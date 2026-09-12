@@ -22,7 +22,9 @@
   } from "$lib/api.js";
   import type { ProvidersListResponse, ProviderStatusDTO, ProviderConnection } from "$lib/types.js";
   import UsageRings from "$lib/components/UsageRings.svelte";
-  import { pickWindows, connectionKey, resetHint } from "$lib/usagerings.js";
+  import UsageCacheChip from "$lib/components/UsageCacheChip.svelte";
+  import { apiLoginTTYUsageRefresh } from "$lib/logintty.js";
+  import { pickWindows, connectionKey, resetHint, fmtSecsShort } from "$lib/usagerings.js";
 
   const HOOK_EVENT = "PreToolUse";
 
@@ -141,6 +143,33 @@
       connections = next;
     } catch {
       connections = {};
+    }
+  }
+
+  /* Re-check state, per card.
+
+     `rechecking` is optimistic: the server flips its own `usageChecking`
+     flag on the very next poll, but the click should light up now.
+     `recheckWait` holds a refusal ("the endpoint asked us to wait 4m"),
+     which is information, not an error — the button explains the wait
+     instead of silently doing nothing. */
+  let rechecking = $state<Record<string, boolean>>({});
+  let recheckWait = $state<Record<string, number>>({});
+
+  async function recheckUsage(type: string, name: string): Promise<void> {
+    const key = connectionKey(type, name);
+    rechecking = { ...rechecking, [key]: true };
+    recheckWait = { ...recheckWait, [key]: 0 };
+    try {
+      const r = await apiLoginTTYUsageRefresh(base, type, name);
+      if (!r.accepted) {
+        recheckWait = { ...recheckWait, [key]: r.waitS };
+      }
+      await loadConnections();
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Failed to re-check usage");
+    } finally {
+      rechecking = { ...rechecking, [key]: false };
     }
   }
 
@@ -401,6 +430,44 @@
   });
 </script>
 
+<!-- "Checking usage…" — shown while a probe for this account is in
+     flight. Usage is read on a paced, shared schedule, so without this
+     the page would look frozen on an old number while it works. -->
+{#snippet checkingLabel()}
+  <span class="inline-flex items-center gap-1 whitespace-nowrap text-black-700 dark:text-black-600" data-testid="usage-checking">
+    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true" class="shrink-0 animate-spin">
+      <circle cx="6" cy="6" r="4.4" stroke="currentColor" stroke-width="1.2" stroke-opacity="0.25" />
+      <path d="M10.4 6A4.4 4.4 0 0 0 6 1.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+    </svg>
+    Checking usage…
+  </span>
+{/snippet}
+
+<!-- Re-check: ask for a fresh reading now, even when the card already
+     has numbers. The server still decides whether a probe may go out
+     (its own floor, and any cooldown the endpoint asked for), and a
+     refusal comes back as a wait this button spells out. -->
+{#snippet recheckButton(type: string, name: string, busy: boolean, waitS: number)}
+  <span class="inline-flex items-center gap-1">
+    <button
+      type="button"
+      data-testid="usage-recheck"
+      class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-link-400 hover:bg-white-300 dark:hover:bg-navy-600 disabled:opacity-50 disabled:hover:bg-transparent"
+      disabled={busy}
+      title={busy ? "Checking usage…" : "Check this account's usage now"}
+      onclick={(e) => {
+        e.stopPropagation();
+        void recheckUsage(type, name);
+      }}
+    >
+      Re-check
+    </button>
+    {#if waitS > 0}
+      <span class="whitespace-nowrap text-xs text-black-600 dark:text-black-700" title="A probe now would land inside a cooldown, so it was not sent">wait {fmtSecsShort(waitS)}</span>
+    {/if}
+  </span>
+{/snippet}
+
 <div class="space-y-6">
   <div class="flex items-center justify-between gap-3 flex-wrap">
     <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Providers</h1>
@@ -593,6 +660,8 @@
                  keep no credentials on disk. -->
             {#if conn}
               {@const rings = pickWindows(conn.windows)}
+              {@const ckey = connectionKey(p.Instance.Type, p.Instance.Name)}
+              {@const busy = conn.usageChecking || rechecking[ckey] === true}
               <div class="pt-3 border-t border-white-300 dark:border-navy-600 flex items-center gap-3">
                 {#if rings.inner || rings.outer}
                   <UsageRings windows={conn.windows} />
@@ -628,9 +697,37 @@
                           </span>
                         {/if}
                       {/each}
+                      <!-- These numbers came from a server-side cache
+                           shared by every instance on this account, so
+                           the row says how old they are rather than
+                           implying a fetch per paint. -->
+                      {#if busy}
+                        {@render checkingLabel()}
+                      {:else}
+                        <UsageCacheChip ageS={conn.usageAgeS} nextS={conn.usageNextS} fetchedAt={conn.usageFetchedAt} />
+                      {/if}
+                      {@render recheckButton(p.Instance.Type, p.Instance.Name, busy, recheckWait[ckey] ?? 0)}
+                    </div>
+                  {:else if busy || conn.usagePending}
+                    <!-- First probe for this account is queued behind the
+                         pacing gate that keeps us under the endpoint's
+                         rate limit. It lands on a later poll. -->
+                    <div class="flex items-center gap-2 text-xs">
+                      {@render checkingLabel()}
+                      {@render recheckButton(p.Instance.Type, p.Instance.Name, true, recheckWait[ckey] ?? 0)}
                     </div>
                   {:else if conn.usageErr}
-                    <p class="font-mono text-xs text-black-700 dark:text-black-600 truncate">usage unavailable: {conn.usageErr}</p>
+                    <div class="flex items-center gap-2 min-w-0 text-xs">
+                      <p class="font-mono text-black-700 dark:text-black-600 truncate">usage unavailable: {conn.usageErr}</p>
+                      {#if conn.usageNextS > 0}
+                        <span class="whitespace-nowrap text-black-600 dark:text-black-700" title="Retrying a rate limit is what keeps it alive, so the next automatic probe waits">retry in {fmtSecsShort(conn.usageNextS)}</span>
+                      {/if}
+                      {@render recheckButton(p.Instance.Type, p.Instance.Name, busy, recheckWait[ckey] ?? 0)}
+                    </div>
+                  {:else if conn.usageSupported}
+                    <div class="flex items-center gap-2 text-xs">
+                      {@render recheckButton(p.Instance.Type, p.Instance.Name, busy, recheckWait[ckey] ?? 0)}
+                    </div>
                   {/if}
                 </div>
               </div>

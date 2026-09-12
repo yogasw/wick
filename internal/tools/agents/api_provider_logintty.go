@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -92,6 +93,11 @@ func apiProviderLoginTTYStatus(c *tool.Ctx) {
 // the connected account (claude's 5h/7d windows). Best-effort: types
 // without a usage API return supported=false, a failed fetch returns
 // the error string so the SPA can show "usage unavailable".
+//
+// Goes through the SAME per-account cache as the providers list, and
+// that matters: this endpoint is one modal open away from being spammed,
+// and its account is usually the one the list just probed. Opening a
+// detail panel must reuse that reading, not buy a fresh 429.
 func apiProviderLoginTTYUsage(c *tool.Ctx) {
 	if notReady(c) || !requireAdmin(c) {
 		return
@@ -100,19 +106,82 @@ func apiProviderLoginTTYUsage(c *tool.Ctx) {
 	if !ok {
 		return
 	}
-	windows, err := logintty.ReadUsage(ins.Type, ins.Env)
-	if err != nil {
-		if errors.Is(err, logintty.ErrUsageUnsupported) {
-			c.JSON(http.StatusOK, map[string]any{"supported": false, "windows": []logintty.UsageWindow{}})
-			return
-		}
-		c.JSON(http.StatusOK, map[string]any{"supported": true, "windows": []logintty.UsageWindow{}, "error": err.Error()})
+	if !logintty.SupportsUsage(ins.Type) {
+		c.JSON(http.StatusOK, map[string]any{"supported": false, "windows": []logintty.UsageWindow{}})
 		return
 	}
-	if windows == nil {
-		windows = []logintty.UsageWindow{}
+	ctx, cancel := context.WithTimeout(c.Context(), connectionsUsageTimeout)
+	defer cancel()
+
+	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, ins.Env), func() ([]logintty.UsageWindow, error) {
+		return logintty.ReadUsage(ins.Type, ins.Env)
+	})
+	body := map[string]any{"supported": true, "windows": []logintty.UsageWindow{}, "checking": v.Checking}
+	// Same provenance the list carries: this panel is looking at a
+	// SHARED, cached reading, so it says how old it is.
+	now := time.Now()
+	if !v.FetchedAt.IsZero() {
+		body["fetched_at"] = v.FetchedAt.UTC().Format(time.RFC3339)
+		body["age_s"] = int(v.Age(now).Round(time.Second) / time.Second)
 	}
-	c.JSON(http.StatusOK, map[string]any{"supported": true, "windows": windows})
+	if !v.NextAt.IsZero() {
+		if d := v.NextAt.Sub(now); d > 0 {
+			body["next_s"] = int(d.Round(time.Second) / time.Second)
+		}
+	}
+	switch {
+	case errors.Is(v.Err, logintty.ErrUsageUnsupported):
+		c.JSON(http.StatusOK, map[string]any{"supported": false, "windows": []logintty.UsageWindow{}})
+	case v.Err != nil:
+		body["error"] = v.Err.Error()
+		c.JSON(http.StatusOK, body)
+	case !v.Known:
+		// First reading for this account is still queued behind the
+		// pacing gate: say "pending", never an error the user would
+		// read as broken, and never a second request.
+		body["pending"] = true
+		c.JSON(http.StatusOK, body)
+	default:
+		if v.Windows != nil {
+			body["windows"] = v.Windows
+		}
+		c.JSON(http.StatusOK, body)
+	}
+}
+
+// apiProviderLoginTTYUsageRefresh is the Retry / re-check button: it
+// asks for a fresh reading of this account NOW, dropping the cache TTL
+// and our own backoff.
+//
+// It is deliberately not a plain "fetch again" — that would hand the
+// user a way to re-create the rate limit one click at a time. The cache
+// still refuses inside a server-sent Retry-After, still refuses two
+// probes within usageManualMinInterval, and still paces the outbound
+// call. A refusal comes back as accepted=false with the wait, which the
+// UI shows, rather than as a silent no-op.
+//
+// Returns immediately: the probe runs in the background and the next
+// poll (or the panel's own refresh) picks the reading up.
+func apiProviderLoginTTYUsageRefresh(c *tool.Ctx) {
+	if notReady(c) || !requireAdmin(c) {
+		return
+	}
+	ins, ok := findLoginInstance(c)
+	if !ok {
+		return
+	}
+	if !logintty.SupportsUsage(ins.Type) {
+		c.JSON(http.StatusOK, map[string]any{"supported": false, "accepted": false})
+		return
+	}
+	accepted, wait := usageProbes.forceRefresh(logintty.UsageIdentity(ins.Type, ins.Env), func() ([]logintty.UsageWindow, error) {
+		return logintty.ReadUsage(ins.Type, ins.Env)
+	})
+	body := map[string]any{"supported": true, "accepted": accepted, "checking": accepted}
+	if !accepted {
+		body["wait_s"] = int(wait.Round(time.Second) / time.Second)
+	}
+	c.JSON(http.StatusOK, body)
 }
 
 // apiProviderLoginTTYStart launches (or attaches to) the login TTY for

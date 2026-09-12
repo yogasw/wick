@@ -1464,6 +1464,11 @@ interface WireProviderConnection {
   auth_method?: string;
   usage_supported?: boolean;
   usage_err?: string;
+  usage_pending?: boolean;
+  usage_checking?: boolean;
+  usage_fetched_at?: string;
+  usage_age_s?: number;
+  usage_next_s?: number;
   windows?: { key?: string; utilization?: number; resets_at?: string }[] | null;
 }
 
@@ -1480,6 +1485,11 @@ export function normalizeConnections(
     authMethod: c.auth_method ?? "",
     usageSupported: c.usage_supported ?? false,
     usageErr: c.usage_err ?? "",
+    usagePending: c.usage_pending ?? false,
+    usageChecking: c.usage_checking ?? false,
+    usageFetchedAt: c.usage_fetched_at ?? "",
+    usageAgeS: c.usage_age_s ?? 0,
+    usageNextS: c.usage_next_s ?? 0,
     windows: (c.windows ?? []).map((w) => ({
       key: w.key ?? "",
       utilization: w.utilization ?? 0,

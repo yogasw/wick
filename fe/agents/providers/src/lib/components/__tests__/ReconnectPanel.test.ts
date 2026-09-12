@@ -11,6 +11,7 @@ vi.mock("$lib/logintty.js", async (importOriginal) => {
     apiLoginTTYStatus: vi.fn(),
     apiLoginTTYUsage: vi.fn(),
     apiLoginTTYStart: vi.fn(),
+    apiLoginTTYUsageRefresh: vi.fn(),
   };
 });
 vi.mock("@wick-fe/common-stores", () => ({
@@ -39,6 +40,11 @@ function makeUsage(over: Partial<UsageResult> = {}): UsageResult {
       { key: "seven_day", utilization: 80, resetsAt: "" },
     ],
     error: "",
+    pending: false,
+    checking: false,
+    fetchedAt: "",
+    ageS: 0,
+    nextS: 0,
     ...over,
   };
 }
@@ -128,5 +134,49 @@ describe("ReconnectPanel", () => {
     expect(screen.queryByRole("button", { name: /reconnect/i })).toBeNull();
     await fireEvent.click(screen.getByText("Connection"));
     expect(await screen.findByText(/not available/i)).toBeTruthy();
+  });
+
+  it("shows how old the cached usage reading is when expanded", async () => {
+    vi.mocked(logintty.apiLoginTTYStatus).mockResolvedValue(makeStatus());
+    vi.mocked(logintty.apiLoginTTYUsage).mockResolvedValue(
+      makeUsage({ ageS: 90, nextS: 30, fetchedAt: "2026-09-12T10:00:00Z" }),
+    );
+    render(ReconnectPanel, { props: { base: "/tools/agents", type: "claude", name: "main" } });
+    await screen.findByText("dev@abc.com");
+    await fireEvent.click(screen.getByText("Connection"));
+    // The panel reads a cache shared with the providers list; opening it
+    // must not imply it went and fetched fresh numbers.
+    expect(await screen.findByText("2m ago")).toBeTruthy();
+  });
+
+  it("shows a queued first probe as pending rather than as a failure", async () => {
+    vi.mocked(logintty.apiLoginTTYStatus).mockResolvedValue(makeStatus());
+    vi.mocked(logintty.apiLoginTTYUsage).mockResolvedValue(makeUsage({ windows: [], pending: true }));
+    render(ReconnectPanel, { props: { base: "/tools/agents", type: "claude", name: "main" } });
+    await screen.findByText("dev@abc.com");
+    await fireEvent.click(screen.getByText("Connection"));
+    expect(await screen.findByText(/Checking usage/i)).toBeTruthy();
+  });
+
+  it("offers a re-check next to the usage bars and sends it", async () => {
+    vi.mocked(logintty.apiLoginTTYStatus).mockResolvedValue(makeStatus());
+    vi.mocked(logintty.apiLoginTTYUsage).mockResolvedValue(makeUsage({ ageS: 20 }));
+    vi.mocked(logintty.apiLoginTTYUsageRefresh).mockResolvedValue({ accepted: true, checking: true, waitS: 0 });
+    render(ReconnectPanel, { props: { base: "/tools/agents", type: "claude", name: "main" } });
+    await screen.findByText("dev@abc.com");
+    await fireEvent.click(screen.getByText("Connection"));
+    await fireEvent.click(await screen.findByTestId("panel-usage-recheck"));
+    expect(logintty.apiLoginTTYUsageRefresh).toHaveBeenCalledWith("/tools/agents", "claude", "main");
+  });
+
+  it("shows the wait when the server declines a re-check", async () => {
+    vi.mocked(logintty.apiLoginTTYStatus).mockResolvedValue(makeStatus());
+    vi.mocked(logintty.apiLoginTTYUsage).mockResolvedValue(makeUsage({ ageS: 20 }));
+    vi.mocked(logintty.apiLoginTTYUsageRefresh).mockResolvedValue({ accepted: false, checking: false, waitS: 90 });
+    render(ReconnectPanel, { props: { base: "/tools/agents", type: "claude", name: "main" } });
+    await screen.findByText("dev@abc.com");
+    await fireEvent.click(screen.getByText("Connection"));
+    await fireEvent.click(await screen.findByTestId("panel-usage-recheck"));
+    expect(await screen.findByText("wait 2m")).toBeTruthy();
   });
 });

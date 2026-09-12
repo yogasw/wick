@@ -3,7 +3,6 @@ package agents
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +19,24 @@ type fakeProbe struct {
 	usageFor   map[string][]logintty.UsageWindow
 	usageErr   map[string]error
 	usageCalls []string
+	// identityFor maps a config dir onto an account key, standing in
+	// for logintty.UsageIdentity reading the credential files. Absent
+	// entries fall back to the dir itself.
+	identityFor map[string]string
+	// unsupported marks provider types with no usage API.
+	unsupported map[provider.Type]bool
+}
+
+func (f *fakeProbe) identity(_ provider.Type, env []string) string {
+	dir := envVal(env, "DIR")
+	if k, ok := f.identityFor[dir]; ok {
+		return k
+	}
+	return dir
+}
+
+func (f *fakeProbe) usageSupported(t provider.Type) bool {
+	return !f.unsupported[t]
 }
 
 func (f *fakeProbe) configDir(_ provider.Type, env []string) string {
@@ -70,7 +87,7 @@ func TestCollectConnectionsOnePerInstance(t *testing.T) {
 		inst(provider.TypeClaude, "waba", "/b"),
 	}
 
-	got := collectConnections(context.Background(), instances, f, newUsageCache(time.Minute))
+	got := collectConnections(context.Background(), instances, f, testUsageCache(time.Minute))
 
 	if len(got) != 2 {
 		t.Fatalf("got %d connections, want one per instance", len(got))
@@ -97,7 +114,7 @@ func TestCollectConnectionsOnePerInstance(t *testing.T) {
 	}
 }
 
-func TestCollectConnectionsDedupesUsageByConfigDir(t *testing.T) {
+func TestCollectConnectionsDedupesUsageByAccount(t *testing.T) {
 	f := &fakeProbe{
 		accountFor: map[string]logintty.Account{
 			"/shared": {Connected: true, Email: "shared@abc.com"},
@@ -115,13 +132,13 @@ func TestCollectConnectionsDedupesUsageByConfigDir(t *testing.T) {
 		inst(provider.TypeClaude, "four", "/shared"),
 	}
 
-	got := collectConnections(context.Background(), instances, f, newUsageCache(time.Minute))
+	got := collectConnections(context.Background(), instances, f, testUsageCache(time.Minute))
 
 	if len(got) != 4 {
 		t.Fatalf("got %d connections, want 4", len(got))
 	}
 	if len(f.usageCalls) != 1 {
-		t.Errorf("usage probed %d times (%v), want 1 per distinct config dir", len(f.usageCalls), f.usageCalls)
+		t.Errorf("usage probed %d times (%v), want 1 per distinct account", len(f.usageCalls), f.usageCalls)
 	}
 	for _, c := range got {
 		if len(c.Windows) != 1 || c.Windows[0].Utilization != 10 {
@@ -135,10 +152,10 @@ func TestCollectConnectionsUnsupportedUsageIsNotAnError(t *testing.T) {
 		accountFor: map[string]logintty.Account{
 			"/c": {Connected: true, Email: "c@abc.com"},
 		},
-		usageErr: map[string]error{"/c": logintty.ErrUsageUnsupported},
+		unsupported: map[provider.Type]bool{provider.TypeCodex: true},
 	}
 
-	got := collectConnections(context.Background(), []provider.Instance{inst(provider.TypeCodex, "cx", "/c")}, f, newUsageCache(time.Minute))
+	got := collectConnections(context.Background(), []provider.Instance{inst(provider.TypeCodex, "cx", "/c")}, f, testUsageCache(time.Minute))
 
 	if len(got) != 1 {
 		t.Fatalf("got %d connections, want 1", len(got))
@@ -153,6 +170,9 @@ func TestCollectConnectionsUnsupportedUsageIsNotAnError(t *testing.T) {
 	if c.UsageErr != "" {
 		t.Errorf("UsageErr = %q, want empty — unsupported is not a failure", c.UsageErr)
 	}
+	if len(f.usageCalls) != 0 {
+		t.Errorf("usage probed %v, want no call at all for a type with no usage API", f.usageCalls)
+	}
 }
 
 func TestCollectConnectionsUsageErrorSurfaces(t *testing.T) {
@@ -163,7 +183,7 @@ func TestCollectConnectionsUsageErrorSurfaces(t *testing.T) {
 		usageErr: map[string]error{"/d": context.DeadlineExceeded},
 	}
 
-	got := collectConnections(context.Background(), []provider.Instance{inst(provider.TypeClaude, "dd", "/d")}, f, newUsageCache(time.Minute))
+	got := collectConnections(context.Background(), []provider.Instance{inst(provider.TypeClaude, "dd", "/d")}, f, testUsageCache(time.Minute))
 
 	if len(got) != 1 {
 		t.Fatalf("got %d connections, want 1", len(got))
@@ -180,114 +200,13 @@ func TestCollectConnectionsUsageErrorSurfaces(t *testing.T) {
 	}
 }
 
-func TestUsageCacheServesWithinTTL(t *testing.T) {
-	calls := 0
-	c := newUsageCache(time.Minute)
-	now := time.Now()
-	fetch := func() ([]logintty.UsageWindow, error) {
-		calls++
-		return []logintty.UsageWindow{{Key: "five_hour", Utilization: 7}}, nil
-	}
-
-	first, _ := c.get("/a", now, fetch)
-	second, _ := c.get("/a", now.Add(30*time.Second), fetch)
-
-	if calls != 1 {
-		t.Errorf("fetched %d times, want 1 — the second read is inside the TTL", calls)
-	}
-	if len(first) != 1 || len(second) != 1 || second[0].Utilization != 7 {
-		t.Errorf("cached windows not returned: first=%+v second=%+v", first, second)
-	}
-}
-
-func TestUsageCacheRefetchesAfterTTL(t *testing.T) {
-	calls := 0
-	c := newUsageCache(time.Minute)
-	now := time.Now()
-	fetch := func() ([]logintty.UsageWindow, error) {
-		calls++
-		return []logintty.UsageWindow{{Key: "five_hour", Utilization: float64(calls)}}, nil
-	}
-
-	_, _ = c.get("/a", now, fetch)
-	got, _ := c.get("/a", now.Add(2*time.Minute), fetch)
-
-	if calls != 2 {
-		t.Errorf("fetched %d times, want 2 — the TTL expired", calls)
-	}
-	if len(got) != 1 || got[0].Utilization != 2 {
-		t.Errorf("windows = %+v, want the refetched value", got)
-	}
-}
-
-func TestUsageCacheKeysPerConfigDir(t *testing.T) {
-	var asked []string
-	c := newUsageCache(time.Minute)
-	now := time.Now()
-	mk := func(dir string) func() ([]logintty.UsageWindow, error) {
-		return func() ([]logintty.UsageWindow, error) {
-			asked = append(asked, dir)
-			return nil, nil
-		}
-	}
-
-	_, _ = c.get("/a", now, mk("/a"))
-	_, _ = c.get("/b", now, mk("/b"))
-
-	if len(asked) != 2 {
-		t.Errorf("fetched for %v, want both dirs probed — separate accounts", asked)
-	}
-}
-
-func TestUsageCacheDoesNotCacheFailures(t *testing.T) {
-	calls := 0
-	c := newUsageCache(time.Minute)
-	now := time.Now()
-	fetch := func() ([]logintty.UsageWindow, error) {
-		calls++
-		return nil, context.DeadlineExceeded
-	}
-
-	_, err1 := c.get("/a", now, fetch)
-	_, err2 := c.get("/a", now.Add(time.Second), fetch)
-
-	if err1 == nil || err2 == nil {
-		t.Fatalf("errors swallowed: %v / %v", err1, err2)
-	}
-	if calls != 2 {
-		t.Errorf("fetched %d times, want 2 — a failure must not be cached", calls)
-	}
-}
-
-func TestUsageCacheCachesUnsupportedVerdict(t *testing.T) {
-	calls := 0
-	c := newUsageCache(time.Minute)
-	now := time.Now()
-	fetch := func() ([]logintty.UsageWindow, error) {
-		calls++
-		return nil, logintty.ErrUsageUnsupported
-	}
-
-	_, err1 := c.get("/a", now, fetch)
-	_, err2 := c.get("/a", now.Add(time.Second), fetch)
-
-	// "This provider type has no usage API" is a property of the build,
-	// not a transient failure — re-asking every page load is pointless.
-	if calls != 1 {
-		t.Errorf("fetched %d times, want 1 — unsupported is a stable verdict", calls)
-	}
-	if !errors.Is(err1, logintty.ErrUsageUnsupported) || !errors.Is(err2, logintty.ErrUsageUnsupported) {
-		t.Errorf("verdict not preserved: %v / %v", err1, err2)
-	}
-}
-
 func TestCollectConnectionsSkipsTypesWithoutCredentials(t *testing.T) {
 	f := &fakeProbe{accountFor: map[string]logintty.Account{}}
 	// wick runs in-process and has no credential dir; the fake returns
 	// "" for its config dir, which must not be probed for usage.
 	instances := []provider.Instance{{Type: provider.TypeWick, Name: "builtin"}}
 
-	got := collectConnections(context.Background(), instances, f, newUsageCache(time.Minute))
+	got := collectConnections(context.Background(), instances, f, testUsageCache(time.Minute))
 
 	if len(got) != 0 {
 		t.Errorf("got %d connections, want none for a credential-less type", len(got))
@@ -378,7 +297,7 @@ func TestCollectConnectionsSplitsPerEnvConfigDir(t *testing.T) {
 		inst(provider.TypeClaude, "personal", "/home/u/.claude-personal"),
 	}
 
-	got := collectConnections(context.Background(), instances, f, newUsageCache(time.Minute))
+	got := collectConnections(context.Background(), instances, f, testUsageCache(time.Minute))
 
 	if len(f.usageCalls) != 2 {
 		t.Errorf("usage probed %v, want one probe per distinct config dir", f.usageCalls)
@@ -398,5 +317,103 @@ func TestCollectConnectionsSplitsPerEnvConfigDir(t *testing.T) {
 	}
 	if u := byName["personal"].Windows[0].Utilization; u != 10 {
 		t.Errorf("personal utilization = %v, want 10 — not the other account's", u)
+	}
+}
+
+// Two instances in DIFFERENT credential folders that resolve to the same
+// account must still cost one request — the endpoint rate-limits the
+// login, not the folder. This is the case the old per-dir dedup missed.
+func TestCollectConnectionsDedupesAcrossDirsOnSameAccount(t *testing.T) {
+	f := &fakeProbe{
+		accountFor: map[string]logintty.Account{
+			"/dir-a": {Connected: true, Email: "dev@abc.com"},
+			"/dir-b": {Connected: true, Email: "dev@abc.com"},
+		},
+		identityFor: map[string]string{
+			"/dir-a": "claude:email:dev@abc.com",
+			"/dir-b": "claude:email:dev@abc.com",
+		},
+		usageFor: map[string][]logintty.UsageWindow{
+			"/dir-a": {{Key: "five_hour", Utilization: 33}},
+			"/dir-b": {{Key: "five_hour", Utilization: 99}},
+		},
+	}
+	instances := []provider.Instance{
+		inst(provider.TypeClaude, "one", "/dir-a"),
+		inst(provider.TypeClaude, "two", "/dir-b"),
+	}
+
+	got := collectConnections(context.Background(), instances, f, testUsageCache(time.Minute))
+
+	if len(f.usageCalls) != 1 {
+		t.Errorf("usage probed %v, want 1 — both instances are the same login", f.usageCalls)
+	}
+	for _, c := range got {
+		if len(c.Windows) != 1 {
+			t.Fatalf("%s has no windows: %+v", c.Name, c)
+		}
+		if c.Windows[0].Utilization != got[0].Windows[0].Utilization {
+			t.Errorf("instances on one account show different numbers: %+v", got)
+		}
+	}
+}
+
+// Every row must say how old its reading is: the numbers come from a
+// shared cache, so a card with no provenance implies a live fetch that
+// never happened.
+func TestCollectConnectionsStampsProvenance(t *testing.T) {
+	f := &fakeProbe{
+		accountFor: map[string]logintty.Account{"/a": {Connected: true, Email: "a@abc.com"}},
+		usageFor:   map[string][]logintty.UsageWindow{"/a": {{Key: "five_hour", Utilization: 5}}},
+	}
+
+	got := collectConnections(context.Background(), []provider.Instance{inst(provider.TypeClaude, "one", "/a")}, f, testUsageCache(time.Minute))
+
+	if len(got) != 1 {
+		t.Fatalf("got %d connections", len(got))
+	}
+	c := got[0]
+	if c.UsageFetchedAt == "" {
+		t.Error("UsageFetchedAt empty — the row cannot say when it was read")
+	}
+	if _, err := time.Parse(time.RFC3339, c.UsageFetchedAt); err != nil {
+		t.Errorf("UsageFetchedAt = %q, not RFC3339: %v", c.UsageFetchedAt, err)
+	}
+	// Just fetched, so the countdown to the next probe is the full TTL
+	// (rounded), and the age is still zero.
+	if c.UsageNextS <= 0 || c.UsageNextS > 60 {
+		t.Errorf("UsageNextS = %d, want the remaining TTL", c.UsageNextS)
+	}
+	if c.UsagePending {
+		t.Error("UsagePending = true for a row that has its reading")
+	}
+}
+
+// A reading that has not arrived yet is pending, NOT an error: the probe
+// is paced deliberately, and a card must not accuse the endpoint of
+// failing while it waits its turn.
+func TestCollectConnectionsReportsPendingWhileProbeQueued(t *testing.T) {
+	f := &fakeProbe{accountFor: map[string]logintty.Account{"/a": {Connected: true, Email: "a@abc.com"}}}
+	cache := testUsageCache(time.Minute)
+	// Never runs the refresh — stands in for a probe still waiting
+	// behind the pacing gate when the page is rendered.
+	cache.run = func(_ func()) {}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the page is out of budget immediately
+	got := collectConnections(ctx, []provider.Instance{inst(provider.TypeClaude, "one", "/a")}, f, cache)
+
+	if len(got) != 1 {
+		t.Fatalf("got %d connections", len(got))
+	}
+	c := got[0]
+	if !c.UsagePending {
+		t.Errorf("UsagePending = false, want true: %+v", c)
+	}
+	if c.UsageErr != "" {
+		t.Errorf("UsageErr = %q, want empty — waiting is not failing", c.UsageErr)
+	}
+	if !c.Connected || c.Email != "a@abc.com" {
+		t.Errorf("account dropped while usage was pending: %+v", c)
 	}
 }

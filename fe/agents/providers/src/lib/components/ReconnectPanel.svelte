@@ -6,6 +6,7 @@
     apiLoginTTYStatus,
     apiLoginTTYUsage,
     apiLoginTTYStart,
+    apiLoginTTYUsageRefresh,
     usageLabel,
     fmtResetsIn,
     prettyPlan,
@@ -15,6 +16,8 @@
     type LoginAccount,
   } from "$lib/logintty.js";
   import LoginTerminalModal from "$lib/components/LoginTerminalModal.svelte";
+  import UsageCacheChip from "$lib/components/UsageCacheChip.svelte";
+  import { fmtSecsShort } from "$lib/usagerings.js";
 
   type Props = { base: string; type: string; name: string };
   let { base, type, name }: Props = $props();
@@ -50,6 +53,29 @@
       usage = null;
     }
   }
+
+  /* Re-check: ask the server for a fresh reading now. Allowed even when
+     numbers are already on screen — the server owns the decision about
+     whether a probe may actually go out, and tells us the wait when it
+     declines. */
+  let rechecking = $state(false);
+  let recheckWait = $state(0);
+
+  async function recheckUsage() {
+    rechecking = true;
+    recheckWait = 0;
+    try {
+      const r = await apiLoginTTYUsageRefresh(base, type, name);
+      if (!r.accepted) recheckWait = r.waitS;
+      usage = await apiLoginTTYUsage(base, type, name);
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Failed to re-check usage");
+    } finally {
+      rechecking = false;
+    }
+  }
+
+  let usageBusy = $derived(rechecking || usage?.checking === true);
 
   onMount(async () => {
     await refresh();
@@ -113,6 +139,30 @@
     ].filter((r) => r.value !== "");
   });
 </script>
+
+<!-- Re-check button, shared by the usage header and the error line. The
+     wait it prints after a refusal is the point: it says the probe was
+     deliberately not sent, rather than leaving a dead-looking button. -->
+{#snippet recheck()}
+  <span class="inline-flex items-center gap-1">
+    <button
+      type="button"
+      data-testid="panel-usage-recheck"
+      class="rounded px-1.5 py-0.5 text-[11px] text-link-400 hover:bg-white-300 dark:hover:bg-navy-600 disabled:opacity-50 disabled:hover:bg-transparent"
+      disabled={usageBusy}
+      title={usageBusy ? "Checking usage…" : "Check this account's usage now"}
+      onclick={(e) => {
+        e.stopPropagation();
+        void recheckUsage();
+      }}
+    >
+      Re-check
+    </button>
+    {#if recheckWait > 0}
+      <span class="text-[11px] text-black-600 dark:text-black-700">wait {fmtSecsShort(recheckWait)}</span>
+    {/if}
+  </span>
+{/snippet}
 
 {#if showTerminal && session}
   <LoginTerminalModal
@@ -196,7 +246,10 @@
       {#if usage?.supported}
         {#if usage.windows.length > 0}
           <div class="space-y-3 pt-1">
-            <p class="text-[11px] font-semibold tracking-wide text-black-700 dark:text-black-600">USAGE</p>
+            <div class="flex items-center justify-between gap-2">
+              <p class="text-[11px] font-semibold tracking-wide text-black-700 dark:text-black-600">USAGE</p>
+              {@render recheck()}
+            </div>
             {#each usage.windows as w (w.key)}
               {@const resetsIn = fmtResetsIn(w.resetsAt, Date.now())}
               <div class="space-y-1">
@@ -212,9 +265,24 @@
                 {/if}
               </div>
             {/each}
+            <!-- Shared, cached reading (see UsageCacheChip): say its age
+                 rather than implying this panel fetched it on open. -->
+            <p class="flex items-center gap-1 text-[11px] text-black-700 dark:text-black-600">
+              {#if usageBusy}
+                <span data-testid="panel-usage-checking">Checking usage…</span>
+              {:else}
+                <UsageCacheChip ageS={usage.ageS} nextS={usage.nextS} fetchedAt={usage.fetchedAt} />
+              {/if}
+            </p>
           </div>
+        {:else if usage.pending || usageBusy}
+          <p class="text-[11px] text-black-700 dark:text-black-600">Checking usage… (probes are paced to stay under the endpoint's rate limit)</p>
         {:else if usage.error}
-          <p class="text-[11px] text-black-700 dark:text-black-600">Usage unavailable: <span class="font-mono">{usage.error}</span></p>
+          <p class="text-[11px] text-black-700 dark:text-black-600">
+            Usage unavailable: <span class="font-mono">{usage.error}</span>
+            {#if usage.nextS > 0}<span class="text-black-600 dark:text-black-700"> — next probe in {fmtSecsShort(usage.nextS)}</span>{/if}
+          </p>
+          {@render recheck()}
         {/if}
       {/if}
     {/if}
