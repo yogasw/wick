@@ -124,7 +124,10 @@ type SystemConfig struct {
 	// The System page reads the wick-framework version, update status, and
 	// cached changelog from it instead of doing a live request on load.
 	VersionCache *updater.VersionCache
-	AppName      string
+	AppName string
+	// DataDir is wick's data directory — where a draining predecessor leaves
+	// the record of what it is still finishing.
+	DataDir string
 	// AppVersion is the version THIS process is running — compared against
 	// the binary on disk to spot a build that is installed but not yet
 	// swapped in.

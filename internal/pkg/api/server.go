@@ -2243,6 +2243,7 @@ func NewServer() *Server {
 		Coordinator:  updCoord,
 		VersionCache: verCache,
 		AppName:      updAppName,
+		DataDir:      agentsLayout.BaseDir,
 		AppVersion:   releaseAppVersion,
 		WickVersion:  buildWickVersion,
 		Commit:       buildCommit,
@@ -3331,6 +3332,31 @@ func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, b
 		logger.Warn().Str("value", v).
 			Msg("upgrade: WICK_DRAIN_AGENT_GRACE is obsolete and ignored — the drain waits for the work now; use WICK_DRAIN_TIMEOUT for a hard cap")
 	}
+	// Say what this process is still finishing, where a process that is NOT
+	// this one can read it. Once the socket is handed over this one answers
+	// nothing, so its remaining work is invisible — and the successor, which
+	// cannot start a third generation while this lives, could only tell the
+	// operator "previous process still finishing". True, and useless: it
+	// names who is blocking without ever saying why.
+	drainDir := s.agentsLayout.BaseDir
+	drainStarted := time.Now()
+	stopPublish := make(chan struct{})
+	go func() {
+		t := time.NewTicker(3 * time.Second)
+		defer t.Stop()
+		upgrade.PublishDrainState(drainDir, os.Getpid(), drainStarted, upgrade.Busy())
+		for {
+			select {
+			case <-stopPublish:
+				upgrade.ClearDrainState(drainDir)
+				return
+			case <-t.C:
+				upgrade.PublishDrainState(drainDir, os.Getpid(), drainStarted, upgrade.Busy())
+			}
+		}
+	}()
+	defer close(stopPublish)
+
 	quiet := upgrade.DrainQuiet()
 	ev := logger.Info().Strs("outstanding", upgrade.Busy()).Dur("settle", quiet)
 	dctx := context.Background()
