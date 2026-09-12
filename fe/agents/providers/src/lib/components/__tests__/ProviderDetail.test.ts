@@ -13,6 +13,11 @@ vi.mock("@wick-fe/common-stores", () => ({
 
 function makeDetail(): ProviderDetailResponse {
   return {
+    // Existing tests describe the ADMIN page; the read-only variant has
+    // its own tests below.
+    ReadOnly: false,
+    CanManage: true,
+    SecretsHidden: false,
     Instance: { Type: "claude", Name: "default", Binary: "claude", Disabled: false, MaxConcurrent: 4, SendMode: "" },
     Path: "/usr/bin/claude",
     PathFound: true,
@@ -377,5 +382,29 @@ describe("ProviderDetail - callbacks", () => {
     await screen.findByRole("button", { name: "Providers" });
     fireEvent.click(screen.getByRole("button", { name: "Providers" }));
     expect(onBack).toHaveBeenCalled();
+  });
+});
+
+describe("ProviderDetail - read-only viewer", () => {
+  it("says it is read-only and makes the configuration inert", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), ReadOnly: true, CanManage: false });
+    render(ProviderDetail, { props: { base: "", type: "claude", name: "claude", onBack: vi.fn(), onOpenSession: vi.fn() } });
+
+    expect(await screen.findByText("Read-only.")).toBeTruthy();
+    // Inert rather than hidden: the whole point of sharing a provider is
+    // that the viewer can see how it is configured. (jsdom does not
+    // reflect the inert property to an attribute, so assert the marker
+    // the component sets alongside it.)
+    const cfg = screen.getByTestId("provider-config");
+    expect(cfg.getAttribute("data-readonly")).toBe("1");
+    expect(cfg.className).toContain("pointer-events-none");
+  });
+
+  it("shows the configuration normally for an admin", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(makeDetail());
+    render(ProviderDetail, { props: { base: "", type: "claude", name: "claude", onBack: vi.fn(), onOpenSession: vi.fn() } });
+    await screen.findByText(/resolved/i);
+    expect(screen.queryByText("Read-only.")).toBeNull();
+    expect(screen.getByTestId("provider-config").getAttribute("data-readonly")).toBeNull();
   });
 });

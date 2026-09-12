@@ -293,6 +293,12 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("GET /admin/skills", admin(h.skillsAdminPage))
 	mux.Handle("POST /admin/skills/{name}/tags", admin(h.setSkillTags))
 
+	// Provider sharing: who may SEE an instance (access tags, empty =
+	// everyone) and who may RECONNECT it (manage tags, empty = admins).
+	mux.Handle("GET /admin/providers", admin(h.providersAdminPage))
+	mux.Handle("POST /admin/providers/{type}/{name}/access-tags", admin(h.setProviderAccessTags))
+	mux.Handle("POST /admin/providers/{type}/{name}/manage-tags", admin(h.setProviderManageTags))
+
 	mux.Handle("GET /admin/data-tables", admin(h.dataTablesAdminPage))
 	mux.Handle("POST /admin/data-tables/{slug}/tags", admin(h.setDataTableTags))
 
@@ -604,7 +610,7 @@ func (h *Handler) approveUser(w http.ResponseWriter, r *http.Request) {
 	if h.onUserApproved != nil {
 		h.onUserApproved(r.Context(), id)
 	}
-	http.Redirect(w, r, "/admin/users", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/users")
 }
 
 // SetOnUserApproved wires the post-approval notice hook. Called once at boot.
@@ -618,7 +624,7 @@ func (h *Handler) unapproveUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/users", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/users")
 }
 
 func (h *Handler) setRole(w http.ResponseWriter, r *http.Request) {
@@ -636,7 +642,7 @@ func (h *Handler) setRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/users", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/users")
 }
 
 func (h *Handler) setUserTags(w http.ResponseWriter, r *http.Request) {
@@ -651,7 +657,7 @@ func (h *Handler) setUserTags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/users", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/users")
 }
 
 // ── Job page handler ──────────────────────────────────────────
@@ -745,7 +751,7 @@ func (h *Handler) setToolVisibility(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/tools", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/tools")
 }
 
 func (h *Handler) setToolDisabled(w http.ResponseWriter, r *http.Request) {
@@ -755,7 +761,7 @@ func (h *Handler) setToolDisabled(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/tools", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/tools")
 }
 
 func (h *Handler) setToolTags(w http.ResponseWriter, r *http.Request) {
@@ -766,7 +772,7 @@ func (h *Handler) setToolTags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/tools", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/tools")
 }
 
 // ── Tag CRUD handlers ──────────────────────────────────────────

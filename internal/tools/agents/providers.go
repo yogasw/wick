@@ -39,7 +39,12 @@ func providersPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	// Not admin-only any more: the page itself is a shell, and what it
+	// shows is decided per instance by the access tags (see
+	// provider_access.go). A user with no accessible instance gets an
+	// empty list rather than a 403 — the same shape an admin with no
+	// instances configured sees.
+	if !requireApprovedUser(c) {
 		return
 	}
 	c.HTML(view.ProvidersSPA(view.ProvidersSPAVM{
@@ -239,7 +244,9 @@ func providerDetailPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	// Shell only; the API behind it (apiProviderDetail) enforces access
+	// per instance and marks the payload read-only for non-admins.
+	if !requireApprovedUser(c) {
 		return
 	}
 	c.HTML(view.ProvidersSPA(view.ProvidersSPAVM{
@@ -254,7 +261,7 @@ func saveProviderDetail(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -303,7 +310,7 @@ func saveProviderConfigKey(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -377,7 +384,7 @@ func saveProviderAIRouter(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -417,7 +424,7 @@ func saveProviderInstance(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t := provider.Type(strings.TrimSpace(c.Form("type")))
@@ -460,7 +467,7 @@ func saveProviderInstance(c *tool.Ctx) {
 //
 // POST /providers/{type}/{name}/sync
 func syncProviderStorage(c *tool.Ctx) {
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	if globalSyncMgr == nil {
@@ -695,7 +702,7 @@ func deleteProviderInstance(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -720,7 +727,7 @@ func renameProviderInstance(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -807,7 +814,7 @@ func autoRescanEnabled() bool {
 // just installed a new CLI and doesn't want to wait for the 24h
 // auto-refresh.
 func rescanAllProviders(c *tool.Ctx) {
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Context(), 30*time.Second)
@@ -893,7 +900,7 @@ func enableProviderHook(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t, name, event, ok := parseHookParams(c)
@@ -953,7 +960,7 @@ func disableProviderHook(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t, name, event, ok := parseHookParams(c)
@@ -1051,7 +1058,7 @@ func checkProviderHook(c *tool.Ctx) {
 // rescanOneProvider re-probes a single instance. Used by the per-card
 // Rescan button so the user can refresh just the row they care about.
 func rescanOneProvider(c *tool.Ctx) {
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))

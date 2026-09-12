@@ -71,11 +71,14 @@ func findLoginInstance(c *tool.Ctx) (provider.Instance, bool) {
 // account from the credential files (honouring the instance's env
 // overrides like CLAUDE_CONFIG_DIR) plus the live login session.
 func apiProviderLoginTTYStatus(c *tool.Ctx) {
-	if notReady(c) || !requireAdmin(c) {
+	if notReady(c) || !requireApprovedUser(c) {
 		return
 	}
 	ins, ok := findLoginInstance(c)
 	if !ok {
+		return
+	}
+	if !requireProviderAccess(c, ins.Type, ins.Name) {
 		return
 	}
 	_, supported := logintty.LoginCommand(ins.Type, nil)
@@ -99,11 +102,14 @@ func apiProviderLoginTTYStatus(c *tool.Ctx) {
 // and its account is usually the one the list just probed. Opening a
 // detail panel must reuse that reading, not buy a fresh 429.
 func apiProviderLoginTTYUsage(c *tool.Ctx) {
-	if notReady(c) || !requireAdmin(c) {
+	if notReady(c) || !requireApprovedUser(c) {
 		return
 	}
 	ins, ok := findLoginInstance(c)
 	if !ok {
+		return
+	}
+	if !requireProviderAccess(c, ins.Type, ins.Name) {
 		return
 	}
 	if !logintty.SupportsUsage(ins.Type) {
@@ -163,11 +169,14 @@ func apiProviderLoginTTYUsage(c *tool.Ctx) {
 // Returns immediately: the probe runs in the background and the next
 // poll (or the panel's own refresh) picks the reading up.
 func apiProviderLoginTTYUsageRefresh(c *tool.Ctx) {
-	if notReady(c) || !requireAdmin(c) {
+	if notReady(c) || !requireApprovedUser(c) {
 		return
 	}
 	ins, ok := findLoginInstance(c)
 	if !ok {
+		return
+	}
+	if !requireProviderManage(c, ins.Type, ins.Name) {
 		return
 	}
 	if !logintty.SupportsUsage(ins.Type) {
@@ -187,11 +196,14 @@ func apiProviderLoginTTYUsageRefresh(c *tool.Ctx) {
 // apiProviderLoginTTYStart launches (or attaches to) the login TTY for
 // one instance.
 func apiProviderLoginTTYStart(c *tool.Ctx) {
-	if notReady(c) || !requireAdmin(c) {
+	if notReady(c) || !requireApprovedUser(c) {
 		return
 	}
 	ins, ok := findLoginInstance(c)
 	if !ok {
+		return
+	}
+	if !requireProviderManage(c, ins.Type, ins.Name) {
 		return
 	}
 	bin, found := provider.ResolveBinary(ins)
@@ -210,11 +222,14 @@ func apiProviderLoginTTYStart(c *tool.Ctx) {
 // apiProviderLoginTTYExtend pushes the running session's kill deadline
 // out one step.
 func apiProviderLoginTTYExtend(c *tool.Ctx) {
-	if notReady(c) || !requireAdmin(c) {
+	if notReady(c) || !requireApprovedUser(c) {
 		return
 	}
 	ins, ok := findLoginInstance(c)
 	if !ok {
+		return
+	}
+	if !requireProviderManage(c, ins.Type, ins.Name) {
 		return
 	}
 	fr, ok := loginTTY.Extend(ins.Type, ins.Name)
@@ -227,11 +242,14 @@ func apiProviderLoginTTYExtend(c *tool.Ctx) {
 
 // apiProviderLoginTTYKill terminates the running session.
 func apiProviderLoginTTYKill(c *tool.Ctx) {
-	if notReady(c) || !requireAdmin(c) {
+	if notReady(c) || !requireApprovedUser(c) {
 		return
 	}
 	ins, ok := findLoginInstance(c)
 	if !ok {
+		return
+	}
+	if !requireProviderManage(c, ins.Type, ins.Name) {
 		return
 	}
 	if !loginTTY.Kill(ins.Type, ins.Name) {
@@ -261,11 +279,14 @@ type loginTTYClientMsg struct {
 // apiProviderLoginTTYWS streams session frames to the browser terminal
 // and feeds keystrokes back into the PTY.
 func apiProviderLoginTTYWS(c *tool.Ctx) {
-	if notReady(c) || !requireAdmin(c) {
+	if notReady(c) || !requireApprovedUser(c) {
 		return
 	}
 	ins, ok := findLoginInstance(c)
 	if !ok {
+		return
+	}
+	if !requireProviderManage(c, ins.Type, ins.Name) {
 		return
 	}
 	s := loginTTY.Get(ins.Type, ins.Name)

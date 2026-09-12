@@ -1,0 +1,116 @@
+package view
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	"strconv"
+	"strings"
+)
+
+// ProviderAdminRow is one provider instance on the access page: who may
+// see it, and who may act on it.
+type ProviderAdminRow struct {
+	Type     string
+	Name     string
+	Binary   string
+	Disabled bool
+	// AccessTagIDs narrow WHO SEES the instance. Empty = everyone.
+	AccessTagIDs []string
+	// ManageTagIDs grant reconnect + usage re-check. Empty = admins only.
+	ManageTagIDs []string
+	// Path is the instance key used in the form URLs ("claude/engineer").
+	Path string
+}
+
+// ProvidersAdminPage lists every provider instance with its two tag sets.
+//
+// Two columns rather than one because the defaults are opposite, and the
+// page has to make that legible: clearing Access opens an instance to
+// everyone, while clearing Manage closes it to everyone but admins. The
+// hint under each picker says which way its empty state falls, since a
+// blank box that means "public" next to a blank box that means "nobody"
+// is exactly the kind of thing an operator gets wrong once.
+templ ProvidersAdminPage(rows []ProviderAdminRow, allTags []*entity.Tag, user *entity.User) {
+	@AdminLayout("Admin · Providers", "providers", user) {
+		{{ tagsJSON := tagsToJSON(allTags) }}
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Providers</h1>
+			<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+				Share a provider with non-admins: who can see it and read its usage, and who can also reconnect it.
+				Editing a provider's configuration stays admin-only — everyone else sees those fields read-only.
+			</p>
+			if len(rows) == 0 {
+				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
+					No provider instances configured.
+				</div>
+			} else {
+				<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm resp-table-wrap">
+					<table class="w-full text-sm resp-table">
+						<thead>
+							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Provider</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Access — see it, read usage</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Manage — reconnect, re-check</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, row := range rows {
+								@providerAdminRow(row, tagsJSON)
+							}
+						</tbody>
+					</table>
+				</div>
+			}
+		</main>
+	}
+}
+
+templ providerAdminRow(row ProviderAdminRow, tagsJSON string) {
+	<tr
+		id={ "provider-" + row.Type + "-" + row.Name }
+		class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+	>
+		<td class="px-4 py-3 align-top">
+			<p class="font-medium text-black-900 dark:text-white-100">{ row.Type + "/" + row.Name }</p>
+			<p class="font-mono text-[10px] text-black-700 dark:text-black-600">{ row.Binary }</p>
+			if row.Disabled {
+				<span class="mt-1 inline-block rounded bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 text-[10px] text-black-700 dark:text-black-600">disabled</span>
+			}
+		</td>
+		<td class="px-4 py-3 align-top">
+			<form action={ templ.SafeURL("/admin/providers/" + row.Path + "/access-tags") } method="POST" class="tag-form flex items-start gap-2">
+				<div
+					class="tag-picker w-full md:w-64"
+					data-tags={ tagsJSON }
+					data-selected={ strings.Join(row.AccessTagIDs, ",") }
+					data-can-create="true"
+				></div>
+				<button type="submit" class="tag-save mt-1 text-xs font-medium text-green-600 hover:underline">Save</button>
+			</form>
+			<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">
+				if len(row.AccessTagIDs) == 0 {
+					No tags — everyone signed in can see it.
+				} else {
+					{ strconv.Itoa(len(row.AccessTagIDs)) } tag(s) — only holders can see it.
+				}
+			</p>
+		</td>
+		<td class="px-4 py-3 align-top">
+			<form action={ templ.SafeURL("/admin/providers/" + row.Path + "/manage-tags") } method="POST" class="tag-form flex items-start gap-2">
+				<div
+					class="tag-picker w-full md:w-64"
+					data-tags={ tagsJSON }
+					data-selected={ strings.Join(row.ManageTagIDs, ",") }
+					data-can-create="true"
+				></div>
+				<button type="submit" class="tag-save mt-1 text-xs font-medium text-green-600 hover:underline">Save</button>
+			</form>
+			<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">
+				if len(row.ManageTagIDs) == 0 {
+					No tags — admins only.
+				} else {
+					{ strconv.Itoa(len(row.ManageTagIDs)) } tag(s) — holders can reconnect it.
+				}
+			</p>
+		</td>
+	</tr>
+}

@@ -39,6 +39,10 @@ export interface ProviderStatusDTO {
   Hooks: Record<string, HookCapabilityDTO>;
   Cap: ProviderCapDTO;
   HookEnabled: Record<string, boolean>;
+  /* CanManage: may this caller reconnect the instance and force a usage
+     re-check? Admins always; everyone else by manage tag. Never implies
+     permission to edit configuration. */
+  CanManage: boolean;
 }
 
 export interface SpawnLogFileDTO {
@@ -189,6 +193,10 @@ export interface GateStatusDTO {
 }
 
 export interface ProvidersListResponse {
+  /* IsAdmin decides which chrome renders at all. Provider configuration
+     is admin-only however the access tags are set, so a non-admin gets
+     the read-only page rather than buttons that come back 403. */
+  IsAdmin: boolean;
   Providers: ProviderStatusDTO[];
   Gate: GateStatusDTO;
   MCPClients: MCPStatusDTO;
@@ -230,6 +238,13 @@ export interface StorageResponse {
 }
 
 export interface ProviderDetailResponse {
+  /* ReadOnly: the caller may look at this instance but not edit it.
+     CanManage is separate — reconnecting is not editing. SecretsHidden
+     says the resolved-config previews were withheld because they carry
+     live tokens. */
+  ReadOnly: boolean;
+  CanManage: boolean;
+  SecretsHidden: boolean;
   Instance: ProviderInstanceDTO;
   Path: string;
   PathFound: boolean;

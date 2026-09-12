@@ -21,6 +21,7 @@
   import RecentSpawns from "$lib/components/RecentSpawns.svelte";
   import ReconnectPanel from "$lib/components/ReconnectPanel.svelte";
 
+
   type Props = {
     base: string;
     type: string;
@@ -42,6 +43,11 @@
   type KVRow = Record<string, string>;
 
   let data = $state<ProviderDetailResponse | null>(null);
+  /* readOnly fails CLOSED: until the payload says otherwise (and an old
+     server never will), the page renders as a viewer's. Showing an
+     editable form to someone whose writes get 403 is worse than showing
+     a read-only one to an admin for a moment. */
+  let readOnly = $derived(data?.ReadOnly ?? true);
   let loading = $state(true);
   let error = $state<string | null>(null);
   let saving = $state(false);
@@ -763,7 +769,27 @@
     </div>
 
     <!-- Connection: account status + usage + reconnect via login TTY -->
+    {#if readOnly}
+      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-xs text-black-800 dark:text-black-600">
+        <span class="font-medium text-black-900 dark:text-white-100">Read-only.</span>
+        Provider configuration is admin-only — the settings below are shown as they are, and cannot be changed here.
+      </div>
+    {/if}
     <ReconnectPanel {base} {type} {name} />
+
+    <!-- Everything below edits the instance. A non-admin still SEES it —
+         that is the point of sharing a provider: you can check how it is
+         configured without being able to change it — but the controls are
+         inert, and the API refuses the write in any case. The Connection
+         panel above stays live, because reconnecting is a manage grant,
+         not an edit. -->
+    <div
+      data-testid="provider-config"
+      data-readonly={readOnly ? "1" : null}
+      class:pointer-events-none={readOnly}
+      class:opacity-75={readOnly}
+      inert={readOnly}
+    >
 
     <!-- Configuration (simple fields, 2-column grid). Collapsed by
          default; the header is the toggle. -->
@@ -1209,5 +1235,6 @@
 
     <!-- Recent spawns — shared component (search + pagination + inline detail) -->
     <RecentSpawns {base} {type} {name} {onOpenSession} collapsible={true} />
+    </div>
   {/if}
 </div>

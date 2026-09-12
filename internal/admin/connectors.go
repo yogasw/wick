@@ -107,7 +107,7 @@ func (h *Handler) setConnectorDisabledAdmin(w http.ResponseWriter, r *http.Reque
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/connectors", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/connectors")
 }
 
 // setConnectorTagsAdmin updates the access tags for one connector
@@ -121,7 +121,7 @@ func (h *Handler) setConnectorTagsAdmin(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/connectors", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/connectors")
 }
 
 // setConnectorAccountTagsAdmin updates the access tags of ONE connected
@@ -141,5 +141,5 @@ func (h *Handler) setConnectorAccountTagsAdmin(w http.ResponseWriter, r *http.Re
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/connectors", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/connectors")
 }

@@ -153,7 +153,11 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 						@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
 						@agentsNavLink(vm.Base+"/agent-profiles", "Sub-agents", vm.ActivePage == "agent-profiles")
 						@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
-						if user != nil && user.IsAdmin() {
+						// Visible to any signed-in user now that the page is
+						// per-instance access-tagged: a viewer sees only the
+						// providers shared with them (and an empty list if
+						// none are), while every write stays admin-only.
+						if user != nil {
 							@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
 						}
 						@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")

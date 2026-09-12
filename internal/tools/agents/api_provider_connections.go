@@ -242,7 +242,7 @@ func usageWindowDTOs(windows []logintty.UsageWindow) []usageWindowDTO {
 // and fast, while this one waits on a remote usage endpoint. Keeping
 // them apart lets the list paint immediately and fill the badges in.
 func apiProviderConnections(c *tool.Ctx) {
-	if notReady(c) || !requireAdmin(c) {
+	if notReady(c) || !requireApprovedUser(c) {
 		return
 	}
 	instances, err := provider.Load()
@@ -250,6 +250,11 @@ func apiProviderConnections(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// Same filter as the list: a badge for an instance the caller cannot
+	// see would leak both its existence and whose account runs it.
+	instances = visibleProviders(c, instances, func(ins provider.Instance) (provider.Type, string) {
+		return ins.Type, ins.Name
+	})
 	ctx, cancel := context.WithTimeout(c.Context(), connectionsUsageTimeout)
 	defer cancel()
 

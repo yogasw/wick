@@ -60,7 +60,7 @@ func (h *Handler) setProjectTags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/projects", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/projects")
 }
 
 // ── Workflows ─────────────────────────────────────────────────────────────────
@@ -119,7 +119,7 @@ func (h *Handler) setWorkflowTags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/workflows", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/workflows")
 }
 
 // ── Skills ────────────────────────────────────────────────────────────────────
@@ -176,7 +176,7 @@ func (h *Handler) setSkillTags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/skills", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/skills")
 }
 
 // ── Data Tables ───────────────────────────────────────────────────────────────
@@ -231,5 +231,5 @@ func (h *Handler) setDataTableTags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/data-tables", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/data-tables")
 }
