@@ -111,7 +111,13 @@ type connectorDetail struct {
 	Tools []toolDetail `json:"tools"`
 }
 
-func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, isAdmin bool) {
+// WickList renders the connector catalogue for one caller: every instance
+// their tags reach, plus — for OAuth instances — the connected accounts they
+// may run as. Accounts are per-user by default (see
+// connectors.AccountVisibleTo), so two people listing the same multi-account
+// instance each see the connector plus their OWN account, not the whole pool.
+func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, user *entity.User) {
+	callerID, isAdmin := callerIdentity(user)
 	rows, err := svc.ListVisibleTo(r.Context(), tagIDs, isAdmin)
 	if err != nil {
 		rsp.ToolError(w, req.ID, "list connectors: "+err.Error(), "")
@@ -181,7 +187,12 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 		})
 		// For OAuth connectors, also add one entry per connected account.
 		if mod.OAuth != nil {
-			if accs, err2 := svc.ListAccounts(r.Context(), row.ID); err2 == nil {
+			caller := connectors.AccountAccess{
+				UserID:     callerID,
+				TagIDs:     tagIDs,
+				Privileged: isAdmin || connectors.OwnsConnector(row, callerID),
+			}
+			if accs, err2 := svc.ListAccountsVisibleTo(r.Context(), row, caller); err2 == nil {
 				for _, acc := range accs {
 					summaries = append(summaries, connectorSummary{
 						ID:        row.ID + "/" + acc.ID,
@@ -216,6 +227,15 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 		TotalTools:         totalTools,
 		SessionConfigBases: sessionBases,
 	})
+}
+
+// callerIdentity unpacks the two things the listing gates on — who is asking
+// and whether they are an admin — tolerating a nil user (test transports).
+func callerIdentity(user *entity.User) (userID string, isAdmin bool) {
+	if user == nil {
+		return "", false
+	}
+	return user.ID, user.IsAdmin()
 }
 
 func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, isAdmin bool) {
@@ -643,6 +663,7 @@ func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service
 		Source:          entity.ConnectorRunSourceMCP,
 		UserID:          user.ID,
 		IsAdmin:         user.IsAdmin(),
+		TagIDs:          tagIDs,
 		IPAddress:       ClientIP(r),
 		UserAgent:       r.Header.Get("User-Agent"),
 		AccountID:       accountID,

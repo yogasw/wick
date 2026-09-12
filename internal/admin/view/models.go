@@ -74,6 +74,20 @@ type ConnectorAdminRow struct {
 	ModuleIcon    string
 	ModuleMissing bool
 	TagIDs        []string
+	// Accounts are the OAuth identities connected to this instance, listed
+	// underneath it. Each one is taggable in its own right: an account is
+	// private to whoever connected it unless the instance shares the whole
+	// pool, so a tag here is how an admin hands ONE account to a team.
+	Accounts []ConnectorAccountAdminRow
+}
+
+// ConnectorAccountAdminRow is the view model for one connected OAuth account
+// under its connector instance. OwnerLabel is the wick user who connected it
+// ("" when the account predates ownership being recorded).
+type ConnectorAccountAdminRow struct {
+	Account    entity.ConnectorAccount
+	OwnerLabel string
+	TagIDs     []string
 }
 
 // AccessTokenRow is the view model for one Personal Access Token in

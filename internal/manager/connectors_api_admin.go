@@ -12,6 +12,7 @@ import (
 	"net/http"
 
 	"github.com/rs/zerolog/log"
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 )
@@ -74,8 +75,11 @@ func (h *Handler) apiDuplicateConnector(w http.ResponseWriter, r *http.Request) 
 }
 
 // apiSetConnectorAccessPolicy serves
-// POST /manager/api/connectors/{key}/{id}/access-policy. Admin-only, like
-// setConnectorAccessPolicy. Body carries the four toggles.
+// POST /manager/api/connectors/{key}/{id}/access-policy. Admin OR the
+// instance owner, exactly like its form-post sibling
+// setConnectorAccessPolicy — the SPA renders this section whenever
+// can_manage_policy is true, so gating the write on admin alone made an
+// owner's own instance look editable and then 403 on every toggle.
 func (h *Handler) apiSetConnectorAccessPolicy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := login.GetUser(ctx)
@@ -84,21 +88,28 @@ func (h *Handler) apiSetConnectorAccessPolicy(w http.ResponseWriter, r *http.Req
 		writeJSON(w, errResp.status, map[string]string{"error": errResp.msg})
 		return
 	}
-	if user == nil || !user.IsAdmin() {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin only"})
+	if !h.canManageAccessPolicy(user, row) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin or owner only"})
 		return
 	}
 	var body struct {
-		AllowOthersConfigure  bool `json:"allow_others_configure"`
-		AllowOthersConnectSSO bool `json:"allow_others_connect_sso"`
-		EnableSSO             bool `json:"enable_sso"`
-		MultiAccount          bool `json:"multi_account"`
+		AllowOthersConfigure   bool `json:"allow_others_configure"`
+		AllowOthersConnectSSO  bool `json:"allow_others_connect_sso"`
+		EnableSSO              bool `json:"enable_sso"`
+		MultiAccount           bool `json:"multi_account"`
+		AllowOthersSeeAccounts bool `json:"allow_others_see_accounts"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
 		return
 	}
-	if err := h.connectors.SetAccessPolicy(ctx, row.ID, body.AllowOthersConfigure, body.AllowOthersConnectSSO, body.EnableSSO, body.MultiAccount); err != nil {
+	if err := h.connectors.SetAccessPolicy(ctx, row.ID, connectors.AccessPolicy{
+		AllowOthersConfigure:   body.AllowOthersConfigure,
+		AllowOthersConnectSSO:  body.AllowOthersConnectSSO,
+		EnableSSO:              body.EnableSSO,
+		MultiAccount:           body.MultiAccount,
+		AllowOthersSeeAccounts: body.AllowOthersSeeAccounts,
+	}); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -106,9 +117,10 @@ func (h *Handler) apiSetConnectorAccessPolicy(w http.ResponseWriter, r *http.Req
 }
 
 // apiSetConnectorSessionConfig serves
-// POST /manager/api/connectors/{key}/{id}/session-config. Admin-only and
-// only honored for session-config-capable connectors, like
-// setConnectorSessionConfig. Body: {"allow_session_config":bool}.
+// POST /manager/api/connectors/{key}/{id}/session-config. Admin or the
+// instance owner (same gate as setConnectorSessionConfig and as the
+// can_manage_policy flag the SPA renders the section on), and only honored
+// for session-config-capable connectors. Body: {"allow_session_config":bool}.
 func (h *Handler) apiSetConnectorSessionConfig(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := login.GetUser(ctx)
@@ -117,8 +129,8 @@ func (h *Handler) apiSetConnectorSessionConfig(w http.ResponseWriter, r *http.Re
 		writeJSON(w, errResp.status, map[string]string{"error": errResp.msg})
 		return
 	}
-	if user == nil || !user.IsAdmin() {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin only"})
+	if !h.canManageAccessPolicy(user, row) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin or owner only"})
 		return
 	}
 	if !h.connectors.SessionConfigCapable(row.Key) {
@@ -310,7 +322,7 @@ func (h *Handler) loadAccountForRow(r *http.Request, user *entity.User, accountI
 		return nil, nil, errResp, false
 	}
 	acc, err := h.connectors.GetAccount(r.Context(), accountID)
-	if err != nil || acc.ConnectorID != row.ID {
+	if err != nil || acc.ConnectorID != row.ID || !h.accountVisible(r.Context(), user, *row, *acc) {
 		return nil, nil, rowErr{http.StatusNotFound, "account not found"}, false
 	}
 	return row, acc, rowErr{}, true

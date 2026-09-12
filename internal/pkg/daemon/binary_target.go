@@ -1,12 +1,15 @@
 package daemon
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
@@ -79,7 +82,8 @@ func ProcessImageIs(pid int, path string) bool {
 // WaitSuccessor blocks until the daemon's main pid moves away from oldPID,
 // i.e. the successor has taken over as the service's main process.
 func WaitSuccessor(p Paths, appName string, oldPID int, timeout time.Duration) (int, error) {
-	deadline := time.Now().Add(timeout)
+	started := time.Now()
+	deadline := started.Add(timeout)
 	for {
 		pid := ServiceMainPID(appName)
 		if pid <= 0 {
@@ -88,11 +92,53 @@ func WaitSuccessor(p Paths, appName string, oldPID int, timeout time.Duration) (
 		if pid > 0 && pid != oldPID && processAlive(pid) {
 			return pid, nil
 		}
+		// The daemon may have REFUSED to start a successor — most often
+		// because a previous generation is still draining. It knows that
+		// instantly; without reading its answer we would sit here for the
+		// whole timeout waiting for a process nobody is starting, which is
+		// five minutes of somebody's evening for a one-line reason.
+		if why, ok := refusedSince(p.Dir, started); ok {
+			return 0, fmt.Errorf("the daemon did not start a successor: %s", why)
+		}
 		if time.Now().After(deadline) {
 			return 0, ErrReloadTimeout
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// RefusedRecently reports a refusal recorded within the last window. Used by
+// a reload that does NOT wait for the successor: the daemon answers "I will
+// not start one" immediately, and that is worth catching even when nothing is
+// being waited for. Anything older belongs to an earlier reload.
+func RefusedRecently(dir string, window time.Duration) (string, bool) {
+	return refusedSince(dir, time.Now().Add(-window))
+}
+
+// refusedSince reports a failed handover recorded AFTER since — an older
+// record belongs to a previous reload and must not abort this one.
+func refusedSince(dir string, since time.Time) (string, bool) {
+	if dir == "" {
+		return "", false
+	}
+	b, err := os.ReadFile(upgrade.HandoverStatePath(dir))
+	if err != nil {
+		return "", false
+	}
+	var r struct {
+		At    time.Time `json:"at"`
+		OK    bool      `json:"ok"`
+		Error string    `json:"error"`
+	}
+	if json.Unmarshal(b, &r) != nil || r.OK || r.Error == "" {
+		return "", false
+	}
+	// A second of slack: the record is written by another process, and two
+	// clocks reading the same instant do not have to agree to the nanosecond.
+	if r.At.Before(since.Add(-time.Second)) {
+		return "", false
+	}
+	return r.Error, true
 }
 
 // WaitDrain blocks until the old process has finished its in-flight work and

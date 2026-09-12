@@ -183,6 +183,11 @@ func daemonStopCmd() *cobra.Command {
 // Routing, in order: an installed systemd unit gets `systemctl --user reload`
 // (which needs ExecReload in the unit); a unit without ExecReload falls back
 // to signalling its MainPID; a PID-file daemon is signalled directly.
+// refusalWindow is how far back a no-wait reload looks for a refusal. The
+// daemon records one within milliseconds of being asked; a second of slack
+// covers two processes reading the same clock.
+const refusalWindow = 2 * time.Second
+
 func daemonReloadCmd() *cobra.Command {
 	var (
 		binaryPath string
@@ -190,6 +195,7 @@ func daemonReloadCmd() *cobra.Command {
 		assumeYes  bool
 		force      bool
 		useSudo    bool
+		wait       bool
 		waitDrain  bool
 		timeout    time.Duration
 	)
@@ -222,6 +228,7 @@ func daemonReloadCmd() *cobra.Command {
 					assumeYes:  assumeYes,
 					force:      force,
 					useSudo:    useSudo,
+					wait:       wait || waitDrain,
 					waitDrain:  waitDrain,
 					timeout:    timeout,
 				})
@@ -234,8 +241,9 @@ func daemonReloadCmd() *cobra.Command {
 	c.Flags().BoolVarP(&assumeYes, "yes", "y", false, "skip the confirmation prompt (required when stdin is not a terminal)")
 	c.Flags().BoolVar(&force, "force", false, "proceed despite blocking findings; never overrides OS/arch or a non-wick binary")
 	c.Flags().BoolVar(&useSudo, "sudo", false, "run the file swap through sudo, for a root-owned target directory")
-	c.Flags().BoolVar(&waitDrain, "wait-drain", false, "also wait for the previous process to finish its work and exit")
-	c.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "how long to wait for the successor to take over")
+	c.Flags().BoolVar(&wait, "wait", false, "block until the successor is serving, and roll the binary back if it never gets there")
+	c.Flags().BoolVar(&waitDrain, "wait-drain", false, "also wait for the previous process to finish its work and exit (implies --wait)")
+	c.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "with --wait: how long to wait for the successor to take over")
 	return c
 }
 
@@ -275,8 +283,13 @@ type reloadOpts struct {
 	assumeYes  bool
 	force      bool
 	useSudo    bool
-	waitDrain  bool
-	timeout    time.Duration
+	// wait blocks until the successor is serving. Off by default: the boot
+	// takes about a minute and a half, the old process serves throughout it,
+	// and a blocked caller helps nobody — least of all an agent, whose open
+	// turn is itself something the next swap would wait on.
+	wait      bool
+	waitDrain bool
+	timeout   time.Duration
 }
 
 // reloadWithBinary installs a candidate binary and hands over to it.
@@ -353,16 +366,40 @@ func reloadWithBinary(p daemon.Paths, o reloadOpts) error {
 		return fmt.Errorf("install %s: %w", target, err)
 	}
 	fmt.Printf("installed %s (previous kept at %s)\n", target, backup)
+	// Remember WHAT we installed. A rollback must only undo our own install:
+	// on a host where two deploys overlap, the loser's rollback otherwise
+	// overwrites the winner's binary with a version nobody asked for — which
+	// is exactly what happened here, 17 seconds after a good install.
+	installed := daemon.FileFingerprint(target)
 
 	if err := signalReload(p); err != nil {
-		restoreAfterFailure(backup, target, o.useSudo)
+		restoreAfterFailure(backup, target, o.useSudo, installed)
 		return err
+	}
+
+	// Not waiting is the default. The boot takes about a minute and a half,
+	// and during it the old process serves every request — so the wait buys
+	// nothing except a blocked caller, and when the caller is an agent it
+	// buys worse than nothing: its turn stays open, which is itself the
+	// thing the swap would otherwise be waiting on.
+	//
+	// A refusal is still caught, because the daemon knows that immediately.
+	if !o.wait {
+		if why, refused := daemon.RefusedRecently(p.Dir, refusalWindow); refused {
+			restoreAfterFailure(backup, target, o.useSudo, installed)
+			return fmt.Errorf("the daemon did not start a successor: %s — %s was rolled back", why, target)
+		}
+		fmt.Printf("handover started: pid %d is booting the successor (%s -> %s)\n",
+			oldPID, firstNonEmptyString(running.AppVersion, "unknown"), candidate.AppVersion)
+		fmt.Println("not waiting for it; the old process keeps serving until the new one is ready")
+		fmt.Println("pass --wait to block until the successor is serving (and to roll back if it never is)")
+		return nil
 	}
 
 	fmt.Printf("waiting for the successor to take over (up to %s)...\n", o.timeout)
 	newPID, err := daemon.WaitSuccessor(p, BuildAppName, oldPID, o.timeout)
 	if err != nil {
-		restoreAfterFailure(backup, target, o.useSudo)
+		restoreAfterFailure(backup, target, o.useSudo, installed)
 		return fmt.Errorf("%w — the previous process is still serving, so nothing is down; %s was rolled back", err, target)
 	}
 	if !daemon.ProcessImageIs(newPID, target) {
@@ -386,7 +423,18 @@ func reloadWithBinary(p daemon.Paths, o reloadOpts) error {
 // restart does not pick up a build that just failed to come up. Traffic is
 // unaffected either way: the old process only steps aside once a successor
 // reports ready.
-func restoreAfterFailure(backup, target string, useSudo bool) {
+//
+// It refuses when the file is no longer the one this command installed.
+// Rollback used to restore blindly, which turned a failed deploy into a
+// DOWNGRADE of somebody else's successful one: two reloads overlapping on the
+// same host, the slow one giving up minutes later and putting its old binary
+// over the new one. Leaving a newer build in place is the safe half of that
+// choice — it is the version an operator most recently asked for.
+func restoreAfterFailure(backup, target string, useSudo bool, installed string) {
+	if now := daemon.FileFingerprint(target); installed != "" && now != "" && now != installed {
+		fmt.Printf("not rolling back %s: it has been replaced since this reload installed it — leaving the newer binary in place\n", target)
+		return
+	}
 	if err := daemon.RestoreBinary(backup, target, useSudo); err != nil {
 		fmt.Printf("WARNING: could not restore %s from %s: %v\n", target, backup, err)
 		return

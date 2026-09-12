@@ -278,6 +278,30 @@ func (r *repo) ListTags(ctx context.Context) ([]*entity.Tag, error) {
 	return tags, nil
 }
 
+// UserLabels resolves user ids to "Name (email)" labels, for surfaces that
+// show who owns a row without an N+1 lookup. Unknown ids are simply absent
+// from the map.
+func (r *repo) UserLabels(ctx context.Context, ids []string) map[string]string {
+	out := map[string]string{}
+	if len(ids) == 0 {
+		return out
+	}
+	var users []struct {
+		ID    string
+		Name  string
+		Email string
+	}
+	r.db.WithContext(ctx).
+		Model(&entity.User{}).
+		Select("id, name, email").
+		Where("id IN ?", ids).
+		Find(&users)
+	for _, u := range users {
+		out[u.ID] = u.Name + " (" + u.Email + ")"
+	}
+	return out
+}
+
 func (r *repo) ResolveOwnerDisplayNames(ctx context.Context, tags []*entity.Tag) {
 	ids := make([]string, 0, len(tags))
 	byID := make(map[string]*entity.Tag, len(tags))

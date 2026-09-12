@@ -278,6 +278,7 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("GET /admin/connectors", admin(h.connectorsAdminPage))
 	mux.Handle("POST /admin/connectors/{id}/disabled", admin(h.setConnectorDisabledAdmin))
 	mux.Handle("POST /admin/connectors/{id}/tags", admin(h.setConnectorTagsAdmin))
+	mux.Handle("POST /admin/connectors/{id}/accounts/{accountID}/tags", admin(h.setConnectorAccountTagsAdmin))
 
 	// Projects, Workflows, Skills — ownership/access tag management.
 	mux.Handle("GET /admin/projects", admin(h.projectsAdminPage))

@@ -63,6 +63,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"kind='connector' = standard instance (bot/API key); kind='account' = personal OAuth account connected to the parent connector. " +
 				"parent_id is the connector id when kind='account'. " +
 				"Use kind to decide which identity to run as: kind='connector' for shared/bot credentials, kind='account' for personal identity. " +
+				"Accounts are per-user: unless the instance shares them, you only ever see the account the current user connected, so a listing of one connector + one account is the normal, complete answer — not a partial one. " +
 				"status is 'ready' (all required configs filled) or 'needs_setup' (missing config — do NOT call wick_execute; tell the user to open the admin dashboard to complete setup). " +
 				"WORKFLOW: (1) wick_list to see what connectors and accounts exist, " +
 				"(2) wick_get with the id to see its categories, then with a category to list its ops, then with an op key to get that op's input_schema, " +
