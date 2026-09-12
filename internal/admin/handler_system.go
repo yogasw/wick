@@ -304,6 +304,17 @@ func (h *Handler) servingPayload() map[string]any {
 		"typical_boot_seconds": upgrade.TypicalBootSeconds(),
 		"inherited": upgrade.Inherited(),
 	}
+	// What the PREVIOUS process is still finishing, if it is still around.
+	// Without this the UI can only say a previous process is finishing — the
+	// question an operator actually has is what it is finishing, because that
+	// is what decides between waiting and forcing.
+	if st, ok := upgrade.ReadDrainState(h.sys.DataDir); ok {
+		body["draining"] = map[string]any{
+			"pid":         st.PID,
+			"since":       st.Since.UTC().Format(time.RFC3339),
+			"outstanding": st.Outstanding,
+		}
+	}
 	if since := upgrade.ServingSince(); !since.IsZero() {
 		body["serving_since"] = since.UTC().Format(time.RFC3339)
 	}

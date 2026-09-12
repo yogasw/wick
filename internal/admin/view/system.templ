@@ -820,6 +820,10 @@ templ systemUpdateScript() {
 		var titleEl = document.getElementById('sys-title');
 		var stepsEl = document.getElementById('sys-steps');
 		var autoState = '', autoLeft = 0, autoElapsed = 0, typicalBoot = 0;
+		/* What the PREVIOUS process is still finishing, published by it while
+		   it drains. By then it answers no requests, so this is the only way
+		   this page can say why the swap is queued rather than stuck. */
+		var drainWhy = '', drainTip = '';
 		var installedAgo = 0;
 
 		function mmss(n) {
@@ -855,7 +859,13 @@ templ systemUpdateScript() {
 			if (key === 'idle') {
 				switch (autoState) {
 					case 'settling': return 'nothing running — swapping in ' + mmss(autoLeft);
-					case 'previous_draining': return 'previous process still finishing — retrying in ' + mmss(autoLeft);
+					case 'previous_draining':
+						// Naming WHO is blocking without saying WHAT it is
+						// finishing is the half-answer that made this look
+						// stuck — as far as this page could tell, nothing was
+						// running at all.
+						return 'previous process still finishing' + (drainWhy ? ' — ' + drainWhy : '')
+							+ ' — retrying in ' + mmss(autoLeft);
 					// Only work that cannot be resumed reaches this state. Agent
 					// turns never hold the swap back: they finish in the
 					// outgoing process either way.
@@ -904,6 +914,8 @@ templ systemUpdateScript() {
 					if (dot) { dot.className = DOT_CLASS[st]; dot.textContent = DOT_TEXT[st]; }
 					var det = panels[i].querySelector('[data-detail]');
 					if (det) det.textContent = stepDetail(key);
+					// Hover carries the full explanation; the panel stays short.
+					if (key === 'idle') panels[i].title = autoState === 'previous_draining' ? drainTip : '';
 				}
 			}
 			// A bar for the one phase that has a duration worth showing. Capped
@@ -1020,6 +1032,24 @@ templ systemUpdateScript() {
 			// an older daemon that does not send it yet.
 			d.busy = (d.busy_label && d.busy_label.length) ? d.busy_label : d.busy;
 			typicalBoot = d.typical_boot_seconds || 0;
+			var dr = d.draining;
+			if (dr && dr.outstanding && dr.outstanding.length) {
+				// The counts carry the meaning; the ids behind them are long
+				// and mean nothing on this page. Keep the kind, drop the tail.
+				var work = dr.outstanding.map(function (w) {
+					var m = /^([^(]+)\s*\(/.exec(w);
+					return m ? m[1].trim() : w;
+				});
+				drainWhy = work.join(', ');
+				drainTip = 'pid ' + dr.pid + ' handed over the socket and is finishing its own work before it exits. '
+					+ 'Only two generations may run at once, so the next swap waits for it. Still running: ' + work.join(', ');
+			} else if (dr) {
+				drainWhy = 'nothing left — it is about to exit';
+				drainTip = 'pid ' + dr.pid + ' has finished its work and is exiting; the next swap goes in right after.';
+			} else {
+				drainWhy = '';
+				drainTip = '';
+			}
 			installedAgo = (d.swap && d.swap.installed_ago) || 0;
 			if (myPID && String(d.pid) !== String(myPID)) { location.reload(); return; }
 			if (!myPID) myPID = String(d.pid);
