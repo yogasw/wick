@@ -18,6 +18,7 @@ import (
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/metrics"
+	"github.com/yogasw/wick/internal/pkg/adminscope"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -707,13 +708,14 @@ func (s *Service) List(ctx context.Context) ([]entity.Connector, error) {
 
 // ListVisibleTo returns the not-disabled connector rows the caller
 // can access, applying the same tag-filter rule as Tools (see
-// Repo.ListAccessibleTo). Pass isAdmin=true to bypass tag filtering
-// — admins see every row whether or not they carry the row's tags.
+// Repo.ListAccessibleTo). Pass isAdmin=true to bypass tag filtering —
+// admins see every row whether or not they carry the row's tags, unless
+// the admin_see_all_connectors knob is off (see AdminSeesAllConnectors).
 //
 // Use this from MCP tools/list and any user-facing surface that
 // enumerates connectors; only the admin manager should call List.
 func (s *Service) ListVisibleTo(ctx context.Context, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
-	if isAdmin {
+	if s.adminBypass(isAdmin) {
 		rows, err := s.repo.List(ctx)
 		if err != nil {
 			return nil, err
@@ -729,6 +731,29 @@ func (s *Service) ListVisibleTo(ctx context.Context, userTagIDs []string, isAdmi
 		return filtered, nil
 	}
 	return s.repo.ListAccessibleTo(ctx, userTagIDs)
+}
+
+// AdminSeesAllConnectors reports whether an admin bypasses tag filtering on
+// connector instances and account visibility — the admin_see_all_connectors
+// knob, which is deliberately NOT the same switch as the sessions/projects
+// one: answering both with one switch is how an admin who wanted to see a
+// project ends up able to post as somebody else's Slack account.
+//
+// Missing/blank config reads as ON — the behaviour every install had before
+// the knob existed. Only an explicit "false" scopes admins like regular
+// users. The /admin/connectors panel is NOT affected: it is the
+// administration surface and always lists everything.
+func (s *Service) AdminSeesAllConnectors() bool {
+	if s.cfgs == nil {
+		return true
+	}
+	return adminscope.AdminSeeAllConnectors(s.cfgs)
+}
+
+// adminBypass reports whether this caller's admin role currently bypasses
+// tag filtering — isAdmin AND the knob.
+func (s *Service) adminBypass(isAdmin bool) bool {
+	return isAdmin && s.AdminSeesAllConnectors()
 }
 
 // FilterBotSlot removes non-SSO instance rows from a row set when at least
@@ -772,7 +797,7 @@ func (s *Service) FilterBotSlot(rows []entity.Connector) []entity.Connector {
 // the caller. Used by tools/call to re-check authorization at dispatch
 // time so a stale tools/list snapshot can't be replayed for access.
 func (s *Service) IsVisibleTo(ctx context.Context, connectorID string, userTagIDs []string, isAdmin bool) (bool, error) {
-	if isAdmin {
+	if s.adminBypass(isAdmin) {
 		c, err := s.repo.Get(ctx, connectorID)
 		if err != nil {
 			return false, err
@@ -784,9 +809,10 @@ func (s *Service) IsVisibleTo(ctx context.Context, connectorID string, userTagID
 
 // ListForManager returns rows the caller can see in the admin manager.
 // Unlike ListVisibleTo, disabled rows are included so users can re-
-// enable or delete them. Admins see every row.
+// enable or delete them. Admins see every row while
+// admin_see_all_connectors is on.
 func (s *Service) ListForManager(ctx context.Context, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
-	if isAdmin {
+	if s.adminBypass(isAdmin) {
 		return s.repo.List(ctx)
 	}
 	return s.repo.ListAccessibleForManager(ctx, userTagIDs)
@@ -796,7 +822,7 @@ func (s *Service) ListForManager(ctx context.Context, userTagIDs []string, isAdm
 // the manager UI. Disabled rows are still manageable — the caller may
 // be re-enabling them.
 func (s *Service) IsManageableBy(ctx context.Context, connectorID string, userTagIDs []string, isAdmin bool) (bool, error) {
-	if isAdmin {
+	if s.adminBypass(isAdmin) {
 		_, err := s.repo.Get(ctx, connectorID)
 		if err != nil {
 			return false, err
@@ -1539,7 +1565,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			// the caller cannot run as. Without this, a tool_id carrying
 			// someone else's @accountID would still execute under their
 			// identity even though the account never appeared in wick_list.
-			caller := AccountAccess{UserID: p.UserID, TagIDs: p.TagIDs, Privileged: p.IsAdmin || OwnsConnector(*c, p.UserID)}
+			caller := AccountAccess{UserID: p.UserID, TagIDs: p.TagIDs, Privileged: OwnsConnector(*c, p.UserID) || s.adminBypass(p.IsAdmin)}
 			accTags, tagErr := s.repo.AccountFilterTagIDs(ctx, []string{acc.ID})
 			if tagErr != nil {
 				return nil, fmt.Errorf("resolve account tags: %w", tagErr)

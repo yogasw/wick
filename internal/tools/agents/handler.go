@@ -44,6 +44,7 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
+	"github.com/yogasw/wick/internal/pkg/adminscope"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/tags"
@@ -744,14 +745,16 @@ func (a projectAccess) allowDataTable(slug, ownerUserID string) bool {
 	return ownerUserID != "" && ownerUserID == a.userID
 }
 
-// adminSeeAll reports whether the AdminSeeAll knob is on. When true, admins
-// regain the legacy unrestricted view of every project and session. Default
-// (and on missing config) is false: admins are scoped like regular users.
+// adminSeeAll reports whether the admin_see_all_sessions knob is on. When
+// true, admins regain the legacy unrestricted view of every project and
+// session. Default (and on missing config) is false: admins are scoped like
+// regular users. Connectors are a separate knob — see
+// adminscope.AdminSeeAllConnectors.
 func adminSeeAll() bool {
 	if globalConfigs == nil {
 		return false
 	}
-	return globalConfigs.GetOwned("agents", "admin_see_all") == "true"
+	return adminscope.AdminSeeAllSessions(globalConfigs)
 }
 
 // grantCacheTTL bounds how stale a user's DB-derived grants may be.

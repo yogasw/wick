@@ -547,10 +547,21 @@ func (h *Handler) accountCaller(user *entity.User, row entity.Connector, callerT
 }
 
 // canSeeAllAccounts reports whether the caller administers this instance —
-// admin or its owner — and therefore sees every connected account on it
-// regardless of the AllowOthersSeeAccounts policy.
+// its owner, or an admin while admin_see_all_connectors is on — and
+// therefore sees every connected account on it regardless of the
+// AllowOthersSeeAccounts policy.
+//
+// The knob matters here: with it off an admin is scoped like anyone else, so
+// "I am an admin" no longer means "I may run as your Slack account". Owning
+// the instance still does.
 func (h *Handler) canSeeAllAccounts(user *entity.User, row entity.Connector) bool {
-	return h.canManageAccessPolicy(user, &row) || connectors.OwnsConnector(row, userID(user))
+	if user == nil {
+		return false
+	}
+	if h.ownsConnectorRow(user, &row) {
+		return true
+	}
+	return user.IsAdmin() && h.connectors.AdminSeesAllConnectors()
 }
 
 // accountVisible reports whether the caller may see one connected account —

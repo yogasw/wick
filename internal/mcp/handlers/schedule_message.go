@@ -563,7 +563,7 @@ func argInt(args map[string]any, key string) int {
 // create→list symmetry for the internal principal (it stamps each row's
 // owner_user_id with the real session owner, so a self-scoped list never
 // matched and returned []). The UI monitor still applies its own
-// admin_see_all filtering separately.
+// admin_see_all_sessions filtering separately.
 func scheduleScope(user *entity.User) (string, bool) {
 	// Admins (incl. the in-process wick provider's synthetic RoleAdmin
 	// principal) see all owners here, matching the create/cancel gate

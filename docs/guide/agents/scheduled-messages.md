@@ -286,7 +286,7 @@ An agent typically passes its own `session_id` from conversation context — "ch
 
 ### List scope
 
-`list` is scoped per-caller: a plain user (or admin) sees only schedules they own. Only the app super-user (`CanSeeAllSessions`) sees every owner's schedules over this transport. A cross-user *admin* view is the **Scheduled** monitor page's job — it additionally reads the `admin_see_all` config knob (see below), which this MCP transport does not carry.
+`list` is scoped per-caller: a plain user (or admin) sees only schedules they own. Only the app super-user (`CanSeeAllSessions`) sees every owner's schedules over this transport. A cross-user *admin* view is the **Scheduled** monitor page's job — it additionally reads the `admin_see_all_sessions` config knob (see below), which this MCP transport does not carry.
 
 ## Scheduled tab (session UI)
 
@@ -313,7 +313,7 @@ Visibility branches on scope, because a project job has no target session to che
 - **Session-scoped** rows reuse the exact session-visibility filter the sidebar uses (`callerProjectAccess.allowSession`): a user sees schedules for sessions they own or reach via a project.
 - **Project-scoped** rows are gated on the project itself (`allowProject`) — the project *is* the access boundary.
 
-Either way, the same check backs both the listing and the by-id actions, so a row the page can show is a row the page can act on. An admin sees **all** schedules only when the `admin_see_all` config (`Configs` → `agents` group) is enabled — otherwise an admin is scoped like a regular user, matching the rest of the agents surface's "admins don't see everything by default" rule.
+Either way, the same check backs both the listing and the by-id actions, so a row the page can show is a row the page can act on. An admin sees **all** schedules only when the `admin_see_all_sessions` config (`Configs` → `agents` group) is enabled — otherwise an admin is scoped like a regular user, matching the rest of the agents surface's "admins don't see everything by default" rule.
 
 ## Delivery shows up live
 

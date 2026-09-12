@@ -7,6 +7,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
+	"github.com/yogasw/wick/internal/pkg/adminscope"
+	wickentity "github.com/yogasw/wick/pkg/entity"
+
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/connector"
@@ -204,4 +207,53 @@ func TestAccountSharedByTagIsVisibleToTagHolders(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not accessible")
+}
+
+// The admin role is one switch per surface: admin_see_all_connectors decides
+// whether being an admin is, by itself, enough to see every instance and
+// every connected account. Off = an admin is scoped like anybody else.
+func TestAdminSeeAllConnectorsKnob(t *testing.T) {
+	svc, db := newSvcAccountVisDB(t)
+	ctx := context.Background()
+	row, err := svc.Create(ctx, "acct-vis", "Tagged row", nil, "u-owner")
+	require.NoError(t, err)
+
+	// Tag the row with a filter tag the admin does not carry.
+	tag := &entity.Tag{Name: "team-only", IsFilter: true}
+	require.NoError(t, db.Create(tag).Error)
+	require.NoError(t, db.Create(&entity.ToolTag{ToolPath: "/connectors/" + row.ID, TagID: tag.ID}).Error)
+
+	// Default (config never written) = legacy behaviour: admin sees it.
+	require.True(t, svc.AdminSeesAllConnectors())
+	rows, err := svc.ListVisibleTo(ctx, nil, true)
+	require.NoError(t, err)
+	require.True(t, containsRow(rows, row.ID), "admin should see the tagged row while the knob is on")
+
+	// Seed the config row the agents config struct declares at boot, then
+	// turn the knob off.
+	require.NoError(t, svc.cfgs.EnsureOwned(ctx, "agents", wickentity.Config{Key: adminscope.KeyAdminSeeAllConnectors, Value: "true", Type: "bool"}))
+	require.NoError(t, svc.cfgs.SetOwned(ctx, "agents", adminscope.KeyAdminSeeAllConnectors, "false"))
+	require.False(t, svc.AdminSeesAllConnectors())
+	rows, err = svc.ListVisibleTo(ctx, nil, true)
+	require.NoError(t, err)
+	require.False(t, containsRow(rows, row.ID), "with the knob off an admin is scoped by tags like anyone else")
+
+	// Carrying the tag brings it back — the admin is now a normal grantee.
+	rows, err = svc.ListVisibleTo(ctx, []string{tag.ID}, true)
+	require.NoError(t, err)
+	require.True(t, containsRow(rows, row.ID))
+
+	// Same answer at the single-row check the dispatch path uses.
+	ok, err := svc.IsVisibleTo(ctx, row.ID, nil, true)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func containsRow(rows []entity.Connector, id string) bool {
+	for _, r := range rows {
+		if r.ID == id {
+			return true
+		}
+	}
+	return false
 }

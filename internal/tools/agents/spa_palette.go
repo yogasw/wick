@@ -142,7 +142,7 @@ func gatherConnectorData(c *tool.Ctx) map[string][]connectorInstance {
 			caller := connectors.AccountAccess{
 				UserID:     user.ID,
 				TagIDs:     tagIDs,
-				Privileged: user.IsAdmin() || connectors.OwnsConnector(row, user.ID),
+				Privileged: connectors.OwnsConnector(row, user.ID) || (user.IsAdmin() && globalConnectors.AdminSeesAllConnectors()),
 			}
 			inst.Accounts, _ = globalConnectors.ListAccountsVisibleTo(c.Context(), row, caller)
 		}
