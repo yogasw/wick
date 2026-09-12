@@ -190,7 +190,7 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 			caller := connectors.AccountAccess{
 				UserID:     callerID,
 				TagIDs:     tagIDs,
-				Privileged: isAdmin || connectors.OwnsConnector(row, callerID),
+				Privileged: connectors.OwnsConnector(row, callerID) || (isAdmin && svc.AdminSeesAllConnectors()),
 			}
 			if accs, err2 := svc.ListAccountsVisibleTo(r.Context(), row, caller); err2 == nil {
 				for _, acc := range accs {

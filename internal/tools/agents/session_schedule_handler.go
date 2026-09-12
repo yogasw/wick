@@ -503,7 +503,7 @@ const scheduleMaxMessageRunes = 8000
 // The Scheduled page lists schedules across every session the caller may
 // see. Access reuses the exact session-visibility filter the sidebar uses
 // (callerProjectAccess.allowSession): a user sees schedules for sessions they
-// own or reach via a project; an admin sees all ONLY when admin_see_all is on
+// own or reach via a project; an admin sees all ONLY when admin_see_all_sessions is on
 // — otherwise an admin is scoped like a regular user. Provenance (creator,
 // session) rides along so the page can group + attribute each row.
 

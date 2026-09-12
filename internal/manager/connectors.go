@@ -845,15 +845,23 @@ func (h *Handler) canManageAccessPolicy(user *entity.User, row *entity.Connector
 	if user.IsAdmin() {
 		return true
 	}
+	return h.ownsConnectorRow(user, row)
+}
+
+// ownsConnectorRow reports whether the user owns this instance: the owner tag
+// seeded at create/duplicate, or CreatedBy — checked as well so an instance
+// whose owner tag was renamed or dropped does not leave its creator locked
+// out of their own row.
+func (h *Handler) ownsConnectorRow(user *entity.User, row *entity.Connector) bool {
+	if user == nil || row == nil {
+		return false
+	}
 	if h.tags != nil {
 		owns, _ := h.tags.UserOwnsConnector(context.Background(), user.ID, row.ID)
 		if owns {
 			return true
 		}
 	}
-	// CreatedBy is the same person the owner tag names; checked as well so an
-	// instance whose owner tag was renamed or dropped does not leave its
-	// creator locked out of their own access policy.
 	return connectors.OwnsConnector(*row, user.ID)
 }
 
