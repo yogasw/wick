@@ -1754,18 +1754,40 @@ func NewServer() *Server {
 	//
 	// ok=false (no owner: legacy rows, cron, system jobs) makes the factory
 	// fall back to the internal token rather than lose MCP access.
-	agentsFactory.SessionMCPToken = func(sessionID string) (string, bool) {
+	agentsFactory.SessionMCPToken = func(sessionID, callerUserID string) (string, bool) {
 		sess, found := agentsMgr.Registry().Session(sessionID)
-		if !found || sess.Meta.UserID == "" {
+		if !found {
+			return "", false
+		}
+		// WHOSE access this spawn gets. The caller wins when a human
+		// triggered it: a turn must run with the reach of the person who
+		// asked for it, not of whoever happens to own the conversation.
+		//
+		// Keying this on the owner alone was a privilege escalation on any
+		// shared session — a Slack thread is multi-user by design, so a
+		// teammate replying into an admin's thread had their turn served
+		// with the admin's connectors. It also quietly disabled
+		// RespawnOnCallerChange, which kills the process precisely so the
+		// next turn can be minted for the new caller.
+		//
+		// The owner remains the fallback for spawns with no human behind
+		// them — a schedule fire, a cron job — where there is no caller to
+		// be faithful to. Either way the identity is a real user's own, so
+		// this can only narrow what a spawn reaches.
+		identity := callerUserID
+		if identity == "" {
+			identity = sess.Meta.UserID
+		}
+		if identity == "" {
 			return "", false
 		}
 		tok, err := mcpScopedTokens.IssueFor(
-			sess.Meta.UserID,
-			authSvc.GetUserFilterTagIDs(context.Background(), sess.Meta.UserID),
+			identity,
+			authSvc.GetUserFilterTagIDs(context.Background(), identity),
 			false,
 		)
 		if err != nil {
-			log.Warn().Err(err).Str("session", sessionID).
+			log.Warn().Err(err).Str("session", sessionID).Str("identity", identity).
 				Msg("mcp: per-user token mint failed; falling back to internal token")
 			return "", false
 		}
