@@ -753,7 +753,7 @@
                     <div class="flex items-center gap-2 min-w-0 text-xs">
                       <p class="font-mono text-black-700 dark:text-black-600 truncate">usage unavailable: {conn.usageErr}</p>
                       {#if conn.usageNextS > 0}
-                        <span class="whitespace-nowrap text-black-600 dark:text-black-700" title="Retrying a rate limit is what keeps it alive, so the next automatic probe waits">retry in {fmtSecsShort(conn.usageNextS)}</span>
+                        <span class="whitespace-nowrap text-black-600 dark:text-black-700" title="Nothing retries on its own; this is when a Re-check would be accepted">re-check in {fmtSecsShort(conn.usageNextS)}</span>
                       {/if}
                       {@render recheckButton(p.Instance.Type, p.Instance.Name, busy, recheckWait[ckey] ?? 0)}
                     </div>

@@ -6,12 +6,15 @@
      Floats above the composer like the /thinking popover and the provider
      switcher, and never sends a message.
 
-     Re-check asks the server's cache for a fresh reading. The cache owns
-     the decision and refuses inside a cooldown (its own 10s floor, or a
-     Retry-After the upstream asked for), answering with the wait instead
-     — which is why the last-check line matters: you can see there is no
-     point pressing it again yet. Reconnect is NOT here: acting on the
-     account belongs to the Providers menu.
+     Re-check is the ONLY thing that fetches: nothing probes the provider
+     on a timer, so what you see is whatever was last read, and the
+     footer says when that was. The cache owns the decision and refuses
+     inside a cooldown (its own 10s floor, or a Retry-After the upstream
+     asked for) — the button is disabled for that window rather than
+     letting anyone press a rate limit into existence.
+
+     Reconnect is NOT here: acting on the account belongs to the
+     Providers menu.
 
      Two things it is careful about. The numbers come from a shared,
      paced server cache (opening this costs no upstream request), so it
@@ -112,7 +115,7 @@
             type="button"
             data-testid="usage-recheck"
             class="rounded px-1.5 py-0.5 text-[11px] text-link-400 hover:bg-white-300 dark:hover:bg-navy-600 disabled:opacity-50"
-            disabled={rechecking || data.checking}
+            disabled={rechecking || data.checking || data.nextS > 0}
             title="Check this account's usage now"
             onclick={onRecheck}
           >{rechecking || data.checking ? "Checking…" : "Re-check"}</button>
@@ -190,7 +193,7 @@
           <p class="flex items-center gap-1 text-[10px] text-black-600 dark:text-black-700">
             <span aria-hidden="true">↻</span>
             last check {data.ageS < 2 ? "just now" : `${shortDuration(data.ageS)} ago`}
-            {#if data.nextS > 0}· auto refresh in {shortDuration(data.nextS)}{/if}
+            {#if data.nextS > 0}· re-check in {shortDuration(data.nextS)}{/if}
           </p>
         {/if}
       {/if}

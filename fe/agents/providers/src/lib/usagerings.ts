@@ -84,12 +84,12 @@ export function fmtSecsShort(seconds: number): string {
   return `${Math.round(s / 86400)}d`;
 }
 
-/* cacheHint describes WHERE a usage reading came from: its age, and
-   when the next probe is due.
+/* cacheHint describes WHERE a usage reading came from: when it was
+   taken, and when a re-check would be accepted.
 
-   Usage readings are shared per account and cached on the server — the
-   endpoint is rate-limited, so the page deliberately does not re-fetch
-   per paint. That makes the age part of the data: a card showing "76%"
+   Nothing probes the provider on a timer — the endpoint is rate-limited,
+   so a reading is taken once and then kept until a human asks for
+   another. That makes the age part of the data: a card showing "76%"
    with no provenance implies a live call it never made.
 
    `short` is the chip text ("2m ago"), `full` the tooltip. Both empty
@@ -101,7 +101,7 @@ export function cacheHint(ageS: number, nextS: number): { short: string; full: s
   const taken = age < 2 ? "Cached reading, taken just now" : `Cached reading, taken ${fmtSecsShort(age)} ago`;
   const next =
     Number.isFinite(nextS) && nextS > 0
-      ? `next refresh in ${fmtSecsShort(nextS)}`
-      : "next refresh due";
+      ? `re-check available in ${fmtSecsShort(nextS)}`
+      : "press Re-check for a new reading";
   return { short, full: `${taken}; ${next}` };
 }

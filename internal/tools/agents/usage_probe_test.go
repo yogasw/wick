@@ -74,7 +74,10 @@ func TestUsageCacheServesWithinTTL(t *testing.T) {
 	}
 }
 
-func TestUsageCacheRefetchesAfterTTL(t *testing.T) {
+// Nothing refreshes on its own. A page that polls every few seconds must
+// cost ZERO upstream requests, however long it stays open — the
+// automatic refresh is what fed the rate limit this cache exists for.
+func TestUsageCacheNeverRefetchesOnItsOwn(t *testing.T) {
 	c, clk := clockedCache(time.Minute)
 	calls := 0
 	fetch := func() ([]logintty.UsageWindow, error) {
@@ -82,18 +85,19 @@ func TestUsageCacheRefetchesAfterTTL(t *testing.T) {
 		return windows(float64(calls)), nil
 	}
 
-	c.get("acct", fetch)
-	clk.advance(2 * time.Minute)
-	got := c.get("acct", fetch).Windows
-
-	if calls != 2 {
-		t.Errorf("fetched %d times, want 2 — the TTL expired", calls)
+	c.get("acct", fetch) // the one automatic probe: this account was cold
+	for range 50 {       // a page open for an hour, polling throughout
+		clk.advance(time.Minute)
+		c.get("acct", fetch)
 	}
-	if len(got) != 1 || got[0].Utilization != 2 {
-		t.Errorf("windows = %+v, want the refetched value", got)
+
+	if calls != 1 {
+		t.Errorf("fetched %d times, want exactly 1 — only the cold read is automatic", calls)
+	}
+	if got := c.get("acct", fetch).Windows; len(got) != 1 || got[0].Utilization != 1 {
+		t.Errorf("windows = %+v, want the first reading, still served", got)
 	}
 }
-
 func TestUsageCacheKeysPerAccount(t *testing.T) {
 	c, _ := clockedCache(time.Minute)
 	var asked []string
@@ -112,10 +116,9 @@ func TestUsageCacheKeysPerAccount(t *testing.T) {
 	}
 }
 
-// The bug this whole file exists for: a failed probe used not to be
-// cached, so a 429 was retried on every 4-second page poll, which kept
-// the rate limit alive. A failure must park the account instead.
-func TestUsageCacheCachesFailureWithBackoff(t *testing.T) {
+// A failure is remembered, and polling never retries it. Only a human
+// pressing Re-check tries again, and only after the manual floor.
+func TestUsageCacheCachesFailureAndNeverRetriesOnItsOwn(t *testing.T) {
 	c, clk := clockedCache(time.Minute)
 	calls := 0
 	fetch := func() ([]logintty.UsageWindow, error) {
@@ -123,48 +126,42 @@ func TestUsageCacheCachesFailureWithBackoff(t *testing.T) {
 		return nil, errors.New("boom")
 	}
 
-	v1 := c.get("acct", fetch)
-	err1, known := v1.Err, v1.Known
-	clk.advance(4 * time.Second) // the providers page's poll interval
-	err2 := c.get("acct", fetch).Err
-
-	if err1 == nil || err2 == nil {
-		t.Fatalf("errors swallowed: %v / %v", err1, err2)
+	v := c.get("acct", fetch)
+	if v.Err == nil || !v.Known {
+		t.Fatalf("view = %+v, want the failure as a known state", v)
 	}
-	if !known {
-		t.Error("known = false after a failure — the failure is a known state to display")
+	for range 20 {
+		clk.advance(4 * time.Second) // the providers page's poll interval
+		c.get("acct", fetch)
 	}
 	if calls != 1 {
-		t.Errorf("fetched %d times, want 1 — a failure must be cached, not retried on the next poll", calls)
+		t.Errorf("fetched %d times, want 1 — a failure must never be retried by a poll", calls)
 	}
+}
 
-	clk.advance(usageErrBackoffMax) // well past any backoff
+// The cooldown a manual re-check must respect: the server's own
+// Retry-After when it sent one, otherwise the 10s floor. There is no
+// exponential backoff any more — nothing retries on its own, so there
+// was nothing left for it to pace.
+func TestManualCooldownReflectsTheServersRequest(t *testing.T) {
+	c, clk := clockedCache(time.Minute)
+	fetch := func() ([]logintty.UsageWindow, error) {
+		return nil, &logintty.RateLimitedError{Status: "429 Too Many Requests", RetryAfter: 5 * time.Minute}
+	}
 	c.get("acct", fetch)
-	if calls != 2 {
-		t.Errorf("fetched %d times after the backoff expired, want 2 — it must eventually retry", calls)
+
+	v := c.get("acct", fetch)
+	if got := v.NextAt.Sub(clk.now()); got < 4*time.Minute || got > 5*time.Minute {
+		t.Errorf("next re-check in %v, want the server's ~5m", got)
+	}
+
+	// A plain success only carries the manual floor.
+	c2, clk2 := clockedCache(time.Minute)
+	c2.get("ok", func() ([]logintty.UsageWindow, error) { return windows(5), nil })
+	if got := c2.get("ok", nil).NextAt.Sub(clk2.now()); got > usageManualMinInterval {
+		t.Errorf("next re-check in %v, want at most the %v floor", got, usageManualMinInterval)
 	}
 }
-
-func TestUsageCacheRateLimitBacksOffLongerThanOrdinaryFailure(t *testing.T) {
-	rl := &logintty.RateLimitedError{Status: "429 Too Many Requests"}
-	plain := errors.New("dial tcp: timeout")
-
-	if got := usageBackoff(rl, 1); got < usageRateLimitBackoffMin {
-		t.Errorf("429 backoff = %v, want at least %v", got, usageRateLimitBackoffMin)
-	}
-	if got := usageBackoff(plain, 1); got >= usageRateLimitBackoffMin {
-		t.Errorf("ordinary backoff = %v, want shorter than the rate-limit floor", got)
-	}
-	// Repeated failures must grow, and stop growing at the ceiling.
-	if usageBackoff(plain, 3) <= usageBackoff(plain, 1) {
-		t.Error("backoff does not grow with consecutive failures")
-	}
-	if got := usageBackoff(plain, 30); got > usageErrBackoffMax+usageErrBackoffMax/4 {
-		t.Errorf("backoff = %v, want capped near %v", got, usageErrBackoffMax)
-	}
-}
-
-// When the endpoint says how long to wait, that wins over our own guess.
 func TestUsageCacheHonoursRetryAfter(t *testing.T) {
 	c, clk := clockedCache(time.Minute)
 	calls := 0
@@ -175,20 +172,16 @@ func TestUsageCacheHonoursRetryAfter(t *testing.T) {
 
 	c.get("acct", fetch)
 	clk.advance(80 * time.Second)
-	c.get("acct", fetch)
-	if calls != 1 {
-		t.Errorf("fetched %d times, want 1 — still inside the server's Retry-After", calls)
+	if accepted, wait := c.forceRefresh("acct", fetch); accepted || wait <= 0 {
+		t.Errorf("accepted=%v wait=%v, want a refusal inside the server's Retry-After", accepted, wait)
 	}
-
-	clk.advance(30 * time.Second) // past 90s + the small jitter
-	c.get("acct", fetch)
-	if calls != 2 {
-		t.Errorf("fetched %d times, want 2 — the Retry-After window has passed", calls)
+	if calls != 1 {
+		t.Errorf("fetched %d times, want 1", calls)
 	}
 }
 
-// A refused refresh must not blank a card that already has numbers.
-func TestUsageCacheServesLastGoodWhenRefreshFails(t *testing.T) {
+// A refused re-check must not blank a card that already has numbers.
+func TestUsageCacheServesLastGoodWhenARecheckFails(t *testing.T) {
 	c, clk := clockedCache(time.Minute)
 	fail := false
 	fetch := func() ([]logintty.UsageWindow, error) {
@@ -200,26 +193,28 @@ func TestUsageCacheServesLastGoodWhenRefreshFails(t *testing.T) {
 
 	c.get("acct", fetch)
 	fail = true
-	clk.advance(2 * time.Minute) // TTL expired, refresh will fail
-	v2 := c.get("acct", fetch)
-	got, err, known := v2.Windows, v2.Err, v2.Known
-
-	if err != nil {
-		t.Errorf("err = %v, want the stale-but-good reading instead", err)
-	}
-	if !known || len(got) != 1 || got[0].Utilization != 76 {
-		t.Errorf("windows = %+v (known=%v), want the last good reading", got, known)
+	clk.advance(usageManualMinInterval)
+	if accepted, _ := c.forceRefresh("acct", fetch); !accepted {
+		t.Fatal("re-check refused")
 	}
 
-	// Once it is older than the stale window, stop pretending.
-	clk.advance(usageStaleWindow + time.Minute)
-	v3 := c.get("acct", fetch)
-	err, known = v3.Err, v3.Known
-	if err == nil || !known {
-		t.Errorf("err = %v, want the failure surfaced once the reading is too old", err)
+	v := c.get("acct", fetch)
+	if v.Err != nil {
+		t.Errorf("err = %v, want the stale-but-good reading instead", v.Err)
+	}
+	if !v.Known || len(v.Windows) != 1 || v.Windows[0].Utilization != 76 {
+		t.Errorf("windows = %+v (known=%v), want the last good reading", v.Windows, v.Known)
+	}
+
+	// Still served an hour later: nothing refreshes on its own, so
+	// dropping it would leave the user with less than they had. The age
+	// travels with it (FetchedAt), and the UI prints "last check …".
+	clk.advance(time.Hour)
+	v = c.get("acct", fetch)
+	if len(v.Windows) != 1 || v.FetchedAt.IsZero() {
+		t.Errorf("view = %+v, want the old reading plus its timestamp", v)
 	}
 }
-
 func TestUsageCacheCachesUnsupportedVerdict(t *testing.T) {
 	c, clk := clockedCache(time.Minute)
 	calls := 0
