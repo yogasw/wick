@@ -63,9 +63,15 @@ type Runner struct {
 	// exist and are approved. Checked at FIRE time, not create time,
 	// because the gap between the two is where accounts get disabled.
 	//
+	// Takes the tick's ctx: this runs a DB lookup, and a tick delivers a
+	// BATCH. Handing it a detached context meant one unreachable database
+	// could park the runner forever and hold up every other schedule due in
+	// the same tick — a lookup that guards one fire must not be able to
+	// stop all of them.
+	//
 	// nil disables the check (stdio, tests), which is safe there: without a
 	// server there is no MCP credential to mint in the first place.
-	runAsUsable func(userID string) bool
+	runAsUsable func(ctx context.Context, userID string) bool
 }
 
 func NewRunner(store *Store, sender Sender, layout agentconfig.Layout) *Runner {
@@ -79,7 +85,7 @@ func NewRunner(store *Store, sender Sender, layout agentconfig.Layout) *Runner {
 // WithRunAsCheck installs the fire-time guard on the run-as identity. The
 // server passes a lookup over its user store; callers without one (tests,
 // stdio) simply skip the check.
-func (r *Runner) WithRunAsCheck(usable func(userID string) bool) *Runner {
+func (r *Runner) WithRunAsCheck(usable func(ctx context.Context, userID string) bool) *Runner {
 	r.runAsUsable = usable
 	return r
 }
@@ -222,7 +228,7 @@ func (r *Runner) deliver(ctx context.Context, l zerologLogger, m entity.Schedule
 	// else entirely", silently, on a timer. Better a failed row somebody can
 	// see than a job that keeps running under an identity nobody chose.
 	if runAs := m.EffectiveRunAsUser(); runAs != "" {
-		if r.runAsUsable != nil && !r.runAsUsable(runAs) {
+		if r.runAsUsable != nil && !r.runAsUsable(ctx, runAs) {
 			l.Warn().Str("id", m.ID).Str("run_as", runAs).
 				Msg("run-as user is gone or not approved; refusing to fire")
 			_ = r.store.MarkFailed(ctx, m.ID, "run-as user "+runAs+" is missing or not approved")

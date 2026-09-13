@@ -249,6 +249,19 @@
         <dd class="font-medium text-black-900 dark:text-white-100">{schedule.created_by || "—"}</dd>
       </div>
       <div>
+        <!-- Kept next to "Created by" on purpose: one says how the row was
+             made, the other whose access its fires carry, and conflating them
+             is what hid an unattached schedule for so long. -->
+        <dt class="text-black-800 dark:text-black-600">Runs as</dt>
+        <dd class="font-medium text-black-900 dark:text-white-100" data-testid="detail-runas">
+          {#if schedule.effective_run_as}
+            {schedule.effective_run_as_name || schedule.effective_run_as}{schedule.run_as_user_id ? " (admin override)" : ""}
+          {:else}
+            <span class="text-amber-600 dark:text-amber-400">nobody — no access tags</span>
+          {/if}
+        </dd>
+      </div>
+      <div>
         <dt class="text-black-800 dark:text-black-600">Delivers to</dt>
         <dd class="font-medium text-black-900 dark:text-white-100" data-testid="detail-target">
           {#if !projectScoped}
