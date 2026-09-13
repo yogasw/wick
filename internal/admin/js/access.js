@@ -208,12 +208,37 @@
       }
     }
 
+    var visible = [];
     rows.forEach(function (row) {
       var hay = (row.getAttribute("data-search") || "").toLowerCase();
       var match = !q || (exact ? row === exact : hay.indexOf(q) !== -1);
       row.classList.toggle("hidden", !match);
-      if (match) shown++;
+      if (match) {
+        shown++;
+        visible.push(row);
+      }
     });
+
+    // Keep parent/child rows together: a connected account is meaningless
+    // without the instance above it, and searching an instance should still
+    // show the accounts under it.
+    if (q) {
+      visible.forEach(function (row) {
+        var parentID = row.getAttribute("data-search-parent");
+        if (parentID) {
+          var parent = document.getElementById(parentID);
+          if (parent) parent.classList.remove("hidden");
+        }
+      });
+      visible.forEach(function (row) {
+        if (!row.id) return;
+        rows.forEach(function (child) {
+          if (child.getAttribute("data-search-parent") === row.id) {
+            child.classList.remove("hidden");
+          }
+        });
+      });
+    }
 
     var out = (input.closest("main") || document).querySelector(".access-search-count");
     if (out) {

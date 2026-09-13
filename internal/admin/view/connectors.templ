@@ -131,6 +131,7 @@ templ connectorAccountAdminRowFragment(row ConnectorAdminRow, acc ConnectorAccou
 		id={ "connector-account-" + accID }
 		data-search={ searchHaystack(acc.Account.DisplayName, accID, acc.OwnerLabel, row.Connector.Label, strings.Join(acc.TagNames, " ")) }
 		data-search-id={ accID }
+		data-search-parent={ "connector-" + id }
 		class={ "border-b border-white-300 dark:border-navy-600 last:border-0 bg-white-200/50 dark:bg-navy-800/40",
 			templ.KV("opacity-60", row.Connector.Disabled) }
 	>
