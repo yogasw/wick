@@ -64,6 +64,17 @@ func (e *SessionInitExecutor) Execute(ctx context.Context, n workflow.Node, rc *
 		if err := e.Pool.EnsureSession(ctx, sessionID, "workflow", n.Workspace); err != nil {
 			return workflow.NodeOutput{}, fmt.Errorf("ensure session: %w", err)
 		}
+		// Attach the workflow's author, because a session with no owner mints
+		// no per-user credential: the spawn falls back to wick's internal
+		// principal, which carries no access tags. That is why an agent node
+		// has always looked like it had "no MCP" — not a property of the node,
+		// but of a session nobody was attached to.
+		//
+		// First-writer-wins inside EnsureSessionOwner, so a workflow pinned to
+		// a session someone already owns never takes it over. An unattributed
+		// workflow (CreatedBy empty) stays ownerless rather than being guessed
+		// at — the fallback is narrower access, never wider.
+		e.Pool.EnsureSessionOwner(ctx, sessionID, rc.Workflow.CreatedBy)
 	}
 
 	return workflow.NodeOutput{
