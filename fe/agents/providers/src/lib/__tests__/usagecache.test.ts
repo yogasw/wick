@@ -22,7 +22,7 @@ describe("cacheHint", () => {
     expect(h.short).toBe("42s ago");
     expect(h.full).toContain("Cached reading");
     expect(h.full).toContain("42s ago");
-    expect(h.full).toContain("next refresh in 18s");
+    expect(h.full).toContain("re-check available in 18s");
   });
 
   it("reads as 'just now' for a fresh reading", () => {
@@ -30,8 +30,10 @@ describe("cacheHint", () => {
     expect(cacheHint(1, 60).short).toBe("just now");
   });
 
-  it("says the refresh is due when no countdown was sent", () => {
-    expect(cacheHint(120, 0).full).toContain("next refresh due");
+  it("points at Re-check when no cooldown is pending", () => {
+    // Nothing refreshes on its own, so there is no "due" to report —
+    // the only thing that produces a new reading is the button.
+    expect(cacheHint(120, 0).full).toContain("press Re-check");
   });
 
   // An absent timestamp must collapse the chip entirely rather than

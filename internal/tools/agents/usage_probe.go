@@ -26,34 +26,18 @@ import (
 //     already running instead of starting a second one.
 //  3. A RANDOMISED gap between any two outbound probes, process-wide,
 //     so two providers never hit the endpoint in the same second.
-//  4. Failures are CACHED with backoff, and a 429's own Retry-After is
-//     honoured. Nothing retries a rate limit on the next page poll.
+//  4. Failures are CACHED and never retried on their own; a 429's own
+//     Retry-After is honoured even against a human pressing Re-check.
 //
 // Readings are refreshed in the background, so a slow or paced probe
 // never holds the page: the handler serves what the cache knows and the
 // badge fills in on a later poll.
 
 const (
-	// usageCacheTTL is how long a good reading is reused. The numbers
-	// are rolling-window utilization percentages that move over
-	// minutes, so a minute keeps the badges honest while making page
-	// refreshes free.
+	// usageCacheTTL is kept as the cache's nominal freshness for the
+	// constructor's sake. It no longer triggers anything: a reading is
+	// served until a human replaces it.
 	usageCacheTTL = 60 * time.Second
-
-	// usageStaleWindow is how long a last-good reading keeps being
-	// shown after refreshes start failing. Slightly stale percentages
-	// beat "usage unavailable" — and it means a transient 429 is
-	// invisible to the user rather than blanking the card.
-	usageStaleWindow = 30 * time.Minute
-
-	// Backoff for ordinary failures (timeout, DNS, 5xx).
-	usageErrBackoffMin = 30 * time.Second
-	usageErrBackoffMax = 10 * time.Minute
-
-	// Backoff for a 429 with no Retry-After. Deliberately much longer:
-	// the endpoint has already told us we are asking too often.
-	usageRateLimitBackoffMin = 2 * time.Minute
-	usageRateLimitBackoffMax = 15 * time.Minute
 
 	// usageUnsupportedTTL parks the "this provider type has no usage
 	// API" verdict. It is a property of the build, not a condition that
@@ -120,7 +104,7 @@ type usageEntry struct {
 	goodAt  time.Time // when the last successful reading was taken
 	err     error     // last failure, kept for display and backoff
 	fails   int       // consecutive failures, drives the backoff
-	nextAt  time.Time // earliest allowed next probe
+	nextAt  time.Time // earliest a manual re-check is accepted
 	// attemptedAt is when the last probe finished, successful or not.
 	// A manual refresh is measured against this, not against goodAt:
 	// failed attempts cost the endpoint just as much as good ones.
@@ -132,12 +116,11 @@ type usageEntry struct {
 
 // usageCache is the per-account probe cache described above.
 type usageCache struct {
-	ttl      time.Duration
-	staleFor time.Duration
-	gate     *paceGate
-	now      func() time.Time
-	sleep    func(time.Duration)
-	run      func(func())
+	ttl   time.Duration
+	gate  *paceGate
+	now   func() time.Time
+	sleep func(time.Duration)
+	run   func(func())
 
 	mu       sync.Mutex
 	entries  map[string]*usageEntry
@@ -147,7 +130,6 @@ type usageCache struct {
 func newUsageCache(ttl time.Duration) *usageCache {
 	return &usageCache{
 		ttl:      ttl,
-		staleFor: usageStaleWindow,
 		gate:     newPaceGate(usagePaceMin, usagePaceMax),
 		now:      time.Now,
 		sleep:    time.Sleep,
@@ -173,8 +155,9 @@ type usageView struct {
 	Known bool
 	// FetchedAt is when the served reading was taken (zero when none).
 	FetchedAt time.Time
-	// NextAt is the earliest moment the next probe may run: the TTL for
-	// a good reading, the backoff for a failed one.
+	// NextAt is the earliest moment a MANUAL re-check would be accepted:
+	// the 10s floor, or a longer cooldown the endpoint asked for. There
+	// is no automatic probe for it to describe.
 	NextAt time.Time
 	// Checking is true while a probe for this account is in flight, so
 	// the UI can say "checking usage…" instead of leaving the user
@@ -190,10 +173,13 @@ func (v usageView) Age(now time.Time) time.Duration {
 	return now.Sub(v.FetchedAt)
 }
 
-// get serves what the cache knows about key, scheduling a background
-// refresh when one is due. It never blocks on the network.
+// get serves what the cache knows about key. It never blocks on the
+// network, and it does NOT refresh a reading that already exists —
+// polling a page must never cost an upstream request. A cold account
+// (nothing read yet) gets its first probe here so the page has something
+// to show; everything after that is Re-check.
 func (c *usageCache) get(key string, fetch usageFetch) usageView {
-	c.schedule(key, fetch)
+	c.schedule(key, fetch, false)
 	c.mu.Lock()
 	e := c.entries[key]
 	_, checking := c.inflight[key]
@@ -245,7 +231,11 @@ func (c *usageCache) serve(e *usageEntry) usageView {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	v := usageView{FetchedAt: e.goodAt, NextAt: e.nextAt}
-	if !e.goodAt.IsZero() && c.now().Sub(e.goodAt) <= c.staleFor {
+	if !e.goodAt.IsZero() {
+		// Served however old it is. Nothing refreshes on its own any
+		// more, so a cutoff would simply blank the card and leave the
+		// user with less than they had — and the age is on screen, so
+		// nobody is being told this number is fresh.
 		v.Windows, v.Known = e.windows, true
 		return v
 	}
@@ -256,18 +246,25 @@ func (c *usageCache) serve(e *usageEntry) usageView {
 	return usageView{NextAt: e.nextAt}
 }
 
-// schedule starts a refresh for key unless one is already running or
-// the entry is still inside its TTL / backoff. Returns the channel that
-// closes when the running probe finishes, or nil when none was needed.
-func (c *usageCache) schedule(key string, fetch usageFetch) chan struct{} {
+// schedule starts a probe for key. It declines when one is already
+// running, and — unless force is set — when the account already has a
+// reading: nothing refreshes on its own, because a page poll must never
+// cost an upstream request. force comes only from forceRefresh, which
+// has already applied the cooldowns. Returns the channel that closes
+// when the running probe finishes, or nil when none was started.
+func (c *usageCache) schedule(key string, fetch usageFetch, force bool) chan struct{} {
 	c.mu.Lock()
 	if ch, ok := c.inflight[key]; ok {
 		c.mu.Unlock()
 		return ch // rule 2: one flight per account
 	}
-	if e := c.entries[key]; e != nil && c.now().Before(e.nextAt) {
+	if e := c.entries[key]; e != nil && !force {
+		// An entry exists, so this account has been read at least once.
+		// Refreshing it is a human's decision (forceRefresh), never a
+		// side effect of someone having a page open — that automatic
+		// refresh is exactly what fed the rate limit before.
 		c.mu.Unlock()
-		return nil // rule 1 & 4: inside the TTL, or still cooling down
+		return nil
 	}
 	ch := make(chan struct{})
 	c.inflight[key] = ch
@@ -306,28 +303,30 @@ func (c *usageCache) store(key string, windows []logintty.UsageWindow, err error
 	switch {
 	case err == nil:
 		e.windows, e.goodAt, e.err, e.fails = windows, now, nil, 0
-		e.nextAt = now.Add(c.ttl)
 	case errors.Is(err, logintty.ErrUsageUnsupported):
 		e.err, e.windows, e.fails = err, nil, 0
 		e.goodAt = time.Time{}
-		e.nextAt = now.Add(usageUnsupportedTTL)
 	default:
 		e.fails++
 		e.err = err
-		e.nextAt = now.Add(usageBackoff(err, e.fails))
+	}
+	// One meaning for nextAt: when would a human's Re-check be allowed?
+	// That is the manual floor, unless the endpoint asked for longer.
+	e.nextAt = now.Add(usageManualMinInterval)
+	if e.serverUntil.After(e.nextAt) {
+		e.nextAt = e.serverUntil
 	}
 }
 
-// forceRefresh is the Retry button: it drops OUR backoff for this
-// account and asks for a probe now.
+// forceRefresh is the Re-check button: the ONLY way a reading is
+// replaced, now that nothing probes on its own.
 //
-// Two things it deliberately does not do, because a button that can be
-// clicked repeatedly is exactly how a rate limit is kept alive:
+// Two refusals stand in its way, and both exist because a button that
+// can be clicked repeatedly is how a rate limit is kept alive:
 //
-//   - It never overrides a cooldown the server asked for (Retry-After).
-//     Retrying inside that window earns the next 429 by design.
-//   - It never probes twice inside usageManualMinInterval, however many
-//     people click.
+//   - a cooldown the SERVER asked for (Retry-After) is never overridden;
+//   - no two probes for one account inside usageManualMinInterval,
+//     however many people click.
 //
 // Returns accepted=false plus how long to wait when it declines, so the
 // UI can say "10s more" instead of looking broken. A probe already in
@@ -348,31 +347,11 @@ func (c *usageCache) forceRefresh(key string, fetch usageFetch) (accepted bool, 
 			c.mu.Unlock()
 			return false, d
 		}
-		e.nextAt = now // due now: schedule() will take it
 	}
 	c.mu.Unlock()
-	c.schedule(key, fetch)
+	// force: schedule() declines an account that already has a reading,
+	// and this is the one caller allowed to override that — a human
+	// asked, and the cooldowns above already said yes.
+	c.schedule(key, fetch, true)
 	return true, 0
-}
-
-// usageBackoff is the cooldown after a failed probe: the server's own
-// Retry-After when it sent one, otherwise exponential from the floor
-// for this failure kind, with jitter so several accounts that failed
-// together do not all come back in the same second.
-func usageBackoff(err error, fails int) time.Duration {
-	if after := logintty.RetryAfterOf(err); after > 0 {
-		return after + randomDuration(usagePaceMin, usagePaceMax)
-	}
-	min, max := usageErrBackoffMin, usageErrBackoffMax
-	if logintty.IsRateLimited(err) {
-		min, max = usageRateLimitBackoffMin, usageRateLimitBackoffMax
-	}
-	d := min
-	for i := 1; i < fails && d < max; i++ {
-		d *= 2
-	}
-	if d > max {
-		d = max
-	}
-	return d + randomDuration(0, d/4)
 }

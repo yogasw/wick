@@ -325,7 +325,7 @@ describe("ProvidersList connection badges", () => {
     // The numbers come from a shared server-side cache, so the card must
     // say so rather than implying it fetched them on this paint.
     expect(screen.getByText("45s ago")).toBeTruthy();
-    expect(screen.getByTestId("usage-cache-chip").getAttribute("title")).toContain("next refresh in 15s");
+    expect(screen.getByTestId("usage-cache-chip").getAttribute("title")).toContain("re-check available in 15s");
   });
 
   it("shows a pending reading as pending, not as an error", async () => {
@@ -336,14 +336,14 @@ describe("ProvidersList connection badges", () => {
     expect(await screen.findByTestId("usage-checking")).toBeTruthy();
   });
 
-  it("says when the next probe runs after a failed one", async () => {
+  it("says when a re-check would be accepted after a failure", async () => {
     // Retrying a 429 is what keeps it alive, so the card explains the
     // wait instead of looking stuck.
     vi.mocked(api.apiGetConnections).mockResolvedValue([
       conn({ windows: [], usageErr: "usage endpoint: 429 Too Many Requests", usageNextS: 120 }),
     ]);
     render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
-    expect(await screen.findByText("retry in 2m")).toBeTruthy();
+    expect(await screen.findByText("re-check in 2m")).toBeTruthy();
   });
 
   // The button must be there even when the card HAS numbers — a reading

@@ -2,11 +2,11 @@
   /* Provenance chip for a usage reading: a cache glyph plus how long
      ago the numbers were actually fetched ("2m ago").
 
-     It exists because the reading is NOT fetched per paint. The usage
-     endpoint is rate-limited, so the server probes once per account,
-     spaces probes apart and serves the result from cache — which means
-     a bare percentage would imply a live call the page never made.
-     The chip says what the number is: cached, and this old. */
+     It exists because the reading is NOT fetched per paint, nor on a
+     timer: the usage endpoint is rate-limited, so the server reads an
+     account once and then keeps serving that reading until somebody
+     presses Re-check. A bare percentage would imply a live call the
+     page never made; the chip says what the number is: this old. */
   import { cacheHint } from "$lib/usagerings.js";
 
   type Props = { ageS: number; nextS?: number; fetchedAt?: string };

@@ -267,15 +267,48 @@
       .catch(() => { usageError = "Could not re-check usage."; })
       .finally(() => {
         usageRechecking = false;
+        // The probe runs server-side; give the poll a budget to catch it
+        // landing instead of leaving "Checking usage…" on screen.
+        usagePollsLeft = 20;
         loadUsage();
       });
   }
 
-  function loadUsage() {
+  /* While a probe is in flight the popover used to sit on "Checking
+     usage…" until you closed and reopened it — the result landed on the
+     server and nothing asked for it. So a landed probe is picked up by
+     a short poll, which stops the moment it is no longer checking (or
+     after a bounded number of tries, so a stuck probe cannot leave a
+     timer running behind a closed popover). */
+  let usagePollTimer: ReturnType<typeof setTimeout> | null = null;
+  let usagePollsLeft = 0;
+
+  function stopUsagePoll() {
+    if (usagePollTimer !== null) { clearTimeout(usagePollTimer); usagePollTimer = null; }
+    usagePollsLeft = 0;
+  }
+
+  function scheduleUsagePoll() {
+    if (usagePollTimer !== null || usagePollsLeft <= 0) return;
+    usagePollTimer = setTimeout(() => {
+      usagePollTimer = null;
+      usagePollsLeft -= 1;
+      if (usagePopoverOpen) loadUsage(true);
+    }, 1500);
+  }
+
+  function loadUsage(silent = false) {
     if (!activeProvider) return;
-    usageLoading = true;
+    if (!silent) usageLoading = true;
     run(getComposerUsage(base, activeProvider).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => { usageData = normalizeComposerUsage(res); })
+      .then((res) => {
+        usageData = normalizeComposerUsage(res);
+        if (usageData.checking || usageData.pending) {
+          scheduleUsagePoll();
+        } else {
+          stopUsagePoll();
+        }
+      })
       .catch(() => { usageError = "Could not read usage for this provider."; })
       .finally(() => { usageLoading = false; });
   }
@@ -284,6 +317,7 @@
     usagePopoverOpen = true;
     usageError = "";
     usageRecheckWait = 0;
+    usagePollsLeft = 20;
     if (!activeProvider) {
       usageError = "No provider selected for this session.";
       return;
@@ -2225,7 +2259,7 @@
             onRecheck={recheckUsage}
             rechecking={usageRechecking}
             recheckWait={usageRecheckWait}
-            onClose={() => (usagePopoverOpen = false)}
+            onClose={() => { usagePopoverOpen = false; stopUsagePoll(); }}
           />
           <Composer
             bind:this={composerRef}
