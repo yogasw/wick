@@ -22,6 +22,19 @@ describe("buildTree", () => {
     ]);
   });
 
+  test("renders a folder-scoped change as one named leaf, not a blank row", () => {
+    // git reports a nested repo as "vendored/" — splitting that naively
+    // produced a folder whose only child had an empty name.
+    const raw: FileChange = { ...mk("vendored/"), work_tree: "?", untracked: true, dir: true };
+    const tree = buildTree([raw]);
+    expect(tree.map((n) => ({ name: n.name, isDir: n.isDir, dirEntry: n.dirEntry }))).toEqual([
+      { name: "vendored", isDir: false, dirEntry: true },
+    ]);
+    // The path stays bare so stage/discard can pass it straight to git.
+    expect(tree[0].path).toBe("vendored");
+    expect(allFilePaths(tree[0])).toEqual(["vendored/"]);
+  });
+
   test("collapses a single-child directory chain into one node", () => {
     const tree = buildTree([mk("pkg/a/b/deep.ts"), mk("other.txt")]);
     const dir = tree.find((n) => n.isDir);

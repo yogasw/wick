@@ -36,6 +36,9 @@ export type FileChange = {
   staged: boolean;
   unstaged: boolean;
   untracked: boolean;
+  // The entry stands for a whole folder (a nested repo git will not look
+  // inside), not a single file.
+  dir?: boolean;
 };
 
 export type BranchInfo = {

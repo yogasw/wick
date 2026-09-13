@@ -77,6 +77,10 @@ type FileChange struct {
 	Staged    bool   `json:"staged"`              // has staged changes
 	Unstaged  bool   `json:"unstaged"`            // has worktree changes
 	Untracked bool   `json:"untracked"`
+	// Dir marks an entry that stands for a whole directory rather than a
+	// single file. git reports one of these when it cannot look inside —
+	// a nested repository — so the path names a folder, not a blob.
+	Dir bool `json:"dir,omitempty"`
 }
 
 // StatusResult bundles a repo's branch + change list.
@@ -85,11 +89,15 @@ type StatusResult struct {
 	Changes []FileChange `json:"changes"`
 }
 
-// Status runs `git status --porcelain=v2 --branch -z` and parses it.
+// Status runs `git status --porcelain=v2 --branch -z -uall` and parses it.
+//
+// -uall matters: with git's default (-unormal) a new directory collapses
+// into ONE entry for the folder, so the panel showed "1 change" for a
+// folder of fifty new files and only expanded once they were staged.
 func Status(ctx context.Context, dir string) (StatusResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
-	out, err := run(ctx, dir, "status", "--porcelain=v2", "--branch", "-z")
+	out, err := run(ctx, dir, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all")
 	if err != nil {
 		return StatusResult{}, err
 	}
@@ -140,9 +148,16 @@ func parseStatus(out string) StatusResult {
 			}
 			res.Changes = append(res.Changes, fc)
 		case strings.HasPrefix(line, "? "):
+			// Even under -uall git keeps one entry for a directory it
+			// will not descend into (a nested repo), reported with a
+			// trailing slash. Drop the slash — every git command takes
+			// the bare path — and flag it so the UI names a folder
+			// instead of building a child with an empty name.
+			path := strings.TrimPrefix(line, "? ")
+			isDir := strings.HasSuffix(path, "/")
 			res.Changes = append(res.Changes, FileChange{
-				Path: strings.TrimPrefix(line, "? "), WorkTree: "?",
-				Unstaged: true, Untracked: true,
+				Path: strings.TrimSuffix(path, "/"), WorkTree: "?",
+				Unstaged: true, Untracked: true, Dir: isDir,
 			})
 		case strings.HasPrefix(line, "u "):
 			// Unmerged (conflict). XY then path at the end.
@@ -185,6 +200,10 @@ func parseOrdinary(line string) FileChange {
 		WorkTree: y,
 		Staged:   x != "." && x != " ",
 		Unstaged: y != "." && y != " ",
+		// The <sub> field reads "S<c><m><u>" when the entry is a
+		// gitlink — a nested repo recorded as one commit pointer. Same
+		// as an untracked folder: a directory wearing a file's clothes.
+		Dir: strings.HasPrefix(parts[1], "S"),
 	}
 }
 
@@ -239,8 +258,8 @@ func FileAtIndex(ctx context.Context, dir, path string) (string, error) {
 // BranchList is the set of local + remote branches plus the current one.
 type BranchList struct {
 	Current  string   `json:"current"`
-	Branches []string `json:"branches"`        // local
-	Remotes  []string `json:"remotes"`         // remote-tracking (e.g. origin/main)
+	Branches []string `json:"branches"` // local
+	Remotes  []string `json:"remotes"`  // remote-tracking (e.g. origin/main)
 }
 
 // Branches lists local + remote branches and marks the current local one.
@@ -331,6 +350,7 @@ func Commit(ctx context.Context, dir, message string) (string, error) {
 //   - untracked → removed from disk (git clean -fd <path>)
 //   - tracked   → working + index restored to HEAD (git restore --staged
 //     --worktree <path>), so both staged and unstaged edits are dropped.
+//
 // untrackedPaths must list which of paths are untracked (the caller knows
 // from status) so we pick clean vs restore correctly.
 func Discard(ctx context.Context, dir string, paths []string, untrackedPaths []string) error {
@@ -512,11 +532,11 @@ func safeRepoJoin(base, rel string) (string, error) {
 
 // LogEntry is one commit in the history list.
 type LogEntry struct {
-	SHA      string `json:"sha"`       // short sha
-	Subject  string `json:"subject"`
-	Author   string `json:"author"`
-	RelDate  string `json:"rel_date"`  // e.g. "2 hours ago"
-	ISODate  string `json:"iso_date"`
+	SHA     string `json:"sha"` // short sha
+	Subject string `json:"subject"`
+	Author  string `json:"author"`
+	RelDate string `json:"rel_date"` // e.g. "2 hours ago"
+	ISODate string `json:"iso_date"`
 }
 
 // logSep / logFieldSep are unlikely-to-collide delimiters for parsing

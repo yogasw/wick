@@ -57,7 +57,16 @@
 {:else if node.change}
   {@const ch = node.change}
   <div class="group flex items-center gap-2 py-1 pr-2 hover:bg-white-200 dark:hover:bg-navy-800" style={pad}>
-    <button type="button" onclick={() => onOpen(ch.path, staged)} class="min-w-0 flex-1 truncate text-left text-xs text-black-800 dark:text-black-600">{node.name}</button>
+    {#if node.dirEntry}
+      <!-- A whole folder reported as one change (nested repo): nothing to
+           diff, so the name is a label, not a button. -->
+      <span class="flex min-w-0 flex-1 items-center gap-1 truncate text-xs text-black-800 dark:text-black-600" title="{ch.path} — a folder git reports as a single entry (nested repository)">
+        <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.5 4.5A1 1 0 012.5 3.5h3l1.5 2h6a1 1 0 011 1v6a1 1 0 01-1 1h-10a1 1 0 01-1-1z" stroke-linejoin="round"/></svg>
+        <span class="truncate">{node.name}/</span>
+      </span>
+    {:else}
+      <button type="button" onclick={() => onOpen(ch.path, staged)} class="min-w-0 flex-1 truncate text-left text-xs text-black-800 dark:text-black-600">{node.name}</button>
+    {/if}
     <div class="hidden shrink-0 items-center gap-1 group-hover:flex">
       <button type="button" title="Discard" onclick={() => onDiscard([ch.path], ch.untracked ? [ch.path] : [])} class="text-black-600 hover:text-cau-600 dark:hover:text-cau-400">
         <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 8a6 6 0 0110.5-4M11 2v3H8M14 8a6 6 0 01-10.5 4M5 14v-3h3" stroke-linecap="round" stroke-linejoin="round"/></svg>

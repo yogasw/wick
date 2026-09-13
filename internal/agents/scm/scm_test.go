@@ -391,3 +391,97 @@ func revParse(t *testing.T, dir string) string {
 	}
 	return string(out)
 }
+
+// A new directory of files must list every file, not collapse into one
+// entry for the folder — that collapse is what made the panel say "1
+// change" and then explode into a dozen rows the moment they were staged.
+func TestStatusExpandsUntrackedDirectory(t *testing.T) {
+	skipNoGit(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	gitInit(t, dir)
+
+	sub := filepath.Join(dir, "pkg", "deep")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(sub, name), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	st, err := Status(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, c := range st.Changes {
+		got[c.Path] = c.Dir
+	}
+	for _, want := range []string{"pkg/deep/a.txt", "pkg/deep/b.txt"} {
+		isDir, ok := got[want]
+		if !ok {
+			t.Fatalf("expected %s in status, got %+v", want, st.Changes)
+		}
+		if isDir {
+			t.Fatalf("%s should not be flagged as a directory", want)
+		}
+	}
+	if _, collapsed := got["pkg/"]; collapsed {
+		t.Fatalf("directory collapsed into one entry: %+v", st.Changes)
+	}
+}
+
+// git refuses to look inside a nested repository, so it reports the whole
+// folder as one entry with a trailing slash. The path must come back
+// clean (every git command takes it bare) and flagged as a directory,
+// both before staging and after — staged, it becomes a gitlink.
+func TestStatusNestedRepoIsDirEntry(t *testing.T) {
+	skipNoGit(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	gitInit(t, dir)
+
+	inner := filepath.Join(dir, "vendored")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitInit(t, inner)
+
+	find := func(st StatusResult) (FileChange, bool) {
+		for _, c := range st.Changes {
+			if c.Path == "vendored" {
+				return c, true
+			}
+		}
+		return FileChange{}, false
+	}
+
+	st, err := Status(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, ok := find(st)
+	if !ok {
+		t.Fatalf("expected a clean 'vendored' entry, got %+v", st.Changes)
+	}
+	if !c.Dir || !c.Untracked {
+		t.Fatalf("expected untracked directory entry, got %+v", c)
+	}
+
+	if err := Stage(ctx, dir, []string{"vendored"}); err != nil {
+		t.Fatal(err)
+	}
+	st, err = Status(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, ok = find(st)
+	if !ok {
+		t.Fatalf("expected staged 'vendored' entry, got %+v", st.Changes)
+	}
+	if !c.Dir || !c.Staged {
+		t.Fatalf("expected staged gitlink flagged as a directory, got %+v", c)
+	}
+}
