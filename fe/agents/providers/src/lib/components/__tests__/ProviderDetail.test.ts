@@ -397,6 +397,12 @@ describe("ProviderDetail - read-only viewer", () => {
     // And crucially NOT the AI Router card: mounting it fires admin-only
     // requests that answer 403 in a manager's console.
     expect(screen.queryByText("AI Router")).toBeNull();
+    // Enable/disable, delete and rename are admin-only: gone, with the
+    // on/off state left as a plain badge.
+    expect(screen.queryByText(/click to disable/i)).toBeNull();
+    expect(screen.queryByText("Delete")).toBeNull();
+    expect(screen.queryByTitle("Rename this provider")).toBeNull();
+    expect(screen.getByText("Enabled")).toBeTruthy();
   });
 
   it("shows the configuration normally for an admin", async () => {

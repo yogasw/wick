@@ -691,6 +691,9 @@
   <Breadcrumb items={crumbs} />
   <div class="flex items-center justify-between gap-3 flex-wrap">
     <div class="flex items-center gap-2 flex-wrap">
+      {#if readOnly}
+        <span class="text-lg font-semibold text-black-900 dark:text-white-100">{type}/{name}</span>
+      {:else}
       <button
         type="button"
         onclick={openRename}
@@ -706,6 +709,7 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
         </svg>
       </button>
+      {/if}
       {#if data}
         {#if !data.PathFound}
           <span class="rounded bg-red-50 dark:bg-red-900 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-300">not found</span>
@@ -717,7 +721,13 @@
         {/if}
       {/if}
     </div>
-    {#if data}
+    {#if data && readOnly}
+      <span
+        class={`rounded-lg border px-3 py-1.5 text-xs font-medium ${data.Instance.Disabled
+          ? "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900 text-amber-800 dark:text-amber-300"
+          : "border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900 text-green-700 dark:text-green-300"}`}
+      >{data.Instance.Disabled ? "Disabled" : "Enabled"}</span>
+    {:else if data}
       <div class="flex items-center gap-2">
         {#if data.Instance.Disabled}
           <button
