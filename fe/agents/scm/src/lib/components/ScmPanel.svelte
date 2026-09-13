@@ -121,6 +121,22 @@
     activeRepo.set(rel);
     compare = null;
   }
+  // A folder-scoped change is opaque to the repo reporting it. Look the
+  // folder up in the snapshot: when it is a repo wick discovered, its
+  // branch and change count are already here, so the row can say what
+  // this repo cannot.
+  function nestedRel(path: string): string {
+    return $activeRepo && $activeRepo !== "." ? `${$activeRepo}/${path}` : path;
+  }
+  function withNested(list: FileChange[]): FileChange[] {
+    return list.map((c) => {
+      if (!c.dir) return c;
+      const rel = nestedRel(c.path);
+      const r = $repos.find((x) => x.rel === rel);
+      return r ? { ...c, nested: { rel, branch: r.branch, changed: r.changed } } : c;
+    });
+  }
+
   // openCompare resolves a path to its FileChange in the right group.
   // A change that IS a repo of its own has no diff to open — this repo
   // only knows the folder exists — so opening it switches the panel to
@@ -130,7 +146,7 @@
     const c = list.find((x) => x.path === path);
     if (!c) return;
     if (c.dir) {
-      const rel = $activeRepo && $activeRepo !== "." ? `${$activeRepo}/${path}` : path;
+      const rel = nestedRel(path);
       if ($repos.some((r) => r.rel === rel)) selectRepo(rel);
       return;
     }
@@ -235,13 +251,13 @@
             <p class="p-4 text-xs text-black-700 dark:text-black-600">No changes.</p>
           {:else}
             <ChangesSection
-              title="Staged Changes" items={staged} staged={true}
+              title="Staged Changes" items={withNested(staged)} staged={true}
               {viewMode} {expanded} onToggleDir={toggleDir} onOpen={openCompare}
               onAction={(p) => withBusy(() => unstagePaths(p))}
               onDiscard={askDiscard} actionIcon="unstage"
             />
             <ChangesSection
-              title="Changes" items={unstaged} staged={false}
+              title="Changes" items={withNested(unstaged)} staged={false}
               {viewMode} {expanded} onToggleDir={toggleDir} onOpen={openCompare}
               onAction={(p) => withBusy(() => stagePaths(p))}
               onDiscard={askDiscard} actionIcon="stage"

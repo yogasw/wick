@@ -39,6 +39,9 @@ export type FileChange = {
   // The entry stands for a whole folder (a nested repo git will not look
   // inside), not a single file.
   dir?: boolean;
+  // Filled in client-side when that folder is a repo wick already knows:
+  // what this repo cannot say about it, the snapshot can.
+  nested?: { rel: string; branch: string; changed: number };
 };
 
 export type BranchInfo = {

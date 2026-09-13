@@ -65,6 +65,11 @@
         <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.5 4.5A1 1 0 012.5 3.5h3l1.5 2h6a1 1 0 011 1v6a1 1 0 01-1 1h-10a1 1 0 01-1-1z" stroke-linejoin="round"/></svg>
         <span class="truncate">{node.name}/</span>
         <span class="shrink-0 rounded bg-white-300 px-1 text-[9px] font-medium whitespace-nowrap text-black-700 dark:bg-navy-600 dark:text-black-600">nested repo</span>
+        {#if ch.nested}
+          <span class="truncate text-[10px] whitespace-nowrap text-black-600">
+            {ch.nested.branch}{ch.nested.changed > 0 ? ` · ${ch.nested.changed} changed` : " · clean"}
+          </span>
+        {/if}
       </button>
     {:else}
       <button type="button" onclick={() => onOpen(ch.path, staged)} class="min-w-0 flex-1 truncate text-left text-xs text-black-800 dark:text-black-600">{node.name}</button>
