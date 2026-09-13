@@ -387,13 +387,87 @@ func Discard(ctx context.Context, dir string, paths []string, untrackedPaths []s
 			return err
 		}
 	}
-	if len(toClean) > 0 {
-		args := append([]string{"clean", "-fd", "--"}, toClean...)
+	// A path that is a repository of its own is not ours to delete, and
+	// `git clean -fd` agrees: it skips it, prints nothing, and exits 0.
+	// Cleaning the rest and then saying so beats reporting a success the
+	// folder plainly did not have.
+	var ownRepos []string
+	cleanable := toClean[:0]
+	for _, p := range toClean {
+		if isRepoRoot(filepath.Join(dir, filepath.FromSlash(p))) {
+			ownRepos = append(ownRepos, p)
+			continue
+		}
+		cleanable = append(cleanable, p)
+	}
+	if len(cleanable) > 0 {
+		args := append([]string{"clean", "-fd", "--"}, cleanable...)
 		if _, err := run(ctx, dir, args...); err != nil {
 			return err
 		}
 	}
+	if len(ownRepos) > 0 {
+		return fmt.Errorf("%s is a repository of its own — git will not delete it; remove the folder yourself, or add it to .git/info/exclude to stop it showing up here", strings.Join(ownRepos, ", "))
+	}
 	return nil
+}
+
+// Exclude stops git reporting the given paths, by appending them to
+// .git/info/exclude — the repo-local ignore list. Nothing on disk is
+// touched and nothing is committed: unlike .gitignore this file is not
+// tracked, so one person hiding a stray folder does not push that
+// decision to everybody else.
+//
+// It is the honest answer for a clone that landed inside a checkout —
+// the folder is not this repo's to delete, but it does not belong in
+// its change list either.
+func Exclude(ctx context.Context, dir string, paths []string) error {
+	if len(paths) == 0 {
+		return errors.New("no paths to exclude")
+	}
+	file := filepath.Join(dir, ".git", "info", "exclude")
+	// A worktree or submodule keeps .git as a FILE pointing elsewhere;
+	// git itself tells us where the real one lives.
+	if fi, err := os.Stat(filepath.Join(dir, ".git")); err != nil || !fi.IsDir() {
+		out, err := run(ctx, dir, "rev-parse", "--git-dir")
+		if err != nil {
+			return err
+		}
+		gitDir := strings.TrimSpace(out)
+		if !filepath.IsAbs(gitDir) {
+			gitDir = filepath.Join(dir, gitDir)
+		}
+		file = filepath.Join(gitDir, "info", "exclude")
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		return err
+	}
+	existing, err := os.ReadFile(file)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	have := map[string]bool{}
+	for _, line := range strings.Split(string(existing), "\n") {
+		have[strings.TrimSpace(line)] = true
+	}
+	var add []string
+	for _, p := range paths {
+		p = strings.TrimSuffix(filepath.ToSlash(strings.TrimSpace(p)), "/")
+		if p == "" || have[p] || have["/"+p] {
+			continue
+		}
+		have[p] = true
+		add = append(add, "/"+p) // anchored: hide THIS path, not every match
+	}
+	if len(add) == 0 {
+		return nil
+	}
+	body := string(existing)
+	if body != "" && !strings.HasSuffix(body, "\n") {
+		body += "\n"
+	}
+	body += strings.Join(add, "\n") + "\n"
+	return os.WriteFile(file, []byte(body), 0o644)
 }
 
 // hasCommits reports whether the repository has a commit HEAD can resolve.

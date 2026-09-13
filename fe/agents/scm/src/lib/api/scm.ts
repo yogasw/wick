@@ -131,6 +131,9 @@ export const unstage = (id: string, repo: string, paths: string[]) =>
 // paths are untracked so the server picks clean vs restore.
 export const discard = (id: string, repo: string, paths: string[], untracked: string[]) =>
   apiPost(`${s(id)}/discard`, { repo, paths, untracked });
+// Hide paths from git (writes .git/info/exclude) without touching disk.
+export const exclude = (id: string, repo: string, paths: string[]) =>
+  apiPost(`${s(id)}/exclude`, { repo, paths });
 
 export const commit = (id: string, repo: string, message: string) =>
   apiPost<{ sha: string }>(`${s(id)}/commit`, { repo, message });

@@ -530,3 +530,86 @@ func TestDiscoverReposFindsNestedClone(t *testing.T) {
 		t.Fatalf("descent below maxNestedDepth should stop, got %+v", repos)
 	}
 }
+
+// Discarding a folder that is a repo of its own used to report success
+// while `git clean -fd` silently skipped it — the button did nothing and
+// said nothing. It must say so instead, and still clean the rest.
+func TestDiscardReportsNestedRepo(t *testing.T) {
+	skipNoGit(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	gitInit(t, dir)
+
+	inner := filepath.Join(dir, "vendored")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitInit(t, inner)
+	if err := os.WriteFile(filepath.Join(dir, "stray.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Discard(ctx, dir, []string{"vendored", "stray.txt"}, []string{"vendored", "stray.txt"})
+	if err == nil {
+		t.Fatal("expected an error naming the nested repo")
+	}
+	if !strings.Contains(err.Error(), "vendored") {
+		t.Fatalf("error should name the folder, got %v", err)
+	}
+	// The nested repo survives, the ordinary untracked file does not.
+	if _, statErr := os.Stat(inner); statErr != nil {
+		t.Fatalf("nested repo should be left alone: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "stray.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("the rest of the selection should still be cleaned, got %v", statErr)
+	}
+}
+
+// Exclude is the way out for a folder that cannot be discarded: git stops
+// reporting it, nothing leaves the disk, and the entry is repo-local.
+func TestExclude(t *testing.T) {
+	skipNoGit(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	gitInit(t, dir)
+
+	inner := filepath.Join(dir, "vendored")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitInit(t, inner)
+
+	if err := Exclude(ctx, dir, []string{"vendored/"}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, ".git", "info", "exclude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Anchored, and with the trailing slash git reported it with dropped.
+	if !strings.Contains(string(body), "\n/vendored\n") && !strings.HasPrefix(string(body), "/vendored\n") {
+		t.Fatalf("expected an anchored /vendored entry, got %q", string(body))
+	}
+	if _, statErr := os.Stat(inner); statErr != nil {
+		t.Fatalf("exclude must not touch the folder: %v", statErr)
+	}
+
+	st, err := Status(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range st.Changes {
+		if c.Path == "vendored" {
+			t.Fatalf("excluded folder should no longer be reported, got %+v", st.Changes)
+		}
+	}
+
+	// Running it twice must not duplicate the line.
+	if err := Exclude(ctx, dir, []string{"vendored"}); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := os.ReadFile(filepath.Join(dir, ".git", "info", "exclude"))
+	if strings.Count(string(again), "/vendored") != 1 {
+		t.Fatalf("entry should be written once, got %q", string(again))
+	}
+}

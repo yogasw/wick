@@ -4,7 +4,7 @@
     sessionID, repos, activeRepo, changes, branch, loading, loadRepos, applySnapshot,
   } from "$lib/stores/scm";
   import { subscribeGitStatus } from "$lib/sse";
-  import { stagePaths, unstagePaths, discardPaths, commit, loadCompare, loadCommitCompare, saveFile, langFor, type FileChange, type CompareData } from "$lib/git-actions";
+  import { stagePaths, unstagePaths, discardPaths, excludePaths, commit, loadCompare, loadCommitCompare, saveFile, langFor, type FileChange, type CompareData } from "$lib/git-actions";
   import { ToastHost, ConfirmDialog } from "@wick-fe/common-ui";
   import RepoSection from "$lib/components/RepoSection.svelte";
   import ChangesSection from "$lib/components/ChangesSection.svelte";
@@ -165,6 +165,11 @@
     const label = paths.length === 1 ? paths[0] : `${paths.length} files`;
     discardAsk = { paths, untracked, label };
   }
+  // Ignoring is not destructive — nothing leaves the disk and the entry
+  // is repo-local — so it does not get the confirm dialog discard has.
+  function ignorePaths(paths: string[]) {
+    if (paths.length > 0) withBusy(() => excludePaths(paths));
+  }
   async function confirmDiscard() {
     const d = discardAsk;
     discardAsk = null;
@@ -254,13 +259,13 @@
               title="Staged Changes" items={withNested(staged)} staged={true}
               {viewMode} {expanded} onToggleDir={toggleDir} onOpen={openCompare}
               onAction={(p) => withBusy(() => unstagePaths(p))}
-              onDiscard={askDiscard} actionIcon="unstage"
+              onDiscard={askDiscard} onIgnore={ignorePaths} actionIcon="unstage"
             />
             <ChangesSection
               title="Changes" items={withNested(unstaged)} staged={false}
               {viewMode} {expanded} onToggleDir={toggleDir} onOpen={openCompare}
               onAction={(p) => withBusy(() => stagePaths(p))}
-              onDiscard={askDiscard} actionIcon="stage"
+              onDiscard={askDiscard} onIgnore={ignorePaths} actionIcon="stage"
             />
           {/if}
         </div>

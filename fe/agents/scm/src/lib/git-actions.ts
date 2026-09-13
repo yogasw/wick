@@ -30,6 +30,19 @@ export async function unstagePaths(paths: string[]): Promise<void> {
 
 // Discard is destructive — callers MUST confirm first. untrackedPaths is
 // the subset of paths that are untracked (server uses clean vs restore).
+// excludePaths makes git stop reporting a path — nothing is deleted, and
+// the entry lives in .git/info/exclude, which is not committed, so it is
+// one person's decision about their own checkout.
+export async function excludePaths(paths: string[]): Promise<void> {
+  try {
+    await api.exclude(sid(), repo(), paths);
+    toastOk("Ignored", `${paths.length === 1 ? paths[0] : `${paths.length} paths`} — added to .git/info/exclude`);
+    await loadStatus();
+  } catch (e) {
+    toastError("Ignore failed", String(e));
+  }
+}
+
 export async function discardPaths(paths: string[], untrackedPaths: string[]): Promise<void> {
   try {
     await api.discard(sid(), repo(), paths, untrackedPaths);
