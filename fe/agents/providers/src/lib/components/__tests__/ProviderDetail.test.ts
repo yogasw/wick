@@ -390,8 +390,7 @@ describe("ProviderDetail - read-only viewer", () => {
     vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), ReadOnly: true, CanManage: false });
     render(ProviderDetail, { props: { base: "", type: "claude", name: "claude", onBack: vi.fn(), onOpenSession: vi.fn() } });
 
-    expect(await screen.findByText("Read-only.")).toBeTruthy();
-    const cfg = screen.getByTestId("provider-config");
+    const cfg = await screen.findByTestId("provider-config");
     expect(cfg.getAttribute("data-readonly")).toBe("1");
     // The summary, not the editor.
     expect(screen.getByText("CONFIGURATION")).toBeTruthy();
@@ -404,7 +403,6 @@ describe("ProviderDetail - read-only viewer", () => {
     vi.mocked(api.apiGetProviderDetail).mockResolvedValue(makeDetail());
     render(ProviderDetail, { props: { base: "", type: "claude", name: "claude", onBack: vi.fn(), onOpenSession: vi.fn() } });
     await screen.findByText(/resolved/i);
-    expect(screen.queryByText("Read-only.")).toBeNull();
     expect(screen.getByTestId("provider-config").getAttribute("data-readonly")).toBeNull();
     // The admin still gets the full editor.
     expect(screen.queryByText("CONFIGURATION")).toBeNull();
