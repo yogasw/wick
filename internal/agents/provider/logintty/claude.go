@@ -59,6 +59,23 @@ func claudeConfigDir(env []string) string {
 	return filepath.Join(home, ".claude")
 }
 
+// claudeCredentialsPath is the file the CLI keeps this instance's OAuth
+// tokens in — the one wick reads, and the one the CLI rewrites on every
+// refresh.
+func claudeCredentialsPath(dir string) string {
+	return filepath.Join(dir, ".credentials.json")
+}
+
+// claudeCredentialsChangedAt is the credential file's mtime, or zero
+// when there is no file to stat (never logged in, unreadable dir).
+func claudeCredentialsChangedAt(env []string) time.Time {
+	fi, err := os.Stat(claudeCredentialsPath(claudeConfigDir(env)))
+	if err != nil {
+		return time.Time{}
+	}
+	return fi.ModTime()
+}
+
 // claudeAccessToken reads the OAuth access token from the instance's
 // credential file.
 func claudeAccessToken(dir string) (string, error) {
@@ -67,7 +84,7 @@ func claudeAccessToken(dir string) (string, error) {
 			AccessToken string `json:"accessToken"`
 		} `json:"claudeAiOauth"`
 	}
-	if !readJSON(filepath.Join(dir, ".credentials.json"), &creds) || creds.ClaudeAiOauth.AccessToken == "" {
+	if !readJSON(claudeCredentialsPath(dir), &creds) || creds.ClaudeAiOauth.AccessToken == "" {
 		return "", errors.New("no claude credentials — not logged in")
 	}
 	return creds.ClaudeAiOauth.AccessToken, nil

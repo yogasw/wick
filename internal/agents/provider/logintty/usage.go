@@ -94,6 +94,23 @@ func ReadUsage(t provider.Type, env []string) ([]UsageWindow, error) {
 	}
 }
 
+// CredentialsChangedAt reports when the instance's stored credentials
+// last changed on disk, or the zero time when that cannot be known.
+//
+// It is the cheap, honest signal for "the login was renewed": the CLI
+// rewrites the file every time it trades the refresh token for a new
+// access token, so a file newer than our last failed probe means the
+// token we failed with is no longer the token on disk. Callers use it
+// to allow ONE retry without re-introducing polling — see usageCache.
+func CredentialsChangedAt(t provider.Type, env []string) time.Time {
+	switch t {
+	case provider.TypeClaude:
+		return claudeCredentialsChangedAt(env)
+	default:
+		return time.Time{}
+	}
+}
+
 // UsageIdentity names the ACCOUNT behind an instance, so callers can
 // probe once per account rather than once per instance.
 //

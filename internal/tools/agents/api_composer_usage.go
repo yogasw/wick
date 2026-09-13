@@ -115,7 +115,7 @@ func apiComposerUsage(c *tool.Ctx) {
 	defer cancel()
 	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, ins.Env), func() ([]logintty.UsageWindow, error) {
 		return logintty.ReadUsage(ins.Type, ins.Env)
-	})
+	}, logintty.CredentialsChangedAt(ins.Type, ins.Env))
 
 	now := time.Now()
 	res.Checking = v.Checking
