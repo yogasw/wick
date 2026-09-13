@@ -29,6 +29,7 @@
   import { sendMessage } from "../api/messages.js";
   import { listFiles, searchTree, searchMentionPaths, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
   import { listComposerCommands, type ComposerApiCommand } from "../api/composer.js";
+  import { getComposerUsage, normalizeComposerUsage, type ComposerUsage } from "../api/usage.js";
   import { getProcesses, killProcess, dequeueProcess, liveProcesses as filterLiveProcesses } from "../api/processes.js";
   import {
     getSubAgentPanel,
@@ -76,6 +77,7 @@
   import FileViewerModal from "./FileViewerModal.svelte";
   import SwitchModal from "./SwitchModal.svelte";
   import OverridePopover from "./OverridePopover.svelte";
+  import UsagePopover from "./UsagePopover.svelte";
   import { getSessionOverrides, setSessionOverride } from "../api/overrides.js";
   import type { ConfigField } from "@wick-fe/common-ui";
   import { setFileContext, setWidgetPolicy } from "../richRender.js";
@@ -229,12 +231,36 @@
     "panel:context": () => toggleRail("context"),
     "panel:subagents": () => toggleRail("subagents"),
     "panel:thinking": () => openOverridePopover(),
+    "panel:usage": () => openUsagePopover(),
     "view:commands": () => handleTabChange("commands"),
     "view:approvals": () => handleTabChange("approvals"),
     "view:raw": () => handleTabChange("raw"),
   };
 
   // Load the session's override schema + current values, then open the popover.
+  /* /usage — the session provider's remaining quota, read-only. The
+     server answers from its shared paced cache, so opening this costs no
+     upstream request; an unsupported provider type comes back with
+     supported=false and the popover prints why. */
+  let usagePopoverOpen = $state(false);
+  let usageData = $state<ComposerUsage | null>(null);
+  let usageLoading = $state(false);
+  let usageError = $state("");
+
+  function openUsagePopover() {
+    usagePopoverOpen = true;
+    usageError = "";
+    if (!activeProvider) {
+      usageError = "No provider selected for this session.";
+      return;
+    }
+    usageLoading = true;
+    run(getComposerUsage(base, activeProvider).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { usageData = normalizeComposerUsage(res); })
+      .catch(() => { usageError = "Could not read usage for this provider."; })
+      .finally(() => { usageLoading = false; });
+  }
+
   function openOverridePopover() {
     const providerType = activeProvider ? activeProvider.split("/")[0] : "";
     run(getSessionOverrides(base, sessionId, providerType).pipe(Effect.provide(WickClientLayer)))
@@ -2159,6 +2185,14 @@
             values={overrideValues}
             onChange={saveOverride}
             onClose={() => (overridePopoverOpen = false)}
+          />
+          <!-- /usage — read-only quota for this session's provider. -->
+          <UsagePopover
+            open={usagePopoverOpen}
+            data={usageData}
+            loading={usageLoading}
+            error={usageError}
+            onClose={() => (usagePopoverOpen = false)}
           />
           <Composer
             bind:this={composerRef}

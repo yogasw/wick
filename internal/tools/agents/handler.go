@@ -318,6 +318,9 @@ func Register(r tool.Router) {
 
 	// JSON API — composer `/` command menu (built-in actions + skills).
 	r.GET("/api/composer/commands", apiComposerCommands)
+	// `/usage` — this session's provider account, read from the same
+	// paced cache the Providers page uses (see api_composer_usage.go).
+	r.GET("/api/composer/usage", apiComposerUsage)
 
 	// JSON API — skills SPA endpoints (mirrors templ skills handlers).
 	r.GET("/api/skills", apiSkillsList)
