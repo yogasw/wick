@@ -29,6 +29,10 @@
   import { sendMessage } from "../api/messages.js";
   import { listFiles, searchTree, searchMentionPaths, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
   import { listComposerCommands, type ComposerApiCommand } from "../api/composer.js";
+  import {
+    getComposerUsage, normalizeComposerUsage, refreshComposerUsage, normalizeUsageRefresh,
+    type ComposerUsage,
+  } from "../api/usage.js";
   import { getProcesses, killProcess, dequeueProcess, liveProcesses as filterLiveProcesses } from "../api/processes.js";
   import {
     getSubAgentPanel,
@@ -76,6 +80,7 @@
   import FileViewerModal from "./FileViewerModal.svelte";
   import SwitchModal from "./SwitchModal.svelte";
   import OverridePopover from "./OverridePopover.svelte";
+  import UsagePopover from "./UsagePopover.svelte";
   import { getSessionOverrides, setSessionOverride } from "../api/overrides.js";
   import type { ConfigField } from "@wick-fe/common-ui";
   import { setFileContext, setWidgetPolicy } from "../richRender.js";
@@ -229,12 +234,63 @@
     "panel:context": () => toggleRail("context"),
     "panel:subagents": () => toggleRail("subagents"),
     "panel:thinking": () => openOverridePopover(),
+    "panel:usage": () => openUsagePopover(),
     "view:commands": () => handleTabChange("commands"),
     "view:approvals": () => handleTabChange("approvals"),
     "view:raw": () => handleTabChange("raw"),
   };
 
   // Load the session's override schema + current values, then open the popover.
+  /* /usage — the session provider's remaining quota, read-only. The
+     server answers from its shared paced cache, so opening this costs no
+     upstream request; an unsupported provider type comes back with
+     supported=false and the popover prints why. */
+  let usagePopoverOpen = $state(false);
+  let usageData = $state<ComposerUsage | null>(null);
+  let usageLoading = $state(false);
+  let usageError = $state("");
+  let usageRechecking = $state(false);
+  let usageRecheckWait = $state(0);
+
+  /* Re-check asks the SERVER's cache for a fresh reading — it does not
+     bypass anything. A refusal comes back as a wait, which the popover
+     prints beside the button. */
+  function recheckUsage() {
+    if (!activeProvider) return;
+    usageRechecking = true;
+    usageRecheckWait = 0;
+    run(refreshComposerUsage(base, activeProvider).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        const r = normalizeUsageRefresh(res);
+        if (!r.accepted) usageRecheckWait = r.waitS;
+      })
+      .catch(() => { usageError = "Could not re-check usage."; })
+      .finally(() => {
+        usageRechecking = false;
+        loadUsage();
+      });
+  }
+
+  function loadUsage() {
+    if (!activeProvider) return;
+    usageLoading = true;
+    run(getComposerUsage(base, activeProvider).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { usageData = normalizeComposerUsage(res); })
+      .catch(() => { usageError = "Could not read usage for this provider."; })
+      .finally(() => { usageLoading = false; });
+  }
+
+  function openUsagePopover() {
+    usagePopoverOpen = true;
+    usageError = "";
+    usageRecheckWait = 0;
+    if (!activeProvider) {
+      usageError = "No provider selected for this session.";
+      return;
+    }
+    loadUsage();
+  }
+
   function openOverridePopover() {
     const providerType = activeProvider ? activeProvider.split("/")[0] : "";
     run(getSessionOverrides(base, sessionId, providerType).pipe(Effect.provide(WickClientLayer)))
@@ -2159,6 +2215,17 @@
             values={overrideValues}
             onChange={saveOverride}
             onClose={() => (overridePopoverOpen = false)}
+          />
+          <!-- /usage — read-only quota for this session's provider. -->
+          <UsagePopover
+            open={usagePopoverOpen}
+            data={usageData}
+            loading={usageLoading}
+            error={usageError}
+            onRecheck={recheckUsage}
+            rechecking={usageRechecking}
+            recheckWait={usageRecheckWait}
+            onClose={() => (usagePopoverOpen = false)}
           />
           <Composer
             bind:this={composerRef}
