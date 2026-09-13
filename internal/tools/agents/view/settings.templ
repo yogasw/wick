@@ -22,19 +22,152 @@ type SettingsVM struct {
 // can render full-height and carry a Reset-to-default button.
 // Remaining rows fall back to the generic ConfigsTable. POSTs target
 // /manager/tools/agents/configs/{key}.
+//
+// Every card starts closed: the page has grown past the point where
+// scrolling through expanded groups finds anything, so the search box is
+// the way in — type a key or a word from its description and only the
+// cards holding a match stay on screen, already open.
 templ SettingsPage(vm SettingsVM) {
 	@AgentsLayout(vm.Layout) {
-		<div class="p-6 space-y-6">
+		<!-- .page-col: the same centred column the chat thread and the session
+		     list use, so moving between them does not change how wide the page
+		     is. A folded card is one line of text — stretched viewport-wide,
+		     its title and chevron end up at opposite edges. -->
+		<div class="page-col p-6 space-y-6" data-settings-root>
 			<div>
 				<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Settings</h1>
 				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
 					Configure agents runtime options. Changes take effect immediately.
 				</p>
 			</div>
-			@managerview.ConfigsTable(vm.Rows, "/manager/tools/agents/configs", "", "")
+			@settingsSearchBox()
+			@managerview.ConfigsTableCollapsed(vm.Rows, "/manager/tools/agents/configs")
 			@systemPromptPanel(vm.SystemPromptCurrent, vm.SystemPromptDefault)
+			@settingsSearchScript()
 		</div>
 	}
+}
+
+// settingsSearchBox is the filter input above the cards. It is a plain
+// client-side filter — nothing is fetched, so results appear per keystroke.
+templ settingsSearchBox() {
+	<div class="sticky top-0 z-10 -mx-6 -mt-2 bg-white-200/95 px-6 pb-3 pt-2 backdrop-blur dark:bg-navy-800/95">
+		<div class="relative">
+			<svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black-700 dark:text-black-600" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+				<circle cx="9" cy="9" r="5.5"></circle>
+				<path d="M13.5 13.5L17 17" stroke-linecap="round"></path>
+			</svg>
+			<input
+				type="search"
+				data-settings-search
+				autocomplete="off"
+				placeholder="Search settings — key, group, or description ( / )"
+				aria-label="Search settings"
+				class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 py-2 pl-9 pr-24 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+			/>
+			<span data-settings-count class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-black-700 dark:text-black-600"></span>
+		</div>
+		<p data-settings-empty class="mt-3 hidden text-sm text-black-700 dark:text-black-600">
+			No setting matches that search.
+		</p>
+	</div>
+}
+
+// settingsSearchScript wires the filter. It hides with the `hidden`
+// attribute, never with inline display, so it composes with the configs
+// form's own visible_when logic (which owns style.display) instead of
+// fighting it for the same slot.
+templ settingsSearchScript() {
+	<script>
+	(function(){
+		var root=document.querySelector('[data-settings-root]');
+		var input=root&&root.querySelector('[data-settings-search]');
+		if(!root||!input)return;
+		var countEl=root.querySelector('[data-settings-count]');
+		var emptyEl=root.querySelector('[data-settings-empty]');
+		// A card is one collapsible block: a config group, or a standalone
+		// panel that opted in with data-search-card (system_prompt).
+		var cards=Array.prototype.slice.call(root.querySelectorAll('[data-cfg-group],[data-search-card]'));
+		var searching=false;
+
+		function headText(card){
+			var head=card.querySelector('summary');
+			return ((card.getAttribute('data-group-title')||'')+' '+(head?head.textContent:'')).toLowerCase();
+		}
+		function fieldsOf(card){
+			var f=card.querySelectorAll('[data-cfg-key]');
+			return f.length?Array.prototype.slice.call(f):[];
+		}
+		function textOf(el){return (el.textContent||'').toLowerCase();}
+
+		function reset(){
+			cards.forEach(function(card){
+				card.hidden=false;
+				fieldsOf(card).forEach(function(f){f.hidden=false;});
+				// Restore whatever was open before the search started.
+				card.open=card.getAttribute('data-pre-search-open')==='1';
+			});
+			if(countEl)countEl.textContent='';
+			if(emptyEl)emptyEl.classList.add('hidden');
+		}
+
+		function apply(q){
+			var hits=0;
+			cards.forEach(function(card){
+				var fields=fieldsOf(card);
+				var headHit=headText(card).indexOf(q)>=0;
+				var shown=0;
+				fields.forEach(function(f){
+					// A group whose own title/description matches keeps all
+					// of its fields — the match is about the group itself.
+					var hit=headHit||textOf(f).indexOf(q)>=0;
+					f.hidden=!hit;
+					if(hit)shown++;
+				});
+				// A card with no indexable fields (system_prompt panel) rides
+				// on its header text alone.
+				var cardHit=fields.length?(shown>0):headHit;
+				card.hidden=!cardHit;
+				card.open=cardHit;
+				if(cardHit)hits+=fields.length?shown:1;
+			});
+			if(countEl)countEl.textContent=hits===0?'':hits+' match'+(hits===1?'':'es');
+			if(emptyEl)emptyEl.classList.toggle('hidden',hits!==0);
+		}
+
+		function run(){
+			var q=input.value.trim().toLowerCase();
+			if(q===''){
+				if(searching){searching=false;reset();}
+				return;
+			}
+			if(!searching){
+				searching=true;
+				// Snapshot the open/closed state once, at the moment the
+				// search begins, so clearing the box puts the page back the
+				// way the operator left it.
+				cards.forEach(function(card){card.setAttribute('data-pre-search-open',card.open?'1':'0');});
+			}
+			apply(q);
+		}
+
+		input.addEventListener('input',run);
+		input.addEventListener('search',run);
+		input.addEventListener('keydown',function(e){
+			if(e.key==='Escape'){input.value='';run();input.blur();}
+		});
+		// "/" focuses the box from anywhere on the page, except while typing
+		// into a field.
+		document.addEventListener('keydown',function(e){
+			if(e.key!=='/'||e.metaKey||e.ctrlKey||e.altKey)return;
+			var t=e.target;
+			if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT'||t.isContentEditable))return;
+			e.preventDefault();
+			input.focus();
+			input.select();
+		});
+	})();
+	</script>
 }
 
 // systemPromptPanel renders the dedicated editor for the global
@@ -42,17 +175,25 @@ templ SettingsPage(vm SettingsVM) {
 // `/manager/tools/agents/configs/system_prompt` endpoint the generic
 // table uses; the Reset button stuffs the embedded default into the
 // textarea and triggers the same save path.
+//
+// Folded like every other card on the page, and tagged data-search-card so
+// the search box can surface it by name.
 templ systemPromptPanel(current, defaultText string) {
-	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-		<div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-			<div class="flex items-center gap-2">
-				<span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">system_prompt</span>
-				<span data-sysprompt-status class="ml-auto text-[10px] transition-all"></span>
+	<details data-search-card class="group/card rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+		<summary class="cursor-pointer list-none rounded-xl group-open/card:rounded-b-none group-open/card:border-b border-white-300 dark:border-navy-600 px-5 py-3 bg-white-200 dark:bg-navy-800 flex items-start gap-2 select-none">
+			<svg class="mt-0.5 h-4 w-4 shrink-0 text-black-700 dark:text-black-600 transition-transform group-open/card:rotate-90" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+				<path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z" clip-rule="evenodd"></path>
+			</svg>
+			<div class="min-w-0">
+				<div class="flex items-center gap-2">
+					<span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">system_prompt</span>
+					<span data-sysprompt-status class="text-[10px] transition-all"></span>
+				</div>
+				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+					Global interaction rules appended to every preset's system prompt on spawn. Adds to the preset — never replaces it. Use for org-wide guardrails, prompt-injection defenses, or shared conventions every agent must follow.
+				</p>
 			</div>
-			<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
-				Global interaction rules appended to every preset's system prompt on spawn. Adds to the preset — never replaces it. Use for org-wide guardrails, prompt-injection defenses, or shared conventions every agent must follow.
-			</p>
-		</div>
+		</summary>
 		<div class="p-5 space-y-3">
 			<textarea
 				id="sysprompt-textarea"
@@ -95,7 +236,10 @@ templ systemPromptPanel(current, defaultText string) {
 			}
 			var t;
 			ta.addEventListener('input',function(){clearTimeout(t);t=setTimeout(function(){save(ta.value);},800);});
-			btn.addEventListener('click',function(){
+			btn.addEventListener('click',function(e){
+				// Inside a <summary>-less card body, but the button still sits
+				// within <details> — stop the click from toggling the card.
+				e.preventDefault();
 				if(ta.value===defaultText){return;}
 				if(ta.value.trim()!==''&&!confirm('Replace current rules with the default?'))return;
 				ta.value=defaultText;
@@ -103,5 +247,5 @@ templ systemPromptPanel(current, defaultText string) {
 			});
 		})();
 		</script>
-	</div>
+	</details>
 }
