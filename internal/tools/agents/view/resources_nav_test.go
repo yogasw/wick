@@ -30,25 +30,44 @@ func TestResourcesNavLinkHasIcon(t *testing.T) {
 	}
 }
 
-// The entry lives inside the collapsed "More" group, so landing on the
-// page must expand it — otherwise the active row is hidden and the page
-// looks unreachable from the sidebar it is listed in.
-func TestResourcesExpandsMoreGroup(t *testing.T) {
-	attrs := agentsMoreOpenAttr("resources")
-	if _, ok := attrs["open"]; !ok {
-		t.Fatal("the More group stays collapsed on the resources page, hiding its own nav entry")
+// The entry lives inside the collapsed "More" group, and landing on the
+// page must not leave the sidebar showing no sign of it. The group no
+// longer auto-expands (nine rows pushed the projects list off screen);
+// instead the active row is promoted above the summary — so what this
+// guards now is that the page IS one of the group's rows and is the one
+// marked active.
+func TestResourcesIsPromotedOutOfTheMoreGroup(t *testing.T) {
+	items := AgentsMoreItems(AgentsLayoutVM{Base: "/tools/agents", ActivePage: "resources"}, admin())
+
+	for _, it := range items {
+		if it.Label == "Resources" {
+			if !it.Active {
+				t.Fatal("the resources page does not mark its own nav row active, so nothing is promoted and the row stays hidden")
+			}
+			return
+		}
 	}
+	t.Fatal("Resources is not in the More group at all")
 }
 
-// Guard the neighbours: a typo'd case label would silently drop an icon
-// from a page nobody is currently looking at.
-func TestMoreGroupPagesAllExpand(t *testing.T) {
+// Guard the neighbours: every page in the group must map to a row, or
+// landing there shows a sidebar with nothing highlighted.
+func TestEveryMoreGroupPageHasARow(t *testing.T) {
+	vm := AgentsLayoutVM{Base: "/tools/agents", ProvidersVisible: true, AirouterVisible: true}
 	for _, page := range []string{
 		"presets", "providers", "skills", "channels",
 		"data-tables", "scheduled", "airouter", "agent-profiles", "resources",
 	} {
-		if _, ok := agentsMoreOpenAttr(page)["open"]; !ok {
-			t.Fatalf("page %q is in the More group but does not expand it", page)
+		vm.ActivePage = page
+		found := false
+		for _, it := range AgentsMoreItems(vm, admin()) {
+			if it.Active {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("page %q is in the More group but no row marks itself active for it", page)
 		}
 	}
 }
