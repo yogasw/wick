@@ -335,3 +335,40 @@ func (r *repo) AdminUsers(ctx context.Context) ([]adminUser, error) {
 	}
 	return out, nil
 }
+
+// OwnerTagHolders resolves who carries each "owner:<id>" tag — the grant an
+// admin uses to hand a project, workflow, skill or data table to somebody
+// who did not create it. Keyed by tag NAME, since that is what the caller
+// builds from the resource id.
+func (r *repo) OwnerTagHolders(ctx context.Context, tagNames []string) (map[string][]adminUser, error) {
+	out := map[string][]adminUser{}
+	if len(tagNames) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		TagName  string
+		ID       string
+		Name     string
+		Email    string
+		Role     string
+		Approved bool
+	}
+	if err := r.db.WithContext(ctx).
+		Table("tags t").
+		Select("t.name as tag_name, u.id as id, u.name as name, u.email as email, u.role as role, u.approved as approved").
+		Joins("JOIN user_tags ut ON ut.tag_id = t.id").
+		Joins("JOIN users u ON CAST(u.id AS TEXT) = CAST(ut.user_id AS TEXT)").
+		Where("t.name IN ?", tagNames).
+		Where("u.approved = ?", true).
+		Order("u.name asc, u.email asc").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[row.TagName] = append(out[row.TagName], adminUser{
+			ID: row.ID, Name: row.Name, Email: row.Email,
+			Role: row.Role, Approved: row.Approved,
+		})
+	}
+	return out, nil
+}

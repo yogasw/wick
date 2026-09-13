@@ -17,6 +17,15 @@ type AccessSummary struct {
 	// state (entity.VisibilityPublic, "no login needed"); it outranks tags,
 	// so it is rendered on its own rather than folded into Public.
 	Anyone bool
+	// OwnerScoped: this surface keeps an UNTAGGED row private to its owner
+	// rather than open to everyone (projects, data tables, workflows,
+	// skills). Such a row must never render as "Public".
+	OwnerScoped bool
+	// TagsInert: the row carries filter tags that the code deciding its
+	// visibility never reads, so they grant nothing. Surfaced rather than
+	// hidden — otherwise the only symptom is a share that silently does not
+	// work.
+	TagsInert bool
 	// Unknown: the count could not be read (DB error). Rendered as "—" so a
 	// failed query never masquerades as "nobody has access".
 	Unknown bool
@@ -49,8 +58,13 @@ templ AccessBadge(s AccessSummary) {
 				<span>Anyone</span>
 			} else if s.Public {
 				<span>Public</span>
+			} else if s.OwnerScoped && s.UserCount <= 1 {
+				<span>Private</span>
 			} else {
 				<span>Restricted</span>
+			}
+			if s.TagsInert {
+				<span title="this surface never reads its filter tags — the tags on this row grant nothing">⚠</span>
 			}
 			if s.Anyone {
 				<span class="font-mono">∞</span>
@@ -70,6 +84,8 @@ func accessBadgeClass(s AccessSummary) string {
 		return "border-amber-400 dark:border-amber-700 bg-amber-50 dark:bg-navy-800 text-amber-700 dark:text-amber-400 hover:border-amber-500"
 	case s.Public:
 		return "border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-800 dark:text-black-600 hover:border-green-400"
+	case s.TagsInert:
+		return "border-amber-400 dark:border-amber-700 bg-amber-50 dark:bg-navy-800 text-amber-700 dark:text-amber-400 hover:border-amber-500"
 	case s.UserCount == 0:
 		return "border-amber-400 dark:border-amber-700 bg-amber-50 dark:bg-navy-800 text-amber-700 dark:text-amber-400 hover:border-amber-500"
 	default:
@@ -83,6 +99,12 @@ func accessBadgeTitle(s AccessSummary) string {
 	}
 	if s.Public {
 		return "No access tag — every approved user (" + strconv.Itoa(s.TotalUser) + ") can see this. Click for the list."
+	}
+	if s.TagsInert {
+		return "This surface never reads its filter tags, so the tags on this row grant nobody access — only the owner (and admins) reach it. Click for the list."
+	}
+	if s.OwnerScoped && s.UserCount <= 1 {
+		return "Private: untagged here means owner-only, not public. Click for the list."
 	}
 	if s.UserCount == 0 {
 		return "Tagged, but nobody carries those tags — no non-admin can see this. Click for details."

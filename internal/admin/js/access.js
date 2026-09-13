@@ -139,7 +139,27 @@
           return;
         }
         var head = "";
-        if (d.public) {
+        if (d.tags_inert) {
+          // The tag picker on this page writes tags nothing reads. Saying it
+          // here is the only place an admin finds out their share did nothing.
+          head +=
+            '<p class="mb-3 rounded-md border border-amber-400 dark:border-amber-700 bg-amber-50 dark:bg-navy-800 px-3 py-2 text-amber-700 dark:text-amber-400">' +
+            "This surface never reads its access tags — " +
+            (d.tags || [])
+              .map(function (t) {
+                return chip(t, "warn");
+              })
+              .join(" ") +
+            " grant nobody access. Only the owner (and admins) reach it.</p>";
+        }
+        if (d.owner_scoped) {
+          head +=
+            '<p class="mb-3 text-black-800 dark:text-black-600">Untagged means <strong>owner-only</strong> on this ' +
+            esc(d.kind_one || "item") +
+            " — not public. " +
+            (d.users || []).length +
+            " user(s) reach it.</p>";
+        } else if (d.public) {
           head =
             '<p class="mb-3 text-black-800 dark:text-black-600">No access tag on this ' +
             esc(d.kind_one || "item") +

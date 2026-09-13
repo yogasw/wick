@@ -339,3 +339,87 @@ func setAgentsKnob(t *testing.T, h *Handler, key, value string) {
 	require.NoError(t, h.configs.EnsureOwned(ctx, "agents", entity.Config{Key: key, Type: "bool"}))
 	require.NoError(t, h.configs.SetOwned(ctx, "agents", key, value))
 }
+
+// ── Owner-scoped surfaces ─────────────────────────────────────────────────
+
+// An UNTAGGED project is not public. login.CanAccessSharedResource returns
+// false for an untagged path on purpose, so the project stays private to its
+// owner — rendering it as "Public 30" said the opposite of the truth.
+func TestUntaggedProjectIsPrivateNotPublic(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	seedUserWithTag(t, db, "u-owner", "owner@x.test", "")
+	seedUserWithTag(t, db, "u-other", "other@x.test", "")
+
+	sums := h.accessSummariesFor(ctx, []accessSpec{
+		{Path: "/projects/p1", ResourceID: "p1", OwnerID: "u-owner"},
+	})
+	got := sums["/projects/p1"]
+	require.False(t, got.Public, "an untagged project must never render as public")
+	require.True(t, got.OwnerScoped)
+	require.Equal(t, 1, got.Reach(), "reach is the owner, not every approved user")
+}
+
+// The same project shared by tag grows to owner + tag holders.
+func TestTaggedProjectIsOwnerPlusShare(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-owner", "owner@x.test", "")
+	seedUserWithTag(t, db, "u-shared", "shared@x.test", support)
+	seedUserWithTag(t, db, "u-other", "other@x.test", "")
+	tagPath(t, db, "/projects/p1", support)
+
+	sums := h.accessSummariesFor(ctx, []accessSpec{
+		{Path: "/projects/p1", ResourceID: "p1", OwnerID: "u-owner"},
+	})
+	require.Equal(t, 2, sums["/projects/p1"].Reach(), "owner + the tag holder")
+}
+
+// An "owner:<id>" tag is how an admin hands a resource to someone who did not
+// create it, so its holders are in reach even with no filter tag anywhere.
+func TestOwnerTagHolderCountsAsReach(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	ownerTag := seedFilterTag(t, db, "owner:wf-1")
+	seedUserWithTag(t, db, "u-creator", "creator@x.test", "")
+	seedUserWithTag(t, db, "u-handed", "handed@x.test", ownerTag)
+
+	sums := h.accessSummariesFor(ctx, []accessSpec{
+		{Path: "/workflows/wf-1", ResourceID: "wf-1", OwnerID: "u-creator"},
+	})
+	require.Equal(t, 2, sums["/workflows/wf-1"].Reach(), "creator + the user handed the owner tag")
+}
+
+// Workflows and skills never read their filter tags — spa_workflows and
+// skills.go both gate on UserOwnsResource alone. A tag added on those admin
+// pages therefore grants nothing, and the badge has to say so instead of
+// counting people who cannot actually get in.
+func TestInertTagsDoNotGrantAccess(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-creator", "creator@x.test", "")
+	seedUserWithTag(t, db, "u-tagged", "tagged@x.test", support)
+	tagPath(t, db, "/skills/deploy", support)
+
+	sums := h.accessSummariesFor(ctx, []accessSpec{
+		{Path: "/skills/deploy", ResourceID: "deploy", OwnerID: "u-creator"},
+	})
+	got := sums["/skills/deploy"]
+	require.True(t, got.TagsInert, "the badge must flag tags this surface never reads")
+	require.Equal(t, 1, got.Reach(), "only the creator reaches it — the tag holder does not")
+}
+
+// Tools keep the opposite rule, and this test exists so a future refactor
+// cannot quietly make everything owner-scoped: untagged tool = everyone.
+func TestUntaggedToolStaysPublic(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	seedUserWithTag(t, db, "u-1", "one@x.test", "")
+	seedUserWithTag(t, db, "u-2", "two@x.test", "")
+
+	sums := h.accessSummariesFor(ctx, []accessSpec{{Path: "/tools/notes", ResourceID: "notes"}})
+	require.True(t, sums["/tools/notes"].Public)
+	require.Equal(t, 2, sums["/tools/notes"].Reach())
+}

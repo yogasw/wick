@@ -83,73 +83,93 @@ func accessKindOf(path string) string {
 // returns it keyed by path, ready to hand to adminview.AccessBadge. Paths with
 // no row in the map are public by definition (no tags), so callers can index
 // the map directly and get the right zero value.
+// accessSpec is one row to summarise: its tag path plus the ownership facts
+// an owner-scoped surface needs. Path alone is enough for tools/jobs/
+// connectors/providers; projects, data tables, workflows and skills also need
+// to know who owns the thing.
+type accessSpec struct {
+	Path       string
+	ResourceID string // the id an "owner:<id>" tag would name
+	OwnerID    string // the creator recorded on the row, when there is one
+}
+
+// accessSummaries is the badge for surfaces where the path says everything.
 func (h *Handler) accessSummaries(ctx context.Context, paths []string) map[string]adminview.AccessSummary {
-	out := make(map[string]adminview.AccessSummary, len(paths))
+	specs := make([]accessSpec, 0, len(paths))
+	for _, p := range paths {
+		specs = append(specs, accessSpec{Path: p})
+	}
+	return h.accessSummariesFor(ctx, specs)
+}
+
+// accessSummariesFor resolves the reach of each row under ITS OWN surface
+// rule (see accessRules). One query for the tag holders, one for the admins,
+// one for the owner tags — not one per row.
+func (h *Handler) accessSummariesFor(ctx context.Context, specs []accessSpec) map[string]adminview.AccessSummary {
+	out := make(map[string]adminview.AccessSummary, len(specs))
 	total := h.repo.ApprovedUserCount(ctx)
+
+	paths := make([]string, 0, len(specs))
+	ownerTagNames := make([]string, 0, len(specs))
+	for _, sp := range specs {
+		paths = append(paths, sp.Path)
+		if sp.ResourceID != "" {
+			ownerTagNames = append(ownerTagNames, "owner:"+sp.ResourceID)
+		}
+	}
+
 	sets, err := h.repo.AccessUserIDs(ctx, paths)
 	if err != nil {
-		// A failed count must not blank the page it decorates: fall back to
-		// "unknown" badges rather than dropping the whole listing.
-		for _, p := range paths {
-			out[p] = adminview.AccessSummary{Path: p, Unknown: true}
+		for _, sp := range specs {
+			out[sp.Path] = adminview.AccessSummary{Path: sp.Path, Unknown: true}
 		}
 		return out
 	}
-	// Admins are loaded once, then unioned into every path whose surface lets
-	// the admin role past the tags. Union, not addition: an admin carrying the
-	// tag is one person, not two.
+	owners, ownerErr := h.repo.OwnerTagHolders(ctx, ownerTagNames)
 	admins, adminErr := h.repo.AdminUsers(ctx)
-	for _, p := range paths {
-		set, tagged := sets[p]
-		if !tagged {
-			out[p] = adminview.AccessSummary{Path: p, Public: true, TotalUser: total}
+
+	for _, sp := range specs {
+		rule := ruleFor(sp.Path)
+		tagHolders, tagged := sets[sp.Path]
+
+		sum := adminview.AccessSummary{Path: sp.Path, TotalUser: total}
+		// Tags that the reader never consults are not access. Saying so on
+		// the badge is the only way an admin finds out that the picker on
+		// that page does nothing.
+		sum.TagsInert = tagged && !rule.FilterTagsGrant
+
+		if rule.UntaggedIsPublic && !tagged {
+			sum.Public = true
+			out[sp.Path] = sum
 			continue
 		}
-		reach := make(map[string]bool, len(set))
-		for id := range set {
-			reach[id] = true
+
+		reach := map[string]bool{}
+		if tagged && rule.FilterTagsGrant {
+			for id := range tagHolders {
+				reach[id] = true
+			}
 		}
-		if adminErr == nil && h.adminBypassFor(p) {
+		if rule.OwnerScoped {
+			sum.OwnerScoped = true
+			if sp.OwnerID != "" {
+				reach[sp.OwnerID] = true
+			}
+			if ownerErr == nil && sp.ResourceID != "" {
+				for _, u := range owners["owner:"+sp.ResourceID] {
+					reach[u.ID] = true
+				}
+			}
+		}
+		if adminErr == nil && h.adminBypassFor(sp.Path) {
 			for _, a := range admins {
 				reach[a.ID] = true
 			}
 		}
-		out[p] = adminview.AccessSummary{
-			Path:      p,
-			UserCount: len(reach),
-			TotalUser: total,
-		}
+		sum.UserCount = len(reach)
+		out[sp.Path] = sum
 	}
 	return out
-}
-
-// withAdminBypass appends the admins who walk past this path's tags, each
-// labelled with the rule that lets them. Users already listed keep their
-// place and just gain the extra reason.
-func (h *Handler) withAdminBypass(ctx context.Context, path string, users []adminUser) []adminUser {
-	if !h.adminBypassFor(path) {
-		return users
-	}
-	admins, err := h.repo.AdminUsers(ctx)
-	if err != nil {
-		return users
-	}
-	reason := h.adminReason(path)
-	seen := make(map[string]int, len(users))
-	for i, u := range users {
-		seen[u.ID] = i
-	}
-	for _, a := range admins {
-		if i, ok := seen[a.ID]; ok {
-			if !containsString(users[i].ViaTags, reason) {
-				users[i].ViaTags = append(users[i].ViaTags, reason)
-			}
-			continue
-		}
-		a.ViaTags = []string{reason}
-		users = append(users, a)
-	}
-	return users
 }
 
 // accessUsersPage serves GET /admin/access/users?path=… — the modal behind the
@@ -165,6 +185,15 @@ func (h *Handler) accessUsersPage(w http.ResponseWriter, r *http.Request) {
 	// accountAccessUsers — so they get their own resolution.
 	if strings.HasPrefix(path, connectors.AccountTagPath("")) {
 		detail, err := h.accountAccessDetail(r.Context(), path)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
+		return
+	}
+	if rule := ruleFor(path); rule.OwnerScoped {
+		detail, err := h.ownerScopedDetail(r.Context(), path, rule)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -237,9 +266,14 @@ type AccessDetail struct {
 	KindOne string `json:"kind_one"`
 	// Public: the item carries no filter tag, so every approved user reaches
 	// it and Users lists all of them.
-	Public bool        `json:"public"`
-	Tags   []string    `json:"tags"`
-	Users  []adminUser `json:"users"`
+	Public bool     `json:"public"`
+	Tags   []string `json:"tags"`
+	// OwnerScoped: untagged here means owner-only, not everyone.
+	OwnerScoped bool `json:"owner_scoped"`
+	// TagsInert: the tags below are never read by this surface's visibility
+	// check, so they grant nobody anything.
+	TagsInert bool        `json:"tags_inert"`
+	Users     []adminUser `json:"users"`
 }
 
 // AccessItem is one thing a tag grants access to.
@@ -271,11 +305,11 @@ type TagUsage struct {
 // One call per page keeps the four handlers from each growing their own copy
 // of the same two lookups.
 func (h *Handler) decorateResourceRows(ctx context.Context, rows []adminview.ResourceAdminRow, allTags []*entity.Tag) []adminview.ResourceAdminRow {
-	paths := make([]string, 0, len(rows))
+	specs := make([]accessSpec, 0, len(rows))
 	for _, r := range rows {
-		paths = append(paths, r.Path)
+		specs = append(specs, accessSpec{Path: r.Path, ResourceID: r.ID, OwnerID: r.CreatedBy})
 	}
-	access := h.accessSummaries(ctx, paths)
+	access := h.accessSummariesFor(ctx, specs)
 	for i := range rows {
 		rows[i].Access = access[rows[i].Path]
 		rows[i].TagNames = adminview.TagNames(allTags, rows[i].TagIDs)
@@ -456,15 +490,15 @@ var errNoAccount = errors.New("connected account not found")
 // An admin who ALSO carries a matching tag must be counted once, so callers
 // union user ids rather than adding two numbers.
 func (h *Handler) adminBypassFor(path string) bool {
-	switch strings.SplitN(strings.TrimPrefix(path, "/"), "/", 2)[0] {
-	case "tools", "jobs", "manager", "providers":
-		return true
-	case "connectors", "connector-accounts":
+	switch ruleFor(path).AdminKnob {
+	case "":
+		return true // no knob: the admin role always passes on this surface
+	case knobConnectors:
 		if h.connectors != nil {
 			return h.connectors.AdminSeesAllConnectors()
 		}
 		return adminscope.AdminSeeAllConnectors(h.configs)
-	case "projects", "data-tables", "workflows", "skills":
+	case knobSessions:
 		return adminscope.AdminSeeAllSessions(h.configs)
 	default:
 		return false
@@ -474,12 +508,138 @@ func (h *Handler) adminBypassFor(path string) bool {
 // adminReason names why an admin is in a reach list, naming the knob when one
 // is involved — "admin" alone invites the question this string answers.
 func (h *Handler) adminReason(path string) string {
-	switch strings.SplitN(strings.TrimPrefix(path, "/"), "/", 2)[0] {
-	case "connectors", "connector-accounts":
+	switch ruleFor(path).AdminKnob {
+	case knobConnectors:
 		return "admin (see-all connectors on)"
-	case "projects", "data-tables", "workflows", "skills":
+	case knobSessions:
 		return "admin (see-all sessions on)"
 	default:
 		return "admin role"
 	}
+}
+
+// withAdminBypass appends the admins who walk past this path's tags, each
+// labelled with the rule that lets them. Users already listed keep their
+// place and just gain the extra reason.
+func (h *Handler) withAdminBypass(ctx context.Context, path string, users []adminUser) []adminUser {
+	if !h.adminBypassFor(path) {
+		return users
+	}
+	admins, err := h.repo.AdminUsers(ctx)
+	if err != nil {
+		return users
+	}
+	reason := h.adminReason(path)
+	seen := make(map[string]int, len(users))
+	for i, u := range users {
+		seen[u.ID] = i
+	}
+	for _, a := range admins {
+		if i, ok := seen[a.ID]; ok {
+			if !containsString(users[i].ViaTags, reason) {
+				users[i].ViaTags = append(users[i].ViaTags, reason)
+			}
+			continue
+		}
+		a.ViaTags = []string{reason}
+		users = append(users, a)
+	}
+	return users
+}
+
+// resourceOwnerID looks up who created the thing at this path, for the
+// owner-scoped surfaces. "" when the surface has no owner concept or the
+// backing service is not wired.
+func (h *Handler) resourceOwnerID(path string) string {
+	ns, id, ok := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+	if !ok || id == "" {
+		return ""
+	}
+	switch ns {
+	case "projects":
+		if h.projects == nil {
+			return ""
+		}
+		if p, found := h.projects.Projects()[id]; found {
+			return p.Meta.OwnerUserID
+		}
+	case "workflows":
+		if h.workflows == nil {
+			return ""
+		}
+		if info, err := h.workflows.LoadInfo(id); err == nil {
+			return info.CreatedBy
+		}
+	case "data-tables":
+		if h.dataTables == nil {
+			return ""
+		}
+		if sc, err := h.dataTables.LoadSchema(id); err == nil {
+			return sc.UserID
+		}
+	case "skills":
+		if h.skillsDB == nil {
+			return ""
+		}
+		if skills, err := h.skillsDB.List(context.Background()); err == nil {
+			for _, sk := range skills {
+				if sk.Name == id && sk.CreatedBy != nil {
+					return *sk.CreatedBy
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// ownerScopedDetail is the modal for a surface where untagged means
+// owner-only: the owner, whoever holds its "owner:<id>" tag, the filter-tag
+// holders IF this surface reads them, and the admins who bypass.
+func (h *Handler) ownerScopedDetail(ctx context.Context, path string, rule accessRule) (AccessDetail, error) {
+	out := AccessDetail{Path: path, Kind: accessKindOf(path), KindOne: accessKindOneOf(path), OwnerScoped: true}
+	_, id, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+
+	tagDetail, err := h.repo.AccessDetail(ctx, path)
+	if err != nil {
+		return out, err
+	}
+	tagged := !tagDetail.Public // Public here only means "carries no filter tag".
+	out.Tags = tagDetail.Tags
+	out.TagsInert = tagged && !rule.FilterTagsGrant
+
+	merged := map[string]int{}
+	add := func(u adminUser, reason string) {
+		if i, ok := merged[u.ID]; ok {
+			if reason != "" && !containsString(out.Users[i].ViaTags, reason) {
+				out.Users[i].ViaTags = append(out.Users[i].ViaTags, reason)
+			}
+			return
+		}
+		if reason != "" {
+			u.ViaTags = append(u.ViaTags, reason)
+		}
+		merged[u.ID] = len(out.Users)
+		out.Users = append(out.Users, u)
+	}
+
+	if ownerID := h.resourceOwnerID(path); ownerID != "" {
+		if u, _ := h.repo.AdminUserByID(ctx, ownerID); u != nil {
+			add(*u, "owner")
+		}
+	}
+	if id != "" {
+		holders, err := h.repo.OwnerTagHolders(ctx, []string{"owner:" + id})
+		if err == nil {
+			for _, u := range holders["owner:"+id] {
+				add(u, "owner tag")
+			}
+		}
+	}
+	if tagged && rule.FilterTagsGrant {
+		for _, u := range tagDetail.Users {
+			add(u, "")
+		}
+	}
+	out.Users = h.withAdminBypass(ctx, path, out.Users)
+	return out, nil
 }
