@@ -579,7 +579,9 @@ func scheduleRunAsUsersUI(c *tool.Ctx) {
 		return
 	}
 	var users []entity.User
-	if err := globalDB.Select("id", "name", "email", "approved").
+	// Only the id is read — the label comes from the cached name map below,
+	// so pulling name/email here would be bytes nobody looks at.
+	if err := globalDB.Select("id", "approved").
 		Where("approved = ?", true).Find(&users).Error; err != nil {
 		c.Error(http.StatusInternalServerError, err.Error())
 		return

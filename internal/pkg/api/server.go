@@ -2547,11 +2547,18 @@ func NewServer() *Server {
 	r.Handle("/", http.HandlerFunc(homeHandler.RootRedirect))
 	r.Handle("/mini-tools", http.HandlerFunc(homeHandler.Launcher))
 
-	runAsUsable := func(userID string) bool {
+	runAsUsable := func(ctx context.Context, userID string) bool {
 		if userID == "" {
 			return false
 		}
-		u, err := authSvc.GetUserByID(context.Background(), userID)
+		// Bounded on purpose. This runs inside a runner tick that delivers a
+		// batch of due schedules, so an unreachable database must cost one
+		// fire rather than stalling every schedule behind it. Failing the
+		// lookup refuses the fire, which is the safe direction: better a
+		// visible failed row than a run under an identity nobody confirmed.
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		u, err := authSvc.GetUserByID(ctx, userID)
 		return err == nil && u != nil && u.Approved
 	}
 	return &Server{runAsUsable: runAsUsable, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens}
@@ -2581,7 +2588,7 @@ type Server struct {
 	// and is approved. The schedule runner consults it at fire time so a
 	// disabled account stops its jobs instead of silently handing them to the
 	// internal principal.
-	runAsUsable func(userID string) bool
+	runAsUsable func(ctx context.Context, userID string) bool
 	// scheduleStore backs wick_schedule_message; Run starts the runner that
 	// polls it and delivers due messages through agentsPool. nil-safe: the
 	// runner is only started when both store and pool are present.

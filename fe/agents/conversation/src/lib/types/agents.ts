@@ -439,8 +439,11 @@ export type Schedule = {
   /* Identity — whose access the fires actually use. created_by only says HOW
      the row was made ("ai"/"user"), never as whom it runs. effective_run_as
      empty means the fire is attached to nobody and falls back to wick's
-     internal principal, which carries no access tags. */
-  owner_user_id?: string;
+     internal principal, which carries no access tags.
+
+     The API also returns owner_user_id; it is left out here until something
+     reads it, so the type stays a description of what this SPA uses rather
+     than a copy of the payload. */
   run_as_user_id?: string;
   effective_run_as?: string;
   effective_run_as_name?: string;

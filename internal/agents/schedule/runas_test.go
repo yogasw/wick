@@ -109,7 +109,7 @@ func TestRunner_RevokedRunAsUserFailsInsteadOfDowngrading(t *testing.T) {
 	s := newTestStore(t)
 	layout, _ := newRunnerLayout(t)
 	sender := &fakeSender{layout: layout}
-	r := NewRunner(s, sender, layout).WithRunAsCheck(func(userID string) bool {
+	r := NewRunner(s, sender, layout).WithRunAsCheck(func(_ context.Context, userID string) bool {
 		return userID == "user-ada" // bob has been disabled
 	})
 	ctx := context.Background()
