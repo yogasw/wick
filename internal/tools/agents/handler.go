@@ -1390,7 +1390,7 @@ func startNewSession(c *tool.Ctx) {
 		return
 	}
 	// Detach from HTTP ctx (see sendMessage note) — keep request_id for logs.
-	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()))
+	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()), id)
 	if err := globalPool.SendWithAttachments(bgCtx, id, "main", "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose send: %s", err.Error())
 		renderCompose(c, text, err.Error())
@@ -1716,10 +1716,25 @@ func viewerID(c *tool.Ctx) string {
 // Without this a dashboard message is stored with no sender at all, so a
 // thread mixing web and Slack turns can attribute the Slack ones and not its
 // own — and the web turns come back anonymous on replay.
-func withComposerSender(c *tool.Ctx, bg context.Context) context.Context {
+// withComposerSender attaches the signed-in human to a detached context so
+// the pool can attribute the turn, and — since it is already the one place
+// the web path resolves that person — records them on the session too.
+//
+// The ownership write is deliberately here rather than in each handler: both
+// composer paths funnel through this helper, so one call covers them without
+// a second mechanism to keep in step.
+//
+// EnsureSessionOwner is first-writer-wins, so this can only fill a session
+// that has nobody attached; it never moves an existing owner. What it does
+// for an already-owned session is add the sender to Participants, which is
+// what keeps a shared conversation openable by the people actually in it.
+func withComposerSender(c *tool.Ctx, bg context.Context, sessionID string) context.Context {
 	u := login.GetUser(c.Context())
 	if u == nil {
 		return bg
+	}
+	if globalPool != nil && sessionID != "" {
+		globalPool.EnsureSessionOwner(bg, sessionID, u.ID)
 	}
 	name := u.Name
 	if name == "" {
@@ -1825,7 +1840,7 @@ func sendMessage(c *tool.Ctx) {
 	// Detach from HTTP ctx — pool.spawn calls exec.CommandContext, so
 	// inheriting c.Context() would SIGKILL claude.exe the moment the
 	// response returns. Copy request_id over so logs still correlate.
-	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()))
+	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()), id)
 	// The person's words are never rewritten, but the leader is told, in
 	// the same message and before it reads them, which mentions wick is
 	// dispatching itself. Routing runs detached below, so without this
