@@ -24,7 +24,10 @@ import (
 //     a number with no provenance implies a live call nobody made.
 //   - It is gated on the ACCESS grant, not manage: if you are allowed to
 //     run a session on this provider, you are allowed to see how much of
-//     it is left. Re-check stays manage-only and the reply says which.
+//     it is left — and to ask for a fresh reading, which the cache is
+//     free to refuse. It refuses inside a server-sent Retry-After and
+//     within 10s of the last probe, so the button cannot be turned into
+//     a rate limit however many people press it.
 
 // composerUsageAccount is the "who is logged in" half of the reply.
 type composerUsageAccount struct {
@@ -148,4 +151,55 @@ func splitProviderKey(key string) (provider.Type, string, bool) {
 		name = typ
 	}
 	return provider.Type(typ), name, true
+}
+
+// ComposerUsageRefreshResponse is POST /api/composer/usage/refresh.
+//
+// accepted=false is not an error: the cache declined because a probe now
+// would land inside a cooldown (its own floor, or one the upstream asked
+// for). WaitS says how long, so the popover explains the wait instead of
+// looking broken — and so nobody learns to click it repeatedly.
+type ComposerUsageRefreshResponse struct {
+	Accepted bool `json:"accepted"`
+	Checking bool `json:"checking"`
+	WaitS    int  `json:"wait_s,omitempty"`
+	// Supported=false for a provider type with no usage API — there is
+	// nothing to re-check.
+	Supported bool `json:"supported"`
+}
+
+// apiComposerUsageRefresh handles POST /api/composer/usage/refresh.
+//
+// Same access gate as the read: this asks the cache for a fresh reading,
+// it does not act on the account. The cache owns the decision about
+// whether a probe actually goes out.
+func apiComposerUsageRefresh(c *tool.Ctx) {
+	if notReady(c) || !requireApprovedUser(c) {
+		return
+	}
+	t, name, ok := splitProviderKey(c.Query("provider"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "provider is required, as type/name"})
+		return
+	}
+	ins, err := provider.Find(t, name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
+		return
+	}
+	if !requireProviderAccess(c, ins.Type, ins.Name) {
+		return
+	}
+	if !logintty.SupportsUsage(ins.Type) {
+		c.JSON(http.StatusOK, ComposerUsageRefreshResponse{Supported: false})
+		return
+	}
+	accepted, wait := usageProbes.forceRefresh(logintty.UsageIdentity(ins.Type, ins.Env), func() ([]logintty.UsageWindow, error) {
+		return logintty.ReadUsage(ins.Type, ins.Env)
+	})
+	res := ComposerUsageRefreshResponse{Supported: true, Accepted: accepted, Checking: accepted}
+	if !accepted {
+		res.WaitS = int(wait.Round(time.Second) / time.Second)
+	}
+	c.JSON(http.StatusOK, res)
 }

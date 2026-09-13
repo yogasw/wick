@@ -321,6 +321,7 @@ func Register(r tool.Router) {
 	// `/usage` — this session's provider account, read from the same
 	// paced cache the Providers page uses (see api_composer_usage.go).
 	r.GET("/api/composer/usage", apiComposerUsage)
+	r.POST("/api/composer/usage/refresh", apiComposerUsageRefresh)
 
 	// JSON API — skills SPA endpoints (mirrors templ skills handlers).
 	r.GET("/api/skills", apiSkillsList)

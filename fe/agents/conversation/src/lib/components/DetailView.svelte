@@ -29,7 +29,10 @@
   import { sendMessage } from "../api/messages.js";
   import { listFiles, searchTree, searchMentionPaths, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
   import { listComposerCommands, type ComposerApiCommand } from "../api/composer.js";
-  import { getComposerUsage, normalizeComposerUsage, type ComposerUsage } from "../api/usage.js";
+  import {
+    getComposerUsage, normalizeComposerUsage, refreshComposerUsage, normalizeUsageRefresh,
+    type ComposerUsage,
+  } from "../api/usage.js";
   import { getProcesses, killProcess, dequeueProcess, liveProcesses as filterLiveProcesses } from "../api/processes.js";
   import {
     getSubAgentPanel,
@@ -246,19 +249,46 @@
   let usageData = $state<ComposerUsage | null>(null);
   let usageLoading = $state(false);
   let usageError = $state("");
+  let usageRechecking = $state(false);
+  let usageRecheckWait = $state(0);
 
-  function openUsagePopover() {
-    usagePopoverOpen = true;
-    usageError = "";
-    if (!activeProvider) {
-      usageError = "No provider selected for this session.";
-      return;
-    }
+  /* Re-check asks the SERVER's cache for a fresh reading — it does not
+     bypass anything. A refusal comes back as a wait, which the popover
+     prints beside the button. */
+  function recheckUsage() {
+    if (!activeProvider) return;
+    usageRechecking = true;
+    usageRecheckWait = 0;
+    run(refreshComposerUsage(base, activeProvider).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        const r = normalizeUsageRefresh(res);
+        if (!r.accepted) usageRecheckWait = r.waitS;
+      })
+      .catch(() => { usageError = "Could not re-check usage."; })
+      .finally(() => {
+        usageRechecking = false;
+        loadUsage();
+      });
+  }
+
+  function loadUsage() {
+    if (!activeProvider) return;
     usageLoading = true;
     run(getComposerUsage(base, activeProvider).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { usageData = normalizeComposerUsage(res); })
       .catch(() => { usageError = "Could not read usage for this provider."; })
       .finally(() => { usageLoading = false; });
+  }
+
+  function openUsagePopover() {
+    usagePopoverOpen = true;
+    usageError = "";
+    usageRecheckWait = 0;
+    if (!activeProvider) {
+      usageError = "No provider selected for this session.";
+      return;
+    }
+    loadUsage();
   }
 
   function openOverridePopover() {
@@ -2192,6 +2222,9 @@
             data={usageData}
             loading={usageLoading}
             error={usageError}
+            onRecheck={recheckUsage}
+            rechecking={usageRechecking}
+            recheckWait={usageRecheckWait}
             onClose={() => (usagePopoverOpen = false)}
           />
           <Composer

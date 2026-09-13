@@ -1,4 +1,4 @@
-import { apiGetE } from "@wick-fe/common-api";
+import { apiGetE, apiPostE } from "@wick-fe/common-api";
 
 /* Mirrors internal/tools/agents/api_composer_usage.go — GET
    /api/composer/usage. Backs the `/usage` popover: the session provider's
@@ -77,6 +77,30 @@ export function normalizeComposerUsage(w: WireComposerUsage): ComposerUsage {
     ageS: w.age_s ?? 0,
     nextS: w.next_s ?? 0,
     canManage: w.can_manage ?? false,
+  };
+}
+
+/* UsageRefresh mirrors ComposerUsageRefreshResponse. accepted=false is
+   NOT an error: the server's cache declined because a probe now would
+   land inside a cooldown (its own 10s floor, or a Retry-After the
+   upstream asked for). waitS says how long, which is what the popover
+   shows instead of a dead button. */
+export type UsageRefresh = { accepted: boolean; checking: boolean; waitS: number; supported: boolean };
+
+export const refreshComposerUsage = (base: string, provider: string) =>
+  apiPostE<{ accepted?: boolean; checking?: boolean; wait_s?: number; supported?: boolean }>(
+    `${base}/api/composer/usage/refresh?provider=${encodeURIComponent(provider)}`,
+    {},
+  );
+
+export function normalizeUsageRefresh(w: {
+  accepted?: boolean; checking?: boolean; wait_s?: number; supported?: boolean;
+}): UsageRefresh {
+  return {
+    accepted: w?.accepted ?? false,
+    checking: w?.checking ?? false,
+    waitS: w?.wait_s ?? 0,
+    supported: w?.supported ?? false,
   };
 }
 

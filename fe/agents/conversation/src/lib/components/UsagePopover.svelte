@@ -4,9 +4,14 @@
      them cannot open, since that menu belongs to provider managers.
 
      Floats above the composer like the /thinking popover and the provider
-     switcher, and never sends a message. Read-only by design: no
-     Reconnect, no forced re-check — acting on a provider account belongs
-     to the Providers menu, which is manage-gated. This just reports.
+     switcher, and never sends a message.
+
+     Re-check asks the server's cache for a fresh reading. The cache owns
+     the decision and refuses inside a cooldown (its own 10s floor, or a
+     Retry-After the upstream asked for), answering with the wait instead
+     — which is why the last-check line matters: you can see there is no
+     point pressing it again yet. Reconnect is NOT here: acting on the
+     account belongs to the Providers menu.
 
      Two things it is careful about. The numbers come from a shared,
      paced server cache (opening this costs no upstream request), so it
@@ -20,10 +25,15 @@
     data: ComposerUsage | null;
     loading: boolean;
     error: string;
+    /** Ask for a fresh reading; the parent calls the endpoint + reloads. */
+    onRecheck: () => void;
+    rechecking: boolean;
+    /** Seconds the server said to wait, when it declined the last click. */
+    recheckWait: number;
     onClose: () => void;
   };
 
-  let { open, data, loading, error, onClose }: Props = $props();
+  let { open, data, loading, error, onRecheck, rechecking, recheckWait, onClose }: Props = $props();
 
   let el: HTMLDivElement | undefined = $state();
 
@@ -92,6 +102,21 @@
         {:else}
           <span class="rounded bg-neg-100 dark:bg-neg-400/20 px-1.5 py-0.5 text-[10px] font-medium text-neg-400">Not connected</span>
         {/if}
+      {/if}
+      {#if data?.supported}
+        <span class="ml-auto inline-flex items-center gap-1">
+          {#if recheckWait > 0}
+            <span class="text-[10px] text-black-600 dark:text-black-700" title="A probe now would land inside a cooldown, so it was not sent">wait {shortDuration(recheckWait)}</span>
+          {/if}
+          <button
+            type="button"
+            data-testid="usage-recheck"
+            class="rounded px-1.5 py-0.5 text-[11px] text-link-400 hover:bg-white-300 dark:hover:bg-navy-600 disabled:opacity-50"
+            disabled={rechecking || data.checking}
+            title="Check this account's usage now"
+            onclick={onRecheck}
+          >{rechecking || data.checking ? "Checking…" : "Re-check"}</button>
+        </span>
       {/if}
     </div>
 
@@ -164,8 +189,8 @@
                when the popover opened. -->
           <p class="flex items-center gap-1 text-[10px] text-black-600 dark:text-black-700">
             <span aria-hidden="true">↻</span>
-            {data.ageS < 2 ? "just now" : `${shortDuration(data.ageS)} ago`}
-            {#if data.nextS > 0}· next in {shortDuration(data.nextS)}{/if}
+            last check {data.ageS < 2 ? "just now" : `${shortDuration(data.ageS)} ago`}
+            {#if data.nextS > 0}· auto refresh in {shortDuration(data.nextS)}{/if}
           </p>
         {/if}
       {/if}

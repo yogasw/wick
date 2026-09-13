@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeComposerUsage } from "../usage.js";
+import { normalizeComposerUsage, normalizeUsageRefresh } from "../usage.js";
 
 describe("normalizeComposerUsage", () => {
   it("maps a supported provider's windows and cache provenance", () => {
@@ -43,5 +43,25 @@ describe("normalizeComposerUsage", () => {
     expect(got.account).toBeNull();
     expect(got.windows).toEqual([]);
     expect(got.canManage).toBe(false);
+  });
+});
+
+describe("normalizeUsageRefresh", () => {
+  it("reports an accepted re-check", () => {
+    const got = normalizeUsageRefresh({ accepted: true, checking: true, supported: true });
+    expect(got.accepted).toBe(true);
+    expect(got.waitS).toBe(0);
+  });
+
+  // A refusal is information, not a failure: the cache declined because a
+  // probe now would land inside a cooldown, and says for how long.
+  it("carries the wait when the server declines", () => {
+    const got = normalizeUsageRefresh({ accepted: false, supported: true, wait_s: 240 });
+    expect(got.accepted).toBe(false);
+    expect(got.waitS).toBe(240);
+  });
+
+  it("defaults to a refusal when the payload is empty", () => {
+    expect(normalizeUsageRefresh({})).toEqual({ accepted: false, checking: false, waitS: 0, supported: false });
   });
 });
