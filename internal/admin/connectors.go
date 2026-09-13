@@ -61,6 +61,29 @@ func (h *Handler) connectorsAdminPage(w http.ResponseWriter, r *http.Request) {
 		items[i] = row
 	}
 
+	// Reach badges: the instance row and every account under it are gated
+	// separately, so both get their own count.
+	accessPaths := make([]string, 0, len(paths))
+	accessPaths = append(accessPaths, paths...)
+	for i := range items {
+		for _, acc := range items[i].Accounts {
+			accessPaths = append(accessPaths, connectors.AccountTagPath(acc.Account.ID))
+		}
+	}
+	access := h.accessSummaries(ctx, accessPaths)
+	totalUsers := h.repo.ApprovedUserCount(ctx)
+	for i := range items {
+		items[i].Access = access["/connectors/"+items[i].Connector.ID]
+		items[i].TagNames = view.TagNames(allTags, items[i].TagIDs)
+		for j := range items[i].Accounts {
+			acc := &items[i].Accounts[j]
+			// An account's reach is wider than its tags (owner, creator,
+			// admins, shared pool), so it is counted on its own terms.
+			acc.Access = h.accountAccessSummary(ctx, items[i].Connector, acc.Account, totalUsers)
+			acc.TagNames = view.TagNames(allTags, acc.TagIDs)
+		}
+	}
+
 	view.ConnectorsAdminPage(items, allTags, user).Render(ctx, w)
 }
 

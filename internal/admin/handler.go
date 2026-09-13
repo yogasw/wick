@@ -278,6 +278,10 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 
 	// Tag CRUD
 	mux.Handle("GET /admin/tags.json", admin(h.listTagsJSON))
+	// Access reach: who can actually see one tag-gated item, and what one tag
+	// opens. Read-only JSON behind the badge / "i" button on every listing.
+	mux.Handle("GET /admin/access/users", admin(h.accessUsersPage))
+	mux.Handle("GET /admin/tags/{id}/usage", admin(h.tagUsagePage))
 	mux.Handle("POST /admin/tags", admin(h.createTag))
 	mux.Handle("POST /admin/tags/{id}/update", admin(h.updateTag))
 	mux.Handle("POST /admin/tags/{id}/delete", admin(h.deleteTag))
@@ -592,6 +596,15 @@ func (h *Handler) toolsPage(w http.ResponseWriter, r *http.Request) {
 			ConfigCount: len(h.configs.ListOwned(t.Key)),
 		}
 	}
+	// Reach badge: a tool set to public visibility is reachable without a
+	// login at all, which outranks whatever its tags say.
+	access := h.accessSummaries(r.Context(), paths)
+	for i := range items {
+		sum := access[items[i].Tool.Path]
+		sum.Anyone = items[i].Visibility == entity.VisibilityPublic
+		items[i].Access = sum
+		items[i].TagNames = view.TagNames(allTags, items[i].TagIDs)
+	}
 	view.ToolsPage(items, allTags, currentUser).Render(r.Context(), w)
 }
 
@@ -603,7 +616,16 @@ func (h *Handler) tagsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	editID := r.URL.Query().Get("edit")
-	view.TagsPage(filterOutOwnerTags(tags), currentUser, editID).Render(r.Context(), w)
+	// Per-tag counters: how many people carry it, how many things it opens.
+	// A failed lookup renders as zeroes rather than failing the page — the
+	// counters are decoration on a page whose real job is renaming tags.
+	usage := map[string]view.TagCounts{}
+	if counts, err := h.repo.TagUsageCounts(r.Context()); err == nil {
+		for id, u := range counts {
+			usage[id] = view.TagCounts{Users: u.UserCount, Items: u.ItemCount}
+		}
+	}
+	view.TagsPage(filterOutOwnerTags(tags), currentUser, editID, usage).Render(r.Context(), w)
 }
 
 // ── User action handlers ───────────────────────────────────────
@@ -722,6 +744,11 @@ func (h *Handler) adminJobsPage(w http.ResponseWriter, r *http.Request) {
 			TagIDs:      perms[i].TagIDs,
 			ConfigCount: len(h.configs.ListOwned(j.Key)),
 		}
+	}
+	access := h.accessSummaries(ctx, paths)
+	for i := range rows {
+		rows[i].Access = access["/jobs/"+rows[i].Job.Key]
+		rows[i].TagNames = view.TagNames(allTags, rows[i].TagIDs)
 	}
 	view.AdminJobsPage(rows, allTags, user).Render(ctx, w)
 }

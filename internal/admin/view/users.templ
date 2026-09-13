@@ -20,6 +20,7 @@ templ UsersPage(rows []UserRow, allTags []*entity.Tag, user *entity.User, adminC
 				@JustCreatedUserBanner(created.Email, created.Password)
 			}
 			@addUserCard()
+			@AccessSearch("users")
 			<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm resp-table-wrap">
 				<table class="w-full text-sm resp-table">
 					<thead>
@@ -147,7 +148,11 @@ templ JustCreatedUserBanner(email, password string) {
 }
 
 templ UserRowFragment(row UserRow, tagsJSON string, adminCount int) {
-	<tr id={ "user-" + row.User.ID } class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+	<tr
+		id={ "user-" + row.User.ID }
+		data-search={ searchHaystack(row.User.Name, row.User.Email, row.User.ID, string(row.User.Role)) }
+		data-search-id={ row.User.ID }
+		class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
 		<td class="px-4 py-3">
 			<div class="flex items-center gap-3">
 				if row.User.Avatar != "" {

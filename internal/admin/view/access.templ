@@ -1,0 +1,147 @@
+package view
+
+import "strconv"
+
+// AccessSummary is the reach of one tag-gated row, as rendered by AccessBadge.
+//
+// Public means the row carries no FILTER tag, which is not a mistake — it is
+// wick's rule that an untagged thing belongs to everyone who can log in. The
+// badge still prints the number, because "public" alone never tells an admin
+// whether that is 3 people or 30.
+type AccessSummary struct {
+	Path      string
+	Public    bool
+	UserCount int
+	TotalUser int
+	// Anyone: the item is reachable WITHOUT logging in. Only tools have this
+	// state (entity.VisibilityPublic, "no login needed"); it outranks tags,
+	// so it is rendered on its own rather than folded into Public.
+	Anyone bool
+	// Unknown: the count could not be read (DB error). Rendered as "—" so a
+	// failed query never masquerades as "nobody has access".
+	Unknown bool
+}
+
+// Reach is the number the badge shows: everyone for a public row, the
+// tag-holders for a restricted one.
+func (s AccessSummary) Reach() int {
+	if s.Anyone || s.Public {
+		return s.TotalUser
+	}
+	return s.UserCount
+}
+
+// AccessBadge renders "Public · 29" / "Restricted · 6" as a button that opens
+// the user list for that row. Restricted-but-zero is called out in amber: the
+// row is tagged with something nobody carries, so it is invisible to every
+// non-admin — almost always a tag that was renamed or never handed out.
+templ AccessBadge(s AccessSummary) {
+	if s.Unknown {
+		<span class="inline-flex items-center rounded-full border border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-600" title="access count unavailable">—</span>
+	} else {
+		<button
+			type="button"
+			class={ "access-badge inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors " + accessBadgeClass(s) }
+			data-access-path={ s.Path }
+			title={ accessBadgeTitle(s) }
+		>
+			if s.Anyone {
+				<span>Anyone</span>
+			} else if s.Public {
+				<span>Public</span>
+			} else {
+				<span>Restricted</span>
+			}
+			if s.Anyone {
+				<span class="font-mono">∞</span>
+			} else {
+				<span class="font-mono">{ strconv.Itoa(s.Reach()) }</span>
+			}
+		</button>
+	}
+}
+
+// accessBadgeClass keeps the three states visually distinct: public is quiet
+// (it is the default state of an untagged row), restricted is the deliberate
+// one, and restricted-with-nobody is a warning.
+func accessBadgeClass(s AccessSummary) string {
+	switch {
+	case s.Anyone:
+		return "border-amber-400 dark:border-amber-700 bg-amber-50 dark:bg-navy-800 text-amber-700 dark:text-amber-400 hover:border-amber-500"
+	case s.Public:
+		return "border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-800 dark:text-black-600 hover:border-green-400"
+	case s.UserCount == 0:
+		return "border-amber-400 dark:border-amber-700 bg-amber-50 dark:bg-navy-800 text-amber-700 dark:text-amber-400 hover:border-amber-500"
+	default:
+		return "border-green-400 dark:border-green-700 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 hover:border-green-500"
+	}
+}
+
+func accessBadgeTitle(s AccessSummary) string {
+	if s.Anyone {
+		return "Visibility is public — reachable without logging in at all. Click for the signed-in user list."
+	}
+	if s.Public {
+		return "No access tag — every approved user (" + strconv.Itoa(s.TotalUser) + ") can see this. Click for the list."
+	}
+	if s.UserCount == 0 {
+		return "Tagged, but nobody carries those tags — no non-admin can see this. Click for details."
+	}
+	return strconv.Itoa(s.UserCount) + " user(s) carry a matching tag. Click for the list."
+}
+
+// AccessSearch is the one-line filter every admin listing gets: type a name,
+// an id/path, or a tag and the rows that do not match disappear. Matching is
+// client-side over data-search on each row, so it is instant and needs no
+// round trip; an exact id match jumps straight to that row.
+//
+// countLabel names what is being counted ("connectors", "tools") for the
+// "3 of 46" readout.
+templ AccessSearch(countLabel string) {
+	<div class="mt-6 flex flex-wrap items-center gap-3">
+		<div class="relative flex-1 min-w-[16rem] max-w-md">
+			<input
+				type="search"
+				class="access-search w-full rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-2 pr-8 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500"
+				placeholder={ "Search " + countLabel + " by name, id or tag…" }
+				data-count-label={ countLabel }
+				autocomplete="off"
+			/>
+		</div>
+		<span class="access-search-count text-xs text-black-700 dark:text-black-600"></span>
+	</div>
+}
+
+// AccessModalHost is the empty shell the access + tag-usage modals render
+// into. One per page, appended by the layout so every listing gets it for
+// free.
+templ AccessModalHost() {
+	<div id="access-modal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+		<div class="max-h-[80vh] w-full max-w-2xl overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-xl">
+			<div class="flex items-start gap-3 border-b border-white-300 dark:border-navy-600 px-5 py-4">
+				<div class="min-w-0 flex-1">
+					<h2 id="access-modal-title" class="text-base font-semibold text-black-900 dark:text-white-100">Access</h2>
+					<p id="access-modal-subtitle" class="mt-0.5 truncate font-mono text-[11px] text-black-700 dark:text-black-600"></p>
+				</div>
+				<button type="button" id="access-modal-close" class="rounded-md px-2 py-1 text-sm text-black-700 hover:bg-white-200 dark:hover:bg-navy-800">✕</button>
+			</div>
+			<div id="access-modal-body" class="max-h-[60vh] overflow-y-auto px-5 py-4 text-sm"></div>
+		</div>
+	</div>
+}
+
+// TagUsageCell renders the Tags page counters: how many people carry the tag
+// and how many things it opens, with an info button for the breakdown.
+templ TagUsageCell(tagID string, users int, items int) {
+	<div class="flex items-center gap-2">
+		<span class="font-mono text-xs text-black-900 dark:text-white-100" title="approved users carrying this tag">{ strconv.Itoa(users) } user</span>
+		<span class="text-black-600">·</span>
+		<span class="font-mono text-xs text-black-900 dark:text-white-100" title="items this tag grants access to">{ strconv.Itoa(items) } item</span>
+		<button
+			type="button"
+			class="tag-usage-info flex h-5 w-5 items-center justify-center rounded-full border border-white-400 dark:border-navy-600 text-[10px] font-semibold text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
+			data-tag-id={ tagID }
+			title="Who carries this tag, and what it opens"
+		>i</button>
+	</div>
+}

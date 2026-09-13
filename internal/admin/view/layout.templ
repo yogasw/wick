@@ -64,11 +64,14 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 		</nav>
 		@pendingSwapBanner()
 		{ children... }
+		@AccessModalHost()
 		<script src="/modules/admin/js/tag_picker.js"></script>
 		<!-- Background save for every tag form on these pages: the Save
 		     button shows only while a row differs from the server, so a
 		     long tagging session never has to guess what it missed. -->
 		<script src="/modules/admin/js/tag_form.js"></script>
+		<!-- Access reach badges, their user modal, and the per-page search. -->
+		<script src="/modules/admin/js/access.js"></script>
 	}
 }
 

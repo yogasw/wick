@@ -16,12 +16,14 @@ templ ConnectorsAdminPage(rows []ConnectorAdminRow, allTags []*entity.Tag, user 
 					No connector instances yet. They are auto-seeded for every code-registered connector on first boot.
 				</div>
 			} else {
+				@AccessSearch("connectors")
 				<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm resp-table-wrap">
 					<table class="w-full text-sm resp-table">
 						<thead>
 							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Instance</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Status</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Access</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Tags</th>
 								<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600"></th>
 							</tr>
@@ -46,6 +48,8 @@ templ connectorAdminRowFragment(row ConnectorAdminRow, tagsJSON string) {
 	{{ key := row.Connector.Key }}
 	<tr
 		id={ "connector-" + id }
+		data-search={ searchHaystack(row.Connector.Label, id, key, row.ModuleName, strings.Join(row.TagNames, " ")) }
+		data-search-id={ id }
 		class={ "border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors",
 			templ.KV("opacity-60", row.Connector.Disabled) }
 	>
@@ -85,6 +89,9 @@ templ connectorAdminRowFragment(row ConnectorAdminRow, tagsJSON string) {
 			</form>
 		</td>
 		<td class="px-4 py-3 align-top">
+			@AccessBadge(row.Access)
+		</td>
+		<td class="px-4 py-3 align-top">
 			<form action={ templ.SafeURL("/admin/connectors/" + id + "/tags") } method="POST" class="flex items-start gap-2">
 				<div
 					class="tag-picker w-full md:w-64"
@@ -122,6 +129,8 @@ templ connectorAccountAdminRowFragment(row ConnectorAdminRow, acc ConnectorAccou
 	{{ accID := acc.Account.ID }}
 	<tr
 		id={ "connector-account-" + accID }
+		data-search={ searchHaystack(acc.Account.DisplayName, accID, acc.OwnerLabel, row.Connector.Label, strings.Join(acc.TagNames, " ")) }
+		data-search-id={ accID }
 		class={ "border-b border-white-300 dark:border-navy-600 last:border-0 bg-white-200/50 dark:bg-navy-800/40",
 			templ.KV("opacity-60", row.Connector.Disabled) }
 	>
@@ -151,6 +160,9 @@ templ connectorAccountAdminRowFragment(row ConnectorAdminRow, acc ConnectorAccou
 			} else {
 				<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-800 dark:text-black-600" title="Only the user who connected it, the instance owner and admins can see this account.">Private</span>
 			}
+		</td>
+		<td class="px-4 py-2.5 align-top">
+			@AccessBadge(acc.Access)
 		</td>
 		<td class="px-4 py-2.5 align-top">
 			<form action={ templ.SafeURL("/admin/connectors/" + id + "/accounts/" + accID + "/tags") } method="POST" class="flex items-start gap-2">

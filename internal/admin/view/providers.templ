@@ -19,6 +19,10 @@ type ProviderAdminRow struct {
 	ManageTagIDs []string
 	// Path is the instance key used in the form URLs ("claude/engineer").
 	Path string
+	// Access is the reach badge for the ACCESS column (who may pick this
+	// provider); TagNames feeds the search blob.
+	Access   AccessSummary
+	TagNames []string
 }
 
 // ProvidersAdminPage lists every provider instance with its two tag sets.
@@ -47,11 +51,13 @@ templ ProvidersAdminPage(rows []ProviderAdminRow, allTags []*entity.Tag, user *e
 					No provider instances configured.
 				</div>
 			} else {
+				@AccessSearch("providers")
 				<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm resp-table-wrap">
 					<table class="w-full text-sm resp-table">
 						<thead>
 							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Provider</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Reach</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Access — may pick it for a project / session / channel</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Manage — sees it in the Providers menu, may reconnect</th>
 							</tr>
@@ -71,6 +77,8 @@ templ ProvidersAdminPage(rows []ProviderAdminRow, allTags []*entity.Tag, user *e
 templ providerAdminRow(row ProviderAdminRow, tagsJSON string) {
 	<tr
 		id={ "provider-" + row.Type + "-" + row.Name }
+		data-search={ searchHaystack(row.Name, row.Type, row.Path, row.Binary, strings.Join(row.TagNames, " ")) }
+		data-search-id={ row.Path }
 		class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
 	>
 		<td class="px-4 py-3 align-top">
@@ -79,6 +87,9 @@ templ providerAdminRow(row ProviderAdminRow, tagsJSON string) {
 			if row.Disabled {
 				<span class="mt-1 inline-block rounded bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 text-[10px] text-black-700 dark:text-black-600">disabled</span>
 			}
+		</td>
+		<td class="px-4 py-3 align-top">
+			@AccessBadge(row.Access)
 		</td>
 		<td class="px-4 py-3 align-top">
 			<form action={ templ.SafeURL("/admin/providers/" + row.Path + "/access-tags") } method="POST" class="tag-form flex items-start gap-2">

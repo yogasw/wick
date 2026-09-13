@@ -55,7 +55,7 @@ func (h *Handler) projectsAdminPage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	adminview.ResourcesAdminPage("Projects", "/admin/projects", rows, allTags, user).Render(ctx, w)
+	adminview.ResourcesAdminPage("Projects", "/admin/projects", h.decorateResourceRows(ctx, rows, allTags), allTags, user).Render(ctx, w)
 }
 
 func (h *Handler) setProjectTags(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +123,7 @@ func (h *Handler) workflowsAdminPage(w http.ResponseWriter, r *http.Request) {
 		rows[i] = row
 	}
 
-	adminview.ResourcesAdminPage("Workflows", "/admin/workflows", rows, allTags, user).Render(ctx, w)
+	adminview.ResourcesAdminPage("Workflows", "/admin/workflows", h.decorateResourceRows(ctx, rows, allTags), allTags, user).Render(ctx, w)
 }
 
 func (h *Handler) setWorkflowTags(w http.ResponseWriter, r *http.Request) {
@@ -189,7 +189,7 @@ func (h *Handler) skillsAdminPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	adminview.ResourcesAdminPage("Skills", "/admin/skills", rows, allTags, user).Render(ctx, w)
+	adminview.ResourcesAdminPage("Skills", "/admin/skills", h.decorateResourceRows(ctx, rows, allTags), allTags, user).Render(ctx, w)
 }
 
 func (h *Handler) setSkillTags(w http.ResponseWriter, r *http.Request) {
@@ -253,7 +253,7 @@ func (h *Handler) dataTablesAdminPage(w http.ResponseWriter, r *http.Request) {
 		rows[i] = row
 	}
 
-	adminview.ResourcesAdminPage("Data Tables", "/admin/data-tables", rows, allTags, user).Render(ctx, w)
+	adminview.ResourcesAdminPage("Data Tables", "/admin/data-tables", h.decorateResourceRows(ctx, rows, allTags), allTags, user).Render(ctx, w)
 }
 
 func (h *Handler) setDataTableTags(w http.ResponseWriter, r *http.Request) {

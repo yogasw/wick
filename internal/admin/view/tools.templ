@@ -11,6 +11,7 @@ templ ToolsPage(rows []ToolRow, allTags []*entity.Tag, user *entity.User) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Tool Permissions</h1>
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Public: anyone. Private: approved users — add <b>filter</b> tags to restrict further. Group tags are cosmetic (home grouping) unless they also toggle "Access filter". Disabling a tool hides it from everyone (admins too) and returns 404 on direct access.</p>
+			@AccessSearch("tools")
 			<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm resp-table-wrap">
 				<table class="w-full text-sm resp-table">
 					<thead>
@@ -18,6 +19,7 @@ templ ToolsPage(rows []ToolRow, allTags []*entity.Tag, user *entity.User) {
 							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Tool</th>
 							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Status</th>
 							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Visibility</th>
+							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Access</th>
 							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Tags</th>
 							<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600"></th>
 						</tr>
@@ -38,6 +40,8 @@ templ ToolRowFragment(row ToolRow, tagsJSON string) {
 	{{ isPublic := row.Visibility == entity.VisibilityPublic }}
 	<tr
 		id={ "tool-" + slug }
+		data-search={ searchHaystack(row.Tool.Name, slug, row.Tool.Path, strings.Join(row.TagNames, " ")) }
+		data-search-id={ slug + " " + row.Tool.Path }
 		class={ "border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors",
 			templ.KV("opacity-60", row.Disabled) }
 	>
@@ -72,6 +76,9 @@ templ ToolRowFragment(row ToolRow, tagsJSON string) {
 					<option value="private" selected?={ row.Visibility == entity.VisibilityPrivate }>Private</option>
 				</select>
 			</form>
+		</td>
+		<td class="px-4 py-3 align-top">
+			@AccessBadge(row.Access)
 		</td>
 		<td class="px-4 py-3 align-top">
 			<form action={ templ.SafeURL("/admin/tools/" + slug + "/tags") } method="POST" class="flex items-start gap-2">

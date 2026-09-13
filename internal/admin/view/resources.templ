@@ -11,6 +11,7 @@ templ ResourcesAdminPage(title string, baseURL string, rows []ResourceAdminRow, 
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{ title }</h1>
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Assign access tags to control which non-admin users can see each { strings.ToLower(title[:len(title)-1]) }.</p>
+			@AccessSearch(strings.ToLower(title))
 			if len(rows) == 0 {
 				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
 					No { strings.ToLower(title) } found.
@@ -22,6 +23,7 @@ templ ResourcesAdminPage(title string, baseURL string, rows []ResourceAdminRow, 
 							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Name</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Owner</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Access</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Tags</th>
 							</tr>
 						</thead>
@@ -40,6 +42,8 @@ templ ResourcesAdminPage(title string, baseURL string, rows []ResourceAdminRow, 
 templ resourceAdminRow(row ResourceAdminRow, baseURL string, tagsJSON string) {
 	<tr
 		id={ "resource-" + row.ID }
+		data-search={ searchHaystack(row.Name, row.ID, row.Path, strings.Join(row.TagNames, " ")) }
+		data-search-id={ row.ID + " " + row.Path }
 		class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
 	>
 		<td class="px-4 py-3">
@@ -61,6 +65,9 @@ templ resourceAdminRow(row ResourceAdminRow, baseURL string, tagsJSON string) {
 			} else {
 				<span class="text-xs italic text-black-600 dark:text-black-700">system</span>
 			}
+		</td>
+		<td class="px-4 py-3 align-top">
+			@AccessBadge(row.Access)
 		</td>
 		<td class="px-4 py-3 align-top">
 			<form action={ templ.SafeURL(baseURL + "/" + row.ID + "/tags") } method="POST" class="flex items-start gap-2">

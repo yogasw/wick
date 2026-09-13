@@ -46,6 +46,9 @@ type ToolRow struct {
 	Disabled    bool
 	TagIDs      []string
 	ConfigCount int
+	// Access is the reach badge; TagNames feeds the search blob.
+	Access   AccessSummary
+	TagNames []string
 }
 
 // JobRow is the view model for a single job row in the admin jobs table.
@@ -62,6 +65,9 @@ type JobRow struct {
 	IsSystem    bool
 	TagIDs      []string
 	ConfigCount int
+	// Access is the reach badge; TagNames feeds the search blob.
+	Access   AccessSummary
+	TagNames []string
 }
 
 // ConnectorAdminRow is the view model for a single connector instance in
@@ -79,6 +85,9 @@ type ConnectorAdminRow struct {
 	// private to whoever connected it unless the instance shares the whole
 	// pool, so a tag here is how an admin hands ONE account to a team.
 	Accounts []ConnectorAccountAdminRow
+	// Access is the reach badge; TagNames feeds the search blob.
+	Access   AccessSummary
+	TagNames []string
 }
 
 // ConnectorAccountAdminRow is the view model for one connected OAuth account
@@ -88,6 +97,11 @@ type ConnectorAccountAdminRow struct {
 	Account    entity.ConnectorAccount
 	OwnerLabel string
 	TagIDs     []string
+	// Access is the reach badge for the ACCOUNT itself — an account's tags
+	// are a separate grant from its row's, which is exactly the distinction
+	// that is easy to get wrong when reading the page.
+	Access   AccessSummary
+	TagNames []string
 }
 
 // AccessTokenRow is the view model for one Personal Access Token in
@@ -111,6 +125,12 @@ type ResourceAdminRow struct {
 	CreatedBy string
 	TagIDs    []string
 	Path      string
+	// Access is who can reach this row — see AccessBadge. Zero value renders
+	// as a public badge, which is what an untagged row is.
+	Access AccessSummary
+	// TagNames feeds the search blob so a row is findable by the tag it
+	// carries, not only by name or id.
+	TagNames []string
 }
 
 // ConnectionRow is the view model for one (user, OAuth client) grant
