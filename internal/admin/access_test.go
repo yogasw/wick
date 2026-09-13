@@ -513,3 +513,48 @@ func TestBatchedAccountReachSkipsUnapprovedConnector(t *testing.T) {
 	got := batch.summaryFor(*mustGet(t, svc, row.ID), accs[0])
 	require.Equal(t, 1, got.UserCount, "only the creator — the unapproved connector is not reach")
 }
+
+// ── Cache ─────────────────────────────────────────────────────────────────
+
+// The cache is only worth having if it actually stops the repeat reads, and
+// only safe if a write through the repo is visible immediately. This asserts
+// both halves, including the cost: a write that bypasses the repo (another
+// replica, a direct DB edit) is NOT seen until the TTL — which is the
+// trade-off, stated rather than hidden.
+func TestAccessCacheInvalidatesOnRepoWriteButHoldsOtherwise(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-1", "one@x.test", support)
+	tagPath(t, db, "/tools/shared", support)
+
+	require.Equal(t, 1, h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"].Reach())
+
+	// A write that goes AROUND the repo is invisible while the cache holds.
+	seedUserWithTag(t, db, "u-2", "two@x.test", support)
+	require.Equal(t, 1, h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"].Reach(),
+		"cache is expected to hold until a repo write or the TTL")
+
+	// A write THROUGH the repo drops it, so the next read is current — and
+	// picks up the out-of-band user too.
+	require.NoError(t, h.repo.SetToolTags(ctx, "/tools/other", []string{support}))
+	require.Equal(t, 2, h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"].Reach(),
+		"a repo write must make the next read current")
+}
+
+// Approving a user is a repo write, so their access appears at once rather
+// than a TTL later — the case an admin watches happen on screen.
+func TestApprovingAUserShowsUpImmediately(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	tagPath(t, db, "/tools/shared", support)
+	require.NoError(t, db.Create(&entity.User{ID: "u-new", Name: "New", Email: "new@x.test", Approved: false}).Error)
+	require.NoError(t, db.Create(&entity.UserTag{UserID: "u-new", TagID: support}).Error)
+
+	require.Equal(t, 0, h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"].Reach())
+
+	require.NoError(t, h.repo.SetApproved(ctx, "u-new", true))
+	require.Equal(t, 1, h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"].Reach(),
+		"approval must be visible on the next render, not after the TTL")
+}

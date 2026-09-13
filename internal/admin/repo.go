@@ -13,6 +13,10 @@ import (
 
 type repo struct {
 	db *gorm.DB
+	// cache holds the user/tag data every admin listing reads. Invalidated by
+	// the write methods below, so it can never serve an edit-old answer for a
+	// change made through this process. See access_cache.go.
+	cache accessCache
 }
 
 func newRepo(db *gorm.DB) *repo {
@@ -38,6 +42,7 @@ func (r *repo) GetUser(ctx context.Context, userID string) (*entity.User, error)
 }
 
 func (r *repo) SetApproved(ctx context.Context, userID string, approved bool) error {
+	defer r.cache.invalidate()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&entity.User{}).Where("id = ?", userID).Update("approved", approved).Error; err != nil {
 			return err
@@ -68,6 +73,7 @@ func (r *repo) CountAdmins(ctx context.Context) (int64, error) {
 }
 
 func (r *repo) SetRole(ctx context.Context, userID string, role entity.UserRole) error {
+	defer r.cache.invalidate()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if role != entity.RoleAdmin {
 			var user entity.User
@@ -143,6 +149,7 @@ var ErrUserNotApproved = errors.New("user must be approved before assigning tags
 var ErrSystemTagAssignment = errors.New("system tags cannot be assigned to users")
 
 func (r *repo) SetUserTags(ctx context.Context, userID string, tagIDs []string) error {
+	defer r.cache.invalidate()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var u entity.User
 		if err := tx.First(&u, "id = ?", userID).Error; err != nil {
@@ -251,6 +258,7 @@ func (r *repo) SetToolDisabled(ctx context.Context, toolPath string, disabled bo
 }
 
 func (r *repo) SetToolTags(ctx context.Context, toolPath string, tagIDs []string) error {
+	defer r.cache.invalidate()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("tool_path = ?", toolPath).Delete(&entity.ToolTag{}).Error; err != nil {
 			return err
@@ -445,6 +453,7 @@ func (r *repo) HasSystemTag(ctx context.Context, toolPath string) (bool, error) 
 }
 
 func (r *repo) CreateTag(ctx context.Context, name string, isGroup, isFilter bool) (*entity.Tag, error) {
+	defer r.cache.invalidate()
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, errors.New("tag name is required")
@@ -468,6 +477,7 @@ func (r *repo) CreateTag(ctx context.Context, name string, isGroup, isFilter boo
 // sort_order) in a single call. Pass the full desired state. Refuses to
 // touch tags flagged IsSystem — those are code-owned.
 func (r *repo) UpdateTag(ctx context.Context, tagID, name, description string, isGroup, isFilter bool, sortOrder int) error {
+	defer r.cache.invalidate()
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return errors.New("tag name is required")
@@ -505,6 +515,7 @@ func (r *repo) UpdateTag(ctx context.Context, tagID, name, description string, i
 // Refuses to delete tags flagged IsSystem — they are seeded from code at
 // every boot anyway, so deletion would resurrect them empty.
 func (r *repo) DeleteTag(ctx context.Context, tagID string) error {
+	defer r.cache.invalidate()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var current entity.Tag
 		if err := tx.First(&current, "id = ?", tagID).Error; err != nil {

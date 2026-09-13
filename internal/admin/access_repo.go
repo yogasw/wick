@@ -19,9 +19,7 @@ import (
 // ApprovedUserCount is the size of "everyone" — the reach of an item with no
 // filter tags. Unapproved users cannot log in, so they are not part of it.
 func (r *repo) ApprovedUserCount(ctx context.Context) int {
-	var n int64
-	r.db.WithContext(ctx).Model(&entity.User{}).Where("approved = ?", true).Count(&n)
-	return int(n)
+	return r.access(ctx).totalApproved
 }
 
 // AccessUserCounts returns, per tool_path, how many APPROVED users carry at
@@ -53,43 +51,19 @@ func (r *repo) AccessUserIDs(ctx context.Context, paths []string) (map[string]ma
 	if len(paths) == 0 {
 		return out, nil
 	}
-	// Every path that has ≥1 filter tag, so a tagged-but-unreachable row
-	// (empty set) is still reported as restricted rather than as public.
-	var tagged []struct{ ToolPath string }
-	if err := r.db.WithContext(ctx).
-		Table("tool_tags tt").
-		Select("DISTINCT tt.tool_path as tool_path").
-		Joins("JOIN tags t ON t.id = tt.tag_id").
-		Where("tt.tool_path IN ?", paths).
-		Where("t.is_filter = ?", true).
-		Scan(&tagged).Error; err != nil {
-		return nil, err
-	}
-	for _, row := range tagged {
-		out[row.ToolPath] = map[string]bool{}
-	}
-
-	var pairs []struct {
-		ToolPath string
-		UserID   string
-	}
-	if err := r.db.WithContext(ctx).
-		Table("tool_tags tt").
-		Select("DISTINCT tt.tool_path as tool_path, CAST(ut.user_id AS TEXT) as user_id").
-		Joins("JOIN tags t ON t.id = tt.tag_id").
-		Joins("JOIN user_tags ut ON ut.tag_id = tt.tag_id").
-		Joins("JOIN users u ON CAST(u.id AS TEXT) = CAST(ut.user_id AS TEXT)").
-		Where("tt.tool_path IN ?", paths).
-		Where("t.is_filter = ?", true).
-		Where("u.approved = ?", true).
-		Scan(&pairs).Error; err != nil {
-		return nil, err
-	}
-	for _, row := range pairs {
-		if out[row.ToolPath] == nil {
-			out[row.ToolPath] = map[string]bool{}
+	d := r.access(ctx)
+	for _, p := range paths {
+		tagIDs, tagged := d.pathTags[p]
+		if !tagged {
+			continue // no filter tag: the caller reads that as public
 		}
-		out[row.ToolPath][row.UserID] = true
+		set := map[string]bool{}
+		for _, tid := range tagIDs {
+			for uid := range d.tagHolders[tid] {
+				set[uid] = true
+			}
+		}
+		out[p] = set
 	}
 	return out, nil
 }
@@ -99,141 +73,74 @@ func (r *repo) AccessUserIDs(ctx context.Context, paths []string) (map[string]ma
 // via-tag — that is the honest answer to "who can see this".
 func (r *repo) AccessDetail(ctx context.Context, path string) (AccessDetail, error) {
 	out := AccessDetail{Path: path}
+	d := r.access(ctx)
 
-	var tagRows []struct {
-		ID   string
-		Name string
-	}
-	if err := r.db.WithContext(ctx).
-		Table("tool_tags tt").
-		Select("t.id as id, t.name as name").
-		Joins("JOIN tags t ON t.id = tt.tag_id").
-		Where("tt.tool_path = ?", path).
-		Where("t.is_filter = ?", true).
-		Scan(&tagRows).Error; err != nil {
-		return out, err
-	}
-	for _, t := range tagRows {
-		out.Tags = append(out.Tags, t.Name)
-	}
-	sort.Strings(out.Tags)
-
-	if len(tagRows) == 0 {
+	tagIDs, tagged := d.pathTags[path]
+	if !tagged {
 		out.Public = true
-		users, err := r.approvedUsers(ctx)
-		if err != nil {
-			return out, err
-		}
-		out.Users = users
+		out.Users = append([]adminUser(nil), d.users...)
 		return out, nil
 	}
-
-	tagIDs := make([]string, 0, len(tagRows))
-	for _, t := range tagRows {
-		tagIDs = append(tagIDs, t.ID)
+	for _, id := range tagIDs {
+		out.Tags = append(out.Tags, d.tagNames[id])
 	}
-	users, err := r.usersCarryingTags(ctx, tagIDs)
-	if err != nil {
-		return out, err
-	}
-	out.Users = users
+	sort.Strings(out.Tags)
+	out.Users = d.holdersOf(tagIDs)
 	return out, nil
 }
 
-// approvedUsers is the "public" reach list.
-func (r *repo) approvedUsers(ctx context.Context) ([]adminUser, error) {
-	var rows []entity.User
-	if err := r.db.WithContext(ctx).
-		Where("approved = ?", true).
-		Order("name asc, email asc").
-		Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	out := make([]adminUser, 0, len(rows))
-	for _, u := range rows {
-		out = append(out, adminUser{
-			ID: u.ID, Name: u.Name, Email: u.Email,
-			Role: string(u.Role), Approved: u.Approved,
-		})
-	}
-	return out, nil
-}
-
-// usersCarryingTags lists approved users holding any of the given tags, each
+// holdersOf lists the approved users carrying any of these tags, each
 // annotated with WHICH of them matched — the answer to "why can they see it".
+// Reads the same cached sets the badge counts from, so the modal can never
+// disagree with the number that opened it.
+func (d *accessData) holdersOf(tagIDs []string) []adminUser {
+	reasons := map[string][]string{}
+	for _, tid := range tagIDs {
+		for uid := range d.tagHolders[tid] {
+			reasons[uid] = append(reasons[uid], d.tagNames[tid])
+		}
+	}
+	out := make([]adminUser, 0, len(reasons))
+	for _, u := range d.users { // name order, from the cached listing
+		via, ok := reasons[u.ID]
+		if !ok {
+			continue
+		}
+		sort.Strings(via)
+		u.ViaTags = via
+		out = append(out, u)
+	}
+	return out
+}
+
+// approvedUsers is the "public" reach list, from the cache.
+func (r *repo) approvedUsers(ctx context.Context) ([]adminUser, error) {
+	return append([]adminUser(nil), r.access(ctx).users...), nil
+}
+
+// usersCarryingTags is holdersOf against the cached sets.
 func (r *repo) usersCarryingTags(ctx context.Context, tagIDs []string) ([]adminUser, error) {
 	if len(tagIDs) == 0 {
 		return nil, nil
 	}
-	var rows []struct {
-		ID       string
-		Name     string
-		Email    string
-		Role     string
-		Approved bool
-		TagName  string
-	}
-	if err := r.db.WithContext(ctx).
-		Table("user_tags ut").
-		Select("u.id as id, u.name as name, u.email as email, u.role as role, u.approved as approved, t.name as tag_name").
-		Joins("JOIN users u ON CAST(u.id AS TEXT) = CAST(ut.user_id AS TEXT)").
-		Joins("JOIN tags t ON t.id = ut.tag_id").
-		Where("ut.tag_id IN ?", tagIDs).
-		Where("u.approved = ?", true).
-		Order("u.name asc, u.email asc").
-		Scan(&rows).Error; err != nil {
-		return nil, err
-	}
-	byID := map[string]*adminUser{}
-	order := make([]string, 0, len(rows))
-	for _, row := range rows {
-		u, ok := byID[row.ID]
-		if !ok {
-			byID[row.ID] = &adminUser{
-				ID: row.ID, Name: row.Name, Email: row.Email,
-				Role: row.Role, Approved: row.Approved,
-				ViaTags: []string{row.TagName},
-			}
-			order = append(order, row.ID)
-			continue
-		}
-		u.ViaTags = append(u.ViaTags, row.TagName)
-	}
-	out := make([]adminUser, 0, len(order))
-	for _, id := range order {
-		u := byID[id]
-		sort.Strings(u.ViaTags)
-		out = append(out, *u)
-	}
-	return out, nil
+	return r.access(ctx).holdersOf(tagIDs), nil
 }
 
 // TagUsageCounts returns per-tag counters for the Tags page: how many approved
 // users carry it, and how many items it gates. Two aggregate queries, not one
 // per tag.
 func (r *repo) TagUsageCounts(ctx context.Context) (map[string]TagUsage, error) {
-	out := map[string]TagUsage{}
-
-	var userRows []struct {
-		TagID string
-		N     int
+	d := r.access(ctx)
+	out := make(map[string]TagUsage, len(d.tagNames))
+	for tagID, holders := range d.tagHolders {
+		u := out[tagID]
+		u.TagID = tagID
+		u.UserCount = len(holders)
+		out[tagID] = u
 	}
-	if err := r.db.WithContext(ctx).
-		Table("user_tags ut").
-		Select("ut.tag_id as tag_id, COUNT(DISTINCT ut.user_id) as n").
-		Joins("JOIN users u ON CAST(u.id AS TEXT) = CAST(ut.user_id AS TEXT)").
-		Where("u.approved = ?", true).
-		Group("ut.tag_id").
-		Scan(&userRows).Error; err != nil {
-		return nil, err
-	}
-	for _, row := range userRows {
-		u := out[row.TagID]
-		u.TagID = row.TagID
-		u.UserCount = row.N
-		out[row.TagID] = u
-	}
-
+	// Item counts cover every tag assignment, including the non-filter
+	// (category) tags the cache does not carry — those group things on the
+	// connectors index and an admin still wants to see how many they label.
 	var itemRows []struct {
 		TagID string
 		N     int
@@ -305,35 +212,19 @@ func (r *repo) AdminUserByID(ctx context.Context, id string) (*adminUser, error)
 	if id == "" {
 		return nil, nil
 	}
-	var u entity.User
-	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&u).Error; err != nil {
-		return nil, nil
+	for _, u := range r.access(ctx).users {
+		if u.ID == id {
+			cp := u
+			return &cp, nil
+		}
 	}
-	return &adminUser{
-		ID: u.ID, Name: u.Name, Email: u.Email,
-		Role: string(u.Role), Approved: u.Approved,
-	}, nil
+	return nil, nil
 }
 
 // AdminUsers lists the admin accounts, for the "admins also see this" part of
 // an account's reach.
 func (r *repo) AdminUsers(ctx context.Context) ([]adminUser, error) {
-	var rows []entity.User
-	if err := r.db.WithContext(ctx).
-		Where("role = ? OR is_owner = ?", entity.RoleAdmin, true).
-		Where("approved = ?", true).
-		Order("name asc, email asc").
-		Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	out := make([]adminUser, 0, len(rows))
-	for _, u := range rows {
-		out = append(out, adminUser{
-			ID: u.ID, Name: u.Name, Email: u.Email,
-			Role: string(u.Role), Approved: u.Approved,
-		})
-	}
-	return out, nil
+	return r.access(ctx).admins, nil
 }
 
 // OwnerTagHolders resolves who carries each "owner:<id>" tag — the grant an
@@ -345,30 +236,17 @@ func (r *repo) OwnerTagHolders(ctx context.Context, tagNames []string) (map[stri
 	if len(tagNames) == 0 {
 		return out, nil
 	}
-	var rows []struct {
-		TagName  string
-		ID       string
-		Name     string
-		Email    string
-		Role     string
-		Approved bool
+	d := r.access(ctx)
+	want := make(map[string]bool, len(tagNames))
+	for _, n := range tagNames {
+		want[n] = true
 	}
-	if err := r.db.WithContext(ctx).
-		Table("tags t").
-		Select("t.name as tag_name, u.id as id, u.name as name, u.email as email, u.role as role, u.approved as approved").
-		Joins("JOIN user_tags ut ON ut.tag_id = t.id").
-		Joins("JOIN users u ON CAST(u.id AS TEXT) = CAST(ut.user_id AS TEXT)").
-		Where("t.name IN ?", tagNames).
-		Where("u.approved = ?", true).
-		Order("u.name asc, u.email asc").
-		Scan(&rows).Error; err != nil {
-		return nil, err
-	}
-	for _, row := range rows {
-		out[row.TagName] = append(out[row.TagName], adminUser{
-			ID: row.ID, Name: row.Name, Email: row.Email,
-			Role: row.Role, Approved: row.Approved,
-		})
+	// tagNames maps id → name; walk it once and keep the ids we were asked for.
+	for tagID, name := range d.tagNames {
+		if !want[name] {
+			continue
+		}
+		out[name] = append(out[name], d.holdersOf([]string{tagID})...)
 	}
 	return out, nil
 }
@@ -377,16 +255,5 @@ func (r *repo) OwnerTagHolders(ctx context.Context, tagNames []string) (map[stri
 // whether an implicit grant (the person who connected an account, a row's
 // creator) is still a real user — a deactivated account is not reach.
 func (r *repo) ApprovedUserIDs(ctx context.Context) (map[string]bool, error) {
-	var ids []string
-	if err := r.db.WithContext(ctx).
-		Model(&entity.User{}).
-		Where("approved = ?", true).
-		Pluck("CAST(id AS TEXT)", &ids).Error; err != nil {
-		return nil, err
-	}
-	out := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		out[id] = true
-	}
-	return out, nil
+	return r.access(ctx).approved, nil
 }
