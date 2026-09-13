@@ -18,8 +18,12 @@ import (
 
 // ApprovedUserCount is the size of "everyone" — the reach of an item with no
 // filter tags. Unapproved users cannot log in, so they are not part of it.
-func (r *repo) ApprovedUserCount(ctx context.Context) int {
-	return r.access(ctx).totalApproved
+func (r *repo) ApprovedUserCount(ctx context.Context) (int, error) {
+	d, err := r.access(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return d.totalApproved, nil
 }
 
 // AccessUserCounts returns, per tool_path, how many APPROVED users carry at
@@ -51,7 +55,10 @@ func (r *repo) AccessUserIDs(ctx context.Context, paths []string) (map[string]ma
 	if len(paths) == 0 {
 		return out, nil
 	}
-	d := r.access(ctx)
+	d, err := r.access(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for _, p := range paths {
 		tagIDs, tagged := d.pathTags[p]
 		if !tagged {
@@ -73,7 +80,10 @@ func (r *repo) AccessUserIDs(ctx context.Context, paths []string) (map[string]ma
 // via-tag — that is the honest answer to "who can see this".
 func (r *repo) AccessDetail(ctx context.Context, path string) (AccessDetail, error) {
 	out := AccessDetail{Path: path}
-	d := r.access(ctx)
+	d, err := r.access(ctx)
+	if err != nil {
+		return out, err
+	}
 
 	tagIDs, tagged := d.pathTags[path]
 	if !tagged {
@@ -115,7 +125,11 @@ func (d *accessData) holdersOf(tagIDs []string) []adminUser {
 
 // approvedUsers is the "public" reach list, from the cache.
 func (r *repo) approvedUsers(ctx context.Context) ([]adminUser, error) {
-	return append([]adminUser(nil), r.access(ctx).users...), nil
+	d, err := r.access(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return append([]adminUser(nil), d.users...), nil
 }
 
 // usersCarryingTags is holdersOf against the cached sets.
@@ -123,14 +137,21 @@ func (r *repo) usersCarryingTags(ctx context.Context, tagIDs []string) ([]adminU
 	if len(tagIDs) == 0 {
 		return nil, nil
 	}
-	return r.access(ctx).holdersOf(tagIDs), nil
+	d, err := r.access(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return d.holdersOf(tagIDs), nil
 }
 
 // TagUsageCounts returns per-tag counters for the Tags page: how many approved
 // users carry it, and how many items it gates. Two aggregate queries, not one
 // per tag.
 func (r *repo) TagUsageCounts(ctx context.Context) (map[string]TagUsage, error) {
-	d := r.access(ctx)
+	d, err := r.access(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := make(map[string]TagUsage, len(d.tagNames))
 	for tagID, holders := range d.tagHolders {
 		u := out[tagID]
@@ -212,7 +233,11 @@ func (r *repo) AdminUserByID(ctx context.Context, id string) (*adminUser, error)
 	if id == "" {
 		return nil, nil
 	}
-	for _, u := range r.access(ctx).users {
+	d, err := r.access(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, u := range d.users {
 		if u.ID == id {
 			cp := u
 			return &cp, nil
@@ -224,7 +249,11 @@ func (r *repo) AdminUserByID(ctx context.Context, id string) (*adminUser, error)
 // AdminUsers lists the admin accounts, for the "admins also see this" part of
 // an account's reach.
 func (r *repo) AdminUsers(ctx context.Context) ([]adminUser, error) {
-	return r.access(ctx).admins, nil
+	d, err := r.access(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return d.admins, nil
 }
 
 // OwnerTagHolders resolves who carries each "owner:<id>" tag — the grant an
@@ -236,7 +265,10 @@ func (r *repo) OwnerTagHolders(ctx context.Context, tagNames []string) (map[stri
 	if len(tagNames) == 0 {
 		return out, nil
 	}
-	d := r.access(ctx)
+	d, err := r.access(ctx)
+	if err != nil {
+		return nil, err
+	}
 	want := make(map[string]bool, len(tagNames))
 	for _, n := range tagNames {
 		want[n] = true
@@ -255,5 +287,9 @@ func (r *repo) OwnerTagHolders(ctx context.Context, tagNames []string) (map[stri
 // whether an implicit grant (the person who connected an account, a row's
 // creator) is still a real user — a deactivated account is not reach.
 func (r *repo) ApprovedUserIDs(ctx context.Context) (map[string]bool, error) {
-	return r.access(ctx).approved, nil
+	d, err := r.access(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return d.approved, nil
 }

@@ -36,6 +36,12 @@ const (
 	knobSessions   = "admin_see_all_sessions"
 )
 
+// The tool_path namespaces, named so a rule can be looked up without
+// assembling a path — and without inventing a fake id to assemble one with.
+const (
+	nsConnectorAccounts = "connector-accounts"
+)
+
 var accessRules = map[string]accessRule{
 	// login.CanAccessTool: public visibility short-circuits, admins bypass
 	// before tags are read, untagged private = every approved user.

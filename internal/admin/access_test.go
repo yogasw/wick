@@ -558,3 +558,71 @@ func TestApprovingAUserShowsUpImmediately(t *testing.T) {
 	require.Equal(t, 1, h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"].Reach(),
 		"approval must be visible on the next render, not after the TTL")
 }
+
+// ── A failed read must not read as "nobody" ───────────────────────────────
+//
+// This is the one the review called critical, and it is right: every number
+// on these pages is an access answer, so an empty set after a database
+// failure says "nobody can see this" — the most misleading thing a hiccup
+// could possibly say. The badge has an Unknown state ("—") for exactly this,
+// and the point is that a failure reaches it instead of being swallowed.
+
+func TestReachIsUnknownNotZeroWhenTheDatabaseFails(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-1", "one@x.test", support)
+	tagPath(t, db, "/tools/shared", support)
+
+	// Warm, then break the database under it and drop the cache the way a
+	// write would, so the next read has to go back to a DB that is gone.
+	require.Equal(t, 1, h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"].Reach())
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+	h.repo.cache.invalidate()
+
+	got := h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"]
+	require.True(t, got.Unknown, "a failed read must render as unknown, never as a count")
+	require.False(t, got.Public, "and never as public")
+}
+
+// The same for a connected account: the batch reports failure rather than
+// counting nobody.
+func TestAccountReachIsUnknownWhenTheDatabaseFails(t *testing.T) {
+	h, svc, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	row, err := svc.Create(ctx, "sso-admin", "Row", nil, "u-creator")
+	require.NoError(t, err)
+	require.NoError(t, svc.SetAccessPolicy(ctx, row.ID, connectors.AccessPolicy{EnableSSO: true, MultiAccount: true}))
+	seedUserWithTag(t, db, "u-creator", "creator@x.test", "")
+	seedUserWithTag(t, db, "u-alice", "alice@x.test", "")
+	require.NoError(t, svc.SaveAccount(ctx, row.ID, "u-alice", "ext-a", "alice", "tok-a"))
+	accs, err := svc.ListAccounts(ctx, row.ID)
+	require.NoError(t, err)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+	h.repo.cache.invalidate()
+
+	batch := h.newAccountReachBatch(ctx, []string{connectors.AccountTagPath(accs[0].ID)})
+	got := batch.summaryFor(*row, accs[0])
+	require.True(t, got.Unknown, "a failed batch must render as unknown, not as a count")
+}
+
+// A failed load must not be cached either — otherwise one hiccup poisons
+// every page for the whole TTL.
+func TestFailedLoadIsNotCached(t *testing.T) {
+	_, _, db := newAdminConnectorsHandler(t)
+	r := newRepo(db)
+	ctx := context.Background()
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	_, err = r.access(ctx)
+	require.Error(t, err, "a broken database must surface as an error")
+	require.Nil(t, r.cache.data, "a failed load must not be cached")
+}

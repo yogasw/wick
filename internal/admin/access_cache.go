@@ -53,20 +53,28 @@ func (c *accessCache) invalidate() {
 }
 
 // access returns the cached set, loading it when cold or expired.
-func (r *repo) access(ctx context.Context) *accessData {
+//
+// A failed load is NOT cached and NOT swallowed. Every number on these pages
+// is an access answer, and an empty set reads as "nobody can see this" — the
+// most misleading thing a database hiccup could possibly say. Callers get the
+// error and render "—".
+func (r *repo) access(ctx context.Context) (*accessData, error) {
 	r.cache.mu.Lock()
 	defer r.cache.mu.Unlock()
 	if r.cache.data != nil && time.Since(r.cache.at) < accessCacheTTL {
-		return r.cache.data
+		return r.cache.data, nil
 	}
-	d := r.loadAccessData(ctx)
+	d, err := r.loadAccessData(ctx)
+	if err != nil {
+		return nil, err
+	}
 	r.cache.at = time.Now()
 	r.cache.data = d
-	return d
+	return d, nil
 }
 
 // loadAccessData reads the whole set in three queries.
-func (r *repo) loadAccessData(ctx context.Context) *accessData {
+func (r *repo) loadAccessData(ctx context.Context) (*accessData, error) {
 	d := &accessData{
 		approved:   map[string]bool{},
 		pathTags:   map[string][]string{},
@@ -83,12 +91,14 @@ func (r *repo) loadAccessData(ctx context.Context) *accessData {
 		Role    string
 		IsOwner bool
 	}
-	r.db.WithContext(ctx).
+	if err := r.db.WithContext(ctx).
 		Table("users").
 		Select("CAST(id AS TEXT) as id, name, email, role, is_owner").
 		Where("approved = ?", true).
 		Order("name asc, email asc").
-		Scan(&users)
+		Scan(&users).Error; err != nil {
+		return nil, err
+	}
 	for _, u := range users {
 		d.approved[u.ID] = true
 		d.users = append(d.users, adminUser{
@@ -108,12 +118,14 @@ func (r *repo) loadAccessData(ctx context.Context) *accessData {
 		TagID    string
 		Name     string
 	}
-	r.db.WithContext(ctx).
+	if err := r.db.WithContext(ctx).
 		Table("tool_tags tt").
 		Select("tt.tool_path as tool_path, tt.tag_id as tag_id, t.name as name").
 		Joins("JOIN tags t ON t.id = tt.tag_id").
 		Where("t.is_filter = ?", true).
-		Scan(&links)
+		Scan(&links).Error; err != nil {
+		return nil, err
+	}
 	for _, l := range links {
 		d.pathTags[l.ToolPath] = append(d.pathTags[l.ToolPath], l.TagID)
 		d.tagNames[l.TagID] = l.Name
@@ -126,13 +138,15 @@ func (r *repo) loadAccessData(ctx context.Context) *accessData {
 		UserID string
 		Name   string
 	}
-	r.db.WithContext(ctx).
+	if err := r.db.WithContext(ctx).
 		Table("user_tags ut").
 		Select("ut.tag_id as tag_id, CAST(ut.user_id AS TEXT) as user_id, t.name as name").
 		Joins("JOIN users u ON CAST(u.id AS TEXT) = CAST(ut.user_id AS TEXT)").
 		Joins("JOIN tags t ON t.id = ut.tag_id").
 		Where("u.approved = ?", true).
-		Scan(&holders)
+		Scan(&holders).Error; err != nil {
+		return nil, err
+	}
 	for _, h := range holders {
 		if d.tagHolders[h.TagID] == nil {
 			d.tagHolders[h.TagID] = map[string]bool{}
@@ -140,7 +154,7 @@ func (r *repo) loadAccessData(ctx context.Context) *accessData {
 		d.tagHolders[h.TagID][h.UserID] = true
 		d.tagNames[h.TagID] = h.Name
 	}
-	return d
+	return d, nil
 }
 
 // usersByID resolves ids to the projection the modals render, from the cached

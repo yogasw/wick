@@ -37,7 +37,11 @@ func (h *Handler) connectorsAdminPage(w http.ResponseWriter, r *http.Request) {
 	}
 	perms, _ := h.repo.ListToolPerms(ctx, paths)
 
-	accountsByRow, accountPerms, ownerLabels := h.connectorAccountsAdmin(ctx, rows)
+	accountsByRow, accountPerms, ownerLabels, err := h.connectorAccountsAdmin(ctx, rows)
+	if err != nil {
+		http.Error(w, "cannot load connected accounts: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	items := make([]view.ConnectorAdminRow, len(rows))
 	for i, c := range rows {
@@ -94,7 +98,7 @@ func (h *Handler) connectorsAdminPage(w http.ResponseWriter, r *http.Request) {
 // on AccountTagPath) and their owners' display labels in one batched query
 // each. Returns accounts keyed by connector id, tag ids keyed by tool path,
 // and owner labels keyed by wick user id.
-func (h *Handler) connectorAccountsAdmin(ctx context.Context, rows []entity.Connector) (map[string][]entity.ConnectorAccount, map[string][]string, map[string]string) {
+func (h *Handler) connectorAccountsAdmin(ctx context.Context, rows []entity.Connector) (map[string][]entity.ConnectorAccount, map[string][]string, map[string]string, error) {
 	ids := make([]string, 0, len(rows))
 	for _, c := range rows {
 		ids = append(ids, c.ID)
@@ -103,7 +107,10 @@ func (h *Handler) connectorAccountsAdmin(ctx context.Context, rows []entity.Conn
 	// trip each, and this page lists every instance on the install.
 	byRow, err := h.connectors.ListAccountsFor(ctx, ids)
 	if err != nil {
-		byRow = map[string][]entity.ConnectorAccount{}
+		// Swallowing this would render the page with accounts missing and
+		// nothing saying so — on the one screen whose job is showing who can
+		// reach which account, a silently short list is worse than an error.
+		return nil, nil, nil, err
 	}
 	paths := []string{}
 	ownerIDs := []string{}
@@ -123,7 +130,7 @@ func (h *Handler) connectorAccountsAdmin(ctx context.Context, rows []entity.Conn
 			}
 		}
 	}
-	return byRow, tagsByPath, h.repo.UserLabels(ctx, ownerIDs)
+	return byRow, tagsByPath, h.repo.UserLabels(ctx, ownerIDs), nil
 }
 
 // setConnectorDisabledAdmin toggles the row-level Disabled flag on the

@@ -107,7 +107,16 @@ func (h *Handler) accessSummaries(ctx context.Context, paths []string) map[strin
 // one for the owner tags — not one per row.
 func (h *Handler) accessSummariesFor(ctx context.Context, specs []accessSpec) map[string]adminview.AccessSummary {
 	out := make(map[string]adminview.AccessSummary, len(specs))
-	total := h.repo.ApprovedUserCount(ctx)
+	total, totalErr := h.repo.ApprovedUserCount(ctx)
+	if totalErr != nil {
+		// The count could not be read. Rendering 0 here would say "nobody
+		// has access", which is the one answer a database hiccup must never
+		// be allowed to give.
+		for _, sp := range specs {
+			out[sp.Path] = adminview.AccessSummary{Path: sp.Path, Unknown: true}
+		}
+		return out
+	}
 
 	paths := make([]string, 0, len(specs))
 	ownerTagNames := make([]string, 0, len(specs))
@@ -476,7 +485,13 @@ var errNoAccount = errors.New("connected account not found")
 // An admin who ALSO carries a matching tag must be counted once, so callers
 // union user ids rather than adding two numbers.
 func (h *Handler) adminBypassFor(path string) bool {
-	switch ruleFor(path).AdminKnob {
+	return h.adminBypassForRule(ruleFor(path))
+}
+
+// adminBypassForRule is the same answer when the caller already has the rule
+// in hand, which is every caller inside a loop.
+func (h *Handler) adminBypassForRule(rule accessRule) bool {
+	switch rule.AdminKnob {
 	case "":
 		return true // no knob: the admin role always passes on this surface
 	case knobConnectors:
@@ -658,7 +673,13 @@ type accountReachBatch struct {
 // newAccountReachBatch loads everything the accounts on one page need, in
 // three queries total regardless of how many accounts there are.
 func (h *Handler) newAccountReachBatch(ctx context.Context, paths []string) accountReachBatch {
-	b := accountReachBatch{total: h.repo.ApprovedUserCount(ctx)}
+	b := accountReachBatch{}
+	total, err := h.repo.ApprovedUserCount(ctx)
+	if err != nil {
+		b.failed = true
+		return b
+	}
+	b.total = total
 	sets, err := h.repo.AccessUserIDs(ctx, paths)
 	if err != nil {
 		b.failed = true
@@ -674,8 +695,9 @@ func (h *Handler) newAccountReachBatch(ctx context.Context, paths []string) acco
 		}
 	}
 	// Every account on the page is on the same surface, so the knob is read
-	// once rather than per row.
-	b.bypass = h.adminBypassFor(connectors.AccountTagPath("x"))
+	// once rather than per row — by NAMESPACE, not by inventing a fake path
+	// to look one up with.
+	b.bypass = h.adminBypassForRule(accessRules[nsConnectorAccounts])
 	return b
 }
 
