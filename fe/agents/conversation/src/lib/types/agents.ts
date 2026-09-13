@@ -436,6 +436,14 @@ export type Schedule = {
   id: string;
   session_id: string;
   created_by: string;
+  /* Identity — whose access the fires actually use. created_by only says HOW
+     the row was made ("ai"/"user"), never as whom it runs. effective_run_as
+     empty means the fire is attached to nobody and falls back to wick's
+     internal principal, which carries no access tags. */
+  owner_user_id?: string;
+  run_as_user_id?: string;
+  effective_run_as?: string;
+  effective_run_as_name?: string;
   kind: string; // once | recurring
   run_at: string; // RFC3339 — next fire
   status: string; // pending | active | done | cancelled | failed
