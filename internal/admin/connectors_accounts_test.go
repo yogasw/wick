@@ -44,7 +44,7 @@ func newAdminConnectorsHandler(t *testing.T) (*Handler, *connectors.Service, *go
 	svc := connectors.NewServiceFromDB(db)
 	svc.SetConfigs(cfgsSvc)
 	require.NoError(t, svc.Bootstrap(context.Background(), []connector.Module{ssoAdminModule()}))
-	return &Handler{repo: newRepo(db), connectors: svc}, svc, db
+	return &Handler{repo: newRepo(db), connectors: svc, configs: cfgsSvc}, svc, db
 }
 
 // The admin connectors page lists each instance's connected accounts, with

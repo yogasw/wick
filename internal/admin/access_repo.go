@@ -31,12 +31,30 @@ func (r *repo) ApprovedUserCount(ctx context.Context) int {
 // One query for the whole page: the admin lists are 40–130 rows and an N+1
 // here would be felt.
 func (r *repo) AccessUserCounts(ctx context.Context, paths []string) (map[string]int, error) {
-	out := map[string]int{}
+	ids, err := r.AccessUserIDs(ctx, paths)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int, len(ids))
+	for path, set := range ids {
+		out[path] = len(set)
+	}
+	return out, nil
+}
+
+// AccessUserIDs is AccessUserCounts before it collapses to a number: per
+// tool_path, the SET of approved users carrying one of its filter tags. A
+// path absent from the result carries no filter tag at all — it is public.
+//
+// Sets rather than counts because the caller unions the admin bypass into
+// them, and an admin who also carries the tag must be counted once.
+func (r *repo) AccessUserIDs(ctx context.Context, paths []string) (map[string]map[string]bool, error) {
+	out := map[string]map[string]bool{}
 	if len(paths) == 0 {
 		return out, nil
 	}
 	// Every path that has ≥1 filter tag, so a tagged-but-unreachable row
-	// (count 0) is still reported as restricted rather than as public.
+	// (empty set) is still reported as restricted rather than as public.
 	var tagged []struct{ ToolPath string }
 	if err := r.db.WithContext(ctx).
 		Table("tool_tags tt").
@@ -48,28 +66,30 @@ func (r *repo) AccessUserCounts(ctx context.Context, paths []string) (map[string
 		return nil, err
 	}
 	for _, row := range tagged {
-		out[row.ToolPath] = 0
+		out[row.ToolPath] = map[string]bool{}
 	}
 
-	var counts []struct {
+	var pairs []struct {
 		ToolPath string
-		N        int
+		UserID   string
 	}
 	if err := r.db.WithContext(ctx).
 		Table("tool_tags tt").
-		Select("tt.tool_path as tool_path, COUNT(DISTINCT ut.user_id) as n").
+		Select("DISTINCT tt.tool_path as tool_path, CAST(ut.user_id AS TEXT) as user_id").
 		Joins("JOIN tags t ON t.id = tt.tag_id").
 		Joins("JOIN user_tags ut ON ut.tag_id = tt.tag_id").
 		Joins("JOIN users u ON CAST(u.id AS TEXT) = CAST(ut.user_id AS TEXT)").
 		Where("tt.tool_path IN ?", paths).
 		Where("t.is_filter = ?", true).
 		Where("u.approved = ?", true).
-		Group("tt.tool_path").
-		Scan(&counts).Error; err != nil {
+		Scan(&pairs).Error; err != nil {
 		return nil, err
 	}
-	for _, row := range counts {
-		out[row.ToolPath] = row.N
+	for _, row := range pairs {
+		if out[row.ToolPath] == nil {
+			out[row.ToolPath] = map[string]bool{}
+		}
+		out[row.ToolPath][row.UserID] = true
 	}
 	return out, nil
 }

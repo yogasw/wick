@@ -9,6 +9,7 @@ import (
 
 	adminview "github.com/yogasw/wick/internal/admin/view"
 	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/pkg/adminscope"
 	"github.com/yogasw/wick/internal/entity"
 )
 
@@ -42,6 +43,30 @@ var accessKinds = map[string]string{
 	"providers":          "Providers",
 }
 
+// accessKindsOne is the SINGULAR of each label, for prose: the modal says
+// "no access tag on this tool", not "on this tools".
+var accessKindsOne = map[string]string{
+	"tools":              "tool",
+	"jobs":               "job",
+	"connectors":         "connector",
+	"connector-accounts": "connected account",
+	"manager":            "connector type",
+	"projects":           "project",
+	"workflows":          "workflow",
+	"skills":             "skill",
+	"data-tables":        "data table",
+	"providers":          "provider",
+}
+
+// accessKindOneOf is accessKindOf in the singular, for a sentence.
+func accessKindOneOf(path string) string {
+	ns := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 2)[0]
+	if label, ok := accessKindsOne[ns]; ok {
+		return label
+	}
+	return "item"
+}
+
 // accessKindOf names the surface a tool_path belongs to ("/jobs/foo" → Jobs).
 func accessKindOf(path string) string {
 	ns := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 2)[0]
@@ -61,7 +86,7 @@ func accessKindOf(path string) string {
 func (h *Handler) accessSummaries(ctx context.Context, paths []string) map[string]adminview.AccessSummary {
 	out := make(map[string]adminview.AccessSummary, len(paths))
 	total := h.repo.ApprovedUserCount(ctx)
-	counts, err := h.repo.AccessUserCounts(ctx, paths)
+	sets, err := h.repo.AccessUserIDs(ctx, paths)
 	if err != nil {
 		// A failed count must not blank the page it decorates: fall back to
 		// "unknown" badges rather than dropping the whole listing.
@@ -70,16 +95,61 @@ func (h *Handler) accessSummaries(ctx context.Context, paths []string) map[strin
 		}
 		return out
 	}
+	// Admins are loaded once, then unioned into every path whose surface lets
+	// the admin role past the tags. Union, not addition: an admin carrying the
+	// tag is one person, not two.
+	admins, adminErr := h.repo.AdminUsers(ctx)
 	for _, p := range paths {
-		c, tagged := counts[p]
+		set, tagged := sets[p]
+		if !tagged {
+			out[p] = adminview.AccessSummary{Path: p, Public: true, TotalUser: total}
+			continue
+		}
+		reach := make(map[string]bool, len(set))
+		for id := range set {
+			reach[id] = true
+		}
+		if adminErr == nil && h.adminBypassFor(p) {
+			for _, a := range admins {
+				reach[a.ID] = true
+			}
+		}
 		out[p] = adminview.AccessSummary{
 			Path:      p,
-			Public:    !tagged,
-			UserCount: c,
+			UserCount: len(reach),
 			TotalUser: total,
 		}
 	}
 	return out
+}
+
+// withAdminBypass appends the admins who walk past this path's tags, each
+// labelled with the rule that lets them. Users already listed keep their
+// place and just gain the extra reason.
+func (h *Handler) withAdminBypass(ctx context.Context, path string, users []adminUser) []adminUser {
+	if !h.adminBypassFor(path) {
+		return users
+	}
+	admins, err := h.repo.AdminUsers(ctx)
+	if err != nil {
+		return users
+	}
+	reason := h.adminReason(path)
+	seen := make(map[string]int, len(users))
+	for i, u := range users {
+		seen[u.ID] = i
+	}
+	for _, a := range admins {
+		if i, ok := seen[a.ID]; ok {
+			if !containsString(users[i].ViaTags, reason) {
+				users[i].ViaTags = append(users[i].ViaTags, reason)
+			}
+			continue
+		}
+		a.ViaTags = []string{reason}
+		users = append(users, a)
+	}
+	return users
 }
 
 // accessUsersPage serves GET /admin/access/users?path=… — the modal behind the
@@ -109,6 +179,11 @@ func (h *Handler) accessUsersPage(w http.ResponseWriter, r *http.Request) {
 	}
 	detail.Path = path
 	detail.Kind = accessKindOf(path)
+	detail.KindOne = accessKindOneOf(path)
+	if !detail.Public {
+		// A public item already lists everyone, admins included.
+		detail.Users = h.withAdminBypass(r.Context(), path, detail.Users)
+	}
 	writeJSON(w, http.StatusOK, detail)
 }
 
@@ -158,6 +233,8 @@ type adminUser struct {
 type AccessDetail struct {
 	Path string `json:"path"`
 	Kind string `json:"kind"`
+	// KindOne is Kind in the singular, for the modal's sentence.
+	KindOne string `json:"kind_one"`
 	// Public: the item carries no filter tag, so every approved user reaches
 	// it and Users lists all of them.
 	Public bool        `json:"public"`
@@ -220,7 +297,6 @@ func (h *Handler) decorateResourceRows(ctx context.Context, rows []adminview.Res
 const (
 	reasonConnected = "connected it"
 	reasonOwner     = "instance owner"
-	reasonAdmin     = "admin"
 	reasonPool      = "pool shared"
 )
 
@@ -284,12 +360,14 @@ func (h *Handler) accountAccessUsers(ctx context.Context, row entity.Connector, 
 	}
 
 	// 4. Admins, but only while the knob that grants them the bypass is on —
-	//    with it off an admin is scoped like anyone else here.
-	if h.connectors != nil && h.connectors.AdminSeesAllConnectors() {
+	//    with it off an admin is scoped like anyone else here. Same rule and
+	//    same wording as every other surface (adminBypassFor).
+	if h.adminBypassFor(connectors.AccountTagPath(acc.ID)) {
 		admins, err := h.repo.AdminUsers(ctx)
 		if err == nil {
+			reason := h.adminReason(connectors.AccountTagPath(acc.ID))
 			for _, u := range admins {
-				add(u, reasonAdmin)
+				add(u, reason)
 			}
 		}
 	}
@@ -328,7 +406,7 @@ func (h *Handler) accountAccessSummary(ctx context.Context, row entity.Connector
 // accountAccessDetail is the modal body for a connected account: the full set
 // from accountAccessUsers, tagged with the reason each person gets in.
 func (h *Handler) accountAccessDetail(ctx context.Context, path string) (AccessDetail, error) {
-	out := AccessDetail{Path: path, Kind: accessKindOf(path)}
+	out := AccessDetail{Path: path, Kind: accessKindOf(path), KindOne: accessKindOneOf(path)}
 	accID := strings.TrimPrefix(path, connectors.AccountTagPath(""))
 	if h.connectors == nil || accID == "" {
 		return out, errNoAccount
@@ -359,3 +437,49 @@ func (h *Handler) accountAccessDetail(ctx context.Context, path string) (AccessD
 // errNoAccount keeps the modal honest when an account id no longer resolves —
 // better a clear error than an empty list that reads as "nobody".
 var errNoAccount = errors.New("connected account not found")
+
+// ── The admin bypass ──────────────────────────────────────────────────────
+//
+// "Who can reach this" is never just the tag holders: on most surfaces the
+// admin ROLE walks past the tags. How far it walks differs per surface, and
+// two of them are behind knobs, so the reach has to be the UNION of the tag
+// holders with whichever admins currently bypass — not the tag count alone.
+//
+//	/tools, /jobs, /manager  — login.CanAccessTool returns true for any admin,
+//	                           unconditionally. No knob.
+//	/providers               — providerPerm grants admins access and manage,
+//	                           unconditionally. No knob.
+//	/connectors, accounts    — adminscope.AdminSeeAllConnectors (default ON).
+//	/projects, /data-tables,
+//	/workflows, /skills      — adminscope.AdminSeeAllSessions (default OFF).
+//
+// An admin who ALSO carries a matching tag must be counted once, so callers
+// union user ids rather than adding two numbers.
+func (h *Handler) adminBypassFor(path string) bool {
+	switch strings.SplitN(strings.TrimPrefix(path, "/"), "/", 2)[0] {
+	case "tools", "jobs", "manager", "providers":
+		return true
+	case "connectors", "connector-accounts":
+		if h.connectors != nil {
+			return h.connectors.AdminSeesAllConnectors()
+		}
+		return adminscope.AdminSeeAllConnectors(h.configs)
+	case "projects", "data-tables", "workflows", "skills":
+		return adminscope.AdminSeeAllSessions(h.configs)
+	default:
+		return false
+	}
+}
+
+// adminReason names why an admin is in a reach list, naming the knob when one
+// is involved — "admin" alone invites the question this string answers.
+func (h *Handler) adminReason(path string) string {
+	switch strings.SplitN(strings.TrimPrefix(path, "/"), "/", 2)[0] {
+	case "connectors", "connector-accounts":
+		return "admin (see-all connectors on)"
+	case "projects", "data-tables", "workflows", "skills":
+		return "admin (see-all sessions on)"
+	default:
+		return "admin role"
+	}
+}

@@ -62,21 +62,65 @@
           return chip(t);
         })
         .join(" ");
+      var hay = [u.name, u.email, u.id, u.role]
+        .concat(u.via_tags || [])
+        .join(" ")
+        .toLowerCase();
       out +=
-        '<li class="flex flex-wrap items-center gap-2 py-2">' +
+        '<li data-modal-row="' + esc(hay) + '" class="flex flex-wrap items-center gap-2 py-2">' +
         '<span class="font-medium text-black-900 dark:text-white-100">' +
         esc(u.name || u.email) +
         "</span>" +
         '<span class="text-xs text-black-700 dark:text-black-600">' +
         esc(u.email) +
         "</span>" +
-        (u.role === "admin" ? chip("admin") : "") +
-        '<span class="ml-auto flex flex-wrap gap-1">' +
+        (u.role === "admin"
+          ? '<span class="rounded bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-black-700 dark:text-black-600" title="account role">admin</span>'
+          : "") +
+        // "via" spelled out: the role badge above sits right next to the name
+        // and was being read as the REASON this person has access, which it is
+        // not — the reason is always what follows this label.
+        '<span class="ml-auto flex flex-wrap items-center gap-1">' +
+        (via ? '<span class="text-[10px] text-black-700 dark:text-black-600">via</span>' : "") +
         via +
         "</span>" +
         "</li>";
     });
     return out + "</ul>";
+  }
+
+
+  // modalSearch is the filter inside a modal. The lists behind a reach badge
+  // are as long as the install is big — 30 users, 40 granted items — so the
+  // question "is Hana in here" needs an answer that is not scrolling.
+  // Rendered only when the list is long enough to be worth filtering.
+  function modalSearch(count, what) {
+    if (count < 8) return "";
+    return (
+      '<input type="search" class="access-modal-search mb-3 w-full rounded-md border ' +
+      'border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-sm ' +
+      'text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500" ' +
+      'placeholder="Filter ' + esc(what) + '…" autocomplete="off"/>' +
+      '<p class="access-modal-count mb-2 text-[11px] text-black-700 dark:text-black-600"></p>'
+    );
+  }
+
+  // filterModal hides the rows of every list in the modal that do not match.
+  // Section headings stay put: a heading with nothing under it still tells you
+  // that surface has no match, which is information.
+  function filterModal(input) {
+    var body = document.getElementById("access-modal-body");
+    if (!body) return;
+    var q = input.value.trim().toLowerCase();
+    var rows = body.querySelectorAll("[data-modal-row]");
+    var shown = 0;
+    rows.forEach(function (row) {
+      var match = !q || (row.getAttribute("data-modal-row") || "").indexOf(q) !== -1;
+      row.classList.toggle("hidden", !match);
+      if (match) shown++;
+    });
+    var out = body.querySelector(".access-modal-count");
+    if (out) out.textContent = q ? shown + " of " + rows.length + " shown" : "";
   }
 
   // ── Access badge → who can see this row ──────────────────────────────────
@@ -98,7 +142,7 @@
         if (d.public) {
           head =
             '<p class="mb-3 text-black-800 dark:text-black-600">No access tag on this ' +
-            esc((d.kind || "item").toLowerCase()) +
+            esc(d.kind_one || "item") +
             " — <strong>every approved user</strong> can see it (" +
             (d.users || []).length +
             ").</p>";
@@ -119,7 +163,11 @@
               "Nobody carries these tags, so no non-admin can reach it.</p>";
           }
         }
-        openModal("Who can access this", d.path || path, head + userRows(d.users));
+        openModal(
+          "Who can access this",
+          d.path || path,
+          head + modalSearch((d.users || []).length, "users") + userRows(d.users)
+        );
       })
       .catch(function (e) {
         openModal("Who can access this", path, '<p class="text-neg-400">' + esc(e.message) + "</p>");
@@ -167,14 +215,21 @@
               '<ul class="mt-1 space-y-1">';
             (g.items || []).forEach(function (it) {
               body +=
-                '<li class="font-mono text-[11px] text-black-800 dark:text-black-600">' +
+                '<li data-modal-row="' +
+                esc(((it.path || "") + " " + (it.label || "") + " " + g.kind).toLowerCase()) +
+                '" class="font-mono text-[11px] text-black-800 dark:text-black-600">' +
                 esc(it.path) +
                 "</li>";
             });
             body += "</ul>";
           });
         }
-        openModal("Tag: " + (d.tag_name || ""), d.tag_id || tagID, body);
+        var rowCount = (d.users || []).length + (d.item_count || 0);
+        openModal(
+          "Tag: " + (d.tag_name || ""),
+          d.tag_id || tagID,
+          modalSearch(rowCount, "users and items") + body
+        );
       })
       .catch(function (e) {
         openModal("Tag detail", tagID, '<p class="text-neg-400">' + esc(e.message) + "</p>");
@@ -273,8 +328,13 @@
   });
 
   document.addEventListener("input", function (e) {
-    if (e.target.classList && e.target.classList.contains("access-search")) {
+    if (!e.target.classList) return;
+    if (e.target.classList.contains("access-search")) {
       applyFilter(e.target);
+      return;
+    }
+    if (e.target.classList.contains("access-modal-search")) {
+      filterModal(e.target);
     }
   });
 
