@@ -386,18 +386,18 @@ describe("ProviderDetail - callbacks", () => {
 });
 
 describe("ProviderDetail - read-only viewer", () => {
-  it("says it is read-only and makes the configuration inert", async () => {
+  it("gives a manager a read-only summary, not the admin form", async () => {
     vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), ReadOnly: true, CanManage: false });
     render(ProviderDetail, { props: { base: "", type: "claude", name: "claude", onBack: vi.fn(), onOpenSession: vi.fn() } });
 
     expect(await screen.findByText("Read-only.")).toBeTruthy();
-    // Inert rather than hidden: the whole point of sharing a provider is
-    // that the viewer can see how it is configured. (jsdom does not
-    // reflect the inert property to an attribute, so assert the marker
-    // the component sets alongside it.)
     const cfg = screen.getByTestId("provider-config");
     expect(cfg.getAttribute("data-readonly")).toBe("1");
-    expect(cfg.className).toContain("pointer-events-none");
+    // The summary, not the editor.
+    expect(screen.getByText("CONFIGURATION")).toBeTruthy();
+    // And crucially NOT the AI Router card: mounting it fires admin-only
+    // requests that answer 403 in a manager's console.
+    expect(screen.queryByText("AI Router")).toBeNull();
   });
 
   it("shows the configuration normally for an admin", async () => {
@@ -406,5 +406,7 @@ describe("ProviderDetail - read-only viewer", () => {
     await screen.findByText(/resolved/i);
     expect(screen.queryByText("Read-only.")).toBeNull();
     expect(screen.getByTestId("provider-config").getAttribute("data-readonly")).toBeNull();
+    // The admin still gets the full editor.
+    expect(screen.queryByText("CONFIGURATION")).toBeNull();
   });
 });

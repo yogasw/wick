@@ -570,8 +570,12 @@
     }
   }
 
-  onMount(() => {
-    load();
+  onMount(async () => {
+    await load();
+    // The catalog feeds the CONFIG EDITOR's pickers, and its endpoint is
+    // admin-only. Fetching it for a manager achieved nothing except a
+    // 403 in their console, so ask only when there is an editor to fill.
+    if (readOnly) return;
     apiGetProviderCatalog(base, type)
       .then((c) => { catalog = c; })
       .catch(() => { /* picker is optional — manual KvList still works */ });
@@ -783,13 +787,46 @@
          inert, and the API refuses the write in any case. The Connection
          panel above stays live, because reconnecting is a manage grant,
          not an edit. -->
-    <div
-      data-testid="provider-config"
-      data-readonly={readOnly ? "1" : null}
-      class:pointer-events-none={readOnly}
-      class:opacity-75={readOnly}
-      inert={readOnly}
-    >
+    {#if readOnly}
+      <!-- Manager view: what they came for is the Connection panel above.
+           The configuration is shown as a plain summary — no inputs, no
+           cards that fetch admin-only endpoints on mount (the AI Router
+           card did exactly that, and every one of those calls was a 403
+           in their console). -->
+      <div
+        data-testid="provider-config"
+        data-readonly="1"
+        class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 space-y-2 text-xs"
+      >
+        <p class="text-[11px] font-semibold tracking-wide text-black-700 dark:text-black-600">CONFIGURATION</p>
+        <div class="flex gap-2">
+          <span class="w-32 shrink-0 text-black-700 dark:text-black-600">binary</span>
+          <span class="font-mono text-black-900 dark:text-white-100 break-all">{data.Instance.Binary || data.Path || "—"}</span>
+        </div>
+        <div class="flex gap-2">
+          <span class="w-32 shrink-0 text-black-700 dark:text-black-600">version</span>
+          <span class="font-mono text-black-900 dark:text-white-100">{data.Version || "—"}</span>
+        </div>
+        <div class="flex gap-2">
+          <span class="w-32 shrink-0 text-black-700 dark:text-black-600">max concurrent</span>
+          <span class="text-black-900 dark:text-white-100">{data.Instance.MaxConcurrent || data.GlobalMax} </span>
+        </div>
+        {#if data.Instance.SendMode}
+          <div class="flex gap-2">
+            <span class="w-32 shrink-0 text-black-700 dark:text-black-600">send mode</span>
+            <span class="text-black-900 dark:text-white-100">{data.Instance.SendMode}</span>
+          </div>
+        {/if}
+        <div class="flex gap-2">
+          <span class="w-32 shrink-0 text-black-700 dark:text-black-600">status</span>
+          <span class="text-black-900 dark:text-white-100">{data.Instance.Disabled ? "disabled" : "enabled"}</span>
+        </div>
+        <p class="pt-2 text-[11px] text-black-700 dark:text-black-600">
+          Editing a provider's configuration is admin-only. You can reconnect this account and re-check its usage above.
+        </p>
+      </div>
+    {:else}
+    <div data-testid="provider-config">
 
     <!-- Configuration (simple fields, 2-column grid). Collapsed by
          default; the header is the toggle. -->
@@ -1236,5 +1273,6 @@
     <!-- Recent spawns — shared component (search + pagination + inline detail) -->
     <RecentSpawns {base} {type} {name} {onOpenSession} collapsible={true} />
     </div>
+    {/if}
   {/if}
 </div>
