@@ -432,6 +432,18 @@ describe("ProvidersList connection badges", () => {
     expect(screen.getAllByTestId("usage-recheck").length).toBeGreaterThan(0);
   });
 
+  it("hides per-card Rescan from a non-admin manager", async () => {
+    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false });
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("claude/claude");
+    // Rescan re-probes the host binary — admin-only, so it must not be
+    // offered to someone whose click would come back 403.
+    expect(screen.queryByText("Rescan")).toBeNull();
+    // Detail stays: that is how a manager reaches Reconnect and usage.
+    expect(screen.getAllByText("Detail").length).toBeGreaterThan(0);
+  });
+
   it("renders cards even when the connections request fails", async () => {
     vi.mocked(api.apiGetConnections).mockRejectedValue(new Error("boom"));
     render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });

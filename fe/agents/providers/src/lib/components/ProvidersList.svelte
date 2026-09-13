@@ -650,12 +650,18 @@
                 {/if}
               </div>
               <div class="flex items-center gap-2">
-                <button
-                  type="button"
-                  onclick={() => doRescanOne(p)}
-                  disabled={busy[rescanKey]}
-                  class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-xs text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50"
-                >{busy[rescanKey] ? "…" : "Rescan"}</button>
+                <!-- Rescan re-probes the binary on the HOST and rewrites
+                     the cached status, so it is admin-only like the rest
+                     of the configuration surface. Hidden rather than
+                     disabled: a manager has no use for it. -->
+                {#if isAdmin}
+                  <button
+                    type="button"
+                    onclick={() => doRescanOne(p)}
+                    disabled={busy[rescanKey]}
+                    class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-xs text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50"
+                  >{busy[rescanKey] ? "…" : "Rescan"}</button>
+                {/if}
                 <button
                   type="button"
                   onclick={() => onNavigate(p.Instance.Type, p.Instance.Name)}
