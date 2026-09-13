@@ -121,7 +121,7 @@ func apiProviderLoginTTYUsage(c *tool.Ctx) {
 
 	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, ins.Env), func() ([]logintty.UsageWindow, error) {
 		return logintty.ReadUsage(ins.Type, ins.Env)
-	})
+	}, logintty.CredentialsChangedAt(ins.Type, ins.Env))
 	body := map[string]any{"supported": true, "windows": []logintty.UsageWindow{}, "checking": v.Checking}
 	// Same provenance the list carries: this panel is looking at a
 	// SHARED, cached reading, so it says how old it is.

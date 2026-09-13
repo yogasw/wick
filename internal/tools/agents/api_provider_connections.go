@@ -30,6 +30,10 @@ type connectionsProbe interface {
 	usageSupported(t provider.Type) bool
 	account(t provider.Type, env []string) logintty.Account
 	usage(ctx context.Context, t provider.Type, env []string) ([]logintty.UsageWindow, error)
+	// credentialsChangedAt is when the account's stored credentials were
+	// last rewritten, so a cached failure can be retried once after a
+	// login was renewed. Zero when unknown.
+	credentialsChangedAt(t provider.Type, env []string) time.Time
 }
 
 // liveProbe is the production connectionsProbe backed by logintty.
@@ -41,6 +45,10 @@ func (liveProbe) configDir(t provider.Type, env []string) string {
 
 func (liveProbe) identity(t provider.Type, env []string) string {
 	return logintty.UsageIdentity(t, env)
+}
+
+func (liveProbe) credentialsChangedAt(t provider.Type, env []string) time.Time {
+	return logintty.CredentialsChangedAt(t, env)
 }
 
 func (liveProbe) usageSupported(t provider.Type) bool {
@@ -157,7 +165,7 @@ func collectConnections(ctx context.Context, instances []provider.Instance, p co
 		g.Go(func() error {
 			v := cache.getWait(gctx, key, func() ([]logintty.UsageWindow, error) {
 				return p.usage(gctx, t, env)
-			})
+			}, p.credentialsChangedAt(t, env))
 			mu.Lock()
 			results[key] = v
 			mu.Unlock()

@@ -25,6 +25,14 @@ type fakeProbe struct {
 	identityFor map[string]string
 	// unsupported marks provider types with no usage API.
 	unsupported map[provider.Type]bool
+	// credsAtFor maps a config dir onto the credential file's mtime,
+	// standing in for logintty.CredentialsChangedAt. Absent entries
+	// mean "unknown", which is what a dir with no credentials gives.
+	credsAtFor map[string]time.Time
+}
+
+func (f *fakeProbe) credentialsChangedAt(_ provider.Type, env []string) time.Time {
+	return f.credsAtFor[envVal(env, "DIR")]
 }
 
 func (f *fakeProbe) identity(_ provider.Type, env []string) string {

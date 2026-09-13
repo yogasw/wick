@@ -28,6 +28,12 @@ import (
 //     so two providers never hit the endpoint in the same second.
 //  4. Failures are CACHED and never retried on their own; a 429's own
 //     Retry-After is honoured even against a human pressing Re-check.
+//     The single exception is a failure whose CAUSE provably changed:
+//     when the account's credentials are rewritten on disk (the CLI
+//     refreshed the login), one retry is allowed, because the token we
+//     failed with is not the token we would send now. That costs a
+//     request only when a login actually changed, so it cannot become
+//     polling.
 //
 // Readings are refreshed in the background, so a slow or paced probe
 // never holds the page: the handler serves what the cache knows and the
@@ -178,8 +184,10 @@ func (v usageView) Age(now time.Time) time.Duration {
 // polling a page must never cost an upstream request. A cold account
 // (nothing read yet) gets its first probe here so the page has something
 // to show; everything after that is Re-check.
-func (c *usageCache) get(key string, fetch usageFetch) usageView {
-	c.schedule(key, fetch, false)
+// credsAt is when this account's stored credentials last changed (zero
+// when unknown); it is what licenses the one retry described in rule 4.
+func (c *usageCache) get(key string, fetch usageFetch, credsAt time.Time) usageView {
+	c.schedule(key, fetch, false, credsAt)
 	c.mu.Lock()
 	e := c.entries[key]
 	_, checking := c.inflight[key]
@@ -196,8 +204,8 @@ func (c *usageCache) get(key string, fetch usageFetch) usageView {
 //
 // Bounded by ctx: a caller that runs out of budget gets the blank and
 // the probe keeps going in the background for the next reader.
-func (c *usageCache) getWait(ctx context.Context, key string, fetch usageFetch) usageView {
-	v := c.get(key, fetch)
+func (c *usageCache) getWait(ctx context.Context, key string, fetch usageFetch, credsAt time.Time) usageView {
+	v := c.get(key, fetch, credsAt)
 	if v.Known {
 		return v
 	}
@@ -252,13 +260,13 @@ func (c *usageCache) serve(e *usageEntry) usageView {
 // cost an upstream request. force comes only from forceRefresh, which
 // has already applied the cooldowns. Returns the channel that closes
 // when the running probe finishes, or nil when none was started.
-func (c *usageCache) schedule(key string, fetch usageFetch, force bool) chan struct{} {
+func (c *usageCache) schedule(key string, fetch usageFetch, force bool, credsAt time.Time) chan struct{} {
 	c.mu.Lock()
 	if ch, ok := c.inflight[key]; ok {
 		c.mu.Unlock()
 		return ch // rule 2: one flight per account
 	}
-	if e := c.entries[key]; e != nil && !force {
+	if e := c.entries[key]; e != nil && !force && !retryOnNewCreds(e, credsAt, c.now()) {
 		// An entry exists, so this account has been read at least once.
 		// Refreshing it is a human's decision (forceRefresh), never a
 		// side effect of someone having a page open — that automatic
@@ -318,6 +326,33 @@ func (c *usageCache) store(key string, windows []logintty.UsageWindow, err error
 	}
 }
 
+// retryOnNewCreds reports whether a cached FAILURE deserves one more
+// probe because the credentials behind it were rewritten since.
+//
+// Deliberately narrow, so this stays "the cause changed" and never
+// becomes "poll again":
+//
+//   - only an account with no reading at all — a card showing numbers
+//     already has something to show, and refreshing it stays a human's
+//     call;
+//   - only when the credential file is newer than the failed attempt;
+//   - never inside a cooldown the SERVER asked for, and never inside
+//     the same floor the Re-check button obeys.
+//
+// Callers hold c.mu.
+func retryOnNewCreds(e *usageEntry, credsAt, now time.Time) bool {
+	if e.err == nil || !e.goodAt.IsZero() {
+		return false
+	}
+	if credsAt.IsZero() || !credsAt.After(e.attemptedAt) {
+		return false
+	}
+	if e.serverUntil.After(now) {
+		return false
+	}
+	return e.attemptedAt.IsZero() || now.Sub(e.attemptedAt) >= usageManualMinInterval
+}
+
 // forceRefresh is the Re-check button: the ONLY way a reading is
 // replaced, now that nothing probes on its own.
 //
@@ -352,6 +387,6 @@ func (c *usageCache) forceRefresh(key string, fetch usageFetch) (accepted bool, 
 	// force: schedule() declines an account that already has a reading,
 	// and this is the one caller allowed to override that — a human
 	// asked, and the cooldowns above already said yes.
-	c.schedule(key, fetch, true)
+	c.schedule(key, fetch, true, time.Time{})
 	return true, 0
 }

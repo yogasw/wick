@@ -227,7 +227,15 @@ func CompareBinaries(candidate, running BinaryInfo, hostGOOS, hostGOARCH string)
 		add(SevBlock, "version", "%s is OLDER than the running %s — downgrade", candidate.AppVersion, running.AppVersion)
 	case 0:
 		if candidate.AppVersion != "" && candidate.AppVersion == running.AppVersion {
-			add(SevWarn, "version", "same version %s as the running binary", candidate.AppVersion)
+			// Fatal, and deliberately not --force-able. A version is the
+			// only handle anyone has on what is actually serving: the
+			// update card, `version`, a bug report, the rollback the
+			// operator reaches for next. Handing over to a DIFFERENT
+			// build wearing the SAME number makes every one of those
+			// lie, and nothing in the running process can tell the two
+			// apart afterwards. Bump the version — it costs one line in
+			// wick.yml and it is what makes the swap auditable.
+			add(SevFatal, "version", "same version %s as the running binary — bump it (%s -> %s) before installing", candidate.AppVersion, running.AppVersion, nextPatch(running.AppVersion))
 		}
 	}
 
@@ -235,6 +243,22 @@ func CompareBinaries(candidate, running BinaryInfo, hostGOOS, hostGOARCH string)
 		add(SevWarn, "wick", "built from a LOCAL wick tree (go.mod replace), not a released tag")
 	}
 	return checks
+}
+
+// nextPatch is the smallest version that would be accepted over v, so
+// the refusal names the fix instead of only the problem. A version it
+// cannot parse yields "", and the message then simply omits it.
+func nextPatch(v string) string {
+	parts := strings.Split(strings.TrimPrefix(v, "v"), ".")
+	if len(parts) == 0 {
+		return ""
+	}
+	last, err := strconv.Atoi(parts[len(parts)-1])
+	if err != nil {
+		return ""
+	}
+	parts[len(parts)-1] = strconv.Itoa(last + 1)
+	return strings.Join(parts, ".")
 }
 
 // Worst returns the highest severity among findings.
