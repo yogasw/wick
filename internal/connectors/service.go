@@ -881,14 +881,16 @@ func (s *Service) SetRateLimit(ctx context.Context, id string, rpm int) error {
 // ── ConnectorAccount ─────────────────────────────────────────────────
 
 // ListAccounts returns all connected OAuth accounts for a connector instance.
+// ListAccountsFor is ListAccounts for many instances at once — one query
+// instead of one per row. See Repo.ListAccountsFor.
+func (s *Service) ListAccountsFor(ctx context.Context, connectorIDs []string) (map[string][]entity.ConnectorAccount, error) {
+	return s.repo.ListAccountsFor(ctx, connectorIDs)
+}
+
 func (s *Service) ListAccounts(ctx context.Context, connectorID string) ([]entity.ConnectorAccount, error) {
 	return s.repo.ListAccounts(ctx, connectorID)
 }
 
-// SaveAccount persists a connected OAuth account. Respects MultiAccount
-// from the connector row: false = replace existing, true = add new.
-// wickUserID is the wick platform user who initiated the OAuth flow.
-// externalUserID is the provider-side user ID from GetUserIdentity.
 func (s *Service) SaveAccount(ctx context.Context, connectorID, wickUserID, externalUserID, displayName, accessToken string) error {
 	row, err := s.repo.Get(ctx, connectorID)
 	if err != nil {

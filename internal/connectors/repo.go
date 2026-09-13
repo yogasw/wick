@@ -308,6 +308,28 @@ func (r *Repo) ListAccounts(ctx context.Context, connectorID string) ([]entity.C
 	return rows, err
 }
 
+// ListAccountsFor returns the connected accounts of MANY instances in one
+// query, keyed by connector id. The admin connectors page lists every
+// instance on the install, and asking per row was one round trip each — 46
+// rows on a database 30ms away is over a second spent on a listing.
+func (r *Repo) ListAccountsFor(ctx context.Context, connectorIDs []string) (map[string][]entity.ConnectorAccount, error) {
+	out := map[string][]entity.ConnectorAccount{}
+	if len(connectorIDs) == 0 {
+		return out, nil
+	}
+	var rows []entity.ConnectorAccount
+	if err := r.db.WithContext(ctx).
+		Where("connector_id IN ?", connectorIDs).
+		Order("connector_id asc, created_at asc").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, acc := range rows {
+		out[acc.ConnectorID] = append(out[acc.ConnectorID], acc)
+	}
+	return out, nil
+}
+
 // AccountFilterTagIDs returns the FILTER tag ids attached to each of the given
 // connected accounts, keyed by account id. Accounts are tagged through the
 // same tool_tags table every other taggable thing uses, on the path

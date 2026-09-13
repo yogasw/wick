@@ -95,16 +95,20 @@ func (h *Handler) connectorsAdminPage(w http.ResponseWriter, r *http.Request) {
 // each. Returns accounts keyed by connector id, tag ids keyed by tool path,
 // and owner labels keyed by wick user id.
 func (h *Handler) connectorAccountsAdmin(ctx context.Context, rows []entity.Connector) (map[string][]entity.ConnectorAccount, map[string][]string, map[string]string) {
-	byRow := make(map[string][]entity.ConnectorAccount, len(rows))
+	ids := make([]string, 0, len(rows))
+	for _, c := range rows {
+		ids = append(ids, c.ID)
+	}
+	// One query for every instance's accounts. Asking per row was a round
+	// trip each, and this page lists every instance on the install.
+	byRow, err := h.connectors.ListAccountsFor(ctx, ids)
+	if err != nil {
+		byRow = map[string][]entity.ConnectorAccount{}
+	}
 	paths := []string{}
 	ownerIDs := []string{}
 	for _, c := range rows {
-		accs, err := h.connectors.ListAccounts(ctx, c.ID)
-		if err != nil || len(accs) == 0 {
-			continue
-		}
-		byRow[c.ID] = accs
-		for _, acc := range accs {
+		for _, acc := range byRow[c.ID] {
 			paths = append(paths, connectors.AccountTagPath(acc.ID))
 			if acc.WickUserID != "" {
 				ownerIDs = append(ownerIDs, acc.WickUserID)

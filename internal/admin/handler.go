@@ -94,7 +94,10 @@ type Handler struct {
 	// the session cookie.
 	midd *login.Middleware
 
-	repo       *repo
+	repo *repo
+	// userCache holds the approved-user and admin sets shared by every
+	// listing, so switching admin tabs does not re-ask for them.
+	userCache  userSetCache
 	tools      []tool.Tool
 	configs    *configs.Service
 	sso        *sso.Service
