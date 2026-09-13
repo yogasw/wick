@@ -122,10 +122,19 @@
     compare = null;
   }
   // openCompare resolves a path to its FileChange in the right group.
+  // A change that IS a repo of its own has no diff to open — this repo
+  // only knows the folder exists — so opening it switches the panel to
+  // that repo, where its files actually show up.
   function openCompare(path: string, isStaged: boolean) {
     const list = isStaged ? staged : unstaged;
     const c = list.find((x) => x.path === path);
-    if (c) compare = { file: c, staged: isStaged };
+    if (!c) return;
+    if (c.dir) {
+      const rel = $activeRepo && $activeRepo !== "." ? `${$activeRepo}/${path}` : path;
+      if ($repos.some((r) => r.rel === rel)) selectRepo(rel);
+      return;
+    }
+    compare = { file: c, staged: isStaged };
   }
   function openCommitFile(sha: string, file: FileChange) {
     compare = { file, staged: false, commitSha: sha };

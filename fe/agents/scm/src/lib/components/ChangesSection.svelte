@@ -58,7 +58,12 @@
     {:else}
       {#each items as c (c.path)}
         <div class="group flex items-center gap-2 py-1 pr-2 pl-3 hover:bg-white-200 dark:hover:bg-navy-800">
-          <button type="button" onclick={() => onOpen(c.path, staged)} class="min-w-0 flex-1 truncate text-left text-xs text-black-800 dark:text-black-600">{c.path}</button>
+          <button type="button" onclick={() => onOpen(c.path, staged)} class="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs text-black-800 dark:text-black-600">
+            <span class="truncate">{c.path}{c.dir ? "/" : ""}</span>
+            {#if c.dir}
+              <span class="shrink-0 rounded bg-white-300 px-1 text-[9px] font-medium whitespace-nowrap text-black-700 dark:bg-navy-600 dark:text-black-600">nested repo</span>
+            {/if}
+          </button>
           <div class="hidden shrink-0 items-center gap-1 group-hover:flex">
             <button type="button" title="Discard" onclick={() => onDiscard([c.path], c.untracked ? [c.path] : [])} class="text-black-600 hover:text-cau-600 dark:hover:text-cau-400">
               <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 8a6 6 0 0110.5-4M11 2v3H8M14 8a6 6 0 01-10.5 4M5 14v-3h3" stroke-linecap="round" stroke-linejoin="round"/></svg>

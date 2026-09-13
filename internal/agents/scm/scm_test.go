@@ -485,3 +485,48 @@ func TestStatusNestedRepoIsDirEntry(t *testing.T) {
 		t.Fatalf("expected staged gitlink flagged as a directory, got %+v", c)
 	}
 }
+
+// A clone that landed inside another checkout has to be listed on its
+// own: the enclosing repo reports it as one opaque folder and cannot
+// show what is inside, so this list is the only way to reach its files.
+func TestDiscoverReposFindsNestedClone(t *testing.T) {
+	skipNoGit(t)
+	root := t.TempDir()
+	outer := filepath.Join(root, "erha-store")
+	inner := filepath.Join(outer, "integration-helm")
+	deep := filepath.Join(outer, "a", "b", "c", "too-deep")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitInit(t, outer)
+	gitInit(t, inner)
+	gitInit(t, deep)
+
+	repos, err := DiscoverRepos(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]string{}
+	for _, r := range repos {
+		names[r.Rel] = r.Name
+	}
+	if _, ok := names["erha-store"]; !ok {
+		t.Fatalf("expected the outer repo, got %+v", repos)
+	}
+	if _, ok := names["erha-store/integration-helm"]; !ok {
+		t.Fatalf("expected the nested clone, got %+v", repos)
+	}
+	// Nested repos are labelled by path — "integration-helm" alone could
+	// be any of several clones in a session directory.
+	if got := names["erha-store/integration-helm"]; got != "erha-store/integration-helm" {
+		t.Fatalf("nested repo should be named by path, got %q", got)
+	}
+	// Bounded: a repo four levels down inside another repo is somebody's
+	// fixture, not a clone the user is working in.
+	if _, ok := names["erha-store/a/b/c/too-deep"]; ok {
+		t.Fatalf("descent below maxNestedDepth should stop, got %+v", repos)
+	}
+}

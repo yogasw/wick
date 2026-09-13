@@ -58,12 +58,14 @@
   {@const ch = node.change}
   <div class="group flex items-center gap-2 py-1 pr-2 hover:bg-white-200 dark:hover:bg-navy-800" style={pad}>
     {#if node.dirEntry}
-      <!-- A whole folder reported as one change (nested repo): nothing to
-           diff, so the name is a label, not a button. -->
-      <span class="flex min-w-0 flex-1 items-center gap-1 truncate text-xs text-black-800 dark:text-black-600" title="{ch.path} — a folder git reports as a single entry (nested repository)">
+      <!-- A whole folder reported as one change (a repo of its own).
+           There is no diff to show, so the click opens that repo in the
+           panel instead — the only place its files are visible. -->
+      <button type="button" onclick={() => onOpen(ch.path, staged)} class="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs text-black-800 dark:text-black-600" title="{ch.path} is a repository of its own — this repo records the whole folder as one change and cannot show what is inside it. Open it to see its own files. Committing it here stores a bare gitlink; the files do not come along.">
         <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.5 4.5A1 1 0 012.5 3.5h3l1.5 2h6a1 1 0 011 1v6a1 1 0 01-1 1h-10a1 1 0 01-1-1z" stroke-linejoin="round"/></svg>
         <span class="truncate">{node.name}/</span>
-      </span>
+        <span class="shrink-0 rounded bg-white-300 px-1 text-[9px] font-medium whitespace-nowrap text-black-700 dark:bg-navy-600 dark:text-black-600">nested repo</span>
+      </button>
     {:else}
       <button type="button" onclick={() => onOpen(ch.path, staged)} class="min-w-0 flex-1 truncate text-left text-xs text-black-800 dark:text-black-600">{node.name}</button>
     {/if}
