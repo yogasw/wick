@@ -2,12 +2,13 @@ package daemon
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 func TestParseLdflagsX(t *testing.T) {
@@ -254,11 +255,11 @@ func TestProcCmdline0(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("procfs is Linux-only")
 	}
-	sleep, err := exec.LookPath("sleep")
+	sleep, err := safeexec.LookPath("sleep")
 	if err != nil {
 		t.Skip("no sleep binary")
 	}
-	cmd := exec.Command(sleep, "30")
+	cmd := safeexec.Command(sleep, "30")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
