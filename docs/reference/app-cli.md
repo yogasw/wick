@@ -176,10 +176,12 @@ question is whether it is what you think it is:
 
 - **FATAL, no override** — built for another OS or architecture, or nothing in its module graph
   depends on wick. A wrong-architecture binary in place is a crash-loop the service manager
-  retries forever.
+  retries forever. Also the SAME version as the running binary: a different build wearing the
+  same number makes the update card, `version` and any rollback lie about what is serving —
+  bump the version instead.
 - **BLOCK, `--force` to proceed** — a different main module, a different `BuildAppName` (that app
   has its own data dir, unit and paths), or a version older than the one running.
-- **WARN** — same version as the running binary, or a wick resolved through a local `replace`
+- **WARN** — a wick resolved through a local `replace`
   tree instead of a released tag.
 
 If the successor does not take over within `--timeout`, the previous binary is restored and the

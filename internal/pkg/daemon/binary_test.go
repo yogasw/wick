@@ -98,7 +98,7 @@ func TestCompareBinaries(t *testing.T) {
 		{"other module", mutate(func(b *BinaryInfo) { b.MainModule = "something-else" }), SevBlock, "module"},
 		{"other app", mutate(func(b *BinaryInfo) { b.AppName = "other-app" }), SevBlock, "app"},
 		{"downgrade", mutate(func(b *BinaryInfo) { b.AppVersion = "0.1.111" }), SevBlock, "version"},
-		{"same version", mutate(func(b *BinaryInfo) { b.AppVersion = "0.1.112" }), SevWarn, "version"},
+		{"same version", mutate(func(b *BinaryInfo) { b.AppVersion = "0.1.112" }), SevFatal, "version"},
 		{"local wick tree", mutate(func(b *BinaryInfo) { b.WickLocal = true }), SevWarn, "wick"},
 	}
 
@@ -309,4 +309,30 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// Same version is refused OUTRIGHT, not "blocked unless --force": the
+// caller only consults --force for SevBlock, so the severity is the
+// whole guarantee. A build that swaps itself in under the number that
+// is already serving leaves nobody — not the update card, not the
+// operator reading `version`, not a rollback — able to say what is
+// actually running.
+func TestSameVersionIsFatalNotForceable(t *testing.T) {
+	running := BinaryInfo{MainModule: "x/app", AppName: "app", AppVersion: "0.1.194", WickVersion: "v1.9.0"}
+	candidate := running
+	candidate.BuildTime = "2026-09-13T09:28:34Z" // a different build, same number
+
+	findings := CompareBinaries(candidate, running, runtime.GOOS, runtime.GOARCH)
+	if got := Worst(findings); got != SevFatal {
+		t.Fatalf("worst severity = %v, want SevFatal (--force must not reach it)", got)
+	}
+	var detail string
+	for _, f := range findings {
+		if f.Label == "version" {
+			detail = f.Detail
+		}
+	}
+	if !strings.Contains(detail, "0.1.195") {
+		t.Errorf("finding = %q, want it to name the next acceptable version 0.1.195", detail)
+	}
 }

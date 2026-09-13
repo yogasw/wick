@@ -62,9 +62,9 @@ Add `--wait` when a script needs the confirmation — it blocks until the succes
 
 Identity comes from the candidate's embedded build info — the module graph plus the `-X` ldflags `wick build` bakes in. The file is never executed to identify it: running an unknown binary is self-defeating when the whole question is whether it is what you think it is.
 
-- **FATAL, no override** — built for another OS or architecture, or nothing in its module graph depends on wick. A wrong-architecture binary in place is a crash-loop (`status=203/EXEC`) that the service manager retries forever.
+- **FATAL, no override** — built for another OS or architecture, or nothing in its module graph depends on wick. A wrong-architecture binary in place is a crash-loop (`status=203/EXEC`) that the service manager retries forever. Also the **same version as the running binary**: a different build wearing the same number makes the update card, `version`, a bug report and the rollback you reach for next all lie about what is serving. The refusal names the smallest version that would be accepted (`0.1.194 -> 0.1.195`). There is no `--force` for it — bump the version.
 - **BLOCK, `--force` to proceed** — a different main module, a different `BuildAppName` (that app has its own data dir, unit and paths), or a version older than the one running.
-- **WARN** — same version as the running binary, or a wick resolved through a local `replace` tree instead of a released tag.
+- **WARN** — a wick resolved through a local `replace` tree instead of a released tag.
 
 Two gates sit beside the identity check:
 
