@@ -84,7 +84,7 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 templ pendingSwapBanner() {
 	<div id="wick-swap-banner" class="hidden border-b border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-navy-800">
 		<div class="mx-auto flex w-full max-w-container flex-wrap items-center gap-x-3 gap-y-1 px-6 py-2 text-sm">
-			<span class="font-medium text-black-900 dark:text-white-100">Update waiting to be applied</span>
+			<span id="wick-swap-banner-title" class="font-medium text-black-900 dark:text-white-100">Update waiting to be applied</span>
 			<span id="wick-swap-banner-versions" class="font-mono text-xs text-black-900 dark:text-white-100"></span>
 			<span id="wick-swap-banner-waiting" class="font-mono text-xs text-black-700 dark:text-black-600"></span>
 			<span id="wick-swap-banner-error" class="hidden font-mono text-xs text-neg-400"></span>
@@ -102,6 +102,7 @@ templ pendingSwapBanner() {
 		// #sys-live at this point always missed it — which is why the banner
 		// followed you onto the detail page.
 		function onDetailPage() { return !!document.getElementById('sys-live'); }
+		var titleEl = document.getElementById('wick-swap-banner-title');
 		var versionsEl = document.getElementById('wick-swap-banner-versions');
 		var waitingEl = document.getElementById('wick-swap-banner-waiting');
 		var errorEl = document.getElementById('wick-swap-banner-error');
@@ -120,7 +121,14 @@ templ pendingSwapBanner() {
 			}
 			return '';
 		}
-		function paintAuto() { if (autoEl) autoEl.textContent = autoText(); }
+		function handingOver() { return autoState === 'handing_over'; }
+		function paintAuto() {
+			if (autoEl) autoEl.textContent = autoText();
+			// Same two titles the Software Update card uses. A banner still
+			// saying "waiting to be applied" while the successor is already
+			// booting describes a state that has passed.
+			if (titleEl) titleEl.textContent = handingOver() ? 'Swapping to the new build' : 'Update waiting to be applied';
+		}
 		setInterval(function () {
 			if (autoState === 'handing_over') autoElapsed++;
 			if (autoLeft > 0) autoLeft--;
@@ -134,23 +142,35 @@ templ pendingSwapBanner() {
 			el.classList.toggle('hidden', !pending);
 			if (!pending) return;
 			if (versionsEl) versionsEl.textContent = (sw.from || '—') + '  →  ' + (sw.to || '—');
-			if (waitingEl) {
-				var busy = (d.busy_label && d.busy_label.length) ? d.busy_label : (d.busy || []);
-				waitingEl.textContent = busy.length
-					? '· waiting for ' + busy.join(', ')
-					: '· nothing running — it would swap straight away';
-			}
-			// A handover that was attempted and failed leaves the old process
-			// serving, which looks exactly like no attempt at all.
 			autoState = (d.auto_swap && d.auto_swap.state) || '';
 			autoElapsed = (d.auto_swap && d.auto_swap.elapsed_seconds) || 0;
-			autoLeft = autoState === 'handing_over'
+			autoLeft = handingOver()
 				? ((d.auto_swap && d.auto_swap.gives_up_in_seconds) || 0)
 				: ((d.auto_swap && d.auto_swap.next_check_in) || 0);
+			if (waitingEl) {
+				// The idle gate is what the swap is waiting ON, so it has
+				// nothing to say once the successor is booting — printing
+				// "nothing running, it would swap straight away" next to a
+				// handover already in flight reads as a swap that never
+				// started.
+				var busy = (d.busy_label && d.busy_label.length) ? d.busy_label : (d.busy || []);
+				waitingEl.textContent = handingOver()
+					? ''
+					: (busy.length
+						? '· waiting for ' + busy.join(', ')
+						: '· nothing running — it would swap straight away');
+			}
 			paintAuto();
+			// A handover that was attempted and failed leaves the old process
+			// serving, which looks exactly like no attempt at all — worth a
+			// line. But only while it is still the last word: once a new
+			// handover is under way, or the retry is being counted down, the
+			// live state says it better, and a red "last attempt failed"
+			// beside it reads as THIS attempt failing.
 			var lh = d.last_handover;
 			if (errorEl) {
-				var failed = !!(lh && lh.ok === false && lh.error);
+				var superseded = handingOver() || autoState === 'previous_draining';
+				var failed = !!(lh && lh.ok === false && lh.error) && !superseded;
 				errorEl.classList.toggle('hidden', !failed);
 				if (failed) errorEl.textContent = '· last attempt failed: ' + lh.error;
 			}
