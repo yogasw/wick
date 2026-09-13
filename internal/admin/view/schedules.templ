@@ -1,0 +1,432 @@
+package view
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	"net/url"
+	"strconv"
+	"strings"
+)
+
+// ScheduleAdminRow is one scheduled message on the admin page. Identity is
+// the point of this screen, so OwnerLabel / RunAsLabel are always rendered —
+// including when they are empty, which is the state worth noticing.
+type ScheduleAdminRow struct {
+	ID          string
+	Message     string
+	Kind        string
+	Status      string
+	Cron        string
+	NextRunAt   string
+	// NextRunLabel is the short, human form of NextRunAt ("13 Sep 10:30").
+	// The full timestamp stays in NextRunAt for the tooltip — a column of
+	// RFC3339 strings is what pushed this table into a sideways scroll.
+	NextRunLabel string
+	SessionID   string
+	SessionMode string
+	ProjectID   string
+	ProjectName string
+	CreatedBy   string
+	OwnerUserID string
+	OwnerLabel  string
+	// RunAsUserID is the explicit admin override, empty when the schedule
+	// simply runs as its owner.
+	RunAsUserID string
+	// RunAs is what the runner will actually use, and RunAsLabel its display
+	// name. Empty means the fire is attached to nobody.
+	RunAs      string
+	RunAsLabel string
+}
+
+// ScheduleUserOption is one entry in the "Run as" picker.
+type ScheduleUserOption struct {
+	ID    string
+	Label string
+}
+
+// scheduleScopeLabel describes where a fire lands, in the terms the schedule
+// itself uses: a project job mints or reuses a session per fire, while a
+// session-scoped row always nudges the same conversation.
+func scheduleScopeLabel(row ScheduleAdminRow) string {
+	switch row.SessionMode {
+	case "new":
+		return "new session per fire"
+	case "template":
+		return "shared session per template"
+	default:
+		return "session " + row.SessionID
+	}
+}
+
+func scheduleCadenceLabel(row ScheduleAdminRow) string {
+	if row.Cron != "" {
+		return row.Cron
+	}
+	if row.Kind == "recurring" {
+		return "recurring"
+	}
+	return "one-shot"
+}
+
+// scheduleShortID trims a schedule id to its recognisable head. The full id is
+// 40 characters of uuid that pushed the table into a horizontal scroll; the
+// prefix is what anyone actually reads, and the title carries the rest.
+func scheduleShortID(id string) string {
+	if len(id) > 14 {
+		return id[:14] + "…"
+	}
+	return id
+}
+
+func scheduleMessageExcerpt(msg string) string {
+	msg = strings.TrimSpace(strings.ReplaceAll(msg, "\n", " "))
+	if r := []rune(msg); len(r) > 56 {
+		return string(r[:56]) + "…"
+	}
+	return msg
+}
+
+
+// ScheduleAdminVM is the whole page: the rows for the CURRENT filter and page,
+// plus the state needed to render the controls and keep them sticky across
+// navigation.
+type ScheduleAdminVM struct {
+	Rows  []ScheduleAdminRow
+	Users []ScheduleUserOption
+	// Status is the active filter — "live" (default), "all", or a concrete
+	// status like "done". Live is the default because a finished schedule can
+	// no longer run as the wrong user, so it is never the thing to act on.
+	Status string
+	Query  string
+	// Counts is per-filter totals over EVERY schedule, so a tab still says how
+	// much sits behind it while you are looking at another one.
+	Counts     map[string]int
+	Page       int
+	Pages      int
+	Total      int
+	PageSize   int
+	Configured bool
+}
+
+// scheduleFilterHref keeps the search text while switching tabs, and resets to
+// page 1 — a filter change makes the old page number meaningless.
+func scheduleFilterHref(status, query string) templ.SafeURL {
+	u := "/admin/schedule?status=" + url.QueryEscape(status)
+	if query != "" {
+		u += "&q=" + url.QueryEscape(query)
+	}
+	return templ.SafeURL(u)
+}
+
+// schedulePageHref moves between pages without losing the filter or the search.
+func schedulePageHref(status, query string, page int) templ.SafeURL {
+	u := "/admin/schedule?status=" + url.QueryEscape(status) + "&page=" + strconv.Itoa(page)
+	if query != "" {
+		u += "&q=" + url.QueryEscape(query)
+	}
+	return templ.SafeURL(u)
+}
+
+// scheduleFilterLabel renders a tab caption with its count, so the page says
+// how much is hidden rather than only what it is showing.
+func scheduleFilterLabel(vm ScheduleAdminVM, key, label string) string {
+	if n, ok := vm.Counts[key]; ok && n > 0 {
+		return label + " (" + strconv.Itoa(n) + ")"
+	}
+	return label
+}
+
+// scheduleRangeLabel describes the slice on screen: "26–50 of 214".
+func scheduleRangeLabel(vm ScheduleAdminVM) string {
+	if vm.Total == 0 {
+		return "0"
+	}
+	from := (vm.Page-1)*vm.PageSize + 1
+	to := from + len(vm.Rows) - 1
+	return strconv.Itoa(from) + "–" + strconv.Itoa(to) + " of " + strconv.Itoa(vm.Total)
+}
+
+// SchedulesAdminPage lists every scheduled message with the identity its
+// fires run as, and lets an admin re-point that identity.
+//
+// The "runs as nobody" case is called out rather than left blank: such a
+// schedule falls back to wick's internal principal, which carries no access
+// tags, so it silently reaches less than the person who created it. That is
+// the failure this page is meant to make obvious at a glance.
+templ SchedulesAdminPage(vm ScheduleAdminVM, user *entity.User) {
+	@AdminLayout("Admin · Schedules", "schedule", user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<div>
+				<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Schedules</h1>
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+					Every scheduled message, and the user its fires run as. A schedule inherits its
+					owner&#39;s access — change <span class="font-medium">Run as</span> only when a job
+					genuinely needs somebody else&#39;s reach.
+				</p>
+			</div>
+			@scheduleControls(vm)
+			if !vm.Configured {
+				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
+					Scheduling is not configured on this instance.
+				</div>
+			} else if len(vm.Rows) == 0 {
+				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
+					if vm.Query != "" {
+						No schedule matches &#34;{ vm.Query }&#34; in this filter.
+					} else {
+						Nothing here — try another filter.
+					}
+				</div>
+			} else {
+				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+					<table class="w-full table-fixed text-sm">
+						<thead>
+							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-left text-xs uppercase tracking-wide text-black-800 dark:text-black-600">
+								<th style="width:34%" class="px-4 py-3 font-medium">Schedule</th>
+								<th style="width:13%" class="px-4 py-3 font-medium">Project</th>
+								<th style="width:12%" class="px-4 py-3 font-medium">Next run</th>
+								<th style="width:16%" class="px-4 py-3 font-medium">Owner</th>
+								<th style="width:25%" class="px-4 py-3 font-medium">Run as</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, row := range vm.Rows {
+								@scheduleAdminRow(row, vm.Users)
+							}
+						</tbody>
+					</table>
+				</div>
+				@schedulePager(vm)
+			}
+		</main>
+	}
+}
+
+templ scheduleAdminRow(row ScheduleAdminRow, users []ScheduleUserOption) {
+	// The whole ROW is the target. Making only the title clickable meant aiming
+	// at a few words in a wide row; everything here describes one schedule, so
+	// everything here should open it. The guard keeps real controls working —
+	// a click that landed on the form inside the row is not a request to open
+	// a dialog on top of it.
+	<tr
+		class="cursor-pointer border-b border-white-200 dark:border-navy-600/60 last:border-0 align-middle hover:bg-white-200 dark:hover:bg-navy-800"
+		onclick="if (event.target.closest('form,button,select,a,[data-modal]')) return; this.querySelector('[data-modal]').hidden = false"
+	>
+		<td class="px-4 py-2">
+			// Toggled by the `hidden` ATTRIBUTE, not a CSS variant. The first cut
+			// used `peer-checked:` and silently did nothing: Tailwind never emitted
+			// that variant into web/public/css/app.css, so the rule the markup
+			// depended on did not exist. `hidden` is plain HTML and cannot be
+			// purged away. The handlers walk the DOM instead of interpolating ids,
+			// so they stay static strings templ is happy to render.
+			<div class="truncate text-black-900 dark:text-white-100">{ scheduleMessageExcerpt(row.Message) }</div>
+			@scheduleDetailModal(row, users)
+			<div class="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-black-800 dark:text-black-600">
+				<code class="font-mono" title={ row.ID }>{ scheduleShortID(row.ID) }</code>
+				<span>·</span>
+				<span>{ scheduleCadenceLabel(row) }</span>
+				<span>·</span>
+				<span>{ row.Status }</span>
+			</div>
+		</td>
+		<td class="px-4 py-2 truncate text-black-800 dark:text-black-600" title={ row.ProjectName }>
+			if row.ProjectName != "" {
+				{ row.ProjectName }
+			} else if row.ProjectID != "" {
+				<code class="font-mono text-xs">{ row.ProjectID }</code>
+			} else {
+				<span class="text-xs">—</span>
+			}
+		</td>
+		<td class="px-4 py-2 whitespace-nowrap text-xs text-black-800 dark:text-black-600" title={ row.NextRunAt }>
+			if row.NextRunLabel != "" {
+				{ row.NextRunLabel }
+			} else {
+				—
+			}
+		</td>
+		<td class="px-4 py-2 truncate text-black-800 dark:text-black-600" title={ row.OwnerLabel }>
+			if row.OwnerLabel != "" {
+				{ row.OwnerLabel }
+			} else {
+				<span class="text-xs italic">unowned</span>
+			}
+		</td>
+		<td class="px-4 py-2">
+			if row.RunAs == "" {
+				<span class="text-xs text-amber-600 dark:text-amber-400">no identity</span>
+			} else {
+				<span class="truncate text-black-900 dark:text-white-100">{ row.RunAsLabel }</span>
+				if row.RunAsUserID != "" {
+					<span class="ml-1 rounded-full bg-white-300 dark:bg-navy-800 px-1.5 py-0.5 text-xs text-black-800 dark:text-black-600">override</span>
+				}
+			}
+		</td>
+	</tr>
+}
+
+// scheduleControls is the filter row + search box. Both are plain links and a
+// GET form: the state lives in the URL, so a filtered view can be shared or
+// bookmarked, and the back button behaves.
+templ scheduleControls(vm ScheduleAdminVM) {
+	<div class="mt-6 flex flex-wrap items-center gap-3">
+		<div class="flex flex-wrap items-center gap-1 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-1">
+			@scheduleFilterTab(vm, "live", "Live")
+			@scheduleFilterTab(vm, "done", "Done")
+			@scheduleFilterTab(vm, "failed", "Failed")
+			@scheduleFilterTab(vm, "cancelled", "Cancelled")
+			@scheduleFilterTab(vm, "all", "All")
+		</div>
+		<form method="GET" action="/admin/schedule" class="flex items-center gap-2 md:ml-auto">
+			<input type="hidden" name="status" value={ vm.Status }/>
+			<input
+				type="search"
+				name="q"
+				value={ vm.Query }
+				placeholder="Search message, id, project, user…"
+				class="w-64 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-1.5 text-sm text-black-900 dark:text-white-100 placeholder:text-black-600"
+			/>
+			<button
+				type="submit"
+				class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-sm text-black-900 dark:text-white-100 hover:border-green-400 transition-colors"
+			>Search</button>
+			if vm.Query != "" {
+				<a href={ scheduleFilterHref(vm.Status, "") } class="text-sm text-black-800 dark:text-black-600 hover:underline">Clear</a>
+			}
+		</form>
+	</div>
+}
+
+templ scheduleFilterTab(vm ScheduleAdminVM, key string, label string) {
+	<a
+		href={ scheduleFilterHref(key, vm.Query) }
+		class={ "rounded-md px-3 py-1.5 text-sm transition-colors",
+			templ.KV("bg-white-100 dark:bg-navy-700 text-black-900 dark:text-white-100 shadow-sm font-medium", vm.Status == key),
+			templ.KV("text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100", vm.Status != key) }
+	>{ scheduleFilterLabel(vm, key, label) }</a>
+}
+
+// schedulePager is rendered even on a single page — the range label is how you
+// tell "this is everything" from "this is the first 25 of 214".
+templ schedulePager(vm ScheduleAdminVM) {
+	<div class="mt-4 flex flex-wrap items-center gap-3 text-sm text-black-800 dark:text-black-600">
+		<span>Showing { scheduleRangeLabel(vm) }</span>
+		if vm.Pages > 1 {
+			<div class="ml-auto flex items-center gap-2">
+				if vm.Page > 1 {
+					<a href={ schedulePageHref(vm.Status, vm.Query, vm.Page-1) } class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 hover:border-green-400 transition-colors">Previous</a>
+				}
+				<span>Page { strconv.Itoa(vm.Page) } of { strconv.Itoa(vm.Pages) }</span>
+				if vm.Page < vm.Pages {
+					<a href={ schedulePageHref(vm.Status, vm.Query, vm.Page+1) } class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 hover:border-green-400 transition-colors">Next</a>
+				}
+			</div>
+		}
+	</div>
+}
+
+// scheduleDetailModal is the full record behind a row: the whole message plus
+// the fields the table had to truncate or drop to stay one screen wide.
+//
+// Rendered inline per row and toggled by its sibling checkbox — no JS, and no
+// second request, so opening it cannot fail or lag.
+templ scheduleDetailModal(row ScheduleAdminRow, users []ScheduleUserOption) {
+	<div data-modal hidden style="position:fixed;inset:0;z-index:50">
+		<div
+			style="position:absolute;inset:0;background:rgba(0,0,0,.6);cursor:pointer"
+			onclick="this.closest('[data-modal]').hidden = true"
+		></div>
+		<div
+			style="position:relative;max-width:42rem;width:calc(100% - 2rem);margin:4rem auto;max-height:80vh;overflow:auto"
+			class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-lg"
+		>
+			<div class="flex items-start gap-4">
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Schedule detail</h2>
+				<button
+					type="button"
+					class="ml-auto rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 text-sm text-black-900 dark:text-white-100 hover:border-green-400"
+					onclick="this.closest('[data-modal]').hidden = true"
+				>Close</button>
+			</div>
+			<dl style="display:grid;grid-template-columns:9rem 1fr;gap:.5rem 1rem" class="mt-4 text-sm">
+				@scheduleDetailField("ID", row.ID)
+				@scheduleDetailField("Status", row.Status)
+				@scheduleDetailField("Cadence", scheduleCadenceLabel(row))
+				@scheduleDetailField("Next run", row.NextRunAt)
+				@scheduleDetailField("Target", scheduleScopeLabel(row))
+				@scheduleDetailField("Project", scheduleDetailProject(row))
+				@scheduleDetailField("Owner", scheduleDetailOwner(row))
+				@scheduleDetailField("Runs as", scheduleDetailRunAs(row))
+				@scheduleDetailField("Created by", row.CreatedBy)
+			</dl>
+			// Editable here too: the modal is where someone has just read enough
+			// to decide, and sending them back to a narrow table cell to act on
+			// that decision is the wrong way round.
+			<div class="mt-4">
+				<div class="text-xs uppercase tracking-wide text-black-800 dark:text-black-600">Change who it runs as</div>
+				<form
+					action={ templ.SafeURL("/admin/schedule/" + row.ID + "/run-as") }
+					method="POST"
+					class="mt-1 flex items-center gap-2"
+				>
+					<select
+						name="run_as_user_id"
+						data-initial={ row.RunAsUserID }
+						onchange="this.nextElementSibling.hidden = this.value === this.dataset.initial"
+						class="min-w-0 flex-1 rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-1 text-sm text-black-900 dark:text-white-100"
+					>
+						<option value="" selected?={ row.RunAsUserID == "" }>Owner (default)</option>
+						for _, u := range users {
+							<option value={ u.ID } selected?={ row.RunAsUserID == u.ID }>{ u.Label }</option>
+						}
+					</select>
+					<button
+						type="submit"
+						hidden
+						class="shrink-0 rounded-lg border border-green-400 bg-green-100 dark:bg-green-900 px-3 py-1 text-sm text-green-700 dark:text-green-300 hover:border-green-500 transition-colors"
+					>Save</button>
+				</form>
+			</div>
+			<div class="mt-4">
+				<div class="text-xs uppercase tracking-wide text-black-800 dark:text-black-600">Message</div>
+				<pre class="mt-1 whitespace-pre-wrap break-words rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3 text-sm text-black-900 dark:text-white-100">{ row.Message }</pre>
+			</div>
+		</div>
+	</div>
+}
+
+templ scheduleDetailField(label string, value string) {
+	<dt class="text-black-800 dark:text-black-600">{ label }</dt>
+	<dd class="break-words font-mono text-xs text-black-900 dark:text-white-100">
+		if value != "" {
+			{ value }
+		} else {
+			—
+		}
+	</dd>
+}
+
+// scheduleDetailProject / Owner / RunAs render the same fallbacks the table
+// uses, so the modal never disagrees with the row that opened it.
+func scheduleDetailProject(row ScheduleAdminRow) string {
+	if row.ProjectName != "" {
+		return row.ProjectName + " (" + row.ProjectID + ")"
+	}
+	return row.ProjectID
+}
+
+func scheduleDetailOwner(row ScheduleAdminRow) string {
+	if row.OwnerUserID == "" {
+		return "unowned"
+	}
+	return row.OwnerLabel + " (" + row.OwnerUserID + ")"
+}
+
+func scheduleDetailRunAs(row ScheduleAdminRow) string {
+	if row.RunAs == "" {
+		return "nobody — falls back to the internal principal, which carries no access tags"
+	}
+	if row.RunAsUserID != "" {
+		return row.RunAsLabel + " (" + row.RunAsUserID + ") — admin override"
+	}
+	return row.RunAsLabel + " — the schedule's owner"
+}
