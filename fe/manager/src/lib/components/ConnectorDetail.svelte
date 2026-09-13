@@ -292,6 +292,7 @@
         oauth={data.oauth}
         enableSso={data.enable_sso}
         multiAccount={data.multi_account}
+        sharedAccounts={data.allow_others_see_accounts}
         onchanged={refresh}
       />
     {/if}

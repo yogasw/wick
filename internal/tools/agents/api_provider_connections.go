@@ -23,8 +23,17 @@ const connectionsUsageTimeout = 12 * time.Second
 // be tested without credential files or a live usage endpoint.
 type connectionsProbe interface {
 	configDir(t provider.Type, env []string) string
+	// identity names the account behind an instance, so instances
+	// sharing one login share one probe.
+	identity(t provider.Type, env []string) string
+	// usageSupported reports whether this type has a usage API at all.
+	usageSupported(t provider.Type) bool
 	account(t provider.Type, env []string) logintty.Account
 	usage(ctx context.Context, t provider.Type, env []string) ([]logintty.UsageWindow, error)
+	// credentialsChangedAt is when the account's stored credentials were
+	// last rewritten, so a cached failure can be retried once after a
+	// login was renewed. Zero when unknown.
+	credentialsChangedAt(t provider.Type, env []string) time.Time
 }
 
 // liveProbe is the production connectionsProbe backed by logintty.
@@ -34,63 +43,24 @@ func (liveProbe) configDir(t provider.Type, env []string) string {
 	return logintty.ConfigDir(t, env)
 }
 
+func (liveProbe) identity(t provider.Type, env []string) string {
+	return logintty.UsageIdentity(t, env)
+}
+
+func (liveProbe) credentialsChangedAt(t provider.Type, env []string) time.Time {
+	return logintty.CredentialsChangedAt(t, env)
+}
+
+func (liveProbe) usageSupported(t provider.Type) bool {
+	return logintty.SupportsUsage(t)
+}
+
 func (liveProbe) account(t provider.Type, env []string) logintty.Account {
 	return logintty.ReadAccount(t, env)
 }
 
 func (liveProbe) usage(_ context.Context, t provider.Type, env []string) ([]logintty.UsageWindow, error) {
 	return logintty.ReadUsage(t, env)
-}
-
-// usageCacheTTL is how long a usage probe's result is reused. The
-// numbers are rolling-window utilization percentages that move over
-// minutes, so a short cache keeps the badges honest while stopping a
-// page refresh (or several open tabs) from hammering the endpoint.
-const usageCacheTTL = 60 * time.Second
-
-// usageCache memoizes usage probes per credential dir.
-//
-// A transient failure is NOT cached — the next page load retries. An
-// ErrUsageUnsupported verdict IS cached: "this provider type has no
-// usage API" is a property of the build, not a condition that clears.
-type usageCache struct {
-	ttl time.Duration
-	mu  sync.Mutex
-	m   map[string]usageCacheEntry
-}
-
-type usageCacheEntry struct {
-	windows []logintty.UsageWindow
-	err     error
-	at      time.Time
-}
-
-func newUsageCache(ttl time.Duration) *usageCache {
-	return &usageCache{ttl: ttl, m: map[string]usageCacheEntry{}}
-}
-
-// usageProbes is the process-wide cache backing the connections endpoint.
-var usageProbes = newUsageCache(usageCacheTTL)
-
-// get returns the cached windows for dir, calling fetch when the entry
-// is absent or older than the TTL. now is passed in so tests can move
-// time without sleeping.
-func (c *usageCache) get(dir string, now time.Time, fetch func() ([]logintty.UsageWindow, error)) ([]logintty.UsageWindow, error) {
-	c.mu.Lock()
-	e, ok := c.m[dir]
-	c.mu.Unlock()
-	if ok && now.Sub(e.at) < c.ttl {
-		return e.windows, e.err
-	}
-
-	windows, err := fetch()
-	if err != nil && !errors.Is(err, logintty.ErrUsageUnsupported) {
-		return nil, err // transient — leave any prior entry to expire on its own
-	}
-	c.mu.Lock()
-	c.m[dir] = usageCacheEntry{windows: windows, err: err, at: now}
-	c.mu.Unlock()
-	return windows, err
 }
 
 // usageWindowDTO is one rate-limit window on the wire.
@@ -113,9 +83,29 @@ type providerConnectionDTO struct {
 	AuthMethod string `json:"auth_method,omitempty"`
 	// UsageSupported is false for provider types with no usage API
 	// (codex/gemini today) — a different state from a failed fetch.
-	UsageSupported bool             `json:"usage_supported"`
-	UsageErr       string           `json:"usage_err,omitempty"`
-	Windows        []usageWindowDTO `json:"windows,omitempty"`
+	UsageSupported bool `json:"usage_supported"`
+	// UsagePending is true while the first reading for this account is
+	// still being fetched — the probe is paced, so a cold page can
+	// paint before the numbers arrive. Not an error: the badge fills in
+	// on a later poll.
+	UsagePending bool `json:"usage_pending,omitempty"`
+	// UsageChecking is true while a probe for this account is in
+	// flight, so the card can say it is working rather than looking
+	// frozen on a number that is deliberately not refetched per paint.
+	UsageChecking bool   `json:"usage_checking,omitempty"`
+	UsageErr      string `json:"usage_err,omitempty"`
+	// UsageFetchedAt is when this reading was actually taken upstream,
+	// and UsageAgeS the same thing as seconds-ago so the card can say
+	// "cached 42s ago" without trusting client clock skew. Readings are
+	// shared per account and cached, so the page must show its age
+	// rather than implying every paint is a fresh call.
+	UsageFetchedAt string `json:"usage_fetched_at,omitempty"`
+	UsageAgeS      int    `json:"usage_age_s,omitempty"`
+	// UsageNextS is how many seconds until the next probe is allowed
+	// (TTL when healthy, backoff after a failure). Negative never
+	// happens — it clamps at 0, meaning "due on the next poll".
+	UsageNextS int              `json:"usage_next_s,omitempty"`
+	Windows    []usageWindowDTO `json:"windows,omitempty"`
 }
 
 // ProviderConnectionsResponse is GET /api/providers/connections.
@@ -126,54 +116,58 @@ type ProviderConnectionsResponse struct {
 // collectConnections reads account + usage for every instance that keeps
 // credentials on disk.
 //
-// Account comes from local files and is cheap. Usage is a remote HTTP
-// call, so it is probed once per distinct config dir and fanned out:
-// several instances commonly point at one credential dir (same account,
-// different flags), and the providers list would otherwise fire one
-// request per card on every page load. Probes also go through cache, so
-// repeated loads inside the TTL cost nothing.
+// Account comes from local files and is cheap, so it is read per
+// instance. Usage is a remote call against a rate-limited endpoint, so
+// it is asked for ONCE PER ACCOUNT and served from usageCache: probes
+// are deduped, single-flighted, paced apart and backed off on failure
+// (see usage_probe.go). Types with no usage API never reach the cache.
 func collectConnections(ctx context.Context, instances []provider.Instance, p connectionsProbe, cache *usageCache) []providerConnectionDTO {
 	type slot struct {
 		ins provider.Instance
-		dir string
+		key string // account identity, "" when this type has no usage API
 	}
 	slots := make([]slot, 0, len(instances))
-	// Keep the first instance seen per dir as that dir's usage probe;
-	// its env is representative because the dir is what the probe reads.
+	// Keep the first instance seen per account as that account's probe;
+	// its env is representative because the credentials are what the
+	// probe reads, and instances sharing a key share those credentials.
 	probeEnv := map[string][]string{}
 	probeType := map[string]provider.Type{}
 	for _, ins := range instances {
-		dir := p.configDir(ins.Type, ins.Env)
-		if dir == "" {
+		if p.configDir(ins.Type, ins.Env) == "" {
 			continue // no on-disk credentials (wick) — nothing to report
 		}
-		slots = append(slots, slot{ins: ins, dir: dir})
-		if _, seen := probeEnv[dir]; !seen {
-			probeEnv[dir] = ins.Env
-			probeType[dir] = ins.Type
+		if !p.usageSupported(ins.Type) {
+			slots = append(slots, slot{ins: ins})
+			continue
+		}
+		key := p.identity(ins.Type, ins.Env)
+		slots = append(slots, slot{ins: ins, key: key})
+		if _, seen := probeEnv[key]; !seen {
+			probeEnv[key] = ins.Env
+			probeType[key] = ins.Type
 		}
 	}
 	if len(slots) == 0 {
 		return nil
 	}
 
-	type usageResult struct {
-		windows []logintty.UsageWindow
-		err     error
-	}
 	var mu sync.Mutex
-	results := make(map[string]usageResult, len(probeEnv))
+	results := make(map[string]usageView, len(probeEnv))
 
 	now := time.Now()
+
+	// The fan-out is over cache reads, not over network calls: the
+	// cache serialises the actual probes behind the pace gate, so this
+	// loop cannot burst the endpoint however many accounts exist.
 	g, gctx := errgroup.WithContext(ctx)
-	for dir := range probeEnv {
-		dir, env, t := dir, probeEnv[dir], probeType[dir]
+	for key := range probeEnv {
+		key, env, t := key, probeEnv[key], probeType[key]
 		g.Go(func() error {
-			w, err := cache.get(dir, now, func() ([]logintty.UsageWindow, error) {
+			v := cache.getWait(gctx, key, func() ([]logintty.UsageWindow, error) {
 				return p.usage(gctx, t, env)
-			})
+			}, p.credentialsChangedAt(t, env))
 			mu.Lock()
-			results[dir] = usageResult{windows: w, err: err}
+			results[key] = v
 			mu.Unlock()
 			return nil // a failed probe is reported per-row, never fatal
 		})
@@ -192,20 +186,44 @@ func collectConnections(ctx context.Context, instances []provider.Instance, p co
 			Org:        acc.Org,
 			AuthMethod: acc.AuthMethod,
 		}
-		res := results[s.dir]
-		switch {
-		case errors.Is(res.err, logintty.ErrUsageUnsupported):
+		if s.key == "" {
 			// Type has no usage API — not a failure, just nothing to show.
-		case res.err != nil:
-			dto.UsageSupported = true
-			dto.UsageErr = res.err.Error()
-		default:
-			dto.UsageSupported = true
-			dto.Windows = usageWindowDTOs(res.windows)
+			out = append(out, dto)
+			continue
 		}
+		dto.UsageSupported = true
+		res := results[s.key]
+		switch {
+		case errors.Is(res.Err, logintty.ErrUsageUnsupported):
+			dto.UsageSupported = false
+		case res.Err != nil:
+			dto.UsageErr = res.Err.Error()
+		case !res.Known:
+			dto.UsagePending = true
+		default:
+			dto.Windows = usageWindowDTOs(res.Windows)
+		}
+		dto.UsageChecking = res.Checking
+		applyUsageProvenance(&dto, res, now)
 		out = append(out, dto)
 	}
 	return out
+}
+
+// applyUsageProvenance stamps a row with when its reading was taken and
+// when the next probe is due, so the UI can show the cache honestly.
+func applyUsageProvenance(dto *providerConnectionDTO, v usageView, now time.Time) {
+	if !v.FetchedAt.IsZero() {
+		dto.UsageFetchedAt = v.FetchedAt.UTC().Format(time.RFC3339)
+		if age := v.Age(now); age > 0 {
+			dto.UsageAgeS = int(age.Round(time.Second) / time.Second)
+		}
+	}
+	if !v.NextAt.IsZero() {
+		if d := v.NextAt.Sub(now); d > 0 {
+			dto.UsageNextS = int(d.Round(time.Second) / time.Second)
+		}
+	}
 }
 
 func usageWindowDTOs(windows []logintty.UsageWindow) []usageWindowDTO {
@@ -232,7 +250,7 @@ func usageWindowDTOs(windows []logintty.UsageWindow) []usageWindowDTO {
 // and fast, while this one waits on a remote usage endpoint. Keeping
 // them apart lets the list paint immediately and fill the badges in.
 func apiProviderConnections(c *tool.Ctx) {
-	if notReady(c) || !requireAdmin(c) {
+	if notReady(c) || !requireProviderMenu(c) {
 		return
 	}
 	instances, err := provider.Load()
@@ -240,6 +258,11 @@ func apiProviderConnections(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// Same filter as the list: a badge for an instance the caller does
+	// not manage would leak both its existence and whose account runs it.
+	instances = manageableProviders(c, instances, func(ins provider.Instance) (provider.Type, string) {
+		return ins.Type, ins.Name
+	})
 	ctx, cancel := context.WithTimeout(c.Context(), connectionsUsageTimeout)
 	defer cancel()
 

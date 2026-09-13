@@ -39,7 +39,11 @@ func providersPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	// Not admin-only any more, but not open either: this page is the
+	// provider MANAGER's surface, so the caller must manage at least one
+	// instance (see provider_access.go). Everyone else never sees the
+	// menu entry in the first place.
+	if !requireProviderMenu(c) {
 		return
 	}
 	c.HTML(view.ProvidersSPA(view.ProvidersSPAVM{
@@ -239,7 +243,10 @@ func providerDetailPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	// Shell only; the API behind it (apiProviderDetail) enforces the
+	// per-instance manage grant and marks the payload read-only for
+	// non-admins.
+	if !requireProviderMenu(c) {
 		return
 	}
 	c.HTML(view.ProvidersSPA(view.ProvidersSPAVM{
@@ -254,7 +261,7 @@ func saveProviderDetail(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -303,7 +310,7 @@ func saveProviderConfigKey(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -377,7 +384,7 @@ func saveProviderAIRouter(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -417,7 +424,7 @@ func saveProviderInstance(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t := provider.Type(strings.TrimSpace(c.Form("type")))
@@ -460,7 +467,7 @@ func saveProviderInstance(c *tool.Ctx) {
 //
 // POST /providers/{type}/{name}/sync
 func syncProviderStorage(c *tool.Ctx) {
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	if globalSyncMgr == nil {
@@ -695,7 +702,7 @@ func deleteProviderInstance(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -720,7 +727,7 @@ func renameProviderInstance(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -807,7 +814,7 @@ func autoRescanEnabled() bool {
 // just installed a new CLI and doesn't want to wait for the 24h
 // auto-refresh.
 func rescanAllProviders(c *tool.Ctx) {
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Context(), 30*time.Second)
@@ -893,7 +900,7 @@ func enableProviderHook(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t, name, event, ok := parseHookParams(c)
@@ -953,7 +960,7 @@ func disableProviderHook(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t, name, event, ok := parseHookParams(c)
@@ -1051,7 +1058,7 @@ func checkProviderHook(c *tool.Ctx) {
 // rescanOneProvider re-probes a single instance. Used by the per-card
 // Rescan button so the user can refresh just the row they care about.
 func rescanOneProvider(c *tool.Ctx) {
-	if !requireAdmin(c) {
+	if !requireProviderAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -1447,6 +1454,23 @@ func liveProcessesVM() []view.LiveProcessVM {
 		})
 	}
 	return out
+}
+
+// providerChoicesFor is providerChoicesCached narrowed to the instances
+// THIS caller may choose.
+//
+// This is where the access tags actually bite: the project defaults
+// dropdown, the new-session composer, the channel and workflow provider
+// fields and the agent-profile picker all read their options from here
+// (one endpoint, several SPAs), so tagging an instance removes it from
+// every one of those lists at once. Untagged instances stay offered to
+// everyone, which is the default every install starts with.
+//
+// It is NOT the Providers menu — that one is manage-only.
+func providerChoicesFor(c *tool.Ctx) []view.ProviderChoiceVM {
+	return visibleProviders(c, providerChoicesCached(c.Context()), func(p view.ProviderChoiceVM) (provider.Type, string) {
+		return provider.Type(p.Type), p.Name
+	})
 }
 
 // providerChoicesCached reads provider status from the persistent cache

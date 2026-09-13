@@ -10,6 +10,10 @@ export type TreeNode = {
   // Full path from repo root (folders end without trailing slash).
   path: string;
   isDir: boolean;
+  // A leaf that IS a directory: git reported the whole folder as one
+  // change (a nested repo it will not descend into). It carries a change
+  // like a file, but there is nothing inside it to open or diff.
+  dirEntry?: boolean;
   // Dirs: child nodes. Files: the underlying change.
   children?: TreeNode[];
   change?: FileChange;
@@ -19,7 +23,7 @@ type RawDir = {
   name: string;
   path: string;
   dirs: Map<string, RawDir>;
-  files: { name: string; change: FileChange }[];
+  files: { name: string; change: FileChange; dirEntry: boolean }[];
 };
 
 function newDir(name: string, path: string): RawDir {
@@ -30,7 +34,12 @@ function newDir(name: string, path: string): RawDir {
 export function buildTree(changes: FileChange[]): TreeNode[] {
   const root = newDir("", "");
   for (const ch of changes) {
-    const segs = ch.path.split("/");
+    // A folder-scoped entry may still arrive with the trailing slash git
+    // prints. Splitting that as-is ends in an empty segment, which used
+    // to render as a nameless blank row under the folder.
+    const dirEntry = ch.dir === true || ch.path.endsWith("/");
+    const segs = ch.path.replace(/\/+$/, "").split("/");
+    if (segs.length === 0 || segs[segs.length - 1] === "") continue;
     let cur = root;
     for (let i = 0; i < segs.length - 1; i++) {
       const seg = segs[i];
@@ -42,7 +51,7 @@ export function buildTree(changes: FileChange[]): TreeNode[] {
       }
       cur = next;
     }
-    cur.files.push({ name: segs[segs.length - 1], change: ch });
+    cur.files.push({ name: segs[segs.length - 1], change: ch, dirEntry });
   }
   return finalize(root).children ?? [];
 }
@@ -53,8 +62,9 @@ function finalize(dir: RawDir): TreeNode {
   const childDirs = [...dir.dirs.values()].map(finalize);
   const childFiles: TreeNode[] = dir.files.map((f) => ({
     name: f.name,
-    path: f.change.path,
+    path: f.change.path.replace(/\/+$/, ""),
     isDir: false,
+    dirEntry: f.dirEntry,
     change: f.change,
   }));
 

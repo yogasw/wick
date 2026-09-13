@@ -336,6 +336,10 @@ type AccessDefaults struct {
 	AllowOthersConnectSSO bool
 	MultiAccount          bool
 	AllowOthersConfigure  bool
+	// AllowOthersSeeAccounts starts the row as a shared account pool
+	// (every connected account visible to every user with tag access).
+	// Zero value keeps accounts private to whoever connected them.
+	AllowOthersSeeAccounts bool
 }
 
 // AllOps flattens the module's categorized operations into a single slice

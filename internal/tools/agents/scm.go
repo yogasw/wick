@@ -34,6 +34,7 @@ func registerSCM(r tool.Router) {
 	r.POST("/api/sessions/{id}/git/stage", gitStage)
 	r.POST("/api/sessions/{id}/git/unstage", gitUnstage)
 	r.POST("/api/sessions/{id}/git/discard", gitDiscard)
+	r.POST("/api/sessions/{id}/git/exclude", gitExclude)
 	r.POST("/api/sessions/{id}/git/commit", gitCommit)
 	r.POST("/api/sessions/{id}/git/branch/switch", gitBranchSwitch)
 	r.POST("/api/sessions/{id}/git/branch/create", gitBranchCreate)
@@ -568,6 +569,32 @@ func gitDiscard(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"status": "discarded"})
+}
+
+type excludeReq struct {
+	Repo  string   `json:"repo"`
+	Paths []string `json:"paths"`
+}
+
+// gitExclude hides paths from git without deleting anything, by writing
+// them into .git/info/exclude. It is the way out for a folder this repo
+// should not be tracking and cannot remove — a clone that landed inside
+// the checkout.
+func gitExclude(c *tool.Ctx) {
+	var req excludeReq
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	dir, ok := resolveBodyRepo(c, req.Repo)
+	if !ok {
+		return
+	}
+	if err := scm.Exclude(c.Context(), dir, req.Paths); err != nil {
+		gitErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"status": "excluded"})
 }
 
 func gitCommit(c *tool.Ctx) {

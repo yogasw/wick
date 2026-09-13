@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,5 +66,132 @@ func TestReadUsageUnsupportedTypes(t *testing.T) {
 	}
 	if _, err := ReadUsage(provider.TypeWick, nil); err != ErrUsageUnsupported {
 		t.Fatalf("wick err = %v, want ErrUsageUnsupported", err)
+	}
+}
+
+// A 429 must be recognisable as a rate limit, not just an opaque status
+// string: callers back off on it instead of retrying like a timeout.
+func TestReadUsageClaudeRateLimited(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".credentials.json"),
+		`{"claudeAiOauth":{"accessToken":"tok-123"}}`)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	old := anthropicAPIBase
+	anthropicAPIBase = srv.URL
+	defer func() { anthropicAPIBase = old }()
+
+	_, err := ReadUsage(provider.TypeClaude, []string{"CLAUDE_CONFIG_DIR=" + dir})
+	if err == nil {
+		t.Fatal("want an error for 429")
+	}
+	if !IsRateLimited(err) {
+		t.Errorf("IsRateLimited = false for %v", err)
+	}
+	if got := RetryAfterOf(err); got != 2*time.Minute {
+		t.Errorf("RetryAfter = %v, want the header's 120s", got)
+	}
+	// The message stays the same shape as any other endpoint failure —
+	// the UI prints it verbatim.
+	if err.Error() != "usage endpoint: 429 Too Many Requests" {
+		t.Errorf("Error() = %q", err.Error())
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	if got := parseRetryAfter("90"); got != 90*time.Second {
+		t.Errorf("delay-seconds: %v", got)
+	}
+	// HTTP-date form.
+	future := time.Now().Add(2 * time.Minute).UTC().Format(http.TimeFormat)
+	if got := parseRetryAfter(future); got <= time.Minute || got > 2*time.Minute {
+		t.Errorf("http-date: %v, want ~2m", got)
+	}
+	// Junk, absent, and already-past values mean "no server guidance".
+	for _, in := range []string{"", "soon", "0", "-5", time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat)} {
+		if got := parseRetryAfter(in); got != 0 {
+			t.Errorf("parseRetryAfter(%q) = %v, want 0", in, got)
+		}
+	}
+}
+
+func TestSupportsUsage(t *testing.T) {
+	if !SupportsUsage(provider.TypeClaude) {
+		t.Error("claude has a usage API")
+	}
+	for _, ty := range []provider.Type{provider.TypeCodex, provider.TypeGemini, provider.TypeWick} {
+		if SupportsUsage(ty) {
+			t.Errorf("%s reported as having a usage API", ty)
+		}
+	}
+}
+
+// The identity is what makes "same account, two folders" cost ONE
+// request. It must merge on a provable match and never merge two
+// different logins.
+func TestUsageIdentityMergesSameAccount(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	for _, dir := range []string{a, b} {
+		writeFile(t, filepath.Join(dir, ".credentials.json"),
+			`{"claudeAiOauth":{"accessToken":"tok-`+filepath.Base(dir)+`"}}`)
+		writeFile(t, filepath.Join(dir, ".claude.json"),
+			`{"oauthAccount":{"emailAddress":"Dev@Abc.com"}}`)
+	}
+
+	ida := UsageIdentity(provider.TypeClaude, []string{"CLAUDE_CONFIG_DIR=" + a})
+	idb := UsageIdentity(provider.TypeClaude, []string{"CLAUDE_CONFIG_DIR=" + b})
+	if ida != idb {
+		t.Errorf("identities differ for one account: %q vs %q", ida, idb)
+	}
+	// Case-folded, so a differently-cased email is still one account.
+	if ida != "claude:email:dev@abc.com" {
+		t.Errorf("identity = %q", ida)
+	}
+}
+
+func TestUsageIdentitySplitsDifferentAccounts(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(a, ".claude.json"), `{"oauthAccount":{"emailAddress":"one@abc.com"}}`)
+	writeFile(t, filepath.Join(b, ".claude.json"), `{"oauthAccount":{"emailAddress":"two@abc.com"}}`)
+
+	if UsageIdentity(provider.TypeClaude, []string{"CLAUDE_CONFIG_DIR=" + a}) ==
+		UsageIdentity(provider.TypeClaude, []string{"CLAUDE_CONFIG_DIR=" + b}) {
+		t.Error("two logins share one identity — one account's usage would be shown for both")
+	}
+}
+
+// No email on disk: the token is the fallback, because an identical
+// token IS the same upstream subject (a copied credential dir).
+func TestUsageIdentityFallsBackToTokenThenDir(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	for _, dir := range []string{a, b} {
+		writeFile(t, filepath.Join(dir, ".credentials.json"), `{"claudeAiOauth":{"accessToken":"same-token"}}`)
+	}
+	ida := UsageIdentity(provider.TypeClaude, []string{"CLAUDE_CONFIG_DIR=" + a})
+	if ida != UsageIdentity(provider.TypeClaude, []string{"CLAUDE_CONFIG_DIR=" + b}) {
+		t.Error("same token must be one identity")
+	}
+	if ida == "" || ida == "claude:dir:"+a {
+		t.Errorf("identity = %q, want the token hash", ida)
+	}
+	// Nothing readable at all: the dir, which can split but never merge.
+	empty := t.TempDir()
+	if got := UsageIdentity(provider.TypeClaude, []string{"CLAUDE_CONFIG_DIR=" + empty}); got != "claude:dir:"+empty {
+		t.Errorf("identity = %q, want the dir fallback", got)
+	}
+}
+
+// The token must never leak into the key — it is a credential, and the
+// key ends up in logs and metrics.
+func TestUsageIdentityNeverContainsTheToken(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".credentials.json"), `{"claudeAiOauth":{"accessToken":"sk-ant-secret-value"}}`)
+	if got := UsageIdentity(provider.TypeClaude, []string{"CLAUDE_CONFIG_DIR=" + dir}); strings.Contains(got, "secret") {
+		t.Errorf("identity leaks the token: %q", got)
 	}
 }

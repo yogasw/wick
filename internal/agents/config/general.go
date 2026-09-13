@@ -83,7 +83,11 @@ type GeneralConfig struct {
 	AirouterEnabled           bool   `wick:"bool;group=AI Router|Embedded AI-router lifecycle (9router, OmniRoute, …). Access is managed at /admin/tools; per-router autostart + external-API toggles live on the AI Router page.;desc=Master switch for the embedded AI routers. Off = every dashboard, the /airouter/<id>/v1 API proxies, autostart, and all controls are disabled."`
 	TraceEventInlineKB        int    `wick:"number;group=Tracing|Limits on how trace-event payloads are stored on disk.;desc=Max KB for a trace event payload stored inline in the turn index. Events larger than this are written to a separate file and loaded on demand. Default: 10."`
 	TraceEventMaxKB           int    `wick:"number;group=Tracing;desc=Hard cap in KB for a single trace event payload file. Payloads exceeding this are truncated before write. 0 = no cap. Default: 512."`
-	AdminSeeAll               bool   `wick:"bool;group=Access|Visibility scope for admins.;desc=When on, admins see every project and every session (legacy behaviour). When off (default), admins are scoped like regular users: only projects granted via tags plus their own unscoped sessions. Ownerless sessions (no creator) are hidden from everyone while off."`
+	// The two Access knobs below are read through internal/pkg/adminscope,
+	// which every surface shares so "how far does an admin see" has exactly
+	// one answer per question. Field name = config key.
+	AdminSeeAllSessions   bool `wick:"bool;group=Access|What the admin role alone is allowed to see. One switch per surface: reading everyone's sessions and using everyone's connected accounts are different decisions.;desc=Sessions and projects (also data tables and the scheduled-message monitor). On: an admin sees every project and every session. Off (default): an admin is scoped like a regular user — projects granted by tag, plus their own sessions. Sessions with no recorded creator are hidden from everyone. Does not affect connectors."`
+	AdminSeeAllConnectors bool `wick:"bool;default=true;group=Access;desc=Connector instances and the accounts connected to them, in the dashboard and in wick_list. On (default): an admin sees every instance and every connected account. Off: an admin is scoped like a regular user — instances their tags reach, and only accounts they connected themselves or that were shared with them (a tag on the account, or the instance's 'Others can see connected accounts'). Owning an instance always shows its accounts. /admin/connectors lists everything either way."`
 
 	// HTML-artifact widget CSP. Artifacts are model-authored, so the
 	// default posture is fully sealed. WidgetMode is the ONE knob that
@@ -165,12 +169,12 @@ func DefaultGeneralConfig() GeneralConfig {
 		// a shared thread, without repeating a platform user ID into every
 		// turn on installs that have no use for one. The dashboard shows the
 		// full sender either way.
-		SenderVisibility: "name",
-		SystemPrompt:        systemprompt.DefaultSystemPrompt(),
-		WorkflowGuardMode:   "off",
-		TraceEventInlineKB:  10,
-		TraceEventMaxKB:     512,
-		AirouterEnabled:     true,
+		SenderVisibility:   "name",
+		SystemPrompt:       systemprompt.DefaultSystemPrompt(),
+		WorkflowGuardMode:  "off",
+		TraceEventInlineKB: 10,
+		TraceEventMaxKB:    512,
+		AirouterEnabled:    true,
 		// Memory guard ships OFF: an install that never opts in must behave
 		// byte-identically to one built before the feature existed. The four
 		// numeric limits stay zero here on purpose — their correct values

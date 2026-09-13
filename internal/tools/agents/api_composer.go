@@ -58,6 +58,11 @@ var builtinComposerCommands = []ComposerCommand{
 	// low|medium|high" as a message still works as a fallback: the wick engine
 	// intercepts it in-process.
 	{ID: "thinking", Label: "/thinking", Hint: "toggle reasoning on/off · set effort", Category: "Session", Action: "panel:thinking"},
+	// /usage shows how much of THIS session's provider account is spent.
+	// It opens a popover rather than sending a message, and reads the
+	// shared usage cache — a provider type with no usage API says so
+	// instead of showing empty bars.
+	{ID: "usage", Label: "/usage", Hint: "provider limits · session + weekly", Category: "Session", Action: "panel:usage"},
 }
 
 // apiComposerCommands handles GET /api/composer/commands — the `/` command menu:

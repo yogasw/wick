@@ -26,12 +26,26 @@ templ ConfigsTable(rows []entity.Config, actionBase string, _ string, _ string) 
 // cards. ConfigsTable is a thin alias kept for callers passing the legacy
 // editKey/cancelHref args (now unused — grouping made the two layouts one).
 templ ConfigsTableFull(rows []entity.Config, actionBase string) {
+	@configsTableBody(rows, actionBase, false)
+}
+
+// ConfigsTableCollapsed renders exactly like ConfigsTableFull but every group
+// card starts closed, whatever its group tag says. Used by pages with enough
+// groups that an all-expanded page is a scroll marathon — there, finding a
+// setting is a search-then-open job, not a read-top-to-bottom one.
+templ ConfigsTableCollapsed(rows []entity.Config, actionBase string) {
+	@configsTableBody(rows, actionBase, true)
+}
+
+// configsTableBody is the shared body of both table variants. forceCollapsed
+// closes every card regardless of the per-group `collapsed` flag.
+templ configsTableBody(rows []entity.Config, actionBase string, forceCollapsed bool) {
 	if len(rows) == 0 {
 		<p class="mt-4 text-sm text-black-700 dark:text-black-600">No configuration fields.</p>
 	} else {
 		<div class="mt-4 flex flex-col gap-3" data-configs-form data-action-base={ actionBase }>
 			for _, grp := range groupRows(rows) {
-				@fieldGroupCard(grp)
+				@fieldGroupCard(grp, forceCollapsed)
 			}
 			@configsSaveScript()
 			@pickerScript()
@@ -44,12 +58,19 @@ templ ConfigsTableFull(rows []entity.Config, actionBase string) {
 // the grid — so a dependent picker (reaction_channels) stays with its toggle
 // instead of being orphaned at the bottom of the page. Untitled groups use
 // the default "Configuration" heading.
-templ fieldGroupCard(grp fieldGroup) {
+templ fieldGroupCard(grp fieldGroup, forceCollapsed bool) {
 	<!-- A native <details> gives collapse/expand with zero JS; grp.Collapsed
 	     (group=Title|Desc|collapsed) omits `open` so the card starts closed.
 	     overflow-visible (not hidden) so a picker's absolute results dropdown can
-	     escape the card edge. -->
-	<details class="group/card rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm" open?={ !grp.Collapsed }>
+	     escape the card edge.
+	     data-cfg-group/data-group-title are the hooks a page-level search box
+	     filters on — the card is the unit shown or hidden by a query. -->
+	<details
+		class="group/card rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm"
+		data-cfg-group
+		data-group-title={ grp.Title }
+		open?={ !grp.Collapsed && !forceCollapsed }
+	>
 		<!-- summary rounds all corners when collapsed (rounded-xl) and only the
 		     top when open (group-open:rounded-b-none); the bottom border shows
 		     only when open so a collapsed card has no dangling divider line. -->

@@ -10,6 +10,7 @@
   import ProcessExplorer from "$lib/ProcessExplorer.svelte";
   import WrapperPanel from "$lib/WrapperPanel.svelte";
   import { humanBytes, humanBps, humanPct, humanDuration, clockTime, pctOf } from "$lib/format.js";
+  import Gauge from "$lib/components/Gauge.svelte";
   import type { MemoryReport, SeriesResponse } from "$lib/types.js";
 
   const base: string = (document.getElementById("app")?.dataset.base ?? "").replace(/\/$/, "");
@@ -132,6 +133,29 @@
   // Graded server-side (percentage AND absolute free together), because
   // percentage alone cries wolf: a 328 GB disk at 93% still has 22 GB
   // free and nothing is about to fail.
+  /* The gauge strokes with currentColor, so it needs the text-* twin of
+     the bar's bg-* tone. Same server-graded pressure either way. */
+  const diskArcTone = $derived.by(() => {
+    switch (report?.disk?.pressure) {
+      case "full":
+        return "text-red-600";
+      case "warn":
+        return "text-yellow-500";
+      default:
+        return "text-blue-600";
+    }
+  });
+
+  /* Memory has no server-side grade, so keep the ramp conservative: a
+     machine sitting at 80% of RAM is normal and should not be painted as
+     a problem. Only genuinely tight states change colour. */
+  const memTone = $derived.by(() => {
+    const pct = pctOf(usedBytes, report?.total_bytes ?? 0);
+    if (pct >= 95) return "text-red-600";
+    if (pct >= 85) return "text-yellow-500";
+    return "text-blue-600";
+  });
+
   const diskTone = $derived.by(() => {
     switch (report?.disk?.pressure) {
       case "full":
@@ -501,20 +525,24 @@
         Machine memory
       </p>
       {#if report?.machine_known}
-        <p class="mt-1 text-2xl font-bold text-black-900 dark:text-white-100">
-          {humanBytes(usedBytes)}
-          <span class="text-sm font-normal text-black-700 dark:text-black-600">
-            / {humanBytes(report.total_bytes ?? 0)}
-          </span>
-        </p>
-        <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-white-300 dark:bg-navy-600">
-          <div
-            class="h-full rounded-full bg-blue-600"
-            style="width: {pctOf(usedBytes, report.total_bytes ?? 0)}%"
-          ></div>
+        {@const memPct = pctOf(usedBytes, report.total_bytes ?? 0)}
+        <div class="mt-2 flex items-center gap-3">
+          <Gauge
+            pct={memPct}
+            tone={memTone}
+            label={`${Math.round(memPct)}% of machine memory used`}
+          />
+          <div class="min-w-0">
+            <p class="text-2xl font-bold leading-tight text-black-900 dark:text-white-100">
+              {humanBytes(usedBytes)}
+              <span class="text-sm font-normal text-black-700 dark:text-black-600">
+                / {humanBytes(report.total_bytes ?? 0)}
+              </span>
+            </p>
+          </div>
         </div>
-        <p class="mt-1 text-xs text-black-700 dark:text-black-600">
-          {humanBytes(report.available_bytes ?? 0)} available
+        <p class="mt-2 text-xs text-black-700 dark:text-black-600">
+          {humanBytes(report.available_bytes ?? 0)} available · {Math.max(0, Math.round(100 - memPct))}% free
         </p>
       {:else}
         <p class="mt-1 text-sm text-black-700 dark:text-black-600">unknown on this platform</p>
@@ -542,17 +570,26 @@
         Disk
       </p>
       {#if report?.disk?.known}
-        <p class="mt-1 text-2xl font-bold text-black-900 dark:text-white-100">
-          {humanBytes(report.disk.used_bytes)}
-          <span class="text-sm font-normal text-black-700 dark:text-black-600">
-            / {humanBytes(report.disk.total_bytes)}
-          </span>
-        </p>
-        <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-white-300 dark:bg-navy-600">
-          <div class="h-full rounded-full {diskTone}" style="width: {report.disk.used_pct}%"></div>
+        <div class="mt-2 flex items-center gap-3">
+          <Gauge
+            pct={report.disk.used_pct}
+            tone={diskArcTone}
+            label={`${Math.round(report.disk.used_pct)}% of disk used`}
+          />
+          <div class="min-w-0">
+            <p class="text-2xl font-bold leading-tight text-black-900 dark:text-white-100">
+              {humanBytes(report.disk.used_bytes)}
+              <span class="text-sm font-normal text-black-700 dark:text-black-600">
+                / {humanBytes(report.disk.total_bytes)}
+              </span>
+            </p>
+          </div>
         </div>
-        <p class="mt-1 truncate text-xs text-black-700 dark:text-black-600" title={report.disk.path}>
-          {humanBytes(report.disk.avail_bytes)} free · {report.disk.path}
+        <p class="mt-2 text-xs text-black-700 dark:text-black-600">
+          {humanBytes(report.disk.avail_bytes)} free · {Math.max(0, Math.round(100 - report.disk.used_pct))}% free
+        </p>
+        <p class="mt-0.5 truncate text-[11px] text-black-600 dark:text-black-700" title={report.disk.path}>
+          {report.disk.path}
         </p>
       {:else}
         <p class="mt-1 text-sm text-black-700 dark:text-black-600">unknown on this platform</p>

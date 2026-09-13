@@ -68,7 +68,29 @@
   let scrollParent: HTMLElement | null = null;
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const isEmpty = $derived(turns.length === 0 && !live && !typing.active);
+  /* An interrupted answer that the agent then finished is ONE answer.
+     When a turn is cut off — a process replaced, a spawn reaped, somebody
+     pressing stop — wick records what had been delivered, and the resumed
+     turn writes the answer again. Both are real records, and the reader saw
+     the same thought twice: once truncated, once complete.
+
+     Identical prefixes are already trimmed server-side, but a resume often
+     REWORDS its opening, and then nothing matches. So the rule here is about
+     shape, not words: an interrupted assistant turn whose very next turn is
+     also the assistant — with nothing from the user in between — was
+     superseded by it. The later turn IS the answer; the stub is dropped.
+
+     Deliberately narrow. A user message in between means the agent was
+     answering something new, and both turns stay. */
+  const shownTurns = $derived(
+    turns.filter((t, i) => {
+      if (!t.interrupted || t.role !== "assistant") return true;
+      const next = turns[i + 1];
+      return !next || next.role !== "assistant";
+    }),
+  );
+
+  const isEmpty = $derived(shownTurns.length === 0 && !live && !typing.active);
 
   // Same merge as ThreadMessage's persisted-turn trace: a long-running
   // live turn calling todo repeatedly shows one checklist with current
@@ -149,10 +171,10 @@
       <p class="text-xs text-black-600 dark:text-black-700">Send a message to start.</p>
     </div>
   {/if}
-  {#each turns as turn, i (turn.turn_id ? turn.turn_id + "-" + i : "turn-" + i)}
+  {#each shownTurns as turn, i (turn.turn_id ? turn.turn_id + "-" + i : "turn-" + i)}
     {@const label = turnDay(turn)}
     {@const dayKey = turnDayKey(turn)}
-    {@const prevKey = i === 0 ? "" : turnDayKey(turns[i - 1])}
+    {@const prevKey = i === 0 ? "" : turnDayKey(shownTurns[i - 1])}
     {#if label && dayKey !== prevKey}
       <div data-day-sep data-day-label={label} class="flex justify-center py-1.5">
         <span class="rounded-md bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm">{label}</span>

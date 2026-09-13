@@ -10,7 +10,7 @@ templ ConnectorsAdminPage(rows []ConnectorAdminRow, allTags []*entity.Tag, user 
 		{{ tagsJSON := tagsToJSON(allTags) }}
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Connector Instances</h1>
-			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Every connector row across all definitions. Disabling hides the row from MCP and the Postman-style test panel; access tags gate which non-admin users can see it. Edit credentials and operations on the per-instance settings page.</p>
+			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Every connector row across all definitions, with the OAuth accounts connected to each one listed underneath. Disabling hides the row from MCP and the Postman-style test panel; access tags gate which non-admin users can see it. A connected account is private to the user who connected it — tag the account to share that one identity with a team, or turn on &#34;Others can see connected accounts&#34; in the instance&#39;s Access policy to share the whole pool. Edit credentials and operations on the per-instance settings page.</p>
 			if len(rows) == 0 {
 				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
 					No connector instances yet. They are auto-seeded for every code-registered connector on first boot.
@@ -29,6 +29,9 @@ templ ConnectorsAdminPage(rows []ConnectorAdminRow, allTags []*entity.Tag, user 
 						<tbody>
 							for _, row := range rows {
 								@connectorAdminRowFragment(row, tagsJSON)
+								for _, acc := range row.Accounts {
+									@connectorAccountAdminRowFragment(row, acc, tagsJSON)
+								}
 							}
 						</tbody>
 					</table>
@@ -90,6 +93,8 @@ templ connectorAdminRowFragment(row ConnectorAdminRow, tagsJSON string) {
 					data-can-create="true"
 					data-disabled?={ row.Connector.Disabled }
 				></div>
+				<!-- Marker so the handler can tell "no tags selected" from "I could not read the body". -->
+				<input type="hidden" name="tags_submitted" value="1"/>
 				if !row.Connector.Disabled {
 					<button type="submit" class="mt-1 text-xs font-medium text-green-600 hover:underline">Save</button>
 				}
@@ -105,5 +110,61 @@ templ connectorAdminRowFragment(row ConnectorAdminRow, tagsJSON string) {
 				</a>
 			}
 		</td>
+	</tr>
+}
+
+// connectorAccountAdminRowFragment renders one connected OAuth account as a
+// sub-row of its connector instance: who connected it, and its own tag
+// picker. Tags on an account are the granular share — without one the
+// account is only visible to its owner (and admins).
+templ connectorAccountAdminRowFragment(row ConnectorAdminRow, acc ConnectorAccountAdminRow, tagsJSON string) {
+	{{ id := row.Connector.ID }}
+	{{ accID := acc.Account.ID }}
+	<tr
+		id={ "connector-account-" + accID }
+		class={ "border-b border-white-300 dark:border-navy-600 last:border-0 bg-white-200/50 dark:bg-navy-800/40",
+			templ.KV("opacity-60", row.Connector.Disabled) }
+	>
+		<td class="px-4 py-2.5">
+			<div class="flex items-center gap-3 pl-11">
+				<svg class="h-4 w-4 flex-shrink-0 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+					<circle cx="12" cy="7" r="4"></circle>
+				</svg>
+				<div>
+					<p class="font-medium text-black-900 dark:text-white-100">{ "@" + acc.Account.DisplayName }</p>
+					<p class="text-xs text-black-700 dark:text-black-600">
+						if acc.OwnerLabel != "" {
+							connected by { acc.OwnerLabel }
+						} else {
+							no owner recorded
+						}
+					</p>
+				</div>
+			</div>
+		</td>
+		<td class="px-4 py-2.5 align-top">
+			if row.Connector.AllowOthersSeeAccounts {
+				<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-800 dark:text-black-600" title="This instance shares every connected account with anyone who can see it.">Pool shared</span>
+			} else if len(acc.TagIDs) > 0 {
+				<span class="inline-flex items-center rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400" title="Users carrying one of the tags on the right can see and run as this account.">Shared by tag</span>
+			} else {
+				<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-800 dark:text-black-600" title="Only the user who connected it, the instance owner and admins can see this account.">Private</span>
+			}
+		</td>
+		<td class="px-4 py-2.5 align-top">
+			<form action={ templ.SafeURL("/admin/connectors/" + id + "/accounts/" + accID + "/tags") } method="POST" class="flex items-start gap-2">
+				<div
+					class="tag-picker w-full md:w-64"
+					data-tags={ tagsJSON }
+					data-selected={ strings.Join(acc.TagIDs, ",") }
+					data-can-create="true"
+				></div>
+				<!-- Marker so the handler can tell "no tags selected" from "I could not read the body". -->
+				<input type="hidden" name="tags_submitted" value="1"/>
+				<button type="submit" class="mt-1 text-xs font-medium text-green-600 hover:underline">Save</button>
+			</form>
+		</td>
+		<td class="px-4 py-2.5 text-right align-top"></td>
 	</tr>
 }

@@ -163,11 +163,11 @@ templ tokenRow(t entity.PersonalAccessToken, highlight bool) {
 			</code>
 		</td>
 		<td class="px-4 py-3 text-black-700 dark:text-black-600">
-			{ t.CreatedAt.Format("Jan 2, 2006") }
+			@ui.LocalTime(t.CreatedAt, ui.TimeFormatDate)
 		</td>
 		<td class="px-4 py-3 text-black-700 dark:text-black-600">
 			if t.LastUsedAt != nil {
-				{ t.LastUsedAt.Format("Jan 2, 2006 15:04") }
+				@ui.LocalTime(*t.LastUsedAt, ui.TimeFormatDateTime)
 			} else {
 				Never
 			}

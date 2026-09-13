@@ -19,9 +19,12 @@
     oauth: ConnectorOAuthMeta | null;
     enableSso: boolean;
     multiAccount: boolean;
+    /* Mirrors the row's allow_others_see_accounts policy — drives the note
+       explaining why this list may be shorter than the pool. */
+    sharedAccounts?: boolean;
     onchanged?: () => void;
   };
-  let { connectorKey, connectorId, accounts, operations, oauth, enableSso, multiAccount, onchanged }: Props = $props();
+  let { connectorKey, connectorId, accounts, operations, oauth, enableSso, multiAccount, sharedAccounts = false, onchanged }: Props = $props();
 
   let connecting = $state(false);
   let confirmId = $state("");
@@ -113,6 +116,11 @@
     </div>
     <p class="mt-1 text-sm text-black-800 dark:text-black-600">
       {oauth.display_name} accounts connected to this instance via OAuth.
+      {#if sharedAccounts}
+        Shared: every user with tag access sees and can run as all of them.
+      {:else}
+        Private: each account is only listed for the user who connected it (admins and the instance owner see all).
+      {/if}
     </p>
 
     {#if accounts.length === 0}

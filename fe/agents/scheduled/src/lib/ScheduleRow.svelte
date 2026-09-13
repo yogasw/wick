@@ -81,9 +81,28 @@
     <span class={"shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium " + statusBadgeCls(s.status)}>
       {s.paused ? "paused" : s.status}
     </span>
-    <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium bg-white-300 text-black-600 dark:bg-navy-700 dark:text-black-600">
-      by {s.created_by}
-    </span>
+    <!-- Whose access this runs with, not how the row was made. "by ai" said
+         only that an agent typed it; what decides whether the job can reach
+         anything is the identity its fires use. A schedule attached to nobody
+         falls back to the internal principal, which carries no access tags —
+         so that case is called out rather than left blank. -->
+    {#if s.effective_run_as}
+      <span
+        class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium bg-white-300 text-black-600 dark:bg-navy-700 dark:text-black-600"
+        title={"Runs with the access of " + (s.effective_run_as_name || s.effective_run_as) + (s.run_as_user_id ? " (admin override)" : "")}
+        data-testid="runas-badge"
+      >
+        runs as {s.effective_run_as_name || s.effective_run_as}{s.run_as_user_id ? " ⚑" : ""}
+      </span>
+    {:else}
+      <span
+        class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300"
+        title="No identity attached — the fire falls back to wick's internal principal, which carries no access tags."
+        data-testid="runas-badge"
+      >
+        no identity
+      </span>
+    {/if}
     {#if isProjectScoped(s)}
       <span
         class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"

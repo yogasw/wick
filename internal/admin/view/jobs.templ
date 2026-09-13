@@ -81,6 +81,8 @@ templ adminJobRow(row JobRow, tagsJSON string) {
 					data-can-create="false"
 					data-disabled="true"
 				></div>
+				<!-- Marker so the handler can tell "no tags selected" from "I could not read the body". -->
+				<input type="hidden" name="tags_submitted" value="1"/>
 			} else {
 				<form action={ templ.SafeURL("/admin/jobs/" + row.Job.Key + "/tags") } method="POST" class="flex items-start gap-2">
 					<div
@@ -90,6 +92,8 @@ templ adminJobRow(row JobRow, tagsJSON string) {
 						data-can-create="true"
 						data-disabled?={ row.Disabled }
 					></div>
+					<!-- Marker so the handler can tell "no tags selected" from "I could not read the body". -->
+					<input type="hidden" name="tags_submitted" value="1"/>
 					if !row.Disabled {
 						<button type="submit" class="mt-1 text-xs font-medium text-green-600 hover:underline">Save</button>
 					}

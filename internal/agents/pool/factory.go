@@ -133,7 +133,7 @@ type ClaudeFactory struct {
 	// Returning ok=false means "no real owner" and the caller falls back to
 	// MCPToken — an ownerless session must keep working rather than lose
 	// MCP entirely. nil = per-user identity disabled (fallback for all).
-	SessionMCPToken func(sessionID string) (token string, ok bool)
+	SessionMCPToken func(sessionID, callerUserID string) (token string, ok bool)
 
 	// InstanceOverride pins a specific Instance for every Build call,
 	// bypassing the provider.Find registry lookup. Tests use this to
@@ -315,7 +315,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			// Same per-session credential claude gets, so a codex spawn also
 			// reaches wick's tools as the human behind the session rather than
 			// having no wick surface at all.
-			tok := f.mcpTokenFor(opt.SessionID)
+			tok := f.mcpTokenFor(opt.SessionID, opt.CallerUserID)
 			if tok != f.MCPToken {
 				// Per-session credential: revocable when the process dies. The
 				// shared per-boot token is not, so it stays unreported.
@@ -332,7 +332,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		default:
 			// Mint ONCE: calling mcpTokenFor twice would issue two tokens
 			// and leak the one not handed to the spawner.
-			tok := f.mcpTokenFor(opt.SessionID)
+			tok := f.mcpTokenFor(opt.SessionID, opt.CallerUserID)
 			if tok != f.MCPToken {
 				// Per-session credential: revocable when the process dies.
 				// The shared per-boot token is not, so it stays unreported.
@@ -595,17 +595,34 @@ func sessionIdentityBlock(sessionID, channel, title string, titleCustom bool, ac
 	return b.String()
 }
 
-// mcpTokenFor picks the MCP credential for one spawn: a per-session token
-// naming the owning human when one can be minted, else the shared internal
-// token (synthetic admin).
+// mcpTokenFor picks the MCP credential for one spawn: the caller's own
+// identity when a human triggered it, the session owner's when nobody did,
+// else the shared internal token (synthetic admin).
 //
-// The fallback is deliberate, not lazy. Sessions predating ownership
-// tracking carry no UserID, and cron / system spawns have no human at all;
-// refusing to spawn them, or spawning them with no MCP access, would break
-// working setups to enforce an attribution nobody asked for there.
-func (f *ClaudeFactory) mcpTokenFor(sessionID string) string {
+// The caller comes FIRST, and that is the fix for a real hole. Minting by
+// session alone meant a spawn always carried the OWNER's access, so anyone
+// who could reach a session — a teammate in a shared Slack thread, say —
+// had their turn run with the owner's reach rather than their own. On an
+// admin's session that is a straight privilege escalation, and it was
+// invisible: nothing in the UI said whose access a turn was using.
+//
+// It also made RespawnOnCallerChange a no-op. That setting kills a live
+// process when a different user speaks, promising the new turn "runs under
+// that user's own identity" — but the replacement spawn was minted for the
+// owner again, so it paid for a lost process context and changed nothing.
+//
+// Falling back to the caller's own identity can only ever NARROW what a
+// spawn reaches, never widen it: a user is handed their own tags. The owner
+// fallback stays for spawns with no human behind them — a schedule fire, a
+// cron job — where there is no caller to be faithful to.
+//
+// The internal-token fallback below is deliberate, not lazy. Sessions
+// predating ownership tracking carry no UserID and system spawns have no
+// human at all; refusing to spawn them, or spawning them with no MCP access,
+// would break working setups to enforce an attribution nobody asked for.
+func (f *ClaudeFactory) mcpTokenFor(sessionID, callerUserID string) string {
 	if f.SessionMCPToken != nil && sessionID != "" {
-		if tok, ok := f.SessionMCPToken(sessionID); ok && tok != "" {
+		if tok, ok := f.SessionMCPToken(sessionID, callerUserID); ok && tok != "" {
 			return tok
 		}
 	}

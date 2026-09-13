@@ -49,6 +49,12 @@ type AgentsLayoutVM struct {
 	// master switch is on AND the caller may access it (admin) — everyone
 	// loses it when the AI routers are disabled.
 	AirouterVisible bool
+
+	// ProvidersVisible controls the "Providers" sidebar entry. True for
+	// admins, and for anyone holding a manage tag on at least one
+	// provider instance. A menu that opens onto an empty page is worse
+	// than no menu, so the entry is hidden rather than shown-and-empty.
+	ProvidersVisible bool
 }
 
 // ProjectName returns the display name for a project id, or the id

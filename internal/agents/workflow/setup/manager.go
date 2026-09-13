@@ -16,6 +16,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/cost"
 	"gorm.io/gorm"
 
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/workflow/datatable"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/guard"
@@ -153,7 +154,7 @@ func (m *Manager) WithDB(db *gorm.DB) *Manager {
 	if db == nil {
 		return m
 	}
-	repo := repository.New(db)
+	repo := repository.New(db).WithSessionAccess(m.canPinSession)
 	m.Repo = repo
 	dbsvc := service.NewDB(m.Layout, repo)
 	m.Service = dbsvc
@@ -401,4 +402,29 @@ func CleanupRuns(layout config.Layout, opts CleanupOptions) (removed int, err er
 		}
 	}
 	return removed, nil
+}
+
+// canPinSession answers whether a workflow author may point a node at an
+// existing session. Every agent turn in a session runs with that SESSION's
+// identity, so pinning one is borrowing whoever owns it — the same act a
+// schedule has always had to pass canManageSession for.
+//
+// Deliberately narrow: owner, or somebody who has already spoken in it, or a
+// session nobody owns (nothing to protect, and the common case of pinning an
+// id wick has not created yet). Project sharing and the admin see-all knob are
+// NOT consulted here, so this can only ever refuse more than the session page
+// would — and a refusal lands on the person typing the id, where it can be
+// fixed, rather than on a run at 3am.
+func (m *Manager) canPinSession(userID, sessionID string) bool {
+	if userID == "" || sessionID == "" {
+		return true
+	}
+	sess, err := session.Load(m.Layout, sessionID)
+	if err != nil {
+		return true // not created yet: this workflow will make it, and own it
+	}
+	if sess.Meta.UserID == "" || sess.Meta.UserID == userID {
+		return true
+	}
+	return sess.Meta.IsParticipant(userID)
 }

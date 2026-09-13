@@ -44,6 +44,7 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
+	"github.com/yogasw/wick/internal/pkg/adminscope"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/tags"
@@ -289,6 +290,9 @@ func Register(r tool.Router) {
 	r.POST("/api/sessions/{id}/subagents/interrupt-all", interruptAllSubAgents)
 	// Agent-to-agent thread + the human-only hop refill.
 	r.GET("/api/sessions/{id}/messages", sessionMessages)
+	// The session's checklists — the live one and the ones before it. The
+	// trace carries the same calls, but not which list is current.
+	r.GET("/api/sessions/{id}/todos", apiSessionTodos)
 	r.POST("/api/sessions/{id}/hops/reset", resetSessionHops)
 	r.POST("/api/delegations/{delegationID}/interrupt", interruptSubAgent)
 	r.POST("/api/delegations/{delegationID}/continue", continueSubAgent)
@@ -314,6 +318,10 @@ func Register(r tool.Router) {
 
 	// JSON API — composer `/` command menu (built-in actions + skills).
 	r.GET("/api/composer/commands", apiComposerCommands)
+	// `/usage` — this session's provider account, read from the same
+	// paced cache the Providers page uses (see api_composer_usage.go).
+	r.GET("/api/composer/usage", apiComposerUsage)
+	r.POST("/api/composer/usage/refresh", apiComposerUsageRefresh)
 
 	// JSON API — skills SPA endpoints (mirrors templ skills handlers).
 	r.GET("/api/skills", apiSkillsList)
@@ -392,6 +400,7 @@ func Register(r tool.Router) {
 	// wick PTY, streamed to the browser terminal over ws. TTL-bound.
 	r.GET("/api/providers/{type}/{name}/logintty", apiProviderLoginTTYStatus)
 	r.GET("/api/providers/{type}/{name}/logintty/usage", apiProviderLoginTTYUsage)
+	r.POST("/api/providers/{type}/{name}/logintty/usage/refresh", apiProviderLoginTTYUsageRefresh)
 	r.POST("/api/providers/{type}/{name}/logintty/start", apiProviderLoginTTYStart)
 	r.POST("/api/providers/{type}/{name}/logintty/extend", apiProviderLoginTTYExtend)
 	r.POST("/api/providers/{type}/{name}/logintty/kill", apiProviderLoginTTYKill)
@@ -434,6 +443,8 @@ func Register(r tool.Router) {
 	// Global cross-session scheduler monitor (the "Scheduled" sidebar page).
 	r.GET("/scheduled", scheduledPage)
 	r.GET("/scheduled/all", schedulesAllUI)
+	// Admin-only: who a schedule may be pointed at ("Run as" picker).
+	r.GET("/scheduled/run-as-users", scheduleRunAsUsersUI)
 	r.POST("/scheduled/{sid}/cancel", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "cancel") })
 	r.POST("/scheduled/{sid}/pause", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "pause") })
 	r.POST("/scheduled/{sid}/resume", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "resume") })
@@ -741,14 +752,16 @@ func (a projectAccess) allowDataTable(slug, ownerUserID string) bool {
 	return ownerUserID != "" && ownerUserID == a.userID
 }
 
-// adminSeeAll reports whether the AdminSeeAll knob is on. When true, admins
-// regain the legacy unrestricted view of every project and session. Default
-// (and on missing config) is false: admins are scoped like regular users.
+// adminSeeAll reports whether the admin_see_all_sessions knob is on. When
+// true, admins regain the legacy unrestricted view of every project and
+// session. Default (and on missing config) is false: admins are scoped like
+// regular users. Connectors are a separate knob — see
+// adminscope.AdminSeeAllConnectors.
 func adminSeeAll() bool {
 	if globalConfigs == nil {
 		return false
 	}
-	return globalConfigs.GetOwned("agents", "admin_see_all") == "true"
+	return adminscope.AdminSeeAllSessions(globalConfigs)
 }
 
 // grantCacheTTL bounds how stale a user's DB-derived grants may be.
@@ -996,6 +1009,7 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		PinnedProjectID:     pinnedProjectID(c),
 		ShellAssetURL:       spaAssetURL("shell"),
 		AirouterVisible:     AirouterVisible(c.Context()),
+		ProvidersVisible:    HasManageableProvider(c),
 	}
 }
 
@@ -1009,7 +1023,7 @@ func createSessionQuick(c *tool.Ctx) {
 	}
 	prov := "claude"
 	// Use first healthy provider if available
-	if ps := providerChoicesCached(c.Context()); len(ps) > 0 {
+	if ps := providerChoicesFor(c); len(ps) > 0 {
 		prov = ps[0].Type
 	}
 	id := uuid.New().String()
@@ -1266,7 +1280,7 @@ func resolveSessionTarget(c *tool.Ctx, formValue, formModel, projectID string) (
 	}
 	// Neither level named a provider, so no level named a model either: an
 	// instance picked here is one nobody chose a model on.
-	if ps := providerChoicesCached(c.Context()); len(ps) > 0 {
+	if ps := providerChoicesFor(c); len(ps) > 0 {
 		return normalizeProviderKey(ps[0].Type + "/" + ps[0].Name), ""
 	}
 	return normalizeProviderKey("claude"), ""
@@ -1376,7 +1390,7 @@ func startNewSession(c *tool.Ctx) {
 		return
 	}
 	// Detach from HTTP ctx (see sendMessage note) — keep request_id for logs.
-	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()))
+	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()), id)
 	if err := globalPool.SendWithAttachments(bgCtx, id, "main", "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose send: %s", err.Error())
 		renderCompose(c, text, err.Error())
@@ -1702,10 +1716,25 @@ func viewerID(c *tool.Ctx) string {
 // Without this a dashboard message is stored with no sender at all, so a
 // thread mixing web and Slack turns can attribute the Slack ones and not its
 // own — and the web turns come back anonymous on replay.
-func withComposerSender(c *tool.Ctx, bg context.Context) context.Context {
+// withComposerSender attaches the signed-in human to a detached context so
+// the pool can attribute the turn, and — since it is already the one place
+// the web path resolves that person — records them on the session too.
+//
+// The ownership write is deliberately here rather than in each handler: both
+// composer paths funnel through this helper, so one call covers them without
+// a second mechanism to keep in step.
+//
+// EnsureSessionOwner is first-writer-wins, so this can only fill a session
+// that has nobody attached; it never moves an existing owner. What it does
+// for an already-owned session is add the sender to Participants, which is
+// what keeps a shared conversation openable by the people actually in it.
+func withComposerSender(c *tool.Ctx, bg context.Context, sessionID string) context.Context {
 	u := login.GetUser(c.Context())
 	if u == nil {
 		return bg
+	}
+	if globalPool != nil && sessionID != "" {
+		globalPool.EnsureSessionOwner(bg, sessionID, u.ID)
 	}
 	name := u.Name
 	if name == "" {
@@ -1811,7 +1840,7 @@ func sendMessage(c *tool.Ctx) {
 	// Detach from HTTP ctx — pool.spawn calls exec.CommandContext, so
 	// inheriting c.Context() would SIGKILL claude.exe the moment the
 	// response returns. Copy request_id over so logs still correlate.
-	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()))
+	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()), id)
 	// The person's words are never rewritten, but the leader is told, in
 	// the same message and before it reads them, which mentions wick is
 	// dispatching itself. Routing runs detached below, so without this
@@ -2373,7 +2402,10 @@ func providerOptionsJSON(c *tool.Ctx) {
 		ShowCaps *bool  `json:"show_capabilities,omitempty"`
 		CapsMode string `json:"capability_display_mode,omitempty"`
 	}
-	ps := providerChoicesCached(c.Context())
+	// Access-tag filtered: this endpoint feeds every provider picker in
+	// the product, so one filter here covers the composer, the project
+	// defaults, channels, workflow nodes and agent profiles.
+	ps := providerChoicesFor(c)
 	opts := make([]option, 0, len(ps))
 	for _, p := range ps {
 		var models []model

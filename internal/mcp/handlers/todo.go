@@ -94,14 +94,39 @@ func WickTodo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 		fmt.Fprintf(&sb, "(%d/%d done)", done, len(in.Items))
 	}
 
+	// Persist the checklist. Echoing it was enough to draw a card in the
+	// trace and nothing else: after a reload the live list is wherever it
+	// landed in the scrollback, and a second person in the session cannot
+	// see what is being worked on at all. Written on a best-effort basis —
+	// a tool call must not fail because a file could not be written.
+	if len(in.Items) > 0 && layout.BaseDir != "" {
+		if sid := resolveTodoSession(r, in.SessionID); sid != "" {
+			items := make([]session.TodoItem, 0, len(in.Items))
+			for _, it := range in.Items {
+				subs := make([]session.TodoSubstep, 0, len(it.Substeps))
+				for _, sub := range it.Substeps {
+					subs = append(subs, session.TodoSubstep{Step: sub.Step, Status: sub.Status})
+				}
+				items = append(items, session.TodoItem{
+					ID:          it.ID,
+					Title:       it.Title,
+					Description: it.Description,
+					Step:        it.Step,
+					Status:      it.Status,
+					Substeps:    subs,
+				})
+			}
+			if _, err := session.RecordTodos(layout, sid, items); err != nil {
+				fmt.Fprintf(&sb, "\n[todo] not saved: %s", err.Error())
+			}
+		}
+	}
+
 	// Goal latch — optional. All providers write the same file; only the
 	// wick engine force-continues while open. Resolve session id the same
 	// way connector tools do (arg, then header).
 	if goalOnly {
-		sid := strings.TrimSpace(in.SessionID)
-		if sid == "" && r != nil {
-			sid = strings.TrimSpace(r.Header.Get("X-Wick-Session-Id"))
-		}
+		sid := resolveTodoSession(r, in.SessionID)
 		if sid == "" {
 			fmt.Fprintf(&sb, "\n[goal] skipped — no session id (pass session_id or call from an agent session)")
 		} else if layout.BaseDir == "" {
@@ -138,4 +163,18 @@ func WickTodo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 	rsp.WriteResult(w, req.ID, ToolCallResult{
 		Content: []ToolContent{{Type: "text", Text: strings.TrimSpace(sb.String())}},
 	})
+}
+
+// resolveTodoSession finds the session a todo call belongs to: the explicit
+// argument first, then the header every agent spawn carries. Shared by the
+// checklist store and the goal latch so the two can never disagree about
+// which session they are writing to.
+func resolveTodoSession(r *http.Request, arg string) string {
+	if sid := strings.TrimSpace(arg); sid != "" {
+		return sid
+	}
+	if r != nil {
+		return strings.TrimSpace(r.Header.Get("X-Wick-Session-Id"))
+	}
+	return ""
 }

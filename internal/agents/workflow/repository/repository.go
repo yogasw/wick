@@ -12,6 +12,7 @@ package repository
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -37,9 +38,49 @@ const DraftRetention = 50
 // pointer-receiver so callers can swap a fake in tests.
 type Repo struct {
 	db *gorm.DB
+	// SessionAccess reports whether a user may point a workflow at an
+	// existing session. Wired by the server; nil disables the check, which
+	// is what tests and the CLI want — there is no signed-in human there to
+	// judge, and refusing every pinned session would break them.
+	SessionAccess func(userID, sessionID string) bool
 }
 
 func New(db *gorm.DB) *Repo { return &Repo{db: db} }
+
+// WithSessionAccess installs the gate that stops a workflow from borrowing a
+// session it has no business in.
+//
+// A node may pin an explicit session id, and every agent turn in that session
+// runs with the SESSION's identity — so without this, anyone who could edit a
+// workflow could point it at an admin's session and have their nodes served
+// with the admin's connectors. Schedules have had this gate since they were
+// written (scheduleAuthorizeTarget → canManageSession); workflows never did.
+//
+// Enforced at SAVE rather than at run: the failure then lands on the person
+// typing the id, instead of surfacing at 3am as a run that quietly did more
+// than it should.
+func (r *Repo) WithSessionAccess(fn func(userID, sessionID string) bool) *Repo {
+	r.SessionAccess = fn
+	return r
+}
+
+// checkPinnedSessions refuses a draft that pins sessions its author may not
+// reach. Nodes that let wick choose the id (the run-scoped, per-workflow and
+// ad-hoc presets) are untouched — nobody else's session can be named that way.
+func (r *Repo) checkPinnedSessions(w wf.Workflow, createdBy string) error {
+	if r.SessionAccess == nil || createdBy == "" {
+		return nil
+	}
+	for _, n := range w.Graph.Nodes {
+		if n.SessionID == "" {
+			continue
+		}
+		if !r.SessionAccess(createdBy, n.SessionID) {
+			return fmt.Errorf("node %q pins session %q, which you do not have access to", n.ID, n.SessionID)
+		}
+	}
+	return nil
+}
 
 // List returns every workflow ordered by updated-at desc — newest
 // edits first. Used by the SPA workflow list.
@@ -98,6 +139,9 @@ func (r *Repo) LoadDraft(id string) (wf.Workflow, error) {
 // Side effect: enforces DraftRetention by deleting the oldest excess
 // draft rows for this workflow. Published rows are never pruned.
 func (r *Repo) SaveDraft(id string, w wf.Workflow, createdBy, message string) (uint, error) {
+	if err := r.checkPinnedSessions(w, createdBy); err != nil {
+		return 0, err
+	}
 	body, err := parse.Marshal(w)
 	if err != nil {
 		return 0, err

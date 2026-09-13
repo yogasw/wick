@@ -77,6 +77,10 @@ type FileChange struct {
 	Staged    bool   `json:"staged"`              // has staged changes
 	Unstaged  bool   `json:"unstaged"`            // has worktree changes
 	Untracked bool   `json:"untracked"`
+	// Dir marks an entry that stands for a whole directory rather than a
+	// single file. git reports one of these when it cannot look inside —
+	// a nested repository — so the path names a folder, not a blob.
+	Dir bool `json:"dir,omitempty"`
 }
 
 // StatusResult bundles a repo's branch + change list.
@@ -85,11 +89,15 @@ type StatusResult struct {
 	Changes []FileChange `json:"changes"`
 }
 
-// Status runs `git status --porcelain=v2 --branch -z` and parses it.
+// Status runs `git status --porcelain=v2 --branch -z -uall` and parses it.
+//
+// -uall matters: with git's default (-unormal) a new directory collapses
+// into ONE entry for the folder, so the panel showed "1 change" for a
+// folder of fifty new files and only expanded once they were staged.
 func Status(ctx context.Context, dir string) (StatusResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
-	out, err := run(ctx, dir, "status", "--porcelain=v2", "--branch", "-z")
+	out, err := run(ctx, dir, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all")
 	if err != nil {
 		return StatusResult{}, err
 	}
@@ -140,9 +148,16 @@ func parseStatus(out string) StatusResult {
 			}
 			res.Changes = append(res.Changes, fc)
 		case strings.HasPrefix(line, "? "):
+			// Even under -uall git keeps one entry for a directory it
+			// will not descend into (a nested repo), reported with a
+			// trailing slash. Drop the slash — every git command takes
+			// the bare path — and flag it so the UI names a folder
+			// instead of building a child with an empty name.
+			path := strings.TrimPrefix(line, "? ")
+			isDir := strings.HasSuffix(path, "/")
 			res.Changes = append(res.Changes, FileChange{
-				Path: strings.TrimPrefix(line, "? "), WorkTree: "?",
-				Unstaged: true, Untracked: true,
+				Path: strings.TrimSuffix(path, "/"), WorkTree: "?",
+				Unstaged: true, Untracked: true, Dir: isDir,
 			})
 		case strings.HasPrefix(line, "u "):
 			// Unmerged (conflict). XY then path at the end.
@@ -185,6 +200,10 @@ func parseOrdinary(line string) FileChange {
 		WorkTree: y,
 		Staged:   x != "." && x != " ",
 		Unstaged: y != "." && y != " ",
+		// The <sub> field reads "S<c><m><u>" when the entry is a
+		// gitlink — a nested repo recorded as one commit pointer. Same
+		// as an untracked folder: a directory wearing a file's clothes.
+		Dir: strings.HasPrefix(parts[1], "S"),
 	}
 }
 
@@ -239,8 +258,8 @@ func FileAtIndex(ctx context.Context, dir, path string) (string, error) {
 // BranchList is the set of local + remote branches plus the current one.
 type BranchList struct {
 	Current  string   `json:"current"`
-	Branches []string `json:"branches"`        // local
-	Remotes  []string `json:"remotes"`         // remote-tracking (e.g. origin/main)
+	Branches []string `json:"branches"` // local
+	Remotes  []string `json:"remotes"`  // remote-tracking (e.g. origin/main)
 }
 
 // Branches lists local + remote branches and marks the current local one.
@@ -331,6 +350,7 @@ func Commit(ctx context.Context, dir, message string) (string, error) {
 //   - untracked → removed from disk (git clean -fd <path>)
 //   - tracked   → working + index restored to HEAD (git restore --staged
 //     --worktree <path>), so both staged and unstaged edits are dropped.
+//
 // untrackedPaths must list which of paths are untracked (the caller knows
 // from status) so we pick clean vs restore correctly.
 func Discard(ctx context.Context, dir string, paths []string, untrackedPaths []string) error {
@@ -367,13 +387,87 @@ func Discard(ctx context.Context, dir string, paths []string, untrackedPaths []s
 			return err
 		}
 	}
-	if len(toClean) > 0 {
-		args := append([]string{"clean", "-fd", "--"}, toClean...)
+	// A path that is a repository of its own is not ours to delete, and
+	// `git clean -fd` agrees: it skips it, prints nothing, and exits 0.
+	// Cleaning the rest and then saying so beats reporting a success the
+	// folder plainly did not have.
+	var ownRepos []string
+	cleanable := toClean[:0]
+	for _, p := range toClean {
+		if isRepoRoot(filepath.Join(dir, filepath.FromSlash(p))) {
+			ownRepos = append(ownRepos, p)
+			continue
+		}
+		cleanable = append(cleanable, p)
+	}
+	if len(cleanable) > 0 {
+		args := append([]string{"clean", "-fd", "--"}, cleanable...)
 		if _, err := run(ctx, dir, args...); err != nil {
 			return err
 		}
 	}
+	if len(ownRepos) > 0 {
+		return fmt.Errorf("%s is a repository of its own — git will not delete it; remove the folder yourself, or add it to .git/info/exclude to stop it showing up here", strings.Join(ownRepos, ", "))
+	}
 	return nil
+}
+
+// Exclude stops git reporting the given paths, by appending them to
+// .git/info/exclude — the repo-local ignore list. Nothing on disk is
+// touched and nothing is committed: unlike .gitignore this file is not
+// tracked, so one person hiding a stray folder does not push that
+// decision to everybody else.
+//
+// It is the honest answer for a clone that landed inside a checkout —
+// the folder is not this repo's to delete, but it does not belong in
+// its change list either.
+func Exclude(ctx context.Context, dir string, paths []string) error {
+	if len(paths) == 0 {
+		return errors.New("no paths to exclude")
+	}
+	file := filepath.Join(dir, ".git", "info", "exclude")
+	// A worktree or submodule keeps .git as a FILE pointing elsewhere;
+	// git itself tells us where the real one lives.
+	if fi, err := os.Stat(filepath.Join(dir, ".git")); err != nil || !fi.IsDir() {
+		out, err := run(ctx, dir, "rev-parse", "--git-dir")
+		if err != nil {
+			return err
+		}
+		gitDir := strings.TrimSpace(out)
+		if !filepath.IsAbs(gitDir) {
+			gitDir = filepath.Join(dir, gitDir)
+		}
+		file = filepath.Join(gitDir, "info", "exclude")
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		return err
+	}
+	existing, err := os.ReadFile(file)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	have := map[string]bool{}
+	for _, line := range strings.Split(string(existing), "\n") {
+		have[strings.TrimSpace(line)] = true
+	}
+	var add []string
+	for _, p := range paths {
+		p = strings.TrimSuffix(filepath.ToSlash(strings.TrimSpace(p)), "/")
+		if p == "" || have[p] || have["/"+p] {
+			continue
+		}
+		have[p] = true
+		add = append(add, "/"+p) // anchored: hide THIS path, not every match
+	}
+	if len(add) == 0 {
+		return nil
+	}
+	body := string(existing)
+	if body != "" && !strings.HasSuffix(body, "\n") {
+		body += "\n"
+	}
+	body += strings.Join(add, "\n") + "\n"
+	return os.WriteFile(file, []byte(body), 0o644)
 }
 
 // hasCommits reports whether the repository has a commit HEAD can resolve.
@@ -512,11 +606,11 @@ func safeRepoJoin(base, rel string) (string, error) {
 
 // LogEntry is one commit in the history list.
 type LogEntry struct {
-	SHA      string `json:"sha"`       // short sha
-	Subject  string `json:"subject"`
-	Author   string `json:"author"`
-	RelDate  string `json:"rel_date"`  // e.g. "2 hours ago"
-	ISODate  string `json:"iso_date"`
+	SHA     string `json:"sha"` // short sha
+	Subject string `json:"subject"`
+	Author  string `json:"author"`
+	RelDate string `json:"rel_date"` // e.g. "2 hours ago"
+	ISODate string `json:"iso_date"`
 }
 
 // logSep / logFieldSep are unlikely-to-collide delimiters for parsing

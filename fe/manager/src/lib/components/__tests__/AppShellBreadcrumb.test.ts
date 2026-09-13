@@ -59,6 +59,7 @@ beforeEach(() => {
     multi_account: false,
     allow_others_connect_sso: false,
     allow_others_configure: false,
+    allow_others_see_accounts: false,
     session_config_capable: false,
     session_config_allowed: false,
   });

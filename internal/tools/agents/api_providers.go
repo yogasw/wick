@@ -62,6 +62,10 @@ type ProviderStatusDTO struct {
 	Hooks       map[string]HookCapabilityDTO `json:"hooks"`
 	Cap         ProviderCapDTO               `json:"cap"`
 	HookEnabled map[string]bool              `json:"hook_enabled"`
+	// CanManage is the per-instance answer to "may this caller reconnect
+	// it and force a usage re-check?" — admins always, everyone else by
+	// manage tag. Never implies permission to edit configuration.
+	CanManage bool `json:"can_manage"`
 }
 
 // SpawnLogFileDTO is a parsed spawn log file entry.
@@ -256,6 +260,11 @@ type SpawnsListResponse struct {
 
 // ProvidersListResponse is the JSON envelope for GET /api/providers.
 type ProvidersListResponse struct {
+	// IsAdmin tells the SPA which chrome to render at all. Everything
+	// that edits configuration is admin-only however the tags are set,
+	// so a non-admin gets the read-only page rather than buttons that
+	// would come back 403.
+	IsAdmin       bool                `json:"is_admin"`
 	Providers     []ProviderStatusDTO `json:"providers"`
 	Gate          GateStatusDTO       `json:"gate"`
 	MCPClients    MCPStatusDTO        `json:"mcp"`
@@ -280,7 +289,18 @@ type ConfigFieldDTO struct {
 
 // ProviderDetailResponse is the JSON envelope for GET /api/providers/{type}/{name}.
 type ProviderDetailResponse struct {
-	Instance     ProviderInstanceDTO          `json:"instance"`
+	// ReadOnly marks a payload rendered for someone who may look but not
+	// edit: every field is shown, every control is disabled, and the API
+	// refuses the write anyway (requireProviderAdmin).
+	ReadOnly bool `json:"read_only"`
+	// CanManage: may this caller reconnect the account and force a usage
+	// re-check? Independent of ReadOnly — manage is not edit.
+	CanManage bool `json:"can_manage"`
+	// SecretsHidden marks a payload whose resolved-config previews were
+	// withheld. They contain live auth tokens verbatim, which is fine for
+	// the admin who owns the credential and not for a viewer.
+	SecretsHidden bool                         `json:"secrets_hidden,omitempty"`
+	Instance      ProviderInstanceDTO          `json:"instance"`
 	Path         string                       `json:"path"`
 	PathFound    bool                         `json:"path_found"`
 	Version      string                       `json:"version"`
@@ -525,9 +545,10 @@ func apiProvidersList(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireProviderMenu(c) {
 		return
 	}
+	isAdmin := callerIsAdmin(c)
 
 	ctx, cancel := context.WithTimeout(c.Context(), 3*time.Second)
 	defer cancel()
@@ -546,9 +567,17 @@ func apiProvidersList(c *tool.Ctx) {
 	}
 
 	caps := providerCapacities()
+	// The menu lists what the caller MANAGES. Access tags do not appear
+	// here at all — they decide which providers can be picked for a
+	// project or a session, which is a different job (provider_access.go).
+	statuses = manageableProviders(c, statuses, func(st provider.Status) (provider.Type, string) {
+		return st.Instance.Type, st.Instance.Name
+	})
 	providerDTOs := make([]ProviderStatusDTO, 0, len(statuses))
 	for _, st := range statuses {
-		providerDTOs = append(providerDTOs, providerStatusDTO(st, caps))
+		dto := providerStatusDTO(st, caps)
+		dto.CanManage = isAdmin || canManageProvider(c, st.Instance.Type, st.Instance.Name)
+		providerDTOs = append(providerDTOs, dto)
 	}
 
 	// Recent Spawns now loads from the dedicated /api/providers/spawns
@@ -566,6 +595,7 @@ func apiProvidersList(c *tool.Ctx) {
 	mcpVM := buildMCPStatusVM()
 
 	c.JSON(http.StatusOK, ProvidersListResponse{
+		IsAdmin:       isAdmin,
 		Providers:     providerDTOs,
 		Gate:          gateStatusDTO(gateVM),
 		MCPClients:    mcpStatusDTO(mcpVM),
@@ -585,7 +615,7 @@ func apiProviderDetail(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireAdmin(c) {
+	if !requireApprovedUser(c) {
 		return
 	}
 
@@ -594,6 +624,9 @@ func apiProviderDetail(c *tool.Ctx) {
 	ins, err := provider.Find(t, name)
 	if err != nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
+		return
+	}
+	if !requireProviderManage(c, t, name) {
 		return
 	}
 
@@ -630,7 +663,20 @@ func apiProviderDetail(c *tool.Ctx) {
 
 	gateVM := gateStatusVM()
 
+	isAdmin := callerIsAdmin(c)
+	airouterDTO := aiRouterDetailDTO(st.Instance)
+	if !isAdmin {
+		// aiRouterConfigPreview resolves the REAL spawn config, auth
+		// token included, because it was written for an admin-only page.
+		// A viewer gets the settings without the credential.
+		airouterDTO.Preview = ""
+		airouterDTO.RawConfig = ""
+	}
+
 	c.JSON(http.StatusOK, ProviderDetailResponse{
+		ReadOnly:      !isAdmin,
+		CanManage:     canManageProvider(c, t, name),
+		SecretsHidden: !isAdmin,
 		Instance: ProviderInstanceDTO{
 			Type:          string(st.Instance.Type),
 			Name:          st.Instance.Name,
@@ -651,7 +697,7 @@ func apiProviderDetail(c *tool.Ctx) {
 		ActiveCount:   len(activePIDs),
 		ActivePIDs:    activePIDs,
 		ConfigFields:  configFieldDTOs(provider.SeedInstanceConfig(st.Instance)),
-		AIRouter:      aiRouterDetailDTO(st.Instance),
+		AIRouter:      airouterDTO,
 		DefaultModels: seedModelDTOs(st.Instance.Type),
 	})
 }

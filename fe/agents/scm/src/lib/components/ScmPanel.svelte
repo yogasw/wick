@@ -4,7 +4,7 @@
     sessionID, repos, activeRepo, changes, branch, loading, loadRepos, applySnapshot,
   } from "$lib/stores/scm";
   import { subscribeGitStatus } from "$lib/sse";
-  import { stagePaths, unstagePaths, discardPaths, commit, loadCompare, loadCommitCompare, saveFile, langFor, type FileChange, type CompareData } from "$lib/git-actions";
+  import { stagePaths, unstagePaths, discardPaths, excludePaths, commit, loadCompare, loadCommitCompare, saveFile, langFor, type FileChange, type CompareData } from "$lib/git-actions";
   import { ToastHost, ConfirmDialog } from "@wick-fe/common-ui";
   import RepoSection from "$lib/components/RepoSection.svelte";
   import ChangesSection from "$lib/components/ChangesSection.svelte";
@@ -121,11 +121,36 @@
     activeRepo.set(rel);
     compare = null;
   }
+  // A folder-scoped change is opaque to the repo reporting it. Look the
+  // folder up in the snapshot: when it is a repo wick discovered, its
+  // branch and change count are already here, so the row can say what
+  // this repo cannot.
+  function nestedRel(path: string): string {
+    return $activeRepo && $activeRepo !== "." ? `${$activeRepo}/${path}` : path;
+  }
+  function withNested(list: FileChange[]): FileChange[] {
+    return list.map((c) => {
+      if (!c.dir) return c;
+      const rel = nestedRel(c.path);
+      const r = $repos.find((x) => x.rel === rel);
+      return r ? { ...c, nested: { rel, branch: r.branch, changed: r.changed } } : c;
+    });
+  }
+
   // openCompare resolves a path to its FileChange in the right group.
+  // A change that IS a repo of its own has no diff to open — this repo
+  // only knows the folder exists — so opening it switches the panel to
+  // that repo, where its files actually show up.
   function openCompare(path: string, isStaged: boolean) {
     const list = isStaged ? staged : unstaged;
     const c = list.find((x) => x.path === path);
-    if (c) compare = { file: c, staged: isStaged };
+    if (!c) return;
+    if (c.dir) {
+      const rel = nestedRel(path);
+      if ($repos.some((r) => r.rel === rel)) selectRepo(rel);
+      return;
+    }
+    compare = { file: c, staged: isStaged };
   }
   function openCommitFile(sha: string, file: FileChange) {
     compare = { file, staged: false, commitSha: sha };
@@ -139,6 +164,11 @@
     if (paths.length === 0) return;
     const label = paths.length === 1 ? paths[0] : `${paths.length} files`;
     discardAsk = { paths, untracked, label };
+  }
+  // Ignoring is not destructive — nothing leaves the disk and the entry
+  // is repo-local — so it does not get the confirm dialog discard has.
+  function ignorePaths(paths: string[]) {
+    if (paths.length > 0) withBusy(() => excludePaths(paths));
   }
   async function confirmDiscard() {
     const d = discardAsk;
@@ -226,16 +256,16 @@
             <p class="p-4 text-xs text-black-700 dark:text-black-600">No changes.</p>
           {:else}
             <ChangesSection
-              title="Staged Changes" items={staged} staged={true}
+              title="Staged Changes" items={withNested(staged)} staged={true}
               {viewMode} {expanded} onToggleDir={toggleDir} onOpen={openCompare}
               onAction={(p) => withBusy(() => unstagePaths(p))}
-              onDiscard={askDiscard} actionIcon="unstage"
+              onDiscard={askDiscard} onIgnore={ignorePaths} actionIcon="unstage"
             />
             <ChangesSection
-              title="Changes" items={unstaged} staged={false}
+              title="Changes" items={withNested(unstaged)} staged={false}
               {viewMode} {expanded} onToggleDir={toggleDir} onOpen={openCompare}
               onAction={(p) => withBusy(() => stagePaths(p))}
-              onDiscard={askDiscard} actionIcon="stage"
+              onDiscard={askDiscard} onIgnore={ignorePaths} actionIcon="stage"
             />
           {/if}
         </div>

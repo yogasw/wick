@@ -244,6 +244,21 @@ module.exports = {
   plugins: [
     function({ addComponents }) {
       addComponents({
+        // ── The shared page column ───────────────────────────────────────
+        // One centred, width-capped column used by every reading/editing
+        // surface: the chat thread, the session list, project settings and
+        // agents settings. They were each carrying their own
+        // `mx-auto w-full max-w-*`, which is how the settings pages ended up
+        // wider than the chat they sit next to. Width comes from the
+        // --page-col variable (web/src/input.css) so it is changed in one
+        // place. Full-bleed work surfaces (the ticket board, card view) opt
+        // out on purpose and keep their own width.
+        '.page-col': {
+          marginLeft: 'auto',
+          marginRight: 'auto',
+          width: '100%',
+          maxWidth: 'var(--page-col)',
+        },
         '.toggle-track': {
           position: 'relative',
           display: 'inline-block',

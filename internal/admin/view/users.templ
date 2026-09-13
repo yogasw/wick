@@ -184,6 +184,8 @@ templ UserRowFragment(row UserRow, tagsJSON string, adminCount int) {
 						data-selected={ strings.Join(row.TagIDs, ",") }
 						data-can-create="true"
 					></div>
+					<!-- Marker so the handler can tell "no tags selected" from "I could not read the body". -->
+					<input type="hidden" name="tags_submitted" value="1"/>
 					<button type="submit" class="mt-1 text-xs font-medium text-green-600 hover:text-green-700">Save</button>
 				</form>
 			} else {

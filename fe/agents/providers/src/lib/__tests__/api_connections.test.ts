@@ -63,4 +63,29 @@ describe("normalizeConnections", () => {
     } as never);
     expect(got[0].usageErr).toBe("usage endpoint: 401");
   });
+
+  it("carries cache provenance through — age, next probe, pending", () => {
+    const got = normalizeConnections({
+      connections: [
+        {
+          type: "claude",
+          name: "n",
+          connected: true,
+          usage_supported: true,
+          usage_fetched_at: "2026-09-12T10:00:00Z",
+          usage_age_s: 42,
+          usage_next_s: 18,
+        },
+        { type: "claude", name: "cold", connected: true, usage_supported: true, usage_pending: true },
+      ],
+    } as never);
+    expect(got[0].usageFetchedAt).toBe("2026-09-12T10:00:00Z");
+    expect(got[0].usageAgeS).toBe(42);
+    expect(got[0].usageNextS).toBe(18);
+    expect(got[0].usagePending).toBe(false);
+    // A reading still queued behind the pacing gate is pending, not an error.
+    expect(got[1].usagePending).toBe(true);
+    expect(got[1].usageErr).toBe("");
+    expect(got[1].usageAgeS).toBe(0);
+  });
 });

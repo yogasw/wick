@@ -36,6 +36,12 @@ export type FileChange = {
   staged: boolean;
   unstaged: boolean;
   untracked: boolean;
+  // The entry stands for a whole folder (a nested repo git will not look
+  // inside), not a single file.
+  dir?: boolean;
+  // Filled in client-side when that folder is a repo wick already knows:
+  // what this repo cannot say about it, the snapshot can.
+  nested?: { rel: string; branch: string; changed: number };
 };
 
 export type BranchInfo = {
@@ -125,6 +131,9 @@ export const unstage = (id: string, repo: string, paths: string[]) =>
 // paths are untracked so the server picks clean vs restore.
 export const discard = (id: string, repo: string, paths: string[], untracked: string[]) =>
   apiPost(`${s(id)}/discard`, { repo, paths, untracked });
+// Hide paths from git (writes .git/info/exclude) without touching disk.
+export const exclude = (id: string, repo: string, paths: string[]) =>
+  apiPost(`${s(id)}/exclude`, { repo, paths });
 
 export const commit = (id: string, repo: string, message: string) =>
   apiPost<{ sha: string }>(`${s(id)}/commit`, { repo, message });

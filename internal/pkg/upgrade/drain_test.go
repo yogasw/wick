@@ -64,3 +64,74 @@ func TestBusySkipsIdleSubsystems(t *testing.T) {
 		t.Fatalf("Busy() = %#v, want [busy=5]", busy)
 	}
 }
+
+// TestWaitSettled locks the rule a handover switches on: the drain ends when
+// the process has STOPPED, not when a timer expires — and "stopped for an
+// instant" does not count.
+func TestWaitSettled(t *testing.T) {
+	t.Run("waits out the quiet window after the last work", func(t *testing.T) {
+		tr := &Tracker{}
+		// Atomic, not a plain int: WaitSettled polls from this goroutine
+		// while the one below mutates.
+		var n atomic.Int64
+		n.Store(1)
+		tr.Add(Work{Name: "workflow runs", InFlight: func() int { return int(n.Load()) }})
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			n.Store(0)
+		}()
+		start := time.Now()
+		if left := tr.WaitSettled(context.Background(), 300*time.Millisecond); len(left) > 0 {
+			t.Fatalf("want settled, still busy: %v", left)
+		}
+		// Returning before work-end + window would mean handing over inside
+		// the gap where a follow-up node or tool result usually lands.
+		if d := time.Since(start); d < 400*time.Millisecond {
+			t.Fatalf("returned after %s — quiet window not honoured", d)
+		}
+	})
+
+	t.Run("new work restarts the window", func(t *testing.T) {
+		tr := &Tracker{}
+		var n atomic.Int64
+		tr.Add(Work{Name: "cron jobs", InFlight: func() int { return int(n.Load()) }})
+		go func() {
+			// A cron job fires while the drain was already quiet: the window
+			// must start again, not resume where it left off.
+			time.Sleep(100 * time.Millisecond)
+			n.Store(1)
+			time.Sleep(200 * time.Millisecond)
+			n.Store(0)
+		}()
+		start := time.Now()
+		tr.WaitSettled(context.Background(), 250*time.Millisecond)
+		if d := time.Since(start); d < 500*time.Millisecond {
+			t.Fatalf("returned after %s — window did not restart", d)
+		}
+	})
+
+	t.Run("never waits for work that is already gone", func(t *testing.T) {
+		tr := &Tracker{}
+		tr.Add(Work{Name: "agent turns", InFlight: func() int { return 0 }})
+		start := time.Now()
+		if left := tr.WaitSettled(context.Background(), 50*time.Millisecond); len(left) > 0 {
+			t.Fatalf("want settled, got %v", left)
+		}
+		if d := time.Since(start); d > time.Second {
+			t.Fatalf("idle tracker took %s", d)
+		}
+	})
+
+	t.Run("a cancelled ctx reports what was still running", func(t *testing.T) {
+		// This is the forced-swap / hard-cap path: the caller gave up, so the
+		// work is about to be interrupted and must be named in the log.
+		tr := &Tracker{}
+		tr.Add(Work{Name: "workflow runs", InFlight: func() int { return 2 }})
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		left := tr.WaitSettled(ctx, time.Second)
+		if len(left) != 1 || left[0] != "workflow runs=2" {
+			t.Fatalf("want the outstanding work named, got %v", left)
+		}
+	})
+}

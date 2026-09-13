@@ -3,12 +3,18 @@ package pool
 import "testing"
 
 // TestMCPTokenFor_PerSessionWithFallback pins the credential choice for one
-// spawn. A session with an owner gets a per-user token; anything without one
-// falls back to the shared internal token rather than losing MCP access.
+// spawn that no human triggered — a schedule fire or cron job, where the
+// caller is empty and the session's owner is the only identity there is.
+// A session with an owner gets a per-user token; anything without one falls
+// back to the shared internal token rather than losing MCP access.
+//
+// Spawns that DO have a caller are covered in spawn_identity_internal_test.go:
+// the caller's own identity wins there, and must, or a turn would run with
+// the reach of whoever owns the conversation instead of whoever asked.
 func TestMCPTokenFor_PerSessionWithFallback(t *testing.T) {
 	f := &ClaudeFactory{
 		MCPToken: "internal-boot-secret",
-		SessionMCPToken: func(sessionID string) (string, bool) {
+		SessionMCPToken: func(sessionID, _ string) (string, bool) {
 			switch sessionID {
 			case "sess-a":
 				return "wick_sub_userA", true
@@ -19,20 +25,20 @@ func TestMCPTokenFor_PerSessionWithFallback(t *testing.T) {
 		},
 	}
 
-	if got := f.mcpTokenFor("sess-a"); got != "wick_sub_userA" {
+	if got := f.mcpTokenFor("sess-a", ""); got != "wick_sub_userA" {
 		t.Fatalf("sess-a token = %q, want per-user token", got)
 	}
-	if got := f.mcpTokenFor("sess-b"); got != "wick_sub_userB" {
+	if got := f.mcpTokenFor("sess-b", ""); got != "wick_sub_userB" {
 		t.Fatalf("sess-b token = %q, want per-user token", got)
 	}
-	if f.mcpTokenFor("sess-a") == f.mcpTokenFor("sess-b") {
+	if f.mcpTokenFor("sess-a", "") == f.mcpTokenFor("sess-b", "") {
 		t.Fatal("two owners share one credential — identities would collapse")
 	}
 	// Ownerless / unknown session must still reach MCP.
-	if got := f.mcpTokenFor("sess-legacy"); got != "internal-boot-secret" {
+	if got := f.mcpTokenFor("sess-legacy", ""); got != "internal-boot-secret" {
 		t.Fatalf("ownerless token = %q, want internal fallback", got)
 	}
-	if got := f.mcpTokenFor(""); got != "internal-boot-secret" {
+	if got := f.mcpTokenFor("", ""); got != "internal-boot-secret" {
 		t.Fatalf("empty session token = %q, want internal fallback", got)
 	}
 }
@@ -42,14 +48,14 @@ func TestMCPTokenFor_PerSessionWithFallback(t *testing.T) {
 // exactly as it did before per-user identity existed.
 func TestMCPTokenFor_NoMinterKeepsOldBehaviour(t *testing.T) {
 	f := &ClaudeFactory{MCPToken: "internal-boot-secret"}
-	if got := f.mcpTokenFor("sess-a"); got != "internal-boot-secret" {
+	if got := f.mcpTokenFor("sess-a", ""); got != "internal-boot-secret" {
 		t.Fatalf("nil minter token = %q, want internal", got)
 	}
 
 	// A minter that claims success but yields an empty token must not blank
 	// the credential — that would silently drop MCP for that spawn.
-	f.SessionMCPToken = func(string) (string, bool) { return "", true }
-	if got := f.mcpTokenFor("sess-a"); got != "internal-boot-secret" {
+	f.SessionMCPToken = func(string, string) (string, bool) { return "", true }
+	if got := f.mcpTokenFor("sess-a", ""); got != "internal-boot-secret" {
 		t.Fatalf("empty-token mint = %q, want internal fallback", got)
 	}
 }

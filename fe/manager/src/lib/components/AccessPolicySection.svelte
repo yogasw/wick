@@ -1,5 +1,6 @@
 <script lang="ts">
-  /* Admin-only Access Policy + Per-session config cards. Each toggle POSTs
+  /* Access Policy + Per-session config cards, rendered for an admin OR the
+     instance owner (the can_manage_policy flag). Each toggle POSTs
      immediately and reflects the saved state, mirroring the legacy
      connectorAccessSection / connectorSessionConfigSection forms (which
      submit on every checkbox change). Access policy toggles submit together
@@ -20,6 +21,7 @@
   let multiAccount = $state(false);
   let allowOthersConnectSso = $state(false);
   let allowOthersConfigure = $state(false);
+  let allowOthersSeeAccounts = $state(false);
   let allowSessionConfig = $state(false);
   let busy = $state(false);
   let sessionBusy = $state(false);
@@ -29,6 +31,7 @@
     multiAccount = data.multi_account;
     allowOthersConnectSso = data.allow_others_connect_sso;
     allowOthersConfigure = data.allow_others_configure;
+    allowOthersSeeAccounts = data.allow_others_see_accounts;
     allowSessionConfig = data.session_config_allowed;
   });
 
@@ -40,6 +43,7 @@
     const policy: AccessPolicy = {
       allow_others_configure: allowOthersConfigure,
       allow_others_connect_sso: hasOauth ? allowOthersConnectSso : false,
+      allow_others_see_accounts: hasOauth ? allowOthersSeeAccounts : false,
       enable_sso: hasOauth ? enableSso : false,
       multi_account: hasOauth ? multiAccount : false,
     };
@@ -90,6 +94,16 @@
             <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Each OAuth connect adds a new account; off replaces the existing one.</p>
           </div>
           <input type="checkbox" disabled={busy} bind:checked={multiAccount} onchange={savePolicy} aria-label="Multi-account" class="h-5 w-9 accent-green-500" />
+        </label>
+        <label class="flex cursor-pointer items-center justify-between gap-4 px-4 py-3 hover:bg-white-200 dark:hover:bg-navy-800">
+          <div class="min-w-0 flex-1">
+            <p class="text-sm font-medium text-black-900 dark:text-white-100">Others can see connected accounts</p>
+            <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+              Off (default): each connected account is private to the user who connected it — everyone else lists this connector plus their own account only.
+              On: every user with tag access sees, and can run as, every connected account.
+            </p>
+          </div>
+          <input type="checkbox" disabled={busy} bind:checked={allowOthersSeeAccounts} onchange={savePolicy} aria-label="Others can see connected accounts" class="h-5 w-9 accent-green-500" />
         </label>
         <label class="flex cursor-pointer items-center justify-between gap-4 px-4 py-3 hover:bg-white-200 dark:hover:bg-navy-800">
           <div class="min-w-0 flex-1">

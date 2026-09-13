@@ -163,6 +163,9 @@ export interface AccessPolicy {
   allow_others_connect_sso: boolean;
   enable_sso: boolean;
   multi_account: boolean;
+  /* false (default) = each connected account is private to the user who
+     connected it; true = every user with tag access sees the whole pool. */
+  allow_others_see_accounts: boolean;
 }
 
 export async function setConnectorAccessPolicy(

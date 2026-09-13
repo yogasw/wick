@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/admin/view"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/updater"
 	"github.com/yogasw/wick/internal/userconfig"
@@ -36,6 +39,17 @@ func (h *Handler) systemPage(w http.ResponseWriter, r *http.Request) {
 		AccessType:  "http", // the admin page is always reached over HTTP
 		DBType:      dbType,
 		DBStatus:    dbStatus,
+		// First paint of the live state the script then keeps fresh: which
+		// process is answering, whether it can hand over, and what it is
+		// still doing.
+		ServingPID: os.Getpid(),
+		Graceful:   upgrade.Armed(),
+		Busy:       upgrade.Busy(),
+		Settle:     upgrade.DrainQuiet().String(),
+	}
+	if sw := h.pendingSwap(); sw.Pending {
+		vm.SwapPending = true
+		vm.SwapFrom, vm.SwapTo, vm.SwapSource, vm.SwapBuilt = sw.From, sw.To, sw.Source, sw.Built
 	}
 	if cfg, err := userconfig.Load(h.sys.AppName); err == nil {
 		vm.AutoUpdate = cfg.AutoUpdate
@@ -173,7 +187,18 @@ func (h *Handler) systemUpdateApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restart": true})
+	// force=1: the operator saw what was running and chose not to wait for
+	// it. Set BEFORE the handover starts — once this process is draining it
+	// no longer answers HTTP, so nothing can reach it to change its mind.
+	forced := boolParam(r, "force")
+	if forced {
+		busy := upgrade.Busy()
+		log.Warn().Bool("forced", true).Strs("interrupting", busy).
+			Msg("apply staged update: forced swap requested — running work will be cut off")
+		upgrade.ForceDrain()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restart": true, "forced": forced})
 	// Flush so the client gets the response before we tear down the
 	// server below. Unwrap-aware to see through the status middleware.
 	_ = http.NewResponseController(w).Flush()
@@ -190,6 +215,198 @@ func (h *Handler) systemUpdateApply(w http.ResponseWriter, r *http.Request) {
 			log.Error().Err(err).Msg("apply staged update: re-exec failed — continuing on current binary")
 		}
 	}()
+}
+
+// systemServingInfo answers the two questions the System page cannot answer
+// from its own HTML: WHICH process is serving me, and what is it still doing?
+//
+// The pid is how the page knows a handover completed. It used to infer that
+// from /health going down and coming back — which is exactly what a
+// zero-downtime upgrade never does, so the page sat on "Restarting…" until it
+// gave up. A pid it can compare is the same answer, from wick, without
+// waiting for an outage that is not coming.
+//
+// The busy list is what a Force swap would interrupt, named. Nobody should be
+// asked to confirm "cut off running work?" without being shown the work.
+func (h *Handler) systemServingInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.servingPayload())
+}
+
+// systemServingStream pushes the same payload every second over SSE, so the
+// countdowns move in real time instead of jumping between polls, and a swap
+// that completes is reflected the moment it happens.
+//
+// SSE rather than a websocket: this is one-way, the page already speaks it
+// (the updater status stream), and it needs no upgrade handshake through
+// whatever proxy sits in front. Like any stream it excludes itself from the
+// drain's in-flight count, so watching this page can never hold a handover
+// open — the bug this whole feature started with.
+func (h *Handler) systemServingStream(w http.ResponseWriter, r *http.Request) {
+	rc := http.NewResponseController(w)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	if err := rc.Flush(); err != nil {
+		return
+	}
+	send := func() bool {
+		body, err := json.Marshal(h.servingPayload())
+		if err != nil {
+			return true
+		}
+		if _, err := fmt.Fprintf(w, "event: serving\ndata: %s\n\n", body); err != nil {
+			return false
+		}
+		return rc.Flush() == nil
+	}
+	if !send() {
+		return
+	}
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-tick.C:
+			if !send() {
+				return
+			}
+		}
+	}
+}
+
+// servingPayload is the one description of "which process is answering, what
+// is it doing, and what is waiting to replace it" — shared by the one-shot
+// GET and the stream so the two can never drift.
+func (h *Handler) servingPayload() map[string]any {
+	version := h.sys.WickVersion
+	if h.sys.Coordinator != nil {
+		if st := h.sys.Coordinator.Snapshot(); st.CurrentVersion != "" {
+			version = st.CurrentVersion
+		}
+	}
+	body := map[string]any{
+		"pid":       os.Getpid(),
+		"version":   version,
+		"graceful":  upgrade.Armed(),
+		"forced":    upgrade.Forced(),
+		"settle":    upgrade.DrainQuiet().String(),
+		"busy":      upgrade.Busy(),
+		// The same thing in words, for the panel and the confirm dialog.
+		"busy_label": upgrade.BusyHuman(),
+		"swap":      h.pendingSwap(),
+		"auto_swap": upgrade.AutoSwapStatus(),
+		// How long a boot took here last time, so the UI can say "usually
+		// about this long" instead of leaving a minute of silence unexplained.
+		"typical_boot_seconds": upgrade.TypicalBootSeconds(),
+		"inherited": upgrade.Inherited(),
+	}
+	// What the PREVIOUS process is still finishing, if it is still around.
+	// Without this the UI can only say a previous process is finishing — the
+	// question an operator actually has is what it is finishing, because that
+	// is what decides between waiting and forcing.
+	if st, ok := upgrade.ReadDrainState(h.sys.DataDir); ok {
+		body["draining"] = map[string]any{
+			"pid":         st.PID,
+			"since":       st.Since.UTC().Format(time.RFC3339),
+			"outstanding": st.Outstanding,
+		}
+	}
+	if since := upgrade.ServingSince(); !since.IsZero() {
+		body["serving_since"] = since.UTC().Format(time.RFC3339)
+	}
+	// A failed handover is invisible from the outside: the old process simply
+	// keeps serving, which looks identical to nobody having tried. Say so.
+	if at, ok, msg := upgrade.LastHandover(); !at.IsZero() {
+		body["last_handover"] = map[string]any{
+			"at":    at.UTC().Format(time.RFC3339),
+			"ok":    ok,
+			"error": msg,
+		}
+	}
+	return body
+}
+
+// pendingSwap reports a build that is installed or downloaded but not yet
+// running: a binary on disk this process is not the image of, or a staged
+// update nobody has applied. Either way the operator wants the same two
+// facts — which version would replace which, and what the handover is still
+// waiting for.
+func (h *Handler) pendingSwap() pendingSwap {
+	if sw := detectPendingSwap(h.sys.AppVersion, h.sys.BuildTime); sw.Pending {
+		return sw
+	}
+	// Nothing on disk, but the updater may be holding a download.
+	if h.sys.Coordinator != nil {
+		if st := h.sys.Coordinator.Snapshot(); st.HasStaged && st.StagedVersion != "" {
+			return pendingSwap{
+				Pending: true,
+				From:    h.sys.AppVersion,
+				To:      st.StagedVersion,
+				Source:  "staged update (not applied yet)",
+			}
+		}
+	}
+	return pendingSwap{}
+}
+
+// systemSwapNow hands over to the binary already installed at the daemon's
+// exec path — the state the CLI leaves behind when a build is installed but
+// not reloaded. It is the same handover SIGHUP starts; no file is touched
+// here, because the file is already in place.
+//
+// force=1 additionally tells the outgoing process not to wait for its
+// in-flight work. That is a human decision, made while looking at the list
+// the page shows, so it is a separate parameter rather than a timeout.
+func (h *Handler) systemSwapNow(w http.ResponseWriter, r *http.Request) {
+	if !upgrade.Armed() {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"ok":    false,
+			"error": "graceful handover is not available in this process — restart the service instead",
+		})
+		return
+	}
+	forced := boolParam(r, "force")
+	busy := upgrade.Busy()
+	if forced {
+		log.Warn().Strs("interrupting", busy).
+			Msg("swap now: forced — running work will be cut off")
+		upgrade.ForceDrain()
+	} else {
+		log.Info().Strs("outstanding", busy).Msg("swap now: handover requested from the admin UI")
+	}
+	if err := upgrade.Trigger(); err != nil {
+		// A handover already underway is not a failure of this request — and
+		// when force was asked for, the flag above is already set, so the
+		// drain will not wait even though no NEW successor could be started.
+		// Reporting "could not start the handover" here told the operator
+		// their click did nothing, which was the opposite of the truth.
+		msg := err.Error()
+		if strings.Contains(msg, "upgrade in progress") || strings.Contains(msg, "parent hasn't exited") {
+			note := "A handover is already underway — nothing new to start."
+			if forced {
+				note = "A handover is already underway; it will now hand over without waiting for the work above."
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok": true, "forced": forced, "already": true, "message": note,
+			})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": msg})
+		return
+	}
+	// Same phase the watcher publishes, so the page shows "handing over — the
+	// new process is booting" for the ~90s that takes, whether the handover
+	// was started by a click or by the watcher.
+	to := ""
+	if sw := h.pendingSwap(); sw.Pending {
+		to = sw.To
+	}
+	upgrade.SetAutoSwap(upgrade.AutoSwap{State: "handing_over", To: to})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "forced": forced})
 }
 
 // systemSetAutoUpdate persists the auto-update toggle into userconfig.

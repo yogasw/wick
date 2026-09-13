@@ -7,13 +7,14 @@ import (
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/mcp"
+	"github.com/yogasw/wick/internal/pkg/adminscope"
 	"github.com/yogasw/wick/internal/tags"
 )
 
 // dataTableACL gates the MCP/agent data-table ops (datatable_*) per caller,
 // mirroring the /data-tables UI rule: the owner (via the owner:<slug> tag) or
 // a user an admin granted that tag to may access; an admin sees all only when
-// AdminSeeAll is on; a direct-owner fallback covers a legacy/unwired-tags
+// admin_see_all_sessions is on; a direct-owner fallback covers a legacy/unwired-tags
 // table. Implements wfconn.DataTableACL.
 //
 // The caller id is the SESSION owner (resolved upstream in connectors.Service
@@ -33,8 +34,9 @@ func (a dataTableACL) CanAccess(ctx context.Context, userID, slug string) bool {
 	if userID == "" || userID == mcp.InternalAgentUserID {
 		return true // internal / system principal — unrestricted
 	}
-	// Admin + AdminSeeAll → unrestricted (same knob the /data-tables UI honours).
-	if a.cfg != nil && a.cfg.GetOwned("agents", "admin_see_all") == "true" && a.login != nil {
+	// Admin + admin_see_all_sessions → unrestricted (same knob the
+	// /data-tables UI honours).
+	if a.cfg != nil && adminscope.AdminSeeAllSessions(a.cfg) && a.login != nil {
 		if u, err := a.login.GetUserByID(ctx, userID); err == nil && u != nil && u.IsAdmin() {
 			return true
 		}

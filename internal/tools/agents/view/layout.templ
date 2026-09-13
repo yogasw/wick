@@ -123,7 +123,17 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 				@agentsNavLink(vm.Base+"/overview", "Overview", vm.ActivePage == "overview")
 				@agentsNavLink(vm.Base+"/workflows", "Workflows", vm.ActivePage == "workflows")
 				@agentsNavLink(vm.Base+"/connectors", "Connectors", vm.ActivePage == "connectors")
-				<details class="group" { agentsMoreOpenAttr(vm.ActivePage)... }>
+				{{ moreItems := AgentsMoreItems(vm, user) }}
+				// The page you are on is lifted OUT of the collapsed group and
+				// shown here, so navigating into "More" does not leave you
+				// looking at a sidebar that forgot where you are. See
+				// AgentsMoreItems for why this beats auto-expanding the group.
+				for _, it := range moreItems {
+					if it.Active {
+						@agentsNavLink(it.Href, it.Label, true)
+					}
+				}
+				<details class="group">
 					<summary class="list-none cursor-pointer flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors select-none">
 						<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
 							<circle cx="4" cy="8" r="1" fill="currentColor"></circle>
@@ -136,29 +146,10 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 						</svg>
 					</summary>
 					<div class="flex flex-col gap-0.5 pt-0.5">
-						// Ordered by use-frequency: monitoring + everyday tools first,
-						// config/infra last. Scheduled → Channels → Skills → Presets
-						// → Providers → Data Tables → 9router.
-						if user != nil {
-							@agentsNavLink(vm.Base+"/scheduled", "Scheduled", vm.ActivePage == "scheduled")
-						}
-						// Admin-only to match its API, which is admin-gated: the
-						// page reports machine-wide process usage.
-						if user != nil && user.IsAdmin() {
-							@agentsNavLink(vm.Base+"/resources", "Resources", vm.ActivePage == "resources")
-						}
-						if user != nil {
-							@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
-						}
-						@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
-						@agentsNavLink(vm.Base+"/agent-profiles", "Sub-agents", vm.ActivePage == "agent-profiles")
-						@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
-						if user != nil && user.IsAdmin() {
-							@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
-						}
-						@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")
-						if vm.AirouterVisible {
-							@agentsNavLink(vm.Base+"/airouter", "AI Router", vm.ActivePage == "airouter")
+						for _, it := range moreItems {
+							if !it.Active {
+								@agentsNavLink(it.Href, it.Label, false)
+							}
 						}
 					</div>
 				</details>
@@ -786,18 +777,6 @@ templ agentsNavLink(href, label string, active bool) {
 		@agentsNavIcon(label)
 		{ label }
 	</a>
-}
-
-// agentsMoreOpenAttr returns an "open" attribute on the <details>
-// when the active page lives inside the collapsed "More" group, so
-// the section auto-expands when the user lands on a secondary tool
-// (otherwise the active row would be hidden).
-func agentsMoreOpenAttr(activePage string) templ.Attributes {
-	switch activePage {
-	case "presets", "providers", "skills", "channels", "data-tables", "scheduled", "airouter", "agent-profiles", "resources":
-		return templ.Attributes{"open": ""}
-	}
-	return templ.Attributes{}
 }
 
 templ agentsNavIcon(label string) {

@@ -137,7 +137,61 @@ closed for the successor's whole boot — tens of seconds once a registry restor
 connectors are involved — and everything in flight is killed.
 
 ```bash
-# install the new binary FIRST, then hand over
+# check the candidate, install it, hand over, verify — one command
+./bin/myapp reload --binary ./bin/myapp     # --sudo when the target directory is root-owned
+```
+
+It checks the candidate, installs it, signals the handover and returns — about a
+second, not a minute and a half:
+
+```
+installed /usr/bin/myapp (previous kept at /usr/bin/myapp.prev)
+handover started: pid 319449 is booting the successor (0.1.155 -> 0.1.156)
+not waiting for it; the old process keeps serving until the new one is ready
+```
+
+It does not block, because there is nothing to block for: the old process
+answers every request for the whole boot. A refusal IS caught before it
+returns — the daemon records one within milliseconds — and that path rolls the
+binary back. Add `--wait` when a script wants the confirmation instead:
+
+```
+handover done: pid 618434 -> 668241, 0.1.113 -> 0.1.114
+```
+
+| Flag | |
+|---|---|
+| `--binary <path>` | install this build at the daemon's exec path, then hand over to it |
+| `--sha256 <sum>` | verify the file's checksum before anything else reads or copies it |
+| `--yes` / `-y` | skip the confirmation prompt — **required** when stdin is not a terminal |
+| `--force` | proceed despite a blocking finding; never overrides OS/arch or a non-wick binary |
+| `--sudo` | run the file swap through `sudo`, for a root-owned target directory |
+| `--wait` | block until the successor is serving, and roll back if it never gets there. Off by default — the old process serves throughout the boot, so waiting blocks the caller and helps nobody |
+| `--wait-drain` | also wait for the previous process to finish its work and exit (implies `--wait`) |
+| `--timeout <dur>` | how long to wait for the successor to take over (default `5m`) |
+
+**The candidate is checked before the file is touched.** Identity comes from its embedded build
+info, never from running it — executing an unknown binary is self-defeating when the whole
+question is whether it is what you think it is:
+
+- **FATAL, no override** — built for another OS or architecture, or nothing in its module graph
+  depends on wick. A wrong-architecture binary in place is a crash-loop the service manager
+  retries forever. Also the SAME version as the running binary: a different build wearing the
+  same number makes the update card, `version` and any rollback lie about what is serving —
+  bump the version instead.
+- **BLOCK, `--force` to proceed** — a different main module, a different `BuildAppName` (that app
+  has its own data dir, unit and paths), or a version older than the one running.
+- **WARN** — a wick resolved through a local `replace`
+  tree instead of a released tag.
+
+If the successor does not take over within `--timeout`, the previous binary is restored and the
+command exits non-zero. Nothing is down while that happens — the old process only steps aside
+once a successor reports ready.
+
+**By hand**, which is what the command does for you and the fallback on a host whose binary
+predates the flag:
+
+```bash
 cp ./bin/myapp /usr/local/bin/myapp.new && chmod +x /usr/local/bin/myapp.new
 mv -f /usr/local/bin/myapp.new /usr/local/bin/myapp   # atomic rename
 ./bin/myapp reload
@@ -146,6 +200,12 @@ mv -f /usr/local/bin/myapp.new /usr/local/bin/myapp   # atomic rename
 The rename is not a detail: copying **onto** a running binary fails with `ETXTBSY`
 ("Text file busy"), while a rename swaps the directory entry and lets the running process keep
 its old inode until it exits.
+
+Install it at the path the successor will *exec*: the handover re-execs `os.Args[0]` resolved
+through `PATH`, not the inode currently running — that one is gone as soon as the file is
+replaced. If the unit says `ExecStart=/usr/local/bin/myapp all`, that file is the one that must
+hold the new bytes; anywhere else gives a reload that reports success and brings the old version
+back. `--binary` resolves that path from the running process instead of assuming it.
 
 Requires the daemon to run with `WICK_GRACEFUL_UPGRADE=1`; without it the signal is logged and
 ignored, and you should use `restart`. Supported on Linux, macOS and BSD, as a plain daemon or
@@ -159,20 +219,26 @@ back to `restart`.
 
 **What the drain waits for**, because interrupting them costs different things:
 
-| Work | Deadline | Why |
+| Work | Waited for | Why |
 |---|---|---|
-| Workflow runs, cron jobs, connector calls, plugin requests, scheduled deliveries | `WICK_DRAIN_TIMEOUT` (default `20m`) | Interrupting them loses the work |
-| Agent turns | `WICK_DRAIN_AGENT_GRACE` (default `45s`) | The session is on disk and resumes on the next message |
+| Agent turns, workflow runs, cron jobs, connector calls, plugin requests, delegations, scheduled deliveries | until every subsystem is at zero and has stayed there for `WICK_DRAIN_QUIET` (default `15s`) | Interrupting them loses work, or cuts a reply off mid-sentence |
 
-The short grace for agent turns is deliberate: an interactive session stays "in flight" for as
-long as somebody keeps talking to it, so waiting for it would keep two processes alive for hours
-— and only one handover can be in flight at a time. Raise it (`WICK_DRAIN_AGENT_GRACE=20m`) when
-you would rather let a long run finish, and accept the longer overlap; `0` hands over
-immediately. Both are read at process start, so changing them needs a `restart` rather than a
-`reload` — a successor inherits its parent's environment.
+There is no default deadline, on purpose: a ceiling on a drain does not stop work, it kills it.
+Whatever is running is waited for however long it takes, and the process exits the moment the
+last of it settles. An idle agent subprocess holds nothing and never blocks the handover.
+`WICK_DRAIN_TIMEOUT` adds an optional hard cap for an unattended deploy that must finish inside a
+known time, and is unset by default. It is read at process start, so changing it needs a
+`restart` rather than a `reload` — a successor inherits its parent's environment.
 
 Every 15 seconds a drain logs what is still outstanding, by name, so a long wait reads as
-"finishing a run" instead of a hang.
+"finishing a run" instead of a hang. The same list is on the System page
+(`/admin/advanced/software-update`) as **Running now**, next to a **Force swap** control for an
+operator who has read it and decided not to wait — the only thing on a default configuration that
+interrupts running work.
+
+In-flight HTTP requests are waited for like any other work. Streams (SSE, hijacked websockets)
+are excluded — they do not end while a client is watching — and are dropped at the very end,
+after everything else has settled.
 
 **Self-update takes the same path.** With graceful upgrade armed, applying an update from the
 admin UI swaps the binary and then hands over exactly like `reload` — no separate step, and no

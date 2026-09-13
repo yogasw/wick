@@ -361,7 +361,7 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq handlers.RPCRequest, rsp handlers.Responder, name string, args map[string]any, user *entity.User, tagIDs []string) {
 	switch name {
 	case "wick_list":
-		handlers.WickList(w, r, hreq, rsp, h.connectors, h.layout, args, tagIDs, user.IsAdmin())
+		handlers.WickList(w, r, hreq, rsp, h.connectors, h.layout, args, tagIDs, user)
 	case "wick_search":
 		handlers.WickSearch(w, r, hreq, rsp, h.connectors, h.layout, args, tagIDs, user.IsAdmin())
 	case "wick_get":

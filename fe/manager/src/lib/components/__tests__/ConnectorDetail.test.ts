@@ -36,6 +36,7 @@ function makeData(over: Partial<DetailType> = {}): DetailType {
     multi_account: false,
     allow_others_connect_sso: false,
     allow_others_configure: false,
+    allow_others_see_accounts: false,
     session_config_capable: false,
     session_config_allowed: false,
     ...over,
@@ -214,5 +215,44 @@ describe("ConnectorDetail", () => {
       "row-a",
       expect.objectContaining({ allow_others_configure: true }),
     );
+  });
+
+  it("offers the connected-accounts visibility toggle once SSO is on", async () => {
+    vi.mocked(api.setConnectorAccessPolicy).mockResolvedValue(undefined);
+    vi.mocked(api.getConnectorRow).mockResolvedValue(
+      makeData({
+        can_manage_policy: true,
+        oauth: { display_name: "Slack", start_url: "" },
+        enable_sso: true,
+        multi_account: true,
+      }),
+    );
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("row-a");
+    await fireEvent.click(screen.getByLabelText("Others can see connected accounts"));
+    await Promise.resolve();
+    expect(api.setConnectorAccessPolicy).toHaveBeenCalledWith(
+      "slack",
+      "row-a",
+      expect.objectContaining({ allow_others_see_accounts: true }),
+    );
+  });
+
+  it("says accounts are private by default and shared once the policy is on", async () => {
+    const sso = {
+      oauth: { display_name: "Slack", start_url: "" },
+      enable_sso: true,
+      accounts: [{ id: "acc-1", display_name: "tester", wick_user_id: "u1", disabled_ops: [], can_manage: true }],
+    };
+    vi.mocked(api.getConnectorRow).mockResolvedValue(makeData(sso));
+    const { unmount } = render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("row-a");
+    expect(screen.getByText(/only listed for the user who connected it/)).toBeTruthy();
+    unmount();
+
+    vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ ...sso, allow_others_see_accounts: true }));
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("row-a");
+    expect(screen.getByText(/every user with tag access sees and can run as all of them/)).toBeTruthy();
   });
 });

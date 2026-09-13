@@ -34,9 +34,11 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 					})
 					@adminDropdown("Agents", isAgentsActive(activeTab), []dropdownItem{
 						{Href: "/admin/projects", Label: "Projects", Active: activeTab == "projects"},
+						{Href: "/admin/schedule", Label: "Schedules", Active: activeTab == "schedule"},
 						{Href: "/admin/workflows", Label: "Workflows", Active: activeTab == "workflows"},
 						{Href: "/admin/skills", Label: "Skills", Active: activeTab == "skills"},
 						{Href: "/admin/data-tables", Label: "Data Tables", Active: activeTab == "data-tables"},
+						{Href: "/admin/providers", Label: "Providers", Active: activeTab == "providers"},
 					})
 					@adminDropdown("Access", isAccessActive(activeTab), []dropdownItem{
 						{Href: "/admin/access-tokens", Label: "Access Tokens", Active: activeTab == "access-tokens"},
@@ -60,9 +62,144 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 				</div>
 			</div>
 		</nav>
+		@pendingSwapBanner()
 		{ children... }
 		<script src="/modules/admin/js/tag_picker.js"></script>
+		<!-- Background save for every tag form on these pages: the Save
+		     button shows only while a row differs from the server, so a
+		     long tagging session never has to guess what it missed. -->
+		<script src="/modules/admin/js/tag_form.js"></script>
 	}
+}
+
+// pendingSwapBanner sits under the nav on EVERY admin page and stays hidden
+// until a build is installed (or staged) but not yet running. That state is
+// invisible otherwise — the app looks perfectly normal while the version an
+// operator thinks they deployed is not the one answering — so it is worth a
+// line at the top of whatever page they happen to be on, not just the
+// Software Update screen.
+//
+// Filled by polling the same endpoint the Software Update page uses. Hidden
+// on that page, where the full card already says all of this.
+templ pendingSwapBanner() {
+	<div id="wick-swap-banner" class="hidden border-b border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-navy-800">
+		<div class="mx-auto flex w-full max-w-container flex-wrap items-center gap-x-3 gap-y-1 px-6 py-2 text-sm">
+			<span id="wick-swap-banner-title" class="font-medium text-black-900 dark:text-white-100">Update waiting to be applied</span>
+			<span id="wick-swap-banner-versions" class="font-mono text-xs text-black-900 dark:text-white-100"></span>
+			<span id="wick-swap-banner-waiting" class="font-mono text-xs text-black-700 dark:text-black-600"></span>
+			<span id="wick-swap-banner-error" class="hidden font-mono text-xs text-neg-400"></span>
+			<span id="wick-swap-banner-auto" class="text-xs text-black-800 dark:text-black-600"></span>
+			<a href="/admin/advanced/software-update" class="ml-auto text-xs font-medium text-green-600 dark:text-green-400 hover:underline">Details →</a>
+		</div>
+	</div>
+	<script type="text/javascript">
+	(function () {
+		var el = document.getElementById('wick-swap-banner');
+		if (!el) return;
+		// The Software Update page renders the full card, so the banner keeps
+		// quiet there. Checked when rendering, NOT here: this script lives in
+		// the layout and runs before the page body is parsed, so looking for
+		// #sys-live at this point always missed it — which is why the banner
+		// followed you onto the detail page.
+		function onDetailPage() { return !!document.getElementById('sys-live'); }
+		var titleEl = document.getElementById('wick-swap-banner-title');
+		var versionsEl = document.getElementById('wick-swap-banner-versions');
+		var waitingEl = document.getElementById('wick-swap-banner-waiting');
+		var errorEl = document.getElementById('wick-swap-banner-error');
+		var autoEl = document.getElementById('wick-swap-banner-auto');
+		var autoState = '', autoLeft = 0, autoElapsed = 0;
+		function mmss(n) {
+			if (n < 60) return n + 's';
+			return Math.floor(n / 60) + 'm' + String(n % 60).padStart(2, '0') + 's';
+		}
+		function autoText() {
+			switch (autoState) {
+				case 'settling': return '· swapping automatically in ' + mmss(autoLeft);
+				case 'waiting': return '· will swap once this process is idle';
+				case 'previous_draining': return '· previous process still finishing, retrying in ' + mmss(autoLeft);
+				case 'handing_over': return '· handing over — the new process is booting (' + mmss(autoElapsed) + ', abort limit ' + mmss(autoLeft) + ')';
+			}
+			return '';
+		}
+		function handingOver() { return autoState === 'handing_over'; }
+		function paintAuto() {
+			if (autoEl) autoEl.textContent = autoText();
+			// Same two titles the Software Update card uses. A banner still
+			// saying "waiting to be applied" while the successor is already
+			// booting describes a state that has passed.
+			if (titleEl) titleEl.textContent = handingOver() ? 'Swapping to the new build' : 'Update waiting to be applied';
+		}
+		setInterval(function () {
+			if (autoState === 'handing_over') autoElapsed++;
+			if (autoLeft > 0) autoLeft--;
+			if (autoState !== '') paintAuto();
+		}, 1000);
+		function render(d) {
+			var sw = d && d.swap;
+			var pending = !!(sw && sw.pending) && !onDetailPage();
+			// Nothing waiting → the banner disappears. A successful swap needs
+			// no announcement: the thing it was warning about is gone.
+			el.classList.toggle('hidden', !pending);
+			if (!pending) return;
+			if (versionsEl) versionsEl.textContent = (sw.from || '—') + '  →  ' + (sw.to || '—');
+			autoState = (d.auto_swap && d.auto_swap.state) || '';
+			autoElapsed = (d.auto_swap && d.auto_swap.elapsed_seconds) || 0;
+			autoLeft = handingOver()
+				? ((d.auto_swap && d.auto_swap.gives_up_in_seconds) || 0)
+				: ((d.auto_swap && d.auto_swap.next_check_in) || 0);
+			if (waitingEl) {
+				// The idle gate is what the swap is waiting ON, so it has
+				// nothing to say once the successor is booting — printing
+				// "nothing running, it would swap straight away" next to a
+				// handover already in flight reads as a swap that never
+				// started.
+				var busy = (d.busy_label && d.busy_label.length) ? d.busy_label : (d.busy || []);
+				waitingEl.textContent = handingOver()
+					? ''
+					: (busy.length
+						? '· waiting for ' + busy.join(', ')
+						: '· nothing running — it would swap straight away');
+			}
+			paintAuto();
+			// A handover that was attempted and failed leaves the old process
+			// serving, which looks exactly like no attempt at all — worth a
+			// line. But only while it is still the last word: once a new
+			// handover is under way, or the retry is being counted down, the
+			// live state says it better, and a red "last attempt failed"
+			// beside it reads as THIS attempt failing.
+			var lh = d.last_handover;
+			if (errorEl) {
+				var superseded = handingOver() || autoState === 'previous_draining';
+				var failed = !!(lh && lh.ok === false && lh.error) && !superseded;
+				errorEl.classList.toggle('hidden', !failed);
+				if (failed) errorEl.textContent = '· last attempt failed: ' + lh.error;
+			}
+		}
+		// Polled, not rendered once: a build can land at any moment — from the
+		// CLI, from a deploy script — and the banner should appear on a page
+		// that has been open the whole time, without anyone reloading it.
+		// Realtime, the same stream the detail page uses; the poll stays as a
+		// fallback for a browser or proxy that cannot hold it open.
+		var streamOK = false;
+		try {
+			var es = new EventSource('/admin/advanced/software-update/serving/stream');
+			es.addEventListener('serving', function (e) {
+				try { streamOK = true; render(JSON.parse(e.data)); } catch (_) {}
+			});
+			es.onerror = function () { streamOK = false; };
+		} catch (_) { /* no EventSource — the poll covers it */ }
+
+		(function poll() {
+			fetch('/admin/advanced/software-update/serving', { cache: 'no-store' })
+				.then(function (r) { return r.ok ? r.json() : null; })
+				.then(function (d) {
+					if (d && !streamOK) render(d);
+					setTimeout(poll, streamOK ? 15000 : 5000);
+				})
+				.catch(function () { setTimeout(poll, 15000); });
+		})();
+	})();
+	</script>
 }
 
 templ adminTab(href string, label string, active bool) {
@@ -85,7 +222,8 @@ func isMiniToolsActive(tab string) bool {
 }
 
 func isAgentsActive(tab string) bool {
-	return tab == "projects" || tab == "workflows" || tab == "skills" || tab == "data-tables"
+	return tab == "projects" || tab == "schedule" || tab == "workflows" || tab == "skills" ||
+		tab == "data-tables" || tab == "providers"
 }
 
 func isAccessActive(tab string) bool {

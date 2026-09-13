@@ -39,6 +39,15 @@ export type UsageResult = {
   supported: boolean;
   windows: UsageWindow[];
   error: string;
+  /* pending = the first probe for this account is still queued behind
+     the server's pacing gate; not an error. */
+  pending: boolean;
+  /* checking = a probe for this account is in flight right now. */
+  checking: boolean;
+  /* Provenance of a cached reading: see ProviderConnection. */
+  fetchedAt: string;
+  ageS: number;
+  nextS: number;
 };
 
 /* One frame on the login TTY websocket (server → client). */
@@ -83,6 +92,11 @@ interface WireUsage {
   supported?: boolean;
   windows?: Array<{ key?: string; utilization?: number; resets_at?: string }> | null;
   error?: string;
+  pending?: boolean;
+  checking?: boolean;
+  fetched_at?: string;
+  age_s?: number;
+  next_s?: number;
 }
 
 export function mapLoginAccount(w: WireLoginAccount | null | undefined): LoginAccount {
@@ -126,6 +140,11 @@ export function normalizeUsage(w: WireUsage): UsageResult {
       resetsAt: x.resets_at ?? "",
     })),
     error: w.error ?? "",
+    pending: w.pending ?? false,
+    checking: w.checking ?? false,
+    fetchedAt: w.fetched_at ?? "",
+    ageS: w.age_s ?? 0,
+    nextS: w.next_s ?? 0,
   };
 }
 
@@ -141,6 +160,28 @@ export async function apiLoginTTYStatus(base: string, type: string, name: string
 export async function apiLoginTTYUsage(base: string, type: string, name: string): Promise<UsageResult> {
   const r = await get<WireUsage>(`${ttyPath(base, type, name)}/usage`);
   return normalizeUsage(r);
+}
+
+/* UsageRefreshResult is the answer to a re-check request.
+
+   accepted=false is NOT an error: the server refused because a probe
+   would land inside a cooldown (its own rate-limit floor, or one the
+   upstream endpoint asked for). waitS says how long, so the button can
+   explain itself instead of looking broken. */
+export type UsageRefreshResult = { accepted: boolean; checking: boolean; waitS: number };
+
+/* apiLoginTTYUsageRefresh asks for a fresh reading of this account now,
+   dropping the cache TTL. Safe to call on a card that already has
+   numbers — the server decides whether a probe may actually go out. */
+export async function apiLoginTTYUsageRefresh(
+  base: string,
+  type: string,
+  name: string,
+): Promise<UsageRefreshResult> {
+  const r = await post<{ accepted?: boolean; checking?: boolean; wait_s?: number }>(
+    `${ttyPath(base, type, name)}/usage/refresh`,
+  );
+  return { accepted: r?.accepted ?? false, checking: r?.checking ?? false, waitS: r?.wait_s ?? 0 };
 }
 
 export async function apiLoginTTYStart(base: string, type: string, name: string): Promise<LoginTTYSession | null> {

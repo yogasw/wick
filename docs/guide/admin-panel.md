@@ -12,10 +12,16 @@ A user becomes admin in one of two ways: their email is in `APP_ADMIN_EMAILS` at
 Above admin sits a single **App Owner**: the first user ever registered is auto-promoted (`is_owner`). The owner is a superset of admin — `IsAdmin()` is true for both — but **only the owner can see every user's agent sessions**. Admins and regular users see only the sessions, projects, workflows, and skills they own or can reach via project tag grants; per-session routes return `404` for sessions outside their access. There is no env var for this — it's assigned automatically to the first account.
 :::
 
-::: info Admin session visibility (`admin_see_all`)
-By default, admins are scoped exactly like regular users: they see only projects granted via tags and their own sessions. Ownerless sessions (no recorded creator) are hidden from everyone under this default.
+::: info How far does an admin see? (two switches)
+"How far does the admin role alone see" is **two questions, so it is two switches**, both in the `agents` group at `/admin/variables`. One switch for both is how an admin who only wanted to read a project ends up able to post as somebody else's Slack account.
 
-To restore the old behaviour where admins see every project and session, turn on **`admin_see_all`** at `/admin/variables`. When on, admins regain an unrestricted view identical to the App Owner's legacy view. The App Owner is always unrestricted regardless of this setting.
+**`admin_see_all_sessions`** — sessions and projects (also data tables and the scheduled-message monitor). **Off by default**: admins are scoped exactly like regular users — projects granted via tags plus their own sessions, and sessions with no recorded creator are hidden from everyone. Turn it on to restore the legacy unrestricted view. The App Owner is always unrestricted regardless.
+
+*(Upgrading: the pre-split key was `admin_see_all`. It is still read as a fallback, so an install that had it on keeps its session visibility until the new key is written.)*
+
+**`admin_see_all_connectors`** — connector instances and the accounts connected to them, in the dashboard and in `wick_list`. **On by default**, which is what every install had before the split. Turn it off to scope admins like regular users here too: only instances their tags reach, and only the accounts they connected themselves or that were shared with them (a per-account tag at `/admin/connectors`, or the instance's **Others can see connected accounts** policy).
+
+Owning an instance always shows its accounts, admin or not, and `/admin/connectors` lists everything either way — that is the administration surface.
 :::
 
 ## Dashboard

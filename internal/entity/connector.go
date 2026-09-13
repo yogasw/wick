@@ -73,6 +73,15 @@ type Connector struct {
 	// Only meaningful when the connector's OAuthMeta is non-nil.
 	// Default false — only admins can initiate the OAuth flow.
 	AllowOthersConnectSSO bool `gorm:"default:false"`
+	// AllowOthersSeeAccounts controls whether the OAuth accounts connected
+	// to this instance are visible to users OTHER than the account's own
+	// owner. Default false — every connected account is private to the wick
+	// user who connected it (plus admins and the instance owner), so a
+	// multi-account instance lists one connector + that caller's own account
+	// instead of everybody's. Turn it on to go back to a shared pool where
+	// any user with tag access can see — and run as — every connected
+	// account. Only meaningful when EnableSSO=true.
+	AllowOthersSeeAccounts bool `gorm:"default:false"`
 	// EnableSSO controls whether this instance participates in the OAuth
 	// flow at all. When false (default) the instance uses manually-entered
 	// credentials (bot token, API key, service account). When true the

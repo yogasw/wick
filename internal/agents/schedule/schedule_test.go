@@ -466,6 +466,7 @@ func TestStore_ListFiltered_ProjectJobIsCrossSession(t *testing.T) {
 type fakeSender struct {
 	calls     []string
 	ensured   []string
+	owners    []string
 	failErr   error
 	ensureErr error
 	layout    agentconfig.Layout
@@ -492,6 +493,21 @@ func (f *fakeSender) EnsureSession(ctx context.Context, sessionID, source, proje
 		Origin: session.Origin(source),
 	})
 	return err
+}
+
+// EnsureSessionOwner mirrors the pool: first-writer-wins on UserID, so a
+// schedule pointed at somebody else's session cannot take it over.
+func (f *fakeSender) EnsureSessionOwner(_ context.Context, sessionID, userID string) {
+	if sessionID == "" || userID == "" {
+		return
+	}
+	f.owners = append(f.owners, sessionID+"|"+userID)
+	sess, err := session.Load(f.layout, sessionID)
+	if err != nil || sess.Meta.UserID != "" {
+		return
+	}
+	sess.Meta.UserID = userID
+	_ = session.SaveMeta(f.layout, sessionID, sess.Meta)
 }
 
 func newRunnerLayout(t *testing.T) (agentconfig.Layout, string) {

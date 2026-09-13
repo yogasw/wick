@@ -380,6 +380,8 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 			Input:           input,
 			Source:          entity.ConnectorRunSourceMCP,
 			UserID:          user.ID,
+			IsAdmin:         user.IsAdmin(),
+			TagIDs:          tagIDs,
 			IPAddress:       handlers.ClientIP(r),
 			UserAgent:       r.Header.Get("User-Agent"),
 			Progress:        reporter,

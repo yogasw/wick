@@ -190,7 +190,7 @@ func (e *AgentExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 	// (claude today; codex/gemini stay on the cliProvider path until
 	// pool gains multi-factory support).
 	if e.Pool != nil && e.Subscribe != nil && providerUsesPool(prov.Name()) {
-		return e.runViaPool(ctx, n, prompt, sessionID)
+		return e.runViaPool(ctx, n, prompt, sessionID, rc.Workflow.CreatedBy)
 	}
 
 	req := provider.AgentRequest{
@@ -222,7 +222,7 @@ func (e *AgentExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 // Subscription happens before the Send so the first text_delta can't
 // race past the receiver. The loop exits on Done (success), Error
 // (failed turn), or ctx cancellation (timeout / workflow abort).
-func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt, sessionID string) (workflow.NodeOutput, error) {
+func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt, sessionID, ownerUserID string) (workflow.NodeOutput, error) {
 	evCh, unsub := e.Subscribe(sessionID)
 	defer unsub()
 
@@ -232,9 +232,13 @@ func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt,
 	// SetMaxTurns/SendWithProject below read meta.json. Without this the
 	// node fails with "set max turns: open …/meta.json: cannot find the
 	// path". Idempotent: a no-op when the session already exists.
+	// Same reason as session_init: an ownerless session spawns as the
+	// internal principal with no access tags. An agent node can be reached
+	// without a session_init upstream, so it has to stamp too.
 	if err := e.Pool.EnsureSession(ctx, sessionID, "workflow", n.Workspace); err != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("ensure session: %w", err)
 	}
+	e.Pool.EnsureSessionOwner(ctx, sessionID, ownerUserID)
 
 	if err := e.persistAgentSessionConfig(sessionID, n); err != nil {
 		return workflow.NodeOutput{}, err

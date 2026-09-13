@@ -87,6 +87,14 @@ func Operations(layout agentconfig.Layout) []connector.Category {
 				"ticket_create(attach_current_session=true) or ticket_attach_session. "+
 				"Pass mine=true to see only the caller's own sessions.",
 			untrackedInput{}, h.untracked, wickdocs.Docs{}),
+		connector.Op("ticket_search", "Search Tickets",
+			"Find tickets by TEXT. ticket_list answers \"what is open\" and \"what is mine\"; this answers "+
+				"\"where is the one about the webhook\" — the question you cannot filter your way to. "+
+				"Matches the id, the title, the description and the project-defined field values, "+
+				"case-insensitively, and says which of them matched so a hit in a field nobody asked about "+
+				"is not mistaken for a hit in the title. Combine with status or assignee to narrow; "+
+				"omit project_id to search the calling session's project.",
+			searchInput{}, h.search, wickdocs.Docs{}),
 		connector.Op("ticket_get", "Get Ticket",
 			"Return one ticket in full, including its session list. "+
 				"Omit ticket_id to get the ticket the calling session belongs to — the usual way to answer \"what am I working on?\".",
@@ -179,6 +187,15 @@ type updateInput struct {
 	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=New status. Omit to leave unchanged."`
 	Assignee  string `wick:"desc=New assignee (wick user id). Pass an empty string to unassign."`
 	Fields    string `wick:"textarea;desc=Field values to merge as JSON. An empty string value clears that field."`
+}
+
+type searchInput struct {
+	Query     string `wick:"required;desc=Text to look for in the id, title, description and field values. Case-insensitive. Example: webhook 401"`
+	ProjectID string `wick:"desc=Project to search. Defaults to the calling session's project."`
+	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=Optional status filter."`
+	Mine      bool   `wick:"desc=Only tickets assigned to the caller. The user is resolved from the credential, so no id is needed."`
+	Assignee  string `wick:"desc=Only tickets assigned to this wick user id. Pass 'unassigned' for tickets with nobody on them."`
+	Limit     int    `wick:"desc=Maximum hits to return. Defaults to 20."`
 }
 
 type settingsGetInput struct {

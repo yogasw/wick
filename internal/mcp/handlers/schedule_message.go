@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -136,12 +137,19 @@ func scheduleCreate(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp 
 		createdBy = v
 	}
 
+	runAs, _, rerr := scheduleRunAsArg(args, user)
+	if rerr != nil {
+		rsp.ToolError(w, req.ID, rerr.Error(), scheduleToolName)
+		return
+	}
+
 	row := &entity.ScheduledMessage{
 		SessionID:       target.SessionID,
 		ProjectID:       target.ProjectID,
 		SessionMode:     target.Mode,
 		SessionTemplate: target.Template,
 		OwnerUserID:     ownerUserID,
+		RunAsUserID:     runAs,
 		CreatedBy:       createdBy,
 		SourceSessionID: scheduleSourceSession(args, target),
 		AgentName:       strings.TrimSpace(argString(args, "agent_name")),
@@ -458,6 +466,11 @@ func scheduleParsePatch(r *http.Request, layout agentconfig.Layout, user *entity
 		mr := argInt(args, "max_runs")
 		patch.MaxRuns = &mr
 	}
+	if runAs, present, rerr := scheduleRunAsArg(args, user); rerr != nil {
+		return patch, rerr
+	} else if present {
+		patch.RunAsUserID = &runAs
+	}
 	if err := scheduleTargetPatch(r, layout, user, m, args, now, &patch); err != nil {
 		return patch, err
 	}
@@ -539,6 +552,41 @@ func scheduleTargetPatch(r *http.Request, layout agentconfig.Layout, user *entit
 	return nil
 }
 
+// scheduleRunAsArg reads the run_as_user_id argument and checks the caller may
+// set it. Returns (value, present, error); present=false means the caller did
+// not mention the field, which must leave an existing value alone rather than
+// clear it.
+//
+// Admin-only, and that is the whole security model of this field: it decides
+// WHOSE access a fire runs with, so letting a schedule's own owner name the
+// user would turn every schedule into "borrow anybody's access". An empty
+// string from an admin is a deliberate clear — back to the owner.
+//
+// Existence and approval are NOT checked here. They are checked at fire time
+// (Runner.runAsUsable), because an account can be disabled between setting
+// this and the next run, and only the fire-time check catches that. What this
+// does reject is the synthetic internal principal: it is not a real account,
+// it holds no access tags, and naming it would be a way to ask for exactly
+// the broken state this whole change exists to fix.
+func scheduleRunAsArg(args map[string]any, user *entity.User) (string, bool, error) {
+	raw, present := args["run_as_user_id"]
+	if !present {
+		return "", false, nil
+	}
+	v := strings.TrimSpace(fmt.Sprint(raw))
+	if raw == nil {
+		v = ""
+	}
+	// nil user = stdio/tests, where there is no identity to escalate from.
+	if user != nil && !user.IsAdmin() {
+		return "", false, errors.New("run_as_user_id is admin-only")
+	}
+	if v == internalAgentUserID {
+		return "", false, errors.New("run_as_user_id cannot be the internal agent principal; name a real user or leave it empty")
+	}
+	return v, true, nil
+}
+
 // argInt reads an integer arg (JSON numbers arrive as float64). Missing or
 // non-numeric → 0.
 func argInt(args map[string]any, key string) int {
@@ -563,7 +611,7 @@ func argInt(args map[string]any, key string) int {
 // create→list symmetry for the internal principal (it stamps each row's
 // owner_user_id with the real session owner, so a self-scoped list never
 // matched and returned []). The UI monitor still applies its own
-// admin_see_all filtering separately.
+// admin_see_all_sessions filtering separately.
 func scheduleScope(user *entity.User) (string, bool) {
 	// Admins (incl. the in-process wick provider's synthetic RoleAdmin
 	// principal) see all owners here, matching the create/cancel gate
@@ -696,6 +744,15 @@ func scheduleVM(m entity.ScheduledMessage) map[string]any {
 	}
 	if m.LastSessionID != "" {
 		vm["last_session_id"] = m.LastSessionID
+	}
+	// Identity is always reported, empty included. A schedule that runs as
+	// nobody reaches far less than its creator does, and the only reason that
+	// went unnoticed for so long is that no surface ever said whose identity a
+	// fire used — created_by answers "how", never "as whom".
+	vm["owner_user_id"] = m.OwnerUserID
+	vm["effective_run_as"] = m.EffectiveRunAsUser()
+	if m.RunAsUserID != "" {
+		vm["run_as_user_id"] = m.RunAsUserID
 	}
 	// Which session asked for this. For a project job that is the only link
 	// back to the conversation that set it up, since it has no session_id.

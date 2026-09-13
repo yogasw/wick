@@ -248,6 +248,11 @@ func (s *Service) ExchangeRefreshToken(ctx context.Context, refresh, clientID st
 	if err != nil {
 		return nil, err
 	}
+	// Redeeming a refresh is a use of the grant — a client that sits
+	// idle between refreshes would otherwise look untouched. Stamped
+	// before the revoke, and it outlives it: the grant views read
+	// last_used_at across every token row, revoked ones included.
+	_ = s.repo.MarkUsed(ctx, row.ID)
 	// Revoke the spent refresh now that its successor exists.
 	_ = s.repo.Revoke(ctx, row.ID)
 	return pair, nil
