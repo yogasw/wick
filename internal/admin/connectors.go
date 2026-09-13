@@ -107,7 +107,7 @@ func (h *Handler) setConnectorDisabledAdmin(w http.ResponseWriter, r *http.Reque
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/connectors", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/connectors")
 }
 
 // setConnectorTagsAdmin updates the access tags for one connector
@@ -115,13 +115,16 @@ func (h *Handler) setConnectorDisabledAdmin(w http.ResponseWriter, r *http.Reque
 // the same tag-filter rules apply to MCP and the manager surface.
 func (h *Handler) setConnectorTagsAdmin(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	r.ParseForm()
-	ids := dedupNonEmpty(r.Form["tag_ids[]"])
+	ids, ok := tagIDsFromForm(r)
+	if !ok {
+		refuseUnreadableTagForm(w)
+		return
+	}
 	if err := h.repo.SetToolTags(r.Context(), "/connectors/"+id, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/connectors", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/connectors")
 }
 
 // setConnectorAccountTagsAdmin updates the access tags of ONE connected
@@ -135,11 +138,14 @@ func (h *Handler) setConnectorAccountTagsAdmin(w http.ResponseWriter, r *http.Re
 		http.Error(w, "account not found", http.StatusNotFound)
 		return
 	}
-	r.ParseForm()
-	ids := dedupNonEmpty(r.Form["tag_ids[]"])
+	ids, ok := tagIDsFromForm(r)
+	if !ok {
+		refuseUnreadableTagForm(w)
+		return
+	}
 	if err := h.repo.SetToolTags(r.Context(), connectors.AccountTagPath(accountID), ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/connectors", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/connectors")
 }

@@ -293,6 +293,12 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("GET /admin/skills", admin(h.skillsAdminPage))
 	mux.Handle("POST /admin/skills/{name}/tags", admin(h.setSkillTags))
 
+	// Provider sharing: who may SEE an instance (access tags, empty =
+	// everyone) and who may RECONNECT it (manage tags, empty = admins).
+	mux.Handle("GET /admin/providers", admin(h.providersAdminPage))
+	mux.Handle("POST /admin/providers/{type}/{name}/access-tags", admin(h.setProviderAccessTags))
+	mux.Handle("POST /admin/providers/{type}/{name}/manage-tags", admin(h.setProviderManageTags))
+
 	mux.Handle("GET /admin/data-tables", admin(h.dataTablesAdminPage))
 	mux.Handle("POST /admin/data-tables/{slug}/tags", admin(h.setDataTableTags))
 
@@ -604,7 +610,7 @@ func (h *Handler) approveUser(w http.ResponseWriter, r *http.Request) {
 	if h.onUserApproved != nil {
 		h.onUserApproved(r.Context(), id)
 	}
-	http.Redirect(w, r, "/admin/users", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/users")
 }
 
 // SetOnUserApproved wires the post-approval notice hook. Called once at boot.
@@ -618,7 +624,7 @@ func (h *Handler) unapproveUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/users", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/users")
 }
 
 func (h *Handler) setRole(w http.ResponseWriter, r *http.Request) {
@@ -636,13 +642,16 @@ func (h *Handler) setRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/users", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/users")
 }
 
 func (h *Handler) setUserTags(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	r.ParseForm()
-	ids := dedupNonEmpty(r.Form["tag_ids[]"])
+	ids, ok := tagIDsFromForm(r)
+	if !ok {
+		refuseUnreadableTagForm(w)
+		return
+	}
 	if err := h.repo.SetUserTags(r.Context(), id, ids); err != nil {
 		if errors.Is(err, ErrUserNotApproved) || errors.Is(err, ErrSystemTagAssignment) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -651,7 +660,7 @@ func (h *Handler) setUserTags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/users", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/users")
 }
 
 // ── Job page handler ──────────────────────────────────────────
@@ -669,9 +678,15 @@ func (h *Handler) adminJobsPage(w http.ResponseWriter, r *http.Request) {
 	for i, j := range jobs {
 		paths[i] = "/jobs/" + j.Key
 	}
-	perms, _ := h.repo.ListToolPerms(ctx, paths)
-	allTags, _ := h.repo.ListTags(ctx)
-	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
+	perms, err := h.repo.ListToolPerms(ctx, paths)
+	if err != nil {
+		http.Error(w, "cannot load tag assignments: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	allTags, _, tagsOK := h.tagPageData(w, r, nil)
+	if !tagsOK {
+		return
+	}
 	allTags = filterOutOwnerTags(allTags)
 
 	systemTagIDs := make(map[string]bool)
@@ -723,8 +738,11 @@ func (h *Handler) setJobTags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, ErrSystemEntityImmutable.Error(), http.StatusBadRequest)
 		return
 	}
-	r.ParseForm()
-	ids := dedupNonEmpty(r.Form["tag_ids[]"])
+	ids, ok := tagIDsFromForm(r)
+	if !ok {
+		refuseUnreadableTagForm(w)
+		return
+	}
 	if err := h.repo.SetToolTags(r.Context(), path, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -745,7 +763,7 @@ func (h *Handler) setToolVisibility(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/tools", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/tools")
 }
 
 func (h *Handler) setToolDisabled(w http.ResponseWriter, r *http.Request) {
@@ -755,18 +773,21 @@ func (h *Handler) setToolDisabled(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/tools", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/tools")
 }
 
 func (h *Handler) setToolTags(w http.ResponseWriter, r *http.Request) {
 	path := "/tools/" + r.PathValue("path")
-	r.ParseForm()
-	ids := dedupNonEmpty(r.Form["tag_ids[]"])
+	ids, ok := tagIDsFromForm(r)
+	if !ok {
+		refuseUnreadableTagForm(w)
+		return
+	}
 	if err := h.repo.SetToolTags(r.Context(), path, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/tools", http.StatusFound)
+	redirectOrNoContent(w, r, "/admin/tools")
 }
 
 // ── Tag CRUD handlers ──────────────────────────────────────────

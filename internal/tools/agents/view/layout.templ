@@ -153,7 +153,12 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 						@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
 						@agentsNavLink(vm.Base+"/agent-profiles", "Sub-agents", vm.ActivePage == "agent-profiles")
 						@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
-						if user != nil && user.IsAdmin() {
+						// The Providers menu belongs to whoever looks after the
+						// provider ACCOUNTS: admins, plus anyone given a manage
+						// tag on an instance. Everyone else never sees it — they
+						// only ever pick a provider, which the access tags gate
+						// elsewhere (see provider_access.go).
+						if vm.ProvidersVisible {
 							@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
 						}
 						@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")

@@ -43,6 +43,7 @@ interface WireHookCapability {
 }
 
 interface WireProviderStatus {
+  can_manage?: boolean;
   instance: WireProviderInstance;
   path: string;
   path_found: boolean;
@@ -166,6 +167,7 @@ interface WireConfigField {
 }
 
 interface WireProvidersListResponse {
+  is_admin?: boolean;
   providers: WireProviderStatus[] | null;
   gate: WireGateStatus | null;
   mcp: WireMCPStatus | null;
@@ -178,6 +180,9 @@ interface WireProvidersListResponse {
 }
 
 interface WireProviderDetailResponse {
+  read_only?: boolean;
+  can_manage?: boolean;
+  secrets_hidden?: boolean;
   instance: WireProviderInstance;
   path: string;
   path_found: boolean;
@@ -376,11 +381,16 @@ function mapProviderStatus(w: WireProviderStatus): ProviderStatusDTO {
     Hooks: mapHooks(w.hooks),
     Cap: mapCap(w.cap),
     HookEnabled: w.hook_enabled ?? {},
+    CanManage: w.can_manage ?? false,
   };
 }
 
 export function normalizeProviders(r: WireProvidersListResponse): ProvidersListResponse {
   return {
+    // Absent is-admin reads as NOT admin: a payload from an older server
+    // (or a field that silently disappears) must render the read-only
+    // page, never hand out admin chrome the API would refuse anyway.
+    IsAdmin: r.is_admin ?? false,
     Providers: (r.providers ?? []).map(mapProviderStatus),
     Gate: mapGate(r.gate),
     MCPClients: mapMCP(r.mcp),
@@ -559,6 +569,12 @@ export async function apiProbeGate(type: string, name: string): Promise<void> {
 
 export function normalizeProviderDetail(r: WireProviderDetailResponse): ProviderDetailResponse {
   return {
+    // Absent read_only means an older server that only ever served
+    // admins — treat it as read-only rather than rendering an editor
+    // whose saves would be refused.
+    ReadOnly: r.read_only ?? true,
+    CanManage: r.can_manage ?? false,
+    SecretsHidden: r.secrets_hidden ?? false,
     Instance: mapInstance(r.instance),
     Path: r.path ?? "",
     PathFound: r.path_found ?? false,

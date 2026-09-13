@@ -15,6 +15,7 @@ vi.mock("@wick-fe/common-stores", () => ({
 
 function makeData(): ProvidersListResponse {
   return {
+    IsAdmin: true,
     Providers: [
       {
         Instance: { Type: "claude", Name: "claude", Binary: "claude", Disabled: false, MaxConcurrent: 4, SendMode: "" },
@@ -26,6 +27,7 @@ function makeData(): ProvidersListResponse {
         Hooks: {},
         HookEnabled: {},
         Cap: { Used: 1, Max: 4, Unlimited: false },
+        CanManage: true,
       },
       {
         Instance: { Type: "openai", Name: "gpt4", Binary: "", Disabled: true, MaxConcurrent: 2, SendMode: "" },
@@ -37,6 +39,7 @@ function makeData(): ProvidersListResponse {
         Hooks: {},
         HookEnabled: {},
         Cap: { Used: 0, Max: 2, Unlimited: false },
+        CanManage: true,
       },
     ],
     Gate: { Enabled: true, Binary: "/usr/bin/gate", Source: "config", Reason: "", Note: "Gate note", PermissionMode: "bypass", BypassLocked: false },
@@ -215,6 +218,7 @@ describe("ProvidersList - wick built-in card", () => {
       Instance: { Type: "wick", Name: "wick", Binary: "", Disabled: false, MaxConcurrent: 0, SendMode: "" },
       Path: "(built-in)",
       PathFound: true,
+      CanManage: true,
       Version: "built-in",
       VersionErr: "",
       Probing: false,
@@ -371,6 +375,73 @@ describe("ProvidersList connection badges", () => {
     // While it works, the button is disabled — a second click would only
     // queue behind the same probe.
     expect((screen.getAllByTestId("usage-recheck")[0] as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  // A non-admin gets a reading page: their providers and nothing that
+  // would let them change the host. The API refuses these anyway — this
+  // is about not offering a button that lies.
+  it("hides every admin control when the caller is not an admin", async () => {
+    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false });
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("claude/claude");
+
+    expect(screen.queryByText("+ Add Custom")).toBeNull();
+    expect(screen.queryByText("Rescan all")).toBeNull();
+    expect(screen.queryByText(/Auto-rescan/)).toBeNull();
+    expect(screen.queryByText("MCP Wick")).toBeNull();
+    expect(screen.queryByText("Delete instance")).toBeNull();
+    // Pool counters describe the host, not a provider.
+    expect(screen.queryByText("Active Slots")).toBeNull();
+    // …and the page says why it looks smaller.
+    expect(screen.getByText("read-only")).toBeTruthy();
+  });
+
+  it("still lists the providers themselves for a non-admin", async () => {
+    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false });
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    // The point of sharing: the card and its usage are there.
+    expect(await screen.findByText("claude/claude")).toBeTruthy();
+    expect(await screen.findByText("dev@abc.com")).toBeTruthy();
+    expect(screen.getByText("42%")).toBeTruthy();
+  });
+
+  it("offers Re-check only on instances the caller may manage", async () => {
+    const d = makeData();
+    d.IsAdmin = false;
+    d.Providers[0].CanManage = false;
+    vi.mocked(api.apiGetProviders).mockResolvedValue(d);
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    // Usage is readable…
+    expect(screen.getByText("42%")).toBeTruthy();
+    // …but forcing a fresh probe is a manage grant this caller lacks.
+    expect(screen.queryAllByTestId("usage-recheck")).toHaveLength(0);
+  });
+
+  it("offers Re-check to a non-admin who was granted manage", async () => {
+    const d = makeData();
+    d.IsAdmin = false;
+    d.Providers[0].CanManage = true;
+    vi.mocked(api.apiGetProviders).mockResolvedValue(d);
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    expect(screen.getAllByTestId("usage-recheck").length).toBeGreaterThan(0);
+  });
+
+  it("hides per-card Rescan from a non-admin manager", async () => {
+    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false });
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("claude/claude");
+    // Rescan re-probes the host binary — admin-only, so it must not be
+    // offered to someone whose click would come back 403.
+    expect(screen.queryByText("Rescan")).toBeNull();
+    // Detail stays: that is how a manager reaches Reconnect and usage.
+    expect(screen.getAllByText("Detail").length).toBeGreaterThan(0);
   });
 
   it("renders cards even when the connections request fails", async () => {

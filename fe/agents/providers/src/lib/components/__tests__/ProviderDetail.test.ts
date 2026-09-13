@@ -13,6 +13,11 @@ vi.mock("@wick-fe/common-stores", () => ({
 
 function makeDetail(): ProviderDetailResponse {
   return {
+    // Existing tests describe the ADMIN page; the read-only variant has
+    // its own tests below.
+    ReadOnly: false,
+    CanManage: true,
+    SecretsHidden: false,
     Instance: { Type: "claude", Name: "default", Binary: "claude", Disabled: false, MaxConcurrent: 4, SendMode: "" },
     Path: "/usr/bin/claude",
     PathFound: true,
@@ -377,5 +382,35 @@ describe("ProviderDetail - callbacks", () => {
     await screen.findByRole("button", { name: "Providers" });
     fireEvent.click(screen.getByRole("button", { name: "Providers" }));
     expect(onBack).toHaveBeenCalled();
+  });
+});
+
+describe("ProviderDetail - read-only viewer", () => {
+  it("gives a manager a read-only summary, not the admin form", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), ReadOnly: true, CanManage: false });
+    render(ProviderDetail, { props: { base: "", type: "claude", name: "claude", onBack: vi.fn(), onOpenSession: vi.fn() } });
+
+    const cfg = await screen.findByTestId("provider-config");
+    expect(cfg.getAttribute("data-readonly")).toBe("1");
+    // The summary, not the editor.
+    expect(screen.getByText("CONFIGURATION")).toBeTruthy();
+    // And crucially NOT the AI Router card: mounting it fires admin-only
+    // requests that answer 403 in a manager's console.
+    expect(screen.queryByText("AI Router")).toBeNull();
+    // Enable/disable, delete and rename are admin-only: gone, with the
+    // on/off state left as a plain badge.
+    expect(screen.queryByText(/click to disable/i)).toBeNull();
+    expect(screen.queryByText("Delete")).toBeNull();
+    expect(screen.queryByTitle("Rename this provider")).toBeNull();
+    expect(screen.getByText("Enabled")).toBeTruthy();
+  });
+
+  it("shows the configuration normally for an admin", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(makeDetail());
+    render(ProviderDetail, { props: { base: "", type: "claude", name: "claude", onBack: vi.fn(), onOpenSession: vi.fn() } });
+    await screen.findByText(/resolved/i);
+    expect(screen.getByTestId("provider-config").getAttribute("data-readonly")).toBeNull();
+    // The admin still gets the full editor.
+    expect(screen.queryByText("CONFIGURATION")).toBeNull();
   });
 });

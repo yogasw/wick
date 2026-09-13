@@ -93,6 +93,8 @@ templ connectorAdminRowFragment(row ConnectorAdminRow, tagsJSON string) {
 					data-can-create="true"
 					data-disabled?={ row.Connector.Disabled }
 				></div>
+				<!-- Marker so the handler can tell "no tags selected" from "I could not read the body". -->
+				<input type="hidden" name="tags_submitted" value="1"/>
 				if !row.Connector.Disabled {
 					<button type="submit" class="mt-1 text-xs font-medium text-green-600 hover:underline">Save</button>
 				}
@@ -158,6 +160,8 @@ templ connectorAccountAdminRowFragment(row ConnectorAdminRow, acc ConnectorAccou
 					data-selected={ strings.Join(acc.TagIDs, ",") }
 					data-can-create="true"
 				></div>
+				<!-- Marker so the handler can tell "no tags selected" from "I could not read the body". -->
+				<input type="hidden" name="tags_submitted" value="1"/>
 				<button type="submit" class="mt-1 text-xs font-medium text-green-600 hover:underline">Save</button>
 			</form>
 		</td>

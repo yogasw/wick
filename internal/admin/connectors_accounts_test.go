@@ -85,7 +85,7 @@ func TestSetConnectorAccountTagsAdmin(t *testing.T) {
 	require.NoError(t, db.Create(tag).Error)
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/connectors/"+row.ID+"/accounts/"+accs[0].ID+"/tags",
-		strings.NewReader("tag_ids[]="+tag.ID))
+		strings.NewReader("tags_submitted=1&tag_ids[]="+tag.ID))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetPathValue("id", row.ID)
 	req.SetPathValue("accountID", accs[0].ID)

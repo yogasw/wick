@@ -89,6 +89,22 @@
     return "";
   });
 
+  /* Admin decides which page this is. Everything that writes provider
+     configuration is admin-only however the access tags are set, so a
+     non-admin gets a reading page: their accessible providers, their
+     usage, and Reconnect / Re-check on the ones they were granted. The
+     API enforces all of it — this only stops us rendering buttons that
+     would come back 403. */
+  let isAdmin = $derived(data?.IsAdmin ?? false);
+
+  /* canManage answers the per-instance question the API will ask again:
+     may this caller reconnect it and force a usage re-check? Admins
+     always; everyone else through a manage tag. */
+  function canManage(type: string, name: string): boolean {
+    const row = data?.Providers.find((p) => p.Instance.Type === type && p.Instance.Name === name);
+    return row?.CanManage ?? false;
+  }
+
   let pollInterval: ReturnType<typeof setInterval> | null = null;
 
   async function load(silent = false): Promise<void> {
@@ -448,6 +464,7 @@
      (its own floor, and any cooldown the endpoint asked for), and a
      refusal comes back as a wait this button spells out. -->
 {#snippet recheckButton(type: string, name: string, busy: boolean, waitS: number)}
+  {#if canManage(type, name)}
   <span class="inline-flex items-center gap-1">
     <button
       type="button"
@@ -466,12 +483,17 @@
       <span class="whitespace-nowrap text-xs text-black-600 dark:text-black-700" title="A probe now would land inside a cooldown, so it was not sent">wait {fmtSecsShort(waitS)}</span>
     {/if}
   </span>
+  {/if}
 {/snippet}
 
 <div class="space-y-6">
   <div class="flex items-center justify-between gap-3 flex-wrap">
     <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Providers</h1>
     <div class="flex items-center gap-2">
+      {#if !isAdmin}
+        <span class="rounded-full border border-white-400 dark:border-navy-600 px-3 py-1 text-xs text-black-700 dark:text-black-600" title="Provider configuration is admin-only. You can view these providers and, where granted, reconnect them.">read-only</span>
+      {/if}
+      {#if isAdmin}
       <button
         type="button"
         onclick={doAutoRescanToggle}
@@ -489,6 +511,7 @@
         onclick={openAdd}
         class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
       >+ Add Custom</button>
+      {/if}
     </div>
   </div>
 
@@ -497,6 +520,9 @@
   {:else if error}
     <div class="rounded-lg border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">{error}</div>
   {:else if data}
+    <!-- Pool counters and the live process table describe the HOST, not
+         a provider, so they stay with the admin page. -->
+    {#if isAdmin}
     <div class="grid grid-cols-2 gap-4 sm:grid-cols-3">
       <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm">
         <p class="text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">Active Slots</p>
@@ -541,6 +567,7 @@
           </tbody>
         </table>
       </div>
+    {/if}
     {/if}
 
     {#if data.Providers.length === 0}
@@ -623,12 +650,18 @@
                 {/if}
               </div>
               <div class="flex items-center gap-2">
-                <button
-                  type="button"
-                  onclick={() => doRescanOne(p)}
-                  disabled={busy[rescanKey]}
-                  class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-xs text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50"
-                >{busy[rescanKey] ? "…" : "Rescan"}</button>
+                <!-- Rescan re-probes the binary on the HOST and rewrites
+                     the cached status, so it is admin-only like the rest
+                     of the configuration surface. Hidden rather than
+                     disabled: a manager has no use for it. -->
+                {#if isAdmin}
+                  <button
+                    type="button"
+                    onclick={() => doRescanOne(p)}
+                    disabled={busy[rescanKey]}
+                    class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-xs text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50"
+                  >{busy[rescanKey] ? "…" : "Rescan"}</button>
+                {/if}
                 <button
                   type="button"
                   onclick={() => onNavigate(p.Instance.Type, p.Instance.Name)}
@@ -732,6 +765,9 @@
                 </div>
               </div>
             {/if}
+            <!-- Per-instance Command Gate: enabling a hook changes what
+                 agents may run on this host, so it stays admin-only. -->
+            {#if isAdmin}
             <div class="pt-3 border-t border-white-300 dark:border-navy-600 space-y-2">
               <div class="flex items-center justify-between gap-2">
                 <div class="flex items-center gap-2 flex-wrap">
@@ -790,7 +826,8 @@
                 <p class="font-mono text-xs text-black-700 dark:text-black-600">last probed: {hc.ProbedAt}</p>
               {/if}
             </div>
-            {#if !isBuiltin(p)}
+            {/if}
+            {#if !isBuiltin(p) && isAdmin}
               <div class="pt-2 border-t border-white-300 dark:border-navy-600">
                 <button
                   type="button"
@@ -806,6 +843,10 @@
       </div>
     {/if}
 
+    <!-- Everything below is operator surface: the master Command Gate,
+         the MCP client installs and the spawn log. A viewer gets their
+         providers and nothing that would let them act on the host. -->
+    {#if isAdmin}
     <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
       <div class="border-b border-white-300 dark:border-navy-600 px-5 py-3 flex items-center justify-between gap-3">
         <div class="flex items-center gap-2">
@@ -950,6 +991,7 @@
     </div>
 
     <RecentSpawns {base} {onOpenSession} />
+    {/if}
   {/if}
 </div>
 

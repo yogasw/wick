@@ -21,6 +21,7 @@
   import RecentSpawns from "$lib/components/RecentSpawns.svelte";
   import ReconnectPanel from "$lib/components/ReconnectPanel.svelte";
 
+
   type Props = {
     base: string;
     type: string;
@@ -42,6 +43,11 @@
   type KVRow = Record<string, string>;
 
   let data = $state<ProviderDetailResponse | null>(null);
+  /* readOnly fails CLOSED: until the payload says otherwise (and an old
+     server never will), the page renders as a viewer's. Showing an
+     editable form to someone whose writes get 403 is worse than showing
+     a read-only one to an admin for a moment. */
+  let readOnly = $derived(data?.ReadOnly ?? true);
   let loading = $state(true);
   let error = $state<string | null>(null);
   let saving = $state(false);
@@ -564,8 +570,12 @@
     }
   }
 
-  onMount(() => {
-    load();
+  onMount(async () => {
+    await load();
+    // The catalog feeds the CONFIG EDITOR's pickers, and its endpoint is
+    // admin-only. Fetching it for a manager achieved nothing except a
+    // 403 in their console, so ask only when there is an editor to fill.
+    if (readOnly) return;
     apiGetProviderCatalog(base, type)
       .then((c) => { catalog = c; })
       .catch(() => { /* picker is optional — manual KvList still works */ });
@@ -681,6 +691,9 @@
   <Breadcrumb items={crumbs} />
   <div class="flex items-center justify-between gap-3 flex-wrap">
     <div class="flex items-center gap-2 flex-wrap">
+      {#if readOnly}
+        <span class="text-lg font-semibold text-black-900 dark:text-white-100">{type}/{name}</span>
+      {:else}
       <button
         type="button"
         onclick={openRename}
@@ -696,6 +709,7 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
         </svg>
       </button>
+      {/if}
       {#if data}
         {#if !data.PathFound}
           <span class="rounded bg-red-50 dark:bg-red-900 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-300">not found</span>
@@ -707,7 +721,13 @@
         {/if}
       {/if}
     </div>
-    {#if data}
+    {#if data && readOnly}
+      <span
+        class={`rounded-lg border px-3 py-1.5 text-xs font-medium ${data.Instance.Disabled
+          ? "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900 text-amber-800 dark:text-amber-300"
+          : "border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900 text-green-700 dark:text-green-300"}`}
+      >{data.Instance.Disabled ? "Disabled" : "Enabled"}</span>
+    {:else if data}
       <div class="flex items-center gap-2">
         {#if data.Instance.Disabled}
           <button
@@ -764,6 +784,53 @@
 
     <!-- Connection: account status + usage + reconnect via login TTY -->
     <ReconnectPanel {base} {type} {name} />
+
+    <!-- Everything below edits the instance. A non-admin still SEES it —
+         that is the point of sharing a provider: you can check how it is
+         configured without being able to change it — but the controls are
+         inert, and the API refuses the write in any case. The Connection
+         panel above stays live, because reconnecting is a manage grant,
+         not an edit. -->
+    {#if readOnly}
+      <!-- Manager view: what they came for is the Connection panel above.
+           The configuration is shown as a plain summary — no inputs, no
+           cards that fetch admin-only endpoints on mount (the AI Router
+           card did exactly that, and every one of those calls was a 403
+           in their console). -->
+      <div
+        data-testid="provider-config"
+        data-readonly="1"
+        class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 space-y-2 text-xs"
+      >
+        <p class="text-[11px] font-semibold tracking-wide text-black-700 dark:text-black-600">CONFIGURATION</p>
+        <div class="flex gap-2">
+          <span class="w-32 shrink-0 text-black-700 dark:text-black-600">binary</span>
+          <span class="font-mono text-black-900 dark:text-white-100 break-all">{data.Instance.Binary || data.Path || "—"}</span>
+        </div>
+        <div class="flex gap-2">
+          <span class="w-32 shrink-0 text-black-700 dark:text-black-600">version</span>
+          <span class="font-mono text-black-900 dark:text-white-100">{data.Version || "—"}</span>
+        </div>
+        <div class="flex gap-2">
+          <span class="w-32 shrink-0 text-black-700 dark:text-black-600">max concurrent</span>
+          <span class="text-black-900 dark:text-white-100">{data.Instance.MaxConcurrent || data.GlobalMax} </span>
+        </div>
+        {#if data.Instance.SendMode}
+          <div class="flex gap-2">
+            <span class="w-32 shrink-0 text-black-700 dark:text-black-600">send mode</span>
+            <span class="text-black-900 dark:text-white-100">{data.Instance.SendMode}</span>
+          </div>
+        {/if}
+        <div class="flex gap-2">
+          <span class="w-32 shrink-0 text-black-700 dark:text-black-600">status</span>
+          <span class="text-black-900 dark:text-white-100">{data.Instance.Disabled ? "disabled" : "enabled"}</span>
+        </div>
+        <p class="pt-2 text-[11px] text-black-700 dark:text-black-600">
+          Editing a provider's configuration is admin-only. You can reconnect this account and re-check its usage above.
+        </p>
+      </div>
+    {:else}
+    <div data-testid="provider-config">
 
     <!-- Configuration (simple fields, 2-column grid). Collapsed by
          default; the header is the toggle. -->
@@ -1209,5 +1276,7 @@
 
     <!-- Recent spawns — shared component (search + pagination + inline detail) -->
     <RecentSpawns {base} {type} {name} {onOpenSession} collapsible={true} />
+    </div>
+    {/if}
   {/if}
 </div>
