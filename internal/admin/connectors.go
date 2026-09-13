@@ -71,7 +71,9 @@ func (h *Handler) connectorsAdminPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	access := h.accessSummaries(ctx, accessPaths)
-	totalUsers := h.repo.ApprovedUserCount(ctx)
+	// One batch for every account on the page: resolving each account on its
+	// own was ~6 round trips each, which on a remote database is seconds.
+	batch := h.newAccountReachBatch(ctx, accessPaths)
 	for i := range items {
 		items[i].Access = access["/connectors/"+items[i].Connector.ID]
 		items[i].TagNames = view.TagNames(allTags, items[i].TagIDs)
@@ -79,7 +81,7 @@ func (h *Handler) connectorsAdminPage(w http.ResponseWriter, r *http.Request) {
 			acc := &items[i].Accounts[j]
 			// An account's reach is wider than its tags (owner, creator,
 			// admins, shared pool), so it is counted on its own terms.
-			acc.Access = h.accountAccessSummary(ctx, items[i].Connector, acc.Account, totalUsers)
+			acc.Access = batch.summaryFor(items[i].Connector, acc.Account)
 			acc.TagNames = view.TagNames(allTags, acc.TagIDs)
 		}
 	}

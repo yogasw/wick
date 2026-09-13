@@ -422,20 +422,6 @@ func containsString(list []string, want string) bool {
 	return false
 }
 
-// accountAccessSummary turns that set into the badge. An account is never
-// "public" — the floor is the person who connected it — so it always renders
-// as a restricted count.
-func (h *Handler) accountAccessSummary(ctx context.Context, row entity.Connector, acc entity.ConnectorAccount, total int) adminview.AccessSummary {
-	users, err := h.accountAccessUsers(ctx, row, acc)
-	if err != nil {
-		return adminview.AccessSummary{Path: connectors.AccountTagPath(acc.ID), Unknown: true}
-	}
-	return adminview.AccessSummary{
-		Path:      connectors.AccountTagPath(acc.ID),
-		UserCount: len(users),
-		TotalUser: total,
-	}
-}
 
 // accountAccessDetail is the modal body for a connected account: the full set
 // from accountAccessUsers, tagged with the reason each person gets in.
@@ -642,4 +628,90 @@ func (h *Handler) ownerScopedDetail(ctx context.Context, path string, rule acces
 	}
 	out.Users = h.withAdminBypass(ctx, path, out.Users)
 	return out, nil
+}
+
+// ── Batched account reach ─────────────────────────────────────────────────
+//
+// The connectors page lists every instance with its connected accounts, and
+// resolving each account on its own cost ~6 round trips — tags, the row's
+// tags, two owner lookups, the admin list. Against a remote Postgres at ~40ms
+// that is seconds of page load for a number.
+//
+// Nothing here needs a NAME, only a count, so the whole page resolves from
+// three sets loaded once: the tag holders of every path on the page, the
+// approved user ids, and the admins. Per account the work is then pure set
+// union with no query at all.
+//
+// Deliberately not a cache: this is the page where an admin EDITS those tags,
+// and a count that lags the edit that produced it is worse than a slow one.
+
+// accountReachBatch is the page-level state the per-account count reads from.
+type accountReachBatch struct {
+	tagSets  map[string]map[string]bool // tool_path → user ids carrying its tags
+	approved map[string]bool
+	adminIDs []string
+	bypass   bool
+	total    int
+	failed   bool
+}
+
+// newAccountReachBatch loads everything the accounts on one page need, in
+// three queries total regardless of how many accounts there are.
+func (h *Handler) newAccountReachBatch(ctx context.Context, paths []string) accountReachBatch {
+	b := accountReachBatch{total: h.repo.ApprovedUserCount(ctx)}
+	sets, err := h.repo.AccessUserIDs(ctx, paths)
+	if err != nil {
+		b.failed = true
+		return b
+	}
+	b.tagSets = sets
+	if approved, err := h.repo.ApprovedUserIDs(ctx); err == nil {
+		b.approved = approved
+	}
+	if admins, err := h.repo.AdminUsers(ctx); err == nil {
+		for _, a := range admins {
+			b.adminIDs = append(b.adminIDs, a.ID)
+		}
+	}
+	// Every account on the page is on the same surface, so the knob is read
+	// once rather than per row.
+	b.bypass = h.adminBypassFor(connectors.AccountTagPath("x"))
+	return b
+}
+
+// summaryFor counts one account's reach from the batch — no queries. Mirrors
+// connectors.AccountVisibleTo: tag share, the connector, the row's creator,
+// admins under the knob, and the whole pool when the instance shares it.
+func (b accountReachBatch) summaryFor(row entity.Connector, acc entity.ConnectorAccount) adminview.AccessSummary {
+	path := connectors.AccountTagPath(acc.ID)
+	if b.failed {
+		return adminview.AccessSummary{Path: path, Unknown: true}
+	}
+	reach := map[string]bool{}
+	for id := range b.tagSets[path] {
+		reach[id] = true
+	}
+	for _, id := range []string{acc.WickUserID, row.CreatedBy} {
+		if id != "" && b.approved[id] {
+			reach[id] = true
+		}
+	}
+	if b.bypass {
+		for _, id := range b.adminIDs {
+			reach[id] = true
+		}
+	}
+	if row.AllowOthersSeeAccounts {
+		rowPath := "/connectors/" + row.ID
+		if holders, tagged := b.tagSets[rowPath]; tagged {
+			for id := range holders {
+				reach[id] = true
+			}
+		} else {
+			// An untagged row is visible to everyone, so sharing its pool
+			// shares every account with everyone.
+			return adminview.AccessSummary{Path: path, UserCount: b.total, TotalUser: b.total}
+		}
+	}
+	return adminview.AccessSummary{Path: path, UserCount: len(reach), TotalUser: b.total}
 }

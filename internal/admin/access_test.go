@@ -423,3 +423,93 @@ func TestUntaggedToolStaysPublic(t *testing.T) {
 	require.True(t, sums["/tools/notes"].Public)
 	require.Equal(t, 2, sums["/tools/notes"].Reach())
 }
+
+// ── The batched count must agree with the detailed list ───────────────────
+//
+// The badge is counted in one batched pass and the modal resolves the same
+// account row by row. They are two code paths answering one question, so the
+// only thing keeping them honest is this: the number on the badge must equal
+// the number of people the modal lists.
+
+func requireBadgeMatchesModal(t *testing.T, h *Handler, svc *connectors.Service, rowID string) {
+	t.Helper()
+	ctx := context.Background()
+	row := mustGet(t, svc, rowID)
+	accs, err := svc.ListAccounts(ctx, rowID)
+	require.NoError(t, err)
+
+	paths := []string{"/connectors/" + rowID}
+	for _, a := range accs {
+		paths = append(paths, connectors.AccountTagPath(a.ID))
+	}
+	batch := h.newAccountReachBatch(ctx, paths)
+
+	for _, acc := range accs {
+		users, err := h.accountAccessUsers(ctx, *row, acc)
+		require.NoError(t, err)
+		got := batch.summaryFor(*row, acc)
+		require.Equal(t, len(users), got.UserCount,
+			"badge and modal disagree for account %s", acc.DisplayName)
+	}
+}
+
+func TestBatchedAccountReachMatchesDetailPrivatePool(t *testing.T) {
+	h, svc, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	row, err := svc.Create(ctx, "sso-admin", "Row", nil, "u-creator")
+	require.NoError(t, err)
+	require.NoError(t, svc.SetAccessPolicy(ctx, row.ID, connectors.AccessPolicy{EnableSSO: true, MultiAccount: true}))
+	team := seedFilterTag(t, db, "team")
+	seedUserWithTag(t, db, "u-creator", "creator@x.test", "")
+	seedUserWithTag(t, db, "u-alice", "alice@x.test", "")
+	seedUserWithTag(t, db, "u-bob", "bob@x.test", "")
+	seedUserWithTag(t, db, "u-teamer", "teamer@x.test", team)
+	require.NoError(t, svc.SaveAccount(ctx, row.ID, "u-alice", "ext-a", "alice", "tok-a"))
+	require.NoError(t, svc.SaveAccount(ctx, row.ID, "u-bob", "ext-b", "bob", "tok-b"))
+
+	accs, err := svc.ListAccounts(ctx, row.ID)
+	require.NoError(t, err)
+	// Share exactly one account with the team — the granular case.
+	tagPath(t, db, connectors.AccountTagPath(accs[0].ID), team)
+
+	requireBadgeMatchesModal(t, h, svc, row.ID)
+}
+
+func TestBatchedAccountReachMatchesDetailSharedPool(t *testing.T) {
+	h, svc, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	row, err := svc.Create(ctx, "sso-admin", "Row", nil, "u-creator")
+	require.NoError(t, err)
+	require.NoError(t, svc.SetAccessPolicy(ctx, row.ID, connectors.AccessPolicy{
+		EnableSSO: true, MultiAccount: true, AllowOthersSeeAccounts: true,
+	}))
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-creator", "creator@x.test", "")
+	seedUserWithTag(t, db, "u-alice", "alice@x.test", "")
+	seedUserWithTag(t, db, "u-sup", "sup@x.test", support)
+	tagPath(t, db, "/connectors/"+row.ID, support)
+	require.NoError(t, svc.SaveAccount(ctx, row.ID, "u-alice", "ext-a", "alice", "tok-a"))
+
+	requireBadgeMatchesModal(t, h, svc, row.ID)
+}
+
+// A deactivated account is not reach: the person who connected it no longer
+// counts once their user is unapproved.
+func TestBatchedAccountReachSkipsUnapprovedConnector(t *testing.T) {
+	h, svc, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	row, err := svc.Create(ctx, "sso-admin", "Row", nil, "u-creator")
+	require.NoError(t, err)
+	require.NoError(t, svc.SetAccessPolicy(ctx, row.ID, connectors.AccessPolicy{EnableSSO: true, MultiAccount: true}))
+	seedUserWithTag(t, db, "u-creator", "creator@x.test", "")
+	require.NoError(t, db.Create(&entity.User{ID: "u-gone", Name: "Gone", Email: "gone@x.test", Approved: false}).Error)
+	require.NoError(t, svc.SaveAccount(ctx, row.ID, "u-gone", "ext-g", "gone", "tok-g"))
+
+	accs, err := svc.ListAccounts(ctx, row.ID)
+	require.NoError(t, err)
+	batch := h.newAccountReachBatch(ctx, []string{
+		"/connectors/" + row.ID, connectors.AccountTagPath(accs[0].ID),
+	})
+	got := batch.summaryFor(*mustGet(t, svc, row.ID), accs[0])
+	require.Equal(t, 1, got.UserCount, "only the creator — the unapproved connector is not reach")
+}

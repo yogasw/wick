@@ -372,3 +372,21 @@ func (r *repo) OwnerTagHolders(ctx context.Context, tagNames []string) (map[stri
 	}
 	return out, nil
 }
+
+// ApprovedUserIDs is the id set of everyone who can log in. Used to decide
+// whether an implicit grant (the person who connected an account, a row's
+// creator) is still a real user — a deactivated account is not reach.
+func (r *repo) ApprovedUserIDs(ctx context.Context) (map[string]bool, error) {
+	var ids []string
+	if err := r.db.WithContext(ctx).
+		Model(&entity.User{}).
+		Where("approved = ?", true).
+		Pluck("CAST(id AS TEXT)", &ids).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, nil
+}
