@@ -391,3 +391,225 @@ func revParse(t *testing.T, dir string) string {
 	}
 	return string(out)
 }
+
+// A new directory of files must list every file, not collapse into one
+// entry for the folder — that collapse is what made the panel say "1
+// change" and then explode into a dozen rows the moment they were staged.
+func TestStatusExpandsUntrackedDirectory(t *testing.T) {
+	skipNoGit(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	gitInit(t, dir)
+
+	sub := filepath.Join(dir, "pkg", "deep")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(sub, name), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	st, err := Status(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, c := range st.Changes {
+		got[c.Path] = c.Dir
+	}
+	for _, want := range []string{"pkg/deep/a.txt", "pkg/deep/b.txt"} {
+		isDir, ok := got[want]
+		if !ok {
+			t.Fatalf("expected %s in status, got %+v", want, st.Changes)
+		}
+		if isDir {
+			t.Fatalf("%s should not be flagged as a directory", want)
+		}
+	}
+	if _, collapsed := got["pkg/"]; collapsed {
+		t.Fatalf("directory collapsed into one entry: %+v", st.Changes)
+	}
+}
+
+// git refuses to look inside a nested repository, so it reports the whole
+// folder as one entry with a trailing slash. The path must come back
+// clean (every git command takes it bare) and flagged as a directory,
+// both before staging and after — staged, it becomes a gitlink.
+func TestStatusNestedRepoIsDirEntry(t *testing.T) {
+	skipNoGit(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	gitInit(t, dir)
+
+	inner := filepath.Join(dir, "vendored")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitInit(t, inner)
+
+	find := func(st StatusResult) (FileChange, bool) {
+		for _, c := range st.Changes {
+			if c.Path == "vendored" {
+				return c, true
+			}
+		}
+		return FileChange{}, false
+	}
+
+	st, err := Status(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, ok := find(st)
+	if !ok {
+		t.Fatalf("expected a clean 'vendored' entry, got %+v", st.Changes)
+	}
+	if !c.Dir || !c.Untracked {
+		t.Fatalf("expected untracked directory entry, got %+v", c)
+	}
+
+	if err := Stage(ctx, dir, []string{"vendored"}); err != nil {
+		t.Fatal(err)
+	}
+	st, err = Status(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, ok = find(st)
+	if !ok {
+		t.Fatalf("expected staged 'vendored' entry, got %+v", st.Changes)
+	}
+	if !c.Dir || !c.Staged {
+		t.Fatalf("expected staged gitlink flagged as a directory, got %+v", c)
+	}
+}
+
+// A clone that landed inside another checkout has to be listed on its
+// own: the enclosing repo reports it as one opaque folder and cannot
+// show what is inside, so this list is the only way to reach its files.
+func TestDiscoverReposFindsNestedClone(t *testing.T) {
+	skipNoGit(t)
+	root := t.TempDir()
+	outer := filepath.Join(root, "erha-store")
+	inner := filepath.Join(outer, "integration-helm")
+	deep := filepath.Join(outer, "a", "b", "c", "too-deep")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitInit(t, outer)
+	gitInit(t, inner)
+	gitInit(t, deep)
+
+	repos, err := DiscoverRepos(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]string{}
+	for _, r := range repos {
+		names[r.Rel] = r.Name
+	}
+	if _, ok := names["erha-store"]; !ok {
+		t.Fatalf("expected the outer repo, got %+v", repos)
+	}
+	if _, ok := names["erha-store/integration-helm"]; !ok {
+		t.Fatalf("expected the nested clone, got %+v", repos)
+	}
+	// Nested repos are labelled by path — "integration-helm" alone could
+	// be any of several clones in a session directory.
+	if got := names["erha-store/integration-helm"]; got != "erha-store/integration-helm" {
+		t.Fatalf("nested repo should be named by path, got %q", got)
+	}
+	// Bounded: a repo four levels down inside another repo is somebody's
+	// fixture, not a clone the user is working in.
+	if _, ok := names["erha-store/a/b/c/too-deep"]; ok {
+		t.Fatalf("descent below maxNestedDepth should stop, got %+v", repos)
+	}
+}
+
+// Discarding a folder that is a repo of its own used to report success
+// while `git clean -fd` silently skipped it — the button did nothing and
+// said nothing. It must say so instead, and still clean the rest.
+func TestDiscardReportsNestedRepo(t *testing.T) {
+	skipNoGit(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	gitInit(t, dir)
+
+	inner := filepath.Join(dir, "vendored")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitInit(t, inner)
+	if err := os.WriteFile(filepath.Join(dir, "stray.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Discard(ctx, dir, []string{"vendored", "stray.txt"}, []string{"vendored", "stray.txt"})
+	if err == nil {
+		t.Fatal("expected an error naming the nested repo")
+	}
+	if !strings.Contains(err.Error(), "vendored") {
+		t.Fatalf("error should name the folder, got %v", err)
+	}
+	// The nested repo survives, the ordinary untracked file does not.
+	if _, statErr := os.Stat(inner); statErr != nil {
+		t.Fatalf("nested repo should be left alone: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "stray.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("the rest of the selection should still be cleaned, got %v", statErr)
+	}
+}
+
+// Exclude is the way out for a folder that cannot be discarded: git stops
+// reporting it, nothing leaves the disk, and the entry is repo-local.
+func TestExclude(t *testing.T) {
+	skipNoGit(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	gitInit(t, dir)
+
+	inner := filepath.Join(dir, "vendored")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitInit(t, inner)
+
+	if err := Exclude(ctx, dir, []string{"vendored/"}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, ".git", "info", "exclude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Anchored, and with the trailing slash git reported it with dropped.
+	if !strings.Contains(string(body), "\n/vendored\n") && !strings.HasPrefix(string(body), "/vendored\n") {
+		t.Fatalf("expected an anchored /vendored entry, got %q", string(body))
+	}
+	if _, statErr := os.Stat(inner); statErr != nil {
+		t.Fatalf("exclude must not touch the folder: %v", statErr)
+	}
+
+	st, err := Status(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range st.Changes {
+		if c.Path == "vendored" {
+			t.Fatalf("excluded folder should no longer be reported, got %+v", st.Changes)
+		}
+	}
+
+	// Running it twice must not duplicate the line.
+	if err := Exclude(ctx, dir, []string{"vendored"}); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := os.ReadFile(filepath.Join(dir, ".git", "info", "exclude"))
+	if strings.Count(string(again), "/vendored") != 1 {
+		t.Fatalf("entry should be written once, got %q", string(again))
+	}
+}

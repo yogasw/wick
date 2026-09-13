@@ -88,3 +88,56 @@ func TestEnsureTurnRefusesForeignSession(t *testing.T) {
 		t.Fatalf("expected no turn for another instance's session, got %+v", got)
 	}
 }
+
+// An owned session with no binding is a fault, and it used to be a silent
+// one: the turn ran, the answer was built, and NotifyState dropped it without
+// a log. A schedule-driven session can lose a reply this way every day, so
+// the drop has to leave a trace.
+func TestEnsureTurnWarnsOnceForOwnedSessionWithoutBinding(t *testing.T) {
+	sess := &sessionsWithBinding{has: false}
+	c := &Channel{turns: map[string]*turn{}, sessions: sess, sessionPrefix: "slack-owner-"}
+
+	if got := c.ensureTurn("slack-owner-1789014375.645429"); got != nil {
+		t.Fatalf("expected no turn without a binding, got %+v", got)
+	}
+	if _, warned := c.unboundWarned.Load("slack-owner-1789014375.645429"); !warned {
+		t.Fatal("an owned session with no binding should be reported")
+	}
+
+	// ensureTurn runs on every streamed delta — the report must not repeat.
+	c.ensureTurn("slack-owner-1789014375.645429")
+	n := 0
+	c.unboundWarned.Range(func(any, any) bool { n++; return true })
+	if n != 1 {
+		t.Fatalf("expected one remembered session, got %d", n)
+	}
+}
+
+// A session that is not ours is not a fault — NotifyState runs for every
+// session on every channel, so warning here would fire on every web-only turn.
+func TestEnsureTurnStaysQuietForForeignSession(t *testing.T) {
+	sess := &sessionsWithBinding{has: false}
+	c := &Channel{turns: map[string]*turn{}, sessions: sess, sessionPrefix: "slack-owner-"}
+
+	c.ensureTurn("ui-session-1")
+	if _, warned := c.unboundWarned.Load("ui-session-1"); warned {
+		t.Error("a session this instance does not own must not be reported")
+	}
+}
+
+// Once the binding turns up the session is healthy again, so the next failure
+// is reported instead of being swallowed by the once-guard.
+func TestEnsureTurnForgetsWarningAfterBindingAppears(t *testing.T) {
+	sess := &sessionsWithBinding{has: false}
+	c := &Channel{turns: map[string]*turn{}, sessions: sess, sessionPrefix: "slack-owner-"}
+	c.ensureTurn("slack-owner-1789014375.645429")
+
+	sess.has = true
+	sess.binding = agentchannels.ThreadBinding{Channel: "slack", ChatID: "D0BACAJ7JRZ"}
+	if got := c.ensureTurn("slack-owner-1789014375.645429"); got == nil {
+		t.Fatal("turn should be restored once the binding exists")
+	}
+	if _, warned := c.unboundWarned.Load("slack-owner-1789014375.645429"); warned {
+		t.Error("the warning should be forgotten once the session can be delivered to")
+	}
+}

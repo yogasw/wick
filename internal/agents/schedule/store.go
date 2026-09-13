@@ -312,6 +312,9 @@ func (s *Store) Reschedule(ctx context.Context, id string, patch SchedulePatch) 
 	if patch.SessionID != nil {
 		updates["session_id"] = *patch.SessionID
 	}
+	if patch.RunAsUserID != nil {
+		updates["run_as_user_id"] = *patch.RunAsUserID
+	}
 	if patch.OwnerUserID != nil {
 		updates["owner_user_id"] = *patch.OwnerUserID
 	}
@@ -348,6 +351,11 @@ type SchedulePatch struct {
 	// belongs to — a session's owner vs a project's — so the owner has to
 	// follow, or the row becomes invisible to its own lists.
 	OwnerUserID *string
+	// RunAsUserID re-points the identity a fire runs as. A pointer to the
+	// empty string CLEARS the override, handing the schedule back to its
+	// owner — which is why it is a pointer and not a plain string: "not
+	// mentioned" and "set back to default" have to be different requests.
+	RunAsUserID *string
 }
 
 // RunNow makes a live schedule due immediately, so the next runner tick

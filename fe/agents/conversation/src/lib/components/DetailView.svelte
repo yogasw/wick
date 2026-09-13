@@ -24,10 +24,15 @@
   import { getConversation, getSessionMeta, deleteSession, getTurnTrace, getTurnEvent, cancelRun } from "../api/sessions.js";
   import { getProviderOptions, getProviderOptionModels, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
   import { getAsks, answerAsk } from "../api/asks.js";
+  import { getTodos, type TodoList } from "../api/todos.js";
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
   import { sendMessage } from "../api/messages.js";
   import { listFiles, searchTree, searchMentionPaths, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
   import { listComposerCommands, type ComposerApiCommand } from "../api/composer.js";
+  import {
+    getComposerUsage, normalizeComposerUsage, refreshComposerUsage, normalizeUsageRefresh,
+    type ComposerUsage,
+  } from "../api/usage.js";
   import { getProcesses, killProcess, dequeueProcess, liveProcesses as filterLiveProcesses } from "../api/processes.js";
   import {
     getSubAgentPanel,
@@ -75,12 +80,14 @@
   import FileViewerModal from "./FileViewerModal.svelte";
   import SwitchModal from "./SwitchModal.svelte";
   import OverridePopover from "./OverridePopover.svelte";
+  import UsagePopover from "./UsagePopover.svelte";
   import { getSessionOverrides, setSessionOverride } from "../api/overrides.js";
   import type { ConfigField } from "@wick-fe/common-ui";
   import { setFileContext, setWidgetPolicy } from "../richRender.js";
   import ProcessPanel from "./ProcessPanel.svelte";
   import WorkspacePanel from "./WorkspacePanel.svelte";
   import SchedulePanel from "./SchedulePanel.svelte";
+  import TodoPanel from "./TodoPanel.svelte";
   import AskUserModal from "./AskUserModal.svelte";
   import ApprovalsModal from "./ApprovalsModal.svelte";
   import ApprovedPanel from "./ApprovedPanel.svelte";
@@ -177,7 +184,7 @@
   let sseStatus = $state<SSEStatus>("connecting");
 
   /* ── vertical rail tabs ────────────────────────────────────────── */
-  type RailTab = "context" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents" | "ticket" | "notes";
+  type RailTab = "context" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents" | "ticket" | "notes" | "todos";
   let railTab = $state<RailTab | null>(null);
 
   /* ── thread scroll ref ─────────────────────────────────────────── */
@@ -227,12 +234,97 @@
     "panel:context": () => toggleRail("context"),
     "panel:subagents": () => toggleRail("subagents"),
     "panel:thinking": () => openOverridePopover(),
+    "panel:usage": () => openUsagePopover(),
     "view:commands": () => handleTabChange("commands"),
     "view:approvals": () => handleTabChange("approvals"),
     "view:raw": () => handleTabChange("raw"),
   };
 
   // Load the session's override schema + current values, then open the popover.
+  /* /usage — the session provider's remaining quota, read-only. The
+     server answers from its shared paced cache, so opening this costs no
+     upstream request; an unsupported provider type comes back with
+     supported=false and the popover prints why. */
+  let usagePopoverOpen = $state(false);
+  let usageData = $state<ComposerUsage | null>(null);
+  let usageLoading = $state(false);
+  let usageError = $state("");
+  let usageRechecking = $state(false);
+  let usageRecheckWait = $state(0);
+
+  /* Re-check asks the SERVER's cache for a fresh reading — it does not
+     bypass anything. A refusal comes back as a wait, which the popover
+     prints beside the button. */
+  function recheckUsage() {
+    if (!activeProvider) return;
+    usageRechecking = true;
+    usageRecheckWait = 0;
+    run(refreshComposerUsage(base, activeProvider).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        const r = normalizeUsageRefresh(res);
+        if (!r.accepted) usageRecheckWait = r.waitS;
+      })
+      .catch(() => { usageError = "Could not re-check usage."; })
+      .finally(() => {
+        usageRechecking = false;
+        // The probe runs server-side; give the poll a budget to catch it
+        // landing instead of leaving "Checking usage…" on screen.
+        usagePollsLeft = 20;
+        loadUsage();
+      });
+  }
+
+  /* While a probe is in flight the popover used to sit on "Checking
+     usage…" until you closed and reopened it — the result landed on the
+     server and nothing asked for it. So a landed probe is picked up by
+     a short poll, which stops the moment it is no longer checking (or
+     after a bounded number of tries, so a stuck probe cannot leave a
+     timer running behind a closed popover). */
+  let usagePollTimer: ReturnType<typeof setTimeout> | null = null;
+  let usagePollsLeft = 0;
+
+  function stopUsagePoll() {
+    if (usagePollTimer !== null) { clearTimeout(usagePollTimer); usagePollTimer = null; }
+    usagePollsLeft = 0;
+  }
+
+  function scheduleUsagePoll() {
+    if (usagePollTimer !== null || usagePollsLeft <= 0) return;
+    usagePollTimer = setTimeout(() => {
+      usagePollTimer = null;
+      usagePollsLeft -= 1;
+      if (usagePopoverOpen) loadUsage(true);
+    }, 1500);
+  }
+
+  function loadUsage(silent = false) {
+    if (!activeProvider) return;
+    if (!silent) usageLoading = true;
+    run(getComposerUsage(base, activeProvider).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        usageData = normalizeComposerUsage(res);
+        if (usageData.checking || usageData.pending) {
+          scheduleUsagePoll();
+        } else {
+          stopUsagePoll();
+        }
+      })
+      .catch(() => { usageError = "Could not read usage for this provider."; })
+      .finally(() => { usageLoading = false; });
+  }
+
+  function openUsagePopover() {
+    usagePopoverOpen = true;
+    usageError = "";
+    usageRecheckWait = 0;
+    usagePollsLeft = 20;
+    if (!activeProvider) {
+      usageError = "No provider selected for this session.";
+      return;
+    }
+    loadUsage();
+  }
+
   function openOverridePopover() {
     const providerType = activeProvider ? activeProvider.split("/")[0] : "";
     run(getSessionOverrides(base, sessionId, providerType).pipe(Effect.provide(WickClientLayer)))
@@ -990,6 +1082,68 @@
       .catch(() => { notesInfo = null; });
   }
 
+  /* Todo rail data. The todo tool writes its list to the session, so
+     the panel shows the SAME list the agent works from — not a reconstruction
+     of the tool calls in the trace, which scroll away and give no answer to
+     "which of these five is the current one?". */
+  let todosActive = $state<TodoList | null>(null);
+  let todosHistory = $state<TodoList[]>([]);
+  let todosLoading = $state(false);
+  let todosError = $state<string | null>(null);
+  /* started_at of the list already on screen. A CHANGE here means the agent
+     started a new checklist, which is the only moment worth opening the rail
+     for; every other update is the same list moving forward. */
+  let todosSeen = $state<string | null>(null);
+  /* True while the rail is open on Todo because the PANEL opened it,
+     not the user. Only that is undone when the list finishes: closing a
+     panel somebody opened themselves is the same rudeness as stealing focus,
+     just in the other direction. */
+  let todosAutoOpened = $state(false);
+
+  function loadTodos() {
+    todosLoading = true;
+    run(getTodos(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        todosActive = res.active;
+        todosHistory = res.history;
+        todosError = null;
+        const start = res.active?.started_at ?? null;
+        if (start && start !== todosSeen) {
+          todosSeen = start;
+          // Open the rail on a NEW list, and only when nothing else is
+          // open: a panel that yanks you off the one you were reading is
+          // worse than one you have to click.
+          if (railTab === null) {
+            railTab = "todos";
+            todosAutoOpened = true;
+          }
+        }
+        // Finished list → put the rail back the way it was. Symmetric with
+        // the open above, and only for an auto-open: a panel the user chose
+        // stays until they choose otherwise.
+        if (res.active?.done && todosAutoOpened && railTab === "todos") {
+          railTab = null;
+          todosAutoOpened = false;
+        }
+      })
+      .catch(() => {
+        // An older server has no endpoint; treat it as "no checklists" so
+        // the tab stays hidden rather than showing a broken panel.
+        todosError = null;
+        todosActive = null;
+        todosHistory = [];
+      })
+      .finally(() => { todosLoading = false; });
+  }
+
+  /* Coalesce: a turn writes its checklist repeatedly, and each write would
+     otherwise cost a fetch. */
+  let todoReloadTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleTodoReload() {
+    if (todoReloadTimer) clearTimeout(todoReloadTimer);
+    todoReloadTimer = setTimeout(() => { todoReloadTimer = null; loadTodos(); }, 400);
+  }
+
   /* Jump from this chat to its ticket — offered only where a board exists.
      A chat already ON a ticket opens that ticket; one that is not opens the
      board, which is where it would be put on one. The ticket rail can do
@@ -1135,11 +1289,18 @@
 
     // A real user scroll: release the bottom-pin the moment they move up, and
     // re-pin once they return to the bottom. Drives the Jump button.
+    //
+    // The two thresholds are deliberately NOT the same. 80px is the Jump-button
+    // threshold — far enough up that an overlay is worth showing. Re-pinning is
+    // stricter: only when the thread is actually parked at the bottom. Sharing
+    // the 80px for both made every short scroll (one wheel notch ≈ 40px) set
+    // stickToBottom back to true, which re-ran the pin effect below and yanked
+    // the thread down again — the panel appeared to blink on small scrolls.
     function onScroll() {
       if (suppressScrollCheck) return;
       const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       userScrolledUp = distFromBottom > 80;
-      stickToBottom = !userScrolledUp;
+      if (distFromBottom <= 4) stickToBottom = true;
       showJumpBtn = userScrolledUp;
       // Near the top → pull the next older history page in.
       if (el.scrollTop < 80) loadOlderHistory();
@@ -1439,6 +1600,10 @@
         // reloaded, which is precisely when you most want to see that
         // sub-agents are running.
         if (isDelegationTool(ev.tool_name)) scheduleSubAgentReload();
+        // A checklist is written mid-turn. Without this the panel only
+        // caught up when the turn ended — which is exactly the stretch
+        // during which somebody wants to see what is being worked on.
+        if (bareToolName(ev.tool_name ?? "") === "todo") scheduleTodoReload();
       } else if (ev.type === "lifecycle") {
         scheduleProcessReload();
         scheduleSubAgentReload();
@@ -1599,6 +1764,9 @@
   /* ── rail toggle ──────────────────────────────────────────────── */
   function toggleRail(tab: RailTab) {
     railTab = railTab === tab ? null : tab;
+    // Any deliberate click hands the rail back to the user, so a finishing
+    // checklist no longer closes it under them.
+    todosAutoOpened = false;
   }
 
   // When a panel opens (via a `/` command or a tab click), move focus into it so
@@ -1684,6 +1852,7 @@
     loadWorkspace();
     loadSchedules();
     loadTicket();
+    loadTodos();
     loadProviderOptions();
     loadProjectOptions();
     loadPendingAsk();
@@ -1751,6 +1920,15 @@
       icon: '<path d="M4 2.5h8v11H4z" stroke-linejoin="round"></path><path d="M6 5.5h4M6 8h4M6 10.5h2.5" stroke-linecap="round"></path>',
     },
     {
+      // Todos live in their own tab rather than inside Context: they are the
+      // one thing in this rail that changes minute to minute. Named after the
+      // tool and the endpoint — todo / /todos — so the thing on screen and
+      // the thing in the API are obviously the same thing.
+      id: "todos",
+      label: "Todo",
+      icon: '<path d="M5.5 4.5h7M5.5 8h7M5.5 11.5h4" stroke-linecap="round"></path><path d="M2.5 4.5l1 1 1.5-2M2.5 8l1 1 1.5-2" stroke-linecap="round" stroke-linejoin="round"></path>',
+    },
+    {
       id: "context",
       label: "Context",
       icon: '<path d="M2 4a1 1 0 011-1h3l2 2h5a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke-linejoin="round"></path>',
@@ -1790,6 +1968,9 @@
     railTabsAll.filter(
       (t) =>
         (t.id !== "browser" || hasBrowserInstance) &&
+        // Hidden until there is something to show, then it appears on its
+        // own — the badge promotes it into the strip from there.
+        (t.id !== "todos" || todosActive !== null || todosHistory.length > 0) &&
         (t.id !== "subagents" || subAgents.length > 0) &&
         // Notes need nothing but a reachable scope; the Ticket tab needs a
         // project, since a chat outside one cannot hold a ticket.
@@ -1958,7 +2139,11 @@
     return id === "subagents" && subAgentsBusy;
   }
 
+  const openTodoCount = $derived(
+    todosActive ? Math.max(0, todosActive.total - todosActive.completed) : 0,
+  );
   function railCount(id: RailTab): number {
+    if (id === "todos") return openTodoCount;
     if (id === "notes") return noteCount;
     if (id === "context") return contextCount;
     if (id === "process") return processCount;
@@ -1994,10 +2179,11 @@
     {#if activeView === "conversation"}
       <div
         class="flex-1 min-h-0 overflow-y-auto bg-white-200 dark:bg-navy-800"
+        style="overflow-anchor: none"
         bind:this={threadEl}
         data-chat-panel
       >
-        <div class="max-w-4xl mx-auto w-full px-6 pt-14 pb-6 md:pt-6">
+        <div class="page-col px-6 pt-14 pb-6 md:pt-6">
           {#if loadingOlder}
             <div class="flex items-center justify-center gap-2 py-3 text-[11px] text-black-600 dark:text-black-700">
               <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
@@ -2018,7 +2204,7 @@
 
       <!-- Zone 3: ask inline -->
       <div class="shrink-0 px-4 md:px-6 bg-white-200 dark:bg-navy-800">
-        <div class="max-w-4xl mx-auto">
+        <div class="page-col">
           <AskUserModal
             request={$currentAsk}
             onSubmit={handleAskSubmit}
@@ -2043,7 +2229,7 @@
             <kbd class="rounded border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1 text-[10px] font-mono text-black-600 dark:text-black-700">Ctrl+↓</kbd>
           </button>
         {/if}
-        <div class="relative max-w-4xl mx-auto pb-6">
+        <div class="page-col relative pb-6">
           <!-- /project picker floats above the composer. /provider now opens
                the composer's own provider drill (see composerRef), so no
                separate provider modal. -->
@@ -2064,6 +2250,17 @@
             onChange={saveOverride}
             onClose={() => (overridePopoverOpen = false)}
           />
+          <!-- /usage — read-only quota for this session's provider. -->
+          <UsagePopover
+            open={usagePopoverOpen}
+            data={usageData}
+            loading={usageLoading}
+            error={usageError}
+            onRecheck={recheckUsage}
+            rechecking={usageRechecking}
+            recheckWait={usageRecheckWait}
+            onClose={() => { usagePopoverOpen = false; stopUsagePoll(); }}
+          />
           <Composer
             bind:this={composerRef}
             onSend={handleSend}
@@ -2079,7 +2276,7 @@
       </div>
     {:else if activeView === "approvals"}
       <div class="flex-1 min-h-0 overflow-y-auto bg-white-200 dark:bg-navy-800">
-        <div class="max-w-4xl mx-auto w-full px-4 md:px-6 pt-14 pb-6 md:pt-16 flex flex-col gap-4">
+        <div class="page-col px-4 md:px-6 pt-14 pb-6 md:pt-16 flex flex-col gap-4">
           {#if approvalsTabPending.length > 0}
             <div>
               <h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-3">Pending approvals</h3>
@@ -2270,6 +2467,14 @@
           onDelete={removeEntry}
           onNewHere={(dir) => createEntry(false, dir)}
         />
+      {:else if railTab === "todos"}
+        <TodoPanel
+          active={todosActive}
+          history={todosHistory}
+          loading={todosLoading}
+          error={todosError}
+          onRefresh={loadTodos}
+        />
       {:else if railTab === "process"}
         <ProcessPanel
           processes={liveProcesses}
@@ -2447,6 +2652,14 @@
               onDownload={(p) => { window.open(downloadURL(base, sessionId, p), "_blank"); }}
               onDelete={removeEntry}
               onNewHere={(dir) => createEntry(false, dir)}
+            />
+          {:else if railTab === "todos"}
+            <TodoPanel
+              active={todosActive}
+              history={todosHistory}
+              loading={todosLoading}
+              error={todosError}
+              onRefresh={loadTodos}
             />
           {:else if railTab === "process"}
             <ProcessPanel

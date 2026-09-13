@@ -29,7 +29,9 @@ Stop / restart:
 ./wick restart
 ```
 
-To replace the binary **without** closing the port, use `reload` instead of `restart` — see
+To replace the binary **without** closing the port, use `reload` instead of `restart` —
+`wick reload --binary <new-binary>` checks the candidate, installs it and hands over in one
+step. See
 [Updating without downtime](#updating-without-downtime) below.
 
 ## Quickstart (foreground)
@@ -117,6 +119,16 @@ Leave them out and wick still runs; `reload` just reports that it is unavailable
 ### Updating without downtime
 
 ```bash
+./wick reload --binary ./wick-new --sudo     # add -y from a script: stdin is not a terminal
+```
+
+One command: it checks that the candidate is a wick binary for this app and this architecture,
+installs it at the path the daemon will exec, hands over, and waits to confirm the successor
+took over — rolling the old binary back if it never does.
+
+By hand, which is the same thing and the fallback on an older binary:
+
+```bash
 # 1. install the new binary — rename, never copy over a running one
 cp ./wick-new /opt/wick/wick.new && chmod +x /opt/wick/wick.new
 mv -f /opt/wick/wick.new /opt/wick/wick
@@ -124,6 +136,9 @@ mv -f /opt/wick/wick.new /opt/wick/wick
 # 2. hand over
 systemctl reload wick        # or: ./wick reload, or: kill -HUP $(pidof wick)
 ```
+
+Install it at the path in `ExecStart`: the handover re-execs `os.Args[0]`, so putting the new
+bytes anywhere else gives a reload that succeeds and brings the old version back.
 
 The successor boots — restoring the registry, reconnecting the database and connectors, which
 takes as long as any boot — **while the old process keeps answering on the same socket**. Only

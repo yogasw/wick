@@ -1,6 +1,8 @@
 package logintty
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -56,6 +59,23 @@ func claudeConfigDir(env []string) string {
 	return filepath.Join(home, ".claude")
 }
 
+// claudeCredentialsPath is the file the CLI keeps this instance's OAuth
+// tokens in — the one wick reads, and the one the CLI rewrites on every
+// refresh.
+func claudeCredentialsPath(dir string) string {
+	return filepath.Join(dir, ".credentials.json")
+}
+
+// claudeCredentialsChangedAt is the credential file's mtime, or zero
+// when there is no file to stat (never logged in, unreadable dir).
+func claudeCredentialsChangedAt(env []string) time.Time {
+	fi, err := os.Stat(claudeCredentialsPath(claudeConfigDir(env)))
+	if err != nil {
+		return time.Time{}
+	}
+	return fi.ModTime()
+}
+
 // claudeAccessToken reads the OAuth access token from the instance's
 // credential file.
 func claudeAccessToken(dir string) (string, error) {
@@ -64,7 +84,7 @@ func claudeAccessToken(dir string) (string, error) {
 			AccessToken string `json:"accessToken"`
 		} `json:"claudeAiOauth"`
 	}
-	if !readJSON(filepath.Join(dir, ".credentials.json"), &creds) || creds.ClaudeAiOauth.AccessToken == "" {
+	if !readJSON(claudeCredentialsPath(dir), &creds) || creds.ClaudeAiOauth.AccessToken == "" {
 		return "", errors.New("no claude credentials — not logged in")
 	}
 	return creds.ClaudeAiOauth.AccessToken, nil
@@ -98,6 +118,15 @@ func readClaudeUsage(env []string) ([]UsageWindow, error) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// Typed, so the caller backs off instead of retrying on its
+		// next tick — and honours the server's own cooldown when it
+		// bothered to send one.
+		return nil, &RateLimitedError{
+			Status:     resp.Status,
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("usage endpoint: %s", resp.Status)
@@ -139,6 +168,52 @@ func readClaudeUsage(env []string) ([]UsageWindow, error) {
 		}
 	})
 	return windows, nil
+}
+
+// claudeAccountEmail reads the logged-in email for ONE credential dir,
+// without the home-directory fallback readClaudeAccount uses.
+//
+// That fallback is right for display (the default instance keeps its
+// .claude.json at ~/.claude.json, outside the dir) but wrong for
+// identity: every dir lacking a local .claude.json would resolve to the
+// home account and two unrelated logins would be merged into one probe.
+// So the home file counts only for the dir it actually belongs to.
+func claudeAccountEmail(dir string) string {
+	var cfg struct {
+		OauthAccount struct {
+			EmailAddress string `json:"emailAddress"`
+		} `json:"oauthAccount"`
+	}
+	if readJSON(filepath.Join(dir, ".claude.json"), &cfg) && cfg.OauthAccount.EmailAddress != "" {
+		return cfg.OauthAccount.EmailAddress
+	}
+	if home, err := os.UserHomeDir(); err == nil && dir == filepath.Join(home, ".claude") {
+		if readJSON(filepath.Join(home, ".claude.json"), &cfg) {
+			return cfg.OauthAccount.EmailAddress
+		}
+	}
+	return ""
+}
+
+// claudeUsageIdentity keys the usage probe on the ACCOUNT rather than
+// the folder: the endpoint rate-limits the login, so two instances on
+// one login must cost one request.
+//
+// Email first — it survives a token refresh, so the key stays stable
+// across the day. Then a hash of the access token: an identical token
+// is literally the same upstream subject (a copied credential dir).
+// Only the hash is kept, never the token itself. Not logged in yet ->
+// the dir, which can split but can never merge two accounts.
+func claudeUsageIdentity(env []string) string {
+	dir := claudeConfigDir(env)
+	if email := claudeAccountEmail(dir); email != "" {
+		return "claude:email:" + strings.ToLower(email)
+	}
+	if token, err := claudeAccessToken(dir); err == nil {
+		sum := sha256.Sum256([]byte(token))
+		return "claude:token:" + hex.EncodeToString(sum[:8])
+	}
+	return "claude:dir:" + dir
 }
 
 func readClaudeAccount(dir string) Account {

@@ -31,9 +31,24 @@ description (`body`), the fields, who it is assigned to, how many other
 sessions are on it.
 
 `ticket_list` shows a project's tickets, newest first, and takes an optional
-`status` filter. Use it to answer "what is open?" without opening the board —
-and to find tickets **related** to this one: list, then `ticket_get` the
-candidates whose titles look relevant and compare their descriptions.
+`status` filter, plus `mine=true` or `assignee=<id>`. Use it to answer "what is
+open?" and "what is mine?" — the questions a filter can answer.
+
+`ticket_search` answers the one it cannot: **where is the ticket about X**.
+
+```
+ticket_search query="webhook 401"
+ticket_search query="paragon" status=open mine=true
+```
+
+It matches the id, the title, the **description** and the field values,
+case-insensitively, and each hit says which of them matched (`matched_in`), so
+a ticket that merely mentions the word in passing is not mistaken for one
+named after it — title hits are returned first for the same reason. Searching
+the description matters more than it looks: a title is written in the first
+minute, when the least is known, while the detail that makes a ticket findable
+later ends up in the body. `limit` defaults to 20, and the response reports
+`scanned` alongside `total`, so a truncated result never looks complete.
 
 ## Keep the status honest
 

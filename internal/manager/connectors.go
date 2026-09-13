@@ -419,7 +419,7 @@ func (h *Handler) toggleAccountOp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acc, err := h.connectors.GetAccount(ctx, accountID)
-	if err != nil || acc.ConnectorID != row.ID {
+	if err != nil || acc.ConnectorID != row.ID || !h.accountVisible(ctx, user, *row, *acc) {
 		http.Error(w, "account not found", http.StatusNotFound)
 		return
 	}
@@ -459,7 +459,7 @@ func (h *Handler) setAccountDisabledOps(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	acc, err := h.connectors.GetAccount(ctx, accountID)
-	if err != nil || acc.ConnectorID != row.ID {
+	if err != nil || acc.ConnectorID != row.ID || !h.accountVisible(ctx, user, *row, *acc) {
 		http.Error(w, "account not found", http.StatusNotFound)
 		return
 	}
@@ -496,7 +496,7 @@ func (h *Handler) disconnectAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acc, err := h.connectors.GetAccount(ctx, accountID)
-	if err != nil || acc.ConnectorID != row.ID {
+	if err != nil || acc.ConnectorID != row.ID || !h.accountVisible(ctx, user, *row, *acc) {
 		http.Error(w, "account not found", http.StatusNotFound)
 		return
 	}
@@ -528,11 +528,13 @@ func (h *Handler) setConnectorAccessPolicy(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "admin or owner only", http.StatusForbidden)
 		return
 	}
-	allowConfigure := boolParam(r, "allow_others_configure")
-	allowSSO := boolParam(r, "allow_others_connect_sso")
-	enableSSO := boolParam(r, "enable_sso")
-	multiAccount := boolParam(r, "multi_account")
-	if err := h.connectors.SetAccessPolicy(ctx, row.ID, allowConfigure, allowSSO, enableSSO, multiAccount); err != nil {
+	if err := h.connectors.SetAccessPolicy(ctx, row.ID, connectors.AccessPolicy{
+		AllowOthersConfigure:   boolParam(r, "allow_others_configure"),
+		AllowOthersConnectSSO:  boolParam(r, "allow_others_connect_sso"),
+		EnableSSO:              boolParam(r, "enable_sso"),
+		MultiAccount:           boolParam(r, "multi_account"),
+		AllowOthersSeeAccounts: boolParam(r, "allow_others_see_accounts"),
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -782,6 +784,8 @@ func (h *Handler) testConnectorOperation(w http.ResponseWriter, r *http.Request)
 		Input:        body.Input,
 		Source:       entity.ConnectorRunSourceTest,
 		UserID:       userID(user),
+		IsAdmin:      user != nil && user.IsAdmin(),
+		TagIDs:       h.userFilterTagIDs(ctx, user),
 		IPAddress:    clientIP(r),
 		UserAgent:    r.UserAgent(),
 		AccountID:    body.AccountID,
@@ -829,10 +833,11 @@ func (h *Handler) canConfigureRow(user *entity.User, row *entity.Connector) bool
 
 // canManageAccessPolicy reports whether the user may change the access policy
 // (SSO toggles, allow-others flags) + session-config override on a row.
-// Allow order: admin → owner tag. Deliberately NOT AllowOthersConfigure — the
-// access policy governs who else may access/configure the instance, so letting
-// a granted-configure user edit it would be a privilege escalation. The owner
-// (creator) gets full control of their own instance; everyone else needs admin.
+// Allow order: admin → owner tag → creator. Deliberately NOT
+// AllowOthersConfigure — the access policy governs who else may
+// access/configure the instance, so letting a granted-configure user edit it
+// would be a privilege escalation. The owner (creator) gets full control of
+// their own instance; everyone else needs admin.
 func (h *Handler) canManageAccessPolicy(user *entity.User, row *entity.Connector) bool {
 	if user == nil {
 		return false
@@ -840,13 +845,24 @@ func (h *Handler) canManageAccessPolicy(user *entity.User, row *entity.Connector
 	if user.IsAdmin() {
 		return true
 	}
+	return h.ownsConnectorRow(user, row)
+}
+
+// ownsConnectorRow reports whether the user owns this instance: the owner tag
+// seeded at create/duplicate, or CreatedBy — checked as well so an instance
+// whose owner tag was renamed or dropped does not leave its creator locked
+// out of their own row.
+func (h *Handler) ownsConnectorRow(user *entity.User, row *entity.Connector) bool {
+	if user == nil || row == nil {
+		return false
+	}
 	if h.tags != nil {
 		owns, _ := h.tags.UserOwnsConnector(context.Background(), user.ID, row.ID)
 		if owns {
 			return true
 		}
 	}
-	return false
+	return connectors.OwnsConnector(*row, user.ID)
 }
 
 // canConfigureSecretField reports whether the user may write a secret config

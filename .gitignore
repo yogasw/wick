@@ -107,3 +107,6 @@ vite.config.ts.timestamp-*
 
 /test.py
 /test.go
+
+# CodeGraph index — per-machine, rebuilt by `codegraph init`.
+.codegraph/

@@ -14,25 +14,38 @@
     collapsible?: boolean;
     /** Initial state for a collapsible section. Ignored otherwise. */
     open?: boolean;
+    /** Held open from outside — used while a search is filtering the page,
+        so a hit is readable without a second click. The manual toggle is
+        remembered underneath and takes over again once this drops. */
+    forceOpen?: boolean;
     action?: Snippet;
     children: Snippet;
   };
-  let { title, subtitle, collapsible = false, open = false, action, children }: Props = $props();
+  let {
+    title,
+    subtitle,
+    collapsible = false,
+    open = false,
+    forceOpen = false,
+    action,
+    children,
+  }: Props = $props();
 
   let expanded = $state(open);
+  const shown = $derived(forceOpen || expanded);
 </script>
 
 <section class="rounded-xl border border-white-300 bg-white-100 shadow-sm dark:border-navy-600 dark:bg-navy-700">
   {#if collapsible}
     <button
       type="button"
-      aria-expanded={expanded}
-      onclick={() => { expanded = !expanded; }}
+      aria-expanded={shown}
+      onclick={() => { expanded = !shown; }}
       class="flex w-full items-center gap-3 px-6 py-4 text-left transition-colors hover:bg-white-200 dark:hover:bg-navy-800 rounded-xl"
     >
       <svg
         viewBox="0 0 16 16"
-        class={"h-4 w-4 shrink-0 text-black-700 transition-transform dark:text-black-600 " + (expanded ? "rotate-90" : "")}
+        class={"h-4 w-4 shrink-0 text-black-700 transition-transform dark:text-black-600 " + (shown ? "rotate-90" : "")}
         fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"
       >
         <path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path>
@@ -44,7 +57,7 @@
         {/if}
       </span>
     </button>
-    {#if expanded}
+    {#if shown}
       <div class="border-t border-white-300 px-6 py-4 dark:border-navy-600">
         {@render children()}
       </div>

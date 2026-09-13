@@ -72,3 +72,36 @@ export function resetHint(
   if (!short) return { short: "", full: "" };
   return { short, full: `${usageLabel(window.key)} resets in ${short}` };
 }
+
+/* fmtSecsShort renders a small number of seconds as a chip-sized
+   duration (42s / 3m / 2h / 1d). Used for cache provenance, where the
+   exact second stops mattering as soon as it is minutes old. */
+export function fmtSecsShort(seconds: number): string {
+  const s = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  if (s < 60) return `${Math.round(s)}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  if (s < 86400) return `${Math.round(s / 3600)}h`;
+  return `${Math.round(s / 86400)}d`;
+}
+
+/* cacheHint describes WHERE a usage reading came from: when it was
+   taken, and when a re-check would be accepted.
+
+   Nothing probes the provider on a timer — the endpoint is rate-limited,
+   so a reading is taken once and then kept until a human asks for
+   another. That makes the age part of the data: a card showing "76%"
+   with no provenance implies a live call it never made.
+
+   `short` is the chip text ("2m ago"), `full` the tooltip. Both empty
+   when the server sent no timestamp, so the caller can drop the chip. */
+export function cacheHint(ageS: number, nextS: number): { short: string; full: string } {
+  if (!Number.isFinite(ageS) || ageS < 0) return { short: "", full: "" };
+  const age = Math.round(ageS);
+  const short = age < 2 ? "just now" : `${fmtSecsShort(age)} ago`;
+  const taken = age < 2 ? "Cached reading, taken just now" : `Cached reading, taken ${fmtSecsShort(age)} ago`;
+  const next =
+    Number.isFinite(nextS) && nextS > 0
+      ? `re-check available in ${fmtSecsShort(nextS)}`
+      : "press Re-check for a new reading";
+  return { short, full: `${taken}; ${next}` };
+}

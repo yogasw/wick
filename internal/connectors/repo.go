@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -258,14 +259,15 @@ func (r *Repo) SetRateLimit(ctx context.Context, id string, rpm int) error {
 }
 
 // SetAccessPolicy updates the access policy fields for a connector instance.
-func (r *Repo) SetAccessPolicy(ctx context.Context, id string, allowConfigure, allowSSO, enableSSO, multiAccount bool) error {
+func (r *Repo) SetAccessPolicy(ctx context.Context, id string, p AccessPolicy) error {
 	return r.db.WithContext(ctx).Model(&entity.Connector{}).Where("id = ?", id).
 		Updates(map[string]any{
-			"allow_others_configure":   allowConfigure,
-			"allow_others_connect_sso": allowSSO,
-			"enable_sso":               enableSSO,
-			"multi_account":            multiAccount,
-			"updated_at":               time.Now(),
+			"allow_others_configure":    p.AllowOthersConfigure,
+			"allow_others_connect_sso":  p.AllowOthersConnectSSO,
+			"enable_sso":                p.EnableSSO,
+			"multi_account":             p.MultiAccount,
+			"allow_others_see_accounts": p.AllowOthersSeeAccounts,
+			"updated_at":                time.Now(),
 		}).Error
 }
 
@@ -304,6 +306,43 @@ func (r *Repo) ListAccounts(ctx context.Context, connectorID string) ([]entity.C
 		Order("created_at asc").
 		Find(&rows).Error
 	return rows, err
+}
+
+// AccountFilterTagIDs returns the FILTER tag ids attached to each of the given
+// connected accounts, keyed by account id. Accounts are tagged through the
+// same tool_tags table every other taggable thing uses, on the path
+// AccountTagPath(accountID) — so the admin tag picker, the tag-filter rules
+// and the audit story are the ones wick already has.
+//
+// Only is_filter tags are returned: a non-filter tag is a label, not a grant.
+func (r *Repo) AccountFilterTagIDs(ctx context.Context, accountIDs []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(accountIDs))
+	if len(accountIDs) == 0 {
+		return out, nil
+	}
+	paths := make([]string, 0, len(accountIDs))
+	for _, id := range accountIDs {
+		paths = append(paths, AccountTagPath(id))
+	}
+	var rows []struct {
+		ToolPath string
+		TagID    string
+	}
+	err := r.db.WithContext(ctx).
+		Table("tool_tags tt").
+		Select("tt.tool_path as tool_path, tt.tag_id as tag_id").
+		Joins("JOIN tags t ON t.id = tt.tag_id").
+		Where("tt.tool_path IN ?", paths).
+		Where("t.is_filter = ?", true).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		id := strings.TrimPrefix(row.ToolPath, accountTagPathPrefix)
+		out[id] = append(out[id], row.TagID)
+	}
+	return out, nil
 }
 
 // UpsertAccount saves a connected account.

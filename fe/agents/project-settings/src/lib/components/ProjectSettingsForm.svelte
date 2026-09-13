@@ -302,6 +302,49 @@
       : "Following the global policy.",
   );
 
+  /* ── search ───────────────────────────────────────────────────────────
+     Every section is folded, so the page answers "where is that setting?"
+     through this box rather than through scrolling. Each section carries the
+     words someone would actually type — its own label plus the terms used
+     inside it, which stay findable even while the section is closed and its
+     fields are not in the DOM. A hit is shown held-open. */
+  let query = $state("");
+  const q = $derived(query.trim().toLowerCase());
+  const searching = $derived(q !== "");
+
+  const hit = (...terms: (string | undefined)[]) =>
+    q === "" || terms.filter(Boolean).join(" ").toLowerCase().includes(q);
+
+  const showProject = $derived(
+    hit("project name icon description delete project rename chats", name, description),
+  );
+  const showFolder = $derived(
+    hit("folder managed custom path working directory cwd workspace where sessions run", customPath),
+  );
+  const showDefaults = $derived(
+    hit("defaults provider model preset system prompt addon new sessions", preset),
+  );
+  const showTicket = $derived(
+    hit(
+      "ticket system tickets statuses columns custom fields follow up auto resolve auto create rules webhooks integrations rest api",
+      ticketSummary,
+    ),
+  );
+  const showWidget = $derived(
+    hit(
+      "widget permissions csp policy iframe frame-src img-src media-src connect-src script-src popups allowlist sandbox secure unsecure",
+      widgetSummary,
+    ),
+  );
+  const showPinned = $derived(hit("pinned sessions pin chats"));
+  const showAdvanced = $derived(hit("advanced raw project meta json folder change semantics"));
+
+  const matchCount = $derived(
+    [showProject, showFolder, showDefaults, showTicket, showWidget, showPinned, showAdvanced].filter(
+      Boolean,
+    ).length,
+  );
+
   const folderModeClass = (active: boolean) =>
     active
       ? "flex-1 rounded-lg bg-green-500 px-4 py-2 text-xs font-semibold text-white-100 transition-colors"
@@ -326,9 +369,39 @@
 {:else if error}
   <div class="rounded-xl border border-neg-400/40 bg-neg-100 px-4 py-3 text-sm text-neg-400">{error}</div>
 {:else if data}
+  {#if !data.is_new}
+    <div class="mb-4">
+      <div class="relative">
+        <svg
+          class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black-700 dark:text-black-600"
+          viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"
+        >
+          <circle cx="9" cy="9" r="5.5"></circle>
+          <path d="M13.5 13.5L17 17" stroke-linecap="round"></path>
+        </svg>
+        <input
+          type="search"
+          bind:value={query}
+          placeholder="Search settings — provider, ticket, folder, widget…"
+          aria-label="Search settings"
+          class="w-full rounded-lg border border-white-400 bg-white-100 py-2 pl-9 pr-20 text-sm text-black-900 outline-none transition-colors focus:border-green-500 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100"
+        />
+        {#if searching}
+          <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-black-700 dark:text-black-600">
+            {matchCount} match{matchCount === 1 ? "" : "es"}
+          </span>
+        {/if}
+      </div>
+      {#if searching && matchCount === 0}
+        <p class="mt-3 text-sm text-black-700 dark:text-black-600">No setting matches that search.</p>
+      {/if}
+    </div>
+  {/if}
+
   <form onsubmit={handleCreate} class="flex flex-col gap-4">
     <!-- Identity. An icon + name pair reads as the page's subject, so it
          sits in its own card above the settings rather than inside them. -->
+    {#if showProject}
     <SettingsSection
       title="Project"
       subtitle={data.is_new
@@ -336,6 +409,7 @@
         : `${data.chat_count} chats · created ${data.created_at} · ${data.managed ? "managed" : "custom"} folder`}
       collapsible={!data.is_new}
       open={data.is_new}
+      forceOpen={searching}
     >
       {#snippet action()}
         {#if canDelete}
@@ -384,14 +458,17 @@
         />
       </div>
     </SettingsSection>
+    {/if}
 
     <!-- Folder: two mutually exclusive modes, so a segmented control rather
          than radios — it shows the active choice without reading labels. -->
+    {#if showFolder}
     <SettingsSection
       title="Folder"
       subtitle="Where agent subprocesses run. Changing it shifts the cwd at the next spawn; a running subprocess is unaffected until it restarts."
       collapsible={!data.is_new}
       open={data.is_new}
+      forceOpen={searching}
     >
       <div class="flex gap-1 rounded-xl bg-white-200 p-1 dark:bg-navy-800">
         <button
@@ -444,12 +521,15 @@
         </div>
       {/if}
     </SettingsSection>
+    {/if}
 
+    {#if showDefaults}
     <SettingsSection
       title="Defaults"
       subtitle="Where new sessions in this project start. Sub-agents inherit the provider and model."
       collapsible={!data.is_new}
       open={data.is_new}
+      forceOpen={searching}
     >
       <div class="flex flex-col gap-4">
         <div>
@@ -490,15 +570,18 @@
         </div>
       </div>
     </SettingsSection>
+    {/if}
 
     {#if !data.is_new}
       <!-- Both of these are long editors that most visits do not touch, so
            they stay folded with their current state in the subtitle. -->
+      {#if showTicket}
       <div onchange={change} role="none">
         <SettingsSection
           title="Ticket system"
           subtitle={ticketSummary}
           collapsible
+          forceOpen={searching}
         >
           <TicketSystemEditor
             {projectID}
@@ -508,12 +591,15 @@
           />
         </SettingsSection>
       </div>
+      {/if}
 
+      {#if showWidget}
       <div onchange={change} role="none">
         <SettingsSection
           title="Widget permissions"
           subtitle={widgetSummary}
           collapsible
+          forceOpen={searching}
         >
           <p class="mb-3 text-xs leading-relaxed text-black-700 dark:text-black-600">
             Widget HTML is written by the agent, so it runs sealed off by default. Pick a mode —
@@ -527,13 +613,16 @@
           />
         </SettingsSection>
       </div>
+      {/if}
 
+      {#if showPinned}
       <SettingsSection
         title="Pinned sessions"
         subtitle={data.pinned.length === 0
           ? "Nothing pinned yet. Pin a chat from its menu."
           : `${data.pinned.length} pinned chat${data.pinned.length === 1 ? "" : "s"}.`}
         collapsible
+        forceOpen={searching}
       >
         {#if data.pinned.length === 0}
           <p class="text-xs text-black-700 dark:text-black-600">Nothing pinned yet.</p>
@@ -557,13 +646,16 @@
           </ul>
         {/if}
       </SettingsSection>
+      {/if}
 
+      {#if showAdvanced}
       <!-- Collapsed by default: worth having when something looks wrong,
            not worth the vertical space the rest of the time. -->
       <SettingsSection
         title="Advanced"
         subtitle="Raw project meta and folder-change semantics."
         collapsible
+        forceOpen={searching}
       >
         <h3 class="mb-2 text-xs font-semibold text-black-800 dark:text-black-600">Project meta</h3>
         <pre class="overflow-x-auto rounded-lg border border-white-300 bg-white-200 p-3 text-xs text-black-800 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">{data.meta_json}</pre>
@@ -574,6 +666,7 @@
           <li>Live sessions: the cwd shifts at the next spawn; a running subprocess is unaffected until it restarts.</li>
         </ul>
       </SettingsSection>
+      {/if}
     {/if}
 
     <!-- A project that does not exist yet cannot be auto-saved: there is no

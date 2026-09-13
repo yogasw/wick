@@ -13,9 +13,10 @@
     onOpen: (path: string, staged: boolean) => void;
     onAction: (paths: string[], untracked: string[]) => void; // stage or unstage (group-dependent)
     onDiscard: (paths: string[], untracked: string[]) => void;
+    onIgnore: (paths: string[]) => void;
     actionIcon: "stage" | "unstage";
   };
-  let { node, depth, staged, expanded, onToggleDir, onOpen, onAction, onDiscard, actionIcon }: Props = $props();
+  let { node, depth, staged, expanded, onToggleDir, onOpen, onAction, onDiscard, onIgnore, actionIcon }: Props = $props();
 
   const isOpen = $derived(expanded[node.path] !== false); // default expanded
   const pad = $derived(`padding-left: ${depth * 12 + 8}px`);
@@ -51,17 +52,43 @@
   </div>
   {#if isOpen}
     {#each node.children ?? [] as child (child.path)}
-      <Self node={child} depth={depth + 1} {staged} {expanded} {onToggleDir} {onOpen} {onAction} {onDiscard} {actionIcon} />
+      <Self node={child} depth={depth + 1} {staged} {expanded} {onToggleDir} {onOpen} {onAction} {onDiscard} {onIgnore} {actionIcon} />
     {/each}
   {/if}
 {:else if node.change}
   {@const ch = node.change}
   <div class="group flex items-center gap-2 py-1 pr-2 hover:bg-white-200 dark:hover:bg-navy-800" style={pad}>
-    <button type="button" onclick={() => onOpen(ch.path, staged)} class="min-w-0 flex-1 truncate text-left text-xs text-black-800 dark:text-black-600">{node.name}</button>
+    {#if node.dirEntry}
+      <!-- A whole folder reported as one change (a repo of its own).
+           There is no diff to show, so the click opens that repo in the
+           panel instead — the only place its files are visible. -->
+      <button type="button" onclick={() => onOpen(ch.path, staged)} class="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs text-black-800 dark:text-black-600" title="{ch.path} is a repository of its own — this repo records the whole folder as one change and cannot show what is inside it. Open it to see its own files. Committing it here stores a bare gitlink; the files do not come along.">
+        <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.5 4.5A1 1 0 012.5 3.5h3l1.5 2h6a1 1 0 011 1v6a1 1 0 01-1 1h-10a1 1 0 01-1-1z" stroke-linejoin="round"/></svg>
+        <span class="truncate">{node.name}/</span>
+        <span class="shrink-0 rounded bg-white-300 px-1 text-[9px] font-medium whitespace-nowrap text-black-700 dark:bg-navy-600 dark:text-black-600">nested repo</span>
+        {#if ch.nested}
+          <span class="truncate text-[10px] whitespace-nowrap text-black-600">
+            {ch.nested.branch}{ch.nested.changed > 0 ? ` · ${ch.nested.changed} changed` : " · clean"}
+          </span>
+        {/if}
+      </button>
+    {:else}
+      <button type="button" onclick={() => onOpen(ch.path, staged)} class="min-w-0 flex-1 truncate text-left text-xs text-black-800 dark:text-black-600">{node.name}</button>
+    {/if}
     <div class="hidden shrink-0 items-center gap-1 group-hover:flex">
+      {#if node.dirEntry}
+        <!-- Discard is `git clean`, and git refuses to delete a folder
+             that is a repository of its own — the button would report
+             success and do nothing. Offer the move that does work:
+             stop reporting it, without touching a single file. -->
+        <button type="button" title="Ignore this folder (adds it to .git/info/exclude — nothing is deleted)" onclick={() => onIgnore([ch.path])} class="text-black-600 hover:text-cau-600 dark:hover:text-cau-400">
+          <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.5 8S3.8 3.5 8 3.5 14.5 8 14.5 8 12.2 12.5 8 12.5 1.5 8 1.5 8z" stroke-linejoin="round"/><path d="M2 14 14 2" stroke-linecap="round"/></svg>
+        </button>
+      {:else}
       <button type="button" title="Discard" onclick={() => onDiscard([ch.path], ch.untracked ? [ch.path] : [])} class="text-black-600 hover:text-cau-600 dark:hover:text-cau-400">
         <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 8a6 6 0 0110.5-4M11 2v3H8M14 8a6 6 0 01-10.5 4M5 14v-3h3" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
+      {/if}
       <button type="button" title={actionIcon === "stage" ? "Stage" : "Unstage"} onclick={() => onAction([ch.path], ch.untracked ? [ch.path] : [])} class="text-black-600 hover:text-green-600 dark:hover:text-green-400">
         {#if actionIcon === "stage"}
           <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 3v10M3 8h10" stroke-linecap="round"/></svg>

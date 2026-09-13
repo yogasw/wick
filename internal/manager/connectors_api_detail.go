@@ -190,6 +190,10 @@ type connectorDetailJSON struct {
 	MultiAccount          bool `json:"multi_account"`
 	AllowOthersConnectSSO bool `json:"allow_others_connect_sso"`
 	AllowOthersConfigure  bool `json:"allow_others_configure"`
+	// AllowOthersSeeAccounts: when false (default) the Accounts list below
+	// only carries the caller's own connected account — accounts are private
+	// to whoever connected them.
+	AllowOthersSeeAccounts bool `json:"allow_others_see_accounts"`
 	// Session config: capability is module-level, allowed is per-instance.
 	SessionConfigCapable bool `json:"session_config_capable"`
 	SessionConfigAllowed bool `json:"session_config_allowed"`
@@ -224,6 +228,9 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tagsByRow, privateByRow := h.resolveRowTags(ctx, rows)
+	// Resolved once: every row on this page is checked against the same
+	// caller, and account visibility reads these tags per row.
+	callerTags := h.userFilterTagIDs(ctx, user)
 
 	customInfo := h.customDefInfo(ctx, key, user)
 	defID := ""
@@ -260,7 +267,7 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		}
 		if mod.OAuth != nil {
 			rowJSON.OAuth = h.rowOAuthJSON(mod, row, user)
-			rowJSON.Accounts = h.rowAccountsJSON(ctx, row, user)
+			rowJSON.Accounts = h.rowAccountsJSON(ctx, row, user, callerTags)
 		}
 		rowJSON.MCPAuth = h.rowMCPAuthJSON(ctx, key, row, user)
 		out.Rows = append(out.Rows, rowJSON)
@@ -351,7 +358,7 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 	canConfigure := h.canConfigureRow(user, row)
 	canManagePolicy := h.canManageAccessPolicy(user, row)
 
-	accounts := h.rowAccountsJSON(ctx, *row, user)
+	accounts := h.rowAccountsJSON(ctx, *row, user, h.userFilterTagIDs(ctx, user))
 
 	var oauthJSON *connectorOAuthJSON
 	if mod.OAuth != nil {
@@ -359,30 +366,31 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, connectorDetailJSON{
-		Key:                   mod.Meta.Key,
-		Name:                  mod.Meta.Name,
-		Icon:                  mod.Meta.Icon,
-		ID:                    row.ID,
-		Label:                 row.Label,
-		Description:           row.Description,
-		Disabled:              row.Disabled,
-		RateLimitRPM:          row.RateLimitRPM,
-		HasHealthCheck:        mod.HealthCheck != nil,
-		CanConfigure:          canConfigure,
-		IsAdmin:               isAdmin,
-		RequireAIDescription:  mod.Meta.RequireAIDescription,
-		CanManagePolicy:       canManagePolicy,
-		Fields:                fields,
-		Operations:            ops,
-		Categories:            categories,
-		Accounts:              accounts,
-		OAuth:                 oauthJSON,
-		EnableSSO:             row.EnableSSO,
-		MultiAccount:          row.MultiAccount,
-		AllowOthersConnectSSO: row.AllowOthersConnectSSO,
-		AllowOthersConfigure:  row.AllowOthersConfigure,
-		SessionConfigCapable:  mod.AllowSessionConfig,
-		SessionConfigAllowed:  row.AllowSessionConfig,
+		Key:                    mod.Meta.Key,
+		Name:                   mod.Meta.Name,
+		Icon:                   mod.Meta.Icon,
+		ID:                     row.ID,
+		Label:                  row.Label,
+		Description:            row.Description,
+		Disabled:               row.Disabled,
+		RateLimitRPM:           row.RateLimitRPM,
+		HasHealthCheck:         mod.HealthCheck != nil,
+		CanConfigure:           canConfigure,
+		IsAdmin:                isAdmin,
+		RequireAIDescription:   mod.Meta.RequireAIDescription,
+		CanManagePolicy:        canManagePolicy,
+		Fields:                 fields,
+		Operations:             ops,
+		Categories:             categories,
+		Accounts:               accounts,
+		OAuth:                  oauthJSON,
+		EnableSSO:              row.EnableSSO,
+		MultiAccount:           row.MultiAccount,
+		AllowOthersConnectSSO:  row.AllowOthersConnectSSO,
+		AllowOthersConfigure:   row.AllowOthersConfigure,
+		AllowOthersSeeAccounts: row.AllowOthersSeeAccounts,
+		SessionConfigCapable:   mod.AllowSessionConfig,
+		SessionConfigAllowed:   row.AllowSessionConfig,
 	})
 }
 
@@ -422,10 +430,10 @@ func visibleOpCount(mod connector.Module) int {
 // rowAccountsJSON projects a row's connected OAuth accounts into the read
 // model shared by the list + detail pages. CanManage is true for the row's
 // configurer or the account's own user.
-func (h *Handler) rowAccountsJSON(ctx context.Context, row entity.Connector, user *entity.User) []connectorAccountJSON {
+func (h *Handler) rowAccountsJSON(ctx context.Context, row entity.Connector, user *entity.User, callerTags []string) []connectorAccountJSON {
 	canConfigure := h.canConfigureRow(user, &row)
 	accounts := make([]connectorAccountJSON, 0)
-	for _, acc := range h.accountsForRow(ctx, row.ID) {
+	for _, acc := range h.visibleAccountsForRow(ctx, row, user, callerTags) {
 		accounts = append(accounts, connectorAccountJSON{
 			ID:          acc.ID,
 			DisplayName: acc.DisplayName,
@@ -512,6 +520,59 @@ func (h *Handler) accountsForRow(ctx context.Context, rowID string) []entity.Con
 		return nil
 	}
 	return accs
+}
+
+// visibleAccountsForRow narrows accountsForRow to the accounts the caller may
+// see: their own plus any shared with a tag they carry, unless they
+// administer the instance or the row opted into the shared pool.
+func (h *Handler) visibleAccountsForRow(ctx context.Context, row entity.Connector, user *entity.User, callerTags []string) []entity.ConnectorAccount {
+	accs, err := h.connectors.ListAccountsVisibleTo(ctx, row, h.accountCaller(user, row, callerTags))
+	if err != nil {
+		return nil
+	}
+	return accs
+}
+
+// accountCaller packs the identity the connectors service checks accounts
+// against: who is asking, which filter tags they carry, and whether they
+// administer this instance. callerTags is resolved once per request by the
+// handler — a list page renders many rows and the caller's tags do not
+// change between them.
+func (h *Handler) accountCaller(user *entity.User, row entity.Connector, callerTags []string) connectors.AccountAccess {
+	return connectors.AccountAccess{
+		UserID:     userID(user),
+		TagIDs:     callerTags,
+		Privileged: h.canSeeAllAccounts(user, row),
+	}
+}
+
+// canSeeAllAccounts reports whether the caller administers this instance —
+// its owner, or an admin while admin_see_all_connectors is on — and
+// therefore sees every connected account on it regardless of the
+// AllowOthersSeeAccounts policy.
+//
+// The knob matters here: with it off an admin is scoped like anyone else, so
+// "I am an admin" no longer means "I may run as your Slack account". Owning
+// the instance still does.
+func (h *Handler) canSeeAllAccounts(user *entity.User, row entity.Connector) bool {
+	if user == nil {
+		return false
+	}
+	if h.ownsConnectorRow(user, &row) {
+		return true
+	}
+	return user.IsAdmin() && h.connectors.AdminSeesAllConnectors()
+}
+
+// accountVisible reports whether the caller may see one connected account —
+// and so whether they may act on it at all. An account they cannot see is
+// reported as "not found" by the account endpoints, matching the listing.
+func (h *Handler) accountVisible(ctx context.Context, user *entity.User, row entity.Connector, acc entity.ConnectorAccount) bool {
+	tagIDs, err := h.connectors.AccountTagIDs(ctx, []entity.ConnectorAccount{acc})
+	if err != nil {
+		return false
+	}
+	return connectors.AccountVisibleTo(row, acc, tagIDs[acc.ID], h.accountCaller(user, row, h.userFilterTagIDs(ctx, user)))
 }
 
 // accountDisabledOpKeys returns the sorted disabled-op keys for an account

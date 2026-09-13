@@ -18,6 +18,7 @@ import (
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/metrics"
+	"github.com/yogasw/wick/internal/pkg/adminscope"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -536,13 +537,14 @@ func (s *Service) seedModuleRows(ctx context.Context, m connector.Module) error 
 	}
 	if n == 0 && m.Meta.Fixed {
 		row := &entity.Connector{
-			Key:                   m.Meta.Key,
-			Label:                 m.Meta.Name,
-			AllowSessionConfig:    m.AllowSessionConfig,
-			EnableSSO:             m.DefaultAccess.EnableSSO,
-			AllowOthersConnectSSO: m.DefaultAccess.AllowOthersConnectSSO,
-			MultiAccount:          m.DefaultAccess.MultiAccount,
-			AllowOthersConfigure:  m.DefaultAccess.AllowOthersConfigure,
+			Key:                    m.Meta.Key,
+			Label:                  m.Meta.Name,
+			AllowSessionConfig:     m.AllowSessionConfig,
+			EnableSSO:              m.DefaultAccess.EnableSSO,
+			AllowOthersConnectSSO:  m.DefaultAccess.AllowOthersConnectSSO,
+			MultiAccount:           m.DefaultAccess.MultiAccount,
+			AllowOthersConfigure:   m.DefaultAccess.AllowOthersConfigure,
+			AllowOthersSeeAccounts: m.DefaultAccess.AllowOthersSeeAccounts,
 		}
 		if err := s.repo.Create(ctx, row); err != nil {
 			return fmt.Errorf("seed initial row for %q: %w", m.Meta.Key, err)
@@ -662,14 +664,15 @@ func (s *Service) Create(ctx context.Context, key, label string, configs map[str
 		}
 	}
 	c := &entity.Connector{
-		Key:                   key,
-		Label:                 label,
-		CreatedBy:             createdBy,
-		AllowSessionConfig:    mod.AllowSessionConfig,
-		EnableSSO:             mod.DefaultAccess.EnableSSO,
-		AllowOthersConnectSSO: mod.DefaultAccess.AllowOthersConnectSSO,
-		MultiAccount:          mod.DefaultAccess.MultiAccount,
-		AllowOthersConfigure:  mod.DefaultAccess.AllowOthersConfigure,
+		Key:                    key,
+		Label:                  label,
+		CreatedBy:              createdBy,
+		AllowSessionConfig:     mod.AllowSessionConfig,
+		EnableSSO:              mod.DefaultAccess.EnableSSO,
+		AllowOthersConnectSSO:  mod.DefaultAccess.AllowOthersConnectSSO,
+		MultiAccount:           mod.DefaultAccess.MultiAccount,
+		AllowOthersConfigure:   mod.DefaultAccess.AllowOthersConfigure,
+		AllowOthersSeeAccounts: mod.DefaultAccess.AllowOthersSeeAccounts,
 	}
 	if err := s.repo.Create(ctx, c); err != nil {
 		return nil, err
@@ -705,13 +708,14 @@ func (s *Service) List(ctx context.Context) ([]entity.Connector, error) {
 
 // ListVisibleTo returns the not-disabled connector rows the caller
 // can access, applying the same tag-filter rule as Tools (see
-// Repo.ListAccessibleTo). Pass isAdmin=true to bypass tag filtering
-// — admins see every row whether or not they carry the row's tags.
+// Repo.ListAccessibleTo). Pass isAdmin=true to bypass tag filtering —
+// admins see every row whether or not they carry the row's tags, unless
+// the admin_see_all_connectors knob is off (see AdminSeesAllConnectors).
 //
 // Use this from MCP tools/list and any user-facing surface that
 // enumerates connectors; only the admin manager should call List.
 func (s *Service) ListVisibleTo(ctx context.Context, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
-	if isAdmin {
+	if s.adminBypass(isAdmin) {
 		rows, err := s.repo.List(ctx)
 		if err != nil {
 			return nil, err
@@ -727,6 +731,29 @@ func (s *Service) ListVisibleTo(ctx context.Context, userTagIDs []string, isAdmi
 		return filtered, nil
 	}
 	return s.repo.ListAccessibleTo(ctx, userTagIDs)
+}
+
+// AdminSeesAllConnectors reports whether an admin bypasses tag filtering on
+// connector instances and account visibility — the admin_see_all_connectors
+// knob, which is deliberately NOT the same switch as the sessions/projects
+// one: answering both with one switch is how an admin who wanted to see a
+// project ends up able to post as somebody else's Slack account.
+//
+// Missing/blank config reads as ON — the behaviour every install had before
+// the knob existed. Only an explicit "false" scopes admins like regular
+// users. The /admin/connectors panel is NOT affected: it is the
+// administration surface and always lists everything.
+func (s *Service) AdminSeesAllConnectors() bool {
+	if s.cfgs == nil {
+		return true
+	}
+	return adminscope.AdminSeeAllConnectors(s.cfgs)
+}
+
+// adminBypass reports whether this caller's admin role currently bypasses
+// tag filtering — isAdmin AND the knob.
+func (s *Service) adminBypass(isAdmin bool) bool {
+	return isAdmin && s.AdminSeesAllConnectors()
 }
 
 // FilterBotSlot removes non-SSO instance rows from a row set when at least
@@ -770,7 +797,7 @@ func (s *Service) FilterBotSlot(rows []entity.Connector) []entity.Connector {
 // the caller. Used by tools/call to re-check authorization at dispatch
 // time so a stale tools/list snapshot can't be replayed for access.
 func (s *Service) IsVisibleTo(ctx context.Context, connectorID string, userTagIDs []string, isAdmin bool) (bool, error) {
-	if isAdmin {
+	if s.adminBypass(isAdmin) {
 		c, err := s.repo.Get(ctx, connectorID)
 		if err != nil {
 			return false, err
@@ -782,9 +809,10 @@ func (s *Service) IsVisibleTo(ctx context.Context, connectorID string, userTagID
 
 // ListForManager returns rows the caller can see in the admin manager.
 // Unlike ListVisibleTo, disabled rows are included so users can re-
-// enable or delete them. Admins see every row.
+// enable or delete them. Admins see every row while
+// admin_see_all_connectors is on.
 func (s *Service) ListForManager(ctx context.Context, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
-	if isAdmin {
+	if s.adminBypass(isAdmin) {
 		return s.repo.List(ctx)
 	}
 	return s.repo.ListAccessibleForManager(ctx, userTagIDs)
@@ -794,7 +822,7 @@ func (s *Service) ListForManager(ctx context.Context, userTagIDs []string, isAdm
 // the manager UI. Disabled rows are still manageable — the caller may
 // be re-enabling them.
 func (s *Service) IsManageableBy(ctx context.Context, connectorID string, userTagIDs []string, isAdmin bool) (bool, error) {
-	if isAdmin {
+	if s.adminBypass(isAdmin) {
 		_, err := s.repo.Get(ctx, connectorID)
 		if err != nil {
 			return false, err
@@ -919,13 +947,137 @@ func (s *Service) ClearSystemDisabled(ctx context.Context, connectorID, opKey st
 	return s.repo.ClearSystemDisabled(ctx, connectorID, opKey)
 }
 
-// SetAccessPolicy updates the access policy for a connector instance:
-//   - allowConfigure: non-admin users with tag access may edit credentials
-//   - allowSSO: non-admin users may connect their OAuth account
-//   - enableSSO: OAuth flow is active on this instance
-//   - multiAccount: each OAuth connect creates a new row (true) or replaces token (false)
-func (s *Service) SetAccessPolicy(ctx context.Context, id string, allowConfigure, allowSSO, enableSSO, multiAccount bool) error {
-	return s.repo.SetAccessPolicy(ctx, id, allowConfigure, allowSSO, enableSSO, multiAccount)
+// AccessPolicy is the per-instance access policy, written as one unit by
+// the Access policy form (SPA POST or the legacy form-post). Grouped into a
+// struct rather than positional bools so adding a flag does not silently
+// re-order every call site.
+type AccessPolicy struct {
+	// AllowOthersConfigure: non-admin users with tag access may edit credentials.
+	AllowOthersConfigure bool
+	// AllowOthersConnectSSO: non-admin users may connect their OAuth account.
+	AllowOthersConnectSSO bool
+	// EnableSSO: the OAuth flow is active on this instance.
+	EnableSSO bool
+	// MultiAccount: each OAuth connect adds an account (true) or replaces the
+	// existing one (false).
+	MultiAccount bool
+	// AllowOthersSeeAccounts: connected accounts are a shared pool visible to
+	// every user with tag access (true), or private to whoever connected them
+	// (false, the default).
+	AllowOthersSeeAccounts bool
+}
+
+// SetAccessPolicy updates the access policy for a connector instance.
+func (s *Service) SetAccessPolicy(ctx context.Context, id string, p AccessPolicy) error {
+	return s.repo.SetAccessPolicy(ctx, id, p)
+}
+
+// accountTagPathPrefix is the tool_tags path namespace for connected
+// accounts. Kept next to AccountTagPath so the prefix and the builder cannot
+// drift apart.
+const accountTagPathPrefix = "/connector-accounts/"
+
+// AccountTagPath is the tool_tags path an account's access tags live on —
+// the account-level sibling of "/connectors/{id}". Admin tags an account
+// here to share it with a team without opening the whole pool.
+func AccountTagPath(accountID string) string { return accountTagPathPrefix + accountID }
+
+// AccountAccess is who is asking, for account-visibility decisions.
+//
+// Privileged means "administers this instance" — an admin or the instance
+// owner. TagIDs are the caller's filter tags, matched against the tags an
+// admin put on the account itself.
+type AccountAccess struct {
+	UserID     string
+	TagIDs     []string
+	Privileged bool
+}
+
+// AccountVisibleTo reports whether a connected account may be seen — and run
+// as — by the caller. accountTagIDs are the account's own filter tags (see
+// AccountTagPath); pass nil when it has none.
+//
+// Visible when ANY of these holds:
+//   - the caller administers the instance (admin or owner);
+//   - the row opted into AllowOthersSeeAccounts (the shared pool);
+//   - the caller connected the account themselves;
+//   - the account carries a filter tag the caller also carries — the
+//     per-account share, for handing one account to a team without opening
+//     every other account on the row;
+//   - the account has no owner recorded (legacy/system connect), so an
+//     existing install does not lose the account it has been running on.
+func AccountVisibleTo(row entity.Connector, acc entity.ConnectorAccount, accountTagIDs []string, caller AccountAccess) bool {
+	if caller.Privileged || row.AllowOthersSeeAccounts || acc.WickUserID == "" {
+		return true
+	}
+	if caller.UserID != "" && acc.WickUserID == caller.UserID {
+		return true
+	}
+	return tagIDsIntersect(accountTagIDs, caller.TagIDs)
+}
+
+// tagIDsIntersect reports whether the two tag-id sets share a member. Both
+// are short (a handful of tags), so the nested loop beats building a map.
+func tagIDsIntersect(a, b []string) bool {
+	for _, x := range a {
+		if x == "" {
+			continue
+		}
+		for _, y := range b {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// AccountsVisibleTo filters a row's connected accounts down to the ones the
+// caller may see. accountTagIDs maps account id → its filter tags.
+// See AccountVisibleTo for the rule.
+func AccountsVisibleTo(row entity.Connector, accs []entity.ConnectorAccount, accountTagIDs map[string][]string, caller AccountAccess) []entity.ConnectorAccount {
+	out := make([]entity.ConnectorAccount, 0, len(accs))
+	for _, acc := range accs {
+		if AccountVisibleTo(row, acc, accountTagIDs[acc.ID], caller) {
+			out = append(out, acc)
+		}
+	}
+	return out
+}
+
+// ListAccountsVisibleTo lists the connected accounts of a row that the given
+// caller may see — the account-level twin of ListVisibleTo.
+func (s *Service) ListAccountsVisibleTo(ctx context.Context, row entity.Connector, caller AccountAccess) ([]entity.ConnectorAccount, error) {
+	accs, err := s.repo.ListAccounts(ctx, row.ID)
+	if err != nil {
+		return nil, err
+	}
+	// Skip the tag lookup entirely when the answer cannot depend on it.
+	if caller.Privileged || row.AllowOthersSeeAccounts {
+		return accs, nil
+	}
+	tagIDs, err := s.AccountTagIDs(ctx, accs)
+	if err != nil {
+		return nil, err
+	}
+	return AccountsVisibleTo(row, accs, tagIDs, caller), nil
+}
+
+// AccountTagIDs resolves the filter tags attached to each of the given
+// accounts, keyed by account id.
+func (s *Service) AccountTagIDs(ctx context.Context, accs []entity.ConnectorAccount) (map[string][]string, error) {
+	ids := make([]string, 0, len(accs))
+	for _, acc := range accs {
+		ids = append(ids, acc.ID)
+	}
+	return s.repo.AccountFilterTagIDs(ctx, ids)
+}
+
+// OwnsConnector reports whether the user created the instance. The owner is
+// the non-admin counterpart of admin for instance-level decisions (managing
+// the access policy, seeing every connected account).
+func OwnsConnector(row entity.Connector, userID string) bool {
+	return userID != "" && row.CreatedBy == userID
 }
 
 // SetSessionConfigAllowed flips the per-instance opt-in for per-session
@@ -1240,6 +1392,10 @@ type ExecuteParams struct {
 	// operations marked AdminOnly in the connector_operations table are
 	// blocked before execution starts.
 	IsAdmin bool
+	// TagIDs are the caller's filter tags. Used to honour per-account share
+	// tags when the call names an AccountID — an account shared with a tag
+	// the caller carries is theirs to run as.
+	TagIDs []string
 	// ParentRunID is set when this call replays an earlier run.
 	// Intended for use with Source == ConnectorRunSourceRetry.
 	ParentRunID *string
@@ -1405,6 +1561,18 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// per-account disabled ops. Real rows only.
 	if !virtual && p.AccountID != "" {
 		if acc, err := s.repo.GetAccountByID(ctx, p.AccountID); err == nil && acc.ConnectorID == c.ID {
+			// Ownership gate: an account the caller cannot see is an account
+			// the caller cannot run as. Without this, a tool_id carrying
+			// someone else's @accountID would still execute under their
+			// identity even though the account never appeared in wick_list.
+			caller := AccountAccess{UserID: p.UserID, TagIDs: p.TagIDs, Privileged: OwnsConnector(*c, p.UserID) || s.adminBypass(p.IsAdmin)}
+			accTags, tagErr := s.repo.AccountFilterTagIDs(ctx, []string{acc.ID})
+			if tagErr != nil {
+				return nil, fmt.Errorf("resolve account tags: %w", tagErr)
+			}
+			if !AccountVisibleTo(*c, *acc, accTags[acc.ID], caller) {
+				return nil, fmt.Errorf("account %q is not accessible: it belongs to another user and this connector keeps connected accounts private", p.AccountID)
+			}
 			disabled := AccountDisabledOps(acc)
 			if disabled[p.OperationKey] {
 				return nil, fmt.Errorf("operation %q is disabled for account @%s", p.OperationKey, acc.DisplayName)

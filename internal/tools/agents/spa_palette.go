@@ -136,7 +136,15 @@ func gatherConnectorData(c *tool.Ctx) map[string][]connectorInstance {
 		inst := connectorInstance{Row: row}
 		inst.OpEnabled, _ = globalConnectors.OperationStates(c.Context(), row.ID, row.Key)
 		if row.EnableSSO {
-			inst.Accounts, _ = globalConnectors.ListAccounts(c.Context(), row.ID)
+			// Only the accounts this user may run as: private-by-default
+			// accounts belong to whoever connected them, so the palette must
+			// not offer somebody else's identity as a droppable node.
+			caller := connectors.AccountAccess{
+				UserID:     user.ID,
+				TagIDs:     tagIDs,
+				Privileged: connectors.OwnsConnector(row, user.ID) || (user.IsAdmin() && globalConnectors.AdminSeesAllConnectors()),
+			}
+			inst.Accounts, _ = globalConnectors.ListAccountsVisibleTo(c.Context(), row, caller)
 		}
 		out[row.Key] = append(out[row.Key], inst)
 	}

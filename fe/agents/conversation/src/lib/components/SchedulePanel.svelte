@@ -467,9 +467,24 @@
           <span class={"shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium " + statusBadgeCls(s.status)}>
             {s.paused ? "paused" : s.status}
           </span>
-          {#if s.created_by === "ai"}
-            <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium bg-white-300 text-black-600 dark:bg-navy-700 dark:text-black-600">
-              by agent
+          <!-- Whose access the fires use, not who typed the row. "by agent"
+               answered a question nobody was asking; what decides whether a
+               schedule can reach anything is the identity it runs as. -->
+          {#if s.effective_run_as}
+            <span
+              class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium bg-white-300 text-black-600 dark:bg-navy-700 dark:text-black-600"
+              title={"Runs with the access of " + (s.effective_run_as_name || s.effective_run_as) + (s.run_as_user_id ? " (admin override)" : "")}
+              data-testid="row-runas"
+            >
+              runs as {s.effective_run_as_name || s.effective_run_as}{s.run_as_user_id ? " ⚑" : ""}
+            </span>
+          {:else}
+            <span
+              class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300"
+              title="No identity attached — the fire falls back to wick's internal principal, which carries no access tags."
+              data-testid="row-runas"
+            >
+              no identity
             </span>
           {/if}
           {#if s.session_mode && s.session_mode !== "existing"}

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -371,10 +372,34 @@ func channelOwnerLabel(names map[string]string, ownerUserID string) string {
 	return ownerUserID
 }
 
+// ownerNameCache memoizes the id → display-name map for a few seconds.
+//
+// The map is a whole-table read, and callers reach for it per ROW as often as
+// per request — one list of a hundred schedules was doing a hundred scans of
+// users and taking seconds. Names change about as often as someone is hired,
+// so a short TTL costs nothing and removes the N+1 wherever it hides, rather
+// than only at the call site that happened to be noticed.
+var ownerNameCache struct {
+	sync.Mutex
+	names map[string]string
+	at    time.Time
+}
+
+// ownerNameTTL is short enough that a renamed user shows up within a page
+// refresh or two, long enough that a burst of rows costs one query.
+const ownerNameTTL = 30 * time.Second
+
 // channelOwnerNames maps wick user id → display name so a channel
 // instance can say whose it is. Falls back to the email, then the raw id,
 // so a row never renders as a bare UUID when a name is missing.
+//
+// Cached — see ownerNameCache. Safe to call in a loop.
 func channelOwnerNames() map[string]string {
+	ownerNameCache.Lock()
+	defer ownerNameCache.Unlock()
+	if ownerNameCache.names != nil && time.Since(ownerNameCache.at) < ownerNameTTL {
+		return ownerNameCache.names
+	}
 	out := map[string]string{}
 	if globalDB == nil {
 		return out
@@ -394,6 +419,7 @@ func channelOwnerNames() map[string]string {
 			out[u.ID] = u.ID
 		}
 	}
+	ownerNameCache.names, ownerNameCache.at = out, time.Now()
 	return out
 }
 

@@ -98,11 +98,11 @@ templ grantRow(g GrantRow) {
 			</div>
 		</td>
 		<td class="px-4 py-3 text-black-700 dark:text-black-600">
-			{ g.GrantedAt.Format("Jan 2, 2006") }
+			@ui.LocalTime(g.GrantedAt, ui.TimeFormatDate)
 		</td>
 		<td class="px-4 py-3 text-black-700 dark:text-black-600">
 			if g.LastUsedAt != nil {
-				{ g.LastUsedAt.Format("Jan 2, 2006 15:04") }
+				@ui.LocalTime(*g.LastUsedAt, ui.TimeFormatDateTime)
 			} else {
 				Never
 			}

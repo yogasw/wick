@@ -36,16 +36,15 @@ type Work struct {
 	Detail func() []string
 	// Resumable marks work that SURVIVES being interrupted because its state
 	// is on disk and it picks up where it left off — an agent turn is resumed
-	// with --resume on the next message. Such work gets a short grace period,
-	// not the full drain: an interactive Slack session can be "in flight" for
-	// hours, and waiting for it kept the old process alive that whole time.
-	// Two wick processes coexisting is not free — only one of them holds
-	// intake, so the browser talks to one while the agents run in the other,
-	// and tableflip refuses the NEXT upgrade while a parent is still alive.
+	// with --resume on the next message. Everything else (a workflow run
+	// mid-node, a cron job mid-write, a connector call) loses work when it is
+	// cut off.
 	//
-	// Everything else (a workflow run mid-node, a cron job mid-write, a
-	// connector call) is NOT resumable: interrupting it loses the work, so
-	// the drain waits for it properly.
+	// The drain no longer treats the two differently: it waits for all of it
+	// (see WaitSettled), because "resumable" still means somebody watches a
+	// reply stop mid-sentence. The flag survives for reporting — BusyKind
+	// separates them so a forced swap can say which work merely resumes and
+	// which is actually lost.
 	Resumable bool
 }
 
@@ -153,6 +152,74 @@ func (t *Tracker) busy(keep func(Work) bool) []string {
 	return out
 }
 
+// BusyHuman renders the outstanding work the way a person would say it:
+// counts and kinds, no identifiers. Busy() stays as it is for logs, where a
+// session id is exactly what you want at 3am; a status panel is not that.
+//
+// Detail is kept only where it is a NAME someone recognises — a cron job, a
+// workflow — never a session or request id, which wrap across three lines and
+// tell a reader nothing they can act on.
+func (t *Tracker) BusyHuman() []string {
+	t.mu.Lock()
+	items := make([]Work, len(t.items))
+	copy(items, t.items)
+	t.mu.Unlock()
+
+	var out []string
+	for _, w := range items {
+		n := w.InFlight()
+		if n <= 0 {
+			continue
+		}
+		entry := humanWork(w.Name, n)
+		if namedWork(w.Name) && w.Detail != nil {
+			if d := w.Detail(); len(d) > 0 {
+				if len(d) > 2 {
+					d = append(d[:2:2], "…")
+				}
+				entry += " (" + strings.Join(d, ", ") + ")"
+			}
+		}
+		out = append(out, entry)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// namedWork reports whether a subsystem's detail is a human-readable name
+// rather than an id.
+func namedWork(name string) bool {
+	return name == "cron jobs" || name == "workflow runs"
+}
+
+func humanWork(name string, n int) string {
+	plural := func(one, many string) string {
+		if n == 1 {
+			return fmt.Sprintf("%d %s", n, one)
+		}
+		return fmt.Sprintf("%d %s", n, many)
+	}
+	switch name {
+	case "agent turns":
+		return plural("agent still replying", "agents still replying")
+	case "http requests":
+		return plural("request still being handled", "requests still being handled")
+	case "workflow runs":
+		return plural("workflow run", "workflow runs")
+	case "cron jobs":
+		return plural("cron job", "cron jobs")
+	case "connector ops":
+		return plural("connector call", "connector calls")
+	case "plugin calls":
+		return plural("plugin call", "plugin calls")
+	case "delegations":
+		return plural("sub-agent working", "sub-agents working")
+	case "scheduled messages":
+		return plural("scheduled message being delivered", "scheduled messages being delivered")
+	}
+	return fmt.Sprintf("%d %s", n, name)
+}
+
 // Total is the sum of every subsystem's in-flight count.
 func (t *Tracker) Total() int {
 	n := 0
@@ -199,8 +266,60 @@ func (t *Tracker) wait(ctx context.Context, keep func(Work) bool) []string {
 	}
 }
 
+// WaitSettled blocks until EVERY registered subsystem has reported zero
+// continuously for quiet, or ctx is done. It is the wait a handover uses.
+//
+// Two properties, and both matter:
+//
+//   - No deadline of its own. Whatever is running — an agent turn, a workflow
+//     run mid-node, a cron job mid-write — is waited for until it is done,
+//     however long that takes. A caller that genuinely must bound the wait
+//     passes a ctx with a deadline and accepts that the work is cut off.
+//   - The window is a SETTLE, not a grace. Work finishing rarely means work
+//     ending: a tool result, a queued message, the next node of a workflow or
+//     a sub-agent reporting back lands moments later. Going quiet for a
+//     moment is not the same as being done, so the counter has to stay at
+//     zero for quiet before this returns, and any new work restarts it.
+//
+// Returns the still-busy descriptions: empty means everything really settled.
+func (t *Tracker) WaitSettled(ctx context.Context, quiet time.Duration) []string {
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	report := time.NewTicker(15 * time.Second)
+	defer report.Stop()
+
+	var since time.Time // when the tracker last went fully quiet
+	for {
+		if Forced() {
+			// A human looked at what was running and chose not to wait.
+			return t.Busy()
+		}
+		busy := t.Busy()
+		switch {
+		case len(busy) > 0:
+			since = time.Time{}
+		case since.IsZero():
+			since = time.Now()
+		default:
+			if time.Since(since) >= quiet {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return t.Busy()
+		case <-report.C:
+			if len(busy) > 0 {
+				log.Info().Strs("outstanding", busy).Msg("drain: still waiting")
+			}
+		case <-tick.C:
+		}
+	}
+}
+
 // Busy / Wait / Snapshot on the default tracker.
 func Busy() []string                   { return Default.Busy() }
+func BusyHuman() []string              { return Default.BusyHuman() }
 func BusyKind(resumable bool) []string { return Default.BusyKind(resumable) }
 
 func WaitKind(ctx context.Context, resumable bool) []string {
@@ -208,4 +327,7 @@ func WaitKind(ctx context.Context, resumable bool) []string {
 }
 func Snapshot() map[string]int          { return Default.Snapshot() }
 func Wait(ctx context.Context) []string { return Default.Wait(ctx) }
+func WaitSettled(ctx context.Context, quiet time.Duration) []string {
+	return Default.WaitSettled(ctx, quiet)
+}
 func Total() int                        { return Default.Total() }
