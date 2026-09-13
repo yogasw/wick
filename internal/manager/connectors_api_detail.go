@@ -554,11 +554,18 @@ func (h *Handler) accountCaller(user *entity.User, row entity.Connector, callerT
 // The knob matters here: with it off an admin is scoped like anyone else, so
 // "I am an admin" no longer means "I may run as your Slack account". Owning
 // the instance still does.
+//
+// Ownership here is the CREATOR of the row (connectors.OwnsConnector), not the
+// "owner:{rowID}" tag ownsConnectorRow also accepts. The tag is a grant an
+// admin can hand out for configuring a row; treating it as "sees every
+// connected account" let a configure-grant read the whole account pool. It is
+// also what Service.Execute enforces at dispatch — so listing by the same rule
+// keeps the UI from offering accounts the caller would be refused on.
 func (h *Handler) canSeeAllAccounts(user *entity.User, row entity.Connector) bool {
 	if user == nil {
 		return false
 	}
-	if h.ownsConnectorRow(user, &row) {
+	if connectors.OwnsConnector(row, user.ID) {
 		return true
 	}
 	return user.IsAdmin() && h.connectors.AdminSeesAllConnectors()

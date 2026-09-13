@@ -277,12 +277,15 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Assign owner tag when a new row was created (MultiAccount flow).
-	if h.tags != nil && row.MultiAccount && entry.wickUserID != "" {
-		if err := h.tags.CreateOwnerTag(r.Context(), savedRowID, entry.wickUserID); err != nil {
-			log.Warn().Err(err).Str("row_id", savedRowID).Msg("manager oauth: create owner tag failed")
-		}
-	}
+	// NO owner tag here. Connecting an account is not creating the row:
+	// oauthStart requires an existing connector_id and oauthSaveToken refuses
+	// to run without one, so this callback never creates a row to own. Handing
+	// "owner:{rowID}" to whoever completes the flow made every person who
+	// connected their Slack account an owner of somebody else's instance —
+	// which reads as "administers this instance", i.e. sees (and manages)
+	// every OTHER account connected to that row, and may rewrite its access
+	// policy. The row is created — and its owner tag assigned — in
+	// createConnectorRow / duplicate / the custom-connector path.
 
 	http.Redirect(w, r,
 		"/manager/connectors/"+key+"?oauth=success&user="+url.QueryEscape(displayName),
