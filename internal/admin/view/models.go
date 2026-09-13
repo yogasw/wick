@@ -79,7 +79,12 @@ type ConnectorAdminRow struct {
 	ModuleName    string
 	ModuleIcon    string
 	ModuleMissing bool
-	TagIDs        []string
+	// OwnerLabel is Connector.CreatedBy as a person. The raw column is a
+	// uuid, and the owner of an instance is the one non-admin who can
+	// configure it and see every account connected to it — a question the
+	// page can only answer with a name.
+	OwnerLabel string
+	TagIDs     []string
 	// Accounts are the OAuth identities connected to this instance, listed
 	// underneath it. Each one is taggable in its own right: an account is
 	// private to whoever connected it unless the instance shares the whole
@@ -115,6 +120,14 @@ type AccessTokenRow struct {
 	OwnerEmail string
 }
 
+// UserOption is one entry in a user picker — the "Run as" select on the
+// schedules page, and the "Owner" select on projects and connectors. Label is
+// the display name the admin reads; ID is what the form posts back.
+type UserOption struct {
+	ID    string
+	Label string
+}
+
 // ResourceAdminRow is a generic view model used by the Projects, Workflows,
 // and Skills admin pages. Each row shows a name, optional icon, optional
 // created-by audit field, and a tag picker addressed by Path.
@@ -123,8 +136,15 @@ type ResourceAdminRow struct {
 	Name      string
 	Icon      string
 	CreatedBy string
-	TagIDs    []string
-	Path      string
+	// OwnerLabel is CreatedBy rendered as a person: the wick user's name and
+	// email. A raw uuid in the Owner column names nobody — an admin reading
+	// the page cannot tell whose project it is without looking the id up by
+	// hand, which is the one question the column exists to answer. Falls back
+	// to the id when it resolves to no user (a deleted account, or an id that
+	// was never a user at all), because showing the id beats showing nothing.
+	OwnerLabel string
+	TagIDs     []string
+	Path       string
 	// Access is who can reach this row — see AccessBadge. Zero value renders
 	// as a public badge, which is what an untagged row is.
 	Access AccessSummary

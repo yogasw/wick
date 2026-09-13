@@ -319,9 +319,14 @@ func (h *Handler) decorateResourceRows(ctx context.Context, rows []adminview.Res
 		specs = append(specs, accessSpec{Path: r.Path, ResourceID: r.ID, OwnerID: r.CreatedBy})
 	}
 	access := h.accessSummariesFor(ctx, specs)
+	// One user lookup for the whole page, not one per row: the Owner column
+	// names a person, and every row on every one of these surfaces resolves
+	// its id out of the same map.
+	names := h.userLabels(ctx)
 	for i := range rows {
 		rows[i].Access = access[rows[i].Path]
 		rows[i].TagNames = adminview.TagNames(allTags, rows[i].TagIDs)
+		rows[i].OwnerLabel = labelFor(names, rows[i].CreatedBy)
 	}
 	return rows
 }

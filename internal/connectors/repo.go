@@ -227,6 +227,20 @@ func (r *Repo) Update(ctx context.Context, c *entity.Connector) error {
 		}).Error
 }
 
+// SetCreatedBy re-stamps which wick user owns the instance. CreatedBy is
+// documented as an identity field Update never touches, and that is still
+// right for an edit — but ownership has to be transferable: the owner is who
+// may configure the row and who sees every account connected to it, so an
+// instance whose owner has left the company would otherwise be stuck with an
+// administrator nobody can reach. Empty clears it, leaving the row admin-only.
+func (r *Repo) SetCreatedBy(ctx context.Context, id, userID string) error {
+	return r.db.WithContext(ctx).Model(&entity.Connector{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"created_by": userID,
+			"updated_at": time.Now(),
+		}).Error
+}
+
 // SetDisabled flips the Disabled flag without touching anything else.
 // Used by the admin manager toggle.
 func (r *Repo) SetDisabled(ctx context.Context, id string, disabled bool) error {

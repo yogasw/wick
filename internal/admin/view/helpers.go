@@ -74,3 +74,15 @@ func TagNames(all []*entity.Tag, ids []string) []string {
 	}
 	return out
 }
+
+// userOptionsHave reports whether the picker already offers this user id. Used
+// to decide if the current owner needs a stale-owner entry of its own: a
+// select that does not contain its own value silently posts somebody else.
+func userOptionsHave(users []UserOption, id string) bool {
+	for _, u := range users {
+		if u.ID == id {
+			return true
+		}
+	}
+	return false
+}

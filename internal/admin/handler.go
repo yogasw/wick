@@ -112,6 +112,10 @@ type Handler struct {
 	// the page as "scheduling is not configured".
 	schedules    ScheduleLister
 	projectNames ProjectNamer
+	// projectWriter backs the projects Owner picker. Optional and wired
+	// post-construction (SetProjectWriter): the page lists projects through
+	// ProjectLister, and only this one endpoint needs to write one back.
+	projectWriter ProjectWriter
 
 	// sys bundles everything the System config page needs: the update
 	// coordinator (nil-safe — page shows "not configured" when absent),
@@ -288,8 +292,8 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 
 	// Connector instance management (cross-definition list).
 	mux.Handle("GET /admin/connectors", admin(h.connectorsAdminPage))
-	mux.Handle("POST /admin/connectors/{id}/disabled", admin(h.setConnectorDisabledAdmin))
 	mux.Handle("POST /admin/connectors/{id}/tags", admin(h.setConnectorTagsAdmin))
+	mux.Handle("POST /admin/connectors/{id}/owner", admin(h.setConnectorOwner))
 	mux.Handle("POST /admin/connectors/{id}/accounts/{accountID}/tags", admin(h.setConnectorAccountTagsAdmin))
 
 	// Projects, Workflows, Skills — ownership/access tag management.
@@ -299,7 +303,9 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	// run-as decides whose access a job borrows.
 	mux.Handle("GET /admin/schedule", admin(h.schedulesAdminPage))
 	mux.Handle("POST /admin/schedule/{id}/run-as", admin(h.setScheduleRunAs))
+	mux.Handle("POST /admin/schedule/{id}/owner", admin(h.setScheduleOwner))
 	mux.Handle("POST /admin/projects/{id}/tags", admin(h.setProjectTags))
+	mux.Handle("POST /admin/projects/{id}/owner", admin(h.setProjectOwner))
 
 	mux.Handle("GET /admin/workflows", admin(h.workflowsAdminPage))
 	mux.Handle("POST /admin/workflows/{id}/tags", admin(h.setWorkflowTags))

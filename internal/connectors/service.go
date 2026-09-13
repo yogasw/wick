@@ -867,6 +867,14 @@ func (s *Service) SetDisabled(ctx context.Context, id string, disabled bool) err
 	return s.repo.SetDisabled(ctx, id, disabled)
 }
 
+// SetOwner re-stamps the instance's owner — the user OwnsConnector reads.
+// Admin-only by construction: the only caller is the admin connectors page,
+// because an owner who could hand ownership on would also be handing on the
+// right to see every account connected to the row.
+func (s *Service) SetOwner(ctx context.Context, id, userID string) error {
+	return s.repo.SetCreatedBy(ctx, id, userID)
+}
+
 // SetDescription updates the per-instance AI-facing description (empty clears).
 func (s *Service) SetDescription(ctx context.Context, id, description string) error {
 	return s.repo.SetDescription(ctx, id, description)

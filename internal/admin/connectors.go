@@ -90,7 +90,15 @@ func (h *Handler) connectorsAdminPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	view.ConnectorsAdminPage(items, allTags, user).Render(ctx, w)
+	// The Owner column names a person. ownerLabels only covers the users who
+	// connected an ACCOUNT, so instance owners get their own lookup — one for
+	// the page, not one per row.
+	names := h.userLabels(ctx)
+	for i := range items {
+		items[i].OwnerLabel = labelFor(names, items[i].Connector.CreatedBy)
+	}
+
+	view.ConnectorsAdminPage(items, allTags, h.userOptions(ctx), user).Render(ctx, w)
 }
 
 // connectorAccountsAdmin loads the connected OAuth accounts of every listed
@@ -133,18 +141,11 @@ func (h *Handler) connectorAccountsAdmin(ctx context.Context, rows []entity.Conn
 	return byRow, tagsByPath, h.repo.UserLabels(ctx, ownerIDs), nil
 }
 
-// setConnectorDisabledAdmin toggles the row-level Disabled flag on the
-// Connector entity itself (NOT the ToolPermission row). Disabled rows
-// disappear from MCP tools/list and the Postman-style test panel.
-func (h *Handler) setConnectorDisabledAdmin(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	disabled := boolParam(r, "disabled")
-	if err := h.connectors.SetDisabled(r.Context(), id, disabled); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	redirectOrNoContent(w, r, "/admin/connectors")
-}
+// Turning an instance on or off is NOT here. It used to be a second toggle on
+// this page, which meant two screens could disable a connector and only one of
+// them (the instance settings page, /manager/connectors/{key}/{id}) shows what
+// else is about to break when you do. This page grants and describes access;
+// the settings page owns the switch.
 
 // setConnectorTagsAdmin updates the access tags for one connector
 // instance. Reuses the ToolTag table with path "/connectors/{id}" so

@@ -536,3 +536,61 @@ func (r *repo) DeleteTag(ctx context.Context, tagID string) error {
 		return tx.Delete(&entity.Tag{}, "id = ?", tagID).Error
 	})
 }
+
+// TransferOwnerTag moves the "owner:<resourceID>" grant from one user to
+// another, creating the tag (and, for surfaces that have one, its tool-path
+// link) when it does not exist yet.
+//
+// It unlinks ONLY the previous owner. An admin can grant an owner tag to other
+// people from the Tags page — those grants are deliberate shares, and wiping
+// the tag to re-create it (the obvious implementation) would revoke every one
+// of them silently. A transfer is about one person handing a row to another,
+// not about clearing the room.
+//
+// newOwner == "" removes the old owner without naming a new one: the resource
+// becomes ownerless, which is a real state (most seeded rows are in it) and
+// not an error.
+func (r *repo) TransferOwnerTag(ctx context.Context, resourceID, toolPath, oldOwner, newOwner string) error {
+	if resourceID == "" || oldOwner == newOwner {
+		return nil
+	}
+	defer r.cache.invalidate()
+	name := "owner:" + resourceID
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var t entity.Tag
+		err := tx.Where("name = ?", name).First(&t).Error
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			if newOwner == "" {
+				// Nothing to unlink and nobody to link: the resource had no
+				// owner tag and is not getting one.
+				return nil
+			}
+			t = entity.Tag{Name: name, IsFilter: true}
+			if err := tx.Create(&t).Error; err != nil {
+				return err
+			}
+		case err != nil:
+			return err
+		}
+		if newOwner != "" {
+			if toolPath != "" {
+				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
+					Create(&entity.ToolTag{ToolPath: toolPath, TagID: t.ID}).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
+				Create(&entity.UserTag{UserID: newOwner, TagID: t.ID}).Error; err != nil {
+				return err
+			}
+		}
+		if oldOwner != "" {
+			if err := tx.Where("user_id = ? AND tag_id = ?", oldOwner, t.ID).
+				Delete(&entity.UserTag{}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}

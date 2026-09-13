@@ -2284,6 +2284,11 @@ func NewServer() *Server {
 	}
 	// /admin/schedule — the identity each scheduled fire runs as.
 	adminHandler.SetSchedules(scheduleStore, scheduleProjectNamer{layout: agentsLayout})
+	// /admin/projects — re-stamping a project's owner needs the manager, not
+	// the registry the page lists through.
+	if agentsMgr != nil {
+		adminHandler.SetProjectWriter(agentsMgr)
+	}
 
 	// ── Shared services ─────────────────────────────────────────
 	bookmarkSvc := bookmark.NewService(db)
