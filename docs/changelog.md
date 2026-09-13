@@ -6,17 +6,85 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v1.10.0](https://github.com/yogasw/wick/compare/v1.9.0...v1.10.0) — Platform Enhancements
+
+_Released on 2026-09-13_
+
 ### Changed
 
-*   **The drain waits for the work instead of running a clock against it**: a handover now completes on a condition — every subsystem at zero, and still at zero for the settle window `WICK_DRAIN_QUIET` (default `15s`) — rather than on two deadlines that killed what they were supposed to protect (`WICK_DRAIN_TIMEOUT` 20m for workflow runs and cron jobs, a fixed 45s grace for agent turns). An agent turn or workflow run that takes hours is waited for, for hours, and the process exits the moment the last of it settles. `WICK_DRAIN_TIMEOUT` remains as an optional hard cap and is now unset by default; `WICK_DRAIN_AGENT_GRACE` is gone (a host that still sets it gets a warning). The pool now reports turns that are actually producing rather than live subprocesses, so an idle-but-alive spawn no longer holds a handover open. Requests being handled are waited for too (the HTTP shutdown lost its 30s cap); SSE and websocket streams are excluded and dropped last. Readiness lost its 2-minute ceiling as well: a successor reports ready only once its own boot gate lifts.
+*   **The drain waits for the work instead of running a clock against it**: A handover now completes on a condition — every registered subsystem at zero, and still at zero for the settle window (`WICK_DRAIN_QUIET`, default `15s`) — rather than on two deadlines that killed what they were supposed to protect. An agent turn or workflow run that takes hours is waited for, for hours, and the process exits the moment the last of it settles.
+    *   `WICK_DRAIN_TIMEOUT` remains as an optional hard cap and is now unset by default.
+    *   `WICK_DRAIN_AGENT_GRACE` is gone (a host that still sets it gets a warning).
+    *   The pool now reports turns that are actually producing rather than live subprocesses, so an idle-but-alive spawn no longer holds a handover open.
+    *   Requests being handled are waited for too (the HTTP shutdown lost its 30s cap); SSE and websocket streams are excluded and dropped last.
+    *   Readiness lost its 2-minute ceiling as well: a successor reports ready only once its own boot gate lifts.
+    *   The auto-swap no longer waits for agent turns to be idle; only unresumable work gates the trigger.
+    *   A per-spawn MCP credential is no longer revoked the instant the subprocess exits; revocation now waits 90 seconds.
+*   **Admin Visibility split**: The `admin_see_all` setting has been split into `admin_see_all_sessions` (for sessions, projects, data tables, scheduled messages) and `admin_see_all_connectors` (for connector instances and accounts), allowing more granular control. `admin_see_all_sessions` is off by default, `admin_see_all_connectors` is on by default.
+*   **AI Provider Usage Probes**: Only the first probe for an account is now automatic; subsequent readings are replaced only by a human pressing Re-check. Exponential backoff for retries has been removed. The UI clarifies when a re-check is available, rather than promising an automatic refresh.
+*   **Scheduled Task Identity**: Scheduled fires now run under the identity of their owner. `Meta.UserID` is stamped before the send, ensuring per-user MCP credentials are minted.
+*   **Agent Turn Identity**: The MCP credential for a spawn is now keyed by the caller's `UserID` (if available), falling back to the session owner only when no human triggered the spawn, and to the internal principal if neither is known. `RespawnOnCallerChange` now effectively recycles processes under the new user's identity.
+*   **Workflow Session Ownership**: Workflow nodes and the web composer now stamp the workflow's author as the session owner when creating new sessions.
+*   **SCM Nested Repos**: The SCM panel now lists nested repositories as their own entries, showing their path, branch, and change count, and allows switching to them to view their files. Untracked folders (not nested repos) now show their individual files when staged.
+*   **OAuth `last_used_at` Reporting**: OAuth grant `last_used_at` now considers all token rows (including expired and revoked) and is updated when a refresh token is redeemed, providing a more accurate usage history. Timestamps are now displayed in the reader's local timezone.
 
 ### Added
 
-*   **Force swap, with the work it would interrupt shown first**: `/admin/advanced/software-update` renders a live “Running now” list (agent turns, workflow runs, cron jobs, in-flight requests) from a new `GET /admin/advanced/software-update/serving` endpoint, alongside a Force swap control that hands over immediately instead of waiting. The page also detects a completed handover by comparing the serving pid, replacing a `/health` poll that waited for an outage a zero-downtime upgrade never produces.
-*   **A binary installed at the exec path applies itself**: the daemon never watched its own file, so a build copied into place sat there until someone sent SIGHUP — with the app looking perfectly normal on the old version. A watcher now hands over once the file differs from the running image, has stopped changing (so a copy in flight is never executed), and nothing is in flight. A file that fails to take over is not retried.
-*   **MCP credentials survive a handover**: scoped per-spawn tokens are passed to the successor (0600 beside the intake baton, deleted as it is read, original expiry kept), so an agent still finishing its turn in the outgoing process keeps its wick tools instead of getting `401`.
+*   **Force swap with work shown**: The `/admin/advanced/software-update` page now renders a live “Running now” list (agent turns, workflow runs, cron jobs, in-flight requests) from a new `GET /admin/advanced/software-update/serving` endpoint. A "Force swap" control allows immediate handover instead of waiting. The page also detects a completed handover by comparing the serving process ID.
+*   **Binary auto-application watcher**: The daemon now watches its own executable file and hands over automatically once the file differs from the running image, has stopped changing, and nothing is in flight. A file that fails to take over is not retried.
+*   **MCP credentials survive handover**: Scoped per-spawn tokens are passed to the successor process, ensuring agents finishing their turns in the outgoing process keep their Wick tools instead of getting `401`.
+*   **`reload --binary` command**: A new `reload --binary <path>` command automates the zero-downtime upgrade sequence by statically checking binary identity, grading findings, performing a safe write-to-sibling + rename swap, verifying the successor, and rolling back on failure. It provides confirmation prompts and updates documentation.
+*   **Persistent Todo Tool**:
+    *   A todo checklist is now saved to `<SessionDir>/todos.json`, with a history of previous lists (capped at 20).
+    *   A new "Todo" tab in the rail shows the active list, promotes open items with a badge, and opens the rail on a new list (if nothing else is open). Updates stream via SSE.
+    *   Unfinished todo lists are carried into the next agent spawn prompt as a reminder.
+    *   The panel is renamed from "Checklist" to "Todo" and closes automatically when a list finishes (if it opened itself).
+*   **`ticket_search` tool**: A new tool for searching tickets by ID, title, description, and field values (case-insensitive), sorting title matches first.
+*   **Connector Accounts & OAuth**: Introduction of per-account visibility for connectors across the system, including entity, repository, service, admin pages, manager API, MCP connector handlers, and frontend views.
+*   **Provider Access Control**: Provider instances can now be shared by tags: `ACCESS` grants view-only (usage, re-check, reconnect for own accounts), while `MANAGE` grants access to the Providers menu and account management. The manager view is streamlined to show only relevant connection details and a read-only summary.
+*   **Composer `/usage` Command**: A `/usage` command in the composer displays a read-only popover showing the current session's provider account, rate-limit windows, and reading age. It can be manually refreshed.
+*   **Admin `run_as_user_id` for schedules**: Admins can now explicitly set a `run_as_user_id` for scheduled tasks from both MCP and the dashboard. This is admin-only and fails if the user is removed.
+*   **New `/admin/schedule` page**: A dedicated page to monitor scheduled tasks, showing owner, `run_as_user_id`, and effective run-as identity, with filtering, searching, and pagination.
+
+### Improved
+
+*   **Upgrade Visibility**: A draining predecessor now writes its outstanding work beside the pid file every 3 seconds, which the successor reads and displays on the `Software Update` page and banner, providing clarity on why a handover is pending.
+*   **AI Provider Usage UI**: The UI now includes provenance for usage readings (age, next probe, checking state, wait after failure) and a Re-check button. The `/usage` popover polls briefly to update itself while a probe is in flight.
+*   **Resource Monitoring UI**: Machine memory and disk usage in resource cards now display as donut gauges with percentages, alongside absolute values.
+*   **Sidebar Navigation**: The active page within the collapsed "More" group is now promoted to a top-level navigation row, preventing the highlighted item from disappearing when the group closes.
+*   **Settings Page UI/UX**:
+    *   All cards in Agents settings and Project settings now start closed.
+    *   A search box filters cards by config key, group title, and description (Project settings include common search terms).
+    *   The Project settings header is more compact, and the back link uses browser history by default.
+    *   Page column widths are standardized across the application.
+*   **Scheduled/Workflow UI Identity**: The session panel and shared detail modal now explicitly report "runs as <name>" for schedules, with an amber "no identity" chip when none is attached. Admin overrides are clearly marked.
+*   **SCM User Experience**:
+    *   The "Discard" button for untracked nested repositories is replaced with an "Ignore" option, which adds an entry to `.git/info/exclude`.
+    *   `git clean -fd` operations now correctly report errors for untracked repos it could not remove.
+*   **Swap Banner Consistency**: The admin banner describing software updates now aligns its messages with the actual handover state, suppressing contradictory or misleading information during active operations.
+
+### Fixed
+
+*   **Slack Scheduled Reply Delivery**: A bug where scheduled Slack replies were never delivered and left no trace if the session had no binding has been fixed. The system now warns once per session when a reply has nowhere to go and records the binding when auto-reply is armed.
+*   **`reload --binary` User Interaction**: Fixed `--yes` prompt logic for scripts (EOF now means no) and suppressed default flag dumps when refusing a binary.
+*   **Conversation Scroll Blinking**: Scrolling up in the chat panel by less than 80px no longer causes the panel to snap back to the bottom. The re-pin threshold is now correctly set to <=4px.
+*   **Conversation Browser Scroll Anchoring**: Disabled browser's automatic `overflow-anchor: auto` in the chat panel to prevent visible content jumps during live streams.
+*   **Admin Tag Background Save**: Corrected the background tag saver to use `application/x-www-form-urlencoded` and ensured all tag handlers correctly parse both URL-encoded and multipart forms, preventing accidental tag deletion. Forms without a `tags_submitted` marker are now refused.
+*   **Provider Manager Page Access**: Corrected provider display for managers to show a summary page instead of an inert admin form, avoiding console errors from admin-only API calls. Removed enable/disable, delete, rename buttons from the manager page.
+*   **Workflow Node Session Pinning**: Workflows can no longer pin a session ID that the workflow author cannot reach or manage. This is enforced at save-time.
+*   **Scheduler Database Lookup**: The fire-time run-as check now uses the runner tick's context and is bounded to 5 seconds, preventing indefinite hangs on unreachable databases.
+*   **`reload --binary` Blocking Behavior**: `reload --binary` no longer blocks by default; the old process serves during boot. The `--wait` flag restores blocking behavior. It also aborts its wait early if the daemon refuses to start the successor.
+*   **Failed Reload Rollback**: A failed `reload` no longer attempts to roll back over a newer binary installed by another process in the meantime; it refuses if the file is not the one it put there.
+*   **Same-Version Upgrade Refusal**: `reload --binary` now *fatally* refuses to hand over to a binary that carries the exact same version number as the one currently serving, preventing confusion and issues with rollbacks.
+*   **Stale Usage 401s**: The usage card now retries a failed probe once if the underlying credential file has a newer modification time than the failed attempt, preventing display of stale 401 errors.
+*   **Lint Failures**: Fixed two pre-existing lint failures related to `TestWickTagDescriptionsAreNotSplitByProse` (semicolon in description) and `TestNoDirectOSExec` (`os/exec` direct usage).
 
 ---
+
 
 ## [v1.9.0](https://github.com/yogasw/wick/compare/v1.8.1...v1.9.0) — Graceful Upgrades & Workflows
 
