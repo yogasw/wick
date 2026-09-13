@@ -34,6 +34,7 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 					})
 					@adminDropdown("Agents", isAgentsActive(activeTab), []dropdownItem{
 						{Href: "/admin/projects", Label: "Projects", Active: activeTab == "projects"},
+						{Href: "/admin/schedule", Label: "Schedules", Active: activeTab == "schedule"},
 						{Href: "/admin/workflows", Label: "Workflows", Active: activeTab == "workflows"},
 						{Href: "/admin/skills", Label: "Skills", Active: activeTab == "skills"},
 						{Href: "/admin/data-tables", Label: "Data Tables", Active: activeTab == "data-tables"},
@@ -201,8 +202,8 @@ func isMiniToolsActive(tab string) bool {
 }
 
 func isAgentsActive(tab string) bool {
-	return tab == "projects" || tab == "workflows" || tab == "skills" || tab == "data-tables" ||
-		tab == "providers"
+	return tab == "projects" || tab == "schedule" || tab == "workflows" || tab == "skills" ||
+		tab == "data-tables" || tab == "providers"
 }
 
 func isAccessActive(tab string) bool {

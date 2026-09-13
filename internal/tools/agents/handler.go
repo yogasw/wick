@@ -443,6 +443,8 @@ func Register(r tool.Router) {
 	// Global cross-session scheduler monitor (the "Scheduled" sidebar page).
 	r.GET("/scheduled", scheduledPage)
 	r.GET("/scheduled/all", schedulesAllUI)
+	// Admin-only: who a schedule may be pointed at ("Run as" picker).
+	r.GET("/scheduled/run-as-users", scheduleRunAsUsersUI)
 	r.POST("/scheduled/{sid}/cancel", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "cancel") })
 	r.POST("/scheduled/{sid}/pause", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "pause") })
 	r.POST("/scheduled/{sid}/resume", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "resume") })

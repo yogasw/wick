@@ -107,6 +107,11 @@ type Handler struct {
 	workflows  WorkflowLister
 	skillsDB   SkillLister
 	dataTables DataTableLister // optional; wired post-construction via SetDataTables
+	// schedules + projectNames back /admin/schedule, where the identity a
+	// scheduled fire runs as is inspected and changed. Optional: nil renders
+	// the page as "scheduling is not configured".
+	schedules    ScheduleLister
+	projectNames ProjectNamer
 
 	// sys bundles everything the System config page needs: the update
 	// coordinator (nil-safe — page shows "not configured" when absent),
@@ -285,6 +290,11 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 
 	// Projects, Workflows, Skills — ownership/access tag management.
 	mux.Handle("GET /admin/projects", admin(h.projectsAdminPage))
+
+	// Schedules: which user each scheduled fire runs as. Admin-only, because
+	// run-as decides whose access a job borrows.
+	mux.Handle("GET /admin/schedule", admin(h.schedulesAdminPage))
+	mux.Handle("POST /admin/schedule/{id}/run-as", admin(h.setScheduleRunAs))
 	mux.Handle("POST /admin/projects/{id}/tags", admin(h.setProjectTags))
 
 	mux.Handle("GET /admin/workflows", admin(h.workflowsAdminPage))

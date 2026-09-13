@@ -3,6 +3,7 @@ package agents
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -66,6 +67,23 @@ type scheduleVM struct {
 	// CronTimezone names the zone a cron expression is matched in (the
 	// server's), so the UI never has to guess whether 9am is local or UTC.
 	CronTimezone string `json:"cron_timezone,omitempty"`
+
+	// Identity — whose access a fire actually runs with.
+	//
+	// Always sent, empty included: a schedule attached to nobody runs as the
+	// synthetic internal principal and reaches far less than its creator, and
+	// the only reason that went unnoticed was that no screen ever showed it.
+	// CreatedBy answers "how the row was made", never "as whom it runs".
+	OwnerUserID string `json:"owner_user_id"`
+	// RunAsUserID is the admin override; empty means the fire runs as the
+	// owner, which is the normal case.
+	RunAsUserID string `json:"run_as_user_id,omitempty"`
+	// EffectiveRunAs is what the runner will actually use — the override if
+	// set, else the owner. Empty is the broken state worth showing loudly.
+	EffectiveRunAs string `json:"effective_run_as"`
+	// EffectiveRunAsName is that user's display name, resolved server-side so
+	// the UI never has to render a bare uuid.
+	EffectiveRunAsName string `json:"effective_run_as_name,omitempty"`
 }
 
 func scheduleToVM(m entity.ScheduledMessage) scheduleVM {
@@ -84,6 +102,12 @@ func scheduleToVM(m entity.ScheduledMessage) scheduleVM {
 		LastSessionID:   m.LastSessionID,
 		SourceSessionID: m.SourceSessionID,
 		ManualRuns:      m.ManualRuns,
+		OwnerUserID:     m.OwnerUserID,
+		RunAsUserID:     m.RunAsUserID,
+		EffectiveRunAs:  m.EffectiveRunAsUser(),
+	}
+	if vm.EffectiveRunAs != "" {
+		vm.EffectiveRunAsName = channelOwnerLabel(channelOwnerNames(), vm.EffectiveRunAs)
 	}
 	if m.Cron != "" {
 		vm.CronTimezone = schedule.ServerZoneLabel(m.RunAt)
@@ -348,6 +372,9 @@ func scheduleParsePatchUI(m entity.ScheduledMessage, c *tool.Ctx, sessionID stri
 		ProjectID       *string `json:"project_id"`
 		SessionMode     *string `json:"session_mode"`
 		SessionTemplate *string `json:"session_template"`
+		// RunAsUserID re-points whose access a fire runs with. Admin-only
+		// (see below) — this is an identity switch, not a preference.
+		RunAsUserID *string `json:"run_as_user_id"`
 	}
 	if err := c.BindJSON(&body); err != nil {
 		return schedule.SchedulePatch{}, fmt.Errorf("invalid JSON")
@@ -374,6 +401,18 @@ func scheduleParsePatchUI(m entity.ScheduledMessage, c *tool.Ctx, sessionID stri
 	}
 	if body.MaxRuns != nil {
 		patch.MaxRuns = body.MaxRuns
+	}
+	if body.RunAsUserID != nil {
+		// Gated here rather than on the route, because the rest of this
+		// endpoint is legitimately owner-accessible: a user may retime and
+		// reword their own schedule. Only the identity field is admin-only,
+		// otherwise any schedule owner could point their job at somebody
+		// with more access and inherit it.
+		if !callerIsAdmin(c) {
+			return patch, fmt.Errorf("run_as_user_id is admin-only")
+		}
+		runAs := strings.TrimSpace(*body.RunAsUserID)
+		patch.RunAsUserID = &runAs
 	}
 	if err := scheduleTargetPatchUI(m, c, sessionID, now, body.ProjectID, body.SessionMode, body.SessionTemplate, &patch); err != nil {
 		return patch, err
@@ -519,6 +558,40 @@ func scheduledPage(c *tool.Ctx) {
 
 // schedulesAllUI lists schedules for every session the caller may access,
 // tagged with the session label for grouping.
+// scheduleRunAsUsersUI lists the users an admin may point a schedule at, for
+// the "Run as" picker. Admin-only and deliberately thin: id + a display label,
+// nothing that would turn the schedule page into a user directory.
+//
+// Only APPROVED users are offered. An unapproved account would be accepted
+// here and then refused at fire time, which is a worse way to find out.
+func scheduleRunAsUsersUI(c *tool.Ctx) {
+	if !callerIsAdmin(c) {
+		c.Error(http.StatusForbidden, "admin only")
+		return
+	}
+	type userOption struct {
+		ID    string `json:"id"`
+		Label string `json:"label"`
+	}
+	out := []userOption{}
+	if globalDB == nil {
+		c.JSON(http.StatusOK, map[string]any{"users": out})
+		return
+	}
+	var users []entity.User
+	if err := globalDB.Select("id", "name", "email", "approved").
+		Where("approved = ?", true).Find(&users).Error; err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	names := channelOwnerNames()
+	for _, u := range users {
+		out = append(out, userOption{ID: u.ID, Label: channelOwnerLabel(names, u.ID)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Label < out[j].Label })
+	c.JSON(http.StatusOK, map[string]any{"users": out})
+}
+
 func schedulesAllUI(c *tool.Ctx) {
 	if globalSchedule == nil || globalMgr == nil {
 		c.JSON(http.StatusOK, map[string]any{"schedules": []any{}})

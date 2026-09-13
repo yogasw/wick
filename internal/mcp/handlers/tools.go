@@ -743,6 +743,10 @@ func MetaToolDescriptors() []ToolDescriptor {
 						"type":        "string",
 						"description": "action=create: optional pool agent to route to. Default 'main'.",
 					},
+					"run_as_user_id": map[string]any{
+						"type":        "string",
+						"description": "action=create/reschedule, ADMIN ONLY: run every fire as this user instead of the schedule's owner. Leave it unset in normal use — a fire already runs as the owner, which is what makes a scheduled run behave like the creator running it by hand. Set it only when a job legitimately needs somebody else's access; pass \"\" to clear it. A fire whose run-as user is later removed or un-approved FAILS rather than falling back, so a disabled account stops its jobs instead of quietly running them as something else.",
+					},
 					"id": map[string]any{
 						"type":        "string",
 						"description": "action=cancel/pause/resume/reschedule: the schedule id (sm_...).",

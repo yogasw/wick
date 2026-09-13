@@ -2260,6 +2260,8 @@ func NewServer() *Server {
 	if wfMgr != nil && wfMgr.DataTables != nil {
 		adminHandler.SetDataTables(wfMgr.DataTables) // /admin/data-tables grant page
 	}
+	// /admin/schedule — the identity each scheduled fire runs as.
+	adminHandler.SetSchedules(scheduleStore, scheduleProjectNamer{layout: agentsLayout})
 
 	// ── Shared services ─────────────────────────────────────────
 	bookmarkSvc := bookmark.NewService(db)
@@ -2523,7 +2525,14 @@ func NewServer() *Server {
 	r.Handle("/", http.HandlerFunc(homeHandler.RootRedirect))
 	r.Handle("/mini-tools", http.HandlerFunc(homeHandler.Launcher))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens}
+	runAsUsable := func(userID string) bool {
+		if userID == "" {
+			return false
+		}
+		u, err := authSvc.GetUserByID(context.Background(), userID)
+		return err == nil && u != nil && u.Approved
+	}
+	return &Server{runAsUsable: runAsUsable, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens}
 }
 
 type Server struct {
@@ -2546,6 +2555,11 @@ type Server struct {
 	// which owns the context cancelled at shutdown — running it on
 	// context.Background() would leak the goroutine past every stop.
 	resourceSampler *memreport.Sampler
+	// runAsUsable reports whether a user id may still be run as — it exists
+	// and is approved. The schedule runner consults it at fire time so a
+	// disabled account stops its jobs instead of silently handing them to the
+	// internal principal.
+	runAsUsable func(userID string) bool
 	// scheduleStore backs wick_schedule_message; Run starts the runner that
 	// polls it and delivers due messages through agentsPool. nil-safe: the
 	// runner is only started when both store and pool are present.
@@ -3045,7 +3059,9 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		if s.scheduleStore != nil && s.agentsPool != nil {
 			// Boot recovery is implicit — the first tick picks up anything
 			// that came due while wick was down.
-			go schedule.NewRunner(s.scheduleStore, s.agentsPool, s.agentsLayout).Run(ctx)
+			go schedule.NewRunner(s.scheduleStore, s.agentsPool, s.agentsLayout).
+				WithRunAsCheck(s.runAsUsable).
+				Run(ctx)
 		}
 		close(s.intakeReady)
 	}()
@@ -3683,4 +3699,18 @@ func channelKindOf(m agentsession.Meta) string {
 		return agentproject.ChannelKindDM
 	}
 	return agentproject.ChannelKindChannel
+}
+
+// scheduleProjectNamer resolves a project id to its display name for the
+// admin schedules page, so a row reads "Ygsw Bot" rather than a uuid. A
+// project that no longer exists yields "", and the page falls back to showing
+// the id — better than a blank cell when the point is to spot a stale row.
+type scheduleProjectNamer struct{ layout agentconfig.Layout }
+
+func (n scheduleProjectNamer) ProjectName(id string) string {
+	p, err := agentproject.Load(n.layout, id)
+	if err != nil {
+		return ""
+	}
+	return p.Meta.Name
 }
