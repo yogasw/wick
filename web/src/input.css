@@ -43,6 +43,12 @@
  * default Dark values so switching away from a custom theme back
  * to "Dark" restores the original palette.
  * ────────────────────────────────────────────────────────── */
+/* Width of the shared page column (.page-col). Chat, session list and both
+   settings pages read it, so the whole app narrows or widens together. */
+:root {
+  --page-col: 56rem;
+}
+
 :root,
 .theme-light {
   --color-white-100: 255 255 255;

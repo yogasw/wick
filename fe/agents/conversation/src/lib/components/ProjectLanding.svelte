@@ -449,12 +449,12 @@
        wide enough for a main column plus its properties rail, never
        edge-to-edge. -->
   <div
-    class={"mx-auto w-full flex flex-col gap-3 flex-1 min-h-0 " +
+    class={"flex flex-col gap-3 flex-1 min-h-0 " +
       (ticketEnabled && openTicketId
-        ? "max-w-7xl"
+        ? "mx-auto w-full max-w-7xl"
         : ticketEnabled && viewMode === "card"
-          ? "max-w-none"
-          : "max-w-4xl")}
+          ? "w-full max-w-none"
+          : "page-col")}
   >
     {#if ticketEnabled && !openTicketId}
       <div class="flex items-center justify-between">

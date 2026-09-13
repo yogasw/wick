@@ -2183,7 +2183,7 @@
         bind:this={threadEl}
         data-chat-panel
       >
-        <div class="max-w-4xl mx-auto w-full px-6 pt-14 pb-6 md:pt-6">
+        <div class="page-col px-6 pt-14 pb-6 md:pt-6">
           {#if loadingOlder}
             <div class="flex items-center justify-center gap-2 py-3 text-[11px] text-black-600 dark:text-black-700">
               <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
@@ -2204,7 +2204,7 @@
 
       <!-- Zone 3: ask inline -->
       <div class="shrink-0 px-4 md:px-6 bg-white-200 dark:bg-navy-800">
-        <div class="max-w-4xl mx-auto">
+        <div class="page-col">
           <AskUserModal
             request={$currentAsk}
             onSubmit={handleAskSubmit}
@@ -2229,7 +2229,7 @@
             <kbd class="rounded border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1 text-[10px] font-mono text-black-600 dark:text-black-700">Ctrl+↓</kbd>
           </button>
         {/if}
-        <div class="relative max-w-4xl mx-auto pb-6">
+        <div class="page-col relative pb-6">
           <!-- /project picker floats above the composer. /provider now opens
                the composer's own provider drill (see composerRef), so no
                separate provider modal. -->
@@ -2276,7 +2276,7 @@
       </div>
     {:else if activeView === "approvals"}
       <div class="flex-1 min-h-0 overflow-y-auto bg-white-200 dark:bg-navy-800">
-        <div class="max-w-4xl mx-auto w-full px-4 md:px-6 pt-14 pb-6 md:pt-16 flex flex-col gap-4">
+        <div class="page-col px-4 md:px-6 pt-14 pb-6 md:pt-16 flex flex-col gap-4">
           {#if approvalsTabPending.length > 0}
             <div>
               <h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-3">Pending approvals</h3>
