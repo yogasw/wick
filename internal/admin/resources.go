@@ -17,8 +17,10 @@ func (h *Handler) projectsAdminPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allProjects := h.projects.Projects()
-	allTags, _ := h.repo.ListTags(ctx)
-	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
+	allTags, _, tagsOK := h.tagPageData(w, r, nil)
+	if !tagsOK {
+		return
+	}
 	projectIDs := make(map[string]struct{}, len(allProjects))
 	for id := range allProjects {
 		projectIDs[id] = struct{}{}
@@ -29,7 +31,11 @@ func (h *Handler) projectsAdminPage(w http.ResponseWriter, r *http.Request) {
 	for id := range allProjects {
 		paths = append(paths, "/projects/"+id)
 	}
-	perms, _ := h.repo.ListToolPerms(ctx, paths)
+	perms, err := h.repo.ListToolPerms(ctx, paths)
+	if err != nil {
+		http.Error(w, "cannot load tag assignments: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	permByPath := make(map[string][]string, len(perms))
 	for i, path := range paths {
@@ -80,8 +86,10 @@ func (h *Handler) workflowsAdminPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	allTags, _ := h.repo.ListTags(ctx)
-	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
+	allTags, _, tagsOK := h.tagPageData(w, r, nil)
+	if !tagsOK {
+		return
+	}
 	workflowIDs := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		workflowIDs[id] = struct{}{}
@@ -92,7 +100,11 @@ func (h *Handler) workflowsAdminPage(w http.ResponseWriter, r *http.Request) {
 	for i, id := range ids {
 		paths[i] = "/workflows/" + id
 	}
-	perms, _ := h.repo.ListToolPerms(ctx, paths)
+	perms, err := h.repo.ListToolPerms(ctx, paths)
+	if err != nil {
+		http.Error(w, "cannot load tag assignments: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	rows := make([]adminview.ResourceAdminRow, len(ids))
 	for i, id := range ids {
@@ -142,8 +154,10 @@ func (h *Handler) skillsAdminPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	allTags, _ := h.repo.ListTags(ctx)
-	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
+	allTags, _, tagsOK := h.tagPageData(w, r, nil)
+	if !tagsOK {
+		return
+	}
 	skillIDs := make(map[string]struct{}, len(skills))
 	for _, sk := range skills {
 		skillIDs[sk.Name] = struct{}{}
@@ -154,7 +168,11 @@ func (h *Handler) skillsAdminPage(w http.ResponseWriter, r *http.Request) {
 	for i, sk := range skills {
 		paths[i] = "/skills/" + sk.Name
 	}
-	perms, _ := h.repo.ListToolPerms(ctx, paths)
+	perms, err := h.repo.ListToolPerms(ctx, paths)
+	if err != nil {
+		http.Error(w, "cannot load tag assignments: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	rows := make([]adminview.ResourceAdminRow, len(skills))
 	for i, sk := range skills {
@@ -198,8 +216,10 @@ func (h *Handler) dataTablesAdminPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slugs := h.dataTables.ListTables()
-	allTags, _ := h.repo.ListTags(ctx)
-	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
+	allTags, _, tagsOK := h.tagPageData(w, r, nil)
+	if !tagsOK {
+		return
+	}
 	tableIDs := make(map[string]struct{}, len(slugs))
 	for _, s := range slugs {
 		tableIDs[s] = struct{}{}
@@ -210,7 +230,11 @@ func (h *Handler) dataTablesAdminPage(w http.ResponseWriter, r *http.Request) {
 	for i, s := range slugs {
 		paths[i] = "/data-tables/" + s
 	}
-	perms, _ := h.repo.ListToolPerms(ctx, paths)
+	perms, err := h.repo.ListToolPerms(ctx, paths)
+	if err != nil {
+		http.Error(w, "cannot load tag assignments: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	rows := make([]adminview.ResourceAdminRow, len(slugs))
 	for i, slug := range slugs {

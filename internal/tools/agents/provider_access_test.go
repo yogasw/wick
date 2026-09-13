@@ -26,9 +26,10 @@ func TestProviderTagPaths(t *testing.T) {
 	// two strings by hand. If this test changes, that one must too.
 }
 
-// The whole rule, as a table. The two defaults are opposite on purpose:
-// an untagged instance is VISIBLE to everyone but MANAGEABLE by no one
-// except admins.
+// The whole rule, as a table. The two grants are independent jobs:
+// ACCESS says who may pick this provider for a project or a session
+// (untagged = everyone), MANAGE says who looks after its account in the
+// Providers menu (untagged = admins only).
 func TestProviderPermissionTable(t *testing.T) {
 	cases := []struct {
 		name                           string
@@ -37,13 +38,14 @@ func TestProviderPermissionTable(t *testing.T) {
 	}{
 		{name: "not approved", wantAccess: false, wantManage: false},
 		{name: "not approved even with tags", access: true, manag: true, wantAccess: false, wantManage: false},
-		{name: "admin sees and manages everything", approved: true, admin: true, wantAccess: true, wantManage: true},
-		{name: "untagged instance is visible to any approved user", approved: true, access: true, wantAccess: true, wantManage: false},
-		{name: "tagged instance without the tag is invisible", approved: true, access: false, wantAccess: false, wantManage: false},
-		{name: "manage tag grants reconnect", approved: true, access: true, manag: true, wantAccess: true, wantManage: true},
-		// The case that matters most: a manage grant on something the
-		// user cannot see must not become a back door into seeing it.
-		{name: "manage tag without access is nothing", approved: true, access: false, manag: true, wantAccess: false, wantManage: false},
+		{name: "admin picks and manages everything", approved: true, admin: true, wantAccess: true, wantManage: true},
+		{name: "untagged provider is pickable by any approved user", approved: true, access: true, wantAccess: true, wantManage: false},
+		{name: "access-tagged without the tag is not pickable", approved: true, access: false, wantAccess: false, wantManage: false},
+		{name: "manage tag grants the Providers menu", approved: true, access: true, manag: true, wantAccess: true, wantManage: true},
+		// The grants are independent: someone who looks after an account
+		// need not be allowed to run projects on it, and vice versa.
+		{name: "manage without access still manages", approved: true, access: false, manag: true, wantAccess: false, wantManage: true},
+		{name: "access without manage never opens the menu", approved: true, access: true, manag: false, wantAccess: true, wantManage: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -53,6 +55,23 @@ func TestProviderPermissionTable(t *testing.T) {
 					gotAccess, gotManage, tc.wantAccess, tc.wantManage)
 			}
 		})
+	}
+}
+
+// Manage is evaluated on its own, so the caller passes access=true for
+// it — mirroring canManageProvider, which no longer consults the access
+// path at all. This test pins that independence.
+func TestProviderManageDoesNotDependOnAccess(t *testing.T) {
+	// access=false, manage=true in the STORED tags; canManageProvider
+	// passes access=true because manage stands alone.
+	_, manage := providerPerm(true, false, true, true)
+	if !manage {
+		t.Error("a manage grant must work without an access grant")
+	}
+	// And an access grant alone never becomes manage.
+	_, manage = providerPerm(true, false, true, false)
+	if manage {
+		t.Error("access alone granted manage — the Providers menu would open for everyone")
 	}
 }
 

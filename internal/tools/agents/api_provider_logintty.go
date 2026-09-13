@@ -78,7 +78,7 @@ func apiProviderLoginTTYStatus(c *tool.Ctx) {
 	if !ok {
 		return
 	}
-	if !requireProviderAccess(c, ins.Type, ins.Name) {
+	if !requireProviderManage(c, ins.Type, ins.Name) {
 		return
 	}
 	_, supported := logintty.LoginCommand(ins.Type, nil)
@@ -109,7 +109,7 @@ func apiProviderLoginTTYUsage(c *tool.Ctx) {
 	if !ok {
 		return
 	}
-	if !requireProviderAccess(c, ins.Type, ins.Name) {
+	if !requireProviderManage(c, ins.Type, ins.Name) {
 		return
 	}
 	if !logintty.SupportsUsage(ins.Type) {

@@ -9,21 +9,29 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-// Provider access has two levels, and they are deliberately different
-// questions with different defaults:
+// Provider tags answer two SEPARATE questions, and it matters that they
+// are not the same question:
 //
-//   - ACCESS — may this person SEE this provider instance and read its
-//     usage? Default: everyone who is logged in. An admin narrows it by
-//     putting filter tags on the instance; remove the tags and it is open
-//     to everyone again. Same rule, same table, as a connector.
+//   - MANAGE — the Providers menu. May this person open it, see this
+//     instance there, read its usage, and reconnect it? Default: admins
+//     only; a manage tag is the only way to hand it to someone else. No
+//     manage tag on anything ⇒ the menu does not appear at all.
 //
-//   - MANAGE — may this person RECONNECT the account and force a usage
-//     re-check? Default: admins only. Tagging is the ONLY way to hand it
-//     to someone else.
+//   - ACCESS — provider CHOICE everywhere else. Which instances may this
+//     person pick as the provider for a project, a session, a channel, a
+//     workflow node, an agent profile? Default: everyone, narrowed by
+//     tags, open again when the tags are removed — the connector rule.
+//     It has nothing to do with the Providers menu.
 //
-// Editing configuration is neither: it stays admin-only, always. A
-// non-admin sees the detail page read-only and gets a plain refusal if
-// they post to it, which is why these helpers never grant writes.
+// The earlier version used ACCESS for the menu, which conflated "may use
+// this provider to run something" with "may look after this provider's
+// account". Those are different jobs: most people need the first and
+// should never see the second.
+//
+// Editing configuration is neither level: it stays admin-only, always. A
+// non-admin manager sees the detail page read-only and gets a plain
+// refusal if they post to it, which is why these helpers never grant
+// writes.
 //
 // Both levels reuse the tool_tags table that connectors, projects, data
 // tables and skills already use — one tagging mechanism for the whole
@@ -58,10 +66,13 @@ func callerIsAdmin(c *tool.Ctx) bool {
 // approved   — signed in and approved at all.
 // isAdmin    — holds the admin role.
 // accessTag  — login.CanAccessTool says yes for the access path (true
-//              when the instance carries no filter tags: untagged is
-//              open to everyone).
+//
+//	when the instance carries no filter tags: untagged is
+//	open to everyone).
+//
 // manageTag  — login.CanAccessSharedResource says yes for the manage
-//              path (false when untagged: manage is never implicit).
+//
+//	path (false when untagged: manage is never implicit).
 //
 // Kept pure so the table below is a unit test rather than a comment.
 func providerPerm(approved, isAdmin, accessTag, manageTag bool) (canAccess, canManage bool) {
@@ -71,18 +82,18 @@ func providerPerm(approved, isAdmin, accessTag, manageTag bool) (canAccess, canM
 	if isAdmin {
 		return true, true
 	}
-	if !accessTag {
-		return false, false
-	}
-	// Manage implies access: a grant to reconnect something the holder
-	// cannot even see would be a grant nobody can use.
-	return true, manageTag
+	// Independent by design. Someone who keeps a provider's login alive
+	// does not thereby get to run projects on it, and someone allowed to
+	// pick it for a project has no business in its account screen.
+	return accessTag, manageTag
 }
 
-// canAccessProvider reports whether the caller may see this instance.
+// canAccessProvider reports whether the caller may CHOOSE this instance
+// (project/session/channel/workflow default provider). It says nothing
+// about the Providers menu — see canManageProvider for that.
 //
 // With no auth service wired (tests, minimal boots) only admins pass:
-// an unwired ACL must fail closed, not open the page to everyone.
+// an unwired ACL must fail closed.
 func canAccessProvider(c *tool.Ctx, t provider.Type, name string) bool {
 	u := login.GetUser(c.Context())
 	if u == nil {
@@ -115,15 +126,17 @@ func canManageProvider(c *tool.Ctx, t provider.Type, name string) bool {
 	if globalAuth == nil {
 		return false
 	}
-	_, manage := providerPerm(u.Approved, false,
-		globalAuth.CanAccessTool(c.Context(), u, providerAccessPath(t, name), entity.VisibilityPrivate),
+	// Manage stands alone: the Providers menu is for whoever looks after
+	// the account, and that person does not also have to be allowed to
+	// pick the provider for a project.
+	_, manage := providerPerm(u.Approved, false, true,
 		globalAuth.CanAccessSharedResource(c.Context(), u, providerManagePath(t, name)))
 	return manage
 }
 
-// requireProviderAccess writes the 404/403 itself and reports whether to
-// continue. A provider the caller may not see answers 404, not 403: the
-// existence of an instance is itself information.
+// requireProviderAccess gates a pick-a-provider surface. A provider the
+// caller may not choose answers 404, not 403: the existence of an
+// instance is itself information.
 func requireProviderAccess(c *tool.Ctx, t provider.Type, name string) bool {
 	if canAccessProvider(c, t, name) {
 		return true
@@ -132,18 +145,55 @@ func requireProviderAccess(c *tool.Ctx, t provider.Type, name string) bool {
 	return false
 }
 
-// requireProviderManage writes the refusal itself. Here 403 IS right:
-// the caller can see the instance, so the honest answer is "you may look
-// at this one, not act on it".
+// requireProviderManage gates everything behind the Providers menu.
+// Without the grant the instance answers 404 rather than 403 — a menu
+// the caller cannot open should not enumerate what is inside it.
 func requireProviderManage(c *tool.Ctx, t provider.Type, name string) bool {
 	if canManageProvider(c, t, name) {
 		return true
 	}
-	if !canAccessProvider(c, t, name) {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
+	c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
+	return false
+}
+
+// manageableProviders filters instances down to the ones the caller may
+// manage — what the Providers menu shows.
+func manageableProviders[T any](c *tool.Ctx, items []T, key func(T) (provider.Type, string)) []T {
+	if callerIsAdmin(c) {
+		return items
+	}
+	out := make([]T, 0, len(items))
+	for _, it := range items {
+		t, name := key(it)
+		if canManageProvider(c, t, name) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// HasManageableProvider reports whether the caller may manage ANY
+// instance — the one question the sidebar asks, since a menu that opens
+// onto an empty page is worse than no menu.
+//
+// Exported because the layout builder lives beside it and the templ view
+// takes it as a plain bool.
+func HasManageableProvider(c *tool.Ctx) bool {
+	if callerIsAdmin(c) {
+		return true
+	}
+	if u := login.GetUser(c.Context()); u == nil || !u.Approved || globalAuth == nil {
 		return false
 	}
-	c.JSON(http.StatusForbidden, map[string]string{"error": "no access: you can view this provider but not manage it"})
+	instances, err := provider.Load()
+	if err != nil {
+		return false
+	}
+	for _, ins := range instances {
+		if canManageProvider(c, ins.Type, ins.Name) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -170,8 +220,21 @@ func requireApprovedUser(c *tool.Ctx) bool {
 	return false
 }
 
-// visibleProviders filters a slice of instances down to what the caller
-// may see. Admins get the list unchanged.
+// requireProviderMenu gates the Providers page itself: the caller must
+// manage at least one instance, or the page is not theirs to open.
+func requireProviderMenu(c *tool.Ctx) bool {
+	if !requireApprovedUser(c) {
+		return false
+	}
+	if HasManageableProvider(c) {
+		return true
+	}
+	c.Error(http.StatusForbidden, "no access: the Providers page is for provider managers")
+	return false
+}
+
+// visibleProviders filters a slice of instances down to the ones the
+// caller may CHOOSE (pickers). Admins get the list unchanged.
 func visibleProviders[T any](c *tool.Ctx, items []T, key func(T) (provider.Type, string)) []T {
 	if callerIsAdmin(c) {
 		return items

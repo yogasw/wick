@@ -153,11 +153,12 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 						@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
 						@agentsNavLink(vm.Base+"/agent-profiles", "Sub-agents", vm.ActivePage == "agent-profiles")
 						@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
-						// Visible to any signed-in user now that the page is
-						// per-instance access-tagged: a viewer sees only the
-						// providers shared with them (and an empty list if
-						// none are), while every write stays admin-only.
-						if user != nil {
+						// The Providers menu belongs to whoever looks after the
+						// provider ACCOUNTS: admins, plus anyone given a manage
+						// tag on an instance. Everyone else never sees it — they
+						// only ever pick a provider, which the access tags gate
+						// elsewhere (see provider_access.go).
+						if vm.ProvidersVisible {
 							@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
 						}
 						@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")

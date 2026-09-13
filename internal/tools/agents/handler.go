@@ -1003,6 +1003,7 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		PinnedProjectID:     pinnedProjectID(c),
 		ShellAssetURL:       spaAssetURL("shell"),
 		AirouterVisible:     AirouterVisible(c.Context()),
+		ProvidersVisible:    HasManageableProvider(c),
 	}
 }
 
@@ -1016,7 +1017,7 @@ func createSessionQuick(c *tool.Ctx) {
 	}
 	prov := "claude"
 	// Use first healthy provider if available
-	if ps := providerChoicesCached(c.Context()); len(ps) > 0 {
+	if ps := providerChoicesFor(c); len(ps) > 0 {
 		prov = ps[0].Type
 	}
 	id := uuid.New().String()
@@ -1273,7 +1274,7 @@ func resolveSessionTarget(c *tool.Ctx, formValue, formModel, projectID string) (
 	}
 	// Neither level named a provider, so no level named a model either: an
 	// instance picked here is one nobody chose a model on.
-	if ps := providerChoicesCached(c.Context()); len(ps) > 0 {
+	if ps := providerChoicesFor(c); len(ps) > 0 {
 		return normalizeProviderKey(ps[0].Type + "/" + ps[0].Name), ""
 	}
 	return normalizeProviderKey("claude"), ""
@@ -2380,7 +2381,10 @@ func providerOptionsJSON(c *tool.Ctx) {
 		ShowCaps *bool  `json:"show_capabilities,omitempty"`
 		CapsMode string `json:"capability_display_mode,omitempty"`
 	}
-	ps := providerChoicesCached(c.Context())
+	// Access-tag filtered: this endpoint feeds every provider picker in
+	// the product, so one filter here covers the composer, the project
+	// defaults, channels, workflow nodes and agent profiles.
+	ps := providerChoicesFor(c)
 	opts := make([]option, 0, len(ps))
 	for _, p := range ps {
 		var models []model

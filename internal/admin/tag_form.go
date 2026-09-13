@@ -4,6 +4,8 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+
+	"github.com/yogasw/wick/internal/entity"
 )
 
 // Reading a tag form, defensively.
@@ -50,4 +52,33 @@ func tagIDsFromForm(r *http.Request) (ids []string, ok bool) {
 // before the marker existed.
 func refuseUnreadableTagForm(w http.ResponseWriter) {
 	http.Error(w, "tag form not recognised — reload the page and save again (nothing was changed)", http.StatusBadRequest)
+}
+
+// A tag page that renders with its tag data MISSING is dangerous, not
+// merely incomplete: the picker only keeps selected ids it can find in
+// the tag list, so a failed lookup paints every row as "no tags" — and
+// the next Save writes exactly that. (That is the same shape as the
+// wipe this package already learned about the hard way; see
+// tag_form.go.) So these lookups fail the page instead of rendering a
+// form that lies about the current state.
+
+// tagPageData loads the tag list + per-path permissions for an admin
+// page that renders tag pickers. ok=false means the page must NOT be
+// rendered; the error has already been written.
+func (h *Handler) tagPageData(w http.ResponseWriter, r *http.Request, paths []string) (tags []*entity.Tag, perms []*ToolPerm, ok bool) {
+	ctx := r.Context()
+	tags, err := h.repo.ListTags(ctx)
+	if err != nil {
+		http.Error(w, "cannot load tags: "+err.Error(), http.StatusInternalServerError)
+		return nil, nil, false
+	}
+	h.repo.ResolveOwnerDisplayNames(ctx, tags)
+	if len(paths) > 0 {
+		perms, err = h.repo.ListToolPerms(ctx, paths)
+		if err != nil {
+			http.Error(w, "cannot load tag assignments: "+err.Error(), http.StatusInternalServerError)
+			return nil, nil, false
+		}
+	}
+	return tags, perms, true
 }

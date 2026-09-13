@@ -678,9 +678,15 @@ func (h *Handler) adminJobsPage(w http.ResponseWriter, r *http.Request) {
 	for i, j := range jobs {
 		paths[i] = "/jobs/" + j.Key
 	}
-	perms, _ := h.repo.ListToolPerms(ctx, paths)
-	allTags, _ := h.repo.ListTags(ctx)
-	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
+	perms, err := h.repo.ListToolPerms(ctx, paths)
+	if err != nil {
+		http.Error(w, "cannot load tag assignments: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	allTags, _, tagsOK := h.tagPageData(w, r, nil)
+	if !tagsOK {
+		return
+	}
 	allTags = filterOutOwnerTags(allTags)
 
 	systemTagIDs := make(map[string]bool)

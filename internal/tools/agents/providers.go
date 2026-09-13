@@ -39,12 +39,11 @@ func providersPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	// Not admin-only any more: the page itself is a shell, and what it
-	// shows is decided per instance by the access tags (see
-	// provider_access.go). A user with no accessible instance gets an
-	// empty list rather than a 403 — the same shape an admin with no
-	// instances configured sees.
-	if !requireApprovedUser(c) {
+	// Not admin-only any more, but not open either: this page is the
+	// provider MANAGER's surface, so the caller must manage at least one
+	// instance (see provider_access.go). Everyone else never sees the
+	// menu entry in the first place.
+	if !requireProviderMenu(c) {
 		return
 	}
 	c.HTML(view.ProvidersSPA(view.ProvidersSPAVM{
@@ -244,9 +243,10 @@ func providerDetailPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	// Shell only; the API behind it (apiProviderDetail) enforces access
-	// per instance and marks the payload read-only for non-admins.
-	if !requireApprovedUser(c) {
+	// Shell only; the API behind it (apiProviderDetail) enforces the
+	// per-instance manage grant and marks the payload read-only for
+	// non-admins.
+	if !requireProviderMenu(c) {
 		return
 	}
 	c.HTML(view.ProvidersSPA(view.ProvidersSPAVM{
@@ -1454,6 +1454,23 @@ func liveProcessesVM() []view.LiveProcessVM {
 		})
 	}
 	return out
+}
+
+// providerChoicesFor is providerChoicesCached narrowed to the instances
+// THIS caller may choose.
+//
+// This is where the access tags actually bite: the project defaults
+// dropdown, the new-session composer, the channel and workflow provider
+// fields and the agent-profile picker all read their options from here
+// (one endpoint, several SPAs), so tagging an instance removes it from
+// every one of those lists at once. Untagged instances stay offered to
+// everyone, which is the default every install starts with.
+//
+// It is NOT the Providers menu — that one is manage-only.
+func providerChoicesFor(c *tool.Ctx) []view.ProviderChoiceVM {
+	return visibleProviders(c, providerChoicesCached(c.Context()), func(p view.ProviderChoiceVM) (provider.Type, string) {
+		return provider.Type(p.Type), p.Name
+	})
 }
 
 // providerChoicesCached reads provider status from the persistent cache

@@ -46,17 +46,23 @@ func (h *Handler) providersAdminPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	allTags, _ := h.repo.ListTags(ctx)
-	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
-
 	accessPaths := make([]string, len(instances))
 	managePaths := make([]string, len(instances))
 	for i, ins := range instances {
 		accessPaths[i] = providerAccessTagPath(string(ins.Type), ins.Name)
 		managePaths[i] = providerManageTagPath(string(ins.Type), ins.Name)
 	}
-	accessPerms, _ := h.repo.ListToolPerms(ctx, accessPaths)
-	managePerms, _ := h.repo.ListToolPerms(ctx, managePaths)
+	// Both lookups must succeed: a row rendered with its tags missing
+	// reads as "untagged", and saving it would make that true.
+	allTags, accessPerms, ok := h.tagPageData(w, r, accessPaths)
+	if !ok {
+		return
+	}
+	managePerms, err := h.repo.ListToolPerms(ctx, managePaths)
+	if err != nil {
+		http.Error(w, "cannot load manage tags: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	rows := make([]adminview.ProviderAdminRow, len(instances))
 	for i, ins := range instances {

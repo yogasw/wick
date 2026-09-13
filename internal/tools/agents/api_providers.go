@@ -545,7 +545,7 @@ func apiProvidersList(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireApprovedUser(c) {
+	if !requireProviderMenu(c) {
 		return
 	}
 	isAdmin := callerIsAdmin(c)
@@ -567,10 +567,10 @@ func apiProvidersList(c *tool.Ctx) {
 	}
 
 	caps := providerCapacities()
-	// Non-admins see only the instances their tags reach, and each row
-	// says whether they may act on it — the SPA renders everything else
-	// read-only rather than offering a button the API would refuse.
-	statuses = visibleProviders(c, statuses, func(st provider.Status) (provider.Type, string) {
+	// The menu lists what the caller MANAGES. Access tags do not appear
+	// here at all — they decide which providers can be picked for a
+	// project or a session, which is a different job (provider_access.go).
+	statuses = manageableProviders(c, statuses, func(st provider.Status) (provider.Type, string) {
 		return st.Instance.Type, st.Instance.Name
 	})
 	providerDTOs := make([]ProviderStatusDTO, 0, len(statuses))
@@ -626,7 +626,7 @@ func apiProviderDetail(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
 		return
 	}
-	if !requireProviderAccess(c, t, name) {
+	if !requireProviderManage(c, t, name) {
 		return
 	}
 

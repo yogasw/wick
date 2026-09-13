@@ -23,20 +23,24 @@ type ProviderAdminRow struct {
 
 // ProvidersAdminPage lists every provider instance with its two tag sets.
 //
-// Two columns rather than one because the defaults are opposite, and the
-// page has to make that legible: clearing Access opens an instance to
-// everyone, while clearing Manage closes it to everyone but admins. The
-// hint under each picker says which way its empty state falls, since a
-// blank box that means "public" next to a blank box that means "nobody"
-// is exactly the kind of thing an operator gets wrong once.
+// The two columns are two different jobs, not two strengths of the same
+// one. Access decides who may PICK this provider for a project, session,
+// channel or workflow; Manage decides who may look after its ACCOUNT in
+// the Providers menu. Most people need the first and should never see
+// the second, which is why the menu itself is manage-only.
+//
+// Their empty states also fall opposite ways — blank Access means
+// everyone, blank Manage means nobody but admins — so each picker says
+// which, rather than leaving an operator to infer it once and wrongly.
 templ ProvidersAdminPage(rows []ProviderAdminRow, allTags []*entity.Tag, user *entity.User) {
 	@AdminLayout("Admin · Providers", "providers", user) {
 		{{ tagsJSON := tagsToJSON(allTags) }}
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Providers</h1>
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">
-				Share a provider with non-admins: who can see it and read its usage, and who can also reconnect it.
-				Editing a provider's configuration stays admin-only — everyone else sees those fields read-only.
+				Two independent grants. <span class="font-medium text-black-900 dark:text-white-100">Access</span> decides who may choose this provider for a project, session, channel or workflow.
+				<span class="font-medium text-black-900 dark:text-white-100">Manage</span> decides who sees it in the Providers menu and may reconnect it — that menu is hidden entirely from anyone with no manage grant.
+				Editing a provider's configuration stays admin-only either way; a manager sees those fields read-only.
 			</p>
 			if len(rows) == 0 {
 				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
@@ -48,8 +52,8 @@ templ ProvidersAdminPage(rows []ProviderAdminRow, allTags []*entity.Tag, user *e
 						<thead>
 							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Provider</th>
-								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Access — see it, read usage</th>
-								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Manage — reconnect, re-check</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Access — may pick it for a project / session / channel</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Manage — sees it in the Providers menu, may reconnect</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -90,9 +94,9 @@ templ providerAdminRow(row ProviderAdminRow, tagsJSON string) {
 			</form>
 			<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">
 				if len(row.AccessTagIDs) == 0 {
-					No tags — everyone signed in can see it.
+					No tags — everyone can pick this provider.
 				} else {
-					{ strconv.Itoa(len(row.AccessTagIDs)) } tag(s) — only holders can see it.
+					{ strconv.Itoa(len(row.AccessTagIDs)) } tag(s) — only holders can pick it.
 				}
 			</p>
 		</td>
@@ -110,9 +114,9 @@ templ providerAdminRow(row ProviderAdminRow, tagsJSON string) {
 			</form>
 			<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">
 				if len(row.ManageTagIDs) == 0 {
-					No tags — admins only.
+					No tags — admins only; nobody else sees it in the menu.
 				} else {
-					{ strconv.Itoa(len(row.ManageTagIDs)) } tag(s) — holders can reconnect it.
+					{ strconv.Itoa(len(row.ManageTagIDs)) } tag(s) — holders get the Providers menu for it.
 				}
 			</p>
 		</td>
