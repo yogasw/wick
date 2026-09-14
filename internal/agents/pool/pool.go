@@ -1606,6 +1606,15 @@ func (p *Pool) SetThinkingTokens(sessionID, agentName, v string) error {
 	return session.SetThinkingTokens(p.cfg.Layout, sessionID, agentName, v)
 }
 
+// SetAgentProvider repoints the session's agent entry at a provider
+// instance ("type/name", e.g. "claude/work") so the next spawn resolves
+// that instance's binary and env. Used by a workflow agent node, whose
+// provider is chosen per node rather than per session. No-op when the
+// entry does not exist — create it first (SetMaxTurns does).
+func (p *Pool) SetAgentProvider(sessionID, agentName, providerKey string) error {
+	return session.SetAgentProvider(p.cfg.Layout, sessionID, agentName, providerKey)
+}
+
 // EnsureSession is the public wrapper for ensureSession. Workflow's
 // session_init executor calls this to materialize the registry entry +
 // sidebar row up-front, before any agent node actually dispatches a
