@@ -47,6 +47,17 @@ type WorkflowLister interface {
 	LoadInfo(id string) (WorkflowInfo, error)
 }
 
+// WorkflowOwnerWriter re-stamps a workflow's owner. Optional, like
+// ProjectWriter: nil leaves the Owner column a label instead of a picker,
+// which is the right answer for a file-backed install where there is no row
+// to re-stamp.
+type WorkflowOwnerWriter interface {
+	SetOwner(id, userID string) error
+}
+
+// SetWorkflowOwnerWriter wires the writer behind the workflows Owner picker.
+func (h *Handler) SetWorkflowOwnerWriter(w WorkflowOwnerWriter) { h.workflowOwner = w }
+
 // SkillLister lists all skills from the DB.
 type SkillLister interface {
 	List(ctx context.Context) ([]entity.Skill, error)
@@ -105,6 +116,9 @@ type Handler struct {
 	auth       *login.Service
 	projects   ProjectLister
 	workflows  WorkflowLister
+	// workflowOwner persists an owner change from the workflows admin page.
+	// Nil when unwired — the picker stays hidden and the endpoint refuses.
+	workflowOwner WorkflowOwnerWriter
 	skillsDB   SkillLister
 	dataTables DataTableLister // optional; wired post-construction via SetDataTables
 	// schedules + projectNames back /admin/schedule, where the identity a
@@ -309,6 +323,7 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 
 	mux.Handle("GET /admin/workflows", admin(h.workflowsAdminPage))
 	mux.Handle("POST /admin/workflows/{id}/tags", admin(h.setWorkflowTags))
+	mux.Handle("POST /admin/workflows/{id}/owner", admin(h.setWorkflowOwner))
 
 	mux.Handle("GET /admin/skills", admin(h.skillsAdminPage))
 	mux.Handle("POST /admin/skills/{name}/tags", admin(h.setSkillTags))
@@ -553,7 +568,12 @@ func (h *Handler) renderUsers(w http.ResponseWriter, r *http.Request, created vi
 	for i, u := range users {
 		ids, _ := h.repo.GetUserTagIDs(r.Context(), u.ID)
 		needsMerge := !u.Approved && isChannelPlaceholderEmail(u.Email)
-		row := view.UserRow{User: u, TagIDs: ids, NeedsMerge: needsMerge}
+		row := view.UserRow{
+			User:       u,
+			TagIDs:     ids,
+			NeedsMerge: needsMerge,
+			Self:       currentUser != nil && currentUser.ID == u.ID,
+		}
 		if needsMerge {
 			row.MergeTargets = mergeTargets
 		}

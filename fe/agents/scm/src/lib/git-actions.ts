@@ -141,14 +141,53 @@ export async function switchBranch(b: string): Promise<void> {
   }
 }
 
-export async function createBranch(name: string): Promise<void> {
+export async function createBranch(name: string, from = ""): Promise<void> {
   if (!name.trim()) return;
   try {
-    await api.createBranch(sid(), repo(), name, true);
-    toastOk("Branch created", name);
+    await api.createBranch(sid(), repo(), name, true, from);
+    toastOk("Branch created", from ? `${name} from ${from}` : name);
     await loadStatus();
   } catch (e) {
     toastError("Create failed", String(e));
+  }
+}
+
+export async function renameBranch(from: string, to: string): Promise<void> {
+  if (!to.trim() || to === from) return;
+  try {
+    await api.renameBranch(sid(), repo(), from, to);
+    toastOk("Branch renamed", `${from} → ${to}`);
+    await loadStatus();
+  } catch (e) {
+    toastError("Rename failed", String(e));
+  }
+}
+
+// Deleting is the one branch action that can lose work, so it asks twice: the
+// first attempt is git's own safe delete, and only its "not fully merged"
+// refusal escalates to the forced form — with the branch's tip in the prompt,
+// because that sha is what makes the deletion recoverable.
+export async function deleteBranch(name: string, tip = ""): Promise<void> {
+  try {
+    await api.deleteBranch(sid(), repo(), name, false);
+    toastOk("Branch deleted", name);
+    await loadStatus();
+    return;
+  } catch (e) {
+    const msg = String(e);
+    if (!/not fully merged|not merged/i.test(msg)) {
+      toastError("Delete failed", msg);
+      return;
+    }
+    const where = tip ? ` Its tip is ${tip} — restore with: git branch ${name} ${tip}` : "";
+    if (!confirm(`${name} is not fully merged. Delete it anyway?${where}`)) return;
+  }
+  try {
+    await api.deleteBranch(sid(), repo(), name, true);
+    toastOk("Branch deleted (forced)", name);
+    await loadStatus();
+  } catch (e) {
+    toastError("Delete failed", String(e));
   }
 }
 

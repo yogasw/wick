@@ -183,3 +183,49 @@ func (h *Handler) setScheduleOwner(w http.ResponseWriter, r *http.Request) {
 	}
 	redirectOrNoContent(w, r, "/admin/schedule")
 }
+
+// setWorkflowOwner re-stamps who a workflow belongs to.
+//
+// Ownership is stamped once, at create, from the session that asked for the
+// workflow — and until this endpoint existed nothing could move it. That left
+// two dead ends the admin page is here to open: a workflow built by someone
+// who has since left, and one created before ownership was recorded at all,
+// both reachable only by admins for the rest of their lives.
+//
+// The owner tag moves with the stamp. Workflows get one at create time
+// (CreateResourceOwnerTag, user-linked with no tool path), and leaving it on
+// the previous owner would keep them reaching a workflow that is no longer
+// theirs — which is the same reason projects move theirs.
+//
+// Clearing the owner is allowed and means what it says: an ownerless workflow
+// is admin-only, NOT public.
+func (h *Handler) setWorkflowOwner(w http.ResponseWriter, r *http.Request) {
+	if h.workflows == nil || h.workflowOwner == nil {
+		http.Error(w, "workflows not available", http.StatusServiceUnavailable)
+		return
+	}
+	id := r.PathValue("id")
+	owner, ok := h.ownerFromForm(w, r)
+	if !ok {
+		return
+	}
+	info, err := h.workflows.LoadInfo(id)
+	if err != nil {
+		http.Error(w, "no such workflow", http.StatusNotFound)
+		return
+	}
+	previous := info.CreatedBy
+	if previous == owner {
+		redirectOrNoContent(w, r, "/admin/workflows")
+		return
+	}
+	if err := h.workflowOwner.SetOwner(id, owner); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := h.repo.TransferOwnerTag(r.Context(), id, "", previous, owner); err != nil {
+		http.Error(w, "owner set, but the owner tag could not be moved: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	redirectOrNoContent(w, r, "/admin/workflows")
+}

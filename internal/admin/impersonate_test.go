@@ -13,6 +13,13 @@ import (
 	"github.com/yogasw/wick/internal/pkg/postgres"
 )
 
+// testSecrets is the minimal SecretProvider a Middleware needs to sign a
+// session cookie in tests.
+type testSecrets struct{}
+
+func (testSecrets) SessionSecret() string      { return "test-secret" }
+func (testSecrets) AdminPasswordChanged() bool { return true }
+
 // impersonateHandler builds a Handler with a seeded user table.
 func impersonateHandler(t *testing.T, users ...*entity.User) *Handler {
 	t.Helper()
@@ -28,7 +35,10 @@ func impersonateHandler(t *testing.T, users ...*entity.User) *Handler {
 			t.Fatalf("seed %s: %v", u.ID, err)
 		}
 	}
-	return &Handler{repo: newRepo(db), auth: login.NewService(db, "")}
+	svc := login.NewService(db, "")
+	// The refusal tests never reach cookie-setting; the success ones do, so
+	// the handler needs a real middleware rather than a nil one.
+	return &Handler{repo: newRepo(db), auth: svc, midd: login.NewMiddleware(svc, testSecrets{})}
 }
 
 func startAs(h *Handler, actor *entity.User, targetID string) *httptest.ResponseRecorder {
@@ -42,6 +52,21 @@ func startAs(h *Handler, actor *entity.User, targetID string) *httptest.Response
 	return rec
 }
 
+// assertSwitchedTo checks the return trip is armed: the impersonation cookie
+// has to carry the ACTING admin's id, or "Back" cannot restore them.
+func assertSwitchedTo(t *testing.T, rec *httptest.ResponseRecorder, adminID string) {
+	t.Helper()
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == impersonateCookie {
+			if c.Value != adminID {
+				t.Fatalf("return cookie = %q, want the acting admin %q", c.Value, adminID)
+			}
+			return
+		}
+	}
+	t.Fatal("no return cookie set — Back would strand the admin")
+}
+
 var (
 	theAdmin  = &entity.User{ID: "a1", Email: "a1@example.com", Name: "Admin", Role: entity.RoleAdmin, Approved: true}
 	theUser   = &entity.User{ID: "u1", Email: "u1@example.com", Name: "User", Role: entity.RoleUser, Approved: true}
@@ -50,22 +75,43 @@ var (
 	thePendng = &entity.User{ID: "p1", Email: "p1@example.com", Name: "Pending", Role: entity.RoleUser, Approved: false}
 )
 
-// TestImpersonate_RefusesAdminTarget is the containment rule: if one admin can
-// become another, the weakest admin account is a route to every other, and
-// removing an admin's privileges stops meaning anything.
-func TestImpersonate_RefusesAdminTarget(t *testing.T) {
+// TestImpersonate_AllowsAdminTarget: an admin may switch into another admin.
+// This replaces the old containment rule, deliberately — support has to be
+// able to reproduce what a colleague with the same role sees. It does mean one
+// admin account reaches every other one, which is why both directions are
+// logged with both ids.
+func TestImpersonate_AllowsAdminTarget(t *testing.T) {
 	h := impersonateHandler(t, theAdmin, otherAdm)
-	if rec := startAs(h, theAdmin, otherAdm.ID); rec.Code != http.StatusForbidden {
-		t.Fatalf("code = %d, want 403 for an admin target", rec.Code)
+	rec := startAs(h, theAdmin, otherAdm.ID)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("code = %d, want 302 for an admin target", rec.Code)
 	}
+	assertSwitchedTo(t, rec, theAdmin.ID)
 }
 
-// TestImpersonate_RefusesOwner: IsOwner counts as admin, so the same rule holds
-// even when the role column says "user".
-func TestImpersonate_RefusesOwner(t *testing.T) {
+// TestImpersonate_AllowsOwner: IsOwner counts as admin, and the same widening
+// applies — the owner's account is reachable too.
+func TestImpersonate_AllowsOwner(t *testing.T) {
 	h := impersonateHandler(t, theAdmin, theOwner)
-	if rec := startAs(h, theAdmin, theOwner.ID); rec.Code != http.StatusForbidden {
-		t.Fatalf("code = %d, want 403 for the owner", rec.Code)
+	rec := startAs(h, theAdmin, theOwner.ID)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("code = %d, want 302 for the owner", rec.Code)
+	}
+	assertSwitchedTo(t, rec, theAdmin.ID)
+}
+
+// TestImpersonate_RefusesSelf is the one target left out: switching into
+// yourself changes nothing and would only strand the return cookie.
+func TestImpersonate_RefusesSelf(t *testing.T) {
+	h := impersonateHandler(t, theAdmin)
+	rec := startAs(h, theAdmin, theAdmin.ID)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("code = %d, want a redirect", rec.Code)
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == impersonateCookie && c.Value != "" {
+			t.Fatal("self-impersonation set the return cookie")
+		}
 	}
 }
 

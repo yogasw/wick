@@ -29,6 +29,7 @@ func registerSCM(r tool.Router) {
 	r.GET("/api/sessions/{id}/git/blob", gitBlob)
 	r.GET("/api/sessions/{id}/git/compare", gitCompare)
 	r.GET("/api/sessions/{id}/git/log", gitLog)
+	r.GET("/api/sessions/{id}/git/refs", gitHistoryRefs)
 	r.GET("/api/sessions/{id}/git/commit", gitCommitInfo)
 	r.GET("/api/sessions/{id}/git/commit-diff", gitCommitDiff)
 	r.POST("/api/sessions/{id}/git/stage", gitStage)
@@ -38,6 +39,8 @@ func registerSCM(r tool.Router) {
 	r.POST("/api/sessions/{id}/git/commit", gitCommit)
 	r.POST("/api/sessions/{id}/git/branch/switch", gitBranchSwitch)
 	r.POST("/api/sessions/{id}/git/branch/create", gitBranchCreate)
+	r.POST("/api/sessions/{id}/git/branch/rename", gitBranchRename)
+	r.POST("/api/sessions/{id}/git/branch/delete", gitBranchDelete)
 	r.POST("/api/sessions/{id}/git/push", gitPush)
 	r.POST("/api/sessions/{id}/git/pull", gitPull)
 	r.POST("/api/sessions/{id}/git/file", gitWriteFile)
@@ -405,12 +408,43 @@ func gitLog(c *tool.Ctx) {
 			limit = n
 		}
 	}
-	entries, err := scm.Log(c.Context(), dir, limit)
+	// refs picks which history the graph walks: "auto" (current branch +
+	// upstream), "all", or a comma-separated list of ref names. Absent
+	// means auto, which is what the panel opens on.
+	var refs []string
+	if v := strings.TrimSpace(c.Query("refs")); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				refs = append(refs, part)
+			}
+		}
+	}
+	entries, err := scm.History(c.Context(), dir, scm.LogOptions{Limit: limit, Refs: refs})
 	if err != nil {
 		gitErr(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"commits": entries})
+}
+
+// gitHistoryRefs lists the branches the graph can be pointed at, for the
+// picker. Separate from /git/branches, which answers a different question
+// (what can I check out) and carries no shas.
+func gitHistoryRefs(c *tool.Ctx) {
+	cwd, ok := sessionCwd(c)
+	if !ok {
+		return
+	}
+	dir, ok := repoDir(c, cwd)
+	if !ok {
+		return
+	}
+	refs, err := scm.HistoryRefs(c.Context(), dir)
+	if err != nil {
+		gitErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"refs": refs, "trunk": scm.TrunkRef(c.Context(), dir)})
 }
 
 func gitCommitInfo(c *tool.Ctx) {
@@ -475,8 +509,13 @@ type repoMsgReq struct {
 }
 
 type repoBranchReq struct {
-	Repo     string `json:"repo"`
-	Branch   string `json:"branch"`
+	Repo   string `json:"repo"`
+	Branch string `json:"branch"`
+	// From starts a new branch somewhere other than HEAD; NewName is the
+	// rename target; Force is the delete that ignores git's unmerged check.
+	From     string `json:"from,omitempty"`
+	NewName  string `json:"new_name,omitempty"`
+	Force    bool   `json:"force,omitempty"`
 	Checkout bool   `json:"checkout"`
 }
 
@@ -642,11 +681,45 @@ func gitBranchCreate(c *tool.Ctx) {
 	if !ok {
 		return
 	}
-	if err := scm.CreateBranch(c.Context(), dir, req.Branch, req.Checkout); err != nil {
+	if err := scm.CreateBranchFrom(c.Context(), dir, req.Branch, req.From, req.Checkout); err != nil {
 		gitErr(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"status": "created", "branch": req.Branch})
+}
+
+func gitBranchRename(c *tool.Ctx) {
+	var req repoBranchReq
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	dir, ok := resolveBodyRepo(c, req.Repo)
+	if !ok {
+		return
+	}
+	if err := scm.RenameBranch(c.Context(), dir, req.Branch, req.NewName); err != nil {
+		gitErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"status": "renamed", "branch": req.NewName})
+}
+
+func gitBranchDelete(c *tool.Ctx) {
+	var req repoBranchReq
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	dir, ok := resolveBodyRepo(c, req.Repo)
+	if !ok {
+		return
+	}
+	if err := scm.DeleteBranch(c.Context(), dir, req.Branch, req.Force); err != nil {
+		gitErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"status": "deleted", "branch": req.Branch})
 }
 
 // gitPush and gitPull run through a Git CLI connector when one is

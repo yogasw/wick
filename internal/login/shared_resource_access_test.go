@@ -130,3 +130,83 @@ func TestCanAccessToolVsSharedResourceUntagged(t *testing.T) {
 		t.Fatal("untagged project must NOT be open (owner-private, not public)")
 	}
 }
+
+// grantUserTag links an existing tag to a user the way /admin does.
+func grantUserTag(t *testing.T, db *gorm.DB, userID, tagID string) {
+	t.Helper()
+	if err := db.Create(&entity.UserTag{UserID: userID, TagID: tagID}).Error; err != nil {
+		t.Fatalf("grant tag: %v", err)
+	}
+}
+
+// TestSharedResourceSeesTagGrantedAfterLogin is the bug behind "I shared the
+// project with them and it still does not show up": the context's tag set comes
+// from the session cookie, minted at LOGIN, so a grant made afterwards was
+// invisible until the person signed out and back in. The check has to read the
+// live set.
+func TestSharedResourceSeesTagGrantedAfterLogin(t *testing.T) {
+	db := newLoginSQLite(t)
+	svc := NewService(db, "")
+	path := "/projects/p-shared"
+	tagID := tagResource(t, db, path, "team-y")
+
+	u := &entity.User{ID: "u-late", Email: "late@abc.com", Name: "Late", Approved: true, Role: entity.RoleUser}
+	if err := db.Create(u).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Signed in BEFORE the grant: the cookie carries no tags at all.
+	ctx := WithUser(context.Background(), u, nil)
+	if svc.CanAccessSharedResource(ctx, u, path) {
+		t.Fatal("user reached the project before being granted anything")
+	}
+
+	grantUserTag(t, db, u.ID, tagID)
+	svc.tagCache.Delete(u.ID) // the cache's TTL is not what this test is about
+
+	if !svc.CanAccessSharedResource(ctx, u, path) {
+		t.Fatal("a tag granted after login must take effect without re-login")
+	}
+}
+
+// The explicit set a caller hands in still counts on its own — MCP bearer
+// contexts pass their tags directly and have no user_tags rows to read.
+func TestSharedResourceKeepsExplicitContextTags(t *testing.T) {
+	db := newLoginSQLite(t)
+	svc := NewService(db, "")
+	path := "/projects/p-ctx"
+	tagID := tagResource(t, db, path, "team-z")
+
+	u := &entity.User{ID: "u-ctx", Email: "ctx@abc.com", Name: "Ctx", Approved: true, Role: entity.RoleUser}
+	ctx := WithUser(context.Background(), u, []string{tagID})
+	if !svc.CanAccessSharedResource(ctx, u, path) {
+		t.Fatal("tags handed in explicitly should still admit the caller")
+	}
+}
+
+// TestSharedResourceForAnotherUserIgnoresViewerTags: "can the workflow's owner
+// reach this project?" is asked inside the VIEWER's request. Answering it with
+// the viewer's cookie tags would report the viewer's reach as the owner's.
+func TestSharedResourceForAnotherUserIgnoresViewerTags(t *testing.T) {
+	db := newLoginSQLite(t)
+	svc := NewService(db, "")
+	path := "/projects/p-other"
+	tagID := tagResource(t, db, path, "team-w")
+
+	viewer := &entity.User{ID: "u-viewer", Email: "v@abc.com", Name: "V", Approved: true, Role: entity.RoleUser}
+	owner := &entity.User{ID: "u-owner", Email: "o@abc.com", Name: "O", Approved: true, Role: entity.RoleUser}
+	for _, u := range []*entity.User{viewer, owner} {
+		if err := db.Create(u).Error; err != nil {
+			t.Fatalf("create user: %v", err)
+		}
+	}
+	// The viewer carries the tag; the owner does not.
+	ctx := WithUser(context.Background(), viewer, []string{tagID})
+
+	if !svc.CanAccessSharedResource(ctx, viewer, path) {
+		t.Fatal("viewer should reach the project they carry the tag for")
+	}
+	if svc.CanAccessSharedResource(ctx, owner, path) {
+		t.Fatal("the owner's access was answered with the viewer's tags")
+	}
+}

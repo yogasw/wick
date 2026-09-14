@@ -492,18 +492,81 @@ func Checkout(ctx context.Context, dir, branch string) error {
 
 // CreateBranch creates a branch. When checkout is true it switches to it.
 func CreateBranch(ctx context.Context, dir, name string, checkout bool) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return errors.New("branch name is empty")
+	return CreateBranchFrom(ctx, dir, name, "", checkout)
+}
+
+// CreateBranchFrom starts a branch at `from` (a branch, tag or sha) instead of
+// at HEAD. Empty `from` means HEAD, which is what the plain CreateBranch does.
+func CreateBranchFrom(ctx context.Context, dir, name, from string, checkout bool) error {
+	if err := validRefName(name); err != nil {
+		return err
+	}
+	from = strings.TrimSpace(from)
+	if from != "" {
+		if err := validRefName(from); err != nil {
+			return fmt.Errorf("start point: %w", err)
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
+	args := []string{"branch", name}
 	if checkout {
-		_, err := run(ctx, dir, "checkout", "-b", name)
+		args = []string{"checkout", "-b", name}
+	}
+	if from != "" {
+		args = append(args, from)
+	}
+	_, err := run(ctx, dir, args...)
+	return err
+}
+
+// RenameBranch renames a branch. Refuses to clobber an existing name — the
+// force form of this is how you lose a branch you meant to keep.
+func RenameBranch(ctx context.Context, dir, from, to string) error {
+	if err := validRefName(from); err != nil {
 		return err
 	}
-	_, err := run(ctx, dir, "branch", name)
+	if err := validRefName(to); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, localTimeout)
+	defer cancel()
+	_, err := run(ctx, dir, "branch", "-m", from, to)
 	return err
+}
+
+// DeleteBranch removes a local branch. Without force git refuses to delete a
+// branch whose work is not merged — keep that refusal reachable, because a
+// squash-merged branch also trips it and the caller needs to be told rather
+// than have the branch deleted anyway.
+func DeleteBranch(ctx context.Context, dir, name string, force bool) error {
+	if err := validRefName(name); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, localTimeout)
+	defer cancel()
+	flag := "-d"
+	if force {
+		flag = "-D"
+	}
+	_, err := run(ctx, dir, "branch", flag, name)
+	return err
+}
+
+// validRefName rejects the shapes that would turn a branch name into a git
+// option or escape the argument list. `git check-ref-format` is the authority
+// on what is a legal name; this is the guard for what is legal to PASS.
+func validRefName(name string) error {
+	name = strings.TrimSpace(name)
+	switch {
+	case name == "":
+		return errors.New("branch name is empty")
+	case strings.HasPrefix(name, "-"):
+		return errors.New("branch name may not start with '-'")
+	case strings.ContainsAny(name, " \t\n"):
+		return errors.New("branch name may not contain whitespace")
+	}
+	return nil
 }
 
 // Push runs `git push`. stderr (auth, rejection) surfaces via GitError.
@@ -611,6 +674,16 @@ type LogEntry struct {
 	Author  string `json:"author"`
 	RelDate string `json:"rel_date"` // e.g. "2 hours ago"
 	ISODate string `json:"iso_date"`
+	// Parents are the short shas this commit descends from — one for an
+	// ordinary commit, two or more for a merge. The panel draws its lanes
+	// from these; without them a graph can only guess.
+	Parents []string `json:"parents,omitempty"`
+	// Refs are the branch/tag names pointing AT this commit, so the row can
+	// carry the same badges the editor shows ("master", "origin/master").
+	Refs []string `json:"refs,omitempty"`
+	// State is how far the commit has travelled: StateLocal, StatePushed or
+	// StateTrunk. See history.go.
+	State string `json:"state,omitempty"`
 }
 
 // logSep / logFieldSep are unlikely-to-collide delimiters for parsing
@@ -620,36 +693,11 @@ const (
 	logFieldSep = "\x1f" // field separator
 )
 
-// Log returns up to limit recent commits on the current branch.
+// Log returns up to limit recent commits, walking the checked-out branch
+// and its upstream. It is History with the default selector — kept as its
+// own name because most callers want exactly that.
 func Log(ctx context.Context, dir string, limit int) ([]LogEntry, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	ctx, cancel := context.WithTimeout(ctx, localTimeout)
-	defer cancel()
-	format := strings.Join([]string{"%h", "%s", "%an", "%cr", "%cI"}, logFieldSep) + logRecSep
-	out, err := run(ctx, dir, "log", "--max-count="+strconv.Itoa(limit), "--pretty=format:"+format)
-	if err != nil {
-		return nil, err
-	}
-	var entries []LogEntry
-	for _, rec := range strings.Split(out, logRecSep) {
-		rec = strings.Trim(rec, "\n\r")
-		if rec == "" {
-			continue
-		}
-		f := strings.Split(rec, logFieldSep)
-		if len(f) < 5 {
-			continue
-		}
-		entries = append(entries, LogEntry{
-			SHA: f[0], Subject: f[1], Author: f[2], RelDate: f[3], ISODate: f[4],
-		})
-	}
-	if entries == nil {
-		entries = []LogEntry{}
-	}
-	return entries, nil
+	return History(ctx, dir, LogOptions{Limit: limit})
 }
 
 // CommitFile is one file changed in a commit.

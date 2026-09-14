@@ -217,12 +217,11 @@ templ UserRowFragment(row UserRow, tagsJSON string, adminCount int) {
 				}
 				<!--
 					View as: switch the session to this user to see wick exactly as
-					they do. Offered only for approved non-admins — the handler
-					refuses admin targets so one admin account can never become a
-					route to another, and an unapproved account can do nothing to
-					look at anyway.
+					they do. Offered for any approved account, admins included —
+					the one exception is your own row, where it would do nothing.
+					An unapproved account has nothing to look at.
 				-->
-				if row.User.Approved && !row.User.IsAdmin() {
+				if row.User.Approved && !row.Self {
 					<form action={ templ.SafeURL("/admin/users/" + row.User.ID + "/impersonate") } method="POST">
 						<button type="submit" class="text-xs font-medium text-link-400 hover:underline transition-colors">View as</button>
 					</form>

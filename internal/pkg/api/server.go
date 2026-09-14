@@ -2110,6 +2110,9 @@ func NewServer() *Server {
 	if wfMgr != nil && wfMgr.DataTables != nil {
 		dtconn.SetDataTableACL(dataTableACL{tags: tagsSvc, login: authSvc, dt: wfMgr.DataTables, cfg: configsSvc})
 	}
+	// Same idea for workflows the agent creates: record the session owner so
+	// the workflow shows up for them, instead of being visible to admins only.
+	wfconn.SetWorkflowOwnership(workflowOwnership{tags: tagsSvc})
 	// Connect MCP custom connectors before the gate lifts: boot
 	// registered them without probing, this pass pulls each server's
 	// live catalog now that configs (incl. oauth instance tokens) are
@@ -2288,6 +2291,14 @@ func NewServer() *Server {
 	// the registry the page lists through.
 	if agentsMgr != nil {
 		adminHandler.SetProjectWriter(agentsMgr)
+	}
+	// /admin/workflows — same for a workflow's owner. Only the DB-backed
+	// service can re-stamp one, so the picker appears when that is what is
+	// running and stays a plain label otherwise.
+	if wfMgr != nil {
+		if ow, canSet := wfMgr.Service.(admin.WorkflowOwnerWriter); canSet {
+			adminHandler.SetWorkflowOwnerWriter(ow)
+		}
 	}
 
 	// ── Shared services ─────────────────────────────────────────

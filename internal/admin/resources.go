@@ -124,7 +124,13 @@ func (h *Handler) workflowsAdminPage(w http.ResponseWriter, r *http.Request) {
 		rows[i] = row
 	}
 
-	adminview.ResourcesAdminPage("Workflows", "/admin/workflows", h.decorateResourceRows(ctx, rows, allTags), allTags, adminview.ResourceOwnerEdit{}, user).Render(ctx, w)
+	// The Owner column becomes a picker only when something can persist the
+	// change; a file-backed install has no row to re-stamp.
+	owner := adminview.ResourceOwnerEdit{}
+	if h.workflowOwner != nil {
+		owner = adminview.ResourceOwnerEdit{Enabled: true, Users: h.userOptions(ctx)}
+	}
+	adminview.ResourcesAdminPage("Workflows", "/admin/workflows", h.decorateResourceRows(ctx, rows, allTags), allTags, owner, user).Render(ctx, w)
 }
 
 func (h *Handler) setWorkflowTags(w http.ResponseWriter, r *http.Request) {

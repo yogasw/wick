@@ -1,6 +1,6 @@
 ---
 name: wick-silent-replies
-description: Use when finishing a turn nobody needs to read — a monitor or poll that found nothing new, a scheduled run mid-sequence, bookkeeping between steps. Also use when the session sits in a thread other people read as a work artifact — a triage card, an incident thread, a report thread — and you are about to answer something that is not the deliverable. Covers the exact `[silent]` marker that keeps a reply out of Slack/Telegram and push notifications, where it must sit, what breaks it, and when to reply normally instead.
+description: Use when finishing a turn nobody needs to read — a monitor or poll that found nothing new, a scheduled run mid-sequence, bookkeeping between steps, progress notes nobody asked for. Also use when you are about to go silent on a thread where somebody typed a question and is waiting for the answer there, to check whether you should. Covers the exact `[silent]` marker that keeps a reply out of Slack/Telegram and push notifications, where it must sit, what breaks it, and when to reply normally instead.
 ---
 
 # Silent replies (`[silent]`)
@@ -53,33 +53,40 @@ useful trace, `[silent] ok` is not.
 - it is the final summary of a loop, schedule, or chain
 - anything with a cost, a risk, or a surprise in it
 - **the user asked a direct question** — a person waiting on you always gets a
-  visible answer, even a short one, *unless* the channel is a shared work
-  thread and the answer is not the deliverable (next section)
+  visible answer, even a short one, in the channel they asked from. There is
+  no thread where this stops being true (next section)
 
 When in doubt on a user-initiated turn, reply normally. Silence is for turns
 you or a timer started.
 
-## When the channel is a shared work thread
+## Shared work threads: still answer what you were asked
 
 Some sessions live where other people read the thread as a work artifact — a
 triage card, an incident thread, a review thread whose visible output IS the
-deliverable. There, the channel is not your workspace: it is someone's record.
-Only deliverables belong in it — the answer, the report, the status change.
+deliverable. That shapes what you may say UNPROMPTED. It does not decide
+whether you answer a person.
 
-Everything else goes `[silent]`, **even when the operator asked you directly**:
-questions about format or process, which approach you picked, progress notes,
-clarifications back to them. They read it in the web session; the thread stays
-readable for the people who only came for the result. This is the one case
-that overrides "the user asked a direct question" above.
+The test is **is somebody waiting for this reply**, not what kind of thread it
+is:
 
-Two tests before replying loud in such a thread:
+- **Somebody typed it, somebody is waiting → reply loud.** A question or an
+  instruction in the thread was typed there by a person expecting the answer
+  in that same place. Marking it `[silent]` leaves them watching a thread that
+  never replies while the answer sits in a web session they are not looking
+  at. Answer where the question came from.
+- **Nobody asked → `[silent]`.** Progress notes, bookkeeping, "report
+  delivered in N messages", a routine check that found nothing new. No one is
+  waiting for those and they bury the record the thread exists to hold.
 
-- would someone who only wants the outcome want this message in the thread?
-- is this the deliverable, or the making-of?
+What does NOT relax: **unprompted loud text is still only the deliverable.**
+When nobody has asked you anything, the only things that may appear in the
+thread on your own initiative are the work products that thread is for.
+Spontaneous narration — "I'll start by reading the skill", "let me check the
+logs" — stays out of it, silent or not.
 
-If a process reply already went out loud, edit that message down to a one-line
-note instead of posting a correction under it — a thread of corrections is
-worse than the original noise.
+If a note nobody asked for already went out loud, edit that message down to a
+one-line note instead of posting a correction under it — a thread of
+corrections is worse than the original noise.
 
 ## What silence does not do
 

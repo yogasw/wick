@@ -20,6 +20,10 @@ type UserRow struct {
 	// approved non-channel accounts, since merging into a pending or synthetic
 	// account just moves the problem.
 	MergeTargets []MergeTarget
+	// Self marks the row belonging to the admin looking at the page. It is
+	// the one account "View as" is not offered for — switching into yourself
+	// does nothing except strand the return cookie.
+	Self bool
 }
 
 // MergeTarget is one selectable destination account.

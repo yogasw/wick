@@ -217,3 +217,171 @@ func TestDBService_OnlyTestsAddressable(t *testing.T) {
 	// the lines below would fail to build, which is the contract.
 	var _ = workflow.Workflow{}
 }
+
+// TestDBService_ToggleKeepsDraftUnpublished: flipping the switch must not
+// publish work in progress. The old Toggle wrote the DRAFT body into the
+// published column, so enabling a workflow silently shipped every
+// unreviewed edit sitting in the editor.
+func TestDBService_ToggleKeepsDraftUnpublished(t *testing.T) {
+	svc, _ := newDBSvc(t)
+	id := "toggle-draft"
+	published := sampleWF(id)
+	published.Name = "published name"
+	if err := svc.Create(id, published); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.Publish(id, ""); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	// An edit that is NOT meant to go live yet.
+	draft := published
+	draft.Name = "work in progress"
+	if err := svc.SaveDraft(id, draft); err != nil {
+		t.Fatalf("save draft: %v", err)
+	}
+
+	if err := svc.Toggle(id, true); err != nil {
+		t.Fatalf("toggle: %v", err)
+	}
+
+	live, err := svc.Load(id)
+	if err != nil {
+		t.Fatalf("load published: %v", err)
+	}
+	if live.Name != "published name" {
+		t.Fatalf("published name = %q — the toggle published the draft", live.Name)
+	}
+	if !live.Enabled {
+		t.Fatal("toggle did not enable the published workflow")
+	}
+	// The draft keeps its own edit and picks up the new flag, so the
+	// editor's chip matches the router.
+	d, err := svc.LoadDraft(id)
+	if err != nil {
+		t.Fatalf("load draft: %v", err)
+	}
+	if d.Name != "work in progress" {
+		t.Fatalf("draft name = %q, want the in-progress edit kept", d.Name)
+	}
+	if !d.Enabled {
+		t.Fatal("draft did not pick up the enabled flag")
+	}
+}
+
+// TestDBService_ToggleWithoutDraft is the ordinary path: no draft, so the
+// published body carries the flag and the row agrees with it.
+func TestDBService_ToggleWithoutDraft(t *testing.T) {
+	svc, _ := newDBSvc(t)
+	id := "toggle-plain"
+	if err := svc.Create(id, sampleWF(id)); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.Publish(id, ""); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if err := svc.Toggle(id, true); err != nil {
+		t.Fatalf("toggle: %v", err)
+	}
+	got, err := svc.Load(id)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !got.Enabled {
+		t.Fatal("enabled flag did not persist")
+	}
+	if err := svc.Toggle(id, false); err != nil {
+		t.Fatalf("toggle off: %v", err)
+	}
+	if got, _ = svc.Load(id); got.Enabled {
+		t.Fatal("disable did not persist")
+	}
+}
+
+// TestDBService_PublishKeepsTheCreator: a workflow belongs to whoever asked
+// for it, not to whoever last pressed Publish. Publishing used to re-stamp
+// created_by, so an admin reviewing someone's workflow quietly became its
+// owner — and the person it was built for lost sight of it.
+func TestDBService_PublishKeepsTheCreator(t *testing.T) {
+	svc, db := newDBSvc(t)
+	id := "owned"
+	w := sampleWF(id)
+	w.CreatedBy = "u-creator"
+	if err := svc.Create(id, w); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.Publish(id, "u-publisher"); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	var row entity.Workflow
+	if err := db.Where("id = ?", id).First(&row).Error; err != nil {
+		t.Fatalf("load row: %v", err)
+	}
+	if row.CreatedBy != "u-creator" {
+		t.Fatalf("owner = %q after a publish by someone else, want the creator", row.CreatedBy)
+	}
+
+	// The publisher is still recorded — on the version snapshot, which is
+	// where "who did this" belongs.
+	var snap entity.WorkflowVersion
+	if err := db.Where("workflow_id = ? AND kind = ?", id, "published").
+		Order("id desc").First(&snap).Error; err != nil {
+		t.Fatalf("load snapshot: %v", err)
+	}
+	if snap.CreatedBy != "u-publisher" {
+		t.Fatalf("snapshot author = %q, want the publisher", snap.CreatedBy)
+	}
+}
+
+// TestDBService_SetOwner: the admin transfer has to land in the row AND the
+// body, because Load reads the body — leaving them split would show one owner
+// on the admin page and another everywhere else.
+func TestDBService_SetOwner(t *testing.T) {
+	svc, db := newDBSvc(t)
+	id := "transfer"
+	w := sampleWF(id)
+	w.CreatedBy = "u-old"
+	if err := svc.Create(id, w); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.Publish(id, ""); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	// An edit in flight: the draft must not carry the old owner forward,
+	// or the next publish would resurrect them.
+	draft := w
+	draft.Name = "in progress"
+	if err := svc.SaveDraft(id, draft); err != nil {
+		t.Fatalf("save draft: %v", err)
+	}
+
+	if err := svc.SetOwner(id, "u-new"); err != nil {
+		t.Fatalf("set owner: %v", err)
+	}
+
+	var row entity.Workflow
+	if err := db.Where("id = ?", id).First(&row).Error; err != nil {
+		t.Fatalf("load row: %v", err)
+	}
+	if row.CreatedBy != "u-new" {
+		t.Fatalf("row owner = %q, want u-new", row.CreatedBy)
+	}
+	live, err := svc.Load(id)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if live.CreatedBy != "u-new" {
+		t.Fatalf("published body owner = %q, want u-new", live.CreatedBy)
+	}
+	d, err := svc.LoadDraft(id)
+	if err != nil {
+		t.Fatalf("load draft: %v", err)
+	}
+	if d.CreatedBy != "u-new" {
+		t.Fatalf("draft owner = %q, want u-new", d.CreatedBy)
+	}
+	if d.Name != "in progress" {
+		t.Fatalf("draft name = %q — the transfer clobbered the edit", d.Name)
+	}
+}

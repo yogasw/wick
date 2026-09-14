@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -48,7 +49,19 @@ type Registry struct {
 	// read-only.
 	viewIDs []string                   // session ids, LastActive descending
 	viewMap map[string]session.Session // shared snapshot
+
+	// adopted holds sessions this process learned about from disk rather
+	// than from its own mutators — see adoptNewSessionsLocked. They are
+	// owned by another process, so their cached copy goes stale on its
+	// own and is re-read on each scan. lastDiskScan rate-limits that scan.
+	adopted      map[string]struct{}
+	lastDiskScan time.Time
 }
+
+// diskScanInterval bounds how often a listing read re-scans the sessions
+// directory for folders this process has never seen. One ReadDir per
+// interval is cheap next to a dashboard that silently omits live work.
+const diskScanInterval = 2 * time.Second
 
 // invalidateSessionViews marks the cached views stale. Callers must hold
 // the write lock.
@@ -216,6 +229,7 @@ func (r *Registry) Project(id string) (project.Project, bool) {
 // replace the snapshot, they never edit it, so a mutation here would
 // corrupt every other reader holding it.
 func (r *Registry) Sessions() map[string]session.Session {
+	r.adoptNewSessions()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.rebuildSessionViewsLocked()
@@ -226,6 +240,7 @@ func (r *Registry) Sessions() map[string]session.Session {
 // listing pages want by default. Cached between writes (see Sessions);
 // treat the slice as read-only.
 func (r *Registry) SessionIDs() []string {
+	r.adoptNewSessions()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.rebuildSessionViewsLocked()
@@ -275,11 +290,43 @@ func (r *Registry) rebuildSessionViewsLocked() {
 }
 
 // Session returns one session by ID, ok=false if missing.
+//
+// A cache miss is not proof the session is gone, so it falls through to
+// disk before answering no — see adoptNewSessionsLocked for why the
+// cache can be behind. Callers that render a shared link (a session
+// page, a spawn log) would otherwise tell the reader a session was
+// deleted while its folder sits right there.
 func (r *Registry) Session(id string) (session.Session, bool) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	s, ok := r.sessions[id]
-	return s, ok
+	r.mu.RUnlock()
+	if ok {
+		return s, true
+	}
+	return r.adoptSession(id)
+}
+
+// adoptSession loads one session straight from disk and caches it.
+// Returns ok=false only when the folder is really unreadable or absent,
+// which is the one case that means deleted.
+func (r *Registry) adoptSession(id string) (session.Session, bool) {
+	if id == "" {
+		return session.Session{}, false
+	}
+	s, err := session.Load(r.layout, id)
+	if err != nil {
+		return session.Session{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Another reader may have adopted it while we were off the lock;
+	// theirs wins so two callers never hold different structs.
+	if existing, ok := r.sessions[id]; ok {
+		return existing, true
+	}
+	r.cacheAdoptedLocked(s)
+	log.Info().Str("session", id).Msg("registry: adopted session from disk after cache miss")
+	return s, true
 }
 
 // PresetNames returns sorted preset names.
@@ -309,6 +356,126 @@ func (r *Registry) upsertProject(p project.Project) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.projects[p.Meta.ID] = p
+}
+
+// adoptNewSessions pulls in sessions that exist on disk but were never
+// announced to this process, and refreshes the ones it already adopted.
+//
+// The cache is filled once at boot by Reload and after that only by this
+// process's own mutators — filesystem watching is out of scope (see the
+// package doc). That holds while one process owns the directory. A
+// zero-downtime reload runs two for the length of the handoff, and every
+// session the other process creates in that window is invisible here:
+// absent from the conversation list, and reported as deleted by anything
+// that reads a cache miss as proof of absence.
+//
+// So re-scan the sessions directory, at most once per diskScanInterval,
+// and adopt what turns up. Adoption is deliberately READ-ONLY, unlike
+// Reload: it must not force status to idle or recover inflight turns,
+// because the session it adopts may be mid-turn inside the other process
+// and those repairs belong to whoever owns the subprocess.
+//
+// Only top-level sessions are scanned. Sub-agents live inside a parent
+// folder and would cost a ReadDir each; they are adopted on demand by
+// adoptSession when something looks one up.
+//
+// The scan and the file reads happen OUTSIDE the lock — a ReadDir over
+// thousands of session folders is milliseconds, and holding the write
+// lock across it would stall every dashboard read for that long. Only
+// the merge at the end takes the lock.
+func (r *Registry) adoptNewSessions() {
+	if !r.claimDiskScan(time.Now()) {
+		return
+	}
+	ids, err := session.List(r.layout)
+	if err != nil {
+		log.Warn().Err(err).Msg("registry: scanning sessions dir for new folders failed")
+		return
+	}
+
+	r.mu.RLock()
+	pending := make([]string, 0, 4)
+	for _, id := range ids {
+		_, known := r.sessions[id]
+		_, adopted := r.adopted[id]
+		// Ours stay fresh through our own mutators; only a session another
+		// process owns needs re-reading for its new status and last_active.
+		if !known || adopted {
+			pending = append(pending, id)
+		}
+	}
+	onDisk := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		onDisk[id] = struct{}{}
+	}
+	gone := make([]string, 0, 2)
+	for id := range r.adopted {
+		if _, still := onDisk[id]; !still && !strings.Contains(id, config.SubSessionSep) {
+			gone = append(gone, id)
+		}
+	}
+	r.mu.RUnlock()
+
+	loaded := make([]session.Session, 0, len(pending))
+	fresh := make(map[string]bool, len(pending))
+	for _, id := range pending {
+		s, err := session.Load(r.layout, id)
+		if err != nil {
+			// A folder mid-creation, or an unreadable one: skip it and let
+			// the next scan decide.
+			continue
+		}
+		loaded = append(loaded, s)
+		fresh[id] = true
+	}
+	if len(loaded) == 0 && len(gone) == 0 {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, s := range loaded {
+		if _, known := r.sessions[s.ID]; !known {
+			log.Info().Str("session", s.ID).Msg("registry: adopted session created outside this process")
+		}
+		r.cacheAdoptedLocked(s)
+	}
+	// An adopted session whose folder is gone was deleted by the process
+	// that owns it. Dropping only adopted ids keeps this away from our own
+	// sessions, whose folder can briefly lag the cache during create.
+	for _, id := range gone {
+		if fresh[id] {
+			continue // re-created between the scan and here
+		}
+		delete(r.adopted, id)
+		delete(r.sessions, id)
+		r.invalidateSessionViews()
+	}
+}
+
+// claimDiskScan reports whether this caller should run the scan, taking
+// the slot if so. Rate limiting has to be a claim rather than a check:
+// two concurrent dashboard reads would otherwise both see a stale
+// timestamp and both scan.
+func (r *Registry) claimDiskScan(now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.lastDiskScan.IsZero() && now.Sub(r.lastDiskScan) < diskScanInterval {
+		return false
+	}
+	r.lastDiskScan = now
+	return true
+}
+
+// cacheAdoptedLocked stores a session read from disk and remembers that
+// this process does not own it. Callers must hold the write lock.
+func (r *Registry) cacheAdoptedLocked(s session.Session) {
+	if r.adopted == nil {
+		r.adopted = make(map[string]struct{})
+	}
+	r.sessions[s.ID] = s
+	r.adopted[s.ID] = struct{}{}
+	r.invalidateSessionViews()
 }
 
 func (r *Registry) upsertSession(s session.Session) {

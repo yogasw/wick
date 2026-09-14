@@ -230,6 +230,7 @@ func Register(r tool.Router) {
 	registerSPAWorkflows(r)
 	registerSPAWorkflowHistory(r)
 	registerSPAPanels(r)
+	registerSPAWorkflowRunIdentity(r)
 	registerSPAPalette(r)
 
 	// Access gates for every per-resource subtree. Registered once here so
@@ -855,6 +856,20 @@ func callerProjectAccess(c *tool.Ctx) projectAccess {
 	// No user in context = internal / MCP caller: unrestricted.
 	if u == nil {
 		return projectAccess{seeAll: true}
+	}
+	return projectAccessForUser(c, u)
+}
+
+// projectAccessForUser resolves which projects a SPECIFIC user reaches.
+//
+// Split out of callerProjectAccess because the workflow editor asks it about
+// somebody else: a workflow's runs borrow its owner's identity, so "will this
+// actually work?" is a question about the OWNER's access, not the viewer's.
+// A nil user reaches nothing — unlike the caller path, where nil means an
+// internal call with no human to scope to.
+func projectAccessForUser(c *tool.Ctx, u *entity.User) projectAccess {
+	if u == nil {
+		return projectAccess{}
 	}
 	// Admins see everything only when AdminSeeAll is on (legacy behaviour).
 	// With it off (default) an admin is scoped like a regular user, falling
@@ -2346,13 +2361,32 @@ func projectOptionsJSON(c *tool.Ctx) {
 		// in a chat's menu) only where a board exists. Without it the client
 		// would have to fetch each project's ticket config to find out.
 		TicketEnabled bool `json:"ticket_enabled"`
+		// NoAccess marks a project returned only because the caller asked
+		// for it by id (see `include`). It is visible so a saved selection
+		// can still be shown; it is flagged so the UI never presents it as
+		// something this person may pick.
+		NoAccess bool `json:"no_access,omitempty"`
 	}
 	access := callerProjectAccess(c)
+	// include=<id,...> names projects that must come back even when the
+	// caller cannot reach them. A workflow's saved workspace is the case:
+	// dropping it from the options left the picker showing "(use run
+	// workspace)" for a workflow that is in fact pinned to a project — one
+	// person's saved choice silently misread by the next.
+	forced := map[string]struct{}{}
+	if v := strings.TrimSpace(c.Query("include")); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				forced[part] = struct{}{}
+			}
+		}
+	}
 	pinned := pinnedProjectID(c)
 	projects := globalMgr.Registry().Projects()
 	opts := make([]option, 0, len(projects))
 	for id, p := range projects {
-		if !access.allowProject(id) {
+		_, wanted := forced[id]
+		if !access.allowProject(id) && !wanted {
 			continue
 		}
 		managed := p.Meta.CustomPath == ""
@@ -2364,6 +2398,7 @@ func projectOptionsJSON(c *tool.Ctx) {
 			ID:              id,
 			Name:            p.Meta.Name,
 			Path:            path,
+			NoAccess:        !access.allowProject(id),
 			Managed:         managed,
 			Pinned:          id == pinned,
 			DefaultProvider: p.Meta.Defaults.Provider,

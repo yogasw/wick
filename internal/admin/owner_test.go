@@ -308,3 +308,113 @@ func TestResourceRowsCarryOwnerNames(t *testing.T) {
 	require.Equal(t, "u-deleted", rows[1].OwnerLabel, "an unresolvable id beats an empty cell")
 	require.Equal(t, "", rows[2].OwnerLabel, "an ownerless row stays ownerless")
 }
+
+// ── workflows ────────────────────────────────────────────────────────────────
+
+// fakeWorkflows is both the lister the page reads and the writer the transfer
+// goes through, so a test can assert the stamp and the tag moved together.
+type fakeWorkflows struct {
+	info map[string]WorkflowInfo
+	err  error
+}
+
+func (f *fakeWorkflows) List() ([]string, error) {
+	out := make([]string, 0, len(f.info))
+	for id := range f.info {
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+func (f *fakeWorkflows) LoadInfo(id string) (WorkflowInfo, error) {
+	w, ok := f.info[id]
+	if !ok {
+		return WorkflowInfo{}, gorm.ErrRecordNotFound
+	}
+	return w, nil
+}
+
+func (f *fakeWorkflows) SetOwner(id, userID string) error {
+	if f.err != nil {
+		return f.err
+	}
+	w := f.info[id]
+	w.CreatedBy = userID
+	f.info[id] = w
+	return nil
+}
+
+func newWorkflowOwnerHandler(t *testing.T, id, owner string) (*Handler, *fakeWorkflows, *gorm.DB) {
+	t.Helper()
+	h, _, db := newAdminConnectorsHandler(t)
+	fw := &fakeWorkflows{info: map[string]WorkflowInfo{
+		id: {Name: "Flow", CreatedBy: owner},
+	}}
+	h.workflows = fw
+	h.workflowOwner = fw
+	return h, fw, db
+}
+
+// A workflow's owner is stamped once at create and nothing could move it, so a
+// workflow built by someone who has left — or created before ownership was
+// recorded — stayed admin-only forever. The transfer has to move both facts:
+// the stamp the listing filters on, and the tag that carries the reach.
+func TestSetWorkflowOwnerMovesStampAndTag(t *testing.T) {
+	h, fw, db := newWorkflowOwnerHandler(t, "wf-1", "u-old")
+	approvedUser(t, db, "u-old", "Old")
+	approvedUser(t, db, "u-new", "New")
+	tag := &entity.Tag{Name: "owner:wf-1", IsFilter: true}
+	require.NoError(t, db.Create(tag).Error)
+	require.NoError(t, db.Create(&entity.UserTag{UserID: "u-old", TagID: tag.ID}).Error)
+
+	rec := ownerPost(t, h.setWorkflowOwner, "/admin/workflows/wf-1/owner", "wf-1", "u-new")
+	require.Equal(t, http.StatusFound, rec.Code)
+	require.Equal(t, "u-new", fw.info["wf-1"].CreatedBy)
+	require.Equal(t, "Flow", fw.info["wf-1"].Name, "a transfer must not disturb the rest of the row")
+	require.True(t, carriesOwnerTag(t, db, "wf-1", "u-new"))
+	require.False(t, carriesOwnerTag(t, db, "wf-1", "u-old"))
+}
+
+// An ownerless workflow is the case this page mostly exists for: nothing to
+// unlink, and the tag has to be created so the new owner can actually reach it.
+func TestSetWorkflowOwnerAdoptsOwnerlessWorkflow(t *testing.T) {
+	h, fw, db := newWorkflowOwnerHandler(t, "wf-1", "")
+	approvedUser(t, db, "u-new", "New")
+
+	rec := ownerPost(t, h.setWorkflowOwner, "/admin/workflows/wf-1/owner", "wf-1", "u-new")
+	require.Equal(t, http.StatusFound, rec.Code)
+	require.Equal(t, "u-new", fw.info["wf-1"].CreatedBy)
+	require.True(t, carriesOwnerTag(t, db, "wf-1", "u-new"))
+}
+
+func TestSetWorkflowOwnerUnknownWorkflow(t *testing.T) {
+	h, _, db := newWorkflowOwnerHandler(t, "wf-1", "u-old")
+	approvedUser(t, db, "u-new", "New")
+	rec := ownerPost(t, h.setWorkflowOwner, "/admin/workflows/wf-2/owner", "wf-2", "u-new")
+	require.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// The tag must not move when the stamp failed — that would revoke the only
+// access the workflow still has.
+func TestSetWorkflowOwnerKeepsTagWhenWriteFails(t *testing.T) {
+	h, fw, db := newWorkflowOwnerHandler(t, "wf-1", "u-old")
+	approvedUser(t, db, "u-old", "Old")
+	approvedUser(t, db, "u-new", "New")
+	tag := &entity.Tag{Name: "owner:wf-1", IsFilter: true}
+	require.NoError(t, db.Create(tag).Error)
+	require.NoError(t, db.Create(&entity.UserTag{UserID: "u-old", TagID: tag.ID}).Error)
+	fw.err = gorm.ErrInvalidDB
+
+	rec := ownerPost(t, h.setWorkflowOwner, "/admin/workflows/wf-1/owner", "wf-1", "u-new")
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.True(t, carriesOwnerTag(t, db, "wf-1", "u-old"))
+	require.False(t, carriesOwnerTag(t, db, "wf-1", "u-new"))
+}
+
+func TestSetWorkflowOwnerUnavailableWithoutWriter(t *testing.T) {
+	h, _, db := newWorkflowOwnerHandler(t, "wf-1", "u-old")
+	approvedUser(t, db, "u-new", "New")
+	h.workflowOwner = nil
+	rec := ownerPost(t, h.setWorkflowOwner, "/admin/workflows/wf-1/owner", "wf-1", "u-new")
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
