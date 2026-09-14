@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/yogasw/wick/internal/mcp"
 	"github.com/yogasw/wick/internal/tags"
 )
@@ -25,9 +27,20 @@ type workflowOwnership struct {
 }
 
 // RegisterOwner links userID to the workflow via its owner tag.
+//
+// A failure is logged, not returned: the workflow itself was created, and
+// failing the whole call because the owner tag did not stick would throw
+// away work the caller already has. But it must not be silent either — the
+// visible symptom is a workflow missing from its own author's list, which
+// looks like a listing bug and sends anyone debugging it to the wrong file.
 func (o workflowOwnership) RegisterOwner(ctx context.Context, userID, workflowID string) {
 	if o.tags == nil || userID == "" || userID == mcp.InternalAgentUserID || workflowID == "" {
 		return
 	}
-	_ = o.tags.CreateResourceOwnerTag(ctx, workflowID, userID)
+	if err := o.tags.CreateResourceOwnerTag(ctx, workflowID, userID); err != nil {
+		log.Warn().Err(err).
+			Str("workflow", workflowID).
+			Str("user", userID).
+			Msg("workflow ownership: owner tag not recorded; the workflow stays admin-only")
+	}
 }
