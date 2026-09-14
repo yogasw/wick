@@ -1,6 +1,6 @@
 ---
 name: wick-silent-replies
-description: Use when finishing a turn nobody needs to read — a monitor or poll that found nothing new, a scheduled run mid-sequence, bookkeeping between steps. Covers the exact `[silent]` marker that keeps a reply out of Slack/Telegram and push notifications, where it must sit, what breaks it, and when to reply normally instead.
+description: Use when finishing a turn nobody needs to read — a monitor or poll that found nothing new, a scheduled run mid-sequence, bookkeeping between steps. Also use when the session sits in a thread other people read as a work artifact — a triage card, an incident thread, a report thread — and you are about to answer something that is not the deliverable. Covers the exact `[silent]` marker that keeps a reply out of Slack/Telegram and push notifications, where it must sit, what breaks it, and when to reply normally instead.
 ---
 
 # Silent replies (`[silent]`)
@@ -53,10 +53,33 @@ useful trace, `[silent] ok` is not.
 - it is the final summary of a loop, schedule, or chain
 - anything with a cost, a risk, or a surprise in it
 - **the user asked a direct question** — a person waiting on you always gets a
-  visible answer, even a short one
+  visible answer, even a short one, *unless* the channel is a shared work
+  thread and the answer is not the deliverable (next section)
 
 When in doubt on a user-initiated turn, reply normally. Silence is for turns
 you or a timer started.
+
+## When the channel is a shared work thread
+
+Some sessions live where other people read the thread as a work artifact — a
+triage card, an incident thread, a review thread whose visible output IS the
+deliverable. There, the channel is not your workspace: it is someone's record.
+Only deliverables belong in it — the answer, the report, the status change.
+
+Everything else goes `[silent]`, **even when the operator asked you directly**:
+questions about format or process, which approach you picked, progress notes,
+clarifications back to them. They read it in the web session; the thread stays
+readable for the people who only came for the result. This is the one case
+that overrides "the user asked a direct question" above.
+
+Two tests before replying loud in such a thread:
+
+- would someone who only wants the outcome want this message in the thread?
+- is this the deliverable, or the making-of?
+
+If a process reply already went out loud, edit that message down to a one-line
+note instead of posting a correction under it — a thread of corrections is
+worse than the original noise.
 
 ## What silence does not do
 
