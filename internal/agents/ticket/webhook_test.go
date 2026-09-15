@@ -445,6 +445,7 @@ func TestSweeperEmitsFollowupAndAutoResolved(t *testing.T) {
 			t.Fatal(cerr)
 		}
 		item.UpdatedAt = now.Add(-ago)
+		item.TouchedAt = now.Add(-ago) // the timers run on this one
 		if serr := SaveKeepingTimestamp(l, item); serr != nil {
 			t.Fatal(serr)
 		}

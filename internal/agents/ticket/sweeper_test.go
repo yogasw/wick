@@ -19,7 +19,8 @@ func cfg(followupSec, resolveSec int64) project.TicketConfig {
 }
 
 func tk(status string, updatedAgo, followupAgo time.Duration, now time.Time) Ticket {
-	t := Ticket{ID: "T-TEST", ProjectID: "p1", Status: status, UpdatedAt: now.Add(-updatedAgo)}
+	t := Ticket{ID: "T-TEST", ProjectID: "p1", Status: status,
+		UpdatedAt: now.Add(-updatedAgo), TouchedAt: now.Add(-updatedAgo)}
 	if followupAgo > 0 {
 		t.LastFollowupAt = now.Add(-followupAgo)
 	}
@@ -77,7 +78,8 @@ func TestFollowupMessage(t *testing.T) {
 	item := Ticket{
 		ID: "T-4F2A", ProjectID: "p1", Title: "Payment webhook down",
 		Status: StatusInProgress, Assignee: "user-9",
-		Fields: map[string]string{"priority": "high"}, UpdatedAt: now.Add(-2 * time.Hour),
+		Fields: map[string]string{"priority": "high"},
+		UpdatedAt: now.Add(-2 * time.Hour), TouchedAt: now.Add(-2 * time.Hour),
 	}
 	msg := FollowupMessage(item, cfg(3600, 0))
 	for _, want := range []string{"T-4F2A", "Payment webhook down", "in_progress", "priority", "high", "check the ticket"} {
@@ -111,7 +113,12 @@ func TestSweepOnce(t *testing.T) {
 		if cerr != nil {
 			t.Fatal(cerr)
 		}
+		// Both clocks: the timers measure TouchedAt (wick-side silence) and
+		// the fixture is simulating exactly that. Backdating only UpdatedAt
+		// would now describe a MIRRORED ticket — old on its face, written a
+		// moment ago — which is precisely the case that must NOT fire.
 		item.UpdatedAt = now.Add(-updatedAgo)
+		item.TouchedAt = now.Add(-updatedAgo)
 		if serr := SaveKeepingTimestamp(l, item); serr != nil {
 			t.Fatal(serr)
 		}
@@ -171,6 +178,7 @@ func TestSweepSkipsProjectsWithTicketModeOff(t *testing.T) {
 	}
 	item, _ := Create(l, CreateOptions{ProjectID: "p1", Title: "x", Sessions: []string{"s1"}})
 	item.UpdatedAt = now.Add(-100 * time.Hour)
+	item.TouchedAt = now.Add(-100 * time.Hour)
 	if err := SaveKeepingTimestamp(l, item); err != nil {
 		t.Fatal(err)
 	}
