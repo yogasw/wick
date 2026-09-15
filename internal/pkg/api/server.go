@@ -3048,14 +3048,26 @@ func (s *Server) Run(ctx context.Context, port int) error {
 			n, err := s.mcpScopedTokens.SaveHandoff(baseDir)
 			if err != nil {
 				logger.Warn().Err(err).Msg("upgrade: could not hand MCP tokens to the successor")
-				return
+			} else {
+				logger.Info().Int("grants", n).Msg("upgrade: MCP tokens handed to the successor")
 			}
-			logger.Info().Int("grants", n).Msg("upgrade: MCP tokens handed to the successor")
+			// CLI tokens travel too. A deploy is precisely when a build is
+			// running, so the job holding one usually finishes AFTER the
+			// swap — and a successor that never issued it answers 401,
+			// losing the report to the very event it was reporting on.
+			if c, cerr := clitoken.Default.SaveHandoff(baseDir); cerr != nil {
+				logger.Warn().Err(cerr).Msg("upgrade: could not hand CLI tokens to the successor")
+			} else if c > 0 {
+				logger.Info().Int("tokens", c).Msg("upgrade: CLI tokens handed to the successor")
+			}
 		}
 		// The other side of that: adopt what a predecessor left, then delete
 		// it. Unconditional — a file only exists when one was written.
 		if n := s.mcpScopedTokens.LoadHandoff(baseDir); n > 0 {
 			logger.Info().Int("grants", n).Msg("upgrade: adopted MCP tokens from the predecessor")
+		}
+		if n := clitoken.Default.LoadHandoff(baseDir); n > 0 {
+			logger.Info().Int("tokens", n).Msg("upgrade: adopted CLI tokens from the predecessor")
 		}
 	}
 	// A force left over from a handover that never started must not ambush

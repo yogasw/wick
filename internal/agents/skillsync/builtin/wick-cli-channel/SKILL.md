@@ -101,6 +101,36 @@ Run this at the START of the job, not at the end: it separates "my token
 expired" from "wick is down" before the work begins, rather than after it
 has already finished and has nowhere to report.
 
+## Deploying wick itself
+
+This is the case the channel was built for, and the one with a trap in it:
+**a turn cannot wait for its own handover.** The outgoing process drains
+its in-flight work before exiting, and your turn IS that work — poll for
+the new version from inside the turn and you will wait forever.
+
+So put the whole chain in the detached script and end the turn:
+
+```bash
+#!/usr/bin/env bash
+set -uo pipefail
+cd ~/support-tools
+if wick build && support-tools reload --binary bin/support-tools-linux-amd64 --sudo -y; then
+  # Wait for the successor to actually be serving, then report.
+  for _ in $(seq 1 30); do
+    sleep 10
+    [ "$(pgrep -cf '^/usr/bin/support-tools')" = "1" ] && break
+  done
+  support-tools agent send --text "deployed $(support-tools version | tail -1)" || true
+else
+  support-tools agent send --text "BUILD FAILED
+$(tail -20 build.log)" || true
+fi
+```
+
+The token keeps working across the swap: the outgoing process hands its
+live tokens to the successor, which adopts them at boot with their
+original expiry.
+
 ## When wick is restarting
 
 The likeliest failure is also the most predictable: deploys are when builds

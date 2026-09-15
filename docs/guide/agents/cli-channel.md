@@ -94,6 +94,17 @@ Run `whoami` at the **start** of the job. It separates "my token expired"
 from "wick is down" before the work begins, rather than after it has
 finished and has nowhere to report.
 
+## Deploying wick itself
+
+The case this was built for — and the one with a trap: **a turn cannot
+wait for its own handover.** The outgoing process drains its in-flight work
+before it exits, and the turn doing the deploy is that work, so polling for
+the new version from inside it waits forever.
+
+Put build, install and report in one detached script, then end the turn.
+The token survives the swap: the outgoing process hands its live tokens to
+the successor, which adopts them at boot with their original expiry.
+
 ## When wick is restarting
 
 The likeliest failure is also the most predictable: deploys are when builds

@@ -52,6 +52,24 @@ deliberately no CLI command that mints one. Exit codes tell a script what
 went wrong: 3 = token expired or session gone, 4 = wick unreachable, 5 =
 refused. Read the `wick-cli-channel` skill before wiring one up.
 
+**Deploying wick itself is the same pattern, and the reason it exists.**
+Put the whole chain in the detached script — build, install, report — so
+nothing depends on this turn still being alive:
+
+```bash
+if wick build && support-tools reload --binary ./bin/... --sudo -y; then
+  support-tools agent send --text "0.1.x deployed" || true
+else
+  support-tools agent send --text "build FAILED: $(tail -5 build.log)" || true
+fi
+```
+
+The token survives the swap (the outgoing process hands its live tokens to
+the successor), so a report that lands after the restart still arrives.
+Do NOT sit in the turn polling for the new version: the old process cannot
+finish draining until your turn ends, so a turn that waits for its own
+handover waits forever.
+
 **If the job might finish while wick is restarting** — which is normal,
 since deploys are when builds run — `agent send` already waits it out: it
 retries an unreachable or still-booting daemon for 90 seconds (`--retry`).
