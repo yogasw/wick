@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -563,6 +564,12 @@ func apiTicketUpdate(c *tool.Ctx) {
 		Status   *string           `json:"status"`
 		Assignee *string           `json:"assignee"`
 		Fields   map[string]string `json:"fields"`
+		// UpdatedAt lets a MIRROR say when the change really happened:
+		// an RFC3339 timestamp (the source system's edit time), or the
+		// literal "keep" for a write that should not move the clock at all
+		// (a sync stamping "I checked this and nothing had changed").
+		// Absent — which is every edit made from the UI — means now.
+		UpdatedAt string `json:"updated_at"`
 	}
 	if err := c.BindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
@@ -610,11 +617,36 @@ func apiTicketUpdate(c *tool.Ctx) {
 			tk.Fields[k] = v
 		}
 	}
-	if err := ticket.SaveAs(globalLayout, tk, callerActor(c)); err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if err := saveWithRequestedTime(tk, callerActor(c), req.UpdatedAt); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, tk)
+}
+
+// saveWithRequestedTime applies the PATCH's updated_at choice.
+//
+//	""      -> now, the normal edit
+//	"keep"  -> leave the stored timestamp alone (bookkeeping write)
+//	RFC3339 -> that instant (the mirrored system's own edit time)
+//
+// A value that is neither is refused rather than silently treated as now:
+// a mirror that mis-formats its timestamps would otherwise stamp every
+// ticket with the sync's clock and nobody would notice until the board's
+// order stopped meaning anything.
+func saveWithRequestedTime(tk ticket.Ticket, actor ticket.Actor, want string) error {
+	switch v := strings.TrimSpace(want); v {
+	case "":
+		return ticket.SaveAs(globalLayout, tk, actor)
+	case "keep":
+		return ticket.SaveAsKeeping(globalLayout, tk, actor)
+	default:
+		at, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return fmt.Errorf("updated_at must be RFC3339 or \"keep\": %w", err)
+		}
+		return ticket.SaveAsAt(globalLayout, tk, actor, at)
+	}
 }
 
 // apiTicketAction handles POST /api/tickets/{ticketID}/actions/{buttonID} —

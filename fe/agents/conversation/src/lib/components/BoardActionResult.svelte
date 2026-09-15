@@ -14,7 +14,11 @@
 
      It does NOT take a slice of the board. The first version sat above the
      columns and pushed them down by a third of the screen, most of it an
-     empty frame around HTML that repeated what the card already said. */
+     empty frame around HTML that repeated what the card already said.
+
+     Its SIZE is the receiver's call (width / html_height, clamped): only
+     the receiver knows whether it is about to render three counters or a
+     table. */
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { pollBoardAction, type ActionPayload, type ActionResult } from "../api/tickets.js";
@@ -83,6 +87,25 @@
   });
 
   const counts = $derived(Object.entries(live.counts ?? {}));
+
+  /* Size is the receiver's call, within limits. It is the only party that
+     knows whether it is about to render three counters or a table, and a
+     fixed-size card forces every receiver down to the smallest rendering
+     anybody might send. The clamps are ours: this is a status card on
+     somebody's board, not a window. */
+  const cardWidth = $derived(cssLength(live.width, "22rem", 16 * 16, 44 * 16));
+  const frameHeight = $derived(cssLength(live.html_height, "10rem", 80, 600));
+
+  /* Only a plain CSS length in px/rem/em is accepted — the value lands in a
+     style attribute, and "100vw;position:fixed" is not a width. */
+  function cssLength(raw: string | undefined, fallback: string, minPx: number, maxPx: number): string {
+    const m = /^(\d+(?:\.\d+)?)(rem|px|em)$/.exec((raw ?? "").trim());
+    if (!m) return fallback;
+    const px = m[2] === "px" ? Number(m[1]) : Number(m[1]) * 16;
+    if (px < minPx) return `${minPx}px`;
+    if (px > maxPx) return `${maxPx}px`;
+    return m[0];
+  }
 
   /* One follow per result object. $effect re-runs when the prop is replaced,
      which is exactly when a new click happened — the old loop sees the
@@ -206,7 +229,8 @@
   role="status"
   onmouseenter={() => { hovering = true; }}
   onmouseleave={() => { hovering = false; }}
-  class="fixed bottom-24 right-4 z-40 w-[22rem] max-w-[calc(100vw-2rem)] rounded-xl border border-white-300 bg-white-100 p-2.5 shadow-lg dark:border-navy-600 dark:bg-navy-700"
+  style={`width:${cardWidth}`}
+  class="fixed bottom-3 right-3 z-40 max-w-[calc(100vw-1.5rem)] rounded-xl border border-white-300 bg-white-100 p-2.5 shadow-lg dark:border-navy-600 dark:bg-navy-700"
 >
   <div class="flex items-start gap-2">
     <span
@@ -271,7 +295,8 @@
         title={`${label} details`}
         sandbox=""
         srcdoc={live.html}
-        class="mt-1 h-40 w-full rounded-lg border border-white-300 bg-white-200 dark:border-navy-600 dark:bg-navy-800"
+        style={`height:${frameHeight}`}
+        class="mt-1 w-full rounded-lg border border-white-300 bg-white-200 dark:border-navy-600 dark:bg-navy-800"
       ></iframe>
     {/if}
   {/if}

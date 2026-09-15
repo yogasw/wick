@@ -322,7 +322,30 @@ func Save(layout config.Layout, tk Ticket) error {
 // moved the ticket. Save stays as the unattributed form because most
 // internal callers genuinely have nobody to name.
 func SaveAs(layout config.Layout, tk Ticket, actor Actor) error {
-	tk.UpdatedAt = time.Now().UTC()
+	return SaveAsAt(layout, tk, actor, time.Time{})
+}
+
+// SaveAsAt is SaveAs with the timestamp chosen by the caller. A zero at
+// means now, which is what every interactive edit wants.
+//
+// A non-zero one is for a mirror: a ticket imported from another system
+// should carry THAT system's edit time, not the moment the importer
+// happened to run. Without it a sync makes every ticket it touches read
+// "just now", the board sorts by when the sync ran rather than by when the
+// work moved, and "updated 3 days ago" stops being a fact about the work.
+func SaveAsAt(layout config.Layout, tk Ticket, actor Actor, at time.Time) error {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	tk.UpdatedAt = at.UTC()
+	return saveEmitting(layout, tk, actor)
+}
+
+// SaveAsKeeping writes tk with its existing UpdatedAt and still emits the
+// events its diff implies — for a write that is pure bookkeeping (a sync
+// stamping "I checked this"), where moving the timestamp would be a lie
+// about the work.
+func SaveAsKeeping(layout config.Layout, tk Ticket, actor Actor) error {
 	return saveEmitting(layout, tk, actor)
 }
 

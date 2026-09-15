@@ -221,8 +221,9 @@ curl -s "$WICK_API/tickets/T-4F2A" -H "Authorization: Bearer $WICK_TOKEN"
 PATCH /tickets/{ticketID}
 ```
 
-Every field is optional — send only what changes. Any edit bumps `updated_at`,
-which is what the follow-up and auto-resolve timers read.
+Every field is optional — send only what changes. An edit bumps `updated_at`
+(what the follow-up and auto-resolve timers read) unless the request says
+otherwise — see [`updated_at`](#updated-at-for-a-mirror-not-for-an-editor).
 
 Move it to another column:
 
@@ -261,6 +262,39 @@ fields are left alone. To unassign, send `"assignee": ""`. To clear the
 description, send `"body": ""` explicitly — omitting `body` leaves it
 unchanged.
 :::
+
+### `updated_at` — for a mirror, not for an editor
+
+A sync writing tickets on somebody else's behalf can say WHEN the change
+really happened:
+
+| Value | Effect |
+|---|---|
+| absent | `updated_at` becomes now. This is every edit made by a person |
+| RFC3339 timestamp | `updated_at` becomes that instant — the source system's own edit time |
+| `"keep"` | `updated_at` is left exactly as it was |
+
+```bash
+# the page changed in the other system at 08:30, and that is what the board
+# should say — not "just now, because my importer happened to run"
+curl -s -X PATCH "$WICK_API/tickets/T-4F2A" \
+  -H "Authorization: Bearer $WICK_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Renamed upstream", "updated_at": "2026-09-12T08:30:00Z"}'
+
+# pure bookkeeping — record that the mirror checked this ticket, without
+# claiming the work moved
+curl -s -X PATCH "$WICK_API/tickets/T-4F2A" \
+  -H "Authorization: Bearer $WICK_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"fields": {"synced_at": "2026-09-15T11:00:00Z"}, "updated_at": "keep"}'
+```
+
+Why it matters: the board sorts on `updated_at` and every card prints it. A
+sync that stamps `now` on a hundred tickets makes the whole board read "just
+now" and orders it by when the importer ran rather than by when the work
+moved. A value that is neither RFC3339 nor `"keep"` is refused (`400`) rather
+than quietly treated as now.
 
 Close it — use the key your board marks as finished:
 

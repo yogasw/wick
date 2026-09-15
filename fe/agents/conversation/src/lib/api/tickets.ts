@@ -112,9 +112,15 @@ export type ActionPayload = {
   /** Where to watch the run. Must be on the button's own origin — the
       server refuses anything else. */
   poll_url?: string;
-  /** The receiver's own HTML, rendered in the same sandboxed frame as an
-      HTML artifact (scripts run, network does not). */
+  /** The receiver's own HTML, folded behind a Details toggle and rendered
+      in a bare sandboxed frame (no scripts, no network). */
   html?: string;
+  /** How wide the card should be — a CSS length the receiver picks because
+      only it knows what it is about to render. Clamped to 16–44rem; absent
+      means the compact default. */
+  width?: string;
+  /** How tall the html frame should be, same idea. Clamped to 80–600px. */
+  html_height?: string;
 };
 
 /** What a custom button's click reports back. `message` is the receiver's

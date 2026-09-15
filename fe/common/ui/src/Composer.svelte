@@ -372,10 +372,50 @@
   const minHeightPx = $derived(minRows > 1 ? minRows * 22 + 16 : 43);
   const MAX_HEIGHT = 240;
 
+  /* Grow (and shrink) the box to its content without flashing the page.
+     The obvious two-liner — height:auto, read scrollHeight, set it back —
+     collapses the textarea to one row for the duration of that reflow.
+     Inside a sticky composer at the bottom of a scrolling page that is
+     visible: the page's content height drops, the browser clamps scrollTop
+     to the shorter document, and the height goes straight back. The result
+     is a jump downward on almost every keystroke, which is what "blink
+     waktu ngetik, dipaksa turun" was.
+
+     Two fixes, and both matter:
+       - GROWING (every keystroke that adds a line) needs no collapse at
+         all: if scrollHeight already exceeds the current height, the
+         content is taller than the box and that number IS the answer.
+       - SHRINKING (a deleted line, a cleared draft) does need the collapse,
+         so the scroll positions of every scrollable ancestor are captured
+         first and put back after — the clamp happens during OUR reflow, so
+         restoring afterwards is enough and nothing is ever painted wrong. */
   function autoResize() {
     if (!textareaEl) return;
+    const clamp = (n: number) => Math.max(minHeightPx, Math.min(n, MAX_HEIGHT));
+    const current = textareaEl.clientHeight;
+
+    // Growing: no collapse, no reflow of the page, no jump.
+    if (textareaEl.scrollHeight > current) {
+      textareaEl.style.height = clamp(textareaEl.scrollHeight) + "px";
+      return;
+    }
+    // Already at the cap and still overflowing: nothing to recompute.
+    if (current >= MAX_HEIGHT && textareaEl.scrollHeight > MAX_HEIGHT) return;
+
+    const scrollers: Array<[Element, number]> = [];
+    for (let el: Element | null = textareaEl.parentElement; el; el = el.parentElement) {
+      if (el.scrollHeight > el.clientHeight) scrollers.push([el, el.scrollTop]);
+    }
+    const docTop = window.scrollY;
+
     textareaEl.style.height = "auto";
-    textareaEl.style.height = Math.max(minHeightPx, Math.min(textareaEl.scrollHeight, MAX_HEIGHT)) + "px";
+    const next = clamp(textareaEl.scrollHeight);
+    textareaEl.style.height = next + "px";
+
+    for (const [el, top] of scrollers) {
+      if (el.scrollTop !== top) el.scrollTop = top;
+    }
+    if (window.scrollY !== docTop) window.scrollTo({ top: docTop });
   }
 
   function doSend() {
