@@ -31,13 +31,20 @@ wick_cli_token {"action": "revoke"}             # drop all of this session's
 The response carries the token, the `base_url` to hit, the exact
 `endpoints`, the expiry, and a ready-to-paste command.
 
-The address preferred is **this machine's own port** (`127.0.0.1`, then
-`localhost`), with the configured public URL as the fallback: a build
-script runs on this host, and a request that leaves for the public name
-only to be routed back through a proxy has more ways to fail. Loopback is
-used only when the host allowlist names it —
-`support-tools config allowed-origins add http://127.0.0.1:<port>` — so
-nothing here steps around that rule.
+**Local only.** The channel answers this machine and nothing else: a
+request from another host is refused before the token is read, and so is
+one forwarded by a proxy. The work it exists for runs here, and the
+restriction is what makes a leaked token worthless off-box.
+
+So the address is always loopback — `127.0.0.1:<port>` or
+`localhost:<port>`, both tried, because a host allowlist can name one and
+not the other. If neither answers:
+
+```bash
+support-tools config allowed-origins add http://127.0.0.1:9425
+```
+
+A configuration change, not a hole in the rule.
 
 Minting **verifies the address first**: it probes the candidates with the
 token it just created and returns the one that answered `200`, as

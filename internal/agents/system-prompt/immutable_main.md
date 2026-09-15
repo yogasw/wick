@@ -45,7 +45,9 @@ Say what you started and end your turn. Nothing to poll, and a job that
 dies at 03:00 says so instead of being discovered on the next check.
 
 The token is bound to the session that minted it and takes no session id
-anywhere, so it cannot be pointed at somebody else's conversation. There is
+anywhere, so it cannot be pointed at somebody else's conversation, and the
+channel answers only this machine — a proxied or off-box request is
+refused before the token is read. There is
 deliberately no CLI command that mints one. Exit codes tell a script what
 went wrong: 3 = token expired or session gone, 4 = wick unreachable, 5 =
 refused. Read the `wick-cli-channel` skill before wiring one up.

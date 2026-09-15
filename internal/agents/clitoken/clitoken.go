@@ -237,15 +237,17 @@ func port() string {
 // other, which is exactly what happened here: localhost was allowed and
 // 127.0.0.1 was not.
 //
-// The configured public URL is the fallback, and it is what makes the
-// channel work from a machine that is not this one.
+// The public URL is deliberately NOT a candidate: the channel refuses any
+// request that did not come from this machine, so advertising an address
+// that routes through a proxy would hand out one that cannot work.
 //
-// Nothing here bypasses the allowlist: an address only wins if it actually
-// answers, and loopback answers only when the operator has allowed it.
+// Nothing here bypasses the host allowlist either: an address only wins if
+// it actually answers the probe, and loopback answers only when the
+// operator has allowed it (config allowed-origins add http://127.0.0.1:<port>).
 func Candidates() []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, c := range []string{LoopbackURL(), localhostURL(), BaseURL()} {
+	for _, c := range []string{LoopbackURL(), localhostURL()} {
 		c = strings.TrimRight(strings.TrimSpace(c), "/")
 		if c != "" && !seen[c] {
 			seen[c] = true

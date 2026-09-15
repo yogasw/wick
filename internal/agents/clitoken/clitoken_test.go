@@ -164,23 +164,20 @@ func TestPickReachableTriesUntilSomethingAnswers(t *testing.T) {
 
 // The order matters: the configured public URL is the name the host
 // allowlist is written in, so it is tried before the machine's own port.
-func TestCandidatesPreferThisMachine(t *testing.T) {
+func TestCandidatesAreLoopbackOnly(t *testing.T) {
 	SetBaseURL(func() string { return "https://wick.example.com/" })
 	t.Cleanup(func() { SetBaseURL(func() string { return "" }) })
 
 	c := Candidates()
-	// This machine first: a build script runs HERE, and a request that
-	// leaves for the public name to be routed back by a proxy is a longer
-	// path with more ways to fail.
-	if len(c) < 3 || c[0] != LoopbackURL() {
-		t.Fatalf("candidates = %v, want this machine's own port first", c)
+	// This machine only. The channel refuses anything that did not come
+	// from here, so advertising the public URL would hand out an address
+	// that cannot work.
+	if len(c) != 2 || c[0] != LoopbackURL() || c[1] != "http://localhost:9425" {
+		t.Fatalf("candidates = %v, want both loopback spellings and nothing else", c)
 	}
-	// Both loopback spellings, because an allowlist may name one and not
-	// the other — which is precisely what happened on this host.
-	if c[1] != "http://localhost:9425" {
-		t.Errorf("candidates = %v, want the localhost spelling too", c)
-	}
-	if c[len(c)-1] != "https://wick.example.com" {
-		t.Errorf("candidates = %v, want the configured URL last (trimmed)", c)
+	for _, got := range c {
+		if strings.Contains(got, "wick.example.com") {
+			t.Errorf("the configured public URL must not be offered: %v", c)
+		}
 	}
 }

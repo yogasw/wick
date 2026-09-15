@@ -35,13 +35,17 @@ wick_cli_token {"ttl": "90m", "note": "build 0.1.255"}
 You get back the token, the `base_url` to hit, the exact `endpoints`, when
 it expires, and a ready-to-paste command.
 
-The address is **this machine's own port** when it works (both
-`127.0.0.1` and `localhost` are tried), falling back to the configured
-public URL. A script runs here, so the short path is the right one — but
-only if the host allowlist names it. If minting reports the public URL
-instead, loopback is simply not on that list; `support-tools config
-allowed-origins add http://127.0.0.1:<port>` is the fix, and it is a
-configuration change rather than a hole in the rule.
+**The channel only answers this machine.** A request from another host is
+refused before the token is even read, and so is one that arrived through
+a proxy (the forwarding headers give it away). The work this exists for
+runs here, so off-box access is not a use case — and a leaked token is
+worth nothing anywhere else.
+
+The address is therefore always loopback: `127.0.0.1:<port>`, or
+`localhost:<port>`. Both are tried because a host allowlist can name one
+and not the other. If neither answers, add it —
+`support-tools config allowed-origins add http://127.0.0.1:<port>` — which
+is a configuration change, not a hole in the rule.
 
 **The address is verified before you get it.** Minting probes the
 candidates with the token it just made and hands back the one that

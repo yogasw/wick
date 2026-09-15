@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -58,6 +59,21 @@ func CLIAPIAuthMW(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// This machine only. The channel exists for work running HERE — a
+		// build, a deploy, a migration — so a request from anywhere else is
+		// not a use case, it is a leaked token being tried from off-box.
+		// Refusing before the token is even read keeps the credential's
+		// blast radius at the machine that minted it.
+		//
+		// A proxied request is "elsewhere" too: nginx forwards from
+		// loopback, so the socket looks local while the caller is not. The
+		// forwarding headers are what give that away, and their presence
+		// alone is enough to refuse — this endpoint has no reason to be
+		// behind a proxy at all.
+		if why := notLocalReason(r); why != "" {
+			writeCLIForbidden(w, why)
+			return
+		}
 		tok := bearerToken(r)
 		if tok == "" {
 			writeTicketAuthError(w, "this endpoint needs a wick_cli_ token — mint one with the wick_cli_token MCP tool")
@@ -78,6 +94,32 @@ func CLIAPIAuthMW(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// notLocalReason explains why a request is not from this machine, or "".
+func notLocalReason(r *http.Request) string {
+	for _, h := range []string{"X-Forwarded-For", "X-Real-Ip", "Forwarded"} {
+		if strings.TrimSpace(r.Header.Get(h)) != "" {
+			return "the CLI channel is reachable from this machine only, and this request came through a proxy (" + h + ")"
+		}
+	}
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	if ip == nil || !ip.IsLoopback() {
+		return "the CLI channel is reachable from this machine only (your address: " + host + ")"
+	}
+	return ""
+}
+
+// writeCLIForbidden answers a non-local caller in JSON, since everything
+// on this surface is a machine.
+func writeCLIForbidden(w http.ResponseWriter, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(`{"error":` + jsonQuote(msg) + `}`))
 }
 
 // cliGrant pulls the resolved grant out of the request context.
