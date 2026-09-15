@@ -83,6 +83,20 @@ func WickCLIToken(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 				base, g.Token),
 			"note": "Bound to this session only, expires as shown, and dies with the daemon. " +
 				"Anything sent lands as a normal user turn — the session wakes on it.",
+			// The one failure mode worth naming at mint time, because it is
+			// the likeliest: deploys are exactly when builds run, so a job
+			// often finishes while wick is swapping binaries.
+			"if_wick_restarts": "`agent send` retries an unreachable or still-booting daemon for 90s " +
+				"(--retry to change, 0 to fail fast), so a report that lands during a handover still arrives. " +
+				"A full restart takes ~80s here. If the daemon is down longer than that the command exits 4 — " +
+				"write the result to a file and let the next turn read it, rather than losing it.",
+			"exit_codes": map[string]string{
+				"0": "delivered",
+				"2": "usage: no token, or nothing to send",
+				"3": "token expired or revoked, or this session is gone — mint a new one",
+				"4": "wick unreachable even after retrying",
+				"5": "wick answered and refused",
+			},
 		})
 	case "list":
 		out := []map[string]any{}

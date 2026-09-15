@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -58,17 +59,22 @@ func agentChannelCmd() *cobra.Command {
 
 func agentSendCmd() *cobra.Command {
 	var text, file, token, base string
+	var retry time.Duration
 	c := &cobra.Command{
 		Use:   "send",
 		Short: "Send a message into the session that minted your token",
+		Long: "Send a message into the wick session that minted your token.\n\n" +
+			"Waits out a restart: wick may be handing over to a new binary at the exact\n" +
+			"moment a build finishes, so an unreachable or still-booting daemon is retried\n" +
+			"for --retry (default 90s) before giving up. An expired token or a refusal is\n" +
+			"NOT retried — neither gets better by asking again.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
 			body, err := messageBody(text, file)
 			if err != nil {
 				return exitErr(exitUsage, err)
 			}
-			resp, err := callCLIAPI(http.MethodPost, base, token, "/api/cli/send",
-				map[string]string{"text": body})
+			resp, err := sendWithRetry(cmd.ErrOrStderr(), base, token, body, retry)
 			if err != nil {
 				return err
 			}
@@ -80,7 +86,49 @@ func agentSendCmd() *cobra.Command {
 	c.Flags().StringVar(&file, "file", "", "read the message from a file, or - for stdin")
 	c.Flags().StringVar(&token, "token", "", "CLI token (default: $"+envToken+")")
 	c.Flags().StringVar(&base, "base-url", "", "wick base URL (default: $"+envBase+", else http://127.0.0.1:9424)")
+	c.Flags().DurationVar(&retry, "retry", 90*time.Second, "keep retrying an unreachable or booting wick for this long (0 = fail fast)")
 	return c
+}
+
+// sendWithRetry delivers the message, waiting out a daemon that is down or
+// still booting.
+//
+// A build finishing at the same second wick swaps binaries is not a rare
+// race: deploys are exactly when builds run. The port is normally kept open
+// across a handover, but a full restart closes it for the successor's whole
+// boot — around eighty seconds on a modest host — and a report lost to that
+// window is the failure this whole channel exists to prevent.
+//
+// Only the transport failures are retried. An expired token and a refusal
+// are answers, not outages, and repeating them just delays the exit code
+// the script needs.
+func sendWithRetry(errOut io.Writer, base, token, body string, budget time.Duration) (map[string]any, error) {
+	deadline := time.Now().Add(budget)
+	wait := time.Second
+	for attempt := 1; ; attempt++ {
+		resp, err := callCLIAPI(http.MethodPost, base, token, "/api/cli/send",
+			map[string]string{"text": body})
+		if err == nil {
+			return resp, nil
+		}
+		var coded cliExit
+		if !errors.As(err, &coded) || coded.code != exitUnreach || budget <= 0 || time.Now().After(deadline) {
+			return nil, err
+		}
+		left := time.Until(deadline).Round(time.Second)
+		fmt.Fprintf(errOut, "wick not answering (attempt %d) — retrying in %s, giving up in %s\n",
+			attempt, wait, left)
+		if left <= 0 {
+			return nil, err
+		}
+		if wait > left {
+			wait = left
+		}
+		time.Sleep(wait)
+		if wait < 8*time.Second {
+			wait *= 2
+		}
+	}
 }
 
 func agentWhoamiCmd() *cobra.Command {

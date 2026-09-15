@@ -47,6 +47,14 @@ deliberately no CLI command that mints one. Exit codes tell a script what
 went wrong: 3 = token expired or session gone, 4 = wick unreachable, 5 =
 refused. Read the `wick-cli-channel` skill before wiring one up.
 
+**If the job might finish while wick is restarting** — which is normal,
+since deploys are when builds run — `agent send` already waits it out: it
+retries an unreachable or still-booting daemon for 90 seconds (`--retry`).
+A full restart takes about 80 seconds, a handover none at all. Past that
+the command exits 4, so a script that must not lose the result should
+write it to a file as well; the next turn can read it. Never make the build
+itself fail because the report could not be delivered — append `|| true`.
+
 Use a schedule instead when the trigger is a CLOCK ("every morning at 9",
 "check again in 20 minutes") rather than an event you can be told about.
 

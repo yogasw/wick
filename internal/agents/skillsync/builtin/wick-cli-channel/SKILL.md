@@ -81,6 +81,31 @@ Run this at the START of the job, not at the end: it separates "my token
 expired" from "wick is down" before the work begins, rather than after it
 has already finished and has nowhere to report.
 
+## When wick is restarting
+
+The likeliest failure is also the most predictable: deploys are when builds
+run, so a job often finishes at the exact moment wick is swapping binaries.
+
+`agent send` handles it. An unreachable or still-booting daemon is retried
+for **90 seconds** (`--retry 3m`, or `--retry 0` to fail fast), with
+backoff, and it says so on stderr while it waits. A handover keeps the port
+open and costs nothing; a full restart closes it for the successor's boot,
+about 80 seconds on a modest host.
+
+An expired token or a refusal is **not** retried — those are answers, and
+repeating them only delays the exit code the script needs.
+
+If the daemon might be down longer than the budget, do not rely on the
+message alone:
+
+```bash
+echo "$RESULT" > /var/tmp/build-result.txt
+support-tools agent send --text "$RESULT" || echo "undelivered; left in /var/tmp/build-result.txt"
+```
+
+The next turn reads the file. A report is worth more on disk than lost to a
+connection that was never going to answer.
+
 ## Exit codes — branch on these
 
 | Code | Meaning | What the script should do |
