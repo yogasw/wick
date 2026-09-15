@@ -215,6 +215,18 @@ GET /tickets/{ticketID}
 curl -s "$WICK_API/tickets/T-4F2A" -H "Authorization: Bearer $WICK_TOKEN"
 ```
 
+### Board query parameters
+
+`GET /projects/{id}/tickets` sends what the caller says it will draw:
+
+| Parameter | Effect |
+|---|---|
+| `?fields=all` | Every stored field per card, not just the ones marked *show on card*. A machine reading this board needs the keys the board does not draw — an external id, a mirror's page reference — and without them a sync cannot recognise the tickets it created and re-creates them on every run |
+| `?rows=N` | Session rows per card (`0` = counts only) |
+| `?statuses=a,b` | Only these columns |
+| `?assignee=ID` or `me` | Only this person's tickets |
+| `?untracked=1` | Include the untracked chat list |
+
 ## Update a ticket
 
 ```
@@ -295,6 +307,13 @@ sync that stamps `now` on a hundred tickets makes the whole board read "just
 now" and orders it by when the importer ran rather than by when the work
 moved. A value that is neither RFC3339 nor `"keep"` is refused (`400`) rather
 than quietly treated as now.
+
+::: tip The idle timers do not read it
+`updated_at` is a display value, so a mirror can set it to a date months
+old. The follow-up and auto-resolve timers run from `touched_at` — when wick
+last wrote the ticket — which is stamped on every write regardless. Without
+that split, importing a ticket last edited in June closes it on arrival.
+:::
 
 Close it — use the key your board marks as finished:
 

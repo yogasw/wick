@@ -189,3 +189,37 @@ func TestSweepSkipsProjectsWithTicketModeOff(t *testing.T) {
 		t.Fatalf("ticket auto-resolved in a ticket-mode-off project: %+v", got)
 	}
 }
+
+// A mirrored ticket wears the source system's edit date, which can be
+// months old on a ticket wick learned about a second ago. Running the idle
+// timers on that closed 130 imported tickets on arrival — the sweeper has
+// to measure OUR silence, not the other system's.
+func TestIdleTimersUseTouchedAtNotTheMirroredDate(t *testing.T) {
+	cfg := project.TicketConfig{Enabled: true, AutoResolveAfterSec: 3600, FollowupAfterSec: 3600}
+	now := time.Now().UTC()
+
+	imported := Ticket{
+		Status:    "pending",
+		UpdatedAt: now.Add(-90 * 24 * time.Hour), // the Notion page's own date
+		TouchedAt: now,                           // wick wrote it just now
+	}
+	if NeedsAutoResolve(cfg, imported, now) {
+		t.Error("a ticket wick just imported must not auto-resolve on arrival")
+	}
+	if NeedsFollowup(cfg, imported, now) {
+		t.Error("a ticket wick just imported is not stale")
+	}
+
+	// And it still closes once WICK has been quiet for the window.
+	stale := Ticket{Status: "pending", UpdatedAt: now.Add(-90 * 24 * time.Hour), TouchedAt: now.Add(-2 * time.Hour)}
+	if !NeedsAutoResolve(cfg, stale, now) {
+		t.Error("two hours of wick-side silence should auto-resolve on a one-hour window")
+	}
+
+	// A ticket written before TouchedAt existed falls back to UpdatedAt, so
+	// an old board keeps working instead of looking brand new forever.
+	old := Ticket{Status: "pending", UpdatedAt: now.Add(-2 * time.Hour)}
+	if !NeedsAutoResolve(cfg, old, now) {
+		t.Error("without TouchedAt the sweeper should fall back to UpdatedAt")
+	}
+}

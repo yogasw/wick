@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/ticket"
 )
 
@@ -98,5 +99,37 @@ func TestReplyObjectOnlyAcceptsObjects(t *testing.T) {
 		if got := replyObject(raw); got != nil {
 			t.Errorf("replyObject(%q) = %+v, want nil", raw, got)
 		}
+	}
+}
+
+// The board draws a chosen few fields; a MACHINE reading the same endpoint
+// needs the ones nobody marks — an external id, a mirror's page reference.
+// Without ?fields=all a sync cannot recognise its own tickets and re-creates
+// them on every run.
+func TestCardFieldsRespectsTheAllFlag(t *testing.T) {
+	cfg := project.TicketConfig{Fields: []project.TicketField{
+		{Key: "priority", ShowOnCard: true},
+		{Key: "severity"},
+	}}
+	stored := map[string]string{
+		"priority":       "high",
+		"severity":       "sev2",
+		"notion_page_id": "3c11f07f-4ae0-8110-a59f-c2d586163299",
+	}
+
+	card := cardFields(cfg, stored, false)
+	if len(card) != 1 || card["priority"] != "high" {
+		t.Fatalf("card = %+v, want only the show_on_card field", card)
+	}
+
+	all := cardFields(cfg, stored, true)
+	if len(all) != 3 || all["notion_page_id"] == "" {
+		t.Fatalf("fields=all = %+v, want every stored field", all)
+	}
+	// A copy, not the ticket's own map: a handler that mutated it would be
+	// editing stored state.
+	all["priority"] = "changed"
+	if stored["priority"] != "high" {
+		t.Error("cardFields handed out the ticket's own map")
 	}
 }

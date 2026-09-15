@@ -130,9 +130,22 @@ type Ticket struct {
 	// Sessions is the list of record for which sessions belong here.
 	Sessions  []string  `json:"sessions,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
-	// UpdatedAt tracks the last TICKET edit — not chat activity. The
-	// stale-followup and auto-resolve timers run from it.
+	// UpdatedAt tracks the last TICKET edit — not chat activity. It is what
+	// the board shows and sorts on, and a MIRROR may set it to the source
+	// system's own edit time (see SaveAsAt), so it can legitimately be
+	// months in the past on a ticket wick learned about a second ago.
 	UpdatedAt time.Time `json:"updated_at"`
+	// TouchedAt is when WICK last wrote this ticket, whatever timestamp the
+	// writer asked to display. The idle timers run from this rather than
+	// from UpdatedAt, because "nobody has touched this in two days" has to
+	// mean two days of OUR silence.
+	//
+	// Without the split, importing a ticket last edited in June closed it
+	// on arrival: the auto-resolve sweeper read the mirrored date, decided
+	// it had been idle for months, and marked it done — 130 tickets in one
+	// run on this install. Zero on a ticket written before this field
+	// existed, and the timers fall back to UpdatedAt there.
+	TouchedAt time.Time `json:"touched_at,omitempty"`
 	// LastFollowupAt guards the sweeper against re-sending a followup on
 	// every tick; the next one waits another full window.
 	LastFollowupAt time.Time `json:"last_followup_at,omitempty"`
@@ -261,6 +274,7 @@ func Create(layout config.Layout, opt CreateOptions) (Ticket, error) {
 			Sessions:  opt.Sessions,
 			CreatedAt: now,
 			UpdatedAt: now,
+			TouchedAt: now,
 		}
 		if err := os.MkdirAll(layout.TicketDir(opt.ProjectID, id), 0o755); err != nil {
 			return Ticket{}, err
@@ -338,6 +352,7 @@ func SaveAsAt(layout config.Layout, tk Ticket, actor Actor, at time.Time) error 
 		at = time.Now()
 	}
 	tk.UpdatedAt = at.UTC()
+	tk.TouchedAt = time.Now().UTC()
 	return saveEmitting(layout, tk, actor)
 }
 
@@ -346,6 +361,7 @@ func SaveAsAt(layout config.Layout, tk Ticket, actor Actor, at time.Time) error 
 // stamping "I checked this"), where moving the timestamp would be a lie
 // about the work.
 func SaveAsKeeping(layout config.Layout, tk Ticket, actor Actor) error {
+	tk.TouchedAt = time.Now().UTC()
 	return saveEmitting(layout, tk, actor)
 }
 
