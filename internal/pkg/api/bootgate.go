@@ -5,6 +5,7 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -182,8 +183,27 @@ func (s *Server) bootPhaseLabel() string {
 // bootStatusJSON is the shape /boot-status returns. ready=false while the
 // gate holds; message reflects the current phase so the page can update its
 // label without a full reload.
+//
+// version + pid say WHICH process is answering. A zero-downtime upgrade
+// swaps the process under pages that are already open: they keep showing the
+// version they were rendered with, and an "update available" marker for an
+// update that has already been applied. This is the cheapest honest answer
+// to "am I still talking to the build that drew this page" — no database, no
+// auth, and already polled by the boot page.
 func (s *Server) bootStatusJSON(ready bool) map[string]any {
-	return map[string]any{"ready": ready, "message": s.bootPhaseLabel()}
+	return bootStatusPayload(ready, s.bootPhaseLabel())
+}
+
+// bootStatusPayload is the same body without a Server to hand — the route
+// registered while one is still being built answers from here, so both
+// sides of the gate return one shape.
+func bootStatusPayload(ready bool, message string) map[string]any {
+	return map[string]any{
+		"ready":   ready,
+		"message": message,
+		"version": releaseAppVersion,
+		"pid":     os.Getpid(),
+	}
 }
 
 // bootGatePageHTML renders the self-contained holding page shown while the

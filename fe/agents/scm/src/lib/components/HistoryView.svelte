@@ -241,6 +241,21 @@
       hasMore = log.has_more ?? false;
       refs = refList.refs;
       trunk = refList.trunk;
+      // The selection is remembered per repo, so a branch deleted since the
+      // last visit is still selected — and the picker would keep showing a
+      // name that is gone, while every request carried a ref the repo no
+      // longer has. Drop those here; the server already walks what is left.
+      // Only when the list actually loaded: an empty list means the refs
+      // call failed, not that the repo has no branches.
+      // [] (auto) and ["all"] are mode sentinels, not ref names — never prune those.
+      if (refList.refs.length > 0 && !(selectedRefs.length === 1 && selectedRefs[0] === "all")) {
+        const alive = new Set(refList.refs.map((r) => r.name));
+        const kept = selectedRefs.filter((n) => alive.has(n));
+        if (kept.length !== selectedRefs.length) {
+          selectedRefs = kept;
+          writeRefs(repo, kept);
+        }
+      }
     } catch (e) {
       toastError("History", String(e));
     } finally {

@@ -218,6 +218,7 @@ templ UserMenu(user *entity.User, showTheme bool) {
 						// Green "actionable" accent + 🆕 marker.
 						if user.IsAdmin() && VersionInfoFromContext(ctx).AnyUpdate() {
 							<a
+								id="wick-nav-software-update"
 								href="/admin/advanced/software-update"
 								class="flex items-center gap-2.5 px-4 py-2 text-sm font-medium text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
 							>
@@ -267,6 +268,7 @@ templ UserMenu(user *entity.User, showTheme bool) {
 // builds show App and Wick separately. Omitted when no version is known.
 templ versionSection(v VersionInfo) {
 	if v.AppVersion != "" || v.WickVersion != "" {
+		<div id="wick-version-section" data-version={ v.AppVersion }>
 		<a
 			href={ templ.SafeURL(versionWebURL(v)) }
 			target="_blank"
@@ -281,7 +283,69 @@ templ versionSection(v VersionInfo) {
 				@versionRowMenu("Wick", v.WickVersion, v.WickLatest, v.WickDev, v.WickUpdateKnown, v.WickUpdate)
 			}
 		</a>
+		// Revealed by the script below once a DIFFERENT build is answering —
+		// which is what a zero-downtime upgrade leaves behind: the process was
+		// replaced without this page ever being reloaded, so the version above
+		// (and any 🆕 next to it) describes a build that is no longer serving.
+		<button
+			id="wick-version-reload"
+			type="button"
+			class="hidden w-full items-center gap-2 border-t border-white-300 dark:border-navy-600 px-4 py-2.5 text-left text-xs hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+			title="A newer build took over while this page was open. Reload to use it."
+		>
+			<span class="text-sm leading-none">🆕</span>
+			<span class="min-w-0 flex-1 truncate text-black-900 dark:text-white-100">
+				<span id="wick-version-serving" class="font-mono"></span> is running now
+			</span>
+			<span class="shrink-0 font-medium text-green-600 dark:text-green-400">Reload</span>
+		</button>
+		</div>
+		@versionFollowScript()
 	}
+}
+
+// versionFollowScript keeps the version row honest on a page that was open
+// across an upgrade. A graceful handover is invisible from the browser — no
+// dropped connection, no reload — so the menu goes on showing the version
+// that rendered it, and an admin keeps seeing a "Software Update 🆕" shortcut
+// for an update that has already been applied.
+//
+// /boot-status is the cheapest way to ask who is answering: no auth, no
+// database, served on both sides of the boot gate, and it already carries the
+// version + pid. Polled slowly (a minute, and only while the tab is visible)
+// because nothing here is urgent — it is a correction, not an alert.
+templ versionFollowScript() {
+	<script type="text/javascript">
+	(function () {
+		var sec = document.getElementById('wick-version-section');
+		if (!sec || !window.fetch) return;
+		var mine = sec.dataset.version || '';
+		if (!mine) return; // nothing to compare against (dev build with no version)
+		var btn = document.getElementById('wick-version-reload');
+		var servingEl = document.getElementById('wick-version-serving');
+		var shortcut = document.getElementById('wick-nav-software-update');
+		var stopped = false;
+		if (btn) btn.addEventListener('click', function () { location.reload(); });
+		function check() {
+			if (stopped || document.hidden) return;
+			fetch('/boot-status', { cache: 'no-store' })
+				.then(function (r) { return r.ok ? r.json() : null; })
+				.then(function (d) {
+					if (!d || !d.version || d.version === mine) return;
+					// A different build is serving. Offer the reload, and drop
+					// the update shortcut: whatever it was pointing at, this
+					// page can no longer describe it.
+					if (servingEl) servingEl.textContent = d.version;
+					if (btn) { btn.classList.remove('hidden'); btn.classList.add('flex'); }
+					if (shortcut) shortcut.classList.add('hidden');
+					stopped = true; // said once; the reload is the user's move
+				})
+				.catch(function () { /* offline or mid-restart — try again later */ });
+		}
+		setInterval(check, 60000);
+		document.addEventListener('visibilitychange', function () { if (!document.hidden) check(); });
+	})();
+	</script>
 }
 
 // versionRowMenu is one labelled version line with a status badge. The

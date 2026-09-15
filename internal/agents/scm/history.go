@@ -4,6 +4,8 @@ import (
 	"context"
 	"strconv"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // history.go answers the question the Source panel's graph asks: for each
@@ -77,6 +79,33 @@ func (o LogOptions) refArgs() []string {
 	return out
 }
 
+// dropMissingRefs removes revisions the repo no longer has, and reports
+// what it dropped. The picker's selection is remembered per repo in the
+// browser, so a branch that gets deleted (merged, pruned by a fetch,
+// cleaned up in another session) stays selected — and git answers the
+// whole log with "fatal: ambiguous argument 'x': unknown revision or path
+// not in the working tree", which took the entire history panel down for
+// a selection the user could no longer even see. A vanished branch is an
+// ordinary event, so treat it as one: walk what still exists.
+//
+// The placeholders (auto / --all) and pseudo-revisions are passed through
+// untouched — only names that git itself cannot resolve are dropped.
+func dropMissingRefs(ctx context.Context, dir string, args []string) (kept, missing []string) {
+	kept = make([]string, 0, len(args))
+	for _, a := range args {
+		if a == RefsAuto || strings.HasPrefix(a, "-") {
+			kept = append(kept, a)
+			continue
+		}
+		if _, err := run(ctx, dir, "rev-parse", "--verify", "--quiet", a+"^{commit}"); err != nil {
+			missing = append(missing, a)
+			continue
+		}
+		kept = append(kept, a)
+	}
+	return kept, missing
+}
+
 // resolveAuto expands the RefsAuto placeholder to HEAD plus its upstream,
 // so the graph shows what the branch has and what its remote has in one
 // view — the divergence is the whole point of looking.
@@ -138,7 +167,16 @@ func History(ctx context.Context, dir string, opts LogOptions) ([]LogEntry, erro
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
 
-	refs := resolveAuto(ctx, dir, opts.refArgs())
+	refs, missing := dropMissingRefs(ctx, dir, resolveAuto(ctx, dir, opts.refArgs()))
+	if len(refs) == 0 {
+		// Every selected ref is gone. Showing the current branch beats
+		// showing an error: the panel stays usable and the picker, which
+		// reloads its list from the same response, drops the dead names.
+		log.Debug().Str("dir", dir).Strs("missing", missing).Msg("scm history: all selected refs are gone, falling back to auto")
+		refs = resolveAuto(ctx, dir, []string{RefsAuto})
+	} else if len(missing) > 0 {
+		log.Debug().Str("dir", dir).Strs("missing", missing).Msg("scm history: skipping refs the repo no longer has")
+	}
 
 	// %H full sha for set membership, %h short for display, %p parents for
 	// the lanes, %D the refs pointing AT this commit for the badges.

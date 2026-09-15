@@ -268,3 +268,38 @@ func TestCommitBodyKeepsFieldSeparator(t *testing.T) {
 		t.Fatal("email lost")
 	}
 }
+
+// TestHistoryDeletedRef: the picker's selection is remembered per repo in
+// the browser, so a branch that gets deleted afterwards is still asked for.
+// git answers the WHOLE log with "fatal: ambiguous argument", which used to
+// take the history panel down over a branch the user could no longer see.
+func TestHistoryDeletedRef(t *testing.T) {
+	skipNoGit(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	gitInit(t, dir)
+	mustGit(t, dir, "checkout", "-q", "-b", "gone")
+	writeCommit(t, dir, "g.txt", "work on gone")
+	mustGit(t, dir, "checkout", "-q", "main")
+	writeCommit(t, dir, "m.txt", "work on main")
+	mustGit(t, dir, "branch", "-qD", "gone")
+
+	// Only the dead branch selected: fall back to the current branch rather
+	// than failing the request.
+	only, err := History(ctx, dir, LogOptions{Limit: 20, Refs: []string{"gone"}})
+	if err != nil {
+		t.Fatalf("deleted ref should fall back, not fail: %v", err)
+	}
+	if stateOf(t, only, "work on main") != StateLocal {
+		t.Fatalf("fallback walked the wrong history: %+v", only)
+	}
+
+	// Mixed selection: the surviving ref still decides what is walked.
+	mixed, err := History(ctx, dir, LogOptions{Limit: 20, Refs: []string{"gone", "main"}})
+	if err != nil {
+		t.Fatalf("one dead ref should not fail the walk: %v", err)
+	}
+	if stateOf(t, mixed, "work on main") != StateLocal {
+		t.Fatalf("surviving ref was not walked: %+v", mixed)
+	}
+}

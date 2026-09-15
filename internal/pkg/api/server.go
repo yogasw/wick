@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -2378,7 +2377,11 @@ func NewServer() *Server {
 	// bootReady flips, requests fall through to here and get true.
 	r.HandleFunc("GET /boot-status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"ready":true}`)
+		w.Header().Set("Cache-Control", "no-store")
+		// Same shape the gate answers with, so a caller does not have to
+		// know which side replied — and it carries the version/pid the
+		// navbar compares to notice a handover happened under it.
+		_ = json.NewEncoder(w).Encode(bootStatusPayload(true, ""))
 	})
 
 	// PWA manifest is dynamic — bakes the configured app name into the
