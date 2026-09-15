@@ -21,6 +21,40 @@ import (
 // operation touches many files) into one git_status recompute.
 const gitWatchDebounce = 400 * time.Millisecond
 
+// The recompute is not cheap and its cost is set by the session directory,
+// not by us: it walks the cwd for repos and runs git status in each one. A
+// session dir holding 61 clones / ~9800 directories costs well over a
+// second of CPU per pass.
+//
+// The debounce alone does not bound that. It bounds LATENCY after the last
+// event, and a build (or an agent writing files in a loop) never stops
+// producing events — so the watcher fired every 400ms for the whole build
+// and the DAEMON, not the build, pinned a 2-core host: 150-180% CPU, 0%
+// idle, with the build sitting politely inside its cgroup quota.
+//
+// So the pace is tied to what the last pass actually cost. After a
+// recompute the watcher waits gitWatchDutyFactor times its duration before
+// running another one, which caps the watcher's share of a core at roughly
+// 1/(1+factor) — about 20% — no matter how big the directory is or how
+// hard something is writing to it. A cheap tree keeps 400ms latency (its
+// cooldown lands below the debounce); an expensive one backs itself off to
+// seconds, which is exactly when nobody is reading the badge anyway.
+const (
+	gitWatchDutyFactor  = 4
+	gitWatchMaxInterval = 15 * time.Second
+)
+
+// gitWatchCooldown is how long to wait after a recompute that took cost.
+func gitWatchCooldown(cost time.Duration) time.Duration {
+	if cost <= 0 {
+		return 0
+	}
+	if d := cost * gitWatchDutyFactor; d < gitWatchMaxInterval {
+		return d
+	}
+	return gitWatchMaxInterval
+}
+
 // gitWatchBudget caps how many directories one session's watcher may
 // register. inotify watches are a per-user kernel resource
 // (/proc/sys/fs/inotify/max_user_watches, 27916 on this host) and a
@@ -121,17 +155,41 @@ func runGitWatch(ctx context.Context, sessionID, cwd string) {
 	var touchedMu sync.Mutex
 	touched := ""
 
+	// When the last recompute finished, and what it cost — the two numbers
+	// the pace is derived from. Written by the timer goroutine, read by the
+	// event loop, so they live under their own lock.
+	var paceMu sync.Mutex
+	var lastEnd time.Time
+	var lastCost time.Duration
+
 	var timer *time.Timer
 	debounce := func() {
 		if timer != nil {
 			timer.Stop()
 		}
-		timer = time.AfterFunc(gitWatchDebounce, func() {
+		wait := gitWatchDebounce
+		paceMu.Lock()
+		if !lastEnd.IsZero() {
+			// Still inside the previous pass's cooldown: fire when it ends
+			// rather than now. The event that arrived is not lost — the
+			// timer is reset on every event, so the publish that eventually
+			// runs reflects the newest state.
+			if left := time.Until(lastEnd.Add(gitWatchCooldown(lastCost))); left > wait {
+				wait = left
+			}
+		}
+		paceMu.Unlock()
+		timer = time.AfterFunc(wait, func() {
 			touchedMu.Lock()
 			p := touched
 			touched = ""
 			touchedMu.Unlock()
+			started := time.Now()
 			now := publishGitSummary(ctx, sessionID, cwd, p)
+			paceMu.Lock()
+			lastCost = time.Since(started)
+			lastEnd = time.Now()
+			paceMu.Unlock()
 			// Work moved to another repo (the panel followed an edit, or
 			// somebody picked a different source). Give THAT repo the deep
 			// watches, or the blind spot just moves with it.

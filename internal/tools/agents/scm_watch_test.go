@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog"
@@ -117,5 +118,35 @@ func TestSnapshotEventsReplaysGitStatus(t *testing.T) {
 	globalBcast.ForgetGitStatus(sid)
 	if evs := snapshotEvents(sid); len(evs) != 0 {
 		t.Errorf("cache should be empty after ForgetGitStatus, got %#v", evs)
+	}
+}
+
+// The watcher's pace has to come from what a recompute COSTS, not from a
+// fixed number: the same 400ms debounce that is fine over one small repo is
+// what let a 61-repo session dir pin a 2-core host while a build wrote
+// files continuously.
+func TestGitWatchCooldownScalesWithCost(t *testing.T) {
+	// Nothing measured yet (first pass): no cooldown, so the badge is
+	// correct as fast as the debounce allows.
+	if got := gitWatchCooldown(0); got != 0 {
+		t.Errorf("cooldown(0) = %v, want none", got)
+	}
+
+	// A cheap tree stays effectively unthrottled — its cooldown lands below
+	// the debounce, so latency is unchanged.
+	if got := gitWatchCooldown(20 * time.Millisecond); got >= gitWatchDebounce {
+		t.Errorf("cooldown(20ms) = %v, want below the %v debounce", got, gitWatchDebounce)
+	}
+
+	// An expensive one backs itself off: 4x the cost means the walk can
+	// occupy at most ~1/5 of the time, whatever the directory holds.
+	if got := gitWatchCooldown(1500 * time.Millisecond); got != 6*time.Second {
+		t.Errorf("cooldown(1.5s) = %v, want 6s (4x)", got)
+	}
+
+	// And it is capped, so a pathological pass cannot silence the panel for
+	// minutes.
+	if got := gitWatchCooldown(time.Minute); got != gitWatchMaxInterval {
+		t.Errorf("cooldown(1m) = %v, want the %v ceiling", got, gitWatchMaxInterval)
 	}
 }
