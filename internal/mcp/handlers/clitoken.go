@@ -42,126 +42,87 @@ func WickCLIToken(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 		return
 	}
 
-	action := strings.ToLower(strings.TrimSpace(str(args["action"])))
-	if action == "" {
-		action = "issue"
+	// One action: issue. There is no list and no revoke because there is
+	// nothing to list or revoke — a token is a signed statement, not a row
+	// somewhere, and it is short enough (2h ceiling) that waiting it out is
+	// the answer. To cancel every outstanding one at once, rotate the app's
+	// session secret.
+	ttl := clitoken.DefaultTTL
+	if raw := strings.TrimSpace(str(args["ttl"])); raw != "" {
+		d, perr := time.ParseDuration(raw)
+		if perr != nil {
+			rsp.ToolError(w, req.ID, fmt.Sprintf("ttl %q is not a duration (try 30m, 90m, 2h)", raw), tool)
+			return
+		}
+		ttl = d
 	}
-	switch action {
-	case "issue":
-		ttl := clitoken.DefaultTTL
-		if raw := strings.TrimSpace(str(args["ttl"])); raw != "" {
-			d, perr := time.ParseDuration(raw)
-			if perr != nil {
-				rsp.ToolError(w, req.ID, fmt.Sprintf("ttl %q is not a duration (try 30m, 90m, 2h)", raw), tool)
-				return
-			}
-			ttl = d
-		}
-		userID := sess.Meta.UserID
-		if user != nil {
-			userID = user.ID
-		}
-		g, ierr := clitoken.Default.Issue(sessionID, userID, str(args["note"]), ttl)
-		if ierr != nil {
-			rsp.ToolError(w, req.ID, ierr.Error(), tool)
-			return
-		}
-		// Prove the address before handing it over. A token with an
-		// address that does not answer is worse than no token: the script
-		// carries it all the way to the end of the build and only then
-		// discovers it has nowhere to report.
-		base := clitoken.BaseURL()
-		verifyCtx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
-		reachable, verr := clitoken.PickReachable(verifyCtx, g.Token, clitoken.Candidates())
-		cancel()
-		verified := verr == nil
-		if verified {
-			base = reachable
-		}
-		out := map[string]any{
-			"token":    g.Token,
-			"base_url": base,
-			// Spelled out rather than left to be derived. The address is
-			// the one thing a script cannot guess — this app answers on a
-			// public name behind a proxy, and the loopback port that looks
-			// obvious returns 403 from the host gate, which is a confusing
-			// way to find out you had the wrong door.
-			"endpoints": map[string]string{
-				"send":   base + "/api/cli/send",
-				"whoami": base + "/api/cli/whoami",
-			},
-			"session_id": g.SessionID,
-			"expires_at": g.ExpiresAt.Format(time.RFC3339),
-			"expires_in": fmt.Sprintf("%.0fm", time.Until(g.ExpiresAt).Minutes()),
-			// The two shapes a script actually needs, spelled out: nobody
-			// should have to derive a curl from a field list.
-			"usage_cli": fmt.Sprintf(
-				"WICK_CLI_TOKEN=%s WICK_BASE_URL=%s support-tools agent send --text \"build finished\"",
-				g.Token, base),
-			"usage_curl": fmt.Sprintf(
-				"curl -sS -X POST %s/api/cli/send -H 'Authorization: Bearer %s' -H 'Content-Type: application/json' -d '{\"text\":\"build finished\"}'",
-				base, g.Token),
-			"check_first": fmt.Sprintf(
-				"WICK_CLI_TOKEN=%s WICK_BASE_URL=%s support-tools agent whoami", g.Token, base),
-			"note": "Bound to this session only, expires as shown, and dies with the daemon. " +
-				"Anything sent lands as a normal user turn — the session wakes on it.",
-			// The one failure mode worth naming at mint time, because it is
-			// the likeliest: deploys are exactly when builds run, so a job
-			// often finishes while wick is swapping binaries.
-			"if_wick_restarts": "`agent send` retries an unreachable or still-booting daemon for 90s " +
-				"(--retry to change, 0 to fail fast), so a report that lands during a handover still arrives. " +
-				"A full restart takes ~80s here. If the daemon is down longer than that the command exits 4 — " +
-				"write the result to a file and let the next turn read it, rather than losing it.",
-			"exit_codes": map[string]string{
-				"0": "delivered",
-				"2": "usage: no token, or nothing to send",
-				"3": "token expired or revoked, or this session is gone — mint a new one",
-				"4": "wick unreachable even after retrying",
-				"5": "wick answered and refused",
-			},
-			// Said plainly either way: "verified" means this exact token
-			// was just used against this exact address and came back 200.
-			"verified": verified,
-		}
-		if !verified {
-			out["verify_error"] = verr.Error()
-			out["warning"] = "None of the addresses answered this token, so the one above is a guess. " +
-				"Check it yourself with `support-tools agent whoami` before handing it to a job — " +
-				"a script that cannot reach wick has nowhere to report its result."
-			out["tried"] = clitoken.Candidates()
-		}
-		rsp.ToolJSON(w, req.ID, out)
-	case "list":
-		out := []map[string]any{}
-		for _, g := range clitoken.Default.ListFor(sessionID) {
-			out = append(out, map[string]any{
-				"token":      g.Token, // already masked by ListFor
-				"note":       g.Note,
-				"expires_at": g.ExpiresAt.Format(time.RFC3339),
-			})
-		}
-		rsp.ToolJSON(w, req.ID, map[string]any{"tokens": out, "session_id": sessionID})
-	case "revoke":
-		tok := strings.TrimSpace(str(args["token"]))
-		if tok == "" {
-			// No token named: drop every one this session holds, which is
-			// what somebody reaching for "revoke" in a hurry means.
-			rsp.ToolJSON(w, req.ID, map[string]any{
-				"revoked":    clitoken.Default.RevokeSession(sessionID),
-				"session_id": sessionID,
-			})
-			return
-		}
-		// Only this session's own tokens, so a leaked token id cannot be
-		// used to revoke somebody else's.
-		if g, ok := clitoken.Default.Resolve(tok); !ok || g.SessionID != sessionID {
-			rsp.ToolError(w, req.ID, "no such live token in this session", tool)
-			return
-		}
-		rsp.ToolJSON(w, req.ID, map[string]any{"revoked": clitoken.Default.Revoke(tok)})
-	default:
-		rsp.ToolError(w, req.ID, "action must be issue, list or revoke", tool)
+	userID := sess.Meta.UserID
+	if user != nil {
+		userID = user.ID
 	}
+	g, ierr := clitoken.Issue(sessionID, userID, str(args["note"]), ttl)
+	if ierr != nil {
+		rsp.ToolError(w, req.ID, ierr.Error(), tool)
+		return
+	}
+
+	// Prove the address before handing it over. A token with an address
+	// that does not answer is worse than no token: the script carries it
+	// all the way to the end of the build and only then discovers it has
+	// nowhere to report.
+	base := clitoken.BaseURL()
+	verifyCtx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	reachable, verr := clitoken.PickReachable(verifyCtx, g.Token, clitoken.Candidates())
+	cancel()
+	verified := verr == nil
+	if verified {
+		base = reachable
+	}
+	out := map[string]any{
+		"token":    g.Token,
+		"base_url": base,
+		// Spelled out rather than left to be derived: the address is the
+		// one thing a script cannot guess.
+		"endpoints": map[string]string{
+			"send":   base + "/api/cli/send",
+			"whoami": base + "/api/cli/whoami",
+		},
+		"session_id": g.SessionID,
+		"expires_at": g.ExpiresAt.Format(time.RFC3339),
+		"expires_in": fmt.Sprintf("%.0fm", time.Until(g.ExpiresAt).Minutes()),
+		"usage_cli": fmt.Sprintf(
+			"WICK_CLI_TOKEN=%s WICK_BASE_URL=%s support-tools agent send --text \"build finished\"",
+			g.Token, base),
+		"usage_curl": fmt.Sprintf(
+			"curl -sS -X POST %s/api/cli/send -H 'Authorization: Bearer %s' -H 'Content-Type: application/json' -d '{\"text\":\"build finished\"}'",
+			base, g.Token),
+		"check_first": fmt.Sprintf(
+			"WICK_CLI_TOKEN=%s WICK_BASE_URL=%s support-tools agent whoami", g.Token, base),
+		"note": "Bound to this session only, reachable from this machine only, and it expires. " +
+			"Anything sent lands as a normal user turn — the session wakes on it. " +
+			"It survives a wick restart (it is signed, not remembered), and it cannot be revoked: " +
+			"let it expire, or rotate the app's session secret to void every outstanding token.",
+		"if_wick_restarts": "`agent send` retries an unreachable or still-booting daemon for 90s " +
+			"(--retry to change, 0 to fail fast), so a report that lands during a handover still arrives. " +
+			"A full restart takes ~80s here. If the daemon is down longer than that the command exits 4 — " +
+			"write the result to a file and let the next turn read it, rather than losing it.",
+		"exit_codes": map[string]string{
+			"0": "delivered",
+			"2": "usage: no token, or nothing to send",
+			"3": "token expired, or this session is gone — mint a new one",
+			"4": "wick unreachable even after retrying",
+			"5": "wick answered and refused",
+		},
+		"verified": verified,
+	}
+	if !verified {
+		out["verify_error"] = verr.Error()
+		out["warning"] = "None of the addresses answered this token, so the one above is a guess. " +
+			"Check it with `support-tools agent whoami` before handing it to a job — " +
+			"a script that cannot reach wick has nowhere to report its result."
+		out["tried"] = clitoken.Candidates()
+	}
+	rsp.ToolJSON(w, req.ID, out)
 }
 
 // str reads a string argument without panicking on a wrong type.

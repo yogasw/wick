@@ -28,9 +28,13 @@ mint a token  →  run the job detached with the token in its env  →  end the 
 ## 1. Mint a token
 
 ```
-wick_cli_token            # action defaults to issue
-wick_cli_token {"ttl": "90m", "note": "build 0.1.255"}
+wick_cli_token                                   # 30m
+wick_cli_token {"ttl": "90m", "note": "build 0.1.261"}
 ```
+
+There is no revoke and no list: a token is a signed statement rather than
+a row somewhere, and at a two-hour ceiling waiting it out IS the answer.
+To cancel every outstanding one at once, rotate the app's session secret.
 
 You get back the token, the `base_url` to hit, the exact `endpoints`, when
 it expires, and a ready-to-paste command.
@@ -127,9 +131,16 @@ $(tail -20 build.log)" || true
 fi
 ```
 
-The token keeps working across the swap: the outgoing process hands its
-live tokens to the successor, which adopts them at boot with their
-original expiry.
+The token keeps working across the swap by construction: it is a **signed
+statement**, not a row in the issuing process's memory, so any process
+holding the app's secret can verify it — including a successor that booted
+after the token was minted.
+
+Two things decide how long that script sits in its wait loop, and both are
+covered by [`wick-zero-downtime-upgrade`](../wick-zero-downtime-upgrade/SKILL.md):
+the old process only exits once nothing has been running for the settle
+window, and **a conversation that keeps receiving messages never gives it
+one** — so ending the turn is part of the deploy, not the end of it.
 
 ## When wick is restarting
 

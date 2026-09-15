@@ -64,8 +64,8 @@ else
 fi
 ```
 
-The token survives the swap (the outgoing process hands its live tokens to
-the successor), so a report that lands after the restart still arrives.
+The token survives the swap because it is signed rather than remembered,
+so a report that lands after the restart still arrives.
 Do NOT sit in the turn polling for the new version: the old process cannot
 finish draining until your turn ends, so a turn that waits for its own
 handover waits forever.

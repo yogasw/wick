@@ -1353,6 +1353,12 @@ func NewServer() *Server {
 	// A CLI token is useless without the address to send it to, and on a
 	// host behind a proxy that address is not the loopback port.
 	clitoken.SetBaseURL(configsSvc.AppURL)
+	// CLI tokens are signed statements, not rows in a map: the app's own
+	// session secret is what lets ANY process — including a successor that
+	// booted after the token was minted — verify one. Rotating that secret
+	// invalidates outstanding CLI tokens too, which is the behaviour
+	// somebody rotating it expects.
+	clitoken.SetSecret(configsSvc.SessionSecret)
 
 	// One call wires every built-in channel: setup.All handles EnsureChannel,
 	// config load, NewChannel, setters, and registry.Add per transport.
@@ -3051,23 +3057,11 @@ func (s *Server) Run(ctx context.Context, port int) error {
 			} else {
 				logger.Info().Int("grants", n).Msg("upgrade: MCP tokens handed to the successor")
 			}
-			// CLI tokens travel too. A deploy is precisely when a build is
-			// running, so the job holding one usually finishes AFTER the
-			// swap — and a successor that never issued it answers 401,
-			// losing the report to the very event it was reporting on.
-			if c, cerr := clitoken.Default.SaveHandoff(baseDir); cerr != nil {
-				logger.Warn().Err(cerr).Msg("upgrade: could not hand CLI tokens to the successor")
-			} else if c > 0 {
-				logger.Info().Int("tokens", c).Msg("upgrade: CLI tokens handed to the successor")
-			}
 		}
 		// The other side of that: adopt what a predecessor left, then delete
 		// it. Unconditional — a file only exists when one was written.
 		if n := s.mcpScopedTokens.LoadHandoff(baseDir); n > 0 {
 			logger.Info().Int("grants", n).Msg("upgrade: adopted MCP tokens from the predecessor")
-		}
-		if n := clitoken.Default.LoadHandoff(baseDir); n > 0 {
-			logger.Info().Int("tokens", n).Msg("upgrade: adopted CLI tokens from the predecessor")
 		}
 	}
 	// A force left over from a handover that never started must not ambush

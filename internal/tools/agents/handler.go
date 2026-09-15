@@ -21,7 +21,6 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
-	"github.com/yogasw/wick/internal/agents/clitoken"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/pool"
@@ -2212,13 +2211,6 @@ func deleteSession(c *tool.Ctx) {
 		log.Ctx(c.Context()).Error().Msgf("delete session %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
-	}
-	// A CLI token outliving the conversation it speaks into has no use
-	// left, only risk: whatever build it was cut for can no longer be
-	// reported to anybody.
-	if n := clitoken.Default.RevokeSession(id); n > 0 {
-		log.Ctx(c.Context()).Info().Int("tokens", n).Str("session", id).
-			Msg("revoked CLI tokens of a deleted session")
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
 }

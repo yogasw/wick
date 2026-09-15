@@ -7,24 +7,37 @@
 // has no way to be told how it went. It can poll, or it can schedule a
 // wake-up and hope the timing is right; both are guesses about someone
 // else's clock. What it actually wants is for the WORK to speak: the build
-// script says "0.1.255 built" or "failed at step 3", and the session wakes
+// script says "0.1.261 built" or "failed at step 3", and the session wakes
 // on that.
 //
-// That needs a credential a script can carry, and the credential is the
-// whole risk. So this one is deliberately the narrowest thing that works:
+// # What a token is
 //
-//   - It is bound to ONE session, decided when it is minted. The HTTP
-//     surface takes no session id at all — the token IS the session — so
-//     there is no id to swap for somebody else's.
+// A signed statement, not a row in a map. It says: this session, this
+// user, until this instant — and anything holding the app's session secret
+// can check that for itself.
+//
+// That is not a detail. The moment a script most often reports is the
+// moment wick was replaced (a deploy is when builds run), and a credential
+// the issuing process had to remember would be refused by its successor —
+// losing the report to the very event it was reporting on.
+//
+// # What keeps it safe
+//
+//   - It names ONE session, decided when it is minted. The HTTP surface
+//     takes no session id at all, so there is no id to swap for somebody
+//     else's.
 //   - It is minted only over MCP, by an agent already running inside that
-//     session. A shell cannot mint one; that is the point. Anyone with a
-//     session id could otherwise mint a token for a session they do not
-//     own, on a host where sessions of many people live side by side.
-//   - It expires (30 minutes by default, two hours at most) and lives in
-//     memory, so a leaked one is worthless shortly after the build it was
-//     cut for, and a restart invalidates every outstanding token.
-//   - It carries the minting user, so everything the script does is
-//     attributed to a person rather than to a synthetic principal.
+//     session. A shell cannot mint one; that is the point, on a host where
+//     many people's sessions live side by side.
+//   - It is SHORT: thirty minutes by default, two hours at most, clamped
+//     here rather than trusted to the caller.
+//   - It reaches two endpoints, from this machine only.
+//
+// There is deliberately no revocation list. A token this narrow and this
+// short is not worth the bookkeeping — and the bookkeeping would be a lie
+// anyway, since it could not survive the restart it exists to tolerate.
+// The lever for "cancel everything now" is rotating the app's session
+// secret, which invalidates every outstanding token at once.
 package clitoken
 
 import (
@@ -37,8 +50,9 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // Prefix marks tokens minted here, distinct from every other bearer wick
@@ -55,6 +69,7 @@ const (
 
 // Grant is what a token authorises: one session, one user, until a time.
 type Grant struct {
+	ID        string
 	Token     string
 	SessionID string
 	UserID    string
@@ -62,25 +77,42 @@ type Grant struct {
 	ExpiresAt time.Time
 }
 
-// Store holds live grants. The zero value is not usable; call New.
-type Store struct {
-	mu  sync.Mutex
-	m   map[string]Grant
-	now func() time.Time
+// claims is what the token says about itself.
+type claims struct {
+	SessionID string `json:"sid"`
+	UserID    string `json:"uid"`
+	Note      string `json:"note,omitempty"`
+	jwt.RegisteredClaims
 }
 
-// New returns an empty store.
-func New() *Store { return &Store{m: map[string]Grant{}, now: time.Now} }
+// secret signs and verifies tokens. Injected at boot from the app's own
+// session secret, which already exists, is already protected, and is
+// already the thing whose rotation invalidates outstanding credentials.
+var secret = func() string { return "" }
+
+// SetSecret installs the signing key resolver. Called once at boot.
+func SetSecret(f func() string) {
+	if f != nil {
+		secret = f
+	}
+}
+
+// now is the package clock, swapped in tests.
+var now = time.Now
 
 // Issue mints a token for sessionID on behalf of userID.
 //
 // ttl is clamped rather than rejected: a caller asking for a week gets two
 // hours and is told so by the returned grant, which is friendlier than an
 // error for something with an obvious right answer.
-func (s *Store) Issue(sessionID, userID, note string, ttl time.Duration) (Grant, error) {
+func Issue(sessionID, userID, note string, ttl time.Duration) (Grant, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return Grant{}, errors.New("a CLI token must belong to a session")
+	}
+	key := strings.TrimSpace(secret())
+	if key == "" {
+		return Grant{}, errors.New("the app has no session secret to sign with")
 	}
 	switch {
 	case ttl <= 0:
@@ -90,112 +122,79 @@ func (s *Store) Issue(sessionID, userID, note string, ttl time.Duration) (Grant,
 	case ttl > MaxTTL:
 		ttl = MaxTTL
 	}
-	raw := make([]byte, 16)
+
+	raw := make([]byte, 12)
 	if _, err := rand.Read(raw); err != nil {
 		return Grant{}, err
 	}
-	g := Grant{
-		Token:     Prefix + hex.EncodeToString(raw),
+	id := hex.EncodeToString(raw)
+	issued := now().UTC()
+	exp := issued.Add(ttl)
+
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims{
 		SessionID: sessionID,
 		UserID:    strings.TrimSpace(userID),
 		Note:      strings.TrimSpace(note),
-		ExpiresAt: s.now().Add(ttl).UTC(),
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        id,
+			Subject:   sessionID,
+			IssuedAt:  jwt.NewNumericDate(issued),
+			ExpiresAt: jwt.NewNumericDate(exp),
+		},
+	}).SignedString([]byte(key))
+	if err != nil {
+		return Grant{}, err
 	}
-	s.mu.Lock()
-	s.sweepLocked()
-	s.m[g.Token] = g
-	s.mu.Unlock()
-	return g, nil
+	return Grant{
+		ID:        id,
+		Token:     Prefix + signed,
+		SessionID: sessionID,
+		UserID:    strings.TrimSpace(userID),
+		Note:      strings.TrimSpace(note),
+		ExpiresAt: exp,
+	}, nil
 }
 
-// Resolve returns the grant a token authorises, or false when the token is
-// unknown or expired. An expired one is dropped on the way out, so the map
-// does not accumulate dead grants on a busy host.
-func (s *Store) Resolve(token string) (Grant, bool) {
-	token = strings.TrimSpace(token)
-	if !strings.HasPrefix(token, Prefix) {
+// Resolve verifies a token and returns what it authorises.
+//
+// Everything in the answer comes from the token itself — signature,
+// expiry, the session it names — which is what lets a process honour one
+// it never issued.
+func Resolve(token string) (Grant, bool) {
+	trimmed := strings.TrimSpace(token)
+	raw, ok := strings.CutPrefix(trimmed, Prefix)
+	if !ok || raw == "" {
+		return Grant{}, false // not ours to validate
+	}
+	key := strings.TrimSpace(secret())
+	if key == "" {
 		return Grant{}, false
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	g, ok := s.m[token]
-	if !ok {
+	var c claims
+	parsed, err := jwt.ParseWithClaims(raw, &c, func(t *jwt.Token) (any, error) {
+		if _, isHMAC := t.Method.(*jwt.SigningMethodHMAC); !isHMAC {
+			return nil, fmt.Errorf("unexpected signing method %v", t.Header["alg"])
+		}
+		return []byte(key), nil
+	},
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithTimeFunc(now),
+	)
+	if err != nil || !parsed.Valid || c.SessionID == "" || c.ExpiresAt == nil {
 		return Grant{}, false
 	}
-	if !s.now().Before(g.ExpiresAt) {
-		delete(s.m, token)
-		return Grant{}, false
-	}
-	return g, true
+	return Grant{
+		ID:        c.ID,
+		Token:     trimmed,
+		SessionID: c.SessionID,
+		UserID:    c.UserID,
+		Note:      c.Note,
+		ExpiresAt: c.ExpiresAt.Time.UTC(),
+	}, true
 }
-
-// Revoke drops one token. Reports whether it was live.
-func (s *Store) Revoke(token string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.m[strings.TrimSpace(token)]; !ok {
-		return false
-	}
-	delete(s.m, strings.TrimSpace(token))
-	return true
-}
-
-// ListFor returns the live grants of one session, newest expiry first.
-// The token strings are NOT included: a list is for seeing what is
-// outstanding, not for recovering a secret somebody lost.
-func (s *Store) ListFor(sessionID string) []Grant {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sweepLocked()
-	var out []Grant
-	for _, g := range s.m {
-		if g.SessionID != sessionID {
-			continue
-		}
-		g.Token = Prefix + "****" + g.Token[len(g.Token)-4:]
-		out = append(out, g)
-	}
-	for i := 1; i < len(out); i++ { // small n; insertion sort keeps it dependency-free
-		for j := i; j > 0 && out[j].ExpiresAt.After(out[j-1].ExpiresAt); j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
-	return out
-}
-
-// RevokeSession drops every token of one session and reports how many.
-// Called when a session ends: a credential outliving the thing it speaks
-// into has no use left, only risk.
-func (s *Store) RevokeSession(sessionID string) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	n := 0
-	for tok, g := range s.m {
-		if g.SessionID == sessionID {
-			delete(s.m, tok)
-			n++
-		}
-	}
-	return n
-}
-
-func (s *Store) sweepLocked() {
-	now := s.now()
-	for tok, g := range s.m {
-		if !now.Before(g.ExpiresAt) {
-			delete(s.m, tok)
-		}
-	}
-}
-
-// Default is the process-wide store. One issuer, because the HTTP surface
-// and the MCP tool have to agree about what is live.
-var Default = New()
 
 // baseURL reports the URL a script should send to. Injected at boot from
-// the app's configured public URL rather than guessed: on a host behind a
-// proxy the loopback port is NOT the door — it answers 403 from the gate,
-// which is a confusing way to learn that the address was wrong.
+// the app's configured public URL rather than guessed.
 var baseURL = func() string { return "" }
 
 // SetBaseURL installs the resolver. Called once at boot.
@@ -205,8 +204,8 @@ func SetBaseURL(f func() string) {
 	}
 }
 
-// BaseURL is the address to hand to a script, with a loopback fallback for
-// an install that has not configured one.
+// BaseURL is the app's configured address, with a loopback fallback for an
+// install that has not set one.
 func BaseURL() string {
 	if v := strings.TrimRight(strings.TrimSpace(baseURL()), "/"); v != "" {
 		return v
@@ -215,11 +214,11 @@ func BaseURL() string {
 }
 
 // LoopbackURL is this app's own port on this machine.
-func LoopbackURL() string {
-	return "http://127.0.0.1:" + port()
-}
+func LoopbackURL() string { return "http://127.0.0.1:" + port() }
 
-// port is the app's HTTP port.
+// localhostURL is the name-based spelling of the same port.
+func localhostURL() string { return "http://localhost:" + port() }
+
 func port() string {
 	if p := strings.TrimSpace(os.Getenv("WICK_PORT")); p != "" {
 		return p
@@ -229,21 +228,14 @@ func port() string {
 
 // Candidates are the addresses worth trying, best first.
 //
-// The machine's own port comes FIRST. A build script runs here, so a
-// request that leaves for the public name only to be routed back through a
-// proxy is a longer path that can fail in more ways — DNS, TLS, the proxy
-// itself — for a conversation happening on this host. Both loopback
-// spellings are tried because a host allowlist may name one and not the
-// other, which is exactly what happened here: localhost was allowed and
-// 127.0.0.1 was not.
+// Loopback only: the channel refuses any request that did not come from
+// this machine, so advertising an address that routes through a proxy
+// would hand out one that cannot work. Both spellings, because a host
+// allowlist can name one and not the other.
 //
-// The public URL is deliberately NOT a candidate: the channel refuses any
-// request that did not come from this machine, so advertising an address
-// that routes through a proxy would hand out one that cannot work.
-//
-// Nothing here bypasses the host allowlist either: an address only wins if
-// it actually answers the probe, and loopback answers only when the
-// operator has allowed it (config allowed-origins add http://127.0.0.1:<port>).
+// Nothing here bypasses that allowlist: an address only wins if it
+// actually answers, and loopback answers only when the operator has added
+// it (config allowed-origins add http://127.0.0.1:<port>).
 func Candidates() []string {
 	var out []string
 	seen := map[string]bool{}
@@ -257,20 +249,15 @@ func Candidates() []string {
 	return out
 }
 
-// localhostURL is the name-based spelling of the same port.
-func localhostURL() string {
-	return "http://localhost:" + port()
-}
-
 // PickReachable returns the first candidate that actually answers this
 // token, and the reason none did when that happens.
 //
 // Handing out an address without checking it is how this feature failed
-// its first live test: the obvious loopback port answered 403 from the
-// host gate, which reads like an auth problem and is not, and the script
-// carrying that address had no way to tell the difference. Minting is the
-// right moment to find out — it costs one request, and the alternative is
-// a build that discovers it at the end, with the result it cannot deliver.
+// its first live test: the obvious port answered 403 from the host gate,
+// which reads like an auth problem and is not, and the script carrying
+// that address had no way to tell the difference. Minting is the right
+// moment to find out — it costs one request, and the alternative is a
+// build that discovers it at the end, with a result it cannot deliver.
 func PickReachable(ctx context.Context, token string, candidates []string) (string, error) {
 	var last error
 	for _, base := range candidates {
@@ -290,8 +277,7 @@ func PickReachable(ctx context.Context, token string, candidates []string) (stri
 		if resp.StatusCode == http.StatusOK {
 			return base, nil
 		}
-		last = fmt.Errorf("%s answered %d: %s", base, resp.StatusCode,
-			strings.TrimSpace(string(body)))
+		last = fmt.Errorf("%s answered %d: %s", base, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	if last == nil {
 		last = errors.New("no address to try")

@@ -8,43 +8,85 @@ import (
 	"time"
 )
 
-func TestIssueResolveAndExpiry(t *testing.T) {
-	s := New()
-	fake := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time { return fake }
+// signing sets the key these tokens are signed with, the way the app does
+// at boot. Without one a token cannot be minted at all, which is itself
+// the right behaviour: an unsigned bearer would be a password anybody can
+// write.
+func signing(t *testing.T) {
+	t.Helper()
+	SetSecret(func() string { return "test-secret-0123456789" })
+	t.Cleanup(func() { SetSecret(func() string { return "" }) })
+}
 
-	g, err := s.Issue("sess-1", "usr-1", "build 0.1.255", 30*time.Minute)
+// freeze pins the package clock so expiry can be tested without sleeping.
+func freeze(t *testing.T, at time.Time) *time.Time {
+	t.Helper()
+	cur := at
+	now = func() time.Time { return cur }
+	t.Cleanup(func() { now = time.Now })
+	return &cur
+}
+
+func TestIssueResolveAndExpiry(t *testing.T) {
+	signing(t)
+	clock := freeze(t, time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC))
+
+	g, err := Issue("sess-1", "usr-1", "build 0.1.261", 30*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(g.Token, Prefix) {
 		t.Fatalf("token %q should carry the CLI prefix", g.Token)
 	}
-	got, ok := s.Resolve(g.Token)
-	if !ok || got.SessionID != "sess-1" || got.UserID != "usr-1" {
+	got, ok := Resolve(g.Token)
+	if !ok || got.SessionID != "sess-1" || got.UserID != "usr-1" || got.Note != "build 0.1.261" {
 		t.Fatalf("resolve = %+v %v, want the grant back", got, ok)
 	}
 
 	// A token from another issuer must never resolve here — that is what
 	// keeps a PAT or a sub-agent token from reaching this surface.
-	if _, ok := s.Resolve("wick_pat_deadbeef"); ok {
+	if _, ok := Resolve("wick_pat_0123456789abcdef"); ok {
 		t.Error("a foreign prefix resolved")
 	}
+	// …and neither does a forged payload: the signature is the whole check.
+	if _, ok := Resolve(Prefix + "not.a.jwt"); ok {
+		t.Error("a malformed token resolved")
+	}
 
-	// One second past the expiry it is gone, and gone for good.
-	fake = fake.Add(30*time.Minute + time.Second)
-	if _, ok := s.Resolve(g.Token); ok {
+	// Past its expiry the token refuses itself: the claim is inside the
+	// signed payload, so nothing has to remember it.
+	*clock = clock.Add(31 * time.Minute)
+	if _, ok := Resolve(g.Token); ok {
 		t.Error("an expired token still resolved")
 	}
-	if s.Revoke(g.Token) {
-		t.Error("an expired token should already have been dropped")
+}
+
+// The point of signing: a process that never saw the mint can still verify
+// it. That is what makes a report survive the swap it is reporting on —
+// the successor was not running when the token was issued.
+func TestATokenVerifiesWithoutTheIssuer(t *testing.T) {
+	signing(t)
+	minted, err := Issue("sess-1", "usr-1", "build", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := Resolve(minted.Token) // no shared state involved
+	if !ok || got.ID != minted.ID {
+		t.Fatalf("resolve = %+v %v", got, ok)
+	}
+
+	// Only under the right key. Rotating the app's session secret is the
+	// documented way to void every outstanding token at once.
+	SetSecret(func() string { return "a-different-secret" })
+	if _, ok := Resolve(minted.Token); ok {
+		t.Error("a token verified under the wrong key")
 	}
 }
 
 // "Just make it long" is how a build credential becomes a standing one, so
 // the ceiling is enforced here rather than trusted to callers.
 func TestTTLIsClamped(t *testing.T) {
-	s := New()
+	signing(t)
 	for _, tc := range []struct{ ask, want time.Duration }{
 		{0, DefaultTTL},
 		{-time.Hour, DefaultTTL},
@@ -52,7 +94,7 @@ func TestTTLIsClamped(t *testing.T) {
 		{24 * time.Hour, MaxTTL},
 		{45 * time.Minute, 45 * time.Minute},
 	} {
-		g, err := s.Issue("sess-1", "usr-1", "", tc.ask)
+		g, err := Issue("sess-1", "usr-1", "", tc.ask)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -64,62 +106,26 @@ func TestTTLIsClamped(t *testing.T) {
 
 // A token with no session is meaningless: the session IS the authorisation.
 func TestIssueRefusesASessionlessToken(t *testing.T) {
-	if _, err := New().Issue("  ", "usr-1", "", time.Minute); err == nil {
+	signing(t)
+	if _, err := Issue("  ", "usr-1", "", time.Minute); err == nil {
 		t.Fatal("a token with no session should be refused")
 	}
 }
 
-// A listing shows what is outstanding without handing back the secret —
-// otherwise "list" becomes a way to recover a token somebody lost.
-func TestListForMasksTheSecretAndScopesToTheSession(t *testing.T) {
-	s := New()
-	a, _ := s.Issue("sess-1", "usr-1", "one", time.Hour)
-	_, _ = s.Issue("sess-2", "usr-1", "other session", time.Hour)
-
-	list := s.ListFor("sess-1")
-	if len(list) != 1 {
-		t.Fatalf("list = %d, want only this session's", len(list))
-	}
-	if strings.Contains(list[0].Token, strings.TrimPrefix(a.Token, Prefix)[:8]) {
-		t.Errorf("the listing leaked the token: %q", list[0].Token)
-	}
-
-	if n := s.RevokeSession("sess-1"); n != 1 {
-		t.Errorf("revoked %d, want 1", n)
-	}
-	if _, ok := s.Resolve(a.Token); ok {
-		t.Error("a revoked session's token still resolves")
-	}
-}
-
-// The address is half the credential: a token with the wrong base URL is a
-// script that cannot report. On a host behind a proxy the loopback port is
-// not the door — it answers 403 from the gate, which reads like an auth
-// problem and is not one.
-func TestBaseURL(t *testing.T) {
-	t.Cleanup(func() { SetBaseURL(func() string { return "" }) })
-
-	SetBaseURL(func() string { return "" })
-	if got := BaseURL(); got != "http://127.0.0.1:9425" {
-		t.Errorf("unconfigured = %q, want the loopback fallback", got)
-	}
-
-	SetBaseURL(func() string { return "https://wick.example.com/" })
-	if got := BaseURL(); got != "https://wick.example.com" {
-		t.Errorf("configured = %q, want it without the trailing slash", got)
-	}
-
-	// A nil resolver must not replace a working one.
-	SetBaseURL(nil)
-	if got := BaseURL(); got != "https://wick.example.com" {
-		t.Errorf("after nil = %q, want the previous resolver", got)
+// No key, no token. An unsigned bearer would be a password anybody could
+// write, so minting fails loudly rather than handing one out.
+func TestIssueRefusesWithoutASigningKey(t *testing.T) {
+	SetSecret(func() string { return "" })
+	if _, err := Issue("sess-1", "usr-1", "", time.Minute); err == nil {
+		t.Fatal("minting without a signing key should be refused")
 	}
 }
 
 // Handing out an address without checking it is how this failed its first
-// live test: the obvious loopback port answered 403 from the host gate,
-// which reads like an auth problem and is not.
+// live test: the obvious port answered 403 from the host gate, which reads
+// like an auth problem and is not.
 func TestPickReachableTriesUntilSomethingAnswers(t *testing.T) {
+	signing(t)
 	var gotAuth string
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -135,7 +141,6 @@ func TestPickReachableTriesUntilSomethingAnswers(t *testing.T) {
 	}))
 	defer gate.Close()
 
-	// The gated host is tried first and rejected; the working one wins.
 	got, err := PickReachable(t.Context(), "wick_cli_abc", []string{gate.URL, ok.URL})
 	if err != nil {
 		t.Fatalf("a reachable candidate should win: %v", err)
@@ -156,22 +161,20 @@ func TestPickReachableTriesUntilSomethingAnswers(t *testing.T) {
 	if !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), gate.URL) {
 		t.Errorf("error = %v, want the address and the status", err)
 	}
-
 	if _, err := PickReachable(t.Context(), "t", nil); err == nil {
 		t.Error("no candidates should be an error, not a silent empty string")
 	}
 }
 
-// The order matters: the configured public URL is the name the host
-// allowlist is written in, so it is tried before the machine's own port.
+// This machine only: the channel refuses anything that did not come from
+// here, so advertising the public URL would hand out an address that
+// cannot work. Both spellings, because an allowlist can name one and not
+// the other — which is exactly what this host had.
 func TestCandidatesAreLoopbackOnly(t *testing.T) {
 	SetBaseURL(func() string { return "https://wick.example.com/" })
 	t.Cleanup(func() { SetBaseURL(func() string { return "" }) })
 
 	c := Candidates()
-	// This machine only. The channel refuses anything that did not come
-	// from here, so advertising the public URL would hand out an address
-	// that cannot work.
 	if len(c) != 2 || c[0] != LoopbackURL() || c[1] != "http://localhost:9425" {
 		t.Fatalf("candidates = %v, want both loopback spellings and nothing else", c)
 	}

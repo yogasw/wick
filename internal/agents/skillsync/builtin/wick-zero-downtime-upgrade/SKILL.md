@@ -1,6 +1,6 @@
 ---
 name: wick-zero-downtime-upgrade
-description: Use when deploying or replacing the wick binary on a running host — "how do I ship this build", `reload --binary`, a refused candidate ("refusing to install this binary", sha256 mismatch, "--yes was not given", "cannot replace … as this user") — or when an update caused downtime: a 502/503 during deploy, killed agent turns, an interrupted workflow run, two wick processes at once, "upgrade failed: parent hasn't exited", or a reload that did nothing. Covers reload vs restart, installing the new binary safely, the systemd unit a handover needs, who decides the successor is ready to switch (wick's own boot gate — not an outside probe, and not tableflip), what the drain does and does not wait for, how to keep a running agent turn from being interrupted, and how to prove there was no downtime.
+description: Use when deploying or replacing the wick binary on a running host — "how do I ship this build", `reload --binary`, a refused candidate ("refusing to install this binary", sha256 mismatch, "--yes was not given", "cannot replace … as this user") — or when an update caused downtime: a 502/503 during deploy, killed agent turns, an interrupted workflow run, two wick processes at once, "upgrade failed: parent hasn't exited", or a reload that did nothing. Covers reload vs restart, installing the new binary safely, the systemd unit a handover needs, who decides the successor is ready to switch (wick's own boot gate — not an outside probe, and not tableflip), what the drain does and does not wait for, how to keep a running agent turn from being interrupted, how an agent deploys the binary it is itself running inside (detached script + `wick_cli_token`, never polling from the turn), and how to prove there was no downtime.
 ---
 
 # Upgrading wick without downtime
@@ -56,7 +56,25 @@ It inspects the candidate before touching anything, swaps it in atomically, sign
 
 Add `--wait` when a script needs the confirmation — it blocks until the successor is serving, prints `handover done: pid <old> -> <new>, <old version> -> <new version>`, and rolls the binary back if the successor never gets there. `--wait-drain` implies it and also waits for the old process to exit, which is the moment channels, cron and the schedule runner move across.
 
-**From inside an agent turn, do neither.** Install the binary and stop there; the watcher applies it. A reload that waits holds the turn open, and an open turn is itself something the next swap has to reckon with — the agent ends up waiting on a swap that is waiting on the agent.
+**From inside an agent turn, do neither.** Install the binary and stop there; the watcher applies it. A reload that waits holds the turn open, and an open turn is itself something the next swap has to reckon with — the agent ends up waiting on a swap that is waiting on the agent. There is a whole section on this below: [Deploying from inside an agent turn](#deploying-from-inside-an-agent-turn).
+
+### Deploying from an agent turn
+
+That trap is wider than `--wait`, and it does not need the agent to be waiting on anything. The drain waits for whatever is running, and **a reply is work** — so a session that keeps answering keeps the predecessor alive, each message restarting the settle window. Two processes sit there, the version never changes, and it reads exactly like a hung handover. It is not hung: end the turn and the swap finishes in seconds. If you are the one deploying, the thing to do after starting the swap is to *stop talking*.
+
+Which leaves the question the waiting was meant to answer — how does the agent learn how it went, if it cannot stay and watch? It gets told. Mint a token with the `wick_cli_token` MCP tool, put the whole chain in a detached script, and end the turn:
+
+```bash
+if wick build && support-tools reload --binary ./bin/... --sudo -y; then
+  support-tools agent send --text "0.1.x deployed" || true
+else
+  support-tools agent send --text "build FAILED: $(tail -5 build.log)" || true
+fi
+```
+
+The report lands as a normal message and wakes the session, whether it arrives in 40 seconds or 40 minutes — and a build that dies at 03:00 says so instead of being discovered on the next check. `agent send` retries an unreachable or still-booting daemon for 90s, so a report sent *during* the handover still gets through; past that it exits 4, which is why a script that must not lose its result writes it to a file as well. Append `|| true`: a deploy that succeeded must not be recorded as failed because its notification could not be delivered.
+
+The token survives the restart it is reporting on because it is **signed, not remembered**. Upgrading *from* a build that predates that — one whose tokens lived in the process's memory — is the one case where the final "deployed" message cannot arrive: the token dies with the process that issued it, at precisely the moment it was for. Expect that report to be missing on the first such upgrade, and read the file instead. See the `wick-cli-channel` skill.
 
 ### What it checks
 
@@ -162,6 +180,79 @@ upgrade.Register("workflow runs", func() int { return r.ActiveRuns() + r.QueuedR
 upgrade.RegisterResumable("agent turns", p.HandoverBlockerCount, p.HandoverBlockers)   // survives interruption
 ```
 
+## Deploying from inside an agent turn
+
+An agent deploying the binary it is running inside is the case that breaks
+every ordinary instinct, because the agent is part of what the deploy has
+to wait for.
+
+**A turn cannot wait for its own handover.** The outgoing process drains
+its in-flight work before it exits, and the turn doing the deploying *is*
+that work. So a turn that polls for the new version — `support-tools
+version` in a loop, waiting for the pid to change, "just checking one more
+time" — is waiting for something that cannot happen until it stops. It
+does not time out. It waits forever, and from the outside it looks exactly
+like the deploy hanging.
+
+The same goes for the conversation around it. **The settle window is a
+lull, and a session being talked to never has one**: every message starts
+new work and restarts the 15-second window. A handover kicked off in the
+middle of a live conversation will sit there, correctly, for as long as the
+conversation continues — and each "is it done yet?" is itself another
+reason it is not. If a swap must happen while someone is actively chatting,
+that is what **Force swap** is for; otherwise the answer is to stop
+talking, which is the one thing a waiting agent is least inclined to do.
+
+So put the whole chain — build, install, wait, report — in a detached
+script, and let it tell you how it went. That is the
+[`wick-cli-channel`](../wick-cli-channel/SKILL.md) skill, and deploying
+wick is the reason it exists:
+
+```bash
+#!/usr/bin/env bash
+set -uo pipefail
+D=/path/to/workdir
+say() { support-tools agent send --text "$1" || echo "UNDELIVERED: $1" >> "$D/result.txt"; }
+
+"$D/gate.sh" >> "$D/build.log" 2>&1 || { say "[DEPLOY] gate failed — nothing installed"; exit 1; }
+wick build    >> "$D/build.log" 2>&1 || { say "[DEPLOY] build failed: $(tail -5 "$D/build.log")"; exit 1; }
+support-tools reload --binary bin/support-tools-linux-amd64 --sudo -y >> "$D/build.log" 2>&1 \
+  || { say "[DEPLOY] reload refused — the old binary is still serving"; exit 1; }
+
+for _ in $(seq 1 40); do                       # wait for the old process to finish draining
+  sleep 10
+  [ "$(pgrep -cf '^/usr/bin/support-tools')" = "1" ] && break
+done
+say "[DEPLOY] done: $(support-tools version | tail -1)"
+```
+
+Mint the token with `wick_cli_token`, pass it to the script as
+`WICK_CLI_TOKEN`, start the script detached, and **end the turn** — that
+last step is not politeness, it is what lets the drain finish.
+
+Four details that decide whether the report actually arrives:
+
+- **The token survives the swap by construction.** It is a signed
+  statement, not a row in the issuing process's memory, so the successor —
+  a process that did not exist when the token was minted — verifies it from
+  the app's secret alone. (A build old enough to keep tokens in memory
+  cannot do this: its token dies with the process that minted it, and the
+  post-swap report is lost. If that is what you are running, this deploy is
+  the last one that loses its report.)
+- **`agent send` rides out the restart.** An unreachable or still-booting
+  daemon is retried for 90 seconds. A handover costs nothing (the port
+  never closes); a full restart costs about 80 seconds.
+- **Never let the report fail the deploy.** `|| true`, or append it to a
+  file the next turn can read. A result on disk beats one lost to a
+  connection that was never going to answer.
+- **Report the failures too.** A gate that fails at 03:00 should say so;
+  the whole point is not having to wonder.
+
+One more trap, learned the hard way: a test that reads the environment can
+pass by hand and fail inside the deploy unit, because the unit has
+`WICK_CLI_TOKEN` set and your shell did not. Run the gate in the same
+environment the deploy will use.
+
 ## Watching it, and forcing it, from the UI
 
 `/admin/advanced/software-update` shows the same thing the drain is looking at, because an operator deciding whether to wait needs to see what they would be interrupting:
@@ -216,10 +307,12 @@ grep -v ' 200$' probe.log        # anything here is real downtime
 
 Probe a real page, not `/health` — `/health` is boot-gate-exempt, so it answers `200` even while the successor would still show the “Booting…” page to a user. A probe of `/` catches that window; a probe of `/health` hides it.
 
-Watch out for two things that look like handover downtime but are not: a **build running on the same host** (compiling saturates a small box and the app degrades under it — build elsewhere, or accept the dip), and a **database that throttles logins** while two processes briefly hold two connection pools.
+Watch out for three things that look like handover downtime but are not: a **build running on the same host** (compiling saturates a small box and the app degrades under it — build elsewhere, or accept the dip); a **database that throttles logins** while two processes briefly hold two connection pools; and a **probe whose own log sits somewhere wick watches**. That last one is the measurement eating the host: an agent session's file tree is polled for changes, so a probe appending a line every half-second can turn that watcher into the busiest process on the box — 150% CPU on a 2-vCPU host, with the app's slowdown looking for all the world like the upgrade's fault. Write probe and watchdog logs outside the watched tree.
 
 ## Troubleshooting
 
+- **The test gate passed by hand and failed inside the deploy** — the deploy unit's environment is not your shell's, and the most likely difference is the one the deploy needs: a `WICK_CLI_TOKEN` passed in so the script can report back is also visible to every test the gate runs, so a test covering "no token configured" quietly exercises the opposite case. Run the gate inside the same unit the deploy uses, and have tests that read the environment clear it themselves rather than inheriting whatever is around.
+- **A gate that fails on code you did not think you had changed** — it compiles the working tree as it is at that instant, so editing files while it runs tests a state that never existed. Start the gate, then keep your hands off the tree until it reports.
 - **`refusing to install this binary`** — the preflight rejected the candidate; the reason is the `FATAL` or `BLOCK` line above it. FATAL is final. BLOCK is a judgement call — read which one fired before reaching for `--force`, because "different app" and "downgrade" fail very differently.
 - **`sha256 mismatch`** — the file is not the one the checksum was issued for. Nothing was touched.
 - **`stdin is not a terminal and --yes was not given`** — a script or CI step is driving. Pass `--yes` deliberately rather than wiring a terminal in.

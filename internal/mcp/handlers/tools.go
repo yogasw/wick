@@ -669,16 +669,12 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"no session id at all. It expires (30 minutes by default, 2 hours at most), lives in memory " +
 				"so a daemon restart voids it, and carries your identity so everything the script sends is " +
 				"attributed to you.\n\n" +
-				"Actions: issue (default) | list (masked, to see what is outstanding) | revoke " +
-				"(a specific token, or every one of this session's when none is named).",
+				"It survives a wick restart because it is signed rather than remembered, which is what " +
+				"makes it usable for deploying wick itself. It cannot be revoked: let it expire, or " +
+				"rotate the app's session secret to void every outstanding token at once.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"action": map[string]any{
-						"type":        "string",
-						"enum":        []string{"issue", "list", "revoke"},
-						"description": "issue (default), list, or revoke.",
-					},
 					"ttl": map[string]any{
 						"type": "string",
 						"description": "How long the token lives, as a Go duration (30m, 90m, 2h). " +
@@ -686,11 +682,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"note": map[string]any{
 						"type":        "string",
-						"description": "What this token is for ('build 0.1.255'), shown in list output.",
-					},
-					"token": map[string]any{
-						"type":        "string",
-						"description": "action=revoke: the token to drop. Omit to revoke all of this session's.",
+						"description": "What this token is for ('build 0.1.261'). Travels in the token and comes back from whoami.",
 					},
 				},
 			},

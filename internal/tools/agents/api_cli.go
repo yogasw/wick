@@ -79,7 +79,7 @@ func CLIAPIAuthMW(next http.Handler) http.Handler {
 			writeTicketAuthError(w, "this endpoint needs a wick_cli_ token — mint one with the wick_cli_token MCP tool")
 			return
 		}
-		grant, ok := clitoken.Default.Resolve(tok)
+		grant, ok := clitoken.Resolve(tok)
 		if !ok {
 			writeTicketAuthError(w, "token is unknown or expired — mint a fresh one (they last 30 minutes by default)")
 			return

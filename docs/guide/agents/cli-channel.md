@@ -22,11 +22,14 @@ agent mints a token  →  job runs detached with the token in its env
 ## Mint a token (MCP only)
 
 ```
-wick_cli_token                                  # issue, 30m
-wick_cli_token {"ttl": "90m", "note": "build 0.1.255"}
-wick_cli_token {"action": "list"}               # outstanding, masked
-wick_cli_token {"action": "revoke"}             # drop all of this session's
+wick_cli_token                                   # 30m
+wick_cli_token {"ttl": "90m", "note": "build 0.1.261"}
 ```
+
+There is no revoke and no list. A token is a signed statement, not a row
+in a table, and with a two-hour ceiling the honest answer to "cancel it"
+is to let it expire — or, when that is not good enough, to rotate the
+app's session secret, which voids every outstanding token at once.
 
 The response carries the token, the `base_url` to hit, the exact
 `endpoints`, the expiry, and a ready-to-paste command.
@@ -66,7 +69,7 @@ What a token is:
 |---|---|
 | **Bound to one session** | The endpoints take no session id at all, so there is nothing to substitute |
 | **Short-lived** | 30 minutes by default, 2 hours maximum |
-| **In memory** | A daemon restart voids every outstanding token |
+| **Signed, not stored** | An HMAC over the app's session secret, so any process can verify one — including a successor that booted after it was minted. Rotating that secret invalidates every outstanding token |
 | **Attributed** | It carries the minting user; everything sent is theirs |
 | **Narrow** | It reaches `/api/cli/send` and `/api/cli/whoami`. Nothing else — not the ticket API, not the rest of the app |
 
@@ -102,8 +105,9 @@ before it exits, and the turn doing the deploy is that work, so polling for
 the new version from inside it waits forever.
 
 Put build, install and report in one detached script, then end the turn.
-The token survives the swap: the outgoing process hands its live tokens to
-the successor, which adopts them at boot with their original expiry.
+The token survives the swap by construction — it is a signed statement
+(HMAC over the app's session secret), so the successor can verify one it
+never issued.
 
 ## When wick is restarting
 

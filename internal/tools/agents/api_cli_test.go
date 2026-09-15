@@ -77,11 +77,12 @@ func TestCLIAuthMiddlewareRejections(t *testing.T) {
 
 	// A live token gets through, and the handler sees the grant — not a
 	// session id it read off the request.
-	g, err := clitoken.Default.Issue("sess-live", "usr-1", "test", time.Minute)
+	clitoken.SetSecret(func() string { return "test-secret-0123456789" })
+	t.Cleanup(func() { clitoken.SetSecret(func() string { return "" }) })
+	g, err := clitoken.Issue("sess-live", "usr-1", "test", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { clitoken.Default.Revoke(g.Token) })
 
 	var seen string
 	h2 := CLIAPIAuthMW(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {

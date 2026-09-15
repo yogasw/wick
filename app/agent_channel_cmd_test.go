@@ -13,6 +13,13 @@ import (
 // DIFFERENT code: "my token expired" and "wick is down" need different
 // reactions, and one exit 1 for both makes the script guess.
 func TestSendExitCodes(t *testing.T) {
+	// The real command falls back to the environment for its token, and
+	// this process may well have one: an agent that mints a token and then
+	// runs the build in the same unit passes it down as WICK_CLI_TOKEN.
+	// Left alone, the "no token" case would quietly become a real send.
+	t.Setenv(envToken, "")
+	t.Setenv(envBase, "")
+
 	var status int
 	var body string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
