@@ -67,8 +67,17 @@ func WickCLIToken(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 		}
 		base := clitoken.BaseURL()
 		rsp.ToolJSON(w, req.ID, map[string]any{
-			"token":      g.Token,
-			"base_url":   base,
+			"token":    g.Token,
+			"base_url": base,
+			// Spelled out rather than left to be derived. The address is
+			// the one thing a script cannot guess — this app answers on a
+			// public name behind a proxy, and the loopback port that looks
+			// obvious returns 403 from the host gate, which is a confusing
+			// way to find out you had the wrong door.
+			"endpoints": map[string]string{
+				"send":   base + "/api/cli/send",
+				"whoami": base + "/api/cli/whoami",
+			},
 			"session_id": g.SessionID,
 			"expires_at": g.ExpiresAt.Format(time.RFC3339),
 			"expires_in": fmt.Sprintf("%.0fm", time.Until(g.ExpiresAt).Minutes()),
@@ -80,6 +89,8 @@ func WickCLIToken(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 			"usage_curl": fmt.Sprintf(
 				"curl -sS -X POST %s/api/cli/send -H 'Authorization: Bearer %s' -H 'Content-Type: application/json' -d '{\"text\":\"build finished\"}'",
 				base, g.Token),
+			"check_first": fmt.Sprintf(
+				"WICK_CLI_TOKEN=%s WICK_BASE_URL=%s support-tools agent whoami", g.Token, base),
 			"note": "Bound to this session only, expires as shown, and dies with the daemon. " +
 				"Anything sent lands as a normal user turn — the session wakes on it.",
 			// The one failure mode worth naming at mint time, because it is
