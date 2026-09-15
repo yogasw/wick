@@ -420,12 +420,27 @@ func gitLog(c *tool.Ctx) {
 			}
 		}
 	}
-	entries, err := scm.History(c.Context(), dir, scm.LogOptions{Limit: limit, Refs: refs})
+	// skip is the paging cursor: the panel asks for the next page once the
+	// list is scrolled near its end.
+	skip := 0
+	if v := c.Query("skip"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			skip = n
+		}
+	}
+	entries, err := scm.History(c.Context(), dir, scm.LogOptions{Limit: limit, Skip: skip, Refs: refs})
 	if err != nil {
 		gitErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, map[string]any{"commits": entries, "avatars": commitAvatars(c, entries)})
+	c.JSON(http.StatusOK, map[string]any{
+		"commits": entries,
+		"avatars": commitAvatars(c, entries),
+		// A full page means there is probably another one. Cheaper than
+		// counting the whole history to answer a question the scrollbar
+		// asks again on every page.
+		"has_more": len(entries) == limit,
+	})
 }
 
 // commitAvatars maps an author email to that person's wick avatar, for the

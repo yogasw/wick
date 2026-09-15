@@ -2,6 +2,7 @@ package scm
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -170,5 +171,68 @@ func TestHistoryRefsSelector(t *testing.T) {
 	}
 	if len(safe) == 0 {
 		t.Fatal("fallback walk returned nothing")
+	}
+}
+
+// TestHistoryPaging: page two must continue where page one stopped, and the
+// state verdict must survive the jump — the bounded rev-lists are sized by
+// Skip+Limit precisely so a commit deep in the history is still found in them.
+func TestHistoryPaging(t *testing.T) {
+	skipNoGit(t)
+	ctx := context.Background()
+
+	remote := t.TempDir()
+	mustGit(t, remote, "init", "-q", "--bare", "-b", "main")
+	dir := t.TempDir()
+	gitInit(t, dir)
+	for i := 0; i < 5; i++ {
+		writeCommit(t, dir, fmt.Sprintf("f%d.txt", i), fmt.Sprintf("commit %d", i))
+	}
+	mustGit(t, dir, "remote", "add", "origin", remote)
+	mustGit(t, dir, "push", "-q", "-u", "origin", "main")
+	// Two more that exist only here.
+	writeCommit(t, dir, "local1.txt", "local one")
+	writeCommit(t, dir, "local2.txt", "local two")
+
+	page1, err := History(ctx, dir, LogOptions{Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page2, err := History(ctx, dir, LogOptions{Limit: 3, Skip: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page1) != 3 || len(page2) != 3 {
+		t.Fatalf("pages = %d,%d, want 3,3", len(page1), len(page2))
+	}
+	seen := map[string]bool{}
+	for _, e := range append(append([]LogEntry{}, page1...), page2...) {
+		if seen[e.SHA] {
+			t.Fatalf("commit %s appeared on both pages", e.SHA)
+		}
+		seen[e.SHA] = true
+	}
+	// Assert by identity, not by position: these commits are created inside
+	// the same second, so git's date ordering interleaves them and "the two
+	// newest rows" is not a thing the test can rely on.
+	states := map[string]string{}
+	for _, e := range append(append([]LogEntry{}, page1...), page2...) {
+		states[e.Subject] = e.State
+	}
+	for _, sub := range []string{"local one", "local two"} {
+		if st, ok := states[sub]; ok && st != StateLocal {
+			t.Fatalf("%q read as %q, want %q", sub, st, StateLocal)
+		}
+	}
+	for _, sub := range []string{"init", "commit 0", "commit 1"} {
+		if st, ok := states[sub]; ok && st == StateLocal {
+			t.Fatalf("%q is on the remote but read as local", sub)
+		}
+	}
+	// The whole point of the bound: a pushed commit reached only on page two
+	// must still be classified, not fall through to "local" because the
+	// rev-list stopped at Limit.
+	if len(states) != 6 {
+		t.Fatalf("two pages covered %d distinct commits, want 6", len(states))
 	}
 }

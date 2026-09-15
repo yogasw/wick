@@ -265,9 +265,10 @@ export const getCompare = (
 // "all", or explicit ref names — the same three the picker offers.
 // avatars maps author email -> picture URL, and only contains emails that
 // belong to a wick account WITH an avatar. Missing = draw nothing.
-export const getLog = (id: string, repo: string, limit = 50, refs: string[] = []) =>
-  apiGet<{ commits: LogEntry[]; avatars?: Record<string, string> }>(
-    `${s(id)}/log?repo=${q(repo)}&limit=${limit}` + (refs.length ? `&refs=${q(refs.join(","))}` : ""),
+export const getLog = (id: string, repo: string, limit = 50, refs: string[] = [], skip = 0) =>
+  apiGet<{ commits: LogEntry[]; avatars?: Record<string, string>; has_more?: boolean }>(
+    `${s(id)}/log?repo=${q(repo)}&limit=${limit}&skip=${skip}` +
+      (refs.length ? `&refs=${q(refs.join(","))}` : ""),
   );
 
 export const getHistoryRefs = (id: string, repo: string) =>

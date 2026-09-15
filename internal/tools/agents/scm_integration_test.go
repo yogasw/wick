@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -371,5 +372,92 @@ func TestProjectOptionsIncludesPinnedWorkspace(t *testing.T) {
 				t.Fatalf("an accessible project must not be flagged: %v", o)
 			}
 		}
+	}
+}
+
+// TestSCMLogPaging proves the contract the panel's infinite scroll depends on:
+// skip shifts the window, has_more says whether to ask again, and the last
+// page reports has_more=false so the list stops asking.
+func TestSCMLogPaging(t *testing.T) {
+	if _, err := safeexec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	layout := config.NewLayout(t.TempDir())
+	mgr, err := registry.Bootstrap(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := mgr.CreateSession(context.Background(), session.CreateOptions{ID: "S3", Origin: session.OriginUI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevMgr, prevLayout := globalMgr, globalLayout
+	globalMgr, globalLayout = mgr, layout
+	t.Cleanup(func() { globalMgr, globalLayout = prevMgr, prevLayout })
+
+	repo := filepath.Join(layout.SessionDir(sess.ID), "cwd", "myrepo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitInitRepo(t, repo)
+	for i := 0; i < 4; i++ {
+		if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte(strings.Repeat("x", i+1)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// -a only picks up TRACKED files; f.txt is new on the first pass.
+		for _, args := range [][]string{{"add", "."}, {"commit", "-qm", "step"}} {
+			cmd := safeexec.Command("git", args...)
+			cmd.Dir = repo
+			if out, cerr := cmd.CombinedOutput(); cerr != nil {
+				t.Fatalf("git %v: %v\n%s", args, cerr, out)
+			}
+		}
+	}
+
+	r := newTestRouter()
+	registerSCM(r)
+	page := func(limit, skip int) (shas []string, more bool) {
+		req := httptest.NewRequest("GET",
+			"/tools/agents/api/sessions/S3/git/log?repo=myrepo&limit="+strconv.Itoa(limit)+"&skip="+strconv.Itoa(skip), nil)
+		w := httptest.NewRecorder()
+		r.mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("code = %d: %s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			Commits []struct {
+				SHA string `json:"sha"`
+			} `json:"commits"`
+			HasMore bool `json:"has_more"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range resp.Commits {
+			shas = append(shas, c.SHA)
+		}
+		return shas, resp.HasMore
+	}
+
+	first, more := page(2, 0)
+	if len(first) != 2 || !more {
+		t.Fatalf("page 1 = %d commits, has_more=%v; want 2 and true", len(first), more)
+	}
+	second, _ := page(2, 2)
+	if len(second) != 2 {
+		t.Fatalf("page 2 = %d commits, want 2", len(second))
+	}
+	for _, a := range first {
+		for _, b := range second {
+			if a == b {
+				t.Fatalf("commit %s served on both pages", a)
+			}
+		}
+	}
+	// Five commits total (init + 4): the third page holds the last one and
+	// must NOT claim there is more, or the panel keeps asking forever.
+	last, more := page(2, 4)
+	if len(last) != 1 || more {
+		t.Fatalf("last page = %d commits, has_more=%v; want 1 and false", len(last), more)
 	}
 }

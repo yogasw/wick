@@ -41,6 +41,10 @@ const (
 // LogOptions selects how much history to walk and which references.
 type LogOptions struct {
 	Limit int
+	// Skip is how many commits to pass over before collecting — the paging
+	// cursor. The state sets below are bounded by Skip+Limit rather than
+	// Limit, because a commit on page three still has to be found in them.
+	Skip int
 	// Refs is the set of history item references to walk. Empty or
 	// [RefsAuto] means the current branch plus its upstream; [RefsAll]
 	// means every branch; anything else is taken as literal ref names.
@@ -139,7 +143,11 @@ func History(ctx context.Context, dir string, opts LogOptions) ([]LogEntry, erro
 	// %H full sha for set membership, %h short for display, %p parents for
 	// the lanes, %D the refs pointing AT this commit for the badges.
 	format := strings.Join([]string{"%H", "%h", "%s", "%an", "%cr", "%cI", "%p", "%D", "%ae"}, logFieldSep) + logRecSep
-	args := append([]string{"log", "--max-count=" + strconv.Itoa(limit), "--pretty=format:" + format}, refs...)
+	logArgs := []string{"log", "--max-count=" + strconv.Itoa(limit), "--pretty=format:" + format}
+	if opts.Skip > 0 {
+		logArgs = append(logArgs, "--skip="+strconv.Itoa(opts.Skip))
+	}
+	args := append(logArgs, refs...)
 	out, err := run(ctx, dir, args...)
 	if err != nil {
 		return nil, err
@@ -147,11 +155,12 @@ func History(ctx context.Context, dir string, opts LogOptions) ([]LogEntry, erro
 
 	// Commits on no remote branch at all, and commits not on the trunk.
 	// Both bounded by the same limit as the log above.
-	unpushed := revSet(ctx, dir, limit, append(append([]string{}, refs...), "--not", "--remotes")...)
+	bound := limit + opts.Skip
+	unpushed := revSet(ctx, dir, bound, append(append([]string{}, refs...), "--not", "--remotes")...)
 	offTrunk := map[string]bool{}
 	trunk := TrunkRef(ctx, dir)
 	if trunk != "" {
-		offTrunk = revSet(ctx, dir, limit, append(append([]string{}, refs...), "--not", trunk)...)
+		offTrunk = revSet(ctx, dir, bound, append(append([]string{}, refs...), "--not", trunk)...)
 	}
 
 	entries := []LogEntry{}

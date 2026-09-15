@@ -23,6 +23,11 @@
   let refs = $state<HistoryRef[]>([]);
   let trunk = $state("");
   let loading = $state(true);
+  // Paging. PAGE is how many commits one request brings back; hasMore comes
+  // from the server (a full page means there is probably another).
+  const PAGE = 80;
+  let hasMore = $state(false);
+  let loadingMore = $state(false);
   let expanded = $state<string | null>(null);
   let detail = $state<CommitDetail | null>(null);
 
@@ -226,13 +231,14 @@
       const id = get(sessionID);
       const repo = get(activeRepo);
       const [log, refList] = await Promise.all([
-        api.getLog(id, repo, 80, selectedRefs),
+        api.getLog(id, repo, PAGE, selectedRefs, 0),
         // The picker's contents, not the history itself — a failure here
         // must not empty the graph.
         api.getHistoryRefs(id, repo).catch(() => ({ refs: [], trunk: "" })),
       ]);
       commits = log.commits;
       avatars = log.avatars ?? {};
+      hasMore = log.has_more ?? false;
       refs = refList.refs;
       trunk = refList.trunk;
     } catch (e) {
@@ -240,6 +246,36 @@
     } finally {
       loading = false;
     }
+  }
+
+  // Fetch the next page and append. Guarded on loadingMore so a scroll that
+  // keeps firing while the request is in flight asks once, not once per
+  // frame; the ref selection is captured in `commits.length`, so a page that
+  // arrives after the user changed refs simply appends to a list that has
+  // already been replaced — hence the length check before appending.
+  async function loadMore() {
+    if (!hasMore || loadingMore || loading) return;
+    loadingMore = true;
+    const before = commits.length;
+    try {
+      const log = await api.getLog(get(sessionID), get(activeRepo), PAGE, selectedRefs, before);
+      if (commits.length !== before) return; // the list moved under us
+      commits = [...commits, ...log.commits];
+      avatars = { ...avatars, ...(log.avatars ?? {}) };
+      hasMore = log.has_more ?? false;
+    } catch (e) {
+      toastError("History", String(e));
+      hasMore = false;
+    } finally {
+      loadingMore = false;
+    }
+  }
+
+  function onListScroll(e: Event) {
+    const el = e.currentTarget as HTMLElement;
+    // 300px of runway: start fetching before the user hits the end, so the
+    // next page is usually there by the time they get to it.
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 300) void loadMore();
   }
 
   function pickRefs(next: string[]) {
@@ -399,7 +435,7 @@
   <!-- overflow-x-hidden: a row whose badges outgrow the panel must clip, not
        turn the list into a sideways-scrolling strip — scrolling right hides
        the rail and the sha, the two things you navigate by. -->
-  <div class="flex-1 overflow-y-auto overflow-x-hidden">
+  <div class="flex-1 overflow-y-auto overflow-x-hidden" onscroll={onListScroll}>
     {#if loading}
       <p class="p-4 text-xs text-black-700 dark:text-black-600">Loading history…</p>
     {:else if commits.length === 0}
@@ -525,6 +561,18 @@
           {/if}
         </div>
       {/each}
+      {#if loadingMore}
+        <p class="flex items-center justify-center gap-1.5 px-3 py-2 text-[10px] text-black-700 dark:text-black-600">
+          <svg viewBox="0 0 16 16" class="h-2.5 w-2.5 animate-spin" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="8" cy="8" r="6" opacity="0.25"/><path d="M14 8a6 6 0 00-6-6" stroke-linecap="round"/>
+          </svg>
+          Loading more…
+        </p>
+      {:else if !hasMore && commits.length >= PAGE}
+        <p class="px-3 py-2 text-center text-[10px] italic text-black-700 dark:text-black-600">
+          End of history — {commits.length} commits.
+        </p>
+      {/if}
       {#if searching && filterMode}
         <p class="px-3 py-2 text-[10px] italic text-black-700 dark:text-black-600">
           {matches.length === 0
