@@ -32,7 +32,10 @@ When work will outlive the turn — a build, a deploy, a migration, a long
 test run — do NOT schedule a wake-up and hope you guessed the timing. Let
 the work tell you:
 
-1. `wick_cli_token` mints a short-lived token bound to THIS session.
+1. `wick_cli_token` mints a short-lived token bound to THIS session, and
+   verifies the address before handing it over (`verified: true` means that
+   token just reached that URL). A `verified: false` reply means the job
+   would have nowhere to report — fix that before starting it.
 2. Start the job detached with `WICK_CLI_TOKEN` (and `WICK_BASE_URL`) in
    its environment.
 3. The job ends with `support-tools agent send --text "…"` — success or

@@ -28,9 +28,14 @@
 package clitoken
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -206,5 +211,67 @@ func BaseURL() string {
 	if v := strings.TrimRight(strings.TrimSpace(baseURL()), "/"); v != "" {
 		return v
 	}
-	return "http://127.0.0.1:9425"
+	return LoopbackURL()
+}
+
+// LoopbackURL is this app's own port on this machine.
+func LoopbackURL() string {
+	port := strings.TrimSpace(os.Getenv("WICK_PORT"))
+	if port == "" {
+		port = "9425"
+	}
+	return "http://127.0.0.1:" + port
+}
+
+// Candidates are the addresses worth trying, best first: the configured
+// public URL (the name the host allowlist is written in), then this
+// machine's own port.
+func Candidates() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, c := range []string{BaseURL(), LoopbackURL()} {
+		c = strings.TrimRight(strings.TrimSpace(c), "/")
+		if c != "" && !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// PickReachable returns the first candidate that actually answers this
+// token, and the reason none did when that happens.
+//
+// Handing out an address without checking it is how this feature failed
+// its first live test: the obvious loopback port answered 403 from the
+// host gate, which reads like an auth problem and is not, and the script
+// carrying that address had no way to tell the difference. Minting is the
+// right moment to find out — it costs one request, and the alternative is
+// a build that discovers it at the end, with the result it cannot deliver.
+func PickReachable(ctx context.Context, token string, candidates []string) (string, error) {
+	var last error
+	for _, base := range candidates {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/cli/whoami", nil)
+		if err != nil {
+			last = err
+			continue
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := (&http.Client{Timeout: 4 * time.Second}).Do(req)
+		if err != nil {
+			last = fmt.Errorf("%s: %w", base, err)
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return base, nil
+		}
+		last = fmt.Errorf("%s answered %d: %s", base, resp.StatusCode,
+			strings.TrimSpace(string(body)))
+	}
+	if last == nil {
+		last = errors.New("no address to try")
+	}
+	return "", last
 }

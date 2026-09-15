@@ -1,6 +1,8 @@
 package clitoken
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -111,5 +113,66 @@ func TestBaseURL(t *testing.T) {
 	SetBaseURL(nil)
 	if got := BaseURL(); got != "https://wick.example.com" {
 		t.Errorf("after nil = %q, want the previous resolver", got)
+	}
+}
+
+// Handing out an address without checking it is how this failed its first
+// live test: the obvious loopback port answered 403 from the host gate,
+// which reads like an auth problem and is not.
+func TestPickReachableTriesUntilSomethingAnswers(t *testing.T) {
+	var gotAuth string
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		if r.URL.Path != "/api/cli/whoami" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"session_id":"s1"}`))
+	}))
+	defer ok.Close()
+	gate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+	}))
+	defer gate.Close()
+
+	// The gated host is tried first and rejected; the working one wins.
+	got, err := PickReachable(t.Context(), "wick_cli_abc", []string{gate.URL, ok.URL})
+	if err != nil {
+		t.Fatalf("a reachable candidate should win: %v", err)
+	}
+	if got != ok.URL {
+		t.Errorf("picked %q, want %q", got, ok.URL)
+	}
+	if gotAuth != "Bearer wick_cli_abc" {
+		t.Errorf("probe sent %q — it must carry the very token it is verifying", gotAuth)
+	}
+
+	// Nothing answers: the caller is told WHICH address failed and how,
+	// because "it did not work" is not something a person can act on.
+	_, err = PickReachable(t.Context(), "wick_cli_abc", []string{gate.URL})
+	if err == nil {
+		t.Fatal("a gated host is not reachable")
+	}
+	if !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), gate.URL) {
+		t.Errorf("error = %v, want the address and the status", err)
+	}
+
+	if _, err := PickReachable(t.Context(), "t", nil); err == nil {
+		t.Error("no candidates should be an error, not a silent empty string")
+	}
+}
+
+// The order matters: the configured public URL is the name the host
+// allowlist is written in, so it is tried before the machine's own port.
+func TestCandidatesPreferTheConfiguredURL(t *testing.T) {
+	SetBaseURL(func() string { return "https://wick.example.com/" })
+	t.Cleanup(func() { SetBaseURL(func() string { return "" }) })
+
+	c := Candidates()
+	if len(c) < 2 || c[0] != "https://wick.example.com" {
+		t.Fatalf("candidates = %v, want the configured URL first and trimmed", c)
+	}
+	if c[len(c)-1] != LoopbackURL() {
+		t.Errorf("candidates = %v, want the loopback fallback last", c)
 	}
 }

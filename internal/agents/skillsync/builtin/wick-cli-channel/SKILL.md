@@ -32,8 +32,16 @@ wick_cli_token            # action defaults to issue
 wick_cli_token {"ttl": "90m", "note": "build 0.1.255"}
 ```
 
-You get back the token, the `base_url` to hit, when it expires, and a
-ready-to-paste command. It is bound to **this** session — the endpoints
+You get back the token, the `base_url` to hit, the exact `endpoints`, when
+it expires, and a ready-to-paste command.
+
+**The address is verified before you get it.** Minting probes the
+candidates with the token it just made and hands back the one that
+answered `200`; `verified: true` means that exact token reached that exact
+URL a moment ago. If nothing answered you get `verified: false` with the
+error and the list of addresses tried — do not hand that token to a job
+until it is sorted, because the job would only discover it at the end,
+with a result it cannot deliver. It is bound to **this** session — the endpoints
 take no session id, so there is nothing to point elsewhere — it expires
 (30 minutes default, 2 hours max), it dies with the daemon, and everything
 sent with it is attributed to you.

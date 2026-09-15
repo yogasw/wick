@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -65,8 +66,19 @@ func WickCLIToken(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 			rsp.ToolError(w, req.ID, ierr.Error(), tool)
 			return
 		}
+		// Prove the address before handing it over. A token with an
+		// address that does not answer is worse than no token: the script
+		// carries it all the way to the end of the build and only then
+		// discovers it has nowhere to report.
 		base := clitoken.BaseURL()
-		rsp.ToolJSON(w, req.ID, map[string]any{
+		verifyCtx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		reachable, verr := clitoken.PickReachable(verifyCtx, g.Token, clitoken.Candidates())
+		cancel()
+		verified := verr == nil
+		if verified {
+			base = reachable
+		}
+		out := map[string]any{
 			"token":    g.Token,
 			"base_url": base,
 			// Spelled out rather than left to be derived. The address is
@@ -107,7 +119,18 @@ func WickCLIToken(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 				"4": "wick unreachable even after retrying",
 				"5": "wick answered and refused",
 			},
-		})
+			// Said plainly either way: "verified" means this exact token
+			// was just used against this exact address and came back 200.
+			"verified": verified,
+		}
+		if !verified {
+			out["verify_error"] = verr.Error()
+			out["warning"] = "None of the addresses answered this token, so the one above is a guess. " +
+				"Check it yourself with `support-tools agent whoami` before handing it to a job — " +
+				"a script that cannot reach wick has nowhere to report its result."
+			out["tried"] = clitoken.Candidates()
+		}
+		rsp.ToolJSON(w, req.ID, out)
 	case "list":
 		out := []map[string]any{}
 		for _, g := range clitoken.Default.ListFor(sessionID) {

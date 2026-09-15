@@ -28,8 +28,15 @@ wick_cli_token {"action": "list"}               # outstanding, masked
 wick_cli_token {"action": "revoke"}             # drop all of this session's
 ```
 
-The response carries the token, the `base_url` to hit, the expiry, and a
-ready-to-paste command.
+The response carries the token, the `base_url` to hit, the exact
+`endpoints`, the expiry, and a ready-to-paste command.
+
+Minting **verifies the address first**: it probes the candidates with the
+token it just created and returns the one that answered `200`, as
+`verified: true`. When none answer you get `verified: false`, the error,
+and the addresses tried — a token with an address that does not work is
+worse than no token, because the job carries it to the end of the build
+before finding out.
 
 ::: warning There is no CLI command that mints one
 A session id is not a secret — it is in the URL of every web session — so
