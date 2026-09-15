@@ -160,6 +160,10 @@ func sweepOnce(ctx context.Context, d Deps, now time.Time) {
 				was := t.Status
 				t.Status = cfg.TerminalStatus()
 				t.UpdatedAt = now
+				t.TouchedAt = now
+				// Say who closed it. A mirror must never push a status
+				// wick's own timer produced into the system of record.
+				t.AutoResolvedAt = now
 				if serr := SaveKeepingTimestamp(d.Layout, t); serr != nil {
 					l.Warn().Err(serr).Str("ticket", t.ID).Msg("auto-resolve save failed")
 					continue

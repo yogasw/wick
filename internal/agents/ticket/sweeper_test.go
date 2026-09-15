@@ -231,3 +231,56 @@ func TestIdleTimersUseTouchedAtNotTheMirroredDate(t *testing.T) {
 		t.Error("without TouchedAt the sweeper should fall back to UpdatedAt")
 	}
 }
+
+// A mirror has to be able to tell "the team finished this" from "wick gave
+// up waiting". Without the mark, one bad idle timer wrote Done onto twelve
+// Notion pages nobody had finished.
+func TestAutoResolveMarksTheTicketAndAHumanMoveClearsIt(t *testing.T) {
+	l := newLayout(t)
+	now := time.Now().UTC()
+
+	item, cerr := Create(l, CreateOptions{ProjectID: "p1", Title: "imported", Status: StatusOpen})
+	if cerr != nil {
+		t.Fatal(cerr)
+	}
+	item.UpdatedAt = now.Add(-100 * time.Hour)
+	item.TouchedAt = now.Add(-100 * time.Hour)
+	if err := SaveKeepingTimestamp(l, item); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := project.Load(l, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Meta.Ticket = cfg(0, 3600) // auto-resolve after an hour, no followup
+	if err := project.SaveMeta(l, "p1", p.Meta); err != nil {
+		t.Fatal(err)
+	}
+	sweepOnce(context.Background(), Deps{
+		Layout:       l,
+		ListProjects: func() ([]project.Project, error) { return []project.Project{p}, nil },
+	}, now)
+
+	closed, err := Load(l, "p1", item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.Status != "done" {
+		t.Fatalf("status = %q, want the sweeper to have closed it", closed.Status)
+	}
+	if closed.AutoResolvedAt.IsZero() {
+		t.Fatal("a swept ticket must say so — a mirror reads this to refuse pushing it")
+	}
+
+	// Somebody reopens it: the mark describes where the ticket WAS, so it
+	// must not survive the move.
+	closed.Status = "open"
+	if err := SaveAs(l, closed, Actor{Type: ActorUser, ID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	reopened, _ := Load(l, "p1", item.ID)
+	if !reopened.AutoResolvedAt.IsZero() {
+		t.Error("moving the ticket should clear the auto-resolve mark")
+	}
+}

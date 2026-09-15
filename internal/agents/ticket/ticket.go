@@ -149,6 +149,14 @@ type Ticket struct {
 	// LastFollowupAt guards the sweeper against re-sending a followup on
 	// every tick; the next one waits another full window.
 	LastFollowupAt time.Time `json:"last_followup_at,omitempty"`
+	// AutoResolvedAt marks a ticket CLOSED BY THE SWEEPER rather than by a
+	// person. It exists so a mirror can tell the two apart: pushing a
+	// machine-made "done" into the system of record is how one bad idle
+	// timer became 13 Notion pages marked Done that nobody had finished.
+	//
+	// Cleared whenever the status moves again, so a ticket reopened by
+	// hand carries no trace of having been swept.
+	AutoResolvedAt time.Time `json:"auto_resolved_at,omitempty"`
 }
 
 // CreateOptions describes a new ticket.
@@ -353,7 +361,22 @@ func SaveAsAt(layout config.Layout, tk Ticket, actor Actor, at time.Time) error 
 	}
 	tk.UpdatedAt = at.UTC()
 	tk.TouchedAt = time.Now().UTC()
+	tk.AutoResolvedAt = carryAutoResolved(layout, tk)
 	return saveEmitting(layout, tk, actor)
+}
+
+// carryAutoResolved keeps the sweeper's mark only while the status it set
+// is still the status: the moment anybody moves the ticket, the fact that
+// it was once swept stops being true of where it is now.
+func carryAutoResolved(layout config.Layout, tk Ticket) time.Time {
+	before, err := Load(layout, tk.ProjectID, tk.ID)
+	if err != nil || before.AutoResolvedAt.IsZero() {
+		return time.Time{}
+	}
+	if before.Status != tk.Status {
+		return time.Time{}
+	}
+	return before.AutoResolvedAt
 }
 
 // SaveAsKeeping writes tk with its existing UpdatedAt and still emits the
@@ -362,6 +385,7 @@ func SaveAsAt(layout config.Layout, tk Ticket, actor Actor, at time.Time) error 
 // about the work.
 func SaveAsKeeping(layout config.Layout, tk Ticket, actor Actor) error {
 	tk.TouchedAt = time.Now().UTC()
+	tk.AutoResolvedAt = carryAutoResolved(layout, tk)
 	return saveEmitting(layout, tk, actor)
 }
 
