@@ -1183,7 +1183,7 @@ func mapInputSchema(schema map[string]any) []DefField {
 			f.Widget = "number"
 		case typ == "boolean":
 			f.Widget = "checkbox"
-		case typ == "object" || typ == "array":
+		case typ == "object" || typ == "array" || schemaTakesStructured(spec, 0):
 			f.Widget = "textarea"
 			if f.Desc != "" {
 				f.Desc += " "
@@ -1203,6 +1203,63 @@ func mapInputSchema(schema map[string]any) []DefField {
 		out = append(out, f)
 	}
 	return out
+}
+
+// schemaTakesStructured reports whether an MCP property schema can carry
+// an object or array value even though its top-level "type" is not the
+// plain string "object"/"array".
+//
+// A server may express that three other ways: a type UNION
+// ("type": ["object","null"]), a COMBINATOR (anyOf/oneOf/allOf holding
+// object branches), or a bare shape with "properties"/"items" and no
+// "type" at all. mapInputSchema only looked at "type" as a string, so
+// such a field fell through to the default "text" widget — wick then
+// advertised an object parameter as a plain string, and coerceArgs left
+// a caller's JSON stringified, which the server's own validator rejects
+// ("expected object, received string"). n8n's execute_workflow is the
+// live case: its "inputs" is an anyOf of three object shapes.
+//
+// depth bounds the combinator walk so a self-referential schema cannot
+// spin here.
+func schemaTakesStructured(spec map[string]any, depth int) bool {
+	if spec == nil || depth > 3 {
+		return false
+	}
+	switch t := spec["type"].(type) {
+	case string:
+		if t == "object" || t == "array" {
+			return true
+		}
+	case []any:
+		for _, v := range t {
+			if s, ok := v.(string); ok && (s == "object" || s == "array") {
+				return true
+			}
+		}
+	}
+	// A shape declared only by its members, with the type left implicit.
+	if _, ok := spec["properties"].(map[string]any); ok {
+		return true
+	}
+	if _, ok := spec["items"]; ok {
+		return true
+	}
+	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
+		branches, ok := spec[key].([]any)
+		if !ok {
+			continue
+		}
+		for _, b := range branches {
+			sub, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			if schemaTakesStructured(sub, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func hostOf(raw string) string {
