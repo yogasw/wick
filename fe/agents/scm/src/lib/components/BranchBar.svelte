@@ -12,6 +12,7 @@
     rememberGitConnector,
   } from "$lib/git-actions";
   import GitConnectorModal from "$lib/components/GitConnectorModal.svelte";
+  import RepoMenu from "$lib/components/RepoMenu.svelte";
   import { activeRepo } from "$lib/stores/scm";
 
   type Props = { branch: BranchInfo; busy: boolean };
@@ -319,6 +320,13 @@
         <path d="M7.7 7.7L13 13M11 11l1.5-1.5M12.5 12.5L14 11" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </button>
+    <!-- Overflow for THIS group. Pull and Push are the two things people do
+         often enough to deserve a button; fetch and the branch operations are
+         their rarer siblings, so they belong behind one dot menu right next
+         to them rather than in the panel's view toolbar, which is about how
+         the list looks. This bar renders under both tabs, so the actions stay
+         reachable from Changes as well as History. -->
+    <RepoMenu direction="up" />
   </div>
 </div>
 

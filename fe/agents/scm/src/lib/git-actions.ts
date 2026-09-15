@@ -87,6 +87,21 @@ export async function push(connectorID?: string): Promise<string> {
   }
 }
 
+// Fetch is the read-only half of pull: it refreshes what the server has
+// without merging anything into the working tree, so ahead/behind becomes
+// true again without risking a conflict.
+export async function fetchRemote(connectorID?: string): Promise<string> {
+  try {
+    await api.fetchRemote(sid(), repo(), connectorID);
+    toastOk("Fetched");
+    await loadStatus();
+    return "";
+  } catch (e) {
+    toastError("Fetch failed", String(e));
+    return String(e);
+  }
+}
+
 export async function pull(connectorID?: string): Promise<string> {
   try {
     await api.pull(sid(), repo(), connectorID);

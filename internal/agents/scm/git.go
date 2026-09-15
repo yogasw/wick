@@ -583,6 +583,16 @@ func Pull(ctx context.Context, dir string) (string, error) {
 	return run(ctx, dir, "pull", "--ff-only")
 }
 
+// Fetch updates the remote-tracking refs without touching the working tree
+// or the current branch. --prune drops tracking refs whose branch was deleted
+// on the server, which is what keeps a merged-and-deleted branch from sitting
+// in the picker forever.
+func Fetch(ctx context.Context, dir string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, netTimeout)
+	defer cancel()
+	return run(ctx, dir, "fetch", "--prune")
+}
+
 // ── File read/write (within repo) ───────────────────────────────────
 
 // ReadFile reads a file at path (relative to repo root). The path is
@@ -672,8 +682,11 @@ type LogEntry struct {
 	SHA     string `json:"sha"` // short sha
 	Subject string `json:"subject"`
 	Author  string `json:"author"`
-	RelDate string `json:"rel_date"` // e.g. "2 hours ago"
-	ISODate string `json:"iso_date"`
+	// AuthorEmail is what git recorded. The HTTP layer uses it to look up a
+	// wick account and, if one matches, hand the panel a real avatar.
+	AuthorEmail string `json:"author_email,omitempty"`
+	RelDate     string `json:"rel_date"` // e.g. "2 hours ago"
+	ISODate     string `json:"iso_date"`
 	// Parents are the short shas this commit descends from — one for an
 	// ordinary commit, two or more for a merge. The panel draws its lanes
 	// from these; without them a graph can only guess.
@@ -704,13 +717,22 @@ func Log(ctx context.Context, dir string, limit int) ([]LogEntry, error) {
 type CommitFile struct {
 	Path   string `json:"path"`
 	Status string `json:"status"` // A/M/D/R...
+	// Additions/Deletions are the line counts git reports for this file.
+	// -1 means "binary", which git prints as "-" and which is not the same
+	// as a file that changed by zero lines.
+	Additions int `json:"additions"`
+	Deletions int `json:"deletions"`
 }
 
 // CommitDetail is a commit's metadata + changed-file list.
 type CommitDetail struct {
-	SHA     string       `json:"sha"`
-	Subject string       `json:"subject"`
-	Author  string       `json:"author"`
+	SHA     string `json:"sha"`
+	Subject string `json:"subject"`
+	Author  string `json:"author"`
+	// Email and Body carry what a commit says beyond its first line: who to
+	// ask about it, and the reasoning the author wrote under the subject.
+	Email   string       `json:"email,omitempty"`
+	Body    string       `json:"body,omitempty"`
 	ISODate string       `json:"iso_date"`
 	Files   []CommitFile `json:"files"`
 }
@@ -725,7 +747,7 @@ func CommitInfo(ctx context.Context, dir, sha string) (CommitDetail, error) {
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
 	// Header line (field-separated) then NUL-delimited name-status.
-	format := strings.Join([]string{"%h", "%s", "%an", "%cI"}, logFieldSep)
+	format := strings.Join([]string{"%h", "%s", "%an", "%cI", "%ae", "%b"}, logFieldSep)
 	out, err := run(ctx, dir, "show", "--no-color", "--name-status", "-z", "--pretty=format:"+format+"%x00", sha)
 	if err != nil {
 		return CommitDetail{}, err
@@ -737,10 +759,54 @@ func CommitInfo(ctx context.Context, dir, sha string) (CommitDetail, error) {
 	if len(hf) >= 4 {
 		det.SHA, det.Subject, det.Author, det.ISODate = hf[0], hf[1], hf[2], hf[3]
 	}
+	if len(hf) >= 6 {
+		det.Email = hf[4]
+		det.Body = strings.TrimSpace(hf[5])
+	}
 	if len(parts) == 2 {
 		det.Files = parseNameStatusZ(parts[1])
 	}
+	// Line counts come from a second pass: --name-status gives the status
+	// letter and --numstat the numbers, and git will not print both from one
+	// invocation. Failure here is not fatal — a detail panel without counts
+	// is still useful, an error page instead of it is not.
+	if counts, cerr := numstat(ctx, dir, sha); cerr == nil {
+		for i := range det.Files {
+			if n, ok := counts[det.Files[i].Path]; ok {
+				det.Files[i].Additions, det.Files[i].Deletions = n[0], n[1]
+			}
+		}
+	}
 	return det, nil
+}
+
+// numstat maps path -> [additions, deletions] for one commit. A binary file
+// is reported by git as "-\t-" and comes back as -1/-1 so the caller can say
+// "binary" instead of "0 lines changed".
+func numstat(ctx context.Context, dir, sha string) (map[string][2]int, error) {
+	out, err := run(ctx, dir, "show", "--no-color", "--numstat", "--format=", sha)
+	if err != nil {
+		return nil, err
+	}
+	res := map[string][2]int{}
+	for _, ln := range strings.Split(out, "\n") {
+		f := strings.Split(strings.TrimRight(ln, "\r"), "\t")
+		if len(f) < 3 || f[2] == "" {
+			continue
+		}
+		parse := func(v string) int {
+			if v == "-" {
+				return -1
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return 0
+			}
+			return n
+		}
+		res[f[2]] = [2]int{parse(f[0]), parse(f[1])}
+	}
+	return res, nil
 }
 
 // parseNameStatusZ decodes `--name-status -z` output. Each entry is a

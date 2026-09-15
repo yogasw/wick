@@ -138,7 +138,7 @@ func History(ctx context.Context, dir string, opts LogOptions) ([]LogEntry, erro
 
 	// %H full sha for set membership, %h short for display, %p parents for
 	// the lanes, %D the refs pointing AT this commit for the badges.
-	format := strings.Join([]string{"%H", "%h", "%s", "%an", "%cr", "%cI", "%p", "%D"}, logFieldSep) + logRecSep
+	format := strings.Join([]string{"%H", "%h", "%s", "%an", "%cr", "%cI", "%p", "%D", "%ae"}, logFieldSep) + logRecSep
 	args := append([]string{"log", "--max-count=" + strconv.Itoa(limit), "--pretty=format:" + format}, refs...)
 	out, err := run(ctx, dir, args...)
 	if err != nil {
@@ -168,6 +168,9 @@ func History(ctx context.Context, dir string, opts LogOptions) ([]LogEntry, erro
 			SHA: f[1], Subject: f[2], Author: f[3], RelDate: f[4], ISODate: f[5],
 			Parents: strings.Fields(f[6]),
 			Refs:    parseDecoration(f[7]),
+		}
+		if len(f) >= 9 {
+			e.AuthorEmail = f[8]
 		}
 		switch {
 		case unpushed[f[0]]:

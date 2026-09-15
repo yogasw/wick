@@ -101,6 +101,14 @@ func (s *Service) UpsertUser(ctx context.Context, email, name, avatar string) (*
 	return s.repo.UpsertUser(ctx, strings.ToLower(email), name, avatar, s.adminEmails)
 }
 
+// GetUserByEmail resolves an account by its email. The Source panel uses it
+// to put a face on a commit: git records an author email, and when that email
+// belongs to a wick account the panel can show that account's avatar instead
+// of inventing one.
+func (s *Service) GetUserByEmail(ctx context.Context, email string) (*entity.User, error) {
+	return s.repo.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
+}
+
 func (s *Service) GetUserByID(ctx context.Context, id string) (*entity.User, error) {
 	return s.repo.GetUserByID(ctx, id)
 }

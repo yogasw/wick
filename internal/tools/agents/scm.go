@@ -43,6 +43,7 @@ func registerSCM(r tool.Router) {
 	r.POST("/api/sessions/{id}/git/branch/delete", gitBranchDelete)
 	r.POST("/api/sessions/{id}/git/push", gitPush)
 	r.POST("/api/sessions/{id}/git/pull", gitPull)
+	r.POST("/api/sessions/{id}/git/fetch", gitFetch)
 	r.POST("/api/sessions/{id}/git/file", gitWriteFile)
 }
 
@@ -424,7 +425,41 @@ func gitLog(c *tool.Ctx) {
 		gitErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, map[string]any{"commits": entries})
+	c.JSON(http.StatusOK, map[string]any{"commits": entries, "avatars": commitAvatars(c, entries)})
+}
+
+// commitAvatars maps an author email to that person's wick avatar, for the
+// emails in this page of history.
+//
+// Only real avatars: an email that belongs to no account, or to an account
+// with no picture, is simply absent from the map and the panel draws nothing.
+// Inventing a placeholder (initials on a colour) was worse than showing
+// nothing — it looks like a product decision rather than missing data.
+//
+// One lookup per DISTINCT email, not per commit: a history page is usually a
+// handful of people, and the cache turns 80 rows into 3 queries.
+func commitAvatars(c *tool.Ctx, entries []scm.LogEntry) map[string]string {
+	if globalAuth == nil {
+		return map[string]string{}
+	}
+	out := map[string]string{}
+	seen := map[string]struct{}{}
+	for _, e := range entries {
+		email := strings.ToLower(strings.TrimSpace(e.AuthorEmail))
+		if email == "" {
+			continue
+		}
+		if _, done := seen[email]; done {
+			continue
+		}
+		seen[email] = struct{}{}
+		u, err := globalAuth.GetUserByEmail(c.Context(), email)
+		if err != nil || u == nil || strings.TrimSpace(u.Avatar) == "" {
+			continue
+		}
+		out[email] = u.Avatar
+	}
+	return out
 }
 
 // gitHistoryRefs lists the branches the graph can be pointed at, for the
@@ -731,6 +766,11 @@ func gitPush(c *tool.Ctx) { gitNetworkOp(c, "push") }
 
 func gitPull(c *tool.Ctx) { gitNetworkOp(c, "pull") }
 
+// gitFetch refreshes remote-tracking refs. Same credential path as push/pull —
+// it talks to the server — but it changes nothing locally, so it is the safe
+// way to answer "am I behind?" without a merge.
+func gitFetch(c *tool.Ctx) { gitNetworkOp(c, "fetch") }
+
 func gitNetworkOp(c *tool.Ctx, op string) {
 	var req gitNetworkReq
 	if err := c.BindJSON(&req); err != nil {
@@ -756,8 +796,11 @@ func gitNetworkOp(c *tool.Ctx, op string) {
 		return
 	}
 	status := "pushed"
-	if op == "pull" {
+	switch op {
+	case "pull":
 		status = "pulled"
+	case "fetch":
+		status = "fetched"
 	}
 
 	connID, cErr := resolveGitConnector(c, sess, req.ConnectorID)
@@ -776,9 +819,12 @@ func gitNetworkOp(c *tool.Ctx, op string) {
 	}
 
 	var out string
-	if op == "pull" {
+	switch op {
+	case "pull":
 		out, err = scm.Pull(c.Context(), dir)
-	} else {
+	case "fetch":
+		out, err = scm.Fetch(c.Context(), dir)
+	default:
 		out, err = scm.Push(c.Context(), dir)
 	}
 	if err != nil {

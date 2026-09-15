@@ -79,6 +79,8 @@ export type LogEntry = {
   /** Branch/tag names pointing at this commit, e.g. "master", "origin/master". */
   refs?: string[];
   state?: CommitState;
+  /** Author email as git recorded it; the key into the avatars map. */
+  author_email?: string;
 };
 
 // One selectable reference in the graph picker.
@@ -99,12 +101,18 @@ export type HistoryRefsResponse = {
 export type CommitFile = {
   path: string;
   status: string;
+  /** Lines git counted for this file. -1 on both means binary. */
+  additions?: number;
+  deletions?: number;
 };
 
 export type CommitDetail = {
   sha: string;
   subject: string;
   author: string;
+  /** Who to ask about it, and what they wrote under the subject line. */
+  email?: string;
+  body?: string;
   iso_date: string;
   files: CommitFile[];
 };
@@ -193,6 +201,14 @@ export const push = (id: string, repo: string, connectorID?: string) =>
     connector_id: connectorID ?? "",
   });
 
+// fetch updates remote-tracking refs and prunes dead ones. Same credential
+// path as push/pull; changes nothing locally.
+export const fetchRemote = (id: string, repo: string, connectorID?: string) =>
+  apiPost<{ output: string; connector_id?: string }>(`${s(id)}/fetch`, {
+    repo,
+    connector_id: connectorID ?? "",
+  });
+
 export const pull = (id: string, repo: string, connectorID?: string) =>
   apiPost<{ output: string; connector_id?: string }>(`${s(id)}/pull`, {
     repo,
@@ -247,8 +263,10 @@ export const getCompare = (
 
 // refs picks which history to walk: "auto" (current branch + upstream),
 // "all", or explicit ref names — the same three the picker offers.
+// avatars maps author email -> picture URL, and only contains emails that
+// belong to a wick account WITH an avatar. Missing = draw nothing.
 export const getLog = (id: string, repo: string, limit = 50, refs: string[] = []) =>
-  apiGet<{ commits: LogEntry[] }>(
+  apiGet<{ commits: LogEntry[]; avatars?: Record<string, string> }>(
     `${s(id)}/log?repo=${q(repo)}&limit=${limit}` + (refs.length ? `&refs=${q(refs.join(","))}` : ""),
   );
 

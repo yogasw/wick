@@ -270,7 +270,7 @@
           {/if}
         </div>
       {:else}
-        <HistoryView onOpenCommitFile={openCommitFile} />
+        <HistoryView onOpenCommitFile={openCommitFile} onShowChanges={() => (view = "changes")} />
       {/if}
 
       {#if $branch}
