@@ -360,8 +360,12 @@
 </script>
 
 <div class="flex flex-1 flex-col overflow-hidden" bind:this={panelEl}>
-  <div class="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-white-300 dark:border-navy-600 px-3 py-1.5">
-    <span class="text-[10px] font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Graph</span>
+  <!-- One line, always. Wrapping moved the ref button to the left edge and
+       cost a whole row of a panel that is already short; the branch name is
+       the only part that can be long, so that is what gives — it truncates
+       and keeps its full text in the tooltip. -->
+  <div class="flex flex-nowrap items-center gap-x-2 border-b border-white-300 dark:border-navy-600 px-3 py-1.5">
+    <span class="shrink-0 text-[10px] font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Graph</span>
     <!-- The per-row badges collapsed to one line: what is not yet out of this
          clone, what is out but not landed, and where the trunk is. -->
     {#if localCount > 0}
@@ -383,13 +387,13 @@
       </span>
     {/if}
     {#if trunk}
-      <span class="flex shrink-0 items-center gap-1 text-[9px] text-black-600 dark:text-black-700" title="Commits below this are merged">
-        <svg viewBox="0 0 16 16" class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="4" r="1.5"/><circle cx="4" cy="12" r="1.5"/><circle cx="12" cy="5" r="1.5"/><path d="M4 5.5v5M5.5 4H9a2 2 0 012 2v0" stroke-linecap="round"/></svg>
-        {trunk}
+      <span class="flex min-w-0 items-center gap-1 text-[9px] text-black-600 dark:text-black-700" title={`Commits below this are merged — ${trunk}`}>
+        <svg viewBox="0 0 16 16" class="h-2.5 w-2.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="4" r="1.5"/><circle cx="4" cy="12" r="1.5"/><circle cx="12" cy="5" r="1.5"/><path d="M4 5.5v5M5.5 4H9a2 2 0 012 2v0" stroke-linecap="round"/></svg>
+        <span class="truncate">{trunk}</span>
       </span>
     {/if}
-    <span class="flex-1"></span>
-    <div class="flex items-center gap-1">
+    <span class="min-w-[0.5rem] flex-1"></span>
+    <div class="flex shrink-0 items-center gap-1">
       <input
         bind:value={query}
         placeholder="Search commits…"

@@ -18,15 +18,18 @@
   let open = $state(false);
   let filter = $state("");
 
-  // The graph toolbar is flex-wrap, so this button is not always at the right
-  // end of a row: as soon as the unpushed/pushed badges appear it wraps onto a
-  // second line and starts at the LEFT edge. A panel anchored `absolute
-  // right-0` then extends ~200px past the left side of a panel whose
-  // ancestors are overflow-hidden, and the list is clipped down to a sliver.
+  // This button is not always near the right edge of the screen: the panel is
+  // a side rail that can be narrow, and the toolbar used to wrap, which put
+  // the button at the LEFT edge. A panel anchored `absolute right-0` then
+  // extends ~200px past the left side of a container whose ancestors are
+  // overflow-hidden, and the list is clipped down to a sliver — the tail of
+  // the placeholder and a column of shas.
   //
-  // So position it from the button's own rect and clamp it to the viewport,
-  // the way the commit hover card in HistoryView already does. `fixed` also
-  // takes it out of those overflow-hidden ancestors entirely.
+  // The toolbar no longer wraps, but "where is this button" is still not this
+  // component's to assume. So position from the button's own rect and clamp
+  // to the viewport, the way the commit hover card in HistoryView already
+  // does. `fixed` also takes it out of those overflow-hidden ancestors, so no
+  // later layout change can clip it again.
   let btnEl = $state<HTMLElement | null>(null);
   let panelLeft = $state(0);
   let panelAt = $state(0);
@@ -76,7 +79,7 @@
 
 <svelte:window onresize={() => { if (open) place(); }} />
 
-<div class="relative">
+<div class="relative shrink-0">
   <button
     type="button"
     bind:this={btnEl}
