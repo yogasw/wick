@@ -249,7 +249,7 @@ func callerActor(c *tool.Ctx) ticket.Actor {
 	if u == nil {
 		return ticket.Actor{Type: kind}
 	}
-	return ticket.Actor{Type: kind, ID: u.ID, Name: displayName(u)}
+	return ticket.Actor{Type: kind, ID: u.ID, Name: displayName(u), Email: u.Email}
 }
 
 // displayName picks the friendliest label available for a user.

@@ -228,8 +228,18 @@ func buildBoardContext(
 		}
 	}
 	if out.AssigneeID != "" {
-		if names := userNames(c, map[string]bool{out.AssigneeID: true}); names[out.AssigneeID] != "" {
-			out.AssigneeName = names[out.AssigneeID]
+		// Name AND email: a receiver matching people by hand-kept ids needs
+		// a table nobody remembers to update, and an email is the
+		// identifier both systems usually already have.
+		if globalAuth != nil {
+			if u, err := globalAuth.GetUserByID(c.Context(), out.AssigneeID); err == nil && u != nil {
+				out.AssigneeName, out.AssigneeEmail = u.Name, u.Email
+			}
+		}
+		if out.AssigneeName == "" {
+			if names := userNames(c, map[string]bool{out.AssigneeID: true}); names[out.AssigneeID] != "" {
+				out.AssigneeName = names[out.AssigneeID]
+			}
 		}
 	}
 

@@ -76,10 +76,17 @@ const (
 )
 
 // Actor identifies who caused an event.
+//
+// Email is included because a receiver usually has to recognise this person
+// in ITS OWN system, and a wick user id means nothing there. A name is
+// ambiguous; an email is the one identifier two systems tend to share, so
+// it turns "who is usr_a91f" from a hand-maintained mapping table into a
+// lookup. Empty for API tokens and for a user record that has none.
 type Actor struct {
-	Type string `json:"type"`
-	ID   string `json:"id,omitempty"`
-	Name string `json:"name,omitempty"`
+	Type  string `json:"type"`
+	ID    string `json:"id,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email,omitempty"`
 }
 
 // Change is one field's before/after. Values are strings because every
@@ -130,6 +137,9 @@ type BoardContext struct {
 	// AssigneeID is the resolved user id; "" means every assignee.
 	AssigneeID   string `json:"assignee_id,omitempty"`
 	AssigneeName string `json:"assignee_name,omitempty"`
+	// AssigneeEmail is that person's email, for the same reason Actor has
+	// one: the receiver has to find them in its own directory.
+	AssigneeEmail string `json:"assignee_email,omitempty"`
 	// Statuses are the columns the list was filtered to. Empty = all of
 	// them, matching the board's own "no chips selected" state.
 	Statuses []string `json:"statuses,omitempty"`

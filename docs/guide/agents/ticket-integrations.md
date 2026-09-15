@@ -696,11 +696,12 @@ carries no ticket; it carries the list:
   "action": "btn_9f3a1c2d4e5b6a7f",
   "delivered_at": "2026-09-15T04:11:09.412Z",
   "project_id": "proj_7f21c9",
-  "actor": { "type": "user", "id": "usr_a91f", "name": "Dana Reyes" },
+  "actor": { "type": "user", "id": "usr_a91f", "name": "Dana Reyes", "email": "dana@abc.com" },
   "board": {
     "assignee": "me",
     "assignee_id": "usr_a91f",
     "assignee_name": "Dana Reyes",
+    "assignee_email": "dana@abc.com",
     "statuses": ["open", "in_progress"],
     "match_count": 2,
     "tickets": [
@@ -724,6 +725,12 @@ Three things about `board` are worth reading closely:
 - **`assignee` is what was picked; `assignee_id` is who that is.** `"me"` is
   resolved against the clicker before the event leaves wick, so a receiver
   never has to guess. An empty `assignee_id` means *every* assignee.
+- **`assignee_email` (and `actor.email`) is how you find that person in YOUR
+  system.** A wick user id means nothing outside wick and a name is
+  ambiguous; an email is the identifier both systems usually already have,
+  so matching on it beats a hand-maintained id table. Absent when the user
+  record has no email, and on every `ticket.action` where the actor is an
+  API token.
 - **`match_count` is the honest total.** `tickets` is capped at 500 rows
   (newest first), and `truncated` says when the cap bit.
 - **`fields` is the ticket's full field map**, not the card's subset — a
