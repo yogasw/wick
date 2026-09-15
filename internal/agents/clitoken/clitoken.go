@@ -216,20 +216,36 @@ func BaseURL() string {
 
 // LoopbackURL is this app's own port on this machine.
 func LoopbackURL() string {
-	port := strings.TrimSpace(os.Getenv("WICK_PORT"))
-	if port == "" {
-		port = "9425"
-	}
-	return "http://127.0.0.1:" + port
+	return "http://127.0.0.1:" + port()
 }
 
-// Candidates are the addresses worth trying, best first: the configured
-// public URL (the name the host allowlist is written in), then this
-// machine's own port.
+// port is the app's HTTP port.
+func port() string {
+	if p := strings.TrimSpace(os.Getenv("WICK_PORT")); p != "" {
+		return p
+	}
+	return "9425"
+}
+
+// Candidates are the addresses worth trying, best first.
+//
+// The machine's own port comes FIRST. A build script runs here, so a
+// request that leaves for the public name only to be routed back through a
+// proxy is a longer path that can fail in more ways — DNS, TLS, the proxy
+// itself — for a conversation happening on this host. Both loopback
+// spellings are tried because a host allowlist may name one and not the
+// other, which is exactly what happened here: localhost was allowed and
+// 127.0.0.1 was not.
+//
+// The configured public URL is the fallback, and it is what makes the
+// channel work from a machine that is not this one.
+//
+// Nothing here bypasses the allowlist: an address only wins if it actually
+// answers, and loopback answers only when the operator has allowed it.
 func Candidates() []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, c := range []string{BaseURL(), LoopbackURL()} {
+	for _, c := range []string{LoopbackURL(), localhostURL(), BaseURL()} {
 		c = strings.TrimRight(strings.TrimSpace(c), "/")
 		if c != "" && !seen[c] {
 			seen[c] = true
@@ -237,6 +253,11 @@ func Candidates() []string {
 		}
 	}
 	return out
+}
+
+// localhostURL is the name-based spelling of the same port.
+func localhostURL() string {
+	return "http://localhost:" + port()
 }
 
 // PickReachable returns the first candidate that actually answers this

@@ -31,6 +31,14 @@ wick_cli_token {"action": "revoke"}             # drop all of this session's
 The response carries the token, the `base_url` to hit, the exact
 `endpoints`, the expiry, and a ready-to-paste command.
 
+The address preferred is **this machine's own port** (`127.0.0.1`, then
+`localhost`), with the configured public URL as the fallback: a build
+script runs on this host, and a request that leaves for the public name
+only to be routed back through a proxy has more ways to fail. Loopback is
+used only when the host allowlist names it —
+`support-tools config allowed-origins add http://127.0.0.1:<port>` — so
+nothing here steps around that rule.
+
 Minting **verifies the address first**: it probes the candidates with the
 token it just created and returns the one that answered `200`, as
 `verified: true`. When none answer you get `verified: false`, the error,
