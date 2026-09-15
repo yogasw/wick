@@ -6,7 +6,10 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Custom buttons for the ticket LIST**: A custom button now has a placement — *On a ticket's page* (the default, and what every existing button stays) or *In the ticket list*, where it draws in the board toolbar beside the Assignee filter. Clicking a list button calls `POST /api/projects/{id}/board-actions/{buttonID}` and delivers a new `ticket.board_action` event carrying the list rather than a ticket: the toolbar's assignee as picked AND resolved (`"me"` is resolved against the clicker), the selected columns, the honest match count, and the matching cards with their full field maps (capped at 500 rows, with `truncated` when the cap bites). Use it for work that is about a set — "pull everything assigned to me from the tracker" — which no single ticket can express.
+*   **A button click reports what the receiver said**: Both button events now surface the receiver's own short answer (`message`) alongside the HTTP status, so a job that outlives one 10-second delivery attempt can answer "started, 42 tickets" and have the clicker actually see it.
 
 ---
 
