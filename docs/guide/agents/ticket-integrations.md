@@ -696,19 +696,64 @@ Three things about `board` are worth reading closely:
   receiver's join key (a Notion page id, an external ticket number) is exactly
   the kind of field nobody marks *show on card*.
 
+`statuses` is worth acting on rather than logging: it is the board as the
+clicker has it set up, and "every column except Done" is how most boards are
+read. A receiver that imports everything regardless will pull back the exact
+column the person switched off.
+
 The click response reports the delivery, the number of tickets that matched,
-and — when the receiver answered with one — its own message:
+and the receiver's own reply:
 
 ```json
 { "ok": true, "status": 200, "error": "", "attempts": 1,
-  "message": "syncing Dana Reyes from Notion (2 in view)", "tickets": 2 }
+  "message": "syncing Dana Reyes from Notion (2 in view)", "tickets": 2,
+  "result": { "…": "the receiver's JSON body, verbatim" } }
 ```
 
-That `message` is shown to the clicker verbatim. It is how a receiver whose
-work outlives the request reports back: a delivery gets **10 seconds per
-attempt**, so anything longer should answer immediately ("started, 42
-tickets") and do the work in the background, rather than let wick time out
-and retry — which would start the job three times.
+A delivery gets **10 seconds per attempt**, so a job that takes longer must
+answer immediately and keep working — otherwise wick times out and retries,
+which starts the job three times. What makes that bearable for the person who
+clicked is `result`: the board draws a panel from it instead of a toast.
+
+### The result panel
+
+Everything below is optional. A receiver that answers `{}` still works; each
+key it does send lights up one more part of the panel.
+
+| Key | Type | What the panel does with it |
+|---|---|---|
+| `status` | string | `running`/`queued`/`busy`/`started` → amber "Running" + follows it; `error`/`failed`/`refused` → red; `ignored`/`skipped` → "Nothing to do"; anything else → green "Done" |
+| `message` | string | The sentence under the label |
+| `progress` | `{done, total}` | Progress bar + `done/total` |
+| `counts` | object of number/string | One chip per entry, in the order given |
+| `poll_url` | string | Where to watch the run — see below |
+| `html` | string | Rendered in the same sandboxed frame as an HTML artifact: scripts run, the network does not, and wick's theme is available as `--wick-bg` / `--wick-fg` / `--wick-surface` / `--wick-muted` / `--wick-accent` |
+
+**Following a run.** While `status` says running and a `poll_url` is present,
+the board polls it every 3 seconds through wick (never from the browser) and
+re-draws the panel from each answer:
+
+```
+POST /api/projects/{projectID}/board-actions/{buttonID}/poll
+{ "url": "https://abc.com/hooks/sync/status" }
+```
+
+The URL must be on the **same origin as the button** — same scheme, same host
+and port — or the request is refused. A receiver that could send wick anywhere
+would turn a ticket button into an SSRF primitive with the server's network
+position; the private-address guard applies on top of that.
+
+Polling stops as soon as the status is no longer a running one (or after 200
+checks, ~10 minutes). The board **re-reads its tickets every time the counters
+move**, so cards travel to their new column while the job walks the list
+rather than after somebody presses reload.
+
+::: tip A second click is not a second job
+A receiver that is already working should answer the next click with its
+CURRENT state — `status: "running"` plus the counters — rather than starting a
+rival pass. That is the whole reason `progress` exists: an impatient click
+becomes a progress report.
+:::
 
 ::: tip One receiver, both buttons
 The `action` field carries the button id on both events, and `event` says

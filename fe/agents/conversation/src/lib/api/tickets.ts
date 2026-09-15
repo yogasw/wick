@@ -98,6 +98,25 @@ export const updateTicket = (
   },
 ) => apiPatchE<TicketCard>(`${base}/api/tickets/${encodeURIComponent(ticketId)}`, patch);
 
+/** The receiver's own JSON reply, passed through by the server. Every field
+    is optional — a receiver that answers `{}` is still a working receiver —
+    but these are the ones the result panel knows how to draw. */
+export type ActionPayload = {
+  /** "running" | "done" | "error" | "ignored" | "busy" | anything else. */
+  status?: string;
+  message?: string;
+  /** Live counters for a job that is still going. */
+  progress?: { done?: number; total?: number };
+  /** Free-form tallies, rendered as chips in the order given. */
+  counts?: Record<string, number | string>;
+  /** Where to watch the run. Must be on the button's own origin — the
+      server refuses anything else. */
+  poll_url?: string;
+  /** The receiver's own HTML, rendered in the same sandboxed frame as an
+      HTML artifact (scripts run, network does not). */
+  html?: string;
+};
+
 /** What a custom button's click reports back. `message` is the receiver's
     own answer, when it gave a short one — for a button whose work outlives
     the request ("sync started, 42 tickets"), that sentence IS the result. */
@@ -109,6 +128,8 @@ export type ActionResult = {
   message?: string;
   /** Board actions only: how many tickets the filter matched. */
   tickets?: number;
+  /** The receiver's parsed JSON body, when it sent an object. */
+  result?: ActionPayload;
 };
 
 /** One custom-button click: the server POSTs the ticket to the button's URL
@@ -122,6 +143,15 @@ export const runTicketAction = (base: string, ticketId: string, buttonId: string
     CURRENT filter — who it is narrowed to, which columns — plus the tickets
     that match, so the receiver acts on the same set the clicker is looking
     at. "me" is resolved server-side against the clicker. */
+/** Follow a run a board action started. The URL comes from the receiver's
+    own `poll_url`; the server only fetches it when it is on the same origin
+    as the button, so a receiver cannot redirect this at the intranet. */
+export const pollBoardAction = (base: string, projectId: string, buttonId: string, url: string) =>
+  apiPostE<ActionResult>(
+    `${base}/api/projects/${encodeURIComponent(projectId)}/board-actions/${encodeURIComponent(buttonId)}/poll`,
+    { url },
+  );
+
 export const runBoardAction = (
   base: string,
   projectId: string,

@@ -162,6 +162,14 @@
            and both are HTTP 200. */
         if (r.ok) toastOk(`${b.label}: ${r.message || `delivered (HTTP ${r.status})`}`);
         else toastError(`${b.label} failed: ${r.error || r.message || "HTTP " + r.status}`);
+        /* A button that syncs this ticket has just rewritten it, so the page
+           in front of the clicker is a version behind. Re-read instead of
+           leaving them to press reload and wonder whether it worked.
+           Twice: some receivers answer before their own write lands. */
+        if (r.ok) {
+          load();
+          setTimeout(load, 2500);
+        }
       })
       .catch((e: unknown) =>
         toastError(e instanceof Error ? e.message : `${b.label} failed`),

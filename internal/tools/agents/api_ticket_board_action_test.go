@@ -56,3 +56,47 @@ func TestSelectBoardTicketsCapsRowsButNotTheCount(t *testing.T) {
 		t.Fatalf("matched = %d truncated = %v, want %d and true", n, truncated, len(tickets))
 	}
 }
+
+// A poll URL is chosen by the RECEIVER, not by an operator, so it is not
+// allowed to point anywhere the button itself does not already reach —
+// otherwise a ticket button becomes an SSRF primitive with the server's
+// network position.
+func TestSameOriginGuardsThePollURL(t *testing.T) {
+	const btn = "https://abc.com/hooks/sync"
+
+	for _, ok := range []string{
+		"https://abc.com/hooks/sync/status?run=7",
+		"https://abc.com/anything/else",
+	} {
+		if err := sameOrigin(btn, ok); err != nil {
+			t.Errorf("same origin %q refused: %v", ok, err)
+		}
+	}
+
+	for _, bad := range []string{
+		"http://abc.com/hooks/sync",       // scheme downgrade
+		"https://evil.com/hooks/sync",     // another host
+		"https://abc.com.evil.com/status", // suffix trick
+		"https://169.254.169.254/latest",  // the classic target
+		"/hooks/sync/status",              // not absolute
+		"",
+	} {
+		if err := sameOrigin(btn, bad); err == nil {
+			t.Errorf("poll url %q should have been refused", bad)
+		}
+	}
+}
+
+// The receiver's JSON is passed through to the client verbatim; anything
+// that is not a JSON object is dropped rather than half-rendered.
+func TestReplyObjectOnlyAcceptsObjects(t *testing.T) {
+	obj := replyObject(`{"status":"running","progress":{"done":3,"total":9}}`)
+	if obj == nil || obj["status"] != "running" {
+		t.Fatalf("object reply = %+v, want it passed through", obj)
+	}
+	for _, raw := range []string{"", "   ", "not json", `["a"]`, `"just a string"`} {
+		if got := replyObject(raw); got != nil {
+			t.Errorf("replyObject(%q) = %+v, want nil", raw, got)
+		}
+	}
+}

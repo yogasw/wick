@@ -2,7 +2,9 @@ package agents
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -96,14 +98,113 @@ func apiBoardAction(c *tool.Ctx) {
 		project.TicketWebhook{ID: "btn:" + btn.ID, URL: btn.URL, Enabled: true},
 		ev,
 	)
-	c.JSON(http.StatusOK, map[string]any{
+	out := map[string]any{
 		"ok":       rec.OK,
 		"status":   rec.Status,
 		"error":    rec.Err,
 		"attempts": rec.Attempts,
 		"message":  rec.Message,
 		"tickets":  board.MatchCount,
-	})
+	}
+	// The receiver's own JSON, passed through. A bulk job cannot finish
+	// inside one delivery attempt, so what it CAN do is hand back where it
+	// is — counters, a run id, a URL to watch, its own HTML — and the
+	// client renders that instead of a single line of text.
+	if obj := replyObject(rec.Reply); obj != nil {
+		out["result"] = obj
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// replyObject decodes a receiver's body as a JSON object, or nil.
+func replyObject(raw string) map[string]any {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		return nil
+	}
+	return obj
+}
+
+// apiBoardActionPoll handles
+// POST /api/projects/{id}/board-actions/{buttonID}/poll — fetch the URL a
+// board action handed back, so the panel can follow a run that is still
+// going.
+//
+// The URL is not trusted because a receiver named it. It must live on the
+// SAME origin as the button's own URL: a receiver that could redirect this
+// to anywhere would turn a ticket button into an SSRF primitive with the
+// server's network position. Scheme, host and port must all match, and the
+// dispatcher's private-address guard still applies on top.
+func apiBoardActionPoll(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	projectID := c.PathValue("id")
+	if !callerProjectAccess(c).allowProject(projectID) {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "you don't have access to this project"})
+		return
+	}
+	if !requireTicketAPI(c, projectID) {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "the REST API is disabled for this project"})
+		return
+	}
+	p, ok := globalMgr.Registry().Project(projectID)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
+		return
+	}
+	btn, found := p.Meta.Ticket.ButtonByID(c.PathValue("buttonID"))
+	if !found || !btn.On(project.ButtonOnBoard) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "button not found"})
+		return
+	}
+	if ticketDispatcher == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "webhook dispatcher not wired"})
+		return
+	}
+
+	var req struct {
+		URL string `json:"url"`
+	}
+	if c.R.Body != nil {
+		_ = json.NewDecoder(c.R.Body).Decode(&req)
+	}
+	if err := sameOrigin(btn.URL, req.URL); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	rec := ticketDispatcher.Get(strings.TrimSpace(req.URL))
+	out := map[string]any{
+		"ok":      rec.OK,
+		"status":  rec.Status,
+		"error":   rec.Err,
+		"message": rec.Message,
+	}
+	if obj := replyObject(rec.Reply); obj != nil {
+		out["result"] = obj
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// sameOrigin reports whether raw may be polled on behalf of a button whose
+// endpoint is buttonURL.
+func sameOrigin(buttonURL, raw string) error {
+	want, err := url.Parse(strings.TrimSpace(buttonURL))
+	if err != nil {
+		return fmt.Errorf("button url is not parseable")
+	}
+	got, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || got.Host == "" {
+		return fmt.Errorf("poll url must be a full http(s) URL")
+	}
+	if got.Scheme != want.Scheme || !strings.EqualFold(got.Host, want.Host) {
+		return fmt.Errorf("poll url must be on the same origin as the button (%s://%s)", want.Scheme, want.Host)
+	}
+	return nil
 }
 
 // buildBoardContext resolves the toolbar's filter and collects the tickets

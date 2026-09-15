@@ -365,6 +365,9 @@ func Register(r tool.Router) {
 	// It POSTs the list's filter (and the tickets it selects) rather than a
 	// single ticket, so it hangs off the project, not a ticket id.
 	r.POST("/api/projects/{id}/board-actions/{buttonID}", apiBoardAction)
+	// …and a way to follow the run it started, for a receiver that answered
+	// immediately and kept working. Only its OWN origin may be polled.
+	r.POST("/api/projects/{id}/board-actions/{buttonID}/poll", apiBoardActionPoll)
 
 	// JSON API — ticket integrations. The event catalogue is served from the
 	// code so the settings UI and the docs cannot drift from what actually
