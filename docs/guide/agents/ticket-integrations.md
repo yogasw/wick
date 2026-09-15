@@ -6,8 +6,10 @@ Wire a project's ticket board to another system, in both directions:
   ticket is created, moved, assigned, or deleted.
 - **Inbound — REST API.** Your system creates and updates tickets with a
   Personal Access Token.
-- **Custom buttons.** A button on every ticket's page that POSTs the ticket to
-  your URL on click — see [Custom buttons](#custom-buttons).
+- **Custom buttons.** A button that POSTs to your URL on click — on a ticket's
+  page (it sends that ticket) or in the ticket list's toolbar (it sends the
+  list's filter and the tickets it matches) — see
+  [Custom buttons](#custom-buttons).
 
 All three are configured per project, under **Project settings → Ticket
 system → Integrations**. All are off (empty) until you add one.
@@ -20,8 +22,9 @@ system → Integrations**. All are off (empty) until you add one.
 4. For webhooks: **Add webhook**, fill in the URL, set a signing secret, pick
    the events, then **Send test** to prove the endpoint before a real ticket
    depends on it.
-5. For a custom button: **Add button**, fill in a label and a URL, and save —
-   see [Custom buttons](#custom-buttons).
+5. For a custom button: **Add button**, fill in a label and a URL, choose
+   where it shows (a ticket's page, or the ticket list), and save — see
+   [Custom buttons](#custom-buttons).
 
 You need a Personal Access Token for the REST API. Create one at
 `/profile/tokens` — see [Access Tokens](/guide/access-tokens). A token acts as
@@ -467,10 +470,11 @@ to `ticket.updated` to mirror every edit without enumerating each event as new
 ones are added. Subscribing to both means two deliveries for one change.
 :::
 
-::: info `ticket.action` is not in this list
-Clicking a [custom button](#custom-buttons) fires a `ticket.action` event, but
-it is delivered **only** to that button's own URL — it is not part of the
-catalogue above and cannot be subscribed to from a regular webhook row. See
+::: info `ticket.action` and `ticket.board_action` are not in this list
+Clicking a [custom button](#custom-buttons) fires `ticket.action` (a ticket's
+page) or `ticket.board_action` (the ticket list), but either one is delivered
+**only** to that button's own URL — neither is part of the catalogue above and
+neither can be subscribed to from a regular webhook row. See
 [Custom buttons](#custom-buttons).
 :::
 
@@ -567,14 +571,28 @@ catalogue above and cannot be subscribed to from a regular webhook row. See
 
 ## Custom buttons
 
-A custom button is a single label + URL pair that appears on **every ticket's
-page**. Clicking it POSTs the ticket to that URL and shows the delivery
-outcome to whoever clicked — use it for things a human decides to trigger,
-like "Sync to abc.com" or "Deploy", rather than something that should fire on
-every change (that is what webhooks are for).
+A custom button is a label + URL pair that POSTs to that URL on click and
+shows the outcome to whoever clicked — use it for things a human decides to
+trigger, like "Sync to abc.com" or "Deploy", rather than something that
+should fire on every change (that is what webhooks are for).
 
 Add one under **Project settings → Ticket system → Integrations → Custom
-buttons**: fill in a label and a full `http(s)://` URL, then save.
+buttons**: fill in a label, a full `http(s)://` URL, and where it shows.
+
+| Placement | Where it draws | What it sends | Event |
+|---|---|---|---|
+| **On a ticket's page** (default) | Every ticket's own page | That one ticket | `ticket.action` |
+| **In the ticket list** | The board toolbar, beside the Assignee filter | The list's filter + the tickets it matches | `ticket.board_action` |
+
+Pick by what the click is ABOUT. "Sync this ticket to Notion" belongs on the
+ticket; "pull everything assigned to me" belongs in the list, because the
+answer depends on who the toolbar is filtered to and no single ticket can
+carry that.
+
+A button saved before placements existed is a ticket-page button — the field
+is absent and absent means the ticket page.
+
+### On a ticket's page
 
 Clicking the button calls:
 
@@ -618,6 +636,85 @@ The click response mirrors the delivery outcome, not a generic "queued":
 `ticket.action` is **not** subscribable from a regular webhook row — it only
 ever reaches the button's own URL, because the button already names its
 receiver.
+
+### In the ticket list
+
+A button placed in the list sits in the board's toolbar. Clicking it calls:
+
+```
+POST /api/projects/{projectID}/board-actions/{buttonID}
+```
+
+with the toolbar's current filter as the body — the same vocabulary the board
+itself uses:
+
+```json
+{ "assignee": "me", "statuses": ["open", "in_progress"] }
+```
+
+and delivers a `ticket.board_action` event to the button's URL. The envelope
+carries no ticket; it carries the list:
+
+```json
+{
+  "id": "evt_7XB2QK9L",
+  "event": "ticket.board_action",
+  "action": "btn_9f3a1c2d4e5b6a7f",
+  "delivered_at": "2026-09-15T04:11:09.412Z",
+  "project_id": "proj_7f21c9",
+  "actor": { "type": "user", "id": "usr_a91f", "name": "Dana Reyes" },
+  "board": {
+    "assignee": "me",
+    "assignee_id": "usr_a91f",
+    "assignee_name": "Dana Reyes",
+    "statuses": ["open", "in_progress"],
+    "match_count": 2,
+    "tickets": [
+      {
+        "id": "T-4F2A",
+        "title": "Checkout returns 502 on retry",
+        "status": "in_progress",
+        "assignee": "usr_a91f",
+        "fields": { "type": "bug", "notion_page_id": "a1b2…" },
+        "updated_at": "2026-09-15T03:58:02Z"
+      },
+      { "id": "T-51C7", "title": "…", "status": "open", "assignee": "usr_a91f", "updated_at": "2026-09-14T11:20:41Z" }
+    ],
+    "truncated": false
+  }
+}
+```
+
+Three things about `board` are worth reading closely:
+
+- **`assignee` is what was picked; `assignee_id` is who that is.** `"me"` is
+  resolved against the clicker before the event leaves wick, so a receiver
+  never has to guess. An empty `assignee_id` means *every* assignee.
+- **`match_count` is the honest total.** `tickets` is capped at 500 rows
+  (newest first), and `truncated` says when the cap bit.
+- **`fields` is the ticket's full field map**, not the card's subset — a
+  receiver's join key (a Notion page id, an external ticket number) is exactly
+  the kind of field nobody marks *show on card*.
+
+The click response reports the delivery, the number of tickets that matched,
+and — when the receiver answered with one — its own message:
+
+```json
+{ "ok": true, "status": 200, "error": "", "attempts": 1,
+  "message": "syncing Dana Reyes from Notion (2 in view)", "tickets": 2 }
+```
+
+That `message` is shown to the clicker verbatim. It is how a receiver whose
+work outlives the request reports back: a delivery gets **10 seconds per
+attempt**, so anything longer should answer immediately ("started, 42
+tickets") and do the work in the background, rather than let wick time out
+and retry — which would start the job three times.
+
+::: tip One receiver, both buttons
+The `action` field carries the button id on both events, and `event` says
+which kind it was. A receiver serving a ticket button and a list button on the
+same endpoint should branch on `event` — the board one has no `ticket`.
+:::
 
 ## Verifying the signature
 

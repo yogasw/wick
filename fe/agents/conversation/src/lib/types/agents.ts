@@ -540,12 +540,16 @@ export type TicketField = {
   show_on_card?: boolean;
 };
 
-/** One custom action button on every ticket's page. Clicking it POSTs the
-    ticket to `url` as a ticket.action event (e.g. "Sync to Notion"). */
+/** One custom action button. On a ticket's page a click POSTs that ticket
+    to `url` (a ticket.action event, e.g. "Sync to Notion"); in the ticket
+    list's toolbar it POSTs the list's filter and the tickets it selects (a
+    ticket.board_action event, e.g. "Pull my tickets from Notion"). */
 export type TicketButton = {
   id?: string; // minted server-side on first save
   label: string;
   url: string;
+  /** Where it is drawn. Absent = "ticket". */
+  placement?: "ticket" | "board";
 };
 
 /** One rule deciding when a new session gets a ticket on its own. Rules

@@ -98,11 +98,39 @@ export const updateTicket = (
   },
 ) => apiPatchE<TicketCard>(`${base}/api/tickets/${encodeURIComponent(ticketId)}`, patch);
 
+/** What a custom button's click reports back. `message` is the receiver's
+    own answer, when it gave a short one — for a button whose work outlives
+    the request ("sync started, 42 tickets"), that sentence IS the result. */
+export type ActionResult = {
+  ok: boolean;
+  status?: number;
+  error?: string;
+  attempts?: number;
+  message?: string;
+  /** Board actions only: how many tickets the filter matched. */
+  tickets?: number;
+};
+
 /** One custom-button click: the server POSTs the ticket to the button's URL
     and reports how that went — the user is waiting to see their "Sync" land. */
 export const runTicketAction = (base: string, ticketId: string, buttonId: string) =>
-  apiPostE<{ ok: boolean; status?: number; error?: string; attempts?: number }>(
+  apiPostE<ActionResult>(
     `${base}/api/tickets/${encodeURIComponent(ticketId)}/actions/${encodeURIComponent(buttonId)}`,
+  );
+
+/** The list-toolbar twin of runTicketAction: the server POSTs the board's
+    CURRENT filter — who it is narrowed to, which columns — plus the tickets
+    that match, so the receiver acts on the same set the clicker is looking
+    at. "me" is resolved server-side against the clicker. */
+export const runBoardAction = (
+  base: string,
+  projectId: string,
+  buttonId: string,
+  filter: { assignee?: string; statuses?: string[] },
+) =>
+  apiPostE<ActionResult>(
+    `${base}/api/projects/${encodeURIComponent(projectId)}/board-actions/${encodeURIComponent(buttonId)}`,
+    { assignee: filter.assignee ?? "", statuses: filter.statuses ?? [] },
   );
 
 /** Deleting a ticket either keeps its chats (they become untracked) or

@@ -139,7 +139,16 @@
 
   /* ── custom buttons ──
      One click, one delivery, one answer. The id doubles as the busy flag so
-     a slow receiver cannot be double-fired. */
+     a slow receiver cannot be double-fired.
+
+     Only the ticket-placed ones: a button configured for the ticket LIST
+     acts on a filter this page does not have, and its event carries no
+     ticket at all. */
+  const pageButtons = $derived(
+    (data?.config.integrations?.buttons ?? []).filter(
+      (b) => (b.placement ?? "ticket") === "ticket",
+    ),
+  );
   let actionBusy = $state("");
   function runAction(b: TicketButton) {
     if (!b.id || actionBusy !== "") return;
@@ -148,8 +157,11 @@
       runTicketAction(base, ticketId, b.id).pipe(Effect.provide(WickClientLayer)),
     )
       .then((r) => {
-        if (r.ok) toastOk(`${b.label}: delivered (HTTP ${r.status})`);
-        else toastError(`${b.label} failed: ${r.error || "HTTP " + r.status}`);
+        /* The receiver's own words when it gave any — a sync that answers
+           "already up to date" is a different outcome from one that wrote,
+           and both are HTTP 200. */
+        if (r.ok) toastOk(`${b.label}: ${r.message || `delivered (HTTP ${r.status})`}`);
+        else toastError(`${b.label} failed: ${r.error || r.message || "HTTP " + r.status}`);
       })
       .catch((e: unknown) =>
         toastError(e instanceof Error ? e.message : `${b.label} failed`),
@@ -473,9 +485,9 @@
         <!-- Custom buttons (configured under Integrations). Each POSTs this
              ticket to its own URL — "Sync to Notion" and friends — and
              reports whether the receiver took it. -->
-        {#if (data.config.integrations?.buttons ?? []).length > 0}
+        {#if pageButtons.length > 0}
           <div class="mt-4 flex flex-col gap-2">
-            {#each data.config.integrations?.buttons ?? [] as b (b.id)}
+            {#each pageButtons as b (b.id)}
               <button
                 type="button"
                 disabled={actionBusy !== ""}

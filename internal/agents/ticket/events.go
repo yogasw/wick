@@ -27,6 +27,13 @@ const (
 	// to THAT BUTTON's URL only — it is not in AllEvents, because a config
 	// webhook cannot subscribe to it: the button already names its receiver.
 	EventAction = "ticket.action"
+	// EventBoardAction is a custom button in the TICKET LIST's toolbar
+	// being clicked. Same delivery rule as EventAction — its own URL, not
+	// subscribable — but a different subject: the list the toolbar is
+	// filtering rather than one ticket, so the envelope carries Board
+	// (who was clicked for, which columns, and the matching tickets) and
+	// leaves Ticket zero.
+	EventBoardAction = "ticket.board_action"
 )
 
 // AllEvents is the catalogue the settings UI offers and the docs list, in a
@@ -101,9 +108,53 @@ type Event struct {
 	Session string `json:"session,omitempty"`
 	// Note carries the note body for ticket.note_added.
 	Note string `json:"note,omitempty"`
-	// Action carries the button id for ticket.action, so a receiver serving
-	// several buttons can tell which one was clicked.
+	// Action carries the button id for ticket.action and
+	// ticket.board_action, so a receiver serving several buttons can tell
+	// which one was clicked.
 	Action string `json:"action,omitempty"`
+	// Board is the subject of ticket.board_action: the ticket list as the
+	// clicker was looking at it. Absent on every per-ticket event.
+	Board *BoardContext `json:"board,omitempty"`
+}
+
+// BoardContext describes the ticket list a board button was clicked on.
+//
+// The filter is sent twice on purpose. Assignee is the raw toolbar choice
+// ("", "me", or a user id) — what the clicker picked. AssigneeID is that
+// choice RESOLVED against the clicker, so a receiver never has to guess who
+// "me" was and an empty value always means "everyone". A receiver that only
+// wants to know whose work this is reads AssigneeID and ignores the rest.
+type BoardContext struct {
+	// Assignee is the toolbar's own value: "" (all), "me", or a user id.
+	Assignee string `json:"assignee"`
+	// AssigneeID is the resolved user id; "" means every assignee.
+	AssigneeID   string `json:"assignee_id,omitempty"`
+	AssigneeName string `json:"assignee_name,omitempty"`
+	// Statuses are the columns the list was filtered to. Empty = all of
+	// them, matching the board's own "no chips selected" state.
+	Statuses []string `json:"statuses,omitempty"`
+	// MatchCount is how many tickets the filter selected — the honest
+	// total, even when Tickets below was capped.
+	MatchCount int `json:"match_count"`
+	// Tickets are those matches, so a receiver can act on the exact list
+	// the clicker was looking at without calling back for it. Capped: a
+	// board with thousands of tickets must not turn one click into a
+	// multi-megabyte POST.
+	Tickets []BoardTicket `json:"tickets,omitempty"`
+	// Truncated says Tickets holds fewer rows than MatchCount.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// BoardTicket is one row of a board action's list — the card, not the full
+// ticket: no body, no notes, no session rows. A receiver that needs more
+// reads the ticket over the REST API by id.
+type BoardTicket struct {
+	ID        string            `json:"id"`
+	Title     string            `json:"title"`
+	Status    string            `json:"status"`
+	Assignee  string            `json:"assignee,omitempty"`
+	Fields    map[string]string `json:"fields,omitempty"`
+	UpdatedAt time.Time         `json:"updated_at"`
 }
 
 // Emitter delivers a ticket event. Implemented by the webhook dispatcher and

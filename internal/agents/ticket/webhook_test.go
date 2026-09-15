@@ -3,8 +3,10 @@ package ticket
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -547,5 +549,87 @@ func TestDeliverStampsEnvelopeAndPostsAction(t *testing.T) {
 	}
 	if ev.Action != "btn_1" || ev.Ticket.ID != "T-4F2A" || ev.DeliveredAt.IsZero() {
 		t.Fatalf("envelope incomplete: %+v", ev)
+	}
+}
+
+// A board button's envelope has no ticket — it carries the LIST: who it was
+// filtered to, which columns, and the cards that matched. A receiver that
+// acts on the wrong person's work is the failure this shape exists to
+// prevent, so "me" must arrive resolved.
+func TestDeliverCarriesBoardContext(t *testing.T) {
+	recv := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		recv <- b
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"started","message":"syncing 2 tickets"}`))
+	}))
+	defer srv.Close()
+
+	d := NewDispatcher(nil)
+	d.AllowPrivate = true
+
+	rec := d.Deliver(
+		project.TicketWebhook{ID: "btn:btn_b", URL: srv.URL, Enabled: true},
+		Event{
+			Event:     EventBoardAction,
+			ProjectID: "p1",
+			Action:    "btn_b",
+			Actor:     Actor{Type: ActorUser, ID: "usr_1", Name: "Dana"},
+			Board: &BoardContext{
+				Assignee: "me", AssigneeID: "usr_1", AssigneeName: "Dana",
+				Statuses: []string{"open"}, MatchCount: 2,
+				Tickets: []BoardTicket{
+					{ID: "T-1", Title: "one", Status: "open", Assignee: "usr_1"},
+					{ID: "T-2", Title: "two", Status: "open", Assignee: "usr_1"},
+				},
+			},
+		},
+	)
+	if !rec.OK {
+		t.Fatalf("delivery = %+v, want ok", rec)
+	}
+	// The receiver's own sentence, not just "HTTP 200": a run that outlives
+	// the request can only report itself through this.
+	if rec.Message != "syncing 2 tickets — started" {
+		t.Errorf("message = %q, want the receiver's message and status", rec.Message)
+	}
+
+	var ev Event
+	if err := json.Unmarshal(<-recv, &ev); err != nil {
+		t.Fatalf("body is not an event envelope: %v", err)
+	}
+	if ev.Event != EventBoardAction || ev.Board == nil {
+		t.Fatalf("envelope = %+v, want a board action with context", ev)
+	}
+	if ev.Board.AssigneeID != "usr_1" || len(ev.Board.Tickets) != 2 || ev.Board.MatchCount != 2 {
+		t.Fatalf("board context incomplete: %+v", ev.Board)
+	}
+	if ev.Ticket.ID != "" {
+		t.Errorf("board action carried a ticket (%q); it is about a list", ev.Ticket.ID)
+	}
+}
+
+// What a receiver says is shown to the clicker, so it has to survive the
+// trip — and a receiver that answers with an HTML error page must not turn
+// the toast into markup.
+func TestReplyMessage(t *testing.T) {
+	reply := func(ct, body string) string {
+		return replyMessage(&http.Response{
+			Header: http.Header{"Content-Type": []string{ct}},
+			Body:   io.NopCloser(strings.NewReader(body)),
+		})
+	}
+	if got := reply("application/json", `{"status":"ignored","reason":"not linked"}`); got != "not linked — ignored" {
+		t.Errorf("json reply = %q", got)
+	}
+	if got := reply("text/plain", "queued\nsecond line"); got != "queued" {
+		t.Errorf("text reply = %q, want the first line", got)
+	}
+	if got := reply("text/html", "<html><body>502 Bad Gateway</body></html>"); got != "" {
+		t.Errorf("html reply = %q, want nothing", got)
+	}
+	if got := reply("application/json", `{"ok":true}`); got != "" {
+		t.Errorf("json without a sentence = %q, want nothing", got)
 	}
 }

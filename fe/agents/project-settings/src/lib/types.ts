@@ -80,12 +80,17 @@ export interface TicketField {
   show_on_card?: boolean;
 }
 
-/** One custom action button on every ticket's page. Clicking it POSTs the
-    ticket to `url` as a ticket.action event (e.g. "Sync to Notion"). */
+/** One custom action button. Clicking it POSTs to `url`: a ticket.action
+    event carrying that ticket (placement "ticket", e.g. "Sync to Notion"),
+    or a ticket.board_action event carrying the list's filter and matches
+    (placement "board", e.g. "Pull my tickets from Notion"). */
 export interface TicketButton {
   id?: string; // minted server-side on first save
   label: string;
   url: string;
+  /** Where the button is drawn. Absent = "ticket", so buttons saved before
+      placements existed stay on the ticket page they were made for. */
+  placement?: "ticket" | "board";
 }
 
 /** One column on the project's board. `key` is what tickets store and what
