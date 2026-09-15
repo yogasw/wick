@@ -6,12 +6,17 @@
      outlives the request, so the interesting part — how far it got, what it
      created, what it refused — arrives AFTER the toast would have faded.
 
-     So a board action gets a panel instead. It draws whatever the receiver
-     sent back (see ActionPayload), follows the run while it says it is
-     running, and tells the board to refresh when it stops. */
+     So a board action gets a small floating card in the bottom-right corner
+     instead: a toast that can keep talking. It follows the run, tells the
+     board to refresh as counters move, and then gets out of the way on its
+     own — a finished run closes itself after a visible countdown, because
+     nobody dismisses a box that is only telling them something worked.
+
+     It does NOT take a slice of the board. The first version sat above the
+     columns and pushed them down by a third of the screen, most of it an
+     empty frame around HTML that repeated what the card already said. */
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
-  import HtmlArtifact from "./HtmlArtifact.svelte";
   import { pollBoardAction, type ActionPayload, type ActionResult } from "../api/tickets.js";
 
   type Props = {
@@ -36,6 +41,16 @@
   let transport = $state<{ ok: boolean; error?: string; status?: number }>({ ok: true });
   let polls = $state(0);
   let polling = $state(false);
+  /* Seconds left before a finished card closes itself; -1 = not counting. */
+  let closeIn = $state(-1);
+  let hovering = $state(false);
+  /* The receiver's HTML is opt-in to LOOK at, always: it is somebody else's
+     markup of unknown size, and the card is 20rem wide. */
+  let showHtml = $state(false);
+
+  /* How long a finished card lingers. Long enough to read the counters,
+     short enough that nobody has to close it. */
+  const CLOSE_AFTER = 8;
 
   /* A receiver that answers every 3s for 10 minutes is either wedged or
      talking to nobody; either way the panel stops asking and says so. */
@@ -146,6 +161,29 @@
     };
   });
 
+  /* Auto-close, but only for an outcome nobody needs to act on. A failure
+     stays until it is dismissed: it is the one result somebody has to see,
+     and a box that vanishes is a box that was never read.
+
+     Pauses while the pointer is on the card — reading it should not be a
+     race against it. */
+  $effect(() => {
+    if (state === "running" || state === "error") {
+      closeIn = -1;
+      return;
+    }
+    closeIn = CLOSE_AFTER;
+    const t = setInterval(() => {
+      if (hovering) return;
+      closeIn -= 1;
+      if (closeIn <= 0) {
+        clearInterval(t);
+        onDismiss?.();
+      }
+    }, 1000);
+    return () => clearInterval(t);
+  });
+
   const TONE: Record<string, string> = {
     running: "border-link-300 bg-link-100 text-link-400",
     done: "border-pos-300 bg-pos-100 text-pos-400",
@@ -160,68 +198,92 @@
   };
 </script>
 
+<!-- Bottom-right, above the composer, never in the board's column space.
+     Pointer-events on the card only, so the strip of screen it occupies is
+     still clickable where it is transparent. -->
 <div
   data-testid="board-action-result"
-  class="rounded-xl border border-white-300 bg-white-100 p-3 dark:border-navy-600 dark:bg-navy-700"
+  role="status"
+  onmouseenter={() => { hovering = true; }}
+  onmouseleave={() => { hovering = false; }}
+  class="fixed bottom-24 right-4 z-40 w-[22rem] max-w-[calc(100vw-2rem)] rounded-xl border border-white-300 bg-white-100 p-2.5 shadow-lg dark:border-navy-600 dark:bg-navy-700"
 >
   <div class="flex items-start gap-2">
     <span
-      class={"shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold " + (TONE[state] ?? TONE.done)}
+      class={"mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold " + (TONE[state] ?? TONE.done)}
     >
       {#if state === "running"}
-        <span class="mr-1 inline-block h-2 w-2 animate-pulse rounded-full bg-link-400 align-middle"></span>
+        <span class="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-link-400 align-middle"></span>
       {/if}
       {WORD[state] ?? state}
     </span>
     <div class="min-w-0 flex-1">
-      <p class="truncate text-xs font-medium text-black-900 dark:text-white-100">{label}</p>
-      <p class="mt-0.5 text-[11px] leading-relaxed text-black-700 dark:text-black-600">{text}</p>
+      <p class="truncate text-[11px] font-medium text-black-900 dark:text-white-100">{label}</p>
+      <p class="mt-0.5 line-clamp-3 text-[11px] leading-snug text-black-700 dark:text-black-600">{text}</p>
     </div>
     <button
       type="button"
       aria-label="Dismiss result"
+      title={closeIn > 0 ? `Closing in ${closeIn}s` : "Dismiss"}
       onclick={() => onDismiss?.()}
-      class="shrink-0 rounded-lg px-1.5 text-black-700 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600"
+      class="shrink-0 rounded-lg px-1.5 text-xs text-black-700 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600"
     >×</button>
   </div>
 
   {#if pct >= 0}
-    <div class="mt-2.5">
-      <div class="h-1.5 w-full overflow-hidden rounded-full bg-white-300 dark:bg-navy-800">
+    <div class="mt-2 flex items-center gap-2">
+      <div class="h-1 flex-1 overflow-hidden rounded-full bg-white-300 dark:bg-navy-800">
         <div
           class={"h-full rounded-full transition-[width] duration-300 " +
             (state === "error" ? "bg-neg-400" : "bg-green-500")}
           style={`width:${pct}%`}
         ></div>
       </div>
-      <p class="mt-1 text-right text-[10px] font-mono text-black-600 dark:text-black-700">
+      <span class="shrink-0 font-mono text-[10px] text-black-600 dark:text-black-700">
         {live.progress?.done ?? 0}/{live.progress?.total ?? 0}
-      </p>
+      </span>
     </div>
   {/if}
 
   {#if counts.length > 0}
-    <div class="mt-2 flex flex-wrap gap-1.5">
+    <div class="mt-1.5 flex flex-wrap gap-1">
       {#each counts as [k, v] (k)}
         <span
-          class="rounded-full bg-white-200 px-2 py-0.5 text-[10px] font-medium text-black-800 dark:bg-navy-800 dark:text-black-600"
+          class="rounded-full bg-white-200 px-1.5 py-0.5 text-[10px] text-black-800 dark:bg-navy-800 dark:text-black-600"
         >{k} <span class="font-mono font-semibold">{v}</span></span>
       {/each}
     </div>
   {/if}
 
-  {#if live.html}
-    <!-- The receiver's own rendering, in the same sandbox an HTML artifact
-         gets: it may script and style itself, it may not reach the network
-         or this page. -->
-    <div class="mt-2.5">
-      <HtmlArtifact src={live.html} name={`${label}.html`} />
-    </div>
+  <!-- Only when a receiver actually sent markup, and only when asked for:
+       it is somebody else's HTML of unknown size, and this card is 22rem
+       wide. A bare sandboxed frame — no scripts, no network, and none of
+       the artifact chrome (Full screen / Show code / Download), which
+       belongs to files somebody wants to keep, not to a status line. -->
+  {#if (live.html ?? "").trim() !== ""}
+    <button
+      type="button"
+      onclick={() => { showHtml = !showHtml; }}
+      class="mt-1.5 text-[10px] text-link-400 hover:underline"
+    >{showHtml ? "Hide details" : "Details"}</button>
+    {#if showHtml}
+      <iframe
+        title={`${label} details`}
+        sandbox=""
+        srcdoc={live.html}
+        class="mt-1 h-40 w-full rounded-lg border border-white-300 bg-white-200 dark:border-navy-600 dark:bg-navy-800"
+      ></iframe>
+    {/if}
   {/if}
 
-  {#if polling}
-    <p class="mt-2 text-[10px] text-black-600 dark:text-black-700">
-      following the run — checked {polls} time{polls === 1 ? "" : "s"}
-    </p>
-  {/if}
+  <div class="mt-1.5 flex items-center justify-between text-[10px] text-black-600 dark:text-black-700">
+    <span>
+      {#if polling}
+        following the run · {polls} check{polls === 1 ? "" : "s"}
+      {/if}
+    </span>
+    {#if closeIn > 0}
+      <span>{hovering ? "paused" : `closing in ${closeIn}s`}</span>
+    {/if}
+  </div>
 </div>

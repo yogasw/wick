@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -614,22 +613,17 @@ func TestDeliverCarriesBoardContext(t *testing.T) {
 // trip — and a receiver that answers with an HTML error page must not turn
 // the toast into markup.
 func TestReplyMessage(t *testing.T) {
-	reply := func(ct, body string) string {
-		return replyMessage(&http.Response{
-			Header: http.Header{"Content-Type": []string{ct}},
-			Body:   io.NopCloser(strings.NewReader(body)),
-		})
-	}
-	if got := reply("application/json", `{"status":"ignored","reason":"not linked"}`); got != "not linked — ignored" {
+	reply := func(body string) string { return replyMessage([]byte(body)) }
+	if got := reply(`{"status":"ignored","reason":"not linked"}`); got != "not linked — ignored" {
 		t.Errorf("json reply = %q", got)
 	}
-	if got := reply("text/plain", "queued\nsecond line"); got != "queued" {
+	if got := reply("queued\nsecond line"); got != "queued" {
 		t.Errorf("text reply = %q, want the first line", got)
 	}
-	if got := reply("text/html", "<html><body>502 Bad Gateway</body></html>"); got != "" {
+	if got := reply("<html><body>502 Bad Gateway</body></html>"); got != "" {
 		t.Errorf("html reply = %q, want nothing", got)
 	}
-	if got := reply("application/json", `{"ok":true}`); got != "" {
+	if got := reply(`{"ok":true}`); got != "" {
 		t.Errorf("json without a sentence = %q, want nothing", got)
 	}
 }

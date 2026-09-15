@@ -727,7 +727,13 @@ key it does send lights up one more part of the panel.
 | `progress` | `{done, total}` | Progress bar + `done/total` |
 | `counts` | object of number/string | One chip per entry, in the order given |
 | `poll_url` | string | Where to watch the run — see below |
-| `html` | string | Rendered in the same sandboxed frame as an HTML artifact: scripts run, the network does not, and wick's theme is available as `--wick-bg` / `--wick-fg` / `--wick-surface` / `--wick-muted` / `--wick-accent` |
+| `html` | string | Folded away behind a **Details** toggle, then rendered in a bare sandboxed frame (no scripts, no network). Send it only for something the card cannot draw — a table, a diff, a list of what moved. Repeating the status and counters there only makes the card taller |
+
+The panel is a small card in the **bottom-right corner**, not a section of
+the board: it never takes column space, and a run that ends well closes
+itself after an 8-second countdown (paused while the pointer is on it). A
+failure stays until it is dismissed — it is the one outcome somebody has to
+read.
 
 **Following a run.** While `status` says running and a `poll_url` is present,
 the board polls it every 3 seconds through wick (never from the browser) and

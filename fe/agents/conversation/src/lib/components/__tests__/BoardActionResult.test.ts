@@ -100,4 +100,42 @@ describe("BoardActionResult", () => {
     expect(screen.getByText("Failed")).toBeTruthy();
     expect(screen.getByText("connection refused")).toBeTruthy();
   });
+
+  /* A card that only says "it worked" should not need dismissing, and a
+     card that says it broke should not disappear before it is read. */
+  test("a finished run counts itself down", async () => {
+    base({ ok: true, result: { status: "done", message: "12 synced" } });
+    await waitFor(() => expect(screen.getByText(/closing in \d+s/)).toBeTruthy());
+  });
+
+  /* The one result somebody has to see is the one that must not vanish. */
+  test("a failed run stays until it is dismissed", () => {
+    base({ ok: true, result: { status: "error", message: "Notion said no" } });
+    expect(screen.queryByText(/closing in/)).toBeNull();
+    expect(screen.getByText("Failed")).toBeTruthy();
+  });
+
+  /* The receiver's markup is not the panel's own rendering: it stays folded
+     away, and a receiver that sends none leaves no toggle behind. */
+  test("receiver HTML is opt-in and absent when not sent", async () => {
+    const { queryByText, rerender } = render(BoardActionResult, {
+      props: {
+        base: "/tools/agents",
+        projectId: "p1",
+        buttonId: "btn_list",
+        label: "Sync",
+        result: { ok: true, result: { status: "done", message: "done" } },
+      },
+    });
+    expect(queryByText("Details")).toBeNull();
+
+    await rerender({
+      base: "/tools/agents",
+      projectId: "p1",
+      buttonId: "btn_list",
+      label: "Sync",
+      result: { ok: true, result: { status: "done", message: "done", html: "<b>hi</b>" } },
+    });
+    expect(queryByText("Details")).toBeTruthy();
+  });
 });
