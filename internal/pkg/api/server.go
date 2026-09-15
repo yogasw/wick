@@ -2527,8 +2527,15 @@ func NewServer() *Server {
 	//     allowlist (agentstool isTicketAPIPath) — the shim forwards it;
 	//   - a new module mounts its own r.Handle("/api/<thing>/", h) — the
 	//     longer ServeMux pattern wins over this catch-all automatically.
+	//
+	// Two validators sit in front of it, each owning its own paths and its
+	// own token prefix: PATs reach the ticket endpoints, and the CLI
+	// channel's session-bound tokens reach /api/cli/… and nothing else.
+	// Neither can widen the other, and a request the CLI middleware does
+	// not recognise as its own passes straight through to the ticket one.
 	r.Handle(agentstool.TicketRESTBase+"/",
-		agentstool.TicketRESTShim(agentstool.TicketAPIAuthMW(gatedTools)))
+		agentstool.TicketRESTShim(
+			agentstool.CLIAPIAuthMW(agentstool.TicketAPIAuthMW(gatedTools))))
 
 	// AI-router dashboards + OpenAI-compatible API proxies, mounted at the wick
 	// root (not under the tool) so each embedded Next.js app's root-absolute
