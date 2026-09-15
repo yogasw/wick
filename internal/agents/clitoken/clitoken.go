@@ -186,3 +186,25 @@ func (s *Store) sweepLocked() {
 // Default is the process-wide store. One issuer, because the HTTP surface
 // and the MCP tool have to agree about what is live.
 var Default = New()
+
+// baseURL reports the URL a script should send to. Injected at boot from
+// the app's configured public URL rather than guessed: on a host behind a
+// proxy the loopback port is NOT the door — it answers 403 from the gate,
+// which is a confusing way to learn that the address was wrong.
+var baseURL = func() string { return "" }
+
+// SetBaseURL installs the resolver. Called once at boot.
+func SetBaseURL(f func() string) {
+	if f != nil {
+		baseURL = f
+	}
+}
+
+// BaseURL is the address to hand to a script, with a loopback fallback for
+// an install that has not configured one.
+func BaseURL() string {
+	if v := strings.TrimRight(strings.TrimSpace(baseURL()), "/"); v != "" {
+		return v
+	}
+	return "http://127.0.0.1:9425"
+}

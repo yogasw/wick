@@ -3,7 +3,6 @@ package handlers
 import (
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -66,7 +65,7 @@ func WickCLIToken(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 			rsp.ToolError(w, req.ID, ierr.Error(), tool)
 			return
 		}
-		base := cliBaseURL()
+		base := clitoken.BaseURL()
 		rsp.ToolJSON(w, req.ID, map[string]any{
 			"token":      g.Token,
 			"base_url":   base,
@@ -129,20 +128,6 @@ func WickCLIToken(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 	default:
 		rsp.ToolError(w, req.ID, "action must be issue, list or revoke", tool)
 	}
-}
-
-// cliBaseURL is the host a script should hit. Loopback by default — these
-// tokens are for work running ON this machine — overridable for an install
-// whose daemon sits behind a name.
-func cliBaseURL() string {
-	if v := strings.TrimSpace(os.Getenv("WICK_PUBLIC_URL")); v != "" {
-		return strings.TrimRight(v, "/")
-	}
-	port := strings.TrimSpace(os.Getenv("WICK_PORT"))
-	if port == "" {
-		port = "9424"
-	}
-	return "http://127.0.0.1:" + port
 }
 
 // str reads a string argument without panicking on a wrong type.

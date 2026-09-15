@@ -89,3 +89,27 @@ func TestListForMasksTheSecretAndScopesToTheSession(t *testing.T) {
 		t.Error("a revoked session's token still resolves")
 	}
 }
+
+// The address is half the credential: a token with the wrong base URL is a
+// script that cannot report. On a host behind a proxy the loopback port is
+// not the door — it answers 403 from the gate, which reads like an auth
+// problem and is not one.
+func TestBaseURL(t *testing.T) {
+	t.Cleanup(func() { SetBaseURL(func() string { return "" }) })
+
+	SetBaseURL(func() string { return "" })
+	if got := BaseURL(); got != "http://127.0.0.1:9425" {
+		t.Errorf("unconfigured = %q, want the loopback fallback", got)
+	}
+
+	SetBaseURL(func() string { return "https://wick.example.com/" })
+	if got := BaseURL(); got != "https://wick.example.com" {
+		t.Errorf("configured = %q, want it without the trailing slash", got)
+	}
+
+	// A nil resolver must not replace a working one.
+	SetBaseURL(nil)
+	if got := BaseURL(); got != "https://wick.example.com" {
+		t.Errorf("after nil = %q, want the previous resolver", got)
+	}
+}

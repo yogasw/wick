@@ -105,6 +105,7 @@ import (
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
+	"github.com/yogasw/wick/internal/agents/clitoken"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
@@ -1349,6 +1350,9 @@ func NewServer() *Server {
 	// rather than beside the dispatcher because tokensSvc lives at this
 	// point in boot.
 	agentstool.SetTicketAPIAuth(tokensSvc, authSvc)
+	// A CLI token is useless without the address to send it to, and on a
+	// host behind a proxy that address is not the loopback port.
+	clitoken.SetBaseURL(configsSvc.AppURL)
 
 	// One call wires every built-in channel: setup.All handles EnsureChannel,
 	// config load, NewChannel, setters, and registry.Add per transport.
@@ -2772,6 +2776,16 @@ func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// The CLI channel is reached by build scripts running ON this host,
+		// over loopback, exactly like /mcp above — and for the same reason:
+		// the allowlist is about the public name this app answers to, which
+		// a shell on the same machine has no business knowing. Scoped to
+		// /api/cli + a loopback Host, and every request there still has to
+		// carry a session-bound token that expires.
+		if cliLoopbackExempt(r.URL.Path, r.Host) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		allowed := collectAllowedHosts(s.configsSvc.AppURL(), s.configsSvc.AllowedOrigins())
 		if len(allowed) == 0 {
 			next.ServeHTTP(w, r)
@@ -2800,6 +2814,20 @@ func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 // app_url. Scoped to /mcp only.
 func mcpLoopbackExempt(path, host string) bool {
 	return path == "/mcp" && isLoopbackHost(host)
+}
+
+// cliLoopbackExempt reports whether this is the CLI channel reached over
+// loopback — a build script on this machine talking back into the session
+// that gave it a token.
+//
+// Without it the channel is unusable exactly where it is meant to be used:
+// a script on the host knows 127.0.0.1, not the public name the allowlist
+// is written in, and the request is refused before any token is even read.
+// The exemption is narrow in the same way /mcp's is — one subtree, loopback
+// Host only — and what protects the endpoint is the token, not the hostname
+// somebody typed to reach it.
+func cliLoopbackExempt(path, host string) bool {
+	return strings.HasPrefix(path, "/api/cli/") && isLoopbackHost(host)
 }
 
 // withAirouterRedirect 302-redirects a root-absolute request that belongs to an
