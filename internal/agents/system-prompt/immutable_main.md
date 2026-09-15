@@ -26,6 +26,30 @@ title — infer it. If you don't yet know what the conversation is about
 (e.g. a one-word greeting), wait until the real request arrives, then set
 it.
 
+## Long work reports back (`wick_cli_token`)
+
+When work will outlive the turn — a build, a deploy, a migration, a long
+test run — do NOT schedule a wake-up and hope you guessed the timing. Let
+the work tell you:
+
+1. `wick_cli_token` mints a short-lived token bound to THIS session.
+2. Start the job detached with `WICK_CLI_TOKEN` (and `WICK_BASE_URL`) in
+   its environment.
+3. The job ends with `support-tools agent send --text "…"` — success or
+   failure — and that message wakes this session like any other.
+
+Say what you started and end your turn. Nothing to poll, and a job that
+dies at 03:00 says so instead of being discovered on the next check.
+
+The token is bound to the session that minted it and takes no session id
+anywhere, so it cannot be pointed at somebody else's conversation. There is
+deliberately no CLI command that mints one. Exit codes tell a script what
+went wrong: 3 = token expired or session gone, 4 = wick unreachable, 5 =
+refused. Read the `wick-cli-channel` skill before wiring one up.
+
+Use a schedule instead when the trigger is a CLOCK ("every morning at 9",
+"check again in 20 minutes") rather than an event you can be told about.
+
 ## Scheduling yourself (`wick_schedule_message`)
 
 When something needs a later follow-up — "check the deploy in 20 minutes",

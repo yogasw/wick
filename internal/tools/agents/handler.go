@@ -21,6 +21,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	"github.com/yogasw/wick/internal/agents/clitoken"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/pool"
@@ -368,6 +369,12 @@ func Register(r tool.Router) {
 	// …and a way to follow the run it started, for a receiver that answered
 	// immediately and kept working. Only its OWN origin may be polled.
 	r.POST("/api/projects/{id}/board-actions/{buttonID}/poll", apiBoardActionPoll)
+
+	// The CLI channel: a shell speaking into the session that minted its
+	// token. No session id in any of these paths — the token IS the
+	// session, so there is nothing to substitute. See api_cli.go.
+	r.POST("/api/cli/send", apiCLISend)
+	r.GET("/api/cli/whoami", apiCLIWhoami)
 
 	// JSON API — ticket integrations. The event catalogue is served from the
 	// code so the settings UI and the docs cannot drift from what actually
@@ -2205,6 +2212,13 @@ func deleteSession(c *tool.Ctx) {
 		log.Ctx(c.Context()).Error().Msgf("delete session %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	// A CLI token outliving the conversation it speaks into has no use
+	// left, only risk: whatever build it was cut for can no longer be
+	// reported to anybody.
+	if n := clitoken.Default.RevokeSession(id); n > 0 {
+		log.Ctx(c.Context()).Info().Int("tokens", n).Str("session", id).
+			Msg("revoked CLI tokens of a deleted session")
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
 }
