@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -234,5 +235,36 @@ func TestHistoryPaging(t *testing.T) {
 	// rev-list stopped at Limit.
 	if len(states) != 6 {
 		t.Fatalf("two pages covered %d distinct commits, want 6", len(states))
+	}
+}
+
+// A commit body may contain the byte we use as a field separator. It used to
+// cut the message there and drop the rest — silently, because the fields
+// before it still parsed.
+func TestCommitBodyKeepsFieldSeparator(t *testing.T) {
+	skipNoGit(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	gitInit(t, dir)
+
+	body := "first line\x1fsecond half after the separator"
+	mustGit(t, dir, "commit", "--allow-empty", "-m", "subject line\n\n"+body)
+
+	head, err := History(ctx, dir, LogOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	det, err := CommitInfo(ctx, dir, head[0].SHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if det.Subject != "subject line" {
+		t.Fatalf("subject = %q", det.Subject)
+	}
+	if !strings.Contains(det.Body, "second half after the separator") {
+		t.Fatalf("body was cut at the separator: %q", det.Body)
+	}
+	if det.Email == "" {
+		t.Fatal("email lost")
 	}
 }

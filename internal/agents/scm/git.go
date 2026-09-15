@@ -755,12 +755,17 @@ func CommitInfo(ctx context.Context, dir, sha string) (CommitDetail, error) {
 	det := CommitDetail{Files: []CommitFile{}}
 	// Split header from the name-status body at the first NUL.
 	parts := strings.SplitN(out, "\x00", 2)
-	hf := strings.Split(parts[0], logFieldSep)
+	// SplitN, not Split: %b is last and a commit body may legitimately
+	// contain the field separator. An unbounded split would cut the body at
+	// the first such byte and silently drop the rest of the message.
+	hf := strings.SplitN(parts[0], logFieldSep, 6)
 	if len(hf) >= 4 {
 		det.SHA, det.Subject, det.Author, det.ISODate = hf[0], hf[1], hf[2], hf[3]
 	}
-	if len(hf) >= 6 {
+	if len(hf) >= 5 {
 		det.Email = hf[4]
+	}
+	if len(hf) >= 6 {
 		det.Body = strings.TrimSpace(hf[5])
 	}
 	if len(parts) == 2 {

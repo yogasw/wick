@@ -7,6 +7,7 @@
   import { stagePaths, unstagePaths, discardPaths, excludePaths, commit, loadCompare, loadCommitCompare, saveFile, langFor, type FileChange, type CompareData } from "$lib/git-actions";
   import { ToastHost, ConfirmDialog } from "@wick-fe/common-ui";
   import RepoSection from "$lib/components/RepoSection.svelte";
+  import RepoMenu from "$lib/components/RepoMenu.svelte";
   import ChangesSection from "$lib/components/ChangesSection.svelte";
   import CommitBox from "$lib/components/CommitBox.svelte";
   import BranchBar from "$lib/components/BranchBar.svelte";
@@ -186,19 +187,13 @@
         <h2 class="truncate text-sm font-semibold text-black-900 dark:text-white-100">Source Control</h2>
       </div>
       <div class="flex shrink-0 items-center gap-0.5">
-        <!-- View mode: tree / list -->
-        <button
-          type="button"
-          onclick={() => setViewMode(viewMode === "tree" ? "list" : "tree")}
-          title={viewMode === "tree" ? "View as list" : "View as tree"}
-          class="inline-flex h-7 w-7 items-center justify-center rounded-lg text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
-        >
-          {#if viewMode === "tree"}
-            <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h12M2 12h12" stroke-linecap="round"/></svg>
-          {:else}
-            <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4h3M3 8h6M6 8v4h3M3 4v8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          {/if}
-        </button>
+        <!-- Repository actions + the tree/list switch, in one menu. They
+             belong to the panel, not to the history: a menu in the Graph
+             header vanishes the moment you open Changes. -->
+        <RepoMenu
+          {viewMode}
+          onToggleViewMode={() => setViewMode(viewMode === "tree" ? "list" : "tree")}
+        />
         <!-- Pin only makes sense for the desktop push dock; on mobile the
              panel is a full-screen overlay, so hide the pin below lg. -->
         <button

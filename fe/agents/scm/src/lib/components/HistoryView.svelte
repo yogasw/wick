@@ -313,11 +313,20 @@
   // another ref in the same list, so drawing them adds a second name for a
   // place already labelled. Tags keep their name but read as local.
   type Badge = { name: string; kind: "local" | "remote" | "tag" };
+  const remoteNames = $derived(new Set(refs.filter((r) => r.remote).map((r) => r.name)));
+  const localNames = $derived(new Set(refs.filter((r) => !r.remote).map((r) => r.name)));
   function badgeRefs(c: LogEntry): Badge[] {
     return (c.refs ?? [])
       .filter((r) => r !== "HEAD" && !r.endsWith("/HEAD"))
       .map((r): Badge => {
         if (r.startsWith("tag: ")) return { name: r.slice(5), kind: "tag" };
+        // Ask the ref list, do not guess from the slash: `feature/login` is
+        // a perfectly ordinary LOCAL branch and was being drawn with the
+        // remote's cloud. The list comes from for-each-ref, which knows
+        // which refs live under refs/remotes.
+        if (remoteNames.has(r)) return { name: r, kind: "remote" };
+        if (localNames.has(r)) return { name: r, kind: "local" };
+        // Not in the list (it can lag a fetch): fall back to the shape.
         return { name: r, kind: r.includes("/") ? "remote" : "local" };
       });
   }

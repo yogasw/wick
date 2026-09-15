@@ -11,8 +11,14 @@
   // Which way the panel opens. In the branch bar there is no room below —
   // it IS the bottom of the panel — so a menu anchored downward renders off
   // the edge and reads as "the button did nothing".
-  type Props = { direction?: "up" | "down" };
-  let { direction = "down" }: Props = $props();
+  type Props = {
+    direction?: "up" | "down";
+    /** Current file-tree mode, folded in here so the toolbar carries one
+        button instead of two. Omit to leave the entry out. */
+    viewMode?: "tree" | "list";
+    onToggleViewMode?: () => void;
+  };
+  let { direction = "down", viewMode, onToggleViewMode }: Props = $props();
 
   let open = $state(false);
   let busy = $state(false);
@@ -53,8 +59,16 @@
     disabled={busy}
     title="Repository actions"
     aria-label="Repository actions"
-    class="inline-flex h-[30px] w-7 shrink-0 items-center justify-center rounded-lg border border-white-300 text-[13px] leading-none text-black-700 hover:bg-white-200 disabled:opacity-40 dark:border-navy-600 dark:text-black-600 dark:hover:bg-navy-800 transition-colors"
-  >⋯</button>
+    class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-black-700 transition-colors hover:bg-white-200 disabled:opacity-50 dark:text-black-600 dark:hover:bg-navy-800"
+  >
+    <!-- The icon this toolbar already had. The menu took over that slot, so
+         it keeps the same glyph rather than introducing a new one — the row
+         looks unchanged and the button still opens what used to be under it.
+         Same 7x7 box and 14px glyph as the pin beside it. -->
+    <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+      <path d="M2 4h12M2 8h12M2 12h12" stroke-linecap="round" />
+    </svg>
+  </button>
 
   {#if open}
     <button type="button" class="fixed inset-0 z-10 cursor-default" aria-label="Close" onclick={() => (open = false)}></button>
@@ -76,6 +90,13 @@
       >Delete branch…</button>
       <div class="my-1 border-t border-white-300 dark:border-navy-600"></div>
       <button type="button" class={item} onclick={() => run(() => loadStatus())}>Refresh</button>
+      {#if viewMode && onToggleViewMode}
+        <button
+          type="button"
+          class={item}
+          onclick={() => { open = false; onToggleViewMode(); }}
+        >View as {viewMode === "tree" ? "list" : "tree"}</button>
+      {/if}
     </div>
   {/if}
 </div>

@@ -155,7 +155,14 @@ func History(ctx context.Context, dir string, opts LogOptions) ([]LogEntry, erro
 
 	// Commits on no remote branch at all, and commits not on the trunk.
 	// Both bounded by the same limit as the log above.
+	// Bound the membership walks. A caller that asks to skip a million
+	// commits would otherwise make git walk a million commits twice to
+	// answer a question about the eighty on screen.
+	const maxBound = 10000
 	bound := limit + opts.Skip
+	if bound > maxBound || bound < limit {
+		bound = maxBound
+	}
 	unpushed := revSet(ctx, dir, bound, append(append([]string{}, refs...), "--not", "--remotes")...)
 	offTrunk := map[string]bool{}
 	trunk := TrunkRef(ctx, dir)
