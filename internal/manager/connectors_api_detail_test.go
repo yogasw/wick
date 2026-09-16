@@ -273,6 +273,29 @@ func TestAPIToggleConnectorDisabled(t *testing.T) {
 	}
 }
 
+// Switching an instance off is a configuring action. A user who can only SEE
+// a shared row must not be able to turn it off for everybody who depends on
+// it — the row menu hides the item, and the endpoint refuses it too.
+func TestAPIToggleConnectorDisabledRefusesViewOnlyUser(t *testing.T) {
+	h, svc := newDetailHandler(t)
+	row, _ := svc.Create(t.Context(), "slack", "Prod", map[string]string{}, "u-owner")
+
+	req := adminReq(t, http.MethodPost, "/manager/api/connectors/slack/"+row.ID+"/disable", nil)
+	req.SetPathValue("key", "slack")
+	req.SetPathValue("id", row.ID)
+	req = req.WithContext(login.WithUser(req.Context(), &entity.User{ID: "u-bob", Role: entity.RoleUser}, nil))
+	rec := httptest.NewRecorder()
+	h.apiToggleConnectorDisabled(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	after, _ := svc.Get(t.Context(), row.ID)
+	if after.Disabled {
+		t.Errorf("row was disabled by a user who may not configure it")
+	}
+}
+
 func TestAPIDeleteConnectorRow(t *testing.T) {
 	h, svc := newDetailHandler(t)
 	row, _ := svc.Create(t.Context(), "slack", "Prod", map[string]string{}, "u-admin")

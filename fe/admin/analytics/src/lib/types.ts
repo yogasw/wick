@@ -26,6 +26,7 @@ export type AnalyticsWindow = {
   days: number;
   all?: boolean;
   channels?: string[];
+  instances?: string[];
 };
 
 /** One provider instance — an account, in practice — and the models it was
@@ -81,10 +82,25 @@ export type AnalyticsUser = {
   daily?: AnalyticsPoint[];
 };
 
+/** One configured bot on a channel — a Slack app somebody connected, a
+ *  Telegram bot somebody registered. Key is what the filter uses. */
+export type AnalyticsChannelInstance = {
+  key: string;
+  channel: string;
+  owner_id?: string;
+  owner_name?: string;
+  owner_email?: string;
+  sessions: number;
+  users: number;
+  unattributed?: number;
+  last_active_at?: string;
+};
+
 export type AnalyticsChannel = {
   channel: string;
   sessions: number;
   users: number;
+  instances?: AnalyticsChannelInstance[];
   unattributed?: number;
   last_active_at?: string;
 };

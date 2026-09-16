@@ -372,6 +372,12 @@ func (h *Handler) toggleConnectorDisabled(w http.ResponseWriter, r *http.Request
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	// Same gate as the JSON twin: switching an instance off is a configuring
+	// action, not something every viewer of a shared row may do.
+	if !h.canConfigureRow(user, row) {
+		http.Error(w, "not allowed", http.StatusForbidden)
+		return
+	}
 	if err := h.connectors.SetDisabled(ctx, row.ID, !row.Disabled); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

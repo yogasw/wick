@@ -30,6 +30,12 @@ type connectorRowJSON struct {
 	// 🔒 Private chip instead of the misleading "Everyone" fallback. Adding
 	// a sharing tag flips it false (real tags then render).
 	Private bool `json:"private"`
+	// CanConfigure mirrors the detail page's can_configure for this row: the
+	// caller may edit its credentials/settings (admin, owner tag, or the
+	// row's allow-others-configure). The list uses it to hide the row menu's
+	// configuring actions (Disable / Delete) from a view-only viewer instead
+	// of offering buttons the server refuses.
+	CanConfigure bool `json:"can_configure"`
 	// OAuth/SSO surface, mirrored from the detail read model so the list
 	// page can render the per-row Connect button + connected-account
 	// sub-rows inline. OAuth is nil on the wire when the connector type has
@@ -262,6 +268,7 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 			RateLimitRPM: row.RateLimitRPM,
 			Tags:         tagsByRow[row.ID],
 			Private:      privateByRow[row.ID],
+			CanConfigure: h.canConfigureRow(user, &row),
 			EnableSSO:    row.EnableSSO,
 			MultiAccount: row.MultiAccount,
 		}
@@ -539,11 +546,11 @@ func (h *Handler) visibleAccountsForRow(ctx context.Context, row entity.Connecto
 // handler — a list page renders many rows and the caller's tags do not
 // change between them.
 func (h *Handler) accountCaller(user *entity.User, row entity.Connector, callerTags []string) connectors.AccountAccess {
-	return connectors.AccountAccess{
-		UserID:     userID(user),
-		TagIDs:     callerTags,
-		Privileged: h.canSeeAllAccounts(user, row),
-	}
+	// Built by the service, not here: Execute decides with the same call, so
+	// a dropdown can no longer offer an account the next click is refused.
+	// That mismatch was the bug — the list and the gate each computed their
+	// own idea of "privileged".
+	return h.connectors.AccountAccessFor(row, userID(user), user != nil && user.IsAdmin(), callerTags)
 }
 
 // canSeeAllAccounts reports whether the caller administers this instance —
@@ -727,7 +734,9 @@ func (h *Handler) apiSetConnectorConfig(w http.ResponseWriter, r *http.Request) 
 func (h *Handler) apiToggleConnectorDisabled(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := login.GetUser(ctx)
-	row, errResp, ok := h.loadVisibleRow(r, user)
+	// Turning an instance off is configuring it: seeing a row shared with
+	// you never meant you could switch it off for everybody else.
+	row, errResp, ok := h.loadConfigurableRow(r, user)
 	if !ok {
 		writeJSON(w, errResp.status, map[string]string{"error": errResp.msg})
 		return

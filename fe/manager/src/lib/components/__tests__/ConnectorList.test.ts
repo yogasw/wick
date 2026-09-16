@@ -163,6 +163,24 @@ describe("ConnectorList", () => {
     expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-a/history");
   });
 
+  /* Disable + Delete configure the instance and the server refuses them from
+     a view-only viewer, so the menu must not offer them. History (read-only)
+     and Duplicate (copies into an instance the copier owns) stay. */
+  it("hides Disable and Delete for a row the caller cannot configure", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(
+      makeData({
+        rows: [{ id: "row-a", label: "Prod", disabled: false, status: "ready", rate_limit_rpm: 0, tags: [], can_configure: false }],
+      }),
+    );
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    await openRowMenu();
+    expect(screen.queryByRole("menuitem", { name: "Disable" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "History" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Duplicate" })).toBeTruthy();
+  });
+
   it("keeps the row actions behind a closed kebab menu until opened", async () => {
     render(ConnectorList, { connectorKey: "slack" });
     await screen.findByText("Prod");

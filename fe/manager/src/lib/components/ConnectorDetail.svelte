@@ -178,106 +178,116 @@
       </div>
     </div>
 
-    <section>
-      <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Label</h2>
-      <div class="mt-3 flex items-center gap-2">
-        <div class="w-full max-w-md">
-          <TextInput value={labelDraft} disabled={!data.can_configure} onChange={(v) => (labelDraft = v)} ariaLabel="Connector label" />
+    <!-- Everything from here to the Accounts section configures the instance:
+         label, AI description, credentials, the health probe, rate limit, and
+         the playwright session/extension panels. A viewer who may not
+         configure this row gets none of it — previously the fields merely
+         rendered disabled, which showed the shape of someone else's setup and
+         invited clicks the server refuses. What such a viewer keeps is the
+         part they can actually use: their connected accounts and the
+         operation list, so they can still open Test and run as themselves. -->
+    {#if data.can_configure}
+      <section>
+        <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Label</h2>
+        <div class="mt-3 flex items-center gap-2">
+          <div class="w-full max-w-md">
+            <TextInput value={labelDraft} disabled={!data.can_configure} onChange={(v) => (labelDraft = v)} ariaLabel="Connector label" />
+          </div>
+          <Button size="lg" disabled={!data.can_configure} onclick={saveLabel}>Save</Button>
         </div>
-        <Button size="lg" disabled={!data.can_configure} onclick={saveLabel}>Save</Button>
-      </div>
-    </section>
+      </section>
 
-    <section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
-      <div class="flex items-start justify-between gap-4 px-5 py-4">
-        <div class="min-w-0">
-          <div class="flex items-center gap-2">
-            <h2 class="text-base font-semibold text-black-900 dark:text-white-100">AI description</h2>
-            {#if data.require_ai_description}
-              <span class="rounded-full bg-neg-400/15 px-2 py-0.5 text-[11px] font-medium text-neg-400">Required</span>
-            {/if}
-            {#if descEnabled && descStatus}
-              <span
-                class="text-[11px] {descStatus === 'error' ? 'text-neg-400' : descStatus === 'saved' ? 'text-pos-400' : 'text-black-700 dark:text-black-600'}"
-              >
-                {descStatus === "saving" ? "saving…" : descStatus === "saved" ? "✓ saved" : descStatus === "error" ? "✗ failed" : ""}
-              </span>
+      <section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+        <div class="flex items-start justify-between gap-4 px-5 py-4">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <h2 class="text-base font-semibold text-black-900 dark:text-white-100">AI description</h2>
+              {#if data.require_ai_description}
+                <span class="rounded-full bg-neg-400/15 px-2 py-0.5 text-[11px] font-medium text-neg-400">Required</span>
+              {/if}
+              {#if descEnabled && descStatus}
+                <span
+                  class="text-[11px] {descStatus === 'error' ? 'text-neg-400' : descStatus === 'saved' ? 'text-pos-400' : 'text-black-700 dark:text-black-600'}"
+                >
+                  {descStatus === "saving" ? "saving…" : descStatus === "saved" ? "✓ saved" : descStatus === "error" ? "✗ failed" : ""}
+                </span>
+              {/if}
+            </div>
+            <p class="mt-1 text-sm text-black-800 dark:text-black-600">
+              Extra guidance the AI sees for this connector — when to use it, team notes, constraints. Appended to the built-in description.
+              {#if data.require_ai_description}
+                <span class="text-black-900 dark:text-white-200">This connector requires it — it stays “needs setup” until you fill it in (e.g. state who may use this instance).</span>
+              {/if}
+            </p>
+          </div>
+          <!-- Pill switch: shows/hides the field to keep the page tidy. When the
+               connector requires the AI description it's forced on (can't hide). -->
+          <!-- Knob offset uses inline style, not translate-x utilities: those
+               (translate-x-5 / -0.5) get purged from the manager CSS and the knob
+               would never move. Inline transform is purge-proof. -->
+          <button
+            type="button"
+            role="switch"
+            aria-checked={descEnabled}
+            aria-label="Toggle AI description"
+            disabled={!data.can_configure || data.require_ai_description}
+            onclick={() => {
+              if (data?.require_ai_description) return;
+              descEnabled = !descEnabled;
+            }}
+            class="relative mt-1 inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors {data.can_configure && !data.require_ai_description
+              ? 'cursor-pointer'
+              : 'opacity-50'} {descEnabled ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
+          >
+            <span
+              class="inline-block h-5 w-5 rounded-full bg-white-100 shadow transition-transform"
+              style="transform: translateX({descEnabled ? '22px' : '2px'});"
+            ></span>
+          </button>
+        </div>
+        {#if descEnabled}
+          <div class="border-t border-white-300 dark:border-navy-600 px-5 py-4">
+            <TextArea
+              value={descDraft}
+              disabled={!data.can_configure}
+              rows={4}
+              onChange={onDescInput}
+              ariaLabel="Connector AI description"
+            />
+            {#if data.require_ai_description && descDraft.trim() === ""}
+              <p class="mt-2 text-[11px] text-neg-400">Required — this instance stays “needs setup” until you fill this in.</p>
+            {:else}
+              <p class="mt-2 text-[11px] text-black-700 dark:text-black-600">Saves automatically as you type.</p>
             {/if}
           </div>
-          <p class="mt-1 text-sm text-black-800 dark:text-black-600">
-            Extra guidance the AI sees for this connector — when to use it, team notes, constraints. Appended to the built-in description.
-            {#if data.require_ai_description}
-              <span class="text-black-900 dark:text-white-200">This connector requires it — it stays “needs setup” until you fill it in (e.g. state who may use this instance).</span>
-            {/if}
-          </p>
-        </div>
-        <!-- Pill switch: shows/hides the field to keep the page tidy. When the
-             connector requires the AI description it's forced on (can't hide). -->
-        <!-- Knob offset uses inline style, not translate-x utilities: those
-             (translate-x-5 / -0.5) get purged from the manager CSS and the knob
-             would never move. Inline transform is purge-proof. -->
-        <button
-          type="button"
-          role="switch"
-          aria-checked={descEnabled}
-          aria-label="Toggle AI description"
-          disabled={!data.can_configure || data.require_ai_description}
-          onclick={() => {
-            if (data?.require_ai_description) return;
-            descEnabled = !descEnabled;
-          }}
-          class="relative mt-1 inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors {data.can_configure && !data.require_ai_description
-            ? 'cursor-pointer'
-            : 'opacity-50'} {descEnabled ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
-        >
-          <span
-            class="inline-block h-5 w-5 rounded-full bg-white-100 shadow transition-transform"
-            style="transform: translateX({descEnabled ? '22px' : '2px'});"
-          ></span>
-        </button>
-      </div>
-      {#if descEnabled}
-        <div class="border-t border-white-300 dark:border-navy-600 px-5 py-4">
-          <TextArea
-            value={descDraft}
-            disabled={!data.can_configure}
-            rows={4}
-            onChange={onDescInput}
-            ariaLabel="Connector AI description"
-          />
-          {#if data.require_ai_description && descDraft.trim() === ""}
-            <p class="mt-2 text-[11px] text-neg-400">Required — this instance stays “needs setup” until you fill this in.</p>
-          {:else}
-            <p class="mt-2 text-[11px] text-black-700 dark:text-black-600">Saves automatically as you type.</p>
+        {/if}
+      </section>
+
+      {#if healthBanner}
+        <div class="rounded-xl border px-4 py-3 text-sm {healthBanner.ok ? 'border-pos-300 bg-pos-100 text-pos-400' : 'border-neg-300 bg-neg-100 text-neg-400'}">{healthBanner.msg}</div>
+      {/if}
+
+      {#if connectorKey === "playwright_browser"}
+        <ActiveSessionsSection connectorId={connectorId} />
+        <ExtensionsSection connectorId={connectorId} />
+      {/if}
+
+      <section>
+        <div class="flex items-center justify-between gap-3">
+          <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Credentials</h2>
+          {#if data.has_health_check}
+            <Button variant="secondary" size="md" disabled={healthBusy} onclick={checkHealth}>{healthBusy ? "Checking…" : "Check Permissions"}</Button>
           {/if}
         </div>
-      {/if}
-    </section>
-
-    {#if healthBanner}
-      <div class="rounded-xl border px-4 py-3 text-sm {healthBanner.ok ? 'border-pos-300 bg-pos-100 text-pos-400' : 'border-neg-300 bg-neg-100 text-neg-400'}">{healthBanner.msg}</div>
+        <p class="mt-1 text-sm text-black-800 dark:text-black-600">Per-row values shared by every operation on this connector.</p>
+        <ConfigsForm
+          connectorKey={connectorKey}
+          connectorId={connectorId}
+          fields={data.fields ?? []}
+          canConfigure={data.can_configure}
+        />
+      </section>
     {/if}
-
-    {#if connectorKey === "playwright_browser"}
-      <ActiveSessionsSection connectorId={connectorId} />
-      <ExtensionsSection connectorId={connectorId} />
-    {/if}
-
-    <section>
-      <div class="flex items-center justify-between gap-3">
-        <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Credentials</h2>
-        {#if data.has_health_check}
-          <Button variant="secondary" size="md" disabled={healthBusy} onclick={checkHealth}>{healthBusy ? "Checking…" : "Check Permissions"}</Button>
-        {/if}
-      </div>
-      <p class="mt-1 text-sm text-black-800 dark:text-black-600">Per-row values shared by every operation on this connector.</p>
-      <ConfigsForm
-        connectorKey={connectorKey}
-        connectorId={connectorId}
-        fields={data.fields ?? []}
-        canConfigure={data.can_configure}
-      />
-    </section>
 
     {#if data.can_manage_policy}
       <AccessPolicySection connectorKey={connectorKey} connectorId={connectorId} data={data} onchanged={refresh} />
@@ -297,20 +307,22 @@
       />
     {/if}
 
-    <section>
-      <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Rate limit</h2>
-      <p class="mt-1 text-sm text-black-800 dark:text-black-600">
-        Maximum MCP and test-panel calls per minute for this connector instance. Set to 0 to disable limiting.
-      </p>
-      <div class="mt-3 flex items-center gap-2">
-        <div class="w-32">
-          <NumberInput value={rateDraft} min={0} disabled={!data.can_configure} onChange={(v) => (rateDraft = v)} ariaLabel="Rate limit per minute" />
+    {#if data.can_configure}
+      <section>
+        <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Rate limit</h2>
+        <p class="mt-1 text-sm text-black-800 dark:text-black-600">
+          Maximum MCP and test-panel calls per minute for this connector instance. Set to 0 to disable limiting.
+        </p>
+        <div class="mt-3 flex items-center gap-2">
+          <div class="w-32">
+            <NumberInput value={rateDraft} min={0} disabled={!data.can_configure} onChange={(v) => (rateDraft = v)} ariaLabel="Rate limit per minute" />
+          </div>
+          <span class="text-sm text-black-800 dark:text-black-600">requests / min</span>
+          <Button disabled={!data.can_configure || rateBusy} onclick={saveRateLimit}>Save</Button>
+          <span class="text-xs text-black-700 dark:text-black-600">{data.rate_limit_rpm > 0 ? `Currently limited to ${data.rate_limit_rpm} rpm` : "Currently unlimited"}</span>
         </div>
-        <span class="text-sm text-black-800 dark:text-black-600">requests / min</span>
-        <Button disabled={!data.can_configure || rateBusy} onclick={saveRateLimit}>Save</Button>
-        <span class="text-xs text-black-700 dark:text-black-600">{data.rate_limit_rpm > 0 ? `Currently limited to ${data.rate_limit_rpm} rpm` : "Currently unlimited"}</span>
-      </div>
-    </section>
+      </section>
+    {/if}
 
     <OperationsTable
       operations={data.operations ?? []}

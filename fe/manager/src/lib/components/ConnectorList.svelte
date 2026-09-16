@@ -73,7 +73,13 @@
   }
 
   /* Per-row kebab (⋮) menu items. History/Disable/Duplicate/Delete —
-     Duplicate + Delete only when the connector isn't fixed. */
+     Duplicate + Delete only when the connector isn't fixed.
+
+     Disable + Delete configure the instance, so they only show to a caller
+     who may configure this row — the server refuses them otherwise, and a
+     view-only viewer of a shared row has no business switching it off for
+     everyone. History stays (read-only) and Duplicate stays (it copies the
+     row into a new instance the copier owns, which seeing it is enough for). */
   function rowMenuItems(row: ConnectorRow) {
     const items: { label: string; onclick: () => void; danger?: boolean; disabled?: boolean }[] = [];
     /* MCP instances authenticate individually, so connecting is a row action.
@@ -94,10 +100,10 @@
         disabled: testingId !== "",
       });
     }
-    items.push(
-      { label: "History", onclick: () => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}/history`) },
-      { label: row.disabled ? "Enable" : "Disable", onclick: () => toggleDisabled(row) },
-    );
+    items.push({ label: "History", onclick: () => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}/history`) });
+    if (row.can_configure !== false) {
+      items.push({ label: row.disabled ? "Enable" : "Disable", onclick: () => toggleDisabled(row) });
+    }
     /* MCP rows can re-probe under their own account — a server may expose a
        different tool set per connected identity. */
     if (data?.mcp) {
@@ -109,7 +115,9 @@
     }
     if (!data?.fixed) {
       items.push({ label: "Duplicate", onclick: () => duplicateRow(row), disabled: busy });
-      items.push({ label: "Delete", onclick: () => (confirmRow = row), danger: true });
+      if (row.can_configure !== false) {
+        items.push({ label: "Delete", onclick: () => (confirmRow = row), danger: true });
+      }
     }
     return items;
   }

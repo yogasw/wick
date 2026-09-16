@@ -30,6 +30,10 @@ export interface ConnectorRow {
   /* Owner-only: row visible to its owner + admins until an admin adds a
      sharing tag. Drives the 🔒 Private chip vs the Everyone fallback. */
   private?: boolean;
+  /* True when the caller may configure this row (admin, owner tag, or the
+     row's allow-others-configure). Hides the row menu's configuring actions
+     from a view-only viewer. */
+  can_configure?: boolean;
   /* OAuth/SSO surface — present only for OAuth connector types. oauth.start_url
      is non-empty only when the caller may connect (SSO on + policy + client_id
      set), which drives whether the per-row Connect button renders. */

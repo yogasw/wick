@@ -21,6 +21,8 @@
   let customTo = $state("");
   /** Channels the whole page is restricted to. Empty = all of them. */
   let picked = $state<string[]>([]);
+  /** Specific bots ("slack:<owner id>"). Empty = every bot of those channels. */
+  let pickedInstances = $state<string[]>([]);
   let query = $state("");
   let metric = $state<"sessions" | "logins">("sessions");
   /** Series drawn over the total. Empty = just the total. */
@@ -41,6 +43,7 @@
         from: range === "custom" ? customFrom : undefined,
         to: range === "custom" ? customTo : undefined,
         channels: picked,
+        instances: pickedInstances,
         onProgress: (done, total) => (progress = { done, total }),
       });
     } catch (e) {
@@ -70,12 +73,23 @@
 
   function toggleChannel(ch: string) {
     picked = picked.includes(ch) ? picked.filter((c) => c !== ch) : [...picked, ch];
+    // A bot belongs to a channel, so narrowing the channels drops any bot
+    // filter that no longer makes sense rather than silently showing zero.
+    pickedInstances = pickedInstances.filter((k) => picked.length === 0 || picked.includes(k.split(":")[0]));
+    void load();
+  }
+
+  function toggleInstance(key: string) {
+    pickedInstances = pickedInstances.includes(key)
+      ? pickedInstances.filter((k) => k !== key)
+      : [...pickedInstances, key];
     void load();
   }
 
   function clearChannels() {
-    if (picked.length === 0) return;
+    if (picked.length === 0 && pickedInstances.length === 0) return;
     picked = [];
+    pickedInstances = [];
     void load();
   }
 
@@ -268,6 +282,19 @@
           <span class="rounded px-1.5 py-0.5 text-[10px] font-medium {channelClass(ch)}">{ch}</span>
         </button>
       {/each}
+      {#if pickedInstances.length}
+        <span class="text-xs text-black-600 dark:text-black-700">·</span>
+        {#each pickedInstances as key}
+          {@const inst = data.channels.flatMap((c) => c.instances ?? []).find((i) => i.key === key)}
+          <button
+            type="button"
+            onclick={() => toggleInstance(key)}
+            class="rounded-lg border border-green-400 px-2 py-1 text-xs text-green-700 dark:text-green-300"
+          >
+            {inst?.owner_name || key} ✕
+          </button>
+        {/each}
+      {/if}
       <span class="ml-auto text-xs text-black-600 dark:text-black-700">
         {data.window.from} → {data.window.to}{picked.length > 0 ? ` · ${picked.join(" + ")}` : ""}
       </span>
@@ -479,7 +506,7 @@
               <tr class="border-b border-white-300 text-left text-black-700 dark:border-navy-600 dark:text-black-600">
                 <th class="px-5 py-2.5">Person</th>
                 <th class="px-5 py-2.5">Last login</th>
-                <th class="px-5 py-2.5">Last worked</th>
+                <th class="px-5 py-2.5">Last activity</th>
                 <th class="px-5 py-2.5">Conversations</th>
                 <th class="px-5 py-2.5">Channels</th>
                 <th class="px-5 py-2.5">Provider · model</th>
@@ -710,15 +737,16 @@
       <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
         <div class="flex items-center gap-2 border-b border-white-300 dark:border-navy-600 px-5 py-3">
           <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Channels</h2>
-          <span class="text-xs text-black-600 dark:text-black-700">in this range · click one to filter the whole page</span>
+          <span class="text-xs text-black-600 dark:text-black-700">
+            in this range · a row per configured bot · click any of them to filter the whole page
+          </span>
         </div>
         <div class="overflow-x-auto">
           <table class="w-full text-xs">
             <thead>
               <tr class="border-b border-white-300 text-left text-black-700 dark:border-navy-600 dark:text-black-600">
-                <th class="px-5 py-2.5">Channel</th>
+                <th class="px-5 py-2.5">Channel · bot</th>
                 <th class="px-5 py-2.5">Conversations</th>
-                <th class="px-5 py-2.5">In this window</th>
                 <th class="px-5 py-2.5">People</th>
                 <th class="px-5 py-2.5">Unattributed</th>
                 <th class="px-5 py-2.5">Last activity</th>
@@ -726,23 +754,45 @@
             </thead>
             <tbody>
               {#each data.channels as c (c.channel)}
-                {@const inWindow = channelsInWindow.find((x) => x.channel === c.channel)?.sessions ?? 0}
-                <tr class="border-b border-white-300 last:border-0 dark:border-navy-600 {picked.includes(c.channel) ? 'bg-green-500/5' : ''}">
+                <tr class="border-b border-white-300 dark:border-navy-600 {picked.includes(c.channel) ? 'bg-green-500/5' : ''}">
                   <td class="px-5 py-2">
                     <button type="button" onclick={() => toggleChannel(c.channel)}>
                       <span class="rounded px-1.5 py-0.5 text-[11px] font-medium {channelClass(c.channel)}">{c.channel}</span>
                     </button>
                   </td>
                   <td class="px-5 py-2 font-mono text-black-800 dark:text-black-600">{c.sessions}</td>
-                  <td class="px-5 py-2 font-mono text-black-800 dark:text-black-600">{inWindow}</td>
                   <td class="px-5 py-2 font-mono text-black-800 dark:text-black-600">{c.users}</td>
                   <td class="px-5 py-2 font-mono text-black-800 dark:text-black-600" title="created before the caller was recorded — there is nothing to attribute them to">
                     {c.unattributed ?? 0}
                   </td>
                   <td class="px-5 py-2 whitespace-nowrap text-black-800 dark:text-black-600">{ago(c.last_active_at)}</td>
                 </tr>
+                <!-- One row per configured bot. "slack: 372" does not say
+                     which app is busy, or whose connection it is. -->
+                {#each c.instances ?? [] as inst (inst.key)}
+                  <tr class="border-b border-white-300 last:border-0 dark:border-navy-600 {pickedInstances.includes(inst.key) ? 'bg-green-500/5' : ''}">
+                    <td class="py-1.5 pl-10 pr-5">
+                      <button type="button" onclick={() => toggleInstance(inst.key)} class="text-left hover:underline">
+                        <span class="text-black-900 dark:text-white-100">
+                          {inst.owner_name || (inst.owner_id ? inst.owner_id.slice(0, 8) : "default")}
+                        </span>
+                        {#if inst.owner_email}
+                          <span class="text-[11px] text-black-600 dark:text-black-700"> · {inst.owner_email}</span>
+                        {:else if !inst.owner_id}
+                          <span class="text-[11px] text-black-600 dark:text-black-700" title="no bot behind it — typed in the dashboard, or called directly"> · no bot</span>
+                        {:else}
+                          <span class="text-[11px] text-black-600 dark:text-black-700" title={inst.owner_id}> · owner not in the accounts table</span>
+                        {/if}
+                      </button>
+                    </td>
+                    <td class="py-1.5 px-5 font-mono text-black-800 dark:text-black-600">{inst.sessions}</td>
+                    <td class="py-1.5 px-5 font-mono text-black-800 dark:text-black-600">{inst.users}</td>
+                    <td class="py-1.5 px-5 font-mono text-black-800 dark:text-black-600">{inst.unattributed ?? 0}</td>
+                    <td class="py-1.5 px-5 whitespace-nowrap text-black-800 dark:text-black-600">{ago(inst.last_active_at)}</td>
+                  </tr>
+                {/each}
               {:else}
-                <tr><td colspan="6" class="px-5 py-8 text-center text-black-700 dark:text-black-600">No sessions recorded yet.</td></tr>
+                <tr><td colspan="5" class="px-5 py-8 text-center text-black-700 dark:text-black-600">No sessions recorded yet.</td></tr>
               {/each}
             </tbody>
           </table>
@@ -775,7 +825,7 @@
           {#each [
             { label: "Conversations", value: String(u.sessions) },
             { label: "Joined", value: String(u.joined) },
-            { label: "Last worked", value: ago(u.last_active_at) },
+            { label: "Last activity", value: ago(u.last_active_at) },
             { label: "Last login", value: u.last_login_at ? ago(u.last_login_at) : loginsRecorded ? "never" : "no record" },
           ] as card}
             <div>

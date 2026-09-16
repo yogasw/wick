@@ -1003,6 +1003,26 @@ type AccountAccess struct {
 	Privileged bool
 }
 
+// AccountAccessFor builds the caller identity that decides which connected
+// accounts a person may SEE and may RUN AS.
+//
+// One function, used by both the listing and the execute gate, because the
+// bug it exists to prevent is the two drifting: a dropdown that offers an
+// account Execute then refuses. The offer is a promise, and a promise the
+// next click breaks is worse than not offering it — the person cannot tell
+// whether they lack access or the thing is broken.
+//
+// Privileged means "administers this instance": its creator, or an admin
+// while admin_see_all_connectors is on. With that knob off an admin is
+// scoped like anybody else, which is the point of the knob.
+func (s *Service) AccountAccessFor(row entity.Connector, userID string, isAdmin bool, tagIDs []string) AccountAccess {
+	return AccountAccess{
+		UserID:     userID,
+		TagIDs:     tagIDs,
+		Privileged: OwnsConnector(row, userID) || s.adminBypass(isAdmin),
+	}
+}
+
 // AccountVisibleTo reports whether a connected account may be seen — and run
 // as — by the caller. accountTagIDs are the account's own filter tags (see
 // AccountTagPath); pass nil when it has none.
@@ -1575,7 +1595,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			// the caller cannot run as. Without this, a tool_id carrying
 			// someone else's @accountID would still execute under their
 			// identity even though the account never appeared in wick_list.
-			caller := AccountAccess{UserID: p.UserID, TagIDs: p.TagIDs, Privileged: OwnsConnector(*c, p.UserID) || s.adminBypass(p.IsAdmin)}
+			caller := s.AccountAccessFor(*c, p.UserID, p.IsAdmin, p.TagIDs)
 			accTags, tagErr := s.repo.AccountFilterTagIDs(ctx, []string{acc.ID})
 			if tagErr != nil {
 				return nil, fmt.Errorf("resolve account tags: %w", tagErr)

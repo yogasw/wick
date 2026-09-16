@@ -121,6 +121,80 @@ type analyticsChannel struct {
 	Users        int    `json:"users"`
 	Unattributed int    `json:"unattributed,omitempty"`
 	LastActiveAt string `json:"last_active_at,omitempty"`
+	// Instances splits the channel by the configured bot behind it. One
+	// workspace can have several, each connected by a different person.
+	Instances []analyticsChannelInstance `json:"instances,omitempty"`
+}
+
+// analyticsChannelInstance is ONE configured bot on a channel — a Slack
+// app somebody connected, a Telegram bot somebody registered.
+//
+// "slack: 372 conversations" is not an answer when several bots share the
+// workspace: it does not say which one is busy, and it does not say whose
+// connection it is. The owner is the person who set that bot up, and the
+// instance key is what a filter can be built on.
+type analyticsChannelInstance struct {
+	// Key identifies the instance as the filter uses it: "<channel>:<owner
+	// id>", or "<channel>:default" for a channel with no per-owner
+	// instance (ui, rest, schedule).
+	Key          string `json:"key"`
+	Channel      string `json:"channel"`
+	OwnerID      string `json:"owner_id,omitempty"`
+	OwnerName    string `json:"owner_name,omitempty"`
+	OwnerEmail   string `json:"owner_email,omitempty"`
+	Sessions     int    `json:"sessions"`
+	Users        int    `json:"users"`
+	Unattributed int    `json:"unattributed,omitempty"`
+	LastActiveAt string `json:"last_active_at,omitempty"`
+}
+
+// looksLikeUUID is a shape check, not a validation: it only has to be
+// sure the prefix is an id rather than the start of a thread timestamp.
+func looksLikeUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			isHex := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+			if !isHex {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// channelInstanceOf works out which configured bot a session came through.
+//
+// Two sources, in order of trust: the persisted thread binding, which the
+// channel itself wrote, and the session id, which encodes the instance
+// because that is how channel sessions are named
+// ("slack-<owner uuid>-<thread ts>"). Neither exists for a session typed
+// in the dashboard, and "default" is the honest answer there rather than
+// a guess.
+func channelInstanceOf(id, channel string, m session.Meta) (key, ownerID string) {
+	raw := ""
+	if m.ChannelRef != nil {
+		raw = strings.TrimSpace(m.ChannelRef.Instance)
+	}
+	if raw == "" {
+		raw = id
+	}
+	// "slack-<uuid>-<thread ts>" or "slack-<uuid>-": the uuid is fixed
+	// width, so the tail needs no parsing.
+	if rest, ok := strings.CutPrefix(raw, channel+"-"); ok && len(rest) >= 36 && looksLikeUUID(rest[:36]) {
+		ownerID = rest[:36]
+	}
+	if ownerID == "" {
+		return channel + ":default", ""
+	}
+	return channel + ":" + ownerID, ownerID
 }
 
 // analyticsFilter is what the page asked for: which slice of time, and
@@ -133,6 +207,9 @@ type analyticsFilter struct {
 	Days int
 	All  bool            // window runs back to the oldest conversation
 	Chan map[string]bool // empty = every channel
+	// Inst narrows further, to specific bots: "slack:<owner id>". Empty =
+	// every instance of whichever channels passed Chan.
+	Inst map[string]bool
 }
 
 func (f analyticsFilter) keepsChannel(ch string) bool {
@@ -140,6 +217,13 @@ func (f analyticsFilter) keepsChannel(ch string) bool {
 		return true
 	}
 	return f.Chan[ch]
+}
+
+func (f analyticsFilter) keepsInstance(key string) bool {
+	if len(f.Inst) == 0 {
+		return true
+	}
+	return f.Inst[key]
 }
 
 func (f analyticsFilter) keepsTime(t time.Time) bool {
@@ -155,11 +239,12 @@ func (f analyticsFilter) keepsTime(t time.Time) bool {
 // analyticsWindow is the filter echoed back, so the page can label its
 // numbers with the range they were computed over instead of assuming.
 type analyticsWindow struct {
-	From     string   `json:"from"`
-	To       string   `json:"to"`
-	Days     int      `json:"days"`
-	All      bool     `json:"all,omitempty"`
-	Channels []string `json:"channels,omitempty"`
+	From      string   `json:"from"`
+	To        string   `json:"to"`
+	Days      int      `json:"days"`
+	All       bool     `json:"all,omitempty"`
+	Channels  []string `json:"channels,omitempty"`
+	Instances []string `json:"instances,omitempty"`
 }
 
 // analyticsProvider is one provider instance — an account, in practice —
@@ -317,12 +402,19 @@ func windowDays(raw string) (days int, all bool) {
 // 400 the page has to render as an error.
 func parseFilter(q url.Values) analyticsFilter {
 	now := time.Now().UTC()
-	f := analyticsFilter{Chan: map[string]bool{}}
+	f := analyticsFilter{Chan: map[string]bool{}, Inst: map[string]bool{}}
 
 	for _, raw := range strings.Split(q.Get("channels"), ",") {
 		ch := strings.TrimSpace(raw)
 		if ch != "" && !strings.EqualFold(ch, "all") {
 			f.Chan[ch] = true
+		}
+	}
+	f.Inst = map[string]bool{}
+	for _, raw := range strings.Split(q.Get("instances"), ",") {
+		key := strings.TrimSpace(raw)
+		if key != "" && !strings.EqualFold(key, "all") {
+			f.Inst[key] = true
 		}
 	}
 
@@ -492,6 +584,8 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 	}
 	chans := map[string]*analyticsChannel{}
 	chanUsers := map[string]map[string]bool{}
+	insts := map[string]*analyticsChannelInstance{}
+	instUsers := map[string]map[string]bool{}
 	projs := map[string]*projAcc{}
 	tokenSessions := map[string]int{}
 
@@ -515,27 +609,30 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 	var oldest time.Time
 
 	ids, _ := session.List(agentsLayout)
+	alive := make(map[string]bool, len(ids))
 	for i, id := range ids {
 		if progress != nil {
 			progress(i, len(ids))
 		}
-		sess, err := session.Load(agentsLayout, id)
-		if err != nil {
+		alive[id] = true
+		// Cached by the file's own mtime+size, so a second render costs a
+		// stat per session instead of a read and a parse. The first load
+		// still pays, which is what the progress bar is for.
+		m, ok := sessionCache.get(agentsLayout, id)
+		if !ok {
 			continue
 		}
-		m := sess.Meta
 		allTime++
-		channel := string(m.Origin)
-		if channel == "" {
-			channel = "ui"
-		}
+		channel := m.Channel
 		allChannels[channel] = true
+
+		instKey, instOwner := m.InstanceKey, m.InstanceOwn
 
 		// The filter applies HERE, before anything is counted — so every
 		// number below describes the same slice the chart does. A page
 		// where the chart moved but the totals did not would be reporting
 		// two different things side by side.
-		if !f.keepsChannel(channel) {
+		if !f.keepsChannel(channel) || !f.keepsInstance(instKey) {
 			continue
 		}
 		if !m.CreatedAt.IsZero() && (oldest.IsZero() || m.CreatedAt.Before(oldest)) {
@@ -546,10 +643,7 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		}
 		total++
 		projectID := m.ProjectID
-		if projectID == "" {
-			projectID = "(none)"
-		}
-		agentName := m.ActiveAgent
+		agentName := m.Agent
 
 		c := chans[channel]
 		if c == nil {
@@ -560,6 +654,17 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		c.Sessions++
 		if t := m.LastActive; t.After(parseStamp(c.LastActiveAt)) {
 			c.LastActiveAt = rfc3339(t)
+		}
+
+		in := insts[instKey]
+		if in == nil {
+			in = &analyticsChannelInstance{Key: instKey, Channel: channel, OwnerID: instOwner}
+			insts[instKey] = in
+			instUsers[instKey] = map[string]bool{}
+		}
+		in.Sessions++
+		if t := m.LastActive; t.After(parseStamp(in.LastActiveAt)) {
+			in.LastActiveAt = rfc3339(t)
 		}
 
 		p := projs[projectID]
@@ -589,14 +694,9 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		// Which provider instance — which ACCOUNT — ran this conversation,
 		// and with which model. A session can switch provider mid-life, so
 		// every entry in its agents.json counts once.
-		seenKey := map[string]bool{}
 		var sessProviders, sessModels []string
-		for _, a := range sess.Agents {
-			key := strings.TrimSpace(a.Provider)
-			if key == "" || seenKey[key] {
-				continue
-			}
-			seenKey[key] = true
+		for _, use := range m.Providers {
+			key := use.Key
 			pv := provs[key]
 			if pv == nil {
 				typ, instance := key, ""
@@ -614,16 +714,11 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 			if t := m.LastActive; t.After(parseStamp(pv.row.LastActiveAt)) {
 				pv.row.LastActiveAt = rfc3339(t)
 			}
-			model := strings.TrimSpace(a.ModelID)
-			if model == "" {
-				// Not a gap in the record: no pin means the provider picked
-				// its own default, which is a real answer worth showing.
-				model = "(default)"
-			}
+			model := use.Model
 			pv.models[model]++
 			sessProviders = append(sessProviders, key)
 			sessModels = append(sessModels, model)
-			for _, uid := range m.People() {
+			for _, uid := range m.People {
 				if uid != "" {
 					pv.users[uid] = true
 				}
@@ -648,17 +743,18 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 				channelDay[channel] = map[string]int{}
 			}
 			channelDay[channel][day]++
-			for _, uid := range m.People() {
+			for _, uid := range m.People {
 				if uid != "" {
 					globalDayPeople[day][uid] = true
 				}
 			}
 		}
 
-		people := m.People()
+		people := m.People
 		if len(people) == 0 {
 			unattributed++
 			c.Unattributed++
+			in.Unattributed++
 			p.row.Unattributed++
 		}
 		for i, uid := range people {
@@ -688,6 +784,7 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 				a.agents[agentName] = true
 			}
 			chanUsers[channel][uid] = true
+			instUsers[instKey][uid] = true
 			p.users[uid] = true
 
 			mem := p.members[uid]
@@ -710,6 +807,10 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 	if progress != nil {
 		progress(len(ids), len(ids))
 	}
+	// A session that no longer exists stops being remembered, so the cache
+	// stays bounded by what is on disk rather than by everything this
+	// process has ever read.
+	sessionCache.keep(alive)
 
 	out := analyticsResponse{
 		GeneratedAt:         rfc3339(now),
@@ -818,8 +919,32 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		return a.Name < b.Name
 	})
 
+	// Owners, resolved from the accounts table: an instance key carries a
+	// uuid, and a uuid is not an answer to "whose bot is this".
+	owners := map[string]struct{ name, email string }{}
+	for _, u := range users {
+		display := u.Name
+		if display == "" {
+			display = u.Email
+		}
+		owners[u.ID] = struct{ name, email string }{display, u.Email}
+	}
+	byChannel := map[string][]analyticsChannelInstance{}
+	for _, in := range insts {
+		in.Users = len(instUsers[in.Key])
+		if o, ok := owners[in.OwnerID]; ok {
+			in.OwnerName, in.OwnerEmail = o.name, o.email
+		}
+		byChannel[in.Channel] = append(byChannel[in.Channel], *in)
+	}
+	for ch, list := range byChannel {
+		sort.Slice(list, func(i, j int) bool { return list[i].Sessions > list[j].Sessions })
+		byChannel[ch] = list
+	}
+
 	for ch, c := range chans {
 		c.Users = len(chanUsers[ch])
+		c.Instances = byChannel[ch]
 		out.Channels = append(out.Channels, *c)
 	}
 	sort.Slice(out.Channels, func(i, j int) bool { return out.Channels[i].Sessions > out.Channels[j].Sessions })
@@ -915,7 +1040,8 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		To:       now.Format("2006-01-02"),
 		Days:     days,
 		All:      all,
-		Channels: sortedKeys(f.Chan),
+		Channels:  sortedKeys(f.Chan),
+		Instances: sortedKeys(f.Inst),
 	}
 	if !f.To.IsZero() && !f.All {
 		out.Window.To = f.To.Format("2006-01-02")

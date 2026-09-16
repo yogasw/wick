@@ -687,3 +687,215 @@ func TestPerUserProviderAndModelBreakdown(t *testing.T) {
 		}
 	}
 }
+
+// ── which bot, and whose ──────────────────────────────────────────────
+
+// "slack: 372 conversations" does not say which bot is busy when several
+// share the workspace, and it does not say whose connection it is. The
+// instance is derivable without recording anything new: channel sessions
+// are named after the bot that owns them.
+func TestChannelInstanceComesFromTheBinding(t *testing.T) {
+	owner := "ec0c0b8b-e73c-4561-9d19-bfa9c481a816"
+	for _, tc := range []struct {
+		name    string
+		id      string
+		channel string
+		meta    session.Meta
+		wantKey string
+		wantOwn string
+	}{
+		{
+			name:    "thread binding wins",
+			id:      "anything",
+			channel: "slack",
+			meta:    session.Meta{ChannelRef: &session.ChannelRef{Instance: "slack-" + owner + "-"}},
+			wantKey: "slack:" + owner,
+			wantOwn: owner,
+		},
+		{
+			name:    "falls back to the session id",
+			id:      "slack-" + owner + "-1789006128.650979",
+			channel: "slack",
+			wantKey: "slack:" + owner,
+			wantOwn: owner,
+		},
+		{
+			// A dashboard session has no bot behind it, and "default" is
+			// the honest answer rather than a guessed owner.
+			name:    "a ui session has no instance",
+			id:      "c045cbe1-934c-4b55-bbfc-6d0b34950612",
+			channel: "ui",
+			wantKey: "ui:default",
+		},
+		{
+			name:    "a prefix that is not a uuid is not an owner",
+			id:      "slack-not-a-uuid-at-all-1789006128.650979",
+			channel: "slack",
+			wantKey: "slack:default",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key, own := channelInstanceOf(tc.id, tc.channel, tc.meta)
+			if key != tc.wantKey || own != tc.wantOwn {
+				t.Errorf("= %q,%q want %q,%q", key, own, tc.wantKey, tc.wantOwn)
+			}
+		})
+	}
+}
+
+// The instance breakdown has to name a person, not a uuid, and has to be
+// filterable — that is the whole point of splitting it out.
+func TestChannelsSplitByInstanceWithOwner(t *testing.T) {
+	r := newAnalyticsRepo(t)
+	ctx := context.Background()
+	if err := r.db.Create(&entity.User{ID: "u-yoga", Name: "Yoga", Email: "y@example.com", Approved: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	// An owner uuid the id parser will accept.
+	const botA = "ec0c0b8b-e73c-4561-9d19-bfa9c481a816"
+	const botB = "aa11bb22-cc33-dd44-ee55-ff6677889900"
+	if err := r.db.Create(&entity.User{ID: botA, Name: "Ygsw Bot Owner", Email: "bot@example.com", Approved: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	layout := agentconfig.NewLayout(t.TempDir())
+	agentsLayout = layout
+	now := time.Now().UTC()
+	mk := func(id string) {
+		t.Helper()
+		if _, err := session.Create(ctx, layout, session.CreateOptions{ID: id, Origin: session.OriginSlack, UserID: "u-yoga"}); err != nil {
+			t.Fatal(err)
+		}
+		s, err := session.Load(layout, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Meta.CreatedAt, s.Meta.LastActive = now, now
+		if err := session.SaveMeta(layout, id, s.Meta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("slack-" + botA + "-1789006128.650979")
+	mk("slack-" + botA + "-1789006128.650980")
+	mk("slack-" + botB + "-1789006128.650981")
+
+	h := &Handler{repo: r}
+	out := build(t, h, testFilter(defaultWindowDays, false))
+
+	var slack *analyticsChannel
+	for i := range out.Channels {
+		if out.Channels[i].Channel == "slack" {
+			slack = &out.Channels[i]
+		}
+	}
+	if slack == nil || len(slack.Instances) != 2 {
+		t.Fatalf("slack instances = %+v, want two bots", slack)
+	}
+	// Busiest first, so the head answers "which bot is carrying this".
+	top := slack.Instances[0]
+	if top.Key != "slack:"+botA || top.Sessions != 2 {
+		t.Errorf("top instance = %+v, want botA with 2", top)
+	}
+	if top.OwnerName != "Ygsw Bot Owner" {
+		t.Errorf("owner = %q — a uuid is not an answer to \"whose bot is this\"", top.OwnerName)
+	}
+	// An instance whose owner is not an account still appears; it just has
+	// no name. Dropping it would hide real traffic.
+	if slack.Instances[1].OwnerName != "" || slack.Instances[1].Sessions != 1 {
+		t.Errorf("second instance = %+v, want the unnamed one kept", slack.Instances[1])
+	}
+
+	// And it filters the whole page, exactly like a channel does.
+	f := testFilter(defaultWindowDays, false)
+	f.Inst = map[string]bool{"slack:" + botA: true}
+	only := build(t, h, f)
+	if only.Sessions != 2 {
+		t.Errorf("filtered to one bot = %d conversations, want 2", only.Sessions)
+	}
+	if got := only.Window.Instances; len(got) != 1 || got[0] != "slack:"+botA {
+		t.Errorf("window echoes %v, want the instance it filtered on", got)
+	}
+}
+
+// ── the cache ─────────────────────────────────────────────────────────
+
+// The page's cost is I/O, not arithmetic: every render reads a file per
+// session. The second render must not.
+func TestSessionFactsAreCachedUntilTheFileChanges(t *testing.T) {
+	layout := agentconfig.NewLayout(t.TempDir())
+	agentsLayout = layout
+	sessionCache = &factsCache{m: map[string]sessionFacts{}}
+	ctx := context.Background()
+
+	if _, err := session.Create(ctx, layout, session.CreateOptions{ID: "s1", Origin: session.OriginUI, UserID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	first, ok := sessionCache.get(layout, "s1")
+	if !ok {
+		t.Fatal("a session that exists must be readable")
+	}
+	if sessionCache.len() != 1 {
+		t.Fatalf("cache holds %d, want the one session", sessionCache.len())
+	}
+
+	// Unchanged file: same facts, and no re-read (proved by the label,
+	// which only a re-read could pick up — see below).
+	again, _ := sessionCache.get(layout, "s1")
+	if again.LastActive != first.LastActive {
+		t.Error("an unchanged session must return the cached facts")
+	}
+
+	// Changed file: the cache must notice. A TTL would not — this is why
+	// validation is by mtime+size rather than by a timer.
+	s, err := session.Load(layout, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Meta.Label = "renamed"
+	s.Meta.LastActive = time.Now().UTC().Add(time.Hour)
+	if err := session.SaveMeta(layout, "s1", s.Meta); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := sessionCache.get(layout, "s1")
+	if fresh.Label != "renamed" {
+		t.Errorf("label = %q, want the edit — a stale cache would serve numbers that are quietly wrong", fresh.Label)
+	}
+}
+
+// A deleted session must stop being remembered, or the cache grows with
+// everything the process has ever seen.
+func TestCacheForgetsDeletedSessions(t *testing.T) {
+	layout := agentconfig.NewLayout(t.TempDir())
+	agentsLayout = layout
+	sessionCache = &factsCache{m: map[string]sessionFacts{}}
+	ctx := context.Background()
+	for _, id := range []string{"a", "b"} {
+		if _, err := session.Create(ctx, layout, session.CreateOptions{ID: id, Origin: session.OriginUI}); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := sessionCache.get(layout, id); !ok {
+			t.Fatal(id)
+		}
+	}
+	if sessionCache.len() != 2 {
+		t.Fatalf("cache holds %d, want 2", sessionCache.len())
+	}
+	sessionCache.keep(map[string]bool{"a": true})
+	if sessionCache.len() != 1 {
+		t.Errorf("cache holds %d after a delete, want 1", sessionCache.len())
+	}
+}
+
+// A file that cannot be stat'd (mid-write, or gone between the listing and
+// the read) is skipped, not cached as an error — otherwise that session
+// stays missing from the page until the process restarts.
+func TestUnreadableSessionIsNotCached(t *testing.T) {
+	layout := agentconfig.NewLayout(t.TempDir())
+	sessionCache = &factsCache{m: map[string]sessionFacts{}}
+	if _, ok := sessionCache.get(layout, "does-not-exist"); ok {
+		t.Error("a missing session must not report facts")
+	}
+	if sessionCache.len() != 0 {
+		t.Error("a failure must not be remembered")
+	}
+}

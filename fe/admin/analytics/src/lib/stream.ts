@@ -20,6 +20,8 @@ export async function loadAnalytics(
     to?: string;
     /** Channels to include. Empty = every channel. */
     channels?: string[];
+    /** Specific bots to include ("slack:<owner id>"). Empty = all of them. */
+    instances?: string[];
     onProgress?: (done: number, total: number) => void;
     fetchImpl?: typeof fetch;
   } = {},
@@ -30,6 +32,7 @@ export async function loadAnalytics(
   if (opts.from) url.searchParams.set("from", opts.from);
   if (opts.to) url.searchParams.set("to", opts.to);
   if (opts.channels?.length) url.searchParams.set("channels", opts.channels.join(","));
+  if (opts.instances?.length) url.searchParams.set("instances", opts.instances.join(","));
 
   const streamURL = new URL(url);
   streamURL.searchParams.set("stream", "1");
