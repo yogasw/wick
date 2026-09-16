@@ -99,6 +99,7 @@ export type AnalyticsResponse = {
   channels: AnalyticsChannel[];
   projects: AnalyticsProject[];
   series: AnalyticsSeries;
+  logins_recorded_since?: string;
   total_users: number;
   active_users_7d: number;
   sessions: number;

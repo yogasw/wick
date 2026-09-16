@@ -141,6 +141,29 @@ func (r *repo) LoginHistory(ctx context.Context, since time.Time) map[string]map
 	return out
 }
 
+// FirstLoginRecordedAt is the oldest sign-in on record, or the zero time
+// when none exists.
+//
+// It exists to keep the page from lying. Sign-ins were not recorded at
+// all until recently — wick's sessions are stateless, so nothing was ever
+// written down — and "never signed in" is a much stronger claim than
+// "we have no record". With this, the page can say which one it means.
+func (r *repo) FirstLoginRecordedAt(ctx context.Context) time.Time {
+	// The oldest row rather than MIN(created_at): an aggregate comes back
+	// as a driver string on sqlite and as a time on postgres, so scanning
+	// it portably means handling both. Reading the row lets gorm's own
+	// column mapping do that, and on a table this small ORDER BY + LIMIT 1
+	// costs the same.
+	var row entity.Session
+	if err := r.db.WithContext(ctx).
+		Order("created_at ASC").
+		Limit(1).
+		Find(&row).Error; err != nil {
+		return time.Time{}
+	}
+	return row.CreatedAt.UTC()
+}
+
 // AccessTokens lists every Personal Access Token row, revoked ones
 // included. The analytics page shows them per person so "which of this
 // account's credentials is actually calling" has an answer; a revoked

@@ -168,6 +168,7 @@ func (h *Handler) loginPassword(w http.ResponseWriter, r *http.Request) {
 
 	tagIDs := h.svc.GetUserFilterTagIDs(r.Context(), user.ID)
 	h.midd.SetSessionCookie(w, user.ID, tagIDs, h.secureCookie())
+	h.svc.RecordLogin(r.Context(), user.ID)
 	h.syncThemeCookie(w, user)
 
 	if !user.Approved {
@@ -223,6 +224,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 
 	tagIDs := h.svc.GetUserFilterTagIDs(r.Context(), user.ID)
 	h.midd.SetSessionCookie(w, user.ID, tagIDs, h.secureCookie())
+	h.svc.RecordLogin(r.Context(), user.ID)
 	h.syncThemeCookie(w, user)
 
 	if !user.Approved {

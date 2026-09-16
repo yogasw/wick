@@ -365,3 +365,26 @@ func TestStreamReportsProgressThenTheData(t *testing.T) {
 		t.Errorf("streamed payload = %+v, want the same numbers as the plain call", result)
 	}
 }
+
+// The page must not confuse "we have no record" with "nobody ever signed
+// in" — the second is a much stronger claim, and it was the wrong one for
+// every account until sign-ins started being recorded.
+func TestLoginsRecordedSinceSaysWhetherThereIsAnyHistory(t *testing.T) {
+	h, _ := seedAnalytics(t)
+	out := buildFixture(t, h)
+	if out.LoginsRecordedSince == "" {
+		t.Fatal("with sign-ins seeded, the page must say since when they exist")
+	}
+
+	// A fresh install with no sign-in yet: the field is empty, and the page
+	// uses that to say "no record" instead of "never".
+	empty := newAnalyticsRepo(t)
+	h2 := &Handler{repo: empty}
+	out2, err := h2.buildAnalytics(httptest.NewRequest(http.MethodGet, "/", nil), defaultWindowDays, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out2.LoginsRecordedSince != "" {
+		t.Errorf("no sign-ins recorded, but the page claims history since %q", out2.LoginsRecordedSince)
+	}
+}

@@ -51,6 +51,11 @@
   // "Never signed in" is a different problem from "signed in once and left",
   // and an admin cleaning up accounts wants the first list, not a sort.
   const neverSignedIn = $derived((data?.users ?? []).filter((u) => !u.last_login_at).length);
+  // Sign-ins were not recorded at all until recently — wick's sessions are
+  // stateless, so nothing was ever written down. Until the first one lands,
+  // an empty column means "no record", not "nobody signed in", and the page
+  // has to say which.
+  const loginsRecorded = $derived(Boolean(data?.logins_recorded_since));
 
   const projectsByID = $derived.by(() => {
     const m = new Map<string, AnalyticsProject>();
@@ -112,7 +117,7 @@
     <!-- Summary: four numbers that answer "how big is this, and how live". -->
     <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {#each [
-        { label: "Accounts", value: data.total_users, hint: `${neverSignedIn} never signed in` },
+        { label: "Accounts", value: data.total_users, hint: loginsRecorded ? `${neverSignedIn} never signed in` : "sign-ins not recorded yet" },
         { label: "Active last 7 days", value: data.active_users_7d, hint: "worked in a session" },
         { label: "Conversations", value: data.sessions, hint: `${data.unattributed_sessions} with no account attached` },
         { label: "Channels in use", value: data.channels.length, hint: data.channels.map((c) => c.channel).join(", ") || "—" },
@@ -266,9 +271,16 @@
                   </div>
                   <div class="text-[11px] text-black-600 dark:text-black-700">{u.email}</div>
                 </td>
-                <td class="px-5 py-2 whitespace-nowrap text-black-800 dark:text-black-600" title={u.last_login_at ?? "never signed in"}>
-                  {ago(u.last_login_at)}
-                  {#if u.logins > 1}<span class="text-black-600 dark:text-black-700"> · {u.logins}×</span>{/if}
+                <td
+                  class="px-5 py-2 whitespace-nowrap text-black-800 dark:text-black-600"
+                  title={u.last_login_at ?? (loginsRecorded ? "never signed in" : "sign-ins are only recorded from this version onward")}
+                >
+                  {#if u.last_login_at}
+                    {ago(u.last_login_at)}
+                    {#if u.logins > 1}<span class="text-black-600 dark:text-black-700"> · {u.logins}×</span>{/if}
+                  {:else}
+                    <span class="text-black-600 dark:text-black-700">{loginsRecorded ? "never" : "no record"}</span>
+                  {/if}
                 </td>
                 <td class="px-5 py-2 whitespace-nowrap text-black-800 dark:text-black-600" title={u.last_active_at ?? "no sessions"}>{ago(u.last_active_at)}</td>
                 <td class="px-5 py-2 font-mono text-black-800 dark:text-black-600">
@@ -325,6 +337,12 @@
     <p class="text-xs text-black-600 dark:text-black-700">
       Generated {ago(data.generated_at)} · a “login” is a browser sign-in; “worked” is activity in a conversation.
       The curve counts conversations by the day they started — that is the only history the session files keep.
+      {#if loginsRecorded}
+        Sign-ins recorded since {data.logins_recorded_since?.slice(0, 10)}; anything before that was never written down.
+      {:else}
+        Sign-ins have only just started being recorded — wick's own sessions are stateless, so there is no history
+        before now. Empty means “no record”, not “never signed in”.
+      {/if}
     </p>
   {/if}
 

@@ -160,6 +160,12 @@ type analyticsResponse struct {
 	TotalUsers   int                `json:"total_users"`
 	ActiveUsers7 int                `json:"active_users_7d"`
 	Sessions     int                `json:"sessions"`
+	// LoginsRecordedSince is the oldest sign-in on record, empty when none
+	// is. Sign-ins were not written down at all before this shipped —
+	// wick's sessions are stateless — so without this the page would report
+	// every account as "never signed in", which is a different and much
+	// stronger claim than "no record".
+	LoginsRecordedSince string `json:"logins_recorded_since,omitempty"`
 	// Unattributed sessions predate user stamping (or came from a channel
 	// with no wick account behind it). Counted rather than hidden: a table
 	// whose numbers do not add up to the total invites the wrong conclusion.
@@ -287,6 +293,7 @@ func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, 
 		return analyticsResponse{}, err
 	}
 	logins := h.repo.LoginStats(ctx)
+	firstLogin := h.repo.FirstLoginRecordedAt(ctx)
 
 	now := time.Now().UTC()
 	from := now.AddDate(0, 0, -(days - 1)).Truncate(24 * time.Hour)
@@ -471,10 +478,11 @@ func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, 
 	}
 
 	out := analyticsResponse{
-		GeneratedAt:  rfc3339(now),
-		Sessions:     total,
-		Unattributed: unattributed,
-		TotalUsers:   len(users),
+		GeneratedAt:         rfc3339(now),
+		Sessions:            total,
+		Unattributed:        unattributed,
+		TotalUsers:          len(users),
+		LoginsRecordedSince: rfc3339(firstLogin),
 	}
 
 	// Token rows, grouped by owner.
