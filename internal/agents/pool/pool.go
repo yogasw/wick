@@ -121,6 +121,14 @@ type PoolConfig struct {
 	// caller-change respawn for that message.
 	CallerUserID func(ctx context.Context) string
 
+	// CallerToken resolves the credential behind a Send — id and label of
+	// the Personal Access Token, for channels that authenticate with one.
+	// Recorded on the session at create time so a machine caller can be
+	// identified later by WHAT called, not only by whose account it used.
+	// nil (or an empty id) = nothing to record, which is the normal case
+	// for a human typing in a browser.
+	CallerToken func(ctx context.Context) (id, name string)
+
 	// SenderFrom resolves WHO sent a message from its context — the human
 	// identity the originating channel read off its own transport envelope.
 	// Injected for the same reason as CallerUserID: the pool must not import
@@ -1707,11 +1715,17 @@ func (p *Pool) ensureSession(ctx context.Context, sessionID, source, projectID s
 	if p.cfg.CallerUserID != nil {
 		ownerUserID = p.cfg.CallerUserID(ctx)
 	}
+	var tokenID, tokenName string
+	if p.cfg.CallerToken != nil {
+		tokenID, tokenName = p.cfg.CallerToken(ctx)
+	}
 	sess, cerr := session.Create(ctx, p.cfg.Layout, session.CreateOptions{
 		ID:        sessionID,
 		Origin:    session.Origin(source),
 		ProjectID: projectID,
 		UserID:    ownerUserID,
+		TokenID:   tokenID,
+		TokenName: tokenName,
 	})
 	// Suppress "already exists" — a concurrent call may have won the race.
 	if cerr != nil && !errors.Is(cerr, os.ErrExist) {
@@ -2041,6 +2055,15 @@ type ActiveEntry struct {
 // The normal onAgentExit hook still fires, releasing the slot and
 // draining the queue.
 func (p *Pool) Kill(sessionID, agentName string) error {
+	return p.KillBy(sessionID, agentName, "", "")
+}
+
+// KillBy is Kill with an author. The turn that gets cut short records who
+// did it, so the transcript can say "stopped by <person>" instead of
+// leaving the reader to guess between a person, the agent, and wick going
+// down — which is the difference between "fine, that was me" and "why did
+// my work vanish". Pass empty strings when nothing is known.
+func (p *Pool) KillBy(sessionID, agentName, by, note string) error {
 	p.mu.Lock()
 	prefix := sessionID + "::"
 	var entries []*runEntry
@@ -2051,6 +2074,11 @@ func (p *Pool) Kill(sessionID, agentName string) error {
 	}
 	p.mu.Unlock()
 	for _, e := range entries {
+		// Claim it BEFORE the stop: the interrupted turn is flushed inside
+		// Stop, and a cause set afterwards would arrive to an empty room.
+		if by != "" && e.store != nil {
+			e.store.SetInterruptCause(by, note)
+		}
 		if err := e.agent.Stop(); err != nil {
 			log.Error().Str("session", e.sessID).Str("agent", e.agentNm).Err(err).Msg("pool.kill: agent.Stop failed")
 			return err
@@ -2093,6 +2121,13 @@ var ErrAgentNotActive = errors.New("agent not active in pool")
 //
 // Returns ErrAgentNotActive when no live entry matches.
 func (p *Pool) KillAgent(sessionID, agentName string) error {
+	return p.KillAgentBy(sessionID, agentName, "", "")
+}
+
+// KillAgentBy is KillAgent with an author — see KillBy. The delegation
+// paths use it so a sub-agent that was stopped by its parent says so,
+// rather than looking like it died on its own.
+func (p *Pool) KillAgentBy(sessionID, agentName, by, note string) error {
 	p.mu.Lock()
 	e, ok := p.active[sessionID+"::"+agentName]
 	p.mu.Unlock()
@@ -2101,6 +2136,9 @@ func (p *Pool) KillAgent(sessionID, agentName string) error {
 	// for the same reason.
 	if !ok {
 		return ErrAgentNotActive
+	}
+	if by != "" && e.store != nil {
+		e.store.SetInterruptCause(by, note)
 	}
 	if err := e.agent.Stop(); err != nil {
 		log.Error().Str("session", sessionID).Str("agent", agentName).Err(err).Msg("pool.killAgent: agent.Stop failed")

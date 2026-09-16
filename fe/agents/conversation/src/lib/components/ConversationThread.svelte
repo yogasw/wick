@@ -19,13 +19,16 @@
     onOpenPath?: (path: string) => void;
     // Cancel an in-flight connector run behind a running tool call.
     onCancelRun?: (runId: string) => void;
+    /** Stop the agent process — the only way to end a tool running inside the
+        provider CLI, which wick cannot cancel on its own. */
+    onStopTurn?: () => void;
     // Dismiss a stuck tool card (no runId to cancel) from the view.
     onDismissTool?: (toolUseId: string) => void;
     // Reveals a wick_delegate call's sub-agent in the rail panel.
     onOpenSubAgent?: (delegationId: string) => void;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, onOpenPath, onCancelRun, onDismissTool, onOpenSubAgent }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -227,7 +230,7 @@
             <div class="flex flex-col gap-1">
               {#each liveNonTodoBlocks as block, bi (bi)}
                 {#if block.kind === "tool"}
-                  <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} onCancel={onCancelRun} onDismiss={onDismissTool} {onOpenSubAgent} />
+                  <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} onCancel={onCancelRun} {onStopTurn} onDismiss={onDismissTool} {onOpenSubAgent} />
                 {:else if block.kind === "thinking"}
                   <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700">
                     {(block as Extract<ThreadBlock, { kind: "thinking" }>).text}

@@ -176,6 +176,11 @@ export type ConversationTurn = {
   timestamp: number;
   truncated: boolean;
   interrupted: boolean;
+  /** Who cut the turn short: "user" | "agent" | "wick" | "unknown" (mid-turn stop
+      nothing claimed — an external kill, a crash, the host out of memory). */
+  interrupted_by?: string;
+  /** One sentence naming who, and what they did. Absent when unknown. */
+  interrupted_note?: string;
   has_trace: boolean;
   events: TurnEvent[];
   attachments: Attachment[];
@@ -183,6 +188,9 @@ export type ConversationTurn = {
   artifacts?: Artifact[];
   // system turn only — a provider/runtime error, rendered as a failure.
   is_error?: boolean;
+  /** system turn only — "provider_switch", "interrupted", … Tags a structured
+      notice so it renders as itself instead of a plain grey line. */
+  kind?: string;
 };
 
 export type ApprovalRequest = {

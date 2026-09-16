@@ -831,6 +831,14 @@ func NewServer() *Server {
 			// another principal's credential.
 			return agentchannels.CallerUserID(ctx)
 		},
+		// Which credential is behind this dispatch, when the caller used one.
+		// Only the REST channel has an answer — a browser or a Slack message
+		// carries a person, not a token — and it is recorded on the session so
+		// "which script has been calling" is answerable after the fact.
+		CallerToken: func(ctx context.Context) (string, string) {
+			t := agentchannels.CallerTokenFrom(ctx)
+			return t.ID, t.Name
+		},
 		// Who the agent is talking to, for the `[wick-sender ...]` line and
 		// the UI's sender chip. Channels stamp this themselves from their
 		// own transport envelope; a composer send falls back to the logged-in
@@ -2291,6 +2299,10 @@ func NewServer() *Server {
 		wfLister = wfListerAdapter{svc: wfMgr.Service}
 	}
 	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore, sysCfg)
+	// The People & usage page reads the session store. Handed the SAME
+	// resolved layout the agents tool uses — resolving that path twice is how
+	// two parts of one binary end up reading two different directories.
+	admin.SetAgentsLayout(agentsLayout)
 	if wfMgr != nil && wfMgr.DataTables != nil {
 		adminHandler.SetDataTables(wfMgr.DataTables) // /admin/data-tables grant page
 	}

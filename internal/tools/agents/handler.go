@@ -1711,7 +1711,8 @@ func moveSessionToProject(c *tool.Ctx) {
 		agentName = sess.Agents[0].Name
 	}
 	if agentName != "" {
-		_ = globalPool.Kill(id, agentName)
+		_ = globalPool.KillBy(id, agentName, "wick",
+			"the session was moved to another project, so its process was restarted in the new folder")
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "moved", "project_id": req.ProjectID})
 }
@@ -2133,6 +2134,17 @@ func sessionProcesses(c *tool.Ctx) {
 	c.JSON(http.StatusOK, out)
 }
 
+// stoppedByNote names the person behind a Stop, for the interrupted turn to
+// carry. A session can be open to several people (a Slack thread is shared
+// work), so "someone stopped it" is not enough — the next reader wants to
+// know whether it was them, a colleague, or nobody at all.
+func stoppedByNote(c *tool.Ctx) string {
+	if u := login.GetUser(c.Context()); u != nil && strings.TrimSpace(u.Name) != "" {
+		return strings.TrimSpace(u.Name) + " stopped this agent from the conversation view"
+	}
+	return "someone stopped this agent from the conversation view"
+}
+
 func killAgent(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -2152,7 +2164,7 @@ func killAgent(c *tool.Ctx) {
 	// every sub-agent it spawned: nothing is waiting on their results
 	// any more, but the processes keep running and spending tokens.
 	cascadeInterruptChildren(c, id)
-	if err := globalPool.Kill(id, agentName); err != nil {
+	if err := globalPool.KillBy(id, agentName, "user", stoppedByNote(c)); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("kill agent %s/%s: %s", id, agentName, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

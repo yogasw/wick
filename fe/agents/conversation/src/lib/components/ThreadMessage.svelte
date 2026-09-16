@@ -36,6 +36,28 @@
     isSilentReply ? (turn.text ?? "").replace(/^\s*\[silent\]\s*/i, "") : (turn.text ?? ""),
   );
 
+  /* "Interrupted — response was cut off" answers what happened and not the
+     question that follows it: BY WHOM. A person clicking Stop, the agent
+     stopping one of its own children, and wick going down mid-turn all
+     landed on the same sentence, and only the last one means the work can
+     be picked up again. The server names the author when it knows one; the
+     bare wording stays for turns interrupted before it did. */
+  const interruptedLabel = $derived.by(() => {
+    const note = (turn.interrupted_note ?? "").trim();
+    if (note) return isSystem ? `Stopped — ${note}` : `Interrupted — ${note}`;
+    switch (turn.interrupted_by) {
+      case "user":
+        return "Interrupted — stopped from the conversation view";
+      case "agent":
+        return "Interrupted — stopped by the agent that started it";
+      case "wick":
+        return "Interrupted — wick stopped this process mid-turn";
+      case "unknown":
+        return "Stopped — nothing claimed it; check the daemon log for this time";
+    }
+    return "Interrupted — response was cut off";
+  });
+
   /* The server appends a "[routed] …" line to a person's message so the
      leader reads, in the same message, which @mentions wick already
      dispatched — without it the leader delegates them a second time. That
@@ -288,7 +310,19 @@
 {#if isSystem}
   <div class="flex justify-center py-1">
     <div class="flex flex-col items-center gap-1 max-w-full">
-      {#if turn.is_error}
+      {#if turn.kind === "interrupted"}
+        <!-- A stop that cut nothing off mid-sentence leaves no assistant turn
+             to mark, so the stop itself is the record. Amber rather than the
+             neutral system grey: this is why the answer you were waiting for
+             never arrived, and it should not read like a routine notice. -->
+        <div class="inline-flex items-start gap-1.5 rounded-2xl border border-amber-400/40 bg-amber-400/10 px-3 py-1 text-xs text-amber-700 dark:text-amber-300 max-w-full">
+          <svg viewBox="0 0 16 16" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M8 2L1.5 13.5h13L8 2z" stroke-linejoin="round"></path>
+            <path d="M8 6v4M8 11.5v.5" stroke-linecap="round"></path>
+          </svg>
+          <span class="whitespace-pre-wrap break-words min-w-0">{interruptedLabel}</span>
+        </div>
+      {:else if turn.is_error}
         <div class="inline-flex items-start gap-1.5 rounded-2xl border border-neg-400/40 bg-neg-400/10 px-3 py-1 text-xs text-neg-400 max-w-full">
           <svg viewBox="0 0 12 12" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M6 1L11 10.5H1z" stroke-linejoin="round"></path>
@@ -542,7 +576,7 @@
                 <path d="M8 2L1.5 13.5h13L8 2z" stroke-linejoin="round"></path>
                 <path d="M8 6v4M8 11.5v.5" stroke-linecap="round"></path>
               </svg>
-              <span class="text-xs text-amber-600 dark:text-amber-400">Interrupted — response was cut off</span>
+              <span class="text-xs text-amber-600 dark:text-amber-400">{interruptedLabel}</span>
             </div>
           {:else if turn.truncated}
             <p class="mt-2 text-xs text-black-600 dark:text-black-700 italic border-t border-white-300 dark:border-navy-600 pt-2">Output truncated — see raw.jsonl for full content.</p>
@@ -561,7 +595,7 @@
               <path d="M8 2L1.5 13.5h13L8 2z" stroke-linejoin="round"></path>
               <path d="M8 6v4M8 11.5v.5" stroke-linecap="round"></path>
             </svg>
-            <span class="text-xs text-amber-700 dark:text-amber-300">Interrupted — response was cut off</span>
+            <span class="text-xs text-amber-700 dark:text-amber-300">{interruptedLabel}</span>
           </div>
         </div>
       {/if}

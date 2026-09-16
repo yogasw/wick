@@ -66,6 +66,96 @@ func (r *repo) SetApproved(ctx context.Context, userID string, approved bool) er
 // ErrLastAdmin is returned when trying to demote the only remaining admin.
 var ErrLastAdmin = errors.New("cannot demote the last admin")
 
+// LoginStat is what the sessions table can say about one person: when they
+// last signed in, how many times, and whether a session of theirs is still
+// valid right now. A login IS a row here, so no new bookkeeping is needed to
+// answer "who still uses this".
+type LoginStat struct {
+	Last  time.Time
+	Count int
+	Live  int
+}
+
+// LoginStats aggregates the auth sessions table per user. Errors are swallowed
+// into an empty map on purpose: the analytics page is still worth rendering
+// without the login column, and half a page beats an error page.
+func (r *repo) LoginStats(ctx context.Context) map[string]LoginStat {
+	type row struct {
+		UserID string
+		Last   time.Time
+		Count  int
+		Live   int
+	}
+	var rows []row
+	err := r.db.WithContext(ctx).
+		Model(&entity.Session{}).
+		Select("user_id, MAX(created_at) AS last, COUNT(*) AS count, SUM(CASE WHEN expires_at > ? THEN 1 ELSE 0 END) AS live", time.Now().UTC()).
+		Group("user_id").
+		Scan(&rows).Error
+	if err != nil {
+		return map[string]LoginStat{}
+	}
+	out := make(map[string]LoginStat, len(rows))
+	for _, x := range rows {
+		out[x.UserID] = LoginStat{Last: x.Last, Count: x.Count, Live: x.Live}
+	}
+	return out
+}
+
+// LoginHistory is LoginStats with the shape the growth chart needs: one
+// count per user per UTC day, from `since` onwards. Same table, same
+// "a login IS a row" rule — a sign-in curve therefore needs no new
+// bookkeeping, only a GROUP BY that was not being asked for.
+//
+// Returned as user -> date(YYYY-MM-DD) -> count. Errors collapse to an
+// empty map for the same reason LoginStats swallows them: the page is
+// worth rendering without its chart.
+func (r *repo) LoginHistory(ctx context.Context, since time.Time) map[string]map[string]int {
+	type row struct {
+		UserID    string
+		CreatedAt time.Time
+	}
+	var rows []row
+	err := r.db.WithContext(ctx).
+		Model(&entity.Session{}).
+		Select("user_id, created_at").
+		Where("created_at >= ?", since.UTC()).
+		Scan(&rows).Error
+	if err != nil {
+		return map[string]map[string]int{}
+	}
+	// Bucketed in Go rather than in SQL: date formatting differs between
+	// sqlite and postgres, and this table is small enough that one round
+	// trip beats two dialects of DATE().
+	out := map[string]map[string]int{}
+	for _, x := range rows {
+		if x.UserID == "" {
+			continue
+		}
+		day := x.CreatedAt.UTC().Format("2006-01-02")
+		if out[x.UserID] == nil {
+			out[x.UserID] = map[string]int{}
+		}
+		out[x.UserID][day]++
+	}
+	return out
+}
+
+// AccessTokens lists every Personal Access Token row, revoked ones
+// included. The analytics page shows them per person so "which of this
+// account's credentials is actually calling" has an answer; a revoked
+// token stays visible because it still explains past traffic.
+//
+// Only the stored record is read — hash and 4-character preview. The
+// plaintext exists nowhere but in the hands of whoever was given it.
+func (r *repo) AccessTokens(ctx context.Context) []entity.PersonalAccessToken {
+	var rows []entity.PersonalAccessToken
+	if err := r.db.WithContext(ctx).Find(&rows).Error; err != nil {
+		return nil
+	}
+	return rows
+}
+
 func (r *repo) CountAdmins(ctx context.Context) (int64, error) {
 	var count int64
 	err := r.db.WithContext(ctx).Model(&entity.User{}).Where("role = ?", entity.RoleAdmin).Count(&count).Error

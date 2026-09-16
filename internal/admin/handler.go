@@ -255,6 +255,12 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("POST /admin/jobs/{path}/disabled", admin(h.setJobDisabled))
 	mux.Handle("POST /admin/jobs/{path}/tags", admin(h.setJobTags))
 
+	// People & usage: who still logs in, through which channel, on what.
+	// Admin-only — it names every account and what they touched.
+	mux.Handle("GET /admin/analytics", admin(h.analyticsPage))
+	mux.Handle("GET /admin/analytics/users.json", admin(h.analyticsUsersJSON))
+	mux.Handle("GET "+spaAssetBase, admin(h.spaAssetHandler))
+
 	mux.Handle("GET /admin/tags", admin(h.tagsPage))
 	mux.Handle("GET /admin/advanced", admin(h.configsHubPage))
 	mux.Handle("GET /admin/advanced/sso", admin(h.ssoPage))

@@ -108,3 +108,18 @@ export function allChanges(node: TreeNode): FileChange[] {
   for (const c of node.children ?? []) out.push(...allChanges(c));
   return out;
 }
+
+/** splitPath cuts a repo-relative path into the two things a file row shows:
+ *  the NAME you are looking for, and the folder that tells two files with the
+ *  same name apart. Mirrors what an editor's Changes list does — the name is
+ *  never the part that gets truncated, because the name is the point.
+ *
+ *  "internal/agents/store/store.go" → { name: "store.go", dir: "internal/agents/store" }
+ *  "store.go"                       → { name: "store.go", dir: "" }
+ */
+export function splitPath(path: string): { name: string; dir: string } {
+  const clean = path.replace(/\/+$/, "");
+  const i = clean.lastIndexOf("/");
+  if (i < 0) return { name: clean, dir: "" };
+  return { name: clean.slice(i + 1), dir: clean.slice(0, i) };
+}

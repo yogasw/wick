@@ -13,6 +13,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 )
 
 // Agent owns one running subprocess. Lifecycle:
@@ -194,7 +195,7 @@ type Options struct {
 	// so the pool's crash-recovery notice can tell the agent WHY it died —
 	// an OOM cause must reach the agent, or the generic "carry on" notice
 	// tells it to repeat the allocation that got it killed.
-	OnExit  func(reason ExitReason, reasonDetail string)
+	OnExit func(reason ExitReason, reasonDetail string)
 	// OnExitDetail fires with the full ExitDetail (reason detail + exit
 	// code + stderr tail on crash) alongside OnExit. Optional — the
 	// factory wires it so the spawn log records the crash/kill reason.
@@ -675,6 +676,11 @@ func (a *Agent) Stop() error {
 	proc := a.proc
 	cancel := a.cancel
 	done := a.done
+	// Was this stop taken mid-answer? A stop between turns (an idle reap)
+	// interrupts nothing and deserves no line in the transcript; a stop
+	// while the agent was working is the one somebody will come back
+	// asking about.
+	wasWorking := a.turnActive
 	a.turnActive = false
 	a.pendingQueue = nil
 	if respawn {
@@ -702,6 +708,23 @@ func (a *Agent) Stop() error {
 		a.mu.Unlock()
 	}
 	if a.store != nil {
+		// Nobody claimed this stop, and wick is on its way out: then wick is
+		// what ended the turn, and the transcript should say so rather than
+		// leaving a bare "interrupted" that reads like the agent gave up.
+		// IfUnset so a person who clicked Stop during a handover still gets
+		// the credit — they were first, and they were more specific.
+		if upgrade.Draining() {
+			a.store.SetInterruptCauseIfUnset("wick",
+				"wick was handing over to a new build, so this process was wound down mid-turn")
+		} else if wasWorking {
+			// Something stopped a working agent and did not say what: an
+			// external kill, an OOM, a crash, a tool nobody expected. Silence
+			// here is the worst answer — the turn simply vanishes and the
+			// next reader cannot tell a deliberate stop from a dead process.
+			// Say that it is unexplained, and point at where the answer is.
+			a.store.SetInterruptCauseIfUnset("unknown",
+				"the agent process ended mid-turn and nothing claimed the stop — an external kill, a crash, or the host running out of memory; the daemon log for this time window says which")
+		}
 		_ = a.store.Flush()
 	}
 	if respawn {

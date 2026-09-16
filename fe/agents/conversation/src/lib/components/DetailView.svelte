@@ -424,7 +424,9 @@
 
   /* ── process panel state ──────────────────────────────────────── */
   let processes = $state<ProcessInfo[]>([]);
-  let confirmKill = $state<{ sid: string; queued: boolean } | null>(null);
+  // note carries the reason the dialog was opened from a running tool card,
+  // so the confirm can explain why a "cancel" turned into "stop the agent".
+  let confirmKill = $state<{ sid: string; queued: boolean; note?: string } | null>(null);
   // Guard against overlapping /processes requests: a burst of SSE `lifecycle`
   // events would otherwise stack into a pile of pending fetches. Skip while
   // one is already in flight.
@@ -1647,6 +1649,18 @@
       .catch((e: unknown) => toastError("Cancel failed", e instanceof Error ? e.message : String(e)));
   }
 
+  // The ✕ on a tool running inside the provider CLI. wick has no handle on
+  // that process — it lives inside claude/codex — so the honest options are
+  // to stop the agent or to wait. Route it through the same confirm as the
+  // header's Stop, with a line saying why the ✕ escalated.
+  function handleStopFromTool() {
+    confirmKill = {
+      sid: sessionId,
+      queued: false,
+      note: "This tool is running inside the provider CLI, so wick cannot cancel it on its own — stopping the agent is what ends it.",
+    };
+  }
+
   function doKill() {
     const target = confirmKill;
     confirmKill = null;
@@ -2198,7 +2212,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} />
+          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} />
         </div>
       </div>
 
@@ -2933,7 +2947,9 @@
 <ConfirmDialog
   open={confirmKill !== null}
   title={confirmKill?.queued ? "Cancel queued agent?" : "Stop this agent?"}
-  body={confirmKill?.queued ? "The queued spawn will be dropped." : "The running agent process will be terminated."}
+  body={confirmKill?.queued
+    ? "The queued spawn will be dropped."
+    : (confirmKill?.note ? confirmKill.note + " The running agent process will be terminated." : "The running agent process will be terminated.")}
   confirmLabel={confirmKill?.queued ? "Cancel spawn" : "Stop agent"}
   destructive={true}
   onConfirm={doKill}

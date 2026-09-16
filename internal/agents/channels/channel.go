@@ -137,6 +137,43 @@ func WithCallerUserID(ctx context.Context, userID string) context.Context {
 	return context.WithValue(ctx, callerUserIDKey{}, userID)
 }
 
+// callerTokenKey carries the credential a channel message authenticated
+// with, when the channel has one to name.
+type callerTokenKey struct{}
+
+// CallerToken identifies the credential behind a dispatch: a Personal
+// Access Token, for channels that authenticate with one. Slack and
+// Telegram have no equivalent — the person IS the envelope — so they
+// leave it unset.
+//
+// It exists because "which account" is not a complete answer for a
+// machine caller. A PAT can be shared with a script, a CI job or an
+// integration, and when one of them starts behaving oddly the useful
+// question is which token did it, not just whose name is on it.
+type CallerToken struct {
+	ID   string // PAT row id
+	Name string // the human label its owner gave it
+}
+
+// WithCallerToken returns ctx carrying the credential this message
+// authenticated with. A zero id is ignored: a session is better with no
+// token recorded than with an empty one that looks like a lookup failure.
+func WithCallerToken(ctx context.Context, t CallerToken) context.Context {
+	if t.ID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, callerTokenKey{}, t)
+}
+
+// CallerTokenFrom returns the credential stamped by WithCallerToken, or
+// the zero value when this dispatch had none.
+func CallerTokenFrom(ctx context.Context) CallerToken {
+	if v, ok := ctx.Value(callerTokenKey{}).(CallerToken); ok {
+		return v
+	}
+	return CallerToken{}
+}
+
 // CallerUserID returns the wick user id behind this dispatch, or "" when
 // the channel could not resolve one.
 func CallerUserID(ctx context.Context) string {

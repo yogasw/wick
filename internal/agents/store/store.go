@@ -104,6 +104,13 @@ type ConversationTurn struct {
 	Text        string       `json:"text"`
 	Truncated   bool         `json:"truncated,omitempty"`
 	Interrupted bool         `json:"interrupted,omitempty"` // true when killed before Done — distinct from text-cap truncation
+	// Who or what cut the turn short. "Interrupted" alone leaves the reader
+	// guessing between a person clicking Stop, the agent stopping one of its
+	// own children, and wick going down under them — three situations with
+	// three different responses. Empty when nothing claimed it, and then the
+	// UI says only that it was interrupted rather than inventing a culprit.
+	InterruptedBy   string `json:"interrupted_by,omitempty"`   // "user" | "agent" | "wick"
+	InterruptedNote string `json:"interrupted_note,omitempty"` // one sentence: who, and what they did
 	HasTrace    bool         `json:"has_trace,omitempty"`   // true when thinking/<TurnID>.json exists
 	Events      []TurnEvent  `json:"events,omitempty"`      // legacy: populated only when reading old turns
 	Attachments []Attachment `json:"attachments,omitempty"`  // user turn only
@@ -183,6 +190,13 @@ type Store struct {
 	// InFlightEvents is called from HTTP handler goroutines.
 	mu       sync.RWMutex
 	eventBuf []TurnEvent
+
+	// interruptBy/Note: who declared they were about to cut the current
+	// turn short. Set just before the stop, consumed by the interrupted
+	// flush. Guarded by mu like eventBuf — it is written from the HTTP
+	// handler goroutine that services the Stop click.
+	interruptBy   string
+	interruptNote string
 
 	// recordRaw mirrors every event line into raw.jsonl. Off by
 	// default per design (raw is opt-in, retention agressive).
@@ -499,15 +513,86 @@ func (s *Store) PartialText() string {
 // Flush is the explicit drain hook for callers that want to write
 // whatever's buffered (e.g. subprocess crashed mid-stream, no Done
 // arrived). Marks the turn as truncated since it didn't end naturally.
+// SetInterruptCause records who is about to cut this turn short, so the
+// interrupted turn can say so. Called just BEFORE the stop it describes —
+// by then the flush is milliseconds away and nothing else can claim it.
+// A later call wins: the last thing to declare itself is the thing that
+// actually did it.
+func (s *Store) SetInterruptCause(by, note string) {
+	s.mu.Lock()
+	s.interruptBy, s.interruptNote = by, note
+	s.mu.Unlock()
+}
+
+// SetInterruptCauseIfUnset is the fallback for a path that only knows the
+// shape of the interruption, not its author — wick shutting down, say. It
+// must never overwrite a caller that named itself.
+func (s *Store) SetInterruptCauseIfUnset(by, note string) {
+	s.mu.Lock()
+	if s.interruptBy == "" {
+		s.interruptBy, s.interruptNote = by, note
+	}
+	s.mu.Unlock()
+}
+
+// takeInterruptCause reads and clears the pending cause: it belongs to the
+// turn being written now, not to the next one.
+func (s *Store) takeInterruptCause() (string, string) {
+	s.mu.Lock()
+	by, note := s.interruptBy, s.interruptNote
+	s.interruptBy, s.interruptNote = "", ""
+	s.mu.Unlock()
+	return by, note
+}
+
 func (s *Store) Flush() error {
 	s.mu.RLock()
 	evEmpty := len(s.eventBuf) == 0
 	bufEmpty := s.turnBuf.Len() == 0
 	s.mu.RUnlock()
 	if bufEmpty && evEmpty {
-		return nil
+		// Nothing was buffered — the agent was thinking, or running a tool,
+		// and had not written a word yet. There is no turn to mark, and the
+		// old behaviour was to record NOTHING: you clicked Stop, the process
+		// died, and the transcript carried on as if you had never clicked.
+		// The stop itself is the event worth keeping, so write it as a
+		// system line when somebody claimed it.
+		return s.noteInterruptOnly()
 	}
 	return s.flushAssistantTurn(true)
+}
+
+// noteInterruptOnly records a stop that cut nothing off mid-sentence. It is
+// the only trace such a stop leaves, so it says who did it and stays silent
+// when nobody claimed it (a pending cause is only set by the paths that know
+// one — see SetInterruptCause).
+func (s *Store) noteInterruptOnly() error {
+	by, note := s.takeInterruptCause()
+	if by == "" && note == "" {
+		return nil
+	}
+	if note == "" {
+		note = "the agent was stopped"
+	}
+	now := s.now().UTC()
+	turn := ConversationTurn{
+		TurnID:          fmt.Sprintf("%d", now.UnixNano()),
+		Timestamp:       now,
+		Role:            "system",
+		Agent:           s.agentName,
+		Provider:        s.provider,
+		Text:            note,
+		Kind:            "interrupted",
+		Interrupted:     true,
+		InterruptedBy:   by,
+		InterruptedNote: note,
+	}
+	return storage.AppendJSONL(
+		s.layout.SessionConversation(s.sessionID),
+		"wick-conv-v1",
+		s.sessionID,
+		turn,
+	)
 }
 
 // flushAssistantTurn writes the buffered text as one assistant turn
@@ -551,6 +636,9 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		Truncated:   truncated,
 		Interrupted: wasInterrupted,
 		HasTrace:    hasTrace,
+	}
+	if wasInterrupted {
+		turn.InterruptedBy, turn.InterruptedNote = s.takeInterruptCause()
 	}
 	s.turnBuf.Reset()
 	if err := storage.AppendJSONL(

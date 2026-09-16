@@ -26,6 +26,10 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 				<div class="flex flex-wrap items-center gap-1 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-1 order-last w-full md:order-none md:w-auto md:mr-auto">
 					@adminTab("/admin", "Dashboard", activeTab == "dashboard")
 					@adminTab("/admin/users", "Users", activeTab == "users")
+					// Who actually uses this install, and through which door.
+					// Beside Users on purpose: the two answer opposite halves of
+					// the same question — who MAY be here, and who IS.
+					@adminTab("/admin/analytics", "People & usage", activeTab == "analytics")
 					@adminDropdown("Mini Tools", isMiniToolsActive(activeTab), []dropdownItem{
 						{Href: "/admin/tools", Label: "Tools", Active: activeTab == "tools"},
 						{Href: "/admin/connectors", Label: "Connectors", Active: activeTab == "connectors"},

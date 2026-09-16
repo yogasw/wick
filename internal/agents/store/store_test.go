@@ -751,3 +751,89 @@ func TestSessionStartMatchingProviderStillPersists(t *testing.T) {
 		t.Errorf("ProviderSessions[claude] = %q, want id-42", a.ProviderSessions["claude"])
 	}
 }
+
+// TestFlushCarriesInterruptCause: "interrupted" on its own leaves the reader
+// guessing between a person clicking Stop, the agent stopping a child, and
+// wick going down — and only the last of those means the work can be picked
+// up again. Whoever is about to stop it says so first, and the turn keeps it.
+func TestFlushCarriesInterruptCause(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "half an ans"})
+	st.SetInterruptCause("user", "Yoga stopped this agent from the conversation view")
+	// A vaguer claim must not overwrite the specific one that got there first.
+	st.SetInterruptCauseIfUnset("wick", "wick was handing over")
+	if err := st.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 {
+		t.Fatalf("turns: %d", len(lines))
+	}
+	if lines[0].InterruptedBy != "user" || !strings.Contains(lines[0].InterruptedNote, "Yoga") {
+		t.Fatalf("cause not carried: by=%q note=%q", lines[0].InterruptedBy, lines[0].InterruptedNote)
+	}
+
+	// The cause belongs to THAT turn: the next interrupted turn must not
+	// inherit it and blame someone who was not involved.
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "another half"})
+	if err := st.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	lines = readConvLines(t, layout)
+	if len(lines) != 2 {
+		t.Fatalf("turns: %d", len(lines))
+	}
+	if lines[1].InterruptedBy != "" || lines[1].InterruptedNote != "" {
+		t.Fatalf("stale cause leaked into the next turn: %+v", lines[1])
+	}
+}
+
+// A turn that ends normally is not interrupted, so it must carry no cause
+// even when something set one and never used it.
+func TestDoneIgnoresInterruptCause(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.SetInterruptCause("user", "someone hovered over Stop and thought better of it")
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "complete answer"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 {
+		t.Fatalf("turns: %d", len(lines))
+	}
+	if lines[0].Interrupted || lines[0].InterruptedBy != "" {
+		t.Fatalf("clean turn wears an interrupt cause: %+v", lines[0])
+	}
+}
+
+// TestFlushRecordsStopWithNothingBuffered: the stop that leaves no half-
+// written sentence used to leave no trace at all — the process died and the
+// transcript read as if nobody had touched it. Now the stop IS the record.
+func TestFlushRecordsStopWithNothingBuffered(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.SetInterruptCause("user", "Yoga Setiawan stopped this agent from the conversation view")
+	if err := st.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 {
+		t.Fatalf("turns: %d — a stop with nothing buffered must still be recorded", len(lines))
+	}
+	got := lines[0]
+	if got.Role != "system" || got.Kind != "interrupted" {
+		t.Fatalf("want a system/interrupted line, got role=%q kind=%q", got.Role, got.Kind)
+	}
+	if got.InterruptedBy != "user" || !strings.Contains(got.Text, "Yoga Setiawan") {
+		t.Fatalf("stop line does not name who did it: %+v", got)
+	}
+}
+
+// The other half of that: a teardown nobody claimed — an idle reap between
+// turns — interrupts nothing, and must not litter the transcript.
+func TestFlushSilentWhenNothingBufferedAndNoCause(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	if err := st.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if lines := readConvLines(t, layout); len(lines) != 0 {
+		t.Fatalf("an unclaimed empty flush wrote %d turn(s): %+v", len(lines), lines)
+	}
+}

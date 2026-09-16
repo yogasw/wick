@@ -131,19 +131,38 @@ func (s *Service) RevokeAny(ctx context.Context, id string) error {
 // LastUsedAt is stamped best-effort; failure to update does not fail
 // the auth (the DB write is observability, not a gate).
 func (s *Service) Authenticate(ctx context.Context, plain string) (userID string, err error) {
+	row, err := s.AuthenticateToken(ctx, plain)
+	if err != nil {
+		return "", err
+	}
+	return row.UserID, nil
+}
+
+// AuthenticateToken is Authenticate with the row kept: the caller learns
+// WHICH credential was used, not only whose it is.
+//
+// One account can hold several tokens — a laptop, a CI job, a script
+// somebody was handed — so "authenticated as Yoga" does not identify the
+// thing that made the request. A channel that records the token id can
+// later answer "what has been calling us", and revoking one token does
+// not have to mean guessing which of them was the culprit.
+//
+// The returned row is the stored record: a hash and a 4-character
+// preview, never the plaintext, which exists only in the caller's hands.
+func (s *Service) AuthenticateToken(ctx context.Context, plain string) (*entity.PersonalAccessToken, error) {
 	if !strings.HasPrefix(plain, Prefix) {
-		return "", ErrInvalid
+		return nil, ErrInvalid
 	}
 	suffix := plain[len(Prefix):]
 	if len(suffix) != suffixLen {
-		return "", ErrInvalid
+		return nil, ErrInvalid
 	}
 	row, err := s.repo.FindByHash(ctx, hashToken(plain))
 	if err != nil {
-		return "", ErrInvalid
+		return nil, ErrInvalid
 	}
 	_ = s.repo.TouchLastUsed(ctx, row.ID)
-	return row.UserID, nil
+	return row, nil
 }
 
 // hashToken returns the SHA-256 hex digest of the plaintext token.
