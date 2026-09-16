@@ -150,3 +150,93 @@ func TestGitWatchCooldownScalesWithCost(t *testing.T) {
 		t.Errorf("cooldown(1m) = %v, want the %v ceiling", got, gitWatchMaxInterval)
 	}
 }
+
+// ── one watcher per directory, not per session ────────────────────────
+
+// Sessions of one project share a working directory. Keying the watcher
+// by session ran a full walk of that directory PER SESSION — 61 repos and
+// ~9800 directories each, at roughly 1.4 cores a pass. The per-watcher
+// duty-cycle cap was working; it just capped each copy, so three open
+// sessions cost three times the work and the daemon sat at 185% CPU while
+// a build wrote into the tree.
+func TestOneWatcherPerDirectory(t *testing.T) {
+	m := &gitWatchManager{
+		entries: make(map[string]*gitWatchEntry),
+		homes:   make(map[string]string),
+	}
+	cwd := t.TempDir()
+
+	// Attach three sessions to the same directory WITHOUT starting a real
+	// watcher: the entry bookkeeping is what this pins.
+	for _, id := range []string{"s1", "s2", "s3"} {
+		m.mu.Lock()
+		e, ok := m.entries[cwd]
+		if !ok {
+			e = &gitWatchEntry{sessions: map[string]int{}}
+			m.entries[cwd] = e
+		}
+		m.homes[id] = cwd
+		e.mu.Lock()
+		e.sessions[id]++
+		e.mu.Unlock()
+		m.mu.Unlock()
+	}
+
+	if len(m.entries) != 1 {
+		t.Fatalf("%d watchers for one directory, want exactly 1", len(m.entries))
+	}
+	if got := len(m.entries[cwd].attached()); got != 3 {
+		t.Errorf("%d sessions attached, want 3", got)
+	}
+
+	// The watcher survives until its LAST subscriber leaves, otherwise one
+	// person closing a tab would blind everyone else in the project.
+	m.release("s1")
+	if len(m.entries) != 1 {
+		t.Fatalf("the watcher stopped while two sessions were still attached")
+	}
+	m.release("s2")
+	if len(m.entries) != 1 {
+		t.Fatalf("the watcher stopped while a session was still attached")
+	}
+	m.release("s3")
+	if len(m.entries) != 0 {
+		t.Errorf("the watcher outlived its last subscriber: %v", m.entries)
+	}
+	if len(m.homes) != 0 {
+		t.Errorf("session→cwd map leaked: %v", m.homes)
+	}
+}
+
+// Two tabs of one session are two references, not two watchers — and
+// closing one must not detach the session.
+func TestSecondTabIsAReferenceNotAWatcher(t *testing.T) {
+	m := &gitWatchManager{
+		entries: make(map[string]*gitWatchEntry),
+		homes:   make(map[string]string),
+	}
+	cwd := t.TempDir()
+	e := &gitWatchEntry{sessions: map[string]int{"s1": 2}}
+	m.entries[cwd] = e
+	m.homes["s1"] = cwd
+
+	m.release("s1")
+	if len(m.entries) != 1 || len(e.attached()) != 1 {
+		t.Fatalf("closing one tab detached the session: entries=%d attached=%v", len(m.entries), e.attached())
+	}
+	m.release("s1")
+	if len(m.entries) != 0 {
+		t.Errorf("the last tab left the watcher running")
+	}
+}
+
+// Releasing something never acquired must be a no-op rather than a panic:
+// it happens whenever a subscriber disconnects after a restart.
+func TestReleaseUnknownSessionIsHarmless(t *testing.T) {
+	m := &gitWatchManager{
+		entries: make(map[string]*gitWatchEntry),
+		homes:   make(map[string]string),
+	}
+	m.release("never-seen")
+	m.release("")
+}

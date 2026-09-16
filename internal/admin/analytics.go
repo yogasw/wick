@@ -3,8 +3,10 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/yogasw/wick/internal/admin/view"
@@ -27,7 +29,14 @@ import (
 const (
 	defaultWindowDays = 30
 	minWindowDays     = 7
-	maxWindowDays     = 180
+	// Two years of daily points is ~730 small objects — a payload worth
+	// sending. Past that the axis is asking for a different chart, not a
+	// longer one.
+	maxWindowDays = 730
+	// allWindowCap bounds "everything": the window still has to be drawn,
+	// and an install with a stray 2019 session should not produce a
+	// five-year axis nobody can read.
+	allWindowCap = 1095
 )
 
 // analyticsPoint is one day of the curve. Sessions and People are derived
@@ -44,10 +53,11 @@ type analyticsPoint struct {
 // analyticsSeries is the whole chart: the global curve, plus one curve per
 // channel so "the rise came from Slack" is readable rather than inferred.
 type analyticsSeries struct {
-	Days      int                         `json:"days"`
-	From      string                      `json:"from"`
-	Points    []analyticsPoint            `json:"points"`
-	ByChannel map[string][]analyticsPoint `json:"by_channel,omitempty"`
+	Days       int                         `json:"days"`
+	From       string                      `json:"from"`
+	Points     []analyticsPoint            `json:"points"`
+	ByChannel  map[string][]analyticsPoint `json:"by_channel,omitempty"`
+	ByProvider map[string][]analyticsPoint `json:"by_provider,omitempty"`
 }
 
 // analyticsToken is one credential, as the page may show it: never the
@@ -86,6 +96,12 @@ type analyticsUser struct {
 	Channels     []string           `json:"channels,omitempty"` // slack, telegram, ui, rest…
 	Projects     []analyticsRef     `json:"projects,omitempty"` // id + name, so the UI shows the name
 	Agents       []string           `json:"agents,omitempty"`
+	// Providers and Models are this person's own usage: which account ran
+	// their work, and with which model. Same source as the Providers tab
+	// (each session's agents.json), aggregated per person so "who leans on
+	// what" is answerable without opening every session.
+	Providers    []analyticsKeyCount `json:"providers,omitempty"`
+	Models       []analyticsKeyCount `json:"models,omitempty"`
 	Tokens       []analyticsToken   `json:"tokens,omitempty"`
 	Daily        []analyticsPoint   `json:"daily,omitempty"` // this person's own curve
 }
@@ -105,6 +121,62 @@ type analyticsChannel struct {
 	Users        int    `json:"users"`
 	Unattributed int    `json:"unattributed,omitempty"`
 	LastActiveAt string `json:"last_active_at,omitempty"`
+}
+
+// analyticsFilter is what the page asked for: which slice of time, and
+// which doors. Every number in the response is computed under it — a
+// filter that only moved the chart while the totals stayed put would be
+// reporting two different things side by side.
+type analyticsFilter struct {
+	From time.Time // inclusive, UTC midnight
+	To   time.Time // inclusive, end of that day
+	Days int
+	All  bool            // window runs back to the oldest conversation
+	Chan map[string]bool // empty = every channel
+}
+
+func (f analyticsFilter) keepsChannel(ch string) bool {
+	if len(f.Chan) == 0 {
+		return true
+	}
+	return f.Chan[ch]
+}
+
+func (f analyticsFilter) keepsTime(t time.Time) bool {
+	if f.All {
+		return true
+	}
+	if t.IsZero() {
+		return false
+	}
+	return !t.Before(f.From) && !t.After(f.To)
+}
+
+// analyticsWindow is the filter echoed back, so the page can label its
+// numbers with the range they were computed over instead of assuming.
+type analyticsWindow struct {
+	From     string   `json:"from"`
+	To       string   `json:"to"`
+	Days     int      `json:"days"`
+	All      bool     `json:"all,omitempty"`
+	Channels []string `json:"channels,omitempty"`
+}
+
+// analyticsProvider is one provider instance — an account, in practice —
+// and the models it was actually run with.
+//
+// Read from each session's agents.json, which records the provider key
+// ("claude/claude_waba" = type/instance) and any pinned model. That file
+// is per session and permanent, unlike the spawn log, which keeps only
+// the newest 50 and so cannot answer "which account do we lean on".
+type analyticsProvider struct {
+	Key          string              `json:"key"`  // claude/claude_waba
+	Type         string              `json:"type"` // claude
+	Instance     string              `json:"instance,omitempty"`
+	Sessions     int                 `json:"sessions"`
+	Users        int                 `json:"users"`
+	LastActiveAt string              `json:"last_active_at,omitempty"`
+	Models       []analyticsKeyCount `json:"models,omitempty"`
 }
 
 // analyticsKeyCount is a small "this much, of that kind" pair.
@@ -152,14 +224,23 @@ type analyticsProject struct {
 }
 
 type analyticsResponse struct {
-	GeneratedAt  string             `json:"generated_at"`
-	Users        []analyticsUser    `json:"users"`
-	Channels     []analyticsChannel `json:"channels"`
-	Projects     []analyticsProject `json:"projects"`
-	Series       analyticsSeries    `json:"series"`
-	TotalUsers   int                `json:"total_users"`
-	ActiveUsers7 int                `json:"active_users_7d"`
-	Sessions     int                `json:"sessions"`
+	GeneratedAt string              `json:"generated_at"`
+	Window      analyticsWindow     `json:"window"`
+	Users       []analyticsUser     `json:"users"`
+	Channels    []analyticsChannel  `json:"channels"`
+	Projects    []analyticsProject  `json:"projects"`
+	Providers   []analyticsProvider `json:"providers,omitempty"`
+	Series      analyticsSeries     `json:"series"`
+	// TotalUsers counts accounts, which exist regardless of the window.
+	TotalUsers   int `json:"total_users"`
+	ActiveUsers7 int `json:"active_users_7d"`
+	// Sessions is conversations INSIDE the window. SessionsAllTime is every
+	// conversation on disk, kept so the page can show what it is a slice of
+	// rather than looking like the install shrank when a range is picked.
+	Sessions        int `json:"sessions"`
+	SessionsAllTime int `json:"sessions_all_time"`
+	// UsersInWindow is how many people started a conversation in it.
+	UsersInWindow int `json:"users_in_window"`
 	// LoginsRecordedSince is the oldest sign-in on record, empty when none
 	// is. Sign-ins were not written down at all before this shipped —
 	// wick's sessions are stateless — so without this the page would report
@@ -170,6 +251,10 @@ type analyticsResponse struct {
 	// with no wick account behind it). Counted rather than hidden: a table
 	// whose numbers do not add up to the total invites the wrong conclusion.
 	Unattributed int `json:"unattributed_sessions"`
+	// KnownChannels is every channel ever seen, regardless of the filter —
+	// otherwise filtering to one channel would remove the means of
+	// filtering back out of it.
+	KnownChannels []string `json:"known_channels,omitempty"`
 }
 
 // Per-project detail caps. Generous enough to answer the question, small
@@ -205,18 +290,78 @@ func later(a, b time.Time) time.Time {
 
 // windowDays reads the ?days= override, clamped. Out-of-range values are
 // clamped rather than rejected: a chart is not worth a 400.
-func windowDays(raw string) int {
+//
+// "all" is its own answer: the window is not known until the data has been
+// read, because it runs back to the oldest conversation on disk.
+func windowDays(raw string) (days int, all bool) {
+	if strings.EqualFold(strings.TrimSpace(raw), "all") {
+		return defaultWindowDays, true
+	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n == 0 {
-		return defaultWindowDays
+		return defaultWindowDays, false
 	}
 	if n < minWindowDays {
-		return minWindowDays
+		return minWindowDays, false
 	}
 	if n > maxWindowDays {
-		return maxWindowDays
+		return maxWindowDays, false
 	}
-	return n
+	return n, false
+}
+
+// parseFilter reads the window and the channel filter off the query.
+//
+// Bad input is clamped rather than refused: this is a dashboard, and a
+// mistyped date is better answered with the default range than with a
+// 400 the page has to render as an error.
+func parseFilter(q url.Values) analyticsFilter {
+	now := time.Now().UTC()
+	f := analyticsFilter{Chan: map[string]bool{}}
+
+	for _, raw := range strings.Split(q.Get("channels"), ",") {
+		ch := strings.TrimSpace(raw)
+		if ch != "" && !strings.EqualFold(ch, "all") {
+			f.Chan[ch] = true
+		}
+	}
+
+	// A custom range wins over the day count: it is the more specific ask.
+	fromStr, toStr := strings.TrimSpace(q.Get("from")), strings.TrimSpace(q.Get("to"))
+	if fromStr != "" || toStr != "" {
+		from, errFrom := time.Parse("2006-01-02", fromStr)
+		to, errTo := time.Parse("2006-01-02", toStr)
+		if errFrom != nil {
+			from = now.AddDate(0, 0, -(defaultWindowDays - 1))
+		}
+		if errTo != nil {
+			to = now
+		}
+		if to.Before(from) {
+			from, to = to, from // a backwards range is a slip, not a request for nothing
+		}
+		f.From = from.UTC().Truncate(24 * time.Hour)
+		f.To = endOfDay(to.UTC())
+		f.Days = int(f.To.Sub(f.From).Hours()/24) + 1
+		if f.Days > allWindowCap {
+			f.Days = allWindowCap
+			f.From = f.To.AddDate(0, 0, -(f.Days - 1)).Truncate(24 * time.Hour)
+		}
+		return f
+	}
+
+	days, all := windowDays(q.Get("days"))
+	f.Days, f.All = days, all
+	f.To = endOfDay(now)
+	f.From = now.AddDate(0, 0, -(days - 1)).Truncate(24 * time.Hour)
+	if all {
+		f.From = time.Time{} // resolved after the read, from the oldest conversation
+	}
+	return f
+}
+
+func endOfDay(t time.Time) time.Time {
+	return t.Truncate(24 * time.Hour).Add(24*time.Hour - time.Nanosecond)
 }
 
 // dayKeys returns the window's days, oldest first. The chart is built from
@@ -240,10 +385,10 @@ func dayKeys(from time.Time, days int) []string {
 // that shows nothing for those seconds is indistinguishable from a page
 // that has hung.
 func (h *Handler) analyticsUsersJSON(w http.ResponseWriter, r *http.Request) {
-	days := windowDays(r.URL.Query().Get("days"))
+	f := parseFilter(r.URL.Query())
 
 	if r.URL.Query().Get("stream") != "1" {
-		out, err := h.buildAnalytics(r, days, nil)
+		out, err := h.buildAnalytics(r, f, nil)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
@@ -268,7 +413,7 @@ func (h *Handler) analyticsUsersJSON(w http.ResponseWriter, r *http.Request) {
 	}
 
 	last := time.Time{}
-	out, err := h.buildAnalytics(r, days, func(done, total int) {
+	out, err := h.buildAnalytics(r, f, func(done, total int) {
 		// Throttled: a flush per session file would spend more time
 		// writing progress than reading data.
 		if done < total && time.Since(last) < 120*time.Millisecond {
@@ -286,7 +431,8 @@ func (h *Handler) analyticsUsersJSON(w http.ResponseWriter, r *http.Request) {
 
 // buildAnalytics does the reading. progress, when non-nil, is called as
 // session files are consumed so a caller can report how far along it is.
-func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, total int)) (analyticsResponse, error) {
+func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress func(done, total int)) (analyticsResponse, error) {
+	days, all := f.Days, f.All
 	ctx := r.Context()
 	users, err := h.repo.ListUsers(ctx)
 	if err != nil {
@@ -296,7 +442,7 @@ func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, 
 	firstLogin := h.repo.FirstLoginRecordedAt(ctx)
 
 	now := time.Now().UTC()
-	from := now.AddDate(0, 0, -(days - 1)).Truncate(24 * time.Hour)
+	from := f.From
 	loginHistory := h.repo.LoginHistory(ctx, from)
 	tokens := h.repo.AccessTokens(ctx)
 
@@ -320,6 +466,8 @@ func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, 
 		projects         map[string]bool
 		agents           map[string]bool
 		daily            map[string]int
+		providers        map[string]int
+		models           map[string]int
 	}
 	per := map[string]*acc{}
 	get := func(id string) *acc {
@@ -328,6 +476,7 @@ func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, 
 			a = &acc{
 				channels: map[string]bool{}, projects: map[string]bool{},
 				agents: map[string]bool{}, daily: map[string]int{},
+				providers: map[string]int{}, models: map[string]int{},
 			}
 			per[id] = a
 		}
@@ -350,8 +499,20 @@ func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, 
 	globalDay := map[string]int{}
 	globalDayPeople := map[string]map[string]bool{}
 	channelDay := map[string]map[string]int{}
+	providerDay := map[string]map[string]int{}
 
-	total, unattributed := 0, 0
+	type provAcc struct {
+		row    analyticsProvider
+		users  map[string]bool
+		models map[string]int
+	}
+	provs := map[string]*provAcc{}
+
+	total, unattributed, allTime := 0, 0, 0
+	// Every channel ever seen, filtered or not: filtering to one channel
+	// must not remove the means of filtering back out of it.
+	allChannels := map[string]bool{}
+	var oldest time.Time
 
 	ids, _ := session.List(agentsLayout)
 	for i, id := range ids {
@@ -363,11 +524,27 @@ func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, 
 			continue
 		}
 		m := sess.Meta
-		total++
+		allTime++
 		channel := string(m.Origin)
 		if channel == "" {
 			channel = "ui"
 		}
+		allChannels[channel] = true
+
+		// The filter applies HERE, before anything is counted — so every
+		// number below describes the same slice the chart does. A page
+		// where the chart moved but the totals did not would be reporting
+		// two different things side by side.
+		if !f.keepsChannel(channel) {
+			continue
+		}
+		if !m.CreatedAt.IsZero() && (oldest.IsZero() || m.CreatedAt.Before(oldest)) {
+			oldest = m.CreatedAt.UTC()
+		}
+		if !f.keepsTime(m.CreatedAt) {
+			continue
+		}
+		total++
 		projectID := m.ProjectID
 		if projectID == "" {
 			projectID = "(none)"
@@ -409,6 +586,57 @@ func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, 
 			tokenSessions[m.TokenID]++
 		}
 
+		// Which provider instance — which ACCOUNT — ran this conversation,
+		// and with which model. A session can switch provider mid-life, so
+		// every entry in its agents.json counts once.
+		seenKey := map[string]bool{}
+		var sessProviders, sessModels []string
+		for _, a := range sess.Agents {
+			key := strings.TrimSpace(a.Provider)
+			if key == "" || seenKey[key] {
+				continue
+			}
+			seenKey[key] = true
+			pv := provs[key]
+			if pv == nil {
+				typ, instance := key, ""
+				if slash := strings.IndexByte(key, '/'); slash >= 0 {
+					typ, instance = key[:slash], key[slash+1:]
+				}
+				pv = &provAcc{
+					row:    analyticsProvider{Key: key, Type: typ, Instance: instance},
+					users:  map[string]bool{},
+					models: map[string]int{},
+				}
+				provs[key] = pv
+			}
+			pv.row.Sessions++
+			if t := m.LastActive; t.After(parseStamp(pv.row.LastActiveAt)) {
+				pv.row.LastActiveAt = rfc3339(t)
+			}
+			model := strings.TrimSpace(a.ModelID)
+			if model == "" {
+				// Not a gap in the record: no pin means the provider picked
+				// its own default, which is a real answer worth showing.
+				model = "(default)"
+			}
+			pv.models[model]++
+			sessProviders = append(sessProviders, key)
+			sessModels = append(sessModels, model)
+			for _, uid := range m.People() {
+				if uid != "" {
+					pv.users[uid] = true
+				}
+			}
+			if !m.CreatedAt.Before(from) {
+				day := m.CreatedAt.UTC().Format("2006-01-02")
+				if providerDay[key] == nil {
+					providerDay[key] = map[string]int{}
+				}
+				providerDay[key][day]++
+			}
+		}
+
 		// The chart counts conversations by the day they STARTED.
 		if !m.CreatedAt.Before(from) {
 			day := m.CreatedAt.UTC().Format("2006-01-02")
@@ -448,6 +676,12 @@ func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, 
 				a.joined++
 			}
 			a.lastActive = later(a.lastActive, m.LastActive)
+			for _, key := range sessProviders {
+				a.providers[key]++
+			}
+			for _, model := range sessModels {
+				a.models[model]++
+			}
 			a.channels[channel] = true
 			a.projects[projectID] = true
 			if agentName != "" {
@@ -480,9 +714,12 @@ func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, 
 	out := analyticsResponse{
 		GeneratedAt:         rfc3339(now),
 		Sessions:            total,
+		SessionsAllTime:     allTime,
 		Unattributed:        unattributed,
 		TotalUsers:          len(users),
+		UsersInWindow:       len(per),
 		LoginsRecordedSince: rfc3339(firstLogin),
+		KnownChannels:       sortedKeys(allChannels),
 	}
 
 	// Token rows, grouped by owner.
@@ -498,6 +735,27 @@ func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, 
 			row.LastUsedAt = rfc3339(*t.LastUsedAt)
 		}
 		byOwner[t.UserID] = append(byOwner[t.UserID], row)
+	}
+
+	if all {
+		// The axis now runs from the oldest conversation to today. With no
+		// sessions at all there is nothing to span, so it falls back to the
+		// default window rather than drawing a chart from year one.
+		if oldest.IsZero() {
+			from = now.AddDate(0, 0, -(defaultWindowDays - 1)).Truncate(24 * time.Hour)
+			days = defaultWindowDays
+		} else {
+			from = oldest.Truncate(24 * time.Hour)
+			days = int(now.Sub(from).Hours()/24) + 1
+			if days > allWindowCap {
+				days = allWindowCap
+				from = now.AddDate(0, 0, -(days - 1)).Truncate(24 * time.Hour)
+			}
+			if days < minWindowDays {
+				days = minWindowDays
+				from = now.AddDate(0, 0, -(days - 1)).Truncate(24 * time.Hour)
+			}
+		}
 	}
 
 	window := dayKeys(from, days)
@@ -539,6 +797,8 @@ func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, 
 			if now.Sub(a.lastActive) <= 7*24*time.Hour && !a.lastActive.IsZero() {
 				out.ActiveUsers7++
 			}
+			row.Providers = rankedCounts(a.providers)
+			row.Models = rankedCounts(a.models)
 			row.Daily = pointsFor(window, a.daily, loginHistory[u.ID])
 		} else if lh := loginHistory[u.ID]; len(lh) > 0 {
 			// Signed in but never worked: still a curve worth drawing.
@@ -606,6 +866,21 @@ func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, 
 		out.Projects = out.Projects[:maxProjects]
 	}
 
+	for _, pv := range provs {
+		pv.row.Users = len(pv.users)
+		for model, n := range pv.models {
+			pv.row.Models = append(pv.row.Models, analyticsKeyCount{Key: model, Sessions: n})
+		}
+		sort.Slice(pv.row.Models, func(i, j int) bool { return pv.row.Models[i].Sessions > pv.row.Models[j].Sessions })
+		out.Providers = append(out.Providers, pv.row)
+	}
+	sort.Slice(out.Providers, func(i, j int) bool {
+		if out.Providers[i].Sessions != out.Providers[j].Sessions {
+			return out.Providers[i].Sessions > out.Providers[j].Sessions
+		}
+		return out.Providers[i].Key < out.Providers[j].Key
+	})
+
 	// The global curve, plus one per channel.
 	globalLogins := map[string]int{}
 	for _, byDay := range loginHistory {
@@ -628,6 +903,23 @@ func (h *Handler) buildAnalytics(r *http.Request, days int, progress func(done, 
 			out.Series.ByChannel[ch] = pointsFor(window, byDay, nil)
 		}
 	}
+	if len(providerDay) > 0 {
+		out.Series.ByProvider = map[string][]analyticsPoint{}
+		for key, byDay := range providerDay {
+			out.Series.ByProvider[key] = pointsFor(window, byDay, nil)
+		}
+	}
+
+	out.Window = analyticsWindow{
+		From:     from.Format("2006-01-02"),
+		To:       now.Format("2006-01-02"),
+		Days:     days,
+		All:      all,
+		Channels: sortedKeys(f.Chan),
+	}
+	if !f.To.IsZero() && !f.All {
+		out.Window.To = f.To.Format("2006-01-02")
+	}
 
 	return out, nil
 }
@@ -639,6 +931,25 @@ func pointsFor(window []string, sessions, logins map[string]int) []analyticsPoin
 	for _, day := range window {
 		out = append(out, analyticsPoint{Date: day, Sessions: sessions[day], Logins: logins[day]})
 	}
+	return out
+}
+
+// rankedCounts turns a tally into a list, busiest first, so the UI can
+// show "the one they mostly use" by taking the head.
+func rankedCounts(m map[string]int) []analyticsKeyCount {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]analyticsKeyCount, 0, len(m))
+	for k, n := range m {
+		out = append(out, analyticsKeyCount{Key: k, Sessions: n})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Sessions != out[j].Sessions {
+			return out[i].Sessions > out[j].Sessions
+		}
+		return out[i].Key < out[j].Key
+	})
 	return out
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -150,9 +151,20 @@ func seedAnalytics(t *testing.T) (*Handler, string) {
 	return &Handler{repo: r}, pid
 }
 
+// testFilter is what parseFilter would produce for a plain ?days= request.
+func testFilter(days int, all bool) analyticsFilter {
+	now := time.Now().UTC()
+	f := analyticsFilter{Days: days, All: all, To: endOfDay(now), Chan: map[string]bool{}}
+	f.From = now.AddDate(0, 0, -(days - 1)).Truncate(24 * time.Hour)
+	if all {
+		f.From = time.Time{}
+	}
+	return f
+}
+
 func buildFixture(t *testing.T, h *Handler) analyticsResponse {
 	t.Helper()
-	out, err := h.buildAnalytics(httptest.NewRequest(http.MethodGet, "/admin/analytics/users.json", nil), defaultWindowDays, nil)
+	out, err := h.buildAnalytics(httptest.NewRequest(http.MethodGet, "/admin/analytics/users.json", nil), testFilter(defaultWindowDays, false), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,9 +334,75 @@ func TestWindowDaysClamps(t *testing.T) {
 		{"3650", maxWindowDays},
 		{"45", 45},
 	} {
-		if got := windowDays(tc.in); got != tc.want {
-			t.Errorf("windowDays(%q) = %d, want %d", tc.in, got, tc.want)
+		got, all := windowDays(tc.in)
+		if got != tc.want || all {
+			t.Errorf("windowDays(%q) = %d,%v want %d,false", tc.in, got, all, tc.want)
 		}
+	}
+	if _, all := windowDays("all"); !all {
+		t.Error("\"all\" must select the everything window")
+	}
+	if _, all := windowDays("ALL"); !all {
+		t.Error("the everything window should not hinge on case")
+	}
+}
+
+// "All" cannot be a fixed number of days: it runs back to the oldest
+// conversation, which is only known once the sessions have been read.
+func TestAllWindowSpansBackToTheOldestConversation(t *testing.T) {
+	h, _ := seedAnalytics(t)
+	layout := agentsLayout
+	// One conversation from well before the default window.
+	oldID := "sess-ancient"
+	if _, err := session.Create(context.Background(), layout, session.CreateOptions{
+		ID: oldID, Origin: session.OriginUI, UserID: "u-yoga",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := session.Load(layout, oldID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().AddDate(0, 0, -120)
+	s.Meta.CreatedAt = old
+	s.Meta.LastActive = old
+	if err := session.SaveMeta(layout, oldID, s.Meta); err != nil {
+		t.Fatal(err)
+	}
+
+	windowed, err := h.buildAnalytics(httptest.NewRequest(http.MethodGet, "/", nil), testFilter(defaultWindowDays, false), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(windowed.Series.Points) != defaultWindowDays {
+		t.Fatalf("a fixed window must stay fixed: %d points", len(windowed.Series.Points))
+	}
+
+	everything, err := h.buildAnalytics(httptest.NewRequest(http.MethodGet, "/", nil), testFilter(defaultWindowDays, true), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(everything.Series.Points) < 120 {
+		t.Errorf("all-window has %d points, want at least the 120 days back to the oldest conversation", len(everything.Series.Points))
+	}
+	if everything.Series.Points[0].Date != old.Format("2006-01-02") {
+		t.Errorf("axis starts %q, want the oldest conversation's day %q", everything.Series.Points[0].Date, old.Format("2006-01-02"))
+	}
+	if everything.Series.Points[0].Sessions != 1 {
+		t.Errorf("the oldest day should carry its one conversation, got %d", everything.Series.Points[0].Sessions)
+	}
+}
+
+// An install with nothing in it must not draw an axis starting in year one.
+func TestAllWindowFallsBackWhenThereIsNothing(t *testing.T) {
+	agentsLayout = agentconfig.NewLayout(t.TempDir())
+	h := &Handler{repo: newAnalyticsRepo(t)}
+	out, err := h.buildAnalytics(httptest.NewRequest(http.MethodGet, "/", nil), testFilter(defaultWindowDays, true), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Series.Points) != defaultWindowDays {
+		t.Errorf("%d points for an empty install, want the default window", len(out.Series.Points))
 	}
 }
 
@@ -380,11 +458,232 @@ func TestLoginsRecordedSinceSaysWhetherThereIsAnyHistory(t *testing.T) {
 	// uses that to say "no record" instead of "never".
 	empty := newAnalyticsRepo(t)
 	h2 := &Handler{repo: empty}
-	out2, err := h2.buildAnalytics(httptest.NewRequest(http.MethodGet, "/", nil), defaultWindowDays, nil)
+	out2, err := h2.buildAnalytics(httptest.NewRequest(http.MethodGet, "/", nil), testFilter(defaultWindowDays, false), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out2.LoginsRecordedSince != "" {
 		t.Errorf("no sign-ins recorded, but the page claims history since %q", out2.LoginsRecordedSince)
+	}
+}
+
+// ── the filter binds every number, not just the chart ─────────────────
+
+// seedForFilter builds sessions across two channels, two providers and two
+// months, so a window or a channel filter has something to cut.
+func seedForFilter(t *testing.T) *Handler {
+	t.Helper()
+	r := newAnalyticsRepo(t)
+	ctx := context.Background()
+	if err := r.db.Create(&entity.User{ID: "u-yoga", Name: "Yoga", Email: "y@example.com", Approved: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	layout := agentconfig.NewLayout(t.TempDir())
+	agentsLayout = layout
+	now := time.Now().UTC()
+
+	mk := func(id, origin string, at time.Time, provider, model string) {
+		t.Helper()
+		if _, err := session.Create(ctx, layout, session.CreateOptions{ID: id, Origin: session.Origin(origin), UserID: "u-yoga"}); err != nil {
+			t.Fatal(err)
+		}
+		s, err := session.Load(layout, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Meta.CreatedAt, s.Meta.LastActive = at, at
+		if err := session.SaveMeta(layout, id, s.Meta); err != nil {
+			t.Fatal(err)
+		}
+		if provider != "" {
+			if err := session.SaveAgents(layout, id, []session.AgentEntry{
+				{Name: "main", Provider: provider, ModelID: model, CreatedAt: at},
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	mk("recent-slack", "slack", now.AddDate(0, 0, -2), "claude/work", "opus")
+	mk("recent-ui", "ui", now.AddDate(0, 0, -3), "claude/work", "sonnet")
+	mk("recent-ui-2", "ui", now.AddDate(0, 0, -4), "codex/personal", "")
+	mk("old-slack", "slack", now.AddDate(0, 0, -60), "claude/work", "opus")
+	return &Handler{repo: r}
+}
+
+func build(t *testing.T, h *Handler, f analyticsFilter) analyticsResponse {
+	t.Helper()
+	out, err := h.buildAnalytics(httptest.NewRequest(http.MethodGet, "/", nil), f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// The complaint that prompted this: picking a range moved the chart while
+// the totals stayed put, so the page reported two different slices side by
+// side. Every number now describes the window.
+func TestWindowBindsEveryNumber(t *testing.T) {
+	h := seedForFilter(t)
+
+	week := build(t, h, testFilter(7, false))
+	if week.Sessions != 3 {
+		t.Errorf("7-day window = %d conversations, want the 3 recent ones", week.Sessions)
+	}
+	if week.SessionsAllTime != 4 {
+		t.Errorf("all-time = %d, want 4 — the page must still say what it is a slice of", week.SessionsAllTime)
+	}
+	for _, c := range week.Channels {
+		if c.Channel == "slack" && c.Sessions != 1 {
+			t.Errorf("slack in window = %d, want 1 (the 60-day-old one is outside)", c.Sessions)
+		}
+	}
+	total := 0
+	for _, p := range week.Projects {
+		total += p.Sessions
+	}
+	if total != 3 {
+		t.Errorf("projects add up to %d, want the window's 3", total)
+	}
+
+	everything := build(t, h, testFilter(30, true))
+	if everything.Sessions != 4 {
+		t.Errorf("all-window = %d conversations, want every one", everything.Sessions)
+	}
+}
+
+// A custom range is the more specific ask, so it wins over ?days=.
+func TestCustomRangeSelectsItsOwnDays(t *testing.T) {
+	now := time.Now().UTC()
+	q := url.Values{}
+	q.Set("days", "7")
+	q.Set("from", now.AddDate(0, 0, -10).Format("2006-01-02"))
+	q.Set("to", now.AddDate(0, 0, -5).Format("2006-01-02"))
+	f := parseFilter(q)
+	if f.Days != 6 {
+		t.Errorf("days = %d, want the 6 days the range spans", f.Days)
+	}
+	if f.All {
+		t.Error("a custom range is not the all-window")
+	}
+
+	// Backwards is a slip, not a request for nothing.
+	q.Set("from", now.Format("2006-01-02"))
+	q.Set("to", now.AddDate(0, 0, -3).Format("2006-01-02"))
+	if got := parseFilter(q); got.From.After(got.To) {
+		t.Errorf("a backwards range must be swapped, got %v → %v", got.From, got.To)
+	}
+}
+
+// Filtering to a channel filters the whole page — and must not remove the
+// means of filtering back out.
+func TestChannelFilterAppliesEverywhere(t *testing.T) {
+	h := seedForFilter(t)
+	f := testFilter(defaultWindowDays, false)
+	f.Chan = map[string]bool{"slack": true}
+	out := build(t, h, f)
+
+	if out.Sessions != 1 {
+		t.Errorf("slack-only = %d conversations, want 1", out.Sessions)
+	}
+	if len(out.Channels) != 1 || out.Channels[0].Channel != "slack" {
+		t.Errorf("channels = %+v, want only slack", out.Channels)
+	}
+	for _, p := range out.Providers {
+		if p.Key != "claude/work" {
+			t.Errorf("provider %q survived a slack-only filter", p.Key)
+		}
+	}
+	// Without this the UI has no way back: the filter chip for "ui" would
+	// disappear along with its rows.
+	if len(out.KnownChannels) < 2 {
+		t.Errorf("known channels = %v, want every channel ever seen", out.KnownChannels)
+	}
+}
+
+// "Which account do we lean on, and with which model" — read from each
+// session's agents.json, not from the spawn log, which keeps only 50 files.
+func TestProvidersAndModelsAreCounted(t *testing.T) {
+	h := seedForFilter(t)
+	out := build(t, h, testFilter(defaultWindowDays, false))
+
+	byKey := map[string]analyticsProvider{}
+	for _, p := range out.Providers {
+		byKey[p.Key] = p
+	}
+	claude, ok := byKey["claude/work"]
+	if !ok {
+		t.Fatalf("providers = %+v, want claude/work", out.Providers)
+	}
+	if claude.Type != "claude" || claude.Instance != "work" {
+		t.Errorf("provider = %+v, want type/instance split out", claude)
+	}
+	if claude.Sessions != 2 {
+		t.Errorf("claude/work = %d conversations in window, want 2", claude.Sessions)
+	}
+	models := map[string]int{}
+	for _, m := range claude.Models {
+		models[m.Key] = m.Sessions
+	}
+	if models["opus"] != 1 || models["sonnet"] != 1 {
+		t.Errorf("models = %v, want one opus and one sonnet", models)
+	}
+	codex, ok := byKey["codex/personal"]
+	if !ok {
+		t.Fatal("a second provider must appear on its own")
+	}
+	// No pin is a real answer — the provider chose — not a missing value.
+	if len(codex.Models) != 1 || codex.Models[0].Key != "(default)" {
+		t.Errorf("codex models = %+v, want the default marked as such", codex.Models)
+	}
+	if len(out.Series.ByProvider["claude/work"]) != defaultWindowDays {
+		t.Errorf("provider curve has %d points, want the page's axis", len(out.Series.ByProvider["claude/work"]))
+	}
+}
+
+// "Which provider does this person actually use" needs the tally per
+// person, not only per provider — otherwise the answer is only available
+// by opening every session they touched.
+func TestPerUserProviderAndModelBreakdown(t *testing.T) {
+	h := seedForFilter(t)
+	out := build(t, h, testFilter(defaultWindowDays, false))
+
+	var yoga *analyticsUser
+	for i := range out.Users {
+		if out.Users[i].ID == "u-yoga" {
+			yoga = &out.Users[i]
+		}
+	}
+	if yoga == nil {
+		t.Fatal("the seeded person is missing")
+	}
+	if len(yoga.Providers) == 0 {
+		t.Fatalf("no per-person providers: %+v", yoga)
+	}
+	// Busiest first, so the head is "the one they mostly use".
+	if yoga.Providers[0].Key != "claude/work" || yoga.Providers[0].Sessions != 2 {
+		t.Errorf("top provider = %+v, want claude/work with 2", yoga.Providers[0])
+	}
+	if len(yoga.Providers) != 2 {
+		t.Errorf("providers = %+v, want both accounts they used", yoga.Providers)
+	}
+	models := map[string]int{}
+	for _, m := range yoga.Models {
+		models[m.Key] = m.Sessions
+	}
+	if models["opus"] != 1 || models["sonnet"] != 1 || models["(default)"] != 1 {
+		t.Errorf("models = %v, want opus, sonnet and the unpinned one", models)
+	}
+
+	// And it moves with the window like every other number.
+	narrow := testFilter(7, false)
+	narrow.Chan = map[string]bool{"slack": true}
+	only := build(t, h, narrow)
+	for _, u := range only.Users {
+		if u.ID != "u-yoga" {
+			continue
+		}
+		if len(u.Providers) != 1 || u.Providers[0].Sessions != 1 {
+			t.Errorf("slack-only providers = %+v, want just the one slack conversation", u.Providers)
+		}
 	}
 }

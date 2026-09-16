@@ -64,64 +64,125 @@ func gitWatchCooldown(cost time.Duration) time.Duration {
 // for every later directory — worse than a bounded blind spot.
 const gitWatchBudget = 4000
 
-// gitWatchManager runs at most one fsnotify watcher per session cwd,
-// ref-counted by the number of live SSE subscribers. The watcher walks
-// the cwd, recomputes a light repo/changed summary on debounced change,
-// and publishes a git_status event to the session's subscribers.
+// gitWatchManager runs at most one fsnotify watcher per WORKING
+// DIRECTORY, ref-counted by the live SSE subscribers attached to it. The
+// watcher walks the cwd, recomputes a light repo/changed summary on
+// debounced change, and publishes a git_status event to every session
+// working in that directory.
 //
-// Lazy lifecycle: acquireGitWatch starts a watcher on the first
-// subscriber; releaseGitWatch stops it when the count hits zero. This
-// keeps fs watches off idle sessions.
+// Keyed by cwd, not by session, and that distinction is the whole point.
+// Sessions of one project SHARE a working directory, so keying by session
+// ran one full walk per open session over the same tree: measured here at
+// 61 repos / ~9800 directories, where a single pass costs ~1.4 cores. The
+// per-watcher duty-cycle cap held, but it capped each watcher
+// individually, so three open sessions meant three times the work and the
+// daemon sat at 185% CPU while a build wrote into that tree — enough to
+// take the node past 70% and get an innocent build killed by the
+// resource watchdog.
+//
+// One walk now serves every session in the project: the expensive part
+// (DiscoverRepos + one git status per repo) happens once per pass, and
+// only the cheap per-session bits — which repo that session has selected
+// — are computed per subscriber.
+//
+// Lazy lifecycle: acquire starts a watcher on the first subscriber;
+// release stops it when the last one goes. This keeps fs watches off
+// idle sessions.
 type gitWatchManager struct {
 	mu      sync.Mutex
-	entries map[string]*gitWatchEntry // keyed by session id
+	entries map[string]*gitWatchEntry // keyed by cwd
+	homes   map[string]string         // session id -> cwd, so release can find its entry
 }
 
 type gitWatchEntry struct {
-	refs   int
 	cancel context.CancelFunc
+
+	// sessions is the subscriber set, with a refcount each: one session
+	// can have several tabs open. Guarded by its own lock because the
+	// watcher goroutine reads it on every publish.
+	mu       sync.Mutex
+	sessions map[string]int
 }
 
-var globalGitWatch = &gitWatchManager{entries: make(map[string]*gitWatchEntry)}
+// attached returns the sessions to publish to, as a snapshot — the
+// watcher must not hold the lock while it walks a repository.
+func (e *gitWatchEntry) attached() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]string, 0, len(e.sessions))
+	for id := range e.sessions {
+		out = append(out, id)
+	}
+	return out
+}
 
-// acquireGitWatch increments the watcher refcount for sessionID, starting
-// the watcher (rooted at cwd) on the first reference.
+var globalGitWatch = &gitWatchManager{
+	entries: make(map[string]*gitWatchEntry),
+	homes:   make(map[string]string),
+}
+
+// acquire attaches sessionID to the watcher for cwd, starting it on the
+// first reference.
 func (m *gitWatchManager) acquire(sessionID, cwd string) {
 	if sessionID == "" || cwd == "" || globalBcast == nil {
 		return
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if e, ok := m.entries[sessionID]; ok {
-		e.refs++
-		// A watcher is already running, so nothing would publish for this
-		// new subscriber until the next filesystem change. Push the current
-		// state now — this is the second tab / re-subscribing page, and it
-		// deserves the same correct badge the first one got.
-		go publishGitSummary(context.Background(), sessionID, cwd, "")
-		return
+	e, running := m.entries[cwd]
+	if !running {
+		e = &gitWatchEntry{sessions: map[string]int{}}
+		m.entries[cwd] = e
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	m.entries[sessionID] = &gitWatchEntry{refs: 1, cancel: cancel}
-	go runGitWatch(ctx, sessionID, cwd)
+	m.homes[sessionID] = cwd
+	e.mu.Lock()
+	e.sessions[sessionID]++
+	e.mu.Unlock()
+	if !running {
+		ctx, cancel := context.WithCancel(context.Background())
+		e.cancel = cancel
+		go runGitWatch(ctx, cwd, e)
+	}
+	m.mu.Unlock()
+
+	if running {
+		// A watcher is already going, so nothing would publish for this new
+		// subscriber until the next filesystem change. Push the current
+		// state now — this is the second tab, or a session joining a
+		// project someone else is already watching, and it deserves the
+		// same correct badge the first one got.
+		go publishGitSummary(context.Background(), sessionID, cwd, "")
+	}
 }
 
-// releaseGitWatch decrements the refcount, stopping the watcher at zero.
+// release detaches sessionID, stopping the watcher when its last
+// subscriber goes.
 func (m *gitWatchManager) release(sessionID string) {
 	if sessionID == "" {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	e, ok := m.entries[sessionID]
+	cwd, ok := m.homes[sessionID]
 	if !ok {
 		return
 	}
-	e.refs--
-	if e.refs <= 0 {
-		e.cancel()
-		delete(m.entries, sessionID)
-		// Drop the replay cache with the watcher: nobody is watching, and
+	e, ok := m.entries[cwd]
+	if !ok {
+		delete(m.homes, sessionID)
+		return
+	}
+	e.mu.Lock()
+	e.sessions[sessionID]--
+	gone := e.sessions[sessionID] <= 0
+	if gone {
+		delete(e.sessions, sessionID)
+	}
+	empty := len(e.sessions) == 0
+	e.mu.Unlock()
+
+	if gone {
+		delete(m.homes, sessionID)
+		// Drop this session's replay cache: nobody is watching for it, and
 		// the next acquire publishes a fresh snapshot anyway. Keeps the
 		// cache bounded by live sessions rather than by every session the
 		// process has ever seen.
@@ -129,12 +190,18 @@ func (m *gitWatchManager) release(sessionID string) {
 			globalBcast.ForgetGitStatus(sessionID)
 		}
 	}
+	if empty {
+		if e.cancel != nil {
+			e.cancel()
+		}
+		delete(m.entries, cwd)
+	}
 }
 
 // runGitWatch watches cwd recursively (one level of repos deep) and
 // publishes a git_status summary on debounced changes until ctx is done.
-func runGitWatch(ctx context.Context, sessionID, cwd string) {
-	l := log.With().Str("component", "scm-watch").Str("session", sessionID).Logger()
+func runGitWatch(ctx context.Context, cwd string, entry *gitWatchEntry) {
+	l := log.With().Str("component", "scm-watch").Str("cwd", cwd).Logger()
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		l.Warn().Err(err).Msg("scm-watch: new watcher failed")
@@ -143,11 +210,19 @@ func runGitWatch(ctx context.Context, sessionID, cwd string) {
 	defer w.Close()
 
 	// The active repo decides where the deep watches go, so read it before
-	// registering anything.
-	active := storedActiveRepo(sessionID)
+	// registering anything. With several sessions on one directory the
+	// first one's selection seeds it; a later publish moves the deep
+	// watches if the work turns out to be elsewhere.
+	active := ""
+	for _, id := range entry.attached() {
+		if active = storedActiveRepo(id); active != "" {
+			break
+		}
+	}
 	budget := addWatches(w, cwd, active, &l)
-	// Publish an initial summary so the badge is correct on connect.
-	publishGitSummary(ctx, sessionID, cwd, "")
+	// Publish an initial summary so every attached badge is correct on
+	// connect. One snapshot, reused per session.
+	publishGitSummaryTo(ctx, entry.attached(), cwd, "")
 
 	// touched is the path of the last file that changed, carried into the
 	// debounced publish so the Source panel can follow the repo actually
@@ -185,7 +260,7 @@ func runGitWatch(ctx context.Context, sessionID, cwd string) {
 			touched = ""
 			touchedMu.Unlock()
 			started := time.Now()
-			now := publishGitSummary(ctx, sessionID, cwd, p)
+			now := publishGitSummaryTo(ctx, entry.attached(), cwd, p)
 			paceMu.Lock()
 			lastCost = time.Since(started)
 			lastEnd = time.Now()
@@ -387,15 +462,48 @@ func storedActiveRepo(sessionID string) string {
 // publishGitSummary recomputes and pushes the snapshot, and reports which
 // repo ended up active so the caller can extend its watches to it.
 func publishGitSummary(ctx context.Context, sessionID, cwd, touched string) string {
-	if globalBcast == nil {
+	return publishGitSummaryTo(ctx, []string{sessionID}, cwd, touched)
+}
+
+// publishGitSummaryTo walks the tree ONCE and publishes to every session
+// working in it.
+//
+// The walk — DiscoverRepos plus a git status per repo — is the expensive
+// half and does not depend on who is watching, so it must not be repeated
+// per subscriber. Only the tail is per session: which repo that session
+// has selected, and whether the edit just made should move that selection.
+// Doing this per session was what made one project with several open
+// sessions cost several full walks of the same directory.
+func publishGitSummaryTo(ctx context.Context, sessionIDs []string, cwd, touched string) string {
+	if globalBcast == nil || len(sessionIDs) == 0 {
 		return ""
 	}
+	base := buildGitSnapshot(ctx, cwd, "")
+	first := ""
+	for _, sessionID := range sessionIDs {
+		active := publishGitSnapshot(sessionID, cwd, touched, base)
+		if first == "" {
+			first = active
+		}
+	}
+	return first
+}
+
+// publishGitSnapshot applies one session's selection to a shared snapshot
+// and sends it. Returns the repo that session is now active in.
+func publishGitSnapshot(sessionID, cwd, touched string, base GitStatusSnapshot) string {
 	sess, sessErr := session.Load(globalLayout, sessionID)
 	stored := ""
 	if sessErr == nil {
 		stored = sess.Meta.ScmRepo
 	}
-	snap := buildGitSnapshot(ctx, cwd, stored)
+	// Copy the shared snapshot: the repo list is identical for everyone,
+	// but Active is this session's own answer and must not be written into
+	// a value other sessions are about to read.
+	snap := base
+	if sel, err := scm.ResolveSelection(cwd, stored); err == nil {
+		snap.Active, snap.ActiveExplicit = sel.Rel, sel.Explicit
+	}
 	// Follow the work: whoever just edited a file — the agent or the
 	// person — is working in that repo, so the Source panel moves there
 	// instead of sitting on a repo nobody is touching. Without this the

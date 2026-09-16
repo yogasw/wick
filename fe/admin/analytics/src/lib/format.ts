@@ -47,3 +47,30 @@ export function channelClass(channel: string): string {
   }
   return "bg-white-300 text-black-700 dark:bg-navy-600 dark:text-black-600";
 }
+
+/** Line colours for the per-channel curves.
+ *
+ *  Hex rather than Tailwind classes, and for the same reason the chart's own
+ *  colours are inline: `stroke-*` utilities that nothing else on the page
+ *  uses never make it into the admin stylesheet, so the class resolves to
+ *  nothing and the path falls back to black. */
+const CHANNEL_COLORS: Record<string, string> = {
+  slack: "#d946ef",
+  telegram: "#38bdf8",
+  ui: "#22c55e",
+  rest: "#f59e0b",
+  schedule: "#a78bfa",
+  workflow: "#f472b6",
+  recover: "#94a3b8",
+};
+
+/** A stable colour per channel, falling back to a deterministic pick so an
+ *  unknown channel still gets its own line rather than sharing one. */
+export function channelColor(channel: string): string {
+  const known = CHANNEL_COLORS[channel];
+  if (known) return known;
+  const spare = ["#2dd4bf", "#fb7185", "#facc15", "#60a5fa", "#c084fc"];
+  let h = 0;
+  for (let i = 0; i < channel.length; i++) h = (h * 31 + channel.charCodeAt(i)) >>> 0;
+  return spare[h % spare.length];
+}

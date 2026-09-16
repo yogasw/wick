@@ -15,6 +15,29 @@ export type AnalyticsSeries = {
   from: string;
   points: AnalyticsPoint[];
   by_channel?: Record<string, AnalyticsPoint[]>;
+  by_provider?: Record<string, AnalyticsPoint[]>;
+};
+
+/** The filter the server actually applied, echoed back so the page can
+ *  label its numbers with the range they were computed over. */
+export type AnalyticsWindow = {
+  from: string;
+  to: string;
+  days: number;
+  all?: boolean;
+  channels?: string[];
+};
+
+/** One provider instance — an account, in practice — and the models it was
+ *  run with. Read from each session's agents.json. */
+export type AnalyticsProvider = {
+  key: string;
+  type: string;
+  instance?: string;
+  sessions: number;
+  users: number;
+  last_active_at?: string;
+  models?: AnalyticsKeyCount[];
 };
 
 /** A credential, as the page may show it: the record of a token, never the
@@ -50,6 +73,10 @@ export type AnalyticsUser = {
   channels?: string[];
   projects?: AnalyticsRef[];
   agents?: string[];
+  /** This person's own usage, busiest first: which account ran their work,
+   *  and with which model. */
+  providers?: AnalyticsKeyCount[];
+  models?: AnalyticsKeyCount[];
   tokens?: AnalyticsToken[];
   daily?: AnalyticsPoint[];
 };
@@ -95,6 +122,8 @@ export type AnalyticsProject = {
 
 export type AnalyticsResponse = {
   generated_at: string;
+  window: AnalyticsWindow;
+  providers?: AnalyticsProvider[];
   users: AnalyticsUser[];
   channels: AnalyticsChannel[];
   projects: AnalyticsProject[];
@@ -102,8 +131,14 @@ export type AnalyticsResponse = {
   logins_recorded_since?: string;
   total_users: number;
   active_users_7d: number;
+  /** Conversations inside the window, and on disk in total. */
   sessions: number;
+  sessions_all_time: number;
+  users_in_window: number;
   unattributed_sessions: number;
+  /** Every channel ever seen, filtered or not — without it, filtering to
+   *  one channel would remove the means of filtering back out. */
+  known_channels?: string[];
 };
 
 /** What the streaming endpoint emits, one JSON object per line. */
