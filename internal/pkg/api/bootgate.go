@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/rs/zerolog/log"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 )
 
 // BootGate tracks the set of asynchronous boot steps that must finish before
@@ -203,6 +204,15 @@ func bootStatusPayload(ready bool, message string) map[string]any {
 		"message": message,
 		"version": releaseAppVersion,
 		"pid":     os.Getpid(),
+		// A handover in progress. This process is still the one answering —
+		// that is the whole point of a graceful upgrade — so without saying
+		// so, a reload is invisible from every page until it is already over
+		// and the version below has quietly changed underneath.
+		"handover": upgrade.HandingOver(),
+		// Set on the way out: this process handed the socket over and is
+		// finishing its work. A page that still reaches it is talking to the
+		// previous generation.
+		"draining": upgrade.Draining(),
 	}
 }
 

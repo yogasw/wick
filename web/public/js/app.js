@@ -23,6 +23,32 @@ document.addEventListener('keydown', function (e) {
   });
 });
 
+// Dropdown menus built on <details data-menu>: the avatar menu, the
+// sidebar's "More", the row action menus, the admin nav. A native
+// <details> only closes when its own summary is clicked again, so every
+// one of them used to stay open behind whatever you clicked next —
+// including a click on the page behind it, which everywhere else in the
+// world means "dismiss this".
+//
+// pointerdown rather than click so the menu is gone by the time the
+// click lands on what is underneath, and Escape for the keyboard. Plain
+// <details> without data-menu (collapsible cards, "Advanced" sections)
+// are deliberately untouched: those are content, and content does not
+// collapse because you clicked elsewhere.
+function closeMenus(except) {
+  document.querySelectorAll('details[data-menu][open]').forEach(function (d) {
+    if (!except || !d.contains(except)) d.open = false;
+  });
+}
+
+document.addEventListener('pointerdown', function (e) {
+  closeMenus(e.target);
+});
+
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') closeMenus(null);
+});
+
 // Server-rendered timestamps in the viewer's own timezone.
 //
 // Pages are rendered in Go, so a formatted time comes out in the
