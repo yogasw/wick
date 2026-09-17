@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yogasw/wick/pkg/safeexec"
@@ -56,6 +57,76 @@ func run(ctx context.Context, dir string, args ...string) (string, error) {
 	}
 	return stdout.String(), nil
 }
+
+// indexLocks serializes wick's OWN index-writing commands per repository.
+// Two panel actions on one repo (stage while a discard is running) would
+// otherwise race for git's index.lock and one of them would simply lose.
+var indexLocks sync.Map // repo dir -> *sync.Mutex
+
+func repoMu(dir string) *sync.Mutex {
+	mu, _ := indexLocks.LoadOrStore(dir, &sync.Mutex{})
+	return mu.(*sync.Mutex)
+}
+
+// lockContention reports whether git refused because another process holds
+// index.lock. It is the one git failure that is nearly always transient: a
+// status refresh, a shell, an editor's plugin — each holds the index for
+// milliseconds.
+func lockContention(err error) bool {
+	var ge *GitError
+	if !errors.As(err, &ge) {
+		return false
+	}
+	return strings.Contains(ge.Stderr, "index.lock") && strings.Contains(ge.Stderr, "File exists")
+}
+
+// runIndex runs a git command that writes the index, serialized against
+// wick's other writers and retried while a FOREIGN process holds the lock.
+//
+// Without this, staging a file the moment anything else touched the repo
+// failed outright with git's own "Another git process seems to be running"
+// wall of text — for a collision that was over before the person could read
+// it. wick's git watcher runs `status` on every write in the tree, so on a
+// busy session that collision is not rare, it is the normal case.
+//
+// The lock is never removed here. A lock left behind by a crashed process
+// looks identical to one held by a command that is still working, and
+// deleting the wrong one corrupts the index of a repository somebody is
+// mid-operation in. After the budget the error says where it is, so a human
+// can decide.
+func runIndex(ctx context.Context, dir string, args ...string) (string, error) {
+	mu := repoMu(dir)
+	mu.Lock()
+	defer mu.Unlock()
+
+	delay := 50 * time.Millisecond
+	deadline := time.Now().Add(indexLockBudget)
+	for {
+		out, err := run(ctx, dir, args...)
+		if err == nil || !lockContention(err) {
+			return out, err
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return out, fmt.Errorf(
+				"another git process is holding %s — wick waited %s for it. "+
+					"If nothing is running (no rebase, no commit, no editor plugin), that lock is stale and can be deleted: %w",
+				filepath.Join(dir, ".git", "index.lock"), indexLockBudget, err)
+		}
+		select {
+		case <-ctx.Done():
+			return out, ctx.Err()
+		case <-time.After(delay):
+		}
+		if delay < 400*time.Millisecond {
+			delay *= 2
+		}
+	}
+}
+
+// indexLockBudget is how long a write waits out somebody else's lock. Long
+// enough for a status refresh or a commit hook, short enough that a stuck
+// repository is reported rather than hung on.
+const indexLockBudget = 5 * time.Second
 
 // ── Status ──────────────────────────────────────────────────────────
 
@@ -311,7 +382,7 @@ func Stage(ctx context.Context, dir string, paths []string) error {
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
 	args := append([]string{"add", "--"}, paths...)
-	_, err := run(ctx, dir, args...)
+	_, err := runIndex(ctx, dir, args...)
 	return err
 }
 
@@ -323,7 +394,7 @@ func Unstage(ctx context.Context, dir string, paths []string) error {
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
 	args := append([]string{"restore", "--staged", "--"}, paths...)
-	_, err := run(ctx, dir, args...)
+	_, err := runIndex(ctx, dir, args...)
 	return err
 }
 
@@ -335,7 +406,7 @@ func Commit(ctx context.Context, dir, message string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
-	if _, err := run(ctx, dir, "commit", "-m", message); err != nil {
+	if _, err := runIndex(ctx, dir, "commit", "-m", message); err != nil {
 		return "", err
 	}
 	out, err := run(ctx, dir, "rev-parse", "--short", "HEAD")
@@ -383,7 +454,7 @@ func Discard(ctx context.Context, dir string, paths []string, untrackedPaths []s
 		if !hasCommits(ctx, dir) {
 			args = append([]string{"rm", "--cached", "-r", "--"}, tracked...)
 		}
-		if _, err := run(ctx, dir, args...); err != nil {
+		if _, err := runIndex(ctx, dir, args...); err != nil {
 			return err
 		}
 	}
@@ -402,7 +473,7 @@ func Discard(ctx context.Context, dir string, paths []string, untrackedPaths []s
 	}
 	if len(cleanable) > 0 {
 		args := append([]string{"clean", "-fd", "--"}, cleanable...)
-		if _, err := run(ctx, dir, args...); err != nil {
+		if _, err := runIndex(ctx, dir, args...); err != nil {
 			return err
 		}
 	}
@@ -486,7 +557,7 @@ func Checkout(ctx context.Context, dir, branch string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
-	_, err := run(ctx, dir, "checkout", branch)
+	_, err := runIndex(ctx, dir, "checkout", branch)
 	return err
 }
 
@@ -516,7 +587,7 @@ func CreateBranchFrom(ctx context.Context, dir, name, from string, checkout bool
 	if from != "" {
 		args = append(args, from)
 	}
-	_, err := run(ctx, dir, args...)
+	_, err := runIndex(ctx, dir, args...)
 	return err
 }
 
@@ -580,7 +651,7 @@ func Push(ctx context.Context, dir string) (string, error) {
 func Pull(ctx context.Context, dir string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, netTimeout)
 	defer cancel()
-	return run(ctx, dir, "pull", "--ff-only")
+	return runIndex(ctx, dir, "pull", "--ff-only")
 }
 
 // Fetch updates the remote-tracking refs without touching the working tree
