@@ -681,7 +681,48 @@ describe("DetailView — sub-agent roster follows delegation tool calls", () => 
     // The file-wide stub never settles, which parks loadSubAgents behind its
     // own in-flight guard forever — a refetch would be indistinguishable from
     // no refetch. Resolve here so the guard clears between events.
-    runPromise.mockReturnValue(Promise.resolve([]));
+    //
+    // ONE stub answers every effect in this block, and each loader reads a
+    // DIFFERENT field off the result, so no single literal fits: a bare []
+    // left `subAgents` undefined and the derived busy-count threw on every
+    // render — three unhandled errors that failed the workspace while all
+    // 1019 tests passed, which reads as green to everything but the exit
+    // code. Filling in the fields one at a time just moved the throw to the
+    // next loader.
+    //
+    // So: an array whose every OTHER property is an empty array, with the
+    // few that must not be a list named explicitly (`incident` especially —
+    // [] is truthy and would render an incident that does not exist). New
+    // loaders are covered without touching this.
+    //
+    // The real client normalises the shape (getSubAgentPanel maps
+    // `r?.subagents ?? []`), but Effect.map is stubbed to identity here, so
+    // it has to be right at the source.
+    const notLists: Record<string, unknown> = {
+      incident: null,
+      schema: null,
+      active: null,
+      values: {},
+      label: "",
+      active_agent: "",
+      provider: "",
+      model_id: "",
+      cwd: "",
+      hopsLeft: 0,
+      hasMore: false,
+      truncated: false,
+      deleted: false,
+      always_approved: false,
+      session_approved: false,
+    };
+    const anyShape = new Proxy([] as unknown[], {
+      get(target, key) {
+        if (key in target) return Reflect.get(target, key);
+        if (typeof key !== "string") return undefined;
+        return key in notLists ? notLists[key] : [];
+      },
+    });
+    runPromise.mockReturnValue(Promise.resolve(anyShape));
     if (!document.getElementById("app")) {
       const el = document.createElement("div");
       el.id = "app";
