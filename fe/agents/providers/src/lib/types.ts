@@ -165,6 +165,13 @@ export interface SpawnDetailResponse {
   Repro: Record<string, string>;
   /** True when the spawn had a resume id — the Keep/Fresh toggle is meaningful. */
   HasResume: boolean;
+  /** True when this provider takes the prompt on stdin (claude/gemini), so the
+      Prompt control is meaningful. False for codex: its argv already ends with
+      the message. */
+  PromptSupported: boolean;
+  /** The message wick sent on this spawn, read from conversation.jsonl — the
+      "Wick" option of Prompt. */
+  WickPrompt: string;
   Logs: SpawnLogsDTO;
 }
 

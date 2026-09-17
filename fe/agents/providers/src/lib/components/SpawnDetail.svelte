@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { Breadcrumb, CodeEditor, type BreadcrumbItem } from "@wick-fe/common-ui";
   import { toastError } from "@wick-fe/common-stores";
-  import { apiGetSpawnDetail, apiRevealSpawn } from "$lib/api.js";
+  import { apiGetSpawnDetail, apiRevealSpawn, apiSpawnRepro } from "$lib/api.js";
   import type { SpawnDetailResponse } from "$lib/types.js";
 
   type Props = {
@@ -98,8 +98,18 @@
   });
 
   /* ── Reproduce card state ─────────────────────────────────────── */
-  type Axis = "mode" | "env" | "shell" | "path" | "resume";
-  let sel = $state<Record<Axis, string>>({ mode: "headless", env: "masked", shell: "bash", path: "full", resume: "res" });
+  type Axis = "mode" | "env" | "shell" | "path" | "resume" | "prompt";
+  let sel = $state<Record<Axis, string>>({ mode: "headless", env: "masked", shell: "bash", path: "full", resume: "res", prompt: "none" });
+  // Prompt axis. wick hands claude/gemini the user message over the stdin
+  // pipe, never in argv, so the logged command alone starts a CLI with nothing
+  // to say — on a --resume spawn claude answers "No deferred tool marker found
+  // in the resumed session". "Wick" replays the message this spawn ran;
+  // "Custom" sends something else into the same session.
+  let customPrompt = $state("");
+  let promptRepro = $state<Record<string, string> | null>(null);
+  let promptLoading = $state(false);
+  let promptError = $state("");
+  let reqSeq = 0;
   let live = $state<Record<string, string> | null>(null); // unmasked, fetched once
   let liveLoading = $state(false);
   let liveError = $state("");
@@ -113,10 +123,43 @@
     return `${sel.shell}-${mode}-${sel.path}-${sel.resume}`;
   }
 
+  let promptText = $derived(
+    sel.prompt === "wick" ? (data?.WickPrompt ?? "") : sel.prompt === "custom" ? customPrompt : "",
+  );
+
+  // Rendering a prompt into a command is per-shell quoting + the stream-json
+  // envelope, which live in Go — so the server renders it. Debounced so typing
+  // in the textarea doesn't fire a request per keystroke.
+  $effect(() => {
+    const text = promptText;
+    const env = sel.env;
+    if (!text) {
+      promptRepro = null;
+      promptLoading = false;
+      promptError = "";
+      return;
+    }
+    const seq = ++reqSeq;
+    promptLoading = true;
+    const t = setTimeout(() => {
+      apiSpawnRepro(base, file, env, text)
+        .then((m) => { if (seq === reqSeq) { promptRepro = m; promptError = ""; } })
+        .catch((e: unknown) => {
+          if (seq === reqSeq) promptError = `Failed to render prompt: ${e instanceof Error ? e.message : String(e)}`;
+        })
+        .finally(() => { if (seq === reqSeq) promptLoading = false; });
+    }, 300);
+    return () => clearTimeout(t);
+  });
+
+  // Edits are keyed by every input that produces the command, prompt text
+  // included, so tweaking a flag for one prompt doesn't resurface under another.
+  let editKey = $derived(`${sel.env}:${promptText}:${variantKey()}`);
+
   let command = $derived.by(() => {
     const k = variantKey();
-    const editKey = `${sel.env}:${k}`;
     if (edited[editKey] != null) return edited[editKey];
+    if (promptText) return promptRepro?.[k] ?? "";
     if (sel.env === "live") return live ? (live[k] ?? "") : "";
     return data?.Repro?.[k] ?? "";
   });
@@ -126,6 +169,8 @@
   function pick(axis: Axis, val: string) {
     sel = { ...sel, [axis]: val };
     if (axis === "env" && val === "live" && !live && !liveLoading) void loadLive();
+    // Seed Custom with what wick sent: most edits start from that turn.
+    if (axis === "prompt" && val === "custom" && !customPrompt) customPrompt = data?.WickPrompt ?? "";
   }
 
   async function loadLive() {
@@ -142,7 +187,7 @@
   }
 
   function onEditorChange(v: string) {
-    edited = { ...edited, [`${sel.env}:${variantKey()}`]: v };
+    edited = { ...edited, [editKey]: v };
   }
 
   async function copyCommand() {
@@ -196,6 +241,9 @@
     { axis: "shell", label: "Shell", opts: [["bash", "bash"], ["powershell", "PowerShell"], ["cmd", "cmd.exe"]] },
     { axis: "path", label: "Path", opts: [["full", "Full"], ["short", "Short"]] },
     ...(data?.HasResume ? [{ axis: "resume" as Axis, label: "Resume", opts: [["res", "Keep"], ["new", "Fresh"]] as [string, string][] }] : []),
+    // Hidden for codex: its logged argv already ends with the message, so a
+    // prompt here would only be sent twice.
+    ...(data?.PromptSupported ? [{ axis: "prompt" as Axis, label: "Prompt", opts: [["none", "None"], ["wick", "Wick"], ["custom", "Custom"]] as [string, string][] }] : []),
   ]);
 </script>
 
@@ -250,6 +298,9 @@
         <div>
           <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Reproduce</h2>
           <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Editable — tweak a flag, then copy. Runs the spawn outside wick.</p>
+          {#if data.PromptSupported && sel.prompt === "none"}
+            <p class="mt-1 text-xs text-cau-400">wick sends the message on stdin, not in argv — this command starts the CLI with nothing to say. Pick a <strong>Prompt</strong> to include one.</p>
+          {/if}
         </div>
         <button
           type="button"
@@ -285,13 +336,36 @@
         {/each}
       </div>
 
+      {#if sel.prompt === "custom"}
+        <div class="space-y-1">
+          <label for="repro-prompt" class="block text-xs text-black-700 dark:text-black-600">Prompt sent to the CLI</label>
+          <textarea
+            id="repro-prompt"
+            bind:value={customPrompt}
+            rows="3"
+            placeholder="What the reproduced run should say…"
+            class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 font-mono text-xs text-black-900 dark:text-white-100 placeholder:text-black-600"
+          ></textarea>
+        </div>
+      {:else if sel.prompt === "wick"}
+        <div class="space-y-1">
+          <p class="text-xs text-black-700 dark:text-black-600">Prompt wick sent on this spawn</p>
+          <pre class="max-h-28 overflow-auto whitespace-pre-wrap rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-2 font-mono text-xs text-black-900 dark:text-white-100">{data.WickPrompt || "(no user turn found for this spawn)"}</pre>
+        </div>
+      {/if}
+
       {#if liveError}
         <p class="text-xs text-error-400">{liveError}</p>
+      {/if}
+      {#if promptError}
+        <p class="text-xs text-error-400">{promptError}</p>
       {/if}
 
       <div class="h-56">
         {#if sel.env === "live" && liveLoading}
           <div class="flex h-full items-center justify-center rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-xs text-black-700 dark:text-black-600">Loading live env…</div>
+        {:else if promptLoading && !command}
+          <div class="flex h-full items-center justify-center rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-xs text-black-700 dark:text-black-600">Rendering prompt…</div>
         {:else}
           <CodeEditor
             language="sh"
@@ -301,6 +375,10 @@
           />
         {/if}
       </div>
+
+      {#if sel.prompt !== "none" && sel.mode === "headless" && promptText}
+        <p class="text-xs text-black-700 dark:text-black-600">The prompt is piped in as one stream-json line — the same envelope <code class="font-mono">Agent.Send</code> writes. Stdin closes after it, so the CLI answers once and exits.</p>
+      {/if}
 
       {#if showCmdNote}
         <p class="text-xs text-cau-400">cmd.exe: the <code class="font-mono">--mcp-config</code> JSON arg has doubled quotes (<code class="font-mono">""</code>) — PowerShell or bash reproduce more reliably.</p>

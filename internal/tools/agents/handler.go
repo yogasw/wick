@@ -534,6 +534,7 @@ func Register(r tool.Router) {
 	r.GET("/providers/spawns/{file}/reveal", providerSpawnReveal)
 	r.GET("/api/providers/spawns", apiSpawnsList)
 	r.GET("/api/providers/spawns/{file}", apiSpawnDetail)
+	r.POST("/api/providers/spawns/{file}/repro", apiSpawnRepro)
 	r.GET("/api/providers/sessions", apiSessionsList)
 	r.GET("/api/providers/sessions/{id}", apiSessionSpawns)
 	// Session detail + log viewer are sub-views of the providers SPA; the

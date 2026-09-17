@@ -1,6 +1,7 @@
 package view
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/yogasw/wick/internal/agents/provider"
@@ -118,7 +119,15 @@ func ReproKey(shell string, interactive, short, resume bool) string {
 // argv, and env. The same function serves the masked page render and the
 // unmasked reveal endpoint — callers pass masked vs unmasked env so the keys
 // line up exactly.
-func BuildReproVariants(providerType, binary string, argv, env []string) map[string]string {
+//
+// prompt is the first user message the command should carry. Empty renders the
+// bare command (what the spawn log used to show), which for a stdin provider
+// starts a CLI with nothing to say — claude then reports "No deferred tool
+// marker found in the resumed session". Non-empty is delivered per the
+// provider's ReproSpec: piped into stdin as a stream-json line for the
+// long-lived-stdin CLIs, appended as a positional arg in interactive mode.
+func BuildReproVariants(providerType, binary string, argv, env []string, prompt string) map[string]string {
+	spec := provider.ReproSpecFor(provider.Type(providerType))
 	out := make(map[string]string, 24)
 	for _, resume := range []bool{true, false} {
 		base := argv
@@ -129,15 +138,60 @@ func BuildReproVariants(providerType, binary string, argv, env []string) map[str
 		for _, m := range []struct {
 			interactive bool
 			av          []string
-		}{{false, base}, {true, iArgv}} {
+			delivery    provider.PromptDelivery
+		}{
+			{false, base, spec.HeadlessPrompt},
+			{true, iArgv, spec.InteractivePrompt},
+		} {
+			av, stdin := applyPrompt(m.av, prompt, m.delivery)
 			for _, short := range []bool{false, true} {
-				out[ReproKey("bash", m.interactive, short, resume)] = ShellReproduceBash(binary, m.av, env, short)
-				out[ReproKey("powershell", m.interactive, short, resume)] = ShellReproducePwsh(binary, m.av, env, short)
-				out[ReproKey("cmd", m.interactive, short, resume)] = ShellReproduceCmd(binary, m.av, env, short)
+				out[ReproKey("bash", m.interactive, short, resume)] = ShellReproduceBash(binary, av, env, short, stdin)
+				out[ReproKey("powershell", m.interactive, short, resume)] = ShellReproducePwsh(binary, av, env, short, stdin)
+				out[ReproKey("cmd", m.interactive, short, resume)] = ShellReproduceCmd(binary, av, env, short, stdin)
 			}
 		}
 	}
 	return out
+}
+
+// applyPrompt folds the prompt into one variant: returns the argv to render
+// (prompt appended for positional delivery) and the single stdin line to feed
+// (non-empty only for stream-json delivery). An empty prompt, or a provider
+// whose argv already carries the message (codex), changes nothing.
+func applyPrompt(argv []string, prompt string, d provider.PromptDelivery) (av []string, stdin string) {
+	if prompt == "" {
+		return argv, ""
+	}
+	switch d {
+	case provider.PromptPositional:
+		av = make([]string, 0, len(argv)+1)
+		av = append(av, argv...)
+		return append(av, prompt), ""
+	case provider.PromptStdinStreamJSON:
+		return argv, StreamJSONUserLine(prompt)
+	}
+	return argv, ""
+}
+
+// StreamJSONUserLine renders one stream-json user message — the exact line
+// provider.Agent.Send writes to the subprocess stdin. Kept byte-identical to
+// that envelope: reproducing a spawn means feeding the CLI what wick feeds it,
+// not an approximation. Always a single line (json escapes any newline), which
+// is what lets the bash/PowerShell heredocs below use a fixed delimiter.
+func StreamJSONUserLine(text string) string {
+	b, err := json.Marshal(text)
+	if err != nil { // impossible for a string; fall back to an empty prompt
+		b = []byte(`""`)
+	}
+	return `{"type":"user","message":{"role":"user","content":` + string(b) + `}}`
+}
+
+// PromptSupported reports whether the Prompt control is meaningful for this
+// provider — false when the spawn's argv already carries the message, so the
+// UI can hide a toggle that would only duplicate it.
+func PromptSupported(providerType string) bool {
+	s := provider.ReproSpecFor(provider.Type(providerType))
+	return s.HeadlessPrompt != provider.PromptInArgv || s.InteractivePrompt != provider.PromptInArgv
 }
 
 // InteractiveArgv strips the headless/programmatic tokens wick adds (per
@@ -153,7 +207,7 @@ func InteractiveArgv(providerType string, argv []string) []string {
 // on continuation lines, then the quoted command. short=true uses the binary
 // basename (rely on PATH); otherwise the full path is rewritten to MSYS form
 // (C:\… → /c/…) so it resolves in git-bash/msys2.
-func ShellReproduceBash(binary string, argv, env []string, short bool) string {
+func ShellReproduceBash(binary string, argv, env []string, short bool, stdin string) string {
 	var b strings.Builder
 	b.WriteString("# run in bash / git-bash / msys2\n")
 	for _, e := range env {
@@ -167,8 +221,22 @@ func ShellReproduceBash(binary string, argv, env []string, short bool) string {
 		b.WriteString(" \\\n")
 	}
 	b.WriteString(shellCommand(bashBinary(binary, short), argv))
+	if stdin != "" {
+		// Quoted heredoc: the body is passed through byte for byte (no
+		// expansion, no escaping to get wrong), and the EOF closes stdin
+		// so the CLI finishes the turn and exits instead of hanging on
+		// an open pipe.
+		b.WriteString(" <<'" + promptHeredoc + "'\n")
+		b.WriteString(stdin)
+		b.WriteString("\n" + promptHeredoc)
+	}
 	return b.String()
 }
+
+// promptHeredoc is the delimiter for the bash heredoc / PowerShell here-string
+// that carries the stdin prompt. Safe as a fixed word: the payload is always a
+// single json line, so it can never contain the delimiter on a line of its own.
+const promptHeredoc = "WICK_PROMPT"
 
 // bashBinary resolves the binary token for a bash line: basename when short,
 // else the MSYS-rewritten full path.
@@ -192,7 +260,7 @@ func winBinary(binary string, short bool) string {
 // per line, then the command with PowerShell single-quote quoting. The binary
 // is invoked with the call operator `&` — a quoted string on its own is just a
 // literal in PowerShell (it echoes, doesn't execute); `& 'path'` runs it.
-func ShellReproducePwsh(binary string, argv, env []string, short bool) string {
+func ShellReproducePwsh(binary string, argv, env []string, short bool, stdin string) string {
 	var b strings.Builder
 	b.WriteString("# run in PowerShell\n")
 	for _, e := range env {
@@ -205,6 +273,14 @@ func ShellReproducePwsh(binary string, argv, env []string, short bool) string {
 		b.WriteString("=")
 		b.WriteString(pwshQuote(v))
 		b.WriteString("\n")
+	}
+	if stdin != "" {
+		// Single-quoted here-string: literal, and both delimiters must sit
+		// at the start of their own line. Piped into the exe so it lands on
+		// stdin the way wick's pipe does.
+		b.WriteString("@'\n")
+		b.WriteString(stdin)
+		b.WriteString("\n'@ | ")
 	}
 	b.WriteString("& ")
 	b.WriteString(pwshQuote(winBinary(binary, short)))
@@ -220,7 +296,7 @@ func ShellReproducePwsh(binary string, argv, env []string, short bool) string {
 // best-effort — a JSON arg like --mcp-config contains double-quotes which must
 // be doubled ("") inside a quoted arg, and cmd's quoting/escaping is finicky.
 // PowerShell or bash reproduce such args more reliably.
-func ShellReproduceCmd(binary string, argv, env []string, short bool) string {
+func ShellReproduceCmd(binary string, argv, env []string, short bool, stdin string) string {
 	var b strings.Builder
 	b.WriteString("REM run in cmd.exe\n")
 	for _, e := range env {
@@ -236,10 +312,39 @@ func ShellReproduceCmd(binary string, argv, env []string, short bool) string {
 		b.WriteString(cmdEscapePercent(v))
 		b.WriteString("\"\n")
 	}
+	if stdin != "" {
+		// No heredoc in cmd.exe — echo the line into the pipe. Best-effort
+		// like the rest of the cmd variant: shell metacharacters outside
+		// the json's quoted spans are caret-escaped.
+		b.WriteString("echo ")
+		b.WriteString(cmdEchoEscape(stdin))
+		b.WriteString("| ")
+	}
 	b.WriteString(cmdQuote(winBinary(binary, short)))
 	for _, a := range argv {
 		b.WriteString(" ")
 		b.WriteString(cmdQuote(a))
+	}
+	return b.String()
+}
+
+// cmdEchoEscape prepares a line for `echo <line>|` in cmd.exe. Inside a
+// double-quoted span cmd treats metacharacters literally, so escaping there
+// would echo the caret itself; outside one they must be caret-escaped or the
+// shell eats them. % is doubled everywhere so %VAR% is not expanded.
+func cmdEchoEscape(s string) string {
+	var b strings.Builder
+	inQuotes := false
+	for _, r := range s {
+		switch {
+		case r == '"':
+			inQuotes = !inQuotes
+		case r == '%':
+			b.WriteString("%")
+		case !inQuotes && strings.ContainsRune(`^&|<>()`, r):
+			b.WriteByte('^')
+		}
+		b.WriteRune(r)
 	}
 	return b.String()
 }
