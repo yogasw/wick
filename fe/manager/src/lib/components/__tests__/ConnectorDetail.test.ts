@@ -205,9 +205,10 @@ describe("ConnectorDetail", () => {
     );
     render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
     await screen.findByText("row-a");
-    /* Row Disconnect opens the confirm dialog, whose confirm is also labelled
-       "Disconnect" — pick the last match (the dialog button). */
-    await fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    /* Disconnect sits in the row's ⋮ menu; picking it opens the confirm
+       dialog, whose confirm button carries the same label. */
+    await fireEvent.click(screen.getByRole("button", { name: "Account actions" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Disconnect" }));
     const buttons = screen.getAllByRole("button", { name: "Disconnect" });
     await fireEvent.click(buttons[buttons.length - 1]);
     await Promise.resolve();

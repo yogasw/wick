@@ -17,14 +17,31 @@
   import { toggleConnectorOperation, bulkToggleOperations } from "$lib/api.js";
   import type { ConnectorOp, ConnectorCategory } from "$lib/types.js";
 
+  /* Per-account mode. When `account` is set the table is showing ONE
+     connected account rather than the instance: the toggle still reads and
+     writes the effective state, but it gains an indicator saying whether
+     that came from the instance or from this account overriding it, plus a
+     reset back to inheriting. Everything else — grouping, search, sections
+     nav, pagination, bulk, Test/History — is the same component, because it
+     is the same job. */
+  type AccountMode = {
+    id: string;
+    /* opKey → how this account's answer was decided. */
+    state: Record<string, "inherit" | "on" | "off">;
+    /* opKey → what the INSTANCE says, i.e. what clearing falls back to. */
+    inherited: Record<string, boolean>;
+    onset: (opKey: string, state: "inherit" | "on" | "off") => Promise<void>;
+  };
+
   type Props = {
     operations: ConnectorOp[];
     categories?: ConnectorCategory[];
     connectorKey: string;
     connectorId: string;
     canConfigure: boolean;
+    account?: AccountMode | null;
   };
-  let { operations, categories = [], connectorKey, connectorId, canConfigure }: Props = $props();
+  let { operations, categories = [], connectorKey, connectorId, canConfigure, account = null }: Props = $props();
 
   let ops = $state<ConnectorOp[]>([]);
   let busy = $state<Record<string, boolean>>({});
@@ -160,11 +177,71 @@
   }
 
   function testOp(opKey: string): void {
-    push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(connectorId)}/test?op=${encodeURIComponent(opKey)}`);
+    const acct = account ? `&account=${encodeURIComponent(account.id)}` : "";
+    push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(connectorId)}/test?op=${encodeURIComponent(opKey)}${acct}`);
   }
 
   function historyOp(opKey: string): void {
-    push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(connectorId)}/history?op=${encodeURIComponent(opKey)}`);
+    /* In account mode the history has to be scoped to this credential, or
+       "History" next to an account's operation shows every other identity's
+       calls too. */
+    const acct = account ? `&credential=${encodeURIComponent(account.id)}` : "";
+    push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(connectorId)}/history?op=${encodeURIComponent(opKey)}${acct}`);
+  }
+
+  /* In account mode the toggle writes an OVERRIDE rather than the instance's
+     own flag: flipping it pins this account's answer in that direction. */
+  async function toggleAccountOp(op: ConnectorOp): Promise<void> {
+    if (!account || busy[op.key]) return;
+    const next = !op.enabled;
+    const prevState = accountState(op.key);
+    busy = { ...busy, [op.key]: true };
+    // Switch and caption move together — they are one fact.
+    ops = ops.map((o) => (o.key === op.key ? { ...o, enabled: next } : o));
+    acctState = { ...acctState, [op.key]: next ? "on" : "off" };
+    try {
+      await account.onset(op.key, next ? "on" : "off");
+    } catch (e) {
+      ops = ops.map((o) => (o.key === op.key ? { ...o, enabled: !next } : o));
+      acctState = { ...acctState, [op.key]: prevState };
+      toastError("Toggle failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      busy = { ...busy, [op.key]: false };
+    }
+  }
+
+  async function resetAccountOp(op: ConnectorOp): Promise<void> {
+    if (!account || busy[op.key]) return;
+    const prevState = accountState(op.key);
+    const prevEnabled = op.enabled;
+    const inherited = account.inherited[op.key] ?? false;
+    busy = { ...busy, [op.key]: true };
+    acctState = { ...acctState, [op.key]: "inherit" };
+    // Clearing an override snaps the switch back to what the instance says.
+    ops = ops.map((o) => (o.key === op.key ? { ...o, enabled: o.system_disabled ? false : inherited } : o));
+    try {
+      await account.onset(op.key, "inherit");
+    } catch (e) {
+      acctState = { ...acctState, [op.key]: prevState };
+      ops = ops.map((o) => (o.key === op.key ? { ...o, enabled: prevEnabled } : o));
+      toastError("Reset failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      busy = { ...busy, [op.key]: false };
+    }
+  }
+
+  /* Local copy of the account's per-op state, seeded from the prop and
+     updated the instant a toggle is flipped. Reading the prop directly made
+     the caption lag the toggle by a whole round-trip: the switch moved, the
+     "inherited / override" label did not, and the row looked stale until a
+     reload. Re-seeded whenever the prop changes, so the server still wins. */
+  let acctState = $state<Record<string, "inherit" | "on" | "off">>({});
+  $effect(() => {
+    acctState = { ...(account?.state ?? {}) };
+  });
+
+  function accountState(opKey: string): "inherit" | "on" | "off" {
+    return acctState[opKey] ?? "inherit";
   }
 
   async function toggleEnabled(op: ConnectorOp): Promise<void> {
@@ -192,6 +269,20 @@
     bulkBusy = true;
     try {
       const scope = keys ?? [];
+      if (account) {
+        /* No bulk endpoint for overrides: one call per operation, so a
+           partial failure leaves the rest applied rather than silently
+           rolling everything back. */
+        const target = scope.length === 0 ? ops.map((o) => o.key) : scope;
+        for (const key of target) {
+          await account.onset(key, enabled ? "on" : "off");
+        }
+        ops = ops.map((o) => (target.includes(o.key) ? { ...o, enabled } : o));
+        const n = target.length;
+        toastOk(`${enabled ? "Enabled" : "Disabled"} ${n} operation${n === 1 ? "" : "s"} for this account`);
+        selected = {};
+        return;
+      }
       await bulkToggleOperations(connectorKey, connectorId, enabled, scope);
       const target = new Set(scope);
       ops = ops.map((o) =>
@@ -352,7 +443,52 @@
                             {#if op.system_disabled}
                               <span class="inline-flex items-center gap-1 rounded-md border border-prog-300 bg-prog-100 px-2 py-0.5 text-[10px] font-medium text-prog-400" title={`Health check warning: ${op.system_disabled_reason}. Toggle on to override.`}>⚠ {op.system_disabled_reason}</span>
                             {/if}
-                            {#if canConfigure}
+                            {#if account}
+                              <!-- Same switch, but it writes this account's
+                                   override. The indicator below is the whole
+                                   point: "off" because the instance is off
+                                   and "off" because this account says so are
+                                   different facts, and only one of them is
+                                   fixed on this page. -->
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={op.enabled}
+                                aria-label={`Enable ${op.name} for this account`}
+                                disabled={!canConfigure || busy[op.key] || op.system_disabled}
+                                onclick={() => toggleAccountOp(op)}
+                                class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 {op.enabled ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
+                              >
+                                <span class="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white-100 shadow transition-transform {op.enabled ? 'translate-x-4' : ''}"></span>
+                              </button>
+                              <!-- A caption, not a pill: the column is narrow
+                                   and "inherited · on" wrapped onto two lines
+                                   inside a big rounded blob. The switch
+                                   already says on/off, so the caption only
+                                   has to say WHERE that came from. -->
+                              {#if accountState(op.key) === "inherit"}
+                                <span
+                                  class="whitespace-nowrap text-[10px] leading-none text-black-700 dark:text-black-600"
+                                  title={`Follows the instance (currently ${account.inherited[op.key] ? "on" : "off"}), and keeps following it when the instance changes.`}
+                                >inherited</span>
+                              {:else}
+                                <span class="inline-flex items-center gap-1.5 whitespace-nowrap leading-none">
+                                  <span
+                                    class="text-[10px] font-medium text-green-600 dark:text-green-400"
+                                    title={`Set on this account. The instance says ${account.inherited[op.key] ? "on" : "off"}.`}
+                                  >override</span>
+                                  {#if canConfigure}
+                                    <button
+                                      type="button"
+                                      class="text-[10px] text-black-700 underline decoration-dotted hover:text-green-600 disabled:opacity-50 dark:text-black-600"
+                                      disabled={busy[op.key]}
+                                      title="Stop overriding and follow the instance again"
+                                      onclick={() => resetAccountOp(op)}
+                                    >reset</button>
+                                  {/if}
+                                </span>
+                              {/if}
+                            {:else if canConfigure}
                               <button
                                 type="button"
                                 role="switch"

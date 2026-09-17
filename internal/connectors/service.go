@@ -811,22 +811,51 @@ func (s *Service) IsVisibleTo(ctx context.Context, connectorID string, userTagID
 // Unlike ListVisibleTo, disabled rows are included so users can re-
 // enable or delete them. Admins see every row while
 // admin_see_all_connectors is on.
-func (s *Service) ListForManager(ctx context.Context, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
+//
+// Rows the caller CREATED are always included, regardless of tags. A new
+// instance inherits the connector type's default tags, which are usually
+// filter tags the creator does not carry — so without this the person who
+// just made an instance could not see it, and with
+// admin_see_all_connectors off not even being an admin helped. Creating
+// something and immediately losing it is not an access policy.
+func (s *Service) ListForManager(ctx context.Context, userID string, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
 	if s.adminBypass(isAdmin) {
 		return s.repo.List(ctx)
 	}
-	return s.repo.ListAccessibleForManager(ctx, userTagIDs)
+	rows, err := s.repo.ListAccessibleForManager(ctx, userTagIDs)
+	if err != nil {
+		return nil, err
+	}
+	owned, err := s.repo.ListOwnedBy(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(rows))
+	for _, r := range rows {
+		seen[r.ID] = struct{}{}
+	}
+	for _, r := range owned {
+		if _, dup := seen[r.ID]; !dup {
+			rows = append(rows, r)
+		}
+	}
+	return rows, nil
 }
 
 // IsManageableBy reports whether the caller may operate on a row from
 // the manager UI. Disabled rows are still manageable — the caller may
 // be re-enabling them.
-func (s *Service) IsManageableBy(ctx context.Context, connectorID string, userTagIDs []string, isAdmin bool) (bool, error) {
-	if s.adminBypass(isAdmin) {
-		_, err := s.repo.Get(ctx, connectorID)
-		if err != nil {
-			return false, err
-		}
+//
+// Three ways in, and ownership is one of them: admin while
+// admin_see_all_connectors is on, the row's creator, or a tag the row
+// carries. Ownership used to be missing, which is how a freshly created
+// instance answered "connector not found" to the person who created it.
+func (s *Service) IsManageableBy(ctx context.Context, connectorID, userID string, userTagIDs []string, isAdmin bool) (bool, error) {
+	row, err := s.repo.Get(ctx, connectorID)
+	if err != nil {
+		return false, err
+	}
+	if s.adminBypass(isAdmin) || OwnsConnector(*row, userID) {
 		return true, nil
 	}
 	return s.repo.IsAccessibleForManager(ctx, connectorID, userTagIDs)
@@ -919,20 +948,94 @@ func (s *Service) DeleteAccount(ctx context.Context, accountID string) error {
 	return s.repo.DeleteAccount(ctx, accountID)
 }
 
-// SetAccountDisabledOps updates which operations are disabled for an account.
-// opKeys is the list of op keys to disable — empty slice clears all.
-func (s *Service) SetAccountDisabledOps(ctx context.Context, accountID string, opKeys []string) error {
-	b, err := json.Marshal(opKeys)
+// AccountOpState values accepted by SetAccountOpOverride.
+const (
+	// AccountOpInherit drops the override so the account follows the instance.
+	AccountOpInherit = "inherit"
+	// AccountOpOn forces the operation on for this account even when the
+	// instance has it off.
+	AccountOpOn = "on"
+	// AccountOpOff forces it off even when the instance has it on.
+	AccountOpOff = "off"
+)
+
+// SetAccountOpOverride sets one operation's state for one account.
+//
+// "inherit" DELETES the key rather than storing a value: an override that
+// happens to agree with the instance today would silently stop agreeing the
+// moment the instance changed, which is exactly the surprise inheritance is
+// supposed to prevent.
+func (s *Service) SetAccountOpOverride(ctx context.Context, accountID, opKey, state string) error {
+	acc, err := s.repo.GetAccountByID(ctx, accountID)
 	if err != nil {
 		return err
 	}
-	return s.repo.SetAccountDisabledOps(ctx, accountID, string(b))
+	overrides := AccountOpOverrides(acc)
+	if overrides == nil {
+		overrides = map[string]bool{}
+	}
+	switch state {
+	case AccountOpInherit:
+		delete(overrides, opKey)
+	case AccountOpOn:
+		overrides[opKey] = true
+	case AccountOpOff:
+		overrides[opKey] = false
+	default:
+		return fmt.Errorf("unknown account op state %q (want inherit, on or off)", state)
+	}
+	if len(overrides) == 0 {
+		// Store "" rather than "{}" so "has no overrides" is one value, not
+		// two that the reader has to treat alike.
+		return s.repo.SetAccountOpOverrides(ctx, accountID, "")
+	}
+	b, err := json.Marshal(overrides)
+	if err != nil {
+		return err
+	}
+	return s.repo.SetAccountOpOverrides(ctx, accountID, string(b))
 }
 
-// AccountDisabledOps parses the DisabledOps JSON and returns the set of
-// disabled op keys for fast lookup.
-func AccountDisabledOps(acc *entity.ConnectorAccount) map[string]bool {
-	if acc == nil || acc.DisabledOps == "" {
+// SetAccountDisabledOps updates which operations are disabled for an account.
+// opKeys is the list of op keys to disable — empty slice clears all.
+// Every listed key becomes a forced OFF override and everything else goes
+// back to inheriting, which is what the binary editor this backs means by
+// "unchecked". It writes the override map, not the legacy array, so the two
+// representations can never drift apart.
+func (s *Service) SetAccountDisabledOps(ctx context.Context, accountID string, opKeys []string) error {
+	if len(opKeys) == 0 {
+		return s.repo.SetAccountOpOverrides(ctx, accountID, "")
+	}
+	overrides := make(map[string]bool, len(opKeys))
+	for _, k := range opKeys {
+		overrides[k] = false
+	}
+	b, err := json.Marshal(overrides)
+	if err != nil {
+		return err
+	}
+	return s.repo.SetAccountOpOverrides(ctx, accountID, string(b))
+}
+
+// AccountOpOverrides parses an account's per-operation overrides into
+// opKey → forced state. A present key means this account overrides the
+// instance; an absent key means it inherits. nil is a perfectly good
+// "inherits everything".
+//
+// Falls back to the legacy DisabledOps array when OpOverrides is empty, so
+// accounts configured before the three-state model keep the behaviour they
+// were given — every key in that array reads as a forced OFF.
+func AccountOpOverrides(acc *entity.ConnectorAccount) map[string]bool {
+	if acc == nil {
+		return nil
+	}
+	if acc.OpOverrides != "" {
+		var m map[string]bool
+		if err := json.Unmarshal([]byte(acc.OpOverrides), &m); err == nil && len(m) > 0 {
+			return m
+		}
+	}
+	if acc.DisabledOps == "" {
 		return nil
 	}
 	var keys []string
@@ -941,9 +1044,71 @@ func AccountDisabledOps(acc *entity.ConnectorAccount) map[string]bool {
 	}
 	out := make(map[string]bool, len(keys))
 	for _, k := range keys {
-		out[k] = true
+		out[k] = false
 	}
 	return out
+}
+
+// AccountOpState is one operation's state for one account, resolved: what
+// actually applies, whether that came from an override or from the instance,
+// and what the instance says — so the UI can show "inherited (off)" and
+// "overridden on" as different things rather than one checkbox.
+type AccountOpState struct {
+	Key string
+	// Enabled is what applies to this account right now.
+	Enabled bool
+	// Overridden is true when this account states its own answer; false
+	// means it follows the instance.
+	Overridden bool
+	// Inherited is what the instance says, shown as the value the account
+	// would fall back to when the override is cleared.
+	Inherited bool
+	// SystemDisabled is the health-check lock on the instance. It is a
+	// ceiling, not a default: an override cannot switch an operation back
+	// on when the credential genuinely lacks the upstream permission, so
+	// forcing it would only buy an error from the provider.
+	SystemDisabled bool
+	Reason         string
+}
+
+// ResolveAccountOps resolves every operation in opKeys for one account
+// against the instance's own operation state.
+//
+// Precedence, tightest first: SystemDisabled wins over everything, then the
+// account's own override, then the instance's Enabled flag.
+func ResolveAccountOps(acc *entity.ConnectorAccount, instance map[string]OpState, opKeys []string) []AccountOpState {
+	overrides := AccountOpOverrides(acc)
+	out := make([]AccountOpState, 0, len(opKeys))
+	for _, key := range opKeys {
+		st := instance[key]
+		inherited := st.Enabled && !st.SystemDisabled
+		forced, overridden := overrides[key]
+		enabled := inherited
+		if overridden {
+			enabled = forced && !st.SystemDisabled
+		}
+		out = append(out, AccountOpState{
+			Key:            key,
+			Enabled:        enabled,
+			Overridden:     overridden,
+			Inherited:      inherited,
+			SystemDisabled: st.SystemDisabled,
+			Reason:         st.SystemDisabledReason,
+		})
+	}
+	return out
+}
+
+// AccountOpEnabled answers the single question Execute needs: may this
+// account run this operation? Same precedence as ResolveAccountOps.
+func AccountOpEnabled(acc *entity.ConnectorAccount, opKey string, st OpState) bool {
+	if st.SystemDisabled {
+		return false
+	}
+	if forced, ok := AccountOpOverrides(acc)[opKey]; ok {
+		return forced
+	}
+	return st.Enabled
 }
 
 // GetAccount returns one ConnectorAccount by ID.
@@ -1546,6 +1711,31 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return nil, fmt.Errorf("operation %q is a config-only helper and cannot be called as a tool", p.OperationKey)
 	}
 
+	// Resolve the named account BEFORE the per-row op gate, not after. The
+	// gate used to reject an operation the instance had turned off and
+	// return before any account was loaded — which made a per-account
+	// "force on" override unreachable by construction. The account is also
+	// the thing the ownership check and the token injection below need, so
+	// it is loaded once here and reused.
+	var acct *entity.ConnectorAccount
+	if !virtual && p.AccountID != "" {
+		if acc, err := s.repo.GetAccountByID(ctx, p.AccountID); err == nil && acc.ConnectorID == c.ID {
+			// Ownership gate: an account the caller cannot see is an account
+			// the caller cannot run as. Without this, a tool_id carrying
+			// someone else's @accountID would still execute under their
+			// identity even though the account never appeared in wick_list.
+			caller := s.AccountAccessFor(*c, p.UserID, p.IsAdmin, p.TagIDs)
+			accTags, tagErr := s.repo.AccountFilterTagIDs(ctx, []string{acc.ID})
+			if tagErr != nil {
+				return nil, fmt.Errorf("resolve account tags: %w", tagErr)
+			}
+			if !AccountVisibleTo(*c, *acc, accTags[acc.ID], caller) {
+				return nil, fmt.Errorf("account %q is not accessible: it belongs to another user and this connector keeps connected accounts private", p.AccountID)
+			}
+			acct = acc
+		}
+	}
+
 	// Per-row state checks (op enable/disable, admin-only) only apply to
 	// real DB rows; a session-workspace instance has no such backing
 	// rows — every base op is available.
@@ -1555,7 +1745,15 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			return nil, fmt.Errorf("load op states: %w", err)
 		}
 		if st, ok := states[p.OperationKey]; ok {
-			if !st.Enabled {
+			// With an account in play the answer is the account's, which may
+			// differ from the instance's in EITHER direction: an override can
+			// switch an operation off that the instance allows, or on that the
+			// instance has turned off. SystemDisabled still wins over both.
+			if acct != nil {
+				if !AccountOpEnabled(acct, p.OperationKey, st) {
+					return nil, fmt.Errorf("operation %q is disabled for account @%s", p.OperationKey, acct.DisplayName)
+				}
+			} else if !st.Enabled {
 				return nil, fmt.Errorf("operation %q is disabled on this connector", p.OperationKey)
 			}
 			// SystemDisabled is a warning, not a hard block — admin can override by
@@ -1587,29 +1785,11 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		configs = s.LoadConfigs(*c)
 	}
 
-	// AccountID override: inject the selected account's token and check
-	// per-account disabled ops. Real rows only.
-	if !virtual && p.AccountID != "" {
-		if acc, err := s.repo.GetAccountByID(ctx, p.AccountID); err == nil && acc.ConnectorID == c.ID {
-			// Ownership gate: an account the caller cannot see is an account
-			// the caller cannot run as. Without this, a tool_id carrying
-			// someone else's @accountID would still execute under their
-			// identity even though the account never appeared in wick_list.
-			caller := s.AccountAccessFor(*c, p.UserID, p.IsAdmin, p.TagIDs)
-			accTags, tagErr := s.repo.AccountFilterTagIDs(ctx, []string{acc.ID})
-			if tagErr != nil {
-				return nil, fmt.Errorf("resolve account tags: %w", tagErr)
-			}
-			if !AccountVisibleTo(*c, *acc, accTags[acc.ID], caller) {
-				return nil, fmt.Errorf("account %q is not accessible: it belongs to another user and this connector keeps connected accounts private", p.AccountID)
-			}
-			disabled := AccountDisabledOps(acc)
-			if disabled[p.OperationKey] {
-				return nil, fmt.Errorf("operation %q is disabled for account @%s", p.OperationKey, acc.DisplayName)
-			}
-			configs["user_token"] = acc.AccessToken
-			configs["auth_mode"] = "user_token"
-		}
+	// Inject the selected account's token. Ownership and per-account op
+	// state were settled above, when the account was resolved.
+	if acct != nil {
+		configs["user_token"] = acct.AccessToken
+		configs["auth_mode"] = "user_token"
 	}
 
 	// Session-workspace instance secrets are stored as MASTER (wick_cenc_)
@@ -1686,6 +1866,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		OperationKey: op.Key,
 		UserID:       p.UserID,
 		SessionID:    sessionID,
+		AccountID:    p.AccountID,
 		Source:       p.Source,
 		RequestJSON:  string(reqBytes),
 		Status:       entity.ConnectorRunStatusRunning,

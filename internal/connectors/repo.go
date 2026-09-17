@@ -135,6 +135,18 @@ func (r *Repo) ListAccessibleForManager(ctx context.Context, userTagIDs []string
 	return out, err
 }
 
+// ListOwnedBy returns every Connector the given user created, newest
+// first. Ownership is independent of tags, so the manager listing can
+// union these in and a creator never loses sight of their own instance.
+func (r *Repo) ListOwnedBy(ctx context.Context, userID string) ([]entity.Connector, error) {
+	if userID == "" {
+		return nil, nil
+	}
+	var out []entity.Connector
+	err := r.db.WithContext(ctx).Where("created_by = ?", userID).Order("created_at DESC").Find(&out).Error
+	return out, err
+}
+
 // IsAccessibleForManager mirrors IsAccessibleTo but ignores the disabled
 // flag. Used by manager handlers so admins who disabled a row can still
 // open its detail page to re-enable.
@@ -419,6 +431,15 @@ func (r *Repo) DeleteAccount(ctx context.Context, accountID string) error {
 	return r.db.WithContext(ctx).Where("id = ?", accountID).Delete(&entity.ConnectorAccount{}).Error
 }
 
+// SetAccountOpOverrides persists the JSON-encoded per-operation override
+// map for an account (opKey → forced bool). Writing "" clears every
+// override, putting the account back to inheriting the instance.
+func (r *Repo) SetAccountOpOverrides(ctx context.Context, accountID, overridesJSON string) error {
+	return r.db.WithContext(ctx).Model(&entity.ConnectorAccount{}).
+		Where("id = ?", accountID).
+		Update("op_overrides", overridesJSON).Error
+}
+
 // SetAccountDisabledOps persists the JSON-encoded disabled ops list for an account.
 func (r *Repo) SetAccountDisabledOps(ctx context.Context, accountID, disabledOpsJSON string) error {
 	return r.db.WithContext(ctx).Model(&entity.ConnectorAccount{}).
@@ -585,7 +606,16 @@ type RunFilter struct {
 	Source       string
 	Status       string
 	UserID       string
+	// AccountID narrows to one connected account. RunFilterAccountDefault
+	// asks the opposite question — the calls that went out on the row's own
+	// credentials — because the zero value is already spoken for ("any").
+	AccountID string
 }
+
+// RunFilterAccountDefault is the AccountID sentinel for "the row's own
+// configured credentials, no connected account". It is not an account id and
+// cannot collide with one.
+const RunFilterAccountDefault = "default"
 
 // AuditFilter narrows cross-connector audit queries. All fields are
 // optional — omit to get all runs across every connector instance.
@@ -726,6 +756,13 @@ func (r *Repo) runFilterQuery(ctx context.Context, connectorID string, f RunFilt
 	}
 	if f.UserID != "" {
 		q = q.Where("user_id = ?", f.UserID)
+	}
+	switch f.AccountID {
+	case "":
+	case RunFilterAccountDefault:
+		q = q.Where("account_id = ''")
+	default:
+		q = q.Where("account_id = ?", f.AccountID)
 	}
 	return q
 }

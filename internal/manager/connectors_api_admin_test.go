@@ -433,9 +433,10 @@ func TestAPISetAccountDisabledOps(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	after, _ := svc.GetAccount(t.Context(), acc.ID)
-	disabled := connectors.AccountDisabledOps(after)
-	if !disabled["del"] {
-		t.Errorf("del should be disabled for account, got %+v", disabled)
+	overrides := connectors.AccountOpOverrides(after)
+	forced, ok := overrides["del"]
+	if !ok || forced {
+		t.Errorf("del should be a forced-OFF override for the account, got %+v", overrides)
 	}
 }
 

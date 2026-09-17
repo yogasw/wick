@@ -307,21 +307,58 @@ describe("ConnectorList OAuth / SSO", () => {
     await waitFor(() => expect(api.getConnector).toHaveBeenCalledTimes(2));
   });
 
-  it("renders connected-account sub-rows with a Disconnect action", async () => {
+  it("puts Re-connect and Disconnect behind the account's own actions menu", async () => {
     const row = { ...ssoRow(), accounts: [{ id: "acc-1", display_name: "yoga.setiawan", wick_user_id: "u1", disabled_ops: [], can_manage: true }] };
     vi.mocked(api.getConnector).mockResolvedValue(makeData({ rows: [row] }));
     render(ConnectorList, { connectorKey: "slack" });
     await screen.findByText("Prod");
     expect(screen.getByText("@yoga.setiawan")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
+    /* Disconnect is no longer a bare link on the row — one stray click used
+       to destroy a grant. */
+    expect(screen.queryByRole("button", { name: "Disconnect" })).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Actions for @yoga.setiawan" }));
+    expect(screen.getByRole("menuitem", { name: "Re-connect" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Disconnect" })).toBeTruthy();
   });
 
-  it("hides Disconnect on accounts the caller can't manage", async () => {
+  it("re-connects from the account menu without disconnecting first", async () => {
+    const row = { ...ssoRow(), accounts: [{ id: "acc-1", display_name: "yoga.setiawan", wick_user_id: "u1", disabled_ops: [], can_manage: true }] };
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ rows: [row] }));
+    vi.mocked(oauth.startConnectorOAuth).mockReturnValue({ promise: Promise.resolve(), cancel: vi.fn() });
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    await fireEvent.click(screen.getByRole("button", { name: "Actions for @yoga.setiawan" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Re-connect" }));
+    expect(oauth.startConnectorOAuth).toHaveBeenCalledWith("/manager/connectors/slack/oauth/start?connector_id=row-a");
+    expect(api.disconnectConnectorAccount).not.toHaveBeenCalled();
+  });
+
+  it("offers no actions menu on accounts the caller can't manage", async () => {
     const row = { ...ssoRow(), accounts: [{ id: "acc-1", display_name: "someone", wick_user_id: "u2", disabled_ops: [], can_manage: false }] };
     vi.mocked(api.getConnector).mockResolvedValue(makeData({ rows: [row] }));
     render(ConnectorList, { connectorKey: "slack" });
     await screen.findByText("@someone");
+    expect(screen.queryByRole("button", { name: "Actions for @someone" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Disconnect" })).toBeNull();
+  });
+
+  it("opens the account's own page from its name", async () => {
+    const row = { ...ssoRow(), accounts: [{ id: "acc-1", display_name: "yoga.setiawan", wick_user_id: "u1", disabled_ops: [], can_manage: true }] };
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ rows: [row] }));
+    render(ConnectorList, { connectorKey: "slack" });
+    await fireEvent.click(await screen.findByRole("button", { name: "Open @yoga.setiawan" }));
+    expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-a/accounts/acc-1");
+  });
+
+  it("does not navigate when the account's kebab is clicked", async () => {
+    const row = { ...ssoRow(), accounts: [{ id: "acc-1", display_name: "yoga.setiawan", wick_user_id: "u1", disabled_ops: [], can_manage: true }] };
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ rows: [row] }));
+    render(ConnectorList, { connectorKey: "slack" });
+    /* The row overlay sits under the content; the controls are lifted back
+       out on top of it. Opening the menu must not also open the account. */
+    await fireEvent.click(await screen.findByRole("button", { name: "Actions for @yoga.setiawan" }));
+    expect(screen.getByRole("menuitem", { name: "Disconnect" })).toBeTruthy();
+    expect(router.push).not.toHaveBeenCalledWith("/connectors/slack/row-a/accounts/acc-1");
   });
 
   it("disconnects an account through the per-row endpoint after confirm", async () => {
@@ -330,11 +367,11 @@ describe("ConnectorList OAuth / SSO", () => {
     vi.mocked(api.disconnectConnectorAccount).mockResolvedValue(undefined);
     render(ConnectorList, { connectorKey: "slack" });
     await screen.findByText("Prod");
-    /* Row Disconnect opens the confirm dialog, whose confirm is also labelled
-       "Disconnect" — pick the last match (the dialog button). */
+    /* Disconnect sits in the account's kebab; picking it opens the confirm
+       dialog, whose confirm button carries the same label. */
+    await fireEvent.click(screen.getByRole("button", { name: "Actions for @yoga.setiawan" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Disconnect" }));
     await fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
-    const buttons = screen.getAllByRole("button", { name: "Disconnect" });
-    await fireEvent.click(buttons[buttons.length - 1]);
     await waitFor(() => expect(api.disconnectConnectorAccount).toHaveBeenCalledWith("slack", "row-a", "acc-1"));
   });
 });

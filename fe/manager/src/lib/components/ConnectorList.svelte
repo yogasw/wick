@@ -157,6 +157,22 @@
       });
   }
 
+  /* Per-account actions, same pair the detail page offers: re-consent without
+     destroying the grant first, or disconnect. Disconnect used to be a bare
+     red link on the row — one stray click from deleting a token, and no
+     affordance at all for the thing people actually wanted, which is why they
+     disconnected just to re-connect. */
+  function accountMenuItems(row: ConnectorRow, acc: ConnectorAccount) {
+    return [
+      {
+        label: connectingId === row.id ? "Re-connecting…" : "Re-connect",
+        onclick: () => connect(row),
+        disabled: !canConnect(row) || connectingId !== "",
+      },
+      { label: "Disconnect", onclick: () => (confirmAcc = { row, acc }), danger: true },
+    ];
+  }
+
   /* Per-instance MCP login. Distinct from the generic connector OAuth above:
      an MCP instance holds its OWN token against the connector's shared server
      URL, so every row connects (and re-connects) independently. The popup
@@ -739,17 +755,30 @@
               {#if (row.accounts ?? []).length}
                 <div class="pointer-events-auto relative z-10 border-t border-white-300 dark:border-navy-600">
                   {#each row.accounts ?? [] as acc (acc.id)}
-                    <div class="flex items-center justify-between gap-3 px-4 py-2.5">
-                      <span class="flex min-w-0 items-center gap-2 text-sm text-black-800 dark:text-black-600">
+                    <!-- Whole sub-row opens the account, same overlay pattern as
+                         the instance card above: a z-0 button under
+                         pointer-events-none content, with the controls lifted
+                         back out on z-10. Hunting for the one word that
+                         happened to be a link is not a target. -->
+                    <div class="relative flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-white-200 dark:hover:bg-navy-800">
+                      <button
+                        type="button"
+                        class="absolute inset-0 z-0"
+                        aria-label={`Open @${acc.display_name}`}
+                        onclick={() => push(`/connectors/${connectorKey}/${row.id}/accounts/${encodeURIComponent(acc.id)}`)}
+                      ></button>
+                      <span class="pointer-events-none relative flex min-w-0 items-center gap-2 text-sm text-black-800 dark:text-black-600">
                         <svg class="h-3.5 w-3.5 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                         <span class="truncate font-medium">@{acc.display_name}</span>
                       </span>
                       {#if acc.can_manage}
-                        <button
-                          type="button"
-                          class="flex-shrink-0 text-xs font-medium text-neg-400 hover:underline"
-                          onclick={() => (confirmAcc = { row, acc })}
-                        >Disconnect</button>
+                        <div class="pointer-events-auto relative z-10 flex-shrink-0">
+                          <KebabMenu
+                            ariaLabel={`Actions for @${acc.display_name}`}
+                            size="sm"
+                            items={accountMenuItems(row, acc)}
+                          />
+                        </div>
                       {/if}
                     </div>
                   {/each}

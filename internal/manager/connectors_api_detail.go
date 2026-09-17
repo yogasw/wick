@@ -589,13 +589,17 @@ func (h *Handler) accountVisible(ctx context.Context, user *entity.User, row ent
 	return connectors.AccountVisibleTo(row, acc, tagIDs[acc.ID], h.accountCaller(user, row, h.userFilterTagIDs(ctx, user)))
 }
 
-// accountDisabledOpKeys returns the sorted disabled-op keys for an account
-// as a slice, for the JSON projection.
+// accountDisabledOpKeys returns the sorted op keys this account forces OFF,
+// for the JSON projection's disabled_ops array. Keys the account forces ON
+// are deliberately absent: the field has always meant "off here", and a
+// forced-on key is the opposite of that.
 func accountDisabledOpKeys(acc *entity.ConnectorAccount) []string {
-	m := connectors.AccountDisabledOps(acc)
+	m := connectors.AccountOpOverrides(acc)
 	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
+	for k, forcedOn := range m {
+		if !forcedOn {
+			out = append(out, k)
+		}
 	}
 	sort.Strings(out)
 	return out

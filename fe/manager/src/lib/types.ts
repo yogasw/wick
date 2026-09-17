@@ -224,6 +224,8 @@ export interface HistoryRun {
   status: string;
   user_id: string;
   user_name: string;
+  account_id: string;
+  account_name: string;
   error_msg: string;
   latency_ms: number;
   http_status: number;
@@ -232,6 +234,37 @@ export interface HistoryRun {
   request_json: string;
   response_json: string;
   started_at: string;
+}
+
+/* One operation as it applies to one connected account. Four fields rather
+   than a boolean because "off" has three causes an operator must tell apart:
+   the instance says off and this account follows, the account itself says
+   off, or the health check locked it. */
+export interface AccountOp {
+  key: string;
+  name: string;
+  description: string;
+  destructive: boolean;
+  /* What applies right now. */
+  enabled: boolean;
+  /* How that was decided. */
+  state: "inherit" | "on" | "off";
+  /* What the instance says — the value clearing the override falls back to. */
+  inherited: boolean;
+  system_disabled: boolean;
+  system_disabled_reason: string;
+}
+
+export interface AccountDetail {
+  connector_key: string;
+  connector_name: string;
+  row_id: string;
+  row_label: string;
+  account_id: string;
+  display_name: string;
+  can_manage: boolean;
+  reconnect_url: string;
+  ops: AccountOp[] | null;
 }
 
 export interface HistoryOpOption {
@@ -244,6 +277,13 @@ export interface HistoryUserOption {
   name: string;
 }
 
+/* One entry in the Credential filter: a connected account, or the "default"
+   sentinel for the row's own configured credentials. */
+export interface HistoryCredentialOption {
+  id: string;
+  name: string;
+}
+
 export interface HistoryResult {
   key: string;
   name: string;
@@ -252,6 +292,7 @@ export interface HistoryResult {
   runs: HistoryRun[] | null;
   ops: HistoryOpOption[] | null;
   users: HistoryUserOption[] | null;
+  credentials: HistoryCredentialOption[] | null;
   page: number;
   total_pages: number;
   total: number;
@@ -263,6 +304,8 @@ export interface HistoryFilter {
   source: string;
   status: string;
   user: string;
+  /* A connected account id, or "default" for the row's own credentials. */
+  credential: string;
   page: number;
 }
 

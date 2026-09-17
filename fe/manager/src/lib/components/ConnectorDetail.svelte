@@ -5,7 +5,7 @@
      duplicate/delete live on the connector list's per-row menu, not here).
      Config auto-save is owned by ConfigsForm; the rest POSTs through the
      JSON api client. */
-  import { Button, TextInput, TextArea, NumberInput } from "@wick-fe/common-ui";
+  import { Button, TextInput, TextArea, NumberInput, ConfirmDialog, KebabMenu } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     getConnectorRow,
@@ -13,8 +13,13 @@
     setConnectorDescription,
     runHealthCheck,
     setConnectorRateLimit,
+    getConnectorAccount,
+    setAccountOpState,
+    disconnectConnectorAccount,
   } from "$lib/api.js";
-  import type { ConnectorDetail } from "$lib/types.js";
+  import type { ConnectorDetail, AccountDetail } from "$lib/types.js";
+  import { startConnectorOAuth, type OAuthConnect } from "./connectorOAuth.js";
+  import { push } from "$lib/router.js";
   import ConfigsForm from "./fields/ConfigsForm.svelte";
   import OperationsTable from "./OperationsTable.svelte";
   import AccountsSection from "./AccountsSection.svelte";
@@ -23,10 +28,27 @@
   import ExtensionsSection from "./ExtensionsSection.svelte";
   import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
 
-  type Props = { connectorKey: string; connectorId: string };
-  let { connectorKey, connectorId }: Props = $props();
+  /* accountId turns this into the page for ONE connected account. It is the
+     same page deliberately — same chrome, same Operations table — with the
+     instance-configuration sections hidden, because an account is a narrower
+     view of this row rather than a different kind of thing. A second page
+     with its own layout drifts from this one the moment either changes. */
+  type Props = { connectorKey: string; connectorId: string; accountId?: string };
+  let { connectorKey, connectorId, accountId = "" }: Props = $props();
 
   let data = $state<ConnectorDetail | null>(null);
+  let account = $state<AccountDetail | null>(null);
+  let connecting = $state(false);
+  let confirmDisconnect = $state(false);
+  let oauthHandle: OAuthConnect | null = null;
+
+  const inAccountMode = $derived(accountId !== "");
+  /* The instance's own settings — label, AI description, credentials, rate
+     limit, policy, the accounts list — belong to the row, not to one account,
+     so account mode hides them exactly the way a non-configuring viewer
+     already does. */
+  const showInstanceConfig = $derived(!inAccountMode && data?.can_configure === true);
+  const canWriteOps = $derived(inAccountMode ? account?.can_manage === true : data?.can_configure === true);
   let loading = $state(true);
   let error = $state("");
   let labelDraft = $state("");
@@ -41,6 +63,7 @@
     if (!silent) loading = true;
     try {
       data = await getConnectorRow(connectorKey, connectorId);
+      account = accountId ? await getConnectorAccount(connectorKey, connectorId, accountId) : null;
       labelDraft = data.label;
       descDraft = data.description ?? "";
       // When the connector requires the AI description, the section is always
@@ -63,6 +86,71 @@
   function refresh() {
     load(true);
   }
+
+  /* Writes this account's override for one operation and patches the row in
+     place. No refetch: a reload would flip `loading` and unmount the whole
+     page on every toggle. `enabled` is recomputed with the backend's
+     precedence — health-check lock, then override, then the instance. */
+  async function setAccountState(opKey: string, state: "inherit" | "on" | "off"): Promise<void> {
+    await setAccountOpState(connectorKey, connectorId, accountId, opKey, state);
+    if (!account?.ops) return;
+    account = {
+      ...account,
+      ops: account.ops.map((o) =>
+        o.key === opKey
+          ? { ...o, state, enabled: o.system_disabled ? false : state === "inherit" ? o.inherited : state === "on" }
+          : o,
+      ),
+    };
+  }
+
+  function reconnectAccount(): void {
+    const url = account?.reconnect_url;
+    if (!url || connecting) return;
+    connecting = true;
+    oauthHandle = startConnectorOAuth(url);
+    oauthHandle.promise
+      .then(() => {
+        toastOk("Account re-connected");
+        return load(true);
+      })
+      .catch((e) => toastError("Re-connect failed", e instanceof Error ? e.message : String(e)))
+      .finally(() => {
+        connecting = false;
+        oauthHandle = null;
+      });
+  }
+
+  async function disconnectAccount(): Promise<void> {
+    confirmDisconnect = false;
+    try {
+      await disconnectConnectorAccount(connectorKey, connectorId, accountId);
+      toastOk("Account disconnected");
+      // Nothing left to show on this page once the account is gone.
+      push(`/connectors/${connectorKey}/${connectorId}`);
+    } catch (e) {
+      toastError("Disconnect failed", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  const accountMenuItems = $derived([
+    {
+      label: connecting ? "Re-connecting…" : "Re-connect",
+      onclick: reconnectAccount,
+      disabled: !account?.can_manage || !account?.reconnect_url || connecting,
+    },
+    {
+      label: "Disconnect",
+      onclick: () => (confirmDisconnect = true),
+      danger: true,
+      disabled: !account?.can_manage,
+    },
+  ]);
+
+  const accountOps = $derived(account?.ops ?? []);
+  const accountStateByKey = $derived(Object.fromEntries(accountOps.map((o) => [o.key, o.state])));
+  const accountInheritedByKey = $derived(Object.fromEntries(accountOps.map((o) => [o.key, o.inherited])));
+  const overrideCount = $derived(accountOps.filter((o) => o.state !== "inherit").length);
 
   async function saveLabel() {
     if (!data || !labelDraft.trim()) return;
@@ -171,12 +259,35 @@
             {/if}
           </div>
           <p class="mt-0.5 font-mono text-[11px] text-black-700 dark:text-black-600">{data.id}</p>
-          {#if data.description}
+          {#if inAccountMode && account}
+            <!-- Same header, one line added: which identity this narrower view
+                 is about, and whether it follows the instance at all. -->
+            <p class="mt-1 text-sm text-black-800 dark:text-black-600">
+              Viewing <span class="font-medium text-black-900 dark:text-white-100">@{account.display_name}</span> — operations follow this instance unless the account overrides them.
+              {#if overrideCount > 0}
+                <span class="font-medium text-green-600 dark:text-green-400">{overrideCount} override{overrideCount === 1 ? "" : "s"} in effect.</span>
+              {/if}
+            </p>
+          {:else if data.description}
             <p class="mt-1 max-w-xl text-sm text-black-800 dark:text-black-600">{data.description}</p>
           {/if}
         </div>
       </div>
+      {#if inAccountMode && account}
+        <div class="flex flex-shrink-0 items-center gap-2">
+          <Button variant="secondary" size="sm" onclick={() => push(`/connectors/${connectorKey}/${connectorId}/history?credential=${encodeURIComponent(accountId)}`)}>History</Button>
+          {#if account.can_manage}
+            <KebabMenu ariaLabel={`Actions for @${account.display_name}`} items={accountMenuItems} />
+          {/if}
+        </div>
+      {/if}
     </div>
+
+    {#if inAccountMode && account && !account.can_manage}
+      <p class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-3 text-sm text-black-700 dark:text-black-600">
+        Read-only: you may see what applies to this account, but changing it needs the instance's owner or an admin.
+      </p>
+    {/if}
 
     <!-- Everything from here to the Accounts section configures the instance:
          label, AI description, credentials, the health probe, rate limit, and
@@ -186,7 +297,7 @@
          invited clicks the server refuses. What such a viewer keeps is the
          part they can actually use: their connected accounts and the
          operation list, so they can still open Test and run as themselves. -->
-    {#if data.can_configure}
+    {#if showInstanceConfig}
       <section>
         <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Label</h2>
         <div class="mt-3 flex items-center gap-2">
@@ -289,11 +400,11 @@
       </section>
     {/if}
 
-    {#if data.can_manage_policy}
+    {#if !inAccountMode && data.can_manage_policy}
       <AccessPolicySection connectorKey={connectorKey} connectorId={connectorId} data={data} onchanged={refresh} />
     {/if}
 
-    {#if data.oauth}
+    {#if !inAccountMode && data.oauth}
       <AccountsSection
         connectorKey={connectorKey}
         connectorId={connectorId}
@@ -307,7 +418,7 @@
       />
     {/if}
 
-    {#if data.can_configure}
+    {#if showInstanceConfig}
       <section>
         <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Rate limit</h2>
         <p class="mt-1 text-sm text-black-800 dark:text-black-600">
@@ -325,11 +436,35 @@
     {/if}
 
     <OperationsTable
-      operations={data.operations ?? []}
-      categories={data.categories ?? []}
+      operations={inAccountMode ? accountOps.map((o) => ({
+        key: o.key,
+        name: o.name,
+        description: o.description,
+        destructive: o.destructive,
+        enabled: o.enabled,
+        system_disabled: o.system_disabled,
+        system_disabled_reason: o.system_disabled_reason,
+        admin_only: false,
+        config_only: false,
+        category: "",
+      })) : (data.operations ?? [])}
+      categories={inAccountMode ? [] : (data.categories ?? [])}
       connectorKey={connectorKey}
       connectorId={connectorId}
-      canConfigure={data.can_configure}
+      canConfigure={canWriteOps}
+      account={inAccountMode
+        ? { id: accountId, state: accountStateByKey, inherited: accountInheritedByKey, onset: setAccountState }
+        : null}
     />
   </div>
 {/if}
+
+<ConfirmDialog
+  open={confirmDisconnect}
+  title="Disconnect this account?"
+  body="The stored OAuth token is removed. The account can be re-connected at any time."
+  confirmLabel="Disconnect"
+  destructive
+  onConfirm={disconnectAccount}
+  onCancel={() => (confirmDisconnect = false)}
+/>

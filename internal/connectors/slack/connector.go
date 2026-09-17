@@ -38,6 +38,19 @@ type Configs struct {
 	ClientID     string `wick:"desc=Slack OAuth App Client ID. Required to use the Connect Account button for user-token OAuth flow."`
 	ClientSecret string `wick:"secret;desc=Slack OAuth App Client Secret. Required for the OAuth token exchange when using Connect Account."`
 
+	// The four below are `hidden`: nobody has to fill them for Connect
+	// Account to work, and four empty boxes on the credentials page read as
+	// four things the operator forgot. Empty is the supported state — wick
+	// then requests exactly the scopes its own operations need. Set one
+	// through the config API (connector_set_config) or the DB on the rare
+	// occasion it is wanted; the row is still seeded and still read by
+	// c.Cfg, so only the form is skipped, not the behaviour.
+	OAuthUserScopes string `wick:"key=oauth_user_scopes;hidden;desc=Override for the user scopes Connect Account asks Slack for, comma-separated. Empty means request exactly what this connector's operations need. Only worth setting when Slack answers invalid_scope, which means one of the requested scopes is not declared in the Slack app's User Token Scopes — narrowing the list to the declared ones unblocks the consent without a rebuild."`
+
+	AppID                 string `wick:"key=app_id;hidden;desc=Slack App ID (A0...), from the app's Basic Information page — not the Client ID. Set it together with the two app-config tokens to have every Connect / Re-connect read the app's User Token Scopes from the manifest instead of deriving them."`
+	AppConfigToken        string `wick:"key=app_config_token;hidden;secret;desc=App configuration token (xoxe.xoxp-...), from api.slack.com/apps → Your Apps → App Configuration Tokens. Only this token type can read the manifest — bot and user tokens answer missing_scope. Expires after 12 hours; wick rotates it when the refresh token is set too."`
+	AppConfigRefreshToken string `wick:"key=app_config_refresh_token;hidden;secret;desc=The refresh token (xoxe-1-...) issued alongside the configuration token. Without it the pair dies after 12 hours and scope lookup falls back to the derived list."`
+
 	CustomAPIMode      string `wick:"group=Custom API|Governs the custom_api_call escape hatch — reaching Slack Web API methods this connector has no dedicated operation for. The operation itself is disabled by default; enable it on this page before these settings do anything.;dropdown=allowlist|all;default=allowlist;desc=Which Slack methods custom_api_call may reach. 'allowlist' permits only the methods listed below (recommended). 'all' permits every Slack Web API method."`
 	CustomAPIAllowlist string `wick:"group=Custom API;kvlist=method;visible_when=custom_api_mode:allowlist;desc=Slack Web API method names custom_api_call may reach, one per row (e.g. emoji.list, pins.add, conversations.members). Supports a trailing * wildcard for prefixes: 'admin.*' allows every admin method. Ignored when mode is 'all'."`
 }

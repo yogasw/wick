@@ -709,7 +709,7 @@ func (h *handlers) connectorSetConfig(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	tagIDs := login.GetUserTagIDs(ctx)
-	allowed, aerr := h.deps.Connectors.IsManageableBy(ctx, id, tagIDs, user.IsAdmin())
+	allowed, aerr := h.deps.Connectors.IsManageableBy(ctx, id, user.ID, tagIDs, user.IsAdmin())
 	if aerr != nil {
 		err = aerr
 		return nil, err
