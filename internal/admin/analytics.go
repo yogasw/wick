@@ -90,20 +90,24 @@ type analyticsUser struct {
 	SignedIn bool `json:"signed_in"`
 
 	// From the session files: what they actually did.
-	Sessions     int                `json:"sessions"` // conversations they started
-	Joined       int                `json:"joined"`   // took part in but did not start
-	LastActiveAt string             `json:"last_active_at,omitempty"`
-	Channels     []string           `json:"channels,omitempty"` // slack, telegram, ui, rest…
-	Projects     []analyticsRef     `json:"projects,omitempty"` // id + name, so the UI shows the name
-	Agents       []string           `json:"agents,omitempty"`
+	Sessions     int            `json:"sessions"` // conversations they started
+	Joined       int            `json:"joined"`   // took part in but did not start
+	LastActiveAt string         `json:"last_active_at,omitempty"`
+	Channels     []string       `json:"channels,omitempty"` // slack, telegram, ui, rest…
+	Projects     []analyticsRef `json:"projects,omitempty"` // id + name, so the UI shows the name
+	Agents       []string       `json:"agents,omitempty"`
 	// Providers and Models are this person's own usage: which account ran
 	// their work, and with which model. Same source as the Providers tab
 	// (each session's agents.json), aggregated per person so "who leans on
 	// what" is answerable without opening every session.
-	Providers    []analyticsKeyCount `json:"providers,omitempty"`
-	Models       []analyticsKeyCount `json:"models,omitempty"`
-	Tokens       []analyticsToken   `json:"tokens,omitempty"`
-	Daily        []analyticsPoint   `json:"daily,omitempty"` // this person's own curve
+	Providers []analyticsKeyCount `json:"providers,omitempty"`
+	Models    []analyticsKeyCount `json:"models,omitempty"`
+	Tokens    []analyticsToken    `json:"tokens,omitempty"`
+	Daily     []analyticsPoint    `json:"daily,omitempty"` // this person's own curve
+	// Recent is the drill-down: their newest conversations, the same shape
+	// the project list uses. Capped hard — the panel answers "what were they
+	// just working on", not "everything they have ever done".
+	Recent []analyticsSessionRef `json:"recent,omitempty"`
 }
 
 // analyticsRef is an id with the name a human recognises it by. Projects
@@ -282,11 +286,19 @@ type analyticsProjectMember struct {
 // analyticsSessionRef is one conversation, as the project drill-down lists
 // it. Enough to recognise and open it, not a second copy of the session.
 type analyticsSessionRef struct {
-	ID           string `json:"id"`
-	Label        string `json:"label,omitempty"`
-	Channel      string `json:"channel"`
-	User         string `json:"user,omitempty"`  // display name, "" when unattributed
-	Token        string `json:"token,omitempty"` // the PAT label, for machine callers
+	ID      string `json:"id"`
+	Label   string `json:"label,omitempty"`
+	Channel string `json:"channel"`
+	User    string `json:"user,omitempty"`  // display name, "" when unattributed
+	Token   string `json:"token,omitempty"` // the PAT label, for machine callers
+	// Providers is which account ran it. A conversation can switch provider
+	// mid-life, so this is a list: naming only the first would misreport the
+	// ones that moved.
+	Providers []string `json:"providers,omitempty"`
+	// The project it lands in. Redundant inside a project's own list, and
+	// the whole point inside a person's.
+	ProjectID    string `json:"project_id,omitempty"`
+	Project      string `json:"project,omitempty"`
 	LastActiveAt string `json:"last_active_at,omitempty"`
 }
 
@@ -347,6 +359,7 @@ type analyticsResponse struct {
 const (
 	maxProjectMembers = 12
 	maxProjectRecent  = 12
+	maxUserRecent     = 5
 	maxProjects       = 40
 )
 
@@ -560,6 +573,7 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		daily            map[string]int
 		providers        map[string]int
 		models           map[string]int
+		recent           []analyticsSessionRef
 	}
 	per := map[string]*acc{}
 	get := func(id string) *acc {
@@ -674,9 +688,9 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 				name = projectID
 			}
 			p = &projAcc{
-				row:     analyticsProject{ID: projectID, Name: name},
-				users:   map[string]bool{},
-				members: map[string]*analyticsProjectMember{},
+				row:      analyticsProject{ID: projectID, Name: name},
+				users:    map[string]bool{},
+				members:  map[string]*analyticsProjectMember{},
 				channels: map[string]int{},
 			}
 			projs[projectID] = p
@@ -750,6 +764,17 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 			}
 		}
 
+		// One row, shared by the drill-downs: the project's list and each
+		// person's. Built once so the two can never disagree about a session.
+		ref := analyticsSessionRef{
+			ID: id, Label: m.Label, Channel: channel,
+			User: firstOf(m.People), Token: m.TokenName,
+			Providers: sessProviders,
+			ProjectID: projectID, Project: p.row.Name,
+			LastActiveAt: rfc3339(m.LastActive),
+		}
+		p.recent = append(p.recent, ref)
+
 		people := m.People
 		if len(people) == 0 {
 			unattributed++
@@ -780,6 +805,7 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 			}
 			a.channels[channel] = true
 			a.projects[projectID] = true
+			a.recent = append(a.recent, ref)
 			if agentName != "" {
 				a.agents[agentName] = true
 			}
@@ -797,12 +823,6 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 				mem.LastActiveAt = rfc3339(t)
 			}
 		}
-
-		p.recent = append(p.recent, analyticsSessionRef{
-			ID: id, Label: m.Label, Channel: channel,
-			User: firstOf(people), Token: m.TokenName,
-			LastActiveAt: rfc3339(m.LastActive),
-		})
 	}
 	if progress != nil {
 		progress(len(ids), len(ids))
@@ -860,14 +880,15 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 	}
 
 	window := dayKeys(from, days)
-	names7 := map[string]string{} // uid -> display name, for project members
+	names7 := map[string]string{} // uid -> display name, for the drill-downs
 	for _, u := range users {
 		display := u.Name
 		if display == "" {
 			display = u.Email
 		}
 		names7[u.ID] = display
-
+	}
+	for _, u := range users {
 		row := analyticsUser{
 			ID: u.ID, Name: u.Name, Email: u.Email, Approved: u.Approved,
 			Role: string(u.Role), Avatar: u.Avatar,
@@ -901,6 +922,7 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 			row.Providers = rankedCounts(a.providers)
 			row.Models = rankedCounts(a.models)
 			row.Daily = pointsFor(window, a.daily, loginHistory[u.ID])
+			row.Recent = newestFirst(a.recent, maxUserRecent, names7)
 		} else if lh := loginHistory[u.ID]; len(lh) > 0 {
 			// Signed in but never worked: still a curve worth drawing.
 			row.Daily = pointsFor(window, nil, lh)
@@ -972,18 +994,7 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 		}
 		sort.Slice(p.row.Channels, func(i, j int) bool { return p.row.Channels[i].Sessions > p.row.Channels[j].Sessions })
 
-		sort.Slice(p.recent, func(i, j int) bool { return p.recent[i].LastActiveAt > p.recent[j].LastActiveAt })
-		if len(p.recent) > maxProjectRecent {
-			p.recent = p.recent[:maxProjectRecent]
-		}
-		for i := range p.recent {
-			if p.recent[i].User != "" {
-				if n := names7[p.recent[i].User]; n != "" {
-					p.recent[i].User = n
-				}
-			}
-		}
-		p.row.Recent = p.recent
+		p.row.Recent = newestFirst(p.recent, maxProjectRecent, names7)
 		out.Projects = append(out.Projects, p.row)
 	}
 	sort.Slice(out.Projects, func(i, j int) bool { return out.Projects[i].Sessions > out.Projects[j].Sessions })
@@ -1036,10 +1047,10 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 	}
 
 	out.Window = analyticsWindow{
-		From:     from.Format("2006-01-02"),
-		To:       now.Format("2006-01-02"),
-		Days:     days,
-		All:      all,
+		From:      from.Format("2006-01-02"),
+		To:        now.Format("2006-01-02"),
+		Days:      days,
+		All:       all,
 		Channels:  sortedKeys(f.Chan),
 		Instances: sortedKeys(f.Inst),
 	}
@@ -1077,6 +1088,28 @@ func rankedCounts(m map[string]int) []analyticsKeyCount {
 		return out[i].Key < out[j].Key
 	})
 	return out
+}
+
+// newestFirst trims a drill-down list to the newest few and swaps each
+// creator's uuid for the name a human recognises. Both the project panel
+// and a person's panel run through it, so the two lists read the same way.
+func newestFirst(list []analyticsSessionRef, max int, names map[string]string) []analyticsSessionRef {
+	if len(list) == 0 {
+		return nil
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].LastActiveAt > list[j].LastActiveAt })
+	if len(list) > max {
+		list = list[:max]
+	}
+	for i := range list {
+		if list[i].User == "" {
+			continue
+		}
+		if n := names[list[i].User]; n != "" {
+			list[i].User = n
+		}
+	}
+	return list
 }
 
 func firstOf(ids []string) string {

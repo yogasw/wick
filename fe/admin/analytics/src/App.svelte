@@ -4,6 +4,7 @@
   import { ago, isDormant, channelClass, channelColor } from "$lib/format";
   import { loadAnalytics } from "$lib/stream";
   import Chart from "$lib/Chart.svelte";
+  import RecentSessions from "$lib/RecentSessions.svelte";
 
   type Props = { endpoint: string };
   let { endpoint }: Props = $props();
@@ -924,6 +925,16 @@
           </div>
         {/if}
 
+        {#if u.recent?.length}
+          <RecentSessions
+            items={u.recent}
+            total={u.sessions + u.joined}
+            showUser={false}
+            showProject
+            onProject={openProjectByID}
+          />
+        {/if}
+
         {#if u.agents?.length}
           <div class="border-t border-white-300 px-5 py-3 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">
             Agents used: {u.agents.join(", ")}
@@ -995,30 +1006,7 @@
         {/if}
 
         {#if p.recent?.length}
-          <div class="border-t border-white-300 px-5 py-3 dark:border-navy-600">
-            <h3 class="mb-2 text-xs font-semibold text-black-900 dark:text-white-100">
-              Recent conversations
-              <span class="font-normal text-black-600 dark:text-black-700">newest {p.recent.length} of {p.sessions}</span>
-            </h3>
-            <div class="space-y-1">
-              {#each p.recent as s}
-                <div class="flex items-baseline gap-2 text-xs">
-                  <span class="rounded px-1.5 py-0.5 text-[10px] font-medium {channelClass(s.channel)}">{s.channel}</span>
-                  <a href={`/agents/conversation?session=${encodeURIComponent(s.id)}`} class="truncate text-black-900 hover:underline dark:text-white-100">
-                    {s.label || s.id}
-                  </a>
-                  {#if s.token}
-                    <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title="created with this token">
-                      {s.token}
-                    </span>
-                  {/if}
-                  <span class="ml-auto whitespace-nowrap text-black-600 dark:text-black-700">
-                    {s.user || "unattributed"} · {ago(s.last_active_at)}
-                  </span>
-                </div>
-              {/each}
-            </div>
-          </div>
+          <RecentSessions items={p.recent} total={p.sessions} />
         {/if}
       </div>
     </div>

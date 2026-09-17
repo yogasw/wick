@@ -80,6 +80,8 @@ export type AnalyticsUser = {
   models?: AnalyticsKeyCount[];
   tokens?: AnalyticsToken[];
   daily?: AnalyticsPoint[];
+  /** Their newest conversations, capped — the same list the project panel shows. */
+  recent?: AnalyticsSessionRef[];
 };
 
 /** One configured bot on a channel — a Slack app somebody connected, a
@@ -121,6 +123,10 @@ export type AnalyticsSessionRef = {
   channel: string;
   user?: string;
   token?: string;
+  /** Which account ran it — several when the conversation switched mid-life. */
+  providers?: string[];
+  project_id?: string;
+  project?: string;
   last_active_at?: string;
 };
 

@@ -899,3 +899,70 @@ func TestUnreadableSessionIsNotCached(t *testing.T) {
 		t.Error("a failure must not be remembered")
 	}
 }
+
+// A person's panel used to end at "providers & models", which says what
+// they ran on but not what they were running. The drill-down answers the
+// question the numbers raise: which conversations, on which provider, in
+// which project, and how long ago.
+func TestUsersCarryTheirRecentConversations(t *testing.T) {
+	h := seedForFilter(t)
+	out := build(t, h, testFilter(7, false))
+
+	var yoga *analyticsUser
+	for i := range out.Users {
+		if out.Users[i].ID == "u-yoga" {
+			yoga = &out.Users[i]
+		}
+	}
+	if yoga == nil {
+		t.Fatalf("the seeded person is missing from %+v", out.Users)
+	}
+	if len(yoga.Recent) != 3 {
+		t.Fatalf("recent = %d conversations, want the window's 3", len(yoga.Recent))
+	}
+	// Newest first: "what were they just working on" is the question.
+	if yoga.Recent[0].ID != "recent-slack" || yoga.Recent[2].ID != "recent-ui-2" {
+		t.Errorf("order = %s…%s, want newest first", yoga.Recent[0].ID, yoga.Recent[2].ID)
+	}
+	for _, s := range yoga.Recent {
+		if len(s.Providers) == 0 {
+			t.Errorf("%s names no provider, but the page shows which account ran it", s.ID)
+		}
+		if s.LastActiveAt == "" {
+			t.Errorf("%s has no last activity, so the row cannot say when it last moved", s.ID)
+		}
+		if s.Project == "" {
+			t.Errorf("%s names no project, and a person's list is the one place that matters", s.ID)
+		}
+	}
+	if got := yoga.Recent[0].Providers[0]; got != "claude/work" {
+		t.Errorf("provider = %q, want the account the session actually ran on", got)
+	}
+	// The project list and the person's list are built from the same rows.
+	for _, p := range out.Projects {
+		if len(p.Recent) == 0 {
+			t.Errorf("project %s lost its own list", p.ID)
+		}
+	}
+}
+
+// Both drill-downs trim through one helper, so they cannot disagree about
+// which conversations are the newest — or leave a uuid where a name goes.
+func TestNewestFirstTrimsAndNamesTheCreator(t *testing.T) {
+	list := []analyticsSessionRef{
+		{ID: "c", User: "u-yoga", LastActiveAt: "2026-09-10T00:00:00Z"},
+		{ID: "a", User: "u-gone", LastActiveAt: "2026-09-12T00:00:00Z"},
+		{ID: "b", User: "", LastActiveAt: "2026-09-11T00:00:00Z"},
+	}
+	got := newestFirst(list, 2, map[string]string{"u-yoga": "Yoga"})
+	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "b" {
+		t.Fatalf("trimmed = %+v, want the newest 2 in order", got)
+	}
+	if got[0].User != "u-gone" {
+		t.Errorf("an unknown account = %q, want the id kept rather than blanked", got[0].User)
+	}
+	named := newestFirst(list, 3, map[string]string{"u-yoga": "Yoga"})
+	if named[2].User != "Yoga" {
+		t.Errorf("creator = %q, want the name a human recognises", named[2].User)
+	}
+}
