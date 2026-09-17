@@ -623,11 +623,12 @@ func (h *Handler) apiCreateConnectorRow(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if h.tags != nil && user != nil && !user.IsAdmin() {
-		// Seed the owner tag so the creator (and admins) can see + manage
-		// this row. Visibility reads tag IDs live from the DB per request
-		// (see Handler.userFilterTagIDs), so the new tag takes effect on the
-		// very next request — no session-cookie re-issue needed.
+	if h.tags != nil && user != nil {
+		// Seed the owner tag so the creator can see + manage this row.
+		// Admins are included — see connectors_api_admin.go for why.
+		// Visibility reads tag IDs live from the DB per request (see
+		// Handler.userFilterTagIDs), so the new tag takes effect on the very
+		// next request — no session-cookie re-issue needed.
 		_ = h.tags.CreateOwnerTag(ctx, row.ID, user.ID)
 	}
 	if h.custom != nil {

@@ -331,7 +331,7 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 		return
 	}
 	if !isSession {
-		allowed, err := h.connectors.IsVisibleTo(r.Context(), connectorID, tagIDs, user.IsAdmin())
+		allowed, err := h.connectors.IsVisibleTo(r.Context(), connectorID, user.ID, tagIDs, user.IsAdmin())
 		if err != nil || !allowed {
 			sseWriteToolError(sess, req, "tool_id not found or not accessible", toolID)
 			return

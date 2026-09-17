@@ -286,8 +286,10 @@ func (h *Handler) createConnectorRow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// Assign ownership tag to the creating user (non-admin creates only).
-	if h.tags != nil && user != nil && !user.IsAdmin() {
+	// Assign ownership tag to the creating user — admins included, because
+	// admin_see_all_connectors can be off (or turned off later) and a
+	// tag-gated row then has no other way back to its author.
+	if h.tags != nil && user != nil {
 		if err := h.tags.CreateOwnerTag(ctx, row.ID, user.ID); err != nil {
 			log.Warn().Err(err).Str("row_id", row.ID).Msg("manager: create owner tag failed")
 		}
@@ -592,8 +594,8 @@ func (h *Handler) duplicateConnector(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// User who duplicates becomes owner of the new row.
-	if h.tags != nil && user != nil && !user.IsAdmin() {
+	// User who duplicates becomes owner of the new row (admins too).
+	if h.tags != nil && user != nil {
 		if err := h.tags.CreateOwnerTag(ctx, dup.ID, user.ID); err != nil {
 			log.Warn().Err(err).Str("row_id", dup.ID).Msg("manager: create owner tag on duplicate failed")
 		}

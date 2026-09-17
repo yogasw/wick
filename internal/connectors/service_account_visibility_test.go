@@ -225,7 +225,7 @@ func TestAdminSeeAllConnectorsKnob(t *testing.T) {
 
 	// Default (config never written) = legacy behaviour: admin sees it.
 	require.True(t, svc.AdminSeesAllConnectors())
-	rows, err := svc.ListVisibleTo(ctx, nil, true)
+	rows, err := svc.ListVisibleTo(ctx, "u-admin", nil, true)
 	require.NoError(t, err)
 	require.True(t, containsRow(rows, row.ID), "admin should see the tagged row while the knob is on")
 
@@ -234,17 +234,17 @@ func TestAdminSeeAllConnectorsKnob(t *testing.T) {
 	require.NoError(t, svc.cfgs.EnsureOwned(ctx, "agents", wickentity.Config{Key: adminscope.KeyAdminSeeAllConnectors, Value: "true", Type: "bool"}))
 	require.NoError(t, svc.cfgs.SetOwned(ctx, "agents", adminscope.KeyAdminSeeAllConnectors, "false"))
 	require.False(t, svc.AdminSeesAllConnectors())
-	rows, err = svc.ListVisibleTo(ctx, nil, true)
+	rows, err = svc.ListVisibleTo(ctx, "u-admin", nil, true)
 	require.NoError(t, err)
 	require.False(t, containsRow(rows, row.ID), "with the knob off an admin is scoped by tags like anyone else")
 
 	// Carrying the tag brings it back — the admin is now a normal grantee.
-	rows, err = svc.ListVisibleTo(ctx, []string{tag.ID}, true)
+	rows, err = svc.ListVisibleTo(ctx, "u-admin", []string{tag.ID}, true)
 	require.NoError(t, err)
 	require.True(t, containsRow(rows, row.ID))
 
 	// Same answer at the single-row check the dispatch path uses.
-	ok, err := svc.IsVisibleTo(ctx, row.ID, nil, true)
+	ok, err := svc.IsVisibleTo(ctx, row.ID, "u-admin", nil, true)
 	require.NoError(t, err)
 	require.False(t, ok)
 }

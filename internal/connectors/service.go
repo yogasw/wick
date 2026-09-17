@@ -17,6 +17,7 @@ import (
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/metrics"
 	"github.com/yogasw/wick/internal/pkg/adminscope"
 	"github.com/yogasw/wick/pkg/connector"
@@ -714,7 +715,13 @@ func (s *Service) List(ctx context.Context) ([]entity.Connector, error) {
 //
 // Use this from MCP tools/list and any user-facing surface that
 // enumerates connectors; only the admin manager should call List.
-func (s *Service) ListVisibleTo(ctx context.Context, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
+//
+// Rows the caller CREATED are included regardless of tags, the same rule
+// ListForManager applies — otherwise a creator can administer a row from
+// the dashboard while their own agent session cannot see it, which is how
+// an admin-created custom connector ended up present in /admin/connectors
+// and absent from wick_list. See ownershipReaches for when this applies.
+func (s *Service) ListVisibleTo(ctx context.Context, userID string, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
 	if s.adminBypass(isAdmin) {
 		rows, err := s.repo.List(ctx)
 		if err != nil {
@@ -730,7 +737,44 @@ func (s *Service) ListVisibleTo(ctx context.Context, userTagIDs []string, isAdmi
 		}
 		return filtered, nil
 	}
-	return s.repo.ListAccessibleTo(ctx, userTagIDs)
+	rows, err := s.repo.ListAccessibleTo(ctx, userTagIDs)
+	if err != nil {
+		return nil, err
+	}
+	if !s.ownershipReaches(ctx, userID) {
+		return rows, nil
+	}
+	owned, err := s.repo.ListOwnedBy(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(rows))
+	for _, r := range rows {
+		seen[r.ID] = struct{}{}
+	}
+	for _, r := range owned {
+		// Disabled rows stay out of every MCP/test surface, owned or not —
+		// the tag query already excludes them and an owner is no exception.
+		if r.Disabled {
+			continue
+		}
+		if _, dup := seen[r.ID]; dup {
+			continue
+		}
+		seen[r.ID] = struct{}{}
+		rows = append(rows, r)
+	}
+	return rows, nil
+}
+
+// ownershipReaches reports whether ownership may widen what this caller
+// sees. False for an anonymous caller — CreatedBy "" must never match
+// userID "", which would hand every ownerless row to an unauthenticated
+// request — and false for an already-narrowed principal, where a
+// sub-agent would otherwise inherit its parent's rows past the profile's
+// allow list (see login.WithScopedUser).
+func (s *Service) ownershipReaches(ctx context.Context, userID string) bool {
+	return userID != "" && !login.IsScopedPrincipal(ctx)
 }
 
 // AdminSeesAllConnectors reports whether an admin bypasses tag filtering on
@@ -796,13 +840,22 @@ func (s *Service) FilterBotSlot(rows []entity.Connector) []entity.Connector {
 // IsVisibleTo reports whether a single connector row is accessible to
 // the caller. Used by tools/call to re-check authorization at dispatch
 // time so a stale tools/list snapshot can't be replayed for access.
-func (s *Service) IsVisibleTo(ctx context.Context, connectorID string, userTagIDs []string, isAdmin bool) (bool, error) {
+//
+// Must agree with ListVisibleTo, ownership included: a row the caller can
+// see but not dispatch is a listing that lies.
+func (s *Service) IsVisibleTo(ctx context.Context, connectorID, userID string, userTagIDs []string, isAdmin bool) (bool, error) {
 	if s.adminBypass(isAdmin) {
 		c, err := s.repo.Get(ctx, connectorID)
 		if err != nil {
 			return false, err
 		}
 		return !c.Disabled, nil
+	}
+	if s.ownershipReaches(ctx, userID) {
+		row, err := s.repo.Get(ctx, connectorID)
+		if err == nil && !row.Disabled && OwnsConnector(*row, userID) {
+			return true, nil
+		}
 	}
 	return s.repo.IsAccessibleTo(ctx, connectorID, userTagIDs)
 }

@@ -266,3 +266,45 @@ describe("AccountDetail updates in place", () => {
     expect(screen.getByRole("switch", { name: "Enable Send Message for this account" }).getAttribute("aria-checked")).toBe("true");
   });
 });
+
+/* The requirement, stated plainly: the SAME page, with the parts that do not
+   apply hidden. A separate page drifted from this one — different width,
+   different header, its own Operations list — which is the whole reason this
+   mode exists instead of a second component. */
+describe("account mode is the row's page with sections hidden", () => {
+  it("keeps the row's own header and identity", async () => {
+    vi.mocked(api.getConnectorRow).mockResolvedValue(makeRow({ label: "Prod", can_configure: true }));
+    vi.mocked(api.getConnectorAccount).mockResolvedValue(makeData());
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a", accountId: "acc-1" });
+
+    // Same title + row id as the instance page, not a bespoke account header.
+    expect(await screen.findByRole("heading", { name: "Prod" })).toBeTruthy();
+    expect(screen.getByText("row-a")).toBeTruthy();
+    expect(screen.getByText("@yoga.setiawan")).toBeTruthy();
+  });
+
+  it("hides the instance-configuration sections even for someone who may configure", async () => {
+    vi.mocked(api.getConnectorRow).mockResolvedValue(
+      makeRow({ can_configure: true, can_manage_policy: true, oauth: { display_name: "Slack", start_url: "" }, enable_sso: true }),
+    );
+    vi.mocked(api.getConnectorAccount).mockResolvedValue(makeData());
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a", accountId: "acc-1" });
+    await screen.findByText("@yoga.setiawan");
+
+    /* These belong to the row, not to one account — showing them here invites
+       edits that have nothing to do with the account being looked at. */
+    expect(screen.queryByRole("heading", { name: "Label" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Credentials" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Rate limit" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Connected accounts" })).toBeNull();
+  });
+
+  it("still shows them on the instance page itself", async () => {
+    vi.mocked(api.getConnectorRow).mockResolvedValue(makeRow({ can_configure: true }));
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    /* The hiding must be conditional on account mode, not a removal. */
+    expect(await screen.findByRole("heading", { name: "Label" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Rate limit" })).toBeTruthy();
+    expect(api.getConnectorAccount).not.toHaveBeenCalled();
+  });
+});
