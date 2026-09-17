@@ -373,6 +373,7 @@ func Register(r tool.Router) {
 	// token. No session id in any of these paths — the token IS the
 	// session, so there is nothing to substitute. See api_cli.go.
 	r.POST("/api/cli/send", apiCLISend)
+	r.POST("/api/cli/todo", apiCLITodo)
 	r.GET("/api/cli/whoami", apiCLIWhoami)
 
 	// JSON API — ticket integrations. The event catalogue is served from the
@@ -1356,7 +1357,7 @@ func startNewSession(c *tool.Ctx) {
 			return
 		}
 	}
-	text := strings.TrimSpace(c.Form("message"))
+	text := trimFormText(c.Form("message"))
 	hasFiles := c.R.MultipartForm != nil && len(c.R.MultipartForm.File["files"]) > 0
 	if text == "" && !hasFiles {
 		renderCompose(c, "", "Type a message or attach a file to start the session.")
@@ -1792,7 +1793,7 @@ func sendMessage(c *tool.Ctx) {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": "parse form: " + err.Error()})
 			return
 		}
-		req.Text = strings.TrimSpace(c.Form("text"))
+		req.Text = trimFormText(c.Form("text"))
 		saved, err := saveUploadsFromMultipart(c, id, c.Base())
 		if err != nil {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -1895,6 +1896,19 @@ func sendMessage(c *tool.Ctx) {
 	// straight to someone else.
 	routeHumanMentions(bgCtx, sess, id, req.Text)
 	c.JSON(http.StatusOK, map[string]string{"status": "queued"})
+}
+
+// trimFormText reads a multipart text field the way the person typed it.
+//
+// HTML form encoding normalises every newline in a textarea to CRLF, so a
+// message sent WITH an attachment (multipart) arrives with "\r\n" while the
+// same message sent without one (JSON) arrives with "\n". That difference is
+// invisible in the bubble and breaks anything that compares the two: the web
+// composer renders its own message optimistically and reconciles it with the
+// persisted copy by text, so a multi-line message with a file attached was
+// drawn twice until the page was reloaded.
+func trimFormText(v string) string {
+	return strings.TrimSpace(strings.ReplaceAll(v, "\r\n", "\n"))
 }
 
 func dequeueAgent(c *tool.Ctx) {

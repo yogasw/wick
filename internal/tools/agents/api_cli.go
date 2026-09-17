@@ -10,6 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/agents/clitoken"
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -41,7 +42,7 @@ func isCLIAPIPath(p string) bool {
 		return false
 	}
 	switch rest {
-	case "/send", "/whoami":
+	case "/send", "/whoami", "/todo":
 		return true
 	}
 	return false
@@ -152,6 +153,149 @@ func apiCLIWhoami(c *tool.Ctx) {
 		out["session_missing"] = true
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// apiCLITodo updates the session's checklist from a script.
+//
+// `send` wakes the agent; this deliberately does not. A run that reports
+// "3 of 9 packages" every minute would otherwise be nine wake-ups and nine
+// turns of tokens for work nobody has to react to. The panel is where
+// progress belongs: it survives a reload, it is there when somebody looks,
+// and it costs nothing when they do not.
+func apiCLITodo(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	g, ok := cliGrant(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no token"})
+		return
+	}
+	var req struct {
+		Item        string `json:"item"`
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		Status      string `json:"status"`
+		Done        *int   `json:"done"`
+		Total       *int   `json:"total"`
+		Unit        string `json:"unit"`
+		Detail      string `json:"detail"`
+		Format      string `json:"format"`
+		Stop        bool   `json:"stop"`
+		Note        string `json:"note"`
+		Clear       bool   `json:"clear"`
+		ClearAll    bool   `json:"clear_all"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+
+	var (
+		rec *session.Todos
+		err error
+	)
+	switch {
+	case req.Clear || req.ClearAll:
+		rec, err = session.ClearTodos(globalLayout, g.SessionID, req.ClearAll)
+	case req.Stop:
+		rec, err = session.StopTodos(globalLayout, g.SessionID, strings.TrimSpace(req.Note))
+	default:
+		patch := session.TodoPatch{
+			Select:      strings.TrimSpace(req.Item),
+			Title:       strings.TrimSpace(req.Title),
+			Description: strings.TrimSpace(req.Description),
+			Status:      normalizeTodoStatus(req.Status),
+		}
+		if req.Done != nil || req.Total != nil {
+			patch.Progress = &session.TodoProgress{Label: strings.TrimSpace(req.Unit)}
+			if req.Done != nil {
+				patch.Progress.Done = *req.Done
+			}
+			if req.Total != nil {
+				patch.Progress.Total = *req.Total
+			}
+		}
+		if req.Detail != "" {
+			patch.Detail = &session.TodoDetail{Format: normalizeTodoFormat(req.Format), Body: req.Detail}
+		}
+		rec, err = session.PatchTodoItem(globalLayout, g.SessionID, patch)
+	}
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Tell the open panels. Without this the checklist only moves when the
+	// agent happens to call the todo tool, which a script never does.
+	publishTodoChanged(g.SessionID)
+
+	out := map[string]any{"status": "ok", "session_id": g.SessionID}
+	if rec != nil && rec.Active != nil {
+		done := 0
+		for _, it := range rec.Active.Items {
+			if it.Status == "completed" {
+				done++
+			}
+		}
+		out["items"] = len(rec.Active.Items)
+		out["completed"] = done
+		out["stopped"] = rec.Active.Stopped
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// publishTodoChanged nudges every open panel to re-read the checklist.
+//
+// The UI refreshes when it sees the `todo` TOOL being called, which is the
+// only way a checklist ever moved before. A script does not call tools, so
+// without an event of its own a CLI update would sit in the file until
+// something else happened to trigger a fetch.
+func publishTodoChanged(sessionID string) {
+	if globalBcast == nil || sessionID == "" {
+		return
+	}
+	agentName := ""
+	if sess, ok := globalMgr.Registry().Session(sessionID); ok {
+		agentName = sess.Meta.ActiveAgent
+	}
+	globalBcast.PublishRaw(sessionID, agentName, "todo", "")
+}
+
+// normalizeTodoStatus accepts what a shell script would naturally write.
+// A rejected status in the middle of a build is a report nobody gets.
+func normalizeTodoStatus(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "":
+		return ""
+	case "done", "ok", "complete", "completed", "pass", "passed":
+		return "completed"
+	case "running", "in_progress", "in-progress", "active", "start", "started":
+		return "in_progress"
+	case "stopped", "cancelled", "canceled", "killed":
+		return "stopped"
+	case "failed", "fail", "error":
+		return "failed"
+	default:
+		return "pending"
+	}
+}
+
+// normalizeTodoFormat keeps the renderer's vocabulary closed. Anything the
+// UI does not know how to draw is shown as text, which is always readable.
+func normalizeTodoFormat(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "markdown", "md":
+		return "markdown"
+	case "json":
+		return "json"
+	case "html":
+		return "html"
+	case "xml":
+		return "xml"
+	default:
+		return "text"
+	}
 }
 
 // apiCLISend delivers a message into the token's session as a user turn —

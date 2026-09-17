@@ -1,6 +1,6 @@
 ---
 name: wick-cli-channel
-description: Use when work will outlive the turn that started it — a build, a deploy, a migration, a long test run — and you want to be TOLD how it went instead of guessing when to check. Also use when a script, cron job, or CI step on this host should be able to speak into this conversation. Covers minting a session-bound token (wick_cli_token), the `support-tools agent send` command, its exit codes, and why this beats scheduling a wake-up.
+description: Use when work will outlive the turn that started it — a build, a deploy, a migration, a long test run — and you want to be TOLD how it went instead of guessing when to check. Also use when a script, cron job, or CI step on this host should be able to speak into this conversation, or should show its PROGRESS while it runs. Covers minting a session-bound token (wick_cli_token), `support-tools agent send` (report, wakes the session) and `support-tools agent todo` (progress into the checklist panel, no wake-up), their exit codes, and why this beats scheduling a wake-up.
 ---
 
 # Talking to this session from a shell
@@ -89,6 +89,58 @@ fi
 `--file <path>` and `--file -` (stdin) work too; anything over 8000
 characters is truncated with a note rather than refused. A build log is
 not a message — send the verdict and the last few lines, not the log.
+
+## 2b. Progress while it runs — `agent todo`
+
+`send` is for things somebody has to react to. A run that says "3 of 9
+packages" every minute is not one of them: each message wakes the session
+and costs a turn, for news nobody has to act on.
+
+`agent todo` writes the session's **checklist panel** instead. Nothing
+wakes, nothing is charged, and the panel survives a reload — so the person
+waiting can look whenever they like and see where the job is.
+
+```bash
+support-tools agent todo --item gate --title "Unit gate" --status running \
+    --done 3 --total 9 --unit packages
+support-tools agent todo --item gate --status running --done 7 --total 9 \
+    --detail-file gate.log --format text          # the tail, under the item
+support-tools agent todo --item gate --status done
+```
+
+Only the item you name is touched, so a script never has to know the rest
+of the list — and an item that does not exist yet is created. That is what
+makes it usable from a shell: each stage reports itself.
+
+| Flag | What it does |
+|---|---|
+| `--item` | id (or title) of the item to update; created when new |
+| `--status` | `pending` / `running` / `done` / `failed` / `stopped` — the words a script would write, mapped for you |
+| `--done` / `--total` / `--unit` | the bar, and what its numbers count |
+| `--detail` / `--detail-file` (`-` = stdin) | payload under the item — a log tail, a JSON result |
+| `--format` | `text` (default) / `markdown` / `json` / `html` / `xml` |
+| `--stop --note "…"` | the run died: the list stops claiming to be in progress |
+| `--clear` / `--clear-all` | delete the finished lists (and with `-all`, the live one) |
+
+A payload is clamped to 8000 characters and the **tail** is what is kept —
+the end of a log is the part that says what happened.
+
+**Stop the list when the job dies.** A card stuck at "in progress" for a
+run that was killed an hour ago is worse than no card: it is the panel
+lying about the state of the box.
+
+```bash
+trap 'support-tools agent todo --item gate --status failed \
+        --detail "$(tail -20 gate.log)" || true' ERR
+```
+
+Both commands take the same token, so one export covers them:
+
+```bash
+export WICK_CLI_TOKEN=… WICK_BASE_URL=http://127.0.0.1:9424
+support-tools agent todo --item build --status running   # progress, silent
+support-tools agent send --text "0.1.273 deployed"       # the verdict, wakes
+```
 
 ## 3. Then end your turn
 
@@ -186,6 +238,8 @@ support-tools agent send --text "done" || echo "could not reach wick ($?)"
 ## When NOT to use this
 
 - **Work that finishes inside the turn.** Just do it and say the answer.
+- **Progress, via `send`.** Ten "still going" messages are ten wake-ups
+  and ten turns; `agent todo` is the same information for free.
 - **A cadence** ("check every morning"): that is `wick_schedule_message`,
   which is about a clock rather than an event.
 - **Sending to a session that is not yours.** There is no way to, and that

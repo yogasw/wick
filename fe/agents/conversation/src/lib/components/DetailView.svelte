@@ -1606,6 +1606,12 @@
         // caught up when the turn ended — which is exactly the stretch
         // during which somebody wants to see what is being worked on.
         if (bareToolName(ev.tool_name ?? "") === "todo") scheduleTodoReload();
+      } else if (ev.type === "todo") {
+        // A checklist written from OUTSIDE the agent — a build script
+        // reporting through the CLI channel. There is no tool call to notice
+        // there, so without its own event the panel would sit on a stale
+        // list until something unrelated triggered a fetch.
+        scheduleTodoReload();
       } else if (ev.type === "lifecycle") {
         scheduleProcessReload();
         scheduleSubAgentReload();

@@ -17,17 +17,21 @@ func TestCLIAPIPathAllowlist(t *testing.T) {
 	for _, ok := range []string{
 		"/tools/agents/api/cli/send",
 		"/tools/agents/api/cli/whoami",
+		// The checklist belongs to a session too, so it is reached the same
+		// way: through the token, never through an id in the path.
+		"/tools/agents/api/cli/todo",
 	} {
 		if !isCLIAPIPath(ok) {
 			t.Errorf("%s should be part of the CLI channel", ok)
 		}
 	}
 	for _, bad := range []string{
-		"/tools/agents/api/cli",              // the root itself is nothing
-		"/tools/agents/api/cli/send/extra",   // no sub-paths
-		"/tools/agents/api/cli/../tickets",   // no traversal into the other surface
-		"/tools/agents/api/tickets",          // the PAT surface
-		"/tools/agents/sessions/abc/send",    // the cookie-only surface
+		"/tools/agents/api/cli",            // the root itself is nothing
+		"/tools/agents/api/cli/send/extra", // no sub-paths
+		"/tools/agents/api/cli/todo/abc",   // …and none under todo either
+		"/tools/agents/api/cli/../tickets", // no traversal into the other surface
+		"/tools/agents/api/tickets",        // the PAT surface
+		"/tools/agents/sessions/abc/send",  // the cookie-only surface
 		"/tools/agents/api/sessions/abc/send",
 		"/api/cli/send", // the public path is rewritten BEFORE this check
 	} {

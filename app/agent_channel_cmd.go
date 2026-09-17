@@ -53,8 +53,117 @@ func agentChannelCmd() *cobra.Command {
 			"  support-tools agent send --text \"0.1.255 built ok\"\n" +
 			"  support-tools agent send --text \"build FAILED at step 3\" || true\n",
 	}
-	cmd.AddCommand(agentSendCmd(), agentWhoamiCmd())
+	cmd.AddCommand(agentSendCmd(), agentTodoCmd(), agentWhoamiCmd())
 	return cmd
+}
+
+// agentTodoCmd is progress without a wake-up.
+//
+// `send` is for things somebody has to react to; a run that says "3 of 9
+// packages" every minute is not one of them — it would be nine turns of
+// tokens for news nobody has to act on. This writes the session's checklist
+// instead: the panel keeps it, a reload still shows it, and it costs nothing
+// when nobody is looking.
+func agentTodoCmd() *cobra.Command {
+	var item, title, desc, status, unit, detail, detailFile, format, note, token, base string
+	var done, total int
+	var stop, clear, clearAll bool
+	c := &cobra.Command{
+		Use:   "todo",
+		Short: "Update this session's checklist from a script (no wake-up)",
+		Long: "Report progress into the session's checklist panel.\n\n" +
+			"Only the item you name is touched, so a script does not have to know the\n" +
+			"rest of the list — an item that does not exist yet is created.\n\n" +
+			"  support-tools agent todo --item gate --status running --done 3 --total 9 \\\n" +
+			"      --unit packages --detail-file gate.log --format text\n" +
+			"  support-tools agent todo --item gate --status done\n" +
+			"  support-tools agent todo --stop --note \"killed by the watchdog\"\n",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			payload := map[string]any{}
+			switch {
+			case clear || clearAll:
+				payload["clear"] = true
+				payload["clear_all"] = clearAll
+			case stop:
+				payload["stop"] = true
+				payload["note"] = note
+			default:
+				if strings.TrimSpace(item) == "" {
+					return exitErr(exitUsage, fmt.Errorf("--item is required (or use --stop / --clear)"))
+				}
+				payload["item"] = item
+				payload["title"] = title
+				payload["description"] = desc
+				payload["status"] = status
+				if cmd.Flags().Changed("done") {
+					payload["done"] = done
+				}
+				if cmd.Flags().Changed("total") {
+					payload["total"] = total
+				}
+				payload["unit"] = unit
+				body, err := todoDetailBody(detail, detailFile)
+				if err != nil {
+					return exitErr(exitUsage, err)
+				}
+				if body != "" {
+					payload["detail"] = body
+					payload["format"] = format
+				}
+			}
+			resp, err := callCLIAPI(http.MethodPost, base, token, "/api/cli/todo", payload)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "todo updated in session %s\n", resp["session_id"])
+			return nil
+		},
+	}
+	c.Flags().StringVar(&item, "item", "", "item id or title to update (created when new)")
+	c.Flags().StringVar(&title, "title", "", "display title, when it differs from --item")
+	c.Flags().StringVar(&desc, "description", "", "one line under the title")
+	c.Flags().StringVar(&status, "status", "", "pending | running | done | failed | stopped")
+	c.Flags().IntVar(&done, "done", 0, "units finished, for the progress bar")
+	c.Flags().IntVar(&total, "total", 0, "units in total, for the progress bar")
+	c.Flags().StringVar(&unit, "unit", "", "what the numbers count (packages, files, MB…)")
+	c.Flags().StringVar(&detail, "detail", "", "payload to show under the item")
+	c.Flags().StringVar(&detailFile, "detail-file", "", "read the payload from a file, or - for stdin")
+	c.Flags().StringVar(&format, "format", "text", "text | markdown | json | html | xml")
+	c.Flags().BoolVar(&stop, "stop", false, "mark the live list stopped (a run that died, a card that is stuck)")
+	c.Flags().StringVar(&note, "note", "", "why it stopped")
+	c.Flags().BoolVar(&clear, "clear", false, "delete the finished lists")
+	c.Flags().BoolVar(&clearAll, "clear-all", false, "delete the finished lists AND the live one")
+	c.Flags().StringVar(&token, "token", "", "CLI token (default: $"+envToken+")")
+	c.Flags().StringVar(&base, "base-url", "", "wick base URL (default: $"+envBase+")")
+	return c
+}
+
+// todoDetailBody resolves --detail / --detail-file / stdin, and keeps the
+// TAIL of anything long: the end of a log is the part that says what
+// happened, and the server clamps it again anyway.
+func todoDetailBody(detail, file string) (string, error) {
+	switch {
+	case detail != "" && file != "":
+		return "", fmt.Errorf("use --detail or --detail-file, not both")
+	case file == "-":
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", fmt.Errorf("read stdin: %w", err)
+		}
+		detail = string(b)
+	case file != "":
+		b, err := os.ReadFile(file)
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", file, err)
+		}
+		detail = string(b)
+	}
+	const maxRunes = 8000
+	if r := []rune(detail); len(r) > maxRunes {
+		detail = "[truncated: kept the last 8000 characters]\n" + string(r[len(r)-maxRunes:])
+	}
+	return detail, nil
 }
 
 func agentSendCmd() *cobra.Command {

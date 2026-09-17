@@ -270,7 +270,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"type": "object",
 				"properties": map[string]any{
 					"items": map[string]any{
-						"type":        "array",
+						"type": "array",
 						"description": "The full task list, in order. Required unless this call only touches the " +
 							"goal latch (goal / goal_done / goal_abandon), which needs no checklist.",
 						"items": map[string]any{
@@ -298,6 +298,28 @@ func MetaToolDescriptors() []ToolDescriptor {
 										"callers; if 'title' is absent this text is used as the checklist label.",
 								},
 								"status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "completed"}, "description": "Current status of the task."},
+								"progress": map[string]any{
+									"type": "object",
+									"description": "Optional counter for a step that is long rather than just unfinished " +
+										"(packages tested, files migrated, MB uploaded). Drawn as a bar on the item.",
+									"properties": map[string]any{
+										"done":  map[string]any{"type": "integer", "description": "Units finished so far."},
+										"total": map[string]any{"type": "integer", "description": "Units in total."},
+										"label": map[string]any{"type": "string", "description": "What the numbers count, e.g. \"packages\"."},
+									},
+								},
+								"detail": map[string]any{
+									"type": "object",
+									"description": "Optional payload to show under the item — a log tail, a JSON result, " +
+										"a small table. Put long output HERE rather than in the reply: the panel keeps it " +
+										"across a reload and it does not flood the conversation. Clamped to 8000 characters " +
+										"(the tail is kept).",
+									"properties": map[string]any{
+										"format": map[string]any{"type": "string", "enum": []string{"text", "markdown", "json", "html", "xml"}, "description": "How to render the body. Defaults to text."},
+										"body":   map[string]any{"type": "string", "description": "The payload itself."},
+									},
+									"required": []string{"body"},
+								},
 								"substeps": map[string]any{
 									"type":        "array",
 									"description": "Optional concrete actions under this task, in order. Omit for a simple task with no breakdown.",
@@ -327,6 +349,16 @@ func MetaToolDescriptors() []ToolDescriptor {
 					"goal_abandon": map[string]any{
 						"type":        "boolean",
 						"description": "Set true to give up on the open goal — also releases the latch.",
+					},
+					"stop": map[string]any{
+						"type": "boolean",
+						"description": "Mark the live checklist as stopped — the work died or was cancelled. Items " +
+							"left in_progress become 'stopped', so a half-ticked list stops reading as still running. " +
+							"Use 'note' for the reason.",
+					},
+					"clear_history": map[string]any{
+						"type":        "boolean",
+						"description": "Delete the finished checklists from the panel. The live one stays.",
 					},
 					"note": map[string]any{
 						"type":        "string",
@@ -735,7 +767,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 						"description": "action=list: max rows to return. Default 50, max 500.",
 					},
 					"session_id": map[string]any{
-						"type":        "string",
+						"type": "string",
 						"description": "action=create: the existing session to deliver into (usually your own — schedule yourself). Mutually exclusive with project_id. " +
 							"action=list: everything RELATED to that session — schedules targeting it, project jobs created from it, project jobs of its project, and schedules whose last fire landed in it. Narrow with target_session_id if you only want the ones that deliver INTO it.",
 					},

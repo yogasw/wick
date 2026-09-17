@@ -12,12 +12,25 @@ import { apiGetE } from "@wick-fe/common-api";
 
 export type TodoSubstep = { step: string; status: string };
 
+/** How far into ONE step the work has got — the bar under a step that is
+    long rather than merely unfinished. */
+export type TodoProgress = { done: number; total: number; label?: string };
+
+/** What a step wants to show that its label cannot: a log tail, a JSON
+    result, a small table. `format` decides how the panel draws it. */
+export type TodoDetail = {
+  format?: "text" | "markdown" | "json" | "html" | "xml";
+  body: string;
+};
+
 export type TodoItem = {
   id?: string;
   label: string;
   description?: string;
   status: string;
   substeps?: TodoSubstep[];
+  progress?: TodoProgress;
+  detail?: TodoDetail;
 };
 
 export type TodoList = {
@@ -25,6 +38,10 @@ export type TodoList = {
   total: number;
   completed: number;
   done: boolean;
+  /** Abandoned rather than finished — a half-ticked list looks the same
+      either way, and only one of them means the work happened. */
+  stopped?: boolean;
+  note?: string;
   started_at?: string;
   updated_at?: string;
 };

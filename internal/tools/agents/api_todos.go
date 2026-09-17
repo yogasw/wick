@@ -24,6 +24,24 @@ type TodoItemDTO struct {
 	Description string           `json:"description,omitempty"`
 	Status      string           `json:"status"`
 	Substeps    []TodoSubstepDTO `json:"substeps,omitempty"`
+	Progress    *TodoProgressDTO `json:"progress,omitempty"`
+	Detail      *TodoDetailDTO   `json:"detail,omitempty"`
+}
+
+// TodoProgressDTO is how far into one step the work has got — the bar under
+// a step that is long rather than merely unfinished.
+type TodoProgressDTO struct {
+	Done  int    `json:"done"`
+	Total int    `json:"total"`
+	Label string `json:"label,omitempty"`
+}
+
+// TodoDetailDTO is the payload an item carries: a log tail, a JSON result,
+// a small table. Passed through as stored — the client decides how to draw
+// each format, and nothing here interprets it.
+type TodoDetailDTO struct {
+	Format string `json:"format,omitempty"`
+	Body   string `json:"body"`
 }
 
 // TodoSubstepDTO is one nested step.
@@ -39,8 +57,13 @@ type TodoListDTO struct {
 	Total     int           `json:"total"`
 	Completed int           `json:"completed"`
 	Done      bool          `json:"done"`
-	StartedAt string        `json:"started_at,omitempty"`
-	UpdatedAt string        `json:"updated_at,omitempty"`
+	// Stopped says the work was abandoned rather than finished — the two
+	// look identical in a half-ticked list, and only one of them means
+	// anything got done.
+	Stopped   bool   `json:"stopped,omitempty"`
+	Note      string `json:"note,omitempty"`
+	StartedAt string `json:"started_at,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
 }
 
 // TodosDTO is the whole record for one session.
@@ -51,9 +74,11 @@ type TodosDTO struct {
 
 func todoListDTO(l session.TodoList) TodoListDTO {
 	out := TodoListDTO{
-		Items: make([]TodoItemDTO, 0, len(l.Items)),
-		Total: len(l.Items),
-		Done:  l.Done,
+		Items:   make([]TodoItemDTO, 0, len(l.Items)),
+		Total:   len(l.Items),
+		Done:    l.Done,
+		Stopped: l.Stopped,
+		Note:    l.Note,
 	}
 	for _, it := range l.Items {
 		if it.Status == "completed" {
@@ -63,13 +88,20 @@ func todoListDTO(l session.TodoList) TodoListDTO {
 		for _, s := range it.Substeps {
 			subs = append(subs, TodoSubstepDTO{Step: s.Step, Status: s.Status})
 		}
-		out.Items = append(out.Items, TodoItemDTO{
+		row := TodoItemDTO{
 			ID:          it.ID,
 			Label:       it.Label(),
 			Description: it.Description,
 			Status:      it.Status,
 			Substeps:    subs,
-		})
+		}
+		if it.Progress != nil {
+			row.Progress = &TodoProgressDTO{Done: it.Progress.Done, Total: it.Progress.Total, Label: it.Progress.Label}
+		}
+		if it.Detail != nil {
+			row.Detail = &TodoDetailDTO{Format: it.Detail.Format, Body: it.Detail.Body}
+		}
+		out.Items = append(out.Items, row)
 	}
 	if !l.StartedAt.IsZero() {
 		out.StartedAt = l.StartedAt.Format(time.RFC3339)
