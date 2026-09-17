@@ -308,3 +308,81 @@ describe("account mode is the row's page with sections hidden", () => {
     expect(api.getConnectorAccount).not.toHaveBeenCalled();
   });
 });
+
+/* "Same page" has to mean the same Operations panel too. The account rows come
+   from a different endpoint and carry no category — that is instance metadata,
+   identical for every account on the row — so the page has to join them back
+   onto the instance ops. Feeding the table a category-less list rendered the
+   flat layout: one untitled card, no grouping, and no Sections sidebar, which
+   OperationsTable only draws when there are categories. */
+describe("account mode keeps the grouped Operations layout", () => {
+  const rowWithGroups = () =>
+    makeRow({
+      label: "Prod",
+      categories: [
+        { key: "msg", title: "Messaging", description: "Send and edit" },
+        { key: "read", title: "Reading", description: "Channels and threads" },
+      ],
+      operations: [
+        { key: "send", name: "Send Message", description: "Post a message", destructive: false, enabled: true, system_disabled: false, system_disabled_reason: "", admin_only: false, config_only: false, category: "Messaging" },
+        { key: "history", name: "Read History", description: "Read a channel", destructive: false, enabled: true, system_disabled: false, system_disabled_reason: "", admin_only: true, config_only: false, category: "Reading" },
+      ],
+    });
+
+  beforeEach(() => {
+    vi.mocked(api.getConnectorRow).mockResolvedValue(rowWithGroups());
+    vi.mocked(api.getConnectorAccount).mockResolvedValue(
+      makeData({ ops: [makeOp(), makeOp({ key: "history", name: "Read History", description: "Read a channel" })] }),
+    );
+  });
+
+  it("renders one card per category, not a single flat list", async () => {
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a", accountId: "acc-1" });
+    await screen.findByText("@yoga.setiawan");
+
+    expect(await screen.findByRole("heading", { name: "Messaging" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Reading" })).toBeTruthy();
+  });
+
+  it("keeps the Sections sidebar", async () => {
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a", accountId: "acc-1" });
+    await screen.findByText("@yoga.setiawan");
+
+    /* Rendered twice: the sticky sidebar and the mobile trigger. Both only
+       exist when the table is categorized, which is the point. */
+    expect((await screen.findAllByText("Sections")).length).toBeGreaterThan(0);
+  });
+
+  it("carries instance-level op metadata the account endpoint does not send", async () => {
+    /* config_only lives on the ROW, not on the account, and it renders as a
+       "UI only" badge. Dropping it in the join would mislabel the op on this
+       page only — and it is the same class of loss as the missing category. */
+    vi.mocked(api.getConnectorRow).mockResolvedValue(
+      makeRow({
+        label: "Prod",
+        categories: [{ key: "msg", title: "Messaging", description: "Send and edit" }],
+        operations: [
+          { key: "send", name: "Send Message", description: "Post a message", destructive: false, enabled: true, system_disabled: false, system_disabled_reason: "", admin_only: false, config_only: true, category: "Messaging" },
+        ],
+      }),
+    );
+    vi.mocked(api.getConnectorAccount).mockResolvedValue(makeData({ ops: [makeOp()] }));
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a", accountId: "acc-1" });
+    await screen.findByText("@yoga.setiawan");
+
+    expect(await screen.findByRole("heading", { name: "Messaging" })).toBeTruthy();
+    expect(screen.getByText("UI only")).toBeTruthy();
+  });
+
+  it("still shows the per-account toggle state, not the instance's", async () => {
+    vi.mocked(api.getConnectorAccount).mockResolvedValue(
+      makeData({ ops: [makeOp({ state: "off", enabled: false, inherited: true })] }),
+    );
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a", accountId: "acc-1" });
+    await screen.findByText("@yoga.setiawan");
+
+    const sw = await screen.findByRole("switch", { name: "Enable Send Message for this account" });
+    expect(sw.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByText("override")).toBeTruthy();
+  });
+});

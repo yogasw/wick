@@ -152,6 +152,36 @@
   const accountInheritedByKey = $derived(Object.fromEntries(accountOps.map((o) => [o.key, o.inherited])));
   const overrideCount = $derived(accountOps.filter((o) => o.state !== "inherit").length);
 
+  /* The account view is the SAME page, so its Operations panel has to be the
+     same panel: grouped into category cards with the Sections sidebar beside
+     them. Only the account endpoint's rows are per-account, and they carry no
+     category / admin_only / config_only — that is instance metadata, the same
+     for every account on the row. So the instance op is the base and the
+     account decides only what it actually decides: enabled, and whether the
+     health check has locked the op.
+
+     Feeding the table a category-less list is what flattened this page and
+     dropped the sidebar with it, since OperationsTable renders the flat
+     layout for a connector with no categories. */
+  const accountOpRows = $derived.by(() => {
+    const base = new Map((data?.operations ?? []).map((o) => [o.key, o]));
+    return accountOps.map((o) => {
+      const inst = base.get(o.key);
+      return {
+        key: o.key,
+        name: o.name,
+        description: o.description,
+        destructive: o.destructive,
+        category: inst?.category ?? "",
+        admin_only: inst?.admin_only ?? false,
+        config_only: inst?.config_only ?? false,
+        enabled: o.enabled,
+        system_disabled: o.system_disabled,
+        system_disabled_reason: o.system_disabled_reason,
+      };
+    });
+  });
+
   async function saveLabel() {
     if (!data || !labelDraft.trim()) return;
     try {
@@ -436,19 +466,8 @@
     {/if}
 
     <OperationsTable
-      operations={inAccountMode ? accountOps.map((o) => ({
-        key: o.key,
-        name: o.name,
-        description: o.description,
-        destructive: o.destructive,
-        enabled: o.enabled,
-        system_disabled: o.system_disabled,
-        system_disabled_reason: o.system_disabled_reason,
-        admin_only: false,
-        config_only: false,
-        category: "",
-      })) : (data.operations ?? [])}
-      categories={inAccountMode ? [] : (data.categories ?? [])}
+      operations={inAccountMode ? accountOpRows : (data.operations ?? [])}
+      categories={data.categories ?? []}
       connectorKey={connectorKey}
       connectorId={connectorId}
       canConfigure={canWriteOps}
