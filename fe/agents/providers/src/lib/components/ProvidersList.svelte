@@ -3,6 +3,7 @@
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import AIRouterConfig from "$lib/components/AIRouterConfig.svelte";
   import RecentSpawns from "$lib/components/RecentSpawns.svelte";
+  import UsageReport from "$lib/components/UsageReport.svelte";
   import {
     apiGetProviders,
     apiRescanAll,
@@ -989,6 +990,11 @@
         </div>
       {/if}
     </div>
+
+    <!-- The ledger sits under the provider cards and above the spawn
+         log: the cards say what exists, this says what it cost, the log
+         says what ran. Same page, narrowing scope. -->
+    <UsageReport {base} />
 
     <RecentSpawns {base} {onOpenSession} />
     {/if}

@@ -343,3 +343,81 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// TestClaudeTokenUsage pins the context reading taken off a `result`
+// frame. The numbers are a real run (session 2ccc5e51): claude's own
+// /context reported 31.2k of 200k for exactly this frame, so the sum
+// below is not a convention we invented — it is the number the CLI
+// shows the user, and the test exists to keep it that way.
+func TestClaudeTokenUsage(t *testing.T) {
+	p := NewClaudeParser()
+	line := `{"type":"result","subtype":"success","is_error":false,"result":"4",` +
+		`"usage":{"input_tokens":10,"cache_creation_input_tokens":31158,"cache_read_input_tokens":0,"output_tokens":85},` +
+		`"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":1033,"cacheReadInputTokens":0,` +
+		`"cacheCreationInputTokens":31158,"contextWindow":200000}}}`
+
+	ev, err := p.Parse(line)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if ev.Type != Done {
+		t.Fatalf("want Done, got %v", ev.Type)
+	}
+	if ev.Usage == nil {
+		t.Fatal("want a context reading, got nil")
+	}
+	// 10 + 31158 + 0 — the last message's input, not the turn-wide
+	// modelUsage totals (those would say 32191 and over-report).
+	if ev.Usage.ContextUsed != 31168 {
+		t.Fatalf("used: want 31168, got %d", ev.Usage.ContextUsed)
+	}
+	if ev.Usage.Window != 200000 {
+		t.Fatalf("window: want 200000, got %d", ev.Usage.Window)
+	}
+	if ev.Usage.Model != "claude-haiku-4-5-20251001" {
+		t.Fatalf("model: got %q", ev.Usage.Model)
+	}
+}
+
+// TestClaudeTokenUsagePicksBusiestModel: a turn that touched two
+// models must report the window of the one that carried the
+// conversation, not whichever key the map happened to yield first.
+func TestClaudeTokenUsagePicksBusiestModel(t *testing.T) {
+	p := NewClaudeParser()
+	line := `{"type":"result","subtype":"success","is_error":false,` +
+		`"usage":{"input_tokens":2,"cache_creation_input_tokens":16409,"cache_read_input_tokens":194475},` +
+		`"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":40,"contextWindow":200000},` +
+		`"claude-opus-5":{"inputTokens":2,"cacheReadInputTokens":194475,"cacheCreationInputTokens":16409,"contextWindow":1000000}}}`
+
+	ev, err := p.Parse(line)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if ev.Usage == nil {
+		t.Fatal("want a context reading, got nil")
+	}
+	if ev.Usage.ContextUsed != 210886 {
+		t.Fatalf("used: want 210886, got %d", ev.Usage.ContextUsed)
+	}
+	if ev.Usage.Model != "claude-opus-5" || ev.Usage.Window != 1000000 {
+		t.Fatalf("want the opus window, got %q / %d", ev.Usage.Model, ev.Usage.Window)
+	}
+}
+
+// TestClaudeTokenUsageAbsent: a result frame without usage (or with
+// an all-zero one, which local slash commands emit) yields no reading
+// rather than a bogus 0-of-0 gauge.
+func TestClaudeTokenUsageAbsent(t *testing.T) {
+	for _, line := range []string{
+		`{"type":"result","subtype":"success","is_error":false,"result":"ok"}`,
+		`{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}`,
+	} {
+		ev, err := NewClaudeParser().Parse(line)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if ev.Usage != nil {
+			t.Fatalf("want no reading, got %+v", ev.Usage)
+		}
+	}
+}

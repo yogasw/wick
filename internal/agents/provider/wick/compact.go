@@ -142,7 +142,7 @@ func (e *engine) runManualCompact(ctx context.Context) {
 	// non-rich channels. See fe common-md `detail` fence.
 	summary := currentSummaryText(e)
 	e.emit(textLine(detailFence(title, summary)))
-	e.emit(doneLine(title))
+	e.emitDone(title)
 }
 
 // currentSummaryText returns the summary now at the head of history (the

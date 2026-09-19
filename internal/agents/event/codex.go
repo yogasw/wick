@@ -53,6 +53,54 @@ type codexRaw struct {
 	// message is nested (`{"type":"turn.failed","error":{"message":"..."}}`)
 	// rather than at top level like a plain `{"type":"error","message":...}`.
 	Error *codexError `json:"error,omitempty"`
+	// Usage lands on turn.completed with the turn's token accounting.
+	Usage *codexUsage `json:"usage,omitempty"`
+}
+
+// codexUsage is the shape codex 0.129 emits on turn.completed, captured
+// from a live run:
+//
+//	{"input_tokens":20250,"cached_input_tokens":11264,
+//	 "cache_write_input_tokens":0,"output_tokens":5,
+//	 "reasoning_output_tokens":0}
+//
+// Note InputTokens is the TOTAL input, cached part included — unlike
+// Anthropic, where the three input numbers are disjoint. So the fresh
+// (uncached) share is InputTokens - CachedInputTokens, and the context
+// level is InputTokens as-is. Adding the cached figure on top would
+// count the cache twice.
+type codexUsage struct {
+	InputTokens       int `json:"input_tokens"`
+	CachedInputTokens int `json:"cached_input_tokens"`
+	CacheWriteTokens  int `json:"cache_write_input_tokens"`
+	OutputTokens      int `json:"output_tokens"`
+	// ReasoningOutputTokens is a SUBSET of OutputTokens, not an extra —
+	// kept only so the split is visible; never added to the total.
+	ReasoningOutputTokens int `json:"reasoning_output_tokens"`
+}
+
+// tokenUsage normalizes the codex numbers into the cross-CLI shape.
+// Codex reports no model id and no window size, so those stay empty
+// rather than being inferred from the configured model — what wick
+// requested and what the vendor actually billed are not always the same.
+func (u *codexUsage) tokenUsage() *TokenUsage {
+	if u == nil {
+		return nil
+	}
+	if u.InputTokens == 0 && u.OutputTokens == 0 {
+		return nil
+	}
+	fresh := u.InputTokens - u.CachedInputTokens
+	if fresh < 0 {
+		fresh = 0
+	}
+	return &TokenUsage{
+		Input:       fresh,
+		CacheRead:   u.CachedInputTokens,
+		CacheWrite:  u.CacheWriteTokens,
+		Output:      u.OutputTokens,
+		ContextUsed: u.InputTokens,
+	}
 }
 
 type codexError struct {
@@ -317,7 +365,7 @@ func (p *CodexParser) Parse(line string) (AgentEvent, error) {
 
 	case "turn.completed":
 		log.Debug().Msg("codex.parse: turn.completed")
-		return AgentEvent{Type: Done, Raw: trimmed}, nil
+		return AgentEvent{Type: Done, Raw: trimmed, Usage: raw.Usage.tokenUsage()}, nil
 
 	case "error":
 		log.Debug().Str("message", raw.Message).Msg("codex.parse: error event")

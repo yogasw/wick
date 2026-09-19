@@ -67,6 +67,14 @@ type claudeRaw struct {
 	// `assistant` and `user` wrap content blocks under .message.content
 	Message *claudeMessage `json:"message,omitempty"`
 
+	// `result` carries the turn's token accounting. .usage is the LAST
+	// message's usage (what the context window currently holds);
+	// .modelUsage is per-model totals for the whole turn and is only
+	// read here for contextWindow.
+	Usage      *claudeUsage                `json:"usage,omitempty"`
+	ModelUsage map[string]claudeModelUsage `json:"modelUsage,omitempty"`
+	CostUSD    float64                     `json:"total_cost_usd,omitempty"`
+
 	// `stream_event` (only when --include-partial-messages is set)
 	// wraps an Anthropic Messages-API streaming event in .event.
 	Event *claudeStreamEvent `json:"event,omitempty"`
@@ -91,6 +99,75 @@ type claudeStreamDelta struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	Thinking string `json:"thinking,omitempty"`
+}
+
+// claudeUsage is the token accounting of one message. The three input
+// fields are disjoint — fresh input, newly written cache, cache read —
+// so their sum is what the model saw as context for that message.
+type claudeUsage struct {
+	InputTokens         int `json:"input_tokens"`
+	OutputTokens        int `json:"output_tokens"`
+	CacheCreationTokens int `json:"cache_creation_input_tokens"`
+	CacheReadTokens     int `json:"cache_read_input_tokens"`
+}
+
+// claudeModelUsage is one entry of the result frame's per-model totals.
+// Its counts are turn-wide sums — right for "what did this turn spend",
+// wrong for "how full is the window" (every iteration re-reads the same
+// cached prefix, so the sum far exceeds what the window held).
+type claudeModelUsage struct {
+	ContextWindow       int `json:"contextWindow"`
+	InputTokens         int `json:"inputTokens"`
+	OutputTokens        int `json:"outputTokens"`
+	CacheReadTokens     int `json:"cacheReadInputTokens"`
+	CacheCreationTokens int `json:"cacheCreationInputTokens"`
+}
+
+// contextUsage builds the end-of-turn context reading, or nil when the
+// frame carried no usage.
+//
+// Picking the model: a turn can touch more than one (a cheap model for
+// a side task, the main one for the conversation). The window we want
+// belongs to whichever model carried the conversation, so we take the
+// entry with the most input tokens rather than the first key — map
+// iteration order is random, and "first" would flap between turns.
+func (r claudeRaw) tokenUsage() *TokenUsage {
+	if r.Usage == nil {
+		return nil
+	}
+	level := r.Usage.InputTokens + r.Usage.CacheCreationTokens + r.Usage.CacheReadTokens
+	if level == 0 && r.Usage.OutputTokens == 0 {
+		return nil
+	}
+	out := &TokenUsage{ContextUsed: level, CostUSD: r.CostUSD}
+
+	// Flows come from modelUsage, which totals the WHOLE turn; .usage is
+	// only the last message and would under-report a turn that looped
+	// through several tool calls. Level comes from .usage for the
+	// opposite reason: modelUsage re-counts the cached prefix on every
+	// iteration, so its sum is far larger than the window ever held.
+	//
+	// Picking the model: a turn can touch more than one (a cheap model
+	// for a side task, the main one for the conversation). Take the
+	// entry with the most input tokens — map iteration order is random,
+	// so "first" would flap between turns.
+	best := -1
+	for name, mu := range r.ModelUsage {
+		weight := mu.InputTokens + mu.CacheReadTokens + mu.CacheCreationTokens
+		if weight > best {
+			best = weight
+			out.Model, out.Window = name, mu.ContextWindow
+			out.Input, out.CacheRead, out.CacheWrite = mu.InputTokens, mu.CacheReadTokens, mu.CacheCreationTokens
+			out.Output = mu.OutputTokens
+		}
+	}
+	if best < 0 {
+		// No modelUsage (a provider emitting claude-shaped lines may omit
+		// it) — fall back to the last message's numbers.
+		out.Input, out.CacheRead = r.Usage.InputTokens, r.Usage.CacheReadTokens
+		out.CacheWrite, out.Output = r.Usage.CacheCreationTokens, r.Usage.OutputTokens
+	}
+	return out
 }
 
 type claudeMessage struct {
@@ -308,6 +385,7 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 			Type:      Done,
 			SessionID: p.sessionID,
 			Raw:       trimmed,
+			Usage:     raw.tokenUsage(),
 		}, nil
 	}
 

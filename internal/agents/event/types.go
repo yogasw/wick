@@ -111,4 +111,46 @@ type AgentEvent struct {
 	// conversation through the delegation result, so relaying its text too
 	// would post the same answer twice.
 	SubAgent string
+
+	// Usage is the turn's token accounting. Set on Done, and only when
+	// the CLI reported it — nil otherwise, which is not an error (a
+	// provider may simply not say).
+	Usage *TokenUsage
+}
+
+// TokenUsage is one turn's token accounting, normalized across CLIs so
+// the same arithmetic works whether the turn ran on claude, codex, or
+// wick's own engine.
+//
+// Two different questions live here, and conflating them is the easy
+// mistake. The four counters (Input/CacheRead/CacheWrite/Output) are
+// FLOW — what this turn spent, which is what a cost report sums over
+// time. ContextUsed is a LEVEL — how full the window was when the turn
+// ended, which only makes sense as the latest reading and must never be
+// added up. Window puts that level on a scale.
+//
+// Every counter is what the vendor reported, never our own estimate.
+// Fields a given CLI does not report stay zero rather than being guessed:
+// codex, for one, says nothing about the window size.
+type TokenUsage struct {
+	// Input is fresh input tokens — the part that missed the cache.
+	Input int `json:"input,omitempty"`
+	// CacheRead is input served from the prompt cache (cheap).
+	CacheRead int `json:"cache_read,omitempty"`
+	// CacheWrite is input written INTO the cache this turn.
+	CacheWrite int `json:"cache_write,omitempty"`
+	// Output is tokens the model generated, reasoning included.
+	Output int `json:"output,omitempty"`
+
+	// ContextUsed is everything the model saw as input for the last
+	// message of the turn: fresh + both cache halves. A level, not a
+	// flow — summing it across turns is meaningless.
+	ContextUsed int `json:"context_used,omitempty"`
+	// Window is the model's context limit, 0 when unreported.
+	Window int `json:"window,omitempty"`
+	// Model is the id the vendor billed, for per-model breakdowns.
+	Model string `json:"model,omitempty"`
+	// CostUSD is the vendor's own figure for the turn, 0 when it gives
+	// none. Never computed here — a price table would go stale silently.
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }

@@ -405,6 +405,8 @@ func Register(r tool.Router) {
 	// JSON API — providers SPA endpoints (mirrors templ providers handlers).
 	r.GET("/api/providers", apiProvidersList)
 	r.GET("/api/providers/storage", apiProvidersStorage)
+	// Token ledger: fleet-wide report, and one provider's slice of it.
+	r.GET("/api/providers/usage", apiUsageReport)
 	// Account + usage for every instance in one request, so the list can
 	// badge each card. Registered before the {type} pattern so the
 	// literal path wins.
@@ -413,6 +415,7 @@ func Register(r tool.Router) {
 
 	// Reconnect (login TTY): run the CLI's interactive login inside a
 	// wick PTY, streamed to the browser terminal over ws. TTL-bound.
+	r.GET("/api/providers/{type}/{name}/usage", apiProviderUsage)
 	r.GET("/api/providers/{type}/{name}/logintty", apiProviderLoginTTYStatus)
 	r.GET("/api/providers/{type}/{name}/logintty/usage", apiProviderLoginTTYUsage)
 	r.POST("/api/providers/{type}/{name}/logintty/usage/refresh", apiProviderLoginTTYUsageRefresh)
