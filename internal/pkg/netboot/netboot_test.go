@@ -8,6 +8,7 @@ import (
 )
 
 func TestSetupIdempotent(t *testing.T) {
+	t.Setenv("TERMUX_VERSION", "test")
 	Setup()
 	Setup()
 	Setup()

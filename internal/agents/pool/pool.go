@@ -726,11 +726,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	senderLevel := p.senderVisibility()
 
 	// /compact aimed at a provider that cannot compact stops here.
-	// Forwarding it would be worse than dropping it: codex exec has no
-	// slash commands, so the text reaches the MODEL, which answers
-	// "Context compacted." while the window keeps filling. Answering in
-	// the transcript costs nothing and tells the truth — see
-	// provider.CanCompact for the measurements.
+	// Forwarding it would be worse than dropping it: a provider without
+	// compaction reads the text as an ordinary message and the MODEL
+	// answers "Context compacted." while the window keeps filling.
+	// Answering in the transcript costs nothing and tells the truth.
+	// No provider type opts out today — codex, the one that used to,
+	// now compacts over the app-server RPC — so this guard is the seat
+	// the next one takes; see provider.CanCompact.
 	if role == "user" && isCompactCommand(text) && !p.providerCanCompact(sessionID, agentName) {
 		p.recordCompactUnsupported(ctx, sessionID, agentName, source, text, sender)
 		return nil

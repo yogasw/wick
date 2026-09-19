@@ -5,12 +5,20 @@ import "github.com/yogasw/wick/internal/entity"
 // ConfigsHubPage is the landing page for /admin/advanced. It's a card
 // grid that points to each subsection (Variables, SSO, …). Add a new
 // card when adding a new config category.
-templ ConfigsHubPage(user *entity.User) {
+templ ConfigsHubPage(user *entity.User, termux bool) {
 	@AdminLayout("Admin · Advanced", "advanced", user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Advanced</h1>
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Runtime app configuration. Changes take effect immediately — no restart needed unless noted.</p>
 			<div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+				if termux {
+					@configCard(
+						"/admin/advanced/network",
+						"Network & DNS",
+						"Configure connector-plugin DNS for this Termux installation.",
+						"🌐",
+					)
+				}
 				@configCard(
 					"/admin/variables",
 					"Variables",

@@ -3,9 +3,30 @@ package plugin
 import (
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestPluginCommandRunsNativeWithDNSOverride(t *testing.T) {
+	t.Setenv("TERMUX_VERSION", "test")
+	m := &Manager{dnsServers: func() string { return "8.8.8.8,8.8.4.4" }}
+	cmd := m.pluginCommand(os.Args[0])
+
+	if strings.Contains(cmd.Path, "proot") {
+		t.Fatalf("plugin command must run natively, got %q", cmd.Path)
+	}
+	found := false
+	for _, item := range cmd.Env {
+		if item == "WICK_DNS_SERVERS=8.8.8.8,8.8.4.4" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("plugin command did not receive WICK_DNS_SERVERS")
+	}
+}
 
 func TestManagerEvictsIdle(t *testing.T) {
 	killed := map[string]bool{}

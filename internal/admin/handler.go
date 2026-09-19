@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -119,8 +120,8 @@ type Handler struct {
 	// workflowOwner persists an owner change from the workflows admin page.
 	// Nil when unwired — the picker stays hidden and the endpoint refuses.
 	workflowOwner WorkflowOwnerWriter
-	skillsDB   SkillLister
-	dataTables DataTableLister // optional; wired post-construction via SetDataTables
+	skillsDB      SkillLister
+	dataTables    DataTableLister // optional; wired post-construction via SetDataTables
 	// schedules + projectNames back /admin/schedule, where the identity a
 	// scheduled fire runs as is inspected and changed. Optional: nil renders
 	// the page as "scheduling is not configured".
@@ -147,7 +148,7 @@ type SystemConfig struct {
 	// The System page reads the wick-framework version, update status, and
 	// cached changelog from it instead of doing a live request on load.
 	VersionCache *updater.VersionCache
-	AppName string
+	AppName      string
 	// DataDir is wick's data directory — where a draining predecessor leaves
 	// the record of what it is still finishing.
 	DataDir string
@@ -156,8 +157,8 @@ type SystemConfig struct {
 	// swapped in.
 	AppVersion  string
 	WickVersion string
-	Commit       string
-	BuildTime    string
+	Commit      string
+	BuildTime   string
 }
 
 // dbInfo mirrors the MCP wick_info db probe: returns (type, status)
@@ -263,6 +264,8 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 
 	mux.Handle("GET /admin/tags", admin(h.tagsPage))
 	mux.Handle("GET /admin/advanced", admin(h.configsHubPage))
+	mux.Handle("GET /admin/advanced/network", admin(h.networkPage))
+	mux.Handle("POST /admin/advanced/network", admin(h.updateNetwork))
 	mux.Handle("GET /admin/advanced/sso", admin(h.ssoPage))
 	mux.Handle("POST /admin/advanced/sso/{provider}", admin(h.updateSSO))
 
@@ -507,6 +510,51 @@ func (h *Handler) setVariable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/admin/variables", http.StatusFound)
+}
+
+func (h *Handler) networkPage(w http.ResponseWriter, r *http.Request) {
+	if !isTermuxHost() {
+		http.NotFound(w, r)
+		return
+	}
+	view.NetworkPage(h.configs.Get(configs.KeyDNSServers), login.GetUser(r.Context())).Render(r.Context(), w)
+}
+
+func (h *Handler) updateNetwork(w http.ResponseWriter, r *http.Request) {
+	if !isTermuxHost() {
+		http.NotFound(w, r)
+		return
+	}
+	var dnsServers string
+	switch r.FormValue("dns_provider") {
+	case "google":
+		dnsServers = "8.8.8.8,8.8.4.4"
+	case "cloudflare":
+		dnsServers = "1.1.1.1,1.0.0.1"
+	case "custom":
+		servers := strings.FieldsFunc(r.FormValue("dns_custom"), func(r rune) bool {
+			return r == ',' || r == ' ' || r == '\t' || r == '\n'
+		})
+		if len(servers) == 0 || len(servers) > 4 {
+			http.Error(w, "custom DNS requires 1 to 4 IP addresses", http.StatusBadRequest)
+			return
+		}
+		for _, server := range servers {
+			if net.ParseIP(server) == nil {
+				http.Error(w, "custom DNS contains an invalid IP address", http.StatusBadRequest)
+				return
+			}
+		}
+		dnsServers = strings.Join(servers, ",")
+	default:
+		http.Error(w, "invalid DNS provider", http.StatusBadRequest)
+		return
+	}
+	if err := h.configs.Set(r.Context(), configs.KeyDNSServers, dnsServers); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/admin/advanced/network?saved=1", http.StatusFound)
 }
 
 func (h *Handler) regenerateVariable(w http.ResponseWriter, r *http.Request) {

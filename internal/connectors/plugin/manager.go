@@ -6,8 +6,8 @@ package plugin
 import (
 	"context"
 	"fmt"
-	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -15,6 +15,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 
+	wickenv "github.com/yogasw/wick/internal/pkg/env"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
@@ -39,6 +41,7 @@ type Manager struct {
 	spawnFn      func(key string) (*entry, error)
 	killFn       func(key string)
 	now          func() time.Time
+	dnsServers   func() string
 	stop         chan struct{}
 	cond         *sync.Cond
 	breakers     map[string]*breaker
@@ -206,7 +209,7 @@ func (m *Manager) spawn(key string) (*entry, error) {
 		if !ok {
 			return nil, fmt.Errorf("no plugin binary registered for %q", key)
 		}
-		clientCfg.Cmd = safeexec.Command(bin)
+		clientCfg.Cmd = m.pluginCommand(bin)
 	}
 	client := goplugin.NewClient(clientCfg)
 	rpc, err := client.Client()
@@ -226,6 +229,20 @@ func (m *Manager) spawn(key string) (*entry, error) {
 	}
 	return &entry{client: client, conn: conn, lastUsed: m.now(), reattached: reattached}, nil
 }
+
+// pluginCommand passes the runtime DNS choice to connector plugins. The plugin
+// SDK configures its own Go resolver and Termux CA bundle, so plugins stay
+// native processes and do not require proot or filesystem bind mounts.
+func (m *Manager) pluginCommand(bin string) *exec.Cmd {
+	cmd := safeexec.Command(bin)
+	if wickenv.IsTermux() && m.dnsServers != nil {
+		cmd.Env = append(os.Environ(), "WICK_DNS_SERVERS="+m.dnsServers())
+	}
+	return cmd
+}
+
+// SetDNSServersLoader supplies the runtime-editable Termux DNS override.
+func (m *Manager) SetDNSServersLoader(fn func() string) { m.dnsServers = fn }
 
 // IsPlugin reports whether key is served by a plugin subprocess.
 func (m *Manager) IsPlugin(key string) bool {

@@ -10,6 +10,28 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.11.1](https://github.com/yogasw/wick/compare/v1.11.0...v1.11.1) — Termux & Codex
+
+_Released on 2026-09-19_
+
+### Fixed
+*   Documentation build errors caused by an unescaped `<name>` placeholder in the changelog.
+*   DNS resolution within Termux plugins.
+*   Scoped native plugin networking to Termux environments.
+*   Limited netboot functionality to Termux.
+*   Enabled running Termux plugins without requiring `proot`.
+
+### Added
+*   A custom DNS option for Termux.
+
+### Improved
+*   Codex compaction: The `/compact` capability is now fully implemented and correctly handled by the Codex provider, with comprehensive test coverage for various compaction scenarios and provider types.
+*   Internal test coverage for compaction RPCs, including handling of app-server errors, incomplete streams, and oversized resume lines.
+*   Updated internal comments and documentation to accurately reflect Codex's new compaction capabilities.
+
+---
+
+
 ## [v1.11.0](https://github.com/yogasw/wick/compare/v1.10.0...v1.11.0) — Access & Automation
 
 _Released on 2026-09-19_
@@ -152,7 +174,7 @@ _Released on 2026-09-13_
     *   A search box filters cards by config key, group title, and description (Project settings include common search terms).
     *   The Project settings header is more compact, and the back link uses browser history by default.
     *   Page column widths are standardized across the application.
-*   **Scheduled/Workflow UI Identity**: The session panel and shared detail modal now explicitly report "runs as <name>" for schedules, with an amber "no identity" chip when none is attached. Admin overrides are clearly marked.
+*   **Scheduled/Workflow UI Identity**: The session panel and shared detail modal now explicitly report "runs as `<name>`" for schedules, with an amber "no identity" chip when none is attached. Admin overrides are clearly marked.
 *   **SCM User Experience**:
     *   The "Discard" button for untracked nested repositories is replaced with an "Ignore" option, which adds an entry to `.git/info/exclude`.
     *   `git clean -fd` operations now correctly report errors for untracked repos it could not remove.

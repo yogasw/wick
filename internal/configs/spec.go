@@ -32,6 +32,7 @@ const (
 	DefaultAppDescription   = "A lightweight internal tooling platform — build, deploy, and run custom tools for your team in minutes."
 	KeyAppURL               = "app_url"
 	KeyAllowedOrigins       = "allowed_origins"
+	KeyDNSServers           = "dns_servers"
 	KeySessionSecret        = "session_secret"
 	KeyAdminPasswordChanged = "admin_password_changed"
 	KeyEncryptionKey        = "encryption_key"
@@ -59,6 +60,7 @@ var generators = map[string]func() string{
 var envOverrides = map[string]string{
 	KeyAppURL:         "APP_URL",
 	KeyAllowedOrigins: "ALLOWED_ORIGINS",
+	KeyDNSServers:     "WICK_DNS_SERVERS",
 	KeyEncryptionKey:  "WICK_ENC_KEY",
 }
 
@@ -107,6 +109,13 @@ func appDefaults() []entity.Config {
 			Options:     "url",
 			Value:       "[]",
 			Description: "Extra URLs that may reach the admin/host allowlist beyond app_url. Add one row per origin (e.g. http://192.168.1.42:9425) when you need to open the app from another device on the same network. The ALLOWED_ORIGINS env var (comma-separated) overrides this list — handy for Termux/LAN bootstrap before the admin UI is reachable.",
+		},
+		{
+			Key:         KeyDNSServers,
+			Type:        "text",
+			Value:       "8.8.8.8,8.8.4.4",
+			Hidden:      true,
+			Description: "DNS provider for connector plugins on Termux. Defaults to Google DNS. WICK_DNS_SERVERS overrides this value. Restart active plugin processes after changing it.",
 		},
 		{
 			Key:           KeySessionSecret,
