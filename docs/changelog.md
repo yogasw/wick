@@ -152,7 +152,7 @@ _Released on 2026-09-13_
     *   A search box filters cards by config key, group title, and description (Project settings include common search terms).
     *   The Project settings header is more compact, and the back link uses browser history by default.
     *   Page column widths are standardized across the application.
-*   **Scheduled/Workflow UI Identity**: The session panel and shared detail modal now explicitly report "runs as <name>" for schedules, with an amber "no identity" chip when none is attached. Admin overrides are clearly marked.
+*   **Scheduled/Workflow UI Identity**: The session panel and shared detail modal now explicitly report "runs as `<name>`" for schedules, with an amber "no identity" chip when none is attached. Admin overrides are clearly marked.
 *   **SCM User Experience**:
     *   The "Discard" button for untracked nested repositories is replaced with an "Ignore" option, which adds an entry to `.git/info/exclude`.
     *   `git clean -fd` operations now correctly report errors for untracked repos it could not remove.
