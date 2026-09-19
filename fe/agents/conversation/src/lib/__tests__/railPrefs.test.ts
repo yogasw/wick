@@ -14,7 +14,7 @@ import {
 const tabs = [
   { id: "ticket" },
   { id: "notes" },
-  { id: "context" },
+  { id: "files" },
   { id: "process" },
   { id: "workspace" },
   { id: "scheduled" },
@@ -109,8 +109,8 @@ describe("resolveHidden", () => {
 
 describe("orderTabs", () => {
   test("saved order leads, unlisted tabs follow in built-in order", () => {
-    const got = orderTabs(tabs, ["source", "context"]);
-    expect(ids(got).slice(0, 2)).toEqual(["source", "context"]);
+    const got = orderTabs(tabs, ["source", "files"]);
+    expect(ids(got).slice(0, 2)).toEqual(["source", "files"]);
     // The rest keep their original sequence rather than being shuffled.
     expect(ids(got).slice(2)).toEqual([
       "ticket",
@@ -152,7 +152,7 @@ describe("splitRail", () => {
   });
 
   test("hiding one tab does not disturb the others", () => {
-    const { shown } = splitRail(tabs, ["context"], nothingLoud);
+    const { shown } = splitRail(tabs, ["files"], nothingLoud);
     expect(ids(shown)).toEqual([
       "ticket", "notes", "process", "workspace", "scheduled", "browser", "source",
     ]);

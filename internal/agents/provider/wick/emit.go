@@ -108,6 +108,64 @@ func doneLine(result string) []byte {
 	})
 }
 
+// doneLineUsage is doneLine plus the turn's token accounting, in the
+// same shape claude's CLI uses — `usage` for the last call (the context
+// level) and `modelUsage` for the turn totals (the spend). The engine's
+// stream is parsed by ClaudeParser, so writing the vendor's own shape
+// here is what makes wick-engine turns land in the usage ledger next to
+// claude's without a second code path.
+//
+// No contextWindow is emitted: the engine does not learn the model's
+// limit from the vendor, and a guessed ceiling would render as a fill
+// percentage nobody can trust.
+func doneLineUsage(result, model string, t turnTokens) []byte {
+	line := map[string]any{
+		"type":     "result",
+		"subtype":  "success",
+		"is_error": false,
+		"result":   result,
+	}
+	if t.lastIn+t.lastCache+t.output > 0 {
+		line["usage"] = map[string]any{
+			"input_tokens":                t.lastIn,
+			"cache_read_input_tokens":     t.lastCache,
+			"cache_creation_input_tokens": 0,
+			"output_tokens":               t.output,
+		}
+		if model != "" {
+			line["modelUsage"] = map[string]any{model: map[string]any{
+				"inputTokens":          t.freshIn,
+				"cacheReadInputTokens": t.cacheRead,
+				"outputTokens":         t.output,
+			}}
+		}
+	}
+	return mustLine(line)
+}
+
+// compactBoundaryLine reports that history was folded into a summary,
+// in claude's compact_boundary shape so one parser path and one UI
+// marker cover every provider.
+func compactBoundaryLine(trigger string, pre, post int) []byte {
+	if trigger == "" {
+		trigger = "auto"
+	}
+	dropped := pre - post
+	if dropped < 0 {
+		dropped = 0
+	}
+	return mustLine(map[string]any{
+		"type":    "system",
+		"subtype": "compact_boundary",
+		"compact_metadata": map[string]any{
+			"trigger":                   trigger,
+			"pre_tokens":                pre,
+			"post_tokens":               post,
+			"cumulative_dropped_tokens": dropped,
+		},
+	})
+}
+
 // errorLine ends a turn with a failure → Error, surfaced in the UI.
 func errorLine(msg string) []byte {
 	return mustLine(map[string]any{

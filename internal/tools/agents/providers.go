@@ -1336,9 +1336,14 @@ func apiSpawnDetail(c *tool.Ctx) {
 		File:           spawnLogFileDTO(meta),
 		Events:         eventDTOs,
 		SessionDeleted: sessionDeleted,
-		Repro:          view.BuildReproVariants(meta.ProviderType, meta.Binary, meta.Argv, meta.Env),
-		HasResume:      view.HasResumeArgv(meta.ProviderType, meta.Argv),
-		Logs:           spawnLogsDTO(meta.Path, meta.StartedAt, endedAt, unclean),
+		// Rendered WITHOUT the prompt: that is the command as the spawn
+		// ran it, and the Prompt control re-renders through apiSpawnRepro
+		// when the operator wants one folded in.
+		Repro:           view.BuildReproVariants(meta.ProviderType, meta.Binary, meta.Argv, meta.Env, ""),
+		HasResume:       view.HasResumeArgv(meta.ProviderType, meta.Argv),
+		PromptSupported: view.PromptSupported(meta.ProviderType),
+		WickPrompt:      spawnPrompt(meta),
+		Logs:            spawnLogsDTO(meta.Path, meta.StartedAt, endedAt, unclean),
 	})
 }
 
@@ -1380,7 +1385,71 @@ func providerSpawnReveal(c *tool.Ctx) {
 		return
 	}
 	env := provider.UnmaskSpawnEnv(provider.Type(meta.ProviderType), meta.ProviderName, meta.Env)
-	c.JSON(http.StatusOK, view.BuildReproVariants(meta.ProviderType, meta.Binary, meta.Argv, env))
+	c.JSON(http.StatusOK, view.BuildReproVariants(meta.ProviderType, meta.Binary, meta.Argv, env, ""))
+}
+
+// spawnPrompt resolves the message this spawn was started to answer, for the
+// Prompt=Wick option. The spawn log only keeps a 10-word preview
+// (first_user_message) for the Recent Spawns table — feeding that to a CLI
+// would reproduce a truncated turn — so the text comes from the session's
+// conversation.jsonl, which holds what the user actually sent. The user turn
+// nearest the spawn's start is the one that caused it: wick appends the turn
+// and spawns for it in the same moment. Falls back to the preview when the
+// conversation is gone (deleted session) or has no user turn.
+func spawnPrompt(meta provider.SpawnLogFile) string {
+	if meta.SessionID == "" {
+		return meta.FirstUserMessage
+	}
+	turns, err := loadConversation(globalLayout, meta.SessionID)
+	if err != nil {
+		return meta.FirstUserMessage
+	}
+	best, bestDiff := "", time.Duration(0)
+	for _, t := range turns {
+		if t.Role != "user" || t.Text == "" {
+			continue
+		}
+		d := t.Timestamp.Sub(meta.StartedAt)
+		if d < 0 {
+			d = -d
+		}
+		if best == "" || d < bestDiff {
+			best, bestDiff = t.Text, d
+		}
+	}
+	if best == "" {
+		return meta.FirstUserMessage
+	}
+	return best
+}
+
+// apiSpawnRepro re-renders the reproduce variants with a prompt folded in —
+// the message wick sent, or one the operator typed. It exists because the
+// logged argv alone reproduces a SILENT process: wick hands claude/gemini the
+// prompt over the stdin pipe (provider.Agent.Send), so a copied command with
+// no stdin sits there with nothing to do — and with --resume, claude reports
+// "No deferred tool marker found in the resumed session".
+//
+// POST (not GET) so a multi-KB prompt travels in a body. Admin-gated like the
+// reveal endpoint it can stand in for: env "live" unmasks real secrets.
+func apiSpawnRepro(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
+	meta, ok := findSpawnFile(c, c.PathValue("file"))
+	if !ok {
+		return
+	}
+	var req SpawnReproRequest
+	if err := c.BindJSON(&req); err != nil {
+		c.Error(http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	env := meta.Env
+	if req.Env == "live" {
+		env = provider.UnmaskSpawnEnv(provider.Type(meta.ProviderType), meta.ProviderName, meta.Env)
+	}
+	c.JSON(http.StatusOK, view.BuildReproVariants(meta.ProviderType, meta.Binary, meta.Argv, env, req.Prompt))
 }
 
 // poolMaxConcurrent surfaces the live MaxConcurrent slot count. The

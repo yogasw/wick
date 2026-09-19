@@ -18,9 +18,15 @@
 
      Two things it is careful about. The numbers come from a shared,
      paced server cache (opening this costs no upstream request), so it
-     always says how old the reading is. And a provider type with no usage
-     API — codex, gemini, wick — says exactly that instead of rendering
-     empty bars that read as "0% used". */
+     always says how old the reading is. And a provider type wick cannot
+     read limits for — gemini, wick — says exactly that instead of
+     rendering empty bars that read as "0% used".
+
+     Codex is a third case: it has no usage endpoint, but it writes its
+     rate limits into every turn's journal, so its numbers are real and
+     free to read — and possibly hours old. Those windows carry their
+     own observation time and are dated per window, because "last check
+     just now" describes when WE looked, not when codex last knew. */
   import type { ComposerUsage } from "../api/usage.js";
 
   type Props = {
@@ -71,6 +77,20 @@
     if (pct >= 90) return "bg-red-500";
     if (pct >= 70) return "bg-amber-500";
     return "bg-blue-500";
+  }
+
+  /* How old the provider's own figure is, for providers that publish
+     limits only while they run (codex writes them into each turn's
+     journal). Empty when the number is live — claude answers a request
+     we just made, and dating that would be noise. Under a minute is
+     also empty: "as of 12s ago" says nothing "last check" does not. */
+  function observedAgo(iso: string | undefined): string {
+    if (!iso) return "";
+    const at = Date.parse(iso);
+    if (Number.isNaN(at)) return "";
+    const s = Math.round((Date.now() - at) / 1000);
+    if (s < 60) return "";
+    return `${shortDuration(s)} ago`;
   }
 
   function shortDuration(seconds: number): string {
@@ -171,6 +191,7 @@
             {#each data.windows as w (w.key)}
               {@const pct = Math.min(100, Math.max(0, Math.round(w.utilization)))}
               {@const reset = resetsIn(w.resetsAt)}
+              {@const observed = observedAgo(w.observedAt)}
               <div class="space-y-1">
                 <div class="flex items-baseline justify-between gap-4 text-[11px]">
                   <span class="text-black-900 dark:text-white-100">{windowLabel(w.key)}</span>
@@ -179,8 +200,11 @@
                 <div class="h-1.5 w-full rounded-full bg-white-300 dark:bg-navy-600 overflow-hidden">
                   <div class={`h-full rounded-full ${barColor(pct)}`} style={`width: ${pct}%`}></div>
                 </div>
-                {#if reset}
-                  <p class="text-[10px] text-black-600 dark:text-black-700">Resets in {reset}</p>
+                {#if reset || observed}
+                  <p class="text-[10px] text-black-600 dark:text-black-700">
+                    {#if reset}Resets in {reset}{/if}{#if reset && observed} ·
+                    {/if}{#if observed}<span data-testid="observed-at">as of {observed}</span>{/if}
+                  </p>
                 {/if}
               </div>
             {/each}

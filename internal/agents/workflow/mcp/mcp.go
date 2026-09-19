@@ -302,6 +302,10 @@ type CreateInput struct {
 	ID       string `json:"id,omitempty"`
 	Template string `json:"template,omitempty"`
 	Name     string `json:"name,omitempty"`
+	// CreatedBy is the human the workflow belongs to. Empty for internal
+	// and system callers, which leaves it ownerless (admin-only) rather
+	// than attributing it to a synthetic account.
+	CreatedBy string `json:"created_by,omitempty"`
 }
 
 // Create scaffolds a new workflow from a template.
@@ -314,6 +318,10 @@ func (m *Ops) Create(in CreateInput) (workflow.Workflow, error) {
 		return workflow.Workflow{}, err
 	}
 	w := scaffold.Workflow(id, in.Name, in.Template)
+	// Without this the row lands with an empty created_by, and a workflow
+	// nobody owns is reachable only by admins — which is how a user ends up
+	// unable to edit the thing they just asked for.
+	w.CreatedBy = in.CreatedBy
 	if err := m.Service.Create(id, w); err != nil {
 		return workflow.Workflow{}, err
 	}
@@ -383,13 +391,32 @@ func (m *Ops) SetTriggers(id string, triggers []workflow.Trigger) (workflow.Work
 
 // Toggle enables/disables a workflow and hot-reloads the router so the
 // dispatcher goroutine and cron/schedule state reflect the change immediately.
+//
+// It goes through Service.Toggle, NOT Canvas.Toggle. The canvas saves a
+// DRAFT, so the flag landed in the draft body while the PUBLISHED body
+// kept its old value — and the published body is what Load parses, which
+// is what `workflow_list` reports. The call answered "ok" with a workflow
+// struct saying enabled, and every subsequent listing said false, forever,
+// no matter how many times it was retried. From the outside that is
+// indistinguishable from a permission gate, and was read as one.
+//
+// Service.Toggle writes the row AND the published body, and mirrors the
+// flag into the draft, so every reader agrees.
 func (m *Ops) Toggle(id string, enabled bool) (workflow.Workflow, error) {
-	w, err := m.Canvas.Toggle(id, enabled)
-	if err != nil {
-		return w, err
+	if err := m.Service.Toggle(id, enabled); err != nil {
+		return workflow.Workflow{}, err
 	}
 	if m.Reload != nil {
 		_ = m.Reload(id)
+	}
+	w, err := m.Service.Load(id)
+	if err != nil {
+		return workflow.Workflow{}, err
+	}
+	// Read back rather than trusting the write: if the row did not move,
+	// the caller has to hear about it instead of being told "ok".
+	if w.Enabled != enabled {
+		return w, fmt.Errorf("workflow %s: enabled is still %v after the toggle — the change did not persist", id, w.Enabled)
 	}
 	return w, nil
 }

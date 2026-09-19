@@ -47,6 +47,17 @@ type WorkflowLister interface {
 	LoadInfo(id string) (WorkflowInfo, error)
 }
 
+// WorkflowOwnerWriter re-stamps a workflow's owner. Optional, like
+// ProjectWriter: nil leaves the Owner column a label instead of a picker,
+// which is the right answer for a file-backed install where there is no row
+// to re-stamp.
+type WorkflowOwnerWriter interface {
+	SetOwner(id, userID string) error
+}
+
+// SetWorkflowOwnerWriter wires the writer behind the workflows Owner picker.
+func (h *Handler) SetWorkflowOwnerWriter(w WorkflowOwnerWriter) { h.workflowOwner = w }
+
 // SkillLister lists all skills from the DB.
 type SkillLister interface {
 	List(ctx context.Context) ([]entity.Skill, error)
@@ -105,6 +116,9 @@ type Handler struct {
 	auth       *login.Service
 	projects   ProjectLister
 	workflows  WorkflowLister
+	// workflowOwner persists an owner change from the workflows admin page.
+	// Nil when unwired — the picker stays hidden and the endpoint refuses.
+	workflowOwner WorkflowOwnerWriter
 	skillsDB   SkillLister
 	dataTables DataTableLister // optional; wired post-construction via SetDataTables
 	// schedules + projectNames back /admin/schedule, where the identity a
@@ -112,6 +126,10 @@ type Handler struct {
 	// the page as "scheduling is not configured".
 	schedules    ScheduleLister
 	projectNames ProjectNamer
+	// projectWriter backs the projects Owner picker. Optional and wired
+	// post-construction (SetProjectWriter): the page lists projects through
+	// ProjectLister, and only this one endpoint needs to write one back.
+	projectWriter ProjectWriter
 
 	// sys bundles everything the System config page needs: the update
 	// coordinator (nil-safe — page shows "not configured" when absent),
@@ -237,6 +255,12 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("POST /admin/jobs/{path}/disabled", admin(h.setJobDisabled))
 	mux.Handle("POST /admin/jobs/{path}/tags", admin(h.setJobTags))
 
+	// People & usage: who still logs in, through which channel, on what.
+	// Admin-only — it names every account and what they touched.
+	mux.Handle("GET /admin/analytics", admin(h.analyticsPage))
+	mux.Handle("GET /admin/analytics/users.json", admin(h.analyticsUsersJSON))
+	mux.Handle("GET "+spaAssetBase, admin(h.spaAssetHandler))
+
 	mux.Handle("GET /admin/tags", admin(h.tagsPage))
 	mux.Handle("GET /admin/advanced", admin(h.configsHubPage))
 	mux.Handle("GET /admin/advanced/sso", admin(h.ssoPage))
@@ -278,14 +302,18 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 
 	// Tag CRUD
 	mux.Handle("GET /admin/tags.json", admin(h.listTagsJSON))
+	// Access reach: who can actually see one tag-gated item, and what one tag
+	// opens. Read-only JSON behind the badge / "i" button on every listing.
+	mux.Handle("GET /admin/access/users", admin(h.accessUsersPage))
+	mux.Handle("GET /admin/tags/{id}/usage", admin(h.tagUsagePage))
 	mux.Handle("POST /admin/tags", admin(h.createTag))
 	mux.Handle("POST /admin/tags/{id}/update", admin(h.updateTag))
 	mux.Handle("POST /admin/tags/{id}/delete", admin(h.deleteTag))
 
 	// Connector instance management (cross-definition list).
 	mux.Handle("GET /admin/connectors", admin(h.connectorsAdminPage))
-	mux.Handle("POST /admin/connectors/{id}/disabled", admin(h.setConnectorDisabledAdmin))
 	mux.Handle("POST /admin/connectors/{id}/tags", admin(h.setConnectorTagsAdmin))
+	mux.Handle("POST /admin/connectors/{id}/owner", admin(h.setConnectorOwner))
 	mux.Handle("POST /admin/connectors/{id}/accounts/{accountID}/tags", admin(h.setConnectorAccountTagsAdmin))
 
 	// Projects, Workflows, Skills — ownership/access tag management.
@@ -295,10 +323,13 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	// run-as decides whose access a job borrows.
 	mux.Handle("GET /admin/schedule", admin(h.schedulesAdminPage))
 	mux.Handle("POST /admin/schedule/{id}/run-as", admin(h.setScheduleRunAs))
+	mux.Handle("POST /admin/schedule/{id}/owner", admin(h.setScheduleOwner))
 	mux.Handle("POST /admin/projects/{id}/tags", admin(h.setProjectTags))
+	mux.Handle("POST /admin/projects/{id}/owner", admin(h.setProjectOwner))
 
 	mux.Handle("GET /admin/workflows", admin(h.workflowsAdminPage))
 	mux.Handle("POST /admin/workflows/{id}/tags", admin(h.setWorkflowTags))
+	mux.Handle("POST /admin/workflows/{id}/owner", admin(h.setWorkflowOwner))
 
 	mux.Handle("GET /admin/skills", admin(h.skillsAdminPage))
 	mux.Handle("POST /admin/skills/{name}/tags", admin(h.setSkillTags))
@@ -543,7 +574,12 @@ func (h *Handler) renderUsers(w http.ResponseWriter, r *http.Request, created vi
 	for i, u := range users {
 		ids, _ := h.repo.GetUserTagIDs(r.Context(), u.ID)
 		needsMerge := !u.Approved && isChannelPlaceholderEmail(u.Email)
-		row := view.UserRow{User: u, TagIDs: ids, NeedsMerge: needsMerge}
+		row := view.UserRow{
+			User:       u,
+			TagIDs:     ids,
+			NeedsMerge: needsMerge,
+			Self:       currentUser != nil && currentUser.ID == u.ID,
+		}
 		if needsMerge {
 			row.MergeTargets = mergeTargets
 		}
@@ -592,6 +628,15 @@ func (h *Handler) toolsPage(w http.ResponseWriter, r *http.Request) {
 			ConfigCount: len(h.configs.ListOwned(t.Key)),
 		}
 	}
+	// Reach badge: a tool set to public visibility is reachable without a
+	// login at all, which outranks whatever its tags say.
+	access := h.accessSummaries(r.Context(), paths)
+	for i := range items {
+		sum := access[items[i].Tool.Path]
+		sum.Anyone = items[i].Visibility == entity.VisibilityPublic
+		items[i].Access = sum
+		items[i].TagNames = view.TagNames(allTags, items[i].TagIDs)
+	}
 	view.ToolsPage(items, allTags, currentUser).Render(r.Context(), w)
 }
 
@@ -603,7 +648,16 @@ func (h *Handler) tagsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	editID := r.URL.Query().Get("edit")
-	view.TagsPage(filterOutOwnerTags(tags), currentUser, editID).Render(r.Context(), w)
+	// Per-tag counters: how many people carry it, how many things it opens.
+	// A failed lookup renders as zeroes rather than failing the page — the
+	// counters are decoration on a page whose real job is renaming tags.
+	usage := map[string]view.TagCounts{}
+	if counts, err := h.repo.TagUsageCounts(r.Context()); err == nil {
+		for id, u := range counts {
+			usage[id] = view.TagCounts{Users: u.UserCount, Items: u.ItemCount}
+		}
+	}
+	view.TagsPage(filterOutOwnerTags(tags), currentUser, editID, usage).Render(r.Context(), w)
 }
 
 // ── User action handlers ───────────────────────────────────────
@@ -722,6 +776,11 @@ func (h *Handler) adminJobsPage(w http.ResponseWriter, r *http.Request) {
 			TagIDs:      perms[i].TagIDs,
 			ConfigCount: len(h.configs.ListOwned(j.Key)),
 		}
+	}
+	access := h.accessSummaries(ctx, paths)
+	for i := range rows {
+		rows[i].Access = access["/jobs/"+rows[i].Job.Key]
+		rows[i].TagNames = view.TagNames(allTags, rows[i].TagIDs)
 	}
 	view.AdminJobsPage(rows, allTags, user).Render(ctx, w)
 }

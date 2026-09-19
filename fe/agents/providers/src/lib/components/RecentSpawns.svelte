@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { apiGetSessions } from "$lib/api.js";
+  import { exitStatus, exitBadgeClass } from "$lib/exitstatus.js";
   import type { SessionsList } from "$lib/types.js";
 
   type Props = {
@@ -126,6 +127,7 @@
       </thead>
       <tbody>
         {#each data?.Sessions ?? [] as s (s.SessionID)}
+          {@const st = exitStatus(s.LastStatus)}
           <tr
             class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 cursor-pointer"
             onclick={() => onOpenSession(s.SessionID)}
@@ -135,15 +137,7 @@
             <td class="px-5 py-2 font-mono text-black-900 dark:text-white-100">{shortID(s.SessionID)}</td>
             <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">{s.SpawnCount}</td>
             <td class="px-5 py-2">
-              {#if !s.LastStatus}
-                <span class="rounded bg-green-100 dark:bg-green-900 px-1.5 py-0.5 text-xs text-green-700 dark:text-green-300">running</span>
-              {:else if s.LastStatus === "unclean"}
-                <span class="rounded bg-red-100 dark:bg-red-900 px-1.5 py-0.5 text-xs text-red-700 dark:text-red-300">unclean exit</span>
-              {:else if s.LastStatus === "error"}
-                <span class="rounded bg-red-100 dark:bg-red-900 px-1.5 py-0.5 text-xs text-red-700 dark:text-red-300">error</span>
-              {:else}
-                <span class="rounded bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 text-xs text-black-700 dark:text-black-600">{s.LastStatus}</span>
-              {/if}
+              <span class="rounded px-1.5 py-0.5 text-xs {exitBadgeClass(st.tone)}" title={st.title}>{st.label}</span>
             </td>
             <td class="px-5 py-2 text-black-700 dark:text-black-600 max-w-xs truncate">{s.FirstMessage}</td>
           </tr>

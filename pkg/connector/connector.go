@@ -284,6 +284,18 @@ type OAuthMeta struct {
 	// and human-readable display name. Called after the code→token exchange
 	// to route the token to the correct connector row.
 	GetUserIdentity func(ctx context.Context, accessToken string) (userID, displayName string, err error) `json:"-"`
+	// ResolveScopes optionally asks the provider which scopes the app is
+	// allowed to request, instead of trusting the static Scopes list.
+	// Called on every connect and re-connect with the instance's configs;
+	// save persists config changes the lookup produced (a rotated
+	// credential, say) so the next call does not have to redo them.
+	//
+	// Return "" to mean "no opinion" — the manager then falls back to
+	// Scopes. An error is logged and treated the same way: a provider
+	// lookup that is down must not block a connect that would otherwise
+	// have worked. Whatever it returns is still overridden by the
+	// instance's own oauth_user_scopes config.
+	ResolveScopes func(ctx context.Context, cfgs map[string]string, save func(map[string]string) error) (string, error) `json:"-"`
 }
 
 // Module is the internal, fully-resolved registration record wick keeps

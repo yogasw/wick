@@ -57,6 +57,12 @@ type engine struct {
 	// interactions). Empty in unit tests that don't need goal force-continue.
 	sessionDir string
 
+	// turnTokens accumulates the vendor's token counts across every LLM
+	// call of ONE turn — a turn can loop through many, and reporting only
+	// the last would under-count what it actually spent. Reset when the
+	// turn's Done goes out. See accumulateUsage / emitDone.
+	turnTokens turnTokens
+
 	// contextBudget is the token ceiling for the replayed history. When
 	// the estimate nears it, runTurn triggers model-driven compaction
 	// (compact.go). 0 = unbounded (no compaction).
@@ -293,7 +299,7 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 		// kill. Checked FIRST so the goal force-continue branches below
 		// can't swallow a cancel that raced a wall-clock/error window.
 		if ctx.Err() != nil {
-			e.emit(doneLine(strings.TrimSpace(finalText.String())))
+			e.emitDone(strings.TrimSpace(finalText.String()))
 			return
 		}
 		if e.maxTurns > 0 && turn >= e.maxTurns {
@@ -330,7 +336,7 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 		resp, err := e.generateWithOverflowRecovery(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				e.emit(doneLine(strings.TrimSpace(finalText.String())))
+				e.emitDone(strings.TrimSpace(finalText.String()))
 				return
 			}
 			log.Warn().Err(err).Str("model", e.modelName).Msg("wick.engine: generate failed")
@@ -341,7 +347,7 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 		content := resp.Content
 		if content == nil {
 			// Empty candidate — treat as an empty successful turn.
-			e.emit(doneLine(strings.TrimSpace(finalText.String())))
+			e.emitDone(strings.TrimSpace(finalText.String()))
 			return
 		}
 
@@ -383,7 +389,7 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 				e.history = append(e.history, genai.NewContentFromText("[wick] "+msg, genai.RoleUser))
 				continue
 			}
-			e.emit(doneLine(strings.TrimSpace(finalText.String())))
+			e.emitDone(strings.TrimSpace(finalText.String()))
 			return
 		}
 
@@ -473,7 +479,7 @@ func (e *engine) finishTruncated(finalText *strings.Builder, reason string) {
 	marker := "\n\n[wick] " + reason
 	e.emit(textLine(marker))
 	finalText.WriteString(marker)
-	e.emit(doneLine(strings.TrimSpace(finalText.String())))
+	e.emitDone(strings.TrimSpace(finalText.String()))
 }
 
 // drainSteer pulls any messages already queued on the steer channel (arrived
@@ -655,7 +661,49 @@ func (e *engine) generateAttempt(ctx context.Context, kind string, attempt int, 
 		return nil, fmt.Errorf("%s: %s", out.ErrorCode, out.ErrorMessage)
 	}
 	e.calibrateFromUsage(req.Contents, out)
+	e.accumulateUsage(out)
 	return out, nil
+}
+
+// turnTokens is the running total for the current turn. Flow fields add
+// up across calls; the level fields keep only the LAST call's prompt,
+// which is what the window actually held when the turn ended.
+type turnTokens struct {
+	freshIn   int
+	cacheRead int
+	output    int
+	lastIn    int
+	lastCache int
+}
+
+// accumulateUsage folds one response's usage into the turn's running
+// total. Compaction calls pass through here too — they are part of what
+// the turn cost, so leaving them out would make the ledger flatter than
+// the bill.
+func (e *engine) accumulateUsage(out *LLMResponse) {
+	if out == nil || out.UsageMetadata == nil {
+		return
+	}
+	u := out.UsageMetadata
+	prompt := int(u.PromptTokenCount)
+	cached := int(u.CachedContentTokenCount)
+	fresh := prompt - cached
+	if fresh < 0 {
+		fresh = 0
+	}
+	e.turnTokens.freshIn += fresh
+	e.turnTokens.cacheRead += cached
+	e.turnTokens.output += int(u.CandidatesTokenCount)
+	if prompt > 0 {
+		e.turnTokens.lastIn, e.turnTokens.lastCache = fresh, cached
+	}
+}
+
+// emitDone closes a turn and hands the accumulated token counts to the
+// parser, then clears them so the next turn starts from zero.
+func (e *engine) emitDone(text string) {
+	e.emit(doneLineUsage(text, e.modelName, e.turnTokens))
+	e.turnTokens = turnTokens{}
 }
 
 // calibratedEstimate is estimateTokens scaled by the learned calibration

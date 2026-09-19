@@ -108,7 +108,7 @@ type baseConnector struct {
 // add as session instances: module capability AllowSessionConfig AND a
 // visible connector row with the per-instance toggle on.
 func sessionWorkspaceBases(r *http.Request, svc *connectors.Service, tagIDs []string, isAdmin bool) []baseConnector {
-	rows, err := svc.ListVisibleTo(r.Context(), tagIDs, isAdmin)
+	rows, err := svc.ListVisibleTo(r.Context(), callerIDFromCtx(r.Context()), tagIDs, isAdmin)
 	if err != nil {
 		return nil
 	}

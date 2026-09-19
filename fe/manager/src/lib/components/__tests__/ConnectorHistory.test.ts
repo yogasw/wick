@@ -16,6 +16,8 @@ function makeRun(over: Partial<HistoryRun> = {}): HistoryRun {
     status: "success",
     user_id: "u-1",
     user_name: "Alice",
+    account_id: "",
+    account_name: "",
     error_msg: "",
     latency_ms: 12,
     http_status: 200,
@@ -37,6 +39,10 @@ function makeResult(over: Partial<HistoryResult> = {}): HistoryResult {
     runs: [makeRun()],
     ops: [{ key: "send", name: "Send" }],
     users: [{ id: "u-1", name: "Alice" }],
+    credentials: [
+      { id: "default", name: "Default credentials" },
+      { id: "acc-1", name: "@yoga.setiawan" },
+    ],
     page: 1,
     total_pages: 1,
     total: 1,
@@ -160,5 +166,50 @@ describe("ConnectorHistory", () => {
     await screen.findByText("Run history");
     await fireEvent.click(screen.getByText("send"));
     expect(screen.queryByRole("button", { name: "Retry in test panel" })).toBeNull();
+  });
+});
+
+/* Credential is a second, independent axis: User says who asked, Credential
+   says which identity it went out as. A run with no account used the row's
+   own configured credentials. */
+describe("ConnectorHistory credential filter", () => {
+  it("labels a run with no account as the row's own credentials", async () => {
+    vi.mocked(api.getConnectorHistory).mockResolvedValue(makeResult({ runs: [makeRun({ account_id: "" })] }));
+    render(ConnectorHistory, { connectorKey: "slack", connectorId: "row-a" });
+    /* Scope to the table: the same label is also a dropdown option. */
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("Default credentials")).toBeTruthy();
+  });
+
+  it("names the connected account a run ran as", async () => {
+    vi.mocked(api.getConnectorHistory).mockResolvedValue(
+      makeResult({ runs: [makeRun({ account_id: "acc-1", account_name: "yoga.setiawan" })] }),
+    );
+    render(ConnectorHistory, { connectorKey: "slack", connectorId: "row-a" });
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("@yoga.setiawan")).toBeTruthy();
+  });
+
+  it("falls back to the id when the account has since been disconnected", async () => {
+    vi.mocked(api.getConnectorHistory).mockResolvedValue(
+      makeResult({ runs: [makeRun({ account_id: "acc-gone", account_name: "" })] }),
+    );
+    render(ConnectorHistory, { connectorKey: "slack", connectorId: "row-a" });
+    /* An empty cell would read as "default credentials", which is the one
+       thing it is not. */
+    expect(await screen.findByText("acc-gone")).toBeTruthy();
+  });
+
+  it("passes the picked credential to the API", async () => {
+    vi.mocked(api.getConnectorHistory).mockResolvedValue(makeResult());
+    render(ConnectorHistory, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("send");
+    const selects = screen.getAllByRole("combobox");
+    await fireEvent.change(selects[selects.length - 1], { target: { value: "default" } });
+    expect(api.getConnectorHistory).toHaveBeenLastCalledWith(
+      "slack",
+      "row-a",
+      expect.objectContaining({ credential: "default" }),
+    );
   });
 });

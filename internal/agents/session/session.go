@@ -103,6 +103,19 @@ type Meta struct {
 	// legacy sessions created before ownership tracking was added.
 	// When non-empty, only the owning user (or app owner) may access it.
 	UserID string `json:"user_id,omitempty"`
+	// TokenID and TokenName name the credential this session was created
+	// with, for callers that authenticate with one — today that means a
+	// Personal Access Token on the REST channel. Empty everywhere else:
+	// a person typing in the dashboard or in Slack IS the credential.
+	//
+	// Recorded because one account can hold many tokens, handed to a CI
+	// job, a script, an integration. "Created by Yoga" does not tell an
+	// admin which of those has been calling, and that is the question
+	// asked when traffic looks wrong. TokenName is a copy of the label at
+	// create time, so the record still reads if the token is later
+	// revoked and its row deleted.
+	TokenID   string `json:"token_id,omitempty"`
+	TokenName string `json:"token_name,omitempty"`
 	// Participants is every wick user who has spoken in this session, in
 	// first-seen order, starting with UserID. A Slack thread is not
 	// single-owner: anyone in the channel can reply into it, and that
@@ -347,6 +360,10 @@ type CreateOptions struct {
 	// UserID is the wick user who is creating this session. Stored in
 	// meta.json for ownership checks in MCP handlers.
 	UserID string
+	// TokenID and TokenName record the credential behind the creation,
+	// when the caller authenticated with one. See Meta.TokenID.
+	TokenID   string
+	TokenName string
 	// ParentSessionID marks this session as a delegated sub-agent's
 	// isolated context. See Meta.ParentSessionID.
 	ParentSessionID string
@@ -385,6 +402,8 @@ func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session
 		CreatedAt:  now,
 		LastActive: now,
 		UserID:     opt.UserID,
+		TokenID:    opt.TokenID,
+		TokenName:  opt.TokenName,
 
 		ParentSessionID: opt.ParentSessionID,
 	}

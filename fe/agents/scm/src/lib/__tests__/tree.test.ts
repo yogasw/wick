@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { buildTree, allFilePaths, allChanges, type TreeNode } from "$lib/tree";
+import { buildTree, allFilePaths, allChanges, splitPath, type TreeNode } from "$lib/tree";
 import type { FileChange } from "$lib/api/scm";
 
 function mk(path: string): FileChange {
@@ -70,5 +70,24 @@ describe("allFilePaths / allChanges", () => {
   test("a single file node returns just its own path", () => {
     const file: TreeNode = { name: "x.ts", path: "x.ts", isDir: false, change: mk("x.ts") };
     expect(allFilePaths(file)).toEqual(["x.ts"]);
+  });
+});
+
+describe("splitPath", () => {
+  // A Changes list that truncates the filename is a list you cannot read.
+  // Name and folder are separate so the folder is what gives way.
+  test("separates the name from the folder that disambiguates it", () => {
+    expect(splitPath("internal/agents/store/store.go")).toEqual({
+      name: "store.go",
+      dir: "internal/agents/store",
+    });
+  });
+
+  test("a root-level file has no folder to show", () => {
+    expect(splitPath("go.mod")).toEqual({ name: "go.mod", dir: "" });
+  });
+
+  test("a folder entry keeps its own name, not an empty one", () => {
+    expect(splitPath("vendor/github.com/pkg/")).toEqual({ name: "pkg", dir: "vendor/github.com" });
   });
 });

@@ -1,12 +1,12 @@
 <script lang="ts">
-  import type { ContextFileEntry } from "../types/agents.js";
+  import type { SessionFileEntry } from "../types/agents.js";
   import FileTreeNode from "./FileTreeNode.svelte";
 
-  type TreeNode = { entry: ContextFileEntry; children: TreeNode[] };
+  type TreeNode = { entry: SessionFileEntry; children: TreeNode[] };
 
   type Props = {
     cwd: string;
-    files: ContextFileEntry[];
+    files: SessionFileEntry[];
     search: string;
     openDirs: Record<string, boolean>;
     loadedDirs?: Record<string, boolean>;
@@ -20,7 +20,7 @@
     findTruncated?: boolean;
     onSearch: (s: string) => void;
     onToggleDir: (path: string) => void;
-    onOpen: (f: ContextFileEntry) => void;
+    onOpen: (f: SessionFileEntry) => void;
     onRefresh: () => void;
     onNewFile: () => void;
     onNewDir: () => void;
@@ -95,7 +95,7 @@
     for (const c of node.children) sortTree(c, key);
   }
 
-  function buildTree(entries: ContextFileEntry[], key: SortKey): TreeNode {
+  function buildTree(entries: SessionFileEntry[], key: SortKey): TreeNode {
     const root: TreeNode = { entry: { path: "", name: "", isDir: true, size: 0, mtime: 0 }, children: [] };
     const byPath: Record<string, TreeNode> = { "": root };
     for (const e of entries) {

@@ -47,7 +47,7 @@ func TestAgentNodePersistsThinkingTokens(t *testing.T) {
 				t.Fatalf("ensure session: %v", err)
 			}
 			n := workflow.Node{ID: "ask", Type: workflow.NodeAgent, Thinking: tc.thinking, MaxThinkingTokens: tc.maxTokens}
-			if err := e.persistAgentSessionConfig(id, n); err != nil {
+			if err := e.persistAgentSessionConfig(id, n, nil); err != nil {
 				t.Fatalf("persistAgentSessionConfig: %v", err)
 			}
 			s, err := session.Load(layout, id)

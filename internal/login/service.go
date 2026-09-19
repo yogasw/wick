@@ -6,6 +6,7 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -15,6 +16,74 @@ import (
 type Service struct {
 	repo        *repo
 	adminEmails map[string]bool
+	// tagCache holds each user's live filter-tag ids for tagCacheTTL. See
+	// effectiveTagIDs for why the cookie alone cannot answer this.
+	tagCache sync.Map
+}
+
+// tagCacheTTL bounds how stale a user's DB-read tag set may be. Access checks
+// run per project and per data table on a single page, so re-querying for each
+// would turn one dashboard load into dozens of queries.
+const tagCacheTTL = 10 * time.Second
+
+type tagCacheEntry struct {
+	ids    []string
+	expiry time.Time
+}
+
+// effectiveTagIDs resolves the filter tags to match a resource against.
+//
+// The context's set comes from the encrypted session cookie, which is minted
+// at LOGIN. That makes it a snapshot: a tag an admin grants afterwards stays
+// invisible until the person signs out and back in — which is exactly why a
+// project shared by tag never showed up in the pickers that filter by it.
+//
+// So the live set is read from the DB and unioned with whatever the context
+// carried. The union (rather than replacing) keeps callers that hand their
+// tags in explicitly — MCP bearer contexts, tests — working unchanged.
+//
+// Known limit, unchanged from before: a REVOKED tag keeps working until the
+// cookie is re-minted. The union cannot narrow that, and the cache adds at
+// most tagCacheTTL on top. Revocation that has to bite immediately still means
+// ending the user's session.
+func (s *Service) effectiveTagIDs(ctx context.Context, userID string) []string {
+	ids := GetUserTagIDs(ctx)
+	if userID == "" {
+		return ids
+	}
+	// The context's tags belong to whoever the request authenticated as. When
+	// the question is about SOMEBODY ELSE — "can the workflow's owner reach
+	// this project?", asked inside the viewer's request — unioning them in
+	// would answer with the viewer's reach and call it the owner's.
+	if u := GetUser(ctx); u != nil && u.ID != userID {
+		ids = nil
+	}
+	var live []string
+	if e, ok := s.tagCache.Load(userID); ok {
+		if ent := e.(tagCacheEntry); time.Now().Before(ent.expiry) {
+			live = ent.ids
+		}
+	}
+	if live == nil {
+		live = s.repo.GetUserFilterTagIDs(ctx, userID)
+		s.tagCache.Store(userID, tagCacheEntry{ids: live, expiry: time.Now().Add(tagCacheTTL)})
+	}
+	if len(live) == 0 {
+		return ids
+	}
+	if len(ids) == 0 {
+		return live
+	}
+	seen := make(map[string]struct{}, len(ids)+len(live))
+	out := make([]string, 0, len(ids)+len(live))
+	for _, id := range append(append([]string{}, ids...), live...) {
+		if _, dup := seen[id]; dup || id == "" {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func NewService(db *gorm.DB, adminEmailsCSV string) *Service {
@@ -30,6 +99,14 @@ func NewService(db *gorm.DB, adminEmailsCSV string) *Service {
 
 func (s *Service) UpsertUser(ctx context.Context, email, name, avatar string) (*entity.User, error) {
 	return s.repo.UpsertUser(ctx, strings.ToLower(email), name, avatar, s.adminEmails)
+}
+
+// GetUserByEmail resolves an account by its email. The Source panel uses it
+// to put a face on a commit: git records an author email, and when that email
+// belongs to a wick account the panel can show that account's avatar instead
+// of inventing one.
+func (s *Service) GetUserByEmail(ctx context.Context, email string) (*entity.User, error) {
+	return s.repo.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 }
 
 func (s *Service) GetUserByID(ctx context.Context, id string) (*entity.User, error) {
@@ -363,7 +440,7 @@ func (s *Service) CanAccessTool(ctx context.Context, user *entity.User, toolPath
 	if len(filterTagIDs) == 0 {
 		return true
 	}
-	return anyTagMatch(GetUserTagIDs(ctx), filterTagIDs)
+	return anyTagMatch(s.effectiveTagIDs(ctx, user.ID), filterTagIDs)
 }
 
 // CanAccessSharedResource reports whether a non-owner may reach a resource that
@@ -385,7 +462,7 @@ func (s *Service) CanAccessSharedResource(ctx context.Context, user *entity.User
 	if len(filterTagIDs) == 0 {
 		return false // no tag share — owner/admin handled by the caller
 	}
-	return anyTagMatch(GetUserTagIDs(ctx), filterTagIDs)
+	return anyTagMatch(s.effectiveTagIDs(ctx, user.ID), filterTagIDs)
 }
 
 // anyTagMatch reports whether the two tag-id sets intersect. Pure helper so the

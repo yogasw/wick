@@ -6,6 +6,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/project"
+	"time"
 )
 
 func newLayout(t *testing.T) config.Layout {
@@ -527,5 +528,58 @@ func TestCreateWithoutIDStillGenerates(t *testing.T) {
 	}
 	if !strings.HasPrefix(tk.ID, "T-") || len(tk.ID) != 6 {
 		t.Fatalf("id %q, want the generated T- form to be untouched", tk.ID)
+	}
+}
+
+// A mirrored ticket has to carry the SOURCE system's edit time. Stamping
+// "now" makes a sync over a hundred pages look like a hundred tickets all
+// changed at once, and the board — which sorts on this field — ends up
+// ordered by when the sync ran.
+func TestSaveAsAtAndKeeping(t *testing.T) {
+	layout := newLayout(t)
+	tk, err := Create(layout, CreateOptions{ProjectID: "p1", Title: "mirrored"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	notionEdit := time.Date(2026, 9, 12, 8, 30, 0, 0, time.UTC)
+	tk.Title = "mirrored, renamed in Notion"
+	if err := SaveAsAt(layout, tk, Actor{}, notionEdit); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(layout, "p1", tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.UpdatedAt.Equal(notionEdit) {
+		t.Fatalf("updated_at = %s, want the source's edit time %s", got.UpdatedAt, notionEdit)
+	}
+
+	// A bookkeeping write ("I checked this, nothing had changed") must not
+	// move the clock at all.
+	got.Fields = map[string]string{"notion_last_checked": "2026-09-15T11:00:00Z"}
+	if err := SaveAsKeeping(layout, got, Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := Load(layout, "p1", tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.UpdatedAt.Equal(notionEdit) {
+		t.Fatalf("a bookkeeping write moved updated_at to %s", after.UpdatedAt)
+	}
+	if after.Fields["notion_last_checked"] == "" {
+		t.Error("the bookkeeping field itself was not written")
+	}
+
+	// And the zero value still means now, so every interactive edit is
+	// unaffected.
+	before := time.Now().Add(-time.Second)
+	if err := SaveAsAt(layout, after, Actor{}, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	now, _ := Load(layout, "p1", tk.ID)
+	if now.UpdatedAt.Before(before) {
+		t.Fatalf("zero time should stamp now, got %s", now.UpdatedAt)
 	}
 }

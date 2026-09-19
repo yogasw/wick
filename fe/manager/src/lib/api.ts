@@ -8,6 +8,7 @@ import type {
   TestRunResult,
   HistoryResult,
   HistoryFilter,
+  AccountDetail,
   CustomMeta,
   CustomDraftResult,
   Draft,
@@ -436,6 +437,32 @@ export async function getAuditRuns(filter: AuditFilter): Promise<AuditResult> {
   return { ...r, runs: r.runs ?? [] };
 }
 
+/* The per-account read model: which operations apply to this identity, and
+   whether each one is inherited or overridden. */
+export async function getConnectorAccount(
+  key: string,
+  id: string,
+  accountId: string,
+): Promise<AccountDetail> {
+  const r = await apiGet<AccountDetail>(`${rowBase(key, id)}/accounts/${encodeURIComponent(accountId)}`);
+  return { ...r, ops: r.ops ?? [] };
+}
+
+/* One operation per call, not the whole map: a stale tab writing a whole map
+   would silently revert everything somebody else changed meanwhile. */
+export async function setAccountOpState(
+  key: string,
+  id: string,
+  accountId: string,
+  opKey: string,
+  state: "inherit" | "on" | "off",
+): Promise<void> {
+  await apiPost<{ key: string; state: string }>(
+    `${rowBase(key, id)}/accounts/${encodeURIComponent(accountId)}/ops/${encodeURIComponent(opKey)}`,
+    { state },
+  );
+}
+
 export async function getConnectorHistory(
   key: string,
   id: string,
@@ -446,11 +473,12 @@ export async function getConnectorHistory(
   if (filter.source) params.set("source", filter.source);
   if (filter.status) params.set("status", filter.status);
   if (filter.user) params.set("user", filter.user);
+  if (filter.credential) params.set("credential", filter.credential);
   if (filter.page > 1) params.set("page", String(filter.page));
   const qs = params.toString();
   const path = qs ? `${rowBase(key, id)}/history?${qs}` : `${rowBase(key, id)}/history`;
   const r = await apiGet<HistoryResult>(path);
-  return { ...r, runs: r.runs ?? [], ops: r.ops ?? [], users: r.users ?? [] };
+  return { ...r, runs: r.runs ?? [], ops: r.ops ?? [], users: r.users ?? [], credentials: r.credentials ?? [] };
 }
 
 /* Kill one in-flight run (the per-run Cancel button on a "running" history row).

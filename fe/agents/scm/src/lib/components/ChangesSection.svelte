@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { splitPath } from "$lib/tree";
   import type { FileChange } from "$lib/api/scm";
   import { buildTree } from "$lib/tree";
   import { statusBadge } from "$lib/git-actions";
@@ -58,9 +59,16 @@
       {/each}
     {:else}
       {#each items as c (c.path)}
+        {@const parts = splitPath(c.path)}
         <div class="group flex items-center gap-2 py-1 pr-2 pl-3 hover:bg-white-200 dark:hover:bg-navy-800">
           <button type="button" onclick={() => onOpen(c.path, staged)} class="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs text-black-800 dark:text-black-600">
-            <span class="truncate">{c.path}{c.dir ? "/" : ""}</span>
+            <!-- Name first, folder after it in grey — the editor convention,
+                 and the only layout where a long path truncates the part
+                 nobody reads instead of the filename itself. -->
+            <span class="shrink-0 truncate font-medium text-black-900 dark:text-white-100">{parts.name}{c.dir ? "/" : ""}</span>
+            {#if parts.dir}
+              <span class="min-w-0 truncate text-[11px] text-black-600 dark:text-black-700" title={c.path}>{parts.dir}</span>
+            {/if}
             {#if c.dir}
               <span class="shrink-0 rounded bg-white-300 px-1 text-[9px] font-medium whitespace-nowrap text-black-700 dark:bg-navy-600 dark:text-black-600">nested repo</span>
             {/if}

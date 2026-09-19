@@ -1,9 +1,9 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
-import ContextPanel from "../ContextPanel.svelte";
-import type { ContextFileEntry } from "../../types/agents.js";
+import FilesPanel from "../FilesPanel.svelte";
+import type { SessionFileEntry } from "../../types/agents.js";
 
-const DIR: ContextFileEntry = {
+const DIR: SessionFileEntry = {
   path: "src",
   name: "src",
   size: 0,
@@ -11,7 +11,7 @@ const DIR: ContextFileEntry = {
   mtime: 0,
 };
 
-const FILE_A: ContextFileEntry = {
+const FILE_A: SessionFileEntry = {
   path: "src/main.go",
   name: "main.go",
   size: 1024,
@@ -19,7 +19,7 @@ const FILE_A: ContextFileEntry = {
   mtime: Date.now() - 60000,
 };
 
-const FILE_B: ContextFileEntry = {
+const FILE_B: SessionFileEntry = {
   path: "README.md",
   name: "README.md",
   size: 512,
@@ -27,9 +27,9 @@ const FILE_B: ContextFileEntry = {
   mtime: Date.now() - 120000,
 };
 
-describe("ContextPanel", () => {
+describe("FilesPanel", () => {
   test("renders cwd", () => {
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/home/agent/project",
         files: [],
@@ -47,7 +47,7 @@ describe("ContextPanel", () => {
   });
 
   test("renders file names from flat list", () => {
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/project",
         files: [FILE_B],
@@ -65,7 +65,7 @@ describe("ContextPanel", () => {
   });
 
   test("renders directory names", () => {
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/project",
         files: [DIR, FILE_A],
@@ -83,7 +83,7 @@ describe("ContextPanel", () => {
   });
 
   test("shows empty state when files is empty", () => {
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/project",
         files: [],
@@ -101,7 +101,7 @@ describe("ContextPanel", () => {
   });
 
   test("shows no-matches state when search yields no results", () => {
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/project",
         files: [FILE_B],
@@ -120,7 +120,7 @@ describe("ContextPanel", () => {
 
   test("search input calls onSearch with new value", async () => {
     const onSearch = vi.fn();
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/project",
         files: [FILE_B],
@@ -141,7 +141,7 @@ describe("ContextPanel", () => {
 
   test("clicking a dir row calls onToggleDir with path", async () => {
     const onToggleDir = vi.fn();
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/project",
         files: [DIR, FILE_A],
@@ -161,7 +161,7 @@ describe("ContextPanel", () => {
 
   test("clicking a file row calls onOpen with the entry", async () => {
     const onOpen = vi.fn();
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/project",
         files: [FILE_B],
@@ -182,7 +182,7 @@ describe("ContextPanel", () => {
 
   test("refresh button calls onRefresh", async () => {
     const onRefresh = vi.fn();
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/project",
         files: [],
@@ -202,7 +202,7 @@ describe("ContextPanel", () => {
 
   test("new-file button calls onNewFile", async () => {
     const onNewFile = vi.fn();
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/project",
         files: [],
@@ -222,7 +222,7 @@ describe("ContextPanel", () => {
 
   test("new-dir button calls onNewDir", async () => {
     const onNewDir = vi.fn();
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/project",
         files: [],
@@ -241,7 +241,7 @@ describe("ContextPanel", () => {
   });
 
   test("children of a closed dir are not rendered", () => {
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/project",
         files: [DIR, FILE_A],
@@ -259,7 +259,7 @@ describe("ContextPanel", () => {
   });
 
   test("shows loading placeholder when loading=true", () => {
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/project",
         files: [],
@@ -278,7 +278,7 @@ describe("ContextPanel", () => {
   });
 
   test("shows error message when loadError is set", () => {
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/project",
         files: [],
@@ -297,7 +297,7 @@ describe("ContextPanel", () => {
   });
 
   test("children of an open dir are rendered", () => {
-    render(ContextPanel, {
+    render(FilesPanel, {
       props: {
         cwd: "/project",
         files: [DIR, FILE_A],

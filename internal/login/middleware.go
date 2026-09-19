@@ -15,6 +15,7 @@ type contextKey string
 
 const contextKeyUser contextKey = "login_user"
 const contextKeyUserTagIDs contextKey = "login_user_tag_ids"
+const contextKeyScoped contextKey = "login_user_scoped"
 
 // GetUser retrieves the authenticated user from context. Returns nil if not logged in.
 func GetUser(ctx context.Context) *entity.User {
@@ -38,6 +39,31 @@ func WithUser(ctx context.Context, user *entity.User, tagIDs []string) context.C
 	ctx = context.WithValue(ctx, contextKeyUser, user)
 	ctx = context.WithValue(ctx, contextKeyUserTagIDs, tagIDs)
 	return ctx
+}
+
+// WithScopedUser is WithUser for a principal whose reach was deliberately
+// NARROWED before it got here — today that means a sub-agent token, whose
+// tag slice is already the intersection of its triggering user's tags with
+// its profile's allow list.
+//
+// The distinction matters because tags are not the only way to reach a row:
+// a row's creator reaches it by ownership too (see connectors.OwnsConnector).
+// For the human who is chatting that is right — it is their own row. For a
+// sub-agent it is not: the child would inherit every row its parent ever
+// created regardless of the profile's allow list, which is precisely what
+// the narrowing exists to prevent.
+//
+// So ownership-based access asks IsScopedPrincipal first. Absent marker =
+// unscoped, which keeps every pre-existing caller behaving as before.
+func WithScopedUser(ctx context.Context, user *entity.User, tagIDs []string) context.Context {
+	return context.WithValue(WithUser(ctx, user, tagIDs), contextKeyScoped, true)
+}
+
+// IsScopedPrincipal reports whether this request's principal arrived with an
+// already-narrowed reach, and must therefore NOT be widened by ownership.
+func IsScopedPrincipal(ctx context.Context) bool {
+	scoped, _ := ctx.Value(contextKeyScoped).(bool)
+	return scoped
 }
 
 // SecretProvider is the minimal interface Middleware needs to read the

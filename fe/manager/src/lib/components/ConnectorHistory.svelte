@@ -45,7 +45,15 @@
     { label: "All users", value: "" },
     ...(data?.users ?? []).map((u) => ({ label: u.name, value: u.id })),
   ]);
-  let hasFilters = $derived(!!(filter.op || filter.source || filter.status || filter.user));
+  /* Credential answers a different question from User: which identity the
+     call went out as. One person can drive several connected accounts, and an
+     agent or MCP client picks one while having no user at all — so "who ran
+     it" and "what it ran as" cannot share a column. */
+  let credentialOptions = $derived([
+    { label: "All credentials", value: "" },
+    ...(data?.credentials ?? []).map((c) => ({ label: c.name, value: c.id })),
+  ]);
+  let hasFilters = $derived(!!(filter.op || filter.source || filter.status || filter.user || filter.credential));
 
   let pageRange = $derived.by(() => {
     if (!data || data.total === 0) return { start: 0, end: 0 };
@@ -67,6 +75,7 @@
       source: q.get("source") ?? "",
       status: q.get("status") ?? "",
       user: q.get("user") ?? "",
+      credential: q.get("credential") ?? "",
       page: Number.isFinite(page) && page > 0 ? page : 1,
     };
   }
@@ -77,6 +86,7 @@
     if (f.source) params.set("source", f.source);
     if (f.status) params.set("status", f.status);
     if (f.user) params.set("user", f.user);
+    if (f.credential) params.set("credential", f.credential);
     if (f.page > 1) params.set("page", String(f.page));
     const qs = params.toString();
     const next = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
@@ -93,7 +103,7 @@
   }
 
   function clearFilters(): void {
-    setFilter({ op: "", source: "", status: "", user: "" });
+    setFilter({ op: "", source: "", status: "", user: "", credential: "" });
   }
 
   function gotoPage(page: number): void {
@@ -170,6 +180,15 @@
     return run.user_name || run.user_id;
   }
 
+  /* A run with no account went out on the row's own credentials — the same
+     thing the Test runner calls "Default credentials". An account that was
+     since disconnected leaves its id behind with no name to resolve; show the
+     id rather than an empty cell, so the row still says something true. */
+  function credentialLabel(run: HistoryRun): string {
+    if (!run.account_id) return "Default credentials";
+    return run.account_name ? `@${run.account_name}` : run.account_id;
+  }
+
   const statusBadge: Record<string, string> = {
     success: "bg-pos-100 text-pos-400",
     error: "bg-neg-100 text-neg-400",
@@ -199,7 +218,7 @@
   </div>
 
   <section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4">
-    <div class="grid grid-cols-1 gap-3 sm:grid-cols-4">
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
       <div>
         <label for="hist-op" class="block text-xs font-medium text-black-800 dark:text-black-600">Operation</label>
         <div class="mt-1"><Select value={filter.op} options={opOptions} onChange={(v) => setFilter({ op: v })} /></div>
@@ -215,6 +234,10 @@
       <div>
         <label for="hist-user" class="block text-xs font-medium text-black-800 dark:text-black-600">User</label>
         <div class="mt-1"><Select value={filter.user} options={userOptions} onChange={(v) => setFilter({ user: v })} /></div>
+      </div>
+      <div>
+        <label for="hist-credential" class="block text-xs font-medium text-black-800 dark:text-black-600">Credential</label>
+        <div class="mt-1"><Select value={filter.credential} options={credentialOptions} onChange={(v) => setFilter({ credential: v })} /></div>
       </div>
     </div>
     {#if hasFilters}
@@ -243,6 +266,7 @@
               <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Operation</th>
               <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Source</th>
               <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">User</th>
+              <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Credential</th>
               <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Status</th>
               <th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600">Latency</th>
             </tr>
@@ -257,6 +281,7 @@
                 <td class="px-4 py-3 font-mono text-xs text-black-900 dark:text-white-100">{run.operation_key}</td>
                 <td class="px-4 py-3 text-xs"><span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 font-medium text-black-700 dark:text-black-600">{run.source}</span></td>
                 <td class="px-4 py-3 text-xs text-black-800 dark:text-black-600">{userLabel(run)}</td>
+                <td class="px-4 py-3 text-xs text-black-800 dark:text-black-600">{credentialLabel(run)}</td>
                 <td class="px-4 py-3 text-xs">
                   <span class="inline-flex items-center gap-1">
                     <span class="rounded-full px-2 py-0.5 font-medium {statusBadge[run.status] ?? statusBadge.running}">{run.status}</span>
@@ -279,7 +304,7 @@
               </tr>
               {#if expanded[run.id]}
                 <tr class="border-b border-white-300 dark:border-navy-600">
-                  <td colspan="7" class="bg-white-200 dark:bg-navy-800 px-4 py-4">
+                  <td colspan="8" class="bg-white-200 dark:bg-navy-800 px-4 py-4">
                     <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
                       <div>
                         <p class="text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">Request</p>

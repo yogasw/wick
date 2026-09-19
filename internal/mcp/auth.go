@@ -126,10 +126,16 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 			// would remove their own admin-only tools while granting no
 			// isolation — nothing is being narrowed on their behalf.
 			scopedUser := *user
+			ctx := r.Context()
 			if stripAdmin {
 				scopedUser.Role = entity.RoleUser
+				// Mark the principal as already-narrowed so ownership does
+				// not become a second way in behind the profile's back: a
+				// sub-agent must not inherit every row its parent created.
+				ctx = login.WithScopedUser(ctx, &scopedUser, tagIDs)
+			} else {
+				ctx = login.WithUser(ctx, &scopedUser, tagIDs)
 			}
-			ctx := login.WithUser(r.Context(), &scopedUser, tagIDs)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}

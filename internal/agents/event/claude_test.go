@@ -343,3 +343,162 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// TestClaudeTokenUsage pins the context reading taken off a `result`
+// frame. The numbers are a real run (session 2ccc5e51): claude's own
+// /context reported 31.2k of 200k for exactly this frame, so the sum
+// below is not a convention we invented — it is the number the CLI
+// shows the user, and the test exists to keep it that way.
+func TestClaudeTokenUsage(t *testing.T) {
+	p := NewClaudeParser()
+	line := `{"type":"result","subtype":"success","is_error":false,"result":"4",` +
+		`"usage":{"input_tokens":10,"cache_creation_input_tokens":31158,"cache_read_input_tokens":0,"output_tokens":85},` +
+		`"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":1033,"cacheReadInputTokens":0,` +
+		`"cacheCreationInputTokens":31158,"contextWindow":200000}}}`
+
+	ev, err := p.Parse(line)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if ev.Type != Done {
+		t.Fatalf("want Done, got %v", ev.Type)
+	}
+	if ev.Usage == nil {
+		t.Fatal("want a context reading, got nil")
+	}
+	// 10 + 31158 + 0 — the last message's input, not the turn-wide
+	// modelUsage totals (those would say 32191 and over-report).
+	if ev.Usage.ContextUsed != 31168 {
+		t.Fatalf("used: want 31168, got %d", ev.Usage.ContextUsed)
+	}
+	if ev.Usage.Window != 200000 {
+		t.Fatalf("window: want 200000, got %d", ev.Usage.Window)
+	}
+	if ev.Usage.Model != "claude-haiku-4-5-20251001" {
+		t.Fatalf("model: got %q", ev.Usage.Model)
+	}
+}
+
+// TestClaudeTokenUsagePicksBusiestModel: a turn that touched two
+// models must report the window of the one that carried the
+// conversation, not whichever key the map happened to yield first.
+func TestClaudeTokenUsagePicksBusiestModel(t *testing.T) {
+	p := NewClaudeParser()
+	line := `{"type":"result","subtype":"success","is_error":false,` +
+		`"usage":{"input_tokens":2,"cache_creation_input_tokens":16409,"cache_read_input_tokens":194475},` +
+		`"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":40,"contextWindow":200000},` +
+		`"claude-opus-5":{"inputTokens":2,"cacheReadInputTokens":194475,"cacheCreationInputTokens":16409,"contextWindow":1000000}}}`
+
+	ev, err := p.Parse(line)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if ev.Usage == nil {
+		t.Fatal("want a context reading, got nil")
+	}
+	if ev.Usage.ContextUsed != 210886 {
+		t.Fatalf("used: want 210886, got %d", ev.Usage.ContextUsed)
+	}
+	if ev.Usage.Model != "claude-opus-5" || ev.Usage.Window != 1000000 {
+		t.Fatalf("want the opus window, got %q / %d", ev.Usage.Model, ev.Usage.Window)
+	}
+}
+
+// TestClaudeTokenUsageAbsent: a result frame without usage (or with
+// an all-zero one, which local slash commands emit) yields no reading
+// rather than a bogus 0-of-0 gauge.
+func TestClaudeTokenUsageAbsent(t *testing.T) {
+	for _, line := range []string{
+		`{"type":"result","subtype":"success","is_error":false,"result":"ok"}`,
+		`{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}`,
+	} {
+		ev, err := NewClaudeParser().Parse(line)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if ev.Usage != nil {
+			t.Fatalf("want no reading, got %+v", ev.Usage)
+		}
+	}
+}
+
+// TestClaudeCompactBoundary pins the frame captured from a live run:
+// wick must see a compaction as a first-class event, because the two
+// frames claude emits alongside it (the replacement summary as a `user`
+// message, and the <local-command-stdout> echo) are deliberately dropped
+// — without this marker the conversation would just lose messages with
+// no explanation.
+func TestClaudeCompactBoundary(t *testing.T) {
+	line := `{"type":"system","subtype":"compact_boundary","session_id":"S1",` +
+		`"compact_metadata":{"trigger":"manual","pre_tokens":31261,"post_tokens":4051,` +
+		`"cumulative_dropped_tokens":27210,"duration_ms":13226}}`
+	ev, err := NewClaudeParser().Parse(line)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if ev.Type != Compaction {
+		t.Fatalf("want Compaction, got %v", ev.Type)
+	}
+	c := ev.Compaction
+	if c == nil {
+		t.Fatal("no compaction info")
+	}
+	if c.Trigger != "manual" || c.PreTokens != 31261 || c.PostTokens != 4051 {
+		t.Fatalf("info: %+v", c)
+	}
+	if c.DroppedTokens != 27210 || c.DurationMS != 13226 {
+		t.Fatalf("info: %+v", c)
+	}
+}
+
+// TestClaudeCompactionCompanionFramesStaySilent: the summary and the
+// stdout echo must NOT surface as user messages — nobody typed them.
+func TestClaudeCompactionCompanionFramesStaySilent(t *testing.T) {
+	p := NewClaudeParser()
+	for _, line := range []string{
+		`{"type":"user","message":{"role":"user","content":"This session is being continued from a previous conversation…"}}`,
+		`{"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted </local-command-stdout>"}}`,
+	} {
+		ev, err := p.Parse(line)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if ev.Type != Unknown {
+			t.Fatalf("want Unknown for %s, got %v", line, ev.Type)
+		}
+	}
+}
+
+// TestClaudeReInitAfterCompactionIsNotANewSession: claude re-emits
+// `init` with the SAME session id right after compacting. Treating that
+// as a new session would reset state mid-conversation.
+func TestClaudeReInitAfterCompaction(t *testing.T) {
+	p := NewClaudeParser()
+	first, _ := p.Parse(`{"type":"system","subtype":"init","session_id":"S1"}`)
+	if first.Type != SessionStart {
+		t.Fatalf("first init should start the session, got %v", first.Type)
+	}
+	again, _ := p.Parse(`{"type":"system","subtype":"init","session_id":"S1"}`)
+	if again.Type != Unknown {
+		t.Fatalf("second init should be silent, got %v", again.Type)
+	}
+}
+
+// TestClaudeStringContentDoesNotError guards the regression the
+// compaction work uncovered: .content arrives as a plain string for the
+// post-compaction summary and for local-command echoes. A decode failure
+// there is not cosmetic — upstream turns any parse error into an Error
+// event, which ends the turn and writes "cannot unmarshal string…" into
+// the user's conversation.
+func TestClaudeStringContentDoesNotError(t *testing.T) {
+	p := NewClaudeParser()
+	for _, line := range []string{
+		`{"type":"user","message":{"role":"user","content":"plain string body"}}`,
+		`{"type":"user","message":{"role":"user","content":null}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":"also a string"}}`,
+	} {
+		if _, err := p.Parse(line); err != nil {
+			t.Fatalf("%s: %v", line, err)
+		}
+	}
+}

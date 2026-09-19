@@ -68,6 +68,10 @@ type usageWindowDTO struct {
 	Key         string  `json:"key"`
 	Utilization float64 `json:"utilization"`
 	ResetsAt    string  `json:"resets_at,omitempty"`
+	// ObservedAt is set when the figure is older than the request that
+	// returned it — codex reports its limits only while it runs, so the
+	// UI has to date the number instead of implying it is live.
+	ObservedAt string `json:"observed_at,omitempty"`
 }
 
 // providerConnectionDTO is one instance's account + usage, keyed by the
@@ -235,6 +239,9 @@ func usageWindowDTOs(windows []logintty.UsageWindow) []usageWindowDTO {
 		dto := usageWindowDTO{Key: w.Key, Utilization: w.Utilization}
 		if !w.ResetsAt.IsZero() {
 			dto.ResetsAt = w.ResetsAt.UTC().Format(time.RFC3339)
+		}
+		if !w.ObservedAt.IsZero() {
+			dto.ObservedAt = w.ObservedAt.UTC().Format(time.RFC3339)
 		}
 		out = append(out, dto)
 	}

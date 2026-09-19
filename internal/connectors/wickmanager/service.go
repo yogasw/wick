@@ -602,7 +602,7 @@ func (h *handlers) connectorList(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	tagIDs := login.GetUserTagIDs(ctx)
-	rows, err := h.deps.Connectors.ListVisibleTo(ctx, tagIDs, user.IsAdmin())
+	rows, err := h.deps.Connectors.ListVisibleTo(ctx, user.ID, tagIDs, user.IsAdmin())
 	if err != nil {
 		return nil, err
 	}
@@ -646,7 +646,7 @@ func (h *handlers) connectorGet(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	tagIDs := login.GetUserTagIDs(ctx)
-	allowed, err := h.deps.Connectors.IsVisibleTo(ctx, id, tagIDs, user.IsAdmin())
+	allowed, err := h.deps.Connectors.IsVisibleTo(ctx, id, user.ID, tagIDs, user.IsAdmin())
 	if err != nil {
 		return nil, err
 	}
@@ -709,7 +709,7 @@ func (h *handlers) connectorSetConfig(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	tagIDs := login.GetUserTagIDs(ctx)
-	allowed, aerr := h.deps.Connectors.IsManageableBy(ctx, id, tagIDs, user.IsAdmin())
+	allowed, aerr := h.deps.Connectors.IsManageableBy(ctx, id, user.ID, tagIDs, user.IsAdmin())
 	if aerr != nil {
 		err = aerr
 		return nil, err

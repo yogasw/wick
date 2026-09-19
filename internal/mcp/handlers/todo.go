@@ -29,6 +29,15 @@ func WickTodo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 		Step   string `json:"step"`
 		Status string `json:"status"`
 	}
+	type progressIn struct {
+		Done  int    `json:"done"`
+		Total int    `json:"total"`
+		Label string `json:"label,omitempty"`
+	}
+	type detailIn struct {
+		Format string `json:"format,omitempty"`
+		Body   string `json:"body"`
+	}
 	type itemIn struct {
 		ID          string      `json:"id,omitempty"`
 		Title       string      `json:"title,omitempty"`
@@ -36,6 +45,8 @@ func WickTodo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 		Step        string      `json:"step,omitempty"` // deprecated fallback label, see tools.go
 		Status      string      `json:"status"`
 		Substeps    []substepIn `json:"substeps,omitempty"`
+		Progress    *progressIn `json:"progress,omitempty"`
+		Detail      *detailIn   `json:"detail,omitempty"`
 	}
 	type input struct {
 		Items       []itemIn `json:"items"`
@@ -44,6 +55,8 @@ func WickTodo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 		GoalAbandon bool     `json:"goal_abandon,omitempty"`
 		Note        string   `json:"note,omitempty"`
 		SessionID   string   `json:"session_id,omitempty"`
+		Stop        bool     `json:"stop,omitempty"`
+		ClearHist   bool     `json:"clear_history,omitempty"`
 	}
 	raw, _ := json.Marshal(args)
 	var in input
@@ -57,7 +70,11 @@ func WickTodo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 	// would reject the exact call we asked for. Items are still required
 	// when the call touches no goal field at all.
 	goalOnly := strings.TrimSpace(in.Goal) != "" || in.GoalDone || in.GoalAbandon
-	if len(in.Items) == 0 && !goalOnly {
+	// stop/clear_history act on the list that is already there, so they are
+	// legal with no items too — requiring a checklist to say "this one is
+	// dead" would mean re-sending the list you are abandoning.
+	listOp := in.Stop || in.ClearHist
+	if len(in.Items) == 0 && !goalOnly && !listOp {
 		rsp.ToolError(w, req.ID, "items must be a non-empty array of {title, status}", "todo")
 		return
 	}
@@ -107,17 +124,54 @@ func WickTodo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 				for _, sub := range it.Substeps {
 					subs = append(subs, session.TodoSubstep{Step: sub.Step, Status: sub.Status})
 				}
-				items = append(items, session.TodoItem{
+				out := session.TodoItem{
 					ID:          it.ID,
 					Title:       it.Title,
 					Description: it.Description,
 					Step:        it.Step,
 					Status:      it.Status,
 					Substeps:    subs,
-				})
+				}
+				if it.Progress != nil {
+					out.Progress = &session.TodoProgress{
+						Done: it.Progress.Done, Total: it.Progress.Total, Label: it.Progress.Label,
+					}
+				}
+				if it.Detail != nil && strings.TrimSpace(it.Detail.Body) != "" {
+					out.Detail = &session.TodoDetail{Format: it.Detail.Format, Body: it.Detail.Body}
+				}
+				items = append(items, out)
 			}
 			if _, err := session.RecordTodos(layout, sid, items); err != nil {
 				fmt.Fprintf(&sb, "\n[todo] not saved: %s", err.Error())
+			}
+		}
+	}
+
+	// stop / clear_history — the escape hatch for a list nobody will finish.
+	// A run that died leaves a card claiming to be in progress forever, and
+	// the only thing worse than no progress indicator is one that lies.
+	if listOp {
+		sid := resolveTodoSession(r, in.SessionID)
+		switch {
+		case sid == "":
+			fmt.Fprintf(&sb, "\n[todo] skipped — no session id (pass session_id or call from an agent session)")
+		case layout.BaseDir == "":
+			fmt.Fprintf(&sb, "\n[todo] skipped — session layout not wired")
+		default:
+			if in.Stop {
+				if _, err := session.StopTodos(layout, sid, strings.TrimSpace(in.Note)); err != nil {
+					fmt.Fprintf(&sb, "\n[todo] stop failed: %s", err.Error())
+				} else {
+					fmt.Fprintf(&sb, "\n[todo] list STOPPED")
+				}
+			}
+			if in.ClearHist {
+				if _, err := session.ClearTodos(layout, sid, false); err != nil {
+					fmt.Fprintf(&sb, "\n[todo] clear failed: %s", err.Error())
+				} else {
+					fmt.Fprintf(&sb, "\n[todo] history cleared")
+				}
 			}
 		}
 	}

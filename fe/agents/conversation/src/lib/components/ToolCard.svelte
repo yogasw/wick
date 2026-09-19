@@ -5,12 +5,16 @@
   type ToolBlock = Extract<ThreadBlock, { kind: "tool" }>;
 
   // onCancel aborts the underlying connector run (per-operation — the agent turn
-  // keeps going and receives a "cancelled" result). onDismiss just removes a
-  // stuck card from the view without touching the backend (used for orphan runs
-  // from before this feature, which carry no runId to cancel).
+  // keeps going and receives a "cancelled" result). onStopTurn is the only lever
+  // that exists for a tool running INSIDE the provider CLI (Bash, Read, Edit…):
+  // wick never sees those as runs it can abort, so the choice is to stop the
+  // agent process or to let the tool finish. onDismiss just removes a stuck card
+  // from the view without touching the backend (orphan runs from before this
+  // feature, which carry no runId and are no longer running anywhere).
   type Props = {
     block: ToolBlock;
     onCancel?: (runId: string) => void;
+    onStopTurn?: () => void;
     onDismiss?: (toolUseId: string) => void;
     // Set when this card belongs to an interrupted/cut-off turn (history path).
     // Such a tool call has no result but is NOT live — show "interrupted", not a
@@ -23,7 +27,7 @@
     // user expands the result — keeps the big blob out of the index load.
     loadEventPayload?: (eventId: string) => Promise<TurnEventPayload>;
   };
-  let { block, onCancel, onDismiss, interrupted = false, onOpenSubAgent, loadEventPayload }: Props = $props();
+  let { block, onCancel, onStopTurn, onDismiss, interrupted = false, onOpenSubAgent, loadEventPayload }: Props = $props();
 
   let cancelling = $state(false);
 
@@ -33,10 +37,17 @@
     if (block.runId && onCancel) {
       cancelling = true;
       onCancel(block.runId);
+    } else if (onStopTurn) {
+      // No runId: the tool is running inside the provider CLI, so there is
+      // nothing for wick to abort on its own. Dismissing the card here was
+      // worse than useless — it looked like a cancel, hid the evidence, and
+      // left the process running until someone killed the conversation.
+      // Offer the action that actually stops it; the caller confirms.
+      onStopTurn();
     } else if (onDismiss) {
-      // No runId — an orphan/stale card (e.g. from before per-run cancel existed,
-      // or a run whose finish event was lost). Nothing to abort server-side; just
-      // clear it from the view.
+      // Neither: an orphan/stale card (e.g. from before per-run cancel
+      // existed, or a run whose finish event was lost). Nothing is running
+      // any more — just clear it from the view.
       onDismiss(block.toolUseId);
     }
   }
@@ -126,7 +137,19 @@
 
   // The ✕ is shown on any running tool. It cancels the op when a runId is known
   // (a live run), otherwise it just dismisses the stuck card from the UI.
-  const canCancel = $derived(running && (!!onCancel || !!onDismiss));
+  const canCancel = $derived(running && (!!onCancel || !!onStopTurn || !!onDismiss));
+
+  // What the ✕ will actually do, said before it is clicked. A connector run
+  // is cancelled on its own; anything else can only be stopped by stopping
+  // the agent, and a button that does not say so is how somebody ends up
+  // clicking it four times.
+  const cancelTitle = $derived(
+    block.runId && onCancel
+      ? "Cancel this operation"
+      : onStopTurn
+        ? "Stop the agent — this tool runs inside the CLI, so it cannot be cancelled on its own"
+        : "Dismiss this card",
+  );
 
   // now ticks once a second ONLY while something on the page is running, so
   // the running timer updates without a permanent interval.
@@ -252,8 +275,8 @@
         <span
           role="button"
           tabindex="0"
-          title={block.runId ? "Cancel this operation (the agent keeps going)" : "Dismiss this stuck card"}
-          aria-label={block.runId ? "Cancel this operation" : "Dismiss this stuck card"}
+          title={cancelTitle}
+          aria-label={cancelTitle}
           aria-disabled={cancelling}
           onclick={cancel}
           onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") cancel(e); }}

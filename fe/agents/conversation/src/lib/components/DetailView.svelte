@@ -75,12 +75,15 @@
 
   import ConversationHeader from "./ConversationHeader.svelte";
   import ConversationThread from "./ConversationThread.svelte";
+  import { bareSlashCommand } from "../slashCommand.js";
   import JsonTree from "./JsonTree.svelte";
-  import ContextPanel from "./ContextPanel.svelte";
+  import FilesPanel from "./FilesPanel.svelte";
   import FileViewerModal from "./FileViewerModal.svelte";
   import SwitchModal from "./SwitchModal.svelte";
   import OverridePopover from "./OverridePopover.svelte";
   import UsagePopover from "./UsagePopover.svelte";
+  import ContextPopover from "./ContextPopover.svelte";
+  import { fetchSessionContext, type SessionContext } from "../api/context.js";
   import { getSessionOverrides, setSessionOverride } from "../api/overrides.js";
   import type { ConfigField } from "@wick-fe/common-ui";
   import { setFileContext, setWidgetPolicy } from "../richRender.js";
@@ -95,7 +98,7 @@
 
   import type {
     ConversationTurn, LiveTurn, TypingState,
-    ContextFileEntry, AskAnswer, ApprovalDecision,
+    SessionFileEntry, AskAnswer, ApprovalDecision,
     ApprovedItem, ComposerCommand,
     WsInstance, WsBase, WsTombstone, ProcessInfo, FileContent,
     ProviderOption, ProjectOption, Schedule,
@@ -184,7 +187,7 @@
   let sseStatus = $state<SSEStatus>("connecting");
 
   /* ── vertical rail tabs ────────────────────────────────────────── */
-  type RailTab = "context" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents" | "ticket" | "notes" | "todos";
+  type RailTab = "files" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents" | "ticket" | "notes" | "todos";
   let railTab = $state<RailTab | null>(null);
 
   /* ── thread scroll ref ─────────────────────────────────────────── */
@@ -192,7 +195,7 @@
 
   /* ── context panel state ──────────────────────────────────────── */
   let cwdVal = $state("");
-  let filesVal = $state<ContextFileEntry[]>([]);
+  let filesVal = $state<SessionFileEntry[]>([]);
   let filesLoading = $state(false);
   let filesLoadError = $state("");
   /* Which directories have had their children fetched. The tree is loaded
@@ -231,10 +234,11 @@
     "panel:process": () => toggleRail("process"),
     "panel:workspace": () => toggleRail("workspace"),
     "panel:source": () => toggleRail("source"),
-    "panel:context": () => toggleRail("context"),
+    "panel:files": () => toggleRail("files"),
     "panel:subagents": () => toggleRail("subagents"),
     "panel:thinking": () => openOverridePopover(),
     "panel:usage": () => openUsagePopover(),
+    "panel:context": () => openContextPopover(),
     "view:commands": () => handleTabChange("commands"),
     "view:approvals": () => handleTabChange("approvals"),
     "view:raw": () => handleTabChange("raw"),
@@ -323,6 +327,72 @@
       return;
     }
     loadUsage();
+  }
+
+  /* Context window — read from the session's token ledger, so it costs
+     nothing to keep current: no CLI call, no model call. Refreshed when
+     the agent's lifecycle moves (a finished turn is what changes the
+     number) and when the panel opens. */
+  let contextPopoverOpen = $state(false);
+  let contextData = $state<SessionContext | null>(null);
+  let contextLoading = $state(false);
+  let contextError = $state("");
+  let compacting = $state(false);
+
+  /* Whether a compaction is actually running. The button's own flag only
+     covers the moment the send is in the air; after that the evidence is
+     the thread itself — the last thing sent was a bare /compact and the
+     agent is still working. Deriving it this way also covers the command
+     typed into the composer, which never touches the button. */
+  const compactInFlight = $derived.by(() => {
+    if (compacting) return true;
+    if (!typing.active) return false;
+    for (let i = turns.length - 1; i >= 0; i--) {
+      if (turns[i].role !== "user") continue;
+      return bareSlashCommand(turns[i].text) === "compact";
+    }
+    return false;
+  });
+
+  async function loadContext() {
+    contextLoading = true;
+    try {
+      contextData = await fetchSessionContext(base, sessionId);
+      contextError = "";
+    } catch (e) {
+      contextError = e instanceof Error ? e.message : String(e);
+    } finally {
+      contextLoading = false;
+    }
+  }
+
+  /* Re-read the meter whenever the agent's lifecycle moves — a finished
+     turn is the only moment the level changes. An effect rather than a
+     callback on the subscription: the subscription fires during init,
+     before this state exists, and reading it there is a temporal-dead-
+     zone crash rather than an early refresh. */
+  $effect(() => {
+    void agentLifecycle.state;
+    void loadContext();
+  });
+
+  function openContextPopover() {
+    contextPopoverOpen = true;
+    void loadContext();
+  }
+
+  /* Compact is a normal message send — the pool strips the sender line
+     from a bare slash command so the CLI actually runs it. Never
+     automatic: the user pressed a button that said what it would do. */
+  async function handleCompact() {
+    compacting = true;
+    contextPopoverOpen = false;
+    try {
+      await handleSend({ text: "/compact", files: [] });
+    } finally {
+      compacting = false;
+      void loadContext();
+    }
   }
 
   function openOverridePopover() {
@@ -424,7 +494,9 @@
 
   /* ── process panel state ──────────────────────────────────────── */
   let processes = $state<ProcessInfo[]>([]);
-  let confirmKill = $state<{ sid: string; queued: boolean } | null>(null);
+  // note carries the reason the dialog was opened from a running tool card,
+  // so the confirm can explain why a "cancel" turned into "stop the agent".
+  let confirmKill = $state<{ sid: string; queued: boolean; note?: string } | null>(null);
   // Guard against overlapping /processes requests: a burst of SSE `lifecycle`
   // events would otherwise stack into a pile of pending fetches. Skip while
   // one is already in flight.
@@ -642,7 +714,7 @@
      that directory: anything still listed under it that the server no longer
      returns is dropped, along with its subtree. Without that, a file deleted
      on disk would sit in the panel until a full refresh. */
-  function mergeFiles(incoming: ContextFileEntry[], dirScope?: string) {
+  function mergeFiles(incoming: SessionFileEntry[], dirScope?: string) {
     const byPath = new Map(filesVal.map((f) => [f.path, f]));
     if (dirScope !== undefined) {
       const keep = new Set(incoming.map((f) => f.path));
@@ -806,7 +878,7 @@
   let filesRefreshing = false;
   let filesRefreshAgain = false;
   async function reloadFilesSilently() {
-    if (railTab !== "context") return;
+    if (railTab !== "files") return;
     if (filesRefreshing) { filesRefreshAgain = true; return; }
     filesRefreshing = true;
     try {
@@ -832,7 +904,7 @@
     }
   }
   function scheduleFileReload() {
-    if (railTab !== "context") return; // nothing renders the tree — skip the fetch
+    if (railTab !== "files") return; // nothing renders the tree — skip the fetch
     if (fileReloadTimer !== null) clearTimeout(fileReloadTimer);
     fileReloadTimer = setTimeout(reloadFilesSilently, 400);
   }
@@ -1263,7 +1335,7 @@
         scrollToBottom();
       } else if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B")) {
         e.preventDefault();
-        toggleRail("context");
+        toggleRail("files");
       }
     }
     window.addEventListener("keydown", onKeydown);
@@ -1446,7 +1518,7 @@
       .catch((e: unknown) => toastError(`Read: ${e instanceof Error ? e.message : String(e)}`));
   }
 
-  function openFile(f: ContextFileEntry) {
+  function openFile(f: SessionFileEntry) {
     if (f.isDir) return;
     openFileByPath(f.path);
   }
@@ -1604,6 +1676,12 @@
         // caught up when the turn ended — which is exactly the stretch
         // during which somebody wants to see what is being worked on.
         if (bareToolName(ev.tool_name ?? "") === "todo") scheduleTodoReload();
+      } else if (ev.type === "todo") {
+        // A checklist written from OUTSIDE the agent — a build script
+        // reporting through the CLI channel. There is no tool call to notice
+        // there, so without its own event the panel would sit on a stale
+        // list until something unrelated triggered a fetch.
+        scheduleTodoReload();
       } else if (ev.type === "lifecycle") {
         scheduleProcessReload();
         scheduleSubAgentReload();
@@ -1645,6 +1723,18 @@
     run(cancelRun(base, sessionId, runId).pipe(Effect.provide(WickClientLayer)))
       .then(() => toastOk("Operation cancelled"))
       .catch((e: unknown) => toastError("Cancel failed", e instanceof Error ? e.message : String(e)));
+  }
+
+  // The ✕ on a tool running inside the provider CLI. wick has no handle on
+  // that process — it lives inside claude/codex — so the honest options are
+  // to stop the agent or to wait. Route it through the same confirm as the
+  // header's Stop, with a line saying why the ✕ escalated.
+  function handleStopFromTool() {
+    confirmKill = {
+      sid: sessionId,
+      queued: false,
+      note: "This tool is running inside the provider CLI, so wick cannot cancel it on its own — stopping the agent is what ends it.",
+    };
   }
 
   function doKill() {
@@ -1745,6 +1835,18 @@
 
   /* ── send message ─────────────────────────────────────────────── */
   async function handleSend(msg: { text: string; files: File[] }) {
+    // A /compact the provider cannot act on never becomes a message.
+    // The server refuses it too, but only the composer can stop the
+    // user watching a command they typed sit there doing nothing — so
+    // open the panel, which says why in full.
+    if (
+      msg.files.length === 0 &&
+      bareSlashCommand(msg.text) === "compact" &&
+      contextData?.can_compact === false
+    ) {
+      openContextPopover();
+      return;
+    }
     const optimisticAttachments = msg.files.map((f) => ({
       name: f.name,
       stored_name: f.name,
@@ -1779,7 +1881,7 @@
   // Refresh the file tree when the context panel opens — SSE-driven reloads are
   // skipped while it's closed, so pick up any files written meanwhile.
   $effect(() => {
-    if (railTab === "context") reloadFilesSilently();
+    if (railTab === "files") reloadFilesSilently();
   });
 
   // Esc closes the open side panel — "sat set". Guarded on defaultPrevented so
@@ -1929,8 +2031,13 @@
       icon: '<path d="M5.5 4.5h7M5.5 8h7M5.5 11.5h4" stroke-linecap="round"></path><path d="M2.5 4.5l1 1 1.5-2M2.5 8l1 1 1.5-2" stroke-linecap="round" stroke-linejoin="round"></path>',
     },
     {
-      id: "context",
-      label: "Context",
+      // Labelled "Files" even though the id stays `context`: what it shows is
+      // the session folder — a file tree with counts — and "Context" is now
+      // spoken for by the model's context window, which is a different thing
+      // entirely. The id is load-bearing (persisted last-open tab), so it
+      // outlives the label.
+      id: "files",
+      label: "Files",
       icon: '<path d="M2 4a1 1 0 011-1h3l2 2h5a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke-linejoin="round"></path>',
     },
     {
@@ -2102,7 +2209,7 @@
 
   const sideOpen = $derived(railTab !== null);
 
-  const contextCount = $derived(filesVal.filter((f) => !f.isDir).length);
+  const filesCount = $derived(filesVal.filter((f) => !f.isDir).length);
   // Idle-fallback rows (kind === "idle") carry only the provider/agent name
   // for the composer toolbar — they are not real processes, so exclude them
   // from the process panel and the "Process N" rail badge. A session whose
@@ -2145,7 +2252,7 @@
   function railCount(id: RailTab): number {
     if (id === "todos") return openTodoCount;
     if (id === "notes") return noteCount;
-    if (id === "context") return contextCount;
+    if (id === "files") return filesCount;
     if (id === "process") return processCount;
     if (id === "workspace") return workspaceCount;
     if (id === "scheduled") return scheduledCount;
@@ -2198,7 +2305,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} />
+          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} />
         </div>
       </div>
 
@@ -2261,6 +2368,17 @@
             recheckWait={usageRecheckWait}
             onClose={() => { usagePopoverOpen = false; stopUsagePoll(); }}
           />
+          <!-- /context — the window meter and the manual Compact action. -->
+          <ContextPopover
+            open={contextPopoverOpen}
+            data={contextData}
+            loading={contextLoading}
+            error={contextError}
+            onRefresh={() => void loadContext()}
+            onCompact={() => void handleCompact()}
+            compacting={compactInFlight}
+            onClose={() => (contextPopoverOpen = false)}
+          />
           <Composer
             bind:this={composerRef}
             onSend={handleSend}
@@ -2271,6 +2389,18 @@
             onSearchFiles={searchMentionFiles}
             mentionAgents={mentionableAgents}
             commands={composerCommands}
+            contextMeter={contextData && contextData.used > 0
+              ? {
+                  pct: contextData.pct,
+                  used: contextData.used,
+                  window: contextData.window,
+                  title:
+                    contextData.window > 0
+                      ? `Context window — ${Math.round(contextData.pct)}% of ${contextData.model || contextData.provider || "model"}`
+                      : `Context — ${contextData.used.toLocaleString()} tokens (window size not reported)`,
+                  onClick: openContextPopover,
+                }
+              : undefined}
           />
         </div>
       </div>
@@ -2444,8 +2574,8 @@
           info={notesInfo}
           onChanged={loadTicket}
         />
-      {:else if railTab === "context"}
-        <ContextPanel
+      {:else if railTab === "files"}
+        <FilesPanel
           cwd={cwdVal}
           files={filesVal}
           search={fileSearch}
@@ -2630,8 +2760,8 @@
               info={notesInfo}
               onChanged={loadTicket}
             />
-          {:else if railTab === "context"}
-            <ContextPanel
+          {:else if railTab === "files"}
+            <FilesPanel
               cwd={cwdVal}
               files={filesVal}
               search={fileSearch}
@@ -2933,7 +3063,9 @@
 <ConfirmDialog
   open={confirmKill !== null}
   title={confirmKill?.queued ? "Cancel queued agent?" : "Stop this agent?"}
-  body={confirmKill?.queued ? "The queued spawn will be dropped." : "The running agent process will be terminated."}
+  body={confirmKill?.queued
+    ? "The queued spawn will be dropped."
+    : (confirmKill?.note ? confirmKill.note + " The running agent process will be terminated." : "The running agent process will be terminated.")}
   confirmLabel={confirmKill?.queued ? "Cancel spawn" : "Stop agent"}
   destructive={true}
   onConfirm={doKill}

@@ -203,6 +203,54 @@ describe("ThreadMessage - interrupted fallback", () => {
     render(ThreadMessage, { props: { turn } });
     expect(screen.getByText(/interrupted/i)).toBeDefined();
   });
+
+  // Who stopped it decides what to do next: a person clicking Stop needs no
+  // action, wick going down means the work can be picked up again.
+  test("names the person when the server recorded one", () => {
+    const turn = makeTurn({
+      role: "assistant",
+      text: "half an answer",
+      interrupted: true,
+      interrupted_by: "user",
+      interrupted_note: "Yoga Setiawan stopped this agent from the conversation view",
+    });
+    render(ThreadMessage, { props: { turn } });
+    expect(screen.getByText(/Yoga Setiawan stopped this agent/)).toBeDefined();
+  });
+
+  test("falls back to the actor class when there is no note", () => {
+    const turn = makeTurn({ role: "assistant", text: "", interrupted: true, interrupted_by: "wick" });
+    render(ThreadMessage, { props: { turn } });
+    expect(screen.getByText(/wick stopped this process mid-turn/)).toBeDefined();
+  });
+
+  // A stop that cut nothing off mid-sentence used to leave NO record at all:
+  // you clicked Stop, the process died, and the transcript carried on as if
+  // nothing had happened. The stop itself is now the record.
+  test("renders a stop with no cut-off text as its own system line", () => {
+    const turn = makeTurn({
+      role: "system",
+      kind: "interrupted",
+      text: "Yoga Setiawan stopped this agent from the conversation view",
+      interrupted: true,
+      interrupted_by: "user",
+      interrupted_note: "Yoga Setiawan stopped this agent from the conversation view",
+    });
+    render(ThreadMessage, { props: { turn } });
+    expect(screen.getByText(/Stopped — Yoga Setiawan stopped this agent/)).toBeDefined();
+  });
+
+  test("an unexplained stop says so and points at the log", () => {
+    const turn = makeTurn({ role: "system", kind: "interrupted", text: "", interrupted: true, interrupted_by: "unknown" });
+    render(ThreadMessage, { props: { turn } });
+    expect(screen.getByText(/nothing claimed it/)).toBeDefined();
+  });
+
+  test("says only that it was interrupted when nothing claimed it", () => {
+    const turn = makeTurn({ role: "assistant", text: "", interrupted: true });
+    render(ThreadMessage, { props: { turn } });
+    expect(screen.getByText(/response was cut off/)).toBeDefined();
+  });
 });
 
 describe("ThreadMessage - null-safe backend arrays (Go nil → JSON null)", () => {
@@ -1025,5 +1073,31 @@ describe("ThreadMessage - large spilled tool_result", () => {
       expect(screen.getByText(/small output/)).toBeDefined();
     });
     expect(screen.queryByText(/running/)).toBeNull();
+  });
+});
+
+describe("ThreadMessage - slash command", () => {
+  test("a bare command is shown as a command, not as a said sentence", () => {
+    const { container } = render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "user", text: "/compact" }) },
+    });
+    expect(screen.getByTestId("command-chip").textContent).toContain("/compact");
+    // the green "you said" bubble must be gone — nothing was said
+    expect(container.innerHTML).not.toContain("bg-green-500 text-white-100");
+  });
+
+  test("a command with words around it is still a message", () => {
+    const { container } = render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "user", text: "/compact please" }) },
+    });
+    expect(screen.queryByTestId("command-chip")).toBeNull();
+    expect(container.innerHTML).toContain("bg-green-500 text-white-100");
+  });
+
+  test("an assistant turn that starts with a slash is untouched", () => {
+    render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "assistant", text: "/compact" }) },
+    });
+    expect(screen.queryByTestId("command-chip")).toBeNull();
   });
 });

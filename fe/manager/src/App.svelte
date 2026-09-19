@@ -38,12 +38,13 @@
   let editParams = $derived(match("/custom/:defID/edit", currentRoute));
   let jobParams = $derived(match("/jobs/:key", currentRoute));
   let toolParams = $derived(match("/tools/:key", currentRoute));
+  let accountParams = $derived(match("/connectors/:key/:id/accounts/:accountID", currentRoute));
   let testParams = $derived(match("/connectors/:key/:id/test", currentRoute));
   let historyParams = $derived(match("/connectors/:key/:id/history", currentRoute));
   let detailParams = $derived(match("/connectors/:key/:id", currentRoute));
   let listParams = $derived(match("/connectors/:key", currentRoute));
 
-  let rowCrumb = $derived(testParams ?? historyParams ?? detailParams);
+  let rowCrumb = $derived(accountParams ?? testParams ?? historyParams ?? detailParams);
   let customCrumb = $derived.by(() => {
     if (pasteRoute) return "From paste";
     if (manualRoute) return "Manual builder";
@@ -129,6 +130,15 @@
       <McpServerForm serverId={mcpEditParams.serverID} />
     {:else if editParams}
       <CustomReview defID={editParams.defID} />
+    {:else if accountParams}
+      <!-- The SAME detail page, narrowed to one account: instance
+           configuration hides, Operations switches to the account's
+           inherit/override view. A separate page drifted from this one. -->
+      <ConnectorDetail
+        connectorKey={accountParams.key}
+        connectorId={accountParams.id}
+        accountId={accountParams.accountID}
+      />
     {:else if testParams}
       <ConnectorTest connectorKey={testParams.key} connectorId={testParams.id} />
     {:else if historyParams}

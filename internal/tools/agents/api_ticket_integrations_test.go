@@ -216,3 +216,32 @@ func TestNormaliseTicketButtons(t *testing.T) {
 		t.Fatalf("nil in should be nil out, got %+v %v", out, err)
 	}
 }
+
+// Placement decides which event a click fires, so a value nobody handles
+// must be refused at save time rather than discovered by a button that
+// draws nowhere.
+func TestNormaliseTicketButtonsPlacement(t *testing.T) {
+	// The default is stored as "", not "ticket": a row saved by the new
+	// editor and one saved before placements existed have to be the same
+	// row on disk.
+	out, err := normaliseTicketButtons([]project.TicketButton{
+		{Label: "A", URL: "https://abc.com/a", Placement: "ticket"},
+		{Label: "B", URL: "https://abc.com/b"},
+		{Label: "C", URL: "https://abc.com/c", Placement: "board"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out[0].Placement != "" || out[1].Placement != "" {
+		t.Fatalf("ticket placement should normalise to empty, got %q and %q", out[0].Placement, out[1].Placement)
+	}
+	if out[2].Placement != project.ButtonOnBoard {
+		t.Fatalf("board placement = %q, want %q", out[2].Placement, project.ButtonOnBoard)
+	}
+
+	if _, err := normaliseTicketButtons([]project.TicketButton{
+		{Label: "D", URL: "https://abc.com/d", Placement: "sidebar"},
+	}); err == nil {
+		t.Error("an unknown placement should be refused")
+	}
+}

@@ -86,17 +86,75 @@
   // the node to change.
   let mobilePane = $state<"input" | "editor" | "output">("editor");
 
-  let projectOptions = $state<{ id: string; name: string; path: string }[]>([]);
+  let projectOptions = $state<{ id: string; name: string; path: string; no_access?: boolean }[]>([]);
   let projectOptionsLoaded = $state(false);
   $effect(() => {
     if (node?.type !== "session_init" || projectOptionsLoaded) return;
     projectOptionsLoaded = true;
+    // Ask for the saved workspace by id as well. Without it a project the
+    // editor cannot reach is simply absent from the list, and the select
+    // falls back to showing "(use run workspace)" — telling this person the
+    // workflow is unpinned when it is pinned to somebody else's project.
+    const pinnedWorkspace = node?.workspace ? [node.workspace] : [];
     void workflowAPI
-      .projectOptions()
+      .projectOptions(pinnedWorkspace)
       .then((r) => {
         projectOptions = r ?? [];
       })
       .catch((e) => console.warn("project options fetch failed:", e));
+  });
+
+  // Whose identity the runs borrow, and whether that identity can reach the
+  // chosen workspace. Only meaningful for session_init, and only worth a
+  // request once a workspace is actually pinned.
+  type RunIdentity = Awaited<ReturnType<typeof workflowAPI.runIdentity>>;
+  let runIdentity = $state<RunIdentity | null>(null);
+  $effect(() => {
+    const ws = node?.type === "session_init" ? (node.workspace ?? "") : "";
+    if (!ws || !workflowId) {
+      runIdentity = null;
+      return;
+    }
+    void workflowAPI
+      .runIdentity(workflowId, ws)
+      .then((r) => {
+        runIdentity = r;
+      })
+      .catch(() => {
+        // The warning is an extra, not a gate: a failed lookup must not
+        // stop anyone editing the node.
+        runIdentity = null;
+      });
+  });
+
+  // The one line that explains what will actually happen at run time. Null
+  // when there is nothing worth interrupting for.
+  const workspaceWarning = $derived.by<{ tone: "warn" | "info"; text: string } | null>(() => {
+    const r = runIdentity;
+    if (!r || !r.project_id) return null;
+    const project = r.project_name || r.project_id;
+    if (!r.project_exists) {
+      return { tone: "warn", text: `Workspace "${project}" no longer exists — the run will fail to open it.` };
+    }
+    const who = r.owner_label || r.owner_id;
+    if (!r.owner_id) {
+      return {
+        tone: "warn",
+        text:
+          `This workflow has no owner, so its sessions run as wick's internal principal — ` +
+          `which carries no access tags and cannot reach ${project}. Set an owner on /admin/workflows.`,
+      };
+    }
+    if (!r.owner_known) {
+      return { tone: "warn", text: `Runs as ${who}, an account that no longer exists. Set a new owner on /admin/workflows.` };
+    }
+    if (!r.owner_access) {
+      return { tone: "warn", text: `Runs as ${who}, who has no access to ${project} — grant it, or pick another workspace.` };
+    }
+    if (!r.viewer_access) {
+      return { tone: "info", text: `Runs as ${who} in ${project}. You do not have access to that project yourself.` };
+    }
+    return { tone: "info", text: `Runs as ${who} in ${project}.` };
   });
 
   function close() {
@@ -1322,9 +1380,17 @@
                   >
                     <option value="">(use run workspace)</option>
                     {#each projectOptions as p (p.id)}
-                      <option value={p.id}>{p.name || p.id}</option>
+                      <option value={p.id}>{p.name || p.id}{p.no_access ? " — no access" : ""}</option>
                     {/each}
                   </select>
+                  {#if workspaceWarning}
+                    <span
+                      class={"rounded border px-2 py-1 text-xs " +
+                        (workspaceWarning.tone === "warn"
+                          ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
+                          : "border-slate-200 bg-slate-50 text-slate-600 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600")}
+                    >{workspaceWarning.text}</span>
+                  {/if}
                 </label>
               {/if}
 

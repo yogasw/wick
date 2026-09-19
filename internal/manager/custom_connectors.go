@@ -489,8 +489,11 @@ func (h *Handler) customMCPServerSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Level 2 ownership: the auto-created first instance belongs to its
-	// non-admin creator (admins manage everything anyway).
-	if instanceID != "" && user != nil && !user.IsAdmin() {
+	// creator. "Admins manage everything anyway" was the old reason to skip
+	// them, and it is false while admin_see_all_connectors is off — this is
+	// the path that produced a custom connector its own author could see in
+	// the dashboard but not in wick_list.
+	if instanceID != "" && user != nil {
 		h.custom.TagInstanceOwner(r.Context(), instanceID, user.ID)
 	}
 	// The connector exists the moment the server row does; instances are

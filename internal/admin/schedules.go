@@ -230,6 +230,22 @@ func (h *Handler) setScheduleRunAs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cannot run as the internal agent principal", http.StatusBadRequest)
 		return
 	}
+	// The picker only offers approved users, but this endpoint is reachable
+	// without it. Run-as decides whose access every future fire borrows, so an
+	// id that names nobody must not be stored: the schedule would fall back to
+	// the tagless internal principal and quietly see less than its owner —
+	// exactly the failure this page exists to surface.
+	if runAs != "" {
+		u, err := h.repo.GetUser(r.Context(), runAs)
+		if err != nil || u == nil {
+			http.Error(w, "no such user", http.StatusBadRequest)
+			return
+		}
+		if !u.Approved {
+			http.Error(w, "cannot run as an unapproved user", http.StatusBadRequest)
+			return
+		}
+	}
 	if err := h.schedules.Reschedule(r.Context(), id, schedule.SchedulePatch{RunAsUserID: &runAs}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

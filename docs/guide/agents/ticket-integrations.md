@@ -6,8 +6,10 @@ Wire a project's ticket board to another system, in both directions:
   ticket is created, moved, assigned, or deleted.
 - **Inbound — REST API.** Your system creates and updates tickets with a
   Personal Access Token.
-- **Custom buttons.** A button on every ticket's page that POSTs the ticket to
-  your URL on click — see [Custom buttons](#custom-buttons).
+- **Custom buttons.** A button that POSTs to your URL on click — on a ticket's
+  page (it sends that ticket) or in the ticket list's toolbar (it sends the
+  list's filter and the tickets it matches) — see
+  [Custom buttons](#custom-buttons).
 
 All three are configured per project, under **Project settings → Ticket
 system → Integrations**. All are off (empty) until you add one.
@@ -20,8 +22,9 @@ system → Integrations**. All are off (empty) until you add one.
 4. For webhooks: **Add webhook**, fill in the URL, set a signing secret, pick
    the events, then **Send test** to prove the endpoint before a real ticket
    depends on it.
-5. For a custom button: **Add button**, fill in a label and a URL, and save —
-   see [Custom buttons](#custom-buttons).
+5. For a custom button: **Add button**, fill in a label and a URL, choose
+   where it shows (a ticket's page, or the ticket list), and save — see
+   [Custom buttons](#custom-buttons).
 
 You need a Personal Access Token for the REST API. Create one at
 `/profile/tokens` — see [Access Tokens](/guide/access-tokens). A token acts as
@@ -212,14 +215,27 @@ GET /tickets/{ticketID}
 curl -s "$WICK_API/tickets/T-4F2A" -H "Authorization: Bearer $WICK_TOKEN"
 ```
 
+### Board query parameters
+
+`GET /projects/{id}/tickets` sends what the caller says it will draw:
+
+| Parameter | Effect |
+|---|---|
+| `?fields=all` | Every stored field per card, not just the ones marked *show on card*. A machine reading this board needs the keys the board does not draw — an external id, a mirror's page reference — and without them a sync cannot recognise the tickets it created and re-creates them on every run |
+| `?rows=N` | Session rows per card (`0` = counts only) |
+| `?statuses=a,b` | Only these columns |
+| `?assignee=ID` or `me` | Only this person's tickets |
+| `?untracked=1` | Include the untracked chat list |
+
 ## Update a ticket
 
 ```
 PATCH /tickets/{ticketID}
 ```
 
-Every field is optional — send only what changes. Any edit bumps `updated_at`,
-which is what the follow-up and auto-resolve timers read.
+Every field is optional — send only what changes. An edit bumps `updated_at`
+(what the follow-up and auto-resolve timers read) unless the request says
+otherwise — see [`updated_at`](#updated-at-for-a-mirror-not-for-an-editor).
 
 Move it to another column:
 
@@ -257,6 +273,46 @@ curl -s -X PATCH "$WICK_API/tickets/T-4F2A" \
 fields are left alone. To unassign, send `"assignee": ""`. To clear the
 description, send `"body": ""` explicitly — omitting `body` leaves it
 unchanged.
+:::
+
+### `updated_at` — for a mirror, not for an editor
+
+A sync writing tickets on somebody else's behalf can say WHEN the change
+really happened:
+
+| Value | Effect |
+|---|---|
+| absent | `updated_at` becomes now. This is every edit made by a person |
+| RFC3339 timestamp | `updated_at` becomes that instant — the source system's own edit time |
+| `"keep"` | `updated_at` is left exactly as it was |
+
+```bash
+# the page changed in the other system at 08:30, and that is what the board
+# should say — not "just now, because my importer happened to run"
+curl -s -X PATCH "$WICK_API/tickets/T-4F2A" \
+  -H "Authorization: Bearer $WICK_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Renamed upstream", "updated_at": "2026-09-12T08:30:00Z"}'
+
+# pure bookkeeping — record that the mirror checked this ticket, without
+# claiming the work moved
+curl -s -X PATCH "$WICK_API/tickets/T-4F2A" \
+  -H "Authorization: Bearer $WICK_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"fields": {"synced_at": "2026-09-15T11:00:00Z"}, "updated_at": "keep"}'
+```
+
+Why it matters: the board sorts on `updated_at` and every card prints it. A
+sync that stamps `now` on a hundred tickets makes the whole board read "just
+now" and orders it by when the importer ran rather than by when the work
+moved. A value that is neither RFC3339 nor `"keep"` is refused (`400`) rather
+than quietly treated as now.
+
+::: tip The idle timers do not read it
+`updated_at` is a display value, so a mirror can set it to a date months
+old. The follow-up and auto-resolve timers run from `touched_at` — when wick
+last wrote the ticket — which is stamped on every write regardless. Without
+that split, importing a ticket last edited in June closes it on arrival.
 :::
 
 Close it — use the key your board marks as finished:
@@ -467,10 +523,11 @@ to `ticket.updated` to mirror every edit without enumerating each event as new
 ones are added. Subscribing to both means two deliveries for one change.
 :::
 
-::: info `ticket.action` is not in this list
-Clicking a [custom button](#custom-buttons) fires a `ticket.action` event, but
-it is delivered **only** to that button's own URL — it is not part of the
-catalogue above and cannot be subscribed to from a regular webhook row. See
+::: info `ticket.action` and `ticket.board_action` are not in this list
+Clicking a [custom button](#custom-buttons) fires `ticket.action` (a ticket's
+page) or `ticket.board_action` (the ticket list), but either one is delivered
+**only** to that button's own URL — neither is part of the catalogue above and
+neither can be subscribed to from a regular webhook row. See
 [Custom buttons](#custom-buttons).
 :::
 
@@ -567,14 +624,28 @@ catalogue above and cannot be subscribed to from a regular webhook row. See
 
 ## Custom buttons
 
-A custom button is a single label + URL pair that appears on **every ticket's
-page**. Clicking it POSTs the ticket to that URL and shows the delivery
-outcome to whoever clicked — use it for things a human decides to trigger,
-like "Sync to abc.com" or "Deploy", rather than something that should fire on
-every change (that is what webhooks are for).
+A custom button is a label + URL pair that POSTs to that URL on click and
+shows the outcome to whoever clicked — use it for things a human decides to
+trigger, like "Sync to abc.com" or "Deploy", rather than something that
+should fire on every change (that is what webhooks are for).
 
 Add one under **Project settings → Ticket system → Integrations → Custom
-buttons**: fill in a label and a full `http(s)://` URL, then save.
+buttons**: fill in a label, a full `http(s)://` URL, and where it shows.
+
+| Placement | Where it draws | What it sends | Event |
+|---|---|---|---|
+| **On a ticket's page** (default) | Every ticket's own page | That one ticket | `ticket.action` |
+| **In the ticket list** | The board toolbar, beside the Assignee filter | The list's filter + the tickets it matches | `ticket.board_action` |
+
+Pick by what the click is ABOUT. "Sync this ticket to Notion" belongs on the
+ticket; "pull everything assigned to me" belongs in the list, because the
+answer depends on who the toolbar is filtered to and no single ticket can
+carry that.
+
+A button saved before placements existed is a ticket-page button — the field
+is absent and absent means the ticket page.
+
+### On a ticket's page
 
 Clicking the button calls:
 
@@ -618,6 +689,143 @@ The click response mirrors the delivery outcome, not a generic "queued":
 `ticket.action` is **not** subscribable from a regular webhook row — it only
 ever reaches the button's own URL, because the button already names its
 receiver.
+
+### In the ticket list
+
+A button placed in the list sits in the board's toolbar. Clicking it calls:
+
+```
+POST /api/projects/{projectID}/board-actions/{buttonID}
+```
+
+with the toolbar's current filter as the body — the same vocabulary the board
+itself uses:
+
+```json
+{ "assignee": "me", "statuses": ["open", "in_progress"] }
+```
+
+and delivers a `ticket.board_action` event to the button's URL. The envelope
+carries no ticket; it carries the list:
+
+```json
+{
+  "id": "evt_7XB2QK9L",
+  "event": "ticket.board_action",
+  "action": "btn_9f3a1c2d4e5b6a7f",
+  "delivered_at": "2026-09-15T04:11:09.412Z",
+  "project_id": "proj_7f21c9",
+  "actor": { "type": "user", "id": "usr_a91f", "name": "Dana Reyes", "email": "dana@abc.com" },
+  "board": {
+    "assignee": "me",
+    "assignee_id": "usr_a91f",
+    "assignee_name": "Dana Reyes",
+    "assignee_email": "dana@abc.com",
+    "statuses": ["open", "in_progress"],
+    "match_count": 2,
+    "tickets": [
+      {
+        "id": "T-4F2A",
+        "title": "Checkout returns 502 on retry",
+        "status": "in_progress",
+        "assignee": "usr_a91f",
+        "fields": { "type": "bug", "notion_page_id": "a1b2…" },
+        "updated_at": "2026-09-15T03:58:02Z"
+      },
+      { "id": "T-51C7", "title": "…", "status": "open", "assignee": "usr_a91f", "updated_at": "2026-09-14T11:20:41Z" }
+    ],
+    "truncated": false
+  }
+}
+```
+
+Three things about `board` are worth reading closely:
+
+- **`assignee` is what was picked; `assignee_id` is who that is.** `"me"` is
+  resolved against the clicker before the event leaves wick, so a receiver
+  never has to guess. An empty `assignee_id` means *every* assignee.
+- **`assignee_email` (and `actor.email`) is how you find that person in YOUR
+  system.** A wick user id means nothing outside wick and a name is
+  ambiguous; an email is the identifier both systems usually already have,
+  so matching on it beats a hand-maintained id table. Absent when the user
+  record has no email, and on every `ticket.action` where the actor is an
+  API token.
+- **`match_count` is the honest total.** `tickets` is capped at 500 rows
+  (newest first), and `truncated` says when the cap bit.
+- **`fields` is the ticket's full field map**, not the card's subset — a
+  receiver's join key (a Notion page id, an external ticket number) is exactly
+  the kind of field nobody marks *show on card*.
+
+`statuses` is worth acting on rather than logging: it is the board as the
+clicker has it set up, and "every column except Done" is how most boards are
+read. A receiver that imports everything regardless will pull back the exact
+column the person switched off.
+
+The click response reports the delivery, the number of tickets that matched,
+and the receiver's own reply:
+
+```json
+{ "ok": true, "status": 200, "error": "", "attempts": 1,
+  "message": "syncing Dana Reyes from Notion (2 in view)", "tickets": 2,
+  "result": { "…": "the receiver's JSON body, verbatim" } }
+```
+
+A delivery gets **10 seconds per attempt**, so a job that takes longer must
+answer immediately and keep working — otherwise wick times out and retries,
+which starts the job three times. What makes that bearable for the person who
+clicked is `result`: the board draws a panel from it instead of a toast.
+
+### The result panel
+
+Everything below is optional. A receiver that answers `{}` still works; each
+key it does send lights up one more part of the panel.
+
+| Key | Type | What the panel does with it |
+|---|---|---|
+| `status` | string | `running`/`queued`/`busy`/`started` → amber "Running" + follows it; `error`/`failed`/`refused` → red; `ignored`/`skipped` → "Nothing to do"; anything else → green "Done" |
+| `message` | string | The sentence under the label |
+| `progress` | `{done, total}` | Progress bar + `done/total` |
+| `counts` | object of number/string | One chip per entry, in the order given |
+| `poll_url` | string | Where to watch the run — see below |
+| `html` | string | Folded away behind a **Details** toggle, then rendered in a bare sandboxed frame (no scripts, no network). Send it only for something the card cannot draw — a table, a diff, a list of what moved. Repeating the status and counters there only makes the card taller |
+
+The panel is a small card in the **bottom-right corner**, not a section of
+the board: it never takes column space, and a run that ends well closes
+itself after an 8-second countdown (paused while the pointer is on it). A
+failure stays until it is dismissed — it is the one outcome somebody has to
+read.
+
+**Following a run.** While `status` says running and a `poll_url` is present,
+the board polls it every 3 seconds through wick (never from the browser) and
+re-draws the panel from each answer:
+
+```
+POST /api/projects/{projectID}/board-actions/{buttonID}/poll
+{ "url": "https://abc.com/hooks/sync/status" }
+```
+
+The URL must be on the **same origin as the button** — same scheme, same host
+and port — or the request is refused. A receiver that could send wick anywhere
+would turn a ticket button into an SSRF primitive with the server's network
+position; the private-address guard applies on top of that.
+
+Polling stops as soon as the status is no longer a running one (or after 200
+checks, ~10 minutes). The board **re-reads its tickets every time the counters
+move**, so cards travel to their new column while the job walks the list
+rather than after somebody presses reload.
+
+::: tip A second click is not a second job
+A receiver that is already working should answer the next click with its
+CURRENT state — `status: "running"` plus the counters — rather than starting a
+rival pass. That is the whole reason `progress` exists: an impatient click
+becomes a progress report.
+:::
+
+::: tip One receiver, both buttons
+The `action` field carries the button id on both events, and `event` says
+which kind it was. A receiver serving a ticket button and a list button on the
+same endpoint should branch on `event` — the board one has no `ticket`.
+:::
 
 ## Verifying the signature
 

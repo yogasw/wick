@@ -175,7 +175,7 @@ func gitConnectorCandidates(c *tool.Ctx, remoteHost string) []gitConnectorVM {
 	if globalAuth != nil {
 		tagIDs = globalAuth.GetUserFilterTagIDs(c.Context(), user.ID)
 	}
-	rows, err := globalConnectors.ListForManager(c.Context(), tagIDs, user.IsAdmin())
+	rows, err := globalConnectors.ListForManager(c.Context(), user.ID, tagIDs, user.IsAdmin())
 	if err != nil {
 		return out
 	}

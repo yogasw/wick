@@ -55,7 +55,7 @@ func (t topLevelConnector) descriptors(ctx context.Context, svc *connectors.Serv
 		return nil
 	}
 	row := rows[0]
-	if ok, verr := svc.IsVisibleTo(ctx, row.ID, tagIDs, isAdmin); verr != nil || !ok {
+	if ok, verr := svc.IsVisibleTo(ctx, row.ID, callerIDFromCtx(ctx), tagIDs, isAdmin); verr != nil || !ok {
 		return nil
 	}
 	mod, ok := svc.Module(row.Key)

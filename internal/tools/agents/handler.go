@@ -230,6 +230,7 @@ func Register(r tool.Router) {
 	registerSPAWorkflows(r)
 	registerSPAWorkflowHistory(r)
 	registerSPAPanels(r)
+	registerSPAWorkflowRunIdentity(r)
 	registerSPAPalette(r)
 
 	// Access gates for every per-resource subtree. Registered once here so
@@ -293,6 +294,8 @@ func Register(r tool.Router) {
 	// The session's checklists — the live one and the ones before it. The
 	// trace carries the same calls, but not which list is current.
 	r.GET("/api/sessions/{id}/todos", apiSessionTodos)
+	// Context meter for the composer ring + its panel.
+	r.GET("/api/sessions/{id}/context", apiSessionContext)
 	r.POST("/api/sessions/{id}/hops/reset", resetSessionHops)
 	r.POST("/api/delegations/{delegationID}/interrupt", interruptSubAgent)
 	r.POST("/api/delegations/{delegationID}/continue", continueSubAgent)
@@ -360,6 +363,20 @@ func Register(r tool.Router) {
 	// A custom ticket button was clicked — POST the ticket to that button's
 	// URL and report the outcome to the clicker.
 	r.POST("/api/tickets/{ticketID}/actions/{buttonID}", apiTicketAction)
+	// The same, one level up: a custom button in the ticket LIST's toolbar.
+	// It POSTs the list's filter (and the tickets it selects) rather than a
+	// single ticket, so it hangs off the project, not a ticket id.
+	r.POST("/api/projects/{id}/board-actions/{buttonID}", apiBoardAction)
+	// …and a way to follow the run it started, for a receiver that answered
+	// immediately and kept working. Only its OWN origin may be polled.
+	r.POST("/api/projects/{id}/board-actions/{buttonID}/poll", apiBoardActionPoll)
+
+	// The CLI channel: a shell speaking into the session that minted its
+	// token. No session id in any of these paths — the token IS the
+	// session, so there is nothing to substitute. See api_cli.go.
+	r.POST("/api/cli/send", apiCLISend)
+	r.POST("/api/cli/todo", apiCLITodo)
+	r.GET("/api/cli/whoami", apiCLIWhoami)
 
 	// JSON API — ticket integrations. The event catalogue is served from the
 	// code so the settings UI and the docs cannot drift from what actually
@@ -390,6 +407,8 @@ func Register(r tool.Router) {
 	// JSON API — providers SPA endpoints (mirrors templ providers handlers).
 	r.GET("/api/providers", apiProvidersList)
 	r.GET("/api/providers/storage", apiProvidersStorage)
+	// Token ledger: fleet-wide report, and one provider's slice of it.
+	r.GET("/api/providers/usage", apiUsageReport)
 	// Account + usage for every instance in one request, so the list can
 	// badge each card. Registered before the {type} pattern so the
 	// literal path wins.
@@ -398,6 +417,7 @@ func Register(r tool.Router) {
 
 	// Reconnect (login TTY): run the CLI's interactive login inside a
 	// wick PTY, streamed to the browser terminal over ws. TTL-bound.
+	r.GET("/api/providers/{type}/{name}/usage", apiProviderUsage)
 	r.GET("/api/providers/{type}/{name}/logintty", apiProviderLoginTTYStatus)
 	r.GET("/api/providers/{type}/{name}/logintty/usage", apiProviderLoginTTYUsage)
 	r.POST("/api/providers/{type}/{name}/logintty/usage/refresh", apiProviderLoginTTYUsageRefresh)
@@ -519,6 +539,7 @@ func Register(r tool.Router) {
 	r.GET("/providers/spawns/{file}/reveal", providerSpawnReveal)
 	r.GET("/api/providers/spawns", apiSpawnsList)
 	r.GET("/api/providers/spawns/{file}", apiSpawnDetail)
+	r.POST("/api/providers/spawns/{file}/repro", apiSpawnRepro)
 	r.GET("/api/providers/sessions", apiSessionsList)
 	r.GET("/api/providers/sessions/{id}", apiSessionSpawns)
 	// Session detail + log viewer are sub-views of the providers SPA; the
@@ -855,6 +876,20 @@ func callerProjectAccess(c *tool.Ctx) projectAccess {
 	// No user in context = internal / MCP caller: unrestricted.
 	if u == nil {
 		return projectAccess{seeAll: true}
+	}
+	return projectAccessForUser(c, u)
+}
+
+// projectAccessForUser resolves which projects a SPECIFIC user reaches.
+//
+// Split out of callerProjectAccess because the workflow editor asks it about
+// somebody else: a workflow's runs borrow its owner's identity, so "will this
+// actually work?" is a question about the OWNER's access, not the viewer's.
+// A nil user reaches nothing — unlike the caller path, where nil means an
+// internal call with no human to scope to.
+func projectAccessForUser(c *tool.Ctx, u *entity.User) projectAccess {
+	if u == nil {
+		return projectAccess{}
 	}
 	// Admins see everything only when AdminSeeAll is on (legacy behaviour).
 	// With it off (default) an admin is scoped like a regular user, falling
@@ -1328,7 +1363,7 @@ func startNewSession(c *tool.Ctx) {
 			return
 		}
 	}
-	text := strings.TrimSpace(c.Form("message"))
+	text := trimFormText(c.Form("message"))
 	hasFiles := c.R.MultipartForm != nil && len(c.R.MultipartForm.File["files"]) > 0
 	if text == "" && !hasFiles {
 		renderCompose(c, "", "Type a message or attach a file to start the session.")
@@ -1683,7 +1718,8 @@ func moveSessionToProject(c *tool.Ctx) {
 		agentName = sess.Agents[0].Name
 	}
 	if agentName != "" {
-		_ = globalPool.Kill(id, agentName)
+		_ = globalPool.KillBy(id, agentName, "wick",
+			"the session was moved to another project, so its process was restarted in the new folder")
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "moved", "project_id": req.ProjectID})
 }
@@ -1763,7 +1799,7 @@ func sendMessage(c *tool.Ctx) {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": "parse form: " + err.Error()})
 			return
 		}
-		req.Text = strings.TrimSpace(c.Form("text"))
+		req.Text = trimFormText(c.Form("text"))
 		saved, err := saveUploadsFromMultipart(c, id, c.Base())
 		if err != nil {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -1866,6 +1902,19 @@ func sendMessage(c *tool.Ctx) {
 	// straight to someone else.
 	routeHumanMentions(bgCtx, sess, id, req.Text)
 	c.JSON(http.StatusOK, map[string]string{"status": "queued"})
+}
+
+// trimFormText reads a multipart text field the way the person typed it.
+//
+// HTML form encoding normalises every newline in a textarea to CRLF, so a
+// message sent WITH an attachment (multipart) arrives with "\r\n" while the
+// same message sent without one (JSON) arrives with "\n". That difference is
+// invisible in the bubble and breaks anything that compares the two: the web
+// composer renders its own message optimistically and reconciles it with the
+// persisted copy by text, so a multi-line message with a file attached was
+// drawn twice until the page was reloaded.
+func trimFormText(v string) string {
+	return strings.TrimSpace(strings.ReplaceAll(v, "\r\n", "\n"))
 }
 
 func dequeueAgent(c *tool.Ctx) {
@@ -2105,6 +2154,17 @@ func sessionProcesses(c *tool.Ctx) {
 	c.JSON(http.StatusOK, out)
 }
 
+// stoppedByNote names the person behind a Stop, for the interrupted turn to
+// carry. A session can be open to several people (a Slack thread is shared
+// work), so "someone stopped it" is not enough — the next reader wants to
+// know whether it was them, a colleague, or nobody at all.
+func stoppedByNote(c *tool.Ctx) string {
+	if u := login.GetUser(c.Context()); u != nil && strings.TrimSpace(u.Name) != "" {
+		return strings.TrimSpace(u.Name) + " stopped this agent from the conversation view"
+	}
+	return "someone stopped this agent from the conversation view"
+}
+
 func killAgent(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -2124,7 +2184,7 @@ func killAgent(c *tool.Ctx) {
 	// every sub-agent it spawned: nothing is waiting on their results
 	// any more, but the processes keep running and spending tokens.
 	cascadeInterruptChildren(c, id)
-	if err := globalPool.Kill(id, agentName); err != nil {
+	if err := globalPool.KillBy(id, agentName, "user", stoppedByNote(c)); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("kill agent %s/%s: %s", id, agentName, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -2346,13 +2406,32 @@ func projectOptionsJSON(c *tool.Ctx) {
 		// in a chat's menu) only where a board exists. Without it the client
 		// would have to fetch each project's ticket config to find out.
 		TicketEnabled bool `json:"ticket_enabled"`
+		// NoAccess marks a project returned only because the caller asked
+		// for it by id (see `include`). It is visible so a saved selection
+		// can still be shown; it is flagged so the UI never presents it as
+		// something this person may pick.
+		NoAccess bool `json:"no_access,omitempty"`
 	}
 	access := callerProjectAccess(c)
+	// include=<id,...> names projects that must come back even when the
+	// caller cannot reach them. A workflow's saved workspace is the case:
+	// dropping it from the options left the picker showing "(use run
+	// workspace)" for a workflow that is in fact pinned to a project — one
+	// person's saved choice silently misread by the next.
+	forced := map[string]struct{}{}
+	if v := strings.TrimSpace(c.Query("include")); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				forced[part] = struct{}{}
+			}
+		}
+	}
 	pinned := pinnedProjectID(c)
 	projects := globalMgr.Registry().Projects()
 	opts := make([]option, 0, len(projects))
 	for id, p := range projects {
-		if !access.allowProject(id) {
+		_, wanted := forced[id]
+		if !access.allowProject(id) && !wanted {
 			continue
 		}
 		managed := p.Meta.CustomPath == ""
@@ -2364,6 +2443,7 @@ func projectOptionsJSON(c *tool.Ctx) {
 			ID:              id,
 			Name:            p.Meta.Name,
 			Path:            path,
+			NoAccess:        !access.allowProject(id),
 			Managed:         managed,
 			Pinned:          id == pinned,
 			DefaultProvider: p.Meta.Defaults.Provider,

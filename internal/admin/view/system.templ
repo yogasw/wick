@@ -137,7 +137,11 @@ templ SystemPage(d SystemPageData, user *entity.User) {
 				<span class="text-black-900 dark:text-white-100">Software Update</span>
 			</div>
 			<h1 class="mt-2 text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Software Update</h1>
-			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Check for a new release, download it, and restart the service to apply. The service re-execs in place — running sessions reconnect once it's back.</p>
+			if d.Graceful {
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">Check for a new release, download it, and hand over to it — no downtime. The new process takes the listening socket before this one exits, so no request is refused and running work finishes where it started.</p>
+			} else {
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">Check for a new release, download it, and restart the service to apply. Graceful handover is off in this process, so the service re-execs in place — the port closes and running sessions reconnect once it's back.</p>
+			}
 			<div class="mt-6 flex flex-col gap-4">
 				// First card on the page, above everything else: when a build
 				// is waiting, that is the only thing on this screen anybody
@@ -560,7 +564,13 @@ templ actionSlot(d SystemPageData) {
 					type="button"
 					data-staged={ d.StagedVersion }
 					class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600"
-				>Apply &amp; restart</button>
+				>
+					if d.Graceful {
+						Apply now
+					} else {
+						Apply &amp; restart
+					}
+				</button>
 				if d.Graceful {
 					// Escape hatch for an operator who has seen the list above
 					// and decided not to wait. Deliberately a separate,
@@ -577,7 +587,11 @@ templ actionSlot(d SystemPageData) {
 		case "applying":
 			<span class="inline-flex items-center gap-2 text-sm text-black-800 dark:text-black-600">
 				<span class="h-4 w-4 animate-spin rounded-full border-2 border-white-400 border-t-green-500"></span>
-				Restarting…
+				if d.Graceful {
+					Handing over…
+				} else {
+					Restarting…
+				}
 			</span>
 		case "checking":
 			<button type="button" disabled class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-700 dark:text-black-600 opacity-60">Checking…</button>
@@ -716,7 +730,7 @@ templ systemUpdateScript() {
 				case 'downloading': return 'Downloading ' + (st.latest_version || '') + '…';
 				case 'up-to-date':  return 'You are on the latest version.';
 				case 'staged':      return (st.staged_version || 'A new version') + ' is ready to apply.';
-				case 'applying':    return 'Applying update…';
+				case 'applying':    return graceful ? 'Handing over — the new process is booting…' : 'Applying update…';
 				case 'no-asset':    return (st.latest_version || 'A new version') + ' is available, but there\'s no build for this platform' + (st.wanted_asset ? ' (expected ' + st.wanted_asset + ')' : '') + '.';
 				case 'error':       return 'Update failed: ' + (st.error || 'unknown error');
 			}
@@ -744,11 +758,11 @@ templ systemUpdateScript() {
 					'<p class="mt-1.5 text-right text-xs font-mono text-black-700 dark:text-black-600">' + p + '%</p></div>';
 			} else if (s === 'staged') {
 				actionEl.innerHTML = '<div class="flex items-center gap-2">' +
-					'<button id="sys-apply" type="button" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">Apply &amp; restart</button>' +
+					'<button id="sys-apply" type="button" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">' + (graceful ? 'Apply now' : 'Apply &amp; restart') + '</button>' +
 					(graceful ? '<button id="sys-force" type="button" title="Swap immediately and interrupt whatever is still running" class="rounded-lg border border-neg-300 px-3 py-2 text-sm font-medium text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-800">Force swap</button>' : '') +
 					'</div>';
 			} else if (s === 'applying') {
-				actionEl.innerHTML = '<span class="inline-flex items-center gap-2 text-sm text-black-800 dark:text-black-600"><span class="h-4 w-4 animate-spin rounded-full border-2 border-white-400 border-t-green-500"></span>Restarting…</span>';
+				actionEl.innerHTML = '<span class="inline-flex items-center gap-2 text-sm text-black-800 dark:text-black-600"><span class="h-4 w-4 animate-spin rounded-full border-2 border-white-400 border-t-green-500"></span>' + (graceful ? 'Handing over…' : 'Restarting…') + '</span>';
 			} else if (s === 'checking') {
 				actionEl.innerHTML = '<button type="button" disabled class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-700 dark:text-black-600 opacity-60">Checking…</button>';
 			} else {
@@ -1082,14 +1096,19 @@ templ systemUpdateScript() {
 		function triggerApply(force) {
 			applying = true;
 			renderAction({ phase: 'applying' });
-			if (statusEl) statusEl.textContent = force ? 'Swapping now — interrupting running work…' : 'Applying update…';
+			if (statusEl) statusEl.textContent = force
+				? 'Swapping now — interrupting running work…'
+				: (graceful ? 'Handing over — the new process is booting…' : 'Applying update…');
 			fetch('/admin/advanced/software-update/apply' + (force ? '?force=1' : ''), { method: 'POST' })
 				.then(function (r) { return r.json(); })
 				.then(function (d) {
-					if (d && d.restart) {
+					if (d && (d.restart || d.handover)) {
 						// Nothing else to start: the poll above is already
 						// running and reloads as soon as a different pid
-						// answers.
+						// answers. handover=1 means the socket is being
+						// passed on instead of the port closing — same
+						// signal to wait for, no outage in between.
+						if (d.handover) graceful = true;
 					} else {
 						applying = false;
 						if (statusEl) statusEl.textContent = (d && (d.error || d.message)) || 'Could not apply the update.';

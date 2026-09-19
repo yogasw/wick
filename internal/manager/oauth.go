@@ -32,6 +32,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io"
 	"net/http"
 	"net/url"
@@ -137,12 +138,14 @@ func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
 
 	redirectURI := h.oauthRedirectURI(r, key)
 
+	scopes := h.resolveOAuthScopes(r.Context(), key, connectorRowID, mod.OAuth, cfgs)
+
 	params := url.Values{}
 	params.Set("client_id", clientID)
 	if mod.OAuth.TokenURL == "" {
-		params.Set("user_scope", mod.OAuth.Scopes)
+		params.Set("user_scope", scopes)
 	} else {
-		params.Set("scope", mod.OAuth.Scopes)
+		params.Set("scope", scopes)
 	}
 	params.Set("redirect_uri", redirectURI)
 	params.Set("state", state)
@@ -151,6 +154,47 @@ func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, mod.OAuth.AuthorizeURL+"?"+params.Encode(), http.StatusTemporaryRedirect)
+}
+
+// resolveOAuthScopes decides what the consent URL asks for, most specific
+// source first:
+//
+//  1. the instance's own oauth_user_scopes config — the operator's manual
+//     override, the escape hatch when a provider rejects the full list;
+//  2. the connector's ResolveScopes lookup, which asks the provider what
+//     the app is allowed to request;
+//  3. the module's static Scopes.
+//
+// A failing lookup falls through to 3 rather than aborting: a provider
+// that is momentarily unreachable should not stop an operator from
+// connecting an account with the scopes wick already knows about.
+func (h *Handler) resolveOAuthScopes(ctx context.Context, key, connectorRowID string, meta *connector.OAuthMeta, cfgs map[string]string) string {
+	if override := strings.TrimSpace(cfgs["oauth_user_scopes"]); override != "" {
+		log.Debug().Str("connector", key).Msg("manager oauth: using instance oauth_user_scopes override")
+		return override
+	}
+	if meta.ResolveScopes == nil {
+		return meta.Scopes
+	}
+	save := func(updates map[string]string) error {
+		row, err := h.connectors.Get(ctx, connectorRowID)
+		if err != nil {
+			return err
+		}
+		return h.connectors.Update(ctx, row.ID, row.Label, updates, row.Disabled)
+	}
+	resolved, err := meta.ResolveScopes(ctx, cfgs, save)
+	if err != nil {
+		log.Warn().Err(err).Str("connector", key).
+			Msg("manager oauth: scope lookup failed; falling back to the connector's own list")
+		return meta.Scopes
+	}
+	if resolved = strings.TrimSpace(resolved); resolved == "" {
+		return meta.Scopes
+	}
+	log.Info().Str("connector", key).Str("scopes", resolved).
+		Msg("manager oauth: scopes resolved from the provider")
+	return resolved
 }
 
 // oauthCallback handles the redirect from the provider after the user approves
@@ -169,7 +213,7 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	// User denied the grant.
 	if errParam := q.Get("error"); errParam != "" {
 		log.Warn().Str("connector", key).Str("oauth_error", errParam).Msg("manager oauth: user denied grant")
-		http.Error(w, "OAuth denied: "+errParam, http.StatusBadRequest)
+		oauthPopupDone(w, key, "", "OAuth denied: "+errParam)
 		return
 	}
 
@@ -230,7 +274,7 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		log.Error().Err(err).Str("connector", key).Msg("manager oauth: token exchange failed")
-		http.Error(w, "token exchange failed: "+err.Error(), http.StatusBadGateway)
+		oauthPopupDone(w, key, "", "token exchange failed: "+err.Error())
 		return
 	}
 
@@ -277,16 +321,60 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Assign owner tag when a new row was created (MultiAccount flow).
-	if h.tags != nil && row.MultiAccount && entry.wickUserID != "" {
-		if err := h.tags.CreateOwnerTag(r.Context(), savedRowID, entry.wickUserID); err != nil {
-			log.Warn().Err(err).Str("row_id", savedRowID).Msg("manager oauth: create owner tag failed")
-		}
+	// NO owner tag here. Connecting an account is not creating the row:
+	// oauthStart requires an existing connector_id and oauthSaveToken refuses
+	// to run without one, so this callback never creates a row to own. Handing
+	// "owner:{rowID}" to whoever completes the flow made every person who
+	// connected their Slack account an owner of somebody else's instance —
+	// which reads as "administers this instance", i.e. sees (and manages)
+	// every OTHER account connected to that row, and may rewrite its access
+	// policy. The row is created — and its owner tag assigned — in
+	// createConnectorRow / duplicate / the custom-connector path.
+
+	oauthPopupDone(w, key, displayName, "")
+}
+
+// oauthPopupDone ends the callback leg. The consent runs in a popup that
+// the SPA watches (see connectorOAuth.ts), so the callback has to signal
+// the opener and close itself — redirecting instead loaded the whole SPA
+// inside the popup, which then sat there until the operator closed it by
+// hand and the detail page never refreshed.
+//
+// BroadcastChannel goes first: the provider's COOP headers can sever
+// window.opener across the cross-origin hop, and the channel is
+// same-origin so it survives that. When there is no opener at all the
+// page was opened as a normal navigation, so it falls back to the
+// redirect the flow used to do.
+func oauthPopupDone(w http.ResponseWriter, key, displayName, errMsg string) {
+	payload, _ := json.Marshal(map[string]string{
+		"type": "wick-connector-oauth", "connector": key, "user": displayName, "error": errMsg,
+	})
+	target, _ := json.Marshal("/manager/connectors/" + key + "?oauth=" +
+		map[bool]string{true: "error", false: "success"}[errMsg != ""] +
+		"&user=" + url.QueryEscape(displayName))
+
+	message := "Account connected — you can close this window."
+	if errMsg != "" {
+		message = "Connect failed: " + errMsg
 	}
 
-	http.Redirect(w, r,
-		"/manager/connectors/"+key+"?oauth=success&user="+url.QueryEscape(displayName),
-		http.StatusSeeOther)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	status := http.StatusOK
+	if errMsg != "" {
+		status = http.StatusBadRequest
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(`<!doctype html><html><body style="font-family:sans-serif;padding:2rem">
+<p>` + template.HTMLEscapeString(message) + `</p>
+<script>
+try { new BroadcastChannel("wick-connector-oauth").postMessage(` + string(payload) + `); } catch (e) {}
+if (window.opener) {
+  try { window.opener.postMessage(` + string(payload) + `, window.location.origin); } catch (e) {}
+  setTimeout(function(){ window.close(); }, 300);
+} else {
+  window.location.replace(` + string(target) + `);
+}
+</script></body></html>`))
 }
 
 // exchangeSlackCode exchanges a Slack authorization code for an xoxp user token

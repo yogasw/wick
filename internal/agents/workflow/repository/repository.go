@@ -229,9 +229,13 @@ func (r *Repo) Publish(id, createdBy, message string) (uint, error) {
 		row.BodyDraft = ""
 		row.HasDraft = false
 		row.Version = newVersion
-		if createdBy != "" {
-			row.CreatedBy = createdBy
-		}
+		// CreatedBy is deliberately NOT touched: it names who the workflow
+		// belongs to, stamped once at create. Publishing is an act, not a
+		// change of ownership — restamping it here handed the workflow to
+		// whoever last pressed Publish, which is how a workflow built for
+		// one person ended up owned by the admin who reviewed it. The
+		// publisher is recorded on the version snapshot below, which is
+		// where "who did this" belongs.
 		row.UpdatedAt = now
 		if err := tx.Save(&row).Error; err != nil {
 			return err
@@ -302,6 +306,23 @@ func (r *Repo) SetPublished(id, name string, enabled bool, version int, body []b
 func (r *Repo) SetEnabled(id string, enabled bool, body []byte) error {
 	updates := map[string]any{
 		"enabled":    enabled,
+		"updated_at": time.Now(),
+	}
+	if len(body) > 0 {
+		updates["body_published"] = string(body)
+	}
+	return r.db.Model(&entity.Workflow{}).
+		Where("id = ?", id).
+		Updates(updates).Error
+}
+
+// SetOwner re-stamps who the workflow belongs to. The body is rewritten
+// alongside the column because created_by is serialised into it, and Load
+// reads the body — leaving the two disagreeing would show one owner on the
+// admin page and another everywhere else.
+func (r *Repo) SetOwner(id, createdBy string, body []byte) error {
+	updates := map[string]any{
+		"created_by": createdBy,
 		"updated_at": time.Now(),
 	}
 	if len(body) > 0 {

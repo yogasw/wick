@@ -123,9 +123,26 @@ type SpawnDetailResponse struct {
 	// HasResume is true when the spawn carried a --resume/resume id, so the
 	// Keep/Fresh toggle is meaningful. False on a session's first spawn.
 	HasResume bool `json:"has_resume"`
+	// PromptSupported is true when this provider needs the prompt added to
+	// the reproduce command (claude/gemini take it on stdin). False for
+	// codex, whose logged argv already ends with the message.
+	PromptSupported bool `json:"prompt_supported"`
+	// WickPrompt is the message wick sent on this spawn — the "Wick" option
+	// of the Prompt control. It is the spawn log's first_user_message, i.e.
+	// the 10-word preview; enough to re-run the same kind of turn, and the
+	// Custom option is there when the exact text matters.
+	WickPrompt string `json:"wick_prompt,omitempty"`
 	// Logs points the operator at the on-disk log files relevant to this
 	// spawn so a crash can be copied out for analysis without shelling in.
 	Logs SpawnLogsDTO `json:"logs"`
+}
+
+// SpawnReproRequest is the body of POST /api/providers/spawns/{file}/repro.
+// Env is "masked" (default) or "live"; Prompt is the user message to fold into
+// the rendered command, empty for the bare spawn command.
+type SpawnReproRequest struct {
+	Env    string `json:"env,omitempty"`
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // SpawnLogsDTO carries the on-disk log paths + the spawn's time window for

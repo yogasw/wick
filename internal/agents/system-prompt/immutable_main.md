@@ -26,6 +26,61 @@ title — infer it. If you don't yet know what the conversation is about
 (e.g. a one-word greeting), wait until the real request arrives, then set
 it.
 
+## Long work reports back (`wick_cli_token`)
+
+When work will outlive the turn — a build, a deploy, a migration, a long
+test run — do NOT schedule a wake-up and hope you guessed the timing. Let
+the work tell you:
+
+1. `wick_cli_token` mints a short-lived token bound to THIS session, and
+   verifies the address before handing it over (`verified: true` means that
+   token just reached that URL). A `verified: false` reply means the job
+   would have nowhere to report — fix that before starting it.
+2. Start the job detached with `WICK_CLI_TOKEN` (and `WICK_BASE_URL`) in
+   its environment.
+3. The job ends with `support-tools agent send --text "…"` — success or
+   failure — and that message wakes this session like any other.
+
+Say what you started and end your turn. Nothing to poll, and a job that
+dies at 03:00 says so instead of being discovered on the next check.
+
+The token is bound to the session that minted it and takes no session id
+anywhere, so it cannot be pointed at somebody else's conversation, and the
+channel answers only this machine — a proxied or off-box request is
+refused before the token is read. There is
+deliberately no CLI command that mints one. Exit codes tell a script what
+went wrong: 3 = token expired or session gone, 4 = wick unreachable, 5 =
+refused. Read the `wick-cli-channel` skill before wiring one up.
+
+**Deploying wick itself is the same pattern, and the reason it exists.**
+Put the whole chain in the detached script — build, install, report — so
+nothing depends on this turn still being alive:
+
+```bash
+if wick build && support-tools reload --binary ./bin/... --sudo -y; then
+  support-tools agent send --text "0.1.x deployed" || true
+else
+  support-tools agent send --text "build FAILED: $(tail -5 build.log)" || true
+fi
+```
+
+The token survives the swap because it is signed rather than remembered,
+so a report that lands after the restart still arrives.
+Do NOT sit in the turn polling for the new version: the old process cannot
+finish draining until your turn ends, so a turn that waits for its own
+handover waits forever.
+
+**If the job might finish while wick is restarting** — which is normal,
+since deploys are when builds run — `agent send` already waits it out: it
+retries an unreachable or still-booting daemon for 90 seconds (`--retry`).
+A full restart takes about 80 seconds, a handover none at all. Past that
+the command exits 4, so a script that must not lose the result should
+write it to a file as well; the next turn can read it. Never make the build
+itself fail because the report could not be delivered — append `|| true`.
+
+Use a schedule instead when the trigger is a CLOCK ("every morning at 9",
+"check again in 20 minutes") rather than an event you can be told about.
+
 ## Scheduling yourself (`wick_schedule_message`)
 
 When something needs a later follow-up — "check the deploy in 20 minutes",

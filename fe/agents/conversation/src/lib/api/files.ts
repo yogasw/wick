@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { apiGetE, apiPostE, apiDeleteE } from "@wick-fe/common-api";
-import type { ContextFileEntry, FileContent } from "../types/agents.js";
+import type { SessionFileEntry, FileContent } from "../types/agents.js";
 
 /* One directory's immediate children — the session cwd when path is empty.
    Depth costs a request; it is never preloaded. A session holding 55 clones
@@ -8,7 +8,7 @@ import type { ContextFileEntry, FileContent } from "../types/agents.js";
    fetching the whole tree up front is both slow and, past the server's cap,
    silently incomplete. */
 export const listFiles = (base: string, id: string, path = "") =>
-  apiGetE<{ cwd: string; path: string; files: ContextFileEntry[]; truncated?: boolean }>(
+  apiGetE<{ cwd: string; path: string; files: SessionFileEntry[]; truncated?: boolean }>(
     `${base}/sessions/${id}/files${path ? `?path=${encodeURIComponent(path)}` : ""}`,
   ).pipe(Effect.map((r) => ({ ...r, files: r.files ?? [] })));
 
@@ -16,7 +16,7 @@ export const listFiles = (base: string, id: string, path = "") =>
    searchMentionPaths (the @-mention path) this returns DIRECTORIES too, plus the
    ancestors of every hit so the caller can attach them to its tree. */
 export const searchTree = (base: string, id: string, q: string, limit = 300) =>
-  apiGetE<{ files: ContextFileEntry[]; truncated?: boolean }>(
+  apiGetE<{ files: SessionFileEntry[]; truncated?: boolean }>(
     `${base}/sessions/${id}/files/search?q=${encodeURIComponent(q)}&limit=${limit}`,
   ).pipe(Effect.map((r) => ({ files: r.files ?? [], truncated: r.truncated === true })));
 

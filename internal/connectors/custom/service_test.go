@@ -108,6 +108,106 @@ func TestMapInputSchema(t *testing.T) {
 	}
 }
 
+// A parameter that accepts an object without saying so through a plain
+// "type" string must still land on the raw-JSON textarea widget — the
+// n8n execute_workflow case, whose "inputs" is an anyOf of three object
+// shapes. Before this, such a field fell through to "text", wick
+// advertised it as a string, and the server rejected the relayed value
+// with "expected object, received string".
+func TestMapInputSchemaStructuredWithoutPlainType(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			// n8n: anyOf of object branches, no top-level "type".
+			"inputs": map[string]any{
+				"description": "Inputs to provide to the workflow.",
+				"anyOf": []any{
+					map[string]any{"type": "object", "properties": map[string]any{
+						"chatInput": map[string]any{"type": "string"},
+					}},
+					map[string]any{"type": "object", "properties": map[string]any{
+						"webhookData": map[string]any{"type": "object"},
+					}},
+				},
+			},
+			"one_of_obj": map[string]any{"oneOf": []any{
+				map[string]any{"type": "string"},
+				map[string]any{"type": "array"},
+			}},
+			"nested_combinator": map[string]any{"allOf": []any{
+				map[string]any{"anyOf": []any{map[string]any{"type": "object"}}},
+			}},
+			// A type union rather than a scalar type string.
+			"nullable_obj": map[string]any{"type": []any{"object", "null"}},
+			// Shape declared only by its members.
+			"implicit_obj": map[string]any{"properties": map[string]any{
+				"a": map[string]any{"type": "string"},
+			}},
+			"implicit_arr": map[string]any{"items": map[string]any{"type": "string"}},
+
+			// Negatives: these must keep their old widgets.
+			"scalar_union": map[string]any{"anyOf": []any{
+				map[string]any{"type": "string"},
+				map[string]any{"type": "number"},
+			}},
+			"nullable_str": map[string]any{"type": []any{"string", "null"}},
+			"plain":        map[string]any{"type": "string"},
+			// An enum still wins over the structured check.
+			"enum_obj": map[string]any{
+				"enum":  []any{"a", "b"},
+				"anyOf": []any{map[string]any{"type": "object"}},
+			},
+		},
+	}
+
+	byKey := map[string]DefField{}
+	for _, f := range mapInputSchema(schema) {
+		byKey[f.Key] = f
+	}
+	want := map[string]string{
+		"inputs":            "textarea",
+		"one_of_obj":        "textarea",
+		"nested_combinator": "textarea",
+		"nullable_obj":      "textarea",
+		"implicit_obj":      "textarea",
+		"implicit_arr":      "textarea",
+		"scalar_union":      "text",
+		"nullable_str":      "text",
+		"plain":             "text",
+		"enum_obj":          "dropdown",
+	}
+	for key, w := range want {
+		f, ok := byKey[key]
+		if !ok {
+			t.Errorf("field %q missing", key)
+			continue
+		}
+		if f.Widget != w {
+			t.Errorf("%s widget = %q, want %q", key, f.Widget, w)
+		}
+	}
+	// The textarea path must also flag the value as raw JSON, since that
+	// hint is the only thing telling a caller the field is not a string.
+	if f := byKey["inputs"]; !strings.HasSuffix(f.Desc, "(raw JSON)") {
+		t.Errorf("inputs desc = %q, want (raw JSON) suffix", f.Desc)
+	}
+	// The server's original camelCase name must survive in Label — the
+	// slugged key is wick-side only.
+	if f := byKey["inputs"]; f.Label != "inputs" {
+		t.Errorf("inputs label = %q", f.Label)
+	}
+}
+
+func TestSchemaTakesStructuredDepthGuard(t *testing.T) {
+	// A self-referential combinator must terminate rather than recurse
+	// forever.
+	spec := map[string]any{}
+	spec["anyOf"] = []any{spec}
+	if schemaTakesStructured(spec, 0) {
+		t.Errorf("self-referential scalar schema reported as structured")
+	}
+}
+
 // ── small package funcs ──────────────────────────────────────────────
 
 func TestFilterTagName(t *testing.T) {

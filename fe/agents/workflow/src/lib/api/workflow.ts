@@ -465,8 +465,36 @@ export const workflowAPI = {
     slug: string,
   ): Promise<{ name: string; type: string }[]> =>
     apiGet(`${BASE}/api/data-tables/${encodeURIComponent(slug)}/columns`),
-  projectOptions: (): Promise<{ id: string; name: string; path: string }[]> =>
-    apiGet(`${BASE}/projects/options`),
+  // include names projects that must come back even when the caller cannot
+  // reach them — a workflow's saved workspace, so the picker shows what is
+  // actually configured instead of silently falling back to "(use run
+  // workspace)". Those come flagged no_access.
+  projectOptions: (
+    include: string[] = [],
+  ): Promise<{ id: string; name: string; path: string; no_access?: boolean }[]> =>
+    apiGet(
+      `${BASE}/projects/options` +
+        (include.length ? `?include=${encodeURIComponent(include.join(","))}` : ""),
+    ),
+
+  // Whose access a run borrows, and whether that identity (and you) can
+  // reach the chosen workspace. See spa_workflow_run_identity.go.
+  runIdentity: (
+    id: string,
+    project: string,
+  ): Promise<{
+    owner_id: string;
+    owner_label: string;
+    owner_known: boolean;
+    project_id: string;
+    project_name: string;
+    project_exists: boolean;
+    owner_access: boolean;
+    viewer_access: boolean;
+  }> =>
+    apiGet(
+      `${BASE}/api/workflows/run-identity/${encodeURIComponent(id)}?project=${encodeURIComponent(project)}`,
+    ),
 
   // Workflow env (Settings tab) — schema from draft body, values from
   // env_values column. Secret fields come back as wick_enc_ tokens.

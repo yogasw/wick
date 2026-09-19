@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { TreeNode } from "$lib/tree";
-  import { allFilePaths, allChanges } from "$lib/tree";
+  import { allFilePaths, allChanges, splitPath } from "$lib/tree";
   import { statusBadge } from "$lib/git-actions";
   import Self from "$lib/components/FileTreeNode.svelte";
 
@@ -19,6 +19,12 @@
   let { node, depth, staged, expanded, onToggleDir, onOpen, onAction, onDiscard, onIgnore, actionIcon }: Props = $props();
 
   const isOpen = $derived(expanded[node.path] !== false); // default expanded
+
+  /* A file sitting at the top of the tree has no folder row above it, so its
+     path is nowhere on screen: one changed file deep in the repo rendered as
+     a bare "store.go", which says nothing about WHICH store.go. Deeper rows
+     don't need it — the folders above them already spell it out. */
+  const dirHint = $derived(depth === 1 && !node.children?.length ? splitPath(node.path).dir : "");
   const pad = $derived(`padding-left: ${depth * 12 + 8}px`);
 
   function folderPaths(): { paths: string[]; untracked: string[] } {
@@ -73,7 +79,12 @@
         {/if}
       </button>
     {:else}
-      <button type="button" onclick={() => onOpen(ch.path, staged)} class="min-w-0 flex-1 truncate text-left text-xs text-black-800 dark:text-black-600">{node.name}</button>
+      <button type="button" onclick={() => onOpen(ch.path, staged)} title={ch.path} class="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs text-black-800 dark:text-black-600">
+        <span class="shrink-0 truncate">{node.name}</span>
+        {#if dirHint}
+          <span class="min-w-0 truncate text-[11px] text-black-600 dark:text-black-700">{dirHint}</span>
+        {/if}
+      </button>
     {/if}
     <div class="hidden shrink-0 items-center gap-1 group-hover:flex">
       {#if node.dirEntry}

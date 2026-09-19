@@ -42,6 +42,23 @@
     mentionAgents?: { handle: string; label: string; hint?: string }[];
     /** `/` command menu entries (built-in actions + skills). */
     commands?: ComposerCommand[];
+    /** Context-window meter shown as a ring next to the provider chip.
+        Omit to hide it — a session that has never run a turn has no
+        window to report, and an empty ring reads as "0% used" rather
+        than "not measured yet". */
+    contextMeter?: ContextMeter;
+  };
+
+  /** ContextMeter is the composer's view of the model's context window.
+      `pct` is 0-100; `window` 0 means the provider never said how big
+      the window is, and then the ring is replaced by a plain token count
+      (a fill bar needs a denominator to mean anything). */
+  type ContextMeter = {
+    pct: number;
+    used: number;
+    window: number;
+    title?: string;
+    onClick: () => void;
   };
 
   let {
@@ -58,6 +75,7 @@
     mentionFiles = [],
     onSearchFiles,
     mentionAgents = [],
+    contextMeter,
     commands = [],
   }: Props = $props();
 
@@ -372,10 +390,50 @@
   const minHeightPx = $derived(minRows > 1 ? minRows * 22 + 16 : 43);
   const MAX_HEIGHT = 240;
 
+  /* Grow (and shrink) the box to its content without flashing the page.
+     The obvious two-liner — height:auto, read scrollHeight, set it back —
+     collapses the textarea to one row for the duration of that reflow.
+     Inside a sticky composer at the bottom of a scrolling page that is
+     visible: the page's content height drops, the browser clamps scrollTop
+     to the shorter document, and the height goes straight back. The result
+     is a jump downward on almost every keystroke, which is what "blink
+     waktu ngetik, dipaksa turun" was.
+
+     Two fixes, and both matter:
+       - GROWING (every keystroke that adds a line) needs no collapse at
+         all: if scrollHeight already exceeds the current height, the
+         content is taller than the box and that number IS the answer.
+       - SHRINKING (a deleted line, a cleared draft) does need the collapse,
+         so the scroll positions of every scrollable ancestor are captured
+         first and put back after — the clamp happens during OUR reflow, so
+         restoring afterwards is enough and nothing is ever painted wrong. */
   function autoResize() {
     if (!textareaEl) return;
+    const clamp = (n: number) => Math.max(minHeightPx, Math.min(n, MAX_HEIGHT));
+    const current = textareaEl.clientHeight;
+
+    // Growing: no collapse, no reflow of the page, no jump.
+    if (textareaEl.scrollHeight > current) {
+      textareaEl.style.height = clamp(textareaEl.scrollHeight) + "px";
+      return;
+    }
+    // Already at the cap and still overflowing: nothing to recompute.
+    if (current >= MAX_HEIGHT && textareaEl.scrollHeight > MAX_HEIGHT) return;
+
+    const scrollers: Array<[Element, number]> = [];
+    for (let el: Element | null = textareaEl.parentElement; el; el = el.parentElement) {
+      if (el.scrollHeight > el.clientHeight) scrollers.push([el, el.scrollTop]);
+    }
+    const docTop = window.scrollY;
+
     textareaEl.style.height = "auto";
-    textareaEl.style.height = Math.max(minHeightPx, Math.min(textareaEl.scrollHeight, MAX_HEIGHT)) + "px";
+    const next = clamp(textareaEl.scrollHeight);
+    textareaEl.style.height = next + "px";
+
+    for (const [el, top] of scrollers) {
+      if (el.scrollTop !== top) el.scrollTop = top;
+    }
+    if (window.scrollY !== docTop) window.scrollTo({ top: docTop });
   }
 
   function doSend() {
@@ -436,6 +494,32 @@
   }
 
   // Toolbar chips open the + menu straight at the matching drill-in. The
+  /* ctxTone maps window fill to a colour. Green below 75% is deliberate:
+     most of a session lives there and a permanently amber chip teaches
+     people to ignore it. */
+  function ctxTone(pct: number) {
+    if (pct >= 90)
+      return {
+        btn: "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20",
+      };
+    if (pct >= 75)
+      return {
+        btn: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20",
+      };
+    return {
+      btn: "border-green-500/40 bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-500/20",
+    };
+  }
+
+  /* ctxShort is the fallback label when no window size is known — the
+     raw token count, compacted. */
+  function ctxShort(n: number): string {
+    if (!Number.isFinite(n) || n <= 0) return "0";
+    if (n < 1000) return String(n);
+    if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+    return `${(n / 1_000_000).toFixed(1)}M`;
+  }
+
   // project + provider chips sit on the RIGHT of the toolbar, so their popup
   // right-aligns to them instead of flying out from the far-left + button.
   function openProjectPicker() {
@@ -1395,8 +1479,34 @@
       </button>
     {/if}
 
-    <!-- right: provider chip (Claude-style) + send -->
+    <!-- right: context ring + provider chip (Claude-style) + send -->
     <div class="ml-auto flex items-center gap-2 shrink-0">
+      {#if contextMeter}
+        <!-- The ring is a gauge, not a button-with-a-number: at a glance
+             you want "how full", and only then the exact figure. It turns
+             amber past 75% and red past 90% because those are the points
+             where the next long turn starts risking a compaction, which
+             is the only thing the reader can act on. -->
+        <button
+          type="button"
+          aria-label="Context window"
+          title={contextMeter.title ?? "Context window"}
+          onclick={contextMeter.onClick}
+          class="inline-flex items-center gap-1.5 h-8 shrink-0 rounded-lg border px-2 transition-colors {ctxTone(contextMeter.pct).btn}"
+        >
+          <svg viewBox="0 0 20 20" class="h-4 w-4 -rotate-90" aria-hidden="true">
+            <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" stroke-width="3" class="opacity-25" />
+            <circle
+              cx="10" cy="10" r="8" fill="none" stroke="currentColor" stroke-width="3"
+              stroke-linecap="round"
+              stroke-dasharray="{(Math.max(0, Math.min(100, contextMeter.pct)) / 100) * 50.27} 50.27"
+            />
+          </svg>
+          <span class="text-xs font-medium tabular-nums">
+            {contextMeter.window > 0 ? `${Math.round(contextMeter.pct)}%` : ctxShort(contextMeter.used)}
+          </span>
+        </button>
+      {/if}
       {#if provider}
         <button
           type="button"

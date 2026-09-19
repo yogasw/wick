@@ -5,30 +5,32 @@ import (
 	"strings"
 )
 
-templ ConnectorsAdminPage(rows []ConnectorAdminRow, allTags []*entity.Tag, user *entity.User) {
+templ ConnectorsAdminPage(rows []ConnectorAdminRow, allTags []*entity.Tag, users []UserOption, user *entity.User) {
 	@AdminLayout("Admin · Connectors", "connectors", user) {
 		{{ tagsJSON := tagsToJSON(allTags) }}
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Connector Instances</h1>
-			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Every connector row across all definitions, with the OAuth accounts connected to each one listed underneath. Disabling hides the row from MCP and the Postman-style test panel; access tags gate which non-admin users can see it. A connected account is private to the user who connected it — tag the account to share that one identity with a team, or turn on &#34;Others can see connected accounts&#34; in the instance&#39;s Access policy to share the whole pool. Edit credentials and operations on the per-instance settings page.</p>
+			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Every connector row across all definitions, with the OAuth accounts connected to each one listed underneath. Owner is the person who administers the instance — they configure it and see every account connected to it. Access tags gate which non-admin users can see it. Turning an instance off lives on its settings page, not here. A connected account is private to the user who connected it — tag the account to share that one identity with a team, or turn on &#34;Others can see connected accounts&#34; in the instance&#39;s Access policy to share the whole pool. Edit credentials and operations on the per-instance settings page.</p>
 			if len(rows) == 0 {
 				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
 					No connector instances yet. They are auto-seeded for every code-registered connector on first boot.
 				</div>
 			} else {
+				@AccessSearch("connectors")
 				<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm resp-table-wrap">
 					<table class="w-full text-sm resp-table">
 						<thead>
 							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Instance</th>
-								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Status</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Owner</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Access</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Tags</th>
 								<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600"></th>
 							</tr>
 						</thead>
 						<tbody>
 							for _, row := range rows {
-								@connectorAdminRowFragment(row, tagsJSON)
+								@connectorAdminRowFragment(row, tagsJSON, users)
 								for _, acc := range row.Accounts {
 									@connectorAccountAdminRowFragment(row, acc, tagsJSON)
 								}
@@ -41,11 +43,13 @@ templ ConnectorsAdminPage(rows []ConnectorAdminRow, allTags []*entity.Tag, user 
 	}
 }
 
-templ connectorAdminRowFragment(row ConnectorAdminRow, tagsJSON string) {
+templ connectorAdminRowFragment(row ConnectorAdminRow, tagsJSON string, users []UserOption) {
 	{{ id := row.Connector.ID }}
 	{{ key := row.Connector.Key }}
 	<tr
 		id={ "connector-" + id }
+		data-search={ searchHaystack(row.Connector.Label, id, key, row.ModuleName, strings.Join(row.TagNames, " ")) }
+		data-search-id={ id }
 		class={ "border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors",
 			templ.KV("opacity-60", row.Connector.Disabled) }
 	>
@@ -59,7 +63,16 @@ templ connectorAdminRowFragment(row ConnectorAdminRow, tagsJSON string) {
 					}
 				</div>
 				<div>
-					<p class="font-medium text-black-900 dark:text-white-100">{ row.Connector.Label }</p>
+					<p class="font-medium text-black-900 dark:text-white-100">
+						{ row.Connector.Label }
+						if row.Connector.Disabled {
+							// The toggle moved to the instance settings page, but the
+							// state has to stay readable here: an admin wondering why
+							// a row is missing from MCP must not have to open it to
+							// find out.
+							<span class="ml-2 inline-flex items-center rounded-full bg-neg-100 px-2 py-0.5 text-[10px] font-medium text-neg-400 align-middle">Disabled</span>
+						}
+					</p>
 					<p class="text-xs text-black-700 dark:text-black-600">
 						if row.ModuleMissing {
 							<span class="text-neg-400">Module not registered</span> ·
@@ -72,17 +85,10 @@ templ connectorAdminRowFragment(row ConnectorAdminRow, tagsJSON string) {
 			</div>
 		</td>
 		<td class="px-4 py-3 align-top">
-			<form action={ templ.SafeURL("/admin/connectors/" + id + "/disabled") } method="POST" class="flex items-center gap-2">
-				if row.Connector.Disabled {
-					<span class="inline-flex items-center rounded-full bg-neg-100 px-2.5 py-0.5 text-xs font-medium text-neg-400">Disabled</span>
-					<input type="hidden" name="disabled" value="false"/>
-					<button type="submit" class="text-xs font-medium text-green-600 hover:underline">Enable</button>
-				} else {
-					<span class="inline-flex items-center rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">Enabled</span>
-					<input type="hidden" name="disabled" value="true"/>
-					<button type="submit" class="text-xs font-medium text-neg-400 hover:underline">Disable</button>
-				}
-			</form>
+			@connectorOwnerPicker(row, users)
+		</td>
+		<td class="px-4 py-3 align-top">
+			@AccessBadge(row.Access)
 		</td>
 		<td class="px-4 py-3 align-top">
 			<form action={ templ.SafeURL("/admin/connectors/" + id + "/tags") } method="POST" class="flex items-start gap-2">
@@ -122,6 +128,9 @@ templ connectorAccountAdminRowFragment(row ConnectorAdminRow, acc ConnectorAccou
 	{{ accID := acc.Account.ID }}
 	<tr
 		id={ "connector-account-" + accID }
+		data-search={ searchHaystack(acc.Account.DisplayName, accID, acc.OwnerLabel, row.Connector.Label, strings.Join(acc.TagNames, " ")) }
+		data-search-id={ accID }
+		data-search-parent={ "connector-" + id }
 		class={ "border-b border-white-300 dark:border-navy-600 last:border-0 bg-white-200/50 dark:bg-navy-800/40",
 			templ.KV("opacity-60", row.Connector.Disabled) }
 	>
@@ -133,24 +142,34 @@ templ connectorAccountAdminRowFragment(row ConnectorAdminRow, acc ConnectorAccou
 				</svg>
 				<div>
 					<p class="font-medium text-black-900 dark:text-white-100">{ "@" + acc.Account.DisplayName }</p>
-					<p class="text-xs text-black-700 dark:text-black-600">
-						if acc.OwnerLabel != "" {
-							connected by { acc.OwnerLabel }
+					// Why this account is reachable, next to the account itself.
+					// The Owner column beside it now names the person who
+					// connected it, so the two facts stop sharing one cell.
+					<p class="mt-0.5">
+						if row.Connector.AllowOthersSeeAccounts {
+							<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-800 dark:text-black-600" title="This instance shares every connected account with anyone who can see it.">Pool shared</span>
+						} else if len(acc.TagIDs) > 0 {
+							<span class="inline-flex items-center rounded-full bg-pos-100 px-2 py-0.5 text-[10px] font-medium text-pos-400" title="Users carrying one of the tags on the right can see and run as this account.">Shared by tag</span>
 						} else {
-							no owner recorded
+							<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-800 dark:text-black-600" title="Only the user who connected it, the instance owner and admins can see this account.">Private</span>
 						}
 					</p>
 				</div>
 			</div>
 		</td>
 		<td class="px-4 py-2.5 align-top">
-			if row.Connector.AllowOthersSeeAccounts {
-				<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-800 dark:text-black-600" title="This instance shares every connected account with anyone who can see it.">Pool shared</span>
-			} else if len(acc.TagIDs) > 0 {
-				<span class="inline-flex items-center rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400" title="Users carrying one of the tags on the right can see and run as this account.">Shared by tag</span>
+			// An account has an owner of its own — the person who connected it
+			// — and it is not the instance owner. It is read-only here: it is
+			// recorded by the OAuth flow, and rewriting it would claim someone
+			// authorised a grant they never did.
+			if acc.OwnerLabel != "" {
+				<span class="text-xs text-black-800 dark:text-black-600">connected by { acc.OwnerLabel }</span>
 			} else {
-				<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-800 dark:text-black-600" title="Only the user who connected it, the instance owner and admins can see this account.">Private</span>
+				<span class="text-xs italic text-black-600 dark:text-black-700">no owner recorded</span>
 			}
+		</td>
+		<td class="px-4 py-2.5 align-top">
+			@AccessBadge(acc.Access)
 		</td>
 		<td class="px-4 py-2.5 align-top">
 			<form action={ templ.SafeURL("/admin/connectors/" + id + "/accounts/" + accID + "/tags") } method="POST" class="flex items-start gap-2">
@@ -167,4 +186,34 @@ templ connectorAccountAdminRowFragment(row ConnectorAdminRow, acc ConnectorAccou
 		</td>
 		<td class="px-4 py-2.5 text-right align-top"></td>
 	</tr>
+}
+
+// connectorOwnerPicker is the Owner cell. Ownership is not cosmetic on a
+// connector: the owner is the non-admin who may configure the instance and
+// who sees every account connected to it, so the name shown here answers
+// "who do I ask" and the select answers "the person who used to own this has
+// left". Save appears only once the selection changes.
+templ connectorOwnerPicker(row ConnectorAdminRow, users []UserOption) {
+	{{ owner := row.Connector.CreatedBy }}
+	<form action={ templ.SafeURL("/admin/connectors/" + row.Connector.ID + "/owner") } method="POST" class="flex items-center gap-2">
+		<select
+			name="owner_user_id"
+			data-initial={ owner }
+			onchange="this.nextElementSibling.hidden = this.value === this.dataset.initial"
+			class="min-w-0 w-44 rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-1 text-xs text-black-900 dark:text-white-100"
+		>
+			<option value="" selected?={ owner == "" }>system (no owner)</option>
+			if owner != "" && !userOptionsHave(users, owner) {
+				<option value={ owner } selected>{ row.OwnerLabel } — unknown user</option>
+			}
+			for _, u := range users {
+				<option value={ u.ID } selected?={ owner == u.ID }>{ u.Label }</option>
+			}
+		</select>
+		<button
+			type="submit"
+			hidden
+			class="shrink-0 rounded-lg border border-green-400 bg-green-100 dark:bg-green-900 px-2 py-1 text-xs text-green-700 dark:text-green-300 hover:border-green-500 transition-colors"
+		>Save</button>
+	</form>
 }

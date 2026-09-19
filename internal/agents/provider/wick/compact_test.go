@@ -2,6 +2,7 @@ package wick
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -133,5 +134,45 @@ func TestIsCompactCommand(t *testing.T) {
 		if isCompactCommand(s) {
 			t.Errorf("should NOT be /compact command: %q", s)
 		}
+	}
+}
+
+// TestCompactBoundaryLineShape: the engine reports its own compactions
+// in claude's compact_boundary shape. That is the whole point — one
+// parser path and one UI marker, whichever provider shrank the history.
+func TestCompactBoundaryLineShape(t *testing.T) {
+	var got map[string]any
+	if err := json.Unmarshal(compactBoundaryLine("manual", 31261, 4051), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["type"] != "system" || got["subtype"] != "compact_boundary" {
+		t.Fatalf("envelope: %+v", got)
+	}
+	meta, _ := got["compact_metadata"].(map[string]any)
+	if meta == nil {
+		t.Fatalf("no compact_metadata: %+v", got)
+	}
+	if meta["trigger"] != "manual" {
+		t.Fatalf("trigger: %v", meta["trigger"])
+	}
+	if meta["pre_tokens"].(float64) != 31261 || meta["post_tokens"].(float64) != 4051 {
+		t.Fatalf("tokens: %+v", meta)
+	}
+	if meta["cumulative_dropped_tokens"].(float64) != 27210 {
+		t.Fatalf("dropped should be pre-post: %+v", meta)
+	}
+}
+
+// TestCompactBoundaryLineDefaults: an untagged compaction reads as
+// "auto", and a post larger than pre never reports negative savings.
+func TestCompactBoundaryLineDefaults(t *testing.T) {
+	var got map[string]any
+	_ = json.Unmarshal(compactBoundaryLine("", 100, 400), &got)
+	meta := got["compact_metadata"].(map[string]any)
+	if meta["trigger"] != "auto" {
+		t.Fatalf("trigger: %v", meta["trigger"])
+	}
+	if meta["cumulative_dropped_tokens"].(float64) != 0 {
+		t.Fatalf("dropped: %v", meta["cumulative_dropped_tokens"])
 	}
 }

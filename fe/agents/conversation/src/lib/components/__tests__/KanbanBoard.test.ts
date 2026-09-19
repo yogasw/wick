@@ -407,4 +407,52 @@ describe("KanbanBoard", () => {
     await fireEvent.click(screen.getByText("Cancel"));
     expect(screen.queryByLabelText("New ticket title")).toBeNull();
   });
+
+  /* A custom button placed in the list acts on the LIST — so the click has
+     to carry the toolbar's own filter, and only the list-placed buttons may
+     appear here: a ticket-page button has no ticket up here to act on. */
+  const withButtons = {
+    ...board,
+    config: {
+      ...board.config,
+      integrations: {
+        buttons: [
+          { id: "btn_list", label: "Sync from Notion", url: "https://abc.com/b", placement: "board" as const },
+          { id: "btn_ticket", label: "Sync this ticket", url: "https://abc.com/t", placement: "ticket" as const },
+          { id: "btn_legacy", label: "Older button", url: "https://abc.com/l" },
+        ],
+      },
+    },
+  };
+
+  test("only list-placed buttons render in the toolbar", () => {
+    renderBoard({ board: withButtons });
+    expect(screen.getByText("Sync from Notion")).toBeTruthy();
+    expect(screen.queryByText("Sync this ticket")).toBeNull();
+    // Absent placement means the ticket page, so a button saved before
+    // placements existed must not move up here.
+    expect(screen.queryByText("Older button")).toBeNull();
+  });
+
+  test("clicking one posts the toolbar's filter to the board-action endpoint", async () => {
+    renderBoard({ board: withButtons, filter: { assignee: "me", statuses: ["open"] } });
+    await fireEvent.click(screen.getByText("Sync from Notion"));
+
+    const call = calls.find((c) => c.url.includes("/board-actions/"));
+    expect(call).toBeTruthy();
+    expect(call!.method).toBe("POST");
+    expect(call!.url).toContain("/api/projects/p1/board-actions/btn_list");
+    expect(call!.body).toEqual({ assignee: "me", statuses: ["open"] });
+  });
+
+  test("every chip off sends the empty-selection sentinel, not the whole board", async () => {
+    // " none" is how the board spells "no columns selected"; an empty list
+    // means "all of them" on the wire, which would act on tickets the
+    // clicker cannot even see.
+    renderBoard({ board: withButtons, filter: { statuses: [" none"] } });
+    await fireEvent.click(screen.getByText("Sync from Notion"));
+
+    const call = calls.find((c) => c.url.includes("/board-actions/"));
+    expect(call!.body).toEqual({ assignee: "", statuses: [" none"] });
+  });
 });

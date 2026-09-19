@@ -4,6 +4,8 @@
     listBranches,
     switchBranch,
     createBranch,
+    renameBranch,
+    deleteBranch,
     push,
     pull,
     gitConnectors,
@@ -20,6 +22,65 @@
   let remotes = $state<string[]>([]);
   let newName = $state("");
   let filter = $state("");
+  // Which row's ⋯ menu is open. One at a time: a list of branches with
+  // several menus hanging off it is unreadable.
+  let menuFor = $state<string | null>(null);
+  // Where to paint that menu, in VIEWPORT coordinates.
+  //
+  // It has to escape the branch list: that list is `max-h-72 overflow-y-auto`,
+  // and a scroll container clips absolutely-positioned children no matter
+  // what z-index they carry. Anchored inside it, the menu of any row near the
+  // bottom was cut in half — "Create branch from here…" sliced through the
+  // middle. Fixed positioning takes it out of that box entirely; `up` flips it
+  // above the button when the viewport has no room below.
+  let menuPos = $state<{ x: number; y: number; up: boolean } | null>(null);
+  const MENU_H = 170; // tallest variant: checkout + create + rename + delete
+
+  function toggleMenu(e: MouseEvent, name: string) {
+    e.stopPropagation();
+    if (menuFor === name) {
+      menuFor = null;
+      menuPos = null;
+      return;
+    }
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const up = window.innerHeight - r.bottom < MENU_H;
+    menuPos = { x: r.right, y: up ? r.top : r.bottom, up };
+    menuFor = name;
+  }
+
+  // A fixed menu does not travel with the row, so scrolling the list (or
+  // resizing) would leave it hanging over unrelated branches. Closing is
+  // both simpler and more honest than re-measuring mid-scroll.
+  function closeMenu() {
+    menuFor = null;
+    menuPos = null;
+  }
+
+  // Shared geometry for both menus (local + remote rows).
+  const menuStyle = $derived(
+    menuPos
+      ? `position:fixed;left:${menuPos.x}px;top:${menuPos.y}px;` +
+        `transform:translate(-100%,${menuPos.up ? "-100%" : "0"});`
+      : "",
+  );
+
+  async function doRename(b: string) {
+    menuFor = null;
+    const to = prompt(`Rename branch "${b}" to:`, b);
+    if (to) await renameBranch(b, to.trim());
+  }
+
+  async function doDelete(b: string) {
+    menuFor = null;
+    await deleteBranch(b);
+  }
+
+  async function doBranchFrom(b: string) {
+    menuFor = null;
+    const name = prompt(`New branch, starting at "${b}":`, "");
+    if (name) await createBranch(name.trim(), b);
+  }
 
   // Credential picker. A push with no chosen connector opens this first:
   // the panel's own git carries no credentials, and running as whichever
@@ -152,26 +213,76 @@
   </button>
 
   {#if open}
-    <div class="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg p-1.5 z-10 max-h-72 overflow-y-auto">
+    <div onscroll={closeMenu} class="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg p-1.5 z-10 max-h-72 overflow-y-auto">
       <input bind:value={filter} placeholder="Filter branches…" class="mb-1 w-full rounded border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-1.5 py-1 text-xs text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none"/>
 
       {#if filteredLocals.length > 0}
         <p class="px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-black-600 dark:text-black-700">Local</p>
         {#each filteredLocals as b (b)}
-          <button type="button" onclick={() => pick(b)} class={"flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs hover:bg-white-200 dark:hover:bg-navy-800 " + (b === branch.name ? "font-semibold text-green-600 dark:text-green-400" : "text-black-800 dark:text-black-600")}>
-            {#if b === branch.name}<span class="text-[10px]">✓</span>{:else}<span class="w-2.5"></span>{/if}
-            <span class="truncate">{b}</span>
-          </button>
+          <div class="relative flex items-center rounded hover:bg-white-200 dark:hover:bg-navy-800">
+            <button type="button" onclick={() => pick(b)} class={"flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-left text-xs " + (b === branch.name ? "font-semibold text-green-600 dark:text-green-400" : "text-black-800 dark:text-black-600")}>
+              {#if b === branch.name}<span class="text-[10px]">✓</span>{:else}<span class="w-2.5"></span>{/if}
+              <span class="truncate">{b}</span>
+            </button>
+            <button
+              type="button"
+              onclick={(e) => toggleMenu(e, b)}
+              title="Branch actions"
+              aria-label={`Actions for ${b}`}
+              class="shrink-0 px-1.5 py-1 text-sm leading-none text-black-800 hover:text-black-900 dark:text-black-600 dark:hover:text-white-100"
+            >⋯</button>
+            {#if menuFor === b}
+              <div style={menuStyle} class="z-50 w-44 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-1 shadow-lg">
+                {#if b === branch.name}
+                  <button type="button" onclick={() => { menuFor = null; void run("pull"); }} class="block w-full rounded px-2 py-1 text-left text-xs text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-800">Pull</button>
+                  <button type="button" onclick={() => { menuFor = null; void run("push"); }} class="block w-full rounded px-2 py-1 text-left text-xs text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-800">Push</button>
+                  <div class="my-1 border-t border-white-300 dark:border-navy-600"></div>
+                {:else}
+                  <button type="button" onclick={() => { menuFor = null; void pick(b); }} class="block w-full rounded px-2 py-1 text-left text-xs text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-800">Checkout</button>
+                {/if}
+                <button type="button" onclick={() => doBranchFrom(b)} class="block w-full rounded px-2 py-1 text-left text-xs text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-800">Create branch from here…</button>
+                <button type="button" onclick={() => doRename(b)} class="block w-full rounded px-2 py-1 text-left text-xs text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-800">Rename…</button>
+                <!-- Delete is last and red: it is the only entry here that can
+                     lose work, and git's own unmerged check is what stands
+                     between a click and that. -->
+                <button
+                  type="button"
+                  disabled={b === branch.name}
+                  title={b === branch.name ? "Check out another branch first" : ""}
+                  onclick={() => doDelete(b)}
+                  class="block w-full rounded px-2 py-1 text-left text-xs text-cau-600 hover:bg-white-200 disabled:opacity-40 dark:text-cau-400 dark:hover:bg-navy-800"
+                >Delete</button>
+              </div>
+            {/if}
+          </div>
         {/each}
       {/if}
 
       {#if filteredRemotes.length > 0}
         <p class="mt-1 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-black-600 dark:text-black-700">Remote</p>
         {#each filteredRemotes as r (r)}
-          <button type="button" onclick={() => pickRemote(r)} class="flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">
-            <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zM1 8h14M8 1c2 2 2 12 0 14M8 1c-2 2-2 12 0 14" stroke-linecap="round"/></svg>
-            <span class="truncate">{r}</span>
-          </button>
+          <div class="relative flex items-center rounded hover:bg-white-200 dark:hover:bg-navy-800">
+            <button type="button" onclick={() => pickRemote(r)} class="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-left text-xs text-black-800 dark:text-black-600">
+              <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zM1 8h14M8 1c2 2 2 12 0 14M8 1c-2 2-2 12 0 14" stroke-linecap="round"/></svg>
+              <span class="truncate">{r}</span>
+            </button>
+            <button
+              type="button"
+              onclick={(e) => toggleMenu(e, r)}
+              title="Branch actions"
+              aria-label={`Actions for ${r}`}
+              class="shrink-0 px-1.5 py-1 text-sm leading-none text-black-800 hover:text-black-900 dark:text-black-600 dark:hover:text-white-100"
+            >⋯</button>
+            {#if menuFor === r}
+              <div style={menuStyle} class="z-50 w-44 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-1 shadow-lg">
+                <button type="button" onclick={() => { menuFor = null; void pickRemote(r); }} class="block w-full rounded px-2 py-1 text-left text-xs text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-800">Checkout</button>
+                <button type="button" onclick={() => doBranchFrom(r)} class="block w-full rounded px-2 py-1 text-left text-xs text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-800">Create branch from here…</button>
+                <!-- No Delete: removing a REMOTE branch is a push to the
+                     server, which needs the repo's credential and is not the
+                     same act as tidying your own clone. -->
+              </div>
+            {/if}
+          </div>
         {/each}
       {/if}
 

@@ -189,8 +189,8 @@ func (e *AgentExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 	// Pool path — only for providers wired through the agent pool
 	// (claude today; codex/gemini stay on the cliProvider path until
 	// pool gains multi-factory support).
-	if e.Pool != nil && e.Subscribe != nil && providerUsesPool(prov.Name()) {
-		return e.runViaPool(ctx, n, prompt, sessionID, rc.Workflow.CreatedBy)
+	if e.Pool != nil && e.Subscribe != nil && providerUsesPool(prov) {
+		return e.runViaPool(ctx, n, prov, prompt, sessionID, rc.Workflow.CreatedBy)
 	}
 
 	req := provider.AgentRequest{
@@ -222,7 +222,7 @@ func (e *AgentExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 // Subscription happens before the Send so the first text_delta can't
 // race past the receiver. The loop exits on Done (success), Error
 // (failed turn), or ctx cancellation (timeout / workflow abort).
-func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt, sessionID, ownerUserID string) (workflow.NodeOutput, error) {
+func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prov provider.Provider, prompt, sessionID, ownerUserID string) (workflow.NodeOutput, error) {
 	evCh, unsub := e.Subscribe(sessionID)
 	defer unsub()
 
@@ -240,7 +240,7 @@ func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt,
 	}
 	e.Pool.EnsureSessionOwner(ctx, sessionID, ownerUserID)
 
-	if err := e.persistAgentSessionConfig(sessionID, n); err != nil {
+	if err := e.persistAgentSessionConfig(sessionID, n, prov); err != nil {
 		return workflow.NodeOutput{}, err
 	}
 
@@ -288,14 +288,45 @@ func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt,
 // (including the zero/clearing values) so a reused session reflects the
 // current node config rather than a prior run's. See resolveThinkingTokens
 // for the thinking value mapping.
-func (e *AgentExecutor) persistAgentSessionConfig(sessionID string, n workflow.Node) error {
+func (e *AgentExecutor) persistAgentSessionConfig(sessionID string, n workflow.Node, prov provider.Provider) error {
 	if err := e.Pool.SetMaxTurns(sessionID, "default", n.MaxTurns); err != nil {
 		return fmt.Errorf("set max turns: %w", err)
 	}
 	if err := e.Pool.SetThinkingTokens(sessionID, "default", resolveThinkingTokens(n.Thinking, n.MaxThinkingTokens)); err != nil {
 		return fmt.Errorf("set thinking: %w", err)
 	}
+	// The pool spawns whatever the session's agent entry names, so the
+	// node's provider has to be written there or it is decorative: a fresh
+	// workflow session carries no entry, and the blank one SetMaxTurns just
+	// created resolves to the project/global default instead. Only written
+	// when the node actually picked a provider — an empty field means
+	// "inherit", and stamping the registry default would take a reused
+	// session over.
+	if prov != nil && strings.TrimSpace(n.Provider) != "" {
+		if key := agentProviderKey(prov); key != "" {
+			if err := e.Pool.SetAgentProvider(sessionID, "default", key); err != nil {
+				return fmt.Errorf("set provider: %w", err)
+			}
+		}
+	}
 	return nil
+}
+
+// agentProviderKey renders a provider as the "type/name" key the pool
+// stores on a session's agent entry (e.g. "claude/claude_support_ent").
+// Falls back to the bare name when the runtime type is unknown, which the
+// pool reads as type == name.
+func agentProviderKey(p provider.Provider) string {
+	name := strings.TrimSpace(p.Name())
+	if name == "" {
+		return ""
+	}
+	if t, ok := p.(providerTyper); ok {
+		if typ := strings.TrimSpace(t.ProviderType()); typ != "" {
+			return typ + "/" + name
+		}
+	}
+	return name
 }
 
 // resolveThinkingTokens maps the agent node's thinking dropdown + the
@@ -352,11 +383,32 @@ func DefaultRunSessionID(id, runID string) string {
 	return fmt.Sprintf("wf_%s_run_%s", id, runID)
 }
 
-// providerUsesPool reports whether a provider name routes through the
-// shared agent pool. Today only claude has a pool factory; codex and
-// gemini stay on the cliProvider one-shot path.
-func providerUsesPool(name string) bool {
-	return strings.EqualFold(name, "claude")
+// providerTyper is implemented by providers that know their underlying
+// runtime ("claude" / "codex" / "gemini"). Optional so the workflow
+// provider interface — and every fake in the tests — stays untouched.
+type providerTyper interface{ ProviderType() string }
+
+// providerUsesPool reports whether a provider routes through the shared
+// agent pool. Today only claude has a pool factory; codex and gemini stay
+// on the cliProvider one-shot path.
+//
+// Decided on the runtime TYPE, not the instance name. Matching the name
+// against "claude" meant an instance called anything else — "enginer",
+// "claude_support_ent", any provider a user actually configures — was
+// treated as non-pool and spawned as a bare `claude --print`: no
+// --mcp-config, so no wick MCP tools at all (the spawn silently inherited
+// the user's own ~/.claude.json servers instead), no instance env, and no
+// session events, which left the run's node stuck with no history. Since
+// no configured instance is literally named "claude", that was every
+// agent node on this host.
+//
+// The name check remains as the fallback for providers that predate
+// ProviderType (test doubles).
+func providerUsesPool(p provider.Provider) bool {
+	if t, ok := p.(providerTyper); ok {
+		return strings.EqualFold(t.ProviderType(), "claude")
+	}
+	return strings.EqualFold(p.Name(), "claude")
 }
 
 func validateSkills(ctx context.Context, prov provider.Provider, skills []string) error {

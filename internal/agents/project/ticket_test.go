@@ -61,6 +61,28 @@ func TestButtonByID(t *testing.T) {
 	}
 }
 
+// A button's placement decides which page draws it, and an empty one has to
+// keep meaning "the ticket page" — every button saved before placements
+// existed has one, and an upgrade that moved them onto the board would put
+// somebody's "Close in Jira" next to the new-ticket box.
+func TestButtonsOnPlacement(t *testing.T) {
+	cfg := TicketConfig{Integrations: TicketIntegrations{Buttons: []TicketButton{
+		{ID: "btn_old", Label: "Legacy", URL: "https://abc.com/1"},
+		{ID: "btn_t", Label: "Sync ticket", URL: "https://abc.com/2", Placement: ButtonOnTicket},
+		{ID: "btn_b", Label: "Sync list", URL: "https://abc.com/3", Placement: ButtonOnBoard},
+		{ID: "btn_blank", Label: "Broken", URL: "  ", Placement: ButtonOnBoard},
+	}}}
+
+	onTicket := cfg.ButtonsOn(ButtonOnTicket)
+	if len(onTicket) != 2 || onTicket[0].ID != "btn_old" || onTicket[1].ID != "btn_t" {
+		t.Fatalf("ticket placement = %+v, want the legacy and explicit ticket rows", onTicket)
+	}
+	onBoard := cfg.ButtonsOn(ButtonOnBoard)
+	if len(onBoard) != 1 || onBoard[0].ID != "btn_b" {
+		t.Fatalf("board placement = %+v, want only btn_b (btn_blank has no URL)", onBoard)
+	}
+}
+
 // Ticket mode is opt-in, and a project written before it existed must read
 // as off rather than as a half-configured board.
 func TestTicketConfigDefaultOff(t *testing.T) {

@@ -5,9 +5,10 @@
      operations are enabled for that account. Mirrors the legacy
      connector_account_ops.templ + the account ops / disconnect routes and the
      per-row OAuth Connect button on connector_detail.templ. */
-  import { Button, ConfirmDialog } from "@wick-fe/common-ui";
+  import { Button, ConfirmDialog, KebabMenu } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import { disconnectConnectorAccount, setAccountDisabledOps } from "$lib/api.js";
+  import { push } from "$lib/router.js";
   import { startConnectorOAuth, type OAuthConnect } from "./connectorOAuth.js";
   import type { ConnectorAccount, ConnectorOAuthMeta, ConnectorOp } from "$lib/types.js";
 
@@ -37,9 +38,11 @@
   let savingOps = $state(false);
 
   const canConnect = $derived(enableSso && oauth !== null && oauth.start_url !== "");
-  const connectLabel = $derived(
-    accounts.length > 0 ? (multiAccount ? "+ Connect another account" : "Reconnect") : "Connect account",
-  );
+  const connectLabel = $derived(accounts.length > 0 ? "+ Connect another account" : "Connect account");
+  /* Re-connecting an existing account lives in that account's ⋮ menu, so the
+     header button is only for adding one: hidden on a single-account row that
+     already has its account, where "connect" could only ever mean re-connect. */
+  const showConnect = $derived(canConnect && (multiAccount || accounts.length === 0));
 
   function connect(): void {
     if (!oauth || !oauth.start_url || connecting) return;
@@ -108,7 +111,7 @@
   <section class="mt-8">
     <div class="flex items-center justify-between gap-3">
       <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Connected accounts</h2>
-      {#if canConnect}
+      {#if showConnect}
         <Button variant="primary" size="md" disabled={connecting} onclick={connect}>
           {connecting ? "Connecting…" : connectLabel}
         </Button>
@@ -137,21 +140,38 @@
       <div class="mt-3 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 divide-y divide-white-300 dark:divide-navy-600">
         {#each accounts as acc (acc.id)}
           <div class="px-4 py-3">
-            <div class="flex items-center justify-between gap-4">
-              <div class="min-w-0">
-                <p class="text-sm font-medium text-black-900 dark:text-white-100">@{acc.display_name}</p>
+            <!-- Whole row opens the account, same overlay pattern the instance
+                 card uses: a z-0 button beneath pointer-events-none content,
+                 with the controls lifted back onto z-10. The editor panel
+                 below sits outside this relative box, so expanding it is not
+                 a click target for navigation. -->
+            <div class="relative flex items-center justify-between gap-4">
+              <button
+                type="button"
+                class="absolute -inset-x-2 -inset-y-1 z-0 rounded-lg"
+                aria-label={`Open @${acc.display_name}`}
+                onclick={() => push(`/connectors/${connectorKey}/${connectorId}/accounts/${encodeURIComponent(acc.id)}`)}
+              ></button>
+              <div class="pointer-events-none relative min-w-0">
+                <p class="truncate text-sm font-medium text-black-900 dark:text-white-100">@{acc.display_name}</p>
                 {#if acc.disabled_ops && acc.disabled_ops.length}
                   <p class="mt-0.5 text-[11px] text-black-700 dark:text-black-600">{acc.disabled_ops.length} operation(s) disabled for this account</p>
                 {/if}
               </div>
               {#if acc.can_manage}
-                <div class="flex flex-shrink-0 items-center gap-2">
+                <div class="pointer-events-auto relative z-10 flex flex-shrink-0 items-center gap-2">
                   {#if operations.length}
                     <Button variant="secondary" size="sm" onclick={() => (editId === acc.id ? (editId = "") : openOps(acc))}>
                       {editId === acc.id ? "Close" : "Manage operations"}
                     </Button>
                   {/if}
-                  <Button variant="danger" size="sm" onclick={() => (confirmId = acc.id)}>Disconnect</Button>
+                  <KebabMenu
+                    ariaLabel="Account actions"
+                    items={[
+                      { label: connecting ? "Re-connecting…" : "Re-connect", onclick: connect, disabled: !canConnect || connecting },
+                      { label: "Disconnect", onclick: () => (confirmId = acc.id), danger: true },
+                    ]}
+                  />
                 </div>
               {/if}
             </div>

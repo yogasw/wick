@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,6 +15,19 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/wftest"
 	"github.com/yogasw/wick/pkg/connector"
 )
+
+// WorkflowOwnership records the human a workflow belongs to, so a workflow
+// an agent creates on someone's behalf is reachable by that person instead
+// of only by admins. Implemented by the API layer over the owner:<id> tag;
+// nil when unwired (tests, file-store installs), which just skips the step.
+type WorkflowOwnership interface {
+	RegisterOwner(ctx context.Context, userID, workflowID string)
+}
+
+var workflowOwnership WorkflowOwnership
+
+// SetWorkflowOwnership wires the owner recorder. Called once at boot.
+func SetWorkflowOwnership(o WorkflowOwnership) { workflowOwnership = o }
 
 // ── Tier 1: introspection ──────────────────────────────────────────────
 
@@ -155,13 +169,21 @@ func (h *handlers) checkName(c *connector.Ctx) (any, error) {
 // ── Tier 2: write ──────────────────────────────────────────────────────
 
 func (h *handlers) create(c *connector.Ctx) (any, error) {
+	caller := strings.TrimSpace(c.CallerUserID())
 	in := wfmcp.CreateInput{
-		Name:     c.Input("name"),
-		Template: c.Input("template"),
+		Name:      c.Input("name"),
+		Template:  c.Input("template"),
+		CreatedBy: caller,
 	}
 	w, err := h.ops.Create(in)
 	if err != nil {
 		return nil, err
+	}
+	// The human behind the session owns what the agent just made for them.
+	// Skipped for an ownerless/system caller, which leaves the workflow
+	// admin-only rather than owned by a synthetic account.
+	if caller != "" && workflowOwnership != nil {
+		workflowOwnership.RegisterOwner(c.Context(), caller, w.ID)
 	}
 	// Auto-publish + enable on create — user explicitly opted in by
 	// calling create. Apply top-down canvas so the editor renders the
@@ -294,7 +316,8 @@ func (h *handlers) toggle(c *connector.Ctx) (any, error) {
 func (h *handlers) publish(c *connector.Ctx) (any, error) {
 	id := c.Input("id")
 	enable := c.Input("enable") != "false" // default true
-	w, err := h.ops.Service.Publish(id, "")
+	// Attribute the publish to the caller so version history names a human.
+	w, err := h.ops.Service.Publish(id, strings.TrimSpace(c.CallerUserID()))
 	if err != nil {
 		return nil, err
 	}

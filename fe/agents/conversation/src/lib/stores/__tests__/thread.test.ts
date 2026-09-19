@@ -72,6 +72,17 @@ describe("createThreadStore", () => {
     expect(get(store.turns).map((t) => t.turn_id)).toEqual(["t1", "t2", "t3", "t4", "t5"]);
   });
 
+  test("setHistory drops a local user turn whose persisted twin only differs in CRLF", () => {
+    // A message sent with a file goes as multipart, and form encoding turns
+    // every newline into CRLF. Matching on the raw text left the optimistic
+    // turn AND its persisted twin on screen — the same message, twice, until
+    // the page was reloaded.
+    store.appendUserTurn("line one\nline two");
+    store.setHistory([makeTurn({ turn_id: "p1", role: "user", text: "line one\r\nline two" })]);
+    const ids = get(store.turns).map((t) => t.turn_id);
+    expect(ids).toEqual(["p1"]);
+  });
+
   test("setHistory grafts a dropped local turn's trace onto a trace-less persisted twin", () => {
     // Stream a turn with a tool call + result, then `done` finalizes it into a
     // local (live-*) turn carrying the inline trace.

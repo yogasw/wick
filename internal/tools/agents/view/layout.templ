@@ -133,7 +133,7 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 						@agentsNavLink(it.Href, it.Label, true)
 					}
 				}
-				<details class="group">
+				<details class="group" data-menu>
 					<summary class="list-none cursor-pointer flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors select-none">
 						<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
 							<circle cx="4" cy="8" r="1" fill="currentColor"></circle>
@@ -524,7 +524,7 @@ func kebabActionAttrs(a kebabAction) templ.Attributes {
 // inside [data-row-action] so opening the menu doesn't navigate the
 // row at the same time.
 templ kebabMenu(action kebabAction) {
-	<details class="relative inline-block" data-row-action>
+	<details class="relative inline-block" data-row-action data-menu>
 		<summary
 			class="list-none cursor-pointer rounded-md p-1 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors"
 			aria-label="More actions"
@@ -550,7 +550,7 @@ templ kebabMenu(action kebabAction) {
 
 // kebabMenuMulti renders a 3-dot menu with multiple actions.
 templ kebabMenuMulti(actions []kebabAction) {
-	<details class="relative inline-block" data-row-action>
+	<details class="relative inline-block" data-row-action data-menu>
 		<summary
 			class="list-none cursor-pointer rounded-md p-1 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors"
 			aria-label="More actions"

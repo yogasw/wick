@@ -49,6 +49,13 @@ const (
 	// recorded to history like an error but does NOT end the turn — the
 	// subprocess keeps running. ErrorMsg carries the detail.
 	Warning
+	// Compaction fires when the CLI compacted the conversation to free
+	// context — automatically at the window limit, or because someone ran
+	// /compact. Not an error and not end-of-turn: the session id stays
+	// the same and the run continues with a summary standing in for the
+	// dropped messages. Carrying it as its own type is what lets the UI
+	// mark the boundary instead of silently losing the history.
+	Compaction
 	// Trace is an event the parser doesn't map to a first-class type but
 	// that is worth keeping visible — recorded into the turn's trace
 	// (expandable in the UI) rather than the main thread. Raw carries the
@@ -76,6 +83,8 @@ func (t EventType) String() string {
 		return "error"
 	case Warning:
 		return "warning"
+	case Compaction:
+		return "compaction"
 	case Trace:
 		return "trace"
 	default:
@@ -111,4 +120,61 @@ type AgentEvent struct {
 	// conversation through the delegation result, so relaying its text too
 	// would post the same answer twice.
 	SubAgent string
+
+	// Usage is the turn's token accounting. Set on Done, and only when
+	// the CLI reported it — nil otherwise, which is not an error (a
+	// provider may simply not say).
+	Usage *TokenUsage
+
+	// Compaction is set only on Compaction events.
+	Compaction *CompactionInfo
+}
+
+// CompactionInfo is one compaction boundary as the CLI reported it.
+// PreTokens is the context size that triggered it, PostTokens what
+// survived — the pair is the whole story, and neither means much alone.
+type CompactionInfo struct {
+	// Trigger is "auto" (window limit) or "manual" (/compact).
+	Trigger       string `json:"trigger,omitempty"`
+	PreTokens     int    `json:"pre_tokens,omitempty"`
+	PostTokens    int    `json:"post_tokens,omitempty"`
+	DroppedTokens int    `json:"dropped_tokens,omitempty"`
+	DurationMS    int    `json:"duration_ms,omitempty"`
+}
+
+// TokenUsage is one turn's token accounting, normalized across CLIs so
+// the same arithmetic works whether the turn ran on claude, codex, or
+// wick's own engine.
+//
+// Two different questions live here, and conflating them is the easy
+// mistake. The four counters (Input/CacheRead/CacheWrite/Output) are
+// FLOW — what this turn spent, which is what a cost report sums over
+// time. ContextUsed is a LEVEL — how full the window was when the turn
+// ended, which only makes sense as the latest reading and must never be
+// added up. Window puts that level on a scale.
+//
+// Every counter is what the vendor reported, never our own estimate.
+// Fields a given CLI does not report stay zero rather than being guessed:
+// codex, for one, says nothing about the window size.
+type TokenUsage struct {
+	// Input is fresh input tokens — the part that missed the cache.
+	Input int `json:"input,omitempty"`
+	// CacheRead is input served from the prompt cache (cheap).
+	CacheRead int `json:"cache_read,omitempty"`
+	// CacheWrite is input written INTO the cache this turn.
+	CacheWrite int `json:"cache_write,omitempty"`
+	// Output is tokens the model generated, reasoning included.
+	Output int `json:"output,omitempty"`
+
+	// ContextUsed is everything the model saw as input for the last
+	// message of the turn: fresh + both cache halves. A level, not a
+	// flow — summing it across turns is meaningless.
+	ContextUsed int `json:"context_used,omitempty"`
+	// Window is the model's context limit, 0 when unreported.
+	Window int `json:"window,omitempty"`
+	// Model is the id the vendor billed, for per-model breakdowns.
+	Model string `json:"model,omitempty"`
+	// CostUSD is the vendor's own figure for the turn, 0 when it gives
+	// none. Never computed here — a price table would go stale silently.
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }

@@ -19,13 +19,20 @@
     onOpenPath?: (path: string) => void;
     // Cancel an in-flight connector run behind a running tool call.
     onCancelRun?: (runId: string) => void;
+    /** Stop the agent process — the only way to end a tool running inside the
+        provider CLI, which wick cannot cancel on its own. */
+    onStopTurn?: () => void;
     // Dismiss a stuck tool card (no runId to cancel) from the view.
     onDismissTool?: (toolUseId: string) => void;
     // Reveals a wick_delegate call's sub-agent in the rail panel.
     onOpenSubAgent?: (delegationId: string) => void;
+    /** A /compact is in flight. The provider reports it as an ordinary
+        turn, so without this the thread would say "thinking…" while the
+        conversation is being rewritten underneath the reader. */
+    compacting?: boolean;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, onOpenPath, onCancelRun, onDismissTool, onOpenSubAgent }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -61,6 +68,19 @@
     if (substate === "running_tool") return "running a tool…";
     return `running ${substate}…`;
   }
+
+  /* What the agent is doing right now, in one place so the inline todo
+     card and the floating bubble never disagree. Compaction outranks the
+     substate: "thinking…" is technically true during a /compact, but it
+     tells the reader nothing about the thing that is actually happening
+     to their conversation. */
+  const activityLabel = $derived(
+    !typing.active
+      ? undefined
+      : compacting
+        ? "compacting the conversation…"
+        : typingLabel(typing.substate, typing.toolName),
+  );
 
   let liveTraceOpen = $state(false);
   let floatLabel = $state("");
@@ -202,7 +222,7 @@
           <TodoCard
             items={liveMergedTodoItems}
             goal={liveTodoGoal}
-            currentActivity={typing.active ? typingLabel(typing.substate, typing.toolName) : undefined}
+            currentActivity={activityLabel}
           />
         {/if}
         {#if live.blocks.length > 0}
@@ -227,7 +247,7 @@
             <div class="flex flex-col gap-1">
               {#each liveNonTodoBlocks as block, bi (bi)}
                 {#if block.kind === "tool"}
-                  <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} onCancel={onCancelRun} onDismiss={onDismissTool} {onOpenSubAgent} />
+                  <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} onCancel={onCancelRun} {onStopTurn} onDismiss={onDismissTool} {onOpenSubAgent} />
                 {:else if block.kind === "thinking"}
                   <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700">
                     {(block as Extract<ThreadBlock, { kind: "thinking" }>).text}
@@ -255,12 +275,31 @@
          exists (its activity shows inline instead) — only render this
          fallback when there's no todo card to attach it to. -->
     <div class="flex justify-start items-end">
-      <div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-2.5">
-        <div class="flex items-center gap-2 text-xs text-black-600 dark:text-black-700">
-          <svg class="h-3 w-3 shrink-0 animate-spin text-green-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+      <!-- Amber while compacting: the same bubble in the same place would
+           read as a normal wait, and this one is not — turns are being
+           replaced by a summary while it spins. -->
+      <div
+        class={"rounded-2xl rounded-tl-sm border px-4 py-2.5 " +
+          (compacting
+            ? "border-amber-500/40 bg-amber-500/10"
+            : "border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800")}
+      >
+        <div
+          class={"flex items-center gap-2 text-xs " +
+            (compacting
+              ? "text-amber-700 dark:text-amber-300"
+              : "text-black-600 dark:text-black-700")}
+        >
+          <svg
+            class={"h-3 w-3 shrink-0 animate-spin " + (compacting ? "text-amber-500" : "text-green-500")}
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+          >
             <path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path>
           </svg>
-          <span class="italic">{typingLabel(typing.substate, typing.toolName)}</span>
+          <span class="italic">{activityLabel}</span>
         </div>
       </div>
     </div>

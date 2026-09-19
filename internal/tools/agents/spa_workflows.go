@@ -131,17 +131,18 @@ func spaWorkflowCreate(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "name is required"})
 		return
 	}
+	// The owner is stamped by Create, so it lands on the workflow row and
+	// the first draft together. Patching it in afterwards left the row's
+	// created_by empty, and publish no longer backfills it — ownership is
+	// the creator's, decided once, here.
 	w, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{
-		Name:     body.Name,
-		Template: body.Template,
+		Name:      body.Name,
+		Template:  body.Template,
+		CreatedBy: actorID(c),
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
-	}
-	if a := actorID(c); a != "" {
-		w.CreatedBy = a
-		_ = globalWorkflowMgr.Service.SaveDraft(w.ID, w)
 	}
 	if globalTagsSvc != nil {
 		_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), w.ID, actorID(c))
@@ -173,7 +174,7 @@ func spaWorkflowImport(c *tool.Ctx) {
 	}
 	w.ID = ""
 	w.CreatedAt = time.Time{}
-	created, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{Name: w.Name})
+	created, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{Name: w.Name, CreatedBy: actorID(c)})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -203,8 +204,9 @@ func spaWorkflowDuplicate(c *tool.Ctx) {
 		return
 	}
 	w, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{
-		Name:     src.Name + " copy",
-		Template: "empty",
+		Name:      src.Name + " copy",
+		Template:  "empty",
+		CreatedBy: actorID(c),
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})

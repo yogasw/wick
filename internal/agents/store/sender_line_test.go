@@ -163,3 +163,31 @@ func TestNormalizeSenderVisibility(t *testing.T) {
 		}
 	}
 }
+
+// TestIsBareSlashCommand pins the narrow shape that skips the sender line.
+// The stakes are asymmetric: a false negative just adds a line nobody
+// minds, while a false positive strips the identity of a real message.
+func TestIsBareSlashCommand(t *testing.T) {
+	bare := []string{"/compact", "/context", "  /compact  ", "/wick-connectors", "/panel:files"}
+	for _, in := range bare {
+		if !IsBareSlashCommand(in) {
+			t.Errorf("want bare: %q", in)
+		}
+	}
+	notBare := []string{
+		"",
+		"/",
+		"compact",
+		"/compact now",              // carries intent — keep the sender
+		"/compact\nand then resume", // multi-line
+		"cek ini /compact",
+		"/compact?",
+		"//comment",
+		"/path/to/file",
+	}
+	for _, in := range notBare {
+		if IsBareSlashCommand(in) {
+			t.Errorf("want NOT bare: %q", in)
+		}
+	}
+}

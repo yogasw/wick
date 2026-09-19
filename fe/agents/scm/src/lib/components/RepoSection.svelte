@@ -139,6 +139,7 @@
     <svg class={"h-3 w-3 shrink-0 text-black-600 transition-transform " + (open ? "rotate-90" : "")} fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
     <span class="text-[10px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">Repositories</span>
     <span class="rounded-full bg-white-300 px-1.5 text-[10px] font-semibold text-black-700 dark:bg-navy-600 dark:text-black-600">{repos.length}</span>
+    <span class="flex-1"></span>
     <!-- Only while collapsed: expanded, the checked row already says it.
          Sits right after the count and takes the rest of the row, rather
          than being pushed to the far edge — and carries no branch, which

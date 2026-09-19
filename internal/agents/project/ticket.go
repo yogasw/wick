@@ -74,16 +74,48 @@ type TicketConfig struct {
 	Integrations TicketIntegrations `json:"integrations,omitempty"`
 }
 
-// TicketButton is one custom action rendered on every ticket's page.
-// Clicking it POSTs a ticket.action event envelope (the full ticket, the
-// actor, and this button's id) to URL and reports the response to the
-// clicker. One label, one URL — anything smarter belongs in the receiver.
+// Button placements — WHERE a custom button is drawn, and therefore what
+// clicking it is about.
+//
+// A ticket button acts on the one ticket whose page it sits on; a board
+// button acts on the LIST the toolbar is filtering, and so carries the
+// filter (who, which columns) instead of a single ticket. Two different
+// questions, so they are two different events — see ticket.EventAction and
+// ticket.EventBoardAction.
+//
+// The empty string means ButtonOnTicket: every button saved before this
+// field existed was a ticket-page button, and an upgrade must not move them
+// onto the board.
+const (
+	ButtonOnTicket = "ticket"
+	ButtonOnBoard  = "board"
+)
+
+// TicketButton is one custom action, rendered either on a ticket's page or
+// in the ticket list's toolbar (see Placement).
+//
+// Clicking it POSTs an event envelope (the actor, this button's id, and
+// either the full ticket or the list's filter) to URL and reports the
+// response to the clicker. One label, one URL — anything smarter belongs in
+// the receiver.
 type TicketButton struct {
 	// ID is stable across edits, minted on first save. It travels in the
 	// event so a receiver serving several buttons can tell them apart.
 	ID    string `json:"id"`
 	Label string `json:"label"`
 	URL   string `json:"url"`
+	// Placement is ButtonOnTicket (default) or ButtonOnBoard.
+	Placement string `json:"placement,omitempty"`
+}
+
+// On reports whether this button belongs at placement, treating an empty
+// Placement as ButtonOnTicket.
+func (b TicketButton) On(placement string) bool {
+	own := b.Placement
+	if own == "" {
+		own = ButtonOnTicket
+	}
+	return own == placement
 }
 
 // ButtonByID finds one of the project's ticket buttons.
@@ -94,6 +126,18 @@ func (c TicketConfig) ButtonByID(id string) (TicketButton, bool) {
 		}
 	}
 	return TicketButton{}, false
+}
+
+// ButtonsOn returns the project's buttons for one placement, in config
+// order — what a page renders.
+func (c TicketConfig) ButtonsOn(placement string) []TicketButton {
+	var out []TicketButton
+	for _, b := range c.Integrations.Buttons {
+		if strings.TrimSpace(b.URL) != "" && b.On(placement) {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 // CardFields filters a ticket's field values down to what the board card
@@ -267,8 +311,10 @@ type TicketIntegrations struct {
 	// Webhooks are the endpoints notified when this project's tickets
 	// change. Order is display order only.
 	Webhooks []TicketWebhook `json:"webhooks,omitempty"`
-	// Buttons are custom actions on every ticket's page ("Sync to Notion").
-	// Clicking one POSTs the ticket to that button's URL — see TicketButton.
+	// Buttons are custom actions on a ticket's page ("Sync to Notion") or
+	// in the ticket list's toolbar ("Pull my tickets from Notion"), by
+	// their Placement. Clicking one POSTs to that button's URL — see
+	// TicketButton.
 	Buttons []TicketButton `json:"buttons,omitempty"`
 }
 

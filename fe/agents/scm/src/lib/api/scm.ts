@@ -63,23 +63,56 @@ export type BranchList = {
   remotes: string[];
 };
 
+// How far a commit has travelled. The graph's whole job is telling these
+// apart: work that only exists on this machine reads very differently from
+// work that has landed on the trunk.
+export type CommitState = "local" | "pushed" | "trunk";
+
 export type LogEntry = {
   sha: string;
   subject: string;
   author: string;
   rel_date: string;
   iso_date: string;
+  /** Short shas this commit descends from — the graph draws lanes from these. */
+  parents?: string[];
+  /** Branch/tag names pointing at this commit, e.g. "master", "origin/master". */
+  refs?: string[];
+  state?: CommitState;
+  /** Author email as git recorded it; the key into the avatars map. */
+  author_email?: string;
+};
+
+// One selectable reference in the graph picker.
+export type HistoryRef = {
+  name: string;
+  sha: string;
+  remote: boolean;
+  current: boolean;
+  trunk: boolean;
+};
+
+export type HistoryRefsResponse = {
+  refs: HistoryRef[];
+  /** The ref "trunk" state is measured against; "" when the repo has none. */
+  trunk: string;
 };
 
 export type CommitFile = {
   path: string;
   status: string;
+  /** Lines git counted for this file. -1 on both means binary. */
+  additions?: number;
+  deletions?: number;
 };
 
 export type CommitDetail = {
   sha: string;
   subject: string;
   author: string;
+  /** Who to ask about it, and what they wrote under the subject line. */
+  email?: string;
+  body?: string;
   iso_date: string;
   files: CommitFile[];
 };
@@ -141,8 +174,22 @@ export const commit = (id: string, repo: string, message: string) =>
 export const switchBranch = (id: string, repo: string, branch: string) =>
   apiPost(`${s(id)}/branch/switch`, { repo, branch });
 
-export const createBranch = (id: string, repo: string, branch: string, checkout: boolean) =>
-  apiPost(`${s(id)}/branch/create`, { repo, branch, checkout });
+// from: start point (branch, tag, sha). Empty = HEAD.
+export const createBranch = (
+  id: string,
+  repo: string,
+  branch: string,
+  checkout: boolean,
+  from = "",
+) => apiPost(`${s(id)}/branch/create`, { repo, branch, checkout, from });
+
+export const renameBranch = (id: string, repo: string, branch: string, newName: string) =>
+  apiPost(`${s(id)}/branch/rename`, { repo, branch, new_name: newName });
+
+// force mirrors `git branch -D`: git refuses an unmerged branch without it,
+// and a squash-merged branch trips that same refusal.
+export const deleteBranch = (id: string, repo: string, branch: string, force: boolean) =>
+  apiPost(`${s(id)}/branch/delete`, { repo, branch, force });
 
 // push/pull run through a Git CLI connector when one is chosen for the
 // repo — that is where the credentials and the branch policy live.
@@ -150,6 +197,14 @@ export const createBranch = (id: string, repo: string, branch: string, checkout:
 // after that the session remembers it.
 export const push = (id: string, repo: string, connectorID?: string) =>
   apiPost<{ output: string; connector_id?: string }>(`${s(id)}/push`, {
+    repo,
+    connector_id: connectorID ?? "",
+  });
+
+// fetch updates remote-tracking refs and prunes dead ones. Same credential
+// path as push/pull; changes nothing locally.
+export const fetchRemote = (id: string, repo: string, connectorID?: string) =>
+  apiPost<{ output: string; connector_id?: string }>(`${s(id)}/fetch`, {
     repo,
     connector_id: connectorID ?? "",
   });
@@ -206,8 +261,18 @@ export const getCompare = (
     `${s(id)}/compare?repo=${q(repo)}&path=${q(path)}&staged=${staged ? "1" : "0"}&untracked=${untracked ? "1" : "0"}`,
   );
 
-export const getLog = (id: string, repo: string, limit = 50) =>
-  apiGet<{ commits: LogEntry[] }>(`${s(id)}/log?repo=${q(repo)}&limit=${limit}`);
+// refs picks which history to walk: "auto" (current branch + upstream),
+// "all", or explicit ref names — the same three the picker offers.
+// avatars maps author email -> picture URL, and only contains emails that
+// belong to a wick account WITH an avatar. Missing = draw nothing.
+export const getLog = (id: string, repo: string, limit = 50, refs: string[] = [], skip = 0) =>
+  apiGet<{ commits: LogEntry[]; avatars?: Record<string, string>; has_more?: boolean }>(
+    `${s(id)}/log?repo=${q(repo)}&limit=${limit}&skip=${skip}` +
+      (refs.length ? `&refs=${q(refs.join(","))}` : ""),
+  );
+
+export const getHistoryRefs = (id: string, repo: string) =>
+  apiGet<HistoryRefsResponse>(`${s(id)}/refs?repo=${q(repo)}`);
 
 export const getCommit = (id: string, repo: string, sha: string) =>
   apiGet<CommitDetail>(`${s(id)}/commit?repo=${q(repo)}&sha=${q(sha)}`);

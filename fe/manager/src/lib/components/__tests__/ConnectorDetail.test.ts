@@ -85,11 +85,22 @@ describe("ConnectorDetail", () => {
     expect(screen.queryByRole("button", { name: "Check Permissions" })).toBeNull();
   });
 
-  it("renders read-only fields when can_configure is false", async () => {
+  /* A viewer who may not configure the row gets none of the configuring
+     surface — label, AI description, credentials, health probe, rate limit.
+     Rendering them disabled leaked someone else's setup and invited clicks
+     the server refuses. What stays is what they can use: the operation list
+     (and their own connected accounts), so Test still works. */
+  it("hides the configuring sections when can_configure is false", async () => {
     vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ can_configure: false }));
     render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
     await screen.findByText("row-a");
-    expect((screen.getByLabelText("Connector label") as HTMLInputElement).disabled).toBe(true);
+    expect(screen.queryByLabelText("Connector label")).toBeNull();
+    expect(screen.queryByText("Credentials")).toBeNull();
+    expect(screen.queryByText("api_url")).toBeNull();
+    expect(screen.queryByLabelText("Rate limit per minute")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check Permissions" })).toBeNull();
+    // The operations list survives — it is the part a view-only user acts on.
+    expect(screen.getByText("Send")).toBeTruthy();
   });
 
   it("saves the rate limit", async () => {
@@ -194,9 +205,10 @@ describe("ConnectorDetail", () => {
     );
     render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
     await screen.findByText("row-a");
-    /* Row Disconnect opens the confirm dialog, whose confirm is also labelled
-       "Disconnect" — pick the last match (the dialog button). */
-    await fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    /* Disconnect sits in the row's ⋮ menu; picking it opens the confirm
+       dialog, whose confirm button carries the same label. */
+    await fireEvent.click(screen.getByRole("button", { name: "Account actions" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Disconnect" }));
     const buttons = screen.getAllByRole("button", { name: "Disconnect" });
     await fireEvent.click(buttons[buttons.length - 1]);
     await Promise.resolve();

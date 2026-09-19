@@ -291,6 +291,18 @@ func MarkDraining() { draining.Store(true) }
 // Draining reports whether this process is on its way out.
 func Draining() bool { return draining.Load() }
 
+// handingOver marks the window where a successor has been forked but has not
+// taken over yet — the ~80s this host spends booting one while this process
+// keeps serving. Nothing else records it: the drain flag is set only AFTER
+// the successor is ready, so between the SIGHUP and that moment a handover in
+// progress is invisible to everything except the log.
+var handingOver atomic.Bool
+
+// HandingOver reports whether this process is currently starting a successor.
+// It is what lets a page say "a reload is happening" while it happens, rather
+// than only noticing afterwards that the version it was drawn with is gone.
+func HandingOver() bool { return handingOver.Load() }
+
 // armed mirrors whether THIS process can hand its socket to a successor, for
 // callers that only need the answer (the admin UI) and have no reason to hold
 // the Upgrader itself.
@@ -471,6 +483,11 @@ func (u *Upgrader) Upgrade() error {
 	if !u.Enabled() {
 		return ErrUnsupported
 	}
+	// Held for the whole call: tableflip's Upgrade blocks until the successor
+	// reports ready, so this flag spans exactly the window where a reload is
+	// underway and this process is still the one answering.
+	handingOver.Store(true)
+	defer handingOver.Store(false)
 	if BeforeSpawn != nil {
 		BeforeSpawn()
 	}

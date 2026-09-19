@@ -148,7 +148,7 @@ func wsBases(c *tool.Ctx) []wsBaseVM {
 	if globalAuth != nil {
 		tagIDs = globalAuth.GetUserFilterTagIDs(c.Context(), user.ID)
 	}
-	rows, err := globalConnectors.ListVisibleTo(c.Context(), tagIDs, user.IsAdmin())
+	rows, err := globalConnectors.ListVisibleTo(c.Context(), user.ID, tagIDs, user.IsAdmin())
 	if err != nil {
 		return nil
 	}
