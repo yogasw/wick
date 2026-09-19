@@ -1,9 +1,9 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import FileTreeNode from "../FileTreeNode.svelte";
-import type { ContextFileEntry } from "../../types/agents.js";
+import type { SessionFileEntry } from "../../types/agents.js";
 
-function fileNode(over: Partial<ContextFileEntry> = {}) {
+function fileNode(over: Partial<SessionFileEntry> = {}) {
   return { entry: { path: "src/a.ts", name: "a.ts", isDir: false, size: 2048, mtime: Date.now(), ...over }, children: [] };
 }
 

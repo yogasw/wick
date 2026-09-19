@@ -1,9 +1,9 @@
 <script lang="ts">
   import FileTreeNode from "./FileTreeNode.svelte";
-  import type { ContextFileEntry } from "../types/agents.js";
+  import type { SessionFileEntry } from "../types/agents.js";
   import { formatSize, formatRelTime } from "../fileMeta.js";
 
-  type TreeNode = { entry: ContextFileEntry; children: TreeNode[] };
+  type TreeNode = { entry: SessionFileEntry; children: TreeNode[] };
 
   type Props = {
     node: TreeNode;
@@ -16,7 +16,7 @@
     loadingDirs?: Record<string, boolean>;
     deletingPaths?: Record<string, boolean>;
     onToggleDir: (path: string) => void;
-    onOpen: (f: ContextFileEntry) => void;
+    onOpen: (f: SessionFileEntry) => void;
     onDownload: (path: string) => void;
     onDelete: (path: string) => void;
     onNewHere: (dirPath: string) => void;

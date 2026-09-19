@@ -228,7 +228,7 @@ export type ApprovalsResponse = {
   always_approved: ApprovedItem[];
 };
 
-export type ContextFileEntry = {
+export type SessionFileEntry = {
   path: string;
   name: string;
   size: number;

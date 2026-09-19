@@ -76,7 +76,7 @@
   import ConversationHeader from "./ConversationHeader.svelte";
   import ConversationThread from "./ConversationThread.svelte";
   import JsonTree from "./JsonTree.svelte";
-  import ContextPanel from "./ContextPanel.svelte";
+  import FilesPanel from "./FilesPanel.svelte";
   import FileViewerModal from "./FileViewerModal.svelte";
   import SwitchModal from "./SwitchModal.svelte";
   import OverridePopover from "./OverridePopover.svelte";
@@ -95,7 +95,7 @@
 
   import type {
     ConversationTurn, LiveTurn, TypingState,
-    ContextFileEntry, AskAnswer, ApprovalDecision,
+    SessionFileEntry, AskAnswer, ApprovalDecision,
     ApprovedItem, ComposerCommand,
     WsInstance, WsBase, WsTombstone, ProcessInfo, FileContent,
     ProviderOption, ProjectOption, Schedule,
@@ -184,7 +184,7 @@
   let sseStatus = $state<SSEStatus>("connecting");
 
   /* ── vertical rail tabs ────────────────────────────────────────── */
-  type RailTab = "context" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents" | "ticket" | "notes" | "todos";
+  type RailTab = "files" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents" | "ticket" | "notes" | "todos";
   let railTab = $state<RailTab | null>(null);
 
   /* ── thread scroll ref ─────────────────────────────────────────── */
@@ -192,7 +192,7 @@
 
   /* ── context panel state ──────────────────────────────────────── */
   let cwdVal = $state("");
-  let filesVal = $state<ContextFileEntry[]>([]);
+  let filesVal = $state<SessionFileEntry[]>([]);
   let filesLoading = $state(false);
   let filesLoadError = $state("");
   /* Which directories have had their children fetched. The tree is loaded
@@ -231,7 +231,7 @@
     "panel:process": () => toggleRail("process"),
     "panel:workspace": () => toggleRail("workspace"),
     "panel:source": () => toggleRail("source"),
-    "panel:context": () => toggleRail("context"),
+    "panel:files": () => toggleRail("files"),
     "panel:subagents": () => toggleRail("subagents"),
     "panel:thinking": () => openOverridePopover(),
     "panel:usage": () => openUsagePopover(),
@@ -644,7 +644,7 @@
      that directory: anything still listed under it that the server no longer
      returns is dropped, along with its subtree. Without that, a file deleted
      on disk would sit in the panel until a full refresh. */
-  function mergeFiles(incoming: ContextFileEntry[], dirScope?: string) {
+  function mergeFiles(incoming: SessionFileEntry[], dirScope?: string) {
     const byPath = new Map(filesVal.map((f) => [f.path, f]));
     if (dirScope !== undefined) {
       const keep = new Set(incoming.map((f) => f.path));
@@ -808,7 +808,7 @@
   let filesRefreshing = false;
   let filesRefreshAgain = false;
   async function reloadFilesSilently() {
-    if (railTab !== "context") return;
+    if (railTab !== "files") return;
     if (filesRefreshing) { filesRefreshAgain = true; return; }
     filesRefreshing = true;
     try {
@@ -834,7 +834,7 @@
     }
   }
   function scheduleFileReload() {
-    if (railTab !== "context") return; // nothing renders the tree — skip the fetch
+    if (railTab !== "files") return; // nothing renders the tree — skip the fetch
     if (fileReloadTimer !== null) clearTimeout(fileReloadTimer);
     fileReloadTimer = setTimeout(reloadFilesSilently, 400);
   }
@@ -1265,7 +1265,7 @@
         scrollToBottom();
       } else if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B")) {
         e.preventDefault();
-        toggleRail("context");
+        toggleRail("files");
       }
     }
     window.addEventListener("keydown", onKeydown);
@@ -1448,7 +1448,7 @@
       .catch((e: unknown) => toastError(`Read: ${e instanceof Error ? e.message : String(e)}`));
   }
 
-  function openFile(f: ContextFileEntry) {
+  function openFile(f: SessionFileEntry) {
     if (f.isDir) return;
     openFileByPath(f.path);
   }
@@ -1799,7 +1799,7 @@
   // Refresh the file tree when the context panel opens — SSE-driven reloads are
   // skipped while it's closed, so pick up any files written meanwhile.
   $effect(() => {
-    if (railTab === "context") reloadFilesSilently();
+    if (railTab === "files") reloadFilesSilently();
   });
 
   // Esc closes the open side panel — "sat set". Guarded on defaultPrevented so
@@ -1949,8 +1949,13 @@
       icon: '<path d="M5.5 4.5h7M5.5 8h7M5.5 11.5h4" stroke-linecap="round"></path><path d="M2.5 4.5l1 1 1.5-2M2.5 8l1 1 1.5-2" stroke-linecap="round" stroke-linejoin="round"></path>',
     },
     {
-      id: "context",
-      label: "Context",
+      // Labelled "Files" even though the id stays `context`: what it shows is
+      // the session folder — a file tree with counts — and "Context" is now
+      // spoken for by the model's context window, which is a different thing
+      // entirely. The id is load-bearing (persisted last-open tab), so it
+      // outlives the label.
+      id: "files",
+      label: "Files",
       icon: '<path d="M2 4a1 1 0 011-1h3l2 2h5a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke-linejoin="round"></path>',
     },
     {
@@ -2122,7 +2127,7 @@
 
   const sideOpen = $derived(railTab !== null);
 
-  const contextCount = $derived(filesVal.filter((f) => !f.isDir).length);
+  const filesCount = $derived(filesVal.filter((f) => !f.isDir).length);
   // Idle-fallback rows (kind === "idle") carry only the provider/agent name
   // for the composer toolbar — they are not real processes, so exclude them
   // from the process panel and the "Process N" rail badge. A session whose
@@ -2165,7 +2170,7 @@
   function railCount(id: RailTab): number {
     if (id === "todos") return openTodoCount;
     if (id === "notes") return noteCount;
-    if (id === "context") return contextCount;
+    if (id === "files") return filesCount;
     if (id === "process") return processCount;
     if (id === "workspace") return workspaceCount;
     if (id === "scheduled") return scheduledCount;
@@ -2464,8 +2469,8 @@
           info={notesInfo}
           onChanged={loadTicket}
         />
-      {:else if railTab === "context"}
-        <ContextPanel
+      {:else if railTab === "files"}
+        <FilesPanel
           cwd={cwdVal}
           files={filesVal}
           search={fileSearch}
@@ -2650,8 +2655,8 @@
               info={notesInfo}
               onChanged={loadTicket}
             />
-          {:else if railTab === "context"}
-            <ContextPanel
+          {:else if railTab === "files"}
+            <FilesPanel
               cwd={cwdVal}
               files={filesVal}
               search={fileSearch}

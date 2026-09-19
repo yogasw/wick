@@ -257,7 +257,7 @@ describe("DetailView — SCM source rail panel", () => {
     const sourceBtn = screen.getByRole("button", { name: /source/i });
     await fireEvent.click(sourceBtn);
 
-    const contextBtn = screen.getByRole("button", { name: /context/i });
+    const contextBtn = screen.getByRole("button", { name: /files/i });
     await fireEvent.click(contextBtn);
 
     /* source panel removed; context btn is now active */
@@ -276,7 +276,7 @@ describe("DetailView — SCM source rail panel", () => {
     expect(container.querySelector("[data-scm-host]")).not.toBeNull();
 
     /* Switch to context — scm host must be gone */
-    const contextBtn = screen.getByRole("button", { name: /context/i });
+    const contextBtn = screen.getByRole("button", { name: /files/i });
     await fireEvent.click(contextBtn);
     expect(container.querySelector("[data-scm-host]")).toBeNull();
   });
@@ -326,7 +326,7 @@ describe("DetailView — SCM source rail panel", () => {
     await Promise.resolve();
 
     /* Switch away from source */
-    const contextBtn = screen.getByRole("button", { name: /context/i });
+    const contextBtn = screen.getByRole("button", { name: /files/i });
     await fireEvent.click(contextBtn);
     await Promise.resolve();
 
@@ -477,7 +477,7 @@ describe("DetailView — rail tab count badges (#31)", () => {
 
   test("rail tabs render without a count badge when counts are zero", () => {
     const { container } = render(DetailView, { props: DEFAULT_PROPS });
-    expect(container.querySelector('[aria-label="Context"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Files"]')).not.toBeNull();
     /* zero-count badges must not appear */
     expect(container.querySelectorAll(".rounded-full.bg-green-500").length).toBe(0);
   });
