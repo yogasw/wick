@@ -9,6 +9,8 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
+	wickenv "github.com/yogasw/wick/internal/pkg/env"
+	"github.com/yogasw/wick/internal/pkg/netboot"
 	"github.com/yogasw/wick/pkg/connector"
 )
 
@@ -41,6 +43,13 @@ func DumpManifest(mod connector.Module) ([]byte, error) {
 // manifest JSON and exits (used by `make plugins` / CI); otherwise it serves
 // the gRPC plugin and blocks until the host disconnects.
 func Serve(mod connector.Module) {
+	// Connector binaries run as native child processes. Configure DNS and the
+	// Termux CA bundle before any connector can make an outbound request. Other
+	// operating systems keep their normal resolver and certificate handling.
+	if wickenv.IsTermux() {
+		netboot.Setup()
+	}
+
 	args := os.Args[1:]
 	dump := false
 	signKey := ""

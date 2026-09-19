@@ -195,6 +195,12 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	}
 	args = append(args, routerContrib.Args...)
 
+	// codex exec treats /compact as ordinary model text. Use the app-server
+	// RPC that performs real persisted-thread compaction instead.
+	if strings.EqualFold(strings.TrimSpace(opt.InitialMessage), "/compact") && opt.ResumeID != "" {
+		return s.spawnCompact(ctx, opt, bin, routerContrib.Env)
+	}
+
 	if soulPath != "" {
 		// model_instructions_file points codex at our preset file as the
 		// model instructions. The earlier `instructions_files` key was

@@ -73,7 +73,8 @@ type codexRaw struct {
 	// rather than at top level like a plain `{"type":"error","message":...}`.
 	Error *codexError `json:"error,omitempty"`
 	// Usage lands on turn.completed with the turn's token accounting.
-	Usage *codexUsage `json:"usage,omitempty"`
+	Usage      *codexUsage     `json:"usage,omitempty"`
+	Compaction *CompactionInfo `json:"compaction,omitempty"`
 }
 
 // codexUsage is the shape codex 0.129 emits on turn.completed, captured
@@ -205,6 +206,8 @@ func (p *CodexParser) Parse(line string) (AgentEvent, error) {
 	log.Debug().Str("type", raw.Type).Str("thread_id", raw.ThreadID).Msg("codex.parse: decoded")
 
 	switch raw.Type {
+	case "wick.compaction":
+		return AgentEvent{Type: Compaction, Raw: trimmed, Compaction: raw.Compaction}, nil
 	case "thread.started":
 		log.Debug().Str("thread_id", raw.ThreadID).Bool("already_emitted", p.sessionEmitted).Msg("codex.parse: thread.started")
 		if raw.ThreadID != "" {

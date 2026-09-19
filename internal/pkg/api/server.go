@@ -52,6 +52,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/ticketprompt"
 	"github.com/yogasw/wick/internal/agents/todoprompt"
 	// systemprompt "github.com/yogasw/wick/internal/agents/system-prompt" // disabled: ConnectorCatalog injection (see ConnectorCatalogLoader below)
+	"github.com/yogasw/wick/internal/agents/clitoken"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
 	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
@@ -104,7 +105,6 @@ import (
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
-	"github.com/yogasw/wick/internal/agents/clitoken"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
@@ -265,6 +265,7 @@ func NewServer() *Server {
 	if mgr, n, err := connplugin.Load(connplugin.DefaultDir(), 5*time.Minute, pluginStore.Enabled); err != nil {
 		log.Warn().Err(err).Msg("connector plugins: load failed")
 	} else if mgr != nil {
+		mgr.SetDNSServersLoader(func() string { return configsSvc.Get(configs.KeyDNSServers) })
 		log.Info().Int("plugins", n).Msg("connector plugins: loaded")
 		pluginMgr = mgr
 		go pluginMgr.WarmUp()
@@ -2826,7 +2827,6 @@ func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 func mcpLoopbackExempt(path, host string) bool {
 	return path == "/mcp" && isLoopbackHost(host)
 }
-
 
 // withAirouterRedirect 302-redirects a root-absolute request that belongs to an
 // embedded router's SPA (e.g. GET /home) to that router's mount
