@@ -37,11 +37,11 @@ type ScheduleAdminRow struct {
 	RunAsLabel string
 }
 
-// ScheduleUserOption is one entry in the "Run as" picker.
-type ScheduleUserOption struct {
-	ID    string
-	Label string
-}
+// ScheduleUserOption is one entry in the "Run as" picker. An alias rather
+// than its own type: the projects and connectors owner pickers offer the same
+// list of approved users, and one shape means one builder (Handler.userOptions)
+// feeds all three.
+type ScheduleUserOption = UserOption
 
 // scheduleScopeLabel describes where a fire lands, in the terms the schedule
 // itself uses: a project job mints or reuses a session per fire, while a
@@ -377,6 +377,38 @@ templ scheduleDetailModal(row ScheduleAdminRow, users []ScheduleUserOption) {
 						<option value="" selected?={ row.RunAsUserID == "" }>Owner (default)</option>
 						for _, u := range users {
 							<option value={ u.ID } selected?={ row.RunAsUserID == u.ID }>{ u.Label }</option>
+						}
+					</select>
+					<button
+						type="submit"
+						hidden
+						class="shrink-0 rounded-lg border border-green-400 bg-green-100 dark:bg-green-900 px-3 py-1 text-sm text-green-700 dark:text-green-300 hover:border-green-500 transition-colors"
+					>Save</button>
+				</form>
+			</div>
+			<div class="mt-4">
+				<div class="text-xs uppercase tracking-wide text-black-800 dark:text-black-600">Change who owns it</div>
+				// Owner is the deeper of the two identities on this screen: it is
+				// what a fire falls back to when there is no run-as override, and
+				// it is what the owner's own schedule list is keyed on. A row whose
+				// owner has left is both running as nobody and visible to nobody.
+				<form
+					action={ templ.SafeURL("/admin/schedule/" + row.ID + "/owner") }
+					method="POST"
+					class="mt-1 flex items-center gap-2"
+				>
+					<select
+						name="owner_user_id"
+						data-initial={ row.OwnerUserID }
+						onchange="this.nextElementSibling.hidden = this.value === this.dataset.initial"
+						class="min-w-0 flex-1 rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-1 text-sm text-black-900 dark:text-white-100"
+					>
+						<option value="" selected?={ row.OwnerUserID == "" }>Nobody (unowned)</option>
+						if row.OwnerUserID != "" && !userOptionsHave(users, row.OwnerUserID) {
+							<option value={ row.OwnerUserID } selected>{ row.OwnerLabel } — unknown user</option>
+						}
+						for _, u := range users {
+							<option value={ u.ID } selected?={ row.OwnerUserID == u.ID }>{ u.Label }</option>
 						}
 					</select>
 					<button

@@ -93,7 +93,12 @@ func (h *Handler) apiConnectorTestMeta(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	accs, _ := h.connectors.ListAccounts(ctx, row.ID)
+	// Only the accounts this caller may actually run as. Service.Execute
+	// refuses an AccountID the caller cannot see, so listing the whole pool
+	// here just offered "Run as @someone-else" options that fail on Run —
+	// and told everyone who else has connected an account. Same rule the
+	// detail page's Accounts section uses.
+	accs := h.visibleAccountsForRow(ctx, *row, user, h.userFilterTagIDs(ctx, user))
 	accounts := make([]testAccountJSON, 0, len(accs))
 	for _, a := range accs {
 		accounts = append(accounts, testAccountJSON{ID: a.ID, DisplayName: a.DisplayName})

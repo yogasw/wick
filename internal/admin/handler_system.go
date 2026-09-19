@@ -198,21 +198,48 @@ func (h *Handler) systemUpdateApply(w http.ResponseWriter, r *http.Request) {
 		upgrade.ForceDrain()
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restart": true, "forced": forced})
+	// Whether this apply hands the socket over or stops and starts. The
+	// updater picks the same way (updater.GracefulRestart is wired exactly
+	// when the handover is armed), so the answer the page gets here matches
+	// what is about to happen — it is the difference between "Restarting…"
+	// and "handing over, nothing goes down", and the page had no way to
+	// tell them apart.
+	graceful := upgrade.Armed()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "restart": !graceful, "handover": graceful, "forced": forced,
+	})
 	// Flush so the client gets the response before we tear down the
 	// server below. Unwrap-aware to see through the status middleware.
 	_ = http.NewResponseController(w).Flush()
 
 	go func() {
 		h.sys.Coordinator.MarkApplying()
+		if graceful {
+			// Same phase the watcher and Swap now publish, so an apply from
+			// this page gets the A → B → C strip and the banner on every
+			// other page — one handover, narrated one way, whoever started it.
+			to := ""
+			if st := h.sys.Coordinator.Snapshot(); st.StagedVersion != "" {
+				to = st.StagedVersion
+			}
+			upgrade.SetAutoSwap(upgrade.AutoSwap{State: "handing_over", To: to})
+		}
 		// Give the HTTP response a beat to reach the client before the
 		// listener is cancelled by the stop func below.
 		time.Sleep(300 * time.Millisecond)
 		// processctl.StopServer drains the in-process server when tray-
 		// managed (no-op otherwise). The real teardown comes from the swap
-		// itself. Logging only — on success the next line never runs.
+		// itself. On success the next line never runs: the process image is
+		// replaced, or a successor takes the socket and this one drains.
 		if err := upd.ApplyStagedAndRestart(func() { _ = processctl.StopServer() }); err != nil {
-			log.Error().Err(err).Msg("apply staged update: re-exec failed — continuing on current binary")
+			log.Error().Err(err).Msg("apply staged update: swap failed — continuing on current binary")
+			// Returning IS the failure, and it used to be invisible: the page
+			// spun on "Applying…" while the old build went on serving. Say so,
+			// and put the button back — the staged binary is still there.
+			h.sys.Coordinator.MarkApplyFailed(err.Error())
+			if graceful {
+				upgrade.SetAutoSwap(upgrade.AutoSwap{})
+			}
 		}
 	}()
 }

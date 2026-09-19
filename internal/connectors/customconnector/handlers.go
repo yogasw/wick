@@ -569,9 +569,14 @@ func (h handlers) instanceCreate(c *connector.Ctx) (any, error) {
 	}
 	// Same follow-up as the UI's "+ New row": link the per-def access
 	// tags so the fresh row is governed immediately, and mark level-2
-	// ownership for non-admin creators.
+	// ownership for the creator.
+	//
+	// Admins are NOT exempt. EnsureTagsForKey attaches custom:<key>, a
+	// filter tag nobody carries yet, so skipping the owner tag for an admin
+	// left the row reachable only through admin_see_all_connectors — and
+	// with that knob off it was invisible to everyone including its author.
 	h.deps.Custom.EnsureTagsForKey(c.Context(), def.Key)
-	if !user.IsAdmin() {
+	if user != nil {
 		h.deps.Custom.TagInstanceOwner(c.Context(), row.ID, user.ID)
 	}
 	return map[string]any{"id": row.ID, "label": row.Label}, nil

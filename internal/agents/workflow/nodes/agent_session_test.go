@@ -1,12 +1,36 @@
 package nodes
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/provider"
 )
+
+// fakeProvider is a provider.Provider whose name and runtime type can
+// disagree — the whole point of the routing tests below. An empty typ
+// stands in for a provider that cannot report its runtime.
+type fakeProvider struct {
+	name string
+	typ  string
+}
+
+func (f fakeProvider) Name() string                        { return f.name }
+func (f fakeProvider) ProviderType() string                { return f.typ }
+func (f fakeProvider) Capabilities() provider.Capabilities { return provider.Capabilities{} }
+
+func (f fakeProvider) StructuredCall(context.Context, provider.StructuredRequest) (provider.StructuredResult, error) {
+	return provider.StructuredResult{}, nil
+}
+
+func (f fakeProvider) AgentCall(context.Context, provider.AgentRequest) (provider.AgentResult, error) {
+	return provider.AgentResult{}, nil
+}
+
+func (f fakeProvider) ListSkills(context.Context) ([]provider.Skill, error) { return nil, nil }
 
 func TestResolveAgentSessionID_FallbackToEngineDefault(t *testing.T) {
 	rc := newTestRC()
@@ -105,16 +129,43 @@ func TestResolveAgentSessionID_OrderingHonored(t *testing.T) {
 }
 
 func TestProviderUsesPool_CaseInsensitive(t *testing.T) {
-	if !providerUsesPool("claude") {
+	if !providerUsesPool(fakeProvider{name: "claude", typ: "claude"}) {
 		t.Error("claude should route via pool")
 	}
-	if !providerUsesPool("Claude") {
+	if !providerUsesPool(fakeProvider{name: "Claude", typ: "Claude"}) {
 		t.Error("Claude (capitalized) should route via pool")
 	}
-	if providerUsesPool("codex") {
+	if providerUsesPool(fakeProvider{name: "codex", typ: "codex"}) {
 		t.Error("codex should not route via pool")
 	}
-	if providerUsesPool("gemini") {
+	if providerUsesPool(fakeProvider{name: "gemini", typ: "gemini"}) {
 		t.Error("gemini should not route via pool")
+	}
+}
+
+// A claude INSTANCE is rarely called "claude" — it is whatever the operator
+// named it. Routing on the name sent every one of those down the non-pool
+// `claude --print` path, which carries no --mcp-config, so the agent came up
+// with none of wick's MCP tools and reported itself blocked.
+func TestProviderUsesPool_NamedClaudeInstanceStillPools(t *testing.T) {
+	for _, name := range []string{"claude_support_ent", "enginer", "claude_waba_sonet"} {
+		if !providerUsesPool(fakeProvider{name: name, typ: "claude"}) {
+			t.Errorf("claude instance %q should route via pool", name)
+		}
+	}
+	// A codex instance named after claude must NOT be dragged onto the
+	// claude pool factory just because of its label.
+	if providerUsesPool(fakeProvider{name: "claude-ish", typ: "codex"}) {
+		t.Error("codex instance should not route via pool regardless of name")
+	}
+}
+
+func TestAgentProviderKey(t *testing.T) {
+	if got := agentProviderKey(fakeProvider{name: "claude_support_ent", typ: "claude"}); got != "claude/claude_support_ent" {
+		t.Errorf("provider key = %q, want claude/claude_support_ent", got)
+	}
+	// No type known: the pool reads a bare key as type == name.
+	if got := agentProviderKey(fakeProvider{name: "legacy"}); got != "legacy" {
+		t.Errorf("typeless provider key = %q, want legacy", got)
 	}
 }

@@ -68,11 +68,20 @@ function cbs() {
 }
 
 describe("ScheduleRow", () => {
-  test("recurring shows cadence + run count + by creator", () => {
+  test("recurring shows cadence + run count + the identity it runs with", () => {
     render(ScheduleRow, { props: { s: RECUR, ...cbs() } });
     expect(screen.getByText("every 5m")).toBeTruthy();
     expect(screen.getByText(/ran 3×/)).toBeTruthy();
-    expect(screen.getByText("by user")).toBeTruthy();
+    // The row deliberately stopped saying who CREATED it: "by ai" only means
+    // an agent typed it, while what decides whether a fire can reach anything
+    // is the identity it runs with. A schedule attached to nobody says so.
+    expect(screen.getByTestId("runas-badge").textContent).toContain("no identity");
+  });
+
+  test("names the identity a fire runs with when the schedule has one", () => {
+    const s = { ...RECUR, effective_run_as: "u1", effective_run_as_name: "Yoga" };
+    render(ScheduleRow, { props: { s, ...cbs() } });
+    expect(screen.getByTestId("runas-badge").textContent).toContain("runs as Yoga");
   });
 
   test("active recurring: pause + cancel fire with id", async () => {

@@ -13,6 +13,10 @@ import (
 
 type repo struct {
 	db *gorm.DB
+	// cache holds the user/tag data every admin listing reads. Invalidated by
+	// the write methods below, so it can never serve an edit-old answer for a
+	// change made through this process. See access_cache.go.
+	cache accessCache
 }
 
 func newRepo(db *gorm.DB) *repo {
@@ -38,6 +42,7 @@ func (r *repo) GetUser(ctx context.Context, userID string) (*entity.User, error)
 }
 
 func (r *repo) SetApproved(ctx context.Context, userID string, approved bool) error {
+	defer r.cache.invalidate()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&entity.User{}).Where("id = ?", userID).Update("approved", approved).Error; err != nil {
 			return err
@@ -61,6 +66,119 @@ func (r *repo) SetApproved(ctx context.Context, userID string, approved bool) er
 // ErrLastAdmin is returned when trying to demote the only remaining admin.
 var ErrLastAdmin = errors.New("cannot demote the last admin")
 
+// LoginStat is what the sessions table can say about one person: when they
+// last signed in, how many times, and whether a session of theirs is still
+// valid right now. A login IS a row here, so no new bookkeeping is needed to
+// answer "who still uses this".
+type LoginStat struct {
+	Last  time.Time
+	Count int
+	Live  int
+}
+
+// LoginStats aggregates the auth sessions table per user. Errors are swallowed
+// into an empty map on purpose: the analytics page is still worth rendering
+// without the login column, and half a page beats an error page.
+func (r *repo) LoginStats(ctx context.Context) map[string]LoginStat {
+	type row struct {
+		UserID string
+		Last   time.Time
+		Count  int
+		Live   int
+	}
+	var rows []row
+	err := r.db.WithContext(ctx).
+		Model(&entity.Session{}).
+		Select("user_id, MAX(created_at) AS last, COUNT(*) AS count, SUM(CASE WHEN expires_at > ? THEN 1 ELSE 0 END) AS live", time.Now().UTC()).
+		Group("user_id").
+		Scan(&rows).Error
+	if err != nil {
+		return map[string]LoginStat{}
+	}
+	out := make(map[string]LoginStat, len(rows))
+	for _, x := range rows {
+		out[x.UserID] = LoginStat{Last: x.Last, Count: x.Count, Live: x.Live}
+	}
+	return out
+}
+
+// LoginHistory is LoginStats with the shape the growth chart needs: one
+// count per user per UTC day, from `since` onwards. Same table, same
+// "a login IS a row" rule — a sign-in curve therefore needs no new
+// bookkeeping, only a GROUP BY that was not being asked for.
+//
+// Returned as user -> date(YYYY-MM-DD) -> count. Errors collapse to an
+// empty map for the same reason LoginStats swallows them: the page is
+// worth rendering without its chart.
+func (r *repo) LoginHistory(ctx context.Context, since time.Time) map[string]map[string]int {
+	type row struct {
+		UserID    string
+		CreatedAt time.Time
+	}
+	var rows []row
+	err := r.db.WithContext(ctx).
+		Model(&entity.Session{}).
+		Select("user_id, created_at").
+		Where("created_at >= ?", since.UTC()).
+		Scan(&rows).Error
+	if err != nil {
+		return map[string]map[string]int{}
+	}
+	// Bucketed in Go rather than in SQL: date formatting differs between
+	// sqlite and postgres, and this table is small enough that one round
+	// trip beats two dialects of DATE().
+	out := map[string]map[string]int{}
+	for _, x := range rows {
+		if x.UserID == "" {
+			continue
+		}
+		day := x.CreatedAt.UTC().Format("2006-01-02")
+		if out[x.UserID] == nil {
+			out[x.UserID] = map[string]int{}
+		}
+		out[x.UserID][day]++
+	}
+	return out
+}
+
+// FirstLoginRecordedAt is the oldest sign-in on record, or the zero time
+// when none exists.
+//
+// It exists to keep the page from lying. Sign-ins were not recorded at
+// all until recently — wick's sessions are stateless, so nothing was ever
+// written down — and "never signed in" is a much stronger claim than
+// "we have no record". With this, the page can say which one it means.
+func (r *repo) FirstLoginRecordedAt(ctx context.Context) time.Time {
+	// The oldest row rather than MIN(created_at): an aggregate comes back
+	// as a driver string on sqlite and as a time on postgres, so scanning
+	// it portably means handling both. Reading the row lets gorm's own
+	// column mapping do that, and on a table this small ORDER BY + LIMIT 1
+	// costs the same.
+	var row entity.Session
+	if err := r.db.WithContext(ctx).
+		Order("created_at ASC").
+		Limit(1).
+		Find(&row).Error; err != nil {
+		return time.Time{}
+	}
+	return row.CreatedAt.UTC()
+}
+
+// AccessTokens lists every Personal Access Token row, revoked ones
+// included. The analytics page shows them per person so "which of this
+// account's credentials is actually calling" has an answer; a revoked
+// token stays visible because it still explains past traffic.
+//
+// Only the stored record is read — hash and 4-character preview. The
+// plaintext exists nowhere but in the hands of whoever was given it.
+func (r *repo) AccessTokens(ctx context.Context) []entity.PersonalAccessToken {
+	var rows []entity.PersonalAccessToken
+	if err := r.db.WithContext(ctx).Find(&rows).Error; err != nil {
+		return nil
+	}
+	return rows
+}
+
 func (r *repo) CountAdmins(ctx context.Context) (int64, error) {
 	var count int64
 	err := r.db.WithContext(ctx).Model(&entity.User{}).Where("role = ?", entity.RoleAdmin).Count(&count).Error
@@ -68,6 +186,7 @@ func (r *repo) CountAdmins(ctx context.Context) (int64, error) {
 }
 
 func (r *repo) SetRole(ctx context.Context, userID string, role entity.UserRole) error {
+	defer r.cache.invalidate()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if role != entity.RoleAdmin {
 			var user entity.User
@@ -143,6 +262,7 @@ var ErrUserNotApproved = errors.New("user must be approved before assigning tags
 var ErrSystemTagAssignment = errors.New("system tags cannot be assigned to users")
 
 func (r *repo) SetUserTags(ctx context.Context, userID string, tagIDs []string) error {
+	defer r.cache.invalidate()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var u entity.User
 		if err := tx.First(&u, "id = ?", userID).Error; err != nil {
@@ -251,6 +371,7 @@ func (r *repo) SetToolDisabled(ctx context.Context, toolPath string, disabled bo
 }
 
 func (r *repo) SetToolTags(ctx context.Context, toolPath string, tagIDs []string) error {
+	defer r.cache.invalidate()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("tool_path = ?", toolPath).Delete(&entity.ToolTag{}).Error; err != nil {
 			return err
@@ -445,6 +566,7 @@ func (r *repo) HasSystemTag(ctx context.Context, toolPath string) (bool, error) 
 }
 
 func (r *repo) CreateTag(ctx context.Context, name string, isGroup, isFilter bool) (*entity.Tag, error) {
+	defer r.cache.invalidate()
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, errors.New("tag name is required")
@@ -468,6 +590,7 @@ func (r *repo) CreateTag(ctx context.Context, name string, isGroup, isFilter boo
 // sort_order) in a single call. Pass the full desired state. Refuses to
 // touch tags flagged IsSystem — those are code-owned.
 func (r *repo) UpdateTag(ctx context.Context, tagID, name, description string, isGroup, isFilter bool, sortOrder int) error {
+	defer r.cache.invalidate()
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return errors.New("tag name is required")
@@ -505,6 +628,7 @@ func (r *repo) UpdateTag(ctx context.Context, tagID, name, description string, i
 // Refuses to delete tags flagged IsSystem — they are seeded from code at
 // every boot anyway, so deletion would resurrect them empty.
 func (r *repo) DeleteTag(ctx context.Context, tagID string) error {
+	defer r.cache.invalidate()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var current entity.Tag
 		if err := tx.First(&current, "id = ?", tagID).Error; err != nil {
@@ -523,5 +647,63 @@ func (r *repo) DeleteTag(ctx context.Context, tagID string) error {
 			return err
 		}
 		return tx.Delete(&entity.Tag{}, "id = ?", tagID).Error
+	})
+}
+
+// TransferOwnerTag moves the "owner:<resourceID>" grant from one user to
+// another, creating the tag (and, for surfaces that have one, its tool-path
+// link) when it does not exist yet.
+//
+// It unlinks ONLY the previous owner. An admin can grant an owner tag to other
+// people from the Tags page — those grants are deliberate shares, and wiping
+// the tag to re-create it (the obvious implementation) would revoke every one
+// of them silently. A transfer is about one person handing a row to another,
+// not about clearing the room.
+//
+// newOwner == "" removes the old owner without naming a new one: the resource
+// becomes ownerless, which is a real state (most seeded rows are in it) and
+// not an error.
+func (r *repo) TransferOwnerTag(ctx context.Context, resourceID, toolPath, oldOwner, newOwner string) error {
+	if resourceID == "" || oldOwner == newOwner {
+		return nil
+	}
+	defer r.cache.invalidate()
+	name := "owner:" + resourceID
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var t entity.Tag
+		err := tx.Where("name = ?", name).First(&t).Error
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			if newOwner == "" {
+				// Nothing to unlink and nobody to link: the resource had no
+				// owner tag and is not getting one.
+				return nil
+			}
+			t = entity.Tag{Name: name, IsFilter: true}
+			if err := tx.Create(&t).Error; err != nil {
+				return err
+			}
+		case err != nil:
+			return err
+		}
+		if newOwner != "" {
+			if toolPath != "" {
+				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
+					Create(&entity.ToolTag{ToolPath: toolPath, TagID: t.ID}).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
+				Create(&entity.UserTag{UserID: newOwner, TagID: t.ID}).Error; err != nil {
+				return err
+			}
+		}
+		if oldOwner != "" {
+			if err := tx.Where("user_id = ? AND tag_id = ?", oldOwner, t.ID).
+				Delete(&entity.UserTag{}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }

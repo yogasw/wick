@@ -2,7 +2,14 @@ package view
 
 import "github.com/yogasw/wick/internal/entity"
 
-templ TagsPage(tags []*entity.Tag, user *entity.User, editID string) {
+// TagCounts is one tag's reach, rendered by TagUsageCell: how many approved
+// users carry it and how many items it gates.
+type TagCounts struct {
+	Users int
+	Items int
+}
+
+templ TagsPage(tags []*entity.Tag, user *entity.User, editID string, usage map[string]TagCounts) {
 	@AdminLayout("Admin · Tags", "tags", user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Tags</h1>
@@ -19,6 +26,7 @@ templ TagsPage(tags []*entity.Tag, user *entity.User, editID string) {
 					<button type="submit" class="rounded-md bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 transition-colors">Add tag</button>
 				</form>
 			</div>
+			@AccessSearch("tags")
 			<div class="mt-6 overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
 				<table class="w-full text-sm">
 					<thead>
@@ -26,17 +34,18 @@ templ TagsPage(tags []*entity.Tag, user *entity.User, editID string) {
 							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Name</th>
 							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Description</th>
 							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Flags</th>
+							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Usage</th>
 							<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600">Actions</th>
 						</tr>
 					</thead>
 					<tbody>
 						if len(tags) == 0 {
 							<tr>
-								<td colspan="4" class="px-4 py-6 text-center text-black-700 dark:text-black-600">No tags yet.</td>
+								<td colspan="5" class="px-4 py-6 text-center text-black-700 dark:text-black-600">No tags yet.</td>
 							</tr>
 						}
 						for _, t := range tags {
-							@TagRowFragment(t, t.ID == editID)
+							@TagRowFragment(t, t.ID == editID, usage[t.ID])
 						}
 					</tbody>
 				</table>
@@ -45,8 +54,12 @@ templ TagsPage(tags []*entity.Tag, user *entity.User, editID string) {
 	}
 }
 
-templ TagRowFragment(t *entity.Tag, editing bool) {
-	<tr id={ "tag-" + t.ID } class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+templ TagRowFragment(t *entity.Tag, editing bool, counts TagCounts) {
+	<tr
+		id={ "tag-" + t.ID }
+		data-search={ searchHaystack(t.Name, t.ID, t.Description) }
+		data-search-id={ t.ID }
+		class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
 		if t.IsSystem {
 			<td class="px-4 py-3 font-medium text-black-900 dark:text-white-100">{ t.Name }</td>
 			<td class="px-4 py-3 text-sm text-black-700 dark:text-black-600">
@@ -67,11 +80,14 @@ templ TagRowFragment(t *entity.Tag, editing bool) {
 					}
 				</div>
 			</td>
+			<td class="px-4 py-3">
+				@TagUsageCell(t.ID, counts.Users, counts.Items)
+			</td>
 			<td class="px-4 py-3 text-right">
 				<span class="text-xs italic text-black-600 dark:text-black-700">Read-only · code-managed</span>
 			</td>
 		} else if editing {
-			<td colspan="4" class="px-4 py-3">
+			<td colspan="5" class="px-4 py-3">
 				<form action={ templ.SafeURL("/admin/tags/" + t.ID + "/update") } method="POST" class="flex flex-wrap items-start gap-3">
 					<div class="flex flex-col gap-1">
 						<label class="text-[10px] uppercase tracking-wide text-black-700 dark:text-black-600">Name</label>
@@ -137,6 +153,9 @@ templ TagRowFragment(t *entity.Tag, editing bool) {
 						<span class="text-xs text-black-600 dark:text-black-700">—</span>
 					}
 				</div>
+			</td>
+			<td class="px-4 py-3">
+				@TagUsageCell(t.ID, counts.Users, counts.Items)
 			</td>
 			<td class="px-4 py-3 text-right">
 				<div class="flex items-center justify-end gap-2">

@@ -20,6 +20,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/state"
+	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/processctl"
 )
@@ -120,6 +121,14 @@ type PoolConfig struct {
 	// this. nil (or empty result) = no resolved caller, which disables
 	// caller-change respawn for that message.
 	CallerUserID func(ctx context.Context) string
+
+	// CallerToken resolves the credential behind a Send — id and label of
+	// the Personal Access Token, for channels that authenticate with one.
+	// Recorded on the session at create time so a machine caller can be
+	// identified later by WHAT called, not only by whose account it used.
+	// nil (or an empty id) = nothing to record, which is the normal case
+	// for a human typing in a browser.
+	CallerToken func(ctx context.Context) (id, name string)
 
 	// SenderFrom resolves WHO sent a message from its context — the human
 	// identity the originating channel read off its own transport envelope.
@@ -716,6 +725,17 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// the operator changes the setting mid-flight.
 	senderLevel := p.senderVisibility()
 
+	// /compact aimed at a provider that cannot compact stops here.
+	// Forwarding it would be worse than dropping it: codex exec has no
+	// slash commands, so the text reaches the MODEL, which answers
+	// "Context compacted." while the window keeps filling. Answering in
+	// the transcript costs nothing and tells the truth — see
+	// provider.CanCompact for the measurements.
+	if role == "user" && isCompactCommand(text) && !p.providerCanCompact(sessionID, agentName) {
+		p.recordCompactUnsupported(ctx, sessionID, agentName, source, text, sender)
+		return nil
+	}
+
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -780,7 +800,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			p.notifyUserMessage(sessionID, agentName, source, text, sender)
 			userMsgNotified = true
 		}
-		err := entry.agent.Send(store.PrependSenderLine(augmentWithAttachments(text, atts), sender, senderLevel))
+		err := entry.agent.Send(withSenderLine(augmentWithAttachments(text, atts), sender, senderLevel))
 		// Nudge SSE so the Process panel's queued count updates in
 		// realtime — a RespawnQueue (codex) Send while busy just appended
 		// to the agent's pending queue, which fires no lifecycle event on
@@ -837,7 +857,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// before the subprocess exists, and drain concatenates them into one
 	// prompt. Stamping at drain would label every one of them with whoever
 	// happened to send last.
-	if err := buf.Append(store.PrependSenderLine(augmentWithAttachments(text, atts), sender, senderLevel)); err != nil {
+	if err := buf.Append(withSenderLine(augmentWithAttachments(text, atts), sender, senderLevel)); err != nil {
 		return err
 	}
 	// Persist the user turn to conversation.jsonl immediately so a page
@@ -1606,6 +1626,15 @@ func (p *Pool) SetThinkingTokens(sessionID, agentName, v string) error {
 	return session.SetThinkingTokens(p.cfg.Layout, sessionID, agentName, v)
 }
 
+// SetAgentProvider repoints the session's agent entry at a provider
+// instance ("type/name", e.g. "claude/work") so the next spawn resolves
+// that instance's binary and env. Used by a workflow agent node, whose
+// provider is chosen per node rather than per session. No-op when the
+// entry does not exist — create it first (SetMaxTurns does).
+func (p *Pool) SetAgentProvider(sessionID, agentName, providerKey string) error {
+	return session.SetAgentProvider(p.cfg.Layout, sessionID, agentName, providerKey)
+}
+
 // EnsureSession is the public wrapper for ensureSession. Workflow's
 // session_init executor calls this to materialize the registry entry +
 // sidebar row up-front, before any agent node actually dispatches a
@@ -1698,11 +1727,17 @@ func (p *Pool) ensureSession(ctx context.Context, sessionID, source, projectID s
 	if p.cfg.CallerUserID != nil {
 		ownerUserID = p.cfg.CallerUserID(ctx)
 	}
+	var tokenID, tokenName string
+	if p.cfg.CallerToken != nil {
+		tokenID, tokenName = p.cfg.CallerToken(ctx)
+	}
 	sess, cerr := session.Create(ctx, p.cfg.Layout, session.CreateOptions{
 		ID:        sessionID,
 		Origin:    session.Origin(source),
 		ProjectID: projectID,
 		UserID:    ownerUserID,
+		TokenID:   tokenID,
+		TokenName: tokenName,
 	})
 	// Suppress "already exists" — a concurrent call may have won the race.
 	if cerr != nil && !errors.Is(cerr, os.ErrExist) {
@@ -2032,6 +2067,15 @@ type ActiveEntry struct {
 // The normal onAgentExit hook still fires, releasing the slot and
 // draining the queue.
 func (p *Pool) Kill(sessionID, agentName string) error {
+	return p.KillBy(sessionID, agentName, "", "")
+}
+
+// KillBy is Kill with an author. The turn that gets cut short records who
+// did it, so the transcript can say "stopped by <person>" instead of
+// leaving the reader to guess between a person, the agent, and wick going
+// down — which is the difference between "fine, that was me" and "why did
+// my work vanish". Pass empty strings when nothing is known.
+func (p *Pool) KillBy(sessionID, agentName, by, note string) error {
 	p.mu.Lock()
 	prefix := sessionID + "::"
 	var entries []*runEntry
@@ -2042,6 +2086,11 @@ func (p *Pool) Kill(sessionID, agentName string) error {
 	}
 	p.mu.Unlock()
 	for _, e := range entries {
+		// Claim it BEFORE the stop: the interrupted turn is flushed inside
+		// Stop, and a cause set afterwards would arrive to an empty room.
+		if by != "" && e.store != nil {
+			e.store.SetInterruptCause(by, note)
+		}
 		if err := e.agent.Stop(); err != nil {
 			log.Error().Str("session", e.sessID).Str("agent", e.agentNm).Err(err).Msg("pool.kill: agent.Stop failed")
 			return err
@@ -2084,6 +2133,13 @@ var ErrAgentNotActive = errors.New("agent not active in pool")
 //
 // Returns ErrAgentNotActive when no live entry matches.
 func (p *Pool) KillAgent(sessionID, agentName string) error {
+	return p.KillAgentBy(sessionID, agentName, "", "")
+}
+
+// KillAgentBy is KillAgent with an author — see KillBy. The delegation
+// paths use it so a sub-agent that was stopped by its parent says so,
+// rather than looking like it died on its own.
+func (p *Pool) KillAgentBy(sessionID, agentName, by, note string) error {
 	p.mu.Lock()
 	e, ok := p.active[sessionID+"::"+agentName]
 	p.mu.Unlock()
@@ -2092,6 +2148,9 @@ func (p *Pool) KillAgent(sessionID, agentName string) error {
 	// for the same reason.
 	if !ok {
 		return ErrAgentNotActive
+	}
+	if by != "" && e.store != nil {
+		e.store.SetInterruptCause(by, note)
 	}
 	if err := e.agent.Stop(); err != nil {
 		log.Error().Str("session", sessionID).Str("agent", agentName).Err(err).Msg("pool.killAgent: agent.Stop failed")
@@ -2370,4 +2429,85 @@ func sessionHasCLISession(s session.Session) bool {
 // sessionKey is the canonical map key for an active agent.
 func sessionKey(sessionID, agentName string) string {
 	return sessionID + "::" + agentName
+}
+
+// withSenderLine stamps the `[from: …]` identity line on outbound text,
+// except when the text is a bare slash command — those must reach the CLI
+// with the slash first on the line or they stop being commands. See
+// store.IsBareSlashCommand for why that exception is safe.
+func withSenderLine(text string, sender *store.Sender, level string) string {
+	if store.IsBareSlashCommand(text) {
+		return text
+	}
+	return store.PrependSenderLine(text, sender, level)
+}
+
+// isCompactCommand recognises the message the composer's Compact action
+// sends, and the same thing typed by hand. Only the bare command — a
+// sentence that merely mentions /compact is a message like any other.
+func isCompactCommand(text string) bool {
+	return strings.EqualFold(strings.TrimSpace(text), "/compact")
+}
+
+// providerCanCompact reports whether this agent's provider can act on
+// /compact. Unknown provider → true, so an unreadable session file
+// cannot silently swallow a command that would have worked.
+func (p *Pool) providerCanCompact(sessionID, agentName string) bool {
+	key := p.agentProviderKey(sessionID, agentName)
+	if key == "" {
+		return true
+	}
+	typ, _ := provider.SplitInstanceKey(key)
+	return provider.CanCompact(provider.Type(typ))
+}
+
+// agentProviderKey returns the "type/name" this agent runs on, falling
+// back to the pool default when the session has no entry yet.
+func (p *Pool) agentProviderKey(sessionID, agentName string) string {
+	sess, err := session.Load(p.cfg.Layout, sessionID)
+	if err == nil {
+		for _, a := range sess.Agents {
+			if a.Name == agentName && a.Provider != "" {
+				return a.Provider
+			}
+		}
+	}
+	return p.cfg.DefaultProvider
+}
+
+// recordCompactUnsupported writes the exchange that did not happen: the
+// command as the person typed it, then wick's own answer. Both are
+// recorded so the transcript explains itself later — a /compact that
+// simply vanished would look like a bug in the composer.
+func (p *Pool) recordCompactUnsupported(ctx context.Context, sessionID, agentName, source, text string, sender *store.Sender) {
+	now := time.Now().UTC()
+	conv := p.cfg.Layout.SessionConversation(sessionID)
+	_ = storage.AppendJSONL(conv, "wick-conv-v1", sessionID, store.ConversationTurn{
+		TurnID:    fmt.Sprintf("%d", now.UnixNano()),
+		Timestamp: now,
+		Role:      "user",
+		Source:    source,
+		Agent:     agentName,
+		Text:      text,
+		Sender:    sender,
+	})
+	_ = storage.AppendJSONL(conv, "wick-conv-v1", sessionID, store.ConversationTurn{
+		TurnID:    fmt.Sprintf("%d", now.UnixNano()+1),
+		Timestamp: now,
+		Role:      "system",
+		Source:    source,
+		Agent:     agentName,
+		Text:      provider.CompactUnsupportedNote,
+	})
+	log.Ctx(ctx).Info().
+		Str("component", "pool").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Msg("pool.send: /compact not supported by this provider — answered without spawning")
+	// Push the command itself to viewers the same way any injected user
+	// turn is pushed. The note beside it is in the transcript; the web
+	// composer also renders it immediately from its own copy of this
+	// rule, so nobody is left watching a command that appears to have
+	// gone nowhere.
+	p.notifyUserMessage(sessionID, agentName, source, text, sender)
 }

@@ -128,6 +128,18 @@ func normaliseTicketButtons(in []project.TicketButton) ([]project.TicketButton, 
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return nil, fmt.Errorf("ticket button %q: url must be a full http(s) URL", b.Label)
 		}
+		switch strings.TrimSpace(b.Placement) {
+		case "", project.ButtonOnTicket:
+			// Stored as "" rather than "ticket": the default has to look
+			// the same whether the row predates placements or was saved by
+			// an editor that offers them.
+			b.Placement = ""
+		case project.ButtonOnBoard:
+			b.Placement = project.ButtonOnBoard
+		default:
+			return nil, fmt.Errorf("ticket button %q: placement must be %q or %q",
+				b.Label, project.ButtonOnTicket, project.ButtonOnBoard)
+		}
 		if b.ID == "" {
 			b.ID = newTicketButtonID()
 		}

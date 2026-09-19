@@ -19,6 +19,7 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -666,9 +667,20 @@ func Run() {
 		configCmd(), pluginCmd(), uninstallCmd(),
 		versionCmd,
 		agentExecCmd(),
+		agentChannelCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
+		// A command may name the exit code it wants. Scripts branch on
+		// those — "the token expired" and "wick is unreachable" are
+		// different problems and a single exit 1 makes a build script guess
+		// between them — and they print plainly rather than as a log line
+		// nobody pipes anywhere.
+		var coded interface{ ExitCode() int }
+		if errors.As(err, &coded) {
+			fmt.Fprintln(os.Stderr, "error: "+err.Error())
+			os.Exit(coded.ExitCode())
+		}
 		log.Fatal().Msgf("failed run app: %s", err.Error())
 	}
 }

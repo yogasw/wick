@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -105,6 +104,7 @@ import (
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
+	"github.com/yogasw/wick/internal/agents/clitoken"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
@@ -831,6 +831,14 @@ func NewServer() *Server {
 			// another principal's credential.
 			return agentchannels.CallerUserID(ctx)
 		},
+		// Which credential is behind this dispatch, when the caller used one.
+		// Only the REST channel has an answer — a browser or a Slack message
+		// carries a person, not a token — and it is recorded on the session so
+		// "which script has been calling" is answerable after the fact.
+		CallerToken: func(ctx context.Context) (string, string) {
+			t := agentchannels.CallerTokenFrom(ctx)
+			return t.ID, t.Name
+		},
 		// Who the agent is talking to, for the `[wick-sender ...]` line and
 		// the UI's sender chip. Channels stamp this themselves from their
 		// own transport envelope; a composer send falls back to the logged-in
@@ -1349,6 +1357,15 @@ func NewServer() *Server {
 	// rather than beside the dispatcher because tokensSvc lives at this
 	// point in boot.
 	agentstool.SetTicketAPIAuth(tokensSvc, authSvc)
+	// A CLI token is useless without the address to send it to, and on a
+	// host behind a proxy that address is not the loopback port.
+	clitoken.SetBaseURL(configsSvc.AppURL)
+	// CLI tokens are signed statements, not rows in a map: the app's own
+	// session secret is what lets ANY process — including a successor that
+	// booted after the token was minted — verify one. Rotating that secret
+	// invalidates outstanding CLI tokens too, which is the behaviour
+	// somebody rotating it expects.
+	clitoken.SetSecret(configsSvc.SessionSecret)
 
 	// One call wires every built-in channel: setup.All handles EnsureChannel,
 	// config load, NewChannel, setters, and registry.Add per transport.
@@ -2110,6 +2127,9 @@ func NewServer() *Server {
 	if wfMgr != nil && wfMgr.DataTables != nil {
 		dtconn.SetDataTableACL(dataTableACL{tags: tagsSvc, login: authSvc, dt: wfMgr.DataTables, cfg: configsSvc})
 	}
+	// Same idea for workflows the agent creates: record the session owner so
+	// the workflow shows up for them, instead of being visible to admins only.
+	wfconn.SetWorkflowOwnership(workflowOwnership{tags: tagsSvc})
 	// Connect MCP custom connectors before the gate lifts: boot
 	// registered them without probing, this pass pulls each server's
 	// live catalog now that configs (incl. oauth instance tokens) are
@@ -2279,11 +2299,28 @@ func NewServer() *Server {
 		wfLister = wfListerAdapter{svc: wfMgr.Service}
 	}
 	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore, sysCfg)
+	// The People & usage page reads the session store. Handed the SAME
+	// resolved layout the agents tool uses — resolving that path twice is how
+	// two parts of one binary end up reading two different directories.
+	admin.SetAgentsLayout(agentsLayout)
 	if wfMgr != nil && wfMgr.DataTables != nil {
 		adminHandler.SetDataTables(wfMgr.DataTables) // /admin/data-tables grant page
 	}
 	// /admin/schedule — the identity each scheduled fire runs as.
 	adminHandler.SetSchedules(scheduleStore, scheduleProjectNamer{layout: agentsLayout})
+	// /admin/projects — re-stamping a project's owner needs the manager, not
+	// the registry the page lists through.
+	if agentsMgr != nil {
+		adminHandler.SetProjectWriter(agentsMgr)
+	}
+	// /admin/workflows — same for a workflow's owner. Only the DB-backed
+	// service can re-stamp one, so the picker appears when that is what is
+	// running and stays a plain label otherwise.
+	if wfMgr != nil {
+		if ow, canSet := wfMgr.Service.(admin.WorkflowOwnerWriter); canSet {
+			adminHandler.SetWorkflowOwnerWriter(ow)
+		}
+	}
 
 	// ── Shared services ─────────────────────────────────────────
 	bookmarkSvc := bookmark.NewService(db)
@@ -2352,7 +2389,11 @@ func NewServer() *Server {
 	// bootReady flips, requests fall through to here and get true.
 	r.HandleFunc("GET /boot-status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"ready":true}`)
+		w.Header().Set("Cache-Control", "no-store")
+		// Same shape the gate answers with, so a caller does not have to
+		// know which side replied — and it carries the version/pid the
+		// navbar compares to notice a handover happened under it.
+		_ = json.NewEncoder(w).Encode(bootStatusPayload(true, ""))
 	})
 
 	// PWA manifest is dynamic — bakes the configured app name into the
@@ -2511,8 +2552,15 @@ func NewServer() *Server {
 	//     allowlist (agentstool isTicketAPIPath) — the shim forwards it;
 	//   - a new module mounts its own r.Handle("/api/<thing>/", h) — the
 	//     longer ServeMux pattern wins over this catch-all automatically.
+	//
+	// Two validators sit in front of it, each owning its own paths and its
+	// own token prefix: PATs reach the ticket endpoints, and the CLI
+	// channel's session-bound tokens reach /api/cli/… and nothing else.
+	// Neither can widen the other, and a request the CLI middleware does
+	// not recognise as its own passes straight through to the ticket one.
 	r.Handle(agentstool.TicketRESTBase+"/",
-		agentstool.TicketRESTShim(agentstool.TicketAPIAuthMW(gatedTools)))
+		agentstool.TicketRESTShim(
+			agentstool.CLIAPIAuthMW(agentstool.TicketAPIAuthMW(gatedTools))))
 
 	// AI-router dashboards + OpenAI-compatible API proxies, mounted at the wick
 	// root (not under the tool) so each embedded Next.js app's root-absolute
@@ -2779,6 +2827,7 @@ func mcpLoopbackExempt(path, host string) bool {
 	return path == "/mcp" && isLoopbackHost(host)
 }
 
+
 // withAirouterRedirect 302-redirects a root-absolute request that belongs to an
 // embedded router's SPA (e.g. GET /home) to that router's mount
 // (/airouter/<id>/home). A Next.js dashboard navigates client-side to
@@ -3020,9 +3069,9 @@ func (s *Server) Run(ctx context.Context, port int) error {
 			n, err := s.mcpScopedTokens.SaveHandoff(baseDir)
 			if err != nil {
 				logger.Warn().Err(err).Msg("upgrade: could not hand MCP tokens to the successor")
-				return
+			} else {
+				logger.Info().Int("grants", n).Msg("upgrade: MCP tokens handed to the successor")
 			}
-			logger.Info().Int("grants", n).Msg("upgrade: MCP tokens handed to the successor")
 		}
 		// The other side of that: adopt what a predecessor left, then delete
 		// it. Unconditional — a file only exists when one was written.

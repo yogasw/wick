@@ -58,7 +58,7 @@ func (e *engine) maybeCompact(ctx context.Context, budget int) bool {
 	if e.calibratedEstimate(e.history) < int(float64(budget)*compactionTriggerRatio) {
 		return false
 	}
-	return e.compactBy(ctx, compactOldestFraction)
+	return e.compactBy(ctx, compactOldestFraction, "auto")
 }
 
 // compactAggressively folds a larger oldest slice unconditionally (no
@@ -70,7 +70,10 @@ func (e *engine) compactAggressively(ctx context.Context) bool {
 	if len(e.history) < 4 {
 		return false
 	}
-	return e.compactBy(ctx, compactAggressiveFraction)
+	// Overflow recovery is still the engine deciding on its own, not a
+	// person asking — "auto" is what the reader needs to understand why
+	// their history shrank without them touching anything.
+	return e.compactBy(ctx, compactAggressiveFraction, "auto")
 }
 
 // isCompactCommand reports whether userText is the /compact command,
@@ -129,7 +132,10 @@ func (e *engine) runManualCompact(ctx context.Context) {
 	}
 	before := estimateTokens(e.history)
 	beforeTurns := len(e.history)
-	if !e.compactAggressively(ctx) {
+	// Same fold as overflow recovery, but tagged "manual": the marker in
+	// the transcript should say a person asked for this, not that the
+	// engine ran out of room.
+	if !e.compactBy(ctx, compactAggressiveFraction, "manual") {
 		e.emit(textLine("Couldn't compact further — the recent turns already fit and there's no older history left to summarize."))
 		e.emit(doneLine(""))
 		return
@@ -142,7 +148,7 @@ func (e *engine) runManualCompact(ctx context.Context) {
 	// non-rich channels. See fe common-md `detail` fence.
 	summary := currentSummaryText(e)
 	e.emit(textLine(detailFence(title, summary)))
-	e.emit(doneLine(title))
+	e.emitDone(title)
 }
 
 // currentSummaryText returns the summary now at the head of history (the
@@ -166,7 +172,8 @@ func detailFence(title, body string) string {
 // summary note, in place. Returns true when it actually shrank history.
 // The cut is advanced to a user-role boundary so a kept tool_result never
 // dangles without its preceding tool_call (which breaks vendors).
-func (e *engine) compactBy(ctx context.Context, fraction float64) bool {
+func (e *engine) compactBy(ctx context.Context, fraction float64, trigger string) bool {
+	before := e.calibratedEstimate(e.history)
 	cut := int(float64(len(e.history)) * fraction)
 	if cut < 1 {
 		return false
@@ -205,6 +212,16 @@ func (e *engine) compactBy(ctx context.Context, fraction float64) bool {
 		Int("summarized_turns", cut).
 		Msg("wick.compact: history compacted")
 	e.history = kept
+
+	// Report the boundary in the same shape a CLI would, so an engine
+	// compaction lands in the transcript as the same marker as claude's
+	// rather than as a differently-shaped notice. The token figures are
+	// the engine's calibrated estimate — it has no vendor count for a
+	// history it never sent — which is honest enough for "how much did
+	// this shed" and is never presented as billing.
+	if e.emit != nil {
+		e.emit(compactBoundaryLine(trigger, before, e.calibratedEstimate(e.history)))
+	}
 
 	// Persist the summary to the sidecar so it survives a respawn. The
 	// cutoff is the current conversation.jsonl turn count: every settled

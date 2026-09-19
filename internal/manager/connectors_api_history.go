@@ -20,6 +20,8 @@ type historyRunJSON struct {
 	Status       string `json:"status"`
 	UserID       string `json:"user_id"`
 	UserName     string `json:"user_name"`
+	AccountID    string `json:"account_id"`
+	AccountName  string `json:"account_name"`
 	ErrorMsg     string `json:"error_msg"`
 	LatencyMs    int    `json:"latency_ms"`
 	HTTPStatus   int    `json:"http_status"`
@@ -43,22 +45,33 @@ type historyUserJSON struct {
 	Name string `json:"name"`
 }
 
+// historyCredentialJSON is one entry in the Credential filter: a connected
+// account, or the sentinel for the row's own configured credentials. Answers
+// "which identity did this call go out as", which the User column cannot —
+// one person can drive several connected accounts, and an agent or MCP client
+// picks one while having no user at all.
+type historyCredentialJSON struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // historyJSON is the shape served at
 // GET /manager/api/connectors/{key}/{id}/history. It carries the filtered
 // + paginated runs plus the dropdown option sets (ops, users) and the
 // pagination envelope, so the SPA can render the whole page from one call.
 type historyJSON struct {
-	Key        string            `json:"key"`
-	Name       string            `json:"name"`
-	ID         string            `json:"id"`
-	Label      string            `json:"label"`
-	Runs       []historyRunJSON  `json:"runs"`
-	Ops        []historyOpJSON   `json:"ops"`
-	Users      []historyUserJSON `json:"users"`
-	Page       int               `json:"page"`
-	TotalPages int               `json:"total_pages"`
-	Total      int               `json:"total"`
-	PageSize   int               `json:"page_size"`
+	Key         string                  `json:"key"`
+	Name        string                  `json:"name"`
+	ID          string                  `json:"id"`
+	Label       string                  `json:"label"`
+	Runs        []historyRunJSON        `json:"runs"`
+	Ops         []historyOpJSON         `json:"ops"`
+	Users       []historyUserJSON       `json:"users"`
+	Credentials []historyCredentialJSON `json:"credentials"`
+	Page        int                     `json:"page"`
+	TotalPages  int                     `json:"total_pages"`
+	Total       int                     `json:"total"`
+	PageSize    int                     `json:"page_size"`
 }
 
 // historyPageSize matches the legacy connector_history.templ page size so
@@ -142,6 +155,7 @@ func (h *Handler) apiConnectorHistory(w http.ResponseWriter, r *http.Request) {
 		Source:       r.URL.Query().Get("source"),
 		Status:       r.URL.Query().Get("status"),
 		UserID:       r.URL.Query().Get("user"),
+		AccountID:    r.URL.Query().Get("credential"),
 	}
 
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -161,18 +175,36 @@ func (h *Handler) apiConnectorHistory(w http.ResponseWriter, r *http.Request) {
 	runs, _ := h.connectors.ListRunsFiltered(ctx, row.ID, filter, historyPageSize, (page-1)*historyPageSize)
 	usersByID := h.resolveRunUsers(ctx, runs)
 
+	// Credential options come from the accounts CONNECTED to this row, not
+	// from whoever appears in the current page: the point of the filter is to
+	// ask about an account whose runs you cannot see yet. Scoped by the same
+	// visibility rule as the Accounts list, so it never names an account the
+	// caller is not allowed to know about.
+	accountsByID := map[string]string{}
+	credentials := []historyCredentialJSON{{ID: connectors.RunFilterAccountDefault, Name: "Default credentials"}}
+	if accs, err := h.connectors.ListAccounts(ctx, row.ID); err == nil {
+		for _, acc := range accs {
+			if !h.accountVisible(ctx, user, *row, acc) {
+				continue
+			}
+			accountsByID[acc.ID] = acc.DisplayName
+			credentials = append(credentials, historyCredentialJSON{ID: acc.ID, Name: "@" + acc.DisplayName})
+		}
+	}
+
 	out := historyJSON{
-		Key:        mod.Meta.Key,
-		Name:       mod.Meta.Name,
-		ID:         row.ID,
-		Label:      row.Label,
-		Runs:       make([]historyRunJSON, 0, len(runs)),
-		Ops:        make([]historyOpJSON, 0, len(mod.AllOps())),
-		Users:      make([]historyUserJSON, 0, len(usersByID)),
-		Page:       page,
-		TotalPages: totalPages,
-		Total:      int(total),
-		PageSize:   historyPageSize,
+		Key:         mod.Meta.Key,
+		Name:        mod.Meta.Name,
+		ID:          row.ID,
+		Label:       row.Label,
+		Runs:        make([]historyRunJSON, 0, len(runs)),
+		Ops:         make([]historyOpJSON, 0, len(mod.AllOps())),
+		Users:       make([]historyUserJSON, 0, len(usersByID)),
+		Credentials: credentials,
+		Page:        page,
+		TotalPages:  totalPages,
+		Total:       int(total),
+		PageSize:    historyPageSize,
 	}
 	for _, op := range mod.AllOps() {
 		out.Ops = append(out.Ops, historyOpJSON{Key: op.Key, Name: op.Name})
@@ -188,6 +220,8 @@ func (h *Handler) apiConnectorHistory(w http.ResponseWriter, r *http.Request) {
 			Status:       string(run.Status),
 			UserID:       run.UserID,
 			UserName:     usersByID[run.UserID],
+			AccountID:    run.AccountID,
+			AccountName:  accountsByID[run.AccountID],
 			ErrorMsg:     run.ErrorMsg,
 			LatencyMs:    run.LatencyMs,
 			HTTPStatus:   run.HTTPStatus,

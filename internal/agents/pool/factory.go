@@ -464,7 +464,11 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		KillAfterIdle: opt.KillAfterIdle,
 		ParserFactory: func() event.Parser {
 			if pType == provider.TypeCodex {
-				return event.NewCodexParser()
+				// The codex parser reads the turn's context level out of
+				// codex's own rollout journal (its stream reports only a
+				// turn-wide sum), so it has to be told where this
+				// instance keeps its state.
+				return event.NewCodexParserIn(envValue(resolvedIns.Env, "CODEX_HOME"))
 			}
 			return event.NewClaudeParser()
 		},
@@ -724,4 +728,17 @@ func exitReasonString(r provider.ExitReason) string {
 		return "oom"
 	}
 	return "unknown"
+}
+
+// envValue picks one KEY=VALUE out of a spawn env slice, last wins (the
+// same rule exec applies). Empty when the key is absent, which callers
+// read as "the default applies".
+func envValue(env []string, key string) string {
+	out := ""
+	for _, kv := range env {
+		if name, value, ok := strings.Cut(kv, "="); ok && name == key {
+			out = value
+		}
+	}
+	return out
 }

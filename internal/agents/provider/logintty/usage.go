@@ -73,6 +73,13 @@ type UsageWindow struct {
 	Key         string    `json:"key"`
 	Utilization float64   `json:"utilization"` // percent, 0-100
 	ResetsAt    time.Time `json:"resets_at,omitempty"`
+	// ObservedAt is when the PROVIDER reported this figure, which is
+	// not always when wick read it. Claude answers a live request, so
+	// it leaves this empty and "checked just now" is the truth. Codex
+	// publishes its limits only while it runs (codex_usage.go reads
+	// them out of the last turn's journal), so a reading can be hours
+	// old and has to say so.
+	ObservedAt time.Time `json:"observed_at,omitempty"`
 }
 
 // SupportsUsage reports whether this provider type has a usage API wick
@@ -80,15 +87,21 @@ type UsageWindow struct {
 // types that would only answer ErrUsageUnsupported — no cache entry, no
 // pacing slot, no goroutine for a verdict that is a build constant.
 func SupportsUsage(t provider.Type) bool {
-	return t == provider.TypeClaude
+	return t == provider.TypeClaude || t == provider.TypeCodex
 }
 
 // ReadUsage fetches the current rate-limit utilization for one
-// instance using its stored credentials. Only claude today.
+// instance using its stored credentials (claude) or the journal it
+// already wrote (codex).
 func ReadUsage(t provider.Type, env []string) ([]UsageWindow, error) {
 	switch t {
 	case provider.TypeClaude:
 		return readClaudeUsage(env)
+	case provider.TypeCodex:
+		// Not a network probe: codex writes its limits into its own
+		// rollout, so this is a file read that cannot fail upstream or
+		// be rate-limited. See codex_usage.go.
+		return readCodexUsage(env)
 	default:
 		return nil, ErrUsageUnsupported
 	}

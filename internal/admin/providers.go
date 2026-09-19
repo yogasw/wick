@@ -82,6 +82,12 @@ func (h *Handler) providersAdminPage(w http.ResponseWriter, r *http.Request) {
 		rows[i] = row
 	}
 
+	access := h.accessSummaries(ctx, accessPaths)
+	for i := range rows {
+		rows[i].Access = access[providerAccessTagPath(rows[i].Type, rows[i].Name)]
+		rows[i].TagNames = adminview.TagNames(allTags, rows[i].AccessTagIDs)
+	}
+
 	adminview.ProvidersAdminPage(rows, allTags, user).Render(ctx, w)
 }
 

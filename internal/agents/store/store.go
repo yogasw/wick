@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -94,22 +95,29 @@ type Artifact struct {
 // Events are NOT stored here — they live in thinking/<TurnID>.json so
 // conversation.jsonl stays small regardless of tool payload size.
 type ConversationTurn struct {
-	TurnID      string       `json:"turn_id,omitempty"`
-	Timestamp   time.Time    `json:"ts"`
-	Role        string       `json:"role"`               // "user" | "assistant" | "system"
-	Agent       string       `json:"agent,omitempty"`    // assistant turn only
-	Provider    string       `json:"provider,omitempty"` // assistant turn only — "type/name" snapshot at turn time
-	Source      string       `json:"source,omitempty"`
-	Sender      *Sender      `json:"sender,omitempty"` // user turn only — who sent it, resolved by the channel
-	Text        string       `json:"text"`
-	Truncated   bool         `json:"truncated,omitempty"`
-	Interrupted bool         `json:"interrupted,omitempty"` // true when killed before Done — distinct from text-cap truncation
-	HasTrace    bool         `json:"has_trace,omitempty"`   // true when thinking/<TurnID>.json exists
-	Events      []TurnEvent  `json:"events,omitempty"`      // legacy: populated only when reading old turns
-	Attachments []Attachment `json:"attachments,omitempty"`  // user turn only
-	HasArtifact bool         `json:"has_artifact,omitempty"` // assistant turn — true when Artifacts derived
-	Artifacts   []Artifact   `json:"artifacts,omitempty"`    // assistant turn, derived read-time
-	IsError     bool         `json:"is_error,omitempty"`     // system turn — provider/runtime error, render as a failure
+	TurnID      string    `json:"turn_id,omitempty"`
+	Timestamp   time.Time `json:"ts"`
+	Role        string    `json:"role"`               // "user" | "assistant" | "system"
+	Agent       string    `json:"agent,omitempty"`    // assistant turn only
+	Provider    string    `json:"provider,omitempty"` // assistant turn only — "type/name" snapshot at turn time
+	Source      string    `json:"source,omitempty"`
+	Sender      *Sender   `json:"sender,omitempty"` // user turn only — who sent it, resolved by the channel
+	Text        string    `json:"text"`
+	Truncated   bool      `json:"truncated,omitempty"`
+	Interrupted bool      `json:"interrupted,omitempty"` // true when killed before Done — distinct from text-cap truncation
+	// Who or what cut the turn short. "Interrupted" alone leaves the reader
+	// guessing between a person clicking Stop, the agent stopping one of its
+	// own children, and wick going down under them — three situations with
+	// three different responses. Empty when nothing claimed it, and then the
+	// UI says only that it was interrupted rather than inventing a culprit.
+	InterruptedBy   string       `json:"interrupted_by,omitempty"`   // "user" | "agent" | "wick"
+	InterruptedNote string       `json:"interrupted_note,omitempty"` // one sentence: who, and what they did
+	HasTrace        bool         `json:"has_trace,omitempty"`        // true when thinking/<TurnID>.json exists
+	Events          []TurnEvent  `json:"events,omitempty"`           // legacy: populated only when reading old turns
+	Attachments     []Attachment `json:"attachments,omitempty"`      // user turn only
+	HasArtifact     bool         `json:"has_artifact,omitempty"`     // assistant turn — true when Artifacts derived
+	Artifacts       []Artifact   `json:"artifacts,omitempty"`        // assistant turn, derived read-time
+	IsError         bool         `json:"is_error,omitempty"`         // system turn — provider/runtime error, render as a failure
 
 	// Kind tags a structured system turn so the UI can render it specially
 	// and callers can identify it (e.g. "provider_switch"). Empty for a
@@ -122,13 +130,19 @@ type ConversationTurn struct {
 // SystemTurnKind values for ConversationTurn.Kind.
 const KindProviderSwitch = "provider_switch"
 
+// KindCompaction marks the point where the CLI folded older turns into
+// a summary. Recorded as a turn of its own so the gap in the
+// conversation has a visible cause — without it the history simply
+// appears to have holes.
+const KindCompaction = "compaction"
+
 // TurnTraceIndex is the lightweight index written to thinking/<turn_id>.json.
 // Events below the inline threshold have their Text embedded here.
 // Events at or above the threshold have Text omitted and Large=true —
 // UI must fetch thinking/<turn_id>/<event_id>.json separately.
 type TurnTraceIndex struct {
-	TurnID string            `json:"turn_id"`
-	Events []TurnEventIndex  `json:"events"`
+	TurnID string           `json:"turn_id"`
+	Events []TurnEventIndex `json:"events"`
 }
 
 // TurnEventIndex is one row in the trace index.
@@ -184,6 +198,13 @@ type Store struct {
 	mu       sync.RWMutex
 	eventBuf []TurnEvent
 
+	// interruptBy/Note: who declared they were about to cut the current
+	// turn short. Set just before the stop, consumed by the interrupted
+	// flush. Guarded by mu like eventBuf — it is written from the HTTP
+	// handler goroutine that services the Stop click.
+	interruptBy   string
+	interruptNote string
+
 	// recordRaw mirrors every event line into raw.jsonl. Off by
 	// default per design (raw is opt-in, retention agressive).
 	recordRaw bool
@@ -203,13 +224,13 @@ type Store struct {
 // stamped on every assistant turn so the UI can render which model
 // produced it even after the active provider switches.
 type Options struct {
-	Layout           config.Layout
-	SessionID        string
-	AgentName        string
-	Provider         string
-	RecordRaw        bool
-	TraceInlineBytes   int             // 0 = DefaultTraceInlineBytes
-	TraceEventMaxBytes int             // 0 = no cap on per-event file size
+	Layout             config.Layout
+	SessionID          string
+	AgentName          string
+	Provider           string
+	RecordRaw          bool
+	TraceInlineBytes   int              // 0 = DefaultTraceInlineBytes
+	TraceEventMaxBytes int              // 0 = no cap on per-event file size
 	Now                func() time.Time // optional; defaults to time.Now
 }
 
@@ -282,7 +303,7 @@ func (s *Store) AppendUserTurnWithSender(role, source, text string, atts []Attac
 // Side effects per event type:
 //
 //   - SessionStart    → persists cli_session_id into agents.json (if
-//                        AgentName is set) so resume works after kill.
+//     AgentName is set) so resume works after kill.
 //   - TextDelta       → appended to turnBuf.
 //   - Done / Error    → flush turnBuf as one assistant turn.
 //   - Anything else   → optionally mirrored to raw.jsonl.
@@ -391,6 +412,10 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		return false, nil
 
 	case event.Done:
+		// Token accounting goes to the session ledger (usage.json), not
+		// onto the turn: the questions it answers are aggregate ones, and
+		// a failure to record must never fail the turn that earned it.
+		_ = s.recordUsage(ev.Usage, s.now().UTC())
 		if err := s.flushAssistantTurn(false); err != nil {
 			return false, err
 		}
@@ -422,6 +447,23 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 				return false, err
 			}
 		}
+		return false, nil
+
+	case event.Compaction:
+		// Flush whatever text the turn had produced first, so the marker
+		// lands after it rather than jumping ahead of the reply it
+		// followed. Compaction does NOT end the turn — the CLI carries on
+		// with the same session — so this returns false.
+		if err := s.flushAssistantTurn(false); err != nil {
+			return false, err
+		}
+		if err := s.appendCompactionTurn(ev.Compaction); err != nil {
+			return false, err
+		}
+		// Keep the meter honest immediately: the level just dropped, and
+		// waiting for the next turn to say so makes the ring contradict
+		// the marker sitting right above it.
+		_ = s.recordCompaction(ev.Compaction, s.now().UTC())
 		return false, nil
 
 	case event.Trace:
@@ -499,15 +541,86 @@ func (s *Store) PartialText() string {
 // Flush is the explicit drain hook for callers that want to write
 // whatever's buffered (e.g. subprocess crashed mid-stream, no Done
 // arrived). Marks the turn as truncated since it didn't end naturally.
+// SetInterruptCause records who is about to cut this turn short, so the
+// interrupted turn can say so. Called just BEFORE the stop it describes —
+// by then the flush is milliseconds away and nothing else can claim it.
+// A later call wins: the last thing to declare itself is the thing that
+// actually did it.
+func (s *Store) SetInterruptCause(by, note string) {
+	s.mu.Lock()
+	s.interruptBy, s.interruptNote = by, note
+	s.mu.Unlock()
+}
+
+// SetInterruptCauseIfUnset is the fallback for a path that only knows the
+// shape of the interruption, not its author — wick shutting down, say. It
+// must never overwrite a caller that named itself.
+func (s *Store) SetInterruptCauseIfUnset(by, note string) {
+	s.mu.Lock()
+	if s.interruptBy == "" {
+		s.interruptBy, s.interruptNote = by, note
+	}
+	s.mu.Unlock()
+}
+
+// takeInterruptCause reads and clears the pending cause: it belongs to the
+// turn being written now, not to the next one.
+func (s *Store) takeInterruptCause() (string, string) {
+	s.mu.Lock()
+	by, note := s.interruptBy, s.interruptNote
+	s.interruptBy, s.interruptNote = "", ""
+	s.mu.Unlock()
+	return by, note
+}
+
 func (s *Store) Flush() error {
 	s.mu.RLock()
 	evEmpty := len(s.eventBuf) == 0
 	bufEmpty := s.turnBuf.Len() == 0
 	s.mu.RUnlock()
 	if bufEmpty && evEmpty {
-		return nil
+		// Nothing was buffered — the agent was thinking, or running a tool,
+		// and had not written a word yet. There is no turn to mark, and the
+		// old behaviour was to record NOTHING: you clicked Stop, the process
+		// died, and the transcript carried on as if you had never clicked.
+		// The stop itself is the event worth keeping, so write it as a
+		// system line when somebody claimed it.
+		return s.noteInterruptOnly()
 	}
 	return s.flushAssistantTurn(true)
+}
+
+// noteInterruptOnly records a stop that cut nothing off mid-sentence. It is
+// the only trace such a stop leaves, so it says who did it and stays silent
+// when nobody claimed it (a pending cause is only set by the paths that know
+// one — see SetInterruptCause).
+func (s *Store) noteInterruptOnly() error {
+	by, note := s.takeInterruptCause()
+	if by == "" && note == "" {
+		return nil
+	}
+	if note == "" {
+		note = "the agent was stopped"
+	}
+	now := s.now().UTC()
+	turn := ConversationTurn{
+		TurnID:          fmt.Sprintf("%d", now.UnixNano()),
+		Timestamp:       now,
+		Role:            "system",
+		Agent:           s.agentName,
+		Provider:        s.provider,
+		Text:            note,
+		Kind:            "interrupted",
+		Interrupted:     true,
+		InterruptedBy:   by,
+		InterruptedNote: note,
+	}
+	return storage.AppendJSONL(
+		s.layout.SessionConversation(s.sessionID),
+		"wick-conv-v1",
+		s.sessionID,
+		turn,
+	)
 }
 
 // flushAssistantTurn writes the buffered text as one assistant turn
@@ -551,6 +664,9 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		Truncated:   truncated,
 		Interrupted: wasInterrupted,
 		HasTrace:    hasTrace,
+	}
+	if wasInterrupted {
+		turn.InterruptedBy, turn.InterruptedNote = s.takeInterruptCause()
 	}
 	s.turnBuf.Reset()
 	if err := storage.AppendJSONL(
@@ -597,6 +713,67 @@ func (s *Store) appendErrorTurn(msg string) error {
 		s.sessionID,
 		turn,
 	)
+}
+
+// appendCompactionTurn records a compaction boundary as a structured
+// system turn. Numbers go in Extras rather than into prose so the UI can
+// render them however it likes (and so a later reader can chart them);
+// Text stays human-readable for channels that show plain text only.
+func (s *Store) appendCompactionTurn(info *event.CompactionInfo) error {
+	if info == nil {
+		return nil
+	}
+	now := s.now().UTC()
+	trigger := info.Trigger
+	if trigger == "" {
+		trigger = "auto"
+	}
+	extras := map[string]string{
+		"trigger":     trigger,
+		"pre_tokens":  strconv.Itoa(info.PreTokens),
+		"post_tokens": strconv.Itoa(info.PostTokens),
+	}
+	if info.DroppedTokens > 0 {
+		extras["dropped_tokens"] = strconv.Itoa(info.DroppedTokens)
+	}
+	if info.DurationMS > 0 {
+		extras["duration_ms"] = strconv.Itoa(info.DurationMS)
+	}
+	turn := ConversationTurn{
+		TurnID:    fmt.Sprintf("%d", now.UnixNano()),
+		Timestamp: now,
+		Role:      "system",
+		Agent:     s.agentName,
+		Provider:  s.provider,
+		Kind:      KindCompaction,
+		Text:      compactionSummary(trigger, info),
+		Extras:    extras,
+	}
+	return storage.AppendJSONL(
+		s.layout.SessionConversation(s.sessionID),
+		"wick-conv-v1",
+		s.sessionID,
+		turn,
+	)
+}
+
+// compactionSummary is the plain-text fallback, e.g.
+// "Context compacted (manual) — 31.3k → 4.1k tokens".
+func compactionSummary(trigger string, info *event.CompactionInfo) string {
+	return fmt.Sprintf("Context compacted (%s) — %s → %s tokens",
+		trigger, shortTokens(info.PreTokens), shortTokens(info.PostTokens))
+}
+
+// shortTokens renders a count the way a person reads it: 31261 -> 31.3k.
+func shortTokens(n int) string {
+	switch {
+	case n < 1000:
+		return strconv.Itoa(n)
+	case n < 1_000_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	default:
+		return fmt.Sprintf("%.2fM", float64(n)/1_000_000)
+	}
 }
 
 // writeTraceIndex writes thinking/<turn_id>.json (the index) and, for

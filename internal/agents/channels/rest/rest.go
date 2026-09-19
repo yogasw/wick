@@ -50,12 +50,29 @@ import (
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/entity"
 )
 
 // Authenticator validates a plaintext Bearer token and returns the owning
 // user_id. Implemented by accesstoken.Service.Authenticate.
 type Authenticator interface {
 	Authenticate(ctx context.Context, plain string) (userID string, err error)
+}
+
+// TokenAuthenticator is an Authenticator that can also name the
+// credential, not just its owner. accesstoken.Service implements it; a
+// test double need not, which is why it is a separate interface probed
+// by assertion rather than a widened Authenticator.
+type TokenAuthenticator interface {
+	AuthenticateToken(ctx context.Context, plain string) (*entity.PersonalAccessToken, error)
+}
+
+// caller is who a request authenticated as, and what it authenticated
+// with. The user id is the half that decides access; the token is the
+// half that says which of that person's credentials made the call.
+type caller struct {
+	UserID string
+	Token  agentchannels.CallerToken
 }
 
 // agentName is the pool agent every REST dispatch routes to. The project
@@ -316,7 +333,7 @@ func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		writeError(w, status, msg)
 		return
 	}
-	userID, status, msg := c.authBearer(r)
+	cl, status, msg := c.authBearer(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
@@ -360,7 +377,7 @@ func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		// Namespace the client-chosen conversation key by the authenticated
 		// user so two callers (different tokens/owners) reusing the same
 		// conversation string never collide on one pool session.
-		sessionID = restSessionID(userID, explicitSession)
+		sessionID = restSessionID(cl.UserID, explicitSession)
 		reused = true
 	}
 	if strings.TrimSpace(prompt) == "" {
@@ -369,7 +386,7 @@ func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if resolveBackground(req.Background, req.Metadata) {
-		if status, msg := c.dispatchBackground(sessionID, userID, req.User, prompt, reused, resolveProject(req.Project, req.Metadata)); status != 0 {
+		if status, msg := c.dispatchBackground(sessionID, cl, req.User, prompt, reused, resolveProject(req.Project, req.Metadata)); status != 0 {
 			writeError(w, status, msg)
 			return
 		}
@@ -390,7 +407,7 @@ func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	res, status, msg := c.dispatch(r.Context(), sessionID, userID, req.User, prompt, reused, resolveProject(req.Project, req.Metadata))
+	res, status, msg := c.dispatch(r.Context(), sessionID, cl, req.User, prompt, reused, resolveProject(req.Project, req.Metadata))
 	if status != 0 {
 		writeError(w, status, msg)
 		return
@@ -507,16 +524,29 @@ func (c *Channel) checkReady() (int, string) {
 
 // authBearer extracts and validates the Bearer token. Returns the owning
 // user_id on success; otherwise an HTTP status + message.
-func (c *Channel) authBearer(r *http.Request) (string, int, string) {
+func (c *Channel) authBearer(r *http.Request) (caller, int, string) {
 	bearer := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 	if bearer == "" {
-		return "", http.StatusUnauthorized, "missing bearer token"
+		return caller{}, http.StatusUnauthorized, "missing bearer token"
+	}
+	// Prefer the token-aware path so the session can record which
+	// credential called. Falling back keeps any Authenticator working —
+	// the identity is the same either way, only the audit detail differs.
+	if ta, ok := c.auth.(TokenAuthenticator); ok {
+		row, err := ta.AuthenticateToken(r.Context(), bearer)
+		if err != nil {
+			return caller{}, http.StatusUnauthorized, "invalid token"
+		}
+		return caller{
+			UserID: row.UserID,
+			Token:  agentchannels.CallerToken{ID: row.ID, Name: row.Name},
+		}, 0, ""
 	}
 	uid, err := c.auth.Authenticate(r.Context(), bearer)
 	if err != nil {
-		return "", http.StatusUnauthorized, "invalid token"
+		return caller{}, http.StatusUnauthorized, "invalid token"
 	}
-	return uid, 0, ""
+	return caller{UserID: uid}, 0, ""
 }
 
 // dispatchResult carries the agent's terminal state for one request.
@@ -531,11 +561,11 @@ type dispatchResult struct {
 // longer 409s — the request queues behind the in-flight turns exactly
 // like chat messages, and each waiter receives the reply to its own
 // message. Returns either a result (status 0) or an HTTP error.
-func (c *Channel) dispatch(ctx context.Context, sessionID, userID, userField, prompt string, reused bool, projectOverride string) (dispatchResult, int, string) {
-	sendCtx := c.newSendCtx(projectOverride)
+func (c *Channel) dispatch(ctx context.Context, sessionID string, cl caller, userField, prompt string, reused bool, projectOverride string) (dispatchResult, int, string) {
+	sendCtx := c.newSendCtx(projectOverride, cl)
 
 	tn := &turn{done: make(chan struct{})}
-	if err := c.enqueueAndSend(sendCtx, tn, sessionID, userID, userField, prompt, reused); err != nil {
+	if err := c.enqueueAndSend(sendCtx, tn, sessionID, cl.UserID, userField, prompt, reused); err != nil {
 		return dispatchResult{}, http.StatusInternalServerError, "pool dispatch failed: " + err.Error()
 	}
 
@@ -559,10 +589,10 @@ func (c *Channel) dispatch(ctx context.Context, sessionID, userID, userField, pr
 // channel. The bg turn keeps the FIFO aligned with the pool's queue and
 // keeps approval auto-block alive; its buffered reply is discarded on
 // Done (the output lives in the session history).
-func (c *Channel) dispatchBackground(sessionID, userID, userField, prompt string, reused bool, projectOverride string) (int, string) {
-	sendCtx := c.newSendCtx(projectOverride)
+func (c *Channel) dispatchBackground(sessionID string, cl caller, userField, prompt string, reused bool, projectOverride string) (int, string) {
+	sendCtx := c.newSendCtx(projectOverride, cl)
 	tn := &turn{done: make(chan struct{}), bg: true}
-	if err := c.enqueueAndSend(sendCtx, tn, sessionID, userID, userField, prompt, reused); err != nil {
+	if err := c.enqueueAndSend(sendCtx, tn, sessionID, cl.UserID, userField, prompt, reused); err != nil {
 		return http.StatusInternalServerError, "pool dispatch failed: " + err.Error()
 	}
 	return 0, ""
@@ -606,12 +636,19 @@ func (c *Channel) enqueueAndSend(sendCtx context.Context, tn *turn, sessionID, u
 // inheriting the request ctx would kill it on return) but carries both
 // project signals: this instance's configured default, and the
 // per-request override that outranks it.
-func (c *Channel) newSendCtx(projectOverride string) context.Context {
+func (c *Channel) newSendCtx(projectOverride string, cl caller) context.Context {
 	c.cfgMu.Lock()
 	instanceProject := c.cfg.ProjectID
 	c.cfgMu.Unlock()
 	sendCtx := agentchannels.WithChannelProject(context.Background(), instanceProject)
-	return agentchannels.WithProjectOverride(sendCtx, projectOverride)
+	sendCtx = agentchannels.WithProjectOverride(sendCtx, projectOverride)
+	// Stamp who is calling. Slack and Telegram have always done this; REST
+	// did not, so every session it created was ownerless — which is why the
+	// analytics page showed hundreds of REST conversations belonging to
+	// nobody, and why those spawns fell back to the shared internal
+	// credential instead of the caller's own.
+	sendCtx = agentchannels.WithCallerUserID(sendCtx, cl.UserID)
+	return agentchannels.WithCallerToken(sendCtx, cl.Token)
 }
 
 // maybeInjectContext sends the one-time origin-context system turn when

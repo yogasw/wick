@@ -63,10 +63,14 @@ func (h *Handler) apiDuplicateConnector(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if h.tags != nil && user != nil && !user.IsAdmin() {
+	if h.tags != nil && user != nil {
 		// Owner tag so the duplicate is visible to its creator. Tag IDs are
 		// read live per request, so it shows up immediately — no cookie
 		// re-issue needed.
+		//
+		// Seeded for admins too: relying on admin_see_all_connectors means a
+		// later flip of that knob retroactively hides every row an admin
+		// made, and a tag-gated row has no other way back.
 		if err := h.tags.CreateOwnerTag(ctx, dup.ID, user.ID); err != nil {
 			log.Warn().Err(err).Str("row_id", dup.ID).Msg("manager api: create owner tag on duplicate failed")
 		}

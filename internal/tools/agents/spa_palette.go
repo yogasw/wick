@@ -124,7 +124,7 @@ func gatherConnectorData(c *tool.Ctx) map[string][]connectorInstance {
 	if globalAuth != nil {
 		tagIDs = globalAuth.GetUserFilterTagIDs(c.Context(), user.ID)
 	}
-	rows, err := globalConnectors.ListForManager(c.Context(), tagIDs, user.IsAdmin())
+	rows, err := globalConnectors.ListForManager(c.Context(), user.ID, tagIDs, user.IsAdmin())
 	if err != nil {
 		return out
 	}
@@ -398,7 +398,21 @@ func buildPalette(instancesByKey map[string][]connectorInstance, me string) pale
 			// Skip an account with no runnable op left.
 			for _, acc := range inst.Accounts {
 				accCopy := acc
-				accDisabled := connectors.AccountDisabledOps(&accCopy)
+				// An account's overrides move in both directions now, so
+				// "disabled for this account" is no longer just the opt-out
+				// list: an op the instance has off can be forced on here, and
+				// the palette must offer exactly what would actually run.
+				overrides := connectors.AccountOpOverrides(&accCopy)
+				accDisabled := make(map[string]bool, len(inst.OpEnabled))
+				for opKey, instanceOn := range inst.OpEnabled {
+					effective := instanceOn
+					if forced, ok := overrides[opKey]; ok {
+						effective = forced
+					}
+					if !effective {
+						accDisabled[opKey] = true
+					}
+				}
 				accOps := opsFor(inst.Row.ID, acc.ID, inst.OpEnabled, accDisabled)
 				if len(accOps) == 0 {
 					continue

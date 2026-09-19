@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -125,6 +126,23 @@ type ticketBoardResponse struct {
 	Statuses       []project.TicketStatus `json:"statuses"`
 	Users          map[string]string      `json:"users,omitempty"`
 	Me             string                 `json:"me,omitempty"`
+}
+
+// cardFields picks what a card carries: the schema's show_on_card subset
+// for a board somebody is looking at, or everything for a caller that said
+// it needs everything.
+func cardFields(cfg project.TicketConfig, fields map[string]string, all bool) map[string]string {
+	if !all {
+		return cfg.CardFields(fields)
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(fields))
+	for k, v := range fields {
+		out[k] = v
+	}
+	return out
 }
 
 // ticketSessionRow is one session inside a ticket's detail view.
@@ -256,6 +274,7 @@ func apiProjectTickets(c *tool.Ctx) {
 	// client would throw most away — so what to send is decided HERE, from
 	// what the caller says it will render, not by a filter in the UI.
 	//
+	//   ?fields=all      the full field map per card, not just show_on_card
 	//   ?rows=N          session rows per card (0 = none, just the count)
 	//   ?statuses=a,b    only these columns; absent = all, `?statuses=` = none
 	//   ?assignee=ID|me  only this person's tickets; absent/empty = everyone
@@ -265,6 +284,12 @@ func apiProjectTickets(c *tool.Ctx) {
 	//                    Applied to the COUNT too, so the rail's number and its
 	//                    rows always describe the same set.
 	rowsPerCard := queryInt(c, "rows", defaultRowsPerCard, 0, maxRowsPerCard)
+	// A MACHINE reading this board needs the fields the board itself does
+	// not draw: an external id, a mirror's page reference — exactly the
+	// keys nobody marks show_on_card. Without this a sync cannot recognise
+	// the tickets it created and re-creates them on every run. Opt-in, so
+	// the UI keeps paying only for what it renders.
+	allFields := isTrueish(c.Query("fields")) || strings.EqualFold(strings.TrimSpace(c.Query("fields")), "all")
 	// The untracked list is the board's most expensive part and the one
 	// least often looked at, so it is opt-in: a caller that never asks
 	// never pays. "0" stays honoured for callers written against the old
@@ -327,8 +352,10 @@ func apiProjectTickets(c *tool.Ctx) {
 			Assignee: t.Assignee,
 			// A card carries only the schema fields marked show_on_card.
 			// Everything else — unmarked fields, values written outside the
-			// schema via the REST surface — lives on the ticket's own page.
-			Fields: cfg.CardFields(t.Fields),
+			// schema via the REST surface — lives on the ticket's own page,
+			// and comes back here only for a caller that asked for all of
+			// them (?fields=all).
+			Fields: cardFields(cfg, t.Fields, allFields),
 			SessionRows: rows,
 			Sessions:    len(t.Sessions),
 			Notes:       count.Visible,
@@ -563,6 +590,12 @@ func apiTicketUpdate(c *tool.Ctx) {
 		Status   *string           `json:"status"`
 		Assignee *string           `json:"assignee"`
 		Fields   map[string]string `json:"fields"`
+		// UpdatedAt lets a MIRROR say when the change really happened:
+		// an RFC3339 timestamp (the source system's edit time), or the
+		// literal "keep" for a write that should not move the clock at all
+		// (a sync stamping "I checked this and nothing had changed").
+		// Absent — which is every edit made from the UI — means now.
+		UpdatedAt string `json:"updated_at"`
 	}
 	if err := c.BindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
@@ -610,11 +643,36 @@ func apiTicketUpdate(c *tool.Ctx) {
 			tk.Fields[k] = v
 		}
 	}
-	if err := ticket.SaveAs(globalLayout, tk, callerActor(c)); err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if err := saveWithRequestedTime(tk, callerActor(c), req.UpdatedAt); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, tk)
+}
+
+// saveWithRequestedTime applies the PATCH's updated_at choice.
+//
+//	""      -> now, the normal edit
+//	"keep"  -> leave the stored timestamp alone (bookkeeping write)
+//	RFC3339 -> that instant (the mirrored system's own edit time)
+//
+// A value that is neither is refused rather than silently treated as now:
+// a mirror that mis-formats its timestamps would otherwise stamp every
+// ticket with the sync's clock and nobody would notice until the board's
+// order stopped meaning anything.
+func saveWithRequestedTime(tk ticket.Ticket, actor ticket.Actor, want string) error {
+	switch v := strings.TrimSpace(want); v {
+	case "":
+		return ticket.SaveAs(globalLayout, tk, actor)
+	case "keep":
+		return ticket.SaveAsKeeping(globalLayout, tk, actor)
+	default:
+		at, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return fmt.Errorf("updated_at must be RFC3339 or \"keep\": %w", err)
+		}
+		return ticket.SaveAsAt(globalLayout, tk, actor, at)
+	}
 }
 
 // apiTicketAction handles POST /api/tickets/{ticketID}/actions/{buttonID} —

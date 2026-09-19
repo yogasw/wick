@@ -44,7 +44,7 @@ func newAdminConnectorsHandler(t *testing.T) (*Handler, *connectors.Service, *go
 	svc := connectors.NewServiceFromDB(db)
 	svc.SetConfigs(cfgsSvc)
 	require.NoError(t, svc.Bootstrap(context.Background(), []connector.Module{ssoAdminModule()}))
-	return &Handler{repo: newRepo(db), connectors: svc}, svc, db
+	return &Handler{repo: newRepo(db), connectors: svc, configs: cfgsSvc}, svc, db
 }
 
 // The admin connectors page lists each instance's connected accounts, with
@@ -65,7 +65,8 @@ func TestConnectorAccountsAdminListsAccountsWithOwnerAndTags(t *testing.T) {
 	require.NoError(t, db.Create(tag).Error)
 	require.NoError(t, db.Create(&entity.ToolTag{ToolPath: connectors.AccountTagPath(accs[0].ID), TagID: tag.ID}).Error)
 
-	byRow, tagsByPath, owners := h.connectorAccountsAdmin(ctx, []entity.Connector{*row})
+	byRow, tagsByPath, owners, err := h.connectorAccountsAdmin(ctx, []entity.Connector{*row})
+	require.NoError(t, err)
 	require.Len(t, byRow[row.ID], 1)
 	require.Equal(t, []string{tag.ID}, tagsByPath[connectors.AccountTagPath(accs[0].ID)])
 	require.Equal(t, "Alice (alice@x.test)", owners["u-alice"])

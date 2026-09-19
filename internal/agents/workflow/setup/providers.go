@@ -54,6 +54,18 @@ func NewCLIProviders() ([]provider.Provider, error) {
 
 func (p *cliProvider) Name() string { return p.ins.Name }
 
+// ProviderType reports the underlying runtime ("claude" / "codex" /
+// "gemini"), which is NOT derivable from Name: an instance is free to be
+// called "enginer" or "claude_support_ent" and still be a claude runtime.
+//
+// The agent node routes on this. Keying that decision on the instance
+// name meant every claude instance except one literally named "claude"
+// fell through to AgentCall below — a bare `claude --print`, with no
+// --mcp-config, no instance env and no session events. Those spawns saw
+// none of wick's MCP tools (they inherited whatever the user's own
+// ~/.claude.json declared) and streamed nothing to the run's history.
+func (p *cliProvider) ProviderType() string { return string(p.ins.Type) }
+
 func (p *cliProvider) Capabilities() provider.Capabilities {
 	return provider.Capabilities{
 		StructuredOutput: p.ins.Type == agentprovider.TypeClaude,

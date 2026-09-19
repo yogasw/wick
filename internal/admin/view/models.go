@@ -20,6 +20,10 @@ type UserRow struct {
 	// approved non-channel accounts, since merging into a pending or synthetic
 	// account just moves the problem.
 	MergeTargets []MergeTarget
+	// Self marks the row belonging to the admin looking at the page. It is
+	// the one account "View as" is not offered for — switching into yourself
+	// does nothing except strand the return cookie.
+	Self bool
 }
 
 // MergeTarget is one selectable destination account.
@@ -46,6 +50,9 @@ type ToolRow struct {
 	Disabled    bool
 	TagIDs      []string
 	ConfigCount int
+	// Access is the reach badge; TagNames feeds the search blob.
+	Access   AccessSummary
+	TagNames []string
 }
 
 // JobRow is the view model for a single job row in the admin jobs table.
@@ -62,6 +69,9 @@ type JobRow struct {
 	IsSystem    bool
 	TagIDs      []string
 	ConfigCount int
+	// Access is the reach badge; TagNames feeds the search blob.
+	Access   AccessSummary
+	TagNames []string
 }
 
 // ConnectorAdminRow is the view model for a single connector instance in
@@ -73,12 +83,20 @@ type ConnectorAdminRow struct {
 	ModuleName    string
 	ModuleIcon    string
 	ModuleMissing bool
-	TagIDs        []string
+	// OwnerLabel is Connector.CreatedBy as a person. The raw column is a
+	// uuid, and the owner of an instance is the one non-admin who can
+	// configure it and see every account connected to it — a question the
+	// page can only answer with a name.
+	OwnerLabel string
+	TagIDs     []string
 	// Accounts are the OAuth identities connected to this instance, listed
 	// underneath it. Each one is taggable in its own right: an account is
 	// private to whoever connected it unless the instance shares the whole
 	// pool, so a tag here is how an admin hands ONE account to a team.
 	Accounts []ConnectorAccountAdminRow
+	// Access is the reach badge; TagNames feeds the search blob.
+	Access   AccessSummary
+	TagNames []string
 }
 
 // ConnectorAccountAdminRow is the view model for one connected OAuth account
@@ -88,6 +106,11 @@ type ConnectorAccountAdminRow struct {
 	Account    entity.ConnectorAccount
 	OwnerLabel string
 	TagIDs     []string
+	// Access is the reach badge for the ACCOUNT itself — an account's tags
+	// are a separate grant from its row's, which is exactly the distinction
+	// that is easy to get wrong when reading the page.
+	Access   AccessSummary
+	TagNames []string
 }
 
 // AccessTokenRow is the view model for one Personal Access Token in
@@ -101,6 +124,14 @@ type AccessTokenRow struct {
 	OwnerEmail string
 }
 
+// UserOption is one entry in a user picker — the "Run as" select on the
+// schedules page, and the "Owner" select on projects and connectors. Label is
+// the display name the admin reads; ID is what the form posts back.
+type UserOption struct {
+	ID    string
+	Label string
+}
+
 // ResourceAdminRow is a generic view model used by the Projects, Workflows,
 // and Skills admin pages. Each row shows a name, optional icon, optional
 // created-by audit field, and a tag picker addressed by Path.
@@ -109,8 +140,21 @@ type ResourceAdminRow struct {
 	Name      string
 	Icon      string
 	CreatedBy string
-	TagIDs    []string
-	Path      string
+	// OwnerLabel is CreatedBy rendered as a person: the wick user's name and
+	// email. A raw uuid in the Owner column names nobody — an admin reading
+	// the page cannot tell whose project it is without looking the id up by
+	// hand, which is the one question the column exists to answer. Falls back
+	// to the id when it resolves to no user (a deleted account, or an id that
+	// was never a user at all), because showing the id beats showing nothing.
+	OwnerLabel string
+	TagIDs     []string
+	Path       string
+	// Access is who can reach this row — see AccessBadge. Zero value renders
+	// as a public badge, which is what an untagged row is.
+	Access AccessSummary
+	// TagNames feeds the search blob so a row is findable by the tag it
+	// carries, not only by name or id.
+	TagNames []string
 }
 
 // ConnectionRow is the view model for one (user, OAuth client) grant

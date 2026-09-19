@@ -584,3 +584,37 @@ describe("Composer — a dismissed menu stays dismissed", () => {
     expect(screen.queryByRole("textbox", { name: /search commands/i })).not.toBeNull();
   });
 });
+
+/* The growth path must not collapse the box: inside a sticky composer that
+   momentary one-row height is what made the page jump down on every
+   keystroke. jsdom reports scrollHeight 0, so the collapse is detectable by
+   watching whether height is ever set to "auto". */
+describe("Composer auto-resize", () => {
+  test("growing never sets height to auto", async () => {
+    const { container } = render(Composer, { props: { onSend: vi.fn() } });
+    const ta = container.querySelector("textarea") as HTMLTextAreaElement;
+
+    const seen: string[] = [];
+    const proto = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "style")!;
+    Object.defineProperty(ta, "scrollHeight", { configurable: true, get: () => 120 });
+    Object.defineProperty(ta, "clientHeight", { configurable: true, get: () => 43 });
+    const realStyle = ta.style;
+    Object.defineProperty(ta, "style", {
+      configurable: true,
+      get: () =>
+        new Proxy(realStyle, {
+          set(t, k, v) {
+            if (k === "height") seen.push(String(v));
+            return Reflect.set(t, k, v);
+          },
+        }),
+    });
+
+    await fireEvent.input(ta, { target: { value: "one\ntwo\nthree" } });
+    Object.defineProperty(ta, "style", proto);
+
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen).not.toContain("auto");
+    expect(seen[seen.length - 1]).toBe("120px");
+  });
+});

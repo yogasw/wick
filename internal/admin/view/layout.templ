@@ -26,6 +26,10 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 				<div class="flex flex-wrap items-center gap-1 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-1 order-last w-full md:order-none md:w-auto md:mr-auto">
 					@adminTab("/admin", "Dashboard", activeTab == "dashboard")
 					@adminTab("/admin/users", "Users", activeTab == "users")
+					// Who actually uses this install, and through which door.
+					// Beside Users on purpose: the two answer opposite halves of
+					// the same question — who MAY be here, and who IS.
+					@adminTab("/admin/analytics", "People & usage", activeTab == "analytics")
 					@adminDropdown("Mini Tools", isMiniToolsActive(activeTab), []dropdownItem{
 						{Href: "/admin/tools", Label: "Tools", Active: activeTab == "tools"},
 						{Href: "/admin/connectors", Label: "Connectors", Active: activeTab == "connectors"},
@@ -64,11 +68,14 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 		</nav>
 		@pendingSwapBanner()
 		{ children... }
+		@AccessModalHost()
 		<script src="/modules/admin/js/tag_picker.js"></script>
 		<!-- Background save for every tag form on these pages: the Save
 		     button shows only while a row differs from the server, so a
 		     long tagging session never has to guess what it missed. -->
 		<script src="/modules/admin/js/tag_form.js"></script>
+		<!-- Access reach badges, their user modal, and the per-page search. -->
+		<script src="/modules/admin/js/access.js"></script>
 	}
 }
 
@@ -236,7 +243,7 @@ func isSetupActive(tab string) bool {
 
 templ adminDropdown(label string, active bool, items []dropdownItem) {
 	<div class="relative">
-		<details class="group">
+		<details class="group" data-menu>
 			<summary
 				class={ "flex cursor-pointer list-none items-center gap-1 rounded-md px-4 py-2 text-sm font-medium transition-colors focus:outline-none",
 					templ.KV("bg-white-100 dark:bg-navy-700 text-black-900 dark:text-white-100 shadow-sm", active),

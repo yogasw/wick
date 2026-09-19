@@ -176,6 +176,11 @@ export type ConversationTurn = {
   timestamp: number;
   truncated: boolean;
   interrupted: boolean;
+  /** Who cut the turn short: "user" | "agent" | "wick" | "unknown" (mid-turn stop
+      nothing claimed — an external kill, a crash, the host out of memory). */
+  interrupted_by?: string;
+  /** One sentence naming who, and what they did. Absent when unknown. */
+  interrupted_note?: string;
   has_trace: boolean;
   events: TurnEvent[];
   attachments: Attachment[];
@@ -183,6 +188,13 @@ export type ConversationTurn = {
   artifacts?: Artifact[];
   // system turn only — a provider/runtime error, rendered as a failure.
   is_error?: boolean;
+  /** system turn only — "provider_switch", "interrupted", "compaction", …
+      Tags a structured notice so it renders as itself instead of a plain
+      grey line. */
+  kind?: string;
+  /** system turn only — the numbers behind `kind`, kept as data rather
+      than baked into the text (compaction: trigger, pre/post tokens). */
+  extras?: Record<string, string>;
 };
 
 export type ApprovalRequest = {
@@ -220,7 +232,7 @@ export type ApprovalsResponse = {
   always_approved: ApprovedItem[];
 };
 
-export type ContextFileEntry = {
+export type SessionFileEntry = {
   path: string;
   name: string;
   size: number;
@@ -540,12 +552,16 @@ export type TicketField = {
   show_on_card?: boolean;
 };
 
-/** One custom action button on every ticket's page. Clicking it POSTs the
-    ticket to `url` as a ticket.action event (e.g. "Sync to Notion"). */
+/** One custom action button. On a ticket's page a click POSTs that ticket
+    to `url` (a ticket.action event, e.g. "Sync to Notion"); in the ticket
+    list's toolbar it POSTs the list's filter and the tickets it selects (a
+    ticket.board_action event, e.g. "Pull my tickets from Notion"). */
 export type TicketButton = {
   id?: string; // minted server-side on first save
   label: string;
   url: string;
+  /** Where it is drawn. Absent = "ticket". */
+  placement?: "ticket" | "board";
 };
 
 /** One rule deciding when a new session gets a ticket on its own. Rules

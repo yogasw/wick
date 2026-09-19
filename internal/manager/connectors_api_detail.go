@@ -30,6 +30,12 @@ type connectorRowJSON struct {
 	// 🔒 Private chip instead of the misleading "Everyone" fallback. Adding
 	// a sharing tag flips it false (real tags then render).
 	Private bool `json:"private"`
+	// CanConfigure mirrors the detail page's can_configure for this row: the
+	// caller may edit its credentials/settings (admin, owner tag, or the
+	// row's allow-others-configure). The list uses it to hide the row menu's
+	// configuring actions (Disable / Delete) from a view-only viewer instead
+	// of offering buttons the server refuses.
+	CanConfigure bool `json:"can_configure"`
 	// OAuth/SSO surface, mirrored from the detail read model so the list
 	// page can render the per-row Connect button + connected-account
 	// sub-rows inline. OAuth is nil on the wire when the connector type has
@@ -262,6 +268,7 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 			RateLimitRPM: row.RateLimitRPM,
 			Tags:         tagsByRow[row.ID],
 			Private:      privateByRow[row.ID],
+			CanConfigure: h.canConfigureRow(user, &row),
 			EnableSSO:    row.EnableSSO,
 			MultiAccount: row.MultiAccount,
 		}
@@ -539,11 +546,11 @@ func (h *Handler) visibleAccountsForRow(ctx context.Context, row entity.Connecto
 // handler — a list page renders many rows and the caller's tags do not
 // change between them.
 func (h *Handler) accountCaller(user *entity.User, row entity.Connector, callerTags []string) connectors.AccountAccess {
-	return connectors.AccountAccess{
-		UserID:     userID(user),
-		TagIDs:     callerTags,
-		Privileged: h.canSeeAllAccounts(user, row),
-	}
+	// Built by the service, not here: Execute decides with the same call, so
+	// a dropdown can no longer offer an account the next click is refused.
+	// That mismatch was the bug — the list and the gate each computed their
+	// own idea of "privileged".
+	return h.connectors.AccountAccessFor(row, userID(user), user != nil && user.IsAdmin(), callerTags)
 }
 
 // canSeeAllAccounts reports whether the caller administers this instance —
@@ -554,11 +561,18 @@ func (h *Handler) accountCaller(user *entity.User, row entity.Connector, callerT
 // The knob matters here: with it off an admin is scoped like anyone else, so
 // "I am an admin" no longer means "I may run as your Slack account". Owning
 // the instance still does.
+//
+// Ownership here is the CREATOR of the row (connectors.OwnsConnector), not the
+// "owner:{rowID}" tag ownsConnectorRow also accepts. The tag is a grant an
+// admin can hand out for configuring a row; treating it as "sees every
+// connected account" let a configure-grant read the whole account pool. It is
+// also what Service.Execute enforces at dispatch — so listing by the same rule
+// keeps the UI from offering accounts the caller would be refused on.
 func (h *Handler) canSeeAllAccounts(user *entity.User, row entity.Connector) bool {
 	if user == nil {
 		return false
 	}
-	if h.ownsConnectorRow(user, &row) {
+	if connectors.OwnsConnector(row, user.ID) {
 		return true
 	}
 	return user.IsAdmin() && h.connectors.AdminSeesAllConnectors()
@@ -575,13 +589,17 @@ func (h *Handler) accountVisible(ctx context.Context, user *entity.User, row ent
 	return connectors.AccountVisibleTo(row, acc, tagIDs[acc.ID], h.accountCaller(user, row, h.userFilterTagIDs(ctx, user)))
 }
 
-// accountDisabledOpKeys returns the sorted disabled-op keys for an account
-// as a slice, for the JSON projection.
+// accountDisabledOpKeys returns the sorted op keys this account forces OFF,
+// for the JSON projection's disabled_ops array. Keys the account forces ON
+// are deliberately absent: the field has always meant "off here", and a
+// forced-on key is the opposite of that.
 func accountDisabledOpKeys(acc *entity.ConnectorAccount) []string {
-	m := connectors.AccountDisabledOps(acc)
+	m := connectors.AccountOpOverrides(acc)
 	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
+	for k, forcedOn := range m {
+		if !forcedOn {
+			out = append(out, k)
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -605,11 +623,12 @@ func (h *Handler) apiCreateConnectorRow(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if h.tags != nil && user != nil && !user.IsAdmin() {
-		// Seed the owner tag so the creator (and admins) can see + manage
-		// this row. Visibility reads tag IDs live from the DB per request
-		// (see Handler.userFilterTagIDs), so the new tag takes effect on the
-		// very next request — no session-cookie re-issue needed.
+	if h.tags != nil && user != nil {
+		// Seed the owner tag so the creator can see + manage this row.
+		// Admins are included — see connectors_api_admin.go for why.
+		// Visibility reads tag IDs live from the DB per request (see
+		// Handler.userFilterTagIDs), so the new tag takes effect on the very
+		// next request — no session-cookie re-issue needed.
 		_ = h.tags.CreateOwnerTag(ctx, row.ID, user.ID)
 	}
 	if h.custom != nil {
@@ -720,7 +739,9 @@ func (h *Handler) apiSetConnectorConfig(w http.ResponseWriter, r *http.Request) 
 func (h *Handler) apiToggleConnectorDisabled(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := login.GetUser(ctx)
-	row, errResp, ok := h.loadVisibleRow(r, user)
+	// Turning an instance off is configuring it: seeing a row shared with
+	// you never meant you could switch it off for everybody else.
+	row, errResp, ok := h.loadConfigurableRow(r, user)
 	if !ok {
 		writeJSON(w, errResp.status, map[string]string{"error": errResp.msg})
 		return

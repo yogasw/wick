@@ -80,6 +80,7 @@ beforeEach(() => {
     runs: [],
     ops: [],
     users: [],
+    credentials: [],
     page: 1,
     total_pages: 1,
     total: 0,

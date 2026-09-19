@@ -5,12 +5,22 @@ import (
 	"strings"
 )
 
-templ ResourcesAdminPage(title string, baseURL string, rows []ResourceAdminRow, allTags []*entity.Tag, user *entity.User) {
+// ResourceOwnerEdit turns the Owner column from a label into a picker. Only
+// the surfaces that can actually re-stamp an owner pass Enabled — the rest
+// render the same column read-only, so one page template still serves all of
+// them.
+type ResourceOwnerEdit struct {
+	Enabled bool
+	Users   []UserOption
+}
+
+templ ResourcesAdminPage(title string, baseURL string, rows []ResourceAdminRow, allTags []*entity.Tag, owner ResourceOwnerEdit, user *entity.User) {
 	@AdminLayout("Admin · "+title, strings.ToLower(title), user) {
 		{{ tagsJSON := tagsToJSON(allTags) }}
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{ title }</h1>
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Assign access tags to control which non-admin users can see each { strings.ToLower(title[:len(title)-1]) }.</p>
+			@AccessSearch(strings.ToLower(title))
 			if len(rows) == 0 {
 				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
 					No { strings.ToLower(title) } found.
@@ -22,12 +32,13 @@ templ ResourcesAdminPage(title string, baseURL string, rows []ResourceAdminRow, 
 							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Name</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Owner</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Access</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Tags</th>
 							</tr>
 						</thead>
 						<tbody>
 							for _, row := range rows {
-								@resourceAdminRow(row, baseURL, tagsJSON)
+								@resourceAdminRow(row, baseURL, tagsJSON, owner)
 							}
 						</tbody>
 					</table>
@@ -37,9 +48,11 @@ templ ResourcesAdminPage(title string, baseURL string, rows []ResourceAdminRow, 
 	}
 }
 
-templ resourceAdminRow(row ResourceAdminRow, baseURL string, tagsJSON string) {
+templ resourceAdminRow(row ResourceAdminRow, baseURL string, tagsJSON string, owner ResourceOwnerEdit) {
 	<tr
 		id={ "resource-" + row.ID }
+		data-search={ searchHaystack(row.Name, row.ID, row.Path, strings.Join(row.TagNames, " ")) }
+		data-search-id={ row.ID + " " + row.Path }
 		class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
 	>
 		<td class="px-4 py-3">
@@ -56,11 +69,14 @@ templ resourceAdminRow(row ResourceAdminRow, baseURL string, tagsJSON string) {
 			</div>
 		</td>
 		<td class="px-4 py-3 align-top">
-			if row.CreatedBy != "" {
-				<span class="text-xs text-black-700 dark:text-black-600">{ row.CreatedBy }</span>
+			if owner.Enabled {
+				@resourceOwnerPicker(row, baseURL, owner.Users)
 			} else {
-				<span class="text-xs italic text-black-600 dark:text-black-700">system</span>
+				@resourceOwnerLabel(row)
 			}
+		</td>
+		<td class="px-4 py-3 align-top">
+			@AccessBadge(row.Access)
 		</td>
 		<td class="px-4 py-3 align-top">
 			<form action={ templ.SafeURL(baseURL + "/" + row.ID + "/tags") } method="POST" class="flex items-start gap-2">
@@ -76,4 +92,51 @@ templ resourceAdminRow(row ResourceAdminRow, baseURL string, tagsJSON string) {
 			</form>
 		</td>
 	</tr>
+}
+
+// resourceOwnerLabel is the read-only Owner cell: the person's name on top,
+// their id underneath in the same mono style the Name column uses for the
+// row's own id. Both are shown because they answer different questions — who
+// to ask about this row, and which account to grant when the answer is "me".
+templ resourceOwnerLabel(row ResourceAdminRow) {
+	if row.CreatedBy == "" {
+		<span class="text-xs italic text-black-600 dark:text-black-700">system</span>
+	} else {
+		<p class="text-xs text-black-800 dark:text-black-600">{ row.OwnerLabel }</p>
+		if row.OwnerLabel != row.CreatedBy {
+			<p class="font-mono text-[10px] text-black-700 dark:text-black-600">{ row.CreatedBy }</p>
+		}
+	}
+}
+
+// resourceOwnerPicker is the editable Owner cell. Save stays hidden until the
+// selection actually changes, so the column reads as a label until someone
+// means to move ownership — the same restraint the schedules run-as picker
+// uses, for the same reason: this is not a field to nudge by accident.
+templ resourceOwnerPicker(row ResourceAdminRow, baseURL string, users []UserOption) {
+	<form action={ templ.SafeURL(baseURL + "/" + row.ID + "/owner") } method="POST" class="flex items-center gap-2">
+		<select
+			name="owner_user_id"
+			data-initial={ row.CreatedBy }
+			onchange="this.nextElementSibling.hidden = this.value === this.dataset.initial"
+			class="min-w-0 w-44 rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-1 text-xs text-black-900 dark:text-white-100"
+		>
+			<option value="" selected?={ row.CreatedBy == "" }>system (no owner)</option>
+			if row.CreatedBy != "" && !userOptionsHave(users, row.CreatedBy) {
+				// The current owner is not an approved user any more (deleted,
+				// or never approved). Offering only the valid choices would
+				// silently misreport who owns the row, so the stale owner stays
+				// on the list — selected, and named as the problem it is.
+				<option value={ row.CreatedBy } selected>{ row.OwnerLabel } — unknown user</option>
+			}
+			for _, u := range users {
+				<option value={ u.ID } selected?={ row.CreatedBy == u.ID }>{ u.Label }</option>
+			}
+		</select>
+		<button
+			type="submit"
+			hidden
+			class="shrink-0 rounded-lg border border-green-400 bg-green-100 dark:bg-green-900 px-2 py-1 text-xs text-green-700 dark:text-green-300 hover:border-green-500 transition-colors"
+		>Save</button>
+	</form>
 }

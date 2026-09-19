@@ -466,26 +466,33 @@ export function createThreadStore(): ThreadStore {
           t.turn_id.startsWith("warning-") ||
           t.turn_id.startsWith("local-user-");
 
+        // Newlines are normalised out of the key. A message sent WITH a file
+        // goes as multipart, and form encoding rewrites every newline to
+        // CRLF — so the persisted copy of a multi-line message differed from
+        // the one this store echoed, its twin was never recognised, and the
+        // message sat on screen twice until a reload. The server no longer
+        // stores it that way; this stops the match depending on that.
+        const keyOf = (t: ConversationTurn) =>
+          `${t.role} ${(t.text ?? "").replace(/\r\n/g, "\n").trim()}`;
+
         const localByKey = new Map<string, ConversationTurn>();
         for (const t of cur) {
           if (!isLocal(t)) continue;
-          const key = `${t.role} ${t.text}`;
+          const key = keyOf(t);
           if (!localByKey.has(key)) localByKey.set(key, t);
         }
 
         const merged = newTurns.map((t) => {
           if (t.events && t.events.length > 0) return t;
-          const twin = localByKey.get(`${t.role} ${t.text}`);
+          const twin = localByKey.get(keyOf(t));
           if (twin && twin.events && twin.events.length > 0) {
             return { ...t, events: twin.events, has_trace: true };
           }
           return t;
         });
 
-        const persistedKeys = new Set(newTurns.map((t) => `${t.role} ${t.text}`));
-        const pendingLocal = cur.filter(
-          (t) => isLocal(t) && !persistedKeys.has(`${t.role} ${t.text}`),
-        );
+        const persistedKeys = new Set(newTurns.map(keyOf));
+        const pendingLocal = cur.filter((t) => isLocal(t) && !persistedKeys.has(keyOf(t)));
         // Pagination: `newTurns` may be only the LATEST window (limit=N), while
         // `cur` still holds older pages scrolled in via prependHistory. Keep
         // everything in `cur` that precedes the window's first turn; a full

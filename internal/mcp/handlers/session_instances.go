@@ -80,7 +80,7 @@ func sessionConfigStatus(specs []entity.Config, cfg map[string]string) string {
 // instance has the per-instance toggle on. Deduped by connector key.
 // Surfaced in wick_list so the agent knows the option exists.
 func sessionConfigBases(r *http.Request, svc *connectors.Service, tagIDs []string, isAdmin bool) []sessionBaseHint {
-	rows, err := svc.ListVisibleTo(r.Context(), tagIDs, isAdmin)
+	rows, err := svc.ListVisibleTo(r.Context(), callerIDFromCtx(r.Context()), tagIDs, isAdmin)
 	if err != nil {
 		return nil
 	}

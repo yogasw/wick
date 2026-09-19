@@ -108,7 +108,7 @@ func (c *Channel) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
-	userID, status, msg := c.authBearer(r)
+	cl, status, msg := c.authBearer(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
@@ -153,7 +153,7 @@ func (c *Channel) handleResponses(w http.ResponseWriter, r *http.Request) {
 		reused = true
 	default:
 		if key := resolveConversation(req.Conversation, req.Metadata); key != "" {
-			sessionID = restSessionID(userID, key)
+			sessionID = restSessionID(cl.UserID, key)
 			reused = true
 		} else {
 			sessionID = "rest-" + uuid.NewString()
@@ -167,7 +167,7 @@ func (c *Channel) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if resolveBackground(req.Background, req.Metadata) {
-		if status, msg := c.dispatchBackground(sessionID, userID, req.User, prompt, reused, resolveProject(req.Project, req.Metadata)); status != 0 {
+		if status, msg := c.dispatchBackground(sessionID, cl, req.User, prompt, reused, resolveProject(req.Project, req.Metadata)); status != 0 {
 			writeError(w, status, msg)
 			return
 		}
@@ -191,7 +191,7 @@ func (c *Channel) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, status, msg := c.dispatch(r.Context(), sessionID, userID, req.User, prompt, reused, resolveProject(req.Project, req.Metadata))
+	res, status, msg := c.dispatch(r.Context(), sessionID, cl, req.User, prompt, reused, resolveProject(req.Project, req.Metadata))
 	if status != 0 {
 		writeError(w, status, msg)
 		return

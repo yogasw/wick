@@ -67,7 +67,10 @@ const TicketRESTBase = "/api"
 func TicketRESTShim(gated http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rewritten := ticketAPIPrefix + strings.TrimPrefix(r.URL.Path, TicketRESTBase)
-		if !isTicketAPIPath(rewritten) {
+		// Two machine surfaces share this mount: the ticket REST API (PAT)
+		// and the CLI channel (wick_cli_ token). Each has its own
+		// allowlist and its own validator, so neither can widen the other.
+		if !isTicketAPIPath(rewritten) && !isCLIAPIPath(rewritten) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"unknown endpoint"}`))
@@ -249,7 +252,7 @@ func callerActor(c *tool.Ctx) ticket.Actor {
 	if u == nil {
 		return ticket.Actor{Type: kind}
 	}
-	return ticket.Actor{Type: kind, ID: u.ID, Name: displayName(u)}
+	return ticket.Actor{Type: kind, ID: u.ID, Name: displayName(u), Email: u.Email}
 }
 
 // displayName picks the friendliest label available for a user.

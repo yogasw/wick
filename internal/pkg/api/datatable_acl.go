@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/yogasw/wick/internal/agents/workflow/datatable"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/login"
@@ -64,5 +66,13 @@ func (a dataTableACL) RegisterOwner(ctx context.Context, userID, slug string) {
 	if a.tags == nil || userID == "" || userID == mcp.InternalAgentUserID || slug == "" {
 		return
 	}
-	_ = a.tags.CreateResourceOwnerTag(ctx, slug, userID)
+	// Same reasoning as workflowOwnership.RegisterOwner: logged, not
+	// returned — the table exists either way, but a lost owner tag must
+	// leave a trace rather than surface later as "my table vanished".
+	if err := a.tags.CreateResourceOwnerTag(ctx, slug, userID); err != nil {
+		log.Warn().Err(err).
+			Str("table", slug).
+			Str("user", userID).
+			Msg("data table acl: owner tag not recorded; the table stays admin-only")
+	}
 }

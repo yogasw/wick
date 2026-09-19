@@ -49,7 +49,7 @@ func TestShellReproduce(t *testing.T) {
 	argv := []string{"-p", "--mcp-config", `{"a":"b"}`}
 	env := []string{"CLAUDE_CONFIG_DIR=C:/x", "ANTHROPIC_AUTH_TOKEN=tok"}
 
-	bash := ShellReproduceBash(bin, argv, env, false)
+	bash := ShellReproduceBash(bin, argv, env, false, "")
 	if !strings.Contains(bash, "CLAUDE_CONFIG_DIR=C:/x \\\n") {
 		t.Errorf("bash env prefix missing:\n%s", bash)
 	}
@@ -60,7 +60,7 @@ func TestShellReproduce(t *testing.T) {
 		t.Errorf("bash json arg not single-quoted:\n%s", bash)
 	}
 
-	pwsh := ShellReproducePwsh(bin, argv, env, false)
+	pwsh := ShellReproducePwsh(bin, argv, env, false, "")
 	if !strings.Contains(pwsh, "$env:CLAUDE_CONFIG_DIR='C:/x'\n") {
 		t.Errorf("pwsh env prefix missing:\n%s", pwsh)
 	}
@@ -71,7 +71,7 @@ func TestShellReproduce(t *testing.T) {
 		t.Errorf("pwsh json arg not backslash-escaped:\n%s", pwsh)
 	}
 
-	cmd := ShellReproduceCmd(bin, argv, env, false)
+	cmd := ShellReproduceCmd(bin, argv, env, false, "")
 	if !strings.Contains(cmd, `set "CLAUDE_CONFIG_DIR=C:/x"`+"\n") {
 		t.Errorf("cmd env prefix missing:\n%s", cmd)
 	}
@@ -101,29 +101,29 @@ func TestBinaryPath(t *testing.T) {
 	}
 
 	// bash renderer: full → MSYS path; short → basename.
-	bashFull := ShellReproduceBash(full, nil, nil, false)
+	bashFull := ShellReproduceBash(full, nil, nil, false, "")
 	if !strings.Contains(bashFull, "/c/msys64/home/Staffinc/.local/bin/claude.exe") {
 		t.Errorf("bash full should be MSYS path:\n%s", bashFull)
 	}
 	if strings.Contains(bashFull, `\`) {
 		t.Errorf("bash full must not contain backslashes:\n%s", bashFull)
 	}
-	bashShort := ShellReproduceBash(full, nil, nil, true)
+	bashShort := ShellReproduceBash(full, nil, nil, true, "")
 	if !strings.HasSuffix(bashShort, "claude.exe") {
 		t.Errorf("bash short should end in basename: %q", bashShort)
 	}
 
 	// pwsh/cmd keep the full path as-is (both accept backslashes).
-	if got := ShellReproducePwsh(full, nil, nil, false); !strings.Contains(got, full) {
+	if got := ShellReproducePwsh(full, nil, nil, false, ""); !strings.Contains(got, full) {
 		t.Errorf("pwsh full should keep Windows path:\n%s", got)
 	}
-	if got := ShellReproduceCmd(full, nil, nil, true); !strings.HasSuffix(got, `"claude.exe"`) {
+	if got := ShellReproduceCmd(full, nil, nil, true, ""); !strings.HasSuffix(got, `"claude.exe"`) {
 		t.Errorf("cmd short should end in quoted basename: %q", got)
 	}
 }
 
 func TestBuildReproVariants(t *testing.T) {
-	m := BuildReproVariants("claude", `C:\bin\claude.exe`, []string{"-p", "--add-dir", "x", "--resume", "abc"}, []string{"K=v"})
+	m := BuildReproVariants("claude", `C:\bin\claude.exe`, []string{"-p", "--add-dir", "x", "--resume", "abc"}, []string{"K=v"}, "")
 	// 3 shells × 2 modes × 2 paths × 2 resume = 24 keys.
 	if len(m) != 24 {
 		t.Fatalf("want 24 variants, got %d: %v", len(m), keysOf(m))
@@ -249,8 +249,87 @@ func TestInteractiveArgv(t *testing.T) {
 }
 
 func TestShellReproduceCmdPercentEscape(t *testing.T) {
-	got := ShellReproduceCmd("app.exe", nil, []string{"P=a%b"}, false)
+	got := ShellReproduceCmd("app.exe", nil, []string{"P=a%b"}, false, "")
 	if !strings.Contains(got, `set "P=a%%b"`) {
 		t.Errorf("cmd should double %%:\n%s", got)
+	}
+}
+
+// The whole point of the Prompt axis: wick feeds claude over stdin, so a
+// reproduce command without it starts a CLI with nothing to say (and, with
+// --resume, claude answers "No deferred tool marker found in the resumed
+// session"). Headless variants must recreate that pipe byte for byte.
+func TestBuildReproVariantsPrompt(t *testing.T) {
+	argv := []string{"-p", "--input-format", "stream-json", "--resume", "abc"}
+	m := BuildReproVariants("claude", "/usr/bin/claude", argv, []string{"K=v"}, "halo \"bos\"")
+
+	line := `{"type":"user","message":{"role":"user","content":"halo \"bos\""}}`
+
+	bash := m[ReproKey("bash", false, false, true)]
+	if !strings.Contains(bash, "<<'WICK_PROMPT'\n"+line+"\nWICK_PROMPT") {
+		t.Errorf("bash headless should heredoc the stream-json line:\n%s", bash)
+	}
+	pwsh := m[ReproKey("powershell", false, false, true)]
+	if !strings.Contains(pwsh, "@'\n"+line+"\n'@ | & ") {
+		t.Errorf("pwsh headless should pipe a here-string:\n%s", pwsh)
+	}
+	cmdv := m[ReproKey("cmd", false, false, true)]
+	if !strings.Contains(cmdv, "echo "+line+"| ") {
+		t.Errorf("cmd headless should echo the line into the pipe:\n%s", cmdv)
+	}
+
+	// Interactive drops the headless flags, so there is no stream-json
+	// reader to pipe into: the prompt rides as a positional arg instead.
+	ibash := m[ReproKey("bash", true, false, true)]
+	if strings.Contains(ibash, "WICK_PROMPT") {
+		t.Errorf("interactive must not heredoc:\n%s", ibash)
+	}
+	if !strings.HasSuffix(ibash, `'halo "bos"'`) {
+		t.Errorf("interactive should end with the quoted prompt:\n%s", ibash)
+	}
+
+	// Empty prompt = the old behaviour, byte for byte.
+	bare := BuildReproVariants("claude", "/usr/bin/claude", argv, []string{"K=v"}, "")
+	if bare[ReproKey("bash", false, false, true)] != strings.Split(bash, " <<'WICK_PROMPT'")[0] {
+		t.Errorf("empty prompt should render the bare command:\n%s", bare[ReproKey("bash", false, false, true)])
+	}
+}
+
+// codex already carries the message as a positional arg (it respawns per
+// turn), so the Prompt control is hidden and nothing is appended twice.
+func TestPromptSupported(t *testing.T) {
+	if !PromptSupported("claude") || !PromptSupported("gemini") {
+		t.Error("stdin providers need the prompt control")
+	}
+	if PromptSupported("codex") {
+		t.Error("codex argv already has the message; control should be hidden")
+	}
+	argv := []string{"exec", "--json", "do the thing"}
+	m := BuildReproVariants("codex", "/usr/bin/codex", argv, nil, "ignored")
+	if strings.Contains(m[ReproKey("bash", false, false, false)], "ignored") {
+		t.Error("codex reproduce must not append a second prompt")
+	}
+}
+
+func TestStreamJSONUserLine(t *testing.T) {
+	// Newlines must escape into the one-line envelope, or the heredoc
+	// delimiter logic (and claude's line-delimited reader) breaks.
+	got := StreamJSONUserLine("a\nb")
+	if strings.Contains(got, "\n") {
+		t.Errorf("envelope must be one line: %q", got)
+	}
+	if got != `{"type":"user","message":{"role":"user","content":"a\nb"}}` {
+		t.Errorf("envelope mismatch: %s", got)
+	}
+}
+
+func TestCmdEchoEscape(t *testing.T) {
+	// Outside quotes: caret-escaped. Inside: literal, because cmd already
+	// treats a quoted span literally and a caret there would be echoed.
+	if got := cmdEchoEscape(`a&b"c&d"`); got != `a^&b"c&d"` {
+		t.Errorf("cmdEchoEscape: %q", got)
+	}
+	if got := cmdEchoEscape("100%"); got != "100%%" {
+		t.Errorf("percent should double: %q", got)
 	}
 }

@@ -29,9 +29,10 @@
   const webhooks = $derived(cfg.webhooks ?? []);
 
   /* ── custom buttons ──
-     One label, one URL. The button appears on every ticket's page; a click
-     POSTs that ticket to the URL as a ticket.action event — anything
-     smarter belongs in the receiver. */
+     One label, one URL, and where it is drawn. On a ticket's page a click
+     POSTs that ticket (ticket.action); in the ticket list's toolbar it
+     POSTs the list's filter and the tickets it selects
+     (ticket.board_action) — anything smarter belongs in the receiver. */
   const buttons = $derived(cfg.buttons ?? []);
 
   function patchButton(i: number, p: Partial<TicketButton>) {
@@ -261,9 +262,12 @@
       <div class="min-w-0">
         <p class="text-xs font-medium text-black-800 dark:text-black-600">Custom buttons</p>
         <p class="mt-1 text-[11px] leading-relaxed text-black-700 dark:text-black-600">
-          Each button appears on every ticket's page. Clicking it sends that ticket as JSON to
-          the URL (a <span class="font-mono">ticket.action</span> event) — use it to trigger a
-          sync, a deploy, or anything else that lives behind an endpoint.
+          A button either sits on every ticket's page — a click sends that ticket as JSON
+          to the URL (a <span class="font-mono">ticket.action</span> event) — or in the
+          ticket list's toolbar, where it sends who the list is filtered to and the
+          tickets that match (a <span class="font-mono">ticket.board_action</span> event).
+          Use them to trigger a sync, a deploy, or anything else that lives behind an
+          endpoint.
         </p>
       </div>
       <button
@@ -277,14 +281,14 @@
 
     {#if buttons.length === 0}
       <p class="rounded-lg border border-dashed border-white-400 px-4 py-6 text-center text-xs text-black-700 dark:border-navy-600 dark:text-black-600">
-        No buttons yet. Ticket pages show none.
+        No buttons yet. Ticket pages and the list toolbar show none.
       </p>
     {/if}
 
     {#each buttons as b, i (i)}
       <div class="rounded-lg border border-white-300 bg-white-200 p-2.5 dark:border-navy-600 dark:bg-navy-800">
         <div class="flex items-center gap-2">
-          <div class="grid min-w-0 flex-1 gap-2 sm:grid-cols-[1fr_2fr]">
+          <div class="grid min-w-0 flex-1 gap-2 sm:grid-cols-[1fr_2fr_auto]">
             <input
               value={b.label}
               placeholder="Sync ticket"
@@ -299,6 +303,21 @@
               oninput={(e) => patchButton(i, { url: (e.target as HTMLInputElement).value })}
               class="w-full rounded-lg border border-white-400 bg-white-100 px-2 py-1.5 font-mono text-xs text-black-900 outline-none transition-colors focus:border-green-500 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100"
             />
+            <!-- Where it shows. Two placements, two different events, so
+                 the choice is on the row rather than in a second list of
+                 buttons somewhere else. -->
+            <select
+              value={b.placement ?? "ticket"}
+              aria-label="Button placement"
+              onchange={(e) =>
+                patchButton(i, {
+                  placement: (e.target as HTMLSelectElement).value as "ticket" | "board",
+                })}
+              class="w-full rounded-lg border border-white-400 bg-white-100 px-2 py-1.5 text-xs text-black-900 outline-none transition-colors focus:border-green-500 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100 sm:w-auto"
+            >
+              <option value="ticket">On a ticket's page</option>
+              <option value="board">In the ticket list</option>
+            </select>
           </div>
           <button
             type="button"

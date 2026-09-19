@@ -13,6 +13,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/connector"
 )
 
@@ -118,7 +119,7 @@ type connectorDetail struct {
 // instance each see the connector plus their OWN account, not the whole pool.
 func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, user *entity.User) {
 	callerID, isAdmin := callerIdentity(user)
-	rows, err := svc.ListVisibleTo(r.Context(), tagIDs, isAdmin)
+	rows, err := svc.ListVisibleTo(r.Context(), callerID, tagIDs, isAdmin)
 	if err != nil {
 		rsp.ToolError(w, req.ID, "list connectors: "+err.Error(), "")
 		return
@@ -238,6 +239,22 @@ func callerIdentity(user *entity.User) (userID string, isAdmin bool) {
 	return user.ID, user.IsAdmin()
 }
 
+// callerIDFromCtx reads the authenticated caller the auth middleware stamped
+// on the request, for the handlers and helpers that are handed tagIDs +
+// isAdmin but no user value. Visibility needs the id as well now that a row's
+// creator reaches it by ownership, and the tagIDs those callers pass are
+// derived from this same principal — so taking the id from the context is the
+// same answer without threading a parameter through every helper.
+//
+// Empty when unauthenticated, which ownership treats as "no owner match"
+// rather than "matches every ownerless row".
+func callerIDFromCtx(ctx context.Context) string {
+	if u := login.GetUser(ctx); u != nil {
+		return u.ID
+	}
+	return ""
+}
+
 func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, isAdmin bool) {
 	query, _ := args["query"].(string)
 	query = strings.TrimSpace(query)
@@ -245,7 +262,7 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 		rsp.ToolError(w, req.ID, "query is required", "")
 		return
 	}
-	rows, err := svc.ListVisibleTo(r.Context(), tagIDs, isAdmin)
+	rows, err := svc.ListVisibleTo(r.Context(), callerIDFromCtx(r.Context()), tagIDs, isAdmin)
 	if err != nil {
 		rsp.ToolError(w, req.ID, "search: "+err.Error(), "")
 		return
@@ -349,7 +366,7 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 		rsp.ToolJSON(w, req.ID, detail)
 		return
 	}
-	allowed, err := svc.IsVisibleTo(r.Context(), connectorID, tagIDs, isAdmin)
+	allowed, err := svc.IsVisibleTo(r.Context(), connectorID, callerIDFromCtx(r.Context()), tagIDs, isAdmin)
 	if err != nil || !allowed {
 		rsp.ToolError(w, req.ID, "connector not found or not accessible", connectorID)
 		return
@@ -648,7 +665,7 @@ func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service
 		return "", err
 	}
 	if !isSession {
-		allowed, verr := svc.IsVisibleTo(ctx, connectorID, tagIDs, user.IsAdmin())
+		allowed, verr := svc.IsVisibleTo(ctx, connectorID, callerIDFromCtx(ctx), tagIDs, user.IsAdmin())
 		if verr != nil || !allowed {
 			return "", errors.New("tool_id not found or not accessible")
 		}

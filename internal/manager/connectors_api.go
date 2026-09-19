@@ -72,7 +72,7 @@ func (h *Handler) apiConnectors(w http.ResponseWriter, r *http.Request) {
 	user := login.GetUser(ctx)
 	isAdmin := user != nil && user.IsAdmin()
 
-	rows, err := h.connectors.ListForManager(ctx, login.GetUserTagIDs(ctx), isAdmin)
+	rows, err := h.connectors.ListForManager(ctx, userID(user), login.GetUserTagIDs(ctx), isAdmin)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

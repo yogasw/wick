@@ -1,0 +1,628 @@
+package admin
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+
+	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/entity"
+)
+
+// seedUserWithTag creates an approved user carrying one filter tag, the shape
+// every access question is asked about.
+func seedUserWithTag(t *testing.T, db *gorm.DB, userID, email, tagID string) {
+	t.Helper()
+	require.NoError(t, db.Create(&entity.User{ID: userID, Name: userID, Email: email, Approved: true, Role: entity.RoleUser}).Error)
+	if tagID != "" {
+		require.NoError(t, db.Create(&entity.UserTag{UserID: userID, TagID: tagID}).Error)
+	}
+}
+
+func seedFilterTag(t *testing.T, db *gorm.DB, name string) string {
+	t.Helper()
+	tag := &entity.Tag{Name: name, IsFilter: true}
+	require.NoError(t, db.Create(tag).Error)
+	return tag.ID
+}
+
+func tagPath(t *testing.T, db *gorm.DB, path, tagID string) {
+	t.Helper()
+	require.NoError(t, db.Create(&entity.ToolTag{ToolPath: path, TagID: tagID}).Error)
+}
+
+// An untagged item is PUBLIC — wick's rule — and its reach is every approved
+// user, not zero. Getting this backwards would tell an admin a wide-open row
+// was locked down.
+func TestAccessUserCountsUntaggedPathIsPublic(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	seedUserWithTag(t, db, "u-1", "one@x.test", "")
+	seedUserWithTag(t, db, "u-2", "two@x.test", "")
+
+	sums := h.accessSummaries(ctx, []string{"/connectors/never-tagged"})
+	got := sums["/connectors/never-tagged"]
+	require.True(t, got.Public, "untagged path reported as restricted")
+	require.Equal(t, 2, got.Reach(), "public reach must be every approved user")
+}
+
+// A tagged item counts only the people carrying one of its tags — and a tag
+// nobody carries must read as 0, not as public.
+func TestAccessUserCountsTaggedPath(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	orphan := seedFilterTag(t, db, "nobody-has-this")
+	seedUserWithTag(t, db, "u-1", "one@x.test", support)
+	seedUserWithTag(t, db, "u-2", "two@x.test", support)
+	seedUserWithTag(t, db, "u-3", "three@x.test", "")
+	tagPath(t, db, "/tools/shared", support)
+	tagPath(t, db, "/tools/orphaned", orphan)
+
+	sums := h.accessSummaries(ctx, []string{"/tools/shared", "/tools/orphaned"})
+
+	shared := sums["/tools/shared"]
+	require.False(t, shared.Public)
+	require.Equal(t, 2, shared.Reach())
+
+	orphaned := sums["/tools/orphaned"]
+	require.False(t, orphaned.Public, "a tagged row with no tag-holders must not read as public")
+	require.Equal(t, 0, orphaned.Reach())
+}
+
+// Unapproved users cannot log in, so they are not part of anybody's reach.
+func TestAccessCountsSkipUnapprovedUsers(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-1", "one@x.test", support)
+	require.NoError(t, db.Create(&entity.User{ID: "u-pending", Name: "Pending", Email: "p@x.test", Approved: false}).Error)
+	require.NoError(t, db.Create(&entity.UserTag{UserID: "u-pending", TagID: support}).Error)
+	tagPath(t, db, "/jobs/nightly", support)
+
+	sums := h.accessSummaries(ctx, []string{"/jobs/nightly"})
+	require.Equal(t, 1, sums["/jobs/nightly"].Reach(), "a pending account must not count as access")
+}
+
+// The modal says WHY each person gets in — the tag that matched.
+func TestAccessDetailNamesTheMatchingTag(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-1", "one@x.test", support)
+	tagPath(t, db, "/projects/p1", support)
+
+	detail, err := h.repo.AccessDetail(ctx, "/projects/p1")
+	require.NoError(t, err)
+	require.False(t, detail.Public)
+	require.Len(t, detail.Users, 1)
+	require.Equal(t, []string{"support"}, detail.Users[0].ViaTags)
+	require.Equal(t, []string{"support"}, detail.Tags)
+}
+
+// A connected account's reach is NOT just its tags: the person who connected
+// it and the row's creator are always in, which is the number that matters
+// when the question is "who can post as this Slack identity".
+func TestAccountAccessCountsImplicitGrants(t *testing.T) {
+	h, svc, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	row, err := svc.Create(ctx, "sso-admin", "Row", nil, "u-creator")
+	require.NoError(t, err)
+	require.NoError(t, svc.SetAccessPolicy(ctx, row.ID, connectors.AccessPolicy{EnableSSO: true, MultiAccount: true}))
+	seedUserWithTag(t, db, "u-creator", "creator@x.test", "")
+	seedUserWithTag(t, db, "u-alice", "alice@x.test", "")
+	require.NoError(t, svc.SaveAccount(ctx, row.ID, "u-alice", "ext-a", "alice", "tok-a"))
+
+	accs, err := svc.ListAccounts(ctx, row.ID)
+	require.NoError(t, err)
+	require.Len(t, accs, 1)
+
+	users, err := h.accountAccessUsers(ctx, *mustGet(t, svc, row.ID), accs[0])
+	require.NoError(t, err)
+	require.Len(t, users, 2, "the connector and the row creator both reach the account")
+	byID := map[string][]string{}
+	for _, u := range users {
+		byID[u.ID] = u.ViaTags
+	}
+	require.Equal(t, []string{reasonConnected}, byID["u-alice"])
+	require.Equal(t, []string{reasonOwner}, byID["u-creator"])
+}
+
+// With AllowOthersSeeAccounts on, the whole pool is shared with everyone who
+// can see the row — the one case where a plain user legitimately sees somebody
+// else's account, so the count has to grow.
+func TestAccountAccessGrowsWithSharedPool(t *testing.T) {
+	h, svc, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	row, err := svc.Create(ctx, "sso-admin", "Row", nil, "u-creator")
+	require.NoError(t, err)
+	require.NoError(t, svc.SetAccessPolicy(ctx, row.ID, connectors.AccessPolicy{
+		EnableSSO: true, MultiAccount: true, AllowOthersSeeAccounts: true,
+	}))
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-creator", "creator@x.test", "")
+	seedUserWithTag(t, db, "u-alice", "alice@x.test", "")
+	seedUserWithTag(t, db, "u-bob", "bob@x.test", support)
+	tagPath(t, db, "/connectors/"+row.ID, support)
+	require.NoError(t, svc.SaveAccount(ctx, row.ID, "u-alice", "ext-a", "alice", "tok-a"))
+
+	accs, err := svc.ListAccounts(ctx, row.ID)
+	require.NoError(t, err)
+	users, err := h.accountAccessUsers(ctx, *mustGet(t, svc, row.ID), accs[0])
+	require.NoError(t, err)
+
+	ids := map[string]bool{}
+	for _, u := range users {
+		ids[u.ID] = true
+	}
+	require.True(t, ids["u-bob"], "pool sharing must put the row's tag holders in reach of the account")
+	require.True(t, ids["u-alice"])
+	require.True(t, ids["u-creator"])
+}
+
+// The Tags page counters: people carrying the tag, things it opens.
+func TestTagUsageCounts(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-1", "one@x.test", support)
+	seedUserWithTag(t, db, "u-2", "two@x.test", support)
+	tagPath(t, db, "/tools/a", support)
+	tagPath(t, db, "/jobs/b", support)
+	tagPath(t, db, "/projects/c", support)
+
+	counts, err := h.repo.TagUsageCounts(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, counts[support].UserCount)
+	require.Equal(t, 3, counts[support].ItemCount)
+
+	detail, err := h.repo.TagUsageDetail(ctx, support)
+	require.NoError(t, err)
+	require.Equal(t, "support", detail.TagName)
+	require.Len(t, detail.Items, 3)
+}
+
+// The JSON endpoint behind the badge answers with the same numbers the page
+// rendered, so clicking never contradicts the badge.
+func TestAccessUsersEndpoint(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-1", "one@x.test", support)
+	tagPath(t, db, "/tools/a", support)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/access/users?path=/tools/a", nil)
+	rec := httptest.NewRecorder()
+	h.accessUsersPage(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got AccessDetail
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.False(t, got.Public)
+	require.Equal(t, "Tools", got.Kind)
+	require.Len(t, got.Users, 1)
+	require.Equal(t, "one@x.test", got.Users[0].Email)
+}
+
+func TestAccessUsersEndpointRejectsEmptyPath(t *testing.T) {
+	h, _, _ := newAdminConnectorsHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/admin/access/users", nil)
+	rec := httptest.NewRecorder()
+	h.accessUsersPage(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func mustGet(t *testing.T, svc *connectors.Service, id string) *entity.Connector {
+	t.Helper()
+	row, err := svc.Get(context.Background(), id)
+	require.NoError(t, err)
+	return row
+}
+
+// ── Admin bypass ──────────────────────────────────────────────────────────
+//
+// The tag holders are never the whole answer: on most surfaces the admin role
+// walks past the tags, so a reach that counted only tags would understate who
+// really sees the row.
+
+// Tools and jobs let ANY admin through unconditionally (login.CanAccessTool
+// returns true for an admin before it ever looks at the tags).
+func TestReachIncludesAdminsOnToolPaths(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-1", "one@x.test", support)
+	require.NoError(t, db.Create(&entity.User{
+		ID: "u-admin", Name: "Root", Email: "root@x.test", Approved: true, Role: entity.RoleAdmin,
+	}).Error)
+	tagPath(t, db, "/tools/secret", support)
+
+	sums := h.accessSummaries(ctx, []string{"/tools/secret"})
+	require.Equal(t, 2, sums["/tools/secret"].Reach(), "the admin sees it too and must be counted")
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/access/users?path=/tools/secret", nil)
+	rec := httptest.NewRecorder()
+	h.accessUsersPage(rec, req)
+	var got AccessDetail
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Len(t, got.Users, 2)
+	byID := map[string][]string{}
+	for _, u := range got.Users {
+		byID[u.ID] = u.ViaTags
+	}
+	require.Equal(t, []string{"support"}, byID["u-1"])
+	require.Equal(t, []string{"admin role"}, byID["u-admin"], "the modal must say WHY the admin is in the list")
+}
+
+// Connectors are behind a knob, so the same admin counts or does not count
+// depending on admin_see_all_connectors. Getting this wrong is what makes the
+// number a lie.
+func TestReachFollowsTheConnectorAdminKnob(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-1", "one@x.test", support)
+	require.NoError(t, db.Create(&entity.User{
+		ID: "u-admin", Name: "Root", Email: "root@x.test", Approved: true, Role: entity.RoleAdmin,
+	}).Error)
+	tagPath(t, db, "/connectors/row-1", support)
+
+	// Default is ON — the admin is in reach.
+	sums := h.accessSummaries(ctx, []string{"/connectors/row-1"})
+	require.Equal(t, 2, sums["/connectors/row-1"].Reach())
+
+	// Turned off, the admin is scoped like anybody else.
+	setAgentsKnob(t, h, "admin_see_all_connectors", "false")
+	sums = h.accessSummaries(ctx, []string{"/connectors/row-1"})
+	require.Equal(t, 1, sums["/connectors/row-1"].Reach(), "knob off must drop the admin from the count")
+}
+
+// Projects follow the OTHER knob, which is off by default — so an admin is
+// NOT in reach of a tagged project until admin_see_all_sessions is turned on.
+func TestReachFollowsTheSessionsAdminKnob(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-1", "one@x.test", support)
+	require.NoError(t, db.Create(&entity.User{
+		ID: "u-admin", Name: "Root", Email: "root@x.test", Approved: true, Role: entity.RoleAdmin,
+	}).Error)
+	tagPath(t, db, "/projects/p1", support)
+
+	sums := h.accessSummaries(ctx, []string{"/projects/p1"})
+	require.Equal(t, 1, sums["/projects/p1"].Reach(), "admin_see_all_sessions is off by default")
+
+	setAgentsKnob(t, h, "admin_see_all_sessions", "true")
+	sums = h.accessSummaries(ctx, []string{"/projects/p1"})
+	require.Equal(t, 2, sums["/projects/p1"].Reach())
+}
+
+// An admin who ALSO carries the tag is one person. Adding two numbers instead
+// of unioning two sets would report three people where there are two.
+func TestReachCountsATaggedAdminOnce(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-1", "one@x.test", support)
+	require.NoError(t, db.Create(&entity.User{
+		ID: "u-admin", Name: "Root", Email: "root@x.test", Approved: true, Role: entity.RoleAdmin,
+	}).Error)
+	require.NoError(t, db.Create(&entity.UserTag{UserID: "u-admin", TagID: support}).Error)
+	tagPath(t, db, "/tools/secret", support)
+
+	sums := h.accessSummaries(ctx, []string{"/tools/secret"})
+	require.Equal(t, 2, sums["/tools/secret"].Reach())
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/access/users?path=/tools/secret", nil)
+	rec := httptest.NewRecorder()
+	h.accessUsersPage(rec, req)
+	var got AccessDetail
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Len(t, got.Users, 2, "the tagged admin must appear once, not twice")
+	for _, u := range got.Users {
+		if u.ID == "u-admin" {
+			require.Equal(t, []string{"support", "admin role"}, u.ViaTags, "both reasons on one row")
+		}
+	}
+}
+
+// setAgentsKnob writes one of the adminscope knobs the way the Agents tool
+// declares it. EnsureOwned registers the key first: SetOwned refuses a config
+// no module has declared, and in this package no module has.
+func setAgentsKnob(t *testing.T, h *Handler, key, value string) {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, h.configs.EnsureOwned(ctx, "agents", entity.Config{Key: key, Type: "bool"}))
+	require.NoError(t, h.configs.SetOwned(ctx, "agents", key, value))
+}
+
+// ── Owner-scoped surfaces ─────────────────────────────────────────────────
+
+// An UNTAGGED project is not public. login.CanAccessSharedResource returns
+// false for an untagged path on purpose, so the project stays private to its
+// owner — rendering it as "Public 30" said the opposite of the truth.
+func TestUntaggedProjectIsPrivateNotPublic(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	seedUserWithTag(t, db, "u-owner", "owner@x.test", "")
+	seedUserWithTag(t, db, "u-other", "other@x.test", "")
+
+	sums := h.accessSummariesFor(ctx, []accessSpec{
+		{Path: "/projects/p1", ResourceID: "p1", OwnerID: "u-owner"},
+	})
+	got := sums["/projects/p1"]
+	require.False(t, got.Public, "an untagged project must never render as public")
+	require.True(t, got.OwnerScoped)
+	require.Equal(t, 1, got.Reach(), "reach is the owner, not every approved user")
+}
+
+// The same project shared by tag grows to owner + tag holders.
+func TestTaggedProjectIsOwnerPlusShare(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-owner", "owner@x.test", "")
+	seedUserWithTag(t, db, "u-shared", "shared@x.test", support)
+	seedUserWithTag(t, db, "u-other", "other@x.test", "")
+	tagPath(t, db, "/projects/p1", support)
+
+	sums := h.accessSummariesFor(ctx, []accessSpec{
+		{Path: "/projects/p1", ResourceID: "p1", OwnerID: "u-owner"},
+	})
+	require.Equal(t, 2, sums["/projects/p1"].Reach(), "owner + the tag holder")
+}
+
+// An "owner:<id>" tag is how an admin hands a resource to someone who did not
+// create it, so its holders are in reach even with no filter tag anywhere.
+func TestOwnerTagHolderCountsAsReach(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	ownerTag := seedFilterTag(t, db, "owner:wf-1")
+	seedUserWithTag(t, db, "u-creator", "creator@x.test", "")
+	seedUserWithTag(t, db, "u-handed", "handed@x.test", ownerTag)
+
+	sums := h.accessSummariesFor(ctx, []accessSpec{
+		{Path: "/workflows/wf-1", ResourceID: "wf-1", OwnerID: "u-creator"},
+	})
+	require.Equal(t, 2, sums["/workflows/wf-1"].Reach(), "creator + the user handed the owner tag")
+}
+
+// Workflows and skills never read their filter tags — spa_workflows and
+// skills.go both gate on UserOwnsResource alone. A tag added on those admin
+// pages therefore grants nothing, and the badge has to say so instead of
+// counting people who cannot actually get in.
+func TestInertTagsDoNotGrantAccess(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-creator", "creator@x.test", "")
+	seedUserWithTag(t, db, "u-tagged", "tagged@x.test", support)
+	tagPath(t, db, "/skills/deploy", support)
+
+	sums := h.accessSummariesFor(ctx, []accessSpec{
+		{Path: "/skills/deploy", ResourceID: "deploy", OwnerID: "u-creator"},
+	})
+	got := sums["/skills/deploy"]
+	require.True(t, got.TagsInert, "the badge must flag tags this surface never reads")
+	require.Equal(t, 1, got.Reach(), "only the creator reaches it — the tag holder does not")
+}
+
+// Tools keep the opposite rule, and this test exists so a future refactor
+// cannot quietly make everything owner-scoped: untagged tool = everyone.
+func TestUntaggedToolStaysPublic(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	seedUserWithTag(t, db, "u-1", "one@x.test", "")
+	seedUserWithTag(t, db, "u-2", "two@x.test", "")
+
+	sums := h.accessSummariesFor(ctx, []accessSpec{{Path: "/tools/notes", ResourceID: "notes"}})
+	require.True(t, sums["/tools/notes"].Public)
+	require.Equal(t, 2, sums["/tools/notes"].Reach())
+}
+
+// ── The batched count must agree with the detailed list ───────────────────
+//
+// The badge is counted in one batched pass and the modal resolves the same
+// account row by row. They are two code paths answering one question, so the
+// only thing keeping them honest is this: the number on the badge must equal
+// the number of people the modal lists.
+
+func requireBadgeMatchesModal(t *testing.T, h *Handler, svc *connectors.Service, rowID string) {
+	t.Helper()
+	ctx := context.Background()
+	row := mustGet(t, svc, rowID)
+	accs, err := svc.ListAccounts(ctx, rowID)
+	require.NoError(t, err)
+
+	paths := []string{"/connectors/" + rowID}
+	for _, a := range accs {
+		paths = append(paths, connectors.AccountTagPath(a.ID))
+	}
+	batch := h.newAccountReachBatch(ctx, paths)
+
+	for _, acc := range accs {
+		users, err := h.accountAccessUsers(ctx, *row, acc)
+		require.NoError(t, err)
+		got := batch.summaryFor(*row, acc)
+		require.Equal(t, len(users), got.UserCount,
+			"badge and modal disagree for account %s", acc.DisplayName)
+	}
+}
+
+func TestBatchedAccountReachMatchesDetailPrivatePool(t *testing.T) {
+	h, svc, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	row, err := svc.Create(ctx, "sso-admin", "Row", nil, "u-creator")
+	require.NoError(t, err)
+	require.NoError(t, svc.SetAccessPolicy(ctx, row.ID, connectors.AccessPolicy{EnableSSO: true, MultiAccount: true}))
+	team := seedFilterTag(t, db, "team")
+	seedUserWithTag(t, db, "u-creator", "creator@x.test", "")
+	seedUserWithTag(t, db, "u-alice", "alice@x.test", "")
+	seedUserWithTag(t, db, "u-bob", "bob@x.test", "")
+	seedUserWithTag(t, db, "u-teamer", "teamer@x.test", team)
+	require.NoError(t, svc.SaveAccount(ctx, row.ID, "u-alice", "ext-a", "alice", "tok-a"))
+	require.NoError(t, svc.SaveAccount(ctx, row.ID, "u-bob", "ext-b", "bob", "tok-b"))
+
+	accs, err := svc.ListAccounts(ctx, row.ID)
+	require.NoError(t, err)
+	// Share exactly one account with the team — the granular case.
+	tagPath(t, db, connectors.AccountTagPath(accs[0].ID), team)
+
+	requireBadgeMatchesModal(t, h, svc, row.ID)
+}
+
+func TestBatchedAccountReachMatchesDetailSharedPool(t *testing.T) {
+	h, svc, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	row, err := svc.Create(ctx, "sso-admin", "Row", nil, "u-creator")
+	require.NoError(t, err)
+	require.NoError(t, svc.SetAccessPolicy(ctx, row.ID, connectors.AccessPolicy{
+		EnableSSO: true, MultiAccount: true, AllowOthersSeeAccounts: true,
+	}))
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-creator", "creator@x.test", "")
+	seedUserWithTag(t, db, "u-alice", "alice@x.test", "")
+	seedUserWithTag(t, db, "u-sup", "sup@x.test", support)
+	tagPath(t, db, "/connectors/"+row.ID, support)
+	require.NoError(t, svc.SaveAccount(ctx, row.ID, "u-alice", "ext-a", "alice", "tok-a"))
+
+	requireBadgeMatchesModal(t, h, svc, row.ID)
+}
+
+// A deactivated account is not reach: the person who connected it no longer
+// counts once their user is unapproved.
+func TestBatchedAccountReachSkipsUnapprovedConnector(t *testing.T) {
+	h, svc, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	row, err := svc.Create(ctx, "sso-admin", "Row", nil, "u-creator")
+	require.NoError(t, err)
+	require.NoError(t, svc.SetAccessPolicy(ctx, row.ID, connectors.AccessPolicy{EnableSSO: true, MultiAccount: true}))
+	seedUserWithTag(t, db, "u-creator", "creator@x.test", "")
+	require.NoError(t, db.Create(&entity.User{ID: "u-gone", Name: "Gone", Email: "gone@x.test", Approved: false}).Error)
+	require.NoError(t, svc.SaveAccount(ctx, row.ID, "u-gone", "ext-g", "gone", "tok-g"))
+
+	accs, err := svc.ListAccounts(ctx, row.ID)
+	require.NoError(t, err)
+	batch := h.newAccountReachBatch(ctx, []string{
+		"/connectors/" + row.ID, connectors.AccountTagPath(accs[0].ID),
+	})
+	got := batch.summaryFor(*mustGet(t, svc, row.ID), accs[0])
+	require.Equal(t, 1, got.UserCount, "only the creator — the unapproved connector is not reach")
+}
+
+// ── Cache ─────────────────────────────────────────────────────────────────
+
+// The cache is only worth having if it actually stops the repeat reads, and
+// only safe if a write through the repo is visible immediately. This asserts
+// both halves, including the cost: a write that bypasses the repo (another
+// replica, a direct DB edit) is NOT seen until the TTL — which is the
+// trade-off, stated rather than hidden.
+func TestAccessCacheInvalidatesOnRepoWriteButHoldsOtherwise(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-1", "one@x.test", support)
+	tagPath(t, db, "/tools/shared", support)
+
+	require.Equal(t, 1, h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"].Reach())
+
+	// A write that goes AROUND the repo is invisible while the cache holds.
+	seedUserWithTag(t, db, "u-2", "two@x.test", support)
+	require.Equal(t, 1, h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"].Reach(),
+		"cache is expected to hold until a repo write or the TTL")
+
+	// A write THROUGH the repo drops it, so the next read is current — and
+	// picks up the out-of-band user too.
+	require.NoError(t, h.repo.SetToolTags(ctx, "/tools/other", []string{support}))
+	require.Equal(t, 2, h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"].Reach(),
+		"a repo write must make the next read current")
+}
+
+// Approving a user is a repo write, so their access appears at once rather
+// than a TTL later — the case an admin watches happen on screen.
+func TestApprovingAUserShowsUpImmediately(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	tagPath(t, db, "/tools/shared", support)
+	require.NoError(t, db.Create(&entity.User{ID: "u-new", Name: "New", Email: "new@x.test", Approved: false}).Error)
+	require.NoError(t, db.Create(&entity.UserTag{UserID: "u-new", TagID: support}).Error)
+
+	require.Equal(t, 0, h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"].Reach())
+
+	require.NoError(t, h.repo.SetApproved(ctx, "u-new", true))
+	require.Equal(t, 1, h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"].Reach(),
+		"approval must be visible on the next render, not after the TTL")
+}
+
+// ── A failed read must not read as "nobody" ───────────────────────────────
+//
+// This is the one the review called critical, and it is right: every number
+// on these pages is an access answer, so an empty set after a database
+// failure says "nobody can see this" — the most misleading thing a hiccup
+// could possibly say. The badge has an Unknown state ("—") for exactly this,
+// and the point is that a failure reaches it instead of being swallowed.
+
+func TestReachIsUnknownNotZeroWhenTheDatabaseFails(t *testing.T) {
+	h, _, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	support := seedFilterTag(t, db, "support")
+	seedUserWithTag(t, db, "u-1", "one@x.test", support)
+	tagPath(t, db, "/tools/shared", support)
+
+	// Warm, then break the database under it and drop the cache the way a
+	// write would, so the next read has to go back to a DB that is gone.
+	require.Equal(t, 1, h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"].Reach())
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+	h.repo.cache.invalidate()
+
+	got := h.accessSummaries(ctx, []string{"/tools/shared"})["/tools/shared"]
+	require.True(t, got.Unknown, "a failed read must render as unknown, never as a count")
+	require.False(t, got.Public, "and never as public")
+}
+
+// The same for a connected account: the batch reports failure rather than
+// counting nobody.
+func TestAccountReachIsUnknownWhenTheDatabaseFails(t *testing.T) {
+	h, svc, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	row, err := svc.Create(ctx, "sso-admin", "Row", nil, "u-creator")
+	require.NoError(t, err)
+	require.NoError(t, svc.SetAccessPolicy(ctx, row.ID, connectors.AccessPolicy{EnableSSO: true, MultiAccount: true}))
+	seedUserWithTag(t, db, "u-creator", "creator@x.test", "")
+	seedUserWithTag(t, db, "u-alice", "alice@x.test", "")
+	require.NoError(t, svc.SaveAccount(ctx, row.ID, "u-alice", "ext-a", "alice", "tok-a"))
+	accs, err := svc.ListAccounts(ctx, row.ID)
+	require.NoError(t, err)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+	h.repo.cache.invalidate()
+
+	batch := h.newAccountReachBatch(ctx, []string{connectors.AccountTagPath(accs[0].ID)})
+	got := batch.summaryFor(*row, accs[0])
+	require.True(t, got.Unknown, "a failed batch must render as unknown, not as a count")
+}
+
+// A failed load must not be cached either — otherwise one hiccup poisons
+// every page for the whole TTL.
+func TestFailedLoadIsNotCached(t *testing.T) {
+	_, _, db := newAdminConnectorsHandler(t)
+	r := newRepo(db)
+	ctx := context.Background()
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	_, err = r.access(ctx)
+	require.Error(t, err, "a broken database must surface as an error")
+	require.Nil(t, r.cache.data, "a failed load must not be cached")
+}

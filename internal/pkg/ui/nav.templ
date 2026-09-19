@@ -127,7 +127,7 @@ templ ThemePicker(current Theme, lightPref, darkPref string) {
 templ UserMenu(user *entity.User, showTheme bool) {
 	if user != nil {
 		<div class="relative">
-			<details class="group">
+			<details class="group" data-menu>
 				<summary class="flex cursor-pointer list-none items-center gap-2 rounded-lg p-1 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors focus:outline-none focus:ring-2 focus:ring-green-400">
 					if user.Avatar != "" {
 						<img src={ user.Avatar } alt={ user.Name } referrerpolicy="no-referrer" class="h-8 w-8 rounded-full object-cover border border-white-300 dark:border-navy-600"/>
@@ -218,6 +218,7 @@ templ UserMenu(user *entity.User, showTheme bool) {
 						// Green "actionable" accent + 🆕 marker.
 						if user.IsAdmin() && VersionInfoFromContext(ctx).AnyUpdate() {
 							<a
+								id="wick-nav-software-update"
 								href="/admin/advanced/software-update"
 								class="flex items-center gap-2.5 px-4 py-2 text-sm font-medium text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
 							>
@@ -235,7 +236,7 @@ templ UserMenu(user *entity.User, showTheme bool) {
 							@ThemePicker(ThemeByID(EffectiveTheme(user.Metadata.Theme)), EffectiveLightTheme(user.Metadata.LightTheme), EffectiveDarkTheme(user.Metadata.DarkTheme))
 						</div>
 					}
-					@versionSection(VersionInfoFromContext(ctx))
+					@versionSection(VersionInfoFromContext(ctx), user.IsAdmin())
 					<div class="border-t border-white-300 dark:border-navy-600 py-1">
 						<form action="/auth/logout" method="POST">
 							<button
@@ -265,8 +266,9 @@ templ UserMenu(user *entity.User, showTheme bool) {
 // links to the public wick site. On the OFFICIAL build app == framework
 // == one release, so it collapses to a SINGLE "Wick" line; downstream
 // builds show App and Wick separately. Omitted when no version is known.
-templ versionSection(v VersionInfo) {
+templ versionSection(v VersionInfo, admin bool) {
 	if v.AppVersion != "" || v.WickVersion != "" {
+		<div id="wick-version-section" data-version={ v.AppVersion }>
 		<a
 			href={ templ.SafeURL(versionWebURL(v)) }
 			target="_blank"
@@ -281,7 +283,155 @@ templ versionSection(v VersionInfo) {
 				@versionRowMenu("Wick", v.WickVersion, v.WickLatest, v.WickDev, v.WickUpdateKnown, v.WickUpdate)
 			}
 		</a>
+		// Revealed by the script below once a DIFFERENT build is answering —
+		// which is what a zero-downtime upgrade leaves behind: the process was
+		// replaced without this page ever being reloaded, so the version above
+		// (and any 🆕 next to it) describes a build that is no longer serving.
+		<button
+			id="wick-version-reload"
+			type="button"
+			class="hidden w-full items-center gap-2 border-t border-white-300 dark:border-navy-600 px-4 py-2.5 text-left text-xs hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+			title="A newer build took over while this page was open. Reload to use it."
+		>
+			<span class="text-sm leading-none">🆕</span>
+			<span class="min-w-0 flex-1 truncate text-black-900 dark:text-white-100">
+				<span id="wick-version-serving" class="font-mono"></span> is running now
+			</span>
+			<span class="shrink-0 font-medium text-green-600 dark:text-green-400">Reload</span>
+		</button>
+		// Revealed WHILE a handover is running — the window a graceful
+		// upgrade is otherwise silent in: the successor is booting (~80s
+		// here) and this process keeps serving, so nothing on screen moves
+		// and the only way to know was to open the admin panel and look.
+		// Admins get the link to it; everyone else gets the fact.
+		if admin {
+			<a
+				id="wick-version-handover"
+				href="/admin/advanced/software-update"
+				class="hidden w-full items-center gap-2 border-t border-white-300 dark:border-navy-600 px-4 py-2.5 text-left text-xs hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+				title="A new build is starting. Open Software Update for the details."
+			>
+				@handoverRowBody(true)
+			</a>
+		} else {
+			<div
+				id="wick-version-handover"
+				class="hidden w-full items-center gap-2 border-t border-white-300 dark:border-navy-600 px-4 py-2.5 text-left text-xs"
+				title="A new build is starting. The app keeps working while it does."
+			>
+				@handoverRowBody(false)
+			</div>
+		}
+		</div>
+		@versionFollowScript()
 	}
+}
+
+// handoverRowBody is the inside of the "reloading now" row — the same in
+// both shapes, so the admin link and the plain notice cannot drift into
+// saying different things about the same event.
+templ handoverRowBody(link bool) {
+	<span class="relative flex h-2 w-2 shrink-0">
+		<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75"></span>
+		<span class="relative inline-flex h-2 w-2 rounded-full bg-green-500"></span>
+	</span>
+	<span class="min-w-0 flex-1 truncate text-black-900 dark:text-white-100">Reloading — a new build is starting</span>
+	if link {
+		<span class="shrink-0 font-medium text-green-600 dark:text-green-400">Details</span>
+	}
+}
+
+// versionFollowScript keeps the version row honest on a page that was open
+// across an upgrade. A graceful handover is invisible from the browser — no
+// dropped connection, no reload — so the menu goes on showing the version
+// that rendered it, and an admin keeps seeing a "Software Update 🆕" shortcut
+// for an update that has already been applied.
+//
+// /boot-status is the cheapest way to ask who is answering: no auth, no
+// database, served on both sides of the boot gate, and it already carries the
+// version + pid — plus `handover`, which says a reload is running right now.
+//
+// It is asked ONLY while this menu is open. Nothing here is an alert: both
+// rows live inside the dropdown, so a poll running behind a closed menu would
+// spend every tab's bandwidth and every process's CPU answering a question
+// nobody is looking at. Opening the menu is the question; that is when it is
+// asked, and it keeps refreshing at 5s for as long as it stays open.
+templ versionFollowScript() {
+	<script type="text/javascript">
+	(function () {
+		var sec = document.getElementById('wick-version-section');
+		if (!sec || !window.fetch) return;
+		var mine = sec.dataset.version || '';
+		var btn = document.getElementById('wick-version-reload');
+		var servingEl = document.getElementById('wick-version-serving');
+		var shortcut = document.getElementById('wick-nav-software-update');
+		var row = document.getElementById('wick-version-handover');
+		var stopped = false;
+		var timer = null;
+		if (btn) btn.addEventListener('click', function () { location.reload(); });
+
+		function show(el, on) {
+			if (!el) return;
+			el.classList.toggle('hidden', !on);
+			el.classList.toggle('flex', on);
+		}
+		function check() {
+			if (stopped) return;
+			fetch('/boot-status', { cache: 'no-store' })
+				.then(function (r) { return r.ok ? r.json() : null; })
+				.then(function (d) {
+					if (!d) return;
+					show(row, !!(d.handover || d.draining));
+					if (!mine || !d.version || d.version === mine) return;
+					// A different build is serving. Offer the reload, and drop
+					// the update shortcut: whatever it was pointing at, this
+					// page can no longer describe it.
+					if (servingEl) servingEl.textContent = d.version;
+					// Correct the number in place. The row saying 0.1.274 while
+					// 0.1.275 answers every request is the actual complaint —
+					// a separate "a new build is running" line underneath does
+					// not fix the line somebody is reading.
+					var appRow = sec.querySelector('[data-version-row="App"], [data-version-row="Wick"]');
+					if (appRow) {
+						appRow.textContent = d.version;
+						appRow.title = d.version + ' — took over while this page was open';
+						appRow.classList.add('text-green-600', 'dark:text-green-400');
+					}
+					show(btn, true);
+					show(row, false);
+					if (shortcut) shortcut.classList.add('hidden');
+					stopped = true; // said once; the reload is the user's move
+					stop();
+				})
+				.catch(function () { /* offline or mid-restart — asked again on the next open */ });
+		}
+		function stop() {
+			if (timer) { clearInterval(timer); timer = null; }
+		}
+		// Open = watch, closed = nothing at all. A handover takes ~80s, so 5s
+		// is fast enough for the row to appear and clear while somebody is
+		// actually looking at it.
+		var menu = sec.closest('details');
+		if (!menu) { check(); return; }
+		function watch() {
+			stop();
+			if (!menu.open) return;
+			check();
+			timer = setInterval(function () {
+				if (!menu.open) { stop(); return; }
+				if (document.hidden) return; // paused, not given up on
+				check();
+			}, 5000);
+		}
+		menu.addEventListener('toggle', watch);
+		// Coming back to the tab with the menu still open is the other moment
+		// somebody is looking at this: a swap that happened while they were
+		// away must not need the menu closing and reopening to be noticed.
+		document.addEventListener('visibilitychange', function () {
+			if (!document.hidden && menu.open) check();
+		});
+	})();
+	</script>
 }
 
 // versionRowMenu is one labelled version line with a status badge. The
@@ -295,7 +445,15 @@ templ versionRowMenu(label, version, latest string, dev, known, update bool) {
 	if version != "" {
 		<div class="flex min-w-0 items-center gap-2 py-0.5">
 			<span class="w-10 shrink-0 text-xs text-black-700 dark:text-black-600">{ label }</span>
-			<span class="truncate font-mono text-xs text-black-900 dark:text-white-100" title={ version }>{ versionDisplay(version) }</span>
+			// data-version-row marks the number the follow script corrects when a
+			// handover swapped the build under this page. Without it the row goes
+			// on stating the version that RENDERED it, which is the one thing it
+			// is there to report.
+			<span
+				data-version-row={ label }
+				class="truncate font-mono text-xs text-black-900 dark:text-white-100"
+				title={ version }
+			>{ versionDisplay(version) }</span>
 			if dev {
 				<span class="shrink-0 rounded-full bg-white-200 dark:bg-navy-600 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-black-700 dark:text-black-600">dev</span>
 			}

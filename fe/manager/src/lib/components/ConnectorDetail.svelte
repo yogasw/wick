@@ -5,7 +5,7 @@
      duplicate/delete live on the connector list's per-row menu, not here).
      Config auto-save is owned by ConfigsForm; the rest POSTs through the
      JSON api client. */
-  import { Button, TextInput, TextArea, NumberInput } from "@wick-fe/common-ui";
+  import { Button, TextInput, TextArea, NumberInput, ConfirmDialog, KebabMenu } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     getConnectorRow,
@@ -13,8 +13,13 @@
     setConnectorDescription,
     runHealthCheck,
     setConnectorRateLimit,
+    getConnectorAccount,
+    setAccountOpState,
+    disconnectConnectorAccount,
   } from "$lib/api.js";
-  import type { ConnectorDetail } from "$lib/types.js";
+  import type { ConnectorDetail, AccountDetail } from "$lib/types.js";
+  import { startConnectorOAuth, type OAuthConnect } from "./connectorOAuth.js";
+  import { push } from "$lib/router.js";
   import ConfigsForm from "./fields/ConfigsForm.svelte";
   import OperationsTable from "./OperationsTable.svelte";
   import AccountsSection from "./AccountsSection.svelte";
@@ -23,10 +28,27 @@
   import ExtensionsSection from "./ExtensionsSection.svelte";
   import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
 
-  type Props = { connectorKey: string; connectorId: string };
-  let { connectorKey, connectorId }: Props = $props();
+  /* accountId turns this into the page for ONE connected account. It is the
+     same page deliberately — same chrome, same Operations table — with the
+     instance-configuration sections hidden, because an account is a narrower
+     view of this row rather than a different kind of thing. A second page
+     with its own layout drifts from this one the moment either changes. */
+  type Props = { connectorKey: string; connectorId: string; accountId?: string };
+  let { connectorKey, connectorId, accountId = "" }: Props = $props();
 
   let data = $state<ConnectorDetail | null>(null);
+  let account = $state<AccountDetail | null>(null);
+  let connecting = $state(false);
+  let confirmDisconnect = $state(false);
+  let oauthHandle: OAuthConnect | null = null;
+
+  const inAccountMode = $derived(accountId !== "");
+  /* The instance's own settings — label, AI description, credentials, rate
+     limit, policy, the accounts list — belong to the row, not to one account,
+     so account mode hides them exactly the way a non-configuring viewer
+     already does. */
+  const showInstanceConfig = $derived(!inAccountMode && data?.can_configure === true);
+  const canWriteOps = $derived(inAccountMode ? account?.can_manage === true : data?.can_configure === true);
   let loading = $state(true);
   let error = $state("");
   let labelDraft = $state("");
@@ -41,6 +63,7 @@
     if (!silent) loading = true;
     try {
       data = await getConnectorRow(connectorKey, connectorId);
+      account = accountId ? await getConnectorAccount(connectorKey, connectorId, accountId) : null;
       labelDraft = data.label;
       descDraft = data.description ?? "";
       // When the connector requires the AI description, the section is always
@@ -63,6 +86,101 @@
   function refresh() {
     load(true);
   }
+
+  /* Writes this account's override for one operation and patches the row in
+     place. No refetch: a reload would flip `loading` and unmount the whole
+     page on every toggle. `enabled` is recomputed with the backend's
+     precedence — health-check lock, then override, then the instance. */
+  async function setAccountState(opKey: string, state: "inherit" | "on" | "off"): Promise<void> {
+    await setAccountOpState(connectorKey, connectorId, accountId, opKey, state);
+    if (!account?.ops) return;
+    account = {
+      ...account,
+      ops: account.ops.map((o) =>
+        o.key === opKey
+          ? { ...o, state, enabled: o.system_disabled ? false : state === "inherit" ? o.inherited : state === "on" }
+          : o,
+      ),
+    };
+  }
+
+  function reconnectAccount(): void {
+    const url = account?.reconnect_url;
+    if (!url || connecting) return;
+    connecting = true;
+    oauthHandle = startConnectorOAuth(url);
+    oauthHandle.promise
+      .then(() => {
+        toastOk("Account re-connected");
+        return load(true);
+      })
+      .catch((e) => toastError("Re-connect failed", e instanceof Error ? e.message : String(e)))
+      .finally(() => {
+        connecting = false;
+        oauthHandle = null;
+      });
+  }
+
+  async function disconnectAccount(): Promise<void> {
+    confirmDisconnect = false;
+    try {
+      await disconnectConnectorAccount(connectorKey, connectorId, accountId);
+      toastOk("Account disconnected");
+      // Nothing left to show on this page once the account is gone.
+      push(`/connectors/${connectorKey}/${connectorId}`);
+    } catch (e) {
+      toastError("Disconnect failed", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  const accountMenuItems = $derived([
+    {
+      label: connecting ? "Re-connecting…" : "Re-connect",
+      onclick: reconnectAccount,
+      disabled: !account?.can_manage || !account?.reconnect_url || connecting,
+    },
+    {
+      label: "Disconnect",
+      onclick: () => (confirmDisconnect = true),
+      danger: true,
+      disabled: !account?.can_manage,
+    },
+  ]);
+
+  const accountOps = $derived(account?.ops ?? []);
+  const accountStateByKey = $derived(Object.fromEntries(accountOps.map((o) => [o.key, o.state])));
+  const accountInheritedByKey = $derived(Object.fromEntries(accountOps.map((o) => [o.key, o.inherited])));
+  const overrideCount = $derived(accountOps.filter((o) => o.state !== "inherit").length);
+
+  /* The account view is the SAME page, so its Operations panel has to be the
+     same panel: grouped into category cards with the Sections sidebar beside
+     them. Only the account endpoint's rows are per-account, and they carry no
+     category / admin_only / config_only — that is instance metadata, the same
+     for every account on the row. So the instance op is the base and the
+     account decides only what it actually decides: enabled, and whether the
+     health check has locked the op.
+
+     Feeding the table a category-less list is what flattened this page and
+     dropped the sidebar with it, since OperationsTable renders the flat
+     layout for a connector with no categories. */
+  const accountOpRows = $derived.by(() => {
+    const base = new Map((data?.operations ?? []).map((o) => [o.key, o]));
+    return accountOps.map((o) => {
+      const inst = base.get(o.key);
+      return {
+        key: o.key,
+        name: o.name,
+        description: o.description,
+        destructive: o.destructive,
+        category: inst?.category ?? "",
+        admin_only: inst?.admin_only ?? false,
+        config_only: inst?.config_only ?? false,
+        enabled: o.enabled,
+        system_disabled: o.system_disabled,
+        system_disabled_reason: o.system_disabled_reason,
+      };
+    });
+  });
 
   async function saveLabel() {
     if (!data || !labelDraft.trim()) return;
@@ -171,119 +289,152 @@
             {/if}
           </div>
           <p class="mt-0.5 font-mono text-[11px] text-black-700 dark:text-black-600">{data.id}</p>
-          {#if data.description}
+          {#if inAccountMode && account}
+            <!-- Same header, one line added: which identity this narrower view
+                 is about, and whether it follows the instance at all. -->
+            <p class="mt-1 text-sm text-black-800 dark:text-black-600">
+              Viewing <span class="font-medium text-black-900 dark:text-white-100">@{account.display_name}</span> — operations follow this instance unless the account overrides them.
+              {#if overrideCount > 0}
+                <span class="font-medium text-green-600 dark:text-green-400">{overrideCount} override{overrideCount === 1 ? "" : "s"} in effect.</span>
+              {/if}
+            </p>
+          {:else if data.description}
             <p class="mt-1 max-w-xl text-sm text-black-800 dark:text-black-600">{data.description}</p>
           {/if}
         </div>
       </div>
-    </div>
-
-    <section>
-      <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Label</h2>
-      <div class="mt-3 flex items-center gap-2">
-        <div class="w-full max-w-md">
-          <TextInput value={labelDraft} disabled={!data.can_configure} onChange={(v) => (labelDraft = v)} ariaLabel="Connector label" />
-        </div>
-        <Button size="lg" disabled={!data.can_configure} onclick={saveLabel}>Save</Button>
-      </div>
-    </section>
-
-    <section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
-      <div class="flex items-start justify-between gap-4 px-5 py-4">
-        <div class="min-w-0">
-          <div class="flex items-center gap-2">
-            <h2 class="text-base font-semibold text-black-900 dark:text-white-100">AI description</h2>
-            {#if data.require_ai_description}
-              <span class="rounded-full bg-neg-400/15 px-2 py-0.5 text-[11px] font-medium text-neg-400">Required</span>
-            {/if}
-            {#if descEnabled && descStatus}
-              <span
-                class="text-[11px] {descStatus === 'error' ? 'text-neg-400' : descStatus === 'saved' ? 'text-pos-400' : 'text-black-700 dark:text-black-600'}"
-              >
-                {descStatus === "saving" ? "saving…" : descStatus === "saved" ? "✓ saved" : descStatus === "error" ? "✗ failed" : ""}
-              </span>
-            {/if}
-          </div>
-          <p class="mt-1 text-sm text-black-800 dark:text-black-600">
-            Extra guidance the AI sees for this connector — when to use it, team notes, constraints. Appended to the built-in description.
-            {#if data.require_ai_description}
-              <span class="text-black-900 dark:text-white-200">This connector requires it — it stays “needs setup” until you fill it in (e.g. state who may use this instance).</span>
-            {/if}
-          </p>
-        </div>
-        <!-- Pill switch: shows/hides the field to keep the page tidy. When the
-             connector requires the AI description it's forced on (can't hide). -->
-        <!-- Knob offset uses inline style, not translate-x utilities: those
-             (translate-x-5 / -0.5) get purged from the manager CSS and the knob
-             would never move. Inline transform is purge-proof. -->
-        <button
-          type="button"
-          role="switch"
-          aria-checked={descEnabled}
-          aria-label="Toggle AI description"
-          disabled={!data.can_configure || data.require_ai_description}
-          onclick={() => {
-            if (data?.require_ai_description) return;
-            descEnabled = !descEnabled;
-          }}
-          class="relative mt-1 inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors {data.can_configure && !data.require_ai_description
-            ? 'cursor-pointer'
-            : 'opacity-50'} {descEnabled ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
-        >
-          <span
-            class="inline-block h-5 w-5 rounded-full bg-white-100 shadow transition-transform"
-            style="transform: translateX({descEnabled ? '22px' : '2px'});"
-          ></span>
-        </button>
-      </div>
-      {#if descEnabled}
-        <div class="border-t border-white-300 dark:border-navy-600 px-5 py-4">
-          <TextArea
-            value={descDraft}
-            disabled={!data.can_configure}
-            rows={4}
-            onChange={onDescInput}
-            ariaLabel="Connector AI description"
-          />
-          {#if data.require_ai_description && descDraft.trim() === ""}
-            <p class="mt-2 text-[11px] text-neg-400">Required — this instance stays “needs setup” until you fill this in.</p>
-          {:else}
-            <p class="mt-2 text-[11px] text-black-700 dark:text-black-600">Saves automatically as you type.</p>
+      {#if inAccountMode && account}
+        <div class="flex flex-shrink-0 items-center gap-2">
+          <Button variant="secondary" size="sm" onclick={() => push(`/connectors/${connectorKey}/${connectorId}/history?credential=${encodeURIComponent(accountId)}`)}>History</Button>
+          {#if account.can_manage}
+            <KebabMenu ariaLabel={`Actions for @${account.display_name}`} items={accountMenuItems} />
           {/if}
         </div>
       {/if}
-    </section>
+    </div>
 
-    {#if healthBanner}
-      <div class="rounded-xl border px-4 py-3 text-sm {healthBanner.ok ? 'border-pos-300 bg-pos-100 text-pos-400' : 'border-neg-300 bg-neg-100 text-neg-400'}">{healthBanner.msg}</div>
+    {#if inAccountMode && account && !account.can_manage}
+      <p class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-3 text-sm text-black-700 dark:text-black-600">
+        Read-only: you may see what applies to this account, but changing it needs the instance's owner or an admin.
+      </p>
     {/if}
 
-    {#if connectorKey === "playwright_browser"}
-      <ActiveSessionsSection connectorId={connectorId} />
-      <ExtensionsSection connectorId={connectorId} />
-    {/if}
+    <!-- Everything from here to the Accounts section configures the instance:
+         label, AI description, credentials, the health probe, rate limit, and
+         the playwright session/extension panels. A viewer who may not
+         configure this row gets none of it — previously the fields merely
+         rendered disabled, which showed the shape of someone else's setup and
+         invited clicks the server refuses. What such a viewer keeps is the
+         part they can actually use: their connected accounts and the
+         operation list, so they can still open Test and run as themselves. -->
+    {#if showInstanceConfig}
+      <section>
+        <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Label</h2>
+        <div class="mt-3 flex items-center gap-2">
+          <div class="w-full max-w-md">
+            <TextInput value={labelDraft} disabled={!data.can_configure} onChange={(v) => (labelDraft = v)} ariaLabel="Connector label" />
+          </div>
+          <Button size="lg" disabled={!data.can_configure} onclick={saveLabel}>Save</Button>
+        </div>
+      </section>
 
-    <section>
-      <div class="flex items-center justify-between gap-3">
-        <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Credentials</h2>
-        {#if data.has_health_check}
-          <Button variant="secondary" size="md" disabled={healthBusy} onclick={checkHealth}>{healthBusy ? "Checking…" : "Check Permissions"}</Button>
+      <section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+        <div class="flex items-start justify-between gap-4 px-5 py-4">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <h2 class="text-base font-semibold text-black-900 dark:text-white-100">AI description</h2>
+              {#if data.require_ai_description}
+                <span class="rounded-full bg-neg-400/15 px-2 py-0.5 text-[11px] font-medium text-neg-400">Required</span>
+              {/if}
+              {#if descEnabled && descStatus}
+                <span
+                  class="text-[11px] {descStatus === 'error' ? 'text-neg-400' : descStatus === 'saved' ? 'text-pos-400' : 'text-black-700 dark:text-black-600'}"
+                >
+                  {descStatus === "saving" ? "saving…" : descStatus === "saved" ? "✓ saved" : descStatus === "error" ? "✗ failed" : ""}
+                </span>
+              {/if}
+            </div>
+            <p class="mt-1 text-sm text-black-800 dark:text-black-600">
+              Extra guidance the AI sees for this connector — when to use it, team notes, constraints. Appended to the built-in description.
+              {#if data.require_ai_description}
+                <span class="text-black-900 dark:text-white-200">This connector requires it — it stays “needs setup” until you fill it in (e.g. state who may use this instance).</span>
+              {/if}
+            </p>
+          </div>
+          <!-- Pill switch: shows/hides the field to keep the page tidy. When the
+               connector requires the AI description it's forced on (can't hide). -->
+          <!-- Knob offset uses inline style, not translate-x utilities: those
+               (translate-x-5 / -0.5) get purged from the manager CSS and the knob
+               would never move. Inline transform is purge-proof. -->
+          <button
+            type="button"
+            role="switch"
+            aria-checked={descEnabled}
+            aria-label="Toggle AI description"
+            disabled={!data.can_configure || data.require_ai_description}
+            onclick={() => {
+              if (data?.require_ai_description) return;
+              descEnabled = !descEnabled;
+            }}
+            class="relative mt-1 inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors {data.can_configure && !data.require_ai_description
+              ? 'cursor-pointer'
+              : 'opacity-50'} {descEnabled ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
+          >
+            <span
+              class="inline-block h-5 w-5 rounded-full bg-white-100 shadow transition-transform"
+              style="transform: translateX({descEnabled ? '22px' : '2px'});"
+            ></span>
+          </button>
+        </div>
+        {#if descEnabled}
+          <div class="border-t border-white-300 dark:border-navy-600 px-5 py-4">
+            <TextArea
+              value={descDraft}
+              disabled={!data.can_configure}
+              rows={4}
+              onChange={onDescInput}
+              ariaLabel="Connector AI description"
+            />
+            {#if data.require_ai_description && descDraft.trim() === ""}
+              <p class="mt-2 text-[11px] text-neg-400">Required — this instance stays “needs setup” until you fill this in.</p>
+            {:else}
+              <p class="mt-2 text-[11px] text-black-700 dark:text-black-600">Saves automatically as you type.</p>
+            {/if}
+          </div>
         {/if}
-      </div>
-      <p class="mt-1 text-sm text-black-800 dark:text-black-600">Per-row values shared by every operation on this connector.</p>
-      <ConfigsForm
-        connectorKey={connectorKey}
-        connectorId={connectorId}
-        fields={data.fields ?? []}
-        canConfigure={data.can_configure}
-      />
-    </section>
+      </section>
 
-    {#if data.can_manage_policy}
+      {#if healthBanner}
+        <div class="rounded-xl border px-4 py-3 text-sm {healthBanner.ok ? 'border-pos-300 bg-pos-100 text-pos-400' : 'border-neg-300 bg-neg-100 text-neg-400'}">{healthBanner.msg}</div>
+      {/if}
+
+      {#if connectorKey === "playwright_browser"}
+        <ActiveSessionsSection connectorId={connectorId} />
+        <ExtensionsSection connectorId={connectorId} />
+      {/if}
+
+      <section>
+        <div class="flex items-center justify-between gap-3">
+          <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Credentials</h2>
+          {#if data.has_health_check}
+            <Button variant="secondary" size="md" disabled={healthBusy} onclick={checkHealth}>{healthBusy ? "Checking…" : "Check Permissions"}</Button>
+          {/if}
+        </div>
+        <p class="mt-1 text-sm text-black-800 dark:text-black-600">Per-row values shared by every operation on this connector.</p>
+        <ConfigsForm
+          connectorKey={connectorKey}
+          connectorId={connectorId}
+          fields={data.fields ?? []}
+          canConfigure={data.can_configure}
+        />
+      </section>
+    {/if}
+
+    {#if !inAccountMode && data.can_manage_policy}
       <AccessPolicySection connectorKey={connectorKey} connectorId={connectorId} data={data} onchanged={refresh} />
     {/if}
 
-    {#if data.oauth}
+    {#if !inAccountMode && data.oauth}
       <AccountsSection
         connectorKey={connectorKey}
         connectorId={connectorId}
@@ -297,27 +448,42 @@
       />
     {/if}
 
-    <section>
-      <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Rate limit</h2>
-      <p class="mt-1 text-sm text-black-800 dark:text-black-600">
-        Maximum MCP and test-panel calls per minute for this connector instance. Set to 0 to disable limiting.
-      </p>
-      <div class="mt-3 flex items-center gap-2">
-        <div class="w-32">
-          <NumberInput value={rateDraft} min={0} disabled={!data.can_configure} onChange={(v) => (rateDraft = v)} ariaLabel="Rate limit per minute" />
+    {#if showInstanceConfig}
+      <section>
+        <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Rate limit</h2>
+        <p class="mt-1 text-sm text-black-800 dark:text-black-600">
+          Maximum MCP and test-panel calls per minute for this connector instance. Set to 0 to disable limiting.
+        </p>
+        <div class="mt-3 flex items-center gap-2">
+          <div class="w-32">
+            <NumberInput value={rateDraft} min={0} disabled={!data.can_configure} onChange={(v) => (rateDraft = v)} ariaLabel="Rate limit per minute" />
+          </div>
+          <span class="text-sm text-black-800 dark:text-black-600">requests / min</span>
+          <Button disabled={!data.can_configure || rateBusy} onclick={saveRateLimit}>Save</Button>
+          <span class="text-xs text-black-700 dark:text-black-600">{data.rate_limit_rpm > 0 ? `Currently limited to ${data.rate_limit_rpm} rpm` : "Currently unlimited"}</span>
         </div>
-        <span class="text-sm text-black-800 dark:text-black-600">requests / min</span>
-        <Button disabled={!data.can_configure || rateBusy} onclick={saveRateLimit}>Save</Button>
-        <span class="text-xs text-black-700 dark:text-black-600">{data.rate_limit_rpm > 0 ? `Currently limited to ${data.rate_limit_rpm} rpm` : "Currently unlimited"}</span>
-      </div>
-    </section>
+      </section>
+    {/if}
 
     <OperationsTable
-      operations={data.operations ?? []}
+      operations={inAccountMode ? accountOpRows : (data.operations ?? [])}
       categories={data.categories ?? []}
       connectorKey={connectorKey}
       connectorId={connectorId}
-      canConfigure={data.can_configure}
+      canConfigure={canWriteOps}
+      account={inAccountMode
+        ? { id: accountId, state: accountStateByKey, inherited: accountInheritedByKey, onset: setAccountState }
+        : null}
     />
   </div>
 {/if}
+
+<ConfirmDialog
+  open={confirmDisconnect}
+  title="Disconnect this account?"
+  body="The stored OAuth token is removed. The account can be re-connected at any time."
+  confirmLabel="Disconnect"
+  destructive
+  onConfirm={disconnectAccount}
+  onCancel={() => (confirmDisconnect = false)}
+/>

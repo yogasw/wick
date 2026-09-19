@@ -102,6 +102,8 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/operations/{opKey}/admin-only", auth(h.apiToggleOperationAdminOnly))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/accounts/{accountID}/disconnect", auth(h.apiDisconnectAccount))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/accounts/{accountID}/ops", auth(h.apiSetAccountDisabledOps))
+	mux.Handle("GET /manager/api/connectors/{key}/{id}/accounts/{accountID}", auth(h.apiAccountDetail))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/accounts/{accountID}/ops/{opKey}", auth(h.apiSetAccountOpOverride))
 
 	// Connector page routes → SPA shell. The SPA's client router resolves
 	// the rest of the path. Every POST/mutation route below stays live —
@@ -284,8 +286,10 @@ func (h *Handler) createConnectorRow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// Assign ownership tag to the creating user (non-admin creates only).
-	if h.tags != nil && user != nil && !user.IsAdmin() {
+	// Assign ownership tag to the creating user — admins included, because
+	// admin_see_all_connectors can be off (or turned off later) and a
+	// tag-gated row then has no other way back to its author.
+	if h.tags != nil && user != nil {
 		if err := h.tags.CreateOwnerTag(ctx, row.ID, user.ID); err != nil {
 			log.Warn().Err(err).Str("row_id", row.ID).Msg("manager: create owner tag failed")
 		}
@@ -372,6 +376,12 @@ func (h *Handler) toggleConnectorDisabled(w http.ResponseWriter, r *http.Request
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	// Same gate as the JSON twin: switching an instance off is a configuring
+	// action, not something every viewer of a shared row may do.
+	if !h.canConfigureRow(user, row) {
+		http.Error(w, "not allowed", http.StatusForbidden)
+		return
+	}
 	if err := h.connectors.SetDisabled(ctx, row.ID, !row.Disabled); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -424,23 +434,21 @@ func (h *Handler) toggleAccountOp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse current disabled ops, toggle the target op.
-	disabled := connectors.AccountDisabledOps(acc)
-	if disabled == nil {
-		disabled = map[string]bool{}
+	// Three states, and the form may send any of them. The legacy binary
+	// form sends only `enabled`, which maps to the two it can express:
+	// checked means "stop overriding and follow the instance", unchecked
+	// means "force off here". `state` is the richer form the per-account
+	// page posts.
+	state := r.FormValue("state")
+	if state == "" {
+		if boolParam(r, "enabled") {
+			state = connectors.AccountOpInherit
+		} else {
+			state = connectors.AccountOpOff
+		}
 	}
-	enabled := boolParam(r, "enabled")
-	if enabled {
-		delete(disabled, opKey)
-	} else {
-		disabled[opKey] = true
-	}
-	keys := make([]string, 0, len(disabled))
-	for k := range disabled {
-		keys = append(keys, k)
-	}
-	if err := h.connectors.SetAccountDisabledOps(ctx, accountID, keys); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := h.connectors.SetAccountOpOverride(ctx, accountID, opKey, state); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	http.Redirect(w, r, "/manager/connectors/"+key+"/"+id+"/accounts/"+accountID, http.StatusSeeOther)
@@ -586,8 +594,8 @@ func (h *Handler) duplicateConnector(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// User who duplicates becomes owner of the new row.
-	if h.tags != nil && user != nil && !user.IsAdmin() {
+	// User who duplicates becomes owner of the new row (admins too).
+	if h.tags != nil && user != nil {
 		if err := h.tags.CreateOwnerTag(ctx, dup.ID, user.ID); err != nil {
 			log.Warn().Err(err).Str("row_id", dup.ID).Msg("manager: create owner tag on duplicate failed")
 		}
@@ -920,7 +928,7 @@ func (h *Handler) userFilterTagIDs(ctx context.Context, user *entity.User) []str
 
 func (h *Handler) visibleRowsForKey(r *http.Request, user *entity.User, key string) ([]entity.Connector, error) {
 	ctx := r.Context()
-	rows, err := h.connectors.ListForManager(ctx, h.userFilterTagIDs(ctx, user), user != nil && user.IsAdmin())
+	rows, err := h.connectors.ListForManager(ctx, userID(user), h.userFilterTagIDs(ctx, user), user != nil && user.IsAdmin())
 	if err != nil {
 		return nil, err
 	}
@@ -941,7 +949,7 @@ func (h *Handler) canSeeRow(r *http.Request, user *entity.User, connectorID stri
 	isAdmin := user != nil && user.IsAdmin()
 	// Live tag IDs (not the cookie snapshot) so a just-created owner tag is
 	// honored without a re-login — same source visibleRowsForKey uses.
-	ok, err := h.connectors.IsManageableBy(ctx, connectorID, h.userFilterTagIDs(ctx, user), isAdmin)
+	ok, err := h.connectors.IsManageableBy(ctx, connectorID, userID(user), h.userFilterTagIDs(ctx, user), isAdmin)
 	return err == nil && ok
 }
 

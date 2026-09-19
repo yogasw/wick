@@ -397,6 +397,8 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 	// connector is taggable and auditable per user, which a hard-coded
 	// tool is not, and each op keeps its own name and schema instead of
 	// being an action string on one overloaded tool.
+	case "wick_cli_token":
+		handlers.WickCLIToken(w, r, hreq, rsp, h.layout, args)
 	case "wick_schedule_message":
 		handlers.WickScheduleMessage(w, r, hreq, rsp, h.schedule, h.layout, args, user)
 	default:

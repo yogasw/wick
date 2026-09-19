@@ -130,12 +130,33 @@ type Ticket struct {
 	// Sessions is the list of record for which sessions belong here.
 	Sessions  []string  `json:"sessions,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
-	// UpdatedAt tracks the last TICKET edit — not chat activity. The
-	// stale-followup and auto-resolve timers run from it.
+	// UpdatedAt tracks the last TICKET edit — not chat activity. It is what
+	// the board shows and sorts on, and a MIRROR may set it to the source
+	// system's own edit time (see SaveAsAt), so it can legitimately be
+	// months in the past on a ticket wick learned about a second ago.
 	UpdatedAt time.Time `json:"updated_at"`
+	// TouchedAt is when WICK last wrote this ticket, whatever timestamp the
+	// writer asked to display. The idle timers run from this rather than
+	// from UpdatedAt, because "nobody has touched this in two days" has to
+	// mean two days of OUR silence.
+	//
+	// Without the split, importing a ticket last edited in June closed it
+	// on arrival: the auto-resolve sweeper read the mirrored date, decided
+	// it had been idle for months, and marked it done — 130 tickets in one
+	// run on this install. Zero on a ticket written before this field
+	// existed, and the timers fall back to UpdatedAt there.
+	TouchedAt time.Time `json:"touched_at,omitempty"`
 	// LastFollowupAt guards the sweeper against re-sending a followup on
 	// every tick; the next one waits another full window.
 	LastFollowupAt time.Time `json:"last_followup_at,omitempty"`
+	// AutoResolvedAt marks a ticket CLOSED BY THE SWEEPER rather than by a
+	// person. It exists so a mirror can tell the two apart: pushing a
+	// machine-made "done" into the system of record is how one bad idle
+	// timer became 13 Notion pages marked Done that nobody had finished.
+	//
+	// Cleared whenever the status moves again, so a ticket reopened by
+	// hand carries no trace of having been swept.
+	AutoResolvedAt time.Time `json:"auto_resolved_at,omitempty"`
 }
 
 // CreateOptions describes a new ticket.
@@ -261,6 +282,7 @@ func Create(layout config.Layout, opt CreateOptions) (Ticket, error) {
 			Sessions:  opt.Sessions,
 			CreatedAt: now,
 			UpdatedAt: now,
+			TouchedAt: now,
 		}
 		if err := os.MkdirAll(layout.TicketDir(opt.ProjectID, id), 0o755); err != nil {
 			return Ticket{}, err
@@ -322,7 +344,48 @@ func Save(layout config.Layout, tk Ticket) error {
 // moved the ticket. Save stays as the unattributed form because most
 // internal callers genuinely have nobody to name.
 func SaveAs(layout config.Layout, tk Ticket, actor Actor) error {
-	tk.UpdatedAt = time.Now().UTC()
+	return SaveAsAt(layout, tk, actor, time.Time{})
+}
+
+// SaveAsAt is SaveAs with the timestamp chosen by the caller. A zero at
+// means now, which is what every interactive edit wants.
+//
+// A non-zero one is for a mirror: a ticket imported from another system
+// should carry THAT system's edit time, not the moment the importer
+// happened to run. Without it a sync makes every ticket it touches read
+// "just now", the board sorts by when the sync ran rather than by when the
+// work moved, and "updated 3 days ago" stops being a fact about the work.
+func SaveAsAt(layout config.Layout, tk Ticket, actor Actor, at time.Time) error {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	tk.UpdatedAt = at.UTC()
+	tk.TouchedAt = time.Now().UTC()
+	tk.AutoResolvedAt = carryAutoResolved(layout, tk)
+	return saveEmitting(layout, tk, actor)
+}
+
+// carryAutoResolved keeps the sweeper's mark only while the status it set
+// is still the status: the moment anybody moves the ticket, the fact that
+// it was once swept stops being true of where it is now.
+func carryAutoResolved(layout config.Layout, tk Ticket) time.Time {
+	before, err := Load(layout, tk.ProjectID, tk.ID)
+	if err != nil || before.AutoResolvedAt.IsZero() {
+		return time.Time{}
+	}
+	if before.Status != tk.Status {
+		return time.Time{}
+	}
+	return before.AutoResolvedAt
+}
+
+// SaveAsKeeping writes tk with its existing UpdatedAt and still emits the
+// events its diff implies — for a write that is pure bookkeeping (a sync
+// stamping "I checked this"), where moving the timestamp would be a lie
+// about the work.
+func SaveAsKeeping(layout config.Layout, tk Ticket, actor Actor) error {
+	tk.TouchedAt = time.Now().UTC()
+	tk.AutoResolvedAt = carryAutoResolved(layout, tk)
 	return saveEmitting(layout, tk, actor)
 }
 

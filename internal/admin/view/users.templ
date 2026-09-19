@@ -20,6 +20,7 @@ templ UsersPage(rows []UserRow, allTags []*entity.Tag, user *entity.User, adminC
 				@JustCreatedUserBanner(created.Email, created.Password)
 			}
 			@addUserCard()
+			@AccessSearch("users")
 			<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm resp-table-wrap">
 				<table class="w-full text-sm resp-table">
 					<thead>
@@ -147,7 +148,11 @@ templ JustCreatedUserBanner(email, password string) {
 }
 
 templ UserRowFragment(row UserRow, tagsJSON string, adminCount int) {
-	<tr id={ "user-" + row.User.ID } class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+	<tr
+		id={ "user-" + row.User.ID }
+		data-search={ searchHaystack(row.User.Name, row.User.Email, row.User.ID, string(row.User.Role)) }
+		data-search-id={ row.User.ID }
+		class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
 		<td class="px-4 py-3">
 			<div class="flex items-center gap-3">
 				if row.User.Avatar != "" {
@@ -212,12 +217,11 @@ templ UserRowFragment(row UserRow, tagsJSON string, adminCount int) {
 				}
 				<!--
 					View as: switch the session to this user to see wick exactly as
-					they do. Offered only for approved non-admins — the handler
-					refuses admin targets so one admin account can never become a
-					route to another, and an unapproved account can do nothing to
-					look at anyway.
+					they do. Offered for any approved account, admins included —
+					the one exception is your own row, where it would do nothing.
+					An unapproved account has nothing to look at.
 				-->
-				if row.User.Approved && !row.User.IsAdmin() {
+				if row.User.Approved && !row.Self {
 					<form action={ templ.SafeURL("/admin/users/" + row.User.ID + "/impersonate") } method="POST">
 						<button type="submit" class="text-xs font-medium text-link-400 hover:underline transition-colors">View as</button>
 					</form>

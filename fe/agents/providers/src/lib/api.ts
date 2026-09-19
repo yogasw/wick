@@ -121,6 +121,8 @@ interface WireSpawnDetailResponse {
   session_deleted: boolean;
   repro: Record<string, string> | null;
   has_resume: boolean;
+  prompt_supported?: boolean;
+  wick_prompt?: string;
   logs?: WireSpawnLogs;
 }
 
@@ -737,6 +739,8 @@ export async function apiGetSpawnDetail(base: string, file: string): Promise<Spa
     SessionDeleted: r.session_deleted ?? false,
     Repro: r.repro ?? {},
     HasResume: r.has_resume ?? false,
+    PromptSupported: r.prompt_supported ?? false,
+    WickPrompt: r.wick_prompt ?? "",
     Logs: {
       SpawnPath: r.logs?.spawn_path ?? "",
       LogsDir: r.logs?.logs_dir ?? "",
@@ -755,6 +759,22 @@ export async function apiGetSpawnDetail(base: string, file: string): Promise<Spa
 
 export async function apiRevealSpawn(base: string, file: string): Promise<Record<string, string>> {
   return get<Record<string, string>>(`${base}/providers/spawns/${encodeURIComponent(file)}/reveal`);
+}
+
+// apiSpawnRepro re-renders the reproduce variants (same keys) with a prompt
+// folded in — piped to stdin as stream-json for a headless spawn, appended as a
+// positional arg for an interactive one. Server-side because the quoting is
+// per-shell and lives in Go; POST because a prompt can be kilobytes.
+export async function apiSpawnRepro(
+  base: string,
+  file: string,
+  env: string,
+  prompt: string,
+): Promise<Record<string, string>> {
+  return post<Record<string, string>>(
+    `${base}/api/providers/spawns/${encodeURIComponent(file)}/repro`,
+    { env, prompt },
+  );
 }
 
 export async function apiSaveProviderDetail(base: string, type: string, name: string, fields: Record<string, string>): Promise<void> {
