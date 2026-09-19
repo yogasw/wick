@@ -42,7 +42,10 @@ var builtinComposerCommands = []ComposerCommand{
 	{ID: "processes", Label: "/processes", Hint: "running · kill", Category: "Panels", Action: "panel:process"},
 	{ID: "workspace", Label: "/workspace", Hint: "connectors", Category: "Panels", Action: "panel:workspace"},
 	{ID: "source", Label: "/source", Hint: "git changes", Category: "Panels", Action: "panel:source"},
-	{ID: "context", Label: "/context", Hint: "files", Category: "Panels", Action: "panel:context"},
+	// Named /files, not /context: it opens the session folder. "/context" is
+	// reserved for the context-window panel, which is what a user typing it
+	// after Claude Code expects — a different question entirely.
+	{ID: "files", Label: "/files", Hint: "session folder", Category: "Panels", Action: "panel:files"},
 	{ID: "commands", Label: "/commands", Hint: "gate log", Category: "Views", Action: "view:commands"},
 	{ID: "approvals", Label: "/approvals", Hint: "pending", Category: "Views", Action: "view:approvals"},
 	{ID: "raw", Label: "/raw", Hint: "transcript", Category: "Views", Action: "view:raw"},
@@ -50,6 +53,12 @@ var builtinComposerCommands = []ComposerCommand{
 	// Claude Code's /compact. It's a "send" action: the FE sends "/compact"
 	// as the message. The wick engine intercepts it and runs compaction
 	// in-process; the CLI providers pass it through to their own /compact.
+	// /context asks the CLI how full its context window is. Like /compact it
+	// is a "send" action, and like /compact it only works because a bare
+	// slash command is sent WITHOUT the `[from: …]` line — see
+	// store.IsBareSlashCommand. Costs nothing: the CLI answers it locally,
+	// no model call.
+	{ID: "context", Label: "/context", Hint: "context window usage", Category: "Session", Action: "send:/context"},
 	{ID: "compact", Label: "/compact", Hint: "summarize history to free context", Category: "Session", Action: "send:/compact"},
 	// /thinking opens a small popover to toggle the model's reasoning on/off
 	// and pick the effort for the rest of the session — it does NOT send a

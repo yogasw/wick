@@ -788,7 +788,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			p.notifyUserMessage(sessionID, agentName, source, text, sender)
 			userMsgNotified = true
 		}
-		err := entry.agent.Send(store.PrependSenderLine(augmentWithAttachments(text, atts), sender, senderLevel))
+		err := entry.agent.Send(withSenderLine(augmentWithAttachments(text, atts), sender, senderLevel))
 		// Nudge SSE so the Process panel's queued count updates in
 		// realtime — a RespawnQueue (codex) Send while busy just appended
 		// to the agent's pending queue, which fires no lifecycle event on
@@ -845,7 +845,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// before the subprocess exists, and drain concatenates them into one
 	// prompt. Stamping at drain would label every one of them with whoever
 	// happened to send last.
-	if err := buf.Append(store.PrependSenderLine(augmentWithAttachments(text, atts), sender, senderLevel)); err != nil {
+	if err := buf.Append(withSenderLine(augmentWithAttachments(text, atts), sender, senderLevel)); err != nil {
 		return err
 	}
 	// Persist the user turn to conversation.jsonl immediately so a page
@@ -2417,4 +2417,15 @@ func sessionHasCLISession(s session.Session) bool {
 // sessionKey is the canonical map key for an active agent.
 func sessionKey(sessionID, agentName string) string {
 	return sessionID + "::" + agentName
+}
+
+// withSenderLine stamps the `[from: …]` identity line on outbound text,
+// except when the text is a bare slash command — those must reach the CLI
+// with the slash first on the line or they stop being commands. See
+// store.IsBareSlashCommand for why that exception is safe.
+func withSenderLine(text string, sender *store.Sender, level string) string {
+	if store.IsBareSlashCommand(text) {
+		return text
+	}
+	return store.PrependSenderLine(text, sender, level)
 }

@@ -40,6 +40,37 @@ func NormalizeSenderVisibility(v string) string {
 	}
 }
 
+// IsBareSlashCommand reports whether text is nothing but a slash command —
+// one line, a leading "/", and no arguments (`/compact`, `/context`).
+//
+// Such a message is not addressed to the model at all: it is an instruction
+// to the CLI, which only recognizes it when the line STARTS with the slash.
+// Prepending `[from: …]` pushes it to line two and silently downgrades the
+// command to prose — the CLI answers it as a question instead of running it,
+// and nothing says the command was lost. So callers skip the sender line for
+// exactly this shape, where there is no sender question to answer anyway:
+// nobody needs to know who asked for a context reading.
+//
+// Deliberately narrow. A command WITH arguments ("/thinking on", a skill
+// invocation with a request behind it) still carries intent that the agent
+// may need attributed, so it keeps its sender line; those are handled
+// in-process by wick rather than by the CLI's own parser.
+func IsBareSlashCommand(text string) bool {
+	t := strings.TrimSpace(text)
+	if len(t) < 2 || t[0] != '/' {
+		return false
+	}
+	for _, r := range t[1:] {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '-', r == '_', r == ':':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // PrependSenderLine returns text with a single leading `[from: …]` line
 // naming who sent it. Returns text unchanged when s is nil or level is
 // SenderOff.
