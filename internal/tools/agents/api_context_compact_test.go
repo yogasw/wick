@@ -37,13 +37,23 @@ func TestContextProviderTypeFallsBackToTheSession(t *testing.T) {
 	}
 }
 
-// TestCanCompactByProvider pins the capability itself: unknown stays
-// capable, because a missing button is a worse guess than a useless one.
+// TestCanCompactByProvider pins the capability itself: every provider
+// wick spawns can compact on demand, and an unknown one stays capable
+// too, because a missing button is a worse guess than a useless one.
+//
+// codex used to be the exception — `codex exec` has no slash commands, so
+// "/compact" reached the MODEL, which answered "Context compacted." while
+// the window kept filling. Its spawner now intercepts the bare command and
+// runs the app-server thread/compact/start RPC instead, so the button is
+// honest for codex as well.
 func TestCanCompactByProvider(t *testing.T) {
-	if provider.CanCompact(provider.TypeCodex) {
-		t.Error("codex exec has no slash commands — /compact must not be offered")
-	}
-	for _, typ := range []provider.Type{provider.TypeClaude, provider.TypeWick, provider.Type("something-new")} {
+	for _, typ := range []provider.Type{
+		provider.TypeClaude,
+		provider.TypeCodex,
+		provider.TypeGemini,
+		provider.TypeWick,
+		provider.Type("something-new"),
+	} {
 		if !provider.CanCompact(typ) {
 			t.Errorf("%s: want compactable", typ)
 		}
