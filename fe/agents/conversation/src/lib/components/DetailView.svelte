@@ -75,12 +75,15 @@
 
   import ConversationHeader from "./ConversationHeader.svelte";
   import ConversationThread from "./ConversationThread.svelte";
+  import { bareSlashCommand } from "../slashCommand.js";
   import JsonTree from "./JsonTree.svelte";
   import FilesPanel from "./FilesPanel.svelte";
   import FileViewerModal from "./FileViewerModal.svelte";
   import SwitchModal from "./SwitchModal.svelte";
   import OverridePopover from "./OverridePopover.svelte";
   import UsagePopover from "./UsagePopover.svelte";
+  import ContextPopover from "./ContextPopover.svelte";
+  import { fetchSessionContext, type SessionContext } from "../api/context.js";
   import { getSessionOverrides, setSessionOverride } from "../api/overrides.js";
   import type { ConfigField } from "@wick-fe/common-ui";
   import { setFileContext, setWidgetPolicy } from "../richRender.js";
@@ -235,6 +238,7 @@
     "panel:subagents": () => toggleRail("subagents"),
     "panel:thinking": () => openOverridePopover(),
     "panel:usage": () => openUsagePopover(),
+    "panel:context": () => openContextPopover(),
     "view:commands": () => handleTabChange("commands"),
     "view:approvals": () => handleTabChange("approvals"),
     "view:raw": () => handleTabChange("raw"),
@@ -323,6 +327,72 @@
       return;
     }
     loadUsage();
+  }
+
+  /* Context window — read from the session's token ledger, so it costs
+     nothing to keep current: no CLI call, no model call. Refreshed when
+     the agent's lifecycle moves (a finished turn is what changes the
+     number) and when the panel opens. */
+  let contextPopoverOpen = $state(false);
+  let contextData = $state<SessionContext | null>(null);
+  let contextLoading = $state(false);
+  let contextError = $state("");
+  let compacting = $state(false);
+
+  /* Whether a compaction is actually running. The button's own flag only
+     covers the moment the send is in the air; after that the evidence is
+     the thread itself — the last thing sent was a bare /compact and the
+     agent is still working. Deriving it this way also covers the command
+     typed into the composer, which never touches the button. */
+  const compactInFlight = $derived.by(() => {
+    if (compacting) return true;
+    if (!typing.active) return false;
+    for (let i = turns.length - 1; i >= 0; i--) {
+      if (turns[i].role !== "user") continue;
+      return bareSlashCommand(turns[i].text) === "compact";
+    }
+    return false;
+  });
+
+  async function loadContext() {
+    contextLoading = true;
+    try {
+      contextData = await fetchSessionContext(base, sessionId);
+      contextError = "";
+    } catch (e) {
+      contextError = e instanceof Error ? e.message : String(e);
+    } finally {
+      contextLoading = false;
+    }
+  }
+
+  /* Re-read the meter whenever the agent's lifecycle moves — a finished
+     turn is the only moment the level changes. An effect rather than a
+     callback on the subscription: the subscription fires during init,
+     before this state exists, and reading it there is a temporal-dead-
+     zone crash rather than an early refresh. */
+  $effect(() => {
+    void agentLifecycle.state;
+    void loadContext();
+  });
+
+  function openContextPopover() {
+    contextPopoverOpen = true;
+    void loadContext();
+  }
+
+  /* Compact is a normal message send — the pool strips the sender line
+     from a bare slash command so the CLI actually runs it. Never
+     automatic: the user pressed a button that said what it would do. */
+  async function handleCompact() {
+    compacting = true;
+    contextPopoverOpen = false;
+    try {
+      await handleSend({ text: "/compact", files: [] });
+    } finally {
+      compacting = false;
+      void loadContext();
+    }
   }
 
   function openOverridePopover() {
@@ -1765,6 +1835,18 @@
 
   /* ── send message ─────────────────────────────────────────────── */
   async function handleSend(msg: { text: string; files: File[] }) {
+    // A /compact the provider cannot act on never becomes a message.
+    // The server refuses it too, but only the composer can stop the
+    // user watching a command they typed sit there doing nothing — so
+    // open the panel, which says why in full.
+    if (
+      msg.files.length === 0 &&
+      bareSlashCommand(msg.text) === "compact" &&
+      contextData?.can_compact === false
+    ) {
+      openContextPopover();
+      return;
+    }
     const optimisticAttachments = msg.files.map((f) => ({
       name: f.name,
       stored_name: f.name,
@@ -2223,7 +2305,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} />
+          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} />
         </div>
       </div>
 
@@ -2286,6 +2368,17 @@
             recheckWait={usageRecheckWait}
             onClose={() => { usagePopoverOpen = false; stopUsagePoll(); }}
           />
+          <!-- /context — the window meter and the manual Compact action. -->
+          <ContextPopover
+            open={contextPopoverOpen}
+            data={contextData}
+            loading={contextLoading}
+            error={contextError}
+            onRefresh={() => void loadContext()}
+            onCompact={() => void handleCompact()}
+            compacting={compactInFlight}
+            onClose={() => (contextPopoverOpen = false)}
+          />
           <Composer
             bind:this={composerRef}
             onSend={handleSend}
@@ -2296,6 +2389,18 @@
             onSearchFiles={searchMentionFiles}
             mentionAgents={mentionableAgents}
             commands={composerCommands}
+            contextMeter={contextData && contextData.used > 0
+              ? {
+                  pct: contextData.pct,
+                  used: contextData.used,
+                  window: contextData.window,
+                  title:
+                    contextData.window > 0
+                      ? `Context window — ${Math.round(contextData.pct)}% of ${contextData.model || contextData.provider || "model"}`
+                      : `Context — ${contextData.used.toLocaleString()} tokens (window size not reported)`,
+                  onClick: openContextPopover,
+                }
+              : undefined}
           />
         </div>
       </div>

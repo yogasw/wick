@@ -421,3 +421,84 @@ func TestClaudeTokenUsageAbsent(t *testing.T) {
 		}
 	}
 }
+
+// TestClaudeCompactBoundary pins the frame captured from a live run:
+// wick must see a compaction as a first-class event, because the two
+// frames claude emits alongside it (the replacement summary as a `user`
+// message, and the <local-command-stdout> echo) are deliberately dropped
+// — without this marker the conversation would just lose messages with
+// no explanation.
+func TestClaudeCompactBoundary(t *testing.T) {
+	line := `{"type":"system","subtype":"compact_boundary","session_id":"S1",` +
+		`"compact_metadata":{"trigger":"manual","pre_tokens":31261,"post_tokens":4051,` +
+		`"cumulative_dropped_tokens":27210,"duration_ms":13226}}`
+	ev, err := NewClaudeParser().Parse(line)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if ev.Type != Compaction {
+		t.Fatalf("want Compaction, got %v", ev.Type)
+	}
+	c := ev.Compaction
+	if c == nil {
+		t.Fatal("no compaction info")
+	}
+	if c.Trigger != "manual" || c.PreTokens != 31261 || c.PostTokens != 4051 {
+		t.Fatalf("info: %+v", c)
+	}
+	if c.DroppedTokens != 27210 || c.DurationMS != 13226 {
+		t.Fatalf("info: %+v", c)
+	}
+}
+
+// TestClaudeCompactionCompanionFramesStaySilent: the summary and the
+// stdout echo must NOT surface as user messages — nobody typed them.
+func TestClaudeCompactionCompanionFramesStaySilent(t *testing.T) {
+	p := NewClaudeParser()
+	for _, line := range []string{
+		`{"type":"user","message":{"role":"user","content":"This session is being continued from a previous conversation…"}}`,
+		`{"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted </local-command-stdout>"}}`,
+	} {
+		ev, err := p.Parse(line)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if ev.Type != Unknown {
+			t.Fatalf("want Unknown for %s, got %v", line, ev.Type)
+		}
+	}
+}
+
+// TestClaudeReInitAfterCompactionIsNotANewSession: claude re-emits
+// `init` with the SAME session id right after compacting. Treating that
+// as a new session would reset state mid-conversation.
+func TestClaudeReInitAfterCompaction(t *testing.T) {
+	p := NewClaudeParser()
+	first, _ := p.Parse(`{"type":"system","subtype":"init","session_id":"S1"}`)
+	if first.Type != SessionStart {
+		t.Fatalf("first init should start the session, got %v", first.Type)
+	}
+	again, _ := p.Parse(`{"type":"system","subtype":"init","session_id":"S1"}`)
+	if again.Type != Unknown {
+		t.Fatalf("second init should be silent, got %v", again.Type)
+	}
+}
+
+// TestClaudeStringContentDoesNotError guards the regression the
+// compaction work uncovered: .content arrives as a plain string for the
+// post-compaction summary and for local-command echoes. A decode failure
+// there is not cosmetic — upstream turns any parse error into an Error
+// event, which ends the turn and writes "cannot unmarshal string…" into
+// the user's conversation.
+func TestClaudeStringContentDoesNotError(t *testing.T) {
+	p := NewClaudeParser()
+	for _, line := range []string{
+		`{"type":"user","message":{"role":"user","content":"plain string body"}}`,
+		`{"type":"user","message":{"role":"user","content":null}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":"also a string"}}`,
+	} {
+		if _, err := p.Parse(line); err != nil {
+			t.Fatalf("%s: %v", line, err)
+		}
+	}
+}

@@ -19,6 +19,7 @@
   import type { ProviderDetailResponse, ConfigFieldDTO, SpawnLogFileDTO } from "$lib/types.js";
   import AIRouterConfig from "$lib/components/AIRouterConfig.svelte";
   import RecentSpawns from "$lib/components/RecentSpawns.svelte";
+  import UsageReport from "$lib/components/UsageReport.svelte";
   import ReconnectPanel from "$lib/components/ReconnectPanel.svelte";
 
 
@@ -1020,6 +1021,17 @@
       </div>
     {/if}
 
+    <!-- Group separator. The page is one long stack of cards, and
+         without a labelled rule the reader cannot tell where the
+         provider's SETTINGS end and its raw argument lists begin —
+         which is exactly where a mis-set value does the most damage. -->
+    {#if valueListFields.length > 0 || keyValueFields.length > 0}
+      <div class="flex items-center gap-3 pt-2">
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">Advanced</span>
+        <div class="h-px flex-1 bg-white-300 dark:bg-navy-600"></div>
+      </div>
+    {/if}
+
     <!-- Value-list editors (single-column kvlist, e.g. extra_args).
          Collapsed by default; header shows the row count. -->
     {#each valueListFields as f (f.Key)}
@@ -1203,6 +1215,16 @@
         </div>
       </div>
     {/if}
+
+    <div class="flex items-center gap-3 pt-2">
+      <span class="text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">Activity</span>
+      <div class="h-px flex-1 bg-white-300 dark:bg-navy-600"></div>
+    </div>
+
+    <!-- Token ledger for THIS provider — same component as the list
+         page, scoped by the provider prop. What it cost, and which
+         sessions spent it (paginated; the list is unbounded). -->
+    <UsageReport {base} provider={`${type}/${name}`} />
 
     <!-- Command Gate -->
     <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm p-5 space-y-3">

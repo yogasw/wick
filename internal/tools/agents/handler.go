@@ -294,6 +294,8 @@ func Register(r tool.Router) {
 	// The session's checklists — the live one and the ones before it. The
 	// trace carries the same calls, but not which list is current.
 	r.GET("/api/sessions/{id}/todos", apiSessionTodos)
+	// Context meter for the composer ring + its panel.
+	r.GET("/api/sessions/{id}/context", apiSessionContext)
 	r.POST("/api/sessions/{id}/hops/reset", resetSessionHops)
 	r.POST("/api/delegations/{delegationID}/interrupt", interruptSubAgent)
 	r.POST("/api/delegations/{delegationID}/continue", continueSubAgent)

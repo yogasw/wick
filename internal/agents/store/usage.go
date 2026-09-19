@@ -148,9 +148,17 @@ func (s *Store) recordUsage(u *event.TokenUsage, at time.Time) error {
 	if u.Window > 0 {
 		p.ContextWindow = u.Window
 	}
+	// A turn whose level could not be read (codex with no rollout to
+	// consult) carries the last known one into the series. Plotting the
+	// zero instead would draw a cliff to nothing and back — a fall that
+	// never happened, in the one chart people read for falls.
+	level := u.ContextUsed
+	if level <= 0 {
+		level = p.ContextUsed
+	}
 	p.Series = append(p.Series, UsagePoint{
 		At:          at,
-		ContextUsed: u.ContextUsed,
+		ContextUsed: level,
 		Input:       u.Input,
 		CacheRead:   u.CacheRead,
 		Output:      u.Output,
@@ -162,6 +170,48 @@ func (s *Store) recordUsage(u *event.TokenUsage, at time.Time) error {
 
 	su.Totals.Add(flows)
 	su.Turns++
+	su.UpdatedAt = at
+	return storage.WriteJSON(path, su)
+}
+
+// recordCompaction drops the recorded context level to what survived a
+// compaction.
+//
+// Without this the meter keeps showing the pre-compaction number until
+// the next turn happens to finish — so the transcript says "94.4k →
+// 6.8k" while the ring beside it still reads 94k, and the one moment the
+// number matters most is the one moment it is wrong. Only the LEVEL
+// moves: compaction spends tokens rather than refunding them, and those
+// are reported by the turn that paid for them.
+func (s *Store) recordCompaction(info *event.CompactionInfo, at time.Time) error {
+	if info == nil || info.PostTokens <= 0 {
+		return nil
+	}
+	path := s.layout.SessionUsage(s.sessionID)
+	su, err := loadUsageFile(path)
+	if err != nil {
+		return err
+	}
+	su.SessionID = s.sessionID
+	key := s.provider
+	if key == "" {
+		key = "unknown"
+	}
+	p := su.Providers[key]
+	if p == nil {
+		// A compaction before this provider ever reported usage: record
+		// the level anyway, so the meter starts from the truth.
+		p = &ProviderUsage{FirstAt: at}
+		su.Providers[key] = p
+	}
+	p.ContextUsed = info.PostTokens
+	p.LastAt = at
+	// A point on the series too, so the curve shows the cliff instead of
+	// jumping silently between two turns.
+	p.Series = append(p.Series, UsagePoint{At: at, ContextUsed: info.PostTokens})
+	if n := len(p.Series); n > UsageSeriesMax {
+		p.Series = append(p.Series[:0], p.Series[n-UsageSeriesMax:]...)
+	}
 	su.UpdatedAt = at
 	return storage.WriteJSON(path, su)
 }

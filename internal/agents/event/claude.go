@@ -1,6 +1,7 @@
 package event
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -49,6 +50,18 @@ type ClaudeParser struct {
 	// streamed in the current turn. When true, the trailing `assistant`
 	// frame's thinking block is suppressed — same dedup logic as text.
 	partialThinkingEmitted bool
+
+	// lastLevel is the context reading from the most recent `assistant`
+	// frame: input + cache read + cache write of that ONE request, which
+	// is exactly what the model had in its window.
+	//
+	// It has to be remembered here because the `result` frame cannot
+	// answer the question. Its .usage sums every request the turn made,
+	// so a turn that looped through twenty tool calls re-counts the same
+	// cached prefix twenty times — measured on a 3-tool-call turn, the
+	// result said 134,763 where the window actually held 34,673. Read
+	// as a level, that sum climbs past 100% and keeps going.
+	lastLevel int
 }
 
 // NewClaudeParser returns a fresh parser ready to consume Claude
@@ -71,6 +84,10 @@ type claudeRaw struct {
 	// message's usage (what the context window currently holds);
 	// .modelUsage is per-model totals for the whole turn and is only
 	// read here for contextWindow.
+	// `system subtype=compact_boundary` reports a compaction under
+	// .compact_metadata.
+	CompactMeta *claudeCompactMeta `json:"compact_metadata,omitempty"`
+
 	Usage      *claudeUsage                `json:"usage,omitempty"`
 	ModelUsage map[string]claudeModelUsage `json:"modelUsage,omitempty"`
 	CostUSD    float64                     `json:"total_cost_usd,omitempty"`
@@ -104,11 +121,33 @@ type claudeStreamDelta struct {
 // claudeUsage is the token accounting of one message. The three input
 // fields are disjoint — fresh input, newly written cache, cache read —
 // so their sum is what the model saw as context for that message.
+// claudeCompactMeta is the compact_boundary payload. The preserved-uuid
+// lists are ignored: they address transcript entries wick does not index.
+type claudeCompactMeta struct {
+	Trigger       string `json:"trigger"`
+	PreTokens     int    `json:"pre_tokens"`
+	PostTokens    int    `json:"post_tokens"`
+	DroppedTokens int    `json:"cumulative_dropped_tokens"`
+	DurationMS    int    `json:"duration_ms"`
+}
+
 type claudeUsage struct {
 	InputTokens         int `json:"input_tokens"`
 	OutputTokens        int `json:"output_tokens"`
 	CacheCreationTokens int `json:"cache_creation_input_tokens"`
 	CacheReadTokens     int `json:"cache_read_input_tokens"`
+
+	// Iterations is present on the `result` frame only: one entry per
+	// request the turn made. The LAST entry is the final request, which
+	// is the one whose input describes the window as the turn ended.
+	// Used as the fallback when no assistant frame carried usage.
+	Iterations []claudeUsage `json:"iterations,omitempty"`
+}
+
+// level is what the model actually had in front of it for this one
+// request: fresh input plus both halves of the cached prefix.
+func (u claudeUsage) level() int {
+	return u.InputTokens + u.CacheCreationTokens + u.CacheReadTokens
 }
 
 // claudeModelUsage is one entry of the result frame's per-model totals.
@@ -135,7 +174,14 @@ func (r claudeRaw) tokenUsage() *TokenUsage {
 	if r.Usage == nil {
 		return nil
 	}
-	level := r.Usage.InputTokens + r.Usage.CacheCreationTokens + r.Usage.CacheReadTokens
+	// The level is the LAST request's input, never the turn's sum — see
+	// ClaudeParser.lastLevel. .iterations, when the CLI sends it, holds
+	// exactly that last request; the caller overrides this with what it
+	// saw on the assistant frames, which is the more reliable source.
+	level := r.Usage.level()
+	if n := len(r.Usage.Iterations); n > 0 {
+		level = r.Usage.Iterations[n-1].level()
+	}
 	if level == 0 && r.Usage.OutputTokens == 0 {
 		return nil
 	}
@@ -172,6 +218,46 @@ func (r claudeRaw) tokenUsage() *TokenUsage {
 
 type claudeMessage struct {
 	Content []claudeContentBlock `json:"content,omitempty"`
+
+	// Usage is the per-request accounting on an `assistant` frame — the
+	// only place the true context level is reported. See lastLevel.
+	Usage *claudeUsage `json:"usage,omitempty"`
+}
+
+// UnmarshalJSON tolerates .content being a plain STRING instead of an
+// array of blocks.
+//
+// Claude sends the string form for the summary it injects after a
+// compaction ("This session is being continued from…") and for the
+// <local-command-stdout> echo of a local slash command. Without this,
+// json.Unmarshal fails on those lines, and a parse failure is turned
+// into an Error event upstream — so a routine compaction would end the
+// turn and post a "cannot unmarshal string" line into the user's
+// conversation. Neither frame is something wick surfaces; they just
+// have to decode without exploding.
+func (m *claudeMessage) UnmarshalJSON(b []byte) error {
+	var probe struct {
+		Content json.RawMessage `json:"content"`
+		Usage   *claudeUsage    `json:"usage"`
+	}
+	if err := json.Unmarshal(b, &probe); err != nil {
+		return err
+	}
+	// Usage is decoded normally — only .content needs the two shapes.
+	m.Usage = probe.Usage
+	trimmed := bytes.TrimSpace(probe.Content)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err != nil {
+			return err
+		}
+		m.Content = []claudeContentBlock{{Type: "text", Text: text}}
+		return nil
+	}
+	return json.Unmarshal(trimmed, &m.Content)
 }
 
 type claudeContentBlock struct {
@@ -216,6 +302,26 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 
 	switch raw.Type {
 	case "system":
+		// A compaction is the one system frame worth surfacing: the
+		// conversation just lost messages. Claude also emits the
+		// replacement summary as a `user` frame and a
+		// `<local-command-stdout>Compacted</local-command-stdout>` echo,
+		// both of which fall through to Unknown below — this marker is
+		// what the UI shows in their place.
+		if raw.Subtype == "compact_boundary" && raw.CompactMeta != nil {
+			m := raw.CompactMeta
+			return AgentEvent{
+				Type: Compaction,
+				Raw:  trimmed,
+				Compaction: &CompactionInfo{
+					Trigger:       m.Trigger,
+					PreTokens:     m.PreTokens,
+					PostTokens:    m.PostTokens,
+					DroppedTokens: m.DroppedTokens,
+					DurationMS:    m.DurationMS,
+				},
+			}, nil
+		}
 		// `init` carries the session_id we want for resume. Other
 		// system subtypes (`hook_started`, `hook_response`,
 		// `compaction`, ...) are noise from claude's lifecycle hooks
@@ -279,6 +385,14 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 		return AgentEvent{Type: Unknown, Raw: trimmed}, nil
 
 	case "assistant":
+		// Every assistant frame reports the window as it stood for that
+		// one request. Remember the newest; the `result` frame that ends
+		// the turn cannot tell us this (its .usage is a turn-wide sum).
+		if raw.Message != nil && raw.Message.Usage != nil {
+			if lvl := raw.Message.Usage.level(); lvl > 0 {
+				p.lastLevel = lvl
+			}
+		}
 		// claude packs text + tool_use blocks into one frame. Iterate
 		// to find the first interesting block. If both text and
 		// tool_use are present we prefer tool_use (gate-relevant) and
@@ -369,6 +483,7 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 		p.partialTextEmitted = false
 		p.partialThinkingEmitted = false
 		if raw.IsError {
+			p.lastLevel = 0
 			// error_during_execution puts the detail on stderr, leaving
 			// .result empty — fall back to subtype so the error isn't blank.
 			msg := raw.Result
@@ -381,11 +496,18 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 				Raw:      trimmed,
 			}, nil
 		}
+		u := raw.tokenUsage()
+		if u != nil && p.lastLevel > 0 {
+			u.ContextUsed = p.lastLevel
+		}
+		// The next turn measures itself; carrying this one's level over
+		// would report a stale window if that turn reports none.
+		p.lastLevel = 0
 		return AgentEvent{
 			Type:      Done,
 			SessionID: p.sessionID,
 			Raw:       trimmed,
-			Usage:     raw.tokenUsage(),
+			Usage:     u,
 		}, nil
 	}
 

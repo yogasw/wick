@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -128,6 +129,12 @@ type ConversationTurn struct {
 
 // SystemTurnKind values for ConversationTurn.Kind.
 const KindProviderSwitch = "provider_switch"
+
+// KindCompaction marks the point where the CLI folded older turns into
+// a summary. Recorded as a turn of its own so the gap in the
+// conversation has a visible cause — without it the history simply
+// appears to have holes.
+const KindCompaction = "compaction"
 
 // TurnTraceIndex is the lightweight index written to thinking/<turn_id>.json.
 // Events below the inline threshold have their Text embedded here.
@@ -442,6 +449,23 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		}
 		return false, nil
 
+	case event.Compaction:
+		// Flush whatever text the turn had produced first, so the marker
+		// lands after it rather than jumping ahead of the reply it
+		// followed. Compaction does NOT end the turn — the CLI carries on
+		// with the same session — so this returns false.
+		if err := s.flushAssistantTurn(false); err != nil {
+			return false, err
+		}
+		if err := s.appendCompactionTurn(ev.Compaction); err != nil {
+			return false, err
+		}
+		// Keep the meter honest immediately: the level just dropped, and
+		// waiting for the next turn to say so makes the ring contradict
+		// the marker sitting right above it.
+		_ = s.recordCompaction(ev.Compaction, s.now().UTC())
+		return false, nil
+
 	case event.Trace:
 		// Unrecognized frame — keep it in the turn's trace (expandable in
 		// the UI) instead of the main thread. Buffered like other trace
@@ -689,6 +713,67 @@ func (s *Store) appendErrorTurn(msg string) error {
 		s.sessionID,
 		turn,
 	)
+}
+
+// appendCompactionTurn records a compaction boundary as a structured
+// system turn. Numbers go in Extras rather than into prose so the UI can
+// render them however it likes (and so a later reader can chart them);
+// Text stays human-readable for channels that show plain text only.
+func (s *Store) appendCompactionTurn(info *event.CompactionInfo) error {
+	if info == nil {
+		return nil
+	}
+	now := s.now().UTC()
+	trigger := info.Trigger
+	if trigger == "" {
+		trigger = "auto"
+	}
+	extras := map[string]string{
+		"trigger":     trigger,
+		"pre_tokens":  strconv.Itoa(info.PreTokens),
+		"post_tokens": strconv.Itoa(info.PostTokens),
+	}
+	if info.DroppedTokens > 0 {
+		extras["dropped_tokens"] = strconv.Itoa(info.DroppedTokens)
+	}
+	if info.DurationMS > 0 {
+		extras["duration_ms"] = strconv.Itoa(info.DurationMS)
+	}
+	turn := ConversationTurn{
+		TurnID:    fmt.Sprintf("%d", now.UnixNano()),
+		Timestamp: now,
+		Role:      "system",
+		Agent:     s.agentName,
+		Provider:  s.provider,
+		Kind:      KindCompaction,
+		Text:      compactionSummary(trigger, info),
+		Extras:    extras,
+	}
+	return storage.AppendJSONL(
+		s.layout.SessionConversation(s.sessionID),
+		"wick-conv-v1",
+		s.sessionID,
+		turn,
+	)
+}
+
+// compactionSummary is the plain-text fallback, e.g.
+// "Context compacted (manual) — 31.3k → 4.1k tokens".
+func compactionSummary(trigger string, info *event.CompactionInfo) string {
+	return fmt.Sprintf("Context compacted (%s) — %s → %s tokens",
+		trigger, shortTokens(info.PreTokens), shortTokens(info.PostTokens))
+}
+
+// shortTokens renders a count the way a person reads it: 31261 -> 31.3k.
+func shortTokens(n int) string {
+	switch {
+	case n < 1000:
+		return strconv.Itoa(n)
+	case n < 1_000_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	default:
+		return fmt.Sprintf("%.2fM", float64(n)/1_000_000)
+	}
 }
 
 // writeTraceIndex writes thinking/<turn_id>.json (the index) and, for

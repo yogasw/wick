@@ -53,12 +53,12 @@ var builtinComposerCommands = []ComposerCommand{
 	// Claude Code's /compact. It's a "send" action: the FE sends "/compact"
 	// as the message. The wick engine intercepts it and runs compaction
 	// in-process; the CLI providers pass it through to their own /compact.
-	// /context asks the CLI how full its context window is. Like /compact it
-	// is a "send" action, and like /compact it only works because a bare
-	// slash command is sent WITHOUT the `[from: …]` line — see
-	// store.IsBareSlashCommand. Costs nothing: the CLI answers it locally,
-	// no model call.
-	{ID: "context", Label: "/context", Hint: "context window usage", Category: "Session", Action: "send:/context"},
+	// /context opens wick's own panel rather than sending anything: the
+	// numbers already sit in the session's token ledger, so there is no
+	// call to make, and the CLI's own answer would arrive as a wall of
+	// markdown in the transcript. The panel also carries the manual
+	// Compact action.
+	{ID: "context", Label: "/context", Hint: "context window · compact", Category: "Session", Action: "panel:context"},
 	{ID: "compact", Label: "/compact", Hint: "summarize history to free context", Category: "Session", Action: "send:/compact"},
 	// /thinking opens a small popover to toggle the model's reasoning on/off
 	// and pick the effort for the rest of the session — it does NOT send a

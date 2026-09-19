@@ -143,6 +143,29 @@ func doneLineUsage(result, model string, t turnTokens) []byte {
 	return mustLine(line)
 }
 
+// compactBoundaryLine reports that history was folded into a summary,
+// in claude's compact_boundary shape so one parser path and one UI
+// marker cover every provider.
+func compactBoundaryLine(trigger string, pre, post int) []byte {
+	if trigger == "" {
+		trigger = "auto"
+	}
+	dropped := pre - post
+	if dropped < 0 {
+		dropped = 0
+	}
+	return mustLine(map[string]any{
+		"type":    "system",
+		"subtype": "compact_boundary",
+		"compact_metadata": map[string]any{
+			"trigger":                   trigger,
+			"pre_tokens":                pre,
+			"post_tokens":               post,
+			"cumulative_dropped_tokens": dropped,
+		},
+	})
+}
+
 // errorLine ends a turn with a failure → Error, surfaced in the UI.
 func errorLine(msg string) []byte {
 	return mustLine(map[string]any{

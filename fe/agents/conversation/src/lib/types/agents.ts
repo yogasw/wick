@@ -188,9 +188,13 @@ export type ConversationTurn = {
   artifacts?: Artifact[];
   // system turn only — a provider/runtime error, rendered as a failure.
   is_error?: boolean;
-  /** system turn only — "provider_switch", "interrupted", … Tags a structured
-      notice so it renders as itself instead of a plain grey line. */
+  /** system turn only — "provider_switch", "interrupted", "compaction", …
+      Tags a structured notice so it renders as itself instead of a plain
+      grey line. */
   kind?: string;
+  /** system turn only — the numbers behind `kind`, kept as data rather
+      than baked into the text (compaction: trigger, pre/post tokens). */
+  extras?: Record<string, string>;
 };
 
 export type ApprovalRequest = {

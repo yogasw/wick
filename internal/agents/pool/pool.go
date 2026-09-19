@@ -20,6 +20,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/state"
+	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/processctl"
 )
@@ -723,6 +724,17 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// Read once per send so the live and buffered paths below agree even if
 	// the operator changes the setting mid-flight.
 	senderLevel := p.senderVisibility()
+
+	// /compact aimed at a provider that cannot compact stops here.
+	// Forwarding it would be worse than dropping it: codex exec has no
+	// slash commands, so the text reaches the MODEL, which answers
+	// "Context compacted." while the window keeps filling. Answering in
+	// the transcript costs nothing and tells the truth — see
+	// provider.CanCompact for the measurements.
+	if role == "user" && isCompactCommand(text) && !p.providerCanCompact(sessionID, agentName) {
+		p.recordCompactUnsupported(ctx, sessionID, agentName, source, text, sender)
+		return nil
+	}
 
 	p.mu.Lock()
 	if p.closed {
@@ -2428,4 +2440,74 @@ func withSenderLine(text string, sender *store.Sender, level string) string {
 		return text
 	}
 	return store.PrependSenderLine(text, sender, level)
+}
+
+// isCompactCommand recognises the message the composer's Compact action
+// sends, and the same thing typed by hand. Only the bare command — a
+// sentence that merely mentions /compact is a message like any other.
+func isCompactCommand(text string) bool {
+	return strings.EqualFold(strings.TrimSpace(text), "/compact")
+}
+
+// providerCanCompact reports whether this agent's provider can act on
+// /compact. Unknown provider → true, so an unreadable session file
+// cannot silently swallow a command that would have worked.
+func (p *Pool) providerCanCompact(sessionID, agentName string) bool {
+	key := p.agentProviderKey(sessionID, agentName)
+	if key == "" {
+		return true
+	}
+	typ, _ := provider.SplitInstanceKey(key)
+	return provider.CanCompact(provider.Type(typ))
+}
+
+// agentProviderKey returns the "type/name" this agent runs on, falling
+// back to the pool default when the session has no entry yet.
+func (p *Pool) agentProviderKey(sessionID, agentName string) string {
+	sess, err := session.Load(p.cfg.Layout, sessionID)
+	if err == nil {
+		for _, a := range sess.Agents {
+			if a.Name == agentName && a.Provider != "" {
+				return a.Provider
+			}
+		}
+	}
+	return p.cfg.DefaultProvider
+}
+
+// recordCompactUnsupported writes the exchange that did not happen: the
+// command as the person typed it, then wick's own answer. Both are
+// recorded so the transcript explains itself later — a /compact that
+// simply vanished would look like a bug in the composer.
+func (p *Pool) recordCompactUnsupported(ctx context.Context, sessionID, agentName, source, text string, sender *store.Sender) {
+	now := time.Now().UTC()
+	conv := p.cfg.Layout.SessionConversation(sessionID)
+	_ = storage.AppendJSONL(conv, "wick-conv-v1", sessionID, store.ConversationTurn{
+		TurnID:    fmt.Sprintf("%d", now.UnixNano()),
+		Timestamp: now,
+		Role:      "user",
+		Source:    source,
+		Agent:     agentName,
+		Text:      text,
+		Sender:    sender,
+	})
+	_ = storage.AppendJSONL(conv, "wick-conv-v1", sessionID, store.ConversationTurn{
+		TurnID:    fmt.Sprintf("%d", now.UnixNano()+1),
+		Timestamp: now,
+		Role:      "system",
+		Source:    source,
+		Agent:     agentName,
+		Text:      provider.CompactUnsupportedNote,
+	})
+	log.Ctx(ctx).Info().
+		Str("component", "pool").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Msg("pool.send: /compact not supported by this provider — answered without spawning")
+	// Push the command itself to viewers the same way any injected user
+	// turn is pushed. The note beside it is in the transcript; the web
+	// composer also renders it immediately from its own copy of this
+	// rule, so nobody is left watching a command that appears to have
+	// gone nowhere.
+	p.notifyUserMessage(sessionID, agentName, source, text, sender)
 }

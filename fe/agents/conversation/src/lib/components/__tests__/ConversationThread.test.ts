@@ -196,3 +196,29 @@ describe("ConversationThread", () => {
     expect(screen.getByText("Fourth dup-id turn B")).toBeDefined();
   });
 });
+
+describe("ConversationThread - compaction in flight", () => {
+  const typing: TypingState = { active: true, substate: "thinking" };
+
+  test("says what is actually happening instead of 'thinking'", () => {
+    render(ConversationThread, {
+      props: { turns: [TURN_A], live: null, typing, compacting: true },
+    });
+    expect(screen.getByText(/compacting the conversation/i)).toBeDefined();
+    expect(screen.queryByText("thinking…")).toBeNull();
+  });
+
+  test("an ordinary turn still reads as thinking", () => {
+    render(ConversationThread, {
+      props: { turns: [TURN_A], live: null, typing },
+    });
+    expect(screen.getByText("thinking…")).toBeDefined();
+  });
+
+  test("the compaction wait is visually distinct, not the usual grey bubble", () => {
+    const { container } = render(ConversationThread, {
+      props: { turns: [TURN_A], live: null, typing, compacting: true },
+    });
+    expect(container.innerHTML).toContain("amber");
+  });
+});

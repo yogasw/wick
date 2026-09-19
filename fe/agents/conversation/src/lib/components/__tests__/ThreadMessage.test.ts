@@ -1075,3 +1075,29 @@ describe("ThreadMessage - large spilled tool_result", () => {
     expect(screen.queryByText(/running/)).toBeNull();
   });
 });
+
+describe("ThreadMessage - slash command", () => {
+  test("a bare command is shown as a command, not as a said sentence", () => {
+    const { container } = render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "user", text: "/compact" }) },
+    });
+    expect(screen.getByTestId("command-chip").textContent).toContain("/compact");
+    // the green "you said" bubble must be gone — nothing was said
+    expect(container.innerHTML).not.toContain("bg-green-500 text-white-100");
+  });
+
+  test("a command with words around it is still a message", () => {
+    const { container } = render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "user", text: "/compact please" }) },
+    });
+    expect(screen.queryByTestId("command-chip")).toBeNull();
+    expect(container.innerHTML).toContain("bg-green-500 text-white-100");
+  });
+
+  test("an assistant turn that starts with a slash is untouched", () => {
+    render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "assistant", text: "/compact" }) },
+    });
+    expect(screen.queryByTestId("command-chip")).toBeNull();
+  });
+});

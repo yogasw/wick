@@ -4,12 +4,23 @@ import { apiGetE, apiPostE } from "@wick-fe/common-api";
    /api/composer/usage. Backs the `/usage` popover: the session provider's
    account + rate-limit windows, read from the server's shared, paced cache
    (so opening the popover never costs an upstream request). */
-export type ComposerUsageWindow = { key: string; utilization: number; resetsAt: string };
+export type ComposerUsageWindow = {
+  key: string;
+  utilization: number;
+  resetsAt: string;
+  /* When the PROVIDER observed this figure, empty when that is the
+     moment we asked. Codex publishes its limits only while it runs, so
+     its numbers can be hours old and must be dated rather than shown
+     under "last check just now". */
+  observedAt?: string;
+};
 
 export type ComposerUsage = {
   provider: string;
-  /* supported=false means this provider TYPE has no usage API (codex,
-     gemini, wick). `reason` says so in words. Not an error. */
+  /* supported=false means wick cannot read limits for this provider
+     type at all (gemini, wick). `reason` says so in words. Not an
+     error. Codex IS supported despite having no usage endpoint — its
+     limits are read from the journal each turn writes. */
   supported: boolean;
   reason: string;
   account: {
@@ -40,7 +51,7 @@ type WireComposerUsage = {
     connected?: boolean; email?: string; plan?: string; org?: string;
     auth_method?: string; expires_at?: string;
   } | null;
-  windows?: { key?: string; utilization?: number; resets_at?: string }[] | null;
+  windows?: { key?: string; utilization?: number; resets_at?: string; observed_at?: string }[] | null;
   error?: string;
   pending?: boolean;
   checking?: boolean;
@@ -69,6 +80,7 @@ export function normalizeComposerUsage(w: WireComposerUsage): ComposerUsage {
       key: x.key ?? "",
       utilization: x.utilization ?? 0,
       resetsAt: x.resets_at ?? "",
+      observedAt: x.observed_at ?? "",
     })),
     error: w.error ?? "",
     pending: w.pending ?? false,

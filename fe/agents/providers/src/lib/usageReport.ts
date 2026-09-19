@@ -25,6 +25,14 @@ export type UsageSlice = {
   share: number;
 };
 
+export type ProviderUsageDetail = {
+  provider: string;
+  totals: UsageTotals;
+  /** Session ids that spent tokens on this provider. Can run to
+   *  thousands, which is why the UI pages through it. */
+  sessions: string[];
+};
+
 export type UsageReport = {
   totals: UsageTotals;
   turns: number;
@@ -52,6 +60,19 @@ export async function fetchUsageReport(base: string, refresh = false): Promise<U
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`usage report: ${res.status}`);
   return (await res.json()) as UsageReport;
+}
+
+/** fetchProviderUsage answers "what did THIS provider cost, and where
+ *  was it used". Same ledger, one slice of it. */
+export async function fetchProviderUsage(
+  base: string,
+  provider: string,
+): Promise<ProviderUsageDetail> {
+  const res = await fetch(`${base}/api/providers/${provider}/usage`, {
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`provider usage: ${res.status}`);
+  return (await res.json()) as ProviderUsageDetail;
 }
 
 /** compactTokens renders 1_234_567 as "1.23M".

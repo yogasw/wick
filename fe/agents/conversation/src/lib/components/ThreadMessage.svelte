@@ -6,6 +6,7 @@
   import { mergeTodoItemsWithSteps, stripTodoBlocks, latestTodoGoal } from "../todoGroups.js";
   import { avatarTone } from "../senderTone.js";
   import { isViewer } from "../viewer.js";
+  import { bareSlashCommand } from "../slashCommand.js";
   import ToolCard from "./ToolCard.svelte";
   import TodoCard from "./TodoCard.svelte";
   import ArtifactGallery from "./ArtifactGallery.svelte";
@@ -148,6 +149,33 @@
   const safeAttachments = $derived(turn.attachments ?? []);
   const safeArtifacts = $derived(turn.artifacts ?? []);
   const safeSteps = $derived(safeEvents.filter((ev) => ev.type === "step"));
+
+  /* Compaction label: "Compacted 31.3k → 4.1k · manual". Built from
+     Extras rather than parsed out of the text, so the numbers stay
+     numbers — the text is only the plain-channel fallback. */
+  const compactionLabel = $derived.by(() => {
+    const x = turn.extras ?? {};
+    const short = (v?: string) => {
+      const n = Number(v ?? 0);
+      if (!Number.isFinite(n) || n <= 0) return "";
+      if (n < 1000) return String(n);
+      if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+      return `${(n / 1_000_000).toFixed(2)}M`;
+    };
+    const pre = short(x.pre_tokens);
+    const post = short(x.post_tokens);
+    const how = x.trigger === "manual" ? "manual" : "auto";
+    if (!pre || !post) return turn.text || "Context compacted";
+    return `Compacted ${pre} → ${post} · ${how}`;
+  });
+
+  /* "/compact" on its own is an instruction to wick, not a sentence
+     addressed to the agent — and the reply to it isn't an answer either.
+     Rendering it as a green "you said" bubble makes the thread read as a
+     conversation where none happened, so a bare command gets its own
+     compact form instead. Anything with words around it stays a message:
+     that text really was sent to the model. */
+  const command = $derived(isUser ? bareSlashCommand(turn.text) : "");
 
   const showTraceToggle = $derived(!isUser && !isSystem && ((safeEvents.length > 0) || turn.has_trace === true));
 
@@ -322,6 +350,23 @@
           </svg>
           <span class="whitespace-pre-wrap break-words min-w-0">{interruptedLabel}</span>
         </div>
+      {:else if turn.kind === "compaction"}
+        <!-- Where older turns were folded into a summary. Rendered as a
+             divider rather than a notice because that is what it is: the
+             history above this line is no longer verbatim, and anyone
+             reading upward needs to know before they trust it. The
+             before/after pair carries the whole meaning, so both are on
+             the line. -->
+        <div class="flex items-center gap-2 w-full py-0.5" title={turn.text}>
+          <div class="h-px flex-1 bg-white-300 dark:bg-navy-600"></div>
+          <span class="inline-flex items-center gap-1.5 text-[11px] text-black-700 dark:text-black-600 shrink-0">
+            <svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M2 3.5h8M3.5 6h5M5 8.5h2" stroke-linecap="round"></path>
+            </svg>
+            {compactionLabel}
+          </span>
+          <div class="h-px flex-1 bg-white-300 dark:bg-navy-600"></div>
+        </div>
       {:else if turn.is_error}
         <div class="inline-flex items-start gap-1.5 rounded-2xl border border-neg-400/40 bg-neg-400/10 px-3 py-1 text-xs text-neg-400 max-w-full">
           <svg viewBox="0 0 12 12" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -445,6 +490,22 @@
               {/if}
             </span>
           {/if}
+          {#if command}
+            <!-- A command, not a line of chat: monospace on a quiet surface
+                 with a prompt caret, so it reads as something that was RUN.
+                 Deliberately small — the interesting part is what it did,
+                 which lands below it. -->
+            <span
+              data-testid="command-chip"
+              title="Slash command sent to the agent"
+              class="inline-flex items-center gap-1.5 rounded-lg border border-green-500/40 bg-green-500/10 px-2.5 py-1 font-mono text-xs text-green-700 dark:text-green-300"
+            >
+              <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 opacity-80" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+                <path d="M4 4.5 7 8l-3 3.5M9 11.5h3.5" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+              /{command}
+            </span>
+          {:else}
           <!-- Green is "you". Someone else writing into this session gets a
                neutral surface instead, so the two are distinguishable at a
                glance rather than only by reading the name above them. -->
@@ -456,6 +517,7 @@
           >
             {@html linkifyText(routed.text)}
           </div>
+          {/if}
         </div>
         {#if routedHandles.length > 0}
           <span

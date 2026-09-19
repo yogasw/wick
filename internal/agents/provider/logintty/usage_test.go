@@ -61,11 +61,16 @@ func TestReadUsageClaudeNoCredentials(t *testing.T) {
 }
 
 func TestReadUsageUnsupportedTypes(t *testing.T) {
-	if _, err := ReadUsage(provider.TypeCodex, nil); err != ErrUsageUnsupported {
-		t.Fatalf("codex err = %v, want ErrUsageUnsupported", err)
-	}
 	if _, err := ReadUsage(provider.TypeWick, nil); err != ErrUsageUnsupported {
 		t.Fatalf("wick err = %v, want ErrUsageUnsupported", err)
+	}
+	if _, err := ReadUsage(provider.TypeGemini, nil); err != ErrUsageUnsupported {
+		t.Fatalf("gemini err = %v, want ErrUsageUnsupported", err)
+	}
+	// Codex is supported but has nothing to read in an empty home: an
+	// instance that has never run must not invent windows.
+	if _, err := ReadUsage(provider.TypeCodex, []string{"CODEX_HOME=" + t.TempDir()}); err != ErrUsageUnsupported {
+		t.Fatalf("codex with no rollouts: err = %v, want ErrUsageUnsupported", err)
 	}
 }
 
@@ -121,10 +126,16 @@ func TestParseRetryAfter(t *testing.T) {
 }
 
 func TestSupportsUsage(t *testing.T) {
-	if !SupportsUsage(provider.TypeClaude) {
-		t.Error("claude has a usage API")
+	// Codex has no usage endpoint, but it does publish its limits — it
+	// writes them into every turn's rollout, which is where
+	// readCodexUsage picks them up. "Supported" means wick can answer
+	// the question, not that an HTTP call exists.
+	for _, ty := range []provider.Type{provider.TypeClaude, provider.TypeCodex} {
+		if !SupportsUsage(ty) {
+			t.Errorf("%s: wick can read its limits", ty)
+		}
 	}
-	for _, ty := range []provider.Type{provider.TypeCodex, provider.TypeGemini, provider.TypeWick} {
+	for _, ty := range []provider.Type{provider.TypeGemini, provider.TypeWick} {
 		if SupportsUsage(ty) {
 			t.Errorf("%s reported as having a usage API", ty)
 		}

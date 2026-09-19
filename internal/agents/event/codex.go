@@ -37,11 +37,30 @@ type CodexParser struct {
 	// agent_message items so item.updated emits only the appended tail
 	// (delta semantics) instead of re-sending the whole string.
 	agentMsgText map[string]string
+	// threadID is codex's own conversation id, learned from
+	// thread.started. It names the rollout file the context level is
+	// read from at the end of each turn — see codex_rollout.go.
+	threadID string
+	// codexHome is the CODEX_HOME this spawn runs with, empty when the
+	// default applies. Only used to find that rollout.
+	codexHome string
+	// level resolves the true context level for a finished turn.
+	// Injected so tests never touch the filesystem.
+	level func(home, threadID string, sum int) (codexRolloutReading, bool)
 }
 
 // NewCodexParser returns a fresh parser ready to consume codex --json lines.
-func NewCodexParser() *CodexParser {
-	return &CodexParser{agentMsgText: map[string]string{}}
+func NewCodexParser() *CodexParser { return NewCodexParserIn("") }
+
+// NewCodexParserIn is NewCodexParser for a spawn with its own
+// CODEX_HOME. The parser needs it because codex's usable context
+// numbers live in that directory, not in the stream (codex_rollout.go).
+func NewCodexParserIn(codexHome string) *CodexParser {
+	return &CodexParser{
+		agentMsgText: map[string]string{},
+		codexHome:    codexHome,
+		level:        codexRolloutLevel,
+	}
 }
 
 type codexRaw struct {
@@ -66,9 +85,14 @@ type codexRaw struct {
 //
 // Note InputTokens is the TOTAL input, cached part included — unlike
 // Anthropic, where the three input numbers are disjoint. So the fresh
-// (uncached) share is InputTokens - CachedInputTokens, and the context
-// level is InputTokens as-is. Adding the cached figure on top would
-// count the cache twice.
+// (uncached) share is InputTokens - CachedInputTokens; adding the cached
+// figure on top would count the cache twice.
+//
+// It is NOT the context level. This block is a per-TURN sum: codex adds
+// up every model request the turn made, so a turn with five tool calls
+// reports roughly five times the window that was actually in use
+// (measured: 92,842 reported against a real level of 18,874). The level
+// is read from codex's rollout instead — see codex_rollout.go.
 type codexUsage struct {
 	InputTokens       int `json:"input_tokens"`
 	CachedInputTokens int `json:"cached_input_tokens"`
@@ -94,12 +118,16 @@ func (u *codexUsage) tokenUsage() *TokenUsage {
 	if fresh < 0 {
 		fresh = 0
 	}
+	// ContextUsed and Window stay empty here: the flow numbers above are
+	// what this turn spent and are correct as they stand, but codex's
+	// stream says nothing truthful about the LEVEL. CodexParser fills
+	// both in from the rollout when it can, and leaves them at zero when
+	// it cannot — see codex_rollout.go.
 	return &TokenUsage{
-		Input:       fresh,
-		CacheRead:   u.CachedInputTokens,
-		CacheWrite:  u.CacheWriteTokens,
-		Output:      u.OutputTokens,
-		ContextUsed: u.InputTokens,
+		Input:      fresh,
+		CacheRead:  u.CachedInputTokens,
+		CacheWrite: u.CacheWriteTokens,
+		Output:     u.OutputTokens,
 	}
 }
 
@@ -108,9 +136,9 @@ type codexError struct {
 }
 
 type codexItem struct {
-	ID     string `json:"id,omitempty"`
-	Type   string `json:"type"`
-	Text   string `json:"text,omitempty"`
+	ID   string `json:"id,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
 	// function_call fields
 	Name   string `json:"name,omitempty"`
 	CallID string `json:"call_id,omitempty"`
@@ -179,6 +207,11 @@ func (p *CodexParser) Parse(line string) (AgentEvent, error) {
 	switch raw.Type {
 	case "thread.started":
 		log.Debug().Str("thread_id", raw.ThreadID).Bool("already_emitted", p.sessionEmitted).Msg("codex.parse: thread.started")
+		if raw.ThreadID != "" {
+			// Remember it even on a resumed spawn that already emitted:
+			// the rollout lookup needs the id, not the novelty.
+			p.threadID = raw.ThreadID
+		}
 		if !p.sessionEmitted && raw.ThreadID != "" {
 			p.sessionEmitted = true
 			return AgentEvent{
@@ -365,7 +398,7 @@ func (p *CodexParser) Parse(line string) (AgentEvent, error) {
 
 	case "turn.completed":
 		log.Debug().Msg("codex.parse: turn.completed")
-		return AgentEvent{Type: Done, Raw: trimmed, Usage: raw.Usage.tokenUsage()}, nil
+		return AgentEvent{Type: Done, Raw: trimmed, Usage: p.turnUsage(raw.Usage)}, nil
 
 	case "error":
 		log.Debug().Str("message", raw.Message).Msg("codex.parse: error event")
@@ -401,6 +434,28 @@ func (p *CodexParser) Parse(line string) (AgentEvent, error) {
 	}
 	log.Debug().Str("type", raw.Type).Msg("codex.parse: unrecognized type → trace")
 	return AgentEvent{Type: Trace, Text: trimmed, Raw: trimmed}, nil
+}
+
+// turnUsage is the turn's accounting with the context level filled in
+// from codex's rollout.
+//
+// The flow numbers come straight from the stream; the level does not
+// exist there (codex_rollout.go explains why) and is looked up by thread
+// id. A lookup that fails leaves the level at zero — the meter then
+// shows the previous reading rather than a number five times too big.
+func (p *CodexParser) turnUsage(u *codexUsage) *TokenUsage {
+	out := u.tokenUsage()
+	if out == nil || p.level == nil || p.threadID == "" {
+		return out
+	}
+	r, ok := p.level(p.codexHome, p.threadID, u.InputTokens)
+	if !ok {
+		log.Debug().Str("thread_id", p.threadID).Msg("codex.parse: no rollout reading — context level unknown this turn")
+		return out
+	}
+	out.ContextUsed = r.Level
+	out.Window = r.Window
+	return out
 }
 
 // codexControlFrames are the known housekeeping frame types that carry no

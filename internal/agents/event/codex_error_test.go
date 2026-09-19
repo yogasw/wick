@@ -93,8 +93,12 @@ func TestCodexTurnUsage(t *testing.T) {
 	if ev.Usage == nil {
 		t.Fatal("want usage, got nil")
 	}
-	if ev.Usage.ContextUsed != 20250 {
-		t.Fatalf("context level: want 20250 (input_tokens as-is), got %d", ev.Usage.ContextUsed)
+	// NOT the context level: input_tokens is the turn's SUM over every
+	// request it made (see codex_rollout.go), so with no rollout to read
+	// the level stays unknown rather than being inflated by the tool
+	// calls. Proven on 0.149.1: 92,842 reported, 18,874 actually held.
+	if ev.Usage.ContextUsed != 0 {
+		t.Fatalf("context level: want 0 (unknown without a rollout), got %d", ev.Usage.ContextUsed)
 	}
 	if ev.Usage.Input != 20250-11264 {
 		t.Fatalf("fresh input: want %d, got %d", 20250-11264, ev.Usage.Input)
@@ -102,7 +106,9 @@ func TestCodexTurnUsage(t *testing.T) {
 	if ev.Usage.CacheRead != 11264 || ev.Usage.Output != 5 {
 		t.Fatalf("usage: %+v", ev.Usage)
 	}
-	// Codex reports no model id and no window — better empty than guessed.
+	// Codex's STREAM reports no model id and no window — better empty
+	// than guessed. (The window does exist in its rollout; a parser
+	// without one, like this bare NewCodexParser, never sees it.)
 	if ev.Usage.Window != 0 || ev.Usage.Model != "" {
 		t.Fatalf("want no window/model, got %+v", ev.Usage)
 	}

@@ -926,3 +926,86 @@ func TestUsageLedgerSkipsTurnsWithoutUsage(t *testing.T) {
 		t.Fatalf("want an empty ledger, got %+v", su)
 	}
 }
+
+// TestApplyCompactionWritesMarkerTurn: a compaction must leave a visible
+// record. The turn above it is flushed first so the marker lands after
+// the reply it followed, and the turn does NOT end — the CLI keeps going
+// in the same session.
+func TestApplyCompactionWritesMarkerTurn(t *testing.T) {
+	st, layout := newStoreWithProvider(t, "claude/opus")
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "before"})
+	ended, err := st.Apply(event.AgentEvent{
+		Type: event.Compaction,
+		Compaction: &event.CompactionInfo{
+			Trigger: "manual", PreTokens: 31261, PostTokens: 4051,
+			DroppedTokens: 27210, DurationMS: 13226,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ended {
+		t.Fatal("compaction must not end the turn")
+	}
+
+	lines := readConvLines(t, layout)
+	if len(lines) != 2 {
+		t.Fatalf("want the flushed reply + the marker, got %d: %+v", len(lines), lines)
+	}
+	if lines[0].Text != "before" {
+		t.Fatalf("the reply should be flushed first: %+v", lines[0])
+	}
+	m := lines[1]
+	if m.Role != "system" || m.Kind != KindCompaction {
+		t.Fatalf("marker: role=%q kind=%q", m.Role, m.Kind)
+	}
+	if m.Extras["trigger"] != "manual" || m.Extras["pre_tokens"] != "31261" || m.Extras["post_tokens"] != "4051" {
+		t.Fatalf("extras should carry the numbers as data: %+v", m.Extras)
+	}
+	// The text is the plain-channel fallback, so it has to read on its own.
+	if m.Text != "Context compacted (manual) — 31.3k → 4.1k tokens" {
+		t.Fatalf("fallback text: %q", m.Text)
+	}
+}
+
+// TestApplyCompactionWithoutInfoIsIgnored: a malformed frame must not
+// write a marker with zeroes, which would read as "compacted to nothing".
+func TestApplyCompactionWithoutInfoIsIgnored(t *testing.T) {
+	st, layout := newStoreWithProvider(t, "claude/opus")
+	st.Apply(event.AgentEvent{Type: event.Compaction})
+	if lines := readConvLines(t, layout); len(lines) != 0 {
+		t.Fatalf("want no turns, got %+v", lines)
+	}
+}
+
+// TestApplyCompactionSyncsTheMeter: the recorded context level must drop
+// with the compaction, not on the next turn. Otherwise the ring shows
+// the pre-compaction number right beside a marker saying it shrank.
+func TestApplyCompactionSyncsTheMeter(t *testing.T) {
+	st, layout := newStoreWithProvider(t, "claude/opus")
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "a"})
+	st.Apply(event.AgentEvent{Type: event.Done, Usage: &event.TokenUsage{
+		Input: 10, Output: 5, ContextUsed: 94_400, Window: 1_000_000,
+	}})
+	st.Apply(event.AgentEvent{Type: event.Compaction, Compaction: &event.CompactionInfo{
+		Trigger: "manual", PreTokens: 94_400, PostTokens: 6_800,
+	}})
+
+	su, _ := LoadSessionUsage(layout, st.sessionID)
+	p := su.Providers[st.provider]
+	if p.ContextUsed != 6_800 {
+		t.Fatalf("level should follow the compaction, got %d", p.ContextUsed)
+	}
+	// The window is a property of the model, not of the history — it must
+	// survive a compaction untouched.
+	if p.ContextWindow != 1_000_000 {
+		t.Fatalf("window should be unchanged, got %d", p.ContextWindow)
+	}
+	// Spend is not refunded by compaction.
+	if p.Output != 5 || p.Input != 10 {
+		t.Fatalf("flows should be untouched: %+v", p.UsageTotals)
+	}
+	if len(p.Series) != 2 || p.Series[1].ContextUsed != 6_800 {
+		t.Fatalf("series should record the cliff: %+v", p.Series)
+	}
+}

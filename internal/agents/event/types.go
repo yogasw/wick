@@ -49,6 +49,13 @@ const (
 	// recorded to history like an error but does NOT end the turn — the
 	// subprocess keeps running. ErrorMsg carries the detail.
 	Warning
+	// Compaction fires when the CLI compacted the conversation to free
+	// context — automatically at the window limit, or because someone ran
+	// /compact. Not an error and not end-of-turn: the session id stays
+	// the same and the run continues with a summary standing in for the
+	// dropped messages. Carrying it as its own type is what lets the UI
+	// mark the boundary instead of silently losing the history.
+	Compaction
 	// Trace is an event the parser doesn't map to a first-class type but
 	// that is worth keeping visible — recorded into the turn's trace
 	// (expandable in the UI) rather than the main thread. Raw carries the
@@ -76,6 +83,8 @@ func (t EventType) String() string {
 		return "error"
 	case Warning:
 		return "warning"
+	case Compaction:
+		return "compaction"
 	case Trace:
 		return "trace"
 	default:
@@ -116,6 +125,21 @@ type AgentEvent struct {
 	// the CLI reported it — nil otherwise, which is not an error (a
 	// provider may simply not say).
 	Usage *TokenUsage
+
+	// Compaction is set only on Compaction events.
+	Compaction *CompactionInfo
+}
+
+// CompactionInfo is one compaction boundary as the CLI reported it.
+// PreTokens is the context size that triggered it, PostTokens what
+// survived — the pair is the whole story, and neither means much alone.
+type CompactionInfo struct {
+	// Trigger is "auto" (window limit) or "manual" (/compact).
+	Trigger       string `json:"trigger,omitempty"`
+	PreTokens     int    `json:"pre_tokens,omitempty"`
+	PostTokens    int    `json:"post_tokens,omitempty"`
+	DroppedTokens int    `json:"dropped_tokens,omitempty"`
+	DurationMS    int    `json:"duration_ms,omitempty"`
 }
 
 // TokenUsage is one turn's token accounting, normalized across CLIs so
