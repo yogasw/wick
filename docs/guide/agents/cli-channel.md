@@ -117,7 +117,7 @@ run, so a job often finishes at the exact moment wick is swapping binaries.
 `agent send` waits it out — an unreachable or still-booting daemon is
 retried for **90 seconds** by default (`--retry 3m`, `--retry 0` to fail
 fast), with backoff, saying so on stderr meanwhile. A
-[handover](/guide/agents/zero-downtime) keeps the port open and costs
+[handover](/guide/headless#updating-without-downtime) keeps the port open and costs
 nothing; a full restart closes it for the successor's boot, about 80
 seconds on a modest host.
 
