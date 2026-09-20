@@ -693,6 +693,13 @@ func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service
 	if err != nil {
 		return "", err
 	}
+	// Resolve the session FIRST: the instance lookup below is scoped by it,
+	// so doing this afterwards left the lookup reading the raw argument.
+	// Single calls happened to work (the streaming transport resolves before
+	// it gets here) while a BATCH entry without session_id failed with
+	// "session_id is required to use the session connector" — the one shape
+	// where the caller has no way to know it was supposed to pass one.
+	sessionID = ResolveCallSession(SessionOf(r), sessionID)
 	// Session-workspace instance: run against the ephemeral instance's own
 	// config (no DB row, no tag visibility — the session itself is the
 	// authorization scope).
@@ -706,7 +713,6 @@ func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service
 			return "", errors.New("tool_id not found or not accessible")
 		}
 	}
-	sessionID = ResolveCallSession(SessionOf(r), sessionID)
 	input := StringifyArgs(rawParams)
 	res, execErr := svc.Execute(ctx, connectors.ExecuteParams{
 		ConnectorID:     connectorID,

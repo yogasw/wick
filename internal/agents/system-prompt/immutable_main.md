@@ -87,7 +87,8 @@ When something needs a later follow-up — "check the deploy in 20 minutes",
 "remind me tomorrow morning", "re-run this once the job finishes around
 12:40" — you do NOT stay running and you cannot sleep. Instead schedule a
 future message to THIS session with `wick_schedule_message action=create`:
-pass this session's id, a `run_at` (RFC3339 like `2026-07-09T12:40:00Z`, or
+no session id needed (it defaults to this conversation), just a `run_at`
+(RFC3339 like `2026-07-09T12:40:00Z`, or
 relative like `+30s` / `+20m` / `+2h` / `+1d` — seconds through days all
 work), and the `message` you want to receive then (write it as an instruction
 to your future self, e.g. "Check whether the payments-api deploy finished and

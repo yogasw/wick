@@ -4,6 +4,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
@@ -92,5 +93,34 @@ func TestSessionInstanceResolvesWithNoArgument(t *testing.T) {
 	}
 	if target.BaseKey != "httprest" {
 		t.Fatalf("wrong target: %+v", target)
+	}
+}
+
+// A BATCH entry carries its own session_id, and the entry that omits it
+// used to reach the session-instance lookup with an empty string — so a
+// batch call to this session's own sw_ connector failed with "session_id
+// is required" while the identical single call worked. The resolution now
+// happens before the lookup; both shapes see the same session.
+//
+// The assertion is on WHICH error comes back: "not found in this session"
+// means the session was resolved and the instance genuinely is not there,
+// where "session_id is required" means it never resolved at all. Both
+// return before the connector service is touched, so this needs no service.
+func TestExecuteResolvesSessionBeforeTheInstanceLookup(t *testing.T) {
+	layout := sessionWith(t, t.TempDir(), "sess-a")
+
+	r := httptest.NewRequest("POST", "/mcp", nil)
+	r = r.WithContext(WithSessionID(r.Context(), "sess-a"))
+
+	_, err := executeOneCtx(r.Context(), r, nil, layout,
+		"conn:sw_does-not-exist/get", nil, "" /* no session_id on the entry */, nil, nil)
+	if err == nil {
+		t.Fatal("expected an error for a missing session instance")
+	}
+	if strings.Contains(err.Error(), "session_id is required") {
+		t.Fatalf("session was not resolved before the lookup: %v", err)
+	}
+	if !strings.Contains(err.Error(), "not found in this session") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

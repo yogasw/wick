@@ -771,7 +771,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"session_id": map[string]any{
 						"type": "string",
-						"description": "action=create: the existing session to deliver into (usually your own — schedule yourself). Mutually exclusive with project_id. " +
+						"description": "action=create: the existing session to deliver into. OMIT IT to schedule THIS conversation — that is the default. Pass it only for another session; mutually exclusive with project_id. " +
 							"action=list: everything RELATED to that session — schedules targeting it, project jobs created from it, project jobs of its project, and schedules whose last fire landed in it. Narrow with target_session_id if you only want the ones that deliver INTO it.",
 					},
 					"target_session_id": map[string]any{
