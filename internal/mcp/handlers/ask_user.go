@@ -58,8 +58,13 @@ func AskUser(
 		rsp.ToolError(w, req.ID, "invalid arguments: "+err.Error(), "ask_user")
 		return
 	}
-	if strings.TrimSpace(in.SessionID) == "" {
-		rsp.ToolError(w, req.ID, "session_id is required", "ask_user")
+	// The prompt has to appear in the conversation the call came from, so
+	// the call's own session wins: a model naming another id would pop a
+	// modal in somebody else's chat and block on an answer nobody there
+	// has the context to give.
+	in.SessionID = ResolveCallSession(SessionOf(r), in.SessionID)
+	if in.SessionID == "" {
+		rsp.ToolError(w, req.ID, "session_id is required (no session on the call)", "ask_user")
 		return
 	}
 	multi := len(in.Questions) > 0

@@ -124,6 +124,11 @@ type ChildSpec struct {
 // TokenIssuer mints and revokes scoped MCP identities.
 type TokenIssuer interface {
 	Issue(userID string, tagIDs []string) (string, error)
+	// IssueForSession is Issue plus the session the token belongs to, so a
+	// child's calls resolve its OWN conversation rather than needing a
+	// header to say so. The child session id exists by the time this is
+	// called (the row carries it), which is what makes it possible.
+	IssueForSession(userID, sessionID string, tagIDs []string, stripAdmin bool) (string, error)
 	Revoke(token string)
 }
 
@@ -564,7 +569,7 @@ func (s *Service) execute(
 	// child would lose its credential the moment this call returned.
 	var token string
 	if s.Tokens != nil && row.TriggeredBy != "" {
-		issued, err := s.Tokens.Issue(row.TriggeredBy, effTags)
+		issued, err := s.Tokens.IssueForSession(row.TriggeredBy, childSessionID, effTags, true)
 		if err != nil {
 			s.finish(ctx, row, entity.DelegationRunning, entity.DelegationFailed, "", "mint scoped token: "+err.Error(), 0)
 			return nil, err

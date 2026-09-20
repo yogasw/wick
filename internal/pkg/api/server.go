@@ -1799,8 +1799,14 @@ func NewServer() *Server {
 		if identity == "" {
 			return "", false
 		}
-		tok, err := mcpScopedTokens.IssueFor(
+		// The session rides in the token as well as in the per-spawn
+		// header. claude sends the header; codex cannot send any header at
+		// all, so without this its calls have no session to resolve and
+		// every session-scoped tool falls back to whatever id the model
+		// remembered to type.
+		tok, err := mcpScopedTokens.IssueForSession(
 			identity,
+			sessionID,
 			authSvc.GetUserFilterTagIDs(context.Background(), identity),
 			false,
 		)

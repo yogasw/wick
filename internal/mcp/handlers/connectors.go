@@ -213,8 +213,8 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 	// caller's session, listed only when a session_id is passed. They
 	// appear like brand-new connectors but live and die with the session.
 	var sessionBases []sessionBaseHint
-	if sid, _ := args["session_id"].(string); strings.TrimSpace(sid) != "" {
-		sessSummaries, sessTools := sessionInstanceSummaries(svc, layout, strings.TrimSpace(sid))
+	if sid := CallSession(r, args); sid != "" {
+		sessSummaries, sessTools := sessionInstanceSummaries(svc, layout, sid)
 		summaries = append(summaries, sessSummaries...)
 		totalTools += sessTools
 		// Connectors that COULD be cloned per-session — surfaced so the
@@ -327,8 +327,8 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 	// Session-workspace instances: matched only when a session_id is
 	// passed, same as wick_list. Without this, searching for a connector
 	// the user spun up for this session returns nothing.
-	if sid, _ := args["session_id"].(string); strings.TrimSpace(sid) != "" {
-		sg, st := sessionInstanceSearch(svc, layout, strings.TrimSpace(sid), needle)
+	if sid := CallSession(r, args); sid != "" {
+		sg, st := sessionInstanceSearch(svc, layout, sid, needle)
 		groups = append(groups, sg...)
 		total += st
 	}
@@ -350,7 +350,7 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 	selector := firstNonEmpty(args, "selector", "category", "op_key")
 	// Session-workspace instance: resolve from the session file and render
 	// the base module's category list / op list / op schema, no DB row involved.
-	if target, ok, err := SessionInstanceFor(layout, args, connectorID); err != nil {
+	if target, ok, err := SessionInstanceForID(layout, CallSession(r, args), connectorID); err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), connectorID)
 		return
 	} else if ok {
@@ -617,7 +617,8 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 }
 
 // callSessionID reads the optional top-level session_id used by single-call
-// mode for session-workspace (sw_) connectors.
+// mode for session-workspace (sw_) connectors. executeOne re-applies the
+// header on top of it, so this stays argument-only.
 func callSessionID(args map[string]any) string {
 	s, _ := args["session_id"].(string)
 	return strings.TrimSpace(s)
@@ -630,9 +631,9 @@ func callSessionID(args map[string]any) string {
 // connector's response body when present.
 // ResolveCallSession picks the session a connector call belongs to.
 //
-// The per-spawn X-Wick-Session-Id header WINS over any session_id the
+// The session resolved from the CALL ITSELF wins over any session_id the
 // model supplied; the argument is only a fallback for transports that
-// set no header.
+// carry no session (stdio, a PAT script).
 //
 // The precedence is an authorization decision, not a convenience. The
 // runtime sets the header and the model cannot forge it, while a
@@ -641,6 +642,41 @@ func callSessionID(args map[string]any) string {
 // session's tree, inherits its identity for tag purposes, and resolves
 // roles in its project scope — so trusting the argument would let a
 // caller name someone else's conversation and operate in it.
+// SessionHeader is the WIRE format for the session a call belongs to.
+// Handlers read SessionOf(r) instead — the header is one of its two
+// inputs, and the weaker one (see session_context.go).
+const SessionHeader = "X-Wick-Session-Id"
+
+// ResolveSessionPreferArg is the other precedence, for tools that MANAGE a
+// session rather than act inside one — reading its context, retitling it,
+// compacting it. There an explicit session_id is a deliberate target (an
+// admin acting on another conversation, already gated by canManageSession),
+// so the argument wins and the call's own session only fills the gap.
+//
+// Keep connector execution on ResolveCallSession: a connector op resolves
+// session-scoped credentials and delegation trees, so a model naming the
+// wrong session there is a misroute, not a choice.
+func ResolveSessionPreferArg(header, argSessionID string) string {
+	if a := strings.TrimSpace(argSessionID); a != "" {
+		return a
+	}
+	return strings.TrimSpace(header)
+}
+
+// CallSession is ResolveCallSession applied to a live request: the
+// session the call itself carries wins, the model's session_id fills the
+// gap. Use it everywhere a call needs to know which session it is running
+// in — every provider now resolves one (the credential names it), so a
+// handler that still reads args["session_id"] alone is silently
+// provider-specific.
+func CallSession(r *http.Request, args map[string]any) string {
+	arg, _ := args["session_id"].(string)
+	if r == nil {
+		return strings.TrimSpace(arg)
+	}
+	return ResolveCallSession(SessionOf(r), arg)
+}
+
 func ResolveCallSession(header, argSessionID string) string {
 	if h := strings.TrimSpace(header); h != "" {
 		return h
@@ -670,7 +706,7 @@ func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service
 			return "", errors.New("tool_id not found or not accessible")
 		}
 	}
-	sessionID = ResolveCallSession(r.Header.Get("X-Wick-Session-Id"), sessionID)
+	sessionID = ResolveCallSession(SessionOf(r), sessionID)
 	input := StringifyArgs(rawParams)
 	res, execErr := svc.Execute(ctx, connectors.ExecuteParams{
 		ConnectorID:     connectorID,

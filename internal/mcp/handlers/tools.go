@@ -387,8 +387,8 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"two libraries, confirming a destructive change). The user sees an inline card with optional " +
 				"choices and an optional freeform field; their answer is returned as JSON {\"value\":\"...\",\"text\":\"...\"}. " +
 				"Default timeout is 5 minutes; on timeout the tool returns an error and you should choose a sensible " +
-				"default rather than retrying immediately. session_id is required and must match the active wick agent " +
-				"session — pass the value the user mentioned or that you saw in the conversation context. " +
+				"default rather than retrying immediately. session_id is optional — the question is delivered to the " +
+				"session the call came from, which wick resolves for you. " +
 				"This tool may also return an error 'blocked by gate policy' when the operator disabled ask_user " +
 				"for the current channel (e.g. Slack/HTTP runs where no human can answer); on that error, pick a " +
 				"sensible default and proceed without retrying.",
@@ -397,7 +397,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"properties": map[string]any{
 					"session_id": map[string]any{
 						"type":        "string",
-						"description": "ID of the active wick agent session this question belongs to.",
+						"description": "Optional and normally omitted — the question always goes to the session the call came from.",
 					},
 					"agent_name": map[string]any{
 						"type":        "string",
@@ -473,7 +473,9 @@ func MetaToolDescriptors() []ToolDescriptor {
 						},
 					},
 				},
-				"required": []string{"session_id"},
+				// No "required": the session comes from the call itself (header,
+				// or the bearer's own grant). An explicit session_id is ignored
+				// here anyway — the question must land in THIS conversation.
 			},
 			Annotations: &ToolAnnotation{
 				Title:        "Ask the human operator",
@@ -506,7 +508,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"session_id": map[string]any{
 						"type":        "string",
-						"description": "ID of the active wick agent session the instance is scoped to. Required for every action.",
+						"description": "Optional. The session is resolved from the call itself inside a wick agent; pass this only from an external client that has no session.",
 					},
 					"base_key": map[string]any{
 						"type":        "string",
@@ -546,7 +548,9 @@ func MetaToolDescriptors() []ToolDescriptor {
 						"description": "action=add/configure: short text shown to the user explaining what the connector is for.",
 					},
 				},
-				"required": []string{"action", "session_id"},
+				// session_id is NOT required: a session workspace belongs to the
+				// calling session, which the call already carries.
+				"required": []string{"action"},
 			},
 			Annotations: &ToolAnnotation{
 				Title:        "Session workspace",
@@ -638,17 +642,16 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"Call this at the start of a conversation to decide whether to set a " +
 				"title: if title_custom is false, derive a short title from the user's " +
 				"request and call wick_set_title; if it is already true, leave it alone. " +
-				"session_id must match the active wick agent session — pass the value " +
-				"you saw in the conversation context.",
+				"session_id is optional: inside a wick agent the session is resolved " +
+				"from the call itself. Pass it only to read ANOTHER session you own.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"session_id": map[string]any{
 						"type":        "string",
-						"description": "ID of the active wick agent session.",
+						"description": "Optional. Another session to read (you must own it, or be an admin). Omit for the current one.",
 					},
 				},
-				"required": []string{"session_id"},
 			},
 			Annotations: &ToolAnnotation{
 				Title:        "Read session info",
@@ -665,21 +668,21 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"title_custom is already true. " +
 				"Keep titles short (a few words, max 60 chars), summarising what the " +
 				"conversation is about (e.g. 'Fix Slack webhook 401', 'Weekly product sync'). " +
-				"session_id must match the active wick agent session — pass the value you " +
-				"saw in the conversation context.",
+				"session_id is optional: inside a wick agent the session is resolved " +
+				"from the call itself. Pass it only to retitle ANOTHER session you own.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"session_id": map[string]any{
 						"type":        "string",
-						"description": "ID of the active wick agent session.",
+						"description": "Optional. Another session to retitle (you must own it, or be an admin). Omit for the current one.",
 					},
 					"title": map[string]any{
 						"type":        "string",
 						"description": "Short human-readable title. Truncated to 60 runes.",
 					},
 				},
-				"required": []string{"session_id", "title"},
+				"required": []string{"title"},
 			},
 			Annotations: &ToolAnnotation{
 				Title:           "Set session title",

@@ -21,7 +21,7 @@ import (
 //	goal_done     — mark latch done (releases wick force-continue)
 //	goal_abandon  — mark latch abandoned
 //
-// Goal writes need a session id (X-Wick-Session-Id header or session_id
+// Goal writes need a session id (resolved from the call, or session_id
 // arg) + layout. Missing either → checklist still works; goal fields
 // return a clear error so the model knows why the latch didn't stick.
 func WickTodo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, layout agentconfig.Layout, args map[string]any) {
@@ -228,7 +228,7 @@ func resolveTodoSession(r *http.Request, arg string) string {
 		return sid
 	}
 	if r != nil {
-		return strings.TrimSpace(r.Header.Get("X-Wick-Session-Id"))
+		return SessionOf(r)
 	}
 	return ""
 }
