@@ -54,7 +54,11 @@
   let error = $state<string | null>(null);
   let loading = $state(true);
   let progress = $state({ done: 0, total: 0 });
-  let range = $state<Range>(30);
+  /* Today by default. The page reads every session on disk for the range
+     it is given, so a month is the slowest possible first paint — and
+     "what is happening now" is the question people open it with. A wider
+     window is one click away; the wait for it is not. */
+  let range = $state<Range>(1);
   let customFrom = $state("");
   let customTo = $state("");
   /** Channels the whole page is restricted to. Empty = all of them. */
