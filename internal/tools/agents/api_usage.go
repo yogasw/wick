@@ -43,11 +43,15 @@ func usageLedger() *usagereport.Builder {
 
 // scopeFromQuery reads the channel filter off the query, in the same
 // shape the analytics page sends it.
+//
+// Channels only. This mount resolves sessions with the ledger's default
+// reader, which knows a session's origin but not WHICH bot of that
+// channel served it — so an instance filter here would match nothing and
+// return an empty report that looks like a real answer. Instance
+// filtering lives where the instance is known (the admin analytics page,
+// which supplies its own resolver).
 func scopeFromQuery(c *tool.Ctx) usagereport.Scope {
-	return usagereport.Scope{
-		Channels:  splitCSV(c.Query("channels")),
-		Instances: splitCSV(c.Query("instances")),
-	}
+	return usagereport.Scope{Channels: splitCSV(c.Query("channels"))}
 }
 
 func splitCSV(raw string) []string {

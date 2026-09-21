@@ -152,7 +152,12 @@ const partialNote = "Some sessions ran more turns than their per-turn trail keep
 // that honoured it, and the two would disagree without either being
 // wrong — the worst kind of dashboard bug, because nothing looks broken.
 type Scope struct {
-	Channels  []string
+	Channels []string
+	// Instances narrows to specific bots ("slack:<owner id>"). It only
+	// means anything when the Builder's Tags resolver fills
+	// SessionTags.Instance — the default one cannot, so a caller using it
+	// must leave this empty rather than get an empty report that reads
+	// like a real answer.
 	Instances []string
 }
 

@@ -150,6 +150,16 @@ func TestScopedTokenHandoffKeepsSession(t *testing.T) {
 	if n := in.LoadHandoff(dir); n != 1 {
 		t.Fatalf("load: n=%d", n)
 	}
+	// The identity half has to survive the same trip: a grant that comes
+	// back naming the right session but the wrong user (or with its tags
+	// dropped) would hand an agent someone else's reach, and the session
+	// assertion below would still pass.
+	if user, tags, ok := in.Lookup(tok); !ok || user != "user-1" || len(tags) != 1 || tags[0] != "a" {
+		t.Fatalf("identity after handoff = %q %v ok=%v, want user-1 [a]", user, tags, ok)
+	}
+	if _, _, stripAdmin, ok := in.LookupGrant(tok); !ok || stripAdmin {
+		t.Fatalf("grant after handoff: stripAdmin=%v ok=%v, want false+ok", stripAdmin, ok)
+	}
 	if sid, ok := in.LookupSession(tok); !ok || sid != "sess-abc" {
 		t.Fatalf("after handoff: sid=%q ok=%v, want sess-abc", sid, ok)
 	}

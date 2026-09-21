@@ -338,3 +338,21 @@ func TestWickUsage_AccountCarriesNoEmail(t *testing.T) {
 		t.Fatalf("no email belongs in this reply: %s", got.Content[0].Text)
 	}
 }
+
+// A session_id that is present but not a string is a different mistake
+// from a missing one. Answering "required" to it sends the caller
+// looking for a value they already sent.
+func TestResolveManagedSession_RejectsANonStringSessionID(t *testing.T) {
+	layout := usageFixture(t, "sess-abc")
+	r := httptest.NewRequest("POST", "/mcp", nil)
+
+	var got ToolCallResult
+	WickUsage(httptest.NewRecorder(), r, RPCRequest{}, captureResponder(t, &got), layout, nil,
+		map[string]any{"session_id": float64(42)})
+	if !got.IsError {
+		t.Fatal("a numeric session_id should be refused")
+	}
+	if !strings.Contains(got.Content[0].Text, "must be a string") {
+		t.Fatalf("error = %q, want it to name the type mistake", got.Content[0].Text)
+	}
+}

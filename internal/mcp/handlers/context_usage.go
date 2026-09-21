@@ -60,7 +60,14 @@ type providerUsageOut struct {
 // caller may see it. An explicit id wins (that is how you ask about another
 // run); otherwise the call's own session answers.
 func resolveManagedSession(r *http.Request, layout agentconfig.Layout, args map[string]any, tool string) (session.Session, string, bool, string) {
-	raw, _ := args["session_id"].(string)
+	// A session_id that is present but not a string is a different
+	// mistake from one that is missing, and answering "required" to it
+	// sends the caller looking for a value they already sent.
+	raw, ok := args["session_id"].(string)
+	if !ok && args["session_id"] != nil {
+		return session.Session{}, "", false,
+			fmt.Sprintf("session_id must be a string, got %T", args["session_id"])
+	}
 	id := ResolveSessionPreferArg(SessionOf(r), raw)
 	if id == "" {
 		return session.Session{}, "", false, "session_id is required (no session on the call)"

@@ -100,6 +100,12 @@ func (s Spawner) spawnCompact(ctx context.Context, opt provider.SpawnOptions, bi
 	}
 	pr, pw := io.Pipe()
 	p := &compactProcess{cmd: cmd, out: pr, done: make(chan error, 1), bin: realBin, args: realArgs}
+	// Best effort, and the error is deliberately dropped: this is only a
+	// FALLBACK level for the case where compaction reports none itself. A
+	// rollout that cannot be read (first turn, pruned file, codex writing
+	// it right now) leaves 0, which the caller already treats as "no
+	// pre-level known" — failing the compaction over it would trade a
+	// missing number for a broken feature.
 	preFallback, _ := event.CodexContextLevel(codexHomeFromEnv(cmd.Env), opt.ResumeID)
 	go func() {
 		err := runCompactRPC(ctx, stdin, stdout, pw, opt.ResumeID, preFallback)
