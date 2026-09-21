@@ -21,12 +21,12 @@ import (
 // session — so a tool that accepted one would let anybody with a shell on
 // this host mint a credential for somebody else's conversation. The only
 // session this can mint for is the one the call arrives from, which the
-// per-spawn X-Wick-Session-Id header establishes and the caller cannot
-// forge: it is set by the process that spawned the agent.
+// call itself establishes and the caller cannot forge: it comes from the
+// credential the spawn was given (see internal/mcp/auth.go).
 func WickCLIToken(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, layout agentconfig.Layout, args map[string]any) {
 	const tool = "wick_cli_token"
 
-	sessionID := ResolveCallSession(r.Header.Get("X-Wick-Session-Id"), "")
+	sessionID := SessionOf(r)
 	if sessionID == "" {
 		rsp.ToolError(w, req.ID, "this tool only works inside an agent session (no session on the call)", tool)
 		return

@@ -64,9 +64,12 @@ func WickSessionWorkspace(
 	tagIDs []string,
 ) {
 	action := strings.TrimSpace(argString(args, "action"))
-	sessionID := strings.TrimSpace(argString(args, "session_id"))
+	// A workspace connector lives INSIDE one session and holds that
+	// session's own credentials, so the call's own session wins over any
+	// id the model typed — see ResolveCallSession.
+	sessionID := ResolveCallSession(SessionOf(r), argString(args, "session_id"))
 	if sessionID == "" {
-		rsp.ToolError(w, req.ID, "session_id is required", sessionWorkspaceToolName)
+		rsp.ToolError(w, req.ID, "session_id is required (no session on the call)", sessionWorkspaceToolName)
 		return
 	}
 	// Validate the session id refers to a real session (and reject

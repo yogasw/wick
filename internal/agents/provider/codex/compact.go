@@ -8,11 +8,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/yogasw/wick/internal/agents/event"
 	provider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/procgroup"
 	"github.com/yogasw/wick/pkg/safeexec"
@@ -98,8 +100,15 @@ func (s Spawner) spawnCompact(ctx context.Context, opt provider.SpawnOptions, bi
 	}
 	pr, pw := io.Pipe()
 	p := &compactProcess{cmd: cmd, out: pr, done: make(chan error, 1), bin: realBin, args: realArgs}
+	// Best effort, and the error is deliberately dropped: this is only a
+	// FALLBACK level for the case where compaction reports none itself. A
+	// rollout that cannot be read (first turn, pruned file, codex writing
+	// it right now) leaves 0, which the caller already treats as "no
+	// pre-level known" — failing the compaction over it would trade a
+	// missing number for a broken feature.
+	preFallback, _ := event.CodexContextLevel(codexHomeFromEnv(cmd.Env), opt.ResumeID)
 	go func() {
-		err := runCompactRPC(ctx, stdin, stdout, pw, opt.ResumeID)
+		err := runCompactRPC(ctx, stdin, stdout, pw, opt.ResumeID, preFallback)
 		_ = stdin.Close()
 		// app-server is long-lived. Once compaction has completed, stopping it is
 		// intentional and its resulting "signal: killed" is not a turn failure.
@@ -111,7 +120,31 @@ func (s Spawner) spawnCompact(ctx context.Context, opt provider.SpawnOptions, bi
 	return p, nil
 }
 
-func runCompactRPC(ctx context.Context, in io.Writer, out io.Reader, translated io.Writer, threadID string) error {
+// codexHomeFromEnv picks the CODEX_HOME this spawn runs with out of its
+// environment, empty when the default applies. Last assignment wins,
+// matching exec's own precedence.
+func codexHomeFromEnv(env []string) string {
+	home := ""
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "CODEX_HOME="); ok {
+			home = v
+		}
+	}
+	return home
+}
+
+// runCompactRPC drives one manual compaction over app-server's stdio
+// protocol: resume the thread, ask for the compaction, translate the
+// result into the one event the rest of wick understands.
+//
+// preFallback is the "before" token count to report when app-server
+// never volunteers one. codex 0.145 emits thread/tokenUsage/updated as
+// part of resuming, 0.149 only emits it once a turn is running — so
+// waiting for that number before asking for the compaction hangs the
+// whole turn on 0.149 (nothing is ever sent, no event is ever emitted,
+// and the spawn dies on wick's timeout). The request goes out as soon as
+// the thread is resumed; the number is a label, not a precondition.
+func runCompactRPC(ctx context.Context, in io.Writer, out io.Reader, translated io.Writer, threadID string, preFallback int) error {
 	enc := json.NewEncoder(in)
 	send := func(v any) error { return enc.Encode(v) }
 	if err := send(map[string]any{"method": "initialize", "id": 1, "params": map[string]any{"clientInfo": map[string]string{"name": "wick", "title": "Wick", "version": "1"}, "capabilities": map[string]bool{"experimentalApi": true}}}); err != nil {
@@ -149,8 +182,19 @@ func runCompactRPC(ctx context.Context, in io.Writer, out io.Reader, translated 
 		}
 		if m.ID == 2 {
 			resumed = true
+			// Compaction itself emits nothing for as long as it runs, and
+			// a spawn that has published no event at all still counts as
+			// "spawning" — which wick kills on a timeout. Reporting the
+			// thread we just resumed moves the session to working, so a
+			// slow compaction is waited for instead of cut off.
+			if _, err := fmt.Fprintf(translated, "{\"type\":\"thread.started\",\"thread_id\":%q}\n", threadID); err != nil {
+				return fmt.Errorf("write thread start: %w", err)
+			}
 		}
-		if resumed && pre > 0 && !compactSent {
+		if resumed && !compactSent {
+			if pre == 0 {
+				pre = preFallback
+			}
 			if err := send(map[string]any{"method": "thread/compact/start", "id": 3, "params": map[string]string{"threadId": threadID}}); err != nil {
 				return err
 			}

@@ -109,9 +109,19 @@ func scheduleCreate(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp 
 	// Target: session-scoped (nudge one session) or project-scoped (mint or
 	// reuse a session per fire). The mode is inferred when the caller only
 	// names one of session_id / project_id.
+	// "Check back in 20 minutes" is the common case and it means THIS
+	// conversation, so a create that names neither target defaults to the
+	// session the call came from. Naming one still works — scheduling into
+	// another session, or a project job — and stays gated by
+	// scheduleAuthorizeTarget below.
+	targetSession := argString(args, "session_id")
+	targetProject := argString(args, "project_id")
+	if strings.TrimSpace(targetSession) == "" && strings.TrimSpace(targetProject) == "" {
+		targetSession = SessionOf(r)
+	}
 	target := schedule.NormalizeTargetSpec(schedule.TargetSpec{
-		SessionID: argString(args, "session_id"),
-		ProjectID: argString(args, "project_id"),
+		SessionID: targetSession,
+		ProjectID: targetProject,
 		Mode:      argString(args, "session_mode"),
 		Template:  argString(args, "session_template"),
 	})

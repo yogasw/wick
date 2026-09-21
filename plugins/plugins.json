@@ -3,7 +3,7 @@
     "key": "bitbucket",
     "name": "Bitbucket",
     "description": "Search repositories, inspect commits and pull requests, and create branch/commit/PR changes in Bitbucket Cloud.",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "default_tags": [
       {
         "Name": "Connector",
@@ -23,15 +23,15 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.2.0/bitbucket-0.2.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.2.0/bitbucket-0.2.0-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.2.1/bitbucket-0.2.1-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.2.1/bitbucket-0.2.1-linux-arm64.zip"
     }
   },
   {
     "key": "git",
     "name": "Git CLI",
     "description": "Run git against local repositories, with a policy that can refuse a branch name, a commit message, a push to a protected branch, or a force push. Rules DIFFER PER REPOSITORY. Call policy_show for the repository first and comply with what it returns — every other operation reports a refusal only after the fact, one rule at a time. Wraps the git binary, so it works with any host.",
-    "version": "0.3.3",
+    "version": "0.3.4",
     "default_tags": [
       {
         "Name": "Connector",
@@ -51,15 +51,15 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/git/v0.3.3/git-0.3.3-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/git/v0.3.3/git-0.3.3-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/git/v0.3.4/git-0.3.4-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/git/v0.3.4/git-0.3.4-linux-arm64.zip"
     }
   },
   {
     "key": "github",
     "name": "GitHub",
     "description": "Comprehensive GitHub REST API connector: repos, issues, PRs (incl. diff/merge), releases, tags, forks, stars, file contents/edits, the authenticated user, and a token health check.",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "default_tags": [
       {
         "Name": "Connector",
@@ -79,15 +79,15 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/github/v0.2.0/github-0.2.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/github/v0.2.0/github-0.2.0-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/github/v0.2.1/github-0.2.1-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/github/v0.2.1/github-0.2.1-linux-arm64.zip"
     }
   },
   {
     "key": "google_workspace",
     "name": "Google Workspace",
     "description": "Manage Drive files, Sheets data, Docs content, and Slides; read, send, and label Gmail; manage Calendar events with Meet links; and read Meet recordings and transcripts — all with one Google OAuth account.",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "default_tags": [
       {
         "Name": "Connector",
@@ -107,14 +107,126 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/google_workspace/v0.2.0/google_workspace-0.2.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/google_workspace/v0.2.0/google_workspace-0.2.0-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/google_workspace/v0.2.1/google_workspace-0.2.1-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/google_workspace/v0.2.1/google_workspace-0.2.1-linux-arm64.zip"
     }
   },
   {
     "key": "httpbin",
     "name": "HTTPBin",
     "description": "Sample connector hitting httpbin.org — GET, POST, and status-code echo. No credentials needed.",
+    "version": "0.1.2",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "API",
+        "Description": "Build, mock, and inspect HTTP APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 30
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/httpbin/v0.1.2/httpbin-0.1.2-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/httpbin/v0.1.2/httpbin-0.1.2-linux-arm64.zip"
+    }
+  },
+  {
+    "key": "loki",
+    "name": "Loki",
+    "description": "Query logs and discover labels in a Grafana Loki instance via LogQL.",
+    "version": "0.3.1",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "Observability",
+        "Description": "Logging, metrics, and tracing connectors.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 53
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/loki/v0.3.1/loki-0.3.1-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/loki/v0.3.1/loki-0.3.1-linux-arm64.zip"
+    }
+  },
+  {
+    "key": "notion",
+    "name": "Notion",
+    "description": "Read and write Notion pages, databases, and comments via the official REST API with a bot token. Fetch returns MCP-style markdown.",
+    "version": "0.2.1",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "Productivity",
+        "Description": "Docs, wikis, and knowledge-base connectors.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 55
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/notion/v0.2.1/notion-0.2.1-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/notion/v0.2.1/notion-0.2.1-linux-arm64.zip"
+    }
+  },
+  {
+    "key": "notion_unofficial",
+    "name": "Notion (Unofficial)",
+    "description": "Read and edit Notion pages and databases via the private web API using a token_v2 cookie. Fetch returns rich markdown; write ops append content and edit or delete individual blocks in place (list_blocks → update_block/delete_block) without rewriting the whole page.",
+    "version": "0.5.1",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "Productivity",
+        "Description": "Docs, wikis, and knowledge-base connectors.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 55
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.5.1/notion_unofficial-0.5.1-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.5.1/notion_unofficial-0.5.1-linux-arm64.zip"
+    }
+  },
+  {
+    "key": "phoenix",
+    "name": "Phoenix",
+    "description": "Debug LLM behaviour in Arize Phoenix: list LLM spans by room or app_id and inspect a single span's prompt, messages, tool calls, and token usage. Read-only.",
     "version": "0.1.1",
     "default_tags": [
       {
@@ -126,34 +238,6 @@
         "SortOrder": 50
       },
       {
-        "Name": "API",
-        "Description": "Build, mock, and inspect HTTP APIs.",
-        "IsGroup": true,
-        "IsFilter": false,
-        "IsSystem": false,
-        "SortOrder": 30
-      }
-    ],
-    "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/httpbin/v0.1.1/httpbin-0.1.1-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/httpbin/v0.1.1/httpbin-0.1.1-linux-arm64.zip"
-    }
-  },
-  {
-    "key": "loki",
-    "name": "Loki",
-    "description": "Query logs and discover labels in a Grafana Loki instance via LogQL.",
-    "version": "0.3.0",
-    "default_tags": [
-      {
-        "Name": "Connector",
-        "Description": "LLM-callable connectors that wrap external APIs.",
-        "IsGroup": true,
-        "IsFilter": false,
-        "IsSystem": false,
-        "SortOrder": 50
-      },
-      {
         "Name": "Observability",
         "Description": "Logging, metrics, and tracing connectors.",
         "IsGroup": true,
@@ -163,99 +247,15 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/loki/v0.3.0/loki-0.3.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/loki/v0.3.0/loki-0.3.0-linux-arm64.zip"
-    }
-  },
-  {
-    "key": "notion",
-    "name": "Notion",
-    "description": "Read and write Notion pages, databases, and comments via the official REST API with a bot token. Fetch returns MCP-style markdown.",
-    "version": "0.2.0",
-    "default_tags": [
-      {
-        "Name": "Connector",
-        "Description": "LLM-callable connectors that wrap external APIs.",
-        "IsGroup": true,
-        "IsFilter": false,
-        "IsSystem": false,
-        "SortOrder": 50
-      },
-      {
-        "Name": "Productivity",
-        "Description": "Docs, wikis, and knowledge-base connectors.",
-        "IsGroup": true,
-        "IsFilter": false,
-        "IsSystem": false,
-        "SortOrder": 55
-      }
-    ],
-    "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/notion/v0.2.0/notion-0.2.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/notion/v0.2.0/notion-0.2.0-linux-arm64.zip"
-    }
-  },
-  {
-    "key": "notion_unofficial",
-    "name": "Notion (Unofficial)",
-    "description": "Read and edit Notion pages and databases via the private web API using a token_v2 cookie. Fetch returns rich markdown; write ops append content and edit or delete individual blocks in place (list_blocks → update_block/delete_block) without rewriting the whole page.",
-    "version": "0.5.0",
-    "default_tags": [
-      {
-        "Name": "Connector",
-        "Description": "LLM-callable connectors that wrap external APIs.",
-        "IsGroup": true,
-        "IsFilter": false,
-        "IsSystem": false,
-        "SortOrder": 50
-      },
-      {
-        "Name": "Productivity",
-        "Description": "Docs, wikis, and knowledge-base connectors.",
-        "IsGroup": true,
-        "IsFilter": false,
-        "IsSystem": false,
-        "SortOrder": 55
-      }
-    ],
-    "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.5.0/notion_unofficial-0.5.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.5.0/notion_unofficial-0.5.0-linux-arm64.zip"
-    }
-  },
-  {
-    "key": "phoenix",
-    "name": "Phoenix",
-    "description": "Debug LLM behaviour in Arize Phoenix: list LLM spans by room or app_id and inspect a single span's prompt, messages, tool calls, and token usage. Read-only.",
-    "version": "0.1.0",
-    "default_tags": [
-      {
-        "Name": "Connector",
-        "Description": "LLM-callable connectors that wrap external APIs.",
-        "IsGroup": true,
-        "IsFilter": false,
-        "IsSystem": false,
-        "SortOrder": 50
-      },
-      {
-        "Name": "Observability",
-        "Description": "Logging, metrics, and tracing connectors.",
-        "IsGroup": true,
-        "IsFilter": false,
-        "IsSystem": false,
-        "SortOrder": 53
-      }
-    ],
-    "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/phoenix/v0.1.0/phoenix-0.1.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/phoenix/v0.1.0/phoenix-0.1.0-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/phoenix/v0.1.1/phoenix-0.1.1-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/phoenix/v0.1.1/phoenix-0.1.1-linux-arm64.zip"
     }
   },
   {
     "key": "playwright_browser",
     "name": "Playwright Browser",
     "description": "Drive a real browser (Chromium/Firefox/WebKit) to screenshot, scrape, render PDFs, evaluate JS, and run scripted interaction flows. Runs an isolated browser per call inside the plugin process.",
-    "version": "0.12.0",
+    "version": "0.12.1",
     "default_tags": [
       {
         "Name": "Connector",
@@ -275,8 +275,8 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.12.0/playwright_browser-0.12.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.12.0/playwright_browser-0.12.0-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.12.1/playwright_browser-0.12.1-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.12.1/playwright_browser-0.12.1-linux-arm64.zip"
     }
   }
 ]

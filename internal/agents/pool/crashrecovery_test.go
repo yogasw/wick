@@ -98,7 +98,7 @@ func TestClearCrashes(t *testing.T) {
 // notice has to say what happened AND what to do, or the agent either
 // goes silent or starts the task over.
 func TestCrashNotice_TellsTheAgentWhatToDo(t *testing.T) {
-	got := crashNotice("exit status 137", 1, false)
+	got := crashNotice("exit status 137", 1)
 
 	low := strings.ToLower(got)
 	for _, want := range []string{"restarted", "exit status 137"} {
@@ -113,16 +113,56 @@ func TestCrashNotice_TellsTheAgentWhatToDo(t *testing.T) {
 }
 
 // Once the cap is reached the message must change: promising another
-// restart that will not come would leave the agent waiting.
-func TestCrashNotice_GiveUpIsDifferent(t *testing.T) {
-	retry := crashNotice("signal: killed", 1, false)
-	final := crashNotice("signal: killed", 3, true)
+// restart that will not come would leave the agent waiting. The halt
+// notice is also read by a PERSON — the agent is not coming back to read
+// it — so it has to name the likely cause and the action that resumes
+// work, not just report the count.
+func TestHaltNotice_TellsThePersonWhatToDo(t *testing.T) {
+	retry := crashNotice("signal: killed", 1)
+	final := haltNotice("signal: killed", 3)
 
 	if retry == final {
-		t.Fatal("the give-up notice is identical to the retry notice")
+		t.Fatal("the halt notice is identical to the retry notice")
 	}
-	if !strings.Contains(strings.ToLower(final), "not restarted again") {
-		t.Fatalf("give-up notice %q does not say restarting has stopped", final)
+	low := strings.ToLower(final)
+	if !strings.Contains(low, "not restarted again") {
+		t.Fatalf("halt notice %q does not say restarting has stopped", final)
+	}
+	if !strings.Contains(low, "config") {
+		t.Fatalf("halt notice %q does not point at the usual cause (a broken config)", final)
+	}
+	if !strings.Contains(low, "send a message") {
+		t.Fatalf("halt notice %q does not say what resumes work", final)
+	}
+	if !strings.Contains(final, "signal: killed") {
+		t.Fatalf("halt notice %q dropped the exit reason", final)
+	}
+}
+
+// The halt is announced once, not once per crash. The process keeps dying
+// for as long as the cause stays broken, and every death re-enters
+// recoverFromExit — without the latch each one would append another
+// identical notice to the transcript.
+func TestMarkHalted_OnlyTheFirstCallAnnounces(t *testing.T) {
+	p := &Pool{}
+	now := time.Unix(1_700_000_000, 0)
+	p.noteCrashLocked("s/a", now)
+
+	if !p.markHaltedLocked("s/a") {
+		t.Fatal("the first halt did not claim the announcement")
+	}
+	for i := 0; i < 5; i++ {
+		if p.markHaltedLocked("s/a") {
+			t.Fatal("a later crash announced the halt a second time")
+		}
+	}
+
+	// A human intervening clears the history, so a genuine crash after the
+	// fix gets its full budget — and its own announcement — back.
+	p.clearCrashesLocked("s/a")
+	p.noteCrashLocked("s/a", now)
+	if !p.markHaltedLocked("s/a") {
+		t.Fatal("after the history was cleared the halt could not be announced again")
 	}
 }
 

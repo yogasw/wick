@@ -260,6 +260,8 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	// Admin-only — it names every account and what they touched.
 	mux.Handle("GET /admin/analytics", admin(h.analyticsPage))
 	mux.Handle("GET /admin/analytics/users.json", admin(h.analyticsUsersJSON))
+	// The token ledger, same report the providers page reads.
+	mux.Handle("GET /admin/analytics/ledger/", admin(h.analyticsLedgerJSON))
 	mux.Handle("GET "+spaAssetBase, admin(h.spaAssetHandler))
 
 	mux.Handle("GET /admin/tags", admin(h.tagsPage))

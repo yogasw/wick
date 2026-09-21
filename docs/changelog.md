@@ -10,6 +10,42 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.12.0](https://github.com/yogasw/wick/compare/v1.11.1...v1.12.0) — MCP & Agents
+
+_Released on 2026-09-21_
+
+### Added
+
+*   **Agent Session Resolution from Credential**: Agent tool calls now resolve the session ID from the MCP grant credential instead of relying on the `X-Wick-Session-Id` header. This change makes `session_id` optional for most session-scoped tools, simplifies agent prompts, and ensures correct session context for sub-agents.
+*   **Agent Context Tools**:
+    *   Sub-agents now correctly apply role-based tag narrowing to their grants.
+    *   Introduced `wick_context` and `wick_usage` tools, allowing agents to monitor their own context window fullness and token spend.
+    *   The `wick_compact` tool now queues compaction requests, providing a clear "queued" response.
+*   **Enhanced Usage Reporting**:
+    *   The token ledger and usage reports now support multiple ranges (Today, 7d, 30d, 90d, All Time), counted in calendar days in the server's timezone.
+    *   "Used in" rows in reports now provide detailed conversation, owner, project, spend, and last run information.
+    *   The `wick_usage` tool now provides comprehensive account details, including plan, organization, authentication method, rate-limit windows, and reset times, and reports failed probes as errors rather than empty accounts.
+*   **Detailed Context Sparkline**:
+    *   The context sparkline now includes hoverable details showing turn, level, share of window, and timestamp.
+    *   Hovered points also display the token difference from the previous turn and the cumulative session spend, with cumulative figures accurately calculated backward from the provider's total.
+*   **Centralized Analytics Filtering**: The Token Usage card in analytics now respects the main page's date, channel, and instance filters, removing redundant range controls. The analytics page now defaults to "Today" for faster loading and immediate current usage insights.
+
+### Fixed
+
+*   **Documentation Link**: Corrected a broken documentation handover link.
+*   **Codex `/compact` on Resume**: Resolved an issue where Codex `/compact` commands were not being sent on thread resume in newer Codex versions, preventing UI compaction. Requests now send immediately upon resume, and `thread.started` is published to prevent Wick timeouts.
+*   **MCP Session Resolution for Tools**: Ensured `wick_execute` in batch mode and `wick_schedule_message` correctly default to the calling session, making `session_id` optional for these tools.
+*   **Front-End UI Issues**:
+    *   Regenerated the CSS bundle to fix UI layout issues, such as the context panel grid.
+    *   Added a dismiss button for the commit hover card on touch interfaces.
+    *   Ensured consistent spacing between cards on provider pages.
+*   **Security & Validation Improvements**: Improved `session_id` validation to explicitly report non-string inputs. Enhanced handoff tests to verify identity and tag grants. Removed instance filtering from the providers mount where it was not supported.
+*   **Provider Crash-Recovery Loop**: Prevented an infinite crash-recovery loop for failing provider processes (e.g., due to invalid configuration). Halt notifications are now sent once via a buffered system turn without restarting the process and are directed to the user with actionable advice on how to resume work.
+*   **Admin UI Tag Picker**: Corrected an administrative UI issue where long tag names would overflow the tag picker, obscuring and preventing interaction with "Save" and settings buttons. Tags now truncate correctly within the picker.
+
+---
+
+
 ## [v1.11.1](https://github.com/yogasw/wick/compare/v1.11.0...v1.11.1) — Termux & Codex
 
 _Released on 2026-09-19_

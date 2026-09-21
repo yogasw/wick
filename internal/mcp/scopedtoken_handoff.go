@@ -29,6 +29,10 @@ type persistedGrant struct {
 	TagIDs     []string  `json:"tag_ids"`
 	Expires    time.Time `json:"expires"`
 	StripAdmin bool      `json:"strip_admin"`
+	// SessionID travels too: a grant that forgot its session across a
+	// handover would send the agent back to passing session_id by hand
+	// for the rest of its run.
+	SessionID string `json:"session_id,omitempty"`
 }
 
 func handoffPath(dir string) string { return filepath.Join(dir, handoffFileName) }
@@ -53,6 +57,7 @@ func (s *ScopedTokens) SaveHandoff(dir string) (int, error) {
 			TagIDs:     g.tagIDs,
 			Expires:    g.expires,
 			StripAdmin: g.stripAdmin,
+			SessionID:  g.sessionID,
 		})
 	}
 	s.mu.Unlock()
@@ -113,6 +118,7 @@ func (s *ScopedTokens) LoadHandoff(dir string) int {
 			tagIDs:     g.TagIDs,
 			expires:    g.Expires,
 			stripAdmin: g.StripAdmin,
+			sessionID:  g.SessionID,
 		}
 		n++
 	}

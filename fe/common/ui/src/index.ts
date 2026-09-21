@@ -43,3 +43,21 @@ export type { ConfigField } from "./config-types.js";
 export { dropdownOptions, isVisible, isToggle } from "./config-types.js";
 export type { ModelCaps, CapabilityDisplayMode } from "./capability-types.js";
 export { CAP_DESCRIPTORS, capDescriptor, fmtTokens, hasAnyCaps } from "./capability-types.js";
+export { default as UsageReport } from "./UsageReport.svelte";
+export {
+  compactTokens,
+  formatCost,
+  exact,
+  sinceText,
+  fetchUsageReport,
+  fetchProviderUsage,
+  EMPTY_TOTALS,
+} from "./usageReport.js";
+export type {
+  UsageReport as UsageReportData,
+  UsageSlice,
+  UsageTotals,
+  SessionUse,
+  WindowOption,
+  ProviderUsageDetail,
+} from "./usageReport.js";

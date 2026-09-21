@@ -103,22 +103,31 @@ you genuinely have no token. Do NOT invent or guess credential values — if
 you don't have them and there's no modal, tell the user what's missing.
 
 `wick_list` already tells you which connectors can be cloned: its
-`session_config_bases` field (present when you pass `session_id`) lists
+`session_config_bases` field lists
 each `{base_key, label}` that supports per-session config. So if a user
 asks for a connector that isn't in the active list but IS in
 `session_config_bases`, don't say it doesn't exist — tell them it can be
 set up for this session and offer to `action=add` it. (`action=list` on
 the tool returns the same `available_bases` if you need to re-check.)
 
-**ALWAYS pass `session_id` to `wick_list`, `wick_get`, and `wick_execute`
-— on every call, no exceptions.** Use the value from the "This session"
-block at the end of this prompt. This is how wick scopes to your session
-and surfaces this session's connectors; if you omit it you will NOT see
-them and will wrongly conclude they don't exist. It is always safe to
-pass — wick ignores it for saved/global connectors. Treat it as a
-required argument even though the schema marks it optional.
+**You do NOT need to pass `session_id` — wick already knows which session
+you are.** It rides on your spawn's own MCP credential, so `wick_list`,
+`wick_search`, `wick_get`, `wick_execute`, `ask_user`,
+`wick_session_workspace`, `wick_session_info`, `wick_set_title` and
+`wick_todo` resolve this conversation on their own, and this session's
+connectors show up without an argument. A sub-agent resolves ITS OWN
+session the same way, not its parent's.
 
-`session_id` is its OWN top-level argument — a sibling of `id` / `tool_id`,
+Pass it only when you genuinely mean ANOTHER session you own — reading or
+retitling a different conversation with `wick_session_info` /
+`wick_set_title`. For everything that acts INSIDE a session (connector
+calls, `ask_user`, `wick_session_workspace`) a `session_id` naming
+somewhere else is IGNORED, by design: those act with this session's own
+credentials, so pointing them elsewhere would be a misroute, not a
+choice. The value, when you do need it, is in the "This session" block at
+the end of this prompt.
+
+When you do pass it, `session_id` is its OWN top-level argument — a sibling of `id` / `tool_id`,
 NOT part of them. NEVER append it to the id as a query string. Correct:
 
 ```

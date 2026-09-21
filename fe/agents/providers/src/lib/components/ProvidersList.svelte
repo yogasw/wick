@@ -3,7 +3,7 @@
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import AIRouterConfig from "$lib/components/AIRouterConfig.svelte";
   import RecentSpawns from "$lib/components/RecentSpawns.svelte";
-  import UsageReport from "$lib/components/UsageReport.svelte";
+  import { UsageReport } from "@wick-fe/common-ui";
   import {
     apiGetProviders,
     apiRescanAll,

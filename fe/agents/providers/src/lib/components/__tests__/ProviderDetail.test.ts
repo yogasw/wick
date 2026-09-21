@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import ProviderDetail from "../ProviderDetail.svelte";
+import { cardStacksMissingRhythm, expectCardRhythm } from "./cardRhythm.js";
 import * as api from "$lib/api.js";
 import type { ProviderDetailResponse } from "$lib/types.js";
 
@@ -412,5 +413,37 @@ describe("ProviderDetail - read-only viewer", () => {
     expect(screen.getByTestId("provider-config").getAttribute("data-readonly")).toBeNull();
     // The admin still gets the full editor.
     expect(screen.queryByText("CONFIGURATION")).toBeNull();
+  });
+});
+
+describe("ProviderDetail - card rhythm", () => {
+  /* The bug this pins: the editable sections are wrapped in one div so
+     the branch has a single root, and that wrapper took every card out
+     of the page's `space-y-4`. The cards then rendered flush — headers
+     touching the card above, the "Advanced" rule glued to extra_args —
+     which is only visible to a person looking at the page, never to a
+     test that asserts on text. */
+  it("spaces the cards it stacks, so none of them render flush", async () => {
+    const { container } = render(ProviderDetail, { props: defaultProps });
+    await screen.findByTestId("provider-config");
+    expectCardRhythm(container);
+  });
+
+  it("spaces the read-only summary too", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), ReadOnly: true, CanManage: false });
+    const { container } = render(ProviderDetail, { props: defaultProps });
+    await screen.findByTestId("provider-config");
+    expectCardRhythm(container);
+  });
+
+  /* The check has to actually catch it — a guard that passes on the
+     broken markup is worse than none, because it reads as covered. */
+  it("catches a stack that forgot its spacing", () => {
+    const el = document.createElement("div");
+    el.innerHTML =
+      '<div class="rounded-xl border p-5"></div><div class="rounded-xl border p-5"></div>';
+    expect(cardStacksMissingRhythm(el)).toHaveLength(1);
+    el.setAttribute("class", "space-y-4");
+    expect(cardStacksMissingRhythm(el)).toHaveLength(0);
   });
 });

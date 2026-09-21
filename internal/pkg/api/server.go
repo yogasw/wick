@@ -90,6 +90,7 @@ import (
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/mcp"
+	mcphandlers "github.com/yogasw/wick/internal/mcp/handlers"
 	"github.com/yogasw/wick/internal/metrics"
 	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/pkg/config"
@@ -1772,7 +1773,27 @@ func NewServer() *Server {
 	//
 	// ok=false (no owner: legacy rows, cron, system jobs) makes the factory
 	// fall back to the internal token rather than lose MCP access.
+	// Shared between the delegation service (which computes the narrowing)
+	// and the MCP minter above (which must apply it).
+	delegationChildGrants := delegation.NewChildGrants()
 	agentsFactory.SessionMCPToken = func(sessionID, callerUserID string) (string, bool) {
+		// A running SUB-AGENT has an identity chosen for it: its triggering
+		// human, with tags already intersected against the role's allowed
+		// list. Honour that first — the delegation computing the narrowing
+		// and this minter ignoring it is how a role's allowed_tags became
+		// decorative (see delegation.ChildGrants).
+		if g, ok := delegationChildGrants.Get(sessionID); ok {
+			// stripAdmin=true: the narrowing is the whole point, so a child
+			// must be tag-filtered even when the human who triggered it is
+			// an administrator.
+			tok, err := mcpScopedTokens.IssueForSession(g.UserID, sessionID, g.TagIDs, true)
+			if err != nil {
+				log.Warn().Err(err).Str("session", sessionID).
+					Msg("mcp: sub-agent token mint failed; falling back to internal token")
+				return "", false
+			}
+			return tok, true
+		}
 		sess, found := agentsMgr.Registry().Session(sessionID)
 		if !found {
 			return "", false
@@ -1799,8 +1820,14 @@ func NewServer() *Server {
 		if identity == "" {
 			return "", false
 		}
-		tok, err := mcpScopedTokens.IssueFor(
+		// The session rides in the token as well as in the per-spawn
+		// header. claude sends the header; codex cannot send any header at
+		// all, so without this its calls have no session to resolve and
+		// every session-scoped tool falls back to whatever id the model
+		// remembered to type.
+		tok, err := mcpScopedTokens.IssueForSession(
 			identity,
+			sessionID,
 			authSvc.GetUserFilterTagIDs(context.Background(), identity),
 			false,
 		)
@@ -1812,11 +1839,12 @@ func NewServer() *Server {
 		return tok, true
 	}
 	delegationSvc = &delegation.Service{
-		Repo:   delegation.NewRepo(db),
-		Runner: delegation.NewPoolRunner(agentsPool, agentsLayout, agentsMgr.Register),
-		Stream: agentstool.NewDelegationStream(agentsBcast),
-		Tokens: mcpScopedTokens,
-		Tags:   authSvc,
+		Repo:     delegation.NewRepo(db),
+		Children: delegationChildGrants,
+		Runner:   delegation.NewPoolRunner(agentsPool, agentsLayout, agentsMgr.Register),
+		Stream:   agentstool.NewDelegationStream(agentsBcast),
+		Tokens:   mcpScopedTokens,
+		Tags:     authSvc,
 		// Phase 3: private git worktrees for sub-agents that edit code.
 		// Falls back to the shared workspace (with a note) on non-git
 		// projects rather than refusing the work.
@@ -1952,6 +1980,56 @@ func NewServer() *Server {
 			return askUserPolicy(db, configsSvc, agentsLayout, sessionID)
 		}).
 		WithPool(agentsPool, agentsLayout).
+		// wick_usage answers "what is left on the account" as well as
+		// "what has this cost". The reading comes from the agents tool's
+		// paced probe cache, so an agent asking cannot contribute to the
+		// rate limit it is asking about.
+		WithAccountQuota(func(ctx context.Context, key string) (mcphandlers.AccountQuota, bool) {
+			q, ok := agentstool.ProviderAccountQuota(ctx, key)
+			if !ok {
+				return mcphandlers.AccountQuota{}, false
+			}
+			// Everything the Usage panel shows, minus the account email:
+			// it names a person and answers none of the questions this
+			// reading exists for. A failed probe is passed through as
+			// itself — a 401 has to arrive as "401", not as an account
+			// with no windows, which reads as "you have nothing left".
+			out := mcphandlers.AccountQuota{
+				Provider: q.Provider, Supported: q.Supported, Reason: q.Reason,
+				Connected: q.Connected, Plan: q.Plan, Org: q.Org,
+				AuthMethod: q.AuthMethod,
+				Pending:    q.Pending, Checking: q.Checking, Err: q.Err,
+			}
+			now := time.Now()
+			if !q.ExpiresAt.IsZero() {
+				out.ExpiresAt = q.ExpiresAt.UTC().Format(time.RFC3339)
+			}
+			if !q.FetchedAt.IsZero() {
+				out.FetchedAt = q.FetchedAt.UTC().Format(time.RFC3339)
+				out.AgeS = int(now.Sub(q.FetchedAt).Round(time.Second) / time.Second)
+			}
+			if d := q.NextAt.Sub(now); d > 0 {
+				out.NextS = int(d.Round(time.Second) / time.Second)
+			}
+			for _, w := range q.Windows {
+				row := mcphandlers.AccountQuotaWindow{
+					Key:         w.Key,
+					Label:       mcphandlers.QuotaWindowLabel(w.Key),
+					Utilization: w.Utilization,
+				}
+				if !w.ResetsAt.IsZero() {
+					row.ResetsAt = w.ResetsAt.UTC().Format(time.RFC3339)
+					if d := w.ResetsAt.Sub(now); d > 0 {
+						row.ResetsInS = int(d.Round(time.Second) / time.Second)
+					}
+				}
+				if !w.ObservedAt.IsZero() {
+					row.ObservedAt = w.ObservedAt.UTC().Format(time.RFC3339)
+				}
+				out.Windows = append(out.Windows, row)
+			}
+			return out, true
+		}).
 		WithSchedule(scheduleStore).
 		WithRefreshSession(func(id string) error {
 			syncSessionMeta(id)

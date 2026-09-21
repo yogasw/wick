@@ -745,6 +745,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	}
 	key := sessionKey(sessionID, agentName)
 	entry, alive := p.active[key]
+	// A person messaging the session is the intervention the halt notice
+	// asked for: they have seen it, and may well have fixed the cause. Give
+	// the agent its full restart budget back rather than holding a
+	// ten-minute-old crash streak against the first turn after the fix.
+	if role == "user" {
+		p.clearCrashesLocked(key)
+	}
 	p.mu.Unlock()
 
 	// A live subprocess speaks with the MCP identity of whoever spawned it —
@@ -2366,9 +2373,24 @@ func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.Exit
 	p.mu.Unlock()
 
 	if !ShouldRespawn(reason, attempt-1) {
+		// The budget is spent. Announce it ONCE and, critically, announce
+		// it without spawning: notifySession delivers through Send, and
+		// Send starts the agent when it is not running. Used here that
+		// turns "stop restarting" into another restart — the process dies
+		// again, lands back in this branch, and announces again, forever.
+		// A broken codex config.toml drove exactly that: 673 spawns in one
+		// session, all of them logged as "giving up".
+		p.mu.Lock()
+		first := p.markHaltedLocked(key)
+		p.mu.Unlock()
+		if !first {
+			l.Debug().Int("attempts", attempt).
+				Msg("pool.recover: still crashing after giving up; no restart, no notice")
+			return
+		}
 		l.Error().Int("attempts", attempt).
 			Msg("pool.recover: repeated unexplained exits; giving up")
-		p.notifySession(sessionID, agentName, crashNotice(reasonDetail, attempt, true))
+		p.haltNotify(sessionID, agentName, haltNotice(reasonDetail, attempt))
 		return
 	}
 
@@ -2378,8 +2400,44 @@ func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.Exit
 	// the restart goes through the same slot accounting, queueing, and
 	// admission checks as any other. A separate spawn path here would be a
 	// second way to start an agent, and the two would drift.
-	p.notifySession(sessionID, agentName, crashNotice(reasonDetail, attempt, false))
+	p.notifySession(sessionID, agentName, crashNotice(reasonDetail, attempt))
 }
+
+// haltNotify tells the session that automatic restarts have stopped,
+// WITHOUT starting a process to hear it.
+//
+// Source "recover-halt" rather than "recover" is the whole mechanism: only
+// "recover" carries the carve-out in send() that lets a non-user turn spawn
+// on its own. Any other source buffers — the notice is persisted to the
+// transcript now and rides along as leading context on the next real
+// message, whenever a human sends one.
+//
+// The buffer is invisible until then, so the same text also goes out over
+// OnSpawnError, which the wiring publishes as an inline system-error turn
+// AND dispatches to the originating channel. Without it a Slack thread whose
+// agent just gave up would show nothing at all.
+func (p *Pool) haltNotify(sessionID, agentName, msg string) {
+	if err := p.Send(context.Background(), sessionID, agentName, "recover-halt", "system", msg); err != nil {
+		log.Warn().Err(err).
+			Str("component", "pool").
+			Str("session", sessionID).
+			Msg("pool.recover: could not record the halt notice")
+	}
+	if p.cfg.OnSpawnError == nil {
+		return
+	}
+	p.cfg.OnSpawnError(SpawnErrorEvent{
+		SessionID: sessionID,
+		AgentName: agentName,
+		Ctx:       context.Background(),
+		Message:   msg,
+		Err:       errCrashLoopHalted,
+	})
+}
+
+// errCrashLoopHalted names the condition for the logs of whoever consumes
+// SpawnErrorEvent. Nothing branches on it.
+var errCrashLoopHalted = errors.New("agent kept exiting immediately; automatic restarts stopped")
 
 // notifySession delivers a system turn to the session, which also brings
 // the agent back if it is not running. Best-effort: a failed notice must

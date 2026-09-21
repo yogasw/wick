@@ -27,8 +27,8 @@
 
     el.classList.add('relative');
     el.innerHTML = `
-      <div class="tp-wrap flex min-h-[32px] flex-wrap items-center gap-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-text focus-within:border-green-500'}">
-        <div class="tp-chips flex flex-wrap gap-1"></div>
+      <div class="tp-wrap flex min-h-[32px] min-w-0 max-w-full flex-wrap items-center gap-1 overflow-hidden rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-text focus-within:border-green-500'}">
+        <div class="tp-chips flex min-w-0 max-w-full flex-wrap gap-1"></div>
         <input type="text" class="tp-input min-w-[80px] flex-1 bg-transparent text-xs text-black-900 dark:text-white-100 outline-none placeholder:text-black-700" placeholder="${disabled ? '' : 'add tag...'}" ${disabled ? 'disabled' : ''}/>
       </div>
       <div class="tp-menu absolute left-0 right-0 z-50 mt-1 hidden max-h-64 overflow-auto rounded-md border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-xs shadow-lg"></div>
@@ -62,9 +62,9 @@
       chips.innerHTML = selected.map(id => {
         const tag = all.get(id) || { id, name: id, is_group: false, is_filter: false };
         return `
-        <span class="tp-chip inline-flex items-center gap-1 rounded-full bg-green-200 px-2 py-0.5 text-xs text-green-700" data-id="${escapeHTML(id)}">
-          <button type="button" class="tp-chip-name text-green-700 hover:underline" data-id="${escapeHTML(id)}" title="Edit tag type">${escapeHTML(tag.display_name || tag.name)}</button>
-          ${disabled ? '' : `<button type="button" data-id="${escapeHTML(id)}" class="tp-remove text-green-700 hover:text-green-900" aria-label="remove">&times;</button>`}
+        <span class="tp-chip inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-green-200 px-2 py-0.5 text-xs text-green-700" data-id="${escapeHTML(id)}">
+          <button type="button" class="tp-chip-name min-w-0 max-w-[12rem] truncate text-left text-green-700 hover:underline" data-id="${escapeHTML(id)}" title="${escapeHTML(tag.display_name || tag.name)} — click to edit tag type">${escapeHTML(tag.display_name || tag.name)}</button>
+          ${disabled ? '' : `<button type="button" data-id="${escapeHTML(id)}" class="tp-remove shrink-0 text-green-700 hover:text-green-900" aria-label="remove">&times;</button>`}
         </span>
       `;
       }).join('');
@@ -207,12 +207,16 @@
           <button type="button" class="tp-edit-ok rounded bg-green-500 px-3 py-1 font-medium text-white-100 hover:bg-green-600">Save</button>
         </div>
       `;
-      // Position below the anchor chip.
+      // Position below the anchor chip, but never past the picker's own
+      // column: an overhanging popover sits on top of whatever control is
+      // next to the row (Save, the settings gear) and eats its clicks.
       const rect = anchor.getBoundingClientRect();
       const hostRect = el.getBoundingClientRect();
-      pop.style.left = Math.max(0, rect.left - hostRect.left) + 'px';
+      pop.style.left = '0px';
       pop.style.top = (rect.bottom - hostRect.top + 4) + 'px';
       pop.classList.remove('hidden');
+      const maxLeft = Math.max(0, el.clientWidth - pop.offsetWidth);
+      pop.style.left = Math.min(Math.max(0, rect.left - hostRect.left), maxLeft) + 'px';
       pop.querySelector('.tp-edit-cancel').addEventListener('click', () => pop.classList.add('hidden'));
       pop.querySelector('.tp-edit-ok').addEventListener('click', async () => {
         const isGroup = pop.querySelector('.tp-edit-group').checked;

@@ -618,7 +618,23 @@
       class="pointer-events-none fixed z-30 max-h-[45vh] w-[20rem] max-w-[calc(100vw-1rem)] overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-2.5 shadow-xl"
       style={`${hoverFlip ? "bottom" : "top"}:${hoverAt}px;right:${hoverRight}px`}
     >
-      <p class="flex items-center gap-2 text-[11px] font-medium text-black-900 dark:text-white-100">
+      <!-- A touch device fires mouseenter on tap and then never fires
+           mouseleave, so the card has no way to close itself there — and the
+           card is pointer-events-none precisely so it cannot swallow taps
+           meant for the list underneath. This button opts ITSELF back in:
+           the only clickable thing on the card, and the only way out on a
+           phone. Harmless on desktop, where leaving the row still closes it. -->
+      <button
+        type="button"
+        onclick={hoverOut}
+        aria-label="Close commit details"
+        class="pointer-events-auto absolute right-1 top-1 rounded p-1 text-black-700 hover:bg-white-300 hover:text-black-900 dark:text-black-600 dark:hover:bg-navy-600 dark:hover:text-white-100"
+      >
+        <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M4 4l8 8M12 4l-8 8" />
+        </svg>
+      </button>
+      <p class="flex items-center gap-2 pr-6 text-[11px] font-medium text-black-900 dark:text-white-100">
         <span>{hoverRow.author}</span>
         <span class="font-mono text-[10px] text-green-600 dark:text-green-400">{hoverRow.sha}</span>
       </p>

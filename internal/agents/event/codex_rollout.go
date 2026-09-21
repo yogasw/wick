@@ -244,3 +244,32 @@ func codexHomeDir(home string) string {
 	}
 	return filepath.Join(h, ".codex")
 }
+
+// CodexContextLevel returns the context level codex last recorded for a
+// thread, without a turn to match it against.
+//
+// The compaction path needs it: app-server volunteers
+// thread/tokenUsage/updated on resume in codex 0.145, but not in 0.149,
+// so the "before" number of a manual /compact has to come from the
+// rollout instead of the wire.
+//
+// The newest entry is not always usable: codex writes a token_count
+// after a compaction whose last_token_usage.input_tokens is 0 (nothing
+// was requested, the context was rewritten), so the scan walks back to
+// the newest entry that carries a real level — the turn the compaction
+// is measured against. No such entry (fresh thread, relocated
+// CODEX_HOME) reports false rather than 0: a missing number is
+// recoverable, a wrong one is not.
+func CodexContextLevel(home, threadID string) (int, bool) {
+	path := codexRolloutPath(home, threadID)
+	if path == "" {
+		return 0, false
+	}
+	readings := codexRolloutReadings(path)
+	for i := len(readings) - 1; i >= 0; i-- {
+		if readings[i].Level > 0 {
+			return readings[i].Level, true
+		}
+	}
+	return 0, false
+}
