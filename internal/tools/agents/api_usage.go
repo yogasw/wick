@@ -3,6 +3,7 @@ package agents
 import (
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +41,25 @@ func usageLedger() *usagereport.Builder {
 	return ledger.b
 }
 
+// scopeFromQuery reads the channel filter off the query, in the same
+// shape the analytics page sends it.
+func scopeFromQuery(c *tool.Ctx) usagereport.Scope {
+	return usagereport.Scope{
+		Channels:  splitCSV(c.Query("channels")),
+		Instances: splitCSV(c.Query("instances")),
+	}
+}
+
+func splitCSV(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if v := strings.TrimSpace(part); v != "" && !strings.EqualFold(v, "all") {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // apiUsageReport serves GET /api/providers/usage?window=today|7d|30d|90d|all.
 func apiUsageReport(c *tool.Ctx) {
 	if notReady(c) {
@@ -48,8 +68,8 @@ func apiUsageReport(c *tool.Ctx) {
 	if !requireProviderMenu(c) {
 		return
 	}
-	w := usagereport.ParseWindow(c.Query("window"), time.Now())
-	rep, err := usageLedger().Report(w, c.Query("refresh") == "1")
+	w := usagereport.WindowFromQuery(c.Query("window"), c.Query("since"), c.Query("until"), time.Now())
+	rep, err := usageLedger().Report(w, scopeFromQuery(c), c.Query("refresh") == "1")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -66,8 +86,8 @@ func apiProviderUsage(c *tool.Ctx) {
 		return
 	}
 	key := c.PathValue("type") + "/" + c.PathValue("name")
-	w := usagereport.ParseWindow(c.Query("window"), time.Now())
-	rep, err := usageLedger().Provider(key, w, c.Query("refresh") == "1")
+	w := usagereport.WindowFromQuery(c.Query("window"), c.Query("since"), c.Query("until"), time.Now())
+	rep, err := usageLedger().Provider(key, w, scopeFromQuery(c), c.Query("refresh") == "1")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

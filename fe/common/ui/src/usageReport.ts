@@ -98,8 +98,13 @@ export async function fetchUsageReport(
   endpoint: string,
   refresh = false,
   window = "all",
+  since = "",
+  until = "",
+  scope: LedgerScope = {},
 ): Promise<UsageReport> {
-  const url = `${endpoint}/usage?window=${encodeURIComponent(window)}${refresh ? "&refresh=1" : ""}`;
+  const url =
+    `${endpoint}/usage?${rangeQuery(window, since, until)}${scopeQuery(scope)}` +
+    (refresh ? "&refresh=1" : "");
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`usage report: ${res.status}`);
   return (await res.json()) as UsageReport;
@@ -112,13 +117,42 @@ export async function fetchProviderUsage(
   provider: string,
   refresh = false,
   window = "all",
+  since = "",
+  until = "",
+  scope: LedgerScope = {},
 ): Promise<ProviderUsageDetail> {
   const url =
-    `${endpoint}/${provider}/usage?window=${encodeURIComponent(window)}` +
+    `${endpoint}/${provider}/usage?${rangeQuery(window, since, until)}${scopeQuery(scope)}` +
     (refresh ? "&refresh=1" : "");
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`provider usage: ${res.status}`);
   return (await res.json()) as ProviderUsageDetail;
+}
+
+/** LedgerScope narrows the ledger the way a page's filter bar does. A
+ *  page that filters its chart by channel has to filter its cost by the
+ *  same channel, or the two numbers below one filter disagree. */
+export type LedgerScope = { channels?: string[]; instances?: string[] };
+
+function scopeQuery(scope: LedgerScope): string {
+  const parts: string[] = [];
+  if (scope.channels?.length) parts.push(`channels=${encodeURIComponent(scope.channels.join(","))}`);
+  if (scope.instances?.length)
+    parts.push(`instances=${encodeURIComponent(scope.instances.join(","))}`);
+  return parts.length ? `&${parts.join("&")}` : "";
+}
+
+/** rangeQuery builds the range half of the query. Explicit dates win over
+ *  a named window — that is how a page with its own custom date picker
+ *  asks for exactly the days it is showing. */
+function rangeQuery(window: string, since: string, until: string): string {
+  if (since || until) {
+    const parts = [];
+    if (since) parts.push(`since=${encodeURIComponent(since)}`);
+    if (until) parts.push(`until=${encodeURIComponent(until)}`);
+    return parts.join("&");
+  }
+  return `window=${encodeURIComponent(window)}`;
 }
 
 /** compactTokens renders 1_234_567 as "1.23M".

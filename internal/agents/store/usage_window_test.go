@@ -207,3 +207,28 @@ func TestProviderSessionsAreNewestFirst(t *testing.T) {
 		t.Fatalf("order = %+v, want the most recently used first", uses)
 	}
 }
+
+// A custom range has two ends. Without the upper one, "1-7 Sep" on a
+// page would quietly include everything since the 1st — including the
+// days after the 7th, which is the opposite of what a date picker with
+// two boxes promises.
+func TestTotalsBetweenHonoursTheUpperBound(t *testing.T) {
+	now := time.Now()
+	p := &ProviderUsage{
+		UsageTotals: UsageTotals{Input: 300, Output: 30, CostUSD: 6},
+		Turns:       3, LastAt: now,
+		Series: []UsagePoint{
+			point(now.Add(-72*time.Hour), 100, 10, 2),
+			point(now.Add(-48*time.Hour), 100, 10, 2),
+			point(now, 100, 10, 2),
+		},
+	}
+	totals, turns, _ := p.TotalsBetween(now.Add(-96*time.Hour), now.Add(-24*time.Hour))
+	if turns != 2 || totals.CostUSD != 4 {
+		t.Fatalf("got %+v turns=%d, want only the two inside the range", totals, turns)
+	}
+	// No bounds at all is still the exact stored total.
+	if all, allTurns, _ := p.TotalsBetween(time.Time{}, time.Time{}); all.CostUSD != 6 || allTurns != 3 {
+		t.Fatalf("unbounded = %+v turns=%d, want the stored totals", all, allTurns)
+	}
+}

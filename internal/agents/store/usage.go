@@ -265,6 +265,22 @@ type SessionTags struct {
 	// Label is the session's own title, so a ledger row can name the
 	// conversation instead of printing eight characters of uuid.
 	Label string
+	// Channel and Instance are where the conversation came from ("slack",
+	// "ui") and which bot of that channel. They exist so a page that
+	// filters by channel can filter its token figures by the same thing —
+	// a page where the chart moves and the cost does not is reporting two
+	// different slices side by side.
+	Channel  string
+	Instance string
+}
+
+// UsageFilter bounds a roll-up: in time, and by which sessions count at
+// all. Keep is applied BEFORE anything is added, so every figure in the
+// result describes the same slice.
+type UsageFilter struct {
+	Since time.Time
+	Until time.Time
+	Keep  func(SessionTags) bool
 }
 
 // SessionUse is one session's line in a provider's ledger: how much it
@@ -295,8 +311,9 @@ type UsageRollup struct {
 	// each session a second time.
 	SessionTagsByID map[string]SessionTags `json:"session_tags,omitempty"`
 
-	// Since bounds the roll-up; zero means all time.
+	// Since / Until bound the roll-up; zero means unbounded on that end.
 	Since time.Time `json:"since,omitempty"`
+	Until time.Time `json:"until,omitempty"`
 	// Partial reports that at least one session could not answer the
 	// window fully, because the per-turn trail it would be summed from
 	// had already dropped its oldest points. The figures are then a
@@ -315,14 +332,21 @@ type UsageRollup struct {
 // difference between "this provider cost $4 today" and "at least $4",
 // and only the caller knows which of those it may print.
 func (p *ProviderUsage) TotalsSince(since time.Time) (totals UsageTotals, turns int, complete bool) {
+	return p.TotalsBetween(since, time.Time{})
+}
+
+// TotalsBetween is TotalsSince with an upper bound as well, so a custom
+// date range ("1-7 Sep") means the same thing here as on the page that
+// asked for it. A zero `until` is "up to now".
+func (p *ProviderUsage) TotalsBetween(since, until time.Time) (totals UsageTotals, turns int, complete bool) {
 	if p == nil {
 		return UsageTotals{}, 0, true
 	}
-	if since.IsZero() {
+	if since.IsZero() && until.IsZero() {
 		return p.UsageTotals, p.Turns, true
 	}
 	// Nothing at all since the cut-off: complete, and empty.
-	if p.LastAt.Before(since) {
+	if !since.IsZero() && p.LastAt.Before(since) {
 		return UsageTotals{}, 0, true
 	}
 	// A bucket recorded before the trail existed can only answer "some
@@ -331,7 +355,10 @@ func (p *ProviderUsage) TotalsSince(since time.Time) (totals UsageTotals, turns 
 		return UsageTotals{}, 0, p.Turns == 0
 	}
 	for _, pt := range p.Series {
-		if pt.At.Before(since) {
+		if !since.IsZero() && pt.At.Before(since) {
+			continue
+		}
+		if !until.IsZero() && pt.At.After(until) {
 			continue
 		}
 		totals.Add(UsageTotals{
@@ -349,7 +376,7 @@ func (p *ProviderUsage) TotalsSince(since time.Time) (totals UsageTotals, turns 
 	}
 	// The trail is full AND starts after the cut-off: older turns fell
 	// off the end, so the window is missing whatever they held.
-	complete = !(len(p.Series) >= UsageSeriesMax && p.Series[0].At.After(since))
+	complete = !(len(p.Series) >= UsageSeriesMax && !since.IsZero() && p.Series[0].At.After(since))
 	return totals, turns, complete
 }
 
@@ -371,6 +398,18 @@ func AggregateUsage(layout config.Layout, sessionIDs []string, tags func(session
 // reach back that far marks the result Partial rather than silently
 // under-reporting.
 func AggregateUsageSince(layout config.Layout, sessionIDs []string, tags func(sessionID string) SessionTags, since time.Time) (UsageRollup, error) {
+	return AggregateUsageBetween(layout, sessionIDs, tags, since, time.Time{})
+}
+
+// AggregateUsageBetween is AggregateUsageSince with an upper bound too.
+func AggregateUsageBetween(layout config.Layout, sessionIDs []string, tags func(sessionID string) SessionTags, since, until time.Time) (UsageRollup, error) {
+	return AggregateUsageFiltered(layout, sessionIDs, tags, UsageFilter{Since: since, Until: until})
+}
+
+// AggregateUsageFiltered is the full form: a time range plus a predicate
+// over each session's tags.
+func AggregateUsageFiltered(layout config.Layout, sessionIDs []string, tags func(sessionID string) SessionTags, f UsageFilter) (UsageRollup, error) {
+	since, until := f.Since, f.Until
 	out := UsageRollup{
 		ByProvider:       map[string]UsageTotals{},
 		ByProject:        map[string]UsageTotals{},
@@ -378,6 +417,7 @@ func AggregateUsageSince(layout config.Layout, sessionIDs []string, tags func(se
 		ProviderSessions: map[string][]SessionUse{},
 		SessionTagsByID:  map[string]SessionTags{},
 		Since:            since,
+		Until:            until,
 	}
 	for _, id := range sessionIDs {
 		su, err := LoadSessionUsage(layout, id)
@@ -392,10 +432,13 @@ func AggregateUsageSince(layout config.Layout, sessionIDs []string, tags func(se
 		if tags != nil {
 			t = tags(id)
 		}
+		if f.Keep != nil && !f.Keep(t) {
+			continue
+		}
 
 		counted := false
 		for name, p := range su.Providers {
-			flows, turns, complete := p.TotalsSince(since)
+			flows, turns, complete := p.TotalsBetween(since, until)
 			if !complete {
 				out.Partial = true
 			}

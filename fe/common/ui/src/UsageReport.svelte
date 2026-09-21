@@ -49,19 +49,56 @@
     /** Section heading. The providers page says "Token Usage"; the admin
         page already has a heading above it. */
     title?: string;
+    /** Which range to open on. "today" where a fast first paint matters
+        more than the lifetime total — all time walks every session. */
+    defaultRange?: string;
+    /** Drive the range from OUTSIDE instead of from these chips. A page
+        that already has a range filter must not grow a second one: two
+        controls over one number is how a reader ends up comparing a
+        30-day chart with a 7-day figure and trusting the comparison. */
+    range?: string;
+    since?: string;
+    until?: string;
+    /** Narrow to certain channels / bots, same filter the page applies
+        to everything else below it. */
+    channels?: string[];
+    instances?: string[];
+    /** Already-fetched report. A page that needs these numbers for its
+        own drill-downs fetches once and hands the result here, instead
+        of the card asking for the same thing a second time. */
+    report?: UsageReport | null;
   };
-  let { base, provider, labelFor, endpoint, title = "Token Usage" }: Props = $props();
+  let {
+    base,
+    provider,
+    labelFor,
+    endpoint,
+    title = "Token Usage",
+    defaultRange = "today",
+    range: rangeProp,
+    since = "",
+    until = "",
+    channels,
+    instances,
+    report: reportProp,
+  }: Props = $props();
+  /** Fed from outside: render what the page already has. */
+  const fed = $derived(reportProp !== undefined);
+  /** Controlled when the caller passes a range or explicit dates. */
+  const controlled = $derived(rangeProp !== undefined || since !== "" || until !== "");
   const api = $derived(endpoint ?? `${base}/api/providers`);
 
   type Tab = "provider" | "project" | "user";
   let tab = $state<Tab>("provider");
-  let report = $state<UsageReport | null>(null);
+  let ownReport = $state<UsageReport | null>(null);
+  const report = $derived(fed ? (reportProp ?? null) : ownReport);
   let detail = $state<ProviderUsageDetail | null>(null);
   /* The range being read. "What did this cost" is almost never a
      question about all time — it is "today", "this week" — and a figure
      that only ever grows cannot show that anything changed. All time
      stays the default because it is the only exact one. */
-  let range = $state("all");
+  let ownRange = $state(defaultRange);
+  const range = $derived(controlled ? (rangeProp ?? "custom") : ownRange);
   /* Offered by the server with every answer, so the chips and the
      windows the backend understands cannot drift apart. */
   const ranges = $derived<WindowOption[]>(
@@ -77,14 +114,19 @@
   let error = $state("");
 
   async function load(refresh = false) {
+    // Fed from outside and not scoped to a provider: nothing to fetch.
+    if (fed && !provider) {
+      loading = false;
+      return;
+    }
     if (refresh) refreshing = true;
     error = "";
     try {
       if (provider) {
-        detail = await fetchProviderUsage(api, provider, refresh, range);
+        detail = await fetchProviderUsage(api, provider, refresh, range, since, until, { channels, instances });
         page = 0;
       } else {
-        report = await fetchUsageReport(api, refresh, range);
+        ownReport = await fetchUsageReport(api, refresh, range, since, until, { channels, instances });
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -95,11 +137,26 @@
   }
   onMount(() => load(false));
 
+  /* Follow the page's filter. Guarded on first run so this does not fire
+     a second request on mount beside onMount's. */
+  let lastRange = $state("");
+  $effect(() => {
+    const key = `${range}|${since}|${until}|${(channels ?? []).join()}|${(instances ?? []).join()}|${fed ? "fed" : ""}`;
+    if (lastRange === "") {
+      lastRange = key;
+      return;
+    }
+    if (key === lastRange) return;
+    lastRange = key;
+    loading = true;
+    void load(false);
+  });
+
   /* Switching range is a new question, not a refresh: the cached answer
      for the old one is no longer what is on screen. */
   function pickRange(key: string) {
     if (key === range) return;
-    range = key;
+    ownRange = key;
     loading = true;
     void load(false);
   }
@@ -191,7 +248,8 @@
 
     <!-- The range switch. Narrowest first: the narrow ranges are the
          ones people check repeatedly, all time is the one they check
-         once. -->
+         once. Hidden when a page drives the range itself. -->
+    {#if !controlled}
     <div class="flex items-center gap-1 flex-wrap" role="group" aria-label="Range">
       {#each ranges as r (r.key)}
         <button
@@ -208,6 +266,7 @@
         </button>
       {/each}
     </div>
+    {/if}
   </div>
 
   {#if partialNote}

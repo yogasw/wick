@@ -5,7 +5,8 @@
   import { loadAnalytics } from "$lib/stream";
   import Chart from "$lib/Chart.svelte";
   import RecentSessions from "$lib/RecentSessions.svelte";
-  import { UsageReport } from "@wick-fe/common-ui";
+  import { UsageReport, fetchUsageReport, compactTokens, formatCost } from "@wick-fe/common-ui";
+  import type { UsageReportData } from "@wick-fe/common-ui";
 
   type Props = { endpoint: string };
   let { endpoint }: Props = $props();
@@ -13,6 +14,37 @@
      data, so it is derived from the endpoint rather than hard-coded —
      the page does not know where it is mounted either. */
   const ledgerEndpoint = $derived(endpoint.replace(/\/users\.json$/, "/ledger"));
+  /* The ledger reads the SAME range as the page. One filter for
+     everything below it was the point of the filter bar; a card with its
+     own range turns "who is expensive this week" into a comparison
+     between two different weeks. */
+  const ledgerWindow = $derived(
+    range === "custom" ? "custom" : range === "all" ? "all" : range === 365 ? "1y" : range === 1 ? "today" : `${range}d`,
+  );
+  const ledgerSince = $derived(range === "custom" ? customFrom : "");
+  const ledgerUntil = $derived(range === "custom" ? customTo : "");
+  /* A second copy of the report, for the drill-downs: the card renders
+     the fleet, a person's panel needs that person's row. The server
+     caches per range, so asking twice costs one walk. */
+  let ledger = $state<UsageReportData | null>(null);
+  async function loadLedger() {
+    try {
+      ledger = await fetchUsageReport(ledgerEndpoint, false, ledgerWindow, ledgerSince, ledgerUntil, {
+        channels: picked,
+        instances: pickedInstances,
+      });
+    } catch {
+      ledger = null; // a missing ledger must not take the page down
+    }
+  }
+  const userSpend = $derived.by(() => {
+    const id = openUser?.id;
+    return id ? (ledger?.by_user.find((r) => r.key === id) ?? null) : null;
+  });
+  const projectSpend = $derived.by(() => {
+    const id = openProject?.id;
+    return id ? (ledger?.by_project.find((r) => r.key === id) ?? null) : null;
+  });
 
   type Tab = "people" | "projects" | "channels" | "providers";
   /** "all" runs back to the oldest conversation; "custom" uses the dates. */
@@ -42,6 +74,11 @@
   async function load() {
     loading = true;
     error = null;
+    // The ledger is part of "the page under this filter", not a card with
+    // a life of its own: it reloads on the same call, in parallel, so a
+    // channel click cannot leave the cost figures describing the
+    // previous selection.
+    void loadLedger();
     progress = { done: 0, total: 0 };
     try {
       data = await loadAnalytics(endpoint, {
@@ -330,7 +367,20 @@
          carries its own range, because "spent today" and "who signed in
          over 30 days" are different questions that happen to share a
          page. -->
-    <UsageReport base="" endpoint={ledgerEndpoint} title="Token usage" />
+    <!-- Fed from the page's own fetch: the drill-downs need these rows
+         anyway, so asking the server twice for the same range would be a
+         second walk over every session for nothing. -->
+    <UsageReport
+      base=""
+      endpoint={ledgerEndpoint}
+      title="Token usage"
+      range={ledgerWindow}
+      since={ledgerSince}
+      until={ledgerUntil}
+      channels={picked}
+      instances={pickedInstances}
+      report={ledger}
+    />
 
     <!-- Overview: always on top, never a tab. It is the context every list
          below is read against. -->
@@ -836,12 +886,18 @@
           </button>
         </div>
 
-        <div class="grid gap-4 px-5 py-4 sm:grid-cols-4">
+        <div class="grid gap-4 px-5 py-4 sm:grid-cols-3 lg:grid-cols-6">
           {#each [
             { label: "Conversations", value: String(u.sessions) },
             { label: "Joined", value: String(u.joined) },
             { label: "Last activity", value: ago(u.last_active_at) },
             { label: "Last login", value: u.last_login_at ? ago(u.last_login_at) : loginsRecorded ? "never" : "no record" },
+            // What their work cost, over the same range as everything else
+            // on this page. "—" is a real answer here: a person can be
+            // active and spend nothing if their sessions ran on a provider
+            // that reports no cost.
+            { label: "Tokens", value: userSpend ? compactTokens(userSpend.totals.total) : "—" },
+            { label: "Spent", value: userSpend ? formatCost(userSpend.totals.cost_usd) : "—" },
           ] as card}
             <div>
               <p class="text-[11px] uppercase tracking-wide text-black-700 dark:text-black-600">{card.label}</p>
@@ -978,11 +1034,14 @@
           </button>
         </div>
 
-        <div class="grid gap-4 px-5 py-4 sm:grid-cols-3">
+        <div class="grid gap-4 px-5 py-4 sm:grid-cols-3 lg:grid-cols-5">
           {#each [
             { label: "Conversations", value: String(p.sessions) },
             { label: "People", value: String(p.users) },
             { label: "Last activity", value: ago(p.last_active_at) },
+            // Same range as the page, same ledger as the card above.
+            { label: "Tokens", value: projectSpend ? compactTokens(projectSpend.totals.total) : "—" },
+            { label: "Spent", value: projectSpend ? formatCost(projectSpend.totals.cost_usd) : "—" },
           ] as card}
             <div>
               <p class="text-[11px] uppercase tracking-wide text-black-700 dark:text-black-600">{card.label}</p>

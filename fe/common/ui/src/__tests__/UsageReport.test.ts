@@ -190,7 +190,7 @@ describe("UsageReport scoped to one provider", () => {
 
   it("says plainly when a provider has never been used", async () => {
     mockFetch({ ...PROVIDER_DETAIL, sessions: [] });
-    render(UsageReport, { props: { base: "/t", provider: "claude/enginer" } });
+    render(UsageReport, { props: { base: "/t", provider: "claude/enginer", defaultRange: "all" } });
     await waitFor(() =>
       expect(screen.getByText(/No session has spent tokens on this provider/i)).toBeTruthy(),
     );
@@ -202,11 +202,13 @@ describe("UsageReport ranges", () => {
     const fn = mockFetch(REPORT);
     render(UsageReport, { props: { base: "/t" } });
     await waitFor(() => expect(screen.getByText("claude/opus")).toBeTruthy());
-    expect(String(fn.mock.calls[0][0])).toContain("window=all");
+    // Today by default: the fleet ledger walks every session on disk, and
+    // the answer people open this for is "what is it costing now".
+    expect(String(fn.mock.calls[0][0])).toContain("window=today");
 
-    screen.getByTestId("usage-range-today").click();
+    screen.getByTestId("usage-range-7d").click();
     await waitFor(() => expect(fn).toHaveBeenCalledTimes(2));
-    expect(String(fn.mock.calls[1][0])).toContain("window=today");
+    expect(String(fn.mock.calls[1][0])).toContain("window=7d");
     // Not a refresh: a different range is a different question, and
     // busting the server's cache for it would walk every session again.
     expect(String(fn.mock.calls[1][0])).not.toContain("refresh=1");
@@ -262,9 +264,35 @@ describe("UsageReport session rows", () => {
   it("says which range came up empty, so it does not read as broken", async () => {
     mockFetch({ ...PROVIDER_DETAIL, sessions: [], window: "today", window_label: "Today" });
     render(UsageReport, { props: { base: "/t", provider: "claude/enginer" } });
-    await waitFor(() => expect(screen.getByText(/No session has spent tokens/i)).toBeTruthy());
-
-    screen.getByTestId("usage-range-today").click();
+    // Default is today, and "none today" must not read as "none ever".
     await waitFor(() => expect(screen.getByText(/in this range/i)).toBeTruthy());
+  });
+});
+
+describe("UsageReport driven by a page filter", () => {
+  /* A page that already has a range filter must not grow a second one.
+     Two controls over one number is how somebody ends up comparing a
+     30-day chart against a 7-day figure and trusting the comparison. */
+  it("hides its own chips and asks for the range it was given", async () => {
+    const fn = mockFetch(REPORT);
+    render(UsageReport, { props: { base: "/t", range: "30d" } });
+    await waitFor(() => expect(screen.getByText("claude/opus")).toBeTruthy());
+
+    expect(screen.queryByTestId("usage-range-today")).toBeNull();
+    expect(String(fn.mock.calls[0][0])).toContain("window=30d");
+  });
+
+  it("asks for explicit dates when the page has a custom range", async () => {
+    const fn = mockFetch(REPORT);
+    render(UsageReport, {
+      props: { base: "/t", since: "2026-09-01", until: "2026-09-07" },
+    });
+    await waitFor(() => expect(screen.getByText("claude/opus")).toBeTruthy());
+
+    const url = String(fn.mock.calls[0][0]);
+    expect(url).toContain("since=2026-09-01");
+    expect(url).toContain("until=2026-09-07");
+    // Dates win over a named window — asking for both would be ambiguous.
+    expect(url).not.toContain("window=");
   });
 });

@@ -17,6 +17,7 @@
 package usagereport
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -81,6 +82,7 @@ type Report struct {
 	Window      string   `json:"window"`
 	WindowLabel string   `json:"window_label"`
 	Since       string   `json:"since,omitempty"`
+	Until       string   `json:"until,omitempty"`
 	Windows     []Option `json:"windows"`
 
 	Totals   Totals `json:"totals"`
@@ -142,6 +144,50 @@ type ProviderReport struct {
 const partialNote = "Some sessions ran more turns than their per-turn trail keeps, " +
 	"so figures for this range are a floor, not a total. All time is exact."
 
+// Scope narrows the ledger the way a page's filter bar does: to certain
+// channels, or to specific bots within them. Empty means everything.
+//
+// It exists so a page with one filter bar has ONE answer below it. A
+// token figure that ignored the channel filter would sit next to a chart
+// that honoured it, and the two would disagree without either being
+// wrong — the worst kind of dashboard bug, because nothing looks broken.
+type Scope struct {
+	Channels  []string
+	Instances []string
+}
+
+// Empty reports whether this scope narrows anything.
+func (sc Scope) Empty() bool { return len(sc.Channels) == 0 && len(sc.Instances) == 0 }
+
+// Keep is the predicate the roll-up applies per session.
+func (sc Scope) Keep(t store.SessionTags) bool {
+	if len(sc.Channels) > 0 && !contains(sc.Channels, t.Channel) {
+		return false
+	}
+	if len(sc.Instances) > 0 && !contains(sc.Instances, t.Instance) {
+		return false
+	}
+	return true
+}
+
+// Key identifies the scope in the cache, so two different filters cannot
+// be served each other's answer.
+func (sc Scope) Key() string {
+	if sc.Empty() {
+		return ""
+	}
+	return "|ch:" + strings.Join(sc.Channels, ",") + "|in:" + strings.Join(sc.Instances, ",")
+}
+
+func contains(list []string, v string) bool {
+	for _, s := range list {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
 // Builder computes and caches reports for one host.
 //
 // UserName resolves a wick user id to a name; it comes from the caller
@@ -151,6 +197,12 @@ const partialNote = "Some sessions ran more turns than their per-turn trail keep
 type Builder struct {
 	Layout   config.Layout
 	UserName func(id string) string
+	// Tags resolves a session id to what the roll-up groups and filters
+	// by. Optional: the default reads the session from disk. A caller
+	// that already keeps a cache of session facts (the admin analytics
+	// page does) should supply it and save the second walk — same data,
+	// read once.
+	Tags func(id string) store.SessionTags
 
 	mu    sync.Mutex
 	cache map[string]cacheEntry
@@ -169,7 +221,7 @@ func New(layout config.Layout, userName func(id string) string) *Builder {
 
 // Rollup returns the cached roll-up for a window, recomputing when stale
 // or when force is set (the explicit Refresh button, never a poll).
-func (b *Builder) Rollup(w Window, force bool) (store.UsageRollup, error) {
+func (b *Builder) Rollup(w Window, sc Scope, force bool) (store.UsageRollup, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.cache == nil {
@@ -178,30 +230,31 @@ func (b *Builder) Rollup(w Window, force bool) (store.UsageRollup, error) {
 	if b.now == nil {
 		b.now = time.Now
 	}
-	if e, ok := b.cache[w.Key]; ok && !force && b.now().Sub(e.at) < CacheTTL {
+	key := w.CacheKey() + sc.Key()
+	if e, ok := b.cache[key]; ok && !force && b.now().Sub(e.at) < CacheTTL {
 		return e.roll, nil
 	}
 	ids, err := session.ListAll(b.Layout)
 	if err != nil {
 		return store.UsageRollup{}, err
 	}
-	roll, err := store.AggregateUsageSince(b.Layout, ids, func(id string) store.SessionTags {
-		s, err := session.Load(b.Layout, id)
-		if err != nil {
-			return store.SessionTags{}
-		}
-		return store.SessionTags{ProjectID: s.Meta.ProjectID, UserID: s.Meta.UserID, Label: s.Meta.Label}
-	}, w.Since)
+	tags := b.Tags
+	if tags == nil {
+		tags = b.loadTags
+	}
+	roll, err := store.AggregateUsageFiltered(b.Layout, ids, tags, store.UsageFilter{
+		Since: w.Since, Until: w.Until, Keep: sc.Keep,
+	})
 	if err != nil {
 		return store.UsageRollup{}, err
 	}
-	b.cache[w.Key] = cacheEntry{at: b.now(), roll: roll}
+	b.cache[key] = cacheEntry{at: b.now(), roll: roll}
 	return roll, nil
 }
 
 // Report builds the fleet-wide report for a window.
-func (b *Builder) Report(w Window, force bool) (Report, error) {
-	roll, err := b.Rollup(w, force)
+func (b *Builder) Report(w Window, sc Scope, force bool) (Report, error) {
+	roll, err := b.Rollup(w, sc, force)
 	if err != nil {
 		return Report{}, err
 	}
@@ -221,6 +274,9 @@ func (b *Builder) Report(w Window, force bool) (Report, error) {
 	if !w.Since.IsZero() {
 		rep.Since = w.Since.UTC().Format(time.RFC3339)
 	}
+	if !w.Until.IsZero() {
+		rep.Until = w.Until.UTC().Format(time.RFC3339)
+	}
 	if roll.Partial {
 		rep.Note = partialNote
 	}
@@ -234,8 +290,8 @@ func (b *Builder) Report(w Window, force bool) (Report, error) {
 // used in. A bare session id told a reader nothing — whose work it was
 // and which project it belonged to is the whole question behind "where
 // is this provider used".
-func (b *Builder) Provider(key string, w Window, force bool) (ProviderReport, error) {
-	roll, err := b.Rollup(w, force)
+func (b *Builder) Provider(key string, w Window, sc Scope, force bool) (ProviderReport, error) {
+	roll, err := b.Rollup(w, sc, force)
 	if err != nil {
 		return ProviderReport{}, err
 	}
@@ -277,6 +333,26 @@ func (b *Builder) Provider(key string, w Window, force bool) (ProviderReport, er
 		out.Sessions = append(out.Sessions, row)
 	}
 	return out, nil
+}
+
+// loadTags is the default session resolver: read it from disk. The
+// channel is the session's origin, the same string the analytics page
+// groups by, so a filter means the same thing on both.
+func (b *Builder) loadTags(id string) store.SessionTags {
+	s, err := session.Load(b.Layout, id)
+	if err != nil {
+		return store.SessionTags{}
+	}
+	ch := string(s.Meta.Origin)
+	if ch == "" {
+		ch = "ui"
+	}
+	return store.SessionTags{
+		ProjectID: s.Meta.ProjectID,
+		UserID:    s.Meta.UserID,
+		Label:     s.Meta.Label,
+		Channel:   ch,
+	}
 }
 
 func (b *Builder) clock() time.Time {
