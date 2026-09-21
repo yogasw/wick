@@ -41,6 +41,10 @@ export type SessionContext = {
   providers: SessionContextProvider[];
   /** Recent per-turn context levels, oldest first. */
   trend?: number[];
+  /** Cumulative tokens spent by each of those points, same order and
+   *  length. The level says how full the window was; this says what it
+   *  had cost to get there. */
+  trend_spent?: number[];
   /** When each of those points was recorded, same order and length.
    *  Optional: an older server does not send it, and the curve is still
    *  readable without the clock. */

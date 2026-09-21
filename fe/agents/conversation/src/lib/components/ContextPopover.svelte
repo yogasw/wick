@@ -122,6 +122,7 @@
      look at rather than just notice. */
   const trend = $derived<number[]>(data?.trend ?? []);
   const trendAt = $derived<string[]>(data?.trend_at ?? []);
+  const trendSpent = $derived<number[]>(data?.trend_spent ?? []);
   const trendMax = $derived(Math.max(...trend, 1));
 
   const SPARK_H = 20;
@@ -158,6 +159,25 @@
   const hoverPct = $derived(
     hover === null || !hasWindow ? 0 : Math.round(((trend[hover] ?? 0) / (data?.window ?? 1)) * 100),
   );
+  /* What the hovered turn actually DID, which is the question a step in
+     the curve raises: how much the window moved, and what that turn put
+     on the wire. Both are differences against the point before it — the
+     first point has no "before", and saying so beats printing a delta
+     measured from nothing. */
+  const hoverDelta = $derived(
+    hover === null || hover === 0 ? null : (trend[hover] ?? 0) - (trend[hover - 1] ?? 0),
+  );
+  const hoverTurnSpend = $derived(
+    hover === null || hover === 0 || trendSpent.length === 0
+      ? null
+      : (trendSpent[hover] ?? 0) - (trendSpent[hover - 1] ?? 0),
+  );
+  const hoverSpent = $derived(hover === null ? 0 : (trendSpent[hover] ?? 0));
+
+  function signed(n: number): string {
+    return `${n > 0 ? "+" : n < 0 ? "−" : ""}${short(Math.abs(n))}`;
+  }
+
   const hoverTime = $derived.by(() => {
     if (hover === null) return "";
     const iso = trendAt[hover];
@@ -268,9 +288,24 @@
               <span class="font-medium text-black-900 dark:text-white-100">
                 turn {hover + 1}/{trend.length}
               </span>
-              · {short(trend[hover])}{#if hasWindow}
+              · {short(trend[hover])}{#if hoverDelta !== null}
+                <span
+                  class={hoverDelta > 0
+                    ? "text-amber-600 dark:text-amber-400"
+                    : hoverDelta < 0
+                      ? "text-green-600 dark:text-green-400"
+                      : ""}>{signed(hoverDelta)}</span
+                >{/if}{#if hasWindow}
                 · {hoverPct}%{/if}{#if hoverTime}
                 · {hoverTime}{/if}
+              <!-- The second line is the spend behind that move: what this
+                   turn cost, and what the session had spent by then. A jump
+                   in the window and a jump in the bill are not the same
+                   event — a cache-heavy turn moves one and not the other. -->
+              <span class="block text-black-700 dark:text-black-600">
+                {#if hoverTurnSpend !== null}turn ini {short(hoverTurnSpend)} token · {/if}total
+                {short(hoverSpent)}
+              </span>
             {:else}
               last {trend.length} turns · hover for a turn
             {/if}

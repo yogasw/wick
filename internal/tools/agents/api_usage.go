@@ -107,6 +107,11 @@ type SessionContextDTO struct {
 	// point has to be able to say WHEN it was: "88k at turn 24" is only
 	// half an answer when the question is what made the window jump.
 	TrendAt []string `json:"trend_at,omitempty"`
+	// TrendSpent is the CUMULATIVE tokens this provider had spent by each
+	// of those points. The level says how full the window was; this says
+	// what it had cost to get there, which is the other half of every
+	// question asked about a step in the curve.
+	TrendSpent []int `json:"trend_spent,omitempty"`
 	// CanCompact reports whether /compact does anything on this
 	// session's provider. False for codex, whose exec mode has no slash
 	// commands at all — the panel must not offer a button that would
@@ -240,6 +245,37 @@ func trendOf(series []store.UsagePoint) ([]int, []string) {
 		at = append(at, pt.At.UTC().Format(time.RFC3339))
 	}
 	return levels, at
+}
+
+// pointTokens is everything one turn put on the wire.
+func pointTokens(pt store.UsagePoint) int {
+	return pt.Input + pt.CacheRead + pt.CacheWrite + pt.Output
+}
+
+// trendSpentOf returns the cumulative spend through each point the trend
+// returns, for the same window trendOf returns.
+//
+// Anchored to the provider's EXACT total and walked backwards, never
+// summed forwards: the per-turn trail is capped, so a forward sum would
+// start from whatever survived and quietly under-report every point by
+// the history that fell off the end. Subtracting from a known total
+// keeps the newest points right — and the newest points are the ones
+// somebody is pointing at.
+func trendSpentOf(series []store.UsagePoint, total int) []int {
+	if len(series) == 0 {
+		return nil
+	}
+	start := 0
+	if len(series) > contextTrendMax {
+		start = len(series) - contextTrendMax
+	}
+	out := make([]int, len(series)-start)
+	after := 0
+	for i := len(series) - 1; i >= start; i-- {
+		out[i-start] = total - after
+		after += pointTokens(series[i])
+	}
+	return out
 }
 
 // sortContextProviders puts the active provider first and the rest in a
