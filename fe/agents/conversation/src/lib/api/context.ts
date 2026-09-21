@@ -41,6 +41,10 @@ export type SessionContext = {
   providers: SessionContextProvider[];
   /** Recent per-turn context levels, oldest first. */
   trend?: number[];
+  /** When each of those points was recorded, same order and length.
+   *  Optional: an older server does not send it, and the curve is still
+   *  readable without the clock. */
+  trend_at?: string[];
   /** Whether /compact does anything on this session's provider. False
    *  for codex: `codex exec` has no slash commands, so the request
    *  would reach the model as plain text and be answered with a claim

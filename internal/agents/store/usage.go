@@ -98,8 +98,14 @@ type UsagePoint struct {
 	ContextUsed int       `json:"context_used,omitempty"`
 	Input       int       `json:"input,omitempty"`
 	CacheRead   int       `json:"cache_read,omitempty"`
-	Output      int       `json:"output,omitempty"`
-	CostUSD     float64   `json:"cost_usd,omitempty"`
+	// CacheWrite is here so a windowed sum ("what did today cost")
+	// reconstructs the same figure the all-time totals carry. Points
+	// written before this field existed simply have none, which makes a
+	// window over old turns understate cache writes rather than lie
+	// about which turns are in it.
+	CacheWrite int     `json:"cache_write,omitempty"`
+	Output     int     `json:"output,omitempty"`
+	CostUSD    float64 `json:"cost_usd,omitempty"`
 }
 
 // recordUsage folds one turn's reading into the session ledger.
@@ -161,6 +167,7 @@ func (s *Store) recordUsage(u *event.TokenUsage, at time.Time) error {
 		ContextUsed: level,
 		Input:       u.Input,
 		CacheRead:   u.CacheRead,
+		CacheWrite:  u.CacheWrite,
 		Output:      u.Output,
 		CostUSD:     u.CostUSD,
 	})
@@ -255,6 +262,20 @@ func LoadSessionUsage(layout config.Layout, sessionID string) (*SessionUsage, er
 type SessionTags struct {
 	ProjectID string
 	UserID    string
+	// Label is the session's own title, so a ledger row can name the
+	// conversation instead of printing eight characters of uuid.
+	Label string
+}
+
+// SessionUse is one session's line in a provider's ledger: how much it
+// spent there and when it last did. Ids alone answered "where is this
+// provider used" and nothing else — not which of them is costing
+// anything, not which are still alive.
+type SessionUse struct {
+	ID     string      `json:"id"`
+	Totals UsageTotals `json:"totals"`
+	Turns  int         `json:"turns"`
+	LastAt time.Time   `json:"last_at"`
 }
 
 // UsageRollup answers the aggregate questions across sessions.
@@ -267,23 +288,96 @@ type UsageRollup struct {
 	ByProject  map[string]UsageTotals `json:"by_project"`
 	ByUser     map[string]UsageTotals `json:"by_user"`
 	// ProviderSessions answers "where is provider A actually used" —
-	// session ids per provider, newest first.
-	ProviderSessions map[string][]string `json:"provider_sessions"`
+	// sessions per provider, most recently used first.
+	ProviderSessions map[string][]SessionUse `json:"provider_sessions"`
+	// SessionTagsByID keeps the project/user of every session that made
+	// it into the roll-up, so a caller can name a row without loading
+	// each session a second time.
+	SessionTagsByID map[string]SessionTags `json:"session_tags,omitempty"`
+
+	// Since bounds the roll-up; zero means all time.
+	Since time.Time `json:"since,omitempty"`
+	// Partial reports that at least one session could not answer the
+	// window fully, because the per-turn trail it would be summed from
+	// had already dropped its oldest points. The figures are then a
+	// floor, not a total — and a report that does not say so is a report
+	// somebody will quote as exact.
+	Partial bool `json:"partial,omitempty"`
+	// PartialSessions counts them, so the note can be specific.
+	PartialSessions int `json:"partial_sessions,omitempty"`
+}
+
+// TotalsSince sums this provider's flows from `since` onwards.
+//
+// All-time is exact: the bucket's own counters. A window has to be
+// rebuilt from the per-turn trail, which is capped — so this also
+// reports whether the trail actually reaches back to `since`. It is the
+// difference between "this provider cost $4 today" and "at least $4",
+// and only the caller knows which of those it may print.
+func (p *ProviderUsage) TotalsSince(since time.Time) (totals UsageTotals, turns int, complete bool) {
+	if p == nil {
+		return UsageTotals{}, 0, true
+	}
+	if since.IsZero() {
+		return p.UsageTotals, p.Turns, true
+	}
+	// Nothing at all since the cut-off: complete, and empty.
+	if p.LastAt.Before(since) {
+		return UsageTotals{}, 0, true
+	}
+	// A bucket recorded before the trail existed can only answer "some
+	// of this is in the window", which is not an answer.
+	if len(p.Series) == 0 {
+		return UsageTotals{}, 0, p.Turns == 0
+	}
+	for _, pt := range p.Series {
+		if pt.At.Before(since) {
+			continue
+		}
+		totals.Add(UsageTotals{
+			Input:      pt.Input,
+			CacheRead:  pt.CacheRead,
+			CacheWrite: pt.CacheWrite,
+			Output:     pt.Output,
+			CostUSD:    pt.CostUSD,
+		})
+		// Compaction writes a level-only point; counting it as a turn
+		// would inflate the turn count of every compacted session.
+		if pt.Input > 0 || pt.CacheRead > 0 || pt.CacheWrite > 0 || pt.Output > 0 {
+			turns++
+		}
+	}
+	// The trail is full AND starts after the cut-off: older turns fell
+	// off the end, so the window is missing whatever they held.
+	complete = !(len(p.Series) >= UsageSeriesMax && p.Series[0].At.After(since))
+	return totals, turns, complete
 }
 
 // AggregateUsage walks every session ledger and rolls it up by provider,
-// project and user.
+// project and user, over all time.
 //
 // tags resolves a session id to its project/user; a session it cannot
 // resolve still counts toward the provider totals, because "which
 // provider burned this" is knowable from the ledger alone and dropping
 // the row would quietly understate the bill.
 func AggregateUsage(layout config.Layout, sessionIDs []string, tags func(sessionID string) SessionTags) (UsageRollup, error) {
+	return AggregateUsageSince(layout, sessionIDs, tags, time.Time{})
+}
+
+// AggregateUsageSince is AggregateUsage bounded in time: only what was
+// spent at or after `since` counts. A zero `since` is all time and stays
+// exact; a window is reconstructed from each session's per-turn trail
+// (see ProviderUsage.TotalsSince), and a session whose trail cannot
+// reach back that far marks the result Partial rather than silently
+// under-reporting.
+func AggregateUsageSince(layout config.Layout, sessionIDs []string, tags func(sessionID string) SessionTags, since time.Time) (UsageRollup, error) {
 	out := UsageRollup{
 		ByProvider:       map[string]UsageTotals{},
 		ByProject:        map[string]UsageTotals{},
 		ByUser:           map[string]UsageTotals{},
-		ProviderSessions: map[string][]string{},
+		ProviderSessions: map[string][]SessionUse{},
+		SessionTagsByID:  map[string]SessionTags{},
+		Since:            since,
 	}
 	for _, id := range sessionIDs {
 		su, err := LoadSessionUsage(layout, id)
@@ -293,34 +387,67 @@ func AggregateUsage(layout config.Layout, sessionIDs []string, tags func(session
 		if len(su.Providers) == 0 {
 			continue
 		}
-		out.Sessions++
-		out.Turns += su.Turns
-		out.Totals.Add(su.Totals)
 
 		var t SessionTags
 		if tags != nil {
 			t = tags(id)
 		}
+
+		counted := false
 		for name, p := range su.Providers {
+			flows, turns, complete := p.TotalsSince(since)
+			if !complete {
+				out.Partial = true
+			}
+			// A session that spent nothing inside the window is not in
+			// the window — listing it would put a row of zeroes under
+			// "Used in" for every session that ever touched the provider.
+			if flows == (UsageTotals{}) && turns == 0 {
+				continue
+			}
+			if !counted {
+				out.Sessions++
+				counted = true
+				if !complete {
+					out.PartialSessions++
+				}
+			}
+			out.Turns += turns
+			out.Totals.Add(flows)
+
 			agg := out.ByProvider[name]
-			agg.Add(p.UsageTotals)
+			agg.Add(flows)
 			out.ByProvider[name] = agg
-			out.ProviderSessions[name] = append(out.ProviderSessions[name], id)
+			out.ProviderSessions[name] = append(out.ProviderSessions[name], SessionUse{
+				ID: id, Totals: flows, Turns: turns, LastAt: p.LastAt,
+			})
 
 			if t.ProjectID != "" {
 				v := out.ByProject[t.ProjectID]
-				v.Add(p.UsageTotals)
+				v.Add(flows)
 				out.ByProject[t.ProjectID] = v
 			}
 			if t.UserID != "" {
 				v := out.ByUser[t.UserID]
-				v.Add(p.UsageTotals)
+				v.Add(flows)
 				out.ByUser[t.UserID] = v
 			}
 		}
+		if counted {
+			out.SessionTagsByID[id] = t
+		}
 	}
+	// Newest first: "where is this provider used" is asked about what is
+	// running now, and a list sorted by id answers a question nobody has.
 	for name := range out.ProviderSessions {
-		sort.Strings(out.ProviderSessions[name])
+		rows := out.ProviderSessions[name]
+		sort.SliceStable(rows, func(i, j int) bool {
+			if !rows[i].LastAt.Equal(rows[j].LastAt) {
+				return rows[i].LastAt.After(rows[j].LastAt)
+			}
+			return rows[i].ID < rows[j].ID
+		})
+		out.ProviderSessions[name] = rows
 	}
 	return out, nil
 }

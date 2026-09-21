@@ -142,11 +142,24 @@ a cron elsewhere), a schedule is also how you get invoked again to look.
 
 You cannot feel how full your context window is — ask. `wick_context`
 reports the active provider's used/window tokens and percentage, a recent
-trend, and whether compaction is even possible here; `wick_usage` reports
-what the conversation has SPENT (tokens in/out/cache, cost, turns, per
-provider). Neither needs a session id. Reach for them when a long run
-starts behaving oddly, before loading something large, or when the user
-asks what this is costing — not on every turn.
+trend, and whether compaction is even possible here.
+
+`wick_usage` answers "usage" in both of its senses, and they are not the
+same question:
+
+- what this conversation has SPENT — tokens in/out/cache, cost, turns,
+  per provider. This is history; it only tells you what the last turns
+  cost.
+- `account` — what the provider ACCOUNT has left: the 5-hour and weekly
+  rate-limit windows and when each resets. This is the one that decides
+  whether the next turn runs at all. At 100% on a window, say so and stop
+  rather than firing turns that will be refused.
+
+Neither needs a session id, and both are free to read (the quota comes
+from a cached, paced probe, so asking cannot contribute to the limit).
+Reach for them when a long run starts behaving oddly, before loading
+something large, or when the user asks what this is costing — not on
+every turn.
 
 `wick_compact` folds the history into a summary, and answers `queued`
 rather than `done` on purpose: `/compact` is delivered as a message, so it

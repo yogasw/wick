@@ -57,6 +57,11 @@ type Handler struct {
 	// nil in stdio mode and tests.
 	pool   *agentpool.Pool
 	layout agentconfig.Layout
+	// accountQuota reads the provider ACCOUNT's remaining quota for
+	// wick_usage — the 5-hour / weekly limits, not the token ledger. The
+	// probe cache behind it lives in the agents tool, so the server
+	// supplies the reader. nil in stdio mode and tests.
+	accountQuota handlers.AccountQuotaFn
 	// refreshSession reloads one session into the in-memory registry
 	// after a handler mutates its meta on disk (wick_set_title). nil in
 	// stdio mode and tests — the disk write still lands; only the live
@@ -99,6 +104,14 @@ func (h *Handler) WithAskUserPolicy(fn func(sessionID string) (bool, string)) *H
 func (h *Handler) WithPool(p *agentpool.Pool, layout agentconfig.Layout) *Handler {
 	h.pool = p
 	h.layout = layout
+	return h
+}
+
+// WithAccountQuota wires the provider account quota reader — what
+// wick_usage reports beside the token ledger. Optional: without it the
+// tool omits the account section rather than guessing at one.
+func (h *Handler) WithAccountQuota(fn handlers.AccountQuotaFn) *Handler {
+	h.accountQuota = fn
 	return h
 }
 
@@ -410,7 +423,7 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 	case "wick_context":
 		handlers.WickContext(w, r, hreq, rsp, h.layout, args)
 	case "wick_usage":
-		handlers.WickUsage(w, r, hreq, rsp, h.layout, args)
+		handlers.WickUsage(w, r, hreq, rsp, h.layout, h.accountQuota, args)
 	case "wick_compact":
 		handlers.WickCompact(w, r, hreq, rsp, h.layout, h.sessionSender(), args)
 	case "wick_cli_token":

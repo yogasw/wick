@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/svelte";
 import UsageReport from "../UsageReport.svelte";
-import { compactTokens, formatCost } from "../../usageReport.js";
+import { compactTokens, formatCost } from "../usageReport.js";
 
 const REPORT = {
   totals: {
@@ -47,6 +47,13 @@ const REPORT = {
   ],
   by_project: [],
   by_user: [],
+  window: "all",
+  window_label: "All time",
+  windows: [
+    { key: "today", label: "Today" },
+    { key: "7d", label: "7 days" },
+    { key: "all", label: "All time" },
+  ],
 };
 
 function mockFetch(body: unknown, ok = true) {
@@ -116,6 +123,16 @@ describe("number formatting", () => {
   });
 });
 
+const rowTotals = (cost: number) => ({
+  input: 100,
+  cache_read: 900,
+  cache_write: 0,
+  output: 50,
+  total: 1_050,
+  cost_usd: cost,
+  cache_hit_pct: 90,
+});
+
 const PROVIDER_DETAIL = {
   provider: "claude/enginer",
   totals: {
@@ -127,7 +144,25 @@ const PROVIDER_DETAIL = {
     cost_usd: 0.51,
     cache_hit_pct: 90,
   },
-  sessions: Array.from({ length: 23 }, (_, i) => `sess${String(i).padStart(4, "0")}-rest-of-uuid`),
+  turns: 23,
+  window: "all",
+  window_label: "All time",
+  windows: [
+    { key: "today", label: "Today" },
+    { key: "7d", label: "7 days" },
+    { key: "all", label: "All time" },
+  ],
+  sessions: Array.from({ length: 23 }, (_, i) => ({
+    id: `sess${String(i).padStart(4, "0")}-rest-of-uuid`,
+    label: i === 0 ? "Debug ZAP komen TikTok" : "",
+    project_id: i === 0 ? "proj-1" : "",
+    project_name: i === 0 ? "Support Ops" : "",
+    user_id: i === 0 ? "user-1" : "",
+    user_name: i === 0 ? "Yoga Setiawan" : "",
+    last_at: "2026-09-21T00:00:00Z",
+    turns: 3,
+    totals: rowTotals(0.02),
+  })),
 };
 
 describe("UsageReport scoped to one provider", () => {
@@ -159,5 +194,77 @@ describe("UsageReport scoped to one provider", () => {
     await waitFor(() =>
       expect(screen.getByText(/No session has spent tokens on this provider/i)).toBeTruthy(),
     );
+  });
+});
+
+describe("UsageReport ranges", () => {
+  it("asks the server for the range the user picked", async () => {
+    const fn = mockFetch(REPORT);
+    render(UsageReport, { props: { base: "/t" } });
+    await waitFor(() => expect(screen.getByText("claude/opus")).toBeTruthy());
+    expect(String(fn.mock.calls[0][0])).toContain("window=all");
+
+    screen.getByTestId("usage-range-today").click();
+    await waitFor(() => expect(fn).toHaveBeenCalledTimes(2));
+    expect(String(fn.mock.calls[1][0])).toContain("window=today");
+    // Not a refresh: a different range is a different question, and
+    // busting the server's cache for it would walk every session again.
+    expect(String(fn.mock.calls[1][0])).not.toContain("refresh=1");
+  });
+
+  it("renders the ranges the server offers, not a list of its own", async () => {
+    mockFetch(REPORT);
+    render(UsageReport, { props: { base: "/t" } });
+    await waitFor(() => expect(screen.getByTestId("usage-range-7d")).toBeTruthy());
+    expect(screen.queryByTestId("usage-range-90d")).toBeNull();
+  });
+
+  /* A windowed figure is rebuilt from a capped per-turn trail. When it
+     cannot reach back far enough the number is a floor, and a floor
+     shown as a total is the one way this panel can mislead. */
+  it("passes on the server's caveat when a range is only a floor", async () => {
+    mockFetch({ ...REPORT, partial: true, note: "figures for this range are a floor" });
+    render(UsageReport, { props: { base: "/t" } });
+    await waitFor(() => expect(screen.getByTestId("usage-partial-note")).toBeTruthy());
+    expect(screen.getByTestId("usage-partial-note").textContent).toContain("floor");
+  });
+
+  it("stays quiet about the caveat when the range is exact", async () => {
+    mockFetch(REPORT);
+    render(UsageReport, { props: { base: "/t" } });
+    await waitFor(() => expect(screen.getByText("claude/opus")).toBeTruthy());
+    expect(screen.queryByTestId("usage-partial-note")).toBeNull();
+  });
+});
+
+describe("UsageReport session rows", () => {
+  /* "Used in: 77f88066" answered how many, and nothing anybody could
+     act on. The row has to say whose conversation it was and what it
+     spent there. */
+  it("names the session, its owner and its project", async () => {
+    mockFetch(PROVIDER_DETAIL);
+    render(UsageReport, { props: { base: "/t", provider: "claude/enginer" } });
+    await waitFor(() => expect(screen.getByTestId("usage-sessions")).toBeTruthy());
+
+    expect(screen.getByText("Debug ZAP komen TikTok")).toBeTruthy();
+    expect(screen.getByText("Yoga Setiawan")).toBeTruthy();
+    expect(screen.getByText("Support Ops")).toBeTruthy();
+    // The id stays as the small print that identifies the row.
+    expect(screen.getByText("sess0000")).toBeTruthy();
+  });
+
+  it("falls back to the id for a session with nothing named", async () => {
+    mockFetch(PROVIDER_DETAIL);
+    render(UsageReport, { props: { base: "/t", provider: "claude/enginer" } });
+    await waitFor(() => expect(screen.getByText("sess0001")).toBeTruthy());
+  });
+
+  it("says which range came up empty, so it does not read as broken", async () => {
+    mockFetch({ ...PROVIDER_DETAIL, sessions: [], window: "today", window_label: "Today" });
+    render(UsageReport, { props: { base: "/t", provider: "claude/enginer" } });
+    await waitFor(() => expect(screen.getByText(/No session has spent tokens/i)).toBeTruthy());
+
+    screen.getByTestId("usage-range-today").click();
+    await waitFor(() => expect(screen.getByText(/in this range/i)).toBeTruthy());
   });
 });

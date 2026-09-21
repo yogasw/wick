@@ -90,6 +90,7 @@ import (
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/mcp"
+	mcphandlers "github.com/yogasw/wick/internal/mcp/handlers"
 	"github.com/yogasw/wick/internal/metrics"
 	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/pkg/config"
@@ -1979,6 +1980,41 @@ func NewServer() *Server {
 			return askUserPolicy(db, configsSvc, agentsLayout, sessionID)
 		}).
 		WithPool(agentsPool, agentsLayout).
+		// wick_usage answers "what is left on the account" as well as
+		// "what has this cost". The reading comes from the agents tool's
+		// paced probe cache, so an agent asking cannot contribute to the
+		// rate limit it is asking about.
+		WithAccountQuota(func(ctx context.Context, key string) (mcphandlers.AccountQuota, bool) {
+			q, ok := agentstool.ProviderAccountQuota(ctx, key)
+			if !ok {
+				return mcphandlers.AccountQuota{}, false
+			}
+			out := mcphandlers.AccountQuota{
+				Provider: q.Provider, Supported: q.Supported, Reason: q.Reason,
+				Connected: q.Connected, Plan: q.Plan, Org: q.Org,
+				Pending: q.Pending, Checking: q.Checking, Err: q.Err,
+			}
+			now := time.Now()
+			if !q.FetchedAt.IsZero() {
+				out.FetchedAt = q.FetchedAt.UTC().Format(time.RFC3339)
+				out.AgeS = int(now.Sub(q.FetchedAt).Round(time.Second) / time.Second)
+			}
+			for _, w := range q.Windows {
+				row := mcphandlers.AccountQuotaWindow{
+					Key:         w.Key,
+					Label:       mcphandlers.QuotaWindowLabel(w.Key),
+					Utilization: w.Utilization,
+				}
+				if !w.ResetsAt.IsZero() {
+					row.ResetsAt = w.ResetsAt.UTC().Format(time.RFC3339)
+					if d := w.ResetsAt.Sub(now); d > 0 {
+						row.ResetsInS = int(d.Round(time.Second) / time.Second)
+					}
+				}
+				out.Windows = append(out.Windows, row)
+			}
+			return out, true
+		}).
 		WithSchedule(scheduleStore).
 		WithRefreshSession(func(id string) error {
 			syncSessionMeta(id)

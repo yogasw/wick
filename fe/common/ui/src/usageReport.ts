@@ -25,15 +25,47 @@ export type UsageSlice = {
   share: number;
 };
 
-export type ProviderUsageDetail = {
-  provider: string;
+/** One line of "where is this provider used". A bare session id named
+ *  nothing — whose conversation it was, and under which project, is the
+ *  actual question behind the list. */
+export type SessionUse = {
+  id: string;
+  label?: string;
+  project_id?: string;
+  project_name?: string;
+  user_id?: string;
+  user_name?: string;
+  last_at?: string;
+  turns?: number;
   totals: UsageTotals;
-  /** Session ids that spent tokens on this provider. Can run to
-   *  thousands, which is why the UI pages through it. */
-  sessions: string[];
 };
 
-export type UsageReport = {
+/** A selectable range, sent by the server so the chips and the windows
+ *  it understands cannot drift apart. */
+export type WindowOption = { key: string; label: string };
+
+/** Fields every ledger answer carries about the range it covers. */
+type Windowed = {
+  window: string;
+  window_label: string;
+  since?: string;
+  windows: WindowOption[];
+  /** True when a range could not be rebuilt in full for every session
+   *  (the per-turn trail is capped). The figures are then a floor. */
+  partial?: boolean;
+  note?: string;
+};
+
+export type ProviderUsageDetail = Windowed & {
+  provider: string;
+  totals: UsageTotals;
+  turns: number;
+  /** Sessions that spent tokens on this provider, newest first. Can run
+   *  to thousands, which is why the UI pages through it. */
+  sessions: SessionUse[];
+};
+
+export type UsageReport = Windowed & {
   totals: UsageTotals;
   turns: number;
   sessions: number;
@@ -54,9 +86,20 @@ export const EMPTY_TOTALS: UsageTotals = {
 
 /** fetchUsageReport pulls the fleet-wide ledger. `refresh` bypasses the
  *  server's short cache — used by the explicit Refresh button, never by
- *  an automatic poll. */
-export async function fetchUsageReport(base: string, refresh = false): Promise<UsageReport> {
-  const url = `${base}/api/providers/usage${refresh ? "?refresh=1" : ""}`;
+ *  an automatic poll.
+ *
+ *  `endpoint` is the collection these two calls hang off, because the
+ *  same ledger is served from two mounts: the agents tool
+ *  ("/tools/agents/api/providers") and the admin analytics page
+ *  ("/admin/analytics/ledger"). Passing it in is what lets ONE component
+ *  render on both pages — which is the point, since the numbers must
+ *  agree wherever they are read. */
+export async function fetchUsageReport(
+  endpoint: string,
+  refresh = false,
+  window = "all",
+): Promise<UsageReport> {
+  const url = `${endpoint}/usage?window=${encodeURIComponent(window)}${refresh ? "&refresh=1" : ""}`;
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`usage report: ${res.status}`);
   return (await res.json()) as UsageReport;
@@ -65,12 +108,15 @@ export async function fetchUsageReport(base: string, refresh = false): Promise<U
 /** fetchProviderUsage answers "what did THIS provider cost, and where
  *  was it used". Same ledger, one slice of it. */
 export async function fetchProviderUsage(
-  base: string,
+  endpoint: string,
   provider: string,
+  refresh = false,
+  window = "all",
 ): Promise<ProviderUsageDetail> {
-  const res = await fetch(`${base}/api/providers/${provider}/usage`, {
-    headers: { Accept: "application/json" },
-  });
+  const url =
+    `${endpoint}/${provider}/usage?window=${encodeURIComponent(window)}` +
+    (refresh ? "&refresh=1" : "");
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`provider usage: ${res.status}`);
   return (await res.json()) as ProviderUsageDetail;
 }
@@ -101,4 +147,19 @@ export function formatCost(usd: number): string {
 /** exact renders the full number with thousands separators, for titles. */
 export function exact(n: number): string {
   return Number.isFinite(n) ? n.toLocaleString() : "0";
+}
+
+/** sinceText renders an ISO timestamp as "3h ago" — the ledger is read
+ *  to find what is still running, and an absolute timestamp makes the
+ *  reader do that subtraction in their head. */
+export function sinceText(iso: string | undefined, now = Date.now()): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const s = Math.max(0, Math.round((now - t) / 1000));
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  if (s < 86400 * 30) return `${Math.floor(s / 86400)}d ago`;
+  return new Date(t).toLocaleDateString();
 }

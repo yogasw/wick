@@ -120,7 +120,7 @@ func TestWickUsage_ReportsFlows(t *testing.T) {
 	r := httptest.NewRequest("POST", "/mcp", nil)
 	r = r.WithContext(WithSessionID(r.Context(), id))
 	var got ToolCallResult
-	WickUsage(httptest.NewRecorder(), r, RPCRequest{}, captureResponder(t, &got), layout, map[string]any{})
+	WickUsage(httptest.NewRecorder(), r, RPCRequest{}, captureResponder(t, &got), layout, nil, map[string]any{})
 	if got.IsError {
 		t.Fatalf("unexpected error: %+v", got)
 	}
@@ -146,7 +146,7 @@ func TestWickUsage_EmptyLedger(t *testing.T) {
 	r := httptest.NewRequest("POST", "/mcp", nil)
 	r = r.WithContext(WithSessionID(r.Context(), id))
 	var got ToolCallResult
-	WickUsage(httptest.NewRecorder(), r, RPCRequest{}, captureResponder(t, &got), layout, map[string]any{})
+	WickUsage(httptest.NewRecorder(), r, RPCRequest{}, captureResponder(t, &got), layout, nil, map[string]any{})
 	if got.IsError {
 		t.Fatalf("a session that has not run should not be an error: %+v", got)
 	}
@@ -201,5 +201,87 @@ func TestWickCompact_WithoutAPoolIsRefused(t *testing.T) {
 	WickCompact(httptest.NewRecorder(), r, RPCRequest{}, captureResponder(t, &got), layout, nil, map[string]any{})
 	if !got.IsError {
 		t.Fatal("expected an error when no pool is wired")
+	}
+}
+
+// "Usage" means two things and wick_usage has to answer both: what the
+// conversation spent, and what the ACCOUNT has left. The second is the
+// one that decides whether the next turn runs at all.
+func TestWickUsage_CarriesTheAccountQuota(t *testing.T) {
+	const id = "sess-abc"
+	layout := usageFixture(t, id)
+
+	var askedFor string
+	quota := func(_ context.Context, key string) (AccountQuota, bool) {
+		askedFor = key
+		return AccountQuota{
+			Provider: key, Supported: true, Connected: true, Plan: "team",
+			Windows: []AccountQuotaWindow{
+				{Key: "five_hour", Label: "Session (5hr)", Utilization: 25, ResetsInS: 7200},
+				{Key: "seven_day", Label: "Weekly (7 day)", Utilization: 9},
+			},
+		}, true
+	}
+
+	r := httptest.NewRequest("POST", "/mcp", nil)
+	r = r.WithContext(WithSessionID(r.Context(), id))
+	var got ToolCallResult
+	WickUsage(httptest.NewRecorder(), r, RPCRequest{}, captureResponder(t, &got), layout, quota, map[string]any{})
+	if got.IsError {
+		t.Fatalf("unexpected error: %+v", got)
+	}
+	// Asked about the provider that actually ran, not a guess.
+	if askedFor == "" {
+		t.Fatal("the quota reader was never asked for a provider")
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(got.Content[0].Text), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	acc, ok := out["account"].(map[string]any)
+	if !ok {
+		t.Fatalf("no account section in %s", got.Content[0].Text)
+	}
+	if acc["plan"] != "team" {
+		t.Fatalf("plan = %v", acc["plan"])
+	}
+	wins, _ := acc["windows"].([]any)
+	if len(wins) != 2 {
+		t.Fatalf("windows = %v, want the two the reader returned", wins)
+	}
+	first, _ := wins[0].(map[string]any)
+	if first["label"] != "Session (5hr)" || first["utilization"] != float64(25) {
+		t.Fatalf("first window = %v", first)
+	}
+	// The spend half is still there — one tool, both answers.
+	if out["tokens"] != float64(1290) {
+		t.Fatalf("tokens = %v, want the ledger too", out["tokens"])
+	}
+}
+
+// No reader wired (stdio, tests): the section is omitted rather than
+// reported as an account with nothing in it, which would read as "you
+// have no quota left".
+func TestWickUsage_OmitsTheAccountWhenUnavailable(t *testing.T) {
+	const id = "sess-abc"
+	layout := usageFixture(t, id)
+
+	r := httptest.NewRequest("POST", "/mcp", nil)
+	r = r.WithContext(WithSessionID(r.Context(), id))
+	var got ToolCallResult
+	WickUsage(httptest.NewRecorder(), r, RPCRequest{}, captureResponder(t, &got), layout, nil, map[string]any{})
+	if strings.Contains(got.Content[0].Text, "\"account\"") {
+		t.Fatalf("expected no account section, got %s", got.Content[0].Text)
+	}
+}
+
+// Providers keep adding windows (extra_usage, nimbus_quill); an unknown
+// key is still worth showing, under its own name.
+func TestQuotaWindowLabel(t *testing.T) {
+	if got := QuotaWindowLabel("five_hour"); got != "Session (5hr)" {
+		t.Fatalf("five_hour = %q", got)
+	}
+	if got := QuotaWindowLabel("nimbus_quill"); got != "nimbus_quill" {
+		t.Fatalf("unknown key = %q, want the key itself", got)
 	}
 }

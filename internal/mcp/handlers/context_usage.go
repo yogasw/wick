@@ -142,9 +142,9 @@ func WickContext(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 // WickUsage reports what a session has SPENT — token flows and cost, whole
 // session and per provider. Distinct from wick_context on purpose: flows
 // are additive and historical, a window level is neither.
-func WickUsage(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, layout agentconfig.Layout, args map[string]any) {
+func WickUsage(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, layout agentconfig.Layout, quota AccountQuotaFn, args map[string]any) {
 	const tool = "wick_usage"
-	_, id, ok, msg := resolveManagedSession(r, layout, args, tool)
+	sess, id, ok, msg := resolveManagedSession(r, layout, args, tool)
 	if !ok {
 		rsp.ToolError(w, req.ID, msg, tool)
 		return
@@ -182,8 +182,80 @@ func WickUsage(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respo
 	if su.Turns == 0 {
 		out["note"] = "nothing recorded yet — no turn has run in this session"
 	}
+	// The other half of "usage": what the ACCOUNT has left. Keyed off the
+	// provider that will actually run the next turn, which is the one the
+	// limit would stop.
+	if quota != nil {
+		key := activeProviderKey(su)
+		if key == "" {
+			key = sessionProviderKey(sess)
+		}
+		if q, ok := quota(r.Context(), key); ok {
+			out["account"] = q
+		}
+	}
 	b, _ := json.Marshal(out)
 	rsp.WriteResult(w, req.ID, ToolCallResult{Content: []ToolContent{{Type: "text", Text: string(b)}}})
+}
+
+// AccountQuotaWindow is one rate-limit window of the provider account —
+// "Session (5hr) at 25%", "Weekly at 9%".
+type AccountQuotaWindow struct {
+	Key         string  `json:"key"`
+	Label       string  `json:"label,omitempty"`
+	Utilization float64 `json:"utilization"`
+	ResetsAt    string  `json:"resets_at,omitempty"`
+	ResetsInS   int     `json:"resets_in_s,omitempty"`
+}
+
+// AccountQuota is what the provider ACCOUNT has left, as opposed to what
+// this conversation has spent.
+//
+// The two are asked for with the same word and are not the same thing:
+// the ledger says a session cost $4, the quota says whether the next turn
+// runs at all. An agent that has just been told it is at 100% of its
+// weekly limit can stop and say so; one that only knows its token count
+// finds out by failing.
+type AccountQuota struct {
+	Provider  string               `json:"provider,omitempty"`
+	Supported bool                 `json:"supported"`
+	Reason    string               `json:"reason,omitempty"`
+	Connected bool                 `json:"connected"`
+	Plan      string               `json:"plan,omitempty"`
+	Org       string               `json:"org,omitempty"`
+	Windows   []AccountQuotaWindow `json:"windows,omitempty"`
+	FetchedAt string               `json:"fetched_at,omitempty"`
+	// AgeS is how old the reading is. Always sent when there is one: the
+	// probe is paced and cached, so a number with no provenance implies a
+	// live call nobody made.
+	AgeS     int    `json:"age_s,omitempty"`
+	Pending  bool   `json:"pending,omitempty"`
+	Checking bool   `json:"checking,omitempty"`
+	Err      string `json:"error,omitempty"`
+}
+
+// AccountQuotaFn reads the cached quota for a provider key. Supplied by
+// the server, which owns the paced probe cache; nil in stdio mode and
+// tests, where wick_usage simply omits the account section rather than
+// inventing one.
+type AccountQuotaFn func(ctx context.Context, providerKey string) (AccountQuota, bool)
+
+// quotaLabels names the windows the way the UI does, so an agent quoting
+// a number uses the same words the person reading the panel sees.
+var quotaLabels = map[string]string{
+	"five_hour": "Session (5hr)",
+	"seven_day": "Weekly (7 day)",
+	"weekly":    "Weekly (7 day)",
+}
+
+// QuotaWindowLabel names a rate-limit window, falling back to its key —
+// providers add windows (extra_usage, nimbus_quill) faster than any map
+// can track, and an unknown key is still worth showing.
+func QuotaWindowLabel(key string) string {
+	if l := quotaLabels[key]; l != "" {
+		return l
+	}
+	return key
 }
 
 // SessionSender delivers a message into a session the way a human message
@@ -254,6 +326,34 @@ func activeProviderOf(layout agentconfig.Layout, sessionID string) string {
 		}
 	}
 	return active
+}
+
+// activeProviderKey is the provider that answered most recently in a
+// ledger already loaded — the one whose account limit would stop the
+// next turn.
+func activeProviderKey(su *store.SessionUsage) string {
+	var newest time.Time
+	active := ""
+	for name, p := range su.Providers {
+		if p.LastAt.After(newest) {
+			newest, active = p.LastAt, name
+		}
+	}
+	return active
+}
+
+// sessionProviderKey is the provider a session WOULD run on before any
+// turn has finished: its active agent's instance. Without it, asking a
+// fresh session about its quota would answer nothing at all — which is
+// exactly when someone checks whether they have room to start.
+func sessionProviderKey(sess session.Session) string {
+	name := sess.Meta.ActiveAgent
+	for _, a := range sess.Agents {
+		if (name == "" || a.Name == name) && a.Provider != "" {
+			return a.Provider
+		}
+	}
+	return ""
 }
 
 // contextProviderType names the provider type the NEXT turn runs on: the

@@ -717,11 +717,16 @@ func MetaToolDescriptors() []ToolDescriptor {
 		},
 		{
 			Name: "wick_usage",
-			Description: "What a conversation has SPENT: input / output / cache-read / cache-write tokens, " +
-				"cost in USD when the provider reports it, turn count, and the same broken down per " +
-				"provider the session used. Distinct from wick_context on purpose — these are flows " +
-				"(additive, historical), a context window is a level (neither). Needs no session_id; " +
-				"pass one only to inspect another session you own.",
+			Description: "Usage in both senses. (1) What this conversation has SPENT: input / output / " +
+				"cache-read / cache-write tokens, cost in USD when the provider reports it, turn count, " +
+				"and the same broken down per provider. (2) `account`: what the provider ACCOUNT has " +
+				"left — the same rate-limit windows the Usage panel shows (Session 5hr, Weekly, and " +
+				"whatever else that provider publishes), with how long until each resets. The second " +
+				"is the one that decides whether the next turn runs at all; the first only says what " +
+				"the last ones cost. Reading it is free — it serves a cached, paced probe, so asking " +
+				"cannot contribute to the limit. Distinct from wick_context on purpose — spend is a " +
+				"flow (additive, historical), a context window is a level (neither). Needs no " +
+				"session_id; pass one only to inspect another session you own.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

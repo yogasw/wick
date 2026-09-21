@@ -5,13 +5,18 @@
   import { loadAnalytics } from "$lib/stream";
   import Chart from "$lib/Chart.svelte";
   import RecentSessions from "$lib/RecentSessions.svelte";
+  import { UsageReport } from "@wick-fe/common-ui";
 
   type Props = { endpoint: string };
   let { endpoint }: Props = $props();
+  /* The token ledger is served from the same mount as this page's own
+     data, so it is derived from the endpoint rather than hard-coded —
+     the page does not know where it is mounted either. */
+  const ledgerEndpoint = $derived(endpoint.replace(/\/users\.json$/, "/ledger"));
 
   type Tab = "people" | "projects" | "channels" | "providers";
   /** "all" runs back to the oldest conversation; "custom" uses the dates. */
-  type Range = 7 | 30 | 90 | 365 | "all" | "custom";
+  type Range = 1 | 7 | 30 | 90 | 365 | "all" | "custom";
 
   let data = $state<AnalyticsResponse | null>(null);
   let error = $state<string | null>(null);
@@ -181,6 +186,7 @@
   ]);
 
   const ranges: Array<{ key: Range; label: string }> = [
+    { key: 1, label: "Today" },
     { key: 7, label: "7d" },
     { key: 30, label: "30d" },
     { key: 90, label: "90d" },
@@ -317,6 +323,14 @@
         </div>
       {/each}
     </div>
+
+    <!-- What it COST. Same component as the providers page, reading the
+         same report from this page's own mount: two renderers over one
+         ledger, so the two pages cannot disagree about the bill. It
+         carries its own range, because "spent today" and "who signed in
+         over 30 days" are different questions that happen to share a
+         page. -->
+    <UsageReport base="" endpoint={ledgerEndpoint} title="Token usage" />
 
     <!-- Overview: always on top, never a tab. It is the context every list
          below is read against. -->
