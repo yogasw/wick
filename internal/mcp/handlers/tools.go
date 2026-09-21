@@ -721,7 +721,10 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"cache-read / cache-write tokens, cost in USD when the provider reports it, turn count, " +
 				"and the same broken down per provider. (2) `account`: what the provider ACCOUNT has " +
 				"left — the same rate-limit windows the Usage panel shows (Session 5hr, Weekly, and " +
-				"whatever else that provider publishes), with how long until each resets. The second " +
+				"whatever else that provider publishes), with how long until each resets, how old the " +
+				"reading is, and the plan / org / auth method behind it. It is the panel's reading in " +
+				"full, so you can answer a follow-up without guessing — and a failed probe arrives as " +
+				"its own error (a 401 says 401), never as an account with no windows left. The second " +
 				"is the one that decides whether the next turn runs at all; the first only says what " +
 				"the last ones cost. Reading it is free — it serves a cached, paced probe, so asking " +
 				"cannot contribute to the limit. Distinct from wick_context on purpose — spend is a " +

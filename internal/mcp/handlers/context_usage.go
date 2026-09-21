@@ -206,6 +206,10 @@ type AccountQuotaWindow struct {
 	Utilization float64 `json:"utilization"`
 	ResetsAt    string  `json:"resets_at,omitempty"`
 	ResetsInS   int     `json:"resets_in_s,omitempty"`
+	// ObservedAt is when the PROVIDER reported the figure, which is not
+	// always when wick read it — codex publishes its limits only while it
+	// runs, so a reading can be hours old and has to be able to say so.
+	ObservedAt string `json:"observed_at,omitempty"`
 }
 
 // AccountQuota is what the provider ACCOUNT has left, as opposed to what
@@ -216,19 +220,37 @@ type AccountQuotaWindow struct {
 // runs at all. An agent that has just been told it is at 100% of its
 // weekly limit can stop and say so; one that only knows its token count
 // finds out by failing.
+// It is the panel's reading in full rather than a summary: the caller is
+// a model that will be asked follow-up questions about it ("when does
+// that reset", "which account is this even on"), and a field it was
+// never given is a question it has to answer with a guess.
 type AccountQuota struct {
-	Provider  string               `json:"provider,omitempty"`
-	Supported bool                 `json:"supported"`
-	Reason    string               `json:"reason,omitempty"`
-	Connected bool                 `json:"connected"`
-	Plan      string               `json:"plan,omitempty"`
-	Org       string               `json:"org,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+	Supported bool   `json:"supported"`
+	Reason    string `json:"reason,omitempty"`
+
+	Connected bool `json:"connected"`
+	// No email. It identifies a person and answers none of the questions
+	// this reading exists for — which account it is is said by the
+	// provider key, and whether it still works is said by Err.
+	Plan string `json:"plan,omitempty"`
+	Org  string `json:"org,omitempty"`
+	// AuthMethod and ExpiresAt explain a reading that is about to stop
+	// working — an expiring login fails as a probe error, which reads as
+	// a bug unless the expiry was visible beforehand.
+	AuthMethod string `json:"auth_method,omitempty"`
+	ExpiresAt  string `json:"expires_at,omitempty"`
+
 	Windows   []AccountQuotaWindow `json:"windows,omitempty"`
 	FetchedAt string               `json:"fetched_at,omitempty"`
 	// AgeS is how old the reading is. Always sent when there is one: the
 	// probe is paced and cached, so a number with no provenance implies a
 	// live call nobody made.
-	AgeS     int    `json:"age_s,omitempty"`
+	AgeS int `json:"age_s,omitempty"`
+	// NextS is how long until a fresh reading would even be accepted —
+	// the probe is paced, so "re-check it" is not always available and
+	// the caller should know before promising a newer number.
+	NextS    int    `json:"next_s,omitempty"`
 	Pending  bool   `json:"pending,omitempty"`
 	Checking bool   `json:"checking,omitempty"`
 	Err      string `json:"error,omitempty"`

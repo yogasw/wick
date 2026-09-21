@@ -1989,15 +1989,27 @@ func NewServer() *Server {
 			if !ok {
 				return mcphandlers.AccountQuota{}, false
 			}
+			// Everything the Usage panel shows, minus the account email:
+			// it names a person and answers none of the questions this
+			// reading exists for. A failed probe is passed through as
+			// itself — a 401 has to arrive as "401", not as an account
+			// with no windows, which reads as "you have nothing left".
 			out := mcphandlers.AccountQuota{
 				Provider: q.Provider, Supported: q.Supported, Reason: q.Reason,
 				Connected: q.Connected, Plan: q.Plan, Org: q.Org,
-				Pending: q.Pending, Checking: q.Checking, Err: q.Err,
+				AuthMethod: q.AuthMethod,
+				Pending:    q.Pending, Checking: q.Checking, Err: q.Err,
 			}
 			now := time.Now()
+			if !q.ExpiresAt.IsZero() {
+				out.ExpiresAt = q.ExpiresAt.UTC().Format(time.RFC3339)
+			}
 			if !q.FetchedAt.IsZero() {
 				out.FetchedAt = q.FetchedAt.UTC().Format(time.RFC3339)
 				out.AgeS = int(now.Sub(q.FetchedAt).Round(time.Second) / time.Second)
+			}
+			if d := q.NextAt.Sub(now); d > 0 {
+				out.NextS = int(d.Round(time.Second) / time.Second)
 			}
 			for _, w := range q.Windows {
 				row := mcphandlers.AccountQuotaWindow{
@@ -2010,6 +2022,9 @@ func NewServer() *Server {
 					if d := w.ResetsAt.Sub(now); d > 0 {
 						row.ResetsInS = int(d.Round(time.Second) / time.Second)
 					}
+				}
+				if !w.ObservedAt.IsZero() {
+					row.ObservedAt = w.ObservedAt.UTC().Format(time.RFC3339)
 				}
 				out.Windows = append(out.Windows, row)
 			}

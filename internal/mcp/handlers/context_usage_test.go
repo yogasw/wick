@@ -285,3 +285,56 @@ func TestQuotaWindowLabel(t *testing.T) {
 		t.Fatalf("unknown key = %q, want the key itself", got)
 	}
 }
+
+// A failed probe has to arrive as the failure. Reporting an account with
+// no windows instead reads as "nothing left" — the opposite of "we could
+// not ask", and the one misreading that would make an agent stop working
+// for no reason.
+func TestWickUsage_PassesAProbeFailureThrough(t *testing.T) {
+	const id = "sess-abc"
+	layout := usageFixture(t, id)
+
+	quota := func(_ context.Context, key string) (AccountQuota, bool) {
+		return AccountQuota{
+			Provider: key, Supported: true, Connected: true,
+			Err: "usage check failed: 401 Unauthorized",
+		}, true
+	}
+
+	r := httptest.NewRequest("POST", "/mcp", nil)
+	r = r.WithContext(WithSessionID(r.Context(), id))
+	var got ToolCallResult
+	WickUsage(httptest.NewRecorder(), r, RPCRequest{}, captureResponder(t, &got), layout, quota, map[string]any{})
+	if got.IsError {
+		t.Fatalf("a failed quota probe must not fail the whole tool: %+v", got)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(got.Content[0].Text), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	acc, _ := out["account"].(map[string]any)
+	if acc == nil || !strings.Contains(acc["error"].(string), "401") {
+		t.Fatalf("expected the 401 to survive into the reply, got %v", acc)
+	}
+	if _, present := acc["windows"]; present {
+		t.Fatalf("a failed probe must not also report windows: %v", acc)
+	}
+}
+
+// The reading names a person nowhere: which account it is, is said by
+// the provider key, and whether it still works is said by the error.
+func TestWickUsage_AccountCarriesNoEmail(t *testing.T) {
+	const id = "sess-abc"
+	layout := usageFixture(t, id)
+
+	quota := func(_ context.Context, key string) (AccountQuota, bool) {
+		return AccountQuota{Provider: key, Supported: true, Connected: true, Plan: "team", Org: "Qiscus"}, true
+	}
+	r := httptest.NewRequest("POST", "/mcp", nil)
+	r = r.WithContext(WithSessionID(r.Context(), id))
+	var got ToolCallResult
+	WickUsage(httptest.NewRecorder(), r, RPCRequest{}, captureResponder(t, &got), layout, quota, map[string]any{})
+	if strings.Contains(got.Content[0].Text, "email") || strings.Contains(got.Content[0].Text, "@") {
+		t.Fatalf("no email belongs in this reply: %s", got.Content[0].Text)
+	}
+}

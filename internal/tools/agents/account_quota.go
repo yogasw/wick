@@ -38,9 +38,11 @@ type AccountQuota struct {
 	Supported bool
 	Reason    string
 
-	Connected bool
-	Plan      string
-	Org       string
+	Connected  bool
+	Plan       string
+	Org        string
+	AuthMethod string
+	ExpiresAt  time.Time
 
 	Windows []AccountQuotaWindow
 
@@ -51,6 +53,10 @@ type AccountQuota struct {
 	Pending bool
 	// Checking: a probe is in flight right now.
 	Checking bool
+	// NextAt is the earliest a manual re-check would be accepted. The
+	// panel shows it as a countdown; a caller that knows it will not ask
+	// again before then.
+	NextAt time.Time
 	// Err is a failed probe (expired token, rate limit), reported as
 	// itself rather than as an empty set of windows.
 	Err string
@@ -74,6 +80,7 @@ func ProviderAccountQuota(ctx context.Context, key string) (AccountQuota, bool) 
 
 	acc := logintty.ReadAccount(ins.Type, ins.Env)
 	out.Connected, out.Plan, out.Org = acc.Connected, acc.Plan, acc.Org
+	out.AuthMethod, out.ExpiresAt = acc.AuthMethod, acc.ExpiresAt
 
 	if !logintty.SupportsUsage(ins.Type) {
 		out.Reason = string(ins.Type) + " does not report usage limits"
@@ -87,7 +94,7 @@ func ProviderAccountQuota(ctx context.Context, key string) (AccountQuota, bool) 
 		return logintty.ReadUsage(ins.Type, ins.Env)
 	}, logintty.CredentialsChangedAt(ins.Type, ins.Env))
 
-	out.Checking, out.FetchedAt = v.Checking, v.FetchedAt
+	out.Checking, out.FetchedAt, out.NextAt = v.Checking, v.FetchedAt, v.NextAt
 	switch {
 	case v.Err != nil:
 		out.Err = v.Err.Error()
