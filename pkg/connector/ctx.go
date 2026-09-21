@@ -367,7 +367,8 @@ func (c *Ctx) SetSessionID(sessionID string) { c.sessionID = sessionID }
 // SessionID returns the agent session this call was made within, or "".
 //
 // Trustworthy for authorization only because the MCP layer resolves it
-// from the per-spawn X-Wick-Session-Id header in preference to any
-// session_id the model supplied — see executeOneCtx. An op that keys
+// from the CALL itself — the per-spawn credential names the session, and
+// that wins over both the wire header and any session_id the model
+// supplied (see internal/mcp/auth.go and executeOneCtx). An op that keys
 // access off this value must not fall back to caller-supplied input.
 func (c *Ctx) SessionID() string { return c.sessionID }

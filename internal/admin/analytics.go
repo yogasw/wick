@@ -28,7 +28,10 @@ import (
 // stays one screen.
 const (
 	defaultWindowDays = 30
-	minWindowDays     = 7
+	// One day is a legitimate question — "what happened today" — so the
+	// floor is a day, not a week. It exists only to stop a zero or a
+	// negative from producing an empty axis.
+	minWindowDays = 1
 	// Two years of daily points is ~730 small objects — a payload worth
 	// sending. Past that the axis is asking for a different chart, not a
 	// longer one.

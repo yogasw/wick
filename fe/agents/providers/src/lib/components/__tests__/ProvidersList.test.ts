@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import ProvidersList from "../ProvidersList.svelte";
+import { expectCardRhythm } from "./cardRhythm.js";
 import * as api from "$lib/api.js";
 import * as tty from "$lib/logintty.js";
 import type { ProvidersListResponse, ProviderConnection } from "$lib/types.js";
@@ -455,3 +456,15 @@ describe("ProvidersList connection badges", () => {
 
 // Recent Spawns is now its own component (RecentSpawns.svelte) with its own
 // test file — ProvidersList just embeds it.
+
+describe("ProvidersList - card rhythm", () => {
+  /* The same rule the provider page broke: a wrapper that groups cards
+     takes them out of the page's vertical rhythm, and they render
+     flush. Asserted here too because this page is the other long stack
+     of cards, and the failure is invisible to every other test. */
+  it("spaces the cards it stacks", async () => {
+    const { container } = render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("claude/claude");
+    expectCardRhythm(container);
+  });
+});

@@ -47,6 +47,21 @@ type scopedGrant struct {
 	// chatting — stripping there would take an admin's own tools away from
 	// them for no security gain.
 	stripAdmin bool
+	// sessionID is the conversation this token was minted for, when the
+	// minter knew it. It exists so a tool call can resolve WHICH session
+	// it belongs to from the credential itself rather than from an
+	// argument the model has to remember to pass.
+	//
+	// The header X-Wick-Session-Id already does this for claude, but only
+	// claude: codex takes no custom headers (it reads the bearer from an
+	// env var and nothing else), so anything header-only is provider
+	// specific by construction. The token is the one thing every provider
+	// carries, so the session rides along with it.
+	//
+	// Empty is normal and not an error: the shared per-boot token names no
+	// session, and a caller that mints before its session exists may leave
+	// it blank — the wire header then answers instead.
+	sessionID string
 }
 
 // ScopedTokenPrefix marks tokens minted here. Distinct from the PAT
@@ -75,6 +90,15 @@ func (s *ScopedTokens) Issue(userID string, tagIDs []string) (string, error) {
 // IssueFor mints a token and says explicitly whether the principal should
 // be demoted to RoleUser on every request. See scopedGrant.stripAdmin.
 func (s *ScopedTokens) IssueFor(userID string, tagIDs []string, stripAdmin bool) (string, error) {
+	return s.IssueForSession(userID, "", tagIDs, stripAdmin)
+}
+
+// IssueForSession mints a token that also remembers WHICH session it was
+// minted for, so calls arriving with it resolve to that conversation
+// without the model passing a session_id. sessionID may be empty when the
+// minter does not know it yet (sub-agents); the grant is then exactly what
+// IssueFor produced before.
+func (s *ScopedTokens) IssueForSession(userID, sessionID string, tagIDs []string, stripAdmin bool) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
@@ -88,7 +112,13 @@ func (s *ScopedTokens) IssueFor(userID string, tagIDs []string, stripAdmin bool)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.m[tok] = scopedGrant{userID: userID, tagIDs: cp, expires: s.now().Add(scopedTokenTTL), stripAdmin: stripAdmin}
+	s.m[tok] = scopedGrant{
+		userID:     userID,
+		tagIDs:     cp,
+		expires:    s.now().Add(scopedTokenTTL),
+		stripAdmin: stripAdmin,
+		sessionID:  sessionID,
+	}
 	return tok, nil
 }
 
@@ -115,6 +145,24 @@ func (s *ScopedTokens) LookupGrant(token string) (userID string, tagIDs []string
 	cp := make([]string, len(g.tagIDs))
 	copy(cp, g.tagIDs)
 	return g.userID, cp, g.stripAdmin, true
+}
+
+// LookupSession resolves the session a token was minted for. ok is false
+// for unknown or expired tokens; a valid token minted without a session
+// returns ok=true with an empty id, which callers read as "no opinion" and
+// fall back to whatever the request itself carries.
+func (s *ScopedTokens) LookupSession(token string) (sessionID string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g, found := s.m[token]
+	if !found {
+		return "", false
+	}
+	if s.now().After(g.expires) {
+		delete(s.m, token)
+		return "", false
+	}
+	return g.sessionID, true
 }
 
 // Revoke drops a token. Called when a delegation reaches a terminal

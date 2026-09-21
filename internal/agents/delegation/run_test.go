@@ -42,6 +42,16 @@ type fakeTokens struct {
 	issued  int
 	revoked int
 	last    []string
+	// lastSession records the session the child's token was minted for,
+	// so a regression back to a session-less grant is visible.
+	lastSession string
+}
+
+func (f *fakeTokens) IssueForSession(_, sessionID string, tagIDs []string, _ bool) (string, error) {
+	f.mu.Lock()
+	f.lastSession = sessionID
+	f.mu.Unlock()
+	return f.Issue("", tagIDs)
 }
 
 func (f *fakeTokens) Issue(_ string, tagIDs []string) (string, error) {
@@ -64,6 +74,12 @@ func (f *fakeTokens) counts() (issued, revoked int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.issued, f.revoked
+}
+
+func (f *fakeTokens) session() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastSession
 }
 
 func (f *fakeTokens) lastTags() []string {
@@ -127,6 +143,15 @@ func TestRunReturnsFinalTextOnDone(t *testing.T) {
 	// The scoped credential must not outlive the run.
 	if issued, revoked := tok.counts(); issued != 1 || revoked != 1 {
 		t.Fatalf("token issued=%d revoked=%d, want 1/1", issued, revoked)
+	}
+	// A child runs in its OWN session, so its credential must name that
+	// one — not the parent's, and not nothing. Without this the child's
+	// session-scoped tools depend on a header it may not be able to send.
+	if got, want := tok.session(), got.ChildSessionID; got != want || got == "" {
+		t.Fatalf("token session = %q, want the child session %q", got, want)
+	}
+	if tok.session() == "leader" {
+		t.Fatal("child token was minted for the parent session")
 	}
 }
 

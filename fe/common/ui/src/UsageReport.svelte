@@ -21,13 +21,18 @@
     compactTokens,
     formatCost,
     exact,
+    sinceText,
     EMPTY_TOTALS,
     type UsageReport,
     type UsageSlice,
+    type SessionUse,
+    type WindowOption,
     type ProviderUsageDetail,
-  } from "../usageReport.js";
+  } from "./usageReport.js";
 
   type Props = {
+    /** Where the ledger is served from. The providers page passes its
+        tool base; the admin analytics page passes its own mount. */
     base: string;
     /** Scope the whole panel to ONE provider ("claude/enginer"). Same
         component, filtered — the provider page asks a narrower question
@@ -37,13 +42,68 @@
     /** Resolve an id to something human — project and user slices key by
      *  id, and a bare uuid tells nobody anything. Falls back to the id. */
     labelFor?: (kind: "project" | "user", key: string) => string;
+    /** Override the collection the two reads hang off. Defaults to the
+        agents tool's shape; the admin page serves the same report from
+        its own path. */
+    endpoint?: string;
+    /** Section heading. The providers page says "Token Usage"; the admin
+        page already has a heading above it. */
+    title?: string;
+    /** Which range to open on. "today" where a fast first paint matters
+        more than the lifetime total — all time walks every session. */
+    defaultRange?: string;
+    /** Drive the range from OUTSIDE instead of from these chips. A page
+        that already has a range filter must not grow a second one: two
+        controls over one number is how a reader ends up comparing a
+        30-day chart with a 7-day figure and trusting the comparison. */
+    range?: string;
+    since?: string;
+    until?: string;
+    /** Narrow to certain channels / bots, same filter the page applies
+        to everything else below it. */
+    channels?: string[];
+    instances?: string[];
+    /** Already-fetched report. A page that needs these numbers for its
+        own drill-downs fetches once and hands the result here, instead
+        of the card asking for the same thing a second time. */
+    report?: UsageReport | null;
   };
-  let { base, provider, labelFor }: Props = $props();
+  let {
+    base,
+    provider,
+    labelFor,
+    endpoint,
+    title = "Token Usage",
+    defaultRange = "today",
+    range: rangeProp,
+    since = "",
+    until = "",
+    channels,
+    instances,
+    report: reportProp,
+  }: Props = $props();
+  /** Fed from outside: render what the page already has. */
+  const fed = $derived(reportProp !== undefined);
+  /** Controlled when the caller passes a range or explicit dates. */
+  const controlled = $derived(rangeProp !== undefined || since !== "" || until !== "");
+  const api = $derived(endpoint ?? `${base}/api/providers`);
 
   type Tab = "provider" | "project" | "user";
   let tab = $state<Tab>("provider");
-  let report = $state<UsageReport | null>(null);
+  let ownReport = $state<UsageReport | null>(null);
+  const report = $derived(fed ? (reportProp ?? null) : ownReport);
   let detail = $state<ProviderUsageDetail | null>(null);
+  /* The range being read. "What did this cost" is almost never a
+     question about all time — it is "today", "this week" — and a figure
+     that only ever grows cannot show that anything changed. All time
+     stays the default because it is the only exact one. */
+  let ownRange = $state(defaultRange);
+  const range = $derived(controlled ? (rangeProp ?? "custom") : ownRange);
+  /* Offered by the server with every answer, so the chips and the
+     windows the backend understands cannot drift apart. */
+  const ranges = $derived<WindowOption[]>(
+    (provider ? detail?.windows : report?.windows) ?? [{ key: "all", label: "All time" }],
+  );
   /* Pagination is not decoration here: a provider used by a busy host
      lists thousands of sessions, and a page that renders all of them is
      a page nobody scrolls to the bottom of. */
@@ -54,14 +114,19 @@
   let error = $state("");
 
   async function load(refresh = false) {
+    // Fed from outside and not scoped to a provider: nothing to fetch.
+    if (fed && !provider) {
+      loading = false;
+      return;
+    }
     if (refresh) refreshing = true;
     error = "";
     try {
       if (provider) {
-        detail = await fetchProviderUsage(base, provider);
+        detail = await fetchProviderUsage(api, provider, refresh, range, since, until, { channels, instances });
         page = 0;
       } else {
-        report = await fetchUsageReport(base, refresh);
+        ownReport = await fetchUsageReport(api, refresh, range, since, until, { channels, instances });
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -72,8 +137,37 @@
   }
   onMount(() => load(false));
 
+  /* Follow the page's filter. Guarded on first run so this does not fire
+     a second request on mount beside onMount's. */
+  let lastRange = $state("");
+  $effect(() => {
+    const key = `${range}|${since}|${until}|${(channels ?? []).join()}|${(instances ?? []).join()}|${fed ? "fed" : ""}`;
+    if (lastRange === "") {
+      lastRange = key;
+      return;
+    }
+    if (key === lastRange) return;
+    lastRange = key;
+    loading = true;
+    void load(false);
+  });
+
+  /* Switching range is a new question, not a refresh: the cached answer
+     for the old one is no longer what is on screen. */
+  function pickRange(key: string) {
+    if (key === range) return;
+    ownRange = key;
+    loading = true;
+    void load(false);
+  }
+
   const totals = $derived(provider ? (detail?.totals ?? EMPTY_TOTALS) : (report?.totals ?? EMPTY_TOTALS));
-  const sessions = $derived<string[]>(detail?.sessions ?? []);
+  const sessions = $derived<SessionUse[]>(detail?.sessions ?? []);
+  /* The caveat the server attaches when a windowed figure had to be
+     rebuilt from a trail that no longer reaches back far enough. Shown
+     verbatim: an "at least" number presented as a total is the one way
+     this panel can mislead. */
+  const partialNote = $derived((provider ? detail : report)?.partial ? ((provider ? detail : report)?.note ?? "") : "");
   const pageCount = $derived(Math.max(1, Math.ceil(sessions.length / PAGE)));
   const pageRows = $derived(sessions.slice(page * PAGE, page * PAGE + PAGE));
   const rows = $derived<UsageSlice[]>(
@@ -128,30 +222,61 @@
 <div
   class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden"
 >
-  <div
-    class="px-5 py-3 flex items-center justify-between gap-3 border-b border-white-300 dark:border-navy-600"
-  >
-    <div class="flex items-baseline gap-2 min-w-0">
-      <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Token Usage</h2>
-      {#if provider}
-        <span class="text-xs text-black-700 dark:text-black-600 truncate">
-          {provider} · {exact(sessions.length)} session{sessions.length === 1 ? "" : "s"}
-        </span>
-      {:else if report}
-        <span class="text-xs text-black-700 dark:text-black-600 truncate">
-          {exact(report.turns)} turns · {exact(report.sessions)} sessions
-        </span>
-      {/if}
+  <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 space-y-2">
+    <div class="flex items-center justify-between gap-3">
+      <div class="flex items-baseline gap-2 min-w-0">
+        <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">{title}</h2>
+        {#if provider}
+          <span class="text-xs text-black-700 dark:text-black-600 truncate">
+            {provider} · {exact(sessions.length)} session{sessions.length === 1 ? "" : "s"}
+          </span>
+        {:else if report}
+          <span class="text-xs text-black-700 dark:text-black-600 truncate">
+            {exact(report.turns)} turns · {exact(report.sessions)} sessions
+          </span>
+        {/if}
+      </div>
+      <button
+        type="button"
+        class="rounded-lg border border-white-300 dark:border-navy-600 px-2.5 py-1 text-xs font-medium text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50"
+        onclick={() => load(true)}
+        disabled={refreshing || loading}
+      >
+        {refreshing ? "Refreshing…" : "Refresh"}
+      </button>
     </div>
-    <button
-      type="button"
-      class="rounded-lg border border-white-300 dark:border-navy-600 px-2.5 py-1 text-xs font-medium text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50"
-      onclick={() => load(true)}
-      disabled={refreshing || loading}
-    >
-      {refreshing ? "Refreshing…" : "Refresh"}
-    </button>
+
+    <!-- The range switch. Narrowest first: the narrow ranges are the
+         ones people check repeatedly, all time is the one they check
+         once. Hidden when a page drives the range itself. -->
+    {#if !controlled}
+    <div class="flex items-center gap-1 flex-wrap" role="group" aria-label="Range">
+      {#each ranges as r (r.key)}
+        <button
+          type="button"
+          aria-pressed={range === r.key}
+          data-testid="usage-range-{r.key}"
+          class="rounded-full px-2.5 py-0.5 text-[11px] font-medium border transition-colors {range === r.key
+            ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900 dark:text-blue-200'
+            : 'border-white-300 dark:border-navy-600 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800'}"
+          onclick={() => pickRange(r.key)}
+          disabled={loading || refreshing}
+        >
+          {r.label}
+        </button>
+      {/each}
+    </div>
+    {/if}
   </div>
+
+  {#if partialNote}
+    <p
+      data-testid="usage-partial-note"
+      class="px-5 py-2 text-[11px] text-amber-700 dark:text-amber-400 border-b border-white-300 dark:border-navy-600"
+    >
+      {partialNote}
+    </p>
+  {/if}
 
   {#if loading}
     <p class="px-5 py-6 text-xs text-black-700 dark:text-black-600">Reading the ledger…</p>
@@ -195,7 +320,9 @@
 
     {#if sessions.length === 0}
       <p class="px-5 py-6 text-xs text-black-700 dark:text-black-600">
-        No session has spent tokens on this provider yet.
+        {range === "all"
+          ? "No session has spent tokens on this provider yet."
+          : `No session spent tokens on this provider in this range (${detail?.window_label ?? ""}).`}
       </p>
     {:else}
       <div class="px-5 py-2 border-t border-white-300 dark:border-navy-600 flex items-center justify-between gap-2">
@@ -220,16 +347,59 @@
           </div>
         {/if}
       </div>
-      <ul class="text-xs">
-        {#each pageRows as sid (sid)}
-          <li
-            class="px-5 py-1.5 border-t border-white-300 dark:border-navy-600 font-mono text-black-900 dark:text-white-100 truncate"
-            title={sid}
-          >
-            {sid.slice(0, 8)}
-          </li>
-        {/each}
-      </ul>
+      <!-- One row per session: whose conversation it was, under which
+           project, and what it spent here. The id alone answered "there
+           are 6 of them" and nothing anybody could act on. -->
+      <table class="w-full text-xs" data-testid="usage-sessions">
+        <thead>
+          <tr class="border-t border-white-300 dark:border-navy-600 text-black-700 dark:text-black-600">
+            <th class="px-5 py-2 text-left font-medium">Session</th>
+            <th class="px-5 py-2 text-left font-medium hidden sm:table-cell">User</th>
+            <th class="px-5 py-2 text-left font-medium hidden md:table-cell">Project</th>
+            <th class="px-5 py-2 text-right font-medium">Cost</th>
+            <th class="px-5 py-2 text-right font-medium hidden sm:table-cell">Tokens</th>
+            <th class="px-5 py-2 text-right font-medium hidden md:table-cell">Last used</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each pageRows as row (row.id)}
+            <tr class="border-t border-white-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-800">
+              <td class="px-5 py-1.5 text-black-900 dark:text-white-100 max-w-0">
+                <div class="truncate" title={row.id}>
+                  {#if row.label}
+                    <span class="font-medium">{row.label}</span>
+                    <span class="ml-1.5 font-mono text-[11px] text-black-700 dark:text-black-600">
+                      {row.id.slice(0, 8)}
+                    </span>
+                  {:else}
+                    <span class="font-mono">{row.id.slice(0, 8)}</span>
+                  {/if}
+                </div>
+              </td>
+              <td class="px-5 py-1.5 text-black-700 dark:text-black-600 hidden sm:table-cell max-w-0">
+                <div class="truncate" title={row.user_id ?? ""}>{row.user_name || (row.user_id ? row.user_id.slice(0, 8) : "—")}</div>
+              </td>
+              <td class="px-5 py-1.5 text-black-700 dark:text-black-600 hidden md:table-cell max-w-0">
+                <div class="truncate" title={row.project_id ?? ""}>
+                  {row.project_name || (row.project_id ? row.project_id.slice(0, 8) : "—")}
+                </div>
+              </td>
+              <td class="px-5 py-1.5 text-right tabular-nums text-black-900 dark:text-white-100">
+                {formatCost(row.totals.cost_usd)}
+              </td>
+              <td
+                class="px-5 py-1.5 text-right tabular-nums text-black-700 dark:text-black-600 hidden sm:table-cell"
+                title={exact(row.totals.total)}
+              >
+                {compactTokens(row.totals.total)}
+              </td>
+              <td class="px-5 py-1.5 text-right text-black-700 dark:text-black-600 hidden md:table-cell whitespace-nowrap">
+                {sinceText(row.last_at)}
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
     {/if}
   {:else if report}
     <!-- Headline figures. Cost first: it is the question, the rest is

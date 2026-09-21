@@ -329,7 +329,9 @@ func TestWindowDaysClamps(t *testing.T) {
 		{"", defaultWindowDays},
 		{"nonsense", defaultWindowDays},
 		{"0", defaultWindowDays},
-		{"1", minWindowDays},
+		// One day is a question people ask ("what happened today"), so it
+		// is answered rather than widened to a week.
+		{"1", 1},
 		{"-5", minWindowDays},
 		{"3650", maxWindowDays},
 		{"45", 45},

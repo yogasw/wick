@@ -124,6 +124,11 @@ type ChildSpec struct {
 // TokenIssuer mints and revokes scoped MCP identities.
 type TokenIssuer interface {
 	Issue(userID string, tagIDs []string) (string, error)
+	// IssueForSession is Issue plus the session the token belongs to, so a
+	// child's calls resolve its OWN conversation rather than needing a
+	// header to say so. The child session id exists by the time this is
+	// called (the row carries it), which is what makes it possible.
+	IssueForSession(userID, sessionID string, tagIDs []string, stripAdmin bool) (string, error)
 	Revoke(token string)
 }
 
@@ -161,7 +166,11 @@ type Service struct {
 	Runner Runner
 	Stream EventStream
 	Tokens TokenIssuer
-	Tags   TagResolver
+	// Children publishes each running child's narrowed identity so the
+	// pool can mint its credential from it. nil = no narrowing applied
+	// (the old behaviour), which is what tests get.
+	Children *ChildGrants
+	Tags     TagResolver
 	// Workspaces prepares isolated worktrees (Phase 3). nil = every
 	// delegation runs in the shared workspace.
 	Workspaces WorkspaceProvider
@@ -562,9 +571,15 @@ func (s *Service) execute(
 	// outlive an unrecorded run. It is revoked when the run ends — for
 	// async that happens on the background goroutine, not here, or the
 	// child would lose its credential the moment this call returned.
+	// Publish the narrowed identity for the child's whole run. The pool
+	// mints the credential its process actually uses, lazily and again
+	// after every idle respawn, so the narrowing has to be readable then —
+	// handing a token to the runner is not enough, and was in fact ignored.
+	s.Children.Set(childSessionID, row.TriggeredBy, effTags)
+
 	var token string
 	if s.Tokens != nil && row.TriggeredBy != "" {
-		issued, err := s.Tokens.Issue(row.TriggeredBy, effTags)
+		issued, err := s.Tokens.IssueForSession(row.TriggeredBy, childSessionID, effTags, true)
 		if err != nil {
 			s.finish(ctx, row, entity.DelegationRunning, entity.DelegationFailed, "", "mint scoped token: "+err.Error(), 0)
 			return nil, err
@@ -575,6 +590,9 @@ func (s *Service) execute(
 		if token != "" && s.Tokens != nil {
 			s.Tokens.Revoke(token)
 		}
+		// The grant must not outlive the run either: a session id that
+		// comes back later must not inherit a finished child's identity.
+		s.Children.Clear(childSessionID)
 	}
 
 	if err := s.Runner.EnsureChildSession(baseCtx, childSessionID, row.ParentSessionID, row.ProjectID, row.TriggeredBy); err != nil {

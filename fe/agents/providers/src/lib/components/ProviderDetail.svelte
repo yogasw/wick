@@ -19,7 +19,7 @@
   import type { ProviderDetailResponse, ConfigFieldDTO, SpawnLogFileDTO } from "$lib/types.js";
   import AIRouterConfig from "$lib/components/AIRouterConfig.svelte";
   import RecentSpawns from "$lib/components/RecentSpawns.svelte";
-  import UsageReport from "$lib/components/UsageReport.svelte";
+  import { UsageReport } from "@wick-fe/common-ui";
   import ReconnectPanel from "$lib/components/ReconnectPanel.svelte";
 
 
@@ -831,7 +831,12 @@
         </p>
       </div>
     {:else}
-    <div data-testid="provider-config">
+    <!-- The card stack. This wrapper exists only to group the editable
+         sections, but grouping them takes them OUT of the page's
+         `space-y-4` — a parent's vertical rhythm only reaches its own
+         direct children. Without repeating it here every card below
+         sits flush against the next one. -->
+    <div data-testid="provider-config" class="space-y-4">
 
     <!-- Configuration (simple fields, 2-column grid). Collapsed by
          default; the header is the toggle. -->

@@ -113,13 +113,79 @@
 
   /* Sparkline over the recent per-turn levels. Drawn from the same
      numbers as the ring, so a rise the ring cannot express ("we jumped
-     30% in one turn") is still visible. */
-  const spark = $derived.by(() => {
-    const t = data?.trend ?? [];
-    if (t.length < 2) return "";
-    const max = Math.max(...t, 1);
-    const w = 100 / (t.length - 1);
-    return t.map((v, i) => `${(i * w).toFixed(1)},${(20 - (v / max) * 18).toFixed(1)}`).join(" ");
+     30% in one turn") is still visible.
+
+     It is hoverable for the same reason the analytics chart is: the
+     shape raises a question ("what happened there?") that the shape
+     alone cannot answer. Hovering names the turn, its level, and when
+     it ran — so a step in the curve becomes something you can go and
+     look at rather than just notice. */
+  const trend = $derived<number[]>(data?.trend ?? []);
+  const trendAt = $derived<string[]>(data?.trend_at ?? []);
+  const trendSpent = $derived<number[]>(data?.trend_spent ?? []);
+  const trendMax = $derived(Math.max(...trend, 1));
+
+  const SPARK_H = 20;
+  const SPARK_PAD = 1;
+
+  function tx(i: number): number {
+    if (trend.length <= 1) return 50;
+    return (i / (trend.length - 1)) * 100;
+  }
+  function ty(v: number): number {
+    return SPARK_H - SPARK_PAD - (v / trendMax) * (SPARK_H - SPARK_PAD * 2);
+  }
+
+  const spark = $derived(
+    trend.length < 2 ? "" : trend.map((v, i) => `${tx(i).toFixed(1)},${ty(v).toFixed(1)}`).join(" "),
+  );
+  /* The filled area under the line. Same points, closed along the
+     baseline — it makes a shallow curve readable at 32px tall, which a
+     hairline is not. */
+  const sparkArea = $derived(spark === "" ? "" : `0,${SPARK_H} ${spark} 100,${SPARK_H}`);
+
+  let hover = $state<number | null>(null);
+
+  function onSparkMove(e: MouseEvent) {
+    const box = (e.currentTarget as SVGElement).getBoundingClientRect();
+    if (box.width === 0 || trend.length === 0) return;
+    const frac = (e.clientX - box.left) / box.width;
+    hover = Math.max(0, Math.min(trend.length - 1, Math.round(frac * (trend.length - 1))));
+  }
+
+  /* The readout, in the line that otherwise says "last N turns". Pinned
+     rather than following the cursor: in a panel this small a tooltip
+     that moves is harder to read than one that stays put. */
+  const hoverPct = $derived(
+    hover === null || !hasWindow ? 0 : Math.round(((trend[hover] ?? 0) / (data?.window ?? 1)) * 100),
+  );
+  /* What the hovered turn actually DID, which is the question a step in
+     the curve raises: how much the window moved, and what that turn put
+     on the wire. Both are differences against the point before it — the
+     first point has no "before", and saying so beats printing a delta
+     measured from nothing. */
+  const hoverDelta = $derived(
+    hover === null || hover === 0 ? null : (trend[hover] ?? 0) - (trend[hover - 1] ?? 0),
+  );
+  const hoverTurnSpend = $derived(
+    hover === null || hover === 0 || trendSpent.length === 0
+      ? null
+      : (trendSpent[hover] ?? 0) - (trendSpent[hover - 1] ?? 0),
+  );
+  const hoverSpent = $derived(hover === null ? 0 : (trendSpent[hover] ?? 0));
+
+  function signed(n: number): string {
+    return `${n > 0 ? "+" : n < 0 ? "−" : ""}${short(Math.abs(n))}`;
+  }
+
+  const hoverTime = $derived.by(() => {
+    if (hover === null) return "";
+    const iso = trendAt[hover];
+    if (!iso) return "";
+    const t = Date.parse(iso);
+    return Number.isFinite(t)
+      ? new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      : "";
   });
 </script>
 
@@ -185,9 +251,14 @@
           <svg
             viewBox="0 0 100 20"
             preserveAspectRatio="none"
-            class="mt-2 h-8 w-full text-black-700 dark:text-black-600"
+            role="img"
+            class="mt-2 h-8 w-full cursor-crosshair text-black-700 dark:text-black-600"
             aria-label="Recent context level per turn"
+            data-testid="context-spark"
+            onmousemove={onSparkMove}
+            onmouseleave={() => (hover = null)}
           >
+            <polygon points={sparkArea} fill="currentColor" opacity="0.12" />
             <polyline
               points={spark}
               fill="none"
@@ -195,9 +266,49 @@
               stroke-width="1"
               vector-effect="non-scaling-stroke"
             />
+            {#if hover !== null}
+              <line
+                x1={tx(hover)}
+                y1="0"
+                x2={tx(hover)}
+                y2={SPARK_H}
+                stroke="currentColor"
+                stroke-width="1"
+                opacity="0.5"
+                vector-effect="non-scaling-stroke"
+              />
+              <circle cx={tx(hover)} cy={ty(trend[hover])} r="2" fill="currentColor" />
+            {/if}
           </svg>
-          <p class="text-[11px] text-black-700 dark:text-black-600">
-            last {data.trend?.length ?? 0} turns
+          <p
+            class="text-[11px] text-black-700 dark:text-black-600 tabular-nums"
+            data-testid="context-spark-readout"
+          >
+            {#if hover !== null}
+              <span class="font-medium text-black-900 dark:text-white-100">
+                turn {hover + 1}/{trend.length}
+              </span>
+              · {short(trend[hover])}{#if hoverDelta !== null}
+                <span
+                  class={hoverDelta > 0
+                    ? "text-amber-600 dark:text-amber-400"
+                    : hoverDelta < 0
+                      ? "text-green-600 dark:text-green-400"
+                      : ""}>{signed(hoverDelta)}</span
+                >{/if}{#if hasWindow}
+                · {hoverPct}%{/if}{#if hoverTime}
+                · {hoverTime}{/if}
+              <!-- The second line is the spend behind that move: what this
+                   turn cost, and what the session had spent by then. A jump
+                   in the window and a jump in the bill are not the same
+                   event — a cache-heavy turn moves one and not the other. -->
+              <span class="block text-black-700 dark:text-black-600">
+                {#if hoverTurnSpend !== null}turn ini {short(hoverTurnSpend)} token · {/if}total
+                {short(hoverSpent)}
+              </span>
+            {:else}
+              last {trend.length} turns · hover for a turn
+            {/if}
           </p>
         {/if}
       </div>

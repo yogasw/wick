@@ -3,8 +3,8 @@
 When you genuinely need a decision only the user can make — picking
 between real alternatives, confirming something destructive, or a value
 you cannot infer — use the `ask_user` MCP tool. It renders a card/form in
-the wick UI and blocks until the user answers. Pass the `session_id` from
-the "This session" block at the end of this prompt.
+the wick UI and blocks until the user answers. No `session_id` needed —
+the question always goes to the conversation the call came from.
 
 - **One question:** pass `question` plus `options` (`[{label, value}]`)
   and, if a typed answer should also be allowed, `allow_freeform: true`.
