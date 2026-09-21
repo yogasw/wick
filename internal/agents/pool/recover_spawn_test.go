@@ -2,9 +2,13 @@ package pool
 
 import (
 	"context"
+	"errors"
+	"io"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/provider"
 )
 
@@ -126,5 +130,187 @@ func TestReapSystemTurnStillDoesNotSpawn(t *testing.T) {
 func TestExitReasonStringOOM(t *testing.T) {
 	if got := exitReasonString(provider.ExitOOM); got != "oom" {
 		t.Fatalf("exitReasonString(ExitOOM) = %q, want %q", got, "oom")
+	}
+}
+
+// crashingSpawner is a CLI that cannot start: every spawn produces a
+// process that emits nothing and exits non-zero immediately — codex with a
+// config.toml it can no longer parse, a missing binary, a bad model id.
+//
+// It is the fake the crash-loop tests need, because the loop is driven by
+// the RESTART dying the same way the original did. A spawner whose process
+// exits cleanly ends the streak at the first restart and proves nothing.
+type crashingSpawner struct {
+	mu    sync.Mutex
+	procs int
+}
+
+func (s *crashingSpawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider.Process, error) {
+	s.mu.Lock()
+	s.procs++
+	pid := 80000 + s.procs
+	s.mu.Unlock()
+	pr, pw := io.Pipe()
+	_ = pw.Close() // stdout EOF straight away: nothing was ever produced
+	return &crashingProc{stdoutR: pr, pid: pid}, nil
+}
+
+func (s *crashingSpawner) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.procs
+}
+
+type crashingProc struct {
+	stdoutR *io.PipeReader
+	pid     int
+}
+
+func (p *crashingProc) Stdout() io.Reader     { return p.stdoutR }
+func (p *crashingProc) Stdin() io.WriteCloser { return nopStdin{} }
+func (p *crashingProc) Wait() error           { return errors.New("exit status 1") }
+func (p *crashingProc) Pid() int              { return p.pid }
+func (p *crashingProc) Binary() string        { return "codex" }
+func (p *crashingProc) Argv() []string        { return nil }
+func (p *crashingProc) Env() []string         { return nil }
+func (p *crashingProc) Kill() error           { return p.stdoutR.Close() }
+func (p *crashingProc) StderrTail() string {
+	return "error: failed to parse config.toml"
+}
+
+type nopStdin struct{}
+
+func (nopStdin) Write(b []byte) (int, error) { return len(b), nil }
+func (nopStdin) Close() error                { return nil }
+
+// newCrashPool is newPool with a spawner that cannot produce a working
+// process, so one Send is enough to start a real crash loop.
+func newCrashPool(t *testing.T, sp *crashingSpawner) (*Pool, config.Layout) {
+	t.Helper()
+	layout := config.NewLayout(t.TempDir())
+	if err := layout.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	factory := &ClaudeFactory{Layout: layout, Spawner: sp}
+	p := New(PoolConfig{
+		MaxConcurrent: 2,
+		IdleTimeout:   500 * time.Millisecond,
+		Layout:        layout,
+		Factory:       factory,
+	})
+	// The exit hook is the loop: a dead process lands in HandleExit, which
+	// decides whether to start another one. Without it there is no loop to
+	// bound and these tests would pass on any code.
+	factory.OnExit = p.HandleExit
+	t.Cleanup(p.Stop)
+	return p, layout
+}
+
+// settle waits until the spawn count stops moving, then returns it. A
+// bounded loop cannot be measured by waiting for an exact number — that
+// passes just as happily while the loop is still running.
+func settle(t *testing.T, sp *crashingSpawner, quiet, timeout time.Duration) int {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	last, stableSince := -1, time.Now()
+	for time.Now().Before(deadline) {
+		n := sp.count()
+		if n != last {
+			last, stableSince = n, time.Now()
+		} else if time.Since(stableSince) >= quiet {
+			return n
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("spawning never settled: still at %d after %s — the crash loop is unbounded", sp.count(), timeout)
+	return 0
+}
+
+// The crash loop, in one test. A provider whose process cannot start —
+// codex with a config.toml it can no longer parse — dies again the instant
+// it is restarted, and every death re-enters recoverFromExit. The restart
+// budget was supposed to bound that, but the give-up branch announced its
+// verdict through Send, and Send spawns: "stop restarting" was itself a
+// restart. Production showed 673 spawns in one session, every one of them
+// logged as "giving up", and the only way out was changing provider.
+//
+// So the budget has to bound SPAWNS, not just the restarts the pool admits
+// to: one for the message that started it, then maxRespawnAttempts.
+func TestGiveUpStopsSpawning(t *testing.T) {
+	sp := &crashingSpawner{}
+	p, layout := newCrashPool(t, sp)
+	setupSession(t, layout, "S1")
+
+	if err := p.Send(context.Background(), "S1", "default", "slack", "user", "halo"); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := settle(t, sp, 700*time.Millisecond, 20*time.Second); n != 1+maxRespawnAttempts {
+		t.Fatalf("crash loop spawned %d processes, want %d (the first send plus %d restarts)",
+			n, 1+maxRespawnAttempts, maxRespawnAttempts)
+	}
+}
+
+// Giving up must still say so. The notice is buffered rather than sent
+// (buffering is what keeps it from spawning), so it also goes out through
+// OnSpawnError — that wiring is what puts it in front of the person in the
+// originating Slack thread, who is the only one who can fix the cause.
+// Once, though: the process keeps dying after the halt, and an
+// announcement per death is the same flood in a different channel.
+func TestGiveUpAnnouncesOnceWithoutSpawning(t *testing.T) {
+	sp := &crashingSpawner{}
+	p, layout := newCrashPool(t, sp)
+	setupSession(t, layout, "S1")
+
+	var mu sync.Mutex
+	var announced []string
+	p.cfg.OnSpawnError = func(ev SpawnErrorEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		announced = append(announced, ev.Message)
+	}
+
+	if err := p.Send(context.Background(), "S1", "default", "slack", "user", "halo"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, sp, 700*time.Millisecond, 20*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	var halts []string
+	for _, m := range announced {
+		if contains(m, "NOT restarted") {
+			halts = append(halts, m)
+		}
+	}
+	if len(halts) != 1 {
+		t.Fatalf("halt announced %d times, want exactly 1: %v", len(halts), halts)
+	}
+	if !contains(halts[0], "config") {
+		t.Fatalf("halt announcement %q does not point at the usual cause", halts[0])
+	}
+}
+
+// A person messaging the session is the intervention the halt notice asked
+// for — they have seen it and may have fixed the provider config. The next
+// message must get a full budget again, or a session that gave up once
+// would sit dead for the rest of the ten-minute window even after the fix.
+func TestUserMessageRestoresTheRestartBudget(t *testing.T) {
+	sp := &crashingSpawner{}
+	p, layout := newCrashPool(t, sp)
+	setupSession(t, layout, "S1")
+
+	if err := p.Send(context.Background(), "S1", "default", "slack", "user", "halo"); err != nil {
+		t.Fatal(err)
+	}
+	first := settle(t, sp, 700*time.Millisecond, 20*time.Second)
+
+	if err := p.Send(context.Background(), "S1", "default", "slack", "user", "sudah kuperbaiki, lanjut"); err != nil {
+		t.Fatal(err)
+	}
+	second := settle(t, sp, 700*time.Millisecond, 20*time.Second)
+
+	if got := second - first; got != 1+maxRespawnAttempts {
+		t.Fatalf("after the user message the budget allowed %d spawns, want %d", got, 1+maxRespawnAttempts)
 	}
 }
