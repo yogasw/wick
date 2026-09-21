@@ -36,9 +36,16 @@ const maxRespawnAttempts = 3
 const respawnWindow = 10 * time.Minute
 
 // crashState tracks recent unexplained deaths for one agent.
+//
+// halted latches once the budget is spent. It exists because giving up is
+// not a one-off decision: the process keeps dying for as long as whatever
+// broke it stays broken, and every one of those deaths re-enters
+// recoverFromExit. Without the latch the pool announces the same verdict
+// on every crash, filling the transcript with identical notices.
 type crashState struct {
 	attempts int
 	first    time.Time
+	halted   bool
 }
 
 // ShouldRespawn reports whether an exit warrants an automatic restart,
@@ -85,6 +92,22 @@ func (p *Pool) noteCrashLocked(key string, now time.Time) int {
 	return st.attempts
 }
 
+// markHaltedLocked latches the give-up verdict and reports whether this
+// call is the one that set it. Only the first gets to announce.
+//
+// Caller MUST hold p.mu.
+func (p *Pool) markHaltedLocked(key string) bool {
+	st, ok := p.crashes[key]
+	if !ok {
+		return false
+	}
+	if st.halted {
+		return false
+	}
+	st.halted = true
+	return true
+}
+
 // clearCrashesLocked forgets an agent's crash history. Called when it
 // exits for an explained reason, so a clean stop does not leave a stale
 // counter that shortens the budget of a future crash.
@@ -104,14 +127,7 @@ func (p *Pool) clearCrashesLocked(key string) {
 // The message states the cause, that work may be half-finished, and what
 // to do — continue rather than restart. It is addressed to the agent, not
 // the user, because the agent is the one that has to act on it.
-func crashNotice(reason string, attempt int, giveUp bool) string {
-	if giveUp {
-		return fmt.Sprintf(
-			"[system] Your process stopped unexpectedly %d times in a row (%s) and was not restarted again. "+
-				"Tell the user what you were doing when it stopped and what state you believe things are in, "+
-				"then wait for instructions.",
-			attempt, reason)
-	}
+func crashNotice(reason string, attempt int) string {
 	return fmt.Sprintf(
 		"[system] Your process stopped unexpectedly (%s) and was restarted — this is attempt %d. "+
 			"Your conversation is intact, but any work in flight may be half-finished: "+
@@ -119,6 +135,26 @@ func crashNotice(reason string, attempt int, giveUp bool) string {
 			"Check the state of whatever you were doing before continuing, and carry on from there — "+
 			"do not start the task over from the beginning.",
 		reason, attempt)
+}
+
+// haltNotice is what the SESSION is told once the restart budget is spent.
+//
+// Addressed to the person, not the agent, and that is the whole point: the
+// agent is not coming back to read it. A process that dies three times in a
+// row dies because of something outside the conversation — a provider
+// config that no longer parses, a CLI that cannot start — and only a human
+// can fix that. It names the cause and the one action that resumes work.
+//
+// It is delivered as a buffered system turn (no spawn), so it also becomes
+// leading context for whatever agent the next message does start.
+func haltNotice(reason string, attempts int) string {
+	return fmt.Sprintf(
+		"[system] The agent process stopped unexpectedly %d times in a row (%s) and was NOT restarted again. "+
+			"Repeated instant exits almost always mean something outside the conversation is broken — "+
+			"a provider config file that no longer parses, a CLI binary that cannot start, a bad model or "+
+			"credential setting. Nothing further will be retried automatically: fix the cause, or switch "+
+			"provider, then send a message to start the agent again.",
+		attempts, reason)
 }
 
 // oomNotice explains a memory kill, which is NOT retried.
