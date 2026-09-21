@@ -354,6 +354,16 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 	h.dispatchTool(w, r, hreq, rsp, p.Name, p.Arguments, user, tagIDs)
 }
 
+// sessionSender exposes the pool's message delivery to wick_compact, or
+// nil when no pool runs in this process (stdio, tests) — the tool then
+// reports itself unavailable instead of silently doing nothing.
+func (h *Handler) sessionSender() handlers.SessionSender {
+	if h.pool == nil {
+		return nil
+	}
+	return h.pool.Send
+}
+
 // dispatchTool routes one tool call to its handler. Extracted from
 // handleToolsCall so the in-process agent path (CallAgentTool, used by
 // the built-in wick provider) shares the exact same routing + handlers
@@ -397,6 +407,12 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 	// connector is taggable and auditable per user, which a hard-coded
 	// tool is not, and each op keeps its own name and schema instead of
 	// being an action string on one overloaded tool.
+	case "wick_context":
+		handlers.WickContext(w, r, hreq, rsp, h.layout, args)
+	case "wick_usage":
+		handlers.WickUsage(w, r, hreq, rsp, h.layout, args)
+	case "wick_compact":
+		handlers.WickCompact(w, r, hreq, rsp, h.layout, h.sessionSender(), args)
 	case "wick_cli_token":
 		handlers.WickCLIToken(w, r, hreq, rsp, h.layout, args)
 	case "wick_schedule_message":

@@ -1772,7 +1772,27 @@ func NewServer() *Server {
 	//
 	// ok=false (no owner: legacy rows, cron, system jobs) makes the factory
 	// fall back to the internal token rather than lose MCP access.
+	// Shared between the delegation service (which computes the narrowing)
+	// and the MCP minter above (which must apply it).
+	delegationChildGrants := delegation.NewChildGrants()
 	agentsFactory.SessionMCPToken = func(sessionID, callerUserID string) (string, bool) {
+		// A running SUB-AGENT has an identity chosen for it: its triggering
+		// human, with tags already intersected against the role's allowed
+		// list. Honour that first — the delegation computing the narrowing
+		// and this minter ignoring it is how a role's allowed_tags became
+		// decorative (see delegation.ChildGrants).
+		if g, ok := delegationChildGrants.Get(sessionID); ok {
+			// stripAdmin=true: the narrowing is the whole point, so a child
+			// must be tag-filtered even when the human who triggered it is
+			// an administrator.
+			tok, err := mcpScopedTokens.IssueForSession(g.UserID, sessionID, g.TagIDs, true)
+			if err != nil {
+				log.Warn().Err(err).Str("session", sessionID).
+					Msg("mcp: sub-agent token mint failed; falling back to internal token")
+				return "", false
+			}
+			return tok, true
+		}
 		sess, found := agentsMgr.Registry().Session(sessionID)
 		if !found {
 			return "", false
@@ -1818,11 +1838,12 @@ func NewServer() *Server {
 		return tok, true
 	}
 	delegationSvc = &delegation.Service{
-		Repo:   delegation.NewRepo(db),
-		Runner: delegation.NewPoolRunner(agentsPool, agentsLayout, agentsMgr.Register),
-		Stream: agentstool.NewDelegationStream(agentsBcast),
-		Tokens: mcpScopedTokens,
-		Tags:   authSvc,
+		Repo:     delegation.NewRepo(db),
+		Children: delegationChildGrants,
+		Runner:   delegation.NewPoolRunner(agentsPool, agentsLayout, agentsMgr.Register),
+		Stream:   agentstool.NewDelegationStream(agentsBcast),
+		Tokens:   mcpScopedTokens,
+		Tags:     authSvc,
 		// Phase 3: private git worktrees for sub-agents that edit code.
 		// Falls back to the shared workspace (with a note) on non-git
 		// projects rather than refusing the work.

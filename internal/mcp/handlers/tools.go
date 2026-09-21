@@ -692,6 +692,81 @@ func MetaToolDescriptors() []ToolDescriptor {
 			},
 		},
 		{
+			Name: "wick_context",
+			Description: "How full the model's context window is RIGHT NOW in this conversation — " +
+				"the reading a compaction decision is made from. Returns the active provider " +
+				"(the one that answered most recently, not the one merely configured), its model, " +
+				"used/window tokens and pct, a recent per-turn trend, the session's turn count and " +
+				"token totals, a row per provider the session has used, and can_compact. " +
+				"window is 0 when the CLI never reported a limit — then pct is 0 too and you must " +
+				"NOT invent a denominator. Needs no session_id: it reads the session the call came " +
+				"from; pass one only to inspect another session you own.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "Optional. Another session to read (you must own it, or be an admin). Omit for the current one.",
+					},
+				},
+			},
+			Annotations: &ToolAnnotation{
+				Title:        "Session context window",
+				ReadOnlyHint: PtrBool(true),
+			},
+		},
+		{
+			Name: "wick_usage",
+			Description: "What a conversation has SPENT: input / output / cache-read / cache-write tokens, " +
+				"cost in USD when the provider reports it, turn count, and the same broken down per " +
+				"provider the session used. Distinct from wick_context on purpose — these are flows " +
+				"(additive, historical), a context window is a level (neither). Needs no session_id; " +
+				"pass one only to inspect another session you own.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "Optional. Another session to read (you must own it, or be an admin). Omit for the current one.",
+					},
+				},
+			},
+			Annotations: &ToolAnnotation{
+				Title:        "Session token usage",
+				ReadOnlyHint: PtrBool(true),
+			},
+		},
+		{
+			Name: "wick_compact",
+			Description: "Ask a session to fold its history into a summary, freeing context. " +
+				"It does NOT compact inside this call and returns status 'queued': /compact is " +
+				"delivered as an ordinary message, so it runs after the current turn finishes, or " +
+				"wakes an idle session to do it. Compacting the conversation you are mid-turn in " +
+				"cannot affect THIS turn anyway — its context reached the model before you called. " +
+				"Check wick_context first; a provider that cannot act on /compact is refused here " +
+				"rather than sent a command it would answer as prose. Needs no session_id; pass one " +
+				"only to compact another session you own.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "Optional. Another session to compact (you must own it, or be an admin). Omit for the current one.",
+					},
+					"agent_name": map[string]any{
+						"type":        "string",
+						"description": "Optional. Which agent in that session; defaults to whichever it is talking to.",
+					},
+				},
+			},
+			Annotations: &ToolAnnotation{
+				Title:           "Compact session context",
+				ReadOnlyHint:    PtrBool(false),
+				DestructiveHint: PtrBool(false),
+				IdempotentHint:  PtrBool(false),
+			},
+		},
+		{
 			Name: "wick_cli_token",
 			Description: "Mint a short-lived token a SHELL can use to talk back into THIS session — " +
 				"the way to hand off long work (a build, a deploy, a migration) and be told how it went " +

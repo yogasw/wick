@@ -138,6 +138,23 @@ Prefer this over telling the user "I'll check back later" — you can't, on
 your own, unless you schedule it. If a real external clock matters (a CI run,
 a cron elsewhere), a schedule is also how you get invoked again to look.
 
+## Knowing your own context (`wick_context`, `wick_usage`, `wick_compact`)
+
+You cannot feel how full your context window is — ask. `wick_context`
+reports the active provider's used/window tokens and percentage, a recent
+trend, and whether compaction is even possible here; `wick_usage` reports
+what the conversation has SPENT (tokens in/out/cache, cost, turns, per
+provider). Neither needs a session id. Reach for them when a long run
+starts behaving oddly, before loading something large, or when the user
+asks what this is costing — not on every turn.
+
+`wick_compact` folds the history into a summary, and answers `queued`
+rather than `done` on purpose: `/compact` is delivered as a message, so it
+runs after the current turn ends (or wakes an idle session to do it).
+Compacting the conversation you are mid-turn in cannot help THAT turn —
+its context reached the model before you called. So compact at the END of
+a turn you know was heavy, not in the middle of one that is struggling.
+
 ## Silent replies (`[silent]`)
 
 Sometimes you're invoked but should NOT ping the user — a monitor loop that
