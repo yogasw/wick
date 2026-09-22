@@ -292,10 +292,16 @@ func TestNewStartAfterExitReplacesSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p1.finish()
-	// Wait for exit to land.
+	// Attach BEFORE the process exits. Attach hands the state it finds back
+	// as a return value and only STREAMS what happens after it, so finishing
+	// first leaves the exit frame with nobody to deliver to: the wait below
+	// then hangs for its full 3s and the test fails on timing rather than on
+	// behaviour. Under -race, where everything runs slower, losing that race
+	// is the normal outcome.
 	ch := make(chan Frame, 64)
 	s1.Attach(ch)
+	p1.finish()
+	// Wait for exit to land.
 	collect(t, ch, func(f Frame) bool { return f.T == "state" && f.State == StateExited })
 	s1.Detach(ch)
 
