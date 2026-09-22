@@ -58,6 +58,7 @@ vi.mock("../../stores/thread.js", () => ({
     turns: { subscribe: (fn: (v: unknown[]) => void) => { fn([]); return () => {}; } },
     live: { subscribe: (fn: (v: null) => void) => { fn(null); return () => {}; } },
     typing: { subscribe: (fn: (v: { active: boolean }) => void) => { fn({ active: false }); return () => {}; } },
+    turnStartedAt: { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; } },
     lifecycle: { subscribe: (fn: (v: { state: string; pid: number; substate: string; at: number }) => void) => { fn({ state: "", pid: 0, substate: "", at: 0 }); return () => {}; } },
     meta: metaStore,
     setHistory: vi.fn(),

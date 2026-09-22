@@ -269,3 +269,62 @@ describe("ContextPopover sparkline deltas", () => {
     expect(screen.getByTestId("context-spark-readout").textContent).toContain("turn 3/3");
   });
 });
+
+/* Everything else in this panel is written when a turn FINISHES, which
+   is no use while one has been running for four minutes saying nothing.
+   The live line is the part that is about now — and it comes from wick's
+   own event stream, so it works the same whichever provider is running. */
+describe("ContextPopover — the running turn", () => {
+  const live = (over: Record<string, unknown> = {}) => ({
+    active: true,
+    startedAt: Date.now() - 125_000, // 2:05 ago
+    steps: 7,
+    substate: "thinking",
+    ...over,
+  });
+
+  it("counts how long the turn has been going", () => {
+    render(ContextPopover, {
+      props: { open: true, data: ctx(), live: live(), loading: false, error: "",
+        onRefresh: vi.fn(), onCompact: vi.fn(), compacting: false, onClose: vi.fn() },
+    });
+    expect(screen.getByTestId("context-live-elapsed").textContent?.trim()).toBe("2:05");
+  });
+
+  it("says what it is doing, and how many steps in", () => {
+    render(ContextPopover, {
+      props: { open: true, data: ctx(), live: live({ toolName: "Bash" }), loading: false, error: "",
+        onRefresh: vi.fn(), onCompact: vi.fn(), compacting: false, onClose: vi.fn() },
+    });
+    const row = screen.getByTestId("context-live");
+    // The tool name wins over the substate: "Bash" says more than "thinking".
+    expect(row.textContent).toContain("Bash");
+    expect(row.textContent).toContain("7 steps");
+  });
+
+  it("is absent when nothing is running", () => {
+    render(ContextPopover, {
+      props: { open: true, data: ctx(), live: { active: false, startedAt: 0, steps: 0 },
+        loading: false, error: "", onRefresh: vi.fn(), onCompact: vi.fn(), compacting: false, onClose: vi.fn() },
+    });
+    expect(screen.queryByTestId("context-live")).toBeNull();
+  });
+
+  // A session with no finished turn has no ledger reading at all — and
+  // that is exactly when someone opens this panel to ask "is it stuck?".
+  it("shows the running turn even before any reading exists", () => {
+    render(ContextPopover, {
+      props: { open: true, data: null, live: live(), loading: false, error: "",
+        onRefresh: vi.fn(), onCompact: vi.fn(), compacting: false, onClose: vi.fn() },
+    });
+    expect(screen.getByTestId("context-live")).toBeTruthy();
+  });
+
+  it("passes an hour without losing the seconds", () => {
+    render(ContextPopover, {
+      props: { open: true, data: ctx(), live: live({ startedAt: Date.now() - 3_725_000 }),
+        loading: false, error: "", onRefresh: vi.fn(), onCompact: vi.fn(), compacting: false, onClose: vi.fn() },
+    });
+    expect(screen.getByTestId("context-live-elapsed").textContent?.trim()).toBe("1:02:05");
+  });
+});

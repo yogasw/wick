@@ -62,6 +62,18 @@ export const getProjectTickets = (base: string, projectId: string, opt: BoardOpt
   );
 };
 
+/** One person a ticket can be put on. */
+export type AssigneeOption = { id: string; name: string };
+
+/** Who this project's tickets may be assigned to, by name.
+
+    Its own request rather than a field on the board: the list changes when
+    somebody joins wick, not when a ticket moves, and the board is polled. */
+export const listAssignees = (base: string, projectId: string) =>
+  apiGetE<{ assignees?: AssigneeOption[] }>(
+    `${base}/api/projects/${encodeURIComponent(projectId)}/assignees`,
+  ).pipe(Effect.map((r) => r.assignees ?? []));
+
 export const createTicket = (
   base: string,
   projectId: string,
@@ -69,6 +81,8 @@ export const createTicket = (
     title: string;
     status?: string;
     assignee?: string;
+    /** Several people at once; merged with `assignee` server-side. */
+    assignees?: string[];
     fields?: Record<string, string>;
     session_id?: string;
   },
@@ -94,6 +108,9 @@ export const updateTicket = (
     body?: string;
     status?: string;
     assignee?: string;
+    /** The full list, replacing whoever is on the ticket. `[]` unassigns
+        everyone. Wins over `assignee` when both are sent. */
+    assignees?: string[];
     fields?: Record<string, string>;
   },
 ) => apiPatchE<TicketCard>(`${base}/api/tickets/${encodeURIComponent(ticketId)}`, patch);

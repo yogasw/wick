@@ -30,6 +30,20 @@ const todoFileName = "todos.json"
 // they stop taking space.
 const todoHistoryLimit = 20
 
+// todoReviseWindow decides when a checklist sharing NOTHING with the active
+// one is a revision of it rather than a new list.
+//
+// The old rule was overlap alone, which reads a rewrite as a new list: an
+// agent that rethinks its plan and renames every step shares no item with
+// what it had a minute ago, so the half-done list was archived and the
+// history filled up with near-duplicate plans nobody wrote on purpose.
+//
+// A list still being worked on — not done, not stopped, touched moments
+// ago — is the plan in hand, and replacing it is editing it. A list that
+// has gone cold, or that finished, is over; a checklist arriving after
+// that really is a new one and the old one belongs in the history.
+const todoReviseWindow = 30 * time.Minute
+
 // TodoSubstep is one nested step under an item.
 type TodoSubstep struct {
 	Step   string `json:"step"`
@@ -156,7 +170,7 @@ func RecordTodos(layout agentconfig.Layout, id string, items []TodoItem) (*Todos
 	}
 	next := TodoList{Items: items, StartedAt: now, UpdatedAt: now, Done: allCompleted(items)}
 	if rec.Active != nil {
-		if sharesItem(rec.Active.Items, items) && !rec.Active.Stopped {
+		if sameTodoList(*rec.Active, items, now) {
 			next.StartedAt = rec.Active.StartedAt // same list, carrying on
 		} else {
 			rec.History = appendTodoHistory(rec.History, *rec.Active)
@@ -364,6 +378,31 @@ func allCompleted(items []TodoItem) bool {
 // when ids are given, otherwise by label. Labels are compared
 // case-insensitively and trimmed, because a model re-sending its list often
 // re-types it.
+// sameTodoList reports whether `items` continue the active list rather than
+// starting a new one. Two ways to be the same list: it names something the
+// active list already has, or the active list is still warm and unfinished
+// (see todoReviseWindow) — a rewrite keeps neither ids nor wording, and is
+// still the same piece of work.
+//
+// A stopped list is never continued: the work was abandoned, and what comes
+// next is something else.
+func sameTodoList(active TodoList, items []TodoItem, now time.Time) bool {
+	if active.Stopped {
+		return false
+	}
+	if sharesItem(active.Items, items) {
+		return true
+	}
+	if active.Done {
+		return false
+	}
+	touched := active.UpdatedAt
+	if touched.IsZero() {
+		touched = active.StartedAt
+	}
+	return !touched.IsZero() && now.Sub(touched) < todoReviseWindow
+}
+
 func sharesItem(a, b []TodoItem) bool {
 	seenID := map[string]bool{}
 	seenLabel := map[string]bool{}

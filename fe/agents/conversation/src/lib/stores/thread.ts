@@ -36,6 +36,20 @@ export interface ThreadStore {
   turns: Writable<ConversationTurn[]>;
   live: Writable<LiveTurn | null>;
   typing: Writable<TypingState>;
+  /* When the turn currently running started, in epoch ms; 0 when nothing
+     is running.
+
+     A turn can go quiet for minutes — a long tool call, a model that is
+     still thinking — and the panel next to the composer had nothing to
+     say about it until the turn finished and the ledger moved. This is
+     the one fact that makes it live, and it comes from the wick event
+     stream rather than from any CLI, so it means the same thing on
+     claude, codex and wick's own provider.
+
+     Taken from the event's own clock where there is one, so a page
+     reloaded mid-turn shows how long the turn has really been going
+     rather than restarting the count at zero. */
+  turnStartedAt: Writable<number>;
   lifecycle: Writable<LifecycleState>;
   meta: Writable<ThreadMeta>;
   setHistory(turns: ConversationTurn[]): void;
@@ -63,10 +77,25 @@ export function createThreadStore(): ThreadStore {
   const turns = writable<ConversationTurn[]>([]);
   const live = writable<LiveTurn | null>(null);
   const typing = writable<TypingState>({ active: false });
+  const turnStartedAt = writable<number>(0);
   const lifecycle = writable<LifecycleState>({ state: "", pid: 0, substate: "", at: 0 });
+
+  /* Start the clock, once per turn. `at` is the event's own timestamp
+     when it carries one — on a reload mid-turn that is when the work
+     actually began, which is the whole point of showing it. Later events
+     in the same turn leave it alone: a substate change is not a new
+     turn, and resetting there would report "2s" on a turn five minutes
+     old. */
+  function startClock(at?: number): void {
+    turnStartedAt.update((t) => (t > 0 ? t : at && at > 0 ? at : Date.now()));
+  }
+  function stopClock(): void {
+    turnStartedAt.set(0);
+  }
   const meta = writable<ThreadMeta>({});
 
   function markWorking(): void {
+    startClock();
     lifecycle.update((l) =>
       l.state === "killed" || l.state === "working" ? l : { ...l, state: "working" }
     );
@@ -114,12 +143,14 @@ export function createThreadStore(): ThreadStore {
     }
     live.set(null);
     typing.set({ active: false });
+    stopClock();
   }
 
   function handleEvent(ev: AgentEvent): void {
     switch (ev.type) {
       case "session_start": {
         typing.set({ active: true });
+        startClock(ev.at);
         break;
       }
 
@@ -127,10 +158,13 @@ export function createThreadStore(): ThreadStore {
         const lc = ev.lifecycle ?? "";
         if (lc === "idle" || lc === "killed") {
           typing.update((t) => ({ ...t, active: false, toolName: undefined }));
+          stopClock();
         } else if (lc === "spawning") {
           typing.set({ active: true, substate: "spawning" });
+          startClock(ev.at);
         } else if (lc === "working") {
           typing.update((t) => ({ active: true, substate: ev.data ?? "", toolName: t.toolName }));
+          startClock(ev.at);
         }
         const lcState = (lc === "spawning" || lc === "working" || lc === "idle" || lc === "killed")
           ? lc as LifecycleState["state"]
@@ -430,6 +464,7 @@ export function createThreadStore(): ThreadStore {
     turns,
     live,
     typing,
+    turnStartedAt,
     lifecycle,
     meta,
     // dismissToolBlock removes a stuck tool card from the live turn (a run with
@@ -520,6 +555,7 @@ export function createThreadStore(): ThreadStore {
     handleKilledLocally() {
       finalize();
       typing.set({ active: false });
+      stopClock();
       lifecycle.update((l) => (l.state === "killed" ? l : { ...l, state: "killed" }));
     },
   };

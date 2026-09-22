@@ -89,8 +89,8 @@ func FollowupMessage(t Ticket, cfg project.TicketConfig) string {
 		fmt.Fprintf(&b, "- title: %s\n", t.Title)
 	}
 	fmt.Fprintf(&b, "- status: %s\n", t.Status)
-	if t.Assignee != "" {
-		fmt.Fprintf(&b, "- assignee: %s\n", t.Assignee)
+	if list := t.AssigneeList(); len(list) > 0 {
+		fmt.Fprintf(&b, "- assignee: %s\n", strings.Join(list, ", "))
 	}
 	keys := make([]string, 0, len(t.Fields))
 	for k := range t.Fields {

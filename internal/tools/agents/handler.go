@@ -353,6 +353,8 @@ func Register(r tool.Router) {
 	// those handlers resolve the owning project through the caller's
 	// visible projects, which enforces access on the way.
 	r.GET("/api/projects/{id}/tickets", apiProjectTickets)
+	// Who a ticket may be put on, by name — the assignee picker's options.
+	r.GET("/api/projects/{id}/assignees", apiProjectAssignees)
 	r.POST("/api/projects/{id}/tickets", apiTicketCreate)
 	r.PUT("/api/projects/{id}/ticket-config", apiProjectTicketConfig)
 	r.GET("/api/tickets/{ticketID}", apiTicketDetail)

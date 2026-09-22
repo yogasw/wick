@@ -67,8 +67,10 @@ templ grantsCard(grants []GrantRow) {
 				</p>
 			</div>
 		} else {
-			<div class="mt-5 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600">
-				<table class="w-full text-left text-sm">
+			<!-- resp-table: one row per card below md, same as the admin
+			     tables — five columns overflow a phone otherwise. -->
+			<div class="mt-5 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 resp-table-wrap">
+				<table class="w-full text-left text-sm resp-table">
 					<thead class="bg-white-200 dark:bg-navy-800 text-xs uppercase tracking-wide text-black-700 dark:text-black-600">
 						<tr>
 							<th class="px-4 py-2.5 font-medium">App</th>

@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -80,6 +81,13 @@ type ProviderUsage struct {
 	Turns int `json:"turns"`
 	// Model is the last model id the vendor billed under this provider.
 	Model string `json:"model,omitempty"`
+	// Models is what each model cost, all time. A provider is a door, not
+	// a price: "claude/default" answers on opus one turn and haiku the
+	// next, and the bill is mostly decided by which. Kept beside the
+	// provider bucket rather than replacing it, because "which provider"
+	// and "which model" are both real questions and the answers have to
+	// add up to the same total.
+	Models map[string]*ModelUsage `json:"models,omitempty"`
 	// ContextUsed / ContextWindow are the LAST reading, not a sum — how
 	// full the window was when this provider last answered. Window is 0
 	// when the CLI does not report a limit (codex does not).
@@ -91,13 +99,33 @@ type ProviderUsage struct {
 	Series  []UsagePoint `json:"series,omitempty"`
 }
 
+// ModelUsage is one model's slice of a provider's bucket.
+type ModelUsage struct {
+	UsageTotals
+	Turns   int       `json:"turns"`
+	FirstAt time.Time `json:"first_at,omitempty"`
+	LastAt  time.Time `json:"last_at,omitempty"`
+}
+
+// UnknownModel is the bucket for a turn whose vendor named no model. It
+// is a real row rather than a dropped one: the tokens were spent, and a
+// breakdown that silently omits them does not add up to the provider
+// total sitting next to it.
+const UnknownModel = "unknown"
+
 // UsagePoint is one turn, kept small on purpose — this is the shape that
 // repeats hundreds of times per session.
 type UsagePoint struct {
 	At          time.Time `json:"at"`
 	ContextUsed int       `json:"context_used,omitempty"`
-	Input       int       `json:"input,omitempty"`
-	CacheRead   int       `json:"cache_read,omitempty"`
+	// Model is which model this turn actually ran on. It costs a few
+	// bytes a point, and it is the only way a WINDOWED breakdown by model
+	// exists at all — the all-time buckets above cannot answer "what did
+	// we spend on opus this week". Points written before this field
+	// existed carry none and roll up under UnknownModel.
+	Model     string `json:"model,omitempty"`
+	Input     int    `json:"input,omitempty"`
+	CacheRead int    `json:"cache_read,omitempty"`
 	// CacheWrite is here so a windowed sum ("what did today cost")
 	// reconstructs the same figure the all-time totals carry. Points
 	// written before this field existed simply have none, which makes a
@@ -147,6 +175,7 @@ func (s *Store) recordUsage(u *event.TokenUsage, at time.Time) error {
 	if u.Model != "" {
 		p.Model = u.Model
 	}
+	p.addModel(modelKey(u.Model), flows, at)
 	// Levels replace, never accumulate.
 	if u.ContextUsed > 0 {
 		p.ContextUsed = u.ContextUsed
@@ -165,6 +194,7 @@ func (s *Store) recordUsage(u *event.TokenUsage, at time.Time) error {
 	p.Series = append(p.Series, UsagePoint{
 		At:          at,
 		ContextUsed: level,
+		Model:       modelKey(u.Model),
 		Input:       u.Input,
 		CacheRead:   u.CacheRead,
 		CacheWrite:  u.CacheWrite,
@@ -303,6 +333,14 @@ type UsageRollup struct {
 	ByProvider map[string]UsageTotals `json:"by_provider"`
 	ByProject  map[string]UsageTotals `json:"by_project"`
 	ByUser     map[string]UsageTotals `json:"by_user"`
+	// ByModel is keyed by ModelRowKey(provider, model): the same model id
+	// reached through two providers is two rows, because that is two
+	// different accounts being billed.
+	ByModel map[string]UsageTotals `json:"by_model,omitempty"`
+	// ModelTurns counts turns per model row. Cost answers "what is
+	// expensive"; turns answer "what do we actually use", and on a plan
+	// with no per-token price those are the only numbers there are.
+	ModelTurns map[string]int `json:"model_turns,omitempty"`
 	// ProviderSessions answers "where is provider A actually used" —
 	// sessions per provider, most recently used first.
 	ProviderSessions map[string][]SessionUse `json:"provider_sessions"`
@@ -380,6 +418,91 @@ func (p *ProviderUsage) TotalsBetween(since, until time.Time) (totals UsageTotal
 	return totals, turns, complete
 }
 
+// modelKey normalises a vendor's model id into a bucket name.
+func modelKey(model string) string {
+	if m := strings.TrimSpace(model); m != "" {
+		return m
+	}
+	return UnknownModel
+}
+
+// addModel folds one turn into the per-model buckets.
+func (p *ProviderUsage) addModel(key string, flows UsageTotals, at time.Time) {
+	if p.Models == nil {
+		p.Models = map[string]*ModelUsage{}
+	}
+	m := p.Models[key]
+	if m == nil {
+		m = &ModelUsage{FirstAt: at}
+		p.Models[key] = m
+	}
+	m.UsageTotals.Add(flows)
+	m.Turns++
+	m.LastAt = at
+}
+
+// ModelTotalsBetween splits this provider's spend by model over a range.
+//
+// All-time reads the buckets, which are exact. A window has to be rebuilt
+// from the per-turn trail — the same trade TotalsBetween makes, and the
+// same caveat applies: turns that fell off the end of the trail are
+// missing, so the caller must not print the result as a total without
+// saying so.
+//
+// A bucket file written before models were recorded has neither, and
+// answers with everything under UnknownModel rather than with nothing —
+// the spend is real even when what it ran on was never written down.
+func (p *ProviderUsage) ModelTotalsBetween(since, until time.Time) (map[string]UsageTotals, map[string]int) {
+	totals := map[string]UsageTotals{}
+	turns := map[string]int{}
+	if p == nil {
+		return totals, turns
+	}
+	if since.IsZero() && until.IsZero() {
+		if len(p.Models) == 0 {
+			// Nothing recorded per model: fall back to the provider's own
+			// figures under its last known model, so the breakdown still
+			// adds up to the provider row beside it.
+			if p.Turns > 0 || p.UsageTotals != (UsageTotals{}) {
+				totals[modelKey(p.Model)] = p.UsageTotals
+				turns[modelKey(p.Model)] = p.Turns
+			}
+			return totals, turns
+		}
+		for k, m := range p.Models {
+			totals[k] = m.UsageTotals
+			turns[k] = m.Turns
+		}
+		return totals, turns
+	}
+	for _, pt := range p.Series {
+		if !since.IsZero() && pt.At.Before(since) {
+			continue
+		}
+		if !until.IsZero() && pt.At.After(until) {
+			continue
+		}
+		spent := UsageTotals{
+			Input:      pt.Input,
+			CacheRead:  pt.CacheRead,
+			CacheWrite: pt.CacheWrite,
+			Output:     pt.Output,
+			CostUSD:    pt.CostUSD,
+		}
+		// A compaction point spends nothing and is not a turn; counting
+		// it would invent a turn for whichever model happened to be last.
+		if spent == (UsageTotals{}) {
+			continue
+		}
+		key := modelKey(pt.Model)
+		agg := totals[key]
+		agg.Add(spent)
+		totals[key] = agg
+		turns[key]++
+	}
+	return totals, turns
+}
+
 // AggregateUsage walks every session ledger and rolls it up by provider,
 // project and user, over all time.
 //
@@ -414,6 +537,8 @@ func AggregateUsageFiltered(layout config.Layout, sessionIDs []string, tags func
 		ByProvider:       map[string]UsageTotals{},
 		ByProject:        map[string]UsageTotals{},
 		ByUser:           map[string]UsageTotals{},
+		ByModel:          map[string]UsageTotals{},
+		ModelTurns:       map[string]int{},
 		ProviderSessions: map[string][]SessionUse{},
 		SessionTagsByID:  map[string]SessionTags{},
 		Since:            since,
@@ -465,6 +590,17 @@ func AggregateUsageFiltered(layout config.Layout, sessionIDs []string, tags func
 				ID: id, Totals: flows, Turns: turns, LastAt: p.LastAt,
 			})
 
+			modelTotals, modelTurns := p.ModelTotalsBetween(since, until)
+			for model, mt := range modelTotals {
+				k := ModelRowKey(name, model)
+				v := out.ByModel[k]
+				v.Add(mt)
+				out.ByModel[k] = v
+			}
+			for model, n := range modelTurns {
+				out.ModelTurns[ModelRowKey(name, model)] += n
+			}
+
 			if t.ProjectID != "" {
 				v := out.ByProject[t.ProjectID]
 				v.Add(flows)
@@ -493,4 +629,25 @@ func AggregateUsageFiltered(layout config.Layout, sessionIDs []string, tags func
 		out.ProviderSessions[name] = rows
 	}
 	return out, nil
+}
+
+// ModelRowKey names one (provider, model) row, and SplitModelRowKey reads
+// it back. They are a pair on purpose: the key crosses a JSON boundary
+// into the UI, so the format is written down once rather than guessed at
+// on the other side.
+//
+// "|" separates them because a provider key is "type/name" and a model id
+// carries dots and dashes — neither has ever contained a pipe.
+func ModelRowKey(provider, model string) string {
+	return provider + "|" + modelKey(model)
+}
+
+// SplitModelRowKey returns the provider and model a row key names. A key
+// with no separator is treated as a bare model, which is what an older
+// stored roll-up would have held.
+func SplitModelRowKey(key string) (provider, model string) {
+	if i := strings.Index(key, "|"); i >= 0 {
+		return key[:i], key[i+1:]
+	}
+	return "", key
 }

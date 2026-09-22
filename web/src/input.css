@@ -278,6 +278,11 @@
     border: 0 !important;
     padding: 0.375rem 0;
     text-align: left;
+    /* A cell on a phone is as wide as the screen and no wider. Connector
+       operation descriptions carry urls, json snippets and dotted paths —
+       tokens with nowhere to wrap — and one of them widened the card, then
+       the page, into a horizontal scroll. */
+    overflow-wrap: anywhere;
   }
   .dark .resp-table tr {
     border-color: rgb(var(--color-navy-600));

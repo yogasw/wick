@@ -72,6 +72,15 @@ type Slice struct {
 	Label    string `json:"label,omitempty"`
 	Totals   Totals `json:"totals"`
 	Sessions int    `json:"sessions,omitempty"`
+	// Turns is how many turns this row ran. Cost answers "what is
+	// expensive"; turns answer "what do we actually use" — and on a flat
+	// -rate plan, where every cost is zero, turns are the only answer
+	// there is.
+	Turns int `json:"turns,omitempty"`
+	// Group is the row this one hangs under: for a model row, the
+	// provider it was reached through. The same model id through two
+	// providers is two rows, and without this the UI cannot say why.
+	Group string `json:"group,omitempty"`
 	// Share is this row's percentage of the report total, so a bar can be
 	// drawn without the client summing the list first.
 	Share float64 `json:"share"`
@@ -90,8 +99,13 @@ type Report struct {
 	Sessions int    `json:"sessions"`
 
 	ByProvider []Slice `json:"by_provider"`
-	ByProject  []Slice `json:"by_project"`
-	ByUser     []Slice `json:"by_user"`
+	// ByModel goes one level below the provider: a provider is a door,
+	// and which model answered behind it is what decides both the bill
+	// and whether the answer was any good. Rows are (provider, model)
+	// pairs — see store.ModelRowKey.
+	ByModel   []Slice `json:"by_model"`
+	ByProject []Slice `json:"by_project"`
+	ByUser    []Slice `json:"by_user"`
 
 	// Partial says the window could not be reconstructed in full for
 	// every session — see store.UsageRollup.Partial. Carried into the
@@ -129,8 +143,11 @@ type ProviderReport struct {
 	Since       string   `json:"since,omitempty"`
 	Windows     []Option `json:"windows"`
 
-	Totals   Totals       `json:"totals"`
-	Turns    int          `json:"turns"`
+	Totals Totals `json:"totals"`
+	Turns  int    `json:"turns"`
+	// ByModel is this provider's own spend split by model — the same
+	// rows the fleet report carries, narrowed to this one door.
+	ByModel  []Slice      `json:"by_model,omitempty"`
 	Sessions []SessionUse `json:"sessions"`
 
 	Partial bool   `json:"partial,omitempty"`
@@ -272,6 +289,7 @@ func (b *Builder) Report(w Window, sc Scope, force bool) (Report, error) {
 		Turns:       roll.Turns,
 		Sessions:    roll.Sessions,
 		ByProvider:  Slices(roll.ByProvider, grand, nil),
+		ByModel:     ModelSlices(roll, grand, ""),
 		ByProject:   Slices(roll.ByProject, grand, func(id string) string { return b.projectName(id) }),
 		ByUser:      Slices(roll.ByUser, grand, b.userName),
 		Partial:     roll.Partial,
@@ -287,6 +305,14 @@ func (b *Builder) Report(w Window, sc Scope, force bool) (Report, error) {
 	}
 	for i, row := range rep.ByProvider {
 		rep.ByProvider[i].Sessions = len(roll.ProviderSessions[row.Key])
+		// Turns as well as sessions: the model rows below carry a turn
+		// count, and a provider row without one cannot be compared to the
+		// models sitting under it.
+		turns := 0
+		for _, use := range roll.ProviderSessions[row.Key] {
+			turns += use.Turns
+		}
+		rep.ByProvider[i].Turns = turns
 	}
 	return rep, nil
 }
@@ -306,6 +332,7 @@ func (b *Builder) Provider(key string, w Window, sc Scope, force bool) (Provider
 		WindowLabel: w.Label,
 		Windows:     options(b.clock()),
 		Totals:      TotalsOf(roll.ByProvider[key]),
+		ByModel:     ModelSlices(roll, TotalsOf(roll.ByProvider[key]).Total, key),
 		Partial:     roll.Partial,
 		Sessions:    []SessionUse{},
 	}
@@ -437,4 +464,29 @@ func SortSlices(rows []Slice) {
 			rows[j-1], rows[j] = rows[j], rows[j-1]
 		}
 	}
+}
+
+// ModelSlices turns the roll-up's (provider, model) buckets into rows.
+//
+// `provider` narrows to one door, or is empty for the whole fleet. The
+// row's Label is the model id — the thing anyone reading this actually
+// asked about — and Group names the provider it came through, so a model
+// reached through two accounts reads as two rows rather than as a
+// mystery duplicate.
+func ModelSlices(roll store.UsageRollup, grand int, provider string) []Slice {
+	out := make([]Slice, 0, len(roll.ByModel))
+	for k, v := range roll.ByModel {
+		p, model := store.SplitModelRowKey(k)
+		if provider != "" && p != provider {
+			continue
+		}
+		d := TotalsOf(v)
+		row := Slice{Key: k, Label: model, Group: p, Totals: d, Turns: roll.ModelTurns[k]}
+		if grand > 0 {
+			row.Share = float64(d.Total) / float64(grand) * 100
+		}
+		out = append(out, row)
+	}
+	SortSlices(out)
+	return out
 }

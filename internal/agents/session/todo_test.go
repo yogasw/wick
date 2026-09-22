@@ -2,6 +2,7 @@ package session
 
 import (
 	"testing"
+	"time"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 )
@@ -95,4 +96,67 @@ func TestRecordTodos(t *testing.T) {
 			t.Fatalf("empty session: %+v, %v", rec, err)
 		}
 	})
+}
+
+// An agent that rethinks its plan renames every step, so the new list
+// shares nothing with the one it replaces. Read as a new list, that filled
+// the history with half-done near-duplicates nobody wrote on purpose — and
+// left the panel disagreeing with the card in the transcript.
+func TestRecordTodosRewriteIsTheSameList(t *testing.T) {
+	l := todoLayout(t)
+	if _, err := RecordTodos(l, "s1", items(
+		"Hide tickets from projects where tickets are not enabled", "in_progress",
+		"Fix the connector layout", "pending",
+	)); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := RecordTodos(l, "s1", items(
+		"Hide ticket tab when the project has tickets disabled", "completed",
+		"Fix the connector long-description layout", "in_progress",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.History) != 0 {
+		t.Fatalf("a rewrite archived the plan it replaced: %d in history", len(rec.History))
+	}
+	if len(rec.Active.Items) != 2 || rec.Active.Items[0].Label() != "Hide ticket tab when the project has tickets disabled" {
+		t.Fatalf("the rewritten list did not become the active one: %+v", rec.Active.Items)
+	}
+}
+
+// A list that has gone cold is over. What arrives after it is new work, and
+// the old plan belongs in the history rather than being silently dropped.
+func TestSameTodoListColdActiveIsANewList(t *testing.T) {
+	now := time.Now().UTC()
+	warm := TodoList{Items: items("a", "in_progress"), UpdatedAt: now.Add(-time.Minute)}
+	cold := TodoList{Items: items("a", "in_progress"), UpdatedAt: now.Add(-2 * todoReviseWindow)}
+	fresh := items("something else entirely", "pending")
+
+	if !sameTodoList(warm, fresh, now) {
+		t.Fatal("a warm unfinished list should be revised, not archived")
+	}
+	if sameTodoList(cold, fresh, now) {
+		t.Fatal("a cold list should be archived, not revised")
+	}
+}
+
+// Stopped means abandoned, and done means finished. Neither is continued by
+// whatever comes next.
+func TestSameTodoListNeverContinuesAClosedList(t *testing.T) {
+	now := time.Now().UTC()
+	fresh := items("something else", "pending")
+	stopped := TodoList{Items: items("a", "in_progress"), UpdatedAt: now, Stopped: true}
+	done := TodoList{Items: items("a", "completed"), UpdatedAt: now, Done: true}
+	if sameTodoList(stopped, fresh, now) {
+		t.Fatal("an abandoned list was continued")
+	}
+	if sameTodoList(done, fresh, now) {
+		t.Fatal("a finished list was continued")
+	}
+	// …but a call that names one of its own items still belongs to it: a
+	// finished list being re-opened is that list, not a new one.
+	if !sameTodoList(done, items("a", "in_progress"), now) {
+		t.Fatal("a call naming the list's own item started a new list")
+	}
 }

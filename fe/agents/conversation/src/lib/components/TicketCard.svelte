@@ -40,8 +40,17 @@
 
   let dropHover = $state(false);
 
+  const assigneeIds = $derived(
+    ticket.assignees?.length ? ticket.assignees : ticket.assignee ? [ticket.assignee] : [],
+  );
   const assigneeName = $derived(
-    ticket.assignee ? (users?.[ticket.assignee] ?? ticket.assignee) : "",
+    assigneeIds.length > 0 ? (users?.[assigneeIds[0]] ?? assigneeIds[0]) : "",
+  );
+  /* A card has room for one name. The rest are a "+2" — seeing that work is
+     shared matters on the board; seeing exactly who is what the ticket's own
+     page is for. The names ride along in the tooltip. */
+  const extraNames = $derived(
+    assigneeIds.slice(1).map((id) => users?.[id] ?? id),
   );
 
   /* A card shows only schema fields marked show_on_card, in schema order so
@@ -151,11 +160,20 @@
 
   <div class="mt-2 flex items-center gap-2 text-[11px] text-black-700 dark:text-black-600">
     {#if assigneeName}
-      <span class="inline-flex min-w-0 items-center gap-1" title={assigneeName}>
+      <span
+        class="inline-flex min-w-0 items-center gap-1"
+        title={[assigneeName, ...extraNames].join(", ")}
+      >
         <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-green-500 text-[9px] font-semibold text-white-100">
           {initial(assigneeName)}
         </span>
         <span class="max-w-[88px] truncate">{assigneeName}</span>
+        {#if extraNames.length > 0}
+          <span
+            data-testid="assignee-extra"
+            class="shrink-0 rounded-full bg-white-200 px-1 text-[10px] font-medium text-black-800 dark:bg-navy-800 dark:text-black-600"
+          >+{extraNames.length}</span>
+        {/if}
       </span>
     {:else}
       <span>unassigned</span>

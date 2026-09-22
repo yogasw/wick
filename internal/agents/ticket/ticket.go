@@ -124,7 +124,17 @@ type Ticket struct {
 	// work is; this is where the detail lives (repro steps, links, context).
 	Body   string `json:"body,omitempty"`
 	Status string `json:"status"`
-	Assignee  string `json:"assignee,omitempty"` // wick user ID
+	// Assignee is the FIRST of Assignees, kept as its own field because it
+	// is what every board filter, webhook payload and connector answer has
+	// meant by "assignee" since before a ticket could have two. Never set
+	// it directly — SetAssignees keeps the two in step, and Load/Save
+	// normalise anything that arrives out of step.
+	Assignee string `json:"assignee,omitempty"` // wick user ID
+	// Assignees is the list of record: work lands on a pair as often as on
+	// a person, and a single field forced that to be written in the title.
+	// A ticket saved before this field existed has only Assignee, which
+	// Load folds into a one-element list.
+	Assignees []string `json:"assignees,omitempty"` // wick user IDs
 	// Fields holds values keyed by project.TicketField.Key.
 	Fields map[string]string `json:"fields,omitempty"`
 	// Sessions is the list of record for which sessions belong here.
@@ -167,12 +177,16 @@ type CreateOptions struct {
 	// store, and creating from the same page twice collides instead of
 	// silently opening a second ticket. Empty means "generate one", which
 	// is what every internal caller wants. See NormalizeID for the shape.
-	ID       string
-	Title    string
-	Body     string // markdown description, optional
-	Status   string // defaults to open
-	Assignee string
-	Fields   map[string]string
+	ID     string
+	Title  string
+	Body   string // markdown description, optional
+	Status string // defaults to open
+	// Assignee names one person; Assignees names several. Both are
+	// accepted so a caller with one id does not have to build a slice —
+	// they are merged, in order, with duplicates dropped.
+	Assignee  string
+	Assignees []string
+	Fields    map[string]string
 	// Sessions optionally seeds the session list (used when a ticket is
 	// created from an existing conversation).
 	Sessions []string
@@ -277,13 +291,13 @@ func Create(layout config.Layout, opt CreateOptions) (Ticket, error) {
 			Title:     title,
 			Body:      strings.TrimSpace(opt.Body),
 			Status:    status,
-			Assignee:  strings.TrimSpace(opt.Assignee),
 			Fields:    opt.Fields,
 			Sessions:  opt.Sessions,
 			CreatedAt: now,
 			UpdatedAt: now,
 			TouchedAt: now,
 		}
+		tk.SetAssignees(append([]string{opt.Assignee}, opt.Assignees...))
 		if err := os.MkdirAll(layout.TicketDir(opt.ProjectID, id), 0o755); err != nil {
 			return Ticket{}, err
 		}
@@ -330,7 +344,68 @@ func Load(layout config.Layout, projectID, ticketID string) (Ticket, error) {
 	if err := storage.ReadJSON(layout.TicketFile(projectID, ticketID), &tk); err != nil {
 		return Ticket{}, err
 	}
+	tk.normaliseAssignees()
 	return tk, nil
+}
+
+// normaliseAssignees makes the two assignee fields agree, whichever one the
+// caller filled in.
+//
+// A ticket written before Assignees existed has only Assignee, and one
+// written by a caller that only knows the list has only Assignees. Both
+// shapes arrive here, and everything downstream — the board filter, the
+// webhook payload, the connector answer — reads whichever field suits it.
+// Normalising at the two doors (read and write) is what keeps them from
+// ever disagreeing in between.
+func (t *Ticket) normaliseAssignees() {
+	if len(t.Assignees) == 0 {
+		t.SetAssignees([]string{t.Assignee})
+		return
+	}
+	t.SetAssignees(t.Assignees)
+}
+
+// SetAssignees replaces the assignee list, trimming blanks and duplicates
+// and re-pointing Assignee at the first of them. Order is the caller's: the
+// first name is the one a card has room for.
+func (t *Ticket) SetAssignees(ids []string) {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		t.Assignees, t.Assignee = nil, ""
+		return
+	}
+	t.Assignees, t.Assignee = out, out[0]
+}
+
+// AssigneeList returns everyone the ticket is on, tolerating a value that
+// never went through Load (a literal in a test, a decoded payload).
+func (t Ticket) AssigneeList() []string {
+	if len(t.Assignees) > 0 {
+		return t.Assignees
+	}
+	if s := strings.TrimSpace(t.Assignee); s != "" {
+		return []string{s}
+	}
+	return nil
+}
+
+// HasAssignee reports whether id is one of the people this ticket is on.
+func (t Ticket) HasAssignee(id string) bool {
+	for _, a := range t.AssigneeList() {
+		if a == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Save rewrites a ticket and bumps UpdatedAt, which is what the stale and
@@ -420,6 +495,7 @@ func SaveKeepingTimestamp(layout config.Layout, tk Ticket) error {
 	if !storage.PathExists(layout.TicketDir(tk.ProjectID, tk.ID)) {
 		return fmt.Errorf("ticket %q not found", tk.ID)
 	}
+	tk.normaliseAssignees()
 	return storage.WriteJSON(layout.TicketFile(tk.ProjectID, tk.ID), &tk)
 }
 

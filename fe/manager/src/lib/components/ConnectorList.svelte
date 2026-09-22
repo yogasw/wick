@@ -596,7 +596,11 @@
         <Button size="sm" disabled={reloadBusy} onclick={reloadDef}>{reloadBusy ? "Reloading…" : "Reload"}</Button>
       </div>
     {/if}
-    <div class="flex items-start gap-4">
+    <!-- Stacked on a phone. Side by side, the action group's three
+         nowrap buttons need more room than a 360px screen has, and the
+         header pushed the whole page into a horizontal scroll — with the
+         buttons themselves the part off the edge. -->
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
 
       <!-- LEFT: icon + name + description -->
       <div class="flex min-w-0 flex-1 items-start gap-3">
@@ -642,7 +646,7 @@
           {/if}
         </div>
       </div>
-      <div class="flex flex-shrink-0 items-center gap-2 pt-1">
+      <div class="flex flex-wrap items-center gap-2 sm:flex-shrink-0 sm:pt-1">
         {#if data.mcp}
           <button
             type="button"

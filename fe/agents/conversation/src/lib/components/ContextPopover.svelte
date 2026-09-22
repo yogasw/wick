@@ -15,9 +15,31 @@
      They are labelled and grouped separately for that reason. */
   import type { SessionContext, SessionContextProvider } from "../api/context.js";
 
+  /* What the turn on screen is doing right now. Everything else in this
+     panel is written when a turn FINISHES — which is exactly the moment
+     it stops being interesting on a turn that has been going for four
+     minutes and has said nothing. */
+  export type LiveTurnState = {
+    /** A turn is running. */
+    active: boolean;
+    /** Epoch ms the turn started; 0 when nothing is running. */
+    startedAt: number;
+    /** Steps taken so far — thinking blocks, tool calls, replies. The
+        same count the trace shows. */
+    steps: number;
+    /** wick's own lifecycle substate ("spawning", "thinking", …). */
+    substate?: string;
+    /** The tool being run, when one is. */
+    toolName?: string;
+  };
+
   type Props = {
     open: boolean;
     data: SessionContext | null;
+    /** The running turn, if any. Provider-agnostic: it comes from wick's
+        event stream, so it reads the same on claude, codex and wick's
+        own provider. */
+    live?: LiveTurnState | null;
     loading: boolean;
     error: string;
     /** Ask the server for a fresh reading. */
@@ -30,7 +52,48 @@
     onClose: () => void;
   };
 
-  let { open, data, loading, error, onRefresh, onCompact, compacting, onClose }: Props = $props();
+  let { open, data, live = null, loading, error, onRefresh, onCompact, compacting, onClose }: Props = $props();
+
+  /* A clock that ticks while a turn is running and the panel is open.
+
+     One second, not the app-wide 30s `now` store: the whole complaint is
+     that a long turn looks identical to a stuck one, and a readout that
+     only moves twice a minute does not answer that. It runs only while
+     this panel is open, so a closed panel costs nothing. */
+  let tick = $state(Date.now());
+  $effect(() => {
+    if (!open || !live?.active) return;
+    tick = Date.now();
+    const id = setInterval(() => { tick = Date.now(); }, 1000);
+    return () => clearInterval(id);
+  });
+
+  const elapsedMs = $derived(
+    live?.active && live.startedAt > 0 ? Math.max(0, tick - live.startedAt) : 0,
+  );
+
+  /** m:ss up to an hour, then h:mm:ss. Seconds stay visible throughout —
+      "3:01" moving every second is what says the turn is alive. */
+  function clock(ms: number): string {
+    const total = Math.floor(ms / 1000);
+    const s = total % 60;
+    const m = Math.floor(total / 60) % 60;
+    const h = Math.floor(total / 3600);
+    const two = (n: number) => String(n).padStart(2, "0");
+    return h > 0 ? `${h}:${two(m)}:${two(s)}` : `${m}:${two(s)}`;
+  }
+
+  /* What it is doing, in the words the rest of the UI already uses. The
+     tool name wins when there is one: "Bash" says more than "working". */
+  const liveWhat = $derived(
+    live?.toolName
+      ? live.toolName
+      : live?.substate === "spawning"
+        ? "starting up"
+        : live?.substate
+          ? live.substate
+          : "thinking",
+  );
 
   let el: HTMLDivElement | undefined = $state();
   let confirming = $state(false);
@@ -217,6 +280,34 @@
         >
       </div>
     </div>
+
+    <!-- The running turn, above everything the ledger knows: those
+         figures are written when a turn ENDS, so during a long one this
+         is the only part of the panel that is about now. -->
+    {#if live?.active}
+      <div
+        data-testid="context-live"
+        class="flex items-center gap-2 border-b border-white-300 bg-white-200 px-4 py-2 dark:border-navy-600 dark:bg-navy-800"
+      >
+        <span class="relative inline-flex h-2 w-2 shrink-0">
+          <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-500 opacity-60"></span>
+          <span class="relative inline-flex h-2 w-2 rounded-full bg-green-500"></span>
+        </span>
+        <span class="min-w-0 flex-1 truncate text-xs text-black-900 dark:text-white-100" title={liveWhat}>
+          {liveWhat}
+        </span>
+        {#if live.steps > 0}
+          <span class="shrink-0 text-xs text-black-700 tabular-nums dark:text-black-600">
+            {live.steps} step{live.steps === 1 ? "" : "s"}
+          </span>
+        {/if}
+        <span
+          data-testid="context-live-elapsed"
+          class="shrink-0 font-mono text-xs text-black-900 tabular-nums dark:text-white-100"
+          title="How long this turn has been running"
+        >{clock(elapsedMs)}</span>
+      </div>
+    {/if}
 
     {#if error}
       <p class="px-4 py-5 text-xs text-red-600 dark:text-red-400">{error}</p>

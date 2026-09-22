@@ -79,17 +79,22 @@
 
 <svelte:window onresize={() => { if (open) place(); }} />
 
-<div class="relative shrink-0">
+<!-- Shrinkable, not shrink-0. It sits at the end of a one-line toolbar
+     that also holds badges and a search box; pinned at its full width it
+     was the element pushed past the panel's right edge, where it sat
+     under the rail. A long branch name gives way instead — the full name
+     is on the button's tooltip and in the list it opens. -->
+<div class="relative min-w-0 shrink">
   <button
     type="button"
     bind:this={btnEl}
     onclick={toggle}
-    title="Which branches the graph shows"
-    class="flex items-center gap-1 rounded border border-white-300 dark:border-navy-600 px-1.5 py-0.5 text-[10px] text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+    title={`Which branches the graph shows — ${label}`}
+    class="flex min-w-0 max-w-full items-center gap-1 rounded border border-white-300 dark:border-navy-600 px-1.5 py-0.5 text-[10px] text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
   >
     <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="4" r="1.5"/><circle cx="4" cy="12" r="1.5"/><circle cx="12" cy="5" r="1.5"/><path d="M4 5.5v5M5.5 4H9a2 2 0 012 2v0" stroke-linecap="round"/></svg>
-    <span class="max-w-[10rem] truncate">{label}</span>
-    <span class="text-[8px]">▾</span>
+    <span class="min-w-0 max-w-[8rem] truncate">{label}</span>
+    <span class="shrink-0 text-[8px]">▾</span>
   </button>
 
   {#if open}
