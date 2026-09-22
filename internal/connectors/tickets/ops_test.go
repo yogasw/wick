@@ -418,3 +418,69 @@ func TestSettingsSetRefusesToStrandTickets(t *testing.T) {
 		t.Fatalf("want an error naming the stranded status, got: %v", err)
 	}
 }
+
+// Creating a ticket hands it to whoever asked, because asking for one is
+// usually taking it on. But a caller who NAMED the people on it has
+// already said who is on it — and naming nobody is an answer too, the
+// same answer an empty value gives on update. Testing the value instead
+// of its presence read that as silence and assigned the ticket to the
+// agent's own user.
+func TestCreateWithAnExplicitlyEmptyAssigneesLeavesItUnassigned(t *testing.T) {
+	h, l := newTestHandlers(t)
+	mkSession(t, l, "s1", "p1")
+
+	c := ctxFor("s1", map[string]string{"title": "Nobody's yet", "assignees": ""})
+	// The MCP path is the one that can tell an empty value from an absent
+	// one — it is the only path that records the caller's raw arguments.
+	c.SetRawInput(map[string]any{"title": "Nobody's yet", "assignees": ""})
+	c.SetCallerUserID("user-ada")
+	res := mustDispatch(t, h.create, c)
+
+	view, ok := res.(ticketView)
+	if !ok {
+		t.Fatalf("unexpected result type %T", res)
+	}
+	if view.Assignee != "" || len(view.Assignees) != 0 {
+		t.Fatalf("ticket landed on %q / %v, want nobody", view.Assignee, view.Assignees)
+	}
+}
+
+// The default itself has to survive: a create that says nothing about
+// assignees still lands with the caller.
+func TestCreateWithNoAssigneeFieldsLandsWithTheCaller(t *testing.T) {
+	h, l := newTestHandlers(t)
+	mkSession(t, l, "s1", "p1")
+
+	c := ctxFor("s1", map[string]string{"title": "Mine then"})
+	c.SetCallerUserID("user-ada")
+	res := mustDispatch(t, h.create, c)
+
+	view, ok := res.(ticketView)
+	if !ok {
+		t.Fatalf("unexpected result type %T", res)
+	}
+	if view.Assignee != "user-ada" {
+		t.Fatalf("ticket landed on %q, want the caller", view.Assignee)
+	}
+}
+
+// And naming somebody else must not quietly add the caller alongside
+// them — including on the paths that carry no raw arguments at all (the
+// connector Test page, a workflow node), where only the string value
+// says anything.
+func TestCreateWithAssigneesDoesNotAddTheCaller(t *testing.T) {
+	h, l := newTestHandlers(t)
+	mkSession(t, l, "s1", "p1")
+
+	c := ctxFor("s1", map[string]string{"title": "Theirs", "assignees": "user-budi,user-citra"})
+	c.SetCallerUserID("user-ada")
+	res := mustDispatch(t, h.create, c)
+
+	view, ok := res.(ticketView)
+	if !ok {
+		t.Fatalf("unexpected result type %T", res)
+	}
+	if strings.Join(view.Assignees, ",") != "user-budi,user-citra" {
+		t.Fatalf("assignees = %v, want exactly the two named", view.Assignees)
+	}
+}
