@@ -390,8 +390,13 @@
      zone crash rather than an early refresh. */
   /* The last lifecycle state this panel was read for. A plain variable,
      not $state: it is a guard, and making it reactive would re-run the
-     effect it guards. */
-  let contextReadAt = "";
+     effect it guards.
+
+     null, not "": an idle session's lifecycle IS "" until something
+     happens, so seeding this with "" made the very first run look like a
+     repeat and skip it. The meter then stayed blank until the agent
+     moved — on a quiet session, until someone sent a message. */
+  let contextReadAt: string | null = null;
   $effect(() => {
     // The store hands out a NEW object on every lifecycle event, and a
     // working agent emits them constantly (each substate change is one).
