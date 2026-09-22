@@ -180,7 +180,9 @@ describe("ContextPopover sparkline", () => {
     });
     const svg = screen.getByTestId("context-spark");
     widen(svg);
-    expect(screen.getByTestId("context-spark-readout").textContent).toContain("last 3 turns");
+    // Idle, the readout already describes the NEWEST turn — the one
+    // anybody would hover first — rather than printing a label.
+    expect(screen.getByTestId("context-spark-readout").textContent).toContain("turn 3/3");
 
     // Far right of the curve = the newest turn.
     await fireEvent.mouseMove(svg, { clientX: 200 });
@@ -198,7 +200,10 @@ describe("ContextPopover sparkline", () => {
     await fireEvent.mouseMove(svg, { clientX: 0 });
     expect(screen.getByTestId("context-spark-readout").textContent).toContain("turn 1/3");
     await fireEvent.mouseLeave(svg);
-    expect(screen.getByTestId("context-spark-readout").textContent).toContain("last 3 turns");
+    // Back to the newest turn, and the invitation to hover another.
+    const back = screen.getByTestId("context-spark-readout").textContent ?? "";
+    expect(back).toContain("turn 3/3");
+    expect(back).toMatch(/hover the curve/i);
   });
 
   /* An older server sends no timestamps. The curve still has to work —
@@ -390,11 +395,13 @@ describe("ContextPopover — the hover readout holds its height", () => {
     onClose: vi.fn(),
   };
 
-  it("reserves two lines when nothing is hovered", () => {
+  it("reserves two lines, and fills them", () => {
     render(ContextPopover, { props });
     const readout = screen.getByTestId("context-spark-readout");
     expect(readout.className).toContain("min-h-");
-    // The second line is empty, not absent.
-    expect(readout.querySelector("span.block")).not.toBeNull();
+    // Both lines carry something. Reserving room for a line that then
+    // renders blank trades one ugliness for another.
+    expect(readout.querySelector("span.block")?.textContent?.trim()).toBeTruthy();
+    expect(readout.textContent).toMatch(/total/i);
   });
 });

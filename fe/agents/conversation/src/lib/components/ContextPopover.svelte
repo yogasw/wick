@@ -230,6 +230,16 @@
   const sparkArea = $derived(spark === "" ? "" : `0,${SPARK_H} ${spark} 100,${SPARK_H}`);
 
   let hover = $state<number | null>(null);
+  /* Which point the readout describes: the hovered one, or the newest
+     when nothing is hovered.
+
+     Idle used to read "last N turns · hover for a turn" and nothing else,
+     so the line under the curve was a label rather than information —
+     and reserving room for the second line then left a blank strip. The
+     newest turn is the one anybody would hover first; showing it by
+     default fills both lines with something true, and hovering simply
+     moves the readout to another point. */
+  const shown = $derived(hover ?? (trend.length > 0 ? trend.length - 1 : null));
 
   function onSparkMove(e: MouseEvent) {
     const box = (e.currentTarget as SVGElement).getBoundingClientRect();
@@ -242,7 +252,7 @@
      rather than following the cursor: in a panel this small a tooltip
      that moves is harder to read than one that stays put. */
   const hoverPct = $derived(
-    hover === null || !hasWindow ? 0 : Math.round(((trend[hover] ?? 0) / (data?.window ?? 1)) * 100),
+    shown === null || !hasWindow ? 0 : Math.round(((trend[shown] ?? 0) / (data?.window ?? 1)) * 100),
   );
   /* What the hovered turn actually DID, which is the question a step in
      the curve raises: how much the window moved, and what that turn put
@@ -250,22 +260,22 @@
      first point has no "before", and saying so beats printing a delta
      measured from nothing. */
   const hoverDelta = $derived(
-    hover === null || hover === 0 ? null : (trend[hover] ?? 0) - (trend[hover - 1] ?? 0),
+    shown === null || shown === 0 ? null : (trend[shown] ?? 0) - (trend[shown - 1] ?? 0),
   );
   const hoverTurnSpend = $derived(
-    hover === null || hover === 0 || trendSpent.length === 0
+    shown === null || shown === 0 || trendSpent.length === 0
       ? null
-      : (trendSpent[hover] ?? 0) - (trendSpent[hover - 1] ?? 0),
+      : (trendSpent[shown] ?? 0) - (trendSpent[shown - 1] ?? 0),
   );
-  const hoverSpent = $derived(hover === null ? 0 : (trendSpent[hover] ?? 0));
+  const hoverSpent = $derived(shown === null ? 0 : (trendSpent[shown] ?? 0));
 
   function signed(n: number): string {
     return `${n > 0 ? "+" : n < 0 ? "−" : ""}${short(Math.abs(n))}`;
   }
 
   const hoverTime = $derived.by(() => {
-    if (hover === null) return "";
-    const iso = trendAt[hover];
+    if (shown === null) return "";
+    const iso = trendAt[shown];
     if (!iso) return "";
     const t = Date.parse(iso);
     return Number.isFinite(t)
@@ -411,11 +421,11 @@
             class="min-h-[2.1rem] text-[11px] text-black-700 dark:text-black-600 tabular-nums"
             data-testid="context-spark-readout"
           >
-            {#if hover !== null}
+            {#if shown !== null}
               <span class="font-medium text-black-900 dark:text-white-100">
-                turn {hover + 1}/{trend.length}
+                turn {shown + 1}/{trend.length}
               </span>
-              · {short(trend[hover])}{#if hoverDelta !== null}
+              · {short(trend[shown])}{#if hoverDelta !== null}
                 <span
                   class={hoverDelta > 0
                     ? "text-amber-600 dark:text-amber-400"
@@ -430,8 +440,10 @@
                    in the window and a jump in the bill are not the same
                    event — a cache-heavy turn moves one and not the other. -->
               <span class="block text-black-700 dark:text-black-600">
-                {#if hoverTurnSpend !== null}turn ini {short(hoverTurnSpend)} token · {/if}total
-                {short(hoverSpent)}
+                {#if hoverTurnSpend !== null}this turn {short(hoverTurnSpend)} tokens · {/if}total
+                {short(hoverSpent)}{#if hover === null}
+                  <span class="opacity-70">· hover the curve for another turn</span>
+                {/if}
               </span>
             {:else}
               last {trend.length} turns · hover for a turn
