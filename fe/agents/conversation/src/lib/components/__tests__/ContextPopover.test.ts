@@ -180,7 +180,9 @@ describe("ContextPopover sparkline", () => {
     });
     const svg = screen.getByTestId("context-spark");
     widen(svg);
-    expect(screen.getByTestId("context-spark-readout").textContent).toContain("last 3 turns");
+    // Idle, the readout already describes the NEWEST turn — the one
+    // anybody would hover first — rather than printing a label.
+    expect(screen.getByTestId("context-spark-readout").textContent).toContain("turn 3/3");
 
     // Far right of the curve = the newest turn.
     await fireEvent.mouseMove(svg, { clientX: 200 });
@@ -198,7 +200,10 @@ describe("ContextPopover sparkline", () => {
     await fireEvent.mouseMove(svg, { clientX: 0 });
     expect(screen.getByTestId("context-spark-readout").textContent).toContain("turn 1/3");
     await fireEvent.mouseLeave(svg);
-    expect(screen.getByTestId("context-spark-readout").textContent).toContain("last 3 turns");
+    // Back to the newest turn, and the invitation to hover another.
+    const back = screen.getByTestId("context-spark-readout").textContent ?? "";
+    expect(back).toContain("turn 3/3");
+    expect(back).toMatch(/hover the curve/i);
   });
 
   /* An older server sends no timestamps. The curve still has to work —
@@ -267,5 +272,136 @@ describe("ContextPopover sparkline deltas", () => {
     widen(svg);
     await fireEvent.mouseMove(svg, { clientX: 200 });
     expect(screen.getByTestId("context-spark-readout").textContent).toContain("turn 3/3");
+  });
+});
+
+/* Everything else in this panel is written when a turn FINISHES, which
+   is no use while one has been running for four minutes saying nothing.
+   The live line is the part that is about now — and it comes from wick's
+   own event stream, so it works the same whichever provider is running. */
+describe("ContextPopover — the running turn", () => {
+  const live = (over: Record<string, unknown> = {}) => ({
+    active: true,
+    startedAt: Date.now() - 125_000, // 2:05 ago
+    steps: 7,
+    substate: "thinking",
+    ...over,
+  });
+
+  it("counts how long the turn has been going", () => {
+    render(ContextPopover, {
+      props: { open: true, data: ctx(), live: live(), loading: false, error: "",
+        onRefresh: vi.fn(), onCompact: vi.fn(), compacting: false, onClose: vi.fn() },
+    });
+    expect(screen.getByTestId("context-live-elapsed").textContent?.trim()).toBe("2:05");
+  });
+
+  it("says what it is doing, and how many steps in", () => {
+    render(ContextPopover, {
+      props: { open: true, data: ctx(), live: live({ toolName: "Bash" }), loading: false, error: "",
+        onRefresh: vi.fn(), onCompact: vi.fn(), compacting: false, onClose: vi.fn() },
+    });
+    const row = screen.getByTestId("context-live");
+    // The tool name wins over the substate: "Bash" says more than "thinking".
+    expect(row.textContent).toContain("Bash");
+    expect(row.textContent).toContain("7 steps");
+  });
+
+  it("is absent when nothing is running", () => {
+    render(ContextPopover, {
+      props: { open: true, data: ctx(), live: { active: false, startedAt: 0, steps: 0 },
+        loading: false, error: "", onRefresh: vi.fn(), onCompact: vi.fn(), compacting: false, onClose: vi.fn() },
+    });
+    expect(screen.queryByTestId("context-live")).toBeNull();
+  });
+
+  // A session with no finished turn has no ledger reading at all — and
+  // that is exactly when someone opens this panel to ask "is it stuck?".
+  it("shows the running turn even before any reading exists", () => {
+    render(ContextPopover, {
+      props: { open: true, data: null, live: live(), loading: false, error: "",
+        onRefresh: vi.fn(), onCompact: vi.fn(), compacting: false, onClose: vi.fn() },
+    });
+    expect(screen.getByTestId("context-live")).toBeTruthy();
+  });
+
+  it("passes an hour without losing the seconds", () => {
+    render(ContextPopover, {
+      props: { open: true, data: ctx(), live: live({ startedAt: Date.now() - 3_725_000 }),
+        loading: false, error: "", onRefresh: vi.fn(), onCompact: vi.fn(), compacting: false, onClose: vi.fn() },
+    });
+    expect(screen.getByTestId("context-live-elapsed").textContent?.trim()).toBe("1:02:05");
+  });
+});
+
+/* The level can be known while a turn is still running; the spend cannot
+   — the provider reports cost only when the turn ends. A panel where one
+   number is live and the rest are not has to say which is which. */
+describe("ContextPopover — live level", () => {
+  const withLive = (used: number) => ({
+    open: true,
+    data: ctx({ used: 210_886, window: 1_000_000, pct: 21 }),
+    live: { active: true, startedAt: Date.now() - 5_000, steps: 2, used },
+    loading: false,
+    error: "",
+    onRefresh: vi.fn(),
+    onCompact: vi.fn(),
+    compacting: false,
+    onClose: vi.fn(),
+  });
+
+  it("shows the running turn's reading, not the stored one", () => {
+    render(ContextPopover, { props: withLive(450_000) });
+    expect(screen.getByText("45%")).toBeTruthy();
+    expect(screen.getByTestId("context-level-live")).toBeTruthy();
+  });
+
+  it("says the spend is still the last finished turn's", () => {
+    render(ContextPopover, { props: withLive(450_000) });
+    expect(screen.getByTestId("context-spend-lag").textContent).toMatch(/last finished turn/i);
+  });
+
+  // A reading behind the ledger is a reading that has not caught up, not
+  // a window that shrank — the stored figure stands.
+  it("keeps the stored reading when the live one is older", () => {
+    render(ContextPopover, { props: withLive(10_000) });
+    expect(screen.getByText("21%")).toBeTruthy();
+    expect(screen.queryByTestId("context-level-live")).toBeNull();
+    expect(screen.queryByTestId("context-spend-lag")).toBeNull();
+  });
+
+  // A provider that reports nothing mid-turn (codex between rollout
+  // reads) must look exactly as it did before.
+  it("is unchanged when no live reading arrives", () => {
+    render(ContextPopover, { props: withLive(0) });
+    expect(screen.getByText("21%")).toBeTruthy();
+    expect(screen.queryByTestId("context-level-live")).toBeNull();
+  });
+});
+
+/* The readout is one line idle and two while hovering. Letting it size
+   itself made the whole panel grow and shrink under the cursor as it
+   crossed the curve — the panel is anchored to the composer, so its body
+   moves when its height changes, and reading it became a moving target. */
+describe("ContextPopover — the hover readout holds its height", () => {
+  const props = {
+    open: true,
+    data: ctx(),
+    loading: false,
+    error: "",
+    onRefresh: vi.fn(),
+    onCompact: vi.fn(),
+    compacting: false,
+    onClose: vi.fn(),
+  };
+
+  it("reserves two lines, and fills them", () => {
+    render(ContextPopover, { props });
+    const readout = screen.getByTestId("context-spark-readout");
+    expect(readout.className).toContain("min-h-");
+    // Both lines carry something. Reserving room for a line that then
+    // renders blank trades one ugliness for another.
+    expect(readout.querySelector("span.block")?.textContent?.trim()).toBeTruthy();
+    expect(readout.textContent).toMatch(/total/i);
   });
 });

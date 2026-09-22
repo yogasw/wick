@@ -73,6 +73,11 @@ templ Layout(title string) {
 			     scrollbar-* shorthands cover Firefox. Track stays transparent
 			     to blend into whatever surface the scroll container sits on. -->
 			<style>
+				/* How much page chrome sits above the viewport's content —
+				   0 unless the impersonation banner is rendered, which then
+				   measures itself into this. Anything sized to the whole
+				   viewport subtracts it. */
+				:root { --wick-chrome-top: 0px; }
 				* { scrollbar-width: thin; scrollbar-color: #cfc9b8 transparent; }
 				.dark * { scrollbar-color: #2c3a5a transparent; }
 				*::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -132,7 +137,7 @@ func htmlThemeClasses(t Theme) string {
 // neg-*, because nothing is broken — the state is just easy to misread.
 templ impersonationBanner(info ImpersonationInfo) {
 	if info.Active {
-		<div class="flex flex-col gap-3 border-b border-cau-400 bg-cau-100 px-6 py-3 text-sm text-cau-400 sm:flex-row sm:items-center sm:justify-between">
+		<div data-chrome-banner class="flex flex-col gap-3 border-b border-cau-400 bg-cau-100 px-6 py-3 text-sm text-cau-400 sm:flex-row sm:items-center sm:justify-between">
 			<span class="font-medium">
 				Viewing as { info.ActingAs } — actions you take are recorded as this user.
 			</span>
@@ -142,5 +147,25 @@ templ impersonationBanner(info ImpersonationInfo) {
 				</button>
 			</form>
 		</div>
+		<!-- The banner sits ABOVE every page in normal flow, so a page sized to
+		     the whole viewport (the agents shell is 100svh) ends up one banner
+		     too tall and loses its bottom edge off-screen — the conversation
+		     composer and the inbox list were cut off while viewing as someone
+		     else. It cannot be a fixed number: the row wraps to two lines on a
+		     narrow window and a long display name changes where. So the banner
+		     publishes its own measured height and full-height shells subtract
+		     it. -->
+		<script>
+			(function () {
+				var el = document.querySelector('[data-chrome-banner]');
+				if (!el) return;
+				var publish = function () {
+					document.documentElement.style.setProperty('--wick-chrome-top', el.offsetHeight + 'px');
+				};
+				publish();
+				if (window.ResizeObserver) new ResizeObserver(publish).observe(el);
+				else window.addEventListener('resize', publish);
+			})();
+		</script>
 	}
 }

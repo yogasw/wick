@@ -112,3 +112,23 @@ describe("TodoPanel", () => {
     expect(screen.getByText("Finished")).toBeTruthy();
   });
 });
+
+/* The store appends, so the server's history runs oldest first. The list
+   you just finished is the one people come here for, and it was at the
+   bottom of the pile. */
+test("earlier checklists are listed newest first", () => {
+  render(TodoPanel, {
+    props: {
+      active: null,
+      history: [
+        { items: [{ label: "the old plan", status: "completed" }], total: 1, completed: 1, done: true, started_at: "2026-09-22T08:00:00Z" },
+        { items: [{ label: "the recent plan", status: "completed" }], total: 1, completed: 1, done: true, started_at: "2026-09-22T10:00:00Z" },
+      ],
+      loading: false,
+      error: null,
+      onRefresh: () => {},
+    },
+  });
+  const labels = screen.getAllByText(/plan$/).map((el) => el.textContent);
+  expect(labels[0]).toBe("the recent plan");
+});

@@ -351,7 +351,7 @@
                       <span class="rounded-full bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">{group.ops.length}</span>
                     </div>
                     {#if group.description}
-                      <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">{group.description}</p>
+                      <p class="mt-0.5 break-words text-xs text-black-700 dark:text-black-600">{group.description}</p>
                     {/if}
                   </div>
                   <input
@@ -417,7 +417,10 @@
                           </div>
                           <p class="mt-0.5 font-mono text-[10px] text-black-700 dark:text-black-600">{op.key}</p>
                         </td>
-                        <td class="px-4 py-3 text-sm text-black-800 dark:text-black-600">{op.description}</td>
+                        <!-- break-words: an operation description carries urls
+                             and dotted json paths, which have nowhere to wrap
+                             and widened the row on a narrow screen. -->
+                        <td class="px-4 py-3 text-sm text-black-800 break-words dark:text-black-600">{op.description}</td>
                         <td class="px-4 py-3">
                           <div class="flex items-center gap-2">
                             <button

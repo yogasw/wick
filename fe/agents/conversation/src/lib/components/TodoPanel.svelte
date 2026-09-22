@@ -24,6 +24,12 @@
      not a second thing to read top to bottom. */
   let openHistory = $state<number | null>(null);
 
+  /* Newest first. The store appends, so the server's order is oldest
+     first — which puts the list you just finished at the bottom of a pile
+     of ones from an hour ago, and it is the only one anybody scrolls
+     here for. */
+  const earlier = $derived([...history].reverse());
+
   /* Which items have their payload open. A detail is a log tail or a JSON
      blob — worth having, not worth reading every time the panel opens. */
   let openDetail = $state<Record<string, boolean>>({});
@@ -235,12 +241,12 @@
         </div>
       {/if}
 
-      {#if history.length}
+      {#if earlier.length}
         <p class="mt-4 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">
-          Earlier ({history.length})
+          Earlier ({earlier.length})
         </p>
         <ul class="mt-1 space-y-1">
-          {#each history as h, i (h.started_at || i)}
+          {#each earlier as h, i (h.started_at || i)}
             <li class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
               <button
                 type="button"

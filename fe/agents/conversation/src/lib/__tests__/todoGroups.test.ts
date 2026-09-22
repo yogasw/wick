@@ -95,7 +95,11 @@ describe("mergeTodoItems", () => {
     expect(merged).toEqual([{ step: "delay 1 minute", status: "completed" }]);
   });
 
-  test("a step present in an earlier call but dropped from a later call keeps its last known status", () => {
+  // `todo` REPLACES the list — that is what the server stores, and the
+  // Todo panel shows what the server stored. A card that kept dropped
+  // items answered the same question differently: a turn that revised
+  // its plan a few times showed thirty items beside a panel showing five.
+  test("the last call is the list — an item it dropped is gone", () => {
     const t1 = todoBlock("t1", [
       { id: "1", step: "a", status: "completed" },
       { id: "2", step: "b", status: "pending" },
@@ -103,10 +107,42 @@ describe("mergeTodoItems", () => {
     // Second call only re-sends item 2 — item 1 isn't repeated.
     const t2 = todoBlock("t2", [{ id: "2", step: "b", status: "in_progress" }]);
     const merged = mergeTodoItems([t1, t2]);
-    expect(merged).toEqual([
-      { id: "1", step: "a", status: "completed" },
-      { id: "2", step: "b", status: "in_progress" },
+    expect(merged).toEqual([{ id: "2", step: "b", status: "in_progress" }]);
+  });
+
+  // A rewrite is the case that made the old union unreadable: the reworded
+  // step is a different key, so both wordings survived.
+  test("a rewritten plan replaces the old wording instead of stacking on it", () => {
+    const t1 = todoBlock("t1", [
+      { step: "Hide tickets from projects where tickets are not enabled", status: "pending" },
     ]);
+    const t2 = todoBlock("t2", [
+      { step: "Hide ticket tab when the project has tickets disabled", status: "completed" },
+    ]);
+    expect(mergeTodoItems([t1, t2]).map((it) => it.step)).toEqual([
+      "Hide ticket tab when the project has tickets disabled",
+    ]);
+  });
+
+  // Order comes from the latest call too: a reordered plan is a plan the
+  // model reordered on purpose.
+  test("order follows the latest call", () => {
+    const t1 = todoBlock("t1", [
+      { id: "1", step: "a", status: "pending" },
+      { id: "2", step: "b", status: "pending" },
+    ]);
+    const t2 = todoBlock("t2", [
+      { id: "2", step: "b", status: "in_progress" },
+      { id: "1", step: "a", status: "pending" },
+    ]);
+    expect(mergeTodoItems([t1, t2]).map((it) => it.id)).toEqual(["2", "1"]);
+  });
+
+  // A goal-only call carries no checklist, and must not wipe the list.
+  test("a goal-only call leaves the list alone", () => {
+    const t1 = todoBlock("t1", [{ id: "1", step: "a", status: "in_progress" }]);
+    const goalOnly = todoBlock("t2", []);
+    expect(mergeTodoItems([t1, goalOnly]).map((it) => it.id)).toEqual(["1"]);
   });
 
   test("a new item introduced in a later call is appended, not inserted at the front", () => {

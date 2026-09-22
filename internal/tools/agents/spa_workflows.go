@@ -233,6 +233,33 @@ func spaWorkflowDuplicate(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"id": w.ID, "name": w.Name})
 }
 
+// workflowsVisibleTo narrows the list to what a non-admin may see.
+//
+// Ownership of a workflow is recorded in TWO places and they drift apart:
+// the created_by stamp on the row — which is what /admin/workflows displays
+// as Owner and what the owner picker writes — and the "owner:<id>" tag,
+// which is what this filter used to read and nothing else. A workflow from
+// before the tag existed therefore showed its owner on the admin page while
+// that person opened an empty list, and re-picking them in the picker
+// changed nothing because the stamp already matched.
+//
+// Either fact counts as ownership now. Both are written server-side from the
+// acting user and a transfer rewrites the stamp, so neither hands reach to
+// somebody who should not have it — where they disagree, the disagreement is
+// the bug, not a grant.
+func workflowsVisibleTo(summaries []mcp.Summary, userID string, owns func(id string) bool) []mcp.Summary {
+	if userID == "" {
+		return nil
+	}
+	filtered := summaries[:0]
+	for _, s := range summaries {
+		if s.CreatedBy == userID || owns(s.ID) {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered
+}
+
 func spaWorkflowList(c *tool.Ctx) {
 	if notReadyWorkflow(c) {
 		return
@@ -245,14 +272,11 @@ func spaWorkflowList(c *tool.Ctx) {
 	user := login.GetUser(c.Context())
 	if user != nil && !user.IsAdmin() {
 		if globalTagsSvc != nil {
-			filtered := summaries[:0]
-			for _, s := range summaries {
-				owns, _ := globalTagsSvc.UserOwnsResource(c.Context(), user.ID, s.ID)
-				if owns {
-					filtered = append(filtered, s)
-				}
+			owns := func(id string) bool {
+				ok, _ := globalTagsSvc.UserOwnsResource(c.Context(), user.ID, id)
+				return ok
 			}
-			summaries = filtered
+			summaries = workflowsVisibleTo(summaries, user.ID, owns)
 		} else {
 			filtered := summaries[:0]
 			for _, s := range summaries {

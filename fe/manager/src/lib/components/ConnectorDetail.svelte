@@ -276,8 +276,10 @@
   <div class="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">{error}</div>
 {:else if data}
   <div class="space-y-8 pb-8">
-    <div class="flex items-start justify-between gap-3">
-      <div class="flex items-center gap-3 min-w-0">
+    <!-- Wraps rather than overflowing: the account view puts History and a
+         menu on the right, and on a phone they were pushed off the edge. -->
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div class="flex min-w-0 flex-1 items-center gap-3">
         <span class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg" aria-hidden="true">{data.icon || "🔌"}</span>
         <div class="min-w-0">
           <div class="flex flex-wrap items-center gap-2">
@@ -288,7 +290,9 @@
               <span class="inline-flex items-center rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">Enabled</span>
             {/if}
           </div>
-          <p class="mt-0.5 font-mono text-[11px] text-black-700 dark:text-black-600">{data.id}</p>
+          <!-- break-all, because an id is one long token with nowhere to
+               wrap and would otherwise widen the whole page on a phone. -->
+          <p class="mt-0.5 break-all font-mono text-[11px] text-black-700 dark:text-black-600">{data.id}</p>
           {#if inAccountMode && account}
             <!-- Same header, one line added: which identity this narrower view
                  is about, and whether it follows the instance at all. -->
@@ -299,7 +303,7 @@
               {/if}
             </p>
           {:else if data.description}
-            <p class="mt-1 max-w-xl text-sm text-black-800 dark:text-black-600">{data.description}</p>
+            <p class="mt-1 max-w-xl break-words text-sm text-black-800 dark:text-black-600">{data.description}</p>
           {/if}
         </div>
       </div>

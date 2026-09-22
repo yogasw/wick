@@ -20,6 +20,12 @@ export type UsageSlice = {
   label?: string;
   totals: UsageTotals;
   sessions?: number;
+  /** Turns this row ran. On a flat-rate plan every cost is zero, and
+   *  this is the only number that says what is actually being used. */
+  turns?: number;
+  /** The row this one hangs under — for a model, the provider it was
+   *  reached through. */
+  group?: string;
   /** Percentage of the report total — the server computes it so every
    *  bar in the UI agrees on the denominator. */
   share: number;
@@ -60,6 +66,8 @@ export type ProviderUsageDetail = Windowed & {
   provider: string;
   totals: UsageTotals;
   turns: number;
+  /** This provider's spend split by model. */
+  by_model?: UsageSlice[];
   /** Sessions that spent tokens on this provider, newest first. Can run
    *  to thousands, which is why the UI pages through it. */
   sessions: SessionUse[];
@@ -70,6 +78,10 @@ export type UsageReport = Windowed & {
   turns: number;
   sessions: number;
   by_provider: UsageSlice[];
+  /** One level below the provider: which model answered behind that
+      door. Rows are (provider, model) pairs — `group` is the provider,
+      `label` the model. Absent on an older server. */
+  by_model?: UsageSlice[];
   by_project: UsageSlice[];
   by_user: UsageSlice[];
 };

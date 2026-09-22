@@ -77,3 +77,36 @@ describe("NotesRail", () => {
     expect(screen.getByText(/Private to this chat/)).toBeTruthy();
   });
 });
+
+/* The ticket's own description, above the running record. Notes answer a
+   request; without it the panel shows only half the conversation. */
+describe("NotesRail — the ticket's body", () => {
+  const onTicket = (body?: string) => ({ id: "T-1", title: "Fix retries", status: "open", body });
+
+  test("shows the body when the scope is a ticket that has one", () => {
+    renderRail([note()], onTicket("Retries stop after the **third** attempt"));
+    const el = screen.getByTestId("notes-ticket-body");
+    expect(el.textContent).toContain("Retries stop after the third attempt");
+  });
+
+  test("nothing is drawn for a ticket with an empty body", () => {
+    renderRail([note()], onTicket("   "));
+    expect(screen.queryByTestId("notes-ticket-body")).toBeNull();
+  });
+
+  // A chat on no ticket has no description to show — and no heading either,
+  // or the panel would announce a section that is always empty.
+  test("nothing is drawn off a ticket", () => {
+    renderRail([note()]);
+    expect(screen.queryByTestId("notes-ticket-body")).toBeNull();
+  });
+
+  test("a long body folds, with a way to open it", async () => {
+    renderRail([note()], onTicket("x".repeat(400)));
+    const el = screen.getByTestId("notes-ticket-body");
+    expect(el.querySelector(".max-h-24")).not.toBeNull();
+    (screen.getByText("Show more") as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(el.querySelector(".max-h-24")).toBeNull();
+  });
+});

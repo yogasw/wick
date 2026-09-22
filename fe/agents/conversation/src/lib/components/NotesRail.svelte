@@ -9,17 +9,30 @@
      way. Everything about the ticket itself lives in the Ticket tab. */
   import NotesPanel from "./NotesPanel.svelte";
   import type { NotesResponse } from "../types/agents.js";
+  import { renderMarkdown } from "../markdown.js";
+  import "../notesMarkdown.css";
 
   type Props = {
     base: string;
     sessionId: string;
-    /* Set when the resolved scope is a ticket's. */
-    ticket?: { id: string; title: string; status: string } | null;
+    /* Set when the resolved scope is a ticket's. `body` is its description. */
+    ticket?: { id: string; title: string; status: string; body?: string } | null;
     info?: NotesResponse | null;
     onChanged?: () => void;
   };
 
   let { base, sessionId, ticket, info, onChanged }: Props = $props();
+
+  /* The ticket's own description, above the notes. Notes are the running
+     record of what was FOUND; the body is what was ASKED — reading one
+     without the other is half a conversation, and the alternative was
+     leaving the tab to open the ticket's page and losing your place.
+
+     Folded by default past a few lines: a long description would push the
+     notes themselves off the panel, which is the opposite of helping. */
+  const body = $derived((ticket?.body ?? "").trim());
+  let bodyOpen = $state(false);
+  const bodyLong = $derived(body.length > 240 || body.split("\n").length > 4);
 
   /* Matches the rail tab's badge: notes the agent can see. A hidden note is
      still in the list below, so the two numbers differ on purpose — the
@@ -60,6 +73,31 @@
       Private to this chat. Put it on a ticket (Ticket tab) and these travel along, shared with
       every session there.
     </p>
+  {/if}
+
+  {#if body}
+    <section
+      data-testid="notes-ticket-body"
+      class="mt-3 rounded-lg border border-white-300 bg-white-200 p-2.5 dark:border-navy-600 dark:bg-navy-800"
+    >
+      <div class="flex items-center justify-between gap-2">
+        <h4 class="text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">
+          What the ticket asks
+        </h4>
+        {#if bodyLong}
+          <button
+            type="button"
+            class="shrink-0 text-[11px] font-medium text-green-600 hover:underline dark:text-green-400"
+            onclick={() => { bodyOpen = !bodyOpen; }}
+          >{bodyOpen ? "Show less" : "Show more"}</button>
+        {/if}
+      </div>
+      <div
+        class="wick-note-md mt-1.5 break-words text-xs text-black-900 dark:text-white-100 {bodyLong && !bodyOpen ? 'max-h-24 overflow-hidden' : ''}"
+      >
+        {@html renderMarkdown(body)}
+      </div>
+    </section>
   {/if}
 
   <div class="mt-3">

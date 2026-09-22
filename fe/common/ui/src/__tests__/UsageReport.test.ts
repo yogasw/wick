@@ -296,3 +296,89 @@ describe("UsageReport driven by a page filter", () => {
     expect(url).not.toContain("window=");
   });
 });
+
+/* "Which provider" stops one level short of the question people actually
+   ask — a provider runs opus one turn and haiku the next, and which it
+   ran is what decides the bill. */
+describe("UsageReport — by model", () => {
+  const WITH_MODELS = {
+    ...REPORT,
+    by_model: [
+      {
+        key: "claude/opus|claude-opus-5",
+        label: "claude-opus-5",
+        group: "claude/opus",
+        totals: {
+          input: 900, cache_read: 9_000, cache_write: 0, output: 400,
+          total: 10_300, cost_usd: 1.2, cache_hit_pct: 91,
+        },
+        turns: 4,
+        share: 98,
+      },
+      {
+        key: "codex/gpt|gpt-5",
+        label: "gpt-5",
+        group: "codex/gpt",
+        totals: {
+          input: 100, cache_read: 0, cache_write: 0, output: 100,
+          total: 200, cost_usd: 0, cache_hit_pct: 0,
+        },
+        turns: 1,
+        share: 2,
+      },
+    ],
+  };
+
+  it("names the model, and which provider it came through", async () => {
+    mockFetch(WITH_MODELS);
+    const { getByText } = render(UsageReport, { props: { base: "/t" } });
+    await waitFor(() => expect(screen.getByText("claude/opus")).toBeTruthy());
+
+    getByText("By model").click();
+    await waitFor(() => expect(screen.getByText("claude-opus-5")).toBeTruthy());
+    expect(screen.getByText("gpt-5")).toBeTruthy();
+    // The same model id through two accounts is two rows; the provider is
+    // the only thing that tells them apart, so it rides along under the
+    // model name.
+    expect(screen.getAllByText("claude/opus").length).toBeGreaterThan(0);
+  });
+
+  it("shows turns, which is the only figure a flat-rate plan has", async () => {
+    mockFetch(WITH_MODELS);
+    const { getByText } = render(UsageReport, { props: { base: "/t" } });
+    await waitFor(() => expect(screen.getByText("claude/opus")).toBeTruthy());
+
+    getByText("By model").click();
+    await waitFor(() => expect(screen.getByText("claude-opus-5")).toBeTruthy());
+    expect(screen.getByText("4")).toBeTruthy();
+  });
+
+  // An older server sends no by_model at all. The tab has to say why it
+  // is empty rather than look broken.
+  it("explains an empty model breakdown", async () => {
+    mockFetch(REPORT);
+    const { getByText } = render(UsageReport, { props: { base: "/t" } });
+    await waitFor(() => expect(screen.getByText("claude/opus")).toBeTruthy());
+
+    getByText("By model").click();
+    await waitFor(() =>
+      expect(screen.getByText(/a turn records its model as it finishes/i)).toBeTruthy(),
+    );
+  });
+
+  it("lists the models on one provider's own page", async () => {
+    mockFetch({
+      provider: "claude/opus",
+      totals: REPORT.totals,
+      turns: 5,
+      by_model: WITH_MODELS.by_model.slice(0, 1),
+      sessions: [],
+      window: "all",
+      window_label: "All time",
+      windows: REPORT.windows,
+    });
+    render(UsageReport, { props: { base: "/t", provider: "claude/opus" } });
+    await waitFor(() => expect(screen.getByTestId("provider-models")).toBeTruthy());
+    expect(screen.getByTestId("provider-models").textContent).toContain("claude-opus-5");
+  });
+});

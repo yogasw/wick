@@ -88,7 +88,7 @@
   const controlled = $derived(rangeProp !== undefined || since !== "" || until !== "");
   const api = $derived(endpoint ?? `${base}/api/providers`);
 
-  type Tab = "provider" | "project" | "user";
+  type Tab = "provider" | "model" | "project" | "user";
   let tab = $state<Tab>("provider");
   let ownReport = $state<UsageReport | null>(null);
   const report = $derived(fed ? (reportProp ?? null) : ownReport);
@@ -163,6 +163,8 @@
 
   const totals = $derived(provider ? (detail?.totals ?? EMPTY_TOTALS) : (report?.totals ?? EMPTY_TOTALS));
   const sessions = $derived<SessionUse[]>(detail?.sessions ?? []);
+  /* This provider's own model breakdown, shown above the session list. */
+  const providerModels = $derived<UsageSlice[]>(detail?.by_model ?? []);
   /* The caveat the server attaches when a windowed figure had to be
      rebuilt from a trail that no longer reaches back far enough. Shown
      verbatim: an "at least" number presented as a total is the one way
@@ -173,9 +175,11 @@
   const rows = $derived<UsageSlice[]>(
     tab === "provider"
       ? (report?.by_provider ?? [])
-      : tab === "project"
-        ? (report?.by_project ?? [])
-        : (report?.by_user ?? []),
+      : tab === "model"
+        ? (report?.by_model ?? [])
+        : tab === "project"
+          ? (report?.by_project ?? [])
+          : (report?.by_user ?? []),
   );
 
   /* A UUID answers nothing to the person asking "where did the money
@@ -186,7 +190,7 @@
      not add up. */
   function rowLabel(r: UsageSlice): string {
     if (r.label) return r.label;
-    if (tab === "provider") return r.key;
+    if (tab === "provider" || tab === "model") return r.key;
     return labelFor?.(tab, r.key) ?? shortId(r.key);
   }
 
@@ -198,6 +202,10 @@
      id — that would print the same string twice. */
   function rowSubLabel(r: UsageSlice): string {
     if (tab === "provider") return "";
+    // Which door the model was reached through. The same model id through
+    // two accounts is two rows, and the provider is the only thing that
+    // tells them apart.
+    if (tab === "model") return r.group ?? "";
     return rowLabel(r) === shortId(r.key) || rowLabel(r) === r.key ? "" : shortId(r.key);
   }
 
@@ -207,13 +215,19 @@
   const emptyNote = $derived(
     tab === "provider"
       ? "No provider has reported tokens yet. Providers report on the turn they finish."
-      : tab === "project"
-        ? "No usage is attributed to a project yet — sessions started outside a project have nothing to group by."
-        : "No usage is attributed to a user yet — sessions with no owner recorded have nothing to group by.",
+      : tab === "model"
+        ? "No model has been named yet — a turn records its model as it finishes, so this fills in from the next one."
+        : tab === "project"
+          ? "No usage is attributed to a project yet — sessions started outside a project have nothing to group by."
+          : "No usage is attributed to a user yet — sessions with no owner recorded have nothing to group by.",
   );
 
+  /* "By model" sits straight after "By provider": it is the same question
+     one level down — which model answered behind that door — and that is
+     what decides both the bill and whether the answer was any good. */
   const TABS: { id: Tab; label: string }[] = [
     { id: "provider", label: "By provider" },
+    { id: "model", label: "By model" },
     { id: "project", label: "By project" },
     { id: "user", label: "By user" },
   ];
@@ -317,6 +331,30 @@
         <p class="mt-0.5 text-[11px] text-black-700 dark:text-black-600">used this provider</p>
       </div>
     </div>
+
+    <!-- Which models answered behind this door. A provider is not a
+         price: the same one runs opus and haiku, and which it ran is what
+         decides both the bill and how good the answer was. -->
+    {#if providerModels.length > 0}
+      <div class="border-t border-white-300 px-5 py-3 dark:border-navy-600">
+        <p class="text-xs font-medium text-black-900 dark:text-white-100">Models used</p>
+        <ul class="mt-2 flex flex-col gap-1.5" data-testid="provider-models">
+          {#each providerModels as m (m.key)}
+            <li class="flex items-center gap-2 text-xs">
+              <span class="min-w-0 flex-1 truncate font-medium text-black-900 dark:text-white-100" title={m.label ?? m.key}
+              >{m.label ?? m.key}</span>
+              <span class="tabular-nums text-black-700 dark:text-black-600">
+                {m.turns ? exact(m.turns) : "—"} turn{m.turns === 1 ? "" : "s"}
+              </span>
+              <span class="w-20 text-right tabular-nums text-black-900 dark:text-white-100" title={exact(m.totals.total)}
+              >{compactTokens(m.totals.total)}</span>
+              <span class="w-16 text-right tabular-nums text-black-900 dark:text-white-100"
+              >{formatCost(m.totals.cost_usd)}</span>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
 
     {#if sessions.length === 0}
       <p class="px-5 py-6 text-xs text-black-700 dark:text-black-600">
@@ -487,9 +525,18 @@
             class="border-b border-white-300 dark:border-navy-600 text-black-700 dark:text-black-600"
           >
             <th class="px-5 py-2 text-left font-medium">
-              {tab === "provider" ? "Provider" : tab === "project" ? "Project" : "User"}
+              {tab === "provider"
+                ? "Provider"
+                : tab === "model"
+                  ? "Model"
+                  : tab === "project"
+                    ? "Project"
+                    : "User"}
             </th>
             <th class="px-5 py-2 text-right font-medium">Cost</th>
+            <!-- Turns, not just tokens: on a flat-rate plan every cost is
+                 zero and "what do we actually use" has no other answer. -->
+            <th class="px-5 py-2 text-right font-medium hidden sm:table-cell">Turns</th>
             <th class="px-5 py-2 text-right font-medium">Tokens</th>
             <th class="px-5 py-2 text-right font-medium hidden sm:table-cell">Cache</th>
             <th class="px-5 py-2 text-left font-medium w-32">Share</th>
@@ -516,6 +563,11 @@
               </td>
               <td class="px-5 py-2 text-right tabular-nums text-black-900 dark:text-white-100">
                 {formatCost(r.totals.cost_usd)}
+              </td>
+              <td
+                class="px-5 py-2 text-right tabular-nums text-black-700 hidden sm:table-cell dark:text-black-600"
+              >
+                {r.turns ? exact(r.turns) : "—"}
               </td>
               <td
                 class="px-5 py-2 text-right tabular-nums text-black-900 dark:text-white-100"

@@ -12,6 +12,7 @@
   import { timeAgo } from "../timeFormat.js";
   import { renderMarkdown } from "../markdown.js";
   import NotesPanel from "./NotesPanel.svelte";
+  import AssigneePicker from "./AssigneePicker.svelte";
 
   type Props = {
     base: string;
@@ -89,8 +90,14 @@
     if (t !== "" && t !== data?.ticket.title) patch({ title: t });
   }
 
-  const assigneeName = $derived(
-    data?.ticket.assignee ? (data.users?.[data.ticket.assignee] ?? data.ticket.assignee) : "",
+  /* Everyone on the ticket. `assignees` is the list of record; `assignee`
+     is its first entry, and the only thing an older server sends. */
+  const assigneeIds = $derived(
+    data?.ticket.assignees?.length
+      ? data.ticket.assignees
+      : data?.ticket.assignee
+        ? [data.ticket.assignee]
+        : [],
   );
 
   /* ── description (markdown) ──
@@ -425,28 +432,14 @@
           </div>
 
           <div>
-            <!-- "take it" is a link beside the label, the Zendesk idiom —
-                 claiming a ticket is one click, not a form control. -->
-            <div class="mb-1 flex items-center justify-between">
-              <label class="block text-xs font-medium text-black-800 dark:text-black-600" for="tkt-assignee">Assignee</label>
-              {#if data.me}
-                <button
-                  type="button"
-                  onclick={() => patch({ assignee: data?.me })}
-                  class="text-[11px] font-medium text-green-600 transition-colors hover:underline dark:text-green-400"
-                >take it</button>
-              {/if}
-            </div>
-            <input
-              id="tkt-assignee"
-              value={t.assignee ?? ""}
-              onblur={(e) => patch({ assignee: (e.target as HTMLInputElement).value })}
-              placeholder="unassigned"
-              class="w-full rounded-lg border border-white-400 bg-white-100 px-2.5 py-1.5 text-xs text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+            <AssigneePicker
+              {base}
+              projectId={t.project_id}
+              assignees={assigneeIds}
+              users={data.users}
+              me={data.me}
+              onChange={(next) => patch({ assignees: next })}
             />
-            {#if assigneeName && assigneeName !== t.assignee}
-              <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">{assigneeName}</p>
-            {/if}
           </div>
 
           {#each visibleFieldDefs as f (f.key)}

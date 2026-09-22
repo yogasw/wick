@@ -96,6 +96,17 @@ func (h *Handler) setConnectorOwner(w http.ResponseWriter, r *http.Request) {
 	}
 	previous := row.CreatedBy
 	if previous == owner {
+		// Naming the same owner is not nothing. The column and the tag are two
+		// facts, and they drift: a row seeded before ownership was recorded, or
+		// one whose earlier transfer wrote the column and lost the tag, shows
+		// the right Owner on this page while that person still cannot reach it.
+		// Re-picking them used to return here and change nothing, which left no
+		// way out through the UI at all. Re-assert the grant instead — passing
+		// no previous owner, so this only ever adds.
+		if err := h.repo.TransferOwnerTag(ctx, id, "/connectors/"+id, "", owner); err != nil {
+			http.Error(w, "owner unchanged, and the owner tag could not be repaired: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		redirectOrNoContent(w, r, "/admin/connectors")
 		return
 	}
@@ -140,6 +151,13 @@ func (h *Handler) setProjectOwner(w http.ResponseWriter, r *http.Request) {
 	}
 	previous := p.Meta.OwnerUserID
 	if previous == owner {
+		// Same reason as connectors: the meta says who owns it, the tag is
+		// what the sessions surface reads, and a project from before the tag
+		// existed has only the first. Re-asserting must be able to repair it.
+		if err := h.repo.TransferOwnerTag(r.Context(), id, "", "", owner); err != nil {
+			http.Error(w, "owner unchanged, and the owner tag could not be repaired: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		redirectOrNoContent(w, r, "/admin/projects")
 		return
 	}
@@ -216,6 +234,15 @@ func (h *Handler) setWorkflowOwner(w http.ResponseWriter, r *http.Request) {
 	}
 	previous := info.CreatedBy
 	if previous == owner {
+		// The case this endpoint was reported for: the Owner column already
+		// named the person, the owner tag did not exist, and the workflow list
+		// — which filters on the tag — stayed empty for them no matter how
+		// many times the same owner was picked. Repair the grant instead of
+		// declaring victory.
+		if err := h.repo.TransferOwnerTag(r.Context(), id, "", "", owner); err != nil {
+			http.Error(w, "owner unchanged, and the owner tag could not be repaired: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		redirectOrNoContent(w, r, "/admin/workflows")
 		return
 	}

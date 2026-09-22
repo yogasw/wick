@@ -361,6 +361,13 @@ export type AgentEvent = {
   lifecycle?: string;
   at?: number;
   end_at?: number;
+  /** How full the context window was for the request this event came
+      from — a MID-TURN reading, so the meter can move while a long turn
+      runs. Absent means this event said nothing about the window (most
+      do), never that the window is empty. Only providers that report it
+      per request send it; codex reads its level once per turn and sends
+      none. */
+  context_used?: number;
 };
 
 export type SSEStatus = "connecting" | "connected" | "error";
@@ -600,7 +607,11 @@ export type TicketCard = {
   id: string; // short quotable code, e.g. "T-4F2A"
   title: string;
   status: string;
+  /** The first of `assignees` — what a card has room to draw. */
   assignee?: string;
+  /** Everyone the ticket is on. Absent on an older server, where `assignee`
+      is the whole answer. */
+  assignees?: string[];
   fields?: Record<string, string>;
   /** The ticket's sessions, listed on the card so one can be dragged to
       another ticket without opening anything. */
@@ -646,7 +657,9 @@ export type Ticket = {
   /** Markdown description. */
   body?: string;
   status: string;
+  /** The first of `assignees`. */
   assignee?: string;
+  assignees?: string[];
   fields?: Record<string, string>;
   sessions?: string[];
   created_at: string;
@@ -698,7 +711,12 @@ export type NotesResponse = {
   notes: Note[];
   users?: Record<string, string>;
   me?: string;
-  ticket?: { id: string; title: string; status: string };
+  /** `body` is the ticket's description — the request the notes answer. */
+  ticket?: { id: string; title: string; status: string; body?: string };
+  /** Whether the project runs tickets at all. Absent on an older server,
+      which is why it is optional rather than defaulted to false: the rail
+      hides its Ticket tab on an explicit `false` and shows it otherwise. */
+  ticket_enabled?: boolean;
   /** The ticket's project board columns, so the rail's status select offers
       the same choices as the board. */
   statuses?: TicketStatus[];

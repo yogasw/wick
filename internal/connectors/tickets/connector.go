@@ -144,7 +144,7 @@ type listInput struct {
 	Mine bool `wick:"desc=Only tickets assigned to the caller. Use this for \"my tickets\" — the user is resolved from the credential, so no id is needed."`
 	// Assignee is for looking at a NAMED person's queue, which is a different
 	// question from "mine" and needs an explicit id.
-	Assignee string `wick:"desc=Only tickets assigned to this wick user id. Leave empty for everyone, prefer mine=true for the caller's own tickets. Pass 'unassigned' for tickets with nobody on them."`
+	Assignee string `wick:"desc=Only tickets this wick user id is on — a shared ticket matches every one of its assignees. Leave empty for everyone, prefer mine=true for the caller's own tickets. Pass 'unassigned' for tickets with nobody on them."`
 }
 
 type mineInput struct {
@@ -173,6 +173,7 @@ type createInput struct {
 	ID        string `wick:"desc=Optional external id to adopt instead of a generated one, so a ticket mirroring a record elsewhere carries that record's id: [A-Za-z0-9._-] up to 64 chars, kept verbatim. A uuid is folded to dashless lowercase, so both shapes of a Notion page id land on one ticket and a second create from it is refused."`
 	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=Initial status. Defaults to open."`
 	Assignee  string `wick:"desc=Optional wick user id to assign it to."`
+	Assignees string `wick:"desc=Several wick user ids, comma-separated, when the work is shared. Use this OR assignee. The first id is the one a board card shows."`
 	Fields    string `wick:"textarea;desc=Optional project-defined field values as JSON. Example: {\"priority\":\"high\",\"type\":\"incident\"}"`
 	// Named "attach_current_session" rather than a bare boolean so the
 	// agent cannot attach a session it did not mean to.
@@ -186,6 +187,7 @@ type updateInput struct {
 	Body      string `wick:"textarea;desc=New markdown description. Omit to leave unchanged, pass an empty string to clear it."`
 	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=New status. Omit to leave unchanged."`
 	Assignee  string `wick:"desc=New assignee (wick user id). Pass an empty string to unassign."`
+	Assignees string `wick:"desc=The new full list of assignees, comma-separated — it REPLACES whoever is on the ticket rather than adding to them, so include the people already there. Pass an empty string to unassign everyone. Wins over assignee when both are sent."`
 	Fields    string `wick:"textarea;desc=Field values to merge as JSON. An empty string value clears that field."`
 }
 
