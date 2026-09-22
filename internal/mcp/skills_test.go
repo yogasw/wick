@@ -4,21 +4,36 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/skillsync"
+	"github.com/yogasw/wick/internal/appname"
 )
 
 // overrideHome temporarily redirects os.UserHomeDir via HOME/USERPROFILE
 // so KnownDirs() sees our temp dirs instead of the real ~/.claude/skills etc.
 func overrideHome(t *testing.T, dir string) {
 	t.Helper()
-	origHome := os.Getenv("HOME")
-	origUserProfile := os.Getenv("USERPROFILE")
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
-	_ = origHome
-	_ = origUserProfile
+	// HOME alone is not enough: wick's OWN skills dir hangs off
+	// appname.DataDir(), which memoizes the home dir on first use — one
+	// process must not split its writes across two trees. Without dropping
+	// that cache the wick dir stays wherever the FIRST caller in this
+	// process resolved it: the real ~/.wick/skills on a fresh binary, or an
+	// earlier test's temp dir. Either way this test then lists skills it did
+	// not create — a sibling test's leftovers, or whatever a package running
+	// in parallel happened to write into the real dir — and fails on a count
+	// that has nothing to do with what it set up.
+	// An inherited $WICK_DATA_DIR would survive the reset and point the
+	// wick dir outside the temp home again, so clear it for the test too.
+	t.Setenv(appname.DataDirEnv, "")
+	appname.ResetDataDirForTest()
+	t.Cleanup(appname.ResetDataDirForTest)
+	if got := appname.SkillsDir(); !strings.HasPrefix(got, dir) {
+		t.Fatalf("wick skills dir = %q, want one under %q: the DataDir cache is still holding another tree", got, dir)
+	}
 }
 
 // makeSkillDir creates a provider skill dir and returns its path.

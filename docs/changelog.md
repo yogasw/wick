@@ -10,6 +10,45 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.13.0](https://github.com/yogasw/wick/compare/v1.12.0...v1.13.0) — UI, MCP & Tickets
+
+_Released on 2026-09-22_
+
+### Added
+- **Assignees**: Tickets now support multiple assignees, with the `assignee` field retaining the first entry for compatibility with existing systems.
+- **Usage**: Per-model usage totals are now recorded and displayed for more granular billing insights.
+
+### Fixed
+- **sw.js**: Aborted network requests are now hedged with a second request to prevent silent failures on slow connections, especially on mobile devices.
+- **Analytics Stream**: A frozen "Reading conversations" UI caused by silent sockets now correctly retries and shows a readable error message instead of freezing.
+- **Impersonation Banner**: Full-viewport shells (e.g., agent shells) now dynamically subtract the banner's height, preventing content like the composer or inbox list from being pushed off-screen.
+- **Workflow Ownership**: The workflow list now correctly filters by either the owner tag or the `created_by` field, and re-picking an owner will repair a missing tag.
+- **Width Issues**: UI components (chips, headers, navbar, branch names) that previously caused horizontal scrolling on smaller screens (phones, boards) now truncate or give way.
+- **Context Sparkline**: The spend behind a hovered point on the context sparkline now correctly displays a value instead of always showing "total 0".
+- **Context Panel Resizing**: The context panel no longer resizes under the cursor when hovering over the sparkline; it now reserves both lines for the readout to maintain a stable layout.
+- **Context Meter on Page Load**: The context meter now correctly fetches and displays data immediately on page load, fixing a regression where it only appeared after an agent's activity.
+- **Ticket Creation with Empty Assignees**: Creating a ticket with an explicitly empty assignees list now correctly assigns nobody instead of automatically assigning the creator.
+- **Login-TTY Exit Test**: The exit test for login-tty sessions now subscribes to events before the exit occurs, resolving a race condition that could cause failures on loaded runners.
+- **Skills Test Cleanup**: A skills test no longer counts leftover skills from sibling tests by correctly clearing the cache and data directory, preventing false failures.
+
+### Improved
+- **Analytics Build**: Postgres account queries are now run concurrently with file walks, significantly speeding up the analytics build page load time.
+- **MCP Scoped Tokens**: Agent credentials are now signed with the app session secret and embedded directly within the token. This eliminates the 105-second 401 window that previously occurred during graceful handovers. Token TTL is reduced to 2 hours, and revocation is handled in-memory.
+- **`test(mcp)`**: Updated test code to use the built-in `min` function (available in Go 1.21+), improving clarity and avoiding shadowing the predeclared identifier.
+- **Assignees Picker**: The assignee picker now displays names instead of UUIDs, and the "take it" action now adds to the existing assignees list rather than replacing colleagues already assigned.
+- **Context Panel (Live)**: The context panel now displays live status, current step count, and a moving clock during an active turn, rather than only showing figures after completion.
+- **Todo Card in Trace**: The todo card in a trace now correctly updates to reflect the latest plan rewrite, showing only the most recent list of items.
+- **Ticket Tab Visibility**: The ticket tab is now hidden when a project has tickets switched off, preventing the display of an empty and potentially broken-looking board.
+- **Notes & Description Accessibility**: Notes are now readable directly from the ticket panel, and the ticket's description is readable from the notes panel.
+- **Context Panel Refresh**: The refresh button for the context panel no longer strobes or reloads per frame; it now reloads only on actual lifecycle transitions, and background refreshes occur silently without affecting the button state.
+- **Context Panel Readout**: The idle state of the context panel readout now displays information about the newest turn (its level, cost, and session spend), ensuring both display lines are always filled.
+
+### Removed
+- `PLAN_CODEX_COMPACTION.md`: A planning document related to Codex compaction has been deleted.
+
+---
+
+
 ## [v1.12.0](https://github.com/yogasw/wick/compare/v1.11.1...v1.12.0) — MCP & Agents
 
 _Released on 2026-09-21_

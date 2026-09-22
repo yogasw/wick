@@ -357,13 +357,20 @@
              reading upward needs to know before they trust it. The
              before/after pair carries the whole meaning, so both are on
              the line. -->
-        <div class="flex items-center gap-2 w-full py-0.5" title={turn.text}>
+        <!-- The label is allowed to shrink. It used to be shrink-0, which
+             is fine for "Compacted 42k → 8k · auto" and not at all fine for
+             the fallback sentence the provider writes when the before/after
+             numbers are missing — that one is long enough to push the whole
+             thread wider than the window, which scrolled the conversation
+             sideways under the rail. It truncates now; the full sentence is
+             on the row's title. -->
+        <div class="flex w-full items-center gap-2 overflow-hidden py-0.5" title={turn.text}>
           <div class="h-px flex-1 bg-white-300 dark:bg-navy-600"></div>
-          <span class="inline-flex items-center gap-1.5 text-[11px] text-black-700 dark:text-black-600 shrink-0">
-            <svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5">
+          <span class="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-black-700 dark:text-black-600">
+            <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M2 3.5h8M3.5 6h5M5 8.5h2" stroke-linecap="round"></path>
             </svg>
-            {compactionLabel}
+            <span class="min-w-0 truncate">{compactionLabel}</span>
           </span>
           <div class="h-px flex-1 bg-white-300 dark:bg-navy-600"></div>
         </div>

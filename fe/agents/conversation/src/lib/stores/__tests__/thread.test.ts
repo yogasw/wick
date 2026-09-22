@@ -737,3 +737,39 @@ describe("createThreadStore", () => {
     expect(get(store.lifecycle).state).toBe("idle");
   });
 });
+
+/* The ledger behind the context meter is written when a turn ENDS, so a
+   long turn left every number frozen on the previous one. Providers that
+   report the level per request send it along with whatever event the
+   frame produced. */
+describe("createThreadStore — live context level", () => {
+  test("takes the reading off any event that carries one", () => {
+    const s = createThreadStore();
+    s.handleEvent({ type: "tool_use", tool_name: "Bash", tool_use_id: "t1", context_used: 301_200 });
+    expect(get(s.contextUsed)).toBe(301_200);
+  });
+
+  // The frame with the newest level is often one nothing renders — the
+  // trailing copy of text that already streamed arrives as `unknown`.
+  test("reads it from an event the switch ignores", () => {
+    const s = createThreadStore();
+    s.handleEvent({ type: "unknown", context_used: 88_000 });
+    expect(get(s.contextUsed)).toBe(88_000);
+  });
+
+  test("an event without a reading leaves the last one alone", () => {
+    const s = createThreadStore();
+    s.handleEvent({ type: "unknown", context_used: 12_000 });
+    s.handleEvent({ type: "text_delta", data: "hi" });
+    expect(get(s.contextUsed)).toBe(12_000);
+  });
+
+  // Zero is "this event said nothing about the window", never "the window
+  // is empty" — drawing it would show a drop that never happened.
+  test("zero is not a reading", () => {
+    const s = createThreadStore();
+    s.handleEvent({ type: "unknown", context_used: 12_000 });
+    s.handleEvent({ type: "unknown", context_used: 0 });
+    expect(get(s.contextUsed)).toBe(12_000);
+  });
+});

@@ -55,6 +55,13 @@ type Event struct {
 	// so the UI can show "started HH:MM:SS, took Ns".
 	At    int64 `json:"at,omitempty"`
 	EndAt int64 `json:"end_at,omitempty"`
+	// ContextUsed is how full the window was for the request this frame
+	// came from — a mid-turn reading, so the meter beside the composer
+	// moves while a long turn is running instead of after it. Carried on
+	// whatever event happened to be the one that knew (see
+	// event.AgentEvent.ContextUsed); 0 means this event said nothing
+	// about the window.
+	ContextUsed int `json:"context_used,omitempty"`
 }
 
 func (e Event) JSON() string {
@@ -133,11 +140,12 @@ func (b *Broadcaster) HasSubscribers(sessionID string) bool {
 // Non-blocking: a full channel's event is dropped rather than blocking.
 func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) {
 	payload := Event{
-		SessionID: sessionID,
-		AgentName: agentName,
-		Type:      ev.Type.String(),
-		Data:      ev.Text,
-		Raw:       ev.Raw,
+		SessionID:   sessionID,
+		AgentName:   agentName,
+		Type:        ev.Type.String(),
+		Data:        ev.Text,
+		Raw:         ev.Raw,
+		ContextUsed: ev.ContextUsed,
 	}
 	now := time.Now().UnixMilli()
 	switch ev.Type {

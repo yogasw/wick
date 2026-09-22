@@ -918,15 +918,21 @@ function renderDetail(node: HTMLElement): void {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.setAttribute("data-detail-chip", "");
+    // max-w-full, not a fixed 22rem: the compaction chip's title runs to
+    // about sixty characters, and on a phone a chip wider than the bubble
+    // pushed the whole conversation sideways under the rail. The title
+    // truncates against whatever room there is; the full text is one
+    // click away in the modal, which is the point of the chip.
     btn.className =
-      "inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 " +
+      "inline-flex max-w-full items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 " +
       "bg-white-200 dark:bg-navy-800 px-2.5 py-1 text-xs text-black-700 dark:text-black-600 " +
       "hover:bg-white-300 dark:hover:bg-navy-700 transition-colors cursor-pointer";
+    btn.title = title;
     btn.innerHTML =
       `<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">` +
       `<path d="M3 4h10M3 8h10M3 12h6" stroke-linecap="round"></path></svg>` +
-      `<span class="truncate max-w-[22rem]">${esc(title)}</span>` +
-      `<span class="text-[10px] opacity-60">details</span>`;
+      `<span class="min-w-0 truncate">${esc(title)}</span>` +
+      `<span class="shrink-0 text-[10px] opacity-60">details</span>`;
     btn.addEventListener("click", () => {
       el.dispatchEvent(
         new CustomEvent("wick-detail-open", { bubbles: true, detail: { title, body } }),

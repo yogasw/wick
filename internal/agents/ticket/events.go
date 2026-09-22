@@ -233,6 +233,13 @@ func diff(before, after Ticket) map[string]Change {
 	if before.Assignee != after.Assignee {
 		out["assignee"] = Change{From: before.Assignee, To: after.Assignee}
 	}
+	// The whole list, comma-joined, as its own change. `assignee` above is
+	// the first name only — it does not move when a second person is added
+	// or when the one who is not first leaves, and a receiver mirroring the
+	// ticket would silently miss both.
+	if b, a := strings.Join(before.AssigneeList(), ","), strings.Join(after.AssigneeList(), ","); b != a {
+		out["assignees"] = Change{From: b, To: a}
+	}
 	if before.Title != after.Title {
 		out["title"] = Change{From: before.Title, To: after.Title}
 	}
@@ -271,6 +278,10 @@ func EventsFor(changes map[string]Change) []string {
 		out = append(out, EventStatusChanged)
 	}
 	if _, ok := changes["assignee"]; ok {
+		out = append(out, EventAssigned)
+	} else if _, ok := changes["assignees"]; ok {
+		// A second person joining does not move `assignee`, but it is still
+		// somebody being assigned — and that is the event they subscribed to.
 		out = append(out, EventAssigned)
 	}
 	return out

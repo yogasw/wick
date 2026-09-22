@@ -696,6 +696,10 @@ func (e *engine) accumulateUsage(out *LLMResponse) {
 	e.turnTokens.output += int(u.CandidatesTokenCount)
 	if prompt > 0 {
 		e.turnTokens.lastIn, e.turnTokens.lastCache = fresh, cached
+		// Report the level now rather than at the end of the turn. A turn
+		// that loops through a dozen tool calls is the one whose meter
+		// people watch, and it is the one that never moved.
+		e.emit(levelLine(fresh, cached))
 	}
 }
 

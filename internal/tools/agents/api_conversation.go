@@ -116,7 +116,9 @@ func ticketAssignedSessions(projectID, userID string) map[string]bool {
 	}
 	var out map[string]bool
 	for _, t := range tickets {
-		if t.Assignee != userID {
+		// Anyone on the ticket, not just the first: a session shared with a
+		// colleague is still this person's work.
+		if !t.HasAssignee(userID) {
 			continue
 		}
 		if out == nil {

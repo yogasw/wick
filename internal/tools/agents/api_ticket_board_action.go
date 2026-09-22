@@ -275,7 +275,7 @@ func selectBoardTickets(
 		if len(wantStatus) > 0 && !wantStatus[t.Status] {
 			continue
 		}
-		if assigneeID != "" && t.Assignee != assigneeID {
+		if assigneeID != "" && !t.HasAssignee(assigneeID) {
 			continue
 		}
 		matched++

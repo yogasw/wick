@@ -418,3 +418,43 @@ func TestSetWorkflowOwnerUnavailableWithoutWriter(t *testing.T) {
 	rec := ownerPost(t, h.setWorkflowOwner, "/admin/workflows/wf-1/owner", "wf-1", "u-new")
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }
+
+// The state this page could not repair: the row already NAMES the owner, but
+// the tag that carries the reach is missing — a workflow created before
+// ownership was recorded, or one whose earlier transfer wrote the stamp and
+// lost the tag. The page then shows the right Owner while that person still
+// cannot open the workflow list, and re-picking the same name did nothing at
+// all, because "no change" was read as "nothing to do".
+func TestSetWorkflowOwnerRepairsMissingTagForTheSameOwner(t *testing.T) {
+	h, fw, db := newWorkflowOwnerHandler(t, "wf-1", "u-owner")
+	approvedUser(t, db, "u-owner", "Owner")
+	require.False(t, carriesOwnerTag(t, db, "wf-1", "u-owner"), "precondition: stamped but untagged")
+
+	rec := ownerPost(t, h.setWorkflowOwner, "/admin/workflows/wf-1/owner", "wf-1", "u-owner")
+	require.Equal(t, http.StatusFound, rec.Code)
+	require.Equal(t, "u-owner", fw.info["wf-1"].CreatedBy)
+	require.True(t, carriesOwnerTag(t, db, "wf-1", "u-owner"), "re-picking the same owner must repair the grant")
+}
+
+// Same hole, same repair, on the other two surfaces that share the shortcut.
+func TestSetConnectorOwnerRepairsMissingTagForTheSameOwner(t *testing.T) {
+	h, svc, db := newAdminConnectorsHandler(t)
+	ctx := context.Background()
+	approvedUser(t, db, "u-owner", "Owner")
+	row, err := svc.Create(ctx, "sso-admin", "Row", nil, "u-owner")
+	require.NoError(t, err)
+	require.False(t, carriesOwnerTag(t, db, row.ID, "u-owner"), "precondition: stamped but untagged")
+
+	rec := ownerPost(t, h.setConnectorOwner, "/admin/connectors/"+row.ID+"/owner", row.ID, "u-owner")
+	require.Equal(t, http.StatusFound, rec.Code)
+	require.True(t, carriesOwnerTag(t, db, row.ID, "u-owner"))
+}
+
+func TestSetProjectOwnerRepairsMissingTagForTheSameOwner(t *testing.T) {
+	h, _, db := newProjectOwnerHandler(t, "p-1", "u-owner")
+	approvedUser(t, db, "u-owner", "Owner")
+
+	rec := ownerPost(t, h.setProjectOwner, "/admin/projects/p-1/owner", "p-1", "u-owner")
+	require.Equal(t, http.StatusFound, rec.Code)
+	require.True(t, carriesOwnerTag(t, db, "p-1", "u-owner"))
+}

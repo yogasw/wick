@@ -24,6 +24,8 @@ export async function loadAnalytics(
     instances?: string[];
     onProgress?: (done: number, total: number) => void;
     fetchImpl?: typeof fetch;
+    /** How long the stream may say nothing before it counts as stalled. */
+    stallMs?: number;
   } = {},
 ): Promise<AnalyticsResponse> {
   const f = opts.fetchImpl ?? fetch;
@@ -37,12 +39,68 @@ export async function loadAnalytics(
   const streamURL = new URL(url);
   streamURL.searchParams.set("stream", "1");
 
-  const res = await f(streamURL.toString(), {
-    headers: { Accept: "application/x-ndjson" },
-    cache: "no-store",
+  // A stalled connection is silent, and silence here used to be
+  // indistinguishable from work: the progress bar sat at its last count
+  // forever — "2311 / 2311" with the server long since finished — because the
+  // read loop had nothing to time out against. One retry turns that into
+  // either an answer or an error somebody can read.
+  try {
+    return await readStream(f, streamURL, url, opts);
+  } catch (e) {
+    if (e instanceof StreamStalled) return readStream(f, streamURL, url, opts);
+    throw e;
+  }
+}
+
+/** Thrown when the stream goes quiet for longer than a live one ever would. */
+class StreamStalled extends Error {
+  constructor(ms: number) {
+    super(`the connection went quiet for ${Math.round(ms / 1000)}s`);
+    this.name = "StreamStalled";
+  }
+}
+
+/** Rejects with StreamStalled — and drops the connection — when `p` has said
+ *  nothing for `ms`. The server writes a progress line every ~120ms, so any
+ *  silence this long is a dead socket, not a slow page. */
+function beforeSilence<T>(p: Promise<T>, ms: number, onStall: () => void): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      onStall();
+      reject(new StreamStalled(ms));
+    }, ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
   });
+}
+
+async function readStream(
+  f: typeof fetch,
+  streamURL: URL,
+  plainURL: URL,
+  opts: { onProgress?: (done: number, total: number) => void; stallMs?: number },
+): Promise<AnalyticsResponse> {
+  const stallMs = opts.stallMs ?? 20_000;
+  const ctrl = new AbortController();
+  const res = await beforeSilence(
+    f(streamURL.toString(), {
+      headers: { Accept: "application/x-ndjson" },
+      cache: "no-store",
+      signal: ctrl.signal,
+    }),
+    stallMs,
+    () => ctrl.abort(),
+  );
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  if (!res.body) return plain(f, url);
+  if (!res.body) return plain(f, plainURL);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -50,7 +108,7 @@ export async function loadAnalytics(
   let result: AnalyticsResponse | null = null;
 
   for (;;) {
-    const { done, value } = await reader.read();
+    const { done, value } = await beforeSilence(reader.read(), stallMs, () => ctrl.abort());
     if (value) buf += decoder.decode(value, { stream: true });
     // A chunk can split a line anywhere, so only whole lines are parsed
     // and the tail is kept for the next read.

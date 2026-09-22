@@ -216,6 +216,12 @@ type Store struct {
 	// traceEventMaxBytes caps per-event file payload. 0 = no cap.
 	traceEventMaxBytes int
 
+	// lastLevelWrite throttles the mid-turn context-level writes. The
+	// level arrives on every frame of a long turn and the ledger is
+	// rewritten whole each time, so persisting all of them would be a
+	// steady trickle of pointless IO for a number nobody reads that fast.
+	lastLevelWrite time.Time
+
 	now func() time.Time
 }
 
@@ -319,6 +325,16 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 				"raw":  ev.Raw,
 			},
 		)
+	}
+
+	// A mid-turn window reading, on whatever frame carried it. Recorded
+	// before the type switch because the frame with the newest level is
+	// often one the switch ignores — a suppressed duplicate of text that
+	// already streamed. Level only: no turn counted, no flows added, no
+	// point appended to the series. Those belong to the turn, and the
+	// turn has not finished.
+	if ev.ContextUsed > 0 && ev.Type != event.Done {
+		_ = s.recordContextLevel(ev.ContextUsed, s.now().UTC())
 	}
 
 	switch ev.Type {

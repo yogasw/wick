@@ -3,6 +3,7 @@ package event
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -47,6 +48,48 @@ type CodexParser struct {
 	// level resolves the true context level for a finished turn.
 	// Injected so tests never touch the filesystem.
 	level func(home, threadID string, sum int) (codexRolloutReading, bool)
+	// newest resolves the level codex has written MOST RECENTLY, without
+	// waiting for the turn to end. Same journal, no retry pause: mid-turn
+	// there is nothing to match against and nothing to wait for. Injected
+	// for the same reason as level.
+	newest func(home, threadID string) (codexRolloutReading, bool)
+	// lastLive throttles those reads. Codex writes one entry per request,
+	// so re-reading the journal on every frame of a busy turn would be a
+	// megabyte of IO for a number that moves a handful of times.
+	lastLive time.Time
+	// now is the clock the throttle reads, swapped in tests.
+	now func() time.Time
+}
+
+// codexLiveInterval is the floor between two rollout reads. The meter is
+// worth keeping current; it is not worth a file read per streamed token.
+const codexLiveInterval = 3 * time.Second
+
+// liveLevel is the newest level codex has recorded for this thread, or 0
+// when there is nothing to read, the throttle has not elapsed, or the
+// thread is not known yet.
+//
+// Zero always means "no reading", never "empty window" — the caller
+// leaves the meter where it was rather than drawing a drop that did not
+// happen.
+func (p *CodexParser) liveLevel() int {
+	if p.threadID == "" || p.newest == nil {
+		return 0
+	}
+	now := time.Now
+	if p.now != nil {
+		now = p.now
+	}
+	at := now()
+	if !p.lastLive.IsZero() && at.Sub(p.lastLive) < codexLiveInterval {
+		return 0
+	}
+	p.lastLive = at
+	r, ok := p.newest(p.codexHome, p.threadID)
+	if !ok {
+		return 0
+	}
+	return r.Level
 }
 
 // NewCodexParser returns a fresh parser ready to consume codex --json lines.
@@ -60,6 +103,7 @@ func NewCodexParserIn(codexHome string) *CodexParser {
 		agentMsgText: map[string]string{},
 		codexHome:    codexHome,
 		level:        codexRolloutLevel,
+		newest:       codexRolloutNewest,
 	}
 }
 
@@ -182,7 +226,24 @@ type codexMCPContent struct {
 
 // Parse decodes one codex --json line into an AgentEvent.
 // Blank/whitespace lines return (Unknown, nil).
+// Parse normalises one codex line, and stamps the mid-turn context level
+// onto whatever it produced.
+//
+// The stamp happens HERE rather than inside the switch because codex's
+// stream carries no usage at all until turn.completed: there is no one
+// frame that knows the level, so the reading is fetched beside the
+// stream (throttled) and any frame will do as a carrier. A turn that is
+// still running is exactly when this matters — turn.completed already
+// carries the real thing, so it is left alone.
 func (p *CodexParser) Parse(line string) (AgentEvent, error) {
+	ev, err := p.parse(line)
+	if err == nil && ev.Type != Done && ev.ContextUsed == 0 {
+		ev.ContextUsed = p.liveLevel()
+	}
+	return ev, err
+}
+
+func (p *CodexParser) parse(line string) (AgentEvent, error) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return AgentEvent{}, nil

@@ -1101,3 +1101,36 @@ describe("ThreadMessage - slash command", () => {
     expect(screen.queryByTestId("command-chip")).toBeNull();
   });
 });
+
+/* The compaction marker is a divider across the thread. Its label has to
+   shrink: the fallback sentence a provider writes when the before/after
+   token counts are missing is long enough to push the conversation wider
+   than the window, which scrolled the whole thread sideways under the
+   rail on a phone. */
+describe("ThreadMessage - compaction divider", () => {
+  const compaction = (over: Partial<ConversationTurn> = {}) =>
+    makeTurn({
+      role: "system",
+      kind: "compaction",
+      text: "Context compacted — folded 9 earlier turns (~42000 → ~8000 tokens)",
+      ...over,
+    });
+
+  test("reads the numbers out of extras when they are there", () => {
+    render(ThreadMessage, {
+      props: {
+        turn: compaction({ extras: { pre_tokens: "42000", post_tokens: "8000", trigger: "manual" } }),
+      },
+    });
+    expect(screen.getByText("Compacted 42.0k → 8.0k · manual")).toBeDefined();
+  });
+
+  test("the long fallback label truncates instead of widening the thread", () => {
+    const { container } = render(ThreadMessage, { props: { turn: compaction() } });
+    const label = container.querySelector(".truncate");
+    expect(label).not.toBeNull();
+    expect(label?.textContent).toContain("Context compacted");
+    // And the row itself clips, so nothing escapes it either.
+    expect(container.innerHTML).toContain("overflow-hidden");
+  });
+});

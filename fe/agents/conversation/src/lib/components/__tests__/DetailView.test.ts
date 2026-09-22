@@ -58,6 +58,8 @@ vi.mock("../../stores/thread.js", () => ({
     turns: { subscribe: (fn: (v: unknown[]) => void) => { fn([]); return () => {}; } },
     live: { subscribe: (fn: (v: null) => void) => { fn(null); return () => {}; } },
     typing: { subscribe: (fn: (v: { active: boolean }) => void) => { fn({ active: false }); return () => {}; } },
+    turnStartedAt: { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; } },
+    contextUsed: { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; } },
     lifecycle: { subscribe: (fn: (v: { state: string; pid: number; substate: string; at: number }) => void) => { fn({ state: "", pid: 0, substate: "", at: 0 }); return () => {}; } },
     meta: metaStore,
     setHistory: vi.fn(),
@@ -126,6 +128,18 @@ vi.mock("../../api/messages.js", () => ({
   sendMessage: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
 }));
 
+vi.mock("../../api/context.js", () => ({
+  fetchSessionContext: vi.fn(async () => ({
+    session_id: "S1",
+    used: 0,
+    window: 0,
+    pct: 0,
+    turns: 0,
+    totals: { input: 0, cache_read: 0, cache_write: 0, output: 0, total: 0, cost_usd: 0, cache_hit_pct: 0 },
+    providers: [],
+  })),
+}));
+
 vi.mock("../../api/subagents.js", () => ({
   getSubAgents: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   getSubAgentPanel: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
@@ -189,6 +203,7 @@ import DetailView from "../DetailView.svelte";
 import { killProcess, getProcesses } from "../../api/processes.js";
 import { getAsks } from "../../api/asks.js";
 import { getApprovals } from "../../api/approvals.js";
+import { fetchSessionContext } from "../../api/context.js";
 import { getConversation } from "../../api/sessions.js";
 import { getSubAgentPanel } from "../../api/subagents.js";
 import { SCM_DEFAULT_W, RAIL_GUTTER_PX } from "../../scmWidth.js";
@@ -506,6 +521,18 @@ describe("DetailView — approvals modal error propagation (#35)", () => {
   test("fetches pending approvals on mount, not just on tab click", () => {
     render(DetailView, { props: DEFAULT_PROPS });
     expect(getApprovals).toHaveBeenCalledWith(DEFAULT_PROPS.base, DEFAULT_PROPS.sessionId);
+  });
+
+  /* The meter beside the composer is read once on mount and again on each
+     lifecycle transition. Guarding the transitions with a seed of "" made
+     the FIRST read look like a repeat — an idle session's lifecycle is ""
+     — so the ring stayed blank and /context opened empty until the agent
+     happened to move. */
+  test("reads the context meter on mount, before anything happens", async () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    await waitFor(() =>
+      expect(fetchSessionContext).toHaveBeenCalledWith(DEFAULT_PROPS.base, DEFAULT_PROPS.sessionId),
+    );
   });
 });
 

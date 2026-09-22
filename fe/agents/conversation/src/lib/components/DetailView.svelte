@@ -68,6 +68,9 @@
     resolveHidden,
     toggleHidden,
     splitRail,
+    fitStrip,
+    RAIL_FILL,
+    RAIL_TAB_FALLBACK_H,
     type RailPrefs,
   } from "../railPrefs.js";
   import BrowserPanel from "./BrowserPanel.svelte";
@@ -123,6 +126,16 @@
   const unsubLive = thread.live.subscribe((v) => { live = v; });
   const unsubTyping = thread.typing.subscribe((v) => { typing = v; });
   const unsubLifecycle = thread.lifecycle.subscribe((v) => { agentLifecycle = v; });
+  /* When the running turn started, for the context panel's live line. A
+     turn can go minutes without saying anything, and every other figure
+     in that panel is written only once the turn ENDS. */
+  let turnStartedAt = $state(0);
+  const unsubTurnClock = thread.turnStartedAt.subscribe((v) => { turnStartedAt = v; });
+  /* The newest window reading off the stream. The ledger behind
+     contextData is written when a turn ENDS, so this is the only thing
+     that moves while one is running. */
+  let liveContextUsed = $state(0);
+  const unsubContextUsed = thread.contextUsed.subscribe((v) => { liveContextUsed = v; });
   const unsubMeta = thread.meta.subscribe((v) => { threadMeta = v; });
 
   /* ── raw trace view ────────────────────────────────────────────── */
@@ -354,15 +367,19 @@
     return false;
   });
 
-  async function loadContext() {
-    contextLoading = true;
+  /* `busy` is for the Refresh button only. A background reload keeps the
+     numbers that are already on screen and says nothing: the panel is
+     open THROUGHOUT a turn now, and flipping the button to "…" on every
+     reload made it strobe while the agent was working. */
+  async function loadContext(busy = false) {
+    if (busy) contextLoading = true;
     try {
       contextData = await fetchSessionContext(base, sessionId);
       contextError = "";
     } catch (e) {
       contextError = e instanceof Error ? e.message : String(e);
     } finally {
-      contextLoading = false;
+      if (busy) contextLoading = false;
     }
   }
 
@@ -371,10 +388,47 @@
      callback on the subscription: the subscription fires during init,
      before this state exists, and reading it there is a temporal-dead-
      zone crash rather than an early refresh. */
+  /* The last lifecycle state this panel was read for. A plain variable,
+     not $state: it is a guard, and making it reactive would re-run the
+     effect it guards.
+
+     null, not "": an idle session's lifecycle IS "" until something
+     happens, so seeding this with "" made the very first run look like a
+     repeat and skip it. The meter then stayed blank until the agent
+     moved — on a quiet session, until someone sent a message. */
+  let contextReadAt: string | null = null;
   $effect(() => {
-    void agentLifecycle.state;
+    // The store hands out a NEW object on every lifecycle event, and a
+    // working agent emits them constantly (each substate change is one).
+    // Only a real transition changes what the ledger holds, so only a
+    // transition is worth a request — the rest was a fetch per frame.
+    const state = agentLifecycle.state;
+    if (state === contextReadAt) return;
+    contextReadAt = state;
     void loadContext();
   });
+
+  /* The running turn, as the context panel wants it. Built from wick's
+     own event stream rather than from anything provider-specific, so it
+     reads the same on claude, codex and wick's own provider. */
+  const contextLive = $derived({
+    active: typing.active,
+    startedAt: turnStartedAt,
+    steps: live?.blocks.length ?? 0,
+    substate: typing.substate,
+    toolName: typing.toolName,
+    used: liveContextUsed,
+  });
+
+  /* What the meter should show. The stream's reading wins when it is
+     newer than the ledger's: they are the same number from the same
+     source (the last request's level), so the only way they differ is
+     that one of them has not caught up. */
+  const meterUsed = $derived(Math.max(liveContextUsed, contextData?.used ?? 0));
+  const meterWindow = $derived(contextData?.window ?? 0);
+  const meterPct = $derived(
+    meterWindow > 0 ? Math.min(100, (meterUsed / meterWindow) * 100) : (contextData?.pct ?? 0),
+  );
 
   function openContextPopover() {
     contextPopoverOpen = true;
@@ -615,9 +669,17 @@
      the window resizes in case a font or zoom change moves it. */
   let railEl: HTMLElement | undefined = $state(undefined);
   let railWidth = $state(0);
+  /* How tall the strip is allowed to get. The rail is centred on the right
+     edge, so a strip taller than the window loses its ends off screen — and
+     those ends are buttons. Tracked here alongside the width because the same
+     resize moves both. */
+  let railViewH = $state(typeof window === "undefined" ? 0 : window.innerHeight);
   $effect(() => {
     if (!railEl) return;
-    const measure = () => { railWidth = railEl?.getBoundingClientRect().width ?? 0; };
+    const measure = () => {
+      railWidth = railEl?.getBoundingClientRect().width ?? 0;
+      railViewH = window.innerHeight;
+    };
     measure();
     /* A window resize is the only thing that moves this in practice (zoom, or
        a font swap reflowing the rotated labels). Watching the element itself
@@ -1995,6 +2057,8 @@
     unsubLive();
     unsubTyping();
     unsubLifecycle();
+    unsubTurnClock();
+    unsubContextUsed();
     unsubMeta();
   });
 
@@ -2082,7 +2146,15 @@
         // Notes need nothing but a reachable scope; the Ticket tab needs a
         // project, since a chat outside one cannot hold a ticket.
         (t.id !== "notes" || notesInfo !== null) &&
-        (t.id !== "ticket" || (notesInfo !== null && activeProjectId !== null)),
+        // The Ticket tab also needs the project to actually run tickets.
+        // Offering to file one on a board nobody turned on produces a ticket
+        // no board will ever show. A session already ON a ticket keeps the
+        // tab whatever the setting says — tickets can be switched off after
+        // the fact, and that must not strand the ones already filed.
+        (t.id !== "ticket" ||
+          (notesInfo !== null &&
+            activeProjectId !== null &&
+            (notesInfo.ticket_enabled !== false || notesInfo.ticket != null))),
     ),
   );
 
@@ -2189,10 +2261,40 @@
       railTab,
     ),
   );
-  const hiddenCount = $derived(
-    railSplit.overflow.reduce((sum, t) => sum + railCount(t.id as RailTab), 0),
+
+  /* Measured tab heights, kept per id and NOT cleared when a tab folds away.
+     A dropped tab whose height went unknown again would be re-added on the
+     next pass, measured, dropped — the strip would flicker. Remembering it
+     makes the fit decide the same thing every time. */
+  let railTabH = $state<Record<string, number>>({});
+  function measureRailTab(node: HTMLElement, id: string) {
+    const read = () => {
+      const h = node.offsetHeight;
+      if (h > 0 && railTabH[id] !== h) railTabH = { ...railTabH, [id]: h };
+    };
+    read();
+    return { update: read };
+  }
+  /* The "More" button sits below the tabs and is never folded, so its height
+     comes out of the budget before anything is fitted. */
+  const RAIL_MORE_H = 44;
+  const railBudget = $derived(railViewH > 0 ? railViewH * RAIL_FILL - RAIL_MORE_H : 0);
+  /* What the window can hold, on top of what the user chose to fold. This is
+     a display override like badge promotion: nothing is saved, so the tabs
+     return on their own once there is room. */
+  const railFit = $derived(
+    fitStrip(
+      railOrdered,
+      railSplit,
+      (id) => railTabH[id] ?? RAIL_TAB_FALLBACK_H,
+      railBudget,
+      railTab,
+    ),
   );
-  const hiddenBusy = $derived(railSplit.overflow.some((t) => railBusy(t.id as RailTab)));
+  const hiddenCount = $derived(
+    railFit.overflow.reduce((sum, t) => sum + railCount(t.id as RailTab), 0),
+  );
+  const hiddenBusy = $derived(railFit.overflow.some((t) => railBusy(t.id as RailTab)));
   // Close the Notes panel if notes stop being reachable.
   $effect(() => {
     if ((railTab === "ticket" || railTab === "notes") && notesInfo === null) railTab = null;
@@ -2372,9 +2474,10 @@
           <ContextPopover
             open={contextPopoverOpen}
             data={contextData}
+            live={contextLive}
             loading={contextLoading}
             error={contextError}
-            onRefresh={() => void loadContext()}
+            onRefresh={() => void loadContext(true)}
             onCompact={() => void handleCompact()}
             compacting={compactInFlight}
             onClose={() => (contextPopoverOpen = false)}
@@ -2389,15 +2492,15 @@
             onSearchFiles={searchMentionFiles}
             mentionAgents={mentionableAgents}
             commands={composerCommands}
-            contextMeter={contextData && contextData.used > 0
+            contextMeter={meterUsed > 0
               ? {
-                  pct: contextData.pct,
-                  used: contextData.used,
-                  window: contextData.window,
+                  pct: meterPct,
+                  used: meterUsed,
+                  window: meterWindow,
                   title:
-                    contextData.window > 0
-                      ? `Context window — ${Math.round(contextData.pct)}% of ${contextData.model || contextData.provider || "model"}`
-                      : `Context — ${contextData.used.toLocaleString()} tokens (window size not reported)`,
+                    meterWindow > 0
+                      ? `Context window — ${Math.round(meterPct)}% of ${contextData?.model || contextData?.provider || "model"}`
+                      : `Context — ${meterUsed.toLocaleString()} tokens (window size not reported)`,
                   onClick: openContextPopover,
                 }
               : undefined}
@@ -2562,6 +2665,8 @@
           ticket={notesInfo?.ticket ?? null}
           statuses={notesInfo?.statuses}
           noteCount={(notesInfo?.notes ?? []).length}
+          notes={notesInfo?.notes}
+          users={notesInfo?.users}
           onOpenTicket={(id) => { window.location.href = `${base}/sessions?project=${encodeURIComponent(activeProjectId ?? "")}&ticket=${encodeURIComponent(id)}`; }}
           onOpenNotes={() => { railTab = "notes"; }}
           onChanged={loadTicket}
@@ -2747,7 +2852,10 @@
               {sessionId}
               projectId={activeProjectId ?? undefined}
               ticket={notesInfo?.ticket ?? null}
+              statuses={notesInfo?.statuses}
               noteCount={(notesInfo?.notes ?? []).length}
+              notes={notesInfo?.notes}
+              users={notesInfo?.users}
               onOpenTicket={(id) => { window.location.href = `${base}/sessions?project=${encodeURIComponent(activeProjectId ?? "")}&ticket=${encodeURIComponent(id)}`; }}
               onOpenNotes={() => { railTab = "notes"; }}
               onChanged={loadTicket}
@@ -2906,13 +3014,14 @@
     bind:this={railEl}
     class="fixed top-1/2 right-0 z-20 -translate-y-1/2 flex flex-col rounded-l-xl border border-r-0 border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md"
   >
-    {#each railSplit.shown as tab, i}
+    {#each railFit.shown as tab, i}
       <button
         type="button"
         title={tab.label}
         aria-label={tab.label}
         draggable="true"
         data-testid={"rail-tab-" + tab.id}
+        use:measureRailTab={tab.id}
         onclick={() => toggleRail(tab.id)}
         ondragstart={(e) => startRailDrag(e, tab.id)}
         ondragover={(e) => { if (railDragId !== null) e.preventDefault(); }}
@@ -3013,9 +3122,9 @@
     <!-- Overflow. Rendered whenever anything is hidden, or when there are
          enough tabs to be worth arranging — otherwise the control would be
          unreachable on a short list. -->
-    {#if railSplit.overflow.length > 0 || railOrdered.length > 2}
+    {#if railFit.overflow.length > 0 || railOrdered.length > 2}
       <RailMore
-        overflow={railSplit.overflow}
+        overflow={railFit.overflow}
         all={railOrdered}
         {hiddenCount}
         {hiddenBusy}

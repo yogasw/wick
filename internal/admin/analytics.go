@@ -9,10 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/yogasw/wick/internal/admin/view"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 )
 
@@ -520,6 +524,7 @@ func (h *Handler) analyticsUsersJSON(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	started := time.Now()
 	last := time.Time{}
 	out, err := h.buildAnalytics(r, f, func(done, total int) {
 		// Throttled: a flush per session file would spend more time
@@ -534,7 +539,31 @@ func (h *Handler) analyticsUsersJSON(w http.ResponseWriter, r *http.Request) {
 		emit(map[string]any{"type": "error", "error": err.Error()})
 		return
 	}
-	emit(map[string]any{"type": "result", "data": out})
+	built := time.Since(started)
+
+	// Encode before writing, so the size of what the browser has to swallow
+	// is a number in the log rather than a guess. "It sat on the progress bar
+	// forever" is a question about THIS line — how long it took to produce and
+	// how big it was — and the access log, which stops at the handler, cannot
+	// answer it.
+	payload, err := json.Marshal(map[string]any{"type": "result", "data": out})
+	if err != nil {
+		emit(map[string]any{"type": "error", "error": err.Error()})
+		return
+	}
+	payload = append(payload, '\n')
+	_, werr := w.Write(payload)
+	if flusher != nil {
+		flusher.Flush()
+	}
+	log.Ctx(r.Context()).Info().
+		Int("sessions_scanned", out.SessionsAllTime).
+		Int("sessions_in_window", out.Sessions).
+		Dur("build", built.Round(time.Millisecond)).
+		Dur("total", time.Since(started).Round(time.Millisecond)).
+		Int("result_bytes", len(payload)).
+		Err(werr).
+		Msg("analytics: page data sent")
 }
 
 // buildAnalytics does the reading. progress, when non-nil, is called as
@@ -542,17 +571,33 @@ func (h *Handler) analyticsUsersJSON(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress func(done, total int)) (analyticsResponse, error) {
 	days, all := f.Days, f.All
 	ctx := r.Context()
-	users, err := h.repo.ListUsers(ctx)
-	if err != nil {
-		return analyticsResponse{}, err
-	}
-	logins := h.repo.LoginStats(ctx)
-	firstLogin := h.repo.FirstLoginRecordedAt(ctx)
-
 	now := time.Now().UTC()
 	from := f.From
-	loginHistory := h.repo.LoginHistory(ctx, from)
-	tokens := h.repo.AccessTokens(ctx)
+
+	// The accounts live in Postgres, and Postgres is not on this machine.
+	// Measured on a 2300-conversation install, reading EVERY session file
+	// costs ~90ms while these five queries, run one after another, cost most
+	// of the rest of a ~370ms render: the page is slow because of round
+	// trips, not because of the files it reads. None of the five feeds
+	// another, and none feeds the session walk below, so they go out together
+	// and are collected once the walk has already happened.
+	var (
+		users        []*entity.User
+		logins       map[string]LoginStat
+		firstLogin   time.Time
+		loginHistory map[string]map[string]int
+		tokens       []entity.PersonalAccessToken
+	)
+	accounts, actx := errgroup.WithContext(ctx)
+	accounts.Go(func() error {
+		var err error
+		users, err = h.repo.ListUsers(actx)
+		return err
+	})
+	accounts.Go(func() error { logins = h.repo.LoginStats(actx); return nil })
+	accounts.Go(func() error { firstLogin = h.repo.FirstLoginRecordedAt(actx); return nil })
+	accounts.Go(func() error { loginHistory = h.repo.LoginHistory(actx, from); return nil })
+	accounts.Go(func() error { tokens = h.repo.AccessTokens(actx); return nil })
 
 	// Project names, read once. A project folder can disappear while
 	// sessions referencing it remain, so a missing name falls back to the
@@ -626,6 +671,7 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 	var oldest time.Time
 
 	ids, _ := session.List(agentsLayout)
+	walkStarted := time.Now()
 	alive := make(map[string]bool, len(ids))
 	for i, id := range ids {
 		if progress != nil {
@@ -834,6 +880,20 @@ func (h *Handler) buildAnalytics(r *http.Request, f analyticsFilter, progress fu
 	// stays bounded by what is on disk rather than by everything this
 	// process has ever read.
 	sessionCache.keep(alive)
+
+	// The queries have been in flight for the whole walk; collect them now.
+	walked := time.Since(walkStarted)
+	waited := time.Now()
+	if err := accounts.Wait(); err != nil {
+		return analyticsResponse{}, err
+	}
+	// Which half was slow is the first question every time this page is
+	// called slow, and it is not answerable from the access log.
+	log.Ctx(ctx).Debug().
+		Int("sessions", len(ids)).
+		Dur("walk", walked.Round(time.Millisecond)).
+		Dur("accounts_wait", time.Since(waited).Round(time.Millisecond)).
+		Msg("analytics: sources read")
 
 	out := analyticsResponse{
 		GeneratedAt:         rfc3339(now),

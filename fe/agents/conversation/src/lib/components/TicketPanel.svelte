@@ -8,7 +8,8 @@
        moved to a different ticket or taken off tickets entirely.
      - On nothing: offers to create a ticket from this chat, or attach it to
        an existing one. */
-  import type { TicketCard, TicketStatus } from "../types/agents.js";
+  import type { Note, TicketCard, TicketStatus } from "../types/agents.js";
+  import NotesPanel from "./NotesPanel.svelte";
   import {
     attachSession,
     createTicket,
@@ -30,9 +31,14 @@
     /* The project's board columns, so the rail offers the same choices as
        the board rather than the built-in four. */
     statuses?: TicketStatus[];
-    /* How many notes the resolved scope holds — shown as a pointer to the
-       Notes tab rather than duplicating the list here. */
+    /* How many notes the resolved scope holds — the count on the section
+       header below, and what the collapsed state reports. */
     noteCount?: number;
+    /* The notes themselves, so the section can be read and written without
+       leaving the ticket. Seeded from what the rail already fetched; the
+       panel reloads on its own if nothing is passed. */
+    notes?: Note[];
+    users?: Record<string, string>;
     /* Opens the ticket's own page (sessions, fields, full note list). */
     onOpenTicket?: (ticketId: string) => void;
     /* Switches the rail to the Notes tab. */
@@ -47,6 +53,8 @@
     ticket,
     statuses,
     noteCount = 0,
+    notes,
+    users,
     onOpenTicket,
     onOpenNotes,
     onChanged,
@@ -158,6 +166,13 @@
   /* ── edit the ticket's title in place ── */
   let editingTitle = $state(false);
   let titleDraft = $state("");
+
+  /* Notes, in the ticket. They used to be a pointer to another tab, on the
+     grounds that notes are not a ticket feature — true, and still true, but
+     it made the one place you look at a ticket the one place you could not
+     read what had been written about it. The section is here and open; the
+     Notes tab remains the place notes live on a chat with no ticket. */
+  let notesOpen = $state(true);
 
   function startTitle() {
     if (!ticket) return;
@@ -358,21 +373,46 @@
     </div>
   {/if}
 
-  <!-- A pointer, not a copy: the notes themselves are one tab away, and
-       duplicating them here is what made the two look like one feature. -->
-  <button
-    type="button"
-    onclick={() => onOpenNotes?.()}
-    class="mt-3 flex items-center gap-2 rounded-lg border border-white-300 px-3 py-2 text-left text-[11px] text-black-700 transition-colors hover:border-green-500 hover:text-green-600 dark:border-navy-600 dark:text-black-600 dark:hover:text-green-400"
-  >
-    <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-      <path d="M4 2.5h8v11H4z" stroke-linejoin="round"></path>
-      <path d="M6 5.5h4M6 8h4M6 10.5h2.5" stroke-linecap="round"></path>
-    </svg>
-    {#if noteCount > 0}
-      {noteCount} note{noteCount === 1 ? "" : "s"} on {ticket ? "this ticket" : "this chat"} →
-    {:else}
-      No notes yet →
+  <!-- Notes, in place. The header still points at the Notes tab, which is
+       where the same notes live for a chat that is on no ticket at all. -->
+  <section class="mt-3 border-t border-white-300 pt-3 dark:border-navy-600">
+    <div class="flex items-center gap-2">
+      <button
+        type="button"
+        data-testid="ticket-notes-toggle"
+        aria-expanded={notesOpen}
+        onclick={() => { notesOpen = !notesOpen; }}
+        class="flex min-w-0 flex-1 items-center gap-2 text-left text-[11px] font-semibold uppercase tracking-wide text-black-700 transition-colors hover:text-green-600 dark:text-black-600 dark:hover:text-green-400"
+      >
+        <svg
+          viewBox="0 0 16 16"
+          class="h-3 w-3 shrink-0 transition-transform {notesOpen ? 'rotate-90' : ''}"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          aria-hidden="true"
+        >
+          <path d="M6 3.5L10.5 8 6 12.5" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+        <span class="truncate">Notes on {ticket ? "this ticket" : "this chat"}</span>
+        {#if noteCount > 0}
+          <span
+            class="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-green-500 px-1 text-[10px] font-semibold text-white-100"
+          >{noteCount > 99 ? "99+" : noteCount}</span>
+        {/if}
+      </button>
+      <button
+        type="button"
+        onclick={() => onOpenNotes?.()}
+        title="Open the Notes tab"
+        class="shrink-0 text-[11px] font-medium text-green-600 hover:underline dark:text-green-400"
+      >Open tab →</button>
+    </div>
+
+    {#if notesOpen}
+      <div class="mt-2">
+        <NotesPanel {base} scope={{ sessionId }} {notes} {users} {onChanged} />
+      </div>
     {/if}
-  </button>
+  </section>
 </div>

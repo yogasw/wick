@@ -124,12 +124,22 @@ function itemKey(it: TodoItem): string {
   return it.id?.trim() || itemLabel(it);
 }
 
-/** Merges every todo call's items into one ordered list — the latest
-    status for each item (by itemKey), in the order items were first
-    introduced. A step whose latest call dropped it (the model stopped
-    listing it) is kept at its last known status rather than vanishing,
-    since a completed step disappearing would look like the work was
-    undone. */
+/** The checklist as the last todo call left it — the same answer the
+    Todo panel gets from the server.
+
+    It used to be a union of every call in the turn, keeping items no
+    later call mentioned. That reads fine while a model ticks off a fixed
+    list, and falls apart the moment it REWRITES one: a reworded step is
+    a new key, so the old wording stayed, and a turn that revised its plan
+    four times showed thirty items in no particular order with several
+    near-duplicates — while the Todo panel beside it showed five. Two
+    surfaces, one tool, two different answers.
+
+    The server settles it: `todo` REPLACES the active list (see
+    session.RecordTodos), so the last call is the list. Membership,
+    order and status all come from it. The per-item work trail still
+    accumulates across the whole turn, since that history is about an
+    item rather than about which call last mentioned it. */
 export function mergeTodoItems(blocks: ThreadBlock[]): TodoItem[] {
   return mergeTodoItemsWithSteps(blocks).map((s) => s.item);
 }
@@ -148,8 +158,9 @@ export type TodoItemWithSteps = { item: TodoItem; relatedBlocks: ThreadBlock[] }
     (nothing to attribute them to) — the flat trace still shows them via
     stripTodoBlocks, they're just not duplicated under an item. */
 export function mergeTodoItemsWithSteps(blocks: ThreadBlock[]): TodoItemWithSteps[] {
-  const order: string[] = [];
-  const byKey = new Map<string, TodoItem>();
+  // The list as of the last call that carried one, and the work trail
+  // gathered per item along the way.
+  let latest: TodoItem[] = [];
   const relatedByKey = new Map<string, ThreadBlock[]>();
 
   let activeKey: string | null = null;
@@ -160,13 +171,10 @@ export function mergeTodoItemsWithSteps(blocks: ThreadBlock[]): TodoItemWithStep
       // alone so blocks after it still attribute to whatever step was
       // already running, instead of being dropped.
       if (items.length === 0) continue;
+      latest = items;
       for (const it of items) {
         const key = itemKey(it);
-        if (!byKey.has(key)) {
-          order.push(key);
-          relatedByKey.set(key, []);
-        }
-        byKey.set(key, it);
+        if (!relatedByKey.has(key)) relatedByKey.set(key, []);
       }
       const inProgress = items.find((it) => it.status === "in_progress");
       activeKey = inProgress ? itemKey(inProgress) : null;
@@ -175,7 +183,7 @@ export function mergeTodoItemsWithSteps(blocks: ThreadBlock[]): TodoItemWithStep
     }
   }
 
-  return order.map((k) => ({ item: byKey.get(k)!, relatedBlocks: relatedByKey.get(k) ?? [] }));
+  return latest.map((it) => ({ item: it, relatedBlocks: relatedByKey.get(itemKey(it)) ?? [] }));
 }
 
 /** Trace blocks with every "todo" tool_use stripped out — the merged

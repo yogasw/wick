@@ -79,6 +79,31 @@ func toolUseLine(id, name string, input json.RawMessage) []byte {
 	}})
 }
 
+// levelLine reports how full the window was for the request that just
+// finished — mid-turn, while the turn is still running.
+//
+// An `assistant` frame carrying usage and NO content: the parser reads
+// the level off it (that is where claude reports the level too) and then
+// finds nothing to render, so it costs one line and changes nothing
+// else. Without it every meter stays frozen on the previous turn for the
+// whole of a long one, which is exactly when someone is watching it.
+//
+// Only the level travels. The spend is emitted once, by doneLineUsage,
+// because a turn's cost is not known until the turn is over.
+func levelLine(lastIn, lastCache int) []byte {
+	return mustLine(map[string]any{
+		"type": "assistant",
+		"message": map[string]any{
+			"role":    "assistant",
+			"content": []map[string]any{},
+			"usage": map[string]any{
+				"input_tokens":            lastIn,
+				"cache_read_input_tokens": lastCache,
+			},
+		},
+	})
+}
+
 // toolResultLine wraps a tool result as a `user` frame (claude's
 // headless convention) → ToolResult.
 func toolResultLine(toolUseID, content string, isError bool) []byte {

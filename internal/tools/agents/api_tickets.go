@@ -95,11 +95,15 @@ func queryCSV(c *tool.Ctx, key string) (map[string]bool, bool) {
 // session: a ticket can hold several sessions, and the board shows the work
 // rather than each conversation about it.
 type TicketCard struct {
-	ID       string            `json:"id"`
-	Title    string            `json:"title"`
-	Status   string            `json:"status"`
-	Assignee string            `json:"assignee,omitempty"`
-	Fields   map[string]string `json:"fields,omitempty"`
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
+	// Assignee is the first of Assignees. Both travel: a card has room for
+	// one avatar, and the older clients that only read this field keep
+	// working against a ticket that now has three people on it.
+	Assignee  string            `json:"assignee,omitempty"`
+	Assignees []string          `json:"assignees,omitempty"`
+	Fields    map[string]string `json:"fields,omitempty"`
 	// SessionRows are the ticket's sessions, listed on the card so one can
 	// be dragged to another ticket without opening anything.
 	SessionRows []ticketSessionRow `json:"session_rows,omitempty"`
@@ -326,14 +330,18 @@ func apiProjectTickets(c *tool.Ctx) {
 		for _, sid := range t.Sessions {
 			ticketed[sid] = true
 		}
-		// Cards the caller will not draw are not built. The assignee is
+		// Cards the caller will not draw are not built. The assignees are
 		// still collected for name resolution, so the filter dropdown can
 		// list people whose tickets are currently filtered out.
-		ids[t.Assignee] = true
+		for _, a := range t.AssigneeList() {
+			ids[a] = true
+		}
 		if statusFiltered && !wantStatus[t.Status] {
 			continue
 		}
-		if wantAssignee != "" && t.Assignee != wantAssignee {
+		// Anyone on the ticket counts: filtering to a person must not hide
+		// the work they share with somebody else.
+		if wantAssignee != "" && !t.HasAssignee(wantAssignee) {
 			continue
 		}
 		count, _ := notes.Counts(globalLayout, notes.Scope{ProjectID: id, TicketID: t.ID})
@@ -346,16 +354,17 @@ func apiProjectTickets(c *tool.Ctx) {
 			rows = append(rows, sessionRow(sid, live, lc, ids))
 		}
 		cards = append(cards, TicketCard{
-			ID:       t.ID,
-			Title:    t.Title,
-			Status:   t.Status,
-			Assignee: t.Assignee,
+			ID:        t.ID,
+			Title:     t.Title,
+			Status:    t.Status,
+			Assignee:  t.Assignee,
+			Assignees: t.AssigneeList(),
 			// A card carries only the schema fields marked show_on_card.
 			// Everything else — unmarked fields, values written outside the
 			// schema via the REST surface — lives on the ticket's own page,
 			// and comes back here only for a caller that asked for all of
 			// them (?fields=all).
-			Fields: cardFields(cfg, t.Fields, allFields),
+			Fields:      cardFields(cfg, t.Fields, allFields),
 			SessionRows: rows,
 			Sessions:    len(t.Sessions),
 			Notes:       count.Visible,
@@ -447,8 +456,16 @@ func apiTicketCreate(c *tool.Ctx) {
 		// Assignee is a pointer so "not sent" stays distinct from "sent
 		// empty": omitting it means "whoever is creating this", while an
 		// explicit "" is a deliberate no-assignee.
-		Assignee *string           `json:"assignee"`
-		Fields   map[string]string `json:"fields"`
+		Assignee *string `json:"assignee"`
+		// Assignees puts several people on it at once. Merged with Assignee
+		// above, so a caller may send either.
+		//
+		// A pointer for the same reason Assignee is one: `[]` is a caller
+		// saying "nobody", and a plain slice cannot tell that from a field
+		// nobody sent — which turned an explicitly unassigned ticket into
+		// one assigned to whoever created it.
+		Assignees *[]string         `json:"assignees"`
+		Fields    map[string]string `json:"fields"`
 		// SessionID optionally attaches an existing conversation, which is
 		// how "turn this chat into a ticket" works.
 		SessionID string `json:"session_id"`
@@ -478,10 +495,16 @@ func apiTicketCreate(c *tool.Ctx) {
 	// landing an "unassigned" card in front of them says the opposite.
 	// An explicit empty assignee still means unassigned.
 	assignee := ""
+	var assignees []string
+	if req.Assignees != nil {
+		assignees = *req.Assignees
+	}
 	if req.Assignee != nil {
 		assignee = strings.TrimSpace(*req.Assignee)
-	} else if u := login.GetUser(c.Context()); u != nil {
-		assignee = u.ID
+	} else if req.Assignees == nil {
+		if u := login.GetUser(c.Context()); u != nil {
+			assignee = u.ID
+		}
 	}
 	tk, err := ticket.Create(globalLayout, ticket.CreateOptions{
 		ProjectID: projectID,
@@ -490,6 +513,7 @@ func apiTicketCreate(c *tool.Ctx) {
 		Body:      req.Body,
 		Status:    req.Status,
 		Assignee:  assignee,
+		Assignees: assignees,
 		Fields:    req.Fields,
 		Sessions:  seed,
 		Actor:     callerActor(c),
@@ -529,7 +553,10 @@ func apiTicketDetail(c *tool.Ctx) {
 
 	lc := lifecycleBySession()
 	live := globalMgr.Registry().Sessions()
-	ids := map[string]bool{tk.Assignee: true}
+	ids := map[string]bool{}
+	for _, a := range tk.AssigneeList() {
+		ids[a] = true
+	}
 	resp.Sessions = make([]ticketSessionRow, 0, len(tk.Sessions))
 	for _, sid := range tk.Sessions {
 		resp.Sessions = append(resp.Sessions, sessionRow(sid, live, lc, ids))
@@ -586,10 +613,14 @@ func apiTicketUpdate(c *tool.Ctx) {
 		Title *string `json:"title"`
 		// Body is a pointer so "not sent" stays distinct from "clear it":
 		// an explicit "" deliberately empties the description.
-		Body     *string           `json:"body"`
-		Status   *string           `json:"status"`
-		Assignee *string           `json:"assignee"`
-		Fields   map[string]string `json:"fields"`
+		Body     *string `json:"body"`
+		Status   *string `json:"status"`
+		Assignee *string `json:"assignee"`
+		// Assignees replaces the whole list; an explicit [] unassigns
+		// everyone. It wins over Assignee when both are sent, since it is
+		// the more specific statement of the same thing.
+		Assignees *[]string         `json:"assignees"`
+		Fields    map[string]string `json:"fields"`
 		// UpdatedAt lets a MIRROR say when the change really happened:
 		// an RFC3339 timestamp (the source system's edit time), or the
 		// literal "keep" for a write that should not move the clock at all
@@ -628,8 +659,10 @@ func apiTicketUpdate(c *tool.Ctx) {
 	if req.Body != nil {
 		tk.Body = strings.TrimSpace(*req.Body)
 	}
-	if req.Assignee != nil {
-		tk.Assignee = strings.TrimSpace(*req.Assignee)
+	if req.Assignees != nil {
+		tk.SetAssignees(*req.Assignees)
+	} else if req.Assignee != nil {
+		tk.SetAssignees([]string{*req.Assignee})
 	}
 	if req.Fields != nil {
 		if tk.Fields == nil {
@@ -925,12 +958,26 @@ func apiNotesList(c *tool.Ctx) {
 	if u := login.GetUser(c.Context()); u != nil {
 		out["me"] = u.ID
 	}
+	// Whether this project runs tickets at all. The rail hides its Ticket
+	// tab when it does not: offering to file a ticket on a board that was
+	// never turned on produces one nobody will ever look at. Sent
+	// unconditionally — a missing field means an older server, and the rail
+	// falls back to showing the tab rather than hiding it on a guess.
+	if p, pok := globalMgr.Registry().Project(sc.ProjectID); pok {
+		out["ticket_enabled"] = p.Meta.Ticket.Enabled
+	}
 	// When the scope resolved to a ticket, name it: the conversation rail
 	// shows which ticket the notes belong to, and without this it would
 	// have to guess from the session or fetch again.
 	if sc.TicketID != "" {
 		if tk, err := ticket.Load(globalLayout, sc.ProjectID, sc.TicketID); err == nil {
-			out["ticket"] = map[string]string{"id": tk.ID, "title": tk.Title, "status": tk.Status}
+			// Body travels with the rest: the Notes panel shows what the
+			// ticket ASKED FOR above the running record of what was found,
+			// and reading notes without the request they answer is half a
+			// conversation.
+			out["ticket"] = map[string]string{
+				"id": tk.ID, "title": tk.Title, "status": tk.Status, "body": tk.Body,
+			}
 			// The rail's status select offers the project's own columns, so
 			// a board that renamed its stages does not present the built-in
 			// four as if they were valid.

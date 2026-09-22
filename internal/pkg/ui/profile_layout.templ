@@ -20,9 +20,15 @@ const (
 // max-w-container width instead of a narrow account-style column.
 templ ProfileLayout(title string, active ProfileTabKey, user *entity.User) {
 	@Layout(title) {
-		<nav class="sticky top-0 z-50 flex h-16 items-center border-b border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
-			<div class="mx-auto flex w-full max-w-container items-center justify-between px-6">
-				<div class="flex items-center gap-4">
+		<!-- Same shape as AdminLayout, and for the same reason: five tabs, a
+		     brand, a theme picker and a user menu do not fit on one 360px
+		     line. Fixed at h-16 they did not wrap — they ran off the right
+		     edge and took the page's whole width with them. So the bar grows
+		     instead (min-h-16), and below md the tab group drops to its own
+		     full-width row under the brand. -->
+		<nav class="sticky top-0 z-50 flex min-h-16 items-center border-b border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+			<div class="mx-auto flex w-full max-w-container flex-wrap items-center justify-between md:justify-start gap-x-4 gap-y-3 px-6 py-3 md:py-0">
+				<div class="flex min-w-0 items-center gap-2">
 					<a href="/" class="inline-flex items-center gap-2 text-base font-semibold text-black-900 dark:text-white-100">
 						<span class="inline-block h-2 w-2 rounded-full bg-green-500"></span>
 						{ AppNameFromContext(ctx) }
@@ -34,15 +40,15 @@ templ ProfileLayout(title string, active ProfileTabKey, user *entity.User) {
 						</svg>
 						Profile
 					</span>
-					<div class="ml-2 flex items-center gap-1 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-1">
-						@profileTab("/profile", "Account", active == ProfileTabAccount)
-						@profileTab("/profile/tokens", "Access Tokens", active == ProfileTabTokens)
-						@profileTab("/profile/connections", "Connected Apps", active == ProfileTabConnections)
-						@profileTab("/profile/mcp", "MCP", active == ProfileTabMCP)
-						@profileTab("/tools/agents", "Agents", active == ProfileTabAgents)
-					</div>
 				</div>
-				<div class="flex items-center gap-3">
+				<div class="order-last flex w-full flex-wrap items-center gap-1 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-1 md:order-none md:mr-auto md:w-auto">
+					@profileTab("/profile", "Account", active == ProfileTabAccount)
+					@profileTab("/profile/tokens", "Access Tokens", active == ProfileTabTokens)
+					@profileTab("/profile/connections", "Connected Apps", active == ProfileTabConnections)
+					@profileTab("/profile/mcp", "MCP", active == ProfileTabMCP)
+					@profileTab("/tools/agents", "Agents", active == ProfileTabAgents)
+				</div>
+				<div class="ml-auto flex items-center gap-3 md:order-last md:ml-0">
 					if user != nil {
 						@ThemePicker(ThemeByID(EffectiveTheme(user.Metadata.Theme)), EffectiveLightTheme(user.Metadata.LightTheme), EffectiveDarkTheme(user.Metadata.DarkTheme))
 					} else {
@@ -61,7 +67,7 @@ templ profileTab(href string, label string, active bool) {
 	<a
 		href={ templ.SafeURL(href) }
 		class={
-			"rounded-md px-4 py-2 text-sm font-medium transition-colors",
+			"whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors sm:px-4",
 			templ.KV("bg-white-100 dark:bg-navy-700 text-black-900 dark:text-white-100 shadow-sm", active),
 			templ.KV("text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100", !active),
 		}

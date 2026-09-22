@@ -8,6 +8,7 @@ import {
   railPrefsFromPage,
   resolveHidden,
   splitRail,
+  fitStrip,
   toggleHidden,
 } from "../railPrefs.js";
 
@@ -293,5 +294,59 @@ describe("railPrefsFromPage", () => {
 
   test("null on unparseable json", () => {
     expect(railPrefsFromPage(el("{not json"))).toBeNull();
+  });
+});
+
+describe("fitStrip", () => {
+  // Every tab 50px tall, so a budget is readable as "how many fit".
+  const even = () => 50;
+  const split = (shown: string[], overflow: string[] = []) => ({
+    shown: shown.map((id) => ({ id })),
+    overflow: overflow.map((id) => ({ id })),
+  });
+
+  test("keeps the strip whole when it fits", () => {
+    const s = split(["ticket", "notes", "files"]);
+    expect(fitStrip(tabs, s, even, 500)).toBe(s);
+  });
+
+  test("folds from the bottom once the budget runs out", () => {
+    const got = fitStrip(tabs, split(["ticket", "notes", "files", "process"]), even, 120);
+    expect(ids(got.shown)).toEqual(["ticket", "notes"]);
+    expect(ids(got.overflow)).toEqual(["files", "process", "workspace", "scheduled", "browser", "source"]);
+  });
+
+  // The overflow menu is ordered by the rail, not by why a tab landed there:
+  // a tab folded by the user and one dropped for height read the same.
+  test("dropped tabs join the overflow in rail order", () => {
+    const got = fitStrip(tabs, split(["ticket", "files", "source"], ["notes"]), even, 60);
+    expect(ids(got.shown)).toEqual(["ticket"]);
+    expect(ids(got.overflow)).toEqual(["notes", "files", "process", "workspace", "scheduled", "browser", "source"]);
+  });
+
+  // A panel whose own tab folded away leaves nothing to click to close it.
+  test("the open panel's tab is kept, whatever its position", () => {
+    const got = fitStrip(tabs, split(["ticket", "notes", "source"]), even, 100, "source");
+    expect(ids(got.shown)).toEqual(["ticket", "source"]);
+  });
+
+  test("never folds everything away", () => {
+    const got = fitStrip(tabs, split(["ticket", "notes"]), even, 10);
+    expect(ids(got.shown)).toEqual(["ticket"]);
+  });
+
+  // Heights differ per tab — the labels are rotated, so "Workspace" is taller
+  // than "Todo" — and the fit has to add up the real ones.
+  test("adds up the measured heights, not a tab count", () => {
+    const h = (id: string) => (id === "workspace" ? 90 : 40);
+    const got = fitStrip(tabs, split(["ticket", "workspace", "files"]), h, 130);
+    expect(ids(got.shown)).toEqual(["ticket", "workspace"]);
+  });
+
+  // Nothing measured yet, or no window height known: leave the split alone
+  // rather than folding on a guess of zero.
+  test("an unknown budget changes nothing", () => {
+    const s = split(["ticket", "notes", "files"]);
+    expect(fitStrip(tabs, s, even, 0)).toBe(s);
   });
 });

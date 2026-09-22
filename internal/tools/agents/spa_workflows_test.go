@@ -6,6 +6,7 @@ import (
 	"time"
 
 	wf "github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 )
 
 // TestRerunEvent confirms a re-run reuses the original run's trigger
@@ -129,5 +130,41 @@ func TestNormaliseWorkflowBody_InvalidJSON(t *testing.T) {
 	_, err := normaliseWorkflowBody("x", []byte(`not json`))
 	if err == nil {
 		t.Fatal("expected error for non-JSON body")
+	}
+}
+
+// The reported bug: /admin/workflows shows a workflow's Owner, that owner
+// opens the workflow list, and it is empty — because the list read only the
+// "owner:<id>" tag while the page shows (and the owner picker writes) the
+// created_by stamp. A workflow older than the tag has just the stamp.
+func TestWorkflowsVisibleToCountsTheStampNotJustTheTag(t *testing.T) {
+	noTags := func(string) bool { return false }
+	rows := []mcp.Summary{
+		{ID: "wf-tagged", CreatedBy: "someone-else"},
+		{ID: "wf-stamped", CreatedBy: "u-hana"},
+		{ID: "wf-theirs", CreatedBy: "someone-else"},
+	}
+
+	got := workflowsVisibleTo(append([]mcp.Summary(nil), rows...), "u-hana", noTags)
+	if len(got) != 1 || got[0].ID != "wf-stamped" {
+		t.Fatalf("stamped workflow must be visible to its owner, got %+v", got)
+	}
+
+	// The tag still counts on its own — that is how a workflow created after
+	// tags exist, or one shared by an admin, reaches its owner.
+	onlyTagged := func(id string) bool { return id == "wf-tagged" }
+	got = workflowsVisibleTo(append([]mcp.Summary(nil), rows...), "u-hana", onlyTagged)
+	if len(got) != 2 {
+		t.Fatalf("tag and stamp must both grant, got %+v", got)
+	}
+}
+
+// Somebody else's workflow stays somebody else's, and an ownerless one stays
+// admin-only — this filter only ever runs for non-admins.
+func TestWorkflowsVisibleToHidesWhatIsNotYours(t *testing.T) {
+	never := func(string) bool { return false }
+	rows := []mcp.Summary{{ID: "wf-1", CreatedBy: "u-other"}, {ID: "wf-2", CreatedBy: ""}}
+	if got := workflowsVisibleTo(rows, "u-hana", never); len(got) != 0 {
+		t.Fatalf("expected nothing visible, got %+v", got)
 	}
 }

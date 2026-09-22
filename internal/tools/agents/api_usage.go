@@ -210,6 +210,12 @@ func apiSessionContext(c *tool.Ctx) {
 			out.Used, out.Window = p.ContextUsed, p.ContextWindow
 			out.Pct = row.Pct
 			out.Trend, out.TrendAt = trendOf(p.Series)
+			// The spend behind each point. Built here and not inside
+			// trendOf because it needs the provider's exact total to
+			// anchor against — and it was written, tested, and then
+			// never called, which is why hovering a point reported
+			// "total 0" for every point on every session.
+			out.TrendSpent = trendSpentOf(p.Series, row.Totals.Total)
 		}
 	}
 	sortContextProviders(out.Providers, out.Provider)

@@ -379,7 +379,7 @@
        cost a whole row of a panel that is already short; the branch name is
        the only part that can be long, so that is what gives — it truncates
        and keeps its full text in the tooltip. -->
-  <div class="flex flex-nowrap items-center gap-x-2 border-b border-white-300 dark:border-navy-600 px-3 py-1.5">
+  <div class="flex flex-nowrap items-center gap-x-2 overflow-hidden border-b border-white-300 dark:border-navy-600 px-3 py-1.5">
     <span class="shrink-0 text-[10px] font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Graph</span>
     <!-- The per-row badges collapsed to one line: what is not yet out of this
          clone, what is out but not landed, and where the trunk is. -->
@@ -408,12 +408,14 @@
       </span>
     {/if}
     <span class="min-w-[0.5rem] flex-1"></span>
-    <div class="flex shrink-0 items-center gap-1">
+    <!-- Also shrinkable: in a narrow panel the search box giving up a few
+         pixels is what keeps the ref picker beside it on screen. -->
+    <div class="flex min-w-0 shrink items-center gap-1">
       <input
         bind:value={query}
         placeholder="Search commits…"
         onkeydown={(e) => { if (e.key === "Enter") step(e.shiftKey ? -1 : 1); }}
-        class="w-28 rounded border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-1.5 py-0.5 text-[10px] text-black-900 dark:text-white-100 focus:w-40 focus:border-green-500 focus:outline-none transition-[width]"
+        class="w-28 min-w-0 rounded border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-1.5 py-0.5 text-[10px] text-black-900 dark:text-white-100 focus:w-40 focus:border-green-500 focus:outline-none transition-[width]"
       />
       {#if searching}
         <button
