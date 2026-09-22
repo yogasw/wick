@@ -31,6 +31,10 @@
     substate?: string;
     /** The tool being run, when one is. */
     toolName?: string;
+    /** The newest window reading off the stream, in tokens; 0 when the
+        provider has not reported one this turn. Same number the ledger
+        will record when the turn ends — it just arrives sooner. */
+    used?: number;
   };
 
   type Props = {
@@ -136,8 +140,26 @@
     return `$${usd.toFixed(2)}`;
   }
 
-  const pct = $derived(Math.max(0, Math.min(100, data?.pct ?? 0)));
+  /* The level, preferring whichever source is further along. They are
+     the same reading from the same place — the last request's level —
+     so a difference only ever means one of them has not caught up, and
+     during a long turn that is always the stored one. */
+  const usedNow = $derived(Math.max(live?.used ?? 0, data?.used ?? 0));
   const hasWindow = $derived((data?.window ?? 0) > 0);
+  /* True when the number on screen came from the running turn rather
+     than from the ledger. Worth saying out loud: the spend figures below
+     it are still the last finished turn's, and a panel where one number
+     is live and the rest are not should say which is which. */
+  const levelIsLive = $derived((live?.used ?? 0) > (data?.used ?? 0));
+  /* The server computes the stored percentage, and stays the source of
+     truth for it; recomputing only happens when the live reading is
+     ahead of the stored one, which is the one case the server could not
+     have known about. */
+  const pct = $derived(
+    levelIsLive && hasWindow
+      ? Math.max(0, Math.min(100, (usedNow / (data?.window ?? 1)) * 100))
+      : Math.max(0, Math.min(100, data?.pct ?? 0)),
+  );
   const tone = $derived(pct >= 90 ? "red" : pct >= 75 ? "amber" : "green");
   const barClass = $derived(
     tone === "red" ? "bg-red-500" : tone === "amber" ? "bg-amber-500" : "bg-green-500",
@@ -319,13 +341,13 @@
       <div class="px-4 py-3">
         <div class="flex items-baseline justify-between gap-2">
           <p class="text-2xl font-bold text-black-900 dark:text-white-100 tabular-nums">
-            {#if hasWindow}{Math.round(pct)}%{:else}{short(data.used)}{/if}
+            {#if hasWindow}{Math.round(pct)}%{:else}{short(usedNow)}{/if}
           </p>
           <p
             class="text-xs text-black-700 dark:text-black-600 tabular-nums"
-            title="{exact(data.used)} of {exact(data.window)} tokens"
+            title="{exact(usedNow)} of {exact(data.window)} tokens"
           >
-            {short(data.used)}{#if hasWindow}
+            {short(usedNow)}{#if hasWindow}
               / {short(data.window)}{/if} tokens
           </p>
         </div>
@@ -336,7 +358,14 @@
           </div>
         {/if}
 
-        <p class="mt-2 text-xs text-black-700 dark:text-black-600">{advice}</p>
+        <p class="mt-2 text-xs text-black-700 dark:text-black-600">
+          {advice}
+          {#if levelIsLive}
+            <span data-testid="context-level-live" class="text-green-600 dark:text-green-400"
+              >· live, this turn</span
+            >
+          {/if}
+        </p>
 
         {#if spark}
           <svg
@@ -404,8 +433,22 @@
         {/if}
       </div>
 
+      <!-- Everything below is the SPEND, and the spend is only known when
+           a turn ends: the vendor reports cost and per-model totals in the
+           frame that closes the turn, never before it. So while one is
+           running these read one turn behind, and say so rather than
+           looking stale next to a level that is moving. -->
+      {#if levelIsLive}
+        <p
+          data-testid="context-spend-lag"
+          class="border-t border-white-300 px-4 pt-2 text-[11px] text-black-700 dark:border-navy-600 dark:text-black-600"
+        >
+          Spend below is up to the last finished turn — the provider only reports it when a turn ends.
+        </p>
+      {/if}
       <div
         class="px-4 py-2.5 border-t border-white-300 dark:border-navy-600 grid grid-cols-4 gap-2 text-xs"
+        class:border-t-0={levelIsLive}
       >
         <div>
           <p class="text-black-700 dark:text-black-600">Provider</p>

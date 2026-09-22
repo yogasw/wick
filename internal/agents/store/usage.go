@@ -211,6 +211,60 @@ func (s *Store) recordUsage(u *event.TokenUsage, at time.Time) error {
 	return storage.WriteJSON(path, su)
 }
 
+// levelWriteInterval is how often a mid-turn reading is persisted. The
+// panel that reads it is refreshed by the stream anyway; this file only
+// has to be right for someone who RELOADS mid-turn, and two seconds of
+// staleness is invisible there.
+const levelWriteInterval = 2 * time.Second
+
+// recordContextLevel updates how full the window is, mid-turn.
+//
+// Everything else in the ledger is written when a turn ENDS, which is
+// exactly when it stops being the interesting number: a turn that runs
+// for minutes leaves the meter frozen on the previous turn's reading for
+// as long as anyone is actually watching it. Claude reports the level on
+// every request, so this keeps up with it.
+//
+// LEVEL ONLY. No turn counted, no flows added, no series point: a level
+// replaces, flows accumulate, and adding a turn's worth of either before
+// the turn has finished would double-count it at Done. The cost figures
+// beside the meter stay honestly one turn behind, because the vendor
+// does not report them until then.
+//
+// Best-effort like the rest of this file — a ledger write must never
+// fail the turn that produced it.
+func (s *Store) recordContextLevel(used int, at time.Time) error {
+	if used <= 0 {
+		return nil
+	}
+	if !s.lastLevelWrite.IsZero() && at.Sub(s.lastLevelWrite) < levelWriteInterval {
+		return nil
+	}
+	path := s.layout.SessionUsage(s.sessionID)
+	su, err := loadUsageFile(path)
+	if err != nil {
+		return err
+	}
+	su.SessionID = s.sessionID
+	key := s.provider
+	if key == "" {
+		key = "unknown"
+	}
+	p := su.Providers[key]
+	if p == nil {
+		// First reading of a session whose first turn has not finished:
+		// the meter should start from the truth rather than from zero.
+		p = &ProviderUsage{FirstAt: at}
+		su.Providers[key] = p
+	}
+	if p.ContextUsed == used {
+		return nil
+	}
+	p.ContextUsed = used
+	s.lastLevelWrite = at
+	return storage.WriteJSON(path, su)
+}
+
 // recordCompaction drops the recorded context level to what survived a
 // compaction.
 //

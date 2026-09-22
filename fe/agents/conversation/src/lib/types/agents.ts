@@ -361,6 +361,13 @@ export type AgentEvent = {
   lifecycle?: string;
   at?: number;
   end_at?: number;
+  /** How full the context window was for the request this event came
+      from — a MID-TURN reading, so the meter can move while a long turn
+      runs. Absent means this event said nothing about the window (most
+      do), never that the window is empty. Only providers that report it
+      per request send it; codex reads its level once per turn and sends
+      none. */
+  context_used?: number;
 };
 
 export type SSEStatus = "connecting" | "connected" | "error";

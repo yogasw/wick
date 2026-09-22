@@ -388,10 +388,21 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 		// Every assistant frame reports the window as it stood for that
 		// one request. Remember the newest; the `result` frame that ends
 		// the turn cannot tell us this (its .usage is a turn-wide sum).
+		frameLevel := 0
 		if raw.Message != nil && raw.Message.Usage != nil {
 			if lvl := raw.Message.Usage.level(); lvl > 0 {
-				p.lastLevel = lvl
+				p.lastLevel, frameLevel = lvl, lvl
 			}
+		}
+		// live stamps that reading onto whatever this frame turns into,
+		// so the meter can move DURING the turn instead of only when it
+		// ends. Every exit below goes through it — including the Unknown
+		// ones, which is the whole point: the frame that carries the
+		// newest level is often the one whose text was already streamed
+		// and is therefore suppressed.
+		live := func(ev AgentEvent) (AgentEvent, error) {
+			ev.ContextUsed = frameLevel
+			return ev, nil
 		}
 		// claude packs text + tool_use blocks into one frame. Iterate
 		// to find the first interesting block. If both text and
@@ -399,30 +410,30 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 		// drop text — the result event will carry the final assistant
 		// text in .result, so we don't lose user-visible output.
 		if raw.Message == nil {
-			return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+			return live(AgentEvent{Type: Unknown, Raw: trimmed})
 		}
 		for _, b := range raw.Message.Content {
 			switch b.Type {
 			case "tool_use":
-				return AgentEvent{
+				return live(AgentEvent{
 					Type:      ToolUse,
 					ToolName:  b.Name,
 					ToolInput: string(b.Input),
 					ToolUseID: b.ID,
 					Raw:       trimmed,
-				}, nil
+				})
 			case "thinking":
 				if b.Thinking != "" {
 					// Suppress when stream_event thinking_delta already
 					// streamed this text; otherwise emit as one block.
 					if p.partialThinkingEmitted {
-						return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+						return live(AgentEvent{Type: Unknown, Raw: trimmed})
 					}
-					return AgentEvent{
+					return live(AgentEvent{
 						Type: Thinking,
 						Text: b.Thinking,
 						Raw:  trimmed,
-					}, nil
+					})
 				}
 			}
 		}
@@ -432,7 +443,7 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 		// emitting it again would double-render in the UI bubble and
 		// double the assistant turn body in conversation.jsonl.
 		if p.partialTextEmitted {
-			return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+			return live(AgentEvent{Type: Unknown, Raw: trimmed})
 		}
 		// No tool_use/thinking — return concatenated text as TextDelta.
 		var buf strings.Builder
@@ -442,13 +453,13 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 			}
 		}
 		if buf.Len() == 0 {
-			return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+			return live(AgentEvent{Type: Unknown, Raw: trimmed})
 		}
-		return AgentEvent{
+		return live(AgentEvent{
 			Type: TextDelta,
 			Text: buf.String(),
 			Raw:  trimmed,
-		}, nil
+		})
 
 	case "user":
 		// In headless stream-json mode claude wraps tool_result blocks

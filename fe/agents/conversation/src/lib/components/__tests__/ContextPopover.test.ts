@@ -328,3 +328,48 @@ describe("ContextPopover — the running turn", () => {
     expect(screen.getByTestId("context-live-elapsed").textContent?.trim()).toBe("1:02:05");
   });
 });
+
+/* The level can be known while a turn is still running; the spend cannot
+   — the provider reports cost only when the turn ends. A panel where one
+   number is live and the rest are not has to say which is which. */
+describe("ContextPopover — live level", () => {
+  const withLive = (used: number) => ({
+    open: true,
+    data: ctx({ used: 210_886, window: 1_000_000, pct: 21 }),
+    live: { active: true, startedAt: Date.now() - 5_000, steps: 2, used },
+    loading: false,
+    error: "",
+    onRefresh: vi.fn(),
+    onCompact: vi.fn(),
+    compacting: false,
+    onClose: vi.fn(),
+  });
+
+  it("shows the running turn's reading, not the stored one", () => {
+    render(ContextPopover, { props: withLive(450_000) });
+    expect(screen.getByText("45%")).toBeTruthy();
+    expect(screen.getByTestId("context-level-live")).toBeTruthy();
+  });
+
+  it("says the spend is still the last finished turn's", () => {
+    render(ContextPopover, { props: withLive(450_000) });
+    expect(screen.getByTestId("context-spend-lag").textContent).toMatch(/last finished turn/i);
+  });
+
+  // A reading behind the ledger is a reading that has not caught up, not
+  // a window that shrank — the stored figure stands.
+  it("keeps the stored reading when the live one is older", () => {
+    render(ContextPopover, { props: withLive(10_000) });
+    expect(screen.getByText("21%")).toBeTruthy();
+    expect(screen.queryByTestId("context-level-live")).toBeNull();
+    expect(screen.queryByTestId("context-spend-lag")).toBeNull();
+  });
+
+  // A provider that reports nothing mid-turn (codex between rollout
+  // reads) must look exactly as it did before.
+  it("is unchanged when no live reading arrives", () => {
+    render(ContextPopover, { props: withLive(0) });
+    expect(screen.getByText("21%")).toBeTruthy();
+    expect(screen.queryByTestId("context-level-live")).toBeNull();
+  });
+});

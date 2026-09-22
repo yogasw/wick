@@ -131,6 +131,11 @@
      in that panel is written only once the turn ENDS. */
   let turnStartedAt = $state(0);
   const unsubTurnClock = thread.turnStartedAt.subscribe((v) => { turnStartedAt = v; });
+  /* The newest window reading off the stream. The ledger behind
+     contextData is written when a turn ENDS, so this is the only thing
+     that moves while one is running. */
+  let liveContextUsed = $state(0);
+  const unsubContextUsed = thread.contextUsed.subscribe((v) => { liveContextUsed = v; });
   const unsubMeta = thread.meta.subscribe((v) => { threadMeta = v; });
 
   /* ── raw trace view ────────────────────────────────────────────── */
@@ -393,7 +398,18 @@
     steps: live?.blocks.length ?? 0,
     substate: typing.substate,
     toolName: typing.toolName,
+    used: liveContextUsed,
   });
+
+  /* What the meter should show. The stream's reading wins when it is
+     newer than the ledger's: they are the same number from the same
+     source (the last request's level), so the only way they differ is
+     that one of them has not caught up. */
+  const meterUsed = $derived(Math.max(liveContextUsed, contextData?.used ?? 0));
+  const meterWindow = $derived(contextData?.window ?? 0);
+  const meterPct = $derived(
+    meterWindow > 0 ? Math.min(100, (meterUsed / meterWindow) * 100) : (contextData?.pct ?? 0),
+  );
 
   function openContextPopover() {
     contextPopoverOpen = true;
@@ -2023,6 +2039,7 @@
     unsubTyping();
     unsubLifecycle();
     unsubTurnClock();
+    unsubContextUsed();
     unsubMeta();
   });
 
@@ -2456,15 +2473,15 @@
             onSearchFiles={searchMentionFiles}
             mentionAgents={mentionableAgents}
             commands={composerCommands}
-            contextMeter={contextData && contextData.used > 0
+            contextMeter={meterUsed > 0
               ? {
-                  pct: contextData.pct,
-                  used: contextData.used,
-                  window: contextData.window,
+                  pct: meterPct,
+                  used: meterUsed,
+                  window: meterWindow,
                   title:
-                    contextData.window > 0
-                      ? `Context window — ${Math.round(contextData.pct)}% of ${contextData.model || contextData.provider || "model"}`
-                      : `Context — ${contextData.used.toLocaleString()} tokens (window size not reported)`,
+                    meterWindow > 0
+                      ? `Context window — ${Math.round(meterPct)}% of ${contextData?.model || contextData?.provider || "model"}`
+                      : `Context — ${meterUsed.toLocaleString()} tokens (window size not reported)`,
                   onClick: openContextPopover,
                 }
               : undefined}

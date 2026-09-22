@@ -36,6 +36,18 @@ export interface ThreadStore {
   turns: Writable<ConversationTurn[]>;
   live: Writable<LiveTurn | null>;
   typing: Writable<TypingState>;
+  /* The newest context-window reading, in tokens; 0 until one arrives.
+
+     The ledger behind the context panel is written when a turn ENDS,
+     which is the moment the number stops being interesting — a turn that
+     runs for minutes leaves the meter frozen on the previous turn for as
+     long as anyone is watching it. Providers that report the level per
+     request (claude does, on every `assistant` frame) send it along with
+     whatever event that frame produced, and this is where it lands.
+
+     It cannot drift from the figure the turn finally records: that one
+     is the last frame's reading, which is the last value seen here. */
+  contextUsed: Writable<number>;
   /* When the turn currently running started, in epoch ms; 0 when nothing
      is running.
 
@@ -77,6 +89,7 @@ export function createThreadStore(): ThreadStore {
   const turns = writable<ConversationTurn[]>([]);
   const live = writable<LiveTurn | null>(null);
   const typing = writable<TypingState>({ active: false });
+  const contextUsed = writable<number>(0);
   const turnStartedAt = writable<number>(0);
   const lifecycle = writable<LifecycleState>({ state: "", pid: 0, substate: "", at: 0 });
 
@@ -147,6 +160,12 @@ export function createThreadStore(): ThreadStore {
   }
 
   function handleEvent(ev: AgentEvent): void {
+    /* Before the switch: the frame carrying the newest level is often one
+       the switch ignores — a suppressed duplicate of text that already
+       streamed arrives as `unknown`. */
+    if (typeof ev.context_used === "number" && ev.context_used > 0) {
+      contextUsed.set(ev.context_used);
+    }
     switch (ev.type) {
       case "session_start": {
         typing.set({ active: true });
@@ -464,6 +483,7 @@ export function createThreadStore(): ThreadStore {
     turns,
     live,
     typing,
+    contextUsed,
     turnStartedAt,
     lifecycle,
     meta,

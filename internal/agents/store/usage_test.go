@@ -3,7 +3,19 @@ package store
 import (
 	"testing"
 	"time"
+
+	"github.com/yogasw/wick/internal/agents/config"
 )
+
+// usageLayout is a throwaway data dir for the ledger tests.
+func usageLayout(t *testing.T) config.Layout {
+	t.Helper()
+	l := config.NewLayout(t.TempDir())
+	if err := l.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
 
 // All-time model totals come from the exact buckets; a window has to be
 // rebuilt from the per-turn trail. Both have to answer, and both have to
@@ -58,5 +70,59 @@ func TestModelTotalsBucketTheUnnamed(t *testing.T) {
 	all, _ := p.ModelTotalsBetween(time.Time{}, time.Time{})
 	if all[UnknownModel].Input != 5 {
 		t.Fatalf("got %+v, want the unnamed turn under %q", all, UnknownModel)
+	}
+}
+
+// The ledger is written when a turn ENDS, which is when the level stops
+// being the interesting number. A mid-turn reading updates the level and
+// nothing else — flows and turns belong to the turn, and the turn has
+// not finished.
+func TestRecordContextLevelTouchesOnlyTheLevel(t *testing.T) {
+	l := usageLayout(t)
+	s := &Store{layout: l, sessionID: "s1", provider: "claude/default", now: time.Now}
+
+	if err := s.recordContextLevel(42_000, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	su, err := LoadSessionUsage(l, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := su.Providers["claude/default"]
+	if p == nil || p.ContextUsed != 42_000 {
+		t.Fatalf("level not recorded: %+v", p)
+	}
+	if p.Turns != 0 || len(p.Series) != 0 || p.UsageTotals != (UsageTotals{}) {
+		t.Fatalf("a mid-turn reading counted a turn or added flows: %+v", p)
+	}
+	if su.Turns != 0 {
+		t.Fatalf("session turns = %d, want 0 until the turn ends", su.Turns)
+	}
+}
+
+// The level arrives on every frame of a long turn and the whole ledger is
+// rewritten each time, so the writes are spaced out.
+func TestRecordContextLevelIsThrottled(t *testing.T) {
+	l := usageLayout(t)
+	s := &Store{layout: l, sessionID: "s1", provider: "claude/default", now: time.Now}
+	at := time.Now()
+
+	if err := s.recordContextLevel(10_000, at); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.recordContextLevel(11_000, at.Add(time.Millisecond*200)); err != nil {
+		t.Fatal(err)
+	}
+	su, _ := LoadSessionUsage(l, "s1")
+	if got := su.Providers["claude/default"].ContextUsed; got != 10_000 {
+		t.Fatalf("level = %d, want the second reading held back by the throttle", got)
+	}
+
+	if err := s.recordContextLevel(12_000, at.Add(levelWriteInterval+time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	su, _ = LoadSessionUsage(l, "s1")
+	if got := su.Providers["claude/default"].ContextUsed; got != 12_000 {
+		t.Fatalf("level = %d, want the reading past the interval to land", got)
 	}
 }

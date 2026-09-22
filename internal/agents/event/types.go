@@ -128,6 +128,26 @@ type AgentEvent struct {
 
 	// Compaction is set only on Compaction events.
 	Compaction *CompactionInfo
+
+	// ContextUsed is how full the window was for the request THIS frame
+	// came out of — a mid-turn reading, set on whatever event the frame
+	// produced rather than on a type of its own.
+	//
+	// It exists because everything else here is end-of-turn. Usage lands
+	// on Done, so a turn that runs for four minutes leaves every meter
+	// frozen on the previous turn's numbers for as long as it is the one
+	// thing anybody is watching. Claude reports the level on every
+	// `assistant` frame, so the answer is already in hand well before the
+	// turn ends; carrying it costs one int.
+	//
+	// It CANNOT disagree with the final reading: the end-of-turn level is
+	// the last frame's level (see ClaudeParser.lastLevel, which overrides
+	// what the result frame carries), so the last value seen here is the
+	// value Done reports. Providers that report nothing mid-turn (codex —
+	// its level comes from a rollout file read once per turn) simply
+	// leave this zero, and zero means "this frame said nothing about the
+	// window", never "the window is empty".
+	ContextUsed int
 }
 
 // CompactionInfo is one compaction boundary as the CLI reported it.

@@ -94,6 +94,23 @@ func codexRolloutLevel(home, threadID string, sum int) (codexRolloutReading, boo
 	return best, ok
 }
 
+// codexRolloutNewest returns the most recent reading in the journal,
+// without matching a turn sum and without the retry pause.
+//
+// Mid-turn there is nothing to match: the turn has not reported its sum
+// yet, and "the newest entry codex has written" is precisely the level
+// wanted. Same read as codexRolloutBest, minus the wait — a meter that
+// is one request behind is right about everything except the last few
+// seconds, and blocking the parser to close that gap would be a poor
+// trade.
+func codexRolloutNewest(home, threadID string) (codexRolloutReading, bool) {
+	path := codexRolloutPath(home, threadID)
+	if path == "" {
+		return codexRolloutReading{}, false
+	}
+	return codexRolloutBest(path, 0)
+}
+
 // codexRolloutRetryDelay is the one pause the reader takes when the
 // rollout has not caught up with the stream yet. A variable so tests
 // don't sleep.
