@@ -76,6 +76,14 @@ func newAnalyticsRepo(t *testing.T) *repo {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// An in-memory sqlite database belongs to ONE connection: a second one
+	// from the pool opens a second, empty database ("no such table: users").
+	// The page now reads the account tables concurrently, which is fine
+	// against the Postgres pool it runs on, so the harness has to stop
+	// pretending a pool is free here.
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
 	if err := db.AutoMigrate(&entity.User{}, &entity.Session{}, &entity.PersonalAccessToken{}); err != nil {
 		t.Fatal(err)
 	}

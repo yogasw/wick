@@ -31,10 +31,26 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 	     and let the script below toggle it. Paired with the matchMedia
 	     query in the script (max-width:767px OR max-height:600px). -->
 	<style>
+		/* This shell is the whole viewport, which is only true when nothing
+		   else occupies it. The impersonation banner does, and publishes how
+		   much (--wick-chrome-top, 0 when absent) — without this the shell
+		   stays a full 100svh BELOW the banner and its bottom edge, the
+		   composer and the end of the inbox list, falls off the screen. */
+		[data-agents-shell] {
+			height: calc(100svh - var(--wick-chrome-top, 0px));
+		}
+		/* The drawer is position:fixed below md, so it is measured from the
+		   viewport and not from the shell: it needs the same offset or it
+		   slides up underneath the banner. Above md it is static and ignores
+		   `top`, so this can stay unconditional. */
+		[data-agents-shell] [data-sidebar],
+		[data-agents-shell] [data-sidebar-backdrop] {
+			top: var(--wick-chrome-top, 0px);
+		}
 		@media (max-height: 600px) {
 			[data-agents-shell] [data-sidebar] {
 				position: fixed !important;
-				top: 0; bottom: 0; left: 0;
+				top: var(--wick-chrome-top, 0px); bottom: 0; left: 0;
 				width: 18rem !important;
 				z-index: 50 !important;
 				transform: translateX(-100%) !important;

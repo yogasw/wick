@@ -126,3 +126,55 @@ describe("window selection", () => {
     expect(url.searchParams.get("days")).toBe("all");
   });
 });
+
+describe("a connection that goes quiet", () => {
+  /** A body that emits `head`, then never says anything again. */
+  function stalling(head: string[]): Response {
+    const enc = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const c of head) controller.enqueue(enc.encode(c));
+        // and then: nothing. No more chunks, no close.
+      },
+    });
+    return new Response(body, { status: 200, headers: { "Content-Type": "application/x-ndjson" } });
+  }
+
+  // The bug this pins: the page sat on "Reading conversations… 2311 / 2311"
+  // forever because a silent socket looks exactly like a busy server.
+  it("retries once instead of waiting forever", async () => {
+    let call = 0;
+    const fetchImpl = vi.fn(async () => {
+      call++;
+      if (call === 1) return stalling(['{"type":"progress","done":2311,"total":2311}\n']);
+      return streaming([`{"type":"result","data":${JSON.stringify(RESULT)}}\n`]);
+    }) as unknown as typeof fetch;
+
+    const data = await loadAnalytics("/x", { fetchImpl, stallMs: 20 });
+    expect(call).toBe(2);
+    expect(data.sessions).toBe(4);
+  });
+
+  it("gives up with a readable error when the retry stalls too", async () => {
+    const fetchImpl = vi.fn(async () => stalling(['{"type":"progress","done":1,"total":9}\n'])) as unknown as typeof fetch;
+    await expect(loadAnalytics("/x", { fetchImpl, stallMs: 20 })).rejects.toThrow(/went quiet/);
+  });
+
+  it("does not fire on a stream that is merely slow", async () => {
+    const enc = new TextEncoder();
+    const fetchImpl = vi.fn(async () => {
+      const body = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          controller.enqueue(enc.encode('{"type":"progress","done":1,"total":2}\n'));
+          await new Promise((r) => setTimeout(r, 30));
+          controller.enqueue(enc.encode(`{"type":"result","data":${JSON.stringify(RESULT)}}\n`));
+          controller.close();
+        },
+      });
+      return new Response(body, { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const data = await loadAnalytics("/x", { fetchImpl, stallMs: 300 });
+    expect(data.sessions).toBe(4);
+  });
+});
