@@ -1368,6 +1368,10 @@ func NewServer() *Server {
 	// invalidates outstanding CLI tokens too, which is the behaviour
 	// somebody rotating it expects.
 	clitoken.SetSecret(configsSvc.SessionSecret)
+	// The per-spawn MCP credentials are signed with the same key and for
+	// the same reason: an agent outlives the daemon that spawned it, and a
+	// successor must be able to verify a token it never issued.
+	mcp.SetScopedTokenSecret(configsSvc.SessionSecret)
 
 	// One call wires every built-in channel: setup.All handles EnsureChannel,
 	// config load, NewChannel, setters, and registry.Add per transport.
