@@ -400,8 +400,15 @@
               <circle cx={tx(hover)} cy={ty(trend[hover])} r="2" fill="currentColor" />
             {/if}
           </svg>
+          <!-- Two lines tall, always. The readout is one line idle and two
+               while hovering, and letting it size itself meant the panel
+               grew and shrank under the cursor as it crossed the curve —
+               a panel anchored to the composer moves its whole body when
+               that happens, so reading it became a moving target. The
+               second line is empty rather than absent when there is
+               nothing to say. -->
           <p
-            class="text-[11px] text-black-700 dark:text-black-600 tabular-nums"
+            class="min-h-[2.1rem] text-[11px] text-black-700 dark:text-black-600 tabular-nums"
             data-testid="context-spark-readout"
           >
             {#if hover !== null}
@@ -428,6 +435,7 @@
               </span>
             {:else}
               last {trend.length} turns · hover for a turn
+              <span class="block" aria-hidden="true">&nbsp;</span>
             {/if}
           </p>
         {/if}

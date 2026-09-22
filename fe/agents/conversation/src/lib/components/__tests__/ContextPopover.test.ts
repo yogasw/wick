@@ -373,3 +373,28 @@ describe("ContextPopover — live level", () => {
     expect(screen.queryByTestId("context-level-live")).toBeNull();
   });
 });
+
+/* The readout is one line idle and two while hovering. Letting it size
+   itself made the whole panel grow and shrink under the cursor as it
+   crossed the curve — the panel is anchored to the composer, so its body
+   moves when its height changes, and reading it became a moving target. */
+describe("ContextPopover — the hover readout holds its height", () => {
+  const props = {
+    open: true,
+    data: ctx(),
+    loading: false,
+    error: "",
+    onRefresh: vi.fn(),
+    onCompact: vi.fn(),
+    compacting: false,
+    onClose: vi.fn(),
+  };
+
+  it("reserves two lines when nothing is hovered", () => {
+    render(ContextPopover, { props });
+    const readout = screen.getByTestId("context-spark-readout");
+    expect(readout.className).toContain("min-h-");
+    // The second line is empty, not absent.
+    expect(readout.querySelector("span.block")).not.toBeNull();
+  });
+});
