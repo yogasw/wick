@@ -367,15 +367,19 @@
     return false;
   });
 
-  async function loadContext() {
-    contextLoading = true;
+  /* `busy` is for the Refresh button only. A background reload keeps the
+     numbers that are already on screen and says nothing: the panel is
+     open THROUGHOUT a turn now, and flipping the button to "…" on every
+     reload made it strobe while the agent was working. */
+  async function loadContext(busy = false) {
+    if (busy) contextLoading = true;
     try {
       contextData = await fetchSessionContext(base, sessionId);
       contextError = "";
     } catch (e) {
       contextError = e instanceof Error ? e.message : String(e);
     } finally {
-      contextLoading = false;
+      if (busy) contextLoading = false;
     }
   }
 
@@ -384,8 +388,18 @@
      callback on the subscription: the subscription fires during init,
      before this state exists, and reading it there is a temporal-dead-
      zone crash rather than an early refresh. */
+  /* The last lifecycle state this panel was read for. A plain variable,
+     not $state: it is a guard, and making it reactive would re-run the
+     effect it guards. */
+  let contextReadAt = "";
   $effect(() => {
-    void agentLifecycle.state;
+    // The store hands out a NEW object on every lifecycle event, and a
+    // working agent emits them constantly (each substate change is one).
+    // Only a real transition changes what the ledger holds, so only a
+    // transition is worth a request — the rest was a fetch per frame.
+    const state = agentLifecycle.state;
+    if (state === contextReadAt) return;
+    contextReadAt = state;
     void loadContext();
   });
 
@@ -2458,7 +2472,7 @@
             live={contextLive}
             loading={contextLoading}
             error={contextError}
-            onRefresh={() => void loadContext()}
+            onRefresh={() => void loadContext(true)}
             onCompact={() => void handleCompact()}
             compacting={compactInFlight}
             onClose={() => (contextPopoverOpen = false)}
