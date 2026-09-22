@@ -162,10 +162,3 @@ func TestSweepDropsStaleRevocations(t *testing.T) {
 		t.Fatalf("stale revocation kept: %d", len(s.revoked))
 	}
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
