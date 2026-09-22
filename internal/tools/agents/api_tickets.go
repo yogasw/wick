@@ -459,7 +459,12 @@ func apiTicketCreate(c *tool.Ctx) {
 		Assignee *string `json:"assignee"`
 		// Assignees puts several people on it at once. Merged with Assignee
 		// above, so a caller may send either.
-		Assignees []string          `json:"assignees"`
+		//
+		// A pointer for the same reason Assignee is one: `[]` is a caller
+		// saying "nobody", and a plain slice cannot tell that from a field
+		// nobody sent — which turned an explicitly unassigned ticket into
+		// one assigned to whoever created it.
+		Assignees *[]string         `json:"assignees"`
 		Fields    map[string]string `json:"fields"`
 		// SessionID optionally attaches an existing conversation, which is
 		// how "turn this chat into a ticket" works.
@@ -490,9 +495,13 @@ func apiTicketCreate(c *tool.Ctx) {
 	// landing an "unassigned" card in front of them says the opposite.
 	// An explicit empty assignee still means unassigned.
 	assignee := ""
+	var assignees []string
+	if req.Assignees != nil {
+		assignees = *req.Assignees
+	}
 	if req.Assignee != nil {
 		assignee = strings.TrimSpace(*req.Assignee)
-	} else if len(req.Assignees) == 0 {
+	} else if req.Assignees == nil {
 		if u := login.GetUser(c.Context()); u != nil {
 			assignee = u.ID
 		}
@@ -504,7 +513,7 @@ func apiTicketCreate(c *tool.Ctx) {
 		Body:      req.Body,
 		Status:    req.Status,
 		Assignee:  assignee,
-		Assignees: req.Assignees,
+		Assignees: assignees,
 		Fields:    req.Fields,
 		Sessions:  seed,
 		Actor:     callerActor(c),

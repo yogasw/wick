@@ -366,9 +366,21 @@ func (h *handlers) create(c *connector.Ctx) (any, error) {
 	}
 	// An agent creating a ticket does so on somebody's behalf, so the ticket
 	// lands with that person rather than unassigned. The agent can still
-	// pass an explicit assignee (including nobody, via a space).
+	// pass an explicit assignee (including nobody, via an empty value).
+	//
+	// Both signals are needed, and neither alone is enough. RawInputValue
+	// sees an explicitly-empty `assignees` — a caller saying "nobody",
+	// which is what an empty value means on update — but it is populated
+	// ONLY on the MCP path (see connector.Ctx.rawInput); everywhere else
+	// it reports every key absent. The string value works on every path
+	// but cannot tell "" from unsent. So: a non-empty list means somebody
+	// was named, and an explicitly present one means the question was
+	// answered, either way the caller is not added on top.
 	assignee := strings.TrimSpace(c.Input("assignee"))
-	if _, given := c.RawInputValue("assignee"); !given && strings.TrimSpace(c.Input("assignees")) == "" {
+	_, assigneeGiven := c.RawInputValue("assignee")
+	_, assigneesGiven := c.RawInputValue("assignees")
+	namedAssignees := assigneesGiven || strings.TrimSpace(c.Input("assignees")) != ""
+	if !assigneeGiven && !namedAssignees {
 		assignee = c.CallerUserID()
 	}
 	tk, err := ticket.Create(h.layout, ticket.CreateOptions{
