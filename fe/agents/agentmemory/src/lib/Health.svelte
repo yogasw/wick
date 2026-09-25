@@ -28,7 +28,12 @@
   let { report, ov, scope, loading, onRefresh, onGoOverview }: Props = $props();
 
   const blocked = $derived(blockedBy(report));
-  const findings = $derived(healthFindings(report?.doctor, report?.contamination, ov?.store, report?.collisions));
+  // The watchdog's record rides on the Overview payload this tab already
+  // receives, so supervision is triaged next to the other silent failures
+  // rather than on a page of its own (PLAN §25.3 guard 3).
+  const findings = $derived(
+    healthFindings(report?.doctor, report?.contamination, ov?.store, report?.collisions, ov?.watchdog),
+  );
   const rows = $derived(contaminationRows(report?.contamination));
   const columns = $derived(rows.length ? Object.keys(rows[0]) : []);
 

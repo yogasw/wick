@@ -1,4 +1,4 @@
-import type { DataFailure, DataReason, InstanceRef, Overview, Status } from "./types.js";
+import type { DataFailure, DataReason, InstanceRef, Overview, Status, WatchdogState } from "./types.js";
 
 // Pure presentation logic for the Overview tab. It lives here rather than in
 // the component so the rules that actually decide what the user is told —
@@ -301,3 +301,93 @@ export function pctWidth(n: number, total: number): number {
 // reads as a division of labour, not as a refusal — looking is allowed, and
 // everything on the page around it still works.
 export const MANAGE_ADMIN_ONLY = "Managing Agent Memory — starting the daemon, changing settings, importing or sweeping — is restricted to admins. Everything here is readable.";
+
+// ── watchdog (PLAN §25) ──────────────────────────────────────────────
+
+// WATCHDOG_CHURN is how many interventions turn "it recovered" into "look at
+// this". Three is the point where a daemon is not having a bad moment, it is
+// failing repeatedly and something upstream — the binary, the store, the
+// port — is the real subject.
+export const WATCHDOG_CHURN = 3;
+
+// WatchdogLine is the Overview's one-line reading of supervision: what state
+// it is in, how that should look, and the sentence underneath.
+export type WatchdogLine = { label: string; cls: string; detail: string };
+
+// watchdogLine reads the supervision record the way a person asks about it:
+// is anything watching this daemon, and has it had to do anything?
+//
+// The four states are kept apart because the right reaction differs. Gave-up
+// is the only one that is a standing problem; churn is a hint to look; off is
+// a fact about configuration, not a fault; and a quiet watchdog is the normal
+// case and must not look like an achievement.
+export function watchdogLine(w: WatchdogState | undefined): WatchdogLine {
+  if (!w || !w.watching) {
+    return {
+      label: "Not watching",
+      cls: "text-black-800 dark:text-black-600",
+      detail:
+        "Nothing depends on this daemon, so nothing is supervising it. Supervision follows the same autostart signal shown above — there is no separate switch.",
+    };
+  }
+  if (w.stopped_by_operator) {
+    return {
+      label: "Paused — stopped by hand",
+      cls: "text-black-800 dark:text-black-600",
+      detail: "Someone stopped this daemon, so the watchdog is leaving it down. Starting it again resumes supervision.",
+    };
+  }
+  if (w.gave_up) {
+    return {
+      label: "Gave up",
+      cls: "text-rose-700 dark:text-rose-300",
+      detail:
+        w.gave_up_reason ||
+        `${w.consecutive_failures} starts in a row failed, so the watchdog stopped trying rather than respawning forever.`,
+    };
+  }
+  if (w.consecutive_failures > 0) {
+    return {
+      label: "Retrying",
+      cls: "text-cau-600 dark:text-cau-400",
+      detail: `${w.consecutive_failures} start${w.consecutive_failures === 1 ? "" : "s"} failed so far${
+        w.last_error ? `: ${w.last_error}` : "."
+      } Each retry waits longer than the last.`,
+    };
+  }
+  return {
+    label: w.restarts > 0 ? `Watching — ${w.restarts} restart${w.restarts === 1 ? "" : "s"}` : "Watching",
+    cls: w.restarts >= WATCHDOG_CHURN ? "text-cau-600 dark:text-cau-400" : "text-green-600 dark:text-green-300",
+    detail: watchdogDetail(w),
+  };
+}
+
+// watchdogDetail is the sentence under a healthy watchdog: what it has had to
+// do, and when. "Nothing" is said out loud rather than left blank — a blank
+// line reads as an unanswered question.
+export function watchdogDetail(w: WatchdogState): string {
+  if (w.restarts === 0) {
+    return "The daemon has not needed an intervention since wick started.";
+  }
+  const hung = w.hung_restarts > 0 ? `, ${w.hung_restarts} of them wedged rather than dead` : "";
+  const last = w.last_restart_ms
+    ? ` Last: ${reasonWord(w.last_reason)} ${relativeTime(new Date(w.last_restart_ms).toISOString())}.`
+    : "";
+  return `${w.restarts} intervention${w.restarts === 1 ? "" : "s"} since wick started${hung}.${last}`;
+}
+
+// reasonWord spells out the machine token the server sends. "off" is not a
+// failure of the daemon at all — it was never running — so it does not get a
+// failure's wording.
+export function reasonWord(reason: WatchdogState["last_reason"]): string {
+  switch (reason) {
+    case "hung":
+      return "restarted a daemon that had stopped answering";
+    case "dead":
+      return "started a daemon whose process had exited";
+    case "off":
+      return "started a daemon that should have been running";
+    default:
+      return "acted";
+  }
+}

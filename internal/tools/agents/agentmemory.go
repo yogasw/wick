@@ -223,6 +223,25 @@ func AgentMemoryAutostart(logf func(string)) { agentmemory.Autostart(logf) }
 // boot — stored autostart, or forced by an instance that uses it.
 func AnyAgentMemoryAutostart() bool { return agentmemory.AnyAutostartEnabled() }
 
+// AgentMemoryStartWatchdog begins supervising the Agent Memory daemons: a
+// dead one is started, a wedged one is restarted, and both are counted where
+// the panel can show them. What it supervises is decided by the same
+// effective-autostart signal the panel shows — not by a switch of its own
+// (PLAN §25.1). Called from server.go at boot, after the routes mount so the
+// config store behind that signal is wired.
+func AgentMemoryStartWatchdog() { agentmemory.StartWatchdog() }
+
+// AgentMemoryStopWatchdog ends supervision. Called before the daemons are
+// stopped on shutdown, so supervision cannot race a stop by restarting what
+// is being torn down.
+func AgentMemoryStopWatchdog() { agentmemory.StopWatchdog() }
+
+// SetAgentMemoryUpgradeWindow wires wick's graceful-handover signal into the
+// watchdog. During a handover the successor adopts the running daemon and
+// this process is about to exit, so supervision must stay quiet rather than
+// fight a window it does not own (PLAN §25.3 guard 5).
+func SetAgentMemoryUpgradeWindow(fn func() bool) { agentmemory.SetUpgradeWindow(fn) }
+
 // AgentMemoryStopAll kills every Agent Memory daemon wick spawned. Called from
 // the server's hard-stop path: the daemons are our children, and leaving one
 // holding a loopback port after wick is gone makes the next boot look like

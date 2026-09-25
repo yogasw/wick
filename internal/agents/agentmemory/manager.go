@@ -37,8 +37,21 @@ const verTTL = time.Hour
 type Manager struct {
 	desc Descriptor
 
-	mu       sync.Mutex
-	cmd      *exec.Cmd
+	// act serialises whole lifecycle SEQUENCES — start-and-wait, stop,
+	// restart — where mu only guards the fields each step touches. The
+	// watchdog and a person pressing Stop are two callers of the same
+	// three methods, and without this an operator's Stop could land
+	// between the watchdog's spawn and its readiness wait, leaving a
+	// daemon running that wick believes it stopped (PLAN §25.3 guard 4).
+	act sync.Mutex
+
+	mu  sync.Mutex
+	cmd *exec.Cmd
+	// exited is closed by the reaper goroutine when cmd's process ends.
+	// It is how "wick spawned it" is told apart from "wick spawned it and
+	// it is still alive" — the difference between the watchdog's dead and
+	// hung states (PLAN §25.2). nil when no process of ours was started.
+	exited   chan struct{}
 	starting bool         // true between spawn and first healthy probe
 	port     atomic.Int32 // bound loopback port (0 until first start)
 	pref     atomic.Int32 // preferred port; descriptor default until configured
@@ -59,6 +72,12 @@ type Manager struct {
 	verMu     sync.Mutex
 	verCached string
 	verAt     time.Time
+
+	// operatorStop records that a PERSON stopped this daemon, so the
+	// watchdog leaves it down. Without it the Stop button lies: the
+	// daemon comes back within half a minute and nothing says why
+	// (PLAN §25.3 guard 1). Cleared by an explicit start.
+	operatorStop atomic.Bool
 }
 
 func newManager(d Descriptor) *Manager {
@@ -287,10 +306,25 @@ func (m *Manager) start() error {
 		return fmt.Errorf("start %s: %w", m.desc.DisplayName, err)
 	}
 	m.cmd = cmd
+	// One reaper per spawn. It exists for two reasons: a child that exits
+	// on its own is reaped instead of becoming a zombie, and the closed
+	// channel is what lets the watchdog see that the process wick spawned
+	// is GONE rather than merely unhealthy (PLAN §25.2).
+	done := make(chan struct{})
+	m.exited = done
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
 	m.started.Store(time.Now().UnixMilli())
 	m.log.Info().Int("pid", cmd.Process.Pid).Msg("agentmemory: spawned")
 	return nil
 }
+
+// reapTimeout bounds how long stop waits for a killed daemon to be reaped.
+// A SIGKILLed process is gone in milliseconds; this is only here so a child
+// wedged in uninterruptible I/O cannot hold the lock for the whole process.
+const reapTimeout = 5 * time.Second
 
 func (m *Manager) stop() {
 	m.mu.Lock()
@@ -300,19 +334,64 @@ func (m *Manager) stop() {
 	}
 	pid := m.cmd.Process.Pid
 	_ = m.cmd.Process.Kill()
-	_ = m.cmd.Wait()
+	// Wait belongs to the reaper goroutine started with the process —
+	// calling it here too would be "Wait was already called". Waiting on
+	// the channel keeps the same guarantee: stop returns once the child
+	// is actually gone.
+	if m.exited != nil {
+		select {
+		case <-m.exited:
+		case <-time.After(reapTimeout):
+			m.log.Warn().Int("pid", pid).Msg("agentmemory: killed daemon did not exit within the reap timeout")
+		}
+	}
 	m.cmd = nil
+	m.exited = nil
 	m.started.Store(0)
 	m.invalidateHealth()
 	m.log.Info().Int("pid", pid).Msg("agentmemory: stopped")
 }
 
-// StopProcess kills the daemon. Exposed for shutdown hooks.
-func (m *Manager) StopProcess() { m.stop() }
+// StopProcess kills the daemon WITHOUT recording an intent: shutdown hooks
+// and the watchdog's own restart use it, and neither is a person deciding the
+// daemon should stay down.
+func (m *Manager) StopProcess() {
+	m.act.Lock()
+	defer m.act.Unlock()
+	m.stop()
+}
+
+// StopByOperator kills the daemon and records that a person asked for it, so
+// the watchdog does not undo the decision. This is what the Stop button
+// calls; everything else uses StopProcess (PLAN §25.3 guard 1).
+func (m *Manager) StopByOperator() {
+	m.act.Lock()
+	defer m.act.Unlock()
+	m.operatorStop.Store(true)
+	m.stop()
+}
+
+// OperatorStopped reports whether the daemon is down because someone stopped
+// it. Surfaced in the watchdog payload so the panel can say why nothing is
+// being restarted.
+func (m *Manager) OperatorStopped() bool { return m.operatorStop.Load() }
 
 // StartAndWait spawns the daemon (if not already running) and blocks until it
 // answers its health path or ctx expires.
+//
+// Any explicit start clears the operator-stop marker: asking for the daemon
+// to run is the other half of having asked for it to stop, and leaving the
+// marker set would keep the watchdog quiet about a daemon someone has since
+// started on purpose.
 func (m *Manager) StartAndWait(ctx context.Context) error {
+	m.act.Lock()
+	defer m.act.Unlock()
+	return m.startAndWait(ctx)
+}
+
+// startAndWait is the sequence itself. Callers hold act.
+func (m *Manager) startAndWait(ctx context.Context) error {
+	m.operatorStop.Store(false)
 	m.setStarting(true)
 	defer m.setStarting(false)
 	if err := m.start(); err != nil {
@@ -322,10 +401,36 @@ func (m *Manager) StartAndWait(ctx context.Context) error {
 }
 
 // Restart stops the daemon and starts it again, waiting for readiness — the
-// way a changed data dir or web-UI toggle takes effect.
+// way a changed data dir or web-UI toggle takes effect, and how the watchdog
+// clears a hung one.
 func (m *Manager) Restart(ctx context.Context) error {
+	m.act.Lock()
+	defer m.act.Unlock()
 	m.stop()
-	return m.StartAndWait(ctx)
+	return m.startAndWait(ctx)
+}
+
+// ChildAlive reports whether the process wick spawned is still running.
+//
+// It is not the same question as healthy(): a daemon that exited leaves
+// nothing to probe, while a daemon that is wedged answers no probe and is
+// very much alive. The watchdog needs both to tell dead from hung, and the
+// two calls for the same state is the whole point (PLAN §25.2).
+func (m *Manager) ChildAlive() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cmd == nil {
+		return false
+	}
+	if m.exited == nil {
+		return true
+	}
+	select {
+	case <-m.exited:
+		return false
+	default:
+		return true
+	}
 }
 
 func (m *Manager) waitReady(ctx context.Context) error {

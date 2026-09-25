@@ -18,6 +18,7 @@
     portLabel,
     uptimeOf,
     warningsFor,
+    watchdogLine,
   } from "./format.js";
 
   type Props = {
@@ -48,6 +49,11 @@
   const warnings = $derived(warningsFor(ov));
   const usedBy = $derived(ov?.used_by ?? []);
   const counts = $derived(ov?.store?.counts);
+  // What supervision has done to this daemon. Shown on the card the daemon
+  // itself is on: a restart is a fact about this process, and a watchdog
+  // whose work is invisible cannot be told apart from one that is not
+  // running (PLAN §25.3 guard 3).
+  const watch = $derived(watchdogLine(ov?.watchdog));
 
   // The gap between every stored version and the latest one is what a compact
   // would reclaim — and what a forced backfill inflates (PLAN §11.1).
@@ -130,6 +136,17 @@
         </div>
       {/each}
     </dl>
+
+    <!-- Watchdog. One line, on the daemon card, whatever state it is in —
+         including "nothing to report", because a blank space reads as an
+         unanswered question rather than as good news. -->
+    <div class="border-t border-white-300 dark:border-navy-600 px-5 py-3" data-testid="watchdog">
+      <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <p class="text-[0.6875rem] uppercase tracking-wider text-black-700 dark:text-black-600">Watchdog</p>
+        <p class={`text-xs font-medium ${watch.cls}`} data-testid="watchdog-label">{watch.label}</p>
+      </div>
+      <p class="mt-1 text-xs leading-relaxed text-black-800 dark:text-black-600">{watch.detail}</p>
+    </div>
 
     {#if daemon?.state === "not-installed"}
       <!-- Same fact, addressed to whoever can act on it: an admin is told

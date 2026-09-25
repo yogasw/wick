@@ -1,5 +1,12 @@
-import { formatCount } from "./format.js";
-import type { CollisionCheck, ContaminationReport, DoctorReport, DoctorRow, StoreStatus } from "./types.js";
+import { formatCount, WATCHDOG_CHURN, watchdogDetail } from "./format.js";
+import type {
+  CollisionCheck,
+  ContaminationReport,
+  DoctorReport,
+  DoctorRow,
+  StoreStatus,
+  WatchdogState,
+} from "./types.js";
 
 // Presentation logic for the Health tab: turn the two diagnostics plus the
 // provider state into findings that each carry their own fix.
@@ -252,11 +259,13 @@ export function healthFindings(
   contamination: ContaminationReport | undefined,
   store: StoreStatus | undefined,
   collisions?: CollisionCheck,
+  watchdog?: WatchdogState,
 ): Finding[] {
   const all = [
     ...doctorFindings(doctor),
     contaminationFinding(contamination),
     collisionFinding(collisions),
+    watchdogFinding(watchdog),
     zeroLLMFinding(store),
     embeddingFinding(store),
   ].filter((f): f is Finding => f !== null);
@@ -322,4 +331,66 @@ export function healthVerdict(findings: Finding[]): string {
   if (!findings.length) return "Nothing has been checked yet.";
   if (!acting) return "Nothing needs attention — every check passed.";
   return `${acting} of ${findings.length} checks need attention.`;
+}
+
+
+// ── watchdog (PLAN §25) ──────────────────────────────────────────────
+
+// watchdogFinding reports what supervision has had to do.
+//
+// Three readings, and only two of them belong on this page as something to
+// act on. A watchdog that gave up is a daemon that is DOWN and staying down,
+// which is the whole silent failure this feature exists to prevent — so it is
+// critical. Repeated interventions are a warning: the daemon is coming back
+// each time, and that is exactly how a real problem hides. A quiet watchdog
+// is reported as a pass rather than omitted, because "nothing here" and "not
+// checked" must not look the same.
+export function watchdogFinding(w: WatchdogState | undefined): Finding | null {
+  if (!w || !w.watching) return null;
+
+  if (w.gave_up) {
+    return {
+      id: "watchdog-gave-up",
+      level: "critical",
+      title: "The watchdog gave up restarting this daemon",
+      body:
+        (w.gave_up_reason ?? `${w.consecutive_failures} starts in a row failed.`) +
+        " While it is down, every agent keeps working and silently recalls and records nothing.",
+      fix: {
+        label: "Read the daemon log for the failure, fix it, then start the daemon — a healthy start resumes supervision.",
+        where: "Overview",
+      },
+    };
+  }
+
+  if (w.stopped_by_operator) {
+    return {
+      id: "watchdog-paused",
+      level: "info",
+      title: "This daemon was stopped by hand",
+      body: "The watchdog is leaving it down on purpose. Nothing is being captured or recalled while it stays that way.",
+      fix: { label: "Start it from the Overview tab when it should be running again.", where: "Overview" },
+    };
+  }
+
+  if (w.restarts >= WATCHDOG_CHURN) {
+    return {
+      id: "watchdog-churn",
+      level: "warn",
+      title: `This daemon has been restarted ${w.restarts} times`,
+      body:
+        watchdogDetail(w) +
+        (w.hung_restarts >= WATCHDOG_CHURN
+          ? " Repeated hangs are usually the store or the model provider, not the process."
+          : " Each restart loses whatever was in flight, so this is worth a look even though the daemon is up."),
+      fix: { label: "The daemon log covers the restarts — it is reset on each start, so read it soon after one.", where: "Overview" },
+    };
+  }
+
+  return {
+    id: "watchdog-ok",
+    level: "ok",
+    title: w.restarts === 0 ? "Supervised, with nothing to report" : "Supervised",
+    body: watchdogDetail(w),
+  };
 }

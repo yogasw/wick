@@ -246,6 +246,11 @@ type Overview struct {
 	// AutostartLock says whether the autostart control is forced on, and
 	// why — the same instances as UsedBy, with the sentence to show.
 	AutostartLock AutostartLock `json:"autostart_lock"`
+	// Watchdog is what supervision has done to this daemon — restarts,
+	// why, and whether it has given up. On the payload the Overview
+	// already polls, because a watchdog nobody can see is one nobody can
+	// tell apart from a broken one (PLAN §25.3 guard 3).
+	Watchdog      WatchdogState `json:"watchdog"`
 	Store         *StoreStatus  `json:"store,omitempty"`
 	// StoreError explains an unreadable store, and StoreReason names the
 	// cause in one machine-checkable token when wick knows it.
@@ -266,6 +271,7 @@ func statusHandler(be *Backend, c *tool.Ctx) {
 		Resources:     probeResources(be.Mgr.PID(), effectiveDataDir(be, set)),
 		UsedBy:        lock.UsedBy,
 		AutostartLock: lock,
+		Watchdog:      WatchdogStateFor(be.Desc.ID),
 	}
 	if be.Desc.Data != nil {
 		if s, err := be.Desc.Data.StoreStatus(ctx, connFor(be, set)); err != nil {
@@ -296,7 +302,9 @@ func startHandler(be *Backend, c *tool.Ctx) {
 }
 
 func stopHandler(be *Backend, c *tool.Ctx) {
-	be.Mgr.StopProcess()
+	// By an operator, explicitly: the watchdog reads that marker and
+	// leaves the daemon down until someone starts it again (PLAN §25.3).
+	be.Mgr.StopByOperator()
 	c.JSON(http.StatusOK, be.Mgr.Status(c.Context()))
 }
 

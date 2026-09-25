@@ -2251,13 +2251,36 @@ func NewServer() *Server {
 	// must run after tr.mount. "Effectively on" here also covers the derived
 	// lock — a provider instance with the toggle on forces its backend to
 	// start, so a spawn never reaches for a memory server that is down.
-	if agentstool.AgentMemoryEnabled() && agentstool.AnyAgentMemoryAutostart() {
-		bootGate.Register("agentmemory")
-		go func() {
-			defer bootGate.Done("agentmemory")
-			bootGate.SetPhase("starting-agentmemory")
-			agentstool.AgentMemoryAutostart(func(m string) { log.Warn().Msg(m) })
-		}()
+	if agentstool.AgentMemoryEnabled() {
+		// The handover signal goes in before anything supervises: during
+		// a graceful upgrade the successor adopts the running daemon, so
+		// this process must stop supervising rather than fight a window
+		// it no longer owns (PLAN §25.3 guard 5).
+		agentstool.SetAgentMemoryUpgradeWindow(func() bool {
+			return upgrade.HandingOver() || upgrade.Draining()
+		})
+		if agentstool.AnyAgentMemoryAutostart() {
+			bootGate.Register("agentmemory")
+			go func() {
+				defer bootGate.Done("agentmemory")
+				bootGate.SetPhase("starting-agentmemory")
+				agentstool.AgentMemoryAutostart(func(m string) { log.Warn().Msg(m) })
+				// Supervision starts AFTER the first start, not
+				// beside it: a watchdog racing the autostart would
+				// see a daemon that is not up yet and count wick's
+				// own boot as a failure.
+				agentstool.AgentMemoryStartWatchdog()
+			}()
+		} else {
+			// Nothing to start today — but the signal that decides
+			// that is derived, and a provider instance toggled on an
+			// hour from now flips it without a restart. The loop
+			// costs one config read per backend per 30s while it has
+			// nothing to watch, which is the price of supervision
+			// existing on a host that did not happen to have a
+			// daemon at boot (PLAN §25.1).
+			agentstool.AgentMemoryStartWatchdog()
+		}
 	}
 
 	tagsSvc := tags.NewService(db)
@@ -3454,6 +3477,12 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		// Agent Memory daemons are wick's children too. The graceful-upgrade
 		// path never gets here (drained short-circuits above), so a handover
 		// leaves the daemon running for the successor to adopt.
+		//
+		// Supervision stops first, and waits for the pass in flight: a
+		// watchdog still running here would start a daemon a moment after
+		// this line killed it, and the host would be left holding an
+		// orphan (PLAN §25.3 guard 4).
+		agentstool.AgentMemoryStopWatchdog()
 		agentstool.AgentMemoryStopAll()
 		sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

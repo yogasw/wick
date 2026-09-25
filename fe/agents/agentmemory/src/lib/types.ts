@@ -204,6 +204,32 @@ export type BackendInfo = {
 // `daemon` and `store` are deliberately separate and can disagree — a daemon
 // can be up with an empty store, and a store can be readable while the daemon
 // is down — so a failure to read one never blanks the other (PLAN §13.5).
+// WatchdogState is what supervision has DONE to this daemon (PLAN §25).
+//
+// It is a record of events, not just a state: a watchdog whose only output is
+// "everything is fine" cannot be told apart from one that is not running, and
+// a daemon quietly restarted forty times a day is a bug somebody has to see.
+export type WatchdogState = {
+  // watching = this backend is supervised, which is the effective-autostart
+  // signal and nothing else. There is no separate watchdog switch.
+  watching: boolean;
+  restarts: number;
+  // hung_restarts is the subset that were wedged rather than dead — a daemon
+  // that keeps hanging is a different bug from one that keeps exiting.
+  hung_restarts: number;
+  last_reason?: "dead" | "hung" | "off";
+  last_restart_ms?: number;
+  last_error?: string;
+  consecutive_failures: number;
+  next_attempt_ms?: number;
+  // gave_up: the retrying has stopped on purpose, with the reason. Stated
+  // rather than silently continued — this host has 2 vCPU.
+  gave_up: boolean;
+  gave_up_reason?: string;
+  // stopped_by_operator is why an otherwise-supervised daemon is left down.
+  stopped_by_operator: boolean;
+};
+
 export type Overview = {
   backend: BackendInfo;
   daemon: Status;
@@ -211,6 +237,7 @@ export type Overview = {
   resources: Resources;
   used_by?: InstanceRef[] | null;
   autostart_lock: AutostartLock;
+  watchdog?: WatchdogState;
   store?: StoreStatus;
   // store_error explains an unreadable store; store_reason names the cause in
   // one machine-checkable token — see DataReason.
