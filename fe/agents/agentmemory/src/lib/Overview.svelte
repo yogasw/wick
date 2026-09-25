@@ -29,12 +29,18 @@
     // canManage false = a viewer: the daemon controls are not rendered at
     // all, and one line says who may drive them (PLAN §23.3).
     canManage: boolean;
+    // installMsg is the last install's log or error, kept on the card;
+    // installFailed decides whether it reads as an outcome or a problem.
+    installMsg: string;
+    installFailed: boolean;
+    onInstall: () => void;
     onStart: () => void;
     onStop: () => void;
     onRestart: () => void;
     onTest: () => void;
   };
-  let { ov, loading, busy, test, canManage, onStart, onStop, onRestart, onTest }: Props = $props();
+  let { ov, loading, busy, test, canManage, installMsg, installFailed, onInstall, onStart, onStop, onRestart, onTest }: Props =
+    $props();
 
   // now ticks once a second so the uptime reads as a clock rather than as a
   // value frozen at the last poll.
@@ -149,20 +155,50 @@
     </div>
 
     {#if daemon?.state === "not-installed"}
-      <!-- Same fact, addressed to whoever can act on it: an admin is told
-           what to do, a viewer is told who does it. Telling a viewer to
-           "press Start" points at a button that is not on their screen. -->
-      <p class="border-t border-white-300 dark:border-navy-600 px-5 py-3 text-xs text-black-800 dark:text-black-600">
-        The backend binary is not on PATH. wick does not install it yet —
-        {#if canManage}put{:else}an admin has to put{/if}
-        <code class="font-mono text-black-900 dark:text-white-100">{ov?.backend.name ?? "the backend"}</code>
-        on PATH{#if canManage} yourself{/if}{#if ov?.backend.github_url}&nbsp;(<a
-            href={ov.backend.github_url}
-            target="_blank"
-            rel="noreferrer"
-            class="text-green-600 hover:text-green-500 dark:text-green-300">upstream repo</a
-          >){/if}{#if canManage}, then press Start.{:else} and start it.{/if}
-      </p>
+      <!-- The same fact, addressed to whoever can act on it: an admin gets
+           the button, a viewer gets the sentence naming who has it. Telling
+           a viewer to "press Install" points at a control that is not on
+           their screen. -->
+      <div class="border-t border-white-300 dark:border-navy-600 px-5 py-3" data-testid="install-block">
+        <p class="text-xs leading-relaxed text-black-800 dark:text-black-600">
+          <code class="font-mono text-black-900 dark:text-white-100">{ov?.backend.name ?? "The backend"}</code>
+          is not installed on this host. wick can fetch it from the project's own release and keep it in wick's
+          directory — no PATH changes and nothing installed system-wide.{#if ov?.backend.github_url}&nbsp;(<a
+              href={ov.backend.github_url}
+              target="_blank"
+              rel="noreferrer"
+              class="text-green-600 hover:text-green-500 dark:text-green-300">upstream repo</a
+            >){/if}
+        </p>
+        {#if canManage}
+          <div class="mt-3 flex flex-wrap items-center gap-2">
+            <Button variant="primary" size="md" disabled={busy} onclick={onInstall}>
+              {busy ? "Installing…" : `Install ${ov?.backend.name ?? "it"}`}
+            </Button>
+            <!-- The size is worth saying: on a slow link this button looks
+                 stuck for a minute otherwise. -->
+            <span class="text-[0.6875rem] text-black-700 dark:text-black-600">
+              Downloads ~15 MB and verifies its published checksum.
+            </span>
+          </div>
+        {:else}
+          <p class="mt-2 text-xs leading-relaxed text-black-700 dark:text-black-600">{MANAGE_ADMIN_ONLY}</p>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- What the install actually did, kept until the next one: the log
+         names the asset, the checksum and the path, and a failure is the
+         thing an operator needs verbatim rather than summarised. -->
+    {#if installMsg}
+      <div
+        class={`border-t border-white-300 dark:border-navy-600 px-5 py-3 text-xs leading-relaxed ${
+          installFailed ? "text-rose-700 dark:text-rose-300" : "text-black-800 dark:text-black-600"
+        }`}
+        data-testid="install-result"
+      >
+        <p class="whitespace-pre-wrap font-mono">{installMsg}</p>
+      </div>
     {/if}
 
     {#if test}

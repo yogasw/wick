@@ -185,30 +185,60 @@ func (m *Manager) SetDataDir(dir string) {
 
 // ── install ──────────────────────────────────────────────────────────
 
-// Install puts the backend's binary on the machine.
+// Install puts the backend's binary on the machine, into a directory wick
+// owns — no sudo, no /usr/bin, and no change to anybody's PATH. The path is
+// then what every exec path resolves to (ResolveBackendBin), which is the
+// whole point: before this, a daemon could be answering on HTTP while every
+// CLI-backed read said "executable file not found in $PATH".
 //
-// TODO: unimplemented. ai-memory ships as a per-arch GitHub release asset
-// (InstallGitHubRelease + ReleaseRepo), so this needs asset selection for the
-// host's OS/arch, a checksum check, and an unpack into a wick-owned bin dir —
-// none of which is written yet. Until then the user installs the binary
-// themselves and wick only detects it on PATH (see Installed).
+// A backend wick has no install route for answers ErrInstallNotSupported —
+// a different thing from a failed install, and the panel says so differently.
 func (m *Manager) Install(ctx context.Context) (string, error) {
-	return "", fmt.Errorf("agentmemory: automatic install of %s is not implemented yet — put %q on PATH manually (%s)",
-		m.desc.DisplayName, m.desc.BinName, m.desc.GitHubURL)
+	kind := m.desc.InstallKind
+	if kind == "" {
+		kind = InstallManual
+	}
+	if kind != InstallGitHubRelease || m.desc.ReleaseRepo == "" {
+		return "", fmt.Errorf("%w: put %q on PATH yourself (%s)", ErrInstallNotSupported, m.desc.BinName, m.desc.GitHubURL)
+	}
+	ri := releaseInstall{
+		repo:    m.desc.ReleaseRepo,
+		bin:     m.desc.BinName,
+		dest:    BinDir(),
+		goos:    hostGOOS(),
+		goarch:  hostGOARCH(),
+		api:     githubAPIBase,
+		logLine: func(l string) { m.log.Info().Msg("agentmemory: install: " + l) },
+	}
+	out, err := ri.run(ctx)
+	if err != nil {
+		m.log.Error().Err(err).Msg("agentmemory: install failed")
+		return out, err
+	}
+	// The version cache is resolved from the binary; a fresh install must
+	// not be reported under the previous answer ("" = not installed).
+	m.verMu.Lock()
+	m.verCached, m.verAt = "", time.Time{}
+	m.verMu.Unlock()
+	return out, nil
 }
 
 // Installed reports whether the backend's binary resolves on PATH.
 func (m *Manager) Installed() bool { return m.BinPath() != "" }
 
-// BinPath is the absolute path of the backend's binary, "" when it does not
-// resolve on PATH. Spawn wiring needs the path and not just the yes/no of
-// Installed: a capture hook is a command the AGENT's shell runs, and a bare
-// name there would resolve against the agent's PATH rather than wick's.
+// BinPath is the absolute path of the backend's binary, "" when it resolves
+// nowhere. Spawn wiring needs the path and not just the yes/no of Installed:
+// a capture hook is a command the AGENT's shell runs, and a bare name there
+// would resolve against the agent's PATH rather than wick's.
+//
+// The resolution itself lives in ResolveBackendBin — wick's own installed
+// copy first, PATH second — so a binary wick downloaded is found by every
+// exec path without anyone editing a shell profile (see install.go).
 func (m *Manager) BinPath() string {
 	if m.desc.BinName == "" {
 		return ""
 	}
-	p, err := safeexec.ResolveBin(m.desc.BinName)
+	p, err := ResolveBackendBin(m.desc.BinName)
 	if err != nil {
 		return ""
 	}
@@ -236,8 +266,8 @@ func (m *Manager) version(ctx context.Context) string {
 // unusual format from some other backend yields that backend's last token
 // rather than an error — a wrong-looking version beats an empty panel.
 func (m *Manager) installedVersion(ctx context.Context) string {
-	bin, err := safeexec.ResolveBin(m.desc.BinName)
-	if err != nil {
+	bin := m.BinPath()
+	if bin == "" {
 		return ""
 	}
 	out, err := safeexec.CommandContext(ctx, bin, "--version").CombinedOutput()
@@ -281,9 +311,9 @@ func (m *Manager) start() error {
 	if m.desc.Launch == nil {
 		return fmt.Errorf("agentmemory: %s has no launch command", m.desc.ID)
 	}
-	bin, err := safeexec.ResolveBin(m.desc.BinName)
-	if err != nil {
-		return fmt.Errorf("%s not installed: %w", m.desc.DisplayName, err)
+	bin := m.BinPath()
+	if bin == "" {
+		return fmt.Errorf("%s is not installed — install it from the panel, or put %q on PATH", m.desc.DisplayName, m.desc.BinName)
 	}
 	port := allocPort(m.PrefPort())
 	m.port.Store(int32(port))

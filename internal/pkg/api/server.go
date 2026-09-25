@@ -1077,6 +1077,12 @@ func NewServer() *Server {
 	// Health tab checks for it — from wick's own project list, since the
 	// backend cannot see an overlap that has not produced a session yet
 	// (PLAN §14.3, §18.1).
+	// Where wick puts a backend binary it installed: next to the agent-gate
+	// binary, under the agents base dir. Naming it is what makes the panel's
+	// Install button possible AND what makes the installed copy findable —
+	// every exec path resolves through here before falling back to PATH, so
+	// nobody has to edit a shell profile (install.go).
+	agentmemory.SetBinDir(filepath.Join(agentsLayout.BaseDir, "_agentmemory-bin"))
 	agentmemory.SetMarkerWorkspace(appname.Resolve())
 	agentmemory.SetProjectLister(func() []agentmemory.ProjectFolder {
 		reg := agentsMgr.Registry()

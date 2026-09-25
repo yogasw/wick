@@ -45,9 +45,13 @@ type source struct {
 // startup log line to stderr and the JSON document to stdout (verified), so
 // mixing the two would put a log line in front of every parse.
 func execCLI(ctx context.Context, dir string, env, args []string) ([]byte, error) {
-	bin, err := safeexec.ResolveBin(binName)
+	// Resolved by the core, not by PATH directly: wick's own installed copy
+	// comes first, which is what stops the CLI-backed reads from reporting
+	// "executable file not found in $PATH" while the daemon answers happily
+	// over HTTP.
+	bin, err := agentmemory.ResolveBackendBin(binName)
 	if err != nil {
-		return nil, fmt.Errorf("%s not installed: %w", binName, err)
+		return nil, fmt.Errorf("%s is not installed — install it from the Agent Memory panel: %w", binName, err)
 	}
 	cmd := safeexec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir

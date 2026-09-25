@@ -21,6 +21,9 @@ const overviewProps = {
   loading: false,
   busy: false,
   test: null,
+  installMsg: "",
+  installFailed: false,
+  onInstall: noop,
   onStart: noop,
   onStop: noop,
   onRestart: noop,
@@ -196,5 +199,75 @@ describe("Projects — opened for one wick project (PLAN §22)", () => {
     render(Projects, { props: { ...projectsProps, canManage: true, scopeError: "no wick project with id nope" } });
     expect(screen.queryByTestId("scope-card")).toBeNull();
     expect(screen.getByText(/could not be located/i)).toBeDefined();
+  });
+});
+
+/* Installing the backend (PLAN §12.4).
+
+   The control only exists for someone who can press it, and the sentence
+   that replaces it names who can — the same rule as every other managing
+   control on this page. */
+describe("Overview — installing the backend", () => {
+  const notInstalled = {
+    backend: { id: "ai-memory", name: "ai-memory", blurb: "", has_data: true, github_url: "https://example.invalid/x" },
+    daemon: {
+      installed: false,
+      version: "",
+      running: false,
+      managed: false,
+      state: "not-installed",
+      pref_port: 49374,
+      bound_port: 49374,
+      base_url: "http://127.0.0.1:49374",
+    },
+    resources: { rss_bytes: 0, rss_known: false, data_dir_bytes: 0, data_dir_known: false },
+    autostart_lock: { locked: false },
+  } as never;
+
+  test("an admin gets the Install button, and is told what it will do", () => {
+    render(Overview, { props: { ...overviewProps, ov: notInstalled, canManage: true } });
+    // Found by its label, the way the other buttons on this card are: the
+    // shared Button does not forward test ids.
+    const btn = screen.getByRole("button", { name: /^Install/ });
+    expect(btn.textContent).toContain("Install");
+    expect(screen.getByTestId("install-block").textContent).toMatch(/verifies its published checksum/i);
+    // No PATH homework: that instruction is what this feature replaced.
+    expect(screen.getByTestId("install-block").textContent).not.toMatch(/put .* on PATH/i);
+  });
+
+  test("a viewer gets no button, and is told who installs it", () => {
+    render(Overview, { props: { ...overviewProps, ov: notInstalled, canManage: false } });
+    expect(screen.queryByRole("button", { name: /^Install/ })).toBeNull();
+    expect(screen.getByTestId("install-block").textContent).toMatch(/restricted to admins/i);
+  });
+
+  test("the button says what it is doing while it runs", () => {
+    render(Overview, { props: { ...overviewProps, ov: notInstalled, canManage: true, busy: true } });
+    const btn = screen.getByRole("button", { name: /Installing/ }) as HTMLButtonElement;
+    expect(btn.textContent).toContain("Installing…");
+    expect(btn.disabled).toBe(true);
+  });
+
+  test("an installed backend offers no install at all", () => {
+    const installed = {
+      ...(notInstalled as object),
+      daemon: { ...(notInstalled as { daemon: object }).daemon, installed: true, state: "stopped", version: "2.4.0" },
+    } as never;
+    render(Overview, { props: { ...overviewProps, ov: installed, canManage: true } });
+    expect(screen.queryByTestId("install-block")).toBeNull();
+  });
+
+  test("the server's log is shown verbatim, and a failure reads as one", () => {
+    const log = "downloading ai-memory-linux-x86_64.tar.gz (15.2 MiB) from v2.4.0";
+    render(Overview, { props: { ...overviewProps, ov: notInstalled, canManage: true, installMsg: log } });
+    expect(screen.getByTestId("install-result").textContent).toContain(log);
+    expect(screen.getByTestId("install-result").className).not.toContain("rose");
+
+    render(Overview, {
+      props: { ...overviewProps, ov: notInstalled, canManage: true, installMsg: "checksum mismatch", installFailed: true },
+    });
+    const failed = screen.getAllByTestId("install-result").pop() as HTMLElement;
+    expect(failed.className).toContain("rose");
+    expect(failed.className).toContain("dark:");
   });
 });

@@ -25,6 +25,7 @@
     fetchProjects,
     fetchProjectScope,
     fetchSettings,
+    install,
     previewBackfill,
     readPage,
     restart,
@@ -155,6 +156,11 @@
   let tab = $state<Tab>(scopedProjectID ? "projects" : "overview");
   let test = $state<TestResult | null>(null);
   let confirmStop = $state(false);
+  // The last install's log, kept on the Overview card. A failure is shown
+  // verbatim: the server's log names the asset, the checksum and the path,
+  // and summarising it is how a fixable error becomes a mystery.
+  let installMsg = $state("");
+  let installFailed = $state(false);
 
   // Projects tab state. `projects` holds the whole response, failure and all
   // — the reason a read came back empty is as much a result as the rows.
@@ -302,6 +308,31 @@
   function doStop(): void {
     confirmStop = false;
     void act(() => run(stop(base, activeId)), "Stop failed", `${active?.name ?? "The daemon"} stopped.`);
+  }
+
+  // onInstall downloads the backend's binary into wick's own directory. It
+  // is not a "start": the daemon stays exactly as it was, which matters on a
+  // host where one is already running that wick did not spawn — the server
+  // says so in `note` and that sentence is shown rather than swallowed.
+  async function onInstall(): Promise<void> {
+    const id = activeId;
+    if (!id) return;
+    busy = true;
+    installMsg = "";
+    installFailed = false;
+    try {
+      const res = await run(install(base, id));
+      installFailed = false;
+      installMsg = [res.output, res.note].filter(Boolean).join("\n").trim();
+      toastOk("Installed", res.path ? `Installed at ${res.path}.` : "The backend is installed.");
+    } catch (e) {
+      installFailed = true;
+      installMsg = errText(e);
+      toastError("Install failed", errText(e));
+    } finally {
+      busy = false;
+      await refresh();
+    }
   }
 
   async function onTest(): Promise<void> {
@@ -725,7 +756,20 @@
         No Agent Memory backend is registered on this host.
       </div>
     {:else if tab === "overview"}
-      <OverviewTab {ov} {loading} {busy} {test} {canManage} {onStart} {onRestart} {onTest} onStop={() => (confirmStop = true)} />
+      <OverviewTab
+        {ov}
+        {loading}
+        {busy}
+        {test}
+        {canManage}
+        {installMsg}
+        {installFailed}
+        {onInstall}
+        {onStart}
+        {onRestart}
+        {onTest}
+        onStop={() => (confirmStop = true)}
+      />
     {:else if tab === "projects"}
       <ProjectsTab
         res={projects}

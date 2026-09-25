@@ -28,6 +28,11 @@ const (
 	compactTimeout = 10 * time.Minute
 	// startTimeout bounds waiting for a daemon to answer its health path.
 	startTimeout = 45 * time.Second
+	// installTimeout bounds a whole install. The asset is ~15 MiB and the
+	// host it lands on may be on a slow link, so this is generous where the
+	// start timeout is not — the same five minutes airouter allows its npm
+	// install.
+	installTimeout = 5 * time.Minute
 	// projectsTimeout covers the list AND one briefing per project. The
 	// briefings run concurrently, so this grows with the slowest call and
 	// the concurrency limit, not with the project count.
@@ -319,15 +324,34 @@ func restartHandler(be *Backend, c *tool.Ctx) {
 	c.JSON(http.StatusOK, be.Mgr.Status(ctx))
 }
 
+// installHandler downloads the backend's binary into wick's own bin dir.
+//
+// Three outcomes, kept apart because the panel says something different for
+// each: a backend wick cannot install at all (501 — not a failure, a fact
+// about that backend), an install that went wrong (502, carrying the log so
+// the reason is visible), and a success.
 func installHandler(be *Backend, c *tool.Ctx) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Context()), startTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Context()), installTimeout)
 	defer cancel()
 	out, err := be.Mgr.Install(ctx)
 	if err != nil {
-		c.JSON(http.StatusNotImplemented, map[string]string{"error": err.Error()})
+		status := http.StatusBadGateway
+		if errors.Is(err, ErrInstallNotSupported) {
+			status = http.StatusNotImplemented
+		}
+		c.JSON(status, map[string]string{"error": err.Error(), "output": out})
 		return
 	}
-	c.JSON(http.StatusOK, map[string]string{"output": out})
+	res := map[string]string{"output": out, "path": be.Mgr.BinPath(), "version": be.Mgr.Status(ctx).Version}
+	// A daemon somebody else started is the state this host was actually in
+	// (PLAN §25 wired the watchdog around it). Installing does not touch it,
+	// and saying so is better than letting the operator press Start and get
+	// a SECOND daemon on another port, reading a different store.
+	if !be.Mgr.spawnedHere() && be.Mgr.probeHealth() {
+		res["note"] = "An " + be.Desc.DisplayName + " daemon that wick did not start is already answering on " + be.Mgr.BaseURL() +
+			". The install did not touch it. Starting one from here would bind a different port and, unless both use the same store location, read a different store — stop that daemon first if wick should own it."
+	}
+	c.JSON(http.StatusOK, res)
 }
 
 // testHandler is the "Test connection" button: probe the daemon's health path

@@ -63,10 +63,25 @@ export const stop = (base: string, id: string) =>
 export const restart = (base: string, id: string) =>
   apiPostE<Status>(`${base}/agentmemory/${id}/restart`);
 
-// install is wired but the backend answers 501 today — ai-memory is a GitHub
-// release asset wick does not fetch yet, so the user puts the binary on PATH.
+// InstallResult is what an install answers with.
+//
+// `output` is the server's own log — asset, checksum, destination — shown
+// verbatim because it is what makes a failure diagnosable. `note` is present
+// only when something needed saying about the host: today that is a daemon
+// already running which wick did not start, and which the install left alone.
+export type InstallResult = {
+  output: string;
+  path?: string;
+  version?: string;
+  note?: string;
+};
+
+// install downloads the backend's release asset into wick's own bin dir and
+// verifies its published checksum. A backend wick cannot install answers 501
+// and a failed install 502 — both surface here as a rejected Effect carrying
+// the server's message.
 export const install = (base: string, id: string) =>
-  apiPostE<{ output: string }>(`${base}/agentmemory/${id}/install`);
+  apiPostE<InstallResult>(`${base}/agentmemory/${id}/install`);
 
 // testConnection probes the daemon's health path and, when it answers, reads
 // the store — so a green result carries a version and counts rather than a
