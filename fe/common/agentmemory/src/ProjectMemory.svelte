@@ -13,12 +13,19 @@
      a memory bucket lives next to the marker writer that pins it — two
      sources of truth for "which bucket" is the failure §22.2 exists to
      prevent. */
-  import { Button, Select, TextInput } from "@wick-fe/common-ui";
+  import { Button, ConfirmDialog, Select, TextInput } from "@wick-fe/common-ui";
   import Section from "./Section.svelte";
   import BlockedState from "./BlockedState.svelte";
   import PageEditor from "./PageEditor.svelte";
   import { blockedBy, MANAGE_ADMIN_ONLY } from "./format.js";
-  import { BRIEFING_UNAVAILABLE, scopeCaveat, scopeOrigin } from "./projects.js";
+  import {
+    backfillCapWarning,
+    backfillConfirmBody,
+    backfillSummary,
+    BRIEFING_UNAVAILABLE,
+    scopeCaveat,
+    scopeOrigin,
+  } from "./projects.js";
   import {
     cardAge,
     cardsFrom,
@@ -36,6 +43,8 @@
   } from "./projectview.js";
   import type { PageCard } from "./projectview.js";
   import type {
+    BackfillReport,
+    BackfillRequestEcho,
     Checkpoint,
     Page,
     ProjectBriefing,
@@ -63,6 +72,16 @@
     policy?: ProjectPolicy | null;
     policyBusy?: boolean;
     onPolicy?: (value: ProjectPolicy["value"]) => void;
+    /* Importing the history that predates capture. It is the answer to an
+       empty project: the sessions are still on disk, they were simply never
+       captured. Preview writes nothing; Import does, which is why it is
+       confirmed and admin-only. Optional so a surface that does not offer
+       the import renders without it. */
+    backfill?: BackfillReport | null;
+    backfillReq?: BackfillRequestEcho | null;
+    backfillError?: string;
+    onPreviewBackfill?: () => void;
+    onRunBackfill?: () => void;
     /* The open page and its editor state, owned by App so a re-render never
        drops a draft. */
     openPath: string;
@@ -107,6 +126,11 @@
     policy = null,
     policyBusy = false,
     onPolicy,
+    backfill = null,
+    backfillReq = null,
+    backfillError = "",
+    onPreviewBackfill,
+    onRunBackfill,
     openPath,
     page,
     pageLoading,
@@ -140,6 +164,13 @@
 
   let newPath = $state("");
   let newPathTouched = $state(false);
+  let confirmImport = $state(false);
+
+  // canImport is false on a surface that did not wire the import — the
+  // section is then absent rather than present and dead.
+  const canImport = $derived(Boolean(onPreviewBackfill && onRunBackfill));
+  const capWarning = $derived(backfillCapWarning(backfill ?? undefined, backfillReq));
+  const importScope = $derived(scope ? `${scope.workspace}/${scope.project}` : "");
 
   const heading = $derived(scopeHeading(scope));
   const caveat = $derived(scope ? scopeCaveat(scope.source) : null);
@@ -162,6 +193,11 @@
   // A page the store has never held is still an empty project, not a broken
   // one: the difference decides whether the empty state teaches or apologises.
   const empty = $derived(!loading && cards.length === 0 && extraCards.length === 0);
+
+  function confirmAndImport(): void {
+    confirmImport = false;
+    onRunBackfill?.();
+  }
 
   function addPage(): void {
     newPathTouched = true;
@@ -412,6 +448,11 @@
             Pages appear as agents work in this project. You can also write the first one yourself — a fact worth
             remembering, a rule about this codebase — and agents will recall it from their next session.
           </p>
+          {#if canImport}
+            <p class="mx-auto mt-1.5 max-w-md text-xs leading-relaxed text-black-700 dark:text-black-600">
+              Sessions that ran here before capture was switched on are still on disk — import them below.
+            </p>
+          {/if}
         </div>
       {:else}
         <ul class="divide-y divide-white-300 dark:divide-navy-600" data-testid="page-cards">
@@ -474,6 +515,49 @@
       {/if}
     </Section>
 
+    {#if canImport}
+      <!-- Import: the same backfill the global panel runs, scoped to THIS
+           project's bucket. It is here because this is where an empty project
+           is discovered — sending someone to the store-wide panel to fix a
+           project-shaped problem is how the two surfaces get confused. -->
+      <Section
+        title="Import earlier sessions"
+        scope="this project only"
+        note="Bring in this project's local harness history — the sessions that ran before capture was switched on. Preview writes nothing; it reports exactly what an import would take."
+      >
+        <div class="px-5 py-4">
+          {#if canManage}
+            <div class="flex flex-wrap items-center gap-2">
+              <Button variant="secondary" size="sm" disabled={busy || !scope} onclick={() => onPreviewBackfill?.()}>
+                Preview import
+              </Button>
+              <Button variant="danger" size="sm" disabled={busy || !scope} onclick={() => (confirmImport = true)}>
+                Import
+              </Button>
+            </div>
+          {:else}
+            <p class="text-xs leading-relaxed text-black-700 dark:text-black-600">{MANAGE_ADMIN_ONLY}</p>
+          {/if}
+
+          {#if backfillError}
+            <p class="mt-3 text-xs leading-relaxed text-rose-700 dark:text-rose-300" data-testid="backfill-error">
+              {backfillError}
+            </p>
+          {:else if backfill}
+            <p class="mt-3 text-xs leading-relaxed text-black-900 dark:text-white-100" data-testid="backfill-summary">
+              <span class="font-medium">{backfill.dry_run ? "Preview" : "Imported"}:</span>
+              {backfillSummary(backfill)}
+            </p>
+            {#if capWarning}
+              <p class="mt-1 text-xs leading-relaxed text-rose-700 dark:text-rose-300" data-testid="backfill-cap">
+                {capWarning}
+              </p>
+            {/if}
+          {/if}
+        </div>
+      </Section>
+    {/if}
+
     {#if openPath}
       <PageEditor
         path={openPath}
@@ -502,3 +586,13 @@
     {/if}
   {/if}
 </div>
+
+<ConfirmDialog
+  open={confirmImport}
+  title="Import this project's history?"
+  body={importScope ? backfillConfirmBody(importScope, false) : ""}
+  confirmLabel="Import"
+  destructive={true}
+  onConfirm={confirmAndImport}
+  onCancel={() => (confirmImport = false)}
+/>

@@ -24,13 +24,17 @@
     fetchProjects,
     fetchProjectPolicy,
     fetchProjectScope,
+    previewBackfill,
     ProjectMemory,
+    runBackfill,
     saveProjectPolicy,
     readPage,
     restorePage,
     searchWiki,
     writePage,
     type BackendInfo,
+    type BackfillReport,
+    type BackfillRequestEcho,
     type Checkpoint,
     type Page,
     type ProjectPolicy,
@@ -78,6 +82,13 @@
   let saveFailed = $state(false);
   let checkpoints = $state<Checkpoint[] | null>(null);
   let checkpointsLoading = $state(false);
+
+  // The last import's outcome, kept beside the request the server echoed
+  // back: the cap warning is only honest when it compares what was asked for
+  // with what was taken.
+  let backfill = $state<BackfillReport | null>(null);
+  let backfillReq = $state<BackfillRequestEcho | null>(null);
+  let backfillError = $state("");
 
   // Whether this project uses Agent Memory at all. Read alongside the scope
   // because it decides whether anything below it means anything.
@@ -290,6 +301,39 @@
     }
   }
 
+  // doBackfill runs one import against THIS project's bucket. The scope is
+  // the server's own resolution, never a name built here (PLAN §22.2), so a
+  // preview and a real run can never act on different buckets.
+  async function doBackfill(dry: boolean): Promise<void> {
+    if (!backendID || !scope) return;
+    busy = true;
+    backfillError = "";
+    backfill = null;
+    backfillReq = null;
+    try {
+      const res = await run(
+        dry ? previewBackfill(base, backendID, scoped) : runBackfill(base, backendID, scoped),
+      );
+      if (res.error) {
+        backfillError = res.hint ? `${res.error} — ${res.hint}` : res.error;
+        return;
+      }
+      backfill = res.report ?? null;
+      backfillReq = res.request ?? null;
+      if (!dry) {
+        toastOk("Imported", "This project's earlier sessions were imported.");
+        // The cards are what the import was for, so they are re-read rather
+        // than left showing the empty state that prompted it.
+        await loadProjects();
+      }
+    } catch (e) {
+      backfillError = errText(e);
+      if (!dry) toastError("Could not import this project's history", errText(e));
+    } finally {
+      busy = false;
+    }
+  }
+
   async function setPolicy(value: ProjectPolicy["value"]): Promise<void> {
     policyBusy = true;
     try {
@@ -321,6 +365,11 @@
   {policy}
   {policyBusy}
   onPolicy={(v) => void setPolicy(v)}
+  {backfill}
+  {backfillReq}
+  {backfillError}
+  onPreviewBackfill={() => void doBackfill(true)}
+  onRunBackfill={() => void doBackfill(false)}
   {openPath}
   {page}
   {pageLoading}

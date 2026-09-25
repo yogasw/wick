@@ -419,3 +419,41 @@ export function errText(e: unknown): string {
   s = s.replace(/\s+at\s+https?:\/\/\S+$/, "");
   return s.trim() || "The request failed and said nothing about why.";
 }
+
+// splitWarnings separates the two kinds the Overview renders differently.
+// They are not the same message in two colours: an alert is something acting
+// wrongly right now (the store cannot be read, events are piling up), while a
+// note is a standing fact about how this store is configured — true for weeks,
+// and true again on the next poll. Stacking three permanent notes as full
+// cards pushed the daemon itself below the fold, which is the one thing the
+// tab exists to show.
+export function splitWarnings(ws: Warning[]): { alerts: Warning[]; notes: Warning[] } {
+  return {
+    alerts: ws.filter((w) => w.level === "warn"),
+    notes: ws.filter((w) => w.level !== "warn"),
+  };
+}
+
+// noteSummary is the one-line version shown while a note is collapsed: the
+// first sentence of the body, which is written to carry the consequence on
+// its own. Falls back to the whole body when there is no sentence break.
+export function noteSummary(body: string): string {
+  const s = body.trim();
+  const cut = s.search(/\.\s/);
+  return cut > 0 ? s.slice(0, cut + 1) : s;
+}
+
+// loopbackNote explains an address that only answers where wick runs. The
+// daemon binds loopback on purpose, so the base URL printed on the card is
+// true and useless at the same time: pasted into a browser on a laptop it
+// reaches THAT machine, and the error which comes back looks like the daemon
+// is broken. Empty for a non-loopback bind, where the address means what it
+// appears to mean.
+export function loopbackNote(baseURL: string | undefined): string {
+  const u = (baseURL ?? "").trim();
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/i.test(u)) return "";
+  return (
+    "Answers only on the machine wick runs on — opening it in a browser elsewhere reaches that machine, not the daemon. " +
+    "This panel is the way in; scripts outside wick go through Settings → External access."
+  );
+}

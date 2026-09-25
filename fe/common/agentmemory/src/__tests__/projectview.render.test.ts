@@ -136,6 +136,75 @@ describe("ProjectView — about ONE project", () => {
   });
 });
 
+/* Importing the history that predates capture, from the project's own tab.
+
+   This is where an empty project is discovered, so this is where the fix has
+   to be reachable — and the fix writes into the store, so the dangerous half
+   is pinned: Preview never asks, Import always does, and a viewer sees
+   neither button. */
+describe("ProjectView — importing earlier sessions", () => {
+  const withImport = (over: object = {}) => ({
+    ...(viewProps as object),
+    canManage: true,
+    onPreviewBackfill: noop,
+    onRunBackfill: noop,
+    ...over,
+  });
+
+  test("a preview runs straight away — it writes nothing", async () => {
+    const onPreviewBackfill = vi.fn();
+    render(ProjectMemory, { props: withImport({ onPreviewBackfill }) as never });
+    await fireEvent.click(screen.getByText("Preview import"));
+    expect(onPreviewBackfill).toHaveBeenCalledTimes(1);
+  });
+
+  test("an import is confirmed first, and the confirmation names the cost", async () => {
+    const onRunBackfill = vi.fn();
+    render(ProjectMemory, { props: withImport({ onRunBackfill }) as never });
+
+    // The section's own button is the first "Import" on the page; the
+    // dialog's is the one that appears after it.
+    await fireEvent.click(screen.getAllByText("Import")[0]);
+    expect(onRunBackfill).not.toHaveBeenCalled();
+    // The question names the bucket being written to, and what the run costs.
+    expect(screen.getByText(/into wick\/kasir-8c28230d/)).toBeDefined();
+    expect(screen.getByText(/nothing is duplicated/)).toBeDefined();
+
+    const buttons = screen.getAllByText("Import");
+    await fireEvent.click(buttons[buttons.length - 1]);
+    expect(onRunBackfill).toHaveBeenCalledTimes(1);
+  });
+
+  test("a viewer gets neither button", () => {
+    render(ProjectMemory, { props: withImport({ canManage: false }) as never });
+    expect(screen.queryByText("Preview import")).toBeNull();
+    expect(screen.queryAllByText("Import")).toEqual([]);
+  });
+
+  test("a surface that did not wire the import has no dead section", () => {
+    render(ProjectMemory, { props: { ...(viewProps as object), canManage: true } });
+    expect(screen.queryByText("Import earlier sessions")).toBeNull();
+    expect(screen.queryByText("Preview import")).toBeNull();
+  });
+
+  test("the outcome of a run is shown where it was started", () => {
+    render(ProjectMemory, {
+      props: withImport({
+        backfill: {
+          selected: 4,
+          imported_sessions: 4,
+          imported_events: 31,
+          skipped_for_cap: 0,
+          failed_sessions: 0,
+          skipped_non_empty: false,
+          dry_run: false,
+        },
+      }) as never,
+    });
+    expect(screen.getByTestId("backfill-summary").textContent).toMatch(/Imported/);
+  });
+});
+
 const PAGE = { path: "pages/kasir_prod_db.md", body: "# kasir_prod_db\n\nRead replica.", title: "kasir_prod_db" };
 
 const editorProps = {

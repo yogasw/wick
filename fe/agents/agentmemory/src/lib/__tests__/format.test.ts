@@ -14,6 +14,9 @@ import {
   reasonHint,
   reasonTitle,
   uptimeOf,
+  loopbackNote,
+  noteSummary,
+  splitWarnings,
   warningsFor,
 } from "../format.js";
 import { emptySettings } from "../settings.js";
@@ -231,5 +234,55 @@ describe("errText", () => {
   // UI that lost the answer, not as a failure with no message.
   test("an empty failure still says something", () => {
     expect(errText(new Error(""))).toContain("said nothing");
+  });
+});
+
+/* Alerts vs notes.
+
+   The Overview stacked every derived message as a full-width card, and on a
+   normal host three of them are permanent configuration facts — so the daemon
+   card, the one thing the tab exists to show, started below the fold. The
+   split is what makes the compact treatment possible, so it is pinned here
+   rather than in the markup alone. */
+describe("splitWarnings", () => {
+  test("something going wrong stays an alert; a standing fact becomes a note", () => {
+    const ws = [
+      { id: "spool", level: "warn" as const, title: "queueing", body: "a." },
+      { id: "zero-llm", level: "info" as const, title: "zero-LLM", body: "b." },
+      { id: "autostart-lock", level: "info" as const, title: "locked", body: "c." },
+    ];
+    const { alerts, notes } = splitWarnings(ws);
+    expect(alerts.map((w) => w.id)).toEqual(["spool"]);
+    expect(notes.map((w) => w.id)).toEqual(["zero-llm", "autostart-lock"]);
+  });
+
+  test("a healthy store produces neither", () => {
+    expect(splitWarnings([])).toEqual({ alerts: [], notes: [] });
+  });
+});
+
+describe("noteSummary", () => {
+  test("keeps the first sentence, which is where the consequence is", () => {
+    expect(noteSummary("No embeddings are stored. Search falls back to full-text.")).toBe(
+      "No embeddings are stored.",
+    );
+  });
+
+  test("a body with no sentence break is used whole", () => {
+    expect(noteSummary("Autostart is on because codex uses it")).toBe("Autostart is on because codex uses it");
+  });
+});
+
+describe("loopbackNote", () => {
+  test("a loopback address is explained — it means something else in another browser", () => {
+    expect(loopbackNote("http://127.0.0.1:49375")).toMatch(/machine wick runs on/);
+    expect(loopbackNote("http://localhost:49375")).not.toBe("");
+    expect(loopbackNote("http://[::1]:49375")).not.toBe("");
+  });
+
+  test("an address that means what it says gets no note", () => {
+    expect(loopbackNote("https://memory.example.com")).toBe("");
+    expect(loopbackNote("http://10.0.0.5:49375")).toBe("");
+    expect(loopbackNote(undefined)).toBe("");
   });
 });

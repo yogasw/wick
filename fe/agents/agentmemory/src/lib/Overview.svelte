@@ -13,9 +13,12 @@
     captureChip,
     formatCount,
     instanceLabel,
+    loopbackNote,
     MANAGE_ADMIN_ONLY,
     measured,
+    noteSummary,
     portLabel,
+    splitWarnings,
     uptimeOf,
     warningsFor,
     watchdogLine,
@@ -53,6 +56,18 @@
   const daemon = $derived(ov?.daemon);
   const badge = $derived(badgeFor(daemon));
   const warnings = $derived(warningsFor(ov));
+  // Alerts and notes are rendered differently because they are different
+  // things: an alert is something going wrong now, a note is a standing fact
+  // about this store's configuration. Three standing facts as full cards is
+  // what pushed the daemon — the thing this tab exists to show — off the
+  // first screen.
+  const alerts = $derived(splitWarnings(warnings).alerts);
+  const notes = $derived(splitWarnings(warnings).notes);
+  // Which note is expanded. One at a time, and none by default: the summary
+  // line already carries the consequence, and the rest is there for whoever
+  // wants it.
+  let openNote = $state("");
+  const baseNote = $derived(loopbackNote(daemon?.base_url));
   const usedBy = $derived(ov?.used_by ?? []);
   const counts = $derived(ov?.store?.counts);
   // What supervision has done to this daemon. Shown on the card the daemon
@@ -69,27 +84,50 @@
 </script>
 
 <div class="mx-auto w-full max-w-4xl space-y-5 px-4 py-5 sm:px-6 sm:py-6">
-  <!-- Warnings: derived, never dismissible, each stating the real consequence -->
-  {#each warnings as w (w.id)}
-    <div
-      class={`rounded-xl border px-4 py-3 ${
-        w.level === "warn"
-          ? "border-rose-300 bg-rose-100 dark:border-rose-700 dark:bg-navy-800"
-          : "border-white-400 bg-white-200 dark:border-navy-600 dark:bg-navy-800"
-      }`}
-    >
-      <p
-        class={`text-sm font-medium ${
-          w.level === "warn"
-            ? "text-rose-700 dark:text-rose-300"
-            : "text-black-900 dark:text-white-100"
-        }`}
-      >
-        {w.title}
-      </p>
+  <!-- Alerts: something is going wrong right now. Derived, never dismissible. -->
+  {#each alerts as w (w.id)}
+    <div class="rounded-xl border border-rose-300 bg-rose-100 px-4 py-3 dark:border-rose-700 dark:bg-navy-800">
+      <p class="text-sm font-medium text-rose-700 dark:text-rose-300">{w.title}</p>
       <p class="mt-1 text-xs leading-relaxed text-black-800 dark:text-black-600">{w.body}</p>
     </div>
   {/each}
+
+  <!-- Notes: how this store is configured. True today and true next week, so
+       they are one compact card of collapsed rows rather than a stack of
+       full-width cards standing between the operator and the daemon. -->
+  {#if notes.length > 0}
+    <section
+      class="rounded-xl border border-white-300 bg-white-100 dark:border-navy-600 dark:bg-navy-700"
+      data-testid="notes"
+    >
+      <p class="border-b border-white-300 px-4 py-2 text-[0.6875rem] uppercase tracking-wider text-black-700 dark:border-navy-600 dark:text-black-600">
+        How this store is set up — {notes.length}
+        {notes.length === 1 ? "note" : "notes"}
+      </p>
+      {#each notes as n (n.id)}
+        <div class="border-b border-white-300 last:border-b-0 dark:border-navy-600">
+          <button
+            type="button"
+            class="flex w-full items-baseline gap-2 px-4 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-600"
+            aria-expanded={openNote === n.id}
+            data-testid={`note-${n.id}`}
+            onclick={() => (openNote = openNote === n.id ? "" : n.id)}
+          >
+            <span class="flex-shrink-0 text-xs font-medium text-black-900 dark:text-white-100">{n.title}</span>
+            <span class="min-w-0 flex-1 truncate text-xs text-black-700 dark:text-black-600">
+              {openNote === n.id ? "" : noteSummary(n.body)}
+            </span>
+            <span class="flex-shrink-0 text-[0.6875rem] text-black-700 dark:text-black-600">
+              {openNote === n.id ? "Hide" : "More"}
+            </span>
+          </button>
+          {#if openNote === n.id}
+            <p class="px-4 pb-3 text-xs leading-relaxed text-black-800 dark:text-black-600">{n.body}</p>
+          {/if}
+        </div>
+      {/each}
+    </section>
+  {/if}
 
   <!-- Daemon -->
   <section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
@@ -142,6 +180,15 @@
         </div>
       {/each}
     </dl>
+
+    {#if baseNote}
+      <!-- The base URL is true and misleading at once: it is the address the
+           daemon answers on, and that address means something else in anybody
+           else's browser. -->
+      <p class="-mt-1 px-5 pb-3 text-xs leading-relaxed text-black-800 dark:text-black-600" data-testid="base-url-note">
+        {baseNote}
+      </p>
+    {/if}
 
     <!-- Watchdog. One line, on the daemon card, whatever state it is in —
          including "nothing to report", because a blank space reads as an
