@@ -37,7 +37,7 @@ func spawnContribution(ins *provider.Instance, t provider.Type, folder string) (
 	}
 	args, env, err := be.Desc.Hook.Contribute(t, *ins, SpawnConn{
 		ServerURL: ServerURL(be, *ins),
-		AuthKey:   resolveKey(*ins),
+		AuthKey:   resolveKey(be, *ins),
 		BinPath:   be.Mgr.BinPath(),
 		// The store the daemon was last STARTED with, not whatever an
 		// instance saved: a capture hook writes into the same store the MCP
@@ -64,10 +64,29 @@ func ServerURL(be *Backend, ins provider.Instance) string {
 	return strings.TrimRight(be.Mgr.BaseURL(), "/")
 }
 
-// resolveKey returns the plaintext auth token for an instance, or "" when it
-// sets none. Decryption failure yields "" rather than leaking the raw stored
+// resolveKey returns the plaintext bearer a spawn presents, or "" when there
+// is none. Decryption failure yields "" rather than leaking the raw stored
 // token into argv/env.
-func resolveKey(ins provider.Instance) string { return resolveSecret(ins.AgentMemoryAuthKey) }
+//
+// An instance that sets no key of its own INHERITS the managed daemon's —
+// the auto-default-but-overridable shape the rest of this block already has
+// (Yoga, 2026-09-25). Without it, configuring a token in the panel's Settings
+// would lock out every instance that had not also been given one by hand, and
+// the failure would arrive as an unexplained 401 inside an agent turn.
+//
+// It inherits ONLY when the instance talks to the daemon wick manages. An
+// instance pointed at somebody else's server gets exactly the key it was
+// given: sending wick's own bearer to a host wick does not run would hand a
+// credential to a third party because a field was left blank.
+func resolveKey(be *Backend, ins provider.Instance) string {
+	if k := resolveSecret(ins.AgentMemoryAuthKey); k != "" {
+		return k
+	}
+	if strings.TrimSpace(ins.AgentMemoryServerURL) != "" {
+		return ""
+	}
+	return resolveSecret(be.Mgr.LaunchOpts().AuthToken)
+}
 
 // resolveSecret turns a stored token into plaintext. Shared by the spawn
 // wiring and by the daemon's own bearer token in ApplySettings — both hold the

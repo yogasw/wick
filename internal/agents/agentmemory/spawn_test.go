@@ -104,21 +104,25 @@ func TestMemorySpawnContributionUnknownBackendErrors(t *testing.T) {
 func TestResolveKeyDecryptsAndFailsClosed(t *testing.T) {
 	t.Cleanup(func() { secretDecrypter = nil })
 
+	// A backend with no daemon token of its own, so every case here
+	// exercises the instance's key alone (inheritance has its own file).
+	keyBe := testBackend(&fakeData{})
+
 	// Unwired decrypter → the stored value passes through (dev/test setups
 	// store plaintext).
 	secretDecrypter = nil
-	if got := resolveKey(provider.Instance{AgentMemoryAuthKey: "plain"}); got != "plain" {
+	if got := resolveKey(keyBe, provider.Instance{AgentMemoryAuthKey: "plain"}); got != "plain" {
 		t.Fatalf("unwired decrypter should pass through, got %q", got)
 	}
 
 	SetSecretDecrypter(func(s string) (string, error) { return "unwrapped:" + s, nil })
-	if got := resolveKey(provider.Instance{AgentMemoryAuthKey: "wick_cenc_x"}); got != "unwrapped:wick_cenc_x" {
+	if got := resolveKey(keyBe, provider.Instance{AgentMemoryAuthKey: "wick_cenc_x"}); got != "unwrapped:wick_cenc_x" {
 		t.Fatalf("decrypted key not used, got %q", got)
 	}
 
 	// A failing decrypt must not leak the stored token into argv/env.
 	SetSecretDecrypter(func(s string) (string, error) { return "", errors.New("decrypt failed") })
-	if got := resolveKey(provider.Instance{AgentMemoryAuthKey: "wick_cenc_x"}); got != "" {
+	if got := resolveKey(keyBe, provider.Instance{AgentMemoryAuthKey: "wick_cenc_x"}); got != "" {
 		t.Fatalf("failed decrypt leaked the stored token: %q", got)
 	}
 }

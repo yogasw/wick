@@ -249,10 +249,16 @@
           id="agentmemory-token"
           type="password"
           bind:value={authKey}
-          placeholder={authKeyMasked ? "•••••••• (leave empty to keep)" : "leave empty = no bearer token"}
+          placeholder={authKeyMasked
+            ? "•••••••• (leave empty to keep)"
+            : "leave empty = use the daemon's own token"}
           class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100"
         />
-        <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Stored encrypted and never sent back to this page — a blank field keeps whatever is saved.</p>
+        <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">
+          Stored encrypted and never sent back to this page — a blank field keeps whatever is saved. With nothing saved
+          here, spawns present the token the daemon itself was configured with; set one only to override that. A
+          custom Server URL above never inherits it, so a server wick does not run is never handed wick's own key.
+        </p>
       </div>
 
       <!-- Capture is the half people get wrong, so the consequence is spelled
