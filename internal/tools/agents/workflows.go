@@ -614,6 +614,11 @@ func workflowLookupAPI(c *tool.Ctx) {
 	module := c.Query("module")
 	source := c.Query("source")
 	query := c.Query("q")
+	// instance pins the lookup to ONE registered bot — the instance key
+	// the trigger/node already selected in its Channel dropdown. Without
+	// it the dropdown offers channels only some other bot can reach, and
+	// picking one yields a trigger that never fires.
+	instance := c.Query("instance")
 	if module == "" || source == "" {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "module and source required"})
 		return
@@ -635,6 +640,21 @@ func workflowLookupAPI(c *tool.Ctx) {
 		}
 		if _, ok := ch.(agentchannels.LookupProvider); ok {
 			providers = append(providers, ch)
+		}
+	}
+	// A pinned instance narrows the fan-out to that one bot. An unknown
+	// key falls back to the fan-out rather than an empty dropdown: the
+	// instance may have been removed since the workflow was saved, and a
+	// picker that shows nothing is worse than one that shows too much.
+	if instance != "" {
+		scoped := []agentchannels.Channel{}
+		for _, ch := range providers {
+			if globalChannels.InstanceKeyOf(ch) == instance {
+				scoped = append(scoped, ch)
+			}
+		}
+		if len(scoped) > 0 {
+			providers = scoped
 		}
 	}
 	if len(providers) == 0 {

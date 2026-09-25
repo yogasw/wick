@@ -73,13 +73,13 @@
 
 <div class="flex flex-col h-full">
   <header
-    class="flex items-center gap-3 px-3 py-1.5 text-[11px] border-b border-slate-200 dark:border-navy-600"
+    class="flex items-center gap-3 px-3 py-1.5 text-[11px] border-b border-white-400 dark:border-navy-600"
   >
     <span class="font-semibold tracking-wide uppercase text-emerald-600 dark:text-emerald-400">
       {leftLabel}
     </span>
     {#if note}{@render note()}{/if}
-    <div class="ml-auto inline-flex rounded border border-slate-300 dark:border-navy-500 overflow-hidden text-[10px] uppercase tracking-wide">
+    <div class="ml-auto inline-flex rounded border border-white-400 dark:border-navy-500 overflow-hidden text-[10px] uppercase tracking-wide">
       {#each ["all", "diff"] as v}
         <button
           type="button"

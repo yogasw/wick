@@ -38,6 +38,15 @@
   const currentChannel = $derived<ChannelDescriptor | undefined>(
     channelDescriptors.find((c) => c.name === trigger?.channel),
   );
+  // What the Channel row is actually SHOWING. An old trigger (or one
+  // dropped before instance pinning existed) has no channel_instance, yet
+  // ChannelPicker still renders the first matching row as selected — so
+  // the picker below has to search that bot, not every bot in the
+  // workspace. Pinning stays the trigger's own field; this only decides
+  // which bot the lookups are asked.
+  const effectiveChannelInstance = $derived(
+    trigger?.channel_instance || currentChannel?.instance_key || "",
+  );
   const currentEvent = $derived<ChannelEventDescriptor | undefined>(
     currentChannel?.events?.find((e) => e.id === trigger?.event),
   );
@@ -177,7 +186,7 @@
 
 {#if trigger}
   <div
-    class="fixed inset-0 z-50 bg-white-100 dark:bg-navy-800/70 backdrop-blur-sm"
+    class="fixed inset-0 z-50 bg-white-300/70 dark:bg-navy-800/70 backdrop-blur-sm"
     role="dialog"
     aria-modal="true"
     aria-label="Edit trigger"
@@ -185,13 +194,13 @@
   >
     <div
       class="absolute inset-2 lg:left-4 lg:right-4 lg:top-8 lg:bottom-8
-             rounded-lg overflow-hidden bg-white-100 dark:bg-[#0f172a]
-             text-slate-900 dark:text-white-100 shadow-2xl flex flex-col"
+             rounded-lg overflow-hidden bg-white-100 dark:bg-navy-800
+             text-black-900 dark:text-white-100 shadow-2xl flex flex-col"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
     >
       <!-- Header. -->
-      <header class="flex items-center gap-3 px-5 py-3 border-b border-slate-200 dark:border-navy-600">
+      <header class="flex items-center gap-3 px-5 py-3 border-b border-white-400 dark:border-navy-600">
         <span class="h-2 w-2 rounded-full {triggerHeadColour[trigger.type] ?? 'bg-amber-400'}"></span>
         <span class="text-sm font-semibold truncate">{trigger.label || trigger.type}</span>
         <span class="text-xs text-black-700 dark:text-black-600 font-mono shrink-0">trigger · {trigger.type}</span>
@@ -200,7 +209,7 @@
       </header>
 
       <!-- Mobile pane switcher — hidden on lg where all 3 columns show. -->
-      <div class="lg:hidden flex border-b border-slate-200 dark:border-navy-600 text-xs font-medium shrink-0">
+      <div class="lg:hidden flex border-b border-white-400 dark:border-navy-600 text-xs font-medium shrink-0">
         {#each [["input", "Input"], ["editor", "Editor"], ["output", "Output"]] as pane}
           <button
             type="button"
@@ -230,7 +239,7 @@
 
         <!-- MIDDLE: parameters + settings. -->
         <section class="flex flex-1 lg:flex min-h-0 flex-col overflow-y-auto" class:hidden={mobilePane !== "editor"}>
-          <nav class="flex items-center border-b border-slate-200 dark:border-navy-600 px-4 text-sm">
+          <nav class="flex items-center border-b border-white-400 dark:border-navy-600 px-4 text-sm">
             {#each ["params", "settings"] as t}
               <button
                 class="px-3 py-2 capitalize border-b-2 transition-colors"
@@ -265,11 +274,13 @@
               {@const labelErr = labelTaken || labelBadFormat}
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Label</span>
+                <!-- border-navy-600 rides in the class string with its
+                     dark: prefix: a `class:` directive applies the bare
+                     class in BOTH themes, which painted a dark border on
+                     the light one. -->
                 <input
-                  class="rounded border bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
-                  class:border-rose-500={labelErr}
-                  class:border-white-400={!labelErr}
-                  class:border-navy-600={!labelErr}
+                  class="rounded border bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm
+                         {labelErr ? 'border-rose-500' : 'border-white-400 dark:border-navy-600'}"
                   value={trigger.label ?? ""}
                   oninput={(e) => patch("label", (e.target as HTMLInputElement).value)}
                   placeholder="manual_1"
@@ -294,7 +305,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Schedule (cron)</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="0 */15 * * * *"
                     value={trigger.schedule ?? ""}
                     oninput={(e) => patch("schedule", (e.target as HTMLInputElement).value)}
@@ -304,7 +315,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Timezone</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="Asia/Jakarta"
                     value={trigger.timezone ?? ""}
                     oninput={(e) => patch("timezone", (e.target as HTMLInputElement).value)}
@@ -321,8 +332,8 @@
                 <!-- Slug input -->
                 <div class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Path slug</span>
-                  <div class="flex items-stretch rounded border border-slate-200 dark:border-navy-600 overflow-hidden font-mono text-sm">
-                    <span class="flex items-center px-2 py-1.5 bg-slate-100 dark:bg-navy-800 text-black-500 dark:text-black-600 text-[11px] shrink-0 select-none border-r border-slate-200 dark:border-navy-600 whitespace-nowrap">
+                  <div class="flex items-stretch rounded border border-white-400 dark:border-navy-600 overflow-hidden font-mono text-sm">
+                    <span class="flex items-center px-2 py-1.5 bg-white-200 dark:bg-navy-800 text-black-500 dark:text-black-600 text-[11px] shrink-0 select-none border-r border-white-400 dark:border-navy-600 whitespace-nowrap">
                       /{wfID}/
                     </span>
                     <input
@@ -341,44 +352,44 @@
                 </div>
 
                 <!-- Tabbed URL preview: Test | Live -->
-                <div class="flex flex-col rounded border border-slate-200 dark:border-navy-600 overflow-hidden">
+                <div class="flex flex-col rounded border border-white-400 dark:border-navy-600 overflow-hidden">
                   <!-- Tab bar -->
-                  <div class="flex border-b border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-800">
+                  <div class="flex border-b border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800">
                     <button
                       type="button"
-                      class={`flex-1 py-1.5 text-[11px] font-semibold transition-colors border-b-2 ${webhookURLTab === "test" ? "border-amber-500 text-amber-600 dark:text-amber-400" : "border-transparent text-slate-500 dark:text-black-500 hover:text-black-700 dark:hover:text-black-400"}`}
+                      class={`flex-1 py-1.5 text-[11px] font-semibold transition-colors border-b-2 ${webhookURLTab === "test" ? "border-amber-500 text-amber-600 dark:text-amber-400" : "border-transparent text-black-600 dark:text-black-500 hover:text-black-700 dark:hover:text-black-400"}`}
                       onclick={() => webhookURLTab = "test"}
                     >Test (draft)</button>
                     <button
                       type="button"
-                      class={`flex-1 py-1.5 text-[11px] font-semibold transition-colors border-b-2 ${webhookURLTab === "live" ? "border-emerald-500 text-emerald-600 dark:text-emerald-400" : "border-transparent text-slate-500 dark:text-black-500 hover:text-black-700 dark:hover:text-black-400"}`}
+                      class={`flex-1 py-1.5 text-[11px] font-semibold transition-colors border-b-2 ${webhookURLTab === "live" ? "border-emerald-500 text-emerald-600 dark:text-emerald-400" : "border-transparent text-black-600 dark:text-black-500 hover:text-black-700 dark:hover:text-black-400"}`}
                       onclick={() => webhookURLTab = "live"}
                     >Live (published)</button>
                   </div>
                   <!-- Tab content -->
-                  <div class="p-2.5 flex flex-col gap-1.5 bg-slate-50 dark:bg-navy-800">
+                  <div class="p-2.5 flex flex-col gap-1.5 bg-white-200 dark:bg-navy-800">
                     {#if webhookURLTab === "test"}
                       {@const testURL = urlBase ? `${urlBase}/webhook-test/${wfID}/${slug}` : `/webhook-test/${wfID}/${slug}`}
-                      <div class="flex items-center gap-1.5 rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1.5">
+                      <div class="flex items-center gap-1.5 rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1.5">
                         <span class="flex-1 font-mono text-[11px] text-black-700 dark:text-black-400 break-all">{testURL}</span>
                         {#if urlBase}
                           <button type="button"
-                            class="shrink-0 px-2 py-0.5 rounded text-[10px] bg-slate-200 dark:bg-navy-600 hover:bg-slate-300 dark:hover:bg-navy-500 transition-colors font-medium text-black-700 dark:text-black-300"
+                            class="shrink-0 px-2 py-0.5 rounded text-[10px] bg-white-300 dark:bg-navy-600 hover:bg-white-400 dark:hover:bg-navy-500 transition-colors font-medium text-black-700 dark:text-black-300"
                             onclick={() => navigator.clipboard.writeText(testURL).catch(()=>{})}>Copy</button>
                         {/if}
                       </div>
-                      <p class="text-[10px] text-slate-500 dark:text-black-500">Fires the <strong>draft</strong> copy. Test changes before publishing — runs appear in the canvas history.</p>
+                      <p class="text-[10px] text-black-600 dark:text-black-500">Fires the <strong>draft</strong> copy. Test changes before publishing — runs appear in the canvas history.</p>
                     {:else}
                       {@const liveURL = urlBase ? `${urlBase}/webhook/${wfID}/${slug}` : `/webhook/${wfID}/${slug}`}
-                      <div class="flex items-center gap-1.5 rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1.5">
+                      <div class="flex items-center gap-1.5 rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1.5">
                         <span class="flex-1 font-mono text-[11px] text-black-700 dark:text-black-400 break-all">{liveURL}</span>
                         {#if urlBase}
                           <button type="button"
-                            class="shrink-0 px-2 py-0.5 rounded text-[10px] bg-slate-200 dark:bg-navy-600 hover:bg-slate-300 dark:hover:bg-navy-500 transition-colors font-medium text-black-700 dark:text-black-300"
+                            class="shrink-0 px-2 py-0.5 rounded text-[10px] bg-white-300 dark:bg-navy-600 hover:bg-white-400 dark:hover:bg-navy-500 transition-colors font-medium text-black-700 dark:text-black-300"
                             onclick={() => navigator.clipboard.writeText(liveURL).catch(()=>{})}>Copy</button>
                         {/if}
                       </div>
-                      <p class="text-[10px] text-slate-500 dark:text-black-500">Fires the <strong>published</strong> workflow. Active only after you publish.</p>
+                      <p class="text-[10px] text-black-600 dark:text-black-500">Fires the <strong>published</strong> workflow. Active only after you publish.</p>
                     {/if}
                     {#if !urlBase}
                       <p class="text-[10px] text-amber-600 dark:text-amber-400">Set <strong>PublicURL</strong> in Settings → Agents to see full URLs.</p>
@@ -389,7 +400,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Method</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={trigger.method ?? "POST"}
                     onchange={(e) => patch("method", (e.target as HTMLSelectElement).value)}
                   >
@@ -402,7 +413,7 @@
                 <!-- Respond mode — mirrors n8n's 3-option picker. -->
                 <div class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Respond</span>
-                  <div class="flex flex-col gap-1 rounded border border-slate-200 dark:border-navy-600 overflow-hidden">
+                  <div class="flex flex-col gap-1 rounded border border-white-400 dark:border-navy-600 overflow-hidden">
                     {#each [
                       { value: "immediately",   label: "Immediately",                  desc: "202 Accepted at enqueue — fire and forget (default)." },
                       { value: "last_node",      label: "When Last Node Finishes",      desc: "Block until the workflow completes, return last node output as JSON." },
@@ -411,13 +422,13 @@
                       {@const active = (trigger.respond_mode ?? "immediately") === opt.value}
                       <button
                         type="button"
-                        class={`flex items-start gap-3 px-3 py-2.5 text-left transition-colors border-b border-slate-100 dark:border-navy-700 last:border-0 ${active ? "bg-emerald-50 dark:bg-emerald-950/30" : "hover:bg-slate-50 dark:hover:bg-navy-700"}`}
+                        class={`flex items-start gap-3 px-3 py-2.5 text-left transition-colors border-b border-white-300 dark:border-navy-700 last:border-0 ${active ? "bg-emerald-50 dark:bg-emerald-950/30" : "hover:bg-white-200 dark:hover:bg-navy-700"}`}
                         onclick={() => patch("respond_mode", opt.value)}
                       >
-                        <span class={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border-2 ${active ? "border-emerald-500 bg-emerald-500" : "border-slate-400 dark:border-navy-500"}`}></span>
+                        <span class={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border-2 ${active ? "border-emerald-500 bg-emerald-500" : "border-white-400 dark:border-navy-500"}`}></span>
                         <span class="flex flex-col gap-0.5">
                           <span class={`text-xs font-medium ${active ? "text-emerald-700 dark:text-emerald-300" : "text-black-800 dark:text-black-300"}`}>{opt.label}</span>
-                          <span class="text-[11px] text-slate-500 dark:text-black-500">{opt.desc}</span>
+                          <span class="text-[11px] text-black-600 dark:text-black-500">{opt.desc}</span>
                         </span>
                       </button>
                     {/each}
@@ -432,7 +443,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Secret ref (optional)</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="env:WEBHOOK_SECRET"
                     value={trigger.secret_ref ?? ""}
                     oninput={(e) => patch("secret_ref", (e.target as HTMLInputElement).value)}
@@ -446,7 +457,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Button label</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     placeholder="Run now"
                     value={trigger.button_label ?? ""}
                     oninput={(e) => patch("button_label", (e.target as HTMLInputElement).value)}
@@ -455,7 +466,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Require role (optional)</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     placeholder="admin"
                     value={trigger.require_role ?? ""}
                     oninput={(e) => patch("require_role", (e.target as HTMLInputElement).value)}
@@ -524,45 +535,46 @@
                          docs/reference/config-tags.md). SchemaForm
                          handles visible_when, hidden, and per-row
                          widget pick. -->
-                    <div class="rounded border border-slate-200 dark:border-navy-600 p-2">
+                    <div class="rounded border border-white-400 dark:border-navy-600 p-2">
                       <SchemaForm
                         schema={matchSchema}
                         values={(trigger.match ?? {}) as Record<string, unknown>}
                         onChange={patchMatchEntry}
                         onClear={removeMatchEntry}
+                        instance={effectiveChannelInstance}
                       />
                     </div>
                   {:else}
                     <!-- Fallback free-form key/value editor for events
                          without a declared schema (or when catalog
                          hasn't loaded yet). -->
-                    <div class="rounded border border-slate-200 dark:border-navy-600 p-2 space-y-2">
+                    <div class="rounded border border-white-400 dark:border-navy-600 p-2 space-y-2">
                       <div class="text-[11px] text-black-700 dark:text-black-600">
                         Match keys — exact-string filter on the event payload.
                       </div>
                       {#each Object.entries(trigger.match ?? {}) as [k, v] (k)}
                         <div class="flex items-center gap-2">
                           <input
-                            class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+                            class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                             value={k}
                             readonly
                           />
                           <input
-                            class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+                            class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                             value={typeof v === "string" ? v : JSON.stringify(v)}
                             oninput={(e) => patchMatchEntry(k, (e.target as HTMLInputElement).value)}
                           />
                           <button class="text-rose-500 text-xs px-2" onclick={() => removeMatchEntry(k)}>✕</button>
                         </div>
                       {/each}
-                      <div class="flex items-center gap-2 pt-1 border-t border-slate-200 dark:border-navy-600">
+                      <div class="flex items-center gap-2 pt-1 border-t border-white-400 dark:border-navy-600">
                         <input
-                          class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+                          class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                           placeholder="key"
                           bind:value={newMatchKey}
                         />
                         <input
-                          class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+                          class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                           placeholder="value"
                           bind:value={newMatchValue}
                           onkeydown={(e) => e.key === "Enter" && addMatchEntry()}
@@ -579,7 +591,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Fire at (ISO 8601)</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="2026-12-31T15:00:00Z"
                     value={trigger.at ?? ""}
                     oninput={(e) => patch("at", (e.target as HTMLInputElement).value)}
@@ -615,7 +627,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Entry node ID</span>
                 <input
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                  class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                   placeholder="(set by drawing an edge from the trigger output port)"
                   value={trigger.entry_node ?? ""}
                   oninput={(e) => patch("entry_node", (e.target as HTMLInputElement).value)}
@@ -644,7 +656,7 @@
                 <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300" title="This trigger fires Execute with a replayed run's payload">📌 PINNED</span>
                 <button
                   type="button"
-                  class="px-1.5 py-0.5 rounded border border-slate-300 dark:border-navy-600 text-[10px] text-black-600 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-600"
+                  class="px-1.5 py-0.5 rounded border border-white-400 dark:border-navy-600 text-[10px] text-black-600 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-600"
                   onclick={unpinEvent}
                   title="Clear the pinned payload — Execute reverts to a synthetic event"
                 >unpin</button>
@@ -652,7 +664,7 @@
             {/if}
           </div>
           {#if eventPayloadText}
-            <pre class="flex-1 overflow-auto rounded bg-slate-50 dark:bg-navy-800 border border-amber-400/40 dark:border-amber-500/30 p-3 text-[11px] font-mono text-black-800 dark:text-white-100 whitespace-pre-wrap">{eventPayloadText}</pre>
+            <pre class="flex-1 overflow-auto rounded bg-white-200 dark:bg-navy-800 border border-amber-400/40 dark:border-amber-500/30 p-3 text-[11px] font-mono text-black-800 dark:text-white-100 whitespace-pre-wrap">{eventPayloadText}</pre>
           {:else}
             <div class="flex-1 flex flex-col items-center justify-center text-black-700 dark:text-black-500 text-xs gap-3">
               <div class="text-2xl">⤒</div>
