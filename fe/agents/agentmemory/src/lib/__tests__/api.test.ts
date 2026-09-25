@@ -9,6 +9,7 @@ import {
   fetchHandoffs,
   fetchHealth,
   fetchProjects,
+  fetchProjectScope,
   previewBackfill,
   runBackfill,
   scopeQuery,
@@ -81,6 +82,32 @@ describe("agentmemory api", () => {
     const r = await Effect.runPromise(fetchBackends("/tools/agents").pipe(Effect.provide(layer)));
     expect(r.backends[0].id).toBe("ai-memory");
     expect(reqOf(ref).url).toContain("/tools/agents/agentmemory/backends");
+  });
+
+  // The panel is opened from a project menu with ?project=<wick id>. It must
+  // ASK for the bucket rather than build a name from the id — the mapping has
+  // one home, server-side (PLAN §22.2).
+  test("fetchProjectScope asks the server which bucket a wick project uses", async () => {
+    const { ref, layer } = captureLayer({
+      project_id: "8c28230d",
+      name: "Kasir",
+      folder: "/srv/projects/8c28230d/files",
+      workspace: "wick",
+      project: "kasir-8c28230d",
+      source: "marker",
+    });
+    const r = await Effect.runPromise(fetchProjectScope("/tools/agents", "8c28230d").pipe(Effect.provide(layer)));
+    expect(r.workspace).toBe("wick");
+    expect(r.project).toBe("kasir-8c28230d");
+    expect(r.source).toBe("marker");
+    expect(reqOf(ref).url).toContain("/tools/agents/agentmemory/project-scope?project=8c28230d");
+    expect(reqOf(ref).method).toBe("GET");
+  });
+
+  test("fetchProjectScope escapes an id that would otherwise change the query", async () => {
+    const { ref, layer } = captureLayer({});
+    await Effect.runPromise(fetchProjectScope("/tools/agents", "a&b=c").pipe(Effect.provide(layer)));
+    expect(reqOf(ref).url).toContain("project=a%26b%3Dc");
   });
 
   test("fetchOverview GETs the per-backend status endpoint", async () => {

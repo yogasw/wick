@@ -23,6 +23,16 @@
   let { base, project, chatCount, onPin }: Props = $props();
 
   let open = $state(false);
+
+  /* Whether this install has Agent Memory switched on AND this reader may
+     look at it. The Go shell inlines the answer on #app (same place as
+     data-base and data-viewer-id), because the entry has to be right on the
+     first paint: a door to a feature that is off — or that this person cannot
+     open — is not shown at all rather than shown and then 404ing (PLAN §22.1,
+     §23.3). Read once per menu: neither the master switch nor the reader can
+     change without a page load. */
+  const agentMemory =
+    typeof document !== "undefined" && document.getElementById("app")?.dataset.agentMemory === "true";
 </script>
 
 <div class="relative shrink-0">
@@ -99,6 +109,30 @@
         </svg>
         Project settings
       </a>
+
+      {#if agentMemory}
+        <!-- Opens the Agent Memory panel scoped to THIS project. The link
+             carries the wick project id, never a scope name: the backend
+             resolves id → memory bucket with the same function that writes
+             the project's .ai-memory.toml, so the panel cannot drift from
+             what the agents actually wrote (PLAN §22.2). Reading the panel is
+             all this entry grants — managing it stays admin-only. -->
+        <a
+          role="menuitem"
+          data-testid="project-menu-agent-memory"
+          href={`${base}/agentmemory?project=${project.id}`}
+          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-black-800 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700"
+        >
+          <!-- The store glyph the Agent Memory panel titles itself with, so
+               the entry looks like the page it opens. -->
+          <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <ellipse cx="8" cy="4" rx="5" ry="2"></ellipse>
+            <path d="M3 4v8c0 1.1 2.24 2 5 2s5-.9 5-2V4" stroke-linecap="round"></path>
+            <path d="M3 8c0 1.1 2.24 2 5 2s5-.9 5-2" stroke-linecap="round"></path>
+          </svg>
+          Agent Memory
+        </a>
+      {/if}
 
       <a
         role="menuitem"

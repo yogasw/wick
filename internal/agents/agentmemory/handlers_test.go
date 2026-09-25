@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,17 +21,25 @@ import (
 // which flags a request turns into, which failures become a named reason, and
 // which ones are refused outright.
 
-// fakeStore is an in-memory ConfigStore.
+// fakeStore is an in-memory ConfigStore. The two access flags are separate so
+// a VIEWER — logged in, may look, may not manage — is expressible, which is
+// the whole point of the split (PLAN §23).
 type fakeStore struct {
 	enabled bool
-	admin   bool
+	// admin drives ManageAllowed, and reads too: someone who may drive the
+	// daemon can obviously look at it, which is also true in production
+	// where an admin is a logged-in user.
+	admin bool
+	// viewer drives ReadAllowed alone — a non-admin who is logged in.
+	viewer  bool
 	set     Settings
 	saved   *Settings
 	saveErr error
 }
 
 func (f *fakeStore) Enabled() bool                      { return f.enabled }
-func (f *fakeStore) AccessAllowed(context.Context) bool { return f.admin }
+func (f *fakeStore) ReadAllowed(context.Context) bool   { return f.viewer || f.admin }
+func (f *fakeStore) ManageAllowed(context.Context) bool { return f.admin }
 func (f *fakeStore) Settings(string) Settings           { return f.set }
 func (f *fakeStore) SaveSettings(_ context.Context, _ string, s Settings) error {
 	if f.saveErr != nil {
@@ -137,8 +146,12 @@ func decodeBody(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 }
 
 // TestGateFailsClosed: the master switch answers 404 so a disabled feature
-// looks absent rather than forbidden, and a non-admin gets 403. An unwired
-// store denies too — no request should ever slip through before boot.
+// looks absent rather than forbidden, and someone with no access gets 403. An
+// unwired store denies too — no request should ever slip through before boot.
+//
+// Both wrappers are driven, because the 404 half is the half that must NOT
+// have changed when the gate was split: a host with the feature off still
+// looks like a host without the feature, whoever is asking (PLAN §23.2).
 func TestGateFailsClosed(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -146,25 +159,164 @@ func TestGateFailsClosed(t *testing.T) {
 		want  int
 	}{
 		{"unwired store", nil, http.StatusNotFound},
-		{"master off", &fakeStore{enabled: false, admin: true}, http.StatusNotFound},
-		{"not admin", &fakeStore{enabled: true, admin: false}, http.StatusForbidden},
+		{"master off, admin", &fakeStore{enabled: false, admin: true}, http.StatusNotFound},
+		{"master off, viewer", &fakeStore{enabled: false, viewer: true}, http.StatusNotFound},
+		{"no access at all", &fakeStore{enabled: true}, http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		for _, w := range []struct {
+			kind string
+			fn   func(*Backend, func(*Backend, *tool.Ctx)) tool.HandlerFunc
+		}{{"view", view}, {"manage", manage}} {
+			t.Run(tc.name+"/"+w.kind, func(t *testing.T) {
+				withStore(t, tc.store)
+				if tc.store == nil {
+					store = nil
+				}
+				rec, c := get(nil)
+				called := false
+				w.fn(testBackend(&fakeData{}), func(*Backend, *tool.Ctx) { called = true })(c)
+				if called {
+					t.Fatal("handler ran behind a closed gate")
+				}
+				if rec.Code != tc.want {
+					t.Fatalf("status %d, want %d", rec.Code, tc.want)
+				}
+			})
+		}
+	}
+}
+
+// TestViewerGate is the security gate of PLAN §23 stated as a table: admin
+// MANAGES, everyone logged in LOOKS.
+//
+// It drives the two wrappers rather than the handlers, because what is being
+// asserted is which side of the split each endpoint was registered on — and
+// that is decided by the wrapper. The endpoint-to-wrapper map is asserted
+// separately in TestEndpointsAreOnTheRightSide, from the routes themselves.
+func TestViewerGate(t *testing.T) {
+	cases := []struct {
+		name   string
+		store  *fakeStore
+		view   bool
+		manage bool
+	}{
+		{"admin does both", &fakeStore{enabled: true, admin: true}, true, true},
+		{"viewer looks, does not manage", &fakeStore{enabled: true, viewer: true}, true, false},
+		{"nobody does neither", &fakeStore{enabled: true}, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			withStore(t, tc.store)
-			if tc.store == nil {
-				store = nil
-			}
-			w, c := get(nil)
-			called := false
-			ctl(testBackend(&fakeData{}), func(*Backend, *tool.Ctx) { called = true })(c)
-			if called {
-				t.Fatal("handler ran behind a closed gate")
-			}
-			if w.Code != tc.want {
-				t.Fatalf("status %d, want %d", w.Code, tc.want)
+			for _, w := range []struct {
+				kind string
+				fn   func(*Backend, func(*Backend, *tool.Ctx)) tool.HandlerFunc
+				want bool
+			}{{"view", view, tc.view}, {"manage", manage, tc.manage}} {
+				rec, c := get(nil)
+				called := false
+				w.fn(testBackend(&fakeData{}), func(*Backend, *tool.Ctx) { called = true })(c)
+				if called != w.want {
+					t.Fatalf("%s: ran=%v, want %v", w.kind, called, w.want)
+				}
+				if !w.want && rec.Code != http.StatusForbidden {
+					t.Fatalf("%s: status %d, want 403", w.kind, rec.Code)
+				}
 			}
 		})
+	}
+}
+
+// recordingRouter captures what RegisterRoutes wires, so the table below is
+// the REGISTERED routes rather than a second list that can drift from them. A
+// route added later shows up here on its own and has to be classified.
+type recordingRouter struct{ routes map[string]tool.HandlerFunc }
+
+func (r *recordingRouter) GET(path string, h tool.HandlerFunc)                    { r.routes["GET "+path] = h }
+func (r *recordingRouter) POST(path string, h tool.HandlerFunc)                   { r.routes["POST "+path] = h }
+func (r *recordingRouter) PUT(path string, h tool.HandlerFunc)                    { r.routes["PUT "+path] = h }
+func (r *recordingRouter) DELETE(path string, h tool.HandlerFunc)                 { r.routes["DELETE "+path] = h }
+func (r *recordingRouter) PATCH(path string, h tool.HandlerFunc)                  { r.routes["PATCH "+path] = h }
+func (r *recordingRouter) Use(string, tool.Middleware)                            {}
+func (r *recordingRouter) Static(string, fs.FS)                                   {}
+func (r *recordingRouter) HandleRaw(string, func(tool.ConfigReader) http.Handler) {}
+func (r *recordingRouter) WebhookGroup(string) tool.WebhookRouter                 { return nil }
+func (r *recordingRouter) Meta() tool.Tool                                        { return tool.Tool{Key: "agents", Path: "/tools/agents"} }
+
+// TestEndpointsAreOnTheRightSide is the §23.2 table: every registered endpoint,
+// and whether a logged-in non-admin may reach it.
+//
+// It calls each registered handler as a VIEWER and asserts only one thing —
+// 403 or not. What the handler then answers (200, 501, 502 from a daemon that
+// is not there) is another test's business; what matters here is the gate, and
+// a wrong answer means either client data leaks or someone entitled to look is
+// locked out.
+func TestEndpointsAreOnTheRightSide(t *testing.T) {
+	// A backend of this test's own, so the table describes routes this test
+	// registered rather than whichever backends other tests happened to
+	// register first (the registry is process-wide).
+	const id = "gate-mem"
+	Register(Descriptor{ID: id, DisplayName: id, PrefPort: 41300, HealthPath: "/healthz", Data: &fakeData{}})
+	p := "/agentmemory/" + id
+
+	// false = a viewer must be refused (admin-only).
+	want := map[string]bool{
+		"GET /agentmemory/backends":      true,
+		"GET /agentmemory/project-scope": true,
+
+		"GET " + p + "/status":   true,
+		"GET " + p + "/projects": true,
+		"GET " + p + "/health":   true,
+		"GET " + p + "/handoffs": true,
+		"GET " + p + "/search":   true,
+		"GET " + p + "/settings": true,
+		"GET " + p + "/page":     true,
+		"GET " + p + "/messages": true,
+
+		// The log carries store paths and launch values, so it sits with
+		// the managing half despite being a GET (PLAN §23.2).
+		"GET " + p + "/logs": false,
+
+		"POST " + p + "/start":            false,
+		"POST " + p + "/stop":             false,
+		"POST " + p + "/restart":          false,
+		"POST " + p + "/install":          false,
+		"POST " + p + "/test":             false,
+		"POST " + p + "/settings":         false,
+		"POST " + p + "/backfill/preview": false,
+		"POST " + p + "/backfill/run":     false,
+		"POST " + p + "/compact":          false,
+		"POST " + p + "/handoffs/cancel":  false,
+		"POST " + p + "/forget-sweep":     false,
+	}
+
+	rr := &recordingRouter{routes: map[string]tool.HandlerFunc{}}
+	prev := store
+	t.Cleanup(func() { store = prev })
+	RegisterRoutes(rr, &fakeStore{enabled: true, viewer: true})
+
+	for route := range want {
+		if rr.routes[route] == nil {
+			t.Fatalf("%s is not registered — the table and the routes disagree", route)
+		}
+	}
+	for route, h := range rr.routes {
+		// Other backends' copies of the same endpoints are skipped: they
+		// are the same handlers behind the same wrappers, and a test that
+		// asserted on them would break every time one is registered.
+		if !strings.Contains(route, p) && !strings.HasSuffix(route, "/agentmemory/backends") && !strings.HasSuffix(route, "/agentmemory/project-scope") {
+			continue
+		}
+		allow, listed := want[route]
+		if !listed {
+			t.Fatalf("%s is registered but not classified — say which side of §23.2 it is on", route)
+		}
+		rec, c := get(nil)
+		h(c)
+		refused := rec.Code == http.StatusForbidden
+		if allow == refused {
+			t.Fatalf("%s: viewer got %d, want %s", route, rec.Code, map[bool]string{true: "not 403", false: "403"}[allow])
+		}
 	}
 }
 
@@ -627,4 +779,49 @@ func TestCompactUnsupportedBackendIsNotASilentNoOp(t *testing.T) {
 	if w.Code != http.StatusNotImplemented {
 		t.Fatalf("want 501, got %d: %s", w.Code, w.Body.String())
 	}
+}
+
+// TestProjectScopeHandler: the panel asks the SERVER which bucket a wick
+// project uses, and the two failures it can meet are told apart. A missing
+// parameter is the caller's bug; an unknown id is a project that is gone —
+// answering either with some default scope would open the panel on another
+// project's memory (PLAN §22.2).
+func TestProjectScopeHandler(t *testing.T) {
+	withStore(t, &fakeStore{enabled: true, viewer: true})
+	dir := t.TempDir()
+	withProjects(t, "wick", ProjectFolder{ID: "8c28230d-aaaa", Name: "Kasir", Folder: dir})
+
+	t.Run("resolves", func(t *testing.T) {
+		w, c := get(url.Values{"project": {"8c28230d-aaaa"}})
+		projectScopeHandler(c)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		}
+		var got projectScope
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if got.Workspace != "wick" || got.Project != "kasir-8c28230d" {
+			t.Fatalf("scope %s/%s", got.Workspace, got.Project)
+		}
+		if got.Source != string(ScopeFromWick) || got.Folder != dir || got.Name != "Kasir" {
+			t.Fatalf("payload %+v", got)
+		}
+	})
+
+	t.Run("missing param", func(t *testing.T) {
+		w, c := get(nil)
+		projectScopeHandler(c)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("unknown id", func(t *testing.T) {
+		w, c := get(url.Values{"project": {"nobody"}})
+		projectScopeHandler(c)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("status %d, want 404", w.Code)
+		}
+	})
 }

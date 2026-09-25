@@ -501,6 +501,29 @@ export type SweepResponse = DataFailure & { report?: SweepReport; warning?: stri
 // Scope narrows a project-scoped read to one workspace/project.
 export type Scope = { workspace?: string; project?: string };
 
+// ProjectScope is the server's answer to "which memory bucket does this wick
+// project use?" — what the project menu's Agent Memory entry opens onto
+// (PLAN §22).
+//
+// Every field of it comes from the server. The FE never builds a scope name
+// from a project name or id: the mapping lives next to the marker writer that
+// pins it, and a second copy here would drift silently (PLAN §22.2).
+export type ProjectScope = {
+  project_id: string;
+  // name and folder are the wick project's own, for naming what was opened.
+  name: string;
+  folder: string;
+  workspace: string;
+  project: string;
+  // source says how the bucket was decided:
+  //   marker   — a .ai-memory.toml governs the folder; this is live truth.
+  //   wick     — no marker yet, wick will write this one on the next session.
+  //   basename — a custom-path folder wick never marks, so the backend
+  //              derives the project from the folder NAME, which is the one
+  //              case that can collide with another project.
+  source: "marker" | "wick" | "basename";
+};
+
 // Tab is the panel's tab strip. All seven are built: Overview (4A), Projects,
 // Analytics and Health (4B), Wiki, Handoffs and Settings (4C).
 export type Tab = "overview" | "projects" | "analytics" | "wiki" | "handoffs" | "health" | "settings";

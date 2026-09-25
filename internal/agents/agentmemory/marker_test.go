@@ -235,3 +235,84 @@ func TestMarkerWriterGated(t *testing.T) {
 		t.Fatalf("enabled writer did not pin the scope:\n%s", readMarker(t, dir))
 	}
 }
+
+// withProjects installs a project list + workspace for one test.
+func withProjects(t *testing.T, ws string, rows ...ProjectFolder) {
+	t.Helper()
+	prevList, prevWS := projectLister, markerWorkspace
+	t.Cleanup(func() { projectLister, markerWorkspace = prevList, prevWS })
+	markerWorkspace = ws
+	projectLister = func() []ProjectFolder { return rows }
+}
+
+// TestScopeForProjectIDSources covers the three answers §22.2 can give, and
+// the order between them. The marker has to win: it is what the agent's own
+// hook reads, so a folder pinned by hand must not be reported under wick's
+// derived name — the panel would then show a bucket nobody writes to.
+func TestScopeForProjectIDSources(t *testing.T) {
+	marked := t.TempDir()
+	if err := EnsureMarker(marked, Scope{Workspace: "qiscus", Project: "pinned-by-hand"}); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	managed := t.TempDir()
+	custom := filepath.Join(t.TempDir(), "backend")
+	if err := os.MkdirAll(custom, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	withProjects(t, "wick",
+		ProjectFolder{ID: "8c28230d-aaaa", Name: "Kasir", Folder: marked},
+		ProjectFolder{ID: "1f2e3d4c-bbbb", Name: "Kasir Prod", Folder: managed},
+		ProjectFolder{ID: "99887766-cccc", Name: "Backend", Folder: custom, CustomPath: true},
+	)
+
+	cases := []struct {
+		id        string
+		workspace string
+		project   string
+		source    ScopeSource
+	}{
+		{"8c28230d-aaaa", "qiscus", "pinned-by-hand", ScopeFromMarker},
+		{"1f2e3d4c-bbbb", "wick", "kasir-prod-1f2e3d4c", ScopeFromWick},
+		// A custom-path folder is one wick never marks, so the backend
+		// derives its project from the basename — the case that can
+		// collide with another project of the same name (collision.go).
+		{"99887766-cccc", "wick", "backend", ScopeFromBasename},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.source), func(t *testing.T) {
+			p, sc, src, ok := ScopeForProjectID(tc.id)
+			if !ok {
+				t.Fatal("not resolved")
+			}
+			if p.ID != tc.id {
+				t.Fatalf("project %q, want %q", p.ID, tc.id)
+			}
+			if sc.Workspace != tc.workspace || sc.Project != tc.project {
+				t.Fatalf("scope %+v, want %s/%s", sc, tc.workspace, tc.project)
+			}
+			if src != tc.source {
+				t.Fatalf("source %q, want %q", src, tc.source)
+			}
+		})
+	}
+}
+
+// TestScopeForProjectIDUnknown: an id nobody has is NOT resolved to some
+// fallback bucket. A guess here would send the panel to another project's
+// memory and look like a successful read.
+func TestScopeForProjectIDUnknown(t *testing.T) {
+	withProjects(t, "wick", ProjectFolder{ID: "known", Name: "Known", Folder: t.TempDir()})
+	for _, id := range []string{"", "   ", "nobody"} {
+		if _, _, _, ok := ScopeForProjectID(id); ok {
+			t.Fatalf("id %q resolved", id)
+		}
+	}
+	// Unwired lister (before boot) answers the same way rather than panicking.
+	prev := projectLister
+	t.Cleanup(func() { projectLister = prev })
+	projectLister = nil
+	if _, _, _, ok := ScopeForProjectID("known"); ok {
+		t.Fatal("resolved with no project lister")
+	}
+}

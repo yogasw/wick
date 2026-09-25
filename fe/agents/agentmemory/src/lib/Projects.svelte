@@ -32,11 +32,14 @@
     pageLabel,
     projectKey,
     projectMetrics,
+    scopeCaveat,
+    scopeKeyOf,
+    scopeOrigin,
     sortProjects,
   } from "./projects.js";
   import type { HandoffCell } from "./projects.js";
-  import { blockedBy, relativeTime } from "./format.js";
-  import type { BackfillReport, ProjectRow, ProjectsResponse } from "./types.js";
+  import { blockedBy, MANAGE_ADMIN_ONLY, relativeTime } from "./format.js";
+  import type { BackfillReport, ProjectRow, ProjectScope, ProjectsResponse } from "./types.js";
 
   type Props = {
     res: ProjectsResponse | null;
@@ -46,6 +49,17 @@
     handoffs: Record<string, HandoffCell>;
     backfill: BackfillReport | null;
     backfillError: string;
+    // canManage false = a viewer: the import controls are left out, because
+    // a backfill writes into the store (PLAN §23.2).
+    canManage: boolean;
+    // scope is set when the panel was opened from ONE wick project's menu:
+    // the bucket the server resolved for it, which the tab opens on. Null is
+    // the ordinary store-wide view (PLAN §22).
+    scope: ProjectScope | null;
+    // scopeError is a resolution that failed — a project that is gone, or a
+    // panel opened with an id nobody has. Said out loud rather than silently
+    // falling back to the whole store.
+    scopeError: string;
     onSelect: (key: string) => void;
     onPreviewBackfill: (row: ProjectRow) => void;
     onRunBackfill: (row: ProjectRow) => void;
@@ -60,6 +74,9 @@
     handoffs,
     backfill,
     backfillError,
+    canManage,
+    scope,
+    scopeError,
     onSelect,
     onPreviewBackfill,
     onRunBackfill,
@@ -81,13 +98,96 @@
   // paragraph about unreadable numbers would just be noise.
   const anyUnbriefed = $derived(rows.some((r) => !r.briefing));
 
+  // What the panel was opened for, and whether the store has anything for it.
+  // "Resolved but absent" is its own state: the project exists in wick and its
+  // bucket is known, and nothing has ever been captured into it — which is an
+  // invitation to backfill, not an error (PLAN §22.3).
+  const scopeKey = $derived(scope ? scopeKeyOf(scope) : "");
+  const scopeRow = $derived(scopeKey ? (rows.find((r) => projectKey(r) === scopeKey) ?? null) : null);
+  const scopeMissing = $derived(Boolean(scope) && !scopeRow);
+  const caveat = $derived(scope ? scopeCaveat(scope.source) : null);
+
+  // The synthetic row an empty bucket's backfill runs against. Only the
+  // workspace/project are read by the call, and they come from the server's
+  // own resolution — never from a name built here (PLAN §22.2).
+  const scopeAsRow = $derived<ProjectRow | null>(
+    scope ? { workspace: scope.workspace, project: scope.project, page_count: 0 } : null,
+  );
+
+  // What an Import would act on: the selected row, or — when the panel was
+  // opened for a project the store has never seen — the resolved bucket.
+  const importTarget = $derived<ProjectRow | null>(current ?? (scopeMissing ? scopeAsRow : null));
+
   function confirmAndImport(): void {
     confirmImport = false;
-    if (current) onRunBackfill(current);
+    if (importTarget) onRunBackfill(importTarget);
   }
 </script>
 
 <div class="mx-auto w-full max-w-5xl space-y-5 px-4 py-5 sm:px-6 sm:py-6">
+  <!-- Opened from one project's "⋯" menu: say which bucket that project maps
+       to and how that was decided, before any table. The name is the SERVER's
+       answer — the panel showing a bucket the agents do not write to is the
+       exact failure §22.2 exists to prevent. -->
+  {#if scopeError}
+    <div class="rounded-xl border border-rose-300 bg-rose-100 px-5 py-3 dark:border-rose-700 dark:bg-navy-800">
+      <p class="text-sm font-medium text-rose-700 dark:text-rose-300">This project's memory could not be located</p>
+      <p class="mt-1 text-xs leading-relaxed text-black-800 dark:text-black-600">{scopeError}</p>
+    </div>
+  {:else if scope}
+    <section
+      class="rounded-xl border border-white-300 bg-white-100 px-5 py-4 dark:border-navy-600 dark:bg-navy-700"
+      data-testid="scope-card"
+    >
+      <p class="text-[0.6875rem] uppercase tracking-wider text-black-700 dark:text-black-600">Project</p>
+      <p class="mt-0.5 text-sm font-medium text-black-900 dark:text-white-100">{scope.name}</p>
+      <p class="mt-1.5 text-xs text-black-800 dark:text-black-600">
+        Memory bucket
+        <span class="font-mono text-black-900 dark:text-white-100">{scope.workspace}/{scope.project}</span>
+        — {scopeOrigin(scope.source)}.
+      </p>
+      {#if caveat}
+        <p class="mt-1.5 text-xs leading-relaxed text-cau-600 dark:text-cau-400" data-testid="scope-caveat">{caveat}</p>
+      {/if}
+
+      {#if scopeMissing}
+        <!-- Resolved, and empty. A zero with no explanation reads as "this
+             feature is broken"; what is actually true is that nothing has
+             been captured here yet, and the history that predates the hook
+             can be imported — preview first (PLAN §22.3, §13.5 point 4). -->
+        <div class="mt-3 border-t border-white-300 pt-3 dark:border-navy-600">
+          <p class="text-xs leading-relaxed text-black-800 dark:text-black-600">
+            Nothing has been captured into this bucket yet. Sessions that ran here before the hook was installed are
+            still on disk — a preview reports exactly what an import would take, without writing anything.
+          </p>
+          {#if canManage}
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy || !scopeAsRow}
+                onclick={() => scopeAsRow && onPreviewBackfill(scopeAsRow)}
+              >
+                Preview import
+              </Button>
+              <Button variant="danger" size="sm" disabled={busy} onclick={() => (confirmImport = true)}>Import</Button>
+            </div>
+          {:else}
+            <p class="mt-2 text-xs leading-relaxed text-black-700 dark:text-black-600">{MANAGE_ADMIN_ONLY}</p>
+          {/if}
+          {#if backfillError}
+            <p class="mt-2 text-xs leading-relaxed text-rose-700 dark:text-rose-300">{backfillError}</p>
+          {:else if backfill}
+            <p class="mt-2 text-xs leading-relaxed text-black-900 dark:text-white-100">
+              <span class="font-medium">{backfill.dry_run ? "Preview" : "Imported"}:</span>
+              {backfillSummary(backfill)}
+            </p>
+          {/if}
+        </div>
+      {/if}
+    </section>
+  {/if}
+
   {#if blocked}
     <BlockedState {blocked} onAction={onGoSettings} />
   {:else if loading && !res}
@@ -269,12 +369,18 @@
                 Preview first: it reports exactly what an import would take.
               </p>
             </div>
-            <div class="flex flex-shrink-0 flex-wrap items-center gap-2">
-              <Button variant="secondary" size="sm" disabled={busy} onclick={() => onPreviewBackfill(current)}>
-                Preview
-              </Button>
-              <Button variant="danger" size="sm" disabled={busy} onclick={() => (confirmImport = true)}>Import</Button>
-            </div>
+            {#if canManage}
+              <div class="flex flex-shrink-0 flex-wrap items-center gap-2">
+                <Button variant="secondary" size="sm" disabled={busy} onclick={() => onPreviewBackfill(current)}>
+                  Preview
+                </Button>
+                <Button variant="danger" size="sm" disabled={busy} onclick={() => (confirmImport = true)}>Import</Button>
+              </div>
+            {:else}
+              <p class="max-w-xs flex-shrink-0 text-xs leading-relaxed text-black-700 dark:text-black-600">
+                {MANAGE_ADMIN_ONLY}
+              </p>
+            {/if}
           </div>
 
           {#if backfillError}
@@ -301,7 +407,7 @@
 <ConfirmDialog
   open={confirmImport}
   title="Import this project's history?"
-  body={current ? backfillConfirmBody(`${current.workspace}/${current.project}`, false) : ""}
+  body={importTarget ? backfillConfirmBody(`${importTarget.workspace}/${importTarget.project}`, false) : ""}
   confirmLabel="Import"
   destructive={true}
   onConfirm={confirmAndImport}

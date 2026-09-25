@@ -226,3 +226,63 @@ func (w MarkerWriter) Ensure(folder, projectName, projectID string) error {
 	}
 	return EnsureMarker(folder, sc)
 }
+
+// ScopeSource names how a project's memory bucket was decided, because the
+// three answers carry different confidence and the panel says so.
+type ScopeSource string
+
+const (
+	// ScopeFromMarker: a .ai-memory.toml governs the folder. This is what
+	// the agent's own hook reads, so it is the bucket in use right now.
+	ScopeFromMarker ScopeSource = "marker"
+	// ScopeFromWick: no marker yet, but wick manages the folder and will
+	// write one the next time a session moves in — so this is where the
+	// memory is going to land.
+	ScopeFromWick ScopeSource = "wick"
+	// ScopeFromBasename: a custom-path folder wick deliberately does not
+	// mark, so the backend derives the project from the folder name — the
+	// one case that can collide with another project (see collision.go).
+	ScopeFromBasename ScopeSource = "basename"
+)
+
+// ScopeForProjectID resolves one wick project id onto the memory bucket its
+// sessions use, for the project-scoped entry into the panel (PLAN §22).
+//
+// It is deliberately NOT a bare ProjectScope call. The marker is what the
+// agent's hook actually reads, so a folder that has one is answered from it —
+// including a marker a human edited, which ProjectScope alone would
+// contradict. Only an unmarked folder falls through to ProjectScope, and only
+// when wick is the one that will mark it; a custom-path folder gets the
+// basename the backend would derive, because that is the truth for it.
+//
+// The FE never computes any of this: two sources of truth for "which bucket"
+// is the failure §22.2 exists to prevent.
+func ScopeForProjectID(id string) (ProjectFolder, Scope, ScopeSource, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" || projectLister == nil {
+		return ProjectFolder{}, Scope{}, "", false
+	}
+	var p ProjectFolder
+	found := false
+	for _, cand := range projectLister() {
+		if cand.ID == id {
+			p, found = cand, true
+			break
+		}
+	}
+	if !found || strings.TrimSpace(p.Folder) == "" {
+		return ProjectFolder{}, Scope{}, "", false
+	}
+	if sc, _, ok := readMarkerUpwards(p.Folder); ok {
+		if sc.Workspace == "" {
+			sc.Workspace = defaultWorkspace(markerWorkspace)
+		}
+		return p, sc, ScopeFromMarker, true
+	}
+	if !p.CustomPath {
+		if sc, err := ProjectScope(markerWorkspace, p.Name, p.ID); err == nil {
+			return p, sc, ScopeFromWick, true
+		}
+	}
+	return p, Scope{Workspace: defaultWorkspace(markerWorkspace), Project: filepath.Base(p.Folder)}, ScopeFromBasename, true
+}

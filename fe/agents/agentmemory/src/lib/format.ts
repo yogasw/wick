@@ -289,3 +289,15 @@ export function pctWidth(n: number, total: number): number {
   if (!total || n <= 0) return 0;
   return Math.min(100, Math.max(1.5, (n / total) * 100));
 }
+
+// ── access ───────────────────────────────────────────────────────────
+
+// MANAGE_ADMIN_ONLY is the one line a viewer is shown where the managing
+// controls would have been.
+//
+// One sentence, one place. The controls themselves are LEFT OUT rather than
+// rendered dead: a disabled button asks a question nobody can answer from the
+// screen, while a line that says who may do it does (Yoga, PLAN §23.3). It
+// reads as a division of labour, not as a refusal — looking is allowed, and
+// everything on the page around it still works.
+export const MANAGE_ADMIN_ONLY = "Managing Agent Memory — starting the daemon, changing settings, importing or sweeping — is restricted to admins. Everything here is readable.";

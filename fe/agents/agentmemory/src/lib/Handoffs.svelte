@@ -26,6 +26,9 @@
     cancelling: string;
     onScope: (key: string) => void;
     onRefresh: () => void;
+    // canManage false = a viewer: cancelling a baton changes what another
+    // agent is waiting on, so it is admin-only (PLAN §23.2).
+    canManage: boolean;
     onCancel: (h: Handoff) => void;
     onGoOverview: () => void;
   };
@@ -39,6 +42,7 @@
     cancelling,
     onScope,
     onRefresh,
+    canManage,
     onCancel,
     onGoOverview,
   }: Props = $props();
@@ -108,14 +112,16 @@
                   <p class="mt-0.5 truncate font-mono text-[0.6875rem] text-black-700 dark:text-black-600">{h.cwd}</p>
                 {/if}
               </div>
-              <Button
-                variant="danger"
-                size="sm"
-                disabled={busy || cancelling === h.id}
-                onclick={() => onCancel(h)}
-              >
-                {cancelling === h.id ? "Cancelling…" : "Cancel"}
-              </Button>
+              {#if canManage}
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={busy || cancelling === h.id}
+                  onclick={() => onCancel(h)}
+                >
+                  {cancelling === h.id ? "Cancelling…" : "Cancel"}
+                </Button>
+              {/if}
             </li>
           {/each}
         </ul>

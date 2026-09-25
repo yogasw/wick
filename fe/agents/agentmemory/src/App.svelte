@@ -23,6 +23,7 @@
     fetchMessages,
     fetchOverview,
     fetchProjects,
+    fetchProjectScope,
     fetchSettings,
     previewBackfill,
     readPage,
@@ -46,6 +47,7 @@
     Overview,
     Page,
     ProjectRow,
+    ProjectScope,
     ProjectsResponse,
     Scope,
     SearchHit,
@@ -56,7 +58,7 @@
     TestResult,
   } from "$lib/types.js";
   import { dotFor } from "$lib/format.js";
-  import { projectKey } from "$lib/projects.js";
+  import { projectKey, scopeKeyOf } from "$lib/projects.js";
   import type { HandoffCell } from "$lib/projects.js";
   import OverviewTab from "$lib/Overview.svelte";
   import ProjectsTab from "$lib/Projects.svelte";
@@ -78,6 +80,17 @@
 
   const app = document.getElementById("app");
   const base: string = (app?.dataset.base ?? "").replace(/\/$/, "");
+
+  // Who is reading. The Go shell inlines it (PLAN §23.3) so the managing
+  // controls are never painted for someone who would only get a 403 from
+  // them — they are left out entirely rather than rendered dead.
+  const canManage: boolean = (app?.dataset.canManage ?? "") === "true";
+
+  // Opened from a project's "⋯" menu: ?project=<wick project id>. The id is
+  // all the FE knows; the bucket it maps to is resolved by the server, which
+  // owns that mapping (PLAN §22.2).
+  const scopedProjectID: string =
+    typeof window !== "undefined" ? (new URLSearchParams(window.location.search).get("project") ?? "").trim() : "";
 
   // All seven are built. The blurbs stay: they are what the tab strip's
   // tooltips read from, and they say what a tab is for before it has data.
@@ -124,13 +137,21 @@
     },
   ];
 
+  // The project this panel was opened for, once the server has resolved it.
+  // scopeError is kept apart from it: "we could not work out which bucket" is
+  // a different thing to say than "that bucket is empty".
+  let scope = $state<ProjectScope | null>(null);
+  let scopeError = $state("");
+
   let backends = $state<BackendInfo[]>([]);
   let activeId = $state("");
   let overviews = $state<Record<string, Overview>>({});
   let loaded = $state(false);
   let loading = $state(true);
   let busy = $state(false);
-  let tab = $state<Tab>("overview");
+  // A panel opened for one project opens on Projects — that is the tab its
+  // detail lives on; the global tabs are still there, one click away.
+  let tab = $state<Tab>(scopedProjectID ? "projects" : "overview");
   let test = $state<TestResult | null>(null);
   let confirmStop = $state(false);
 
@@ -312,11 +333,33 @@
     void loadTab(t);
   }
 
+  // resolveScope asks the server which bucket the wick project in ?project=
+  // uses. It runs once, before the first project list, so the Projects tab
+  // already knows what it was opened for. A failure is recorded and shown —
+  // never silently widened to the whole store, which would look like the
+  // project's memory and be someone else's.
+  async function resolveScope(): Promise<void> {
+    if (!scopedProjectID) return;
+    try {
+      scope = await run(fetchProjectScope(base, scopedProjectID));
+      scopeError = "";
+    } catch (e) {
+      scope = null;
+      scopeError = String(e);
+    }
+  }
+
   async function loadProjects(): Promise<void> {
     const id = activeId;
     projectsLoading = true;
     try {
       projects = await run(fetchProjects(base, id));
+      // Opened for one project: select its row, so the detail below the
+      // table is already the one the menu pointed at.
+      if (scope) {
+        const key = scopeKeyOf(scope);
+        if ((projects.projects ?? []).some((r) => projectKey(r) === key)) selectedProject = key;
+      }
       await loadHandoffCounts(projects.projects ?? []);
     } catch (e) {
       toastError("Could not list projects", String(e));
@@ -597,7 +640,7 @@
   // belong to the Health tab and run only when it is opened
   // (PLAN §13.5 point 7).
   $effect(() => {
-    void loadBackends();
+    void resolveScope().then(loadBackends);
     const t = setInterval(() => void refresh(), 5000);
     return () => clearInterval(t);
   });
@@ -673,7 +716,7 @@
         No Agent Memory backend is registered on this host.
       </div>
     {:else if tab === "overview"}
-      <OverviewTab {ov} {loading} {busy} {test} {onStart} {onRestart} {onTest} onStop={() => (confirmStop = true)} />
+      <OverviewTab {ov} {loading} {busy} {test} {canManage} {onStart} {onRestart} {onTest} onStop={() => (confirmStop = true)} />
     {:else if tab === "projects"}
       <ProjectsTab
         res={projects}
@@ -683,6 +726,9 @@
         handoffs={handoffCells}
         backfill={backfillReport}
         {backfillError}
+        {canManage}
+        {scope}
+        {scopeError}
         onSelect={selectProject}
         onPreviewBackfill={(r) => void onBackfill(r, false)}
         onRunBackfill={(r) => void onBackfill(r, true)}
@@ -690,7 +736,14 @@
         onGoSettings={() => selectTab("settings")}
       />
     {:else if tab === "analytics"}
-      <AnalyticsTab {ov} {loading} {busy} onCompact={() => void onCompact()} onGoOverview={() => selectTab("overview")} />
+      <AnalyticsTab
+        {ov}
+        {loading}
+        {busy}
+        {canManage}
+        onCompact={() => void onCompact()}
+        onGoOverview={() => selectTab("overview")}
+      />
     {:else if tab === "health"}
       <HealthTab
         report={health}
@@ -725,6 +778,7 @@
         scopeKey={handoffScope}
         loading={handoffLoading}
         {busy}
+        {canManage}
         {cancelling}
         onScope={setHandoffScope}
         onRefresh={() => void loadHandoffs()}
@@ -745,6 +799,7 @@
         {sweep}
         {sweepError}
         {advanced}
+        {canManage}
         onField={setField}
         onSave={() => void doSaveSettings()}
         onReset={() => (form = storedSettings ? { ...storedSettings } : null)}

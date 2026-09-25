@@ -14,6 +14,9 @@ import {
   pageLabel,
   projectKey,
   projectMetrics,
+  scopeCaveat,
+  scopeKeyOf,
+  scopeOrigin,
   sortProjects,
 } from "../projects.js";
 import type { BackfillReport, ProjectBriefing, ProjectRow } from "../types.js";
@@ -289,5 +292,29 @@ describe("latestPages", () => {
 
   test("no selected project is unavailable rather than a crash", () => {
     expect(latestPages(null).state).toBe("unavailable");
+  });
+});
+
+// ── the project this panel was opened for (PLAN §22) ─────────────────
+
+describe("scope of an opened project", () => {
+  test("the selection key is the same form the table's rows use", () => {
+    expect(scopeKeyOf({ workspace: "wick", project: "kasir-8c28230d" })).toBe("wick/kasir-8c28230d");
+  });
+
+  // Only the basename case can collide, so only it earns a caveat — and the
+  // caveat has to name the collision, not just the mechanism.
+  test("only a basename-derived bucket carries a caveat, and it names the risk", () => {
+    expect(scopeCaveat("marker")).toBeNull();
+    expect(scopeCaveat("wick")).toBeNull();
+    const c = scopeCaveat("basename");
+    expect(c).toContain("folder NAME");
+    expect(c).toMatch(/same name would share this memory/i);
+  });
+
+  test("every source says in plain words where the bucket came from", () => {
+    expect(scopeOrigin("marker")).toContain(".ai-memory.toml");
+    expect(scopeOrigin("wick")).toContain("next time a session runs");
+    expect(scopeOrigin("basename")).toContain("folder name");
   });
 });

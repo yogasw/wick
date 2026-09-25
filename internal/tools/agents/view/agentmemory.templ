@@ -1,5 +1,7 @@
 package view
 
+import "strconv"
+
 // AgentMemoryVM feeds the thin-shell that hosts the Agent Memory SPA inside
 // the standard agents layout. AssetURL is the hashed Vite bundle path resolved
 // at boot via spaAssetURL("agentmemory"). The SPA fetches the backend list and
@@ -8,6 +10,11 @@ type AgentMemoryVM struct {
 	Layout   AgentsLayoutVM
 	Base     string // /tools/agents
 	AssetURL string
+	// CanManage says whether this reader may drive the daemon and the
+	// store. False leaves every managing control out of the panel rather
+	// than rendering it dead, and is known before the first fetch so a
+	// viewer never watches a button appear and then 403 (PLAN §23.3).
+	CanManage bool
 }
 
 // AgentMemoryPage renders the Agent Memory SPA shell inside the agents chrome.
@@ -25,6 +32,7 @@ templ AgentMemoryPage(vm AgentMemoryVM) {
 			<div
 				id="app"
 				data-base={ vm.Base }
+				data-can-manage={ strconv.FormatBool(vm.CanManage) }
 				class="h-full"
 			></div>
 			<script type="module" src={ vm.AssetURL }></script>

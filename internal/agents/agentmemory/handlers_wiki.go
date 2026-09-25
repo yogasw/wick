@@ -18,10 +18,12 @@ const defaultMessageLimit = 50
 // registerWikiRoutes wires the 4C endpoints for one backend under the same
 // prefix as the rest.
 func registerWikiRoutes(r tool.Router, be *Backend, p string) {
-	r.GET(p+"/page", ctl(be, pageHandler))
-	r.GET(p+"/messages", ctl(be, messagesHandler))
-	r.POST(p+"/handoffs/cancel", ctl(be, cancelHandoffHandler))
-	r.POST(p+"/forget-sweep", ctl(be, forgetSweepHandler))
+	r.GET(p+"/page", view(be, pageHandler))
+	r.GET(p+"/messages", view(be, messagesHandler))
+	// Retiring a baton and sweeping the store both change it, so both sit
+	// on the admin side of the split (PLAN §23.2).
+	r.POST(p+"/handoffs/cancel", manage(be, cancelHandoffHandler))
+	r.POST(p+"/forget-sweep", manage(be, forgetSweepHandler))
 }
 
 // pageHandler reads one wiki page in full — the other half of search, which

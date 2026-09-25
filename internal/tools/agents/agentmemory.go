@@ -44,7 +44,11 @@ type agentMemoryConfigStore struct{}
 
 func (agentMemoryConfigStore) Enabled() bool { return AgentMemoryEnabled() }
 
-func (agentMemoryConfigStore) AccessAllowed(ctx context.Context) bool {
+func (agentMemoryConfigStore) ReadAllowed(ctx context.Context) bool {
+	return agentMemoryViewer(ctx)
+}
+
+func (agentMemoryConfigStore) ManageAllowed(ctx context.Context) bool {
 	return agentMemoryAdminOnly(ctx)
 }
 
@@ -179,16 +183,34 @@ func AgentMemoryEnabled() bool {
 }
 
 // agentMemoryAdminOnly reports whether the request's user is an admin. The
-// panel and its controls are admin-only — they start processes and read what
-// agents stored. Fail-closed when no user.
+// CONTROLS are admin-only — they start processes, rewrite the daemon's
+// configuration and import history. Fail-closed when no user.
 func agentMemoryAdminOnly(ctx context.Context) bool {
 	u := login.GetUser(ctx)
 	return u != nil && u.IsAdmin()
 }
 
+// agentMemoryViewer reports who may LOOK at the panel: anyone logged in
+// (Yoga, PLAN §23.4). The store holds what agents saw in their sessions, so
+// this is the one line to narrow if a wick install ever has users who should
+// not see client data — the endpoints all read it through ConfigStore.
+// Fail-closed when no user.
+func agentMemoryViewer(ctx context.Context) bool {
+	return login.GetUser(ctx) != nil
+}
+
 // AgentMemoryVisible reports whether the Agent Memory nav entry should show:
-// master on AND the caller has access.
+// master on AND the caller may at least look. It gates the project menu's
+// entry too (PLAN §22.1) — the reading gate, not the managing one.
 func AgentMemoryVisible(ctx context.Context) bool {
+	return AgentMemoryEnabled() && agentMemoryViewer(ctx)
+}
+
+// AgentMemoryManageable reports whether the caller may drive the controls. The
+// panel is handed this so it can leave the managing controls out entirely
+// rather than render them dead — a disabled button only raises questions
+// (PLAN §23.3).
+func AgentMemoryManageable(ctx context.Context) bool {
 	return AgentMemoryEnabled() && agentMemoryAdminOnly(ctx)
 }
 
@@ -221,20 +243,26 @@ func RegisterAgentMemory(r tool.Router) {
 // this handler only supplies the layout, base, and the Vite bundle URL.
 // FullBleed so the panel fills the content area. The gate matches the data
 // endpoints exactly: 404 while the master switch is off (the feature looks
-// absent rather than forbidden), 403 for non-admins.
+// absent rather than forbidden), 403 for anyone not logged in.
+//
+// CanManage rides along so the SPA knows which half of the panel to draw
+// before its first fetch — without it a viewer would see the managing
+// controls paint and then fail on 403.
 func agentMemoryPage(c *tool.Ctx) {
 	if !AgentMemoryEnabled() {
 		c.Error(http.StatusNotFound, "agent memory disabled")
 		return
 	}
-	if !requireAdmin(c) {
+	if !agentMemoryViewer(c.Context()) {
+		c.Error(http.StatusForbidden, "forbidden")
 		return
 	}
 	layout := sidebarVM(c, "agentmemory", "")
 	layout.FullBleed = true
 	c.HTML(view.AgentMemoryPage(view.AgentMemoryVM{
-		Layout:   layout,
-		Base:     c.Base(),
-		AssetURL: spaAssetURL("agentmemory"),
+		Layout:    layout,
+		Base:      c.Base(),
+		AssetURL:  spaAssetURL("agentmemory"),
+		CanManage: AgentMemoryManageable(c.Context()),
 	}))
 }

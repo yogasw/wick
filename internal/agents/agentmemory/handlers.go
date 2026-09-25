@@ -51,58 +51,102 @@ func RegisterRoutes(r tool.Router, cfg ConfigStore) {
 	// Registry-wide list so the FE can enumerate backends before it knows
 	// which one is selected.
 	r.GET("/agentmemory/backends", listBackends)
+	// Which wick project maps to which memory bucket, for the project-scoped
+	// entry into the panel (PLAN §22).
+	r.GET("/agentmemory/project-scope", projectScopeHandler)
 
 	for _, be := range List() {
 		be := be
 		p := "/agentmemory/" + be.Desc.ID
 
-		// Daemon control.
-		r.GET(p+"/status", ctl(be, statusHandler))
-		r.GET(p+"/logs", ctl(be, logsHandler))
-		r.POST(p+"/start", ctl(be, startHandler))
-		r.POST(p+"/stop", ctl(be, stopHandler))
-		r.POST(p+"/restart", ctl(be, restartHandler))
-		r.POST(p+"/install", ctl(be, installHandler))
-		r.POST(p+"/test", ctl(be, testHandler))
+		// Daemon control — managing, so admin only.
+		r.POST(p+"/start", manage(be, startHandler))
+		r.POST(p+"/stop", manage(be, stopHandler))
+		r.POST(p+"/restart", manage(be, restartHandler))
+		r.POST(p+"/install", manage(be, installHandler))
+		r.POST(p+"/test", manage(be, testHandler))
+		// The log is a read, but a managing one: the daemon writes store
+		// paths and launch values into it (PLAN §23.2).
+		r.GET(p+"/logs", manage(be, logsHandler))
 
-		// Daemon settings.
-		r.GET(p+"/settings", ctl(be, getSettings))
-		r.POST(p+"/settings", ctl(be, saveSettings))
+		// Daemon settings. Reading them is open — every value that leaves
+		// here is masked (settingsForUI) — while writing them is not.
+		r.GET(p+"/settings", view(be, getSettings))
+		r.POST(p+"/settings", manage(be, saveSettings))
 
-		// Panel data.
-		r.GET(p+"/projects", ctl(be, projectsHandler))
-		r.GET(p+"/health", ctl(be, healthHandler))
-		r.GET(p+"/handoffs", ctl(be, handoffsHandler))
-		r.GET(p+"/search", ctl(be, searchHandler))
-		r.POST(p+"/backfill/preview", ctl(be, backfillPreview))
-		r.POST(p+"/backfill/run", ctl(be, backfillRun))
-		r.POST(p+"/compact", ctl(be, compactHandler))
+		// Panel data — the looking half of the panel.
+		r.GET(p+"/status", view(be, statusHandler))
+		r.GET(p+"/projects", view(be, projectsHandler))
+		r.GET(p+"/health", view(be, healthHandler))
+		r.GET(p+"/handoffs", view(be, handoffsHandler))
+		r.GET(p+"/search", view(be, searchHandler))
+
+		// Everything that changes the store.
+		r.POST(p+"/backfill/preview", manage(be, backfillPreview))
+		r.POST(p+"/backfill/run", manage(be, backfillRun))
+		r.POST(p+"/compact", manage(be, compactHandler))
 
 		// Wiki, Handoffs and the retention sweep (handlers_wiki.go).
 		registerWikiRoutes(r, be, p)
 	}
 }
 
-// ctl wraps a per-backend handler with the shared gate: master switch on +
-// caller has access.
-func ctl(be *Backend, fn func(*Backend, *tool.Ctx)) tool.HandlerFunc {
+// Two gates, because the feature has two audiences: admin MANAGES, everyone
+// else LOOKS (PLAN §23). Which one an endpoint gets is decided once, at
+// registration, by wrapping it in view() or manage() — so a route added later
+// has to state which side it is on rather than inheriting the loose one.
+
+// view wraps a per-backend handler with the reading gate.
+func view(be *Backend, fn func(*Backend, *tool.Ctx)) tool.HandlerFunc {
 	return func(c *tool.Ctx) {
-		if !allowed(c) {
+		if !allowedRead(c) {
 			return
 		}
 		fn(be, c)
 	}
 }
 
-// allowed gates every endpoint. A disabled master answers 404 so the feature
-// looks absent rather than forbidden; a non-admin gets 403.
-func allowed(c *tool.Ctx) bool {
-	if store == nil || !store.Enabled() {
-		c.Error(http.StatusNotFound, "agent memory disabled")
+// manage wraps a per-backend handler with the admin gate.
+func manage(be *Backend, fn func(*Backend, *tool.Ctx)) tool.HandlerFunc {
+	return func(c *tool.Ctx) {
+		if !allowedWrite(c) {
+			return
+		}
+		fn(be, c)
+	}
+}
+
+// allowedRead gates the looking endpoints. A disabled master answers 404 so
+// the feature looks absent rather than forbidden — that part is the same for
+// everyone and must not change (PLAN §23.2).
+func allowedRead(c *tool.Ctx) bool {
+	if !featureOn(c) {
 		return false
 	}
-	if !store.AccessAllowed(c.Context()) {
+	if !store.ReadAllowed(c.Context()) {
 		c.Error(http.StatusForbidden, "forbidden")
+		return false
+	}
+	return true
+}
+
+// allowedWrite gates everything that manages the daemon or the store.
+func allowedWrite(c *tool.Ctx) bool {
+	if !featureOn(c) {
+		return false
+	}
+	if !store.ManageAllowed(c.Context()) {
+		c.Error(http.StatusForbidden, "managing Agent Memory is restricted to admins")
+		return false
+	}
+	return true
+}
+
+// featureOn is the half both gates share: an unwired or disabled store is a
+// 404, so nothing slips through before boot either.
+func featureOn(c *tool.Ctx) bool {
+	if store == nil || !store.Enabled() {
+		c.Error(http.StatusNotFound, "agent memory disabled")
 		return false
 	}
 	return true
@@ -120,7 +164,7 @@ type backendInfo struct {
 }
 
 func listBackends(c *tool.Ctx) {
-	if !allowed(c) {
+	if !allowedRead(c) {
 		return
 	}
 	out := make([]backendInfo, 0, len(List()))
@@ -140,6 +184,47 @@ func listBackends(c *tool.Ctx) {
 		})
 	}
 	c.JSON(http.StatusOK, map[string]any{"backends": out})
+}
+
+// projectScope is the answer to "which memory bucket does this wick project
+// use?" — the one the project menu's Agent Memory entry opens onto.
+type projectScope struct {
+	ProjectID string `json:"project_id"`
+	Name      string `json:"name"`
+	Folder    string `json:"folder"`
+	Workspace string `json:"workspace"`
+	Project   string `json:"project"`
+	// Source says how it was decided — marker, wick's mapping, or the
+	// folder's basename — so the panel can explain a bucket that is not
+	// what the operator expected rather than just showing it.
+	Source string `json:"source"`
+}
+
+// projectScopeHandler resolves a wick project id server-side. It exists so
+// the FE never derives a scope name: the mapping lives in exactly one place,
+// next to the marker writer that pins it (PLAN §22.2).
+func projectScopeHandler(c *tool.Ctx) {
+	if !allowedRead(c) {
+		return
+	}
+	id := strings.TrimSpace(c.Query("project"))
+	if id == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "project is required"})
+		return
+	}
+	p, sc, src, ok := ScopeForProjectID(id)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no wick project with id " + id})
+		return
+	}
+	c.JSON(http.StatusOK, projectScope{
+		ProjectID: p.ID,
+		Name:      p.Name,
+		Folder:    p.Folder,
+		Workspace: sc.Workspace,
+		Project:   sc.Project,
+		Source:    string(src),
+	})
 }
 
 // ── daemon control + overview ────────────────────────────────────────

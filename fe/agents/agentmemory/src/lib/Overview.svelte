@@ -13,6 +13,7 @@
     captureChip,
     formatCount,
     instanceLabel,
+    MANAGE_ADMIN_ONLY,
     measured,
     portLabel,
     uptimeOf,
@@ -24,12 +25,15 @@
     loading: boolean;
     busy: boolean;
     test: TestResult | null;
+    // canManage false = a viewer: the daemon controls are not rendered at
+    // all, and one line says who may drive them (PLAN §23.3).
+    canManage: boolean;
     onStart: () => void;
     onStop: () => void;
     onRestart: () => void;
     onTest: () => void;
   };
-  let { ov, loading, busy, test, onStart, onStop, onRestart, onTest }: Props = $props();
+  let { ov, loading, busy, test, canManage, onStart, onStop, onRestart, onTest }: Props = $props();
 
   // now ticks once a second so the uptime reads as a clock rather than as a
   // value frozen at the last poll.
@@ -96,19 +100,25 @@
         {/if}
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        {#if daemon?.state === "running" || daemon?.state === "starting"}
-          <!-- Stopping is the destructive one here: every instance wired to
-               this daemon loses recall AND stops being captured while it is
-               down, so it gets the danger variant + a confirm that names
-               that consequence (PLAN §13.5 point 2). -->
-          <Button variant="danger" size="lg" disabled={busy} onclick={onStop}>Stop</Button>
-          <Button variant="secondary" size="lg" disabled={busy} onclick={onRestart}>Restart</Button>
+        {#if canManage}
+          {#if daemon?.state === "running" || daemon?.state === "starting"}
+            <!-- Stopping is the destructive one here: every instance wired to
+                 this daemon loses recall AND stops being captured while it is
+                 down, so it gets the danger variant + a confirm that names
+                 that consequence (PLAN §13.5 point 2). -->
+            <Button variant="danger" size="lg" disabled={busy} onclick={onStop}>Stop</Button>
+            <Button variant="secondary" size="lg" disabled={busy} onclick={onRestart}>Restart</Button>
+          {:else}
+            <Button variant="primary" size="lg" disabled={busy || daemon?.state === "not-installed"} onclick={onStart}>
+              Start
+            </Button>
+          {/if}
+          <Button variant="secondary" size="lg" disabled={busy} onclick={onTest}>Test connection</Button>
         {:else}
-          <Button variant="primary" size="lg" disabled={busy || daemon?.state === "not-installed"} onclick={onStart}>
-            Start
-          </Button>
+          <!-- A viewer gets the sentence instead of the buttons, not the
+               buttons greyed out (PLAN §23.3). -->
+          <p class="max-w-md text-xs leading-relaxed text-black-700 dark:text-black-600">{MANAGE_ADMIN_ONLY}</p>
         {/if}
-        <Button variant="secondary" size="lg" disabled={busy} onclick={onTest}>Test connection</Button>
       </div>
     </div>
 
@@ -122,15 +132,19 @@
     </dl>
 
     {#if daemon?.state === "not-installed"}
+      <!-- Same fact, addressed to whoever can act on it: an admin is told
+           what to do, a viewer is told who does it. Telling a viewer to
+           "press Start" points at a button that is not on their screen. -->
       <p class="border-t border-white-300 dark:border-navy-600 px-5 py-3 text-xs text-black-800 dark:text-black-600">
-        The backend binary is not on PATH. wick does not install it yet — put
+        The backend binary is not on PATH. wick does not install it yet —
+        {#if canManage}put{:else}an admin has to put{/if}
         <code class="font-mono text-black-900 dark:text-white-100">{ov?.backend.name ?? "the backend"}</code>
-        on PATH yourself{#if ov?.backend.github_url}&nbsp;(<a
+        on PATH{#if canManage} yourself{/if}{#if ov?.backend.github_url}&nbsp;(<a
             href={ov.backend.github_url}
             target="_blank"
             rel="noreferrer"
             class="text-green-600 hover:text-green-500 dark:text-green-300">upstream repo</a
-          >){/if}, then press Start.
+          >){/if}{#if canManage}, then press Start.{:else} and start it.{/if}
       </p>
     {/if}
 

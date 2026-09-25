@@ -35,6 +35,7 @@
     retentionSummary,
     ZERO_LLM_NOTE,
   } from "./settings.js";
+  import { MANAGE_ADMIN_ONLY } from "./format.js";
   import type { AutostartLock, Settings, SweepReport, TestResult } from "./types.js";
 
   type Props = {
@@ -50,6 +51,11 @@
     sweep: SweepReport | null;
     sweepError: string;
     advanced: boolean;
+    // canManage false = a viewer: the fields are shown (the server masks the
+    // one secret for everyone) but nothing here can be submitted, so the save
+    // bar and every write button are left out and the controls are inert
+    // (PLAN §23.2, §23.3).
+    canManage: boolean;
     onField: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
     onSave: () => void;
     onReset: () => void;
@@ -72,6 +78,7 @@
     sweep,
     sweepError,
     advanced,
+    canManage,
     onField,
     onSave,
     onReset,
@@ -82,6 +89,8 @@
     onToggleAdvanced,
   }: Props = $props();
 
+  // readOnly is the inverse of canManage, named for what it does to a field.
+  const readOnly = $derived(!canManage);
   const dirty = $derived(isDirty(form, stored));
   const access = $derived(form ? accessWarning(form) : null);
   const retention = $derived(retentionSummary(form?.observation_retention_days ?? 0));
@@ -112,18 +121,22 @@
       class="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-5 py-3"
     >
       <p class="min-w-0 text-xs text-black-700 dark:text-black-600">
-        {#if dirty}
+        {#if readOnly}
+          {MANAGE_ADMIN_ONLY}
+        {:else if dirty}
           Unsaved changes.
         {:else}
           {restartNote(restartPending, running)}
         {/if}
       </p>
-      <div class="flex flex-wrap items-center gap-2">
-        <Button variant="ghost" size="md" disabled={!dirty || saving} onclick={onReset}>Discard</Button>
-        <Button variant="primary" size="md" disabled={!dirty || saving} onclick={onSave}>
-          {saving ? "Saving…" : "Save"}
-        </Button>
-      </div>
+      {#if !readOnly}
+        <div class="flex flex-wrap items-center gap-2">
+          <Button variant="ghost" size="md" disabled={!dirty || saving} onclick={onReset}>Discard</Button>
+          <Button variant="primary" size="md" disabled={!dirty || saving} onclick={onSave}>
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      {/if}
     </div>
 
     <!-- ── A. daemon ──────────────────────────────────────────────── -->
@@ -133,7 +146,7 @@
           <div class="flex justify-start sm:justify-end">
             <Toggle
               checked={form.autostart || form.autostart_locked}
-              disabled={form.autostart_locked}
+              disabled={readOnly || form.autostart_locked}
               label="Start the daemon when wick boots"
               onChange={(v) => onField("autostart", v)}
             />
@@ -141,14 +154,14 @@
         </SettingRow>
 
         <SettingRow label="Port" note={portNote(form.port, defaultPort, undefined)}>
-          <NumberInput value={form.port} min={0} max={65535} onChange={(v) => onField("port", v)} ariaLabel="Port" />
+          <NumberInput disabled={readOnly} value={form.port} min={0} max={65535} onChange={(v) => onField("port", v)} ariaLabel="Port" />
         </SettingRow>
 
         <SettingRow
           label="Store location"
           note="Absolute path. One daemon holds every workspace and project in one store — the separation that matters happens on the project axis, not by splitting stores."
         >
-          <TextInput
+          <TextInput disabled={readOnly}
             value={form.data_dir}
             onChange={(v) => onField("data_dir", v)}
             placeholder="Backend default"
@@ -161,7 +174,7 @@
           note="Serves the project list and search this panel reads. With it off, those two report that they are unavailable rather than showing an empty store."
         >
           <div class="flex justify-start sm:justify-end">
-            <Toggle checked={form.enable_web} label="Web API" onChange={(v) => onField("enable_web", v)} />
+            <Toggle disabled={readOnly} checked={form.enable_web} label="Web API" onChange={(v) => onField("enable_web", v)} />
           </div>
         </SettingRow>
 
@@ -169,7 +182,7 @@
           label="Base path"
           note="Mounts everything — MCP, the API, the hook endpoint and the web UI — under one prefix, for running behind a reverse proxy."
         >
-          <TextInput
+          <TextInput disabled={readOnly}
             value={form.base_path}
             onChange={(v) => onField("base_path", v)}
             placeholder="/"
@@ -178,7 +191,7 @@
         </SettingRow>
 
         <SettingRow label="Log level" note="Raise it only while diagnosing: debug logs every hook event.">
-          <Select value={form.log_level} options={LOG_LEVELS} onChange={(v) => onField("log_level", v)} />
+          <Select disabled={readOnly} value={form.log_level} options={LOG_LEVELS} onChange={(v) => onField("log_level", v)} />
         </SettingRow>
       </div>
     </Section>
@@ -210,7 +223,7 @@
           label="Allowed hosts"
           note="Comma-separated Host-header allowlist. Leave it on the loopback default unless something off this machine genuinely has to read the store."
         >
-          <TextInput
+          <TextInput disabled={readOnly}
             value={form.allowed_hosts}
             onChange={(v) => onField("allowed_hosts", v)}
             placeholder="localhost, 127.0.0.1, ::1"
@@ -222,7 +235,7 @@
           label="Bearer token"
           note="Required on every request when set. A stored token is shown as dots and is left alone unless you type a new one; clearing the field removes it."
         >
-          <TextInput
+          <TextInput disabled={readOnly}
             value={form.auth_token}
             onChange={(v) => onField("auth_token", v)}
             type="password"
@@ -233,7 +246,9 @@
 
         <SettingRow label="Connection" note="Checks the daemon answers its health path, and reads the store so the result carries a version and real counts.">
           <div class="flex flex-col items-start gap-2 sm:items-end">
-            <Button variant="secondary" size="md" disabled={busy} onclick={onTest}>Test connection</Button>
+            {#if !readOnly}
+              <Button variant="secondary" size="md" disabled={busy} onclick={onTest}>Test connection</Button>
+            {/if}
             {#if test}
               <p class={`text-[0.6875rem] ${test.ok ? "text-pos-400" : "text-neg-400"}`}>
                 {test.ok
@@ -254,7 +269,7 @@
     >
       <div class="divide-y divide-white-300 dark:divide-navy-600">
         <SettingRow label="Capture mode" note={captureModeBody}>
-          <Select
+          <Select disabled={readOnly}
             value={form.capture_mode || "denylist"}
             options={CAPTURE_MODES.map((m) => ({ label: m.label, value: m.value }))}
             onChange={(v) => onField("capture_mode", v)}
@@ -270,7 +285,7 @@
           <div class="flex justify-start sm:justify-end">
             <!-- Routed through the parent so it can raise a confirmation
                  before turning ON. Off needs no ceremony; on does. -->
-            <Toggle
+            <Toggle disabled={readOnly}
               checked={form.capture_assistant}
               label="Store the assistant's final message on every session stop"
               describedBy="capture-assistant-note"
@@ -281,7 +296,7 @@
 
         <SettingRow label="Capture prompts" note={PROMPT_CAPTURE_NOTE}>
           <div class="flex justify-start sm:justify-end">
-            <Toggle
+            <Toggle disabled={readOnly}
               checked={!form.no_capture_prompts}
               label="Capture prompt text"
               onChange={(v) => onField("no_capture_prompts", !v)}
@@ -290,7 +305,7 @@
         </SettingRow>
 
         <SettingRow label="Project strategy" note={strategyBody}>
-          <Select
+          <Select disabled={readOnly}
             value={form.project_strategy}
             options={PROJECT_STRATEGIES.map((s) => ({ label: s.label, value: s.value }))}
             onChange={(v) => onField("project_strategy", v)}
@@ -302,7 +317,7 @@
             label="Extra redaction patterns"
             helper="One regex per line, redacted on top of the built-in patterns. An invalid one stops the daemon from starting."
           >
-            <TextArea
+            <TextArea disabled={readOnly}
               value={form.sanitize_extra_patterns}
               onChange={(v) => onField("sanitize_extra_patterns", v)}
               rows={3}
@@ -317,7 +332,7 @@
             label="Never redact"
             helper="One substring per line. For a public identifier that the generic *_KEY catch-all would otherwise hide."
           >
-            <TextArea
+            <TextArea disabled={readOnly}
               value={form.sanitize_allowlist}
               onChange={(v) => onField("sanitize_allowlist", v)}
               rows={2}
@@ -332,14 +347,14 @@
           note="Events per second per session. 0 is no limit — raise it off zero only if a busy host is flooding the spool."
         >
           <div class="grid grid-cols-2 gap-2">
-            <NumberInput
+            <NumberInput disabled={readOnly}
               value={form.hook_rate_per_sec}
               min={0}
               step={0.5}
               onChange={(v) => onField("hook_rate_per_sec", v)}
               ariaLabel="Hook events per second"
             />
-            <NumberInput
+            <NumberInput disabled={readOnly}
               value={form.hook_rate_burst}
               min={0}
               step={1}
@@ -389,13 +404,13 @@
       <div class="divide-y divide-white-300 dark:divide-navy-600">
         <SettingRow label="LLM provider" note={mode === "zero" ? ZERO_LLM_NOTE : undefined} danger={mode === "cloud"}>
           <div class="grid grid-cols-2 gap-2">
-            <TextInput
+            <TextInput disabled={readOnly}
               value={form.llm_provider}
               onChange={(v) => onField("llm_provider", v)}
               placeholder="none"
               ariaLabel="LLM provider"
             />
-            <TextInput
+            <TextInput disabled={readOnly}
               value={form.llm_model}
               onChange={(v) => onField("llm_model", v)}
               placeholder="model"
@@ -409,13 +424,13 @@
           note="Drives semantic search. Unset uses the backend's in-process local model — no key, no egress. “none” leaves full-text search only."
         >
           <div class="grid grid-cols-2 gap-2">
-            <TextInput
+            <TextInput disabled={readOnly}
               value={form.embedding_provider}
               onChange={(v) => onField("embedding_provider", v)}
               placeholder="local"
               ariaLabel="Embedding provider"
             />
-            <TextInput
+            <TextInput disabled={readOnly}
               value={form.embedding_model}
               onChange={(v) => onField("embedding_model", v)}
               placeholder="model"
@@ -429,13 +444,13 @@
           note="Input and output ceilings for the summarising prompt. A small local model needs both lowered together."
         >
           <div class="grid grid-cols-2 gap-2">
-            <NumberInput
+            <NumberInput disabled={readOnly}
               value={form.max_input_tokens}
               min={0}
               onChange={(v) => onField("max_input_tokens", v)}
               ariaLabel="Max input tokens"
             />
-            <NumberInput
+            <NumberInput disabled={readOnly}
               value={form.max_output_tokens}
               min={0}
               onChange={(v) => onField("max_output_tokens", v)}
@@ -449,7 +464,7 @@
           note="On, the auto-improvement reviewer stages its edits for approval instead of writing them into the wiki."
         >
           <div class="flex justify-start sm:justify-end">
-            <Toggle
+            <Toggle disabled={readOnly}
               checked={form.auto_improve_require_approval}
               label="Require approval for auto-improvement proposals"
               onChange={(v) => onField("auto_improve_require_approval", v)}
@@ -476,7 +491,7 @@
           label="Prune raw observations after"
           note="Days. 0 means never — the backend's default, and a real setting rather than an empty field."
         >
-          <NumberInput
+          <NumberInput disabled={readOnly}
             value={form.observation_retention_days}
             min={0}
             onChange={(v) => onField("observation_retention_days", v)}
@@ -485,7 +500,7 @@
         </SettingRow>
 
         <SettingRow label="Hard-delete evicted pages after" note="Days. Until then an evicted page can still be recovered.">
-          <NumberInput
+          <NumberInput disabled={readOnly}
             value={form.hard_delete_after_days}
             min={0}
             onChange={(v) => onField("hard_delete_after_days", v)}
@@ -494,7 +509,7 @@
         </SettingRow>
 
         <SettingRow label="Prune batch size" note="Rows per transaction. Lower it on a slow disk.">
-          <NumberInput
+          <NumberInput disabled={readOnly}
             value={form.observation_prune_batch}
             min={0}
             onChange={(v) => onField("observation_prune_batch", v)}
@@ -508,8 +523,12 @@
           danger={true}
         >
           <div class="flex flex-wrap items-center gap-2 sm:justify-end">
-            <Button variant="secondary" size="md" disabled={busy} onclick={onPreviewSweep}>Preview</Button>
-            <Button variant="danger" size="md" disabled={busy} onclick={onRunSweep}>Run sweep</Button>
+            {#if readOnly}
+              <p class="text-xs leading-relaxed text-black-700 dark:text-black-600">{MANAGE_ADMIN_ONLY}</p>
+            {:else}
+              <Button variant="secondary" size="md" disabled={busy} onclick={onPreviewSweep}>Preview</Button>
+              <Button variant="danger" size="md" disabled={busy} onclick={onRunSweep}>Run sweep</Button>
+            {/if}
           </div>
         </SettingRow>
       </div>
@@ -530,7 +549,7 @@
     <Section title="Backfill" scope="per import">
       <div class="divide-y divide-white-300 dark:divide-navy-600">
         <SettingRow label="Sessions per import" note={backfillCapNote(form.backfill_max_sessions)}>
-          <NumberInput
+          <NumberInput disabled={readOnly}
             value={form.backfill_max_sessions}
             min={0}
             onChange={(v) => onField("backfill_max_sessions", v)}
@@ -543,7 +562,7 @@
           note="Off by default. An import reads every local harness transcript for the project, which is a lot of history to absorb without being asked — the Projects tab has a per-project import with a preview."
         >
           <div class="flex justify-start sm:justify-end">
-            <Toggle
+            <Toggle disabled={readOnly}
               checked={form.backfill_auto}
               label="Import a project's history automatically"
               onChange={(v) => onField("backfill_auto", v)}
@@ -568,7 +587,7 @@
       {:else}
         <div class="divide-y divide-white-300 dark:divide-navy-600">
           <SettingRow label="LLM reranker" note={RERANKER_NOTE} danger={(form.reranker ?? "") === "llm"}>
-            <Select
+            <Select disabled={readOnly}
               value={form.reranker}
               options={[
                 { label: "Off — local ranking only", value: "" },
@@ -578,22 +597,22 @@
             />
           </SettingRow>
           <SettingRow label="Decay λ" note="Age decay. Higher forgets faster; 0.02 puts an unused page below the cold threshold at about 80 days.">
-            <NumberInput value={form.decay_lambda} min={0} step={0.01} onChange={(v) => onField("decay_lambda", v)} ariaLabel="Decay lambda" />
+            <NumberInput disabled={readOnly} value={form.decay_lambda} min={0} step={0.01} onChange={(v) => onField("decay_lambda", v)} ariaLabel="Decay lambda" />
           </SettingRow>
           <SettingRow label="Access boost σ" note="How much being read keeps a page alive.">
-            <NumberInput value={form.decay_sigma} min={0} step={0.1} onChange={(v) => onField("decay_sigma", v)} ariaLabel="Decay sigma" />
+            <NumberInput disabled={readOnly} value={form.decay_sigma} min={0} step={0.1} onChange={(v) => onField("decay_sigma", v)} ariaLabel="Decay sigma" />
           </SettingRow>
           <SettingRow label="Access decay μ" note="How fast that boost fades once nobody reads the page.">
-            <NumberInput value={form.decay_mu} min={0} step={0.01} onChange={(v) => onField("decay_mu", v)} ariaLabel="Decay mu" />
+            <NumberInput disabled={readOnly} value={form.decay_mu} min={0} step={0.01} onChange={(v) => onField("decay_mu", v)} ariaLabel="Decay mu" />
           </SettingRow>
           <SettingRow label="Default salience" note="The starting score every page gets.">
-            <NumberInput value={form.salience_default} min={0} step={0.1} onChange={(v) => onField("salience_default", v)} ariaLabel="Default salience" />
+            <NumberInput disabled={readOnly} value={form.salience_default} min={0} step={0.1} onChange={(v) => onField("salience_default", v)} ariaLabel="Default salience" />
           </SettingRow>
           <SettingRow label="Breadth weight" note="Rewards a page several distinct operators have used.">
-            <NumberInput value={form.breadth_weight} min={0} step={0.1} onChange={(v) => onField("breadth_weight", v)} ariaLabel="Breadth weight" />
+            <NumberInput disabled={readOnly} value={form.breadth_weight} min={0} step={0.1} onChange={(v) => onField("breadth_weight", v)} ariaLabel="Breadth weight" />
           </SettingRow>
           <SettingRow label="Cold threshold" note="A page scoring below this is evicted by the sweep.">
-            <NumberInput value={form.cold_threshold} min={0} step={0.05} onChange={(v) => onField("cold_threshold", v)} ariaLabel="Cold threshold" />
+            <NumberInput disabled={readOnly} value={form.cold_threshold} min={0} step={0.05} onChange={(v) => onField("cold_threshold", v)} ariaLabel="Cold threshold" />
           </SettingRow>
         </div>
       {/if}

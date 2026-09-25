@@ -11,6 +11,7 @@ import type {
   MessagesResponse,
   Overview,
   PageResponse,
+  ProjectScope,
   ProjectsResponse,
   Scope,
   SearchResponse,
@@ -37,6 +38,13 @@ import type {
 // them before it knows which one is selected.
 export const fetchBackends = (base: string) =>
   apiGetE<{ backends: BackendInfo[] }>(`${base}/agentmemory/backends`);
+
+// fetchProjectScope resolves a WICK project id onto its memory bucket, server
+// side. The panel is opened this way from a project's "⋯" menu, and it asks
+// rather than computes for the reason in PLAN §22.2: the mapping has exactly
+// one home, next to the marker writer.
+export const fetchProjectScope = (base: string, projectID: string) =>
+  apiGetE<ProjectScope>(`${base}/agentmemory/project-scope?project=${encodeURIComponent(projectID)}`);
 
 // fetchOverview is the Overview tab in one request: daemon, settings,
 // resources, the instances using it, and the store counters.

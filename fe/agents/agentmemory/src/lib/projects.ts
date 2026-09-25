@@ -265,3 +265,39 @@ export function backfillConfirmBody(scope: string, force: boolean): string {
     "Importing one missing session at a time is the safe way to fill a gap."
   );
 }
+
+// ── the project this panel was opened for (PLAN §22) ─────────────────
+
+// scopeKeyOf is the selection key for a server-resolved project scope, in the
+// same "workspace/project" form the table's rows use — so opening the panel
+// from a project menu selects the row that is already there.
+export const scopeKeyOf = (sc: { workspace: string; project: string }): string => `${sc.workspace}/${sc.project}`;
+
+// scopeCaveat is what has to be said about HOW the bucket was decided, or
+// null when there is nothing to add.
+//
+// Only `basename` earns a caveat, and it earns a real one: that folder is a
+// custom path wick deliberately does not mark, so the backend derives the
+// project from the folder's NAME — and two projects whose folders share a
+// name share one memory (PLAN §14.3). The Health tab is where that is
+// actually detected, so the line points at it rather than at a fix that would
+// mean wick writing a dotfile into someone's repo.
+export function scopeCaveat(source: string): string | null {
+  if (source !== "basename") return null;
+  return (
+    "This project's folder is a custom path, which wick does not mark, so its memory bucket comes from the folder NAME. " +
+    "Another project whose folder has the same name would share this memory — the Health tab lists any such collision."
+  );
+}
+
+// scopeOrigin is the plain-language half of the same answer, for every source.
+export function scopeOrigin(source: string): string {
+  switch (source) {
+    case "marker":
+      return "pinned by this folder's .ai-memory.toml — the file agents actually read";
+    case "wick":
+      return "wick's own mapping for this project; the marker is written the next time a session runs here";
+    default:
+      return "derived from the folder name, because this folder carries no marker";
+  }
+}

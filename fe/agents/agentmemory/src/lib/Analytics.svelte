@@ -23,17 +23,20 @@
     spoolFacts,
     storageFacts,
   } from "./analytics.js";
-  import { blockedBy, formatCount, pctWidth } from "./format.js";
+  import { blockedBy, formatCount, MANAGE_ADMIN_ONLY, pctWidth } from "./format.js";
   import type { Overview } from "./types.js";
 
   type Props = {
     ov: Overview | null;
     loading: boolean;
     busy: boolean;
+    // canManage false = a viewer: Compact is left out, since it rewrites the
+    // database (PLAN §23.2).
+    canManage: boolean;
     onCompact: () => void;
     onGoOverview: () => void;
   };
-  let { ov, loading, busy, onCompact, onGoOverview }: Props = $props();
+  let { ov, loading, busy, canManage, onCompact, onGoOverview }: Props = $props();
 
   let confirmCompact = $state(false);
 
@@ -159,7 +162,11 @@
         <!-- Compaction deletes nothing, but it blocks every agent write for
              the length of a full database rewrite — so it is a danger button
              with a confirm that says exactly that (PLAN §13.5 point 2). -->
-        <Button variant="danger" size="sm" disabled={busy} onclick={() => (confirmCompact = true)}>Compact</Button>
+        {#if canManage}
+          <Button variant="danger" size="sm" disabled={busy} onclick={() => (confirmCompact = true)}>Compact</Button>
+        {:else}
+          <p class="max-w-xs text-[0.6875rem] leading-relaxed text-black-700 dark:text-black-600">{MANAGE_ADMIN_ONLY}</p>
+        {/if}
       {/snippet}
       <dl class="grid grid-cols-3 gap-x-6 gap-y-3 px-5 py-4">
         {#each [["Database", storage.database], ["Reclaimable", storage.reclaimable], ["Free on disk", storage.free]] as [k, v] (k)}

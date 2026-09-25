@@ -22,9 +22,16 @@ var ErrWebDisabled = errors.New("agentmemory: the backend's web API is disabled 
 type ConfigStore interface {
 	// Enabled is the master switch. False hides every Agent Memory surface.
 	Enabled() bool
-	// AccessAllowed reports whether the caller may drive the controls
-	// (admin only today).
-	AccessAllowed(ctx context.Context) bool
+	// ReadAllowed reports whether the caller may SEE the panel — the
+	// status, the projects, the wiki, the masked settings. Anyone logged
+	// in, by Yoga's decision (PLAN §23.4): narrowing it later is a change
+	// to this one method and nothing else.
+	ReadAllowed(ctx context.Context) bool
+	// ManageAllowed reports whether the caller may DRIVE it — start/stop,
+	// install, save settings, backfill, compact, sweep, and read the
+	// daemon log. Admin only: these change the host or expose paths and
+	// values a viewer has no business seeing.
+	ManageAllowed(ctx context.Context) bool
 	// Settings reads the persisted settings for backend id.
 	Settings(id string) Settings
 	// SaveSettings persists them. Autostart is written as given; the lock
