@@ -119,6 +119,11 @@ type SystemPageData struct {
 	SwapTo      string // version waiting
 	SwapSource  string // binary path, or "staged update (not applied yet)"
 	SwapBuilt   string // build timestamp of the waiting binary
+	// SwapBlocked is why the waiting build will never be applied on its own.
+	// Empty is the normal case. When set, the card says so instead of
+	// counting down to a swap that cannot happen.
+	SwapBlocked string
+	SwapWant    string // the version that WOULD be accepted
 	Graceful   bool     // this process can hand its socket to a successor
 	Busy       []string // work in flight right now ("agent turns=2 (sess-x)")
 }
@@ -441,6 +446,13 @@ templ runningNowCard(d SystemPageData) {
 				<h2 id="sys-title" class="text-base font-semibold text-black-900 dark:text-white-100">Update waiting to be applied</h2>
 				<p id="sys-swap-line" class="mt-1 text-sm font-mono text-black-900 dark:text-white-100">{ swapHeadline(d) }</p>
 				<p id="sys-swap-source" class="mt-1 text-xs text-black-700 dark:text-black-600">{ swapSourceLine(d) }</p>
+				// The note only exists when something is wrong, so it is
+				// allowed to be loud. A refusal with no reason is the state
+				// this whole card was built to stop producing.
+				<p
+					id="sys-swap-blocked"
+					class={ "mt-2 rounded-lg border border-cau-300 bg-cau-100 px-3 py-2 text-xs text-black-900", templ.KV("hidden", d.SwapBlocked == "") }
+				>{ blockedLine(d) }</p>
 			</div>
 			<div class="shrink-0 text-right">
 				<p class="text-xs font-mono text-black-700 dark:text-black-600">pid { strconv.Itoa(d.ServingPID) }</p>
@@ -521,6 +533,18 @@ func initialStateLine(d SystemPageData) string {
 		return strings.Join(d.Busy, ", ")
 	}
 	return "nothing running"
+}
+
+// blockedLine is the note under the headline: why this build is going
+// nowhere, and the version that would be taken instead.
+func blockedLine(d SystemPageData) string {
+	if d.SwapBlocked == "" {
+		return ""
+	}
+	if d.SwapWant == "" {
+		return "Not applied — " + d.SwapBlocked
+	}
+	return "Not applied — " + d.SwapBlocked + " Expected: " + d.SwapWant + " or newer."
 }
 
 // swapHeadline is the one line that answers "from what, to what".
@@ -852,6 +876,7 @@ templ systemUpdateScript() {
 			if (key === 'detected') return 'done';
 			if (key === 'idle') {
 				if (s === 'handing_over') return 'done';
+				if (s === 'blocked') return 'active';
 				if (s === 'waiting' || s === 'settling' || s === 'previous_draining') return 'active';
 				return 'todo';
 			}
@@ -883,6 +908,7 @@ templ systemUpdateScript() {
 					// Only work that cannot be resumed reaches this state. Agent
 					// turns never hold the swap back: they finish in the
 					// outgoing process either way.
+					case 'blocked': return 'refused — see the note above';
 					case 'waiting': return lastBusy.length ? lastBusy.join(', ') : 'work that cannot be interrupted';
 					case 'handing_over': return 'clear — running turns finish in the old process';
 				}
@@ -911,11 +937,26 @@ templ systemUpdateScript() {
 			todo: 'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-white-400 dark:border-navy-600 text-[0.7rem] font-semibold text-black-700 dark:text-black-600'
 		};
 
+		var autoNote = '', autoWant = '';
 		function paintAuto() {
 			if (titleEl) {
 				titleEl.textContent = autoState === 'handing_over'
 					? 'Swapping to the new build'
-					: 'Update waiting to be applied';
+					: autoState === 'blocked'
+						? 'Update will NOT be applied'
+						: 'Update waiting to be applied';
+			}
+			// The note is the whole point of the blocked state: a refusal
+			// nobody can read is indistinguishable from a watcher that quietly
+			// died, which is exactly how a versionless build spent 71 minutes
+			// "waiting for idle" that was never going to arrive.
+			var noteEl = document.getElementById('sys-swap-blocked');
+			if (noteEl) {
+				noteEl.classList.toggle('hidden', autoState !== 'blocked' || !autoNote);
+				if (autoState === 'blocked' && autoNote) {
+					noteEl.textContent = 'Not applied — ' + autoNote
+						+ (autoWant ? ' Expected: ' + autoWant + ' or newer.' : '');
+				}
 			}
 			if (stepsEl) {
 				var panels = stepsEl.querySelectorAll('[data-step]');
@@ -949,11 +990,16 @@ templ systemUpdateScript() {
 			// progress" is a button that lied about being clickable.
 			var btn = document.getElementById('sys-swap-force');
 			if (!btn) return;
-			var dead = autoState === 'handing_over';
+			var blocked = autoState === 'blocked';
+			var dead = autoState === 'handing_over' || blocked;
 			btn.disabled = dead;
-			btn.title = dead
-				? 'A handover is already underway — the new process is booting.'
-				: 'Hand over immediately and interrupt whatever is still running';
+			btn.title = blocked
+				// Forcing it would exec the file once and land in the same
+				// state, because nothing about the binary has changed.
+				? 'This build is refused — forcing it changes nothing. Fix the version and install again.'
+				: autoState === 'handing_over'
+					? 'A handover is already underway — the new process is booting.'
+					: 'Hand over immediately and interrupt whatever is still running';
 			btn.classList.toggle('opacity-50', dead);
 			btn.classList.toggle('cursor-not-allowed', dead);
 			btn.classList.toggle('hover:bg-neg-100', !dead);
@@ -962,6 +1008,8 @@ templ systemUpdateScript() {
 
 		function renderAuto(a) {
 			autoState = (a && a.state) || '';
+			autoNote = (a && a.note) || '';
+			autoWant = (a && a.want) || '';
 			autoElapsed = (a && a.elapsed_seconds) || 0;
 			autoLeft = autoState === 'handing_over'
 				? ((a && a.gives_up_in_seconds) || 0)
@@ -971,6 +1019,7 @@ templ systemUpdateScript() {
 		// Local tick only as a smoother between server updates; every update
 		// overwrites it, so the page can never disagree with the daemon.
 		setInterval(function () {
+			if (autoState === 'blocked') { paintAuto(); return; } // no clock: nothing is coming
 			if (autoState === 'handing_over') autoElapsed++;
 			if (autoLeft > 0) autoLeft--;
 			if (autoState !== '') paintAuto();

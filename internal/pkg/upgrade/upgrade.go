@@ -172,9 +172,17 @@ type AutoSwap struct {
 	// has to hold still before it is trusted), "waiting" (stable, but work is
 	// in flight), "previous_draining" (an earlier generation has not exited,
 	// so only two processes may exist at once), "handing_over" (the successor
-	// has been started).
+	// has been started), "blocked" (a build is installed that must NOT be
+	// applied — Note says why).
 	State string `json:"state"`
 	To    string `json:"to,omitempty"`
+	// Note explains a state the operator would otherwise have to guess at.
+	// Carried for "blocked", where a silent refusal is indistinguishable from
+	// a watcher that simply stopped working.
+	Note string `json:"note,omitempty"`
+	// Want is the version that WOULD be accepted, so the note ends in an
+	// instruction rather than a complaint.
+	Want string `json:"want,omitempty"`
 	// NextCheckIn is seconds until the next check, so a countdown can run.
 	NextCheckIn int `json:"next_check_in,omitempty"`
 	// ElapsedSeconds is how long this state has been in force. Counted on the

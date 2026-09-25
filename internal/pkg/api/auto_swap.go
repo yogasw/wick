@@ -74,7 +74,10 @@ func (s *Server) watchBinarySwap(ctx context.Context, runningVersion, runningBui
 		// during the wait shows the reason rather than an unexplained pause.
 		upgrade.SetAutoSwap(sw.status(p, ok, busy, fire))
 		if !fire {
-			if ok && len(busy) > 0 {
+			if ok && p.Blocked != "" {
+				logger.Warn().Str("path", p.Path).Str("to", p.Version).Str("reason", p.Blocked).
+					Msg("auto-swap: a binary is installed that will NOT be applied")
+			} else if ok && len(busy) > 0 {
 				logger.Debug().Strs("blocking", busy).Strs("running", upgrade.Busy()).Str("to", p.Version).
 					Msg("auto-swap: a new binary is installed, waiting for work that cannot be resumed")
 			}
@@ -160,6 +163,12 @@ func (a *autoSwapper) shouldSwap(p daemon.Pending, pending bool, busy []string) 
 		a.seen = daemon.Pending{} // nothing waiting; forget what we saw
 		return false
 	}
+	if p.Blocked != "" {
+		// A build the preflight would refuse. Letting the unattended path
+		// apply what the CLI blocks is how a versionless binary put this host
+		// in a re-exec loop (see daemon.blockReason).
+		return false
+	}
 	if a.failed.Path != "" && samePendingFile(p, a.failed) {
 		return false // already tried this exact file and it did not take over
 	}
@@ -182,6 +191,8 @@ func (a *autoSwapper) status(p daemon.Pending, pending bool, busy []string, fire
 	switch {
 	case !pending:
 		return upgrade.AutoSwap{}
+	case p.Blocked != "":
+		return upgrade.AutoSwap{State: "blocked", To: p.Version, Note: p.Blocked, Want: p.Want}
 	case a.failed.Path != "" && samePendingFile(p, a.failed):
 		// Tried, did not take over, will not be retried — the banner says so
 		// via last_handover; here it is simply not counting down.

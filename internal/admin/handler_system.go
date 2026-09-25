@@ -50,6 +50,7 @@ func (h *Handler) systemPage(w http.ResponseWriter, r *http.Request) {
 	if sw := h.pendingSwap(); sw.Pending {
 		vm.SwapPending = true
 		vm.SwapFrom, vm.SwapTo, vm.SwapSource, vm.SwapBuilt = sw.From, sw.To, sw.Source, sw.Built
+		vm.SwapBlocked, vm.SwapWant = sw.Blocked, sw.Want
 	}
 	if cfg, err := userconfig.Load(h.sys.AppName); err == nil {
 		vm.AutoUpdate = cfg.AutoUpdate
