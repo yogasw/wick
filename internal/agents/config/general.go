@@ -81,6 +81,15 @@ type GeneralConfig struct {
 	WorkflowLokiLabels        string `wick:"text;group=Workflow;desc=Extra Loki stream labels as comma-separated key=value pairs (e.g. env=prod,team=eng)."`
 	MCPUninstalledClients     string `wick:"hidden;desc=Comma-separated MCP client IDs the user has manually uninstalled. Managed by the UI — do not edit by hand."`
 	AirouterEnabled           bool   `wick:"bool;group=AI Router|Embedded AI-router lifecycle (9router, OmniRoute, …). Access is managed at /admin/tools; per-router autostart + external-API toggles live on the AI Router page.;desc=Master switch for the embedded AI routers. Off = every dashboard, the /airouter/<id>/v1 API proxies, autostart, and all controls are disabled."`
+	// The ONE key that makes Agent Memory reachable. It is off by default —
+	// the feature spawns a daemon and writes a marker file into project
+	// folders, so a host that never asked for it gets neither — and without
+	// a field here there was nowhere to turn it on: the nav entry is gated
+	// on this key, so the only door to the feature was behind the door.
+	// Everything else it stores (the data dir, per-backend port, autostart,
+	// tuning) is edited in the panel's own Settings tab, deliberately not
+	// duplicated here.
+	AgentmemoryEnabled        bool   `wick:"bool;group=Agent Memory|Shared memory across agent CLIs, backed by a local daemon. Turn it on to get the Agent Memory page, where the backend, its store and per-project import live.;desc=Master switch for Agent Memory. Off (default) = the nav entry, the panel, every endpoint and the capture hooks are all absent, and no marker file is written into project folders."`
 	TraceEventInlineKB        int    `wick:"number;group=Tracing|Limits on how trace-event payloads are stored on disk.;desc=Max KB for a trace event payload stored inline in the turn index. Events larger than this are written to a separate file and loaded on demand. Default: 10."`
 	TraceEventMaxKB           int    `wick:"number;group=Tracing;desc=Hard cap in KB for a single trace event payload file. Payloads exceeding this are truncated before write. 0 = no cap. Default: 512."`
 	// The two Access knobs below are read through internal/pkg/adminscope,
