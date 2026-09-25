@@ -1062,6 +1062,14 @@ func NewServer() *Server {
 		Workspace: appname.Resolve(),
 		Enabled:   func() bool { return configsSvc.GetOwned("agents", "agentmemory_enabled") == "true" },
 	}
+	// Projects that already existed when the switch was flipped never pass
+	// through create or move again, so without this sweep they keep resolving
+	// by folder basename — all of them "files" — and share one bucket forever.
+	// Idempotent and gated on the same switch, so a host with the feature off
+	// still gets no dotfiles.
+	if configsSvc.GetOwned("agents", "agentmemory_enabled") == "true" {
+		agentsMgr.EnsureMemoryMarkers()
+	}
 	// The other half of the same problem: the marker writer PREVENTS a
 	// collision for the projects it writes into, and deliberately skips
 	// custom-path folders because those belong to the user. Those are exactly

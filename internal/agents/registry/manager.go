@@ -134,6 +134,42 @@ func (m *Manager) ensureMemoryMarker(projectID string) {
 	log.Debug().Str("project", projectID).Str("path", folder).Msg("registry.manager: memory marker ensured")
 }
 
+// EnsureMemoryMarkers pins every managed project that has no marker yet.
+//
+// The per-project write on create/move only ever reaches projects created
+// AFTER Agent Memory was switched on. Every project that already existed keeps
+// resolving by folder basename — and wick names them all "files"
+// (projects/<uuid>/files), so the whole host collapses into one memory bucket
+// and each project recalls what every other one learned. On the host this was
+// found on that was 40 projects sharing one store, which is what the Health
+// tab reports as critical.
+//
+// So the sweep runs once when the feature is on. It is idempotent (Ensure
+// keeps an existing scope), it skips custom-path folders for the same reason
+// the per-project write does — that folder is the user's — and a failure on
+// one project is logged and stepped over rather than stopping the rest.
+//
+// It does NOT move memory that was already captured. Facts stored under the
+// shared bucket stay there; the marker stops the bleeding from here on.
+func (m *Manager) EnsureMemoryMarkers() int {
+	if m.MemoryMarker == nil {
+		return 0
+	}
+	n := 0
+	for id := range m.reg.Projects() {
+		before := m.reg.layout.ProjectManagedPath(id)
+		if before == "" {
+			continue
+		}
+		m.ensureMemoryMarker(id)
+		n++
+	}
+	if n > 0 {
+		log.Info().Int("projects", n).Msg("registry.manager: agent memory markers ensured for existing projects")
+	}
+	return n
+}
+
 // Registry exposes the underlying registry for read paths.
 func (m *Manager) Registry() *Registry { return m.reg }
 
