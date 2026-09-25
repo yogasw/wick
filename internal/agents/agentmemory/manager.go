@@ -590,7 +590,14 @@ func (m *Manager) Status(ctx context.Context) Status {
 		state = "running"
 	}
 	st := Status{
-		Installed: installed || running,
+		// Installed answers ONE question: does the binary resolve. It used
+		// to be `installed || running`, which quietly made a daemon someone
+		// else started count as proof that wick has the binary — and on a
+		// host where that was true the panel showed no Install control at
+		// all while every CLI-backed read failed with "not found in $PATH".
+		// A process answering on a port and an executable being present are
+		// different facts; conflating them hid the one action that fixes it.
+		Installed: installed,
 		Running:   running,
 		Managed:   m.spawnedHere(),
 		State:     state,

@@ -19,8 +19,10 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/agentmemory"
 	_ "github.com/yogasw/wick/internal/agents/agentmemory/aimemory"
+	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tools/agents/view"
+	"github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -284,4 +286,46 @@ func agentMemoryPage(c *tool.Ctx) {
 		AssetURL:  spaAssetURL("agentmemory"),
 		CanManage: AgentMemoryManageable(c.Context()),
 	}))
+}
+
+// EnsureAgentMemoryConfigs declares every config row this feature writes.
+//
+// configs.SetOwned refuses a key it has no meta entry for, so an undeclared
+// key is not a silent no-op — it fails the whole save. That is what the panel
+// hit: pressing Save answered "unknown config agents/agentmemory_data_dir"
+// and nothing in the Settings tab could be persisted at all.
+//
+// The per-backend rows are derived from the REGISTRY rather than listed by
+// hand, which is the point: registering a second backend gives it its port,
+// web, autostart and tuning rows for free. A hand-written list would have to
+// be remembered, and the failure mode of forgetting is this same silent-until-
+// you-press-Save break.
+//
+// Hidden, because these belong to the Agent Memory panel and not to the
+// Settings page — the master switch is the one row an operator sets there.
+// Hidden rows are still seeded, so runtime reads work normally.
+func EnsureAgentMemoryConfigs(ctx context.Context, cfgs *configs.Service) error {
+	if cfgs == nil {
+		return nil
+	}
+	rows := []entity.Config{
+		{Key: "agentmemory_data_dir", Type: "text", Hidden: true,
+			Description: "Where the memory store lives on disk. Set from the Agent Memory panel."},
+		{Key: "agentmemory_backfill_max_sessions", Type: "number", Hidden: true,
+			Description: "Ceiling on how many local sessions one import may read. Set from the Agent Memory panel."},
+	}
+	for _, be := range agentmemory.List() {
+		id := be.Desc.ID
+		rows = append(rows,
+			entity.Config{Key: "agentmemory_" + id + "_port", Type: "number", Hidden: true,
+				Description: "Port for the " + be.Desc.DisplayName + " daemon. 0 = the backend's own default."},
+			entity.Config{Key: "agentmemory_" + id + "_enable_web", Type: "bool", Hidden: true,
+				Description: "Whether the " + be.Desc.DisplayName + " daemon serves its web API."},
+			entity.Config{Key: "agentmemory_" + id + "_autostart", Type: "bool", Hidden: true,
+				Description: "Start the " + be.Desc.DisplayName + " daemon when wick boots."},
+			entity.Config{Key: "agentmemory_" + id + "_tuning", Type: "text", Hidden: true,
+				Description: "Daemon tuning for " + be.Desc.DisplayName + ", as JSON. Applied as environment on launch."},
+		)
+	}
+	return cfgs.EnsureOwned(ctx, "agents", rows...)
 }

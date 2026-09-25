@@ -1083,6 +1083,14 @@ func NewServer() *Server {
 	// every exec path resolves through here before falling back to PATH, so
 	// nobody has to edit a shell profile (install.go).
 	agentmemory.SetBinDir(filepath.Join(agentsLayout.BaseDir, "_agentmemory-bin"))
+	// Declare the rows the panel writes. configs.SetOwned refuses an
+	// undeclared key outright, so without this every Save in the Agent Memory
+	// Settings tab fails with "unknown config agents/agentmemory_data_dir" —
+	// nothing in that tab could be persisted at all. Derived from the backend
+	// registry, so a second backend gets its rows without anyone remembering.
+	if err := agentstool.EnsureAgentMemoryConfigs(context.Background(), configsSvc); err != nil {
+		log.Warn().Err(err).Msg("agentmemory: could not declare its config rows — the Settings tab will refuse to save")
+	}
 	agentmemory.SetMarkerWorkspace(appname.Resolve())
 	agentmemory.SetProjectLister(func() []agentmemory.ProjectFolder {
 		reg := agentsMgr.Registry()

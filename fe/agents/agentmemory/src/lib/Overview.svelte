@@ -154,7 +154,11 @@
       <p class="mt-1 text-xs leading-relaxed text-black-800 dark:text-black-600">{watch.detail}</p>
     </div>
 
-    {#if daemon?.state === "not-installed"}
+    <!-- Keyed on the BINARY, not on the daemon's state. A daemon somebody else
+       started answers health checks while wick still cannot run the CLI — the
+       state on this host when the panel first went live — and keying this on
+       state meant the one control that fixes it was nowhere on the page. -->
+  {#if daemon && !daemon.installed}
       <!-- The same fact, addressed to whoever can act on it: an admin gets
            the button, a viewer gets the sentence naming who has it. Telling
            a viewer to "press Install" points at a control that is not on
