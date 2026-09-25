@@ -42,6 +42,20 @@ function makeDetail(): ProviderDetailResponse {
     ],
     DefaultModels: [],
     AIRouter: { Supported: true, Enabled: false, Provider: "9router", Routers: [{ ID: "9router", Name: "9router" }], Models: {}, KeySet: false, RawConfig: "", Preview: "" },
+    AgentMemory: {
+      FeatureEnabled: true,
+      Supported: true,
+      CaptureSupported: true,
+      CaptureNote: "",
+      Enabled: false,
+      Provider: "ai-memory",
+      Backends: [{ ID: "ai-memory", Name: "ai-memory", Blurb: "", GitHubURL: "https://github.com/example/ai-memory" }],
+      ServerURL: "",
+      EffectiveURL: "http://127.0.0.1:49374",
+      KeySet: false,
+      Capture: false,
+      Preview: "",
+    },
   };
 }
 

@@ -51,6 +51,7 @@ func AgentsMoreItems(vm AgentsLayoutVM, user *entity.User) []AgentsNavItem {
 		{"/providers", "Providers", vm.ProvidersVisible},
 		{"/data-tables", "Data Tables", true},
 		{"/airouter", "AI Router", vm.AirouterVisible},
+		{"/agentmemory", "Agent Memory", vm.AgentMemoryVisible},
 	}
 
 	out := make([]AgentsNavItem, 0, len(candidates))

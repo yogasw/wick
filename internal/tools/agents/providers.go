@@ -360,6 +360,30 @@ func applyAIRouterForm(ins *provider.Instance, c *tool.Ctx) {
 	ins.AIRouterRawConfig = strings.TrimSpace(strings.ReplaceAll(c.Form("airouter_raw_config"), "\r\n", "\n"))
 }
 
+// applyAgentMemoryForm reads the Agent Memory fields from a create/detail form
+// and merges them into ins, encrypting the auth token. Toggle absent = off.
+//
+// Deliberately shorter than applyAIRouterForm: a memory backend has no model
+// slots to pick (PLAN §15.3), and no data dir either — one daemon serves every
+// workspace and project, so the store is a daemon setting, not an instance one
+// (PLAN §19).
+func applyAgentMemoryForm(ins *provider.Instance, c *tool.Ctx) {
+	ins.UseAgentMemory = c.Form("use_agent_memory") == "on" || c.Form("use_agent_memory") == "true"
+	if p := strings.TrimSpace(c.Form("agent_memory_provider")); p != "" {
+		ins.AgentMemoryProvider = p
+	}
+	// Set unconditionally so clearing the field persists: empty means "the
+	// managed daemon on its loopback port", which is a real choice and must
+	// be reachable again after pointing an instance somewhere else.
+	ins.AgentMemoryServerURL = strings.TrimSpace(c.Form("agent_memory_server_url"))
+	ins.AgentMemoryCapture = c.Form("agent_memory_capture") == "on" || c.Form("agent_memory_capture") == "true"
+	// Empty or masked placeholder = leave the stored token untouched, the
+	// same contract the router key uses — the FE never round-trips a secret.
+	if raw := strings.TrimSpace(c.Form("agent_memory_auth_key")); raw != "" && !strings.ContainsRune(raw, '•') {
+		ins.AgentMemoryAuthKey = encryptSecretValue(raw)
+	}
+}
+
 // providerAIRouterSlots returns the model slots a provider type exposes under
 // the given router (?router=<id>, default resolves to 9router in the BE). The
 // FE renders one model picker per slot and re-fetches when the router changes.
@@ -395,6 +419,32 @@ func saveProviderAIRouter(c *tool.Ctx) {
 		return
 	}
 	applyAIRouterForm(&ins, c)
+	if err := provider.Save(ins); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// saveProviderAgentMemory persists the Agent Memory settings (toggle +
+// backend + server URL + capture + optional auth token) for one instance in a
+// single request.
+// POST /providers/detail/{type}/{name}/agentmemory
+func saveProviderAgentMemory(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	if !requireProviderAdmin(c) {
+		return
+	}
+	t := provider.Type(c.PathValue("type"))
+	name := c.PathValue("name")
+	ins, err := provider.Find(t, name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
+		return
+	}
+	applyAgentMemoryForm(&ins, c)
 	if err := provider.Save(ins); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

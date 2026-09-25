@@ -14,22 +14,39 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 )
 
-// applyRolePrompt writes a profile's system prompt onto the child
-// session so the spawn factory appends it after the preset.
+// applyRolePrompt writes a profile's system prompt — and the delegation's
+// turn budget — onto the child session so the spawn factory appends them
+// after the preset.
 //
 // A role IS its prompt; a profile whose prompt never reaches the spawn
 // degrades to a provider plus a turn budget while still carrying the
-// role's name. An empty prompt is a no-op rather than a blanking write,
-// because the session may carry an addon set elsewhere.
-func applyRolePrompt(layout agentconfig.Layout, sessionID string, profile *entity.AgentProfile) error {
-	if profile == nil {
+// role's name. The budget rides the same write because it has the same
+// audience and the same lifetime: it is a standing fact about this run,
+// not something to restate in the task. See FormatTurnBudget.
+//
+// With no prompt AND no cap there is nothing to say, and the write is
+// skipped rather than blanking an addon the session may carry from
+// elsewhere. With a cap but no prompt, whatever the session already holds
+// is kept and only the budget block is refreshed.
+func applyRolePrompt(layout agentconfig.Layout, sessionID string, profile *entity.AgentProfile, turnsUsed, maxTurns int) error {
+	prompt := ""
+	if profile != nil {
+		prompt = strings.TrimSpace(profile.SystemPrompt)
+	}
+	budget := FormatTurnBudget(turnsUsed, maxTurns)
+	if prompt == "" && budget == "" {
 		return nil
 	}
-	prompt := strings.TrimSpace(profile.SystemPrompt)
 	if prompt == "" {
-		return nil
+		// Nothing of our own to write on top of: preserve the existing
+		// addon and re-stamp the budget onto it. A load failure costs the
+		// preservation, not the budget — a child told nothing about its
+		// cap is the bug this exists to fix.
+		if sess, err := session.Load(layout, sessionID); err == nil {
+			prompt = strings.TrimSpace(stripTurnBudget(sess.Meta.SystemAddon))
+		}
 	}
-	return session.SetSystemAddon(layout, sessionID, prompt)
+	return session.SetSystemAddon(layout, sessionID, composeChildAddon(prompt, budget))
 }
 
 // PoolRunner adapts the agent pool to the Runner interface. It is the
@@ -121,7 +138,7 @@ func (r *PoolRunner) StartAgent(ctx context.Context, spec ChildSpec) error {
 		// Already present is fine — a retried delegation reuses the entry.
 		log.Debug().Err(err).Str("session", spec.SessionID).Msg("delegation: add agent entry")
 	}
-	if err := applyRolePrompt(r.Layout, spec.SessionID, spec.Profile); err != nil {
+	if err := applyRolePrompt(r.Layout, spec.SessionID, spec.Profile, spec.TurnsUsed, spec.MaxTurns); err != nil {
 		// A sub-agent without its role prompt answers as a generic
 		// assistant while still being labelled with the role. Loud,
 		// because the output would look plausible and be wrong.

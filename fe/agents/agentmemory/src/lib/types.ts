@@ -1,0 +1,506 @@
+// Mirrors internal/agents/agentmemory — one type per Go struct, same JSON tag
+// names. Nothing here is guessed: every field was read off handlers.go,
+// data.go, config.go, manager.go and resources.go.
+
+// ── daemon control ───────────────────────────────────────────────────
+
+// Status is the daemon's install + run state. `state` is the single source of
+// truth for the badge; the booleans exist for the finer questions ("is it ours
+// to restart?").
+export type Status = {
+  installed: boolean;
+  version: string;
+  running: boolean;
+  // managed true = the process is one wick spawned, so uptime is known and
+  // Stop/Restart act on something we own.
+  managed: boolean;
+  state: "not-installed" | "starting" | "running" | "stopped";
+  pref_port: number;
+  bound_port: number;
+  base_url: string;
+  // started_at_ms is the spawn time of a daemon wick is running. Absent for
+  // an adopted daemon — its start is not ours to know (see uptimeOf).
+  started_at_ms?: number;
+};
+
+// Settings are the daemon-level knobs. autostart_locked is derived server-side
+// and rendered as a forced-on, disabled control.
+export type Settings = {
+  data_dir: string;
+  port: number;
+  enable_web: boolean;
+  autostart: boolean;
+  autostart_locked: boolean;
+  backfill_max_sessions: number;
+} & Tuning;
+
+// Tuning is the rest of the daemon's configuration — flattened into Settings
+// by the Go side, which embeds it.
+//
+// It reaches the daemon as AI_MEMORY_* environment on the launch line, never
+// by wick rewriting the backend's config.toml, and an UNSET field is not sent
+// at all. That is why "" and 0 mean "whatever the config file says" in this
+// form rather than "empty" and "zero" — the UI has to say so next to the
+// fields where the difference bites (retention above all).
+export type Tuning = {
+  // A. daemon
+  base_path: string;
+  log_level: string;
+  // B. access & security
+  allowed_hosts: string;
+  // auth_token arrives MASKED when one is stored (a row of bullets) and is
+  // posted back unchanged unless the user types a new one.
+  auth_token: string;
+  // C. capture & privacy
+  capture_mode: string;
+  project_strategy: string;
+  capture_assistant: boolean;
+  no_capture_prompts: boolean;
+  sanitize_extra_patterns: string;
+  sanitize_allowlist: string;
+  hook_rate_per_sec: number;
+  hook_rate_burst: number;
+  // D. model providers
+  llm_provider: string;
+  llm_model: string;
+  embedding_provider: string;
+  embedding_model: string;
+  embedding_dim: number;
+  max_input_tokens: number;
+  max_output_tokens: number;
+  auto_improve_require_approval: boolean;
+  auto_improve_min_observations: number;
+  auto_improve_min_confidence: number;
+  auto_improve_max_proposals_per_run: number;
+  // E. retention
+  observation_retention_days: number;
+  observation_prune_batch: number;
+  hard_delete_after_days: number;
+  cold_threshold: number;
+  // F. recall ranking
+  reranker: string;
+  decay_lambda: number;
+  decay_sigma: number;
+  decay_mu: number;
+  salience_default: number;
+  breadth_weight: number;
+  // G. backfill
+  backfill_auto: boolean;
+};
+
+// InstanceRef is one provider instance wired to a backend. capture false =
+// recall only: it reads the store and writes nothing back, which is how a
+// store stays alive-looking while capturing nothing.
+export type InstanceRef = {
+  type: string;
+  name: string;
+  capture: boolean;
+  // server_url set = this instance talks to some other daemon, so its numbers
+  // are not the ones on this page.
+  server_url?: string;
+};
+
+// AutostartLock says whether autostart is forced on, and by whom.
+export type AutostartLock = {
+  locked: boolean;
+  used_by?: InstanceRef[];
+  reason?: string;
+};
+
+// Resources is the footprint: process RSS and store size on disk. The *_known
+// flags matter — a 0 with known false means nobody could measure it, NOT that
+// it costs nothing.
+export type Resources = {
+  pid?: number;
+  rss_bytes: number;
+  rss_known: boolean;
+  data_dir?: string;
+  data_dir_bytes: number;
+  data_dir_known: boolean;
+};
+
+// ── store ────────────────────────────────────────────────────────────
+
+// StoreCounts are the headline numbers. pages_all counts every version, so it
+// runs ahead of pages_latest.
+export type StoreCounts = {
+  pages_latest: number;
+  pages_all: number;
+  sessions: number;
+  observations: number;
+};
+
+export type IndexState = {
+  pages_rows: number;
+  pages_fts_rows: number;
+  observations_rows: number;
+  observations_fts_rows: number;
+  embedding_rows: number;
+  latest_pages_missing_embeddings: number;
+};
+
+export type StorageState = {
+  database_bytes: number;
+  reclaimable_bytes: number;
+  data_dir_free_bytes: number;
+};
+
+export type IngestState = {
+  accepted: number;
+  dropped_by_policy: number;
+  shed_saturated: number;
+  shed_rate_limited: number;
+  last_persisted_ms?: number;
+};
+
+export type SpoolState = {
+  pending: number;
+  oldest_age_ms?: number;
+  retries_total: number;
+};
+
+// ProviderState is one model provider's state. status "disabled" on `llm` is
+// the zero-LLM mode the Overview warns about.
+export type ProviderState = {
+  status: string;
+  provider?: string;
+  model?: string;
+  dim?: number;
+  last_error_message?: string;
+};
+
+export type StoreStatus = {
+  version: string;
+  data_dir: string;
+  db_path: string;
+  bind: string;
+  capture_mode: string;
+  counts: StoreCounts;
+  index: IndexState;
+  storage: StorageState;
+  ingest: IngestState;
+  spool: SpoolState;
+  llm: ProviderState;
+  embedding: ProviderState;
+  raw?: unknown;
+};
+
+// ── the Overview payload ─────────────────────────────────────────────
+
+// BackendInfo is one registered backend, from GET /agentmemory/backends and
+// echoed inside Overview. icon is inline SVG inner markup.
+export type BackendInfo = {
+  id: string;
+  name: string;
+  blurb: string;
+  icon?: string;
+  github_url?: string;
+  install_kind?: string;
+  has_data: boolean;
+};
+
+// Overview is GET /agentmemory/<id>/status in one shot.
+//
+// `daemon` and `store` are deliberately separate and can disagree — a daemon
+// can be up with an empty store, and a store can be readable while the daemon
+// is down — so a failure to read one never blanks the other (PLAN §13.5).
+export type Overview = {
+  backend: BackendInfo;
+  daemon: Status;
+  settings: Settings;
+  resources: Resources;
+  used_by?: InstanceRef[] | null;
+  autostart_lock: AutostartLock;
+  store?: StoreStatus;
+  // store_error explains an unreadable store; store_reason names the cause in
+  // one machine-checkable token — see DataReason.
+  store_error?: string;
+  store_reason?: string;
+};
+
+// DataReason is the named cause of an empty panel read. These two are the
+// states the user can actually fix, which is why the server names them
+// instead of leaving prose.
+export type DataReason = "web_disabled" | "daemon_not_running" | "";
+
+// TestResult is POST /agentmemory/<id>/test — the "Test connection" probe.
+export type TestResult = {
+  base_url: string;
+  health_path: string;
+  ok: boolean;
+  error?: string;
+  version?: string;
+  counts?: StoreCounts;
+  data_dir?: string;
+  store_error?: string;
+};
+
+// ── panel data ───────────────────────────────────────────────────────
+
+// DataFailure is the shape every panel-data endpoint can answer with INSTEAD
+// of its payload. The two named reasons come back with HTTP 200 on purpose:
+// a web API that is off and a daemon that is down are ordinary, fixable
+// states, not crashes, so the FE branches on `reason` rather than on a status
+// code (writeDataError in handlers.go).
+export type DataFailure = {
+  error?: string;
+  reason?: DataReason;
+  hint?: string;
+};
+
+// BriefingCounts are ONE project's lifetime counters — not the store's.
+// pages_all counts every version, so it runs ahead of pages_latest.
+export type BriefingCounts = {
+  pages_latest: number;
+  pages_all: number;
+  sessions: number;
+  observations: number;
+  evidence_rows: number;
+};
+
+// ActivityWindow is what happened in this project in the last `days` days.
+export type ActivityWindow = {
+  days: number;
+  sessions: number;
+  observations: number;
+  pages_updated: number;
+};
+
+// RecentPage is one recently-updated page. `path` is store-relative
+// ("sessions/<uuid>.md"), not a filesystem path.
+export type RecentPage = {
+  path: string;
+  title?: string;
+  kind?: string;
+  updated_at?: string;
+};
+
+// ProjectBriefing is a project's own numbers, from the backend's
+// `memory_briefing` — the single MCP call this dashboard is allowed to make
+// (Yoga, 2026-09-25; PLAN §13.2.1). Every one of these is PER PROJECT and
+// must never be shown beside the Analytics tab's store-wide totals without
+// saying which is which (PLAN §13.5 point 1).
+export type ProjectBriefing = {
+  counts: BriefingCounts;
+  activity_7d: ActivityWindow;
+  activity_30d: ActivityWindow;
+  last_observation_at?: string;
+  pending_handoff_count: number;
+  pending_message_count: number;
+  recent_pages?: RecentPage[] | null;
+  cross_project_dependents: number;
+  cross_project_dependencies: number;
+};
+
+// ProjectRow is one workspace/project pair in the store.
+//
+// The first four fields are everything the project listing returns; the
+// counters that listing has no room for arrive in `briefing`. It is ABSENT,
+// not zeroed, when that one call failed for this row — `briefing_error` says
+// why — because a project whose numbers could not be read has not been shown
+// to have none.
+export type ProjectRow = {
+  workspace: string;
+  project: string;
+  page_count: number;
+  last_updated?: string;
+  briefing?: ProjectBriefing;
+  briefing_error?: string;
+};
+
+export type ProjectsResponse = DataFailure & { projects?: ProjectRow[] | null };
+
+// DoctorRow is one harness's capture coverage for a project. `captured` is
+// what the store holds; `local_recent` is what ran here. uncaptured true with
+// a non-zero local_recent is the half-wired state: the harness runs and its
+// hook never reports.
+export type DoctorRow = {
+  agent: string;
+  local_total: number;
+  local_recent: number;
+  captured: number;
+  uncaptured: boolean;
+};
+
+export type DoctorReport = {
+  workspace?: string;
+  project?: string;
+  since_days?: number;
+  rows?: DoctorRow[] | null;
+  uncaptured?: string[] | null;
+  error?: string;
+};
+
+// ContaminationReport is the cross-project audit. `findings` stays untyped:
+// the only run available to read off was an empty one, so its row shape is
+// unverified and the UI renders whatever keys arrive rather than dropping the
+// rows that actually matter.
+export type ContaminationReport = {
+  sessions_misbucketed: number;
+  findings?: unknown[] | null;
+  error?: string;
+};
+
+// CollisionMember is one wick project caught in a project-name collision.
+// has_marker means THIS folder pins its own scope — a folder governed by a
+// parent's marker has none, and writing one is the repair.
+export type CollisionMember = {
+  id: string;
+  name: string;
+  folder: string;
+  has_marker: boolean;
+};
+
+// Collision is a set of wick projects that resolve to ONE ai-memory project,
+// so each one's memory is recalled into the others'.
+export type Collision = {
+  workspace: string;
+  project: string;
+  members: CollisionMember[];
+  fixable: boolean;
+};
+
+// CollisionCheck is wick's own check, not the backend's.
+//
+// `checked: false` is NOT "no collisions" — it means wick could not read its
+// project list, and the tab has to say so rather than render a clean result.
+export type CollisionCheck = {
+  checked: boolean;
+  reason?: string;
+  scanned: number;
+  collisions?: Collision[] | null;
+};
+
+export type HealthReport = DataFailure & {
+  doctor?: DoctorReport;
+  contamination?: ContaminationReport;
+  collisions?: CollisionCheck;
+};
+
+// Handoff is one open cross-agent baton.
+export type Handoff = {
+  id: string;
+  from_agent?: string;
+  to_agent?: string;
+  cwd?: string;
+  created_at_ms?: number;
+};
+
+export type HandoffsResponse = DataFailure & { handoffs?: Handoff[] | null };
+
+// BackfillReport is one import's outcome. skipped_non_empty true with
+// selected 0 is the normal no-op: the store already holds sessions, so an
+// unforced run does nothing.
+export type BackfillReport = {
+  workspace?: string;
+  project?: string;
+  selected: number;
+  imported_sessions: number;
+  imported_events: number;
+  skipped_for_cap: number;
+  failed_sessions: number;
+  skipped_non_empty: boolean;
+  dry_run: boolean;
+};
+
+export type BackfillResponse = DataFailure & {
+  report?: BackfillReport;
+  // warning is the server's own sentence about what a forced import costs —
+  // shown verbatim so the UI cannot soften it.
+  warning?: string;
+};
+
+export type CompactResponse = DataFailure & {
+  report?: { output: string };
+  warning?: string;
+};
+
+// ── wiki ─────────────────────────────────────────────────────────────
+
+// Page is one wiki page with its body, from GET <p>/page.
+//
+// No `kind` and no `updated_at`: the backend's read-page document does not
+// carry them. The search hit that led here does — the Wiki tab shows the hit's
+// values as the hit's, not as the page's.
+export type Page = {
+  path: string;
+  workspace?: string;
+  project?: string;
+  title?: string;
+  body: string;
+  // frontmatter keys differ per page kind, so it stays an open record.
+  frontmatter?: Record<string, unknown>;
+};
+
+export type PageResponse = DataFailure & { page?: Page | null };
+
+export type SearchResponse = DataFailure & {
+  hits?: SearchHit[] | null;
+  query?: string;
+  // note explains the whole-token match rule, which is the difference
+  // between "my memory is empty" and "my query missed".
+  note?: string;
+};
+
+// SearchHit is one wiki match. `snippet` carries <mark> tags around the
+// matched terms.
+export type SearchHit = {
+  workspace?: string;
+  project?: string;
+  path: string;
+  title?: string;
+  kind?: string;
+  snippet?: string;
+  rank?: number;
+};
+
+// ── handoffs & messages ──────────────────────────────────────────────
+
+// Message is one cross-project message.
+//
+// The sender is `from_project_id` — a UUID, with no name for it anywhere in
+// the backend's surface. The UI shows the id. Anything else would be a guess
+// about which project sent it.
+export type Message = {
+  id: string;
+  subject?: string;
+  body?: string;
+  from_agent?: string;
+  from_workspace_id?: string;
+  from_project_id?: string;
+  state?: string;
+  created_at?: string;
+  claimed_at?: string;
+};
+
+export type MessagesResponse = DataFailure & { messages?: Message[] | null; box?: string };
+
+// HandoffCancelResult is POST <p>/handoffs/cancel.
+//
+// `cancelled: false` with no error is an ORDINARY answer: the baton was
+// already gone. It must never be rendered as a success — see cancelOutcome.
+export type HandoffCancelResult = {
+  handoff_id: string;
+  cancelled: boolean;
+  state?: string;
+};
+
+export type HandoffCancelResponse = DataFailure & {
+  result?: HandoffCancelResult;
+  warning?: string;
+};
+
+// ── retention sweep ──────────────────────────────────────────────────
+
+// SweepReport is one retention sweep. Like compact, the backend has no --json
+// mode for it, so `output` is its own sentence carried through verbatim.
+export type SweepReport = { dry_run: boolean; output: string };
+
+export type SweepResponse = DataFailure & { report?: SweepReport; warning?: string };
+
+// Scope narrows a project-scoped read to one workspace/project.
+export type Scope = { workspace?: string; project?: string };
+
+// Tab is the panel's tab strip. All seven are built: Overview (4A), Projects,
+// Analytics and Health (4B), Wiki, Handoffs and Settings (4C).
+export type Tab = "overview" | "projects" | "analytics" | "wiki" | "handoffs" | "health" | "settings";

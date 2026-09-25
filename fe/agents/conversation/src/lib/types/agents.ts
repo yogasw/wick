@@ -298,6 +298,16 @@ export type SubAgentItem = {
   depth: number;
   turns_used: number;
   max_turns: number;
+  /** What this run put on the wire, as the delegation recorded it. 0
+      means the provider never reported usage — never "free", which is
+      why the inspector says "not reported" instead of showing a zero. */
+  input_tokens?: number;
+  output_tokens?: number;
+  tokens_used?: number;
+  /** This delegation's own token cap; 0 = uncapped by the delegation
+      (the per-tree budget still applies), so the panel shows a bare
+      count rather than a ratio. */
+  max_tokens?: number;
   result?: string;
   started_at?: string;
   /** Set once the delegation reaches a terminal status; absent while it

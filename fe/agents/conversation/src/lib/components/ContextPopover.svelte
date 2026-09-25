@@ -13,6 +13,8 @@
      the fill level (how full the window is NOW, replaced each turn) and
      the spend (what the session has burned in total, which only grows).
      They are labelled and grouped separately for that reason. */
+  import { contextTone } from "@wick-fe/common-ui";
+
   import type { SessionContext, SessionContextProvider } from "../api/context.js";
 
   /* What the turn on screen is doing right now. Everything else in this
@@ -160,7 +162,10 @@
       ? Math.max(0, Math.min(100, (usedNow / (data?.window ?? 1)) * 100))
       : Math.max(0, Math.min(100, data?.pct ?? 0)),
   );
-  const tone = $derived(pct >= 90 ? "red" : pct >= 75 ? "amber" : "green");
+  /* Thresholds live in @wick-fe/common-ui, shared with the sub-agent
+     inspector: two panels that disagreed about what "nearly full" means
+     would be two different warnings about one number. */
+  const tone = $derived(contextTone(pct));
   const barClass = $derived(
     tone === "red" ? "bg-red-500" : tone === "amber" ? "bg-amber-500" : "bg-green-500",
   );

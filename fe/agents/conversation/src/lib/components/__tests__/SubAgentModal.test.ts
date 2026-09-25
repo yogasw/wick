@@ -56,6 +56,13 @@ vi.mock("../../api/subagents.js", () => ({
   }),
 }));
 
+// The modal's caption asks the child session for its own context
+// reading. Stubbed to nothing here so these tests stay about the
+// transcript — SubAgentModal.meter.test.ts is what covers the caption.
+vi.mock("../../api/context.js", () => ({
+  fetchSessionContext: vi.fn(() => Promise.reject(new Error("context: 404"))),
+}));
+
 vi.mock("../../api/messages.js", () => ({
   sendMessage: vi.fn((_base: string, id: string, payload: { text: string }) => {
     calls.sent.push({ id, text: payload.text });

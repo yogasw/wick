@@ -14,10 +14,12 @@
     apiProbeGate,
     apiGetProviderCatalog,
     apiSaveAIRouter,
+    apiSaveAgentMemory,
   } from "$lib/api.js";
   import type { CatalogEntry, ProviderCatalog } from "$lib/api.js";
-  import type { ProviderDetailResponse, ConfigFieldDTO, SpawnLogFileDTO } from "$lib/types.js";
+  import type { ProviderDetailResponse, ConfigFieldDTO, SpawnLogFileDTO, AgentMemoryChoiceDTO } from "$lib/types.js";
   import AIRouterConfig from "$lib/components/AIRouterConfig.svelte";
+  import AgentMemoryConfig from "$lib/components/AgentMemoryConfig.svelte";
   import RecentSpawns from "$lib/components/RecentSpawns.svelte";
   import { UsageReport } from "@wick-fe/common-ui";
   import ReconnectPanel from "$lib/components/ReconnectPanel.svelte";
@@ -275,6 +277,19 @@
   let airRawConfig = $state("");
   let airSaving = $state(false);
 
+  // Agent Memory local state, seeded from data.AgentMemory in load(). Support
+  // is decided by the BE from the real spawn wiring; the fallback only covers
+  // a payload from a server that predates the field.
+  const memSupported = $derived(data?.AgentMemory.Supported ?? false);
+  let memUse = $state(false);
+  let memProvider = $state("");
+  let memBackends = $state<AgentMemoryChoiceDTO[]>([]);
+  let memServerUrl = $state("");
+  let memKey = $state("");
+  let memKeyMasked = $state(false);
+  let memCapture = $state(false);
+  let memSaving = $state(false);
+
   async function load(silent = false) {
     if (!silent) { loading = true; error = null; }
     try {
@@ -299,6 +314,14 @@
       airKeyMasked = data.AIRouter.KeySet;
       airKey = ""; // never prefill a secret; blank = keep existing
       airRawConfig = data.AIRouter.RawConfig;
+      // Seed Agent Memory widget state from the same payload.
+      memUse = data.AgentMemory.Enabled;
+      memProvider = data.AgentMemory.Provider;
+      memBackends = data.AgentMemory.Backends;
+      memServerUrl = data.AgentMemory.ServerURL;
+      memCapture = data.AgentMemory.Capture;
+      memKeyMasked = data.AgentMemory.KeySet;
+      memKey = ""; // never prefill a secret; blank = keep existing
     } catch (e) {
       if (!silent) error = e instanceof Error ? e.message : "Failed to load provider detail";
     } finally {
@@ -356,6 +379,25 @@
       toastError(e instanceof Error ? e.message : "Save failed");
     } finally {
       airSaving = false;
+    }
+  }
+
+  async function saveAgentMemory() {
+    memSaving = true;
+    try {
+      await apiSaveAgentMemory(base, type, name, {
+        use_agent_memory: memUse,
+        provider: memProvider,
+        server_url: memServerUrl,
+        capture: memCapture,
+        auth_key: memKey || undefined,
+      });
+      toastOk("Agent Memory settings saved");
+      await load(true);
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      memSaving = false;
     }
   }
 
@@ -1022,6 +1064,40 @@
             disabled={airSaving}
             class="rounded-lg bg-green-600 hover:bg-green-700 px-4 py-1.5 text-xs font-medium text-white-100 disabled:opacity-50"
           >{airSaving ? "Saving…" : "Save AI Router"}</button>
+        </div>
+      </div>
+    {/if}
+
+    {#if memSupported}
+      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+          <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Agent Memory</h3>
+        </div>
+        <div class="p-5">
+          <AgentMemoryConfig
+            {base}
+            {type}
+            supported={memSupported}
+            featureEnabled={data?.AgentMemory.FeatureEnabled ?? false}
+            bind:useAgentMemory={memUse}
+            bind:provider={memProvider}
+            backends={memBackends}
+            bind:serverUrl={memServerUrl}
+            effectiveUrl={data?.AgentMemory.EffectiveURL ?? ""}
+            bind:authKey={memKey}
+            authKeyMasked={memKeyMasked}
+            bind:capture={memCapture}
+            captureSupported={data?.AgentMemory.CaptureSupported ?? false}
+            captureNote={data?.AgentMemory.CaptureNote ?? ""}
+            configPreview={data?.AgentMemory.Preview ?? ""}
+          />
+        </div>
+        <div class="px-5 py-3 border-t border-white-300 dark:border-navy-600 flex justify-end">
+          <button
+            onclick={saveAgentMemory}
+            disabled={memSaving}
+            class="rounded-lg bg-green-600 hover:bg-green-700 px-4 py-1.5 text-xs font-medium text-white-100 disabled:opacity-50"
+          >{memSaving ? "Saving…" : "Save Agent Memory"}</button>
         </div>
       </div>
     {/if}

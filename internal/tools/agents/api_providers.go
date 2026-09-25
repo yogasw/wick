@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/agentmemory"
 	"github.com/yogasw/wick/internal/agents/airouter"
 	"github.com/yogasw/wick/internal/agents/capability"
 	"github.com/yogasw/wick/internal/agents/provider"
@@ -66,6 +67,10 @@ type ProviderStatusDTO struct {
 	// it and force a usage re-check?" — admins always, everyone else by
 	// manage tag. Never implies permission to edit configuration.
 	CanManage bool `json:"can_manage"`
+	// AgentMemory is the §18.2 badge state, so "is this instance recording
+	// what it learns?" is readable from the list instead of only from the
+	// detail page.
+	AgentMemory AgentMemoryBadgeDTO `json:"agent_memory"`
 }
 
 // SpawnLogFileDTO is a parsed spawn log file entry.
@@ -291,6 +296,10 @@ type ProvidersListResponse struct {
 	PoolMax       int                 `json:"pool_max"`
 	LiveProcesses []LiveProcessDTO    `json:"live_processes"`
 	SupportedKeys []string            `json:"supported_keys"`
+	// AgentMemoryEnabled is the server-wide master switch. Off means the
+	// per-card Agent Memory badges say nothing at all — a badge reading
+	// "off" for a feature nobody turned on is noise, not information.
+	AgentMemoryEnabled bool `json:"agent_memory_enabled"`
 }
 
 // ConfigFieldDTO is one config row for the detail page (secret values masked).
@@ -318,19 +327,20 @@ type ProviderDetailResponse struct {
 	// the admin who owns the credential and not for a viewer.
 	SecretsHidden bool                         `json:"secrets_hidden,omitempty"`
 	Instance      ProviderInstanceDTO          `json:"instance"`
-	Path         string                       `json:"path"`
-	PathFound    bool                         `json:"path_found"`
-	Version      string                       `json:"version"`
-	VersionErr   string                       `json:"version_err,omitempty"`
-	Probing      bool                         `json:"probing"`
-	Hooks        map[string]HookCapabilityDTO `json:"hooks"`
-	HookEnabled  map[string]bool              `json:"hook_enabled"`
-	Gate         GateStatusDTO                `json:"gate"`
-	GlobalMax    int                          `json:"global_max"`
-	ActiveCount  int                          `json:"active_count"`
-	ActivePIDs   []LiveProcessDTO             `json:"active_pids"`
-	ConfigFields []ConfigFieldDTO             `json:"config_fields"`
-	AIRouter     AIRouterDetailDTO            `json:"airouter"`
+	Path          string                       `json:"path"`
+	PathFound     bool                         `json:"path_found"`
+	Version       string                       `json:"version"`
+	VersionErr    string                       `json:"version_err,omitempty"`
+	Probing       bool                         `json:"probing"`
+	Hooks         map[string]HookCapabilityDTO `json:"hooks"`
+	HookEnabled   map[string]bool              `json:"hook_enabled"`
+	Gate          GateStatusDTO                `json:"gate"`
+	GlobalMax     int                          `json:"global_max"`
+	ActiveCount   int                          `json:"active_count"`
+	ActivePIDs    []LiveProcessDTO             `json:"active_pids"`
+	ConfigFields  []ConfigFieldDTO             `json:"config_fields"`
+	AIRouter      AIRouterDetailDTO            `json:"airouter"`
+	AgentMemory   AgentMemoryDetailDTO         `json:"agent_memory"`
 	// DefaultModels are the per-type catalog seed models (id + description),
 	// shown in the model-selection card so the operator sees what's used when
 	// the curated list is empty, and can Load them as an editable starting
@@ -368,6 +378,61 @@ type AIRouterDetailDTO struct {
 type AIRouterChoiceDTO struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+}
+
+// AgentMemoryDetailDTO carries the instance's Agent Memory settings so the
+// detail page can seed its widget. The stored auth token is never returned —
+// only KeySet, the same contract the router key uses.
+//
+// Shorter than AIRouterDetailDTO by design: a memory backend has no model
+// slots (PLAN §15.3) and no per-instance data dir (PLAN §19). Longer in one
+// place: Capture is a separate switch with its own support story, so it
+// carries its own "why not" sentence rather than being silently hidden.
+type AgentMemoryDetailDTO struct {
+	// FeatureEnabled is the server-wide master switch. Off means the
+	// daemon is unmanaged AND no project marker is written, so saving a
+	// toggle here would configure something that never runs.
+	FeatureEnabled bool `json:"feature_enabled"`
+	// Supported: does the selected backend actually wire into a spawn of
+	// this provider type? Measured from the spawn contribution, not from a
+	// hardcoded type list, so a backend that grows a gemini path lights up
+	// without a change here.
+	Supported bool `json:"supported"`
+	// CaptureSupported: does turning Capture on change the spawn? False
+	// means recording is a no-op right now — see CaptureNote for why.
+	CaptureSupported bool `json:"capture_supported"`
+	// CaptureNote is the one honest sentence shown when capture can't
+	// record. Empty when it can.
+	CaptureNote string                 `json:"capture_note,omitempty"`
+	Enabled     bool                   `json:"enabled"`
+	Provider    string                 `json:"provider"`
+	Backends    []AgentMemoryChoiceDTO `json:"backends"`
+	// ServerURL is the instance's own override. Empty = the managed daemon,
+	// whose resolved address is EffectiveURL.
+	ServerURL    string `json:"server_url"`
+	EffectiveURL string `json:"effective_url"`
+	KeySet       bool   `json:"key_set"`
+	Capture      bool   `json:"capture"`
+	// Preview is the effective spawn wiring for the current settings, with
+	// the toggle forced on so it can be read before enabling.
+	Preview string `json:"preview"`
+}
+
+// AgentMemoryChoiceDTO is one selectable memory backend, with the upstream
+// repo so the operator can see what they are about to run.
+type AgentMemoryChoiceDTO struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Blurb     string `json:"blurb,omitempty"`
+	GitHubURL string `json:"github_url,omitempty"`
+}
+
+// AgentMemoryBadgeDTO is the list page's compact read of one instance's Agent
+// Memory state (PLAN §18.2): off / on and reading only / on and recording.
+// Capture is meaningless while Enabled is false and the FE ignores it there.
+type AgentMemoryBadgeDTO struct {
+	Enabled bool `json:"enabled"`
+	Capture bool `json:"capture"`
 }
 
 // StorageFileDTO is one storage file row (without the binary content blob).
@@ -455,6 +520,10 @@ func providerStatusDTO(st provider.Status, caps map[string]view.ProviderCapVM) P
 		Hooks:       hooksDTO,
 		Cap:         capDTO,
 		HookEnabled: hookEnabled,
+		AgentMemory: AgentMemoryBadgeDTO{
+			Enabled: st.Instance.UseAgentMemory,
+			Capture: st.Instance.AgentMemoryCapture,
+		},
 	}
 }
 
@@ -622,6 +691,8 @@ func apiProvidersList(c *tool.Ctx) {
 		PoolMax:       poolMaxConcurrent(),
 		LiveProcesses: liveProcessDTOs(),
 		SupportedKeys: supportedTypeKeys(),
+
+		AgentMemoryEnabled: AgentMemoryEnabled(),
 	})
 }
 
@@ -682,12 +753,16 @@ func apiProviderDetail(c *tool.Ctx) {
 
 	isAdmin := callerIsAdmin(c)
 	airouterDTO := aiRouterDetailDTO(st.Instance)
+	memoryDTO := agentMemoryDetailDTO(st.Instance)
 	if !isAdmin {
 		// aiRouterConfigPreview resolves the REAL spawn config, auth
 		// token included, because it was written for an admin-only page.
 		// A viewer gets the settings without the credential.
 		airouterDTO.Preview = ""
 		airouterDTO.RawConfig = ""
+		// agentMemoryConfigPreview is the same story: it renders the
+		// backend's auth token verbatim into the env lines.
+		memoryDTO.Preview = ""
 	}
 
 	c.JSON(http.StatusOK, ProviderDetailResponse{
@@ -715,6 +790,7 @@ func apiProviderDetail(c *tool.Ctx) {
 		ActivePIDs:    activePIDs,
 		ConfigFields:  configFieldDTOs(provider.SeedInstanceConfig(st.Instance)),
 		AIRouter:      airouterDTO,
+		AgentMemory:   memoryDTO,
 		DefaultModels: seedModelDTOs(st.Instance.Type),
 	})
 }
@@ -756,20 +832,124 @@ func aiRouterConfigPreview(ins provider.Instance) string {
 	if err != nil {
 		return ""
 	}
+	return spawnContribPreview(contrib.Env, contrib.Args)
+}
+
+// agentMemoryDetailDTO projects an instance's Agent Memory settings for the
+// FE. The stored auth token never leaves the server — only KeySet.
+//
+// Support is MEASURED rather than declared: the spawn contribution is resolved
+// with the toggle forced on, and an empty one means this provider type has no
+// memory path under the selected backend. Same for capture — the contribution
+// is resolved twice, and if flipping Capture changes nothing then recording is
+// a no-op and the UI must say so instead of offering a switch with no effect
+// (codex today, PLAN §21).
+func agentMemoryDetailDTO(ins provider.Instance) AgentMemoryDetailDTO {
+	backends := make([]AgentMemoryChoiceDTO, 0)
+	for _, be := range agentmemory.List() {
+		backends = append(backends, AgentMemoryChoiceDTO{
+			ID:        be.Desc.ID,
+			Name:      be.Desc.DisplayName,
+			Blurb:     be.Desc.Blurb,
+			GitHubURL: be.Desc.GitHubURL,
+		})
+	}
+	supported, captureOK := agentMemorySupport(ins)
+	return AgentMemoryDetailDTO{
+		FeatureEnabled:   AgentMemoryEnabled(),
+		Supported:        supported,
+		CaptureSupported: captureOK,
+		CaptureNote:      agentMemoryCaptureNote(ins, supported, captureOK),
+		Enabled:          ins.UseAgentMemory,
+		Provider:         ins.AgentMemoryProvider,
+		Backends:         backends,
+		ServerURL:        ins.AgentMemoryServerURL,
+		EffectiveURL:     agentMemoryEffectiveURL(ins),
+		KeySet:           ins.AgentMemoryAuthKey != "",
+		Capture:          ins.AgentMemoryCapture,
+		Preview:          agentMemoryConfigPreview(ins),
+	}
+}
+
+// agentMemorySupport answers both support questions by resolving the spawn
+// contribution: once with capture off (does memory wire in at all?) and once
+// with it on (does recording add anything?).
+func agentMemorySupport(ins provider.Instance) (supported, captureSupported bool) {
+	ins.UseAgentMemory = true
+	ins.AgentMemoryCapture = false
+	read, err := provider.MemorySpawnContribution(&ins, ins.Type)
+	if err != nil || (len(read.Args) == 0 && len(read.Env) == 0) {
+		return false, false
+	}
+	ins.AgentMemoryCapture = true
+	rec, err := provider.MemorySpawnContribution(&ins, ins.Type)
+	if err != nil {
+		return true, false
+	}
+	return true, len(rec.Args) != len(read.Args) || len(rec.Env) != len(read.Env)
+}
+
+// agentMemoryCaptureNote explains a capture switch that would not record.
+//
+// Phrased as "right now", not as a capability verdict, because two different
+// things land here: a provider type wick has no capture wiring for (codex
+// today, PLAN §21) and a host where the backend binary the hooks call is
+// simply missing. The second gets an extra sentence; neither gets a promise
+// that installing something will flip it.
+func agentMemoryCaptureNote(ins provider.Instance, supported, captureOK bool) string {
+	if !supported || captureOK {
+		return ""
+	}
+	note := "Recording is not wired for " + string(ins.Type) + " right now — this instance can read memory, but its sessions are not recorded."
+	if be, ok := agentmemory.Resolve(ins.AgentMemoryProvider); ok && strings.TrimSpace(be.Mgr.BinPath()) == "" {
+		note += " The " + be.Desc.DisplayName + " binary is also missing from this host, and the capture hooks call it directly."
+	}
+	return note
+}
+
+// agentMemoryEffectiveURL is the address this instance actually talks to: its
+// own override, or the managed daemon's loopback URL. Shown as the placeholder
+// so an empty field reads as a concrete default rather than as "nothing".
+func agentMemoryEffectiveURL(ins provider.Instance) string {
+	be, ok := agentmemory.Resolve(ins.AgentMemoryProvider)
+	if !ok {
+		return strings.TrimRight(strings.TrimSpace(ins.AgentMemoryServerURL), "/")
+	}
+	return agentmemory.ServerURL(be, ins)
+}
+
+// agentMemoryConfigPreview is the Agent Memory twin of aiRouterConfigPreview:
+// the env + args the selected memory backend injects into a spawn of this
+// instance, rendered for the read-only preview. Computed with the toggle
+// forced on so the user can see the effect before enabling it; empty when the
+// backend can't resolve (unknown backend, type with no memory path).
+//
+// The env is shown verbatim, auth token included — this is an admin-only page,
+// and a masked preview of an editable value is worse than useless.
+func agentMemoryConfigPreview(ins provider.Instance) string {
+	ins.UseAgentMemory = true
+	contrib, err := provider.MemorySpawnContribution(&ins, ins.Type)
+	if err != nil {
+		return ""
+	}
+	return spawnContribPreview(contrib.Env, contrib.Args)
+}
+
+// spawnContribPreview renders one spawn contribution as newline-separated
+// text: env first, then args with codex `-c key=val` pairs folded onto one
+// line each and every other token left as-is.
+func spawnContribPreview(env, args []string) string {
 	var b strings.Builder
-	// Admin-only page — show the real resolved values (incl. the auth token)
-	// verbatim so the editable box is the actual effective config.
-	for _, e := range contrib.Env {
+	for _, e := range env {
 		b.WriteString(e + "\n")
 	}
-	// Render codex -c pairs one per line; leave any other tokens as-is.
-	for i := 0; i < len(contrib.Args); i++ {
-		if contrib.Args[i] == "-c" && i+1 < len(contrib.Args) {
-			b.WriteString("-c " + contrib.Args[i+1] + "\n")
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-c" && i+1 < len(args) {
+			b.WriteString("-c " + args[i+1] + "\n")
 			i++
 			continue
 		}
-		b.WriteString(contrib.Args[i] + "\n")
+		b.WriteString(args[i] + "\n")
 	}
 	return strings.TrimSpace(b.String())
 }

@@ -17,6 +17,8 @@ vi.mock("@wick-fe/common-stores", () => ({
 function makeData(): ProvidersListResponse {
   return {
     IsAdmin: true,
+    // Master switch on so the §18.2 memory badges render in these fixtures.
+    AgentMemoryEnabled: true,
     Providers: [
       {
         Instance: { Type: "claude", Name: "claude", Binary: "claude", Disabled: false, MaxConcurrent: 4, SendMode: "" },
@@ -29,6 +31,7 @@ function makeData(): ProvidersListResponse {
         HookEnabled: {},
         Cap: { Used: 1, Max: 4, Unlimited: false },
         CanManage: true,
+        AgentMemory: { Enabled: false, Capture: false },
       },
       {
         Instance: { Type: "openai", Name: "gpt4", Binary: "", Disabled: true, MaxConcurrent: 2, SendMode: "" },
@@ -41,6 +44,7 @@ function makeData(): ProvidersListResponse {
         HookEnabled: {},
         Cap: { Used: 0, Max: 2, Unlimited: false },
         CanManage: true,
+        AgentMemory: { Enabled: false, Capture: false },
       },
     ],
     Gate: { Enabled: true, Binary: "/usr/bin/gate", Source: "config", Reason: "", Note: "Gate note", PermissionMode: "bypass", BypassLocked: false },
@@ -220,6 +224,7 @@ describe("ProvidersList - wick built-in card", () => {
       Path: "(built-in)",
       PathFound: true,
       CanManage: true,
+      AgentMemory: { Enabled: false, Capture: false },
       Version: "built-in",
       VersionErr: "",
       Probing: false,
@@ -466,5 +471,38 @@ describe("ProvidersList - card rhythm", () => {
     const { container } = render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
     await screen.findByText("claude/claude");
     expectCardRhythm(container);
+  });
+});
+
+describe("ProvidersList - Agent Memory badge (PLAN §18.2)", () => {
+  /* Three states, not two. "on" alone hides the distinction that costs
+     people time: an instance can be wired to the memory server and still
+     record nothing, and from the list that is otherwise invisible. */
+  it("reads off when the instance does not use memory", async () => {
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    // One per card: both fixtures have it off.
+    expect(await screen.findAllByText("memory off")).toHaveLength(2);
+  });
+
+  it("distinguishes reading from recording", async () => {
+    const d = makeData();
+    d.Providers[0].AgentMemory = { Enabled: true, Capture: false };
+    d.Providers[1].AgentMemory = { Enabled: true, Capture: true };
+    vi.mocked(api.apiGetProviders).mockResolvedValue(d);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    expect(await screen.findByText("memory · read only")).toBeTruthy();
+    expect(screen.getByText("memory · recording")).toBeTruthy();
+  });
+
+  it("shows no badge at all while the feature is switched off", async () => {
+    // A row of "off" badges for a feature nobody turned on is noise, and
+    // noise on this page is what makes the real states unreadable.
+    const d = makeData();
+    d.AgentMemoryEnabled = false;
+    vi.mocked(api.apiGetProviders).mockResolvedValue(d);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("claude/claude");
+    expect(screen.queryByText("memory off")).toBeNull();
+    expect(screen.queryByText(/memory ·/)).toBeNull();
   });
 });

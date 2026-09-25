@@ -1,0 +1,33 @@
+package view
+
+// AgentMemoryVM feeds the thin-shell that hosts the Agent Memory SPA inside
+// the standard agents layout. AssetURL is the hashed Vite bundle path resolved
+// at boot via spaAssetURL("agentmemory"). The SPA fetches the backend list and
+// each backend's overview/settings from /tools/agents/agentmemory/* itself.
+type AgentMemoryVM struct {
+	Layout   AgentsLayoutVM
+	Base     string // /tools/agents
+	AssetURL string
+}
+
+// AgentMemoryPage renders the Agent Memory SPA shell inside the agents chrome.
+// The SPA reads data-base from the #app div, then drives the backend switcher
+// and the tab strip client-side.
+templ AgentMemoryPage(vm AgentMemoryVM) {
+	@AgentsLayout(vm.Layout) {
+		if vm.AssetURL == "" {
+			<div class="p-8 text-sm text-rose-600 dark:text-rose-400">
+				Agent Memory bundle not built yet. Run
+				<code class="font-mono">npm --workspace=@wick-fe/agents-agentmemory run build</code>
+				in <code class="font-mono">fe/</code> and refresh.
+			</div>
+		} else {
+			<div
+				id="app"
+				data-base={ vm.Base }
+				class="h-full"
+			></div>
+			<script type="module" src={ vm.AssetURL }></script>
+		}
+	}
+}

@@ -134,6 +134,31 @@ type Instance struct {
 	// a code change.
 	AIRouterRawConfig string
 
+	// UseAgentMemory gives this instance's agents a shared memory backend
+	// (ai-memory, …) over MCP, so context survives across sessions and
+	// across provider types. Only claude/codex.
+	UseAgentMemory bool
+
+	// AgentMemoryProvider selects which registered memory backend this
+	// instance talks to ("ai-memory", …). Empty falls back to the default
+	// backend, so instances configured before a second backend existed keep
+	// working.
+	AgentMemoryProvider string
+
+	// AgentMemoryServerURL is the backend's base URL. Empty = the managed
+	// daemon on its loopback port (http://127.0.0.1:49374 for ai-memory).
+	// A remote URL is allowed — the agent only ever speaks HTTP to it.
+	AgentMemoryServerURL string
+
+	// AgentMemoryAuthKey is the backend's auth token (encrypted at rest,
+	// same as AIRouterAPIKey). Empty = the backend runs without auth.
+	AgentMemoryAuthKey string
+
+	// AgentMemoryCapture records this instance's sessions into the memory
+	// store via the backend's lifecycle hooks. False = read-only: agents can
+	// recall what is already there but write nothing back.
+	AgentMemoryCapture bool
+
 	// WickModels is the custom-model registry for the built-in wick
 	// provider. nil for other types.
 	WickModels []WickModel
@@ -918,6 +943,12 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 				AIRouterModels:    raw.AIRouterModels,
 				AIRouterAPIKey:    raw.AIRouterAPIKey,
 				AIRouterRawConfig: raw.AIRouterRawConfig,
+
+				UseAgentMemory:       raw.UseAgentMemory,
+				AgentMemoryProvider:  raw.AgentMemoryProvider,
+				AgentMemoryServerURL: raw.AgentMemoryServerURL,
+				AgentMemoryAuthKey:   raw.AgentMemoryAuthKey,
+				AgentMemoryCapture:   raw.AgentMemoryCapture,
 			}
 			if t == TypeCodex {
 				ins.CodexConfig = &CodexConfig{
@@ -981,6 +1012,12 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 		AIRouterModels:    ins.AIRouterModels,
 		AIRouterAPIKey:    ins.AIRouterAPIKey,
 		AIRouterRawConfig: ins.AIRouterRawConfig,
+
+		UseAgentMemory:       ins.UseAgentMemory,
+		AgentMemoryProvider:  ins.AgentMemoryProvider,
+		AgentMemoryServerURL: ins.AgentMemoryServerURL,
+		AgentMemoryAuthKey:   ins.AgentMemoryAuthKey,
+		AgentMemoryCapture:   ins.AgentMemoryCapture,
 	}
 	if ins.CodexConfig != nil {
 		raw.SandboxMode = string(ins.CodexConfig.SandboxMode)

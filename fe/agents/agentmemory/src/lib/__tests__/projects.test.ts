@@ -1,0 +1,293 @@
+import { describe, test, expect } from "vitest";
+import {
+  BRIEFING_UNAVAILABLE,
+  backfillCapWarning,
+  backfillConfirmBody,
+  backfillSummary,
+  briefingReason,
+  handoffCellText,
+  handoffDetail,
+  latestPages,
+  metricText,
+  metricTitle,
+  oldestHandoff,
+  pageLabel,
+  projectKey,
+  projectMetrics,
+  sortProjects,
+} from "../projects.js";
+import type { BackfillReport, ProjectBriefing, ProjectRow } from "../types.js";
+
+const row = (project: string, last?: string, pages = 3): ProjectRow => ({
+  workspace: "default",
+  project,
+  page_count: pages,
+  last_updated: last,
+});
+
+// briefing mirrors a real memory_briefing payload (ai-memory 2.4.0,
+// default/proj2, captured 2026-09-25) with the two activity windows given
+// DIFFERENT numbers — equal ones would not catch 30d being wired to 7d.
+const briefing = (over: Partial<ProjectBriefing> = {}): ProjectBriefing => ({
+  counts: { pages_latest: 6, pages_all: 15, sessions: 6, observations: 172, evidence_rows: 0 },
+  activity_7d: { days: 7, sessions: 4, observations: 120, pages_updated: 5 },
+  activity_30d: { days: 30, sessions: 6, observations: 172, pages_updated: 6 },
+  last_observation_at: "2026-09-24T17:04:40.437113Z",
+  pending_handoff_count: 2,
+  pending_message_count: 0,
+  recent_pages: [
+    { path: "sessions/b047548c.md", title: "Panggil tool memory_status", kind: "session", updated_at: "2026-09-24T17:04:40.440131Z" },
+    { path: "sessions/227a6362.md", title: "", kind: "session", updated_at: "2026-09-24T17:04:39.641325Z" },
+  ],
+  cross_project_dependents: 0,
+  cross_project_dependencies: 0,
+  ...over,
+});
+
+const briefed = (project: string, last?: string, over?: Partial<ProjectBriefing>): ProjectRow => ({
+  ...row(project, last),
+  briefing: briefing(over),
+});
+
+const report = (over: Partial<BackfillReport> = {}): BackfillReport => ({
+  selected: 0,
+  imported_sessions: 0,
+  imported_events: 0,
+  skipped_for_cap: 0,
+  failed_sessions: 0,
+  skipped_non_empty: false,
+  dry_run: false,
+  ...over,
+});
+
+describe("sortProjects", () => {
+  test("most recently touched first", () => {
+    const rows = sortProjects([
+      row("old", "2026-01-01T00:00:00Z"),
+      row("new", "2026-09-01T00:00:00Z"),
+    ]);
+    expect(rows.map((r) => r.project)).toEqual(["new", "old"]);
+  });
+
+  // A project the store has never dated is not "the oldest" — it has no date
+  // at all, and sorting it to the top would put the least informative row in
+  // the place the eye lands first.
+  test("an undated project sorts last, not first", () => {
+    const rows = sortProjects([row("undated"), row("dated", "2026-01-01T00:00:00Z")]);
+    expect(rows.map((r) => r.project)).toEqual(["dated", "undated"]);
+  });
+
+  test("does not mutate its input", () => {
+    const input = [row("b", "2026-01-01T00:00:00Z"), row("a", "2026-09-01T00:00:00Z")];
+    sortProjects(input);
+    expect(input.map((r) => r.project)).toEqual(["b", "a"]);
+  });
+});
+
+describe("projectMetrics", () => {
+  const now = Date.parse("2026-09-25T12:00:00Z");
+
+  test("pages and last activity are the two the store can actually answer", () => {
+    const m = projectMetrics(row("files", "2026-09-25T10:00:00Z", 1234), undefined, now);
+    expect(m.pages).toEqual({ available: true, value: "1,234", note: "latest version of each" });
+    expect(metricText(m.lastActive)).toBe("2h 0m ago");
+  });
+
+  // The three briefing-fed columns, filled from a real payload.
+  test("sessions, observations and activity come from the briefing", () => {
+    const m = projectMetrics(briefed("proj2", "2026-09-25T10:00:00Z"), undefined, now);
+    expect(metricText(m.sessions)).toBe("6");
+    expect(metricText(m.observations)).toBe("172");
+    // Both windows, in that order — 0 in 7d alone reads as a dead project
+    // until the 30d number says it was busy last month.
+    expect(metricText(m.activity)).toBe("4 / 6");
+    expect(metricTitle(m.activity)).toContain("4 in the last 7 days");
+    expect(metricTitle(m.activity)).toContain("6 in the last 30");
+    // The unit has to be named: "4 / 6" under a header reading "Activity
+    // 7d/30d" does not say whether it counts sessions, pages or observations.
+    expect(metricTitle(m.activity)).toContain("120 / 172 observations");
+  });
+
+  // Still the rule §13.5 opens with: a row the backend could not brief shows
+  // an explicit absence carrying the reason, NEVER the store-wide total
+  // sitting one tab away.
+  test("a row with no briefing is unavailable WITH the reason", () => {
+    const m = projectMetrics(row("files"), undefined, now);
+    for (const cell of [m.sessions, m.observations, m.activity]) {
+      expect(cell.available).toBe(false);
+      expect(metricText(cell)).toBe("n/a");
+      expect(metricTitle(cell)).toBe(BRIEFING_UNAVAILABLE);
+    }
+    expect(BRIEFING_UNAVAILABLE).toMatch(/briefing/i);
+    expect(BRIEFING_UNAVAILABLE).toMatch(/store-wide/i);
+  });
+
+  // Zero is a FACT when the briefing answered. A project that exists and has
+  // never been written to must read "0", not "n/a" — the two say different
+  // things and only one of them is measured.
+  test("a briefed but empty project shows 0, not n/a", () => {
+    const empty = briefed("scratch", undefined, {
+      counts: { pages_latest: 0, pages_all: 0, sessions: 0, observations: 0, evidence_rows: 0 },
+      activity_7d: { days: 7, sessions: 0, observations: 0, pages_updated: 0 },
+      activity_30d: { days: 30, sessions: 0, observations: 0, pages_updated: 0 },
+    });
+    const m = projectMetrics(empty, undefined, now);
+    expect(metricText(m.sessions)).toBe("0");
+    expect(metricText(m.activity)).toBe("0 / 0");
+    expect(m.sessions.available).toBe(true);
+  });
+
+  // The backend's own message is what tells a daemon that died mid-list apart
+  // from a project renamed out from under the listing.
+  test("a per-row briefing error carries the backend's message", () => {
+    const failed: ProjectRow = { ...row("gone"), briefing_error: "project 'gone' not found in workspace 'default'" };
+    expect(briefingReason(failed)).toContain("not found in workspace");
+    expect(metricTitle(projectMetrics(failed, undefined, now).sessions)).toContain("not found in workspace");
+  });
+
+  // The swap point. If the briefing call is ever allowed, filling it in here
+  // is the only edit — so the override has to actually win.
+  test("an override fills an unavailable cell without touching the rest", () => {
+    const m = projectMetrics(row("files", "2026-09-25T10:00:00Z"), {
+      sessions: { available: true, value: "12", note: "captured" },
+    }, now);
+    expect(metricText(m.sessions)).toBe("12");
+    expect(m.observations.available).toBe(false);
+    expect(m.pages.available).toBe(true);
+  });
+
+  // …and it still wins over a briefing that DID answer, which is what makes
+  // this the one seam a caller can reach through.
+  test("an override beats the briefing's own number", () => {
+    const m = projectMetrics(briefed("proj2"), { sessions: { available: false, reason: "suppressed" } }, now);
+    expect(metricText(m.sessions)).toBe("n/a");
+    expect(metricText(m.observations)).toBe("172");
+  });
+
+  test("a project that was never written to says so", () => {
+    const m = projectMetrics(row("fresh"), undefined, now);
+    expect(metricText(m.lastActive)).toBe("never");
+    expect(metricTitle(m.lastActive)).toBe("never written to");
+  });
+});
+
+describe("handoff cells", () => {
+  // An unread count is not zero. A project whose handoffs could not be read
+  // has not been shown to have none.
+  test("unknown and error never render as 0", () => {
+    expect(handoffCellText(undefined)).toBe("—");
+    expect(handoffCellText({ state: "error", message: "boom" })).toBe("?");
+    expect(handoffCellText({ state: "ok", count: 0 })).toBe("0");
+  });
+
+  test("the detail line separates a failed read from an empty one", () => {
+    expect(handoffDetail({ state: "ok", count: 0 })).toEqual({
+      text: "None open — nothing is waiting to be picked up by another agent.",
+      error: false,
+    });
+    expect(handoffDetail({ state: "ok", count: 2 }).text).toContain("2 open batons");
+    expect(handoffDetail({ state: "error", message: "404" })).toEqual({
+      text: "Could not be read: 404",
+      error: true,
+    });
+    expect(handoffDetail(undefined).error).toBe(false);
+  });
+
+  test("oldestHandoff picks the one that has been waiting longest", () => {
+    const rows = [
+      { id: "new", created_at_ms: 2000 },
+      { id: "old", created_at_ms: 1000 },
+      { id: "undated" },
+    ];
+    expect(oldestHandoff(rows)?.id).toBe("old");
+    expect(oldestHandoff([])).toBeNull();
+  });
+});
+
+describe("backfill reporting", () => {
+  // selected 0 + skipped_non_empty is the NORMAL outcome on a store that
+  // already has sessions. Without this sentence the button looks broken.
+  test("the no-op explains itself instead of reading as a failure", () => {
+    const s = backfillSummary(report({ skipped_non_empty: true, selected: 0 }));
+    expect(s).toContain("already has captured sessions");
+    expect(s).toContain("observations a second time");
+  });
+
+  test("an empty project is told apart from a skipped one", () => {
+    expect(backfillSummary(report({ selected: 0 }))).toContain("No local harness sessions");
+  });
+
+  test("a real import counts what it took", () => {
+    const s = backfillSummary(report({ selected: 4, imported_sessions: 4, imported_events: 190 }));
+    expect(s).toContain("4 sessions selected");
+    expect(s).toContain("imported 4 sessions");
+    expect(s).toContain("190 events");
+  });
+
+  test("a dry run says 'would import', not 'imported'", () => {
+    expect(backfillSummary(report({ selected: 2, imported_sessions: 2, dry_run: true }))).toContain("would import");
+  });
+
+  // The backend's own cap default is 25 — low enough to leave most of a long
+  // project behind without saying anything (PLAN §10.6).
+  test("the max-sessions cap is surfaced, never swallowed", () => {
+    expect(backfillCapWarning(report())).toBeNull();
+    const w = backfillCapWarning(report({ skipped_for_cap: 30 }));
+    expect(w).toContain("30 sessions were left out");
+    expect(w).toContain("Settings");
+  });
+});
+
+describe("backfillConfirmBody", () => {
+  test("the unforced import promises no duplication", () => {
+    expect(backfillConfirmBody("default/files", false)).toContain("nothing is duplicated");
+  });
+
+  // §13.5 point 2: a confirmation states the consequence. "Are you sure?"
+  // would not tell anyone that their observations are about to be doubled.
+  test("the forced import names the consequence, not just the flag", () => {
+    const body = backfillConfirmBody("default/files", true);
+    expect(body).toContain("observations do NOT");
+    expect(body).toContain("stored a second time");
+  });
+});
+
+test("projectKey is workspace/project", () => {
+  expect(projectKey(row("files"))).toBe("default/files");
+});
+
+describe("latestPages", () => {
+  // Three states, because "no pages" and "could not be read" are different
+  // facts and one line cannot serve both.
+  test("a briefed project lists its recent pages, newest first as sent", () => {
+    const p = latestPages(briefed("proj2"));
+    expect(p.state).toBe("ok");
+    if (p.state !== "ok") return;
+    expect(p.pages).toHaveLength(2);
+    expect(pageLabel(p.pages[0])).toBe("Panggil tool memory_status");
+  });
+
+  // A page whose title was never written still has to be identifiable, and
+  // its store path identifies it.
+  test("an untitled page falls back to its path, never to a blank", () => {
+    const p = latestPages(briefed("proj2"));
+    if (p.state !== "ok") throw new Error("expected ok");
+    expect(pageLabel(p.pages[1])).toBe("sessions/227a6362.md");
+  });
+
+  test("a briefed project with no pages is empty, not unavailable", () => {
+    expect(latestPages(briefed("scratch", undefined, { recent_pages: [] })).state).toBe("empty");
+    expect(latestPages(briefed("scratch", undefined, { recent_pages: null })).state).toBe("empty");
+  });
+
+  test("an unbriefed project is unavailable WITH the reason", () => {
+    const p = latestPages(row("files"));
+    expect(p.state).toBe("unavailable");
+    if (p.state !== "unavailable") return;
+    expect(p.reason).toBe(BRIEFING_UNAVAILABLE);
+  });
+
+  test("no selected project is unavailable rather than a crash", () => {
+    expect(latestPages(null).state).toBe("unavailable");
+  });
+});

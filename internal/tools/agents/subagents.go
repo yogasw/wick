@@ -44,6 +44,16 @@ type SubAgentItem struct {
 	Depth     int    `json:"depth"`
 	TurnsUsed int    `json:"turns_used"`
 	MaxTurns  int    `json:"max_turns"`
+	// Token spend, as the delegation recorded it. 0 means the provider
+	// never reported usage for this run, never "free" — which is why the
+	// panel says "not reported" rather than printing a zero.
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TokensUsed   int `json:"tokens_used"`
+	// MaxTokens is this delegation's own cap; 0 = uncapped by the
+	// delegation (the per-tree budget still applies), so the panel shows
+	// a bare count instead of a ratio.
+	MaxTokens int    `json:"max_tokens"`
 	Result    string `json:"result,omitempty"`
 	StartedAt string `json:"started_at,omitempty"`
 	// EndedAt is when the delegation reached a terminal status. Absent
@@ -107,6 +117,10 @@ func sessionSubAgents(c *tool.Ctx) {
 			Depth:          d.Depth,
 			TurnsUsed:      d.TurnsUsed,
 			MaxTurns:       d.MaxTurns,
+			InputTokens:    d.InputTokens,
+			OutputTokens:   d.OutputTokens,
+			TokensUsed:     d.TokensUsed,
+			MaxTokens:      d.MaxTokens,
 			Result:         truncateRunes(d.Result, 400),
 		}
 		if !d.StartedAt.IsZero() {

@@ -49,6 +49,12 @@ type AgentsLayoutVM struct {
 	// master switch is on AND the caller may access it (admin) — everyone
 	// loses it when the AI routers are disabled.
 	AirouterVisible bool
+	// AgentMemoryVisible controls the "Agent Memory" sidebar entry. True
+	// when the master switch is on AND the caller may access it (admin).
+	// The master switch is off by default — this feature spawns a daemon
+	// and writes a marker into project folders — so a host that never
+	// asked for it never sees the entry.
+	AgentMemoryVisible bool
 
 	// ProvidersVisible controls the "Providers" sidebar entry. True for
 	// admins, and for anyone holding a manage tag on at least one

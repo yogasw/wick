@@ -53,6 +53,7 @@ interface WireProviderStatus {
   hooks: Record<string, WireHookCapability> | null;
   cap: WireProviderCap;
   hook_enabled: Record<string, boolean> | null;
+  agent_memory?: { enabled?: boolean; capture?: boolean } | null;
 }
 
 interface WireSpawnLogFile {
@@ -179,6 +180,7 @@ interface WireProvidersListResponse {
   pool_max: number;
   live_processes: WireLiveProcess[] | null;
   supported_keys: string[] | null;
+  agent_memory_enabled?: boolean;
 }
 
 interface WireProviderDetailResponse {
@@ -207,6 +209,20 @@ interface WireProviderDetailResponse {
     models?: Record<string, string> | null;
     key_set?: boolean;
     raw_config?: string;
+    preview?: string;
+  } | null;
+  agent_memory?: {
+    feature_enabled?: boolean;
+    supported?: boolean;
+    capture_supported?: boolean;
+    capture_note?: string;
+    enabled?: boolean;
+    provider?: string;
+    backends?: { id: string; name: string; blurb?: string; github_url?: string }[] | null;
+    server_url?: string;
+    effective_url?: string;
+    key_set?: boolean;
+    capture?: boolean;
     preview?: string;
   } | null;
 }
@@ -384,6 +400,10 @@ function mapProviderStatus(w: WireProviderStatus): ProviderStatusDTO {
     Cap: mapCap(w.cap),
     HookEnabled: w.hook_enabled ?? {},
     CanManage: w.can_manage ?? false,
+    AgentMemory: {
+      Enabled: w.agent_memory?.enabled ?? false,
+      Capture: w.agent_memory?.capture ?? false,
+    },
   };
 }
 
@@ -402,6 +422,9 @@ export function normalizeProviders(r: WireProvidersListResponse): ProvidersListR
     PoolMax: r.pool_max ?? 0,
     LiveProcesses: (r.live_processes ?? []).map(mapLiveProcess),
     SupportedKeys: r.supported_keys ?? [],
+    // Absent reads as OFF, same fail-quiet rule as is_admin above: an older
+    // server that never heard of the feature must not grow badges.
+    AgentMemoryEnabled: r.agent_memory_enabled ?? false,
   };
 }
 
@@ -600,6 +623,28 @@ export function normalizeProviderDetail(r: WireProviderDetailResponse): Provider
       KeySet: r.airouter?.key_set ?? false,
       RawConfig: r.airouter?.raw_config ?? "",
       Preview: r.airouter?.preview ?? "",
+    },
+    AgentMemory: {
+      // Every default is the SAFE one: a server that never heard of Agent
+      // Memory reports the feature off and unsupported, so the card is
+      // absent rather than offering a save the API would 404.
+      FeatureEnabled: r.agent_memory?.feature_enabled ?? false,
+      Supported: r.agent_memory?.supported ?? false,
+      CaptureSupported: r.agent_memory?.capture_supported ?? false,
+      CaptureNote: r.agent_memory?.capture_note ?? "",
+      Enabled: r.agent_memory?.enabled ?? false,
+      Provider: r.agent_memory?.provider ?? "",
+      Backends: (r.agent_memory?.backends ?? []).map((b) => ({
+        ID: b.id,
+        Name: b.name,
+        Blurb: b.blurb ?? "",
+        GitHubURL: b.github_url ?? "",
+      })),
+      ServerURL: r.agent_memory?.server_url ?? "",
+      EffectiveURL: r.agent_memory?.effective_url ?? "",
+      KeySet: r.agent_memory?.key_set ?? false,
+      Capture: r.agent_memory?.capture ?? false,
+      Preview: r.agent_memory?.preview ?? "",
     },
   };
 }
@@ -1041,6 +1086,92 @@ export async function apiSaveAIRouter(
     } catch { /* keep raw */ }
     throw new ApiError(resp.status, msg);
   }
+}
+
+// ── Agent Memory (per instance) ──────────────────────────────────────
+
+// postForm submits a urlencoded body to one of the provider detail's
+// sub-routes and unwraps the BE's {"error": …} shape. Shared by the router
+// and memory saves, which post the same way to the same kind of endpoint.
+async function postForm(path: string, form: URLSearchParams): Promise<void> {
+  const resp = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+    body: form.toString(),
+    redirect: "follow",
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    let msg = text || `HTTP ${resp.status}`;
+    try {
+      const j = JSON.parse(text) as { error?: string };
+      if (j.error) msg = j.error;
+    } catch { /* keep raw */ }
+    throw new ApiError(resp.status, msg);
+  }
+}
+
+// apiSaveAgentMemory persists an instance's Agent Memory settings (toggle +
+// backend + server URL + capture + optional token) in one request.
+//
+// server_url is sent ALWAYS, token only when non-empty: an empty URL is the
+// real choice "use the managed daemon" and has to be saveable, while an empty
+// token means "keep the stored one" — the FE never round-trips a secret.
+export async function apiSaveAgentMemory(
+  base: string,
+  type: string,
+  name: string,
+  fields: { use_agent_memory: boolean; provider: string; server_url: string; capture: boolean; auth_key?: string },
+): Promise<void> {
+  const form = new URLSearchParams();
+  form.set("use_agent_memory", fields.use_agent_memory ? "on" : "false");
+  if (fields.provider) form.set("agent_memory_provider", fields.provider);
+  form.set("agent_memory_server_url", fields.server_url.trim());
+  form.set("agent_memory_capture", fields.capture ? "on" : "false");
+  if (fields.auth_key && fields.auth_key.trim() !== "") {
+    form.set("agent_memory_auth_key", fields.auth_key);
+  }
+  return postForm(
+    `${base}/providers/detail/${encodeURIComponent(type)}/${encodeURIComponent(name)}/agentmemory`,
+    form,
+  );
+}
+
+// AgentMemoryProbe is the daemon's answer to the preflight: did the health
+// path return 200, and what does the store look like if it did.
+export type AgentMemoryProbe = {
+  ok: boolean;
+  baseUrl: string;
+  error: string;
+  version: string;
+};
+
+// apiAgentMemoryTest probes the managed daemon for one backend (PLAN §18.4).
+// A transport failure is reported as a NOT-ok probe rather than thrown: the
+// caller's job is to tell the user the daemon is unreachable, and an
+// unreachable daemon and an unreachable wick endpoint mean the same thing to
+// them — do not enable this yet.
+export async function apiAgentMemoryTest(base: string, id: string): Promise<AgentMemoryProbe> {
+  try {
+    const r = await post<{ ok?: boolean; base_url?: string; error?: string; version?: string }>(
+      `${base}/agentmemory/${encodeURIComponent(id)}/test`,
+    );
+    return {
+      ok: r?.ok ?? false,
+      baseUrl: r?.base_url ?? "",
+      error: r?.error ?? "",
+      version: r?.version ?? "",
+    };
+  } catch (e) {
+    return { ok: false, baseUrl: "", error: e instanceof Error ? e.message : "probe failed", version: "" };
+  }
+}
+
+// apiAgentMemoryStart starts the managed daemon for one backend, so a failed
+// preflight has a one-click answer instead of a dead end.
+export async function apiAgentMemoryStart(base: string, id: string): Promise<void> {
+  return post<void>(`${base}/agentmemory/${encodeURIComponent(id)}/start`);
 }
 
 // ── Wick provider (built-in) ─────────────────────────────────────────

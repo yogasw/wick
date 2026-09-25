@@ -189,6 +189,24 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		return nil, err
 	}
 	args = append(args, routerContrib.Args...)
+	// Agent Memory: when the instance is wired to a memory backend, that
+	// backend contributes the MCP server this spawn recalls from (and, with
+	// capture on, the hooks that record into it), so a session inherits what
+	// earlier sessions — codex ones included — learned in this folder.
+	//
+	// Position is load-bearing for a reproducible command. claude's
+	// --mcp-config is VARIADIC, so the contribution is inserted here, ahead of
+	// the trailing --resume / --session-id flags, rather than at the argv
+	// tail. wick's own spawn streams the prompt over stdin so argv carries no
+	// trailing operand to eat, but the spawn log is meant to be re-runnable by
+	// hand — where a prompt WOULD be positional. TestSpawnArgvMemoryOrder
+	// locks the position. The contribution deliberately adds no
+	// --strict-mcp-config: see TestArgvNeverIsolatesMCP.
+	memContrib, err := provider.MemorySpawnContribution(opt.Instance, provider.TypeClaude)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, memContrib.Args...)
 	args = append(args, maxTurnsArgs(opt.MaxTurns)...)
 	// Written to a file and referenced by path, not inlined: the preset
 	// alone is ~28KB and Windows caps a command line at 32767 chars. See
@@ -226,7 +244,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 
 	cmd := safeexec.CommandContext(ctx, execBin, execArgs...)
 	cmd.Dir = opt.Workspace
-	cmd.Env = append(spawnEnv(os.Environ(), opt), routerContrib.Env...)
+	cmd.Env = append(append(spawnEnv(os.Environ(), opt), routerContrib.Env...), memContrib.Env...)
 	hideConsole(cmd)
 	// Own process group: teardown must reach the descendants this CLI
 	// spawns (MCP servers, tool subprocesses), not just the leader.
@@ -235,9 +253,9 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	procgroup.Apply(cmd)
 
 	// Env wick injected on top of the inherited environment (ExtraEnv,
-	// thinking, AI-router), masked, for the spawn log. Passing a nil base to
-	// spawnEnv yields only the added entries.
-	addedEnv := provider.MaskSpawnEnv(append(spawnEnv(nil, opt), routerContrib.Env...))
+	// thinking, AI-router, Agent Memory), masked, for the spawn log. Passing a
+	// nil base to spawnEnv yields only the added entries.
+	addedEnv := provider.MaskSpawnEnv(append(append(spawnEnv(nil, opt), routerContrib.Env...), memContrib.Env...))
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

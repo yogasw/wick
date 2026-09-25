@@ -195,6 +195,20 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	}
 	args = append(args, routerContrib.Args...)
 
+	// Agent Memory: the selected backend contributes codex's `-c
+	// mcp_servers.<backend>.*` overrides, pointing this spawn at the same
+	// memory a claude instance in the same folder reads.
+	//
+	// Position is load-bearing: `codex exec` takes its PROMPT as a positional
+	// operand appended at the very end (and `resume <id>` just before it), so
+	// anything that carries a value must land ahead of both. Here is ahead of
+	// both. TestSpawnerArgvMemoryBeforePrompt locks that.
+	memContrib, err := provider.MemorySpawnContribution(opt.Instance, provider.TypeCodex)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, memContrib.Args...)
+
 	// codex exec treats /compact as ordinary model text. Use the app-server
 	// RPC that performs real persisted-thread compaction instead.
 	if strings.EqualFold(strings.TrimSpace(opt.InitialMessage), "/compact") && opt.ResumeID != "" {
@@ -229,6 +243,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	cmd.Dir = opt.Workspace
 	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
 	cmd.Env = append(cmd.Env, routerContrib.Env...)
+	cmd.Env = append(cmd.Env, memContrib.Env...)
 	// The MCP bearer, named by the -c override above. Per-spawn, so two users'
 	// processes never see each other's credential.
 	cmd.Env = append(cmd.Env, mcpEnv(s.MCPToken)...)
@@ -239,10 +254,11 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// group is how a session is stopped.
 	procgroup.Apply(cmd)
 
-	// Track only the env wick injected (instance env + AI-router), masked,
-	// for the spawn log. The full OS environ is noise and must not be logged.
-	addedEnv := provider.MaskSpawnEnv(append(append(append([]string{}, opt.ExtraEnv...),
-		routerContrib.Env...), mcpEnv(s.MCPToken)...))
+	// Track only the env wick injected (instance env + AI-router + Agent
+	// Memory), masked, for the spawn log. The full OS environ is noise and
+	// must not be logged.
+	addedEnv := provider.MaskSpawnEnv(append(append(append(append([]string{}, opt.ExtraEnv...),
+		routerContrib.Env...), memContrib.Env...), mcpEnv(s.MCPToken)...))
 
 	// Codex reads its prompt from argv (positional [PROMPT]), never from
 	// stdin. We must give the child an already-closed stdin so codex sees

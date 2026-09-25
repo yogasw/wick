@@ -270,6 +270,31 @@ type ProviderInstance struct {
 	// (codex `-c` overrides / claude env), one entry per line.
 	AIRouterRawConfig string `json:"airouter_raw_config,omitempty"`
 
+	// UseAgentMemory gives this instance's agents a shared memory backend
+	// (ai-memory, …) over MCP, so context survives across sessions and across
+	// provider types. Only meaningful for claude/codex.
+	//
+	// Unlike UseAIRouter above, the JSON keys here are backend-agnostic from
+	// the start — "agent_memory_*", not the first backend's name — so adding a
+	// second backend never means carrying a misleading key forever.
+	UseAgentMemory bool `json:"use_agent_memory,omitempty"`
+
+	// AgentMemoryProvider selects which registered memory backend this
+	// instance talks to ("ai-memory", …). Empty = the default backend.
+	AgentMemoryProvider string `json:"agent_memory_provider,omitempty"`
+
+	// AgentMemoryServerURL is the backend's base URL. Empty = the managed
+	// daemon on its loopback port.
+	AgentMemoryServerURL string `json:"agent_memory_server_url,omitempty"`
+
+	// AgentMemoryAuthKey is the backend's auth token (encrypted at rest via
+	// the secret layer). Empty = the backend runs without auth.
+	AgentMemoryAuthKey string `json:"agent_memory_auth_key,omitempty"`
+
+	// AgentMemoryCapture records sessions into the store via the backend's
+	// lifecycle hooks. False = recall only, nothing written back.
+	AgentMemoryCapture bool `json:"agent_memory_capture,omitempty"`
+
 	// WickModels is the custom-model registry for the built-in wick
 	// provider — one entry per registered model (Gemini / OpenAI /
 	// Anthropic / OpenRouter / other). Only meaningful for the wick

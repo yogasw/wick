@@ -403,6 +403,35 @@
     return cap.Unlimited ? `${cap.Used} / ∞` : `${cap.Used} / ${cap.Max}`;
   }
 
+  /* Agent Memory badge (PLAN §18.2). Three states, because "on" alone hides
+     the distinction that actually matters: an instance can be wired to the
+     memory server and still record nothing, and that is invisible from the
+     detail page's toggle alone. Rendered only while the feature's master
+     switch is on — a row of "off" badges for something nobody enabled is
+     noise, not information. */
+  type MemoryBadge = { label: string; title: string; cls: string };
+  const MEMORY_BADGES: Record<"off" | "read" | "record", MemoryBadge> = {
+    off: {
+      label: "memory off",
+      title: "This instance does not reach the memory server at all.",
+      cls: "bg-white-300 dark:bg-navy-600 text-black-600 dark:text-black-500",
+    },
+    read: {
+      label: "memory · read only",
+      title: "Spawns can read what other sessions learned, but nothing they do is recorded.",
+      cls: "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600",
+    },
+    record: {
+      label: "memory · recording",
+      title: "Spawns read memory AND write their sessions back into it.",
+      cls: "bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300",
+    },
+  };
+  function memoryBadge(p: ProviderStatusDTO): MemoryBadge {
+    if (!p.AgentMemory.Enabled) return MEMORY_BADGES.off;
+    return p.AgentMemory.Capture ? MEMORY_BADGES.record : MEMORY_BADGES.read;
+  }
+
   function configuredCount(): number {
     return data?.Providers.length ?? 0;
   }
@@ -639,6 +668,10 @@
                 <div class="flex items-center gap-2">
                   <p class="text-base font-semibold text-black-900 dark:text-white-100">{p.Instance.Type}/{p.Instance.Name}</p>
                   <span class={`rounded px-1.5 py-0.5 text-xs font-medium ${p.Cap.Used > 0 ? "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300" : "bg-white-300 dark:bg-navy-600 text-black-600 dark:text-black-500"}`}>{capLabel(p.Cap)}</span>
+                  {#if data?.AgentMemoryEnabled}
+                    {@const mem = memoryBadge(p)}
+                    <span class={`rounded px-1.5 py-0.5 text-xs font-medium ${mem.cls}`} title={mem.title}>{mem.label}</span>
+                  {/if}
                 </div>
                 {#if p.Instance.Disabled}
                   <p class="text-xs text-amber-600 dark:text-amber-400 mt-0.5">disabled</p>

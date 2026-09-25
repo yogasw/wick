@@ -113,6 +113,11 @@ type ChildSpec struct {
 	TagIDs []string
 	// MaxTurns is the resolved per-child cap, already clamped.
 	MaxTurns int
+	// TurnsUsed is what the row has ALREADY spent when this spawn starts.
+	// Zero for a fresh delegation; non-zero for a continuation, whose cap
+	// is absolute — so the child must be told how much of it is left
+	// rather than the cap alone.
+	TurnsUsed int
 	// MaxTokens is the resolved per-child token cap. 0 = uncapped at the
 	// delegation level.
 	MaxTokens int
@@ -292,9 +297,23 @@ type Result struct {
 	Profile      string `json:"profile"`
 	Status       string `json:"status"`
 	TurnsUsed    int    `json:"turns_used"`
-	TokensUsed   int    `json:"tokens_used,omitempty"`
-	Result       string `json:"result"`
-	Note         string `json:"note,omitempty"`
+	// MaxTurns is the cap this delegation ran under. Emitted alongside
+	// TurnsUsed so a caller reading "12 turns used" can tell an agent that
+	// finished early from one the harness cut off — the two are the same
+	// number without it.
+	MaxTurns   int    `json:"max_turns,omitempty"`
+	TokensUsed int    `json:"tokens_used,omitempty"`
+	Result     string `json:"result"`
+	Note       string `json:"note,omitempty"`
+	// Partial marks a result that is NOT a finished answer: the run ended
+	// on a cap or a stop, and the text is as far as the sub-agent got.
+	//
+	// A typed flag rather than prose only, because acting on it is a
+	// decision (continue, re-plan, ship anyway) and the status enum that
+	// carries the same information is a string the caller has to know the
+	// members of. With DelegationID and MaxTurns beside it, a leader has
+	// everything a continuation needs without reassembling context.
+	Partial bool `json:"partial,omitempty"`
 	// Mode echoes how this ran, in the spoken names: "background" or
 	// "foreground" (ModeLabel). For a background run it is the signal that
 	// Result is intentionally empty and the answer arrives later.
@@ -634,6 +653,7 @@ func (s *Service) execute(
 		MCPToken:      token,
 		TagIDs:        effTags,
 		MaxTurns:      row.MaxTurns,
+		TurnsUsed:     row.TurnsUsed,
 		MaxTokens:     row.MaxTokens,
 		WorkspacePath: workspacePath,
 	}
@@ -778,6 +798,11 @@ func (s *Service) await(
 		text     strings.Builder
 		usageIn  = row.InputTokens
 		usageOut = row.OutputTokens
+		// turnsWarned keeps the low-budget warning to ONE note per
+		// delegation. Warning on every turn past the threshold spends the
+		// leader's own budget re-reading the same fact, and a repeated
+		// alert is an ignored alert.
+		turnsWarned bool
 	)
 	tokens := func() int { return usageIn + usageOut }
 
@@ -906,6 +931,18 @@ func (s *Service) await(
 				turns++
 				_ = s.Repo.UpdateTurns(ctx, row.ID, turns)
 
+				// Early warning, once per delegation. The cap is enforced
+				// silently and lands as a kill mid-action, so the only
+				// moment a leader can still do something about it is
+				// BEFORE the last turn is spent. Supervised rows only:
+				// this rides the supervision channel, and a leader that
+				// asked for no reporting must not be woken by it.
+				if !turnsWarned && row.Supervised {
+					if threshold := turnWarnThreshold(spec.MaxTurns); threshold > 0 && turns >= threshold {
+						turnsWarned = s.warnTurnBudget(ctx, row, turns, spec.MaxTurns)
+					}
+				}
+
 				// Token cap: a spend ceiling bounds what turn counting
 				// cannot — one turn that reads a huge file can cost more
 				// than ten small ones. Only enforceable when the provider
@@ -919,6 +956,7 @@ func (s *Service) await(
 					return &Result{
 						DelegationID: row.ID, Profile: row.ProfileKey,
 						Status: entity.DelegationStoppedBudget, TurnsUsed: turns,
+						MaxTurns: spec.MaxTurns, Partial: true,
 						TokensUsed: tokens(), Result: out,
 						Note:     TokenBudgetNote(tokens(), spec.MaxTokens),
 						Envelope: FallbackEnvelope(out),
@@ -939,7 +977,8 @@ func (s *Service) await(
 					return &Result{
 						DelegationID: row.ID, Profile: row.ProfileKey,
 						Status: entity.DelegationStoppedMaxTurns, TurnsUsed: turns, Result: out,
-						Note:     fmt.Sprintf("Stopped at max_turns=%d. The result above is partial.", spec.MaxTurns),
+						MaxTurns: spec.MaxTurns, Partial: true,
+						Note:     MaxTurnsNote(row.ID, turns, spec.MaxTurns),
 						Envelope: FallbackEnvelope(out),
 					}, nil
 				}

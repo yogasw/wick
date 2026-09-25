@@ -25,6 +25,22 @@ type ProjectHookWriter interface {
 	Remove(folder string) error
 }
 
+// ProjectMemoryMarker pins a project folder to its own Agent Memory scope.
+// Implemented by agentmemory.MarkerWriter; the interface keeps this package
+// free of a direct agentmemory import, the same way ProjectHookWriter keeps it
+// free of a gate import.
+//
+// It exists because ai-memory scopes a session by the BASENAME of its cwd, and
+// every wick project's cwd is named "files" (projects/<uuid>/files) — so
+// without a marker every project on the host shares one memory bucket. See
+// agentmemory/marker.go and PLAN §14.4.
+//
+// Ensure must be idempotent and must never overwrite a name already in the
+// file; it is called on every CreateProject and MoveSession.
+type ProjectMemoryMarker interface {
+	Ensure(folder, projectName, projectID string) error
+}
+
 // Manager wraps Registry with mutators that keep disk and memory in
 // sync. Pure-disk functions in the project / session / preset
 // packages stay usable on their own — Manager just glues a
@@ -41,6 +57,10 @@ type Manager struct {
 	// inject so live config changes take effect without a server restart.
 	// Nil, or a loader that returns "", disables injection silently.
 	GateBinLoader func() string
+	// MemoryMarker, when non-nil, writes the Agent Memory scope marker into
+	// the project folder after every CreateProject and MoveSession. Nil = skip
+	// (tests, and any build without the feature wired).
+	MemoryMarker ProjectMemoryMarker
 }
 
 func NewManager(reg *Registry) *Manager { return &Manager{reg: reg} }
@@ -87,6 +107,33 @@ func (m *Manager) injectHook(_ context.Context, projectID string) {
 		Msg("registry.manager: hook config injected successfully")
 }
 
+// ensureMemoryMarker writes the Agent Memory scope marker into a project's
+// folder. Best-effort: a failure is logged and never fails the operation that
+// triggered it — a missing marker costs memory hygiene, not a working project.
+//
+// Custom-path projects are skipped on purpose. Their folder belongs to the
+// user (often a git repo), and dropping a dotfile into it is not wick's call;
+// a marker there is something the user writes themselves.
+func (m *Manager) ensureMemoryMarker(projectID string) {
+	if m.MemoryMarker == nil || projectID == "" {
+		return
+	}
+	p, ok := m.reg.Project(projectID)
+	if !ok {
+		return
+	}
+	if p.Meta.CustomPath != "" {
+		log.Debug().Str("project", projectID).Msg("registry.manager: memory marker skipped — custom path is the user's folder")
+		return
+	}
+	folder := m.reg.layout.ProjectManagedPath(projectID)
+	if err := m.MemoryMarker.Ensure(folder, p.Meta.Name, projectID); err != nil {
+		log.Error().Err(err).Str("project", projectID).Str("path", folder).Msg("registry.manager: memory marker write failed")
+		return
+	}
+	log.Debug().Str("project", projectID).Str("path", folder).Msg("registry.manager: memory marker ensured")
+}
+
 // Registry exposes the underlying registry for read paths.
 func (m *Manager) Registry() *Registry { return m.reg }
 
@@ -102,6 +149,7 @@ func (m *Manager) CreateProject(ctx context.Context, opt project.CreateOptions) 
 	log.Info().Str("project", p.Meta.ID).Str("name", opt.Name).Msg("registry.manager: project created")
 	m.reg.upsertProject(p)
 	m.injectHook(ctx, p.Meta.ID)
+	m.ensureMemoryMarker(p.Meta.ID)
 	return p, nil
 }
 
@@ -235,6 +283,9 @@ func (m *Manager) MoveSession(ctx context.Context, id, newProjectID string) erro
 	log.Info().Str("session", id).Str("project", newProjectID).Msg("registry.manager: session moved")
 	if newProjectID != "" {
 		m.injectHook(ctx, newProjectID)
+		// Also the backfill path: a project created before Agent Memory was
+		// switched on gets its marker the first time a session lands in it.
+		m.ensureMemoryMarker(newProjectID)
 	} else {
 		log.Debug().Str("session", id).Msg("registry.manager: hook injection skipped — project unbound (empty)")
 	}

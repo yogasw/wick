@@ -189,7 +189,7 @@ func apiSessionContext(c *tool.Ctx) {
 	// the session's configured provider, which may have been switched a
 	// second ago and not yet run a turn. The meter has to describe a
 	// window that actually exists.
-	var newest time.Time
+	active := activeContextProvider(su.Providers)
 	for name, p := range su.Providers {
 		row := SessionContextProviderDTO{
 			Provider: name,
@@ -204,8 +204,7 @@ func apiSessionContext(c *tool.Ctx) {
 			row.LastAt = p.LastAt.UTC().Format(time.RFC3339)
 		}
 		out.Providers = append(out.Providers, row)
-		if p.LastAt.After(newest) {
-			newest = p.LastAt
+		if name == active {
 			out.Provider, out.Model = name, p.Model
 			out.Used, out.Window = p.ContextUsed, p.ContextWindow
 			out.Pct = row.Pct
@@ -224,6 +223,36 @@ func apiSessionContext(c *tool.Ctx) {
 		out.CompactNote = provider.CompactUnsupportedNote
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// activeContextProvider names the provider whose window the meter shows.
+//
+// Newest LastAt wins, as before. What is new is that a provider which has
+// never FINISHED a turn still counts when it already reported a level:
+// LastAt is only written when a turn completes, so a run still on its
+// first turn had every field of the meter blanked while the row right
+// underneath it carried a real reading. Sub-agents live in that state —
+// most of them are looked at while they are still working.
+//
+// Ties (and the all-zero case) break on the provider name, because map
+// iteration order is random and a meter that names a different provider
+// on each poll is worse than one that names an arbitrary but stable one.
+func activeContextProvider(ps map[string]*store.ProviderUsage) string {
+	var active string
+	var newest time.Time
+	for name, p := range ps {
+		if p == nil {
+			continue
+		}
+		switch {
+		case active == "", p.LastAt.After(newest):
+		case p.LastAt.Equal(newest) && name < active:
+		default:
+			continue
+		}
+		active, newest = name, p.LastAt
+	}
+	return active
 }
 
 // contextProviderType names the provider type the NEXT turn will run

@@ -883,6 +883,14 @@ templ agentsNavIcon(label string) {
 				<circle cx="4" cy="12" r="2"></circle>
 				<path d="M13 4v3a2 2 0 0 1-2 2H6M6 6l-2 2 2 2" stroke-linecap="round" stroke-linejoin="round"></path>
 			</svg>
+		case "Agent Memory":
+			// A store with a thread running back into it — what an agent
+			// recalls from the sessions before this one.
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<ellipse cx="8" cy="4" rx="5" ry="2"></ellipse>
+				<path d="M3 4v8c0 1.1 2.24 2 5 2s5-.9 5-2V4" stroke-linecap="round"></path>
+				<path d="M3 8c0 1.1 2.24 2 5 2s5-.9 5-2" stroke-linecap="round"></path>
+			</svg>
 		default:
 			<span class="h-4 w-4 shrink-0"></span>
 	}

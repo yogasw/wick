@@ -43,6 +43,9 @@ export interface ProviderStatusDTO {
      re-check? Admins always; everyone else by manage tag. Never implies
      permission to edit configuration. */
   CanManage: boolean;
+  /* AgentMemory is the §18.2 badge state: off / on and reading only / on
+     and recording. Capture is meaningless while Enabled is false. */
+  AgentMemory: { Enabled: boolean; Capture: boolean };
 }
 
 export interface SpawnLogFileDTO {
@@ -213,6 +216,9 @@ export interface ProvidersListResponse {
   PoolMax: number;
   LiveProcesses: LiveProcessDTO[];
   SupportedKeys: string[];
+  /* AgentMemoryEnabled is the master switch. Off hides the per-card badges
+     entirely — "off" for a feature nobody turned on is noise. */
+  AgentMemoryEnabled: boolean;
 }
 
 export interface ConfigFieldDTO {
@@ -267,6 +273,7 @@ export interface ProviderDetailResponse {
   ConfigFields: ConfigFieldDTO[];
   DefaultModels: { id: string; desc: string }[];
   AIRouter: AIRouterDetailDTO;
+  AgentMemory: AgentMemoryDetailDTO;
 }
 
 export interface AIRouterDetailDTO {
@@ -278,6 +285,40 @@ export interface AIRouterDetailDTO {
   KeySet: boolean;
   RawConfig: string;
   Preview: string;
+}
+
+/* AgentMemoryDetailDTO is one instance's Agent Memory settings. The stored
+   auth token never crosses the wire — KeySet is all the FE gets. */
+export interface AgentMemoryDetailDTO {
+  /* FeatureEnabled is the server-wide master switch. Off means no daemon is
+     managed and no project marker is written, so the toggle is shown
+     disabled rather than saving a setting that cannot work. */
+  FeatureEnabled: boolean;
+  /* Supported is measured on the BE from the real spawn wiring, not from a
+     type list here — a backend that grows a new provider path lights up
+     without an FE change. */
+  Supported: boolean;
+  /* CaptureSupported: would turning Capture on actually change the spawn?
+     False means recording is a no-op and CaptureNote says why. */
+  CaptureSupported: boolean;
+  CaptureNote: string;
+  Enabled: boolean;
+  Provider: string;
+  Backends: AgentMemoryChoiceDTO[];
+  /* ServerURL is the instance's own override; empty means the managed
+     daemon, whose address is EffectiveURL. */
+  ServerURL: string;
+  EffectiveURL: string;
+  KeySet: boolean;
+  Capture: boolean;
+  Preview: string;
+}
+
+export interface AgentMemoryChoiceDTO {
+  ID: string;
+  Name: string;
+  Blurb: string;
+  GitHubURL: string;
 }
 
 /* ProviderConnection is one instance's account + usage, from

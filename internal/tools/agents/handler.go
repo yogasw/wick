@@ -510,6 +510,7 @@ func Register(r tool.Router) {
 	r.GET("/providers/detail/{type}/{name}", providerDetailPage)
 	r.POST("/providers/detail/{type}/{name}/save", saveProviderDetail)
 	r.POST("/providers/detail/{type}/{name}/airouter", saveProviderAIRouter)
+	r.POST("/providers/detail/{type}/{name}/agentmemory", saveProviderAgentMemory)
 	r.POST("/providers/detail/{type}/{name}/{key}", saveProviderConfigKey)
 	r.GET("/providers/airouter/slots/{type}", providerAIRouterSlots)
 	r.GET("/providers/{type}/{name}", providerDetailPage)
@@ -584,6 +585,14 @@ func Register(r tool.Router) {
 	// in the airouter package; RegisterAirouter wires the control routes + the
 	// SPA page and backs the config store with the app config service.
 	RegisterAirouter(r)
+
+	// Agent Memory — a shared memory backend (ai-memory, …) agents reach over
+	// MCP, so context survives a session ending and a switch of provider CLI.
+	// The registry, daemon manager and panel endpoints live in the
+	// agentmemory package; RegisterAgentMemory wires the control + data routes
+	// and backs the config store with the app config service. The panel page
+	// itself is a later slice.
+	RegisterAgentMemory(r)
 
 	r.POST("/providers/storage/sync/{type}/{name}", syncProviderStorage)
 	r.GET("/providers/storage", storagePage)
@@ -1046,6 +1055,7 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		PinnedProjectID:     pinnedProjectID(c),
 		ShellAssetURL:       spaAssetURL("shell"),
 		AirouterVisible:     AirouterVisible(c.Context()),
+		AgentMemoryVisible:  AgentMemoryVisible(c.Context()),
 		ProvidersVisible:    HasManageableProvider(c),
 	}
 }

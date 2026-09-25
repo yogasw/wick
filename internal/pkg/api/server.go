@@ -23,6 +23,10 @@ import (
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin"
 	"github.com/yogasw/wick/internal/agents/agentctl"
+	"github.com/yogasw/wick/internal/agents/agentmemory"
+	// Blank import registers the ai-memory backend in the agentmemory
+	// registry — adding a backend is "new folder + blank import here".
+	_ "github.com/yogasw/wick/internal/agents/agentmemory/aimemory"
 	"github.com/yogasw/wick/internal/agents/airouter"
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
@@ -1048,6 +1052,45 @@ func NewServer() *Server {
 		}
 		return resolvedGateBin
 	}
+	// Agent Memory scope marker: without it every project's cwd resolves to
+	// the ai-memory project "files" (projects/<uuid>/files), so the whole host
+	// shares one memory bucket — see PLAN §14.4. Gated on the master switch
+	// and read per call, so flipping it in the UI takes effect on the next
+	// project create / session move without a restart. Absent row = OFF: a
+	// host that doesn't use the feature gets no dotfiles in its folders.
+	agentsMgr.MemoryMarker = agentmemory.MarkerWriter{
+		Workspace: appname.Resolve(),
+		Enabled:   func() bool { return configsSvc.GetOwned("agents", "agentmemory_enabled") == "true" },
+	}
+	// The other half of the same problem: the marker writer PREVENTS a
+	// collision for the projects it writes into, and deliberately skips
+	// custom-path folders because those belong to the user. Those are exactly
+	// the ones that can still collapse into one ai-memory project, so the
+	// Health tab checks for it — from wick's own project list, since the
+	// backend cannot see an overlap that has not produced a session yet
+	// (PLAN §14.3, §18.1).
+	agentmemory.SetMarkerWorkspace(appname.Resolve())
+	agentmemory.SetProjectLister(func() []agentmemory.ProjectFolder {
+		reg := agentsMgr.Registry()
+		if reg == nil {
+			return nil
+		}
+		projects := reg.Projects()
+		out := make([]agentmemory.ProjectFolder, 0, len(projects))
+		for id, p := range projects {
+			folder := p.Meta.CustomPath
+			if folder == "" {
+				folder = agentsLayout.ProjectManagedPath(id)
+			}
+			out = append(out, agentmemory.ProjectFolder{
+				ID:         id,
+				Name:       p.Meta.Name,
+				Folder:     folder,
+				CustomPath: p.Meta.CustomPath != "",
+			})
+		}
+		return out
+	})
 
 	agentstool.SetManager(agentsMgr)
 	ui.SetNavParamsFn(func(ctx context.Context, u *entity.User) ui.NavParams {
@@ -1211,6 +1254,15 @@ func NewServer() *Server {
 	// they can unwrap the stored router API key (wick_cenc_ token) at spawn.
 	airouter.Init()
 	airouter.SetSecretDecrypter(configsSvc.DecryptSecret)
+	// Same two wires for Agent Memory: the spawn injection that lets an
+	// instance reach its selected memory backend, and the decrypter that
+	// unwraps that backend's stored auth token (wick_cenc_) at spawn.
+	agentmemory.Init()
+	agentmemory.SetSecretDecrypter(configsSvc.DecryptSecret)
+	// The memory store is a DAEMON-level setting (PLAN §19) — one daemon holds
+	// every workspace and project, so the store location is configured once
+	// here, not per provider instance. Empty = the backend's own default.
+	agentmemory.SetDataDir(configsSvc.GetOwned("agents", "agentmemory_data_dir"))
 	// Prime the persistent status cache once in the background so the
 	// first load of /tools/agents/providers renders from cache instead
 	// of waiting on three cold `--version` spawns. Subsequent boots
@@ -2191,6 +2243,20 @@ func NewServer() *Server {
 			defer bootGate.Done("airouter")
 			bootGate.SetPhase("starting-airouter")
 			agentstool.AirouterAutostart(func(m string) { log.Warn().Msg(m) })
+		}()
+	}
+
+	// Same shape for the Agent Memory daemons, and for the same reason: the
+	// config store they read is wired by the agents tool's Register, so this
+	// must run after tr.mount. "Effectively on" here also covers the derived
+	// lock — a provider instance with the toggle on forces its backend to
+	// start, so a spawn never reaches for a memory server that is down.
+	if agentstool.AgentMemoryEnabled() && agentstool.AnyAgentMemoryAutostart() {
+		bootGate.Register("agentmemory")
+		go func() {
+			defer bootGate.Done("agentmemory")
+			bootGate.SetPhase("starting-agentmemory")
+			agentstool.AgentMemoryAutostart(func(m string) { log.Warn().Msg(m) })
 		}()
 	}
 
@@ -3385,6 +3451,10 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		if s.pluginMgr != nil {
 			s.pluginMgr.KillAll()
 		}
+		// Agent Memory daemons are wick's children too. The graceful-upgrade
+		// path never gets here (drained short-circuits above), so a handover
+		// leaves the daemon running for the successor to adopt.
+		agentstool.AgentMemoryStopAll()
 		sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		httpSrv.SetKeepAlivesEnabled(false)
