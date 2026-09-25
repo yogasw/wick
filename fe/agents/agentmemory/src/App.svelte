@@ -47,6 +47,7 @@
     Overview,
     Page,
     ProjectRow,
+    BackfillRequestEcho,
     ProjectScope,
     ProjectsResponse,
     Scope,
@@ -162,6 +163,10 @@
   let selectedProject = $state("");
   let handoffCells = $state<Record<string, HandoffCell>>({});
   let backfillReport = $state<BackfillReport | null>(null);
+  // What the server actually ran. Kept beside the report because the cap it
+  // resolved is not in the report: skipped_for_cap says how many were left
+  // out, and only this says what the limit was.
+  let backfillRequest = $state<BackfillRequestEcho | null>(null);
   let backfillError = $state("");
 
   // Health tab state. Null means "not checked yet", which the tab says out
@@ -258,6 +263,7 @@
     selectedProject = "";
     handoffCells = {};
     backfillReport = null;
+    backfillRequest = null;
     backfillError = "";
     health = null;
     wikiRes = null;
@@ -408,6 +414,7 @@
     // re-running its backfill report against a stale one.
     selectedProject = selectedProject === key ? "" : key;
     backfillReport = null;
+    backfillRequest = null;
     backfillError = "";
   }
 
@@ -426,8 +433,10 @@
       if (res.error) {
         backfillError = res.hint ? `${res.error} — ${res.hint}` : res.error;
         backfillReport = null;
+        backfillRequest = null;
       } else {
         backfillReport = res.report ?? null;
+        backfillRequest = res.request ?? null;
         if (real) {
           toastOk("Import finished", `${row.workspace}/${row.project} was imported.`);
           await refresh();
@@ -725,6 +734,7 @@
         selected={selectedProject}
         handoffs={handoffCells}
         backfill={backfillReport}
+        backfillReq={backfillRequest}
         {backfillError}
         {canManage}
         {scope}

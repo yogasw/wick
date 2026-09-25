@@ -430,8 +430,25 @@ export type BackfillReport = {
   dry_run: boolean;
 };
 
+// BackfillRequestEcho is what the server actually ran, echoed back beside the
+// report.
+//
+// It is not decoration: `max_sessions` is RESOLVED server-side (wick's 2000
+// rather than the backend's 25 when the form sends nothing), so this is the
+// only place the cap that truncated an import is visible. It was being sent
+// and not declared here — found by the payload sweep in
+// internal/agents/agentmemory/handlers_e2e_test.go, 2026-09-25.
+export type BackfillRequestEcho = {
+  scope: Scope;
+  dry_run: boolean;
+  force: boolean;
+  session?: string;
+  max_sessions?: number;
+};
+
 export type BackfillResponse = DataFailure & {
   report?: BackfillReport;
+  request?: BackfillRequestEcho;
   // warning is the server's own sentence about what a forced import costs —
   // shown verbatim so the UI cannot soften it.
   warning?: string;

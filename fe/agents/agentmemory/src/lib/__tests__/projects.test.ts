@@ -239,6 +239,27 @@ describe("backfill reporting", () => {
     expect(w).toContain("30 sessions were left out");
     expect(w).toContain("Settings");
   });
+
+  // "Raise it in Settings" is advice you cannot act on without knowing what
+  // the cap is now, and the report does not carry it — only the echoed
+  // request the server sends back beside it does.
+  test("the cap's actual value is named when the server sent it", () => {
+    const w = backfillCapWarning(report({ skipped_for_cap: 30 }), {
+      scope: { workspace: "w", project: "p" },
+      dry_run: false,
+      force: false,
+      max_sessions: 2000,
+    });
+    expect(w).toContain("max-sessions cap of 2000");
+  });
+
+  // An older server, or a preview that resolved no cap, still gets a usable
+  // sentence — just without the number. Silence would be worse than vague.
+  test("without the echo the warning still reads", () => {
+    const w = backfillCapWarning(report({ skipped_for_cap: 30 }), null);
+    expect(w).toContain("30 sessions were left out");
+    expect(w).not.toContain("cap of");
+  });
 });
 
 describe("backfillConfirmBody", () => {

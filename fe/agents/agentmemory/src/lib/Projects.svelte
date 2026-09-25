@@ -39,7 +39,7 @@
   } from "./projects.js";
   import type { HandoffCell } from "./projects.js";
   import { blockedBy, MANAGE_ADMIN_ONLY, relativeTime } from "./format.js";
-  import type { BackfillReport, ProjectRow, ProjectScope, ProjectsResponse } from "./types.js";
+  import type { BackfillReport, BackfillRequestEcho, ProjectRow, ProjectScope, ProjectsResponse } from "./types.js";
 
   type Props = {
     res: ProjectsResponse | null;
@@ -48,6 +48,9 @@
     selected: string;
     handoffs: Record<string, HandoffCell>;
     backfill: BackfillReport | null;
+    // What the server actually ran. Carries the resolved max-sessions cap,
+    // which the report itself does not.
+    backfillReq: BackfillRequestEcho | null;
     backfillError: string;
     // canManage false = a viewer: the import controls are left out, because
     // a backfill writes into the store (PLAN §23.2).
@@ -73,6 +76,7 @@
     selected,
     handoffs,
     backfill,
+    backfillReq,
     backfillError,
     canManage,
     scope,
@@ -90,7 +94,7 @@
   const rows = $derived(sortProjects(res?.projects ?? []));
   const current = $derived(rows.find((r) => projectKey(r) === selected) ?? null);
   const metrics = $derived(current ? projectMetrics(current) : null);
-  const capWarning = $derived(backfillCapWarning(backfill ?? undefined));
+  const capWarning = $derived(backfillCapWarning(backfill ?? undefined, backfillReq));
   const handoffLine = $derived(handoffDetail(handoffs[selected]));
   const pages = $derived(latestPages(current));
   // The legend under the table only earns its space when a row actually

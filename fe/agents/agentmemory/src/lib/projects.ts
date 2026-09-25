@@ -1,5 +1,5 @@
 import { formatCount, relativeTime } from "./format.js";
-import type { BackfillReport, Handoff, ProjectRow, RecentPage } from "./types.js";
+import type { BackfillReport, BackfillRequestEcho, Handoff, ProjectRow, RecentPage } from "./types.js";
 
 // Presentation logic for the Projects tab. It lives here rather than in the
 // component so the rules that decide what a row says — which column is
@@ -243,11 +243,18 @@ export function backfillSummary(rep: BackfillReport | undefined): string {
 // backfillCapWarning fires when the cap truncated the history. It matters
 // because the backend's own default is 25, low enough to silently leave most
 // of a long project behind (PLAN §10.6).
-export function backfillCapWarning(rep: BackfillReport | undefined): string | null {
+export function backfillCapWarning(
+  rep: BackfillReport | undefined,
+  req?: BackfillRequestEcho | null,
+): string | null {
   if (!rep || rep.skipped_for_cap <= 0) return null;
+  // Name the cap when the server said what it resolved to. "Raise it in
+  // Settings" is advice you cannot act on without knowing what it is now:
+  // the number is not in the report, only in the echoed request.
+  const cap = req?.max_sessions && req.max_sessions > 0 ? ` of ${req.max_sessions}` : "";
   return `${rep.skipped_for_cap} session${
     rep.skipped_for_cap === 1 ? " was" : "s were"
-  } left out because of the max-sessions cap. Raise it in Settings and run the import again to take the rest.`;
+  } left out because of the max-sessions cap${cap}. Raise it in Settings and run the import again to take the rest.`;
 }
 
 // backfillConfirmBody is the ConfirmDialog text for a REAL import. It states
