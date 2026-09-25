@@ -23,6 +23,7 @@
     fetchMessages,
     fetchOverview,
     fetchProjects,
+    fetchProjectPolicies,
     fetchProjectScope,
     fetchCheckpoints,
     fetchSettings,
@@ -54,6 +55,7 @@
     Page,
     ProjectRow,
     BackfillRequestEcho,
+    ProjectPolicyRoster,
     ProjectScope,
     ProjectsResponse,
     Scope,
@@ -183,6 +185,10 @@
   // loud rather than rendering as a clean bill of health.
   let health = $state<HealthReport | null>(null);
   let healthLoading = $state(false);
+  // Who is recording and who went quiet. Read with the health checks: the
+  // trial is one of the silent failures this tab is for, and a finding that
+  // names no projects is only half an answer.
+  let policyRoster = $state<ProjectPolicyRoster | null>(null);
 
   // Wiki tab state. The search response and the open page are separate reads
   // and separate failures: a page that will not load must not blank the
@@ -437,6 +443,9 @@
     healthLoading = true;
     try {
       health = await run(fetchHealth(base, id));
+      // A roster that fails must not cost the page its checks: it explains
+      // a finding, it is not the finding.
+      policyRoster = await run(fetchProjectPolicies(base)).catch(() => null);
     } catch (e) {
       toastError("Could not run the health checks", errText(e));
     } finally {
@@ -824,6 +833,7 @@
       <HealthTab
         report={health}
         {ov}
+        roster={policyRoster}
         scope={{}}
         loading={healthLoading}
         onRefresh={() => void loadHealth()}

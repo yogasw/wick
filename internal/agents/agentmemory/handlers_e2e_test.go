@@ -799,6 +799,30 @@ func TestDashboardPayloadsMatchTheFrontend(t *testing.T) {
 		assertShape(t, "Status", body, statusShape)
 	})
 
+	// The host-wide roster behind the trial finding. Its two lists are what
+	// the Health tab maps over, so they are checked for shape AND for never
+	// being null — a null here is a TypeError, not an empty table.
+	t.Run("project-policies", func(t *testing.T) {
+		dir := t.TempDir()
+		withProjects(t, "wick", ProjectFolder{ID: "8c28230d-aaaa", Name: "Kasir", Folder: dir})
+		w, body := call(t, routes, "GET /agentmemory/project-policies", nil)
+		mustOK(t, "project-policies", w, body)
+		assertShape(t, "ProjectPolicyRoster", body, shape{
+			required: []string{"trial", "recording", "silenced"},
+		})
+		assertShape(t, "TrialCheck", sub(t, "ProjectPolicyRoster", body, "trial"), shape{
+			required: []string{"active", "silenced"},
+			optional: []string{"projects"},
+		})
+		rows := list(t, "ProjectPolicyRoster", body, "recording")
+		list(t, "ProjectPolicyRoster", body, "silenced")
+		if len(rows) > 0 {
+			assertShape(t, "ProjectPolicyRow", rows[0].(map[string]any), shape{
+				required: []string{"id", "name", "value", "recording", "reason"},
+			})
+		}
+	})
+
 	t.Run("project-scope", func(t *testing.T) {
 		dir := t.TempDir()
 		withProjects(t, "wick", ProjectFolder{ID: "8c28230d-aaaa", Name: "Kasir", Folder: dir})

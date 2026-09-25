@@ -207,3 +207,65 @@ describe("Health — supervision among the other silent failures", () => {
     expect(screen.getByText(/Supervised, with nothing to report/i)).toBeDefined();
   });
 });
+
+/* The trial roster on the Health tab.
+
+   The switch is per-project and its consequence is host-wide: turning one
+   project on stops every un-opted project recording. A finding that says so
+   without naming the projects leaves an operator opening them one at a time,
+   which is exactly what this tab exists to prevent. */
+describe("Health — the per-project trial roster", () => {
+  const rosterProps = {
+    report: { doctor: { rows: [] }, collisions: { checked: true, collisions: [] } },
+    scope: {},
+    loading: false,
+    onRefresh: () => {},
+    onGoOverview: () => {},
+    ov: payload(WATCH),
+  } as never;
+
+  const roster = {
+    trial: { active: true, projects: ["kasir"], silenced: 2 },
+    recording: [{ id: "kasir-8c28230d", name: "Kasir", value: "on" as const, recording: true, reason: "on" }],
+    silenced: [
+      { id: "brand-1f2e3d4c", name: "Brand site", value: "" as const, recording: false, reason: "trial" },
+      { id: "legacy-99887766", name: "Legacy API", value: "" as const, recording: false, reason: "trial" },
+    ],
+  };
+
+  test("names both halves, not just a count", () => {
+    render(Health, { props: { ...(rosterProps as object), roster } });
+    const card = screen.getByTestId("trial-roster");
+    expect(card.textContent).toMatch(/1 recording, 2 silent/);
+    expect(screen.getByTestId("trial-recording").textContent).toContain("Kasir");
+    const silent = screen.getByTestId("trial-silenced").textContent ?? "";
+    expect(silent).toContain("Brand site");
+    expect(silent).toContain("Legacy API");
+  });
+
+  // The name is what a person recognises; the id is what the policy is keyed
+  // by. Both, so the roster can be acted on.
+  test("carries the id alongside the name", () => {
+    render(Health, { props: { ...(rosterProps as object), roster } });
+    expect(screen.getByTestId("trial-silenced").textContent).toContain("brand-1f");
+  });
+
+  test("says what ends it, on the card itself", () => {
+    render(Health, { props: { ...(rosterProps as object), roster } });
+    expect(screen.getByTestId("trial-roster").textContent).toMatch(/Nothing already stored is lost/i);
+  });
+
+  test("is absent outside a trial — every project following its instance is not news", () => {
+    render(Health, {
+      props: { ...(rosterProps as object), roster: { trial: { active: false, silenced: 0 }, recording: [], silenced: [] } },
+    });
+    expect(screen.queryByTestId("trial-roster")).toBeNull();
+  });
+
+  test("a host that could not answer shows the rest of the tab anyway", () => {
+    render(Health, { props: { ...(rosterProps as object), roster: null } });
+    expect(screen.queryByTestId("trial-roster")).toBeNull();
+    // The checks themselves still rendered.
+    expect(screen.getByText(/Re-run checks/i)).toBeDefined();
+  });
+});

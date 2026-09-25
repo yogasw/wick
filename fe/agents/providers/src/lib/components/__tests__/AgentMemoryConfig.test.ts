@@ -126,14 +126,17 @@ describe("AgentMemoryConfig - capture", () => {
   it("disables recording and says why when it would do nothing", async () => {
     render(AgentMemoryConfig, {
       props: props({
-        type: "codex",
+        type: "gemini",
         useAgentMemory: true,
         captureSupported: false,
-        captureNote: "Recording is not wired for codex right now — this instance can read memory, but its sessions are not recorded.",
+        // gemini, not codex: codex records through `-c hooks.<Event>`
+        // overrides now, and a fixture that says otherwise teaches the
+        // opposite of what the panel shows.
+        captureNote: "Recording is not wired for gemini right now — this instance can read memory, but its sessions are not recorded.",
       }),
     });
     expect((screen.getByLabelText("Record this instance's sessions") as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText(/not wired for codex/i)).toBeTruthy();
+    expect(screen.getByText(/not wired for gemini/i)).toBeTruthy();
   });
 
   it("shows the backend's upstream repo so the operator can see what runs", () => {

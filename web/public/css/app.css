@@ -6229,6 +6229,11 @@ select {
   border-color: rgb(29 78 216 / var(--tw-border-opacity, 1));
 }
 
+.dark\:border-cau-400:is(.dark *) {
+  --tw-border-opacity: 1;
+  border-color: rgb(215 142 8 / var(--tw-border-opacity, 1));
+}
+
 .dark\:border-emerald-400:is(.dark *) {
   --tw-border-opacity: 1;
   border-color: rgb(52 211 153 / var(--tw-border-opacity, 1));

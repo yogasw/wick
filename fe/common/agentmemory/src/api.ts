@@ -15,6 +15,7 @@ import type {
   PageResponse,
   PageWriteResponse,
   ProjectPolicy,
+  ProjectPolicyRoster,
   ProjectScope,
   ProjectsResponse,
   Scope,
@@ -297,6 +298,12 @@ export const saveProjectPolicy = (base: string, projectID: string, value: Projec
   const params = new URLSearchParams({ project: projectID, value });
   return apiPostE<ProjectPolicy>(`${base}/agentmemory/project-policy?${params.toString()}`);
 };
+
+// fetchProjectPolicies is the host-wide roster: who is recording, who is
+// silent, and the trial block that explains why. One read, because the
+// alternative is opening every project in turn to find the quiet ones.
+export const fetchProjectPolicies = (base: string) =>
+  apiGetE<ProjectPolicyRoster>(`${base}/agentmemory/project-policies`);
 
 // ── editing one project's memory (PLAN §22) ──────────────────────────
 

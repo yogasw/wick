@@ -363,3 +363,127 @@ func TestLeavingTheTrialRestoresTheOldBehaviour(t *testing.T) {
 		t.Fatalf("trial check still reports %+v after the trial ended", tc)
 	}
 }
+
+// ── the roster ───────────────────────────────────────────────────────
+
+// TestRosterAnswersWhoIsRecordingAndWhoIsSilent is the guard the trial needs
+// most: its control is per-project and its consequence is host-wide, so an
+// operator has to be able to see WHICH projects went quiet without opening
+// them one at a time.
+func TestRosterAnswersWhoIsRecordingAndWhoIsSilent(t *testing.T) {
+	st := newPolicies("kasir", "brand", "legacy", "archive")
+	st.values["kasir"] = PolicyOn
+	st.values["archive"] = PolicyOff
+	withPolicies(t, st)
+	withProjects(t, "wick",
+		ProjectFolder{ID: "kasir", Name: "Kasir", Folder: "/srv/p/kasir"},
+		ProjectFolder{ID: "brand", Name: "Brand site", Folder: "/srv/p/brand"},
+		ProjectFolder{ID: "legacy", Name: "Legacy API", Folder: "/srv/p/legacy"},
+		ProjectFolder{ID: "archive", Name: "Archive", Folder: "/srv/p/archive"},
+	)
+
+	recording, silenced := TrialRoster()
+	if len(recording) != 1 || recording[0].ID != "kasir" {
+		t.Fatalf("recording %+v", recording)
+	}
+	// The two left on "follow the instance" are the ones the trial silenced.
+	// The project someone switched OFF is not counted among them: that was a
+	// decision, and mixing the two inflates the number meant to alarm people.
+	if len(silenced) != 2 {
+		t.Fatalf("silenced %+v", silenced)
+	}
+	names := []string{silenced[0].Name, silenced[1].Name}
+	if names[0] != "Brand site" || names[1] != "Legacy API" {
+		t.Fatalf("silenced names %v (sorted by name?)", names)
+	}
+	for _, r := range silenced {
+		if r.Reason == "" {
+			t.Errorf("%s went quiet with no reason attached", r.Name)
+		}
+		// The id is what the policy is keyed by; the name is what a person
+		// recognises. A roster of uuids is a roster nobody can act on.
+		if r.ID == "" || r.Name == "" {
+			t.Errorf("row %+v is missing half its identity", r)
+		}
+	}
+}
+
+// TestRosterOutsideATrialReportsEverythingRecording: with nothing opted in,
+// the roster says exactly what the old behaviour was — no silenced column
+// appearing out of nowhere.
+func TestRosterOutsideATrialReportsEverythingRecording(t *testing.T) {
+	st := newPolicies("a", "b")
+	withPolicies(t, st)
+	withProjects(t, "wick",
+		ProjectFolder{ID: "a", Name: "A", Folder: "/srv/a"},
+		ProjectFolder{ID: "b", Name: "B", Folder: "/srv/b"},
+	)
+
+	recording, silenced := TrialRoster()
+	if len(recording) != 2 || len(silenced) != 0 {
+		t.Fatalf("recording %d silenced %d", len(recording), len(silenced))
+	}
+}
+
+// TestRosterEndpointIsReadableAndComplete drives the endpoint the Health tab
+// reads, including the trial block it renders beside the list.
+func TestRosterEndpointIsReadableAndComplete(t *testing.T) {
+	st := newPolicies("kasir", "brand")
+	st.values["kasir"] = PolicyOn
+	withPolicies(t, st)
+	withProjects(t, "wick",
+		ProjectFolder{ID: "kasir", Name: "Kasir", Folder: "/srv/p/kasir"},
+		ProjectFolder{ID: "brand", Name: "Brand site", Folder: "/srv/p/brand"},
+	)
+
+	// A VIEWER: an operator who has just inherited this host has to be able
+	// to see what is happening without being an admin.
+	withStore(t, &fakeStore{enabled: true, viewer: true})
+	w, c := get(nil)
+	projectPolicyRosterHandler(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	body := decodeBody(t, w)
+	for _, key := range []string{"trial", "recording", "silenced"} {
+		if _, ok := body[key]; !ok {
+			t.Fatalf("payload is missing %q: %v", key, body)
+		}
+	}
+	rec, _ := body["recording"].([]any)
+	sil, _ := body["silenced"].([]any)
+	if len(rec) != 1 || len(sil) != 1 {
+		t.Fatalf("recording %v silenced %v", rec, sil)
+	}
+	row, _ := sil[0].(map[string]any)
+	if row["name"] != "Brand site" || row["recording"] != false {
+		t.Fatalf("silenced row %v", row)
+	}
+	trial, _ := body["trial"].(map[string]any)
+	if trial["active"] != true {
+		t.Fatalf("trial block %v", trial)
+	}
+}
+
+// TestRosterListsAreNeverNull: the FE maps over both, and a null is a
+// TypeError rather than an empty table.
+func TestRosterListsAreNeverNull(t *testing.T) {
+	withStore(t, &fakeStore{enabled: true, viewer: true})
+	withPolicies(t, newPolicies())
+	prev := projectLister
+	t.Cleanup(func() { projectLister = prev })
+	projectLister = nil
+
+	w, c := get(nil)
+	projectPolicyRosterHandler(c)
+	body := decodeBody(t, w)
+	for _, key := range []string{"recording", "silenced"} {
+		v, ok := body[key]
+		if !ok || v == nil {
+			t.Fatalf("%s serialised as %v", key, v)
+		}
+		if _, ok := v.([]any); !ok {
+			t.Fatalf("%s is %T, want an array", key, v)
+		}
+	}
+}

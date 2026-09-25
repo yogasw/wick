@@ -15,17 +15,25 @@
   import { BlockedState } from "@wick-fe/common-agentmemory";
   import { contaminationRows, healthFindings, healthVerdict, levelClasses } from "./health.js";
   import { blockedBy } from "./format.js";
-  import type { HealthReport, Overview, Scope } from "./types.js";
+  import type { HealthReport, Overview, ProjectPolicyRoster, Scope } from "./types.js";
 
   type Props = {
     report: HealthReport | null;
     ov: Overview | null;
+    /* roster answers the question the trial finding raises: WHICH projects
+       are recording, and which went quiet. Null until it is read. */
+    roster: ProjectPolicyRoster | null;
     scope: Scope;
     loading: boolean;
     onRefresh: () => void;
     onGoOverview: () => void;
   };
-  let { report, ov, scope, loading, onRefresh, onGoOverview }: Props = $props();
+  let { report, ov, roster, scope, loading, onRefresh, onGoOverview }: Props = $props();
+
+  // Shown while a trial is on. Outside one every project follows its
+  // instance, and a roster of "everything is normal" is noise on a tab whose
+  // job is to surface what is not.
+  const trialOn = $derived(Boolean(roster?.trial?.active));
 
   const blocked = $derived(blockedBy(report));
   // The watchdog's record rides on the Overview payload this tab already
@@ -62,6 +70,55 @@
     </div>
     <Button variant="secondary" size="md" disabled={loading} onclick={onRefresh}>Re-run checks</Button>
   </div>
+
+  <!-- The trial's roster. The switch is per-project and its consequence is
+       host-wide, so "memory stopped being written here" has to be
+       answerable without opening forty projects one at a time — which is
+       the same failure the rest of this tab exists to catch. -->
+  {#if trialOn && roster}
+    <section
+      class="rounded-xl border border-cau-400 bg-cau-100 px-5 py-4 dark:border-cau-400 dark:bg-navy-800"
+      data-testid="trial-roster"
+    >
+      <p class="text-sm font-medium text-cau-600 dark:text-cau-400">
+        A per-project trial is running — {roster.recording.length} recording, {roster.silenced.length} silent
+      </p>
+      <p class="mt-1 text-xs leading-relaxed text-black-800 dark:text-black-600">
+        While any project is switched on, every project left on “follow the agent's setting” stops recording and
+        recalling. Nothing already stored is lost; setting the trial project back ends it.
+      </p>
+      <div class="mt-3 grid gap-4 sm:grid-cols-2">
+        <div class="min-w-0">
+          <p class="text-[0.6875rem] uppercase tracking-wider text-black-700 dark:text-black-600">Recording</p>
+          <ul class="mt-1 space-y-1" data-testid="trial-recording">
+            {#each roster.recording as p (p.id)}
+              <li class="truncate text-xs text-black-900 dark:text-white-100" title={p.reason}>
+                {p.name || p.id}
+                <span class="ml-1 font-mono text-[0.6875rem] text-black-700 dark:text-black-600">{p.id.slice(0, 8)}</span>
+              </li>
+            {:else}
+              <li class="text-xs text-black-700 dark:text-black-600">None — nothing on this host is recording.</li>
+            {/each}
+          </ul>
+        </div>
+        <div class="min-w-0">
+          <p class="text-[0.6875rem] uppercase tracking-wider text-black-700 dark:text-black-600">
+            Silent because of the trial
+          </p>
+          <ul class="mt-1 space-y-1" data-testid="trial-silenced">
+            {#each roster.silenced as p (p.id)}
+              <li class="truncate text-xs text-black-900 dark:text-white-100" title={p.reason}>
+                {p.name || p.id}
+                <span class="ml-1 font-mono text-[0.6875rem] text-black-700 dark:text-black-600">{p.id.slice(0, 8)}</span>
+              </li>
+            {:else}
+              <li class="text-xs text-black-700 dark:text-black-600">None.</li>
+            {/each}
+          </ul>
+        </div>
+      </div>
+    </section>
+  {/if}
 
   {#if blocked}
     <BlockedState {blocked} onAction={onGoOverview} />

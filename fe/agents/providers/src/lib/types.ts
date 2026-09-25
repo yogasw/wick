@@ -302,6 +302,10 @@ export interface AgentMemoryDetailDTO {
      False means recording is a no-op and CaptureNote says why. */
   CaptureSupported: boolean;
   CaptureNote: string;
+  /* What recording COSTS on this provider type when it IS wired — the
+     opposite state to CaptureNote, which explains a switch that does
+     nothing. */
+  CaptureCaveat?: string;
   Enabled: boolean;
   Provider: string;
   Backends: AgentMemoryChoiceDTO[];

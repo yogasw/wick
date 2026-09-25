@@ -624,6 +624,30 @@ export type ProjectPolicy = {
   reason: string;
 };
 
+// ProjectPolicyRow is one project's memory state on the host-wide roster: is
+// it recording, and if not, why not.
+//
+// The id AND the name, always: the id is what the policy is keyed by, the
+// name is what a person recognises, and a trial reported as a list of uuids
+// is one nobody can act on.
+export type ProjectPolicyRow = {
+  id: string;
+  name: string;
+  value: "" | "on" | "off";
+  recording: boolean;
+  reason: string;
+};
+
+// ProjectPolicyRoster answers the question a per-project switch with a
+// host-wide consequence forces: which projects are recording, and which went
+// quiet because of the trial. A project switched explicitly OFF is in
+// neither list — that was a decision, not a side effect.
+export type ProjectPolicyRoster = {
+  trial: TrialCheck;
+  recording: ProjectPolicyRow[];
+  silenced: ProjectPolicyRow[];
+};
+
 // ── retention sweep ──────────────────────────────────────────────────
 
 // SweepReport is one retention sweep. Like compact, the backend has no --json

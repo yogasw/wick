@@ -1,9 +1,14 @@
 package agents
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/yogasw/wick/internal/agents/agentmemory"
+	_ "github.com/yogasw/wick/internal/agents/agentmemory/aimemory"
 	"github.com/yogasw/wick/internal/agents/provider"
 )
 
@@ -63,4 +68,81 @@ func TestSpawnContribPreviewRendering(t *testing.T) {
 	if got != want {
 		t.Fatalf("render\n  got:  %q\n  want: %q", got, want)
 	}
+}
+
+// TestCodexReportsCaptureSupported: the panel's "recording is not wired for
+// …" note is derived from the spawn contribution, not from a list of types,
+// so wiring codex's hooks has to make the note disappear and the switch
+// become usable — with nobody editing copy. This drives the REAL backend
+// registry rather than a stub, because what is being checked is exactly that
+// the real contribution differs when capture is on.
+func TestCodexReportsCaptureSupported(t *testing.T) {
+	agentmemory.Init()
+	t.Cleanup(func() { provider.SetMemorySpawn(nil) })
+
+	if _, ok := agentmemory.Get("ai-memory"); !ok {
+		t.Skip("ai-memory backend is not registered in this binary")
+	}
+	// The hooks name the binary, so the test gives wick one: a stub in
+	// wick's own bin dir, which is where an installed backend lives. A test
+	// that skipped on a host without ai-memory would prove nothing in the
+	// gate, which is where this claim has to hold.
+	withStubBackendBin(t)
+
+	for _, tp := range []provider.Type{provider.TypeCodex, provider.TypeClaude} {
+		ins := provider.Instance{Type: tp, AgentMemoryProvider: "ai-memory"}
+		supported, captureOK := agentMemorySupport(ins)
+		if !supported {
+			t.Fatalf("%s: memory is not supported at all", tp)
+		}
+		if !captureOK {
+			t.Fatalf("%s: capture reports unsupported, so the panel still tells people it cannot record", tp)
+		}
+		if note := agentMemoryCaptureNote(ins, supported, captureOK); note != "" {
+			t.Fatalf("%s: a capture note survives after capture was wired: %q", tp, note)
+		}
+	}
+}
+
+// TestCodexPreviewShowsTheHooksWhenCaptureIsOn: the "what wick passes" block
+// is where an operator reads what will run on every tool call, so the hook
+// overrides belong in it — and only when capture is actually on.
+func TestCodexPreviewShowsTheHooksWhenCaptureIsOn(t *testing.T) {
+	agentmemory.Init()
+	t.Cleanup(func() { provider.SetMemorySpawn(nil) })
+
+	if _, ok := agentmemory.Get("ai-memory"); !ok {
+		t.Skip("ai-memory backend is not registered in this binary")
+	}
+	withStubBackendBin(t)
+
+	on := agentMemoryConfigPreview(provider.Instance{Type: provider.TypeCodex, AgentMemoryProvider: "ai-memory", AgentMemoryCapture: true})
+	if !strings.Contains(on, "hooks.SessionStart") {
+		t.Fatalf("capture-on preview hides the hooks:\n%s", on)
+	}
+	if !strings.Contains(on, "--dangerously-bypass-hook-trust") {
+		t.Fatalf("the preview hides the flag that makes the hooks run:\n%s", on)
+	}
+
+	off := agentMemoryConfigPreview(provider.Instance{Type: provider.TypeCodex, AgentMemoryProvider: "ai-memory"})
+	if strings.Contains(off, "hooks.SessionStart") {
+		t.Fatalf("capture-off preview shows a spawn that will not happen:\n%s", off)
+	}
+}
+
+// withStubBackendBin puts an executable where wick keeps an installed
+// backend, so BinPath resolves without anything being installed on the host.
+func withStubBackendBin(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	name := "ai-memory"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prev := agentmemory.BinDir()
+	t.Cleanup(func() { agentmemory.SetBinDir(prev) })
+	agentmemory.SetBinDir(dir)
 }

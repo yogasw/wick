@@ -2,6 +2,7 @@ package aimemory
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -239,8 +240,9 @@ func TestContributeClaudeCaptureInstallsHooksFirst(t *testing.T) {
 	}
 }
 
-// codex gets its own first-party hook path (PLAN §12.1); until that is wired,
-// claude's settings flag must not leak into its argv.
+// codex has its own hook path — `-c hooks.<Event>` overrides, not claude's
+// settings flag. The two CLIs take the same idea through different doors, and
+// the wrong flag would be silently ignored rather than rejected.
 func TestContributeCodexCaptureAddsNoClaudeSettings(t *testing.T) {
 	args, _, err := hook{}.Contribute(provider.TypeCodex,
 		provider.Instance{AgentMemoryCapture: true}, captureConn)
@@ -251,6 +253,187 @@ func TestContributeCodexCaptureAddsNoClaudeSettings(t *testing.T) {
 		if a == "--settings" {
 			t.Fatalf("claude-only flag reached codex: %v", args)
 		}
+	}
+}
+
+// codexHookMap decodes the generated `-c hooks.<Event>=…` pairs back into
+// event -> command. The value is TOML, and the only part worth reading back
+// is the command — that it parses at all is the other half of the assertion.
+func codexHookMap(t *testing.T, args []string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] != "-c" || !strings.HasPrefix(args[i+1], "hooks.") {
+			continue
+		}
+		kv := args[i+1]
+		eq := strings.Index(kv, "=")
+		if eq < 0 {
+			t.Fatalf("hook override is not key=value: %q", kv)
+		}
+		event := strings.TrimPrefix(kv[:eq], "hooks.")
+		val := kv[eq+1:]
+		const marker = `command=`
+		j := strings.Index(val, marker)
+		if j < 0 {
+			t.Fatalf("hook value has no command: %q", val)
+		}
+		cmd, err := strconv.Unquote(strings.TrimSuffix(val[j+len(marker):], "}]}]"))
+		if err != nil {
+			t.Fatalf("hook command is not a quoted TOML string: %v (%q)", err, val)
+		}
+		out[event] = cmd
+	}
+	return out
+}
+
+// TestCodexCaptureMatchesTheTwoSchemas pins the wiring to what BOTH sides
+// actually accept, because neither half is guessable:
+//
+//   - codex 0.149.1's hook config, learned from its own parser on
+//     2026-09-25: hooks.<Event> = [{hooks=[{type="command",command="…"}]}],
+//     with `type` one of command|mcp_tool|prompt|agent;
+//   - ai-memory 2.4.0's codex slugs, from the hook bundle it ships.
+//
+// The events NOT here matter as much as the ones that are: codex has no bare
+// Stop event, so ai-memory's `stop` slug has nothing to hang on, and a hook
+// registered under a name codex never emits is capture that looks wired and
+// records nothing.
+func TestCodexCaptureMatchesTheTwoSchemas(t *testing.T) {
+	args, _, err := hook{}.Contribute(provider.TypeCodex,
+		provider.Instance{AgentMemoryCapture: true}, captureConn)
+	if err != nil {
+		t.Fatalf("contribute err: %v", err)
+	}
+	hooks := codexHookMap(t, args)
+
+	want := map[string]string{
+		"SessionStart":     "session-start",
+		"UserPromptSubmit": "user-prompt-submit",
+		"PreToolUse":       "pre-tool-use",
+		"PostToolUse":      "post-tool-use",
+		"PreCompact":       "pre-compact",
+		"SessionEnd":       "session-end",
+	}
+	if len(hooks) != len(want) {
+		t.Fatalf("got %d hook events, want %d: %v", len(hooks), len(want), hooks)
+	}
+	for event, slug := range want {
+		cmd, ok := hooks[event]
+		if !ok {
+			t.Fatalf("no hook for %s: %v", event, hooks)
+		}
+		if !strings.Contains(cmd, "--event "+slug) {
+			t.Errorf("%s runs %q, want the %s slug", event, cmd, slug)
+		}
+		// Attributed to codex, not to claude-code: the Health tab's
+		// capture-coverage check compares harnesses by exactly this string.
+		if !strings.Contains(cmd, "--agent codex") {
+			t.Errorf("%s is attributed to the wrong agent: %q", event, cmd)
+		}
+		if !strings.Contains(cmd, "hook") || !strings.Contains(cmd, "--server-url") {
+			t.Errorf("%s is not a native hook invocation: %q", event, cmd)
+		}
+	}
+	if _, ok := hooks["Stop"]; ok {
+		t.Error("a Stop hook was registered, but codex never emits that event")
+	}
+}
+
+// TestCodexCaptureCarriesTheTrustFlag: without it the override loads and the
+// hook silently never runs (measured against codex 0.149.1, 2026-09-25), so
+// the flag is not decoration — it is the difference between capture and the
+// appearance of capture.
+func TestCodexCaptureCarriesTheTrustFlag(t *testing.T) {
+	args, _, err := hook{}.Contribute(provider.TypeCodex,
+		provider.Instance{AgentMemoryCapture: true}, captureConn)
+	if err != nil {
+		t.Fatalf("contribute err: %v", err)
+	}
+	if args[0] != codexTrustFlag {
+		t.Fatalf("the trust flag must lead the contribution: %v", args)
+	}
+
+	// And it is only ever passed WITH capture: recall alone must not
+	// bypass anybody's hook trust.
+	off, _, err := hook{}.Contribute(provider.TypeCodex, provider.Instance{}, captureConn)
+	if err != nil {
+		t.Fatalf("contribute err: %v", err)
+	}
+	for _, a := range off {
+		if a == codexTrustFlag {
+			t.Fatalf("recall-only spawn bypasses hook trust: %v", off)
+		}
+		if strings.HasPrefix(a, "hooks.") {
+			t.Fatalf("recall-only spawn installs hooks: %v", off)
+		}
+	}
+}
+
+// TestCodexCaptureOrderKeepsRecallLast is the argv-order lock, the same shape
+// claude's has: the hook overrides and the trust flag lead, and the MCP pair
+// stays at the tail where the spawner appends the prompt after it.
+func TestCodexCaptureOrderKeepsRecallLast(t *testing.T) {
+	args, _, err := hook{}.Contribute(provider.TypeCodex,
+		provider.Instance{AgentMemoryCapture: true}, captureConn)
+	if err != nil {
+		t.Fatalf("contribute err: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	mcp := strings.Index(joined, "mcp_servers.")
+	last := strings.LastIndex(joined, "hooks.")
+	if mcp < 0 || last < 0 {
+		t.Fatalf("expected both halves in %v", args)
+	}
+	if last > mcp {
+		t.Fatalf("a hook override landed after the MCP pair: %v", args)
+	}
+	// Every override is a -c pair: an odd one would make codex read the
+	// next argument as a value.
+	for i, a := range args {
+		if a == "-c" && i+1 >= len(args) {
+			t.Fatalf("dangling -c at the end: %v", args)
+		}
+	}
+}
+
+// TestCodexCaptureWithoutABinaryStaysRecallOnly: a hook line that cannot name
+// an executable would make every tool call print a spawn failure, which is
+// worse than not recording.
+func TestCodexCaptureWithoutABinaryStaysRecallOnly(t *testing.T) {
+	conn := captureConn
+	conn.BinPath = ""
+	args, _, err := hook{}.Contribute(provider.TypeCodex,
+		provider.Instance{AgentMemoryCapture: true}, conn)
+	if err != nil {
+		t.Fatalf("contribute err: %v", err)
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "hooks.") || a == codexTrustFlag {
+			t.Fatalf("hooks wired with no binary to run: %v", args)
+		}
+	}
+	if !strings.Contains(strings.Join(args, " "), "mcp_servers.") {
+		t.Fatalf("recall must stay wired: %v", args)
+	}
+}
+
+// TestCodexNoCapturePromptsDropsTheePromptHook: the setting is implemented by
+// not installing the hook, so the user's words never enter the spool.
+func TestCodexNoCapturePromptsDropsTheePromptHook(t *testing.T) {
+	conn := captureConn
+	conn.Tuning.NoCapturePrompts = true
+	args, _, err := hook{}.Contribute(provider.TypeCodex,
+		provider.Instance{AgentMemoryCapture: true}, conn)
+	if err != nil {
+		t.Fatalf("contribute err: %v", err)
+	}
+	hooks := codexHookMap(t, args)
+	if _, ok := hooks[codexPromptEvent]; ok {
+		t.Fatalf("prompt hook installed while prompts are not to be captured: %v", hooks)
+	}
+	if _, ok := hooks["SessionStart"]; !ok {
+		t.Fatalf("the rest of capture was dropped with it: %v", hooks)
 	}
 }
 

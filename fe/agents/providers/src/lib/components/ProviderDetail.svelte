@@ -1089,6 +1089,7 @@
             bind:capture={memCapture}
             captureSupported={data?.AgentMemory.CaptureSupported ?? false}
             captureNote={data?.AgentMemory.CaptureNote ?? ""}
+            captureCaveat={data?.AgentMemory.CaptureCaveat ?? ""}
             configPreview={data?.AgentMemory.Preview ?? ""}
           />
         </div>

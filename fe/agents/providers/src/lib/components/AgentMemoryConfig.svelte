@@ -34,6 +34,9 @@
     // False means the switch would do nothing, and captureNote says why.
     captureSupported?: boolean;
     captureNote?: string;
+    // What recording COSTS on this provider type when it is wired. Opposite
+    // of captureNote: that one explains a switch that would do nothing.
+    captureCaveat?: string;
     // configPreview is the effective wiring wick injects at spawn, rendered
     // by the BE (admin-only; a viewer gets an empty string).
     configPreview?: string;
@@ -53,6 +56,7 @@
     capture = $bindable(),
     captureSupported = false,
     captureNote = "",
+    captureCaveat = "",
     configPreview = "",
   }: Props = $props();
 
@@ -278,6 +282,15 @@
             It is not free: the PreToolUse and PostToolUse hooks fire on <em>every</em> tool call, so each one runs the
             {backendName} binary once. On a spawn that makes hundreds of tool calls that is hundreds of extra processes.
           </p>
+          {#if captureCaveat}
+            <!-- A consequence of the switch belongs next to the switch. -->
+            <p
+              class="mt-2 rounded-lg border border-cau-400/30 bg-cau-400/5 px-3 py-2 text-[11px] text-cau-600 dark:text-cau-400"
+              data-testid="capture-caveat"
+            >
+              {captureCaveat}
+            </p>
+          {/if}
         {:else if captureNote}
           <p class="mt-2 rounded-lg border border-cau-400/30 bg-cau-400/5 px-3 py-2 text-[11px] text-cau-400">{captureNote}</p>
         {/if}

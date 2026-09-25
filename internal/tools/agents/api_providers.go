@@ -403,7 +403,13 @@ type AgentMemoryDetailDTO struct {
 	CaptureSupported bool `json:"capture_supported"`
 	// CaptureNote is the one honest sentence shown when capture can't
 	// record. Empty when it can.
-	CaptureNote string                 `json:"capture_note,omitempty"`
+	CaptureNote string `json:"capture_note,omitempty"`
+	// CaptureCaveat is what recording costs on THIS provider type when it
+	// is wired and does work. Separate from CaptureNote because they are
+	// opposite states: the note explains a switch that would do nothing,
+	// the caveat explains a switch that does something with a side effect
+	// the operator should know about before flipping it.
+	CaptureCaveat string `json:"capture_caveat,omitempty"`
 	Enabled     bool                   `json:"enabled"`
 	Provider    string                 `json:"provider"`
 	Backends    []AgentMemoryChoiceDTO `json:"backends"`
@@ -860,6 +866,7 @@ func agentMemoryDetailDTO(ins provider.Instance) AgentMemoryDetailDTO {
 		Supported:        supported,
 		CaptureSupported: captureOK,
 		CaptureNote:      agentMemoryCaptureNote(ins, supported, captureOK),
+		CaptureCaveat:    agentMemoryCaptureCaveat(ins, captureOK),
 		Enabled:          ins.UseAgentMemory,
 		Provider:         ins.AgentMemoryProvider,
 		Backends:         backends,
@@ -891,11 +898,17 @@ func agentMemorySupport(ins provider.Instance) (supported, captureSupported bool
 
 // agentMemoryCaptureNote explains a capture switch that would not record.
 //
-// Phrased as "right now", not as a capability verdict, because two different
-// things land here: a provider type wick has no capture wiring for (codex
-// today, PLAN §21) and a host where the backend binary the hooks call is
-// simply missing. The second gets an extra sentence; neither gets a promise
-// that installing something will flip it.
+// It is DERIVED, never a list of types: agentMemorySupport resolves the spawn
+// contribution twice and compares, so a provider type gains capture the
+// moment its wiring lands and loses this note without anyone editing copy.
+// That is how codex stopped being the example here — it records through `-c
+// hooks.<Event>` overrides now (aimemory.codexCaptureArgs).
+//
+// Phrased as "right now" rather than as a capability verdict, because two
+// different things still land here: a provider type wick has no capture
+// wiring for, and a host where the backend binary the hooks call is simply
+// missing. The second gets an extra sentence; neither gets a promise that
+// installing something will flip it.
 func agentMemoryCaptureNote(ins provider.Instance, supported, captureOK bool) string {
 	if !supported || captureOK {
 		return ""
@@ -905,6 +918,25 @@ func agentMemoryCaptureNote(ins provider.Instance, supported, captureOK bool) st
 		note += " The " + be.Desc.DisplayName + " binary is also missing from this host, and the capture hooks call it directly."
 	}
 	return note
+}
+
+// agentMemoryCaptureCaveat states what recording costs on this provider type.
+//
+// codex has no way to trust a hook passed at launch, so wick passes
+// --dangerously-bypass-hook-trust with the capture hooks. The flag is
+// per-invocation rather than per-hook, which means any OTHER hook codex would
+// have prompted about in that spawn also runs unprompted. wick only passes it
+// when capture is explicitly on — but that is a consequence of the switch,
+// and a consequence belongs next to the switch rather than in a source
+// comment. The alternative is persisting trust in codex's own config, which
+// wick is not allowed to write.
+func agentMemoryCaptureCaveat(ins provider.Instance, captureOK bool) string {
+	if !captureOK || ins.Type != provider.TypeCodex {
+		return ""
+	}
+	return "Recording codex sessions also passes --dangerously-bypass-hook-trust, because codex cannot trust a hook handed to it at launch. " +
+		"For that spawn only, any other hook codex would have asked you about runs without asking — including one from your own config. " +
+		"wick passes it only while this switch is on."
 }
 
 // agentMemoryEffectiveURL is the address this instance actually talks to: its
@@ -920,9 +952,16 @@ func agentMemoryEffectiveURL(ins provider.Instance) string {
 
 // agentMemoryConfigPreview is the Agent Memory twin of aiRouterConfigPreview:
 // the env + args the selected memory backend injects into a spawn of this
-// instance, rendered for the read-only preview. Computed with the toggle
-// forced on so the user can see the effect before enabling it; empty when the
-// backend can't resolve (unknown backend, type with no memory path).
+// instance, rendered for the read-only preview. Computed with the memory
+// toggle forced on so the user can see the effect before enabling it; empty
+// when the backend can't resolve (unknown backend, type with no memory path).
+//
+// The CAPTURE toggle is deliberately NOT forced: recording adds the lifecycle
+// hooks (claude's --settings block, codex's -c hooks.<Event> overrides plus
+// the hook-trust flag), and showing those to someone who has capture switched
+// off would preview a spawn that will not happen. With capture on they are in
+// the block, which is where an operator can read exactly what runs on every
+// tool call.
 //
 // The env is shown verbatim, auth token included — this is an admin-only page,
 // and a masked preview of an editable value is worse than useless.

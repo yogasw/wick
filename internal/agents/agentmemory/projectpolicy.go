@@ -216,3 +216,77 @@ func projectIDForFolder(folder string) (string, bool) {
 	}
 	return "", false
 }
+
+// ── the roster ───────────────────────────────────────────────────────
+
+// ProjectPolicyRow is one project's answer to the question an operator who
+// inherits this host actually asks: is this project recording, and if not,
+// why not?
+//
+// It carries the NAME as well as the id. A trial reported as a list of uuids
+// is a trial nobody can act on — the id is what the policy is keyed by, the
+// name is what the person recognises, and both belong in the answer.
+type ProjectPolicyRow struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Value is what this project itself says: "", "on" or "off".
+	Value string `json:"value"`
+	// Recording is the resolved answer after the trial rule is applied.
+	Recording bool `json:"recording"`
+	// Reason is the sentence for this row's state, the same one the
+	// project's own tab shows.
+	Reason string `json:"reason"`
+}
+
+// ProjectPolicyRoster is every wick project with its resolved memory state.
+//
+// It exists because the trial's consequence is host-wide while its control is
+// per-project: turning one project on stops the others recording, and until
+// this list existed the only way to see WHICH ones had gone quiet was to open
+// them one at a time. "Memory stopped being written here" is otherwise
+// indistinguishable from a broken hook — which is the failure the Health tab
+// exists to catch, so the roster is what that tab shows next to the finding.
+//
+// Sorted by name so the list is stable between reads and readable at a glance.
+func ProjectPolicyRoster() []ProjectPolicyRow {
+	if projectLister == nil {
+		return nil
+	}
+	projects := projectLister()
+	out := make([]ProjectPolicyRow, 0, len(projects))
+	for _, p := range projects {
+		pol := PolicyFor(p.ID)
+		out = append(out, ProjectPolicyRow{
+			ID:        p.ID,
+			Name:      strings.TrimSpace(p.Name),
+			Value:     pol.Value,
+			Recording: pol.Allowed,
+			Reason:    pol.Reason,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+// TrialRoster splits the roster the way the question is asked: what is
+// recording, and what has gone quiet because of the trial.
+//
+// A project switched explicitly OFF is not "silenced by the trial" — someone
+// decided that, and mixing the two would inflate the number that is supposed
+// to alarm people.
+func TrialRoster() (recording, silenced []ProjectPolicyRow) {
+	for _, r := range ProjectPolicyRoster() {
+		switch {
+		case r.Recording:
+			recording = append(recording, r)
+		case r.Value == PolicyUnset:
+			silenced = append(silenced, r)
+		}
+	}
+	return recording, silenced
+}

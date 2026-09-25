@@ -37,7 +37,7 @@ describe("normalizeProviderDetail - agent_memory", () => {
         feature_enabled: true,
         supported: true,
         capture_supported: false,
-        capture_note: "Recording is not wired for codex right now",
+        capture_note: "Recording is not wired for gemini right now",
         enabled: true,
         provider: "ai-memory",
         backends: [{ id: "ai-memory", name: "ai-memory", blurb: "local memory server", github_url: "https://github.com/x/ai-memory" }],
@@ -50,7 +50,7 @@ describe("normalizeProviderDetail - agent_memory", () => {
     } as never);
     expect(r.AgentMemory.Supported).toBe(true);
     expect(r.AgentMemory.CaptureSupported).toBe(false);
-    expect(r.AgentMemory.CaptureNote).toContain("codex");
+    expect(r.AgentMemory.CaptureNote).toContain("gemini");
     expect(r.AgentMemory.EffectiveURL).toBe("http://127.0.0.1:49374");
     expect(r.AgentMemory.Backends).toEqual([
       { ID: "ai-memory", Name: "ai-memory", Blurb: "local memory server", GitHubURL: "https://github.com/x/ai-memory" },

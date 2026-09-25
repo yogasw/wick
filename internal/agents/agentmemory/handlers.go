@@ -64,6 +64,9 @@ func RegisterRoutes(r tool.Router, cfg ConfigStore) {
 	// it — while changing it is managing (PLAN §23.2).
 	r.GET("/agentmemory/project-policy", projectPolicyHandler)
 	r.POST("/agentmemory/project-policy", saveProjectPolicyHandler)
+	// Which projects are recording and which have gone quiet — the
+	// host-wide view of a per-project switch (see ProjectPolicyRoster).
+	r.GET("/agentmemory/project-policies", projectPolicyRosterHandler)
 
 	for _, be := range List() {
 		be := be
@@ -251,6 +254,30 @@ func projectPolicyHandler(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, PolicyFor(id))
+}
+
+// projectPolicyRosterHandler answers "which projects are recording, and which
+// are silent because of the trial?" in one read.
+//
+// It is on the READ side: it states what is happening, and an operator who
+// has just inherited this host needs to be able to see that without being an
+// admin — and without opening forty projects one at a time.
+func projectPolicyRosterHandler(c *tool.Ctx) {
+	if !allowedRead(c) {
+		return
+	}
+	recording, silenced := TrialRoster()
+	if recording == nil {
+		recording = []ProjectPolicyRow{}
+	}
+	if silenced == nil {
+		silenced = []ProjectPolicyRow{}
+	}
+	c.JSON(http.StatusOK, map[string]any{
+		"trial":     RunTrialCheck(),
+		"recording": recording,
+		"silenced":  silenced,
+	})
 }
 
 // saveProjectPolicyHandler stores one project's setting. Admin only: it

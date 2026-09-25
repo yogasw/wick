@@ -111,6 +111,9 @@ func (hook) Contribute(t provider.Type, ins provider.Instance, conn agentmemory.
 			"-c", "mcp_servers." + binName + ".url=" + strconv.Quote(mcpURL),
 			"-c", "mcp_servers." + binName + ".default_tools_approval_mode=" + strconv.Quote("approve"),
 		}
+		if ins.AgentMemoryCapture {
+			args = append(codexCaptureArgs(conn), args...)
+		}
 		return args, memoryEnv(conn), nil
 	default:
 		return nil, nil, nil
@@ -223,6 +226,101 @@ func captureSettings(conn agentmemory.SpawnConn) string {
 	return string(b)
 }
 
+// ── codex capture ────────────────────────────────────────────────────
+
+// codexCaptureEvents maps codex's lifecycle events onto the --event slug
+// ai-memory expects. Both halves are measured, not assumed:
+//
+//   - the codex side is codex 0.149.1's own hook schema, read off the binary
+//     (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PreCompact,
+//     PostCompact, SessionEnd, PermissionRequest, Subagent{Start,Stop});
+//   - the ai-memory side is the codex hook bundle shipped with 2.4.0
+//     (session-start, user-prompt-submit, pre-tool-use, post-tool-use,
+//     pre-compact, stop, session-end).
+//
+// The bundle's `stop` is deliberately absent here: codex has no bare Stop
+// event, so a hook hung on that name would never fire and would sit in the
+// spawn log looking like capture that works. PostCompact, PermissionRequest
+// and the subagent pair are codex events ai-memory has no slug for, and are
+// left out for the same reason — a hook that posts an event the server does
+// not know is noise, not coverage.
+//
+// Ordered, like claude's, so two spawns of the same session produce the same
+// argv rather than a reshuffled one.
+var codexCaptureEvents = []struct{ event, slug string }{
+	{"SessionStart", "session-start"},
+	{codexPromptEvent, "user-prompt-submit"},
+	{"PreToolUse", "pre-tool-use"},
+	{"PostToolUse", "post-tool-use"},
+	{"PreCompact", "pre-compact"},
+	{"SessionEnd", "session-end"},
+}
+
+// codexPromptEvent is codex's name for the event carrying the user's words,
+// so "do not capture prompts" can drop exactly it.
+const codexPromptEvent = "UserPromptSubmit"
+
+// codexTrustFlag is what makes a launch-passed hook actually RUN.
+//
+// Measured against codex 0.149.1 on 2026-09-25: the same `-c hooks.…`
+// override loads cleanly without it and the hook never executes — silently,
+// with nothing in the output to say a hook was skipped. With it, the hook
+// runs. codex's own help calls the flag "intended only for automation that
+// already vets hook sources", which is this case exactly: the command it
+// bypasses trust for is one wick generated this second, naming a binary wick
+// installed.
+//
+// What it costs, stated because it is not free: the flag is per-invocation
+// and not per-hook, so any OTHER hook codex would have prompted about in this
+// session — one from the user's own config or a project file — also runs
+// unprompted. It is only ever passed when capture is explicitly on for the
+// instance, never as a side effect of switching memory on.
+//
+// The alternative is persisting trust in codex's own state, which is a config
+// file wick is not allowed to write (Yoga, 2026-09-25) — so this is the only
+// shape available at launch.
+const codexTrustFlag = "--dangerously-bypass-hook-trust"
+
+// codexCaptureArgs renders the hook wiring as codex `-c` overrides:
+//
+//	--dangerously-bypass-hook-trust
+//	-c hooks.SessionStart=[{hooks=[{type="command",command="…"}]}]
+//	-c hooks.UserPromptSubmit=…
+//	…
+//
+// The shape is codex's own, learned from its parser: an event maps to a list
+// of matcher groups, each carrying a list of hook entries tagged by `type`
+// (command | mcp_tool | prompt | agent). A malformed entry is refused at
+// config load, so a wrong shape here fails the spawn loudly rather than
+// quietly capturing nothing.
+//
+// Returns nil when the binary did not resolve, for the same reason claude's
+// settings block does: a hook line that cannot name an executable turns every
+// tool call into a spawn failure. Recall stays wired either way.
+func codexCaptureArgs(conn agentmemory.SpawnConn) []string {
+	if conn.BinPath == "" {
+		return nil
+	}
+	out := []string{codexTrustFlag}
+	for _, e := range codexCaptureEvents {
+		// Not installing the prompt hook is how "do not capture prompts"
+		// is implemented — the words never reach the spool or the wire,
+		// rather than being discarded at the far end.
+		if conn.Tuning.NoCapturePrompts && e.event == codexPromptEvent {
+			continue
+		}
+		out = append(out, "-c", "hooks."+e.event+"="+codexHookValue(hookLineFor(conn, e.slug, "codex")))
+	}
+	return out
+}
+
+// codexHookValue renders one event's TOML value. strconv.Quote is the right
+// escaper here: TOML basic strings are JSON-ish, and the command line can
+// contain quotes of its own once a path is shell-quoted.
+func codexHookValue(command string) string {
+	return `[{hooks=[{type="command",command=` + strconv.Quote(command) + `}]}]`
+}
+
 // hookLine renders one hook line:
 //
 //	<bin> --data-dir <dir> hook --event <slug> --agent claude-code --server-url <url>
@@ -239,11 +337,22 @@ func captureSettings(conn agentmemory.SpawnConn) string {
 // it contains something a shell would act on. A store under a path with a
 // space is otherwise a hook that silently fails on every call.
 func hookLine(conn agentmemory.SpawnConn, slug string) string {
+	return hookLineFor(conn, slug, "claude-code")
+}
+
+// hookLineFor is hookLine with the agent name chosen by the caller.
+//
+// The name is ai-memory's own spelling for the CLI, not wick's provider type
+// — "claude-code" and "codex", both taken from `install-hooks --agent`'s own
+// value list. It is what every captured session is attributed to, so a wrong
+// one does not fail, it mislabels: the Health tab's capture-coverage check
+// compares harnesses by exactly this string.
+func hookLineFor(conn agentmemory.SpawnConn, slug, agentName string) string {
 	parts := []string{shellArg(conn.BinPath)}
 	if d := strings.TrimSpace(conn.DataDir); d != "" {
 		parts = append(parts, "--data-dir", shellArg(d))
 	}
-	parts = append(parts, "hook", "--event", slug, "--agent", "claude-code")
+	parts = append(parts, "hook", "--event", slug, "--agent", agentName)
 	if u := strings.TrimSpace(conn.ServerURL); u != "" {
 		parts = append(parts, "--server-url", shellArg(u))
 	}

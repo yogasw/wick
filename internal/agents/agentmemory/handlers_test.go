@@ -267,6 +267,9 @@ func TestEndpointsAreOnTheRightSide(t *testing.T) {
 		// project may read it; changing it is managing.
 		"GET /agentmemory/project-policy":  true,
 		"POST /agentmemory/project-policy": false,
+		// Who is recording and who went quiet: a statement about the
+		// host, readable by anyone who may see the panel at all.
+		"GET /agentmemory/project-policies": true,
 
 		"GET " + p + "/status":   true,
 		"GET " + p + "/projects": true,
@@ -318,7 +321,8 @@ func TestEndpointsAreOnTheRightSide(t *testing.T) {
 		// are the same handlers behind the same wrappers, and a test that
 		// asserted on them would break every time one is registered.
 		if !strings.Contains(route, p) && !strings.HasSuffix(route, "/agentmemory/backends") &&
-			!strings.HasSuffix(route, "/agentmemory/project-scope") && !strings.HasSuffix(route, "/agentmemory/project-policy") {
+			!strings.HasSuffix(route, "/agentmemory/project-scope") && !strings.HasSuffix(route, "/agentmemory/project-policy") &&
+			!strings.HasSuffix(route, "/agentmemory/project-policies") {
 			continue
 		}
 		allow, listed := want[route]
