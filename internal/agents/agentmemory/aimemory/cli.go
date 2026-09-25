@@ -33,8 +33,13 @@ import (
 // project-scoped command from the process's cwd, so the same command run from
 // the wrong place answers about a different project (PLAN §14).
 //
+// stdin is what the command reads when an argument is `-`. Only write-page
+// uses it, and it has to: a page body is markdown of arbitrary length, and an
+// argv big enough for it exceeds Windows' 32k command line. Every other call
+// passes nil.
+//
 // Swapped out in tests; nothing in the test suite ever spawns the real binary.
-type runner func(ctx context.Context, dir string, env, args []string) ([]byte, error)
+type runner func(ctx context.Context, dir string, env, args []string, stdin []byte) ([]byte, error)
 
 // source implements agentmemory.DataSource for ai-memory.
 type source struct {
@@ -44,7 +49,7 @@ type source struct {
 // execCLI is the production runner. It takes stdout only: ai-memory writes its
 // startup log line to stderr and the JSON document to stdout (verified), so
 // mixing the two would put a log line in front of every parse.
-func execCLI(ctx context.Context, dir string, env, args []string) ([]byte, error) {
+func execCLI(ctx context.Context, dir string, env, args []string, stdin []byte) ([]byte, error) {
 	// Resolved by the core, not by PATH directly: wick's own installed copy
 	// comes first, which is what stops the CLI-backed reads from reporting
 	// "executable file not found in $PATH" while the daemon answers happily
@@ -55,6 +60,9 @@ func execCLI(ctx context.Context, dir string, env, args []string) ([]byte, error
 	}
 	cmd := safeexec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
+	if len(stdin) > 0 {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
@@ -140,7 +148,7 @@ func decode(out []byte, v any) error {
 // takes no --project, which is exactly why its numbers must never be shown in
 // the same card as a project's (PLAN §13.5).
 func (s source) StoreStatus(ctx context.Context, conn agentmemory.Conn) (*agentmemory.StoreStatus, error) {
-	out, err := s.run(ctx, "", env(conn), args("status", conn, agentmemory.ReadScope{}))
+	out, err := s.run(ctx, "", env(conn), args("status", conn, agentmemory.ReadScope{}), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -158,13 +166,13 @@ func (s source) StoreStatus(ctx context.Context, conn agentmemory.Conn) (*agentm
 func (s source) Health(ctx context.Context, conn agentmemory.Conn, sc agentmemory.ReadScope) (*agentmemory.HealthReport, error) {
 	rep := &agentmemory.HealthReport{}
 
-	if out, err := s.run(ctx, sc.Dir, env(conn), args("doctor", conn, sc)); err != nil {
+	if out, err := s.run(ctx, sc.Dir, env(conn), args("doctor", conn, sc), nil); err != nil {
 		rep.Doctor.Error = err.Error()
 	} else if err := decode(out, &rep.Doctor); err != nil {
 		rep.Doctor.Error = fmt.Sprintf("parse doctor: %v", err)
 	}
 
-	if out, err := s.run(ctx, sc.Dir, env(conn), args("audit-contamination", conn, sc)); err != nil {
+	if out, err := s.run(ctx, sc.Dir, env(conn), args("audit-contamination", conn, sc), nil); err != nil {
 		rep.Contamination.Error = err.Error()
 	} else {
 		var raw contaminationJSON
@@ -186,7 +194,7 @@ func (s source) Handoffs(ctx context.Context, conn agentmemory.Conn, sc agentmem
 	if limit > 0 {
 		extra = append(extra, "--limit", strconv.Itoa(limit))
 	}
-	out, err := s.run(ctx, sc.Dir, env(conn), args("handoffs", conn, sc, extra...))
+	out, err := s.run(ctx, sc.Dir, env(conn), args("handoffs", conn, sc, extra...), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +233,7 @@ func (s source) Backfill(ctx context.Context, conn agentmemory.Conn, req agentme
 	if req.MaxSessions > 0 {
 		extra = append(extra, "--max-sessions", strconv.Itoa(req.MaxSessions))
 	}
-	out, err := s.run(ctx, req.Scope.Dir, env(conn), args("backfill", conn, req.Scope, extra...))
+	out, err := s.run(ctx, req.Scope.Dir, env(conn), args("backfill", conn, req.Scope, extra...), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +258,7 @@ func (s source) Compact(ctx context.Context, conn agentmemory.Conn) (*agentmemor
 	if d := strings.TrimSpace(conn.DataDir); d != "" {
 		cmd = append(cmd, "--data-dir", d)
 	}
-	out, err := s.run(ctx, "", env(conn), cmd)
+	out, err := s.run(ctx, "", env(conn), cmd, nil)
 	if err != nil {
 		return nil, err
 	}

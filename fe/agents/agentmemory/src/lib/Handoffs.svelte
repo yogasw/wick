@@ -10,8 +10,8 @@
      --expire-all, which discards every open baton including the ones other
      agents are waiting on — it is not exposed here at all (PLAN §20.2). */
   import { Button, Select } from "@wick-fe/common-ui";
-  import Section from "./Section.svelte";
-  import BlockedState from "./BlockedState.svelte";
+  import { Section } from "@wick-fe/common-agentmemory";
+  import { BlockedState } from "@wick-fe/common-agentmemory";
   import { blockedBy } from "./format.js";
   import { handoffAge, handoffParties, messageSender, messageStateLabel, messageSummary, SENDER_NOTE } from "./handoffs.js";
   import type { Handoff, HandoffsResponse, MessagesResponse, ProjectRow } from "./types.js";

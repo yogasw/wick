@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/yogasw/wick/pkg/tool"
@@ -156,6 +157,36 @@ func (e2eData) CancelHandoff(_ context.Context, _ Conn, _ ReadScope, id string) 
 
 func (e2eData) ForgetSweep(_ context.Context, _ Conn, _ ReadScope, dryRun bool) (*SweepReport, error) {
 	return &SweepReport{DryRun: dryRun, Output: "Would evict 12 cold pages and prune 400 observations."}, nil
+}
+
+// The editing half (PLAN §22). Same rule as the reads: every optional field
+// is filled, because a payload of zeros cannot show that an omitempty field
+// still serialises under the name the panel reads.
+
+func (e2eData) WritePage(_ context.Context, _ Conn, s ReadScope, w PageWrite) (*PageWriteResult, error) {
+	return &PageWriteResult{
+		Path:   w.Path,
+		PageID: "01a0d8dd",
+		Output: "✓ wrote " + w.Path + " (page_id=01a0d8dd) under " + s.Workspace + "/" + s.Project,
+	}, nil
+}
+
+func (e2eData) DeletePage(_ context.Context, _ Conn, s ReadScope, path string) (*PageDeleteResult, error) {
+	return &PageDeleteResult{Path: path, Deleted: true, Output: "✓ deleted " + path + " under " + s.Workspace + "/" + s.Project}, nil
+}
+
+func (e2eData) Checkpoints(context.Context, Conn, int) ([]Checkpoint, error) {
+	return []Checkpoint{{
+		OID: "d544bc66fa5e33c4da76b37982e251da373b9a33", ShortOID: "d544bc66fa5e",
+		TimeUnix: 1790344784, Summary: "write-page wick/kasir-8c28230d: pages/kasir_prod_db.md",
+	}}, nil
+}
+
+func (e2eData) RestorePage(_ context.Context, _ Conn, _ ReadScope, path, from string) (*RestoreResult, error) {
+	return &RestoreResult{
+		PageID: "01a0d8dd", Path: path, RestoredFrom: from,
+		PreCheckpoint: "c84640f0a0f5", Checkpoint: "25d150d14afd",
+	}, nil
 }
 
 // e2eFailingData is the same backend with its reads refusing the way a real
@@ -355,6 +386,21 @@ var (
 		required: []string{"id"},
 		optional: []string{"subject", "body", "from_agent", "from_workspace_id", "from_project_id", "state", "created_at", "claimed_at"},
 	}
+	pageWriteShape = shape{
+		required: []string{"path"},
+		optional: []string{"page_id", "output"},
+	}
+	pageDeleteShape = shape{
+		required: []string{"path", "deleted"},
+		optional: []string{"output"},
+	}
+	checkpointShape = shape{
+		required: []string{"oid", "short_oid", "time", "summary"},
+	}
+	restoreResultShape = shape{
+		required: []string{"path"},
+		optional: []string{"page_id", "restored_from", "pre_checkpoint", "checkpoint"},
+	}
 	cancelResultShape = shape{
 		required: []string{"handoff_id", "cancelled"},
 		optional: []string{"state"},
@@ -520,8 +566,15 @@ func TestDashboardPayloadsMatchTheFrontend(t *testing.T) {
 		w, body := call(t, routes, "GET "+p+"/health", nil)
 		mustOK(t, "health", w, body)
 		assertShape(t, "HealthReport", body, shape{
-			required: []string{"doctor", "contamination", "collisions"},
+			required: []string{"doctor", "contamination", "collisions", "trial"},
 			optional: []string{"error", "reason", "hint"},
+		})
+		// The per-project trial: a deliberate mode that stops capture for
+		// every project that has not opted in, so the Health tab has to be
+		// able to say it rather than leaving it to look like a broken hook.
+		assertShape(t, "TrialCheck", sub(t, "HealthReport", body, "trial"), shape{
+			required: []string{"active", "silenced"},
+			optional: []string{"projects"},
 		})
 		doctor := sub(t, "HealthReport", body, "doctor")
 		assertShape(t, "DoctorReport", doctor, shape{
@@ -638,6 +691,63 @@ func TestDashboardPayloadsMatchTheFrontend(t *testing.T) {
 			optional: []string{"error", "reason", "hint"},
 		})
 		assertShape(t, "SweepReport", sub(t, "SweepResponse", body, "report"), shape{required: []string{"dry_run", "output"}})
+	})
+
+	// Editing one project's memory (PLAN §22). Driven as an admin, because
+	// all four are on the manage side — the viewer's 403 is asserted in
+	// manage_handlers_test.go against the registered routes.
+	t.Run("write, delete, checkpoints and restore", func(t *testing.T) {
+		scoped := url.Values{"workspace": {"wick"}, "project": {"kasir-8c28230d"}}
+
+		v := url.Values{"path": {"pages/kasir_prod_db.md"}, "body": {"# kasir_prod_db\n\nRead replica."}, "title": {"kasir_prod_db"}, "kind": {"fact"}}
+		for k, vals := range scoped {
+			v[k] = vals
+		}
+		w, body := call(t, routes, "POST "+p+"/page/write", v)
+		mustOK(t, "write", w, body)
+		assertShape(t, "PageWriteResponse", body, shape{
+			required: []string{"result", "note"},
+			optional: []string{"error", "reason", "hint"},
+		})
+		assertShape(t, "PageWriteResult", sub(t, "PageWriteResponse", body, "result"), pageWriteShape)
+		// The reassurance is part of the payload, not a sentence the FE
+		// invented: it is a claim about the BACKEND committing every write.
+		if note, _ := body["note"].(string); !strings.Contains(note, "restored") {
+			t.Errorf("note %q does not say the edit is recoverable", note)
+		}
+
+		d := url.Values{"path": {"pages/kasir_prod_db.md"}, "confirm": {"true"}}
+		for k, vals := range scoped {
+			d[k] = vals
+		}
+		w, body = call(t, routes, "POST "+p+"/page/delete", d)
+		mustOK(t, "delete", w, body)
+		assertShape(t, "PageDeleteResponse", body, shape{
+			required: []string{"result", "warning"},
+			optional: []string{"error", "reason", "hint"},
+		})
+		res := sub(t, "PageDeleteResponse", body, "result")
+		assertShape(t, "PageDeleteResult", res, pageDeleteShape)
+		if res["path"] != "pages/kasir_prod_db.md" {
+			t.Errorf("a delete must name what it removed, got %v", res["path"])
+		}
+
+		w, body = call(t, routes, "GET "+p+"/checkpoints", url.Values{"limit": {"5"}})
+		mustOK(t, "checkpoints", w, body)
+		rows := list(t, "CheckpointsResponse", body, "checkpoints")
+		assertShape(t, "Checkpoint", rows[0].(map[string]any), checkpointShape)
+
+		r := url.Values{"path": {"pages/kasir_prod_db.md"}, "from": {"d544bc66fa5e"}}
+		for k, vals := range scoped {
+			r[k] = vals
+		}
+		w, body = call(t, routes, "POST "+p+"/page/restore", r)
+		mustOK(t, "restore", w, body)
+		assertShape(t, "RestoreResponse", body, shape{
+			required: []string{"result", "note"},
+			optional: []string{"error", "reason", "hint"},
+		})
+		assertShape(t, "RestoreResult", sub(t, "RestoreResponse", body, "result"), restoreResultShape)
 	})
 
 	t.Run("test connection reports the daemon that is not there", func(t *testing.T) {

@@ -64,7 +64,7 @@ func indexOfValue(argv []string, v string) int {
 // and must never be followed by a bare (non-flag) operand — either mistake
 // feeds a prompt or a path into the MCP config list instead of to claude.
 func TestSpawnArgvMemoryOrder(t *testing.T) {
-	provider.SetMemorySpawn(func(*provider.Instance, provider.Type) (provider.MemoryContribution, error) {
+	provider.SetMemorySpawn(func(*provider.Instance, provider.Type, string) (provider.MemoryContribution, error) {
 		return provider.MemoryContribution{
 			Args: append([]string{}, memoryArgs...),
 			Env:  []string{"AI_MEMORY_SERVER_URL=http://127.0.0.1:49374"},
@@ -110,7 +110,7 @@ func TestSpawnArgvMemoryOrder(t *testing.T) {
 // TestSpawnArgvNoMemoryWhenOff is the isolation guard: an instance that does
 // not use Agent Memory must spawn byte-identically to before the feature.
 func TestSpawnArgvNoMemoryWhenOff(t *testing.T) {
-	provider.SetMemorySpawn(func(*provider.Instance, provider.Type) (provider.MemoryContribution, error) {
+	provider.SetMemorySpawn(func(*provider.Instance, provider.Type, string) (provider.MemoryContribution, error) {
 		t.Fatal("memory hook must not be consulted for an instance with the toggle off")
 		return provider.MemoryContribution{}, nil
 	})

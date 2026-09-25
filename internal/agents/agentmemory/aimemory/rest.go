@@ -92,7 +92,7 @@ func (s source) Search(ctx context.Context, conn agentmemory.Conn, sc agentmemor
 // the scope the caller asked for is stamped back on — that is the scope the
 // command was run under, not a guess.
 func (s source) searchCLI(ctx context.Context, conn agentmemory.Conn, sc agentmemory.ReadScope, q string) ([]agentmemory.SearchHit, error) {
-	out, err := s.run(ctx, sc.Dir, env(conn), args("search", conn, sc, q))
+	out, err := s.run(ctx, sc.Dir, env(conn), args("search", conn, sc, q), nil)
 	if err != nil {
 		return nil, err
 	}

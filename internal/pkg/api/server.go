@@ -1091,6 +1091,10 @@ func NewServer() *Server {
 	if err := agentstool.EnsureAgentMemoryConfigs(context.Background(), configsSvc); err != nil {
 		log.Warn().Err(err).Msg("agentmemory: could not declare its config rows — the Settings tab will refuse to save")
 	}
+	// The per-project switch, backed by the project registry: a project can
+	// keep Agent Memory out of itself, or opt into a trial while the others
+	// stay quiet (agentmemory/projectpolicy.go).
+	agentstool.WireAgentMemoryProjectPolicy()
 	agentmemory.SetMarkerWorkspace(appname.Resolve())
 	agentmemory.SetProjectLister(func() []agentmemory.ProjectFolder {
 		reg := agentsMgr.Registry()

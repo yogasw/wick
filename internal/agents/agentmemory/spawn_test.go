@@ -29,7 +29,7 @@ func TestMemorySpawnContributionSkipsInstancesWithMemoryOff(t *testing.T) {
 	got, err := provider.MemorySpawnContribution(&provider.Instance{
 		UseAgentMemory:      false,
 		AgentMemoryProvider: "testmem-off",
-	}, provider.TypeClaude)
+	}, provider.TypeClaude, "")
 	if err != nil {
 		t.Fatalf("contribution err: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestMemorySpawnContributionResolvesServerURL(t *testing.T) {
 	contrib, err := provider.MemorySpawnContribution(&provider.Instance{
 		UseAgentMemory:      true,
 		AgentMemoryProvider: "testmem-url",
-	}, provider.TypeClaude)
+	}, provider.TypeClaude, "")
 	if err != nil {
 		t.Fatalf("contribution err: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestMemorySpawnContributionResolvesServerURL(t *testing.T) {
 		UseAgentMemory:       true,
 		AgentMemoryProvider:  "testmem-url",
 		AgentMemoryServerURL: "http://memhost:8080/",
-	}, provider.TypeClaude)
+	}, provider.TypeClaude, "")
 	if err != nil {
 		t.Fatalf("contribution err: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestMemorySpawnContributionDefaultsToAIMemoryBackend(t *testing.T) {
 	Register(Descriptor{ID: "ai-memory", DisplayName: "ai-memory", PrefPort: 49374, HealthPath: "/healthz", Hook: fakeHook{}})
 	Init()
 
-	contrib, err := provider.MemorySpawnContribution(&provider.Instance{UseAgentMemory: true}, provider.TypeClaude)
+	contrib, err := provider.MemorySpawnContribution(&provider.Instance{UseAgentMemory: true}, provider.TypeClaude, "")
 	if err != nil {
 		t.Fatalf("contribution err: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestMemorySpawnContributionUnknownBackendErrors(t *testing.T) {
 	_, err := provider.MemorySpawnContribution(&provider.Instance{
 		UseAgentMemory:      true,
 		AgentMemoryProvider: "does-not-exist",
-	}, provider.TypeClaude)
+	}, provider.TypeClaude, "")
 	if err == nil {
 		t.Fatal("expected error for unknown backend id")
 	}

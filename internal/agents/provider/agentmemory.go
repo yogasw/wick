@@ -15,19 +15,26 @@ type MemoryContribution struct {
 	Env  []string
 }
 
-var memorySpawnFn func(ins *Instance, t Type) (MemoryContribution, error)
+var memorySpawnFn func(ins *Instance, t Type, folder string) (MemoryContribution, error)
 
 // SetMemorySpawn wires the boot-time hook that resolves an instance's selected
 // memory backend and returns the CLI args + env it needs. Called once from
 // agentmemory.Init.
-func SetMemorySpawn(fn func(*Instance, Type) (MemoryContribution, error)) { memorySpawnFn = fn }
+func SetMemorySpawn(fn func(*Instance, Type, string) (MemoryContribution, error)) { memorySpawnFn = fn }
 
 // MemorySpawnContribution returns the args + env for an instance wired to its
 // selected memory backend. Empty when the instance doesn't use agent memory or
 // the hook is unwired.
-func MemorySpawnContribution(ins *Instance, t Type) (MemoryContribution, error) {
+//
+// folder is the directory the session runs in. It is passed because a PROJECT
+// can now keep memory out of itself, or opt itself into a trial while the
+// other projects stay quiet, and the folder is what a spawn has to identify
+// its project with — the id never reaches this layer. An empty folder means
+// "no project in particular", which follows the instance the way it always
+// did.
+func MemorySpawnContribution(ins *Instance, t Type, folder string) (MemoryContribution, error) {
 	if memorySpawnFn == nil || ins == nil || !ins.UseAgentMemory {
 		return MemoryContribution{}, nil
 	}
-	return memorySpawnFn(ins, t)
+	return memorySpawnFn(ins, t, folder)
 }

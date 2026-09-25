@@ -17,8 +17,8 @@
        store-wide figure: mixing those two scopes is the confusion §13.5
        opens with. Every cell resolves through projectMetrics(). */
   import { Button, ConfirmDialog } from "@wick-fe/common-ui";
-  import Section from "./Section.svelte";
-  import BlockedState from "./BlockedState.svelte";
+  import { Section } from "@wick-fe/common-agentmemory";
+  import { BlockedState } from "@wick-fe/common-agentmemory";
   import {
     BRIEFING_UNAVAILABLE,
     backfillCapWarning,
@@ -311,7 +311,11 @@
           <p class="text-[0.6875rem] uppercase tracking-wider text-black-700 dark:text-black-600">Latest pages</p>
           {#if pages.state === "ok"}
             <ul class="mt-1.5 space-y-1">
-              {#each pages.pages as p (p.path)}
+              <!-- A teaser, not a browser: the briefing now carries up to
+                   fifty pages because the project view lists them all, and
+                   fifty rows inside this detail panel would bury the
+                   counters above it. -->
+              {#each pages.pages.slice(0, 5) as p (p.path)}
                 <li class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
                   <span class="min-w-0 truncate text-black-900 dark:text-white-100" title={p.path}>{pageLabel(p)}</span>
                   {#if p.kind}
@@ -323,6 +327,12 @@
                 </li>
               {/each}
             </ul>
+            {#if pages.pages.length > 5}
+              <p class="mt-1 text-[0.6875rem] text-black-700 dark:text-black-600">
+                Showing the 5 most recent of {pages.pages.length}. A project's full memory — with editing — opens from
+                its “⋯” menu in the sidebar.
+              </p>
+            {/if}
           {:else if pages.state === "empty"}
             <p class="mt-1 text-xs leading-relaxed text-black-700 dark:text-black-600">
               No pages yet — this project has been read and holds none. Full page browsing belongs to the Wiki tab.

@@ -877,12 +877,12 @@ func agentMemoryDetailDTO(ins provider.Instance) AgentMemoryDetailDTO {
 func agentMemorySupport(ins provider.Instance) (supported, captureSupported bool) {
 	ins.UseAgentMemory = true
 	ins.AgentMemoryCapture = false
-	read, err := provider.MemorySpawnContribution(&ins, ins.Type)
+	read, err := provider.MemorySpawnContribution(&ins, ins.Type, "")
 	if err != nil || (len(read.Args) == 0 && len(read.Env) == 0) {
 		return false, false
 	}
 	ins.AgentMemoryCapture = true
-	rec, err := provider.MemorySpawnContribution(&ins, ins.Type)
+	rec, err := provider.MemorySpawnContribution(&ins, ins.Type, "")
 	if err != nil {
 		return true, false
 	}
@@ -928,7 +928,7 @@ func agentMemoryEffectiveURL(ins provider.Instance) string {
 // and a masked preview of an editable value is worse than useless.
 func agentMemoryConfigPreview(ins provider.Instance) string {
 	ins.UseAgentMemory = true
-	contrib, err := provider.MemorySpawnContribution(&ins, ins.Type)
+	contrib, err := provider.MemorySpawnContribution(&ins, ins.Type, "")
 	if err != nil {
 		return ""
 	}

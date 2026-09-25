@@ -64,7 +64,32 @@ type Meta struct {
 	// Ticket is this project's ticket-mode configuration. Zero value =
 	// off (see TicketConfig) — sessions stay plain chat sessions.
 	Ticket TicketConfig `json:"ticket,omitempty"`
+
+	// AgentMemory is this project's Agent Memory policy: "" (unset), "on"
+	// or "off". It can only ever NARROW what the master switch and the
+	// provider instance already allow — a project cannot turn memory on
+	// for an instance that is not wired to a backend, because the
+	// instance is what holds the server and the credentials.
+	//
+	// Unset is not simply "yes": while at least one project is explicitly
+	// "on", the unset ones are treated as off, which is what makes
+	// trialling the feature on ONE project possible without a second
+	// global switch (agentmemory.ProjectAllowed).
+	AgentMemory string `json:"agent_memory,omitempty"`
 }
+
+// Agent Memory policies a project can carry.
+const (
+	// MemoryUnset follows the provider instance — unless some other
+	// project has opted in, which turns unset into off. See
+	// agentmemory.ProjectAllowed for the whole rule in one place.
+	MemoryUnset = ""
+	// MemoryOn opts this project in. The first project to carry it puts
+	// the host into trial mode.
+	MemoryOn = "on"
+	// MemoryOff keeps memory out of this project whatever else is set.
+	MemoryOff = "off"
+)
 
 // Project is the in-memory view: meta only (no session list — that lives
 // in the registry).

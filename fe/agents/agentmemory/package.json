@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@wick-fe/common-stores": "*",
-    "@wick-fe/common-ui": "*"
+    "@wick-fe/common-ui": "*",
+    "@wick-fe/common-agentmemory": "*"
   }
 }

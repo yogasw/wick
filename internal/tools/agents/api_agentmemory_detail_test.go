@@ -15,7 +15,7 @@ func TestAgentMemorySupportIsMeasured(t *testing.T) {
 	// claude: memory wires in, and capture adds a --settings pair.
 	// codex: memory wires in, capture changes nothing.
 	// gemini: nothing at all.
-	provider.SetMemorySpawn(func(ins *provider.Instance, tp provider.Type) (provider.MemoryContribution, error) {
+	provider.SetMemorySpawn(func(ins *provider.Instance, tp provider.Type, _ string) (provider.MemoryContribution, error) {
 		switch tp {
 		case provider.TypeClaude:
 			args := []string{"--mcp-config", "{}"}
@@ -51,7 +51,7 @@ func TestAgentMemorySupportIsMeasured(t *testing.T) {
 // forces UseAgentMemory/AgentMemoryCapture on to measure, and must not leave
 // the caller's instance carrying settings the operator never saved.
 func TestAgentMemorySupportSurvivesMutation(t *testing.T) {
-	provider.SetMemorySpawn(func(*provider.Instance, provider.Type) (provider.MemoryContribution, error) {
+	provider.SetMemorySpawn(func(*provider.Instance, provider.Type, string) (provider.MemoryContribution, error) {
 		return provider.MemoryContribution{Args: []string{"--mcp-config", "{}"}}, nil
 	})
 	t.Cleanup(func() { provider.SetMemorySpawn(nil) })
@@ -86,7 +86,7 @@ func TestAgentMemoryCaptureNote(t *testing.T) {
 // TestAgentMemoryDetailDTOHidesTheToken is the one rule that cannot regress:
 // the stored auth token is replaced by a boolean on its way out.
 func TestAgentMemoryDetailDTOHidesTheToken(t *testing.T) {
-	provider.SetMemorySpawn(func(*provider.Instance, provider.Type) (provider.MemoryContribution, error) {
+	provider.SetMemorySpawn(func(*provider.Instance, provider.Type, string) (provider.MemoryContribution, error) {
 		return provider.MemoryContribution{Args: []string{"--mcp-config", "{}"}}, nil
 	})
 	t.Cleanup(func() { provider.SetMemorySpawn(nil) })

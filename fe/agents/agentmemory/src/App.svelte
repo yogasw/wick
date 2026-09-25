@@ -24,10 +24,14 @@
     fetchOverview,
     fetchProjects,
     fetchProjectScope,
+    fetchCheckpoints,
     fetchSettings,
     install,
+    deletePage,
     previewBackfill,
     readPage,
+    restorePage,
+    writePage,
     restart,
     runBackfill,
     runSweep,
@@ -40,6 +44,7 @@
   import type {
     AutostartLock,
     BackendInfo,
+    Checkpoint,
     BackfillReport,
     Handoff,
     HandoffsResponse,
@@ -151,9 +156,8 @@
   let loaded = $state(false);
   let loading = $state(true);
   let busy = $state(false);
-  // A panel opened for one project opens on Projects — that is the tab its
-  // detail lives on; the global tabs are still there, one click away.
-  let tab = $state<Tab>(scopedProjectID ? "projects" : "overview");
+  let tab = $state<Tab>("overview");
+
   let test = $state<TestResult | null>(null);
   let confirmStop = $state(false);
   // The last install's log, kept on the Overview card. A failure is shown
@@ -724,9 +728,27 @@
     </div>
   </div>
 
-  <!-- Backend switcher — only worth showing once there is a choice -->
-  {#if backends.length > 1}
-    <div class="flex shrink-0 flex-wrap items-center gap-2 px-4 pb-3 sm:px-6">
+  <!-- Which backend this panel is talking about — ALWAYS, not only when
+       there is a choice. With one backend the page used to name it nowhere,
+       so every number on it was about "some store"; the provider page names
+       its provider either way, and more memory backends are coming. One
+       control, two renderings: a label for one, the picker for several. -->
+  {#if backends.length === 1}
+    <div class="flex shrink-0 flex-wrap items-center gap-2 px-4 pb-3 sm:px-6" data-testid="backend-label">
+      <span
+        class="inline-flex items-center gap-2 rounded-lg border border-white-300 bg-white-100 px-3 py-1.5 text-[0.8125rem] font-medium text-black-800 dark:border-navy-600 dark:bg-navy-700 dark:text-black-600"
+      >
+        <span class={`h-1.5 w-1.5 rounded-full ${dotFor(overviews[backends[0].id]?.daemon)}`}></span>
+        {#if backends[0].icon}
+          <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5"
+            >{@html backends[0].icon}</svg
+          >
+        {/if}
+        {backends[0].name}
+      </span>
+    </div>
+  {:else if backends.length > 1}
+    <div class="flex shrink-0 flex-wrap items-center gap-2 px-4 pb-3 sm:px-6" data-testid="backend-picker">
       {#each backends as b (b.id)}
         <button
           type="button"

@@ -36,17 +36,20 @@ const statusFixture = `{
   "client": {"server_url": "http://127.0.0.1:49374", "auth": false}
 }`
 
-// stubRun records the last invocation and replays a canned stdout.
+// stubRun records the last invocation and replays a canned stdout. stdin is
+// recorded too: a page body travels that way, and "was the body actually
+// handed over" is the assertion a write test exists for.
 type stubRun struct {
-	out  string
-	err  error
-	dir  string
-	env  []string
-	args []string
+	out   string
+	err   error
+	dir   string
+	env   []string
+	args  []string
+	stdin []byte
 }
 
-func (s *stubRun) run(_ context.Context, dir string, env, args []string) ([]byte, error) {
-	s.dir, s.env, s.args = dir, env, args
+func (s *stubRun) run(_ context.Context, dir string, env, args []string, stdin []byte) ([]byte, error) {
+	s.dir, s.env, s.args, s.stdin = dir, env, args, stdin
 	return []byte(s.out), s.err
 }
 
@@ -242,7 +245,7 @@ func TestHandoffsParse(t *testing.T) {
 func TestHealthKeepsBothHalves(t *testing.T) {
 	const audit = `{"summary":{"sessions_misbucketed":3},"findings":[{"session_id":"abc"}]}`
 	calls := 0
-	src := source{run: func(_ context.Context, _ string, _, a []string) ([]byte, error) {
+	src := source{run: func(_ context.Context, _ string, _, a []string, _ []byte) ([]byte, error) {
 		calls++
 		if a[0] == "doctor" {
 			return nil, errors.New("server returned 404 Not Found: project not found")
@@ -268,7 +271,7 @@ func TestHealthKeepsBothHalves(t *testing.T) {
 // project has nothing to report.
 func TestDoctorParse(t *testing.T) {
 	const fixture = `{"workspace":"default","project":"proj2","server":"http://127.0.0.1:49374","since_days":30,"rows":[],"uncaptured":[]}`
-	src := source{run: func(_ context.Context, _ string, _, a []string) ([]byte, error) {
+	src := source{run: func(_ context.Context, _ string, _, a []string, _ []byte) ([]byte, error) {
 		if a[0] == "doctor" {
 			return []byte(fixture), nil
 		}
@@ -292,7 +295,7 @@ func TestDoctorParse(t *testing.T) {
 // report rather than being parsed into numbers the CLI never promised.
 func TestCompactSkipsJSONFlag(t *testing.T) {
 	var got []string
-	src := source{run: func(_ context.Context, dir string, _, a []string) ([]byte, error) {
+	src := source{run: func(_ context.Context, dir string, _, a []string, _ []byte) ([]byte, error) {
 		got = a
 		if dir != "" {
 			t.Fatalf("compact is store-wide: it must not run in a project dir, got %q", dir)

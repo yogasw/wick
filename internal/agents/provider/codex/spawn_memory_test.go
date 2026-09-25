@@ -48,7 +48,7 @@ func indexOfValue(argv []string, v string) int {
 // land ahead of both — a value-carrying flag after the prompt would either eat
 // the prompt or be parsed as part of it.
 func TestSpawnerArgvMemoryBeforePrompt(t *testing.T) {
-	provider.SetMemorySpawn(func(*provider.Instance, provider.Type) (provider.MemoryContribution, error) {
+	provider.SetMemorySpawn(func(*provider.Instance, provider.Type, string) (provider.MemoryContribution, error) {
 		return provider.MemoryContribution{
 			Args: append([]string{}, memoryArgs...),
 			Env:  []string{"AI_MEMORY_SERVER_URL=http://127.0.0.1:49374"},
@@ -102,7 +102,7 @@ func TestSpawnerArgvMemoryBeforePrompt(t *testing.T) {
 // TestSpawnerArgvNoMemoryWhenOff is the isolation guard: an instance with the
 // toggle off must spawn exactly as it did before the feature existed.
 func TestSpawnerArgvNoMemoryWhenOff(t *testing.T) {
-	provider.SetMemorySpawn(func(*provider.Instance, provider.Type) (provider.MemoryContribution, error) {
+	provider.SetMemorySpawn(func(*provider.Instance, provider.Type, string) (provider.MemoryContribution, error) {
 		t.Fatal("memory hook must not be consulted for an instance with the toggle off")
 		return provider.MemoryContribution{}, nil
 	})

@@ -293,6 +293,51 @@ type HealthReport struct {
 	// backend cannot see it — the overlap is in wick's project layout, and it
 	// is visible before a single session has been captured.
 	Collisions CollisionCheck `json:"collisions"`
+	// Trial is wick's own check too: while one project has opted in, every
+	// project that has not is silently NOT recording. That is a deliberate
+	// mode, not a fault — but "memory stopped being written here" is
+	// otherwise indistinguishable from a broken hook, which is the thing the
+	// rest of this report exists to find. So it is stated.
+	Trial TrialCheck `json:"trial"`
+}
+
+// TrialCheck reports the per-project trial: who opted in, and therefore who
+// went quiet.
+type TrialCheck struct {
+	Active   bool     `json:"active"`
+	Projects []string `json:"projects,omitempty"`
+	// Silenced counts the projects left on "follow the instance" while the
+	// trial is on — the ones that stopped recording without anybody
+	// touching them.
+	Silenced int `json:"silenced"`
+}
+
+// RunTrialCheck derives the trial state from the policy store. An unwired
+// store is not a trial: the feature then behaves exactly as it did before
+// per-project policy existed.
+func RunTrialCheck() TrialCheck {
+	st := policies()
+	if st == nil {
+		return TrialCheck{}
+	}
+	all := st.All()
+	on := optedIn(all)
+	if len(on) == 0 {
+		return TrialCheck{}
+	}
+	// Counted from wick's PROJECT LIST, not from the policy map: a store is
+	// free to return only the projects that carry a value, and a project with
+	// no value is exactly the one being silenced. Deriving the count from the
+	// values would report 0 silenced on the hosts where it matters most.
+	silenced := 0
+	if projectLister != nil {
+		for _, p := range projectLister() {
+			if all[p.ID] == PolicyUnset {
+				silenced++
+			}
+		}
+	}
+	return TrialCheck{Active: true, Projects: on, Silenced: silenced}
 }
 
 // DoctorReport answers "a harness ran here — did anything get captured?".

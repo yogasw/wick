@@ -263,6 +263,10 @@ func TestEndpointsAreOnTheRightSide(t *testing.T) {
 	want := map[string]bool{
 		"GET /agentmemory/backends":      true,
 		"GET /agentmemory/project-scope": true,
+		// Whether a project uses memory at all: anyone who may see the
+		// project may read it; changing it is managing.
+		"GET /agentmemory/project-policy":  true,
+		"POST /agentmemory/project-policy": false,
 
 		"GET " + p + "/status":   true,
 		"GET " + p + "/projects": true,
@@ -288,6 +292,15 @@ func TestEndpointsAreOnTheRightSide(t *testing.T) {
 		"POST " + p + "/compact":          false,
 		"POST " + p + "/handoffs/cancel":  false,
 		"POST " + p + "/forget-sweep":     false,
+
+		// Editing this project's memory (PLAN §22). All four are writes
+		// in the sense that matters — they change, remove or roll back
+		// what an agent will recall — and the checkpoint list is only
+		// ever read next to a restore button.
+		"POST " + p + "/page/write":   false,
+		"POST " + p + "/page/delete":  false,
+		"POST " + p + "/page/restore": false,
+		"GET " + p + "/checkpoints":   false,
 	}
 
 	rr := &recordingRouter{routes: map[string]tool.HandlerFunc{}}
@@ -304,7 +317,8 @@ func TestEndpointsAreOnTheRightSide(t *testing.T) {
 		// Other backends' copies of the same endpoints are skipped: they
 		// are the same handlers behind the same wrappers, and a test that
 		// asserted on them would break every time one is registered.
-		if !strings.Contains(route, p) && !strings.HasSuffix(route, "/agentmemory/backends") && !strings.HasSuffix(route, "/agentmemory/project-scope") {
+		if !strings.Contains(route, p) && !strings.HasSuffix(route, "/agentmemory/backends") &&
+			!strings.HasSuffix(route, "/agentmemory/project-scope") && !strings.HasSuffix(route, "/agentmemory/project-policy") {
 			continue
 		}
 		allow, listed := want[route]

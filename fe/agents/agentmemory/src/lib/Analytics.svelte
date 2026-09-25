@@ -7,8 +7,8 @@
      source of confusion this feature has (PLAN §13.5 point 1), so the two
      never share a screen — per-project numbers live on the Projects tab. */
   import { Button, ConfirmDialog } from "@wick-fe/common-ui";
-  import Section from "./Section.svelte";
-  import BlockedState from "./BlockedState.svelte";
+  import { Section } from "@wick-fe/common-agentmemory";
+  import { BlockedState } from "@wick-fe/common-agentmemory";
   import {
     GROWTH_NOTE,
     PROVIDER_SPLIT_NOTE,

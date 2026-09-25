@@ -1,5 +1,7 @@
 package view
 
+import "strconv"
+
 // ProjectSettingsSPAVM feeds the thin-shell that hosts the project-settings
 // SPA inside the standard agents layout. AssetURL is the hashed Vite bundle
 // path resolved at boot via spaAssetURL("project-settings").
@@ -8,6 +10,13 @@ type ProjectSettingsSPAVM struct {
 	Base      string
 	ProjectID string
 	AssetURL  string
+	// AgentMemory says whether this project's Agent Memory tab belongs on
+	// the page: the master switch is on and this reader may at least look
+	// (PLAN §22). CanManage says whether they may EDIT what is in it —
+	// both inlined so the tab strip is right on the first paint rather
+	// than growing a tab after a fetch (PLAN §23.3).
+	AgentMemory bool
+	CanManage   bool
 }
 
 // ProjectSettingsSPA renders the project-settings SPA shell inside the agents
@@ -25,6 +34,8 @@ templ ProjectSettingsSPA(vm ProjectSettingsSPAVM) {
 				id="app"
 				data-base={ vm.Base }
 				data-project-id={ vm.ProjectID }
+				data-agent-memory={ strconv.FormatBool(vm.AgentMemory) }
+				data-can-manage={ strconv.FormatBool(vm.CanManage) }
 				class="h-full"
 			></div>
 			<script type="module" src={ vm.AssetURL }></script>

@@ -31,7 +31,7 @@ func (s source) ReadPage(ctx context.Context, conn agentmemory.Conn, sc agentmem
 	if path == "" {
 		return nil, fmt.Errorf("%s read-page needs a path", binName)
 	}
-	out, err := s.run(ctx, sc.Dir, env(conn), args("read-page", conn, sc, "--path", path))
+	out, err := s.run(ctx, sc.Dir, env(conn), args("read-page", conn, sc, "--path", path), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +71,7 @@ func (s source) Messages(ctx context.Context, conn agentmemory.Conn, sc agentmem
 	if limit > 0 {
 		cmd = append(cmd, "--limit", strconv.Itoa(limit))
 	}
-	out, err := s.run(ctx, sc.Dir, env(conn), append(cmd, "--json"))
+	out, err := s.run(ctx, sc.Dir, env(conn), append(cmd, "--json"), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func (s source) ForgetSweep(ctx context.Context, conn agentmemory.Conn, sc agent
 	if dryRun {
 		cmd = append(cmd, "--dry-run")
 	}
-	out, err := s.run(ctx, sc.Dir, env(conn), cmd)
+	out, err := s.run(ctx, sc.Dir, env(conn), cmd, nil)
 	if err != nil {
 		return nil, err
 	}

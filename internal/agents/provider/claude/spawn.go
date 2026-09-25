@@ -202,7 +202,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// hand — where a prompt WOULD be positional. TestSpawnArgvMemoryOrder
 	// locks the position. The contribution deliberately adds no
 	// --strict-mcp-config: see TestArgvNeverIsolatesMCP.
-	memContrib, err := provider.MemorySpawnContribution(opt.Instance, provider.TypeClaude)
+	memContrib, err := provider.MemorySpawnContribution(opt.Instance, provider.TypeClaude, opt.Workspace)
 	if err != nil {
 		return nil, err
 	}

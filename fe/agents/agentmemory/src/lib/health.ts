@@ -5,6 +5,7 @@ import type {
   DoctorReport,
   DoctorRow,
   StoreStatus,
+  TrialCheck,
   WatchdogState,
 } from "./types.js";
 
@@ -260,11 +261,13 @@ export function healthFindings(
   store: StoreStatus | undefined,
   collisions?: CollisionCheck,
   watchdog?: WatchdogState,
+  trial?: TrialCheck,
 ): Finding[] {
   const all = [
     ...doctorFindings(doctor),
     contaminationFinding(contamination),
     collisionFinding(collisions),
+    trialFinding(trial),
     watchdogFinding(watchdog),
     zeroLLMFinding(store),
     embeddingFinding(store),
@@ -392,5 +395,35 @@ export function watchdogFinding(w: WatchdogState | undefined): Finding | null {
     level: "ok",
     title: w.restarts === 0 ? "Supervised, with nothing to report" : "Supervised",
     body: watchdogDetail(w),
+  };
+}
+
+// ── per-project trial ────────────────────────────────────────────────
+
+// trialFinding states the per-project trial while it is on.
+//
+// It is not a fault — somebody switched it on deliberately — but it stops
+// capture for every project that has not opted in, and "memory stopped being
+// written here" looks exactly like a missing hook. This report is the place
+// people come to when that happens, so the mode has to be one of the answers
+// it gives. Silent by design is fine; silent AND unexplained is not.
+export function trialFinding(t: TrialCheck | undefined): Finding | null {
+  if (!t?.active) return null;
+  const on = t.projects ?? [];
+  const names = on.length ? on.join(", ") : "one project";
+  const silenced =
+    t.silenced > 0
+      ? ` ${t.silenced} project${t.silenced === 1 ? "" : "s"} left on "follow the agent's setting" ${
+          t.silenced === 1 ? "is" : "are"
+        } neither recording nor recalling while this lasts.`
+      : "";
+  return {
+    id: "project-trial",
+    level: "warn",
+    title: "Agent Memory is being trialled on one project",
+    body:
+      `Only ${names} ${on.length === 1 ? "is" : "are"} switched on.` +
+      silenced +
+      " Nothing already stored is lost; set the trial project back to \u201cfollow the agent\u2019s setting\u201d to end it.",
   };
 }

@@ -46,12 +46,13 @@ describe("ProjectMenu — Agent Memory entry", () => {
     expect(screen.queryByTestId("project-menu-agent-memory")).toBeNull();
   });
 
-  test("links to the panel scoped by wick project id when the feature is on", async () => {
+  test("links into the project's own Agent Memory tab when the feature is on", async () => {
     setAgentMemory(true);
     render(ProjectMenu, { props: baseProps });
     await openMenu();
     const link = screen.getByTestId("project-menu-agent-memory");
-    expect(link.getAttribute("href")).toBe("/tools/agents/agentmemory?project=proj-42");
+    // Inside the project, not the global panel with a filter on it.
+    expect(link.getAttribute("href")).toBe("/tools/agents/projects/proj-42?tab=memory");
     expect(link.textContent).toContain("Agent Memory");
   });
 

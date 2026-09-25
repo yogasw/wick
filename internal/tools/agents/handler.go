@@ -2391,10 +2391,12 @@ func projectSettingsPage(c *tool.Ctx) {
 		}
 	}
 	c.HTML(view.ProjectSettingsSPA(view.ProjectSettingsSPAVM{
-		Layout:    sidebarVM(c, "projects", ""),
-		Base:      c.Base(),
-		ProjectID: id,
-		AssetURL:  spaAssetURL("project-settings"),
+		Layout:      sidebarVM(c, "projects", ""),
+		Base:        c.Base(),
+		ProjectID:   id,
+		AssetURL:    spaAssetURL("project-settings"),
+		AgentMemory: AgentMemoryVisible(c.Context()),
+		CanManage:   AgentMemoryManageable(c.Context()),
 	}))
 }
 

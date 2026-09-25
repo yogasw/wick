@@ -15,7 +15,7 @@
      all — so "" and 0 mean "whatever your config file says", which is why the
      retention block has to spell out that 0 is itself a real setting. */
   import { Button, LabeledInput, NumberInput, Select, TextArea, TextInput, Toggle } from "@wick-fe/common-ui";
-  import Section from "./Section.svelte";
+  import { Section } from "@wick-fe/common-agentmemory";
   import SettingRow from "./SettingRow.svelte";
   import {
     accessWarning,

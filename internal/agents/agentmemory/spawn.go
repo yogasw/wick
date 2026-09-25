@@ -17,7 +17,16 @@ func Init() {
 
 // spawnContribution resolves an instance's selected memory backend and builds
 // the CLI args + env. Backs provider.MemorySpawnContribution.
-func spawnContribution(ins *provider.Instance, t provider.Type) (provider.MemoryContribution, error) {
+//
+// folder is the session's working directory, and the FIRST thing checked: a
+// project that has memory switched off — or one that is not in a trial the
+// host is running — gets no MCP server and no capture hooks at all, which is
+// the honest meaning of "off" (neither recall nor record). See
+// projectpolicy.go for the whole rule.
+func spawnContribution(ins *provider.Instance, t provider.Type, folder string) (provider.MemoryContribution, error) {
+	if !ProjectAllowedForFolder(folder) {
+		return provider.MemoryContribution{}, nil
+	}
 	id := backendID(ins.AgentMemoryProvider)
 	be, ok := Get(id)
 	if !ok {

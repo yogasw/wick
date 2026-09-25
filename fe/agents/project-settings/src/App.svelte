@@ -2,6 +2,7 @@
   import { ToastHost } from "@wick-fe/common-ui";
   import ProjectSettingsForm from "$lib/components/ProjectSettingsForm.svelte";
   import SubAgentsTab from "$lib/components/SubAgentsTab.svelte";
+  import AgentMemoryTab from "$lib/components/AgentMemoryTab.svelte";
   import SaveStatus from "$lib/components/SaveStatus.svelte";
   import type { SaveStatus as SaveStatusValue } from "$lib/autosave.js";
 
@@ -16,6 +17,15 @@
   const projectID = getProjectID();
   const base = getBase();
 
+  /* Agent Memory's two facts, inlined by the Go shell the way data-base is:
+     whether the feature is on for this reader at all, and whether they may
+     MANAGE it. Read here so the tab is right on the first paint — a door to
+     a feature that is off, or that this person cannot open, is not shown
+     (PLAN §22.1, §23.3). */
+  const el = document.getElementById("app");
+  const memoryVisible = (el?.dataset.agentMemory ?? "") === "true";
+  const memoryManageable = (el?.dataset.canManage ?? "") === "true";
+
   /* Back goes where the operator came from — the sessions list remembers
      whether it was showing cards or rows, and a hard link to /sessions
      would throw that away. Only same-origin history is trusted; opened
@@ -29,8 +39,19 @@
     window.location.href = `${base}/sessions`;
   }
 
-  type Tab = "general" | "subagents";
-  let tab = $state<Tab>("general");
+  type Tab = "general" | "subagents" | "memory";
+
+  /* The project's "⋯" menu links straight to ?tab=memory, so the entry lands
+     the reader INSIDE the project rather than on the global panel. An
+     unknown or unavailable tab falls back to General instead of showing an
+     empty page. */
+  function initialTab(): Tab {
+    const want = new URLSearchParams(window.location.search).get("tab");
+    if (want === "subagents") return "subagents";
+    if (want === "memory" && memoryVisible) return "memory";
+    return "general";
+  }
+  let tab = $state<Tab>(initialTab());
 
   // A project that does not exist yet has nothing to scope roles to, so
   // the tab strip only appears once the project has been created.
@@ -78,6 +99,16 @@
           <button type="button" class={tabClass(tab === "subagents")} onclick={() => (tab = "subagents")}>
             Sub-agents
           </button>
+          {#if memoryVisible}
+            <button
+              type="button"
+              class={tabClass(tab === "memory")}
+              onclick={() => (tab = "memory")}
+              data-testid="tab-memory"
+            >
+              Agent Memory
+            </button>
+          {/if}
         </nav>
         <div class="ml-auto">
           <SaveStatus status={saveStatus} onRetry={() => retry()} />
@@ -89,6 +120,8 @@
   <main class="page-col px-6 py-6">
     {#if isNew}
       <ProjectSettingsForm {projectID} {base} />
+    {:else if tab === "memory" && memoryVisible}
+      <AgentMemoryTab {projectID} {base} canManage={memoryManageable} />
     {:else if tab === "general"}
       <ProjectSettingsForm
         {projectID}

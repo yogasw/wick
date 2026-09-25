@@ -32,10 +32,14 @@ import (
 // at, so the panel reads exactly what the agents write.
 const mcpPath = "/mcp"
 
-// briefingRecentPages is how many recent pages one briefing carries. The
-// detail panel shows a short list, not a page browser — that is the Wiki
-// tab's job — and the backend caps this at 100 anyway.
-const briefingRecentPages = 10
+// briefingRecentPages is how many recent pages one briefing carries.
+//
+// Raised from 10 when the project view landed (PLAN §22): that view IS a page
+// browser — it lists a project's memory as cards you can open and edit — and
+// ten pages is not a project's memory, it is a teaser. The backend caps the
+// parameter at 100; fifty is a real list without making one briefing a page
+// dump. The Projects tab still shows only its first few (see Projects.svelte).
+const briefingRecentPages = 50
 
 // ProjectBriefing reads one project's counters via `memory_briefing`.
 //

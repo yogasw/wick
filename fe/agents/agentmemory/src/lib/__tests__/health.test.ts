@@ -9,6 +9,7 @@ import {
   healthVerdict,
   levelClasses,
   zeroLLMFinding,
+  trialFinding,
 } from "../health.js";
 import type { DoctorReport, StoreStatus } from "../types.js";
 
@@ -278,5 +279,30 @@ describe("collisionFinding", () => {
 
   test("no check at all yields no finding rather than a fabricated one", () => {
     expect(collisionFinding(undefined)).toBeNull();
+  });
+});
+
+describe("trialFinding", () => {
+  test("nothing is said when no project has opted in", () => {
+    expect(trialFinding(undefined)).toBeNull();
+    expect(trialFinding({ active: false, silenced: 0 })).toBeNull();
+  });
+
+  // The mode is deliberate, so it is a warning and not an error — but it has
+  // to be ON the page people come to when memory stopped being written,
+  // because from inside a silenced project it looks exactly like a broken
+  // hook.
+  test("a running trial names who is on and how many went quiet", () => {
+    const f = trialFinding({ active: true, projects: ["kasir"], silenced: 40 });
+    expect(f?.level).toBe("warn");
+    expect(f?.body).toContain("kasir");
+    expect(f?.body).toContain("40 projects");
+    // Nobody should read this and think their memory was deleted.
+    expect(f?.body).toContain("Nothing already stored is lost");
+  });
+
+  test("a trial with nothing left to silence does not invent a count", () => {
+    const f = trialFinding({ active: true, projects: ["only"], silenced: 0 });
+    expect(f?.body).not.toContain("0 project");
   });
 });

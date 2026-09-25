@@ -203,7 +203,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// operand appended at the very end (and `resume <id>` just before it), so
 	// anything that carries a value must land ahead of both. Here is ahead of
 	// both. TestSpawnerArgvMemoryBeforePrompt locks that.
-	memContrib, err := provider.MemorySpawnContribution(opt.Instance, provider.TypeCodex)
+	memContrib, err := provider.MemorySpawnContribution(opt.Instance, provider.TypeCodex, opt.Workspace)
 	if err != nil {
 		return nil, err
 	}

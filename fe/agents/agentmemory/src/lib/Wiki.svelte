@@ -12,8 +12,8 @@
      one of them (PLAN §13.2.1, §20.2). So the tab reads the section the
      consolidator already wrote, and says so when a page has none. */
   import { Button, Select, TextInput } from "@wick-fe/common-ui";
-  import Section from "./Section.svelte";
-  import BlockedState from "./BlockedState.svelte";
+  import { Section } from "@wick-fe/common-agentmemory";
+  import { BlockedState } from "@wick-fe/common-agentmemory";
   import { blockedBy } from "./format.js";
   import {
     frontmatterRows,

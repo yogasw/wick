@@ -111,16 +111,15 @@
       </a>
 
       {#if agentMemory}
-        <!-- Opens the Agent Memory panel scoped to THIS project. The link
-             carries the wick project id, never a scope name: the backend
-             resolves id → memory bucket with the same function that writes
-             the project's .ai-memory.toml, so the panel cannot drift from
-             what the agents actually wrote (PLAN §22.2). Reading the panel is
-             all this entry grants — managing it stays admin-only. -->
+        <!-- Lands INSIDE the project, next to its other settings — not on
+             the global panel with a filter on it. The store-wide view still
+             exists at /agentmemory; this entry is about one project, so it
+             opens the project's own Agent Memory tab (PLAN §22). Reading is
+             all it grants — editing stays admin-only. -->
         <a
           role="menuitem"
           data-testid="project-menu-agent-memory"
-          href={`${base}/agentmemory?project=${project.id}`}
+          href={`${base}/projects/${project.id}?tab=memory`}
           class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-black-800 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700"
         >
           <!-- The store glyph the Agent Memory panel titles itself with, so

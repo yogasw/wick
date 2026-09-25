@@ -13,6 +13,7 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -224,6 +225,54 @@ func AgentMemoryAutostart(logf func(string)) { agentmemory.Autostart(logf) }
 // AnyAgentMemoryAutostart reports whether at least one backend will start at
 // boot — stored autostart, or forced by an instance that uses it.
 func AnyAgentMemoryAutostart() bool { return agentmemory.AnyAutostartEnabled() }
+
+// agentMemoryPolicyStore backs agentmemory.ProjectPolicyStore with wick's
+// project registry. It lives here for the same reason the config store does:
+// the agentmemory package must not import the registry, and this file is the
+// one place that already knows both.
+type agentMemoryPolicyStore struct{}
+
+func (agentMemoryPolicyStore) Policy(id string) (string, bool) {
+	if globalMgr == nil || globalMgr.Registry() == nil {
+		return "", false
+	}
+	p, ok := globalMgr.Registry().Project(id)
+	if !ok {
+		return "", false
+	}
+	return p.Meta.AgentMemory, true
+}
+
+func (agentMemoryPolicyStore) SetPolicy(id, value string) error {
+	if globalMgr == nil || globalMgr.Registry() == nil {
+		return fmt.Errorf("agents: the project registry is not ready")
+	}
+	p, ok := globalMgr.Registry().Project(id)
+	if !ok {
+		return fmt.Errorf("agents: no project with id %s", id)
+	}
+	meta := p.Meta
+	meta.AgentMemory = value
+	_, err := globalMgr.UpdateProject(context.Background(), id, meta)
+	return err
+}
+
+func (agentMemoryPolicyStore) All() map[string]string {
+	out := map[string]string{}
+	if globalMgr == nil || globalMgr.Registry() == nil {
+		return out
+	}
+	for id, p := range globalMgr.Registry().Projects() {
+		if v := p.Meta.AgentMemory; v != "" {
+			out[id] = v
+		}
+	}
+	return out
+}
+
+// WireAgentMemoryProjectPolicy hands the per-project switch its storage.
+// Called at boot, after the registry exists.
+func WireAgentMemoryProjectPolicy() { agentmemory.SetProjectPolicyStore(agentMemoryPolicyStore{}) }
 
 // AgentMemoryStartWatchdog begins supervising the Agent Memory daemons: a
 // dead one is started, a wedged one is restarted, and both are counted where

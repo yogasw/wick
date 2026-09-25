@@ -59,6 +59,11 @@ func RegisterRoutes(r tool.Router, cfg ConfigStore) {
 	// Which wick project maps to which memory bucket, for the project-scoped
 	// entry into the panel (PLAN §22).
 	r.GET("/agentmemory/project-scope", projectScopeHandler)
+	// Whether a project uses Agent Memory at all. Reading it is open —
+	// it is a statement about the project, and the project's own tab shows
+	// it — while changing it is managing (PLAN §23.2).
+	r.GET("/agentmemory/project-policy", projectPolicyHandler)
+	r.POST("/agentmemory/project-policy", saveProjectPolicyHandler)
 
 	for _, be := range List() {
 		be := be
@@ -93,6 +98,9 @@ func RegisterRoutes(r tool.Router, cfg ConfigStore) {
 
 		// Wiki, Handoffs and the retention sweep (handlers_wiki.go).
 		registerWikiRoutes(r, be, p)
+		// Editing one project's memory — write, delete, checkpoints,
+		// restore (manage.go). Admin only, all four.
+		registerManageRoutes(r, be, p)
 	}
 }
 
@@ -230,6 +238,46 @@ func projectScopeHandler(c *tool.Ctx) {
 		Project:   sc.Project,
 		Source:    string(src),
 	})
+}
+
+// projectPolicyHandler answers whether a project uses Agent Memory, and why.
+func projectPolicyHandler(c *tool.Ctx) {
+	if !allowedRead(c) {
+		return
+	}
+	id := strings.TrimSpace(c.Query("project"))
+	if id == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "project is required"})
+		return
+	}
+	c.JSON(http.StatusOK, PolicyFor(id))
+}
+
+// saveProjectPolicyHandler stores one project's setting. Admin only: it
+// decides whether agents working in that project record and recall anything
+// at all.
+func saveProjectPolicyHandler(c *tool.Ctx) {
+	if !allowedWrite(c) {
+		return
+	}
+	id := strings.TrimSpace(c.Form("project"))
+	if id == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "project is required"})
+		return
+	}
+	value := strings.TrimSpace(c.Form("value"))
+	if err := SetProjectPolicy(id, value); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errNoPolicyStore) {
+			status = http.StatusNotImplemented
+		}
+		c.JSON(status, map[string]string{"error": err.Error()})
+		return
+	}
+	// Answered with the resolved policy, not an "ok": turning one project
+	// on changes what every OTHER project does, and the page has to be able
+	// to say so immediately.
+	c.JSON(http.StatusOK, PolicyFor(id))
 }
 
 // ── daemon control + overview ────────────────────────────────────────
@@ -515,6 +563,9 @@ func healthHandler(be *Backend, c *tool.Ctx) {
 	// it answers a question no backend can: two wick projects whose folders
 	// land in one ai-memory project (PLAN §18.1).
 	rep.Collisions = RunCollisionCheck()
+	// Same reason: a deliberate mode that stops capture everywhere else has
+	// to be visible next to the checks that look for capture having stopped.
+	rep.Trial = RunTrialCheck()
 	c.JSON(http.StatusOK, rep)
 }
 

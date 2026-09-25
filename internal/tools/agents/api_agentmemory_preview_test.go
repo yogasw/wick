@@ -13,7 +13,7 @@ import (
 // pairs onto a single line each.
 func TestAgentMemoryConfigPreview(t *testing.T) {
 	var sawToggle bool
-	provider.SetMemorySpawn(func(ins *provider.Instance, _ provider.Type) (provider.MemoryContribution, error) {
+	provider.SetMemorySpawn(func(ins *provider.Instance, _ provider.Type, _ string) (provider.MemoryContribution, error) {
 		sawToggle = ins.UseAgentMemory
 		return provider.MemoryContribution{
 			Env:  []string{"AI_MEMORY_SERVER_URL=http://127.0.0.1:49374"},
@@ -37,7 +37,7 @@ func TestAgentMemoryConfigPreview(t *testing.T) {
 // TestAgentMemoryConfigPreviewUnresolvedIsEmpty: a backend that cannot resolve
 // renders nothing rather than a half-built command.
 func TestAgentMemoryConfigPreviewUnresolvedIsEmpty(t *testing.T) {
-	provider.SetMemorySpawn(func(*provider.Instance, provider.Type) (provider.MemoryContribution, error) {
+	provider.SetMemorySpawn(func(*provider.Instance, provider.Type, string) (provider.MemoryContribution, error) {
 		return provider.MemoryContribution{}, errUnresolved{}
 	})
 	t.Cleanup(func() { provider.SetMemorySpawn(nil) })
