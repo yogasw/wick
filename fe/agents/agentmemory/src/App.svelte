@@ -26,7 +26,11 @@
     fetchProjectPolicies,
     fetchProjectScope,
     fetchCheckpoints,
+    fetchExternal,
     fetchSettings,
+    mintExternalToken,
+    revokeExternalToken,
+    setExternal,
     install,
     deletePage,
     previewBackfill,
@@ -45,6 +49,7 @@
   import type {
     AutostartLock,
     BackendInfo,
+    ExternalState,
     Checkpoint,
     BackfillReport,
     Handoff,
@@ -227,6 +232,14 @@
   let confirmAssistant = $state(false);
   let confirmSweep = $state(false);
 
+  // External access. `mintedToken` holds a freshly created token for as long
+  // as it is on screen and nowhere else — the server never sends it again, so
+  // there is nothing to re-read and nothing to persist.
+  let external = $state<ExternalState | null>(null);
+  let mintedToken = $state("");
+  let externalBusy = $state(false);
+  let confirmRevoke = $state(false);
+
   const ov = $derived<Overview | null>(overviews[activeId] ?? null);
   const active = $derived(backends.find((b) => b.id === activeId));
   const activeTab = $derived(TABS.find((t) => t.id === tab) ?? TABS[0]);
@@ -293,6 +306,11 @@
     storedSettings = null;
     sweep = null;
     sweepError = "";
+    external = null;
+    // Switching backend drops a token still on screen: it belongs to the
+    // backend it was minted for, and leaving it up would attach it to the
+    // wrong one.
+    mintedToken = "";
     void refresh();
     void loadTab(tab);
   }
@@ -373,6 +391,7 @@
     // whichever one the daemon resolves on its own.
     if ((t === "wiki" || t === "handoffs") && !projects) await loadProjects();
     if (t === "settings" && !form) await loadSettings();
+    if (t === "settings" && canManage && !external) await loadExternal();
   }
 
   function selectTab(t: Tab): void {
@@ -631,6 +650,69 @@
     }
   }
 
+  // ── external access ────────────────────────────────────────────────
+  //
+  // Four calls, admin only. The state is re-read after every write so the
+  // switch, the token badge and the refusal list always describe the server
+  // rather than what the page assumed the click did.
+
+  async function loadExternal(): Promise<void> {
+    const id = activeId;
+    if (!id || !canManage) return;
+    try {
+      external = (await run(fetchExternal(base, id))).external;
+    } catch (e) {
+      toastError("Could not read the external-access settings", errText(e));
+    }
+  }
+
+  async function doSetExternal(on: boolean): Promise<void> {
+    const id = activeId;
+    if (!id) return;
+    externalBusy = true;
+    try {
+      external = (await run(setExternal(base, id, on))).external;
+      toastOk(on ? "External access is on" : "External access is off",
+        on ? "A caller with the access token can now read this store from outside wick." : "Nothing outside wick can reach the store.");
+    } catch (e) {
+      toastError("Could not change external access", errText(e));
+      await loadExternal();
+    } finally {
+      externalBusy = false;
+    }
+  }
+
+  async function doMintToken(): Promise<void> {
+    const id = activeId;
+    if (!id) return;
+    externalBusy = true;
+    try {
+      const res = await run(mintExternalToken(base, id));
+      external = res.external;
+      mintedToken = res.token;
+    } catch (e) {
+      toastError("Could not create an access token", errText(e));
+    } finally {
+      externalBusy = false;
+    }
+  }
+
+  async function doRevokeToken(): Promise<void> {
+    const id = activeId;
+    if (!id) return;
+    externalBusy = true;
+    try {
+      external = (await run(revokeExternalToken(base, id))).external;
+      mintedToken = "";
+      toastOk("Token revoked", "External access is closed and the old token no longer works.");
+    } catch (e) {
+      toastError("Could not revoke the token", errText(e));
+      await loadExternal();
+    } finally {
+      externalBusy = false;
+    }
+  }
+
   function setField<K extends keyof Settings>(key: K, value: Settings[K]): void {
     if (!form) return;
     form = { ...form, [key]: value };
@@ -886,6 +968,13 @@
         {sweepError}
         {advanced}
         {canManage}
+        {external}
+        {mintedToken}
+        {externalBusy}
+        onSetExternal={(v) => void doSetExternal(v)}
+        onMintToken={() => void doMintToken()}
+        onRevokeToken={() => (confirmRevoke = true)}
+        onDismissToken={() => (mintedToken = "")}
         onField={setField}
         onSave={() => void doSaveSettings()}
         onReset={() => (form = storedSettings ? { ...storedSettings } : null)}
@@ -934,6 +1023,21 @@
     setField("capture_assistant", true);
   }}
   onCancel={() => (confirmAssistant = false)}
+/>
+
+<!-- Revoking closes the door AND invalidates the key, so anything already
+     using the token stops working the moment this is confirmed. -->
+<ConfirmDialog
+  open={confirmRevoke}
+  title="Revoke the access token?"
+  body="Any script or agent using it stops being able to reach this store immediately, and external access is switched off. A new token can be created afterwards, but the old value cannot be recovered."
+  confirmLabel="Revoke token"
+  destructive={true}
+  onConfirm={() => {
+    confirmRevoke = false;
+    void doRevokeToken();
+  }}
+  onCancel={() => (confirmRevoke = false)}
 />
 
 <ConfirmDialog

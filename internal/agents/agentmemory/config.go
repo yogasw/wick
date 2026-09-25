@@ -37,6 +37,22 @@ type ConfigStore interface {
 	// SaveSettings persists them. Autostart is written as given; the lock
 	// is derived at read time, never stored (see Settings.AutostartLocked).
 	SaveSettings(ctx context.Context, id string, s Settings) error
+
+	// ExternalEnabled reports the per-backend external-access toggle —
+	// whether something outside wick may reach this store through wick's
+	// own authenticated route (external.go). Default OFF: a host that did
+	// not ask for it gets nothing.
+	ExternalEnabled(id string) bool
+	SetExternalEnabled(ctx context.Context, id string, on bool) error
+	// ExternalToken is the STORED token, i.e. still encrypted. The caller
+	// decrypts it; nothing here ever hands the panel a plaintext one.
+	ExternalToken(id string) string
+	// SetExternalToken persists tok, encrypting it the way every other
+	// wick secret is stored. "" clears it.
+	SetExternalToken(ctx context.Context, id, tok string) error
+	// ExternalAllowed is the whole gate in one call: the master switch AND
+	// the per-backend toggle, mirroring airouter's ExternalAPIAllowed.
+	ExternalAllowed(id string) bool
 }
 
 // Settings are the daemon-level knobs — everything that belongs to the store

@@ -35,7 +35,28 @@ type fakeStore struct {
 	set     Settings
 	saved   *Settings
 	saveErr error
+	// The external-access half: the switch and the stored token. Both zero
+	// by default, which is the production default too — a store nobody
+	// opened refuses every external call.
+	external bool
+	extToken string
 }
+
+func (f *fakeStore) ExternalEnabled(string) bool { return f.external }
+
+func (f *fakeStore) SetExternalEnabled(_ context.Context, _ string, on bool) error {
+	f.external = on
+	return nil
+}
+
+func (f *fakeStore) ExternalToken(string) string { return f.extToken }
+
+func (f *fakeStore) SetExternalToken(_ context.Context, _, tok string) error {
+	f.extToken = tok
+	return nil
+}
+
+func (f *fakeStore) ExternalAllowed(id string) bool { return f.enabled && f.ExternalEnabled(id) }
 
 func (f *fakeStore) Enabled() bool                      { return f.enabled }
 func (f *fakeStore) ReadAllowed(context.Context) bool   { return f.viewer || f.admin }
@@ -295,6 +316,14 @@ func TestEndpointsAreOnTheRightSide(t *testing.T) {
 		"POST " + p + "/compact":          false,
 		"POST " + p + "/handoffs/cancel":  false,
 		"POST " + p + "/forget-sweep":     false,
+
+		// External access. Reading the state is managing too: it names the
+		// URL the store answers on and lists who has been refused, which is
+		// reconnaissance for anyone who should not be reaching it at all.
+		"GET " + p + "/external":         false,
+		"POST " + p + "/external":        false,
+		"POST " + p + "/external/token":  false,
+		"POST " + p + "/external/revoke": false,
 
 		// Editing this project's memory (PLAN §22). All four are writes
 		// in the sense that matters — they change, remove or roll back

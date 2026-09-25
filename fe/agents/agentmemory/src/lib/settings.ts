@@ -6,7 +6,7 @@
 // invisible at the moment you flip them and obvious a month later, so the
 // screen carries the cost next to the control (PLAN §13.5 point 2).
 
-import type { Settings, Status } from "./types.js";
+import type { ExternalRejection, ExternalState, Settings, Status } from "./types.js";
 
 // emptySettings is the all-unset form: every field at the value that means
 // "leave it to the backend". It is the shape the tab falls back to before a
@@ -120,6 +120,69 @@ export function accessWarning(s: Settings): AccessWarning | null {
     body: `${named} may reach this daemon. A bearer token is set, so a caller needs it — keep that token out of anything shared, and remove hosts you no longer use.`,
   };
 }
+
+// ── B2. reaching the store from outside wick ─────────────────────────
+
+// EXTERNAL_WARNING is what the operator reads BEFORE the click, not after.
+//
+// The switch is one word long and the thing behind it is not: this store
+// holds what agents saw inside client sessions — prompts, file contents,
+// identifiers, whatever went past during support work — and turning this on
+// makes all of it reachable from off this machine by anyone holding the
+// token. Saying so next to the control is the whole mitigation.
+export const EXTERNAL_WARNING =
+  "This store holds what agents saw inside client sessions — prompts, tool calls and session summaries from every project on this host. " +
+  "Turning this on lets anything that can reach wick read it with the access token. The daemon itself stays on loopback; wick checks the token and forwards.";
+
+// externalStatus is the one-line reading of where the switch stands. The
+// middle state is the one worth naming: a token exists but nothing is open
+// yet, which is the normal halfway point of setting this up.
+export function externalStatus(ext: ExternalState | null): string {
+  if (!ext) return "Loading…";
+  if (!ext.has_token) return "Closed. No access token exists, so every external request is refused.";
+  if (!ext.enabled) return "Closed. A token exists but the switch is off — nothing outside wick can reach the store.";
+  return "Open. A caller holding the access token can read this store from outside wick.";
+}
+
+// externalPathsNote says what is actually reachable, because "open" does not
+// mean the whole daemon is. The backend's own web UI is deliberately not on
+// the list and never should be.
+export function externalPathsNote(ext: ExternalState | null): string {
+  const paths = ext?.paths ?? [];
+  if (paths.length === 0) return "";
+  return `Only ${paths.join(" and ")} are forwarded. The backend's own web UI is not exposed.`;
+}
+
+// externalExample is the call to copy. Concrete beats a description: the
+// commonest failure here is a script pointed at the daemon's own port, which
+// is not reachable and never will be.
+export function externalExample(ext: ExternalState | null): string {
+  const url = ext?.url ?? "";
+  if (!url) return "";
+  return `curl -H "Authorization: Bearer <token>" ${url}/api/v1/projects`;
+}
+
+// REJECTION_REASONS turns the server's machine token into the sentence that
+// answers "why can't my script reach it?".
+const REJECTION_REASONS: Record<string, string> = {
+  "external-access-off": "the switch was off",
+  "no-token-created": "no access token existed",
+  "no-bearer-sent": "no Authorization: Bearer header was sent",
+  "wrong-token": "the token did not match",
+  "path-not-exposed": "that path is not exposed externally",
+};
+
+// rejectionLine is one refused request as a person reads it.
+export function rejectionLine(r: ExternalRejection): string {
+  const why = REJECTION_REASONS[r.reason] ?? r.reason;
+  return `${r.method} ${r.path} from ${r.client_ip} — refused (${r.status}) because ${why}.`;
+}
+
+// TOKEN_SHOWN_ONCE is the warning that rides the minted token. It is true —
+// nothing stores the plaintext anywhere the page can read it again — so it
+// has to be said at the moment the value is on screen.
+export const TOKEN_SHOWN_ONCE =
+  "Copy it now. This is the only time it is shown — wick stores it encrypted and never displays it again. A lost one is replaced by creating another.";
 
 // ── C. capture & privacy ─────────────────────────────────────────────
 

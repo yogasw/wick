@@ -71,6 +71,16 @@ func RegisterRoutes(r tool.Router, cfg ConfigStore) {
 	for _, be := range List() {
 		be := be
 		p := "/agentmemory/" + be.Desc.ID
+		id := be.Desc.ID
+
+		// Back the external-access route's three decisions with the config
+		// store: may anyone outside reach it, which token do they present,
+		// and which token does the daemon itself want (external.go). Getters
+		// rather than values — a revocation has to bite immediately, and the
+		// daemon's token changes whenever the settings are saved.
+		be.Mgr.SetExternalAllowed(func() bool { return cfg.ExternalAllowed(id) })
+		be.Mgr.SetExternalToken(func() string { return resolveSecret(cfg.ExternalToken(id)) })
+		be.Mgr.SetDaemonToken(func() string { return resolveSecret(cfg.Settings(id).AuthToken) })
 
 		// Daemon control — managing, so admin only.
 		r.POST(p+"/start", manage(be, startHandler))
@@ -99,6 +109,8 @@ func RegisterRoutes(r tool.Router, cfg ConfigStore) {
 		r.POST(p+"/backfill/run", manage(be, backfillRun))
 		r.POST(p+"/compact", manage(be, compactHandler))
 
+		// Reaching this store from outside wick (external_handlers.go).
+		registerExternalRoutes(r, be, p)
 		// Wiki, Handoffs and the retention sweep (handlers_wiki.go).
 		registerWikiRoutes(r, be, p)
 		// Editing one project's memory — write, delete, checkpoints,
@@ -330,8 +342,8 @@ type Overview struct {
 	// why, and whether it has given up. On the payload the Overview
 	// already polls, because a watchdog nobody can see is one nobody can
 	// tell apart from a broken one (PLAN §25.3 guard 3).
-	Watchdog      WatchdogState `json:"watchdog"`
-	Store         *StoreStatus  `json:"store,omitempty"`
+	Watchdog WatchdogState `json:"watchdog"`
+	Store    *StoreStatus  `json:"store,omitempty"`
 	// StoreError explains an unreadable store, and StoreReason names the
 	// cause in one machine-checkable token when wick knows it.
 	StoreError  string `json:"store_error,omitempty"`

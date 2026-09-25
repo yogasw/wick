@@ -130,6 +130,72 @@ func (agentMemoryConfigStore) SaveSettings(ctx context.Context, id string, s age
 	return set("agentmemory_"+id+"_tuning", string(blob))
 }
 
+// ── external access ──────────────────────────────────────────────────
+//
+// Two rows per backend: the switch and the token a caller must present. Both
+// default to off/absent, so a host that never opened the Agent Memory panel
+// refuses every external request without anyone having configured anything.
+
+func (agentMemoryConfigStore) ExternalEnabled(id string) bool {
+	return cfgBool("agentmemory_"+id+"_external", false)
+}
+
+func (agentMemoryConfigStore) SetExternalEnabled(ctx context.Context, id string, on bool) error {
+	if globalConfigs == nil {
+		return nil
+	}
+	return globalConfigs.SetOwned(ctx, "agents", "agentmemory_"+id+"_external", boolStr(on))
+}
+
+// ExternalToken returns the row as stored — encrypted. Decryption happens in
+// the agentmemory package, at the moment the token is compared, so a
+// plaintext one is never held anywhere a response could pick it up.
+func (agentMemoryConfigStore) ExternalToken(id string) string {
+	if globalConfigs == nil {
+		return ""
+	}
+	return globalConfigs.GetOwned("agents", "agentmemory_"+id+"_external_token")
+}
+
+// SetExternalToken encrypts before writing, the same treatment the daemon's
+// own bearer token gets in SaveSettings. "" clears the row.
+func (agentMemoryConfigStore) SetExternalToken(ctx context.Context, id, tok string) error {
+	if globalConfigs == nil {
+		return nil
+	}
+	tok = strings.TrimSpace(tok)
+	if tok != "" {
+		tok = encryptSecretValue(tok)
+	}
+	return globalConfigs.SetOwned(ctx, "agents", "agentmemory_"+id+"_external_token", tok)
+}
+
+// ExternalAllowed is the gate the proxy reads: master switch AND the
+// per-backend toggle, so disabling Agent Memory closes the route too.
+func (agentMemoryConfigStore) ExternalAllowed(id string) bool {
+	return AgentMemoryEnabled() && agentMemoryConfigStore{}.ExternalEnabled(id)
+}
+
+// AgentMemoryExternalAllowed reports whether backend id may be reached from
+// off this machine — the host-allowlist exemption in server.go consults it
+// for a non-loopback caller on the /agentmemory/<id> subtree, the same way
+// AirouterExternalAllowed is consulted next door.
+func AgentMemoryExternalAllowed(id string) bool {
+	return agentMemoryConfigStore{}.ExternalAllowed(id)
+}
+
+// AgentMemoryBackendIDs lists the registered backends, so server.go can mount
+// one external route per backend without importing the registry itself.
+func AgentMemoryBackendIDs() []string { return agentmemory.IDs() }
+
+// AgentMemoryExternalProxy is the authenticated external route for backend
+// id, mounted at the wick root. The daemon stays on loopback; this is the
+// only way in from outside.
+func AgentMemoryExternalProxy(id string) http.Handler { return agentmemory.ExternalProxy(id) }
+
+// AgentMemoryExternalMountPath is where that route lives.
+func AgentMemoryExternalMountPath(id string) string { return agentmemory.ExternalMountPath(id) }
+
 func boolStr(b bool) string {
 	if b {
 		return "true"
@@ -374,6 +440,10 @@ func EnsureAgentMemoryConfigs(ctx context.Context, cfgs *configs.Service) error 
 				Description: "Start the " + be.Desc.DisplayName + " daemon when wick boots."},
 			entity.Config{Key: "agentmemory_" + id + "_tuning", Type: "text", Hidden: true,
 				Description: "Daemon tuning for " + be.Desc.DisplayName + ", as JSON. Applied as environment on launch."},
+			entity.Config{Key: "agentmemory_" + id + "_external", Type: "bool", Hidden: true,
+				Description: "Whether " + be.Desc.DisplayName + " may be reached from outside wick, through wick's authenticated route. Off by default."},
+			entity.Config{Key: "agentmemory_" + id + "_external_token", Type: "text", Hidden: true,
+				Description: "Encrypted bearer token an external caller must present to reach " + be.Desc.DisplayName + ". Minted and revoked from the Agent Memory panel."},
 		)
 	}
 	return cfgs.EnsureOwned(ctx, "agents", rows...)

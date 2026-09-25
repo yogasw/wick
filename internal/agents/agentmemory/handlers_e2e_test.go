@@ -405,6 +405,14 @@ var (
 		required: []string{"handoff_id", "cancelled"},
 		optional: []string{"state"},
 	}
+	// ExternalState. `has_token` rather than the token: the plaintext one
+	// exists in exactly one response, the mint, and never appears here.
+	externalShape = shape{
+		required: []string{"enabled", "has_token", "url", "paths", "allowed_total", "rejected_total", "recent"},
+	}
+	externalRejectionShape = shape{
+		required: []string{"time_ms", "method", "path", "client_ip", "reason", "status"},
+	}
 	// settingsFields is the FE's Settings type — its own six plus every
 	// field of Tuning, which it intersects with.
 	settingsFields = []string{
@@ -536,6 +544,72 @@ func TestDashboardPayloadsMatchTheFrontend(t *testing.T) {
 		if tok, _ := saved["auth_token"].(string); tok != secretMask {
 			t.Errorf("auth_token came back as %q — it must be masked on every read", tok)
 		}
+	})
+
+	t.Run("external access round-trip", func(t *testing.T) {
+		// Read: off, no token, and a URL to call. The panel draws the whole
+		// block from this one payload.
+		w, body := call(t, routes, "GET "+p+"/external", nil)
+		mustOK(t, "external", w, body)
+		assertShape(t, "ExternalStateResponse", body, shape{required: []string{"external"}})
+		ext := sub(t, "ExternalStateResponse", body, "external")
+		assertShape(t, "ExternalState", ext, externalShape)
+		if ext["enabled"] != false || ext["has_token"] != false {
+			t.Errorf("a fresh backend must be closed: %v", ext)
+		}
+		// recent must be [] and not null — the FE maps over it.
+		list(t, "ExternalState", ext, "recent")
+
+		// Mint: the one response that carries a token, plus the state.
+		w, body = call(t, routes, "POST "+p+"/external/token", nil)
+		mustOK(t, "mint", w, body)
+		assertShape(t, "ExternalTokenResponse", body, shape{required: []string{"token", "external"}})
+		tok, _ := body["token"].(string)
+		if !strings.HasPrefix(tok, externalTokenPrefix) {
+			t.Errorf("minted token %q does not carry the prefix the FE tells the user to look for", tok)
+		}
+		assertShape(t, "ExternalState", sub(t, "ExternalTokenResponse", body, "external"), externalShape)
+
+		// Reading it back says a token exists and never repeats it.
+		w, body = call(t, routes, "GET "+p+"/external", nil)
+		mustOK(t, "external after mint", w, body)
+		if sub(t, "ExternalStateResponse", body, "external")["has_token"] != true {
+			t.Error("has_token is false right after minting")
+		}
+		if strings.Contains(w.Body.String(), tok) {
+			t.Fatal("the stored token was echoed back to the page")
+		}
+
+		// The switch and the revoke answer the same block.
+		for _, route := range []string{"POST " + p + "/external", "POST " + p + "/external/revoke"} {
+			args := url.Values(nil)
+			if strings.HasSuffix(route, "/external") {
+				args = url.Values{"enabled": {"true"}}
+			}
+			w, body = call(t, routes, route, args)
+			mustOK(t, route, w, body)
+			assertShape(t, "ExternalStateResponse", body, shape{required: []string{"external"}})
+			assertShape(t, "ExternalState", sub(t, "ExternalStateResponse", body, "external"), externalShape)
+		}
+	})
+
+	t.Run("a refused external request is reported field for field", func(t *testing.T) {
+		be, ok := Get(e2eID)
+		if !ok {
+			t.Fatal("the e2e backend is not registered")
+		}
+		be.Mgr.ext = externalStats{}
+		callExternal(ExternalProxy(e2eID), http.MethodGet,
+			ExternalMountPath(e2eID)+"/api/v1/projects", "agmem_nope")
+
+		w, body := call(t, routes, "GET "+p+"/external", nil)
+		mustOK(t, "external", w, body)
+		ext := sub(t, "ExternalStateResponse", body, "external")
+		rows := list(t, "ExternalState", ext, "recent")
+		if len(rows) != 1 {
+			t.Fatalf("got %d recorded refusals, want 1", len(rows))
+		}
+		assertShape(t, "ExternalRejection", rows[0].(map[string]any), externalRejectionShape)
 	})
 
 	t.Run("projects carry their briefings", func(t *testing.T) {

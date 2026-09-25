@@ -24,6 +24,10 @@
     CAPTURE_ASSISTANT_WARNING,
     CAPTURE_MODE_SCOPE_NOTE,
     CAPTURE_MODES,
+    EXTERNAL_WARNING,
+    externalExample,
+    externalPathsNote,
+    externalStatus,
     isDirty,
     PROJECT_STRATEGIES,
     PROMPT_CAPTURE_NOTE,
@@ -32,11 +36,13 @@
     providerMode,
     RERANKER_NOTE,
     restartNote,
+    rejectionLine,
     retentionSummary,
+    TOKEN_SHOWN_ONCE,
     ZERO_LLM_NOTE,
   } from "./settings.js";
   import { MANAGE_ADMIN_ONLY } from "./format.js";
-  import type { AutostartLock, Settings, SweepReport, TestResult } from "./types.js";
+  import type { AutostartLock, ExternalState, Settings, SweepReport, TestResult } from "./types.js";
 
   type Props = {
     form: Settings | null;
@@ -56,6 +62,18 @@
     // bar and every write button are left out and the controls are inert
     // (PLAN §23.2, §23.3).
     canManage: boolean;
+    // ── external access ──────────────────────────────────────────────
+    // Optional, with closed defaults: a page that has not read the state
+    // yet renders the block as shut rather than as open.
+    external?: ExternalState | null;
+    // mintedToken is non-empty ONLY for as long as a freshly created token
+    // is on screen. Nothing stores it — the server never sends it again.
+    mintedToken?: string;
+    externalBusy?: boolean;
+    onSetExternal?: (next: boolean) => void;
+    onMintToken?: () => void;
+    onRevokeToken?: () => void;
+    onDismissToken?: () => void;
     onField: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
     onSave: () => void;
     onReset: () => void;
@@ -79,6 +97,13 @@
     sweepError,
     advanced,
     canManage,
+    external = null,
+    mintedToken = "",
+    externalBusy = false,
+    onSetExternal = () => {},
+    onMintToken = () => {},
+    onRevokeToken = () => {},
+    onDismissToken = () => {},
     onField,
     onSave,
     onReset,
@@ -260,6 +285,83 @@
         </SettingRow>
       </div>
     </Section>
+
+    <!-- ── B2. reaching the store from outside wick ───────────────── -->
+    <!-- Admin only, and LEFT OUT for everyone else rather than disabled:
+         the sticky bar above already carries the one line explaining who
+         may manage this (PLAN §23.3). -->
+    {#if !readOnly}
+      <Section title="External access" scope="this daemon" note={EXTERNAL_WARNING}>
+        <div class="divide-y divide-white-300 dark:divide-navy-600">
+          <SettingRow label="Reachable from outside wick" note={externalStatus(external)} id="external-note">
+            <div class="flex justify-start sm:justify-end">
+              <Toggle
+                checked={external?.enabled ?? false}
+                disabled={externalBusy || !(external?.has_token ?? false)}
+                label="Let callers outside wick reach this store with an access token"
+                describedBy="external-note"
+                onChange={(v) => onSetExternal(v)}
+              />
+            </div>
+          </SettingRow>
+
+          <SettingRow
+            label="Access token"
+            note={(external?.has_token ?? false)
+              ? "A token exists. It is stored encrypted and is never shown again — create a new one to replace it, or revoke to close this off entirely."
+              : "No token yet. Create one to be able to turn the switch on; every external request is refused until then."}
+          >
+            <div class="flex flex-wrap items-center gap-2 sm:justify-end">
+              <Button variant="secondary" size="md" disabled={externalBusy} onclick={onMintToken}>
+                {(external?.has_token ?? false) ? "Create new token" : "Create token"}
+              </Button>
+              {#if external?.has_token}
+                <Button variant="ghost" size="md" disabled={externalBusy} onclick={onRevokeToken}>Revoke</Button>
+              {/if}
+            </div>
+          </SettingRow>
+
+          {#if mintedToken}
+            <!-- The one moment the plaintext token exists on screen. -->
+            <div class="bg-cau-100 px-5 py-3 dark:bg-navy-800">
+              <p class="text-xs font-medium text-cau-400">Your new access token</p>
+              <code
+                class="mt-2 block break-all rounded-lg border border-cau-400 bg-white-100 px-3 py-2 font-mono text-xs text-black-900 dark:bg-navy-700 dark:text-white-100"
+                data-testid="minted-token">{mintedToken}</code
+              >
+              <p class="mt-2 text-[0.6875rem] leading-relaxed text-black-800 dark:text-black-600">{TOKEN_SHOWN_ONCE}</p>
+              <div class="mt-2">
+                <Button variant="ghost" size="sm" onclick={onDismissToken}>I have copied it</Button>
+              </div>
+            </div>
+          {/if}
+
+          {#if external?.url}
+            <SettingRow label="Address" note={externalPathsNote(external)}>
+              <code class="block break-all font-mono text-[0.6875rem] text-black-800 dark:text-black-600">
+                {externalExample(external)}
+              </code>
+            </SettingRow>
+          {/if}
+
+          {#if external && (external.rejected_total > 0 || external.allowed_total > 0)}
+            <SettingRow
+              label="Refused requests"
+              note={`${external.allowed_total} forwarded, ${external.rejected_total} refused since wick started. A refusal is shown here so "why can't my script reach it?" has an answer.`}
+            >
+              <div class="flex flex-col items-start gap-1 sm:items-end">
+                {#each external.recent.slice(0, 5) as r (r.time_ms + r.path + r.reason)}
+                  <p class="text-[0.6875rem] text-neg-400">{rejectionLine(r)}</p>
+                {/each}
+                {#if external.recent.length === 0}
+                  <p class="text-[0.6875rem] text-black-700 dark:text-black-600">Nothing refused yet.</p>
+                {/if}
+              </div>
+            </SettingRow>
+          {/if}
+        </div>
+      </Section>
+    {/if}
 
     <!-- ── C. capture & privacy ───────────────────────────────────── -->
     <Section

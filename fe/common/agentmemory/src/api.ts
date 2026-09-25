@@ -21,6 +21,7 @@ import type {
   Scope,
   RestoreResponse,
   SearchResponse,
+  ExternalState,
   Settings,
   Status,
   SweepResponse,
@@ -105,6 +106,41 @@ export type SettingsResponse = {
   default_port?: number;
   restart_pending?: boolean;
 };
+
+// ── external access ──────────────────────────────────────────────────
+//
+// Four calls behind one switch. All four are admin-only server side; the tab
+// leaves the controls out entirely for a viewer rather than rendering them
+// dead, so these are never reached from a viewer's page either.
+
+// ExternalResponse is what the state read, the switch and the revoke answer.
+export type ExternalResponse = { external: ExternalState };
+
+// ExternalTokenResponse is the mint — the ONE response that carries a
+// plaintext token. It is never readable again, so the page has to show it
+// once and say so.
+export type ExternalTokenResponse = { token: string; external: ExternalState };
+
+export const fetchExternal = (base: string, id: string) =>
+  apiGetE<ExternalResponse>(`${base}/agentmemory/${id}/external`);
+
+// setExternal flips the switch. Turning it on with no token stored is refused
+// by the server — an open route with no token answers 403 to everything,
+// which looks like a broken feature rather than a closed one.
+export const setExternal = (base: string, id: string, on: boolean) =>
+  apiPostE<ExternalResponse>(`${base}/agentmemory/${id}/external?enabled=${on ? "true" : "false"}`);
+
+// mintExternalToken issues a new token, replacing any previous one — so this
+// is also how a leaked token is rotated.
+export const mintExternalToken = (base: string, id: string) =>
+  apiPostE<ExternalTokenResponse>(`${base}/agentmemory/${id}/external/token`);
+
+// revokeExternalToken clears the token AND closes the switch. Both, because
+// either leftover state is worse than closed: an open route with no token is
+// a 403 machine, and a token behind a closed switch is a credential nobody
+// remembers is still valid.
+export const revokeExternalToken = (base: string, id: string) =>
+  apiPostE<ExternalResponse>(`${base}/agentmemory/${id}/external/revoke`);
 
 export const fetchSettings = (base: string, id: string) =>
   apiGetE<SettingsResponse>(`${base}/agentmemory/${id}/settings`);

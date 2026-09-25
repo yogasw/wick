@@ -262,6 +262,40 @@ export type TestResult = {
   store_error?: string;
 };
 
+// ── external access ──────────────────────────────────────────────────
+
+// ExternalRejection is one request wick turned away at the external route.
+// The reason is the point of recording it: a bare 403 cannot tell an operator
+// whether the switch is off, no token was created, or their script is sending
+// the wrong one.
+export type ExternalRejection = {
+  time_ms: number;
+  method: string;
+  path: string;
+  client_ip: string;
+  reason: string;
+  status: number;
+};
+
+// ExternalState is the external-access block of the Settings tab.
+//
+// There is no token field, and that is deliberate: the plaintext token exists
+// in exactly one response — the mint — and is never readable again. This says
+// only whether one exists.
+export type ExternalState = {
+  enabled: boolean;
+  has_token: boolean;
+  // url is the base an outside caller uses, built from the request so it is
+  // the address the operator is demonstrably reaching wick on.
+  url: string;
+  // paths are the daemon subtrees the route exposes. The backend's own web UI
+  // is not among them and must not be.
+  paths: string[];
+  allowed_total: number;
+  rejected_total: number;
+  recent: ExternalRejection[];
+};
+
 // ── panel data ───────────────────────────────────────────────────────
 
 // DataFailure is the shape every panel-data endpoint can answer with INSTEAD

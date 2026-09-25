@@ -2821,6 +2821,17 @@ func NewServer() *Server {
 		r.Handle(base+"/", authMidd.RequireAdmin(airouter.RootProxy(id)))
 	}
 
+	// Agent Memory's external route, one per backend, mounted at the wick
+	// root and UNAUTHENTICATED by the session middleware — a script off this
+	// machine has no wick cookie, and the route's own bearer check is the
+	// gate (internal/agents/agentmemory/external.go). The memory daemon
+	// itself never leaves loopback; this is the only way to it from outside,
+	// it is OFF by default per backend, and with the switch off every call
+	// here is refused.
+	for _, id := range agentstool.AgentMemoryBackendIDs() {
+		r.Handle(agentstool.AgentMemoryExternalMountPath(id)+"/", agentstool.AgentMemoryExternalProxy(id))
+	}
+
 	// Routers emit some root-absolute /_next/* asset URLs (fonts/CSS/chunks)
 	// assembled at runtime that the body rewriter can't catch, so they land at
 	// the wick root. Serve them from the active router's dashboard proxy (the
@@ -3041,6 +3052,15 @@ func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Agent Memory's external route, for the same reason and under the
+		// same condition: exempt only while an admin has explicitly exposed
+		// that backend, so a tunnel/public host reaches the route and its
+		// own bearer check decides. Off (the default) means no exemption at
+		// all — the route is not even reachable by name.
+		if agentMemoryExternalExempt(r.URL.Path, r.Host) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		allowed := collectAllowedHosts(s.configsSvc.AppURL(), s.configsSvc.AllowedOrigins())
 		if len(allowed) == 0 {
 			next.ServeHTTP(w, r)
@@ -3111,6 +3131,23 @@ func airouterAPIExempt(path, host string) bool {
 			return true
 		}
 		return agentstool.AirouterExternalAllowed(id)
+	}
+	return false
+}
+
+// agentMemoryExternalExempt reports whether the request targets an Agent
+// Memory external route (/agentmemory/<id>) that must bypass the host
+// allowlist. Unlike the AI-router case there is no loopback carve-out: agents
+// on this machine talk to the memory daemon DIRECTLY on 127.0.0.1, so nothing
+// local needs this route, and the exemption exists only for the off-machine
+// caller an admin deliberately allowed.
+func agentMemoryExternalExempt(path, host string) bool {
+	for _, id := range agentstool.AgentMemoryBackendIDs() {
+		prefix := agentstool.AgentMemoryExternalMountPath(id)
+		if path != prefix && !strings.HasPrefix(path, prefix+"/") {
+			continue
+		}
+		return agentstool.AgentMemoryExternalAllowed(id)
 	}
 	return false
 }

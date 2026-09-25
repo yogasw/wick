@@ -78,6 +78,14 @@ type Manager struct {
 	// daemon comes back within half a minute and nothing says why
 	// (PLAN §25.3 guard 1). Cleared by an explicit start.
 	operatorStop atomic.Bool
+
+	// external* back the authenticated route that lets something outside
+	// wick reach this daemon (external.go). All three are nil until
+	// RegisterRoutes wires them, and every gate reads nil as closed.
+	externalAllowed func() bool
+	externalToken   func() string
+	daemonToken     func() string
+	ext             externalStats
 }
 
 func newManager(d Descriptor) *Manager {
@@ -163,12 +171,25 @@ func (m *Manager) BaseURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d", m.BoundPort())
 }
 
-// SetLaunchOptions records the knobs the next start uses (store location, web
-// UI opt-in). Port is resolved at start and ignored here. Takes effect on the
-// next start — a running daemon keeps the options it was started with.
+// SetLaunchOptions records the knobs the next start uses. Port is resolved at
+// start and ignored here. Takes effect on the next start — a running daemon
+// keeps the options it was started with.
+//
+// It rebuilds the struct rather than assigning it so Port cannot be smuggled
+// in, and EVERY other field has to be carried across explicitly. It used to
+// carry only DataDir and EnableWeb, which silently dropped the bearer token
+// and the whole tuning block on the floor: ApplySettings decrypted the token
+// at the last moment, handed it over, and the daemon was started without it.
+// Thirty tuning fields in the Settings tab did nothing, and nothing said so —
+// the same failure as a Save that answers OK and persists nothing.
 func (m *Manager) SetLaunchOptions(opt LaunchOptions) {
 	m.mu.Lock()
-	m.opt = LaunchOptions{DataDir: strings.TrimSpace(opt.DataDir), EnableWeb: opt.EnableWeb}
+	m.opt = LaunchOptions{
+		DataDir:   strings.TrimSpace(opt.DataDir),
+		EnableWeb: opt.EnableWeb,
+		AuthToken: opt.AuthToken,
+		Tuning:    opt.Tuning,
+	}
 	m.mu.Unlock()
 }
 
