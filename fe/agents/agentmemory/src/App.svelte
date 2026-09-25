@@ -58,7 +58,7 @@
     Tab,
     TestResult,
   } from "$lib/types.js";
-  import { dotFor } from "$lib/format.js";
+  import { dotFor, errText } from "$lib/format.js";
   import { projectKey, scopeKeyOf } from "$lib/projects.js";
   import type { HandoffCell } from "$lib/projects.js";
   import OverviewTab from "$lib/Overview.svelte";
@@ -224,7 +224,7 @@
       }
       await refreshAll();
     } catch (e) {
-      toastError("Could not list Agent Memory backends", String(e));
+      toastError("Could not list Agent Memory backends", errText(e));
     } finally {
       loaded = true;
       loading = false;
@@ -287,7 +287,7 @@
       await fn();
       toastOk("Done", okMsg);
     } catch (e) {
-      toastError(failMsg, String(e));
+      toastError(failMsg, errText(e));
     } finally {
       busy = false;
       await refresh();
@@ -312,7 +312,7 @@
       else toastError("No answer", test.error ?? "The daemon did not answer.");
     } catch (e) {
       test = null;
-      toastError("Test failed", String(e));
+      toastError("Test failed", errText(e));
     } finally {
       busy = false;
     }
@@ -351,7 +351,7 @@
       scopeError = "";
     } catch (e) {
       scope = null;
-      scopeError = String(e);
+      scopeError = errText(e);
     }
   }
 
@@ -368,7 +368,7 @@
       }
       await loadHandoffCounts(projects.projects ?? []);
     } catch (e) {
-      toastError("Could not list projects", String(e));
+      toastError("Could not list projects", errText(e));
     } finally {
       projectsLoading = false;
     }
@@ -391,7 +391,7 @@
             : { state: "ok", count: (res.handoffs ?? []).length };
           handoffCells = { ...handoffCells, [key]: cell };
         } catch (e) {
-          handoffCells = { ...handoffCells, [key]: { state: "error", message: String(e) } };
+          handoffCells = { ...handoffCells, [key]: { state: "error", message: errText(e) } };
         }
       }),
     );
@@ -403,7 +403,7 @@
     try {
       health = await run(fetchHealth(base, id));
     } catch (e) {
-      toastError("Could not run the health checks", String(e));
+      toastError("Could not run the health checks", errText(e));
     } finally {
       healthLoading = false;
     }
@@ -443,7 +443,7 @@
         }
       }
     } catch (e) {
-      backfillError = String(e);
+      backfillError = errText(e);
     } finally {
       busy = false;
     }
@@ -458,7 +458,7 @@
       if (res.error) toastError("Compaction failed", res.error);
       else toastOk("Compacted", res.report?.output ?? "The database was rewritten.");
     } catch (e) {
-      toastError("Compaction failed", String(e));
+      toastError("Compaction failed", errText(e));
     } finally {
       busy = false;
       await refresh();
@@ -484,7 +484,7 @@
     try {
       wikiRes = await run(searchWiki(base, id, q, scopeOf(wikiScope)));
     } catch (e) {
-      toastError("Search failed", String(e));
+      toastError("Search failed", errText(e));
     } finally {
       wikiSearching = false;
     }
@@ -506,7 +506,7 @@
       if (res.error) wikiPageError = res.hint ? `${res.error} — ${res.hint}` : res.error;
       else wikiPage = res.page ?? null;
     } catch (e) {
-      wikiPageError = String(e);
+      wikiPageError = errText(e);
     } finally {
       wikiPageLoading = false;
     }
@@ -525,12 +525,12 @@
       // a mailbox that fails must not delay the batons.
       const [h, m] = await Promise.all([
         run(fetchHandoffs(base, id, scope)),
-        run(fetchMessages(base, id, scope, "inbox")).catch((e) => ({ error: String(e) }) as MessagesResponse),
+        run(fetchMessages(base, id, scope, "inbox")).catch((e) => ({ error: errText(e) }) as MessagesResponse),
       ]);
       handoffRes = h;
       messages = m;
     } catch (e) {
-      toastError("Could not read handoffs", String(e));
+      toastError("Could not read handoffs", errText(e));
     } finally {
       handoffLoading = false;
     }
@@ -563,7 +563,7 @@
       else if (out.kind === "gone") toastWarn(out.title, out.body);
       else toastError(out.title, out.body);
     } catch (e) {
-      const out = cancelOutcome(null, String(e));
+      const out = cancelOutcome(null, errText(e));
       toastError(out.title, out.body);
     } finally {
       cancelling = "";
@@ -583,7 +583,7 @@
       settingsLock = res.autostart_lock;
       defaultPort = res.default_port ?? 0;
     } catch (e) {
-      toastError("Could not read settings", String(e));
+      toastError("Could not read settings", errText(e));
     }
   }
 
@@ -605,7 +605,7 @@
       toastOk("Saved", restartPending ? "Restart the daemon to apply them." : "They apply on the next start.");
       await refresh();
     } catch (e) {
-      toastError("Could not save settings", String(e));
+      toastError("Could not save settings", errText(e));
     } finally {
       saving = false;
     }
@@ -638,7 +638,7 @@
         }
       }
     } catch (e) {
-      sweepError = String(e);
+      sweepError = errText(e);
     } finally {
       busy = false;
     }

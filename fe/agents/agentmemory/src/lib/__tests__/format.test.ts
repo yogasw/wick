@@ -3,6 +3,7 @@ import {
   badgeFor,
   captureChip,
   dotFor,
+  errText,
   formatBytes,
   formatCount,
   humanDuration,
@@ -201,5 +202,34 @@ describe("reasons", () => {
   test("an unnamed reason keeps the raw error rather than inventing advice", () => {
     expect(reasonHint("", "connection refused")).toBe("connection refused");
     expect(reasonTitle("")).toBe("The store could not be read");
+  });
+});
+
+describe("errText", () => {
+  // The exact shape that reached the panel on 2026-09-25: Effect's rendered
+  // failure, with a minified bundle frame glued to the end.
+  test("an Effect FiberFailure is reduced to the sentence", () => {
+    const e = new Error(
+      '(FiberFailure) Error: ai-memory not installed: exec: "ai-memory": executable file not found in $PATH at https://support-assistant.qiscus.io/tools/agents/workflow/agentmemory/assets/index-CUGFQL-J.js:23:113516',
+    );
+    expect(errText(e)).toBe(
+      'ai-memory not installed: exec: "ai-memory": executable file not found in $PATH',
+    );
+  });
+
+  test("the server's own sentence wins over the thrown message", () => {
+    expect(errText({ detail: "the web API is disabled", message: "Error: 503" })).toBe(
+      "the web API is disabled",
+    );
+  });
+
+  test("a stack is cut at the first line", () => {
+    expect(errText(new Error("boom\n    at foo (bar.js:1:2)"))).toBe("boom");
+  });
+
+  // Something has to be said. A blank line where a reason belongs reads as a
+  // UI that lost the answer, not as a failure with no message.
+  test("an empty failure still says something", () => {
+    expect(errText(new Error(""))).toContain("said nothing");
   });
 });

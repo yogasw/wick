@@ -391,3 +391,31 @@ export function reasonWord(reason: WatchdogState["last_reason"]): string {
       return "acted";
   }
 }
+
+// ── errors a person has to read ──────────────────────────────────────
+
+// errText turns whatever a failed call threw into one sentence.
+//
+// Effect rejects with a FiberFailure whose toString() carries the whole
+// rendered cause — "(FiberFailure) Error: …" followed by a stack frame
+// pointing at a minified bundle. Putting String(e) on screen therefore shows
+// the reader a line number in index-CUGFQL-J.js, which tells them nothing and
+// makes a handled, expected condition look like a crash.
+//
+// So: prefer the server's own sentence (APIError.detail), fall back to the
+// message, and cut everything a stack adds.
+export function errText(e: unknown): string {
+  const anyE = e as { detail?: unknown; message?: unknown } | null;
+  let s =
+    typeof anyE?.detail === "string" && anyE.detail
+      ? anyE.detail
+      : typeof anyE?.message === "string" && anyE.message
+        ? anyE.message
+        : String(e);
+  s = s.replace(/^\(FiberFailure\)\s*/, "").replace(/^Error:?\s*/, "");
+  s = s.split("\n")[0];
+  // " at https://host/assets/index-abc.js:23:113516" — a bundle frame that
+  // survived into the message itself.
+  s = s.replace(/\s+at\s+https?:\/\/\S+$/, "");
+  return s.trim() || "The request failed and said nothing about why.";
+}
