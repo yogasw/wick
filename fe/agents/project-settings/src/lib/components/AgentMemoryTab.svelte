@@ -21,9 +21,11 @@
     errText,
     fetchBackends,
     fetchCheckpoints,
+    fetchHealth,
     fetchProjects,
     fetchProjectPolicy,
     fetchProjectScope,
+    ImportPage,
     previewBackfill,
     ProjectMemory,
     runBackfill,
@@ -36,6 +38,7 @@
     type BackfillReport,
     type BackfillRequestEcho,
     type Checkpoint,
+    type HealthReport,
     type Page,
     type ProjectPolicy,
     type ProjectScope,
@@ -95,6 +98,47 @@
   let policy = $state<ProjectPolicy | null>(null);
   let policyBusy = $state(false);
 
+  /* The import lives on its own page rather than in a block under the
+     reading surface (Yoga, 2026-09-26). It is a VIEW of this tab, in the
+     same query-param style the tab strip itself uses — ?tab=memory&view=
+     import — so a link to it survives a reload and the browser's Back
+     button goes where it looks like it goes. */
+  type View = "memory" | "import";
+  let view = $state<View>(
+    new URLSearchParams(window.location.search).get("view") === "import" ? "import" : "memory",
+  );
+
+  function goView(next: View): void {
+    view = next;
+    const url = new URL(window.location.href);
+    if (next === "import") url.searchParams.set("view", "import");
+    else url.searchParams.delete("view");
+    window.history.pushState({}, "", url);
+    if (next === "import") void loadHealth();
+  }
+
+  // Doctor's per-harness rows for THIS project — the decomposition behind
+  // the import's count. It is the Health tab's own call, scoped, rather than
+  // a second way to ask the same question.
+  let health = $state<HealthReport | null>(null);
+  let healthLoading = $state(false);
+  let healthError = $state("");
+
+  async function loadHealth(): Promise<void> {
+    if (!backendID || !scope) return;
+    healthLoading = true;
+    healthError = "";
+    try {
+      const res = await run(fetchHealth(base, backendID, scoped));
+      if (res.error) healthError = res.hint ? `${res.error} — ${res.hint}` : res.error;
+      else health = res;
+    } catch (e) {
+      healthError = errText(e);
+    } finally {
+      healthLoading = false;
+    }
+  }
+
   const backendID = $derived(backend?.id ?? "");
   const scoped = $derived(scope ? { workspace: scope.workspace, project: scope.project } : {});
   const briefing = $derived(
@@ -139,6 +183,9 @@
         return;
       }
       await loadProjects();
+      // Opened cold on the import view (a link, a reload): its data has to
+      // arrive without a navigation to trigger it.
+      if (view === "import") void loadHealth();
     } catch (e) {
       scopeError = errText(e);
     } finally {
@@ -358,6 +405,24 @@
   }
 </script>
 
+{#if view === "import"}
+  <ImportPage
+    {scope}
+    {canManage}
+    {busy}
+    {health}
+    {healthLoading}
+    {healthError}
+    {backfill}
+    {backfillReq}
+    {backfillError}
+    onPreview={() => void doBackfill(true)}
+    onRun={() => void doBackfill(false)}
+    onForce={() => void doBackfill(false, true)}
+    onRefresh={() => void loadHealth()}
+    onBack={() => goView("memory")}
+  />
+{:else}
 <ProjectMemory
   {scope}
   {scopeError}
@@ -373,9 +438,7 @@
   {backfill}
   {backfillReq}
   {backfillError}
-  onPreviewBackfill={() => void doBackfill(true)}
-  onRunBackfill={() => void doBackfill(false)}
-  onForceBackfill={() => void doBackfill(false, true)}
+  onOpenImport={() => goView("import")}
   {openPath}
   {page}
   {pageLoading}
@@ -406,3 +469,4 @@
   onRefresh={() => void load()}
   onGoGlobal={goGlobal}
 />
+{/if}

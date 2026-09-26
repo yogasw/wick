@@ -29,11 +29,7 @@
   import Sparkbars from "./Sparkbars.svelte";
   import { blockedBy, MANAGE_ADMIN_ONLY } from "./format.js";
   import {
-    BACKFILL_EXPLAINER,
-    BACKFILL_SELECTED_NOTE,
-    backfillCapNote,
     backfillCapWarning,
-    backfillConfirmBody,
     backfillSummary,
     BRIEFING_UNAVAILABLE,
     scopeCaveat,
@@ -102,13 +98,10 @@
     backfill?: BackfillReport | null;
     backfillReq?: BackfillRequestEcho | null;
     backfillError?: string;
-    onPreviewBackfill?: () => void;
-    onRunBackfill?: () => void;
-    /* A FORCED import re-reads sessions the store already has. Optional and
-       separate from onRunBackfill: a surface that does not want to offer the
-       duplicating run simply leaves it out, and the button is absent rather
-       than present and refused. */
-    onForceBackfill?: () => void;
+    /* onOpenImport navigates to the import page. Absent on a surface that
+       does not offer the import at all, in which case the card is gone
+       rather than present and dead. */
+    onOpenImport?: () => void;
     /* The open page and its editor state, owned by App so a re-render never
        drops a draft. */
     openPath: string;
@@ -156,9 +149,7 @@
     backfill = null,
     backfillReq = null,
     backfillError = "",
-    onPreviewBackfill,
-    onRunBackfill,
-    onForceBackfill,
+    onOpenImport,
     openPath,
     page,
     pageLoading,
@@ -192,20 +183,12 @@
 
   let newPath = $state("");
   let newPathTouched = $state(false);
-  let confirmImport = $state(false);
-  let confirmForce = $state(false);
   let confirmDiscard = $state(false);
-  // Which of the two below-the-fold panes is showing. Activity is the
-  // default because it is the answer; importing is a thing you do.
-  let pane = $state<"activity" | "import">("activity");
   let pageNo = $state(1);
 
-  // canImport is false on a surface that did not wire the import — the
-  // section is then absent rather than present and dead.
-  const canImport = $derived(Boolean(onPreviewBackfill && onRunBackfill));
+  // canImport is false on a surface that did not wire the import.
+  const canImport = $derived(Boolean(onOpenImport));
   const capWarning = $derived(backfillCapWarning(backfill ?? undefined, backfillReq));
-  const capNote = $derived(backfillCapNote(backfillReq));
-  const importScope = $derived(scope ? `${scope.workspace}/${scope.project}` : "");
 
   const heading = $derived(scopeHeading(scope));
   const caveat = $derived(scope ? scopeCaveat(scope.source) : null);
@@ -264,16 +247,6 @@
   function discardAndClose(): void {
     confirmDiscard = false;
     onClose();
-  }
-
-  function confirmAndImport(): void {
-    confirmImport = false;
-    onRunBackfill?.();
-  }
-
-  function confirmAndForce(): void {
-    confirmForce = false;
-    onForceBackfill?.();
   }
 
   function addPage(): void {
@@ -546,27 +519,11 @@
          rather than between its halves: the top of this page is "what does
          this project remember", and neither of these is that. -->
     <Section
-      title={pane === "activity" ? "Activity" : "Import earlier sessions"}
+      title="Activity"
       scope="this project only"
-      note={pane === "activity"
-        ? "Page writes per day over the last 30 days, from this project's own pages — and the two windows the backend reports for this project. Nothing store-wide is mixed in."
-        : BACKFILL_EXPLAINER}
+      note="Page writes per day over the last 30 days, from this project's own pages — and the two windows the backend reports for this project. Nothing store-wide is mixed in."
     >
-      {#snippet actions()}
-        {#if canImport}
-          <div class="flex items-center gap-1 rounded-lg bg-white-200 p-0.5 dark:bg-navy-800" data-testid="pane-switch">
-            <Button variant={pane === "activity" ? "secondary" : "ghost"} size="sm" onclick={() => (pane = "activity")}>
-              Activity
-            </Button>
-            <Button variant={pane === "import" ? "secondary" : "ghost"} size="sm" onclick={() => (pane = "import")}>
-              Import
-            </Button>
-          </div>
-        {/if}
-      {/snippet}
-
-      {#if pane === "activity"}
-        {#if briefing}
+      {#if briefing}
           <div class="px-5 py-4">
             <div class="flex items-baseline justify-between gap-3">
               <p class="text-sm text-black-900 dark:text-white-100">
@@ -639,52 +596,43 @@
             {BRIEFING_UNAVAILABLE}
           </p>
         {/if}
-      {:else}
-        <div class="px-5 py-4">
-          {#if canManage}
-            <div class="flex flex-wrap items-center gap-2">
-              <Button variant="secondary" size="sm" disabled={busy || !scope} onclick={() => onPreviewBackfill?.()}>
-                Preview import
-              </Button>
-              <Button variant="danger" size="sm" disabled={busy || !scope} onclick={() => (confirmImport = true)}>
-                Import now
-              </Button>
-              {#if onForceBackfill}
-                <Button variant="danger" size="sm" disabled={busy || !scope} onclick={() => (confirmForce = true)}>
-                  Force re-import
-                </Button>
-              {/if}
-            </div>
-            <p class="mt-2 text-[0.6875rem] leading-relaxed text-black-700 dark:text-black-600" data-testid="backfill-selected-note">
-              {BACKFILL_SELECTED_NOTE}
-            </p>
-            {#if capNote}
-              <p class="mt-1 text-[0.6875rem] leading-relaxed text-black-700 dark:text-black-600" data-testid="backfill-cap-note">
-                {capNote}
-              </p>
-            {/if}
-          {:else}
-            <p class="text-xs leading-relaxed text-black-700 dark:text-black-600">{MANAGE_ADMIN_ONLY}</p>
-          {/if}
-
-          {#if backfillError}
-            <p class="mt-3 text-xs leading-relaxed text-rose-700 dark:text-rose-300" data-testid="backfill-error">
-              {backfillError}
-            </p>
-          {:else if backfill}
-            <p class="mt-3 text-xs leading-relaxed text-black-900 dark:text-white-100" data-testid="backfill-summary">
-              <span class="font-medium">{backfill.dry_run ? "Preview" : "Imported"}:</span>
-              {backfillSummary(backfill)}
-            </p>
-            {#if capWarning}
-              <p class="mt-1 text-xs leading-relaxed text-rose-700 dark:text-rose-300" data-testid="backfill-cap">
-                {capWarning}
-              </p>
-            {/if}
-          {/if}
-        </div>
-      {/if}
     </Section>
+
+    <!-- Import: one line and a way in, nothing more. It is rare, one of its
+         buttons duplicates data irreversibly, and showing its working needs
+         room — so it has a page of its own rather than a block under the
+         reading surface (Yoga, 2026-09-26: "mending halaman terpisah import
+         ini jangan di bawah gini, jadi lebih flexibel"). What stays here is
+         the outcome of a run just made, because that is the one thing you
+         come back to this tab wanting to see. -->
+    {#if canImport}
+      <section
+        class="rounded-xl border border-white-300 bg-white-100 px-5 py-4 dark:border-navy-600 dark:bg-navy-700"
+        data-testid="import-link-card"
+      >
+        <div class="flex flex-wrap items-baseline justify-between gap-3">
+          <p class="min-w-0 text-xs leading-relaxed text-black-800 dark:text-black-600">
+            Sessions that ran in this project before capture was switched on are still on disk, and can be brought in.
+          </p>
+          <Button variant="secondary" size="sm" onclick={() => onOpenImport?.()}>Import earlier sessions →</Button>
+        </div>
+        {#if backfillError}
+          <p class="mt-3 text-xs leading-relaxed text-rose-700 dark:text-rose-300" data-testid="backfill-error">
+            {backfillError}
+          </p>
+        {:else if backfill}
+          <p class="mt-3 text-xs leading-relaxed text-black-900 dark:text-white-100" data-testid="backfill-summary">
+            <span class="font-medium">{backfill.dry_run ? "Preview" : "Imported"}:</span>
+            {backfillSummary(backfill)}
+          </p>
+          {#if capWarning}
+            <p class="mt-1 text-xs leading-relaxed text-rose-700 dark:text-rose-300" data-testid="backfill-cap">
+              {capWarning}
+            </p>
+          {/if}
+        {/if}
+      </section>
+    {/if}
   {/if}
 </div>
 
@@ -741,22 +689,4 @@
   onCancel={() => (confirmDiscard = false)}
 />
 
-<ConfirmDialog
-  open={confirmImport}
-  title="Import this project's history?"
-  body={importScope ? backfillConfirmBody(importScope, false) : ""}
-  confirmLabel="Import now"
-  destructive={true}
-  onConfirm={confirmAndImport}
-  onCancel={() => (confirmImport = false)}
-/>
 
-<ConfirmDialog
-  open={confirmForce}
-  title="Force a re-import?"
-  body={importScope ? backfillConfirmBody(importScope, true) : ""}
-  confirmLabel="Force re-import"
-  destructive={true}
-  onConfirm={confirmAndForce}
-  onCancel={() => (confirmForce = false)}
-/>

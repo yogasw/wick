@@ -24,6 +24,7 @@ export { default as ProjectMemory } from "./ProjectMemory.svelte";
 export { default as PageEditor } from "./PageEditor.svelte";
 export { default as Section } from "./Section.svelte";
 export { default as BlockedState } from "./BlockedState.svelte";
+export { default as ImportPage } from "./ImportPage.svelte";
 
 // The scope-agnostic analytics blocks. They take rows and know nothing about
 // whose numbers those are, which is what lets the store-wide Analytics tab and

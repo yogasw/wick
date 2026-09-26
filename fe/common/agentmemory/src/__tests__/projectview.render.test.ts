@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/svelte";
 
 import ProjectMemory from "../ProjectMemory.svelte";
 import PageEditor from "../PageEditor.svelte";
+import ImportPage from "../ImportPage.svelte";
 import type { Checkpoint, ProjectScope } from "../types.js";
 
 /* The project view as someone meets it (PLAN §22).
@@ -136,121 +137,268 @@ describe("ProjectView — about ONE project", () => {
   });
 });
 
-/* Importing the history that predates capture, from the project's own tab.
+/* The import left the tab. What stays is one line, a way in, and the outcome
+   of a run just made — the only part of it you come back to this tab for. */
 
-   This is where an empty project is discovered, so this is where the fix has
-   to be reachable — and the fix writes into the store, so the dangerous half
-   is pinned: Preview never asks, Import always does, and a viewer sees
-   neither button. */
-describe("ProjectView — importing earlier sessions", () => {
-  const withImport = (over: object = {}) => ({
-    ...(viewProps as object),
-    canManage: true,
-    onPreviewBackfill: noop,
-    onRunBackfill: noop,
-    ...over,
-  });
-
-  // Import lives behind the switcher beside Activity, so every test here
-  // opens that pane first — the same click the user makes.
-  const openImport = async (over: object = {}) => {
-    render(ProjectMemory, { props: withImport(over) as never });
-    await fireEvent.click(screen.getByText("Import"));
-  };
-
-  test("the card explains what an import actually reads before offering one", async () => {
-    await openImport();
-    expect(screen.getByText(/one-time bootstrap, not a sync/i)).toBeDefined();
-    expect(screen.getByTestId("backfill-selected-note").textContent).toMatch(/session files/i);
-  });
-
-  test("a preview runs straight away — it writes nothing", async () => {
-    const onPreviewBackfill = vi.fn();
-    await openImport({ onPreviewBackfill });
-    await fireEvent.click(screen.getByText("Preview import"));
-    expect(onPreviewBackfill).toHaveBeenCalledTimes(1);
-  });
-
-  test("an import is confirmed first, and the confirmation names the cost", async () => {
-    const onRunBackfill = vi.fn();
-    await openImport({ onRunBackfill });
-
-    await fireEvent.click(screen.getByText("Import now"));
-    expect(onRunBackfill).not.toHaveBeenCalled();
-    // The question names the bucket being written to, and what the run costs.
-    expect(screen.getByText(/into wick\/kasir-8c28230d/)).toBeDefined();
-    expect(screen.getByText(/nothing is duplicated/)).toBeDefined();
-
-    // Two "Import now" now exist — the card's button and the dialog's — and
-    // the dialog's is the one that commits.
-    const buttons = screen.getAllByText("Import now");
-    await fireEvent.click(buttons[buttons.length - 1]);
-    expect(onRunBackfill).toHaveBeenCalledTimes(1);
-  });
-
-  // Force is the one control that duplicates observations, so it is absent
-  // unless the surface wired it, and it still asks first.
-  test("a forced re-import is offered only when wired, and says what it costs", async () => {
-    const onForceBackfill = vi.fn();
-    await openImport({ onForceBackfill });
-    await fireEvent.click(screen.getByText("Force re-import"));
-    expect(onForceBackfill).not.toHaveBeenCalled();
-    expect(screen.getByText(/observations do NOT/)).toBeDefined();
-
-    const buttons = screen.getAllByText("Force re-import");
-    await fireEvent.click(buttons[buttons.length - 1]);
-    expect(onForceBackfill).toHaveBeenCalledTimes(1);
-  });
-
-  test("no force button on a surface that did not wire one", async () => {
-    await openImport();
+describe("ProjectMemory — the way to the import", () => {
+  test("a link, not a panel of buttons", () => {
+    const onOpenImport = vi.fn();
+    render(ProjectMemory, { props: { ...(viewProps as object), canManage: true, onOpenImport } as never });
+    expect(screen.getByTestId("import-link-card")).toBeDefined();
+    // None of the acting controls are on the reading surface any more.
+    expect(screen.queryByText("Preview import")).toBeNull();
+    expect(screen.queryByText("Import now")).toBeNull();
     expect(screen.queryByText("Force re-import")).toBeNull();
   });
 
-  test("a viewer gets neither button", async () => {
-    await openImport({ canManage: false });
-    expect(screen.queryByText("Preview import")).toBeNull();
-    expect(screen.queryByText("Import now")).toBeNull();
-    expect(screen.getAllByText(/restricted to admins/i).length).toBeGreaterThan(0);
+  test("the link navigates rather than doing anything itself", async () => {
+    const onOpenImport = vi.fn();
+    render(ProjectMemory, { props: { ...(viewProps as object), canManage: true, onOpenImport } as never });
+    await fireEvent.click(screen.getByText(/Import earlier sessions/));
+    expect(onOpenImport).toHaveBeenCalledTimes(1);
   });
 
-  test("a surface that did not wire the import has no dead switcher", () => {
-    render(ProjectMemory, { props: { ...(viewProps as object), canManage: true } });
-    expect(screen.queryByTestId("pane-switch")).toBeNull();
-    expect(screen.queryByText("Preview import")).toBeNull();
-  });
-
-  test("the outcome of a run is shown where it was started", async () => {
-    await openImport({
-      backfill: {
-        selected: 4,
-        imported_sessions: 4,
-        imported_events: 31,
-        skipped_for_cap: 0,
-        failed_sessions: 0,
-        skipped_non_empty: false,
-        dry_run: false,
-      },
+  test("the outcome of a run comes back to the tab with you", () => {
+    render(ProjectMemory, {
+      props: {
+        ...(viewProps as object),
+        canManage: true,
+        onOpenImport: noop,
+        backfill: {
+          selected: 4,
+          imported_sessions: 4,
+          imported_events: 31,
+          skipped_for_cap: 0,
+          failed_sessions: 0,
+          skipped_non_empty: false,
+          dry_run: false,
+        },
+      } as never,
     });
     expect(screen.getByTestId("backfill-summary").textContent).toMatch(/Imported/);
   });
 
+  test("a surface that did not wire the import has no dead card", () => {
+    render(ProjectMemory, { props: { ...(viewProps as object), canManage: true } });
+    expect(screen.queryByTestId("import-link-card")).toBeNull();
+  });
+});
+
+/* The import's own page.
+
+   Its whole reason for existing is that the number has to be checkable
+   (Yoga, 2026-09-26: "yang jangan bohong harus real dan ada datanya dan
+   preview nya, biar aku bisa cek"), so what is pinned here is that the page
+   shows the folder it read, the backend's own decomposition of the count,
+   and the limit where the backend cannot answer. */
+
+const DOCTOR = {
+  doctor: {
+    workspace: "wick",
+    project: "kasir-8c28230d",
+    rows: [
+      { agent: "claude-code", local_total: 3, local_recent: 3, captured: 33, uncaptured: false },
+      { agent: "codex", local_total: 8, local_recent: 2, captured: 26, uncaptured: false },
+    ],
+  },
+} as never;
+
+const importProps = {
+  scope: SCOPE,
+  canManage: true,
+  busy: false,
+  health: DOCTOR,
+  healthLoading: false,
+  healthError: "",
+  backfill: null,
+  backfillReq: null,
+  backfillError: "",
+  onPreview: noop,
+  onRun: noop,
+  onForce: noop,
+  onRefresh: noop,
+  onBack: noop,
+} as never;
+
+describe("ImportPage — a count you can check", () => {
+  test("names the folder it reads, in full", () => {
+    render(ImportPage, { props: importProps });
+    expect(screen.getByTestId("import-folder").textContent).toContain("/srv/p/files");
+  });
+
+  test("decomposes the count per harness, from the backend's own check", () => {
+    render(ImportPage, { props: importProps });
+    const rows = screen.getByTestId("harness-rows");
+    expect(rows.textContent).toContain("claude-code");
+    expect(rows.textContent).toContain("codex");
+    // 3 + 8, and what the store already holds beside it.
+    expect(screen.getByTestId("import-totals").textContent).toContain("11");
+    expect(screen.getByTestId("import-totals").textContent).toContain("59");
+  });
+
+  test("says outright that nothing is launched and no model is called", () => {
+    render(ImportPage, { props: importProps });
+    const text = (screen.getByTestId("import-explainer").textContent ?? "").replace(/\s+/g, " ");
+    expect(text).toMatch(/does not start claude or codex/i);
+    expect(text).toMatch(/calls no model/i);
+  });
+
+  // The honest limit: ai-memory counts, it does not enumerate, and wick does
+  // not go reading the harness folders itself to invent a list.
+  test("states that there is no list rather than inventing one", () => {
+    render(ImportPage, { props: importProps });
+    expect(screen.getByTestId("import-no-list").textContent).toMatch(/counts, not as a list/i);
+  });
+
+  test("a failed harness check is reported, not rendered as zero", () => {
+    render(ImportPage, {
+      props: { ...(importProps as object), health: { doctor: { error: "daemon not running" } } } as never,
+    });
+    expect(screen.getByTestId("import-health-error").textContent).toContain("daemon not running");
+    expect(screen.queryByTestId("import-totals")).toBeNull();
+  });
+
+  test("a preview runs straight away — it writes nothing", async () => {
+    const onPreview = vi.fn();
+    render(ImportPage, { props: { ...(importProps as object), onPreview } as never });
+    await fireEvent.click(screen.getByText("Preview import"));
+    expect(onPreview).toHaveBeenCalledTimes(1);
+  });
+
+  test("an import is confirmed first, and the confirmation names the cost", async () => {
+    const onRun = vi.fn();
+    render(ImportPage, { props: { ...(importProps as object), onRun } as never });
+    await fireEvent.click(screen.getByText("Import now"));
+    expect(onRun).not.toHaveBeenCalled();
+    expect(screen.getByText(/into wick\/kasir-8c28230d/)).toBeDefined();
+    expect(screen.getByText(/nothing is duplicated/)).toBeDefined();
+
+    const buttons = screen.getAllByText("Import now");
+    await fireEvent.click(buttons[buttons.length - 1]);
+    expect(onRun).toHaveBeenCalledTimes(1);
+  });
+
+  test("a forced re-import says what it costs before it runs", async () => {
+    const onForce = vi.fn();
+    render(ImportPage, { props: { ...(importProps as object), onForce } as never });
+    await fireEvent.click(screen.getByText("Force re-import"));
+    expect(onForce).not.toHaveBeenCalled();
+    expect(screen.getByText(/observations do NOT/)).toBeDefined();
+
+    const buttons = screen.getAllByText("Force re-import");
+    await fireEvent.click(buttons[buttons.length - 1]);
+    expect(onForce).toHaveBeenCalledTimes(1);
+  });
+
+  test("a viewer gets the evidence and none of the buttons", () => {
+    render(ImportPage, { props: { ...(importProps as object), canManage: false } as never });
+    expect(screen.getByTestId("harness-rows")).toBeDefined();
+    expect(screen.queryByText("Preview import")).toBeNull();
+    expect(screen.queryByText("Import now")).toBeNull();
+    expect(screen.getByText(/restricted to admins/i)).toBeDefined();
+  });
+
   // The report that started all of this: 59 found, 0 imported, no explanation.
-  test("a no-op preview says why nothing was imported", async () => {
-    await openImport({
-      backfill: {
-        selected: 59,
-        imported_sessions: 0,
-        imported_events: 0,
-        skipped_for_cap: 0,
-        failed_sessions: 0,
-        skipped_non_empty: true,
-        dry_run: true,
-      },
+  test("a no-op preview says why nothing was imported", () => {
+    render(ImportPage, {
+      props: {
+        ...(importProps as object),
+        backfill: {
+          selected: 59,
+          imported_sessions: 0,
+          imported_events: 0,
+          skipped_for_cap: 0,
+          failed_sessions: 0,
+          skipped_non_empty: true,
+          dry_run: true,
+        },
+      } as never,
     });
     const text = screen.getByTestId("backfill-summary").textContent ?? "";
     expect(text).toContain("59 local sessions found for this project, none imported");
     expect(text).toMatch(/already has captured sessions/);
+  });
+
+  // A preview cannot know what an import would write, so it must not print a
+  // zero that reads as "this would do nothing".
+  test("a preview reports its selection and never an import count", () => {
+    render(ImportPage, {
+      props: {
+        ...(importProps as object),
+        backfill: {
+          selected: 11,
+          imported_sessions: 0,
+          imported_events: 0,
+          skipped_for_cap: 0,
+          failed_sessions: 0,
+          skipped_non_empty: false,
+          dry_run: true,
+        },
+      } as never,
+    });
+    const text = screen.getByTestId("backfill-summary").textContent ?? "";
+    expect(text).toContain("11 session files would be read");
+    expect(text).not.toMatch(/import 0/);
+    // And the two independent numbers are reconciled out loud.
+    expect(screen.getByTestId("counts-note").textContent).toMatch(/The two agree: 11/);
+  });
+
+  test("when the two counts disagree, both are shown and the difference is stated", () => {
+    render(ImportPage, {
+      props: {
+        ...(importProps as object),
+        backfill: {
+          selected: 5,
+          imported_sessions: 0,
+          imported_events: 0,
+          skipped_for_cap: 0,
+          failed_sessions: 0,
+          skipped_non_empty: false,
+          dry_run: true,
+        },
+      } as never,
+    });
+    const note = screen.getByTestId("counts-note").textContent ?? "";
+    expect(note).toMatch(/do not match/i);
+    expect(note).toContain("11");
+    expect(note).toContain("5");
+  });
+
+  // The cap is only news when it actually left something out.
+  test("the max-sessions cap appears only when it bit", () => {
+    const { unmount } = render(ImportPage, {
+      props: {
+        ...(importProps as object),
+        backfill: { selected: 11, imported_sessions: 11, imported_events: 4, skipped_for_cap: 0, failed_sessions: 0, skipped_non_empty: false, dry_run: false },
+        backfillReq: { scope: {}, dry_run: false, force: false, max_sessions: 2000 },
+      } as never,
+    });
+    expect(screen.queryByTestId("backfill-cap")).toBeNull();
+    expect(screen.queryByText(/At most 2000/)).toBeNull();
+    unmount();
+
+    render(ImportPage, {
+      props: {
+        ...(importProps as object),
+        backfill: { selected: 11, imported_sessions: 8, imported_events: 4, skipped_for_cap: 3, failed_sessions: 0, skipped_non_empty: false, dry_run: false },
+        backfillReq: { scope: {}, dry_run: false, force: false, max_sessions: 2000 },
+      } as never,
+    });
+    expect(screen.getByTestId("backfill-cap").textContent).toContain("3 sessions were left out");
+  });
+
+  // "No sessions found" while the tab lists sessions reads as a bug; it is
+  // not one, and the sentence has to say where it looked.
+  test("nothing found says WHERE it looked", () => {
+    render(ImportPage, {
+      props: {
+        ...(importProps as object),
+        backfill: { selected: 0, imported_sessions: 0, imported_events: 0, skipped_for_cap: 0, failed_sessions: 0, skipped_non_empty: false, dry_run: true },
+      } as never,
+    });
+    const text = screen.getByTestId("backfill-summary").textContent ?? "";
+    expect(text).toMatch(/in this project's folder/i);
+    expect(text).toMatch(/not the same as having no sessions/i);
   });
 });
 

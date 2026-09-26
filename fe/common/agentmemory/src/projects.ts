@@ -1,5 +1,5 @@
 import { formatCount, relativeTime } from "./format.js";
-import type { BackfillReport, BackfillRequestEcho, Handoff, ProjectRow, RecentPage } from "./types.js";
+import type { BackfillReport, BackfillRequestEcho, DoctorReport, Handoff, ProjectRow, RecentPage } from "./types.js";
 
 // Presentation logic for the Projects tab. It lives here rather than in the
 // component so the rules that decide what a row says — which column is
@@ -212,16 +212,18 @@ export function oldestHandoff(rows: Handoff[]): Handoff | null {
 
 // backfillSummary turns one report into the sentence shown after a run.
 //
-// The no-op is the case that needs explaining, and it is the one the old
-// wording got wrong (Yoga, 2026-09-26: "kok 59 semua? ngak jelas itu apa").
-// The card printed "59 sessions selected, would import 0" because the
-// skipped-store sentence was gated on `selected === 0` as well — and a real
-// run reports both: 59 local sessions were FOUND, and every one of them was
-// skipped because the store already holds sessions (PLAN §11.1). The flag
-// alone decides it now; the count stays, with the meaning it actually has.
+// Three outcomes, and they are genuinely different questions. The one that
+// used to be wrong is the DRY RUN: `ai-memory backfill --dry-run` reports
+// `selected` and leaves `imported_sessions` at 0 every time, whatever the
+// state — measured on this host at --max-sessions 1, 2 and 2000, and on a
+// scope with skipped_non_empty false, where nothing was blocking an import at
+// all. So "would import 0 sessions" was never a result; it was a field the
+// preview does not fill. The user read it as the feature being broken
+// ("kalau gini berarti bukan import per project dong"), which is a fair
+// reading of a sentence that says an import would do nothing. A preview now
+// reports what it selected and stops there.
 export function backfillSummary(rep: BackfillReport | undefined): string {
   if (!rep) return "";
-  const what = rep.dry_run ? "would import" : "imported";
   if (rep.skipped_non_empty) {
     const found = rep.selected > 0
       ? `${rep.selected} local session${rep.selected === 1 ? "" : "s"} found for this project, none imported`
@@ -231,51 +233,130 @@ export function backfillSummary(rep: BackfillReport | undefined): string {
       "Only a forced import would re-read them — and it would add their observations a second time."
     );
   }
-  if (rep.selected === 0) {
-    return "No local harness sessions were found for this project, so there is nothing to import.";
+  if (rep.selected === 0) return NO_LOCAL_SESSIONS;
+  const n = `${rep.selected} session file${rep.selected === 1 ? "" : "s"}`;
+  if (rep.dry_run) {
+    // `selected` is capped by max-sessions — at --max-sessions 1 the backend
+    // returned exactly 1 — so it is how many an import would READ, not how
+    // many exist in the folder.
+    return (
+      `${n} would be read for this project. A preview stops there: the backend reports what it selected, ` +
+      "not what importing them would write, so there is no import count to show yet."
+    );
   }
-  const parts = [
-    `${rep.selected} local session${rep.selected === 1 ? "" : "s"} found`,
-    `${what} ${rep.imported_sessions} session${rep.imported_sessions === 1 ? "" : "s"}`,
-  ];
+  const parts = [`${n} read`, `imported ${rep.imported_sessions} session${rep.imported_sessions === 1 ? "" : "s"}`];
   if (rep.imported_events > 0) parts.push(`${rep.imported_events} events`);
-  if (rep.skipped_for_cap > 0) {
-    parts.push(`${rep.skipped_for_cap} left out by the max-sessions cap`);
-  }
+  if (rep.skipped_for_cap > 0) parts.push(`${rep.skipped_for_cap} left out by the max-sessions cap`);
   if (rep.failed_sessions > 0) parts.push(`${rep.failed_sessions} failed`);
   return `${parts.join(", ")}.`;
 }
 
-// BACKFILL_EXPLAINER is the card's own answer to "ini pas import gimana cara
-// kerja nya?" (Yoga, 2026-09-26).
+// NO_LOCAL_SESSIONS says WHERE it looked, because "no sessions found" while
+// the panel is showing a list of sessions reads as a bug.
 //
-// Three facts, because each one is a question the buttons raise and cannot
-// answer on their own: what it reads (the harness session files already on
-// this host, for THIS project's folder), that it is a one-time bootstrap
-// rather than a sync, and that running it twice is a no-op unless forced.
-// Checked against `ai-memory backfill --help` (2.4.0) and a live dry run.
+// It is not one — they are different things. wick sessions are wick's own;
+// these are the transcript files claude and codex leave on this host. A
+// project can have plenty of the first and none of the second: verified for
+// support-tools/rest-20c9202d on this host, which has wick sessions and no
+// harness transcript directory at all.
+export const NO_LOCAL_SESSIONS =
+  "No harness session files were found in this project's folder. That is not the same as having no sessions: " +
+  "this counts the transcript files claude and codex leave on this host for work done in that folder, and a project " +
+  "can have wick sessions without any of them.";
+
+// BACKFILL_EXPLAINER is the card's own answer to "ini pas import gimana cara
+// kerja nya?" and, more pointedly, to "apakah buka claude codex atau gimana
+// sih?" (Yoga, 2026-09-26).
+//
+// The answer to the second is NO, and it is said outright rather than left to
+// be inferred from "reads the local history". claude keeps one .jsonl
+// transcript per session under ~/.claude/projects/<folder>/ and codex keeps
+// its own under ~/.codex/sessions/; backfill opens those files. Nothing is
+// launched, nobody is signed in as, and no model is called — which is the
+// difference between a file read and the thing people reasonably fear when a
+// button offers to "import your sessions".
 export const BACKFILL_EXPLAINER =
-  "Claude and codex keep a session file on this host for every session that ran in this project's folder. " +
+  "Claude and codex each leave a transcript file on this host for every session that ran in this project's folder. " +
   "Import reads those files and writes their sessions into this project's memory, so switching capture on part-way " +
-  "through a project does not leave it amnesiac about everything before. It is a one-time bootstrap, not a sync: " +
-  "once this project's memory holds sessions, a further import finds the same files and imports none of them.";
+  "through a project does not leave it amnesiac about everything before. It does not start claude or codex, does not " +
+  "sign in as anyone, and calls no model and no network service — it is a read of files already on this disk. " +
+  "It is a one-time bootstrap rather than a sync: once this project's memory holds sessions, a further import finds " +
+  "the same files and imports none of them.";
 
-// backfillSelectedNote spells out the word the report uses. "59 selected"
-// means 59 session FILES were found on disk for this project — not 59 things
-// that are about to be written.
+// BACKFILL_SELECTED_NOTE explains the word the report uses. It counts files
+// the backend would READ, capped by max-sessions — not everything in the
+// folder, and not what would be written.
 export const BACKFILL_SELECTED_NOTE =
-  "“Found” counts the local harness session files that belong to this project. What is imported is a separate number: sessions already in this project's memory are skipped.";
+  "“Found” counts the harness transcript files in this project's folder that an import would read, up to the max-sessions cap. What actually gets written is a separate number, and only a real import can report it: sessions already in this project's memory are skipped.";
 
-// backfillCapNote names the cap that was actually in force, whether or not it
-// bit. The cap is resolved server-side (wick's own default, not the backend's
-// 25) and appears nowhere else — so a run that took everything still has to
-// say what the ceiling was, or the next longer project's truncation arrives
-// unexplained.
-export function backfillCapNote(req: BackfillRequestEcho | null | undefined): string | null {
-  const cap = req?.max_sessions;
-  if (!cap || cap <= 0) return null;
-  return `At most ${cap} session${cap === 1 ? "" : "s"} are read in one run — wick's max-sessions cap, which the Settings tab sets.`;
+// ── what is behind the number (Yoga, 2026-09-26) ─────────────────────
+//
+// "itu katanya found tapi aku kok ngak yakin itu ada beneran dan mana yg mau
+// di import" — a bare count is not checkable, and he is right not to trust
+// one. `ai-memory doctor --json`, run in a project's folder, decomposes it
+// from the SAME discovery the backfill uses: on this host that folder's
+// doctor reported claude-code 3 + codex 8, and its dry run selected 11.
+//
+// What doctor does NOT give is a list. There is no enumeration in the CLI —
+// `backfill --session <id>` imports one by id, but nothing lists the ids — so
+// the page states that limit instead of wick going to the harness stores
+// itself. A second implementation of "which sessions belong here" would drift
+// from ai-memory's, which is the class of bug this whole morning was.
+
+// HarnessRow is one harness's coverage of this project's folder, as the
+// import page shows it.
+export type HarnessRow = {
+  agent: string;
+  // local is what this harness left in the folder; recent is the subset
+  // doctor counts as recent. captured is what the store already holds.
+  local: number;
+  recent: number;
+  captured: number;
+  // uncaptured marks the half-wired state: sessions ran here and the hook
+  // never reported them.
+  uncaptured: boolean;
+};
+
+export function harnessRows(d: DoctorReport | null | undefined): HarnessRow[] {
+  return (d?.rows ?? []).map((r) => ({
+    agent: r.agent,
+    local: r.local_total,
+    recent: r.local_recent,
+    captured: r.captured,
+    uncaptured: r.uncaptured,
+  }));
 }
+
+// localTotal sums what the harnesses left in the folder, or null when doctor
+// could not answer. Null is not zero: a failed check has not shown there is
+// nothing there.
+export function localTotal(d: DoctorReport | null | undefined): number | null {
+  if (!d || d.error || !d.rows) return null;
+  return d.rows.reduce((n, r) => n + r.local_total, 0);
+}
+
+// countsNote reconciles the two numbers on the page — doctor's per-harness
+// totals and the dry run's `selected` — or says plainly that they differ.
+//
+// They usually match (3 + 8 = 11 on this host). When they do not, the cap or
+// doctor's recency window is the likely reason, and BOTH numbers are shown
+// with the disagreement stated. Silently preferring one would hide exactly
+// the kind of mismatch that makes a count untrustworthy.
+export function countsNote(selected: number | null, local: number | null): string | null {
+  if (selected === null || local === null) return null;
+  if (selected === local) {
+    return `The two agree: ${local} session file${local === 1 ? "" : "s"} in the folder, ${selected} that an import would read.`;
+  }
+  return (
+    `These two do not match: the harness check counts ${local} session file${local === 1 ? "" : "s"} in the folder, ` +
+    `while the preview would read ${selected}. The max-sessions cap and the check's own recency window are the usual ` +
+    "reasons. Both numbers are the backend's own — neither is adjusted to agree with the other."
+  );
+}
+
+// IMPORT_NO_LIST is the limit, stated rather than worked around.
+export const IMPORT_NO_LIST =
+  "ai-memory reports these as counts, not as a list of sessions: its backfill has no way to enumerate what it found, only to import one by id once you already know the id. wick does not go looking through the harness folders itself to produce a list — a second opinion about which sessions belong to a project would drift from the one that actually does the importing.";
 
 // backfillCapWarning fires when the cap truncated the history. It matters
 // because the backend's own default is 25, low enough to silently leave most

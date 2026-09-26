@@ -3,8 +3,10 @@ import {
   BRIEFING_UNAVAILABLE,
   BACKFILL_EXPLAINER,
   BACKFILL_SELECTED_NOTE,
-  backfillCapNote,
   backfillCapWarning,
+  countsNote,
+  harnessRows,
+  localTotal,
   backfillConfirmBody,
   backfillSummary,
   briefingReason,
@@ -220,13 +222,12 @@ describe("backfill reporting", () => {
   });
 
   test("an empty project is told apart from a skipped one", () => {
-    expect(backfillSummary(report({ selected: 0 }))).toContain("No local harness sessions");
+    expect(backfillSummary(report({ selected: 0 }))).toContain("No harness session files were found");
   });
 
-  // The bug Yoga hit: the card printed "59 sessions selected, would import 0"
-  // because the explanation was gated on selected === 0 as well. A real run on
-  // a non-empty store reports BOTH — 59 found, every one skipped — so the flag
-  // alone decides the sentence, and the count keeps the meaning it has.
+  // The bug Yoga hit first: the card printed "59 sessions selected, would
+  // import 0" because the explanation was gated on selected === 0 as well. A
+  // real run on a non-empty store reports BOTH — 59 found, every one skipped.
   test("sessions found and none imported is explained, not left as a bare 0", () => {
     const s = backfillSummary(report({ skipped_non_empty: true, selected: 59, dry_run: true }));
     expect(s).toContain("59 local sessions found for this project, none imported");
@@ -234,32 +235,57 @@ describe("backfill reporting", () => {
     expect(s).not.toContain("would import 0");
   });
 
+  /* The bug underneath that one: `ai-memory backfill --dry-run` NEVER fills
+     imported_sessions. Measured on this host at --max-sessions 1, 2 and 2000,
+     and on a scope with skipped_non_empty false where nothing was blocking an
+     import — 0 every time. So "would import 0" was not a result, it was a
+     field the preview does not fill, and the user read it as the feature
+     being broken. A preview reports its selection and stops. */
+
+  test("a preview reports what it would READ and never an import count", () => {
+    const s = backfillSummary(report({ selected: 217, imported_sessions: 0, dry_run: true }));
+    expect(s).toContain("217 session files would be read");
+    expect(s).not.toMatch(/import 0|imported 0|0 sessions/);
+    expect(s).toMatch(/not what importing them would write/i);
+  });
+
+  test("one selected file is still singular", () => {
+    expect(backfillSummary(report({ selected: 1, dry_run: true }))).toContain("1 session file would be read");
+  });
+
   test("a real import counts what it took", () => {
     const s = backfillSummary(report({ selected: 4, imported_sessions: 4, imported_events: 190 }));
-    expect(s).toContain("4 local sessions found");
+    expect(s).toContain("4 session files read");
     expect(s).toContain("imported 4 sessions");
     expect(s).toContain("190 events");
   });
 
-  // The cap is resolved server-side (wick's default, not the backend's 25) and
-  // is visible nowhere else, so it is stated whether or not it bit.
-  test("the cap in force is named even when it took everything", () => {
-    expect(backfillCapNote(null)).toBeNull();
-    expect(backfillCapNote({ scope: {}, dry_run: true, force: false })).toBeNull();
-    const n = backfillCapNote({ scope: {}, dry_run: true, force: false, max_sessions: 2000 });
-    expect(n).toContain("At most 2000 sessions");
+  // A real run that genuinely imported nothing is a fact and may say so —
+  // that is exactly the case a preview cannot speak to.
+  test("a real run that imported nothing says so", () => {
+    expect(backfillSummary(report({ selected: 3, imported_sessions: 0 }))).toContain("imported 0 sessions");
   });
 
-  // "Selected" is a count of files on disk, not of things about to be written.
-  test("the card explains what it reads and that it is a one-time bootstrap", () => {
-    expect(BACKFILL_EXPLAINER).toMatch(/session file/i);
-    expect(BACKFILL_EXPLAINER).toMatch(/one-time bootstrap, not a sync/i);
-    expect(BACKFILL_SELECTED_NOTE).toMatch(/local harness session files/i);
+  // "No sessions found" while the panel lists wick sessions reads as a bug.
+  // It is not one — they are different things — so the sentence says where it
+  // looked and what it counted.
+  test("nothing found names where it looked, and what it is not", () => {
+    const s = backfillSummary(report({ selected: 0, dry_run: true }));
+    expect(s).toMatch(/in this project's folder/i);
+    expect(s).toMatch(/not the same as having no sessions/i);
+    expect(s).toMatch(/claude and codex/i);
   });
 
-  test("a dry run says 'would import', not 'imported'", () => {
-    expect(backfillSummary(report({ selected: 2, imported_sessions: 2, dry_run: true }))).toContain("would import");
+  // "apakah buka claude codex atau gimana sih?" — the answer is no, said
+  // outright rather than left to be inferred from "reads the local history".
+  test("the explainer denies launching anything, in so many words", () => {
+    expect(BACKFILL_EXPLAINER).toMatch(/does not start claude or codex/i);
+    expect(BACKFILL_EXPLAINER).toMatch(/sign in as anyone/i);
+    expect(BACKFILL_EXPLAINER).toMatch(/calls no model and no network service/i);
+    expect(BACKFILL_EXPLAINER).toMatch(/one-time bootstrap rather than a sync/i);
+    expect(BACKFILL_SELECTED_NOTE).toMatch(/harness transcript files/i);
   });
+
 
   // The backend's own cap default is 25 — low enough to leave most of a long
   // project behind without saying anything (PLAN §10.6).
@@ -367,5 +393,56 @@ describe("scope of an opened project", () => {
     expect(scopeOrigin("marker")).toContain(".ai-memory.toml");
     expect(scopeOrigin("wick")).toContain("next time a session runs");
     expect(scopeOrigin("basename")).toContain("folder name");
+  });
+});
+
+/* The decomposition behind the count (Yoga, 2026-09-26: "itu katanya found
+   tapi aku kok ngak yakin itu ada beneran"). It is doctor's own output, from
+   the same discovery the backfill uses — 3 + 8 on this host's project
+   06c162e0, whose dry run selected exactly 11. */
+
+describe("what is behind the found count", () => {
+  const doctor = {
+    rows: [
+      { agent: "claude-code", local_total: 3, local_recent: 3, captured: 33, uncaptured: false },
+      { agent: "codex", local_total: 8, local_recent: 2, captured: 26, uncaptured: true },
+    ],
+  };
+
+  test("each harness's own numbers survive the mapping", () => {
+    const rows = harnessRows(doctor);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toEqual({ agent: "claude-code", local: 3, recent: 3, captured: 33, uncaptured: false });
+    expect(rows[1].uncaptured).toBe(true);
+  });
+
+  test("the total is the sum the dry run should match", () => {
+    expect(localTotal(doctor)).toBe(11);
+  });
+
+  // A failed check has not shown there is nothing there.
+  test("a check that could not run is null, not zero", () => {
+    expect(localTotal({ error: "daemon not running" })).toBeNull();
+    expect(localTotal(null)).toBeNull();
+    expect(harnessRows(null)).toEqual([]);
+  });
+
+  test("agreement is stated as agreement", () => {
+    expect(countsNote(11, 11)).toMatch(/The two agree: 11 session files/);
+  });
+
+  // A visible disagreement is information; a hidden one is the bug that cost
+  // this whole morning.
+  test("a disagreement shows BOTH numbers rather than picking one", () => {
+    const n = countsNote(5, 11) ?? "";
+    expect(n).toMatch(/do not match/i);
+    expect(n).toContain("11");
+    expect(n).toContain("5");
+    expect(n).toMatch(/neither is adjusted/i);
+  });
+
+  test("nothing is claimed when either number is missing", () => {
+    expect(countsNote(null, 11)).toBeNull();
+    expect(countsNote(11, null)).toBeNull();
   });
 });
