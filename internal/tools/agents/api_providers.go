@@ -425,6 +425,10 @@ type AgentMemoryDetailDTO struct {
 	EffectiveURL string `json:"effective_url"`
 	KeySet       bool   `json:"key_set"`
 	Capture      bool   `json:"capture"`
+	// InjectBrief pastes the backend's own project brief into this
+	// instance's session instructions, rather than only offering the store
+	// as MCP tools the model may never call. Off by default.
+	InjectBrief bool `json:"inject_brief"`
 	// Preview is the effective spawn wiring for the current settings, with
 	// the toggle forced on so it can be read before enabling.
 	Preview string `json:"preview"`
@@ -880,6 +884,7 @@ func agentMemoryDetailDTO(ins provider.Instance) AgentMemoryDetailDTO {
 		EffectiveURL:     agentMemoryEffectiveURL(ins),
 		KeySet:           ins.AgentMemoryAuthKey != "",
 		Capture:          ins.AgentMemoryCapture,
+		InjectBrief:      ins.AgentMemoryInjectBrief,
 		Preview:          agentMemoryConfigPreview(ins),
 		PreviewNote:      agentMemoryPreviewNote(ins),
 	}

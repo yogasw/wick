@@ -214,8 +214,17 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// Shipped skills are not copied into ~/.claude/skills, so claude's own
 	// loader never sees them. Naming them here is what makes them reachable;
 	// skillAddDirArgs above is what makes the paths readable.
-	args = append(args, systemPromptArgs(opt.SessionDir, opt.Workspace,
-		skillsync.AppendBuiltinCatalog(opt.Preset))...)
+	// The memory block joins the system prompt rather than riding as an MCP
+	// offer alone: an offer is something the model may never take up, and
+	// this is the half that arrives without being asked for. claude's file
+	// memory is deliberately left exactly as it was — it is the fallback
+	// while the daemon is down, and removing it is a decision nobody has
+	// made.
+	prompt := skillsync.AppendBuiltinCatalog(opt.Preset)
+	if b := strings.TrimSpace(memContrib.Instructions); b != "" {
+		prompt = strings.TrimRight(prompt, "\n") + "\n\n" + b
+	}
+	args = append(args, systemPromptArgs(opt.SessionDir, opt.Workspace, prompt)...)
 	// One id per conversation, chosen by wick rather than claude: the
 	// first spawn NAMES the session with --session-id (the wick session
 	// id), later spawns RESUME that same name. Otherwise claude mints its

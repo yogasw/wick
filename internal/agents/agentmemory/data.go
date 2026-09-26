@@ -223,7 +223,18 @@ type ProjectBriefing struct {
 	PendingMessages   int64  `json:"pending_message_count"`
 	// RecentPages is the project's most recently updated pages, newest
 	// first — the "latest pages" list the detail panel shows.
-	RecentPages              []RecentPage `json:"recent_pages,omitempty"`
+	RecentPages []RecentPage `json:"recent_pages,omitempty"`
+	// Rules and Slots are the two lists the briefing carries that the panel
+	// never needed and so never read: the pages ai-memory itself classes as
+	// standing instructions (_rules/*) and as filled slots (_slots/*).
+	//
+	// They are REFERENCES, not content — path, title, kind, date, exactly
+	// like RecentPages. Verified against the live daemon (2026-09-26), where
+	// this project's one rule comes back as
+	// {"path":"_rules/greeting-bojong.md","title":"Sapaan hai → Bojong",...}
+	// with no body. Anything that wants the rule itself has to read the page.
+	Rules                    []RecentPage `json:"rules,omitempty"`
+	Slots                    []RecentPage `json:"slots,omitempty"`
 	CrossProjectDependents   int64        `json:"cross_project_dependents"`
 	CrossProjectDependencies int64        `json:"cross_project_dependencies"`
 }

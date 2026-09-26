@@ -1122,13 +1122,21 @@ export async function apiSaveAgentMemory(
   base: string,
   type: string,
   name: string,
-  fields: { use_agent_memory: boolean; provider: string; server_url: string; capture: boolean; auth_key?: string },
+  fields: {
+    use_agent_memory: boolean;
+    provider: string;
+    server_url: string;
+    capture: boolean;
+    inject_brief?: boolean;
+    auth_key?: string;
+  },
 ): Promise<void> {
   const form = new URLSearchParams();
   form.set("use_agent_memory", fields.use_agent_memory ? "on" : "false");
   if (fields.provider) form.set("agent_memory_provider", fields.provider);
   form.set("agent_memory_server_url", fields.server_url.trim());
   form.set("agent_memory_capture", fields.capture ? "on" : "false");
+  form.set("agent_memory_inject_brief", fields.inject_brief ? "on" : "false");
   if (fields.auth_key && fields.auth_key.trim() !== "") {
     form.set("agent_memory_auth_key", fields.auth_key);
   }

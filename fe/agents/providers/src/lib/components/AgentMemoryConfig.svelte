@@ -30,6 +30,11 @@
     // leaving the field blank keeps it.
     authKeyMasked?: boolean;
     capture: boolean;
+    /* injectBrief pastes the store's own project brief into this instance's
+       session instructions. Separate from capture because they are opposite
+       directions: capture is what a session WRITES to memory, this is what
+       memory tells a session before it starts. */
+    injectBrief?: boolean;
     // captureSupported: would turning capture on change the spawn at all?
     // False means the switch would do nothing, and captureNote says why.
     captureSupported?: boolean;
@@ -59,6 +64,7 @@
     authKey = $bindable(),
     authKeyMasked = false,
     capture = $bindable(),
+    injectBrief = $bindable(),
     captureSupported = false,
     captureNote = "",
     captureCaveat = "",
@@ -289,6 +295,25 @@
             disabled={!captureSupported}
           />
         </div>
+        <div class="mt-3 flex items-start justify-between gap-3 border-t border-white-300 pt-3 dark:border-navy-600">
+          <div>
+            <p class="text-sm font-medium text-black-900 dark:text-white-100">Put the project brief in the instructions</p>
+            <p id="agentmemory-brief-why" class="text-[11px] text-black-700 dark:text-black-600">
+              MCP is an <strong class="font-medium">offer</strong>: the model has to decide to call it, and codex is never told
+              the memory tools are there at all. With this on, wick reads {backendName}'s own brief for the project at spawn and
+              pastes it into the session's instructions — the project's rules marked as rules, what it recalled marked as
+              evidence. Budgeted and clipped if it grows; skipped without failing the session if the store is unreachable.
+            </p>
+          </div>
+          <Toggle
+            id="agentmemory-inject-brief"
+            checked={injectBrief}
+            onChange={(v) => (injectBrief = v)}
+            label="Put the project brief in the instructions"
+            describedBy="agentmemory-brief-why"
+          />
+        </div>
+
         {#if captureSupported}
           <p class="mt-2 text-[11px] text-black-700 dark:text-black-600">
             It is not free: the PreToolUse and PostToolUse hooks fire on <em>every</em> tool call, so each one runs the

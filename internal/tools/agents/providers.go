@@ -377,6 +377,7 @@ func applyAgentMemoryForm(ins *provider.Instance, c *tool.Ctx) {
 	// be reachable again after pointing an instance somewhere else.
 	ins.AgentMemoryServerURL = strings.TrimSpace(c.Form("agent_memory_server_url"))
 	ins.AgentMemoryCapture = c.Form("agent_memory_capture") == "on" || c.Form("agent_memory_capture") == "true"
+	ins.AgentMemoryInjectBrief = c.Form("agent_memory_inject_brief") == "on" || c.Form("agent_memory_inject_brief") == "true"
 	// Empty or masked placeholder = leave the stored token untouched, the
 	// same contract the router key uses — the FE never round-trips a secret.
 	if raw := strings.TrimSpace(c.Form("agent_memory_auth_key")); raw != "" && !strings.ContainsRune(raw, '•') {

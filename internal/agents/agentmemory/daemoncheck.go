@@ -45,6 +45,12 @@ type DaemonCheck struct {
 	// daemon. It is the finding, not a side note — a session that silently
 	// forgets is the failure this whole feature exists to catch.
 	SpawnsWithoutMemory bool `json:"spawns_without_memory"`
+	// BriefingsOmitted counts sessions that opted into the pasted project
+	// brief and got none, because the store could not be reached. Separate
+	// from SpawnsWithoutMemory: those sessions have no memory wiring at all,
+	// while these have the MCP tools and lost only the block that arrives
+	// without being asked for.
+	BriefingsOmitted int64 `json:"briefings_omitted"`
 	// Verdict is the sentence for the state this backend is actually in.
 	Verdict string `json:"verdict"`
 }
@@ -69,6 +75,7 @@ func RunDaemonCheck(be *Backend) DaemonCheck {
 		PrefPort:            be.Mgr.PrefPort(),
 		HealthPath:          be.Desc.HealthPath,
 		SpawnsWithoutMemory: port == 0 && spawnsWithoutMemory.Load() > 0,
+		BriefingsOmitted:    briefingsOmitted.Load(),
 	}
 	c.Running = c.Managed || len(procs) > 0
 	if port > 0 {

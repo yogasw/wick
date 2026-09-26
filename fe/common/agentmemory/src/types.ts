@@ -477,6 +477,11 @@ export type DaemonCheck = {
   // spawns_without_memory: agents started with NO memory wiring because wick
   // had no address for the daemon. The consequence nobody could see.
   spawns_without_memory: boolean;
+  // briefings_omitted: sessions that opted into the pasted project brief and
+  // got none because the store was unreachable. Different from
+  // spawns_without_memory — those had no memory wiring at all, these kept the
+  // MCP tools and lost only the block that arrives unasked-for.
+  briefings_omitted: number;
   verdict: string;
 };
 

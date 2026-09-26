@@ -13,6 +13,15 @@ package provider
 type MemoryContribution struct {
 	Args []string
 	Env  []string
+	// Instructions is text to append to the session's instruction surface —
+	// codex's soul.md, claude's prompt file.
+	//
+	// It exists because an MCP server is an OFFER, not a delivery: the model
+	// has to decide to call it, and codex was never even told the tools were
+	// there (its 51 KB instruction file mentioned ai-memory zero times). So
+	// what one agent learned another could not reach, however much had been
+	// imported. This is the half that arrives without being asked for.
+	Instructions string
 }
 
 var (

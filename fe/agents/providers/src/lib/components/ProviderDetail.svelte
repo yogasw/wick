@@ -288,6 +288,7 @@
   let memKey = $state("");
   let memKeyMasked = $state(false);
   let memCapture = $state(false);
+  let memInjectBrief = $state(false);
   let memSaving = $state(false);
 
   async function load(silent = false) {
@@ -320,6 +321,7 @@
       memBackends = data.AgentMemory.Backends;
       memServerUrl = data.AgentMemory.ServerURL;
       memCapture = data.AgentMemory.Capture;
+      memInjectBrief = data.AgentMemory.InjectBrief ?? false;
       memKeyMasked = data.AgentMemory.KeySet;
       memKey = ""; // never prefill a secret; blank = keep existing
     } catch (e) {
@@ -390,6 +392,7 @@
         provider: memProvider,
         server_url: memServerUrl,
         capture: memCapture,
+        inject_brief: memInjectBrief,
         auth_key: memKey || undefined,
       });
       toastOk("Agent Memory settings saved");
@@ -1087,6 +1090,7 @@
             bind:authKey={memKey}
             authKeyMasked={memKeyMasked}
             bind:capture={memCapture}
+            bind:injectBrief={memInjectBrief}
             captureSupported={data?.AgentMemory.CaptureSupported ?? false}
             captureNote={data?.AgentMemory.CaptureNote ?? ""}
             captureCaveat={data?.AgentMemory.CaptureCaveat ?? ""}

@@ -294,6 +294,11 @@ type ProviderInstance struct {
 	// AgentMemoryCapture records sessions into the store via the backend's
 	// lifecycle hooks. False = recall only, nothing written back.
 	AgentMemoryCapture bool `json:"agent_memory_capture,omitempty"`
+	// AgentMemoryInjectBrief pastes the backend's own project brief into
+	// this instance's session instructions, instead of only offering the
+	// store as MCP tools the model may never call. Default off so it can be
+	// tried on ONE instance before it is on everywhere.
+	AgentMemoryInjectBrief bool `json:"agent_memory_inject_brief,omitempty"`
 
 	// WickModels is the custom-model registry for the built-in wick
 	// provider — one entry per registered model (Gemini / OpenAI /

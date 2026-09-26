@@ -315,6 +315,11 @@ export interface AgentMemoryDetailDTO {
   EffectiveURL: string;
   KeySet: boolean;
   Capture: boolean;
+  /* InjectBrief pastes the store's own project brief into this instance's
+     session instructions. An MCP server is an offer the model may never take
+     up — codex was never even told it existed — so this is the half that
+     arrives without being asked for. Off by default. */
+  InjectBrief?: boolean;
   Preview: string;
   /* PreviewNote says Preview is the configuration an agent WOULD get while
      no daemon is running to give it. Empty when one is. Separate from

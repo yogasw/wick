@@ -648,7 +648,7 @@ func TestDashboardPayloadsMatchTheFrontend(t *testing.T) {
 		// card cannot disagree about whether the backend is running, which
 		// is a bug this host actually had.
 		assertShape(t, "DaemonCheck", sub(t, "HealthReport", body, "daemon"), shape{
-			required: []string{"running", "managed", "port", "pref_port", "answering", "spawns_without_memory", "verdict"},
+			required: []string{"running", "managed", "port", "pref_port", "answering", "spawns_without_memory", "briefings_omitted", "verdict"},
 			optional: []string{"processes", "health_path"},
 		})
 		// The per-project trial: a deliberate mode that stops capture for

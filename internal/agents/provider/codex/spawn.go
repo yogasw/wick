@@ -107,8 +107,20 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// copied into ~/.codex/skills (see skillsync/builtin.go), so codex's own
 	// loader never sees them; this block is what makes them reachable, and the
 	// --add-dir below is what makes the paths it names readable.
+	// Resolved before soul.md is written, because the memory contribution can
+	// carry an instruction block and soul.md is where it has to land. codex
+	// is the reason this exists: its instruction file never mentioned that a
+	// memory server was attached, so the model had no reason to call one.
+	memContrib, err := provider.MemorySpawnContribution(opt.Instance, provider.TypeCodex, opt.Workspace)
+	if err != nil {
+		return nil, err
+	}
+
 	soulPath := ""
 	soul := skillsync.AppendBuiltinCatalog(opt.Preset)
+	if b := strings.TrimSpace(memContrib.Instructions); b != "" {
+		soul = strings.TrimRight(soul, "\n") + "\n\n" + b
+	}
 	if soul != "" {
 		soulDir := opt.SessionDir
 		if soulDir == "" {
@@ -203,10 +215,6 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// operand appended at the very end (and `resume <id>` just before it), so
 	// anything that carries a value must land ahead of both. Here is ahead of
 	// both. TestSpawnerArgvMemoryBeforePrompt locks that.
-	memContrib, err := provider.MemorySpawnContribution(opt.Instance, provider.TypeCodex, opt.Workspace)
-	if err != nil {
-		return nil, err
-	}
 	args = append(args, memContrib.Args...)
 
 	// codex exec treats /compact as ordinary model text. Use the app-server

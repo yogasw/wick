@@ -158,6 +158,14 @@ type Instance struct {
 	// store via the backend's lifecycle hooks. False = read-only: agents can
 	// recall what is already there but write nothing back.
 	AgentMemoryCapture bool
+	// AgentMemoryInjectBrief pastes the backend's own brief for this
+	// project into the session's instruction surface at spawn.
+	//
+	// It exists because an MCP server is an offer the model may decline —
+	// and codex was never told the offer was there. Off by default: this
+	// changes what every session reads, so it earns its way onto one
+	// instance first (Yoga, 2026-09-26).
+	AgentMemoryInjectBrief bool
 
 	// WickModels is the custom-model registry for the built-in wick
 	// provider. nil for other types.
@@ -944,11 +952,12 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 				AIRouterAPIKey:    raw.AIRouterAPIKey,
 				AIRouterRawConfig: raw.AIRouterRawConfig,
 
-				UseAgentMemory:       raw.UseAgentMemory,
-				AgentMemoryProvider:  raw.AgentMemoryProvider,
-				AgentMemoryServerURL: raw.AgentMemoryServerURL,
-				AgentMemoryAuthKey:   raw.AgentMemoryAuthKey,
-				AgentMemoryCapture:   raw.AgentMemoryCapture,
+				UseAgentMemory:         raw.UseAgentMemory,
+				AgentMemoryProvider:    raw.AgentMemoryProvider,
+				AgentMemoryServerURL:   raw.AgentMemoryServerURL,
+				AgentMemoryAuthKey:     raw.AgentMemoryAuthKey,
+				AgentMemoryCapture:     raw.AgentMemoryCapture,
+				AgentMemoryInjectBrief: raw.AgentMemoryInjectBrief,
 			}
 			if t == TypeCodex {
 				ins.CodexConfig = &CodexConfig{
@@ -1013,11 +1022,12 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 		AIRouterAPIKey:    ins.AIRouterAPIKey,
 		AIRouterRawConfig: ins.AIRouterRawConfig,
 
-		UseAgentMemory:       ins.UseAgentMemory,
-		AgentMemoryProvider:  ins.AgentMemoryProvider,
-		AgentMemoryServerURL: ins.AgentMemoryServerURL,
-		AgentMemoryAuthKey:   ins.AgentMemoryAuthKey,
-		AgentMemoryCapture:   ins.AgentMemoryCapture,
+		UseAgentMemory:         ins.UseAgentMemory,
+		AgentMemoryProvider:    ins.AgentMemoryProvider,
+		AgentMemoryServerURL:   ins.AgentMemoryServerURL,
+		AgentMemoryAuthKey:     ins.AgentMemoryAuthKey,
+		AgentMemoryCapture:     ins.AgentMemoryCapture,
+		AgentMemoryInjectBrief: ins.AgentMemoryInjectBrief,
 	}
 	if ins.CodexConfig != nil {
 		raw.SandboxMode = string(ins.CodexConfig.SandboxMode)

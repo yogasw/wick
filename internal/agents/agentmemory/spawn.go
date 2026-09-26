@@ -1,8 +1,10 @@
 package agentmemory
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -61,7 +63,40 @@ func spawnContribution(ins *provider.Instance, t provider.Type, folder string) (
 			Msg("agentmemory: no reachable daemon — this session gets no memory rather than a guessed URL")
 		return provider.MemoryContribution{}, nil
 	}
-	return contributionAt(be, ins, t, server)
+	contrib, err := contributionAt(be, ins, t, server)
+	if err != nil {
+		return provider.MemoryContribution{}, err
+	}
+	// The instruction block, when this instance opted in. It is resolved
+	// AFTER the args because it is the optional half: a brief that cannot be
+	// read must not cost the session its MCP wiring, which is the part that
+	// works without it.
+	if ins.AgentMemoryInjectBrief {
+		ctx, cancel := context.WithTimeout(context.Background(), briefingTimeout)
+		defer cancel()
+		contrib.Instructions = InstructionBlock(ctx, be, scopeForSpawn(folder))
+	}
+	return contrib, nil
+}
+
+// briefingTimeout bounds the brief's resolution. A spawn waits for it, so it
+// is short: a slow store delays every session, and the block is an
+// improvement rather than a requirement.
+const briefingTimeout = 3 * time.Second
+
+// scopeForSpawn resolves the memory scope for the folder a session runs in,
+// using wick's own project registry — the same resolution the panel and the
+// import use, never a name built here (PLAN §22.2).
+func scopeForSpawn(folder string) ReadScope {
+	id, ok := projectIDForFolder(folder)
+	if !ok {
+		return ReadScope{}
+	}
+	p, sc, _, ok := ScopeForProjectID(id)
+	if !ok {
+		return ReadScope{}
+	}
+	return ReadScope{Workspace: sc.Workspace, Project: sc.Project, Dir: p.Folder}
 }
 
 // contributionAt builds the wiring for one instance against a given address.
