@@ -649,7 +649,7 @@ func TestDashboardPayloadsMatchTheFrontend(t *testing.T) {
 		// is a bug this host actually had.
 		assertShape(t, "DaemonCheck", sub(t, "HealthReport", body, "daemon"), shape{
 			required: []string{"running", "managed", "port", "pref_port", "answering", "spawns_without_memory", "briefings_omitted", "verdict"},
-			optional: []string{"processes", "health_path"},
+			optional: []string{"processes", "health_path", "briefing_skipped"},
 		})
 		// The per-project trial: a deliberate mode that stops capture for
 		// every project that has not opted in, so the Health tab has to be

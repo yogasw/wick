@@ -482,6 +482,9 @@ export type DaemonCheck = {
   // spawns_without_memory — those had no memory wiring at all, these kept the
   // MCP tools and lost only the block that arrives unasked-for.
   briefings_omitted: number;
+  // briefing_skipped: rule or slot pages whose body could not be read, so
+  // they are missing from the instructions agents were given.
+  briefing_skipped?: string[] | null;
   verdict: string;
 };
 

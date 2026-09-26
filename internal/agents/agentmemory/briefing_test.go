@@ -55,23 +55,33 @@ func briefBackend(t *testing.T, src *briefSource) *Backend {
 	}
 }
 
-// The rule on this host, verbatim from the live daemon.
+// liveBrief mirrors what the daemon on this host returns: a stats object whose
+// only instruction-worthy parts are the `rules` and `slots` arrays, both of
+// which carry REFERENCES — path, title, kind, date — and no body.
+//
+// The counters, the activity windows and recent_pages are here precisely
+// because they must NOT reach the block. recent_pages on this host is a list
+// of sessions/<uuid>.md titled "[from: Admin]": noise that would cost budget
+// and teach an agent nothing.
 func liveBrief() *ProjectBriefing {
 	return &ProjectBriefing{
-		Counts:      BriefingCounts{PagesLatest: 16, Sessions: 15},
-		Activity30d: ActivityWindow{Days: 30, Observations: 557},
+		Counts:      BriefingCounts{PagesLatest: 16, PagesAll: 19, Sessions: 18, Observations: 581},
+		Activity30d: ActivityWindow{Days: 30, Observations: 581},
 		Rules: []RecentPage{
 			{Path: "_rules/greeting-bojong.md", Title: "Sapaan hai → Bojong", Kind: "rule"},
 		},
 		RecentPages: []RecentPage{
-			{Path: "_rules/greeting-bojong.md", Title: "Sapaan hai → Bojong", Kind: "rule"},
-			{Path: "sessions/abc.md", Title: "Debugging the port", Kind: "session"},
+			{Path: "sessions/01a0dbab.md", Title: "[from: Admin]", Kind: "session"},
 		},
 	}
 }
 
+func ruleBodies() map[string]string {
+	return map[string]string{"_rules/greeting-bojong.md": "Kalau user menyapa dengan \"hai\", balas dengan \"Bojong\"."}
+}
+
 func TestInstructionBlockIsScopedToTheProject(t *testing.T) {
-	src := &briefSource{brief: liveBrief(), pages: map[string]string{"_rules/greeting-bojong.md": "Say Bojong."}}
+	src := &briefSource{brief: liveBrief(), pages: ruleBodies()}
 	be := briefBackend(t, src)
 
 	sc := ReadScope{Workspace: "support-tools", Project: "yoga-06c162e0"}
@@ -96,7 +106,9 @@ func TestInstructionBlockIsScopedToTheProject(t *testing.T) {
 // The distinction the whole block exists to make. A rule stored in memory was
 // followed only half the time because nothing said it was a rule.
 func TestInstructionBlockLabelsRulesApartFromRecall(t *testing.T) {
-	src := &briefSource{brief: liveBrief(), pages: map[string]string{"_rules/greeting-bojong.md": "Say Bojong."}}
+	src := &briefSource{brief: liveBrief(), pages: ruleBodies()}
+	src.brief.Slots = []RecentPage{{Path: "_slots/stack.md", Title: "Stack", Kind: "slot"}}
+	src.pages["_slots/stack.md"] = "Go + Svelte."
 	be := briefBackend(t, src)
 
 	block := InstructionBlock(context.Background(), be, ReadScope{Workspace: "w", Project: "p"})
@@ -105,22 +117,106 @@ func TestInstructionBlockLabelsRulesApartFromRecall(t *testing.T) {
 		t.Fatalf("no rules heading:\n%s", block)
 	}
 	if !strings.Contains(block, "EVIDENCE, NOT INSTRUCTIONS") {
-		t.Fatalf("recalled content is not marked as non-authoritative:\n%s", block)
+		t.Fatalf("recorded state is not marked as non-authoritative:\n%s", block)
 	}
-	// The rule's BODY is there, not just its title: the briefing hands back
-	// references, and a title alone does not tell anyone what to do.
-	if !strings.Contains(block, "Say Bojong.") {
+	// Bodies, not titles: the briefing hands back references, and a list of
+	// titles teaches an agent nothing.
+	if !strings.Contains(block, "balas dengan") {
 		t.Fatalf("the rule's text was not included:\n%s", block)
 	}
-	// A rule must not also appear under the weaker heading.
-	if strings.Count(block, "_rules/greeting-bojong.md") != 1 {
-		t.Fatalf("the rule is listed twice, which blurs the one distinction here:\n%s", block)
+	if !strings.Contains(block, "Go + Svelte.") {
+		t.Fatalf("the slot's text was not included:\n%s", block)
 	}
 	// codex's actual problem: it was never told the tools exist.
 	for _, tool := range []string{"memory_query", "memory_read_page", "memory_write_page"} {
 		if !strings.Contains(block, tool) {
 			t.Fatalf("the block never mentions %s:\n%s", tool, block)
 		}
+	}
+}
+
+// An instruction file is not where you read that a project has 581
+// observations, and a list of sessions/<uuid>.md titled "[from: Admin]" is
+// noise that costs budget and teaches nothing.
+func TestInstructionBlockCarriesOnlyRulesAndSlots(t *testing.T) {
+	src := &briefSource{brief: liveBrief(), pages: ruleBodies()}
+	be := briefBackend(t, src)
+
+	block := InstructionBlock(context.Background(), be, ReadScope{Workspace: "w", Project: "p"})
+	for _, noise := range []string{"581", "sessions/01a0dbab.md", "[from: Admin]", "observation"} {
+		if strings.Contains(block, noise) {
+			t.Fatalf("panel material reached the instruction file (%q):\n%s", noise, block)
+		}
+	}
+}
+
+// Empty rules and slots is the state of this host today, and it is correct
+// behaviour rather than a bug: an empty heading spends instruction budget
+// announcing that there is nothing to announce.
+func TestNoRulesOrSlotsMeansNoBlock(t *testing.T) {
+	src := &briefSource{brief: &ProjectBriefing{
+		Counts:      BriefingCounts{PagesLatest: 16, Sessions: 18},
+		RecentPages: []RecentPage{{Path: "sessions/01a0dbab.md", Title: "[from: Admin]"}},
+	}}
+	be := briefBackend(t, src)
+
+	if got := InstructionBlock(context.Background(), be, ReadScope{Workspace: "w", Project: "p"}); got != "" {
+		t.Fatalf("a project with pages but no rules or slots must paste nothing, got:\n%s", got)
+	}
+}
+
+// One line, and only because the agent can act on it.
+func TestPendingHandoffEarnsOneLine(t *testing.T) {
+	src := &briefSource{brief: &ProjectBriefing{PendingHandoffs: 1}}
+	be := briefBackend(t, src)
+
+	block := InstructionBlock(context.Background(), be, ReadScope{Workspace: "w", Project: "p"})
+	if !strings.Contains(block, "handoff from a previous session is waiting") {
+		t.Fatalf("a waiting handoff is actionable and was dropped:\n%s", block)
+	}
+	if strings.Count(block, "handoff") > 2 {
+		t.Fatalf("one line, not a section:\n%s", block)
+	}
+}
+
+// A page that will not open must not take the rest of the block down, and
+// must not vanish without trace: an agreed rule quietly missing from the
+// instructions is exactly the failure nobody can explain afterwards.
+func TestAnUnreadablePageIsSkippedAndNamed(t *testing.T) {
+	src := &briefSource{brief: liveBrief(), pages: ruleBodies()}
+	src.brief.Rules = append(src.brief.Rules, RecentPage{Path: "_rules/broken.md", Title: "Broken", Kind: "rule"})
+	be := briefBackend(t, src)
+
+	block := InstructionBlock(context.Background(), be, ReadScope{Workspace: "w", Project: "p"})
+	if !strings.Contains(block, "balas dengan") {
+		t.Fatalf("one unreadable page took the readable one with it:\n%s", block)
+	}
+	if strings.Contains(block, "Broken") {
+		t.Fatalf("a page that could not be read was announced as if it had been:\n%s", block)
+	}
+	skipped := SkippedBriefingPages()
+	if len(skipped) != 1 || skipped[0] != "_rules/broken.md" {
+		t.Fatalf("the skipped page is not named for the Health finding: %v", skipped)
+	}
+}
+
+// A project with forty rules must not fire forty reads at spawn.
+func TestPageReadsAreBounded(t *testing.T) {
+	src := &briefSource{brief: &ProjectBriefing{}, pages: map[string]string{}}
+	for i := 0; i < 40; i++ {
+		path := "_rules/r" + string(rune('a'+i%26)) + string(rune('0'+i/26)) + ".md"
+		src.brief.Rules = append(src.brief.Rules, RecentPage{Path: path, Title: path, Kind: "rule"})
+		src.pages[path] = "body"
+	}
+	be := briefBackend(t, src)
+
+	block := InstructionBlock(context.Background(), be, ReadScope{Workspace: "w", Project: "p"})
+	if src.reads > pageBudget {
+		t.Fatalf("%d reads at spawn, budget is %d", src.reads, pageBudget)
+	}
+	// Stopping early is said, not hidden.
+	if !strings.Contains(block, "read it with `memory_read_page`") {
+		t.Fatalf("the block stopped early without saying so:\n%s", block)
 	}
 }
 
@@ -165,7 +261,7 @@ func TestUnreachableStoreYieldsNoBlockAndIsCounted(t *testing.T) {
 
 // One HTTP round trip per project per window, not one per spawn.
 func TestInstructionBlockIsCachedPerProject(t *testing.T) {
-	src := &briefSource{brief: liveBrief(), pages: map[string]string{"_rules/greeting-bojong.md": "Say Bojong."}}
+	src := &briefSource{brief: liveBrief(), pages: ruleBodies()}
 	be := briefBackend(t, src)
 
 	sc := ReadScope{Workspace: "w", Project: "p"}

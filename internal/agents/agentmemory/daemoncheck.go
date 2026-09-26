@@ -51,6 +51,11 @@ type DaemonCheck struct {
 	// while these have the MCP tools and lost only the block that arrives
 	// without being asked for.
 	BriefingsOmitted int64 `json:"briefings_omitted"`
+	// BriefingSkipped names rule or slot pages whose body could not be
+	// read, so they are absent from the instructions agents were given.
+	// Skipping one silently means an agreed rule quietly stops being
+	// followed and nobody can say why.
+	BriefingSkipped []string `json:"briefing_skipped,omitempty"`
 	// Verdict is the sentence for the state this backend is actually in.
 	Verdict string `json:"verdict"`
 }
@@ -76,6 +81,7 @@ func RunDaemonCheck(be *Backend) DaemonCheck {
 		HealthPath:          be.Desc.HealthPath,
 		SpawnsWithoutMemory: port == 0 && spawnsWithoutMemory.Load() > 0,
 		BriefingsOmitted:    briefingsOmitted.Load(),
+		BriefingSkipped:     SkippedBriefingPages(),
 	}
 	c.Running = c.Managed || len(procs) > 0
 	if port > 0 {
