@@ -265,7 +265,24 @@ func projectPolicyHandler(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "project is required"})
 		return
 	}
-	c.JSON(http.StatusOK, PolicyFor(id))
+	c.JSON(http.StatusOK, policyPayload(id))
+}
+
+// projectPolicyPayload is the policy plus the host-wide provider fact.
+//
+// They travel together because either one alone misleads. A project reported
+// as "on" while no provider instance uses Agent Memory records nothing, and
+// the policy cannot say so — the enabling switch is the instance's, and a
+// project's is a narrowing (projectpolicy.go). The FE would otherwise have to
+// infer it from the Overview payload of a backend it may not even be looking
+// at, which is a second copy of the rule in the wrong place.
+type projectPolicyPayload struct {
+	ProjectPolicy
+	Providers ProviderMemoryState `json:"providers"`
+}
+
+func policyPayload(id string) projectPolicyPayload {
+	return projectPolicyPayload{ProjectPolicy: PolicyFor(id), Providers: ProviderMemory()}
 }
 
 // projectPolicyRosterHandler answers "which projects are recording, and which
@@ -315,8 +332,9 @@ func saveProjectPolicyHandler(c *tool.Ctx) {
 	}
 	// Answered with the resolved policy, not an "ok": turning one project
 	// on changes what every OTHER project does, and the page has to be able
-	// to say so immediately.
-	c.JSON(http.StatusOK, PolicyFor(id))
+	// to say so immediately. Same shape as the GET, so a save cannot drop
+	// the provider block the card reads.
+	c.JSON(http.StatusOK, policyPayload(id))
 }
 
 // ── daemon control + overview ────────────────────────────────────────
@@ -702,6 +720,21 @@ func runBackfill(be *Backend, c *tool.Ctx, dryRun bool) {
 		})
 		return
 	}
+	// A project-scoped import MUST run in that project's folder. ai-memory
+	// discovers the local harness history from its working directory, so an
+	// import launched from wick's own cwd reads whatever ran in wick's cwd
+	// and reports it as this project's — the "59 sessions selected" every
+	// project showed, identically, whatever it was (Yoga, 2026-09-26).
+	// Falling back to the cwd is therefore not a lesser answer, it is the
+	// wrong one, so a bucket wick cannot place is refused instead.
+	if scope.Project != "" && scope.Dir == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "no wick project maps to " + scopeLabel(scope) +
+				", so there is no folder to import its local history from",
+			"hint": "An import reads the harness session files in the project's own folder. This bucket has no wick project behind it — it may have been imported from another host, or its project deleted — so wick has no folder to read and will not fall back to its own.",
+		})
+		return
+	}
 	req := BackfillRequest{
 		Scope:       scope,
 		DryRun:      dryRun,
@@ -901,15 +934,34 @@ func scopeFromForm(c *tool.Ctx) (ReadScope, error) {
 	s := ReadScope{
 		Workspace: strings.TrimSpace(c.Form("workspace")),
 		Project:   strings.TrimSpace(c.Form("project")),
-		Dir:       strings.TrimSpace(c.Form("dir")),
 	}
-	if s.Dir != "" {
-		fi, err := os.Stat(s.Dir)
-		if err != nil || !fi.IsDir() {
-			return ReadScope{}, errors.New("dir is not a readable directory: " + s.Dir)
+	// Dir is RESOLVED, never accepted. It is the directory the backend's
+	// command runs in, and ai-memory reads real meaning out of it — which
+	// harness sessions exist here, which project an unmarked folder belongs
+	// to — so a caller-supplied path would let the browser point a scoped
+	// write at any folder on the host. wick knows the folder from its own
+	// project registry; that is the only source it comes from.
+	if s.Project != "" {
+		if p, ok := FolderForScope(Scope{Workspace: s.Workspace, Project: s.Project}); ok {
+			if fi, err := os.Stat(p.Folder); err == nil && fi.IsDir() {
+				s.Dir = p.Folder
+			} else {
+				// The registry names a folder that is not there any more.
+				// Left empty rather than passed on: a non-existent cwd
+				// fails the exec, and a silently different one is worse.
+				return s, nil
+			}
 		}
 	}
 	return s, nil
+}
+
+// scopeLabel names a scope the way the panel does, for a message about it.
+func scopeLabel(s ReadScope) string {
+	if s.Workspace == "" {
+		return s.Project
+	}
+	return s.Workspace + "/" + s.Project
 }
 
 // writeDataError turns a backend read failure into a response the FE can

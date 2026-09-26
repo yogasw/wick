@@ -304,15 +304,20 @@
   // doBackfill runs one import against THIS project's bucket. The scope is
   // the server's own resolution, never a name built here (PLAN §22.2), so a
   // preview and a real run can never act on different buckets.
-  async function doBackfill(dry: boolean): Promise<void> {
+  async function doBackfill(dry: boolean, force = false): Promise<void> {
     if (!backendID || !scope) return;
     busy = true;
     backfillError = "";
     backfill = null;
     backfillReq = null;
     try {
+      // confirm travels with force because the server refuses a forced run
+      // that does not carry both — the fence is on the endpoint, and this
+      // only sends it after the dialog that states what it costs.
       const res = await run(
-        dry ? previewBackfill(base, backendID, scoped) : runBackfill(base, backendID, scoped),
+        dry
+          ? previewBackfill(base, backendID, scoped)
+          : runBackfill(base, backendID, { ...scoped, force, confirm: force }),
       );
       if (res.error) {
         backfillError = res.hint ? `${res.error} — ${res.hint}` : res.error;
@@ -321,7 +326,7 @@
       backfill = res.report ?? null;
       backfillReq = res.request ?? null;
       if (!dry) {
-        toastOk("Imported", "This project's earlier sessions were imported.");
+        toastOk("Imported", force ? "This project's sessions were re-imported." : "This project's earlier sessions were imported.");
         // The cards are what the import was for, so they are re-read rather
         // than left showing the empty state that prompted it.
         await loadProjects();
@@ -370,6 +375,7 @@
   {backfillError}
   onPreviewBackfill={() => void doBackfill(true)}
   onRunBackfill={() => void doBackfill(false)}
+  onForceBackfill={() => void doBackfill(false, true)}
   {openPath}
   {page}
   {pageLoading}

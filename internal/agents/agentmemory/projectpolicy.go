@@ -290,3 +290,55 @@ func TrialRoster() (recording, silenced []ProjectPolicyRow) {
 	}
 	return recording, silenced
 }
+
+// ── the switch a project cannot reach (Yoga, 2026-09-26) ─────────────
+
+// ProviderMemoryState is the host-wide fact that decides whether a project's
+// own setting means anything: whether ANY provider instance has Agent Memory
+// turned on at all.
+//
+// It is read with the policy because only one of the two can ENABLE. The
+// project switch narrows — off, or a trial — and an instance holds the server
+// URL and the credentials, so a project switched on while no instance is wired
+// records and recalls nothing. That state is invisible from the policy alone:
+// PolicyFor answers "on", nothing happens, and the page has no way to say why.
+//
+// It counts instances across every backend on purpose. The question is not
+// "is this bucket wired" but "will any agent in this project record", and an
+// instance pointed at another backend still records.
+type ProviderMemoryState struct {
+	// Known false = wick could not read the provider list. The state is
+	// then unknown, NOT empty: an unreadable config must not be reported
+	// as "nothing is switched on".
+	Known bool `json:"known"`
+	// Instances is how many provider instances use Agent Memory.
+	Instances int `json:"instances"`
+	// Recording is the subset that also capture. The rest recall and write
+	// nothing back, which is how a project reads its memory and never adds
+	// to it (PLAN §7.1).
+	Recording int `json:"recording"`
+	// Names labels them, so a page that says "switch it on somewhere" can
+	// also say where it already is.
+	Names []string `json:"names,omitempty"`
+}
+
+// ProviderMemory reports that state.
+func ProviderMemory() ProviderMemoryState {
+	list, err := loadInstances()
+	if err != nil {
+		return ProviderMemoryState{}
+	}
+	st := ProviderMemoryState{Known: true}
+	for _, ins := range list {
+		if !ins.UseAgentMemory {
+			continue
+		}
+		st.Instances++
+		if ins.AgentMemoryCapture {
+			st.Recording++
+		}
+		st.Names = append(st.Names, InstanceRef{Type: string(ins.Type), Name: ins.Name}.Label())
+	}
+	sort.Strings(st.Names)
+	return st
+}

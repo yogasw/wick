@@ -5,13 +5,22 @@ import {
   cardsFromHits,
   checkpointLabel,
   checkpointsForPath,
-  counterRow,
+  activityTotals,
+  clampPage,
   hasUnsavedWork,
+  listSignature,
+  PAGE_SIZE,
+  pageRangeLabel,
+  paginate,
   pathError,
+  policyState,
+  projectTotals,
+  providerGap,
   scopeHeading,
   snippetOf,
 } from "../projectview.js";
-import type { Checkpoint, ProjectBriefing, ProjectScope, RecentPage, SearchHit } from "../types.js";
+import { meterWidth } from "../stats.js";
+import type { Checkpoint, ProjectBriefing, ProjectPolicy, ProjectScope, RecentPage, SearchHit } from "../types.js";
 
 /* The project view's rules (PLAN §22) — the parts that decide what a card
    says and what an edit is allowed to be. */
@@ -155,7 +164,7 @@ describe("header and counters", () => {
     expect(scopeHeading(null).title).toMatch(/memory/i);
   });
 
-  test("the counters are the project's own, from the briefing", () => {
+  test("the headline counters are the project's own, from the briefing", () => {
     const b: ProjectBriefing = {
       counts: { pages_latest: 31, pages_all: 64, sessions: 12, observations: 880, evidence_rows: 210 },
       activity_7d: { days: 7, sessions: 3, observations: 120, pages_updated: 9 },
@@ -165,14 +174,51 @@ describe("header and counters", () => {
       cross_project_dependents: 0,
       cross_project_dependencies: 0,
     };
-    const row = counterRow(b);
-    expect(row.map((c) => c.label)).toEqual(["Pages", "Sessions", "Observations", "Last 7 days", "Last 30 days"]);
-    expect(row[0].value).toBe("31");
-    expect(row[3].value).toContain("3 sessions");
+    const row = projectTotals(b);
+    expect(row.map((c) => c.label)).toEqual(["Sessions", "Observations", "Pages", "Page versions kept"]);
+    expect(row[0].value).toBe("12");
+    // The ratio is the readable part: how much each session left behind.
+    expect(row[1].note).toContain("73.3 per session");
+    // pages_all runs ahead of pages_latest, and the gap is what a compaction
+    // would reclaim — stated rather than left to be subtracted by eye.
+    expect(row[3].note).toContain("33 older versions");
+  });
+
+  test("a project with no sessions gets a note, not a division by zero", () => {
+    const b = {
+      counts: { pages_latest: 0, pages_all: 0, sessions: 0, observations: 0, evidence_rows: 0 },
+      activity_7d: { days: 7, sessions: 0, observations: 0, pages_updated: 0 },
+      activity_30d: { days: 30, sessions: 0, observations: 0, pages_updated: 0 },
+      pending_handoff_count: 0,
+      pending_message_count: 0,
+      cross_project_dependents: 0,
+      cross_project_dependencies: 0,
+    } as ProjectBriefing;
+    expect(projectTotals(b)[1].note).toMatch(/raw facts/);
+    expect(projectTotals(b)[3].note).toBe("no older versions");
+  });
+
+  test("both windows are shown, because either alone misleads", () => {
+    const b = {
+      counts: { pages_latest: 1, pages_all: 1, sessions: 1, observations: 1, evidence_rows: 0 },
+      activity_7d: { days: 7, sessions: 0, observations: 0, pages_updated: 0 },
+      activity_30d: { days: 30, sessions: 9, observations: 300, pages_updated: 12 },
+      pending_handoff_count: 0,
+      pending_message_count: 0,
+      cross_project_dependents: 0,
+      cross_project_dependencies: 0,
+    } as ProjectBriefing;
+    const w = activityTotals(b);
+    expect(w.map((c) => c.label)).toEqual(["Last 7 days", "Last 30 days"]);
+    expect(w[0].value).toBe("0 · 0 · 0");
+    expect(w[1].value).toBe("9 · 300 · 12");
+    // The units are named, or "9 · 300 · 12" is three anonymous numbers.
+    expect(w[1].note).toContain("sessions · observations · pages updated");
   });
 
   test("no briefing means no counters rather than a row of zeros", () => {
-    expect(counterRow(null)).toEqual([]);
+    expect(projectTotals(null)).toEqual([]);
+    expect(activityTotals(null)).toEqual([]);
   });
 });
 
@@ -319,5 +365,156 @@ describe("linkRow", () => {
 
   test("no briefing means no row rather than four zeros", () => {
     expect(linkRow(null)).toEqual([]);
+  });
+});
+
+// ── paging the page list ─────────────────────────────────────────────
+//
+// The list arrives as one capped array with no server offset, so the slicing
+// is here — which makes the clamping the part worth pinning: a page number
+// that survives a search narrowing the list must land on a real page rather
+// than on an empty one that reads as a broken tab.
+
+describe("pagination", () => {
+  const rows = Array.from({ length: 23 }, (_, i) => `row-${i}`);
+
+  test("a page is a window onto the list, with the numbers to describe it", () => {
+    const p = paginate(rows, 1, 10);
+    expect(p.rows).toHaveLength(10);
+    expect(p.rows[0]).toBe("row-0");
+    expect(p).toMatchObject({ page: 1, pages: 3, total: 23, from: 1, to: 10 });
+  });
+
+  test("the last page is short, and says so rather than padding", () => {
+    const p = paginate(rows, 3, 10);
+    expect(p.rows).toEqual(["row-20", "row-21", "row-22"]);
+    expect(p).toMatchObject({ from: 21, to: 23 });
+  });
+
+  test("a page past the end lands on the last one, not on nothing", () => {
+    expect(paginate(rows, 99, 10).page).toBe(3);
+    expect(paginate(rows, 0, 10).page).toBe(1);
+    expect(paginate(rows, Number.NaN, 10).page).toBe(1);
+  });
+
+  test("an empty list is one empty page, with a zero range", () => {
+    const p = paginate([], 2, 10);
+    expect(p).toMatchObject({ rows: [], page: 1, pages: 1, total: 0, from: 0, to: 0 });
+    expect(pageRangeLabel(p)).toBe("No pages");
+  });
+
+  test("a missing list is the same as an empty one", () => {
+    expect(paginate(null, 1).total).toBe(0);
+    expect(paginate(undefined, 1).total).toBe(0);
+  });
+
+  test("the range line names the total, not just the window", () => {
+    expect(pageRangeLabel(paginate(rows, 2, 10))).toBe("11–20 of 23 pages");
+    expect(pageRangeLabel(paginate(["one"], 1, 10))).toBe("1–1 of 1 page");
+  });
+
+  test("clampPage keeps a number inside the list", () => {
+    expect(clampPage(5, 3)).toBe(3);
+    expect(clampPage(-2, 3)).toBe(1);
+    expect(clampPage(2, 0)).toBe(1);
+  });
+
+  test("the default page size is the one the component uses", () => {
+    expect(paginate(rows, 1).rows).toHaveLength(PAGE_SIZE);
+  });
+
+  // The signature is what sends a reader back to page 1 when the list itself
+  // changes. Identity is not enough: a re-render rebuilds the array every
+  // time, and resetting on every render would make paging impossible.
+  test("the signature follows the paths, not the array identity", () => {
+    const a = [{ path: "a.md", title: "a" }, { path: "b.md", title: "b" }];
+    const same = [{ path: "a.md", title: "a (renamed)" }, { path: "b.md", title: "b" }];
+    const different = [{ path: "a.md", title: "a" }];
+    expect(listSignature(a)).toBe(listSignature(same));
+    expect(listSignature(a)).not.toBe(listSignature(different));
+    expect(listSignature([])).toBe("");
+  });
+});
+
+describe("meter widths", () => {
+  test("a share becomes a percentage", () => {
+    expect(meterWidth(0.5)).toBe(50);
+    expect(meterWidth(1)).toBe(100);
+  });
+
+  // "Almost none" and "none" are different facts, so a non-zero share never
+  // rounds away to an invisible bar.
+  test("a tiny share still draws something; a zero share draws nothing", () => {
+    expect(meterWidth(0.001)).toBe(2);
+    expect(meterWidth(0)).toBe(0);
+    expect(meterWidth(Number.NaN)).toBe(0);
+  });
+});
+
+// ── the switch a project cannot reach ────────────────────────────────
+//
+// Turning Agent Memory on for a project only NARROWS. If no provider instance
+// has it on, nothing records — and the card said nothing at all about that, so
+// a project switched on looked live and was not.
+
+describe("providerGap", () => {
+  const base: ProjectPolicy = { value: "on", allowed: true, trial_mode: false, reason: "on" };
+
+  test("nothing wired: says no agent records here yet, and where to switch it on", () => {
+    const g = providerGap({ ...base, providers: { known: true, instances: 0, recording: 0 } });
+    expect(g?.level).toBe("none");
+    expect(g?.text).toMatch(/no agent records or recalls/i);
+    expect(g?.text).toMatch(/Providers/);
+  });
+
+  test("wired but none capturing: recall works, nothing is written back", () => {
+    const g = providerGap({
+      ...base,
+      providers: { known: true, instances: 2, recording: 0, names: ["claude/enginer", "codex"] },
+    });
+    expect(g?.level).toBe("no-capture");
+    expect(g?.text).toContain("claude/enginer, codex");
+  });
+
+  test("an unreadable provider list is an unknown, not a complaint", () => {
+    const g = providerGap({ ...base, providers: { known: false, instances: 0, recording: 0 } });
+    expect(g?.level).toBe("unknown");
+  });
+
+  test("a healthy host says nothing extra", () => {
+    expect(providerGap({ ...base, providers: { known: true, instances: 1, recording: 1 } })).toBeNull();
+  });
+
+  // A server that does not send the block at all (an older wick) must not
+  // produce a warning invented from its absence.
+  test("no provider block means no claim", () => {
+    expect(providerGap(base)).toBeNull();
+    expect(providerGap(null)).toBeNull();
+  });
+});
+
+describe("policyState", () => {
+  const on: ProjectPolicy = { value: "on", allowed: true, trial_mode: false, reason: "on" };
+
+  test("a project that records says so", () => {
+    expect(policyState(on, null)).toEqual({ label: "Recording and recalling", ok: true });
+  });
+
+  // The headline must not claim what the host cannot do. This is the state
+  // Yoga hit: switch the project on, nothing happens, card stays green.
+  test("an unwired host is never reported as recording", () => {
+    const st = policyState(on, providerGap({ ...on, providers: { known: true, instances: 0, recording: 0 } }));
+    expect(st.ok).toBe(false);
+    expect(st.label).toMatch(/Nothing is recording/i);
+  });
+
+  test("recall-only is its own answer, not a green tick", () => {
+    const st = policyState(on, providerGap({ ...on, providers: { known: true, instances: 1, recording: 0 } }));
+    expect(st.ok).toBe(false);
+    expect(st.label).toMatch(/Recalling only/i);
+  });
+
+  test("a project switched off stays off whatever the host does", () => {
+    expect(policyState({ ...on, value: "off", allowed: false }, null).ok).toBe(false);
   });
 });

@@ -1,6 +1,9 @@
 import { describe, test, expect } from "vitest";
 import {
   BRIEFING_UNAVAILABLE,
+  BACKFILL_EXPLAINER,
+  BACKFILL_SELECTED_NOTE,
+  backfillCapNote,
   backfillCapWarning,
   backfillConfirmBody,
   backfillSummary,
@@ -220,11 +223,38 @@ describe("backfill reporting", () => {
     expect(backfillSummary(report({ selected: 0 }))).toContain("No local harness sessions");
   });
 
+  // The bug Yoga hit: the card printed "59 sessions selected, would import 0"
+  // because the explanation was gated on selected === 0 as well. A real run on
+  // a non-empty store reports BOTH — 59 found, every one skipped — so the flag
+  // alone decides the sentence, and the count keeps the meaning it has.
+  test("sessions found and none imported is explained, not left as a bare 0", () => {
+    const s = backfillSummary(report({ skipped_non_empty: true, selected: 59, dry_run: true }));
+    expect(s).toContain("59 local sessions found for this project, none imported");
+    expect(s).toContain("already has captured sessions");
+    expect(s).not.toContain("would import 0");
+  });
+
   test("a real import counts what it took", () => {
     const s = backfillSummary(report({ selected: 4, imported_sessions: 4, imported_events: 190 }));
-    expect(s).toContain("4 sessions selected");
+    expect(s).toContain("4 local sessions found");
     expect(s).toContain("imported 4 sessions");
     expect(s).toContain("190 events");
+  });
+
+  // The cap is resolved server-side (wick's default, not the backend's 25) and
+  // is visible nowhere else, so it is stated whether or not it bit.
+  test("the cap in force is named even when it took everything", () => {
+    expect(backfillCapNote(null)).toBeNull();
+    expect(backfillCapNote({ scope: {}, dry_run: true, force: false })).toBeNull();
+    const n = backfillCapNote({ scope: {}, dry_run: true, force: false, max_sessions: 2000 });
+    expect(n).toContain("At most 2000 sessions");
+  });
+
+  // "Selected" is a count of files on disk, not of things about to be written.
+  test("the card explains what it reads and that it is a one-time bootstrap", () => {
+    expect(BACKFILL_EXPLAINER).toMatch(/session file/i);
+    expect(BACKFILL_EXPLAINER).toMatch(/one-time bootstrap, not a sync/i);
+    expect(BACKFILL_SELECTED_NOTE).toMatch(/local harness session files/i);
   });
 
   test("a dry run says 'would import', not 'imported'", () => {

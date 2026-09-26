@@ -538,34 +538,88 @@ func TestBackfillCapDefaultsToWicks(t *testing.T) {
 	}
 }
 
-// TestUnknownScopeDirIsRefused: ai-memory resolves an unknown directory to
-// some OTHER project's scope instead of failing, so wick checks the directory
-// before handing it over (PLAN §14).
-func TestUnknownScopeDirIsRefused(t *testing.T) {
-	withStore(t, &fakeStore{enabled: true, admin: true})
-	fd := &fakeData{}
-	w, c := post(url.Values{"dir": {"/no/such/folder/here"}})
-	runBackfill(testBackend(fd), c, true)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status %d", w.Code)
-	}
-	if fd.backfills != 0 {
-		t.Fatal("an unresolvable scope must not reach the backend")
-	}
-}
+// The import's working directory is the whole bug behind "59 sessions
+// selected" on every project (Yoga, 2026-09-26): ai-memory discovers a host's
+// harness session history relative to the directory the command runs in, and
+// wick was setting none — so every project's backfill ran in wick's own cwd,
+// found the same pile of sessions there, and reported it as that project's.
+//
+// The fix is that the directory is RESOLVED from wick's project registry and
+// never sent by the caller. These three pin all of it: the folder arrives,
+// nothing the browser says can change it, and a bucket wick cannot place is
+// refused rather than quietly run from the cwd.
 
-// TestScopeDirIsPassedThrough: a real directory reaches the backend as the
-// working directory of the command.
-func TestScopeDirIsPassedThrough(t *testing.T) {
+func TestBackfillRunsInTheProjectsOwnFolder(t *testing.T) {
 	withStore(t, &fakeStore{enabled: true, admin: true})
 	dir := t.TempDir()
+	withProjects(t, "qiscus", ProjectFolder{ID: "8c28230d-aaaa", Name: "Kasir", Folder: dir})
+
 	fd := &fakeData{}
-	w, c := post(url.Values{"dir": {dir}, "project": {"wick-8c28230d"}, "workspace": {"qiscus"}})
+	w, c := post(url.Values{"project": {"kasir-8c28230d"}, "workspace": {"qiscus"}})
 	runBackfill(testBackend(fd), c, true)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
-	if fd.lastReq.Scope.Dir != dir || fd.lastReq.Scope.Project != "wick-8c28230d" || fd.lastReq.Scope.Workspace != "qiscus" {
+	if fd.lastReq.Scope.Dir != dir {
+		t.Fatalf("the import must run in the project's own folder %s: %+v", dir, fd.lastReq.Scope)
+	}
+	if fd.lastReq.Scope.Project != "kasir-8c28230d" || fd.lastReq.Scope.Workspace != "qiscus" {
+		t.Fatalf("scope: %+v", fd.lastReq.Scope)
+	}
+}
+
+// A directory in the request is ignored, not honoured. The panel runs in a
+// browser, and a scoped command's cwd decides which harness history it reads
+// and writes — that is not a value a caller gets to choose.
+func TestBackfillIgnoresACallerSuppliedDir(t *testing.T) {
+	withStore(t, &fakeStore{enabled: true, admin: true})
+	dir := t.TempDir()
+	withProjects(t, "qiscus", ProjectFolder{ID: "8c28230d-aaaa", Name: "Kasir", Folder: dir})
+
+	fd := &fakeData{}
+	w, c := post(url.Values{"project": {"kasir-8c28230d"}, "workspace": {"qiscus"}, "dir": {"/etc"}})
+	runBackfill(testBackend(fd), c, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if fd.lastReq.Scope.Dir != dir {
+		t.Fatalf("a caller-supplied dir must not reach the backend: %+v", fd.lastReq.Scope)
+	}
+}
+
+// The case that used to be silent: a bucket with no wick project behind it.
+// Running it from wick's cwd would import wick's own session files into that
+// project, which is worse than not importing at all.
+func TestBackfillRefusesAScopeWickCannotPlace(t *testing.T) {
+	withStore(t, &fakeStore{enabled: true, admin: true})
+	withProjects(t, "qiscus", ProjectFolder{ID: "8c28230d-aaaa", Name: "Kasir", Folder: t.TempDir()})
+
+	fd := &fakeData{}
+	w, c := post(url.Values{"project": {"imported-from-another-host"}, "workspace": {"qiscus"}})
+	runBackfill(testBackend(fd), c, true)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if fd.backfills != 0 {
+		t.Fatal("an unplaceable scope must not reach the backend")
+	}
+	// The refusal has to say what is missing, or it reads as a broken button.
+	if body := decodeBody(t, w); body["hint"] == "" {
+		t.Fatalf("the refusal must explain itself: %v", body)
+	}
+}
+
+// A store-wide import still has no project, and still runs where it always
+// did. Only the project-scoped path gained a folder.
+func TestStoreWideBackfillNeedsNoFolder(t *testing.T) {
+	withStore(t, &fakeStore{enabled: true, admin: true})
+	fd := &fakeData{}
+	w, c := post(nil)
+	runBackfill(testBackend(fd), c, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if fd.lastReq.Scope.Dir != "" || fd.lastReq.Scope.Project != "" {
 		t.Fatalf("scope: %+v", fd.lastReq.Scope)
 	}
 }

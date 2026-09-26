@@ -151,57 +151,106 @@ describe("ProjectView — importing earlier sessions", () => {
     ...over,
   });
 
+  // Import lives behind the switcher beside Activity, so every test here
+  // opens that pane first — the same click the user makes.
+  const openImport = async (over: object = {}) => {
+    render(ProjectMemory, { props: withImport(over) as never });
+    await fireEvent.click(screen.getByText("Import"));
+  };
+
+  test("the card explains what an import actually reads before offering one", async () => {
+    await openImport();
+    expect(screen.getByText(/one-time bootstrap, not a sync/i)).toBeDefined();
+    expect(screen.getByTestId("backfill-selected-note").textContent).toMatch(/session files/i);
+  });
+
   test("a preview runs straight away — it writes nothing", async () => {
     const onPreviewBackfill = vi.fn();
-    render(ProjectMemory, { props: withImport({ onPreviewBackfill }) as never });
+    await openImport({ onPreviewBackfill });
     await fireEvent.click(screen.getByText("Preview import"));
     expect(onPreviewBackfill).toHaveBeenCalledTimes(1);
   });
 
   test("an import is confirmed first, and the confirmation names the cost", async () => {
     const onRunBackfill = vi.fn();
-    render(ProjectMemory, { props: withImport({ onRunBackfill }) as never });
+    await openImport({ onRunBackfill });
 
-    // The section's own button is the first "Import" on the page; the
-    // dialog's is the one that appears after it.
-    await fireEvent.click(screen.getAllByText("Import")[0]);
+    await fireEvent.click(screen.getByText("Import now"));
     expect(onRunBackfill).not.toHaveBeenCalled();
     // The question names the bucket being written to, and what the run costs.
     expect(screen.getByText(/into wick\/kasir-8c28230d/)).toBeDefined();
     expect(screen.getByText(/nothing is duplicated/)).toBeDefined();
 
-    const buttons = screen.getAllByText("Import");
+    // Two "Import now" now exist — the card's button and the dialog's — and
+    // the dialog's is the one that commits.
+    const buttons = screen.getAllByText("Import now");
     await fireEvent.click(buttons[buttons.length - 1]);
     expect(onRunBackfill).toHaveBeenCalledTimes(1);
   });
 
-  test("a viewer gets neither button", () => {
-    render(ProjectMemory, { props: withImport({ canManage: false }) as never });
-    expect(screen.queryByText("Preview import")).toBeNull();
-    expect(screen.queryAllByText("Import")).toEqual([]);
+  // Force is the one control that duplicates observations, so it is absent
+  // unless the surface wired it, and it still asks first.
+  test("a forced re-import is offered only when wired, and says what it costs", async () => {
+    const onForceBackfill = vi.fn();
+    await openImport({ onForceBackfill });
+    await fireEvent.click(screen.getByText("Force re-import"));
+    expect(onForceBackfill).not.toHaveBeenCalled();
+    expect(screen.getByText(/observations do NOT/)).toBeDefined();
+
+    const buttons = screen.getAllByText("Force re-import");
+    await fireEvent.click(buttons[buttons.length - 1]);
+    expect(onForceBackfill).toHaveBeenCalledTimes(1);
   });
 
-  test("a surface that did not wire the import has no dead section", () => {
+  test("no force button on a surface that did not wire one", async () => {
+    await openImport();
+    expect(screen.queryByText("Force re-import")).toBeNull();
+  });
+
+  test("a viewer gets neither button", async () => {
+    await openImport({ canManage: false });
+    expect(screen.queryByText("Preview import")).toBeNull();
+    expect(screen.queryByText("Import now")).toBeNull();
+    expect(screen.getAllByText(/restricted to admins/i).length).toBeGreaterThan(0);
+  });
+
+  test("a surface that did not wire the import has no dead switcher", () => {
     render(ProjectMemory, { props: { ...(viewProps as object), canManage: true } });
-    expect(screen.queryByText("Import earlier sessions")).toBeNull();
+    expect(screen.queryByTestId("pane-switch")).toBeNull();
     expect(screen.queryByText("Preview import")).toBeNull();
   });
 
-  test("the outcome of a run is shown where it was started", () => {
-    render(ProjectMemory, {
-      props: withImport({
-        backfill: {
-          selected: 4,
-          imported_sessions: 4,
-          imported_events: 31,
-          skipped_for_cap: 0,
-          failed_sessions: 0,
-          skipped_non_empty: false,
-          dry_run: false,
-        },
-      }) as never,
+  test("the outcome of a run is shown where it was started", async () => {
+    await openImport({
+      backfill: {
+        selected: 4,
+        imported_sessions: 4,
+        imported_events: 31,
+        skipped_for_cap: 0,
+        failed_sessions: 0,
+        skipped_non_empty: false,
+        dry_run: false,
+      },
     });
     expect(screen.getByTestId("backfill-summary").textContent).toMatch(/Imported/);
+  });
+
+  // The report that started all of this: 59 found, 0 imported, no explanation.
+  test("a no-op preview says why nothing was imported", async () => {
+    await openImport({
+      backfill: {
+        selected: 59,
+        imported_sessions: 0,
+        imported_events: 0,
+        skipped_for_cap: 0,
+        failed_sessions: 0,
+        skipped_non_empty: true,
+        dry_run: true,
+      },
+    });
+    const text = screen.getByTestId("backfill-summary").textContent ?? "";
+    expect(text).toContain("59 local sessions found for this project, none imported");
+    expect(text).toMatch(/already has captured sessions/);
   });
 });
 
@@ -401,5 +450,134 @@ describe("ProjectMemory — analytics about this project", () => {
     render(ProjectMemory, { props: { ...(viewProps as object), canManage: true, briefing: stale } });
     expect(screen.getByTestId("freshness")).toBeDefined();
     expect(screen.getByText(/capture hook/i)).toBeDefined();
+  });
+});
+
+/* The regrouped page (Yoga, 2026-09-26).
+
+   Three complaints, three things to pin: the list is paged instead of poured
+   out whole, opening a page puts the reader BESIDE the list rather than under
+   it, and the policy card no longer claims a project is recording on a host
+   where nothing is wired to record. */
+
+const manyPages = Array.from({ length: 23 }, (_, i) => ({
+  path: `sessions/${String(i).padStart(4, "0")}.md`,
+  title: `session ${i}`,
+  kind: "session",
+  updated_at: "2026-09-25T09:58:00Z",
+}));
+
+const withPages = (over: object = {}) => ({
+  ...(viewProps as object),
+  canManage: true,
+  briefing: { ...(BRIEFING as object), recent_pages: manyPages },
+  ...over,
+});
+
+describe("ProjectMemory — the page list is paged, not poured out", () => {
+  test("only one page of cards is rendered, and the range says so", () => {
+    render(ProjectMemory, { props: withPages() as never });
+    expect(screen.getByTestId("page-cards").querySelectorAll("li")).toHaveLength(10);
+    expect(screen.getByTestId("pager").textContent).toContain("1–10 of 23 pages");
+  });
+
+  test("Next moves the window without touching the rest of the page", async () => {
+    render(ProjectMemory, { props: withPages() as never });
+    await fireEvent.click(screen.getByText("Next"));
+    expect(screen.getByTestId("pager").textContent).toContain("11–20 of 23 pages");
+    expect(screen.getByTestId("page-cards").textContent).toContain("session 10");
+    expect(screen.getByTestId("page-cards").textContent).not.toContain("session 0\n");
+  });
+
+  test("a list that fits on one page gets the count and no controls", () => {
+    render(ProjectMemory, { props: { ...(viewProps as object), canManage: true } });
+    expect(screen.getByTestId("pager").textContent).toContain("1–1 of 1 page");
+    expect(screen.queryByText("Next")).toBeNull();
+  });
+});
+
+describe("ProjectMemory — reading a page does not move the list", () => {
+  test("nothing open: the side panel invites a click rather than sitting empty", () => {
+    render(ProjectMemory, { props: withPages() as never });
+    expect(screen.getByTestId("reader-placeholder").textContent).toMatch(/beside the list/i);
+  });
+
+  // The reader is rendered twice on purpose: a sticky column at lg+ and a
+  // modal below it, both driven by the same props, so the breakpoint decides
+  // which one is visible and neither can hold a different draft.
+  test("opening a page renders the reader beside the list AND in the modal", () => {
+    render(ProjectMemory, { props: withPages({ openPath: "sessions/0000.md", page: { path: "sessions/0000.md", body: "hello" } }) as never });
+    expect(screen.getAllByTestId("page-editor")).toHaveLength(2);
+    // Two elements share this label for that reason — query both.
+    expect(screen.getAllByLabelText("Page body")).toHaveLength(2);
+    // The list is still on screen, where it was.
+    expect(screen.getByTestId("page-cards")).toBeDefined();
+    expect(screen.queryByTestId("reader-placeholder")).toBeNull();
+  });
+
+  test("closing from either copy is the same close", async () => {
+    const onClose = vi.fn();
+    render(ProjectMemory, {
+      props: withPages({ openPath: "sessions/0000.md", page: { path: "sessions/0000.md", body: "hello" }, onClose }) as never,
+    });
+    await fireEvent.click(screen.getByText("Close"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ProjectMemory — the switch this project cannot reach", () => {
+  const policy = {
+    value: "on" as const,
+    allowed: true,
+    trial_mode: false,
+    reason: "Agent Memory is on for this project.",
+  };
+
+  test("a host with nothing wired does not show a green 'recording'", () => {
+    render(ProjectMemory, {
+      props: {
+        ...(viewProps as object),
+        canManage: true,
+        policy: { ...policy, providers: { known: true, instances: 0, recording: 0 } },
+      },
+    });
+    expect(screen.getByTestId("policy-state").textContent).toMatch(/Nothing is recording/i);
+    expect(screen.getByTestId("provider-gap").textContent).toMatch(/Providers/);
+  });
+
+  test("a wired host says nothing extra", () => {
+    render(ProjectMemory, {
+      props: {
+        ...(viewProps as object),
+        canManage: true,
+        policy: { ...policy, providers: { known: true, instances: 1, recording: 1 } },
+      },
+    });
+    expect(screen.getByTestId("policy-state").textContent).toMatch(/Recording and recalling/i);
+    expect(screen.queryByTestId("provider-gap")).toBeNull();
+  });
+});
+
+describe("ProjectMemory — analytics shared with the global panel", () => {
+  test("the project's own totals lead the page, with the ratios spelled out", () => {
+    render(ProjectMemory, { props: { ...(viewProps as object), canManage: true } });
+    const grid = screen.getByTestId("project-counters");
+    expect(grid.textContent).toContain("Observations");
+    expect(grid.textContent).toContain("880");
+    expect(grid.textContent).toContain("73.3 per session");
+  });
+
+  test("both activity windows are shown, labelled", () => {
+    render(ProjectMemory, { props: { ...(viewProps as object), canManage: true } });
+    const windows = screen.getByTestId("project-windows");
+    expect(windows.textContent).toContain("Last 7 days");
+    expect(windows.textContent).toContain("3 · 120 · 9");
+  });
+
+  // What is NOT per project is said in words rather than drawn as this
+  // project's zeros.
+  test("store-only analytics are named as absent, not rendered as zeros", () => {
+    render(ProjectMemory, { props: { ...(viewProps as object), canManage: true } });
+    expect(screen.getByTestId("store-only-note").textContent).toMatch(/no per-project figure/i);
   });
 });

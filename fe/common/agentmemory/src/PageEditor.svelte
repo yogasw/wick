@@ -39,6 +39,11 @@
     onClose: () => void;
     onLoadCheckpoints: () => void;
     onRestore: (oid: string) => void;
+    /* framed false = the editor is already inside a frame that carries its
+       own title and close control (the narrow-screen modal). It drops the
+       border and its own header rather than nesting one card inside another
+       and offering two ways to close the same thing. */
+    framed?: boolean;
   };
   let {
     path,
@@ -63,6 +68,7 @@
     onClose,
     onLoadCheckpoints,
     onRestore,
+    framed = true,
   }: Props = $props();
 
   let confirmDelete = $state(false);
@@ -86,16 +92,21 @@
   }
 </script>
 
-<section class="rounded-xl border border-white-300 bg-white-100 dark:border-navy-600 dark:bg-navy-700" data-testid="page-editor">
-  <div class="flex flex-wrap items-start justify-between gap-3 border-b border-white-300 px-5 py-3 dark:border-navy-600">
-    <div class="min-w-0">
-      <p class="truncate font-mono text-sm text-black-900 dark:text-white-100" title={path}>{path}</p>
-      {#if dirty}
-        <p class="mt-0.5 text-[0.6875rem] text-cau-600 dark:text-cau-400">Unsaved changes</p>
-      {/if}
+<section
+  class={framed ? "rounded-xl border border-white-300 bg-white-100 dark:border-navy-600 dark:bg-navy-700" : ""}
+  data-testid="page-editor"
+>
+  {#if framed}
+    <div class="flex flex-wrap items-start justify-between gap-3 border-b border-white-300 px-5 py-3 dark:border-navy-600">
+      <div class="min-w-0">
+        <p class="truncate font-mono text-sm text-black-900 dark:text-white-100" title={path}>{path}</p>
+        {#if dirty}
+          <p class="mt-0.5 text-[0.6875rem] text-cau-600 dark:text-cau-400">Unsaved changes</p>
+        {/if}
+      </div>
+      <Button variant="ghost" size="sm" onclick={onClose}>Close</Button>
     </div>
-    <Button variant="ghost" size="sm" onclick={onClose}>Close</Button>
-  </div>
+  {/if}
 
   {#if loading}
     <p class="px-5 py-8 text-center text-xs text-black-700 dark:text-black-600">Reading the page…</p>

@@ -1,4 +1,13 @@
-import type { Checkpoint, ProjectBriefing, ProjectScope, RecentPage, SearchHit } from "./types.js";
+import type {
+  ActivityWindow,
+  Checkpoint,
+  ProjectBriefing,
+  ProjectPolicy,
+  ProjectScope,
+  RecentPage,
+  SearchHit,
+} from "./types.js";
+import type { MeterRow, StatItem } from "./stats.js";
 import { relativeTime } from "./format.js";
 import { BRIEFING_UNAVAILABLE } from "./projects.js";
 
@@ -156,21 +165,6 @@ export function checkpointsForPath(all: Checkpoint[] | null | undefined, path: s
 export function scopeHeading(scope: ProjectScope | null): { title: string; bucket: string } {
   if (!scope) return { title: "This project's memory", bucket: "" };
   return { title: scope.name || scope.project, bucket: `${scope.workspace}/${scope.project}` };
-}
-
-// counterRow is the project's own numbers, in display order. It reads from
-// the briefing and nowhere else: the store-wide totals with the same names
-// live on the Analytics tab and must never be mixed in here (PLAN §13.5).
-export function counterRow(b: ProjectBriefing | undefined | null): { label: string; value: string }[] {
-  if (!b) return [];
-  const c = b.counts;
-  return [
-    { label: "Pages", value: String(c.pages_latest) },
-    { label: "Sessions", value: String(c.sessions) },
-    { label: "Observations", value: String(c.observations) },
-    { label: "Last 7 days", value: `${b.activity_7d.sessions} sessions · ${b.activity_7d.observations} obs` },
-    { label: "Last 30 days", value: `${b.activity_30d.sessions} sessions · ${b.activity_30d.observations} obs` },
-  ];
 }
 
 // ── this project's analytics (Yoga, 2026-09-25) ──────────────────────
@@ -345,4 +339,189 @@ export function linkRow(b: ProjectBriefing | null | undefined): { label: string;
     { label: "Handoffs pending", value: String(b.pending_handoff_count), note: "batons another agent has not picked up" },
     { label: "Messages pending", value: String(b.pending_message_count), note: "mail addressed to this project" },
   ];
+}
+
+// ── paging the page list (Yoga, 2026-09-26: "capek scroll2 mulu") ─────
+
+// The listing arrives as ONE array: the briefing's recent_pages is capped at
+// 50 rows server-side (briefingRecentPages in aimemory/mcp.go) and the backend
+// exposes no offset for it, so there is no honest server parameter to page
+// with. The slicing is therefore here, over the rows already in hand — which
+// is also why the caveat about the cap (timelineCaveat) still has to be said.
+
+export const PAGE_SIZE = 10;
+
+// Paged is one page of a list, with everything the pager needs to render
+// itself. `page` is the CLAMPED page, not the one that was asked for: a stale
+// page number after a search narrows the list must land on a real page rather
+// than on nothing.
+export type Paged<T> = {
+  rows: T[];
+  page: number;
+  pages: number;
+  total: number;
+  // from/to are 1-based and inclusive, for the "11–20 of 47" line. Both are 0
+  // when there is nothing to show.
+  from: number;
+  to: number;
+};
+
+export function paginate<T>(rows: T[] | null | undefined, page: number, size: number = PAGE_SIZE): Paged<T> {
+  const all = rows ?? [];
+  const per = Math.max(1, Math.floor(size));
+  const total = all.length;
+  const pages = Math.max(1, Math.ceil(total / per));
+  const cur = clampPage(page, pages);
+  const start = (cur - 1) * per;
+  const slice = all.slice(start, start + per);
+  return {
+    rows: slice,
+    page: cur,
+    pages,
+    total,
+    from: slice.length ? start + 1 : 0,
+    to: slice.length ? start + slice.length : 0,
+  };
+}
+
+// clampPage keeps a page number inside the list. A non-number is page 1 rather
+// than NaN — the pager's own arithmetic is the likeliest source of one.
+export function clampPage(page: number, pages: number): number {
+  const max = Math.max(1, Math.floor(pages) || 1);
+  if (!Number.isFinite(page)) return 1;
+  return Math.min(max, Math.max(1, Math.floor(page)));
+}
+
+// pageRangeLabel is the line beside the pager. It names the total as well as
+// the window: "1–10" alone cannot say whether there is anything after it.
+export function pageRangeLabel(p: Paged<unknown>, noun = "page"): string {
+  if (p.total === 0) return `No ${noun}s`;
+  return `${p.from}–${p.to} of ${p.total} ${noun}${p.total === 1 ? "" : "s"}`;
+}
+
+// listSignature identifies the list a pager is sitting on, so the component
+// can return to page 1 when the underlying rows change — searching, importing
+// or deleting must not leave the reader on page 4 of a list that is now one
+// page long. It is the paths in order: a re-render that produced the same
+// rows is the same list, whatever the array identity says.
+export function listSignature(cards: PageCard[]): string {
+  return cards.map((c) => c.path).join("\n");
+}
+
+// ── this project's analytics, drawn with the shared blocks ───────────
+
+// projectTotals is the project's lifetime counters as the Analytics grid shows
+// them — the same treatment the store-wide Totals card gets, over the
+// project's OWN briefing and nothing else.
+//
+// The ratios are where the readable shape is: observations per session says
+// how much each session left behind, and the version gap says how much history
+// this project is carrying.
+export function projectTotals(b: ProjectBriefing | null | undefined): StatItem[] {
+  if (!b) return [];
+  const c = b.counts;
+  const gap = Math.max(0, c.pages_all - c.pages_latest);
+  return [
+    { label: "Sessions", value: String(c.sessions), note: "captured in this project, lifetime" },
+    {
+      label: "Observations",
+      value: String(c.observations),
+      note: c.sessions ? `${(c.observations / c.sessions).toFixed(1)} per session` : "raw facts behind the pages",
+    },
+    { label: "Pages", value: String(c.pages_latest), note: "latest version of each" },
+    {
+      label: "Page versions kept",
+      value: String(c.pages_all),
+      note: gap ? `${gap} older version${gap === 1 ? "" : "s"} still stored` : "no older versions",
+    },
+  ];
+}
+
+// activityTotals is the two windows side by side. Either alone misleads: 0 in
+// 7 days reads as a dead project until the 30-day number says it was busy last
+// month.
+export function activityTotals(b: ProjectBriefing | null | undefined): StatItem[] {
+  if (!b) return [];
+  const w = (a: ActivityWindow) => `${a.sessions} · ${a.observations} · ${a.pages_updated}`;
+  return [
+    { label: "Last 7 days", value: w(b.activity_7d), note: "sessions · observations · pages updated" },
+    { label: "Last 30 days", value: w(b.activity_30d), note: "sessions · observations · pages updated" },
+  ];
+}
+
+// kindMeters is the page-kind mix as proportional bars — the project-scoped
+// use of the same block the store-wide ingest split is drawn with.
+export function kindMeters(mix: KindSlice[]): MeterRow[] {
+  return mix.map((k) => ({
+    id: k.kind,
+    label: k.kind,
+    value: `${k.count} · ${Math.round(k.share * 100)}%`,
+    share: k.share,
+  }));
+}
+
+// STORE_ONLY_ANALYTICS names the analytics that genuinely have no per-project
+// answer, rather than drawing them as this project's zeros.
+//
+// Ingest, the hook spool, index coverage and storage all come from the
+// backend's `status`, which takes no --project: they are properties of the
+// daemon and the database, not of a project. Saying so is the honest version
+// of a card that would otherwise show a store-wide figure under a project's
+// heading (PLAN §13.5 point 1).
+export const STORE_ONLY_ANALYTICS =
+  "Ingest, the hook spool, index coverage and database size are properties of the store and its daemon — they come from a call that takes no project, so there is no per-project figure to show here. They are on the global panel's Analytics tab, where they are labelled store-wide.";
+
+// ── the switch this project cannot reach (PLAN §F, Yoga 2026-09-26) ──
+
+// ProviderGap is what has to be said when a project's own switch is not the
+// one that decides anything.
+//
+// Turning Agent Memory on for a project NARROWS: it can silence a project or
+// start a one-project trial, and it can never enable an instance that is not
+// wired. So a project switched on while no provider instance uses Agent Memory
+// records and recalls nothing, and the card has to say that rather than
+// showing a green "Recording and recalling" that is simply false.
+export type ProviderGap = { level: "none" | "no-capture" | "unknown"; text: string } | null;
+
+export function providerGap(p: ProjectPolicy | null | undefined): ProviderGap {
+  const st = p?.providers;
+  if (!st) return null;
+  if (!st.known) {
+    return {
+      level: "unknown",
+      text: "wick could not read its provider list, so whether any agent is wired to Agent Memory at all is unknown — this project's setting alone does not decide it.",
+    };
+  }
+  if (st.instances === 0) {
+    return {
+      level: "none",
+      text: "No provider instance has Agent Memory switched on, so no agent records or recalls in this project yet — whatever this project's own setting says. This switch only narrows: turn Agent Memory on for an agent under Providers first.",
+    };
+  }
+  if (st.recording === 0) {
+    const who = (st.names ?? []).join(", ");
+    return {
+      level: "no-capture",
+      text: `Agent Memory is on for ${who || "the wired instances"}, but none of them capture: agents here recall what is already stored and write nothing back. Switch capture on for an instance under Providers.`,
+    };
+  }
+  return null;
+}
+
+// PolicyState is the headline on the policy card: what is ACTUALLY happening
+// in this project, not what its own switch says.
+//
+// The two can differ, and that difference is the whole point of ProviderGap: a
+// project set to "on" with no instance wired is not recording, and a green
+// "Recording and recalling" over that state is a lie the page tells every time
+// someone tries the feature on one project first.
+export type PolicyState = { label: string; ok: boolean };
+
+export function policyState(p: ProjectPolicy | null | undefined, gap: ProviderGap): PolicyState {
+  if (!p) return { label: "Not recording or recalling", ok: false };
+  if (gap?.level === "none") return { label: "Nothing is recording yet", ok: false };
+  if (gap?.level === "no-capture" && p.allowed) return { label: "Recalling only — nothing is recorded", ok: false };
+  return p.allowed
+    ? { label: "Recording and recalling", ok: true }
+    : { label: "Not recording or recalling", ok: false };
 }

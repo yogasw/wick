@@ -7,8 +7,8 @@
      source of confusion this feature has (PLAN §13.5 point 1), so the two
      never share a screen — per-project numbers live on the Projects tab. */
   import { Button, ConfirmDialog } from "@wick-fe/common-ui";
-  import { Section } from "@wick-fe/common-agentmemory";
-  import { BlockedState } from "@wick-fe/common-agentmemory";
+  import { BlockedState, MeterList, Section, StatGrid } from "@wick-fe/common-agentmemory";
+  import type { MeterRow, StatItem } from "@wick-fe/common-agentmemory";
   import {
     GROWTH_NOTE,
     PROVIDER_SPLIT_NOTE,
@@ -23,7 +23,7 @@
     spoolFacts,
     storageFacts,
   } from "./analytics.js";
-  import { blockedBy, formatCount, MANAGE_ADMIN_ONLY, pctWidth } from "./format.js";
+  import { blockedBy, formatCount, MANAGE_ADMIN_ONLY } from "./format.js";
   import type { Overview } from "./types.js";
 
   type Props = {
@@ -53,6 +53,31 @@
   const split = $derived(providerSplit(ov?.used_by));
   const storage = $derived(storageFacts(store));
 
+  // The store-wide rows, in the shape the shared blocks render. Building them
+  // here rather than inside the components is what keeps the components
+  // scope-agnostic: the project tab builds its own rows from its own briefing
+  // and draws them with exactly these (stats.ts).
+  const ingestRows = $derived<MeterRow[]>(
+    ingest.parts.map((p) => ({
+      id: p.id,
+      label: p.label,
+      value: `${formatCount(p.value)} · ${p.pct}`,
+      share: ingest.total > 0 ? p.value / ingest.total : 0,
+      bar: p.bar,
+      note: p.note,
+    })),
+  );
+  const spoolItems = $derived<StatItem[]>([
+    { label: "Pending", value: formatCount(spool.pending) },
+    { label: "Oldest waiting", value: spool.oldest },
+    { label: "Retries", value: formatCount(spool.retries) },
+  ]);
+  const storageItems = $derived<StatItem[]>([
+    { label: "Database", value: storage.database },
+    { label: "Reclaimable", value: storage.reclaimable },
+    { label: "Free on disk", value: storage.free },
+  ]);
+
   function doCompact(): void {
     confirmCompact = false;
     onCompact();
@@ -71,53 +96,31 @@
   {:else}
     <!-- Growth -->
     <Section title="Totals" scope={STORE_SCOPE_LABEL} note={GROWTH_NOTE}>
-      <div class="grid grid-cols-2 gap-4 px-5 py-4 sm:grid-cols-4">
-        {#each growth as g (g.label)}
-          <div class="min-w-0">
-            <p class="text-[0.6875rem] uppercase tracking-wider text-black-700 dark:text-black-600">{g.label}</p>
-            <p class="mt-0.5 text-xl font-semibold tabular-nums text-black-900 dark:text-white-100">{g.value}</p>
-            <p class="mt-0.5 text-[0.6875rem] leading-tight text-black-700 dark:text-black-600">{g.note}</p>
-          </div>
-        {/each}
-      </div>
+      <StatGrid items={growth} cols={4} large={true} testid="store-totals" />
     </Section>
 
     <!-- Ingest -->
     <Section title="Ingest" scope={STORE_SCOPE_LABEL} note={ingestVerdict(ingest)}>
-      <div class="space-y-3 px-5 py-4">
-        {#each ingest.parts as p (p.id)}
-          <div class="min-w-0">
-            <div class="flex flex-wrap items-baseline justify-between gap-2">
-              <span class="text-xs font-medium text-black-900 dark:text-white-100">{p.label}</span>
-              <span class="font-mono text-xs tabular-nums text-black-800 dark:text-black-600">
-                {formatCount(p.value)} · {p.pct}
-              </span>
-            </div>
-            <div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-white-300 dark:bg-navy-600">
-              <div class={`h-full rounded-full ${p.bar}`} style={`width:${pctWidth(p.value, ingest.total)}%`}></div>
-            </div>
-            <p class="mt-1 text-[0.6875rem] leading-tight text-black-700 dark:text-black-600">{p.note}</p>
-          </div>
-        {/each}
-      </div>
+      <MeterList rows={ingestRows} empty="No events have reached the server at all." testid="ingest-split" />
     </Section>
 
     <!-- Hook spool -->
     <Section title="Hook spool" scope={STORE_SCOPE_LABEL} note={spool.verdict}>
-      <dl class="grid grid-cols-3 gap-x-6 gap-y-3 px-5 py-4">
-        {#each [["Pending", formatCount(spool.pending)], ["Oldest waiting", spool.oldest], ["Retries", formatCount(spool.retries)]] as [k, v] (k)}
-          <div class="min-w-0">
-            <dt class="text-[0.6875rem] uppercase tracking-wider text-black-700 dark:text-black-600">{k}</dt>
-            <dd
-              class={`mt-0.5 font-mono text-sm tabular-nums ${
-                spool.healthy ? "text-black-900 dark:text-white-100" : "text-rose-700 dark:text-rose-300"
-              }`}
-            >
-              {v}
-            </dd>
-          </div>
-        {/each}
-      </dl>
+      <!-- The grid is shared; the colour is not. A pile-up in this queue is
+           the one number on the card that means something is wrong, so it
+           keeps its own rendering rather than being flattened into a stat. -->
+      {#if spool.healthy}
+        <StatGrid items={spoolItems} cols={3} testid="spool-facts" />
+      {:else}
+        <dl class="grid grid-cols-3 gap-x-6 gap-y-3 px-5 py-4" data-testid="spool-facts">
+          {#each spoolItems as it (it.label)}
+            <div class="min-w-0">
+              <dt class="text-[0.6875rem] uppercase tracking-wider text-black-700 dark:text-black-600">{it.label}</dt>
+              <dd class="mt-0.5 font-mono text-sm tabular-nums text-rose-700 dark:text-rose-300">{it.value}</dd>
+            </div>
+          {/each}
+        </dl>
+      {/if}
     </Section>
 
     <!-- Index coverage -->
@@ -168,14 +171,7 @@
           <p class="max-w-xs text-[0.6875rem] leading-relaxed text-black-700 dark:text-black-600">{MANAGE_ADMIN_ONLY}</p>
         {/if}
       {/snippet}
-      <dl class="grid grid-cols-3 gap-x-6 gap-y-3 px-5 py-4">
-        {#each [["Database", storage.database], ["Reclaimable", storage.reclaimable], ["Free on disk", storage.free]] as [k, v] (k)}
-          <div class="min-w-0">
-            <dt class="text-[0.6875rem] uppercase tracking-wider text-black-700 dark:text-black-600">{k}</dt>
-            <dd class="mt-0.5 font-mono text-sm tabular-nums text-black-900 dark:text-white-100">{v}</dd>
-          </div>
-        {/each}
-      </dl>
+      <StatGrid items={storageItems} cols={3} testid="storage-facts" />
     </Section>
 
     <!-- Providers wired to Agent Memory -->

@@ -656,6 +656,24 @@ export type ProjectPolicy = {
   trial_mode: boolean;
   trial_projects?: string[] | null;
   reason: string;
+  // providers is the host-wide switch this project cannot reach. A project
+  // switched on while no instance uses Agent Memory records nothing, and
+  // `allowed` alone cannot say so — see ProviderMemoryState.
+  providers?: ProviderMemoryState;
+};
+
+// ProviderMemoryState is how many provider instances have Agent Memory turned
+// on at all, and how many of those also record.
+//
+// It is the master switch: a project's own setting NARROWS (it can keep memory
+// out, or start a one-project trial) and can never enable one. `known` false
+// means wick could not read the provider list — an unknown, not an empty one,
+// so nothing is claimed from it.
+export type ProviderMemoryState = {
+  known: boolean;
+  instances: number;
+  recording: number;
+  names?: string[] | null;
 };
 
 // ProjectPolicyRow is one project's memory state on the host-wide roster: is

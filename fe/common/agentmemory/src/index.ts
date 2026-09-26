@@ -18,8 +18,17 @@ export * from "./api.js";
 export * from "./format.js";
 export * from "./projects.js";
 export * from "./projectview.js";
+export * from "./stats.js";
 
 export { default as ProjectMemory } from "./ProjectMemory.svelte";
 export { default as PageEditor } from "./PageEditor.svelte";
 export { default as Section } from "./Section.svelte";
 export { default as BlockedState } from "./BlockedState.svelte";
+
+// The scope-agnostic analytics blocks. They take rows and know nothing about
+// whose numbers those are, which is what lets the store-wide Analytics tab and
+// a project's own tab draw the same shapes without either one borrowing the
+// other's figures (stats.ts).
+export { default as StatGrid } from "./StatGrid.svelte";
+export { default as MeterList } from "./MeterList.svelte";
+export { default as Sparkbars } from "./Sparkbars.svelte";

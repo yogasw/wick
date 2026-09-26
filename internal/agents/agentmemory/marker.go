@@ -273,16 +273,62 @@ func ScopeForProjectID(id string) (ProjectFolder, Scope, ScopeSource, bool) {
 	if !found || strings.TrimSpace(p.Folder) == "" {
 		return ProjectFolder{}, Scope{}, "", false
 	}
+	sc, src := scopeOfFolder(p)
+	return p, sc, src, true
+}
+
+// scopeOfFolder is the resolution itself, for one project whose folder is
+// already known. Split out so the reverse lookup can run it over every project
+// without re-walking the registry for each one.
+func scopeOfFolder(p ProjectFolder) (Scope, ScopeSource) {
 	if sc, _, ok := readMarkerUpwards(p.Folder); ok {
 		if sc.Workspace == "" {
 			sc.Workspace = defaultWorkspace(markerWorkspace)
 		}
-		return p, sc, ScopeFromMarker, true
+		return sc, ScopeFromMarker
 	}
 	if !p.CustomPath {
 		if sc, err := ProjectScope(markerWorkspace, p.Name, p.ID); err == nil {
-			return p, sc, ScopeFromWick, true
+			return sc, ScopeFromWick
 		}
 	}
-	return p, Scope{Workspace: defaultWorkspace(markerWorkspace), Project: filepath.Base(p.Folder)}, ScopeFromBasename, true
+	return Scope{Workspace: defaultWorkspace(markerWorkspace), Project: filepath.Base(p.Folder)}, ScopeFromBasename
+}
+
+// FolderForScope is ScopeForProjectID run backwards: given the memory bucket a
+// panel call names, which wick project folder does it belong to?
+//
+// It exists because a scoped ai-memory command has to run IN that folder.
+// ai-memory discovers a host's harness session files relative to the directory
+// the command runs in, so a backfill launched from wick's own cwd discovers
+// whatever ran in wick's cwd — for every project, the same pile, which is
+// exactly the "59 sessions selected" every project reported (Yoga,
+// 2026-09-26). The bucket name in the request is not enough to fix that: only
+// the folder is, and the folder is wick's to know, never the caller's to send.
+//
+// The workspace is matched only when the caller gave one, since a store-wide
+// listing row carries the project name alone. Not found is a real answer: a
+// bucket can exist in the store with no wick project behind it (imported
+// elsewhere, or a project since deleted), and guessing a folder for one would
+// put another project's history into it.
+func FolderForScope(sc Scope) (ProjectFolder, bool) {
+	ws := strings.TrimSpace(sc.Workspace)
+	proj := strings.TrimSpace(sc.Project)
+	if proj == "" || projectLister == nil {
+		return ProjectFolder{}, false
+	}
+	for _, cand := range projectLister() {
+		if strings.TrimSpace(cand.Folder) == "" {
+			continue
+		}
+		got, _ := scopeOfFolder(cand)
+		if got.Project != proj {
+			continue
+		}
+		if ws != "" && got.Workspace != ws {
+			continue
+		}
+		return cand, true
+	}
+	return ProjectFolder{}, false
 }

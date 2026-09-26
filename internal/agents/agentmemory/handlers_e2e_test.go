@@ -729,6 +729,12 @@ func TestDashboardPayloadsMatchTheFrontend(t *testing.T) {
 	})
 
 	t.Run("backfill, compact and sweep", func(t *testing.T) {
+		// A project-scoped import runs in that project's own folder, which
+		// wick resolves from its registry — so the registry has to hold the
+		// project the scope names, or the import is refused rather than run
+		// from wick's cwd (see runBackfill).
+		dir := t.TempDir()
+		withProjects(t, "wick", ProjectFolder{ID: "8c28230d-aaaa", Name: "Kasir", Folder: dir})
 		v := url.Values{"workspace": {"wick"}, "project": {"kasir-8c28230d"}}
 		for _, route := range []string{"POST " + p + "/backfill/preview", "POST " + p + "/backfill/run"} {
 			w, body := call(t, routes, route, v)
@@ -747,6 +753,12 @@ func TestDashboardPayloadsMatchTheFrontend(t *testing.T) {
 			})
 			if req["max_sessions"] == nil {
 				t.Error("request.max_sessions is empty — the resolved cap is what makes the echo worth sending")
+			}
+			// The echoed scope carries the folder the command ran in. It is
+			// the difference between importing this project's history and
+			// importing whatever happens to live in wick's cwd.
+			if got := sub(t, "BackfillRequestEcho", req, "scope")["dir"]; got != dir {
+				t.Errorf("request.scope.dir = %v, want the project's folder %s", got, dir)
 			}
 		}
 

@@ -212,16 +212,22 @@ export function oldestHandoff(rows: Handoff[]): Handoff | null {
 
 // backfillSummary turns one report into the sentence shown after a run.
 //
-// The no-op case is the one that needs explaining: selected 0 with
-// skipped_non_empty true is not a failure and not an empty project — it means
-// the store already holds sessions and an unforced import correctly did
-// nothing (PLAN §11.1). Without that sentence the button looks broken.
+// The no-op is the case that needs explaining, and it is the one the old
+// wording got wrong (Yoga, 2026-09-26: "kok 59 semua? ngak jelas itu apa").
+// The card printed "59 sessions selected, would import 0" because the
+// skipped-store sentence was gated on `selected === 0` as well — and a real
+// run reports both: 59 local sessions were FOUND, and every one of them was
+// skipped because the store already holds sessions (PLAN §11.1). The flag
+// alone decides it now; the count stays, with the meaning it actually has.
 export function backfillSummary(rep: BackfillReport | undefined): string {
   if (!rep) return "";
   const what = rep.dry_run ? "would import" : "imported";
-  if (rep.skipped_non_empty && rep.selected === 0) {
+  if (rep.skipped_non_empty) {
+    const found = rep.selected > 0
+      ? `${rep.selected} local session${rep.selected === 1 ? "" : "s"} found for this project, none imported`
+      : "Nothing imported";
     return (
-      "Nothing to do: this project already has captured sessions, so an unforced import skipped every one of them. " +
+      `${found}: this project's memory already has captured sessions, so an unforced import skips every one of them. ` +
       "Only a forced import would re-read them — and it would add their observations a second time."
     );
   }
@@ -229,7 +235,7 @@ export function backfillSummary(rep: BackfillReport | undefined): string {
     return "No local harness sessions were found for this project, so there is nothing to import.";
   }
   const parts = [
-    `${rep.selected} session${rep.selected === 1 ? "" : "s"} selected`,
+    `${rep.selected} local session${rep.selected === 1 ? "" : "s"} found`,
     `${what} ${rep.imported_sessions} session${rep.imported_sessions === 1 ? "" : "s"}`,
   ];
   if (rep.imported_events > 0) parts.push(`${rep.imported_events} events`);
@@ -238,6 +244,37 @@ export function backfillSummary(rep: BackfillReport | undefined): string {
   }
   if (rep.failed_sessions > 0) parts.push(`${rep.failed_sessions} failed`);
   return `${parts.join(", ")}.`;
+}
+
+// BACKFILL_EXPLAINER is the card's own answer to "ini pas import gimana cara
+// kerja nya?" (Yoga, 2026-09-26).
+//
+// Three facts, because each one is a question the buttons raise and cannot
+// answer on their own: what it reads (the harness session files already on
+// this host, for THIS project's folder), that it is a one-time bootstrap
+// rather than a sync, and that running it twice is a no-op unless forced.
+// Checked against `ai-memory backfill --help` (2.4.0) and a live dry run.
+export const BACKFILL_EXPLAINER =
+  "Claude and codex keep a session file on this host for every session that ran in this project's folder. " +
+  "Import reads those files and writes their sessions into this project's memory, so switching capture on part-way " +
+  "through a project does not leave it amnesiac about everything before. It is a one-time bootstrap, not a sync: " +
+  "once this project's memory holds sessions, a further import finds the same files and imports none of them.";
+
+// backfillSelectedNote spells out the word the report uses. "59 selected"
+// means 59 session FILES were found on disk for this project — not 59 things
+// that are about to be written.
+export const BACKFILL_SELECTED_NOTE =
+  "“Found” counts the local harness session files that belong to this project. What is imported is a separate number: sessions already in this project's memory are skipped.";
+
+// backfillCapNote names the cap that was actually in force, whether or not it
+// bit. The cap is resolved server-side (wick's own default, not the backend's
+// 25) and appears nowhere else — so a run that took everything still has to
+// say what the ceiling was, or the next longer project's truncation arrives
+// unexplained.
+export function backfillCapNote(req: BackfillRequestEcho | null | undefined): string | null {
+  const cap = req?.max_sessions;
+  if (!cap || cap <= 0) return null;
+  return `At most ${cap} session${cap === 1 ? "" : "s"} are read in one run — wick's max-sessions cap, which the Settings tab sets.`;
 }
 
 // backfillCapWarning fires when the cap truncated the history. It matters
