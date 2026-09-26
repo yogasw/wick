@@ -1,6 +1,11 @@
 <script lang="ts">
   /* One page, open: its body, and — for an admin — the ways to change it.
 
+     It has no frame and no header of its own. The host that opens it — the
+     modal over the project tab — already names the page and owns the ways to
+     close it, and a card inside a card with two Close buttons is what the
+     side-panel version of this looked like.
+
      The thing this screen has to get right is nerve. People are correctly
      wary of editing what an agent will later recall as fact, so the line
      that says every write is committed and restorable sits WITH the editor,
@@ -36,14 +41,8 @@
     onKind: (v: string) => void;
     onSave: () => void;
     onDelete: () => void;
-    onClose: () => void;
     onLoadCheckpoints: () => void;
     onRestore: (oid: string) => void;
-    /* framed false = the editor is already inside a frame that carries its
-       own title and close control (the narrow-screen modal). It drops the
-       border and its own header rather than nesting one card inside another
-       and offering two ways to close the same thing. */
-    framed?: boolean;
   };
   let {
     path,
@@ -65,10 +64,8 @@
     onKind,
     onSave,
     onDelete,
-    onClose,
     onLoadCheckpoints,
     onRestore,
-    framed = true,
   }: Props = $props();
 
   let confirmDelete = $state(false);
@@ -92,22 +89,7 @@
   }
 </script>
 
-<section
-  class={framed ? "rounded-xl border border-white-300 bg-white-100 dark:border-navy-600 dark:bg-navy-700" : ""}
-  data-testid="page-editor"
->
-  {#if framed}
-    <div class="flex flex-wrap items-start justify-between gap-3 border-b border-white-300 px-5 py-3 dark:border-navy-600">
-      <div class="min-w-0">
-        <p class="truncate font-mono text-sm text-black-900 dark:text-white-100" title={path}>{path}</p>
-        {#if dirty}
-          <p class="mt-0.5 text-[0.6875rem] text-cau-600 dark:text-cau-400">Unsaved changes</p>
-        {/if}
-      </div>
-      <Button variant="ghost" size="sm" onclick={onClose}>Close</Button>
-    </div>
-  {/if}
-
+<section data-testid="page-editor">
   {#if loading}
     <p class="px-5 py-8 text-center text-xs text-black-700 dark:text-black-600">Reading the page…</p>
   {:else if error}

@@ -194,6 +194,7 @@
   let newPathTouched = $state(false);
   let confirmImport = $state(false);
   let confirmForce = $state(false);
+  let confirmDiscard = $state(false);
   // Which of the two below-the-fold panes is showing. Activity is the
   // default because it is the answer; importing is a thing you do.
   let pane = $state<"activity" | "import">("activity");
@@ -247,6 +248,23 @@
       pageNo = 1;
     }
   });
+
+  // requestClose is every way out of the reader — the ×, Escape, the
+  // backdrop. It is guarded rather than direct because two of those three are
+  // easy to hit by accident, and an unsaved draft is work the store has never
+  // seen.
+  function requestClose(): void {
+    if (dirty) {
+      confirmDiscard = true;
+      return;
+    }
+    onClose();
+  }
+
+  function discardAndClose(): void {
+    confirmDiscard = false;
+    onClose();
+  }
 
   function confirmAndImport(): void {
     confirmImport = false;
@@ -391,183 +409,138 @@
       </div>
     {/if}
 
-    <!-- Pages beside their reader. The list is the left column and stays
-         put; opening a page fills the right one at lg+ and a modal below
-         it, so reading never scrolls the list away (Yoga, 2026-09-26:
-         "pas di click malah preview nya di bawah, harusnya modal, atau di
-         kanan/kiri"). -->
-    <div class="grid gap-5 lg:grid-cols-12">
-      <div class="min-w-0 lg:col-span-7">
-        <Section
-          title="Pages"
-          scope="this project only"
-          note="What agents wrote down here. Open a page to read it beside the list; the search box also finds pages older than this list."
-        >
-          {#snippet actions()}
-            <div class="flex flex-wrap items-center gap-2">
-              <div class="w-44">
-                <TextInput value={query} onChange={onQuery} placeholder="Search this project" ariaLabel="Search this project" />
-              </div>
-              <Button variant="secondary" size="sm" disabled={searching || !query.trim()} onclick={onSearch}>
-                {searching ? "Searching…" : "Search"}
-              </Button>
-            </div>
-          {/snippet}
+    <!-- The pages, full width. Opening one opens a modal over the tab
+         (Yoga, 2026-09-26: "mending modal aja ngak sih", "kecil bet gini").
+         A side column was tried first and was the wrong trade: inside an
+         already-narrow settings shell it left a ~300px strip to read a page
+         of markdown in, and a box that said "pick a page" the rest of the
+         time. The list keeps the whole width; the reader takes the screen
+         when it is wanted and none of it when it is not. -->
+    <Section
+      title="Pages"
+      scope="this project only"
+      note="What agents wrote down here. Open a page to read it in full; the search box also finds pages older than this list."
+    >
+      {#snippet actions()}
+        <div class="flex flex-wrap items-center gap-2">
+          <div class="w-44">
+            <TextInput value={query} onChange={onQuery} placeholder="Search this project" ariaLabel="Search this project" />
+          </div>
+          <Button variant="secondary" size="sm" disabled={searching || !query.trim()} onclick={onSearch}>
+            {searching ? "Searching…" : "Search"}
+          </Button>
+        </div>
+      {/snippet}
 
-          {#if loading}
-            <p class="px-5 py-8 text-center text-xs text-black-700 dark:text-black-600">Reading this project's memory…</p>
-          {:else if empty}
-            <div class="px-5 py-8 text-center">
-              <p class="text-sm font-medium text-black-900 dark:text-white-100">Nothing has been written here yet</p>
-              <p class="mx-auto mt-1.5 max-w-md text-xs leading-relaxed text-black-700 dark:text-black-600">
-                Pages appear as agents work in this project. You can also write the first one yourself — a fact worth
-                remembering, a rule about this codebase — and agents will recall it from their next session.
-              </p>
-              {#if canImport}
-                <p class="mx-auto mt-1.5 max-w-md text-xs leading-relaxed text-black-700 dark:text-black-600">
-                  Sessions that ran here before capture was switched on are still on disk — import them under
-                  <span class="font-medium text-black-900 dark:text-white-100">Import earlier sessions</span>.
-                </p>
-              {/if}
-            </div>
-          {:else}
-            <ul class="divide-y divide-white-300 dark:divide-navy-600" data-testid="page-cards">
-              {#each paged.rows as c (c.path)}
-                <li>
-                  <button
-                    type="button"
-                    onclick={() => onOpen(c.path)}
-                    class={`w-full px-5 py-3 text-left transition-colors hover:bg-white-200 dark:hover:bg-navy-600 ${
-                      c.path === openPath ? "bg-green-200 dark:bg-green-800" : ""
-                    }`}
-                  >
-                    <div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                      <span class="min-w-0 truncate text-sm font-medium text-black-900 dark:text-white-100">{c.title}</span>
-                      {#if c.kind}
-                        <span class="text-[0.6875rem] uppercase tracking-wider text-black-700 dark:text-black-600">{c.kind}</span>
-                      {/if}
-                      <span class="text-[0.6875rem] text-black-700 dark:text-black-600">{cardAge(c)}</span>
-                    </div>
-                    <p class="mt-0.5 truncate font-mono text-[0.6875rem] text-black-700 dark:text-black-600">{c.path}</p>
-                    {#if snippetFor(c)}
-                      <!-- The snippet is the page's own first line, or the
-                           search's match — never a restatement of the title. -->
-                      <p class="mt-1 line-clamp-2 text-xs leading-relaxed text-black-800 dark:text-black-600">
-                        {@html snippetFor(c)}
-                      </p>
-                    {/if}
-                  </button>
-                </li>
-              {/each}
-            </ul>
-
-            <!-- The pager. A project with dozens of session pages poured the
-                 whole list onto the screen before this, which is the scroll
-                 Yoga was complaining about. -->
-            <div
-              class="flex flex-wrap items-center justify-between gap-2 border-t border-white-300 px-5 py-2.5 dark:border-navy-600"
-              data-testid="pager"
-            >
-              <p class="text-[0.6875rem] text-black-700 dark:text-black-600">{pageRangeLabel(paged)}</p>
-              {#if paged.pages > 1}
-                <div class="flex items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={paged.page <= 1}
-                    onclick={() => (pageNo = paged.page - 1)}
-                  >
-                    Previous
-                  </Button>
-                  <span class="text-[0.6875rem] tabular-nums text-black-700 dark:text-black-600">
-                    {paged.page} / {paged.pages}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={paged.page >= paged.pages}
-                    onclick={() => (pageNo = paged.page + 1)}
-                  >
-                    Next
-                  </Button>
-                </div>
-              {/if}
-            </div>
-          {/if}
-
-          {#if canManage}
-            <div class="border-t border-white-300 px-5 py-3 dark:border-navy-600">
-              <p class="text-[0.6875rem] uppercase tracking-wider text-black-700 dark:text-black-600">New page</p>
-              <div class="mt-2 flex flex-wrap items-start gap-2">
-                <div class="w-full sm:w-72">
-                  <TextInput
-                    value={newPath}
-                    onChange={(v) => {
-                      newPath = v;
-                      newPathTouched = true;
-                    }}
-                    placeholder="notes/deploy.md"
-                    ariaLabel="New page path"
-                    disabled={busy}
-                  />
-                </div>
-                <Button variant="secondary" size="sm" disabled={busy} onclick={addPage}>Write a page</Button>
-              </div>
-              {#if newPathProblem}
-                <p class="mt-2 text-xs text-rose-700 dark:text-rose-300" data-testid="new-path-error">{newPathProblem}</p>
-              {/if}
-            </div>
-          {:else}
-            <p class="border-t border-white-300 px-5 py-3 text-xs leading-relaxed text-black-700 dark:border-navy-600 dark:text-black-600">
-              {MANAGE_ADMIN_ONLY}
+      {#if loading}
+        <p class="px-5 py-8 text-center text-xs text-black-700 dark:text-black-600">Reading this project's memory…</p>
+      {:else if empty}
+        <div class="px-5 py-8 text-center">
+          <p class="text-sm font-medium text-black-900 dark:text-white-100">Nothing has been written here yet</p>
+          <p class="mx-auto mt-1.5 max-w-md text-xs leading-relaxed text-black-700 dark:text-black-600">
+            Pages appear as agents work in this project. You can also write the first one yourself — a fact worth
+            remembering, a rule about this codebase — and agents will recall it from their next session.
+          </p>
+          {#if canImport}
+            <p class="mx-auto mt-1.5 max-w-md text-xs leading-relaxed text-black-700 dark:text-black-600">
+              Sessions that ran here before capture was switched on are still on disk — import them under
+              <span class="font-medium text-black-900 dark:text-white-100">Import earlier sessions</span>.
             </p>
           {/if}
-        </Section>
-      </div>
+        </div>
+      {:else}
+        <ul class="divide-y divide-white-300 dark:divide-navy-600" data-testid="page-cards">
+          {#each paged.rows as c (c.path)}
+            <li>
+              <button
+                type="button"
+                onclick={() => onOpen(c.path)}
+                class={`w-full px-5 py-3 text-left transition-colors hover:bg-white-200 dark:hover:bg-navy-600 ${
+                  c.path === openPath ? "bg-green-200 dark:bg-green-800" : ""
+                }`}
+              >
+                <div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <span class="min-w-0 truncate text-sm font-medium text-black-900 dark:text-white-100">{c.title}</span>
+                  {#if c.kind}
+                    <span class="text-[0.6875rem] uppercase tracking-wider text-black-700 dark:text-black-600">{c.kind}</span>
+                  {/if}
+                  <span class="text-[0.6875rem] text-black-700 dark:text-black-600">{cardAge(c)}</span>
+                </div>
+                <p class="mt-0.5 truncate font-mono text-[0.6875rem] text-black-700 dark:text-black-600">{c.path}</p>
+                {#if snippetFor(c)}
+                  <!-- The snippet is the page's own first line, or the
+                       search's match — never a restatement of the title. -->
+                  <p class="mt-1 line-clamp-2 text-xs leading-relaxed text-black-800 dark:text-black-600">
+                    {@html snippetFor(c)}
+                  </p>
+                {/if}
+              </button>
+            </li>
+          {/each}
+        </ul>
 
-      <!-- The reader. Sticky, so scrolling a long page does not lose the
-           list, and hidden below lg where there is no room for two columns —
-           the modal underneath takes over there. -->
-      <aside class="hidden min-w-0 lg:col-span-5 lg:block">
-        <div class="lg:sticky lg:top-4">
-          {#if openPath}
-            <PageEditor
-              path={openPath}
-              {page}
-              loading={pageLoading}
-              error={pageError}
-              {busy}
-              {canManage}
-              {draft}
-              title={draftTitle}
-              kind={draftKind}
-              {committedNote}
-              {saveMsg}
-              {saveFailed}
-              {checkpoints}
-              {checkpointsLoading}
-              {onDraft}
-              {onTitle}
-              {onKind}
-              {onSave}
-              {onDelete}
-              {onClose}
-              {onLoadCheckpoints}
-              {onRestore}
-            />
-          {:else}
-            <div
-              class="rounded-xl border border-dashed border-white-300 bg-white-100 px-5 py-8 text-center dark:border-navy-600 dark:bg-navy-700"
-              data-testid="reader-placeholder"
-            >
-              <p class="text-xs leading-relaxed text-black-700 dark:text-black-600">
-                Pick a page on the left and it opens here, beside the list.
-              </p>
+        <!-- The pager. A project with dozens of session pages poured the
+             whole list onto the screen before this, which is the scroll
+             Yoga was complaining about. -->
+        <div
+          class="flex flex-wrap items-center justify-between gap-2 border-t border-white-300 px-5 py-2.5 dark:border-navy-600"
+          data-testid="pager"
+        >
+          <p class="text-[0.6875rem] text-black-700 dark:text-black-600">{pageRangeLabel(paged)}</p>
+          {#if paged.pages > 1}
+            <div class="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={paged.page <= 1}
+                onclick={() => (pageNo = paged.page - 1)}
+              >
+                Previous
+              </Button>
+              <span class="text-[0.6875rem] tabular-nums text-black-700 dark:text-black-600">
+                {paged.page} / {paged.pages}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={paged.page >= paged.pages}
+                onclick={() => (pageNo = paged.page + 1)}
+              >
+                Next
+              </Button>
             </div>
           {/if}
         </div>
-      </aside>
-    </div>
+      {/if}
+
+      {#if canManage}
+        <div class="border-t border-white-300 px-5 py-3 dark:border-navy-600">
+          <p class="text-[0.6875rem] uppercase tracking-wider text-black-700 dark:text-black-600">New page</p>
+          <div class="mt-2 flex flex-wrap items-start gap-2">
+            <div class="w-full sm:w-72">
+              <TextInput
+                value={newPath}
+                onChange={(v) => {
+                  newPath = v;
+                  newPathTouched = true;
+                }}
+                placeholder="notes/deploy.md"
+                ariaLabel="New page path"
+                disabled={busy}
+              />
+            </div>
+            <Button variant="secondary" size="sm" disabled={busy} onclick={addPage}>Write a page</Button>
+          </div>
+          {#if newPathProblem}
+            <p class="mt-2 text-xs text-rose-700 dark:text-rose-300" data-testid="new-path-error">{newPathProblem}</p>
+          {/if}
+        </div>
+      {:else}
+        <p class="border-t border-white-300 px-5 py-3 text-xs leading-relaxed text-black-700 dark:border-navy-600 dark:text-black-600">
+          {MANAGE_ADMIN_ONLY}
+        </p>
+      {/if}
+    </Section>
 
     <!-- Activity and import, behind one switcher. Both are below the answer
          rather than between its halves: the top of this page is "what does
@@ -715,49 +688,58 @@
   {/if}
 </div>
 
-<!-- Below lg there is no second column, so the reader is a modal instead of a
-     block pushed under the list. It is rendered under lg:hidden rather than
-     switched on a measured width: a media query cannot disagree with the
-     column it is paired with, and a JS breakpoint can. -->
-<div class="lg:hidden">
-  <Modal open={Boolean(openPath)} onClose={onClose} size="xl">
-    {#snippet header()}
-      <div class="min-w-0">
-        <p class="truncate font-mono text-sm text-black-900 dark:text-white-100" title={openPath}>{openPath}</p>
-        {#if dirty}
-          <p class="mt-0.5 text-[0.6875rem] text-cau-600 dark:text-cau-400">Unsaved changes</p>
-        {/if}
-      </div>
-    {/snippet}
-    <div class="-mx-4 -my-3">
-      <PageEditor
-        path={openPath}
-        {page}
-        loading={pageLoading}
-        error={pageError}
-        {busy}
-        {canManage}
-        {draft}
-        title={draftTitle}
-        kind={draftKind}
-        {committedNote}
-        {saveMsg}
-        {saveFailed}
-        {checkpoints}
-        {checkpointsLoading}
-        {onDraft}
-        {onTitle}
-        {onKind}
-        {onSave}
-        {onDelete}
-        {onClose}
-        {onLoadCheckpoints}
-        {onRestore}
-        framed={false}
-      />
+<!-- The reader. A modal over the tab, at the widest size the shell has, so a
+     page of markdown is read at a readable width instead of in a column. The
+     Modal primitive holds the page still underneath, takes focus on open and
+     hands it back to the row on close. -->
+<Modal open={Boolean(openPath)} onClose={requestClose} size="2xl">
+  {#snippet header()}
+    <div class="min-w-0">
+      <p class="truncate font-mono text-sm text-black-900 dark:text-white-100" title={openPath}>{openPath}</p>
+      {#if dirty}
+        <p class="mt-0.5 text-[0.6875rem] text-cau-600 dark:text-cau-400" data-testid="unsaved-marker">Unsaved changes</p>
+      {/if}
     </div>
-  </Modal>
-</div>
+  {/snippet}
+  <div class="-mx-4 -my-3">
+    <PageEditor
+      path={openPath}
+      {page}
+      loading={pageLoading}
+      error={pageError}
+      {busy}
+      {canManage}
+      {draft}
+      title={draftTitle}
+      kind={draftKind}
+      {committedNote}
+      {saveMsg}
+      {saveFailed}
+      {checkpoints}
+      {checkpointsLoading}
+      {onDraft}
+      {onTitle}
+      {onKind}
+      {onSave}
+      {onDelete}
+      {onLoadCheckpoints}
+      {onRestore}
+    />
+  </div>
+</Modal>
+
+<!-- Escape and the backdrop both close the reader, which makes discarding an
+     edit one stray keypress away. What was typed is worth a question. -->
+<ConfirmDialog
+  open={confirmDiscard}
+  title="Discard your unsaved edits?"
+  body={`${openPath} has changes that have not been saved. Closing now throws them away — the stored page is unchanged.`}
+  confirmLabel="Discard them"
+  cancelLabel="Keep editing"
+  destructive={true}
+  onConfirm={discardAndClose}
+  onCancel={() => (confirmDiscard = false)}
+/>
 
 <ConfirmDialog
   open={confirmImport}

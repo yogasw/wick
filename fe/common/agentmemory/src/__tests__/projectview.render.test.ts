@@ -275,7 +275,6 @@ const editorProps = {
   onKind: noop,
   onSave: noop,
   onDelete: noop,
-  onClose: noop,
   onLoadCheckpoints: noop,
   onRestore: noop,
 } as never;
@@ -296,9 +295,11 @@ describe("PageEditor — editing what an agent will recall", () => {
     expect((screen.getByText("Save") as HTMLButtonElement).disabled).toBe(true);
   });
 
-  test("an edit is announced as unsaved", () => {
+  // The editor has no header of its own any more — the modal that opens it
+  // names the page and announces the unsaved state (see the modal tests
+  // below). What it still owns is whether Save is live.
+  test("an edit makes Save live", () => {
     render(PageEditor, { props: { ...(editorProps as object), canManage: true, draft: PAGE.body + "\nmore" } });
-    expect(screen.getByText(/Unsaved changes/i)).toBeDefined();
     expect((screen.getByText("Save") as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -496,32 +497,113 @@ describe("ProjectMemory — the page list is paged, not poured out", () => {
   });
 });
 
-describe("ProjectMemory — reading a page does not move the list", () => {
-  test("nothing open: the side panel invites a click rather than sitting empty", () => {
+/* Reading a page is a modal over the tab, not a column beside it.
+
+   The column was tried and was worse: a ~300px strip for a page of markdown
+   inside an already-narrow settings shell, plus a box occupying the same
+   space to say that nothing was open (Yoga, 2026-09-26: "kecil bet gini"). */
+
+const OPEN = {
+  openPath: "sessions/0000.md",
+  page: { path: "sessions/0000.md", body: "hello" },
+  // draft matches the stored body: this is a page just opened, not an edit.
+  draft: "hello",
+};
+
+describe("ProjectMemory — reading a page opens a modal", () => {
+  test("nothing open: nothing occupies space to say so", () => {
     render(ProjectMemory, { props: withPages() as never });
-    expect(screen.getByTestId("reader-placeholder").textContent).toMatch(/beside the list/i);
-  });
-
-  // The reader is rendered twice on purpose: a sticky column at lg+ and a
-  // modal below it, both driven by the same props, so the breakpoint decides
-  // which one is visible and neither can hold a different draft.
-  test("opening a page renders the reader beside the list AND in the modal", () => {
-    render(ProjectMemory, { props: withPages({ openPath: "sessions/0000.md", page: { path: "sessions/0000.md", body: "hello" } }) as never });
-    expect(screen.getAllByTestId("page-editor")).toHaveLength(2);
-    // Two elements share this label for that reason — query both.
-    expect(screen.getAllByLabelText("Page body")).toHaveLength(2);
-    // The list is still on screen, where it was.
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByTestId("page-editor")).toBeNull();
+    // The list has the tab to itself.
     expect(screen.getByTestId("page-cards")).toBeDefined();
-    expect(screen.queryByTestId("reader-placeholder")).toBeNull();
   });
 
-  test("closing from either copy is the same close", async () => {
+  test("opening a page puts it in ONE dialog, over the list", () => {
+    render(ProjectMemory, { props: withPages(OPEN) as never });
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeDefined();
+    // One editor, not one per breakpoint — there is no second copy to drift.
+    expect(screen.getAllByTestId("page-editor")).toHaveLength(1);
+    expect(screen.getAllByLabelText("Page body")).toHaveLength(1);
+    expect(dialog.contains(screen.getByTestId("page-editor"))).toBe(true);
+    // The list is still there behind it, untouched.
+    expect(screen.getByTestId("page-cards")).toBeDefined();
+  });
+
+  test("the dialog names the page, and every editor capability is in it", () => {
+    render(ProjectMemory, { props: withPages({ ...OPEN, canManage: true }) as never });
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("sessions/0000.md");
+    for (const label of ["Save", "Delete page", "Restore…"]) {
+      expect(dialog.textContent).toContain(label);
+    }
+    expect(screen.getByLabelText("Page title")).toBeDefined();
+    expect(screen.getByLabelText("Page body")).toBeDefined();
+    // The promise that an edit is recoverable travels with the editor.
+    expect(dialog.textContent).toMatch(/committed to the wiki's git history/i);
+  });
+
+  test("a clean draft closes straight away, from the × and from Escape", async () => {
+    const onClose = vi.fn();
+    const { unmount } = render(ProjectMemory, { props: withPages({ ...OPEN, onClose }) as never });
+    await fireEvent.click(screen.getByLabelText("Close"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    unmount();
+
+    onClose.mockClear();
+    render(ProjectMemory, { props: withPages({ ...OPEN, onClose }) as never });
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // Escape and a backdrop click are both one stray gesture away, so what was
+  // typed is worth a question rather than a silent loss.
+  test("an unsaved draft is not discarded without asking", async () => {
     const onClose = vi.fn();
     render(ProjectMemory, {
-      props: withPages({ openPath: "sessions/0000.md", page: { path: "sessions/0000.md", body: "hello" }, onClose }) as never,
+      props: withPages({ ...OPEN, draft: "hello — and something new", onClose }) as never,
     });
-    await fireEvent.click(screen.getByText("Close"));
+    expect(screen.getByTestId("unsaved-marker")).toBeDefined();
+
+    await fireEvent.click(screen.getByLabelText("Close"));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(/Discard your unsaved edits\?/i)).toBeDefined();
+
+    // Keeping the edit leaves the reader open with the draft still in it.
+    await fireEvent.click(screen.getByText("Keep editing"));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Page body")).toBeDefined();
+
+    // Saying it out loud is what discards it.
+    await fireEvent.click(screen.getByLabelText("Close"));
+    await fireEvent.click(screen.getByText("Discard them"));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("Escape on a dirty draft asks too, rather than throwing the edit away", async () => {
+    const onClose = vi.fn();
+    render(ProjectMemory, { props: withPages({ ...OPEN, draft: "edited", onClose }) as never });
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(/Discard your unsaved edits\?/i)).toBeDefined();
+  });
+
+  // The difference between a modal and a div that looks like one.
+  test("opening takes focus, and closing hands it back to the row", async () => {
+    const props = withPages({ canManage: true });
+    const { rerender } = render(ProjectMemory, { props: props as never });
+
+    const row = screen.getByTestId("page-cards").querySelector("button") as HTMLButtonElement;
+    row.focus();
+    expect(document.activeElement).toBe(row);
+
+    await rerender({ ...props, ...OPEN } as never);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    await rerender({ ...props, openPath: "", page: null } as never);
+    expect(document.activeElement).toBe(row);
   });
 });
 
