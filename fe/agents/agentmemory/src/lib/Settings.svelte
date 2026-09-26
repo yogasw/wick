@@ -38,11 +38,14 @@
     restartNote,
     rejectionLine,
     retentionSummary,
+    STORE_REPLACE_NOTE,
+    storeFacts,
+    storeLocationLine,
     TOKEN_SHOWN_ONCE,
     ZERO_LLM_NOTE,
   } from "./settings.js";
   import { MANAGE_ADMIN_ONLY } from "./format.js";
-  import type { AutostartLock, ExternalState, Settings, SweepReport, TestResult } from "./types.js";
+  import type { AutostartLock, ExternalState, Resources, Settings, StoreStatus, SweepReport, TestResult } from "./types.js";
 
   type Props = {
     form: Settings | null;
@@ -51,6 +54,12 @@
     defaultPort: number;
     running: boolean;
     restartPending: boolean;
+    /* store and resources are the Overview payload's, passed in so the store
+       field can state WHERE the store is rather than offering "Backend
+       default" as if that were an answer. Both are already fetched; nothing
+       new is probed for this. */
+    store?: StoreStatus | null;
+    resources?: Resources | null;
     saving: boolean;
     busy: boolean;
     test: TestResult | null;
@@ -90,6 +99,8 @@
     defaultPort,
     running,
     restartPending,
+    store = null,
+    resources = null,
     saving,
     busy,
     test,
@@ -116,6 +127,9 @@
 
   // readOnly is the inverse of canManage, named for what it does to a field.
   const readOnly = $derived(!canManage);
+  // Where the store IS, from the daemon's own status rather than from a
+  // setting that is empty on most hosts (settings.ts).
+  const facts = $derived(storeFacts(form?.data_dir ?? "", store, resources));
   const dirty = $derived(isDirty(form, stored));
   const access = $derived(form ? accessWarning(form) : null);
   const retention = $derived(retentionSummary(form?.observation_retention_days ?? 0));
@@ -192,6 +206,19 @@
             placeholder="Backend default"
             ariaLabel="Store location"
           />
+          <!-- The path, stated. An empty field used to leave the operator
+               reading the word "default" and guessing which directory that
+               meant — while the store in use held 2 pages and the 81 they
+               were looking for sat somewhere else (settings.ts storeFacts). -->
+          <p class="mt-1.5 break-all font-mono text-[11px] text-black-900 dark:text-white-100" data-testid="store-path">
+            {facts.path || "—"}
+          </p>
+          <p class="mt-0.5 text-[11px] leading-relaxed text-black-700 dark:text-black-600" data-testid="store-path-note">
+            {storeLocationLine(facts)}
+          </p>
+          <p class="mt-1.5 text-[11px] leading-relaxed text-cau-600 dark:text-cau-400" data-testid="store-replace-note">
+            {STORE_REPLACE_NOTE}
+          </p>
         </SettingRow>
 
         <SettingRow

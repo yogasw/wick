@@ -6,7 +6,8 @@
 // invisible at the moment you flip them and obvious a month later, so the
 // screen carries the cost next to the control (PLAN §13.5 point 2).
 
-import type { ExternalRejection, ExternalState, Settings, Status } from "./types.js";
+import { formatBytes } from "./format.js";
+import type { ExternalRejection, ExternalState, Resources, Settings, Status, StoreStatus } from "./types.js";
 
 // emptySettings is the all-unset form: every field at the value that means
 // "leave it to the backend". It is the shape the tab falls back to before a
@@ -359,3 +360,86 @@ export function portNote(port: number, defaultPort: number, st: Status | undefin
   }
   return port && port > 0 ? `Binds 127.0.0.1:${port}.` : `Unset — the backend's own port (${defaultPort}) is used.`;
 }
+
+// ── where the store actually is ──────────────────────────────────────
+//
+// "di seting global wick untuk Ai memory di kasih info juga itu storage nya di
+// mana biar jelas, sama bisa di replace ngak" (Yoga, 2026-09-26).
+//
+// The field was a text input with the placeholder "Backend default", and on
+// this host it is empty — so the panel stated a preference and never the fact.
+// Same family as the port bug: an operator told "default" and left to guess
+// which directory that is, while the store wick actually uses holds 2 pages
+// and the 81 pages they are looking for sit somewhere else entirely.
+//
+// The resolved path comes from the DAEMON's own status, not from wick's
+// settings, because wick's settings are exactly what is empty here. Nothing
+// new is fetched for it: the Overview payload already carries the store block.
+
+export type StoreFacts = {
+  // path is the directory in use, or "" when wick could not learn it.
+  path: string;
+  // configured true = this is the path typed into the field. False = the
+  // backend's own default, which the daemon resolved and wick read back.
+  // The difference matters the moment someone types into the field: one is
+  // a choice they made, the other is a choice being made for them.
+  configured: boolean;
+  // contents is what is in there, when the panel already knows — a path
+  // beside "0 pages" answers "have I pointed this at the wrong place?"
+  // faster than any sentence. Empty when the store could not be read.
+  contents: string;
+};
+
+export function storeFacts(
+  configured: string,
+  store: StoreStatus | undefined | null,
+  res: Resources | undefined | null,
+): StoreFacts {
+  const typed = (configured ?? "").trim();
+  // The daemon's answer wins for the PATH even when the field is set: the
+  // field is what the next start will use, the daemon says what the running
+  // one actually opened, and those differ for as long as a restart is
+  // pending. Reporting the field as fact there would repeat the whole bug.
+  const reported = (store?.data_dir ?? "").trim();
+  const path = reported || typed;
+  const parts: string[] = [];
+  if (store?.counts) {
+    const p = store.counts.pages_latest;
+    parts.push(`${p} page${p === 1 ? "" : "s"}`);
+    const s = store.counts.sessions;
+    parts.push(`${s} session${s === 1 ? "" : "s"}`);
+  }
+  if (res?.data_dir_known && res.data_dir_bytes > 0) parts.push(formatBytes(res.data_dir_bytes));
+  return { path, configured: Boolean(typed) && reported === typed, contents: parts.join(" · ") };
+}
+
+// storeLocationLine is the stated fact under the input.
+export function storeLocationLine(f: StoreFacts): string {
+  if (!f.path) return STORE_LOCATION_UNKNOWN;
+  const who = f.configured
+    ? "The path set here, and the one the running daemon opened."
+    : "Resolved by the backend — this is its own default, not a path set here.";
+  return f.contents ? `${who} It holds ${f.contents}.` : who;
+}
+
+// STORE_LOCATION_UNKNOWN is the honest blank. It happens when the daemon is
+// down and no path was ever configured: wick has nothing to read the default
+// from, and inventing one would be the same mistake as the placeholder.
+export const STORE_LOCATION_UNKNOWN =
+  "wick cannot tell which directory the store is in: nothing is set here, and the backend reports its default only while it is running. Start the daemon to see it.";
+
+// STORE_REPLACE_NOTE is what changing the field does. Every clause was checked
+// against the code before it was written:
+//
+//   - wick passes --data-dir to the next launch and does nothing else
+//     (aimemory.launch), so no copy or merge happens anywhere;
+//   - nothing in wick deletes or moves a store, so the old one is simply
+//     left where it is;
+//   - ai-memory CREATES a directory that does not exist (verified by running
+//     it against a fresh path), and a directory with no store in it opens as
+//     an empty one — every project then looks amnesiac until something is
+//     captured or imported;
+//   - the launch options are read at start (Manager.SetLaunchOptions), and
+//     the save response says restart_pending for a daemon wick is running.
+export const STORE_REPLACE_NOTE =
+  "Changing this points the daemon at a different store. Nothing is moved, copied or merged: the store you are using now stays on disk exactly where it is, and the new path is opened as-is — created if it does not exist. A directory with no store in it starts empty, so every project will look like it has forgotten everything until something is captured or imported there. It takes effect the next time the daemon starts, not when you save.";

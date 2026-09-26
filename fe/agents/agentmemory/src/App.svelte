@@ -960,6 +960,8 @@
         lock={settingsLock}
         {defaultPort}
         running={ov?.daemon?.running ?? false}
+        store={ov?.store ?? null}
+        resources={ov?.resources ?? null}
         {restartPending}
         {saving}
         {busy}

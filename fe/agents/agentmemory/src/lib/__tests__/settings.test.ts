@@ -1,15 +1,19 @@
 import { describe, expect, test } from "vitest";
 import {
+  STORE_LOCATION_UNKNOWN,
+  STORE_REPLACE_NOTE,
   accessWarning,
-  emptySettings,
   autostartNote,
   backfillCapNote,
+  emptySettings,
   isDirty,
   nonLoopbackHosts,
   portNote,
   providerMode,
   restartNote,
   retentionSummary,
+  storeFacts,
+  storeLocationLine,
 } from "../settings.js";
 import type { Settings } from "../types.js";
 
@@ -119,5 +123,95 @@ describe("isDirty", () => {
 
   test("nothing loaded yet is not dirty", () => {
     expect(isDirty(null, base)).toBe(false);
+  });
+});
+
+/* Where the store actually is (Yoga, 2026-09-26: "di kasih info juga itu
+   storage nya di mana biar jelas, sama bisa di replace ngak").
+
+   The field showed the placeholder "Backend default" and, on this host, is
+   empty — so the panel stated a preference and never the fact. It is the port
+   bug's family: an operator told "default" and left to guess which directory,
+   while the store in use holds 2 pages and the 81 they want sit elsewhere. */
+
+describe("storeFacts", () => {
+  const store = (over: object = {}) =>
+    ({
+      data_dir: "/home/ubuntu/.local/share/ai-memory",
+      counts: { pages_latest: 2, pages_all: 4, sessions: 1, observations: 9 },
+      ...over,
+    }) as never;
+
+  test("an empty field still states the path the daemon resolved", () => {
+    const f = storeFacts("", store(), null);
+    expect(f.path).toBe("/home/ubuntu/.local/share/ai-memory");
+    // Not "configured": it is the backend's own default, and the difference
+    // matters the moment someone types into the field.
+    expect(f.configured).toBe(false);
+    expect(storeLocationLine(f)).toMatch(/Resolved by the backend/);
+  });
+
+  test("what is in there, so a wrong path is obvious at a glance", () => {
+    const f = storeFacts("", store(), { data_dir_bytes: 1048576, data_dir_known: true } as never);
+    expect(f.contents).toContain("2 pages");
+    expect(f.contents).toContain("1 session");
+    expect(f.contents).toContain("1.0 MiB");
+    expect(storeLocationLine(f)).toContain("It holds 2 pages");
+  });
+
+  test("a configured path that the running daemon opened is reported as set here", () => {
+    const f = storeFacts("/srv/mem", store({ data_dir: "/srv/mem" }), null);
+    expect(f.configured).toBe(true);
+    expect(storeLocationLine(f)).toMatch(/The path set here/);
+  });
+
+  // The pending-restart window: the field says one thing, the daemon opened
+  // another. Reporting the field as fact there would be the original bug.
+  test("a saved-but-not-restarted change reports what the daemon actually opened", () => {
+    const f = storeFacts("/srv/new", store({ data_dir: "/srv/old" }), null);
+    expect(f.path).toBe("/srv/old");
+    expect(f.configured).toBe(false);
+  });
+
+  test("with the daemon down and nothing configured, it says it cannot tell", () => {
+    const f = storeFacts("", null, null);
+    expect(f.path).toBe("");
+    expect(storeLocationLine(f)).toBe(STORE_LOCATION_UNKNOWN);
+    expect(STORE_LOCATION_UNKNOWN).toMatch(/cannot tell/i);
+  });
+
+  test("with the daemon down, a configured path is still worth showing", () => {
+    const f = storeFacts("/srv/mem", null, null);
+    expect(f.path).toBe("/srv/mem");
+  });
+
+  test("a store with no counts says the path and claims nothing about contents", () => {
+    const f = storeFacts("", store({ counts: undefined }), null);
+    expect(f.contents).toBe("");
+    expect(storeLocationLine(f)).not.toContain("It holds");
+  });
+});
+
+// Every clause here was checked against the code before it was written, and
+// this is what keeps it honest if any of them changes.
+describe("STORE_REPLACE_NOTE", () => {
+  test("says nothing is moved, copied or merged", () => {
+    expect(STORE_REPLACE_NOTE).toMatch(/Nothing is moved, copied or merged/i);
+  });
+
+  test("says the old store stays where it is", () => {
+    expect(STORE_REPLACE_NOTE).toMatch(/stays on disk exactly where it is/i);
+  });
+
+  // ai-memory creates a missing directory — verified by running it against a
+  // fresh path — and an empty one opens as an empty store.
+  test("says a new path is created and starts empty", () => {
+    expect(STORE_REPLACE_NOTE).toMatch(/created if it does not exist/i);
+    expect(STORE_REPLACE_NOTE).toMatch(/starts empty/i);
+    expect(STORE_REPLACE_NOTE).toMatch(/forgotten everything/i);
+  });
+
+  test("says when it takes effect, because saving is not it", () => {
+    expect(STORE_REPLACE_NOTE).toMatch(/next time the daemon starts, not when you save/i);
   });
 });
