@@ -450,6 +450,34 @@ export type HealthReport = DataFailure & {
   // that has not is silently not recording. A deliberate mode, but one that
   // looks exactly like a broken hook from inside an affected project.
   trial?: TrialCheck;
+  // daemon answers "has this backend spawned, and where" from the process
+  // list and the socket — never from the configured preference, which is what
+  // had the panel reporting a live daemon as stopped.
+  daemon?: DaemonCheck;
+};
+
+// DaemonProcess is one running process of a backend, as the process list
+// shows it: which pid, and which port its own launch line says it bound.
+export type DaemonProcess = { pid: number; port: number };
+
+// DaemonCheck is the daemon's real state, measured rather than remembered.
+//
+// `running` and `answering` are separate questions and a wedged daemon
+// answers them differently: the process is there and silent, which is not the
+// same as gone. `port` 0 means unknown OR ambiguous — two daemons of one
+// backend have no single answer, and picking one is the bug this reports.
+export type DaemonCheck = {
+  running: boolean;
+  managed: boolean;
+  processes?: DaemonProcess[] | null;
+  port: number;
+  pref_port: number;
+  answering: boolean;
+  health_path?: string;
+  // spawns_without_memory: agents started with NO memory wiring because wick
+  // had no address for the daemon. The consequence nobody could see.
+  spawns_without_memory: boolean;
+  verdict: string;
 };
 
 // Handoff is one open cross-agent baton.

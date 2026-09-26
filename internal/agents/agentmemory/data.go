@@ -299,6 +299,12 @@ type HealthReport struct {
 	// otherwise indistinguishable from a broken hook, which is the thing the
 	// rest of this report exists to find. So it is stated.
 	Trial TrialCheck `json:"trial"`
+	// Daemon answers the question the daemon card's badge answers, from the
+	// same source, so the two surfaces cannot disagree about whether the
+	// backend is running. It is a health finding because the states it
+	// reports — two daemons at once, a wedged one, agents spawning with no
+	// memory — are faults nothing else on this report would catch.
+	Daemon DaemonCheck `json:"daemon"`
 }
 
 // TrialCheck reports the per-project trial: who opted in, and therefore who

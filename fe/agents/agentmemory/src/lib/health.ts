@@ -2,6 +2,7 @@ import { formatCount, WATCHDOG_CHURN, watchdogDetail } from "./format.js";
 import type {
   CollisionCheck,
   ContaminationReport,
+  DaemonCheck,
   DoctorReport,
   DoctorRow,
   StoreStatus,
@@ -262,9 +263,11 @@ export function healthFindings(
   collisions?: CollisionCheck,
   watchdog?: WatchdogState,
   trial?: TrialCheck,
+  daemon?: DaemonCheck,
 ): Finding[] {
   const all = [
     ...doctorFindings(doctor),
+    daemonFinding(daemon),
     contaminationFinding(contamination),
     collisionFinding(collisions),
     trialFinding(trial),
@@ -425,5 +428,76 @@ export function trialFinding(t: TrialCheck | undefined): Finding | null {
       `Only ${names} ${on.length === 1 ? "is" : "are"} switched on.` +
       silenced +
       " Nothing already stored is lost; set the trial project back to \u201cfollow the agent\u2019s setting\u201d to end it.",
+  };
+}
+
+// ── has it spawned, and where ────────────────────────────────────────
+
+// daemonFinding is "is the backend running?" answered from the process list
+// and the socket (Yoga, 2026-09-26: "health check itu buat tau apakah ai
+// memory udah spawn atau ngak gitu").
+//
+// The server does the measuring and writes the sentence, because the rule
+// that decides it — process, port, socket — lives with the process list. What
+// is decided HERE is how loud it is, and that is the part that was wrong: the
+// panel said "Stopped" about a daemon that was serving, which is the one
+// answer that makes someone press Start and get a second one.
+export function daemonFinding(d: DaemonCheck | undefined): Finding | null {
+  if (!d) return null;
+  const procs = d.processes ?? [];
+
+  // Two daemons of one backend usually means two stores: one is being
+  // written to and the other read. Nothing else on this page would catch it.
+  if (procs.length > 1) {
+    return {
+      id: "daemon-duplicate",
+      level: "critical",
+      title: `${procs.length} daemons are running at once`,
+      body: d.verdict,
+      fix: {
+        label: `Stop the one that should not be there: ${procs.map((p) => `pid ${p.pid} on port ${p.port}`).join(", ")}.`,
+      },
+    };
+  }
+
+  // Agents are starting with no memory at all. This is the user's own
+  // morning: codex came up, recalled nothing, and nothing said why.
+  if (d.spawns_without_memory) {
+    return {
+      id: "daemon-spawns-blind",
+      level: "critical",
+      title: "Agents are spawning without memory",
+      body: d.verdict,
+      fix: { label: "Start the daemon from the Overview tab.", where: "Overview" },
+    };
+  }
+
+  if (d.running && !d.answering) {
+    return {
+      id: "daemon-wedged",
+      level: "critical",
+      title: "The daemon is running but not answering",
+      body: d.verdict,
+      fix: { label: "Restart it from the Overview tab — the process is there, it has simply stopped responding.", where: "Overview" },
+    };
+  }
+
+  if (!d.running) {
+    return {
+      id: "daemon-stopped",
+      level: "warn",
+      title: "The daemon is not running",
+      body: d.verdict,
+      fix: { label: "Start it from the Overview tab.", where: "Overview" },
+    };
+  }
+
+  // Up and answering. Adopted is worth saying even when everything is fine:
+  // it is why there is no log to show and no uptime on the card.
+  return {
+    id: "daemon-ok",
+    level: "ok",
+    title: d.managed ? `Running on port ${d.port}` : `Running on port ${d.port} (wick did not start it)`,
+    body: d.verdict,
   };
 }

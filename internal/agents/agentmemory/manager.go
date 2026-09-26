@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -149,6 +150,17 @@ func (m *Manager) adoptedPort() int {
 	}
 	m.adopted, m.adoptAt = port, time.Now()
 	return port
+}
+
+// Daemons lists the running processes of this backend, from the process list.
+//
+// It is the honest answer to "has it spawned?" — asked of the machine, not of
+// wick's memory of what it started, which does not survive a handover. More
+// than one is a real state and is reported as one: two daemons of the same
+// backend on two stores is what put agents on the wrong memory here, and the
+// panel showing it is how somebody notices.
+func (m *Manager) Daemons() []DaemonProcess {
+	return findDaemons(m.BinPath(), m.LaunchOpts(), m.desc.Adopt)
 }
 
 // forgetAdoptedPort drops the cached discovery. Called when something happened
@@ -394,6 +406,23 @@ func (m *Manager) start() error {
 	if m.desc.Launch == nil {
 		return fmt.Errorf("agentmemory: %s has no launch command", m.desc.ID)
 	}
+	// Refuse to start a SECOND daemon beside one already running.
+	//
+	// This is the failure the whole port fix exists to prevent, arriving from
+	// the other direction. A daemon wick did not spawn — after a handover,
+	// say — used to be invisible: nothing was recorded, the probe checked the
+	// preferred port, found nothing there, and the panel said "Stopped" while
+	// the daemon answered happily on another port. Pressing Start then bound a
+	// second copy on the preferred port, and the host had two daemons on two
+	// stores, which is precisely the mess that made agents recall from memory
+	// nobody was writing to.
+	//
+	// findDaemons directly rather than Daemons(): the caller holds m.mu and
+	// the accessor takes it again to read the launch options.
+	if running := findDaemons(m.BinPath(), m.opt, m.desc.Adopt); len(running) > 0 {
+		return fmt.Errorf("%s is already running: %s. wick did not start it, so it has no process to manage — stop it first if wick should own it",
+			m.desc.DisplayName, describeDaemons(running))
+	}
 	bin := m.BinPath()
 	if bin == "" {
 		return fmt.Errorf("%s is not installed — install it from the panel, or put %q on PATH", m.desc.DisplayName, m.desc.BinName)
@@ -441,8 +470,13 @@ const reapTimeout = 5 * time.Second
 
 func (m *Manager) stop() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.cmd == nil {
+		m.mu.Unlock()
+		// Nothing of ours to kill, which used to be the end of it — and left
+		// Stop and Restart as dead buttons on every daemon wick inherited
+		// through a handover. The process list knows where it is (Yoga,
+		// 2026-09-26: "cari pid nya aja dari list proses gitu").
+		m.stopAdopted()
 		return
 	}
 	pid := m.cmd.Process.Pid
@@ -462,7 +496,67 @@ func (m *Manager) stop() {
 	m.exited = nil
 	m.started.Store(0)
 	m.invalidateHealth()
+	m.mu.Unlock()
+	m.forgetAdoptedPort()
 	m.log.Info().Int("pid", pid).Msg("agentmemory: stopped")
+}
+
+// stopAdopted signals a daemon wick did not spawn.
+//
+// It only ever signals a pid whose RESOLVED executable is this backend's own
+// binary (findDaemons). Matching on the process NAME would let wick kill a
+// stranger's unrelated build that happens to be called the same thing, and no
+// amount of convenience is worth that. Nothing is escalated: a process this
+// user does not own answers EPERM, which is reported rather than worked
+// around.
+func (m *Manager) stopAdopted() {
+	running := m.Daemons()
+	if len(running) == 0 {
+		return
+	}
+	for _, d := range running {
+		proc, err := os.FindProcess(d.PID)
+		if err != nil {
+			m.log.Warn().Int("pid", d.PID).Err(err).Msg("agentmemory: adopted daemon could not be addressed")
+			continue
+		}
+		// TERM, not KILL: the daemon owns a SQLite store and deserves the
+		// chance to close it. A wedged one is dealt with by the watchdog's
+		// own escalation, not by hardening this into a kill.
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
+			m.log.Warn().Int("pid", d.PID).Err(err).Msg("agentmemory: could not stop adopted daemon")
+			continue
+		}
+		m.log.Info().Int("pid", d.PID).Int("port", d.Port).Msg("agentmemory: stopped adopted daemon")
+	}
+	m.forgetAdoptedPort()
+	m.invalidateHealth()
+	// Give the process a moment to go before anything asks again, so a
+	// Restart does not race its own predecessor for the port.
+	m.waitGone(running)
+}
+
+// waitGone blocks briefly until the signalled processes are out of the
+// process list, so a Restart does not race the port it is about to rebind.
+func (m *Manager) waitGone(was []DaemonProcess) {
+	deadline := time.Now().Add(reapTimeout)
+	for time.Now().Before(deadline) {
+		if len(m.Daemons()) == 0 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	m.log.Warn().Int("count", len(was)).Msg("agentmemory: adopted daemon did not exit within the reap timeout")
+}
+
+// describeDaemons names running processes for a message an operator can act
+// on — a pid they can look up and a port they can curl.
+func describeDaemons(ds []DaemonProcess) string {
+	parts := make([]string, 0, len(ds))
+	for _, d := range ds {
+		parts = append(parts, fmt.Sprintf("pid %d on port %d", d.PID, d.Port))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // StopProcess kills the daemon WITHOUT recording an intent: shutdown hooks

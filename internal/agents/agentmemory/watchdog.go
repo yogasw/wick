@@ -151,8 +151,19 @@ func (t backendTarget) Supervised() bool {
 	return settingsFor(t.be.Desc.ID).EffectiveAutostart()
 }
 
-func (t backendTarget) Managed() bool         { return t.be.Mgr.spawnedHere() }
-func (t backendTarget) Alive() bool           { return t.be.Mgr.ChildAlive() }
+func (t backendTarget) Managed() bool { return t.be.Mgr.spawnedHere() }
+
+// Alive is whether a process of this backend EXISTS, whoever started it.
+//
+// It used to be ChildAlive alone, which is only ever true for a daemon this
+// wick process spawned. After a handover that is false for a daemon that is
+// very much running, so an adopted daemon that stopped answering read as
+// "dead" — and dead means Start, which on a host that already has one running
+// is how you end up with two daemons on two stores. The process list is asked
+// instead (adopt.go).
+func (t backendTarget) Alive() bool {
+	return t.be.Mgr.ChildAlive() || len(t.be.Mgr.Daemons()) > 0
+}
 func (t backendTarget) OperatorStopped() bool { return t.be.Mgr.OperatorStopped() }
 
 // Healthy is the UNCACHED probe. The cached one exists so a page poll does
@@ -261,9 +272,15 @@ func (w *Watchdog) check(ctx context.Context, t watchTarget) {
 
 	reason := ReasonOff
 	switch {
-	case t.Managed() && t.Alive():
+	case t.Alive():
 		// Alive and silent. Give it the grace window first: one missed
 		// probe is a busy daemon, not a wedged one.
+		//
+		// Managed is deliberately NOT part of this any more. A wedged daemon
+		// is wedged whoever started it, and the restart path knows how to
+		// stop an adopted one (Manager.stopAdopted). Requiring ours here is
+		// what left an inherited daemon hung forever with the watchdog
+		// reporting nothing.
 		if !w.hungLongEnough(st) {
 			return
 		}

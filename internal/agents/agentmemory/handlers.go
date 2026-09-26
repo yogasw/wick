@@ -632,6 +632,11 @@ func healthHandler(be *Backend, c *tool.Ctx) {
 	// Same reason: a deliberate mode that stops capture everywhere else has
 	// to be visible next to the checks that look for capture having stopped.
 	rep.Trial = RunTrialCheck()
+	// The same answer the daemon card shows, from the same source. Two
+	// surfaces disagreeing about whether the backend is running is its own
+	// bug, and this host had it: the card said Stopped while the daemon
+	// served (daemoncheck.go).
+	rep.Daemon = RunDaemonCheck(be)
 	c.JSON(http.StatusOK, rep)
 }
 

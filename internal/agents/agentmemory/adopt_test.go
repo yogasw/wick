@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -205,5 +206,104 @@ func TestUnknownPortIsUnknownRatherThanThePreference(t *testing.T) {
 	// And nothing is reported as running off the back of a guess.
 	if m.probeHealth() {
 		t.Fatal("an unknown port must not be probed, let alone reported healthy")
+	}
+}
+
+/* The controls, on a daemon wick did not start.
+
+   Before this, "has it spawned?" was answered from wick's own memory of what
+   it started — which a handover erases. The panel then said Stopped beside a
+   daemon that was answering, and Start would have bound a SECOND one on the
+   preferred port: two daemons, two stores, which is the state that put agents
+   on memory nobody was writing to. */
+
+func TestStartRefusesToAddASecondDaemon(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "ai-memory")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeProc(t,
+		map[int][]string{2223661: {bin, "serve", "--bind", "127.0.0.1:49375"}},
+		map[int]string{2223661: bin},
+	)
+	withResolvedBin(t, bin)
+
+	m := newManager(Descriptor{
+		ID: "mem", DisplayName: "ai-memory", BinName: "ai-memory", PrefPort: 49374,
+		Adopt: bindMatch,
+		Launch: func(LaunchOptions) ([]string, []string) {
+			return []string{"serve"}, nil
+		},
+	})
+
+	err := m.start()
+	if err == nil {
+		t.Fatal("starting beside a running daemon is how this host ended up with two")
+	}
+	// The refusal has to be actionable: which process, on which port.
+	if !strings.Contains(err.Error(), "2223661") || !strings.Contains(err.Error(), "49375") {
+		t.Fatalf("the refusal must name what is already running: %v", err)
+	}
+	if m.spawnedHere() {
+		t.Fatal("nothing should have been spawned")
+	}
+}
+
+// Several daemons is a real state and gets reported as one. Picking the first
+// would hide the two-store split that caused all of this.
+func TestDaemonsListsEveryMatchRatherThanChoosing(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "ai-memory")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeProc(t,
+		map[int][]string{
+			200: {bin, "serve", "--bind", "127.0.0.1:49375"},
+			100: {bin, "serve", "--bind", "127.0.0.1:49374"},
+		},
+		map[int]string{100: bin, 200: bin},
+	)
+	withResolvedBin(t, bin)
+	m := newManager(Descriptor{ID: "mem", BinName: "ai-memory", PrefPort: 49374, Adopt: bindMatch})
+
+	got := m.Daemons()
+	if len(got) != 2 || got[0].PID != 100 || got[1].PID != 200 {
+		t.Fatalf("both daemons, in pid order: %+v", got)
+	}
+	// And with two of them, there is no single answer to "which port" — so
+	// none is given, rather than one being picked at random.
+	if p := m.BoundPort(); p != 0 {
+		t.Fatalf("two daemons means the port is ambiguous, got %d", p)
+	}
+	if got := describeDaemons(got); !strings.Contains(got, "pid 100 on port 49374") {
+		t.Fatalf("the description names each one: %q", got)
+	}
+}
+
+// Matching is on the RESOLVED executable. A stranger's unrelated build that
+// happens to be called ai-memory must never be adopted, and above all must
+// never be signalled.
+func TestDaemonsIgnoresAnUnrelatedBinaryOfTheSameName(t *testing.T) {
+	dir := t.TempDir()
+	ours := filepath.Join(dir, "ai-memory")
+	theirs := filepath.Join(dir, "somebody-else", "ai-memory")
+	if err := os.WriteFile(ours, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(theirs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(theirs, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeProc(t,
+		map[int][]string{9: {theirs, "serve", "--bind", "127.0.0.1:49374"}},
+		map[int]string{9: theirs},
+	)
+	withResolvedBin(t, ours)
+	m := newManager(Descriptor{ID: "mem", BinName: "ai-memory", PrefPort: 49374, Adopt: bindMatch})
+
+	if got := m.Daemons(); len(got) != 0 {
+		t.Fatalf("another program with the same name is not ours to touch: %+v", got)
 	}
 }

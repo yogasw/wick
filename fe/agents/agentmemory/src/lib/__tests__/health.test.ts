@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 import {
   collisionFinding,
   contaminationFinding,
+  daemonFinding,
   contaminationRows,
   doctorFindings,
   embeddingFinding,
@@ -304,5 +305,89 @@ describe("trialFinding", () => {
   test("a trial with nothing left to silence does not invent a count", () => {
     const f = trialFinding({ active: true, projects: ["only"], silenced: 0 });
     expect(f?.body).not.toContain("0 project");
+  });
+});
+
+/* "Has the backend spawned, and where" (Yoga, 2026-09-26).
+
+   The panel used to answer this from the configured PREFERENCE, which on this
+   host reported a live daemon as stopped — the one answer that makes someone
+   press Start and end up with a second daemon on a second store. */
+
+describe("daemonFinding", () => {
+  const base = {
+    running: true,
+    managed: true,
+    port: 49375,
+    pref_port: 49374,
+    answering: true,
+    health_path: "/healthz",
+    spawns_without_memory: false,
+    verdict: "ai-memory is running on port 49375 and answering /healthz.",
+  };
+
+  test("no check means no claim", () => {
+    expect(daemonFinding(undefined)).toBeNull();
+  });
+
+  test("up and answering is an ok finding that names the port", () => {
+    const f = daemonFinding(base);
+    expect(f?.level).toBe("ok");
+    expect(f?.title).toContain("49375");
+  });
+
+  // Adopted is not a defect, but it changes what wick can promise — no
+  // output to show, no uptime it witnessed — so it is said on the card.
+  test("an adopted daemon says so even while everything is fine", () => {
+    const f = daemonFinding({ ...base, managed: false });
+    expect(f?.level).toBe("ok");
+    expect(f?.title).toMatch(/wick did not start it/i);
+  });
+
+  test("running but silent is critical, and is not called 'stopped'", () => {
+    const f = daemonFinding({ ...base, answering: false });
+    expect(f?.level).toBe("critical");
+    expect(f?.title).toMatch(/running but not answering/i);
+    expect(f?.fix?.where).toBe("Overview");
+  });
+
+  test("not running is a warning with the way to start it", () => {
+    const f = daemonFinding({ ...base, running: false, answering: false, port: 0 });
+    expect(f?.level).toBe("warn");
+    expect(f?.title).toMatch(/not running/i);
+  });
+
+  // The user's own morning: codex came up, recalled nothing, and nothing
+  // said why. It outranks "not running" because it names the consequence.
+  test("agents spawning without memory is critical and says so first", () => {
+    const f = daemonFinding({ ...base, running: false, answering: false, port: 0, spawns_without_memory: true });
+    expect(f?.level).toBe("critical");
+    expect(f?.title).toMatch(/spawning without memory/i);
+  });
+
+  // Two daemons usually means two stores: one written, the other read.
+  test("two daemons is the top finding and lists both", () => {
+    const f = daemonFinding({
+      ...base,
+      processes: [
+        { pid: 100, port: 49374 },
+        { pid: 200, port: 49375 },
+      ],
+    });
+    expect(f?.level).toBe("critical");
+    expect(f?.title).toContain("2 daemons");
+    expect(f?.fix?.label).toContain("pid 100 on port 49374");
+    expect(f?.fix?.label).toContain("pid 200 on port 49375");
+  });
+
+  test("it is ranked into the findings list, not appended to it", () => {
+    const rows = healthFindings(undefined, undefined, undefined, undefined, undefined, undefined, {
+      ...base,
+      running: false,
+      answering: false,
+      port: 0,
+      spawns_without_memory: true,
+    });
+    expect(rows[0].id).toBe("daemon-spawns-blind");
   });
 });

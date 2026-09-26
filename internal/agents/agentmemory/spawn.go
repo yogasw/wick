@@ -50,6 +50,7 @@ func spawnContribution(ins *provider.Instance, t provider.Type, folder string) (
 	// silently forgets is the failure this whole feature exists to catch.
 	server := ServerURL(be, *ins)
 	if server == "" {
+		noteSpawnWithoutMemory()
 		log.Warn().
 			Str("component", "agentmemory").
 			Str("backend", id).

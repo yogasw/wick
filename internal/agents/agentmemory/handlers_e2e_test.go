@@ -640,8 +640,16 @@ func TestDashboardPayloadsMatchTheFrontend(t *testing.T) {
 		w, body := call(t, routes, "GET "+p+"/health", nil)
 		mustOK(t, "health", w, body)
 		assertShape(t, "HealthReport", body, shape{
-			required: []string{"doctor", "contamination", "collisions", "trial"},
+			required: []string{"doctor", "contamination", "collisions", "trial", "daemon"},
 			optional: []string{"error", "reason", "hint"},
+		})
+		// "Has it spawned, and where" — measured from the process list and
+		// the socket. It is on this report so the Health tab and the daemon
+		// card cannot disagree about whether the backend is running, which
+		// is a bug this host actually had.
+		assertShape(t, "DaemonCheck", sub(t, "HealthReport", body, "daemon"), shape{
+			required: []string{"running", "managed", "port", "pref_port", "answering", "spawns_without_memory", "verdict"},
+			optional: []string{"processes", "health_path"},
 		})
 		// The per-project trial: a deliberate mode that stops capture for
 		// every project that has not opted in, so the Health tab has to be

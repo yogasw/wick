@@ -40,7 +40,15 @@
   // receives, so supervision is triaged next to the other silent failures
   // rather than on a page of its own (PLAN §25.3 guard 3).
   const findings = $derived(
-    healthFindings(report?.doctor, report?.contamination, ov?.store, report?.collisions, ov?.watchdog, report?.trial),
+    healthFindings(
+      report?.doctor,
+      report?.contamination,
+      ov?.store,
+      report?.collisions,
+      ov?.watchdog,
+      report?.trial,
+      report?.daemon,
+    ),
   );
   const rows = $derived(contaminationRows(report?.contamination));
   const columns = $derived(rows.length ? Object.keys(rows[0]) : []);
