@@ -61,3 +61,54 @@ func TestProviderMemoryUnreadableIsNotEmpty(t *testing.T) {
 		t.Fatalf("a failed read must not be reported as a known state: %+v", st)
 	}
 }
+
+// The shape this host actually has (read from ~/.support-tools/config.json,
+// 2026-09-26): five claude instances with NO memory fields at all, and one
+// codex instance with use_agent_memory true and no capture flag.
+//
+// It is pinned because the answer it produces is the one the user sees, and
+// the two branches next to each other say opposite things. "No instance has it
+// on" tells someone to go and switch it on; "on but not capturing" tells them
+// the switch they are looking for is capture. Getting that wrong sends them to
+// the wrong screen.
+func TestProviderMemoryMirrorsThisHostsConfig(t *testing.T) {
+	withInstances(t, []provider.Instance{
+		{Type: provider.TypeClaude, Name: "enginer"},
+		{Type: provider.TypeClaude, Name: "claude_waba"},
+		{Type: provider.TypeClaude, Name: "enginer_sonet_medium"},
+		{Type: provider.TypeClaude, Name: "claude_waba_sonet"},
+		{Type: provider.TypeClaude, Name: "claude_support_ent"},
+		{Type: provider.TypeCodex, Name: "codex", UseAgentMemory: true, AgentMemoryProvider: "ai-memory"},
+		{Type: provider.TypeGemini, Name: "gemini"},
+		{Type: provider.TypeWick, Name: "wick"},
+	}, nil)
+
+	st := ProviderMemory()
+	if !st.Known {
+		t.Fatal("the provider list read fine, so the state is known")
+	}
+	// One instance uses it; none of them capture, because codex carries no
+	// agent_memory_capture field. That is "on but not recording", NOT "no
+	// instance has it on".
+	if st.Instances != 1 || st.Recording != 0 {
+		t.Fatalf("one instance on, none capturing: %+v", st)
+	}
+	if len(st.Names) != 1 || st.Names[0] != "codex" {
+		t.Fatalf("the instance is named so the card can point at it: %+v", st.Names)
+	}
+}
+
+// A disabled instance cannot spawn, so its toggle is not a fact about what is
+// recording. Counting it would put "Agent Memory is on for codex" on a card
+// while codex never runs.
+func TestProviderMemoryIgnoresDisabledInstances(t *testing.T) {
+	withInstances(t, []provider.Instance{
+		{Type: provider.TypeCodex, Name: "codex", UseAgentMemory: true, AgentMemoryCapture: true, Disabled: true},
+		{Type: provider.TypeClaude, Name: "enginer", UseAgentMemory: true},
+	}, nil)
+
+	st := ProviderMemory()
+	if st.Instances != 1 || st.Recording != 0 || len(st.Names) != 1 || st.Names[0] != "claude/enginer" {
+		t.Fatalf("a disabled instance must not count: %+v", st)
+	}
+}

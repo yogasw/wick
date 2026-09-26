@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/yogasw/wick/internal/agents/provider"
 )
 
@@ -35,8 +37,28 @@ func spawnContribution(ins *provider.Instance, t provider.Type, folder string) (
 	if be.Desc.Hook == nil {
 		return provider.MemoryContribution{}, fmt.Errorf("agentmemory: %s cannot be wired into spawns", id)
 	}
+	// No URL, no wiring. wick used to fill this gap with the PREFERRED port,
+	// which is a guess that points at a real address: here it pointed at a
+	// different ai-memory with a different store, and every session after a
+	// handover recalled and captured there (adopt.go).
+	//
+	// The gap is not an error, though, and that distinction matters. A memory
+	// daemon that is down must not stop agents from running — it means they
+	// run without memory, which is the same contribution a project with
+	// memory switched off already gets. It is logged rather than swallowed,
+	// and the panel shows the daemon as not running, because a session that
+	// silently forgets is the failure this whole feature exists to catch.
+	server := ServerURL(be, *ins)
+	if server == "" {
+		log.Warn().
+			Str("component", "agentmemory").
+			Str("backend", id).
+			Str("instance", InstanceRef{Type: string(ins.Type), Name: ins.Name}.Label()).
+			Msg("agentmemory: no reachable daemon — this session gets no memory rather than a guessed URL")
+		return provider.MemoryContribution{}, nil
+	}
 	args, env, err := be.Desc.Hook.Contribute(t, *ins, SpawnConn{
-		ServerURL: ServerURL(be, *ins),
+		ServerURL: server,
 		AuthKey:   resolveKey(be, *ins),
 		BinPath:   be.Mgr.BinPath(),
 		// The store the daemon was last STARTED with, not whatever an
@@ -54,9 +76,12 @@ func spawnContribution(ins *provider.Instance, t provider.Type, folder string) (
 }
 
 // ServerURL resolves the base URL an instance talks to: its own setting when
-// set (a remote server is allowed), else the managed daemon's loopback URL —
-// which is http://127.0.0.1:<PrefPort> until a start remaps the port. Any
-// trailing slash is dropped so callers can append a path.
+// set (a remote server is allowed), else the managed daemon's loopback URL.
+// Any trailing slash is dropped so callers can append a path.
+//
+// EMPTY when neither is available — see Manager.BaseURL. It used to be the
+// preferred port in that case, which is what pointed agents at a daemon wick
+// does not manage after a handover.
 func ServerURL(be *Backend, ins provider.Instance) string {
 	if u := strings.TrimSpace(ins.AgentMemoryServerURL); u != "" {
 		return strings.TrimRight(u, "/")

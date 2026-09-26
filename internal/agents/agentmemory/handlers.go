@@ -475,7 +475,16 @@ func testHandler(be *Backend, c *tool.Ctx) {
 		"ok":          be.Mgr.probeHealth(),
 	}
 	if !res["ok"].(bool) {
-		res["error"] = "no 200 from " + be.Mgr.BaseURL() + be.Desc.HealthPath
+		// An unknown port is a different failure from a port that answered
+		// nothing, and the fix is different too: one needs the daemon
+		// started, the other needs it looked at. "no 200 from
+		// http://127.0.0.1:0/healthz" would describe neither (adopt.go).
+		if be.Mgr.BoundPort() == 0 {
+			res["error"] = "wick could not determine which port " + be.Desc.DisplayName +
+				" is listening on, so there was nothing to test. Start it from this panel — wick records the port of a daemon it starts itself."
+		} else {
+			res["error"] = "no 200 from " + be.Mgr.BaseURL() + be.Desc.HealthPath
+		}
 		c.JSON(http.StatusOK, res)
 		return
 	}

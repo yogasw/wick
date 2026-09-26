@@ -472,3 +472,70 @@ func TestContributeUnsupportedTypeIsEmpty(t *testing.T) {
 		t.Fatalf("gemini has no per-spawn path yet, want nothing: args=%v env=%v", args, env)
 	}
 }
+
+/* Reading a RUNNING daemon's port out of its own launch line.
+
+   It is the inverse of launch(), and the pair has to stay honest together:
+   wick only records a port for daemons it spawned, so after a handover this
+   is the only thing standing between an agent and a URL built from a
+   preference that points at somebody else's daemon. */
+
+func TestAdoptBindReadsTheLiveLaunchLine(t *testing.T) {
+	// Captured from this host's running daemon, argv verbatim.
+	argv := []string{"serve", "--transport", "http", "--bind", "127.0.0.1:49375", "--enable-web"}
+	port, ok := adoptBind(argv, agentmemory.LaunchOptions{})
+	if !ok || port != 49375 {
+		t.Fatalf("port %d ok=%v, want 49375", port, ok)
+	}
+}
+
+// launch() and adoptBind() are two halves of one agreement about the flags.
+// Round-tripping them is what stops a flag rename breaking the adoption
+// silently — the failure would be a wrong URL, which looks like nothing.
+func TestAdoptBindRoundTripsLaunch(t *testing.T) {
+	for _, opt := range []agentmemory.LaunchOptions{
+		{Port: 49374},
+		{Port: 50000, DataDir: "/srv/mem", EnableWeb: true},
+		{Port: 49999, EnableWeb: true},
+	} {
+		args, _ := launch(opt)
+		port, ok := adoptBind(args, opt)
+		if !ok || port != opt.Port {
+			t.Fatalf("launch(%+v) -> %v did not read back: port %d ok=%v", opt, args, port, ok)
+		}
+	}
+}
+
+// The store is part of the match. Two ai-memory daemons on one host is not
+// hypothetical — it is what happened here, and taking the wrong one is the
+// bug this exists to prevent.
+func TestAdoptBindRefusesAnotherStore(t *testing.T) {
+	argv := []string{"--data-dir", "/somebody/elses/data", "serve", "--bind", "127.0.0.1:49374"}
+	if _, ok := adoptBind(argv, agentmemory.LaunchOptions{DataDir: "/wick/store"}); ok {
+		t.Fatal("a daemon on another store is not ours")
+	}
+	// wick configuring no data dir means the daemon should have none either:
+	// that is the line launch() would have produced.
+	if _, ok := adoptBind(argv, agentmemory.LaunchOptions{}); ok {
+		t.Fatal("an explicit store is not the same as the default")
+	}
+	if _, ok := adoptBind([]string{"serve", "--bind", "127.0.0.1:49374"}, agentmemory.LaunchOptions{DataDir: "/wick/store"}); ok {
+		t.Fatal("the default store is not the same as an explicit one")
+	}
+}
+
+func TestAdoptBindIgnoresWhatIsNotADaemon(t *testing.T) {
+	cases := [][]string{
+		{"backfill", "--dry-run", "--json"},       // a CLI call, not the daemon
+		{"serve", "--transport", "http"},          // serving, but no bind to read
+		{"serve", "--bind", "127.0.0.1:notaport"}, // a bind that is not one
+		{"serve", "--bind", "127.0.0.1:0"},        // and a port that cannot be dialled
+		{"serve", "--bind"},                       // truncated
+		{},                                        // nothing at all
+	}
+	for _, argv := range cases {
+		if _, ok := adoptBind(argv, agentmemory.LaunchOptions{}); ok {
+			t.Fatalf("%v should not have produced a port", argv)
+		}
+	}
+}

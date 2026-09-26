@@ -62,6 +62,14 @@ type Manager struct {
 	// put an invented uptime on the Overview card.
 	started atomic.Int64
 
+	// adopted is the port a daemon wick did NOT spawn is listening on, read
+	// from the process's own command line (adopt.go). 0 = not found. It is
+	// cached because BaseURL is on the spawn path and a /proc walk per
+	// spawn is not free; adoptAt bounds how stale the answer can be.
+	adoptMu sync.Mutex
+	adopted int
+	adoptAt time.Time
+
 	log  zerolog.Logger
 	logs *logBuffer
 
@@ -99,13 +107,56 @@ func newManager(d Descriptor) *Manager {
 // Desc exposes the descriptor this manager drives.
 func (m *Manager) Desc() Descriptor { return m.desc }
 
-// BoundPort is the port the daemon is listening on — the preferred port until
-// the first start remaps it.
+// BoundPort is the port the daemon is ACTUALLY listening on, or 0 when wick
+// does not know.
+//
+// It used to fall back to the preferred port, and that fallback was a lie with
+// consequences: after a handover wick holds no bound port, so every consumer —
+// the health probe, the panel, and the URL handed to every agent — was told
+// the daemon was on a port that merely happened to be its first choice. When
+// something else held that port, agents were wired to a different store
+// entirely (adopt.go). A preference is where the NEXT start will try; it is
+// not evidence about a daemon that is already running, so it is no longer
+// offered as one. PrefPort answers that question, separately and honestly.
 func (m *Manager) BoundPort() int {
 	if p := int(m.port.Load()); p != 0 {
 		return p
 	}
-	return m.PrefPort()
+	return m.adoptedPort()
+}
+
+// adoptedPortTTL bounds how long a discovered port is reused. Short enough
+// that a daemon restarted by hand onto another port is noticed within a poll,
+// long enough that a burst of spawns does not walk /proc once each.
+const adoptedPortTTL = 5 * time.Second
+
+// adoptedPort is the port of a daemon wick did not start, discovered from the
+// process itself. 0 when there is no such process, when the backend cannot
+// recognise its own launch line, or when /proc is not readable.
+func (m *Manager) adoptedPort() int {
+	m.adoptMu.Lock()
+	defer m.adoptMu.Unlock()
+	if m.adopted != 0 && time.Since(m.adoptAt) < adoptedPortTTL {
+		return m.adopted
+	}
+	// A miss is re-checked every time rather than cached: the common path
+	// for "not found" is "the daemon is not running", and a daemon someone
+	// has just started by hand should be visible on the next look.
+	port, ok := adoptedPort(m.BinPath(), m.LaunchOpts(), m.desc.Adopt)
+	if !ok {
+		m.adopted, m.adoptAt = 0, time.Time{}
+		return 0
+	}
+	m.adopted, m.adoptAt = port, time.Now()
+	return port
+}
+
+// forgetAdoptedPort drops the cached discovery. Called when something happened
+// that could have moved the daemon.
+func (m *Manager) forgetAdoptedPort() {
+	m.adoptMu.Lock()
+	m.adopted, m.adoptAt = 0, time.Time{}
+	m.adoptMu.Unlock()
 }
 
 // PrefPort is the port the next start tries first: the configured one, else
@@ -130,6 +181,7 @@ func (m *Manager) SetPrefPort(p int) {
 	// preference changes and no process of ours is running.
 	if !m.spawnedHere() {
 		m.port.Store(0)
+		m.forgetAdoptedPort()
 		m.invalidateHealth()
 	}
 }
@@ -165,10 +217,20 @@ func (m *Manager) LaunchOpts() LaunchOptions {
 }
 
 // BaseURL is the loopback base URL of the daemon, e.g.
-// "http://127.0.0.1:49374". It is what an instance that sets no explicit
+// "http://127.0.0.1:49375". It is what an instance that sets no explicit
 // server URL talks to.
+//
+// EMPTY when the port is unknown, and deliberately so. The alternative is a
+// URL built from the preferred port, which is a guess that points somewhere
+// real: on this host it pointed at another daemon's store, and agents read and
+// wrote there for as long as it was up. A caller that cannot get a URL can say
+// so; a caller handed the wrong one cannot tell.
 func (m *Manager) BaseURL() string {
-	return fmt.Sprintf("http://127.0.0.1:%d", m.BoundPort())
+	p := m.BoundPort()
+	if p == 0 {
+		return ""
+	}
+	return fmt.Sprintf("http://127.0.0.1:%d", p)
 }
 
 // SetLaunchOptions records the knobs the next start uses. Port is resolved at
@@ -548,6 +610,11 @@ func (m *Manager) healthy() bool {
 // non-200-based probe would report a live daemon as down.
 func (m *Manager) probeHealth() bool {
 	port := m.BoundPort()
+	// No known port, nothing to probe. Probing the PREFERRED one instead is
+	// what used to report a stranger's daemon as this one's (adopt.go).
+	if port == 0 {
+		return false
+	}
 	if m.desc.HealthPath == "" {
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 300*time.Millisecond)
 		if err != nil {

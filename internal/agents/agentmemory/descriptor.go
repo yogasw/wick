@@ -73,6 +73,19 @@ type Descriptor struct {
 	// resolves (from the instances using this backend), not constants the
 	// descriptor can bake in.
 	Launch func(opt LaunchOptions) (args, env []string)
+	// Adopt reads a RUNNING process's own launch line and reports the
+	// loopback port it was told to bind, plus whether that process is the
+	// daemon wick means — the one started with the same store.
+	//
+	// It is the counterpart of Launch, and it exists because wick only
+	// records a port for daemons it spawned itself: after a handover the
+	// successor inherits a live daemon and has no idea what port it is on.
+	// Guessing the preferred port there is how agents got pointed at
+	// somebody else's daemon (adopt.go).
+	//
+	// nil = this backend cannot be recognised from its command line, and an
+	// adopted daemon's port stays unknown rather than being assumed.
+	Adopt func(argv []string, opt LaunchOptions) (port int, ok bool)
 	// Hook contributes the CLI args + env an agent needs to reach this
 	// backend at spawn time. nil = this backend can't be used as a spawn
 	// target.

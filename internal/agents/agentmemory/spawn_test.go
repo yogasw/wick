@@ -38,12 +38,26 @@ func TestMemorySpawnContributionSkipsInstancesWithMemoryOff(t *testing.T) {
 	}
 }
 
+// withBoundPort makes a registered backend's manager report a daemon on port,
+// the way it would after wick started one itself.
+func withBoundPort(t *testing.T, id string, port int) {
+	t.Helper()
+	be, ok := Get(id)
+	if !ok {
+		t.Fatalf("backend %q is not registered", id)
+	}
+	be.Mgr.port.Store(int32(port))
+	t.Cleanup(func() { be.Mgr.port.Store(0) })
+}
+
 func TestMemorySpawnContributionResolvesServerURL(t *testing.T) {
 	registerTestBackend(t, "testmem-url", 41200)
 	Init()
 
-	// No explicit server URL → the managed daemon's loopback base, which is
-	// the preferred port until a start remaps it.
+	// No explicit server URL → the daemon's REAL loopback base. Note the
+	// port is 41201 while the preference is 41200: the two differ on purpose,
+	// because handing out the preference is exactly the bug (adopt.go).
+	withBoundPort(t, "testmem-url", 41201)
 	contrib, err := provider.MemorySpawnContribution(&provider.Instance{
 		UseAgentMemory:      true,
 		AgentMemoryProvider: "testmem-url",
@@ -51,14 +65,19 @@ func TestMemorySpawnContributionResolvesServerURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("contribution err: %v", err)
 	}
-	if joined := strings.Join(contrib.Env, " "); !strings.Contains(joined, "SERVER=http://127.0.0.1:41200") {
-		t.Fatalf("default server URL not resolved from pref port: %v", contrib.Env)
+	joined := strings.Join(contrib.Env, " ")
+	if !strings.Contains(joined, "SERVER=http://127.0.0.1:41201") {
+		t.Fatalf("the URL must be the bound port, not the preference: %v", contrib.Env)
+	}
+	if strings.Contains(joined, "41200") {
+		t.Fatalf("the preferred port must not reach a spawn: %v", contrib.Env)
 	}
 	if len(contrib.Args) == 0 {
 		t.Fatalf("hook args dropped: %+v", contrib)
 	}
 
 	// Explicit server URL wins, trailing slash trimmed so callers can append.
+	// It is unaffected by any of this: the instance said where to go.
 	contrib, err = provider.MemorySpawnContribution(&provider.Instance{
 		UseAgentMemory:       true,
 		AgentMemoryProvider:  "testmem-url",
@@ -72,18 +91,45 @@ func TestMemorySpawnContributionResolvesServerURL(t *testing.T) {
 	}
 }
 
+// The heart of it: with no daemon wick can address, a spawn gets NO memory
+// wiring — not a URL built from the preferred port.
+//
+// It is not an error either. A memory daemon that is down must not stop agents
+// from running; it means they run without memory, which is what the panel is
+// for saying out loud.
+func TestMemorySpawnContributionWiresNothingWhenThePortIsUnknown(t *testing.T) {
+	registerTestBackend(t, "testmem-down", 41300)
+	Init()
+
+	got, err := provider.MemorySpawnContribution(&provider.Instance{
+		UseAgentMemory:      true,
+		AgentMemoryProvider: "testmem-down",
+	}, provider.TypeClaude, "")
+	if err != nil {
+		t.Fatalf("a daemon that is down is not a spawn failure: %v", err)
+	}
+	if len(got.Args) != 0 || len(got.Env) != 0 {
+		t.Fatalf("no reachable daemon must wire nothing, got %+v", got)
+	}
+	// And in particular, nothing built from the preference.
+	if strings.Contains(strings.Join(got.Env, " "), "41300") {
+		t.Fatalf("the preferred port leaked into a spawn: %v", got.Env)
+	}
+}
+
 func TestMemorySpawnContributionDefaultsToAIMemoryBackend(t *testing.T) {
 	// An instance that names no backend resolves to ai-memory, the default —
 	// registered here under its real id so the lookup is the real one.
 	Register(Descriptor{ID: "ai-memory", DisplayName: "ai-memory", PrefPort: 49374, HealthPath: "/healthz", Hook: fakeHook{}})
 	Init()
+	withBoundPort(t, "ai-memory", 49375)
 
 	contrib, err := provider.MemorySpawnContribution(&provider.Instance{UseAgentMemory: true}, provider.TypeClaude, "")
 	if err != nil {
 		t.Fatalf("contribution err: %v", err)
 	}
-	if joined := strings.Join(contrib.Env, " "); !strings.Contains(joined, "SERVER=http://127.0.0.1:49374") {
-		t.Fatalf("empty provider should resolve to ai-memory on 49374: %v", contrib.Env)
+	if joined := strings.Join(contrib.Env, " "); !strings.Contains(joined, "SERVER=http://127.0.0.1:49375") {
+		t.Fatalf("empty provider should resolve to ai-memory on its bound port: %v", contrib.Env)
 	}
 	if id := backendID(""); id != "ai-memory" {
 		t.Fatalf("backendID(\"\") = %q, want ai-memory", id)

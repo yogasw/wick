@@ -7,6 +7,7 @@ package aimemory
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,7 @@ func init() {
 		// /version all 404. Probing anything else reports a live daemon down.
 		HealthPath: "/healthz",
 		Launch:     launch,
+		Adopt:      adoptBind,
 		Hook:       hook{},
 		Data:       source{run: execCLI},
 	})
@@ -69,6 +71,83 @@ func launch(opt agentmemory.LaunchOptions) (args, env []string) {
 	// exists to unlock, and a flag named "insecure" should not be reachable
 	// from a settings form by accident.
 	return args, tuningEnv(opt.Tuning, opt.AuthToken)
+}
+
+// adoptBind reads the port out of a RUNNING ai-memory's own launch line.
+//
+// It is the inverse of launch() above and has to stay next to it: both know
+// that the store is `--data-dir` before the subcommand and the address is
+// `--bind host:port` after `serve`. Read off the live process on this host —
+// `serve --transport http --bind 127.0.0.1:49375 --enable-web`.
+//
+// The store is part of the MATCH, not just the port: two ai-memory daemons can
+// be running, and picking the wrong one is the whole bug (agentmemory/adopt.go).
+// wick's own daemon is the one started with wick's data dir — and when wick
+// configures none, the one started with none, since that is the line launch()
+// would have produced.
+func adoptBind(argv []string, opt agentmemory.LaunchOptions) (int, bool) {
+	var (
+		serve   bool
+		dataDir string
+		bind    string
+	)
+	for i := 0; i < len(argv); i++ {
+		switch argv[i] {
+		case "serve":
+			serve = true
+		case "--data-dir":
+			if i+1 < len(argv) {
+				dataDir = argv[i+1]
+				i++
+			}
+		case "--bind":
+			if i+1 < len(argv) {
+				bind = argv[i+1]
+				i++
+			}
+		}
+	}
+	if !serve || bind == "" {
+		return 0, false
+	}
+	if !sameStore(dataDir, opt.DataDir) {
+		return 0, false
+	}
+	return bindPort(bind)
+}
+
+// sameStore compares two --data-dir values the way the filesystem would, so a
+// trailing slash or a relative spelling of the same directory is not read as a
+// different store. Both empty = both took the backend's default, which is a
+// match; one empty and one not is not.
+func sameStore(a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	if a == "" || b == "" {
+		return a == b
+	}
+	if a == b {
+		return true
+	}
+	ra, erra := filepath.EvalSymlinks(a)
+	rb, errb := filepath.EvalSymlinks(b)
+	if erra != nil || errb != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return ra == rb
+}
+
+// bindPort takes the port half of a "host:port" bind address. A bind with no
+// port, or one that is not a number, is not an answer.
+func bindPort(bind string) (int, bool) {
+	i := strings.LastIndex(bind, ":")
+	if i < 0 {
+		return 0, false
+	}
+	p, err := strconv.Atoi(strings.TrimSpace(bind[i+1:]))
+	if err != nil || p <= 0 || p > 65535 {
+		return 0, false
+	}
+	return p, true
 }
 
 // hook implements agentmemory.SpawnHook for ai-memory. It absorbs the

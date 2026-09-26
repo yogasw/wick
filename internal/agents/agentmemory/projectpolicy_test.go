@@ -212,6 +212,10 @@ func TestSpawnGateFollowsTheFolder(t *testing.T) {
 func TestSpawnContributionIsEmptyForADisabledProject(t *testing.T) {
 	Register(Descriptor{ID: "policy-mem", DisplayName: "policy-mem", BinName: "policy-mem", PrefPort: 42400, HealthPath: "/healthz", Hook: fakeHook{}})
 	Init()
+	// This test is about the POLICY gate, so the daemon has to be reachable
+	// — otherwise the empty contribution it checks for would be the missing
+	// port talking, not the gate (spawn.go).
+	withBoundPort(t, "policy-mem", 42401)
 	st := newPolicies("off-project")
 	st.values["off-project"] = PolicyOff
 	withPolicies(t, st)

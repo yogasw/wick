@@ -330,7 +330,11 @@ func ProviderMemory() ProviderMemoryState {
 	}
 	st := ProviderMemoryState{Known: true}
 	for _, ins := range list {
-		if !ins.UseAgentMemory {
+		// A disabled instance never spawns, so its toggle is a setting
+		// nobody acts on. Counting it would let the card say memory is on
+		// for an agent that cannot run — the same class of untrue statement
+		// this whole struct exists to prevent.
+		if !ins.UseAgentMemory || ins.Disabled {
 			continue
 		}
 		st.Instances++
