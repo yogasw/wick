@@ -40,6 +40,11 @@
     // configPreview is the effective wiring wick injects at spawn, rendered
     // by the BE (admin-only; a viewer gets an empty string).
     configPreview?: string;
+    /* previewNote is the other half of that block: the wiring is real, and
+       right now nothing is running to receive it. Both facts belong on
+       screen — a preview that silently described a dead host is what sent
+       someone hunting a bug that was not there. */
+    previewNote?: string;
   };
   let {
     base,
@@ -58,6 +63,7 @@
     captureNote = "",
     captureCaveat = "",
     configPreview = "",
+    previewNote = "",
   }: Props = $props();
 
   let showAdvanced = $state(false);
@@ -317,6 +323,9 @@
           {#if showAdvanced}
             <pre class="mt-2 max-h-64 overflow-auto rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-900 px-3 py-2 text-[12px] leading-relaxed font-mono text-black-800 dark:text-black-600 whitespace-pre-wrap">{configPreview}</pre>
             <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Read-only, and resolved with the toggle on so it shows the effect before you save it.</p>
+            {#if previewNote}
+              <p class="mt-1 text-[11px] leading-relaxed text-cau-600 dark:text-cau-400" data-testid="memory-preview-note">{previewNote}</p>
+            {/if}
           {/if}
         </div>
       {/if}

@@ -15,6 +15,9 @@ import (
 // subpackages have registered.
 func Init() {
 	provider.SetMemorySpawn(spawnContribution)
+	// After the spawn hook, which clears this one: the pair is wired
+	// together so a replacement of one is never left beside a stale other.
+	provider.SetMemoryPreview(PreviewContribution)
 }
 
 // spawnContribution resolves an instance's selected memory backend and builds
@@ -58,6 +61,17 @@ func spawnContribution(ins *provider.Instance, t provider.Type, folder string) (
 			Msg("agentmemory: no reachable daemon — this session gets no memory rather than a guessed URL")
 		return provider.MemoryContribution{}, nil
 	}
+	return contributionAt(be, ins, t, server)
+}
+
+// contributionAt builds the wiring for one instance against a given address.
+//
+// The address is the parameter because that is the ONLY thing the spawn and
+// the preview disagree about: a spawn refuses to guess one, a preview shows
+// the one a spawn would use. Everything else — the hook, the key, the store,
+// the tuning — has to be identical, or the block an operator reads stops
+// describing what actually happens.
+func contributionAt(be *Backend, ins *provider.Instance, t provider.Type, server string) (provider.MemoryContribution, error) {
 	args, env, err := be.Desc.Hook.Contribute(t, *ins, SpawnConn{
 		ServerURL: server,
 		AuthKey:   resolveKey(be, *ins),
@@ -74,6 +88,78 @@ func spawnContribution(ins *provider.Instance, t provider.Type, folder string) (
 		return provider.MemoryContribution{}, err
 	}
 	return provider.MemoryContribution{Args: args, Env: env}, nil
+}
+
+// PreviewContribution is the wiring an instance WOULD get — the providers
+// page's "what wick passes to this agent" block, and the measurement behind
+// "does this provider type support memory at all".
+//
+// It is hypothetical by construction, and keeping it that way is the point of
+// its existing separately. The spawn path refuses to guess an address, because
+// a real session handed the wrong one reads and writes somebody else's store.
+// A preview starts no session and writes nothing; its job is to show how this
+// instance is CONFIGURED. Emptying it whenever the daemon happens to be down
+// told an operator that codex has no memory wiring at all — which is false,
+// and is the same silence the spawn path's Health finding exists to remove. It
+// was also wrong on a freshly configured host where nothing has started yet.
+//
+// The second return is the sentence that must be shown beside it when nothing
+// is listening at that address right now. Both facts, neither hidden: this is
+// the configuration, AND a session started now would get no memory.
+func PreviewContribution(ins provider.Instance, t provider.Type) (provider.MemoryContribution, string, error) {
+	id := backendID(ins.AgentMemoryProvider)
+	be, ok := Get(id)
+	if !ok {
+		return provider.MemoryContribution{}, "", fmt.Errorf("agentmemory: unknown backend %q", id)
+	}
+	if be.Desc.Hook == nil {
+		return provider.MemoryContribution{}, "", fmt.Errorf("agentmemory: %s cannot be wired into spawns", id)
+	}
+	// No project gate here: a preview is about the INSTANCE, and the
+	// per-project switch answers a question about a folder no preview has.
+	contrib, err := contributionAt(be, &ins, t, PreviewURL(be, ins))
+	if err != nil {
+		return provider.MemoryContribution{}, "", err
+	}
+	return contrib, previewReachabilityNote(be, ins), nil
+}
+
+// previewReachabilityNote is empty when the daemon is answering, and otherwise
+// says what the preview cannot: that this configuration is real and a session
+// started right now would still get nothing.
+func previewReachabilityNote(be *Backend, ins provider.Instance) string {
+	if strings.TrimSpace(ins.AgentMemoryServerURL) != "" {
+		// Somebody else's server. wick does not manage it and has no
+		// business reporting on whether it is up.
+		return ""
+	}
+	if be.Mgr.BoundPort() != 0 {
+		return ""
+	}
+	return "This is the configuration an agent would be given. No " + be.Desc.DisplayName +
+		" daemon is running right now, so a session started now would get no memory at all — it would neither recall nor record. Start it from the Agent Memory panel."
+}
+
+// PreviewURL is the address a spawn WOULD use: the instance's own override, or
+// the managed daemon's — its real port when one is known, and otherwise the
+// port the next start would bind.
+//
+// That last fallback is the one the spawn path refuses to make, and the
+// difference is the consequence. Guessing for a real session points it at
+// whatever else holds the port; guessing for a preview describes the host as
+// it is about to be, next to a note saying nothing is there yet.
+func PreviewURL(be *Backend, ins provider.Instance) string {
+	if u := strings.TrimSpace(ins.AgentMemoryServerURL); u != "" {
+		return strings.TrimRight(u, "/")
+	}
+	port := be.Mgr.BoundPort()
+	if port == 0 {
+		port = be.Mgr.PrefPort()
+	}
+	if port == 0 {
+		return ""
+	}
+	return fmt.Sprintf("http://127.0.0.1:%d", port)
 }
 
 // ServerURL resolves the base URL an instance talks to: its own setting when

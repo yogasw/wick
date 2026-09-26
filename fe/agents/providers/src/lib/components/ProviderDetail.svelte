@@ -1091,6 +1091,7 @@
             captureNote={data?.AgentMemory.CaptureNote ?? ""}
             captureCaveat={data?.AgentMemory.CaptureCaveat ?? ""}
             configPreview={data?.AgentMemory.Preview ?? ""}
+            previewNote={data?.AgentMemory.PreviewNote ?? ""}
           />
         </div>
         <div class="px-5 py-3 border-t border-white-300 dark:border-navy-600 flex justify-end">

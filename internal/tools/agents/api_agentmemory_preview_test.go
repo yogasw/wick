@@ -146,3 +146,65 @@ func withStubBackendBin(t *testing.T) {
 	t.Cleanup(func() { agentmemory.SetBinDir(prev) })
 	agentmemory.SetBinDir(dir)
 }
+
+// TestPreviewIsHypotheticalWhenNoDaemonIsRunning pins the split that broke
+// this file once already.
+//
+// The spawn path refuses to resolve an address it cannot verify — a real
+// session handed the wrong one reads and writes somebody else's store. This
+// block is not a session. It is the "what wick passes to this agent" panel an
+// operator reads to understand how an instance is wired, and blanking it
+// whenever the daemon happens to be down said that codex has no memory wiring
+// at all. That is false, it is wrong on a freshly configured host where
+// nothing has been started, and it is the same silence the spawn path's Health
+// finding exists to remove.
+//
+// So the preview shows the configuration AND says nothing would receive it.
+// Both facts, neither hidden.
+func TestPreviewIsHypotheticalWhenNoDaemonIsRunning(t *testing.T) {
+	agentmemory.Init()
+	t.Cleanup(func() { provider.SetMemorySpawn(nil) })
+
+	if _, ok := agentmemory.Get("ai-memory"); !ok {
+		t.Skip("ai-memory backend is not registered in this binary")
+	}
+	withStubBackendBin(t)
+
+	// Nothing is started in a test, so this is the no-daemon case by
+	// construction — the same state as a host where nobody has pressed Start.
+	ins := provider.Instance{Type: provider.TypeCodex, AgentMemoryProvider: "ai-memory", AgentMemoryCapture: true}
+
+	dto := agentMemoryDetailDTO(ins)
+	if !dto.Supported || !dto.CaptureSupported {
+		t.Fatalf("a daemon being down is not the same as a type not supporting memory: %+v", dto)
+	}
+	if !strings.Contains(dto.Preview, "hooks.SessionStart") {
+		t.Fatalf("the wiring an agent would get is missing from the preview:\n%s", dto.Preview)
+	}
+	if !strings.Contains(dto.Preview, "--dangerously-bypass-hook-trust") {
+		t.Fatalf("the preview hides the flag that makes the hooks run:\n%s", dto.Preview)
+	}
+	// The address is the one a spawn WOULD use, so the block is readable
+	// rather than half-rendered around an empty URL.
+	if !strings.Contains(dto.Preview, "127.0.0.1:") {
+		t.Fatalf("the preview has no address in it:\n%s", dto.Preview)
+	}
+
+	// …and the other half: a session started right now would get none of it.
+	if dto.PreviewNote == "" {
+		t.Fatal("the preview claims a wiring with no daemon behind it and says nothing about that")
+	}
+	for _, want := range []string{"would be given", "no memory", "Agent Memory panel"} {
+		if !strings.Contains(dto.PreviewNote, want) {
+			t.Fatalf("the note does not say %q:\n%s", want, dto.PreviewNote)
+		}
+	}
+
+	// An instance pointed at somebody else's server gets no such note: wick
+	// does not manage that daemon and has no business reporting it down.
+	remote := ins
+	remote.AgentMemoryServerURL = "http://memhost:8080"
+	if note := agentMemoryDetailDTO(remote).PreviewNote; note != "" {
+		t.Fatalf("wick reported on a server it does not manage: %q", note)
+	}
+}

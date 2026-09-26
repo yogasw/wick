@@ -410,6 +410,12 @@ type AgentMemoryDetailDTO struct {
 	// the caveat explains a switch that does something with a side effect
 	// the operator should know about before flipping it.
 	CaptureCaveat string `json:"capture_caveat,omitempty"`
+	// PreviewNote says that Preview is the configuration an agent WOULD get
+	// while no daemon is running to give it. Empty when one is. It is
+	// separate from the preview text because they are different claims: the
+	// block is what wick would pass, this is whether anything would receive
+	// it (agentmemory/spawn.go previewReachabilityNote).
+	PreviewNote string                 `json:"preview_note,omitempty"`
 	Enabled     bool                   `json:"enabled"`
 	Provider    string                 `json:"provider"`
 	Backends    []AgentMemoryChoiceDTO `json:"backends"`
@@ -875,6 +881,7 @@ func agentMemoryDetailDTO(ins provider.Instance) AgentMemoryDetailDTO {
 		KeySet:           ins.AgentMemoryAuthKey != "",
 		Capture:          ins.AgentMemoryCapture,
 		Preview:          agentMemoryConfigPreview(ins),
+		PreviewNote:      agentMemoryPreviewNote(ins),
 	}
 }
 
@@ -882,14 +889,20 @@ func agentMemoryDetailDTO(ins provider.Instance) AgentMemoryDetailDTO {
 // contribution: once with capture off (does memory wire in at all?) and once
 // with it on (does recording add anything?).
 func agentMemorySupport(ins provider.Instance) (supported, captureSupported bool) {
+	// Both questions are about what this TYPE can do, so both resolve the
+	// PREVIEW contribution. Whether a daemon happens to be up is a different
+	// question with its own answer on the Health tab, and letting it land
+	// here reported codex as having no memory support at all whenever the
+	// daemon was down — including on a host where nothing has been started
+	// yet (agentmemory/spawn.go PreviewContribution).
 	ins.UseAgentMemory = true
 	ins.AgentMemoryCapture = false
-	read, err := provider.MemorySpawnContribution(&ins, ins.Type, "")
+	read, _, err := provider.MemoryPreviewContribution(&ins, ins.Type)
 	if err != nil || (len(read.Args) == 0 && len(read.Env) == 0) {
 		return false, false
 	}
 	ins.AgentMemoryCapture = true
-	rec, err := provider.MemorySpawnContribution(&ins, ins.Type, "")
+	rec, _, err := provider.MemoryPreviewContribution(&ins, ins.Type)
 	if err != nil {
 		return true, false
 	}
@@ -967,11 +980,28 @@ func agentMemoryEffectiveURL(ins provider.Instance) string {
 // and a masked preview of an editable value is worse than useless.
 func agentMemoryConfigPreview(ins provider.Instance) string {
 	ins.UseAgentMemory = true
-	contrib, err := provider.MemorySpawnContribution(&ins, ins.Type, "")
+	// The PREVIEW contribution, not the spawn one. A spawn refuses to
+	// resolve an address it cannot verify, which is right for a real session
+	// and wrong here: this block is hypothetical, and blanking it whenever
+	// the daemon is down would tell an operator that this instance has no
+	// memory wiring at all (agentmemory/spawn.go PreviewContribution).
+	contrib, _, err := provider.MemoryPreviewContribution(&ins, ins.Type)
 	if err != nil {
 		return ""
 	}
 	return spawnContribPreview(contrib.Env, contrib.Args)
+}
+
+// agentMemoryPreviewNote is the line shown beside that block when the
+// configuration is real but nothing is listening yet. Empty when the daemon
+// is up, or when the instance points at a server wick does not manage.
+func agentMemoryPreviewNote(ins provider.Instance) string {
+	ins.UseAgentMemory = true
+	_, note, err := provider.MemoryPreviewContribution(&ins, ins.Type)
+	if err != nil {
+		return ""
+	}
+	return note
 }
 
 // spawnContribPreview renders one spawn contribution as newline-separated

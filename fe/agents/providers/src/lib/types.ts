@@ -316,6 +316,11 @@ export interface AgentMemoryDetailDTO {
   KeySet: boolean;
   Capture: boolean;
   Preview: string;
+  /* PreviewNote says Preview is the configuration an agent WOULD get while
+     no daemon is running to give it. Empty when one is. Separate from
+     Preview because they are different claims: the block is what wick would
+     pass, this is whether anything would receive it. */
+  PreviewNote?: string;
 }
 
 export interface AgentMemoryChoiceDTO {
