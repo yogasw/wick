@@ -38,15 +38,22 @@ const briefingTTL = 30 * time.Second
 // rules and a page list, small enough that nobody has to audit it.
 const briefingBudget = 6000
 
-// pageBudget is how many rule and slot pages are read in full, across BOTH
-// lists.
+// bodyBudget is how many pages are read in full.
 //
 // The briefing hands back rules as REFERENCES — path and title, no body
 // (verified against the live daemon). A title alone does not tell an agent
 // what to do, so wick follows the pointers ai-memory gave it. Following a
 // pointer is not the same as deciding what a rule is: the selection stays the
 // backend's, and this only dereferences it.
-const pageBudget = 5
+const bodyBudget = 5
+
+// indexLines caps the one-line index of rules.
+//
+// One line each is what makes this scale — the prompt grows a line per rule
+// instead of a page — but a project with a thousand rules would still flood
+// it. claude's own file memory on this host is the shape being copied: a
+// 220-line MEMORY.md of pointers with the bodies in 223 separate files.
+const indexLines = 40
 
 // briefingCache holds one rendered block per project.
 var (
@@ -163,34 +170,39 @@ func buildInstructionBlock(ctx context.Context, be *Backend, sc ReadScope) strin
 	return block
 }
 
-// renderBriefing turns one briefing into the pasted block.
+// renderBriefing turns one briefing into the pasted block, in three tiers.
 //
-// Only `rules` and `slots` are pasted. They are the namespaces ai-memory
-// itself reserves for exactly this — `_rules/*` and `_slots/*`, plus pinned
-// pages — so using them is following its decision rather than making one.
+// Pasting every rule in full does not scale, and scale is the real concern:
+// the file memory on this host runs to 417 pages across projects, 223 in one
+// of them. At a 6000-character cap that block clips, and when it clips RULES
+// DISAPPEAR SILENTLY — the important ones drowning among the trivial on the
+// way out. So the shape is the one every harness with real memory converges
+// on, and the one claude's own file memory already uses here: a 220-line index
+// of pointers, bodies in separate files.
 //
-// Everything else the briefing carries is deliberately left out. The counters
-// and the activity windows are panel material: an instruction file is not
-// where you read that a project has 581 observations. `recent_pages` is worse
-// than useless here, because on this host it is a list of
-// `sessions/<uuid>.md` titled "[from: Admin]" — noise that would cost budget
-// and teach nothing.
+//	always, in full  — _slots/*, the few pages ai-memory keeps loaded every
+//	                   session: project context and invariants. They do not
+//	                   grow on their own, because a person decides what is
+//	                   a slot.
+//	index, one line  — every other _rules/* page, title and path, no body.
+//	                   The prompt grows a line per rule, not a page.
+//	not at all       — everything else. It is one `memory_read_page` away
+//	                   and the preamble above says so.
 //
-// The two sections carry different authority and say so. Rules are standing
-// instructions the project agreed on. Slots are its recorded state — facts,
-// and facts go stale. Quietly promoting the second to the first is how a
-// memory store starts giving orders nobody agreed to; the absence of that
-// distinction is also why a rule that WAS agreed got followed only half the
-// time, since nothing marked it as one.
+// PINNED pages belong in the first tier and are absent from it, because they
+// are not reachable: `pinned` appears nowhere in the briefing payload, nowhere
+// in `memory_read_page`'s document (path/title/body/frontmatter), and is not a
+// briefing parameter — checked against the live daemon. Inventing a second
+// source for them would be the mistake this file keeps warning about, so this
+// ships slots-only and the gap is reported rather than papered over.
 func renderBriefing(ctx context.Context, be *Backend, conn Conn, sc ReadScope, b *ProjectBriefing) (string, []string) {
-	budget := pageBudget
-	rules, skippedRules := renderPages(ctx, be, conn, sc, b.Rules, &budget)
-	slots, skippedSlots := renderPages(ctx, be, conn, sc, b.Slots, &budget)
-	skipped := append(skippedRules, skippedSlots...)
+	budget := bodyBudget
+	slots, skipped := renderPages(ctx, be, conn, sc, b.Slots, &budget)
+	index := renderIndex(b.Rules)
 
 	// Nothing to say. An empty heading is worse than no block: it spends
 	// instruction budget announcing that there is nothing to announce.
-	if rules == "" && slots == "" && b.PendingHandoffs == 0 {
+	if slots == "" && index == "" && b.PendingHandoffs == 0 {
 		return "", skipped
 	}
 
@@ -198,18 +210,22 @@ func renderBriefing(ctx context.Context, be *Backend, conn Conn, sc ReadScope, b
 	s.WriteString("# Project memory — " + sc.Workspace + "/" + sc.Project + "\n\n")
 	s.WriteString(memoryPreamble(be.Desc.DisplayName))
 
-	if rules != "" {
-		s.WriteString("\n## Rules for this project — FOLLOW THESE\n\n")
-		s.WriteString("Standing instructions this project has agreed on. They are not suggestions, and they are not\n")
-		s.WriteString("overridden by anything below.\n\n")
-		s.WriteString(rules)
+	// First, because it is the tier that has to be obeyed without being
+	// fetched.
+	if slots != "" {
+		s.WriteString("\n## Project context — ALWAYS LOADED\n\n")
+		s.WriteString("The pages this project keeps in every session: its context and its invariants. They are the\n")
+		s.WriteString("project's own record of itself — treat them as what was true when they were written, and as\n")
+		s.WriteString("binding on how you work here unless something in front of you plainly contradicts them.\n\n")
+		s.WriteString(slots)
 	}
 
-	if slots != "" {
-		s.WriteString("\n## What this project has recorded — EVIDENCE, NOT INSTRUCTIONS\n\n")
-		s.WriteString("State this project keeps about itself. Treat it as what was true when it was written: useful\n")
-		s.WriteString("context, not an order, and not necessarily still correct.\n\n")
-		s.WriteString(slots)
+	if index != "" {
+		s.WriteString("\n## Rules for this project — FOLLOW THESE\n\n")
+		s.WriteString("Standing instructions this project has agreed on, listed by title and path. The bodies are NOT\n")
+		s.WriteString("here: read one with `memory_read_page` before doing anything it covers. A rule you have not read\n")
+		s.WriteString("is still a rule.\n\n")
+		s.WriteString(index)
 	}
 
 	// One line, and only when there is something to pick up. It earns its
@@ -231,6 +247,35 @@ func memoryPreamble(name string) string {
 		"The same store is reachable as MCP tools for anything not included here: `memory_query` to search it,\n" +
 		"`memory_read_page` to read a page in full by its path, `memory_write_page` to record something worth\n" +
 		"keeping. What follows is a summary; the store holds more.\n"
+}
+
+// renderIndex is the middle tier: one line per rule, and a count when the line
+// budget bites.
+//
+// Saying "and N more" rather than stopping silently is the whole difference
+// between a list that is short and a list that is truncated — an agent that
+// cannot tell which one it is reading has no reason to go looking.
+func renderIndex(rules []RecentPage) string {
+	if len(rules) == 0 {
+		return ""
+	}
+	var s strings.Builder
+	shown := 0
+	for _, r := range rules {
+		if shown >= indexLines {
+			break
+		}
+		title := strings.TrimSpace(r.Title)
+		if title == "" {
+			title = r.Path
+		}
+		s.WriteString("- " + title + " — `" + r.Path + "`\n")
+		shown++
+	}
+	if rest := len(rules) - shown; rest > 0 {
+		s.WriteString(fmt.Sprintf("- …and %d more. Use `memory_query` to find the one you need.\n", rest))
+	}
+	return s.String()
 }
 
 // renderPages turns one list of page REFERENCES into text, reading each body

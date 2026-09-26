@@ -3,6 +3,7 @@ package agentmemory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -103,8 +104,11 @@ func TestInstructionBlockIsScopedToTheProject(t *testing.T) {
 	}
 }
 
-// The distinction the whole block exists to make. A rule stored in memory was
-// followed only half the time because nothing said it was a rule.
+// The three tiers, and the distinction the block exists to make.
+//
+// Slots arrive in full because they are the few pages a person decided are
+// always loaded. Rules arrive as one line each because pasting them all does
+// not scale — and when a block clips, rules disappear silently.
 func TestInstructionBlockLabelsRulesApartFromRecall(t *testing.T) {
 	src := &briefSource{brief: liveBrief(), pages: ruleBodies()}
 	src.brief.Slots = []RecentPage{{Path: "_slots/stack.md", Title: "Stack", Kind: "slot"}}
@@ -113,25 +117,66 @@ func TestInstructionBlockLabelsRulesApartFromRecall(t *testing.T) {
 
 	block := InstructionBlock(context.Background(), be, ReadScope{Workspace: "w", Project: "p"})
 
+	if !strings.Contains(block, "Project context — ALWAYS LOADED") {
+		t.Fatalf("no always-loaded heading:\n%s", block)
+	}
 	if !strings.Contains(block, "Rules for this project — FOLLOW THESE") {
 		t.Fatalf("no rules heading:\n%s", block)
 	}
-	if !strings.Contains(block, "EVIDENCE, NOT INSTRUCTIONS") {
-		t.Fatalf("recorded state is not marked as non-authoritative:\n%s", block)
-	}
-	// Bodies, not titles: the briefing hands back references, and a list of
-	// titles teaches an agent nothing.
-	if !strings.Contains(block, "balas dengan") {
-		t.Fatalf("the rule's text was not included:\n%s", block)
-	}
+	// Tier 1 in full.
 	if !strings.Contains(block, "Go + Svelte.") {
-		t.Fatalf("the slot's text was not included:\n%s", block)
+		t.Fatalf("the slot's body was not included:\n%s", block)
+	}
+	// Tier 2 as a pointer, NOT as a body — this is the scaling change.
+	if !strings.Contains(block, "`_rules/greeting-bojong.md`") {
+		t.Fatalf("the rule is not indexed:\n%s", block)
+	}
+	if strings.Contains(block, "balas dengan") {
+		t.Fatalf("a rule body was pasted; that is what does not scale:\n%s", block)
+	}
+	// A rule nobody read is still a rule, and the block has to say how.
+	if !strings.Contains(block, "memory_read_page") {
+		t.Fatalf("the index never says how to read one:\n%s", block)
+	}
+	// Order: what must be obeyed without fetching comes first.
+	if strings.Index(block, "ALWAYS LOADED") > strings.Index(block, "FOLLOW THESE") {
+		t.Fatalf("the index was put ahead of the always-loaded tier:\n%s", block)
 	}
 	// codex's actual problem: it was never told the tools exist.
 	for _, tool := range []string{"memory_query", "memory_read_page", "memory_write_page"} {
 		if !strings.Contains(block, tool) {
 			t.Fatalf("the block never mentions %s:\n%s", tool, block)
 		}
+	}
+}
+
+// One line per rule is what makes this scale, but a thousand rules would
+// still flood the prompt. The cut is counted, because an agent that cannot
+// tell a short list from a truncated one has no reason to go looking.
+func TestRuleIndexHasALineBudget(t *testing.T) {
+	src := &briefSource{brief: &ProjectBriefing{}, pages: map[string]string{}}
+	for i := 0; i < indexLines+12; i++ {
+		src.brief.Rules = append(src.brief.Rules, RecentPage{
+			Path:  fmt.Sprintf("_rules/r%03d.md", i),
+			Title: fmt.Sprintf("Rule %d", i),
+			Kind:  "rule",
+		})
+	}
+	be := briefBackend(t, src)
+
+	block := InstructionBlock(context.Background(), be, ReadScope{Workspace: "w", Project: "p"})
+	if n := strings.Count(block, "— `_rules/"); n != indexLines {
+		t.Fatalf("%d index lines, budget is %d", n, indexLines)
+	}
+	if !strings.Contains(block, "…and 12 more") {
+		t.Fatalf("the index was cut without a count:\n%s", block)
+	}
+	// Indexing does not read pages: that is the point of the tier.
+	if src.reads != 0 {
+		t.Fatalf("%d page reads for an index of titles", src.reads)
+	}
+	if len(block) > briefingBudget {
+		t.Fatalf("the block is %d chars, over the %d outer bound", len(block), briefingBudget)
 	}
 }
 
@@ -183,36 +228,39 @@ func TestPendingHandoffEarnsOneLine(t *testing.T) {
 // must not vanish without trace: an agreed rule quietly missing from the
 // instructions is exactly the failure nobody can explain afterwards.
 func TestAnUnreadablePageIsSkippedAndNamed(t *testing.T) {
-	src := &briefSource{brief: liveBrief(), pages: ruleBodies()}
-	src.brief.Rules = append(src.brief.Rules, RecentPage{Path: "_rules/broken.md", Title: "Broken", Kind: "rule"})
+	src := &briefSource{brief: liveBrief(), pages: map[string]string{"_slots/ok.md": "This one reads."}}
+	src.brief.Slots = []RecentPage{
+		{Path: "_slots/ok.md", Title: "Fine", Kind: "slot"},
+		{Path: "_slots/broken.md", Title: "Broken", Kind: "slot"},
+	}
 	be := briefBackend(t, src)
 
 	block := InstructionBlock(context.Background(), be, ReadScope{Workspace: "w", Project: "p"})
-	if !strings.Contains(block, "balas dengan") {
+	if !strings.Contains(block, "This one reads.") {
 		t.Fatalf("one unreadable page took the readable one with it:\n%s", block)
 	}
 	if strings.Contains(block, "Broken") {
 		t.Fatalf("a page that could not be read was announced as if it had been:\n%s", block)
 	}
 	skipped := SkippedBriefingPages()
-	if len(skipped) != 1 || skipped[0] != "_rules/broken.md" {
+	if len(skipped) != 1 || skipped[0] != "_slots/broken.md" {
 		t.Fatalf("the skipped page is not named for the Health finding: %v", skipped)
 	}
 }
 
-// A project with forty rules must not fire forty reads at spawn.
+// A project with forty slots must not fire forty reads at spawn.
 func TestPageReadsAreBounded(t *testing.T) {
 	src := &briefSource{brief: &ProjectBriefing{}, pages: map[string]string{}}
 	for i := 0; i < 40; i++ {
-		path := "_rules/r" + string(rune('a'+i%26)) + string(rune('0'+i/26)) + ".md"
-		src.brief.Rules = append(src.brief.Rules, RecentPage{Path: path, Title: path, Kind: "rule"})
+		path := fmt.Sprintf("_slots/s%03d.md", i)
+		src.brief.Slots = append(src.brief.Slots, RecentPage{Path: path, Title: path, Kind: "slot"})
 		src.pages[path] = "body"
 	}
 	be := briefBackend(t, src)
 
 	block := InstructionBlock(context.Background(), be, ReadScope{Workspace: "w", Project: "p"})
-	if src.reads > pageBudget {
-		t.Fatalf("%d reads at spawn, budget is %d", src.reads, pageBudget)
+	if src.reads > bodyBudget {
+		t.Fatalf("%d reads at spawn, budget is %d", src.reads, bodyBudget)
 	}
 	// Stopping early is said, not hidden.
 	if !strings.Contains(block, "read it with `memory_read_page`") {
@@ -223,8 +271,12 @@ func TestPageReadsAreBounded(t *testing.T) {
 // The standing objection is that instruction files keep growing. A brief that
 // could balloon would prove it right.
 func TestInstructionBlockIsBudgeted(t *testing.T) {
-	huge := strings.Repeat("a rule that goes on and on. ", 2000)
-	src := &briefSource{brief: liveBrief(), pages: map[string]string{"_rules/greeting-bojong.md": huge}}
+	// On a SLOT, because slots are the tier that arrives in full. Rules are
+	// one line each now, so no rule body can blow the budget — which is the
+	// point of the reshape, not a hole in this test.
+	huge := strings.Repeat("a slot that goes on and on. ", 2000)
+	src := &briefSource{brief: liveBrief(), pages: map[string]string{"_slots/big.md": huge}}
+	src.brief.Slots = []RecentPage{{Path: "_slots/big.md", Title: "Big", Kind: "slot"}}
 	be := briefBackend(t, src)
 
 	block := InstructionBlock(context.Background(), be, ReadScope{Workspace: "w", Project: "p"})
