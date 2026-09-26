@@ -30,6 +30,24 @@ function bareWire(): Record<string, unknown> {
 }
 
 describe("normalizeProviderDetail - agent_memory", () => {
+  // A field the mapper forgets is not a missing feature, it is a toggle that
+  // silently resets: the widget seeded `undefined ?? false`, so turning brief
+  // injection on and reloading showed it off, and the next save wrote that
+  // false back to the server (Yoga, 2026-09-26).
+  it("reads inject_brief back, so the toggle survives a reload", () => {
+    const on = normalizeProviderDetail({
+      ...bareWire(),
+      agent_memory: { enabled: true, capture: true, inject_brief: true },
+    } as never);
+    expect(on.AgentMemory.InjectBrief).toBe(true);
+
+    const off = normalizeProviderDetail({
+      ...bareWire(),
+      agent_memory: { enabled: true, capture: true },
+    } as never);
+    expect(off.AgentMemory.InjectBrief).toBe(false);
+  });
+
   it("maps the backend list and the settings", () => {
     const r = normalizeProviderDetail({
       ...bareWire(),

@@ -644,6 +644,10 @@ export function normalizeProviderDetail(r: WireProviderDetailResponse): Provider
       EffectiveURL: r.agent_memory?.effective_url ?? "",
       KeySet: r.agent_memory?.key_set ?? false,
       Capture: r.agent_memory?.capture ?? false,
+      // Read back what the server stored. Without this the toggle always
+      // seeded false, so turning it on and reloading showed it off again —
+      // and the save that followed sent the false straight back.
+      InjectBrief: r.agent_memory?.inject_brief ?? false,
       Preview: r.agent_memory?.preview ?? "",
     },
   };
