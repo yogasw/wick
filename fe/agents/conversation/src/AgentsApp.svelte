@@ -160,6 +160,8 @@
 
   const agentMode = $derived({
     hideTabs: hiddenTabsFor(selected?.features),
+    hideHeader: true,
+    hidePickers: true,
     onDeleted: () => go({ session: null }),
   });
 
@@ -256,7 +258,7 @@
 
   <!-- Chat -->
   <section class="flex min-w-0 flex-1 flex-col">
-    <header class="flex items-center gap-3 border-b border-white-300 px-4 py-2 dark:border-navy-600">
+    <header class="flex h-16 shrink-0 items-center gap-3 border-b border-white-300 px-4 dark:border-navy-600">
       <button
         type="button"
         class="lg:hidden flex h-8 w-8 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600"
@@ -266,13 +268,20 @@
         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
       </button>
       {#if selected}
-        <AgentAvatar shape={selected.avatar?.shape} color={selected.avatar?.color} size={32} working={isWorking(selected.status)} asleep={selected.disabled} />
+        <AgentAvatar shape={selected.avatar?.shape} color={selected.avatar?.color} size={36} working={isWorking(selected.status)} asleep={selected.disabled} />
         <div class="min-w-0 flex-1">
-          <div class="truncate text-sm font-semibold text-black-900 dark:text-white-100">
+          <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">
             {selected.icon ? `${selected.icon} ` : ""}{selected.name}
           </div>
           <div class="truncate text-xs text-black-800 dark:text-black-600">
-            @{selected.handle}{route.session ? " · percakapan lain" : ""}{isWorking(selected.status) ? " · bekerja…" : ""}
+            {#if isWorking(selected.status)}
+              <span class="font-medium text-green-600 dark:text-green-400">mengetik<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
+            {:else if selected.disabled}
+              nonaktif
+            {:else}
+              <span class="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-green-500 align-middle"></span>online
+            {/if}
+            · @{selected.handle}{route.session ? " · percakapan lain" : ""}
           </div>
         </div>
         {#if route.session}
@@ -339,3 +348,26 @@
     </div>
   {/if}
 </div>
+
+<style>
+  /* Three dots that bounce in turn: the "typing" cue in the header and the
+     roster. Tailwind has no staggered keyframe, hence the local rule. */
+  .dots i {
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    margin-left: 2px;
+    border-radius: 9999px;
+    background: currentColor;
+    animation: agent-dot 1s infinite;
+  }
+  .dots i:nth-child(2) { animation-delay: 0.15s; }
+  .dots i:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes agent-dot {
+    0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-2px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dots i { animation: none; opacity: 0.7; }
+  }
+</style>

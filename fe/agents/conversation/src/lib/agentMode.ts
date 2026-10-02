@@ -22,6 +22,14 @@ export type AgentMode = {
       deleted: in the Agents app that path is the /sessions list, i.e. it
       would throw the user out of the app. */
   onDeleted?: () => void;
+  /** The host draws its own header (agent identity, not session title and
+      provider), so DetailView skips ConversationHeader. Without that
+      header there is no tab strip, so the view stays on the conversation. */
+  hideHeader?: boolean;
+  /** Drop the project and provider pickers from the composer: an agent's
+      chat lives in the agent's project, and moving it elsewhere from here
+      would detach it from the agent. */
+  hidePickers?: boolean;
 };
 
 /** Persona feature flags as the server sends them (snake_case JSON). */

@@ -791,6 +791,8 @@
   }
 
   function handleTabChange(view: ActiveView) {
+    // No header in agent mode means no way back from another view.
+    if (agentMode?.hideHeader && view !== "conversation") return;
     activeView = view;
     if (view === "approvals") loadApprovalsTab();
   }
@@ -2391,7 +2393,8 @@
   <!-- Centre column: header + thread + ask + composer -->
   <div class="relative flex flex-col flex-1 min-w-0" data-session-id={sessionId}>
 
-    <!-- Zone 1: header bar -->
+    <!-- Zone 1: header bar (the Agents app draws its own) -->
+    {#if !agentMode?.hideHeader}
     <ConversationHeader
       title={threadMeta.title || title}
       {agentLabel}
@@ -2405,6 +2408,7 @@
       onDelete={handleDelete}
       onTabChange={handleTabChange}
     />
+    {/if}
 
     <!-- Zone 2: main content area — switches by activeView -->
     {#if activeView === "conversation"}
@@ -2414,7 +2418,7 @@
         bind:this={threadEl}
         data-chat-panel
       >
-        <div class="page-col px-6 pt-14 pb-6 md:pt-6">
+        <div class="page-col px-6 {agentMode?.hideHeader ? 'pt-4' : 'pt-14'} pb-6 md:pt-6">
           {#if loadingOlder}
             <div class="flex items-center justify-center gap-2 py-3 text-[11px] text-black-600 dark:text-black-700">
               <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
@@ -2516,8 +2520,8 @@
             onSend={handleSend}
             placeholder="Ask anything…   / commands · @ files"
             notifyKey={NOTIFY_KEY}
-            provider={providerSelect}
-            project={projectSelect}
+            provider={agentMode?.hidePickers ? undefined : providerSelect}
+            project={agentMode?.hidePickers ? undefined : projectSelect}
             onSearchFiles={searchMentionFiles}
             mentionAgents={mentionableAgents}
             commands={composerCommands}
