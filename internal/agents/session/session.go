@@ -194,7 +194,7 @@ type Meta struct {
 	// session talks to. The MCP layer reads it to narrow connector access
 	// to that agent's checklist; a sub-agent session carries none and
 	// inherits its parent's through ParentSessionID (see
-	// persona.AgentOfSession). Absent = an ordinary session, unscoped.
+	// team.AgentOfSession). Absent = an ordinary session, unscoped.
 	AgentID string `json:"agent_id,omitempty"`
 	// AgentMain marks the agent's one main conversation — the chat the
 	// Agents app opens when the agent is picked. Other sessions with the

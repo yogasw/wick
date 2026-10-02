@@ -1,4 +1,4 @@
-package persona
+package team
 
 import (
 	"testing"

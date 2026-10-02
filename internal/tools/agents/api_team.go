@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
-	"github.com/yogasw/wick/internal/agents/persona"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/entity"
@@ -20,19 +20,19 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-// globalPersonas backs the Agents app (/team). nil = the app is off and
-// every /api/personas route answers 503.
-var globalPersonas *persona.Service
+// globalTeam backs the Agents app (/team). nil = the app is off and
+// every /api/team/agents route answers 503.
+var globalTeam *team.Service
 
-// SetPersonas wires the Agents-app store.
-func SetPersonas(s *persona.Service) { globalPersonas = s }
+// SetTeam wires the Agents-app store.
+func SetTeam(s *team.Service) { globalTeam = s }
 
 /* ── DTOs ────────────────────────────────────────────────────────────────── */
 
-// PersonaItem is one agent as the Agents app renders it. The persona text
+// TeamAgentItem is one agent as the Agents app renders it. The persona text
 // (name … preset) is read from the agent's project at response time, never
 // stored on the row, so it can never disagree with the project settings.
-type PersonaItem struct {
+type TeamAgentItem struct {
 	ID                   string                   `json:"id"`
 	Handle               string                   `json:"handle"`
 	IsCaptain            bool                     `json:"is_captain"`
@@ -44,9 +44,9 @@ type PersonaItem struct {
 	Provider             string                   `json:"provider"`
 	Model                string                   `json:"model"`
 	Preset               string                   `json:"preset"`
-	Features             persona.Features         `json:"features"`
-	Avatar               persona.Avatar           `json:"avatar"`
-	AllowedConnectors    []persona.ConnectorGrant `json:"allowed_connectors"`
+	Features             team.Features         `json:"features"`
+	Avatar               team.Avatar           `json:"avatar"`
+	AllowedConnectors    []team.ConnectorGrant `json:"allowed_connectors"`
 	IncludeNewConnectors bool                     `json:"include_new_connectors"`
 	Disabled             bool                     `json:"disabled"`
 	MainSessionID        string                   `json:"main_session_id"`
@@ -58,8 +58,8 @@ type PersonaItem struct {
 	SharedWith int `json:"shared_with"`
 }
 
-// PersonaSessionItem is one conversation of an agent.
-type PersonaSessionItem struct {
+// TeamAgentSessionItem is one conversation of an agent.
+type TeamAgentSessionItem struct {
 	ID         string     `json:"id"`
 	Label      string     `json:"label"`
 	LastActive *time.Time `json:"last_active"`
@@ -67,31 +67,31 @@ type PersonaSessionItem struct {
 	Status     string     `json:"status"`
 }
 
-// personaConnectorItem is one row of the access checklist. Names and op
+// teamAgentConnectorItem is one row of the access checklist. Names and op
 // declarations only — never a config value.
-type personaConnectorItem struct {
+type teamAgentConnectorItem struct {
 	ID          string               `json:"id"`
 	Key         string               `json:"key"`
 	Label       string               `json:"label"`
 	Description string               `json:"description"`
-	Accounts    []personaAccountItem `json:"accounts"`
-	Ops         []personaConnectorOp `json:"ops"`
+	Accounts    []teamAgentAccountItem `json:"accounts"`
+	Ops         []teamAgentConnectorOp `json:"ops"`
 }
 
-type personaAccountItem struct {
+type teamAgentAccountItem struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name"`
 }
 
-type personaConnectorOp struct {
+type teamAgentConnectorOp struct {
 	Key         string `json:"key"`
 	Name        string `json:"name"`
 	Destructive bool   `json:"destructive"`
 }
 
-// personaWriteReq is the POST body and, with every field optional, the
+// teamAgentWriteReq is the POST body and, with every field optional, the
 // PATCH body. Pointers tell "absent" apart from "set to empty".
-type personaWriteReq struct {
+type teamAgentWriteReq struct {
 	Handle               *string                   `json:"handle"`
 	Name                 *string                   `json:"name"`
 	Icon                 *string                   `json:"icon"`
@@ -100,9 +100,9 @@ type personaWriteReq struct {
 	Provider             *string                   `json:"provider"`
 	Model                *string                   `json:"model"`
 	ProjectID            *string                   `json:"project_id"`
-	Avatar               *persona.Avatar           `json:"avatar"`
-	Features             *persona.Features         `json:"features"`
-	AllowedConnectors    *[]persona.ConnectorGrant `json:"allowed_connectors"`
+	Avatar               *team.Avatar           `json:"avatar"`
+	Features             *team.Features         `json:"features"`
+	AllowedConnectors    *[]team.ConnectorGrant `json:"allowed_connectors"`
 	IncludeNewConnectors *bool                     `json:"include_new_connectors"`
 	Disabled             *bool                     `json:"disabled"`
 	IsCaptain            *bool                     `json:"is_captain"`
@@ -115,11 +115,11 @@ const captainSystemAddon = "Kamu Captain: agent utama pemilik tim ini. Bantu pem
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
-func personasReady(c *tool.Ctx) bool {
+func teamReady(c *tool.Ctx) bool {
 	if notReady(c) {
 		return false
 	}
-	if globalPersonas == nil {
+	if globalTeam == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "agents app is not enabled"})
 		return false
 	}
@@ -130,12 +130,12 @@ func personasReady(c *tool.Ctx) bool {
 	return true
 }
 
-// loadOwnPersona fetches {id} and confirms the caller owns it. Someone
+// loadOwnTeamAgent fetches {id} and confirms the caller owns it. Someone
 // else's agent answers 404, not 403, so ids are not probeable.
-func loadOwnPersona(c *tool.Ctx) (entity.AgentPersona, bool) {
-	p, err := globalPersonas.Get(c.Context(), c.PathValue("id"))
+func loadOwnTeamAgent(c *tool.Ctx) (entity.AgentPersona, bool) {
+	p, err := globalTeam.Get(c.Context(), c.PathValue("id"))
 	if err != nil || p.OwnerUserID != actorID(c) {
-		if err != nil && !errors.Is(err, persona.ErrNotFound) {
+		if err != nil && !errors.Is(err, team.ErrNotFound) {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return p, false
 		}
@@ -145,8 +145,8 @@ func loadOwnPersona(c *tool.Ctx) (entity.AgentPersona, bool) {
 	return p, true
 }
 
-func decodePersonaReq(c *tool.Ctx) (personaWriteReq, bool) {
-	var req personaWriteReq
+func decodeTeamAgentReq(c *tool.Ctx) (teamAgentWriteReq, bool) {
+	var req teamAgentWriteReq
 	if err := json.NewDecoder(io.LimitReader(c.R.Body, 1<<20)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return req, false
@@ -157,13 +157,13 @@ func decodePersonaReq(c *tool.Ctx) (personaWriteReq, bool) {
 // validateGrants rejects a checklist entry this build cannot interpret. A
 // grant naming a connector the owner cannot see is harmless (the scope
 // only narrows) and is kept, so a temporarily lost tag does not wipe it.
-func validateGrants(gs []persona.ConnectorGrant) error {
+func validateGrants(gs []team.ConnectorGrant) error {
 	for _, g := range gs {
 		if strings.TrimSpace(g.ConnectorID) == "" {
 			return errors.New("allowed_connectors: connector_id is required")
 		}
 		switch g.Level {
-		case persona.LevelAll, persona.LevelRead, persona.LevelPick:
+		case team.LevelAll, team.LevelRead, team.LevelPick:
 		default:
 			return errors.New("allowed_connectors: level must be all, read or pick")
 		}
@@ -171,12 +171,12 @@ func validateGrants(gs []persona.ConnectorGrant) error {
 	return nil
 }
 
-// personaStatusText maps a row-level error to an HTTP status.
-func personaSaveStatus(err error) int {
+// teamAgentSaveStatus maps a row-level error to an HTTP status.
+func teamAgentSaveStatus(err error) int {
 	switch {
-	case errors.Is(err, persona.ErrHandleTaken):
+	case errors.Is(err, team.ErrHandleTaken):
 		return http.StatusConflict
-	case errors.Is(err, persona.ErrNotFound):
+	case errors.Is(err, team.ErrNotFound):
 		return http.StatusNotFound
 	case strings.HasPrefix(err.Error(), "handle "):
 		return http.StatusBadRequest
@@ -213,15 +213,15 @@ func timePtr(t time.Time) *time.Time {
 	return &t
 }
 
-// personaToItem renders one row. siblings is the owner's full list, used
+// teamAgentToItem renders one row. siblings is the owner's full list, used
 // for SharedWith; pass nil to skip the count.
-func personaToItem(p entity.AgentPersona, siblings []entity.AgentPersona) PersonaItem {
-	it := PersonaItem{
+func teamAgentToItem(p entity.AgentPersona, siblings []entity.AgentPersona) TeamAgentItem {
+	it := TeamAgentItem{
 		ID: p.ID, Handle: p.Handle, IsCaptain: p.IsCaptain, ProjectID: p.ProjectID,
 		Name:                 p.Handle,
-		Features:             persona.DecodeFeatures(p.Features),
-		Avatar:               persona.DecodeAvatar(p.Avatar),
-		AllowedConnectors:    persona.DecodeGrants(p.AllowedConnectors),
+		Features:             team.DecodeFeatures(p.Features),
+		Avatar:               team.DecodeAvatar(p.Avatar),
+		AllowedConnectors:    team.DecodeGrants(p.AllowedConnectors),
 		IncludeNewConnectors: p.IncludeNewConnectors,
 		Disabled:             p.Disabled,
 		Status:               string(session.StatusIdle),
@@ -256,7 +256,7 @@ func personaToItem(p entity.AgentPersona, siblings []entity.AgentPersona) Person
 // applyProjectFields writes the persona half of req into project meta.
 // Returns whether anything changed so an untouched project is not
 // rewritten (and its UpdatedAt not bumped) by an access-only PATCH.
-func applyProjectFields(m *project.Meta, req personaWriteReq) bool {
+func applyProjectFields(m *project.Meta, req teamAgentWriteReq) bool {
 	changed := false
 	set := func(dst *string, v *string, trim bool) {
 		if v == nil {
@@ -312,8 +312,8 @@ func requireUsableProject(c *tool.Ctx, id string) bool {
 	return true
 }
 
-// createPersonaProject makes the project a new agent's persona lives in.
-func createPersonaProject(c *tool.Ctx, name, icon, description, systemPrompt, provider, model string) (string, error) {
+// createTeamAgentProject makes the project a new agent's persona lives in.
+func createTeamAgentProject(c *tool.Ctx, name, icon, description, systemPrompt, provider, model string) (string, error) {
 	opt := project.CreateOptions{
 		ID:          uuid.New().String(),
 		Name:        name,
@@ -339,35 +339,35 @@ func createPersonaProject(c *tool.Ctx, name, icon, description, systemPrompt, pr
 // so the app never opens on an empty roster.
 func ensureCaptain(c *tool.Ctx) ([]entity.AgentPersona, error) {
 	owner := actorID(c)
-	rows, err := globalPersonas.List(c.Context(), owner)
+	rows, err := globalTeam.List(c.Context(), owner)
 	if err != nil || len(rows) > 0 {
 		return rows, err
 	}
-	pid, err := createPersonaProject(c, "Captain", "🧭", "Agent utama yang membantu mengatur tim agent.", captainSystemAddon, "", "")
+	pid, err := createTeamAgentProject(c, "Captain", "🧭", "Agent utama yang membantu mengatur tim agent.", captainSystemAddon, "", "")
 	if err != nil {
 		return nil, err
 	}
 	p := &entity.AgentPersona{
 		OwnerUserID: owner, Handle: "captain", ProjectID: pid, IsCaptain: true,
 		AllowedConnectors: "[]",
-		Features:          persona.EncodeFeatures(persona.DefaultFeatures()),
-		Avatar:            persona.EncodeAvatar(persona.Avatar{Shape: "squircle", Color: "#f59e0b"}),
+		Features:          team.EncodeFeatures(team.DefaultFeatures()),
+		Avatar:            team.EncodeAvatar(team.Avatar{Shape: "squircle", Color: "#f59e0b"}),
 	}
-	if err := globalPersonas.Create(c.Context(), p); err != nil && !errors.Is(err, persona.ErrHandleTaken) {
+	if err := globalTeam.Create(c.Context(), p); err != nil && !errors.Is(err, team.ErrHandleTaken) {
 		// ErrHandleTaken = a concurrent first load won the race; its
 		// Captain is the one to show. The project made here is left as
 		// an ordinary empty project rather than deleted under a request
 		// that may be using it.
 		return nil, err
 	}
-	return globalPersonas.List(c.Context(), owner)
+	return globalTeam.List(c.Context(), owner)
 }
 
 /* ── handlers ────────────────────────────────────────────────────────────── */
 
-// apiPersonaList handles GET /api/personas.
-func apiPersonaList(c *tool.Ctx) {
-	if !personasReady(c) {
+// apiTeamAgentList handles GET /api/team/agents.
+func apiTeamAgentList(c *tool.Ctx) {
+	if !teamReady(c) {
 		return
 	}
 	rows, err := ensureCaptain(c)
@@ -375,10 +375,10 @@ func apiPersonaList(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	items := make([]PersonaItem, 0, len(rows))
+	items := make([]TeamAgentItem, 0, len(rows))
 	captainID := ""
 	for _, r := range rows {
-		items = append(items, personaToItem(r, rows))
+		items = append(items, teamAgentToItem(r, rows))
 		if r.IsCaptain {
 			captainID = r.ID
 		}
@@ -386,12 +386,12 @@ func apiPersonaList(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"agents": items, "captain_id": captainID})
 }
 
-// apiPersonaCreate handles POST /api/personas.
-func apiPersonaCreate(c *tool.Ctx) {
-	if !personasReady(c) {
+// apiTeamAgentCreate handles POST /api/team/agents.
+func apiTeamAgentCreate(c *tool.Ctx) {
+	if !teamReady(c) {
 		return
 	}
-	req, ok := decodePersonaReq(c)
+	req, ok := decodeTeamAgentReq(c)
 	if !ok {
 		return
 	}
@@ -401,8 +401,8 @@ func apiPersonaCreate(c *tool.Ctx) {
 		}
 		return *p
 	}
-	handle := persona.NormalizeHandle(str(req.Handle))
-	if err := persona.ValidateHandle(handle); err != nil {
+	handle := team.NormalizeHandle(str(req.Handle))
+	if err := team.ValidateHandle(handle); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -418,49 +418,49 @@ func apiPersonaCreate(c *tool.Ctx) {
 	} else {
 		// Handle clash checked before a project is made, so a refused
 		// create does not leave an orphan project behind.
-		if _, err := globalPersonas.GetByHandle(c.Context(), actorID(c), handle); err == nil {
-			c.JSON(http.StatusConflict, map[string]string{"error": persona.ErrHandleTaken.Error()})
+		if _, err := globalTeam.GetByHandle(c.Context(), actorID(c), handle); err == nil {
+			c.JSON(http.StatusConflict, map[string]string{"error": team.ErrHandleTaken.Error()})
 			return
 		}
 		var err error
-		pid, err = createPersonaProject(c, name, str(req.Icon), str(req.Description), str(req.SystemPrompt), str(req.Provider), str(req.Model))
+		pid, err = createTeamAgentProject(c, name, str(req.Icon), str(req.Description), str(req.SystemPrompt), str(req.Provider), str(req.Model))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 	}
-	feats := persona.DefaultFeatures()
+	feats := team.DefaultFeatures()
 	if req.Features != nil {
 		feats = *req.Features
 	}
-	av := persona.DefaultAvatar()
+	av := team.DefaultAvatar()
 	if req.Avatar != nil {
 		av = *req.Avatar
 	}
 	p := &entity.AgentPersona{
 		OwnerUserID: actorID(c), Handle: handle, ProjectID: pid,
 		AllowedConnectors: "[]",
-		Features:          persona.EncodeFeatures(feats),
-		Avatar:            persona.EncodeAvatar(av),
+		Features:          team.EncodeFeatures(feats),
+		Avatar:            team.EncodeAvatar(av),
 	}
-	if err := globalPersonas.Create(c.Context(), p); err != nil {
-		c.JSON(personaSaveStatus(err), map[string]string{"error": err.Error()})
+	if err := globalTeam.Create(c.Context(), p); err != nil {
+		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
-	rows, _ := globalPersonas.List(c.Context(), actorID(c))
-	c.JSON(http.StatusOK, personaToItem(*p, rows))
+	rows, _ := globalTeam.List(c.Context(), actorID(c))
+	c.JSON(http.StatusOK, teamAgentToItem(*p, rows))
 }
 
-// apiPersonaUpdate handles PATCH /api/personas/{id}.
-func apiPersonaUpdate(c *tool.Ctx) {
-	if !personasReady(c) {
+// apiTeamAgentUpdate handles PATCH /api/team/agents/{id}.
+func apiTeamAgentUpdate(c *tool.Ctx) {
+	if !teamReady(c) {
 		return
 	}
-	p, ok := loadOwnPersona(c)
+	p, ok := loadOwnTeamAgent(c)
 	if !ok {
 		return
 	}
-	req, ok := decodePersonaReq(c)
+	req, ok := decodeTeamAgentReq(c)
 	if !ok {
 		return
 	}
@@ -476,8 +476,8 @@ func apiPersonaUpdate(c *tool.Ctx) {
 		p.ProjectID = pid
 	}
 	if req.Handle != nil {
-		p.Handle = persona.NormalizeHandle(*req.Handle)
-		if err := persona.ValidateHandle(p.Handle); err != nil {
+		p.Handle = team.NormalizeHandle(*req.Handle)
+		if err := team.ValidateHandle(p.Handle); err != nil {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
@@ -487,7 +487,7 @@ func apiPersonaUpdate(c *tool.Ctx) {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		p.AllowedConnectors = persona.EncodeGrants(*req.AllowedConnectors)
+		p.AllowedConnectors = team.EncodeGrants(*req.AllowedConnectors)
 	}
 	if req.IncludeNewConnectors != nil {
 		p.IncludeNewConnectors = *req.IncludeNewConnectors
@@ -496,10 +496,10 @@ func apiPersonaUpdate(c *tool.Ctx) {
 		p.Disabled = *req.Disabled
 	}
 	if req.Features != nil {
-		p.Features = persona.EncodeFeatures(*req.Features)
+		p.Features = team.EncodeFeatures(*req.Features)
 	}
 	if req.Avatar != nil {
-		p.Avatar = persona.EncodeAvatar(*req.Avatar)
+		p.Avatar = team.EncodeAvatar(*req.Avatar)
 	}
 	if req.IsCaptain != nil {
 		// Captaincy moves by promoting another agent; un-ticking the
@@ -524,26 +524,26 @@ func apiPersonaUpdate(c *tool.Ctx) {
 			}
 		}
 	}
-	if err := globalPersonas.Update(c.Context(), &p); err != nil {
-		c.JSON(personaSaveStatus(err), map[string]string{"error": err.Error()})
+	if err := globalTeam.Update(c.Context(), &p); err != nil {
+		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
-	rows, _ := globalPersonas.List(c.Context(), actorID(c))
-	c.JSON(http.StatusOK, personaToItem(p, rows))
+	rows, _ := globalTeam.List(c.Context(), actorID(c))
+	c.JSON(http.StatusOK, teamAgentToItem(p, rows))
 }
 
-// apiPersonaDelete handles DELETE /api/personas/{id}. Only the row goes;
+// apiTeamAgentDelete handles DELETE /api/team/agents/{id}. Only the row goes;
 // its project and conversations stay as the owner's ordinary work.
-func apiPersonaDelete(c *tool.Ctx) {
-	if !personasReady(c) {
+func apiTeamAgentDelete(c *tool.Ctx) {
+	if !teamReady(c) {
 		return
 	}
-	p, ok := loadOwnPersona(c)
+	p, ok := loadOwnTeamAgent(c)
 	if !ok {
 		return
 	}
 	if p.IsCaptain {
-		rows, err := globalPersonas.List(c.Context(), actorID(c))
+		rows, err := globalTeam.List(c.Context(), actorID(c))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -553,21 +553,21 @@ func apiPersonaDelete(c *tool.Ctx) {
 			return
 		}
 	}
-	if err := globalPersonas.Delete(c.Context(), p.ID); err != nil {
-		c.JSON(personaSaveStatus(err), map[string]string{"error": err.Error()})
+	if err := globalTeam.Delete(c.Context(), p.ID); err != nil {
+		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// apiPersonaConnectors handles GET /api/personas/connectors: the checklist
+// apiTeamAgentConnectors handles GET /api/team/agents/connectors: the checklist
 // source, i.e. what the OWNER reaches. The request context carries no agent
 // scope (it is a browser call), so this is the unnarrowed list.
-func apiPersonaConnectors(c *tool.Ctx) {
-	if !personasReady(c) {
+func apiTeamAgentConnectors(c *tool.Ctx) {
+	if !teamReady(c) {
 		return
 	}
-	out := make([]personaConnectorItem, 0)
+	out := make([]teamAgentConnectorItem, 0)
 	if globalConnectors == nil {
 		c.JSON(http.StatusOK, out)
 		return
@@ -585,46 +585,46 @@ func apiPersonaConnectors(c *tool.Ctx) {
 		if !ok {
 			continue
 		}
-		it := personaConnectorItem{
+		it := teamAgentConnectorItem{
 			ID: row.ID, Key: row.Key, Label: row.Label,
 			Description: strings.TrimSpace(row.Description),
-			Accounts:    []personaAccountItem{},
-			Ops:         []personaConnectorOp{},
+			Accounts:    []teamAgentAccountItem{},
+			Ops:         []teamAgentConnectorOp{},
 		}
 		if it.Description == "" {
 			it.Description = mod.Meta.Description
 		}
 		if mod.OAuth != nil {
 			// The instance's own identity is one more pickable account.
-			it.Accounts = append(it.Accounts, personaAccountItem{ID: "", DisplayName: "bot / instance"})
+			it.Accounts = append(it.Accounts, teamAgentAccountItem{ID: "", DisplayName: "bot / instance"})
 			caller := globalConnectors.AccountAccessFor(row, actorID(c), isAdmin, tagIDs)
 			if accs, aerr := globalConnectors.ListAccountsVisibleTo(c.Context(), row, caller); aerr == nil {
 				for _, a := range accs {
-					it.Accounts = append(it.Accounts, personaAccountItem{ID: a.ID, DisplayName: a.DisplayName})
+					it.Accounts = append(it.Accounts, teamAgentAccountItem{ID: a.ID, DisplayName: a.DisplayName})
 				}
 			} else {
-				log.Ctx(c.Context()).Warn().Err(aerr).Str("connector", row.ID).Msg("persona checklist: list accounts")
+				log.Ctx(c.Context()).Warn().Err(aerr).Str("connector", row.ID).Msg("team agent checklist: list accounts")
 			}
 		}
 		for _, op := range mod.AllOps() {
 			if op.ConfigOnly {
 				continue
 			}
-			it.Ops = append(it.Ops, personaConnectorOp{Key: op.Key, Name: op.Name, Destructive: op.Destructive})
+			it.Ops = append(it.Ops, teamAgentConnectorOp{Key: op.Key, Name: op.Name, Destructive: op.Destructive})
 		}
 		out = append(out, it)
 	}
 	c.JSON(http.StatusOK, out)
 }
 
-// apiPersonaChat handles POST /api/personas/{id}/chat: returns the agent's
+// apiTeamAgentChat handles POST /api/team/agents/{id}/chat: returns the agent's
 // main conversation (creating it on first use) or, with new=true, a fresh
 // side conversation.
-func apiPersonaChat(c *tool.Ctx) {
-	if !personasReady(c) {
+func apiTeamAgentChat(c *tool.Ctx) {
+	if !teamReady(c) {
 		return
 	}
-	p, ok := loadOwnPersona(c)
+	p, ok := loadOwnTeamAgent(c)
 	if !ok {
 		return
 	}
@@ -641,18 +641,18 @@ func apiPersonaChat(c *tool.Ctx) {
 			return
 		}
 	}
-	id, err := createPersonaSession(c, p, !body.New)
+	id, err := createTeamAgentSession(c, p, !body.New)
 	if err != nil {
-		log.Ctx(c.Context()).Error().Err(err).Str("agent", p.ID).Msg("persona chat: create session")
+		log.Ctx(c.Context()).Error().Err(err).Str("agent", p.ID).Msg("team agent chat: create session")
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"session_id": id})
 }
 
-// createPersonaSession mirrors startNewSession minus the first message:
+// createTeamAgentSession mirrors startNewSession minus the first message:
 // the Agents app opens the chat empty and the user types into it.
-func createPersonaSession(c *tool.Ctx, p entity.AgentPersona, main bool) (string, error) {
+func createTeamAgentSession(c *tool.Ctx, p entity.AgentPersona, main bool) (string, error) {
 	projectID := p.ProjectID
 	if projectID != "" {
 		if _, ok := globalMgr.Registry().Project(projectID); !ok {
@@ -691,7 +691,7 @@ func createPersonaSession(c *tool.Ctx, p entity.AgentPersona, main bool) (string
 	}
 	if modelID != "" {
 		if err := session.SetModelID(globalLayout, id, "main", modelID); err != nil {
-			log.Ctx(c.Context()).Warn().Msgf("persona chat set model id: %s", err.Error())
+			log.Ctx(c.Context()).Warn().Msgf("team agent chat set model id: %s", err.Error())
 		}
 	}
 	// Titled after the agent so its conversations read as the agent's in
@@ -707,18 +707,18 @@ func createPersonaSession(c *tool.Ctx, p entity.AgentPersona, main bool) (string
 	return id, nil
 }
 
-// apiPersonaSessions handles GET /api/personas/{id}/sessions.
-func apiPersonaSessions(c *tool.Ctx) {
-	if !personasReady(c) {
+// apiTeamAgentSessions handles GET /api/team/agents/{id}/sessions.
+func apiTeamAgentSessions(c *tool.Ctx) {
+	if !teamReady(c) {
 		return
 	}
-	p, ok := loadOwnPersona(c)
+	p, ok := loadOwnTeamAgent(c)
 	if !ok {
 		return
 	}
-	out := make([]PersonaSessionItem, 0)
+	out := make([]TeamAgentSessionItem, 0)
 	for _, s := range agentSessions(p.OwnerUserID, p.ID) {
-		out = append(out, PersonaSessionItem{
+		out = append(out, TeamAgentSessionItem{
 			ID: s.ID, Label: s.Meta.Label, LastActive: timePtr(s.Meta.LastActive),
 			AgentMain: s.Meta.AgentMain, Status: string(s.Meta.Status),
 		})

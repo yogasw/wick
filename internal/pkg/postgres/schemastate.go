@@ -98,7 +98,7 @@ var migratedModels = []any{
 	&entity.AgentIncident{},
 	&entity.AgentEvidence{},
 	// Agents app: chat-able agents backed by a project, with a per-agent
-	// connector checklist. See internal/agents/persona.
+	// connector checklist. See internal/agents/team.
 	&entity.AgentPersona{},
 }
 

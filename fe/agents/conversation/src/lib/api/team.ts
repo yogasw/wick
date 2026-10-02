@@ -3,7 +3,7 @@ import { apiGetE, apiPostE, apiPatchE, apiDeleteE, WickClientLayer, type APIErro
 import type { HttpClient } from "@effect/platform";
 import type { AgentFeatures } from "../agentMode.js";
 
-/* The Agents app API (api_personas.go). Every route is scoped to the
+/* The Agents app API (api_team.go). Every route is scoped to the
    caller as owner server-side, so nothing here passes a user id. */
 
 export type AgentAvatarSpec = { shape: string; color: string };
@@ -58,7 +58,7 @@ export type AgentWrite = Partial<{
   is_captain: boolean;
 }>;
 
-export type PersonaConnector = {
+export type AgentConnector = {
   id: string;
   key: string;
   label: string;
@@ -78,27 +78,27 @@ export type AgentSessionItem = {
 const enc = encodeURIComponent;
 
 export const listAgents = (base: string) =>
-  apiGetE<{ agents: AgentItem[] | null; captain_id: string }>(`${base}/api/personas`);
+  apiGetE<{ agents: AgentItem[] | null; captain_id: string }>(`${base}/api/team/agents`);
 
 export const createAgent = (base: string, body: AgentWrite) =>
-  apiPostE<AgentItem>(`${base}/api/personas`, body);
+  apiPostE<AgentItem>(`${base}/api/team/agents`, body);
 
 export const updateAgent = (base: string, id: string, body: AgentWrite) =>
-  apiPatchE<AgentItem>(`${base}/api/personas/${enc(id)}`, body);
+  apiPatchE<AgentItem>(`${base}/api/team/agents/${enc(id)}`, body);
 
 export const deleteAgent = (base: string, id: string) =>
-  apiDeleteE<unknown>(`${base}/api/personas/${enc(id)}`);
+  apiDeleteE<unknown>(`${base}/api/team/agents/${enc(id)}`);
 
 export const listAgentConnectors = (base: string) =>
-  apiGetE<PersonaConnector[] | null>(`${base}/api/personas/connectors`);
+  apiGetE<AgentConnector[] | null>(`${base}/api/team/agents/connectors`);
 
 /** openAgentChat returns the agent's main session (created on first use),
     or a fresh side conversation when fresh=true. */
 export const openAgentChat = (base: string, id: string, fresh = false) =>
-  apiPostE<{ session_id: string }>(`${base}/api/personas/${enc(id)}/chat`, fresh ? { new: true } : {});
+  apiPostE<{ session_id: string }>(`${base}/api/team/agents/${enc(id)}/chat`, fresh ? { new: true } : {});
 
 export const listAgentSessions = (base: string, id: string) =>
-  apiGetE<AgentSessionItem[] | null>(`${base}/api/personas/${enc(id)}/sessions`);
+  apiGetE<AgentSessionItem[] | null>(`${base}/api/team/agents/${enc(id)}/sessions`);
 
 /** runApi runs one of the effects above as a promise — the Agents app
     components only ever need the result or the error message. */

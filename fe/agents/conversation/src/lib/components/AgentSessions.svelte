@@ -5,7 +5,7 @@
   import { onMount } from "svelte";
   import DrawerHeader from "./DrawerHeader.svelte";
   import { timeAgo } from "../timeFormat.js";
-  import { listAgentSessions, runApi, isWorking, type AgentItem, type AgentSessionItem } from "../api/personas.js";
+  import { listAgentSessions, runApi, isWorking, type AgentItem, type AgentSessionItem } from "../api/team.js";
 
   type Props = {
     base: string;

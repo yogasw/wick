@@ -11,8 +11,8 @@
   import { getProviderOptions } from "../api/options.js";
   import {
     updateAgent, deleteAgent, listAgentConnectors, runApi,
-    type AgentItem, type AgentWrite, type ConnectorGrant, type PersonaConnector,
-  } from "../api/personas.js";
+    type AgentItem, type AgentWrite, type ConnectorGrant, type AgentConnector,
+  } from "../api/team.js";
   import { FEATURE_TABS, type AgentFeatures } from "../agentMode.js";
   import { AVATAR_SHAPES, AVATAR_COLORS } from "../avatarShape.js";
   import { HANDLE_RE, splitPick, joinPick, destructiveAllowed } from "../agentForm.js";
@@ -55,7 +55,7 @@
   });
 
   let providers = $state<{ type: string; name: string; models?: { id: string; label: string; default: boolean }[] }[]>([]);
-  let catalog = $state<PersonaConnector[]>([]);
+  let catalog = $state<AgentConnector[]>([]);
   let catalogError = $state("");
   let catalogLoading = $state(true);
   let connQuery = $state("");
@@ -77,7 +77,7 @@
 
   /* ── Akses ─────────────────────────────────────────────────────── */
   const grantOf = (id: string) => draft.grants.find((g) => g.connector_id === id);
-  function toggleConnector(c: PersonaConnector, on: boolean) {
+  function toggleConnector(c: AgentConnector, on: boolean) {
     if (on && !grantOf(c.id)) {
       // New ticks default to read-only: write access is a deliberate step.
       draft.grants = [...draft.grants, { connector_id: c.id, accounts: [], level: "read", ops: [] }];

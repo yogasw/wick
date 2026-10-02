@@ -340,14 +340,14 @@ func Register(r tool.Router) {
 	r.DELETE("/api/agent-profiles/{id}", apiAgentProfileDelete)
 
 	// JSON API — Agents app (/team). Every route is scoped to the caller's
-	// own agents; see api_personas.go.
-	r.GET("/api/personas", apiPersonaList)
-	r.POST("/api/personas", apiPersonaCreate)
-	r.GET("/api/personas/connectors", apiPersonaConnectors)
-	r.PATCH("/api/personas/{id}", apiPersonaUpdate)
-	r.DELETE("/api/personas/{id}", apiPersonaDelete)
-	r.POST("/api/personas/{id}/chat", apiPersonaChat)
-	r.GET("/api/personas/{id}/sessions", apiPersonaSessions)
+	// own agents; see api_team.go.
+	r.GET("/api/team/agents", apiTeamAgentList)
+	r.POST("/api/team/agents", apiTeamAgentCreate)
+	r.GET("/api/team/agents/connectors", apiTeamAgentConnectors)
+	r.PATCH("/api/team/agents/{id}", apiTeamAgentUpdate)
+	r.DELETE("/api/team/agents/{id}", apiTeamAgentDelete)
+	r.POST("/api/team/agents/{id}/chat", apiTeamAgentChat)
+	r.GET("/api/team/agents/{id}/sessions", apiTeamAgentSessions)
 
 	r.GET("/api/presets", apiPresetList)
 	r.GET("/api/presets/{name}", apiPresetDetail)

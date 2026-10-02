@@ -16,7 +16,7 @@
   import { agentsRoute, navigate, type AgentsRoute, type AgentsPanel } from "./lib/agentsRouter.js";
   import { hiddenTabsFor } from "./lib/agentMode.js";
   import { rosterTime } from "./lib/timeFormat.js";
-  import { listAgents, openAgentChat, runApi, isWorking, type AgentItem } from "./lib/api/personas.js";
+  import { listAgents, openAgentChat, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
 
   const appEl = document.getElementById("app");
   const base = appEl?.dataset.base ?? "";

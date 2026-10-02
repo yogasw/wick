@@ -1,4 +1,4 @@
-// Package persona is the Agents app's data layer: the agents a user owns,
+// Package team is the Agents app's data layer: the agents a user owns,
 // the connector access each one is handed, and the resolver the MCP layer
 // asks "which agent is this session, and what may it reach?".
 //
@@ -6,7 +6,7 @@
 // person reads as "the persona" — name, icon, description, system prompt,
 // provider — lives in the project's meta.json; this package only adds the
 // handle, the Captain flag and the access checklist.
-package persona
+package team
 
 import "encoding/json"
 

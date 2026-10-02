@@ -6,7 +6,7 @@
   import { ProviderPicker, buildProviderOptions } from "@wick-fe/common-ui";
   import DrawerHeader from "./DrawerHeader.svelte";
   import { getProviderOptions } from "../api/options.js";
-  import { createAgent, runApi, type AgentItem } from "../api/personas.js";
+  import { createAgent, runApi, type AgentItem } from "../api/team.js";
   import { HANDLE_RE, slugHandle, splitPick } from "../agentForm.js";
 
   type Props = { base: string; onClose: () => void; onCreated: (a: AgentItem) => void };
