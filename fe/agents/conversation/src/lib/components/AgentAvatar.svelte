@@ -1,11 +1,16 @@
 <script lang="ts">
   /* Agent avatar: a coloured blob (circle / squircle / triangle / diamond)
-     with two small eyes. Still when idle; while the agent works the outline
-     wobbles and the eyes drift, which is the roster's "typing…" without a
-     second indicator. One rAF loop per WORKING avatar only — an idle
-     roster costs nothing — and none at all under prefers-reduced-motion. */
-  import { onDestroy } from "svelte";
-  import { blobPath, normalizeShape } from "../avatarShape.js";
+     with two dark eyes. It is alive rather than a still picture (PLAN 6.5,
+     phase 1a): idle breathes and blinks, thinking wobbles and looks up,
+     alert opens wide, notify plays once when the agent finishes a turn, a
+     disabled agent sleeps and a new one hatches from an egg. The eyes
+     follow the pointer, hover makes it attentive and a click winks.
+
+     Every avatar on the page rides one shared rAF and one pointermove
+     listener (avatarTicker.ts), paused while the tab is hidden. Under
+     prefers-reduced-motion nothing subscribes and the still frame is drawn. */
+  import { blobPath, eyesAt, gazeTarget, approach, followsPointer, normalizeShape, normalizeState, stateFor, type AvatarState, type Vec } from "../avatarShape.js";
+  import { subscribe, pointer, pointerActive, prefersReducedMotion } from "../avatarTicker.js";
 
   type Props = {
     shape?: string;
@@ -14,59 +19,130 @@
     working?: boolean;
     /** Greyed and eyes closed: a disabled agent. */
     asleep?: boolean;
+    /** Just created: drawn as an egg that pops into the agent. */
+    hatching?: boolean;
+    /** Needs the user's attention. */
+    alert?: boolean;
+    /** Has something new to read. */
+    notify?: boolean;
+    /** Force a state (Settings preview); otherwise derived from the flags. */
+    pose?: AvatarState;
     title?: string;
   };
-  let { shape = "circle", color = "#6366f1", size = 40, working = false, asleep = false, title }: Props = $props();
+  let {
+    shape = "circle",
+    color = "#6366f1",
+    size = 40,
+    working = false,
+    asleep = false,
+    hatching = false,
+    alert = false,
+    notify = false,
+    pose,
+    title,
+  }: Props = $props();
+
+  const NOTIFY_MS = 2400;
+  const WINK_MS = 450;
 
   const s = $derived(normalizeShape(shape));
-  let t = $state(0);
-  let raf = 0;
+  const reduced = prefersReducedMotion();
 
-  const reduced =
-    typeof window !== "undefined" && typeof window.matchMedia === "function"
-      ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      : true;
+  /* "Pesan masuk dari agent ini → notify sekali": a finished turn plays
+     notify for a moment, without needing an unread field. */
+  let justReplied = $state(false);
+  let wasWorking = false;
+  let replyTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const w = working;
+    if (wasWorking && !w && !asleep) {
+      justReplied = true;
+      clearTimeout(replyTimer);
+      replyTimer = setTimeout(() => (justReplied = false), NOTIFY_MS);
+    }
+    wasWorking = w;
+  });
+  $effect(() => () => clearTimeout(replyTimer));
 
-  function tick(ms: number) {
-    t = ms / 1000;
-    raf = requestAnimationFrame(tick);
+  const current = $derived<AvatarState>(
+    pose ? normalizeState(pose) : stateFor({ working, asleep, hatching, alert, notify: notify || justReplied }),
+  );
+
+  let hover = $state(false);
+  let wink = $state(false);
+  let winkTimer: ReturnType<typeof setTimeout> | undefined;
+  function onClick() {
+    if (current === "sleep" || current === "egg") return;
+    wink = true;
+    clearTimeout(winkTimer);
+    winkTimer = setTimeout(() => (wink = false), WINK_MS);
   }
+  $effect(() => () => clearTimeout(winkTimer));
+
+  let svgEl: SVGSVGElement | undefined = $state();
+  let t = $state(0);
+  let gaze = $state<Vec>({ x: 0, y: 0 });
 
   $effect(() => {
-    if (working && !asleep && !reduced && typeof requestAnimationFrame === "function") {
-      raf = requestAnimationFrame(tick);
-      return () => cancelAnimationFrame(raf);
-    }
-    t = 0;
-  });
-  onDestroy(() => {
-    if (raf) cancelAnimationFrame(raf);
+    if (reduced) return;
+    return subscribe((now) => {
+      t = now;
+      let target: Vec = { x: 0, y: 0 };
+      if (svgEl && followsPointer(current) && pointerActive(performance.now())) {
+        const r = svgEl.getBoundingClientRect();
+        target = gazeTarget(pointer.x - (r.left + r.width / 2), pointer.y - (r.top + r.height / 2));
+      }
+      const next = approach(gaze, target);
+      // Settled: skip the write so an idle avatar does not re-render the eyes for nothing.
+      if (Math.abs(next.x - gaze.x) > 1e-4 || Math.abs(next.y - gaze.y) > 1e-4) gaze = next;
+    });
   });
 
-  const animate = $derived(working && !asleep && !reduced);
-  const path = $derived(blobPath(s, 50, 52, 44, t, animate));
-  // Eyes sit a touch lower on the triangle, whose mass is at the bottom.
-  const eyeY = $derived(s === "triangle" ? 60 : 48);
-  const gaze = $derived(animate ? Math.sin(t * 1.3) * 4 : 0);
+  const path = $derived(blobPath(s, current, t, !reduced));
+  const eyes = $derived(eyesAt(current, t, gaze, { animate: !reduced, hover, wink }));
   const fill = $derived(/^#[0-9a-f]{3,8}$/i.test(color) ? color : "#6366f1");
 </script>
 
+<!-- The click is a reaction, not an action: the row button around the
+     avatar does the navigating, so there is nothing for a key to trigger. -->
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
 <svg
+  bind:this={svgEl}
   width={size}
   height={size}
-  viewBox="0 0 100 100"
-  class="shrink-0"
-  style:opacity={asleep ? 0.45 : 1}
+  viewBox="-1.4 -1.4 2.8 2.8"
+  class="agent-avatar shrink-0 overflow-visible"
+  class:hatch={hatching && !reduced}
+  class:lift={hover && !reduced && current !== "sleep"}
+  style:opacity={current === "sleep" ? 0.45 : 1}
   role="img"
   aria-label={title ?? "avatar"}
+  data-state={current}
+  onpointerenter={() => (hover = true)}
+  onpointerleave={() => (hover = false)}
+  onclick={onClick}
 >
   {#if title}<title>{title}</title>{/if}
-  <path d={path} fill={fill} />
-  {#if asleep}
-    <rect x={30 + gaze} y={eyeY} width="14" height="3" rx="1.5" fill="white" />
-    <rect x={56 + gaze} y={eyeY} width="14" height="3" rx="1.5" fill="white" />
-  {:else}
-    <rect x={34 + gaze} y={eyeY - 8} width="8" height="16" rx="4" fill="white" />
-    <rect x={58 + gaze} y={eyeY - 8} width="8" height="16" rx="4" fill="white" />
-  {/if}
+  <path d={path} fill={fill} transform="translate({(gaze.x * 0.35).toFixed(3)} {(gaze.y * 0.35).toFixed(3)})" />
+  {#each eyes as e, i (i)}
+    <ellipse cx={e.cx.toFixed(3)} cy={e.cy.toFixed(3)} rx={e.rx} ry={e.ry.toFixed(3)} fill="#16181d" opacity="0.88" />
+  {/each}
 </svg>
+
+<style>
+  .agent-avatar {
+    transition: transform 0.18s ease-out;
+    transform-origin: center;
+  }
+  .agent-avatar.lift {
+    transform: scale(1.06);
+  }
+  .agent-avatar.hatch {
+    animation: agent-hatch 0.6s ease-out;
+  }
+  @keyframes agent-hatch {
+    0% { transform: scale(0.4) rotate(-10deg); }
+    60% { transform: scale(1.15) rotate(4deg); }
+    100% { transform: none; }
+  }
+</style>

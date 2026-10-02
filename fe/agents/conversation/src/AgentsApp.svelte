@@ -149,8 +149,14 @@
     navigate({ handle: captain?.handle ?? null, session: null, panel: null }, { replace: true });
   }
 
+  /* A new agent hatches: its avatar is an egg for a moment, then pops. */
+  const HATCH_MS = 2600;
+  let hatching = $state<string[]>([]);
+
   function onCreated(a: AgentItem) {
     agents = [...agents, a];
+    hatching = [...hatching, a.id];
+    setTimeout(() => (hatching = hatching.filter((id) => id !== a.id)), HATCH_MS);
     navigate({ handle: a.handle, session: null, panel: null });
   }
 
@@ -177,6 +183,7 @@
   function rowTip(a: AgentItem): string {
     if (isWorking(a.status)) return "sedang mengetik";
     if (a.disabled) return "nonaktif";
+    if (hatching.includes(a.id)) return "baru menetas";
     return "online · idle";
   }
 </script>
@@ -245,7 +252,7 @@
           aria-current={active ? "page" : undefined}
           onclick={() => openAgent(a)}
         >
-          <AgentAvatar shape={a.avatar?.shape} color={a.avatar?.color} size={44} {working} asleep={a.disabled} />
+          <AgentAvatar shape={a.avatar?.shape} color={a.avatar?.color} size={44} {working} asleep={a.disabled} hatching={hatching.includes(a.id)} />
           <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{rowTip(a)}</span>
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-2">
@@ -280,7 +287,7 @@
         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
       </button>
       {#if selected}
-        <AgentAvatar shape={selected.avatar?.shape} color={selected.avatar?.color} size={36} working={isWorking(selected.status)} asleep={selected.disabled} />
+        <AgentAvatar shape={selected.avatar?.shape} color={selected.avatar?.color} size={36} working={isWorking(selected.status)} asleep={selected.disabled} hatching={hatching.includes(selected.id)} />
         <div class="min-w-0 flex-1">
           <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">
             {selected.icon ? `${selected.icon} ` : ""}{selected.name}

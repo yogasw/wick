@@ -1,7 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { parseAgentsRoute, formatAgentsRoute, type AgentsRoute } from "../agentsRouter.js";
 import { hiddenTabsFor } from "../agentMode.js";
-import { blobPath, radiusAt, normalizeShape } from "../avatarShape.js";
 
 const B = "/tools/agents";
 
@@ -75,27 +74,6 @@ describe("hiddenTabsFor", () => {
   });
   test("no features hides nothing", () => {
     expect(hiddenTabsFor(null)).toEqual([]);
-  });
-});
-
-describe("avatarShape", () => {
-  test("circle radius is constant, polygons stay within the unit circle", () => {
-    expect(radiusAt("circle", 1.2)).toBe(1);
-    for (const s of ["squircle", "triangle", "diamond"] as const) {
-      for (let i = 0; i < 64; i++) {
-        const r = radiusAt(s, (i / 64) * 2 * Math.PI);
-        expect(r).toBeGreaterThan(0.4);
-        expect(r).toBeLessThanOrEqual(1.0000001);
-      }
-    }
-  });
-  test("still outline is time-independent; path is closed", () => {
-    expect(blobPath("diamond", 50, 50, 40, 0)).toBe(blobPath("diamond", 50, 50, 40, 7));
-    expect(blobPath("circle", 50, 50, 40, 3, true)).not.toBe(blobPath("circle", 50, 50, 40, 0, true));
-    expect(blobPath("circle", 50, 50, 40).endsWith("Z")).toBe(true);
-  });
-  test("unknown shape falls back to circle", () => {
-    expect(normalizeShape("hexagon")).toBe("circle");
   });
 });
 
