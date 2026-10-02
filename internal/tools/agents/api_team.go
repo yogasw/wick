@@ -49,6 +49,9 @@ type TeamAgentItem struct {
 	Avatar               team.Avatar           `json:"avatar"`
 	AllowedConnectors    []team.ConnectorGrant `json:"allowed_connectors"`
 	IncludeNewConnectors bool                     `json:"include_new_connectors"`
+	// RunAs is team.RunAsCaller or team.RunAsOwner: whose access a turn
+	// runs with (see team.SpawnIdentity).
+	RunAs                string                   `json:"run_as"`
 	Disabled             bool                     `json:"disabled"`
 	MainSessionID        string                   `json:"main_session_id"`
 	LastActive           *time.Time               `json:"last_active"`
@@ -105,6 +108,7 @@ type teamAgentWriteReq struct {
 	Features             *team.Features         `json:"features"`
 	AllowedConnectors    *[]team.ConnectorGrant `json:"allowed_connectors"`
 	IncludeNewConnectors *bool                     `json:"include_new_connectors"`
+	RunAs                *string                   `json:"run_as"`
 	Disabled             *bool                     `json:"disabled"`
 	IsCaptain            *bool                     `json:"is_captain"`
 }
@@ -185,6 +189,20 @@ func validateGrants(c *tool.Ctx, gs []team.ConnectorGrant) bool {
 	return true
 }
 
+// validRunAs reads req.RunAs: the stored value (unchanged when absent),
+// or a 400 for anything but caller / owner. false = stop.
+func validRunAs(c *tool.Ctx, v *string, current string) (string, bool) {
+	if v == nil {
+		return team.NormalizeRunAs(current), true
+	}
+	switch *v {
+	case team.RunAsCaller, team.RunAsOwner:
+		return *v, true
+	}
+	c.JSON(http.StatusBadRequest, map[string]string{"error": "run_as must be caller or owner"})
+	return "", false
+}
+
 // teamAgentSaveStatus maps a row-level error to an HTTP status.
 func teamAgentSaveStatus(err error) int {
 	switch {
@@ -237,6 +255,7 @@ func teamAgentToItem(p entity.AgentPersona, siblings []entity.AgentPersona) Team
 		Avatar:               team.DecodeAvatar(p.Avatar),
 		AllowedConnectors:    team.DecodeGrants(p.AllowedConnectors),
 		IncludeNewConnectors: p.IncludeNewConnectors,
+		RunAs:                team.NormalizeRunAs(p.RunAs),
 		Disabled:             p.Disabled,
 		Status:               string(session.StatusIdle),
 	}
@@ -443,6 +462,10 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 			return
 		}
 	}
+	runAs, ok := validRunAs(c, req.RunAs, "")
+	if !ok {
+		return
+	}
 	grants := "[]"
 	if req.AllowedConnectors != nil {
 		if !validateGrants(c, *req.AllowedConnectors) {
@@ -462,6 +485,7 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		OwnerUserID: actorID(c), Handle: handle, ProjectID: pid,
 		AllowedConnectors:    grants,
 		IncludeNewConnectors: req.IncludeNewConnectors != nil && *req.IncludeNewConnectors,
+		RunAs:                runAs,
 		Features:          team.EncodeFeatures(feats),
 		Avatar:            team.EncodeAvatar(av),
 	}
@@ -512,6 +536,9 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	}
 	if req.IncludeNewConnectors != nil {
 		p.IncludeNewConnectors = *req.IncludeNewConnectors
+	}
+	if p.RunAs, ok = validRunAs(c, req.RunAs, p.RunAs); !ok {
+		return
 	}
 	if req.Disabled != nil {
 		p.Disabled = *req.Disabled

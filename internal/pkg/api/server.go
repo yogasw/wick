@@ -861,6 +861,9 @@ func NewServer() *Server {
 	ompprovider.SetMCPTokenRevoker(func(token string) { mcpScopedTokens.Revoke(token) })
 
 	preemptIdle := configsSvc.GetOwned("agents", "preempt_idle") != "false"
+	// Agents app (Team) service: declared ahead of the pool because both
+	// the pool's respawn rule and the MCP minter consult it.
+	var teamSvc *team.Service
 	agentsPool = agentpool.New(agentpool.PoolConfig{
 		MaxConcurrent: maxConc,
 		IdleTimeout:   time.Duration(idleSec) * time.Second,
@@ -922,6 +925,11 @@ func NewServer() *Server {
 		// Read live so the switch takes effect without a restart, matching
 		// how the other agents settings behave.
 		RespawnOnCallerChange: configsSvc.GetOwned("agents", "respawn_on_caller_change") == "true",
+		// A Team agent running as its owner keeps one identity whoever
+		// talks to it; teamSvc is assigned below, before any send.
+		IdentityFixed: func(ctx context.Context, sessionID string) bool {
+			return teamSvc.IdentityFixed(ctx, sessionID)
+		},
 		Layout:                agentsLayout,
 		Factory:               agentsFactory,
 		DefaultProvider:       configsSvc.GetOwned("agents", "default_provider"),
@@ -1114,7 +1122,7 @@ func NewServer() *Server {
 	agentstool.SetDB(db)
 	// Agents app: the MCP layer narrows an agent session's connector
 	// reach to that agent's checklist through this resolver.
-	teamSvc := team.NewService(db, agentsLayout)
+	teamSvc = team.NewService(db, agentsLayout)
 	mcp.SetAgentScopeResolver(teamSvc.ScopeForSession)
 	agentstool.SetTeam(teamSvc)
 	agentstool.SetChannelRegistry(channelReg)
@@ -1872,10 +1880,13 @@ func NewServer() *Server {
 		// them — a schedule fire, a cron job — where there is no caller to
 		// be faithful to. Either way the identity is a real user's own, so
 		// this can only narrow what a spawn reaches.
-		identity := callerUserID
-		if identity == "" {
-			identity = sess.Meta.UserID
-		}
+		//
+		// A Team agent's session follows the agent's run_as mode instead:
+		// "owner" always runs as the agent's owner, "caller" as above but
+		// falling back to the agent's owner. The agent's checklist narrows
+		// either identity — the scope resolver applies it on every MCP
+		// request, and a deleted agent resolves to deny-all.
+		identity := team.SpawnIdentity(sess.Meta, teamSvc.AgentFor(context.Background(), sessionID), callerUserID)
 		if identity == "" {
 			return "", false
 		}

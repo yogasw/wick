@@ -176,6 +176,12 @@ type PoolConfig struct {
 	// where per-user attribution matters more than continuity.
 	RespawnOnCallerChange bool
 
+	// IdentityFixed reports whether a session's spawn identity is the same
+	// whoever triggers the turn (a Team agent running as its owner). Such a
+	// session is never recycled on caller grounds: the respawn would mint
+	// the very identity the running process already holds. nil = none is.
+	IdentityFixed func(ctx context.Context, sessionID string) bool
+
 	// PreemptIdle, when true, lets a queued send kick out the longest-idle
 	// active subprocess (Lifecycle == Idle) so the new session doesn't have
 	// to wait for the idle TTL. The preempted session keeps its CLI session
@@ -766,7 +772,8 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	//
 	// Only when explicitly enabled, and only for role "user": a system or
 	// sub-agent message is not a human taking over the conversation.
-	if alive && p.cfg.RespawnOnCallerChange && role == "user" && p.callerChanged(ctx, entry) {
+	if alive && p.cfg.RespawnOnCallerChange && role == "user" && p.callerChanged(ctx, entry) &&
+		(p.cfg.IdentityFixed == nil || !p.cfg.IdentityFixed(ctx, sessionID)) {
 		log.Ctx(ctx).Info().
 			Str("component", "pool").
 			Str("session", sessionID).

@@ -21,6 +21,26 @@ const (
 	LevelPick = "pick"
 )
 
+// Run-as modes for entity.AgentPersona.RunAs.
+const (
+	// RunAsCaller runs a turn with the access of the human who triggered
+	// it, falling back to the owner when no human did.
+	RunAsCaller = "caller"
+	// RunAsOwner runs every turn with the owner's access, whoever
+	// triggered it.
+	RunAsOwner = "owner"
+)
+
+// NormalizeRunAs maps a stored value to a mode. Empty (a row saved before
+// the column existed) reads as RunAsCaller; anything unknown also does,
+// since caller is the mode that never hands a person more than their own.
+func NormalizeRunAs(v string) string {
+	if v == RunAsOwner {
+		return RunAsOwner
+	}
+	return RunAsCaller
+}
+
 // ConnectorGrant is one connector instance on an agent's checklist.
 type ConnectorGrant struct {
 	ConnectorID string `json:"connector_id"`

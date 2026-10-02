@@ -42,6 +42,11 @@ type AgentPersona struct {
 	// Avatar is a JSON object of team.Avatar (shape + color).
 	Avatar string `gorm:"type:text;not null;default:'{}'" json:"avatar"`
 
+	// RunAs picks whose connector access the agent's spawns run with:
+	// "caller" (the human who triggered the turn, the owner when none did)
+	// or "owner" (always the owner). See team.SpawnIdentity.
+	RunAs string `gorm:"type:varchar(16);not null;default:'caller'" json:"run_as"`
+
 	Disabled  bool      `gorm:"not null;default:false" json:"disabled"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
