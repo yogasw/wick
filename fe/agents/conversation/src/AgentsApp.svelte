@@ -15,11 +15,13 @@
   import AgentSessions from "./lib/components/AgentSessions.svelte";
   import { agentsRoute, navigate, type AgentsRoute, type AgentsPanel } from "./lib/agentsRouter.js";
   import { hiddenTabsFor } from "./lib/agentMode.js";
-  import { timeAgo } from "./lib/timeFormat.js";
+  import { rosterTime } from "./lib/timeFormat.js";
   import { listAgents, openAgentChat, runApi, isWorking, type AgentItem } from "./lib/api/personas.js";
 
   const appEl = document.getElementById("app");
   const base = appEl?.dataset.base ?? "";
+  const viewerName = appEl?.dataset.viewerName ?? "";
+  const viewerInitial = (viewerName.trim()[0] ?? "?").toUpperCase();
 
   let route = $state<AgentsRoute>({ handle: null, session: null, panel: null });
   agentsRoute.subscribe((v) => { route = v; });
@@ -167,8 +169,15 @@
 
   function rowPreview(a: AgentItem): string {
     if (a.disabled) return "Nonaktif";
-    if (isWorking(a.status)) return "Typing…";
     return a.last_preview || a.description || "Belum ada percakapan";
+  }
+
+  /* Hover tip on a roster row. Only what the list already knows; the
+     current action ("lagi query Loki…") needs a server field first. */
+  function rowTip(a: AgentItem): string {
+    if (isWorking(a.status)) return "sedang mengetik";
+    if (a.disabled) return "nonaktif";
+    return "online · idle";
   }
 </script>
 
@@ -187,9 +196,9 @@
     ></button>
   {/if}
   <aside
-    class="{rosterOpen ? 'flex' : 'hidden'} lg:flex fixed lg:static inset-y-0 left-0 z-40 w-72 shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700"
+    class="{rosterOpen ? 'flex' : 'hidden'} lg:flex fixed lg:sticky inset-y-0 left-0 z-40 w-[300px] shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700"
   >
-    <div class="flex items-center gap-2 px-4 pt-4 pb-2">
+    <div class="flex items-center gap-1.5 px-3 pt-3.5 pb-2.5">
       <a
         href="{base}/sessions"
         class="flex h-8 w-8 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600"
@@ -198,21 +207,25 @@
       >
         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4L2 8l4 4"></path><path d="M2 8h8a4 4 0 014 4v1"></path></svg>
       </a>
-      <h1 class="flex-1 text-lg font-semibold text-black-900 dark:text-white-100">Agents</h1>
+      <h1 class="flex-1 text-base font-bold text-black-900 dark:text-white-100">Agents</h1>
       <button
         type="button"
-        class="rounded-lg bg-green-500 px-3 py-1 text-sm font-medium text-white-100 hover:bg-green-600"
+        class="new-agent flex h-8 w-8 items-center justify-center rounded-full bg-green-500 text-lg leading-none text-white-100 hover:bg-green-600"
+        title="Agent baru"
+        aria-label="Agent baru"
         onclick={() => { rosterOpen = false; openPanel({ kind: "new" }); }}
-      >+ Agent</button>
+      >+</button>
     </div>
-    <div class="px-4 pb-2">
+    <label class="mx-3 mb-2 flex items-center gap-2 rounded-xl border border-transparent bg-white-300 px-3 py-2 focus-within:border-green-500 dark:bg-navy-600">
+      <svg class="h-4 w-4 shrink-0 text-black-700" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg>
       <input
         type="search"
         bind:value={query}
-        placeholder="Cari agent…"
-        class="w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 placeholder:text-black-700 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+        placeholder="Search"
+        aria-label="Cari agent"
+        class="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-black-900 placeholder:text-black-700 focus:outline-none dark:text-white-100"
       />
-    </div>
+    </label>
     <nav class="flex-1 overflow-y-auto px-2 pb-4" aria-label="Daftar agent">
       {#if !loaded}
         <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">Memuat…</p>
@@ -226,34 +239,33 @@
         {@const working = isWorking(a.status)}
         <button
           type="button"
-          class="mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left {active
-            ? 'bg-white-100 shadow-sm dark:bg-navy-600'
+          class="roster-row relative mb-0.5 flex w-full items-center gap-3 rounded-2xl px-2.5 py-2.5 text-left {active
+            ? 'bg-white-300 dark:bg-navy-600'
             : 'hover:bg-white-300 dark:hover:bg-navy-600'}"
           aria-current={active ? "page" : undefined}
           onclick={() => openAgent(a)}
         >
-          <AgentAvatar shape={a.avatar?.shape} color={a.avatar?.color} size={40} {working} asleep={a.disabled} />
+          <AgentAvatar shape={a.avatar?.shape} color={a.avatar?.color} size={44} {working} asleep={a.disabled} />
+          <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{rowTip(a)}</span>
           <span class="min-w-0 flex-1">
-            <span class="flex items-center gap-2">
-              <span class="truncate text-sm font-medium text-black-900 dark:text-white-100">{a.icon ? `${a.icon} ` : ""}{a.name}</span>
-              {#if a.is_captain}
-                <span class="rounded-full bg-green-100 px-2 text-xs font-medium text-green-700 dark:bg-green-900/40 dark:text-green-300">Captain</span>
-              {/if}
-              <span class="ml-auto shrink-0 text-xs text-black-700">{a.last_active ? timeAgo(a.last_active) : ""}</span>
-            </span>
-            <span class="flex items-center gap-2">
-              <span class="truncate text-xs {working ? 'text-green-600 dark:text-green-400' : 'text-black-800 dark:text-black-600'}">
-                @{a.handle} · {rowPreview(a)}
+            <span class="flex items-baseline gap-2">
+              <span class="roster-name min-w-0 flex-1 truncate font-semibold text-black-900 dark:text-white-100">
+                {a.icon ? `${a.icon} ` : ""}{a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[9px] font-bold tracking-wider text-green-600 dark:text-green-400">★ CAPTAIN</span>{/if}
               </span>
-              <span
-                class="ml-auto h-2 w-2 shrink-0 rounded-full {working ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-500'}"
-                title={working ? "Sedang bekerja" : "Idle"}
-              ></span>
+              <span class="shrink-0 text-xs text-black-700">{rosterTime(a.last_active)}</span>
+            </span>
+            <span class="mt-0.5 block truncate text-[13px] {working ? 'font-medium text-green-600 dark:text-green-400' : 'text-black-800 dark:text-black-600'}">
+              {#if working}Typing<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>{:else}{rowPreview(a)}{/if}
             </span>
           </span>
         </button>
       {/each}
     </nav>
+    <div class="flex items-center gap-2.5 border-t border-white-300 px-3 py-2.5 dark:border-navy-600">
+      <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-200 text-xs font-bold text-green-700 select-none">{viewerInitial}</span>
+      <span class="min-w-0 flex-1 truncate text-[13px] font-medium text-black-900 dark:text-white-100">{viewerName || "Kamu"}</span>
+      <span class="shrink-0 text-xs text-black-700">{agents.length} agent</span>
+    </div>
   </aside>
 
   <!-- Chat -->
@@ -350,6 +362,19 @@
 </div>
 
 <style>
+  /* Roster bits the token scale has no exact step for (mockup sizes). */
+  .roster-name { font-size: 15px; }
+  .new-agent { box-shadow: 0 4px 12px rgba(39, 177, 153, 0.35); }
+  .roster-tip {
+    display: none;
+    position: absolute;
+    left: 60px;
+    top: -4px;
+    z-index: 30;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .roster-row:hover .roster-tip { display: block; }
   /* Three dots that bounce in turn: the "typing" cue in the header and the
      roster. Tailwind has no staggered keyframe, hence the local rule. */
   .dots i {

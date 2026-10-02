@@ -1562,6 +1562,7 @@ func agentsAppPage(c *tool.Ctx) {
 		IdleTimeoutMs: idleTimeoutMs(),
 		RailPrefs:     railPrefsJSON(c),
 		ViewerID:      viewerID(c),
+		ViewerName:    viewerName(c),
 	}))
 }
 
@@ -1761,6 +1762,18 @@ type sendReq struct {
 func viewerID(c *tool.Ctx) string {
 	if u := login.GetUser(c.Context()); u != nil {
 		return u.ID
+	}
+	return ""
+}
+
+// viewerName is the logged-in user's display name, falling back to the
+// email when no name is set. The Agents roster shows it in its footer.
+func viewerName(c *tool.Ctx) string {
+	if u := login.GetUser(c.Context()); u != nil {
+		if u.Name != "" {
+			return u.Name
+		}
+		return u.Email
 	}
 	return ""
 }
