@@ -150,8 +150,9 @@ func TestScopeForSession(t *testing.T) {
 	if svc.ScopeForSession(ctx, "s-plain") != nil {
 		t.Error("plain session must be unscoped")
 	}
-	if svc.ScopeForSession(ctx, "s-gone") != nil {
-		t.Error("session of a deleted agent must be unscoped")
+	// A deleted agent must not hand its session the owner's full reach.
+	if gone := svc.ScopeForSession(ctx, "s-gone"); gone == nil || gone.AllowConnector("c1") {
+		t.Error("session of a deleted agent must be denied, not unscoped")
 	}
 	sc := svc.ScopeForSession(ctx, "s-agent")
 	if sc == nil || !sc.AllowConnector("c1") || sc.AllowConnector("c2") {

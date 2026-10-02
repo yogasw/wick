@@ -49,10 +49,9 @@ func NewService(db *gorm.DB, layout config.Layout) *Service {
 // belongs to, or nil when it belongs to none.
 //
 // An agent id the session names but the table no longer has (the agent
-// was deleted) also returns nil: deleting the agent is documented to keep
-// its sessions as the owner's ordinary work, so they get the owner's
-// reach back. A lookup error, by contrast, returns deny-all — failing
-// open on a DB hiccup would hand an agent everything its owner has.
+// was deleted) returns deny-all, and so does a lookup error: either way
+// failing open would hand the session everything its owner can reach,
+// which no checklist ever granted.
 func (s *Service) ScopeForSession(ctx context.Context, sessionID string) connectors.AgentScope {
 	if s == nil || sessionID == "" {
 		return nil
@@ -73,7 +72,10 @@ func (s *Service) ScopeForSession(ctx context.Context, sessionID string) connect
 	p, err := s.Get(ctx, agentID)
 	switch {
 	case err == ErrNotFound:
-		scope = nil
+		// The session was an agent's and the agent is gone. Falling back
+		// to "no scope" would hand the session its owner's full reach, so
+		// a deleted agent's sessions keep running with no connectors.
+		scope = DenyAll()
 	case err != nil:
 		return DenyAll()
 	default:
