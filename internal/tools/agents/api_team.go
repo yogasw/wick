@@ -12,9 +12,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
-	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
@@ -34,29 +34,29 @@ func SetTeam(s *team.Service) { globalTeam = s }
 // (name … preset) is read from the agent's project at response time, never
 // stored on the row, so it can never disagree with the project settings.
 type TeamAgentItem struct {
-	ID                   string                   `json:"id"`
-	Handle               string                   `json:"handle"`
-	IsCaptain            bool                     `json:"is_captain"`
-	ProjectID            string                   `json:"project_id"`
-	Name                 string                   `json:"name"`
-	Icon                 string                   `json:"icon"`
-	Description          string                   `json:"description"`
-	SystemPrompt         string                   `json:"system_prompt"`
-	Provider             string                   `json:"provider"`
-	Model                string                   `json:"model"`
-	Preset               string                   `json:"preset"`
+	ID                   string                `json:"id"`
+	Handle               string                `json:"handle"`
+	IsCaptain            bool                  `json:"is_captain"`
+	ProjectID            string                `json:"project_id"`
+	Name                 string                `json:"name"`
+	Icon                 string                `json:"icon"`
+	Description          string                `json:"description"`
+	SystemPrompt         string                `json:"system_prompt"`
+	Provider             string                `json:"provider"`
+	Model                string                `json:"model"`
+	Preset               string                `json:"preset"`
 	Features             team.Features         `json:"features"`
 	Avatar               team.Avatar           `json:"avatar"`
 	AllowedConnectors    []team.ConnectorGrant `json:"allowed_connectors"`
-	IncludeNewConnectors bool                     `json:"include_new_connectors"`
+	IncludeNewConnectors bool                  `json:"include_new_connectors"`
 	// RunAs is team.RunAsCaller or team.RunAsOwner: whose access a turn
 	// runs with (see team.SpawnIdentity).
-	RunAs                string                   `json:"run_as"`
-	Disabled             bool                     `json:"disabled"`
-	MainSessionID        string                   `json:"main_session_id"`
-	LastActive           *time.Time               `json:"last_active"`
-	LastPreview          string                   `json:"last_preview"`
-	Status               string                   `json:"status"`
+	RunAs         string     `json:"run_as"`
+	Disabled      bool       `json:"disabled"`
+	MainSessionID string     `json:"main_session_id"`
+	LastActive    *time.Time `json:"last_active"`
+	LastPreview   string     `json:"last_preview"`
+	Status        string     `json:"status"`
 	// SharedWith counts the owner's OTHER agents on the same project, so
 	// the editor can warn that a persona edit changes them too.
 	SharedWith int `json:"shared_with"`
@@ -74,10 +74,10 @@ type TeamAgentSessionItem struct {
 // teamAgentConnectorItem is one row of the access checklist. Names and op
 // declarations only — never a config value.
 type teamAgentConnectorItem struct {
-	ID          string               `json:"id"`
-	Key         string               `json:"key"`
-	Label       string               `json:"label"`
-	Description string               `json:"description"`
+	ID          string                 `json:"id"`
+	Key         string                 `json:"key"`
+	Label       string                 `json:"label"`
+	Description string                 `json:"description"`
 	Accounts    []teamAgentAccountItem `json:"accounts"`
 	Ops         []teamAgentConnectorOp `json:"ops"`
 }
@@ -96,21 +96,21 @@ type teamAgentConnectorOp struct {
 // teamAgentWriteReq is the POST body and, with every field optional, the
 // PATCH body. Pointers tell "absent" apart from "set to empty".
 type teamAgentWriteReq struct {
-	Handle               *string                   `json:"handle"`
-	Name                 *string                   `json:"name"`
-	Icon                 *string                   `json:"icon"`
-	Description          *string                   `json:"description"`
-	SystemPrompt         *string                   `json:"system_prompt"`
-	Provider             *string                   `json:"provider"`
-	Model                *string                   `json:"model"`
-	ProjectID            *string                   `json:"project_id"`
+	Handle               *string                `json:"handle"`
+	Name                 *string                `json:"name"`
+	Icon                 *string                `json:"icon"`
+	Description          *string                `json:"description"`
+	SystemPrompt         *string                `json:"system_prompt"`
+	Provider             *string                `json:"provider"`
+	Model                *string                `json:"model"`
+	ProjectID            *string                `json:"project_id"`
 	Avatar               *team.Avatar           `json:"avatar"`
 	Features             *team.Features         `json:"features"`
 	AllowedConnectors    *[]team.ConnectorGrant `json:"allowed_connectors"`
-	IncludeNewConnectors *bool                     `json:"include_new_connectors"`
-	RunAs                *string                   `json:"run_as"`
-	Disabled             *bool                     `json:"disabled"`
-	IsCaptain            *bool                     `json:"is_captain"`
+	IncludeNewConnectors *bool                  `json:"include_new_connectors"`
+	RunAs                *string                `json:"run_as"`
+	Disabled             *bool                  `json:"disabled"`
+	IsCaptain            *bool                  `json:"is_captain"`
 }
 
 // captainSystemAddon is the starting persona of the auto-created Captain.
@@ -486,8 +486,8 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		AllowedConnectors:    grants,
 		IncludeNewConnectors: req.IncludeNewConnectors != nil && *req.IncludeNewConnectors,
 		RunAs:                runAs,
-		Features:          team.EncodeFeatures(feats),
-		Avatar:            team.EncodeAvatar(av),
+		Features:             team.EncodeFeatures(feats),
+		Avatar:               team.EncodeAvatar(av),
 	}
 	if err := globalTeam.Create(c.Context(), p); err != nil {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})

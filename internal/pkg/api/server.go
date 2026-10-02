@@ -35,7 +35,6 @@ import (
 	"github.com/yogasw/wick/internal/agents/gate"
 	agentgate "github.com/yogasw/wick/internal/agents/gate"
 	agentnotes "github.com/yogasw/wick/internal/agents/notes"
-	"github.com/yogasw/wick/internal/agents/team"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	agentproject "github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/provider"
@@ -52,6 +51,7 @@ import (
 	agentskills "github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/terminal"
 	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/agents/ticketprompt"
@@ -930,9 +930,9 @@ func NewServer() *Server {
 		IdentityFixed: func(ctx context.Context, sessionID string) bool {
 			return teamSvc.IdentityFixed(ctx, sessionID)
 		},
-		Layout:                agentsLayout,
-		Factory:               agentsFactory,
-		DefaultProvider:       configsSvc.GetOwned("agents", "default_provider"),
+		Layout:          agentsLayout,
+		Factory:         agentsFactory,
+		DefaultProvider: configsSvc.GetOwned("agents", "default_provider"),
 		// Queue a spawn instead of starting it while the machine is
 		// already short of memory. Read live so the floor can be changed
 		// in the UI without a restart; 0 (the default) disables it.
