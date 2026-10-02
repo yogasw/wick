@@ -30,6 +30,12 @@
        makes "Copy path" answerable without clicking: the row shows the value
        it would copy, so nothing has to be copied to find out what it was. */
     detail?: string;
+    /* A plain second line under the label, for what the row is about rather
+       than a value (detail is for values: monospace, elided by the caller). */
+    hint?: string;
+    /* Draw a rule above this row, to set apart a group such as the
+       destructive actions at the bottom. */
+    divider?: boolean;
     /* Rows to swap the popup over to, with a back row at the top. Deliberately
        NOT a second floating layer: the panel this lives in is ~300px wide, so
        a flyout would open off-screen half the time. */
@@ -224,7 +230,7 @@
         type="button"
         role="menuitem"
         disabled={item.disabled}
-        class="block w-full px-3 py-2 text-left text-sm hover:bg-white-200 disabled:opacity-50 dark:hover:bg-navy-800 {item.danger ? 'text-neg-400 hover:bg-neg-100' : 'text-black-800 dark:text-black-600'}"
+        class="block w-full px-3 py-2 text-left text-sm hover:bg-white-200 disabled:opacity-50 dark:hover:bg-navy-800 {item.danger ? 'text-neg-400 hover:bg-neg-100' : 'text-black-800 dark:text-black-600'} {item.divider ? 'mt-1 border-t border-white-300 pt-3 dark:border-navy-600' : ''}"
         onclick={() => run(item)}
       >
         <span class="flex items-center gap-1.5">
@@ -235,6 +241,9 @@
             <svg viewBox="0 0 16 16" class="ml-auto h-3 w-3 shrink-0 opacity-60" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
           {/if}
         </span>
+        {#if item.hint}
+          <span class="mt-0.5 block truncate text-xs text-black-700 dark:text-black-600">{item.hint}</span>
+        {/if}
         {#if item.detail}
           <!-- Elided by the caller, not by CSS: a path's useful end is its
                TAIL, and the usual trick for that (direction:rtl) reorders the

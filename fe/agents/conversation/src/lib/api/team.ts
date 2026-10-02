@@ -32,12 +32,14 @@ export type AgentItem = {
   avatar: AgentAvatarSpec;
   allowed_connectors: ConnectorGrant[] | null;
   include_new_connectors: boolean;
+  /** Whose access a turn runs with; rows older than the field read "caller". */
+  run_as?: "caller" | "owner";
   disabled: boolean;
   main_session_id: string;
   last_active: string | null;
   last_preview: string;
   status: string;
-  /** Only on PATCH responses: other agents of this owner on the same project. */
+  /** Other agents of this owner on the same project. */
   shared_with?: number;
 };
 
@@ -54,6 +56,7 @@ export type AgentWrite = Partial<{
   features: AgentFeatures;
   allowed_connectors: ConnectorGrant[];
   include_new_connectors: boolean;
+  run_as: "caller" | "owner";
   disabled: boolean;
   is_captain: boolean;
 }>;

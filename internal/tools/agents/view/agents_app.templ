@@ -6,7 +6,7 @@ import (
 	"github.com/yogasw/wick/internal/pkg/ui"
 )
 
-// AgentsAppVM feeds the full-screen Agents app (/team). It hosts the same
+// AgentsAppVM feeds the full-screen Team app (/team; "Agents app" in code). It hosts the same
 // conversation bundle as the session pages, switched into its agents mode
 // by data-mode, so a chat with an agent is the ordinary conversation view
 // and not a second implementation of it.
@@ -32,6 +32,9 @@ templ AgentsApp(vm AgentsAppVM) {
 		html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
 		[data-agents-app] { height: calc(100svh - var(--wick-chrome-top, 0px)); }
 	</style>
+	// The page chrome titles every page after the tool ("Agents"); this one
+	// is the Team app, so swap the leading name and keep the app suffix.
+	<script>document.title = document.title.replace(/^[^|]*\|/, "Team |");</script>
 	<div class="flex w-full bg-white-200 dark:bg-navy-800" data-agents-app>
 		if vm.AssetURL == "" {
 			<div class="p-8 text-sm text-rose-600 dark:text-rose-400">

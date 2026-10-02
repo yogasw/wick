@@ -17,7 +17,7 @@ import "time"
 // themselves; the MCP layer intersects it with the owner's visibility on
 // every call (see team.Scope).
 //
-// Each row is one member of a user's Team (package internal/agents/team).
+// Each row is one agent in a user's Team (package internal/agents/team).
 // The AgentPersona name and the agent_personas table are kept as-is so
 // existing data needs no migration.
 type AgentPersona struct {

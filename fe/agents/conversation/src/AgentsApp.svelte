@@ -7,7 +7,7 @@
      their own URL (agentsRouter.ts), so they survive a refresh. */
   import { onMount } from "svelte";
   import { KebabMenu, ToastHost } from "@wick-fe/common-ui";
-  import { toastError } from "@wick-fe/common-stores";
+  import { toastError, toastOk } from "@wick-fe/common-stores";
   import DetailView from "./lib/components/DetailView.svelte";
   import AgentAvatar from "./lib/components/AgentAvatar.svelte";
   import AgentSettings from "./lib/components/AgentSettings.svelte";
@@ -16,7 +16,8 @@
   import { agentsRoute, navigate, type AgentsRoute, type AgentsPanel } from "./lib/agentsRouter.js";
   import { hiddenTabsFor } from "./lib/agentMode.js";
   import { rosterTime } from "./lib/timeFormat.js";
-  import { listAgents, openAgentChat, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
+  import { listAgents, openAgentChat, createAgent, updateAgent, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
+  import { duplicateBody } from "./lib/agentDuplicate.js";
 
   const appEl = document.getElementById("app");
   const base = appEl?.dataset.base ?? "";
@@ -160,10 +161,38 @@
     navigate({ handle: a.handle, session: null, panel: null });
   }
 
+  /* A copy shares the original's project (so its persona), look and access,
+     under the next free @handle. It then hatches like a wizard-made agent. */
+  async function duplicate() {
+    if (!selected) return;
+    try {
+      const a = await runApi(createAgent(base, duplicateBody(selected, agents.map((x) => x.handle))));
+      toastOk(`Agent @${a.handle} dibuat`);
+      onCreated(a);
+    } catch (e) {
+      toastError(`Duplikat: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async function toggleDisabled() {
+    if (!selected) return;
+    const off = !selected.disabled;
+    try {
+      onSaved(await runApi(updateAgent(base, selected.id, { disabled: off })));
+      toastOk(off ? `@${selected.handle} dinonaktifkan` : `@${selected.handle} aktif lagi`);
+    } catch (e) {
+      toastError(`${off ? "Nonaktifkan" : "Aktifkan"}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   const menuItems = $derived([
-    { label: "Settings", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
-    { label: "Percakapan lain", onclick: () => openPanel({ kind: "sessions" }) },
-    { label: "Chat baru", onclick: newChat },
+    { label: "Settings", hint: "persona, akses, avatar", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
+    { label: "Percakapan lain", hint: "chat utama dan riwayat", onclick: () => openPanel({ kind: "sessions" }) },
+    { label: "Chat baru", hint: "mulai dari kosong", onclick: newChat },
+    { label: "Duplikat agent", hint: "persona & akses sama, @handle baru", divider: true, onclick: duplicate },
+    selected?.disabled
+      ? { label: "Aktifkan", hint: "agent bisa dipakai lagi", onclick: toggleDisabled }
+      : { label: "Nonaktifkan", hint: "semua akses connector ditutup", danger: true, onclick: toggleDisabled },
   ]);
 
   const agentMode = $derived({
@@ -303,14 +332,25 @@
             · @{selected.handle}{route.session ? " · percakapan lain" : ""}
           </div>
         </div>
-        {#if route.session}
-          <button
-            type="button"
-            class="rounded-lg px-2 py-1 text-xs font-medium text-link-400 hover:bg-white-200 dark:hover:bg-navy-700"
-            onclick={() => go({ session: null })}
-          >Chat utama</button>
-        {/if}
-        <KebabMenu items={menuItems} ariaLabel="Menu agent" width={192} />
+        <!-- Always-on switcher: names the conversation on screen and opens
+             the list of the others (main chat first). -->
+        <button
+          type="button"
+          class="flex shrink-0 items-center gap-1.5 rounded-full border border-white-300 px-3 py-1.5 text-xs font-medium text-black-900 hover:bg-white-200 dark:border-navy-600 dark:text-white-100 dark:hover:bg-navy-700"
+          title="Ganti percakapan"
+          aria-haspopup="dialog"
+          onclick={() => openPanel({ kind: "sessions" })}
+        >
+          {#if route.session}
+            <svg class="h-3.5 w-3.5 shrink-0 text-black-700" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"></path></svg>
+            <span class="hidden sm:inline">Percakapan lain</span>
+          {:else}
+            <svg class="h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2.5h4M7 2.5v4L4.5 9h7L9 6.5v-4M8 9v4.5"></path></svg>
+            <span class="hidden sm:inline">Chat utama</span>
+          {/if}
+          <svg class="h-3 w-3 shrink-0 text-black-700" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg>
+        </button>
+        <KebabMenu items={menuItems} ariaLabel="Menu agent" width={240} />
       {:else}
         <div class="flex-1"></div>
       {/if}

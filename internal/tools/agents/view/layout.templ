@@ -829,7 +829,7 @@ templ agentsNavLink(href, label string, active bool) {
 	</a>
 }
 
-// agentsAppNavLink opens the full-screen Agents app. Its own templ rather
+// agentsAppNavLink opens the full-screen Team app. Its own templ rather
 // than an agentsNavLink: it is never "active" (the app has no wick sidebar
 // to highlight it in) and it carries the "BARU" chip while the app is new.
 templ agentsAppNavLink(href string) {
@@ -844,7 +844,7 @@ templ agentsAppNavLink(href string) {
 			<circle cx="12.5" cy="7" r="1.5"></circle>
 			<path d="M4.5 13.5a3.5 3.5 0 017 0M1 13a2.5 2.5 0 013-2.4M15 13a2.5 2.5 0 00-3-2.4" stroke-linecap="round"></path>
 		</svg>
-		<span class="flex-1">Agents</span>
+		<span class="flex-1">Team</span>
 		<span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold leading-none bg-prog-100 text-prog-400">BARU</span>
 	</a>
 }
