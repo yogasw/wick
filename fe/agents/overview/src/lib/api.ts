@@ -1,4 +1,4 @@
-import type { OverviewResponse } from "./types.js";
+import type { OverviewResponse, TeamResponse } from "./types.js";
 
 class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -28,6 +28,13 @@ export async function fetchOverview(base: string): Promise<OverviewResponse> {
     active: r.active ?? [],
     stats: r.stats ?? { active: 0, pool_max: 0, queue_len: 0 },
   };
+}
+
+/** fetchTeam reads the caller's Team roster for the Overview card. Captain
+    first, then oldest first — the server's order is kept. */
+export async function fetchTeam(base: string): Promise<TeamResponse> {
+  const r = await get<{ agents: TeamResponse["agents"] | null; captain_id?: string }>(`${base}/api/team/agents`);
+  return { agents: r.agents ?? [], captain_id: r.captain_id ?? "" };
 }
 
 export async function killSession(base: string, id: string): Promise<void> {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fetchOverview } from "../api.js";
+import { fetchOverview, fetchTeam } from "../api.js";
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -52,5 +52,38 @@ describe("fetchOverview - null normalization", () => {
     expect(r.active[0].session_id).toBe("def");
     expect(r.stats.active).toBe(1);
     expect(r.stats.pool_max).toBe(4);
+  });
+});
+
+describe("fetchTeam", () => {
+  it("reads the team roster from the team API", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ agents: [{ id: "a1", handle: "captain" }], captain_id: "a1" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const r = await fetchTeam("/tools/agents");
+    expect(fetchMock.mock.calls[0][0]).toBe("/tools/agents/api/team/agents");
+    expect(r.captain_id).toBe("a1");
+    expect(r.agents).toHaveLength(1);
+  });
+
+  it("normalizes a null roster and missing captain", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ agents: null }),
+    }));
+    expect(await fetchTeam("/tools/agents")).toEqual({ agents: [], captain_id: "" });
+  });
+
+  it("throws on a failed request", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      text: async () => "team not ready",
+    }));
+    await expect(fetchTeam("/tools/agents")).rejects.toThrow("team not ready");
   });
 });

@@ -25,3 +25,18 @@ export interface OverviewResponse {
   active: ActiveEntry[];
   stats: OverviewStats;
 }
+
+/* One row of GET /api/team/agents — only what the Overview card shows. */
+export interface TeamAgent {
+  id: string;
+  handle: string;
+  name: string;
+  is_captain: boolean;
+  disabled: boolean;
+  avatar: { shape: string; color: string } | null;
+}
+
+export interface TeamResponse {
+  agents: TeamAgent[];
+  captain_id: string;
+}

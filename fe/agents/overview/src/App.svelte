@@ -1,8 +1,9 @@
 <script lang="ts">
   import { ToastHost, ConfirmDialog } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
-  import { fetchOverview, killSession, dequeueSession } from "$lib/api.js";
-  import type { QueuedEntry, ActiveEntry, OverviewStats } from "$lib/types.js";
+  import { fetchOverview, fetchTeam, killSession, dequeueSession } from "$lib/api.js";
+  import type { QueuedEntry, ActiveEntry, OverviewStats, TeamResponse } from "$lib/types.js";
+  import TeamAvatar from "$lib/TeamAvatar.svelte";
 
   const base: string = (document.getElementById("app")?.dataset.base ?? "").replace(/\/$/, "");
 
@@ -11,6 +12,22 @@
   let stats = $state<OverviewStats>({ active: 0, pool_max: 0, queue_len: 0 });
   let queueSearch = $state("");
   let selected = $state<Set<string>>(new Set());
+
+  /* Team card. Loaded once: the roster changes in the Team app, not here.
+     null = still loading or failed — the card then shows only its button. */
+  let team = $state<TeamResponse | null>(null);
+  const TEAM_PEEK = 5;
+  const teamCaptain = $derived(
+    team ? (team.agents.find((a) => a.id === team?.captain_id) ?? team.agents.find((a) => a.is_captain)) : undefined,
+  );
+
+  $effect(() => {
+    fetchTeam(base)
+      .then((r) => (team = r))
+      .catch(() => {
+        /* silent — the card still links to the Team app */
+      });
+  });
 
   let confirmOpen = $state(false);
   let confirmTitle = $state("");
@@ -173,6 +190,41 @@
       <p class="text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">Sessions</p>
       <p class="mt-1 text-3xl font-bold text-green-600 dark:text-green-400">{activeSessions.length}</p>
     </div>
+  </div>
+
+  <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+    <div class="flex items-start justify-between gap-4 border-b border-white-300 dark:border-navy-600 px-5 py-3">
+      <div class="min-w-0">
+        <h2 class="flex items-center gap-2 text-sm font-semibold text-black-900 dark:text-white-100">
+          Team
+          <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold leading-none bg-prog-100 text-prog-400">BARU</span>
+        </h2>
+        <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Agent dengan persona, avatar, dan akses sendiri. Dibuka sebagai app full-screen.</p>
+      </div>
+      <a
+        href={`${base}/team`}
+        class="shrink-0 rounded-lg bg-green-500 px-3 py-2 text-xs font-medium text-white-100 hover:bg-green-600 transition-colors"
+      >Buka Team →</a>
+    </div>
+    {#if team && team.agents.length > 0}
+      <div class="flex flex-wrap items-center gap-x-6 gap-y-3 px-5 py-4">
+        <div class="flex items-center gap-4">
+          {#each team.agents.slice(0, TEAM_PEEK) as a (a.id)}
+            <a href={`${base}/team/${a.handle}`} class="flex w-14 flex-col items-center gap-1 hover:opacity-80" title={`@${a.handle}`}>
+              <TeamAvatar shape={a.avatar?.shape} color={a.avatar?.color} size={36} asleep={a.disabled} />
+              <span class="w-full truncate text-center text-[11px] text-black-700 dark:text-black-600">{a.name}</span>
+            </a>
+          {/each}
+          {#if team.agents.length > TEAM_PEEK}
+            <span class="text-xs text-black-700 dark:text-black-600">+{team.agents.length - TEAM_PEEK}</span>
+          {/if}
+        </div>
+        <div class="ml-auto text-right text-xs text-black-700 dark:text-black-600">
+          <p class="text-2xl font-bold text-black-900 dark:text-white-100">{team.agents.length}</p>
+          <p>agent{#if teamCaptain} · <span class="font-semibold text-green-600 dark:text-green-400">★ Captain</span> {teamCaptain.name}{/if}</p>
+        </div>
+      </div>
+    {/if}
   </div>
 
   {#if queued.length > 0}
