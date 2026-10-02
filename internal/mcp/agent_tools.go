@@ -80,6 +80,8 @@ func (h *Handler) CallAgentToolAs(ctx context.Context, name string, args map[str
 	ctx = login.WithUser(ctx, user, tagIDs)
 
 	ctx = handlers.WithSessionID(ctx, sessionID)
+	// Same narrowing the HTTP transport applies in serveWithSession.
+	ctx = withAgentScope(ctx, sessionID)
 
 	r, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/mcp", nil)
 

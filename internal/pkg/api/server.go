@@ -35,6 +35,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/gate"
 	agentgate "github.com/yogasw/wick/internal/agents/gate"
 	agentnotes "github.com/yogasw/wick/internal/agents/notes"
+	"github.com/yogasw/wick/internal/agents/persona"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	agentproject "github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/provider"
@@ -1111,6 +1112,11 @@ func NewServer() *Server {
 	agentstool.SetAuth(authSvc)
 	go agentstool.AutoInstallMCP()
 	agentstool.SetDB(db)
+	// Agents app: the MCP layer narrows an agent session's connector
+	// reach to that agent's checklist through this resolver.
+	personaSvc := persona.NewService(db, agentsLayout)
+	mcp.SetAgentScopeResolver(personaSvc.ScopeForSession)
+	agentstool.SetPersonas(personaSvc)
 	agentstool.SetChannelRegistry(channelReg)
 	agentstool.SetSyncManager(syncMgr)
 

@@ -1,0 +1,57 @@
+package view
+
+import (
+	"strconv"
+
+	"github.com/yogasw/wick/internal/pkg/ui"
+)
+
+// AgentsAppVM feeds the full-screen Agents app (/team). It hosts the same
+// conversation bundle as the session pages, switched into its agents mode
+// by data-mode, so a chat with an agent is the ordinary conversation view
+// and not a second implementation of it.
+type AgentsAppVM struct {
+	Base          string
+	AssetURL      string
+	ScmAsset      string
+	IdleTimeoutMs int
+	RailPrefs     string
+	ViewerID      string
+}
+
+// AgentsApp renders the Agents app shell. Deliberately WITHOUT
+// AgentsLayout: the app has its own roster sidebar, and the wick sidebar
+// beside it would be two navigation columns for one screen. The page
+// chrome (head, CSS, theme) still comes from the app-wide renderer, so
+// light/dark and fonts match every other page.
+templ AgentsApp(vm AgentsAppVM) {
+	@tooltipStyles()
+	@scrollbarStyles()
+	<style>
+		html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+		[data-agents-app] { height: calc(100svh - var(--wick-chrome-top, 0px)); }
+	</style>
+	<div class="flex w-full bg-white-200 dark:bg-navy-800" data-agents-app>
+		if vm.AssetURL == "" {
+			<div class="p-8 text-sm text-rose-600 dark:text-rose-400">
+				Conversation bundle not built yet. Run
+				<code class="font-mono">npm --workspace=@wick-fe/agents-conversation run build</code>
+				in <code class="font-mono">fe/</code> and refresh.
+			</div>
+		} else {
+			<div
+				id="app"
+				data-mode="agents"
+				data-base={ vm.Base }
+				data-scm-asset={ vm.ScmAsset }
+				data-idle-timeout-ms={ strconv.Itoa(vm.IdleTimeoutMs) }
+				data-rail-prefs={ vm.RailPrefs }
+				data-viewer-id={ vm.ViewerID }
+				class="h-full w-full"
+			></div>
+			<script type="module" src={ vm.AssetURL }></script>
+		}
+	</div>
+	@ui.Dialog()
+	<script src="/public/js/dialog.js"></script>
+}

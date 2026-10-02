@@ -136,6 +136,7 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 					</svg>
 					<span>New session</span>
 				</a>
+				@agentsAppNavLink(vm.Base + "/team")
 				@agentsNavLink(vm.Base+"/overview", "Overview", vm.ActivePage == "overview")
 				@agentsNavLink(vm.Base+"/workflows", "Workflows", vm.ActivePage == "workflows")
 				@agentsNavLink(vm.Base+"/connectors", "Connectors", vm.ActivePage == "connectors")
@@ -825,6 +826,26 @@ templ agentsNavLink(href, label string, active bool) {
 	>
 		@agentsNavIcon(label)
 		{ label }
+	</a>
+}
+
+// agentsAppNavLink opens the full-screen Agents app. Its own templ rather
+// than an agentsNavLink: it is never "active" (the app has no wick sidebar
+// to highlight it in) and it carries the "BARU" chip while the app is new.
+templ agentsAppNavLink(href string) {
+	<a
+		href={ templ.SafeURL(href) }
+		class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100"
+	>
+		// Three heads side by side — a team, not a single session.
+		<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+			<circle cx="8" cy="5" r="2"></circle>
+			<circle cx="3.5" cy="7" r="1.5"></circle>
+			<circle cx="12.5" cy="7" r="1.5"></circle>
+			<path d="M4.5 13.5a3.5 3.5 0 017 0M1 13a2.5 2.5 0 013-2.4M15 13a2.5 2.5 0 00-3-2.4" stroke-linecap="round"></path>
+		</svg>
+		<span class="flex-1">Agents</span>
+		<span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold leading-none bg-prog-100 text-prog-400">BARU</span>
 	</a>
 }
 

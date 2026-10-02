@@ -97,6 +97,9 @@ var migratedModels = []any{
 	// write a row here.
 	&entity.AgentIncident{},
 	&entity.AgentEvidence{},
+	// Agents app: chat-able agents backed by a project, with a per-agent
+	// connector checklist. See internal/agents/persona.
+	&entity.AgentPersona{},
 }
 
 // modelFingerprint derives a stable hash of the models' shape. Purely

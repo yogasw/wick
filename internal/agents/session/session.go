@@ -190,6 +190,16 @@ type Meta struct {
 	// back-pointer the ticket does not confirm is treated as stale and
 	// ignored — see notes.Resolve.
 	TicketID string `json:"ticket_id,omitempty"`
+	// AgentID names the Agents-app agent (entity.AgentPersona) this
+	// session talks to. The MCP layer reads it to narrow connector access
+	// to that agent's checklist; a sub-agent session carries none and
+	// inherits its parent's through ParentSessionID (see
+	// persona.AgentOfSession). Absent = an ordinary session, unscoped.
+	AgentID string `json:"agent_id,omitempty"`
+	// AgentMain marks the agent's one main conversation — the chat the
+	// Agents app opens when the agent is picked. Other sessions with the
+	// same AgentID are side conversations started with "Chat baru".
+	AgentMain bool `json:"agent_main,omitempty"`
 }
 
 // ChannelRef is where a session's replies belong: a chat channel and the
@@ -367,6 +377,10 @@ type CreateOptions struct {
 	// ParentSessionID marks this session as a delegated sub-agent's
 	// isolated context. See Meta.ParentSessionID.
 	ParentSessionID string
+	// AgentID and AgentMain bind the session to an Agents-app agent. See
+	// Meta.AgentID.
+	AgentID   string
+	AgentMain bool
 }
 
 // Create materializes sessions/<id>/: meta.json, agents.json (empty
@@ -406,6 +420,8 @@ func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session
 		TokenName:  opt.TokenName,
 
 		ParentSessionID: opt.ParentSessionID,
+		AgentID:         opt.AgentID,
+		AgentMain:       opt.AgentMain,
 	}
 	// The creator is the first participant. Written at create rather than
 	// backfilled on the next message so the very first turn already reads

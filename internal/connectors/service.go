@@ -722,6 +722,15 @@ func (s *Service) List(ctx context.Context) ([]entity.Connector, error) {
 // an admin-created custom connector ended up present in /admin/connectors
 // and absent from wick_list. See ownershipReaches for when this applies.
 func (s *Service) ListVisibleTo(ctx context.Context, userID string, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
+	rows, err := s.listVisibleTo(ctx, userID, userTagIDs, isAdmin)
+	if err != nil {
+		return nil, err
+	}
+	// An agent session sees only its checklist, whatever its owner reaches.
+	return filterRowsByScope(ctx, rows), nil
+}
+
+func (s *Service) listVisibleTo(ctx context.Context, userID string, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
 	if s.adminBypass(isAdmin) {
 		rows, err := s.repo.List(ctx)
 		if err != nil {
@@ -844,6 +853,9 @@ func (s *Service) FilterBotSlot(rows []entity.Connector) []entity.Connector {
 // Must agree with ListVisibleTo, ownership included: a row the caller can
 // see but not dispatch is a listing that lies.
 func (s *Service) IsVisibleTo(ctx context.Context, connectorID, userID string, userTagIDs []string, isAdmin bool) (bool, error) {
+	if scope := AgentScopeFrom(ctx); scope != nil && !scope.AllowConnector(connectorID) {
+		return false, nil
+	}
 	if s.adminBypass(isAdmin) {
 		c, err := s.repo.Get(ctx, connectorID)
 		if err != nil {
@@ -1326,6 +1338,7 @@ func (s *Service) ListAccountsVisibleTo(ctx context.Context, row entity.Connecto
 	if err != nil {
 		return nil, err
 	}
+	accs = filterAccountsByScope(ctx, row.ID, accs)
 	// Skip the tag lookup entirely when the answer cannot depend on it.
 	if caller.Privileged || row.AllowOthersSeeAccounts {
 		return accs, nil
@@ -1445,6 +1458,17 @@ func (s *Service) OperationStates(ctx context.Context, connectorID, key string) 
 		// runnable from the config UI because Execute reads OperationStatesFull,
 		// where Enabled is untouched.
 		out[k] = st.Enabled && !st.ConfigOnly
+	}
+	// An agent's checklist can switch ops off for the catalog the LLM
+	// reads; Execute re-checks the same rule at dispatch.
+	if scope := AgentScopeFrom(ctx); scope != nil {
+		if mod, ok := s.Module(key); ok {
+			for _, op := range mod.AllOps() {
+				if out[op.Key] && !scope.AllowOp(connectorID, op.Key, op.Destructive) {
+					out[op.Key] = false
+				}
+			}
+		}
 	}
 	return out, nil
 }
@@ -1812,6 +1836,25 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 				return nil, fmt.Errorf("account %q is not accessible: it belongs to another user and this connector keeps connected accounts private", p.AccountID)
 			}
 			acct = acc
+		}
+	}
+
+	// Agent checklist: the instance, the identity it runs as, and the op
+	// must all be on it. Session-workspace instances are scoped by their
+	// session instead and are not part of any checklist.
+	if scope := AgentScopeFrom(ctx); scope != nil && !virtual {
+		if !scope.AllowConnector(c.ID) {
+			return nil, fmt.Errorf("connector %q is not in this agent's access list", c.ID)
+		}
+		accountID := ""
+		if acct != nil {
+			accountID = acct.ID
+		}
+		if !scope.AllowAccount(c.ID, accountID) {
+			return nil, fmt.Errorf("this agent may not run connector %q as that account", c.ID)
+		}
+		if !scope.AllowOp(c.ID, op.Key, op.Destructive) {
+			return nil, fmt.Errorf("operation %q is not allowed for this agent", op.Key)
 		}
 	}
 

@@ -339,6 +339,16 @@ func Register(r tool.Router) {
 	r.POST("/api/agent-profiles", apiAgentProfileSave)
 	r.DELETE("/api/agent-profiles/{id}", apiAgentProfileDelete)
 
+	// JSON API — Agents app (/team). Every route is scoped to the caller's
+	// own agents; see api_personas.go.
+	r.GET("/api/personas", apiPersonaList)
+	r.POST("/api/personas", apiPersonaCreate)
+	r.GET("/api/personas/connectors", apiPersonaConnectors)
+	r.PATCH("/api/personas/{id}", apiPersonaUpdate)
+	r.DELETE("/api/personas/{id}", apiPersonaDelete)
+	r.POST("/api/personas/{id}/chat", apiPersonaChat)
+	r.GET("/api/personas/{id}/sessions", apiPersonaSessions)
+
 	r.GET("/api/presets", apiPresetList)
 	r.GET("/api/presets/{name}", apiPresetDetail)
 
@@ -508,6 +518,10 @@ func Register(r tool.Router) {
 	r.DELETE("/projects/{id}", deleteProject)
 
 	r.GET("/agent-profiles", agentProfilesPage)
+	// Agents app: one shell for every client route under /team, which the
+	// SPA's own router resolves (roster, /team/<handle>, ?panel=…).
+	r.GET("/team", agentsAppPage)
+	r.GET("/team/{rest...}", agentsAppPage)
 	r.GET("/presets", presetsPage)
 	r.GET("/presets/{name}", presetDetail)
 	r.POST("/presets", createPreset)
@@ -1527,6 +1541,21 @@ func sessionsPage(c *tool.Ctx) {
 	layout.FullBleed = true
 	c.HTML(view.Conversation(view.ConversationVM{
 		Layout:        layout,
+		Base:          c.Base(),
+		AssetURL:      spaAssetURL("conversation"),
+		ScmAsset:      spaAssetURL("scm"),
+		IdleTimeoutMs: idleTimeoutMs(),
+		RailPrefs:     railPrefsJSON(c),
+		ViewerID:      viewerID(c),
+	}))
+}
+
+// agentsAppPage hosts the full-screen Agents app.
+func agentsAppPage(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	c.HTML(view.AgentsApp(view.AgentsAppVM{
 		Base:          c.Base(),
 		AssetURL:      spaAssetURL("conversation"),
 		ScmAsset:      spaAssetURL("scm"),

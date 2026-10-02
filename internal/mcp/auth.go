@@ -194,6 +194,11 @@ func serveWithSession(next http.Handler, w http.ResponseWriter, r *http.Request,
 	if handlers.SessionIDFrom(ctx) == "" {
 		ctx = handlers.WithSessionID(ctx, r.Header.Get(handlers.SessionHeader))
 	}
+	// A session that belongs to an Agents-app agent reaches only that
+	// agent's checklist. Trusting the header here is safe: a scope can only
+	// take away, so naming someone else's agent session narrows the caller
+	// and never widens it.
+	ctx = withAgentScope(ctx, handlers.SessionIDFrom(ctx))
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
