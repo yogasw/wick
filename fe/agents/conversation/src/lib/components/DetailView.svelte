@@ -19,6 +19,7 @@
   import { currentApproval, showApproval, hideApproval, isExpiredApprovalError } from "../stores/approvals.js";
   import { notify } from "../notify.js";
   import { push } from "../router.js";
+  import type { AgentMode, RailTab } from "../agentMode.js";
   import { bareToolName } from "../todoGroups.js";
   import { readScmWidth, writeScmWidth, clampScmWidth, RAIL_GUTTER_PX } from "../scmWidth.js";
   import { isValidFileName } from "../fileName.js";
@@ -112,9 +113,12 @@
   type Props = {
     base: string;
     sessionId: string;
+    /* Set when the Agents app hosts this view (/team). Unset = the normal
+       /sessions page, whose behaviour this must not change. */
+    agentMode?: AgentMode;
   };
 
-  let { base, sessionId }: Props = $props();
+  let { base, sessionId, agentMode }: Props = $props();
 
   /* ── thread store ──────────────────────────────────────────────── */
   const thread = createThreadStore();
@@ -202,8 +206,12 @@
   let sseStatus = $state<SSEStatus>("connecting");
 
   /* ── vertical rail tabs ────────────────────────────────────────── */
-  type RailTab = "files" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents" | "ticket" | "notes" | "todos";
   let railTab = $state<RailTab | null>(null);
+  // Auto-open paths (todos, ?rail=subagents) must not reveal a tab the
+  // agent's features hide.
+  $effect(() => {
+    if (railTab && agentMode?.hideTabs?.includes(railTab)) railTab = null;
+  });
 
   /* ── thread scroll ref ─────────────────────────────────────────── */
   let threadEl: HTMLElement | undefined = $state();
@@ -1785,7 +1793,9 @@
   async function handleDelete() {
     try {
       await run(deleteSession(base, sessionId).pipe(Effect.provide(WickClientLayer)));
-      push("/");
+      // push("/") is the /sessions list — outside the Agents app.
+      if (agentMode) agentMode.onDeleted?.();
+      else push("/");
     } catch (e: unknown) {
       toastError(`Delete: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -2141,6 +2151,8 @@
   const railTabs = $derived(
     railTabsAll.filter(
       (t) =>
+        // An agent whose feature is off loses the tab outright.
+        !(agentMode?.hideTabs ?? []).includes(t.id) &&
         (t.id !== "browser" || hasBrowserInstance) &&
         // Hidden until there is something to show, then it appears on its
         // own — the badge promotes it into the strip from there.

@@ -1,0 +1,132 @@
+import { describe, test, expect } from "vitest";
+import { parseAgentsRoute, formatAgentsRoute, type AgentsRoute } from "../agentsRouter.js";
+import { hiddenTabsFor } from "../agentMode.js";
+import { blobPath, radiusAt, normalizeShape } from "../avatarShape.js";
+
+const B = "/tools/agents";
+
+describe("parseAgentsRoute", () => {
+  test("roster root", () => {
+    expect(parseAgentsRoute("/tools/agents/team", "", B)).toEqual({ handle: null, session: null, panel: null });
+    expect(parseAgentsRoute("/tools/agents/team/", "", B).handle).toBeNull();
+  });
+
+  test("agent handle", () => {
+    expect(parseAgentsRoute("/tools/agents/team/log-hunter", "", B).handle).toBe("log-hunter");
+  });
+
+  test("extra path segments are ignored, not mistaken for the handle", () => {
+    expect(parseAgentsRoute("/tools/agents/team/support/x/y", "", B).handle).toBe("support");
+  });
+
+  test("settings panel with tab; unknown tab falls back to persona", () => {
+    expect(parseAgentsRoute("/tools/agents/team/a1", "?panel=settings&tab=access", B).panel).toEqual({
+      kind: "settings",
+      tab: "access",
+    });
+    expect(parseAgentsRoute("/tools/agents/team/a1", "?panel=settings&tab=nope", B).panel).toEqual({
+      kind: "settings",
+      tab: "persona",
+    });
+  });
+
+  test("new + sessions panels; unknown panel is none", () => {
+    expect(parseAgentsRoute("/tools/agents/team", "?panel=new", B).panel).toEqual({ kind: "new" });
+    expect(parseAgentsRoute("/tools/agents/team/a1", "?panel=sessions", B).panel).toEqual({ kind: "sessions" });
+    expect(parseAgentsRoute("/tools/agents/team/a1", "?panel=bogus", B).panel).toBeNull();
+  });
+
+  test("session only counts under a handle", () => {
+    expect(parseAgentsRoute("/tools/agents/team/a1", "?session=s9", B).session).toBe("s9");
+    expect(parseAgentsRoute("/tools/agents/team", "?session=s9", B).session).toBeNull();
+  });
+
+  test("a path outside /team is the roster root", () => {
+    expect(parseAgentsRoute("/tools/agents/sessions/x", "", B)).toEqual({ handle: null, session: null, panel: null });
+  });
+});
+
+describe("formatAgentsRoute", () => {
+  const cases: [AgentsRoute, string][] = [
+    [{ handle: null, session: null, panel: null }, "/tools/agents/team"],
+    [{ handle: "captain", session: null, panel: null }, "/tools/agents/team/captain"],
+    [{ handle: null, session: null, panel: { kind: "new" } }, "/tools/agents/team?panel=new"],
+    [
+      { handle: "a1", session: null, panel: { kind: "settings", tab: "features" } },
+      "/tools/agents/team/a1?panel=settings&tab=features",
+    ],
+    [{ handle: "a1", session: "s2", panel: { kind: "sessions" } }, "/tools/agents/team/a1?session=s2&panel=sessions"],
+  ];
+  test.each(cases)("%j → %s", (r, url) => {
+    expect(formatAgentsRoute(r, B)).toBe(url);
+  });
+
+  test("round-trips", () => {
+    for (const [r] of cases) {
+      const url = new URL("http://x" + formatAgentsRoute(r, B));
+      expect(parseAgentsRoute(url.pathname, url.search, B)).toEqual(r);
+    }
+  });
+});
+
+describe("hiddenTabsFor", () => {
+  test("maps off features to their rail tabs", () => {
+    expect(hiddenTabsFor({ schedule: false, tickets: false, source: true })).toEqual(["scheduled", "ticket"]);
+  });
+  test("no features hides nothing", () => {
+    expect(hiddenTabsFor(null)).toEqual([]);
+  });
+});
+
+describe("avatarShape", () => {
+  test("circle radius is constant, polygons stay within the unit circle", () => {
+    expect(radiusAt("circle", 1.2)).toBe(1);
+    for (const s of ["squircle", "triangle", "diamond"] as const) {
+      for (let i = 0; i < 64; i++) {
+        const r = radiusAt(s, (i / 64) * 2 * Math.PI);
+        expect(r).toBeGreaterThan(0.4);
+        expect(r).toBeLessThanOrEqual(1.0000001);
+      }
+    }
+  });
+  test("still outline is time-independent; path is closed", () => {
+    expect(blobPath("diamond", 50, 50, 40, 0)).toBe(blobPath("diamond", 50, 50, 40, 7));
+    expect(blobPath("circle", 50, 50, 40, 3, true)).not.toBe(blobPath("circle", 50, 50, 40, 0, true));
+    expect(blobPath("circle", 50, 50, 40).endsWith("Z")).toBe(true);
+  });
+  test("unknown shape falls back to circle", () => {
+    expect(normalizeShape("hexagon")).toBe("circle");
+  });
+});
+
+import { HANDLE_RE, slugHandle, splitPick, joinPick, destructiveAllowed } from "../agentForm.js";
+
+describe("agentForm", () => {
+  test("slugHandle produces a valid handle", () => {
+    expect(slugHandle("Log Hunter!")).toBe("log-hunter");
+    expect(HANDLE_RE.test(slugHandle("Support Bot 2"))).toBe(true);
+    expect(HANDLE_RE.test("-bad")).toBe(false);
+  });
+  test("pick split/join round-trip", () => {
+    expect(splitPick("claude/claude::opus")).toEqual({ provider: "claude/claude", model: "opus" });
+    expect(splitPick("codex/codex")).toEqual({ provider: "codex/codex", model: "" });
+    expect(joinPick("claude/claude", "opus")).toBe("claude/claude::opus");
+    expect(joinPick("", "opus")).toBe("");
+  });
+  test("destructiveAllowed honours level", () => {
+    const cat = [
+      {
+        id: "c1", key: "slack", label: "Slack", description: "", accounts: [],
+        ops: [
+          { key: "read_thread", name: "Read", destructive: false },
+          { key: "delete_message", name: "Delete", destructive: true },
+        ],
+      },
+    ];
+    const g = (level: "all" | "read" | "pick", ops: string[] = []) => [{ connector_id: "c1", accounts: [], level, ops }];
+    expect(destructiveAllowed(g("all"), cat)).toEqual(["Slack · Delete"]);
+    expect(destructiveAllowed(g("read"), cat)).toEqual([]);
+    expect(destructiveAllowed(g("pick", ["read_thread"]), cat)).toEqual([]);
+    expect(destructiveAllowed(g("pick", ["delete_message"]), cat)).toEqual(["Slack · Delete"]);
+  });
+});
