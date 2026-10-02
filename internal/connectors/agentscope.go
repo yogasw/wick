@@ -37,6 +37,16 @@ func WithAgentScope(ctx context.Context, scope AgentScope) context.Context {
 	return context.WithValue(ctx, agentScopeKey{}, scope)
 }
 
+// WithoutAgentScope returns ctx with any agent scope removed, for the
+// surfaces that must see a person's own reach even when called from inside
+// an agent session (the checklist an agent is narrowed FROM).
+func WithoutAgentScope(ctx context.Context) context.Context {
+	if AgentScopeFrom(ctx) == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, agentScopeKey{}, nil)
+}
+
 // AgentScopeFrom returns the scope on ctx, or nil when the caller is not
 // an agent.
 func AgentScopeFrom(ctx context.Context) AgentScope {

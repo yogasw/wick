@@ -15,6 +15,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
@@ -154,21 +155,34 @@ func decodeTeamAgentReq(c *tool.Ctx) (teamAgentWriteReq, bool) {
 	return req, true
 }
 
-// validateGrants rejects a checklist entry this build cannot interpret. A
-// grant naming a connector the owner cannot see is harmless (the scope
-// only narrows) and is kept, so a temporarily lost tag does not wipe it.
-func validateGrants(gs []team.ConnectorGrant) error {
-	for _, g := range gs {
-		if strings.TrimSpace(g.ConnectorID) == "" {
-			return errors.New("allowed_connectors: connector_id is required")
-		}
-		switch g.Level {
-		case team.LevelAll, team.LevelRead, team.LevelPick:
-		default:
-			return errors.New("allowed_connectors: level must be all, read or pick")
-		}
+// ownerCatalog is the caller's own connector reach — the same set wick_list
+// shows them — with any agent scope stripped from ctx, since the checklist
+// is what an agent is narrowed FROM. Every route here acts on the caller's
+// own agents, so the caller is the owner.
+func ownerCatalog(c *tool.Ctx) ([]connectors.CatalogEntry, error) {
+	if globalConnectors == nil {
+		return nil, nil
 	}
-	return nil
+	u := login.GetUser(c.Context())
+	isAdmin := u != nil && u.IsAdmin()
+	ctx := connectors.WithoutAgentScope(c.Context())
+	return globalConnectors.VisibleCatalog(ctx, actorID(c), login.GetUserTagIDs(c.Context()), isAdmin)
+}
+
+// validateGrants rejects a checklist the owner could not have ticked: an
+// entry this build cannot interpret, or a connector, account or picked op
+// outside the owner's catalog. Writes the 400/500 itself; false = stop.
+func validateGrants(c *tool.Ctx, gs []team.ConnectorGrant) bool {
+	cat, err := ownerCatalog(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return false
+	}
+	if err := team.CheckGrants(gs, team.CatalogOf(cat)); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return false
+	}
+	return true
 }
 
 // teamAgentSaveStatus maps a row-level error to an HTTP status.
@@ -429,6 +443,13 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 			return
 		}
 	}
+	grants := "[]"
+	if req.AllowedConnectors != nil {
+		if !validateGrants(c, *req.AllowedConnectors) {
+			return
+		}
+		grants = team.EncodeGrants(*req.AllowedConnectors)
+	}
 	feats := team.DefaultFeatures()
 	if req.Features != nil {
 		feats = *req.Features
@@ -439,7 +460,8 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 	}
 	p := &entity.AgentPersona{
 		OwnerUserID: actorID(c), Handle: handle, ProjectID: pid,
-		AllowedConnectors: "[]",
+		AllowedConnectors:    grants,
+		IncludeNewConnectors: req.IncludeNewConnectors != nil && *req.IncludeNewConnectors,
 		Features:          team.EncodeFeatures(feats),
 		Avatar:            team.EncodeAvatar(av),
 	}
@@ -483,8 +505,7 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 		}
 	}
 	if req.AllowedConnectors != nil {
-		if err := validateGrants(*req.AllowedConnectors); err != nil {
-			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		if !validateGrants(c, *req.AllowedConnectors) {
 			return
 		}
 		p.AllowedConnectors = team.EncodeGrants(*req.AllowedConnectors)
@@ -561,30 +582,20 @@ func apiTeamAgentDelete(c *tool.Ctx) {
 }
 
 // apiTeamAgentConnectors handles GET /api/team/agents/connectors: the checklist
-// source, i.e. what the OWNER reaches. The request context carries no agent
-// scope (it is a browser call), so this is the unnarrowed list.
+// source, i.e. what the OWNER reaches — exactly the connectors, accounts and
+// live ops wick_list shows them (see ownerCatalog).
 func apiTeamAgentConnectors(c *tool.Ctx) {
 	if !teamReady(c) {
 		return
 	}
-	out := make([]teamAgentConnectorItem, 0)
-	if globalConnectors == nil {
-		c.JSON(http.StatusOK, out)
-		return
-	}
-	u := login.GetUser(c.Context())
-	isAdmin := u != nil && u.IsAdmin()
-	tagIDs := login.GetUserTagIDs(c.Context())
-	rows, err := globalConnectors.ListVisibleTo(c.Context(), actorID(c), tagIDs, isAdmin)
+	cat, err := ownerCatalog(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	for _, row := range rows {
-		mod, ok := globalConnectors.Module(row.Key)
-		if !ok {
-			continue
-		}
+	out := make([]teamAgentConnectorItem, 0, len(cat))
+	for _, e := range cat {
+		row, mod := e.Row, e.Module
 		it := teamAgentConnectorItem{
 			ID: row.ID, Key: row.Key, Label: row.Label,
 			Description: strings.TrimSpace(row.Description),
@@ -595,21 +606,14 @@ func apiTeamAgentConnectors(c *tool.Ctx) {
 			it.Description = mod.Meta.Description
 		}
 		if mod.OAuth != nil {
-			// The instance's own identity is one more pickable account.
+			// The instance's own identity is one more pickable account —
+			// wick_list's connector entry for the row.
 			it.Accounts = append(it.Accounts, teamAgentAccountItem{ID: "", DisplayName: "bot / instance"})
-			caller := globalConnectors.AccountAccessFor(row, actorID(c), isAdmin, tagIDs)
-			if accs, aerr := globalConnectors.ListAccountsVisibleTo(c.Context(), row, caller); aerr == nil {
-				for _, a := range accs {
-					it.Accounts = append(it.Accounts, teamAgentAccountItem{ID: a.ID, DisplayName: a.DisplayName})
-				}
-			} else {
-				log.Ctx(c.Context()).Warn().Err(aerr).Str("connector", row.ID).Msg("team agent checklist: list accounts")
+			for _, a := range e.Accounts {
+				it.Accounts = append(it.Accounts, teamAgentAccountItem{ID: a.ID, DisplayName: a.DisplayName})
 			}
 		}
-		for _, op := range mod.AllOps() {
-			if op.ConfigOnly {
-				continue
-			}
+		for _, op := range e.Ops {
 			it.Ops = append(it.Ops, teamAgentConnectorOp{Key: op.Key, Name: op.Name, Destructive: op.Destructive})
 		}
 		out = append(out, it)

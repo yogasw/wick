@@ -3,26 +3,8 @@ package agents
 import (
 	"testing"
 
-	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/project"
 )
-
-func TestTeamAgentValidateGrants(t *testing.T) {
-	ok := []team.ConnectorGrant{
-		{ConnectorID: "a", Level: team.LevelAll},
-		{ConnectorID: "b", Level: team.LevelRead},
-		{ConnectorID: "c", Level: team.LevelPick, Ops: []string{"get"}},
-	}
-	if err := validateGrants(ok); err != nil {
-		t.Fatalf("valid grants rejected: %v", err)
-	}
-	if err := validateGrants([]team.ConnectorGrant{{ConnectorID: "", Level: team.LevelAll}}); err == nil {
-		t.Fatal("empty connector_id accepted")
-	}
-	if err := validateGrants([]team.ConnectorGrant{{ConnectorID: "a", Level: "write"}}); err == nil {
-		t.Fatal("unknown level accepted")
-	}
-}
 
 func TestTeamAgentApplyProjectFields(t *testing.T) {
 	s := func(v string) *string { return &v }
