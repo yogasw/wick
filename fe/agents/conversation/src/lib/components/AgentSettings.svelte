@@ -31,13 +31,13 @@
   let { base, agent, agents, tab, onTab, onClose, onSaved, onDeleted }: Props = $props();
 
   type Draft = {
-    handle: string; name: string; icon: string; description: string; system_prompt: string;
+    handle: string; name: string; description: string; system_prompt: string;
     pick: string; features: AgentFeatures; avatar: { shape: string; color: string };
     grants: ConnectorGrant[]; include_new_connectors: boolean; disabled: boolean;
   };
   function draftOf(a: AgentItem): Draft {
     return {
-      handle: a.handle, name: a.name, icon: a.icon, description: a.description,
+      handle: a.handle, name: a.name, description: a.description,
       system_prompt: a.system_prompt, pick: joinPick(a.provider, a.model),
       features: { ...a.features }, avatar: { ...a.avatar },
       grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
@@ -106,7 +106,6 @@
     const d = draft;
     if (d.handle !== agent.handle) p.handle = d.handle;
     if (d.name !== agent.name) p.name = d.name;
-    if (d.icon !== agent.icon) p.icon = d.icon;
     if (d.description !== agent.description) p.description = d.description;
     if (d.system_prompt !== agent.system_prompt) p.system_prompt = d.system_prompt;
     if (d.pick !== joinPick(agent.provider, agent.model)) {
@@ -185,15 +184,9 @@
 
 <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
   {#if tab === "persona"}
-    <div class="flex gap-3">
-      <div class="w-20">
-        <label class={label} for="as-icon">Icon</label>
-        <input id="as-icon" class={input} bind:value={draft.icon} maxlength="8" />
-      </div>
-      <div class="flex-1">
-        <label class={label} for="as-name">Nama</label>
-        <input id="as-name" class={input} bind:value={draft.name} />
-      </div>
+    <div>
+      <label class={label} for="as-name">Nama</label>
+      <input id="as-name" class={input} bind:value={draft.name} />
     </div>
     <div>
       <label class={label} for="as-handle">Handle</label>

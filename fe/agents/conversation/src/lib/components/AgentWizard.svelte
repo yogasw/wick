@@ -15,7 +15,6 @@
   let name = $state("");
   let handle = $state("");
   let handleTouched = $state(false);
-  let icon = $state("🤖");
   let description = $state("");
   let systemPrompt = $state("");
   let pick = $state("");
@@ -44,7 +43,7 @@
     try {
       const a = await runApi(
         createAgent(base, {
-          handle, name: name.trim(), icon: icon.trim(), description,
+          handle, name: name.trim(), description,
           system_prompt: systemPrompt, provider, model,
         }),
       );
@@ -64,15 +63,9 @@
 <DrawerHeader title="Agent baru" subtitle="Akses connector diatur setelah dibuat" {onClose} />
 <form class="flex min-h-0 flex-1 flex-col" onsubmit={submit}>
   <div class="flex-1 space-y-4 overflow-y-auto px-6 py-4">
-    <div class="flex gap-3">
-      <div class="w-20">
-        <label class={label} for="aw-icon">Icon</label>
-        <input id="aw-icon" class={input} bind:value={icon} maxlength="8" />
-      </div>
-      <div class="flex-1">
-        <label class={label} for="aw-name">Nama</label>
-        <input id="aw-name" class={input} bind:value={name} placeholder="Log Hunter" />
-      </div>
+    <div>
+      <label class={label} for="aw-name">Nama</label>
+      <input id="aw-name" class={input} bind:value={name} placeholder="Log Hunter" />
     </div>
     <div>
       <label class={label} for="aw-handle">Handle</label>

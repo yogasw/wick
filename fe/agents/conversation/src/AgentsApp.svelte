@@ -1,5 +1,5 @@
 <script lang="ts">
-  /* The Agents app (/team): a messaging-style roster on the left and the
+  /* The Team app (/team; "Agents" in code): a messaging-style roster on the left and the
      chosen agent's chat on the right. The chat IS the ordinary
      conversation view (DetailView) in agent mode, so streaming, approvals,
      artifacts and the rail all come along instead of being rebuilt.
@@ -214,11 +214,11 @@
       >
         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4L2 8l4 4"></path><path d="M2 8h8a4 4 0 014 4v1"></path></svg>
       </a>
-      <h1 class="flex-1 text-base font-bold text-black-900 dark:text-white-100">Agents</h1>
+      <h1 class="flex-1 text-base font-bold text-black-900 dark:text-white-100">Team</h1>
       <button
         type="button"
         class="new-agent flex h-8 w-8 items-center justify-center rounded-full bg-green-500 text-lg leading-none text-white-100 hover:bg-green-600"
-        title="Agent baru"
+        title="+ Agent"
         aria-label="Agent baru"
         onclick={() => { rosterOpen = false; openPanel({ kind: "new" }); }}
       >+</button>
@@ -257,7 +257,7 @@
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-2">
               <span class="roster-name min-w-0 flex-1 truncate font-semibold text-black-900 dark:text-white-100">
-                {a.icon ? `${a.icon} ` : ""}{a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[9px] font-bold tracking-wider text-green-600 dark:text-green-400">★ CAPTAIN</span>{/if}
+                {a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[9px] font-bold tracking-wider text-green-600 dark:text-green-400">★ CAPTAIN</span>{/if}
               </span>
               <span class="shrink-0 text-xs text-black-700">{rosterTime(a.last_active)}</span>
             </span>
@@ -290,7 +290,7 @@
         <AgentAvatar shape={selected.avatar?.shape} color={selected.avatar?.color} size={36} working={isWorking(selected.status)} asleep={selected.disabled} hatching={hatching.includes(selected.id)} />
         <div class="min-w-0 flex-1">
           <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">
-            {selected.icon ? `${selected.icon} ` : ""}{selected.name}
+            {selected.name}
           </div>
           <div class="truncate text-xs text-black-800 dark:text-black-600">
             {#if isWorking(selected.status)}
