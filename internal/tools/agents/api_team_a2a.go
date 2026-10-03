@@ -94,6 +94,15 @@ func (a2aDirectory) EnsureSession(ctx context.Context, a a2aserver.Agent, sessio
 		}
 	}
 	prov, modelID := a2aSessionTarget(ctx, projectID)
+	// A remote agent exposed over A2A answers through its adapter, as its
+	// own chat does: the call goes on to the remote, not to a local CLI.
+	if globalTeam != nil {
+		if p, err := globalTeam.Get(ctx, a.ID); err == nil {
+			if key, ok := remoteProviderKey(p); ok {
+				prov, modelID = key, ""
+			}
+		}
+	}
 	if _, err := globalMgr.CreateSession(ctx, session.CreateOptions{
 		ID: sessionID, ProjectID: projectID, Origin: session.Origin(a2aserver.Source),
 		Preset: preset, UserID: a.OwnerUserID, AgentID: a.ID,

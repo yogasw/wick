@@ -46,7 +46,7 @@ func (s *Source) ResumeID(dir string) string { return LoadState(dir).ContextID }
 func (s *Source) Send(ctx context.Context, turn remote.Turn) (remote.Handle, error) {
 	ch := make(chan remote.Event, 64)
 	s.pending = ch
-	go s.run(ctx, turn.SessionDir, turn.Text, ch)
+	go s.run(ctx, turn, ch)
 	return remote.Handle{ID: time.Now().UTC().Format(time.RFC3339Nano)}, nil
 }
 

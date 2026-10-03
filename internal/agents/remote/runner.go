@@ -57,7 +57,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	runCtx, cancel := context.WithCancel(ctx)
 	p := &process{
 		r: pr, w: pw, msgs: make(chan string, 16), ctx: runCtx, cancel: cancel,
-		done: make(chan struct{}), src: s.Source, dir: opt.SessionDir,
+		done: make(chan struct{}), src: s.Source, dir: opt.SessionDir, id: opt.SessionID,
 	}
 	go p.loop(opt)
 	return p, nil
@@ -81,6 +81,7 @@ type process struct {
 	once   sync.Once
 	src    Source
 	dir    string
+	id     string
 }
 
 func (p *process) Stdout() io.Reader     { return p.r }
@@ -266,7 +267,7 @@ func (p *process) turn(text string) {
 	stopBeat := p.heartbeat(ctx)
 	defer stopBeat()
 
-	h, err := src.Send(ctx, Turn{Text: text, SessionDir: p.dir})
+	h, err := src.Send(ctx, Turn{Text: text, SessionDir: p.dir, SessionID: p.id})
 	if err != nil {
 		switch {
 		case p.ctx.Err() != nil:

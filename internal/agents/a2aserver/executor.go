@@ -3,6 +3,7 @@ package a2aserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"iter"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/yogasw/wick/internal/agents/event"
+	"github.com/yogasw/wick/internal/agents/remote"
 )
 
 // HealthKey is the metadata flag of the connection test's message: the
@@ -52,7 +54,15 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			fail("empty message: send at least one text part")
 			return
 		}
-		tn, err := e.s.dispatch(a, SessionID(a.ID, ec.ContextID), callerOf(ec.User), ec.ContextID, text)
+		hops := inboundHops(ec)
+		if hops > remote.MaxHops {
+			fail(fmt.Sprintf("refused: this request already passed through %d wick A2A hops (limit %d); a remote agent probably points back at wick", hops, remote.MaxHops))
+			return
+		}
+		sid := SessionID(a.ID, ec.ContextID)
+		// A remote agent behind this one sends hops+1 on its own call.
+		remote.SetHops(sid, hops)
+		tn, err := e.s.dispatch(a, sid, callerOf(ec.User), ec.ContextID, text)
 		if err != nil {
 			fail(err.Error())
 			return
@@ -154,6 +164,17 @@ func messageText(m *a2a.Message) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+}
+
+// inboundHops is the request's remote.HopsKey: set by a wick caller,
+// absent (0) from anyone else.
+func inboundHops(ec *a2asrv.ExecutorContext) int {
+	if ec.Message != nil {
+		if n := remote.HopsOf(ec.Message.Metadata[remote.HopsKey]); n > 0 {
+			return n
+		}
+	}
+	return remote.HopsOf(ec.Metadata[remote.HopsKey])
 }
 
 func isHealth(ec *a2asrv.ExecutorContext) bool {

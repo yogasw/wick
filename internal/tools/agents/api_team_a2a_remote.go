@@ -16,6 +16,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/a2aremote"
 	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/tool"
@@ -65,6 +66,19 @@ func IsRemoteAgent(p entity.AgentPersona) bool { return isA2ARemote(p) || isSlac
 
 // isA2ARemote reports whether p is an A2A remote agent.
 func isA2ARemote(p entity.AgentPersona) bool { return p.Kind == a2aremote.Kind }
+
+// remoteProviderKey is the provider a session of remote agent p is
+// created with; false for a local agent. The pool runs such a session on
+// RemoteSpawnerFor, never a local CLI.
+func remoteProviderKey(p entity.AgentPersona) (string, bool) {
+	switch {
+	case isSlackRemote(p):
+		return slackremote.ProviderKey, true
+	case isA2ARemote(p):
+		return a2aremote.ProviderKey, true
+	}
+	return "", false
+}
 
 /* ── DTOs ────────────────────────────────────────────────────────────────── */
 

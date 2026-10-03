@@ -78,15 +78,16 @@ func saveState(dir string, st State) {
 // run is one A2A call: the result is streamed when the card says it can
 // stream, else sent with message/send and polled until it settles. Its
 // events go to out, closed after the terminal one.
-func (s *Source) run(ctx context.Context, dir, text string, out chan<- remote.Event) {
+func (s *Source) run(ctx context.Context, turn remote.Turn, out chan<- remote.Event) {
 	defer close(out)
+	dir := turn.SessionDir
 	cfg := s.rt.Config
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	st := LoadState(dir)
 
 	t := &turnState{st: &st, max: cfg.MaxBytes(), cancel: cancel, out: out}
-	err := s.call(ctx, t, text)
+	err := s.call(ctx, t, turn.Text, remote.Hops(turn.SessionID)+1)
 	// The state is saved before the closing event, so whoever reads the
 	// turn's end also reads where the conversation stands.
 	var end remote.Event
@@ -107,7 +108,9 @@ func (s *Source) run(ctx context.Context, dir, text string, out chan<- remote.Ev
 	out <- end
 }
 
-func (s *Source) call(ctx context.Context, t *turnState, text string) error {
+// call sends text; hops counts the wick A2A servers the turn has passed
+// through, this call included, so a wick on the other end can stop a loop.
+func (s *Source) call(ctx context.Context, t *turnState, text string, hops int) error {
 	card, err := s.rt.Config.ParsedCard()
 	if err != nil {
 		return err
@@ -119,6 +122,7 @@ func (s *Source) call(ctx context.Context, t *turnState, text string) error {
 	defer func() { _ = client.Destroy() }()
 	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(text))
 	msg.ContextID = t.st.ContextID
+	msg.Metadata = map[string]any{remote.HopsKey: hops}
 	if t.st.InputRequired && t.st.TaskID != "" {
 		msg.TaskID = a2a.TaskID(t.st.TaskID)
 	}

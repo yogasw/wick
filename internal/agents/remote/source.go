@@ -31,6 +31,8 @@ type Turn struct {
 	// SessionDir is where the adapter keeps the session's state
 	// (A2A contextId, Slack thread_ts, …).
 	SessionDir string
+	// SessionID is the wick session the turn runs in (see Hops).
+	SessionID string
 }
 
 // Handle identifies a sent turn: what a reply is matched by (task id,
