@@ -13,6 +13,8 @@
   import SystemEventChip from "./system/SystemEventChip.svelte";
   import InputRequestCard from "./system/InputRequestCard.svelte";
   import ActionCard from "./system/ActionCard.svelte";
+  import ApprovalRequestCard from "./system/ApprovalRequestCard.svelte";
+  import type { ApprovalDecisionChoice } from "../interactiveCards.js";
   import { splitActionCards, cardMode } from "../actionCard.js";
   import type { CardState } from "../types/agents.js";
   import { AgentAvatar } from "@wick-fe/common-avatar";
@@ -43,8 +45,10 @@
     cards?: Record<string, CardState>;
     /** Posts an actioncard click back; unset = buttons stay inert. */
     onCardAction?: (cardId: string, value: string, label: string) => void;
+    /** Settles an approval_request card through the gate. */
+    onApprovalDecide?: (approvalId: string, decision: ApprovalDecisionChoice) => void;
   };
-  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction }: Props = $props();
+  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -437,6 +441,8 @@
           </span>
           <div class="h-px flex-1 bg-white-300 dark:bg-navy-600"></div>
         </div>
+      {:else if turn.kind === "approval_request"}
+        <ApprovalRequestCard {turn} onDecide={onApprovalDecide} />
       {:else if turn.kind === "input_request"}
         <InputRequestCard {turn} />
       {:else if isSystemEvent}

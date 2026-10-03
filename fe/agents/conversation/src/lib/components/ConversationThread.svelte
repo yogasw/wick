@@ -44,9 +44,10 @@
     onOpenAgent?: (handle: string) => void;
     cards?: Record<string, import("../types/agents.js").CardState>;
     onCardAction?: (cardId: string, value: string, label: string) => void;
+    onApprovalDecide?: (approvalId: string, decision: import("../interactiveCards.js").ApprovalDecisionChoice) => void;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -229,7 +230,7 @@
         <span class="rounded-md bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm">{label}</span>
       </div>
     {/if}
-    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} />
+    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} />
   {/each}
 
   {#if live && turns.length === 0}

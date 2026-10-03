@@ -1906,6 +1906,26 @@
     toastError(`Card: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  /* An approval_request card's button. Same gate as the modal: a 410 means
+     it was already decided (here, in the modal or another tab) or expired. */
+  async function handleApprovalCard(approvalId: string, decision: "accept" | "accept_for_session" | "decline") {
+    const res = await Effect.runPromise(
+      Effect.either(decideApprovalCard(base, sessionId, approvalId, { decision }).pipe(Effect.provide(WickClientLayer))),
+    );
+    if (Either.isRight(res)) {
+      hideApproval({ id: approvalId });
+      approvalsTabPending = approvalsTabPending.filter((p) => p.id !== approvalId);
+      return;
+    }
+    const err = res.left;
+    if (err instanceof APIError && err.status === 410) {
+      toastWarn("That approval is no longer pending.");
+      void loadConversation();
+      return;
+    }
+    toastError(`Approval: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   /* ── ask / approval handlers ──────────────────────────────────── */
   async function handleAskSubmit(answer: AskAnswer) {
     hideAsk();
@@ -2568,7 +2588,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} />
+          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} />
         </div>
       </div>
 

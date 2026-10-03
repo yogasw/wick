@@ -1308,3 +1308,18 @@ describe("ThreadMessage - actioncard", () => {
     expect(screen.getByTestId("postback-chip").textContent).toContain("✓ Approve");
   });
 });
+
+describe("ThreadMessage - approval_request", () => {
+  test("pending offers the three gate decisions", async () => {
+    const onApprovalDecide = vi.fn();
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "system", kind: "approval_request", text: "Bash: rm -rf build", extras: { approval_id: "ap-1", state: "pending", agent: "main", tool: "Bash", cmd: "rm -rf build" } }), onApprovalDecide } });
+    expect(screen.getByTestId("approval-request").textContent).toContain("rm -rf build");
+    await fireEvent.click(screen.getByTestId("approval-accept-session"));
+    expect(onApprovalDecide).toHaveBeenCalledWith("ap-1", "accept_for_session");
+  });
+  test("settled shows the decision, no buttons", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "system", kind: "approval_request", text: "declined", extras: { approval_id: "ap-1", state: "block", tool: "Bash", cmd: "rm -rf build" } }) } });
+    expect(screen.getByTestId("approval-pill").textContent).toContain("declined");
+    expect(screen.queryByTestId("approval-accept")).toBeNull();
+  });
+});
