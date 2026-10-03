@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { apiGetE, apiPostE, apiPatchE, apiDeleteE, WickClientLayer, type APIError } from "@wick-fe/common-api";
+import { apiGetE, apiPostE, apiPatchE, apiPutE, apiDeleteE, WickClientLayer, type APIError } from "@wick-fe/common-api";
 import type { HttpClient } from "@effect/platform";
 import type { AgentFeatures } from "../agentMode.js";
 
@@ -161,6 +161,24 @@ export const markAgentRead = (base: string, id: string) =>
 
 export const listAgentSessions = (base: string, id: string) =>
   apiGetE<AgentSessionItem[] | null>(`${base}/api/team/agents/${enc(id)}/sessions`);
+
+/** The caller's own Team settings (GET/PUT /api/team/settings). */
+export type TeamSettings = {
+  /** Team instructions: markdown for every agent in the caller's Team. */
+  prompt: string;
+  /** "Open Team when I open Agents". */
+  open_team: boolean;
+  max_prompt_bytes: number;
+  /** Admins only: the page that edits the operator prompt of all users. */
+  operator_prompt_href?: string;
+};
+
+export type TeamSettingsWrite = { prompt?: string; open_team?: boolean };
+
+export const getTeamSettings = (base: string) => apiGetE<TeamSettings>(`${base}/api/team/settings`);
+
+export const saveTeamSettings = (base: string, body: TeamSettingsWrite) =>
+  apiPutE<TeamSettings>(`${base}/api/team/settings`, body);
 
 /** runApi runs one of the effects above as a promise — the Agents app
     components only ever need the result or the error message. */

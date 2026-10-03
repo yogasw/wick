@@ -20,6 +20,7 @@
   import { rosterStatus, withTurn } from "./lib/rosterStatus.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import TeamNav from "./lib/components/TeamNav.svelte";
+  import TeamSettings from "./lib/components/TeamSettings.svelte";
   import { RETURN_KEY, returnHref, classicHref } from "./lib/teamReturn.js";
 
   const appEl = document.getElementById("app");
@@ -442,7 +443,7 @@
     </div>
   </section>
 
-  <!-- Drawer (Settings / Other chats) or the centred + Agent modal -->
+  <!-- Drawer (Settings / Team settings / Other chats) or the centred + Agent modal -->
   {#if route.panel}
     <button
       type="button"
@@ -455,7 +456,14 @@
       role="dialog"
       aria-modal="true"
     >
-      {#if route.panel.kind === "new"}
+      {#if route.panel.kind === "team-settings"}
+        <TeamSettings
+          {base}
+          tab={route.panel.tab}
+          onTab={(tab) => go({ panel: { kind: "team-settings", tab } }, true)}
+          onClose={() => openPanel(null)}
+        />
+      {:else if route.panel.kind === "new"}
         <AgentWizard {base} taken={agents.map((a) => a.handle)} convertProject={route.panel.project} onClose={() => openPanel(null)} {onCreated} />
       {:else if selected && route.panel.kind === "settings"}
         <AgentSettings
