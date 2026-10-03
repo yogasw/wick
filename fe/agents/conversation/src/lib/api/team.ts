@@ -63,6 +63,8 @@ export type AgentItem = {
   bash_rules?: BashRule[];
   native_tools_enforced?: boolean;
   disabled_skills?: string[];
+  /** Prompt chips of the agent view (Slack) and an empty chat; max 4. */
+  suggested_prompts?: SuggestedPrompt[];
   main_session_id: string;
   last_active: string | null;
   last_preview: string;
@@ -112,6 +114,7 @@ export type AgentWrite = Partial<{
   allowed_native_tools: string[];
   bash_rules: BashRule[];
   disabled_skills: string[];
+  suggested_prompts: SuggestedPrompt[];
 }>;
 
 /** team.BashRule: a command glob and where its path arguments may point
@@ -332,3 +335,52 @@ export const isWorking = (status: string | undefined) => status === "running" ||
     button posts its instruction to the agent's main chat). */
 export const sendToChat = (base: string, sessionID: string, text: string) =>
   apiPostE<{ status: string }>(`${base}/sessions/${enc(sessionID)}/send`, { text });
+
+/** team.SuggestedPrompt: the chip's title and what clicking it sends. */
+export type SuggestedPrompt = { title: string; message: string };
+
+/* Connections › Slack (api_team_slack.go). Secrets never come back: the
+   server answers whether each one is set, nothing more. */
+export type SlackSecretKey = "bot_token" | "app_token" | "signing_secret" | "app_config_token";
+export type AgentSlackStatus = {
+  connected: boolean;
+  online: boolean;
+  mode: "socket" | "http";
+  bot_id?: string;
+  bot_name?: string;
+  team_name?: string;
+  dm_main_chat: boolean;
+  app_id?: string;
+  secrets: Partial<Record<SlackSecretKey, boolean>>;
+  disabled: boolean;
+};
+export type AgentSlackConnect = Partial<{
+  mode: "socket" | "http";
+  bot_token: string;
+  app_token: string;
+  signing_secret: string;
+  app_config_token: string;
+  app_id: string;
+  dm_main_chat: boolean;
+}>;
+export type SlackMatrixItem = { name: string; status: SlackMatrixStatus; hint?: string };
+export type SlackMatrixStatus = "ok" | "warn" | "error" | "off";
+export type SlackMatrixRow = {
+  key: string; label: string; need: string; status: SlackMatrixStatus;
+  scopes: SlackMatrixItem[]; events: SlackMatrixItem[];
+};
+export type SlackHealthCheck = { name: string; ok: boolean; error?: string; detail?: string };
+export type AgentSlackHealth = { checks: SlackHealthCheck[] | null; matrix: SlackMatrixRow[] | null };
+
+export const getAgentSlack = (base: string, id: string) =>
+  apiGetE<AgentSlackStatus>(`${base}/api/team/agents/${enc(id)}/slack`);
+export const connectAgentSlack = (base: string, id: string, body: AgentSlackConnect) =>
+  apiPutE<AgentSlackStatus>(`${base}/api/team/agents/${enc(id)}/slack`, body);
+export const updateAgentSlack = (base: string, id: string, body: AgentSlackConnect) =>
+  apiPatchE<AgentSlackStatus>(`${base}/api/team/agents/${enc(id)}/slack`, body);
+export const disconnectAgentSlack = (base: string, id: string) =>
+  apiDeleteE<unknown>(`${base}/api/team/agents/${enc(id)}/slack`);
+export const getAgentSlackHealth = (base: string, id: string) =>
+  apiGetE<AgentSlackHealth>(`${base}/api/team/agents/${enc(id)}/slack/health`);
+export const getAgentSlackManifest = (base: string, id: string) =>
+  apiGetE<{ manifest: unknown; create_url: string }>(`${base}/api/team/agents/${enc(id)}/slack/manifest`);

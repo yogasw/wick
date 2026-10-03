@@ -12,6 +12,7 @@ import { teamSettingsTabOf, type TeamSettingsTab } from "./teamSettingsTabs.js";
      /team/<handle>?session=<id>         one of its other conversations
      /team/<handle>?panel=settings&tab=… Settings drawer over the chat
      /team/<handle>?panel=sessions       "Other chats" drawer
+     /team/<handle>?panel=connections    Connections drawer (Slack)
      /team/g/<group session id>          a group chat
      /team/g/<id>?panel=group-settings   its Settings drawer
      /team?panel=new                     the + Agent wizard
@@ -40,6 +41,7 @@ export type AgentsPanel =
   | { kind: "settings"; tab: SettingsTab }
   | { kind: "team-settings"; tab: TeamSettingsTab }
   | { kind: "sessions" }
+  | { kind: "connections" }
   | { kind: "group-settings" }
   | { kind: "new"; project?: string };
 
@@ -94,6 +96,9 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
       break;
     case "sessions":
       panel = { kind: "sessions" };
+      break;
+    case "connections":
+      panel = { kind: "connections" };
       break;
     case "group-settings":
       if (group) panel = { kind: "group-settings" };

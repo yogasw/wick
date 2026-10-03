@@ -14,7 +14,7 @@
   import { getProviderOptions, getProjectOptions } from "../api/options.js";
   import {
     updateAgent, deleteAgent, getProjectPersona, listAgentConnectors, runApi,
-    type AgentItem, type AgentWrite, type ConnectorGrant, type AgentConnector,
+    type AgentItem, type AgentWrite, type SuggestedPrompt, type ConnectorGrant, type AgentConnector,
   } from "../api/team.js";
   import type { AgentFeatures } from "../agentMode.js";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
@@ -29,6 +29,7 @@
   import NativeToolsSection from "./NativeToolsSection.svelte";
   import AgentSkillsTab from "./AgentSkillsTab.svelte";
   import { nativeToolsOf } from "../nativeTools.js";
+  import { MAX_PROMPTS, promptsToSave } from "../suggestedPrompts.js";
   import type { BashRule } from "../api/team.js";
 
   type Props = {
@@ -51,6 +52,7 @@
     mention_from: MentionFrom; mention_allow: string[]; max_hops: number;
     manage_agents: boolean; captain_can: CaptainCan;
     native_tools: string[]; bash_rules: BashRule[]; disabled_skills: string[];
+    suggested_prompts: SuggestedPrompt[];
   };
   function draftOf(a: AgentItem): Draft {
     return {
@@ -64,6 +66,7 @@
       manage_agents: a.manage_agents ?? a.is_captain, captain_can: captainCanOf(a.captain_can),
       native_tools: nativeToolsOf(a.allowed_native_tools), bash_rules: (a.bash_rules ?? []).map((r) => ({ ...r })),
       disabled_skills: [...(a.disabled_skills ?? [])],
+      suggested_prompts: (a.suggested_prompts ?? []).map((p) => ({ ...p })),
     };
   }
   let draft = $state<Draft>(untrack(() => draftOf(agent)));
@@ -219,6 +222,10 @@
     if (JSON.stringify(d.native_tools) !== JSON.stringify(nativeToolsOf(saved.allowed_native_tools))) p.allowed_native_tools = [...d.native_tools];
     if (JSON.stringify(d.bash_rules) !== JSON.stringify(saved.bash_rules ?? [])) p.bash_rules = d.bash_rules.map((r) => ({ ...r }));
     if (JSON.stringify(d.disabled_skills) !== JSON.stringify(saved.disabled_skills ?? [])) p.disabled_skills = [...d.disabled_skills];
+    {
+      const prompts = promptsToSave(d.suggested_prompts);
+      if (JSON.stringify(prompts) !== JSON.stringify(saved.suggested_prompts ?? [])) p.suggested_prompts = prompts;
+    }
     return p;
   });
   const dirty = $derived(Object.keys(patch).length > 0);
@@ -406,6 +413,31 @@
           {/snippet}
         </AIGenerateButton>
       </div>
+    </div>
+    <div data-testid="suggested-prompts">
+      <span class={label}>Suggested prompts</span>
+      <p class="mb-2 text-xs text-black-800 dark:text-black-600">Up to {MAX_PROMPTS} chips shown when someone opens the agent in Slack. Title is the chip, message is what it sends.</p>
+      <div class="space-y-2">
+        {#each draft.suggested_prompts as p, i (i)}
+          <div class="flex items-start gap-2">
+            <input class="{input} w-1/3" aria-label="Prompt {i + 1} title" placeholder="Title" maxlength="75" bind:value={p.title} />
+            <input class={input} aria-label="Prompt {i + 1} message" placeholder="Message it sends" bind:value={p.message} />
+            <button
+              type="button"
+              class="mt-1.5 rounded px-2 text-sm text-black-800 hover:text-neg-400 dark:text-black-600"
+              aria-label="Remove prompt {i + 1}"
+              onclick={() => (draft.suggested_prompts = draft.suggested_prompts.filter((_, j) => j !== i))}
+            >✕</button>
+          </div>
+        {/each}
+      </div>
+      {#if draft.suggested_prompts.length < MAX_PROMPTS}
+        <button
+          type="button"
+          class="mt-2 text-xs font-medium text-green-600 hover:underline"
+          onclick={() => (draft.suggested_prompts = [...draft.suggested_prompts, { title: "", message: "" }])}
+        >+ Add prompt</button>
+      {/if}
     </div>
   {:else if tab === "access"}
     <p class="text-xs text-black-800 dark:text-black-600">

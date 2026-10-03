@@ -13,6 +13,7 @@
   import AgentSettings from "./lib/components/AgentSettings.svelte";
   import AgentWizard from "./lib/components/AgentWizard.svelte";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
+  import AgentConnections from "./lib/components/AgentConnections.svelte";
   import { agentsRoute, navigate, type AgentsRoute, type AgentsPanel } from "./lib/agentsRouter.js";
   import { connectorCaption, hiddenTabsFor } from "./lib/agentMode.js";
   import { nativeToolsOf } from "./lib/nativeTools.js";
@@ -265,6 +266,7 @@
   const menuItems = $derived([
     { label: "Chats", hint: "main chat and history", onclick: () => openPanel({ kind: "sessions" }) },
     { label: "Settings", hint: "persona, access, tools, avatar", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
+    { label: "Connections", hint: "Slack and health", onclick: () => openPanel({ kind: "connections" }) },
     { label: "Duplicate agent", hint: "copies persona & access, not connections", divider: true, onclick: duplicate },
     selected?.disabled
       ? { label: "Enable", hint: "the agent can be used again", onclick: toggleDisabled }
@@ -579,6 +581,8 @@
           {onSaved}
           onDeleted={() => onDeleted(selected.id)}
         />
+      {:else if selected && route.panel.kind === "connections"}
+        <AgentConnections {base} agent={selected} onClose={() => openPanel(null)} />
       {:else if selected && route.panel.kind === "sessions"}
         <AgentSessions
           {base}
