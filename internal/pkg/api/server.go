@@ -1176,12 +1176,16 @@ func NewServer() *Server {
 	// one on resolve) so every open tab updates without polling.
 	askUsersMgr := askuser.NewManager(askuser.Options{
 		OnRequest: func(req askuser.AskRequest) {
+			agentstool.RecordAskRequest(req)
 			payload, _ := json.Marshal(req)
 			agentsBcast.PublishAskUser(req.SessionID, req.AgentName, payload)
 		},
 		OnResolved: func(sessionID, requestID string) {
 			agentsBcast.PublishAskUserResolved(sessionID, requestID)
 		},
+		// The question stays in the thread as an input_request card, with
+		// its answer once settled — not only above the composer.
+		OnSettled: agentstool.RecordAskSettled,
 	})
 	agentstool.SetAskUsers(askUsersMgr)
 	// Bind the askuser unix socket so sibling processes (stdio MCP —
