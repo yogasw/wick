@@ -252,6 +252,9 @@
     hidePickers: true,
     onDeleted: () => go({ session: null }),
     onTurnChange,
+    providerSwitch: !!selected?.allow_provider_switch,
+    onOpenSettings: () => openPanel({ kind: "settings", tab: "advanced" }),
+    onNewChat: newChat,
     agent: selected
       ? {
           name: selected.name,

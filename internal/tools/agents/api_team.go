@@ -54,12 +54,14 @@ type TeamAgentItem struct {
 	IncludeNewConnectors bool                  `json:"include_new_connectors"`
 	// RunAs is team.RunAsCaller or team.RunAsOwner: whose access a turn
 	// runs with (see team.SpawnIdentity).
-	RunAs         string     `json:"run_as"`
-	Disabled      bool       `json:"disabled"`
-	MainSessionID string     `json:"main_session_id"`
-	LastActive    *time.Time `json:"last_active"`
-	LastPreview   string     `json:"last_preview"`
-	Status        string     `json:"status"`
+	RunAs    string `json:"run_as"`
+	Disabled bool   `json:"disabled"`
+	// AllowProviderSwitch is the effective value (default applied).
+	AllowProviderSwitch bool       `json:"allow_provider_switch"`
+	MainSessionID       string     `json:"main_session_id"`
+	LastActive          *time.Time `json:"last_active"`
+	LastPreview         string     `json:"last_preview"`
+	Status              string     `json:"status"`
 	// Unread is true when the main session moved after the owner last
 	// opened the chat (POST /api/team/agents/{id}/read).
 	Unread bool `json:"unread"`
@@ -130,6 +132,7 @@ type teamAgentWriteReq struct {
 	IncludeNewConnectors *bool                  `json:"include_new_connectors"`
 	RunAs                *string                `json:"run_as"`
 	Disabled             *bool                  `json:"disabled"`
+	AllowProviderSwitch  *bool                  `json:"allow_provider_switch"`
 	IsCaptain            *bool                  `json:"is_captain"`
 }
 
@@ -404,6 +407,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		IncludeNewConnectors: p.IncludeNewConnectors,
 		RunAs:                team.NormalizeRunAs(p.RunAs),
 		Disabled:             p.Disabled,
+		AllowProviderSwitch:  team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain),
 		Status:               string(session.StatusIdle),
 	}
 	if p.ProjectID != "" {
@@ -764,6 +768,10 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	}
 	if req.Disabled != nil {
 		p.Disabled = *req.Disabled
+	}
+	if req.AllowProviderSwitch != nil {
+		v := *req.AllowProviderSwitch
+		p.AllowProviderSwitch = &v
 	}
 	if req.Features != nil {
 		p.Features = team.EncodeFeatures(*req.Features)

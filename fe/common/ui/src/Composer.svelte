@@ -33,6 +33,10 @@
     /** localStorage key for the notification-bell preference; omit to hide the bell. */
     notifyKey?: string;
     provider?: ComposerSelect;
+    /** A provider shown but not pickable here: the chip draws its icon and
+        a click calls onClick instead of opening the picker. Used when
+        `provider` is omitted. */
+    providerChip?: { value: string; title: string; onClick: () => void };
     project?: ComposerSelect;
     preset?: ComposerSelect;
     /** `@` mention: client-side fallback list used only when onSearchFiles is absent. */
@@ -73,6 +77,7 @@
     requireContent = true,
     notifyKey,
     provider,
+    providerChip,
     project,
     preset,
     mentionFiles = [],
@@ -1511,6 +1516,16 @@
         >
           {@render provIcon(provider.value, "h-5 w-5")}
           {#if selBadge(provider)}<span class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 ring-2 ring-white-100 dark:ring-navy-700" aria-hidden="true"></span>{/if}
+        </button>
+      {:else if providerChip}
+        <button
+          type="button"
+          aria-label="Provider"
+          title={providerChip.title}
+          onclick={providerChip.onClick}
+          class="inline-flex items-center justify-center h-8 w-8 shrink-0 rounded-lg border border-white-300 dark:border-navy-600 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600 transition-colors"
+        >
+          {@render provIcon(providerChip.value, "h-5 w-5")}
         </button>
       {/if}
       <button

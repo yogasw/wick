@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { FEATURE_TABS, composerPlaceholder, connectorCaption, hiddenTabNote, hiddenTabsFor, railShownNote } from "../agentMode.js";
+import { FEATURE_TABS, composerPlaceholder, providerLocked, connectorCaption, hiddenTabNote, hiddenTabsFor, railShownNote } from "../agentMode.js";
 
 describe("hiddenTabNote", () => {
   it("is empty when nothing is hidden", () => {
@@ -48,5 +48,22 @@ describe("feature flags", () => {
     expect(railShownNote(null)).toBe(
       "rail shows: Source, Routines, Files, Process, Browser, Sub-agents, Notes, Ticket, Workspace, Todos",
     );
+  });
+});
+
+describe("providerLocked", () => {
+  it("anything goes before the first message", () => {
+    expect(providerLocked(false, "claude/claude", "codex/codex")).toBe(false);
+  });
+  it("another provider is refused once the chat started", () => {
+    expect(providerLocked(true, "claude/claude", "codex/codex::gpt-5")).toBe(true);
+    expect(providerLocked(true, "claude", "codex/codex")).toBe(true);
+  });
+  it("another model of the same provider is fine", () => {
+    expect(providerLocked(true, "claude/claude", "claude/claude::opus")).toBe(false);
+    expect(providerLocked(true, "claude", "claude/claude::sonnet")).toBe(false);
+  });
+  it("a started chat on the wick default is fixed too", () => {
+    expect(providerLocked(true, "", "codex/codex")).toBe(true);
   });
 });

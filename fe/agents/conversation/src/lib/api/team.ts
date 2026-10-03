@@ -35,6 +35,9 @@ export type AgentItem = {
   /** Whose access a turn runs with; rows older than the field read "caller". */
   run_as?: "caller" | "owner";
   disabled: boolean;
+  /** Whether the chat may pick another provider/model (server applies
+      the default: Captain on, others off). */
+  allow_provider_switch?: boolean;
   main_session_id: string;
   last_active: string | null;
   last_preview: string;
@@ -70,6 +73,7 @@ export type AgentWrite = Partial<{
   include_new_connectors: boolean;
   run_as: "caller" | "owner";
   disabled: boolean;
+  allow_provider_switch: boolean;
   is_captain: boolean;
 }>;
 

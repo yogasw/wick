@@ -34,7 +34,7 @@
     handle: string; name: string; description: string; system_prompt: string;
     pick: string; features: AgentFeatures; avatar: { shape: string; color: string };
     project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; run_as: "caller" | "owner";
-    disabled: boolean;
+    disabled: boolean; allow_provider_switch: boolean;
   };
   function draftOf(a: AgentItem): Draft {
     return {
@@ -43,7 +43,7 @@
       features: { ...a.features }, avatar: { ...a.avatar }, project_id: a.project_id,
       grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
       include_new_connectors: a.include_new_connectors, run_as: a.run_as ?? "caller",
-      disabled: a.disabled,
+      disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch,
     };
   }
   let draft = $state<Draft>(untrack(() => draftOf(agent)));
@@ -153,6 +153,7 @@
     if (d.include_new_connectors !== agent.include_new_connectors) p.include_new_connectors = d.include_new_connectors;
     if (d.run_as !== (agent.run_as ?? "caller")) p.run_as = d.run_as;
     if (d.disabled !== agent.disabled) p.disabled = d.disabled;
+    if (d.allow_provider_switch !== !!agent.allow_provider_switch) p.allow_provider_switch = d.allow_provider_switch;
     return p;
   });
   const dirty = $derived(Object.keys(patch).length > 0);
@@ -403,6 +404,12 @@
         onChange={(v) => (draft.pick = v)}
         placeholder="Default project"
       />
+    </div>
+    <div>
+      <Toggle checked={draft.allow_provider_switch} onChange={(v) => (draft.allow_provider_switch = v)} label="Allow provider switch in chat" />
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
+        Off: every chat uses the provider above. On: a chat can pick another provider before its first message, and another model of the same provider any time. Neither changes the agent's default.
+      </p>
     </div>
     <div class="space-y-3 border-t border-white-300 pt-4 dark:border-navy-600">
       <p class="text-sm font-semibold text-neg-400">Danger zone</p>

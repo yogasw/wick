@@ -19,7 +19,7 @@
   import { currentApproval, showApproval, hideApproval, isExpiredApprovalError } from "../stores/approvals.js";
   import { notify } from "../notify.js";
   import { push } from "../router.js";
-  import { composerPlaceholder, hiddenTabNote, type AgentMode, type RailTab } from "../agentMode.js";
+  import { composerPlaceholder, hiddenTabNote, providerLocked, type AgentMode, type RailTab } from "../agentMode.js";
   import { bareToolName } from "../todoGroups.js";
   import { readScmWidth, writeScmWidth, clampScmWidth, RAIL_GUTTER_PX } from "../scmWidth.js";
   import { isValidFileName } from "../fileName.js";
@@ -585,6 +585,25 @@
     loadModels: loadProviderModels,
     showCapabilities: capsPrefs.show,
     capabilityMode: capsPrefs.mode,
+  });
+  /* Agent mode: the provider chip follows the agent's switch setting.
+     On, the picker works but another provider is refused once the chat
+     has turns; off, the chip only explains where to change it. */
+  let providerNotice = $state<"started" | "locked" | null>(null);
+  const agentProviderSelect = $derived({
+    ...providerSelect,
+    onChange: (v: string) => {
+      if (providerLocked(turns.length > 0, activeProvider, v)) providerNotice = "started";
+      else void handleProviderChange(v);
+    },
+  });
+  const effectiveProvider = $derived(
+    (activeProvider ? activeProvider : "wick default") + (activeModelID ? ` / ${activeModelID}` : ""),
+  );
+  const agentProviderChip = $derived({
+    value: activeProvider ? normKey(activeProvider) : "",
+    title: effectiveProvider,
+    onClick: () => (providerNotice = "locked"),
   });
   const projectSelect = $derived({
     options: [
@@ -2564,7 +2583,8 @@
             onSend={handleSend}
             placeholder={agentMode?.agent ? composerPlaceholder(agentMode.agent.name) : "Ask anything…   / commands · @ files"}
             notifyKey={NOTIFY_KEY}
-            provider={agentMode?.hidePickers ? undefined : providerSelect}
+            provider={!agentMode?.hidePickers ? providerSelect : agentMode.providerSwitch ? agentProviderSelect : undefined}
+            providerChip={agentMode?.hidePickers && !agentMode.providerSwitch ? agentProviderChip : undefined}
             project={agentMode?.hidePickers ? undefined : projectSelect}
             onSearchFiles={searchMentionFiles}
             mentionAgents={mentionableAgents}
@@ -3262,6 +3282,23 @@
     onChanged={loadSubAgents}
   />
 {/if}
+
+<ConfirmDialog
+  open={providerNotice !== null}
+  title={providerNotice === "started" ? "Provider is fixed for this chat" : "Provider is set by the agent"}
+  body={providerNotice === "started"
+    ? "Provider can't be changed once a conversation has started. Start a new chat to use a different one."
+    : `This agent always uses ${effectiveProvider}. Change it in agent Settings.`}
+  confirmLabel={providerNotice === "started" ? "New chat" : "Open Settings"}
+  cancelLabel="Close"
+  onConfirm={() => {
+    const n = providerNotice;
+    providerNotice = null;
+    if (n === "started") agentMode?.onNewChat?.();
+    else agentMode?.onOpenSettings?.();
+  }}
+  onCancel={() => (providerNotice = null)}
+/>
 
 <ConfirmDialog
   open={confirmKill !== null}

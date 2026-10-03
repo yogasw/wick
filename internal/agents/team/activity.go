@@ -47,6 +47,16 @@ func CurrentAction(evs []store.TurnEvent) string {
 	return ""
 }
 
+// AllowsProviderSwitch reads AllowProviderSwitch with its default: the
+// Captain may switch provider in chat, every other agent stays on the one
+// its settings name, unless the owner said otherwise.
+func AllowsProviderSwitch(set *bool, isCaptain bool) bool {
+	if set != nil {
+		return *set
+	}
+	return isCaptain
+}
+
 // TurnStatus is the roster status of a session: "running" only while a
 // turn is in flight. metaStatus is the persisted session status, which
 // the pool sets to running at spawn and back to idle only when the

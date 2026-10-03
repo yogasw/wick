@@ -48,6 +48,10 @@ type AgentPersona struct {
 	RunAs string `gorm:"type:varchar(16);not null;default:'caller'" json:"run_as"`
 
 	Disabled bool `gorm:"not null;default:false" json:"disabled"`
+	// AllowProviderSwitch lets the agent's chat pick another provider or
+	// model from the composer. nil = never set: see
+	// team.AllowsProviderSwitch for the default.
+	AllowProviderSwitch *bool `json:"allow_provider_switch"`
 	// LastReadAt is when the owner last opened the agent's chat in the
 	// Team app; activity on the main session after it reads as unread.
 	// nil = never opened. Only the owner chats an agent from the app, so

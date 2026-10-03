@@ -38,7 +38,29 @@ export type AgentMode = {
       that drives the typing bubble, so the host's "typing" cue follows the
       turn instead of waiting for its next roster poll. */
   onTurnChange?: (active: boolean) => void;
+  /** The agent's "Allow provider switch in chat" setting. Off, the
+      composer shows the provider read-only; on, the picker works but the
+      provider itself is fixed once the chat has started. */
+  providerSwitch?: boolean;
+  /** Opens the agent's Settings (the locked-provider modal's button). */
+  onOpenSettings?: () => void;
+  /** Starts a new chat with the agent (the started-chat modal's button). */
+  onNewChat?: () => void;
 };
+
+/** providerLocked says whether picking `next` must be refused: the chat
+    has started and `next` names another provider. A model change within
+    the same provider is fine. Values are "type/name[::model]"; a started
+    chat on the wick default ("") counts as having a provider. */
+export function providerLocked(started: boolean, current: string, next: string): boolean {
+  if (!started) return false;
+  const prov = (v: string) => {
+    const i = v.indexOf("::");
+    const p = i < 0 ? v : v.slice(0, i);
+    return p.includes("/") ? p : `${p}/${p}`;
+  };
+  return prov(current) !== prov(next);
+}
 
 /** What the chat area shows of the agent it talks to. */
 export type AgentIdentity = {

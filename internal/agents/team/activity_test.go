@@ -148,3 +148,13 @@ func TestTurnStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestAllowsProviderSwitch(t *testing.T) {
+	on, off := true, false
+	if !AllowsProviderSwitch(nil, true) || AllowsProviderSwitch(nil, false) {
+		t.Fatal("unset: Captain on, others off")
+	}
+	if AllowsProviderSwitch(&off, true) || !AllowsProviderSwitch(&on, false) {
+		t.Fatal("a stored value wins over the default")
+	}
+}
