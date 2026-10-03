@@ -15,7 +15,8 @@
   } from "../api/team.js";
   import { FEATURE_TABS, type AgentFeatures } from "../agentMode.js";
   import { AVATAR_SHAPES, AVATAR_COLORS } from "../avatarShape.js";
-  import { HANDLE_RE, splitPick, joinPick, destructiveAllowed } from "../agentForm.js";
+  import ConnectorChecklist from "./ConnectorChecklist.svelte";
+  import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, type GrantErrors } from "../agentForm.js";
   import type { SettingsTab } from "../agentsRouter.js";
 
   type Props = {
@@ -33,7 +34,8 @@
   type Draft = {
     handle: string; name: string; description: string; system_prompt: string;
     pick: string; features: AgentFeatures; avatar: { shape: string; color: string };
-    grants: ConnectorGrant[]; include_new_connectors: boolean; disabled: boolean;
+    grants: ConnectorGrant[]; include_new_connectors: boolean; run_as: "caller" | "owner";
+    disabled: boolean;
   };
   function draftOf(a: AgentItem): Draft {
     return {
@@ -41,7 +43,8 @@
       system_prompt: a.system_prompt, pick: joinPick(a.provider, a.model),
       features: { ...a.features }, avatar: { ...a.avatar },
       grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
-      include_new_connectors: a.include_new_connectors, disabled: a.disabled,
+      include_new_connectors: a.include_new_connectors, run_as: a.run_as ?? "caller",
+      disabled: a.disabled,
     };
   }
   let draft = $state<Draft>(untrack(() => draftOf(agent)));
@@ -58,7 +61,8 @@
   let catalog = $state<AgentConnector[]>([]);
   let catalogError = $state("");
   let catalogLoading = $state(true);
-  let connQuery = $state("");
+  let pruned = $state(0);
+  let grantErrors = $state<GrantErrors | null>(null);
   let saving = $state(false);
   let error = $state("");
   let confirmDelete = $state(false);
@@ -66,7 +70,16 @@
   onMount(() => {
     runApi(getProviderOptions(base)).then((p) => { providers = p; }).catch(() => {});
     runApi(listAgentConnectors(base))
-      .then((c) => { catalog = c ?? []; })
+      .then((c) => {
+        catalog = c ?? [];
+        // The server rejects a list naming access the owner lost; drop it
+        // from the draft up front and say so, rather than failing the save.
+        const p = pruneGrants(draft.grants, catalog);
+        if (p.dropped > 0) {
+          draft.grants = p.grants;
+          pruned = p.dropped;
+        }
+      })
       .catch((e) => { catalogError = e instanceof Error ? e.message : String(e); })
       .finally(() => { catalogLoading = false; });
   });
@@ -74,31 +87,6 @@
   const sharedWith = $derived(
     agent.project_id ? agents.filter((a) => a.id !== agent.id && a.project_id === agent.project_id).length : 0,
   );
-
-  /* ── Akses ─────────────────────────────────────────────────────── */
-  const grantOf = (id: string) => draft.grants.find((g) => g.connector_id === id);
-  function toggleConnector(c: AgentConnector, on: boolean) {
-    if (on && !grantOf(c.id)) {
-      // New ticks default to read-only: write access is a deliberate step.
-      draft.grants = [...draft.grants, { connector_id: c.id, accounts: [], level: "read", ops: [] }];
-    } else if (!on) {
-      draft.grants = draft.grants.filter((g) => g.connector_id !== c.id);
-    }
-  }
-  function setLevel(g: ConnectorGrant, level: ConnectorGrant["level"]) {
-    g.level = level;
-    if (level !== "pick") g.ops = [];
-  }
-  function toggleIn(list: string[], v: string, on: boolean): string[] {
-    return on ? (list.includes(v) ? list : [...list, v]) : list.filter((x) => x !== v);
-  }
-  const visibleCatalog = $derived(
-    catalog.filter((c) => {
-      const q = connQuery.trim().toLowerCase();
-      return !q || c.label.toLowerCase().includes(q) || c.key.toLowerCase().includes(q);
-    }),
-  );
-  const risky = $derived(destructiveAllowed(draft.grants, catalog));
 
   /* ── save ──────────────────────────────────────────────────────── */
   const patch = $derived.by((): AgentWrite => {
@@ -119,6 +107,7 @@
       p.allowed_connectors = $state.snapshot(d.grants) as ConnectorGrant[];
     }
     if (d.include_new_connectors !== agent.include_new_connectors) p.include_new_connectors = d.include_new_connectors;
+    if (d.run_as !== (agent.run_as ?? "caller")) p.run_as = d.run_as;
     if (d.disabled !== agent.disabled) p.disabled = d.disabled;
     return p;
   });
@@ -133,9 +122,20 @@
       const next = await runApi(updateAgent(base, agent.id, patch));
       onSaved(next);
       draft = draftOf(next);
+      pruned = 0;
+      grantErrors = null;
       toastOk("Agent disimpan");
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      const ge = parseGrantErrors(msg, catalog);
+      if (ge.general) {
+        grantErrors = null;
+        error = msg;
+      } else {
+        // Item-level rejections are drawn on their rows in Akses.
+        grantErrors = ge;
+        error = tab === "access" ? "" : "Ada akses yang ditolak server — lihat tab Akses.";
+      }
     } finally {
       saving = false;
     }
@@ -246,98 +246,23 @@
     </div>
   {:else if tab === "access"}
     <p class="text-xs text-black-800 dark:text-black-600">
-      Agent hanya bisa memakai connector yang dicentang, dan tidak pernah lebih dari akses kamu sendiri.
+      Daftar connector yang bisa <b>kamu</b> pakai. Centang yang boleh dipakai agent ini; agent tidak pernah
+      mendapat lebih dari akses kamu sendiri.
     </p>
-    <Toggle
-      checked={draft.include_new_connectors}
-      onChange={(v) => (draft.include_new_connectors = v)}
-      label="Sertakan connector baru (read-only)"
+    {#if pruned > 0}
+      <p class="text-xs text-black-800 dark:text-black-600">
+        {pruned} akses lama tidak lagi bisa kamu pakai dan dibuang dari daftar — simpan untuk menerapkan.
+      </p>
+    {/if}
+    <ConnectorChecklist
+      {catalog}
+      loading={catalogLoading}
+      loadError={catalogError}
+      bind:grants={draft.grants}
+      bind:includeNew={draft.include_new_connectors}
+      bind:runAs={draft.run_as}
+      errors={grantErrors}
     />
-    {#if risky.length > 0}
-      <div class="rounded-xl border border-cau-300 bg-cau-50 px-4 py-2 text-xs text-cau-700 dark:border-cau-700 dark:bg-cau-900/20 dark:text-cau-400">
-        <p class="font-medium">Op destructive diizinkan ({risky.length}):</p>
-        <p class="mt-1">{risky.slice(0, 8).join(", ")}{risky.length > 8 ? ", …" : ""}</p>
-      </div>
-    {/if}
-    <input type="search" class={input} bind:value={connQuery} placeholder="Cari connector…" />
-    {#if catalogLoading}
-      <p class="text-sm text-black-800 dark:text-black-600">Memuat connector…</p>
-    {:else if catalogError}
-      <p class="text-sm text-neg-400">{catalogError}</p>
-    {:else if visibleCatalog.length === 0}
-      <p class="text-sm text-black-800 dark:text-black-600">Tidak ada connector.</p>
-    {/if}
-    <ul class="space-y-2">
-      {#each visibleCatalog as c (c.id)}
-        {@const g = grantOf(c.id)}
-        <li class="rounded-xl border border-white-300 px-4 py-2 dark:border-navy-600">
-          <div class="flex items-center gap-3">
-            <input
-              type="checkbox"
-              class="h-4 w-4 accent-green-500"
-              id="conn-{c.id}"
-              checked={!!g}
-              onchange={(e) => toggleConnector(c, (e.currentTarget as HTMLInputElement).checked)}
-            />
-            <label for="conn-{c.id}" class="min-w-0 flex-1">
-              <span class="block truncate text-sm font-medium text-black-900 dark:text-white-100">{c.label}</span>
-              <span class="block truncate text-xs text-black-800 dark:text-black-600">{c.key}</span>
-            </label>
-            {#if g}
-              <select
-                class="rounded-lg border border-white-300 bg-white-100 px-2 py-1 text-xs text-black-900 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
-                value={g.level}
-                onchange={(e) => setLevel(g, (e.currentTarget as HTMLSelectElement).value as ConnectorGrant["level"])}
-                aria-label="Level akses {c.label}"
-              >
-                <option value="all">semua operasi</option>
-                <option value="read">hanya baca</option>
-                <option value="pick">pilih operasi</option>
-              </select>
-            {/if}
-          </div>
-          {#if g && (c.accounts ?? []).length > 0}
-            <div class="mt-2 flex flex-wrap items-center gap-3 pl-8 text-xs text-black-800 dark:text-black-600">
-              <span>akun:</span>
-              <label class="flex items-center gap-1">
-                <input
-                  type="checkbox"
-                  class="accent-green-500"
-                  checked={g.accounts.length === 0}
-                  onchange={(e) => { if ((e.currentTarget as HTMLInputElement).checked) g.accounts = []; }}
-                />semua
-              </label>
-              {#each c.accounts ?? [] as acc (acc.id)}
-                <label class="flex items-center gap-1">
-                  <input
-                    type="checkbox"
-                    class="accent-green-500"
-                    checked={g.accounts.includes(acc.id)}
-                    onchange={(e) => (g.accounts = toggleIn(g.accounts, acc.id, (e.currentTarget as HTMLInputElement).checked))}
-                  />{acc.display_name || acc.id || "bot / instance"}
-                </label>
-              {/each}
-            </div>
-          {/if}
-          {#if g && g.level === "pick"}
-            <div class="mt-2 grid grid-cols-1 gap-1 pl-8 text-xs text-black-900 dark:text-white-100 sm:grid-cols-2">
-              {#each c.ops ?? [] as op (op.key)}
-                <label class="flex items-center gap-1">
-                  <input
-                    type="checkbox"
-                    class="accent-green-500"
-                    checked={g.ops.includes(op.key)}
-                    onchange={(e) => (g.ops = toggleIn(g.ops, op.key, (e.currentTarget as HTMLInputElement).checked))}
-                  />
-                  <span class="truncate">{op.name || op.key}</span>
-                  {#if op.destructive}<span class="text-cau-700 dark:text-cau-400" title="destructive">⚠</span>{/if}
-                </label>
-              {/each}
-            </div>
-          {/if}
-        </li>
-      {/each}
-    </ul>
   {:else if tab === "features"}
     <p class="text-xs text-black-800 dark:text-black-600">Fitur yang dimatikan menyembunyikan tab-nya di rail chat agent.</p>
     <div class="space-y-3">
