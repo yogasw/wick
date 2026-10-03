@@ -204,4 +204,17 @@ describe("ConnectorsIndex", () => {
     await fireEvent.keyDown(window, { key: "/" });
     expect(document.activeElement).toBe(screen.getByLabelText("Search connectors"));
   });
+
+  it("lists service plugins linking to their admin page", async () => {
+    vi.mocked(router.push).mockClear();
+    vi.mocked(api.listServicePlugins).mockResolvedValueOnce([
+      { key: "example_a2a_repeater", name: "A2A repeater", version: "0.1.0", path: "/x/example_a2a_repeater/",
+        status: { state: "running", restarts: 0 }, routes: [], callback_revoked: false },
+    ]);
+    render(ConnectorsIndex);
+    const card = await screen.findByText("A2A repeater");
+    expect(card.closest("a")?.getAttribute("href")).toContain("/services/example_a2a_repeater");
+    await fireEvent.click(card);
+    expect(router.push).toHaveBeenCalledWith("/services/example_a2a_repeater");
+  });
 });

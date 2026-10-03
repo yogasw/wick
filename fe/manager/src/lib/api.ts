@@ -586,6 +586,11 @@ export type ServiceTokenSecret = { token: ServiceToken; secret: string };
 
 const serviceBase = (key: string) => `/manager/api/service-plugins/${encodeURIComponent(key)}`;
 
+/* Admin-only; non-admins get an error and simply see no service section. */
+export function listServicePlugins(): Promise<ServicePlugin[]> {
+  return apiGet<ServicePlugin[]>("/manager/api/service-plugins");
+}
+
 export function getServicePlugin(key: string): Promise<ServicePlugin> {
   return apiGet<ServicePlugin>(serviceBase(key));
 }
