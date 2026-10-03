@@ -168,3 +168,32 @@ func TestScopeForSession(t *testing.T) {
 		t.Fatal("disabled agent must resolve to deny-all, not nil")
 	}
 }
+
+func TestStoreMarkReadSurvivesSave(t *testing.T) {
+	ctx := context.Background()
+	st := NewStore(testDB(t))
+	p := &entity.AgentPersona{OwnerUserID: "u1", Handle: "helper"}
+	if err := st.Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC().Truncate(time.Second)
+	if err := st.MarkRead(ctx, p.ID, at); err != nil {
+		t.Fatalf("mark read: %v", err)
+	}
+	// p still carries LastReadAt nil, as a settings form loaded before the
+	// mark would; saving it must not wipe the mark.
+	p.Disabled = true
+	if err := st.Update(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Get(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastReadAt == nil || !got.LastReadAt.Equal(at) {
+		t.Fatalf("LastReadAt = %v, want %v", got.LastReadAt, at)
+	}
+	if err := st.MarkRead(ctx, "missing", at); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing agent: err = %v, want ErrNotFound", err)
+	}
+}

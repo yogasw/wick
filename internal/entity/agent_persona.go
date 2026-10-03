@@ -47,9 +47,15 @@ type AgentPersona struct {
 	// or "owner" (always the owner). See team.SpawnIdentity.
 	RunAs string `gorm:"type:varchar(16);not null;default:'caller'" json:"run_as"`
 
-	Disabled  bool      `gorm:"not null;default:false" json:"disabled"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Disabled bool `gorm:"not null;default:false" json:"disabled"`
+	// LastReadAt is when the owner last opened the agent's chat in the
+	// Team app; activity on the main session after it reads as unread.
+	// nil = never opened. Only the owner chats an agent from the app, so
+	// one column is the per-(user, agent) read mark. Written by
+	// Store.MarkRead alone — a settings save never touches it.
+	LastReadAt *time.Time `json:"last_read_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 // TableName pins the table name so a rename of the struct cannot move it.

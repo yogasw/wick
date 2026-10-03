@@ -57,6 +57,16 @@ type TeamAgentItem struct {
 	LastActive    *time.Time `json:"last_active"`
 	LastPreview   string     `json:"last_preview"`
 	Status        string     `json:"status"`
+	// Unread is true when the main session moved after the owner last
+	// opened the chat (POST /api/team/agents/{id}/read).
+	Unread bool `json:"unread"`
+	// NeedsAttention is true while the main session waits on the owner:
+	// an ask_user question or a tool approval.
+	NeedsAttention bool `json:"needs_attention"`
+	// CurrentAction names the tool the main session's running turn is
+	// waiting on ("Bash", "query_range"); "" when idle, thinking or
+	// writing.
+	CurrentAction string `json:"current_action"`
 	// SharedWith counts the owner's OTHER agents on the same project, so
 	// the editor can warn that a persona edit changes them too.
 	SharedWith int `json:"shared_with"`
@@ -248,9 +258,41 @@ func timePtr(t time.Time) *time.Time {
 	return &t
 }
 
+// teamLive is the in-memory turn state of every session, read once per
+// response so a roster of N agents costs one pool snapshot rather than N.
+type teamLive struct {
+	actions   map[string]string // session id → CurrentAction
+	approvals map[string]bool   // session id → a tool approval is pending
+}
+
+func teamLiveNow() teamLive {
+	l := teamLive{actions: map[string]string{}, approvals: map[string]bool{}}
+	if globalPool != nil {
+		for _, e := range globalPool.ActiveSnapshot() {
+			if a := team.CurrentAction(e.InFlightEvents); a != "" {
+				l.actions[e.SessionID] = a
+			}
+		}
+	}
+	if globalApprovals != nil {
+		for _, r := range globalApprovals.PendingFor("") {
+			l.approvals[r.SessionID] = true
+		}
+	}
+	return l
+}
+
+// needsAttention reports whether sessionID waits on a person.
+func (l teamLive) needsAttention(sessionID string) bool {
+	if l.approvals[sessionID] {
+		return true
+	}
+	return globalAskUsers != nil && len(globalAskUsers.PendingFor(sessionID)) > 0
+}
+
 // teamAgentToItem renders one row. siblings is the owner's full list, used
 // for SharedWith; pass nil to skip the count.
-func teamAgentToItem(p entity.AgentPersona, siblings []entity.AgentPersona) TeamAgentItem {
+func teamAgentToItem(p entity.AgentPersona, siblings []entity.AgentPersona, live teamLive) TeamAgentItem {
 	it := TeamAgentItem{
 		ID: p.ID, Handle: p.Handle, IsCaptain: p.IsCaptain, ProjectID: p.ProjectID,
 		Name:                 p.Handle,
@@ -277,6 +319,11 @@ func teamAgentToItem(p entity.AgentPersona, siblings []entity.AgentPersona) Team
 		it.MainSessionID = s.ID
 		it.LastActive = timePtr(s.Meta.LastActive)
 		it.Status = string(s.Meta.Status)
+		it.Unread = team.Unread(s.Meta.LastActive, p.LastReadAt)
+		it.NeedsAttention = live.needsAttention(s.ID)
+		if it.Status != string(session.StatusIdle) {
+			it.CurrentAction = live.actions[s.ID]
+		}
 		// The preview is left empty on purpose for now: the last message
 		// lives in conversation.jsonl, and reading one file per agent on
 		// every roster load is the cost the sidebar was built to avoid.
@@ -414,8 +461,9 @@ func apiTeamAgentList(c *tool.Ctx) {
 	}
 	items := make([]TeamAgentItem, 0, len(rows))
 	captainID := ""
+	live := teamLiveNow()
 	for _, r := range rows {
-		items = append(items, teamAgentToItem(r, rows))
+		items = append(items, teamAgentToItem(r, rows, live))
 		if r.IsCaptain {
 			captainID = r.ID
 		}
@@ -498,7 +546,7 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		return
 	}
 	rows, _ := globalTeam.List(c.Context(), actorID(c))
-	c.JSON(http.StatusOK, teamAgentToItem(*p, rows))
+	c.JSON(http.StatusOK, teamAgentToItem(*p, rows, teamLiveNow()))
 }
 
 // apiTeamAgentUpdate handles PATCH /api/team/agents/{id}.
@@ -581,7 +629,7 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 		return
 	}
 	rows, _ := globalTeam.List(c.Context(), actorID(c))
-	c.JSON(http.StatusOK, teamAgentToItem(p, rows))
+	c.JSON(http.StatusOK, teamAgentToItem(p, rows, teamLiveNow()))
 }
 
 // apiTeamAgentDelete handles DELETE /api/team/agents/{id}. Only the row goes;
@@ -740,6 +788,24 @@ func createTeamAgentSession(c *tool.Ctx, p entity.AgentPersona, main bool) (stri
 		}
 	}
 	return id, nil
+}
+
+// apiTeamAgentRead handles POST /api/team/agents/{id}/read: the owner opened
+// the agent's chat, so what it has said so far is read.
+func apiTeamAgentRead(c *tool.Ctx) {
+	if !teamReady(c) {
+		return
+	}
+	p, ok := loadOwnTeamAgent(c)
+	if !ok {
+		return
+	}
+	now := time.Now().UTC()
+	if err := globalTeam.MarkRead(c.Context(), p.ID, now); err != nil {
+		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"status": "ok", "last_read_at": now})
 }
 
 // apiTeamAgentSessions handles GET /api/team/agents/{id}/sessions.

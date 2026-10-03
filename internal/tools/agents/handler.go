@@ -348,6 +348,7 @@ func Register(r tool.Router) {
 	r.DELETE("/api/team/agents/{id}", apiTeamAgentDelete)
 	r.POST("/api/team/agents/{id}/chat", apiTeamAgentChat)
 	r.GET("/api/team/agents/{id}/sessions", apiTeamAgentSessions)
+	r.POST("/api/team/agents/{id}/read", apiTeamAgentRead)
 
 	r.GET("/api/presets", apiPresetList)
 	r.GET("/api/presets/{name}", apiPresetDetail)

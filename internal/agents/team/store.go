@@ -152,7 +152,7 @@ func (s *Store) save(ctx context.Context, p *entity.AgentPersona, create bool) e
 			p.CreatedAt = now
 			return tx.Create(p).Error
 		}
-		res := tx.Model(&entity.AgentPersona{}).Where("id = ?", p.ID).Select("*").Omit("created_at").Updates(p)
+		res := tx.Model(&entity.AgentPersona{}).Where("id = ?", p.ID).Select("*").Omit("created_at", "last_read_at").Updates(p)
 		if res.Error != nil {
 			return res.Error
 		}
@@ -161,6 +161,19 @@ func (s *Store) save(ctx context.Context, p *entity.AgentPersona, create bool) e
 		}
 		return nil
 	})
+}
+
+// MarkRead stamps the agent's read mark at t. The column alone is written,
+// so UpdatedAt is left as the last settings change.
+func (s *Store) MarkRead(ctx context.Context, id string, t time.Time) error {
+	res := s.db.WithContext(ctx).Model(&entity.AgentPersona{}).Where("id = ?", id).UpdateColumn("last_read_at", t.UTC())
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // Delete removes the row. The project and sessions it pointed at stay:
