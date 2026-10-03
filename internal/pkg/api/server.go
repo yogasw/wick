@@ -58,11 +58,13 @@ import (
 	"github.com/yogasw/wick/internal/agents/ticketprompt"
 	"github.com/yogasw/wick/internal/agents/todoprompt"
 	// systemprompt "github.com/yogasw/wick/internal/agents/system-prompt" // disabled: ConnectorCatalog injection (see ConnectorCatalogLoader below)
+	"github.com/yogasw/wick/internal/agents/aigen"
 	"github.com/yogasw/wick/internal/agents/clitoken"
 	"github.com/yogasw/wick/internal/agents/teamlink"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
 	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
+	wfprovider "github.com/yogasw/wick/internal/agents/workflow/provider"
 	wfsetup "github.com/yogasw/wick/internal/agents/workflow/setup"
 	wfstate "github.com/yogasw/wick/internal/agents/workflow/state"
 	wftrigger "github.com/yogasw/wick/internal/agents/workflow/trigger"
@@ -1742,6 +1744,34 @@ func NewServer() *Server {
 		}
 		return out
 	})
+	// Generate jobs ("✨ Generate" buttons, the paste page's AI tab) run
+	// queued behind the agent pool: each borrows a pool slot before it
+	// forks a CLI, so a burst of clicks waits in line instead of
+	// overloading the host. The provider defaults to the operator's
+	// default_provider, read live.
+	aigenSvc := aigen.New(aigen.Config{
+		Gate: aigen.GateFunc(func(key, pType, pName string) (func(), bool) {
+			if agentsPool == nil {
+				return func() {}, true
+			}
+			return agentsPool.TryLease(key, pType, pName)
+		}),
+		Resolve: aigen.ListResolver(wfsetup.NewCLIProviders, func() string {
+			return configsSvc.GetOwned("agents", "default_provider")
+		}),
+	})
+	aigenSvc.Register(aigen.Kind{
+		Name:     "connector-parse",
+		MaxInput: 8 * 1024,
+		Validate: func(in aigen.Input) error { return customconn.CheckPasteSize(in.Text) },
+		Build: func(in aigen.Input) (wfprovider.StructuredRequest, error) {
+			return customconn.AIParseRequest(in.Text), nil
+		},
+		Finish: func(res wfprovider.StructuredResult) (any, error) {
+			return customconn.DraftFromAIResult(res)
+		},
+	})
+	aigenHandler := aigen.NewHandler(aigenSvc)
 	if err := customConnSvc.RegisterAllAtBoot(context.Background()); err != nil {
 		log.Error().Err(err).Msg("custom connectors: boot registration failed")
 	}
@@ -2740,6 +2770,9 @@ func NewServer() *Server {
 
 	// Bookmark API (auth-gated inside)
 	bookmarkHandler.Register(r, authMidd)
+
+	// Queued LLM generate jobs (auth-gated inside, owner-scoped).
+	aigenHandler.Register(r, authMidd)
 
 	// Notification API (auth-gated inside)
 	pushHandler.Register(r, authMidd)

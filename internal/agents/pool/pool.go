@@ -79,6 +79,9 @@ type Pool struct {
 	spawningKeys map[string]struct{}  // sessions mid-spawn: slot reserved, not yet in active
 	queue        []queueEntry
 	buffers      map[string]*Buffer // per-session buffer, lazily created
+	// leases are slots held by work that is not a session subprocess
+	// (one-shot LLM helpers, see lease.go). Lazily created; guarded by mu.
+	leases map[string]leaseEntry
 	// crashes tracks recent unexplained deaths per agent so a restart
 	// budget can be enforced. Lazily created; see crashrecovery.go.
 	crashes map[string]*crashState

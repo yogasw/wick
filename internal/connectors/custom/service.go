@@ -731,12 +731,15 @@ func serverIDOf(d *Draft) string {
 
 // ── paste parsing ────────────────────────────────────────────────────
 
+// maxPasteBytes caps one paste; one endpoint never needs more.
+const maxPasteBytes = 8 * 1024
+
 // ParsePaste runs the requested parser over the paste box content and
 // returns the review-form draft. parser is "curl" (deterministic,
 // default) or "ai" (LLM extraction; requires a configured provider).
 func (s *Service) ParsePaste(ctx context.Context, parser, provider, paste string) (*Draft, error) {
-	if len(paste) > 8*1024 {
-		return nil, fmt.Errorf("paste is larger than 8 KB — trim it down to a single endpoint")
+	if err := CheckPasteSize(paste); err != nil {
+		return nil, err
 	}
 	switch parser {
 	case "", "curl":
