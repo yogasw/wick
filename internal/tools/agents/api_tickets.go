@@ -920,6 +920,11 @@ func notesScopeFromQuery(c *tool.Ctx) (notes.Scope, bool) {
 	if !ok || !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants) {
 		return notes.Scope{}, false
 	}
+	// A shared agent's chat lives in the owner's project; its notes are
+	// the owner's, whoever else might reach the project.
+	if _, shared := sharedChatAgent(c.Context(), sess); shared {
+		return notes.Scope{}, false
+	}
 	sc, err := notes.Resolve(globalLayout, sid)
 	if err != nil {
 		return notes.Scope{}, false

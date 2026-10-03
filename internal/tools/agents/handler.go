@@ -242,6 +242,8 @@ func Register(r tool.Router) {
 	r.Use("/api/sessions/{id}", sessionAccessMW)
 	r.Use("/projects/{id}", projectAccessMW)
 	r.Use("/api/projects/{id}", projectAccessMW)
+	// A shared agent's chat is chat only: its rail is the owner's project.
+	registerSharedChatRailGuard(r)
 
 	r.GET("/", newSessionCompose)
 	r.POST("/", startNewSession)

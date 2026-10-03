@@ -356,3 +356,48 @@ func sharedChatAllowed(ctx context.Context, userID string, sess session.Session,
 	_, err := globalTeam.ShareOf(ctx, p.ID, userID)
 	return err == nil
 }
+
+// errSharedRail answers a share recipient who reaches for the rail of a
+// shared agent's chat. The chat lives in the owner's project, so its
+// files, repos, processes and the rest are the owner's: sharing hands over
+// the conversation, never the project.
+const errSharedRail = "this agent is shared with you for chat only"
+
+// sharedChatRailPrefixes are the session subtrees that read or change the
+// project a session lives in — every rail tab, plus moving the session to
+// another project. The chat itself (send, conversation, meta, answers,
+// approvals, stop, uploads, turn traces) stays open to the recipient.
+var sharedChatRailPrefixes = []string{
+	"/sessions/{id}/files",
+	"/sessions/{id}/processes",
+	"/sessions/{id}/workspace",
+	"/sessions/{id}/schedules",
+	"/sessions/{id}/project",
+	"/api/sessions/{id}/subagents",
+	"/api/sessions/{id}/team-tasks",
+	"/api/sessions/{id}/todos",
+	"/api/sessions/{id}/git",
+}
+
+// registerSharedChatRailGuard puts sharedChatRailMW on every rail subtree.
+func registerSharedChatRailGuard(r tool.Router) {
+	for _, p := range sharedChatRailPrefixes {
+		r.Use(p, sharedChatRailMW)
+	}
+}
+
+// sharedChatRailMW answers 403 on a rail route of a shared agent's chat.
+// sessionAccessMW runs first, so only the recipient gets this far.
+func sharedChatRailMW(next tool.HandlerFunc) tool.HandlerFunc {
+	return func(c *tool.Ctx) {
+		if globalMgr != nil {
+			if sess, ok := globalMgr.Registry().Session(c.PathValue("id")); ok {
+				if _, shared := sharedChatAgent(c.Context(), sess); shared {
+					c.JSON(http.StatusForbidden, map[string]string{"error": errSharedRail})
+					return
+				}
+			}
+		}
+		next(c)
+	}
+}
