@@ -218,6 +218,58 @@
     }, 3000);
   }
 
+  // TEST_PUSH_DELAY gives the user time to close the window before the
+  // test lands, so they see the OS notification and not just the page.
+  // The server holds the delay: a closed window runs no JS.
+  var TEST_PUSH_DELAY = 5;
+
+  // sendTestPush asks the server for a test push, optionally delayed. The
+  // Send test button stays disabled through the countdown so a second
+  // click does not queue a second push. A failed send (an expired
+  // subscription answers 410 at the push service) says so and points at
+  // Refresh device instead of claiming success.
+  async function sendTestPush(btn, delay) {
+    var label = btn ? btn.textContent : '';
+    if (btn) btn.disabled = true;
+    var sub = await currentSubscription();
+    var res;
+    try {
+      res = await fetch('/api/push/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: sub ? sub.endpoint : '', delay_seconds: delay }),
+      });
+    } catch (err) {
+      if (btn) btn.disabled = false;
+      throw err;
+    }
+    if (!res.ok) {
+      if (btn) btn.disabled = false;
+      var msg = (await res.text().catch(function () { return ''; })).trim();
+      showToast('Test notification failed' + (msg ? ': ' + msg : '') + '. Try Refresh device, then send again.', 'bad');
+      return;
+    }
+    if (!delay) {
+      if (btn) btn.disabled = false;
+      showToast('Test notification sent.', 'ok');
+      return;
+    }
+    showToast('Test notification in ' + delay + 's — close this window now to check OS notifications.', 'ok');
+    var left = delay;
+    var tick = function () {
+      if (!btn) return;
+      if (left <= 0) {
+        btn.textContent = label;
+        btn.disabled = false;
+        return;
+      }
+      btn.textContent = 'Sending in ' + left + '…';
+      left -= 1;
+      window.setTimeout(tick, 1000);
+    };
+    tick();
+  }
+
   // Lifecycle chime — a pre-rendered two-tone WAV (E5 → A5) played
   // through an HTMLAudioElement. Deliberately NOT WebAudio: on macOS,
   // `new AudioContext()` blocks the main thread synchronously while
@@ -514,7 +566,8 @@
     var actions = document.getElementById('push-device-actions');
     if (actions) {
       actions.innerHTML = '<button type="button" id="push-enable-btn" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 transition-colors hover:bg-green-600">' + (sub ? 'Refresh device' : 'Enable notifications') + '</button>' +
-        '<button type="button" id="push-test-btn" class="rounded-lg border border-white-400 bg-white-100 px-4 py-2 text-sm font-medium text-black-800 transition-colors hover:border-green-400 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">Send test</button>';
+        '<button type="button" id="push-test-btn" class="rounded-lg border border-white-400 bg-white-100 px-4 py-2 text-sm font-medium text-black-800 transition-colors hover:border-green-400 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">Send test</button>' +
+        '<button type="button" id="push-test-now-btn" class="px-2 py-2 text-xs text-black-800 underline-offset-2 hover:underline dark:text-black-600">Send now</button>';
     }
   }
 
@@ -754,6 +807,7 @@
     var bell = e.target.closest('#push-bell-btn');
     var enable = e.target.closest('#push-enable-btn');
     var test = e.target.closest('#push-test-btn');
+    var testNow = e.target.closest('#push-test-now-btn');
     var remove = e.target.closest('[data-push-remove]');
     var copyID = e.target.closest('#push-copy-id-btn');
     var queueBell = e.target.closest('[data-queue-notify]');
@@ -877,16 +931,8 @@
         await refreshProfile();
         await hydrateBell();
       }
-      if (test) {
-        test.disabled = true;
-        var sub = await currentSubscription();
-        await fetch('/api/push/test', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ endpoint: sub ? sub.endpoint : '' }),
-        });
-        test.disabled = false;
-        showToast('Test notification sent.', 'ok');
+      if (test || testNow) {
+        await sendTestPush(test, test ? TEST_PUSH_DELAY : 0);
       }
       if (remove) {
         remove.disabled = true;

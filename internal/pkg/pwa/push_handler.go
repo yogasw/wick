@@ -1,8 +1,12 @@
 package pwa
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/login"
 )
@@ -10,11 +14,28 @@ import (
 type PushHandler struct {
 	svc  *PushService
 	auth *login.Service
+	// sendTest and after are the seams the handler tests replace; they
+	// default to the service and time.AfterFunc.
+	sendTest func(ctx context.Context, userID, endpoint string) (int, error)
+	after    func(d time.Duration, f func())
 }
 
 func NewPushHandler(svc *PushService, auth *login.Service) *PushHandler {
-	return &PushHandler{svc: svc, auth: auth}
+	return &PushHandler{
+		svc:      svc,
+		auth:     auth,
+		sendTest: svc.SendTest,
+		after:    func(d time.Duration, f func()) { time.AfterFunc(d, f) },
+	}
 }
+
+// maxTestDelay caps a delayed test push: long enough to close the window
+// and look at the OS, short enough that nobody forgets they asked.
+const maxTestDelay = 30
+
+// testSendTimeout bounds the delayed send, which runs after the request
+// (and its context) is gone.
+const testSendTimeout = 30 * time.Second
 
 func (h *PushHandler) Register(mux *http.ServeMux, midd *login.Middleware) {
 	auth := func(next http.HandlerFunc) http.Handler {
@@ -80,11 +101,32 @@ func (h *PushHandler) unsubscribe(w http.ResponseWriter, r *http.Request) {
 
 func (h *PushHandler) test(w http.ResponseWriter, r *http.Request) {
 	user := login.GetUser(r.Context())
+	if user == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	var req struct {
-		Endpoint string `json:"endpoint"`
+		Endpoint     string `json:"endpoint"`
+		DelaySeconds int    `json:"delay_seconds"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	sent, err := h.svc.SendTest(r.Context(), user.ID, req.Endpoint)
+	// A delay lets the user close the window first and see the OS
+	// notification land. It has to run here: a closed tab runs no JS.
+	if delay := min(max(req.DelaySeconds, 0), maxTestDelay); delay > 0 {
+		userID, endpoint := user.ID, req.Endpoint
+		h.after(time.Duration(delay)*time.Second, func() {
+			ctx, cancel := context.WithTimeout(context.Background(), testSendTimeout)
+			defer cancel()
+			if sent, err := h.sendTest(ctx, userID, endpoint); err != nil && sent == 0 {
+				log.Warn().Err(err).Str("user", userID).Msg("pwa: delayed test push failed")
+			}
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{"scheduled": true, "delay_seconds": delay})
+		return
+	}
+	sent, err := h.sendTest(r.Context(), user.ID, req.Endpoint)
 	if err != nil && sent == 0 {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
