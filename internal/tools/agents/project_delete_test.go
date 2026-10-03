@@ -11,6 +11,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/entity"
 )
 
@@ -175,5 +176,20 @@ func TestProjectDeletePreviewJSON(t *testing.T) {
 	var got projectDeletePreview
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got.Chats != 1 || got.Name != "pv" {
 		t.Fatalf("preview %d %s (%v)", w.Code, w.Body, err)
+	}
+}
+
+func TestWorkflowsBoundTo(t *testing.T) {
+	wfs := []workflow.Workflow{
+		{ID: "w1", Name: "Nightly digest", Graph: workflow.Graph{Nodes: []workflow.Node{{ID: "a", Workspace: "pv"}, {ID: "b", Workspace: "pv"}}}},
+		{ID: "w2", Graph: workflow.Graph{Nodes: []workflow.Node{{ID: "a", Workspace: "pv"}}}},
+		{ID: "w3", Name: "Other", Graph: workflow.Graph{Nodes: []workflow.Node{{ID: "a", Workspace: "elsewhere"}, {ID: "b"}}}},
+	}
+	got := workflowsBoundTo(wfs, "pv")
+	if len(got) != 2 || got[0] != "Nightly digest" || got[1] != "w2" {
+		t.Fatalf("got %v", got)
+	}
+	if got := workflowsBoundTo(wfs, ""); len(got) != 0 {
+		t.Fatalf("empty project id matched %v", got)
 	}
 }

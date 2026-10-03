@@ -13,6 +13,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/provider/claude"
 	"github.com/yogasw/wick/internal/agents/provider/logintty"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -47,6 +48,10 @@ type projectDeletePreview struct {
 	// the agent) if it is converted.
 	Channels  []string `json:"channels"`
 	Schedules int64    `json:"schedules"`
+	// Workflows names the workflows with a node bound to this project —
+	// they keep sending into it after a convert, and lose their target
+	// after a delete.
+	Workflows []string `json:"workflows"`
 }
 
 func previewProjectDelete(ctx context.Context, p project.Project) projectDeletePreview {
@@ -62,7 +67,54 @@ func previewProjectDelete(ctx context.Context, p project.Project) projectDeleteP
 	if globalSchedule != nil {
 		pv.Schedules, _ = globalSchedule.CountTargeting(ctx, p.Meta.ID, sids)
 	}
+	pv.Workflows = projectWorkflows(p.Meta.ID)
 	return pv
+}
+
+// projectWorkflows lists the names of the workflows that bind a node to
+// projectID. A workflow that fails to load is skipped: the preview is a
+// heads-up, not a gate.
+func projectWorkflows(projectID string) []string {
+	if globalWorkflowMgr == nil || globalWorkflowMgr.Service == nil {
+		return []string{}
+	}
+	ids, err := globalWorkflowMgr.Service.List()
+	if err != nil {
+		return []string{}
+	}
+	var wfs []workflow.Workflow
+	for _, id := range ids {
+		if w, err := globalWorkflowMgr.Service.Load(id); err == nil {
+			wfs = append(wfs, w)
+		}
+	}
+	return workflowsBoundTo(wfs, projectID)
+}
+
+// workflowsBoundTo returns, sorted, the names (id when unnamed) of the
+// workflows with a node whose project binding is projectID.
+func workflowsBoundTo(wfs []workflow.Workflow, projectID string) []string {
+	out := []string{}
+	if projectID == "" {
+		return out
+	}
+	for _, w := range wfs {
+		for _, n := range w.Graph.Nodes {
+			if n.Workspace != projectID {
+				continue
+			}
+			name := w.Name
+			if name == "" {
+				name = w.ID
+			}
+			if !slices.Contains(out, name) {
+				out = append(out, name)
+			}
+			break
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // projectChannels lists the distinct channels (origin + channel id) the
