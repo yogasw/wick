@@ -26,7 +26,9 @@ describe("ConnectorChecklist", () => {
     await fireEvent.click(screen.getByRole("tab", { name: /Platform/ }));
     expect(screen.getByText("Notes")).toBeTruthy();
     expect(screen.queryByText("Slack")).toBeNull();
-    expect(screen.getAllByRole("radio", { name: "Default (Write)" }).length).toBe(2);
+    expect(screen.getAllByRole("radio", { name: "Default (Write)" }).length).toBe(1);
+    // wick's own tools only know on and off.
+    expect(screen.getAllByRole("radio", { name: "Default (On)" }).length).toBe(1);
     unmount();
     render(ConnectorChecklist, { props: { catalog: catalog.filter((x) => x.tier !== "system"), grants: [] } });
     expect(screen.queryByRole("tab", { name: /System/ })).toBeNull();

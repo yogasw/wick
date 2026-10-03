@@ -67,6 +67,9 @@
     tier === "connectors" && (adding || query.trim() !== "") ? rows.filter((c) => !grantOf(c.id)) : [],
   );
   // Write ops the Connectors list grants, by their real op keys.
+  // Bulk level applies to the granted rows, or to every shown row while
+  // adding/searching (Connectors), or to every shown row (Platform/System).
+  const bulkTargets = $derived(tier === "connectors" ? [...granted, ...addable] : rows);
   const writes = $derived.by(() => {
     const out: string[] = [];
     for (const g of grants) {
@@ -165,10 +168,10 @@
   {/if}
 </div>
 <div class="flex flex-wrap items-center gap-2 text-xs text-black-800 dark:text-black-600">
-  <span>Set level for {tier === "connectors" ? (addable.length > 0 ? "shown" : "granted") : "shown"} ({tier === "connectors" ? (addable.length > 0 ? addable.length + granted.length : granted.length) : rows.length}):</span>
+  <span>Set level for {tier === "connectors" && addable.length === 0 ? "granted" : "shown"} ({bulkTargets.length}):</span>
   {#each [["read", "Read"], ["all", "Write"], ["off", tier === "connectors" ? "Off (clear)" : "Off"]] as [lv, name] (lv)}
-    <button type="button" class={btn} disabled={rows.length === 0}
-      onclick={() => (grants = setLevelFor(grants, tier === "connectors" && addable.length === 0 ? granted : rows, lv as "read" | "all" | "off"))}>{name}</button>
+    <button type="button" class={btn} disabled={bulkTargets.length === 0}
+      onclick={() => (grants = setLevelFor(grants, bulkTargets, lv as "read" | "all" | "off"))}>{name}</button>
   {/each}
 </div>
 
@@ -291,7 +294,7 @@
             <span class="block truncate text-xs text-black-800 dark:text-black-600">{c.description || c.key}</span>
           </span>
           <div class="inline-flex" role="radiogroup" aria-label="Access for {c.label}">
-            {#each (c.tool ? [["default", `Default (${levelName[def]})`], ["off", "Off"], ["all", "On"]] : [["default", `Default (${levelName[def]})`], ["off", "Off"], ["read", "Read"], ["all", "Write"], ["pick", "Pick ops"]]) as [o, name] (o)}
+            {#each (c.tool ? [["default", `Default (${def === "all" ? "On" : "Off"})`], ["off", "Off"], ["all", "On"]] : [["default", `Default (${levelName[def]})`], ["off", "Off"], ["read", "Read"], ["all", "Write"], ["pick", "Pick ops"]]) as [o, name] (o)}
               <button type="button" role="radio" aria-checked={ov === o} class="{seg} {ov === o ? segOn : segOff}" onclick={() => setOv(c, o as Override)}>{name}</button>
             {/each}
           </div>
