@@ -5,18 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
-	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/agents/remote"
 )
 
 // Runtime is what one remote agent session needs: its settings, the auth
@@ -29,15 +27,16 @@ type Runtime struct {
 }
 
 // Spawner is a provider.Spawner with no process: Spawn returns a Process
-// whose turns are A2A calls.
+// whose turns are A2A calls, run by the generic remote runner over Source.
 type Spawner struct{ Runtime Runtime }
+
+// Spawn starts the turn loop.
+func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider.Process, error) {
+	return remote.Spawner{Source: NewSource(s.Runtime)}.Spawn(ctx, opt)
+}
 
 // pollInterval spaces GetTask calls while a non-streaming task works.
 var pollInterval = time.Second
-
-// heartbeatEvery keeps the pool's idle timer from reaping a session whose
-// remote is silent mid-turn.
-var heartbeatEvery = 20 * time.Second
 
 // stateFile holds the session's A2A conversation state in its session dir.
 const stateFile = "a2a-remote.json"
@@ -76,221 +75,44 @@ func saveState(dir string, st State) {
 	}
 }
 
-// Spawn starts the turn loop.
-func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider.Process, error) {
-	pr, pw := io.Pipe()
-	runCtx, cancel := context.WithCancel(ctx)
-	p := &process{
-		r: pr, w: pw, msgs: make(chan string, 16), ctx: runCtx, cancel: cancel,
-		done: make(chan struct{}), rt: s.Runtime, dir: opt.SessionDir,
-	}
-	go p.loop(opt)
-	return p, nil
-}
-
-// process fakes a subprocess around the turn loop the way the built-in
-// wick provider does: user messages arrive on Stdin as stream-json
-// envelopes, replies leave on Stdout as claude-shaped stream-json lines,
-// so the parser, store, SSE, Slack bridge and mention router need not
-// know the agent is remote.
-type process struct {
-	r      *io.PipeReader
-	w      *io.PipeWriter
-	wmu    sync.Mutex
-	msgs   chan string
-	mmu    sync.RWMutex
-	closed bool
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
-	once   sync.Once
-	rt     Runtime
-	dir    string
-}
-
-func (p *process) Stdout() io.Reader     { return p.r }
-func (p *process) Stdin() io.WriteCloser { return stdin{p} }
-func (p *process) Pid() int              { return 0 }
-func (p *process) Binary() string        { return "a2a-remote (" + hostOf(p.rt.Config.Card.Endpoint) + ")" }
-func (p *process) Argv() []string        { return nil }
-func (p *process) Env() []string         { return nil }
-
-func (p *process) Wait() error {
-	<-p.done
-	p.closePipe()
-	return nil
-}
-
-func (p *process) Kill() error {
-	p.cancel()
-	p.closeMsgs()
-	p.closePipe()
-	return nil
-}
-
-func (p *process) closePipe() { p.once.Do(func() { _ = p.w.Close() }) }
-
-func (p *process) closeMsgs() {
-	p.mmu.Lock()
-	defer p.mmu.Unlock()
-	if !p.closed {
-		p.closed = true
-		close(p.msgs)
-	}
-}
-
-func (p *process) send(text string) {
-	p.mmu.RLock()
-	defer p.mmu.RUnlock()
-	if p.closed {
-		return
-	}
-	select {
-	case p.msgs <- text:
-	case <-p.ctx.Done():
-	}
-}
-
-type stdin struct{ p *process }
-
-func (s stdin) Write(b []byte) (int, error) {
-	if t := userText(b); t != "" {
-		s.p.send(t)
-	}
-	return len(b), nil
-}
-
-func (s stdin) Close() error {
-	s.p.closeMsgs()
-	return nil
-}
-
-// userText pulls the text out of a stream-json user envelope; anything
-// else is taken as raw text.
-func userText(b []byte) string {
-	var env struct {
-		Type    string `json:"type"`
-		Message struct {
-			Content json.RawMessage `json:"content"`
-		} `json:"message"`
-	}
-	if err := json.Unmarshal(b, &env); err != nil || env.Type != "user" {
-		return strings.TrimSpace(string(b))
-	}
-	var s string
-	if json.Unmarshal(env.Message.Content, &s) == nil {
-		return s
-	}
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	_ = json.Unmarshal(env.Message.Content, &blocks)
-	var sb strings.Builder
-	for _, bl := range blocks {
-		if bl.Type == "text" {
-			sb.WriteString(bl.Text)
-		}
-	}
-	return sb.String()
-}
-
-func (p *process) emit(v any) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return
-	}
-	p.wmu.Lock()
-	defer p.wmu.Unlock()
-	_, _ = p.w.Write(append(b, '\n'))
-}
-
-func (p *process) emitText(text string) {
-	p.emit(map[string]any{"type": "assistant", "message": map[string]any{
-		"role": "assistant", "content": []map[string]any{{"type": "text", "text": text}},
-	}})
-}
-
-func (p *process) emitDone(result string) {
-	p.emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": result})
-}
-
-func (p *process) emitError(msg string) {
-	p.emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": msg})
-}
-
-func (p *process) loop(opt provider.SpawnOptions) {
-	defer close(p.done)
-	st := LoadState(p.dir)
-	sid := st.ContextID
-	if sid == "" {
-		sid = uuid.NewString()
-	}
-	p.emit(map[string]any{"type": "system", "subtype": "init", "session_id": sid})
-	if opt.InitialMessage != "" {
-		p.turn(&st, opt.InitialMessage)
-	}
-	for text := range p.msgs {
-		p.turn(&st, text)
-	}
-}
-
-// turn is one A2A call: the result is streamed when the card says it can
-// stream, else sent with message/send and polled until it settles.
-func (p *process) turn(st *State, text string) {
-	cfg := p.rt.Config
-	ctx, cancel := context.WithTimeout(p.ctx, cfg.Timeout())
+// run is one A2A call: the result is streamed when the card says it can
+// stream, else sent with message/send and polled until it settles. Its
+// events go to out, closed after the terminal one.
+func (s *Source) run(ctx context.Context, dir, text string, out chan<- remote.Event) {
+	defer close(out)
+	cfg := s.rt.Config
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	stopBeat := p.heartbeat(ctx)
-	defer stopBeat()
+	st := LoadState(dir)
 
-	t := &turnState{p: p, st: st, max: cfg.MaxBytes(), cancel: cancel}
-	err := p.call(ctx, t, text)
-	// The state is saved before the closing line, so whoever reads the
+	t := &turnState{st: &st, max: cfg.MaxBytes(), cancel: cancel, out: out}
+	err := s.call(ctx, t, text)
+	// The state is saved before the closing event, so whoever reads the
 	// turn's end also reads where the conversation stands.
-	var end func()
+	var end remote.Event
 	switch {
 	case t.tooBig:
-		end = p.finishError(t, fmt.Sprintf("The remote agent's reply passed the %d byte limit and was cut off.", t.max))
+		end = t.finishError(fmt.Sprintf("The remote agent's reply passed the %d byte limit and was cut off.", t.max))
 	case err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded):
-		end = p.finishError(t, fmt.Sprintf("The remote agent did not finish within %s.", cfg.Timeout()))
+		end = t.finishError(remote.TimeoutMessage(cfg.Timeout()))
 	case err != nil:
-		if p.ctx.Err() != nil {
-			return
+		if errors.Is(ctx.Err(), context.Canceled) && !t.tooBig {
+			return // the session was killed
 		}
-		end = p.finishError(t, "A2A call failed: "+err.Error())
+		end = t.finishError("A2A call failed: " + err.Error())
 	default:
-		end = p.finish(t)
+		end = t.finish()
 	}
-	saveState(p.dir, *st)
-	end()
+	saveState(dir, st)
+	out <- end
 }
 
-func (p *process) heartbeat(ctx context.Context) func() {
-	stop := make(chan struct{})
-	go func() {
-		tk := time.NewTicker(heartbeatEvery)
-		defer tk.Stop()
-		for {
-			select {
-			case <-tk.C:
-				p.emit(map[string]any{"type": "system", "subtype": "heartbeat"})
-			case <-stop:
-				return
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	return func() { close(stop) }
-}
-
-func (p *process) call(ctx context.Context, t *turnState, text string) error {
-	card, err := p.rt.Config.ParsedCard()
+func (s *Source) call(ctx context.Context, t *turnState, text string) error {
+	card, err := s.rt.Config.ParsedCard()
 	if err != nil {
 		return err
 	}
-	client, err := NewClient(ctx, p.rt.Guard, card, p.rt.Auth, t.max)
+	client, err := NewClient(ctx, s.rt.Guard, card, s.rt.Auth, t.max)
 	if err != nil {
 		return err
 	}
@@ -340,7 +162,7 @@ func (p *process) call(ctx context.Context, t *turnState, text string) error {
 
 // turnState follows one turn's events.
 type turnState struct {
-	p       *process
+	out     chan<- remote.Event
 	st      *State
 	max     int64
 	cancel  context.CancelFunc
@@ -348,7 +170,7 @@ type turnState struct {
 	state   a2a.TaskState
 	message bool
 	status  string // last status message text
-	out     strings.Builder
+	text    strings.Builder
 	sent    int64
 	tooBig  bool
 	// artifacts maps an artifact id to the bytes of it already shown, so
@@ -371,8 +193,8 @@ func (t *turnState) write(s string) {
 		return
 	}
 	t.sent += int64(len(s))
-	t.out.WriteString(s)
-	t.p.emitText(s)
+	t.text.WriteString(s)
+	t.out <- remote.Event{Kind: remote.EventTextDelta, Text: s}
 }
 
 func (t *turnState) context(id string) {
@@ -437,7 +259,7 @@ func (t *turnState) setStatus(s a2a.TaskStatus) {
 // task is the reply and its task is kept for the next message; a failed
 // task is an error; anything else completes with what was streamed, or
 // the final status message when nothing was.
-func (p *process) finish(t *turnState) func() {
+func (t *turnState) finish() remote.Event {
 	st := t.st
 	st.LastState = string(t.state)
 	if t.message {
@@ -447,28 +269,28 @@ func (p *process) finish(t *turnState) func() {
 	case a2a.TaskStateInputRequired:
 		st.TaskID, st.InputRequired = t.taskID, true
 		if t.status != "" {
-			if t.out.Len() > 0 {
+			if t.text.Len() > 0 {
 				t.write("\n\n")
 			}
 			t.write(t.status)
 		}
-		return func() { p.emitDone(t.out.String()) }
+		return remote.Event{Kind: remote.EventDone, Text: t.text.String()}
 	case a2a.TaskStateFailed, a2a.TaskStateRejected, a2a.TaskStateCanceled, a2a.TaskStateAuthRequired:
 		msg := t.status
 		if msg == "" {
 			msg = "remote task ended as " + strings.ToLower(strings.TrimPrefix(string(t.state), "TASK_STATE_"))
 		}
-		return p.finishError(t, "Remote agent: "+msg)
+		return t.finishError("Remote agent: " + msg)
 	}
 	st.TaskID, st.InputRequired = "", false
-	if t.out.Len() == 0 && t.status != "" {
+	if t.text.Len() == 0 && t.status != "" {
 		t.write(t.status)
 	}
-	return func() { p.emitDone(t.out.String()) }
+	return remote.Event{Kind: remote.EventDone, Text: t.text.String()}
 }
 
-func (p *process) finishError(t *turnState, msg string) func() {
+func (t *turnState) finishError(msg string) remote.Event {
 	t.st.TaskID, t.st.InputRequired = "", false
 	t.st.LastState = string(t.state)
-	return func() { p.emitError(msg) }
+	return remote.Event{Kind: remote.EventError, Text: msg}
 }
