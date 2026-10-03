@@ -166,17 +166,23 @@
   const label = "mb-1 block text-xs font-medium text-black-800 dark:text-black-600";
 </script>
 
-<DrawerHeader title="Settings" subtitle={`${agent.name} · @${agent.handle}`} {onClose} />
+<DrawerHeader
+  title="Settings"
+  subtitle={`${agent.name} · @${agent.handle} — chat tetap di belakang`}
+  avatar={draft.avatar}
+  bordered={false}
+  {onClose}
+/>
 
-<div class="flex gap-2 px-6 pt-4" role="tablist">
+<div class="flex shrink-0 gap-1 overflow-x-auto border-b border-white-300 px-6 pb-3 dark:border-navy-600" role="tablist">
   {#each TABS as t (t.id)}
     <button
       type="button"
       role="tab"
       aria-selected={tab === t.id}
-      class="rounded-full px-4 py-1 text-sm font-medium {tab === t.id
-        ? 'bg-green-500 text-white-100'
-        : 'bg-white-200 text-black-800 hover:bg-white-300 dark:bg-navy-800 dark:text-black-600 dark:hover:bg-navy-600'}"
+      class="whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-medium {tab === t.id
+        ? 'bg-black-900 text-white-100 dark:bg-white-200 dark:text-navy-700'
+        : 'text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600'}"
       onclick={() => onTab(t.id)}
     >{t.label}</button>
   {/each}

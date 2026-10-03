@@ -372,12 +372,12 @@
   {#if route.panel}
     <button
       type="button"
-      class="fixed inset-0 z-40 bg-navy-900/40"
+      class="agent-scrim fixed inset-0 z-40"
       aria-label="Tutup panel"
       onclick={() => openPanel(null)}
     ></button>
     <div
-      class="fixed inset-y-0 right-0 z-50 flex w-full max-w-xl flex-col bg-white-100 shadow-xl dark:bg-navy-700 sm:m-2 sm:rounded-xl"
+      class="agent-drawer fixed z-50 flex flex-col overflow-hidden border border-white-300 bg-white-100 shadow-2xl dark:border-navy-600 dark:bg-navy-700"
       role="dialog"
       aria-modal="true"
     >
@@ -439,7 +439,30 @@
     0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
     30% { opacity: 1; transform: translateY(-2px); }
   }
+  /* Floating drawer (mockup .drawer/.scrim): inset 8px on three sides, 20px
+     corners, a short slide-in. Width and blur have no token step. */
+  .agent-drawer {
+    top: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: min(540px, calc(100% - 16px));
+    border-radius: 20px;
+    animation: agent-drawer-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .agent-scrim {
+    background: rgb(10 12 16 / 0.28);
+    backdrop-filter: blur(1.5px);
+    animation: agent-fade 0.2s;
+  }
+  @keyframes agent-drawer-in {
+    from { opacity: 0.4; transform: translateX(40px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes agent-fade {
+    from { opacity: 0; }
+  }
   @media (prefers-reduced-motion: reduce) {
     .dots i { animation: none; opacity: 0.7; }
+    .agent-drawer, .agent-scrim { animation: none; }
   }
 </style>

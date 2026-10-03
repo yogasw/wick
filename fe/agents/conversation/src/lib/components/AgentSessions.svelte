@@ -34,7 +34,7 @@
   });
 </script>
 
-<DrawerHeader title="Percakapan" subtitle={`@${agent.handle}`} {onClose} />
+<DrawerHeader title="Percakapan" subtitle={`${agent.name} · @${agent.handle}`} avatar={agent.avatar} {onClose} />
 <div class="flex-1 overflow-y-auto px-4 py-4">
   <button
     type="button"
