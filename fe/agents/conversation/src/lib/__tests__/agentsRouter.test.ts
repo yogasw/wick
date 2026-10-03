@@ -151,3 +151,24 @@ describe("convert route", () => {
     expect(parseAgentsRoute("/tools/agents/team", "?panel=new", "/tools/agents").panel).toEqual({ kind: "new" });
   });
 });
+
+describe("group routes", () => {
+  test("/team/g/<id> opens a group, never an agent", () => {
+    const r = parseAgentsRoute("/tools/agents/team/g/abc-123", "", B);
+    expect(r).toEqual({ handle: null, session: null, panel: null, group: "abc-123" });
+  });
+  test("group settings panel only on a group", () => {
+    expect(parseAgentsRoute("/tools/agents/team/g/abc", "?panel=group-settings", B).panel).toEqual({ kind: "group-settings" });
+    expect(parseAgentsRoute("/tools/agents/team/anton", "?panel=group-settings", B).panel).toBeNull();
+  });
+  test("round trip", () => {
+    const r: AgentsRoute = { handle: null, session: null, panel: { kind: "group-settings" }, group: "abc" };
+    const url = formatAgentsRoute(r, B);
+    expect(url).toBe("/tools/agents/team/g/abc?panel=group-settings");
+    const [path, qs] = url.split("?");
+    expect(parseAgentsRoute(path, "?" + qs, B)).toEqual(r);
+  });
+  test("a bare /team/g is not a group", () => {
+    expect(parseAgentsRoute("/tools/agents/team/g", "", B).group).toBeUndefined();
+  });
+});

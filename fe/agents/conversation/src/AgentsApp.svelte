@@ -64,19 +64,22 @@
   // Below lg the roster is a drawer over the chat, opened from the header.
   let rosterOpen = $state(false);
 
-  /* Group chats: listed under the agents; one open at a time replaces
-     the agent chat (not routed — a reload lands back on the agent). */
+  /* Group chats: listed under the agents; the open one (/team/g/<id>)
+     replaces the agent chat. */
   let groups = $state<GroupItem[]>([]);
-  let activeGroupId = $state("");
+  let groupsLoaded = $state(false);
+  const activeGroupId = $derived(route.group ?? "");
+  const groupSettingsOpen = $derived(route.panel?.kind === "group-settings");
   let newGroupOpen = $state(false);
   let addMenuOpen = $state(false);
-  let groupSettingsOpen = $state(false);
   const activeGroup = $derived(groups.find((g) => g.id === activeGroupId));
   async function loadGroups() {
     try {
       groups = (await runApi(listGroups(base))).groups ?? [];
     } catch {
       /* an older server has no groups */
+    } finally {
+      groupsLoaded = true;
     }
   }
 
@@ -133,6 +136,13 @@
       navigate({ handle: captain?.handle ?? null, session: null, panel: route.panel }, { replace: true });
       return;
     }
+    if (route.group) {
+      if (groupsLoaded && !groups.some((g) => g.id === route.group)) {
+        toastError("Group not found");
+        navigate({ handle: captain?.handle ?? null, session: null, panel: null }, { replace: true });
+      }
+      return;
+    }
     if (!route.handle && captain && route.panel?.kind !== "new") {
       navigate({ ...route, handle: captain.handle }, { replace: true });
     }
@@ -178,7 +188,6 @@
   }
   function openAgent(a: AgentItem) {
     rosterOpen = false;
-    activeGroupId = "";
     navigate({ handle: a.handle, session: null, panel: null });
   }
   function openPanel(panel: AgentsPanel | null) {
@@ -377,7 +386,7 @@
         <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">No matching agents.</p>
       {/if}
       {#each roster as a (a.id)}
-        {@const active = selected?.id === a.id}
+        {@const active = !route.group && selected?.id === a.id}
         {@const working = isWorking(a.status)}
         {@const st = rosterStatus(a, { activeId: selected?.id, hatching: hatching.includes(a.id) })}
         <button
@@ -413,9 +422,9 @@
           class="roster-row relative mb-0.5 flex w-full items-center gap-3 rounded-2xl px-2.5 py-2.5 text-left {activeGroupId === g.id ? 'bg-white-300 dark:bg-navy-600' : 'hover:bg-white-300 dark:hover:bg-navy-600'}"
           aria-current={activeGroupId === g.id ? "page" : undefined}
           data-testid="roster-group"
-          onclick={() => { rosterOpen = false; activeGroupId = g.id; g.unread = false; }}
+          onclick={() => { rosterOpen = false; g.unread = false; navigate({ handle: null, session: null, panel: null, group: g.id }); }}
         >
-          <span class="flex h-11 w-11 shrink-0 items-center"><GroupAvatars members={g.members} size={22} max={2} ring="bg-white-200 dark:bg-navy-700" /></span>
+          <span class="flex h-11 w-11 shrink-0 items-center"><GroupAvatars members={g.members} size={20} max={2} ring="bg-white-200 dark:bg-navy-700" /></span>
           {#if g.unread && activeGroupId !== g.id}<span class="roster-udot rounded-full border-2 border-white-200 bg-neg-400 dark:border-navy-700" aria-label="new message"></span>{/if}
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-2">
@@ -438,7 +447,7 @@
         group={activeGroup}
         {agents}
         onMenu={() => (rosterOpen = true)}
-        onSettings={() => (groupSettingsOpen = true)}
+        onSettings={() => openPanel({ kind: "group-settings" })}
       />
     {/key}
   </section>
@@ -519,25 +528,25 @@
   {/if}
 
   {#if newGroupOpen}
-    <NewGroupDialog {base} {agents} onClose={() => (newGroupOpen = false)} onCreated={(g) => { newGroupOpen = false; groups = [g, ...groups]; activeGroupId = g.id; }} />
+    <NewGroupDialog {base} {agents} onClose={() => (newGroupOpen = false)} onCreated={(g) => { newGroupOpen = false; groups = [g, ...groups]; navigate({ handle: null, session: null, panel: null, group: g.id }); }} />
   {/if}
 
   {#if groupSettingsOpen && activeGroup}
-    <button type="button" class="agent-scrim fixed inset-0 z-40" aria-label="Close panel" onclick={() => (groupSettingsOpen = false)}></button>
+    <button type="button" class="agent-scrim fixed inset-0 z-40" aria-label="Close panel" onclick={() => openPanel(null)}></button>
     <div class="agent-drawer fixed z-50 flex flex-col overflow-hidden border border-white-300 bg-white-100 shadow-2xl dark:border-navy-600 dark:bg-navy-700" role="dialog" aria-modal="true">
       <GroupSettings
         {base}
         group={activeGroup}
         {agents}
-        onClose={() => (groupSettingsOpen = false)}
+        onClose={() => openPanel(null)}
         onChanged={(g) => (groups = groups.map((x) => (x.id === g.id ? g : x)))}
-        onDeleted={() => { groupSettingsOpen = false; groups = groups.filter((x) => x.id !== activeGroupId); activeGroupId = ""; toastOk("Group deleted"); }}
+        onDeleted={() => { const id = activeGroupId; groups = groups.filter((x) => x.id !== id); navigate({ handle: captain?.handle ?? null, session: null, panel: null }, { replace: true }); toastOk("Group deleted"); }}
       />
     </div>
   {/if}
 
   <!-- Drawer (Settings / Team settings / Other chats) or the centred + Agent modal -->
-  {#if route.panel}
+  {#if route.panel && route.panel.kind !== "group-settings"}
     <button
       type="button"
       class="agent-scrim fixed inset-0 z-40"

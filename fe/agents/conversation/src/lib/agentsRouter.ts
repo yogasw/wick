@@ -12,6 +12,8 @@ import { teamSettingsTabOf, type TeamSettingsTab } from "./teamSettingsTabs.js";
      /team/<handle>?session=<id>         one of its other conversations
      /team/<handle>?panel=settings&tab=… Settings drawer over the chat
      /team/<handle>?panel=sessions       "Other chats" drawer
+     /team/g/<group session id>          a group chat
+     /team/g/<id>?panel=group-settings   its Settings drawer
      /team?panel=new                     the + Agent wizard
      /team?panel=new&project=<id>        the wizard converting that project
                                          ("Make this an agent…")
@@ -38,6 +40,7 @@ export type AgentsPanel =
   | { kind: "settings"; tab: SettingsTab }
   | { kind: "team-settings"; tab: TeamSettingsTab }
   | { kind: "sessions" }
+  | { kind: "group-settings" }
   | { kind: "new"; project?: string };
 
 export type AgentsRoute = {
@@ -46,6 +49,8 @@ export type AgentsRoute = {
   /** A non-main conversation of that agent; null = its main chat. */
   session: string | null;
   panel: AgentsPanel | null;
+  /** A group chat's session id (/team/g/<id>); then handle is null. */
+  group?: string | null;
 };
 
 const ROOT = "/team";
@@ -58,9 +63,18 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
   const prefix = base + ROOT;
   let rest = "";
   if (pathname.startsWith(prefix + "/")) rest = pathname.slice(prefix.length + 1);
-  const seg = rest.split("/").filter(Boolean)[0] ?? "";
+  const segs = rest.split("/").filter(Boolean);
+  const seg = segs[0] ?? "";
   let handle: string | null = null;
-  if (seg) {
+  let group: string | null = null;
+  // "g" is free to reserve: a handle has 2+ characters (HANDLE_RE).
+  if (seg === "g" && segs[1]) {
+    try {
+      group = decodeURIComponent(segs[1]);
+    } catch {
+      group = null;
+    }
+  } else if (seg) {
     try {
       handle = decodeURIComponent(seg);
     } catch {
@@ -81,20 +95,24 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
     case "sessions":
       panel = { kind: "sessions" };
       break;
+    case "group-settings":
+      if (group) panel = { kind: "group-settings" };
+      break;
     case "new":
       panel = q.get("project") ? { kind: "new", project: q.get("project")! } : { kind: "new" };
       break;
   }
   const session = handle ? q.get("session") || null : null;
-  return { handle, session, panel };
+  return group ? { handle, session, panel, group } : { handle, session, panel };
 }
 
 /** formatAgentsRoute is the inverse of parseAgentsRoute. */
 export function formatAgentsRoute(r: AgentsRoute, base: string): string {
   let path = base + ROOT;
-  if (r.handle) path += "/" + encodeURIComponent(r.handle);
+  if (r.group) path += "/g/" + encodeURIComponent(r.group);
+  else if (r.handle) path += "/" + encodeURIComponent(r.handle);
   const q = new URLSearchParams();
-  if (r.handle && r.session) q.set("session", r.session);
+  if (!r.group && r.handle && r.session) q.set("session", r.session);
   if (r.panel) {
     q.set("panel", r.panel.kind);
     if (r.panel.kind === "settings" || r.panel.kind === "team-settings") q.set("tab", r.panel.tab);
