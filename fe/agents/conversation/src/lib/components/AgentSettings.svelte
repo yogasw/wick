@@ -26,6 +26,10 @@
   import type { MentionFrom, CaptainCan } from "../api/team.js";
   import { CAPTAIN_CAN_OPTIONS, CAPTAIN_ACCESS_NOTE, MANAGE_AGENTS_NOTE, captainCanOf } from "../captainSettings.js";
   import AccessHistory from "./AccessHistory.svelte";
+  import NativeToolsSection from "./NativeToolsSection.svelte";
+  import AgentSkillsTab from "./AgentSkillsTab.svelte";
+  import { nativeToolsOf } from "../nativeTools.js";
+  import type { BashRule } from "../api/team.js";
 
   type Props = {
     base: string;
@@ -46,6 +50,7 @@
     disabled: boolean; allow_provider_switch: boolean; use_global_prompt: boolean;
     mention_from: MentionFrom; mention_allow: string[]; max_hops: number;
     manage_agents: boolean; captain_can: CaptainCan;
+    native_tools: string[]; bash_rules: BashRule[]; disabled_skills: string[];
   };
   function draftOf(a: AgentItem): Draft {
     return {
@@ -57,6 +62,8 @@
       disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, use_global_prompt: !!a.use_global_prompt,
       mention_from: mentionFromOf(a.mention_from), mention_allow: [...(a.mention_allow ?? [])], max_hops: clampHops(a.max_hops),
       manage_agents: a.manage_agents ?? a.is_captain, captain_can: captainCanOf(a.captain_can),
+      native_tools: nativeToolsOf(a.allowed_native_tools), bash_rules: (a.bash_rules ?? []).map((r) => ({ ...r })),
+      disabled_skills: [...(a.disabled_skills ?? [])],
     };
   }
   let draft = $state<Draft>(untrack(() => draftOf(agent)));
@@ -209,6 +216,9 @@
     if (clampHops(d.max_hops) !== clampHops(saved.max_hops)) p.max_hops = clampHops(d.max_hops);
     if (d.manage_agents !== (saved.manage_agents ?? saved.is_captain)) p.manage_agents = d.manage_agents;
     if (JSON.stringify(d.captain_can) !== JSON.stringify(captainCanOf(saved.captain_can))) p.captain_can = { ...d.captain_can };
+    if (JSON.stringify(d.native_tools) !== JSON.stringify(nativeToolsOf(saved.allowed_native_tools))) p.allowed_native_tools = [...d.native_tools];
+    if (JSON.stringify(d.bash_rules) !== JSON.stringify(saved.bash_rules ?? [])) p.bash_rules = d.bash_rules.map((r) => ({ ...r }));
+    if (JSON.stringify(d.disabled_skills) !== JSON.stringify(saved.disabled_skills ?? [])) p.disabled_skills = [...d.disabled_skills];
     return p;
   });
   const dirty = $derived(Object.keys(patch).length > 0);
@@ -290,6 +300,7 @@
     { id: "persona", label: "Persona" },
     { id: "access", label: "Access" },
     { id: "tools", label: "Tools & features" },
+    { id: "skills", label: "Skills" },
     { id: "mention", label: "Mention" },
     { id: "captain", label: "Captain" },
     { id: "avatar", label: "Avatar" },
@@ -427,13 +438,14 @@
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Tools &amp; features</p>
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">Panels of the agent's chat. Notes, Tickets, Source, Schedule and Sub-agents follow Access › Platform, and the Browser tab follows the Playwright connector in Access › Connectors.</p>
     </div>
-    <div class="rounded-xl border border-white-300 px-4 py-3 opacity-60 dark:border-navy-600" aria-disabled="true">
-      <p class="text-sm font-medium text-black-900 dark:text-white-100">
-        Native tools &amp; Bash
-        <span class="ml-1 rounded-full bg-white-200 px-2 py-0.5 text-xs font-medium text-black-800 dark:bg-navy-600 dark:text-black-600">Coming soon (Phase 1c)</span>
-      </p>
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Choosing built-in tools and Bash commands per agent is not available yet.</p>
-    </div>
+    <NativeToolsSection
+      tools={draft.native_tools}
+      rules={draft.bash_rules}
+      enforced={agent.native_tools_enforced}
+      provider={splitPick(draft.pick).provider || agent.provider}
+      onTools={(t) => (draft.native_tools = t)}
+      onRules={(r) => (draft.bash_rules = r)}
+    />
     <div>
       <span class={label}>wick features</span>
       <div class="space-y-3">
@@ -450,6 +462,10 @@
       </div>
       <p class="mt-2 text-xs text-black-800 dark:text-black-600">{railShownNote(draft.features)}</p>
     </div>
+  {:else if tab === "skills"}
+    {#key agent.id}
+      <AgentSkillsTab {base} agentId={agent.id} mainSessionId={agent.main_session_id} disabled={draft.disabled_skills} onChange={(d) => (draft.disabled_skills = d)} />
+    {/key}
   {:else if tab === "avatar"}
     <div class="flex items-center gap-4">
       <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={72} live />

@@ -56,6 +56,13 @@ export type AgentItem = {
   manage_agents?: boolean;
   /** What the Captain may do to this agent. Older servers omit it. */
   captain_can?: CaptainCan;
+  /** Tools & features: native tools on, Bash commands that run unasked,
+      and whether the provider is held to them. Skills tab: skills off.
+      Older servers omit them. */
+  allowed_native_tools?: string[];
+  bash_rules?: BashRule[];
+  native_tools_enforced?: boolean;
+  disabled_skills?: string[];
   main_session_id: string;
   last_active: string | null;
   last_preview: string;
@@ -102,7 +109,28 @@ export type AgentWrite = Partial<{
   max_hops: number;
   manage_agents: boolean;
   captain_can: CaptainCan;
+  allowed_native_tools: string[];
+  bash_rules: BashRule[];
+  disabled_skills: string[];
 }>;
+
+/** team.BashRule: a command glob and where its path arguments may point
+    ("{project}", an absolute path, or "" = the project folder). */
+export type BashRule = { pattern: string; scope: string };
+
+/** One skill the agent's spawns see (GET …/skills). */
+export type AgentSkill = {
+  name: string;
+  description: string;
+  source: "local" | "global" | "builtin";
+  /** A local skill hiding a global/built-in one of the same name. */
+  overrides?: "global" | "builtin";
+  /** The hidden entry ("local wins"). */
+  shadowed?: boolean;
+  /** Cannot be switched off. */
+  required?: boolean;
+  disabled: boolean;
+};
 
 /** team.CaptainCan: what the Captain may do to one agent. Access is only
     ever a proposal the owner approves, even when on. */
@@ -161,6 +189,10 @@ export const updateAgent = (base: string, id: string, body: AgentWrite) =>
 /** The agent's latest 20 access changes, newest first. */
 export const getAccessHistory = (base: string, id: string) =>
   apiGetE<{ items: AccessHistoryItem[] | null }>(`${base}/api/team/agents/${enc(id)}/access-history`);
+
+/** The skills the agent's spawns see: project-local, global, built-in. */
+export const getAgentSkills = (base: string, id: string) =>
+  apiGetE<{ items: AgentSkill[] | null; local_dir: string }>(`${base}/api/team/agents/${enc(id)}/skills`);
 
 /** chats="delete" takes the agent's own project with it (chats, files,
     memory); "keep" leaves it as an ordinary project in the sidebar. */
@@ -295,3 +327,8 @@ export const runApi = <T>(eff: Effect.Effect<T, APIError, HttpClient.HttpClient>
 
 /** isWorking reads a session status as "the agent is busy right now". */
 export const isWorking = (status: string | undefined) => status === "running" || status === "queued";
+
+/** Sends text into a chat as the user (the "Create skill from this chat"
+    button posts its instruction to the agent's main chat). */
+export const sendToChat = (base: string, sessionID: string, text: string) =>
+  apiPostE<{ status: string }>(`${base}/sessions/${enc(sessionID)}/send`, { text });

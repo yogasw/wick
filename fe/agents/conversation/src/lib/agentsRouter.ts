@@ -21,8 +21,8 @@ import { teamSettingsTabOf, type TeamSettingsTab } from "./teamSettingsTabs.js";
                                          Team settings drawer (the user's
                                          own Team, not one agent) */
 
-export type SettingsTab = "persona" | "access" | "tools" | "mention" | "captain" | "avatar" | "advanced";
-export const SETTINGS_TABS: SettingsTab[] = ["persona", "access", "tools", "mention", "captain", "avatar", "advanced"];
+export type SettingsTab = "persona" | "access" | "tools" | "skills" | "mention" | "captain" | "avatar" | "advanced";
+export const SETTINGS_TABS: SettingsTab[] = ["persona", "access", "tools", "skills", "mention", "captain", "avatar", "advanced"];
 
 /** Old tab names that still open the right tab from a bookmark. */
 const TAB_ALIASES: Record<string, SettingsTab> = { features: "tools" };

@@ -30,7 +30,7 @@ describe("parseAgentsRoute", () => {
   });
 
   test("every Settings tab parses; the old features tab opens Tools & fitur", () => {
-    for (const tab of ["persona", "access", "tools", "mention", "captain", "avatar", "advanced"]) {
+    for (const tab of ["persona", "access", "tools", "skills", "mention", "captain", "avatar", "advanced"]) {
       expect(parseAgentsRoute("/tools/agents/team/a1", `?panel=settings&tab=${tab}`, B).panel).toEqual({
         kind: "settings",
         tab,
