@@ -223,51 +223,29 @@
   // The server holds the delay: a closed window runs no JS.
   var TEST_PUSH_DELAY = 5;
 
-  // sendTestPush asks the server for a test push, optionally delayed. The
-  // Send test button stays disabled through the countdown so a second
-  // click does not queue a second push. A failed send (an expired
-  // subscription answers 410 at the push service) says so and points at
-  // Refresh device instead of claiming success.
-  async function sendTestPush(btn, delay) {
-    var label = btn ? btn.textContent : '';
+  // sendTestPush asks the server for a delayed test push: to every device
+  // of the user when endpoint is empty, else to that one device (the
+  // server refuses a device that is not the caller's). One toast on the
+  // 202; the button is only held long enough to stop a double click. A
+  // failed send (an expired subscription answers 410 at the push service)
+  // says so and points at Refresh device instead of claiming success.
+  async function sendTestPush(btn, endpoint) {
     if (btn) btn.disabled = true;
-    var sub = await currentSubscription();
-    var res;
     try {
-      res = await fetch('/api/push/test', {
+      var res = await fetch('/api/push/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint: sub ? sub.endpoint : '', delay_seconds: delay }),
+        body: JSON.stringify({ endpoint: endpoint || '', delay_seconds: TEST_PUSH_DELAY }),
       });
-    } catch (err) {
-      if (btn) btn.disabled = false;
-      throw err;
-    }
-    if (!res.ok) {
-      if (btn) btn.disabled = false;
-      var msg = (await res.text().catch(function () { return ''; })).trim();
-      showToast('Test notification failed' + (msg ? ': ' + msg : '') + '. Try Refresh device, then send again.', 'bad');
-      return;
-    }
-    if (!delay) {
-      if (btn) btn.disabled = false;
-      showToast('Test notification sent.', 'ok');
-      return;
-    }
-    showToast('Test notification in ' + delay + 's — close this window now to check OS notifications.', 'ok');
-    var left = delay;
-    var tick = function () {
-      if (!btn) return;
-      if (left <= 0) {
-        btn.textContent = label;
-        btn.disabled = false;
+      if (!res.ok) {
+        var msg = (await res.text().catch(function () { return ''; })).trim();
+        showToast('Test notification failed' + (msg ? ': ' + msg : '') + '. Try Refresh device, then send again.', 'bad');
         return;
       }
-      btn.textContent = 'Sending in ' + left + '…';
-      left -= 1;
-      window.setTimeout(tick, 1000);
-    };
-    tick();
+      showToast('Test notification will be sent in ' + TEST_PUSH_DELAY + ' seconds', 'ok');
+    } finally {
+      if (btn) window.setTimeout(function () { btn.disabled = false; }, 1500);
+    }
   }
 
   // Lifecycle chime — a pre-rendered two-tone WAV (E5 → A5) played
@@ -525,7 +503,14 @@
         '<div class="mt-1 truncate font-mono text-xs text-black-700 dark:text-black-600">' + escapeHTML(shortEndpoint(d.endpoint)) + '</div>' +
         '<div class="mt-1 text-xs text-black-700 dark:text-black-600">Last seen ' + escapeHTML(seen) + '</div>' +
         '</div>' +
-        '<button type="button" data-push-remove="' + escapeHTML(d.endpoint) + '" data-current="' + (isCurrent ? '1' : '0') + '" class="inline-flex items-center justify-center rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm font-medium text-neg-400 transition-colors hover:bg-neg-100 dark:border-navy-600 dark:bg-navy-800">Remove</button>' +
+        // One ⋮ per row: a test for just this device, and Remove. A native
+        // <details> opens and closes without any wiring of its own.
+        '<details class="relative">' +
+        '<summary aria-label="Device actions" title="Device actions" class="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-lg border border-white-400 bg-white-100 text-lg leading-none text-black-800 transition-colors hover:bg-white-200 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600 dark:hover:bg-navy-700">⋮</summary>' +
+        '<div class="absolute right-0 z-10 mt-1 flex w-56 flex-col rounded-lg border border-white-300 bg-white-100 py-1 shadow-md dark:border-navy-600 dark:bg-navy-800">' +
+        '<button type="button" data-push-test-device="' + escapeHTML(d.endpoint) + '" class="px-3 py-2 text-left text-sm text-black-900 hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-700">Send test to this device</button>' +
+        '<button type="button" data-push-remove="' + escapeHTML(d.endpoint) + '" data-current="' + (isCurrent ? '1' : '0') + '" class="px-3 py-2 text-left text-sm text-neg-400 hover:bg-neg-100">Remove</button>' +
+        '</div></details>' +
         '</div>';
     }).join('');
   }
@@ -566,8 +551,7 @@
     var actions = document.getElementById('push-device-actions');
     if (actions) {
       actions.innerHTML = '<button type="button" id="push-enable-btn" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 transition-colors hover:bg-green-600">' + (sub ? 'Refresh device' : 'Enable notifications') + '</button>' +
-        '<button type="button" id="push-test-btn" class="rounded-lg border border-white-400 bg-white-100 px-4 py-2 text-sm font-medium text-black-800 transition-colors hover:border-green-400 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">Send test</button>' +
-        '<button type="button" id="push-test-now-btn" class="px-2 py-2 text-xs text-black-800 underline-offset-2 hover:underline dark:text-black-600">Send now</button>';
+        '<button type="button" id="push-test-btn" class="rounded-lg border border-white-400 bg-white-100 px-4 py-2 text-sm font-medium text-black-800 transition-colors hover:border-green-400 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600" title="Send a test to every device in 5 seconds">Send test</button>';
     }
   }
 
@@ -807,7 +791,7 @@
     var bell = e.target.closest('#push-bell-btn');
     var enable = e.target.closest('#push-enable-btn');
     var test = e.target.closest('#push-test-btn');
-    var testNow = e.target.closest('#push-test-now-btn');
+    var testDevice = e.target.closest('[data-push-test-device]');
     var remove = e.target.closest('[data-push-remove]');
     var copyID = e.target.closest('#push-copy-id-btn');
     var queueBell = e.target.closest('[data-queue-notify]');
@@ -931,8 +915,10 @@
         await refreshProfile();
         await hydrateBell();
       }
-      if (test || testNow) {
-        await sendTestPush(test, test ? TEST_PUSH_DELAY : 0);
+      if (test || testDevice) {
+        var menuOpen = testDevice && testDevice.closest('details');
+        if (menuOpen) menuOpen.open = false;
+        await sendTestPush(test || testDevice, testDevice ? testDevice.getAttribute('data-push-test-device') : '');
       }
       if (remove) {
         remove.disabled = true;
