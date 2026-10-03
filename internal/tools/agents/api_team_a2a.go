@@ -73,10 +73,16 @@ func a2aAgentOf(p entity.AgentPersona) a2aserver.Agent {
 	return a
 }
 
-// EnsureSession creates an A2A context's session the way the Agents app
-// creates a side chat: owned by the agent's owner, bound to the agent, in
-// its project — origin "a2a".
+// EnsureSession creates an A2A context's session: owned by the agent's
+// owner, bound to the agent, in its project — origin "a2a".
 func (a2aDirectory) EnsureSession(ctx context.Context, a a2aserver.Agent, sessionID string) (bool, error) {
+	return ensureTeamAgentSession(ctx, session.Origin(a2aserver.Source), a.ID, a.OwnerUserID, a.ProjectID, sessionID)
+}
+
+// ensureTeamAgentSession creates sessionID as a session of the agent, the
+// way the Agents app creates a side chat, with the given origin. Shared by
+// every connection that lets a caller outside wick talk to an agent.
+func ensureTeamAgentSession(ctx context.Context, origin session.Origin, agentID, ownerUserID, agentProjectID, sessionID string) (bool, error) {
 	if globalMgr == nil {
 		return false, errors.New("agents manager not ready")
 	}
@@ -85,7 +91,7 @@ func (a2aDirectory) EnsureSession(ctx context.Context, a a2aserver.Agent, sessio
 	if _, ok := globalMgr.Registry().Session(sessionID); ok {
 		return false, nil
 	}
-	projectID, preset := a.ProjectID, "default"
+	projectID, preset := agentProjectID, "default"
 	if projectID != "" {
 		if proj, ok := globalMgr.Registry().Project(projectID); !ok {
 			projectID = ""
@@ -97,15 +103,15 @@ func (a2aDirectory) EnsureSession(ctx context.Context, a a2aserver.Agent, sessio
 	// A remote agent exposed over A2A answers through its adapter, as its
 	// own chat does: the call goes on to the remote, not to a local CLI.
 	if globalTeam != nil {
-		if p, err := globalTeam.Get(ctx, a.ID); err == nil {
+		if p, err := globalTeam.Get(ctx, agentID); err == nil {
 			if key, ok := remoteProviderKey(p); ok {
 				prov, modelID = key, ""
 			}
 		}
 	}
 	if _, err := globalMgr.CreateSession(ctx, session.CreateOptions{
-		ID: sessionID, ProjectID: projectID, Origin: session.Origin(a2aserver.Source),
-		Preset: preset, UserID: a.OwnerUserID, AgentID: a.ID,
+		ID: sessionID, ProjectID: projectID, Origin: origin,
+		Preset: preset, UserID: ownerUserID, AgentID: agentID,
 	}); err != nil {
 		return false, err
 	}

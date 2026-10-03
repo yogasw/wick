@@ -29,6 +29,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/airouter"
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	agentrest "github.com/yogasw/wick/internal/agents/channels/rest"
 	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
 	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
 	telegramch "github.com/yogasw/wick/internal/agents/channels/telegram"
@@ -1579,6 +1580,8 @@ func NewServer() *Server {
 	channelReg.Add(a2aSrv, nil)
 	a2aSrv.SetSendFunc(sendFnFor("a2a"))
 	agentstool.SetA2AServer(a2aSrv)
+	// Team agents over the OpenAI-compatible endpoint ("model": "agent:<handle>").
+	agentrest.SetAgentDirectory(agentstool.RESTDirectory())
 
 	// Wire each channel's workflow integration surface — registers
 	// per-event + per-action descriptors and attaches the inbound
