@@ -37,6 +37,9 @@ type Manifest struct {
 	// Tool carries the tool meta, configs, webhook routes, and keep_warm for
 	// kind=tool (Module.Meta mirrors key/name the same way as for jobs).
 	Tool *ToolModule `json:"tool,omitempty"`
+	// Service carries the routes, auth modes, capabilities, and callback
+	// scopes for kind=service.
+	Service *ServiceModule `json:"service,omitempty"`
 }
 
 // ManifestSchemaVersion is the current envelope format version.
