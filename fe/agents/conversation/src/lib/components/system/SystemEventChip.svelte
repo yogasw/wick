@@ -24,7 +24,7 @@
   class={"inline-flex items-center gap-1.5 rounded-2xl border px-3 py-1 text-xs max-w-full " +
     (warn
       ? "border-amber-400/40 bg-amber-400/10 text-amber-700 dark:text-amber-300"
-      : "border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-700 dark:text-black-600")}
+      : "border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-800 dark:text-black-600")}
 >
   <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     {#if r.icon === "user-plus"}
