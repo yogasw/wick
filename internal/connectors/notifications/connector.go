@@ -39,7 +39,7 @@ func Meta() connector.Meta {
 
 func Module(deps Deps) connector.Module {
 	m := Meta()
-	m.DefaultTags = []tool.DefaultTag{tags.Connector, tags.Communication}
+	m.DefaultTags = []tool.DefaultTag{tags.Connector, tags.Platform}
 	return connector.Module{
 		Meta:       m,
 		Operations: Operations(deps),

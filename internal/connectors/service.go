@@ -20,6 +20,7 @@ import (
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/metrics"
 	"github.com/yogasw/wick/internal/pkg/adminscope"
+	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -195,6 +196,22 @@ type Service struct {
 // trivial.
 type tagSeeder interface {
 	EnsureToolDefaultTags(ctx context.Context, toolPath string, defaults []tool.DefaultTag) error
+}
+
+// tagSwapper is the optional half of a tagSeeder that re-tags rows seeded
+// before their connector's DefaultTags changed.
+type tagSwapper interface {
+	SwapToolTag(ctx context.Context, toolPath, from string, to tool.DefaultTag) error
+}
+
+// retiredTags lists, per connector key, a tag an older build seeded that
+// DefaultTags has since replaced. EnsureToolDefaultTags never touches a
+// row that already has links, so without this the old tag would stick.
+var retiredTags = map[string]struct {
+	from string
+	to   tool.DefaultTag
+}{
+	"notifications": {from: tags.Communication.Name, to: tags.Platform},
 }
 
 // SetTags wires the tags service used to attach Meta.DefaultTags onto
@@ -572,6 +589,13 @@ func (s *Service) seedModuleRows(ctx context.Context, m connector.Module) error 
 			path := "/connectors/" + row.ID
 			if err := s.tags.EnsureToolDefaultTags(ctx, path, m.Meta.DefaultTags); err != nil {
 				return fmt.Errorf("ensure tags for %q: %w", row.ID, err)
+			}
+			if r, ok := retiredTags[m.Meta.Key]; ok {
+				if sw, ok := s.tags.(tagSwapper); ok {
+					if err := sw.SwapToolTag(ctx, path, r.from, r.to); err != nil {
+						return fmt.Errorf("swap tag for %q: %w", row.ID, err)
+					}
+				}
 			}
 		}
 	}
