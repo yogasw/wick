@@ -115,8 +115,10 @@ export const createAgent = (base: string, body: AgentWrite) =>
 export const updateAgent = (base: string, id: string, body: AgentWrite) =>
   apiPatchE<AgentItem>(`${base}/api/team/agents/${enc(id)}`, body);
 
-export const deleteAgent = (base: string, id: string) =>
-  apiDeleteE<unknown>(`${base}/api/team/agents/${enc(id)}`);
+/** chats="delete" takes the agent's own project with it (chats, files,
+    memory); "keep" leaves it as an ordinary project in the sidebar. */
+export const deleteAgent = (base: string, id: string, chats: "delete" | "keep") =>
+  apiDeleteE<unknown>(`${base}/api/team/agents/${enc(id)}?chats=${chats}`);
 
 /** The persona half an agent reads from its project (same fields
     teamAgentToItem fills from project meta), for the Settings project

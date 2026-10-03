@@ -7,7 +7,7 @@
      flight per agent; edits made meanwhile go out in the next one. A
      rejected PATCH keeps the local value and shows the error inline. */
   import { onMount, untrack } from "svelte";
-  import { ProviderPicker, Toggle, buildProviderOptions } from "@wick-fe/common-ui";
+  import { Button, Modal, ProviderPicker, Toggle, buildProviderOptions } from "@wick-fe/common-ui";
   import { toastOk } from "@wick-fe/common-stores";
   import DrawerHeader from "./DrawerHeader.svelte";
   import { AgentAvatar, AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, colorInputValue } from "@wick-fe/common-avatar";
@@ -86,6 +86,7 @@
   // its own (that would loop), only after another edit or Retry.
   let failedKey = $state("");
   let confirmDelete = $state(false);
+  let deleteChats = $state<"delete" | "keep">("delete");
 
   onMount(() => {
     runApi(getProviderOptions(base)).then((p) => { providers = p; }).catch(() => {});
@@ -231,7 +232,7 @@
     saving = true;
     error = "";
     try {
-      await runApi(deleteAgent(base, agent.id));
+      await runApi(deleteAgent(base, agent.id, deleteChats));
       onDeleted();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -460,16 +461,9 @@
       <p class="text-sm font-semibold text-neg-400">Danger zone</p>
       <Toggle checked={draft.disabled} onChange={(v) => (draft.disabled = v)} label="Disable agent" />
       <div>
-        {#if confirmDelete}
-          <div class="flex gap-2">
-            <button type="button" class="rounded-lg bg-neg-400 px-3 py-1 text-sm font-medium text-white-100 disabled:opacity-50" disabled={saving} onclick={remove}>Yes, delete</button>
-            <button type="button" class="rounded-lg px-3 py-1 text-sm text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600" onclick={() => (confirmDelete = false)}>Cancel</button>
-          </div>
-        {:else}
-          <button type="button" class="rounded-lg border border-neg-300 px-3 py-1 text-sm text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600" onclick={() => (confirmDelete = true)}>Delete agent…</button>
-        {/if}
+        <button type="button" class="rounded-lg border border-neg-300 px-3 py-1 text-sm text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600" onclick={() => { deleteChats = "delete"; confirmDelete = true; }}>Delete agent…</button>
         <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-          Its project and chats are not deleted.
+          You choose what happens to its chats and memory.
           {#if agent.is_captain}The Captain cannot be deleted while other agents exist.{/if}
         </p>
       </div>
@@ -495,3 +489,24 @@
   </span>
   <button type="button" class="rounded-lg px-4 py-2 text-sm text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600" onclick={onClose}>Close</button>
 </div>
+
+<Modal open={confirmDelete} title={`Delete agent ${agent.name || agent.handle}?`} onClose={() => (confirmDelete = false)} size="sm">
+  <fieldset class="space-y-2" data-testid="agent-delete-modes">
+    <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100">
+      <input type="radio" name="agent-delete-chats" value="delete" bind:group={deleteChats} class="mt-1" />
+      <span>Delete its chats and memory too
+        <span class="block text-xs text-black-700 dark:text-black-600">Removes the agent's project: its chats, files folder and the memory it built. Cannot be undone.</span>
+      </span>
+    </label>
+    <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100">
+      <input type="radio" name="agent-delete-chats" value="keep" bind:group={deleteChats} class="mt-1" />
+      <span>Keep its chats as a normal project
+        <span class="block text-xs text-black-700 dark:text-black-600">The project stays and shows in the sidebar under Projects.</span>
+      </span>
+    </label>
+  </fieldset>
+  {#snippet footer()}
+    <Button variant="secondary" onclick={() => (confirmDelete = false)}>Cancel</Button>
+    <Button variant="danger" disabled={saving} onclick={remove}>{deleteChats === "delete" ? "Delete agent and chats" : "Delete agent"}</Button>
+  {/snippet}
+</Modal>
