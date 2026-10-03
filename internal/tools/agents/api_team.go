@@ -1132,8 +1132,10 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	announceAccessChanged(c, accessBefore, p)
 	// Disabling holds the agent's schedules, enabling releases them.
 	syncAgentSchedules(c.Context(), accessBefore, p)
-	// Disabling takes the agent's Slack bot offline, enabling brings it back.
+	// Disabling takes the agent's Slack and Telegram bots offline, enabling
+	// brings them back.
 	syncAgentSlack(context.Background(), p)
+	syncAgentTelegram(context.Background(), p)
 	users := teamProjectUsersFor(c.Context(), []entity.AgentPersona{p})
 	c.JSON(http.StatusOK, teamAgentToItem(p, users, teamLiveNow(), reach))
 }
@@ -1171,6 +1173,7 @@ func apiTeamAgentDelete(c *tool.Ctx) {
 	removeAgentSlackInstant(p.ID)
 	removeAgentRemote(p)
 	removeAgentREST(p.ID)
+	removeAgentTelegram(p.ID)
 	// Before the project goes: the scope is read from the live sessions.
 	deleteAgentSchedules(c.Context(), p)
 	if err := releaseTeamAgentProject(c.Context(), p, rows, c.Query("chats") == "delete"); err != nil {

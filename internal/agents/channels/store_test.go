@@ -123,3 +123,34 @@ func TestSaveAgentSlackCreateKeepsDisabled(t *testing.T) {
 		t.Fatalf("enabled row = %+v", row)
 	}
 }
+
+// An agent's Telegram row lives beside its Slack row, never mixed up.
+func TestAgentTelegramRow(t *testing.T) {
+	db := testDB(t)
+	if err := SaveAgentSlack(db, "a1", "u1", map[string]string{"bot_token": "s"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveAgentTelegram(db, "a1", "u1", map[string]string{"bot_token": "t", "project_id": "p1"}, true); err != nil {
+		t.Fatal(err)
+	}
+	m, err := AgentTelegramConfig(db, "a1")
+	if err != nil || m["bot_token"] != "t" {
+		t.Fatalf("telegram config = %v %v", m, err)
+	}
+	cfg, err := DBStore{db: db}.LoadTelegramForAgent("a1")
+	if err != nil || cfg.BotToken != "t" || cfg.ProjectID != "p1" {
+		t.Fatalf("load = %+v %v", cfg, err)
+	}
+	if rows, _ := ListAgentTelegram(db); len(rows) != 1 || rows[0].Type != AgentTelegramType {
+		t.Fatalf("list = %+v", rows)
+	}
+	if err := DeleteAgentTelegram(db, "a1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := AgentTelegramRow(db, "a1"); ok {
+		t.Fatal("delete kept the telegram row")
+	}
+	if _, ok, _ := AgentSlackRow(db, "a1"); !ok {
+		t.Fatal("telegram delete dropped the slack row")
+	}
+}

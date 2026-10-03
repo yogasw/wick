@@ -1918,9 +1918,10 @@ func NewServer() *Server {
 	// Note: OAuth flow (start/callback) has moved to the generic connector
 	// manager at /manager/connectors/{key}/oauth/*. The Slack channel only
 	// needs token-refresh wiring for the send-proxy feature.
-	// Team agents with their own Slack app join the registry here so the
-	// wiring below (identity, owner, tokens) reaches their bots too.
+	// Team agents with their own Slack app or Telegram bot join the registry
+	// here so the wiring below (identity, owner, tokens) reaches them too.
 	agentstool.RegisterAgentSlackInstances(context.Background())
+	agentstool.RegisterAgentTelegramInstances(context.Background())
 	wireChannel := func(ch agentchannels.Channel) {
 		if slackCh, ok := ch.(*slackch.Channel); ok {
 			// Wire the refresh function so RefreshTokenMap can rebuild the map
