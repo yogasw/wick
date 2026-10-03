@@ -67,7 +67,7 @@ describe("SlackRemoteWizard", () => {
     expect(testSlack).toHaveBeenCalledWith("/tools/agents", want);
     await fireEvent.click(screen.getByRole("button", { name: "Create agent" }));
     await waitFor(() => expect(p.onCreated).toHaveBeenCalled());
-    expect(create).toHaveBeenCalledWith("/tools/agents", { ...want, usage: "only_me" });
+    expect(create).toHaveBeenCalledWith("/tools/agents", want);
   });
 
   test("a thread link fills channel and timestamp; As me needs the user's own account", async () => {

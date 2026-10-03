@@ -76,12 +76,12 @@ describe("RemoteAgentWizard", () => {
     await next();
     expect(screen.getByTestId("rw-warning").textContent).toBe(
       "Messages you send, including other agents' output that mentions this agent, leave wick for research.example.com.");
-    await fireEvent.click(screen.getByLabelText(/Me \+ my agents/));
+    expect(screen.queryByText("Who may use it")).toBeNull();
     await next();
     expect(screen.getByTestId("rw-connect").textContent).toContain("coming soon");
     await fireEvent.click(screen.getByRole("button", { name: "Create agent" }));
     await waitFor(() => expect(p.onCreated).toHaveBeenCalled());
-    expect(create.mock.calls[0][1]).toEqual({ url: resolved.card_url, usage: "me_and_my_agents" });
+    expect(create.mock.calls[0][1]).toEqual({ url: resolved.card_url });
   });
 
   test("a typed handle is sent; a 409 lands on the handle field", async () => {

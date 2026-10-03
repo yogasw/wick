@@ -13,10 +13,10 @@
   import RemoteSourcePicker from "./RemoteSourcePicker.svelte";
   import {
     createRemoteAgent, resolveRemoteCard, testRemoteAgent, runApi,
-    type AgentItem, type RemoteAuthType, type RemoteResolved, type RemoteTestResult, type RemoteUsage,
+    type AgentItem, type RemoteAuthType, type RemoteResolved, type RemoteTestResult,
   } from "../../api/team.js";
   import { HANDLE_RE } from "../../agentForm.js";
-  import { USAGE_OPTIONS, authReq, egressWarning, testSummary } from "../../remoteAgent.js";
+  import { authReq, egressWarning, testSummary } from "../../remoteAgent.js";
 
   type Props = {
     base: string;
@@ -48,7 +48,6 @@
   let handleTouched = $state(false);
   let handleError = $state("");
   let tagline = $state("");
-  let usage = $state<RemoteUsage>("only_me");
   let saving = $state(false);
   let error = $state("");
 
@@ -105,7 +104,6 @@
           ...(auth && auth.type !== "none" ? { auth } : {}),
           ...(handleTouched ? { handle } : {}),
           ...(tagline.trim() ? { tagline: tagline.trim() } : {}),
-          usage,
         }),
       );
       onCreated(a);
@@ -242,15 +240,6 @@
     <p class="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-500 dark:bg-navy-800 dark:text-amber-300" role="alert" data-testid="rw-warning">
       {egressWarning(host)}
     </p>
-    <fieldset class="space-y-2">
-      <legend class={label}>Who may use it</legend>
-      {#each USAGE_OPTIONS as o (o.value)}
-        <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100">
-          <input type="radio" class="mt-1" name="rw-usage" value={o.value} checked={usage === o.value} onchange={() => (usage = o.value)} />
-          <span>{o.label}<br /><span class="text-xs text-black-800 dark:text-black-600">{o.hint}</span></span>
-        </label>
-      {/each}
-    </fieldset>
     <p class="text-xs text-black-800 dark:text-black-600">Its tools run on {host || "the remote host"}, so there is no connector checklist here.</p>
   {:else}
     <div class="space-y-2" data-testid="rw-connect">

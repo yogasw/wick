@@ -11,10 +11,9 @@
   import SlackListenFields from "./SlackListenFields.svelte";
   import {
     getSlackRemote, updateSlackRemote, testSlackRemote, listAgentConnectors, runApi,
-    type AgentItem, type RemoteUsage, type SlackIdentity, type SlackListen, type SlackRemoteConfig,
+    type AgentItem, type SlackIdentity, type SlackListen, type SlackRemoteConfig,
     type SlackRemoteInfo, type SlackTarget, type SlackTestResult,
   } from "../../api/team.js";
-  import { USAGE_OPTIONS } from "../../remoteAgent.js";
   import { cleanConfig, configError, patchBody, slackTestSummary } from "../../slackRemote.js";
 
   type Props = {
@@ -29,7 +28,7 @@
   let info = $state<SlackRemoteInfo | null>(untrack(() => agent.slack_remote ?? null));
   let loadError = $state("");
   let workspace = $state("");
-  let busy = $state<"" | "save" | "test" | "usage">("");
+  let busy = $state<"" | "save" | "test">("");
   let error = $state("");
   let note = $state("");
   let testResult = $state<SlackTestResult | null>(null);
@@ -109,10 +108,6 @@
     void run("save", () => runApi(updateSlackRemote(base, agent.id, body)), "Saved.");
   }
 
-  function setUsage(u: RemoteUsage) {
-    if (!info || info.usage_effective === u) return;
-    void run("usage", () => runApi(updateSlackRemote(base, agent.id, { usage: u })), "Saved.");
-  }
 
   async function test() {
     if (busy) return;
@@ -162,15 +157,6 @@
 {:else}
   <div class="space-y-4" data-testid="slack-remote-advanced">
     <p class="text-sm font-semibold text-black-900 dark:text-white-100">Advanced</p>
-    <fieldset class="space-y-2">
-      <legend class={label}>Who may use it</legend>
-      {#each USAGE_OPTIONS as o (o.value)}
-        <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100">
-          <input type="radio" class="mt-1" name="ss-usage" value={o.value} checked={info.usage_effective === o.value} disabled={!!busy} onchange={() => setUsage(o.value)} />
-          <span>{o.label}<br /><span class="text-xs text-black-800 dark:text-black-600">{o.hint}</span></span>
-        </label>
-      {/each}
-    </fieldset>
   </div>
 {/if}
 {#if error}<p class="mt-2 text-sm text-neg-400">{error}</p>{/if}

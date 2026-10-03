@@ -9,11 +9,11 @@
   import RemoteAuthFields from "./RemoteAuthFields.svelte";
   import {
     getRemoteAgent, updateRemoteAgent, refreshRemoteCard, testRemoteAgent, runApi,
-    type AgentItem, type RemoteAgentInfo, type RemoteAuthType, type RemoteTestResult, type RemoteUpdate, type RemoteUsage,
+    type AgentItem, type RemoteAgentInfo, type RemoteAuthType, type RemoteTestResult, type RemoteUpdate,
   } from "../../api/team.js";
   import { rosterTime } from "../../timeFormat.js";
   import {
-    USAGE_OPTIONS, AUTH_OPTIONS, TIMEOUT_MIN, TIMEOUT_MAX, MAX_BYTES_DEFAULT, TIMEOUT_DEFAULT,
+    AUTH_OPTIONS, TIMEOUT_MIN, TIMEOUT_MAX, MAX_BYTES_DEFAULT, TIMEOUT_DEFAULT,
     authReq, bytesToKb, kbToBytes, limitsError, formatBytes, testSummary,
   } from "../../remoteAgent.js";
 
@@ -28,7 +28,7 @@
 
   let info = $state<RemoteAgentInfo | null>(untrack(() => agent.remote ?? null));
   let loadError = $state("");
-  let busy = $state<"" | "refresh" | "test" | "auth" | "usage" | "limits">("");
+  let busy = $state<"" | "refresh" | "test" | "auth" | "limits">("");
   let error = $state("");
   let note = $state("");
   let testResult = $state<RemoteTestResult | null>(null);
@@ -101,10 +101,6 @@
     void run("auth", () => patch({ auth: body }), body.type === "none" ? "Auth removed." : "Auth saved.").then(() => { secret = ""; });
   }
 
-  function setUsage(u: RemoteUsage) {
-    if (!info || info.usage === u) return;
-    void run("usage", () => patch({ usage: u }), "Saved ✓");
-  }
 
   function saveLimits() {
     if (!info || limitsWhy) return;
@@ -169,15 +165,6 @@
     <RemoteAuthFields bind:type={authType} bind:secret bind:header saved={info.auth_set && authType === info.auth_type} idPrefix="rs" />
     <button type="button" class={outline} disabled={!authDirty || !!busy} data-testid="remote-auth-save" onclick={saveAuth}>{busy === "auth" ? "Saving…" : "Save auth"}</button>
   </div>
-  <fieldset class="space-y-2 border-t border-white-300 pt-4 dark:border-navy-600">
-    <legend class="{label} pt-4">Who may use it</legend>
-    {#each USAGE_OPTIONS as o (o.value)}
-      <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100">
-        <input type="radio" class="mt-1" name="rs-usage" value={o.value} checked={info.usage === o.value} disabled={!!busy} onchange={() => setUsage(o.value)} />
-        <span>{o.label}<br /><span class="text-xs text-black-800 dark:text-black-600">{o.hint}</span></span>
-      </label>
-    {/each}
-  </fieldset>
 {:else}
   <div>
     <p class="text-sm font-semibold text-black-900 dark:text-white-100">Advanced</p>

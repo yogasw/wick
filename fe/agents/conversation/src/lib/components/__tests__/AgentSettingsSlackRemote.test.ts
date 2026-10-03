@@ -78,11 +78,11 @@ describe("AgentSettings › Slack remote", () => {
     expect(test_).toHaveBeenCalledWith("/tools/agents", { agent_id: "s1" });
   });
 
-  test("Advanced saves usage at once and keeps the danger zone", async () => {
+  test("Advanced keeps the danger zone; who may use it lives in Mention", async () => {
     render(AgentSettings, props("advanced"));
     await loaded();
     expect(screen.getByText("Danger zone")).toBeDefined();
-    await fireEvent.click(screen.getByLabelText(/Me \+ my agents/));
-    await waitFor(() => expect(update).toHaveBeenCalledWith("/tools/agents", "s1", { usage: "me_and_my_agents" }));
+    expect(screen.queryByText("Who may use it")).toBeNull();
+    await fireEvent.click(screen.getByRole("tab", { name: "Mention" }));
   });
 });

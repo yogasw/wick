@@ -103,7 +103,8 @@ export type AgentItem = {
 
 export type RemoteAuthType = "none" | "bearer" | "api_key";
 export type RemoteAuthReq = { type: RemoteAuthType; header?: string; secret?: string };
-export type RemoteUsage = "only_me" | "me_and_my_agents";
+/** Legacy "Who may use it"; "mention" = the Mention tab decides (read only). */
+export type RemoteUsage = "only_me" | "me_and_my_agents" | "mention";
 
 export type RemoteSkill = { id: string; name: string; description?: string; examples?: string[] };
 

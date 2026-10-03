@@ -1,4 +1,4 @@
-import type { AgentItem, RemoteAuthReq, RemoteAuthType, RemoteUsage } from "./api/team.js";
+import type { AgentItem, RemoteAuthReq, RemoteAuthType } from "./api/team.js";
 import type { RailTab } from "./agentMode.js";
 import type { SettingsTab } from "./agentsRouter.js";
 import { SLACK_REMOTE_KIND, slackCaption, targetLabel } from "./slackRemote.js";
@@ -77,14 +77,6 @@ export function egressWarning(host: string | null | undefined): string {
   return `Messages you send, including other agents' output that mentions this agent, leave wick for ${host || "the remote host"}.`;
 }
 
-export const USAGE_OPTIONS: { value: RemoteUsage; label: string; hint: string }[] = [
-  { value: "only_me", label: "Only me", hint: "Only you can chat with it. Your agents' @mentions are refused." },
-  {
-    value: "me_and_my_agents",
-    label: "Me + my agents (via mention)",
-    hint: "Your agents may @mention it too; only the mention text is sent, and the turn cap still applies.",
-  },
-];
 
 export const AUTH_OPTIONS: { value: RemoteAuthType; label: string }[] = [
   { value: "none", label: "None" },

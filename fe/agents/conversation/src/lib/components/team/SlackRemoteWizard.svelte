@@ -15,11 +15,10 @@
   import SlackListenFields from "./SlackListenFields.svelte";
   import {
     createSlackRemote, listAgentConnectors, testSlackRemote, runApi,
-    type AgentConnector, type AgentItem, type RemoteUsage, type SlackIdentity, type SlackListen,
+    type AgentConnector, type AgentItem, type SlackIdentity, type SlackListen,
     type SlackRemoteConfig, type SlackTarget, type SlackTestResult,
   } from "../../api/team.js";
   import { HANDLE_RE } from "../../agentForm.js";
-  import { USAGE_OPTIONS } from "../../remoteAgent.js";
   import { cleanConfig, configError, secError, slackTestSummary, slackWarning, targetLabel } from "../../slackRemote.js";
 
   type Props = {
@@ -57,7 +56,6 @@
   let name = $state("");
   let handle = $state("");
   let tagline = $state("");
-  let usage = $state<RemoteUsage>("only_me");
 
   let testing = $state(false);
   let testResult = $state<SlackTestResult | null>(null);
@@ -130,7 +128,6 @@
       const a = await runApi(
         createSlackRemote(base, {
           ...cfg,
-          usage,
           ...(name.trim() ? { name: name.trim() } : {}),
           ...(handleTyped ? { handle: handle.trim() } : {}),
           ...(tagline.trim() ? { tagline: tagline.trim() } : {}),
@@ -247,15 +244,6 @@
         {testResult ? slackTestSummary(testResult) : testError}
       </p>
     {/if}
-    <fieldset class="space-y-2">
-      <legend class={label}>Who may use it</legend>
-      {#each USAGE_OPTIONS as o (o.value)}
-        <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100">
-          <input type="radio" class="mt-1" name="sw-usage" value={o.value} checked={usage === o.value} onchange={() => (usage = o.value)} />
-          <span>{o.label}<br /><span class="text-xs text-black-800 dark:text-black-600">{o.hint}</span></span>
-        </label>
-      {/each}
-    </fieldset>
     <p class="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-500 dark:bg-navy-800 dark:text-amber-300" role="alert" data-testid="sw-warning">
       {slackWarning(where, workspace)}
     </p>

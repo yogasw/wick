@@ -76,15 +76,22 @@ describe("AgentSettings › A2A remote", () => {
     expect(p.onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: "r1", remote: expect.objectContaining({ card: expect.objectContaining({ version: "1.5.0" }) }) }));
   });
 
-  test("changing auth sends the new secret; switching usage saves at once", async () => {
+  test("changing auth sends the new secret; no separate usage setting", async () => {
     render(AgentSettings, props("remote"));
     await loaded();
     await fireEvent.click(screen.getByRole("button", { name: "API key" }));
     await fireEvent.input(screen.getByLabelText("Key"), { target: { value: "k-1" } });
     await fireEvent.click(screen.getByTestId("remote-auth-save"));
     await waitFor(() => expect(update).toHaveBeenCalledWith("/tools/agents", "r1", { auth: { type: "api_key", header: "X-API-Key", secret: "k-1" } }));
-    await fireEvent.click(screen.getByLabelText(/Me \+ my agents/));
-    await waitFor(() => expect(update).toHaveBeenLastCalledWith("/tools/agents", "r1", { usage: "me_and_my_agents" }));
+    expect(screen.queryByText("Who may use it")).toBeNull();
+  });
+
+  test("Mention says the agent runs outside wick and offers the usual options", async () => {
+    render(AgentSettings, props("mention"));
+    await waitFor(() => expect(screen.getByTestId("mention-remote-note")).toBeTruthy());
+    expect(screen.getByTestId("mention-remote-note").textContent).toContain("runs outside wick");
+    expect(screen.getByText("Nobody")).toBeTruthy();
+    expect(screen.getByText("Any of my agents")).toBeTruthy();
   });
 
   test("Advanced edits timeout and max response, refuses out-of-range values, keeps the danger zone", async () => {

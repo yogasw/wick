@@ -583,6 +583,11 @@
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Mention between agents</p>
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">Who in your Team can hand @{agent.handle} a turn with an @mention. You can always mention it yourself.</p>
+      {#if remote}
+        <p class="mt-2 rounded-lg border border-white-300 bg-white-200 px-3 py-2 text-xs text-black-800 dark:border-navy-600 dark:bg-navy-700 dark:text-black-600" data-testid="mention-remote-note">
+          This agent runs outside wick (Slack/A2A) as you. Agents that may mention it send only the mention text. "Nobody" keeps it to you alone.
+        </p>
+      {/if}
     </div>
     <div class="space-y-2" role="radiogroup" aria-label="Who can mention this agent" data-testid="mention-from">
       {#each MENTION_FROM_OPTIONS as o (o.value)}
