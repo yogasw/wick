@@ -125,6 +125,7 @@ import (
 	"github.com/yogasw/wick/internal/tools"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
+	toolplugin "github.com/yogasw/wick/internal/tools/plugin"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
 	"github.com/yogasw/wick/internal/updater"
 	"github.com/yogasw/wick/internal/userconfig"
@@ -250,6 +251,14 @@ func NewServer() *Server {
 	if n := jobplugin.Load(connplugin.KindDir(wickplugin.KindJob), jobPluginStore.Enabled, jobPluginStore.Record); n > 0 {
 		log.Info().Int("plugins", n).Msg("job plugins: loaded")
 	}
+	// Tool plugins (plugins/tools/<key>) register like built-in tools whose
+	// routes reverse-proxy to the plugin process (spawned on first use).
+	toolPlugins := toolplugin.NewPool()
+	if n := toolPlugins.Load(connplugin.KindDir(wickplugin.KindTool), jobPluginStore.Enabled, jobPluginStore.Record, tools.Register); n > 0 {
+		log.Info().Int("plugins", n).Msg("tool plugins: loaded")
+	}
+	toolPlugins.Start()
+	home.PluginVersions = toolPlugins.Version
 
 	// ── Tool modules (discover first so their Specs feed into the
 	// config bootstrap below) ──────────────────────────────────────
@@ -3086,7 +3095,7 @@ func NewServer() *Server {
 		u, err := authSvc.GetUserByID(ctx, userID)
 		return err == nil && u != nil && u.Approved
 	}
-	return &Server{runAsUsable: runAsUsable, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens}
+	return &Server{runAsUsable: runAsUsable, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens}
 }
 
 type Server struct {
@@ -3096,6 +3105,7 @@ type Server struct {
 	agentsPool     *agentpool.Pool
 	agentsLayout   agentconfig.Layout
 	pluginMgr      *connplugin.Manager
+	toolPlugins    *toolplugin.Pool
 	pluginReloader *connplugin.Reloader
 	// syncSessionMeta reloads one session into the in-memory registry
 	// and broadcasts its meta over SSE. Built in NewServer (where the
@@ -3742,6 +3752,9 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		if s.pluginReloader != nil {
 			s.pluginReloader.Stop()
 		}
+		if s.toolPlugins != nil {
+			s.toolPlugins.KillAll()
+		}
 		if s.pluginMgr != nil {
 			s.pluginMgr.KillAll()
 		}
@@ -3989,6 +4002,9 @@ func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, b
 	ompprovider.ShutdownServers()
 	if s.pluginReloader != nil {
 		s.pluginReloader.Stop()
+	}
+	if s.toolPlugins != nil {
+		s.toolPlugins.KillAll()
 	}
 	if s.pluginMgr != nil {
 		s.pluginMgr.KillAll()
