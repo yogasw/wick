@@ -1112,6 +1112,8 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 		return
 	}
 	announceAccessChanged(c, accessBefore, p)
+	// Disabling takes the agent's Slack bot offline, enabling brings it back.
+	syncAgentSlack(context.Background(), p)
 	users := teamProjectUsersFor(c.Context(), []entity.AgentPersona{p})
 	c.JSON(http.StatusOK, teamAgentToItem(p, users, teamLiveNow(), reach))
 }
@@ -1145,6 +1147,7 @@ func apiTeamAgentDelete(c *tool.Ctx) {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
+	removeAgentSlack(p.ID)
 	if err := releaseTeamAgentProject(c.Context(), p, rows, c.Query("chats") == "delete"); err != nil {
 		log.Ctx(c.Context()).Error().Err(err).Str("project", p.ProjectID).Msg("team: release agent project")
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": "agent deleted, but its project was not: " + err.Error()})

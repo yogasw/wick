@@ -266,6 +266,18 @@ type Channel struct {
 	// and the turn.threadTS field.
 	sessionPrefix string
 
+	// dmMainFn, when set, names the session a DM from a wick user continues
+	// (a Team agent's main chat); dmMain remembers which sessions those are
+	// so their turn is let go once answered. See agent_dm.go.
+	dmMainFn DMMainFn
+	dmMain   sync.Map
+
+	// eventsSeen is event subscription name → last receipt, for the
+	// health matrix's "never received since boot" warning.
+	eventsSeen sync.Map
+	// matrixAPIURL points the matrix's auth.test at a stub in tests.
+	matrixAPIURL string
+
 	cfgMu          sync.Mutex
 	cfg            agentconfig.SlackChannelConfig
 	pubURL         string
@@ -1225,6 +1237,11 @@ func (s *Channel) handleSlashCommand(ctx context.Context, cmd slackgo.SlashComma
 func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsAPIEvent) {
 	switch outer.Type {
 	case slackevents.CallbackEvent:
+		chType := ""
+		if m, ok := outer.InnerEvent.Data.(*slackevents.MessageEvent); ok {
+			chType = m.ChannelType
+		}
+		s.observeEvent(observedEventName(outer.InnerEvent.Type, chType))
 		switch ev := outer.InnerEvent.Data.(type) {
 		case *slackevents.AppMentionEvent:
 			if ev.BotID != "" {
@@ -1914,6 +1931,10 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	// workspaces) never collide on an equal threadTS. The bare threadTS is
 	// kept on the turn for Slack API calls.
 	sessionID := s.sessionKey(threadTS)
+	dmMain := false
+	if id := s.dmMainSession(ev); id != "" {
+		sessionID, dmMain = id, true
+	}
 
 	s.mu.Lock()
 	old := s.turns[sessionID]
@@ -1929,7 +1950,11 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	}
 	s.turns[sessionID] = t
 	s.mu.Unlock()
-	s.persistThreadBinding(sessionID, ev.Channel, threadTS)
+	// A main chat is shared with the web app; binding it to this thread
+	// would send the web's answers here too.
+	if !dmMain {
+		s.persistThreadBinding(sessionID, ev.Channel, threadTS)
+	}
 
 	// Set the status (with our loading_messages) BEFORE spawning the agent —
 	// Slack's guidance is to set status immediately when a message arrives,
@@ -2638,6 +2663,11 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 	if ev.SubAgent != "" {
 		s.setStatusLabel(sessionKey, subAgentStatusLabel(ev))
 		return
+	}
+	if ev.Type == event.Done || ev.Type == event.Error {
+		if _, ok := s.dmMain.Load(sessionKey); ok {
+			defer s.releaseDMTurn(sessionKey)
+		}
 	}
 	// Same reason as NotifyState: without a turn every case below is a no-op,
 	// so a turn this process did not receive would stream into nothing.

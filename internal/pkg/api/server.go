@@ -1846,7 +1846,10 @@ func NewServer() *Server {
 	// Note: OAuth flow (start/callback) has moved to the generic connector
 	// manager at /manager/connectors/{key}/oauth/*. The Slack channel only
 	// needs token-refresh wiring for the send-proxy feature.
-	for _, ch := range channelReg.Channels() {
+	// Team agents with their own Slack app join the registry here so the
+	// wiring below (identity, owner, tokens) reaches their bots too.
+	agentstool.RegisterAgentSlackInstances(context.Background())
+	wireChannel := func(ch agentchannels.Channel) {
 		if slackCh, ok := ch.(*slackch.Channel); ok {
 			// Wire the refresh function so RefreshTokenMap can rebuild the map
 			// from connector rows without a server restart.
@@ -1952,6 +1955,11 @@ func NewServer() *Server {
 			}
 		}
 	}
+	for _, ch := range channelReg.Channels() {
+		wireChannel(ch)
+	}
+	// A bot connected while wick runs gets the same wiring.
+	agentstool.SetChannelWirer(wireChannel)
 
 	// ── Personal Access Tokens (MCP bearer auth) ─────────────────
 	// tokensSvc instantiated earlier so the REST channel can reuse it.

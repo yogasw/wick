@@ -387,3 +387,86 @@ func (s DBStore) SaveBotIdentity(channelType, userID, botUserID, botName, teamNa
 	}
 	return nil
 }
+
+// AgentSlackType is the agent_channels.type of a Team agent's own Slack
+// app (Custom mode). One row per agent: Name holds the agent id, UserID
+// the agent's owner. Config is the same JSON map a Slack row uses.
+const AgentSlackType = "slack-agent"
+
+// AgentSlackRow returns the Slack connection row of agentID.
+func AgentSlackRow(db *gorm.DB, agentID string) (entity.AgentChannel, bool, error) {
+	var ch entity.AgentChannel
+	err := db.Where("type = ? AND name = ?", AgentSlackType, agentID).First(&ch).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ch, false, nil
+	}
+	return ch, err == nil, err
+}
+
+// AgentSlackConfig is AgentSlackRow's config map, still encrypted.
+func AgentSlackConfig(db *gorm.DB, agentID string) (map[string]string, error) {
+	ch, ok, err := AgentSlackRow(db, agentID)
+	if err != nil || !ok {
+		return map[string]string{}, err
+	}
+	m := map[string]string{}
+	if ch.Config != "" && ch.Config != "{}" {
+		if err := json.Unmarshal([]byte(ch.Config), &m); err != nil {
+			return nil, err
+		}
+	}
+	return m, nil
+}
+
+// SaveAgentSlack upserts agentID's connection row with m as its config.
+func SaveAgentSlack(db *gorm.DB, agentID, ownerID string, m map[string]string, enabled bool) error {
+	data, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	ch, ok, err := AgentSlackRow(db, agentID)
+	if err != nil {
+		return err
+	}
+	if ok {
+		return db.Model(&ch).Updates(map[string]any{
+			"config": string(data), "enabled": enabled, "updated_at": time.Now(),
+		}).Error
+	}
+	owner := ownerID
+	return db.Create(&entity.AgentChannel{
+		ID: uuid.New().String(), Type: AgentSlackType, Name: agentID, UserID: &owner,
+		Enabled: enabled, Config: string(data), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}).Error
+}
+
+// DeleteAgentSlack drops agentID's connection row, if any.
+func DeleteAgentSlack(db *gorm.DB, agentID string) error {
+	return db.Where("type = ? AND name = ?", AgentSlackType, agentID).Delete(&entity.AgentChannel{}).Error
+}
+
+// ListAgentSlack returns every agent Slack connection row.
+func ListAgentSlack(db *gorm.DB) ([]entity.AgentChannel, error) {
+	var rows []entity.AgentChannel
+	err := db.Where("type = ?", AgentSlackType).Find(&rows).Error
+	return rows, err
+}
+
+// LoadSlackForAgent is LoadSlackForUser for a Team agent's connection row,
+// secrets decrypted.
+func (s DBStore) LoadSlackForAgent(agentID string) (agentconfig.SlackChannelConfig, string, error) {
+	cfg := agentconfig.DefaultSlackChannelConfig()
+	m, err := AgentSlackConfig(s.db, agentID)
+	if err != nil {
+		return cfg, "", err
+	}
+	if s.Configs != nil {
+		for k, v := range m {
+			if plain, err := s.Configs.DecryptSecret(v); err == nil {
+				m[k] = plain
+			}
+		}
+	}
+	pkgentity.MapToStruct(m, &cfg)
+	return cfg, cfg.PublicURL, nil
+}
