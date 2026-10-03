@@ -15,6 +15,7 @@
       "bot": [
         "app_mentions:read",
         "chat:write",
+        "chat:write.customize",
         "reactions:write",
         "reactions:read",
         "usergroups:read",

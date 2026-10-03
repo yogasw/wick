@@ -46,6 +46,7 @@ const (
 	FeatureAgentView     = "agent_view"
 	FeatureFiles         = "files"
 	FeatureCanvasList    = "canvas_list"
+	FeatureInstant       = "instant_agents"
 )
 
 // Feature is one row of the requirement matrix.
@@ -78,6 +79,10 @@ var requirements = []Feature{
 	{Key: FeatureAgentView, Label: "Agent view and status banner", Need: NeedWhenOn,
 		BotScopes: []string{"assistant:write"},
 		Events:    []string{"assistant_thread_started"}},
+	// Instant agents reply under their own name and icon. Missing the scope
+	// is a warning: replies still go out, as the bot.
+	{Key: FeatureInstant, Label: "Instant agents (custom name and icon)", Need: NeedWhenOn,
+		BotScopes: []string{"chat:write.customize"}},
 	{Key: FeatureFiles, Label: "Files and attachments", Need: NeedOptional,
 		BotScopes: []string{"files:read", "files:write"}},
 	{Key: FeatureCanvasList, Label: "Canvases and lists", Need: NeedInfo,
@@ -129,6 +134,9 @@ func FeatureActive(key string, cfg agentconfig.SlackChannelConfig, agentView boo
 		return cfg.ReactionTriggerEnabled
 	case FeatureAgentView:
 		return agentView
+	case FeatureInstant:
+		// Known per instance, not from cfg: see Channel.FeatureMatrix.
+		return false
 	}
 	return true
 }

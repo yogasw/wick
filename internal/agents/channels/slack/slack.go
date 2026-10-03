@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -272,6 +273,12 @@ type Channel struct {
 	// so their turn is let go once answered. See agent_dm.go.
 	dmMainFn DMMainFn
 	dmMain   sync.Map
+
+	// personas is session key → Persona of the Instant agent answering it
+	// (zero Persona = wick itself); customizeDenied is set once the token
+	// proved to lack chat:write.customize. See instant.go.
+	personas        sync.Map
+	customizeDenied atomic.Bool
 
 	// eventsSeen is event subscription name → last receipt, for the
 	// health matrix's "never received since boot" warning.
@@ -635,6 +642,7 @@ func (s *Channel) HTTPHandlers() map[string]http.Handler {
 	return map[string]http.Handler{
 		"POST /integrations/slack/events": s.HTTPHandler(),
 		"POST /integrations/slack/send":   s.sendHandler(),
+		"GET " + avatarPath + "{file}":    avatarHandler(),
 	}
 }
 
@@ -1963,6 +1971,14 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		sessionID, dmMain = id, true
 	}
 
+	// An Instant agent riding this bot answers when the channel is bound to
+	// it, the mention names it, or it already owns the thread.
+	var persona Persona
+	routedText := ev.Text
+	if !dmMain {
+		persona, routedText = s.routePersona(ev.Channel, sessionID, ev.Text, s.sessionOnDisk(sessionID))
+	}
+
 	s.mu.Lock()
 	old := s.turns[sessionID]
 	t := &turn{
@@ -2021,7 +2037,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		s.setReaction(reactionQueued, chID, msgTS, "")
 	})
 
-	userText := normalizeUserText(ev.Text)
+	userText := normalizeUserText(routedText)
 	// Who spoke — essential in multi-user threads and for matching the sender
 	// to a connector (bot vs the user's SSO-connected account) when replying.
 	// Travels on the send context rather than inside userText: the pool turns
@@ -2072,11 +2088,14 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	if s.ownerFn != nil {
 		s.ownerFn(context.Background(), sessionID, callerUserID)
 	}
+	// The Instant agent's project carries the turn, so the session is born
+	// as that agent's (and is found again by it — sticky per thread).
+	baseCtx := agentchannels.WithProjectOverride(s.sendCtxAs(context.Background(), callerUserID), persona.ProjectID)
 	isNewSession := !s.sessionOnDisk(sessionID)
 	if isNewSession {
 		ctxText := s.buildSessionContext(ev, threadTS)
 		if ctxText != "" {
-			if err := s.sendFn(s.sendCtxAs(context.Background(), callerUserID), sessionID, "main", "slack", "system", ctxText); err != nil {
+			if err := s.sendFn(baseCtx, sessionID, "main", "slack", "system", ctxText); err != nil {
 				log.Warn().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("inject session context failed")
 			}
 		}
@@ -2085,7 +2104,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		}
 	}
 
-	userCtx := agentchannels.WithSender(s.sendCtxAs(context.Background(), callerUserID), sender)
+	userCtx := agentchannels.WithSender(baseCtx, sender)
 	if err := s.sendFn(userCtx, sessionID, "main", "slack", "user", userText); err != nil {
 		log.Error().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("pool send failed")
 		s.cancelQueueTimer(sessionID, ev.Channel, ev.TimeStamp)
@@ -2435,11 +2454,7 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 	if liveTS == "" {
 		var newTS string
 		s.withBackoff(func() error {
-			_, ts, err := api.PostMessage(
-				channelID,
-				slackgo.MsgOptionText(shown, false),
-				slackgo.MsgOptionTS(threadTS),
-			)
+			ts, err := s.postThread(api, channelID, threadTS, slackgo.MsgOptionText(shown, false))
 			if err == nil {
 				newTS = ts
 			}
@@ -2842,11 +2857,7 @@ func (s *Channel) postSystemNotice(sessionKey, text string) {
 			slackgo.MarkdownType, text, false, false)),
 	}
 	s.withBackoff(func() error {
-		_, _, err := api.PostMessage(
-			channelID,
-			slackgo.MsgOptionBlocks(blocks...),
-			slackgo.MsgOptionTS(threadTS),
-		)
+		_, err := s.postThread(api, channelID, threadTS, slackgo.MsgOptionBlocks(blocks...))
 		return err
 	})
 }

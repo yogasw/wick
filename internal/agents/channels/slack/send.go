@@ -331,11 +331,7 @@ func (s *Channel) postReply(channelID, threadTS, text string) {
 	api := s.api
 	s.cfgMu.Unlock()
 	s.withBackoff(func() error {
-		_, _, err := api.PostMessage(
-			channelID,
-			slackgo.MsgOptionText(text, false),
-			slackgo.MsgOptionTS(threadTS),
-		)
+		_, err := s.postThread(api, channelID, threadTS, slackgo.MsgOptionText(text, false))
 		return err
 	})
 }
@@ -355,11 +351,7 @@ func (s *Channel) postReplyWithFooter(channelID, threadTS, text string) {
 		s.signedContextBlock(),
 	}
 	s.withBackoff(func() error {
-		_, _, err := api.PostMessage(
-			channelID,
-			slackgo.MsgOptionBlocks(blocks...),
-			slackgo.MsgOptionTS(threadTS),
-		)
+		_, err := s.postThread(api, channelID, threadTS, slackgo.MsgOptionBlocks(blocks...))
 		return err
 	})
 }

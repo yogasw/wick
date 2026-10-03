@@ -60,7 +60,7 @@ func BuildMatrix(in MatrixInput) []MatrixRow {
 		r := MatrixRow{Key: f.Key, Label: f.Label, Need: f.Need, Scopes: []MatrixItem{}, Events: []MatrixItem{}}
 		active := in.Active == nil || in.Active(f.Key)
 		miss := StatusError
-		if f.Need == NeedOptional || f.Need == NeedInfo {
+		if f.Need == NeedOptional || f.Need == NeedInfo || f.Key == FeatureInstant {
 			miss = StatusWarn
 		}
 		for _, sc := range f.BotScopes {
@@ -202,8 +202,13 @@ func (s *Channel) SeenEvents() map[string]time.Time {
 func (s *Channel) FeatureMatrix(agentView bool) []MatrixRow {
 	cfg := s.snapshot()
 	in := MatrixInput{
-		Seen:   s.SeenEvents(),
-		Active: func(key string) bool { return FeatureActive(key, cfg, agentView) },
+		Seen: s.SeenEvents(),
+		Active: func(key string) bool {
+			if key == FeatureInstant {
+				return s.ServesInstant()
+			}
+			return FeatureActive(key, cfg, agentView)
+		},
 	}
 	if cfg.BotToken != "" {
 		if sc, err := TokenScopes(cfg.BotToken, s.apiURLOverride()); err == nil {
