@@ -80,7 +80,10 @@ type Event struct {
 	Scope  string    `json:"scope,omitempty"`
 	PID    int       `json:"pid,omitempty"`
 	Target string    `json:"target,omitempty"`
-	Detail string    `json:"detail"`
+	// AgentPID is the agent CLI that owns the scope, so the caller can
+	// tell that agent's session what happened. 0 = unknown (a run-* unit).
+	AgentPID int    `json:"agent_pid,omitempty"`
+	Detail   string `json:"detail"`
 }
 
 // Guard is the watchdog. Zero value is not usable; use New.
@@ -114,6 +117,7 @@ type Guard struct {
 	appliedQuota *[3]int
 	lastTick     time.Time
 	logOnly      bool
+	scopeAgent   map[string]int // scope → agent CLI pid, from the last sample
 }
 
 // New builds a guard over host, reading its config through load.
@@ -168,6 +172,9 @@ func (g *Guard) HoldSpawns() bool {
 
 func (g *Guard) emit(e Event) {
 	e.At = g.now()
+	if e.AgentPID == 0 && e.Scope != "" {
+		e.AgentPID = g.scopeAgent[e.Scope]
+	}
 	if g.logOnly {
 		// Action "log": nothing was done, so the record must not say it was.
 		e.Detail = "[log only, no action taken] " + e.Detail
@@ -258,6 +265,7 @@ func (g *Guard) readProcs(scopes []Scope) []agentProc {
 	self := g.host.SelfScope()
 	dt := g.now().Sub(g.prevAt).Seconds()
 	var out []agentProc
+	g.scopeAgent = map[string]int{}
 	for _, s := range scopes {
 		if s.Name == self {
 			continue
@@ -271,7 +279,10 @@ func (g *Guard) readProcs(scopes []Scope) []agentProc {
 			if !ok {
 				continue
 			}
-			ap := agentProc{Proc: p, scope: s.Name, isAgent: !in[p.PPID]}
+			ap := agentProc{Proc: p, scope: s.Name, isAgent: !s.Detached && !in[p.PPID]}
+			if ap.isAgent && g.scopeAgent[s.Name] == 0 {
+				g.scopeAgent[s.Name] = pid
+			}
 			if prev, ok := g.prevRSS[pid]; ok && dt > 0 {
 				ap.rssRate = (float64(p.RSSBytes) - float64(prev)) / dt
 			}
@@ -465,6 +476,10 @@ func (g *Guard) cpuPass(cfg Config, now time.Time, procs []agentProc, lagging bo
 		}
 		calm := now.Sub(g.cpuCalmSince)
 		for pid, at := range g.stopped {
+			if _, alive := g.host.Proc(pid); !alive {
+				delete(g.stopped, pid)
+				continue
+			}
 			if calm >= cpuResumeCalm || now.Sub(at) >= 2*cpuResumeCalm {
 				_ = g.host.Signal(pid, syscall.SIGCONT)
 				delete(g.stopped, pid)

@@ -33,3 +33,17 @@ func TestMemoryAdmits(t *testing.T) {
 		})
 	}
 }
+
+// The trend gate holds a spawn even with free memory above the floor:
+// a machine losing memory fast is not fine just because it is not empty yet.
+func TestSpawnHoldRefusesWhileTheGuardHolds(t *testing.T) {
+	hold := true
+	p := &Pool{cfg: PoolConfig{SpawnHold: func() bool { return hold }}}
+	if p.memoryAdmitsNow() {
+		t.Fatal("spawn admitted while the resource guard holds")
+	}
+	hold = false
+	if !p.memoryAdmitsNow() {
+		t.Fatal("spawn refused after the guard released")
+	}
+}

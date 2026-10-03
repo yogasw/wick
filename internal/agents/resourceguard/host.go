@@ -1,6 +1,11 @@
 package resourceguard
 
-import "syscall"
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+	"syscall"
+)
 
 // Host is everything the guard reads from and does to the machine. The
 // Linux implementation reads /proc and the cgroup v2 tree under
@@ -33,9 +38,13 @@ type Host interface {
 
 // Scope is one agent's cgroup.
 type Scope struct {
-	Name     string // e.g. claude-agent-1110-4.scope
+	Name     string // e.g. claude-agent-1110-4.scope, or app.slice/run-u12.service
 	MemBytes uint64
 	PIDs     []int
+	// Detached marks a transient run-* unit an agent started with
+	// `systemd-run --user` outside agents.slice. It has no agent CLI of
+	// its own — every process in it is disposable.
+	Detached bool
 }
 
 // Proc is one process as the guard sees it.
@@ -46,4 +55,20 @@ type Proc struct {
 	Cmdline  string
 	RSSBytes uint64
 	CPUTicks uint64 // utime+stime, in clock ticks
+}
+
+// scopeDirIn resolves a scope name to its directory: a plain name under
+// agents.slice, or app.slice/run-* under the user manager. Anything else
+// is refused, so a bad name can never reach another cgroup.
+func scopeDirIn(user, slice, scope string) (string, error) {
+	if rest, ok := strings.CutPrefix(scope, "app.slice/"); ok {
+		if strings.HasPrefix(rest, "run-") && !strings.ContainsAny(rest, "/\x00") {
+			return filepath.Join(user, "app.slice", rest), nil
+		}
+		return "", fmt.Errorf("resourceguard: bad scope %q", scope)
+	}
+	if scope == "" || strings.ContainsAny(scope, "/\x00") || scope == "." || scope == ".." {
+		return "", fmt.Errorf("resourceguard: bad scope %q", scope)
+	}
+	return filepath.Join(slice, scope), nil
 }

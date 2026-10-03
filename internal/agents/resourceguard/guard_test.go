@@ -301,3 +301,55 @@ func TestParsers(t *testing.T) {
 		t.Fatalf("cpuMax wrong: %q %q", cpuMax(140), cpuMax(0))
 	}
 }
+
+// A run-* unit an agent started outside agents.slice has no agent CLI:
+// its root process is disposable, and its events carry no agent pid.
+func TestDetachedRunUnitIsCovered(t *testing.T) {
+	h := agentTree()
+	h.scopes = append(h.scopes, Scope{Name: "app.slice/run-u7.service", Detached: true, PIDs: []int{200}})
+	h.procs[200] = Proc{PID: 200, PPID: 1, Comm: "go", Cmdline: "go test ./...", RSSBytes: 900 << 20}
+	g, c := newTestGuard(h, enforce())
+	h.avail = 900
+	for i := 0; i < 4; i++ {
+		h.avail -= 150
+		p := h.procs[200]
+		p.RSSBytes += 300 << 20
+		h.procs[200] = p
+		c.step(time.Second)
+		g.Tick()
+	}
+	if len(h.signals) != 1 || h.signals[0] != "killed:go" {
+		t.Fatalf("signals = %v, want the detached go build killed", h.signals)
+	}
+	ev := g.History()
+	if ev[0].Scope != "app.slice/run-u7.service" || ev[0].AgentPID != 0 {
+		t.Fatalf("event = %+v", ev[0])
+	}
+}
+
+// Events from an agent scope name the agent CLI, so its session can be told.
+func TestEventCarriesAgentPID(t *testing.T) {
+	h := agentTree()
+	g, c := newTestGuard(h, enforce())
+	h.avail = 100
+	c.step(time.Second)
+	g.Tick()
+	ev := g.History()
+	if len(ev) == 0 || ev[0].AgentPID != 100 {
+		t.Fatalf("events = %+v, want agent pid 100", ev)
+	}
+}
+
+func TestScopeDirRefusesEscapes(t *testing.T) {
+	for _, bad := range []string{"", "..", "a/b", "app.slice/support-tools.service", "app.slice/run-x/../../y"} {
+		if _, err := scopeDirIn("/u", "/u/agents.slice", bad); err == nil {
+			t.Fatalf("scope %q accepted", bad)
+		}
+	}
+	if d, err := scopeDirIn("/u", "/u/agents.slice", "app.slice/run-u1.service"); err != nil || d != "/u/app.slice/run-u1.service" {
+		t.Fatalf("run unit = %q %v", d, err)
+	}
+	if d, err := scopeDirIn("/u", "/u/agents.slice", "claude-agent-1-1.scope"); err != nil || d != "/u/agents.slice/claude-agent-1-1.scope" {
+		t.Fatalf("agent scope = %q %v", d, err)
+	}
+}

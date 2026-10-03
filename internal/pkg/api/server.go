@@ -15,8 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"strconv"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,11 +24,11 @@ import (
 
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin"
+	"github.com/yogasw/wick/internal/agents/a2aserver"
 	"github.com/yogasw/wick/internal/agents/agentctl"
 	"github.com/yogasw/wick/internal/agents/airouter"
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
-	"github.com/yogasw/wick/internal/agents/a2aserver"
 	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
 	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
 	telegramch "github.com/yogasw/wick/internal/agents/channels/telegram"
@@ -48,13 +48,14 @@ import (
 	wickprovider "github.com/yogasw/wick/internal/agents/provider/wick"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
+	"github.com/yogasw/wick/internal/agents/resourceguard"
 	"github.com/yogasw/wick/internal/agents/schedule"
 	agentsession "github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/sessionworkspace"
 	agentskills "github.com/yogasw/wick/internal/agents/skills"
+	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
-	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/terminal"
 	"github.com/yogasw/wick/internal/agents/ticket"
@@ -879,6 +880,37 @@ func NewServer() *Server {
 	ompprovider.SetMCPTokenRevoker(func(token string) { mcpScopedTokens.Revoke(token) })
 
 	preemptIdle := configsSvc.GetOwned("agents", "preempt_idle") != "false"
+	// Resource Guard: the fast watchdog over the agent tree. Config is
+	// read per tick so mode, action and knobs apply without a restart;
+	// it only acts while the guard mode is enforce, and only on Linux
+	// (NewHost is nil elsewhere and Run returns at once).
+	resourceGuard := resourceguard.New(resourceguard.NewHost(), func() resourceguard.Config {
+		atoiOr := func(key string, def int) int {
+			if n, err := strconv.Atoi(configsSvc.GetOwned("agents", key)); err == nil && n > 0 {
+				return n
+			}
+			return def
+		}
+		atoi := func(key string) int {
+			n, _ := strconv.Atoi(configsSvc.GetOwned("agents", key))
+			return n
+		}
+		action := configsSvc.GetOwned("agents", "resource_guard_action")
+		if action == "" {
+			action = resourceguard.ActionKill
+		}
+		return resourceguard.Config{
+			Enabled:     configsSvc.GetOwned("agents", "memory_guard_mode") == agentconfig.MemGuardEnforce,
+			Action:      action,
+			Interval:    time.Duration(atoiOr("resource_guard_interval_ms", 1000)) * time.Millisecond,
+			HorizonSec:  atoiOr("resource_guard_exhaust_horizon_sec", 20),
+			MinFreeMB:   atoi("min_free_memory_mb"),
+			CPUPSIMax:   float64(atoiOr("resource_guard_cpu_psi_max", 90)),
+			CPUQuotaPct: atoi("agents_cpu_quota_pct"),
+			CPUWeight:   atoi("agents_cpu_weight"),
+			TasksMax:    atoi("agents_tasks_max"),
+		}
+	})
 	// Agents app (Team) service: declared ahead of the pool because both
 	// the pool's respawn rule and the MCP minter consult it.
 	var teamSvc *team.Service
@@ -958,6 +990,9 @@ func NewServer() *Server {
 			v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "min_free_memory_mb"))
 			return v
 		},
+		// Trend gate: hold a spawn while free memory is falling toward the
+		// floor, not only once it is under it.
+		SpawnHold: resourceGuard.HoldSpawns,
 		OnSessionCreated: func(s agentsession.Session) {
 			agentsMgr.Register(s)
 		},
@@ -1065,6 +1100,22 @@ func NewServer() *Server {
 			channelReg.DispatchAgentEvent(ev.SessionID, doneEv)
 		},
 	})
+	// Guard events reach the session whose agent was acted on, as a
+	// system line in its history, and the Resources page reads the rest.
+	resourceGuard.OnEvent = func(e resourceguard.Event) {
+		if e.AgentPID == 0 || strings.HasPrefix(e.Detail, "[log only") {
+			return
+		}
+		for _, a := range agentsPool.ActiveSnapshot() {
+			if a.PID == e.AgentPID {
+				st := store.New(store.Options{Layout: agentsLayout, SessionID: a.SessionID, AgentName: a.AgentName})
+				_ = st.AppendNoticeTurn(e.Detail)
+				return
+			}
+		}
+	}
+	agentstool.SetResourceGuard(resourceGuard)
+	go resourceGuard.Run(context.Background())
 	// When the sweeper reaps an idle session's connectors, record a system
 	// turn on that session so its agent's context reflects the deletion. The
 	// session is idle by definition (that's why it was reaped), so a non-user

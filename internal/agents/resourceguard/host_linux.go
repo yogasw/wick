@@ -20,6 +20,7 @@ import (
 const sliceName = "agents.slice"
 
 type linuxHost struct {
+	user  string // the user manager's cgroup (user@UID.service)
 	slice string // absolute path of agents.slice in the cgroup v2 tree
 	self  string // scope name the daemon runs in
 }
@@ -35,8 +36,14 @@ func NewHost() Host {
 	if h.slice == "" {
 		return nil
 	}
+	h.user = filepath.Dir(h.slice)
 	if b, err := os.ReadFile("/proc/self/cgroup"); err == nil {
-		h.self = filepath.Base(strings.TrimSpace(string(b[bytes.LastIndexByte(b, ':')+1:])))
+		cg := "/sys/fs/cgroup" + strings.TrimSpace(string(b[bytes.LastIndexByte(b, ':')+1:]))
+		if rel, err := filepath.Rel(h.slice, cg); err == nil && !strings.HasPrefix(rel, "..") {
+			h.self = strings.SplitN(rel, string(filepath.Separator), 2)[0]
+		} else if rel, err := filepath.Rel(h.user, cg); err == nil && !strings.HasPrefix(rel, "..") {
+			h.self = rel
+		}
 	}
 	return h
 }
@@ -121,37 +128,50 @@ func (h *linuxHost) Load1() float64 {
 func (h *linuxHost) NumCPU() int { return runtime.NumCPU() }
 
 func (h *linuxHost) Scopes() []Scope {
-	entries, err := os.ReadDir(h.slice)
-	if err != nil {
-		return nil
-	}
 	var out []Scope
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		dir := filepath.Join(h.slice, e.Name())
-		s := Scope{Name: e.Name()}
-		if b, err := os.ReadFile(filepath.Join(dir, "memory.current")); err == nil {
-			s.MemBytes, _ = strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
-		}
-		// Nested groups (a tool scope inside an agent) are folded into
-		// the agent: the agent is the unit the ladder acts on.
-		_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() || d.Name() != "cgroup.procs" {
-				return nil
+	if entries, err := os.ReadDir(h.slice); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				out = append(out, readScope(filepath.Join(h.slice, e.Name()), e.Name(), false))
 			}
-			b, _ := os.ReadFile(path)
-			for _, f := range strings.Fields(string(b)) {
-				if pid, err := strconv.Atoi(f); err == nil {
-					s.PIDs = append(s.PIDs, pid)
-				}
+		}
+	}
+	// Transient units an agent started with `systemd-run --user` land in
+	// app.slice, outside every agents.slice limit — a build run that way
+	// is exactly what took small hosts down, so they are covered too.
+	// Only run-* units: app.slice also holds wick itself and other
+	// services the guard has no business touching.
+	app := filepath.Join(h.user, "app.slice")
+	if entries, err := os.ReadDir(app); err == nil {
+		for _, e := range entries {
+			if e.IsDir() && strings.HasPrefix(e.Name(), "run-") {
+				out = append(out, readScope(filepath.Join(app, e.Name()), "app.slice/"+e.Name(), true))
 			}
-			return nil
-		})
-		out = append(out, s)
+		}
 	}
 	return out
+}
+
+func readScope(dir, name string, detached bool) Scope {
+	s := Scope{Name: name, Detached: detached}
+	if b, err := os.ReadFile(filepath.Join(dir, "memory.current")); err == nil {
+		s.MemBytes, _ = strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	}
+	// Nested groups (a tool scope inside an agent) are folded into the
+	// agent: the agent is the unit the ladder acts on.
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "cgroup.procs" {
+			return nil
+		}
+		b, _ := os.ReadFile(path)
+		for _, f := range strings.Fields(string(b)) {
+			if pid, err := strconv.Atoi(f); err == nil {
+				s.PIDs = append(s.PIDs, pid)
+			}
+		}
+		return nil
+	})
+	return s
 }
 
 func (h *linuxHost) Proc(pid int) (Proc, bool) {
@@ -214,10 +234,7 @@ func (h *linuxHost) SetSliceCPU(quotaPct, weight, tasksMax int) error {
 }
 
 func (h *linuxHost) scopeDir(scope string) (string, error) {
-	if scope == "" || strings.ContainsAny(scope, "/\x00") || scope == "." || scope == ".." {
-		return "", fmt.Errorf("resourceguard: bad scope %q", scope)
-	}
-	return filepath.Join(h.slice, scope), nil
+	return scopeDirIn(h.user, h.slice, scope)
 }
 
 func (h *linuxHost) Freeze(scope string, frozen bool) error {

@@ -123,6 +123,11 @@ type PoolConfig struct {
 	// PROCESSES; this counts BYTES, and a free slot says nothing about
 	// whether the machine can host what would fill it.
 	MinFreeMemoryLoader func() int
+
+	// SpawnHold reports whether the resource guard wants new agents held
+	// back because memory is FALLING toward the floor — the trend a static
+	// MinFreeMemoryLoader floor cannot see. nil = no trend gate.
+	SpawnHold func() bool
 	// CallerUserID resolves the wick user behind a Send from its context.
 	// The pool stays decoupled from the auth packages: the server injects
 	// this. nil (or empty result) = no resolved caller, which disables
@@ -519,11 +524,20 @@ func (p *Pool) reconcileLoop() {
 			p.mu.Lock()
 			closed := p.closed
 			empty := len(p.active) == 0
+			queued := len(p.queue) > 0
 			p.mu.Unlock()
-			if closed || empty {
+			if closed {
 				continue
 			}
-			p.ReconcileDead()
+			if !empty {
+				p.ReconcileDead()
+			}
+			// A spawn held back for memory has no slot release to wake
+			// it — memory recovering is not an event. Re-offer the queue
+			// here so it starts once the machine has room again.
+			if queued {
+				p.tryGrantQueue()
+			}
 		}
 	}
 }
