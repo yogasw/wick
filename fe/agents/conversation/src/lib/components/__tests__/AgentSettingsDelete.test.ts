@@ -33,21 +33,33 @@ function mount(onDeleted = vi.fn()) {
 }
 
 describe("AgentSettings delete agent", () => {
-  beforeEach(() => deleteAgent.mockClear());
+  beforeEach(() => {
+    deleteAgent.mockClear();
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({ chats: 4, channels: ["slack · C01"], schedules: 1 })))));
+  });
 
-  test("defaults to deleting chats and memory too", async () => {
+  test("defaults to deleting the project too, behind a red alert and the typed name", async () => {
     const onDeleted = mount();
     await fireEvent.click(screen.getByRole("button", { name: "Delete agent…" }));
     expect(screen.getByText("Delete agent Worker?")).toBeDefined();
-    await fireEvent.click(screen.getByRole("button", { name: "Delete agent and chats" }));
+    expect((screen.getByLabelText(/Also delete its project/) as HTMLInputElement).checked).toBe(true);
+    await waitFor(() => expect(screen.getByTestId("agent-delete-alert").textContent).toContain("4 chats"));
+    expect(screen.getByTestId("agent-delete-alert").textContent).toContain("slack · C01");
+    const btn = screen.getByRole("button", { name: "Delete agent and project" }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    await fireEvent.input(screen.getByLabelText("Agent name"), { target: { value: "Worker" } });
+    expect(btn.disabled).toBe(false);
+    await fireEvent.click(btn);
     await waitFor(() => expect(onDeleted).toHaveBeenCalled());
     expect(deleteAgent).toHaveBeenCalledWith("/tools/agents", "a1", "delete");
   });
 
-  test("keep mode leaves the chats as a normal project", async () => {
+  test("unticked keeps the chats as a normal project, no name needed", async () => {
     mount();
     await fireEvent.click(screen.getByRole("button", { name: "Delete agent…" }));
-    await fireEvent.click(screen.getByLabelText(/Keep its chats as a normal project/));
+    await fireEvent.click(screen.getByLabelText(/Also delete its project/));
+    expect(screen.getByText("Its chats stay as a normal project in the sidebar.")).toBeDefined();
+    expect(screen.queryByTestId("agent-delete-alert")).toBeNull();
     await fireEvent.click(screen.getByRole("button", { name: "Delete agent" }));
     await waitFor(() => expect(deleteAgent).toHaveBeenCalledWith("/tools/agents", "a1", "keep"));
   });

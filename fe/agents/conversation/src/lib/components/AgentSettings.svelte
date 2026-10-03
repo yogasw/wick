@@ -20,6 +20,7 @@
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject } from "../agentForm.js";
   import type { SettingsTab } from "../agentsRouter.js";
+  import { deleteAlert, canDeleteAgent, type AgentProjectPreview } from "../agentDelete.js";
   import { PERSONA_KIND, personaInput, type PersonaDraft, type PersonaTarget } from "../personaGen.js";
 
   type Props = {
@@ -87,7 +88,22 @@
   // its own (that would loop), only after another edit or Retry.
   let failedKey = $state("");
   let confirmDelete = $state(false);
-  let deleteChats = $state<"delete" | "keep">("delete");
+  // "Also delete its project" starts ticked; unticked keeps the chats as
+  // a normal project. Ticked needs the agent's name typed.
+  let alsoDeleteProject = $state(true);
+  let typedName = $state("");
+  let projectPreview = $state<AgentProjectPreview | null>(null);
+  const agentLabel = $derived(agent.name || agent.handle);
+  function openDelete() {
+    alsoDeleteProject = true;
+    typedName = "";
+    projectPreview = null;
+    confirmDelete = true;
+    if (!agent.project_id) return;
+    fetch(`${base}/projects/${encodeURIComponent(agent.project_id)}/delete-preview`, { credentials: "same-origin" })
+      .then(async (r) => { if (r.ok) projectPreview = (await r.json()) as AgentProjectPreview; })
+      .catch(() => {});
+  }
 
   onMount(() => {
     runApi(getProviderOptions(base)).then((p) => { providers = p; }).catch(() => {});
@@ -244,7 +260,7 @@
     saving = true;
     error = "";
     try {
-      await runApi(deleteAgent(base, agent.id, deleteChats));
+      await runApi(deleteAgent(base, agent.id, alsoDeleteProject ? "delete" : "keep"));
       onDeleted();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -512,7 +528,7 @@
       <p class="text-sm font-semibold text-neg-400">Danger zone</p>
       <Toggle checked={draft.disabled} onChange={(v) => (draft.disabled = v)} label="Disable agent" />
       <div>
-        <button type="button" class="rounded-lg border border-neg-300 px-3 py-1 text-sm text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600" onclick={() => { deleteChats = "delete"; confirmDelete = true; }}>Delete agent…</button>
+        <button type="button" class="rounded-lg border border-neg-300 px-3 py-1 text-sm text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600" onclick={openDelete}>Delete agent…</button>
         <p class="mt-1 text-xs text-black-800 dark:text-black-600">
           You choose what happens to its chats and memory.
           {#if agent.is_captain}The Captain cannot be deleted while other agents exist.{/if}
@@ -542,22 +558,25 @@
 </div>
 
 <Modal open={confirmDelete} title={`Delete agent ${agent.name || agent.handle}?`} onClose={() => (confirmDelete = false)} size="sm">
-  <fieldset class="space-y-2" data-testid="agent-delete-modes">
+  <div class="space-y-3" data-testid="agent-delete-modes">
     <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100">
-      <input type="radio" name="agent-delete-chats" value="delete" bind:group={deleteChats} class="mt-1" />
-      <span>Delete its chats and memory too
-        <span class="block text-xs text-black-700 dark:text-black-600">Removes the agent's project: its chats, files folder and the memory it built. Cannot be undone.</span>
-      </span>
+      <input type="checkbox" bind:checked={alsoDeleteProject} class="mt-1" />
+      <span>Also delete its project (chats, history, files, memory)</span>
     </label>
-    <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100">
-      <input type="radio" name="agent-delete-chats" value="keep" bind:group={deleteChats} class="mt-1" />
-      <span>Keep its chats as a normal project
-        <span class="block text-xs text-black-700 dark:text-black-600">The project stays and shows in the sidebar under Projects.</span>
-      </span>
-    </label>
-  </fieldset>
+    {#if alsoDeleteProject}
+      <p class="rounded-lg border border-neg-400/40 bg-neg-400/10 px-3 py-2 text-xs leading-relaxed text-neg-400" role="alert" data-testid="agent-delete-alert">
+        {deleteAlert(projectPreview)}
+      </p>
+      <label class="block text-xs text-black-800 dark:text-black-600">
+        Type <span class="font-semibold text-black-900 dark:text-white-100">{agentLabel}</span> to confirm
+        <input class="mt-1 w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-neg-400 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100" bind:value={typedName} aria-label="Agent name" />
+      </label>
+    {:else}
+      <p class="text-xs text-black-700 dark:text-black-600">Its chats stay as a normal project in the sidebar.</p>
+    {/if}
+  </div>
   {#snippet footer()}
     <Button variant="secondary" onclick={() => (confirmDelete = false)}>Cancel</Button>
-    <Button variant="danger" disabled={saving} onclick={remove}>{deleteChats === "delete" ? "Delete agent and chats" : "Delete agent"}</Button>
+    <Button variant="danger" disabled={saving || !canDeleteAgent(alsoDeleteProject, typedName, agentLabel)} onclick={remove}>{alsoDeleteProject ? "Delete agent and project" : "Delete agent"}</Button>
   {/snippet}
 </Modal>
