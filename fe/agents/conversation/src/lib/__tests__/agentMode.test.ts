@@ -7,7 +7,7 @@ describe("hiddenTabNote", () => {
     expect(hiddenTabNote(undefined)).toBe("");
   });
   it("counts each hidden tab once", () => {
-    expect(hiddenTabNote(["source", "browser", "source"])).toBe("2 tab disembunyikan — fiturnya tidak diizinkan");
+    expect(hiddenTabNote(["source", "browser", "source"])).toBe("2 tabs hidden — feature not allowed");
   });
 });
 
@@ -23,10 +23,10 @@ describe("composerPlaceholder", () => {
 
 describe("connectorCaption", () => {
   it("counts connectors, not grants per account", () => {
-    expect(connectorCaption([{ connector_id: "a" }, { connector_id: "b" }, { connector_id: "a" }])).toBe("2 connector");
+    expect(connectorCaption([{ connector_id: "a" }, { connector_id: "b" }, { connector_id: "a" }])).toBe("2 connectors");
   });
   it("reads zero for no grants", () => {
-    expect(connectorCaption(null)).toBe("0 connector");
+    expect(connectorCaption(null)).toBe("0 connectors");
   });
 });
 
@@ -43,10 +43,10 @@ describe("feature flags", () => {
 
   it("lists the rail tabs the flags leave", () => {
     expect(railShownNote({ source: false, schedule: true, files: false, process: false, browser: false, subagents: false, notes: false, tickets: false })).toBe(
-      "rail tampil: Routines, Workspace, Todos",
+      "rail shows: Routines, Workspace, Todos",
     );
     expect(railShownNote(null)).toBe(
-      "rail tampil: Source, Routines, Files, Process, Browser, Sub-agents, Notes, Ticket, Workspace, Todos",
+      "rail shows: Source, Routines, Files, Process, Browser, Sub-agents, Notes, Ticket, Workspace, Todos",
     );
   });
 });

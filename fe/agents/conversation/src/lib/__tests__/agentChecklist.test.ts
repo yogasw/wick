@@ -81,8 +81,8 @@ describe("parseGrantErrors", () => {
     );
     expect(e.missing).toEqual(["c9"]);
     expect(e.byConnector.c1).toEqual([
-      "akun acc-x tidak lagi bisa kamu akses",
-      "operasi nuke tidak aktif atau tidak bisa kamu akses",
+      "you no longer have access to account acc-x",
+      "operation nuke is disabled or not accessible to you",
     ]);
     expect(e.general).toBe("");
   });

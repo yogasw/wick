@@ -52,7 +52,7 @@ export function shiftColor(color: string, degrees = 24): string {
 export function duplicateBody(a: AgentItem, taken: Iterable<string>): AgentWrite {
   return {
     handle: duplicateHandle(a.handle, taken),
-    name: `${a.name} (salinan)`,
+    name: `${a.name} (copy)`,
     description: a.description,
     system_prompt: a.system_prompt,
     provider: a.provider,

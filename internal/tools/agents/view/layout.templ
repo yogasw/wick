@@ -831,7 +831,7 @@ templ agentsNavLink(href, label string, active bool) {
 
 // agentsAppNavLink opens the full-screen Team app. Its own templ rather
 // than an agentsNavLink: it is never "active" (the app has no wick sidebar
-// to highlight it in) and it carries the "BARU" chip while the app is new.
+// to highlight it in) and it carries the "NEW" chip while the app is new.
 // The click remembers the page it left from, so the app's ↩ button can
 // bring the user back there (teamReturn.ts reads the same key).
 templ agentsAppNavLink(href string) {
@@ -848,7 +848,7 @@ templ agentsAppNavLink(href string) {
 			<path d="M4.5 13.5a3.5 3.5 0 017 0M1 13a2.5 2.5 0 013-2.4M15 13a2.5 2.5 0 00-3-2.4" stroke-linecap="round"></path>
 		</svg>
 		<span class="flex-1">Team</span>
-		<span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold leading-none tracking-wide bg-green-500 text-white-100">BARU</span>
+		<span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold leading-none tracking-wide bg-green-500 text-white-100">NEW</span>
 	</a>
 }
 

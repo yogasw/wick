@@ -96,13 +96,13 @@ func TestPreviewText(t *testing.T) {
 }
 
 func TestAttentionPreviews(t *testing.T) {
-	if got := AskPreview("Deploy ke prod?\nPilih satu"); got != "Butuh input: Deploy ke prod? Pilih satu" {
+	if got := AskPreview("Deploy ke prod?\nPilih satu"); got != "Needs input: Deploy ke prod? Pilih satu" {
 		t.Errorf("AskPreview = %q", got)
 	}
-	if got := ApprovalPreview("mcp__wick__wick_execute"); got != "wick_execute — butuh approval" {
+	if got := ApprovalPreview("mcp__wick__wick_execute"); got != "wick_execute — needs approval" {
 		t.Errorf("ApprovalPreview = %q", got)
 	}
-	if got := ApprovalPreview(""); got != "Aksi — butuh approval" {
+	if got := ApprovalPreview(""); got != "Action — needs approval" {
 		t.Errorf("ApprovalPreview empty = %q", got)
 	}
 }

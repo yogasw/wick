@@ -135,8 +135,8 @@ type teamAgentWriteReq struct {
 
 // captainSystemAddon is the starting persona of the auto-created Captain.
 // Kept short: the owner is expected to rewrite it.
-const captainSystemAddon = "Kamu Captain: agent utama pemilik tim ini. Bantu pemilik mengatur tim agent-nya — " +
-	"siapa mengerjakan apa — dan kerjakan sendiri hal yang tidak cocok untuk agent lain."
+const captainSystemAddon = "You are the Captain: the lead agent of this owner's team. Help the owner organise their team of agents — " +
+	"who does what — and handle yourself whatever fits no other agent. Reply in the language the owner writes in."
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -563,7 +563,7 @@ func ensureCaptain(c *tool.Ctx) ([]entity.AgentPersona, error) {
 	if err != nil || len(rows) > 0 {
 		return rows, err
 	}
-	pid, err := createTeamAgentProject(c, "Captain", "🧭", "Agent utama yang membantu mengatur tim agent.", captainSystemAddon, "", "", "")
+	pid, err := createTeamAgentProject(c, "Captain", "🧭", "Lead agent that helps organise the team.", captainSystemAddon, "", "", "")
 	if err != nil {
 		return nil, err
 	}

@@ -68,7 +68,7 @@ describe("duplicateBody", () => {
   it("copies persona into a new project, plus look and access", () => {
     expect(duplicateBody(agent, ["ops"])).toEqual({
       handle: "ops-2",
-      name: "Ops (salinan)",
+      name: "Ops (copy)",
       description: "jaga ops",
       system_prompt: "kamu ops",
       provider: "claude/default",

@@ -1,7 +1,7 @@
 <script lang="ts">
   /* The Akses checklist: which of the owner's connectors an agent may use,
      at what level, on which accounts — plus whose access a turn runs with.
-     Shared by Settings › Akses and (later) the + Agent wizard. All the
+     Shared by Settings › Access and (later) the + Agent wizard. All the
      arithmetic lives in agentForm.ts; this file only draws it. */
   import { Toggle } from "@wick-fe/common-ui";
   import type { ConnectorGrant, AgentConnector } from "../api/team.js";
@@ -75,37 +75,37 @@
 
 {#if showRunAs}
   <div>
-    <label class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600" for="cc-runas">Jalan sebagai</label>
+    <label class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600" for="cc-runas">Run as</label>
     <select
       id="cc-runas"
       class="w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
       bind:value={runAs}
     >
-      <option value="caller">Pemicu (default) — akses orang yang memicu ∩ checklist</option>
-      <option value="owner">Owner — selalu akses kamu ∩ checklist</option>
+      <option value="caller">Caller (default) — the caller's access ∩ checklist</option>
+      <option value="owner">Owner — always your access ∩ checklist</option>
     </select>
-    <p class="mt-1 text-xs text-black-800 dark:text-black-600">Pemicu bot / schedule / cron memakai akses owner.</p>
+    <p class="mt-1 text-xs text-black-800 dark:text-black-600">Bot, schedule and cron triggers use the owner's access.</p>
     {#if errors?.runAs}<p class="mt-1 text-xs text-neg-400">{errors.runAs}</p>{/if}
   </div>
 {/if}
 
 <div class="flex items-center gap-2">
-  <input type="search" class="min-w-0 flex-1 rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100" bind:value={query} placeholder="Cari connector…" />
-  <button type="button" class={btn} disabled={visible.length === 0} onclick={() => (grants = selectAll(grants, visible))}>Pilih semua</button>
-  <button type="button" class={btn} disabled={visible.length === 0} onclick={() => (grants = clearAll(grants, visible))}>Kosongkan</button>
+  <input type="search" class="min-w-0 flex-1 rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100" bind:value={query} placeholder="Search connectors…" />
+  <button type="button" class={btn} disabled={visible.length === 0} onclick={() => (grants = selectAll(grants, visible))}>Select all</button>
+  <button type="button" class={btn} disabled={visible.length === 0} onclick={() => (grants = clearAll(grants, visible))}>Clear</button>
 </div>
-<p class="text-xs text-black-800 dark:text-black-600">{count.checked} dari {count.total} connector milikmu dicentang</p>
+<p class="text-xs text-black-800 dark:text-black-600">{count.checked} of your {count.total} connectors checked</p>
 
 {#if loading}
-  <p class="text-sm text-black-800 dark:text-black-600">Memuat connector…</p>
+  <p class="text-sm text-black-800 dark:text-black-600">Loading connectors…</p>
 {:else if loadError}
   <p class="text-sm text-neg-400">{loadError}</p>
 {:else if visible.length === 0}
-  <p class="text-sm text-black-800 dark:text-black-600">Tidak ada connector.</p>
+  <p class="text-sm text-black-800 dark:text-black-600">No connectors.</p>
 {/if}
 
 {#if errors && errors.missing.length > 0}
-  <p class="text-xs text-neg-400">Tidak lagi bisa kamu akses: {errors.missing.join(", ")} — buang dari daftar lalu simpan ulang.</p>
+  <p class="text-xs text-neg-400">No longer accessible to you: {errors.missing.join(", ")} — remove them and save again.</p>
 {/if}
 
 <ul class="space-y-2">
@@ -132,7 +132,7 @@
         <label for="conn-{c.id}" class="min-w-0 flex-1">
           <span class="block truncate text-sm font-medium text-black-900 dark:text-white-100">{c.label}</span>
           <span class="block truncate text-xs text-black-800 dark:text-black-600">
-            {st.total} operasi · {st.write > 0 ? `${st.write} tulis` : "read-only"}
+            {st.total} ops · {st.write > 0 ? `${st.write} write` : "read-only"}
           </span>
         </label>
         <select
@@ -140,16 +140,16 @@
           value={g?.level ?? "read"}
           disabled={!g}
           onchange={(e) => g && setLevel(g, (e.currentTarget as HTMLSelectElement).value as ConnectorGrant["level"])}
-          aria-label="Level akses {c.label}"
+          aria-label="Access level for {c.label}"
         >
-          <option value="all">Semua operasi</option>
-          <option value="read">Hanya baca</option>
-          <option value="pick">Pilih operasi…</option>
+          <option value="all">All operations</option>
+          <option value="read">Read only</option>
+          <option value="pick">Pick operations…</option>
         </select>
       </div>
       {#if g && (c.accounts ?? []).length > 0}
         <div class="mt-2 flex flex-wrap items-center gap-2 pl-16">
-          <span class="text-xs text-black-800 dark:text-black-600">Akun</span>
+          <span class="text-xs text-black-800 dark:text-black-600">Accounts</span>
           {#each c.accounts ?? [] as acc (acc.id)}
             {@const on = accountTicked(g, acc.id)}
             <label class="{chip} {on ? chipOn : chipOff}">
@@ -161,7 +161,7 @@
               />{on ? "✓ " : ""}{acc.display_name || acc.id || "bot / instance"}
             </label>
           {/each}
-          <span class="text-xs text-black-700">akun orang lain tidak terlihat</span>
+          <span class="text-xs text-black-700">other people's accounts are not shown</span>
         </div>
       {/if}
       {#if g && g.level === "pick"}
@@ -175,10 +175,10 @@
                 checked={on}
                 onchange={(e) => tickOp(g, op.key, (e.currentTarget as HTMLInputElement).checked)}
               /><span class="font-mono text-[11px]">{op.key}</span>
-              {#if op.destructive}<span class="text-cau-400">tulis</span>{/if}
+              {#if op.destructive}<span class="text-cau-400">write</span>{/if}
             </label>
           {/each}
-          {#if (c.ops ?? []).length === 0}<span class="text-xs text-black-800 dark:text-black-600">Tidak ada operasi aktif.</span>{/if}
+          {#if (c.ops ?? []).length === 0}<span class="text-xs text-black-800 dark:text-black-600">No enabled operations.</span>{/if}
         </div>
       {/if}
       {#each rowErr as line (line)}
@@ -190,21 +190,21 @@
 
 {#if showIncludeNew}
   <div>
-    <Toggle checked={includeNew} onChange={(v) => (includeNew = v)} label="Ikutkan semua connector saya, termasuk yang baru (hanya baca)" />
-    <p class="mt-1 text-xs text-black-800 dark:text-black-600">Connector yang tidak dicentang ikut terbuka dengan operasi baca saja, terbatas pada connector yang Anda sendiri punya — cocok untuk agent pribadi; default mati.</p>
+    <Toggle checked={includeNew} onChange={(v) => (includeNew = v)} label="Include all my connectors, new ones too (read only)" />
+    <p class="mt-1 text-xs text-black-800 dark:text-black-600">Unchecked connectors open too, read operations only, limited to connectors you own — suits a personal agent; off by default.</p>
   </div>
 {/if}
 
 {#if writes.length > 0}
   <div class="rounded-xl border border-white-300 px-4 py-2 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">
-    <p class="font-medium text-black-900 dark:text-white-100">Operasi tulis diizinkan ({writes.length})</p>
+    <p class="font-medium text-black-900 dark:text-white-100">Write operations allowed ({writes.length})</p>
     <p class="mt-1">{writes.slice(0, 8).join(", ")}{writes.length > 8 ? ", …" : ""}</p>
   </div>
 {/if}
 
 {#if showRunAs && runAs === "owner"}
   <div class="rounded-xl border border-cau-300 bg-cau-100 px-4 py-2 text-xs text-black-900 dark:bg-navy-800 dark:text-cau-300" role="alert">
-    ⚠️ Siapa pun yang chat agent ini memakai akses <b>kamu</b> sebatas checklist{#if writeConns.length > 0}
-      — termasuk akses <b>tulis</b> ke {writeConns.join(", ")}{/if}.
+    ⚠️ Anyone who chats with this agent uses <b>your</b> access, up to the checklist{#if writeConns.length > 0}
+      — including <b>write</b> access to {writeConns.join(", ")}{/if}.
   </div>
 {/if}

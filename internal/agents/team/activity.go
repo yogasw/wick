@@ -111,15 +111,15 @@ const previewTailBytes = 64 << 10
 
 // AskPreview is the roster preview while an ask_user question waits.
 func AskPreview(question string) string {
-	return PreviewText("Butuh input: " + question)
+	return PreviewText("Needs input: " + question)
 }
 
 // ApprovalPreview is the roster preview while a tool approval waits.
 func ApprovalPreview(tool string) string {
 	if strings.TrimSpace(tool) == "" {
-		tool = "Aksi"
+		tool = "Action"
 	}
-	return PreviewText(ActionLabel(tool, "") + " — butuh approval")
+	return PreviewText(ActionLabel(tool, "") + " — needs approval")
 }
 
 // PreviewText flattens a message to one plain line: markdown markers

@@ -42,7 +42,7 @@ export function joinPick(provider: string, model: string): string {
 }
 
 /** destructiveAllowed lists "Connector · op" for every destructive op the
-    grants let through — what the Akses tab warns about. A connector the
+    grants let through — what the Access tab warns about. A connector the
     server no longer lists cannot be judged and is skipped. */
 export function destructiveAllowed(grants: ConnectorGrant[], catalog: AgentConnector[]): string[] {
   const out: string[] = [];
@@ -88,7 +88,7 @@ export function opStats(c: AgentConnector): { total: number; write: number } {
 }
 
 /** checkedCount counts ticked connectors the catalog still lists, against
-    the catalog size — the toolbar's "n dari N". */
+    the catalog size — the toolbar's "n of N". */
 export function checkedCount(grants: ConnectorGrant[], catalog: AgentConnector[]): { checked: number; total: number } {
   const ids = new Set(catalog.map((c) => c.id));
   return { checked: grants.filter((g) => ids.has(g.connector_id)).length, total: catalog.length };
@@ -193,9 +193,9 @@ export function parseGrantErrors(msg: string, catalog: AgentConnector[]): GrantE
     const slash = ref.indexOf("/");
     const conn = slash < 0 ? ref : ref.slice(0, slash);
     const rest = slash < 0 ? "" : ref.slice(slash + 1);
-    if (kind === "connector") add(conn, "connector tidak lagi bisa kamu akses");
-    else if (kind === "account") add(conn, `akun ${rest || "bot / instance"} tidak lagi bisa kamu akses`);
-    else if (kind === "op") add(conn, `operasi ${rest} tidak aktif atau tidak bisa kamu akses`);
+    if (kind === "connector") add(conn, "you no longer have access to this connector");
+    else if (kind === "account") add(conn, `you no longer have access to account ${rest || "bot / instance"}`);
+    else if (kind === "op") add(conn, `operation ${rest} is disabled or not accessible to you`);
     else out.general = msg;
   }
   return out;

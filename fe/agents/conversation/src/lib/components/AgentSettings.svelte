@@ -66,7 +66,7 @@
   const projectChoices = $derived.by(() => {
     const own = agent.project_id;
     if (!own || projects.some((p) => p.id === own)) return projects;
-    return [{ id: own, name: `${agent.name} (project agent ini)` }, ...projects];
+    return [{ id: own, name: `${agent.name} (this agent's project)` }, ...projects];
   });
   let pruned = $state(0);
   let grantErrors = $state<GrantErrors | null>(null);
@@ -168,7 +168,7 @@
       draft = draftOf(next);
       pruned = 0;
       grantErrors = null;
-      toastOk("Agent disimpan");
+      toastOk("Agent saved");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       const ge = parseGrantErrors(msg, catalog);
@@ -178,7 +178,7 @@
       } else {
         // Item-level rejections are drawn on their rows in Akses.
         grantErrors = ge;
-        error = tab === "access" ? "" : "Ada akses yang ditolak server — lihat tab Akses.";
+        error = tab === "access" ? "" : "The server rejected some access — see the Access tab.";
       }
     } finally {
       saving = false;
@@ -201,10 +201,10 @@
 
   const TABS: { id: SettingsTab; label: string }[] = [
     { id: "persona", label: "Persona" },
-    { id: "access", label: "Akses" },
-    { id: "tools", label: "Tools & fitur" },
+    { id: "access", label: "Access" },
+    { id: "tools", label: "Tools & features" },
     { id: "avatar", label: "Avatar" },
-    { id: "advanced", label: "Lanjutan" },
+    { id: "advanced", label: "Advanced" },
   ];
   const input =
     "w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100";
@@ -213,7 +213,7 @@
 
 <DrawerHeader
   title="Settings"
-  subtitle={`${agent.name} · @${agent.handle} — chat tetap di belakang`}
+  subtitle={`${agent.name} · @${agent.handle} — chat stays behind`}
   avatar={draft.avatar}
   bordered={false}
   {onClose}
@@ -238,17 +238,17 @@
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Persona</p>
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        Disimpan ke project agent (tersembunyi){#if sharedWith > 0} · dipakai juga oleh {sharedWith} agent{/if}
+        Saved to the agent's project (hidden){#if sharedWith > 0} · also used by {sharedWith} agent{sharedWith === 1 ? "" : "s"}{/if}
       </p>
       {#if projectSwitched}
         <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-          {projectLoading ? "Memuat persona dari project baru…" : "Dimuat dari project baru (tab Lanjutan) — perubahan yang disimpan berlaku ke project tersebut."}
+          {projectLoading ? "Loading persona from the new project…" : "Loaded from the new project (Advanced tab) — saved changes apply to that project."}
         </p>
       {/if}
     </div>
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <div>
-        <label class={label} for="as-name">Nama</label>
+        <label class={label} for="as-name">Name</label>
         <input id="as-name" class={input} bind:value={draft.name} />
       </div>
       <div>
@@ -262,29 +262,29 @@
           />
         </div>
         {#if handleOk}
-          <p class="mt-1 text-xs text-black-800 dark:text-black-600">dipakai untuk @mention</p>
+          <p class="mt-1 text-xs text-black-800 dark:text-black-600">used for @mentions</p>
         {:else}
-          <p class="mt-1 text-xs text-neg-400">Huruf kecil, angka, dan "-", 2–31 karakter.</p>
+          <p class="mt-1 text-xs text-neg-400">Lowercase letters, digits and "-", 2–31 characters.</p>
         {/if}
       </div>
     </div>
     <div>
-      <label class={label} for="as-desc">Deskripsi singkat</label>
+      <label class={label} for="as-desc">Short description</label>
       <input id="as-desc" class={input} bind:value={draft.description} />
     </div>
     <div>
       <label class={label} for="as-sys">System prompt (persona)</label>
       <textarea id="as-sys" class={input} rows="8" bind:value={draft.system_prompt}></textarea>
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">ditempel setelah preset dasar</p>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">appended after the base preset</p>
     </div>
   {:else if tab === "access"}
     <p class="text-xs text-black-800 dark:text-black-600">
-      Daftar connector yang bisa <b>kamu</b> pakai. Centang yang boleh dipakai agent ini; agent tidak pernah
-      mendapat lebih dari akses kamu sendiri.
+      Connectors <b>you</b> can use. Check the ones this agent may use; an agent never
+      gets more than your own access.
     </p>
     {#if pruned > 0}
       <p class="text-xs text-black-800 dark:text-black-600">
-        {pruned} akses lama tidak lagi bisa kamu pakai dan dibuang dari daftar — simpan untuk menerapkan.
+        {pruned} old grant{pruned === 1 ? "" : "s"} you can no longer use {pruned === 1 ? "was" : "were"} removed from the list — save to apply.
       </p>
     {/if}
     <ConnectorChecklist
@@ -298,18 +298,18 @@
     />
   {:else if tab === "tools"}
     <div>
-      <p class="text-sm font-semibold text-black-900 dark:text-white-100">Tools &amp; fitur</p>
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Fitur yang dimatikan juga menghilangkan tab rail-nya di chat agent.</p>
+      <p class="text-sm font-semibold text-black-900 dark:text-white-100">Tools &amp; features</p>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Turning a feature off also hides its rail tab in the agent's chat.</p>
     </div>
     <div class="rounded-xl border border-white-300 px-4 py-3 opacity-60 dark:border-navy-600" aria-disabled="true">
       <p class="text-sm font-medium text-black-900 dark:text-white-100">
         Native tools &amp; Bash
-        <span class="ml-1 rounded-full bg-white-200 px-2 py-0.5 text-xs font-medium text-black-800 dark:bg-navy-600 dark:text-black-600">Segera (Fase 1c)</span>
+        <span class="ml-1 rounded-full bg-white-200 px-2 py-0.5 text-xs font-medium text-black-800 dark:bg-navy-600 dark:text-black-600">Coming soon (Phase 1c)</span>
       </p>
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Pilihan tool bawaan dan command Bash per agent belum tersedia.</p>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Choosing built-in tools and Bash commands per agent is not available yet.</p>
     </div>
     <div>
-      <span class={label}>Fitur wick</span>
+      <span class={label}>wick features</span>
       <div class="space-y-3">
         {#each FEATURE_TABS as f (f.feature)}
           <!-- Toggle draws only the switch; the name and hint sit beside it. -->
@@ -328,10 +328,10 @@
     <div class="flex items-center gap-4">
       <AgentAvatar shape={draft.avatar.shape} color={draft.avatar.color} size={72} />
       <AgentAvatar shape={draft.avatar.shape} color={draft.avatar.color} size={72} working />
-      <span class="text-xs text-black-800 dark:text-black-600">diam · bekerja</span>
+      <span class="text-xs text-black-800 dark:text-black-600">idle · working</span>
     </div>
     <div>
-      <span class={label}>Bentuk</span>
+      <span class={label}>Shape</span>
       <div class="flex gap-2">
         {#each AVATAR_SHAPES as s (s)}
           <button
@@ -345,7 +345,7 @@
       </div>
     </div>
     <div>
-      <span class={label}>Warna</span>
+      <span class={label}>Color</span>
       <div class="flex flex-wrap gap-2">
         {#each AVATAR_COLORS as col (col)}
           <button
@@ -361,8 +361,8 @@
         <input
           type="color"
           class="h-8 w-10 cursor-pointer rounded-lg border border-white-300 dark:border-navy-600 bg-transparent p-0.5"
-          aria-label="Warna lain"
-          title="Warna lain"
+          aria-label="Other color"
+          title="Other color"
           value={colorInputValue(draft.avatar.color)}
           oninput={(e) => (draft.avatar.color = e.currentTarget.value)}
         />
@@ -381,8 +381,8 @@
     </div>
   {:else if tab === "advanced"}
     <div>
-      <p class="text-sm font-semibold text-black-900 dark:text-white-100">Lanjutan</p>
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Project di balik agent ini — biasanya tidak perlu disentuh.</p>
+      <p class="text-sm font-semibold text-black-900 dark:text-white-100">Advanced</p>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">The project behind this agent — usually best left alone.</p>
     </div>
     <div>
       <label class={label} for="as-project">Project</label>
@@ -392,7 +392,7 @@
         {/each}
       </select>
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        Ganti project = persona langsung dimuat ulang dari project itu, dan perubahan persona yang disimpan berlaku ke project tersebut; percakapan lama tetap di project lama.
+        Switching projects reloads the persona from that project at once, and saved persona changes apply to it; old chats stay in the old project.
       </p>
     </div>
     <div>
@@ -406,19 +406,19 @@
     </div>
     <div class="space-y-3 border-t border-white-300 pt-4 dark:border-navy-600">
       <p class="text-sm font-semibold text-neg-400">Danger zone</p>
-      <Toggle checked={draft.disabled} onChange={(v) => (draft.disabled = v)} label="Nonaktifkan agent" />
+      <Toggle checked={draft.disabled} onChange={(v) => (draft.disabled = v)} label="Disable agent" />
       <div>
         {#if confirmDelete}
           <div class="flex gap-2">
-            <button type="button" class="rounded-lg bg-neg-400 px-3 py-1 text-sm font-medium text-white-100 disabled:opacity-50" disabled={saving} onclick={remove}>Ya, hapus</button>
-            <button type="button" class="rounded-lg px-3 py-1 text-sm text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600" onclick={() => (confirmDelete = false)}>Batal</button>
+            <button type="button" class="rounded-lg bg-neg-400 px-3 py-1 text-sm font-medium text-white-100 disabled:opacity-50" disabled={saving} onclick={remove}>Yes, delete</button>
+            <button type="button" class="rounded-lg px-3 py-1 text-sm text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600" onclick={() => (confirmDelete = false)}>Cancel</button>
           </div>
         {:else}
-          <button type="button" class="rounded-lg border border-neg-300 px-3 py-1 text-sm text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600" onclick={() => (confirmDelete = true)}>Hapus agent…</button>
+          <button type="button" class="rounded-lg border border-neg-300 px-3 py-1 text-sm text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600" onclick={() => (confirmDelete = true)}>Delete agent…</button>
         {/if}
         <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-          Project dan percakapannya tidak ikut terhapus.
-          {#if agent.is_captain}Captain tidak bisa dihapus selama masih ada agent lain.{/if}
+          Its project and chats are not deleted.
+          {#if agent.is_captain}The Captain cannot be deleted while other agents exist.{/if}
         </p>
       </div>
     </div>
@@ -427,12 +427,12 @@
 </div>
 
 <div class="flex items-center justify-end gap-2 border-t border-white-300 px-6 py-4 dark:border-navy-600">
-  {#if dirty}<span class="mr-auto text-xs text-black-800 dark:text-black-600">Ada perubahan belum disimpan</span>{/if}
-  <button type="button" class="rounded-lg px-4 py-2 text-sm text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600" onclick={onClose}>Tutup</button>
+  {#if dirty}<span class="mr-auto text-xs text-black-800 dark:text-black-600">Unsaved changes</span>{/if}
+  <button type="button" class="rounded-lg px-4 py-2 text-sm text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600" onclick={onClose}>Close</button>
   <button
     type="button"
     class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:opacity-50"
     disabled={!dirty || !handleOk || saving}
     onclick={save}
-  >{saving ? "Menyimpan…" : "Simpan"}</button>
+  >{saving ? "Saving…" : "Save"}</button>
 </div>

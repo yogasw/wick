@@ -8,10 +8,10 @@ describe("rosterStatus", () => {
     expect(rosterStatus(row())).toEqual({ unread: false, attention: false, typing: null, tip: "online · idle" });
   });
 
-  it("unread shows the dot and 'pesan baru'", () => {
+  it("unread shows the dot and 'new message'", () => {
     const s = rosterStatus(row({ unread: true }));
     expect(s.unread).toBe(true);
-    expect(s.tip).toBe("pesan baru");
+    expect(s.tip).toBe("new message");
   });
 
   it("the open chat is never unread", () => {
@@ -21,7 +21,7 @@ describe("rosterStatus", () => {
 
   it("running turn types, with the current tool when known", () => {
     expect(rosterStatus(row({ status: "running" })).typing).toBe("Typing");
-    expect(rosterStatus(row({ status: "running" })).tip).toBe("sedang mengetik");
+    expect(rosterStatus(row({ status: "running" })).tip).toBe("typing");
     const s = rosterStatus(row({ status: "queued", current_action: "query_range" }));
     expect(s.typing).toBe("query_range");
     expect(s.tip).toBe("query_range");
@@ -33,18 +33,18 @@ describe("rosterStatus", () => {
 
   it("attention beats typing and unread", () => {
     const s = rosterStatus(row({ status: "running", needs_attention: true, unread: true }));
-    expect(s.tip).toBe("butuh perhatianmu");
+    expect(s.tip).toBe("needs your attention");
     expect(s.attention).toBe(true);
     expect(s.typing).toBe("Typing");
   });
 
   it("hatching beats everything but disabled", () => {
-    expect(rosterStatus(row({ unread: true }), { hatching: true }).tip).toBe("baru menetas");
+    expect(rosterStatus(row({ unread: true }), { hatching: true }).tip).toBe("just hatched");
   });
 
   it("a disabled agent shows no live cue", () => {
     const s = rosterStatus(row({ disabled: true, status: "running", unread: true, needs_attention: true }), { hatching: true });
-    expect(s).toEqual({ unread: false, attention: false, typing: null, tip: "nonaktif" });
+    expect(s).toEqual({ unread: false, attention: false, typing: null, tip: "disabled" });
   });
 
   it("rows from an older server (no P13 fields) read as idle", () => {

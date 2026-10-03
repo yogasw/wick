@@ -34,19 +34,19 @@
   });
 </script>
 
-<DrawerHeader title="Percakapan" subtitle={`${agent.name} · @${agent.handle}`} avatar={agent.avatar} {onClose} />
+<DrawerHeader title="Chats" subtitle={`${agent.name} · @${agent.handle}`} avatar={agent.avatar} {onClose} />
 <div class="flex-1 overflow-y-auto px-4 py-4">
   <button
     type="button"
     class="mb-4 w-full rounded-lg border border-dashed border-white-400 px-4 py-2 text-sm font-medium text-black-900 hover:bg-white-200 dark:border-navy-500 dark:text-white-100 dark:hover:bg-navy-600"
     onclick={onNew}
-  >+ Chat baru</button>
+  >+ New chat</button>
   {#if loading}
-    <p class="text-sm text-black-800 dark:text-black-600">Memuat…</p>
+    <p class="text-sm text-black-800 dark:text-black-600">Loading…</p>
   {:else if error}
     <p class="text-sm text-neg-400">{error}</p>
   {:else if items.length === 0}
-    <p class="text-sm text-black-800 dark:text-black-600">Belum ada percakapan.</p>
+    <p class="text-sm text-black-800 dark:text-black-600">No chats yet.</p>
   {/if}
   {#each items as s (s.id)}
     <button
@@ -58,10 +58,10 @@
     >
       <span class="min-w-0 flex-1">
         <span class="block truncate text-sm text-black-900 dark:text-white-100">
-          {s.agent_main ? "📌 Chat utama" : s.label || s.id}
+          {s.agent_main ? "📌 Main chat" : s.label || s.id}
         </span>
         <span class="block truncate text-xs text-black-800 dark:text-black-600">
-          {s.last_active ? timeAgo(s.last_active) : ""}{isWorking(s.status) ? " · bekerja…" : ""}
+          {s.last_active ? timeAgo(s.last_active) : ""}{isWorking(s.status) ? " · working…" : ""}
         </span>
       </span>
     </button>

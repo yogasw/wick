@@ -2,9 +2,9 @@
   /* + Agent: a centred modal in two steps (mockup create()).
      1 Persona — avatar, name, handle, system prompt, and the project behind
        it under "Lanjutan" (default: a new one made from these fields).
-     2 Akses — the same connector checklist as Settings › Akses, starting
+     2 Access — the same connector checklist as Settings › Access, starting
        empty (deny-by-default). A new agent runs as the caller with
-       include-new off; both are changed later in Settings › Akses.
+       include-new off; both are changed later in Settings › Access.
      The provider lives in Settings › Lanjutan; the mockup's third "Connect"
      step waits for Slack/A2A (phase 1b). */
   import { onMount } from "svelte";
@@ -23,7 +23,7 @@
   };
   let { base, taken, onClose, onCreated }: Props = $props();
 
-  const STEPS = ["Persona", "Akses"];
+  const STEPS = ["Persona", "Access"];
   let step = $state(1);
 
   let name = $state("");
@@ -72,7 +72,7 @@
     color = d.color;
   });
 
-  /* "Pakai project yang ada": the form shows that project's persona right
+  /* "Use an existing project": the form shows that project's persona right
      away. Whatever is in the fields at submit is sent and written to the
      project, so a name typed after the pick is the one the agent gets. */
   async function pickProject(id: string) {
@@ -156,18 +156,18 @@
 </script>
 
 <div class="flex items-center gap-2 px-6 pt-5">
-  <h2 class="flex-1 text-[17px] font-semibold text-black-900 dark:text-white-100">Agent baru</h2>
+  <h2 class="flex-1 text-[17px] font-semibold text-black-900 dark:text-white-100">New agent</h2>
   <button
     type="button"
     class="flex h-8 w-8 items-center justify-center rounded-lg text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600"
-    aria-label="Tutup"
+    aria-label="Close"
     onclick={onClose}
   >
     <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"></path></svg>
   </button>
 </div>
 
-<ol class="flex items-center gap-2 px-6 pt-3 pb-4 text-xs" aria-label="Langkah">
+<ol class="flex items-center gap-2 px-6 pt-3 pb-4 text-xs" aria-label="Steps">
   {#each STEPS as s, i (s)}
     {@const n = i + 1}
     <li class="flex items-center gap-1.5 {n === step ? 'font-semibold text-black-900 dark:text-white-100' : 'text-black-800 dark:text-black-600'}" aria-current={n === step ? "step" : undefined}>
@@ -210,7 +210,7 @@
     </div>
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <div>
-        <label class={label} for="aw-name">Nama</label>
+        <label class={label} for="aw-name">Name</label>
         <!-- svelte-ignore a11y_autofocus -->
         <input id="aw-name" class={input} bind:value={name} placeholder="Log Hunter" autofocus />
       </div>
@@ -226,32 +226,32 @@
         {#if handleError}
           <p class="mt-1 text-xs text-neg-400">{handleError}</p>
         {:else if handleTaken}
-          <p class="mt-1 text-xs text-neg-400">@{handle} sudah dipakai agent lain.</p>
+          <p class="mt-1 text-xs text-neg-400">@{handle} is already taken by another agent.</p>
         {:else if handle && !handleOk}
-          <p class="mt-1 text-xs text-neg-400">Huruf kecil, angka, dan "-", 2–31 karakter, diawali huruf/angka.</p>
+          <p class="mt-1 text-xs text-neg-400">Lowercase letters, digits and "-", 2–31 characters, starting with a letter or digit.</p>
         {/if}
       </div>
     </div>
     <div>
       <label class={label} for="aw-sys">System prompt (persona)</label>
-      <textarea id="aw-sys" class="{input} min-h-24" rows="4" bind:value={systemPrompt} placeholder="Kamu adalah …"></textarea>
+      <textarea id="aw-sys" class="{input} min-h-24" rows="4" bind:value={systemPrompt} placeholder="You are …"></textarea>
     </div>
     <details class="text-sm text-black-800 dark:text-black-600">
-      <summary class="cursor-pointer select-none">Lanjutan — project (default: dibuat otomatis)</summary>
+      <summary class="cursor-pointer select-none">Advanced — project (default: created automatically)</summary>
       <div class="mt-2">
         <select class={input} value={projectId} onchange={(e) => pickProject((e.currentTarget as HTMLSelectElement).value)} aria-label="Project">
-          <option value="">Project baru (otomatis)</option>
+          <option value="">New project (automatic)</option>
           {#each projects as p (p.id)}
             <option value={p.id}>{p.name}</option>
           {/each}
         </select>
         {#if projectId}
-          <p class="mt-1 text-xs">{projectLoading ? "Memuat persona project…" : "Persona di atas dimuat dari project ini; nama & system prompt yang disimpan berlaku ke project tersebut."}</p>
+          <p class="mt-1 text-xs">{projectLoading ? "Loading project persona…" : "The persona above is loaded from this project; the name and system prompt you save apply to that project."}</p>
         {/if}
       </div>
     </details>
   {:else}
-    <p class="text-sm text-black-800 dark:text-black-600">Centang connector milikmu yang boleh dipakai. Default kosong (deny-by-default).</p>
+    <p class="text-sm text-black-800 dark:text-black-600">Check the connectors of yours this agent may use. None by default (deny-by-default).</p>
     <ConnectorChecklist
       {catalog}
       loading={catalogLoading}
@@ -267,13 +267,13 @@
 
 <div class="flex items-center justify-between gap-2 px-6 py-4">
   {#if step > 1}
-    <button type="button" class={ghost} onclick={() => (step = 1)}>← Kembali</button>
+    <button type="button" class={ghost} onclick={() => (step = 1)}>← Back</button>
   {:else}
     <span></span>
   {/if}
   {#if step < STEPS.length}
-    <button type="button" class={primary} disabled={!personaOk} onclick={next}>Lanjut →</button>
+    <button type="button" class={primary} disabled={!personaOk} onclick={next}>Next →</button>
   {:else}
-    <button type="button" class={primary} disabled={!personaOk || saving} onclick={submit}>{saving ? "Membuat…" : "Buat agent"}</button>
+    <button type="button" class={primary} disabled={!personaOk || saving} onclick={submit}>{saving ? "Creating…" : "Create agent"}</button>
   {/if}
 </div>

@@ -28,11 +28,11 @@ export function rosterStatus(a: Row, opts: { activeId?: string; hatching?: boole
   const unread = !!a.unread && !a.disabled && a.id !== opts.activeId;
   const attention = !!a.needs_attention && !a.disabled;
   let tip: string;
-  if (a.disabled) tip = "nonaktif";
-  else if (opts.hatching) tip = "baru menetas";
-  else if (attention) tip = "butuh perhatianmu";
-  else if (working) tip = action || "sedang mengetik";
-  else if (unread) tip = "pesan baru";
+  if (a.disabled) tip = "disabled";
+  else if (opts.hatching) tip = "just hatched";
+  else if (attention) tip = "needs your attention";
+  else if (working) tip = action || "typing";
+  else if (unread) tip = "new message";
   else tip = "online · idle";
   return { unread, attention, typing: working ? action || "Typing" : null, tip };
 }

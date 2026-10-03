@@ -74,7 +74,7 @@ export type AgentFeatures = {
 export const FEATURE_TABS: { feature: keyof AgentFeatures; tab: RailTab; label: string; hint?: string }[] = [
   { feature: "source", tab: "source", label: "Source panel (git)" },
   { feature: "schedule", tab: "scheduled", label: "Routines / Schedule" },
-  { feature: "browser", tab: "browser", label: "Browser", hint: "butuh connector Playwright dicentang" },
+  { feature: "browser", tab: "browser", label: "Browser", hint: "needs the Playwright connector checked" },
   { feature: "subagents", tab: "subagents", label: "Sub-agent / delegasi" },
   { feature: "notes", tab: "notes", label: "Notes" },
   { feature: "tickets", tab: "ticket", label: "Tickets" },
@@ -82,7 +82,7 @@ export const FEATURE_TABS: { feature: keyof AgentFeatures; tab: RailTab; label: 
   { feature: "process", tab: "process", label: "Process" },
 ];
 
-/** Every rail tab with the name the Tools & fitur hint uses, in rail order. */
+/** Every rail tab with the name the Tools & features hint uses, in rail order. */
 const RAIL_LABELS: { tab: RailTab; label: string }[] = [
   { tab: "source", label: "Source" },
   { tab: "scheduled", label: "Routines" },
@@ -97,11 +97,11 @@ const RAIL_LABELS: { tab: RailTab; label: string }[] = [
 ];
 
 /** railShownNote is the hint under the feature switches: which rail tabs
-    the agent gets with these flags ("rail tampil: Source, Files, …"). */
+    the agent gets with these flags ("rail shows: Source, Files, …"). */
 export function railShownNote(f: Partial<AgentFeatures> | null | undefined): string {
   const hidden = hiddenTabsFor(f);
   const shown = RAIL_LABELS.filter((r) => !hidden.includes(r.tab)).map((r) => r.label);
-  return `rail tampil: ${shown.join(", ")}`;
+  return `rail shows: ${shown.join(", ")}`;
 }
 
 /** hiddenTabsFor lists the rail tabs to hide for a feature set. A missing
@@ -117,7 +117,7 @@ export function hiddenTabsFor(f: Partial<AgentFeatures> | null | undefined): Rai
     Empty when nothing is hidden. Duplicates count once. */
 export function hiddenTabNote(hidden: RailTab[] | null | undefined): string {
   const n = new Set(hidden ?? []).size;
-  return n > 0 ? `${n} tab disembunyikan — fiturnya tidak diizinkan` : "";
+  return n > 0 ? `${n} tab${n === 1 ? "" : "s"} hidden — feature not allowed` : "";
 }
 
 /** composerPlaceholder addresses the agent by name; a nameless one (still
@@ -132,5 +132,5 @@ export function composerPlaceholder(name: string | null | undefined): string {
     a persona field yet, so they are not counted here. */
 export function connectorCaption(grants: { connector_id: string }[] | null | undefined): string {
   const n = new Set((grants ?? []).map((g) => g.connector_id)).size;
-  return `${n} connector`;
+  return `${n} connector${n === 1 ? "" : "s"}`;
 }

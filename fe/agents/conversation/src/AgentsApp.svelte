@@ -99,7 +99,7 @@
   $effect(() => {
     if (!loaded || loadError) return;
     if (route.handle && !agents.some((a) => a.handle === route.handle)) {
-      toastError(`Agent @${route.handle} tidak ditemukan`);
+      toastError(`Agent @${route.handle} not found`);
       navigate({ handle: captain?.handle ?? null, session: null, panel: route.panel }, { replace: true });
       return;
     }
@@ -119,7 +119,7 @@
       .then((r) => {
         agents = agents.map((x) => (x.id === a.id ? { ...x, main_session_id: r.session_id } : x));
       })
-      .catch((e) => toastError(`Buka chat: ${e instanceof Error ? e.message : String(e)}`))
+      .catch((e) => toastError(`Open chat: ${e instanceof Error ? e.message : String(e)}`))
       .finally(() => { opening = null; });
   });
 
@@ -160,7 +160,7 @@
       const r = await runApi(openAgentChat(base, selected.id, true));
       go({ session: r.session_id, panel: null });
     } catch (e) {
-      toastError(`Chat baru: ${e instanceof Error ? e.message : String(e)}`);
+      toastError(`New chat: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -201,10 +201,10 @@
     if (!selected) return;
     try {
       const a = await runApi(createAgent(base, duplicateBody(selected, agents.map((x) => x.handle))));
-      toastOk(`Agent @${a.handle} dibuat`);
+      toastOk(`Agent @${a.handle} created`);
       onCreated(a);
     } catch (e) {
-      toastError(`Duplikat: ${e instanceof Error ? e.message : String(e)}`);
+      toastError(`Duplicate: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -213,21 +213,21 @@
     const off = !selected.disabled;
     try {
       onSaved(await runApi(updateAgent(base, selected.id, { disabled: off })));
-      toastOk(off ? `@${selected.handle} dinonaktifkan` : `@${selected.handle} aktif lagi`);
+      toastOk(off ? `@${selected.handle} disabled` : `@${selected.handle} enabled again`);
     } catch (e) {
-      toastError(`${off ? "Nonaktifkan" : "Aktifkan"}: ${e instanceof Error ? e.message : String(e)}`);
+      toastError(`${off ? "Disable" : "Enable"}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
   /* Same order as the mockup: where to go first, then what to do to the
-     agent. A new chat lives in the Percakapan drawer, not here. */
+     agent. A new chat lives in the Chats drawer, not here. */
   const menuItems = $derived([
-    { label: "Percakapan", hint: "chat utama dan riwayat", onclick: () => openPanel({ kind: "sessions" }) },
-    { label: "Settings", hint: "persona, akses, tools, avatar", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
-    { label: "Duplikat agent", hint: "salinan persona & akses, tanpa connection", divider: true, onclick: duplicate },
+    { label: "Chats", hint: "main chat and history", onclick: () => openPanel({ kind: "sessions" }) },
+    { label: "Settings", hint: "persona, access, tools, avatar", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
+    { label: "Duplicate agent", hint: "copies persona & access, not connections", divider: true, onclick: duplicate },
     selected?.disabled
-      ? { label: "Aktifkan", hint: "agent bisa dipakai lagi", onclick: toggleDisabled }
-      : { label: "Nonaktifkan", hint: "semua akses connector ditutup", danger: true, onclick: toggleDisabled },
+      ? { label: "Enable", hint: "the agent can be used again", onclick: toggleDisabled }
+      : { label: "Disable", hint: "closes all connector access", danger: true, onclick: toggleDisabled },
   ]);
 
   /* The main chat's turn started or ended on the stream: flip the row and
@@ -264,8 +264,8 @@
   });
 
   function rowPreview(a: AgentItem): string {
-    if (a.disabled) return "Nonaktif";
-    return a.attention_preview || a.last_preview || a.description || "Belum ada percakapan";
+    if (a.disabled) return "Disabled";
+    return a.attention_preview || a.last_preview || a.description || "No chats yet";
   }
 
 </script>
@@ -280,7 +280,7 @@
     <button
       type="button"
       class="lg:hidden fixed inset-0 z-30 bg-navy-900/40"
-      aria-label="Tutup daftar agent"
+      aria-label="Close agent list"
       onclick={() => (rosterOpen = false)}
     ></button>
   {/if}
@@ -291,8 +291,8 @@
       <a
         href={exitHref}
         class="flex h-8 w-8 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600"
-        title="Kembali ke wick"
-        aria-label="Kembali ke wick"
+        title="Back to wick"
+        aria-label="Back to wick"
       >
         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4L2 8l4 4"></path><path d="M2 8h8a4 4 0 014 4v1"></path></svg>
       </a>
@@ -301,7 +301,7 @@
         type="button"
         class="new-agent flex h-8 w-8 items-center justify-center rounded-full bg-green-500 text-lg leading-none text-white-100 hover:bg-green-600"
         title="+ Agent"
-        aria-label="Agent baru"
+        aria-label="New agent"
         onclick={() => { rosterOpen = false; openPanel({ kind: "new" }); }}
       >+</button>
     </div>
@@ -311,17 +311,17 @@
         type="search"
         bind:value={query}
         placeholder="Search"
-        aria-label="Cari agent"
+        aria-label="Search agents"
         class="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-black-900 placeholder:text-black-700 focus:outline-none dark:text-white-100"
       />
     </label>
-    <nav class="flex-1 overflow-y-auto px-2 pb-4" aria-label="Daftar agent">
+    <nav class="flex-1 overflow-y-auto px-2 pb-4" aria-label="Agent list">
       {#if !loaded}
-        <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">Memuat…</p>
+        <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">Loading…</p>
       {:else if loadError}
         <p class="px-3 py-4 text-sm text-neg-400">{loadError}</p>
       {:else if roster.length === 0}
-        <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">Tidak ada agent yang cocok.</p>
+        <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">No matching agents.</p>
       {/if}
       {#each roster as a (a.id)}
         {@const active = selected?.id === a.id}
@@ -336,7 +336,7 @@
           onclick={() => openAgent(a)}
         >
           <AgentAvatar shape={a.avatar?.shape} color={a.avatar?.color} size={44} {working} tool={!!a.current_action} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
-          {#if st.unread}<span class="roster-udot rounded-full border-2 border-white-200 bg-neg-400 dark:border-navy-700" aria-label="pesan baru"></span>{/if}
+          {#if st.unread}<span class="roster-udot rounded-full border-2 border-white-200 bg-neg-400 dark:border-navy-700" aria-label="new message"></span>{/if}
           <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{st.tip}</span>
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-2">
@@ -354,8 +354,8 @@
     </nav>
     <div class="flex items-center gap-2.5 border-t border-white-300 px-3 py-2.5 dark:border-navy-600">
       <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-200 text-xs font-bold text-green-700 select-none">{viewerInitial}</span>
-      <span class="min-w-0 flex-1 truncate text-[13px] font-medium text-black-900 dark:text-white-100">{viewerName || "Kamu"}</span>
-      <span class="shrink-0 text-xs text-black-700">{agents.length} agent</span>
+      <span class="min-w-0 flex-1 truncate text-[13px] font-medium text-black-900 dark:text-white-100">{viewerName || "You"}</span>
+      <span class="shrink-0 text-xs text-black-700">{agents.length} agent{agents.length === 1 ? "" : "s"}</span>
     </div>
   </aside>
 
@@ -365,7 +365,7 @@
       <button
         type="button"
         class="lg:hidden flex h-8 w-8 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600"
-        aria-label="Daftar agent"
+        aria-label="Agent list"
         onclick={() => (rosterOpen = true)}
       >
         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
@@ -378,13 +378,13 @@
           </div>
           <div class="truncate text-xs text-black-800 dark:text-black-600">
             {#if isWorking(selected.status)}
-              <span class="font-medium text-green-600 dark:text-green-400">mengetik<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
+              <span class="font-medium text-green-600 dark:text-green-400">typing<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
             {:else if selected.disabled}
-              nonaktif
+              disabled
             {:else}
               <span class="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-green-500 align-middle"></span>online
             {/if}
-            · @{selected.handle}{route.session ? " · percakapan lain" : ""}
+            · @{selected.handle}{route.session ? " · other chat" : ""}
           </div>
         </div>
         <!-- Always-on switcher: names the conversation on screen and opens
@@ -392,20 +392,20 @@
         <button
           type="button"
           class="flex shrink-0 items-center gap-1.5 rounded-full border border-white-300 px-3 py-1.5 text-xs font-medium text-black-900 hover:bg-white-200 dark:border-navy-600 dark:text-white-100 dark:hover:bg-navy-700"
-          title="Ganti percakapan"
+          title="Switch chat"
           aria-haspopup="dialog"
           onclick={() => openPanel({ kind: "sessions" })}
         >
           {#if route.session}
             <svg class="h-3.5 w-3.5 shrink-0 text-black-700" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"></path></svg>
-            <span class="hidden sm:inline">Percakapan lain</span>
+            <span class="hidden sm:inline">Other chat</span>
           {:else}
             <svg class="h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2.5h4M7 2.5v4L4.5 9h7L9 6.5v-4M8 9v4.5"></path></svg>
-            <span class="hidden sm:inline">Chat utama</span>
+            <span class="hidden sm:inline">Main chat</span>
           {/if}
           <svg class="h-3 w-3 shrink-0 text-black-700" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg>
         </button>
-        <KebabMenu items={menuItems} ariaLabel="Menu agent" width={240} />
+        <KebabMenu items={menuItems} ariaLabel="Agent menu" width={240} />
         <button
           type="button"
           class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600 {railOpen ? 'bg-white-300 dark:bg-navy-600' : ''}"
@@ -427,19 +427,19 @@
           <DetailView {base} sessionId={chatSessionId} {agentMode} {railToggle} onRailChange={(open) => (railOpen = open)} />
         {/key}
       {:else if loaded && !loadError && selected}
-        <div class="flex h-full items-center justify-center text-sm text-black-800 dark:text-black-600">Membuka chat…</div>
+        <div class="flex h-full items-center justify-center text-sm text-black-800 dark:text-black-600">Opening chat…</div>
       {:else if loaded && !loadError && agents.length === 0}
-        <div class="flex h-full items-center justify-center text-sm text-black-800 dark:text-black-600">Belum ada agent.</div>
+        <div class="flex h-full items-center justify-center text-sm text-black-800 dark:text-black-600">No agents yet.</div>
       {/if}
     </div>
   </section>
 
-  <!-- Drawer (Settings / Percakapan lain) or the centred + Agent modal -->
+  <!-- Drawer (Settings / Other chats) or the centred + Agent modal -->
   {#if route.panel}
     <button
       type="button"
       class="agent-scrim fixed inset-0 z-40"
-      aria-label="Tutup panel"
+      aria-label="Close panel"
       onclick={() => openPanel(null)}
     ></button>
     <div

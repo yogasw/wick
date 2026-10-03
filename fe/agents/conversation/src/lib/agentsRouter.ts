@@ -10,7 +10,7 @@ import { writable, type Readable } from "svelte/store";
      /team/<handle>                      that agent's main chat
      /team/<handle>?session=<id>         one of its other conversations
      /team/<handle>?panel=settings&tab=… Settings drawer over the chat
-     /team/<handle>?panel=sessions       "Percakapan lain" drawer
+     /team/<handle>?panel=sessions       "Other chats" drawer
      /team?panel=new                     the + Agent wizard */
 
 export type SettingsTab = "persona" | "access" | "tools" | "avatar" | "advanced";

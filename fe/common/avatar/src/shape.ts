@@ -26,13 +26,13 @@ export const AVATAR_STATES: AvatarState[] = ["idle", "thinking", "orbit", "alert
 
 /** Captions for the state grid in Settings → Avatar. */
 export const AVATAR_STATE_LABELS: Record<AvatarState, string> = {
-  idle: "diam",
-  thinking: "bekerja",
-  orbit: "pakai tool",
-  alert: "perlu perhatian",
-  notify: "pesan baru",
-  sleep: "nonaktif",
-  egg: "menetas",
+  idle: "idle",
+  thinking: "working",
+  orbit: "using a tool",
+  alert: "needs attention",
+  notify: "new message",
+  sleep: "disabled",
+  egg: "hatching",
 };
 
 /** hashHandle is 32-bit FNV-1a over the handle's UTF-16 code units. The
