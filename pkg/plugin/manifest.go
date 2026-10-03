@@ -34,6 +34,9 @@ type Manifest struct {
 	// Job carries the job meta + configs for kind=job (Module.Meta mirrors its
 	// key/name so key-based install/scan code stays kind-agnostic).
 	Job *JobModule `json:"job,omitempty"`
+	// Tool carries the tool meta, configs, webhook routes, and keep_warm for
+	// kind=tool (Module.Meta mirrors key/name the same way as for jobs).
+	Tool *ToolModule `json:"tool,omitempty"`
 }
 
 // ManifestSchemaVersion is the current envelope format version.

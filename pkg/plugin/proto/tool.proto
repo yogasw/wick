@@ -1,0 +1,20 @@
+syntax = "proto3";
+package wick.tool.v1;
+option go_package = "github.com/yogasw/wick/pkg/plugin/proto;proto";
+
+import "connector.proto";
+
+// Tool is the control service a tool plugin serves next to its HTTP server.
+// Page/API traffic does NOT go through gRPC: the plugin listens for HTTP on
+// the unix socket the host names in $WICK_PLUGIN_SOCKET and the host
+// reverse-proxies /tools/{key}/* to it. gRPC only carries the handshake
+// (go-plugin), the manifest, health, and config pushes.
+//
+// Configure reuses the connector messages:
+//   ExecuteRequest.creds = the tool's resolved config (key -> value), sent
+//                          once after spawn and again whenever it changes.
+service Tool {
+  rpc Schema    (wick.connector.v1.SchemaRequest)  returns (wick.connector.v1.SchemaResponse);
+  rpc Configure (wick.connector.v1.ExecuteRequest) returns (wick.connector.v1.HealthResponse);
+  rpc Health    (wick.connector.v1.HealthRequest)  returns (wick.connector.v1.HealthResponse);
+}
