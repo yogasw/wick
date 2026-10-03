@@ -33,15 +33,15 @@ type Service struct {
 	cache map[string]scopeEntry
 	now   func() time.Time
 
-	// ownerReach answers which connector ids an agent's owner reaches —
-	// their VisibleCatalog — for the include-new toggle. nil (not wired)
-	// means include-new lets nothing in.
+	// ownerReach answers which connectors an agent's owner reaches —
+	// their AgentCatalog — with each one's tier. nil (not wired) leaves
+	// explicit grants working and every default off.
 	ownerReach OwnerReachFunc
 }
 
-// OwnerReachFunc returns the connector ids in userID's own catalog (the
-// set wick_list shows them), with no agent scope applied.
-type OwnerReachFunc func(ctx context.Context, userID string) (map[string]bool, error)
+// OwnerReachFunc returns userID's own catalog (see connectors
+// AgentCatalog) with no agent scope applied.
+type OwnerReachFunc func(ctx context.Context, userID string) (Reach, error)
 
 // SetOwnerReach wires the owner-catalog lookup. Set at boot, once the
 // connectors service exists.
@@ -54,13 +54,9 @@ func (s *Service) SetOwnerReach(f OwnerReachFunc) {
 	s.mu.Unlock()
 }
 
-// reachOf is p's owner catalog when p's include-new toggle needs it, nil
-// otherwise. A failed lookup is nil too: include-new then lets nothing
-// in, the ticked connectors still work.
-func (s *Service) reachOf(ctx context.Context, p entity.AgentPersona) map[string]bool {
-	if !p.IncludeNewConnectors {
-		return nil
-	}
+// reachOf is p's owner catalog. A failed lookup is nil: tier defaults and
+// include-new then let nothing in, the ticked connectors still work.
+func (s *Service) reachOf(ctx context.Context, p entity.AgentPersona) Reach {
 	s.mu.Lock()
 	f := s.ownerReach
 	s.mu.Unlock()

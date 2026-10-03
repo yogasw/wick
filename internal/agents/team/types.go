@@ -22,6 +22,9 @@ const (
 	LevelRead = "read"
 	// LevelPick permits exactly the ops listed in ConnectorGrant.Ops.
 	LevelPick = "pick"
+	// LevelOff is an explicit "no": it overrides a tier default (see
+	// TierPlatform) the way the other levels override it upwards.
+	LevelOff = "off"
 )
 
 // Run-as modes for entity.AgentPersona.RunAs.
@@ -51,8 +54,8 @@ type ConnectorGrant struct {
 	// as. Empty = every account the owner sees; "" inside the list is the
 	// instance's own identity (the bot).
 	Accounts []string `json:"accounts"`
-	// Level is LevelAll, LevelRead or LevelPick. Anything else reads as
-	// LevelRead, so a malformed row fails towards less access.
+	// Level is LevelAll, LevelRead, LevelPick or LevelOff. Anything else
+	// reads as LevelRead, so a malformed row fails towards less access.
 	Level string `json:"level"`
 	// Ops is the allow-list used when Level is LevelPick.
 	Ops []string `json:"ops"`

@@ -38,6 +38,15 @@ func CatalogOf(entries []connectors.CatalogEntry) Catalog {
 	return out
 }
 
+// ReachOf indexes a connectors.AgentCatalog result with each entry's tier.
+func ReachOf(entries []connectors.CatalogEntry) Reach {
+	out := make(Reach, len(entries))
+	for _, e := range entries {
+		out[e.Row.ID] = ReachItem{Key: e.Row.Key, Tier: TierOf(e.Module.Meta.DefaultTags)}
+	}
+	return out
+}
+
 // CheckGrants rejects grants this build cannot interpret and grants that
 // reach past the owner's catalog: a connector the owner does not see, an
 // account they cannot run as, or (for LevelPick) an op that is not live.
@@ -49,9 +58,16 @@ func CheckGrants(gs []ConnectorGrant, cat Catalog) error {
 			return errors.New("allowed_connectors: connector_id is required")
 		}
 		switch g.Level {
-		case LevelAll, LevelRead, LevelPick:
+		case LevelAll, LevelRead, LevelPick, LevelOff:
 		default:
-			return errors.New("allowed_connectors: level must be all, read or pick")
+			return errors.New("allowed_connectors: level must be all, read, pick or off")
+		}
+		if strings.HasPrefix(g.ConnectorID, ToolPrefix) {
+			// wick's own tools know only on and off.
+			if !isToolGrant(g.ConnectorID) || (g.Level != LevelAll && g.Level != LevelOff) {
+				bad = append(bad, "tool "+strings.TrimPrefix(g.ConnectorID, ToolPrefix))
+			}
+			continue
 		}
 		it, ok := cat[g.ConnectorID]
 		if !ok {

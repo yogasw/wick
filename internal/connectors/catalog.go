@@ -44,13 +44,25 @@ type CatalogEntry struct {
 // ctx narrows the result as it narrows wick_list; pass a ctx without one
 // to get the person's own reach.
 func (s *Service) VisibleCatalog(ctx context.Context, userID string, tagIDs []string, isAdmin bool) ([]CatalogEntry, error) {
+	return s.catalog(ctx, userID, tagIDs, isAdmin, false)
+}
+
+// AgentCatalog is VisibleCatalog plus the wickmanager row when the caller
+// may see it (admins only, by its System tag). wick_list leaves it out
+// because its ops surface as wick_manager_* tools instead; an agent's
+// Access tab still needs it as a System-tier entry.
+func (s *Service) AgentCatalog(ctx context.Context, userID string, tagIDs []string, isAdmin bool) ([]CatalogEntry, error) {
+	return s.catalog(ctx, userID, tagIDs, isAdmin, true)
+}
+
+func (s *Service) catalog(ctx context.Context, userID string, tagIDs []string, isAdmin, withManager bool) ([]CatalogEntry, error) {
 	rows, err := s.ListVisibleTo(ctx, userID, tagIDs, isAdmin)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]CatalogEntry, 0, len(rows))
 	for _, row := range rows {
-		if row.Key == wickManagerKey {
+		if row.Key == wickManagerKey && !withManager {
 			continue
 		}
 		mod, ok := s.Module(row.Key)

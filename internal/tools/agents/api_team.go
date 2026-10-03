@@ -99,6 +99,11 @@ type teamAgentConnectorItem struct {
 	Description string                 `json:"description"`
 	Accounts    []teamAgentAccountItem `json:"accounts"`
 	Ops         []teamAgentConnectorOp `json:"ops"`
+	// Tier is the Access list the entry belongs to: "platform", "system"
+	// or "" (Connectors). See team.TierOf.
+	Tier string `json:"tier"`
+	// Tool marks a wick MCP tool entry (id "tool:<name>"): on/off only.
+	Tool bool `json:"tool,omitempty"`
 }
 
 type teamAgentAccountItem struct {
@@ -199,7 +204,43 @@ func ownerCatalog(c *tool.Ctx) ([]connectors.CatalogEntry, error) {
 	u := login.GetUser(c.Context())
 	isAdmin := u != nil && u.IsAdmin()
 	ctx := connectors.WithoutAgentScope(c.Context())
-	return globalConnectors.VisibleCatalog(ctx, actorID(c), login.GetUserTagIDs(c.Context()), isAdmin)
+	return globalConnectors.AgentCatalog(ctx, actorID(c), login.GetUserTagIDs(c.Context()), isAdmin)
+}
+
+// ownerReach is ownerCatalog indexed for team.MigrateFeatures; nil when
+// the catalog cannot be read, which leaves the old switches as they are.
+func ownerReach(c *tool.Ctx) team.Reach {
+	cat, err := ownerCatalog(c)
+	if err != nil {
+		return nil
+	}
+	return team.ReachOf(cat)
+}
+
+// migrateTeamAccess rewrites p's old Notes/Tickets/Source/Sub-agents/
+// Schedule switches into off grants (team.MigrateFeatures). Reports
+// whether p changed; the caller saves.
+func migrateTeamAccess(p *entity.AgentPersona, reach team.Reach) bool {
+	f, gs, changed := team.MigrateFeatures(team.DecodeFeatures(p.Features), team.DecodeGrants(p.AllowedConnectors), reach)
+	if changed {
+		p.Features = team.EncodeFeatures(f)
+		p.AllowedConnectors = team.EncodeGrants(gs)
+	}
+	return changed
+}
+
+// teamToolLabels names the PlatformTools entries in the Access tab.
+var teamToolLabels = map[string][2]string{
+	"wick_schedule_message":  {"Schedule", "Schedule a message into this conversation later."},
+	"todo":                   {"Todo list", "Keep a step-by-step plan for the current task."},
+	"ask_user":               {"Ask the user", "Pause and ask the person a question."},
+	"wick_set_title":         {"Session title", "Rename the conversation."},
+	"wick_session_info":      {"Session info", "Read details of this conversation."},
+	"wick_context":           {"Context usage", "See how full the context window is."},
+	"wick_usage":             {"Usage", "Read token and cost usage."},
+	"wick_compact":           {"Compact", "Summarise the conversation to free context."},
+	"wick_cli_token":         {"CLI token", "Mint a token for the wick CLI."},
+	"wick_session_workspace": {"Session workspace", "Add throwaway connectors for this conversation."},
 }
 
 // validateGrants rejects a checklist the owner could not have ticked: an
@@ -620,7 +661,12 @@ func apiTeamAgentList(c *tool.Ctx) {
 	items := make([]TeamAgentItem, 0, len(rows))
 	captainID := ""
 	live, users := teamLiveNow(), teamProjectUsersFor(c.Context(), rows)
+	reach := ownerReach(c)
 	for _, r := range rows {
+		if migrateTeamAccess(&r, reach) {
+			// Best effort: the next load retries a failed save.
+			_ = globalTeam.Update(c.Context(), &r)
+		}
 		items = append(items, teamAgentToItem(r, users, live))
 		if r.IsCaptain {
 			captainID = r.ID
@@ -812,6 +858,7 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 			}
 		}
 	}
+	migrateTeamAccess(&p, ownerReach(c))
 	if err := globalTeam.Update(c.Context(), &p); err != nil {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
@@ -868,6 +915,7 @@ func apiTeamAgentConnectors(c *tool.Ctx) {
 			Description: strings.TrimSpace(row.Description),
 			Accounts:    []teamAgentAccountItem{},
 			Ops:         []teamAgentConnectorOp{},
+			Tier:        team.TierOf(mod.Meta.DefaultTags),
 		}
 		if it.Description == "" {
 			it.Description = mod.Meta.Description
@@ -875,7 +923,7 @@ func apiTeamAgentConnectors(c *tool.Ctx) {
 		if mod.OAuth != nil {
 			// The instance's own identity is one more pickable account —
 			// wick_list's connector entry for the row.
-			it.Accounts = append(it.Accounts, teamAgentAccountItem{ID: "", DisplayName: "bot / instance"})
+			it.Accounts = append(it.Accounts, teamAgentAccountItem{ID: "", DisplayName: "Bot / instance"})
 			for _, a := range e.Accounts {
 				it.Accounts = append(it.Accounts, teamAgentAccountItem{ID: a.ID, DisplayName: a.DisplayName})
 			}
@@ -884,6 +932,17 @@ func apiTeamAgentConnectors(c *tool.Ctx) {
 			it.Ops = append(it.Ops, teamAgentConnectorOp{Key: op.Key, Name: op.Name, Destructive: op.Destructive})
 		}
 		out = append(out, it)
+	}
+	for _, name := range team.PlatformTools {
+		l := teamToolLabels[name]
+		if l[0] == "" {
+			l = [2]string{name, ""}
+		}
+		out = append(out, teamAgentConnectorItem{
+			ID: team.ToolPrefix + name, Key: name, Label: l[0], Description: l[1],
+			Accounts: []teamAgentAccountItem{}, Ops: []teamAgentConnectorOp{},
+			Tier: team.TierPlatform, Tool: true,
+		})
 	}
 	c.JSON(http.StatusOK, out)
 }

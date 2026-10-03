@@ -10,17 +10,22 @@ import (
 // Scope is an agent's checklist in the shape connectors.Service checks.
 // It only ever narrows: the service consults it after the owner's own
 // visibility rules, so nothing here can grant what the owner lacks.
+//
+// What an agent gets on one connector is decided by Level, in this order:
+// an explicit grant (LevelOff included), else the connector's tier default
+// (TierPlatform: write; TierSystem: write for the Captain only), else the
+// include-new toggle (read only), else nothing. All of it stops at reach.
 type Scope struct {
 	grants map[string]ConnectorGrant
-	// includeNew lets connectors absent from the checklist through with
-	// read-only ops — but only those in reach, the connector ids of the
-	// owner's own catalog. The toggle reads "all my connectors, including
-	// new ones (read only)": the owner's, not whoever triggers the turn,
-	// and never one the catalog skips on purpose (wickmanager).
+	// includeNew lets untiered connectors absent from the checklist
+	// through with read-only ops — the owner's, not whoever triggers the
+	// turn.
 	includeNew bool
-	// reach is the owner's VisibleCatalog as a set of connector ids. nil
-	// (unknown, or the lookup failed) lets nothing in through includeNew.
-	reach map[string]bool
+	// captain unlocks the TierSystem default.
+	captain bool
+	// reach is the owner's catalog (see Reach). nil (unknown, or the
+	// lookup failed) leaves explicit grants working and every default off.
+	reach Reach
 	// denyAll is the disabled-agent scope: it answers no to everything.
 	denyAll bool
 	// offKeys and offTools are what the agent's switched-off features
@@ -45,9 +50,10 @@ type featureGate struct {
 	prefixes []string
 }
 
-// featureGates maps the features with a server-side surface. Files,
-// Process, Todos and Workspace are panels only: hiding the tab is all
-// switching them off does.
+// featureGates maps the features with a server-side surface that
+// MigrateFeatures could not turn into off grants (the owner's catalog was
+// unknown). Files, Process, Todos, Workspace and Browser are panels only:
+// the browser is an ordinary connector reached through a grant.
 func featureGates(f Features) []featureGate {
 	var out []featureGate
 	if !f.Schedule {
@@ -61,9 +67,6 @@ func featureGates(f Features) []featureGate {
 	}
 	if !f.Subagents {
 		out = append(out, featureGate{keys: []string{"sub-agents"}, prefixes: []string{"wick_agent_"}})
-	}
-	if !f.Browser {
-		out = append(out, featureGate{keys: []string{"playwright_browser"}})
 	}
 	if !f.Source {
 		out = append(out, featureGate{keys: []string{"source"}})
@@ -91,8 +94,8 @@ func (s *Scope) WithFeatures(f Features) *Scope {
 }
 
 // NewScope builds the scope for grants. reach is the owner's catalog (see
-// Scope.reach); it only matters when includeNew is on.
-func NewScope(grants []ConnectorGrant, includeNew bool, reach map[string]bool) *Scope {
+// Scope.reach); captain unlocks the TierSystem default.
+func NewScope(grants []ConnectorGrant, includeNew, captain bool, reach Reach) *Scope {
 	m := make(map[string]ConnectorGrant, len(grants))
 	for _, g := range grants {
 		if g.ConnectorID == "" {
@@ -100,27 +103,71 @@ func NewScope(grants []ConnectorGrant, includeNew bool, reach map[string]bool) *
 		}
 		m[g.ConnectorID] = g
 	}
-	return &Scope{grants: m, includeNew: includeNew, reach: reach}
+	return &Scope{grants: m, includeNew: includeNew, captain: captain, reach: reach}
 }
 
 // ScopeOf builds the scope an agent row describes. A disabled agent gets
 // a deny-all scope rather than nil: nil would mean "not an agent" and
 // hand its sessions the owner's full reach. reach is the owner's catalog,
-// see Scope.reach.
-func ScopeOf(p entity.AgentPersona, reach map[string]bool) *Scope {
+// see Scope.reach. Old feature switches are read through MigrateFeatures.
+func ScopeOf(p entity.AgentPersona, reach Reach) *Scope {
 	if p.Disabled {
 		return DenyAll()
 	}
-	return NewScope(DecodeGrants(p.AllowedConnectors), p.IncludeNewConnectors, reach).
-		WithFeatures(DecodeFeatures(p.Features))
+	f, grants, _ := MigrateFeatures(DecodeFeatures(p.Features), DecodeGrants(p.AllowedConnectors), reach)
+	return NewScope(grants, p.IncludeNewConnectors, p.IsCaptain, reach).WithFeatures(f)
 }
 
 // DenyAll returns a scope that permits nothing.
 func DenyAll() *Scope { return &Scope{denyAll: true} }
 
-// includes reports whether includeNew lets an unlisted connector in.
-func (s *Scope) includes(connectorID string) bool {
-	return s.includeNew && s.reach[connectorID]
+// Level resolves what the agent may do on connectorID: LevelAll,
+// LevelRead, LevelPick or LevelOff. It is the one place the order lives —
+// explicit grant, then tier default, then include-new — and everything
+// stops at reach once reach is known.
+func (s *Scope) Level(connectorID string) string {
+	lv, _ := s.resolve(connectorID)
+	return lv
+}
+
+// resolve is Level plus the grant it came from, if any.
+func (s *Scope) resolve(connectorID string) (string, *ConnectorGrant) {
+	if s.denyAll {
+		return LevelOff, nil
+	}
+	it, inReach := s.reach[connectorID]
+	if s.reach != nil && !inReach && !isToolGrant(connectorID) {
+		return LevelOff, nil
+	}
+	if g, ok := s.grants[connectorID]; ok {
+		switch g.Level {
+		case LevelOff:
+			return LevelOff, nil
+		case LevelAll, LevelPick:
+			return g.Level, &g
+		}
+		return LevelRead, &g
+	}
+	if isToolGrant(connectorID) {
+		// wick's own session tools: on unless switched off.
+		return LevelAll, nil
+	}
+	if s.reach == nil {
+		return LevelOff, nil
+	}
+	switch it.Tier {
+	case TierPlatform:
+		return LevelAll, nil
+	case TierSystem:
+		if s.captain {
+			return LevelAll, nil
+		}
+		return LevelOff, nil
+	}
+	if s.includeNew {
+		return LevelRead, nil
+	}
+	return LevelOff, nil
 }
 
 // AllowKey implements connectors.AgentFeatureScope.
@@ -134,6 +181,9 @@ func (s *Scope) AllowTool(name string) bool {
 	if s.offTools[name] {
 		return false
 	}
+	if !s.denyAll && IsPlatformTool(name) && s.Level(toolGrantID(name)) == LevelOff {
+		return false
+	}
 	for _, p := range s.offPrefixes {
 		if strings.HasPrefix(name, p) {
 			return false
@@ -144,27 +194,20 @@ func (s *Scope) AllowTool(name string) bool {
 
 // AllowConnector implements connectors.AgentScope.
 func (s *Scope) AllowConnector(connectorID string) bool {
-	if s.denyAll {
-		return false
-	}
-	if _, ok := s.grants[connectorID]; ok {
-		return true
-	}
-	return s.includes(connectorID)
+	return s.Level(connectorID) != LevelOff
 }
 
-// AllowAccount implements connectors.AgentScope.
+// AllowAccount implements connectors.AgentScope. A connector reached
+// through a tier default or include-new carries no account list: the
+// owner's own account visibility is the only limit. A grant's list is
+// exact — "" (the bot) included only when listed, so a grant naming just
+// a personal account refuses ops run as the bot.
 func (s *Scope) AllowAccount(connectorID, accountID string) bool {
-	if s.denyAll {
+	lv, g := s.resolve(connectorID)
+	if lv == LevelOff {
 		return false
 	}
-	g, ok := s.grants[connectorID]
-	if !ok {
-		// An included-new connector carries no account list: the owner's
-		// own account visibility is the only limit.
-		return s.includes(connectorID)
-	}
-	if len(g.Accounts) == 0 {
+	if g == nil || len(g.Accounts) == 0 {
 		return true
 	}
 	for _, a := range g.Accounts {
@@ -177,14 +220,8 @@ func (s *Scope) AllowAccount(connectorID, accountID string) bool {
 
 // AllowOp implements connectors.AgentScope.
 func (s *Scope) AllowOp(connectorID, opKey string, destructive bool) bool {
-	if s.denyAll {
-		return false
-	}
-	g, ok := s.grants[connectorID]
-	if !ok {
-		return s.includes(connectorID) && !destructive
-	}
-	switch g.Level {
+	lv, g := s.resolve(connectorID)
+	switch lv {
 	case LevelAll:
 		return true
 	case LevelPick:
@@ -194,8 +231,8 @@ func (s *Scope) AllowOp(connectorID, opKey string, destructive bool) bool {
 			}
 		}
 		return false
-	default:
-		// LevelRead, and any value this build does not know.
+	case LevelRead:
 		return !destructive
 	}
+	return false
 }

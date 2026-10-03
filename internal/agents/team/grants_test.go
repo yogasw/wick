@@ -48,3 +48,31 @@ func TestCheckGrants(t *testing.T) {
 		t.Fatalf("error should list both items, got %v", err)
 	}
 }
+
+// The owner's own accounts (and the bot, "") are valid picks; an account
+// the owner's catalog does not list — someone else's — is refused.
+// LevelOff and the on/off tool entries are accepted.
+func TestCheckGrantsAccountsOffAndTools(t *testing.T) {
+	cat := Catalog{"slack": {Accounts: map[string]bool{"": true, "acc-me": true}, Ops: map[string]bool{"send": true}}}
+	ok := []ConnectorGrant{
+		{ConnectorID: "slack", Level: LevelAll, Accounts: []string{"acc-me"}},
+		{ConnectorID: "slack", Level: LevelOff},
+		{ConnectorID: "tool:todo", Level: LevelOff},
+		{ConnectorID: "tool:wick_schedule_message", Level: LevelAll},
+	}
+	for _, g := range ok {
+		if err := CheckGrants([]ConnectorGrant{g}, cat); err != nil {
+			t.Errorf("%+v refused: %v", g, err)
+		}
+	}
+	bad := []ConnectorGrant{
+		{ConnectorID: "slack", Level: LevelAll, Accounts: []string{"acc-other"}},
+		{ConnectorID: "tool:todo", Level: LevelRead},
+		{ConnectorID: "tool:wick_list", Level: LevelOff},
+	}
+	for _, g := range bad {
+		if err := CheckGrants([]ConnectorGrant{g}, cat); err == nil {
+			t.Errorf("%+v accepted", g)
+		}
+	}
+}

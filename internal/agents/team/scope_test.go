@@ -45,7 +45,10 @@ func TestScope(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := NewScope(grants, tc.includeNew, map[string]bool{"other": true, "read": true})
+			s := NewScope(grants, tc.includeNew, false, nil)
+			if tc.includeNew {
+				s = NewScope(grants, tc.includeNew, false, reachOf("other", "read", "all", "pick", "odd", "accs", "accsonly"))
+			}
 			if got := s.AllowConnector(tc.conn); got != tc.wantConn {
 				t.Errorf("AllowConnector = %v, want %v", got, tc.wantConn)
 			}
@@ -65,7 +68,7 @@ func TestScopeOfDisabledDeniesAll(t *testing.T) {
 		AllowedConnectors:    EncodeGrants([]ConnectorGrant{{ConnectorID: "c", Level: LevelAll}}),
 		IncludeNewConnectors: true,
 	}
-	s := ScopeOf(p, map[string]bool{"c": true, "x": true})
+	s := ScopeOf(p, reachOf("c", "x"))
 	if s.AllowConnector("c") || s.AllowConnector("x") || s.AllowOp("c", "get", false) || s.AllowAccount("c", "") {
 		t.Fatal("disabled agent scope must deny everything")
 	}
@@ -76,45 +79,35 @@ func TestScopeIncludeNewNeedsReach(t *testing.T) {
 	if ScopeOf(p, nil).AllowConnector("c") {
 		t.Fatal("include-new without a known owner catalog must let nothing in")
 	}
-	s := ScopeOf(p, map[string]bool{"c": true})
+	s := ScopeOf(p, reachOf("c"))
 	if !s.AllowConnector("c") || !s.AllowOp("c", "get", false) || s.AllowOp("c", "delete", true) {
 		t.Fatal("include-new must admit owner-catalog connectors read-only")
 	}
-	// wickmanager is never in a catalog, so it is never in reach.
 	if s.AllowConnector("wickmanager-row") {
 		t.Fatal("a connector outside the owner's catalog must stay out")
 	}
 }
 
-func TestScopeFeatureGates(t *testing.T) {
+func TestScopeFeatureGatesWithoutReach(t *testing.T) {
+	// Owner catalog unknown: the old switches cannot become grants, so
+	// they still gate by connector type / tool name.
 	f := DefaultFeatures()
-	f.Schedule, f.Notes, f.Tickets, f.Subagents, f.Browser, f.Source = false, false, false, false, false, false
+	f.Schedule, f.Notes, f.Tickets, f.Subagents, f.Source = false, false, false, false, false
 	p := entity.AgentPersona{
 		AllowedConnectors: EncodeGrants([]ConnectorGrant{{ConnectorID: "n1", Level: LevelAll}}),
 		Features:          EncodeFeatures(f),
 	}
 	s := ScopeOf(p, nil)
-	for _, k := range []string{"notes", "tickets", "sub-agents", "playwright_browser", "source"} {
+	for _, k := range []string{"notes", "tickets", "sub-agents", "source"} {
 		if s.AllowKey(k) {
 			t.Errorf("AllowKey(%q) = true with its feature off", k)
 		}
 	}
-	if !s.AllowKey("httprest") {
+	if !s.AllowKey("httprest") || !s.AllowKey("playwright_browser") {
 		t.Error("a connector type with no feature must stay on")
-	}
-	for _, name := range []string{"wick_schedule_message", "wick_agent_delegate"} {
-		if s.AllowTool(name) {
-			t.Errorf("AllowTool(%q) = true with its feature off", name)
-		}
 	}
 	if !s.AllowTool("wick_list") || !s.AllowTool("todo") {
 		t.Error("tools without a feature must stay on")
-	}
-
-	// Defaults leave everything but the browser on.
-	d := ScopeOf(entity.AgentPersona{}, nil)
-	if !d.AllowKey("notes") || !d.AllowTool("wick_schedule_message") || !d.AllowTool("wick_agent_delegate") || d.AllowKey("playwright_browser") {
-		t.Error("default features gate wrong")
 	}
 }
 
@@ -164,5 +157,103 @@ func TestNormalizeAvatar(t *testing.T) {
 	}
 	if a := DecodeAvatar(`{"shape":"diamond","color":"#000000"}`); a.Shape != "diamond" || a.Color != "#000000" {
 		t.Fatalf("got %+v", a)
+	}
+}
+
+func reachOf(ids ...string) Reach {
+	r := Reach{}
+	for _, id := range ids {
+		r[id] = ReachItem{Key: id}
+	}
+	return r
+}
+
+// TestScopeLevelResolution is the order in one table: explicit grant
+// (off included) > tier default > include-new > deny, all inside reach.
+func TestScopeLevelResolution(t *testing.T) {
+	reach := Reach{
+		"notes1": {Key: "notes", Tier: TierPlatform},
+		"cc":     {Key: "customconnector", Tier: TierSystem},
+		"wm":     {Key: "wickmanager", Tier: TierSystem},
+		"slack":  {Key: "slack"},
+		"http":   {Key: "httprest"},
+	}
+	grants := []ConnectorGrant{
+		{ConnectorID: "http", Level: LevelRead},
+		{ConnectorID: "cc", Level: LevelRead},
+		{ConnectorID: "gone", Level: LevelAll},
+		{ConnectorID: "tool:todo", Level: LevelOff},
+	}
+	cases := []struct {
+		name             string
+		captain, inclNew bool
+		grants           []ConnectorGrant
+		reach            Reach
+		conn, want       string
+	}{
+		{"platform default", false, false, nil, reach, "notes1", LevelAll},
+		{"platform off override", false, false, []ConnectorGrant{{ConnectorID: "notes1", Level: LevelOff}}, reach, "notes1", LevelOff},
+		{"platform read override", false, false, []ConnectorGrant{{ConnectorID: "notes1", Level: LevelRead}}, reach, "notes1", LevelRead},
+		{"system default non-captain", false, false, nil, reach, "wm", LevelOff},
+		{"system default captain", true, false, nil, reach, "wm", LevelAll},
+		{"system ticked non-captain", false, false, grants, reach, "cc", LevelRead},
+		{"system off for captain", true, false, []ConnectorGrant{{ConnectorID: "wm", Level: LevelOff}}, reach, "wm", LevelOff},
+		{"connector unticked", false, false, nil, reach, "slack", LevelOff},
+		{"connector include-new", false, true, nil, reach, "slack", LevelRead},
+		{"connector ticked", false, false, grants, reach, "http", LevelRead},
+		{"grant outside owner catalog", true, true, grants, reach, "gone", LevelOff},
+		{"platform default outside owner catalog", false, false, nil, reach, "notes2", LevelOff},
+		{"unknown reach: grant works", false, false, grants, nil, "http", LevelRead},
+		{"unknown reach: no defaults", true, true, nil, nil, "notes1", LevelOff},
+		{"tool default on", false, false, nil, reach, "tool:ask_user", LevelAll},
+		{"tool switched off", false, false, grants, reach, "tool:todo", LevelOff},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewScope(tc.grants, tc.inclNew, tc.captain, tc.reach)
+			if got := s.Level(tc.conn); got != tc.want {
+				t.Fatalf("Level(%q) = %q, want %q", tc.conn, got, tc.want)
+			}
+		})
+	}
+	s := NewScope(grants, false, false, reach)
+	if s.AllowTool("todo") || !s.AllowTool("ask_user") || !s.AllowTool("wick_list") {
+		t.Fatal("tool off-grant not applied")
+	}
+	if !s.AllowOp("notes1", "delete", true) || s.AllowOp("cc", "delete", true) || !s.AllowOp("cc", "get", false) {
+		t.Fatal("ops do not follow the resolved level")
+	}
+}
+
+// A grant naming only a personal account refuses ops run as the bot.
+func TestScopePersonalAccountOnly(t *testing.T) {
+	s := NewScope([]ConnectorGrant{{ConnectorID: "slack", Level: LevelAll, Accounts: []string{"acc-me"}}}, false, false, Reach{"slack": {Key: "slack"}})
+	if s.AllowAccount("slack", "") || !s.AllowAccount("slack", "acc-me") || s.AllowAccount("slack", "acc-other") {
+		t.Fatal("account list must be exact")
+	}
+}
+
+func TestMigrateFeatures(t *testing.T) {
+	f := DefaultFeatures()
+	f.Notes, f.Schedule, f.Tickets = false, false, false
+	reach := Reach{"n1": {Key: "notes", Tier: TierPlatform}, "t1": {Key: "tickets", Tier: TierPlatform}}
+	existing := []ConnectorGrant{{ConnectorID: "t1", Level: LevelRead}}
+	f2, gs, changed := MigrateFeatures(f, existing, reach)
+	if !changed || !f2.Notes || !f2.Schedule || !f2.Tickets {
+		t.Fatalf("features not switched back on: %+v", f2)
+	}
+	got := map[string]string{}
+	for _, g := range gs {
+		got[g.ConnectorID] = g.Level
+	}
+	if got["n1"] != LevelOff || got["tool:wick_schedule_message"] != LevelOff || got["t1"] != LevelRead || len(got) != 3 {
+		t.Fatalf("grants = %v", got)
+	}
+	s := ScopeOf(entity.AgentPersona{Features: EncodeFeatures(f), AllowedConnectors: EncodeGrants(existing)}, reach)
+	if s.AllowConnector("n1") || s.AllowTool("wick_schedule_message") || !s.AllowConnector("t1") {
+		t.Fatal("scope does not apply migrated features")
+	}
+	if _, _, again := MigrateFeatures(f2, gs, reach); again {
+		t.Fatal("migration is not idempotent")
 	}
 }

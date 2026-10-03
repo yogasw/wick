@@ -23,29 +23,49 @@ func withScopeResolver(t *testing.T, f AgentScopeResolver) {
 	t.Cleanup(func() { SetAgentScopeResolver(nil) })
 }
 
-// TestWickManagerDeniedToAgentSessions: wickmanager is no checklist entry,
-// so even a scope that permits everything must not list or run its ops.
-func TestWickManagerDeniedToAgentSessions(t *testing.T) {
+// closedScope permits nothing, as an agent whose Access leaves wickmanager
+// off (every non-Captain by default).
+type closedScope struct{}
+
+func (closedScope) AllowConnector(string) bool        { return false }
+func (closedScope) AllowAccount(string, string) bool  { return false }
+func (closedScope) AllowOp(string, string, bool) bool { return false }
+
+// TestWickManagerFollowsAgentScope: wickmanager is a System-tier Access
+// entry, so an agent session lists and runs wick_manager_* exactly when
+// its scope allows the row — never by a blanket rule either way.
+func TestWickManagerFollowsAgentScope(t *testing.T) {
 	db := newTestDB(t)
 	svc := newTestService(t, db, wickManagerStubModule())
 	h := NewHandler(svc)
 
-	scoped := connectors.WithAgentScope(context.Background(), openScope{})
-	for _, d := range h.AgentToolDescriptors(scoped) {
-		if strings.HasPrefix(d.Name, "wick_manager_") {
-			t.Fatalf("agent session must not list %s", d.Name)
+	listed := func(scope connectors.AgentScope) bool {
+		for _, d := range h.AgentToolDescriptors(connectors.WithAgentScope(context.Background(), scope)) {
+			if strings.HasPrefix(d.Name, "wick_manager_") {
+				return true
+			}
 		}
+		return false
+	}
+	if listed(closedScope{}) {
+		t.Fatal("a scope without wickmanager must not list wick_manager_*")
+	}
+	if !listed(openScope{}) {
+		t.Fatal("a scope granting wickmanager must list wick_manager_*")
 	}
 
+	withScopeResolver(t, func(context.Context, string) connectors.AgentScope { return closedScope{} })
+	if out, isErr := h.CallAgentTool(context.Background(), "wick_manager_app_list", map[string]any{}, "sess-agent"); !isErr {
+		t.Fatalf("wick_manager_* ran outside the agent's scope: %q", out)
+	}
 	withScopeResolver(t, func(context.Context, string) connectors.AgentScope { return openScope{} })
-	out, isErr := h.CallAgentTool(context.Background(), "wick_manager_app_list", map[string]any{}, "sess-agent")
-	if !isErr || !strings.Contains(out, "not available to agent sessions") {
-		t.Fatalf("wick_manager_* must be refused in an agent session, got isErr=%v %q", isErr, out)
+	if out, isErr := h.CallAgentTool(context.Background(), "wick_manager_app_list", map[string]any{}, "sess-agent"); isErr {
+		t.Fatalf("wick_manager_* refused inside the agent's scope: %q", out)
 	}
 
 	// An ordinary session keeps it.
-	out, isErr = h.CallAgentTool(context.Background(), "wick_manager_app_list", map[string]any{}, "")
-	if isErr {
+	SetAgentScopeResolver(nil)
+	if out, isErr := h.CallAgentTool(context.Background(), "wick_manager_app_list", map[string]any{}, ""); isErr {
 		t.Fatalf("ordinary session lost wick_manager_*: %q", out)
 	}
 }
