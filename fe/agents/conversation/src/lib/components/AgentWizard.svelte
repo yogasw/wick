@@ -53,7 +53,7 @@
   let grantErrors = $state<GrantErrors | null>(null);
 
   onMount(() => {
-    runApi(getProjectOptions(base)).then((p) => { projects = p ?? []; }).catch(() => {});
+    runApi(getProjectOptions(base, { hideTeam: true })).then((p) => { projects = p ?? []; }).catch(() => {});
     runApi(listAgentConnectors(base))
       .then((c) => { catalog = c ?? []; })
       .catch((e) => { catalogError = e instanceof Error ? e.message : String(e); })

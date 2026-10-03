@@ -2513,12 +2513,18 @@ func projectOptionsJSON(c *tool.Ctx) {
 			}
 		}
 	}
+	// hide_team=1 drops the Team app's agent projects (the agent wizard
+	// and Settings pickers); the agent's own project comes back via include.
+	hideTeam := c.Query("hide_team") == "1"
 	pinned := pinnedProjectID(c)
 	projects := globalMgr.Registry().Projects()
 	opts := make([]option, 0, len(projects))
 	for id, p := range projects {
 		_, wanted := forced[id]
 		if !access.allowProject(id) && !wanted {
+			continue
+		}
+		if hideTeam && !wanted && project.IsAgentProject(p.Meta) {
 			continue
 		}
 		managed := p.Meta.CustomPath == ""

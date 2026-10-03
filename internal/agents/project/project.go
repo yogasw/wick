@@ -335,7 +335,10 @@ const PersonalTag = "personal"
 // (Captain included). Such a project is left out of the sidebar's Projects
 // list; it stays reachable by URL and from the agent. A project an agent
 // was pointed at by the user carries no tag and keeps showing.
-const AgentTag = "agent"
+//
+// Namespaced so a user's own "agent" label never hides their project.
+// Project tags are not validated, so the ':' is safe.
+const AgentTag = "wick:team"
 
 // IsAgentProject reports whether meta carries AgentTag.
 func IsAgentProject(meta Meta) bool { return slices.Contains(meta.Tags, AgentTag) }

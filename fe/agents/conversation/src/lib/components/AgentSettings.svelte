@@ -76,7 +76,7 @@
 
   onMount(() => {
     runApi(getProviderOptions(base)).then((p) => { providers = p; }).catch(() => {});
-    runApi(getProjectOptions(base)).then((p) => { projects = p ?? []; }).catch(() => {});
+    runApi(getProjectOptions(base, { hideTeam: true, include: [agent.project_id] })).then((p) => { projects = p ?? []; }).catch(() => {});
     runApi(listAgentConnectors(base))
       .then((c) => {
         catalog = c ?? [];
