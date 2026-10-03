@@ -371,3 +371,41 @@ describe("SubAgentPanel — continuing a finished sub-agent", () => {
     expect(screen.queryByRole("button", { name: /continue/i })).toBeNull();
   });
 });
+
+describe("SubAgentPanel - Team and continued rows", () => {
+  test("Team tasks get their own section with target, state, turns and a chat link", async () => {
+    const onOpenAgent = vi.fn();
+    render(SubAgentPanel, {
+      props: props({
+        teamTasks: [{
+          task_id: "t1", context_id: "c1", to_agent_id: "a2", to_handle: "anton", to_name: "Anton",
+          title: "check the 401s", state: "working", turns: 2, max_turns: 4,
+          started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        }],
+        onOpenAgent,
+      }),
+    });
+    const sec = screen.getByTestId("team-tasks");
+    expect(sec.textContent).toContain("Anton");
+    expect(sec.textContent).toContain("@anton");
+    expect(sec.textContent).toContain("working");
+    expect(sec.textContent).toContain("turn 2/4");
+    await fireEvent.click(screen.getByText("Open chat"));
+    expect(onOpenAgent).toHaveBeenCalledWith("anton");
+  });
+
+  test("a continued row shows its first task, a Resumed badge and per-leg turns", () => {
+    render(SubAgentPanel, {
+      props: props({
+        subAgents: [subAgent({
+          label: "Your previous run ended in an error. Your earlier work is st",
+          title: "Find the flaky test",
+          resumes: 1, turns_used: 51, max_turns: 101, leg_base_turns: 40,
+        })],
+      }),
+    });
+    expect(screen.getByText("Find the flaky test")).toBeTruthy();
+    expect(screen.getByTestId("resumed-badge").textContent).toContain("Resumed ×1");
+    expect(screen.getByText(/11\/61 turns · leg 2 of 2 · 51 total/)).toBeTruthy();
+  });
+});

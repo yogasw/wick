@@ -45,11 +45,12 @@
     liveSubAgents,
     getMessages,
     bumpHops,
+    getTeamTasks,
   } from "../api/subagents.js";
   import { isSubAgentWorking } from "../lifecycleCls.js";
   import SubAgentPanel from "./SubAgentPanel.svelte";
   import SubAgentModal from "./SubAgentModal.svelte";
-  import type { AgentMessageItem, IncidentSummary, SubAgentItem } from "../types/agents.js";
+  import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
   import {
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
     duplicateWorkspace, renameWorkspace, removeWorkspace,
@@ -91,7 +92,11 @@
   import ContextPopover from "./ContextPopover.svelte";
   import { fetchSessionContext, type SessionContext } from "../api/context.js";
   import { getSessionOverrides, setSessionOverride } from "../api/overrides.js";
-  import type { ConfigField } from "@wick-fe/common-ui";
+  import type { ConfigField, ComposerMentionAgent } from "@wick-fe/common-ui";
+  import { AgentAvatar } from "@wick-fe/common-avatar";
+  import { listAgentRoster, runApi } from "../api/team.js";
+  import { teamMentionAgents, type TeamPeer } from "../teamMention.js";
+  import { navigate as navigateAgents } from "../agentsRouter.js";
   import { setFileContext, setWidgetPolicy } from "../richRender.js";
   import ProcessPanel from "./ProcessPanel.svelte";
   import WorkspacePanel from "./WorkspacePanel.svelte";
@@ -1101,6 +1106,15 @@
     }, 200);
   }
 
+  /* Team (A2A) tasks this chat sent: only an agent's chat can send any. */
+  let teamTasks = $state<TeamTaskItem[]>([]);
+  function loadTeamTasks() {
+    if (!agentMode?.agent) return;
+    run(getTeamTasks(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((t) => { teamTasks = t; })
+      .catch(() => {});
+  }
+
   function loadSubAgents() {
     // Same in-flight guard + re-arm as loadProcesses: a delegation burst
     // fires many lifecycle events, and a refresh requested mid-flight must
@@ -1112,6 +1126,7 @@
     subAgentsInFlight = true;
     run(getSubAgentPanel(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { subAgents = res.subAgents; incident = res.incident; })
+      .then(() => loadTeamTasks())
       .catch((e: unknown) => toastError(`Sub-agents: ${e instanceof Error ? e.message : String(e)}`))
       .finally(() => {
         subAgentsInFlight = false;
@@ -1157,21 +1172,48 @@
       .catch(() => {});
   }
 
-  // Live instances first, then roles. Mentioning a running agent talks to
-  // the one that already has context; mentioning a role starts a new one,
-  // so the cheaper, better-informed target is offered first.
+  /* Team agents the `@` menu offers in an agent's chat: the owner's roster
+     minus the agent itself and the disabled ones. Read once per agent; a
+     plain /sessions chat has no agentMode.agent and never asks. */
+  let teamPeers = $state<TeamPeer[]>([]);
+  $effect(() => {
+    const selfId = agentMode?.agent?.id;
+    if (!selfId) { teamPeers = []; return; }
+    let stale = false;
+    runApi(listAgentRoster(base))
+      .then((res) => { if (!stale) teamPeers = res.agents ?? []; })
+      // Silent like loadAgentRoles: the menu still lists the rest.
+      .catch(() => {});
+    return () => { stale = true; };
+  });
+
+  const teamAgentsByHandle = $derived(
+    Object.fromEntries(teamPeers.map((p) => [p.handle, { name: p.name || p.handle, shape: p.avatar?.shape, color: p.avatar?.color }])),
+  );
+  function openTeamAgent(handle: string) {
+    navigateAgents({ handle, session: null, panel: null });
+  }
+
+  // An agent whose Sub-agents access is off gets no Sub-agents section —
+  // the same switch that hides the rail tab.
+  const subAgentsAllowed = $derived(!(agentMode?.hideTabs ?? []).includes("subagents"));
+
+  // Team first, then live instances, then roles. Mentioning a running agent
+  // talks to the one that already has context; mentioning a role starts a
+  // new one, so the cheaper, better-informed target is offered first.
   const mentionableAgents = $derived.by(() => {
-    const out: { handle: string; label: string; hint?: string }[] = [];
-    const seen = new Set<string>();
+    const out: ComposerMentionAgent[] = teamMentionAgents(teamPeers, agentMode?.agent?.id ?? "");
+    if (!subAgentsAllowed) return out;
+    const seen = new Set<string>(out.map((a) => a.handle));
     for (const s of subAgents) {
       if (!s.handle || seen.has(s.handle)) continue;
       seen.add(s.handle);
-      out.push({ handle: s.handle, label: s.handle, hint: `${s.profile_key} · running here` });
+      out.push({ handle: s.handle, label: s.handle, hint: `${s.profile_key} · running here`, group: "subagent" });
     }
     for (const r of agentRoles) {
       if (seen.has(r.key)) continue;
       seen.add(r.key);
-      out.push({ handle: r.key, label: r.key, hint: r.description || r.name });
+      out.push({ handle: r.key, label: r.key, hint: r.description || r.name, group: "subagent" });
     }
     return out;
   });
@@ -2220,7 +2262,7 @@
         // Hidden until there is something to show, then it appears on its
         // own — the badge promotes it into the strip from there.
         (t.id !== "todos" || todosActive !== null || todosHistory.length > 0) &&
-        (t.id !== "subagents" || subAgents.length > 0) &&
+        (t.id !== "subagents" || subAgents.length > 0 || teamTasks.length > 0) &&
         // Notes need nothing but a reachable scope — and no Ticket tab to
         // have absorbed them.
         (t.id !== "notes" || (notesInfo !== null && !ticketTabShown)) &&
@@ -2387,7 +2429,7 @@
   // Same for Sub-agents: without this the panel is orphaned when the last
   // sub-agent row goes away.
   $effect(() => {
-    if (railTab === "subagents" && subAgents.length === 0) railTab = null;
+    if (railTab === "subagents" && subAgents.length === 0 && teamTasks.length === 0) railTab = null;
   });
 
   const sideOpen = $derived(railTab !== null);
@@ -2448,6 +2490,10 @@
   }
 </script>
 
+{#snippet mentionAvatar(a: { shape?: string; color?: string })}
+  <AgentAvatar shape={a.shape} color={a.color} size={18} />
+{/snippet}
+
 <!-- Full-height flex row: main area + vertical rail -->
 <div class="flex h-full min-w-0 overflow-hidden">
 
@@ -2494,7 +2540,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} />
+          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} />
         </div>
       </div>
 
@@ -2588,6 +2634,7 @@
             project={agentMode?.hidePickers ? undefined : projectSelect}
             onSearchFiles={searchMentionFiles}
             mentionAgents={mentionableAgents}
+            {mentionAvatar}
             commands={composerCommands}
             contextMeter={meterUsed > 0
               ? {
@@ -2832,6 +2879,9 @@
           messages={agentMessages}
           {hopsLeft}
           onBumpHops={bumpAgentHops}
+          {teamTasks}
+          teamAgents={teamAgentsByHandle}
+          onOpenAgent={agentMode?.agent ? openTeamAgent : undefined}
         />
       {:else if railTab === "workspace"}
         <WorkspacePanel
@@ -3028,6 +3078,9 @@
               messages={agentMessages}
               {hopsLeft}
               onBumpHops={bumpAgentHops}
+              {teamTasks}
+              teamAgents={teamAgentsByHandle}
+              onOpenAgent={agentMode?.agent ? openTeamAgent : undefined}
             />
           {:else if railTab === "workspace"}
             <WorkspacePanel

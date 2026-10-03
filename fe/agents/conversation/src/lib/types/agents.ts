@@ -287,6 +287,14 @@ export type SubAgentItem = {
   handle?: string;
   // label is the delegated task, truncated server-side.
   label: string;
+  /** The first leg's task (truncated). A continue reframes `label` with a
+      resume preamble; this keeps what the sub-agent was asked to do.
+      Absent on rows from before it existed. */
+  title?: string;
+  /** How many times the row was continued. */
+  resumes?: number;
+  /** turns_used when the current leg started. */
+  leg_base_turns?: number;
   status: SubAgentStatus;
   // lifecycle comes from the live pool snapshot; "" when the sub-agent
   // has no running process (queued, or already finished).
@@ -741,4 +749,20 @@ export type AgentMessageItem = {
   /** Set when wick promoted a closing turn into an answer nobody wrote. */
   auto_reply?: boolean;
   created_at: string;
+};
+
+/** One A2A task this session sent to a Team agent (GET
+    /api/sessions/{id}/team-tasks). */
+export type TeamTaskItem = {
+  task_id: string;
+  context_id: string;
+  to_agent_id: string;
+  to_handle: string;
+  to_name: string;
+  title: string;
+  state: string;
+  turns: number;
+  max_turns: number;
+  started_at: string;
+  updated_at: string;
 };

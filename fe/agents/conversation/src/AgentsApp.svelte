@@ -257,6 +257,8 @@
     onNewChat: newChat,
     agent: selected
       ? {
+          id: selected.id,
+          handle: selected.handle,
           name: selected.name,
           description: selected.description,
           shape: selected.avatar?.shape,

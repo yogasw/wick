@@ -36,9 +36,12 @@
     /** Set in the Team app: the empty thread introduces the agent and its
         avatar stands in for the typing spinner. */
     agent?: AgentIdentity;
+    /** Team agents by handle and the opener for their chats; see ThreadMessage. */
+    teamAgents?: Record<string, { name: string; shape?: string; color?: string }>;
+    onOpenAgent?: (handle: string) => void;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, agent }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, agent, teamAgents = {}, onOpenAgent }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -216,7 +219,7 @@
         <span class="rounded-md bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm">{label}</span>
       </div>
     {/if}
-    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} />
+    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {teamAgents} {onOpenAgent} />
   {/each}
 
   {#if live && turns.length === 0}

@@ -8,6 +8,8 @@
   import { avatarTone } from "../senderTone.js";
   import { isViewer } from "../viewer.js";
   import { bareSlashCommand } from "../slashCommand.js";
+  import { teamSender, handoffOf, handoffState } from "../teamMention.js";
+  import { AgentAvatar } from "@wick-fe/common-avatar";
   import ToolCard from "./ToolCard.svelte";
   import TodoCard from "./TodoCard.svelte";
   import ArtifactGallery from "./ArtifactGallery.svelte";
@@ -20,8 +22,23 @@
     // with large:true carries no text) — wired to
     // GET /sessions/{id}/turns/{turn_id}/events/{event_id}.
     loadTraceEvent?: (turnId: string, eventId: string) => Promise<TurnEventPayload>;
+    /** Team agents by handle, for a teammate's avatar on its messages. */
+    teamAgents?: Record<string, { name: string; shape?: string; color?: string }>;
+    /** Opens a Team agent's chat; unset (outside the Team app) the
+        handoff row's target is plain text. */
+    onOpenAgent?: (handle: string) => void;
   };
-  let { turn, loadTrace, loadTraceEvent }: Props = $props();
+  let { turn, loadTrace, loadTraceEvent, teamAgents = {}, onOpenAgent }: Props = $props();
+
+  /* A teammate's message (source "team", framed "Message from Name
+     (@handle):") reads as from that agent — its avatar and name on the
+     chip, the frame dropped from the bubble — not as the person typing. */
+  const teamFrom = $derived(isUserTurn(turn) ? teamSender(turn.source, turn.text ?? "") : null);
+  const teamFromAgent = $derived(teamFrom ? teamAgents[teamFrom.handle] : undefined);
+  const handoff = $derived(turn.kind === "mention_handoff" ? handoffOf(turn.extras) : null);
+  function isUserTurn(t: ConversationTurn) {
+    return t.role === "user";
+  }
 
   const isUser = $derived(turn.role === "user");
   const isSystem = $derived(turn.role === "system");
@@ -79,8 +96,9 @@
     const raw = turn.text ?? "";
     if (!isUser) return { text: raw, note: "" };
     const at = raw.lastIndexOf("\n\n[routed]");
-    if (at < 0) return { text: raw, note: "" };
-    return { text: raw.slice(0, at), note: raw.slice(at + 2) };
+    const body = (t: string) => (teamFrom ? (teamSender(turn.source, t)?.body ?? t) : t);
+    if (at < 0) return { text: body(raw), note: "" };
+    return { text: body(raw.slice(0, at)), note: raw.slice(at + 2) };
   });
   const routedHandles = $derived(routed.note.match(/@[a-z0-9-]+/g) ?? []);
 
@@ -105,7 +123,7 @@
      The name comes from the structured `sender` field, never from the message
      text, so nobody can put someone else's name on their own message. */
   const sourceBadge = $derived.by(() => {
-    if (!isUser) return null;
+    if (!isUser || teamFrom) return null;
     const src = (turn.source ?? "").trim().toLowerCase();
     if (src === "schedule") return { label: "Scheduled", icon: "clock" };
 
@@ -384,6 +402,22 @@
           </span>
           <div class="h-px flex-1 bg-white-300 dark:bg-navy-600"></div>
         </div>
+      {:else if handoff}
+        <!-- A Team handoff: who handed what to whom and how it ended, on
+             one line. The target opens its own chat in the Team app. -->
+        <div data-testid="mention-handoff" class="inline-flex items-center gap-1.5 rounded-2xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 text-xs text-black-700 dark:text-black-600 max-w-full" title={turn.text}>
+          <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <path d="M2 6h7M6.5 3.5 9 6 6.5 8.5" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+          <span class="truncate">{handoff.from === "user" ? "You" : (teamAgents[handoff.from]?.name ?? "@" + handoff.from)}</span>
+          <span aria-hidden="true">→</span>
+          {#if onOpenAgent && handoff.to}
+            <button type="button" class="font-medium text-green-600 dark:text-green-400 hover:underline" onclick={() => onOpenAgent?.(handoff.to)}>@{handoff.to}</button>
+          {:else}
+            <span class="font-medium">@{handoff.to}</span>
+          {/if}
+          <span class="opacity-70">· {handoffState(handoff.state)}</span>
+        </div>
       {:else if turn.is_error}
         <div class="inline-flex items-start gap-1.5 rounded-2xl border border-neg-400/40 bg-neg-400/10 px-3 py-1 text-xs text-neg-400 max-w-full">
           <svg viewBox="0 0 12 12" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -456,6 +490,19 @@
              top of the bubble, tinted to match, so it reads as part of the
              message rather than a floating label. -->
         <div class="flex flex-col items-end gap-0.5 min-w-0 max-w-full">
+          {#if teamFrom}
+            <span
+              data-testid="team-sender-chip"
+              title={`${teamFrom.name} (@${teamFrom.handle}) · Team agent`}
+              class="inline-flex items-center gap-1.5 pr-1 mr-0.5 text-[11px] leading-4 text-black-800 dark:text-black-600"
+            >
+              <AgentAvatar shape={teamFromAgent?.shape} color={teamFromAgent?.color} size={16} />
+              <span class="min-w-0 truncate"
+                ><span class="font-medium text-black-900 dark:text-white-100">{teamFromAgent?.name || teamFrom.name}</span
+                ><span class="opacity-70">{" · @" + teamFrom.handle}</span></span
+              >
+            </span>
+          {/if}
           {#if sourceBadge}
             <span
               data-testid="sender-chip"
@@ -530,7 +577,7 @@
                glance rather than only by reading the name above them. -->
           <div
             class={"min-w-0 max-w-full overflow-hidden rounded-2xl rounded-tr-sm px-4 py-2.5 text-base whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed shadow-sm " +
-              (fromSomeoneElse
+              (fromSomeoneElse || teamFrom
                 ? "bg-white-200 dark:bg-navy-700 text-black-900 dark:text-white-100 ring-1 ring-white-400 dark:ring-navy-600"
                 : "bg-green-500 text-white-100")}
           >

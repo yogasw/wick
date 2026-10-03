@@ -1,5 +1,7 @@
 <script lang="ts">
-  import type { AgentMessageItem, IncidentSummary, SubAgentItem } from "../types/agents.js";
+  import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
+  import { AgentAvatar } from "@wick-fe/common-avatar";
+  import { subAgentTitle, subAgentTurns, handoffState } from "../teamMention.js";
   import MessageThread from "./MessageThread.svelte";
   import {
     subAgentStatusCls,
@@ -28,6 +30,11 @@
     messages: AgentMessageItem[];
     hopsLeft: number;
     onBumpHops: () => void;
+    /** Team (A2A) tasks this chat sent — their own section, never mixed
+        with sub-agent delegations. */
+    teamTasks?: TeamTaskItem[];
+    teamAgents?: Record<string, { name: string; shape?: string; color?: string }>;
+    onOpenAgent?: (handle: string) => void;
   };
 
   let {
@@ -41,7 +48,28 @@
     messages,
     hopsLeft,
     onBumpHops,
+    teamTasks = [],
+    teamAgents = {},
+    onOpenAgent = undefined,
   }: Props = $props();
+
+  function teamStateCls(state: string): string {
+    switch (handoffState(state)) {
+      case "working":
+        return "bg-green-500/10 text-green-600 dark:text-green-400";
+      case "needs input":
+        return "bg-amber-400/10 text-amber-700 dark:text-amber-300";
+      case "failed":
+        return "bg-neg-100 text-neg-400";
+    }
+    return "bg-white-300 text-black-800 dark:bg-navy-700 dark:text-white-100";
+  }
+  function teamDuration(t: TeamTaskItem): string {
+    const a = parseEventTime(t.started_at);
+    if (a == null) return "";
+    const end = handoffState(t.state) === "working" ? $now : (parseEventTime(t.updated_at) ?? $now);
+    return shortDuration(end - a);
+  }
 
   /* Which row has its continue composer open, and what has been typed
      into it. One at a time: two open composers on a narrow rail is a
@@ -100,7 +128,7 @@
   }
 
   function turnsLabel(s: SubAgentItem): string {
-    return s.max_turns > 0 ? `${s.turns_used}/${s.max_turns} turns` : `${s.turns_used} turns`;
+    return subAgentTurns(s);
   }
 
   /* When it happened, phrased by what it is doing.
@@ -160,6 +188,35 @@
       {#if incident.stop_reason}
         <p class="text-[10px] text-black-700 dark:text-black-600">stopped: {incident.stop_reason}</p>
       {/if}
+    </div>
+  {/if}
+
+  {#if teamTasks.length > 0}
+    <div class="px-4 pt-4 space-y-2" data-testid="team-tasks">
+      <p class="px-1 text-[10px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">Team</p>
+      {#each teamTasks as t (t.task_id)}
+        {@const peer = teamAgents[t.to_handle]}
+        <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3 space-y-1.5">
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex min-w-0 items-center gap-2">
+              <AgentAvatar shape={peer?.shape} color={peer?.color} size={18} />
+              <span class="truncate text-xs font-semibold text-black-900 dark:text-white-100">{peer?.name || t.to_name || t.to_handle}</span>
+              <span class="shrink-0 text-[10px] text-black-700 dark:text-black-600">@{t.to_handle}</span>
+            </div>
+            <span class={"shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium " + teamStateCls(t.state)}>{handoffState(t.state)}</span>
+          </div>
+          {#if t.title}
+            <p class="text-[11px] text-black-800 dark:text-black-600 line-clamp-2">{t.title}</p>
+          {/if}
+          <div class="flex items-center gap-2 text-[10px] text-black-700 dark:text-black-600">
+            {#if t.max_turns > 0}<span title="Turns of this exchange">turn {t.turns}/{t.max_turns}</span>{/if}
+            {#if teamDuration(t)}<span>· {teamDuration(t)}</span>{/if}
+            {#if onOpenAgent}
+              <button type="button" class="ml-auto font-medium text-green-600 dark:text-green-400 hover:underline" onclick={() => onOpenAgent?.(t.to_handle)}>Open chat</button>
+            {/if}
+          </div>
+        </div>
+      {/each}
     </div>
   {/if}
 
@@ -267,7 +324,11 @@
               {/if}
             </div>
 
-            <p class="text-[11px] text-black-800 dark:text-black-600 line-clamp-2">{sub.label}</p>
+            <p class="text-[11px] text-black-800 dark:text-black-600 line-clamp-2" title={sub.label}>{subAgentTitle(sub)}</p>
+            {#if (sub.resumes ?? 0) > 0}
+              <span data-testid="resumed-badge" class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-white-300 text-black-800 dark:bg-navy-700 dark:text-white-100"
+                >Resumed ×{sub.resumes}</span>
+            {/if}
 
             <!-- Confidence sits with the other facts about the run, not
                  with the status chips: it describes the ANSWER, and a

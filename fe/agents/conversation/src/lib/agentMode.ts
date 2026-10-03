@@ -64,6 +64,10 @@ export function providerLocked(started: boolean, current: string, next: string):
 
 /** What the chat area shows of the agent it talks to. */
 export type AgentIdentity = {
+  /** The Team agent's id and handle: the `@` menu leaves the agent itself
+      out of its own Team list. Unset outside the Team app. */
+  id?: string;
+  handle?: string;
   name: string;
   description: string;
   /** Avatar spec; unset falls back to AgentAvatar's defaults. */

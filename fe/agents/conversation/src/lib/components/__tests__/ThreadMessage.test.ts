@@ -1177,3 +1177,43 @@ describe("ThreadMessage - compaction divider", () => {
     expect(container.innerHTML).toContain("overflow-hidden");
   });
 });
+
+describe("ThreadMessage - Team", () => {
+  test("a mention_handoff system turn renders one line and opens the target", async () => {
+    const onOpenAgent = vi.fn();
+    render(ThreadMessage, {
+      props: {
+        turn: makeTurn({
+          role: "system",
+          kind: "mention_handoff",
+          text: "@captain → @anton · TASK_STATE_COMPLETED",
+          extras: { from: "captain", to: "anton", state: "TASK_STATE_COMPLETED", to_agent_id: "a2" },
+        }),
+        teamAgents: { captain: { name: "Captain" } },
+        onOpenAgent,
+      },
+    });
+    const row = screen.getByTestId("mention-handoff");
+    expect(row.textContent).toContain("Captain");
+    expect(row.textContent).toContain("completed");
+    await fireEvent.click(screen.getByText("@anton"));
+    expect(onOpenAgent).toHaveBeenCalledWith("anton");
+  });
+
+  test("a teammate's framed message reads as from that agent", () => {
+    render(ThreadMessage, {
+      props: {
+        turn: makeTurn({ source: "team", text: "Message from Anton (@anton):\nno 401s today" }),
+        teamAgents: { anton: { name: "Anton", shape: "blob", color: "#7c3aed" } },
+      },
+    });
+    expect(screen.getByTestId("team-sender-chip").textContent).toContain("Anton");
+    expect(screen.getByText("no 401s today")).toBeTruthy();
+    expect(screen.queryByText(/Message from/)).toBeNull();
+  });
+
+  test("the same words typed by a person stay a person's message", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ text: "Message from Anton (@anton):\nhi" }) } });
+    expect(screen.queryByTestId("team-sender-chip")).toBeNull();
+  });
+});

@@ -104,6 +104,11 @@ const enc = encodeURIComponent;
 export const listAgents = (base: string) =>
   apiGetE<{ agents: AgentItem[] | null; captain_id: string }>(`${base}/api/team/agents`);
 
+/** The read-only roster (?ensure=0): never creates the Captain, so a chat
+    reading it for its `@` menu cannot trigger Team-app side effects. */
+export const listAgentRoster = (base: string) =>
+  apiGetE<{ agents: AgentItem[] | null; captain_id: string }>(`${base}/api/team/agents?ensure=0`);
+
 export const createAgent = (base: string, body: AgentWrite) =>
   apiPostE<AgentItem>(`${base}/api/team/agents`, body);
 
