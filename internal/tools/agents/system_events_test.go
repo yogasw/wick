@@ -91,3 +91,31 @@ func TestAgentCreatedTextAndExtras(t *testing.T) {
 		t.Fatalf("extras = %v", ex)
 	}
 }
+
+func TestStampSpeakers(t *testing.T) {
+	turns := []store.ConversationTurn{
+		{Role: "user", Source: "ui"}, {Role: "assistant"},
+		{Role: "user", Source: sourceTeam}, {Role: "assistant"},
+		{Role: "system", Kind: store.KindHopLimit}, {Role: "assistant"},
+		{Role: "user", Source: "slack"}, {Role: "assistant"},
+	}
+	stampSpeakers(turns, &store.Speaker{AgentID: "a1", Handle: "anton"})
+	want := []string{"", store.ViaDirect, "", store.ViaMention, "", store.ViaMention, "", store.ViaDirect}
+	for i, w := range want {
+		sp := turns[i].Speaker
+		if w == "" {
+			if sp != nil {
+				t.Fatalf("turn %d (%s) got speaker %+v", i, turns[i].Role, sp)
+			}
+			continue
+		}
+		if sp == nil || sp.Via != w || sp.AgentID != "a1" || sp.Handle != "anton" {
+			t.Fatalf("turn %d speaker = %+v, want via %s", i, sp, w)
+		}
+	}
+	plain := []store.ConversationTurn{{Role: "assistant"}}
+	stampSpeakers(plain, nil)
+	if plain[0].Speaker != nil {
+		t.Fatal("ordinary session got a speaker")
+	}
+}

@@ -60,6 +60,10 @@ type SessionMetaDTO struct {
 	// never omitted: an absent field would leave the SPA guessing, and
 	// the safe guess and the real policy are not always the same.
 	Widget agentsconfig.WidgetPolicy `json:"widget"`
+	// Speaker is the Team agent this session belongs to (via "direct"),
+	// so a live assistant turn can be named before the thread is
+	// reloaded. Absent for an ordinary session.
+	Speaker *agentstore.Speaker `json:"speaker,omitempty"`
 }
 
 // accessibleSessionIDs returns the subset of ids whose sessions pass the
@@ -301,6 +305,7 @@ func apiSessionConversation(c *tool.Ctx) {
 	// history — page after it, not before.
 	resolveLabelFromTurns(globalLayout, id, turns)
 	backfillTurnIDs(turns)
+	stampSpeakers(turns, sessionSpeaker(c, id))
 	limit, _ := strconv.Atoi(c.Query("limit"))
 	page, hasMore := pageTurns(turns, c.Query("before"), limit)
 	if cwd, err := resolveSessionCwd(sess); err == nil {
@@ -336,6 +341,7 @@ func apiSessionMeta(c *tool.Ctx) {
 		CreatedAt:   sess.Meta.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		LastActive:  sess.Meta.LastActive.Format("2006-01-02T15:04:05Z07:00"),
 		Widget:      resolveWidgetPolicy(sess.Meta.ProjectID),
+		Speaker:     sessionSpeaker(c, id),
 	}
 	// Resolve provider + pinned model from the active (or first) agent
 	// entry — ActiveAgent above is the agent's own NAME ("main"), not its
@@ -352,4 +358,46 @@ func apiSessionMeta(c *tool.Ctx) {
 		}
 	}
 	c.JSON(http.StatusOK, dto)
+}
+
+// sessionSpeaker is the Team agent behind sessionID's assistant turns, or
+// nil for a session that belongs to no agent.
+func sessionSpeaker(c *tool.Ctx, sessionID string) *agentstore.Speaker {
+	if globalTeam == nil {
+		return nil
+	}
+	// Only the agent's own conversations: a sub-agent working for it
+	// resolves to the agent too, but its turns are not the agent speaking.
+	if sess, ok := globalMgr.Registry().Session(sessionID); !ok || sess.Meta.AgentID == "" {
+		return nil
+	}
+	p := globalTeam.AgentFor(c.Context(), sessionID)
+	if p == nil {
+		return nil
+	}
+	return &agentstore.Speaker{AgentID: p.ID, Handle: p.Handle, Via: agentstore.ViaDirect}
+}
+
+// stampSpeakers names who said each assistant turn. The speaker comes
+// from the session, never from the text. A turn answering a message
+// another agent handed over (the user turn before it came in over the
+// Team link) is via "mention"; anything else is "direct".
+func stampSpeakers(turns []agentstore.ConversationTurn, base *agentstore.Speaker) {
+	if base == nil {
+		return
+	}
+	via := agentstore.ViaDirect
+	for i := range turns {
+		switch turns[i].Role {
+		case "user":
+			via = agentstore.ViaDirect
+			if turns[i].Source == sourceTeam {
+				via = agentstore.ViaMention
+			}
+		case "assistant":
+			sp := *base
+			sp.Via = via
+			turns[i].Speaker = &sp
+		}
+	}
 }
