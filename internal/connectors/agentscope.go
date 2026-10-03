@@ -27,6 +27,32 @@ type AgentScope interface {
 	AllowOp(connectorID, opKey string, destructive bool) bool
 }
 
+// AgentFeatureScope is the optional half of an AgentScope that switches
+// whole features off for an agent: every instance of a connector type,
+// and wick's own MCP tools by name. An AgentScope without it gates
+// nothing by feature.
+type AgentFeatureScope interface {
+	// AllowKey reports whether connectors of this type are on at all.
+	AllowKey(connectorKey string) bool
+	// AllowTool reports whether a top-level MCP tool may be listed and
+	// called.
+	AllowTool(name string) bool
+}
+
+// KeyAllowed reports whether the agent scope on ctx, if any, leaves the
+// connector type key switched on.
+func KeyAllowed(ctx context.Context, key string) bool {
+	fs, ok := AgentScopeFrom(ctx).(AgentFeatureScope)
+	return !ok || fs.AllowKey(key)
+}
+
+// ToolAllowed reports whether the agent scope on ctx, if any, leaves the
+// MCP tool name switched on.
+func ToolAllowed(ctx context.Context, name string) bool {
+	fs, ok := AgentScopeFrom(ctx).(AgentFeatureScope)
+	return !ok || fs.AllowTool(name)
+}
+
 type agentScopeKey struct{}
 
 // WithAgentScope attaches scope to ctx. A nil scope leaves ctx unchanged.
@@ -64,7 +90,11 @@ func filterRowsByScope(ctx context.Context, rows []entity.Connector) []entity.Co
 		return rows
 	}
 	out := rows[:0:0]
+	fs, _ := scope.(AgentFeatureScope)
 	for _, r := range rows {
+		if fs != nil && !fs.AllowKey(r.Key) {
+			continue
+		}
 		if scope.AllowConnector(r.ID) {
 			out = append(out, r)
 		}

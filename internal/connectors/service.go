@@ -856,6 +856,15 @@ func (s *Service) IsVisibleTo(ctx context.Context, connectorID, userID string, u
 	if scope := AgentScopeFrom(ctx); scope != nil && !scope.AllowConnector(connectorID) {
 		return false, nil
 	}
+	if fs, ok := AgentScopeFrom(ctx).(AgentFeatureScope); ok {
+		row, err := s.repo.Get(ctx, connectorID)
+		if err != nil {
+			return false, err
+		}
+		if !fs.AllowKey(row.Key) {
+			return false, nil
+		}
+	}
 	if s.adminBypass(isAdmin) {
 		c, err := s.repo.Get(ctx, connectorID)
 		if err != nil {
@@ -1853,6 +1862,12 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			}
 			acct = acc
 		}
+	}
+
+	// An agent feature switched off takes every instance of its connector
+	// type with it, session instances included.
+	if !KeyAllowed(ctx, c.Key) {
+		return nil, fmt.Errorf("connector %q is switched off for this agent", c.Key)
 	}
 
 	// Agent checklist: the instance, the identity it runs as, and the op

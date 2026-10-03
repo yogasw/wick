@@ -60,7 +60,7 @@ func (h *Handler) AgentToolDescriptorsAs(ctx context.Context, id AgentIdentity) 
 	tools := handlers.MetaToolDescriptors()
 	tools = append(tools, handlers.WickManagerToolDescriptors(ctx, h.connectors, tagIDs, user.IsAdmin())...)
 	tools = append(tools, handlers.SubAgentsToolDescriptors(ctx, h.connectors, tagIDs, user.IsAdmin())...)
-	return tools
+	return featureAllowedTools(ctx, tools)
 }
 
 // CallAgentTool dispatches one tool call in-process and returns the tool

@@ -49,3 +49,33 @@ func TestWickManagerDeniedToAgentSessions(t *testing.T) {
 		t.Fatalf("ordinary session lost wick_manager_*: %q", out)
 	}
 }
+
+// featureOffScope permits every connector but switches the schedule tool
+// off, as an agent with the Schedule feature disabled does.
+type featureOffScope struct{ openScope }
+
+func (featureOffScope) AllowKey(string) bool { return true }
+func (featureOffScope) AllowTool(name string) bool {
+	return name != "wick_schedule_message"
+}
+
+// TestFeatureOffToolHiddenAndRefused: a switched-off feature takes its
+// tool out of the list and refuses it at dispatch.
+func TestFeatureOffToolHiddenAndRefused(t *testing.T) {
+	db := newTestDB(t)
+	svc := newTestService(t, db, stubModule())
+	h := NewHandler(svc)
+
+	scoped := connectors.WithAgentScope(context.Background(), featureOffScope{})
+	for _, d := range h.AgentToolDescriptors(scoped) {
+		if d.Name == "wick_schedule_message" {
+			t.Fatal("switched-off tool must not be listed")
+		}
+	}
+
+	withScopeResolver(t, func(context.Context, string) connectors.AgentScope { return featureOffScope{} })
+	out, isErr := h.CallAgentTool(context.Background(), "wick_schedule_message", map[string]any{}, "sess-agent")
+	if !isErr || !strings.Contains(out, "switched off") {
+		t.Fatalf("switched-off tool must be refused, got isErr=%v %q", isErr, out)
+	}
+}

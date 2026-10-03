@@ -86,6 +86,38 @@ func TestScopeIncludeNewNeedsReach(t *testing.T) {
 	}
 }
 
+func TestScopeFeatureGates(t *testing.T) {
+	f := DefaultFeatures()
+	f.Schedule, f.Notes, f.Tickets, f.Subagents, f.Browser, f.Source = false, false, false, false, false, false
+	p := entity.AgentPersona{
+		AllowedConnectors: EncodeGrants([]ConnectorGrant{{ConnectorID: "n1", Level: LevelAll}}),
+		Features:          EncodeFeatures(f),
+	}
+	s := ScopeOf(p, nil)
+	for _, k := range []string{"notes", "tickets", "sub-agents", "playwright_browser", "source"} {
+		if s.AllowKey(k) {
+			t.Errorf("AllowKey(%q) = true with its feature off", k)
+		}
+	}
+	if !s.AllowKey("httprest") {
+		t.Error("a connector type with no feature must stay on")
+	}
+	for _, name := range []string{"wick_schedule_message", "wick_agent_delegate"} {
+		if s.AllowTool(name) {
+			t.Errorf("AllowTool(%q) = true with its feature off", name)
+		}
+	}
+	if !s.AllowTool("wick_list") || !s.AllowTool("todo") {
+		t.Error("tools without a feature must stay on")
+	}
+
+	// Defaults leave everything but the browser on.
+	d := ScopeOf(entity.AgentPersona{}, nil)
+	if !d.AllowKey("notes") || !d.AllowTool("wick_schedule_message") || !d.AllowTool("wick_agent_delegate") || d.AllowKey("playwright_browser") {
+		t.Error("default features gate wrong")
+	}
+}
+
 func TestScopeOfMalformedGrantsDeny(t *testing.T) {
 	s := ScopeOf(entity.AgentPersona{AllowedConnectors: "{not json"}, nil)
 	if s.AllowConnector("c") {

@@ -1,6 +1,8 @@
 package team
 
 import (
+	"strings"
+
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -21,9 +23,72 @@ type Scope struct {
 	reach map[string]bool
 	// denyAll is the disabled-agent scope: it answers no to everything.
 	denyAll bool
+	// offKeys and offTools are what the agent's switched-off features
+	// take away (see featureGates).
+	offKeys     map[string]bool
+	offTools    map[string]bool
+	offPrefixes []string
 }
 
-var _ connectors.AgentScope = (*Scope)(nil)
+var (
+	_ connectors.AgentScope        = (*Scope)(nil)
+	_ connectors.AgentFeatureScope = (*Scope)(nil)
+)
+
+// featureGate is what one feature switches off on the server: connector
+// types (every instance, session instances included) and wick MCP tools,
+// by exact name or by prefix. Keys mirror the connector packages'
+// Key constants, which this package does not import.
+type featureGate struct {
+	keys     []string
+	tools    []string
+	prefixes []string
+}
+
+// featureGates maps the features with a server-side surface. Files,
+// Process, Todos and Workspace are panels only: hiding the tab is all
+// switching them off does.
+func featureGates(f Features) []featureGate {
+	var out []featureGate
+	if !f.Schedule {
+		out = append(out, featureGate{tools: []string{"wick_schedule_message"}})
+	}
+	if !f.Notes {
+		out = append(out, featureGate{keys: []string{"notes"}})
+	}
+	if !f.Tickets {
+		out = append(out, featureGate{keys: []string{"tickets"}})
+	}
+	if !f.Subagents {
+		out = append(out, featureGate{keys: []string{"sub-agents"}, prefixes: []string{"wick_agent_"}})
+	}
+	if !f.Browser {
+		out = append(out, featureGate{keys: []string{"playwright_browser"}})
+	}
+	if !f.Source {
+		out = append(out, featureGate{keys: []string{"source"}})
+	}
+	return out
+}
+
+// WithFeatures switches off what f's disabled features cover and returns
+// s for chaining. A deny-all scope is left as is.
+func (s *Scope) WithFeatures(f Features) *Scope {
+	if s.denyAll {
+		return s
+	}
+	s.offKeys, s.offTools, s.offPrefixes = map[string]bool{}, map[string]bool{}, nil
+	for _, g := range featureGates(f) {
+		for _, k := range g.keys {
+			s.offKeys[k] = true
+		}
+		for _, t := range g.tools {
+			s.offTools[t] = true
+		}
+		s.offPrefixes = append(s.offPrefixes, g.prefixes...)
+	}
+	return s
+}
 
 // NewScope builds the scope for grants. reach is the owner's catalog (see
 // Scope.reach); it only matters when includeNew is on.
@@ -46,7 +111,8 @@ func ScopeOf(p entity.AgentPersona, reach map[string]bool) *Scope {
 	if p.Disabled {
 		return DenyAll()
 	}
-	return NewScope(DecodeGrants(p.AllowedConnectors), p.IncludeNewConnectors, reach)
+	return NewScope(DecodeGrants(p.AllowedConnectors), p.IncludeNewConnectors, reach).
+		WithFeatures(DecodeFeatures(p.Features))
 }
 
 // DenyAll returns a scope that permits nothing.
@@ -55,6 +121,25 @@ func DenyAll() *Scope { return &Scope{denyAll: true} }
 // includes reports whether includeNew lets an unlisted connector in.
 func (s *Scope) includes(connectorID string) bool {
 	return s.includeNew && s.reach[connectorID]
+}
+
+// AllowKey implements connectors.AgentFeatureScope.
+func (s *Scope) AllowKey(connectorKey string) bool {
+	return !s.denyAll && !s.offKeys[connectorKey]
+}
+
+// AllowTool implements connectors.AgentFeatureScope. A deny-all scope
+// leaves wick's own tools alone: it already reaches no connector.
+func (s *Scope) AllowTool(name string) bool {
+	if s.offTools[name] {
+		return false
+	}
+	for _, p := range s.offPrefixes {
+		if strings.HasPrefix(name, p) {
+			return false
+		}
+	}
+	return true
 }
 
 // AllowConnector implements connectors.AgentScope.

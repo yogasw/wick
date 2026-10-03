@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -329,7 +330,19 @@ func (h *Handler) handleToolsList(w http.ResponseWriter, r *http.Request, req rp
 		tools = append(tools, handlers.WickManagerToolDescriptors(r.Context(), h.connectors, tagIDs, user.IsAdmin())...)
 		tools = append(tools, handlers.SubAgentsToolDescriptors(r.Context(), h.connectors, tagIDs, user.IsAdmin())...)
 	}
-	writeRPCResult(w, req.ID, handlers.ToolListResult{Tools: tools})
+	writeRPCResult(w, req.ID, handlers.ToolListResult{Tools: featureAllowedTools(r.Context(), tools)})
+}
+
+// featureAllowedTools drops the tools an agent's switched-off features
+// cover. Without an agent scope on ctx it returns tools unchanged.
+func featureAllowedTools(ctx context.Context, tools []handlers.ToolDescriptor) []handlers.ToolDescriptor {
+	out := tools[:0:0]
+	for _, t := range tools {
+		if connectors.ToolAllowed(ctx, t.Name) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // ── tools/call ───────────────────────────────────────────────────────
@@ -382,6 +395,13 @@ func (h *Handler) sessionSender() handlers.SessionSender {
 // the built-in wick provider) shares the exact same routing + handlers
 // as the HTTP MCP transport — one dispatch, no drift.
 func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq handlers.RPCRequest, rsp handlers.Responder, name string, args map[string]any, user *entity.User, tagIDs []string) {
+	// An agent's switched-off feature takes its tools away at dispatch
+	// too, not only from tools/list: a client may call a name it was
+	// never shown.
+	if !connectors.ToolAllowed(r.Context(), name) {
+		rsp.ToolError(w, hreq.ID, "tool "+name+" is switched off for this agent", name)
+		return
+	}
 	switch name {
 	case "wick_list":
 		handlers.WickList(w, r, hreq, rsp, h.connectors, h.layout, args, tagIDs, user)
