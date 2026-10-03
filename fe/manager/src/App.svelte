@@ -13,6 +13,7 @@
   import McpServerForm from "$lib/components/custom/McpServerForm.svelte";
   import JobDetail from "$lib/components/jobs/JobDetail.svelte";
   import ToolDetail from "$lib/components/tools/ToolDetail.svelte";
+  import ServiceDetail from "$lib/components/services/ServiceDetail.svelte";
   import AuditLog from "$lib/components/audit/AuditLog.svelte";
   import { breadcrumbNames } from "$lib/stores/breadcrumb.js";
   import type { BreadcrumbItem } from "@wick-fe/common-ui";
@@ -38,6 +39,7 @@
   let editParams = $derived(match("/custom/:defID/edit", currentRoute));
   let jobParams = $derived(match("/jobs/:key", currentRoute));
   let toolParams = $derived(match("/tools/:key", currentRoute));
+  let serviceParams = $derived(match("/services/:key", currentRoute));
   let accountParams = $derived(match("/connectors/:key/:id/accounts/:accountID", currentRoute));
   let testParams = $derived(match("/connectors/:key/:id/test", currentRoute));
   let historyParams = $derived(match("/connectors/:key/:id/history", currentRoute));
@@ -62,6 +64,7 @@
   let rowName = $derived(names.row ?? rowCrumb?.id ?? "");
   let jobName = $derived(names.job ?? jobParams?.key ?? "");
   let toolName = $derived(names.tool ?? toolParams?.key ?? "");
+  let serviceName = $derived(names.service ?? serviceParams?.key ?? "");
 
   const home: BreadcrumbItem = { label: "Connectors", onClick: () => push("/") };
 
@@ -80,6 +83,9 @@
         { label: "Tools" },
         { label: toolName, onClick: () => push(`/tools/${encodeURIComponent(toolParams.key)}`), truncate: true },
       ];
+    }
+    if (serviceParams) {
+      return [{ label: "Services" }, { label: serviceName, truncate: true }];
     }
     if (customCrumb) {
       return [home, { label: customCrumb }];
@@ -118,6 +124,8 @@
       <JobDetail jobKey={jobParams.key} />
     {:else if toolParams}
       <ToolDetail toolKey={toolParams.key} />
+    {:else if serviceParams}
+      <ServiceDetail serviceKey={serviceParams.key} />
     {:else if pasteRoute}
       <CustomPaste />
     {:else if manualRoute}

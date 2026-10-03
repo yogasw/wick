@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPostSSE } from "@wick-fe/common-api";
+import { apiDelete, apiGet, apiPost, apiPostSSE } from "@wick-fe/common-api";
 import type {
   ConnectorDef,
   ConnectorList,
@@ -549,4 +549,47 @@ export async function setPluginEnabled(key: string, enabled: boolean): Promise<{
 }
 export async function removePlugin(key: string): Promise<{ ok: boolean }> {
   return apiPost<{ ok: boolean }>(`/manager/api/plugins/${encodeURIComponent(key)}/remove`);
+}
+
+/* ── Service plugins (always-on, /x/{key}) ── */
+
+export type ServiceRoute = { prefix: string; auth: "public" | "token" | "wick-session" };
+export type ServiceStatus = { state: "stopped" | "starting" | "running" | "backoff"; restarts: number; started_at?: string; next_start?: string; last_error?: string };
+export type ServiceToken = { id: string; name: string; hint: string; created_at: string; last_used?: string };
+export type ServicePlugin = {
+  key: string;
+  name: string;
+  description?: string;
+  version: string;
+  path: string;
+  status: ServiceStatus;
+  routes: ServiceRoute[];
+  capabilities?: string[];
+  callback_scopes?: string[];
+  callback_revoked: boolean;
+  tokens?: ServiceToken[];
+  logs?: string[];
+};
+export type ServiceTokenSecret = { token: ServiceToken; secret: string };
+
+const serviceBase = (key: string) => `/manager/api/service-plugins/${encodeURIComponent(key)}`;
+
+export function getServicePlugin(key: string): Promise<ServicePlugin> {
+  return apiGet<ServicePlugin>(serviceBase(key));
+}
+
+export function serviceAction(key: string, action: "start" | "stop" | "restart" | "callback-revoke" | "callback-allow"): Promise<ServicePlugin> {
+  return apiPost<ServicePlugin>(`${serviceBase(key)}/${action}`);
+}
+
+export function generateServiceToken(key: string, name: string): Promise<ServiceTokenSecret> {
+  return apiPost<ServiceTokenSecret>(`${serviceBase(key)}/tokens`, { name });
+}
+
+export function rotateServiceToken(key: string, id: string): Promise<ServiceTokenSecret> {
+  return apiPost<ServiceTokenSecret>(`${serviceBase(key)}/tokens/${encodeURIComponent(id)}/rotate`);
+}
+
+export function revokeServiceToken(key: string, id: string): Promise<void> {
+  return apiDelete<void>(`${serviceBase(key)}/tokens/${encodeURIComponent(id)}`);
 }

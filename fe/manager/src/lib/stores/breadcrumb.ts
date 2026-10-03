@@ -10,6 +10,7 @@ export interface BreadcrumbNames {
   row?: string;
   job?: string;
   tool?: string;
+  service?: string;
 }
 
 export const breadcrumbNames = writable<BreadcrumbNames>({});
