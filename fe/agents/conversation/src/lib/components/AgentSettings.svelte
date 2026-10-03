@@ -564,7 +564,8 @@
         type="number"
         min={MAX_HOPS_MIN}
         max={MAX_HOPS_MAX}
-        class="{input} w-24"
+        class="w-24 rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+        data-testid="max-hops"
         value={draft.max_hops}
         onchange={(e) => (draft.max_hops = clampHops(Number((e.currentTarget as HTMLInputElement).value)))}
       />
