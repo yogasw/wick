@@ -7,12 +7,14 @@ export type WhenMode = "once" | "every" | "cron";
 export type EveryUnit = "m" | "h" | "d";
 /** Where the result lands; "other" is a chat the drawer can't pick (a
     schedule the agent made elsewhere) and is left as it is. */
-export type DraftDest = "main" | "telegram" | "other";
+export type DraftDest = "main" | "telegram" | "slack" | "other";
 export type ScheduleDraft = {
   message: string;
   dest: DraftDest;
   /** The Telegram chat of a "telegram" destination. */
   tgSession: string;
+  /** The channel of a "slack" destination: an id or a pasted link. */
+  slackChannel: string;
   mode: WhenMode;
   /** datetime-local value (server tz is shown beside it). */
   at: string;
@@ -91,7 +93,7 @@ export const isLive = (s: Pick<AgentSchedule, "status">) => s.status === "pendin
 /** emptyDraft: every day by default, an hour from now for "once". */
 export function emptyDraft(now = new Date()): ScheduleDraft {
   const at = new Date(now.getTime() + 3_600_000);
-  return { message: "", dest: "main", tgSession: "", mode: "cron", at: localInput(at), every: 1, unit: "h", cron: "0 9 * * *" };
+  return { message: "", dest: "main", tgSession: "", slackChannel: "", mode: "cron", at: localInput(at), every: 1, unit: "h", cron: "0 9 * * *" };
 }
 
 /** localInput formats a Date for <input type="datetime-local">. */
@@ -103,8 +105,9 @@ export function localInput(d: Date): string {
 export function draftOf(s: AgentSchedule): ScheduleDraft {
   const d = emptyDraft();
   d.message = s.message;
-  d.dest = s.destination === "main" || s.destination === "telegram" ? s.destination : "other";
+  d.dest = s.destination === "main" || s.destination === "telegram" || s.destination === "slack" ? s.destination : "other";
   d.tgSession = s.telegram_session ?? "";
+  d.slackChannel = s.slack_channel ?? "";
   if (s.kind === "recurring" && s.cron) return { ...d, mode: "cron", cron: s.cron };
   if (s.kind === "recurring" && s.interval_ms) {
     const min = Math.round(s.interval_ms / 60_000);
@@ -122,6 +125,7 @@ export function draftError(d: ScheduleDraft): string {
   if (d.mode === "every" && (!Number.isInteger(d.every) || d.every < 1)) return "Every needs a whole number of 1 or more.";
   if (d.mode === "cron" && d.cron.trim().split(/\s+/).length !== 5) return "Cron needs 5 fields: minute hour day month weekday.";
   if (d.dest === "telegram" && !d.tgSession) return "Pick a Telegram chat.";
+  if (d.dest === "slack" && !slackChannelId(d.slackChannel)) return "Pick a Slack channel, or paste its id (C0123ABCD) or link.";
   return "";
 }
 
@@ -135,12 +139,24 @@ export function bodyOf(d: ScheduleDraft): AgentScheduleWrite {
   else if (d.dest === "telegram") {
     b.destination = "telegram";
     b.telegram_session = d.tgSession;
+  } else if (d.dest === "slack") {
+    b.destination = "slack";
+    b.slack_channel = slackChannelId(d.slackChannel);
   }
   return b;
 }
 
+/** slackChannelId reads a channel id out of an id, "#C…" or a pasted
+    channel link; "" when there is none. Mirrors the server's check. */
+export function slackChannelId(v: string): string {
+  const link = v.match(/\/(?:archives|client\/[A-Z0-9]+)\/([CG][A-Z0-9]{6,})/);
+  if (link) return link[1];
+  const id = v.trim().replace(/^#/, "").toUpperCase();
+  return /^[CG][A-Z0-9]{6,}$/.test(id) && /[0-9]/.test(id) ? id : "";
+}
+
 /** destLabel is the row's "where it lands" in words. */
-export function destLabel(s: Pick<AgentSchedule, "destination" | "telegram_session">, chats: AgentTelegramChat[] = []): string {
+export function destLabel(s: Pick<AgentSchedule, "destination" | "telegram_session" | "slack_channel">, chats: AgentTelegramChat[] = []): string {
   switch (s.destination) {
     case "main":
       return "Main chat";
@@ -148,6 +164,8 @@ export function destLabel(s: Pick<AgentSchedule, "destination" | "telegram_sessi
       const chat = chats.find((c) => c.session_id === s.telegram_session);
       return chat ? `Telegram · ${chat.title}` : "Telegram";
     }
+    case "slack":
+      return s.slack_channel ? `Slack · #${s.slack_channel}` : "Slack";
     case "new_chat":
       return "New chat each run";
     default:

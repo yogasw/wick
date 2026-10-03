@@ -69,10 +69,12 @@
   const editingRow = $derived(editing && editing !== "new" ? data?.items.find((s) => s.id === editing) ?? null : null);
   const problem = $derived(draftError(draft));
   const tgChats = $derived(data?.telegram_chats ?? []);
+  const slackChannels = $derived(data?.slack_channels ?? []);
 
   function pickDest(dest: ScheduleDraft["dest"]) {
     draft.dest = dest;
     if (dest === "telegram" && !draft.tgSession && tgChats.length > 0) draft.tgSession = tgChats[0].session_id;
+    if (dest === "slack" && !draft.slackChannel && slackChannels.length > 0) draft.slackChannel = slackChannels[0].id;
     queueSave();
   }
 
@@ -237,7 +239,7 @@
       </div>
       <div>
         <span class={label}>Send the result to</span>
-        {#if editingRow && editingRow.destination !== "main" && editingRow.destination !== "telegram"}
+        {#if editingRow && editingRow.destination !== "main" && editingRow.destination !== "telegram" && editingRow.destination !== "slack"}
           <label class="flex items-center gap-2 text-sm text-black-900 dark:text-white-100">
             <input type="radio" name="sch-dest" checked={draft.dest === "other"} onchange={() => pickDest("other")} /> {destLabel(editingRow)} <span class={muted}>(where it runs now)</span>
           </label>
@@ -259,10 +261,27 @@
             </div>
           {/if}
         {/if}
-        {#if data.slack_online}
-          <label class="mt-1 flex items-center gap-2 text-sm text-black-800 opacity-60 dark:text-black-600" data-testid="dest-slack">
-            <input type="radio" disabled /> Slack channel <span class="text-xs">(coming soon)</span>
+        {#if data.slack_ready}
+          <label class="mt-1 flex items-center gap-2 text-sm text-black-900 dark:text-white-100" data-testid="dest-slack">
+            <input type="radio" name="sch-dest" checked={draft.dest === "slack"} onchange={() => pickDest("slack")} /> Slack channel
           </label>
+          {#if draft.dest === "slack"}
+            <div class="mt-1 pl-5">
+              <!-- Saved on change, not per keystroke: each new channel opens a thread there. -->
+              <input
+                class="{input} font-mono"
+                list="sch-slack-channels"
+                bind:value={draft.slackChannel}
+                onchange={queueSave}
+                aria-label="Slack channel"
+                placeholder="C0123ABCD or a channel link"
+              />
+              <datalist id="sch-slack-channels">
+                {#each slackChannels as c (c.id)}<option value={c.id}></option>{/each}
+              </datalist>
+              <p class="mt-1 {muted}">The bot posts “⏰ Scheduled …” there and answers every run in that thread — invite the bot to the channel first.</p>
+            </div>
+          {/if}
         {/if}
       </div>
       {#if problem}<p class={muted} data-testid="form-problem">{problem}</p>{/if}

@@ -79,7 +79,7 @@ describe("AgentScheduled", () => {
     render(AgentScheduled, { props: { base: "/b", agent, onClose: vi.fn() } });
     await fireEvent.click(await screen.findByRole("button", { name: "New schedule" }));
     expect(screen.getByTestId("server-tz").textContent).toContain("Asia/Jakarta");
-    expect(screen.getByTestId("dest-slack").textContent).toContain("coming soon");
+    expect(screen.queryByTestId("dest-slack")).toBeNull();
     const create = screen.getByRole("button", { name: "Create" }) as HTMLButtonElement;
     expect(create.disabled).toBe(true);
     await fireEvent.input(screen.getByLabelText("Message to the agent"), { target: { value: "Check the inbox" } });
@@ -153,6 +153,34 @@ describe("AgentScheduled", () => {
     await fireEvent.click(screen.getByLabelText("Main chat"));
     await waitFor(() => expect(updateAgentSchedule).toHaveBeenCalled(), { timeout: 2000 });
     expect(updateAgentSchedule.mock.calls[0][3]).toEqual({ message: "Morning recap", cron: "0 9 * * *", destination: "main" });
+  });
+
+  test("create into a Slack channel: known channels are offered, a pasted link works too", async () => {
+    list = base({ items: [], slack_ready: true, slack_mode: "custom", slack_channels: [{ id: "C0123ABCD" }] });
+    render(AgentScheduled, { props: { base: "/b", agent, onClose: vi.fn() } });
+    await fireEvent.click(await screen.findByRole("button", { name: "New schedule" }));
+    await fireEvent.input(screen.getByLabelText("Message to the agent"), { target: { value: "Daily digest" } });
+    await fireEvent.click(screen.getByLabelText("Slack channel", { selector: "input[type=radio]" }));
+    const field = screen.getByLabelText("Slack channel", { selector: "input[list]" }) as HTMLInputElement;
+    expect(field.value).toBe("C0123ABCD");
+    await fireEvent.input(field, { target: { value: "#general" } });
+    expect(screen.getByTestId("form-problem").textContent).toContain("Slack channel");
+    await fireEvent.input(field, { target: { value: "https://x.slack.com/archives/C0999ZZZZ" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(createAgentSchedule).toHaveBeenCalled());
+    expect(createAgentSchedule.mock.calls[0][2]).toEqual({ message: "Daily digest", cron: "0 9 * * *", destination: "slack", slack_channel: "C0999ZZZZ" });
+  });
+
+  test("a Slack row names its channel; editing keeps the Slack destination", async () => {
+    list = base({ items: [{ ...daily, destination: "slack", slack_channel: "C0123ABCD", session_id: "slackagent-a1-1.2" }], slack_ready: true, slack_channels: [] });
+    render(AgentScheduled, { props: { base: "/b", agent, onClose: vi.fn() } });
+    expect((await screen.findByTestId("scheduled-row")).textContent).toContain("Slack · #C0123ABCD");
+    await fireEvent.click(screen.getByRole("button", { name: "More" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
+    expect((screen.getByLabelText("Slack channel", { selector: "input[list]" }) as HTMLInputElement).value).toBe("C0123ABCD");
+    await fireEvent.input(screen.getByLabelText("Message to the agent"), { target: { value: "Evening recap" } });
+    await waitFor(() => expect(updateAgentSchedule).toHaveBeenCalled(), { timeout: 2000 });
+    expect(updateAgentSchedule.mock.calls[0][3]).toEqual({ message: "Evening recap", cron: "0 9 * * *", destination: "slack", slack_channel: "C0123ABCD" });
   });
 
   test("History lists the last runs and opens the chat of one", async () => {

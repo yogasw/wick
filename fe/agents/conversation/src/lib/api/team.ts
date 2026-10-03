@@ -570,13 +570,17 @@ export type AgentSchedule = {
   last_run_at?: string;
   last_error?: string;
   run_count: number;
-  destination: "main" | "telegram" | "chat" | "new_chat";
+  destination: "main" | "telegram" | "slack" | "chat" | "new_chat";
   session_id: string;
   /** The Telegram chat a "telegram" destination posts into. */
   telegram_session?: string;
+  /** The Slack channel a "slack" destination's thread is in. */
+  slack_channel?: string;
 };
 /** A chat of the agent's Telegram bot a schedule can post into. */
 export type AgentTelegramChat = { session_id: string; title: string };
+/** A Slack channel the agent's threads already live in (or, Instant, is bound to). */
+export type AgentSlackChannel = { id: string };
 export type AgentScheduledList = {
   items: AgentSchedule[];
   feature_on: boolean;
@@ -587,6 +591,11 @@ export type AgentScheduledList = {
   /** The Telegram destination exists only while the bot is connected. */
   telegram_connected?: boolean;
   telegram_chats?: AgentTelegramChat[];
+  /** The Slack destination exists only while the agent's Slack connection
+      (its own app, or Instant on the shared app) can post. */
+  slack_ready?: boolean;
+  slack_mode?: "custom" | "instant" | "";
+  slack_channels?: AgentSlackChannel[];
 };
 /** Create/edit body: exactly one of run_at / every / cron. */
 export type AgentScheduleWrite = {
@@ -594,8 +603,9 @@ export type AgentScheduleWrite = {
   run_at?: string;
   every?: string;
   cron?: string;
-  destination?: "main" | "telegram";
+  destination?: "main" | "telegram" | "slack";
   telegram_session?: string;
+  slack_channel?: string;
 };
 /** One fire of a schedule (GET …/scheduled/{sid}/runs), newest first. */
 export type AgentScheduleRun = {

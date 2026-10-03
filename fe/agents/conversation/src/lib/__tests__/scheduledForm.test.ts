@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { everyLabel, cronLabel, whenLabel, statusOf, isLive, draftOf, draftError, bodyOf, kindOf, emptyDraft, destLabel, runStatus } from "../scheduledForm.js";
+import { everyLabel, cronLabel, whenLabel, statusOf, isLive, draftOf, draftError, bodyOf, kindOf, emptyDraft, destLabel, runStatus, slackChannelId } from "../scheduledForm.js";
 import { clampIdleHours } from "../sessionPolicy.js";
 import type { AgentSchedule } from "../api/team.js";
 
@@ -69,10 +69,20 @@ describe("scheduledForm drafts", () => {
     expect(destLabel({ destination: "telegram", telegram_session: "tg-1" }, chats)).toBe("Telegram · Ops group");
     expect(destLabel({ destination: "telegram", telegram_session: "gone" }, chats)).toBe("Telegram");
     expect(destLabel({ destination: "main" })).toBe("Main chat");
+    expect(destLabel({ destination: "slack", slack_channel: "C0123ABCD" })).toBe("Slack · #C0123ABCD");
     expect(destLabel({ destination: "new_chat" })).toBe("New chat each run");
     expect(runStatus({ status: "ok" })).toEqual({ label: "OK", tone: "ok" });
     expect(runStatus({ status: "failed" }).tone).toBe("error");
     expect(runStatus({ status: "running" }).label).toBe("Running");
+  });
+
+  test("destination: a Slack channel is sent by id, from an id or a link", () => {
+    const d = { ...emptyDraft(), message: "go", dest: "slack" as const };
+    expect(draftError({ ...d, slackChannel: "" })).toMatch(/Slack channel/);
+    expect(draftError({ ...d, slackChannel: "#general" })).toMatch(/Slack channel/);
+    expect(bodyOf({ ...d, slackChannel: "#c0123abcd" })).toMatchObject({ destination: "slack", slack_channel: "C0123ABCD" });
+    expect(slackChannelId("https://acme.slack.com/archives/C0999ZZZZ/p1700000000")).toBe("C0999ZZZZ");
+    expect(draftOf(row({ cron: "0 9 * * *", destination: "slack", slack_channel: "C0123ABCD" }))).toMatchObject({ dest: "slack", slackChannel: "C0123ABCD" });
   });
 
   test("bodyOf sends exactly one of run_at / every / cron", () => {
