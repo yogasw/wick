@@ -47,7 +47,7 @@ func TestPromptFor(t *testing.T) {
 		}
 	}
 	got = svc.PromptFor(ctx, "s-ops", false)
-	if !strings.Contains(got, "Your name is ops.") || strings.Contains(got, "You are the Captain") || !strings.Contains(got, "Captain (@captain) — Lead agent") {
+	if !strings.Contains(got, "Your name is ops.") || strings.Contains(got, "You are the Captain") || !strings.Contains(got, "Your Captain is Captain (@captain)") || strings.Contains(got, "Your Team") {
 		t.Errorf("non-captain prompt wrong:\n%s", got)
 	}
 	if got := svc.PromptFor(ctx, "s-child", true); got != SubAgentOfTeam("ops") {

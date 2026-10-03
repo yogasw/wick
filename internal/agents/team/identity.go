@@ -5,21 +5,23 @@ import (
 	"strings"
 )
 
-// maxTeamListed bounds the "Your Team" line so a big roster does not
-// grow every spawn's prompt; the rest is counted, not named.
+// maxTeamListed bounds the Captain's "Your Team" line so a big roster
+// does not grow every spawn's prompt; the rest is counted, not named.
 const maxTeamListed = 12
 
 // Member is one Team agent as the identity block names it. Name and
-// Description come from the agent's project, Handle from its row.
+// Description come from the agent's project, Handle from its row; Tagline
+// is the short one-liner when the agent has one.
 type Member struct {
-	Name, Handle, Description string
-	IsCaptain                 bool
+	Name, Handle, Tagline, Description string
+	IsCaptain                          bool
 }
 
 // WhoYouAre is the dynamic "Who you are" block of a Team agent's prompt,
 // built at spawn from the agent's row so a renamed agent never answers to
 // an old name its persona may still carry. team is every OTHER agent of
-// the owner, Captain first is fine but not required.
+// the owner. Only the Captain, which coordinates, gets the roster; any
+// other agent is told who its Captain is and nothing more.
 func WhoYouAre(self Member, team []Member) string {
 	var b strings.Builder
 	b.WriteString("## Who you are\n")
@@ -31,26 +33,44 @@ func WhoYouAre(self Member, team []Member) string {
 		b.WriteString(" You are the Captain — the owner's main agent.")
 	}
 	b.WriteString("\n")
-	if len(team) > 0 {
-		parts := make([]string, 0, maxTeamListed)
-		for i, m := range team {
-			if i == maxTeamListed {
+	if self.IsCaptain {
+		if line := teamLine(team); line != "" {
+			b.WriteString("Your Team: " + line + "\n")
+		}
+	} else {
+		for _, m := range team {
+			if m.IsCaptain {
+				fmt.Fprintf(&b, "Your Captain is %s (@%s); the Captain coordinates the Team.\n", m.Name, m.Handle)
 				break
 			}
-			s := fmt.Sprintf("%s (@%s)", m.Name, m.Handle)
-			if d := strings.TrimSpace(m.Description); d != "" {
-				s += " — " + d
-			}
-			parts = append(parts, s)
 		}
-		line := strings.Join(parts, "; ")
-		if extra := len(team) - maxTeamListed; extra > 0 {
-			line += fmt.Sprintf("; +%d more", extra)
-		}
-		b.WriteString("Your Team: " + line + "\n")
 	}
 	b.WriteString("If your persona below names you differently, the name and handle above are the current ones.")
 	return b.String()
+}
+
+// teamLine names up to maxTeamListed agents with their tagline and
+// description, counting the rest.
+func teamLine(team []Member) string {
+	parts := make([]string, 0, maxTeamListed)
+	for i, m := range team {
+		if i == maxTeamListed {
+			break
+		}
+		s := fmt.Sprintf("%s (@%s)", m.Name, m.Handle)
+		if t := strings.TrimSpace(m.Tagline); t != "" {
+			s += ", " + t
+		}
+		if d := strings.TrimSpace(m.Description); d != "" {
+			s += " — " + d
+		}
+		parts = append(parts, s)
+	}
+	line := strings.Join(parts, "; ")
+	if extra := len(team) - maxTeamListed; extra > 0 {
+		line += fmt.Sprintf("; +%d more", extra)
+	}
+	return line
 }
 
 // SubAgentOfTeam is the one line a sub-agent delegated from a Team
