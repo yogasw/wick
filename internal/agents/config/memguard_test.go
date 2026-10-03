@@ -29,6 +29,10 @@ func TestMemoryGuardConfigKeys_MatchLoaders(t *testing.T) {
 		"agents_cpu_quota_pct",
 		"agents_tasks_max",
 		"agents_io_weight",
+		"resource_guard_interval_ms",
+		"resource_guard_exhaust_horizon_sec",
+		"resource_guard_cpu_psi_max",
+		"resource_guard_action",
 	} {
 		if !got[want] {
 			t.Fatalf("key %q not derived by StructToConfigs — the loader reading it gets an empty value", want)
