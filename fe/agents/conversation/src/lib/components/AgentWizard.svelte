@@ -379,7 +379,7 @@
   {:else}
     {#if convertProject}
       <p class="rounded-xl bg-white-200 px-3 py-2 text-xs text-black-800 dark:bg-navy-800 dark:text-black-600" data-testid="aw-convert-access">
-        <span class="font-medium text-black-900 dark:text-white-100">Default for a converted project:</span> every connector at Write, and new connectors included — what its chats can do today. Narrow it below or later in Settings.
+        <span class="font-medium text-black-900 dark:text-white-100">Default for a converted project:</span> every connector you have at Write, and connectors added later open read-only — so its chats keep doing what they do today. Narrow it below or later in Settings.
       </p>
       <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100" data-testid="aw-global-prompt">
         <input type="checkbox" class="mt-1" bind:checked={useGlobalPrompt} />
