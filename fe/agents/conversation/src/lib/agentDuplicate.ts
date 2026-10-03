@@ -59,7 +59,7 @@ export function duplicateBody(a: AgentItem, taken: Iterable<string>): AgentWrite
     provider: a.provider,
     model: a.model,
     preset: a.preset,
-    avatar: { shape: a.avatar?.shape ?? "circle", color: shiftColor(a.avatar?.color ?? "") },
+    avatar: { kind: a.avatar?.kind, shape: a.avatar?.shape ?? "circle", color: shiftColor(a.avatar?.color ?? ""), expression: a.avatar?.expression },
     features: a.features,
     allowed_connectors: a.allowed_connectors ?? [],
     include_new_connectors: a.include_new_connectors,

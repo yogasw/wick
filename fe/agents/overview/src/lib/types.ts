@@ -34,7 +34,7 @@ export interface TeamAgent {
   tagline?: string;
   is_captain: boolean;
   disabled: boolean;
-  avatar: { shape: string; color: string } | null;
+  avatar: { kind?: string; shape: string; color: string; expression?: string } | null;
 }
 
 export interface TeamResponse {

@@ -6,7 +6,8 @@ import type { AgentFeatures } from "../agentMode.js";
 /* The Agents app API (api_team.go). Every route is scoped to the
    caller as owner server-side, so nothing here passes a user id. */
 
-export type AgentAvatarSpec = { shape: string; color: string };
+/** team.Avatar: kind "" = classic, "blob" = blob mascot (+ expression). */
+export type AgentAvatarSpec = { kind?: string; shape: string; color: string; expression?: string };
 
 export type ConnectorGrant = {
   connector_id: string;

@@ -7,7 +7,7 @@ export { default as BlobAvatar } from "./BlobAvatar.svelte";
 export { default as BlobAvatarPicker } from "./BlobAvatarPicker.svelte";
 export {
   AVATAR_KIND_BLOB, isBlobKind, BLOB_SHAPES, BLOB_EXPRESSIONS, BLOB_COLORS, BLOB_GAZE_MIN,
-  normalizeBlobShape, normalizeBlobExpression, blobStateFor, randomBlob, blobColor,
+  normalizeBlobShape, normalizeBlobExpression, switchAvatarKind, type AvatarSpec, blobStateFor, randomBlob, blobColor,
   type AvatarKind, type BlobLook, type BlobShape, type BlobExpression, type BlobState,
 } from "./blob.js";
 export * from "./shape.js";

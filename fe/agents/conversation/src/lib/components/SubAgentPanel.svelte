@@ -33,7 +33,7 @@
     /** Team (A2A) tasks this chat sent — their own section, never mixed
         with sub-agent delegations. */
     teamTasks?: TeamTaskItem[];
-    teamAgents?: Record<string, { name: string; shape?: string; color?: string }>;
+    teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }>;
     onOpenAgent?: (handle: string) => void;
   };
 
@@ -199,7 +199,7 @@
         <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3 space-y-1.5">
           <div class="flex items-center justify-between gap-2">
             <div class="flex min-w-0 items-center gap-2">
-              <AgentAvatar shape={peer?.shape} color={peer?.color} size={18} />
+              <AgentAvatar kind={peer?.kind} shape={peer?.shape} expression={peer?.expression} color={peer?.color} size={18} />
               <span class="truncate text-xs font-semibold text-black-900 dark:text-white-100">{peer?.name || t.to_name || t.to_handle}</span>
               <span class="shrink-0 text-[10px] text-black-700 dark:text-black-600">@{t.to_handle}</span>
             </div>

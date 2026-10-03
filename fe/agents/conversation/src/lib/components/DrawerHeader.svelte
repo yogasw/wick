@@ -7,7 +7,7 @@
   type Props = {
     title: string;
     subtitle?: string;
-    avatar?: { shape?: string; color?: string } | null;
+    avatar?: { kind?: string; shape?: string; color?: string; expression?: string } | null;
     /** false when the drawer draws its own rule below (Settings' tab row). */
     bordered?: boolean;
     onClose: () => void;
@@ -16,7 +16,7 @@
 </script>
 
 <div class="flex items-center gap-3 px-6 pt-4 {bordered ? 'border-b border-white-300 pb-4 dark:border-navy-600' : 'pb-3'}">
-  {#if avatar}<AgentAvatar shape={avatar.shape} color={avatar.color} size={36} />{/if}
+  {#if avatar}<AgentAvatar kind={avatar.kind} shape={avatar.shape} expression={avatar.expression} color={avatar.color} size={36} live />{/if}
   <div class="min-w-0 flex-1">
     <h2 class="truncate text-base font-semibold text-black-900 dark:text-white-100">{title}</h2>
     {#if subtitle}<p class="truncate text-xs text-black-800 dark:text-black-600">{subtitle}</p>{/if}

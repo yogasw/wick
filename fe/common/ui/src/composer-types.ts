@@ -21,7 +21,7 @@ export type ComposerCommand = {
   key?: string;
   /** `@` menu Team rows only: the agent's avatar spec, drawn by the
       Composer's mentionAvatar snippet (unset spec → the avatar defaults). */
-  avatar?: { shape?: string; color?: string };
+  avatar?: { kind?: string; shape?: string; color?: string; expression?: string };
 };
 
 /** One agent the `@` menu offers. `group` picks its section: "team" is a
@@ -32,7 +32,7 @@ export type ComposerMentionAgent = {
   label: string;
   hint?: string;
   group?: "team" | "subagent";
-  avatar?: { shape?: string; color?: string };
+  avatar?: { kind?: string; shape?: string; color?: string; expression?: string };
 };
 
 import type { ModelCaps } from "./capability-types.js";

@@ -38,7 +38,7 @@
         avatar stands in for the typing spinner. */
     agent?: AgentIdentity;
     /** Team agents by handle and the opener for their chats; see ThreadMessage. */
-    teamAgents?: Record<string, { name: string; shape?: string; color?: string }>;
+    teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }>;
     onOpenAgent?: (handle: string) => void;
   };
 
@@ -199,7 +199,7 @@
   </div>
   {#if isEmpty && agent}
     <div class="flex flex-col items-center justify-center py-16 text-center gap-3">
-      <AgentAvatar shape={agent.shape} color={agent.color} size={72} />
+      <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={72} live />
       <div class="flex flex-col gap-1">
         <p class="text-lg font-semibold text-black-900 dark:text-white-100">{agent.name}</p>
         {#if agent.tagline}
@@ -313,7 +313,7 @@
                indicator in the Team app. A compaction keeps the amber
                spinner: that wait is not the agent answering. -->
           {#if agent && !compacting}
-            <AgentAvatar shape={agent.shape} color={agent.color} size={20} working={true} />
+            <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={20} working={true} />
           {:else}
           <svg
             class={"h-3 w-3 shrink-0 animate-spin " + (compacting ? "text-amber-500" : "text-green-500")}

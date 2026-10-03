@@ -49,7 +49,7 @@ describe("AgentAvatar kind=blob", () => {
     motion(false);
     const { container } = render(AgentAvatar, { props: { ...blob, size: 72, live: true } });
     const el = node(container)!;
-    expect(el.tagName).toBe("CANVAS");
+    expect(el.querySelector("canvas")).not.toBeNull();
     expect(el.dataset.mode).toBe("live");
   });
 

@@ -11,7 +11,7 @@
 import { createRuntime } from "./blob/core/runtime";
 import { drawFrame } from "./blob/render/canvas";
 import { EXPRESSIONS, PALETTE, SHAPES, type BlobExpression, type BlobShape, type BlobState, type Gaze } from "./blob/core/types";
-import type { AvatarState } from "./shape.js";
+import { normalizeShape, type AvatarState } from "./shape.js";
 
 export type { BlobExpression, BlobShape, BlobState, Gaze };
 
@@ -87,6 +87,17 @@ export function randomBlob(rand: () => number = Math.random): BlobLook {
 export function blobColor(c: string | null | undefined): string {
   const v = (c ?? "").trim();
   return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v) ? v.toLowerCase() : BLOB_COLORS[8];
+}
+
+export type AvatarSpec = { kind?: string; shape: string; color: string; expression?: string };
+
+/** switchAvatarKind converts a stored avatar between classic and blob,
+    keeping the color and any shape both kinds share (circle, squircle,
+    triangle). A classic spec carries no kind/expression keys at all, so it
+    compares and encodes exactly like a row written before blobs. */
+export function switchAvatarKind(a: AvatarSpec, kind: string): AvatarSpec {
+  if (isBlobKind(kind)) return { kind: AVATAR_KIND_BLOB, shape: normalizeBlobShape(a.shape), color: a.color, expression: normalizeBlobExpression(a.expression) };
+  return { shape: normalizeShape(a.shape), color: a.color };
 }
 
 export function snapshotOf(look: BlobLook, state: BlobState = "idle", gaze: Gaze = { yaw: 0, pitch: 0 }) {

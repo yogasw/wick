@@ -11,7 +11,7 @@
      step waits for Slack/A2A (phase 1b). */
   import { onMount } from "svelte";
   import { AIGenerateButton } from "@wick-fe/common-ui";
-  import { AgentAvatar, AVATAR_SHAPES, AVATAR_COLORS, defaultAvatarFor } from "@wick-fe/common-avatar";
+  import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, defaultAvatarFor, isBlobKind, switchAvatarKind } from "@wick-fe/common-avatar";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { getProjectOptions } from "../api/options.js";
   import { createAgent, getProjectPersona, listAgentConnectors, runApi, type AgentItem, type AgentConnector, type ConnectorGrant } from "../api/team.js";
@@ -43,8 +43,17 @@
   let handle = $state("");
   let handleTouched = $state(false);
   let systemPrompt = $state("");
+  let kind = $state("");
   let shape = $state("circle");
   let color = $state(AVATAR_COLORS[1]);
+  let expression = $state("neutral");
+  function setKind(k: string) {
+    const a = switchAvatarKind({ kind, shape, color, expression }, k);
+    kind = a.kind ?? "";
+    shape = a.shape;
+    expression = a.expression ?? "neutral";
+    avatarTouched = true;
+  }
   // Until a shape or swatch is picked the avatar follows the handle's hash
   // (same function as the server's default), so it is stable per handle.
   let avatarTouched = $state(false);
@@ -143,7 +152,11 @@
     description = d.description;
     systemPrompt = d.system_prompt;
     if (d.avatar_shape || d.avatar_color) {
-      if (d.avatar_shape) shape = d.avatar_shape;
+      // The generator suggests a classic shape: take it as classic.
+      if (d.avatar_shape) {
+        kind = "";
+        shape = d.avatar_shape;
+      }
       if (d.avatar_color) color = d.avatar_color;
       avatarTouched = true;
     }
@@ -173,7 +186,7 @@
           tagline: tagline.trim(),
           description: description.trim(),
           system_prompt: systemPrompt,
-          avatar: { shape, color },
+          avatar: isBlobKind(kind) ? { kind, shape, color, expression } : { shape, color },
           ...(projectId ? { project_id: projectId } : {}),
           ...(convertProject && projectId === convertProject ? { convert: true } : {}),
           allowed_connectors: $state.snapshot(grants) as ConnectorGrant[],
@@ -260,8 +273,22 @@
       </div>
     </div>
     <div class="flex items-center gap-4">
-      <AgentAvatar {shape} {color} size={64} />
+      <AgentAvatar {kind} {shape} {expression} {color} size={64} live />
       <div class="space-y-2">
+        <div class="inline-flex rounded-lg border border-white-300 p-0.5 dark:border-navy-600" role="group" aria-label="Avatar kind">
+          {#each [["", "Classic"], ["blob", "Blob"]] as [k, lbl] (k)}
+            <button
+              type="button"
+              class="rounded-md px-3 py-1 text-xs {kind === k ? 'bg-green-500 text-white-100' : 'text-black-800 dark:text-black-600'}"
+              aria-pressed={kind === k}
+              data-testid="avatar-kind-{k || 'classic'}"
+              onclick={() => setKind(k)}
+            >{lbl}</button>
+          {/each}
+        </div>
+        {#if isBlobKind(kind)}
+          <BlobAvatarPicker {shape} {expression} {color} compact onChange={(l) => { shape = l.shape; expression = l.expression; color = l.color; avatarTouched = true; }} />
+        {:else}
         <div class="flex gap-2">
           {#each AVATAR_SHAPES as s (s)}
             <button
@@ -285,6 +312,7 @@
             ></button>
           {/each}
         </div>
+        {/if}
       </div>
     </div>
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">

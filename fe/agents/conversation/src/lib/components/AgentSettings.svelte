@@ -10,7 +10,7 @@
   import { AIGenerateButton, Button, Modal, ProviderPicker, Toggle, buildProviderOptions } from "@wick-fe/common-ui";
   import { toastOk } from "@wick-fe/common-stores";
   import DrawerHeader from "./DrawerHeader.svelte";
-  import { AgentAvatar, AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, colorInputValue } from "@wick-fe/common-avatar";
+  import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, colorInputValue, isBlobKind, switchAvatarKind, type AvatarSpec } from "@wick-fe/common-avatar";
   import { getProviderOptions, getProjectOptions } from "../api/options.js";
   import {
     updateAgent, deleteAgent, getProjectPersona, listAgentConnectors, runApi,
@@ -37,7 +37,7 @@
 
   type Draft = {
     handle: string; name: string; tagline: string; description: string; system_prompt: string;
-    pick: string; features: AgentFeatures; avatar: { shape: string; color: string };
+    pick: string; features: AgentFeatures; avatar: AvatarSpec;
     project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; run_as: "caller" | "owner";
     disabled: boolean; allow_provider_switch: boolean; use_global_prompt: boolean;
   };
@@ -434,10 +434,33 @@
     </div>
   {:else if tab === "avatar"}
     <div class="flex items-center gap-4">
-      <AgentAvatar shape={draft.avatar.shape} color={draft.avatar.color} size={72} />
-      <AgentAvatar shape={draft.avatar.shape} color={draft.avatar.color} size={72} working />
+      <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={72} live />
+      <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={72} working live />
       <span class="text-xs text-black-800 dark:text-black-600">idle · working</span>
     </div>
+    <div>
+      <span class={label}>Style</span>
+      <div class="inline-flex rounded-lg border border-white-300 p-0.5 dark:border-navy-600" role="group" aria-label="Avatar kind">
+        {#each [["", "Classic"], ["blob", "Blob"]] as [k, lbl] (k)}
+          <button
+            type="button"
+            class="rounded-md px-3 py-1 text-xs {(draft.avatar.kind ?? "") === k ? 'bg-green-500 text-white-100' : 'text-black-800 dark:text-black-600'}"
+            aria-pressed={(draft.avatar.kind ?? "") === k}
+            data-testid="avatar-kind-{k || 'classic'}"
+            onclick={() => (draft.avatar = switchAvatarKind(draft.avatar, k))}
+          >{lbl}</button>
+        {/each}
+      </div>
+    </div>
+    {#if isBlobKind(draft.avatar.kind)}
+      <BlobAvatarPicker
+        shape={draft.avatar.shape}
+        expression={draft.avatar.expression}
+        color={draft.avatar.color}
+        labelClass={label}
+        onChange={(l) => (draft.avatar = { kind: "blob", ...l })}
+      />
+    {:else}
     <div>
       <span class={label}>Shape</span>
       <div class="flex gap-2">
@@ -476,12 +499,13 @@
         />
       </div>
     </div>
+    {/if}
     <div>
       <span class={label}>State</span>
       <div class="grid grid-cols-3 gap-3 sm:grid-cols-7">
         {#each AVATAR_STATES as st (st)}
           <div class="flex flex-col items-center gap-1.5 text-center">
-            <AgentAvatar shape={draft.avatar.shape} color={draft.avatar.color} size={40} pose={st} />
+            <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={40} pose={st} />
             <span class="text-[11px] text-black-800 dark:text-black-600">{AVATAR_STATE_LABELS[st]}</span>
           </div>
         {/each}

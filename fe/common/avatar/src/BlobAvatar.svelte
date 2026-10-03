@@ -90,11 +90,8 @@
 <!-- The click is a reaction (a wink), not an action. -->
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
 {#if animate}
-  <canvas
-    bind:this={canvas}
-    width={px}
-    height={px}
-    class="blob-avatar shrink-0"
+  <span
+    class="blob-avatar inline-block shrink-0"
     class:hatch={hatching}
     style:width="{size}px"
     style:height="{size}px"
@@ -105,7 +102,7 @@
     data-mode="live"
     data-state={shown}
     onclick={onClick}
-  ></canvas>
+  ><canvas bind:this={canvas} width={px} height={px} class="block" style:width="{size}px" style:height="{size}px" aria-hidden="true"></canvas></span>
 {:else if src}
   <img
     {src}

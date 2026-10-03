@@ -11,7 +11,7 @@ export type TeamPeer = {
   name: string;
   description: string;
   disabled: boolean;
-  avatar?: { shape?: string; color?: string } | null;
+  avatar?: { kind?: string; shape?: string; color?: string; expression?: string } | null;
 };
 
 /** teamMentionAgents lists the owner's agents an agent's chat can @-mention:
@@ -25,7 +25,7 @@ export function teamMentionAgents(peers: TeamPeer[] | null | undefined, selfId: 
       label: p.name || p.handle,
       hint: tagline(p.description),
       group: "team" as const,
-      avatar: { shape: p.avatar?.shape, color: p.avatar?.color },
+      avatar: { kind: p.avatar?.kind, shape: p.avatar?.shape, color: p.avatar?.color, expression: p.avatar?.expression },
     }));
 }
 

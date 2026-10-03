@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   BLOB_COLORS, BLOB_EXPRESSIONS, BLOB_SHAPES, blobAnimates, blobColor, blobFollowsGaze, blobStateFor,
   clearStillCache, gazeFromOffset, isBlobKind, normalizeBlobExpression, normalizeBlobShape, randomBlob,
-  stillCacheSize, stillKey, stillUrl,
+  stillCacheSize, stillKey, stillUrl, switchAvatarKind,
 } from "../blob.js";
 import { AVATAR_STATES } from "../shape.js";
 import { stubCanvas } from "./canvasStub.js";
@@ -61,6 +61,18 @@ describe("blob helpers", () => {
     expect(top.shape).toBe("clover");
     expect(top.expression).toBe("unimpressed");
     expect(randomBlob(() => 1).shape).toBe("clover");
+  });
+});
+
+describe("switchAvatarKind", () => {
+  test("classic → blob keeps color and a shared shape", () => {
+    expect(switchAvatarKind({ shape: "triangle", color: "#ef4444" }, "blob")).toEqual({ kind: "blob", shape: "triangle", color: "#ef4444", expression: "neutral" });
+    expect(switchAvatarKind({ shape: "diamond", color: "#ef4444" }, "blob").shape).toBe("circle");
+  });
+  test("blob → classic drops the blob-only keys", () => {
+    const c = switchAvatarKind({ kind: "blob", shape: "cloud", color: "#111111", expression: "sad" }, "");
+    expect(c).toEqual({ shape: "circle", color: "#111111" });
+    expect(Object.keys(c)).toEqual(["shape", "color"]);
   });
 });
 

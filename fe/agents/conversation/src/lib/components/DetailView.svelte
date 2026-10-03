@@ -1188,7 +1188,7 @@
   });
 
   const teamAgentsByHandle = $derived(
-    Object.fromEntries(teamPeers.map((p) => [p.handle, { name: p.name || p.handle, shape: p.avatar?.shape, color: p.avatar?.color }])),
+    Object.fromEntries(teamPeers.map((p) => [p.handle, { name: p.name || p.handle, kind: p.avatar?.kind, shape: p.avatar?.shape, color: p.avatar?.color, expression: p.avatar?.expression }])),
   );
   function openTeamAgent(handle: string) {
     navigateAgents({ handle, session: null, panel: null });
@@ -2490,8 +2490,8 @@
   }
 </script>
 
-{#snippet mentionAvatar(a: { shape?: string; color?: string })}
-  <AgentAvatar shape={a.shape} color={a.color} size={18} />
+{#snippet mentionAvatar(a: { kind?: string; shape?: string; color?: string; expression?: string })}
+  <AgentAvatar kind={a.kind} shape={a.shape} expression={a.expression} color={a.color} size={18} />
 {/snippet}
 
 <!-- Full-height flex row: main area + vertical rail -->

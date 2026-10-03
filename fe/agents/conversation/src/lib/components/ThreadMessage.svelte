@@ -23,7 +23,7 @@
     // GET /sessions/{id}/turns/{turn_id}/events/{event_id}.
     loadTraceEvent?: (turnId: string, eventId: string) => Promise<TurnEventPayload>;
     /** Team agents by handle, for a teammate's avatar on its messages. */
-    teamAgents?: Record<string, { name: string; shape?: string; color?: string }>;
+    teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }>;
     /** Opens a Team agent's chat; unset (outside the Team app) the
         handoff row's target is plain text. */
     onOpenAgent?: (handle: string) => void;
@@ -496,7 +496,7 @@
               title={`${teamFrom.name} (@${teamFrom.handle}) · Team agent`}
               class="inline-flex items-center gap-1.5 pr-1 mr-0.5 text-[11px] leading-4 text-black-800 dark:text-black-600"
             >
-              <AgentAvatar shape={teamFromAgent?.shape} color={teamFromAgent?.color} size={16} />
+              <AgentAvatar kind={teamFromAgent?.kind} shape={teamFromAgent?.shape} expression={teamFromAgent?.expression} color={teamFromAgent?.color} size={16} />
               <span class="min-w-0 truncate"
                 ><span class="font-medium text-black-900 dark:text-white-100">{teamFromAgent?.name || teamFrom.name}</span
                 ><span class="opacity-70">{" · @" + teamFrom.handle}</span></span

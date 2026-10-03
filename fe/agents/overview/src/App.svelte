@@ -211,7 +211,7 @@
         <div class="flex items-center gap-4">
           {#each team.agents.slice(0, TEAM_PEEK) as a (a.id)}
             <a href={`${base}/team/${a.handle}`} class="flex w-14 flex-col items-center gap-1 hover:opacity-80" title={a.tagline ? `@${a.handle} · ${a.tagline}` : `@${a.handle}`}>
-              <AgentAvatar shape={a.avatar?.shape} color={a.avatar?.color} size={36} asleep={a.disabled} still />
+              <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={36} asleep={a.disabled} still />
               <span class="w-full truncate text-center text-[11px] text-black-700 dark:text-black-600">{a.name}</span>
               {#if a.tagline}<span class="w-full truncate text-center text-[10px] text-black-600 dark:text-black-700">{a.tagline}</span>{/if}
             </a>

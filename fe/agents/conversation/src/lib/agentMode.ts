@@ -73,8 +73,10 @@ export type AgentIdentity = {
   tagline?: string;
   description: string;
   /** Avatar spec; unset falls back to AgentAvatar's defaults. */
+  kind?: string;
   shape?: string;
   color?: string;
+  expression?: string;
   /** Right-hand composer caption, e.g. "3 connector". */
   caption: string;
 };
