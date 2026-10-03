@@ -20,7 +20,7 @@ func TestAppendHandoffWritesSystemTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := teamlink.Handoff{From: "captain", To: "anton", ToID: "ag-2", TaskID: "t1", ContextID: "c1", State: a2a.TaskStateCompleted}
-	if err := appendHandoff(layout, "S1", h, time.Unix(100, 0)); err != nil {
+	if err := appendHandoff(layout, "S1", handoffTurn(h, time.Unix(100, 0))); err != nil {
 		t.Fatal(err)
 	}
 	f, err := os.Open(layout.SessionConversation("S1"))
@@ -51,7 +51,24 @@ func TestAppendHandoffWritesSystemTurn(t *testing.T) {
 }
 
 func TestAppendHandoffNoLayoutIsNoop(t *testing.T) {
-	if err := appendHandoff(config.Layout{}, "S1", teamlink.Handoff{}, time.Now()); err != nil {
+	if err := appendHandoff(config.Layout{}, "S1", handoffTurn(teamlink.Handoff{}, time.Now())); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestPublishHandoffPushesLiveEvent(t *testing.T) {
+	b := NewBroadcaster()
+	ch, unsub := b.Subscribe("S1")
+	defer unsub()
+	h := teamlink.Handoff{From: "captain", To: "anton", ToID: "ag-2", TaskID: "t1", State: a2a.TaskStateWorking}
+	publishHandoff(b, "S1", handoffTurn(h, time.Unix(100, 0)))
+	select {
+	case ev := <-ch:
+		if ev.Type != "mention_handoff" || !strings.Contains(ev.Data, `"task_id":"t1"`) || !strings.Contains(ev.Data, `"kind":"mention_handoff"`) {
+			t.Fatalf("event = %+v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no live mention_handoff event")
+	}
+	publishHandoff(nil, "S1", handoffTurn(h, time.Now())) // no broadcaster: no panic
 }

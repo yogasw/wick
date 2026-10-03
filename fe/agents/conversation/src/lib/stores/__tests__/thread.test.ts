@@ -830,3 +830,16 @@ describe("createThreadStore — live context level", () => {
     expect(get(s.contextUsed)).toBe(12_000);
   });
 });
+
+describe("thread store — mention_handoff", () => {
+  test("a live mention_handoff event appends a system handoff turn", () => {
+    const s = createThreadStore();
+    s.handleEvent({
+      type: "mention_handoff",
+      data: JSON.stringify({ turn_id: "9", kind: "mention_handoff", text: "@captain → @anton · TASK_STATE_WORKING", extras: { task_id: "t1", to: "anton", state: "TASK_STATE_WORKING" } }),
+    } as AgentEvent);
+    const ts = get(s.turns);
+    expect(ts).toHaveLength(1);
+    expect(ts[0]).toMatchObject({ role: "system", kind: "mention_handoff", extras: { task_id: "t1" } });
+  });
+});

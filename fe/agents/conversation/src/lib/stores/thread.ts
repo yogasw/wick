@@ -388,6 +388,34 @@ export function createThreadStore(): ThreadStore {
         break;
       }
 
+      case "mention_handoff": {
+        // A Team handoff row, pushed live (the same turn the server wrote
+        // to the transcript). Its working → completed turns share a
+        // task_id and are folded into one row when rendered.
+        try {
+          const d = JSON.parse(ev.data ?? "{}") as Partial<ConversationTurn> & { ts?: string };
+          if (d.kind === "mention_handoff") {
+            const turn: ConversationTurn = {
+              turn_id: `handoff-${d.turn_id ?? Date.now()}`,
+              role: "system",
+              agent: "",
+              provider: "",
+              text: d.text ?? "",
+              kind: "mention_handoff",
+              extras: d.extras ?? {},
+              timestamp: Date.now(),
+              truncated: false,
+              interrupted: false,
+              has_trace: false,
+              events: [],
+              attachments: [],
+            };
+            turns.update((ts) => [...ts, turn]);
+          }
+        } catch (_) {}
+        break;
+      }
+
       case "connector_run": {
         // A connector run started/finished under this session. Attach its run_id
         // + connector_id to the matching in-flight tool call so the card can show

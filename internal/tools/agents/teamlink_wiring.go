@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -163,25 +164,26 @@ func (n teamNotifier) Deliver(ctx context.Context, sessionID, text string) error
 	return n.deliver(ctx, sessionID, text)
 }
 
-// Audit logs one mention_handoff per side and records it in that thread
-// as a kind:"mention_handoff" system turn, which the front-end draws as a
-// one-line "@from → @to · state" row.
+// Audit logs one mention_handoff per side, records it in that thread as
+// a kind:"mention_handoff" system turn and pushes the same turn to open
+// viewers as a mention_handoff SSE event, so the row shows without a
+// reload. A task is audited twice (working, then its final state); the
+// front-end folds the turns of one task_id into one row.
 func (teamNotifier) Audit(_ context.Context, sessionID string, h teamlink.Handoff) {
 	log.Info().Str("event", "mention_handoff").Str("session", sessionID).
 		Str("from", h.From).Str("to", h.To).Str("context_id", h.ContextID).
 		Str("task_id", h.TaskID).Str("state", string(h.State)).Msg("team: handoff")
-	if err := appendHandoff(globalLayout, sessionID, h, time.Now()); err != nil {
+	turn := handoffTurn(h, time.Now())
+	if err := appendHandoff(globalLayout, sessionID, turn); err != nil {
 		log.Warn().Err(err).Str("session", sessionID).Msg("team: handoff — thread write failed")
 	}
+	publishHandoff(globalBcast, sessionID, turn)
 }
 
-// appendHandoff writes h into sessionID's conversation as a system turn.
-func appendHandoff(layout agentconfig.Layout, sessionID string, h teamlink.Handoff, now time.Time) error {
-	if layout.BaseDir == "" || sessionID == "" {
-		return nil
-	}
+// handoffTurn is h as a conversation system turn.
+func handoffTurn(h teamlink.Handoff, now time.Time) store.ConversationTurn {
 	now = now.UTC()
-	return storage.AppendJSONL(layout.SessionConversation(sessionID), "wick-conv-v1", sessionID, store.ConversationTurn{
+	return store.ConversationTurn{
 		TurnID:    fmt.Sprintf("%d", now.UnixNano()),
 		Timestamp: now,
 		Role:      "system",
@@ -191,7 +193,27 @@ func appendHandoff(layout agentconfig.Layout, sessionID string, h teamlink.Hando
 			"from": h.From, "to": h.To, "to_agent_id": h.ToID, "state": string(h.State),
 			"task_id": h.TaskID, "context_id": h.ContextID,
 		},
-	})
+	}
+}
+
+// publishHandoff pushes turn to sessionID's live viewers.
+func publishHandoff(b *Broadcaster, sessionID string, turn store.ConversationTurn) {
+	if b == nil || sessionID == "" {
+		return
+	}
+	body, err := json.Marshal(turn)
+	if err != nil {
+		return
+	}
+	b.PublishRaw(sessionID, "", "mention_handoff", string(body))
+}
+
+// appendHandoff writes turn into sessionID's conversation.
+func appendHandoff(layout agentconfig.Layout, sessionID string, turn store.ConversationTurn) error {
+	if layout.BaseDir == "" || sessionID == "" {
+		return nil
+	}
+	return storage.AppendJSONL(layout.SessionConversation(sessionID), "wick-conv-v1", sessionID, turn)
 }
 
 // TeamMentionRouter adapts the Hub to delegation.TeamRouter: an @handle
