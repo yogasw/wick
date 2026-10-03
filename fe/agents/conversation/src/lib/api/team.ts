@@ -39,6 +39,12 @@ export type AgentItem = {
   last_active: string | null;
   last_preview: string;
   status: string;
+  /** Main chat moved since the owner last opened it (markAgentRead). */
+  unread?: boolean;
+  /** Main chat waits on the owner: an ask_user question or an approval. */
+  needs_attention?: boolean;
+  /** Tool the running turn is on ("Bash", "query_range"); "" otherwise. */
+  current_action?: string;
   /** Other agents of this owner on the same project. */
   shared_with?: number;
 };
@@ -101,6 +107,10 @@ export const listAgentConnectors = (base: string) =>
     or a fresh side conversation when fresh=true. */
 export const openAgentChat = (base: string, id: string, fresh = false) =>
   apiPostE<{ session_id: string }>(`${base}/api/team/agents/${enc(id)}/chat`, fresh ? { new: true } : {});
+
+/** markAgentRead clears the unread mark: the owner opened the chat. */
+export const markAgentRead = (base: string, id: string) =>
+  apiPostE<{ status: string; last_read_at: string }>(`${base}/api/team/agents/${enc(id)}/read`, {});
 
 export const listAgentSessions = (base: string, id: string) =>
   apiGetE<AgentSessionItem[] | null>(`${base}/api/team/agents/${enc(id)}/sessions`);

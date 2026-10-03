@@ -5,7 +5,7 @@
      artifacts and the rail all come along instead of being rebuilt.
      Settings, other conversations and the + Agent wizard are drawers with
      their own URL (agentsRouter.ts), so they survive a refresh. */
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { KebabMenu, ToastHost } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
   import DetailView from "./lib/components/DetailView.svelte";
@@ -16,7 +16,8 @@
   import { agentsRoute, navigate, type AgentsRoute, type AgentsPanel } from "./lib/agentsRouter.js";
   import { connectorCaption, hiddenTabsFor } from "./lib/agentMode.js";
   import { rosterTime } from "./lib/timeFormat.js";
-  import { listAgents, openAgentChat, createAgent, updateAgent, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
+  import { listAgents, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
+  import { rosterStatus } from "./lib/rosterStatus.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import { RETURN_KEY, returnHref } from "./lib/teamReturn.js";
 
@@ -120,6 +121,24 @@
       })
       .catch((e) => toastError(`Buka chat: ${e instanceof Error ? e.message : String(e)}`))
       .finally(() => { opening = null; });
+  });
+
+  /* Opening an agent's chat reads it; leaving it reads it again, since the
+     owner's own messages and the replies they watched arrive while it is
+     open. The dot drops locally at once; the POST is best-effort. */
+  let readId = "";
+  function markRead(id: string) {
+    agents = agents.map((x) => (x.id === id && x.unread ? { ...x, unread: false } : x));
+    runApi(markAgentRead(base, id)).catch(() => {});
+  }
+  $effect(() => {
+    const id = selected?.id ?? "";
+    if (id === readId) return;
+    untrack(() => {
+      if (readId) markRead(readId);
+      readId = id;
+      if (id) markRead(id);
+    });
   });
 
   const chatSessionId = $derived(route.session ?? selected?.main_session_id ?? "");
@@ -231,14 +250,6 @@
     return a.last_preview || a.description || "Belum ada percakapan";
   }
 
-  /* Hover tip on a roster row. Only what the list already knows; the
-     current action ("lagi query Loki…") needs a server field first. */
-  function rowTip(a: AgentItem): string {
-    if (isWorking(a.status)) return "sedang mengetik";
-    if (a.disabled) return "nonaktif";
-    if (hatching.includes(a.id)) return "baru menetas";
-    return "online · idle";
-  }
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -297,6 +308,7 @@
       {#each roster as a (a.id)}
         {@const active = selected?.id === a.id}
         {@const working = isWorking(a.status)}
+        {@const st = rosterStatus(a, { activeId: selected?.id, hatching: hatching.includes(a.id) })}
         <button
           type="button"
           class="roster-row relative mb-0.5 flex w-full items-center gap-3 rounded-2xl px-2.5 py-2.5 text-left {active
@@ -305,8 +317,9 @@
           aria-current={active ? "page" : undefined}
           onclick={() => openAgent(a)}
         >
-          <AgentAvatar shape={a.avatar?.shape} color={a.avatar?.color} size={44} {working} asleep={a.disabled} hatching={hatching.includes(a.id)} />
-          <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{rowTip(a)}</span>
+          <AgentAvatar shape={a.avatar?.shape} color={a.avatar?.color} size={44} {working} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
+          {#if st.unread}<span class="roster-udot rounded-full border-2 border-white-200 bg-neg-400 dark:border-navy-700" aria-label="pesan baru"></span>{/if}
+          <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{st.tip}</span>
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-2">
               <span class="roster-name min-w-0 flex-1 truncate font-semibold text-black-900 dark:text-white-100">
@@ -314,8 +327,8 @@
               </span>
               <span class="shrink-0 text-xs text-black-700">{rosterTime(a.last_active)}</span>
             </span>
-            <span class="mt-0.5 block truncate text-[13px] {working ? 'font-medium text-green-600 dark:text-green-400' : 'text-black-800 dark:text-black-600'}">
-              {#if working}Typing<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>{:else}{rowPreview(a)}{/if}
+            <span class="mt-0.5 block truncate text-[13px] {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : 'text-black-800 dark:text-black-600'}">
+              {#if st.typing !== null}{st.typing}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>{:else}{rowPreview(a)}{/if}
             </span>
           </span>
         </button>
@@ -449,6 +462,15 @@
     pointer-events: none;
   }
   .roster-row:hover .roster-tip { display: block; }
+  /* Unread dot over the avatar's top-right (mockup .udot); the ring is the
+     roster background so it reads as cut out of the avatar. */
+  .roster-udot {
+    position: absolute;
+    left: 44px;
+    top: 9px;
+    width: 11px;
+    height: 11px;
+  }
   /* Three dots that bounce in turn: the "typing" cue in the header and the
      roster. Tailwind has no staggered keyframe, hence the local rule. */
   .dots i {
