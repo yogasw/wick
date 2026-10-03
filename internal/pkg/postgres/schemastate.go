@@ -80,6 +80,8 @@ var migratedModels = []any{
 	&entity.WorkflowTestCase{},
 	&entity.Skill{},
 	&entity.PluginState{},
+	&entity.PluginSource{},
+	&entity.PluginAudit{},
 	&entity.ConnectorState{},
 	&entity.ScheduledMessage{},
 	// Multi-agent sub-agent delegation — see
