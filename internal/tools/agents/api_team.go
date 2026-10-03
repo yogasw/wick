@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -693,7 +694,7 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		return *p
 	}
 	handle := team.NormalizeHandle(str(req.Handle))
-	if err := team.ValidateHandle(handle); err != nil {
+	if err := validateTeamHandle(c.Context(), handle); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -807,7 +808,7 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	}
 	if req.Handle != nil {
 		p.Handle = team.NormalizeHandle(*req.Handle)
-		if err := team.ValidateHandle(p.Handle); err != nil {
+		if err := validateTeamHandle(c.Context(), p.Handle); err != nil {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
@@ -1078,4 +1079,19 @@ func apiTeamAgentSessions(c *tool.Ctx) {
 		})
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// validateTeamHandle is team.ValidateHandle plus one rule the team package
+// cannot see: a handle may not equal a sub-agent role key, or "@handle"
+// would mean two different things to the mention router.
+func validateTeamHandle(ctx context.Context, handle string) error {
+	if err := team.ValidateHandle(handle); err != nil {
+		return err
+	}
+	if globalDelegation != nil && globalDelegation.Repo != nil {
+		if p, err := globalDelegation.Repo.GetProfile(ctx, handle); err == nil && p != nil {
+			return fmt.Errorf("handle %q is already a sub-agent role; pick another", handle)
+		}
+	}
+	return nil
 }
