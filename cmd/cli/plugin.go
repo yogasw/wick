@@ -34,14 +34,14 @@ var pluginBuildTargets = []string{
 }
 
 // pluginKinds are the plugin kinds wick understands. Each maps 1:1 to a source
-// folder in a plugins monorepo (connector/, tool/, job/). Only connector
-// has a host contract today; tool/job build identically (the binary's own
-// --dump-manifest carries its declared kind) and are accepted now so the repo
-// layout and CLI are forward-compatible.
+// folder in a plugins monorepo (connector/, tool/, job/, service/). All kinds
+// build identically; the binary's own --dump-manifest carries its declared
+// kind and the host routes it to the matching install folder.
 var pluginKinds = map[string]bool{
 	"connector": true,
 	"tool":      true,
 	"job":       true,
+	"service":   true,
 }
 
 // pluginCmd is the scaffolder-side `wick plugin` group: the PRODUCTION side of
@@ -52,20 +52,25 @@ var pluginKinds = map[string]bool{
 func pluginCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plugin",
-		Short: "Build wick plugins (connector/tool/job) for release",
+		Short: "Build wick plugins (connector/tool/job/service) for release",
 		Long: `Production-side tooling for the wick plugin platform.
 
 Run this from a plugins monorepo (one folder per plugin, grouped by kind):
 
   plugins/
   ├── connector/  { _template/, gmail/, slack/ }
-  ├── tool/       (later)
-  └── job/        (later)
+  ├── tool/       { _template/, ... }
+  ├── job/        { _template/, ... }
+  └── service/    { _template/, ... }
+
+  wick plugin build --kind job auto_get_data --target linux/amd64
+  wick plugin index --dir bin          # plugins.json v2 for the release
+  wick plugin sign --sign-key k bin/plugins.json
 
 The consumption side — installing, enabling, disabling plugins — lives in the
 app binary itself: '<your-app> plugin install|list|enable|disable|remove'.`,
 	}
-	cmd.AddCommand(pluginBuildCmd(), pluginCatalogCmd())
+	cmd.AddCommand(pluginBuildCmd(), pluginCatalogCmd(), pluginIndexCmd(), pluginSignCmd())
 	return cmd
 }
 
@@ -227,7 +232,7 @@ binary plus its generated plugin.json into a zip named
 
 Plugin KIND (selects the source folder):
   --kind connector   (default) → builds from connector/<name>/
-  --kind tool|job              → builds from tool/<name>/ or job/<name>/
+  --kind tool|job|service      → builds from tool/, job/ or service/<name>/
 
 Selecting WHICH plugins:
   wick plugin build gmail slack        explicit names
@@ -245,7 +250,7 @@ Pass --sign-key <path> to sign each manifest (ed25519); generate a key with the
 cmd/plugin-keygen tool.`,
 		RunE: func(c *cobra.Command, args []string) error {
 			if !pluginKinds[kind] {
-				return fmt.Errorf("unknown --kind %q (want connector|tool|job)", kind)
+				return fmt.Errorf("unknown --kind %q (want connector|tool|job|service)", kind)
 			}
 			names, err := resolvePluginNames(kind, args, allInd, changed, since)
 			if err != nil {
@@ -300,7 +305,7 @@ cmd/plugin-keygen tool.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&kind, "kind", "connector", "Plugin kind: connector|tool|job (selects the <kind>/ source folder)")
+	cmd.Flags().StringVar(&kind, "kind", "connector", "Plugin kind: connector|tool|job|service (selects the <kind>/ source folder)")
 	cmd.Flags().StringVarP(&target, "target", "t", "", "Target(s) <os>/<arch>, comma-separated for many (e.g. linux/arm64 or darwin/amd64,windows/amd64). Mutually exclusive with --goos/--goarch and --all")
 	cmd.Flags().StringVar(&goos, "goos", "", "Target GOOS (env: GOOS). Mutually exclusive with --target")
 	cmd.Flags().StringVar(&goarch, "goarch", "", "Target GOARCH (env: GOARCH). Mutually exclusive with --target")
