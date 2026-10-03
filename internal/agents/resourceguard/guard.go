@@ -91,6 +91,9 @@ type Guard struct {
 	host    Host
 	load    func() Config
 	OnEvent func(Event)
+	// OnQuotaApplied runs after configured slice limits are written live,
+	// so the caller can persist them where a reload reads them.
+	OnQuotaApplied func()
 	now     func() time.Time
 
 	mu      sync.Mutex
@@ -250,6 +253,9 @@ func (g *Guard) applyQuota(cfg Config) {
 		return
 	}
 	g.appliedQuota = &want
+	if g.OnQuotaApplied != nil {
+		g.OnQuotaApplied()
+	}
 }
 
 // agentProc is a process with its scope and per-second growth.

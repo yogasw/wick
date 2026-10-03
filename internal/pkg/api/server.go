@@ -1114,6 +1114,11 @@ func NewServer() *Server {
 			}
 		}
 	}
+	resourceGuard.OnQuotaApplied = func() {
+		if err := agentsFactory.MemGuardLoader().SyncSlice(); err != nil {
+			log.Warn().Err(err).Msg("resource guard: could not persist agents.slice limits")
+		}
+	}
 	agentstool.SetResourceGuard(resourceGuard)
 	go resourceGuard.Run(context.Background())
 	// When the sweeper reaps an idle session's connectors, record a system

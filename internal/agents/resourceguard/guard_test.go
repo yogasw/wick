@@ -353,3 +353,17 @@ func TestScopeDirRefusesEscapes(t *testing.T) {
 		t.Fatalf("agent scope = %q %v", d, err)
 	}
 }
+
+// Writing the configured limits live also asks the caller to persist
+// them, once per change.
+func TestQuotaAppliedNotifiesOnce(t *testing.T) {
+	h := agentTree()
+	g, _ := newTestGuard(h, enforce())
+	n := 0
+	g.OnQuotaApplied = func() { n++ }
+	g.Tick()
+	g.Tick()
+	if n != 1 {
+		t.Fatalf("OnQuotaApplied ran %d times, want 1", n)
+	}
+}
