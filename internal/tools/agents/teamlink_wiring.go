@@ -2,7 +2,6 @@ package agents
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -173,39 +172,20 @@ func (teamNotifier) Audit(_ context.Context, sessionID string, h teamlink.Handof
 	log.Info().Str("event", "mention_handoff").Str("session", sessionID).
 		Str("from", h.From).Str("to", h.To).Str("context_id", h.ContextID).
 		Str("task_id", h.TaskID).Str("state", string(h.State)).Msg("team: handoff")
-	turn := handoffTurn(h, time.Now())
-	if err := appendHandoff(globalLayout, sessionID, turn); err != nil {
-		log.Warn().Err(err).Str("session", sessionID).Msg("team: handoff — thread write failed")
-	}
-	publishHandoff(globalBcast, sessionID, turn)
+	recordSystemTurn(globalLayout, globalBcast, sessionID, handoffTurn(h, time.Now()))
 }
 
 // handoffTurn is h as a conversation system turn.
 func handoffTurn(h teamlink.Handoff, now time.Time) store.ConversationTurn {
-	now = now.UTC()
-	return store.ConversationTurn{
-		TurnID:    fmt.Sprintf("%d", now.UnixNano()),
-		Timestamp: now,
-		Role:      "system",
-		Kind:      "mention_handoff",
-		Text:      fmt.Sprintf("@%s → @%s · %s", h.From, h.To, h.State),
-		Extras: map[string]string{
-			"from": h.From, "to": h.To, "to_agent_id": h.ToID, "state": string(h.State),
-			"task_id": h.TaskID, "context_id": h.ContextID,
-		},
-	}
+	return systemTurn(store.KindMentionHandoff, fmt.Sprintf("@%s → @%s · %s", h.From, h.To, h.State), map[string]string{
+		"from": h.From, "to": h.To, "to_agent_id": h.ToID, "state": string(h.State),
+		"task_id": h.TaskID, "context_id": h.ContextID,
+	}, now)
 }
 
 // publishHandoff pushes turn to sessionID's live viewers.
 func publishHandoff(b *Broadcaster, sessionID string, turn store.ConversationTurn) {
-	if b == nil || sessionID == "" {
-		return
-	}
-	body, err := json.Marshal(turn)
-	if err != nil {
-		return
-	}
-	b.PublishRaw(sessionID, "", "mention_handoff", string(body))
+	publishSystemTurnEvent(b, sessionID, turn)
 }
 
 // appendHandoff writes turn into sessionID's conversation.

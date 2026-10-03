@@ -62,13 +62,17 @@ func TestPublishHandoffPushesLiveEvent(t *testing.T) {
 	defer unsub()
 	h := teamlink.Handoff{From: "captain", To: "anton", ToID: "ag-2", TaskID: "t1", State: a2a.TaskStateWorking}
 	publishHandoff(b, "S1", handoffTurn(h, time.Unix(100, 0)))
-	select {
-	case ev := <-ch:
-		if ev.Type != "mention_handoff" || !strings.Contains(ev.Data, `"task_id":"t1"`) || !strings.Contains(ev.Data, `"kind":"mention_handoff"`) {
-			t.Fatalf("event = %+v", ev)
+	// Pushed as the generic system_event and, for the thread store that
+	// predates it, under its own name.
+	for _, want := range []string{"system_event", "mention_handoff"} {
+		select {
+		case ev := <-ch:
+			if ev.Type != want || !strings.Contains(ev.Data, `"task_id":"t1"`) || !strings.Contains(ev.Data, `"kind":"mention_handoff"`) {
+				t.Fatalf("event = %+v, want type %s", ev, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("no live %s event", want)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("no live mention_handoff event")
 	}
 	publishHandoff(nil, "S1", handoffTurn(h, time.Now())) // no broadcaster: no panic
 }
