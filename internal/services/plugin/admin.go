@@ -31,6 +31,7 @@ type ServiceView struct {
 	Capabilities    []string                  `json:"capabilities,omitempty"`
 	CallbackScopes  []string                  `json:"callback_scopes,omitempty"`
 	CallbackRevoked bool                      `json:"callback_revoked"`
+	Configs         []ConfigField             `json:"configs,omitempty"`
 	Tokens          []TokenView               `json:"tokens,omitempty"`
 	Logs            []string                  `json:"logs,omitempty"`
 }
@@ -46,6 +47,7 @@ func (h *Host) View(s *Service, full bool) ServiceView {
 		v.CallbackRevoked = h.Tokens.CallbackRevoked(s.Key)
 	}
 	if full {
+		v.Configs = h.configFields(s)
 		if h.Tokens != nil {
 			for _, t := range h.Tokens.List(s.Key) {
 				v.Tokens = append(v.Tokens, TokenView{ID: t.ID, Name: t.Name, Hint: t.Hint, CreatedAt: t.CreatedAt, LastUsed: t.LastUsed})
@@ -83,6 +85,7 @@ func (h *Host) RegisterAdmin(mux *http.ServeMux, wrap func(http.Handler) http.Ha
 	mux.Handle("GET "+base+"/{key}", hf(h.withService(func(w http.ResponseWriter, _ *http.Request, s *Service) {
 		writeJSON(w, http.StatusOK, h.View(s, true))
 	})))
+	mux.Handle("PUT "+base+"/{key}/config", hf(h.withService(h.serveSetConfig)))
 	mux.Handle("POST "+base+"/{key}/{action}", hf(h.withService(func(w http.ResponseWriter, r *http.Request, s *Service) {
 		switch r.PathValue("action") {
 		case "start":

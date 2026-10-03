@@ -175,6 +175,7 @@ type Supervisor struct {
 	mu      sync.Mutex
 	status  Status
 	rt      http.RoundTripper
+	conn    wickplugin.ToolConn
 	kill    func()
 	cancel  context.CancelFunc
 	wakeNow chan struct{}
@@ -228,7 +229,7 @@ func (s *Supervisor) Start() {
 func (s *Supervisor) Stop() {
 	s.mu.Lock()
 	cancel, kill, done := s.cancel, s.kill, s.done
-	s.cancel, s.kill, s.rt, s.done = nil, nil, nil, nil
+	s.cancel, s.kill, s.rt, s.conn, s.done = nil, nil, nil, nil, nil
 	s.status.State = StateStopped
 	s.status.NextStart = time.Time{}
 	s.mu.Unlock()
@@ -245,6 +246,28 @@ func (s *Supervisor) Stop() {
 			s.Logs.Printf("stop: supervise loop still busy after %s", stopWait)
 		}
 	}
+}
+
+// Reconfigure pushes the current config to the running process. A plugin
+// that rejects the push is restarted so it boots with the new config. A
+// stopped service picks the config up on its next start.
+func (s *Supervisor) Reconfigure() {
+	s.mu.Lock()
+	conn := s.conn
+	running := s.status.State == StateRunning
+	s.mu.Unlock()
+	if !running || conn == nil || s.cfg == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err := conn.Configure(ctx, s.cfg())
+	cancel()
+	if err != nil {
+		s.Logs.Printf("config push failed (%v); restarting", err)
+		s.Restart()
+		return
+	}
+	s.Logs.Printf("config updated")
 }
 
 // Restart stops and starts again, resetting the backoff.
@@ -282,7 +305,7 @@ func (s *Supervisor) loop(ctx context.Context, wake chan struct{}) {
 			s.mu.Unlock()
 			return
 		}
-		s.rt, s.kill = nil, nil
+		s.rt, s.kill, s.conn = nil, nil, nil
 		s.status.State = StateBackoff
 		s.status.Restarts++
 		if err != nil {
@@ -338,7 +361,7 @@ func (s *Supervisor) runOnce(ctx context.Context) (<-chan struct{}, error) {
 		killAll()
 		return nil, ctx.Err()
 	}
-	s.kill, s.rt = killAll, unixTransport(socket)
+	s.kill, s.rt, s.conn = killAll, unixTransport(socket), conn
 	s.status.State = StateRunning
 	s.status.StartedAt = time.Now()
 	s.status.NextStart = time.Time{}

@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -37,7 +38,11 @@ type Host struct {
 	SessionUser func(*http.Request) *User
 	// BaseURL is wick's public base URL handed to plugins as WICK_BASE_URL.
 	BaseURL func() string
-	// Config returns key's config values pushed to the plugin after spawn.
+	// Configs stores each service's manifest config rows (owner
+	// ConfigOwner(key)); secrets are encrypted at rest by the store.
+	Configs ConfigStore
+	// Config overrides the values pushed to the plugin after spawn (tests);
+	// nil reads them from Configs.
 	Config func(key string) map[string]string
 
 	sockDir  string
@@ -116,11 +121,11 @@ func (h *Host) Load(dir string, enabled func(string) bool, record func(key, kind
 func (h *Host) Add(key, version string, sm wickplugin.ServiceModule, binary string) *Service {
 	sup := newSupervisor(key, binary, h.sockDir, h.spawn)
 	sup.env = func() []string { return h.processEnv(key, sm.CallbackScopes) }
-	sup.cfg = func() map[string]string {
-		if h.Config == nil {
-			return map[string]string{}
+	sup.cfg = func() map[string]string { return h.configValues(key) }
+	if h.Configs != nil && len(sm.Configs) > 0 {
+		if err := h.Configs.EnsureOwned(context.Background(), ConfigOwner(key), sm.Configs...); err != nil {
+			log.Warn().Str("service", key).Err(err).Msg("service plugin: config seed failed")
 		}
-		return h.Config(key)
 	}
 	s := &Service{Key: key, Version: version, Manifest: sm, Sup: sup}
 	h.mu.Lock()

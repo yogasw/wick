@@ -3018,6 +3018,7 @@ func NewServer() *Server {
 		}
 		return &serviceplugin.User{ID: u.ID, Email: u.Email, Name: u.Name, Admin: u.IsAdmin()}
 	}
+	servicePlugins.Configs = configsSvc
 	if n := servicePlugins.Load(connplugin.KindDir(wickplugin.KindService), jobPluginStore.Enabled, jobPluginStore.Record); n > 0 {
 		log.Info().Int("plugins", n).Msg("service plugins: loaded")
 	}
