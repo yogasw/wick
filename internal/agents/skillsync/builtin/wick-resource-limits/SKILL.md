@@ -1,6 +1,6 @@
 ---
 name: wick-resource-limits
-description: Use when the user asks about agent memory or CPU limits, an agent being killed or OOM, the Resources page, usage history, disk space, why a spawn is queued, or how to cap what an agent may consume. Covers the three guard modes and what each actually does, which platform enforces what, how to read the four separate measurements, and the rules for suggesting limits safely.
+description: Use when the user asks about agent memory or CPU limits, an agent or build being killed, paused or OOM, the Resource Guard watchdog, the Resources page, usage history, disk space, why a spawn is queued, or how to cap what an agent may consume. Covers the three guard modes and what each actually does, which platform enforces what, how to read the four separate measurements, and the rules for suggesting limits safely.
 ---
 
 # Agent resource limits
@@ -11,6 +11,8 @@ Two things follow from that, and they explain most questions about this subsyste
 
 - **Enforcement needs cgroups, so it is Linux-only.** Measurement, reporting, and crash recovery work everywhere.
 - **A killed agent is killed by the kernel.** Wick's job is to report it accurately, not to prevent it after the fact.
+
+The one exception is the **Resource Guard** watchdog (enforce mode, Linux): a 1-second loop that acts on the *trend* — memory falling fast, CPU pressure climbing — before the kernel acts at the cliff edge. See "The fast watchdog" below.
 
 ## The three modes
 
@@ -51,7 +53,7 @@ A container without systemd still enforces memory: there is a raw-cgroupfs path.
 
 ## The config knobs
 
-Under **Memory Guard** and **Usage History** in the agents config:
+Under **Resource Guard** (formerly labelled Memory Guard — the keys did not change) and **Usage History** in the agents config:
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -66,6 +68,10 @@ Under **Memory Guard** and **Usage History** in the agents config:
 | `agents_cpu_quota_pct` | `0` (off) | hard CPU cap |
 | `agents_tasks_max` | `512` | process-count cap — the fork-bomb guard |
 | `agents_io_weight` | `0` (off) | relative block-IO share |
+| `resource_guard_interval_ms` | `1000` | watchdog sampling interval |
+| `resource_guard_exhaust_horizon_sec` | `20` | act when free memory is projected to run out within this |
+| `resource_guard_cpu_psi_max` | `90` | CPU pressure (some avg10, %) that counts as overloaded |
+| `resource_guard_action` | `kill` | `off` / `log` / `pause` / `kill` — how far the watchdog may go |
 | `resource_history_enabled` | `true` | record usage samples |
 | `resource_sample_interval_sec` | `15` | seconds between samples |
 | `resource_retention_minutes` | `360` | how long samples are kept |
@@ -73,9 +79,41 @@ Under **Memory Guard** and **Usage History** in the agents config:
 
 Defaults for the derived values come from the machine's own size, so they are sane without tuning.
 
+CPU weight, CPU quota and tasks max **apply live**: change them in the UI and the watchdog writes them onto the running agents.slice within a second (and into the slice unit, so a reload keeps them). No restart and no new spawn needed — but only in `enforce` mode.
+
 `agents_tasks_max` deserves a mention because it catches something no memory knob can: thousands of tiny processes cripple the scheduler while staying comfortably under every memory ceiling.
 
 A per-instance `MemoryMaxMB` overrides the global per-agent value when set. Note it does **not** take the smaller of the two — a memory ceiling is per-process, not a share of a pool, so an explicit per-instance value wins outright.
+
+## The fast watchdog (Resource Guard)
+
+Runs every `resource_guard_interval_ms` in `enforce` mode on Linux. It watches agents.slice **and** the `run-*` units agents start with `systemd-run --user` (those land in app.slice, outside every slice limit). It never acts on the agent CLI itself (claude, codex, …) or on wick.
+
+**Memory** — triggers when free memory is under `min_free_memory_mb`, or is projected (regression over the last 10 s) to run out within the horizon while under twice the floor, or memory pressure "full" exceeds 20%. Ladder:
+
+1. Kill the **child process** growing fastest — a build, test runner, browser or script. One per 3 s.
+2. Still critical after ~6 s (or nothing to kill) → **freeze** that agent's whole scope; it is thawed after 15 s of calm.
+3. Frozen and still critical for 10 s → **stop the agent**. The session is not lost; it resumes on its next message.
+
+**CPU** — triggers when CPU pressure stays above `resource_guard_cpu_psi_max`, load per core exceeds 2, or wick's own loop is running a second late. Ladder:
+
+1. After 10 s hot: cap agents.slice to 100% of one core, then 70%.
+2. After 20 s hot: **pause** (SIGSTOP) the child using the most CPU; it is resumed after 30 s calm.
+3. If that child takes the CPU again after resuming: **kill** it (builds can be re-run).
+The configured quota is restored after 60 s calm.
+
+`resource_guard_action` caps the ladder: `log` records only, `pause` never kills. Every action is written as a system line into the history of the session whose agent was affected (e.g. "wick stopped `node vitest` (1.2 GB, +300 MB/s) to keep the host alive"), and listed under **Resource Guard** on the Resources page.
+
+**Spawn gate.** While memory is heading toward the floor, new agents are queued (not refused) even if free memory is still above `min_free_memory_mb`; the queue is re-offered every few seconds and starts once memory recovers.
+
+**Sub-agent queue.** `sub_agents_max_parallel` is per *conversation*: every delegate, mention and `continue` from one conversation shares the same slots, extra work is queued in order.
+
+### Small hosts (2 vCPU, ≤ 4–8 GB)
+
+- `memory_guard_mode = enforce`, `resource_guard_action = kill`.
+- `agents_cpu_quota_pct = 140` — leaves wick and the OS more than half a core under full load.
+- `sub_agents_max_parallel = 1` — one sub-agent at a time; heavy builds (vite, vitest, go test) one at a time too.
+- Keep the derived memory values: they are computed from the RAM the machine reports at runtime, so they follow a RAM upgrade without editing.
 
 ## Reading the Resources page
 
