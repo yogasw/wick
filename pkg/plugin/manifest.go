@@ -17,7 +17,7 @@ import (
 // module marshals with its func fields excluded (json:"-"), so the envelope
 // is fully round-trippable.
 type Manifest struct {
-	SchemaVersion int    `json:"schema_version"`
+	SchemaVersion int `json:"schema_version"`
 	// Kind is the plugin kind: "connector" (default), "tool", or "job". The
 	// platform routes installed plugins by kind into the matching registry;
 	// all kinds share the same gRPC service (Execute(op,args)→result is generic
@@ -31,6 +31,9 @@ type Manifest struct {
 	SHA256       string           `json:"sha256"`
 	Signature    string           `json:"signature"`
 	Module       connector.Module `json:"module"`
+	// Job carries the job meta + configs for kind=job (Module.Meta mirrors its
+	// key/name so key-based install/scan code stays kind-agnostic).
+	Job *JobModule `json:"job,omitempty"`
 }
 
 // ManifestSchemaVersion is the current envelope format version.

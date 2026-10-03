@@ -12,6 +12,7 @@ import (
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	connectorrunsreaper "github.com/yogasw/wick/internal/jobs/connector-runs-reaper"
+	jobplugin "github.com/yogasw/wick/internal/jobs/plugin"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
 	"github.com/yogasw/wick/internal/manager"
@@ -19,6 +20,7 @@ import (
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/tools"
 	"github.com/yogasw/wick/pkg/job"
+	wickplugin "github.com/yogasw/wick/pkg/plugin"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -48,6 +50,13 @@ func NewServer() *Server {
 	// identical.
 	tools.RegisterBuiltins()
 	jobs.RegisterBuiltins()
+
+	// Job plugins (plugins/jobs/<key>) register like built-in jobs, before
+	// validation and the configs bootstrap so their config rows get seeded.
+	jobPluginStore := connplugin.NewStateStore(db)
+	if n := jobplugin.Load(connplugin.KindDir(wickplugin.KindJob), jobPluginStore.Enabled, jobPluginStore.Record); n > 0 {
+		log.Info().Int("plugins", n).Msg("job plugins: loaded")
+	}
 
 	// Reconcile the configs table so job.Ctx.Cfg(...) sees the same
 	// cached values the web process uses. Seeds per-tool / per-job
