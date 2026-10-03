@@ -202,6 +202,9 @@
       <AgentAvatar shape={agent.shape} color={agent.color} size={72} />
       <div class="flex flex-col gap-1">
         <p class="text-lg font-semibold text-black-900 dark:text-white-100">{agent.name}</p>
+        {#if agent.tagline}
+          <p class="text-sm font-medium text-black-700 dark:text-black-600" data-testid="agent-tagline">{agent.tagline}</p>
+        {/if}
         {#if agent.description}
           <p class="max-w-md text-sm text-black-700 dark:text-black-600">{agent.description}</p>
         {/if}

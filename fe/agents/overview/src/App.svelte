@@ -210,9 +210,10 @@
       <div class="flex flex-wrap items-center gap-x-6 gap-y-3 px-5 py-4">
         <div class="flex items-center gap-4">
           {#each team.agents.slice(0, TEAM_PEEK) as a (a.id)}
-            <a href={`${base}/team/${a.handle}`} class="flex w-14 flex-col items-center gap-1 hover:opacity-80" title={`@${a.handle}`}>
+            <a href={`${base}/team/${a.handle}`} class="flex w-14 flex-col items-center gap-1 hover:opacity-80" title={a.tagline ? `@${a.handle} · ${a.tagline}` : `@${a.handle}`}>
               <AgentAvatar shape={a.avatar?.shape} color={a.avatar?.color} size={36} asleep={a.disabled} still />
               <span class="w-full truncate text-center text-[11px] text-black-700 dark:text-black-600">{a.name}</span>
+              {#if a.tagline}<span class="w-full truncate text-center text-[10px] text-black-600 dark:text-black-700">{a.tagline}</span>{/if}
             </a>
           {/each}
           {#if team.agents.length > TEAM_PEEK}
@@ -221,7 +222,7 @@
         </div>
         <div class="ml-auto text-right text-xs text-black-700 dark:text-black-600">
           <p class="text-2xl font-bold text-black-900 dark:text-white-100">{team.agents.length}</p>
-          <p>agent{#if teamCaptain} · <span class="font-semibold text-green-600 dark:text-green-400">★ Captain</span> {teamCaptain.name}{/if}</p>
+          <p>agent{#if teamCaptain} · <span class="font-semibold text-green-600 dark:text-green-400">★ Captain</span> {teamCaptain.name}{#if teamCaptain.tagline}, {teamCaptain.tagline}{/if}{/if}</p>
         </div>
       </div>
     {/if}

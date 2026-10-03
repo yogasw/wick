@@ -45,6 +45,7 @@ type TeamAgentItem struct {
 	ProjectID            string                `json:"project_id"`
 	Name                 string                `json:"name"`
 	Icon                 string                `json:"icon"`
+	Tagline              string                `json:"tagline"`
 	Description          string                `json:"description"`
 	SystemPrompt         string                `json:"system_prompt"`
 	Provider             string                `json:"provider"`
@@ -125,6 +126,7 @@ type teamAgentWriteReq struct {
 	Handle       *string `json:"handle"`
 	Name         *string `json:"name"`
 	Icon         *string `json:"icon"`
+	Tagline      *string `json:"tagline"`
 	Description  *string `json:"description"`
 	SystemPrompt *string `json:"system_prompt"`
 	Provider     *string `json:"provider"`
@@ -273,6 +275,20 @@ func validRunAs(c *tool.Ctx, v *string, current string) (string, bool) {
 	}
 	c.JSON(http.StatusBadRequest, map[string]string{"error": "run_as must be caller or owner"})
 	return "", false
+}
+
+// validTagline trims a tagline from the request; nil keeps current.
+// Writes the 400; false = stop.
+func validTagline(c *tool.Ctx, v *string, current string) (string, bool) {
+	if v == nil {
+		return current, true
+	}
+	t, err := team.NormalizeTagline(*v)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return "", false
+	}
+	return t, true
 }
 
 // teamAgentSaveStatus maps a row-level error to an HTTP status.
@@ -452,6 +468,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 	it := TeamAgentItem{
 		ID: p.ID, Handle: p.Handle, IsCaptain: p.IsCaptain, ProjectID: p.ProjectID,
 		Name:                 p.Handle,
+		Tagline:              p.Tagline,
 		Features:             team.EffectiveFeatures(p, reach),
 		Avatar:               team.DecodeAvatar(p.Avatar),
 		AllowedConnectors:    team.DecodeGrants(p.AllowedConnectors),
@@ -709,6 +726,10 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 	if !ok {
 		return
 	}
+	tagline, ok := validTagline(c, req.Tagline, "")
+	if !ok {
+		return
+	}
 	grants := "[]"
 	if req.AllowedConnectors != nil {
 		if !validateGrants(c, *req.AllowedConnectors) {
@@ -749,7 +770,7 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		av = *req.Avatar
 	}
 	p := &entity.AgentPersona{
-		OwnerUserID: actorID(c), Handle: handle, ProjectID: pid,
+		OwnerUserID: actorID(c), Handle: handle, ProjectID: pid, Tagline: tagline,
 		AllowedConnectors:    grants,
 		IncludeNewConnectors: req.IncludeNewConnectors != nil && *req.IncludeNewConnectors,
 		RunAs:                runAs,
@@ -824,6 +845,9 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 		p.IncludeNewConnectors = *req.IncludeNewConnectors
 	}
 	if p.RunAs, ok = validRunAs(c, req.RunAs, p.RunAs); !ok {
+		return
+	}
+	if p.Tagline, ok = validTagline(c, req.Tagline, p.Tagline); !ok {
 		return
 	}
 	if req.Disabled != nil {

@@ -67,3 +67,29 @@ func TestSubAgentOfTeam(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestWhoYouAreSelfTagline(t *testing.T) {
+	got := WhoYouAre(Member{Name: "Anton", Handle: "anton", Tagline: "The Critic"}, nil)
+	if !strings.Contains(got, "People know you as Anton, The Critic.") {
+		t.Fatalf("missing tagline line:\n%s", got)
+	}
+	if strings.Contains(WhoYouAre(Member{Name: "Anton", Handle: "anton"}, nil), "People know you") {
+		t.Fatal("no tagline must add no line")
+	}
+}
+
+func TestNormalizeTagline(t *testing.T) {
+	if got, err := NormalizeTagline("  Si   Kritikus "); err != nil || got != "Si Kritikus" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if got, err := NormalizeTagline(""); err != nil || got != "" {
+		t.Fatalf("empty: %q, %v", got, err)
+	}
+	// 32 multi-byte characters fit; 33 do not.
+	if _, err := NormalizeTagline(strings.Repeat("é", 32)); err != nil {
+		t.Fatalf("32 chars refused: %v", err)
+	}
+	if _, err := NormalizeTagline(strings.Repeat("a", 33)); err == nil {
+		t.Fatal("33 chars accepted")
+	}
+}

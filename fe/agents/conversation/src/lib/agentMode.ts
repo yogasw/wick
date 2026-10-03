@@ -69,6 +69,8 @@ export type AgentIdentity = {
   id?: string;
   handle?: string;
   name: string;
+  /** Short label shown beside the name ("The Critic"); unset = none. */
+  tagline?: string;
   description: string;
   /** Avatar spec; unset falls back to AgentAvatar's defaults. */
   shape?: string;

@@ -27,6 +27,8 @@
   let step = $state(1);
 
   let name = $state("");
+  let tagline = $state("");
+  let description = $state("");
   let handle = $state("");
   let handleTouched = $state(false);
   let systemPrompt = $state("");
@@ -38,7 +40,7 @@
   let projectId = $state("");
   // What was typed before an existing project replaced it, so going back
   // to "Project baru" restores it.
-  let typed: { name: string; systemPrompt: string } | null = null;
+  let typed: { name: string; description: string; systemPrompt: string } | null = null;
   let projectLoading = $state(false);
   let projects = $state<{ id: string; name: string }[]>([]);
 
@@ -76,11 +78,12 @@
      away. Whatever is in the fields at submit is sent and written to the
      project, so a name typed after the pick is the one the agent gets. */
   async function pickProject(id: string) {
-    if (id && !typed) typed = { name, systemPrompt };
+    if (id && !typed) typed = { name, description, systemPrompt };
     projectId = id;
     if (!id) {
       if (typed) {
         name = typed.name;
+        description = typed.description;
         systemPrompt = typed.systemPrompt;
       }
       typed = null;
@@ -91,6 +94,7 @@
       const p = await runApi(getProjectPersona(base, id));
       if (projectId !== id) return;
       name = p.name;
+      description = p.description;
       systemPrompt = p.system_prompt;
     } catch {
       // Unreadable project: keep what is there; the create will say why.
@@ -118,6 +122,8 @@
         createAgent(base, {
           handle,
           name: name.trim(),
+          tagline: tagline.trim(),
+          description: description.trim(),
           system_prompt: systemPrompt,
           avatar: { shape, color },
           ...(projectId ? { project_id: projectId } : {}),
@@ -213,6 +219,8 @@
         <label class={label} for="aw-name">Name</label>
         <!-- svelte-ignore a11y_autofocus -->
         <input id="aw-name" class={input} bind:value={name} placeholder="Log Hunter" autofocus />
+        <label class="{label} mt-3" for="aw-tagline">Tagline</label>
+        <input id="aw-tagline" class={input} bind:value={tagline} maxlength="32" placeholder="e.g. The Critic" />
       </div>
       <div>
         <label class={label} for="aw-handle">Handle</label>
@@ -231,6 +239,10 @@
           <p class="mt-1 text-xs text-neg-400">Lowercase letters, digits and "-", 2–31 characters, starting with a letter or digit.</p>
         {/if}
       </div>
+    </div>
+    <div>
+      <label class={label} for="aw-desc">Short description</label>
+      <input id="aw-desc" class={input} bind:value={description} placeholder="One line on what this agent is for" />
     </div>
     <div>
       <label class={label} for="aw-sys">System prompt (persona)</label>

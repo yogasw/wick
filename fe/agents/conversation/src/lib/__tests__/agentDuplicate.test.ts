@@ -51,6 +51,7 @@ describe("duplicateBody", () => {
     is_captain: true,
     project_id: "proj-1",
     name: "Ops",
+    tagline: "The Critic",
     description: "jaga ops",
     system_prompt: "kamu ops",
     provider: "claude/default",
@@ -69,6 +70,7 @@ describe("duplicateBody", () => {
     expect(duplicateBody(agent, ["ops"])).toEqual({
       handle: "ops-2",
       name: "Ops (copy)",
+      tagline: "The Critic",
       description: "jaga ops",
       system_prompt: "kamu ops",
       provider: "claude/default",

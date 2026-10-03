@@ -53,6 +53,7 @@ export function duplicateBody(a: AgentItem, taken: Iterable<string>): AgentWrite
   return {
     handle: duplicateHandle(a.handle, taken),
     name: `${a.name} (copy)`,
+    tagline: a.tagline ?? "",
     description: a.description,
     system_prompt: a.system_prompt,
     provider: a.provider,

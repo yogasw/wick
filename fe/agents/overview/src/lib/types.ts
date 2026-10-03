@@ -31,6 +31,7 @@ export interface TeamAgent {
   id: string;
   handle: string;
   name: string;
+  tagline?: string;
   is_captain: boolean;
   disabled: boolean;
   avatar: { shape: string; color: string } | null;

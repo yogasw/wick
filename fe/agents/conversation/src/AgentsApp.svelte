@@ -260,6 +260,7 @@
           id: selected.id,
           handle: selected.handle,
           name: selected.name,
+          tagline: selected.tagline,
           description: selected.description,
           shape: selected.avatar?.shape,
           color: selected.avatar?.color,
@@ -346,7 +347,7 @@
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-2">
               <span class="roster-name min-w-0 flex-1 truncate font-semibold text-black-900 dark:text-white-100">
-                {a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[9px] font-bold tracking-wider text-green-600 dark:text-green-400">★ CAPTAIN</span>{/if}
+                {a.name}{#if a.tagline}<span class="ml-1.5 font-normal text-black-700 dark:text-black-600">· {a.tagline}</span>{/if}{#if a.is_captain}<span class="ml-1.5 align-middle text-[9px] font-bold tracking-wider text-green-600 dark:text-green-400">★ CAPTAIN</span>{/if}
               </span>
               <span class="shrink-0 text-xs text-black-700">{rosterTime(a.last_active)}</span>
             </span>
@@ -379,7 +380,7 @@
         <AgentAvatar shape={selected.avatar?.shape} color={selected.avatar?.color} size={36} working={isWorking(selected.status)} tool={!!selected.current_action} asleep={selected.disabled} hatching={hatching.includes(selected.id)} />
         <div class="min-w-0 flex-1">
           <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">
-            {selected.name}
+            {selected.name}{#if selected.tagline}<span class="font-normal text-black-700 dark:text-black-600"> · {selected.tagline}</span>{/if}
           </div>
           <div class="truncate text-xs text-black-800 dark:text-black-600">
             {#if isWorking(selected.status)}

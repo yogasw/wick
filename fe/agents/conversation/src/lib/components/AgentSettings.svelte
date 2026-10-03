@@ -34,14 +34,14 @@
   let { base, agent, agents, tab, onTab, onClose, onSaved, onDeleted }: Props = $props();
 
   type Draft = {
-    handle: string; name: string; description: string; system_prompt: string;
+    handle: string; name: string; tagline: string; description: string; system_prompt: string;
     pick: string; features: AgentFeatures; avatar: { shape: string; color: string };
     project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; run_as: "caller" | "owner";
     disabled: boolean; allow_provider_switch: boolean;
   };
   function draftOf(a: AgentItem): Draft {
     return {
-      handle: a.handle, name: a.name, description: a.description,
+      handle: a.handle, name: a.name, tagline: a.tagline ?? "", description: a.description,
       system_prompt: a.system_prompt, pick: joinPick(a.provider, a.model),
       features: { ...a.features }, avatar: { ...a.avatar }, project_id: a.project_id,
       grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
@@ -152,6 +152,7 @@
     // "" would be a 400: an agent always has a project.
     if (d.project_id && d.project_id !== saved.project_id) p.project_id = d.project_id;
     if (d.name !== saved.name) p.name = d.name;
+    if (d.tagline !== (saved.tagline ?? "")) p.tagline = d.tagline;
     if (d.description !== saved.description) p.description = d.description;
     if (d.system_prompt !== saved.system_prompt) p.system_prompt = d.system_prompt;
     if (d.pick !== joinPick(saved.provider, saved.model)) {
@@ -173,7 +174,7 @@
   const dirty = $derived(Object.keys(patch).length > 0);
   const handleOk = $derived(HANDLE_RE.test(draft.handle));
 
-  const TEXT_KEYS = ["handle", "name", "description", "system_prompt"];
+  const TEXT_KEYS = ["handle", "name", "tagline", "description", "system_prompt"];
   let timer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
     const key = JSON.stringify(patch);
@@ -259,7 +260,7 @@
 
 <DrawerHeader
   title="Settings"
-  subtitle={`${agent.name} · @${agent.handle} — chat stays behind`}
+  subtitle={`${agent.name}${agent.tagline ? ` · ${agent.tagline}` : ""} · @${agent.handle} — chat stays behind`}
   avatar={draft.avatar}
   bordered={false}
   {onClose}
@@ -296,6 +297,8 @@
       <div>
         <label class={label} for="as-name">Name</label>
         <input id="as-name" class={input} bind:value={draft.name} />
+        <label class="{label} mt-3" for="as-tagline">Tagline</label>
+        <input id="as-tagline" class={input} bind:value={draft.tagline} maxlength="32" placeholder="e.g. The Critic" />
       </div>
       <div>
         <label class={label} for="as-handle">Handle</label>

@@ -80,10 +80,11 @@ func (s *Service) teamPrompt(ctx context.Context, p entity.AgentPersona) string 
 	return systemprompt.ImmutableTeam() + "\n\n" + WhoYouAre(s.memberOf(p), others)
 }
 
-// memberOf reads an agent's name and description off its project; a
+// memberOf reads an agent's name and description off its project (the
+// tagline off its row); a
 // missing project leaves the handle as the name.
 func (s *Service) memberOf(p entity.AgentPersona) Member {
-	m := Member{Name: p.Handle, Handle: p.Handle, IsCaptain: p.IsCaptain}
+	m := Member{Name: p.Handle, Handle: p.Handle, Tagline: p.Tagline, IsCaptain: p.IsCaptain}
 	if p.ProjectID != "" {
 		if proj, err := project.Load(s.layout, p.ProjectID); err == nil {
 			if proj.Meta.Name != "" {

@@ -23,6 +23,8 @@ export type AgentItem = {
   is_captain: boolean;
   project_id: string;
   name: string;
+  /** Short label people know the agent by ("The Critic"); "" = none. */
+  tagline?: string;
   icon: string;
   description: string;
   system_prompt: string;
@@ -60,6 +62,7 @@ export type AgentItem = {
 export type AgentWrite = Partial<{
   handle: string;
   name: string;
+  tagline: string;
   icon: string;
   description: string;
   system_prompt: string;

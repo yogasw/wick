@@ -3,7 +3,22 @@ package team
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
+
+// MaxTagline is the longest tagline, in characters: a label that sits
+// beside a name, not a sentence.
+const MaxTagline = 32
+
+// NormalizeTagline trims a tagline and refuses one longer than
+// MaxTagline. "" is valid (no tagline).
+func NormalizeTagline(s string) (string, error) {
+	s = strings.Join(strings.Fields(s), " ")
+	if utf8.RuneCountInString(s) > MaxTagline {
+		return "", fmt.Errorf("tagline must be at most %d characters", MaxTagline)
+	}
+	return s, nil
+}
 
 // maxTeamListed bounds the Captain's "Your Team" line so a big roster
 // does not grow every spawn's prompt; the rest is counted, not named.
@@ -28,6 +43,9 @@ func WhoYouAre(self Member, team []Member) string {
 	fmt.Fprintf(&b, "Your name is %s. People and other agents call you @%s (that is how you are mentioned).", self.Name, self.Handle)
 	if d := strings.TrimSpace(self.Description); d != "" {
 		fmt.Fprintf(&b, " Your role: %s.", strings.TrimRight(d, ". "))
+	}
+	if t := strings.TrimSpace(self.Tagline); t != "" {
+		fmt.Fprintf(&b, " People know you as %s, %s.", self.Name, strings.TrimRight(t, ". "))
 	}
 	if self.IsCaptain {
 		b.WriteString(" You are the Captain — the owner's main agent.")
