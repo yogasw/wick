@@ -18,6 +18,10 @@ describe("returnHref", () => {
     expect(returnHref("//evil.example/x", "", O, B)).toBe("/tools/agents/sessions");
     expect(returnHref("https://evil.example/x", "", O, B)).toBe("/tools/agents/sessions");
   });
+  it("rejects a backslash after the leading slash (browsers treat /\\ like //)", () => {
+    expect(returnHref("/\\evil.example/x", "", O, B)).toBe("/tools/agents/sessions");
+    expect(returnHref("/\\evil.example", `${O}/tools/agents/connectors`, O, B)).toBe("/tools/agents/connectors");
+  });
   it("never points back into the Team app", () => {
     expect(returnHref("/tools/agents/team/ops", `${O}/tools/agents/team?panel=new`, O, B)).toBe("/tools/agents/sessions");
     expect(returnHref("/tools/agents/team", "", O, B)).toBe("/tools/agents/sessions");
