@@ -6,6 +6,9 @@ describe("system event registry", () => {
     expect(getSystemEvent("agent_created").icon).toBe("user-plus");
     expect(getSystemEvent("hop_limit").tone).toBe("warn");
     expect(isSystemEventKind("access_changed")).toBe(true);
+    expect(isSystemEventKind("persona_changed")).toBe(true);
+    expect(isSystemEventKind("access_change_declined")).toBe(true);
+    expect(getSystemEvent("access_change_declined").tone).toBe("warn");
     expect(isSystemEventKind("input_request")).toBe(false);
     expect(systemEventParts({ kind: "nope", text: "raw words" })).toEqual(["raw words"]);
   });

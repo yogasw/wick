@@ -51,6 +51,11 @@ export type AgentItem = {
   /** Whether the chat may pick another provider/model (server applies
       the default: Captain on, others off). */
   allow_provider_switch?: boolean;
+  /** "Manage other agents" (agents.* ops), default applied: on for the
+      Captain, off for the rest. Older servers omit it. */
+  manage_agents?: boolean;
+  /** What the Captain may do to this agent. Older servers omit it. */
+  captain_can?: CaptainCan;
   main_session_id: string;
   last_active: string | null;
   last_preview: string;
@@ -95,7 +100,24 @@ export type AgentWrite = Partial<{
   mention_from: MentionFrom;
   mention_allow: string[];
   max_hops: number;
+  manage_agents: boolean;
+  captain_can: CaptainCan;
 }>;
+
+/** team.CaptainCan: what the Captain may do to one agent. Access is only
+    ever a proposal the owner approves, even when on. */
+export type CaptainCan = { persona: boolean; access: boolean; routines: boolean };
+
+/** One row of Settings › Access › History. */
+export type AccessHistoryItem = {
+  id: string;
+  /** A person's name, or "@handle" for an agent. */
+  actor: string;
+  status: "applied" | "declined" | "pending" | string;
+  diff: string[];
+  decided_by?: string;
+  at: string;
+};
 
 export type MentionFrom = "all" | "captain" | "list" | "off";
 
@@ -135,6 +157,10 @@ export const createAgent = (base: string, body: AgentWrite) =>
 
 export const updateAgent = (base: string, id: string, body: AgentWrite) =>
   apiPatchE<AgentItem>(`${base}/api/team/agents/${enc(id)}`, body);
+
+/** The agent's latest 20 access changes, newest first. */
+export const getAccessHistory = (base: string, id: string) =>
+  apiGetE<{ items: AccessHistoryItem[] | null }>(`${base}/api/team/agents/${enc(id)}/access-history`);
 
 /** chats="delete" takes the agent's own project with it (chats, files,
     memory); "keep" leaves it as an ordinary project in the sidebar. */

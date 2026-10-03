@@ -31,3 +31,19 @@ describe("approvalView", () => {
     expect(approvalView("declined", { approval_id: "x", state: "block" })).toMatchObject({ outcome: "declined", allowed: false });
   });
 });
+
+describe("approvalView: Captain access change", () => {
+  it("carries target and diff, no command", () => {
+    const v = approvalView("@captain wants to change access of @worker", { approval_id: "ap-9", state: "pending", type: "access_change", agent: "captain", target: "worker", changes: "+Notion (read)\n-Slack", reason: "daily recap" });
+    expect(v.access).toEqual({ target: "worker", changes: ["+Notion (read)", "-Slack"], reason: "daily recap" });
+    expect(v.cmd).toBe("");
+    expect(v.pending).toBe(true);
+  });
+  it("settles to applied / declined", () => {
+    expect(approvalView("x", { approval_id: "ap-9", state: "approve_once", type: "access_change" }).outcome).toBe("applied");
+    expect(approvalView("x", { approval_id: "ap-9", state: "block", type: "access_change" }).outcome).toBe("declined");
+  });
+  it("leaves gate cards alone", () => {
+    expect(approvalView("Bash: ls", { approval_id: "a", state: "pending", tool: "Bash", cmd: "ls" }).access).toBeUndefined();
+  });
+});

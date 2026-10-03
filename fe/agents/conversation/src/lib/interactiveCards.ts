@@ -41,6 +41,9 @@ export type ApprovalView = {
   outcome: string;
   /** Settled: whether the command went ahead. */
   allowed: boolean;
+  /** An access change a Captain proposed (agents.set_access): no command,
+      a target agent and the diff lines; Accept / Decline only. */
+  access?: { target: string; changes: string[]; reason: string };
 };
 
 const OUTCOME: Record<string, string> = {
@@ -63,13 +66,17 @@ export function approvalView(text: string, extras: Record<string, string> | unde
     const m = /^([^:]+):\s*(.*)$/s.exec(text);
     if (m) { tool = m[1]; cmd = m[2]; }
   }
+  const access = x.type === "access_change";
   return {
     id: x.approval_id ?? "",
     pending,
-    tool,
-    cmd,
+    tool: access ? "" : tool,
+    cmd: access ? "" : cmd,
     agent: x.agent ?? "",
-    outcome: pending ? "" : (OUTCOME[state] ?? text ?? state),
+    outcome: pending ? "" : access ? (state.startsWith("approve") ? "applied" : "declined") : (OUTCOME[state] ?? text ?? state),
     allowed: state.startsWith("approve"),
+    ...(access
+      ? { access: { target: x.target ?? "", changes: (x.changes ?? "").split("\n").filter(Boolean), reason: x.reason ?? "" } }
+      : {}),
   };
 }

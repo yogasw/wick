@@ -26,15 +26,31 @@
     <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true">
       <path d="M6 1 10.5 2.8v3c0 2.4-1.8 4.3-4.5 5.2C3.3 10.1 1.5 8.2 1.5 5.8v-3z"></path>
     </svg>
-    <span>{v.agent ? `@${v.agent} wants to run` : "Approval needed"}{v.tool ? ` · ${v.tool}` : ""}</span>
+    {#if v.access}
+      <span data-testid="approval-access-title">{v.agent ? `@${v.agent}` : "The Captain"} wants to change access of @{v.access.target}</span>
+    {:else}
+      <span>{v.agent ? `@${v.agent} wants to run` : "Approval needed"}{v.tool ? ` · ${v.tool}` : ""}</span>
+    {/if}
   </div>
+  {#if v.access}
+    <ul class="space-y-0.5 rounded-md bg-white-200 px-2 py-1 font-mono text-[11px] dark:bg-navy-900" data-testid="approval-access-diff">
+      {#each v.access.changes as ch}
+        <li class={ch.startsWith("-") ? "text-neg-400" : ch.startsWith("+") ? "text-green-700 dark:text-green-300" : "text-black-900 dark:text-white-100"}>{ch.startsWith("+") || ch.startsWith("-") ? ch : "~ " + ch}</li>
+      {/each}
+    </ul>
+    {#if v.access.reason}
+      <p class="text-[11px] text-black-800 dark:text-black-600">{v.access.reason}</p>
+    {/if}
+  {/if}
   {#if v.cmd}
     <code class="block whitespace-pre-wrap break-all rounded-md bg-white-200 dark:bg-navy-900 px-2 py-1 font-mono text-[11px] text-black-900 dark:text-white-100">{v.cmd}</code>
   {/if}
   {#if v.pending}
     <div class="flex flex-wrap gap-1.5 pt-0.5">
       <button type="button" data-testid="approval-accept" disabled={busy || !onDecide} onclick={() => decide("accept")} class="rounded-lg bg-green-500 px-3 py-1 text-xs font-medium text-white-100 hover:bg-green-600 disabled:opacity-50">Accept</button>
+      {#if !v.access}
       <button type="button" data-testid="approval-accept-session" disabled={busy || !onDecide} onclick={() => decide("accept_for_session")} class="rounded-lg border border-white-300 dark:border-navy-600 px-3 py-1 text-xs font-medium text-black-800 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700 disabled:opacity-50">Accept for this agent</button>
+      {/if}
       <button type="button" data-testid="approval-decline" disabled={busy || !onDecide} onclick={() => decide("decline")} class="rounded-lg border border-neg-400/40 px-3 py-1 text-xs font-medium text-neg-400 hover:bg-neg-400/10 disabled:opacity-50">Decline</button>
     </div>
   {:else}

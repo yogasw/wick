@@ -64,6 +64,8 @@ export function systemEventParts(turn: SystemEventTurn, ctx: SystemEventCtx = {}
 
 registerSystemEvent("agent_created", { icon: "user-plus" });
 registerSystemEvent("access_changed", { icon: "key" });
+registerSystemEvent("access_change_declined", { icon: "ban", tone: "warn" });
+registerSystemEvent("persona_changed", { icon: "info" });
 registerSystemEvent("hop_limit", { icon: "stop", tone: "warn" });
 registerSystemEvent("mention_refused", { icon: "ban", tone: "warn" });
 registerSystemEvent("group_member_added", { icon: "user-plus" });

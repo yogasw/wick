@@ -1323,3 +1323,32 @@ describe("ThreadMessage - approval_request", () => {
     expect(screen.queryByTestId("approval-accept")).toBeNull();
   });
 });
+
+describe("ThreadMessage - Captain access change card", () => {
+  const extras = { approval_id: "ap-9", state: "pending", type: "access_change", agent: "captain", target: "worker", target_id: "a1", changes: "+Notion (read)\n-Slack\nLoki: read → all" };
+  test("pending shows who, whom and the diff, Accept / Decline only", async () => {
+    const onApprovalDecide = vi.fn();
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "system", kind: "approval_request", text: "@captain wants to change access of @worker", extras }), onApprovalDecide } });
+    expect(screen.getByTestId("approval-access-title").textContent).toContain("@captain wants to change access of @worker");
+    const diff = screen.getByTestId("approval-access-diff").textContent ?? "";
+    expect(diff).toContain("+Notion (read)");
+    expect(diff).toContain("-Slack");
+    expect(diff).toContain("~ Loki: read → all");
+    expect(screen.queryByTestId("approval-accept-session")).toBeNull();
+    await fireEvent.click(screen.getByTestId("approval-accept"));
+    expect(onApprovalDecide).toHaveBeenCalledWith("ap-9", "accept");
+  });
+  test("settled reads applied / declined", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "system", kind: "approval_request", text: "declined · by Yoga", extras: { ...extras, state: "block" } }) } });
+    expect(screen.getByTestId("approval-pill").textContent).toContain("declined");
+  });
+});
+
+describe("ThreadMessage - Captain chips", () => {
+  test("persona_changed and access_change_declined render as chips", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "system", kind: "persona_changed", text: "Persona of @worker changed: system prompt · by @captain", extras: { handle: "worker" } }) } });
+    expect(screen.getByText(/Persona of @worker changed/)).toBeDefined();
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "system", kind: "access_change_declined", text: "Access change for @worker declined · proposed by @captain · declined by Yoga", extras: { handle: "worker" } }) } });
+    expect(screen.getByText(/Access change for @worker declined/)).toBeDefined();
+  });
+});

@@ -23,7 +23,9 @@
   import { deleteAlert, canDeleteAgent, type AgentProjectPreview } from "../agentDelete.js";
   import { PERSONA_KIND, personaInput, type PersonaDraft, type PersonaTarget } from "../personaGen.js";
   import { MENTION_FROM_OPTIONS, MAX_HOPS_MIN, MAX_HOPS_MAX, clampHops, hopsNote, mentionFromOf } from "../mentionSettings.js";
-  import type { MentionFrom } from "../api/team.js";
+  import type { MentionFrom, CaptainCan } from "../api/team.js";
+  import { CAPTAIN_CAN_OPTIONS, CAPTAIN_ACCESS_NOTE, MANAGE_AGENTS_NOTE, captainCanOf } from "../captainSettings.js";
+  import AccessHistory from "./AccessHistory.svelte";
 
   type Props = {
     base: string;
@@ -43,6 +45,7 @@
     project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; run_as: "caller" | "owner";
     disabled: boolean; allow_provider_switch: boolean; use_global_prompt: boolean;
     mention_from: MentionFrom; mention_allow: string[]; max_hops: number;
+    manage_agents: boolean; captain_can: CaptainCan;
   };
   function draftOf(a: AgentItem): Draft {
     return {
@@ -53,6 +56,7 @@
       include_new_connectors: a.include_new_connectors, run_as: a.run_as ?? "caller",
       disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, use_global_prompt: !!a.use_global_prompt,
       mention_from: mentionFromOf(a.mention_from), mention_allow: [...(a.mention_allow ?? [])], max_hops: clampHops(a.max_hops),
+      manage_agents: a.manage_agents ?? a.is_captain, captain_can: captainCanOf(a.captain_can),
     };
   }
   let draft = $state<Draft>(untrack(() => draftOf(agent)));
@@ -203,6 +207,8 @@
     if (d.mention_from !== mentionFromOf(saved.mention_from)) p.mention_from = d.mention_from;
     if (JSON.stringify(d.mention_allow) !== JSON.stringify(saved.mention_allow ?? [])) p.mention_allow = [...d.mention_allow];
     if (clampHops(d.max_hops) !== clampHops(saved.max_hops)) p.max_hops = clampHops(d.max_hops);
+    if (d.manage_agents !== (saved.manage_agents ?? saved.is_captain)) p.manage_agents = d.manage_agents;
+    if (JSON.stringify(d.captain_can) !== JSON.stringify(captainCanOf(saved.captain_can))) p.captain_can = { ...d.captain_can };
     return p;
   });
   const dirty = $derived(Object.keys(patch).length > 0);
@@ -285,6 +291,7 @@
     { id: "access", label: "Access" },
     { id: "tools", label: "Tools & features" },
     { id: "mention", label: "Mention" },
+    { id: "captain", label: "Captain" },
     { id: "avatar", label: "Avatar" },
     { id: "advanced", label: "Advanced" },
   ];
@@ -412,6 +419,9 @@
       errors={grantErrors}
       isCaptain={agent.is_captain}
     />
+    {#key agent.id}
+      <AccessHistory {base} agentId={agent.id} />
+    {/key}
   {:else if tab === "tools"}
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Tools &amp; features</p>
@@ -571,6 +581,34 @@
       />
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">{hopsNote(draft.max_hops)}</p>
     </div>
+  {:else if tab === "captain"}
+    {#if agent.is_captain}
+      <div class="space-y-2" data-testid="captain-manage">
+        <p class="text-sm font-semibold text-black-900 dark:text-white-100">Manage other agents</p>
+        <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">
+          <span>
+            <span class="block text-sm font-medium text-black-900 dark:text-white-100">Manage other agents</span>
+            <span class="block text-xs text-black-800 dark:text-black-600">{MANAGE_AGENTS_NOTE}</span>
+          </span>
+          <Toggle checked={draft.manage_agents} onChange={(v) => (draft.manage_agents = v)} label="Manage other agents" />
+        </div>
+      </div>
+    {:else}
+      <div class="space-y-2" data-testid="captain-can">
+        <p class="text-sm font-semibold text-black-900 dark:text-white-100">Captain can</p>
+        <p class="text-xs text-black-800 dark:text-black-600">What your Captain may do to @{agent.handle}.</p>
+        {#each CAPTAIN_CAN_OPTIONS as o (o.key)}
+          <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600" data-testid={`captain-can-${o.key}`}>
+            <span>
+              <span class="block text-sm font-medium text-black-900 dark:text-white-100">{o.label}</span>
+              <span class="block text-xs text-black-800 dark:text-black-600">{o.hint}</span>
+            </span>
+            <Toggle checked={draft.captain_can[o.key]} onChange={(v) => (draft.captain_can = { ...draft.captain_can, [o.key]: v })} label={o.label} />
+          </div>
+        {/each}
+        <p class="text-xs text-black-800 dark:text-black-600">{CAPTAIN_ACCESS_NOTE}</p>
+      </div>
+    {/if}
   {:else if tab === "advanced"}
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Advanced</p>
