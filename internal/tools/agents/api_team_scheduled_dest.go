@@ -26,6 +26,7 @@ import (
 const (
 	scheduleDestMain     = "main"
 	scheduleDestTelegram = "telegram"
+	scheduleDestSlack    = "slack"
 )
 
 // telegramChatVM is one Telegram chat a schedule can post into.
@@ -69,8 +70,10 @@ func (e errScheduleDest) Error() string { return e.msg }
 
 // scheduleDestination resolves a drawer destination to the session the
 // schedule fires into. main=true on an empty or "main" destination, where
-// the caller supplies (or creates) the main chat.
-func scheduleDestination(p entity.AgentPersona, dest, tgSession string) (sessionID string, main bool, err error) {
+// the caller supplies (or creates) the main chat. A "slack" destination is
+// only checked here; its session is the thread openSlackScheduleThread
+// opens once the rest of the request is valid.
+func scheduleDestination(p entity.AgentPersona, dest, tgSession, slackChannel string) (sessionID string, main bool, err error) {
 	switch dest {
 	case "", scheduleDestMain:
 		return "", true, nil
@@ -91,8 +94,16 @@ func scheduleDestination(p entity.AgentPersona, dest, tgSession string) (session
 			}
 		}
 		return "", false, errScheduleDest{"pick one of the agent's Telegram chats"}
+	case scheduleDestSlack:
+		if _, ok := agentSlackScheduleTarget(p); !ok {
+			return "", false, errScheduleDest{"the agent has no active Slack connection"}
+		}
+		if _, ok := normalizeSlackChannel(slackChannel); !ok {
+			return "", false, errScheduleDest{"pick a Slack channel, or paste its id (C0123ABCD) or link"}
+		}
+		return "", false, nil
 	default:
-		return "", false, errScheduleDest{"destination must be main or telegram"}
+		return "", false, errScheduleDest{"destination must be main, telegram or slack"}
 	}
 }
 
@@ -186,6 +197,7 @@ func editAgentSchedule(c *tool.Ctx, p entity.AgentPersona, m *entity.ScheduledMe
 	var body struct {
 		Destination     *string `json:"destination"`
 		TelegramSession string  `json:"telegram_session"`
+		SlackChannel    string  `json:"slack_channel"`
 	}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &body); err != nil {
@@ -198,9 +210,24 @@ func editAgentSchedule(c *tool.Ctx, p entity.AgentPersona, m *entity.ScheduledMe
 		return err
 	}
 	if body.Destination != nil {
-		target, toMain, err := scheduleDestination(p, *body.Destination, body.TelegramSession)
+		target, toMain, err := scheduleDestination(p, *body.Destination, body.TelegramSession, body.SlackChannel)
 		if err != nil {
 			return err
+		}
+		if *body.Destination == scheduleDestSlack {
+			// The same channel keeps its thread; another one opens a new
+			// thread there.
+			want, _ := normalizeSlackChannel(body.SlackChannel)
+			target = m.SessionID
+			if scheduleSlackChannelOf(m.SessionID, p.ID) != want {
+				msg := m.Message
+				if patch.Message != nil {
+					msg = *patch.Message
+				}
+				if target, err = openSlackScheduleThread(c, p, want, msg); err != nil {
+					return err
+				}
+			}
 		}
 		if toMain {
 			if s, ok := mainSessionOf(p.OwnerUserID, p.ID); ok {

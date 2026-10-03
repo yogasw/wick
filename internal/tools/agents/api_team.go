@@ -1298,6 +1298,12 @@ func apiTeamAgentChat(c *tool.Ctx) {
 // createTeamAgentSession mirrors startNewSession minus the first message:
 // the Agents app opens the chat empty and the user types into it.
 func createTeamAgentSession(c *tool.Ctx, p entity.AgentPersona, main bool) (string, error) {
+	return createTeamAgentSessionID(c, p, main, uuid.New().String(), session.OriginUI)
+}
+
+// createTeamAgentSessionID is createTeamAgentSession under a chosen id and
+// origin — a Slack thread a schedule answers into is keyed by its thread.
+func createTeamAgentSessionID(c *tool.Ctx, p entity.AgentPersona, main bool, id string, origin session.Origin) (string, error) {
 	projectID := p.ProjectID
 	if projectID != "" {
 		if _, ok := globalMgr.Registry().Project(projectID); !ok {
@@ -1322,11 +1328,10 @@ func createTeamAgentSession(c *tool.Ctx, p entity.AgentPersona, main bool) (stri
 			}
 		}
 	}
-	id := uuid.New().String()
 	if _, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
 		ID:        id,
 		ProjectID: projectID,
-		Origin:    session.OriginUI,
+		Origin:    origin,
 		Preset:    presetName,
 		UserID:    actorID(c),
 		AgentID:   p.ID,

@@ -54,11 +54,13 @@ type agentScheduleVM struct {
 	Destination string `json:"destination"`
 	// TelegramSession is the chat a "telegram" destination posts into.
 	TelegramSession string `json:"telegram_session,omitempty"`
-	HeldByAgent     bool   `json:"held_by_agent,omitempty"`
+	// SlackChannel is the channel a "slack" destination's thread is in.
+	SlackChannel string `json:"slack_channel,omitempty"`
+	HeldByAgent  bool   `json:"held_by_agent,omitempty"`
 }
 
 func agentScheduleToVM(m entity.ScheduledMessage, mainID, agentID string) agentScheduleVM {
-	dest, tg := "chat", ""
+	dest, tg, sl := "chat", "", ""
 	switch {
 	case m.Mode() != entity.ScheduledSessionExisting:
 		dest = "new_chat"
@@ -66,9 +68,13 @@ func agentScheduleToVM(m entity.ScheduledMessage, mainID, agentID string) agentS
 		dest = scheduleDestMain
 	case strings.HasPrefix(m.SessionID, agentTelegramSessionPrefix(agentID)):
 		dest, tg = scheduleDestTelegram, m.SessionID
+	default:
+		if sl = scheduleSlackChannelOf(m.SessionID, agentID); sl != "" {
+			dest = scheduleDestSlack
+		}
 	}
 	return agentScheduleVM{scheduleVM: scheduleToVM(m), Title: scheduledTitle(m.Message), Destination: dest,
-		TelegramSession: tg, HeldByAgent: m.HeldByAgent}
+		TelegramSession: tg, SlackChannel: sl, HeldByAgent: m.HeldByAgent}
 }
 
 // scheduledTitle is the first line of the message, clipped — schedules
@@ -127,6 +133,17 @@ func apiTeamAgentScheduledList(c *tool.Ctx) {
 			tgChats = ch
 		}
 	}
+	// The Slack option exists while the agent's bot (Custom) or the shared
+	// app it rides (Instant) can post.
+	slackChannels := []slackChannelVM{}
+	slackMode := ""
+	t, slackReady := agentSlackScheduleTarget(p)
+	if slackReady {
+		slackMode = t.mode
+		if ch := agentSlackChannels(p, t); ch != nil {
+			slackChannels = ch
+		}
+	}
 	c.JSON(http.StatusOK, map[string]any{
 		"telegram_connected": tgReady,
 		"telegram_chats":     tgChats,
@@ -136,13 +153,15 @@ func apiTeamAgentScheduledList(c *tool.Ctx) {
 		"server_timezone":    schedule.ServerZoneLabel(time.Now()),
 		"main_session_id":    mainID,
 		"slack_online":       slackOnline,
+		"slack_ready":        slackReady,
+		"slack_mode":         slackMode,
+		"slack_channels":     slackChannels,
 	})
 }
 
 // apiTeamAgentScheduledCreate handles POST /api/team/agents/{id}/scheduled:
-// a schedule into the agent's main chat (created on first use) or one of
-// its Telegram bot's chats. Slack as a destination is not offered yet; the
-// drawer shows it as coming soon.
+// a schedule into the agent's main chat (created on first use), one of its
+// Telegram bot's chats, or a new thread its Slack bot opens in a channel.
 func apiTeamAgentScheduledCreate(c *tool.Ctx) {
 	p, ok := loadScheduledAgent(c)
 	if !ok {
@@ -156,12 +175,14 @@ func apiTeamAgentScheduledCreate(c *tool.Ctx) {
 		Destination string `json:"destination"`
 		// TelegramSession picks the chat of a "telegram" destination.
 		TelegramSession string `json:"telegram_session"`
+		// SlackChannel is the channel of a "slack" destination.
+		SlackChannel string `json:"slack_channel"`
 	}
 	if err := c.BindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
-	target, toMain, err := scheduleDestination(p, body.Destination, body.TelegramSession)
+	target, toMain, err := scheduleDestination(p, body.Destination, body.TelegramSession, body.SlackChannel)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -191,6 +212,13 @@ func apiTeamAgentScheduledCreate(c *tool.Ctx) {
 	}
 	if toMain {
 		target = mainID
+	}
+	// The thread is opened last, once nothing else can refuse the request.
+	if body.Destination == scheduleDestSlack {
+		if target, err = openSlackScheduleThread(c, p, body.SlackChannel, message); err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 	row := &entity.ScheduledMessage{
 		SessionID:       target,

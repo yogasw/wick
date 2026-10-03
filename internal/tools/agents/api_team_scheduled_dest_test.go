@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/entity"
@@ -93,5 +95,47 @@ func TestTeamScheduledEditAndRuns(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if w.Code != http.StatusOK || len(resp.Items) != 2 || resp.Items[0].TurnID != "f2" || resp.Items[0].Status != "running" || resp.Items[1].Status != "ok" {
 		t.Fatalf("runs = %d %s", w.Code, w.Body)
+	}
+}
+
+// A schedule aimed at a Slack thread session reads back as a "slack"
+// destination with its channel; without a Slack connection the
+// destination is refused before anything is posted.
+func TestTeamScheduledSlackDestination(t *testing.T) {
+	withTeamWorld(t)
+	withScheduleStore(t)
+	seedTeamProject(t, "p1", "u1")
+	a := seedTeamAgent(t, "u1", "alpha", "p1")
+	seedAgentSession(t, a, "main-a", true)
+	thread := agentSlackSessionPrefix(a.ID) + "1700000000.000200"
+	seedAgentSession(t, a, thread, false)
+	sess, err := session.Load(globalLayout, thread)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Meta.ChannelRef = &session.ChannelRef{Channel: "slack", ChatID: "C0123ABCD", ThreadID: "1700000000.000200"}
+	if err := session.SaveMeta(globalLayout, thread, sess.Meta); err != nil {
+		t.Fatal(err)
+	}
+	_ = globalMgr.RefreshSession(thread)
+
+	vm := agentScheduleToVM(*seedSchedule(t, thread, true), "main-a", a.ID)
+	if vm.Destination != scheduleDestSlack || vm.SlackChannel != "C0123ABCD" {
+		t.Errorf("vm = %+v", vm)
+	}
+	if got := scheduleSlackChannelOf(thread, "someone-else"); got != "" {
+		t.Errorf("another agent's thread = %q", got)
+	}
+	if got := scheduleSlackChannelOf("main-a", a.ID); got != "" {
+		t.Errorf("main chat = %q", got)
+	}
+	if chs := agentSlackChannels(a, agentSlackTarget{bound: []string{"C0999ZZZZ", "C0123ABCD", "#general"}}); len(chs) != 2 || chs[0].ID != "C0123ABCD" || chs[1].ID != "C0999ZZZZ" {
+		t.Errorf("channels = %+v", chs)
+	}
+	if _, _, err := scheduleDestination(a, scheduleDestSlack, "", "C0123ABCD"); err == nil || !strings.Contains(err.Error(), "no active Slack connection") {
+		t.Errorf("slack without a connection = %v", err)
+	}
+	if _, _, err := scheduleDestination(a, "email", "", ""); err == nil {
+		t.Error("unknown destination accepted")
 	}
 }
