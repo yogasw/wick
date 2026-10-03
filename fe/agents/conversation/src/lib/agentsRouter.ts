@@ -13,8 +13,18 @@ import { writable, type Readable } from "svelte/store";
      /team/<handle>?panel=sessions       "Percakapan lain" drawer
      /team?panel=new                     the + Agent wizard */
 
-export type SettingsTab = "persona" | "access" | "features" | "avatar";
-export const SETTINGS_TABS: SettingsTab[] = ["persona", "access", "features", "avatar"];
+export type SettingsTab = "persona" | "access" | "tools" | "avatar" | "advanced";
+export const SETTINGS_TABS: SettingsTab[] = ["persona", "access", "tools", "avatar", "advanced"];
+
+/** Old tab names that still open the right tab from a bookmark. */
+const TAB_ALIASES: Record<string, SettingsTab> = { features: "tools" };
+
+/** settingsTabOf resolves a `tab=` value; unknown → persona. */
+export function settingsTabOf(t: string | null): SettingsTab {
+  if (!t) return "persona";
+  if ((SETTINGS_TABS as string[]).includes(t)) return t as SettingsTab;
+  return TAB_ALIASES[t] ?? "persona";
+}
 
 export type AgentsPanel =
   | { kind: "settings"; tab: SettingsTab }
@@ -53,8 +63,7 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
   let panel: AgentsPanel | null = null;
   switch (q.get("panel")) {
     case "settings": {
-      const t = q.get("tab") as SettingsTab | null;
-      panel = { kind: "settings", tab: t && SETTINGS_TABS.includes(t) ? t : "persona" };
+      panel = { kind: "settings", tab: settingsTabOf(q.get("tab")) };
       break;
     }
     case "sessions":

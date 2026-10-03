@@ -186,7 +186,7 @@
   }
 
   const menuItems = $derived([
-    { label: "Settings", hint: "persona, akses, avatar", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
+    { label: "Settings", hint: "persona, akses, tools, lanjutan", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
     { label: "Percakapan lain", hint: "chat utama dan riwayat", onclick: () => openPanel({ kind: "sessions" }) },
     { label: "Chat baru", hint: "mulai dari kosong", onclick: newChat },
     { label: "Duplikat agent", hint: "salinan persona & akses, @handle baru", divider: true, onclick: duplicate },

@@ -8,7 +8,7 @@
   import { toastOk } from "@wick-fe/common-stores";
   import DrawerHeader from "./DrawerHeader.svelte";
   import AgentAvatar from "./AgentAvatar.svelte";
-  import { getProviderOptions } from "../api/options.js";
+  import { getProviderOptions, getProjectOptions } from "../api/options.js";
   import {
     updateAgent, deleteAgent, listAgentConnectors, runApi,
     type AgentItem, type AgentWrite, type ConnectorGrant, type AgentConnector,
@@ -34,14 +34,14 @@
   type Draft = {
     handle: string; name: string; description: string; system_prompt: string;
     pick: string; features: AgentFeatures; avatar: { shape: string; color: string };
-    grants: ConnectorGrant[]; include_new_connectors: boolean; run_as: "caller" | "owner";
+    project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; run_as: "caller" | "owner";
     disabled: boolean;
   };
   function draftOf(a: AgentItem): Draft {
     return {
       handle: a.handle, name: a.name, description: a.description,
       system_prompt: a.system_prompt, pick: joinPick(a.provider, a.model),
-      features: { ...a.features }, avatar: { ...a.avatar },
+      features: { ...a.features }, avatar: { ...a.avatar }, project_id: a.project_id,
       grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
       include_new_connectors: a.include_new_connectors, run_as: a.run_as ?? "caller",
       disabled: a.disabled,
@@ -61,6 +61,14 @@
   let catalog = $state<AgentConnector[]>([]);
   let catalogError = $state("");
   let catalogLoading = $state(true);
+  let projects = $state<{ id: string; name: string }[]>([]);
+  // The agent's own project is often hidden from the picker list; keep it
+  // selectable so the select never shows a blank value.
+  const projectChoices = $derived.by(() => {
+    const own = agent.project_id;
+    if (!own || projects.some((p) => p.id === own)) return projects;
+    return [{ id: own, name: `${agent.name} (project agent ini)` }, ...projects];
+  });
   let pruned = $state(0);
   let grantErrors = $state<GrantErrors | null>(null);
   let saving = $state(false);
@@ -69,6 +77,7 @@
 
   onMount(() => {
     runApi(getProviderOptions(base)).then((p) => { providers = p; }).catch(() => {});
+    runApi(getProjectOptions(base)).then((p) => { projects = p ?? []; }).catch(() => {});
     runApi(listAgentConnectors(base))
       .then((c) => {
         catalog = c ?? [];
@@ -93,6 +102,8 @@
     const p: AgentWrite = {};
     const d = draft;
     if (d.handle !== agent.handle) p.handle = d.handle;
+    // "" would be a 400: an agent always has a project.
+    if (d.project_id && d.project_id !== agent.project_id) p.project_id = d.project_id;
     if (d.name !== agent.name) p.name = d.name;
     if (d.description !== agent.description) p.description = d.description;
     if (d.system_prompt !== agent.system_prompt) p.system_prompt = d.system_prompt;
@@ -158,8 +169,9 @@
   const TABS: { id: SettingsTab; label: string }[] = [
     { id: "persona", label: "Persona" },
     { id: "access", label: "Akses" },
-    { id: "features", label: "Fitur" },
+    { id: "tools", label: "Tools & fitur" },
     { id: "avatar", label: "Avatar" },
+    { id: "advanced", label: "Lanjutan" },
   ];
   const input =
     "w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100";
@@ -191,58 +203,41 @@
 <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
   {#if tab === "persona"}
     <div>
-      <label class={label} for="as-name">Nama</label>
-      <input id="as-name" class={input} bind:value={draft.name} />
+      <p class="text-sm font-semibold text-black-900 dark:text-white-100">Persona</p>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
+        Disimpan ke project agent (tersembunyi){#if sharedWith > 0} · dipakai juga oleh {sharedWith} agent{/if}
+      </p>
+    </div>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div>
+        <label class={label} for="as-name">Nama</label>
+        <input id="as-name" class={input} bind:value={draft.name} />
+      </div>
+      <div>
+        <label class={label} for="as-handle">Handle</label>
+        <div class="flex items-center rounded-lg border border-white-300 bg-white-100 focus-within:border-green-500 dark:border-navy-600 dark:bg-navy-800">
+          <span class="pl-3 font-mono text-sm text-black-800 dark:text-black-600">@</span>
+          <input
+            id="as-handle"
+            class="w-full min-w-0 bg-transparent py-2 pl-1 pr-3 font-mono text-sm text-black-900 focus:outline-none dark:text-white-100"
+            bind:value={draft.handle}
+          />
+        </div>
+        {#if handleOk}
+          <p class="mt-1 text-xs text-black-800 dark:text-black-600">dipakai untuk @mention</p>
+        {:else}
+          <p class="mt-1 text-xs text-neg-400">Huruf kecil, angka, dan "-", 2–31 karakter.</p>
+        {/if}
+      </div>
     </div>
     <div>
-      <label class={label} for="as-handle">Handle</label>
-      <input id="as-handle" class={input} bind:value={draft.handle} />
-      {#if !handleOk}
-        <p class="mt-1 text-xs text-neg-400">Huruf kecil, angka, dan "-", 2–31 karakter.</p>
-      {/if}
-    </div>
-    <div>
-      <label class={label} for="as-desc">Deskripsi</label>
+      <label class={label} for="as-desc">Deskripsi singkat</label>
       <input id="as-desc" class={input} bind:value={draft.description} />
     </div>
     <div>
       <label class={label} for="as-sys">System prompt (persona)</label>
-      <textarea id="as-sys" class="{input} min-h-32" rows="8" bind:value={draft.system_prompt}></textarea>
-    </div>
-    <div>
-      <span class={label}>Provider / model</span>
-      <ProviderPicker
-        options={buildProviderOptions(providers, draft.pick)}
-        value={draft.pick}
-        onChange={(v) => (draft.pick = v)}
-        placeholder="Default project"
-      />
-    </div>
-    <div class="flex flex-wrap items-center gap-2 text-xs text-black-800 dark:text-black-600">
-      <span>Project</span>
-      <code class="rounded bg-white-200 px-2 py-1 font-mono dark:bg-navy-800">{agent.project_id || "—"}</code>
-      {#if sharedWith > 0}
-        <span class="rounded-full bg-cau-100 px-2 py-1 font-medium text-cau-700 dark:bg-cau-900/30 dark:text-cau-300">
-          dipakai juga oleh {sharedWith} agent
-        </span>
-      {/if}
-    </div>
-    <Toggle checked={draft.disabled} onChange={(v) => (draft.disabled = v)} label="Nonaktifkan agent" />
-
-    <div class="rounded-xl border border-neg-300 p-4 dark:border-neg-700">
-      <p class="text-sm font-medium text-black-900 dark:text-white-100">Hapus agent</p>
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        Menghapus agent saja; project dan percakapannya tetap ada.
-        {#if agent.is_captain}Captain tidak bisa dihapus selama masih ada agent lain.{/if}
-      </p>
-      {#if confirmDelete}
-        <div class="mt-2 flex gap-2">
-          <button type="button" class="rounded-lg bg-neg-400 px-3 py-1 text-sm font-medium text-white-100 disabled:opacity-50" disabled={saving} onclick={remove}>Ya, hapus</button>
-          <button type="button" class="rounded-lg px-3 py-1 text-sm text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600" onclick={() => (confirmDelete = false)}>Batal</button>
-        </div>
-      {:else}
-        <button type="button" class="mt-2 rounded-lg border border-neg-300 px-3 py-1 text-sm text-neg-400 hover:bg-neg-50 dark:border-neg-700 dark:hover:bg-neg-900/20" onclick={() => (confirmDelete = true)}>Hapus…</button>
-      {/if}
+      <textarea id="as-sys" class={input} rows="8" bind:value={draft.system_prompt}></textarea>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">ditempel setelah preset dasar</p>
     </div>
   {:else if tab === "access"}
     <p class="text-xs text-black-800 dark:text-black-600">
@@ -263,12 +258,25 @@
       bind:runAs={draft.run_as}
       errors={grantErrors}
     />
-  {:else if tab === "features"}
-    <p class="text-xs text-black-800 dark:text-black-600">Fitur yang dimatikan menyembunyikan tab-nya di rail chat agent.</p>
-    <div class="space-y-3">
-      {#each FEATURE_TABS as f (f.feature)}
-        <Toggle checked={draft.features[f.feature]} onChange={(v) => (draft.features[f.feature] = v)} label={f.label} />
-      {/each}
+  {:else if tab === "tools"}
+    <div>
+      <p class="text-sm font-semibold text-black-900 dark:text-white-100">Tools &amp; fitur</p>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Fitur yang dimatikan juga menghilangkan tab rail-nya di chat agent.</p>
+    </div>
+    <div class="rounded-xl border border-white-300 px-4 py-3 opacity-60 dark:border-navy-600" aria-disabled="true">
+      <p class="text-sm font-medium text-black-900 dark:text-white-100">
+        Native tools &amp; Bash
+        <span class="ml-1 rounded-full bg-white-200 px-2 py-0.5 text-xs font-medium text-black-800 dark:bg-navy-600 dark:text-black-600">Segera (Fase 1c)</span>
+      </p>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Pilihan tool bawaan dan command Bash per agent belum tersedia.</p>
+    </div>
+    <div>
+      <span class={label}>Fitur wick</span>
+      <div class="space-y-3">
+        {#each FEATURE_TABS as f (f.feature)}
+          <Toggle checked={draft.features[f.feature]} onChange={(v) => (draft.features[f.feature] = v)} label={f.label} />
+        {/each}
+      </div>
     </div>
   {:else if tab === "avatar"}
     <div class="flex items-center gap-4">
@@ -296,13 +304,56 @@
         {#each AVATAR_COLORS as col (col)}
           <button
             type="button"
-            class="h-8 w-8 rounded-full border-2 {draft.avatar.color.toLowerCase() === col ? 'border-black-900 dark:border-white-100' : 'border-transparent'}"
+            class="h-8 w-8 rounded-full border-2 {draft.avatar.color.toLowerCase() === col ? 'border-green-500' : 'border-transparent'}"
             style:background-color={col}
             aria-label={col}
             aria-pressed={draft.avatar.color.toLowerCase() === col}
             onclick={() => (draft.avatar.color = col)}
           ></button>
         {/each}
+      </div>
+    </div>
+  {:else if tab === "advanced"}
+    <div>
+      <p class="text-sm font-semibold text-black-900 dark:text-white-100">Lanjutan</p>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Project di balik agent ini — biasanya tidak perlu disentuh.</p>
+    </div>
+    <div>
+      <label class={label} for="as-project">Project</label>
+      <select id="as-project" class={input} bind:value={draft.project_id}>
+        {#each projectChoices as p (p.id)}
+          <option value={p.id}>{p.name}</option>
+        {/each}
+      </select>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
+        Ganti project = persona dimuat ulang dari project itu; percakapan lama tetap di project lama.
+      </p>
+    </div>
+    <div>
+      <span class={label}>Provider / model</span>
+      <ProviderPicker
+        options={buildProviderOptions(providers, draft.pick)}
+        value={draft.pick}
+        onChange={(v) => (draft.pick = v)}
+        placeholder="Default project"
+      />
+    </div>
+    <div class="space-y-3 border-t border-white-300 pt-4 dark:border-navy-600">
+      <p class="text-sm font-semibold text-neg-400">Danger zone</p>
+      <Toggle checked={draft.disabled} onChange={(v) => (draft.disabled = v)} label="Nonaktifkan agent" />
+      <div>
+        {#if confirmDelete}
+          <div class="flex gap-2">
+            <button type="button" class="rounded-lg bg-neg-400 px-3 py-1 text-sm font-medium text-white-100 disabled:opacity-50" disabled={saving} onclick={remove}>Ya, hapus</button>
+            <button type="button" class="rounded-lg px-3 py-1 text-sm text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600" onclick={() => (confirmDelete = false)}>Batal</button>
+          </div>
+        {:else}
+          <button type="button" class="rounded-lg border border-neg-300 px-3 py-1 text-sm text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600" onclick={() => (confirmDelete = true)}>Hapus agent…</button>
+        {/if}
+        <p class="mt-1 text-xs text-black-800 dark:text-black-600">
+          Project dan percakapannya tidak ikut terhapus.
+          {#if agent.is_captain}Captain tidak bisa dihapus selama masih ada agent lain.{/if}
+        </p>
       </div>
     </div>
   {/if}

@@ -29,6 +29,23 @@ describe("parseAgentsRoute", () => {
     });
   });
 
+  test("every Settings tab parses; the old features tab opens Tools & fitur", () => {
+    for (const tab of ["persona", "access", "tools", "avatar", "advanced"]) {
+      expect(parseAgentsRoute("/tools/agents/team/a1", `?panel=settings&tab=${tab}`, B).panel).toEqual({
+        kind: "settings",
+        tab,
+      });
+    }
+    expect(parseAgentsRoute("/tools/agents/team/a1", "?panel=settings&tab=features", B).panel).toEqual({
+      kind: "settings",
+      tab: "tools",
+    });
+    expect(parseAgentsRoute("/tools/agents/team/a1", "?panel=settings", B).panel).toEqual({
+      kind: "settings",
+      tab: "persona",
+    });
+  });
+
   test("new + sessions panels; unknown panel is none", () => {
     expect(parseAgentsRoute("/tools/agents/team", "?panel=new", B).panel).toEqual({ kind: "new" });
     expect(parseAgentsRoute("/tools/agents/team/a1", "?panel=sessions", B).panel).toEqual({ kind: "sessions" });
@@ -51,8 +68,12 @@ describe("formatAgentsRoute", () => {
     [{ handle: "captain", session: null, panel: null }, "/tools/agents/team/captain"],
     [{ handle: null, session: null, panel: { kind: "new" } }, "/tools/agents/team?panel=new"],
     [
-      { handle: "a1", session: null, panel: { kind: "settings", tab: "features" } },
-      "/tools/agents/team/a1?panel=settings&tab=features",
+      { handle: "a1", session: null, panel: { kind: "settings", tab: "tools" } },
+      "/tools/agents/team/a1?panel=settings&tab=tools",
+    ],
+    [
+      { handle: "a1", session: null, panel: { kind: "settings", tab: "advanced" } },
+      "/tools/agents/team/a1?panel=settings&tab=advanced",
     ],
     [{ handle: "a1", session: "s2", panel: { kind: "sessions" } }, "/tools/agents/team/a1?session=s2&panel=sessions"],
   ];
