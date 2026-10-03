@@ -90,6 +90,10 @@ type AgentPersona struct {
 	CaptainCan string `gorm:"type:text;not null;default:'{}'" json:"captain_can"`
 
 	Disabled bool `gorm:"not null;default:false" json:"disabled"`
+	// SuggestedPrompts is a JSON array of team.SuggestedPrompt (at most
+	// four): the prompt chips of the agent's Slack agent view and of an
+	// empty web chat.
+	SuggestedPrompts string `gorm:"type:text;not null;default:'[]'" json:"suggested_prompts"`
 	// AllowProviderSwitch lets the agent's chat pick another provider or
 	// model from the composer. nil = never set: see
 	// team.AllowsProviderSwitch for the default.
