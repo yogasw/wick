@@ -40,9 +40,25 @@
     if (!out.body && !out.command && !isBinaryKind(out.kind) && raw) {
       out = { ...out, body: classify().body ?? raw };
     }
+    // Live turn (inflight / SSE): the backend display has no blob_ref yet
+    // and the raw text still holds the base64 — borrow it from the
+    // classifier so the chip can decode on click.
+    if (raw && needsData(out)) {
+      const c = classify();
+      const bins = [c, ...(c.parts ?? [])].filter((p) => isBinaryKind(p.kind) && p.data);
+      let i = 0;
+      const fill = (p: TraceDisplay): TraceDisplay =>
+        isBinaryKind(p.kind) && !p.blob_ref && !p.data && bins[i] ? { ...p, data: bins[i++].data } : p;
+      out = fill(out);
+      if (out.parts) out = { ...out, parts: out.parts.map(fill) };
+    }
     if (truncated && !out.truncated) out = { ...out, truncated: true };
     return out;
   });
+
+  function needsData(d: TraceDisplay): boolean {
+    return [d, ...(d.parts ?? [])].some((p) => isBinaryKind(p.kind) && !p.blob_ref && !p.data && !p.too_large);
+  }
 
   const binary = $derived(isBinaryKind(d.kind));
   const Renderer = $derived(getTraceRenderer(d.kind));

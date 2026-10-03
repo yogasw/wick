@@ -133,6 +133,20 @@ describe("BinaryChip", () => {
     expect(onOpenMedia).toHaveBeenCalledWith({ url: "blob:y", name: "shot.png", kind: "image", mime: "image/png" });
   });
 
+  it("live backend display without blob_ref decodes from the raw base64", async () => {
+    globalThis.URL.createObjectURL = vi.fn(() => "blob:live");
+    globalThis.URL.revokeObjectURL = vi.fn();
+    const raw = JSON.stringify([{ type: "text", text: "shot" }, { type: "image", data: PNG, mimeType: "image/png" }]);
+    const display: TraceDisplay = { kind: "text", body: "shot", parts: [{ kind: "image", mime: "image/png", original_bytes: 70, name: "image.png" }] };
+    const { container } = render(TraceBody, { display, raw });
+    const chip = container.querySelector("[data-binary-chip]") as HTMLButtonElement;
+    expect(chip.disabled).toBe(false);
+    expect(container.querySelector("img")).toBeNull();
+    await fireEvent.click(chip);
+    await tick();
+    expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:live");
+  });
+
   it("too_large is info only", () => {
     const { container } = render(TraceBody, {
       display: { kind: "image", mime: "image/png", original_bytes: 14 << 20, too_large: true },
