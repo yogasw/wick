@@ -296,6 +296,7 @@
       bind:includeNew={draft.include_new_connectors}
       bind:runAs={draft.run_as}
       errors={grantErrors}
+      isCaptain={agent.is_captain}
     />
   {:else if tab === "tools"}
     <div>

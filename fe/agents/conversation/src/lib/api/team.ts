@@ -12,7 +12,8 @@ export type ConnectorGrant = {
   connector_id: string;
   /** Empty = every account the owner sees; "" inside = the instance/bot. */
   accounts: string[];
-  level: "all" | "read" | "pick";
+  /** "off" overrides a Platform/System tier default downwards. */
+  level: "all" | "read" | "pick" | "off";
   ops: string[];
 };
 
@@ -84,6 +85,10 @@ export type AgentConnector = {
   description: string;
   accounts: { id: string; display_name: string }[] | null;
   ops: { key: string; name: string; destructive: boolean }[] | null;
+  /** Access list: "platform", "system" or "" (Connectors). */
+  tier?: "platform" | "system" | "";
+  /** A wick MCP tool entry (id "tool:<name>"): on/off only. */
+  tool?: boolean;
 };
 
 export type AgentSessionItem = {
