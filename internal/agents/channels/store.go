@@ -395,12 +395,14 @@ const AgentSlackType = "slack-agent"
 
 // AgentSlackRow returns the Slack connection row of agentID.
 func AgentSlackRow(db *gorm.DB, agentID string) (entity.AgentChannel, bool, error) {
-	var ch entity.AgentChannel
-	err := db.Where("type = ? AND name = ?", AgentSlackType, agentID).First(&ch).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return ch, false, nil
+	var rows []entity.AgentChannel
+	if err := db.Where("type = ? AND name = ?", AgentSlackType, agentID).Limit(1).Find(&rows).Error; err != nil {
+		return entity.AgentChannel{}, false, err
 	}
-	return ch, err == nil, err
+	if len(rows) == 0 {
+		return entity.AgentChannel{}, false, nil
+	}
+	return rows[0], true, nil
 }
 
 // AgentSlackConfig is AgentSlackRow's config map, still encrypted.

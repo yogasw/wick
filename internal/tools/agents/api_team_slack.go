@@ -480,6 +480,14 @@ func newAgentSlackInstance(p entity.AgentPersona, store agentchannels.DBStore) *
 	ch.SetPublicURL(pubURL)
 	ch.SetSessionPrefix(agentSlackSessionPrefix(p.ID))
 	ch.SetDMMainFn(agentSlackDMMain(p.ID))
+	agentID := p.ID
+	ch.SetPromptsFn(func() []agentslack.SuggestedPrompt {
+		cur, err := globalTeam.Get(context.Background(), agentID)
+		if err != nil {
+			return nil
+		}
+		return slackPrompts(team.DecodeSuggestedPrompts(cur.SuggestedPrompts))
+	})
 	globalChannels.AddKeyed(agentSlackInstanceKey(p.ID), ch, agentslack.NewConfigSourceForAgent(store, ch, p.ID))
 	return ch
 }

@@ -19,8 +19,8 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
-	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/skillsync"
+	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/connectors"
@@ -79,16 +79,17 @@ type TeamAgentItem struct {
 	// system_prompt_team (on for agents converted from a project).
 	UseGlobalPrompt bool `json:"use_global_prompt"`
 	// AllowProviderSwitch is the effective value (default applied).
-	AllowProviderSwitch bool `json:"allow_provider_switch"`
+	AllowProviderSwitch bool                   `json:"allow_provider_switch"`
+	SuggestedPrompts    []team.SuggestedPrompt `json:"suggested_prompts"`
 	// ManageAgents is the effective "Manage other agents" permission
 	// (on for the Captain unless switched off); CaptainCan is what the
 	// Captain may do to this agent. See team.ManagesAgents.
-	ManageAgents        bool            `json:"manage_agents"`
-	CaptainCan          team.CaptainCan `json:"captain_can"`
-	MainSessionID       string     `json:"main_session_id"`
-	LastActive          *time.Time `json:"last_active"`
-	LastPreview         string     `json:"last_preview"`
-	Status              string     `json:"status"`
+	ManageAgents  bool            `json:"manage_agents"`
+	CaptainCan    team.CaptainCan `json:"captain_can"`
+	MainSessionID string          `json:"main_session_id"`
+	LastActive    *time.Time      `json:"last_active"`
+	LastPreview   string          `json:"last_preview"`
+	Status        string          `json:"status"`
 	// Unread is true when the main session moved after the owner last
 	// opened the chat (POST /api/team/agents/{id}/read).
 	Unread bool `json:"unread"`
@@ -157,25 +158,26 @@ type teamAgentWriteReq struct {
 	Model        *string `json:"model"`
 	// Preset is read on create only, for the new project's defaults (a
 	// duplicated agent keeps its original's preset).
-	Preset               *string                `json:"preset"`
-	ProjectID            *string                `json:"project_id"`
-	Avatar               *team.Avatar           `json:"avatar"`
-	Features             *team.Features         `json:"features"`
-	AllowedConnectors    *[]team.ConnectorGrant `json:"allowed_connectors"`
-	IncludeNewConnectors *bool                  `json:"include_new_connectors"`
-	AllowedNativeTools   *[]string              `json:"allowed_native_tools"`
-	BashRules            *[]team.BashRule       `json:"bash_rules"`
-	DisabledSkills       *[]string              `json:"disabled_skills"`
-	RunAs                *string                `json:"run_as"`
-	Disabled             *bool                  `json:"disabled"`
-	AllowProviderSwitch  *bool                  `json:"allow_provider_switch"`
-	IsCaptain            *bool                  `json:"is_captain"`
-	UseGlobalPrompt      *bool                  `json:"use_global_prompt"`
-	MentionFrom          *string                `json:"mention_from"`
-	MentionAllow         *[]string              `json:"mention_allow"`
-	MaxHops              *int                   `json:"max_hops"`
-	ManageAgents         *bool                  `json:"manage_agents"`
-	CaptainCan           *team.CaptainCan       `json:"captain_can"`
+	Preset               *string                 `json:"preset"`
+	ProjectID            *string                 `json:"project_id"`
+	Avatar               *team.Avatar            `json:"avatar"`
+	Features             *team.Features          `json:"features"`
+	AllowedConnectors    *[]team.ConnectorGrant  `json:"allowed_connectors"`
+	IncludeNewConnectors *bool                   `json:"include_new_connectors"`
+	AllowedNativeTools   *[]string               `json:"allowed_native_tools"`
+	BashRules            *[]team.BashRule        `json:"bash_rules"`
+	SuggestedPrompts     *[]team.SuggestedPrompt `json:"suggested_prompts"`
+	DisabledSkills       *[]string               `json:"disabled_skills"`
+	RunAs                *string                 `json:"run_as"`
+	Disabled             *bool                   `json:"disabled"`
+	AllowProviderSwitch  *bool                   `json:"allow_provider_switch"`
+	IsCaptain            *bool                   `json:"is_captain"`
+	UseGlobalPrompt      *bool                   `json:"use_global_prompt"`
+	MentionFrom          *string                 `json:"mention_from"`
+	MentionAllow         *[]string               `json:"mention_allow"`
+	MaxHops              *int                    `json:"max_hops"`
+	ManageAgents         *bool                   `json:"manage_agents"`
+	CaptainCan           *team.CaptainCan        `json:"captain_can"`
 	// Convert (create only, with ProjectID) turns an ordinary project
 	// into this agent's own: the project gets the Team tag, so it leaves
 	// the sidebar and lives on in the Team app. See checkConvertProject.
@@ -588,6 +590,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		MaxHops:              teamlink.EffectiveHops(p.MaxHops),
 		UseGlobalPrompt:      p.UseGlobalPrompt,
 		AllowProviderSwitch:  team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain),
+		SuggestedPrompts:     team.DecodeSuggestedPrompts(p.SuggestedPrompts),
 		ManageAgents:         team.ManagesAgents(p),
 		CaptainCan:           team.DecodeCaptainCan(p.CaptainCan),
 		Status:               string(session.StatusIdle),
@@ -1422,6 +1425,14 @@ func apiTeamAgentAccessHistory(c *tool.Ctx) {
 // onto p, answering 400 (and false) for an unknown tool or a Bash rule
 // that could chain a second command.
 func applyToolSettings(c *tool.Ctx, p *entity.AgentPersona, req teamAgentWriteReq) bool {
+	if req.SuggestedPrompts != nil {
+		prompts, err := team.NormalizeSuggestedPrompts(*req.SuggestedPrompts)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return false
+		}
+		p.SuggestedPrompts = team.EncodeSuggestedPrompts(prompts)
+	}
 	if req.AllowedNativeTools != nil {
 		if err := team.ValidateNativeTools(*req.AllowedNativeTools); err != nil {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -1446,7 +1457,6 @@ func applyToolSettings(c *tool.Ctx, p *entity.AgentPersona, req teamAgentWriteRe
 	}
 	return true
 }
-
 
 // apiTeamAgentSkills handles GET /api/team/agents/{id}/skills: the skills
 // the agent's spawns see — its project's own, the global and the built-in

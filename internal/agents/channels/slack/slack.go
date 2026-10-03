@@ -275,6 +275,8 @@ type Channel struct {
 	// eventsSeen is event subscription name → last receipt, for the
 	// health matrix's "never received since boot" warning.
 	eventsSeen sync.Map
+	// promptsFn feeds assistant_thread_started (assistant_thread.go).
+	promptsFn PromptsFn
 	// matrixAPIURL points the matrix's auth.test at a stub in tests.
 	matrixAPIURL string
 
@@ -1368,6 +1370,8 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				"user": ev.User,
 				"tab":  ev.Tab,
 			})
+		case *slackevents.AssistantThreadStartedEvent:
+			s.handleAssistantThreadStarted(ctx, ev)
 		case *slackevents.ReactionAddedEvent:
 			s.handleReactionAdded(ctx, ev)
 		case *slackevents.ReactionRemovedEvent:
