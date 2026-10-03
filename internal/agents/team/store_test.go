@@ -258,3 +258,21 @@ func TestStoreListByProjectsCrossesOwners(t *testing.T) {
 		t.Errorf("nil ids returned %d rows", len(rows))
 	}
 }
+
+func TestListIdleCompactPicksIdleEnabledAgents(t *testing.T) {
+	s := NewStore(testDB(t))
+	ctx := context.Background()
+	mk := func(handle, policy string, disabled bool) {
+		p := &entity.AgentPersona{OwnerUserID: "u1", Handle: handle, SessionPolicy: policy, Disabled: disabled}
+		if err := s.Create(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("idle", EncodeSessionPolicy(SessionPolicy{Compact: CompactIdle, IdleHours: 4}), false)
+	mk("auto", "", false)
+	mk("off", EncodeSessionPolicy(SessionPolicy{Compact: CompactIdle}), true)
+	rows, err := s.ListIdleCompact(ctx)
+	if err != nil || len(rows) != 1 || rows[0].Handle != "idle" {
+		t.Fatalf("rows = %+v, %v", rows, err)
+	}
+}

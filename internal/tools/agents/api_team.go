@@ -34,7 +34,12 @@ import (
 var globalTeam *team.Service
 
 // SetTeam wires the Agents-app store.
-func SetTeam(s *team.Service) { globalTeam = s }
+func SetTeam(s *team.Service) {
+	globalTeam = s
+	if s != nil {
+		startTeamJobs()
+	}
+}
 
 /* ── DTOs ────────────────────────────────────────────────────────────────── */
 
@@ -1115,6 +1120,8 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 		return
 	}
 	announceAccessChanged(c, accessBefore, p)
+	// Disabling holds the agent's schedules, enabling releases them.
+	syncAgentSchedules(c.Context(), accessBefore, p)
 	// Disabling takes the agent's Slack bot offline, enabling brings it back.
 	syncAgentSlack(context.Background(), p)
 	users := teamProjectUsersFor(c.Context(), []entity.AgentPersona{p})
@@ -1151,6 +1158,8 @@ func apiTeamAgentDelete(c *tool.Ctx) {
 		return
 	}
 	removeAgentSlack(p.ID)
+	// Before the project goes: the scope is read from the live sessions.
+	deleteAgentSchedules(c.Context(), p)
 	if err := releaseTeamAgentProject(c.Context(), p, rows, c.Query("chats") == "delete"); err != nil {
 		log.Ctx(c.Context()).Error().Err(err).Str("project", p.ProjectID).Msg("team: release agent project")
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": "agent deleted, but its project was not: " + err.Error()})

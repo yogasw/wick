@@ -137,6 +137,9 @@ func (s *Store) save(ctx context.Context, p *entity.AgentPersona, create bool) e
 	if p.DisabledSkills == "" {
 		p.DisabledSkills = "[]"
 	}
+	if p.SessionPolicy == "" {
+		p.SessionPolicy = "{}"
+	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Checked up front rather than left to the unique index so the
 		// caller gets a sentence instead of a driver error, and the same
@@ -212,4 +215,15 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ListIdleCompact returns every enabled agent whose session policy asks
+// for idle compaction, across owners — what the idle compactor walks.
+// The LIKE is a cheap pre-filter; callers decode the policy to be sure.
+func (s *Store) ListIdleCompact(ctx context.Context) ([]entity.AgentPersona, error) {
+	var rows []entity.AgentPersona
+	err := s.db.WithContext(ctx).
+		Where("disabled = ? AND session_policy LIKE ?", false, `%"compact":"idle"%`).
+		Order("id ASC").Find(&rows).Error
+	return rows, err
 }

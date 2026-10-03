@@ -208,7 +208,10 @@ const (
 	KindPersonaChanged = "persona_changed"
 	KindMentionHandoff    = "mention_handoff"
 	KindHopLimit          = "hop_limit"
-	KindRoutineFired      = "routine_fired"
+	// KindScheduledFired: a schedule aimed at the agent ran (extras:
+	// schedule_id, title). Older rows carry KindRoutineFired.
+	KindScheduledFired = "scheduled_fired"
+	KindRoutineFired   = "routine_fired"
 	KindConnectionChanged = "connection_changed"
 	KindMentionRefused    = "mention_refused"
 	KindA2AContext        = "a2a_context"

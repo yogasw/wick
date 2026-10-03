@@ -90,6 +90,9 @@ type AgentPersona struct {
 	CaptainCan string `gorm:"type:text;not null;default:'{}'" json:"captain_can"`
 
 	Disabled bool `gorm:"not null;default:false" json:"disabled"`
+	// SessionPolicy is a JSON object of team.SessionPolicy: how the
+	// agent's main chat is compacted. "{}" = provider default.
+	SessionPolicy string `gorm:"type:text;not null;default:'{}'" json:"session_policy"`
 	// SuggestedPrompts is a JSON array of team.SuggestedPrompt (at most
 	// four): the prompt chips of the agent's Slack agent view and of an
 	// empty web chat.

@@ -311,7 +311,9 @@ func (s *Store) CancelTargeting(ctx context.Context, projectID string, sessionID
 // supplies the recomputed next run_at (the runner/handler figures out the
 // next fire from now). Only recurring, non-terminal rows can be toggled.
 func (s *Store) SetPaused(ctx context.Context, id string, paused bool, nextRunAt time.Time) error {
-	updates := map[string]any{"paused": paused, "updated_at": time.Now()}
+	// A pause or resume by hand is the user's call from now on: the row
+	// no longer follows its agent's disable/enable.
+	updates := map[string]any{"paused": paused, "held_by_agent": false, "updated_at": time.Now()}
 	if !paused {
 		updates["run_at"] = nextRunAt
 	}
