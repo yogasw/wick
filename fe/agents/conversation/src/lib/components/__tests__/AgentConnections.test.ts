@@ -29,6 +29,13 @@ vi.mock("../../api/team.js", async (orig) => ({
   runApi: <T,>(p: Promise<T>) => p,
 }));
 
+let instantNow: { enabled: boolean } & Record<string, unknown> = { enabled: false, bound_channels: [] };
+vi.mock("../../slackInstant.js", async (orig) => ({
+  ...(await orig<typeof import("../../slackInstant.js")>()),
+  getAgentSlackInstant: () => Promise.resolve(instantNow),
+  listSlackInstantApps: () => Promise.resolve({ apps: [] }),
+}));
+
 import AgentConnections from "../AgentConnections.svelte";
 import { connectBody, statusLine, tokenError } from "../../slackConnection.js";
 import type { AgentItem } from "../../api/team.js";
@@ -66,6 +73,32 @@ describe("AgentConnections", () => {
     expect(matrix.querySelector('[data-status="off"]')).toBeTruthy();
     await fireEvent.click(screen.getByRole("switch", { name: "DMs continue the sender's main chat" }));
     await waitFor(() => expect(updateAgentSlack).toHaveBeenCalledWith("/tools/agents", "a1", { dm_main_chat: false }));
+  });
+});
+
+describe("AgentConnections Slack mode", () => {
+  test("an Instant agent opens on Instant; Custom explains the two are exclusive", async () => {
+    current = disconnected;
+    instantNow = {
+      enabled: true, shared_channel: "slack:__owner__", bound_channels: ["C0123ABCD"], prefix_enabled: false,
+      username: "Rekap", avatar_ready: true, shared_online: true, customize_scope: "ok",
+    };
+    render(AgentConnections, { props: props() });
+    await screen.findByTestId("slack-instant");
+    expect(screen.getByText("Instant — 1 channel")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Instant (shared app)" }).getAttribute("aria-pressed")).toBe("true");
+    await fireEvent.click(screen.getByRole("button", { name: "Custom app" }));
+    expect(screen.getByTestId("custom-exclusive").textContent).toContain("Turn off Instant");
+    expect(screen.queryByTestId("slack-wizard")).toBeNull();
+    instantNow = { enabled: false, bound_channels: [] };
+  });
+
+  test("a fresh agent opens on Custom and can switch to Instant", async () => {
+    current = disconnected;
+    render(AgentConnections, { props: props() });
+    await screen.findByTestId("slack-wizard");
+    await fireEvent.click(screen.getByRole("button", { name: "Instant (shared app)" }));
+    expect(await screen.findByTestId("instant-no-apps")).toBeTruthy();
   });
 });
 

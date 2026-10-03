@@ -7,11 +7,13 @@
   import { toastOk } from "@wick-fe/common-stores";
   import DrawerHeader from "./DrawerHeader.svelte";
   import ConnectionA2ACard from "./team/ConnectionA2ACard.svelte";
+  import SlackInstantCard from "./team/SlackInstantCard.svelte";
   import {
     getAgentSlack, connectAgentSlack, updateAgentSlack, disconnectAgentSlack, getAgentSlackHealth, getAgentSlackManifest, runApi,
     type AgentItem, type AgentSlackStatus, type AgentSlackHealth,
   } from "../api/team.js";
   import { MATRIX_ICON, MATRIX_LABEL, MASKED, connectBody, statusLine, tokenError, type TokenDraft } from "../slackConnection.js";
+  import { getAgentSlackInstant, instantStatusLine, type AgentSlackInstantStatus } from "../slackInstant.js";
 
   type Props = { base: string; agent: AgentItem; onClose: () => void };
   let { base, agent, onClose }: Props = $props();
@@ -28,6 +30,10 @@
   let manifest = $state<{ json: string; url: string } | null>(null);
   let copied = $state(false);
   let saveState = $state<"" | "saving" | "saved" | "error">("");
+  /* Custom = the agent's own Slack app; Instant = a persona on a shared
+     app. The two are exclusive, so the card shows one at a time. */
+  let slackMode = $state<"custom" | "instant">("custom");
+  let instant = $state<AgentSlackInstantStatus | null>(null);
 
   const input =
     "w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 font-mono text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100";
@@ -36,8 +42,12 @@
 
   async function load() {
     try {
-      status = await runApi(getAgentSlack(base, agent.id));
+      [status, instant] = await Promise.all([
+        runApi(getAgentSlack(base, agent.id)),
+        runApi(getAgentSlackInstant(base, agent.id)).catch(() => null),
+      ]);
       loadError = "";
+      slackMode = instant?.enabled && !status.connected ? "instant" : "custom";
       wizard = !status.connected;
       if (status.connected) draft.mode = status.mode;
       if (status.connected && status.online) void runHealth();
@@ -139,11 +149,22 @@
   <section class="rounded-xl border border-white-300 p-4 dark:border-navy-600" data-testid="slack-card">
     <div class="flex items-center gap-3">
       <span class="text-sm font-semibold text-black-900 dark:text-white-100">Slack</span>
-      <span class="rounded-full px-2 py-0.5 text-xs {status?.online ? 'bg-green-50 text-green-700' : 'bg-white-200 text-black-800 dark:bg-navy-600 dark:text-black-600'}">
-        {statusLine(status)}
+      <span class="rounded-full px-2 py-0.5 text-xs {(slackMode === "instant" ? instant?.enabled && instant.shared_online : status?.online) ? 'bg-green-50 text-green-700' : 'bg-white-200 text-black-800 dark:bg-navy-600 dark:text-black-600'}">
+        {slackMode === "instant" ? instantStatusLine(instant) : statusLine(status)}
       </span>
-      {#if saveState}<span class="ml-auto {muted}" aria-live="polite">{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved" : "Couldn't save"}</span>{/if}
+      {#if saveState && slackMode === "custom"}<span class="ml-auto {muted}" aria-live="polite">{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved" : "Couldn't save"}</span>{/if}
     </div>
+    <div class="mt-3 inline-flex rounded-lg border border-white-300 p-0.5 dark:border-navy-600" role="group" aria-label="Slack mode">
+      {#each [["custom", "Custom app"], ["instant", "Instant (shared app)"]] as [m, lbl] (m)}
+        <button type="button" class="rounded-md px-3 py-1 text-xs {slackMode === m ? 'bg-green-500 text-white-100' : 'text-black-800 dark:text-black-600'}" aria-pressed={slackMode === m} onclick={() => (slackMode = m as typeof slackMode)}>{lbl}</button>
+      {/each}
+    </div>
+
+    {#if slackMode === "instant"}
+      <SlackInstantCard {base} {agent} bind:status={instant} customConnected={!!status?.connected} />
+    {:else if instant?.enabled}
+      <p class="mt-3 text-xs text-neg-400" data-testid="custom-exclusive">@{agent.handle} answers in Slack as an Instant agent. Turn off Instant before connecting its own app — an agent answers through one Slack app at a time.</p>
+    {:else}
     <p class="mt-1 {muted}">One Slack app per agent: its name and photo are the agent's own.</p>
 
     {#if wizard}
@@ -220,9 +241,10 @@
         {#if manifest}<p class={muted}>Paste it under App Manifest on your Slack app's page, save, then reinstall the app.</p>{/if}
       </div>
     {/if}
+    {/if}
   </section>
 
-  {#if status?.connected && !wizard}
+  {#if slackMode === "custom" && status?.connected && !wizard}
     <section data-testid="slack-health">
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Health</p>
       {#if healthError}<p class="mt-1 text-xs text-neg-400">{healthError}</p>{/if}
