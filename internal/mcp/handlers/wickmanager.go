@@ -43,6 +43,19 @@ type topLevelConnector struct {
 var wickManagerTopLevel = topLevelConnector{key: wickManagerKey, prefix: WickManagerPrefix}
 var subAgentsTopLevel = topLevelConnector{key: subAgentsKey, prefix: SubAgentsPrefix, withSessionID: true}
 
+// teamKey / TeamPrefix surface the team connector's ops as team_<op>.
+const (
+	teamKey    = "team"
+	TeamPrefix = "team_"
+)
+
+var teamTopLevel = topLevelConnector{key: teamKey, prefix: TeamPrefix, withSessionID: true}
+
+// TeamToolsVisible decides whether a session is offered the team_* tools:
+// only a Team agent's session with at least one reachable teammate. Nil
+// (not wired) offers them to nobody.
+var TeamToolsVisible func(ctx context.Context, sessionID string) bool
+
 // descriptors expands the connector's enabled ops into top-level
 // descriptors, gated by row visibility. Returns nil when the connector
 // is absent or the caller can't see it.
@@ -151,4 +164,19 @@ func SubAgentsToolDescriptors(ctx context.Context, svc *connectors.Service, tagI
 // ops resolve the calling session.
 func SubAgentsExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, name string, params map[string]any, user *entity.User, tagIDs []string) {
 	subAgentsTopLevel.execute(w, r, req, rsp, svc, layout, name, params, user, tagIDs)
+}
+
+// TeamToolDescriptors expands the team connector's enabled ops into
+// top-level team_<op> descriptors, for a session TeamToolsVisible admits.
+func TeamToolDescriptors(ctx context.Context, svc *connectors.Service, tagIDs []string, isAdmin bool) []ToolDescriptor {
+	if TeamToolsVisible == nil || !TeamToolsVisible(ctx, SessionIDFrom(ctx)) {
+		return nil
+	}
+	return teamTopLevel.descriptors(ctx, svc, tagIDs, isAdmin)
+}
+
+// TeamExecute translates a team_<op> call into the canonical wick_execute
+// path. The op itself resolves the calling agent from the session.
+func TeamExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, name string, params map[string]any, user *entity.User, tagIDs []string) {
+	teamTopLevel.execute(w, r, req, rsp, svc, layout, name, params, user, tagIDs)
 }

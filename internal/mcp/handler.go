@@ -329,6 +329,7 @@ func (h *Handler) handleToolsList(w http.ResponseWriter, r *http.Request, req rp
 		tagIDs := login.GetUserTagIDs(r.Context())
 		tools = append(tools, handlers.WickManagerToolDescriptors(r.Context(), h.connectors, tagIDs, user.IsAdmin())...)
 		tools = append(tools, handlers.SubAgentsToolDescriptors(r.Context(), h.connectors, tagIDs, user.IsAdmin())...)
+		tools = append(tools, handlers.TeamToolDescriptors(r.Context(), h.connectors, tagIDs, user.IsAdmin())...)
 	}
 	writeRPCResult(w, req.ID, handlers.ToolListResult{Tools: featureAllowedTools(r.Context(), tools)})
 }
@@ -456,6 +457,8 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 			handlers.WickManagerExecute(w, r, hreq, rsp, h.connectors, name, args, user, tagIDs)
 		case strings.HasPrefix(name, handlers.SubAgentsPrefix):
 			handlers.SubAgentsExecute(w, r, hreq, rsp, h.connectors, h.layout, name, args, user, tagIDs)
+		case strings.HasPrefix(name, handlers.TeamPrefix):
+			handlers.TeamExecute(w, r, hreq, rsp, h.connectors, h.layout, name, args, user, tagIDs)
 		default:
 			rsp.WriteError(w, hreq.ID, errInvalidParams, "unknown tool: "+name, nil)
 		}

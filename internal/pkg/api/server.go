@@ -17,6 +17,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -58,6 +59,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/todoprompt"
 	// systemprompt "github.com/yogasw/wick/internal/agents/system-prompt" // disabled: ConnectorCatalog injection (see ConnectorCatalogLoader below)
 	"github.com/yogasw/wick/internal/agents/clitoken"
+	"github.com/yogasw/wick/internal/agents/teamlink"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
 	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
@@ -78,6 +80,7 @@ import (
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	sourceconn "github.com/yogasw/wick/internal/connectors/source"
 	subagents "github.com/yogasw/wick/internal/connectors/sub-agents"
+	teamlinkconn "github.com/yogasw/wick/internal/connectors/team-link"
 	ticketconn "github.com/yogasw/wick/internal/connectors/tickets"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
@@ -1666,6 +1669,36 @@ func NewServer() *Server {
 		Service: func() *delegation.Service { return delegationSvc },
 		Layout:  agentsLayout,
 	}))
+
+	// Team messaging over A2A. Same late binding as sub-agents: the Hub
+	// needs the Team service and the pool, built further down.
+	var (
+		teamHub     *teamlink.Hub
+		teamHubOnce sync.Once
+	)
+	hub := func() *teamlink.Hub {
+		teamHubOnce.Do(func() {
+			if teamSvc == nil {
+				return
+			}
+			d := poolDeliverer{pool: agentsPool, channels: channelReg}
+			teamHub = agentstool.NewTeamLinkHub(teamSvc, func(ctx context.Context, sessionID, text string) error {
+				return d.DeliverToSession(ctx, sessionID, "", text)
+			})
+		})
+		return teamHub
+	}
+	connectors.Register(teamlinkconn.Module(teamlinkconn.Deps{Hub: hub, AgentOf: agentstool.TeamAgentOf}))
+	// team_* tools only in a Team agent's session with a reachable teammate.
+	mcphandlers.TeamToolsVisible = func(ctx context.Context, sessionID string) bool {
+		h := hub()
+		id := agentstool.TeamAgentOf(ctx, sessionID)
+		if h == nil || id == "" {
+			return false
+		}
+		peers, err := h.Reachable(ctx, id)
+		return err == nil && len(peers) > 0
+	}
 
 	// Custom connectors: replay admin-built definitions from the DB
 	// into the registry. MUST run before Bootstrap so custom modules

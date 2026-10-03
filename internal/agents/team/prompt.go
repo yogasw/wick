@@ -171,3 +171,7 @@ func YourAccess(sc *Scope, reach Reach) string {
 	b.WriteString("Anything not listed is not available; the owner can change it in Settings.")
 	return b.String()
 }
+
+// MemberOf is memberOf for callers outside the package (the A2A registry
+// builds its cards from the same name and description).
+func (s *Service) MemberOf(p entity.AgentPersona) Member { return s.memberOf(p) }
