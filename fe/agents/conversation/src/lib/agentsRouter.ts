@@ -24,8 +24,8 @@ import { teamSettingsTabOf, type TeamSettingsTab } from "./teamSettingsTabs.js";
                                          own Team, not one agent) */
 
 /* "remote" is the A2A remote agent's own tab (remoteAgent.ts). */
-export type SettingsTab = "persona" | "access" | "tools" | "skills" | "mention" | "captain" | "session" | "avatar" | "advanced" | "remote";
-export const SETTINGS_TABS: SettingsTab[] = ["persona", "access", "tools", "skills", "mention", "captain", "session", "avatar", "advanced", "remote"];
+export type SettingsTab = "persona" | "access" | "tools" | "skills" | "mention" | "captain" | "session" | "avatar" | "advanced" | "remote" | "sharing";
+export const SETTINGS_TABS: SettingsTab[] = ["persona", "access", "tools", "skills", "mention", "captain", "session", "avatar", "advanced", "remote", "sharing"];
 
 /** Old tab names that still open the right tab from a bookmark. */
 const TAB_ALIASES: Record<string, SettingsTab> = { features: "tools" };

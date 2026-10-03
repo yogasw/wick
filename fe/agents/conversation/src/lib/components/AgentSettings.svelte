@@ -33,6 +33,7 @@
   import { MAX_PROMPTS, promptsToSave } from "../suggestedPrompts.js";
   import type { BashRule } from "../api/team.js";
   import RemoteAgentPanel from "./team/RemoteAgentPanel.svelte";
+  import AgentSharingTab from "./AgentSharingTab.svelte";
   import SlackRemotePanel from "./team/SlackRemotePanel.svelte";
   import { isRemoteAgent, isSlackRemote, remoteSettingsTab, remoteSettingsTabs } from "../remoteAgent.js";
 
@@ -321,8 +322,9 @@
      Remote. */
   const remote = $derived(isRemoteAgent(agent));
   const slack = $derived(isSlackRemote(agent));
-  const tabs = $derived(remote ? remoteSettingsTabs(agent) : TABS);
-  const view = $derived<SettingsTab>(remote ? remoteSettingsTab(tab) : tab === "remote" ? "persona" : tab);
+  // Sharing comes last on every agent; the Captain's tab says why it can't.
+  const tabs = $derived([...(remote ? remoteSettingsTabs(agent) : TABS), { id: "sharing" as SettingsTab, label: "Sharing" }]);
+  const view = $derived<SettingsTab>(tab === "sharing" ? "sharing" : remote ? remoteSettingsTab(tab) : tab === "remote" ? "persona" : tab);
   const input =
     "w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100";
   const label = "mb-1 block text-xs font-medium text-black-800 dark:text-black-600";
@@ -351,7 +353,9 @@
 </div>
 
 <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4" onfocusout={flush}>
-  {#if view === "persona"}
+  {#if view === "sharing"}
+    <AgentSharingTab {base} {agent} />
+  {:else if view === "persona"}
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Persona</p>
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">

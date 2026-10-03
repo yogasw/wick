@@ -11,6 +11,8 @@
   import DetailView from "./lib/components/DetailView.svelte";
   import { AgentAvatar, setIdleAnimations } from "@wick-fe/common-avatar";
   import AgentSettings from "./lib/components/AgentSettings.svelte";
+  import SharedAgentInfo from "./lib/components/SharedAgentInfo.svelte";
+  import { agentMenu, isSharedAgent, sharedLabel } from "./lib/agentSharing.js";
   import AgentWizard from "./lib/components/AgentWizard.svelte";
   import RemoteAgentWizard from "./lib/components/team/RemoteAgentWizard.svelte";
   import SlackRemoteWizard from "./lib/components/team/SlackRemoteWizard.svelte";
@@ -281,7 +283,7 @@
 
   /* Same order as the mockup: where to go first, then what to do to the
      agent. A new chat lives in the Chats drawer, not here. */
-  const menuItems = $derived([
+  const fullMenu = $derived([
     { label: "Chats", hint: "main chat and history", onclick: () => openPanel({ kind: "sessions" }) },
     selected && isRemoteAgent(selected)
       ? { label: "Settings", hint: isSlackRemote(selected) ? "remote Slack, mention, avatar" : "remote A2A, mention, avatar", onclick: () => openPanel({ kind: "settings", tab: "remote" }) }
@@ -294,6 +296,10 @@
       ? { label: "Enable", hint: "the agent can be used again", onclick: toggleDisabled }
       : { label: "Disable", hint: "closes all connector access", danger: true, onclick: toggleDisabled },
   ]);
+  /* An agent shared with the user: chat and a read-only info card only. */
+  const menuItems = $derived(
+    agentMenu(selected, fullMenu, { label: "Info", hint: selected ? sharedLabel(selected) : "", onclick: () => openPanel({ kind: "settings", tab: "persona" }) }),
+  );
 
   /* The main chat's turn started or ended on the stream: flip the row and
      header now, and re-read the roster once it ends so the preview and
@@ -341,7 +347,8 @@
 
   function rowPreview(a: AgentItem): string {
     if (a.disabled) return "Disabled";
-    return a.attention_preview || a.last_preview || a.description || "No chats yet";
+    // A shared agent the user has not chatted with yet says whose it is.
+    return a.attention_preview || a.last_preview || (isSharedAgent(a) ? sharedLabel(a) : "") || a.description || "No chats yet";
   }
 
 </script>
@@ -422,7 +429,7 @@
             <span class="min-w-0 flex-1">
               <span class="flex items-baseline gap-2">
                 <span class="min-w-0 flex-1 truncate text-sm font-semibold text-black-900 dark:text-white-100">
-                  {a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[10px] font-semibold tracking-wider text-green-600 dark:text-green-400">CAPTAIN</span>{/if}{#if isRemoteAgent(a)}<span class="ml-1.5 rounded-full bg-white-300 px-1.5 py-px align-middle text-[9px] font-bold uppercase tracking-wider text-black-800 dark:bg-navy-600 dark:text-black-600" data-testid="roster-remote-badge">{remoteBadge(a)}</span>{/if}
+                  {a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[10px] font-semibold tracking-wider text-green-600 dark:text-green-400">CAPTAIN</span>{/if}{#if isRemoteAgent(a)}<span class="ml-1.5 rounded-full bg-white-300 px-1.5 py-px align-middle text-[9px] font-bold uppercase tracking-wider text-black-800 dark:bg-navy-600 dark:text-black-600" data-testid="roster-remote-badge">{remoteBadge(a)}</span>{/if}{#if isSharedAgent(a)}<span class="ml-1.5 rounded-full bg-white-300 px-1.5 py-px align-middle text-[9px] font-bold uppercase tracking-wider text-black-800 dark:bg-navy-600 dark:text-black-600" title={sharedLabel(a)} data-testid="roster-shared-badge">Shared</span>{/if}
                 </span>
                 <span class="shrink-0 text-[11px] text-black-700">{rosterTime(a.last_active)}</span>
               </span>
@@ -616,6 +623,8 @@
         {:else}
           <AgentWizard {base} taken={agents.map((a) => a.handle)} convertProject={route.panel.project} onClose={() => openPanel(null)} {onCreated} onType={(t) => (newType = t)} />
         {/if}
+      {:else if selected && isSharedAgent(selected) && route.panel.kind !== "sessions"}
+        <SharedAgentInfo agent={selected} onClose={() => openPanel(null)} />
       {:else if selected && route.panel.kind === "settings"}
         <AgentSettings
           {base}

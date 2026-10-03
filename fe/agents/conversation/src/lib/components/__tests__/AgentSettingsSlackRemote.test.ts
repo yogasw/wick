@@ -47,7 +47,7 @@ describe("AgentSettings › Slack remote", () => {
 
   test("tabs are Remote · Mention · Avatar · Advanced; Persona, Access, Tools and Captain open Remote", async () => {
     render(AgentSettings, props("persona"));
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Remote", "Mention", "Avatar", "Advanced"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Remote", "Mention", "Avatar", "Advanced", "Sharing"]);
     expect(screen.getByRole("tab", { name: "Remote" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByTestId("slack-remote-settings")).toBeTruthy();
     expect(screen.getByTestId("slack-remote-warning").textContent).toContain("posted to #ops");

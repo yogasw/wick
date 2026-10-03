@@ -52,7 +52,7 @@ describe("AgentSettings › A2A remote", () => {
 
   test("tabs are Remote A2A · Mention · Avatar · Advanced, and Persona opens Remote A2A", async () => {
     render(AgentSettings, props("persona"));
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Remote A2A", "Mention", "Avatar", "Advanced"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Remote A2A", "Mention", "Avatar", "Advanced", "Sharing"]);
     expect(screen.getByRole("tab", { name: "Remote A2A" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByTestId("remote-card").textContent).toContain("v1.4.0");
     expect(screen.getByTestId("remote-url").textContent).toBe(info.card_url);

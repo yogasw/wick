@@ -84,6 +84,12 @@ export type AgentItem = {
   /** Everything else on the same project: other agents (any owner) and
       web/channel conversations. */
   shared_with?: number;
+  /** "viewer" = another owner shared this agent with the user: chat and
+      info only (agentSharing.ts); absent for the user's own agents. */
+  role?: "viewer";
+  /** The owner who shared it (role "viewer"). */
+  shared_by?: string;
+  shared_by_id?: string;
   /** "" = an agent wick runs itself, "a2a-remote" = another system's A2A
       agent (then `remote` holds its card and settings), "slack-remote" =
       an agent reached through Slack (then `slack_remote`). */
@@ -604,3 +610,23 @@ export const updateAgentSession = (base: string, id: string, body: Partial<Pick<
   apiPatchE<AgentSessionPolicy>(`${base}/api/team/agents/${enc(id)}/session`, body);
 export const compactAgentMain = (base: string, id: string) =>
   apiPostE<{ status: string; session_id: string }>(`${base}/api/team/agents/${enc(id)}/compact`, {});
+
+/* ── Sharing (chat only) ─────────────────────────────────────────────── */
+
+export type AgentShare = { user_id: string; name: string; created_at: string };
+export type AgentShares = { shares: AgentShare[]; shareable: boolean; reason: string };
+export type ShareUser = { id: string; name: string };
+
+export const listAgentShares = (base: string, id: string) =>
+  apiGetE<AgentShares>(`${base}/api/team/agents/${enc(id)}/shares`);
+
+export const addAgentShare = (base: string, id: string, userId: string) =>
+  apiPostE<{ status: string }>(`${base}/api/team/agents/${enc(id)}/shares`, { user_id: userId });
+
+export const removeAgentShare = (base: string, id: string, userId: string) =>
+  apiDeleteE<{ status: string }>(`${base}/api/team/agents/${enc(id)}/shares/${enc(userId)}`);
+
+/** listShareUsers is who an agent may be shared with: approved wick users,
+    the caller aside; ids and names only. */
+export const listShareUsers = (base: string) =>
+  apiGetE<{ users: ShareUser[] }>(`${base}/api/team/share-users`);
