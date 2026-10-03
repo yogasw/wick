@@ -357,6 +357,11 @@ func Register(r tool.Router) {
 	r.POST("/api/team/agents/{id}/chat", apiTeamAgentChat)
 	r.GET("/api/team/agents/{id}/sessions", apiTeamAgentSessions)
 	r.POST("/api/team/agents/{id}/read", apiTeamAgentRead)
+	r.GET("/api/team/groups", apiTeamGroupList)
+	r.POST("/api/team/groups", apiTeamGroupCreate)
+	r.PATCH("/api/team/groups/{id}", apiTeamGroupUpdate)
+	r.DELETE("/api/team/groups/{id}", apiTeamGroupDelete)
+	r.POST("/api/team/groups/{id}/read", apiTeamGroupRead)
 	// The caller's own Team settings (Team instructions, landing choice).
 	r.GET("/api/team/settings", apiTeamSettingsGet)
 	r.PUT("/api/team/settings", apiTeamSettingsSave)
@@ -1934,6 +1939,11 @@ func sendMessage(c *tool.Ctx) {
 	}
 	if req.Text == "" && len(atts) == 0 {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "text or file required"})
+		return
+	}
+	// A group chat never spawns: its members answer in their own sessions.
+	if sess, ok := globalMgr.Registry().Session(id); ok && sess.Meta.AgentGroup != nil {
+		sendGroupMessage(c, sess, req.Text)
 		return
 	}
 

@@ -200,6 +200,30 @@ type Meta struct {
 	// Agents app opens when the agent is picked. Other sessions with the
 	// same AgentID are side conversations started with "Chat baru".
 	AgentMain bool `json:"agent_main,omitempty"`
+	// AgentGroup makes the session a group chat of the owner's Team
+	// agents. It never spawns a provider itself: each member answers in
+	// its own backing session (GroupSessionID) with its own access, and
+	// the replies are copied into this thread. nil = not a group.
+	AgentGroup *AgentGroup `json:"agent_group,omitempty"`
+	// GroupSessionID marks a member's backing session: the group chat it
+	// answers for. Hidden from the agent's own chat list.
+	GroupSessionID string `json:"group_session_id,omitempty"`
+}
+
+// AgentGroup is a group chat's settings (Meta.AgentGroup).
+type AgentGroup struct {
+	Name string `json:"name"`
+	// Members are agent ids of the owner, in the order the group lists
+	// them; the first is the "first" default responder.
+	Members []string `json:"members"`
+	// DefaultResponder answers a message with no @: "captain" (the
+	// Captain when a member, else the first member) or "first".
+	DefaultResponder string `json:"default_responder"`
+	// MaxHopsOverride lowers the agent-to-agent turn cap below the
+	// smallest of the members'; 0 = none. It can never raise it.
+	MaxHopsOverride int `json:"max_hops_override,omitempty"`
+	// LastReadAt is when the owner last opened the group.
+	LastReadAt *time.Time `json:"last_read_at,omitempty"`
 }
 
 // ChannelRef is where a session's replies belong: a chat channel and the

@@ -208,6 +208,10 @@ const (
 	// KindApprovalRequest is a gate approval prompt, recorded when raised
 	// and again when decided (same extras.approval_id).
 	KindApprovalRequest = "approval_request"
+	// KindGroupMemberAdded / KindGroupMemberRemoved record a member
+	// change in a group chat (extras: agent_id, handle, by).
+	KindGroupMemberAdded   = "group_member_added"
+	KindGroupMemberRemoved = "group_member_removed"
 )
 
 // KindCompaction marks the point where the CLI folded older turns into

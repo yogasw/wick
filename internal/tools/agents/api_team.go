@@ -393,7 +393,9 @@ func teamAgentSaveStatus(err error) int {
 func agentSessions(ownerID, agentID string) []session.Session {
 	var out []session.Session
 	for _, s := range globalMgr.Registry().Sessions() {
-		if s.Meta.AgentID == agentID && s.Meta.UserID == ownerID {
+		// A group's backing session answers for the group, not as one of
+		// the agent's own chats.
+		if s.Meta.AgentID == agentID && s.Meta.UserID == ownerID && s.Meta.GroupSessionID == "" {
 			out = append(out, s)
 		}
 	}
