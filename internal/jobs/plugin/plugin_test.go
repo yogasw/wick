@@ -190,3 +190,52 @@ func TestLoadSkipsDisabledAndForeignKinds(t *testing.T) {
 		t.Fatalf("disabled job must not register: %d %+v", n, got)
 	}
 }
+
+// blockConn's Run blocks until its process is killed.
+type blockConn struct{ killed chan struct{} }
+
+func (c blockConn) Run(ctx context.Context, _ string, _ map[string]string, _ func(string)) (string, error) {
+	select {
+	case <-c.killed:
+		return "", errors.New("killed")
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+func (blockConn) Schema(context.Context) ([]byte, error) { return nil, nil }
+
+func TestKillAllReapsRunningJobs(t *testing.T) {
+	f := connplugin.Found{Key: "k", BinaryPath: "/bin/k", Manifest: wickplugin.Manifest{Job: &wickplugin.JobModule{}}}
+	killed := make(chan struct{})
+	kills := 0
+	spawn := func(string) (func(), wickplugin.JobConn, error) {
+		return func() { kills++; close(killed) }, blockConn{killed: killed}, nil
+	}
+	done := make(chan error, 1)
+	go func() { _, err := runWith(buildModule(f, spawn, time.Minute), nil); done <- err }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		live.Lock()
+		n := len(live.kills)
+		live.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("job process never registered as live")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	KillAll()
+	if err := <-done; err == nil {
+		t.Fatal("interrupted run must fail")
+	}
+	if kills != 1 {
+		t.Fatalf("kill must run exactly once (KillAll + deferred), got %d", kills)
+	}
+	live.Lock()
+	defer live.Unlock()
+	if len(live.kills) != 0 {
+		t.Fatalf("live kills left: %d", len(live.kills))
+	}
+}

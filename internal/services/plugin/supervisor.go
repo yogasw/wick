@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
@@ -32,6 +33,11 @@ var (
 	// stableAfter resets the backoff once a process has stayed up this long.
 	stableAfter = time.Minute
 	pollEvery   = 200 * time.Millisecond
+	// StopGrace is how long a process gets after SIGTERM before SIGKILL.
+	StopGrace = 5 * time.Second
+	// stopWait bounds how long Stop waits for the supervise loop to unwind
+	// (a spawn still in its handshake).
+	stopWait = 15 * time.Second
 )
 
 // ErrNotRunning is returned for a request while the service is down.
@@ -90,11 +96,12 @@ type spawnFn func(binary, socket string, env []string, stderr io.Writer) (kill f
 
 func spawnProcess(binary, socket string, env []string, stderr io.Writer) (func(), wickplugin.ToolConn, <-chan struct{}, error) {
 	client, raw, err := connplugin.Spawn(connplugin.SpawnSpec{
-		Binary:   binary,
-		Plugins:  wickplugin.ToolVersionedPlugins,
-		Dispense: wickplugin.ToolPluginName,
-		Env:      append([]string{wickplugin.EnvToolSocket + "=" + socket}, env...),
-		Stderr:   stderr,
+		Binary:    binary,
+		SocketDir: filepath.Dir(socket),
+		Plugins:   wickplugin.ToolVersionedPlugins,
+		Dispense:  wickplugin.ToolPluginName,
+		Env:       append([]string{wickplugin.EnvToolSocket + "=" + socket}, env...),
+		Stderr:    stderr,
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -111,7 +118,30 @@ func spawnProcess(binary, socket string, env []string, stderr io.Writer) (func()
 		}
 		close(exited)
 	}()
-	return client.Kill, conn, exited, nil
+	pid := 0
+	if rc := client.ReattachConfig(); rc != nil {
+		pid = rc.Pid
+	}
+	kill := func() { terminate(pid, exited, StopGrace); client.Kill() }
+	return kill, conn, exited, nil
+}
+
+// terminate sends SIGTERM to pid and waits up to grace for exited; the
+// caller force-kills after. Platforms without SIGTERM go straight to kill.
+func terminate(pid int, exited <-chan struct{}, grace time.Duration) {
+	if pid <= 0 {
+		return
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil || p.Signal(syscall.SIGTERM) != nil {
+		return
+	}
+	t := time.NewTimer(grace)
+	defer t.Stop()
+	select {
+	case <-exited:
+	case <-t.C:
+	}
 }
 
 // State of a supervised service.
@@ -148,6 +178,8 @@ type Supervisor struct {
 	kill    func()
 	cancel  context.CancelFunc
 	wakeNow chan struct{}
+	// done is closed when the supervise loop has returned.
+	done chan struct{}
 }
 
 func newSupervisor(key, binary, sockDir string, spawn spawnFn) *Supervisor {
@@ -182,15 +214,21 @@ func (s *Supervisor) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 	s.wakeNow = make(chan struct{}, 1)
+	s.done = make(chan struct{})
 	s.status.State = StateStarting
-	go s.loop(ctx, s.wakeNow)
+	go func(done chan struct{}) {
+		defer close(done)
+		s.loop(ctx, s.wakeNow)
+	}(s.done)
 }
 
-// Stop kills the process and stops restarting it.
+// Stop terminates the process (SIGTERM, then SIGKILL after StopGrace),
+// removes its socket and stops restarting it. It returns once the supervise
+// loop is gone, so no spawn still in flight outlives it.
 func (s *Supervisor) Stop() {
 	s.mu.Lock()
-	cancel, kill := s.cancel, s.kill
-	s.cancel, s.kill, s.rt = nil, nil, nil
+	cancel, kill, done := s.cancel, s.kill, s.done
+	s.cancel, s.kill, s.rt, s.done = nil, nil, nil, nil
 	s.status.State = StateStopped
 	s.status.NextStart = time.Time{}
 	s.mu.Unlock()
@@ -199,6 +237,13 @@ func (s *Supervisor) Stop() {
 	}
 	if kill != nil {
 		kill()
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(stopWait):
+			s.Logs.Printf("stop: supervise loop still busy after %s", stopWait)
+		}
 	}
 }
 

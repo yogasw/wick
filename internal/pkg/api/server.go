@@ -119,10 +119,10 @@ import (
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"github.com/yogasw/wick/internal/processctl"
+	serviceplugin "github.com/yogasw/wick/internal/services/plugin"
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
-	serviceplugin "github.com/yogasw/wick/internal/services/plugin"
 	"github.com/yogasw/wick/internal/tools"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
@@ -3117,7 +3117,7 @@ func NewServer() *Server {
 		u, err := authSvc.GetUserByID(ctx, userID)
 		return err == nil && u != nil && u.Approved
 	}
-	return &Server{runAsUsable: runAsUsable, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens}
+	return &Server{runAsUsable: runAsUsable, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens}
 }
 
 type Server struct {
@@ -3128,6 +3128,7 @@ type Server struct {
 	agentsLayout   agentconfig.Layout
 	pluginMgr      *connplugin.Manager
 	toolPlugins    *toolplugin.Pool
+	servicePlugins *serviceplugin.Host
 	pluginReloader *connplugin.Reloader
 	// syncSessionMeta reloads one session into the in-memory registry
 	// and broadcasts its meta over SSE. Built in NewServer (where the
@@ -3777,6 +3778,11 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		if s.toolPlugins != nil {
 			s.toolPlugins.KillAll()
 		}
+		// Service plugins are always-on children: SIGTERM, then SIGKILL.
+		if s.servicePlugins != nil {
+			s.servicePlugins.Shutdown()
+		}
+		jobplugin.KillAll()
 		if s.pluginMgr != nil {
 			s.pluginMgr.KillAll()
 		}
@@ -4028,6 +4034,13 @@ func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, b
 	if s.toolPlugins != nil {
 		s.toolPlugins.KillAll()
 	}
+	// The successor spawns its own service plugins; stop ours (SIGTERM, then
+	// SIGKILL) so none is orphaned by the handover, and reap any job run the
+	// drain left behind.
+	if s.servicePlugins != nil {
+		s.servicePlugins.Shutdown()
+	}
+	jobplugin.KillAll()
 	if s.pluginMgr != nil {
 		s.pluginMgr.KillAll()
 	}

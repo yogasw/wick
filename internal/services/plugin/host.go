@@ -181,6 +181,19 @@ func (h *Host) StopAll() {
 	}
 }
 
+// Shutdown stops every service process in parallel (SIGTERM, then SIGKILL
+// after StopGrace) and waits for them. Called on wick shutdown and before a
+// reload hands over, so the successor spawns its own processes and no plugin
+// outlives the wick that started it.
+func (h *Host) Shutdown() {
+	var wg sync.WaitGroup
+	for _, s := range h.List() {
+		wg.Add(1)
+		go func(s *Service) { defer wg.Done(); s.Sup.Stop() }(s)
+	}
+	wg.Wait()
+}
+
 // ServeHTTP serves /x/{key}/*.
 func (h *Host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/x/")

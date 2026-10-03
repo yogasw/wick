@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -46,6 +47,46 @@ func spawnProcess(binary string) (func(), wickplugin.JobConn, error) {
 		return nil, nil, fmt.Errorf("plugin %s is not a job plugin", binary)
 	}
 	return client.Kill, conn, nil
+}
+
+// live holds the kill of every job process still running, so KillAll can
+// reap them on shutdown / before a reload hands over.
+var live = struct {
+	sync.Mutex
+	next  int
+	kills map[int]func()
+}{kills: map[int]func(){}}
+
+// track registers kill as live; the returned func kills once and unregisters.
+func track(kill func()) func() {
+	live.Lock()
+	live.next++
+	id := live.next
+	var once sync.Once
+	k := func() { once.Do(kill) }
+	live.kills[id] = k
+	live.Unlock()
+	return func() {
+		live.Lock()
+		delete(live.kills, id)
+		live.Unlock()
+		k()
+	}
+}
+
+// KillAll kills every job plugin process still running (wick shutdown or
+// the end of a reload drain). The interrupted runs fail like a timeout.
+func KillAll() {
+	live.Lock()
+	kills := make([]func(), 0, len(live.kills))
+	for id, k := range live.kills {
+		kills = append(kills, k)
+		delete(live.kills, id)
+	}
+	live.Unlock()
+	for _, k := range kills {
+		k()
+	}
 }
 
 func timeout() time.Duration {
@@ -95,6 +136,7 @@ func buildModule(f connplugin.Found, spawn spawnFn, limit time.Duration) job.Mod
 			return "", fmt.Errorf("start job plugin %s: %w", meta.Key, err)
 		}
 		// The process lives for this one call only.
+		kill = track(kill)
 		defer kill()
 		var lines []string
 		result, err := conn.Run(ctx, TriggerScheduled, cfg, func(line string) {
