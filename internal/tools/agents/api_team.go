@@ -1444,3 +1444,32 @@ func applyToolSettings(c *tool.Ctx, p *entity.AgentPersona, req teamAgentWriteRe
 	return true
 }
 
+
+// apiTeamAgentSkills handles GET /api/team/agents/{id}/skills: the skills
+// the agent's spawns see — its project's own, the global and the built-in
+// ones — each with whether the agent has it switched off.
+func apiTeamAgentSkills(c *tool.Ctx) {
+	if !teamReady(c) {
+		return
+	}
+	p, ok := loadOwnTeamAgent(c)
+	if !ok {
+		return
+	}
+	localDir := ""
+	if p.ProjectID != "" {
+		if dir, err := project.ResolvePath(globalLayout, p.ProjectID); err == nil {
+			localDir = skillsync.LocalSkillsDir(dir)
+		}
+	}
+	type item struct {
+		skillsync.EffectiveSkill
+		Disabled bool `json:"disabled"`
+	}
+	off := team.DecodeSkillNames(p.DisabledSkills)
+	out := []item{}
+	for _, s := range skillsync.EffectiveSkills(localDir, skillsync.ListSkills()) {
+		out = append(out, item{EffectiveSkill: s, Disabled: !s.Required && slices.Contains(off, s.Name)})
+	}
+	c.JSON(http.StatusOK, map[string]any{"items": out, "local_dir": localDir})
+}
