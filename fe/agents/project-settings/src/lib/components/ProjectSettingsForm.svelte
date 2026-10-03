@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { ConfirmDialog, ProviderPicker, buildProviderOptions } from "@wick-fe/common-ui";
+  import { DeleteProjectDialog, ProviderPicker, buildProviderOptions } from "@wick-fe/common-ui";
   import { toastError } from "@wick-fe/common-stores";
   import {
     getProjectSettings,
     updateProject,
     createProject,
-    deleteProject,
     unpinSession,
     getProviderOptionModels,
     saveTicketConfig,
@@ -235,14 +234,9 @@
     }
   }
 
-  async function handleDelete() {
+  function handleDeleted() {
     showDeleteConfirm = false;
-    try {
-      await deleteProject(projectID);
-      window.location.href = `${base}/sessions`;
-    } catch (err) {
-      toastError("Delete failed", err instanceof Error ? err.message : String(err));
-    }
+    window.location.href = `${base}/sessions`;
   }
 
   async function handleUnpin(sessionID: string) {
@@ -262,8 +256,6 @@
     return `${base}/sessions`;
   }
 
-  /* Snippets are compiled outside the `{:else if data}` block, so the
-     narrowing there does not reach them — these read the flags instead. */
   const canDelete = $derived(data !== null && !data.is_new && !data.is_protected);
 
   /* Folded sections state their current setting in the subtitle, so the
@@ -316,7 +308,7 @@
     q === "" || terms.filter(Boolean).join(" ").toLowerCase().includes(q);
 
   const showProject = $derived(
-    hit("project name icon description delete project rename chats", name, description),
+    hit("project name icon description rename chats", name, description),
   );
   const showFolder = $derived(
     hit("folder managed custom path working directory cwd workspace where sessions run", customPath),
@@ -337,7 +329,7 @@
     ),
   );
   const showPinned = $derived(hit("pinned sessions pin chats"));
-  const showAdvanced = $derived(hit("advanced raw project meta json folder change semantics"));
+  const showAdvanced = $derived(hit("advanced raw project meta json folder change semantics danger zone delete remove project"));
 
   const matchCount = $derived(
     [showProject, showFolder, showDefaults, showTicket, showWidget, showPinned, showAdvanced].filter(
@@ -354,13 +346,11 @@
   $effect(() => () => autosave.dispose());
 </script>
 
-<ConfirmDialog
+<DeleteProjectDialog
   open={showDeleteConfirm}
-  title="Delete project?"
-  body="All sessions in this project will be moved to the default project. This cannot be undone."
-  confirmLabel="Delete"
-  destructive={true}
-  onConfirm={handleDelete}
+  {base}
+  {projectID}
+  onDeleted={handleDeleted}
   onCancel={() => { showDeleteConfirm = false; }}
 />
 
@@ -411,16 +401,6 @@
       open={data.is_new}
       forceOpen={searching}
     >
-      {#snippet action()}
-        {#if canDelete}
-          <button
-            type="button"
-            onclick={() => { showDeleteConfirm = true; }}
-            class="rounded-lg border border-neg-400/40 px-3 py-1.5 text-xs font-medium text-neg-400 transition-colors hover:bg-neg-100"
-          >Delete project</button>
-        {/if}
-      {/snippet}
-
       <div class="flex items-center gap-4">
         <input
           type="text"
@@ -665,6 +645,28 @@
           <li>Custom → managed: a new managed folder is created; the custom path is left untouched.</li>
           <li>Live sessions: the cwd shifts at the next spawn; a running subprocess is unaffected until it restarts.</li>
         </ul>
+        {#if !data.is_new}
+          <!-- Danger zone sits last inside Advanced: findable (search
+               "delete" opens it) without a red button on every visit. -->
+          <div class="mt-5 rounded-lg border border-neg-400/40 bg-neg-400/10 p-3" data-testid="danger-zone">
+            <h3 class="text-xs font-semibold text-neg-400">Danger zone</h3>
+            {#if canDelete}
+              <p class="mt-1 text-xs leading-relaxed text-black-700 dark:text-black-600">
+                Deleting removes this project's {data.chat_count} chats, the agents' memory for it and
+                {data.managed ? "its managed files folder" : "its settings — the custom folder stays on disk"}.
+                This cannot be undone.
+              </p>
+            {:else}
+              <p class="mt-1 text-xs leading-relaxed text-black-700 dark:text-black-600">This project can't be deleted (default/personal).</p>
+            {/if}
+            <button
+              type="button"
+              disabled={!canDelete}
+              onclick={() => { showDeleteConfirm = true; }}
+              class="mt-3 rounded-lg border border-neg-400/40 px-3 py-1.5 text-xs font-medium text-neg-400 transition-colors hover:bg-neg-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >Delete project…</button>
+          </div>
+        {/if}
       </SettingsSection>
       {/if}
     {/if}

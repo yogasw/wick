@@ -80,6 +80,19 @@ describe("ProjectLanding — presentational rendering", () => {
     expect(container.querySelector(`a[href='/tools/agents/projects/proj-42']`)).not.toBeNull();
   });
 
+  test("the menu's last item opens the shared delete dialog", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ id: "proj-42", name: "Acme API", chats: 3, protected: false }), { status: 200 })),
+    );
+    render(ProjectLanding, { props: baseProps });
+    await openProjectMenu();
+    await fireEvent.click(screen.getByTestId("project-menu-delete"));
+    expect(await screen.findByText("Delete project Acme API?")).toBeDefined();
+    expect(screen.getByLabelText("Project name")).toBeDefined();
+    vi.unstubAllGlobals();
+  });
+
   test("renders a session list item for each session", () => {
     render(ProjectLanding, { props: baseProps });
     expect(screen.getByText("Chat s1")).toBeDefined();

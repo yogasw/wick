@@ -1,4 +1,7 @@
 export { default as ConfirmDialog } from "./ConfirmDialog.svelte";
+export { default as DeleteProjectDialog } from "./DeleteProjectDialog.svelte";
+export type { DeleteProjectPreview } from "./delete-project.js";
+export { canConfirmDelete, deleteProjectBody, needsTypedName } from "./delete-project.js";
 export { default as ToastHost } from "./ToastHost.svelte";
 export { default as Select } from "./Select.svelte";
 export type { SelectOption } from "./select-types.js";
