@@ -13,6 +13,7 @@ import { teamSettingsTabOf, type TeamSettingsTab } from "./teamSettingsTabs.js";
      /team/<handle>?panel=settings&tab=… Settings drawer over the chat
      /team/<handle>?panel=sessions       "Other chats" drawer
      /team/<handle>?panel=connections    Connections drawer (Slack)
+     /team/<handle>?panel=scheduled      Scheduled drawer
      /team/g/<group session id>          a group chat
      /team/g/<id>?panel=group-settings   its Settings drawer
      /team?panel=new                     the + Agent wizard
@@ -22,8 +23,8 @@ import { teamSettingsTabOf, type TeamSettingsTab } from "./teamSettingsTabs.js";
                                          Team settings drawer (the user's
                                          own Team, not one agent) */
 
-export type SettingsTab = "persona" | "access" | "tools" | "skills" | "mention" | "captain" | "avatar" | "advanced";
-export const SETTINGS_TABS: SettingsTab[] = ["persona", "access", "tools", "skills", "mention", "captain", "avatar", "advanced"];
+export type SettingsTab = "persona" | "access" | "tools" | "skills" | "mention" | "captain" | "session" | "avatar" | "advanced";
+export const SETTINGS_TABS: SettingsTab[] = ["persona", "access", "tools", "skills", "mention", "captain", "session", "avatar", "advanced"];
 
 /** Old tab names that still open the right tab from a bookmark. */
 const TAB_ALIASES: Record<string, SettingsTab> = { features: "tools" };
@@ -42,6 +43,7 @@ export type AgentsPanel =
   | { kind: "team-settings"; tab: TeamSettingsTab }
   | { kind: "sessions" }
   | { kind: "connections" }
+  | { kind: "scheduled" }
   | { kind: "group-settings" }
   | { kind: "new"; project?: string };
 
@@ -99,6 +101,9 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
       break;
     case "connections":
       panel = { kind: "connections" };
+      break;
+    case "scheduled":
+      panel = { kind: "scheduled" };
       break;
     case "group-settings":
       if (group) panel = { kind: "group-settings" };

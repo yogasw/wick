@@ -19,7 +19,7 @@
   import type { AgentFeatures } from "../agentMode.js";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject } from "../agentForm.js";
-  import type { SettingsTab } from "../agentsRouter.js";
+  import { navigate, type SettingsTab } from "../agentsRouter.js";
   import { deleteAlert, canDeleteAgent, type AgentProjectPreview } from "../agentDelete.js";
   import { PERSONA_KIND, personaInput, type PersonaDraft, type PersonaTarget } from "../personaGen.js";
   import { MENTION_FROM_OPTIONS, MAX_HOPS_MIN, MAX_HOPS_MAX, clampHops, hopsNote, mentionFromOf } from "../mentionSettings.js";
@@ -28,6 +28,7 @@
   import AccessHistory from "./AccessHistory.svelte";
   import NativeToolsSection from "./NativeToolsSection.svelte";
   import AgentSkillsTab from "./AgentSkillsTab.svelte";
+  import AgentSessionTab from "./AgentSessionTab.svelte";
   import { nativeToolsOf } from "../nativeTools.js";
   import { MAX_PROMPTS, promptsToSave } from "../suggestedPrompts.js";
   import type { BashRule } from "../api/team.js";
@@ -307,6 +308,7 @@
     { id: "skills", label: "Skills" },
     { id: "mention", label: "Mention" },
     { id: "captain", label: "Captain" },
+    { id: "session", label: "Session" },
     { id: "avatar", label: "Avatar" },
     { id: "advanced", label: "Advanced" },
   ];
@@ -478,6 +480,10 @@
   {:else if tab === "skills"}
     {#key agent.id}
       <AgentSkillsTab {base} agentId={agent.id} mainSessionId={agent.main_session_id} disabled={draft.disabled_skills} onChange={(d) => (draft.disabled_skills = d)} />
+    {/key}
+  {:else if tab === "session"}
+    {#key agent.id}
+      <AgentSessionTab {base} agentId={agent.id} onOpenConnections={() => navigate({ handle: agent.handle, session: null, panel: { kind: "connections" } })} />
     {/key}
   {:else if tab === "avatar"}
     <div class="flex items-center gap-4">

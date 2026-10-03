@@ -384,3 +384,60 @@ export const getAgentSlackHealth = (base: string, id: string) =>
   apiGetE<AgentSlackHealth>(`${base}/api/team/agents/${enc(id)}/slack/health`);
 export const getAgentSlackManifest = (base: string, id: string) =>
   apiGetE<{ manifest: unknown; create_url: string }>(`${base}/api/team/agents/${enc(id)}/slack/manifest`);
+
+/** One row of an agent's Scheduled drawer (GET /api/team/agents/{id}/scheduled). */
+export type AgentSchedule = {
+  id: string;
+  title: string;
+  message: string;
+  kind: "once" | "recurring";
+  status: string;
+  paused?: boolean;
+  held_by_agent?: boolean;
+  interval_ms?: number;
+  cron?: string;
+  cron_timezone?: string;
+  next_run_at?: string;
+  last_run_at?: string;
+  last_error?: string;
+  run_count: number;
+  destination: "main" | "chat" | "new_chat";
+  session_id: string;
+};
+export type AgentScheduledList = {
+  items: AgentSchedule[];
+  feature_on: boolean;
+  agent_disabled: boolean;
+  server_timezone: string;
+  main_session_id: string;
+  slack_online: boolean;
+};
+/** Create/edit body: exactly one of run_at / every / cron. */
+export type AgentScheduleWrite = { message?: string; run_at?: string; every?: string; cron?: string; destination?: "main" };
+
+export const getAgentScheduled = (base: string, id: string) =>
+  apiGetE<AgentScheduledList>(`${base}/api/team/agents/${enc(id)}/scheduled`);
+export const createAgentSchedule = (base: string, id: string, body: AgentScheduleWrite) =>
+  apiPostE<AgentSchedule>(`${base}/api/team/agents/${enc(id)}/scheduled`, body);
+export const updateAgentSchedule = (base: string, id: string, sid: string, body: AgentScheduleWrite) =>
+  apiPatchE<AgentSchedule>(`${base}/api/team/agents/${enc(id)}/scheduled/${enc(sid)}`, body);
+export const deleteAgentSchedule = (base: string, id: string, sid: string) =>
+  apiDeleteE<unknown>(`${base}/api/team/agents/${enc(id)}/scheduled/${enc(sid)}`);
+export const agentScheduleAction = (base: string, id: string, sid: string, action: "pause" | "resume" | "run") =>
+  apiPostE<AgentSchedule>(`${base}/api/team/agents/${enc(id)}/scheduled/${enc(sid)}/${action}`, {});
+
+/** Settings › Session (GET/PATCH /api/team/agents/{id}/session). */
+export type AgentSessionPolicy = {
+  compact: "auto" | "idle";
+  idle_hours: number;
+  summarise_threads: boolean;
+  main_session_id: string;
+  slack_dm_main_chat: boolean;
+  slack_connected: boolean;
+};
+export const getAgentSession = (base: string, id: string) =>
+  apiGetE<AgentSessionPolicy>(`${base}/api/team/agents/${enc(id)}/session`);
+export const updateAgentSession = (base: string, id: string, body: Partial<Pick<AgentSessionPolicy, "compact" | "idle_hours" | "summarise_threads">>) =>
+  apiPatchE<AgentSessionPolicy>(`${base}/api/team/agents/${enc(id)}/session`, body);
+export const compactAgentMain = (base: string, id: string) =>
+  apiPostE<{ status: string; session_id: string }>(`${base}/api/team/agents/${enc(id)}/compact`, {});

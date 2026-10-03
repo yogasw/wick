@@ -1,0 +1,117 @@
+import { describe, test, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
+import type { AgentSchedule, AgentScheduledList, AgentScheduleWrite } from "../../api/team.js";
+
+const daily: AgentSchedule = {
+  id: "s1", title: "Morning recap", message: "Morning recap", kind: "recurring", status: "active", cron: "0 9 * * *",
+  next_run_at: "2026-10-04T02:00:00Z", run_count: 2, destination: "main", session_id: "main1",
+};
+let list: AgentScheduledList;
+const createAgentSchedule = vi.fn((_b: string, _id: string, body: AgentScheduleWrite) =>
+  Promise.resolve({ ...daily, id: "s2", message: body.message ?? "", title: body.message ?? "" }));
+const updateAgentSchedule = vi.fn((_b: string, _id: string, _sid: string, body: AgentScheduleWrite) =>
+  Promise.resolve({ ...daily, message: body.message ?? daily.message, cron: body.cron ?? daily.cron }));
+const agentScheduleAction = vi.fn((_b: string, _id: string, _sid: string, action: string) =>
+  Promise.resolve({ ...daily, paused: action === "pause" }));
+const deleteAgentSchedule = vi.fn(() => Promise.resolve({}));
+vi.mock("../../api/team.js", async (orig) => ({
+  ...(await orig<typeof import("../../api/team.js")>()),
+  getAgentScheduled: () => Promise.resolve(structuredClone(list)),
+  createAgentSchedule: (b: string, id: string, body: AgentScheduleWrite) => createAgentSchedule(b, id, body),
+  updateAgentSchedule: (b: string, id: string, sid: string, body: AgentScheduleWrite) => updateAgentSchedule(b, id, sid, body),
+  agentScheduleAction: (b: string, id: string, sid: string, a: string) => agentScheduleAction(b, id, sid, a),
+  deleteAgentSchedule: () => deleteAgentSchedule(),
+  runApi: <T,>(p: Promise<T>) => p,
+}));
+
+import AgentScheduled from "../AgentScheduled.svelte";
+import type { AgentItem } from "../../api/team.js";
+
+const agent = { id: "a1", handle: "rekap", name: "Rekap", avatar: { shape: "circle", color: "#6366f1" } } as unknown as AgentItem;
+const base = (o: Partial<AgentScheduledList> = {}): AgentScheduledList => ({
+  items: [daily], feature_on: true, agent_disabled: false, server_timezone: "Asia/Jakarta (UTC+07:00)", main_session_id: "main1", slack_online: false, ...o,
+});
+
+describe("AgentScheduled", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    for (const f of [createAgentSchedule, updateAgentSchedule, agentScheduleAction, deleteAgentSchedule]) f.mockClear();
+  });
+
+  test("list shows the human schedule, destination and status; the toggle pauses", async () => {
+    list = base();
+    render(AgentScheduled, { props: { base: "/b", agent, onClose: vi.fn() } });
+    const row = await screen.findByTestId("scheduled-row");
+    expect(row.textContent).toContain("Morning recap");
+    expect(row.textContent).toContain("Every day 09:00");
+    expect(row.textContent).toContain("Main chat");
+    expect(row.textContent).toContain("On");
+    await fireEvent.click(screen.getByRole("switch", { name: "On" }));
+    await waitFor(() => expect(agentScheduleAction).toHaveBeenCalledWith("/b", "a1", "s1", "pause"));
+    await waitFor(() => expect(screen.getByTestId("scheduled-row").textContent).toContain("Paused"));
+  });
+
+  test("⋯ menu: run now and delete with confirmation", async () => {
+    list = base();
+    render(AgentScheduled, { props: { base: "/b", agent, onClose: vi.fn() } });
+    await screen.findByTestId("scheduled-row");
+    await fireEvent.click(screen.getByRole("button", { name: "More" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Run now" }));
+    await waitFor(() => expect(agentScheduleAction).toHaveBeenCalledWith("/b", "a1", "s1", "run"));
+    await fireEvent.click(screen.getByRole("button", { name: "More" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    const confirm = await screen.findByTestId("confirm-delete");
+    expect(deleteAgentSchedule).not.toHaveBeenCalled();
+    await fireEvent.click(confirm.querySelector("button")!);
+    await waitFor(() => expect(deleteAgentSchedule).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByTestId("scheduled-row")).toBeNull());
+  });
+
+  test("create: button stays disabled until the message is written, sends into the main chat", async () => {
+    list = base({ items: [], slack_online: true });
+    render(AgentScheduled, { props: { base: "/b", agent, onClose: vi.fn() } });
+    await fireEvent.click(await screen.findByRole("button", { name: "New schedule" }));
+    expect(screen.getByTestId("server-tz").textContent).toContain("Asia/Jakarta");
+    expect(screen.getByTestId("dest-slack").textContent).toContain("coming soon");
+    const create = screen.getByRole("button", { name: "Create" }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    await fireEvent.input(screen.getByLabelText("Message to the agent"), { target: { value: "Check the inbox" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Every" }));
+    await fireEvent.input(screen.getByLabelText("Every"), { target: { value: "2" } });
+    await fireEvent.click(create);
+    await waitFor(() => expect(createAgentSchedule).toHaveBeenCalled());
+    expect(createAgentSchedule.mock.calls[0][2]).toEqual({ message: "Check the inbox", every: "2h", destination: "main" });
+  });
+
+  test("edit autosaves and keeps to the schedule's kind", async () => {
+    list = base();
+    render(AgentScheduled, { props: { base: "/b", agent, onClose: vi.fn() } });
+    await screen.findByTestId("scheduled-row");
+    await fireEvent.click(screen.getByRole("button", { name: "More" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
+    expect((screen.getByRole("button", { name: "Once at" }) as HTMLButtonElement).disabled).toBe(true);
+    await fireEvent.input(screen.getByLabelText("Cron"), { target: { value: "0 10 * * *" } });
+    await waitFor(() => expect(updateAgentSchedule).toHaveBeenCalled(), { timeout: 2000 });
+    expect(updateAgentSchedule.mock.calls[0][3]).toEqual({ message: "Morning recap", cron: "0 10 * * *" });
+    await waitFor(() => expect(screen.getByTestId("save-state").textContent).toBe("Saved"));
+  });
+
+  test("feature off: explains and links to Tools & features", async () => {
+    list = base({ feature_on: false });
+    const onOpenTools = vi.fn();
+    render(AgentScheduled, { props: { base: "/b", agent, onClose: vi.fn(), onOpenTools } });
+    const off = await screen.findByTestId("scheduled-off");
+    expect(off.textContent).toContain("Scheduling is off for this agent");
+    expect(screen.queryByTestId("scheduled-list")).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Open Tools & features" }));
+    expect(onOpenTools).toHaveBeenCalled();
+  });
+
+  test("a disabled agent shows its schedules as held", async () => {
+    list = base({ agent_disabled: true, items: [{ ...daily, paused: true, held_by_agent: true }] });
+    render(AgentScheduled, { props: { base: "/b", agent, onClose: vi.fn() } });
+    const row = await screen.findByTestId("scheduled-row");
+    expect(row.textContent).toContain("Held — agent off");
+    expect(screen.getByText(/schedules are on hold/)).toBeTruthy();
+  });
+});

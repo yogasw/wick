@@ -14,6 +14,7 @@
   import AgentWizard from "./lib/components/AgentWizard.svelte";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
   import AgentConnections from "./lib/components/AgentConnections.svelte";
+  import AgentScheduled from "./lib/components/AgentScheduled.svelte";
   import { agentsRoute, navigate, type AgentsRoute, type AgentsPanel } from "./lib/agentsRouter.js";
   import { connectorCaption, hiddenTabsFor } from "./lib/agentMode.js";
   import { nativeToolsOf } from "./lib/nativeTools.js";
@@ -267,6 +268,7 @@
     { label: "Chats", hint: "main chat and history", onclick: () => openPanel({ kind: "sessions" }) },
     { label: "Settings", hint: "persona, access, tools, avatar", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
     { label: "Connections", hint: "Slack and health", onclick: () => openPanel({ kind: "connections" }) },
+    { label: "Scheduled", hint: "work it runs on a schedule", onclick: () => openPanel({ kind: "scheduled" }) },
     { label: "Duplicate agent", hint: "copies persona & access, not connections", divider: true, onclick: duplicate },
     selected?.disabled
       ? { label: "Enable", hint: "the agent can be used again", onclick: toggleDisabled }
@@ -583,6 +585,8 @@
         />
       {:else if selected && route.panel.kind === "connections"}
         <AgentConnections {base} agent={selected} onClose={() => openPanel(null)} />
+      {:else if selected && route.panel.kind === "scheduled"}
+        <AgentScheduled {base} agent={selected} onClose={() => openPanel(null)} onOpenTools={() => openPanel({ kind: "settings", tab: "tools" })} />
       {:else if selected && route.panel.kind === "sessions"}
         <AgentSessions
           {base}
