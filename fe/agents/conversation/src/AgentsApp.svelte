@@ -12,6 +12,7 @@
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import AgentSettings from "./lib/components/AgentSettings.svelte";
   import AgentWizard from "./lib/components/AgentWizard.svelte";
+  import RemoteAgentWizard from "./lib/components/team/RemoteAgentWizard.svelte";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
   import AgentConnections from "./lib/components/AgentConnections.svelte";
   import AgentScheduled from "./lib/components/AgentScheduled.svelte";
@@ -75,6 +76,8 @@
   const groupSettingsOpen = $derived(route.panel?.kind === "group-settings");
   let newGroupOpen = $state(false);
   let addMenuOpen = $state(false);
+  /* + Agent's type: a wick agent or an A2A remote one (its own wizard). */
+  let newType = $state<"local" | "remote">("local");
   const activeGroup = $derived(groups.find((g) => g.id === activeGroupId));
   async function loadGroups() {
     try {
@@ -361,7 +364,7 @@
       >+</button>
       {#if addMenuOpen}
         <div class="absolute left-[150px] top-11 z-50 w-40 rounded-xl border border-white-300 bg-white-100 py-1 shadow-lg dark:border-navy-600 dark:bg-navy-800" role="menu">
-          <button type="button" role="menuitem" class="block w-full px-3 py-2 text-left text-sm text-black-900 hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-700" onclick={() => { addMenuOpen = false; rosterOpen = false; openPanel({ kind: "new" }); }}>New agent</button>
+          <button type="button" role="menuitem" class="block w-full px-3 py-2 text-left text-sm text-black-900 hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-700" onclick={() => { addMenuOpen = false; rosterOpen = false; newType = "local"; openPanel({ kind: "new" }); }}>New agent</button>
           <button type="button" role="menuitem" class="block w-full px-3 py-2 text-left text-sm text-black-900 hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-700" onclick={() => { addMenuOpen = false; rosterOpen = false; newGroupOpen = true; }}>New group</button>
         </div>
       {/if}
@@ -571,7 +574,11 @@
           onClose={() => openPanel(null)}
         />
       {:else if route.panel.kind === "new"}
-        <AgentWizard {base} taken={agents.map((a) => a.handle)} convertProject={route.panel.project} onClose={() => openPanel(null)} {onCreated} />
+        {#if newType === "remote" && !route.panel.project}
+          <RemoteAgentWizard {base} taken={agents.map((a) => a.handle)} onClose={() => openPanel(null)} {onCreated} onType={(t) => (newType = t)} />
+        {:else}
+          <AgentWizard {base} taken={agents.map((a) => a.handle)} convertProject={route.panel.project} onClose={() => openPanel(null)} {onCreated} onType={(t) => (newType = t)} />
+        {/if}
       {:else if selected && route.panel.kind === "settings"}
         <AgentSettings
           {base}

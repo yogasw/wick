@@ -81,7 +81,75 @@ export type AgentItem = {
   /** Everything else on the same project: other agents (any owner) and
       web/channel conversations. */
   shared_with?: number;
+  /** "" = an agent wick runs itself, "a2a-remote" = another system's A2A
+      agent; then `remote` holds its card and settings. */
+  kind?: "" | "a2a-remote";
+  remote?: RemoteAgentInfo;
 };
+
+/* A2A remote agents (api_team_a2a_remote.go). The auth secret goes out
+   on writes only; no response ever carries it back (auth_set). */
+
+export type RemoteAuthType = "none" | "bearer" | "api_key";
+export type RemoteAuthReq = { type: RemoteAuthType; header?: string; secret?: string };
+export type RemoteUsage = "only_me" | "me_and_my_agents";
+
+export type RemoteSkill = { id: string; name: string; description?: string; examples?: string[] };
+
+export type RemoteCard = {
+  name: string;
+  description: string;
+  version: string;
+  streaming: boolean;
+  icon_url?: string;
+  /** card.provider.organization */
+  provider?: string;
+  skills: RemoteSkill[] | null;
+  endpoint: string;
+  transport: string;
+};
+
+/** Per chat, only on GET …/a2a-remote?session_id=. */
+export type RemoteState = {
+  context_id?: string;
+  task_id?: string;
+  /** The remote waits on an answer: the next message continues its task. */
+  input_required?: boolean;
+  last_state?: string;
+  updated_at: string;
+};
+
+export type RemoteAgentInfo = {
+  card_url: string;
+  host: string;
+  card: RemoteCard;
+  auth_type: RemoteAuthType;
+  auth_header?: string;
+  auth_set: boolean;
+  timeout_sec: number;
+  max_response_bytes: number;
+  usage: RemoteUsage;
+  refreshed_at: string;
+  session?: RemoteState;
+};
+
+export type RemoteResolved = { card_url: string; host: string; card: RemoteCard; suggested_handle: string };
+
+/** Always 200: ok false carries the failing step in state and error. */
+export type RemoteTestResult = { ok: boolean; state: string; card_ms: number; latency_ms: number; reply: string; error: string };
+
+export type RemoteCreate = {
+  url: string;
+  auth?: RemoteAuthReq;
+  handle?: string;
+  tagline?: string;
+  avatar?: AgentAvatarSpec;
+  timeout_sec?: number;
+  max_response_bytes?: number;
+  usage?: RemoteUsage;
+};
+
+export type RemoteUpdate = Partial<{ timeout_sec: number; max_response_bytes: number; usage: RemoteUsage; auth: RemoteAuthReq }>;
 
 export type AgentWrite = Partial<{
   handle: string;
@@ -174,6 +242,26 @@ export type AgentSessionItem = {
 };
 
 const enc = encodeURIComponent;
+
+export const resolveRemoteCard = (base: string, url: string, auth?: RemoteAuthReq) =>
+  apiPostE<RemoteResolved>(`${base}/api/team/a2a-remote/resolve`, auth ? { url, auth } : { url });
+
+/** By url (wizard) or agent_id (Settings; no auth = the stored one). */
+export const testRemoteAgent = (base: string, body: { url?: string; agent_id?: string; auth?: RemoteAuthReq }) =>
+  apiPostE<RemoteTestResult>(`${base}/api/team/a2a-remote/test`, body);
+
+export const createRemoteAgent = (base: string, body: RemoteCreate) =>
+  apiPostE<AgentItem>(`${base}/api/team/a2a-remote`, body);
+
+export const getRemoteAgent = (base: string, id: string, sessionId?: string) =>
+  apiGetE<RemoteAgentInfo>(`${base}/api/team/agents/${enc(id)}/a2a-remote${sessionId ? `?session_id=${enc(sessionId)}` : ""}`);
+
+export const updateRemoteAgent = (base: string, id: string, body: RemoteUpdate) =>
+  apiPatchE<RemoteAgentInfo>(`${base}/api/team/agents/${enc(id)}/a2a-remote`, body);
+
+/** Re-reads the card: skills, version and streaming change; handle and avatar stay. */
+export const refreshRemoteCard = (base: string, id: string) =>
+  apiPostE<RemoteAgentInfo>(`${base}/api/team/agents/${enc(id)}/a2a-remote/refresh-card`, {});
 
 export const listAgents = (base: string) =>
   apiGetE<{ agents: AgentItem[] | null; captain_id: string }>(`${base}/api/team/agents`);

@@ -23,8 +23,9 @@ import { teamSettingsTabOf, type TeamSettingsTab } from "./teamSettingsTabs.js";
                                          Team settings drawer (the user's
                                          own Team, not one agent) */
 
-export type SettingsTab = "persona" | "access" | "tools" | "skills" | "mention" | "captain" | "session" | "avatar" | "advanced";
-export const SETTINGS_TABS: SettingsTab[] = ["persona", "access", "tools", "skills", "mention", "captain", "session", "avatar", "advanced"];
+/* "remote" is the A2A remote agent's own tab (remoteAgent.ts). */
+export type SettingsTab = "persona" | "access" | "tools" | "skills" | "mention" | "captain" | "session" | "avatar" | "advanced" | "remote";
+export const SETTINGS_TABS: SettingsTab[] = ["persona", "access", "tools", "skills", "mention", "captain", "session", "avatar", "advanced", "remote"];
 
 /** Old tab names that still open the right tab from a bookmark. */
 const TAB_ALIASES: Record<string, SettingsTab> = { features: "tools" };

@@ -29,8 +29,10 @@
     convertProject?: string;
     onClose: () => void;
     onCreated: (a: AgentItem) => void;
+    /** Switches + Agent to the A2A remote wizard (not when converting). */
+    onType?: (t: "local" | "remote") => void;
   };
-  let { base, taken, convertProject, onClose, onCreated }: Props = $props();
+  let { base, taken, convertProject, onClose, onCreated, onType }: Props = $props();
 
   const STEPS = ["Persona", "Access"];
   let step = $state(1);
@@ -240,6 +242,15 @@
     <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"></path></svg>
   </button>
 </div>
+
+{#if onType && !convertProject}
+  <div class="px-6 pt-3">
+    <div class="inline-flex rounded-lg border border-white-300 p-0.5 dark:border-navy-600" role="group" aria-label="Agent type">
+      <button type="button" class="rounded-md bg-green-500 px-3 py-1 text-xs text-white-100" aria-pressed="true">Wick agent</button>
+      <button type="button" class="rounded-md px-3 py-1 text-xs text-black-800 dark:text-black-600" aria-pressed="false" data-testid="aw-type-remote" onclick={() => onType?.("remote")}>A2A remote</button>
+    </div>
+  </div>
+{/if}
 
 <ol class="flex items-center gap-2 px-6 pt-3 pb-4 text-xs" aria-label="Steps">
   {#each STEPS as s, i (s)}
