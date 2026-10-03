@@ -16,6 +16,11 @@ type UserMetadata struct {
 	// "detailed" (wider cards with description). Empty means compact.
 	HomeView string `json:"home_view,omitempty"`
 
+	// UIScale is the interface size: the root font-size in percent, 80 to
+	// 100 in steps of 5. 0 means the default (UIScaleDefault). Read it
+	// through UIScaleOrDefault.
+	UIScale int `json:"ui_scale,omitempty"`
+
 	// Theme picks the UI color palette. Values are Theme.ID from
 	// internal/pkg/ui/theme.go ("light", "dark", "dracula", …).
 	// Empty means "no preference" — guests follow the device
@@ -115,6 +120,26 @@ const (
 	HomeViewCompact  = "compact"
 	HomeViewDetailed = "detailed"
 )
+
+// Interface size bounds, in percent of the browser's root font-size.
+const (
+	UIScaleMin     = 80
+	UIScaleMax     = 100
+	UIScaleStep    = 5
+	UIScaleDefault = 90
+)
+
+// ValidUIScale returns v when it is a size the slider offers (80..100,
+// a multiple of 5), else UIScaleDefault.
+func ValidUIScale(v int) int {
+	if v < UIScaleMin || v > UIScaleMax || v%UIScaleStep != 0 {
+		return UIScaleDefault
+	}
+	return v
+}
+
+// UIScaleOrDefault returns the stored interface size, or the default.
+func (m UserMetadata) UIScaleOrDefault() int { return ValidUIScale(m.UIScale) }
 
 // HomeViewOrDefault returns a valid HomeView value, falling back to
 // compact when unset or unrecognized.

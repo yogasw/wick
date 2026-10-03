@@ -179,6 +179,18 @@ func (s *Service) SetHomeView(ctx context.Context, userID, view string) error {
 	return s.repo.SetMetadata(ctx, userID, meta)
 }
 
+// SetUIScale saves the user's interface size; an invalid value stores the
+// default.
+func (s *Service) SetUIScale(ctx context.Context, userID string, pct int) error {
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	meta := u.Metadata
+	meta.UIScale = entity.ValidUIScale(pct)
+	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
 // SetTicketFilter saves the user's ticket-board filter for one project.
 // A zero-value filter removes the entry so the metadata bag doesn't
 // accumulate empty objects for every project ever visited.

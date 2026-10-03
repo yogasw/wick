@@ -5,7 +5,7 @@ import "github.com/yogasw/wick/internal/pkg/spa"
 templ Layout(title string) {
 	{{ theme := ThemeByID(ThemeFromContext(ctx)) }}
 	<!DOCTYPE html>
-	<html lang="en" class={ htmlThemeClasses(theme) }>
+	<html lang="en" class={ htmlThemeClasses(theme) } { htmlScaleAttrs(ctx)... }>
 		<head>
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"/>
