@@ -22,6 +22,8 @@
   import type { SettingsTab } from "../agentsRouter.js";
   import { deleteAlert, canDeleteAgent, type AgentProjectPreview } from "../agentDelete.js";
   import { PERSONA_KIND, personaInput, type PersonaDraft, type PersonaTarget } from "../personaGen.js";
+  import { MENTION_FROM_OPTIONS, MAX_HOPS_MIN, MAX_HOPS_MAX, clampHops, hopsNote, mentionFromOf } from "../mentionSettings.js";
+  import type { MentionFrom } from "../api/team.js";
 
   type Props = {
     base: string;
@@ -40,6 +42,7 @@
     pick: string; features: AgentFeatures; avatar: AvatarSpec;
     project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; run_as: "caller" | "owner";
     disabled: boolean; allow_provider_switch: boolean; use_global_prompt: boolean;
+    mention_from: MentionFrom; mention_allow: string[]; max_hops: number;
   };
   function draftOf(a: AgentItem): Draft {
     return {
@@ -49,6 +52,7 @@
       grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
       include_new_connectors: a.include_new_connectors, run_as: a.run_as ?? "caller",
       disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, use_global_prompt: !!a.use_global_prompt,
+      mention_from: mentionFromOf(a.mention_from), mention_allow: [...(a.mention_allow ?? [])], max_hops: clampHops(a.max_hops),
     };
   }
   let draft = $state<Draft>(untrack(() => draftOf(agent)));
@@ -196,6 +200,9 @@
     if (d.disabled !== saved.disabled) p.disabled = d.disabled;
     if (d.allow_provider_switch !== !!saved.allow_provider_switch) p.allow_provider_switch = d.allow_provider_switch;
     if (d.use_global_prompt !== !!saved.use_global_prompt) p.use_global_prompt = d.use_global_prompt;
+    if (d.mention_from !== mentionFromOf(saved.mention_from)) p.mention_from = d.mention_from;
+    if (JSON.stringify(d.mention_allow) !== JSON.stringify(saved.mention_allow ?? [])) p.mention_allow = [...d.mention_allow];
+    if (clampHops(d.max_hops) !== clampHops(saved.max_hops)) p.max_hops = clampHops(d.max_hops);
     return p;
   });
   const dirty = $derived(Object.keys(patch).length > 0);
@@ -277,6 +284,7 @@
     { id: "persona", label: "Persona" },
     { id: "access", label: "Access" },
     { id: "tools", label: "Tools & features" },
+    { id: "mention", label: "Mention" },
     { id: "avatar", label: "Avatar" },
     { id: "advanced", label: "Advanced" },
   ];
@@ -510,6 +518,57 @@
           </div>
         {/each}
       </div>
+    </div>
+  {:else if tab === "mention"}
+    <div>
+      <p class="text-sm font-semibold text-black-900 dark:text-white-100">Mention between agents</p>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Who in your Team can hand @{agent.handle} a turn with an @mention. You can always mention it yourself.</p>
+    </div>
+    <div class="space-y-2" role="radiogroup" aria-label="Who can mention this agent" data-testid="mention-from">
+      {#each MENTION_FROM_OPTIONS as o (o.value)}
+        <label class="flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 {draft.mention_from === o.value ? 'border-green-500 bg-green-100 dark:bg-navy-700' : 'border-white-300 dark:border-navy-600'}">
+          <input type="radio" name="mention-from" class="mt-1" value={o.value} checked={draft.mention_from === o.value} onchange={() => (draft.mention_from = o.value)} />
+          <span>
+            <span class="block text-sm font-medium text-black-900 dark:text-white-100">{o.label}</span>
+            <span class="block text-xs text-black-800 dark:text-black-600">{o.hint}</span>
+          </span>
+        </label>
+      {/each}
+    </div>
+    {#if draft.mention_from === "list"}
+      <div data-testid="mention-allow">
+        <span class={label}>Agents that can mention @{agent.handle}</span>
+        {#each agents.filter((a) => a.id !== agent.id) as a (a.id)}
+          <label class="flex items-center gap-2 py-1 text-sm text-black-900 dark:text-white-100">
+            <input
+              type="checkbox"
+              checked={draft.mention_allow.includes(a.id)}
+              onchange={(e) => {
+                const on = (e.currentTarget as HTMLInputElement).checked;
+                draft.mention_allow = on ? [...draft.mention_allow, a.id] : draft.mention_allow.filter((id) => id !== a.id);
+              }}
+            />
+            <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={20} />
+            <span>{a.name}</span>
+            <span class="text-xs text-black-800 dark:text-black-600">@{a.handle}</span>
+          </label>
+        {:else}
+          <p class="text-xs text-black-800 dark:text-black-600">No other agents yet.</p>
+        {/each}
+      </div>
+    {/if}
+    <div>
+      <label class={label} for="as-max-hops">Max agent-to-agent turns in a row</label>
+      <input
+        id="as-max-hops"
+        type="number"
+        min={MAX_HOPS_MIN}
+        max={MAX_HOPS_MAX}
+        class="{input} w-24"
+        value={draft.max_hops}
+        onchange={(e) => (draft.max_hops = clampHops(Number((e.currentTarget as HTMLInputElement).value)))}
+      />
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">{hopsNote(draft.max_hops)}</p>
     </div>
   {:else if tab === "advanced"}
     <div>

@@ -11,15 +11,18 @@ export type TeamPeer = {
   name: string;
   description: string;
   disabled: boolean;
+  /** "off" = takes no mention from another agent; hidden from `@`. */
+  mention_from?: string;
   avatar?: { kind?: string; shape?: string; color?: string; expression?: string } | null;
 };
 
 /** teamMentionAgents lists the owner's agents an agent's chat can @-mention:
-    every agent but itself and the disabled ones (the router refuses those),
-    with a one-line tagline from the description. */
+    every agent but itself, the disabled ones and the ones whose mentions
+    are off (the router refuses those), with a one-line tagline from the
+    description. */
 export function teamMentionAgents(peers: TeamPeer[] | null | undefined, selfId: string): ComposerMentionAgent[] {
   return (peers ?? [])
-    .filter((p) => p.id !== selfId && !p.disabled && p.handle)
+    .filter((p) => p.id !== selfId && !p.disabled && p.mention_from !== "off" && p.handle)
     .map((p) => ({
       handle: p.handle,
       label: p.name || p.handle,

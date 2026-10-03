@@ -39,6 +39,12 @@ export type AgentItem = {
   /** Whose access a turn runs with; rows older than the field read "caller". */
   run_as?: "caller" | "owner";
   disabled: boolean;
+  /** Mention tab: who may hand this agent a turn ("all" | "captain" |
+      "list" | "off"), the allow list for "list", and its agent-to-agent
+      turn cap (1–10, default applied). Older servers omit them. */
+  mention_from?: MentionFrom;
+  mention_allow?: string[];
+  max_hops?: number;
   /** Spawns carry the global system prompt instead of the Team one
       (on for agents converted from a project). */
   use_global_prompt?: boolean;
@@ -86,7 +92,12 @@ export type AgentWrite = Partial<{
   /** Create only, with project_id: make that project this agent's own. */
   convert: boolean;
   use_global_prompt: boolean;
+  mention_from: MentionFrom;
+  mention_allow: string[];
+  max_hops: number;
 }>;
+
+export type MentionFrom = "all" | "captain" | "list" | "off";
 
 export type AgentConnector = {
   id: string;
