@@ -16,7 +16,7 @@
     updateAgent, deleteAgent, getProjectPersona, listAgentConnectors, runApi,
     type AgentItem, type AgentWrite, type ConnectorGrant, type AgentConnector,
   } from "../api/team.js";
-  import { FEATURE_TABS, railShownNote, type AgentFeatures } from "../agentMode.js";
+  import type { AgentFeatures } from "../agentMode.js";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject } from "../agentForm.js";
   import type { SettingsTab } from "../agentsRouter.js";
@@ -293,9 +293,6 @@
     }
   }
 
-  // Features now governed by Access (Platform/System rows); the Tools tab
-  // keeps panel-only switches.
-  const ACCESS_FEATURES: (keyof AgentFeatures)[] = ["source", "schedule", "subagents", "notes", "tickets", "browser"];
   const TABS: { id: SettingsTab; label: string }[] = [
     { id: "persona", label: "Persona" },
     { id: "access", label: "Access" },
@@ -436,7 +433,7 @@
   {:else if tab === "tools"}
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Tools &amp; features</p>
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Panels of the agent's chat. Notes, Tickets, Source, Schedule and Sub-agents follow Access › Platform, and the Browser tab follows the Playwright connector in Access › Connectors.</p>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Panels of the agent's chat. Files shows while Read, Edit or Write is on and Process while Bash is on; Notes, Tickets, Source, Scheduled and Sub-agents follow Access › Platform, and the Browser tab follows the Playwright connector in Access › Connectors.</p>
     </div>
     <NativeToolsSection
       tools={draft.native_tools}
@@ -446,22 +443,6 @@
       onTools={(t) => (draft.native_tools = t)}
       onRules={(r) => (draft.bash_rules = r)}
     />
-    <div>
-      <span class={label}>wick features</span>
-      <div class="space-y-3">
-        {#each FEATURE_TABS.filter((f) => !ACCESS_FEATURES.includes(f.feature)) as f (f.feature)}
-          <!-- Toggle draws only the switch; the name and hint sit beside it. -->
-          <div class="flex items-start gap-3">
-            <Toggle checked={draft.features[f.feature]} onChange={(v) => (draft.features[f.feature] = v)} label={f.label} describedBy={f.hint ? `as-ft-${f.feature}` : undefined} />
-            <span class="min-w-0">
-              <span class="block text-sm text-black-900 dark:text-white-100">{f.label}</span>
-              {#if f.hint}<span id="as-ft-{f.feature}" class="block text-xs text-black-800 dark:text-black-600">{f.hint}</span>{/if}
-            </span>
-          </div>
-        {/each}
-      </div>
-      <p class="mt-2 text-xs text-black-800 dark:text-black-600">{railShownNote(draft.features)}</p>
-    </div>
   {:else if tab === "skills"}
     {#key agent.id}
       <AgentSkillsTab {base} agentId={agent.id} mainSessionId={agent.main_session_id} disabled={draft.disabled_skills} onChange={(d) => (draft.disabled_skills = d)} />

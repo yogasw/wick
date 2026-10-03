@@ -15,6 +15,7 @@
   import AgentSessions from "./lib/components/AgentSessions.svelte";
   import { agentsRoute, navigate, type AgentsRoute, type AgentsPanel } from "./lib/agentsRouter.js";
   import { connectorCaption, hiddenTabsFor } from "./lib/agentMode.js";
+  import { nativeToolsOf } from "./lib/nativeTools.js";
   import { rosterTime } from "./lib/timeFormat.js";
   import { listAgents, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
   import { listGroups, type GroupItem } from "./lib/api/team.js";
@@ -287,7 +288,7 @@
   let railOpen = $state(false);
 
   const agentMode = $derived({
-    hideTabs: hiddenTabsFor(selected?.features),
+    hideTabs: hiddenTabsFor(selected?.features, selected ? nativeToolsOf(selected.allowed_native_tools) : null),
     hideHeader: true,
     hidePickers: true,
     onDeleted: () => go({ session: null }),

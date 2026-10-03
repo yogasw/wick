@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { FEATURE_TABS, composerPlaceholder, providerLocked, connectorCaption, hiddenTabNote, hiddenTabsFor, railShownNote } from "../agentMode.js";
+import { FEATURE_TABS, composerPlaceholder, providerLocked, connectorCaption, hiddenTabNote, hiddenTabsFor } from "../agentMode.js";
 
 describe("hiddenTabNote", () => {
   it("is empty when nothing is hidden", () => {
@@ -41,13 +41,12 @@ describe("feature flags", () => {
     expect(FEATURE_TABS.find((f) => f.feature === "browser")?.hint).toMatch(/Playwright/);
   });
 
-  it("lists the rail tabs the flags leave", () => {
-    expect(railShownNote({ source: false, schedule: true, files: false, process: false, browser: false, subagents: false, notes: false, tickets: false })).toBe(
-      "rail shows: Routines, Workspace, Todos",
-    );
-    expect(railShownNote(null)).toBe(
-      "rail shows: Source, Routines, Files, Process, Browser, Sub-agents, Notes, Ticket, Workspace, Todos",
-    );
+  it("shows Files and Process from the native tools, not from flags", () => {
+    expect(hiddenTabsFor({ files: false, process: false } as never, ["Read", "Bash"])).toEqual([]);
+    expect(hiddenTabsFor({}, ["Grep", "WebFetch"])).toEqual(["files", "process"]);
+    expect(hiddenTabsFor(null, ["Write"])).toEqual(["process"]);
+    expect(hiddenTabsFor(null, null)).toEqual([]);
+    expect(FEATURE_TABS.find((f) => f.feature === "schedule")?.label).toBe("Scheduled");
   });
 });
 

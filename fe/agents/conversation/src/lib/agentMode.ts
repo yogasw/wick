@@ -99,47 +99,30 @@ export type AgentFeatures = {
     (schedule/scheduled, tickets/ticket) because the flags are the
     persona's vocabulary and the tabs are DetailView's. Todos and Workspace
     are not here on purpose: they are always shown (plan §6.0b), so an old
-    todos/workspace flag set to false is ignored. Files and Process stay
-    flags until native tools land. */
+    todos/workspace flag set to false is ignored. Files and Process are not
+    flags: they follow the agent's native tools (see hiddenTabsFor). */
 export const FEATURE_TABS: { feature: keyof AgentFeatures; tab: RailTab; label: string; hint?: string }[] = [
   { feature: "source", tab: "source", label: "Source panel (git)" },
-  { feature: "schedule", tab: "scheduled", label: "Routines / Schedule" },
+  { feature: "schedule", tab: "scheduled", label: "Scheduled" },
   { feature: "browser", tab: "browser", label: "Browser", hint: "needs the Playwright connector checked" },
   { feature: "subagents", tab: "subagents", label: "Sub-agents / delegation" },
   { feature: "notes", tab: "notes", label: "Notes" },
   { feature: "tickets", tab: "ticket", label: "Tickets" },
-  { feature: "files", tab: "files", label: "Files" },
-  { feature: "process", tab: "process", label: "Process" },
 ];
 
-/** Every rail tab with the name the Tools & features hint uses, in rail order. */
-const RAIL_LABELS: { tab: RailTab; label: string }[] = [
-  { tab: "source", label: "Source" },
-  { tab: "scheduled", label: "Routines" },
-  { tab: "files", label: "Files" },
-  { tab: "process", label: "Process" },
-  { tab: "browser", label: "Browser" },
-  { tab: "subagents", label: "Sub-agents" },
-  { tab: "notes", label: "Notes" },
-  { tab: "ticket", label: "Ticket" },
-  { tab: "workspace", label: "Workspace" },
-  { tab: "todos", label: "Todos" },
-];
-
-/** railShownNote is the hint under the feature switches: which rail tabs
-    the agent gets with these flags ("rail shows: Source, Files, …"). */
-export function railShownNote(f: Partial<AgentFeatures> | null | undefined): string {
-  const hidden = hiddenTabsFor(f);
-  const shown = RAIL_LABELS.filter((r) => !hidden.includes(r.tab)).map((r) => r.label);
-  return `rail shows: ${shown.join(", ")}`;
-}
-
-/** hiddenTabsFor lists the rail tabs to hide for a feature set. A missing
-    features object hides nothing — an agent loaded before the server sent
-    flags should look like a normal session, not an empty rail. */
-export function hiddenTabsFor(f: Partial<AgentFeatures> | null | undefined): RailTab[] {
-  if (!f) return [];
-  return FEATURE_TABS.filter((m) => f[m.feature] === false).map((m) => m.tab);
+/** hiddenTabsFor lists the rail tabs to hide for a feature set and the
+    agent's native tools. Files shows while Read, Edit or Write is on and
+    Process while Bash is on; nativeTools null/undefined (an older server)
+    hides neither. A missing features object hides no feature tab — an
+    agent loaded before the server sent flags should look like a normal
+    session, not an empty rail. */
+export function hiddenTabsFor(f: Partial<AgentFeatures> | null | undefined, nativeTools?: string[] | null): RailTab[] {
+  const out: RailTab[] = f ? FEATURE_TABS.filter((m) => f[m.feature] === false).map((m) => m.tab) : [];
+  if (nativeTools) {
+    if (!["Read", "Edit", "Write"].some((t) => nativeTools.includes(t))) out.push("files");
+    if (!nativeTools.includes("Bash")) out.push("process");
+  }
+  return out;
 }
 
 /** hiddenTabNote is the rail footer that says why tabs are missing: a
