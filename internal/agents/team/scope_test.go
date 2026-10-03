@@ -303,3 +303,19 @@ func TestEffectiveFeatures(t *testing.T) {
 		t.Fatal("unknown reach must leave stored switches alone")
 	}
 }
+
+// Files and Process follow the native tools, whatever the stored flags say.
+func TestEffectiveFeaturesFilesProcessFromTools(t *testing.T) {
+	p := entity.AgentPersona{Features: `{"files":false,"process":true}`, AllowedNativeTools: `["Write","Bash"]`}
+	if f := EffectiveFeatures(p, nil); !f.Files || !f.Process {
+		t.Fatalf("Write+Bash: %+v", f)
+	}
+	p = entity.AgentPersona{Features: `{"files":true,"process":true}`, AllowedNativeTools: `["Grep","WebFetch"]`}
+	if f := EffectiveFeatures(p, nil); f.Files || f.Process {
+		t.Fatalf("no file/shell tools: %+v", f)
+	}
+	// A row from before the setting has every tool on.
+	if f := EffectiveFeatures(entity.AgentPersona{}, nil); !f.Files || !f.Process {
+		t.Fatalf("legacy row: %+v", f)
+	}
+}

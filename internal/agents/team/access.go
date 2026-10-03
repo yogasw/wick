@@ -1,6 +1,7 @@
 package team
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/yogasw/wick/internal/entity"
@@ -158,6 +159,7 @@ func isToolGrant(id string) bool {
 // stored switches as they are.
 func EffectiveFeatures(p entity.AgentPersona, reach Reach) Features {
 	f, _, _ := MigrateFeatures(DecodeFeatures(p.Features), DecodeGrants(p.AllowedConnectors), reach)
+	FeaturesFromTools(&f, DecodeNativeTools(p.AllowedNativeTools))
 	if reach == nil || p.Disabled {
 		return f
 	}
@@ -192,6 +194,15 @@ func EffectiveFeatures(p entity.AgentPersona, reach Reach) Features {
 		}
 	}
 	return f
+}
+
+// FeaturesFromTools derives the Files and Process flags from the agent's
+// native tools, overriding whatever the stored row says: Files is on while
+// Read, Edit or Write is, Process while Bash is. The web rail applies the
+// same rule (agentMode.ts hiddenTabsFor).
+func FeaturesFromTools(f *Features, tools []string) {
+	f.Files = slices.ContainsFunc(tools, func(t string) bool { return t == "Read" || t == "Edit" || t == "Write" })
+	f.Process = slices.Contains(tools, "Bash")
 }
 
 // browserKey mirrors the Playwright plugin's connector key.
