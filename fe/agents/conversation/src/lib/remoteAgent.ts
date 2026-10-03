@@ -9,10 +9,11 @@ import { SLACK_REMOTE_KIND, slackCaption, targetLabel } from "./slackRemote.js";
    word here is about the remote host. No components: the tests import it. */
 
 export const REMOTE_KIND = "a2a-remote";
+export const PLUGIN_REMOTE_KIND = "plugin-remote";
 
 /** Any remote agent, A2A or Slack: no rail, no persona, its own Settings. */
 export function isRemoteAgent(a: Pick<AgentItem, "kind"> | null | undefined): boolean {
-  return a?.kind === REMOTE_KIND || a?.kind === SLACK_REMOTE_KIND;
+  return a?.kind === REMOTE_KIND || a?.kind === SLACK_REMOTE_KIND || a?.kind === PLUGIN_REMOTE_KIND;
 }
 
 export function isA2ARemote(a: Pick<AgentItem, "kind"> | null | undefined): boolean {
@@ -25,7 +26,7 @@ export function isSlackRemote(a: Pick<AgentItem, "kind"> | null | undefined): bo
 
 /** The roster badge of a remote agent ("" for a wick agent). */
 export function remoteBadge(a: Pick<AgentItem, "kind">): string {
-  return isSlackRemote(a) ? "Slack remote" : isA2ARemote(a) ? "A2A remote" : "";
+  return isSlackRemote(a) ? "Slack remote" : isA2ARemote(a) ? "A2A remote" : a.kind === PLUGIN_REMOTE_KIND ? "Plugin remote" : "";
 }
 
 /** Sources + Agent › Remote agent offers; the disabled ones are not built yet. */
@@ -34,7 +35,7 @@ export const REMOTE_SOURCES: { value: RemoteSource; label: string; hint: string;
   { value: "a2a", label: "A2A", hint: "An agent that speaks the A2A protocol." },
   { value: "slack", label: "Slack", hint: "A bot or person you reach in a Slack DM, channel or thread." },
   { value: "http", label: "HTTP", hint: "Coming later", disabled: true },
-  { value: "plugin", label: "Plugin", hint: "Coming later", disabled: true },
+  { value: "plugin", label: "Plugin", hint: "A service plugin on this host that offers a remote agent source." },
 ];
 
 /** Every rail tab: a remote agent has no project tools to show. */

@@ -24,7 +24,7 @@
     onClose: () => void;
     onCreated: (a: AgentItem) => void;
     /** Back to the wick-agent wizard, or to another remote source. */
-    onType?: (t: "local" | "remote" | "slack") => void;
+    onType?: (t: "local" | "remote" | "slack" | "plugin") => void;
   };
   let { base, taken, onClose, onCreated, onType }: Props = $props();
 
@@ -151,7 +151,7 @@
       <button type="button" class="rounded-md bg-green-500 px-3 py-1 text-xs text-white-100" aria-pressed="true">Remote agent</button>
     </div>
   </div>
-  <RemoteSourcePicker value="a2a" onSource={(s) => { if (s === "slack") onType?.("slack"); }} />
+  <RemoteSourcePicker value="a2a" onSource={(s) => { if (s === "slack" || s === "plugin") onType?.(s); }} />
 {/if}
 
 <ol class="flex items-center gap-2 px-6 pt-3 pb-4 text-xs" aria-label="Steps">

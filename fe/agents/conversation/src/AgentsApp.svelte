@@ -16,6 +16,7 @@
   import AgentWizard from "./lib/components/AgentWizard.svelte";
   import RemoteAgentWizard from "./lib/components/team/RemoteAgentWizard.svelte";
   import SlackRemoteWizard from "./lib/components/team/SlackRemoteWizard.svelte";
+  import PluginRemoteWizard from "./lib/components/team/PluginRemoteWizard.svelte";
   import RemoteQuestionCard from "./lib/components/team/RemoteQuestionCard.svelte";
   import { isA2ARemote, isRemoteAgent, isSlackRemote, remoteBadge, remoteChatMode, remoteSubtitle } from "./lib/remoteAgent.js";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
@@ -84,7 +85,7 @@
   let newGroupOpen = $state(false);
   /* + Agent's type: a wick agent, or a remote one by source (A2A or
      Slack), each with its own wizard. */
-  let newType = $state<"local" | "remote" | "slack">("local");
+  let newType = $state<"local" | "remote" | "slack" | "plugin">("local");
   const activeGroup = $derived(groups.find((g) => g.id === activeGroupId));
   async function loadGroups() {
     try {
@@ -624,6 +625,8 @@
       {:else if route.panel.kind === "new"}
         {#if newType === "slack" && !route.panel.project}
           <SlackRemoteWizard {base} taken={agents.map((a) => a.handle)} onClose={() => openPanel(null)} {onCreated} onType={(t) => (newType = t)} />
+        {:else if newType === "plugin" && !route.panel.project}
+          <PluginRemoteWizard {base} taken={agents.map((a) => a.handle)} onClose={() => openPanel(null)} {onCreated} onType={(t) => (newType = t)} />
         {:else if newType === "remote" && !route.panel.project}
           <RemoteAgentWizard {base} taken={agents.map((a) => a.handle)} onClose={() => openPanel(null)} {onCreated} onType={(t) => (newType = t)} />
         {:else}

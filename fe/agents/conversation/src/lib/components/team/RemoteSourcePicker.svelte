@@ -1,6 +1,6 @@
 <script lang="ts">
-  /* + Agent › Remote agent: where the agent lives. A2A and Slack each open
-     their own wizard; HTTP and Plugin show as coming later. */
+  /* + Agent › Remote agent: where the agent lives. A2A, Slack and Plugin each
+     open their own wizard; HTTP shows as coming later. */
   import { REMOTE_SOURCES, type RemoteSource } from "../../remoteAgent.js";
 
   type Props = { value: RemoteSource; onSource: (s: RemoteSource) => void };
@@ -24,7 +24,7 @@
         onclick={() => { if (!s.disabled && value !== s.value) onSource(s.value); }}
       >
         <span class="block font-medium">{s.label}</span>
-        <span class="block text-[11px] {s.disabled ? 'uppercase tracking-wider' : ''}">{s.disabled ? "Coming later" : s.value === "a2a" ? "A2A protocol" : "DM · channel · thread"}</span>
+        <span class="block text-[11px] {s.disabled ? 'uppercase tracking-wider' : ''}">{s.disabled ? "Coming later" : s.value === "a2a" ? "A2A protocol" : s.value === "plugin" ? "Service plugin" : "DM · channel · thread"}</span>
       </button>
     {/each}
   </div>

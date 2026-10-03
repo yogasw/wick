@@ -93,7 +93,7 @@ export type AgentItem = {
   /** "" = an agent wick runs itself, "a2a-remote" = another system's A2A
       agent (then `remote` holds its card and settings), "slack-remote" =
       an agent reached through Slack (then `slack_remote`). */
-  kind?: "" | "a2a-remote" | "slack-remote";
+  kind?: "" | "a2a-remote" | "slack-remote" | "plugin-remote";
   remote?: RemoteAgentInfo;
   slack_remote?: SlackRemoteInfo;
 };
@@ -665,3 +665,14 @@ export const removeAgentShare = (base: string, id: string, userId: string) =>
     the caller aside; ids and names only. */
 export const listShareUsers = (base: string) =>
   apiGetE<{ users: ShareUser[] }>(`${base}/api/team/share-users`);
+
+/* ── Plugin remote agents (service plugins with remote_source) ── */
+
+export type PluginSource = { key: string; name: string; description?: string; version: string; state: string };
+
+export type PluginRemoteCreate = { plugin_key: string; name?: string; handle?: string; tagline?: string };
+
+export const listPluginSources = (base: string) => apiGetE<PluginSource[]>(`${base}/api/team/plugin-sources`);
+
+export const createPluginRemote = (base: string, body: PluginRemoteCreate) =>
+  apiPostE<AgentItem>(`${base}/api/team/plugin-remote`, body);

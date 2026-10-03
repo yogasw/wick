@@ -30,7 +30,7 @@
     onClose: () => void;
     onCreated: (a: AgentItem) => void;
     /** Switches + Agent to a remote agent's wizard (not when converting). */
-    onType?: (t: "local" | "remote" | "slack") => void;
+    onType?: (t: "local" | "remote" | "slack" | "plugin") => void;
   };
   let { base, taken, convertProject, onClose, onCreated, onType }: Props = $props();
 
