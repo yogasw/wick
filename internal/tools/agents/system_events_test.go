@@ -11,6 +11,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/teamlink"
+	"github.com/yogasw/wick/internal/entity"
 )
 
 func TestRecordSystemTurnWritesPublishesAndTouches(t *testing.T) {
@@ -74,5 +75,19 @@ func TestRefusalTurn(t *testing.T) {
 	ref := refusalTurn(teamlink.Refusal{From: "captain", To: "sleepy", Err: teamlink.ErrUnknownHandle}, time.Unix(1, 0))
 	if ref.Kind != store.KindMentionRefused || ref.Text != "@sleepy doesn't take mentions" || ref.Extras["reason"] == "" {
 		t.Fatalf("refused = %+v", ref)
+	}
+}
+
+func TestAgentCreatedTextAndExtras(t *testing.T) {
+	if got := agentCreatedText("Rekap", "Yoga", "", "Notion (read)"); got != "Rekap joined the team · created by Yoga · Notion (read)" {
+		t.Fatalf("text = %q", got)
+	}
+	if got := agentCreatedText("Rekap", "", "Yoga", ""); got != "Rekap joined the team · approved by Yoga" {
+		t.Fatalf("text = %q", got)
+	}
+	p := entity.AgentPersona{ID: "a1", Handle: "rekap", AllowedConnectors: `[{"connector_id":"n","level":"read"}]`}
+	ex := agentCreatedExtras(p, "Rekap", "Yoga", "", func(id string) string { return "Notion" }, "wizard")
+	if ex["agent_id"] != "a1" || ex["handle"] != "rekap" || ex["grants_summary"] != "Notion (read)" || ex["via"] != "wizard" || ex["created_by"] != "Yoga" {
+		t.Fatalf("extras = %v", ex)
 	}
 }

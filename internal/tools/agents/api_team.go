@@ -19,6 +19,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
@@ -877,6 +878,11 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 			stampProjectSessions(c, pid, p.ID)
 		}
 	}
+	how := "wizard"
+	if req.Convert {
+		how = "convert"
+	}
+	announceAgentCreated(c, *p, name, how)
 	users := teamProjectUsersFor(c.Context(), []entity.AgentPersona{*p})
 	c.JSON(http.StatusOK, teamAgentToItem(*p, users, teamLiveNow(), ownerReach(c)))
 }
@@ -917,6 +923,7 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 			return
 		}
 	}
+	accessBefore := p
 	if req.AllowedConnectors != nil {
 		if !validateGrants(c, *req.AllowedConnectors) {
 			return
@@ -977,6 +984,7 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
+	announceAccessChanged(c, accessBefore, p)
 	users := teamProjectUsersFor(c.Context(), []entity.AgentPersona{p})
 	c.JSON(http.StatusOK, teamAgentToItem(p, users, teamLiveNow(), reach))
 }
@@ -1171,6 +1179,12 @@ func createTeamAgentSession(c *tool.Ctx, p entity.AgentPersona, main bool) (stri
 		if err := session.SetModelID(globalLayout, id, "main", modelID); err != nil {
 			log.Ctx(c.Context()).Warn().Msgf("team agent chat set model id: %s", err.Error())
 		}
+	}
+	// A new main chat opens on the agent's arrival, so its first turn is
+	// the agent_created chip.
+	if main {
+		extras := agentCreatedExtras(p, label, actorName(c), "", connectorLabeler(c), "chat")
+		emitSystemEvent(id, store.KindAgentCreated, agentCreatedText(label, extras["created_by"], "", extras["grants_summary"]), extras)
 	}
 	// Titled after the agent so its conversations read as the agent's in
 	// the ordinary session list too. Best-effort: an untitled session is

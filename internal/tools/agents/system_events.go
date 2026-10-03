@@ -14,6 +14,9 @@ import (
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/team"
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/pkg/tool"
 )
 
 // evSystemEvent is the SSE event every server-recorded system turn is
@@ -146,4 +149,124 @@ func grantsDiff(before, after []team.ConnectorGrant, label func(string) string) 
 	}
 	slices.Sort(out)
 	return out
+}
+
+// actorName is the logged-in user as a chip names them.
+func actorName(c *tool.Ctx) string {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		return ""
+	}
+	if u.Name != "" {
+		return u.Name
+	}
+	return u.Email
+}
+
+// connectorLabeler maps a connector id to the label the caller sees; an
+// id missing from the caller's catalog shows as itself.
+func connectorLabeler(c *tool.Ctx) func(string) string {
+	labels := map[string]string{}
+	if cat, err := ownerCatalog(c); err == nil {
+		for _, e := range cat {
+			labels[e.Row.ID] = e.Row.Label
+		}
+	}
+	return func(id string) string {
+		if l := labels[id]; l != "" {
+			return l
+		}
+		return id
+	}
+}
+
+// agentCreatedText is the agent_created chip: "Rekap joined the team ·
+// created by Yoga · Notion (read)".
+func agentCreatedText(name, createdBy, approvedBy, grants string) string {
+	t := name + " joined the team"
+	if createdBy != "" {
+		t += " · created by " + createdBy
+	}
+	if approvedBy != "" {
+		t += " · approved by " + approvedBy
+	}
+	if grants != "" {
+		t += " · " + grants
+	}
+	return t
+}
+
+// agentCreatedExtras is agent_created's extras. how is where the agent
+// came from: "wizard", "convert" or "chat" (its main chat opened later).
+func agentCreatedExtras(p entity.AgentPersona, name, createdBy, approvedBy string, label func(string) string, how string) map[string]string {
+	return map[string]string{
+		"agent_id": p.ID, "handle": p.Handle, "name": name,
+		"created_by": createdBy, "approved_by": approvedBy,
+		"grants_summary": grantsSummary(team.DecodeGrants(p.AllowedConnectors), label),
+		"via":            how,
+	}
+}
+
+// announceAgentCreated records agent_created in the new agent's main chat
+// when it already has one (a converted project), and a copy in the
+// Captain's — the owner's lead agent hears of every new teammate. A main
+// chat opened later gets its own chip from createTeamAgentSession.
+func announceAgentCreated(c *tool.Ctx, p entity.AgentPersona, name, how string) {
+	label := connectorLabeler(c)
+	who := actorName(c)
+	extras := agentCreatedExtras(p, name, who, "", label, how)
+	text := agentCreatedText(name, who, "", extras["grants_summary"])
+	if s, ok := mainSessionOf(p.OwnerUserID, p.ID); ok {
+		emitSystemEvent(s.ID, store.KindAgentCreated, text, extras)
+	}
+	if p.IsCaptain || globalTeam == nil {
+		return
+	}
+	rows, err := globalTeam.List(c.Context(), p.OwnerUserID)
+	if err != nil {
+		return
+	}
+	for _, r := range rows {
+		if r.IsCaptain && r.ID != p.ID {
+			if s, ok := mainSessionOf(r.OwnerUserID, r.ID); ok {
+				emitSystemEvent(s.ID, store.KindAgentCreated, text, extras)
+			}
+		}
+	}
+}
+
+// announceAccessChanged records access_changed in the agent's main chat
+// when the Settings save moved its connector grants, the include-new
+// switch or its run-as identity. Nothing is recorded for a save that
+// left access as it was (the drawer autosaves every field).
+func announceAccessChanged(c *tool.Ctx, before, after entity.AgentPersona) {
+	label := connectorLabeler(c)
+	changes := grantsDiff(team.DecodeGrants(before.AllowedConnectors), team.DecodeGrants(after.AllowedConnectors), label)
+	if before.IncludeNewConnectors != after.IncludeNewConnectors {
+		if after.IncludeNewConnectors {
+			changes = append(changes, "+new connectors")
+		} else {
+			changes = append(changes, "-new connectors")
+		}
+	}
+	if before.RunAs != after.RunAs {
+		changes = append(changes, "runs as: "+after.RunAs)
+	}
+	if len(changes) == 0 {
+		return
+	}
+	s, ok := mainSessionOf(after.OwnerUserID, after.ID)
+	if !ok {
+		return
+	}
+	who := actorName(c)
+	summary := strings.Join(changes, ", ")
+	text := fmt.Sprintf("Access of @%s changed: %s", after.Handle, summary)
+	if who != "" {
+		text += " · by " + who
+	}
+	emitSystemEvent(s.ID, store.KindAccessChanged, text, map[string]string{
+		"agent_id": after.ID, "handle": after.Handle, "changed_by": who,
+		"changes": summary, "grants_summary": grantsSummary(team.DecodeGrants(after.AllowedConnectors), label),
+	})
 }
