@@ -64,7 +64,7 @@ describe("fetchTeam", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     const r = await fetchTeam("/tools/agents");
-    expect(fetchMock.mock.calls[0][0]).toBe("/tools/agents/api/team/agents");
+    expect(fetchMock.mock.calls[0][0]).toBe("/tools/agents/api/team/agents?ensure=0");
     expect(r.captain_id).toBe("a1");
     expect(r.agents).toHaveLength(1);
   });

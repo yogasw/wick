@@ -518,6 +518,19 @@ func createTeamAgentProject(c *tool.Ctx, name, icon, description, systemPrompt, 
 	return opt.ID, nil
 }
 
+// discardTeamAgentProject removes a project createTeamAgentProject just
+// made for an agent row that was then not saved. Best effort: a failure
+// only leaves an empty project behind, which is what used to happen.
+func discardTeamAgentProject(c *tool.Ctx, pid string) {
+	if err := globalMgr.DeleteProject(c.Context(), pid); err != nil {
+		log.Ctx(c.Context()).Warn().Err(err).Str("project", pid).Msg("team: discard orphan agent project")
+		return
+	}
+	if globalTagsSvc != nil {
+		_ = globalTagsSvc.DeleteResourceOwnerTag(c.Context(), pid)
+	}
+}
+
 // ensureCaptain creates the owner's Captain when they have no agent yet,
 // so the app never opens on an empty roster.
 func ensureCaptain(c *tool.Ctx) ([]entity.AgentPersona, error) {
@@ -536,12 +549,16 @@ func ensureCaptain(c *tool.Ctx) ([]entity.AgentPersona, error) {
 		Features:          team.EncodeFeatures(team.DefaultFeatures()),
 		Avatar:            team.EncodeAvatar(team.Avatar{Shape: "squircle", Color: "#f59e0b"}),
 	}
-	if err := globalTeam.Create(c.Context(), p); err != nil && !errors.Is(err, team.ErrHandleTaken) {
+	if err := globalTeam.Create(c.Context(), p); err != nil {
+		// Either way the project made above has no agent and nothing
+		// else knows its fresh id, so it goes rather than lingering as
+		// an orphan in the Projects list.
+		discardTeamAgentProject(c, pid)
+		if !errors.Is(err, team.ErrHandleTaken) {
+			return nil, err
+		}
 		// ErrHandleTaken = a concurrent first load won the race; its
-		// Captain is the one to show. The project made here is left as
-		// an ordinary empty project rather than deleted under a request
-		// that may be using it.
-		return nil, err
+		// Captain is the one to show.
 	}
 	return globalTeam.List(c.Context(), owner)
 }
@@ -553,7 +570,15 @@ func apiTeamAgentList(c *tool.Ctx) {
 	if !teamReady(c) {
 		return
 	}
-	rows, err := ensureCaptain(c)
+	// ?ensure=0 is the read-only roster (the Overview card): it never
+	// creates the Captain, which only the Team app itself should do.
+	var rows []entity.AgentPersona
+	var err error
+	if c.R.URL.Query().Get("ensure") == "0" {
+		rows, err = globalTeam.List(c.Context(), actorID(c))
+	} else {
+		rows, err = ensureCaptain(c)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

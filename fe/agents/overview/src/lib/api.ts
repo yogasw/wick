@@ -31,9 +31,10 @@ export async function fetchOverview(base: string): Promise<OverviewResponse> {
 }
 
 /** fetchTeam reads the caller's Team roster for the Overview card. Captain
-    first, then oldest first — the server's order is kept. */
+    first, then oldest first — the server's order is kept. ensure=0 keeps
+    it read-only: opening Overview must not create anyone's Captain. */
 export async function fetchTeam(base: string): Promise<TeamResponse> {
-  const r = await get<{ agents: TeamResponse["agents"] | null; captain_id?: string }>(`${base}/api/team/agents`);
+  const r = await get<{ agents: TeamResponse["agents"] | null; captain_id?: string }>(`${base}/api/team/agents?ensure=0`);
   return { agents: r.agents ?? [], captain_id: r.captain_id ?? "" };
 }
 
