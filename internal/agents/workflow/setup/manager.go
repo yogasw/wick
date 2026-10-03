@@ -63,6 +63,10 @@ type Manager struct {
 	// queue/sidebar/session-reuse benefits. See workflow/pool.md.
 	AgentPool      *pool.Pool
 	AgentSubscribe nodes.AgentSubscribeFn
+
+	// retentionOpts is set by StartRunRetention and read by
+	// StartRunSweep, which starts later — once intake is ours.
+	retentionOpts func() CleanupOptions
 }
 
 // New constructs every dependency wired to a single Layout. Channels,

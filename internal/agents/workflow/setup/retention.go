@@ -158,18 +158,32 @@ func isTerminal(status string) bool {
 	return status == workflow.StatusSuccess || status == workflow.StatusFailed
 }
 
-// StartRunRetention runs one sweep shortly after boot, then every
-// RunCleanupInterval, until ctx is done; it also prunes a workflow right
-// after one of its runs finishes. opts is re-read on every pass so a
-// config change lands without a restart.
-func (m *Manager) StartRunRetention(ctx context.Context, opts func() CleanupOptions) {
+// StartRunRetention wires the per-workflow pass that prunes a workflow
+// right after one of its runs finishes, and remembers opts for the
+// background sweep. It does NOT sweep: during a graceful upgrade the
+// predecessor still owns intake and is still finishing runs, so the
+// all-workflow pass waits for StartRunSweep, called once this process
+// holds the intake baton. opts is re-read on every pass so a config
+// change lands without a restart.
+func (m *Manager) StartRunRetention(opts func() CleanupOptions) {
 	if opts == nil {
 		opts = func() CleanupOptions { return CleanupOptions{} }
 	}
+	m.retentionOpts = opts
 	m.Engine.AfterRun = func(id string) {
 		if n, err := CleanupWorkflowRuns(m.Layout, id, opts()); err == nil && n > 0 {
 			log.Info().Str("component", "wf").Str("wf_id", id).Int("removed", n).Msg("workflow run retention")
 		}
+	}
+}
+
+// StartRunSweep runs one all-workflow sweep now, then every
+// RunCleanupInterval, until ctx is done. Call it only after this process
+// has taken over intake (next to StartCron).
+func (m *Manager) StartRunSweep(ctx context.Context) {
+	opts := m.retentionOpts
+	if opts == nil {
+		opts = func() CleanupOptions { return CleanupOptions{} }
 	}
 	go func() {
 		sweep := func() {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/state"
 )
 
@@ -156,5 +157,26 @@ func TestCleanupDropsGhostIndexRows(t *testing.T) {
 	entries, _ := os.ReadDir(layout.WorkflowIndexDir(wf))
 	for _, e := range entries {
 		t.Fatalf("index shard %q left behind", e.Name())
+	}
+}
+
+// Wiring retention at boot must not sweep: the predecessor may still own
+// intake. Only the per-run hook is armed; StartRunSweep does the pass.
+func TestStartRunRetentionDefersSweep(t *testing.T) {
+	layout := config.Layout{BaseDir: t.TempDir()}
+	ss := state.New(layout)
+	const wf = "wf1"
+	seedRun(t, ss, wf, "old", workflow.StatusSuccess, 30*24*time.Hour, true)
+	m := &Manager{Layout: layout, Engine: &engine.Engine{}}
+	m.StartRunRetention(opts)
+	if m.Engine.AfterRun == nil || m.retentionOpts == nil {
+		t.Fatal("AfterRun hook / retention opts not wired")
+	}
+	if !runExists(layout, wf, "old") {
+		t.Fatal("StartRunRetention swept at boot; sweep must wait for StartRunSweep")
+	}
+	m.Engine.AfterRun(wf)
+	if runExists(layout, wf, "old") {
+		t.Fatal("AfterRun hook did not prune the workflow")
 	}
 }

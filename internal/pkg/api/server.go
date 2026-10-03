@@ -1268,8 +1268,9 @@ func NewServer() *Server {
 	}
 	// Run retention: cap each workflow's finished-run history by count
 	// and age. Re-read per pass so an edit on the settings page applies
-	// without a restart; unset/0 falls back to the package defaults.
-	wfMgr.StartRunRetention(context.Background(), func() wfsetup.CleanupOptions {
+	// without a restart; unset/0 falls back to the package defaults. The
+	// all-workflow sweep starts with cron, once the intake baton is ours.
+	wfMgr.StartRunRetention(func() wfsetup.CleanupOptions {
 		opts := wfsetup.CleanupOptions{}
 		if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "workflow_run_keep_max")); err == nil {
 			opts.KeepMax = n
@@ -3416,6 +3417,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		s.startChannels(ctx)
 		if s.wfMgr != nil {
 			s.wfMgr.StartCron(ctx)
+			s.wfMgr.StartRunSweep(ctx)
 		}
 		if s.scheduleStore != nil && s.agentsPool != nil {
 			// Boot recovery is implicit — the first tick picks up anything
