@@ -1903,6 +1903,10 @@ func (s *Channel) snapshot() agentconfig.SlackChannelConfig {
 	return c
 }
 
+// notReadyReply is what a sender sees when the instance has no pool
+// dispatch wired yet.
+const notReadyReply = "Agent is not ready, try again in a moment."
+
 func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEvent, files []slackgo.File) {
 	threadTS := ev.ThreadTimeStamp
 	if threadTS == "" {
@@ -1959,6 +1963,17 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	meta := agentchannels.ParseMeta(ev.Text)
 	if meta.IsMeta {
 		s.handleMetaCmd(ctx, meta, ev.Channel, threadTS)
+		return
+	}
+
+	// An instance that was never handed the pool dispatch has nowhere to
+	// send the turn. Say so in the thread instead of dereferencing nil —
+	// a panic here would take the whole daemon down with this one bot.
+	if s.sendFn == nil {
+		log.Error().Str("channel", "slack").Str("slack_channel", ev.Channel).
+			Msg("slack channel not wired to the agent pool; dropping message")
+		s.setReaction(reactionError, ev.Channel, ev.TimeStamp, "")
+		s.postReply(ev.Channel, threadTS, notReadyReply)
 		return
 	}
 

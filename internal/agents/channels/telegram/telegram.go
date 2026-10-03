@@ -463,6 +463,15 @@ func (t *Channel) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
+	// No pool dispatch wired: tell the sender rather than calling a nil
+	// func, which would panic and take the whole daemon down.
+	if sendFn == nil {
+		log.Error().Str("channel", "telegram").Int64("chat_id", chatID).
+			Msg("telegram channel not wired to the agent pool; dropping message")
+		t.postMessage(chatID, "Agent is not ready, try again in a moment.")
+		return
+	}
+
 	t.mu.Lock()
 	if _, ok := t.turns[sessionID]; !ok {
 		t.turns[sessionID] = &turn{chatID: chatID}

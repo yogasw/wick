@@ -396,7 +396,12 @@ func (r *Registry) ChannelByKey(instanceKey string) Channel {
 }
 
 // SendFuncFor returns the registry's shared sendFn (used when dynamically adding channels).
-func (r *Registry) SendFuncFor(_ string) SendFunc {
+// Nil means boot never called WithSendFunc; the channel handed it will
+// refuse messages instead of reaching the pool, so it is logged loudly.
+func (r *Registry) SendFuncFor(channelType string) SendFunc {
+	if r.sendFn == nil {
+		log.Error().Str("channel", channelType).Msg("channels: no pool dispatch wired; channel added at runtime cannot send")
+	}
 	return r.sendFn
 }
 

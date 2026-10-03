@@ -1592,6 +1592,11 @@ func NewServer() *Server {
 	// line never changes.
 	channelStore := agentchannels.NewDBStore(db)
 	channelStore.Configs = configsSvc
+	// Channels added after boot (a Team agent's own bot, a per-user
+	// instance saved from the dashboard) take their dispatch from
+	// SendFuncFor. Without this they get nil and the first message panics.
+	// The closure does not depend on the transport, so one serves all.
+	channelReg.WithSendFunc(sendFnFor("runtime"))
 	channelsetup.All(channelReg, channelStore, sendFnFor, tokensSvc)
 
 	// Team agents as A2A servers (/integrations/a2a/<agent_id>). One channel
