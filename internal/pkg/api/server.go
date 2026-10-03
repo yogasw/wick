@@ -1266,6 +1266,19 @@ func NewServer() *Server {
 	if err := wfMgr.Start(context.Background()); err != nil {
 		log.Warn().Err(err).Msg("workflow bootstrap failed; workflows tab will be empty")
 	}
+	// Run retention: cap each workflow's finished-run history by count
+	// and age. Re-read per pass so an edit on the settings page applies
+	// without a restart; unset/0 falls back to the package defaults.
+	wfMgr.StartRunRetention(context.Background(), func() wfsetup.CleanupOptions {
+		opts := wfsetup.CleanupOptions{}
+		if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "workflow_run_keep_max")); err == nil {
+			opts.KeepMax = n
+		}
+		if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "workflow_run_retention_days")); err == nil {
+			opts.TTL = time.Duration(n) * 24 * time.Hour
+		}
+		return opts
+	})
 	agentstool.SetWorkflowManager(wfMgr)
 	agentstool.SetWorkflowEncService(encSvc)
 	// Wire master-key decryptor into the engine so wick_enc_ workflow

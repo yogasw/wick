@@ -78,6 +78,8 @@ type GeneralConfig struct {
 	SystemPromptTeam          string `wick:"textarea;desc=Team agents system prompt — replaces system_prompt for Team agent sessions; leave empty for none"`
 	WorkflowGuardMode         string `wick:"dropdown=off|warn|block;group=Workflow|Workflow guard policy, parallelism, and run-event export.;desc=Workflow guard policy. off = skip guard entirely (default). warn = log violations, allow run. block = reject Publish/Run on violations."`
 	WorkflowMaxParallelGlobal int    `wick:"number;group=Workflow;desc=Global parallel cap. 0 = parallel disabled, all workflows serial (default). N > 0 = parallel enabled, at most N runs execute simultaneously across all workflows. Per-workflow concurrency.max is honoured as an inner cap."`
+	WorkflowRunKeepMax        int    `wick:"number;group=Workflow;desc=Finished runs kept per workflow, newest first. Older ones are deleted (runs still in progress are never touched). 0 = default 50."`
+	WorkflowRunRetentionDays  int    `wick:"number;group=Workflow;desc=Days a finished run is kept, even inside the keep-max count. 0 = default 7."`
 	WorkflowLokiURL           string `wick:"url;group=Workflow;desc=Loki push endpoint for workflow run events (e.g. http://loki:3100). Empty = disabled."`
 	WorkflowLokiLabels        string `wick:"text;group=Workflow;desc=Extra Loki stream labels as comma-separated key=value pairs (e.g. env=prod,team=eng)."`
 	MCPUninstalledClients     string `wick:"hidden;desc=Comma-separated MCP client IDs the user has manually uninstalled. Managed by the UI — do not edit by hand."`
@@ -170,12 +172,14 @@ func DefaultGeneralConfig() GeneralConfig {
 		// a shared thread, without repeating a platform user ID into every
 		// turn on installs that have no use for one. The dashboard shows the
 		// full sender either way.
-		SenderVisibility:   "name",
-		SystemPrompt:       systemprompt.DefaultSystemPrompt(),
-		WorkflowGuardMode:  "off",
-		TraceEventInlineKB: 10,
-		TraceEventMaxKB:    512,
-		AirouterEnabled:    true,
+		SenderVisibility:         "name",
+		SystemPrompt:             systemprompt.DefaultSystemPrompt(),
+		WorkflowGuardMode:        "off",
+		WorkflowRunKeepMax:       50,
+		WorkflowRunRetentionDays: 7,
+		TraceEventInlineKB:       10,
+		TraceEventMaxKB:          512,
+		AirouterEnabled:          true,
 		// Memory guard ships OFF: an install that never opts in must behave
 		// byte-identically to one built before the feature existed. The four
 		// numeric limits stay zero here on purpose — their correct values
