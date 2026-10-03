@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { humanBytes, humanBps, humanPct, humanDuration, pctOf, middleTruncate, machineShare, guardKindLabel } from "../format.js";
+import { humanBytes, humanBps, humanPct, humanDuration, pctOf, middleTruncate, machineShare, guardKindLabel, quotaShare } from "../format.js";
 
 // These render the numbers an operator reads a limit decision off, so the
 // boundaries matter more than the happy path.
@@ -118,5 +118,13 @@ describe("guardKindLabel", () => {
     expect(guardKindLabel("kill_child")).toBe("Stopped process");
     expect(guardKindLabel("throttle")).toBe("Capped CPU");
     expect(guardKindLabel("mystery")).toBe("mystery");
+  });
+});
+
+describe("quotaShare", () => {
+  it("reads a per-core quota as a share of the machine", () => {
+    expect(quotaShare(140, 2)).toBe("140% = 70% of this machine");
+    expect(quotaShare(0, 2)).toBe("uncapped");
+    expect(quotaShare(150, 0)).toBe("150% of one core");
   });
 });

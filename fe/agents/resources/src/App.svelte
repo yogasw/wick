@@ -9,7 +9,7 @@
   import TopTable from "$lib/TopTable.svelte";
   import ProcessExplorer from "$lib/ProcessExplorer.svelte";
   import WrapperPanel from "$lib/WrapperPanel.svelte";
-  import { humanBytes, humanBps, humanPct, humanDuration, clockTime, pctOf, machineShare, guardKindLabel } from "$lib/format.js";
+  import { humanBytes, humanBps, humanPct, humanDuration, clockTime, pctOf, machineShare, guardKindLabel, quotaShare } from "$lib/format.js";
   import Gauge from "$lib/components/Gauge.svelte";
   import type { MemoryReport, SeriesResponse } from "$lib/types.js";
 
@@ -335,8 +335,13 @@
           <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Resource Guard</h2>
           <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
             {report.mode === "enforce"
-              ? `Watching memory and CPU every ${report.guard.interval_ms || 1000} ms · action: ${report.guard.action}`
-              : "Runs only in 'enforce' mode."}
+              ? `Watching CPU and memory every ${report.guard.interval_ms || 1000} ms · action: ${report.guard.action}`
+              : report.mode === "measure"
+                ? "Measure mode: records what it would stop, stops nothing."
+                : "Off. Switch the mode to 'measure' or 'enforce'."}
+          </p>
+          <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+            Safe line {report.guard.safe_pct || 80}% CPU and memory · agent CPU quota {quotaShare(report.guard.cpu_quota_pct, report.cpu_cores)}
           </p>
         </div>
         {#if report.guard.hold_spawns}

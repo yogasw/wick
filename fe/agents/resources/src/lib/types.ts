@@ -138,10 +138,14 @@ export interface GuardEvent {
   target?: string;
   detail: string;
   agent_pid?: number;
+  dry_run?: boolean;
 }
 
 export interface GuardReport {
   action: string;
+  safe_pct: number;
+  // Percent of ONE core; see quotaShare for the whole-machine reading.
+  cpu_quota_pct: number;
   interval_ms: number;
   exhaust_horizon_sec: number;
   cpu_psi_max: number;

@@ -100,7 +100,20 @@ export function guardKindLabel(kind: string): string {
       return "Capped CPU";
     case "restore":
       return "CPU restored";
+    case "near_hang":
+      return "Near hang";
+    case "resolved":
+      return "Back to safe";
     default:
       return kind;
   }
+}
+
+// quotaShare reads a CPU quota (percent of ONE core) as a share of the
+// whole machine: "140% = 70% of this machine" on two cores. Without it a
+// quota above 100 looks like a typo.
+export function quotaShare(pct: number, cores: number): string {
+  if (!Number.isFinite(pct) || pct <= 0) return "uncapped";
+  if (!Number.isFinite(cores) || cores <= 0) return `${pct}% of one core`;
+  return `${pct}% = ${Math.round(pct / cores)}% of this machine`;
 }
