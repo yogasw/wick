@@ -9,13 +9,15 @@
        - mentionFiles/onSearchFiles: `@` file search (omit → `@` inert)
        - commands: `/` command menu (omit → `/` inert)
        - submitLabel: text beside the send arrow (omit → icon only) */
+  import type { Snippet } from "svelte";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import ImageEditor from "./ImageEditor.svelte";
   import CapabilityChips from "./CapabilityChips.svelte";
   import CapabilityModal from "./CapabilityModal.svelte";
   import ProviderIcon from "./ProviderIcon.svelte";
   import { modelListMeta, describeModelListMeta, type ModelListMeta } from "./model-list-meta.js";
-  import type { ComposerCommand, ComposerSelect, ComposerSelectOption, ComposerModelOption } from "./composer-types.js";
+  import type { ComposerCommand, ComposerSelect, ComposerSelectOption, ComposerModelOption, ComposerMentionAgent } from "./composer-types.js";
+  import { agentMentionRows, fileMentionRows } from "./mention-menu.js";
   import { matchModelFilter } from "./modelFilter.js";
 
   type Props = {
@@ -46,7 +48,10 @@
     /** `@` mention: agents reachable from this conversation. Listed above
         files, because naming an agent asks for work while naming a file
         only supplies context — the more consequential pick goes first. */
-    mentionAgents?: { handle: string; label: string; hint?: string }[];
+    mentionAgents?: ComposerMentionAgent[];
+    /** Draws a Team row's avatar in the `@` menu. A snippet rather than an
+        import so common-ui stays free of the avatar package. */
+    mentionAvatar?: Snippet<[{ shape?: string; color?: string }]>;
     /** `/` command menu entries (built-in actions + skills). */
     commands?: ComposerCommand[];
     /** Context-window meter shown as a ring next to the provider chip.
@@ -83,6 +88,7 @@
     mentionFiles = [],
     onSearchFiles,
     mentionAgents = [],
+    mentionAvatar,
     contextMeter,
     commands = [],
   }: Props = $props();
@@ -201,29 +207,21 @@
         : commands;
       return matches.slice(0, 50);
     }
-    // Agents first, then files. A handle is a short exact token, so a
-    // plain substring match is enough — and matching on the description
-    // too would surface an agent for a query aimed at a file path.
-    const aq = menuQuery.toLowerCase();
-    const agentRows: MenuItem[] = mentionAgents
-      .filter((a) => !aq || a.handle.toLowerCase().includes(aq))
-      .map((a) => ({
-        value: a.handle,
-        label: a.label,
-        category: a.hint ? `agent · ${a.hint}` : "agent",
-      }));
+    // Team, then Sub-agents, then Files — see mention-menu.ts.
+    const agentRows = agentMentionRows(mentionAgents, menuQuery);
+    const titled = mentionAgents.length > 0;
 
     if (onSearchFiles) {
-      return [...agentRows, ...fileResults.map((p) => ({ value: p, label: p }))].slice(0, 50);
+      return [...agentRows, ...fileMentionRows(fileResults, titled)].slice(0, 50);
     }
     const terms = menuQuery.toLowerCase().split(/\s+/).filter(Boolean);
-    const scored: { item: MenuItem; score: number }[] = [];
+    const scored: { path: string; score: number }[] = [];
     for (const p of mentionFiles) {
       const s = scoreFile(p, terms);
-      if (s !== null) scored.push({ item: { value: p, label: p }, score: s });
+      if (s !== null) scored.push({ path: p, score: s });
     }
     scored.sort((a, b) => a.score - b.score);
-    return [...agentRows, ...scored.map((s) => s.item)].slice(0, 50);
+    return [...agentRows, ...fileMentionRows(scored.map((s) => s.path), titled)].slice(0, 50);
   });
 
   $effect(() => {
@@ -1060,7 +1058,15 @@
               <!-- `/` command menu: fixed-width name column so every hint lines
                    up in a straight second column (esp. skills). `@` file mentions
                    have no hint — let the filename use the full row instead. -->
-              <span class="truncate font-mono {menuKind === '/' ? 'w-36 sm:w-44 shrink-0' : ''}">{item.label}</span>
+              {#if item.avatar}
+                <!-- Team row: avatar + name, the @handle and tagline as the hint. -->
+                <span class="flex min-w-0 shrink-0 items-center gap-2" data-testid="mention-team-row">
+                  {#if mentionAvatar}{@render mentionAvatar(item.avatar)}{/if}
+                  <span class="truncate font-medium">{item.label}</span>
+                </span>
+              {:else}
+                <span class="truncate font-mono {menuKind === '/' ? 'w-36 sm:w-44 shrink-0' : ''}">{item.label}</span>
+              {/if}
               {#if item.hint}
                 <span class="min-w-0 flex-1 truncate text-[10px] text-black-500 dark:text-black-600">{item.hint}</span>
               {/if}

@@ -669,3 +669,47 @@ describe("Composer auto-resize", () => {
     expect(seen[seen.length - 1]).toBe("120px");
   });
 });
+
+describe("Composer — @ mention groups", () => {
+  const agents = [
+    { handle: "log-investigator", label: "log-investigator", hint: "reads logs", group: "subagent" as const },
+    { handle: "anton", label: "Anton", hint: "Billing specialist", group: "team" as const, avatar: { shape: "blob", color: "#7c3aed" } },
+  ];
+
+  test("lists Team, then Sub-agents, then Files under section titles", async () => {
+    render(Composer, { props: { onSend: vi.fn(), mentionFiles: ["a.txt"], mentionAgents: agents } });
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "@" } });
+    const list = screen.getByRole("listbox");
+    const text = list.textContent ?? "";
+    const iTeam = text.indexOf("Team");
+    const iSub = text.indexOf("Sub-agents");
+    const iFiles = text.indexOf("Files");
+    expect(iTeam).toBeGreaterThanOrEqual(0);
+    expect(iSub).toBeGreaterThan(iTeam);
+    expect(iFiles).toBeGreaterThan(iSub);
+    expect(screen.getByTestId("mention-team-row").textContent).toContain("Anton");
+    expect(screen.getByText("@anton · Billing specialist")).toBeDefined();
+  });
+
+  test("the query filters Team rows by handle or name", async () => {
+    render(Composer, { props: { onSend: vi.fn(), mentionAgents: agents } });
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "@ant" } });
+    expect(screen.getByText("Anton")).toBeDefined();
+    expect(screen.queryByText("log-investigator")).toBeNull();
+  });
+
+  test("picking a Team row inserts its handle", async () => {
+    const onSend = vi.fn();
+    render(Composer, { props: { onSend, mentionAgents: agents } });
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await fireEvent.input(textarea, { target: { value: "@Anton" } });
+    await fireEvent.mouseDown(screen.getByText("Anton"));
+    expect(textarea.value.startsWith("@anton")).toBe(true);
+  });
+
+  test("a files-only menu keeps no section title", async () => {
+    render(Composer, { props: { onSend: vi.fn(), mentionFiles: ["a.txt"] } });
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "@" } });
+    expect(screen.queryByText("Files")).toBeNull();
+  });
+});
