@@ -458,10 +458,13 @@
 {:else if isUser}
   <!-- Only the bubble the user just sent (optimistic local turn) slides in;
        history and refreshes render still. -->
-  <div class="flex min-w-0 max-w-full justify-end gap-2 group" class:wick-enter-up={turn.turn_id?.startsWith("local-user-")}>
-    <div class="flex flex-col items-end gap-1 max-w-[80%] min-w-0">
+  <!-- A teammate agent's message sits on the LEFT, where replies live: the
+       right-hand side means "a person typed this", and an agent writing into
+       the thread is not that. -->
+  <div class={"flex min-w-0 max-w-full gap-2 group " + (teamFrom ? "justify-start" : "justify-end")} class:wick-enter-up={turn.turn_id?.startsWith("local-user-")}>
+    <div class={"flex flex-col gap-1 max-w-[80%] min-w-0 " + (teamFrom ? "items-start" : "items-end")}>
       {#if safeAttachments.length > 0}
-        <div class="flex flex-wrap justify-end gap-1.5 max-w-full">
+        <div class={"flex flex-wrap gap-1.5 max-w-full " + (teamFrom ? "justify-start" : "justify-end")}>
           {#each safeAttachments as attachment}
             {#if attachment.mime?.startsWith("image/")}
               <button
@@ -494,14 +497,14 @@
         <!-- chip + bubble are one tight unit: the source chip sits flush on
              top of the bubble, tinted to match, so it reads as part of the
              message rather than a floating label. -->
-        <div class="flex flex-col items-end gap-0.5 min-w-0 max-w-full">
+        <div class={"flex flex-col gap-0.5 min-w-0 max-w-full " + (teamFrom ? "items-start" : "items-end")}>
           {#if teamFrom}
             <span
               data-testid="team-sender-chip"
               title={`${teamFrom.name} (@${teamFrom.handle}) · Team agent`}
-              class="inline-flex items-center gap-1.5 pr-1 mr-0.5 text-[11px] leading-4 text-black-800 dark:text-black-600"
+              class="inline-flex items-center gap-1.5 pl-1 ml-0.5 text-[11px] leading-4 text-black-800 dark:text-black-600"
             >
-              <AgentAvatar kind={teamFromAgent?.kind} shape={teamFromAgent?.shape} expression={teamFromAgent?.expression} color={teamFromAgent?.color} size={16} />
+              <AgentAvatar kind={teamFromAgent?.kind} shape={teamFromAgent?.shape} expression={teamFromAgent?.expression} color={teamFromAgent?.color} size={20} />
               <span class="min-w-0 truncate"
                 ><span class="font-medium text-black-900 dark:text-white-100">{teamFromAgent?.name || teamFrom.name}</span
                 ><span class="opacity-70">{" · @" + teamFrom.handle}</span></span
@@ -581,7 +584,8 @@
                neutral surface instead, so the two are distinguishable at a
                glance rather than only by reading the name above them. -->
           <div
-            class={"min-w-0 max-w-full overflow-hidden rounded-2xl rounded-tr-sm px-4 py-2.5 text-base whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed shadow-sm " +
+            class={"min-w-0 max-w-full overflow-hidden rounded-2xl px-4 py-2.5 text-base whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed shadow-sm " +
+              (teamFrom ? "rounded-tl-sm " : "rounded-tr-sm ") +
               (fromSomeoneElse || teamFrom
                 ? "bg-white-200 dark:bg-navy-700 text-black-900 dark:text-white-100 ring-1 ring-white-400 dark:ring-navy-600"
                 : "bg-green-500 text-white-100")}

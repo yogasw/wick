@@ -1212,6 +1212,18 @@ describe("ThreadMessage - Team", () => {
     expect(screen.queryByText(/Message from/)).toBeNull();
   });
 
+  test("a teammate's message sits on the left, a person's on the right", () => {
+    const { container, unmount } = render(ThreadMessage, {
+      props: { turn: makeTurn({ source: "team", text: "Message from Anton (@anton):\nno 401s today" }) },
+    });
+    const row = container.firstElementChild as HTMLElement;
+    expect(row.className).toContain("justify-start");
+    expect(row.className).not.toContain("justify-end");
+    unmount();
+    const mine = render(ThreadMessage, { props: { turn: makeTurn({ text: "hi" }) } });
+    expect((mine.container.firstElementChild as HTMLElement).className).toContain("justify-end");
+  });
+
   test("the same words typed by a person stay a person's message", () => {
     render(ThreadMessage, { props: { turn: makeTurn({ text: "Message from Anton (@anton):\nhi" }) } });
     expect(screen.queryByTestId("team-sender-chip")).toBeNull();
