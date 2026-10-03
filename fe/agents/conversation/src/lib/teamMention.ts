@@ -109,3 +109,15 @@ export function subAgentTurns(s: { turns_used: number; max_turns: number; resume
   const used = Math.max(0, s.turns_used - base);
   return `${used} turns this leg · ${s.turns_used} total`;
 }
+
+/** speakerVia names who an agent's mention-driven turn answered: the
+    teammate behind the nearest earlier user turn (framed by teamlink).
+    "" when the turn is not via a mention or nobody can be named. */
+export function speakerVia<T extends { role: string; source?: string; text: string; speaker?: { via?: string } }>(turns: T[], i: number): string {
+  if (turns[i]?.speaker?.via !== "mention") return "";
+  for (let j = i - 1; j >= 0; j--) {
+    if (turns[j].role !== "user") continue;
+    return teamSender(turns[j].source, turns[j].text ?? "")?.handle ?? "";
+  }
+  return "";
+}

@@ -200,6 +200,25 @@ export type ConversationTurn = {
   /** system turn only — the numbers behind `kind`, kept as data rather
       than baked into the text (compaction: trigger, pre/post tokens). */
   extras?: Record<string, string>;
+  /** assistant turn of a Team agent's session — who spoke, set by the
+      server. via "mention" = answering a teammate's message. */
+  speaker?: TurnSpeaker;
+  /** user turn made by clicking an actioncard button — set ONLY by the
+      server's postback endpoint, never parsed out of text. */
+  postback?: CardPostback;
+};
+
+export type TurnSpeaker = { agent_id: string; handle: string; via: "direct" | "mention" | "group" | string };
+
+export type CardPostback = { card_id: string; value: string; label: string };
+
+/** Server-computed state of one actioncard id across the whole thread. */
+export type CardState = {
+  /** The assistant turn holding the card's newest version. */
+  turn_id: string;
+  locked?: boolean;
+  postback?: CardPostback;
+  postback_turn_id?: string;
 };
 
 export type ApprovalRequest = {

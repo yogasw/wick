@@ -31,8 +31,21 @@
     /** Opens a Team agent's chat; unset (outside the Team app) the
         handoff row's target is plain text. */
     onOpenAgent?: (handle: string) => void;
+    /** The agent this chat belongs to — names a speaker missing from teamAgents. */
+    agent?: { handle?: string; name: string; kind?: string; shape?: string; color?: string; expression?: string };
+    /** Handle of the teammate a via-mention turn answered ("" = none). */
+    via?: string;
   };
-  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, teamAgents = {}, onOpenAgent }: Props = $props();
+  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, teamAgents = {}, onOpenAgent, agent, via = "" }: Props = $props();
+
+  /* Who spoke an assistant turn, from the server's turn.speaker — never
+     guessed from the text. A turn answering a teammate's mention is nested
+     under a "via @x" label so it reads as part of that exchange. */
+  const speaker = $derived(turn.role === "assistant" ? turn.speaker : undefined);
+  const speakerAgent = $derived(
+    speaker ? (teamAgents[speaker.handle] ?? (agent && agent.handle === speaker.handle ? agent : undefined)) : undefined,
+  );
+  const viaMention = $derived(speaker?.via === "mention");
 
   /* A teammate's message (source "team", framed "Message from Name
      (@handle):") reads as from that agent — its avatar and name on the
@@ -605,8 +618,17 @@
     </div>
   </div>
 {:else}
-  <div class="flex justify-start group">
+  <div class={"flex justify-start group" + (viaMention ? " ml-3 pl-3 border-l-2 border-white-300 dark:border-navy-600" : "")} data-via={viaMention ? "mention" : undefined}>
     <div class="flex flex-col gap-1.5 w-full max-w-full min-w-0">
+      {#if speaker}
+        <span data-testid="speaker-chip" class="inline-flex items-center gap-1.5 self-start text-[11px] leading-4 text-black-800 dark:text-black-600">
+          <AgentAvatar kind={speakerAgent?.kind} shape={speakerAgent?.shape} expression={speakerAgent?.expression} color={speakerAgent?.color} size={20} />
+          <span class="min-w-0 truncate"
+            ><span class="font-medium text-black-900 dark:text-white-100">{speakerAgent?.name || "@" + speaker.handle}</span
+            >{#if viaMention}<span class="opacity-70">{via ? " · via @" + via : " · via mention"}</span>{/if}</span
+          >
+        </span>
+      {/if}
       {#if showTraceToggle}
         <div class="flex flex-col gap-1">
           {#if mergedTodoItems.length > 0 || todoGoal}

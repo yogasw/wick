@@ -1229,3 +1229,34 @@ describe("ThreadMessage - Team", () => {
     expect(screen.queryByTestId("team-sender-chip")).toBeNull();
   });
 });
+
+describe("ThreadMessage - speaker", () => {
+  test("an assistant turn names its server-set speaker", () => {
+    render(ThreadMessage, {
+      props: {
+        turn: makeTurn({ role: "assistant", text: "done", speaker: { agent_id: "a1", handle: "anton", via: "direct" } }),
+        teamAgents: { anton: { name: "Anton" } },
+      },
+    });
+    const chip = screen.getByTestId("speaker-chip");
+    expect(chip.textContent).toContain("Anton");
+    expect(chip.textContent).not.toContain("via");
+  });
+
+  test("a via-mention turn is nested and says who it answered", () => {
+    const { container } = render(ThreadMessage, {
+      props: {
+        turn: makeTurn({ role: "assistant", text: "ok", speaker: { agent_id: "a1", handle: "anton", via: "mention" } }),
+        agent: { handle: "anton", name: "Anton" },
+        via: "captain",
+      },
+    });
+    expect(screen.getByTestId("speaker-chip").textContent).toContain("Anton · via @captain");
+    expect(container.querySelector("[data-via=mention]")).not.toBeNull();
+  });
+
+  test("no speaker → no chip (plain sessions)", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "assistant", text: "hi" }) } });
+    expect(screen.queryByTestId("speaker-chip")).toBeNull();
+  });
+});

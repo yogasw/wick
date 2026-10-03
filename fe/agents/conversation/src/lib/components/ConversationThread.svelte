@@ -12,6 +12,7 @@
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import type { AgentIdentity } from "../agentMode.js";
   import { foldSystemEvents } from "../systemEvents.js";
+  import { speakerVia } from "../teamMention.js";
 
   type Props = {
     turns: ConversationTurn[];
@@ -226,7 +227,7 @@
         <span class="rounded-md bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm">{label}</span>
       </div>
     {/if}
-    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {teamAgents} {onOpenAgent} />
+    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} />
   {/each}
 
   {#if live && turns.length === 0}
