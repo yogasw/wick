@@ -22,7 +22,7 @@ plugins/
 │       ├── connector.go   #   the connector.Module (Meta + Operations + Configs)
 │       └── VERSION        #   source of truth for this plugin's version
 ├── tool/                  # (later) kind=tool — same build flow
-└── job/                   # (later) kind=job — same build flow
+└── job/                   # kind=job — wickplugin.ServeJob; _template + example_heartbeat
 ```
 
 `_template` is a complete, working connector (HTTP GET + DELETE against a
@@ -59,14 +59,24 @@ wick plugin build --all-plugins
 # only connectors whose folder changed since a ref (used by CI)
 wick plugin build --changed --since origin/main
 
-# other kinds (later): pick the source folder with --kind
-wick plugin build --kind tool mytool
+# job plugins: pick the source folder with --kind
+wick plugin build --kind job example_heartbeat
 ```
 
 Each build produces `bin/<name>-<version>-<goos>-<goarch>.zip` containing the
 binary plus a `plugin.json` generated **from the binary** (`--dump-manifest`),
 so the manifest can never drift from the code. Pass `--sign-key <path>` to sign
 each manifest (ed25519; `cmd/plugin-keygen` in the wick repo mints a key).
+
+### Job plugins
+
+`job/<name>/` calls `wickplugin.ServeJob(job.Module{...})` instead of `Serve`.
+The host installs it under `plugins/jobs/<key>/` and registers it like a
+built-in job: it shows on the Jobs page, runs on its cron and from Run now, and
+each run spawns the binary, calls `Run` once, then kills the process. Lines
+logged with `job.Logf(ctx, ...)` and the returned markdown land in the run
+history. A run is bounded by `WICK_JOB_PLUGIN_TIMEOUT` (default 30m). Start from
+`job/_template/`.
 
 ## Installing (consumption side)
 
