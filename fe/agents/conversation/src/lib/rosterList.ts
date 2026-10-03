@@ -19,8 +19,8 @@ function matches(q: string, a: Searchable): boolean {
 }
 
 /** rosterEntries is the sidebar list: agents and groups that match the
-    search, newest last_active first, ties by name. A group matches on its
-    own name or any member's. */
+    search, the Captain pinned on top, the rest newest last_active first,
+    ties by name. A group matches on its own name or any member's. */
 export function rosterEntries(agents: AgentItem[], groups: GroupItem[], query: string): RosterEntry[] {
   const q = query.trim().toLowerCase();
   const list: RosterEntry[] = [
@@ -31,7 +31,8 @@ export function rosterEntries(agents: AgentItem[], groups: GroupItem[], query: s
   ];
   const at = (e: RosterEntry) => ts(e.kind === "agent" ? e.agent.last_active : e.group.last_active);
   const name = (e: RosterEntry) => (e.kind === "agent" ? e.agent.name : e.group.name);
-  return list.sort((x, y) => at(y) - at(x) || name(x).localeCompare(name(y)));
+  const captain = (e: RosterEntry) => (e.kind === "agent" && e.agent.is_captain ? 1 : 0);
+  return list.sort((x, y) => captain(y) - captain(x) || at(y) - at(x) || name(x).localeCompare(name(y)));
 }
 
 export const PIN_COUNT = 3;
