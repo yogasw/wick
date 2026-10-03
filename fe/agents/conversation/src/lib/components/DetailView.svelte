@@ -3,7 +3,7 @@
   import { attachThreadScroll, type ThreadScroll } from "../threadStick.js";
   import { railRefreshTargets, type RefreshableRailTab } from "../railRefresh.js";
   import { get } from "svelte/store";
-  import { Effect } from "effect";
+  import { Effect, Either } from "effect";
   import { WickClientLayer, listAgentProfiles } from "@wick-fe/common-api";
   import { toastError, toastOk, toastWarn } from "@wick-fe/common-stores";
   import { ConfirmDialog, Composer } from "@wick-fe/common-ui";
@@ -24,7 +24,9 @@
   import { readScmWidth, writeScmWidth, clampScmWidth, RAIL_GUTTER_PX } from "../scmWidth.js";
   import { isValidFileName } from "../fileName.js";
 
-  import { getConversation, getSessionMeta, deleteSession, getTurnTrace, getTurnEvent, getTurnBlob, cancelRun } from "../api/sessions.js";
+  import { getConversation, getSessionMeta, deleteSession, getTurnTrace, getTurnEvent, getTurnBlob, cancelRun, sendPostback, decideApprovalCard } from "../api/sessions.js";
+  import { lockCard } from "../actionCard.js";
+  import { APIError } from "@wick-fe/common-api";
   import { getProviderOptions, getProviderOptionModels, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
   import { getAsks, answerAsk } from "../api/asks.js";
   import { getTodos, type TodoList } from "../api/todos.js";
@@ -139,7 +141,9 @@
   let agentLifecycle = $state<LifecycleState>({ state: "", pid: 0, substate: "", at: 0 });
   let threadMeta = $state<ThreadMeta>({});
 
+  let cards = $state<Record<string, import("../types/agents.js").CardState>>({});
   const unsubTurns = thread.turns.subscribe((v) => { turns = v; });
+  const unsubCards = thread.cards.subscribe((v) => { cards = v; });
   const unsubLive = thread.live.subscribe((v) => { live = v; });
   const unsubTyping = thread.typing.subscribe((v) => { typing = v; });
   /* Report turn start/end to an agent-mode host, edges only. Starts at
@@ -1693,6 +1697,7 @@
         // oldest loaded turn is the window's first turn (or nothing loaded).
         const oldestLoaded = turns[0]?.turn_id;
         thread.setHistory(res.turns);
+        thread.cards.set(res.cards ?? {});
         if (!oldestLoaded || oldestLoaded === res.turns[0]?.turn_id) {
           hasMoreHistory = res.hasMore;
         }
@@ -1877,6 +1882,28 @@
     } catch (e: unknown) {
       toastError(`Delete: ${e instanceof Error ? e.message : String(e)}`);
     }
+  }
+
+  /* ── actioncard postback ──────────────────────────────────────── */
+  /* A click on an agent's actioncard. The server records it as a user turn
+     and pushes a `postback` event that locks the card in every tab; a 409
+     means another click or a final version got there first, so the card
+     state is refreshed instead of shouting. */
+  async function handleCardAction(cardId: string, value: string, label: string) {
+    const res = await Effect.runPromise(
+      Effect.either(sendPostback(base, sessionId, { card_id: cardId, value }).pipe(Effect.provide(WickClientLayer))),
+    );
+    if (Either.isRight(res)) {
+      thread.cards.update((c) => lockCard(c, res.right.postback ?? { card_id: cardId, value, label }));
+      return;
+    }
+    const err = res.left;
+    if (err instanceof APIError && err.status === 409) {
+      toastWarn("That card was already answered — refreshed.");
+      void loadConversation();
+      return;
+    }
+    toastError(`Card: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   /* ── ask / approval handlers ──────────────────────────────────── */
@@ -2155,6 +2182,7 @@
     window.removeEventListener("online", handleResync);
     closeSSE?.();
     unsubTurns();
+    unsubCards();
     unsubLive();
     unsubTyping();
     unsubLifecycle();
@@ -2540,7 +2568,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} />
+          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} />
         </div>
       </div>
 

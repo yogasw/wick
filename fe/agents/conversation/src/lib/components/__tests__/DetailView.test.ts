@@ -62,6 +62,7 @@ vi.mock("../../stores/thread.js", () => ({
     contextUsed: { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; } },
     lifecycle: { subscribe: (fn: (v: { state: string; pid: number; substate: string; at: number }) => void) => { fn({ state: "", pid: 0, substate: "", at: 0 }); return () => {}; } },
     meta: metaStore,
+    cards: { subscribe: (fn: (v: Record<string, unknown>) => void) => { fn({}); return () => {}; }, set: vi.fn(), update: vi.fn() },
     setHistory: vi.fn(),
     appendUserTurn: vi.fn(),
     handleEvent: vi.fn(),

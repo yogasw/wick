@@ -42,9 +42,11 @@
     /** Team agents by handle and the opener for their chats; see ThreadMessage. */
     teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }>;
     onOpenAgent?: (handle: string) => void;
+    cards?: Record<string, import("../types/agents.js").CardState>;
+    onCardAction?: (cardId: string, value: string, label: string) => void;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, agent, teamAgents = {}, onOpenAgent }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -227,7 +229,7 @@
         <span class="rounded-md bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm">{label}</span>
       </div>
     {/if}
-    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} />
+    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} />
   {/each}
 
   {#if live && turns.length === 0}

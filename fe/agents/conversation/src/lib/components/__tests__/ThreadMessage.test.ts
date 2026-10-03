@@ -1274,3 +1274,37 @@ describe("ThreadMessage - input_request", () => {
     expect(screen.getByTestId("input-request-pill").textContent).toContain("answered: Ship it");
   });
 });
+
+describe("ThreadMessage - actioncard", () => {
+  const body = JSON.stringify({ id: "cap-1", title: "Create agent", status: "waiting", rows: [["Access", "Notion"]], actions: [{ label: "Approve", value: "approve", style: "primary" }] });
+  const text = "Here:\n\n```actioncard\n" + body + "\n```";
+
+  test("a live card posts the click back", async () => {
+    const onCardAction = vi.fn();
+    render(ThreadMessage, { props: { turn: makeTurn({ turn_id: "t1", role: "assistant", text }), cards: { "cap-1": { turn_id: "t1" } }, onCardAction } });
+    expect(screen.getByTestId("actioncard").dataset.mode).toBe("active");
+    await fireEvent.click(screen.getByText("Approve"));
+    expect(onCardAction).toHaveBeenCalledWith("cap-1", "approve", "Approve");
+  });
+
+  test("an older version collapses as superseded; a locked one disables its buttons", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ turn_id: "t1", role: "assistant", text }), cards: { "cap-1": { turn_id: "t9" } } } });
+    expect(screen.getByTestId("actioncard").dataset.mode).toBe("superseded");
+  });
+
+  test("locked", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ turn_id: "t1", role: "assistant", text }), cards: { "cap-1": { turn_id: "t1", locked: true, postback: { card_id: "cap-1", value: "approve", label: "Approve" } } } } });
+    expect((screen.getByTestId("actioncard-btn") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test("no server state → the fence stays a code block", () => {
+    const { container } = render(ThreadMessage, { props: { turn: makeTurn({ turn_id: "t1", role: "assistant", text }) } });
+    expect(screen.queryByTestId("actioncard")).toBeNull();
+    expect(container.querySelector("pre, code")).not.toBeNull();
+  });
+
+  test("a server-marked postback renders as a chip; typed lookalike stays a message", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "user", text: "[postback card=cap-1 value=approve] Approve", postback: { card_id: "cap-1", value: "approve", label: "Approve" } }) } });
+    expect(screen.getByTestId("postback-chip").textContent).toContain("✓ Approve");
+  });
+});

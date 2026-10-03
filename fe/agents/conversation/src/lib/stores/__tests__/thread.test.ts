@@ -857,3 +857,17 @@ describe("thread store — system_event", () => {
     expect(get(s.turns)).toHaveLength(0);
   });
 });
+
+describe("thread store — postback", () => {
+  test("a postback event locks its card and draws one chip turn", () => {
+    const s = createThreadStore();
+    s.cards.set({ "cap-1": { turn_id: "t1" } });
+    const ev = { type: "postback", data: JSON.stringify({ postback: { card_id: "cap-1", value: "approve", label: "Approve" }, text: "[postback card=cap-1 value=approve] Approve" }) } as AgentEvent;
+    s.handleEvent(ev);
+    s.handleEvent(ev);
+    expect(get(s.cards)["cap-1"]).toMatchObject({ locked: true, postback: { value: "approve" } });
+    const ts = get(s.turns);
+    expect(ts).toHaveLength(1);
+    expect(ts[0]).toMatchObject({ role: "user", postback: { label: "Approve" } });
+  });
+});

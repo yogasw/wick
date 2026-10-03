@@ -12,6 +12,9 @@
   import { isSystemEventKind } from "../systemEvents.js";
   import SystemEventChip from "./system/SystemEventChip.svelte";
   import InputRequestCard from "./system/InputRequestCard.svelte";
+  import ActionCard from "./system/ActionCard.svelte";
+  import { splitActionCards, cardMode } from "../actionCard.js";
+  import type { CardState } from "../types/agents.js";
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import ToolCard from "./ToolCard.svelte";
   import TodoCard from "./TodoCard.svelte";
@@ -36,8 +39,12 @@
     agent?: { handle?: string; name: string; kind?: string; shape?: string; color?: string; expression?: string };
     /** Handle of the teammate a via-mention turn answered ("" = none). */
     via?: string;
+    /** Server-computed actioncard state for the whole thread. */
+    cards?: Record<string, CardState>;
+    /** Posts an actioncard click back; unset = buttons stay inert. */
+    onCardAction?: (cardId: string, value: string, label: string) => void;
   };
-  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, teamAgents = {}, onOpenAgent, agent, via = "" }: Props = $props();
+  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -47,6 +54,9 @@
     speaker ? (teamAgents[speaker.handle] ?? (agent && agent.handle === speaker.handle ? agent : undefined)) : undefined,
   );
   const viaMention = $derived(speaker?.via === "mention");
+
+  /* Only an agent's reply can hold a live actioncard; the server's `cards`
+     state decides whether a fence IS one (see cardMode). */
 
   /* A teammate's message (source "team", framed "Message from Name
      (@handle):") reads as from that agent — its avatar and name on the
@@ -383,6 +393,9 @@
     traceEvents = null;
     await toggleTrace();
   }
+  const cardSegments = $derived(
+    turn.role === "assistant" ? splitActionCards(displayText) : [{ kind: "md" as const, text: displayText }],
+  );
 </script>
 
 {#if isSystem}
@@ -462,6 +475,12 @@
         </div>
       {/if}
     </div>
+  </div>
+{:else if isUser && turn.postback}
+  <!-- A click on an actioncard button, recorded by the server: a small chip
+       on the user's side, not a typed message. -->
+  <div class="flex justify-end">
+    <span data-testid="postback-chip" title={turn.text} class="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:text-green-300">✓ {turn.postback.label || turn.postback.value}</span>
   </div>
 {:else if isUser}
   <!-- Only the bubble the user just sent (optimistic local turn) slides in;
@@ -717,7 +736,18 @@
              line-height for comfortable long-form reading. A [silent] reply is
              the same plain text, marked by the muted-bell chip above. -->
         <div use:enrich={displayText} onwick-imagecard-open={onImageCardOpen} class="wick-prose px-0.5 text-black-900 dark:text-white-100 break-words">
-          {@html renderMarkdown(displayText)}
+          {#each cardSegments as seg}
+            {#if seg.kind === "card" && cardMode(seg.card.id, turn.turn_id, cards) !== "none"}
+              <ActionCard
+                card={seg.card}
+                mode={cardMode(seg.card.id, turn.turn_id, cards)}
+                clicked={cards[seg.card.id]?.postback}
+                onAction={onCardAction}
+              />
+            {:else}
+              {@html renderMarkdown(seg.kind === "card" ? seg.raw : seg.text)}
+            {/if}
+          {/each}
           {#if turn.interrupted}
             <div class="mt-2 flex items-center gap-1.5 border-t border-white-300 dark:border-navy-600 pt-2">
               <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-amber-500" fill="none" stroke="currentColor" stroke-width="1.5">

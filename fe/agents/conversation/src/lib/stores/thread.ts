@@ -14,6 +14,8 @@ import type { Writable } from "svelte/store";
 import type {
   AgentEvent,
   Attachment,
+  CardPostback,
+  CardState,
   ConversationTurn,
   LiveTurn,
   Sender,
@@ -64,6 +66,9 @@ export interface ThreadStore {
   turnStartedAt: Writable<number>;
   lifecycle: Writable<LifecycleState>;
   meta: Writable<ThreadMeta>;
+  /* actioncard state per card id, as the conversation endpoint computes it
+     over the whole thread; a live postback locks its card here too. */
+  cards: Writable<Record<string, CardState>>;
   setHistory(turns: ConversationTurn[]): void;
   /* Insert an older history page (infinite scroll up) before the turns
      already loaded, dropping any turn whose id is already present. */
@@ -106,6 +111,7 @@ export function createThreadStore(): ThreadStore {
     turnStartedAt.set(0);
   }
   const meta = writable<ThreadMeta>({});
+  const cards = writable<Record<string, CardState>>({});
 
   function markWorking(): void {
     startClock();
@@ -423,6 +429,42 @@ export function createThreadStore(): ThreadStore {
         break;
       }
 
+      case "postback": {
+        // An actioncard click the server accepted (from this tab or another).
+        // Its user turn is not echoed as user_message, so draw the chip and
+        // lock the card here; the reload swaps in the persisted twin.
+        try {
+          const d = JSON.parse(ev.data ?? "{}") as { postback?: CardPostback; text?: string };
+          const pb = d.postback;
+          if (pb?.card_id) {
+            cards.update((c) => {
+              const st = c[pb.card_id];
+              return st ? { ...c, [pb.card_id]: { ...st, locked: true, postback: pb } } : c;
+            });
+            const text = d.text ?? "";
+            turns.update((ts) =>
+              ts.some((t) => t.role === "user" && t.postback && t.text === text)
+                ? ts
+                : [...ts, {
+                    turn_id: `postback-${Date.now()}`,
+                    role: "user",
+                    agent: "",
+                    provider: "",
+                    text,
+                    postback: pb,
+                    timestamp: Date.now(),
+                    truncated: false,
+                    interrupted: false,
+                    has_trace: false,
+                    events: [],
+                    attachments: [],
+                  }],
+            );
+          }
+        } catch (_) {}
+        break;
+      }
+
       case "connector_run": {
         // A connector run started/finished under this session. Attach its run_id
         // + connector_id to the matching in-flight tool call so the card can show
@@ -540,6 +582,7 @@ export function createThreadStore(): ThreadStore {
     turnStartedAt,
     lifecycle,
     meta,
+    cards,
     // dismissToolBlock removes a stuck tool card from the live turn (a run with
     // no runId to cancel — an orphan from before per-run cancel, or one whose
     // finish event was lost). Purely a view cleanup; the backend is untouched.
@@ -572,7 +615,8 @@ export function createThreadStore(): ThreadStore {
           t.turn_id.startsWith("live-") ||
           t.turn_id.startsWith("error-") ||
           t.turn_id.startsWith("warning-") ||
-          t.turn_id.startsWith("local-user-");
+          t.turn_id.startsWith("local-user-") ||
+          t.turn_id.startsWith("postback-");
 
         // Newlines are normalised out of the key. A message sent WITH a file
         // goes as multipart, and form encoding rewrites every newline to
