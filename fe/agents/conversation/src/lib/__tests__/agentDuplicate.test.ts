@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { duplicateHandle, duplicateBody } from "../agentDuplicate.js";
+import { duplicateHandle, duplicateBody, shiftColor } from "../agentDuplicate.js";
 import type { AgentItem } from "../api/team.js";
 
 describe("duplicateHandle", () => {
@@ -28,32 +28,64 @@ describe("duplicateHandle", () => {
   });
 });
 
+describe("shiftColor", () => {
+  it("turns the hue a little", () => {
+    expect(shiftColor("#ff0000")).toBe("#ff6600");
+  });
+
+  it("expands #rgb", () => {
+    expect(shiftColor("#f00")).toBe("#ff6600");
+  });
+
+  it("leaves greys and non-hex values alone", () => {
+    expect(shiftColor("#808080")).toBe("#808080");
+    expect(shiftColor("")).toBe("");
+    expect(shiftColor("red")).toBe("red");
+  });
+});
+
 describe("duplicateBody", () => {
   const agent = {
     id: "p1",
     handle: "ops",
     is_captain: true,
     project_id: "proj-1",
+    name: "Ops",
+    description: "jaga ops",
+    system_prompt: "kamu ops",
+    provider: "claude/default",
+    model: "opus",
+    preset: "default",
     avatar: { shape: "diamond", color: "#ff0000" },
     features: { source: true },
     allowed_connectors: null,
     include_new_connectors: true,
     run_as: "owner",
     disabled: true,
+    main_session_id: "s1",
   } as unknown as AgentItem;
 
-  it("copies project, look and access but not captain or disabled", () => {
-    const b = duplicateBody(agent, ["ops"]);
-    expect(b).toEqual({
+  it("copies persona into a new project, plus look and access", () => {
+    expect(duplicateBody(agent, ["ops"])).toEqual({
       handle: "ops-2",
-      project_id: "proj-1",
-      avatar: { shape: "diamond", color: "#ff0000" },
+      name: "Ops (salinan)",
+      description: "jaga ops",
+      system_prompt: "kamu ops",
+      provider: "claude/default",
+      model: "opus",
+      preset: "default",
+      avatar: { shape: "diamond", color: "#ff6600" },
       features: { source: true },
       allowed_connectors: [],
       include_new_connectors: true,
       run_as: "owner",
     });
-    expect(b).not.toHaveProperty("is_captain");
-    expect(b).not.toHaveProperty("disabled");
+  });
+
+  it("never reuses the project, captain, disabled or sessions", () => {
+    const b = duplicateBody(agent, ["ops"]);
+    for (const k of ["project_id", "is_captain", "disabled", "main_session_id"]) {
+      expect(b).not.toHaveProperty(k);
+    }
   });
 });

@@ -161,8 +161,8 @@
     navigate({ handle: a.handle, session: null, panel: null });
   }
 
-  /* A copy shares the original's project (so its persona), look and access,
-     under the next free @handle. It then hatches like a wizard-made agent. */
+  /* A copy gets its own project holding a copy of the persona, plus the same
+     look and access, under the next free @handle. It then hatches. */
   async function duplicate() {
     if (!selected) return;
     try {
@@ -189,7 +189,7 @@
     { label: "Settings", hint: "persona, akses, avatar", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
     { label: "Percakapan lain", hint: "chat utama dan riwayat", onclick: () => openPanel({ kind: "sessions" }) },
     { label: "Chat baru", hint: "mulai dari kosong", onclick: newChat },
-    { label: "Duplikat agent", hint: "persona & akses sama, @handle baru", divider: true, onclick: duplicate },
+    { label: "Duplikat agent", hint: "salinan persona & akses, @handle baru", divider: true, onclick: duplicate },
     selected?.disabled
       ? { label: "Aktifkan", hint: "agent bisa dipakai lagi", onclick: toggleDisabled }
       : { label: "Nonaktifkan", hint: "semua akses connector ditutup", danger: true, onclick: toggleDisabled },

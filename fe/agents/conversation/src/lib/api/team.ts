@@ -51,6 +51,8 @@ export type AgentWrite = Partial<{
   system_prompt: string;
   provider: string;
   model: string;
+  /** Create only: the new project's preset. */
+  preset: string;
   project_id: string;
   avatar: AgentAvatarSpec;
   features: AgentFeatures;

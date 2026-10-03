@@ -96,13 +96,16 @@ type teamAgentConnectorOp struct {
 // teamAgentWriteReq is the POST body and, with every field optional, the
 // PATCH body. Pointers tell "absent" apart from "set to empty".
 type teamAgentWriteReq struct {
-	Handle               *string                `json:"handle"`
-	Name                 *string                `json:"name"`
-	Icon                 *string                `json:"icon"`
-	Description          *string                `json:"description"`
-	SystemPrompt         *string                `json:"system_prompt"`
-	Provider             *string                `json:"provider"`
-	Model                *string                `json:"model"`
+	Handle       *string `json:"handle"`
+	Name         *string `json:"name"`
+	Icon         *string `json:"icon"`
+	Description  *string `json:"description"`
+	SystemPrompt *string `json:"system_prompt"`
+	Provider     *string `json:"provider"`
+	Model        *string `json:"model"`
+	// Preset is read on create only, for the new project's defaults (a
+	// duplicated agent keeps its original's preset).
+	Preset               *string                `json:"preset"`
 	ProjectID            *string                `json:"project_id"`
 	Avatar               *team.Avatar           `json:"avatar"`
 	Features             *team.Features         `json:"features"`
@@ -346,7 +349,7 @@ func requireUsableProject(c *tool.Ctx, id string) bool {
 }
 
 // createTeamAgentProject makes the project a new agent's persona lives in.
-func createTeamAgentProject(c *tool.Ctx, name, icon, description, systemPrompt, provider, model string) (string, error) {
+func createTeamAgentProject(c *tool.Ctx, name, icon, description, systemPrompt, provider, model, preset string) (string, error) {
 	opt := project.CreateOptions{
 		ID:          uuid.New().String(),
 		Name:        name,
@@ -356,6 +359,7 @@ func createTeamAgentProject(c *tool.Ctx, name, icon, description, systemPrompt, 
 		Defaults: project.Defaults{
 			Provider:    strings.TrimSpace(provider),
 			Model:       modelWithProvider(provider, model),
+			Preset:      strings.TrimSpace(preset),
 			SystemAddon: systemPrompt,
 		},
 	}
@@ -376,7 +380,7 @@ func ensureCaptain(c *tool.Ctx) ([]entity.AgentPersona, error) {
 	if err != nil || len(rows) > 0 {
 		return rows, err
 	}
-	pid, err := createTeamAgentProject(c, "Captain", "🧭", "Agent utama yang membantu mengatur tim agent.", captainSystemAddon, "", "")
+	pid, err := createTeamAgentProject(c, "Captain", "🧭", "Agent utama yang membantu mengatur tim agent.", captainSystemAddon, "", "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -456,7 +460,7 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 			return
 		}
 		var err error
-		pid, err = createTeamAgentProject(c, name, str(req.Icon), str(req.Description), str(req.SystemPrompt), str(req.Provider), str(req.Model))
+		pid, err = createTeamAgentProject(c, name, str(req.Icon), str(req.Description), str(req.SystemPrompt), str(req.Provider), str(req.Model), str(req.Preset))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
