@@ -76,7 +76,7 @@
       data-trace-raw
       aria-pressed={showRaw}
       onclick={(e) => { e.stopPropagation(); showRaw = !showRaw; }}
-      class="rounded px-1.5 py-0.5 text-[10px] font-medium hover:bg-white-200 dark:hover:bg-navy-700 {showRaw ? 'text-link-400' : 'text-black-600 dark:text-black-500'}"
+      class="rounded border px-1.5 py-0.5 text-[10px] font-medium hover:bg-white-200 dark:hover:bg-navy-700 {showRaw ? 'border-link-400 text-link-400' : 'border-white-300 dark:border-navy-600 text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100'}"
     >Raw</button>
     {#if !binary || showRaw}<CopyButton text={copyValue} />{/if}
   </div>
