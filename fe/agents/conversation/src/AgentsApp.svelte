@@ -17,6 +17,10 @@
   import { connectorCaption, hiddenTabsFor } from "./lib/agentMode.js";
   import { rosterTime } from "./lib/timeFormat.js";
   import { listAgents, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
+  import { listGroups, type GroupItem } from "./lib/api/team.js";
+  import GroupView from "./lib/components/GroupView.svelte";
+  import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
+  import { stacked } from "./lib/teamGroups.js";
   import { rosterStatus, withTurn } from "./lib/rosterStatus.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
@@ -59,6 +63,21 @@
   // Below lg the roster is a drawer over the chat, opened from the header.
   let rosterOpen = $state(false);
 
+  /* Group chats: listed under the agents; one open at a time replaces
+     the agent chat (not routed — a reload lands back on the agent). */
+  let groups = $state<GroupItem[]>([]);
+  let activeGroupId = $state("");
+  let newGroupOpen = $state(false);
+  let addMenuOpen = $state(false);
+  const activeGroup = $derived(groups.find((g) => g.id === activeGroupId));
+  async function loadGroups() {
+    try {
+      groups = (await runApi(listGroups(base))).groups ?? [];
+    } catch {
+      /* an older server has no groups */
+    }
+  }
+
   async function load() {
     try {
       const r = await runApi(listAgents(base));
@@ -76,8 +95,9 @@
   // list endpoint reads only the in-memory registry, so a slow poll is fine.
   onMount(() => {
     load();
+    loadGroups();
     const t = setInterval(() => {
-      if (document.visibilityState === "visible") load();
+      if (document.visibilityState === "visible") { load(); loadGroups(); }
     }, 15000);
     return () => clearInterval(t);
   });
@@ -156,6 +176,7 @@
   }
   function openAgent(a: AgentItem) {
     rosterOpen = false;
+    activeGroupId = "";
     navigate({ handle: a.handle, session: null, panel: null });
   }
   function openPanel(panel: AgentsPanel | null) {
@@ -316,10 +337,18 @@
       <button
         type="button"
         class="new-agent flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-500 text-lg leading-none text-white-100 hover:bg-green-600"
-        title="+ Agent"
-        aria-label="New agent"
-        onclick={() => { rosterOpen = false; openPanel({ kind: "new" }); }}
+        title="New agent or group"
+        aria-label="New agent or group"
+        aria-haspopup="menu"
+        aria-expanded={addMenuOpen}
+        onclick={() => (addMenuOpen = !addMenuOpen)}
       >+</button>
+      {#if addMenuOpen}
+        <div class="absolute left-[150px] top-11 z-50 w-40 rounded-xl border border-white-300 bg-white-100 py-1 shadow-lg dark:border-navy-600 dark:bg-navy-800" role="menu">
+          <button type="button" role="menuitem" class="block w-full px-3 py-2 text-left text-sm text-black-900 hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-700" onclick={() => { addMenuOpen = false; rosterOpen = false; openPanel({ kind: "new" }); }}>New agent</button>
+          <button type="button" role="menuitem" class="block w-full px-3 py-2 text-left text-sm text-black-900 hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-700" onclick={() => { addMenuOpen = false; rosterOpen = false; newGroupOpen = true; }}>New group</button>
+        </div>
+      {/if}
       <TeamAccountMenu
         {viewerName}
         {exitHref}
@@ -373,10 +402,51 @@
           </span>
         </button>
       {/each}
+      {#if groups.length}
+        <p class="px-3 pb-1 pt-3 text-[10px] font-medium uppercase tracking-wider text-black-600 dark:text-black-700">Groups</p>
+      {/if}
+      {#each groups as g (g.id)}
+        {@const st = stacked(g.members, 3)}
+        <button
+          type="button"
+          class="roster-row relative mb-0.5 flex w-full items-center gap-3 rounded-2xl px-2.5 py-2.5 text-left {activeGroupId === g.id ? 'bg-white-300 dark:bg-navy-600' : 'hover:bg-white-300 dark:hover:bg-navy-600'}"
+          aria-current={activeGroupId === g.id ? "page" : undefined}
+          data-testid="roster-group"
+          onclick={() => { rosterOpen = false; activeGroupId = g.id; g.unread = false; }}
+        >
+          <span class="relative flex h-11 w-11 shrink-0 items-center">
+            {#each st.shown.slice(0, 2) as m, i (m.id)}
+              <span class="absolute rounded-full ring-2 ring-white-200 dark:ring-navy-700" style="left:{i * 12}px;top:{i * 12}px"><AgentAvatar kind={m.avatar?.kind} shape={m.avatar?.shape} expression={m.avatar?.expression} color={m.avatar?.color} size={30} /></span>
+            {/each}
+          </span>
+          {#if g.unread && activeGroupId !== g.id}<span class="roster-udot rounded-full border-2 border-white-200 bg-neg-400 dark:border-navy-700" aria-label="new message"></span>{/if}
+          <span class="min-w-0 flex-1">
+            <span class="flex items-baseline gap-2">
+              <span class="roster-name min-w-0 flex-1 truncate font-semibold text-black-900 dark:text-white-100">{g.name}</span>
+              <span class="shrink-0 text-xs text-black-700">{rosterTime(g.last_active)}</span>
+            </span>
+            <span class="mt-0.5 block truncate text-[13px] text-black-800 dark:text-black-600">{g.last_preview || `${g.members.length} agents`}</span>
+          </span>
+        </button>
+      {/each}
     </nav>
   </aside>
 
   <!-- Chat -->
+  {#if activeGroup}
+  <section class="flex min-w-0 flex-1 flex-col">
+    {#key activeGroup.id}
+      <GroupView
+        {base}
+        group={activeGroup}
+        {agents}
+        onMenu={() => (rosterOpen = true)}
+        onChanged={(g) => (groups = groups.map((x) => (x.id === g.id ? g : x)))}
+        onDeleted={() => { groups = groups.filter((x) => x.id !== activeGroupId); activeGroupId = ""; toastOk("Group deleted"); }}
+      />
+    {/key}
+  </section>
+  {:else}
   <section class="flex min-w-0 flex-1 flex-col">
     <header class="flex h-16 shrink-0 items-center gap-3 border-b border-white-300 px-4 dark:border-navy-600">
       <button
@@ -450,6 +520,11 @@
       {/if}
     </div>
   </section>
+  {/if}
+
+  {#if newGroupOpen}
+    <NewGroupDialog {base} {agents} onClose={() => (newGroupOpen = false)} onCreated={(g) => { newGroupOpen = false; groups = [g, ...groups]; activeGroupId = g.id; }} />
+  {/if}
 
   <!-- Drawer (Settings / Team settings / Other chats) or the centred + Agent modal -->
   {#if route.panel}

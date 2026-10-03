@@ -200,6 +200,67 @@ export const getTeamSettings = (base: string) => apiGetE<TeamSettings>(`${base}/
 export const saveTeamSettings = (base: string, body: TeamSettingsWrite) =>
   apiPutE<TeamSettings>(`${base}/api/team/settings`, body);
 
+/* ── Group chats (team_group.go) ─────────────────────────────────── */
+
+export type GroupMember = {
+  id: string;
+  handle: string;
+  name: string;
+  avatar: AgentAvatarSpec;
+  is_captain: boolean;
+  disabled: boolean;
+  max_hops: number;
+};
+
+export type GroupItem = {
+  id: string;
+  name: string;
+  members: GroupMember[];
+  default_responder: "captain" | "first";
+  /** Handle a message with no @ goes to now. */
+  responder: string;
+  /** 0 = none; only ever lower than members_max_hops. */
+  max_hops_override: number;
+  members_max_hops: number;
+  /** The cap in force. */
+  max_hops: number;
+  last_active: string | null;
+  last_preview: string;
+  unread: boolean;
+};
+
+export type GroupWrite = Partial<{
+  name: string;
+  members: string[];
+  default_responder: "captain" | "first";
+  max_hops_override: number;
+}>;
+
+export type GroupTurn = {
+  turn_id?: string;
+  ts: string;
+  role: "user" | "assistant" | "system";
+  text: string;
+  kind?: string;
+  extras?: Record<string, string>;
+  is_error?: boolean;
+  sender?: { name?: string } | null;
+  speaker?: { agent_id: string; handle?: string; via: string } | null;
+};
+
+export const listGroups = (base: string) => apiGetE<{ groups: GroupItem[] | null }>(`${base}/api/team/groups`);
+export const createGroup = (base: string, body: GroupWrite) => apiPostE<GroupItem>(`${base}/api/team/groups`, body);
+export const updateGroup = (base: string, id: string, body: GroupWrite) =>
+  apiPatchE<GroupItem>(`${base}/api/team/groups/${enc(id)}`, body);
+export const deleteGroup = (base: string, id: string) =>
+  apiDeleteE<{ status: string }>(`${base}/api/team/groups/${enc(id)}`);
+export const markGroupRead = (base: string, id: string) =>
+  apiPostE<{ status: string }>(`${base}/api/team/groups/${enc(id)}/read`, {});
+export const groupConversation = (base: string, id: string) =>
+  apiGetE<{ turns: GroupTurn[] | null }>(`${base}/api/sessions/${enc(id)}/conversation?limit=200`);
+export const sendToGroup = (base: string, id: string, text: string) =>
+  apiPostE<{ status: string }>(`${base}/sessions/${enc(id)}/send`, { text });
+
 /** runApi runs one of the effects above as a promise — the Agents app
     components only ever need the result or the error message. */
 export const runApi = <T>(eff: Effect.Effect<T, APIError, HttpClient.HttpClient>): Promise<T> =>
