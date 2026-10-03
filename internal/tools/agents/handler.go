@@ -357,6 +357,10 @@ func Register(r tool.Router) {
 	r.POST("/api/team/agents/{id}/chat", apiTeamAgentChat)
 	r.GET("/api/team/agents/{id}/sessions", apiTeamAgentSessions)
 	r.POST("/api/team/agents/{id}/read", apiTeamAgentRead)
+	r.GET("/api/team/agents/{id}/shares", apiTeamAgentShares)
+	r.POST("/api/team/agents/{id}/shares", apiTeamAgentShareAdd)
+	r.DELETE("/api/team/agents/{id}/shares/{uid}", apiTeamAgentShareRemove)
+	r.GET("/api/team/share-users", apiTeamShareUsers)
 	r.GET("/api/team/agents/{id}/access-history", apiTeamAgentAccessHistory)
 	r.GET("/api/team/agents/{id}/skills", apiTeamAgentSkills)
 	r.GET("/api/team/agents/{id}/slack/manifest", apiTeamAgentSlackManifest)
@@ -1251,6 +1255,11 @@ func ownsSession(c *tool.Ctx, sess session.Session) bool {
 	}
 	if u.IsAdmin() && adminSeeAll() {
 		return true
+	}
+	// A shared agent's chat is its recipient's alone: the agent's owner
+	// reaches its project but not this conversation.
+	if p, ok := sharedChatAgent(c.Context(), sess); ok {
+		return sharedChatAllowed(c.Context(), u.ID, sess, p)
 	}
 	// Owner or any other person who has spoken in it: a Slack thread is
 	// shared work, so replying into one must not leave it unopenable.

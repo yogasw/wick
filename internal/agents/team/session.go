@@ -69,12 +69,19 @@ func AgentOfSession(layout config.Layout, sessionID string) (string, error) {
 // RunAsCaller mode as the caller, else as the agent's owner. Either way
 // the agent's checklist narrows the result — that is applied per request
 // by the scope resolver, not here.
+//
+// A shared agent's chat with its recipient (IsSharedChat) always runs as
+// the agent's owner, whatever run_as says: sharing hands over the agent's
+// access, never the recipient's.
 func SpawnIdentity(meta session.Meta, agent *entity.AgentPersona, caller string) string {
 	if agent == nil {
 		if caller != "" {
 			return caller
 		}
 		return meta.UserID
+	}
+	if IsSharedChat(meta, agent) {
+		return agent.OwnerUserID
 	}
 	if NormalizeRunAs(agent.RunAs) == RunAsOwner || caller == "" {
 		return agent.OwnerUserID
@@ -127,4 +134,12 @@ func (s *Service) AgentOfProject(ctx context.Context, projectID string) string {
 		return ""
 	}
 	return rows[0].ID
+}
+
+// IsSharedChat reports whether meta is a chat a share recipient opened
+// with agent: an app conversation owned by someone other than the agent's
+// owner. Channel sessions (Slack, Telegram, REST) keep their own rules.
+func IsSharedChat(meta session.Meta, agent *entity.AgentPersona) bool {
+	return agent != nil && meta.Origin == session.OriginUI &&
+		meta.UserID != "" && meta.UserID != agent.OwnerUserID
 }

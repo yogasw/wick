@@ -181,5 +181,10 @@ func (s *Service) Update(ctx context.Context, p *entity.AgentPersona) error {
 func (s *Service) Delete(ctx context.Context, id string) error {
 	err := s.Store.Delete(ctx, id)
 	s.Invalidate(id)
+	if err == nil {
+		// Best effort: SharedWith already skips a share whose agent is
+		// gone, so a leftover row is invisible.
+		_ = s.Store.DeleteShares(ctx, id)
+	}
 	return err
 }

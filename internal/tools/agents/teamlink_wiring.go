@@ -121,6 +121,22 @@ func (d teamDirectory) Peers(ctx context.Context, ownerID string) ([]teamlink.Pe
 	return out, nil
 }
 
+// SharedPeers is the agents other owners share with userID that may still
+// be shared (teamlink.SharedDirectory).
+func (d teamDirectory) SharedPeers(ctx context.Context, userID string) ([]teamlink.Peer, error) {
+	rows, _, err := sharedAgentsFor(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]teamlink.Peer, 0, len(rows))
+	for _, p := range rows {
+		peer := d.peer(p)
+		peer.ChatUser = userID
+		out = append(out, peer)
+	}
+	return out, nil
+}
+
 func (d teamDirectory) Get(ctx context.Context, agentID string) (teamlink.Peer, error) {
 	p, err := d.svc.Get(ctx, agentID)
 	if err != nil {
@@ -135,8 +151,11 @@ func (d teamDirectory) Get(ctx context.Context, agentID string) (teamlink.Peer, 
 type poolTurns struct{}
 
 func (poolTurns) Run(ctx context.Context, agent teamlink.Peer, text string) (string, string, error) {
-	s, ok := mainSessionOf(agent.OwnerID, agent.ID)
+	s, ok := mainSessionOf(chatUserOf(agent), agent.ID)
 	if !ok {
+		if agent.ChatUser != "" {
+			return "", "", fmt.Errorf("@%s has no chat with you yet — open it once from your Team roster", agent.Handle)
+		}
 		return "", "", fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
 	}
 	// Subscribe BEFORE sending, or a fast turn ends unseen.
@@ -151,10 +170,19 @@ func (poolTurns) Run(ctx context.Context, agent teamlink.Peer, text string) (str
 
 // MainSession is the session a turn of agent runs in (SessionLocator).
 func (poolTurns) MainSession(_ context.Context, agent teamlink.Peer) string {
-	if s, ok := mainSessionOf(agent.OwnerID, agent.ID); ok {
+	if s, ok := mainSessionOf(chatUserOf(agent), agent.ID); ok {
 		return s.ID
 	}
 	return ""
+}
+
+// chatUserOf is whose main chat with agent a turn runs in: a share
+// recipient's own, else the owner's.
+func chatUserOf(agent teamlink.Peer) string {
+	if agent.ChatUser != "" {
+		return agent.ChatUser
+	}
+	return agent.OwnerID
 }
 
 // collectTurn joins the text of one turn, up to its Done.
@@ -285,8 +313,22 @@ func (r TeamMentionRouter) TeamHandles(ctx context.Context, sessionID string) []
 		return nil
 	}
 	out := make([]string, 0, len(peers))
+	seen := map[string]bool{}
 	for _, p := range peers {
 		out = append(out, p.Handle)
+		seen[p.Handle] = true
+	}
+	// Agents shared with the session's owner answer that person's
+	// @mention too (teamlink refuses an agent's own).
+	if sess, ok := globalMgr.Registry().Session(sessionID); ok && sess.Meta.UserID != "" {
+		if shared, err := (teamDirectory{svc: globalTeam}).SharedPeers(ctx, sess.Meta.UserID); err == nil {
+			for _, p := range shared {
+				if !seen[p.Handle] {
+					out = append(out, p.Handle)
+					seen[p.Handle] = true
+				}
+			}
+		}
 	}
 	return out
 }

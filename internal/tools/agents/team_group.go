@@ -94,11 +94,17 @@ type teamGroupWriteReq struct {
 
 /* ── helpers ─────────────────────────────────────────────────────────── */
 
-// ownerPeers is the owner's agents as teamlink peers, by id.
+// ownerPeers is the owner's agents as teamlink peers, by id, followed by
+// the agents other owners share with them: a group of the owner's may hold
+// those too, each answering in a backing session the owner owns.
 func ownerPeers(ctx context.Context, ownerID string) (map[string]teamlink.Peer, []teamlink.Peer, error) {
-	all, err := teamDirectory{svc: globalTeam}.Peers(ctx, ownerID)
+	dir := teamDirectory{svc: globalTeam}
+	all, err := dir.Peers(ctx, ownerID)
 	if err != nil {
 		return nil, nil, err
+	}
+	if shared, err := dir.SharedPeers(ctx, ownerID); err == nil {
+		all = append(all, shared...)
 	}
 	byID := make(map[string]teamlink.Peer, len(all))
 	for _, p := range all {

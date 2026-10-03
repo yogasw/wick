@@ -119,6 +119,12 @@ type TeamAgentItem struct {
 	// agents of any owner and non-agent web/channel conversations — so
 	// the editor can warn that a persona edit changes them too.
 	SharedWith int `json:"shared_with"`
+	// Role is "" for the caller's own agent and RoleViewer for one another
+	// owner shared with them (chat only); SharedBy/SharedByID name that
+	// owner then.
+	Role       string `json:"role,omitempty"`
+	SharedBy   string `json:"shared_by,omitempty"`
+	SharedByID string `json:"shared_by_id,omitempty"`
 }
 
 // TeamAgentSessionItem is one conversation of an agent.
@@ -225,13 +231,21 @@ func teamReady(c *tool.Ctx) bool {
 }
 
 // loadOwnTeamAgent fetches {id} and confirms the caller owns it. Someone
-// else's agent answers 404, not 403, so ids are not probeable.
+// else's agent answers 404, not 403, so ids are not probeable; an agent
+// shared with the caller answers 403, since they know it exists and may
+// only chat with it (loadChatTeamAgent).
 func loadOwnTeamAgent(c *tool.Ctx) (entity.AgentPersona, bool) {
 	p, err := globalTeam.Get(c.Context(), c.PathValue("id"))
 	if err != nil || p.OwnerUserID != actorID(c) {
 		if err != nil && !errors.Is(err, team.ErrNotFound) {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return p, false
+		}
+		if err == nil {
+			if _, ok := sharedWithCaller(c, p); ok {
+				c.JSON(http.StatusForbidden, map[string]string{"error": "this agent is shared with you to chat only; its owner manages it"})
+				return p, false
+			}
 		}
 		c.JSON(http.StatusNotFound, map[string]string{"error": "agent not found"})
 		return p, false
@@ -622,24 +636,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		}
 	}
 	it.NativeToolsEnforced = team.NativeToolsEnforced(providerTypeOf(it.Provider))
-	if s, ok := mainSessionOf(p.OwnerUserID, p.ID); ok {
-		it.MainSessionID = s.ID
-		it.LastActive = timePtr(s.Meta.LastActive)
-		// Meta.Status stays "running" for as long as the process is warm,
-		// turn or no turn; the pool lifecycle is what says a turn is on.
-		it.Status = team.TurnStatus(string(s.Meta.Status), live.lifecycles[s.ID])
-		it.Unread = team.Unread(s.Meta.LastActive, p.LastReadAt)
-		if it.Status != string(session.StatusIdle) {
-			it.CurrentAction = live.actions[s.ID]
-		}
-		// What the agent waits on outranks what it last said.
-		if it.AttentionPreview = live.attention(s.ID); it.AttentionPreview != "" {
-			it.NeedsAttention = true
-			it.LastPreview = it.AttentionPreview
-		} else {
-			it.LastPreview = lastPreview(s.ID)
-		}
-	}
+	fillChatState(&it, p.OwnerUserID, p.ID, p.LastReadAt, live)
 	it.SharedWith = users.others(p)
 	return it
 }
@@ -888,6 +885,8 @@ func apiTeamAgentList(c *tool.Ctx) {
 			captainID = r.ID
 		}
 	}
+	// Agents other owners shared with the caller come after their own.
+	items = append(items, sharedRosterItems(c, live)...)
 	c.JSON(http.StatusOK, map[string]any{"agents": items, "captain_id": captainID})
 }
 
@@ -1265,7 +1264,7 @@ func apiTeamAgentChat(c *tool.Ctx) {
 	if !teamReady(c) {
 		return
 	}
-	p, ok := loadOwnTeamAgent(c)
+	p, shared, ok := loadChatTeamAgent(c)
 	if !ok {
 		return
 	}
@@ -1276,11 +1275,13 @@ func apiTeamAgentChat(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
 	}
-	if !requireAgentProjectAccess(c, p) {
+	// A recipient chats in the owner's agent project without access to
+	// it; their conversations are theirs alone (ownsSession).
+	if !shared && !requireAgentProjectAccess(c, p) {
 		return
 	}
 	if !body.New {
-		if s, ok := mainSessionOf(p.OwnerUserID, p.ID); ok {
+		if s, ok := mainSessionOf(actorID(c), p.ID); ok {
 			c.JSON(http.StatusOK, map[string]string{"session_id": s.ID})
 			return
 		}
@@ -1342,8 +1343,9 @@ func createTeamAgentSession(c *tool.Ctx, p entity.AgentPersona, main bool) (stri
 		}
 	}
 	// A new main chat opens on the agent's arrival, so its first turn is
-	// the agent_created chip.
-	if main {
+	// the agent_created chip — the owner's only: it names the agent's
+	// access, which a share recipient does not see.
+	if main && p.OwnerUserID == actorID(c) {
 		extras := agentCreatedExtras(p, label, actorName(c), "", connectorLabeler(c), "chat")
 		emitSystemEvent(id, store.KindAgentCreated, agentCreatedText(label, extras["created_by"], "", extras["grants_summary"]), extras)
 	}
@@ -1366,12 +1368,16 @@ func apiTeamAgentRead(c *tool.Ctx) {
 	if !teamReady(c) {
 		return
 	}
-	p, ok := loadOwnTeamAgent(c)
+	p, shared, ok := loadChatTeamAgent(c)
 	if !ok {
 		return
 	}
 	now := time.Now().UTC()
-	if err := globalTeam.MarkRead(c.Context(), p.ID, now); err != nil {
+	mark := func() error { return globalTeam.MarkRead(c.Context(), p.ID, now) }
+	if shared {
+		mark = func() error { return globalTeam.MarkShareRead(c.Context(), p.ID, actorID(c), now) }
+	}
+	if err := mark(); err != nil {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
@@ -1383,12 +1389,12 @@ func apiTeamAgentSessions(c *tool.Ctx) {
 	if !teamReady(c) {
 		return
 	}
-	p, ok := loadOwnTeamAgent(c)
+	p, _, ok := loadChatTeamAgent(c)
 	if !ok {
 		return
 	}
 	out := make([]TeamAgentSessionItem, 0)
-	for _, s := range agentSessions(p.OwnerUserID, p.ID) {
+	for _, s := range agentSessions(actorID(c), p.ID) {
 		out = append(out, TeamAgentSessionItem{
 			ID: s.ID, Label: s.Meta.Label, LastActive: timePtr(s.Meta.LastActive),
 			AgentMain: s.Meta.AgentMain, Status: string(s.Meta.Status),

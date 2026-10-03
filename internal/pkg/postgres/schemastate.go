@@ -105,6 +105,8 @@ var migratedModels = []any{
 	&entity.AgentAccessHistory{},
 	// Per-user Team settings (Team instructions, landing choice).
 	&entity.TeamSettings{},
+	// Team agents shared with another user (chat only).
+	&entity.AgentShare{},
 }
 
 // modelFingerprint derives a stable hash of the models' shape. Purely

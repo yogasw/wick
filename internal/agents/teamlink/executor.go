@@ -67,10 +67,21 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		text := messageText(ec.Message)
 		var from Peer
 		if fromID != "" {
-			if from, err = h.Dir.Get(ctx, fromID); err != nil || from.OwnerID != target.OwnerID {
-				// Never across owners, whatever the metadata claims.
+			if from, err = h.Dir.Get(ctx, fromID); err != nil {
 				e.fail(ctx, ec, yield, ErrUnknownHandle)
 				return
+			}
+			if from.OwnerID != target.OwnerID {
+				// Never across owners, whatever the metadata claims —
+				// except an agent still shared with the sender's owner,
+				// whose turn then runs in that owner's chat with it.
+				chatUser, _ := meta[metaChatUser].(string)
+				shared, ok := h.sharedByID(ctx, from.OwnerID, target.ID)
+				if chatUser != from.OwnerID || !ok {
+					e.fail(ctx, ec, yield, ErrNotShared)
+					return
+				}
+				target = shared
 			}
 			// A remote agent gets the mention text alone: the frame names
 			// a local agent, which is not the remote's business.

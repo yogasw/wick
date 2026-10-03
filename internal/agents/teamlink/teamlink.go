@@ -63,6 +63,8 @@ const (
 	metaFrom    = "wick.from_agent"
 	metaDepth   = "wick.depth"
 	metaSession = "wick.caller_session"
+	// metaChatUser names the recipient a shared agent's turn is for.
+	metaChatUser = "wick.chat_user"
 )
 
 var (
@@ -72,7 +74,13 @@ var (
 	// ErrUnknownHandle means no enabled agent of the owner has the handle.
 	ErrUnknownHandle = errors.New("unknown or disabled Team handle")
 	// ErrSelf refuses a message to the calling agent itself.
-	ErrSelf = errors.New("you can't message yourself — pick a teammate from your Team")
+	// ErrSharedHumanOnly refuses an agent's turn for an agent another
+	// owner shared: only the person it was shared with may mention it.
+	// ErrNotShared ends a turn for a shared agent its owner unshared or
+	// turned off since the mention was sent.
+	ErrNotShared       = errors.New("that agent is no longer shared with you or is turned off")
+	ErrSharedHumanOnly = errors.New("that agent is shared with your user, not your Team — only you can @mention it")
+	ErrSelf            = errors.New("you can't message yourself — pick a teammate from your Team")
 	// ErrNotTeamSession refuses a caller that is not a Team agent.
 	ErrNotTeamSession = errors.New("team messaging is only available in a Team agent's session")
 	// ErrUnknownContext refuses a context_id this owner never opened (or
@@ -103,6 +111,10 @@ type Peer struct {
 	// that names the sender. RemoteOwnerOnly refuses every agent's turn
 	// (usage "only_me"); a person's mention still goes through.
 	Remote, RemoteOwnerOnly bool
+	// ChatUser is whose conversation with the agent a turn runs in: ""
+	// for the owner's own main chat, a recipient's id for an agent shared
+	// with them (see SharedDirectory).
+	ChatUser string
 }
 
 // Label is how a peer is named in framing and replies.
@@ -120,6 +132,55 @@ type Directory interface {
 	Peers(ctx context.Context, ownerID string) ([]Peer, error)
 	// Get returns one agent by id.
 	Get(ctx context.Context, agentID string) (Peer, error)
+}
+
+// SharedDirectory is optionally implemented by a Directory that knows
+// agents shared with a user (chat only). A shared agent answers a
+// person's @mention from the recipient's own sessions, never an agent's,
+// and its turn runs in the recipient's chat with it.
+type SharedDirectory interface {
+	// SharedPeers lists the enabled agents other owners share with
+	// userID, each with ChatUser = userID.
+	SharedPeers(ctx context.Context, userID string) ([]Peer, error)
+}
+
+// sharedPeer finds the agent called handle among those shared with userID.
+func (h *Hub) sharedPeer(ctx context.Context, userID, handle string) (Peer, bool) {
+	sd, ok := h.Dir.(SharedDirectory)
+	if !ok || userID == "" {
+		return Peer{}, false
+	}
+	all, err := sd.SharedPeers(ctx, userID)
+	if err != nil {
+		return Peer{}, false
+	}
+	for _, p := range all {
+		if p.Handle == handle && !p.Disabled {
+			p.ChatUser = userID
+			return p, true
+		}
+	}
+	return Peer{}, false
+}
+
+// sharedByID is sharedPeer by agent id: whether agentID is still shared
+// with userID.
+func (h *Hub) sharedByID(ctx context.Context, userID, agentID string) (Peer, bool) {
+	sd, ok := h.Dir.(SharedDirectory)
+	if !ok || userID == "" {
+		return Peer{}, false
+	}
+	all, err := sd.SharedPeers(ctx, userID)
+	if err != nil {
+		return Peer{}, false
+	}
+	for _, p := range all {
+		if p.ID == agentID && !p.Disabled {
+			p.ChatUser = userID
+			return p, true
+		}
+	}
+	return Peer{}, false
 }
 
 // Turns runs one turn of an agent's main conversation. Implemented over
@@ -305,6 +366,10 @@ func (h *Hub) Resolve(ctx context.Context, ownerID, handle string) (*a2a.AgentCa
 			return Card(p), p, nil
 		}
 	}
+	// The owner's own agents win a handle clash with a shared one.
+	if p, ok := h.sharedPeer(ctx, ownerID, handle); ok {
+		return Card(p), p, nil
+	}
 	return nil, Peer{}, fmt.Errorf("%w: @%s", ErrUnknownHandle, handle)
 }
 
@@ -385,6 +450,11 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	}
 	// A person's @mention always goes through; an agent's needs the
 	// target's consent.
+	// An agent shared with the caller's owner takes a person's mention
+	// only: agents never hand turns across owners.
+	if err == nil && target.OwnerID != caller.OwnerID && !in.Human {
+		err = ErrSharedHumanOnly
+	}
 	if err == nil && !in.Human && !target.AcceptsFrom(caller) {
 		err = ErrMentionsOff
 		if target.Remote && target.RemoteOwnerOnly {
@@ -411,6 +481,9 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(in.Text))
 	msg.ContextID = contextID
 	msg.Metadata = map[string]any{metaFrom: caller.ID, metaDepth: depth, metaSession: in.CallerSession}
+	if target.ChatUser != "" {
+		msg.Metadata[metaChatUser] = target.ChatUser
+	}
 
 	cl, err := h.client(ctx, card)
 	if err != nil {
