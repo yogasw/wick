@@ -122,6 +122,7 @@ import (
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
+	serviceplugin "github.com/yogasw/wick/internal/services/plugin"
 	"github.com/yogasw/wick/internal/tools"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
@@ -3003,6 +3004,27 @@ func NewServer() *Server {
 		pluginsHandler.SetReloader(pluginReloader)
 	}
 	pluginsHandler.RegisterRoutes(r, authMidd)
+
+	// Service plugins (plugins/services/<key>) are always-on: supervised
+	// with restart backoff and served at /x/{key}/* with per-route auth
+	// (public / admin-issued token / wick session). Admin API under
+	// /manager/api/service-plugins; plugin callbacks under /x/-/api/.
+	servicePlugins := serviceplugin.NewHost(serviceplugin.NewTokens(filepath.Join(connplugin.RootDir(), "service-tokens.json")), "")
+	servicePlugins.BaseURL = func() string { return strings.TrimRight(configsSvc.AppURL(), "/") }
+	servicePlugins.SessionUser = func(req *http.Request) *serviceplugin.User {
+		u := login.GetUser(req.Context())
+		if u == nil {
+			return nil
+		}
+		return &serviceplugin.User{ID: u.ID, Email: u.Email, Name: u.Name, Admin: u.IsAdmin()}
+	}
+	if n := servicePlugins.Load(connplugin.KindDir(wickplugin.KindService), jobPluginStore.Enabled, jobPluginStore.Record); n > 0 {
+		log.Info().Int("plugins", n).Msg("service plugins: loaded")
+	}
+	servicePlugins.RegisterAdmin(r, authMidd.RequireAdmin)
+	r.Handle("/x/", servicePlugins)
+	serviceplugin.SetDefault(servicePlugins)
+	servicePlugins.Start()
 
 	// Tool routes — per-tool visibility enforced via RequireToolAccess.
 	// Public tools are reachable without login; Private tools require

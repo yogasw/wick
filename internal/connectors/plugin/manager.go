@@ -6,6 +6,7 @@ package plugin
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sync"
@@ -193,6 +194,7 @@ type SpawnSpec struct {
 	Dispense  string                     // plugin name to dispense (wickplugin.PluginName, wickplugin.JobPluginName, ...)
 	SocketDir string                     // "" = RunDir()
 	Env       []string                   // extra env on top of the scrubbed OS env
+	Stderr    io.Writer                  // nil = go-plugin's default (logged)
 }
 
 // Spawn starts a plugin subprocess (env scrubbed, same transport as connector
@@ -209,6 +211,9 @@ func Spawn(spec SpawnSpec) (*goplugin.Client, any, error) {
 	cmd := safeexec.Command(spec.Binary)
 	cmd.Env = append(envscrub.ScrubOSEnv(), spec.Env...)
 	cfg.Cmd = cmd
+	if spec.Stderr != nil {
+		cfg.Stderr = spec.Stderr
+	}
 	client := goplugin.NewClient(cfg)
 	rpc, err := client.Client()
 	if err != nil {
