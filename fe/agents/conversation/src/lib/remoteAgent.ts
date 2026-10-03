@@ -29,12 +29,11 @@ export function remoteBadge(a: Pick<AgentItem, "kind">): string {
   return isSlackRemote(a) ? "Slack remote" : isA2ARemote(a) ? "A2A remote" : a.kind === PLUGIN_REMOTE_KIND ? "Plugin remote" : "";
 }
 
-/** Sources + Agent › Remote agent offers; the disabled ones are not built yet. */
-export type RemoteSource = "a2a" | "slack" | "http" | "plugin";
-export const REMOTE_SOURCES: { value: RemoteSource; label: string; hint: string; disabled?: boolean }[] = [
+/** Sources + Agent › Remote agent offers. */
+export type RemoteSource = "a2a" | "slack" | "plugin";
+export const REMOTE_SOURCES: { value: RemoteSource; label: string; hint: string }[] = [
   { value: "a2a", label: "A2A", hint: "An agent that speaks the A2A protocol." },
   { value: "slack", label: "Slack", hint: "A bot or person you reach in a Slack DM, channel or thread." },
-  { value: "http", label: "HTTP", hint: "Coming later", disabled: true },
   { value: "plugin", label: "Plugin", hint: "A service plugin on this host that offers a remote agent source." },
 ];
 

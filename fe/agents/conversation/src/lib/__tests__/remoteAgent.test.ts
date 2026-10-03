@@ -95,7 +95,7 @@ describe("remote chat mode", () => {
     expect(remoteSettingsTabs({ kind: "a2a-remote" })[0].label).toBe("Remote A2A");
   });
 
-  test("sources: A2A, Slack and Plugin open, HTTP coming later", () => {
-    expect(REMOTE_SOURCES.map((s) => [s.value, !!s.disabled])).toEqual([["a2a", false], ["slack", false], ["http", true], ["plugin", false]]);
+  test("sources: A2A, Slack and Plugin", () => {
+    expect(REMOTE_SOURCES.map((s) => s.value)).toEqual(["a2a", "slack", "plugin"]);
   });
 });
