@@ -275,7 +275,10 @@
     // so a command/mention can be inserted mid-message, not just as a prefix.
     const slash = /(?:^|\s)\/(\S*)$/.exec(before);
     if (slash) return { kind: "/", query: slash[1], pos: before.length - slash[1].length - 1 };
-    const at = /(?:^|\s)@(\S[^\n]*|)$/.exec(before);
+    // A mention may span spaces ("src main"), but a fresh whitespace-led `@`
+    // starts a new token — so the query never crosses ` @`, and the match is
+    // always the LAST mention on the line, not the first.
+    const at = /(?:^|\s)@((?:\S(?:(?!\s@)[^\n])*)?)$/.exec(before);
     if (at) return { kind: "@", query: at[1], pos: before.length - at[1].length - 1 };
     return null;
   }

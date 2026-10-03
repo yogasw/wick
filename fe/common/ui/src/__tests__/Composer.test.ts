@@ -429,6 +429,25 @@ describe("Composer — @ mention", () => {
     expect(textarea.value).toBe("read @src/main.go ");
   });
 
+  test("a second mention on the same line gets its own query", async () => {
+    const onSearchFiles = vi.fn().mockResolvedValue(["s.txt"]);
+    render(Composer, { props: { onSend: vi.fn(), onSearchFiles } });
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "@wick-feature-implementer @s" } });
+    await waitFor(() => expect(onSearchFiles).toHaveBeenLastCalledWith("s"));
+    expect(await screen.findByText("s.txt")).toBeDefined();
+  });
+
+  test("a new @ after a picked mention opens the menu again", async () => {
+    render(Composer, { props: { onSend: vi.fn(), mentionFiles: ["tune.py", "b.txt"] } });
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await fireEvent.input(textarea, { target: { value: "@tu" } });
+    await fireEvent.mouseDown(screen.getByText("tune.py"));
+    expect(textarea.value).toBe("@tune.py ");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    await fireEvent.input(textarea, { target: { value: "@tune.py @" } });
+    expect(screen.getByText("b.txt")).toBeDefined();
+  });
+
   test("@ does not trigger mid-word (email)", async () => {
     render(Composer, { props: { onSend: vi.fn(), mentionFiles: ["a.txt"] } });
     await fireEvent.input(screen.getByRole("textbox"), { target: { value: "foo@bar" } });
@@ -610,6 +629,19 @@ describe("Composer — a dismissed menu stays dismissed", () => {
     expect(menu()).toBeNull();
     await fireEvent.input(textarea, { target: { value: "@ap and more\n@" } });
     expect(menu()).not.toBeNull();
+  });
+
+  test("a second @ on the same line is a new token and opens again", async () => {
+    const textarea = await openThenEscape();
+    await fireEvent.input(textarea, { target: { value: "@ap and more" } });
+    expect(menu()).toBeNull();
+    await fireEvent.input(textarea, { target: { value: "@ap and more @" } });
+    expect(menu()).not.toBeNull();
+    // ...and Esc dismisses that one too.
+    await fireEvent.keyDown(textarea, { key: "Escape" });
+    expect(menu()).toBeNull();
+    await fireEvent.input(textarea, { target: { value: "@ap and more @a" } });
+    expect(menu()).toBeNull();
   });
 
   test("deleting the mention re-arms it, so retyping @ works", async () => {
