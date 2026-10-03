@@ -1,0 +1,247 @@
+// Package pluginremote is the remote.Source of a service plugin that
+// declares remote_source: Send / Receive / Done go to the plugin's internal
+// /_wick/remote/* paths over its unix socket, and events arrive as SSE in
+// the v1 event schema, so nothing is converted.
+package pluginremote
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"gorm.io/gorm"
+
+	"github.com/yogasw/wick/internal/agents/remote"
+	"github.com/yogasw/wick/internal/entity"
+	wickplugin "github.com/yogasw/wick/pkg/plugin"
+)
+
+// Persona kind, adapter kind, provider key, and agent_channels row type.
+const (
+	Kind        = "plugin-remote"
+	AdapterKind = "plugin"
+	ProviderKey = "plugin-remote/plugin-remote"
+	RowType     = "plugin-remote"
+)
+
+func init() {
+	if wickplugin.RemoteEventSchema != remote.SchemaVersion {
+		panic("pluginremote: plugin event schema differs from the runner's")
+	}
+	remote.Register(remote.Adapter{Kind: AdapterKind, Label: "Plugin", Schema: remote.SchemaVersion,
+		Listen: []remote.ListenMode{remote.ListenPush}})
+}
+
+// Transport resolves the running plugin's socket transport.
+type Transport func(key string) (http.RoundTripper, error)
+
+// Source is one agent's plugin adapter.
+type Source struct {
+	Key       string
+	transport Transport
+	limits    remote.Limits
+}
+
+// NewSource wraps plugin key.
+func NewSource(key string, t Transport) *Source {
+	return &Source{Key: key, transport: t, limits: remote.Limits{Max: 10 * time.Minute}}
+}
+
+func (s *Source) Kind() string                { return AdapterKind }
+func (s *Source) Label() string               { return "plugin-remote (" + s.Key + ")" }
+func (s *Source) Listen() []remote.ListenMode { return []remote.ListenMode{remote.ListenPush} }
+func (s *Source) Limits() remote.Limits       { return s.limits }
+
+func (s *Source) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
+	rt, err := s.transport(s.Key)
+	if err != nil {
+		return nil, err
+	}
+	var rd io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		rd = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, "http://plugin"+path, rd)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Transport: rt}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		resp.Body.Close()
+		return nil, fmt.Errorf("plugin %s: %s %s: %d %s", s.Key, method, path, resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	return resp, nil
+}
+
+type state struct {
+	ContextID string `json:"context_id"`
+}
+
+func statePath(dir string) string { return filepath.Join(dir, "plugin-remote.json") }
+
+func loadState(dir string) state {
+	var st state
+	if dir != "" {
+		if b, err := os.ReadFile(statePath(dir)); err == nil {
+			_ = json.Unmarshal(b, &st)
+		}
+	}
+	return st
+}
+
+// ResumeID names the session by the plugin's conversation id.
+func (s *Source) ResumeID(dir string) string {
+	if st := loadState(dir); st.ContextID != "" {
+		return "plugin:" + s.Key + ":" + st.ContextID
+	}
+	return ""
+}
+
+// Send posts the turn (with the conversation id of earlier turns) and keeps
+// the id the plugin answers with.
+func (s *Source) Send(ctx context.Context, turn remote.Turn) (remote.Handle, error) {
+	st := loadState(turn.SessionDir)
+	resp, err := s.do(ctx, http.MethodPost, wickplugin.RemotePathSend,
+		wickplugin.RemoteTurn{Text: turn.Text, SessionID: turn.SessionID, ContextID: st.ContextID})
+	if err != nil {
+		return remote.Handle{}, err
+	}
+	defer resp.Body.Close()
+	var res wickplugin.RemoteSendResult
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil || res.Handle == "" {
+		return remote.Handle{}, errors.New("plugin " + s.Key + ": send returned no handle")
+	}
+	if res.ContextID != "" && res.ContextID != st.ContextID && turn.SessionDir != "" {
+		b, _ := json.Marshal(state{ContextID: res.ContextID})
+		_ = os.WriteFile(statePath(turn.SessionDir), b, 0o600)
+	}
+	return remote.Handle{ID: res.Handle}, nil
+}
+
+// Receive streams h's events until the plugin closes the stream.
+func (s *Source) Receive(ctx context.Context, h remote.Handle) (<-chan remote.Event, error) {
+	resp, err := s.do(ctx, http.MethodGet, wickplugin.RemotePathEvents+"?handle="+h.ID, nil)
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan remote.Event, 16)
+	go func() {
+		defer close(ch)
+		defer resp.Body.Close()
+		sc := bufio.NewScanner(resp.Body)
+		sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+		for sc.Scan() {
+			data, ok := strings.CutPrefix(sc.Text(), "data: ")
+			if !ok {
+				continue
+			}
+			var ev remote.Event
+			if json.Unmarshal([]byte(data), &ev) != nil || ev.Kind == "" {
+				continue
+			}
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				return
+			}
+			if ev.Terminal() {
+				return
+			}
+		}
+	}()
+	return ch, nil
+}
+
+// Cancel ends h on the plugin side (Done is the only stop it has).
+func (s *Source) Cancel(ctx context.Context, h remote.Handle) error {
+	resp, err := s.do(ctx, http.MethodPost, wickplugin.RemotePathDone, map[string]string{"handle": h.ID})
+	if err == nil {
+		resp.Body.Close()
+	}
+	return err
+}
+
+// End releases h.
+func (s *Source) End(h remote.Handle) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.Cancel(ctx, h)
+}
+
+// Describe asks the plugin for its name.
+func (s *Source) Describe(ctx context.Context) (remote.Description, error) {
+	d := remote.Description{Kind: AdapterKind, Target: s.Key, Name: s.Key}
+	resp, err := s.do(ctx, http.MethodGet, wickplugin.RemotePathDescribe, nil)
+	if err != nil {
+		return d, err
+	}
+	defer resp.Body.Close()
+	var out struct{ Name, Detail string }
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if out.Name != "" {
+		d.Name = out.Name
+	}
+	d.Detail = out.Detail
+	return d, nil
+}
+
+// Test pings Describe.
+func (s *Source) Test(ctx context.Context) remote.TestResult {
+	start := time.Now()
+	_, err := s.Describe(ctx)
+	r := remote.TestResult{OK: err == nil, State: "ok", LatencyMS: time.Since(start).Milliseconds()}
+	if err != nil {
+		r.State, r.Error = "error", err.Error()
+	}
+	return r
+}
+
+// Config is a plugin remote agent's settings row.
+type Config struct {
+	AgentID     string `json:"agent_id"`
+	OwnerUserID string `json:"owner_user_id"`
+	PluginKey   string `json:"plugin_key"`
+}
+
+// Store keeps Config in agent_channels (type plugin-remote, name agent id).
+type Store struct{ db *gorm.DB }
+
+// NewStore wraps db.
+func NewStore(db *gorm.DB) *Store { return &Store{db: db} }
+
+// Load returns agentID's settings; ok=false when it has none.
+func (s *Store) Load(agentID string) (Config, bool, error) {
+	var rows []entity.AgentChannel
+	if err := s.db.Where("type = ? AND name = ?", RowType, agentID).Limit(1).Find(&rows).Error; err != nil || len(rows) == 0 {
+		return Config{}, false, err
+	}
+	var c Config
+	err := json.Unmarshal([]byte(rows[0].Config), &c)
+	return c, err == nil, err
+}
+
+// Save writes c.
+func (s *Store) Save(c Config) error {
+	data, _ := json.Marshal(c)
+	now := time.Now()
+	owner := c.OwnerUserID
+	return s.db.Create(&entity.AgentChannel{
+		ID: RowType + ":" + c.AgentID, Type: RowType, Name: c.AgentID, UserID: &owner,
+		Enabled: true, Config: string(data), CreatedAt: now, UpdatedAt: now,
+	}).Error
+}

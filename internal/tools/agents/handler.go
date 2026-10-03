@@ -397,6 +397,8 @@ func Register(r tool.Router) {
 	r.POST("/api/team/slack-remote/test", apiTeamSlackRemoteTest)
 	r.GET("/api/team/slack-remote/identities", apiTeamSlackRemoteIdentities)
 	r.POST("/api/team/slack-remote", apiTeamSlackRemoteCreate)
+	r.GET("/api/team/plugin-sources", apiTeamPluginSources)
+	r.POST("/api/team/plugin-remote", apiTeamPluginRemoteCreate)
 	r.GET("/api/team/agents/{id}/slack-remote", apiTeamSlackRemoteGet)
 	r.PATCH("/api/team/agents/{id}/slack-remote", apiTeamSlackRemoteUpdate)
 	r.GET("/api/team/agents/{id}/scheduled", apiTeamAgentScheduledList)

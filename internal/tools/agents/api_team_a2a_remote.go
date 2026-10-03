@@ -16,6 +16,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/a2aremote"
 	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/agents/remote/pluginremote"
 	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/entity"
@@ -62,7 +63,9 @@ func remoteStore() *a2aremote.Store {
 
 // IsRemoteAgent reports whether p is a remote agent of any source (A2A,
 // Slack): no local process, its brain lives elsewhere.
-func IsRemoteAgent(p entity.AgentPersona) bool { return isA2ARemote(p) || isSlackRemote(p) }
+func IsRemoteAgent(p entity.AgentPersona) bool {
+	return isA2ARemote(p) || isSlackRemote(p) || isPluginRemote(p)
+}
 
 // isA2ARemote reports whether p is an A2A remote agent.
 func isA2ARemote(p entity.AgentPersona) bool { return p.Kind == a2aremote.Kind }
@@ -76,6 +79,8 @@ func remoteProviderKey(p entity.AgentPersona) (string, bool) {
 		return slackremote.ProviderKey, true
 	case isA2ARemote(p):
 		return a2aremote.ProviderKey, true
+	case isPluginRemote(p):
+		return pluginremote.ProviderKey, true
 	}
 	return "", false
 }
@@ -504,6 +509,9 @@ func RemoteSpawnerFor(sessionID string) (provider.Spawner, bool) {
 	}
 	if isSlackRemote(p) {
 		return slackRemoteSpawner(p), true
+	}
+	if isPluginRemote(p) {
+		return pluginRemoteSpawner(p), true
 	}
 	cfg, found, err := remoteStore().Load(p.ID)
 	if err != nil || !found {
