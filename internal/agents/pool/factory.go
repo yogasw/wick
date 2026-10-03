@@ -878,6 +878,8 @@ type TeamSpawn struct {
 	// immutable main overlay (see systemprompt.TeamGates).
 	Subagents bool
 	Schedule  bool
+	// Files keeps the HTML render formats (systemprompt.TeamGates.Files).
+	Files bool
 	// UseGlobalPrompt swaps system_prompt_team for the global
 	// system_prompt (an agent converted from a project keeps its rules).
 	UseGlobalPrompt bool
@@ -930,6 +932,7 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 		add(systemprompt.ImmutableForTeam(providerType, systemprompt.TeamGates{
 			Subagents: ts.Subagents,
 			Schedule:  ts.Schedule,
+			Files:     ts.Files,
 		}))
 		add(ts.Prompt)
 		add(ts.Access)

@@ -67,3 +67,22 @@ func TestApplyGates(t *testing.T) {
 		t.Errorf("unclosed: %q", got)
 	}
 }
+
+func TestImmutableForTeamGatesHTMLOnFiles(t *testing.T) {
+	on := ImmutableForTeam("claude", TeamGates{Files: true})
+	off := ImmutableForTeam("claude", TeamGates{Files: false})
+	for _, want := range []string{"HTML preview (inline)", "### HTML artifacts", "htmlfile"} {
+		if !strings.Contains(on, want) {
+			t.Errorf("Files on lost %q", want)
+		}
+	}
+	if strings.Contains(off, "HTML preview") || strings.Contains(off, "### HTML artifacts") || strings.Contains(off, "```htmlfile") {
+		t.Error("Files off still describes the HTML formats")
+	}
+	if !strings.Contains(off, "Mermaid diagrams") || strings.Contains(on+off, "<!-- gate:") {
+		t.Error("table broken or gate markers leaked")
+	}
+	if strings.Contains(ImmutableFor("claude", false), "<!-- gate:") || !strings.Contains(ImmutableFor("claude", false), "### HTML artifacts") {
+		t.Error("non-Team prompt changed")
+	}
+}

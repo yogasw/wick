@@ -1,6 +1,8 @@
 package team
 
 import (
+	"github.com/yogasw/wick/internal/agents/teamlink"
+
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -30,6 +32,8 @@ const maxTeamListed = 12
 type Member struct {
 	Name, Handle, Tagline, Description string
 	IsCaptain                          bool
+	// MentionFrom is the member's mention policy (teamlink.Mention*).
+	MentionFrom string
 }
 
 // WhoYouAre is the dynamic "Who you are" block of a Team agent's prompt,
@@ -96,4 +100,46 @@ func teamLine(team []Member) string {
 // agent's session gets instead of the Team blocks.
 func SubAgentOfTeam(handle string) string {
 	return fmt.Sprintf("You are a temporary sub-agent working for @%s; you are not a Team member.", handle)
+}
+
+// YourTeam is the "Your team" block every Team agent gets: the other
+// members (up to maxTeamListed, then a count) with handle, tagline and
+// whom they take mentions from. "" with no other member. Kept apart from
+// sub-agent roles, which are temporary workers, not members.
+func YourTeam(team []Member) string {
+	if len(team) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Your team\n")
+	b.WriteString("Other agents of your owner (members, not sub-agent roles). Mention one with @handle or team_message.\n")
+	for i, m := range team {
+		if i == maxTeamListed {
+			fmt.Fprintf(&b, "- +%d more\n", len(team)-maxTeamListed)
+			break
+		}
+		line := fmt.Sprintf("- @%s — %s", m.Handle, m.Name)
+		if t := strings.TrimSpace(m.Tagline); t != "" {
+			line += ", " + t
+		}
+		if m.IsCaptain {
+			line += " (Captain)"
+		}
+		line += "; " + mentionPolicyText(m.MentionFrom)
+		b.WriteString(line + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// mentionPolicyText says in a few words whom a member takes mentions from.
+func mentionPolicyText(v string) string {
+	switch teamlink.NormalizeMentionFrom(v) {
+	case teamlink.MentionCaptain:
+		return "takes mentions from the Captain only"
+	case teamlink.MentionList:
+		return "takes mentions from listed agents only"
+	case teamlink.MentionOff:
+		return "takes no mentions"
+	}
+	return "takes mentions from anyone"
 }

@@ -122,6 +122,9 @@ type TeamGates struct {
 	Subagents bool
 	// Schedule keeps "Scheduling yourself" (the Schedule access is not Off).
 	Schedule bool
+	// Files keeps the HTML preview formats of render_formats.md: without
+	// the Files panel there is nowhere to preview them.
+	Files bool
 }
 
 // ImmutableForTeam is ImmutableFor for a Team agent's own session (never
@@ -134,6 +137,7 @@ func ImmutableForTeam(providerType string, g TeamGates) string {
 		gateSessionTitle: true,
 		gateDelegating:   !g.Subagents,
 		gateScheduling:   !g.Schedule,
+		gateHTML:         !g.Files,
 	}
 	return immutableWith(providerType, mainImmutable(skip))
 }
@@ -160,6 +164,7 @@ const (
 	gateSessionTitle = "session_title"
 	gateDelegating   = "delegating"
 	gateScheduling   = "scheduling"
+	gateHTML         = "html"
 )
 
 // mainImmutable assembles the main-agent overlay by splicing each
@@ -176,7 +181,9 @@ func mainImmutable(skip map[string]bool) string {
 		"{{ASKING_USER}}", strings.TrimSpace(immutableAskUserTemplate),
 		"{{RENDER_FORMATS}}", strings.TrimSpace(immutableRenderFormatsTemplate),
 	)
-	return strings.TrimSpace(r.Replace(applyGates(immutableMainTemplate, skip)))
+	// Gates run after the splice so a spliced section (render_formats.md)
+	// can carry its own gates too.
+	return strings.TrimSpace(applyGates(r.Replace(immutableMainTemplate), skip))
 }
 
 // applyGates drops each gated section named in skip, marker lines

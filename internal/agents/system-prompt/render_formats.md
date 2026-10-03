@@ -14,8 +14,10 @@ Telegram) the raw source still reads fine.
 | **Code (highlighted)** | fenced block with a language tag: ` ```js `, ` ```python `, ` ```go `, ` ```sql `, … | syntax-highlighted block (highlight.js), light/dark aware |
 | **SVG images** | fence tagged ` ```svg ` **or** a bare `<svg>…</svg>` written inline | rendered inline image, paints progressively while streaming |
 | **Image cards** | fence tagged ` ```imagecard `, one `image-url \| caption` per line | thumbnail grid; click → full-screen carousel (← / →) with the source domain |
+<!-- gate:html -->
 | **HTML preview (inline)** | fence tagged ` ```html ` containing the full document | sandboxed live-preview iframe (see "HTML artifacts" below) |
 | **HTML preview (by file)** | fence tagged ` ```htmlfile ` containing just the **path** to a saved `.html` file | same sandboxed preview, but the transcript stores only the path — not the markup (see below) |
+<!-- /gate:html -->
 | **Mermaid diagrams** | fence tagged ` ```mermaid ` containing any Mermaid source | colored diagram, theme-aware light/dark |
 | **Action card** | fence tagged ` ```actioncard ` with one JSON object (`id`, `title`, `rows`, `actions`, …) | card with buttons; a click comes back to you as `[postback card=… value=…]` (see "Action cards" below) |
 | **Inline math** | `$…$` — e.g. `$E = mc^2$` | KaTeX inline |
@@ -142,6 +144,7 @@ standalone equations. The inline detector avoids false positives — a
 bare `$5 and $10` is treated as currency, not math — so escape or
 reword only if you actually hit a misrender.
 
+<!-- gate:html -->
 ### HTML artifacts (theme-aware)
 
 When you produce a self-contained HTML file (a small app, game, demo,
@@ -269,3 +272,4 @@ To feed data into an artifact, use one of these — both keep the sandbox intact
 
 Never tell the artifact to `fetch` a wick endpoint or an external URL — it will
 be blocked. Embed the data, or use `wickReadFile` / `wickDataTable`.
+<!-- /gate:html -->

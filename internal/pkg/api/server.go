@@ -1147,7 +1147,7 @@ func NewServer() *Server {
 	}
 	agentsFactory.TeamSpawnLoader = func(sessionID string) (agentpool.TeamSpawn, bool) {
 		sp, ok := teamSvc.SpawnPromptFor(context.Background(), sessionID)
-		return agentpool.TeamSpawn{Prompt: sp.Prompt, Access: sp.Access, Subagents: sp.Subagents, Schedule: sp.Schedule, UseGlobalPrompt: sp.UseGlobalPrompt, TeamInstructions: sp.TeamInstructions}, ok
+		return agentpool.TeamSpawn{Prompt: sp.Prompt, Access: sp.Access, Subagents: sp.Subagents, Schedule: sp.Schedule, Files: sp.Files, UseGlobalPrompt: sp.UseGlobalPrompt, TeamInstructions: sp.TeamInstructions}, ok
 	}
 	agentsFactory.TeamLimitsLoader = func(sessionID string) (agentpool.TeamLimits, bool) {
 		lim, ok := teamSvc.LimitsFor(context.Background(), sessionID)

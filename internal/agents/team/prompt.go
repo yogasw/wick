@@ -39,6 +39,8 @@ type SpawnPrompt struct {
 	// every entry backing it resolves to off.
 	Subagents bool
 	Schedule  bool
+	// Files keeps the HTML render formats (the Files panel is on).
+	Files bool
 	// UseGlobalPrompt: the operator prompt is system_prompt, not
 	// system_prompt_team (entity.AgentPersona.UseGlobalPrompt).
 	UseGlobalPrompt bool
@@ -69,6 +71,7 @@ func (s *Service) SpawnPromptFor(ctx context.Context, sessionID string) (SpawnPr
 		Access:    YourAccess(scope, reach),
 		Subagents: f.Subagents && scope.AllowKey("sub-agents") && scope.AllowTool("wick_agent_delegate"),
 		Schedule:  f.Schedule && scope.AllowTool("wick_schedule_message"),
+		Files:     f.Files,
 
 		UseGlobalPrompt:  p.UseGlobalPrompt,
 		TeamInstructions: s.teamInstructions(ctx, p.OwnerUserID),
@@ -96,14 +99,18 @@ func (s *Service) teamPrompt(ctx context.Context, p entity.AgentPersona) string 
 			}
 		}
 	}
-	return systemprompt.ImmutableTeam() + "\n\n" + WhoYouAre(s.memberOf(p), others) + manageAgentsBlock(p)
+	out := systemprompt.ImmutableTeam() + "\n\n" + WhoYouAre(s.memberOf(p), others)
+	if yt := YourTeam(others); yt != "" {
+		out += "\n\n" + yt
+	}
+	return out + manageAgentsBlock(p)
 }
 
 // memberOf reads an agent's name and description off its project (the
 // tagline off its row); a
 // missing project leaves the handle as the name.
 func (s *Service) memberOf(p entity.AgentPersona) Member {
-	m := Member{Name: p.Handle, Handle: p.Handle, Tagline: p.Tagline, IsCaptain: p.IsCaptain}
+	m := Member{Name: p.Handle, Handle: p.Handle, Tagline: p.Tagline, IsCaptain: p.IsCaptain, MentionFrom: p.MentionFrom}
 	if p.ProjectID != "" {
 		if proj, err := project.Load(s.layout, p.ProjectID); err == nil {
 			if proj.Meta.Name != "" {
