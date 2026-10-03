@@ -3,6 +3,7 @@ package team
 import (
 	"strings"
 
+	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -85,16 +86,17 @@ func toolGrantID(name string) string { return ToolPrefix + name }
 // featureKeys maps the old per-agent feature switches with a server side
 // to what replaced them: off grants on these connector keys / tools.
 var featureKeys = []struct {
-	off  func(Features) bool
-	set  func(*Features)
-	key  string // connector key, "" for a tool
-	tool string
+	off   func(Features) bool
+	set   func(*Features)
+	clear func(*Features)
+	key   string // connector key, "" for a tool
+	tool  string
 }{
-	{func(f Features) bool { return !f.Notes }, func(f *Features) { f.Notes = true }, "notes", ""},
-	{func(f Features) bool { return !f.Tickets }, func(f *Features) { f.Tickets = true }, "tickets", ""},
-	{func(f Features) bool { return !f.Source }, func(f *Features) { f.Source = true }, "source", ""},
-	{func(f Features) bool { return !f.Subagents }, func(f *Features) { f.Subagents = true }, "sub-agents", ""},
-	{func(f Features) bool { return !f.Schedule }, func(f *Features) { f.Schedule = true }, "", "wick_schedule_message"},
+	{func(f Features) bool { return !f.Notes }, func(f *Features) { f.Notes = true }, func(f *Features) { f.Notes = false }, "notes", ""},
+	{func(f Features) bool { return !f.Tickets }, func(f *Features) { f.Tickets = true }, func(f *Features) { f.Tickets = false }, "tickets", ""},
+	{func(f Features) bool { return !f.Source }, func(f *Features) { f.Source = true }, func(f *Features) { f.Source = false }, "source", ""},
+	{func(f Features) bool { return !f.Subagents }, func(f *Features) { f.Subagents = true }, func(f *Features) { f.Subagents = false }, "sub-agents", ""},
+	{func(f Features) bool { return !f.Schedule }, func(f *Features) { f.Schedule = true }, func(f *Features) { f.Schedule = false }, "", "wick_schedule_message"},
 }
 
 // MigrateFeatures turns the old Notes/Tickets/Source/Sub-agents/Schedule
@@ -142,4 +144,39 @@ func MigrateFeatures(f Features, grants []ConnectorGrant, reach Reach) (Features
 // isToolGrant reports whether id names a PlatformTools entry.
 func isToolGrant(id string) bool {
 	return strings.HasPrefix(id, ToolPrefix) && IsPlatformTool(strings.TrimPrefix(id, ToolPrefix))
+}
+
+// EffectiveFeatures is p's features with the access-backed ones (Notes,
+// Tickets, Source, Sub-agents, Schedule) switched off when the agent's
+// resolved level on every matching entry is LevelOff, so the chat rail
+// hides a tab whose tool the agent cannot use. reach nil leaves the
+// stored switches as they are.
+func EffectiveFeatures(p entity.AgentPersona, reach Reach) Features {
+	f, _, _ := MigrateFeatures(DecodeFeatures(p.Features), DecodeGrants(p.AllowedConnectors), reach)
+	if reach == nil || p.Disabled {
+		return f
+	}
+	s := ScopeOf(p, reach)
+	off := func(key, tool string) bool {
+		if tool != "" {
+			return s.Level(toolGrantID(tool)) == LevelOff
+		}
+		seen := false
+		for id, it := range reach {
+			if it.Key != key {
+				continue
+			}
+			seen = true
+			if s.Level(id) != LevelOff {
+				return false
+			}
+		}
+		return seen
+	}
+	for _, fk := range featureKeys {
+		if !fk.off(f) && off(fk.key, fk.tool) {
+			fk.clear(&f)
+		}
+	}
+	return f
 }

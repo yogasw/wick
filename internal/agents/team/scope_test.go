@@ -257,3 +257,24 @@ func TestMigrateFeatures(t *testing.T) {
 		t.Fatal("migration is not idempotent")
 	}
 }
+
+// The rail follows access: an Off row hides its feature, a default or a
+// lowered (Read) row keeps it.
+func TestEffectiveFeatures(t *testing.T) {
+	reach := Reach{"n1": {Key: "notes", Tier: TierPlatform}, "t1": {Key: "tickets", Tier: TierPlatform}, "s1": {Key: "source", Tier: TierPlatform}}
+	p := entity.AgentPersona{
+		Features: EncodeFeatures(DefaultFeatures()),
+		AllowedConnectors: EncodeGrants([]ConnectorGrant{
+			{ConnectorID: "n1", Level: LevelOff},
+			{ConnectorID: "t1", Level: LevelRead},
+			{ConnectorID: "tool:wick_schedule_message", Level: LevelOff},
+		}),
+	}
+	f := EffectiveFeatures(p, reach)
+	if f.Notes || f.Schedule || !f.Tickets || !f.Source || !f.Subagents {
+		t.Fatalf("effective = %+v", f)
+	}
+	if g := EffectiveFeatures(p, nil); !g.Notes {
+		t.Fatal("unknown reach must leave stored switches alone")
+	}
+}

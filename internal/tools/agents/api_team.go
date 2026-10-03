@@ -443,12 +443,14 @@ func (u teamProjectUsers) others(p entity.AgentPersona) int {
 }
 
 // teamAgentToItem renders one row. users feeds SharedWith; the zero
-// value counts nothing.
-func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLive) TeamAgentItem {
+// value counts nothing. reach (the owner's catalog, may be nil) turns
+// Features into what the agent can actually use, so the chat rail hides a
+// tab whose Access row is Off.
+func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLive, reach team.Reach) TeamAgentItem {
 	it := TeamAgentItem{
 		ID: p.ID, Handle: p.Handle, IsCaptain: p.IsCaptain, ProjectID: p.ProjectID,
 		Name:                 p.Handle,
-		Features:             team.DecodeFeatures(p.Features),
+		Features:             team.EffectiveFeatures(p, reach),
 		Avatar:               team.DecodeAvatar(p.Avatar),
 		AllowedConnectors:    team.DecodeGrants(p.AllowedConnectors),
 		IncludeNewConnectors: p.IncludeNewConnectors,
@@ -667,7 +669,7 @@ func apiTeamAgentList(c *tool.Ctx) {
 			// Best effort: the next load retries a failed save.
 			_ = globalTeam.Update(c.Context(), &r)
 		}
-		items = append(items, teamAgentToItem(r, users, live))
+		items = append(items, teamAgentToItem(r, users, live, reach))
 		if r.IsCaptain {
 			captainID = r.ID
 		}
@@ -771,7 +773,7 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		}
 	}
 	users := teamProjectUsersFor(c.Context(), []entity.AgentPersona{*p})
-	c.JSON(http.StatusOK, teamAgentToItem(*p, users, teamLiveNow()))
+	c.JSON(http.StatusOK, teamAgentToItem(*p, users, teamLiveNow(), ownerReach(c)))
 }
 
 // apiTeamAgentUpdate handles PATCH /api/team/agents/{id}.
@@ -858,13 +860,14 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 			}
 		}
 	}
-	migrateTeamAccess(&p, ownerReach(c))
+	reach := ownerReach(c)
+	migrateTeamAccess(&p, reach)
 	if err := globalTeam.Update(c.Context(), &p); err != nil {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 	users := teamProjectUsersFor(c.Context(), []entity.AgentPersona{p})
-	c.JSON(http.StatusOK, teamAgentToItem(p, users, teamLiveNow()))
+	c.JSON(http.StatusOK, teamAgentToItem(p, users, teamLiveNow(), reach))
 }
 
 // apiTeamAgentDelete handles DELETE /api/team/agents/{id}. Only the row goes;
