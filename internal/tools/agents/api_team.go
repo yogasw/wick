@@ -21,6 +21,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/team"
+	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
@@ -60,6 +61,12 @@ type TeamAgentItem struct {
 	// runs with (see team.SpawnIdentity).
 	RunAs    string `json:"run_as"`
 	Disabled bool   `json:"disabled"`
+	// MentionFrom, MentionAllow and MaxHops are the Mention tab: who may
+	// hand the agent a turn and its agent-to-agent turn cap (effective
+	// value, default applied). See teamlink/policy.go.
+	MentionFrom  string   `json:"mention_from"`
+	MentionAllow []string `json:"mention_allow"`
+	MaxHops      int      `json:"max_hops"`
 	// UseGlobalPrompt: spawns carry the global system_prompt instead of
 	// system_prompt_team (on for agents converted from a project).
 	UseGlobalPrompt bool `json:"use_global_prompt"`
@@ -148,6 +155,9 @@ type teamAgentWriteReq struct {
 	AllowProviderSwitch  *bool                  `json:"allow_provider_switch"`
 	IsCaptain            *bool                  `json:"is_captain"`
 	UseGlobalPrompt      *bool                  `json:"use_global_prompt"`
+	MentionFrom          *string                `json:"mention_from"`
+	MentionAllow         *[]string              `json:"mention_allow"`
+	MaxHops              *int                   `json:"max_hops"`
 	// Convert (create only, with ProjectID) turns an ordinary project
 	// into this agent's own: the project gets the Team tag, so it leaves
 	// the sidebar and lives on in the Team app. See checkConvertProject.
@@ -284,6 +294,72 @@ func validRunAs(c *tool.Ctx, v *string, current string) (string, bool) {
 	}
 	c.JSON(http.StatusBadRequest, map[string]string{"error": "run_as must be caller or owner"})
 	return "", false
+}
+
+// applyMentionSettings writes the Mention tab fields of req onto p. The
+// allow list may only name other agents of p's owner. false = a 400 was
+// written.
+func applyMentionSettings(c *tool.Ctx, p *entity.AgentPersona, req teamAgentWriteReq) bool {
+	if req.MentionFrom != nil {
+		v := strings.ToLower(strings.TrimSpace(*req.MentionFrom))
+		if !teamlink.ValidMentionFrom(v) {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": "mention_from must be all, captain, list or off"})
+			return false
+		}
+		p.MentionFrom = v
+	}
+	if req.MaxHops != nil {
+		if n := *req.MaxHops; n < 1 || n > teamlink.MaxHopsCeiling {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("max_hops must be 1–%d", teamlink.MaxHopsCeiling)})
+			return false
+		}
+		p.MaxHops = *req.MaxHops
+	}
+	if req.MentionAllow != nil {
+		own, err := globalTeam.List(c.Context(), p.OwnerUserID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return false
+		}
+		ids, err := teamAllowList(*req.MentionAllow, own, p.ID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return false
+		}
+		p.MentionAllow = encodeIDList(ids)
+	}
+	return true
+}
+
+// teamAllowList dedupes ids and checks each names an agent in own other
+// than self.
+func teamAllowList(ids []string, own []entity.AgentPersona, self string) ([]string, error) {
+	known := make(map[string]bool, len(own))
+	for _, a := range own {
+		known[a.ID] = true
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		if id == self || !known[id] {
+			return nil, fmt.Errorf("mention_allow: %q is not another agent of yours", id)
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+// nonNilIDs keeps a JSON list a list.
+func nonNilIDs(ids []string) []string {
+	if ids == nil {
+		return []string{}
+	}
+	return ids
 }
 
 // validTagline trims a tagline from the request; nil keeps current.
@@ -484,6 +560,9 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		IncludeNewConnectors: p.IncludeNewConnectors,
 		RunAs:                team.NormalizeRunAs(p.RunAs),
 		Disabled:             p.Disabled,
+		MentionFrom:          teamlink.NormalizeMentionFrom(p.MentionFrom),
+		MentionAllow:         nonNilIDs(decodeIDList(p.MentionAllow)),
+		MaxHops:              teamlink.EffectiveHops(p.MaxHops),
 		UseGlobalPrompt:      p.UseGlobalPrompt,
 		AllowProviderSwitch:  team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain),
 		Status:               string(session.StatusIdle),
@@ -941,6 +1020,9 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	}
 	if req.Disabled != nil {
 		p.Disabled = *req.Disabled
+	}
+	if !applyMentionSettings(c, &p, req) {
+		return
 	}
 	if req.UseGlobalPrompt != nil {
 		p.UseGlobalPrompt = *req.UseGlobalPrompt

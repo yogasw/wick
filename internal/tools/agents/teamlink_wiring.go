@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -80,6 +81,8 @@ func (d teamDirectory) peer(p entity.AgentPersona) teamlink.Peer {
 		ID: p.ID, OwnerID: p.OwnerUserID, Handle: p.Handle,
 		Name: m.Name, Tagline: m.Tagline, Description: m.Description,
 		IsCaptain: p.IsCaptain, Disabled: p.Disabled,
+		MentionFrom: teamlink.NormalizeMentionFrom(p.MentionFrom), MentionAllow: decodeIDList(p.MentionAllow),
+		MaxHops: p.MaxHops,
 	}
 }
 
@@ -190,10 +193,37 @@ func refusalTurn(r teamlink.Refusal, now time.Time) store.ConversationTurn {
 	}
 	if r.HopLimit {
 		extras["context_id"] = r.ContextID
-		extras["max_turns"] = fmt.Sprintf("%d", teamlink.MaxContextTurns)
-		return systemTurn(store.KindHopLimit, fmt.Sprintf("Agent-to-agent limit of %d turns reached — reply to continue", teamlink.MaxContextTurns), extras, now)
+		limit := r.MaxTurns
+		if limit <= 0 {
+			limit = teamlink.MaxContextTurns
+		}
+		return hopLimitTurn(extras, limit, now)
 	}
 	return systemTurn(store.KindMentionRefused, fmt.Sprintf("@%s doesn't take mentions", r.To), extras, now)
+}
+
+// hopLimitTurn is the hop_limit event for a budget of limit turns.
+func hopLimitTurn(extras map[string]string, limit int, now time.Time) store.ConversationTurn {
+	extras["max_turns"] = fmt.Sprintf("%d", limit)
+	return systemTurn(store.KindHopLimit, fmt.Sprintf("Agent-to-agent limit of %d turns reached — reply to continue", limit), extras, now)
+}
+
+// decodeIDList reads a JSON array of ids; a malformed value reads as none.
+func decodeIDList(raw string) []string {
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// encodeIDList is ids as a JSON array, "[]" for none.
+func encodeIDList(ids []string) string {
+	if len(ids) == 0 {
+		return "[]"
+	}
+	b, _ := json.Marshal(ids)
+	return string(b)
 }
 
 // handoffTurn is h as a conversation system turn.

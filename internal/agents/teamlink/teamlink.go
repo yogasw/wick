@@ -80,6 +80,9 @@ var (
 	ErrUnknownContext = errors.New("unknown context_id — omit it to start a new exchange")
 	// ErrUnknownTask means the task id was never issued to this caller.
 	ErrUnknownTask = errors.New("unknown task id")
+	// ErrMentionsOff refuses a turn the target's mention setting does not
+	// take from the caller (Peer.AcceptsFrom).
+	ErrMentionsOff = errors.New("that agent does not take turns from you — tell the user instead")
 )
 
 // Peer is one Team agent as the registry sees it.
@@ -87,6 +90,11 @@ type Peer struct {
 	ID, OwnerID, Handle        string
 	Name, Tagline, Description string
 	IsCaptain, Disabled        bool
+	// MentionFrom, MentionAllow and MaxHops are the agent's mention
+	// settings (see policy.go).
+	MentionFrom  string
+	MentionAllow []string
+	MaxHops      int
 }
 
 // Label is how a peer is named in framing and replies.
@@ -132,6 +140,8 @@ type Refusal struct {
 	ContextID string
 	// HopLimit is true for an exhausted budget; false for a refused mention.
 	HopLimit bool
+	// MaxTurns is the exhausted budget's size, for the event text.
+	MaxTurns int
 	Err      error
 }
 
@@ -212,6 +222,9 @@ type contextState struct {
 	// owner is the user whose agents opened the exchange; nobody else's
 	// agent may continue it.
 	owner string
+	// limit is the exchange's turn budget: the smallest MaxHops of every
+	// agent that took part so far.
+	limit int
 }
 
 // inbound is the task an agent is currently answering. A message the
@@ -362,6 +375,11 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if err == nil && target.ID == caller.ID {
 		err = ErrSelf
 	}
+	// A person's @mention always goes through; an agent's needs the
+	// target's consent.
+	if err == nil && !in.Human && !target.AcceptsFrom(caller) {
+		err = ErrMentionsOff
+	}
 	if err != nil {
 		if in.Mention {
 			h.refused(ctx, Refusal{Session: in.CallerSession, From: caller.Handle, To: NormalizeHandle(in.To), Err: err})
@@ -371,10 +389,10 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, errors.New("message is empty")
 	}
-	contextID, depth, err := h.admit(caller.OwnerID, caller.ID, in.CallerSession, in.ContextID, in.Mention && !in.Human)
+	contextID, depth, limit, err := h.admit(caller.OwnerID, caller.ID, in.CallerSession, in.ContextID, in.Mention && !in.Human, MinHops(caller, target))
 	if err != nil {
 		if errors.Is(err, ErrHopLimit) {
-			h.refused(ctx, Refusal{Session: in.CallerSession, From: caller.Handle, To: target.Handle, ContextID: in.ContextID, HopLimit: true, Err: err})
+			h.refused(ctx, Refusal{Session: in.CallerSession, From: caller.Handle, To: target.Handle, ContextID: in.ContextID, HopLimit: true, MaxTurns: limit, Err: err})
 		}
 		return nil, err
 	}
@@ -414,8 +432,10 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 }
 
 // admit charges one turn to the context and works out the depth. A
-// caller answering an inbound task continues that task's context.
-func (h *Hub) admit(ownerID, callerID, callerSession, contextID string, afterReply bool) (string, int, error) {
+// caller answering an inbound task continues that task's context. limit is
+// the cap of the two agents of this message; the context keeps the
+// smallest cap it has seen, which admit returns.
+func (h *Hub) admit(ownerID, callerID, callerSession, contextID string, afterReply bool, limit int) (string, int, int, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.pruneLocked()
@@ -433,26 +453,29 @@ func (h *Hub) admit(ownerID, callerID, callerSession, contextID string, afterRep
 	case contextID != "":
 		// Only an exchange this owner already has may be continued.
 		if cs := h.contexts[contextID]; cs == nil || cs.owner != ownerID {
-			return "", 0, ErrUnknownContext
+			return "", 0, limit, ErrUnknownContext
 		}
 	}
 	if depth > MaxDepth {
-		return "", 0, ErrHopLimit
+		return "", 0, limit, ErrHopLimit
 	}
 	if contextID == "" {
 		contextID = uuid.NewString()
 	}
 	cs := h.contexts[contextID]
 	if cs == nil {
-		cs = &contextState{owner: ownerID}
+		cs = &contextState{owner: ownerID, limit: limit}
 		h.contexts[contextID] = cs
 	}
-	if cs.turns >= MaxContextTurns {
-		return "", 0, ErrHopLimit
+	if limit < cs.limit || cs.limit <= 0 {
+		cs.limit = limit
+	}
+	if cs.turns >= cs.limit {
+		return "", 0, cs.limit, ErrHopLimit
 	}
 	cs.turns++
 	cs.touched = h.now()
-	return contextID, depth, nil
+	return contextID, depth, cs.limit, nil
 }
 
 // inboundOf picks the inbound task a message from callerID continues:
@@ -658,14 +681,14 @@ func (h *Hub) SentFrom(sessionID string) []TaskView {
 		if ref.finished {
 			state = stateName(ref.state)
 		}
-		turns := 0
+		turns, limit := 0, MaxContextTurns
 		if c := h.contexts[ref.contextID]; c != nil {
-			turns = c.turns
+			turns, limit = c.turns, c.limit
 		}
 		out = append(out, TaskView{
 			TaskID: string(id), ContextID: ref.contextID,
 			ToID: ref.to.ID, ToHandle: ref.to.Handle, ToName: ref.to.Name,
-			Title: ref.title, State: state, Turns: turns, MaxTurns: MaxContextTurns,
+			Title: ref.title, State: state, Turns: turns, MaxTurns: limit,
 			Started: ref.started, Updated: ref.touched,
 		})
 	}

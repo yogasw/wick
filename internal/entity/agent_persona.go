@@ -56,6 +56,19 @@ type AgentPersona struct {
 	// identity) live in that prompt; off for a new agent.
 	UseGlobalPrompt bool `gorm:"not null;default:false" json:"use_global_prompt"`
 
+	// MentionFrom is who may hand this agent a turn over the Team link:
+	// "all" (every agent of the owner), "captain", "list" (MentionAllow)
+	// or "off". A person's @mention is never filtered by it. "" = all.
+	// See teamlink.Peer.AcceptsFrom.
+	MentionFrom string `gorm:"type:varchar(16);not null;default:'all'" json:"mention_from"`
+	// MentionAllow is a JSON array of agent ids, read when MentionFrom is
+	// "list".
+	MentionAllow string `gorm:"type:text;not null;default:'[]'" json:"mention_allow"`
+	// MaxHops caps the agent-to-agent turns of an exchange this agent
+	// takes part in (1..teamlink.MaxHopsCeiling); the smallest cap of the
+	// agents involved wins. 0 = teamlink.DefaultMaxHops.
+	MaxHops int `gorm:"not null;default:0" json:"max_hops"`
+
 	Disabled bool `gorm:"not null;default:false" json:"disabled"`
 	// AllowProviderSwitch lets the agent's chat pick another provider or
 	// model from the composer. nil = never set: see
