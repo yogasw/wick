@@ -401,8 +401,10 @@ export type TeamSettingValues = {
   prompt: string;
   /** "Open Team when I open Agents". */
   open_team: boolean;
+  /** "Idle animations": idle avatars fidget now and then. */
+  idle_animations: boolean;
 };
-export const TEAM_SETTING_KEYS: (keyof TeamSettingValues)[] = ["prompt", "open_team"];
+export const TEAM_SETTING_KEYS: (keyof TeamSettingValues)[] = ["prompt", "open_team", "idle_animations"];
 
 /** The caller's own Team settings (GET/PUT /api/team/settings): the
     values plus read-only hints for drawing them. */

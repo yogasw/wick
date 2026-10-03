@@ -15,9 +15,15 @@ type TeamSettings struct {
 	// inverted so the zero value is the default (ON): gorm skips a zero
 	// field that has a column default on insert, so a false default-true
 	// column could never be saved.
-	ClassicHome bool      `gorm:"not null;default:false" json:"classic_home"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ClassicHome bool `gorm:"not null;default:false" json:"classic_home"`
+	// NoIdleFidget turns OFF "Idle animations" (an idle avatar's random
+	// fidgets). Inverted for the same reason as ClassicHome.
+	NoIdleFidget bool      `gorm:"not null;default:false" json:"no_idle_fidget"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // OpenTeam reports whether opening the Agents landing goes to Team.
 func (s TeamSettings) OpenTeam() bool { return !s.ClassicHome }
+
+// IdleAnimations reports whether idle avatars play their fidgets.
+func (s TeamSettings) IdleAnimations() bool { return !s.NoIdleFidget }

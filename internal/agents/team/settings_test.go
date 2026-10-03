@@ -108,4 +108,16 @@ func TestApplySettingsRegistry(t *testing.T) {
 	if st.Prompt != "new" || st.OpenTeam() {
 		t.Fatalf("patch not applied: %+v", st)
 	}
+	if !st.IdleAnimations() {
+		t.Fatal("idle animations should default on")
+	}
+	if err := ApplySettings(&st, map[string]json.RawMessage{"idle_animations": raw(`"off"`)}); err == nil {
+		t.Fatal("mistyped idle_animations accepted")
+	}
+	if err := ApplySettings(&st, map[string]json.RawMessage{"idle_animations": raw(`false`)}); err != nil {
+		t.Fatal(err)
+	}
+	if st.IdleAnimations() || SettingValues(st)["idle_animations"] != false {
+		t.Fatalf("idle_animations not applied: %+v", st)
+	}
 }

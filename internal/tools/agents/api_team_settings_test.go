@@ -14,6 +14,7 @@ import (
 type teamSettingsWire struct {
 	Prompt             string `json:"prompt"`
 	OpenTeam           bool   `json:"open_team"`
+	IdleAnimations     bool   `json:"idle_animations"`
 	MaxPromptBytes     int    `json:"max_prompt_bytes"`
 	OperatorPromptHref string `json:"operator_prompt_href"`
 }
@@ -35,7 +36,7 @@ func TestTeamSettingsAPIOwnRowOnly(t *testing.T) {
 
 	w, c := teamReq(t, u1, http.MethodGet, "/api/team/settings", nil, nil)
 	apiTeamSettingsGet(c)
-	if d := decodeTeamSettings(t, w.Body.String()); w.Code != http.StatusOK || d.Prompt != "" || !d.OpenTeam || d.MaxPromptBytes != team.MaxTeamPromptBytes {
+	if d := decodeTeamSettings(t, w.Body.String()); w.Code != http.StatusOK || d.Prompt != "" || !d.OpenTeam || !d.IdleAnimations || d.MaxPromptBytes != team.MaxTeamPromptBytes {
 		t.Fatalf("defaults: %d %s", w.Code, w.Body)
 	}
 
@@ -50,9 +51,15 @@ func TestTeamSettingsAPIOwnRowOnly(t *testing.T) {
 		t.Fatalf("toggle lost the prompt or did not stick: %s", w.Body)
 	}
 
+	w, c = teamReq(t, u1, http.MethodPut, "/api/team/settings", map[string]any{"idle_animations": false}, nil)
+	apiTeamSettingsSave(c)
+	if d := decodeTeamSettings(t, w.Body.String()); d.Prompt != "U1 RULES" || d.OpenTeam || d.IdleAnimations {
+		t.Fatalf("idle animations off did not stick: %s", w.Body)
+	}
+
 	w, c = teamReq(t, u2, http.MethodGet, "/api/team/settings", nil, nil)
 	apiTeamSettingsGet(c)
-	if d := decodeTeamSettings(t, w.Body.String()); d.Prompt != "" || !d.OpenTeam {
+	if d := decodeTeamSettings(t, w.Body.String()); d.Prompt != "" || !d.OpenTeam || !d.IdleAnimations {
 		t.Fatalf("u2 reads u1's settings: %s", w.Body)
 	}
 	if d := decodeTeamSettings(t, w.Body.String()); d.OperatorPromptHref != "" {

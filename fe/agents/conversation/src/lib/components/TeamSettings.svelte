@@ -13,6 +13,7 @@
     type TeamSettings, type TeamSettingValues, type TeamSettingsWrite,
   } from "../api/team.js";
   import { TEAM_SETTINGS_TABS, invalidReason, isTextKey, type TeamSettingsTab } from "../teamSettingsTabs.js";
+  import { setIdleAnimations } from "@wick-fe/common-avatar";
 
   type Props = {
     base: string;
@@ -46,6 +47,11 @@
     } catch (e) {
       loadError = e instanceof Error ? e.message : String(e);
     }
+  });
+
+  // What the server confirmed drives the page's avatars at once.
+  $effect(() => {
+    if (saved) setIdleAnimations(saved.idle_animations !== false);
   });
 
   const invalid = $derived(saved && draft ? invalidReason(draft, saved) : "");

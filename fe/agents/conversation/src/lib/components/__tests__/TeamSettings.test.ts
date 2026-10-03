@@ -11,8 +11,9 @@ vi.mock("../../api/team.js", async (orig) => ({
 }));
 
 import TeamSettings from "../TeamSettings.svelte";
+import { idleAnimationsOn, setIdleAnimations } from "@wick-fe/common-avatar";
 
-const settings = (over: Record<string, unknown> = {}) => ({ prompt: "Be brief.", open_team: true, max_prompt_bytes: 16384, ...over });
+const settings = (over: Record<string, unknown> = {}) => ({ prompt: "Be brief.", open_team: true, idle_animations: true, max_prompt_bytes: 16384, ...over });
 
 function mount() {
   return render(TeamSettings, { props: { base: "/tools/agents", tab: "general", onTab: vi.fn(), onClose: vi.fn() } });
@@ -40,6 +41,29 @@ describe("TeamSettings", () => {
     await fireEvent.click(screen.getByRole("switch", { name: "Open Team when I open Agents" }));
     await waitFor(() => expect(saveTeamSettings).toHaveBeenCalledWith("/tools/agents", { open_team: false }));
     await waitFor(() => expect(screen.getByTestId("autosave-status").textContent).toContain("Saved"));
+  });
+
+  test("Idle animations: off is saved and stops the page's fidgets", async () => {
+    setIdleAnimations(true);
+    getTeamSettings.mockResolvedValue(settings());
+    saveTeamSettings.mockImplementation((_b: string, body: Record<string, unknown>) => Promise.resolve(settings(body)));
+    mount();
+    await screen.findByLabelText("Team prompt");
+    const sw = screen.getByRole("switch", { name: "Idle animations" });
+    expect(sw.getAttribute("aria-checked")).toBe("true");
+    await fireEvent.click(sw);
+    await waitFor(() => expect(saveTeamSettings).toHaveBeenCalledWith("/tools/agents", { idle_animations: false }));
+    await waitFor(() => expect(idleAnimationsOn()).toBe(false));
+    setIdleAnimations(true);
+  });
+
+  test("a stored off applies on load", async () => {
+    setIdleAnimations(true);
+    getTeamSettings.mockResolvedValue(settings({ idle_animations: false }));
+    mount();
+    await screen.findByLabelText("Team prompt");
+    await waitFor(() => expect(idleAnimationsOn()).toBe(false));
+    setIdleAnimations(true);
   });
 
   test("a prompt over the limit is not sent", async () => {

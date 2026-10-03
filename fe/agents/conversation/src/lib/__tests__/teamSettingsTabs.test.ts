@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 import { TEAM_SETTINGS_TABS, teamSettingsTabOf, invalidReason, isTextKey } from "../teamSettingsTabs.js";
 import { TEAM_SETTING_KEYS, type TeamSettings } from "../api/team.js";
 
-const saved: TeamSettings = { prompt: "", open_team: true, max_prompt_bytes: 10 };
+const saved: TeamSettings = { prompt: "", open_team: true, idle_animations: true, max_prompt_bytes: 10 };
 
 describe("Team settings tab registry", () => {
   test("ids are unique and an unknown tab falls back to the first", () => {
@@ -20,7 +20,7 @@ describe("Team settings tab registry", () => {
   });
 
   test("a prompt over the limit is refused, counting UTF-8 bytes", () => {
-    expect(invalidReason({ prompt: "x".repeat(10), open_team: true }, saved)).toBe("");
-    expect(invalidReason({ prompt: "é".repeat(6), open_team: true }, saved)).toMatch(/over/);
+    expect(invalidReason({ prompt: "x".repeat(10), open_team: true, idle_animations: true }, saved)).toBe("");
+    expect(invalidReason({ prompt: "é".repeat(6), open_team: true, idle_animations: true }, saved)).toMatch(/over/);
   });
 });

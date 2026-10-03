@@ -9,7 +9,7 @@
   import { KebabMenu, ToastHost } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
   import DetailView from "./lib/components/DetailView.svelte";
-  import { AgentAvatar } from "@wick-fe/common-avatar";
+  import { AgentAvatar, setIdleAnimations } from "@wick-fe/common-avatar";
   import AgentSettings from "./lib/components/AgentSettings.svelte";
   import AgentWizard from "./lib/components/AgentWizard.svelte";
   import RemoteAgentWizard from "./lib/components/team/RemoteAgentWizard.svelte";
@@ -24,7 +24,7 @@
   import { nativeToolsOf } from "./lib/nativeTools.js";
   import { rosterTime } from "./lib/timeFormat.js";
   import { listAgents, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
-  import { listGroups, type GroupItem } from "./lib/api/team.js";
+  import { listGroups, getTeamSettings, type GroupItem } from "./lib/api/team.js";
   import GroupView from "./lib/components/GroupView.svelte";
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
   import GroupSettings from "./lib/components/GroupSettings.svelte";
@@ -109,9 +109,20 @@
 
   // Status dots go stale without a refresh; the roster is small and the
   // list endpoint reads only the in-memory registry, so a slow poll is fine.
+  /* Team settings › Idle animations applies to every avatar on the page;
+     the drawer updates it on save. A failed read keeps the default (on). */
+  async function loadIdleAnimations() {
+    try {
+      setIdleAnimations((await runApi(getTeamSettings(base))).idle_animations !== false);
+    } catch {
+      /* keep the default */
+    }
+  }
+
   onMount(() => {
     load();
     loadGroups();
+    void loadIdleAnimations();
     const t = setInterval(() => {
       if (document.visibilityState === "visible") { load(); loadGroups(); }
     }, 15000);

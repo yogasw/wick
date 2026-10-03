@@ -103,6 +103,18 @@ var SettingFields = []SettingField{
 			return nil
 		},
 	},
+	{
+		Key: "idle_animations",
+		Get: func(st entity.TeamSettings) any { return st.IdleAnimations() },
+		Set: func(st *entity.TeamSettings, raw json.RawMessage) error {
+			var v bool
+			if err := json.Unmarshal(raw, &v); err != nil {
+				return errors.New("idle_animations must be true or false")
+			}
+			st.NoIdleFidget = !v
+			return nil
+		},
+	},
 }
 
 // SettingValues is st as the wire map: one entry per SettingFields key.

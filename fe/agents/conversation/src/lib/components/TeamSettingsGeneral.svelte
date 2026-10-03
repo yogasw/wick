@@ -1,6 +1,6 @@
 <script lang="ts">
-  /* The General tab of Team settings: the Team prompt and the landing
-     toggle. Edits the drawer's draft in place; saving is the drawer's. */
+  /* The General tab of Team settings: the Team prompt, the landing and
+     idle-animation toggles. Edits the drawer's draft in place; saving is the drawer's. */
   import { Toggle } from "@wick-fe/common-ui";
   import type { TeamSettings, TeamSettingValues } from "../api/team.js";
   import { promptBytes } from "../teamSettingsTabs.js";
@@ -41,6 +41,15 @@
     <span class="block text-sm text-black-900 dark:text-white-100">Open Team when I open Agents</span>
     <span id="ts-open-team-hint" class="block text-xs text-black-800 dark:text-black-600">
       The Agents home opens Team. "Switch to Agents" in your account menu still takes you to the classic page.
+    </span>
+  </span>
+</div>
+<div class="flex items-start gap-3">
+  <Toggle checked={draft.idle_animations} onChange={(v) => (draft.idle_animations = v)} label="Idle animations" describedBy="ts-idle-hint" />
+  <span class="min-w-0">
+    <span class="block text-sm text-black-900 dark:text-white-100">Idle animations</span>
+    <span id="ts-idle-hint" class="block text-xs text-black-800 dark:text-black-600">
+      An agent with nothing to do glances around, yawns or dozes off now and then. Off keeps it to breathing and blinking.
     </span>
   </span>
 </div>
