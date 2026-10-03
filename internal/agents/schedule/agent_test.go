@@ -168,3 +168,29 @@ func TestRunnerNotifiesFiredHook(t *testing.T) {
 		t.Fatalf("a failed send reached the hook: %v", fired)
 	}
 }
+
+// An edit that moves a schedule from cron to an interval (or back) keeps
+// the new cadence: the parsed patch carries both fields, one empty.
+func TestRescheduleSwitchesCadence(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	m, err := s.Create(ctx, &entity.ScheduledMessage{SessionID: "s1", Message: "x", RunAt: time.Now().Add(time.Hour),
+		Kind: entity.ScheduledKindRecurring, Status: entity.ScheduledStatusActive, Cron: "0 9 * * *"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	iv, empty := time.Hour.Milliseconds(), ""
+	if err := s.Reschedule(ctx, m.ID, SchedulePatch{IntervalMs: &iv, Cron: &empty}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(ctx, m.ID); got.IntervalMs != iv || got.Cron != "" {
+		t.Fatalf("cron → every = %d %q", got.IntervalMs, got.Cron)
+	}
+	cr, zero := "30 8 * * 1", int64(0)
+	if err := s.Reschedule(ctx, m.ID, SchedulePatch{IntervalMs: &zero, Cron: &cr}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(ctx, m.ID); got.IntervalMs != 0 || got.Cron != cr {
+		t.Fatalf("every → cron = %d %q", got.IntervalMs, got.Cron)
+	}
+}

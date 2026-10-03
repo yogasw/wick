@@ -198,20 +198,24 @@ const KindProviderSwitch = "provider_switch"
 // written by wick itself, never by an agent, so none can be forged from a
 // reply. Extras per kind are listed where each is emitted.
 const (
-	KindAgentCreated      = "agent_created"
-	KindAccessChanged     = "access_changed"
+	KindAgentCreated  = "agent_created"
+	KindAccessChanged = "access_changed"
 	// KindAccessChangeDeclined: the owner declined an access change the
 	// Captain proposed (agents.set_access).
 	KindAccessChangeDeclined = "access_change_declined"
 	// KindPersonaChanged: the Captain edited the agent's persona
 	// (agents.update_persona).
 	KindPersonaChanged = "persona_changed"
-	KindMentionHandoff    = "mention_handoff"
-	KindHopLimit          = "hop_limit"
+	KindMentionHandoff = "mention_handoff"
+	KindHopLimit       = "hop_limit"
 	// KindScheduledFired: a schedule aimed at the agent ran (extras:
 	// schedule_id, title). Older rows carry KindRoutineFired.
 	KindScheduledFired = "scheduled_fired"
 	KindRoutineFired   = "routine_fired"
+	// KindScheduleChanged: the Captain created, edited, paused or resumed
+	// one of the agent's schedules (agents.schedule; extras: schedule_id,
+	// title, action, changed_by).
+	KindScheduleChanged   = "schedule_changed"
 	KindConnectionChanged = "connection_changed"
 	KindMentionRefused    = "mention_refused"
 	KindA2AContext        = "a2a_context"

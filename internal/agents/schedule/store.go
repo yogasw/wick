@@ -337,13 +337,21 @@ func (s *Store) Reschedule(ctx context.Context, id string, patch SchedulePatch) 
 	if !patch.RunAt.IsZero() {
 		updates["run_at"] = patch.RunAt
 	}
+	// Interval and cron are mutually exclusive: setting one clears the
+	// other. A patch may carry both with one empty (a parsed spec does), so
+	// only a non-empty value clears its sibling — else the empty one would
+	// wipe the value just set.
 	if patch.IntervalMs != nil {
 		updates["interval_ms"] = *patch.IntervalMs
-		updates["cron"] = "" // interval and cron are mutually exclusive
+		if *patch.IntervalMs > 0 {
+			updates["cron"] = ""
+		}
 	}
 	if patch.Cron != nil {
 		updates["cron"] = *patch.Cron
-		updates["interval_ms"] = int64(0)
+		if *patch.Cron != "" {
+			updates["interval_ms"] = int64(0)
+		}
 	}
 	if patch.Message != nil {
 		updates["message"] = *patch.Message

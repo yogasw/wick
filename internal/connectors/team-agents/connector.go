@@ -1,5 +1,5 @@
 // Package teamagents exposes the Captain's agents.* ops — list, create,
-// update_persona, set_access — as a fixed, single-instance connector.
+// update_persona, set_access, schedule — as a fixed, single-instance connector.
 //
 // Every op runs on behalf of the OWNER of the calling agent and only ever
 // touches that owner's agents. The scope (team.ManageAgentsKey) shows the
@@ -38,7 +38,7 @@ type CreateInput struct {
 
 // PersonaInput is agents.update_persona's input. nil = leave as is.
 type PersonaInput struct {
-	Agent                                     string
+	Agent                                    string
 	Name, Tagline, Description, SystemPrompt *string
 }
 
@@ -50,12 +50,26 @@ type AccessInput struct {
 	Reason string
 }
 
+// ScheduleInput is agents.schedule's input: one action on another
+// agent's Scheduled drawer.
+type ScheduleInput struct {
+	Agent string
+	// Action is list | create | update | pause | resume.
+	Action     string
+	ScheduleID string
+	// One of RunAt (one-shot), Every or Cron; update leaves all three
+	// empty to keep the time.
+	RunAt, Every, Cron string
+	Message            string
+}
+
 // Ops is what the connector drives; implemented in internal/tools/agents.
 type Ops interface {
 	List(ctx context.Context, sessionID string) (any, error)
 	Create(ctx context.Context, sessionID string, in CreateInput) (any, error)
 	UpdatePersona(ctx context.Context, sessionID string, in PersonaInput) (any, error)
 	SetAccess(ctx context.Context, sessionID string, in AccessInput) (any, error)
+	Schedule(ctx context.Context, sessionID string, in ScheduleInput) (any, error)
 }
 
 // Deps wires the connector to its implementation. Ops is late-bound.
@@ -112,6 +126,16 @@ type accessInput struct {
 	Reason string `wick:"desc=Why, shown to the owner on the approval card."`
 }
 
+type scheduleInput struct {
+	Agent      string `wick:"required;desc=The agent's @handle or id."`
+	Action     string `wick:"required;desc=list | create | update | pause | resume."`
+	ScheduleID string `wick:"desc=The schedule id (update, pause, resume). From action=list."`
+	RunAt      string `wick:"desc=One-shot fire time: RFC3339 or an offset like +2h."`
+	Every      string `wick:"desc=Repeat interval, e.g. 30m, 1h30m."`
+	Cron       string `wick:"desc=5-field cron (min hour dom mon dow) in the server time zone, e.g. 0 9 * * 1-5."`
+	Message    string `wick:"textarea;desc=What the agent is told when it fires (create; update = new text, empty = unchanged)."`
+}
+
 // Operations lists the connector's ops.
 func Operations(deps Deps) []connector.Category {
 	return []connector.Category{
@@ -128,6 +152,9 @@ func Operations(deps Deps) []connector.Category {
 			connector.OpDestructive("set_access", "Propose an Access Change",
 				"Ask the owner to change another agent's connector access. ALWAYS returns pending_approval: the owner accepts or declines on a card, and the change applies only then. Can never exceed the owner's own access. Refused when that agent does not let the Captain propose access changes.",
 				accessInput{}, deps.setAccess, wickdocs.Docs{}),
+			connector.OpDestructive("schedule", "Manage an Agent's Schedules",
+				"List, create, update, pause or resume the schedules in another agent's Scheduled drawer. New schedules fire into that agent's main chat. Applies at once and is announced in that agent's chat. Refused when that agent does not let the Captain manage its routines.",
+				scheduleInput{}, deps.schedule, wickdocs.Docs{}),
 		),
 	}
 }
@@ -191,6 +218,18 @@ func (d Deps) setAccess(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return ops.SetAccess(c.Context(), c.SessionID(), AccessInput{Agent: c.Input("agent"), Grants: gs, Reason: c.Input("reason")})
+}
+
+func (d Deps) schedule(c *connector.Ctx) (any, error) {
+	ops, err := d.ops()
+	if err != nil {
+		return nil, err
+	}
+	return ops.Schedule(c.Context(), c.SessionID(), ScheduleInput{
+		Agent: c.Input("agent"), Action: strings.TrimSpace(strings.ToLower(c.Input("action"))),
+		ScheduleID: strings.TrimSpace(c.Input("schedule_id")), RunAt: strings.TrimSpace(c.Input("run_at")),
+		Every: strings.TrimSpace(c.Input("every")), Cron: strings.TrimSpace(c.Input("cron")), Message: c.Input("message"),
+	})
 }
 
 // ParseGrants reads a JSON grant array; "" is none.

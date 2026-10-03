@@ -14,7 +14,7 @@ func TestModuleShape(t *testing.T) {
 	if team.TierOf(m.Meta.DefaultTags) != team.TierPlatform {
 		t.Error("the connector must be Platform-tagged so the owner's catalog carries it")
 	}
-	want := map[string]bool{"list": false, "create": true, "update_persona": true, "set_access": true}
+	want := map[string]bool{"list": false, "create": true, "update_persona": true, "set_access": true, "schedule": true}
 	n := 0
 	for _, cat := range m.Operations {
 		for _, op := range cat.Ops {
