@@ -76,6 +76,13 @@
     queueSave();
   }
 
+  /** "3 on · 1 paused": a paused schedule is not counted as on. */
+  function activeSummary(items: AgentSchedule[]): string {
+    const live = items.filter(isLive);
+    const paused = live.filter((s) => s.paused).length;
+    return paused ? `${live.length - paused} on · ${paused} paused` : `${live.length} on`;
+  }
+
   async function toggleHistory(s: AgentSchedule) {
     menuFor = null;
     if (historyFor === s.id) {
@@ -243,9 +250,9 @@
             <input type="radio" name="sch-dest" checked={draft.dest === "telegram"} disabled={tgChats.length === 0} onchange={() => pickDest("telegram")} /> Telegram chat
           </label>
           {#if tgChats.length === 0}
-            <p class="ml-6 {muted}">Nobody has messaged the agent's Telegram bot yet — a bot can only post to a chat that wrote to it.</p>
+            <p class="pl-5 {muted}">Nobody has messaged the agent's Telegram bot yet — a bot can only post to a chat that wrote to it.</p>
           {:else if draft.dest === "telegram"}
-            <div class="mt-1 pl-6">
+            <div class="mt-1 pl-5">
               <select class={input} bind:value={draft.tgSession} onchange={queueSave} aria-label="Telegram chat">
                 {#each tgChats as c (c.session_id)}<option value={c.session_id}>{c.title}</option>{/each}
               </select>
@@ -275,7 +282,7 @@
       <p class="mb-3 rounded-lg bg-white-200 px-3 py-2 {muted} dark:bg-navy-600">This agent is off, so its schedules are on hold. They resume when you turn it back on.</p>
     {/if}
     <div class="mb-3 flex items-center justify-between">
-      <p class={muted}>{data.items.length === 0 ? "Nothing scheduled yet." : `${data.items.filter(isLive).length} active`}</p>
+      <p class={muted}>{data.items.length === 0 ? "Nothing scheduled yet." : activeSummary(data.items)}</p>
       <Button size="sm" onclick={openNew}>New schedule</Button>
     </div>
     <ul class="space-y-2" data-testid="scheduled-list">
