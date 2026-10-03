@@ -882,7 +882,7 @@ func NewServer() *Server {
 	preemptIdle := configsSvc.GetOwned("agents", "preempt_idle") != "false"
 	// Resource Guard: the fast watchdog over the agent tree. Config is
 	// read per tick so mode, action and knobs apply without a restart;
-	// it only acts while the guard mode is enforce, and only on Linux
+	// it acts in enforce mode, only records in measure, and runs only on Linux
 	// (NewHost is nil elsewhere and Run returns at once).
 	resourceGuard := resourceguard.New(resourceguard.NewHost(), func() resourceguard.Config {
 		atoiOr := func(key string, def int) int {
@@ -899,13 +899,17 @@ func NewServer() *Server {
 		if action == "" {
 			action = resourceguard.ActionKill
 		}
+		// enforce acts; measure only records what it would stop; off is off.
+		mode := configsSvc.GetOwned("agents", "memory_guard_mode")
 		return resourceguard.Config{
-			Enabled:     configsSvc.GetOwned("agents", "memory_guard_mode") == agentconfig.MemGuardEnforce,
+			Enabled:     mode == agentconfig.MemGuardEnforce || mode == agentconfig.MemGuardMeasure,
+			Measure:     mode == agentconfig.MemGuardMeasure,
 			Action:      action,
 			Interval:    time.Duration(atoiOr("resource_guard_interval_ms", 1000)) * time.Millisecond,
+			SafePct:     atoiOr("resource_guard_safe_pct", 80),
 			HorizonSec:  atoiOr("resource_guard_exhaust_horizon_sec", 20),
 			MinFreeMB:   atoi("min_free_memory_mb"),
-			CPUPSIMax:   float64(atoiOr("resource_guard_cpu_psi_max", 90)),
+			CPUPSIMax:   float64(atoiOr("resource_guard_cpu_psi_max", 60)),
 			CPUQuotaPct: atoi("agents_cpu_quota_pct"),
 			CPUWeight:   atoi("agents_cpu_weight"),
 			TasksMax:    atoi("agents_tasks_max"),
@@ -1103,7 +1107,7 @@ func NewServer() *Server {
 	// Guard events reach the session whose agent was acted on, as a
 	// system line in its history, and the Resources page reads the rest.
 	resourceGuard.OnEvent = func(e resourceguard.Event) {
-		if e.AgentPID == 0 || strings.HasPrefix(e.Detail, "[log only") {
+		if e.AgentPID == 0 || e.DryRun {
 			return
 		}
 		for _, a := range agentsPool.ActiveSnapshot() {
@@ -2595,7 +2599,34 @@ func NewServer() *Server {
 	// written from the manager SPA, the legacy form POST, and the
 	// wickmanager MCP tool, and a rule only some of those doors enforce is
 	// not a rule.
-	configsSvc.RegisterValidator("agents", agentconfig.ValidateConfigValue)
+	//
+	// The combined memory ceiling is checked against the machine's real
+	// RAM, read now rather than assumed, together with the free-memory
+	// floor: a ceiling the host cannot hold never binds.
+	configsSvc.RegisterValidator("agents", func(key, value string) error {
+		if err := agentconfig.ValidateConfigValue(key, value); err != nil {
+			return err
+		}
+		if key != "agents_total_memory_mb" && key != "min_free_memory_mb" {
+			return nil
+		}
+		total, _ := strconv.Atoi(configsSvc.GetOwned("agents", "agents_total_memory_mb"))
+		minFree, _ := strconv.Atoi(configsSvc.GetOwned("agents", "min_free_memory_mb"))
+		n, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return nil // not a number: the generic form validation reports it
+		}
+		if key == "agents_total_memory_mb" {
+			total = n
+		} else {
+			minFree = n
+		}
+		ramBytes, ok := sysmem.Total()
+		if !ok {
+			return nil
+		}
+		return agentconfig.ValidateMemoryBudget(total, minFree, int(ramBytes/(1024*1024)))
+	})
 
 	managerHandler.RegisterConfigDecorator("agents", func(rows []pkgentity.Config) []pkgentity.Config {
 		projectIDs, _ := agentproject.List(agentsLayout)

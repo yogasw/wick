@@ -16,8 +16,12 @@ type Host interface {
 	MemAvailable() (availMB, totalMB int, ok bool)
 	// PSI is the avg10 "some" and "full" pressure for memory or cpu.
 	PSI(resource string) (some10, full10 float64, ok bool)
-	// Load1 is the one-minute load average; NumCPU the online cores.
-	Load1() float64
+	// CPUTimes is the host-wide busy and total jiffies from /proc/stat
+	// (busy = user+nice+system+irq+softirq+steal; total adds idle+iowait),
+	// so busy % is a delta between two samples — not a load average.
+	CPUTimes() (busy, total uint64, ok bool)
+	// ProcsRunning is /proc/stat procs_running: tasks runnable right now.
+	ProcsRunning() int
 	NumCPU() int
 	// Scopes lists the agent scopes under agents.slice with their memory
 	// and member processes.

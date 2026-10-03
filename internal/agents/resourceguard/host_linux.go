@@ -112,17 +112,20 @@ func parsePSI(s string) (some, full float64, ok bool) {
 	return some, full, ok
 }
 
-func (h *linuxHost) Load1() float64 {
-	b, err := os.ReadFile("/proc/loadavg")
+func (h *linuxHost) CPUTimes() (uint64, uint64, bool) {
+	b, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0, 0, false
+	}
+	return parseCPUTimes(string(b))
+}
+
+func (h *linuxHost) ProcsRunning() int {
+	b, err := os.ReadFile("/proc/stat")
 	if err != nil {
 		return 0
 	}
-	fs := strings.Fields(string(b))
-	if len(fs) == 0 {
-		return 0
-	}
-	v, _ := strconv.ParseFloat(fs[0], 64)
-	return v
+	return parseProcsRunning(string(b))
 }
 
 func (h *linuxHost) NumCPU() int { return runtime.NumCPU() }

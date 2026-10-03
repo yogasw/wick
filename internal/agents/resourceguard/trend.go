@@ -2,6 +2,8 @@ package resourceguard
 
 import (
 	"math"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -52,4 +54,35 @@ func trimWindow(s []sample, now time.Time, window time.Duration) []sample {
 		i++
 	}
 	return append(s[:0], s[i:]...)
+}
+
+// parseCPUTimes reads the aggregate "cpu" line of /proc/stat.
+// busy = user+nice+system+irq+softirq+steal; total = busy+idle+iowait.
+// guest time is already counted inside user and is left out.
+func parseCPUTimes(stat string) (busy, total uint64, ok bool) {
+	for _, line := range strings.Split(stat, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 9 || f[0] != "cpu" {
+			continue
+		}
+		v := make([]uint64, 8)
+		for i := range v {
+			v[i], _ = strconv.ParseUint(f[i+1], 10, 64)
+		}
+		// user nice system idle iowait irq softirq steal
+		busy = v[0] + v[1] + v[2] + v[5] + v[6] + v[7]
+		return busy, busy + v[3] + v[4], true
+	}
+	return 0, 0, false
+}
+
+// parseProcsRunning reads procs_running from /proc/stat.
+func parseProcsRunning(stat string) int {
+	for _, line := range strings.Split(stat, "\n") {
+		if rest, ok := strings.CutPrefix(line, "procs_running "); ok {
+			n, _ := strconv.Atoi(strings.TrimSpace(rest))
+			return n
+		}
+	}
+	return 0
 }

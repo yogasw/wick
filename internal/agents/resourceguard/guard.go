@@ -1,18 +1,18 @@
-// Package resourceguard is wick's fast watchdog for the agent tree. It
-// samples memory and CPU every second, projects where memory is heading,
-// and climbs a ladder of actions — kill a runaway child, freeze its
-// agent, kill the agent; throttle the slice, pause the CPU hog, kill it —
-// before the machine stops answering.
+// Package resourceguard is wick's fast watchdog for every agent it spawns
+// — sessions, sub-agents, Team agents, workflow agent nodes, and whatever
+// they start, including `systemd-run --user` units outside agents.slice.
 //
-// The kernel OOM killer and the slice limits are the backstop; they act
-// at the cliff edge, by which time a small host has often been swapping
-// or thrashing for a minute. This acts on the trend.
+// One rule drives it: when the host nears a hang, stop agent child
+// processes one at a time until BOTH host CPU and host memory are back
+// under the safe line (80% by default). The kernel's own limits and OOM
+// killer stay as the backstop, but on a small host without swap they act
+// after the machine has already stopped answering: memory pressure ran
+// for minutes with no OOM kill before an incident this was built for.
 package resourceguard
 
 import (
 	"context"
 	"fmt"
-	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -23,7 +23,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Actions, from mildest to strongest. Action config caps the ladder.
+// Actions, from mildest to strongest. Action config caps what the guard
+// may do; measure mode records only regardless.
 const (
 	ActionOff   = "off"
 	ActionLog   = "log"
@@ -31,42 +32,44 @@ const (
 	ActionKill  = "kill"
 )
 
-// Ladder timings. Fixed rather than configurable: they encode how fast a
-// small host goes from "busy" to "unreachable", and a knob nobody can
-// reason about is worse than a sound default.
+// Fixed thresholds. They encode how fast a small host goes from "busy"
+// to "unreachable"; the safe line, the projection horizon and the CPU
+// pressure threshold are the knobs an operator has a reason to move.
 const (
 	trendWindow     = 10 * time.Second
-	killCooldown    = 3 * time.Second
-	freezeAfter     = 6 * time.Second  // critical this long despite child kills
-	scopeKillAfter  = 10 * time.Second // frozen and still critical
-	thawAfterCalm   = 15 * time.Second
+	actCooldown     = 2 * time.Second // re-measure between kills
+	memDangerPct    = 90
+	cpuDangerPct    = 95
 	cpuHotFor       = 10 * time.Second
-	cpuStopAfter    = 20 * time.Second
-	cpuResumeCalm   = 30 * time.Second
-	cpuRestoreCalm  = 60 * time.Second
-	cpuThrottle1Pct = 100
-	cpuThrottle2Pct = 70
 	psiMemFullMax   = 20
+	calmToRelease   = 30 * time.Second // resume paused work / restore quota
+	cpuThrottlePct  = 100
 	tickLagMax      = time.Second
 	historyMax      = 100
+	defaultSafePct  = 80
+	defaultPSICPU   = 60
+	defaultInterval = time.Second
 )
 
 // childPattern is what counts as a disposable child: build tools, test
-// runners, browsers, scripts. The agent CLI and wick are never matched.
+// runners, browsers, scripts.
 var childPattern = regexp.MustCompile(`^(node|esbuild|vite|vitest|go|compile|link|asm|cgo|gopls|chrome|chromium|headless_shell|python3?|npm|npx|pnpm|yarn|bun|deno|tsc|cargo|rustc|gcc|cc1|cc1plus|ld|make|java|playwright)$`)
 
-// neverTouch matches command lines the guard must never act on.
+// neverTouch matches command lines the guard must never act on: the
+// agent CLIs and wick itself.
 var neverTouch = regexp.MustCompile(`(?i)\b(claude|codex|support-tools|wick|opencode|gemini)\b`)
 
 // Config is read fresh on every tick so a change in the UI applies
 // without a restart.
 type Config struct {
-	Enabled     bool   // memory_guard_mode == enforce on Linux
+	Enabled     bool   // memory_guard_mode is enforce or measure, on Linux
+	Measure     bool   // measure mode: record what would be done, do nothing
 	Action      string // off|log|pause|kill
 	Interval    time.Duration
-	HorizonSec  int     // act when memory is projected to run out sooner
+	SafePct     int     // stop acting once host CPU and memory are both below this
+	HorizonSec  int     // memory projected to run out sooner than this = near hang
 	MinFreeMB   int     // hard floor
-	CPUPSIMax   float64 // cpu some avg10 above this counts as hot
+	CPUPSIMax   float64 // cpu "some" avg10 above this = tasks are queueing
 	CPUQuotaPct int     // configured slice quota, restored after a throttle
 	CPUWeight   int
 	TasksMax    int
@@ -76,17 +79,19 @@ type Config struct {
 // OnEvent.
 type Event struct {
 	At     time.Time `json:"at"`
-	Kind   string    `json:"kind"` // kill_child|freeze|thaw|kill_scope|throttle|restore|stop_child|cont_child|log
+	Kind   string    `json:"kind"` // kill_child|stop_child|cont_child|kill_scope|freeze|thaw|throttle|restore|near_hang|resolved
 	Scope  string    `json:"scope,omitempty"`
 	PID    int       `json:"pid,omitempty"`
 	Target string    `json:"target,omitempty"`
+	Detail string    `json:"detail"`
 	// AgentPID is the agent CLI that owns the scope, so the caller can
 	// tell that agent's session what happened. 0 = unknown (a run-* unit).
-	AgentPID int    `json:"agent_pid,omitempty"`
-	Detail   string `json:"detail"`
+	AgentPID int `json:"agent_pid,omitempty"`
+	// DryRun marks a record of what WOULD have been done (measure/log).
+	DryRun bool `json:"dry_run,omitempty"`
 }
 
-// Guard is the watchdog. Zero value is not usable; use New.
+// Guard is the watchdog. Use New.
 type Guard struct {
 	host    Host
 	load    func() Config
@@ -94,41 +99,36 @@ type Guard struct {
 	// OnQuotaApplied runs after configured slice limits are written live,
 	// so the caller can persist them where a reload reads them.
 	OnQuotaApplied func()
-	now     func() time.Time
+	now            func() time.Time
 
 	mu      sync.Mutex
 	history []Event
-	hold    bool // spawn gate, read by HoldSpawns
+	hold    bool
 
-	samples []sample
-	prevRSS map[int]uint64
-	prevCPU map[int]uint64
-	prevAt  time.Time
-	prevMem map[string]uint64
+	samples    []sample
+	prevCPU    map[int]uint64
+	prevAt     time.Time
+	prevBusy   uint64
+	prevTotal  uint64
+	scopeAgent map[string]int
+	dryRun     bool
+	lastTick   time.Time
 
-	memCritSince time.Time
-	lastKill     time.Time
-	frozen       string
-	frozenAt     time.Time
-	calmSince    time.Time
-
+	incident     bool
+	lastAct      time.Time
 	cpuHotSince  time.Time
-	cpuCalmSince time.Time
-	throttlePct  int // 0 = not throttled
-	stopped      map[int]time.Time
-	resumed      map[int]bool // pids resumed once; hot again → kill
+	calmSince    time.Time
+	throttled    bool
+	stopped      map[int]bool    // SIGSTOPped children (pause action)
+	frozen       map[string]bool // frozen scopes (pause action)
 	appliedQuota *[3]int
-	lastTick     time.Time
-	logOnly      bool
-	scopeAgent   map[string]int // scope → agent CLI pid, from the last sample
 }
 
 // New builds a guard over host, reading its config through load.
 func New(host Host, load func() Config) *Guard {
 	return &Guard{
 		host: host, load: load, now: time.Now,
-		prevRSS: map[int]uint64{}, prevCPU: map[int]uint64{}, prevMem: map[string]uint64{},
-		stopped: map[int]time.Time{}, resumed: map[int]bool{},
+		prevCPU: map[int]uint64{}, stopped: map[int]bool{}, frozen: map[string]bool{},
 	}
 }
 
@@ -140,7 +140,7 @@ func (g *Guard) Run(ctx context.Context) {
 	for {
 		interval := g.load().Interval
 		if interval <= 0 {
-			interval = time.Second
+			interval = defaultInterval
 		}
 		select {
 		case <-ctx.Done():
@@ -161,9 +161,9 @@ func (g *Guard) History() []Event {
 	return append([]Event(nil), g.history...)
 }
 
-// HoldSpawns reports whether a new agent should wait: memory is critical
-// or heading there. The spawn gate that a static free-memory floor cannot
-// be — a host losing 200 MB/s with 900 MB left is not fine.
+// HoldSpawns reports whether a new agent should wait: the host is near a
+// hang, or memory is heading there. A static free-memory floor cannot see
+// a host losing 200 MB/s with 900 MB left.
 func (g *Guard) HoldSpawns() bool {
 	if g == nil {
 		return false
@@ -173,14 +173,23 @@ func (g *Guard) HoldSpawns() bool {
 	return g.hold
 }
 
+func (g *Guard) setHold(v bool) {
+	g.mu.Lock()
+	g.hold = v
+	g.mu.Unlock()
+}
+
 func (g *Guard) emit(e Event) {
 	e.At = g.now()
 	if e.AgentPID == 0 && e.Scope != "" {
 		e.AgentPID = g.scopeAgent[e.Scope]
 	}
-	if g.logOnly {
-		// Action "log": nothing was done, so the record must not say it was.
-		e.Detail = "[log only, no action taken] " + e.Detail
+	switch e.Kind {
+	case "kill_child", "stop_child", "kill_scope", "freeze", "throttle":
+		if g.dryRun {
+			e.DryRun = true
+			e.Detail = "[measure only, nothing done] would have: " + e.Detail
+		}
 	}
 	g.mu.Lock()
 	g.history = append(g.history, e)
@@ -189,59 +198,237 @@ func (g *Guard) emit(e Event) {
 	}
 	g.mu.Unlock()
 	log.Warn().Str("component", "resourceguard").Str("kind", e.Kind).Str("scope", e.Scope).
-		Int("pid", e.PID).Str("target", e.Target).Msg(e.Detail)
+		Int("pid", e.PID).Str("target", e.Target).Bool("dry_run", e.DryRun).Msg(e.Detail)
 	if g.OnEvent != nil {
 		g.OnEvent(e)
 	}
+}
+
+// may reports whether the guard may really take an action of strength
+// need; false means it only records.
+func (g *Guard) may(cfg Config, need string) bool {
+	if g.dryRun {
+		return false
+	}
+	rank := map[string]int{ActionLog: 1, ActionPause: 2, ActionKill: 3}
+	return rank[cfg.Action] >= rank[need]
+}
+
+// hostState is one sample of the whole host.
+type hostState struct {
+	memUsedPct float64
+	availMB    int
+	eta        float64 // seconds to memory exhaustion at the current slope
+	busyPct    float64
+	psiMemFull float64
+	psiCPU     float64
+	running    int
+	cores      int
+	lagging    bool
+}
+
+func (g *Guard) sample(cfg Config, now time.Time) (hostState, bool) {
+	var st hostState
+	avail, total, ok := g.host.MemAvailable()
+	if !ok || total <= 0 {
+		return st, false
+	}
+	st.availMB = avail
+	st.memUsedPct = float64(total-avail) * 100 / float64(total)
+	g.samples = trimWindow(append(g.samples, sample{at: now, availMB: float64(avail)}), now, trendWindow)
+	st.eta = secondsToExhaustion(float64(avail), slopeMBps(g.samples))
+
+	if busy, tot, ok := g.host.CPUTimes(); ok {
+		if g.prevTotal != 0 && tot > g.prevTotal && busy >= g.prevBusy {
+			st.busyPct = float64(busy-g.prevBusy) * 100 / float64(tot-g.prevTotal)
+		}
+		g.prevBusy, g.prevTotal = busy, tot
+	}
+	_, st.psiMemFull, _ = g.host.PSI("memory")
+	st.psiCPU, _, _ = g.host.PSI("cpu")
+	st.running = g.host.ProcsRunning()
+	st.cores = g.host.NumCPU()
+	// wick's own responsiveness: a tick that fires a second late means the
+	// daemon itself is starved.
+	if !g.lastTick.IsZero() && cfg.Interval > 0 && now.Sub(g.lastTick)-cfg.Interval > tickLagMax {
+		st.lagging = true
+	}
+	return st, true
 }
 
 // Tick runs one sample-decide-act pass. Exported for tests.
 func (g *Guard) Tick() {
 	cfg := g.load()
 	now := g.now()
-	// The daemon's own responsiveness: a tick that fires a second late
-	// means wick itself is starved, which is one rung up on its own.
-	lagging := false
-	if !g.lastTick.IsZero() && cfg.Interval > 0 && now.Sub(g.lastTick)-cfg.Interval > tickLagMax {
-		lagging = true
-	}
-	g.lastTick = now
+	defer func() { g.lastTick = now }()
 	if !cfg.Enabled || cfg.Action == ActionOff || cfg.Action == "" {
 		g.setHold(false)
 		return
 	}
-	g.logOnly = cfg.Action == ActionLog
+	if cfg.SafePct <= 0 || cfg.SafePct > 100 {
+		cfg.SafePct = defaultSafePct
+	}
+	if cfg.CPUPSIMax <= 0 {
+		cfg.CPUPSIMax = defaultPSICPU
+	}
+	g.dryRun = cfg.Measure || cfg.Action == ActionLog
 	g.applyQuota(cfg)
 
+	st, ok := g.sample(cfg, now)
 	scopes := g.host.Scopes()
-	procs := g.readProcs(scopes)
-	g.memoryPass(cfg, now, scopes, procs)
-	g.cpuPass(cfg, now, procs, lagging)
+	procs := g.readProcs(scopes, now)
+	defer func() {
+		g.prevAt = now
+		g.prevCPU = map[int]uint64{}
+		for _, p := range procs {
+			g.prevCPU[p.PID] = p.CPUTicks
+		}
+	}()
+	if !ok {
+		return
+	}
+	safe := float64(cfg.SafePct)
+	horizon := float64(cfg.HorizonSec)
 
-	// Growth baselines for the next tick.
-	g.prevAt = now
-	g.prevRSS, g.prevCPU = map[int]uint64{}, map[int]uint64{}
-	for _, p := range procs {
-		g.prevRSS[p.PID] = p.RSSBytes
-		g.prevCPU[p.PID] = p.CPUTicks
+	// Memory near hang: very full, under the floor, projected to run out
+	// soon while already above the safe line, or stalling on reclaim.
+	memReason := ""
+	switch {
+	case st.memUsedPct >= memDangerPct:
+		memReason = fmt.Sprintf("memory %.0f%% used", st.memUsedPct)
+	case cfg.MinFreeMB > 0 && st.availMB < cfg.MinFreeMB:
+		memReason = fmt.Sprintf("%d MB free, below the %d MB floor", st.availMB, cfg.MinFreeMB)
+	case horizon > 0 && st.eta < horizon && st.memUsedPct >= safe:
+		memReason = fmt.Sprintf("memory %.0f%% used and falling — out in ~%.0fs", st.memUsedPct, st.eta)
+	case st.psiMemFull > psiMemFullMax:
+		memReason = fmt.Sprintf("memory pressure full avg10 %.0f%%", st.psiMemFull)
 	}
-	g.prevMem = map[string]uint64{}
-	for _, s := range scopes {
-		g.prevMem[s.Name] = s.MemBytes
+	// CPU near hang: busy AND tasks queueing. Busy alone is a build using
+	// idle CPU, which is fine.
+	queueing := st.psiCPU > cfg.CPUPSIMax || (st.cores > 0 && st.running > 2*st.cores)
+	if st.busyPct >= cpuDangerPct && queueing {
+		if g.cpuHotSince.IsZero() {
+			g.cpuHotSince = now
+		}
+	} else {
+		g.cpuHotSince = time.Time{}
 	}
+	cpuReason := ""
+	if st.lagging {
+		cpuReason = fmt.Sprintf("wick itself is responding slowly (CPU %.0f%%)", st.busyPct)
+	} else if !g.cpuHotSince.IsZero() && now.Sub(g.cpuHotSince) >= cpuHotFor {
+		cpuReason = fmt.Sprintf("CPU %.0f%% busy with pressure %.0f%% for %s", st.busyPct, st.psiCPU, now.Sub(g.cpuHotSince).Round(time.Second))
+	}
+
+	g.setHold(memReason != "" || g.incident ||
+		(horizon > 0 && st.eta < 2*horizon && st.memUsedPct >= safe))
+
+	aboveSafe := st.memUsedPct >= safe || st.busyPct >= safe
+	if !g.incident && (memReason != "" || cpuReason != "") {
+		g.incident = true
+		reason := strings.TrimPrefix(memReason+"; "+cpuReason, "; ")
+		reason = strings.TrimSuffix(reason, "; ")
+		g.emit(Event{Kind: "near_hang", Detail: fmt.Sprintf("host near a hang (%s); stopping agent work until CPU and memory are under %d%%", reason, cfg.SafePct)})
+		// A brief first step for CPU: cap the agents while the hog is found.
+		if cpuReason != "" && !g.throttled {
+			if g.may(cfg, ActionPause) {
+				_ = g.host.SetSliceCPU(cpuThrottlePct, cfg.CPUWeight, cfg.TasksMax)
+				g.throttled = true
+			}
+			g.emit(Event{Kind: "throttle", Detail: fmt.Sprintf("agent CPU capped at %d%% while the host recovers", cpuThrottlePct)})
+		}
+	}
+
+	if g.incident && !aboveSafe {
+		g.incident = false
+		g.emit(Event{Kind: "resolved", Detail: fmt.Sprintf("host back under %d%% (CPU %.0f%%, memory %.0f%%)", cfg.SafePct, st.busyPct, st.memUsedPct)})
+	}
+	if g.incident {
+		g.calmSince = time.Time{}
+		if now.Sub(g.lastAct) >= actCooldown {
+			g.actOnce(cfg, st, scopes, procs)
+			g.lastAct = now
+		}
+		return
+	}
+	g.release(cfg, now, aboveSafe)
 }
 
-func (g *Guard) setHold(v bool) {
-	g.mu.Lock()
-	g.hold = v
-	g.mu.Unlock()
+// actOnce stops ONE thing, chosen by what is short: memory → the largest
+// resident child; CPU → the child that used the most CPU since the last
+// sample. With no child left, the heaviest agent scope goes.
+func (g *Guard) actOnce(cfg Config, st hostState, scopes []Scope, procs []agentProc) {
+	byMem := st.memUsedPct >= float64(cfg.SafePct)
+	why := fmt.Sprintf("CPU %.0f%%, memory %.0f%%", st.busyPct, st.memUsedPct)
+	if p, ok := pickChild(procs, byMem, g.stopped); ok {
+		if g.may(cfg, ActionKill) {
+			_ = g.host.Signal(p.PID, syscall.SIGKILL)
+		} else if g.may(cfg, ActionPause) {
+			_ = g.host.Signal(p.PID, syscall.SIGSTOP)
+			g.stopped[p.PID] = true
+			g.emit(Event{Kind: "stop_child", Scope: p.scope, PID: p.PID, Target: describe(p),
+				Detail: fmt.Sprintf("wick paused `%s` (%s) to keep the host alive (%s)", describe(p), gb(p.RSSBytes), why)})
+			return
+		}
+		g.emit(Event{Kind: "kill_child", Scope: p.scope, PID: p.PID, Target: describe(p),
+			Detail: fmt.Sprintf("wick stopped `%s` (%s) to keep the host alive (%s); re-run it when the host is quieter", describe(p), gb(p.RSSBytes), why)})
+		return
+	}
+	s, ok := g.pickScope(scopes, procs, byMem)
+	if !ok {
+		return
+	}
+	if g.may(cfg, ActionKill) {
+		_ = g.host.KillScope(s.Name)
+	} else if g.may(cfg, ActionPause) {
+		_ = g.host.Freeze(s.Name, true)
+		g.frozen[s.Name] = true
+		g.emit(Event{Kind: "freeze", Scope: s.Name,
+			Detail: fmt.Sprintf("wick paused agent %s (%s) to keep the host alive (%s)", s.Name, gb(s.MemBytes), why)})
+		return
+	}
+	g.emit(Event{Kind: "kill_scope", Scope: s.Name,
+		Detail: fmt.Sprintf("wick stopped agent %s (%s) to keep the host alive (%s); the conversation resumes on its next message", s.Name, gb(s.MemBytes), why)})
+}
+
+// release undoes the temporary steps once the host has been calm.
+func (g *Guard) release(cfg Config, now time.Time, aboveSafe bool) {
+	if aboveSafe {
+		g.calmSince = time.Time{}
+		return
+	}
+	if g.calmSince.IsZero() {
+		g.calmSince = now
+	}
+	if now.Sub(g.calmSince) < calmToRelease {
+		return
+	}
+	for pid := range g.stopped {
+		if _, alive := g.host.Proc(pid); alive {
+			_ = g.host.Signal(pid, syscall.SIGCONT)
+			g.emit(Event{Kind: "cont_child", PID: pid, Detail: fmt.Sprintf("host calm; resumed pid %d", pid)})
+		}
+		delete(g.stopped, pid)
+	}
+	for s := range g.frozen {
+		_ = g.host.Freeze(s, false)
+		g.emit(Event{Kind: "thaw", Scope: s, Detail: "host calm; resumed agent " + s})
+		delete(g.frozen, s)
+	}
+	if g.throttled {
+		_ = g.host.SetSliceCPU(cfg.CPUQuotaPct, cfg.CPUWeight, cfg.TasksMax)
+		g.throttled = false
+		q := [3]int{cfg.CPUQuotaPct, cfg.CPUWeight, cfg.TasksMax}
+		g.appliedQuota = &q
+		g.emit(Event{Kind: "restore", Detail: "host calm; agent CPU quota back to " + quotaLabel(cfg.CPUQuotaPct)})
+	}
 }
 
 // applyQuota writes the configured slice CPU controls when they change —
-// the "live" in live quota. Skipped while a throttle is in force; the
-// restore step writes the configured value back.
+// the "live" in live quota. Skipped while a throttle is in force; release
+// writes the configured value back.
 func (g *Guard) applyQuota(cfg Config) {
-	if g.throttlePct != 0 {
+	if g.throttled || cfg.Measure {
 		return
 	}
 	want := [3]int{cfg.CPUQuotaPct, cfg.CPUWeight, cfg.TasksMax}
@@ -258,18 +445,16 @@ func (g *Guard) applyQuota(cfg Config) {
 	}
 }
 
-// agentProc is a process with its scope and per-second growth.
+// agentProc is a process with its scope and CPU used since last sample.
 type agentProc struct {
 	Proc
 	scope    string
 	isAgent  bool // the agent CLI itself (the scope's root process)
-	rssRate  float64
-	cpuTicks uint64 // ticks used since the previous sample
+	cpuTicks uint64
 }
 
-func (g *Guard) readProcs(scopes []Scope) []agentProc {
+func (g *Guard) readProcs(scopes []Scope, now time.Time) []agentProc {
 	self := g.host.SelfScope()
-	dt := g.now().Sub(g.prevAt).Seconds()
 	var out []agentProc
 	g.scopeAgent = map[string]int{}
 	for _, s := range scopes {
@@ -289,9 +474,6 @@ func (g *Guard) readProcs(scopes []Scope) []agentProc {
 			if ap.isAgent && g.scopeAgent[s.Name] == 0 {
 				g.scopeAgent[s.Name] = pid
 			}
-			if prev, ok := g.prevRSS[pid]; ok && dt > 0 {
-				ap.rssRate = (float64(p.RSSBytes) - float64(prev)) / dt
-			}
 			if prev, ok := g.prevCPU[pid]; ok && p.CPUTicks >= prev {
 				ap.cpuTicks = p.CPUTicks - prev
 			}
@@ -310,12 +492,13 @@ func disposable(p agentProc) bool {
 	return childPattern.MatchString(p.Comm)
 }
 
-// pickGrowing is the disposable child growing fastest, falling back to
-// the largest when nothing has a rate yet.
-func pickGrowing(procs []agentProc) (agentProc, bool) {
+// pickChild is the disposable child holding the most memory (byMem) or
+// using the most CPU since the last sample. Already-paused children are
+// skipped: pausing them again frees nothing.
+func pickChild(procs []agentProc, byMem bool, skip map[int]bool) (agentProc, bool) {
 	var c []agentProc
 	for _, p := range procs {
-		if disposable(p) {
+		if disposable(p) && !skip[p.PID] {
 			c = append(c, p)
 		}
 	}
@@ -323,46 +506,50 @@ func pickGrowing(procs []agentProc) (agentProc, bool) {
 		return agentProc{}, false
 	}
 	sort.SliceStable(c, func(i, j int) bool {
-		if c[i].rssRate != c[j].rssRate {
-			return c[i].rssRate > c[j].rssRate
+		if byMem {
+			return c[i].RSSBytes > c[j].RSSBytes
+		}
+		if c[i].cpuTicks != c[j].cpuTicks {
+			return c[i].cpuTicks > c[j].cpuTicks
 		}
 		return c[i].RSSBytes > c[j].RSSBytes
 	})
+	if !byMem && c[0].cpuTicks == 0 {
+		return agentProc{}, false // nothing is actually burning CPU
+	}
 	return c[0], true
 }
 
-// pickCPUHog is the disposable child that used the most CPU since the
-// last sample.
-func pickCPUHog(procs []agentProc) (agentProc, bool) {
-	var best agentProc
-	found := false
-	for _, p := range procs {
-		if disposable(p) && p.cpuTicks > 0 && (!found || p.cpuTicks > best.cpuTicks) {
-			best, found = p, true
-		}
-	}
-	return best, found
-}
-
-// pickScope is the agent scope growing fastest (largest as tie-break).
-func (g *Guard) pickScope(scopes []Scope) (Scope, bool) {
+// pickScope is the heaviest agent scope — by memory, or by CPU used since
+// the last sample — never wick's own and never one already frozen.
+func (g *Guard) pickScope(scopes []Scope, procs []agentProc, byMem bool) (Scope, bool) {
 	self := g.host.SelfScope()
+	cpu := map[string]uint64{}
+	for _, p := range procs {
+		cpu[p.scope] += p.cpuTicks
+	}
 	var best Scope
-	bestRate := math.Inf(-1)
 	found := false
 	for _, s := range scopes {
-		if s.Name == self {
+		if s.Name == self || g.frozen[s.Name] {
 			continue
 		}
-		rate := float64(s.MemBytes) - float64(g.prevMem[s.Name])
-		if !found || rate > bestRate || (rate == bestRate && s.MemBytes > best.MemBytes) {
-			best, bestRate, found = s, rate, true
+		better := !found
+		if found {
+			if byMem {
+				better = s.MemBytes > best.MemBytes
+			} else {
+				better = cpu[s.Name] > cpu[best.Name]
+			}
+		}
+		if better {
+			best, found = s, true
 		}
 	}
 	return best, found
 }
 
-func mb(b uint64) string { return fmt.Sprintf("%.1f GB", float64(b)/(1<<30)) }
+func gb(b uint64) string { return fmt.Sprintf("%.1f GB", float64(b)/(1<<30)) }
 
 func describe(p agentProc) string {
 	cmd := p.Cmdline
@@ -373,195 +560,6 @@ func describe(p agentProc) string {
 		cmd = p.Comm
 	}
 	return cmd
-}
-
-func (g *Guard) memoryPass(cfg Config, now time.Time, scopes []Scope, procs []agentProc) {
-	avail, _, ok := g.host.MemAvailable()
-	if !ok {
-		return
-	}
-	g.samples = trimWindow(append(g.samples, sample{at: now, availMB: float64(avail)}), now, trendWindow)
-	slope := slopeMBps(g.samples)
-	eta := secondsToExhaustion(float64(avail), slope)
-	_, full10, _ := g.host.PSI("memory")
-
-	horizon := float64(cfg.HorizonSec)
-	floor := cfg.MinFreeMB
-	reason := ""
-	switch {
-	case floor > 0 && avail < floor:
-		reason = fmt.Sprintf("%d MB free, below the %d MB floor", avail, floor)
-	case horizon > 0 && eta < horizon && (floor <= 0 || avail < 2*floor):
-		reason = fmt.Sprintf("%d MB free, falling %.0f MB/s — out in ~%.0fs", avail, -slope, eta)
-	case full10 > psiMemFullMax:
-		reason = fmt.Sprintf("memory pressure full avg10 %.0f%%", full10)
-	}
-	// The spawn gate opens a horizon early: hold new agents while memory
-	// is heading for the floor even before the ladder needs to act.
-	g.setHold(reason != "" || (horizon > 0 && eta < 2*horizon && (floor <= 0 || avail < 3*floor)))
-
-	if reason == "" {
-		g.memCritSince = time.Time{}
-		if g.calmSince.IsZero() {
-			g.calmSince = now
-		}
-		if g.frozen != "" && now.Sub(g.calmSince) >= thawAfterCalm {
-			if g.act(cfg, ActionPause) {
-				_ = g.host.Freeze(g.frozen, false)
-			}
-			g.emit(Event{Kind: "thaw", Scope: g.frozen, Detail: "memory calm again; resumed " + g.frozen})
-			g.frozen = ""
-		}
-		return
-	}
-	g.calmSince = time.Time{}
-	if g.memCritSince.IsZero() {
-		g.memCritSince = now
-	}
-	crit := now.Sub(g.memCritSince)
-
-	// Rung 3: the frozen agent is still the problem.
-	if g.frozen != "" && now.Sub(g.frozenAt) >= scopeKillAfter {
-		if g.act(cfg, ActionKill) {
-			_ = g.host.KillScope(g.frozen)
-		}
-		g.emit(Event{Kind: "kill_scope", Scope: g.frozen,
-			Detail: fmt.Sprintf("wick stopped agent %s to keep the host alive (%s); the session resumes on its next message", g.frozen, reason)})
-		g.frozen = ""
-		g.lastKill = now
-		return
-	}
-	// Rung 1: a runaway child.
-	if now.Sub(g.lastKill) >= killCooldown {
-		if p, ok := pickGrowing(procs); ok && (crit < freezeAfter || g.frozen != "") {
-			if g.act(cfg, ActionKill) {
-				_ = g.host.Signal(p.PID, syscall.SIGKILL)
-			} else if g.act(cfg, ActionPause) {
-				_ = g.host.Signal(p.PID, syscall.SIGSTOP)
-				g.stopped[p.PID] = now
-			}
-			g.emit(Event{Kind: "kill_child", Scope: p.scope, PID: p.PID, Target: describe(p),
-				Detail: fmt.Sprintf("wick stopped `%s` (%s, %+.0f MB/s) to keep the host alive: %s",
-					describe(p), mb(p.RSSBytes), p.rssRate/(1<<20), reason)})
-			g.lastKill = now
-			return
-		}
-	}
-	// Rung 2: still critical after child kills, or nothing to kill.
-	if g.frozen == "" && crit >= freezeAfter {
-		if s, ok := g.pickScope(scopes); ok {
-			if g.act(cfg, ActionPause) {
-				_ = g.host.Freeze(s.Name, true)
-			}
-			g.frozen, g.frozenAt = s.Name, now
-			g.emit(Event{Kind: "freeze", Scope: s.Name,
-				Detail: fmt.Sprintf("wick paused agent %s (%s) to keep the host alive: %s", s.Name, mb(s.MemBytes), reason)})
-		}
-	}
-}
-
-// act reports whether the configured action reaches the rung `need`.
-// log only records; pause stops short of killing.
-func (g *Guard) act(cfg Config, need string) bool {
-	rank := map[string]int{ActionLog: 1, ActionPause: 2, ActionKill: 3}
-	return rank[cfg.Action] >= rank[need]
-}
-
-func (g *Guard) cpuPass(cfg Config, now time.Time, procs []agentProc, lagging bool) {
-	some10, _, _ := g.host.PSI("cpu")
-	max := cfg.CPUPSIMax
-	if max <= 0 {
-		max = 90
-	}
-	n := g.host.NumCPU()
-	hot := some10 > max || (n > 0 && g.host.Load1()/float64(n) > 2)
-	if !hot && !lagging {
-		g.cpuHotSince = time.Time{}
-		if g.cpuCalmSince.IsZero() {
-			g.cpuCalmSince = now
-		}
-		calm := now.Sub(g.cpuCalmSince)
-		for pid, at := range g.stopped {
-			if _, alive := g.host.Proc(pid); !alive {
-				delete(g.stopped, pid)
-				continue
-			}
-			if calm >= cpuResumeCalm || now.Sub(at) >= 2*cpuResumeCalm {
-				_ = g.host.Signal(pid, syscall.SIGCONT)
-				delete(g.stopped, pid)
-				g.resumed[pid] = true
-				g.emit(Event{Kind: "cont_child", PID: pid, Detail: fmt.Sprintf("CPU calm; resumed pid %d", pid)})
-			}
-		}
-		if g.throttlePct != 0 && calm >= cpuRestoreCalm {
-			_ = g.host.SetSliceCPU(cfg.CPUQuotaPct, cfg.CPUWeight, cfg.TasksMax)
-			g.throttlePct = 0
-			q := [3]int{cfg.CPUQuotaPct, cfg.CPUWeight, cfg.TasksMax}
-			g.appliedQuota = &q
-			g.emit(Event{Kind: "restore", Detail: fmt.Sprintf("CPU calm for %s; agent CPU quota back to %s", cpuRestoreCalm, quotaLabel(cfg.CPUQuotaPct))})
-		}
-		return
-	}
-	g.cpuCalmSince = time.Time{}
-	if g.cpuHotSince.IsZero() {
-		g.cpuHotSince = now
-		if lagging {
-			// A starved daemon skips the wait: one rung up immediately.
-			g.cpuHotSince = now.Add(-cpuHotFor)
-		}
-	}
-	hotFor := now.Sub(g.cpuHotSince)
-	reason := fmt.Sprintf("CPU pressure %.0f%% for %s", some10, hotFor.Round(time.Second))
-	if lagging {
-		reason += ", wick itself responding slowly"
-	}
-
-	// Rung 1: throttle the slice, 100% then 70%.
-	if hotFor >= cpuHotFor {
-		next := 0
-		switch {
-		case g.throttlePct == 0:
-			next = cpuThrottle1Pct
-		case g.throttlePct == cpuThrottle1Pct && hotFor >= cpuHotFor+cpuHotFor:
-			next = cpuThrottle2Pct
-		}
-		if cfg.CPUQuotaPct > 0 && next > cfg.CPUQuotaPct && g.throttlePct == 0 {
-			next = cpuThrottle2Pct // already capped tighter than rung 1
-		}
-		if next != 0 {
-			if g.act(cfg, ActionPause) {
-				_ = g.host.SetSliceCPU(next, cfg.CPUWeight, cfg.TasksMax)
-			}
-			g.throttlePct = next
-			g.emit(Event{Kind: "throttle", Detail: fmt.Sprintf("agent CPU capped at %d%% for now: %s", next, reason)})
-		}
-	}
-	// Rung 2 and 3: pause the hog; a hog that comes back hot is killed.
-	if hotFor >= cpuStopAfter && now.Sub(g.lastKill) >= killCooldown {
-		p, ok := pickCPUHog(procs)
-		if !ok {
-			return
-		}
-		if _, already := g.stopped[p.PID]; already {
-			return
-		}
-		if g.resumed[p.PID] {
-			if g.act(cfg, ActionKill) {
-				_ = g.host.Signal(p.PID, syscall.SIGKILL)
-			}
-			delete(g.resumed, p.PID)
-			g.emit(Event{Kind: "kill_child", Scope: p.scope, PID: p.PID, Target: describe(p),
-				Detail: fmt.Sprintf("wick stopped `%s` — it took the CPU again after a pause (%s); re-run it when the host is quieter", describe(p), reason)})
-		} else {
-			if g.act(cfg, ActionPause) {
-				_ = g.host.Signal(p.PID, syscall.SIGSTOP)
-				g.stopped[p.PID] = now
-			}
-			g.emit(Event{Kind: "stop_child", Scope: p.scope, PID: p.PID, Target: describe(p),
-				Detail: fmt.Sprintf("wick paused `%s` to keep the host responsive (%s); it resumes once the CPU is calm", describe(p), reason)})
-		}
-		g.lastKill = now
-	}
 }
 
 func quotaLabel(pct int) string {

@@ -4,6 +4,8 @@ package config
 // its defaults. The mechanism lives in internal/agents/provider/memscope;
 // this file only decides the numbers.
 
+import "fmt"
+
 // Guard modes. off is genuinely nothing — no slice unit, no oom_score_adj,
 // no argv wrapping — so an install that never opts in behaves exactly as
 // it did before the feature existed.
@@ -138,4 +140,29 @@ func ResolveAgentLimitMB(instanceMB, globalMB int) int {
 		return instanceMB
 	}
 	return globalMB
+}
+
+// ValidateMemoryBudget refuses a combined agent ceiling that, with wick's
+// own reserve and the free-memory floor, adds up to more than the
+// machine has. Such a ceiling never binds: the host runs out first, and
+// on a small host without swap that is a hang, not an OOM kill.
+// ramMB <= 0 (unknown machine size) or a zero ceiling accepts.
+func ValidateMemoryBudget(totalAgentsMB, minFreeMB, ramMB int) error {
+	if ramMB <= 0 || totalAgentsMB <= 0 {
+		return nil
+	}
+	if minFreeMB < 0 {
+		minFreeMB = 0
+	}
+	need := totalAgentsMB + reserveWickMB + minFreeMB
+	if need <= ramMB {
+		return nil
+	}
+	max := ramMB - reserveWickMB - minFreeMB
+	if max < 0 {
+		max = 0
+	}
+	return fmt.Errorf("agents_total_memory_mb %d + wick reserve %d + min_free_memory_mb %d = %d MB, more than this machine's %d MB; "+
+		"the ceiling could never be reached before the machine runs out — use at most %d MB (or 0 for none)",
+		totalAgentsMB, reserveWickMB, minFreeMB, need, ramMB, max)
 }

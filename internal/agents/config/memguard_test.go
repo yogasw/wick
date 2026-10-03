@@ -33,6 +33,7 @@ func TestMemoryGuardConfigKeys_MatchLoaders(t *testing.T) {
 		"resource_guard_exhaust_horizon_sec",
 		"resource_guard_cpu_psi_max",
 		"resource_guard_action",
+		"resource_guard_safe_pct",
 	} {
 		if !got[want] {
 			t.Fatalf("key %q not derived by StructToConfigs — the loader reading it gets an empty value", want)
@@ -165,5 +166,22 @@ func TestDeriveMemoryDefaults_ZeroConcurrency(t *testing.T) {
 	if got.AgentMaxMB != got.AgentsTotalMB {
 		t.Fatalf("zero concurrency should behave as 1: per-agent %d vs budget %d",
 			got.AgentMaxMB, got.AgentsTotalMB)
+	}
+}
+
+// A combined ceiling the machine cannot hold never binds — the host runs
+// out first. Unknown RAM or no ceiling accepts.
+func TestValidateMemoryBudget(t *testing.T) {
+	if err := ValidateMemoryBudget(3000, 500, 7600); err != nil {
+		t.Fatalf("fits: %v", err)
+	}
+	if err := ValidateMemoryBudget(3400, 500, 3600); err == nil {
+		t.Fatal("3400 + reserve + 500 on 3600 MB accepted")
+	}
+	if err := ValidateMemoryBudget(0, 500, 3600); err != nil {
+		t.Fatalf("no ceiling refused: %v", err)
+	}
+	if err := ValidateMemoryBudget(99999, 0, 0); err != nil {
+		t.Fatalf("unknown RAM refused: %v", err)
 	}
 }

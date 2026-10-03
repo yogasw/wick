@@ -160,12 +160,16 @@ type memoryReport struct {
 }
 
 type resourceGuardReport struct {
-	Action     string                `json:"action"`
-	IntervalMS int                   `json:"interval_ms"`
-	HorizonSec int                   `json:"exhaust_horizon_sec"`
-	CPUPSIMax  int                   `json:"cpu_psi_max"`
-	HoldSpawns bool                  `json:"hold_spawns"`
-	Events     []resourceguard.Event `json:"events"`
+	Action  string `json:"action"`
+	SafePct int    `json:"safe_pct"`
+	// CPUQuotaPct is percent of ONE core; the UI also shows it as a
+	// share of the whole machine using CPUCores.
+	CPUQuotaPct int                   `json:"cpu_quota_pct"`
+	IntervalMS  int                   `json:"interval_ms"`
+	HorizonSec  int                   `json:"exhaust_horizon_sec"`
+	CPUPSIMax   int                   `json:"cpu_psi_max"`
+	HoldSpawns  bool                  `json:"hold_spawns"`
+	Events      []resourceguard.Event `json:"events"`
 }
 
 // memoryCurrentLimits echoes what is configured now, so the UI can show
@@ -483,12 +487,14 @@ func buildMemoryReport() memoryReport {
 	}
 
 	rep.Guard = resourceGuardReport{
-		Action:     memGuardConfig("resource_guard_action", resourceguard.ActionKill),
-		IntervalMS: memGuardInt("resource_guard_interval_ms"),
-		HorizonSec: memGuardInt("resource_guard_exhaust_horizon_sec"),
-		CPUPSIMax:  memGuardInt("resource_guard_cpu_psi_max"),
-		HoldSpawns: resourceGuard.HoldSpawns(),
-		Events:     resourceGuard.History(),
+		Action:      memGuardConfig("resource_guard_action", resourceguard.ActionKill),
+		SafePct:     memGuardInt("resource_guard_safe_pct"),
+		CPUQuotaPct: memGuardInt("agents_cpu_quota_pct"),
+		IntervalMS:  memGuardInt("resource_guard_interval_ms"),
+		HorizonSec:  memGuardInt("resource_guard_exhaust_horizon_sec"),
+		CPUPSIMax:   memGuardInt("resource_guard_cpu_psi_max"),
+		HoldSpawns:  resourceGuard.HoldSpawns(),
+		Events:      resourceGuard.History(),
 	}
 
 	if okT {
