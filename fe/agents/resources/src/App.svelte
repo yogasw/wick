@@ -9,7 +9,7 @@
   import TopTable from "$lib/TopTable.svelte";
   import ProcessExplorer from "$lib/ProcessExplorer.svelte";
   import WrapperPanel from "$lib/WrapperPanel.svelte";
-  import { humanBytes, humanBps, humanPct, humanDuration, clockTime, pctOf } from "$lib/format.js";
+  import { humanBytes, humanBps, humanPct, humanDuration, clockTime, pctOf, machineShare, guardKindLabel } from "$lib/format.js";
   import Gauge from "$lib/components/Gauge.svelte";
   import type { MemoryReport, SeriesResponse } from "$lib/types.js";
 
@@ -315,9 +315,49 @@
               <span class="text-black-700 dark:text-black-600">→</span>
               <span class="font-semibold">{row.next} MB</span>
             </p>
+            {#if machineShare(row.next, report.total_bytes ?? 0)}
+              <p class="mt-0.5 text-[11px] text-black-600 dark:text-black-700">
+                {row.now ? `${machineShare(row.now, report.total_bytes ?? 0)} → ` : ""}{machineShare(row.next, report.total_bytes ?? 0)}
+              </p>
+            {/if}
           </div>
         {/each}
       </div>
+    </div>
+  {/if}
+
+  <!-- Resource Guard: what the fast watchdog did, newest first -->
+  {#if report?.guard}
+    {@const guardEvents = [...(report.guard.events ?? [])].reverse().slice(0, 10)}
+    <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Resource Guard</h2>
+          <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+            {report.mode === "enforce"
+              ? `Watching memory and CPU every ${report.guard.interval_ms || 1000} ms · action: ${report.guard.action}`
+              : "Runs only in 'enforce' mode."}
+          </p>
+        </div>
+        {#if report.guard.hold_spawns}
+          <span class="rounded-lg bg-yellow-100 px-2 py-1 text-xs font-medium text-yellow-800 dark:bg-yellow-950 dark:text-yellow-300">
+            New agents held — memory falling
+          </span>
+        {/if}
+      </div>
+      {#if guardEvents.length === 0}
+        <p class="mt-3 text-xs text-black-700 dark:text-black-600">No actions taken since wick started.</p>
+      {:else}
+        <ul class="mt-3 divide-y divide-white-300">
+          {#each guardEvents as ev, i (ev.at + i)}
+            <li class="py-2 text-xs">
+              <span class="tabular-nums text-black-700 dark:text-black-600">{clockTime(ev.at)}</span>
+              <span class="ml-2 font-semibold text-black-900 dark:text-white-100">{guardKindLabel(ev.kind)}</span>
+              <span class="ml-2 text-black-800 dark:text-white-100">{ev.detail}</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </div>
   {/if}
 

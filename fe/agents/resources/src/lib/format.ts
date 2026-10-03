@@ -70,3 +70,37 @@ export function pctOf(part: number, whole: number): number {
   if (!Number.isFinite(whole) || whole <= 0) return 0;
   return Math.min(100, (part / whole) * 100);
 }
+
+// machineShare labels a limit in MB as a share of this machine's RAM, so
+// "1800 MB" reads as what it means on THIS box ("23% of RAM") — the
+// same number is generous on 8 GB and reckless on 2 GB. Empty when the
+// limit is unset or the machine size is unknown.
+export function machineShare(mb: number, totalBytes: number): string {
+  if (!Number.isFinite(mb) || mb <= 0 || !Number.isFinite(totalBytes) || totalBytes <= 0) return "";
+  const pct = (mb * 1024 * 1024 * 100) / totalBytes;
+  return `${pct < 1 ? "<1" : Math.round(pct)}% of RAM`;
+}
+
+// guardKindLabel names a Resource Guard action for the history list.
+export function guardKindLabel(kind: string): string {
+  switch (kind) {
+    case "kill_child":
+      return "Stopped process";
+    case "stop_child":
+      return "Paused process";
+    case "cont_child":
+      return "Resumed process";
+    case "freeze":
+      return "Paused agent";
+    case "thaw":
+      return "Resumed agent";
+    case "kill_scope":
+      return "Stopped agent";
+    case "throttle":
+      return "Capped CPU";
+    case "restore":
+      return "CPU restored";
+    default:
+      return kind;
+  }
+}

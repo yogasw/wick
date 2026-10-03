@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { humanBytes, humanBps, humanPct, humanDuration, pctOf, middleTruncate } from "../format.js";
+import { humanBytes, humanBps, humanPct, humanDuration, pctOf, middleTruncate, machineShare, guardKindLabel } from "../format.js";
 
 // These render the numbers an operator reads a limit decision off, so the
 // boundaries matter more than the happy path.
@@ -99,5 +99,24 @@ describe("middleTruncate", () => {
       const got = middleTruncate("x".repeat(n), 50);
       expect(got.length).toBeLessThanOrEqual(50);
     }
+  });
+});
+
+describe("machineShare", () => {
+  it("reads a limit as a share of this machine", () => {
+    expect(machineShare(1024, 8 * 1024 ** 3)).toBe("13% of RAM");
+    expect(machineShare(10, 8 * 1024 ** 3)).toBe("<1% of RAM");
+  });
+  it("is empty when the limit or the machine size is unknown", () => {
+    expect(machineShare(0, 8 * 1024 ** 3)).toBe("");
+    expect(machineShare(512, 0)).toBe("");
+  });
+});
+
+describe("guardKindLabel", () => {
+  it("names the guard actions and passes unknown kinds through", () => {
+    expect(guardKindLabel("kill_child")).toBe("Stopped process");
+    expect(guardKindLabel("throttle")).toBe("Capped CPU");
+    expect(guardKindLabel("mystery")).toBe("mystery");
   });
 });

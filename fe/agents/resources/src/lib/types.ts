@@ -126,6 +126,27 @@ export interface MemoryReport {
   history: HistoryStats;
   disk: DiskRow;
   top: TopProcesses;
+  guard?: GuardReport;
+}
+
+// Resource Guard: the fast watchdog's knobs and its recent actions.
+export interface GuardEvent {
+  at: string;
+  kind: string;
+  scope?: string;
+  pid?: number;
+  target?: string;
+  detail: string;
+  agent_pid?: number;
+}
+
+export interface GuardReport {
+  action: string;
+  interval_ms: number;
+  exhaust_horizon_sec: number;
+  cpu_psi_max: number;
+  hold_spawns: boolean;
+  events: GuardEvent[] | null;
 }
 
 export interface MachineSample {
