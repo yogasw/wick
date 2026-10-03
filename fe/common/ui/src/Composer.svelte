@@ -59,6 +59,10 @@
         window to report, and an empty ring reads as "0% used" rather
         than "not measured yet". */
     contextMeter?: ContextMeter;
+    /** One short line about this chat (an agent's connector count), shown
+        in the toolbar beside the context meter rather than on a row of
+        its own under the composer. */
+    caption?: string;
   };
 
   /** ContextMeter is the composer's view of the model's context window.
@@ -90,6 +94,7 @@
     mentionAgents = [],
     mentionAvatar,
     contextMeter,
+    caption,
     commands = [],
   }: Props = $props();
 
@@ -1484,7 +1489,10 @@
     {/if}
 
     <!-- right: context ring + provider chip (Claude-style) + send -->
-    <div class="ml-auto flex items-center gap-2 shrink-0">
+    <div class="ml-auto flex items-center gap-2 min-w-0">
+      {#if caption}
+        <span data-testid="composer-caption" title={caption} class="min-w-0 truncate text-[11px] text-black-600 dark:text-black-700" style="max-width: 14rem">{caption}</span>
+      {/if}
       {#if contextMeter}
         <!-- The ring is a gauge, not a button-with-a-number: at a glance
              you want "how full", and only then the exact figure. It turns

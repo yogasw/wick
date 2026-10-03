@@ -2623,7 +2623,7 @@
             <kbd class="rounded border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1 text-[10px] font-mono text-black-600 dark:text-black-700">Ctrl+↓</kbd>
           </button>
         {/if}
-        <div class="page-col relative pb-6">
+        <div class="page-col relative pb-3 md:pb-6">
           <!-- /project picker floats above the composer. /provider now opens
                the composer's own provider drill (see composerRef), so no
                separate provider modal. -->
@@ -2696,10 +2696,8 @@
                   onClick: openContextPopover,
                 }
               : undefined}
+            caption={agentMode?.agent?.caption}
           />
-          {#if agentMode?.agent?.caption}
-            <p class="mt-1.5 pr-1 text-right text-[11px] text-black-600 dark:text-black-700">{agentMode.agent.caption}</p>
-          {/if}
         </div>
       </div>
     {:else if activeView === "approvals"}
