@@ -9,7 +9,7 @@
 
 <div data-trace-kind="search" class="px-3 py-2 font-mono text-[11px]">
   {#if isCall}
-    <div><span class="text-black-600 dark:text-black-500">pattern </span><span class="text-emerald-700 dark:text-emerald-400 break-all">{display.pattern}</span></div>
+    <div><span class="text-black-600 dark:text-black-500">pattern </span><span class="text-green-700 dark:text-green-400 break-all">{display.pattern}</span></div>
     {#if display.path}<div><span class="text-black-600 dark:text-black-500">in </span><span class="break-all text-black-900 dark:text-white-100">{display.path}</span></div>{/if}
   {:else}
     <div class="mb-1 text-[10px] text-black-600 dark:text-black-500">{hits.length} result{hits.length === 1 ? "" : "s"}</div>

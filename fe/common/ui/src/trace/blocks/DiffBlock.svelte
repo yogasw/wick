@@ -16,9 +16,9 @@
 
   function cls(l: string): string {
     if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("diff ") || l.startsWith("***")) return "text-black-600 dark:text-black-500 font-semibold";
-    if (l.startsWith("@@")) return "text-sky-700 dark:text-sky-400";
-    if (l.startsWith("+")) return "bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300";
-    if (l.startsWith("-")) return "bg-red-50 text-red-800 dark:bg-red-900/30 dark:text-red-300";
+    if (l.startsWith("@@")) return "text-sky-700 dark:text-sky-300";
+    if (l.startsWith("+")) return "bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400";
+    if (l.startsWith("-")) return "bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-300";
     return "text-black-900 dark:text-white-100";
   }
 </script>
