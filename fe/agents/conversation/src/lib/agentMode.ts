@@ -18,6 +18,9 @@ export type AgentMode = {
   /** Rail tabs the agent's features turn off. A switched-off feature
       hides its tab outright instead of showing a tab that fails on click. */
   hideTabs?: RailTab[];
+  /** Replaces the "N tabs hidden" rail footer (an A2A remote agent has
+      no local tools at all, not tools it was refused). */
+  railNote?: string;
   /** Called instead of DetailView's own push("/") after the session is
       deleted: in the Agents app that path is the /sessions list, i.e. it
       would throw the user out of the app. */

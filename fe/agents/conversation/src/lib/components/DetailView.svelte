@@ -2330,7 +2330,7 @@
 
   /* The Team app's rail footer: says the missing tabs were withheld from
      the agent, so their absence does not read as a fault. */
-  const railHiddenNote = $derived(agentMode ? hiddenTabNote(agentMode.hideTabs) : "");
+  const railHiddenNote = $derived(agentMode ? (agentMode.railNote ?? hiddenTabNote(agentMode.hideTabs)) : "");
 
   const railTabs = $derived(
     railTabsAll.filter(
@@ -3259,7 +3259,7 @@
        corner is clipped per-child instead (first/last:rounded-l-xl). -->
   <div
     bind:this={railEl}
-    class="fixed top-1/2 right-0 z-20 -translate-y-1/2 flex flex-col rounded-l-xl border border-r-0 border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md"
+    class="fixed top-1/2 right-0 z-20 -translate-y-1/2 {railOrdered.length === 0 ? 'hidden' : 'flex'} flex-col rounded-l-xl border border-r-0 border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md"
   >
     {#each railFit.shown as tab, i}
       <button

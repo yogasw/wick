@@ -13,6 +13,8 @@
   import AgentSettings from "./lib/components/AgentSettings.svelte";
   import AgentWizard from "./lib/components/AgentWizard.svelte";
   import RemoteAgentWizard from "./lib/components/team/RemoteAgentWizard.svelte";
+  import RemoteQuestionCard from "./lib/components/team/RemoteQuestionCard.svelte";
+  import { isRemoteAgent, remoteChatMode, remoteSubtitle } from "./lib/remoteAgent.js";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
   import AgentConnections from "./lib/components/AgentConnections.svelte";
   import AgentScheduled from "./lib/components/AgentScheduled.svelte";
@@ -269,10 +271,13 @@
      agent. A new chat lives in the Chats drawer, not here. */
   const menuItems = $derived([
     { label: "Chats", hint: "main chat and history", onclick: () => openPanel({ kind: "sessions" }) },
-    { label: "Settings", hint: "persona, access, tools, avatar", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
+    selected && isRemoteAgent(selected)
+      ? { label: "Settings", hint: "remote A2A, mention, avatar", onclick: () => openPanel({ kind: "settings", tab: "remote" }) }
+      : { label: "Settings", hint: "persona, access, tools, avatar", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
     { label: "Connections", hint: "Slack and health", onclick: () => openPanel({ kind: "connections" }) },
     { label: "Scheduled", hint: "work it runs on a schedule", onclick: () => openPanel({ kind: "scheduled" }) },
-    { label: "Duplicate agent", hint: "copies persona & access, not connections", divider: true, onclick: duplicate },
+    // A copy of a remote agent would be a local one with no persona.
+    ...(selected && isRemoteAgent(selected) ? [] : [{ label: "Duplicate agent", hint: "copies persona & access, not connections", divider: true, onclick: duplicate }]),
     selected?.disabled
       ? { label: "Enable", hint: "the agent can be used again", onclick: toggleDisabled }
       : { label: "Disable", hint: "closes all connector access", danger: true, onclick: toggleDisabled },
@@ -294,8 +299,11 @@
   let railToggle = $state(0);
   let railOpen = $state(false);
 
+  // An A2A remote agent has no local process: no rail, its own caption.
+  const remoteMode = $derived(selected && isRemoteAgent(selected) ? remoteChatMode(selected) : null);
   const agentMode = $derived({
-    hideTabs: hiddenTabsFor(selected?.features, selected ? nativeToolsOf(selected.allowed_native_tools) : null),
+    hideTabs: remoteMode?.hideTabs ?? hiddenTabsFor(selected?.features, selected ? nativeToolsOf(selected.allowed_native_tools) : null),
+    ...(remoteMode ? { railNote: remoteMode.railNote } : {}),
     hideHeader: true,
     hidePickers: true,
     onDeleted: () => go({ session: null }),
@@ -314,7 +322,7 @@
           shape: selected.avatar?.shape,
           color: selected.avatar?.color,
           expression: selected.avatar?.expression,
-          caption: connectorCaption(selected.allowed_connectors),
+          caption: remoteMode?.caption ?? connectorCaption(selected.allowed_connectors),
         }
       : undefined,
   });
@@ -411,7 +419,7 @@
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-2">
               <span class="roster-name min-w-0 flex-1 truncate font-semibold text-black-900 dark:text-white-100">
-                {a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[9px] font-bold tracking-wider text-green-600 dark:text-green-400">★ CAPTAIN</span>{/if}
+                {a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[9px] font-bold tracking-wider text-green-600 dark:text-green-400">★ CAPTAIN</span>{/if}{#if isRemoteAgent(a)}<span class="ml-1.5 rounded-full bg-white-300 px-1.5 py-px align-middle text-[9px] font-bold uppercase tracking-wider text-black-800 dark:bg-navy-600 dark:text-black-600" data-testid="roster-remote-badge">A2A remote</span>{/if}
               </span>
               <span class="shrink-0 text-xs text-black-700">{rosterTime(a.last_active)}</span>
             </span>
@@ -484,7 +492,7 @@
             {:else}
               <span class="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-green-500 align-middle"></span>online
             {/if}
-            · @{selected.handle}{route.session ? " · other chat" : ""}
+            · @{selected.handle}{route.session ? " · other chat" : ""}{#if isRemoteAgent(selected)}<span data-testid="header-remote"> · {remoteSubtitle(selected)}</span>{/if}
           </div>
         </div>
         <!-- Always-on switcher: names the conversation on screen and opens
@@ -506,6 +514,7 @@
           <svg class="h-3 w-3 shrink-0 text-black-700" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg>
         </button>
         <KebabMenu items={menuItems} ariaLabel="Agent menu" width={240} />
+        {#if !remoteMode}
         <button
           type="button"
           class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600 {railOpen ? 'bg-white-300 dark:bg-navy-600' : ''}"
@@ -517,10 +526,21 @@
         >
           <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="2"></rect><path d="M10 2.5v11"></path></svg>
         </button>
+        {/if}
       {:else}
         <div class="flex-1"></div>
       {/if}
     </header>
+    {#if selected && chatSessionId && remoteMode}
+      <RemoteQuestionCard
+        {base}
+        agentId={selected.id}
+        sessionId={chatSessionId}
+        handle={selected.handle}
+        turn={`${selected.status}|${selected.last_active ?? ""}`}
+        question={route.session ? "" : selected.last_preview}
+      />
+    {/if}
     <div class="min-h-0 flex-1">
       {#if selected && chatSessionId}
         {#key chatSessionId}

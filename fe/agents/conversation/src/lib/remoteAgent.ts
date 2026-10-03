@@ -124,3 +124,16 @@ export function testSummary(r: { ok: boolean; state: string; latency_ms: number;
   const step = r.state === "card_failed" ? "Agent card" : r.state === "client_failed" ? "Client" : r.state === "send_failed" ? "Ping" : r.state || "Test";
   return `${step} failed${r.error ? `: ${r.error}` : ""}`;
 }
+
+/** remoteChatMode is what DetailView's agentMode differs in for a remote
+    agent: no rail tabs, a footer saying why, the A2A composer caption. */
+export function remoteChatMode(a: Pick<AgentItem, "remote">): { hideTabs: RailTab[]; railNote: string; caption: string } {
+  return { hideTabs: [...REMOTE_HIDDEN_TABS], railNote: REMOTE_RAIL_NOTE, caption: remoteCaption(a.remote?.host) };
+}
+
+/** remoteSubtitle is the chat header's second line: badge, card version, host. */
+export function remoteSubtitle(a: Pick<AgentItem, "remote">): string {
+  const r = a.remote;
+  if (!r) return "A2A remote";
+  return ["A2A remote", r.card?.version ? `v${r.card.version}` : "", r.host].filter(Boolean).join(" · ");
+}

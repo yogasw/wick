@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
   authReq, egressWarning, formatBytes, hostOf, isRemoteAgent, limitsError, remoteCaption, remoteSettingsTab,
-  REMOTE_HIDDEN_TABS, testSummary,
+  REMOTE_HIDDEN_TABS, remoteChatMode, remoteSubtitle, testSummary,
 } from "../remoteAgent.js";
 
 describe("remoteAgent", () => {
@@ -55,5 +55,23 @@ describe("remoteAgent", () => {
     expect(formatBytes(2048)).toBe("2 KB");
     expect(testSummary({ ok: true, state: "message", latency_ms: 40, reply: "pong", error: "" })).toBe("Replied in 40 ms — “pong”");
     expect(testSummary({ ok: false, state: "card_failed", latency_ms: 0, reply: "", error: "404" })).toBe("Agent card failed: 404");
+  });
+});
+
+describe("remote chat mode", () => {
+  const remote = {
+    remote: { host: "research.example.com", card: { version: "1.4.0" } },
+  } as unknown as Parameters<typeof remoteChatMode>[0];
+
+  test("hides the rail, says why, and captions the composer", () => {
+    const m = remoteChatMode(remote);
+    expect(m.caption).toBe("via A2A · research.example.com · no local tools");
+    expect(m.hideTabs).toEqual(expect.arrayContaining(["source", "files", "process"]));
+    expect(m.railNote).toContain("No local tools");
+  });
+
+  test("the header subtitle carries the card version and host", () => {
+    expect(remoteSubtitle(remote)).toBe("A2A remote · v1.4.0 · research.example.com");
+    expect(remoteSubtitle({})).toBe("A2A remote");
   });
 });
