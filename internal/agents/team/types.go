@@ -11,6 +11,7 @@ package team
 import (
 	"encoding/json"
 	"hash/fnv"
+	"slices"
 )
 
 // Grant levels for ConnectorGrant.Level.
@@ -87,14 +88,35 @@ func DefaultFeatures() Features {
 
 // Avatar is the agent's drawn identity in the roster.
 type Avatar struct {
-	// Shape is one of AvatarShapes.
+	// Kind picks the renderer: "" is the classic avatar, AvatarKindBlob the
+	// blob mascot. Absent in rows written before blobs existed, so those
+	// keep decoding as classic.
+	Kind string `json:"kind,omitempty"`
+	// Shape is one of AvatarShapes, or of BlobShapes for a blob.
 	Shape string `json:"shape"`
 	// Color is a CSS color, normally a #rrggbb hex.
 	Color string `json:"color"`
+	// Expression is one of BlobExpressions; only a blob has one.
+	Expression string `json:"expression,omitempty"`
 }
 
 // AvatarShapes lists the shapes the avatar component can draw.
 var AvatarShapes = []string{"circle", "squircle", "triangle", "diamond"}
+
+// AvatarKindBlob is Avatar.Kind for the blob mascot.
+const AvatarKindBlob = "blob"
+
+// BlobShapes and BlobExpressions mirror BLOB_SHAPES / BLOB_EXPRESSIONS in
+// fe/common/avatar/src/blob/core/types.ts.
+var BlobShapes = []string{
+	"circle", "pebble", "squircle", "capsule", "triangle", "cloud",
+	"droplet", "flame", "medal", "acorn", "jellyfish", "clover",
+}
+
+var BlobExpressions = []string{
+	"neutral", "attentive", "surprised", "excited", "happy", "angry",
+	"sad", "suspicious", "curious", "proud", "shy", "unimpressed",
+}
 
 // DefaultAvatar is used when a row carries none.
 func DefaultAvatar() Avatar { return Avatar{Shape: "circle", Color: "#6366f1"} }
@@ -117,19 +139,23 @@ func DefaultAvatarFor(handle string) Avatar {
 	}
 }
 
-// NormalizeAvatar replaces an unknown shape or an empty color with the
-// default, so the UI never receives a value it cannot draw.
+// NormalizeAvatar replaces an unknown kind, shape or expression, or an
+// empty color, with the default, so the UI never receives a value it
+// cannot draw. An unknown kind falls back to classic.
 func NormalizeAvatar(a Avatar) Avatar {
 	d := DefaultAvatar()
-	ok := false
-	for _, s := range AvatarShapes {
-		if a.Shape == s {
-			ok = true
-			break
+	if a.Kind == AvatarKindBlob {
+		if !slices.Contains(BlobShapes, a.Shape) {
+			a.Shape = BlobShapes[0]
 		}
-	}
-	if !ok {
-		a.Shape = d.Shape
+		if !slices.Contains(BlobExpressions, a.Expression) {
+			a.Expression = BlobExpressions[0]
+		}
+	} else {
+		a.Kind, a.Expression = "", ""
+		if !slices.Contains(AvatarShapes, a.Shape) {
+			a.Shape = d.Shape
+		}
 	}
 	if a.Color == "" {
 		a.Color = d.Color

@@ -158,6 +158,23 @@ func TestNormalizeAvatar(t *testing.T) {
 	if a := DecodeAvatar(`{"shape":"diamond","color":"#000000"}`); a.Shape != "diamond" || a.Color != "#000000" {
 		t.Fatalf("got %+v", a)
 	}
+	// A classic row never carries the blob-only fields, even if sent.
+	if a := DecodeAvatar(`{"kind":"sprite","shape":"cloud","expression":"happy"}`); a.Kind != "" || a.Shape != "circle" || a.Expression != "" {
+		t.Fatalf("unknown kind: %+v", a)
+	}
+}
+
+func TestNormalizeBlobAvatar(t *testing.T) {
+	if a := DecodeAvatar(`{"kind":"blob","shape":"cloud","color":"#4b8fea","expression":"happy"}`); a.Kind != "blob" || a.Shape != "cloud" || a.Expression != "happy" || a.Color != "#4b8fea" {
+		t.Fatalf("got %+v", a)
+	}
+	if a := DecodeAvatar(`{"kind":"blob","shape":"diamond","expression":"smug"}`); a.Shape != "circle" || a.Expression != "neutral" || a.Color == "" {
+		t.Fatalf("fallback: %+v", a)
+	}
+	// Old rows stay byte-identical: no kind/expression keys appear.
+	if got := EncodeAvatar(Avatar{Shape: "diamond", Color: "#000000"}); got != `{"shape":"diamond","color":"#000000"}` {
+		t.Fatalf("classic encode = %s", got)
+	}
 }
 
 func reachOf(ids ...string) Reach {
