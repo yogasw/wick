@@ -645,6 +645,19 @@
           <li>Custom → managed: a new managed folder is created; the custom path is left untouched.</li>
           <li>Live sessions: the cwd shifts at the next spawn; a running subprocess is unaffected until it restarts.</li>
         </ul>
+        {#if !data.is_new && !data.is_protected}
+          <div class="mt-5 rounded-lg border border-white-300 p-3 dark:border-navy-600" data-testid="make-agent">
+            <h3 class="text-xs font-semibold text-black-900 dark:text-white-100">Make this an agent</h3>
+            <p class="mt-1 text-xs leading-relaxed text-black-700 dark:text-black-600">
+              Turn this project into a Team agent with its name, description and system prompt. Its chats and files
+              stay; it moves from the Projects list to Team. Only the project's owner can do this.
+            </p>
+            <a
+              href={`${base}/team?panel=new&project=${encodeURIComponent(projectID)}`}
+              class="mt-3 inline-block rounded-lg border border-white-400 px-3 py-1.5 text-xs font-medium text-black-800 transition-colors hover:bg-white-200 dark:border-navy-600 dark:text-black-600 dark:hover:bg-navy-800"
+            >Make this an agent…</a>
+          </div>
+        {/if}
         {#if !data.is_new}
           <!-- Danger zone sits last inside Advanced: findable (search
                "delete" opens it) without a red button on every visit. -->

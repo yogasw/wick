@@ -79,6 +79,8 @@ export type AgentWrite = Partial<{
   disabled: boolean;
   allow_provider_switch: boolean;
   is_captain: boolean;
+  /** Create only, with project_id: make that project this agent's own. */
+  convert: boolean;
 }>;
 
 export type AgentConnector = {

@@ -454,7 +454,7 @@
       aria-modal="true"
     >
       {#if route.panel.kind === "new"}
-        <AgentWizard {base} taken={agents.map((a) => a.handle)} onClose={() => openPanel(null)} {onCreated} />
+        <AgentWizard {base} taken={agents.map((a) => a.handle)} convertProject={route.panel.project} onClose={() => openPanel(null)} {onCreated} />
       {:else if selected && route.panel.kind === "settings"}
         <AgentSettings
           {base}

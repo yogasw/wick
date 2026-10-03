@@ -23,10 +23,13 @@
     base: string;
     /** Handles already in use, so the suggestion never collides. */
     taken: string[];
+    /** "Make this an agent…": the project to convert. Its persona fills
+        the form and the new agent takes the project over. */
+    convertProject?: string;
     onClose: () => void;
     onCreated: (a: AgentItem) => void;
   };
-  let { base, taken, onClose, onCreated }: Props = $props();
+  let { base, taken, convertProject, onClose, onCreated }: Props = $props();
 
   const STEPS = ["Persona", "Access"];
   let step = $state(1);
@@ -63,6 +66,7 @@
 
   onMount(() => {
     runApi(getProjectOptions(base, { hideTeam: true })).then((p) => { projects = p ?? []; }).catch(() => {});
+    if (convertProject) void pickProject(convertProject);
     runApi(listAgentConnectors(base))
       .then((c) => { catalog = c ?? []; })
       .catch((e) => { catalogError = e instanceof Error ? e.message : String(e); })
@@ -154,6 +158,7 @@
           system_prompt: systemPrompt,
           avatar: { shape, color },
           ...(projectId ? { project_id: projectId } : {}),
+          ...(convertProject && projectId === convertProject ? { convert: true } : {}),
           allowed_connectors: $state.snapshot(grants) as ConnectorGrant[],
           include_new_connectors: false,
           run_as: "caller",
@@ -189,7 +194,7 @@
 </script>
 
 <div class="flex items-center gap-2 px-6 pt-5">
-  <h2 class="flex-1 text-[17px] font-semibold text-black-900 dark:text-white-100">New agent</h2>
+  <h2 class="flex-1 text-[17px] font-semibold text-black-900 dark:text-white-100">{convertProject ? "Make this an agent" : "New agent"}</h2>
   <button
     type="button"
     class="flex h-8 w-8 items-center justify-center rounded-lg text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600"
@@ -213,6 +218,11 @@
 
 <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 pb-2">
   {#if step === 1}
+    {#if convertProject}
+      <p class="rounded-xl bg-white-200 px-3 py-2 text-xs text-black-800 dark:bg-navy-800 dark:text-black-600" data-testid="aw-convert-note">
+        This project becomes the agent's own: its chats and files stay, it leaves the Projects list and lives on in Team.
+      </p>
+    {/if}
     <div class="rounded-xl border border-white-300 p-3 dark:border-navy-600">
       <label class={label} for="aw-brief">What should this agent do?</label>
       <textarea id="aw-brief" class="{input} min-h-16" rows="2" bind:value={brief} placeholder="e.g. Review pull requests critically and point out risky changes"></textarea>

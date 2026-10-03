@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/tool"
@@ -130,5 +131,38 @@ func TestSharedProjectOwners(t *testing.T) {
 	got := sharedProjectOwners(c, globalMgr.Registry().Projects(), []string{"mine", "theirs", "nobody"})
 	if len(got) != 1 || got["theirs"] == "" {
 		t.Fatalf("shared = %v, want only theirs", got)
+	}
+}
+
+// "Make this an agent…": the owner's ordinary project becomes the new
+// agent's own (Team tag added); a second convert, someone else's project
+// and a protected one are refused.
+func TestTeamAgentConvertProject(t *testing.T) {
+	withTeamWorld(t)
+	u := &entity.User{ID: "u1"}
+	seedTeamProject(t, "p1", u.ID)
+	create := func(handle, pid string) int {
+		t.Helper()
+		w, c := teamReq(t, u, http.MethodPost, "/api/team/agents", map[string]any{"handle": handle, "project_id": pid, "convert": true, "tagline": "Ops"}, nil)
+		apiTeamAgentCreate(c)
+		return w.Code
+	}
+	if code := create("conv", "p1"); code != http.StatusOK {
+		t.Fatalf("convert: status %d", code)
+	}
+	if p, _ := globalMgr.Registry().Project("p1"); !project.IsAgentProject(p.Meta) {
+		t.Fatalf("project not tagged: %v", p.Meta.Tags)
+	}
+	if code := create("conv2", "p1"); code != http.StatusConflict {
+		t.Fatalf("second convert: status %d, want 409", code)
+	}
+	if code := create("conv3", ""); code != http.StatusBadRequest {
+		t.Fatalf("convert without project: status %d, want 400", code)
+	}
+	if _, err := globalMgr.CreateProject(context.Background(), project.CreateOptions{ID: "home", Name: "home", OwnerUserID: u.ID, Tags: []string{project.PersonalTag}}); err != nil {
+		t.Fatal(err)
+	}
+	if code := create("conv4", "home"); code != http.StatusBadRequest {
+		t.Fatalf("protected: status %d, want 400", code)
 	}
 }

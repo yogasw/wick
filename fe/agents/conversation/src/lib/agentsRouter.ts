@@ -11,7 +11,9 @@ import { writable, type Readable } from "svelte/store";
      /team/<handle>?session=<id>         one of its other conversations
      /team/<handle>?panel=settings&tab=… Settings drawer over the chat
      /team/<handle>?panel=sessions       "Other chats" drawer
-     /team?panel=new                     the + Agent wizard */
+     /team?panel=new                     the + Agent wizard
+     /team?panel=new&project=<id>        the wizard converting that project
+                                         ("Make this an agent…") */
 
 export type SettingsTab = "persona" | "access" | "tools" | "avatar" | "advanced";
 export const SETTINGS_TABS: SettingsTab[] = ["persona", "access", "tools", "avatar", "advanced"];
@@ -29,7 +31,7 @@ export function settingsTabOf(t: string | null): SettingsTab {
 export type AgentsPanel =
   | { kind: "settings"; tab: SettingsTab }
   | { kind: "sessions" }
-  | { kind: "new" };
+  | { kind: "new"; project?: string };
 
 export type AgentsRoute = {
   /** Agent handle from the path; null = no agent named (roster root). */
@@ -70,7 +72,7 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
       panel = { kind: "sessions" };
       break;
     case "new":
-      panel = { kind: "new" };
+      panel = q.get("project") ? { kind: "new", project: q.get("project")! } : { kind: "new" };
       break;
   }
   const session = handle ? q.get("session") || null : null;
@@ -86,6 +88,7 @@ export function formatAgentsRoute(r: AgentsRoute, base: string): string {
   if (r.panel) {
     q.set("panel", r.panel.kind);
     if (r.panel.kind === "settings") q.set("tab", r.panel.tab);
+    if (r.panel.kind === "new" && r.panel.project) q.set("project", r.panel.project);
   }
   const qs = q.toString();
   return qs ? `${path}?${qs}` : path;

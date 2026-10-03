@@ -1,4 +1,4 @@
-import { describe, test, expect } from "vitest";
+import { describe, it, test, expect } from "vitest";
 import { parseAgentsRoute, formatAgentsRoute, type AgentsRoute } from "../agentsRouter.js";
 import { hiddenTabsFor } from "../agentMode.js";
 
@@ -127,5 +127,14 @@ describe("agentForm", () => {
     expect(destructiveAllowed(g("read"), cat)).toEqual([]);
     expect(destructiveAllowed(g("pick", ["read_thread"]), cat)).toEqual([]);
     expect(destructiveAllowed(g("pick", ["delete_message"]), cat)).toEqual(["Slack · Delete"]);
+  });
+});
+
+describe("convert route", () => {
+  it("round-trips the wizard's project to convert", () => {
+    const r = parseAgentsRoute("/tools/agents/team", "?panel=new&project=p%201", "/tools/agents");
+    expect(r.panel).toEqual({ kind: "new", project: "p 1" });
+    expect(formatAgentsRoute(r, "/tools/agents")).toBe("/tools/agents/team?panel=new&project=p+1");
+    expect(parseAgentsRoute("/tools/agents/team", "?panel=new", "/tools/agents").panel).toEqual({ kind: "new" });
   });
 });

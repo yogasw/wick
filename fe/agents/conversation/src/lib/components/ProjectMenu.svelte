@@ -111,6 +111,21 @@
         Project settings
       </a>
 
+      <!-- The server refuses a protected, someone else's or already
+           converted project; the wizard shows why. -->
+      <a
+        role="menuitem"
+        data-testid="project-menu-make-agent"
+        href={`${base}/team?panel=new&project=${encodeURIComponent(project.id)}`}
+        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-black-800 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700"
+      >
+        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <circle cx="8" cy="6" r="2.5"></circle>
+          <path d="M3.5 13.5c.6-2.3 2.4-3.5 4.5-3.5s3.9 1.2 4.5 3.5" stroke-linecap="round"></path>
+        </svg>
+        Make this an agent…
+      </a>
+
       <a
         role="menuitem"
         href={`${base}/sessions`}

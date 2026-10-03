@@ -143,6 +143,10 @@ type teamAgentWriteReq struct {
 	Disabled             *bool                  `json:"disabled"`
 	AllowProviderSwitch  *bool                  `json:"allow_provider_switch"`
 	IsCaptain            *bool                  `json:"is_captain"`
+	// Convert (create only, with ProjectID) turns an ordinary project
+	// into this agent's own: the project gets the Team tag, so it leaves
+	// the sidebar and lives on in the Team app. See checkConvertProject.
+	Convert bool `json:"convert"`
 }
 
 // captainSystemAddon is the starting persona of the auto-created Captain.
@@ -589,6 +593,30 @@ func requireUsableProject(c *tool.Ctx, id string) bool {
 	return true
 }
 
+// checkConvertProject guards "Make this an agent…": only the project's
+// owner may convert it, never a protected (default/personal) project, and
+// never one that already is an agent's or that another agent points at.
+// Writes the error; false = stop.
+func checkConvertProject(c *tool.Ctx, pid string) bool {
+	proj, _ := globalMgr.Registry().Project(pid)
+	refuse := func(code int, msg string) bool {
+		c.JSON(code, map[string]string{"error": msg})
+		return false
+	}
+	switch {
+	case proj.Meta.OwnerUserID == "" || proj.Meta.OwnerUserID != actorID(c):
+		return refuse(http.StatusForbidden, "only the project's owner can make it an agent")
+	case project.IsProtected(proj.Meta):
+		return refuse(http.StatusBadRequest, "a default or personal project cannot become an agent")
+	case project.IsAgentProject(proj.Meta):
+		return refuse(http.StatusConflict, "this project is already an agent")
+	}
+	if rows, err := globalTeam.ListByProjects(c.Context(), []string{pid}); err != nil || len(rows) > 0 {
+		return refuse(http.StatusConflict, "an agent already uses this project")
+	}
+	return true
+}
+
 // createTeamAgentProject makes the project a new agent's persona lives in.
 func createTeamAgentProject(c *tool.Ctx, name, icon, description, systemPrompt, provider, model, preset string) (string, error) {
 	opt := project.CreateOptions{
@@ -739,8 +767,15 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 	}
 	pid := strings.TrimSpace(str(req.ProjectID))
 	existing := pid != ""
+	if req.Convert && !existing {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "convert needs a project_id"})
+		return
+	}
 	if existing {
 		if !requireUsableProject(c, pid) {
+			return
+		}
+		if req.Convert && !checkConvertProject(c, pid) {
 			return
 		}
 	} else {
@@ -787,7 +822,12 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		// agent's name rather than being dropped for the project's.
 		if proj, ok := globalMgr.Registry().Project(pid); ok {
 			meta := proj.Meta
-			if applyProjectFields(&meta, req) {
+			changed := applyProjectFields(&meta, req)
+			if req.Convert && !project.IsAgentProject(meta) {
+				meta.Tags = append(slices.Clone(meta.Tags), project.AgentTag)
+				changed = true
+			}
+			if changed {
 				if _, err := globalMgr.UpdateProject(c.Context(), pid, meta); err != nil {
 					c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 					return
