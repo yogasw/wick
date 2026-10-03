@@ -1,4 +1,6 @@
 import type { AgentItem, AgentShare, ShareUser } from "./api/team.js";
+import type { RailTab } from "./agentMode.js";
+import { REMOTE_HIDDEN_TABS } from "./remoteAgent.js";
 
 /* Agents shared with the user (chat only, plan keputusan 18). The roster
    marks them, their ⋯ menu keeps only what a recipient may do, and their
@@ -25,6 +27,17 @@ export const VIEWER_MENU = ["Chats"];
 export function agentMenu<T extends { label: string }>(a: Shared | null | undefined, items: T[], info: T): T[] {
   if (!isSharedAgent(a)) return items;
   return [...items.filter((i) => VIEWER_MENU.includes(i.label)), info];
+}
+
+export const SHARED_RAIL_NOTE = "Shared with you for chat only — its files and tools stay with its owner.";
+
+/** sharedChatMode is what DetailView's agentMode differs in for a shared
+    agent's chat: every rail tab hidden (they read the owner's project), a
+    footer saying why, and nothing loaded for them. null for the user's own
+    agent. */
+export function sharedChatMode(a: Shared | null | undefined): { hideTabs: RailTab[]; railNote: string; chatOnly: true } | null {
+  if (!isSharedAgent(a)) return null;
+  return { hideTabs: [...REMOTE_HIDDEN_TABS], railNote: SHARED_RAIL_NOTE, chatOnly: true };
 }
 
 export const PICK_LIMIT = 8;

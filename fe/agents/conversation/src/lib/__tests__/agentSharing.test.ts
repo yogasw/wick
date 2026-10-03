@@ -1,5 +1,6 @@
 import { describe, test, expect } from "vitest";
-import { isSharedAgent, sharedLabel, agentMenu, pickableUsers, PICK_LIMIT } from "../agentSharing.js";
+import { isSharedAgent, sharedLabel, agentMenu, pickableUsers, PICK_LIMIT, sharedChatMode, SHARED_RAIL_NOTE } from "../agentSharing.js";
+import { REMOTE_HIDDEN_TABS } from "../remoteAgent.js";
 import { rosterEntries } from "../rosterList.js";
 import type { AgentItem } from "../api/team.js";
 
@@ -35,5 +36,16 @@ describe("agentSharing", () => {
     const own = { id: "mine", name: "Mine", handle: "mine", last_active: "2026-10-01T00:00:00Z" } as AgentItem;
     const shared = { id: "lena", name: "Lena", handle: "lena", role: "viewer", last_active: "2026-10-02T00:00:00Z" } as AgentItem;
     expect(rosterEntries([own, shared], [], "").map((e) => e.id)).toEqual(["lena", "mine"]);
+  });
+  test("sharedChatMode hides the whole rail of a shared agent's chat", () => {
+    const m = sharedChatMode({ role: "viewer" });
+    expect(m?.chatOnly).toBe(true);
+    expect(m?.railNote).toBe(SHARED_RAIL_NOTE);
+    expect([...(m?.hideTabs ?? [])].sort()).toEqual([...REMOTE_HIDDEN_TABS].sort());
+    for (const tab of ["notes", "source", "files", "process", "browser", "subagents", "todos", "ticket", "workspace", "scheduled"]) {
+      expect(m?.hideTabs).toContain(tab);
+    }
+    expect(sharedChatMode({ role: "" } as AgentItem)).toBeNull();
+    expect(sharedChatMode(null)).toBeNull();
   });
 });

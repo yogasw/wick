@@ -264,6 +264,7 @@
      backend (whole tree, ranked, fresh per keystroke); `/` lists commands from
      GET /api/composer/commands (built-in actions + skills). */
   function searchMentionFiles(query: string): Promise<string[]> {
+    if (agentMode?.chatOnly) return Promise.resolve([]);
     return run(searchMentionPaths(base, sessionId, query).pipe(Effect.provide(WickClientLayer)))
       .catch(() => [] as string[]);
   }
@@ -877,6 +878,7 @@
   }
 
   function loadFiles() {
+    if (agentMode?.chatOnly) return;
     filesLoading = true;
     filesLoadError = "";
     run(listFiles(base, sessionId).pipe(Effect.provide(WickClientLayer)))
@@ -1069,6 +1071,7 @@
   }
 
   function loadProcesses() {
+    if (agentMode?.chatOnly) return;
     // In-flight guard: if a fetch is already running, don't fire a second one
     // — but remember that a refresh was asked for, so we run once more when
     // the current one lands. Without the re-arm, a lifecycle event arriving
@@ -1122,6 +1125,7 @@
   }
 
   function loadSubAgents() {
+    if (agentMode?.chatOnly) return;
     // Same in-flight guard + re-arm as loadProcesses: a delegation burst
     // fires many lifecycle events, and a refresh requested mid-flight must
     // not be dropped or the panel settles on a stale state.
@@ -1328,12 +1332,14 @@
   }
 
   function loadWorkspace() {
+    if (agentMode?.chatOnly) return;
     run(listWorkspace(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { wsInstances = res.instances; wsBases = res.bases; wsDeleted = res.deleted; })
       .catch((e: unknown) => toastError(`Workspace: ${e instanceof Error ? e.message : String(e)}`));
   }
 
   function loadSchedules() {
+    if (agentMode?.chatOnly) return;
     run(listSchedules(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { schedules = res; })
       .catch((e: unknown) => toastError(`Schedules: ${e instanceof Error ? e.message : String(e)}`));
@@ -1345,6 +1351,7 @@
      server) just leaves the tab hidden. */
   let notesInfo = $state<NotesResponse | null>(null);
   function loadTicket() {
+    if (agentMode?.chatOnly) return;
     run(listNotes(base, { sessionId }).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { notesInfo = res; })
       .catch(() => { notesInfo = null; });
@@ -1369,6 +1376,7 @@
   let todosAutoOpened = $state(false);
 
   function loadTodos() {
+    if (agentMode?.chatOnly) return;
     todosLoading = true;
     run(getTodos(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {

@@ -12,7 +12,7 @@
   import { AgentAvatar, setIdleAnimations } from "@wick-fe/common-avatar";
   import AgentSettings from "./lib/components/AgentSettings.svelte";
   import SharedAgentInfo from "./lib/components/SharedAgentInfo.svelte";
-  import { agentMenu, isSharedAgent, sharedLabel } from "./lib/agentSharing.js";
+  import { agentMenu, isSharedAgent, sharedChatMode, sharedLabel } from "./lib/agentSharing.js";
   import AgentWizard from "./lib/components/AgentWizard.svelte";
   import RemoteAgentWizard from "./lib/components/team/RemoteAgentWizard.svelte";
   import SlackRemoteWizard from "./lib/components/team/SlackRemoteWizard.svelte";
@@ -319,9 +319,11 @@
 
   // An A2A remote agent has no local process: no rail, its own caption.
   const remoteMode = $derived(selected && isRemoteAgent(selected) ? remoteChatMode(selected) : null);
+  // A shared agent's rail is its owner's project: chat only.
+  const sharedMode = $derived(sharedChatMode(selected));
   const agentMode = $derived({
-    hideTabs: remoteMode?.hideTabs ?? hiddenTabsFor(selected?.features, selected ? nativeToolsOf(selected.allowed_native_tools) : null),
-    ...(remoteMode ? { railNote: remoteMode.railNote } : {}),
+    hideTabs: sharedMode?.hideTabs ?? remoteMode?.hideTabs ?? hiddenTabsFor(selected?.features, selected ? nativeToolsOf(selected.allowed_native_tools) : null),
+    ...(sharedMode ? { railNote: sharedMode.railNote, chatOnly: true } : remoteMode ? { railNote: remoteMode.railNote } : {}),
     hideHeader: true,
     hidePickers: true,
     onDeleted: () => go({ session: null }),
@@ -391,7 +393,11 @@
       <div class="flex justify-center gap-2 px-2 pb-3 pt-1 lg:hidden" data-testid="roster-pins">
         {#each pins as a (a.id)}
           <button type="button" class="flex w-20 flex-col items-center gap-1.5 rounded-xl py-1 text-xs text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600" onclick={() => openAgent(a)}>
-            <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={54} working={isWorking(a.status)} asleep={a.disabled} />
+            <span class="relative inline-flex">
+              <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={54} working={isWorking(a.status)} asleep={a.disabled} />
+              <!-- Same cue as the list's SHARED badge, sized for a pin. -->
+              {#if isSharedAgent(a)}<span class="absolute bottom-0 right-0 flex h-5 w-5 items-center justify-center rounded-full border-2 border-white-100 bg-white-300 text-black-800 dark:border-navy-700 dark:bg-navy-600 dark:text-black-600" title={sharedLabel(a)} data-testid="pin-shared-badge"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" /></svg><span class="sr-only">{sharedLabel(a)}</span></span>{/if}
+            </span>
             <span class="w-full truncate text-center">{a.name}</span>
           </button>
         {/each}

@@ -21,6 +21,12 @@ export type AgentMode = {
   /** Replaces the "N tabs hidden" rail footer (an A2A remote agent has
       no local tools at all, not tools it was refused). */
   railNote?: string;
+  /** A chat with an agent another owner shared: chat only. The chat lives
+      in the owner's project, so DetailView loads nothing for the rail
+      (files, processes, sub-agents, workspace, schedules, notes, todos)
+      and the composer's @file search stays empty — the server refuses
+      them all for this chat. */
+  chatOnly?: boolean;
   /** Called instead of DetailView's own push("/") after the session is
       deleted: in the Agents app that path is the /sessions list, i.e. it
       would throw the user out of the app. */
