@@ -638,6 +638,19 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 	if name == "" {
 		name = handle
 	}
+	// Everything that can refuse the request is checked before a project
+	// is made, so a 400 does not leave an orphan project behind.
+	runAs, ok := validRunAs(c, req.RunAs, "")
+	if !ok {
+		return
+	}
+	grants := "[]"
+	if req.AllowedConnectors != nil {
+		if !validateGrants(c, *req.AllowedConnectors) {
+			return
+		}
+		grants = team.EncodeGrants(*req.AllowedConnectors)
+	}
 	pid := strings.TrimSpace(str(req.ProjectID))
 	if pid != "" {
 		if !requireUsableProject(c, pid) {
@@ -656,17 +669,6 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-	}
-	runAs, ok := validRunAs(c, req.RunAs, "")
-	if !ok {
-		return
-	}
-	grants := "[]"
-	if req.AllowedConnectors != nil {
-		if !validateGrants(c, *req.AllowedConnectors) {
-			return
-		}
-		grants = team.EncodeGrants(*req.AllowedConnectors)
 	}
 	feats := team.DefaultFeatures()
 	if req.Features != nil {
