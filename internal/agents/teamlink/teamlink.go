@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +45,16 @@ const (
 	DefaultWait = 90 * time.Second
 	// MaxWait clamps a caller-supplied wait.
 	MaxWait = 300 * time.Second
+
+	// TaskTTL is how long a settled task and an idle context are kept.
+	TaskTTL = time.Hour
+	// LastTTL is how long a reply's exchange stays open to an @mention in
+	// that reply.
+	LastTTL = 10 * time.Minute
+	// MaxTasks caps the tasks remembered at once; the oldest go first.
+	MaxTasks = 1000
+	// pruneEvery spaces the janitor passes Send triggers.
+	pruneEvery = time.Minute
 )
 
 // Metadata keys carried on every message. They are set by the Hub from
@@ -124,12 +135,17 @@ type Hub struct {
 
 	// poll is how often a waiting call re-reads its task. Tests shorten it.
 	poll time.Duration
+	// now is the clock; tests move it.
+	now func() time.Time
 
 	mu       sync.Mutex
 	handlers map[string]a2asrv.RequestHandler
+	stores   map[string]*genStore
 	tasks    map[a2a.TaskID]*taskRef
-	contexts map[string]int
+	contexts map[string]*contextState
 	inflight map[string]inbound
+	// pruned is when the janitor last ran.
+	pruned time.Time
 	// last is the inbound task each agent answered most recently. A
 	// mention in that answer continues it, so "@a thanks" → "@b thanks"
 	// stays inside one context's turn budget instead of starting fresh.
@@ -148,6 +164,14 @@ type taskRef struct {
 	waiterGone, finished, delivered bool
 	reply                           string
 	state                           a2a.TaskState
+	// touched is the last time the task changed; the janitor ages from it.
+	touched time.Time
+}
+
+// contextState is one exchange's turn count.
+type contextState struct {
+	turns   int
+	touched time.Time
 }
 
 // inbound is the task an agent is currently answering. A message the
@@ -155,6 +179,7 @@ type taskRef struct {
 type inbound struct {
 	contextID string
 	depth     int
+	at        time.Time
 }
 
 // NewHub returns an empty Hub.
@@ -162,9 +187,11 @@ func NewHub(dir Directory, turns Turns, notify Notifier) *Hub {
 	return &Hub{
 		Dir: dir, Turns: turns, Notify: notify,
 		poll:     250 * time.Millisecond,
+		now:      time.Now,
 		handlers: map[string]a2asrv.RequestHandler{},
+		stores:   map[string]*genStore{},
 		tasks:    map[a2a.TaskID]*taskRef{},
-		contexts: map[string]int{},
+		contexts: map[string]*contextState{},
 		inflight: map[string]inbound{},
 		last:     map[string]inbound{},
 	}
@@ -324,6 +351,7 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 		h.tasks[task.ID] = ref
 	}
 	ref.agentID, ref.callerAgentID, ref.callerSession, ref.to = target.ID, caller.ID, in.CallerSession, target
+	ref.touched = h.now()
 	h.mu.Unlock()
 
 	return h.wait(ctx, cl, task.ID, contextID, target, in.Wait)
@@ -351,11 +379,60 @@ func (h *Hub) admit(callerID, contextID string, afterReply bool) (string, int, e
 	if contextID == "" {
 		contextID = uuid.NewString()
 	}
-	if h.contexts[contextID] >= MaxContextTurns {
+	h.pruneLocked()
+	cs := h.contexts[contextID]
+	if cs == nil {
+		cs = &contextState{}
+		h.contexts[contextID] = cs
+	}
+	if cs.turns >= MaxContextTurns {
 		return "", 0, ErrHopLimit
 	}
-	h.contexts[contextID]++
+	cs.turns++
+	cs.touched = h.now()
 	return contextID, depth, nil
+}
+
+// pruneLocked is the janitor: settled tasks and idle contexts older than
+// TaskTTL, reply exchanges older than LastTTL, tasks past MaxTasks
+// (oldest first), and the task stores' old generation. Runs from Send at
+// most every pruneEvery, unless the task cap is already exceeded.
+func (h *Hub) pruneLocked() {
+	now := h.now()
+	if now.Sub(h.pruned) < pruneEvery && len(h.tasks) <= MaxTasks {
+		return
+	}
+	h.pruned = now
+	for id, t := range h.tasks {
+		// A task nobody finished is still dropped after 2×TTL: its turn
+		// is long gone, and the ref would otherwise never leave.
+		if age := now.Sub(t.touched); (t.finished && age > TaskTTL) || age > 2*TaskTTL {
+			delete(h.tasks, id)
+		}
+	}
+	if extra := len(h.tasks) - MaxTasks; extra > 0 {
+		ids := make([]a2a.TaskID, 0, len(h.tasks))
+		for id := range h.tasks {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return h.tasks[ids[i]].touched.Before(h.tasks[ids[j]].touched) })
+		for _, id := range ids[:extra] {
+			delete(h.tasks, id)
+		}
+	}
+	for id, c := range h.contexts {
+		if now.Sub(c.touched) > TaskTTL {
+			delete(h.contexts, id)
+		}
+	}
+	for id, l := range h.last {
+		if now.Sub(l.at) > LastTTL {
+			delete(h.last, id)
+		}
+	}
+	for _, st := range h.stores {
+		st.rotate(now, TaskTTL)
+	}
 }
 
 // wait polls the task until it settles or the wait runs out.
@@ -370,6 +447,11 @@ func (h *Hub) wait(ctx context.Context, cl *a2aclient.Client, id a2a.TaskID, con
 	for {
 		h.mu.Lock()
 		ref := h.tasks[id]
+		if ref == nil {
+			// Pruned under a caller that waited past TaskTTL.
+			h.mu.Unlock()
+			return nil, ErrUnknownTask
+		}
 		if ref.finished {
 			ref.delivered = true
 			out := &Result{TaskID: string(id), ContextID: contextID, State: stateName(ref.state), To: "@" + to.Handle, ReplyText: ref.reply}
@@ -439,7 +521,7 @@ func (h *Hub) finished(ctx context.Context, id a2a.TaskID, state a2a.TaskState, 
 		ref = &taskRef{}
 		h.tasks[id] = ref
 	}
-	ref.finished, ref.state, ref.reply = true, state, reply
+	ref.finished, ref.state, ref.reply, ref.touched = true, state, reply, h.now()
 	deliver := ref.waiterGone && !ref.delivered && ref.callerSession != ""
 	if deliver {
 		ref.delivered = true

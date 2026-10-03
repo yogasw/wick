@@ -21,15 +21,16 @@ type executor struct {
 }
 
 // handler returns agentID's request handler, creating it on first use.
-// The task store is a2a-go's in-memory default.
+// The task store is a genStore, so settled tasks age out (see store.go).
 func (h *Hub) handler(agentID string) a2asrv.RequestHandler {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if rh, ok := h.handlers[agentID]; ok {
 		return rh
 	}
-	rh := a2asrv.NewHandler(&executor{hub: h, agentID: agentID})
-	h.handlers[agentID] = rh
+	st := newGenStore(h.now())
+	rh := a2asrv.NewHandler(&executor{hub: h, agentID: agentID}, a2asrv.WithTaskStore(st))
+	h.handlers[agentID], h.stores[agentID] = rh, st
 	return rh
 }
 
@@ -80,7 +81,7 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		sessionID, reply, runErr := h.Turns.Run(ctx, target, text)
 		h.mu.Lock()
 		delete(h.inflight, e.agentID)
-		h.last[e.agentID] = inbound{contextID: ec.ContextID, depth: depth}
+		h.last[e.agentID] = inbound{contextID: ec.ContextID, depth: depth, at: h.now()}
 		h.mu.Unlock()
 
 		state := a2a.TaskStateCompleted
