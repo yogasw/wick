@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -35,6 +36,87 @@ type CompareResult struct {
 	Ahead  int           `json:"ahead"`
 	Behind int           `json:"behind"`
 	Files  []CompareFile `json:"files"`
+	// Commits are the commits the range brings in (base..head, newest
+	// first), capped at maxRangeCommits; CommitsTruncated says the cap
+	// cut it. For a working-tree head they are the commits up to HEAD —
+	// the uncommitted part has no commit to list.
+	Commits          []RangeCommit `json:"commits"`
+	CommitsTruncated bool          `json:"commits_truncated,omitempty"`
+}
+
+// RangeCommit is one row of a compare's commit list.
+type RangeCommit struct {
+	SHA     string `json:"sha"`
+	Subject string `json:"subject"`
+	Author  string `json:"author"`
+	RelDate string `json:"rel_date"`
+	ISODate string `json:"iso_date"`
+}
+
+const maxRangeCommits = 200
+
+// The working-tree sides a compare can take as its head. Neither is a
+// legal ref name (git forbids ':' in one), so they cannot collide with a
+// branch, and they never reach git as an argument.
+const (
+	// WorktreeRef is everything not yet committed, staged and unstaged
+	// together: `git diff <base>` against the files on disk.
+	WorktreeRef = ":worktree"
+	// StagedRef is the index only: `git diff --cached <base>`.
+	StagedRef = ":staged"
+)
+
+// IsWorkingSide reports whether ref names the working tree or the index
+// rather than a commit.
+func IsWorkingSide(ref string) bool { return ref == WorktreeRef || ref == StagedRef }
+
+// commitSide is the commit a side stands on: HEAD for the working tree
+// and the index, the ref itself otherwise.
+func commitSide(ref string) string {
+	if IsWorkingSide(ref) {
+		return "HEAD"
+	}
+	return ref
+}
+
+// ValidateCompareRef checks one side of a compare before anything is
+// built from it: the shape guard (no option, no whitespace, no range —
+// the range is ours to build), then git's own word that it names a
+// commit in this repo. A typo comes back as "unknown revision" instead
+// of as whatever git makes of it inside a range.
+func ValidateCompareRef(ctx context.Context, dir, ref string) error {
+	if IsWorkingSide(ref) {
+		return nil
+	}
+	if err := validRefName(ref); err != nil {
+		return err
+	}
+	if strings.Contains(ref, "..") {
+		return errors.New("a range is not a ref — pick each side on its own")
+	}
+	if strings.ContainsAny(ref, ":\x00") {
+		return fmt.Errorf("%q is not a ref", ref)
+	}
+	ctx, cancel := context.WithTimeout(ctx, localTimeout)
+	defer cancel()
+	if _, err := run(ctx, dir, "rev-parse", "--verify", "--quiet", ref+"^{commit}"); err != nil {
+		return fmt.Errorf("unknown revision %q", ref)
+	}
+	return nil
+}
+
+// WorkingFile is the right-hand side of one file for a working-side head:
+// the file on disk for WorktreeRef, the index for StagedRef. A file that
+// is not there (deleted) reads as empty, like FileAtRef's missing side.
+func WorkingFile(ctx context.Context, dir, side, path string) (string, error) {
+	if side == StagedRef {
+		return FileAtIndex(ctx, dir, path)
+	}
+	out, err := ReadFile(dir, path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	return out, err
 }
 
 // CompareRefs diffs two refs the way a review tool does.
@@ -50,23 +132,44 @@ type CompareResult struct {
 // letter and the rename source, the second the line counts.
 func CompareRefs(ctx context.Context, dir, base, head string, threeDot bool) (CompareResult, error) {
 	base, head = strings.TrimSpace(base), strings.TrimSpace(head)
-	if err := validRefName(base); err != nil {
+	if IsWorkingSide(base) {
+		return CompareResult{}, errors.New("base: the working tree can only be the head side")
+	}
+	if err := ValidateCompareRef(ctx, dir, base); err != nil {
 		return CompareResult{}, fmt.Errorf("base: %w", err)
 	}
-	if err := validRefName(head); err != nil {
+	if err := ValidateCompareRef(ctx, dir, head); err != nil {
 		return CompareResult{}, fmt.Errorf("head: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
 
-	sep := ".."
-	if threeDot {
-		sep = "..."
+	// The diff arguments, refs last and always before "--" so nothing a
+	// caller sends can be read as a path or an option.
+	var diffArgs []string
+	switch {
+	case IsWorkingSide(head):
+		// `git diff [--cached] [--merge-base] <base>`: base's tree (or
+		// where it parted from HEAD) against the disk or the index.
+		if head == StagedRef {
+			diffArgs = append(diffArgs, "--cached")
+		}
+		if threeDot {
+			diffArgs = append(diffArgs, "--merge-base")
+		}
+		diffArgs = append(diffArgs, base)
+	case threeDot:
+		diffArgs = append(diffArgs, base+"..."+head)
+	default:
+		diffArgs = append(diffArgs, base+".."+head)
 	}
-	rng := base + sep + head
+	diff := func(mode string) (string, error) {
+		args := append([]string{"diff", "--no-color", mode, "-z", "--find-renames"}, diffArgs...)
+		return run(ctx, dir, append(args, "--")...)
+	}
 
-	res := CompareResult{Base: base, Head: head, Files: []CompareFile{}}
-	out, err := run(ctx, dir, "diff", "--no-color", "--name-status", "-z", "--find-renames", rng)
+	res := CompareResult{Base: base, Head: head, Files: []CompareFile{}, Commits: []RangeCommit{}}
+	out, err := diff("--name-status")
 	if err != nil {
 		return CompareResult{}, err
 	}
@@ -75,7 +178,7 @@ func CompareRefs(ctx context.Context, dir, base, head string, threeDot bool) (Co
 	// Counts are advisory: a file list without ± is still usable, a 400
 	// instead of it is not. Same call for both passes so rename detection
 	// keys the numbers onto the same paths.
-	if nout, nerr := run(ctx, dir, "diff", "--no-color", "--numstat", "-z", "--find-renames", rng); nerr == nil {
+	if nout, nerr := diff("--numstat"); nerr == nil {
 		counts := parseNumstatZ(nout)
 		for i := range res.Files {
 			if n, ok := counts[res.Files[i].Path]; ok {
@@ -84,20 +187,49 @@ func CompareRefs(ctx context.Context, dir, base, head string, threeDot bool) (Co
 		}
 	}
 
+	// Ahead/behind and the commit list are about commits, so a working
+	// side stands on HEAD for them.
+	tip := commitSide(head)
 	// `rev-list --left-right --count A...B` prints "<left>\t<right>":
 	// commits only on base, then commits only on head.
-	if rl, rerr := run(ctx, dir, "rev-list", "--left-right", "--count", base+"..."+head); rerr == nil {
+	if rl, rerr := run(ctx, dir, "rev-list", "--left-right", "--count", base+"..."+tip, "--"); rerr == nil {
 		if f := strings.Fields(rl); len(f) == 2 {
 			res.Behind, _ = strconv.Atoi(f[0])
 			res.Ahead, _ = strconv.Atoi(f[1])
 		}
 	}
+	if lout, lerr := run(ctx, dir, "log", "--no-color", "-z",
+		fmt.Sprintf("--max-count=%d", maxRangeCommits+1),
+		"--format=%h%x1f%s%x1f%an%x1f%ar%x1f%aI", base+".."+tip, "--"); lerr == nil {
+		res.Commits = parseRangeLog(lout)
+		if len(res.Commits) > maxRangeCommits {
+			res.Commits = res.Commits[:maxRangeCommits]
+			res.CommitsTruncated = true
+		}
+	}
 	// No merge base is not a failure — unrelated histories simply have
 	// none, and the header says so instead of the request erroring out.
-	if mb, mberr := MergeBase(ctx, dir, base, head); mberr == nil {
+	if mb, mberr := MergeBase(ctx, dir, base, tip); mberr == nil {
 		res.MergeBase = mb
 	}
 	return res, nil
+}
+
+// parseRangeLog decodes the -z / %x1f log format CompareRefs asks for.
+func parseRangeLog(s string) []RangeCommit {
+	out := []RangeCommit{}
+	for _, rec := range strings.Split(s, "\x00") {
+		rec = strings.TrimLeft(rec, "\n")
+		if rec == "" {
+			continue
+		}
+		f := strings.Split(rec, "\x1f")
+		if len(f) < 5 {
+			continue
+		}
+		out = append(out, RangeCommit{SHA: f[0], Subject: f[1], Author: f[2], RelDate: f[3], ISODate: f[4]})
+	}
+	return out
 }
 
 // MergeBase returns the sha where two refs last agreed. Refs that share

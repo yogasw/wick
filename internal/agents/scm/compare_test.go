@@ -427,3 +427,106 @@ func TestResetTo(t *testing.T) {
 		}
 	}
 }
+
+func findFile(files []CompareFile, path string) *CompareFile {
+	for i := range files {
+		if files[i].Path == path {
+			return &files[i]
+		}
+	}
+	return nil
+}
+
+// The working tree as a head: what main...HEAD commits PLUS what is not
+// committed yet, and the staged-only variant that leaves unstaged edits out.
+func TestCompareRefsWorkingSides(t *testing.T) {
+	dir, _ := divergedRepo(t)
+	ctx := context.Background()
+	// One staged edit to README.md, then one more unstaged line on top.
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("staged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, dir, "add", "README.md")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("staged\nunstaged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wt, err := CompareRefs(ctx, dir, "main", WorktreeRef, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wtReadme := findFile(wt.Files, "README.md")
+	if wtReadme == nil || findFile(wt.Files, "blob.bin") == nil || findFile(wt.Files, "new.txt") == nil {
+		t.Fatalf("worktree compare should carry both committed and uncommitted files, got %+v", wt.Files)
+	}
+	// Merge-base mode: main-only.txt is base's own, not ours.
+	if findFile(wt.Files, "main-only.txt") != nil {
+		t.Fatalf("merge-base worktree compare must not list main's own commit")
+	}
+	if wt.Ahead != 1 || len(wt.Commits) != 1 || wt.Commits[0].Subject != "side work" {
+		t.Fatalf("commits: ahead=%d commits=%+v", wt.Ahead, wt.Commits)
+	}
+
+	st, err := CompareRefs(ctx, dir, "main", StagedRef, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The unstaged line is one more addition on the worktree side.
+	if f := findFile(st.Files, "README.md"); f == nil || f.Additions != wtReadme.Additions-1 {
+		t.Fatalf("staged compare must leave the unstaged line out, got %+v vs worktree %+v", f, wtReadme)
+	}
+
+	if _, err := CompareRefs(ctx, dir, WorktreeRef, "main", true); err == nil {
+		t.Fatal("working tree as base should be refused")
+	}
+
+	got, err := WorkingFile(ctx, dir, WorktreeRef, "README.md")
+	if err != nil || !strings.Contains(got, "unstaged") {
+		t.Fatalf("WorkingFile(worktree) = %q, %v", got, err)
+	}
+	got, err = WorkingFile(ctx, dir, StagedRef, "README.md")
+	if err != nil || got != "staged\n" {
+		t.Fatalf("WorkingFile(staged) = %q, %v", got, err)
+	}
+	if got, err := WorkingFile(ctx, dir, WorktreeRef, "gone.txt"); err != nil || got != "" {
+		t.Fatalf("a deleted file should read empty, got %q, %v", got, err)
+	}
+}
+
+// Last N commits is HEAD~N..HEAD; the commit list is newest first.
+func TestCompareRefsLastNCommits(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir)
+	writeCommit(t, dir, "a.txt", "one")
+	writeCommit(t, dir, "b.txt", "two")
+	writeCommit(t, dir, "c.txt", "three")
+	res, err := CompareRefs(context.Background(), dir, "HEAD~2", "HEAD", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 2 || findFile(res.Files, "a.txt") != nil {
+		t.Fatalf("HEAD~2..HEAD should be b.txt and c.txt, got %+v", res.Files)
+	}
+	if len(res.Commits) != 2 || res.Commits[0].Subject != "three" || res.Commits[0].SHA == "" {
+		t.Fatalf("commits = %+v", res.Commits)
+	}
+}
+
+func TestValidateCompareRef(t *testing.T) {
+	dir, side := divergedRepo(t)
+	ctx := context.Background()
+	for _, ok := range []string{"main", "side", "HEAD~1", side, side[:7], WorktreeRef, StagedRef} {
+		if err := ValidateCompareRef(ctx, dir, ok); err != nil {
+			t.Errorf("%q: unexpected error %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "--output=/tmp/x", "-p", "main..side", "main...side", "nope", "main side", "HEAD:README.md"} {
+		if err := ValidateCompareRef(ctx, dir, bad); err == nil {
+			t.Errorf("%q: expected an error", bad)
+		}
+	}
+	// A refused ref never reaches a diff.
+	if _, err := CompareRefs(ctx, dir, "--output=x", "side", true); err == nil {
+		t.Fatal("an option-shaped base must be refused")
+	}
+}
