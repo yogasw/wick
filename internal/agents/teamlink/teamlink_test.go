@@ -255,3 +255,22 @@ func TestSilentReply(t *testing.T) {
 		t.Fatalf("silent reply delivered: %v", delivered)
 	}
 }
+
+// "@vera thanks" in Anton's reply continues the exchange it answered, so
+// an @mention ping-pong runs into the same per-context cap as the tool.
+func TestMentionAfterReplyContinuesContext(t *testing.T) {
+	h, _, _ := newTestHub(func(Peer, string) string { return "ok" })
+	ctx := context.Background()
+	first, err := h.Send(ctx, SendInput{CallerAgentID: "a-cap", To: "anton", Text: "q"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := h.Send(ctx, SendInput{CallerAgentID: "a-anton", To: "captain", Text: "thanks", Mention: true, Wait: -1})
+	if err != nil || res.ContextID != first.ContextID {
+		t.Fatalf("mention = %+v, %v (first ctx %s)", res, err, first.ContextID)
+	}
+	human, err := h.Send(ctx, SendInput{CallerAgentID: "a-anton", To: "captain", Text: "from the person", Mention: true, Human: true, Wait: -1})
+	if err != nil || human.ContextID == first.ContextID {
+		t.Fatalf("a person's mention reused the agents' context: %+v, %v", human, err)
+	}
+}

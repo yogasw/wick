@@ -80,6 +80,7 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		sessionID, reply, runErr := h.Turns.Run(ctx, target, text)
 		h.mu.Lock()
 		delete(h.inflight, e.agentID)
+		h.last[e.agentID] = inbound{contextID: ec.ContextID, depth: depth}
 		h.mu.Unlock()
 
 		state := a2a.TaskStateCompleted

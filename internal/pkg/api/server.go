@@ -1982,6 +1982,8 @@ func NewServer() *Server {
 		Workspaces: delegation.NewGitWorktrees(agentsLayout),
 		// Phase 2/4: where an async result goes once it lands.
 		Deliver: poolDeliverer{pool: agentsPool, channels: channelReg},
+		// @handle lines naming a Team agent go over the Team A2A link.
+		TeamRouter: agentstool.TeamMentionRouter{Hub: hub},
 		// Take-over: a human steering a running sub-agent.
 		Steerer: poolSteerer{pool: agentsPool},
 		// Keeps the "leader stopped, sub-agents still running" thread notice

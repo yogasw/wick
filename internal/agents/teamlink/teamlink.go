@@ -130,6 +130,10 @@ type Hub struct {
 	tasks    map[a2a.TaskID]*taskRef
 	contexts map[string]int
 	inflight map[string]inbound
+	// last is the inbound task each agent answered most recently. A
+	// mention in that answer continues it, so "@a thanks" → "@b thanks"
+	// stays inside one context's turn budget instead of starting fresh.
+	last map[string]inbound
 }
 
 // taskRef is what the Hub remembers about a task it sent.
@@ -162,6 +166,7 @@ func NewHub(dir Directory, turns Turns, notify Notifier) *Hub {
 		tasks:    map[a2a.TaskID]*taskRef{},
 		contexts: map[string]int{},
 		inflight: map[string]inbound{},
+		last:     map[string]inbound{},
 	}
 }
 
@@ -250,6 +255,10 @@ type SendInput struct {
 	// Wait bounds the synchronous part. 0 = DefaultWait; negative = do
 	// not wait at all (the @mention router).
 	Wait time.Duration
+	// Mention marks an @handle line in an agent's own reply: it continues
+	// the exchange that reply answered. A person's mention (Human) always
+	// starts a fresh exchange.
+	Mention, Human bool
 }
 
 // Result is what a caller gets back.
@@ -283,7 +292,7 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, errors.New("message is empty")
 	}
-	contextID, depth, err := h.admit(caller.ID, in.ContextID)
+	contextID, depth, err := h.admit(caller.ID, in.ContextID, in.Mention && !in.Human)
 	if err != nil {
 		return nil, err
 	}
@@ -322,11 +331,15 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 
 // admit charges one turn to the context and works out the depth. A
 // caller answering an inbound task continues that task's context.
-func (h *Hub) admit(callerID, contextID string) (string, int, error) {
+func (h *Hub) admit(callerID, contextID string, afterReply bool) (string, int, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	depth := 1
-	if cur, ok := h.inflight[callerID]; ok {
+	cur, ok := h.inflight[callerID]
+	if !ok && afterReply {
+		cur, ok = h.last[callerID]
+	}
+	if ok {
 		depth = cur.depth + 1
 		if contextID == "" {
 			contextID = cur.contextID

@@ -52,14 +52,57 @@ type RouteInput struct {
 	TriggeredBy string
 }
 
+// TeamRouter carries @mentions of Team agents. Implemented over the Team
+// A2A link in wiring; an interface keeps this package free of it.
+type TeamRouter interface {
+	// TeamHandles lists the Team handles sessionID's agent may reach; nil
+	// when the session is not a Team agent's.
+	TeamHandles(ctx context.Context, sessionID string) []string
+	// SendTeam delivers body to handle without waiting for the reply.
+	SendTeam(ctx context.Context, sessionID, handle, body string, human bool) error
+}
+
+// routeTeam acts on the mentions that name a Team agent. A Team handle
+// can never also be a role key (refused when the handle is saved), so
+// these never compete with the tree's own routing.
+func (s *Service) routeTeam(ctx context.Context, in RouteInput) []Dispatch {
+	if s.TeamRouter == nil {
+		return nil
+	}
+	handles := s.TeamRouter.TeamHandles(ctx, in.SessionID)
+	if len(handles) == 0 {
+		return nil
+	}
+	var out []Dispatch
+	seen := map[string]bool{}
+	for _, m := range ParseMentions(in.Text, handles) {
+		if seen[m.Handle] {
+			continue
+		}
+		seen[m.Handle] = true
+		d := Dispatch{Token: m.Handle, Kind: TargetTeam}
+		if err := s.TeamRouter.SendTeam(ctx, in.SessionID, m.Handle, m.Body, in.Human); err != nil {
+			d.Err = err.Error()
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 // Route acts on the mentions in one piece of text.
 func (s *Service) Route(ctx context.Context, in RouteInput) []Dispatch {
-	if s == nil || s.Repo == nil || !s.limits().MentionRouter {
+	if s == nil || strings.TrimSpace(in.Text) == "" {
 		return nil
 	}
-	if strings.TrimSpace(in.Text) == "" {
-		return nil
+	team := s.routeTeam(ctx, in)
+	if s.Repo == nil || !s.limits().MentionRouter {
+		return team
 	}
+	return append(team, s.routeTree(ctx, in)...)
+}
+
+// routeTree acts on the mentions addressed inside the delegation tree.
+func (s *Service) routeTree(ctx context.Context, in RouteInput) []Dispatch {
 
 	rootID := s.rootForMention(ctx, in.SessionID, in.Text)
 	res, err := s.NewResolver(ctx, rootID, in.ProjectID)
@@ -110,22 +153,34 @@ const RoutedMarker = "[routed]"
 // spawn are cheap enough to run in the send path, and they are what makes
 // "mentions are acted on for you" true at the moment the leader reads it.
 func (s *Service) PreRouteNote(ctx context.Context, in RouteInput) string {
-	if s == nil || s.Repo == nil || !s.limits().MentionRouter {
+	if s == nil || strings.TrimSpace(in.Text) == "" {
 		return ""
 	}
-	if strings.TrimSpace(in.Text) == "" {
-		return ""
-	}
-	res, err := s.NewResolver(ctx, s.RootForSession(ctx, in.SessionID), in.ProjectID)
-	if err != nil {
-		log.Warn().Err(err).Str("session", in.SessionID).
-			Msg("delegation: routed marker skipped; roster unavailable")
-		return ""
-	}
-
 	seen := map[string]bool{}
 	tokens := make([]string, 0, 2)
-	for _, m := range ParseMentions(in.Text, res.AllNames()) {
+	if s.TeamRouter != nil {
+		for _, m := range ParseMentions(in.Text, s.TeamRouter.TeamHandles(ctx, in.SessionID)) {
+			if !seen[m.Handle] {
+				seen[m.Handle] = true
+				tokens = append(tokens, "@"+m.Handle)
+			}
+		}
+	}
+	var res *Resolver
+	if s.Repo != nil && s.limits().MentionRouter {
+		var err error
+		res, err = s.NewResolver(ctx, s.RootForSession(ctx, in.SessionID), in.ProjectID)
+		if err != nil {
+			log.Warn().Err(err).Str("session", in.SessionID).
+				Msg("delegation: routed marker skipped; roster unavailable")
+			res = nil
+		}
+	}
+	var names []string
+	if res != nil {
+		names = res.AllNames()
+	}
+	for _, m := range ParseMentions(in.Text, names) {
 		// Same exclusions Route applies, so the note never promises a
 		// dispatch that will then be refused: an unknown token is plain
 		// text, and an author cannot address itself.
@@ -227,7 +282,7 @@ func FormatDispatches(ds []Dispatch) string {
 		switch {
 		case d.Err != "":
 			parts = append(parts, fmt.Sprintf("@%s (refused: %s)", d.Token, d.Err))
-		case d.Kind == TargetAgent:
+		case d.Kind == TargetAgent || d.Kind == TargetTeam:
 			parts = append(parts, fmt.Sprintf("@%s (messaged)", d.Token))
 		case d.Queued:
 			// The position is the point: an author fanning out four

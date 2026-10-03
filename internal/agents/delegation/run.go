@@ -204,6 +204,8 @@ type Service struct {
 	// nil = assume resumable. A wiring that cannot answer must not make
 	// every continuation announce a memory loss it has no evidence for.
 	Resumable func(childSessionID, agentName string) bool
+	// TeamRouter, when set, takes the @mentions that name a Team agent.
+	TeamRouter TeamRouter
 	// AskTimeout bounds a blocking ask. 0 = defaultAskTimeout.
 	AskTimeout time.Duration
 	// InboxCap bounds undelivered messages per handle. 0 = defaultInboxCap.

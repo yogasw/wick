@@ -123,3 +123,36 @@ func (teamNotifier) Audit(_ context.Context, sessionID string, h teamlink.Handof
 		Str("from", h.From).Str("to", h.To).Str("context_id", h.ContextID).
 		Str("task_id", h.TaskID).Str("state", string(h.State)).Msg("team: handoff")
 }
+
+// TeamMentionRouter adapts the Hub to delegation.TeamRouter: an @handle
+// line naming a teammate is sent over the same client team_message uses,
+// without waiting.
+type TeamMentionRouter struct{ Hub func() *teamlink.Hub }
+
+func (r TeamMentionRouter) TeamHandles(ctx context.Context, sessionID string) []string {
+	h, id := r.Hub(), TeamAgentOf(ctx, sessionID)
+	if h == nil || id == "" {
+		return nil
+	}
+	peers, err := h.Reachable(ctx, id)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, p.Handle)
+	}
+	return out
+}
+
+func (r TeamMentionRouter) SendTeam(ctx context.Context, sessionID, handle, body string, human bool) error {
+	h := r.Hub()
+	if h == nil {
+		return nil
+	}
+	_, err := h.Send(context.WithoutCancel(ctx), teamlink.SendInput{
+		CallerSession: sessionID, CallerAgentID: TeamAgentOf(ctx, sessionID),
+		To: handle, Text: body, Wait: -1, Mention: true, Human: human,
+	})
+	return err
+}
