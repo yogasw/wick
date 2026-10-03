@@ -83,6 +83,21 @@ export default withMermaid(defineConfig({
         ],
       },
       {
+        text: 'Plugins',
+        items: [
+          { text: 'Overview', link: '/plugins/overview' },
+          { text: 'Connector plugin', link: '/plugins/authoring-connector' },
+          { text: 'Tool plugin', link: '/plugins/authoring-tool' },
+          { text: 'Job plugin', link: '/plugins/authoring-job' },
+          { text: 'Service plugin', link: '/plugins/authoring-service' },
+          { text: 'Index format', link: '/plugins/index-format' },
+          { text: 'Sources', link: '/plugins/sources' },
+          { text: 'Release', link: '/plugins/release' },
+          { text: 'Security', link: '/plugins/security' },
+          { text: 'A2A repeater walkthrough', link: '/plugins/service-a2a' },
+        ],
+      },
+      {
         text: 'LLM & Auth',
         items: [
           { text: 'MCP for LLMs', link: '/guide/mcp' },

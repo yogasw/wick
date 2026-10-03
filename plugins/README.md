@@ -22,7 +22,8 @@ plugins/
 │       ├── connector.go   #   the connector.Module (Meta + Operations + Configs)
 │       └── VERSION        #   source of truth for this plugin's version
 ├── tool/                  # kind=tool — toolplugin.ServeTool; _template + example_counter
-└── job/                   # kind=job — wickplugin.ServeJob; _template + example_heartbeat
+├── job/                   # kind=job — wickplugin.ServeJob; _template + example_heartbeat
+└── service/               # kind=service — service.ServeService; _template + example_a2a_repeater
 ```
 
 `_template` is a complete, working connector (HTTP GET + DELETE against a
@@ -103,6 +104,20 @@ server on a unix socket:
 Start from `tool/_template/`; `tool/example_counter/` shows a page, a JSON
 endpoint, and a webhook.
 
+### Service plugins
+
+`service/<name>/` calls `service.ServeService(service.Module{...})`: an
+always-on HTTP server exposed at `/x/<key>/*`, restarted with backoff
+(1s→30s) when it dies. Each `Route` picks its auth — `service.Public`,
+`service.Token` (Bearer token generated on the plugin's admin page) or
+`service.Session` (signed-in wick user). `env.Callback()` gives a scoped
+`WICK_PLUGIN_TOKEN` + `WICK_BASE_URL` for calling wick back, and
+`Module.RemoteSource` makes the plugin a Team remote-agent source. Start from
+`service/_template/`; `service/example_a2a_repeater/` is a full A2A adapter.
+
+Full docs: `docs/plugins/` (overview, authoring per kind, index format,
+sources, release, security).
+
 ## Installing (consumption side)
 
 Installing/enabling/disabling is done by the **app** that uses the plugin, not
@@ -122,10 +137,11 @@ reloader polls the plugins dir) — no restart needed.
 
 ## Releasing
 
-Push to `main`; the CI workflow (`.github/workflows/release.yml`) builds **only
-the connectors whose folder changed** (one zip per os/arch) and attaches them to
-a GitHub Release tagged `<name>/v<version>`. It does NOT rebuild everything on
-every push.
+See [RELEASE.md](./RELEASE.md). Every release `<name>/v<version>` carries the
+zips plus a per-release `plugins.json` (`wick plugin index`: relative urls,
+`zip_sha256`, optional signature), so a wick GitHub source can install from it
+directly. Plugins kept in a separate repo use the reusable workflow
+`yogasw/wick/.github/workflows/plugin-release.yml@master`.
 
 ## Marketplace catalog (`plugins.json`)
 
