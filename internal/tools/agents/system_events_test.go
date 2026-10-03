@@ -10,6 +10,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/team"
+	"github.com/yogasw/wick/internal/agents/teamlink"
 )
 
 func TestRecordSystemTurnWritesPublishesAndTouches(t *testing.T) {
@@ -62,5 +63,16 @@ func TestGrantsSummaryAndDiff(t *testing.T) {
 	}
 	if d := grantsDiff(before, before, label); len(d) != 0 {
 		t.Fatalf("no change, diff = %v", d)
+	}
+}
+
+func TestRefusalTurn(t *testing.T) {
+	hop := refusalTurn(teamlink.Refusal{From: "captain", To: "anton", ContextID: "c1", HopLimit: true, Err: teamlink.ErrHopLimit}, time.Unix(1, 0))
+	if hop.Kind != store.KindHopLimit || hop.Role != "system" || hop.Extras["context_id"] != "c1" || hop.Extras["max_turns"] != "4" {
+		t.Fatalf("hop = %+v", hop)
+	}
+	ref := refusalTurn(teamlink.Refusal{From: "captain", To: "sleepy", Err: teamlink.ErrUnknownHandle}, time.Unix(1, 0))
+	if ref.Kind != store.KindMentionRefused || ref.Text != "@sleepy doesn't take mentions" || ref.Extras["reason"] == "" {
+		t.Fatalf("refused = %+v", ref)
 	}
 }

@@ -175,6 +175,27 @@ func (teamNotifier) Audit(_ context.Context, sessionID string, h teamlink.Handof
 	recordSystemTurn(globalLayout, globalBcast, sessionID, handoffTurn(h, time.Now()))
 }
 
+// Refused records a message the Hub would not send in the caller's
+// thread: hop_limit when the exchange's budget ran out, mention_refused
+// when an @mention named nobody who takes one.
+func (teamNotifier) Refused(_ context.Context, r teamlink.Refusal) {
+	recordSystemTurn(globalLayout, globalBcast, r.Session, refusalTurn(r, time.Now()))
+}
+
+// refusalTurn is r as a conversation system turn.
+func refusalTurn(r teamlink.Refusal, now time.Time) store.ConversationTurn {
+	extras := map[string]string{"from": r.From, "to": r.To}
+	if r.Err != nil {
+		extras["reason"] = r.Err.Error()
+	}
+	if r.HopLimit {
+		extras["context_id"] = r.ContextID
+		extras["max_turns"] = fmt.Sprintf("%d", teamlink.MaxContextTurns)
+		return systemTurn(store.KindHopLimit, fmt.Sprintf("Agent-to-agent limit of %d turns reached — reply to continue", teamlink.MaxContextTurns), extras, now)
+	}
+	return systemTurn(store.KindMentionRefused, fmt.Sprintf("@%s doesn't take mentions", r.To), extras, now)
+}
+
 // handoffTurn is h as a conversation system turn.
 func handoffTurn(h teamlink.Handoff, now time.Time) store.ConversationTurn {
 	return systemTurn(store.KindMentionHandoff, fmt.Sprintf("@%s → @%s · %s", h.From, h.To, h.State), map[string]string{

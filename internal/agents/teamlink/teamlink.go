@@ -123,6 +123,31 @@ type Notifier interface {
 	Audit(ctx context.Context, sessionID string, h Handoff)
 }
 
+// Refusal is a message the Hub would not send: the hop budget ran out, or
+// an @mention named someone who does not take mentions.
+type Refusal struct {
+	// Session is the caller's conversation — where the event is shown.
+	Session   string
+	From, To  string
+	ContextID string
+	// HopLimit is true for an exhausted budget; false for a refused mention.
+	HopLimit bool
+	Err      error
+}
+
+// RefusalNotifier is optionally implemented by a Notifier that records
+// refusals in the caller's thread.
+type RefusalNotifier interface {
+	Refused(ctx context.Context, r Refusal)
+}
+
+// refused reports r to the Notifier when it records refusals.
+func (h *Hub) refused(ctx context.Context, r Refusal) {
+	if rn, ok := h.Notify.(RefusalNotifier); ok && r.Session != "" {
+		rn.Refused(context.WithoutCancel(ctx), r)
+	}
+}
+
 // Handoff is one mention_handoff audit event.
 type Handoff struct {
 	From, To, ContextID, TaskID string
@@ -334,17 +359,23 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 		return nil, ErrNotTeamSession
 	}
 	card, target, err := h.Resolve(ctx, caller.OwnerID, in.To)
-	if err != nil {
-		return nil, err
+	if err == nil && target.ID == caller.ID {
+		err = ErrSelf
 	}
-	if target.ID == caller.ID {
-		return nil, ErrSelf
+	if err != nil {
+		if in.Mention {
+			h.refused(ctx, Refusal{Session: in.CallerSession, From: caller.Handle, To: NormalizeHandle(in.To), Err: err})
+		}
+		return nil, err
 	}
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, errors.New("message is empty")
 	}
 	contextID, depth, err := h.admit(caller.OwnerID, caller.ID, in.CallerSession, in.ContextID, in.Mention && !in.Human)
 	if err != nil {
+		if errors.Is(err, ErrHopLimit) {
+			h.refused(ctx, Refusal{Session: in.CallerSession, From: caller.Handle, To: target.Handle, ContextID: in.ContextID, HopLimit: true, Err: err})
+		}
 		return nil, err
 	}
 

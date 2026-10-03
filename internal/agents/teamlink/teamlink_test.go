@@ -345,3 +345,44 @@ func TestSentFromListsSessionTasks(t *testing.T) {
 		t.Fatalf("empty session = %+v", none)
 	}
 }
+
+type refusalNotify struct {
+	fakeNotify
+	refusals []Refusal
+}
+
+func (n *refusalNotify) Refused(_ context.Context, r Refusal) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.refusals = append(n.refusals, r)
+}
+
+// A refused mention and an exhausted budget are both reported to a
+// Notifier that records refusals, in the caller's session.
+func TestRefusalsReachNotifier(t *testing.T) {
+	h, _, _ := newTestHub(func(Peer, string) string { return "ok" })
+	note := &refusalNotify{}
+	h.Notify = note
+	ctx := context.Background()
+	// A non-mention refusal (the team_message tool) is the tool's error only.
+	_, _ = h.Send(ctx, SendInput{CallerSession: "s-cap", CallerAgentID: "a-cap", To: "sleepy", Text: "hi"})
+	_, _ = h.Send(ctx, SendInput{CallerSession: "s-cap", CallerAgentID: "a-cap", To: "@sleepy", Text: "hi", Mention: true, Wait: -1})
+	first, err := h.Send(ctx, SendInput{CallerSession: "s-cap", CallerAgentID: "a-cap", To: "anton", Text: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 2; i <= MaxContextTurns+1; i++ {
+		_, _ = h.Send(ctx, SendInput{CallerSession: "s-cap", CallerAgentID: "a-cap", To: "anton", Text: "more", ContextID: first.ContextID})
+	}
+	note.mu.Lock()
+	defer note.mu.Unlock()
+	if len(note.refusals) != 2 {
+		t.Fatalf("refusals = %+v", note.refusals)
+	}
+	if r := note.refusals[0]; r.HopLimit || r.To != "sleepy" || r.From != "captain" || r.Session != "s-cap" || !errors.Is(r.Err, ErrUnknownHandle) {
+		t.Fatalf("mention refusal = %+v", r)
+	}
+	if r := note.refusals[1]; !r.HopLimit || r.To != "anton" || r.ContextID != first.ContextID {
+		t.Fatalf("hop limit = %+v", r)
+	}
+}
