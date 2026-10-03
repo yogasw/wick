@@ -13,6 +13,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -129,10 +130,85 @@ type ConversationTurn struct {
 	// (provider_switch: from, to, note) without growing the schema per feature.
 	Kind   string            `json:"kind,omitempty"`   // system turn only
 	Extras map[string]string `json:"extras,omitempty"` // system turn only
+
+	// Speaker names the Team agent behind an assistant turn. Set by the
+	// server at read time from the session, never parsed from the text, so
+	// an agent cannot speak as another one.
+	Speaker *Speaker `json:"speaker,omitempty"`
+	// Postback marks a user turn sent by clicking an actioncard button.
+	// Only the postback endpoint sets it: text that merely looks like a
+	// postback is an ordinary message.
+	Postback *Postback `json:"postback,omitempty"`
+}
+
+// Speaker is who said an assistant turn. Via is how the turn came to be:
+// "mention" (another agent handed it over), "group" (a multi-agent chat)
+// or "direct" (the agent's own conversation).
+type Speaker struct {
+	AgentID string `json:"agent_id"`
+	Handle  string `json:"handle,omitempty"`
+	Via     string `json:"via"`
+}
+
+// Speaker.Via values.
+const (
+	ViaDirect  = "direct"
+	ViaMention = "mention"
+	ViaGroup   = "group"
+)
+
+// Postback is one actioncard button click.
+type Postback struct {
+	CardID string `json:"card_id"`
+	Value  string `json:"value"`
+	Label  string `json:"label,omitempty"`
+}
+
+// PostbackText is how a click reads to the model: short, and with the
+// card and value spelled out so the agent can tell which decision it is.
+func (p Postback) PostbackText() string {
+	t := fmt.Sprintf("[postback card=%s value=%s]", p.CardID, p.Value)
+	if p.Label != "" {
+		t += " " + p.Label
+	}
+	return t
+}
+
+type postbackKey struct{}
+
+// WithPostback marks the user turn sent with ctx as a postback.
+func WithPostback(ctx context.Context, p *Postback) context.Context {
+	return context.WithValue(ctx, postbackKey{}, p)
+}
+
+// PostbackFrom returns the postback WithPostback put on ctx, or nil.
+func PostbackFrom(ctx context.Context) *Postback {
+	p, _ := ctx.Value(postbackKey{}).(*Postback)
+	return p
 }
 
 // SystemTurnKind values for ConversationTurn.Kind.
 const KindProviderSwitch = "provider_switch"
+
+// Kinds of the server-recorded Team events (system turns). Each is
+// written by wick itself, never by an agent, so none can be forged from a
+// reply. Extras per kind are listed where each is emitted.
+const (
+	KindAgentCreated      = "agent_created"
+	KindAccessChanged     = "access_changed"
+	KindMentionHandoff    = "mention_handoff"
+	KindHopLimit          = "hop_limit"
+	KindRoutineFired      = "routine_fired"
+	KindConnectionChanged = "connection_changed"
+	KindMentionRefused    = "mention_refused"
+	KindA2AContext        = "a2a_context"
+	// KindInputRequest is an ask_user question, recorded when asked and
+	// again when settled (same extras.ask_id, extras.state changes).
+	KindInputRequest = "input_request"
+	// KindApprovalRequest is a gate approval prompt, recorded when raised
+	// and again when decided (same extras.approval_id).
+	KindApprovalRequest = "approval_request"
+)
 
 // KindCompaction marks the point where the CLI folded older turns into
 // a summary. Recorded as a turn of its own so the gap in the
@@ -309,6 +385,12 @@ func (s *Store) AppendUserTurnWithAttachments(role, source, text string, atts []
 // not persisted, so the UI can render the message the person actually typed
 // and build the sender chip from these fields instead of parsing text.
 func (s *Store) AppendUserTurnWithSender(role, source, text string, atts []Attachment, sender *Sender) error {
+	return s.AppendUserTurnWithPostback(role, source, text, atts, sender, nil)
+}
+
+// AppendUserTurnWithPostback is AppendUserTurnWithSender for a turn that
+// may be an actioncard click. postback nil = an ordinary message.
+func (s *Store) AppendUserTurnWithPostback(role, source, text string, atts []Attachment, sender *Sender, postback *Postback) error {
 	turn := ConversationTurn{
 		Timestamp:   s.now().UTC(),
 		Role:        role,
@@ -316,6 +398,7 @@ func (s *Store) AppendUserTurnWithSender(role, source, text string, atts []Attac
 		Sender:      sender,
 		Text:        text,
 		Attachments: atts,
+		Postback:    postback,
 	}
 	return storage.AppendJSONL(
 		s.layout.SessionConversation(s.sessionID),

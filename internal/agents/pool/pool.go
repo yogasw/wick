@@ -734,6 +734,12 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	if role == "user" && p.cfg.SenderFrom != nil {
 		sender = p.cfg.SenderFrom(ctx)
 	}
+	// An actioncard click is marked by the postback endpoint on ctx, never
+	// inferred from the text.
+	var postback *store.Postback
+	if role == "user" {
+		postback = store.PostbackFrom(ctx)
+	}
 	// Read once per send so the live and buffered paths below agree even if
 	// the operator changes the setting mid-flight.
 	senderLevel := p.senderVisibility()
@@ -815,7 +821,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			Msg("pool.send: routing to live subprocess")
 		// Active agent — append to conversation log + send straight.
 		if entry.store != nil {
-			_ = entry.store.AppendUserTurnWithSender(role, source, text, atts, sender)
+			_ = entry.store.AppendUserTurnWithPostback(role, source, text, atts, sender, postback)
 			turnPersisted = true
 		}
 		if role == "user" {
@@ -888,7 +894,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// shows the messages — they previously only lived in PendingInput.
 	// We build a transient Store because no entry.store exists yet.
 	if !turnPersisted {
-		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts, sender)
+		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts, sender, postback)
 	}
 	if role == "user" && !userMsgNotified {
 		p.notifyUserMessage(sessionID, agentName, source, text, sender)
@@ -964,13 +970,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 // (subprocess not yet alive) used to skip this, which made messages
 // disappear from the UI after a page refresh — they only lived in
 // meta.PendingInput, which the conversation view doesn't read.
-func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string, atts []store.Attachment, sender *store.Sender) {
+func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string, atts []store.Attachment, sender *store.Sender, postback *store.Postback) {
 	sto := store.New(store.Options{
 		Layout:    p.cfg.Layout,
 		SessionID: sessionID,
 		AgentName: agentName,
 	})
-	_ = sto.AppendUserTurnWithSender(role, source, text, atts, sender)
+	_ = sto.AppendUserTurnWithPostback(role, source, text, atts, sender, postback)
 }
 
 // preemptIdleSlot picks the longest-idle active entry (Lifecycle == Idle,
