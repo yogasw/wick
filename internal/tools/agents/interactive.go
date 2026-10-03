@@ -119,4 +119,3 @@ func answerLabel(req askuser.AskRequest, ans askuser.Answer) string {
 	}
 	return strings.Join(parts, ", ")
 }
-
