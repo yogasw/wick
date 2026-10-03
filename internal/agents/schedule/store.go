@@ -252,6 +252,39 @@ func (s *Store) Cancel(ctx context.Context, id string) error {
 	return nil
 }
 
+// CancelTargeting cancels every live schedule that would fire into the
+// project or into one of the given sessions — what a project delete must
+// do so nothing fires into a conversation that no longer exists. A row that
+// was only REQUESTED from one of those sessions (SourceSessionID) but
+// targets elsewhere is left alone: its target is still there. Returns how
+// many rows were cancelled.
+func (s *Store) CancelTargeting(ctx context.Context, projectID string, sessionIDs []string) (int64, error) {
+	cond, args := "", []any{}
+	if projectID != "" {
+		cond = "project_id = ?"
+		args = append(args, projectID)
+	}
+	if len(sessionIDs) > 0 {
+		if cond != "" {
+			cond += " OR "
+		}
+		cond += "session_id IN ?"
+		args = append(args, sessionIDs)
+	}
+	if cond == "" {
+		return 0, nil
+	}
+	res := s.db.WithContext(ctx).Model(&entity.ScheduledMessage{}).
+		Where("status IN ?", liveStatuses).
+		Where(cond, args...).
+		Updates(map[string]any{
+			"status":     entity.ScheduledStatusCancelled,
+			"run_at":     gorm.Expr("COALESCE(last_run_at, run_at)"),
+			"updated_at": time.Now(),
+		})
+	return res.RowsAffected, res.Error
+}
+
 // SetPaused pauses or resumes a recurring schedule. On resume the caller
 // supplies the recomputed next run_at (the runner/handler figures out the
 // next fire from now). Only recurring, non-terminal rows can be toggled.
