@@ -645,7 +645,13 @@
       {:else if selected && route.panel.kind === "connections"}
         <AgentConnections {base} agent={selected} onClose={() => openPanel(null)} />
       {:else if selected && route.panel.kind === "scheduled"}
-        <AgentScheduled {base} agent={selected} onClose={() => openPanel(null)} onOpenTools={() => openPanel({ kind: "settings", tab: "tools" })} />
+        <AgentScheduled
+          {base}
+          agent={selected}
+          onClose={() => openPanel(null)}
+          onOpenTools={() => openPanel({ kind: "settings", tab: "tools" })}
+          onOpenSession={(id) => go({ session: id === selected.main_session_id ? null : id, panel: null })}
+        />
       {:else if selected && route.panel.kind === "sessions"}
         <AgentSessions
           {base}

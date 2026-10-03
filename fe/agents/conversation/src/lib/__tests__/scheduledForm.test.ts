@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { everyLabel, cronLabel, whenLabel, statusOf, isLive, draftOf, draftError, bodyOf, kindOf, emptyDraft } from "../scheduledForm.js";
+import { everyLabel, cronLabel, whenLabel, statusOf, isLive, draftOf, draftError, bodyOf, kindOf, emptyDraft, destLabel, runStatus } from "../scheduledForm.js";
 import { clampIdleHours } from "../sessionPolicy.js";
 import type { AgentSchedule } from "../api/team.js";
 
@@ -51,11 +51,32 @@ describe("scheduledForm drafts", () => {
     expect(draftError({ ...d, message: " " })).toMatch(/Write/);
     expect(draftError({ ...d, mode: "every", every: 0 })).toMatch(/whole number/);
     expect(draftError({ ...d, mode: "cron", cron: "0 9 *" })).toMatch(/5 fields/);
+    expect(draftError({ ...d, dest: "telegram", tgSession: "" })).toMatch(/Telegram chat/);
     expect(draftError(d)).toBe("");
   });
 
+  test("destination: main and telegram are sent, another chat is left alone", () => {
+    const d = { ...emptyDraft(), message: "go" };
+    expect(bodyOf(d).destination).toBe("main");
+    expect(bodyOf({ ...d, dest: "telegram", tgSession: "tg-1" })).toMatchObject({ destination: "telegram", telegram_session: "tg-1" });
+    expect(bodyOf({ ...d, dest: "other" })).not.toHaveProperty("destination");
+    expect(draftOf(row({ cron: "0 9 * * *", destination: "telegram", telegram_session: "tg-1" }))).toMatchObject({ dest: "telegram", tgSession: "tg-1" });
+    expect(draftOf(row({ cron: "0 9 * * *", destination: "new_chat" })).dest).toBe("other");
+  });
+
+  test("destLabel names the Telegram chat; runStatus chips", () => {
+    const chats = [{ session_id: "tg-1", title: "Ops group" }];
+    expect(destLabel({ destination: "telegram", telegram_session: "tg-1" }, chats)).toBe("Telegram · Ops group");
+    expect(destLabel({ destination: "telegram", telegram_session: "gone" }, chats)).toBe("Telegram");
+    expect(destLabel({ destination: "main" })).toBe("Main chat");
+    expect(destLabel({ destination: "new_chat" })).toBe("New chat each run");
+    expect(runStatus({ status: "ok" })).toEqual({ label: "OK", tone: "ok" });
+    expect(runStatus({ status: "failed" }).tone).toBe("error");
+    expect(runStatus({ status: "running" }).label).toBe("Running");
+  });
+
   test("bodyOf sends exactly one of run_at / every / cron", () => {
-    const d = { ...emptyDraft(), message: " go " };
+    const d = { ...emptyDraft(), message: " go ", dest: "other" as const };
     expect(bodyOf({ ...d, mode: "every", every: 3, unit: "h" })).toEqual({ message: "go", every: "3h" });
     expect(bodyOf({ ...d, mode: "cron", cron: " 0 9 * * * " })).toEqual({ message: "go", cron: "0 9 * * *" });
     const once = bodyOf({ ...d, mode: "once", at: "2026-10-04T09:00" });

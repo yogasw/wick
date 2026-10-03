@@ -1,12 +1,18 @@
 /* Pure helpers of the Scheduled drawer: how a schedule reads to a person,
    and the form ↔ API body mapping. Kept out of the component so they are
    testable without rendering. */
-import type { AgentSchedule, AgentScheduleWrite } from "./api/team.js";
+import type { AgentSchedule, AgentScheduleRun, AgentScheduleWrite, AgentTelegramChat } from "./api/team.js";
 
 export type WhenMode = "once" | "every" | "cron";
 export type EveryUnit = "m" | "h" | "d";
+/** Where the result lands; "other" is a chat the drawer can't pick (a
+    schedule the agent made elsewhere) and is left as it is. */
+export type DraftDest = "main" | "telegram" | "other";
 export type ScheduleDraft = {
   message: string;
+  dest: DraftDest;
+  /** The Telegram chat of a "telegram" destination. */
+  tgSession: string;
   mode: WhenMode;
   /** datetime-local value (server tz is shown beside it). */
   at: string;
@@ -85,7 +91,7 @@ export const isLive = (s: Pick<AgentSchedule, "status">) => s.status === "pendin
 /** emptyDraft: every day by default, an hour from now for "once". */
 export function emptyDraft(now = new Date()): ScheduleDraft {
   const at = new Date(now.getTime() + 3_600_000);
-  return { message: "", mode: "cron", at: localInput(at), every: 1, unit: "h", cron: "0 9 * * *" };
+  return { message: "", dest: "main", tgSession: "", mode: "cron", at: localInput(at), every: 1, unit: "h", cron: "0 9 * * *" };
 }
 
 /** localInput formats a Date for <input type="datetime-local">. */
@@ -97,6 +103,8 @@ export function localInput(d: Date): string {
 export function draftOf(s: AgentSchedule): ScheduleDraft {
   const d = emptyDraft();
   d.message = s.message;
+  d.dest = s.destination === "main" || s.destination === "telegram" ? s.destination : "other";
+  d.tgSession = s.telegram_session ?? "";
   if (s.kind === "recurring" && s.cron) return { ...d, mode: "cron", cron: s.cron };
   if (s.kind === "recurring" && s.interval_ms) {
     const min = Math.round(s.interval_ms / 60_000);
@@ -113,6 +121,7 @@ export function draftError(d: ScheduleDraft): string {
   if (d.mode === "once" && !d.at) return "Pick a time.";
   if (d.mode === "every" && (!Number.isInteger(d.every) || d.every < 1)) return "Every needs a whole number of 1 or more.";
   if (d.mode === "cron" && d.cron.trim().split(/\s+/).length !== 5) return "Cron needs 5 fields: minute hour day month weekday.";
+  if (d.dest === "telegram" && !d.tgSession) return "Pick a Telegram chat.";
   return "";
 }
 
@@ -122,7 +131,35 @@ export function bodyOf(d: ScheduleDraft): AgentScheduleWrite {
   if (d.mode === "once") b.run_at = new Date(d.at).toISOString();
   else if (d.mode === "every") b.every = `${d.every}${d.unit}`;
   else b.cron = d.cron.trim();
+  if (d.dest === "main") b.destination = "main";
+  else if (d.dest === "telegram") {
+    b.destination = "telegram";
+    b.telegram_session = d.tgSession;
+  }
   return b;
+}
+
+/** destLabel is the row's "where it lands" in words. */
+export function destLabel(s: Pick<AgentSchedule, "destination" | "telegram_session">, chats: AgentTelegramChat[] = []): string {
+  switch (s.destination) {
+    case "main":
+      return "Main chat";
+    case "telegram": {
+      const chat = chats.find((c) => c.session_id === s.telegram_session);
+      return chat ? `Telegram · ${chat.title}` : "Telegram";
+    }
+    case "new_chat":
+      return "New chat each run";
+    default:
+      return "Another chat";
+  }
+}
+
+/** runStatus is a history row's chip. */
+export function runStatus(r: Pick<AgentScheduleRun, "status">): { label: string; tone: "ok" | "muted" | "error" } {
+  if (r.status === "ok") return { label: "OK", tone: "ok" };
+  if (r.status === "failed") return { label: "Failed", tone: "error" };
+  return { label: "Running", tone: "muted" };
 }
 
 /** kindOf: a draft's mode as the schedule kind it creates. The server

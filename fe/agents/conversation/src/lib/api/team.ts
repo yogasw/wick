@@ -570,9 +570,13 @@ export type AgentSchedule = {
   last_run_at?: string;
   last_error?: string;
   run_count: number;
-  destination: "main" | "chat" | "new_chat";
+  destination: "main" | "telegram" | "chat" | "new_chat";
   session_id: string;
+  /** The Telegram chat a "telegram" destination posts into. */
+  telegram_session?: string;
 };
+/** A chat of the agent's Telegram bot a schedule can post into. */
+export type AgentTelegramChat = { session_id: string; title: string };
 export type AgentScheduledList = {
   items: AgentSchedule[];
   feature_on: boolean;
@@ -580,9 +584,28 @@ export type AgentScheduledList = {
   server_timezone: string;
   main_session_id: string;
   slack_online: boolean;
+  /** The Telegram destination exists only while the bot is connected. */
+  telegram_connected?: boolean;
+  telegram_chats?: AgentTelegramChat[];
 };
 /** Create/edit body: exactly one of run_at / every / cron. */
-export type AgentScheduleWrite = { message?: string; run_at?: string; every?: string; cron?: string; destination?: "main" };
+export type AgentScheduleWrite = {
+  message?: string;
+  run_at?: string;
+  every?: string;
+  cron?: string;
+  destination?: "main" | "telegram";
+  telegram_session?: string;
+};
+/** One fire of a schedule (GET …/scheduled/{sid}/runs), newest first. */
+export type AgentScheduleRun = {
+  at: string;
+  session_id: string;
+  turn_id: string;
+  status: "ok" | "failed" | "running";
+  error?: string;
+};
+export type AgentScheduleRuns = { items: AgentScheduleRun[]; last_error?: string };
 
 export const getAgentScheduled = (base: string, id: string) =>
   apiGetE<AgentScheduledList>(`${base}/api/team/agents/${enc(id)}/scheduled`);
@@ -592,6 +615,8 @@ export const updateAgentSchedule = (base: string, id: string, sid: string, body:
   apiPatchE<AgentSchedule>(`${base}/api/team/agents/${enc(id)}/scheduled/${enc(sid)}`, body);
 export const deleteAgentSchedule = (base: string, id: string, sid: string) =>
   apiDeleteE<unknown>(`${base}/api/team/agents/${enc(id)}/scheduled/${enc(sid)}`);
+export const getAgentScheduleRuns = (base: string, id: string, sid: string) =>
+  apiGetE<AgentScheduleRuns>(`${base}/api/team/agents/${enc(id)}/scheduled/${enc(sid)}/runs`);
 export const agentScheduleAction = (base: string, id: string, sid: string, action: "pause" | "resume" | "run") =>
   apiPostE<AgentSchedule>(`${base}/api/team/agents/${enc(id)}/scheduled/${enc(sid)}/${action}`, {});
 

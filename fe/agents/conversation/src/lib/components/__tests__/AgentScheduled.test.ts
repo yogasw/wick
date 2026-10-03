@@ -14,6 +14,12 @@ const updateAgentSchedule = vi.fn((_b: string, _id: string, _sid: string, body: 
 const agentScheduleAction = vi.fn((_b: string, _id: string, _sid: string, action: string) =>
   Promise.resolve({ ...daily, paused: action === "pause" }));
 const deleteAgentSchedule = vi.fn(() => Promise.resolve({}));
+const getAgentScheduleRuns = vi.fn((_b: string, _id: string, _sid: string) => Promise.resolve({
+  items: [
+    { at: "2026-10-03T02:00:00Z", session_id: "main1", turn_id: "t2", status: "failed", error: "provider timed out" },
+    { at: "2026-10-02T02:00:00Z", session_id: "main1", turn_id: "t1", status: "ok" },
+  ],
+}));
 vi.mock("../../api/team.js", async (orig) => ({
   ...(await orig<typeof import("../../api/team.js")>()),
   getAgentScheduled: () => Promise.resolve(structuredClone(list)),
@@ -21,6 +27,7 @@ vi.mock("../../api/team.js", async (orig) => ({
   updateAgentSchedule: (b: string, id: string, sid: string, body: AgentScheduleWrite) => updateAgentSchedule(b, id, sid, body),
   agentScheduleAction: (b: string, id: string, sid: string, a: string) => agentScheduleAction(b, id, sid, a),
   deleteAgentSchedule: () => deleteAgentSchedule(),
+  getAgentScheduleRuns: (b: string, id: string, sid: string) => getAgentScheduleRuns(b, id, sid),
   runApi: <T,>(p: Promise<T>) => p,
 }));
 
@@ -35,7 +42,7 @@ const base = (o: Partial<AgentScheduledList> = {}): AgentScheduledList => ({
 describe("AgentScheduled", () => {
   beforeEach(() => {
     vi.useRealTimers();
-    for (const f of [createAgentSchedule, updateAgentSchedule, agentScheduleAction, deleteAgentSchedule]) f.mockClear();
+    for (const f of [createAgentSchedule, updateAgentSchedule, agentScheduleAction, deleteAgentSchedule, getAgentScheduleRuns]) f.mockClear();
   });
 
   test("list shows the human schedule, destination and status; the toggle pauses", async () => {
@@ -92,7 +99,7 @@ describe("AgentScheduled", () => {
     expect((screen.getByRole("button", { name: "Once at" }) as HTMLButtonElement).disabled).toBe(true);
     await fireEvent.input(screen.getByLabelText("Cron"), { target: { value: "0 10 * * *" } });
     await waitFor(() => expect(updateAgentSchedule).toHaveBeenCalled(), { timeout: 2000 });
-    expect(updateAgentSchedule.mock.calls[0][3]).toEqual({ message: "Morning recap", cron: "0 10 * * *" });
+    expect(updateAgentSchedule.mock.calls[0][3]).toEqual({ message: "Morning recap", cron: "0 10 * * *", destination: "main" });
     await waitFor(() => expect(screen.getByTestId("save-state").textContent).toBe("Saved"));
   });
 
@@ -113,5 +120,55 @@ describe("AgentScheduled", () => {
     const row = await screen.findByTestId("scheduled-row");
     expect(row.textContent).toContain("Held — agent off");
     expect(screen.getByText(/schedules are on hold/)).toBeTruthy();
+  });
+
+  test("Telegram destination is hidden without a connection", async () => {
+    list = base({ items: [], telegram_connected: false });
+    render(AgentScheduled, { props: { base: "/b", agent, onClose: vi.fn() } });
+    await fireEvent.click(await screen.findByRole("button", { name: "New schedule" }));
+    expect(screen.queryByTestId("dest-telegram")).toBeNull();
+  });
+
+  test("create into a Telegram chat of the agent's bot", async () => {
+    const chats = [{ session_id: "tg-a", title: "Ops group" }, { session_id: "tg-b", title: "Rina" }];
+    list = base({ items: [], telegram_connected: true, telegram_chats: chats });
+    render(AgentScheduled, { props: { base: "/b", agent, onClose: vi.fn() } });
+    await fireEvent.click(await screen.findByRole("button", { name: "New schedule" }));
+    await fireEvent.input(screen.getByLabelText("Message to the agent"), { target: { value: "Daily digest" } });
+    await fireEvent.click(screen.getByLabelText("Telegram chat", { selector: "input" }));
+    await fireEvent.change(screen.getByLabelText("Telegram chat", { selector: "select" }), { target: { value: "tg-b" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(createAgentSchedule).toHaveBeenCalled());
+    expect(createAgentSchedule.mock.calls[0][2]).toEqual({ message: "Daily digest", cron: "0 9 * * *", destination: "telegram", telegram_session: "tg-b" });
+  });
+
+  test("a Telegram row names its chat; editing can move it to the main chat", async () => {
+    const chats = [{ session_id: "tg-a", title: "Ops group" }];
+    list = base({ items: [{ ...daily, destination: "telegram", telegram_session: "tg-a", session_id: "tg-a" }], telegram_connected: true, telegram_chats: chats });
+    render(AgentScheduled, { props: { base: "/b", agent, onClose: vi.fn() } });
+    expect((await screen.findByTestId("scheduled-row")).textContent).toContain("Telegram · Ops group");
+    await fireEvent.click(screen.getByRole("button", { name: "More" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
+    expect((screen.getByLabelText("Telegram chat", { selector: "select" }) as HTMLSelectElement).value).toBe("tg-a");
+    await fireEvent.click(screen.getByLabelText("Main chat"));
+    await waitFor(() => expect(updateAgentSchedule).toHaveBeenCalled(), { timeout: 2000 });
+    expect(updateAgentSchedule.mock.calls[0][3]).toEqual({ message: "Morning recap", cron: "0 9 * * *", destination: "main" });
+  });
+
+  test("History lists the last runs and opens the chat of one", async () => {
+    list = base();
+    const onOpenSession = vi.fn();
+    render(AgentScheduled, { props: { base: "/b", agent, onClose: vi.fn(), onOpenSession } });
+    await screen.findByTestId("scheduled-row");
+    await fireEvent.click(screen.getByRole("button", { name: "More" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "History" }));
+    await waitFor(() => expect(screen.getAllByTestId("run-row")).toHaveLength(2));
+    expect(getAgentScheduleRuns).toHaveBeenCalledWith("/b", "a1", "s1");
+    const [failed, ok] = screen.getAllByTestId("run-row");
+    expect(failed.textContent).toContain("Failed");
+    expect(failed.textContent).toContain("provider timed out");
+    expect(ok.textContent).toContain("OK");
+    await fireEvent.click(ok.querySelector("button")!);
+    expect(onOpenSession).toHaveBeenCalledWith("main1");
   });
 });

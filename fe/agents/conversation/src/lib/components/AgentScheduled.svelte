@@ -2,21 +2,29 @@
   /* Scheduled drawer (⋯ → Scheduled): the schedules that fire into this
      agent — the ones made here and the ones the agent made for itself. A
      toggle pauses/resumes, ⋯ runs now / edits / deletes. Create uses a
-     button; editing an existing schedule autosaves. */
+     button; editing an existing schedule autosaves. ⋯ → History lists the
+     last runs, each opening the chat it answered in. */
   import { Button, Toggle } from "@wick-fe/common-ui";
   import { toastOk } from "@wick-fe/common-stores";
   import DrawerHeader from "./DrawerHeader.svelte";
   import {
-    getAgentScheduled, createAgentSchedule, updateAgentSchedule, deleteAgentSchedule, agentScheduleAction, runApi,
-    type AgentItem, type AgentSchedule, type AgentScheduledList,
+    getAgentScheduled, createAgentSchedule, updateAgentSchedule, deleteAgentSchedule, agentScheduleAction, getAgentScheduleRuns, runApi,
+    type AgentItem, type AgentSchedule, type AgentScheduledList, type AgentScheduleRuns,
   } from "../api/team.js";
   import {
-    whenLabel, fmtTime, statusOf, isLive, emptyDraft, draftOf, draftError, bodyOf, kindOf,
+    whenLabel, fmtTime, statusOf, isLive, emptyDraft, draftOf, draftError, bodyOf, kindOf, destLabel, runStatus,
     type ScheduleDraft,
   } from "../scheduledForm.js";
 
-  type Props = { base: string; agent: AgentItem; onClose: () => void; onOpenTools?: () => void };
-  let { base, agent, onClose, onOpenTools }: Props = $props();
+  type Props = {
+    base: string;
+    agent: AgentItem;
+    onClose: () => void;
+    onOpenTools?: () => void;
+    /** Opens the chat a run answered in. */
+    onOpenSession?: (sessionId: string) => void;
+  };
+  let { base, agent, onClose, onOpenTools, onOpenSession }: Props = $props();
 
   let data = $state<AgentScheduledList | null>(null);
   let loadError = $state("");
@@ -29,6 +37,10 @@
   let menuFor = $state<string | null>(null);
   let confirmDelete = $state<AgentSchedule | null>(null);
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The row whose run history is open, and what it loaded. */
+  let historyFor = $state<string | null>(null);
+  let runs = $state<AgentScheduleRuns | null>(null);
+  let runsError = $state("");
 
   const input =
     "w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100";
@@ -56,6 +68,30 @@
 
   const editingRow = $derived(editing && editing !== "new" ? data?.items.find((s) => s.id === editing) ?? null : null);
   const problem = $derived(draftError(draft));
+  const tgChats = $derived(data?.telegram_chats ?? []);
+
+  function pickDest(dest: ScheduleDraft["dest"]) {
+    draft.dest = dest;
+    if (dest === "telegram" && !draft.tgSession && tgChats.length > 0) draft.tgSession = tgChats[0].session_id;
+    queueSave();
+  }
+
+  async function toggleHistory(s: AgentSchedule) {
+    menuFor = null;
+    if (historyFor === s.id) {
+      historyFor = null;
+      return;
+    }
+    historyFor = s.id;
+    runs = null;
+    runsError = "";
+    try {
+      const r = await runApi(getAgentScheduleRuns(base, agent.id, s.id));
+      if (historyFor === s.id) runs = r;
+    } catch (e) {
+      if (historyFor === s.id) runsError = e instanceof Error ? e.message : String(e);
+    }
+  }
 
   function openNew() {
     draft = emptyDraft();
@@ -84,7 +120,7 @@
     busy = true;
     formError = "";
     try {
-      await runApi(createAgentSchedule(base, agent.id, { ...bodyOf(draft), destination: "main" }));
+      await runApi(createAgentSchedule(base, agent.id, bodyOf(draft)));
       toastOk("Scheduled");
       closeForm();
     } catch (e) {
@@ -139,8 +175,6 @@
       loadError = e instanceof Error ? e.message : String(e);
     }
   }
-
-  const destLabel = (s: AgentSchedule) => (s.destination === "main" ? "Main chat" : s.destination === "new_chat" ? "New chat each run" : "Another chat");
 </script>
 
 <DrawerHeader title="Scheduled" subtitle={`@${agent.handle} — runs on its own, results land in the chat`} avatar={agent.avatar} {onClose} />
@@ -196,9 +230,28 @@
       </div>
       <div>
         <span class={label}>Send the result to</span>
+        {#if editingRow && editingRow.destination !== "main" && editingRow.destination !== "telegram"}
+          <label class="flex items-center gap-2 text-sm text-black-900 dark:text-white-100">
+            <input type="radio" name="sch-dest" checked={draft.dest === "other"} onchange={() => pickDest("other")} /> {destLabel(editingRow)} <span class={muted}>(where it runs now)</span>
+          </label>
+        {/if}
         <label class="flex items-center gap-2 text-sm text-black-900 dark:text-white-100">
-          <input type="radio" checked disabled={!!editingRow} /> Main chat
+          <input type="radio" name="sch-dest" checked={draft.dest === "main"} onchange={() => pickDest("main")} /> Main chat
         </label>
+        {#if data.telegram_connected}
+          <label class="mt-1 flex items-center gap-2 text-sm text-black-900 dark:text-white-100" data-testid="dest-telegram">
+            <input type="radio" name="sch-dest" checked={draft.dest === "telegram"} disabled={tgChats.length === 0} onchange={() => pickDest("telegram")} /> Telegram chat
+          </label>
+          {#if tgChats.length === 0}
+            <p class="ml-6 {muted}">Nobody has messaged the agent's Telegram bot yet — a bot can only post to a chat that wrote to it.</p>
+          {:else if draft.dest === "telegram"}
+            <div class="mt-1 pl-6">
+              <select class={input} bind:value={draft.tgSession} onchange={queueSave} aria-label="Telegram chat">
+                {#each tgChats as c (c.session_id)}<option value={c.session_id}>{c.title}</option>{/each}
+              </select>
+            </div>
+          {/if}
+        {/if}
         {#if data.slack_online}
           <label class="mt-1 flex items-center gap-2 text-sm text-black-800 opacity-60 dark:text-black-600" data-testid="dest-slack">
             <input type="radio" disabled /> Slack channel <span class="text-xs">(coming soon)</span>
@@ -232,7 +285,7 @@
           <div class="flex items-start gap-3">
             <div class="min-w-0 flex-1">
               <p class="truncate text-sm font-medium text-black-900 dark:text-white-100">{s.title || "(no message)"}</p>
-              <p class="mt-0.5 {muted}">{whenLabel(s)} · {destLabel(s)}</p>
+              <p class="mt-0.5 {muted}">{whenLabel(s)} · {destLabel(s, tgChats)}</p>
               <p class="mt-0.5 {muted}">
                 {#if isLive(s) && !s.paused && s.next_run_at}Next {fmtTime(s.next_run_at)}{/if}
                 {#if s.last_run_at}{isLive(s) && !s.paused && s.next_run_at ? " · " : ""}Last {fmtTime(s.last_run_at)}{/if}
@@ -251,11 +304,38 @@
                     <button type="button" role="menuitem" class="block w-full px-3 py-1.5 text-left text-sm hover:bg-white-200 dark:hover:bg-navy-600" onclick={() => runNow(s)}>Run now</button>
                     <button type="button" role="menuitem" class="block w-full px-3 py-1.5 text-left text-sm hover:bg-white-200 dark:hover:bg-navy-600" onclick={() => openEdit(s)}>Edit</button>
                   {/if}
+                  <button type="button" role="menuitem" class="block w-full px-3 py-1.5 text-left text-sm hover:bg-white-200 dark:hover:bg-navy-600" onclick={() => toggleHistory(s)}>{historyFor === s.id ? "Hide history" : "History"}</button>
                   <button type="button" role="menuitem" class="block w-full px-3 py-1.5 text-left text-sm text-neg-400 hover:bg-white-200 dark:hover:bg-navy-600" onclick={() => { menuFor = null; confirmDelete = s; }}>Delete</button>
                 </div>
               {/if}
             </div>
           </div>
+          {#if historyFor === s.id}
+            <div class="mt-2 border-t border-white-300 pt-2 dark:border-navy-600" data-testid="scheduled-history">
+              <p class="mb-1 text-xs font-medium text-black-900 dark:text-white-100">Last runs</p>
+              {#if runsError}
+                <p class="text-xs text-neg-400">{runsError}</p>
+              {:else if !runs}
+                <p class={muted}>Loading…</p>
+              {:else if runs.items.length === 0}
+                <p class={muted}>{runs.last_error ? `No run reached the chat. Last error: ${runs.last_error}` : "It hasn't run yet."}</p>
+              {:else}
+                <ul class="space-y-1">
+                  {#each runs.items as r (r.turn_id || r.at)}
+                    {@const rs = runStatus(r)}
+                    <li class="flex items-center gap-2 text-xs" data-testid="run-row">
+                      <span class="w-36 shrink-0 text-black-900 dark:text-white-100">{fmtTime(r.at)}</span>
+                      <span class="shrink-0 rounded-full px-2 py-0.5 {TONE[rs.tone]}">{rs.label}</span>
+                      <span class="min-w-0 flex-1 truncate text-neg-400" title={r.error}>{r.error ?? ""}</span>
+                      {#if onOpenSession}
+                        <button type="button" class="shrink-0 text-green-600 hover:underline dark:text-green-400" onclick={() => onOpenSession(r.session_id)}>Open message</button>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </div>
+          {/if}
           {#if confirmDelete?.id === s.id}
             <div class="mt-2 flex items-center gap-2 rounded-lg bg-white-200 px-3 py-2 dark:bg-navy-600" data-testid="confirm-delete">
               <span class="flex-1 text-xs text-black-900 dark:text-white-100">Delete this schedule?</span>
