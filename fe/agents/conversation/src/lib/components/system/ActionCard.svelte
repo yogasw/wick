@@ -54,7 +54,7 @@
       {/if}
     </div>
     {#if card.rows && card.rows.length > 0}
-      <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+      <dl class="text-xs" style="display:grid;grid-template-columns:auto 1fr;column-gap:0.75rem;row-gap:0.125rem">
         {#each card.rows as [k, val]}
           <dt class="text-black-600 dark:text-black-500">{k}</dt>
           <dd class="min-w-0 break-words text-black-900 dark:text-white-100">{val}</dd>
