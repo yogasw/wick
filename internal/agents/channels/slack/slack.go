@@ -31,6 +31,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"github.com/yogasw/wick/internal/agents/store"
 )
 
@@ -664,6 +665,8 @@ func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string)
 		}
 	}
 
+	slackremote.NoteWickID(botUserID)
+
 	s.cfgMu.Lock()
 	s.cfg = cfg
 	s.pubURL = pubURL
@@ -1242,6 +1245,7 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 		chType := ""
 		if m, ok := outer.InnerEvent.Data.(*slackevents.MessageEvent); ok {
 			chType = m.ChannelType
+			routeToRemoteTurns(m)
 		}
 		s.observeEvent(observedEventName(outer.InnerEvent.Type, chType))
 		switch ev := outer.InnerEvent.Data.(type) {
@@ -1835,6 +1839,25 @@ func (s *Channel) HTTPHandler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		go s.handleEventsAPI(context.Background(), apiEvent)
 	})
+}
+
+// routeToRemoteTurns hands a message event to the turns of Slack remote
+// agents waiting in that thread — the shared listener of plan 6.2c, so a
+// remote agent opens no connection of its own. A no-op while none waits.
+func routeToRemoteTurns(ev *slackevents.MessageEvent) {
+	if slackremote.Shared.Waiting() == 0 {
+		return
+	}
+	var edited *slackremote.Message
+	if ev.Message != nil {
+		edited = &slackremote.Message{
+			TS: ev.Message.Timestamp, ThreadTS: ev.Message.ThreadTimestamp,
+			User: ev.Message.User, BotID: ev.Message.BotID, Text: ev.Message.Text,
+		}
+	}
+	if m, ok := slackremote.FromEvent(ev.Channel, ev.SubType, ev.TimeStamp, ev.ThreadTimeStamp, ev.User, ev.BotID, ev.Text, edited); ok {
+		slackremote.Shared.Dispatch(m)
+	}
 }
 
 // verifySlackSignature validates the HMAC-SHA256 signature Slack attaches

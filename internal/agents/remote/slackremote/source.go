@@ -51,6 +51,9 @@ func NewSource(cfg Config, deps Deps) *Source {
 	if deps.Router == nil {
 		deps.Router = Shared
 	}
+	if deps.WickIDs == nil {
+		deps.WickIDs = WickIDs
+	}
 	return &Source{cfg: cfg, deps: deps}
 }
 

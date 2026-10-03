@@ -112,7 +112,8 @@ func start(t *testing.T, src *Source, msg string) func() result {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = p.Kill() })
+	// Wait lets the turn's End finish writing state before TempDir goes.
+	t.Cleanup(func() { _ = p.Kill(); _ = p.Wait() })
 	ch := make(chan result, 1)
 	go func() {
 		sc := bufio.NewScanner(p.Stdout())
@@ -288,5 +289,31 @@ func TestProgressLine(t *testing.T) {
 		if _, ok := progressLine(in); ok != want {
 			t.Errorf("progressLine(%q) = %v", in, ok)
 		}
+	}
+}
+
+func TestFromEventAndRouterKeys(t *testing.T) {
+	if _, ok := FromEvent("C1", "channel_join", "1.1", "", "U", "", "joined", nil); ok {
+		t.Fatal("channel_join routed")
+	}
+	m, ok := FromEvent("C1", "message_changed", "9.9", "", "", "", "", &Message{TS: "1.2", ThreadTS: "1.0", User: "UBOT", Text: "edited"})
+	if !ok || m.Channel != "C1" || m.TS != "1.2" || !m.Edited || m.Text != "edited" {
+		t.Fatalf("message_changed = %+v %v", m, ok)
+	}
+	rt := NewRouter()
+	tr := newTracker("C1", "1.0", "1.0", "", false, map[string]bool{}, func(Message) bool { return true })
+	rt.add(tr)
+	rt.Dispatch(Message{Channel: "C2", TS: "1.5", ThreadTS: "1.0", User: "UBOT", Text: "other channel"})
+	rt.Dispatch(Message{Channel: "C1", TS: "1.6", ThreadTS: "1.3", User: "UBOT", Text: "other thread"})
+	if len(tr.events) != 0 {
+		t.Fatalf("foreign messages routed: %d", len(tr.events))
+	}
+	rt.Dispatch(m)
+	if ev := <-tr.events; ev.Kind != remote.EventText || ev.Text != "edited" {
+		t.Fatalf("event = %+v", ev)
+	}
+	rt.remove(tr)
+	if rt.Waiting() != 0 {
+		t.Fatal("still waiting")
 	}
 }

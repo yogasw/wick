@@ -15,6 +15,23 @@ type Router struct {
 	turns map[string]map[*tracker]struct{}
 }
 
+// FromEvent is a message event as the Slack channel received it, flattened
+// for Dispatch: a message_changed carries the edited message.
+func FromEvent(channel, subtype, ts, threadTS, user, botID, text string, edited *Message) (Message, bool) {
+	switch subtype {
+	case "", "bot_message", "thread_broadcast", "file_share", "me_message":
+		return Message{Channel: channel, TS: ts, ThreadTS: threadTS, User: user, BotID: botID, Text: text}, true
+	case "message_changed":
+		if edited == nil {
+			return Message{}, false
+		}
+		m := *edited
+		m.Channel, m.Edited = channel, true
+		return m, true
+	}
+	return Message{}, false
+}
+
 // Shared is the process-wide router the Slack channel feeds.
 var Shared = NewRouter()
 
@@ -99,4 +116,25 @@ func (r *Router) Dispatch(m Message) {
 			}
 		}
 	}
+}
+
+// wickIDs holds the user and bot ids of every Slack identity wick posts
+// as, noted by the Slack channel as it learns them.
+var wickIDs sync.Map
+
+// NoteWickID records id as one of wick's own Slack identities.
+func NoteWickID(id string) {
+	if id != "" {
+		wickIDs.Store(id, struct{}{})
+	}
+}
+
+// WickIDs lists what NoteWickID recorded.
+func WickIDs() []string {
+	var out []string
+	wickIDs.Range(func(k, _ any) bool {
+		out = append(out, k.(string))
+		return true
+	})
+	return out
 }
