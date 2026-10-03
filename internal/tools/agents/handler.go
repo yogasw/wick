@@ -1047,6 +1047,7 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		}
 		allProjects = filteredMap
 	}
+	allProjectIDs = withoutAgentProjects(allProjectIDs, allProjects, scopedProjectID)
 	return view.AgentsLayoutVM{
 		Base:                c.Base(),
 		ActivePage:          activePage,
@@ -1067,6 +1068,21 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		AirouterVisible:     AirouterVisible(c.Context()),
 		ProvidersVisible:    HasManageableProvider(c),
 	}
+}
+
+// withoutAgentProjects drops the Team app's agent projects from the
+// sidebar's Projects list. They stay in the projects map, so a session in
+// one still shows its project name, and the one being viewed (reached by
+// URL or from the agent) is kept so the open page has its row.
+func withoutAgentProjects(ids []string, projects map[string]project.Project, keep string) []string {
+	out := make([]string, 0, len(ids))
+	for _, pid := range ids {
+		if p, ok := projects[pid]; ok && project.IsAgentProject(p.Meta) && pid != keep {
+			continue
+		}
+		out = append(out, pid)
+	}
+	return out
 }
 
 // projectChoices builds the picker rows for the compose form / move menu

@@ -7,14 +7,13 @@
   import { ProviderPicker, Toggle, buildProviderOptions } from "@wick-fe/common-ui";
   import { toastOk } from "@wick-fe/common-stores";
   import DrawerHeader from "./DrawerHeader.svelte";
-  import AgentAvatar from "./AgentAvatar.svelte";
+  import { AgentAvatar, AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, colorInputValue } from "@wick-fe/common-avatar";
   import { getProviderOptions, getProjectOptions } from "../api/options.js";
   import {
-    updateAgent, deleteAgent, listAgentConnectors, runApi,
+    updateAgent, deleteAgent, getProjectPersona, listAgentConnectors, runApi,
     type AgentItem, type AgentWrite, type ConnectorGrant, type AgentConnector,
   } from "../api/team.js";
-  import { FEATURE_TABS, type AgentFeatures } from "../agentMode.js";
-  import { AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, colorInputValue } from "../avatarShape.js";
+  import { FEATURE_TABS, railShownNote, type AgentFeatures } from "../agentMode.js";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, type GrantErrors } from "../agentForm.js";
   import type { SettingsTab } from "../agentsRouter.js";
@@ -93,8 +92,42 @@
       .finally(() => { catalogLoading = false; });
   });
 
+  /* Switching the project reloads the persona fields from it at once
+     (before Save), so the form shows what the agent will become. Back to
+     the agent's own project restores what it has now. Whatever is in the
+     fields at Save is written to the newly picked project. */
+  let projectLoading = $state(false);
+  async function switchProject(id: string) {
+    draft.project_id = id;
+    if (!id || id === agent.project_id) {
+      Object.assign(draft, {
+        name: agent.name, description: agent.description, system_prompt: agent.system_prompt,
+        pick: joinPick(agent.provider, agent.model),
+      });
+      return;
+    }
+    projectLoading = true;
+    error = "";
+    try {
+      const p = await runApi(getProjectPersona(base, id));
+      if (draft.project_id !== id) return;
+      Object.assign(draft, {
+        name: p.name || draft.handle, description: p.description, system_prompt: p.system_prompt,
+        pick: joinPick(p.provider, p.model),
+      });
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      projectLoading = false;
+    }
+  }
+  const projectSwitched = $derived(!!draft.project_id && draft.project_id !== agent.project_id);
+
+  /* The server counts every user of the project (other owners' agents,
+     web/channel chats); the local roster is the fallback for an older one. */
   const sharedWith = $derived(
-    agent.project_id ? agents.filter((a) => a.id !== agent.id && a.project_id === agent.project_id).length : 0,
+    agent.shared_with ??
+      (agent.project_id ? agents.filter((a) => a.id !== agent.id && a.project_id === agent.project_id).length : 0),
   );
 
   /* ── save ──────────────────────────────────────────────────────── */
@@ -207,6 +240,11 @@
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">
         Disimpan ke project agent (tersembunyi){#if sharedWith > 0} · dipakai juga oleh {sharedWith} agent{/if}
       </p>
+      {#if projectSwitched}
+        <p class="mt-1 text-xs text-black-800 dark:text-black-600">
+          {projectLoading ? "Memuat persona dari project baru…" : "Dimuat dari project baru (tab Lanjutan) — perubahan yang disimpan berlaku ke project tersebut."}
+        </p>
+      {/if}
     </div>
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <div>
@@ -274,9 +312,17 @@
       <span class={label}>Fitur wick</span>
       <div class="space-y-3">
         {#each FEATURE_TABS as f (f.feature)}
-          <Toggle checked={draft.features[f.feature]} onChange={(v) => (draft.features[f.feature] = v)} label={f.label} />
+          <!-- Toggle draws only the switch; the name and hint sit beside it. -->
+          <div class="flex items-start gap-3">
+            <Toggle checked={draft.features[f.feature]} onChange={(v) => (draft.features[f.feature] = v)} label={f.label} describedBy={f.hint ? `as-ft-${f.feature}` : undefined} />
+            <span class="min-w-0">
+              <span class="block text-sm text-black-900 dark:text-white-100">{f.label}</span>
+              {#if f.hint}<span id="as-ft-{f.feature}" class="block text-xs text-black-800 dark:text-black-600">{f.hint}</span>{/if}
+            </span>
+          </div>
         {/each}
       </div>
+      <p class="mt-2 text-xs text-black-800 dark:text-black-600">{railShownNote(draft.features)}</p>
     </div>
   {:else if tab === "avatar"}
     <div class="flex items-center gap-4">
@@ -324,7 +370,7 @@
     </div>
     <div>
       <span class={label}>State</span>
-      <div class="grid grid-cols-3 gap-3 sm:grid-cols-6">
+      <div class="grid grid-cols-3 gap-3 sm:grid-cols-7">
         {#each AVATAR_STATES as st (st)}
           <div class="flex flex-col items-center gap-1.5 text-center">
             <AgentAvatar shape={draft.avatar.shape} color={draft.avatar.color} size={40} pose={st} />
@@ -340,13 +386,13 @@
     </div>
     <div>
       <label class={label} for="as-project">Project</label>
-      <select id="as-project" class={input} bind:value={draft.project_id}>
+      <select id="as-project" class={input} value={draft.project_id} onchange={(e) => switchProject((e.currentTarget as HTMLSelectElement).value)}>
         {#each projectChoices as p (p.id)}
           <option value={p.id}>{p.name}</option>
         {/each}
       </select>
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        Ganti project = persona dimuat ulang dari project itu; percakapan lama tetap di project lama.
+        Ganti project = persona langsung dimuat ulang dari project itu, dan perubahan persona yang disimpan berlaku ke project tersebut; percakapan lama tetap di project lama.
       </p>
     </div>
     <div>

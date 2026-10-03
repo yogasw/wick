@@ -9,7 +9,7 @@
   import ToolCard from "./ToolCard.svelte";
   import TodoCard from "./TodoCard.svelte";
   import { turnDay, turnDayKey, activeDayLabel } from "../timeFormat.js";
-  import AgentAvatar from "./AgentAvatar.svelte";
+  import { AgentAvatar } from "@wick-fe/common-avatar";
   import type { AgentIdentity } from "../agentMode.js";
 
   type Props = {

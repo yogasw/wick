@@ -16,7 +16,10 @@ import {
   normalizeState,
   radiusAt,
   stateFor,
-} from "../avatarShape.js";
+  orbitDot,
+  hashHandle,
+  defaultAvatarFor,
+} from "../shape.js";
 
 /* Parse "M x yL x y…Z" back into points. */
 function points(d: string): [number, number][] {
@@ -29,7 +32,8 @@ describe("normalize", () => {
     expect(normalizeShape("hexagon")).toBe("circle");
     expect(normalizeShape(undefined)).toBe("circle");
     expect(normalizeShape("diamond")).toBe("diamond");
-    expect(normalizeState("orbit")).toBe("idle");
+    expect(normalizeState("comet")).toBe("idle");
+    expect(normalizeState("orbit")).toBe("orbit");
     expect(normalizeState("alert")).toBe("alert");
   });
 });
@@ -38,6 +42,9 @@ describe("stateFor", () => {
   test("egg beats work beats sleep beats attention", () => {
     expect(stateFor({ hatching: true, working: true, asleep: true })).toBe("egg");
     expect(stateFor({ working: true, asleep: true, alert: true })).toBe("thinking");
+    expect(stateFor({ working: true, tool: true, asleep: true })).toBe("orbit");
+    // A tool name left over from a finished turn does not keep it orbiting.
+    expect(stateFor({ tool: true })).toBe("idle");
     expect(stateFor({ asleep: true, notify: true })).toBe("sleep");
     expect(stateFor({ alert: true, notify: true })).toBe("alert");
     expect(stateFor({ notify: true })).toBe("notify");
@@ -160,4 +167,30 @@ describe("colorInputValue", () => {
 
 test("every avatar state has a grid caption", () => {
   for (const s of AVATAR_STATES) expect(AVATAR_STATE_LABELS[s]).toBeTruthy();
+});
+
+describe("orbit", () => {
+  test("only orbit has a satellite, and it circles outside the body", () => {
+    for (const st of AVATAR_STATES) {
+      if (st !== "orbit") expect(orbitDot(st, 1)).toBeNull();
+    }
+    const a = orbitDot("orbit", 0)!;
+    const b = orbitDot("orbit", 0.5)!;
+    expect(Math.hypot(a.x, a.y)).toBeGreaterThan(BODY_R);
+    expect(a).not.toEqual(b);
+    expect(orbitDot("orbit", 0, false)).toEqual(orbitDot("orbit", 9, false));
+  });
+});
+
+describe("defaultAvatarFor", () => {
+  test("FNV-1a matches the server's team.DefaultAvatarFor vectors", () => {
+    expect(hashHandle("log-hunter")).toBe(728470498);
+    expect(defaultAvatarFor("log-hunter")).toEqual({ shape: AVATAR_SHAPES[0], color: AVATAR_COLORS[2] });
+    expect(defaultAvatarFor("captain")).toEqual({ shape: AVATAR_SHAPES[1], color: AVATAR_COLORS[3] });
+  });
+  test("is deterministic and spreads across the palette", () => {
+    expect(defaultAvatarFor("x-1")).toEqual(defaultAvatarFor("x-1"));
+    const colors = new Set(["a", "b", "c", "d", "e", "f", "g", "h"].map((h) => defaultAvatarFor(h).color));
+    expect(colors.size).toBeGreaterThan(2);
+  });
 });

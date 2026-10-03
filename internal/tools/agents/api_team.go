@@ -521,6 +521,7 @@ func createTeamAgentProject(c *tool.Ctx, name, icon, description, systemPrompt, 
 		Icon:        strings.TrimSpace(icon),
 		Description: description,
 		OwnerUserID: actorID(c),
+		Tags:        []string{project.AgentTag},
 		Defaults: project.Defaults{
 			Provider:    strings.TrimSpace(provider),
 			Model:       modelWithProvider(provider, model),
@@ -652,7 +653,8 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		grants = team.EncodeGrants(*req.AllowedConnectors)
 	}
 	pid := strings.TrimSpace(str(req.ProjectID))
-	if pid != "" {
+	existing := pid != ""
+	if existing {
 		if !requireUsableProject(c, pid) {
 			return
 		}
@@ -674,7 +676,7 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 	if req.Features != nil {
 		feats = *req.Features
 	}
-	av := team.DefaultAvatar()
+	av := team.DefaultAvatarFor(handle)
 	if req.Avatar != nil {
 		av = *req.Avatar
 	}
@@ -689,6 +691,20 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 	if err := globalTeam.Create(c.Context(), p); err != nil {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
+	}
+	if existing {
+		// "Pakai project yang ada": the wizard shows that project's persona
+		// and sends back what is in the form, so a name typed there is the
+		// agent's name rather than being dropped for the project's.
+		if proj, ok := globalMgr.Registry().Project(pid); ok {
+			meta := proj.Meta
+			if applyProjectFields(&meta, req) {
+				if _, err := globalMgr.UpdateProject(c.Context(), pid, meta); err != nil {
+					c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+					return
+				}
+			}
+		}
 	}
 	users := teamProjectUsersFor(c.Context(), []entity.AgentPersona{*p})
 	c.JSON(http.StatusOK, teamAgentToItem(*p, users, teamLiveNow()))

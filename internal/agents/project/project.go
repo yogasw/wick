@@ -331,6 +331,15 @@ func Delete(layout config.Layout, id string) error {
 // change).
 const PersonalTag = "personal"
 
+// AgentTag marks a project the Team app made to hold an agent's persona
+// (Captain included). Such a project is left out of the sidebar's Projects
+// list; it stays reachable by URL and from the agent. A project an agent
+// was pointed at by the user carries no tag and keeps showing.
+const AgentTag = "agent"
+
+// IsAgentProject reports whether meta carries AgentTag.
+func IsAgentProject(meta Meta) bool { return slices.Contains(meta.Tags, AgentTag) }
+
 // IsProtected reports whether meta names a project that cannot be
 // deleted: the built-in "default" project (matched by name), or a
 // personal project (one carrying PersonalTag — the auto-created per-user

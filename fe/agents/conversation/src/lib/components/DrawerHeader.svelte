@@ -2,7 +2,7 @@
   /* Title row shared by the Agents app drawers: the agent's avatar (when
      the drawer belongs to one), title, optional subtitle, and the ✕ (Esc
      does the same, handled by the app shell). */
-  import AgentAvatar from "./AgentAvatar.svelte";
+  import { AgentAvatar } from "@wick-fe/common-avatar";
 
   type Props = {
     title: string;

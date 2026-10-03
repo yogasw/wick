@@ -2,21 +2,24 @@
   /* Agent avatar: a coloured blob (circle / squircle / triangle / diamond)
      with two dark eyes. It is alive rather than a still picture (PLAN 6.5,
      phase 1a): idle breathes and blinks, thinking wobbles and looks up,
-     alert opens wide, notify plays once when the agent finishes a turn, a
+     orbit (a tool is running) wobbles with a dot circling it, alert opens wide, notify plays once when the agent finishes a turn, a
      disabled agent sleeps and a new one hatches from an egg. The eyes
      follow the pointer, hover makes it attentive and a click winks.
 
      Every avatar on the page rides one shared rAF and one pointermove
      listener (avatarTicker.ts), paused while the tab is hidden. Under
-     prefers-reduced-motion nothing subscribes and the still frame is drawn. */
-  import { blobPath, eyesAt, gazeTarget, approach, followsPointer, normalizeShape, normalizeState, stateFor, type AvatarState, type Vec } from "../avatarShape.js";
-  import { subscribe, pointer, pointerActive, prefersReducedMotion } from "../avatarTicker.js";
+     prefers-reduced-motion (or with `still`) nothing subscribes and the
+     still frame is drawn. */
+  import { blobPath, eyesAt, orbitDot, gazeTarget, approach, followsPointer, normalizeShape, normalizeState, stateFor, DOT_R, type AvatarState, type Vec } from "./shape.js";
+  import { subscribe, pointer, pointerActive, prefersReducedMotion } from "./ticker.js";
 
   type Props = {
     shape?: string;
     color?: string;
     size?: number;
     working?: boolean;
+    /** The running turn is on a tool: orbit instead of thinking. */
+    tool?: boolean;
     /** Greyed and eyes closed: a disabled agent. */
     asleep?: boolean;
     /** Just created: drawn as an egg that pops into the agent. */
@@ -27,6 +30,8 @@
     notify?: boolean;
     /** Force a state (Settings preview); otherwise derived from the flags. */
     pose?: AvatarState;
+    /** Draw one still frame and never animate (cards, dense lists). */
+    still?: boolean;
     title?: string;
   };
   let {
@@ -34,11 +39,13 @@
     color = "#6366f1",
     size = 40,
     working = false,
+    tool = false,
     asleep = false,
     hatching = false,
     alert = false,
     notify = false,
     pose,
+    still = false,
     title,
   }: Props = $props();
 
@@ -46,7 +53,8 @@
   const WINK_MS = 450;
 
   const s = $derived(normalizeShape(shape));
-  const reduced = prefersReducedMotion();
+  const motionReduced = prefersReducedMotion();
+  const reduced = $derived(still || motionReduced);
 
   /* "Pesan masuk dari agent ini → notify sekali": a finished turn plays
      notify for a moment, without needing an unread field. */
@@ -65,7 +73,7 @@
   $effect(() => () => clearTimeout(replyTimer));
 
   const current = $derived<AvatarState>(
-    pose ? normalizeState(pose) : stateFor({ working, asleep, hatching, alert, notify: notify || justReplied }),
+    pose ? normalizeState(pose) : stateFor({ working, tool, asleep, hatching, alert, notify: notify || justReplied }),
   );
 
   let hover = $state(false);
@@ -100,6 +108,7 @@
 
   const path = $derived(blobPath(s, current, t, !reduced));
   const eyes = $derived(eyesAt(current, t, gaze, { animate: !reduced, hover, wink }));
+  const dot = $derived(orbitDot(current, t, !reduced));
   const fill = $derived(/^#[0-9a-f]{3,8}$/i.test(color) ? color : "#6366f1");
 </script>
 
@@ -127,6 +136,7 @@
   {#each eyes as e, i (i)}
     <ellipse cx={e.cx.toFixed(3)} cy={e.cy.toFixed(3)} rx={e.rx} ry={e.ry.toFixed(3)} fill="#16181d" opacity="0.88" />
   {/each}
+  {#if dot}<circle cx={dot.x.toFixed(3)} cy={dot.y.toFixed(3)} r={DOT_R} fill="#27b199" />{/if}
 </svg>
 
 <style>

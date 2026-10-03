@@ -8,11 +8,10 @@
      The provider lives in Settings › Lanjutan; the mockup's third "Connect"
      step waits for Slack/A2A (phase 1b). */
   import { onMount } from "svelte";
-  import AgentAvatar from "./AgentAvatar.svelte";
+  import { AgentAvatar, AVATAR_SHAPES, AVATAR_COLORS, defaultAvatarFor } from "@wick-fe/common-avatar";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { getProjectOptions } from "../api/options.js";
-  import { createAgent, listAgentConnectors, runApi, type AgentItem, type AgentConnector, type ConnectorGrant } from "../api/team.js";
-  import { AVATAR_SHAPES, AVATAR_COLORS } from "../avatarShape.js";
+  import { createAgent, getProjectPersona, listAgentConnectors, runApi, type AgentItem, type AgentConnector, type ConnectorGrant } from "../api/team.js";
   import { HANDLE_RE, slugHandle, uniqueHandle, parseGrantErrors, type GrantErrors } from "../agentForm.js";
 
   type Props = {
@@ -33,7 +32,14 @@
   let systemPrompt = $state("");
   let shape = $state("circle");
   let color = $state(AVATAR_COLORS[1]);
+  // Until a shape or swatch is picked the avatar follows the handle's hash
+  // (same function as the server's default), so it is stable per handle.
+  let avatarTouched = $state(false);
   let projectId = $state("");
+  // What was typed before an existing project replaced it, so going back
+  // to "Project baru" restores it.
+  let typed: { name: string; systemPrompt: string } | null = null;
+  let projectLoading = $state(false);
   let projects = $state<{ id: string; name: string }[]>([]);
 
   let catalog = $state<AgentConnector[]>([]);
@@ -47,8 +53,6 @@
   let grantErrors = $state<GrantErrors | null>(null);
 
   onMount(() => {
-    // A different swatch per agent, so a fresh roster is not all one colour.
-    color = AVATAR_COLORS[taken.length % AVATAR_COLORS.length];
     runApi(getProjectOptions(base)).then((p) => { projects = p ?? []; }).catch(() => {});
     runApi(listAgentConnectors(base))
       .then((c) => { catalog = c ?? []; })
@@ -60,6 +64,40 @@
   $effect(() => {
     if (!handleTouched) handle = uniqueHandle(slugHandle(name), taken);
   });
+
+  $effect(() => {
+    if (avatarTouched) return;
+    const d = defaultAvatarFor(handle || "agent");
+    shape = d.shape;
+    color = d.color;
+  });
+
+  /* "Pakai project yang ada": the form shows that project's persona right
+     away. Whatever is in the fields at submit is sent and written to the
+     project, so a name typed after the pick is the one the agent gets. */
+  async function pickProject(id: string) {
+    if (id && !typed) typed = { name, systemPrompt };
+    projectId = id;
+    if (!id) {
+      if (typed) {
+        name = typed.name;
+        systemPrompt = typed.systemPrompt;
+      }
+      typed = null;
+      return;
+    }
+    projectLoading = true;
+    try {
+      const p = await runApi(getProjectPersona(base, id));
+      if (projectId !== id) return;
+      name = p.name;
+      systemPrompt = p.system_prompt;
+    } catch {
+      // Unreadable project: keep what is there; the create will say why.
+    } finally {
+      projectLoading = false;
+    }
+  }
 
   const handleOk = $derived(HANDLE_RE.test(handle));
   const handleTaken = $derived(taken.includes(handle));
@@ -152,7 +190,7 @@
               class="rounded-xl border-2 p-1 {shape === s ? 'border-green-500' : 'border-white-300 dark:border-navy-600'}"
               aria-label={s}
               aria-pressed={shape === s}
-              onclick={() => (shape = s)}
+              onclick={() => { shape = s; avatarTouched = true; }}
             ><AgentAvatar shape={s} {color} size={28} /></button>
           {/each}
         </div>
@@ -164,7 +202,7 @@
               style:background-color={col}
               aria-label={col}
               aria-pressed={color === col}
-              onclick={() => (color = col)}
+              onclick={() => { color = col; avatarTouched = true; }}
             ></button>
           {/each}
         </div>
@@ -201,14 +239,14 @@
     <details class="text-sm text-black-800 dark:text-black-600">
       <summary class="cursor-pointer select-none">Lanjutan — project (default: dibuat otomatis)</summary>
       <div class="mt-2">
-        <select class={input} bind:value={projectId} aria-label="Project">
+        <select class={input} value={projectId} onchange={(e) => pickProject((e.currentTarget as HTMLSelectElement).value)} aria-label="Project">
           <option value="">Project baru (otomatis)</option>
           {#each projects as p (p.id)}
             <option value={p.id}>{p.name}</option>
           {/each}
         </select>
         {#if projectId}
-          <p class="mt-1 text-xs">Persona diambil dari project ini — system prompt di atas tidak dipakai.</p>
+          <p class="mt-1 text-xs">{projectLoading ? "Memuat persona project…" : "Persona di atas dimuat dari project ini; nama & system prompt yang disimpan berlaku ke project tersebut."}</p>
         {/if}
       </div>
     </details>

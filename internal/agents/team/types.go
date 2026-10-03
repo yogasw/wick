@@ -8,7 +8,10 @@
 // handle, the Captain flag and the access checklist.
 package team
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"hash/fnv"
+)
 
 // Grant levels for ConnectorGrant.Level.
 const (
@@ -92,6 +95,24 @@ var AvatarShapes = []string{"circle", "squircle", "triangle", "diamond"}
 
 // DefaultAvatar is used when a row carries none.
 func DefaultAvatar() Avatar { return Avatar{Shape: "circle", Color: "#6366f1"} }
+
+// AvatarColors is the swatch palette, in the same order as the UI's
+// AVATAR_COLORS (fe/common/avatar/src/shape.ts).
+var AvatarColors = []string{"#6366f1", "#27b199", "#0ea5e9", "#f59e0b", "#ef4444", "#ec4899", "#8b5cf6", "#64748b"}
+
+// DefaultAvatarFor is a new agent's starting look: colour and shape picked
+// by the 32-bit FNV-1a hash of the handle, the same function as the UI's
+// defaultAvatarFor, so a handle always gets the same avatar on both sides.
+func DefaultAvatarFor(handle string) Avatar {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(handle))
+	n := h.Sum32()
+	nc := uint32(len(AvatarColors))
+	return Avatar{
+		Shape: AvatarShapes[(n/nc)%uint32(len(AvatarShapes))],
+		Color: AvatarColors[n%nc],
+	}
+}
 
 // NormalizeAvatar replaces an unknown shape or an empty color with the
 // default, so the UI never receives a value it cannot draw.

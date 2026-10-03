@@ -9,7 +9,7 @@
   import { KebabMenu, ToastHost } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
   import DetailView from "./lib/components/DetailView.svelte";
-  import AgentAvatar from "./lib/components/AgentAvatar.svelte";
+  import { AgentAvatar } from "@wick-fe/common-avatar";
   import AgentSettings from "./lib/components/AgentSettings.svelte";
   import AgentWizard from "./lib/components/AgentWizard.svelte";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
@@ -323,7 +323,7 @@
           aria-current={active ? "page" : undefined}
           onclick={() => openAgent(a)}
         >
-          <AgentAvatar shape={a.avatar?.shape} color={a.avatar?.color} size={44} {working} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
+          <AgentAvatar shape={a.avatar?.shape} color={a.avatar?.color} size={44} {working} tool={!!a.current_action} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
           {#if st.unread}<span class="roster-udot rounded-full border-2 border-white-200 bg-neg-400 dark:border-navy-700" aria-label="pesan baru"></span>{/if}
           <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{st.tip}</span>
           <span class="min-w-0 flex-1">
@@ -359,7 +359,7 @@
         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
       </button>
       {#if selected}
-        <AgentAvatar shape={selected.avatar?.shape} color={selected.avatar?.color} size={36} working={isWorking(selected.status)} asleep={selected.disabled} hatching={hatching.includes(selected.id)} />
+        <AgentAvatar shape={selected.avatar?.shape} color={selected.avatar?.color} size={36} working={isWorking(selected.status)} tool={!!selected.current_action} asleep={selected.disabled} hatching={hatching.includes(selected.id)} />
         <div class="min-w-0 flex-1">
           <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">
             {selected.name}

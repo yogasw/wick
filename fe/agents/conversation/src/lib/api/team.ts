@@ -104,6 +104,23 @@ export const updateAgent = (base: string, id: string, body: AgentWrite) =>
 export const deleteAgent = (base: string, id: string) =>
   apiDeleteE<unknown>(`${base}/api/team/agents/${enc(id)}`);
 
+/** The persona half an agent reads from its project (same fields
+    teamAgentToItem fills from project meta), for the Settings project
+    switch and the wizard's "existing project" pick. */
+export type ProjectPersona = {
+  name: string; description: string; system_prompt: string; provider: string; model: string;
+};
+
+export const getProjectPersona = (base: string, projectId: string) =>
+  apiGetE<{ name?: string; description?: string; system_addon?: string; default_provider?: string; default_model?: string }>(
+    `${base}/api/projects/${enc(projectId)}`,
+  ).pipe(
+    Effect.map((r): ProjectPersona => ({
+      name: r.name ?? "", description: r.description ?? "", system_prompt: r.system_addon ?? "",
+      provider: r.default_provider ?? "", model: r.default_model ?? "",
+    })),
+  );
+
 export const listAgentConnectors = (base: string) =>
   apiGetE<AgentConnector[] | null>(`${base}/api/team/agents/connectors`);
 

@@ -2,7 +2,9 @@
    gaze) so the component stays a thin renderer and every frame can be
    tested without a DOM. This is a light imitation of the bloub engine
    (PLAN 6.5), not a port of it: a superformula outline that breathes,
-   two dark eyes that blink and follow the pointer, and a few states.
+   two dark eyes that blink and follow the pointer, and a few states. No
+   bloub code is copied here, so its MIT notice does not apply; whoever
+   ports the real engine into this package adds the notice with it.
 
    Coordinates are unit space: the outline's widest point sits at radius
    BODY_R around (0, 0), drawn in a viewBox of -1.4..1.4 so a wobble or a
@@ -17,19 +19,40 @@ export const AVATAR_COLORS = [
   "#6366f1", "#27b199", "#0ea5e9", "#f59e0b", "#ef4444", "#ec4899", "#8b5cf6", "#64748b",
 ];
 
-/** Phase 1a states (PLAN 6.5). sleep = disabled agent, egg = just created. */
-export type AvatarState = "idle" | "thinking" | "alert" | "notify" | "sleep" | "egg";
-export const AVATAR_STATES: AvatarState[] = ["idle", "thinking", "alert", "notify", "sleep", "egg"];
+/** Phase 1a states (PLAN 6.5). orbit = the turn is on a tool, sleep =
+    disabled agent, egg = just created. */
+export type AvatarState = "idle" | "thinking" | "orbit" | "alert" | "notify" | "sleep" | "egg";
+export const AVATAR_STATES: AvatarState[] = ["idle", "thinking", "orbit", "alert", "notify", "sleep", "egg"];
 
 /** Captions for the state grid in Settings → Avatar. */
 export const AVATAR_STATE_LABELS: Record<AvatarState, string> = {
   idle: "diam",
   thinking: "bekerja",
+  orbit: "pakai tool",
   alert: "perlu perhatian",
   notify: "pesan baru",
   sleep: "nonaktif",
   egg: "menetas",
 };
+
+/** hashHandle is 32-bit FNV-1a over the handle's UTF-16 code units. The
+    server's team.DefaultAvatarFor runs the same hash over the same
+    (ASCII-only) handles, so both sides pick the same default. */
+export function hashHandle(handle: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < handle.length; i++) {
+    h ^= handle.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/** defaultAvatarFor is a new agent's starting look: colour and shape from
+    the handle's hash, so the same handle always gets the same avatar. */
+export function defaultAvatarFor(handle: string): { shape: AvatarShape; color: string } {
+  const h = hashHandle(handle);
+  return { shape: AVATAR_SHAPES[Math.floor(h / AVATAR_COLORS.length) % AVATAR_SHAPES.length], color: AVATAR_COLORS[h % AVATAR_COLORS.length] };
+}
 
 /** colorInputValue turns a stored color into what <input type="color">
     accepts (#rrggbb, lowercase). A short #rgb is expanded; anything else
@@ -43,12 +66,14 @@ export function colorInputValue(c: string | null | undefined): string {
 
 /* a = wobble amplitude, k = lobes, w = wobble speed, open = eye height
    (1 = normal), ey = eye vertical shift, blink = blinks every BLINK_EVERY s,
-   look = eyes wander up and sideways (thinking), egg = taller, narrower. */
-type StateSpec = { a: number; k: number; w: number; open: number; ey: number; blink?: boolean; look?: boolean; egg?: boolean };
+   look = eyes wander up and sideways (thinking), egg = taller, narrower,
+   dot = a small satellite circles the body (orbit). */
+type StateSpec = { a: number; k: number; w: number; open: number; ey: number; blink?: boolean; look?: boolean; egg?: boolean; dot?: boolean };
 
 export const STATE_SPECS: Record<AvatarState, StateSpec> = {
   idle: { a: 0.035, k: 3, w: 1.1, open: 1, ey: 0, blink: true },
   thinking: { a: 0.09, k: 4, w: 3.6, open: 0.75, ey: -0.14, look: true },
+  orbit: { a: 0.06, k: 5, w: 5, open: 1, ey: 0, dot: true },
   alert: { a: 0.03, k: 3, w: 2, open: 1.25, ey: 0 },
   notify: { a: 0.05, k: 3, w: 2.2, open: 1, ey: 0, blink: true },
   sleep: { a: 0.02, k: 2, w: 0.5, open: 0.07, ey: 0.1 },
@@ -78,11 +103,11 @@ export function normalizeState(s: string | null | undefined): AvatarState {
 }
 
 /** stateFor picks the state from what the roster knows. A hatching egg
-    wins over everything, then work, then a disabled agent, then the
-    attention states. */
-export function stateFor(f: { working?: boolean; asleep?: boolean; hatching?: boolean; alert?: boolean; notify?: boolean }): AvatarState {
+    wins over everything, then work (orbit while a tool runs), then a
+    disabled agent, then the attention states. */
+export function stateFor(f: { working?: boolean; tool?: boolean; asleep?: boolean; hatching?: boolean; alert?: boolean; notify?: boolean }): AvatarState {
   if (f.hatching) return "egg";
-  if (f.working) return "thinking";
+  if (f.working) return f.tool ? "orbit" : "thinking";
   if (f.asleep) return "sleep";
   if (f.alert) return "alert";
   if (f.notify) return "notify";
@@ -122,6 +147,17 @@ export function blobPath(shape: AvatarShape, state: AvatarState = "idle", t = 0,
 }
 
 export type Vec = { x: number; y: number };
+
+export const DOT_R = 0.16;
+const DOT_ORBIT = 1.35;
+
+/** orbitDot is the satellite's centre at time t for a state that has one
+    (orbit), null otherwise. animate=false parks it at the top right. */
+export function orbitDot(state: AvatarState, t: number, animate = true): Vec | null {
+  if (!STATE_SPECS[state].dot) return null;
+  const a = animate ? t * 3 : -Math.PI / 4;
+  return { x: DOT_ORBIT * Math.cos(a), y: DOT_ORBIT * Math.sin(a) };
+}
 
 /** gazeTarget turns the pointer's offset from the avatar centre (px) into
     an eye offset in unit space: full lean from 160px away, less when the

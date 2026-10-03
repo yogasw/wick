@@ -3,7 +3,7 @@
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import { fetchOverview, fetchTeam, killSession, dequeueSession } from "$lib/api.js";
   import type { QueuedEntry, ActiveEntry, OverviewStats, TeamResponse } from "$lib/types.js";
-  import TeamAvatar from "$lib/TeamAvatar.svelte";
+  import { AgentAvatar } from "@wick-fe/common-avatar";
 
   const base: string = (document.getElementById("app")?.dataset.base ?? "").replace(/\/$/, "");
 
@@ -211,7 +211,7 @@
         <div class="flex items-center gap-4">
           {#each team.agents.slice(0, TEAM_PEEK) as a (a.id)}
             <a href={`${base}/team/${a.handle}`} class="flex w-14 flex-col items-center gap-1 hover:opacity-80" title={`@${a.handle}`}>
-              <TeamAvatar shape={a.avatar?.shape} color={a.avatar?.color} size={36} asleep={a.disabled} />
+              <AgentAvatar shape={a.avatar?.shape} color={a.avatar?.color} size={36} asleep={a.disabled} still />
               <span class="w-full truncate text-center text-[11px] text-black-700 dark:text-black-600">{a.name}</span>
             </a>
           {/each}
