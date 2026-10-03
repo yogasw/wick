@@ -110,6 +110,15 @@ type AgentEvent struct {
 	ErrorMsg  string // Error: short reason
 	Raw       string // verbatim source line
 
+	// ExitCode is the process exit status of a ToolResult, set only when
+	// the provider reports one (codex shell calls).
+	ExitCode *int
+
+	// Display is how a ToolUse input or ToolResult body should render —
+	// see display.go. Set by the parser on the FULL payload; nil for every
+	// other event type.
+	Display *Display
+
 	// SubAgent names the sub-agent an event was RELAYED from, and is set
 	// only on that relay — never by a parser. A leader's own events leave
 	// it empty; a child's status event forwarded onto the leader's thread

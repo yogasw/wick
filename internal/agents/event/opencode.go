@@ -28,6 +28,8 @@ import (
 //
 // Concurrency: one parser per subprocess.
 type OpencodeParser struct {
+	// tools pairs calls with results for Display (see display.go).
+	tools toolCalls
 	instance       string
 	sessionEmitted bool
 	usage          TokenUsage
@@ -115,6 +117,9 @@ func (p *OpencodeParser) ParseAll(line string) ([]AgentEvent, error) {
 		out = append(out, AgentEvent{Type: SessionStart, SessionID: raw.SessionID, Raw: trimmed})
 	}
 	out = append(out, p.events(raw, trimmed)...)
+	for i := range out {
+		p.tools.decorate(&out[i])
+	}
 	return out, nil
 }
 

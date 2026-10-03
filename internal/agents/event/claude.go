@@ -31,6 +31,10 @@ import (
 //
 // Concurrency: not safe for concurrent use. One parser per subprocess.
 type ClaudeParser struct {
+	// tools pairs tool_use with tool_result so a result is classified
+	// with its call's context (see display.go).
+	tools toolCalls
+
 	// sessionID is captured from the first `system subtype=init` event.
 	// Claude tags every event with `session_id`, but we only emit
 	// SessionStart once per process lifetime.
@@ -302,7 +306,18 @@ type claudeContentBlock struct {
 // surface the tool via subsequent calls? No — claude emits one block
 // type per assistant frame in practice; if both ever co-occur, the
 // raw line is preserved so downstream consumers can re-parse.
+//
+// Every tool event leaves with a Display: claude's tool_result content is
+// a JSON string literal or a content-block array, which Classify unwraps.
 func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
+	ev, err := p.parse(line)
+	if err == nil {
+		p.tools.decorate(&ev)
+	}
+	return ev, err
+}
+
+func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return AgentEvent{}, nil
