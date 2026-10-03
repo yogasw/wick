@@ -36,11 +36,12 @@ func WhoYouAre(self Member, team []Member) string {
 	if self.IsCaptain {
 		if line := teamLine(team); line != "" {
 			b.WriteString("Your Team: " + line + "\n")
+			b.WriteString("Reach a member with team_message (to: \"@handle\"), e.g. team_message to \"@" + team[0].Handle + "\".\n")
 		}
 	} else {
 		for _, m := range team {
 			if m.IsCaptain {
-				fmt.Fprintf(&b, "Your Captain is %s (@%s); the Captain coordinates the Team.\n", m.Name, m.Handle)
+				fmt.Fprintf(&b, "Your Captain is %s (@%s); the Captain coordinates the Team. Reach it with team_message (to: \"@%s\").\n", m.Name, m.Handle, m.Handle)
 				break
 			}
 		}

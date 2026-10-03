@@ -41,13 +41,13 @@ func TestPromptFor(t *testing.T) {
 	}
 
 	got := svc.PromptFor(ctx, "s-cap", false)
-	for _, want := range []string{"## You are a Team agent", "Your name is Captain.", "@captain", "Your role: Lead agent.", "You are the Captain", "Your Team: ops (@ops)"} {
+	for _, want := range []string{"## You are a Team agent", "Your name is Captain.", "@captain", "Your role: Lead agent.", "You are the Captain", "Your Team: ops (@ops)", "Reach a member with team_message", "## How to work with your Team", "Message from <Name> (@handle):", "[silent]"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("captain prompt missing %q", want)
 		}
 	}
 	got = svc.PromptFor(ctx, "s-ops", false)
-	if !strings.Contains(got, "Your name is ops.") || strings.Contains(got, "You are the Captain") || !strings.Contains(got, "Your Captain is Captain (@captain)") || strings.Contains(got, "Your Team") {
+	if !strings.Contains(got, "Your name is ops.") || strings.Contains(got, "You are the Captain") || !strings.Contains(got, "Your Captain is Captain (@captain)") || !strings.Contains(got, `team_message (to: "@captain")`) || strings.Contains(got, "Your Team") {
 		t.Errorf("non-captain prompt wrong:\n%s", got)
 	}
 	if got := svc.PromptFor(ctx, "s-child", true); got != SubAgentOfTeam("ops") {
