@@ -200,3 +200,14 @@ export function parseGrantErrors(msg: string, catalog: AgentConnector[]): GrantE
   }
   return out;
 }
+
+/** A project row in the agent pickers; shared/owner_name come from
+    /projects/options for a project someone else owns. */
+export type PickerProject = { id: string; name: string; shared?: boolean; owner_name?: string };
+
+/** projectOptionLabel names a picker row, flagging one shared with the
+    caller ("Ops · Shared by Ana") — a native <option> has no room for a
+    badge. */
+export function projectOptionLabel(p: PickerProject): string {
+  return p.shared ? `${p.name} · Shared${p.owner_name ? ` by ${p.owner_name}` : ""}` : p.name;
+}

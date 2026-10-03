@@ -15,7 +15,7 @@
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { getProjectOptions } from "../api/options.js";
   import { createAgent, getProjectPersona, listAgentConnectors, runApi, type AgentItem, type AgentConnector, type ConnectorGrant } from "../api/team.js";
-  import { HANDLE_RE, slugHandle, uniqueHandle, parseGrantErrors, type GrantErrors } from "../agentForm.js";
+  import { HANDLE_RE, slugHandle, uniqueHandle, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject } from "../agentForm.js";
   import { PERSONA_KIND, personaInput, suggestedConnectors, type PersonaDraft } from "../personaGen.js";
   import { setOverride } from "../accessTiers.js";
 
@@ -49,7 +49,7 @@
   // to "Project baru" restores it.
   let typed: { name: string; description: string; systemPrompt: string } | null = null;
   let projectLoading = $state(false);
-  let projects = $state<{ id: string; name: string }[]>([]);
+  let projects = $state<PickerProject[]>([]);
 
   let catalog = $state<AgentConnector[]>([]);
   let catalogLoading = $state(true);
@@ -295,7 +295,7 @@
         <select class={input} value={projectId} onchange={(e) => pickProject((e.currentTarget as HTMLSelectElement).value)} aria-label="Project">
           <option value="">New project (automatic)</option>
           {#each projects as p (p.id)}
-            <option value={p.id}>{p.name}</option>
+            <option value={p.id}>{projectOptionLabel(p)}</option>
           {/each}
         </select>
         {#if projectId}

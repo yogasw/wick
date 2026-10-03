@@ -22,6 +22,9 @@ type AgentsLayoutVM struct {
 	// chips. Keyed by project id; ProjectList is the display order.
 	Projects    map[string]project.Project
 	ProjectList []string
+	// SharedOwners maps a project the viewer reaches but does not own to
+	// its owner's name, for the sidebar's "Shared" badge. Absent = theirs.
+	SharedOwners map[string]string
 	// SidebarOwner is the sidebar session list's scope: "me" (default)
 	// shows only the caller's sessions, "all" everything they may see.
 	// The two hrefs re-render the CURRENT page with ?sb= set — the toggle

@@ -1066,10 +1066,44 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		SidebarOwnerAllHref: sidebarOwnerHref(c, "all"),
 		ScopedProjectID:     scopedProjectID,
 		PinnedProjectID:     pinnedProjectID(c),
+		SharedOwners:        sharedProjectOwners(c, allProjects, allProjectIDs),
 		ShellAssetURL:       spaAssetURL("shell"),
 		AirouterVisible:     AirouterVisible(c.Context()),
 		ProvidersVisible:    HasManageableProvider(c),
 	}
+}
+
+// sharedProjectOwners maps each of ids that has an owner other than the
+// caller to that owner's display name ("another user" when it cannot be
+// resolved). A project without an owner (protected/legacy) is nobody's
+// and never shows as shared.
+func sharedProjectOwners(c *tool.Ctx, projects map[string]project.Project, ids []string) map[string]string {
+	me := actorID(c)
+	owners := map[string]string{}
+	need := map[string]bool{}
+	for _, id := range ids {
+		if p, ok := projects[id]; ok && p.Meta.OwnerUserID != "" && p.Meta.OwnerUserID != me {
+			owners[id] = p.Meta.OwnerUserID
+			need[p.Meta.OwnerUserID] = true
+		}
+	}
+	if len(owners) == 0 {
+		return nil
+	}
+	names := userNames(c, need)
+	for id, uid := range owners {
+		if n := names[uid]; n != "" {
+			owners[id] = n
+		} else {
+			owners[id] = "another user"
+		}
+	}
+	return owners
+}
+
+func isShared(owners map[string]string, id string) bool {
+	_, ok := owners[id]
+	return ok
 }
 
 // withoutAgentProjects drops the Team app's agent projects from the
@@ -2500,6 +2534,10 @@ func projectOptionsJSON(c *tool.Ctx) {
 		// can still be shown; it is flagged so the UI never presents it as
 		// something this person may pick.
 		NoAccess bool `json:"no_access,omitempty"`
+		// Shared marks a project someone else owns that the caller sees
+		// through a tag or sharing; OwnerName names that owner.
+		Shared    bool   `json:"shared,omitempty"`
+		OwnerName string `json:"owner_name,omitempty"`
 	}
 	access := callerProjectAccess(c)
 	// include=<id,...> names projects that must come back even when the
@@ -2520,6 +2558,11 @@ func projectOptionsJSON(c *tool.Ctx) {
 	hideTeam := c.Query("hide_team") == "1"
 	pinned := pinnedProjectID(c)
 	projects := globalMgr.Registry().Projects()
+	ids := make([]string, 0, len(projects))
+	for id := range projects {
+		ids = append(ids, id)
+	}
+	shared := sharedProjectOwners(c, projects, ids)
 	opts := make([]option, 0, len(projects))
 	for id, p := range projects {
 		_, wanted := forced[id]
@@ -2545,6 +2588,8 @@ func projectOptionsJSON(c *tool.Ctx) {
 			DefaultModel:    p.Meta.Defaults.Model,
 			DefaultPreset:   p.Meta.Defaults.Preset,
 			TicketEnabled:   p.Meta.Ticket.Enabled,
+			Shared:          isShared(shared, id),
+			OwnerName:       shared[id],
 		})
 	}
 	c.JSON(http.StatusOK, opts)

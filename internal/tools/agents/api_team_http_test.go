@@ -118,3 +118,17 @@ func TestTeamAgentTagline(t *testing.T) {
 		t.Fatalf("cleared tagline %q", got)
 	}
 }
+
+// A project someone else owns reads as shared; the caller's own and an
+// ownerless (protected) one do not.
+func TestSharedProjectOwners(t *testing.T) {
+	withTeamWorld(t)
+	seedTeamProject(t, "mine", "u1")
+	seedTeamProject(t, "theirs", "u2")
+	seedTeamProject(t, "nobody", "")
+	_, c := teamReq(t, &entity.User{ID: "u1"}, http.MethodGet, "/projects/options", nil, nil)
+	got := sharedProjectOwners(c, globalMgr.Registry().Projects(), []string{"mine", "theirs", "nobody"})
+	if len(got) != 1 || got["theirs"] == "" {
+		t.Fatalf("shared = %v, want only theirs", got)
+	}
+}

@@ -542,6 +542,9 @@ export type ProjectOption = {
       the board itself (a chat's jump-to-ticket entry) key off this, so a
       project without one shows none of them. */
   ticketEnabled?: boolean;
+  /** Someone else owns it; the caller sees it through a tag or sharing. */
+  shared?: boolean;
+  owner_name?: string;
 };
 
 /** One column on a project's board. Statuses are per project: a team names

@@ -18,7 +18,7 @@
   } from "../api/team.js";
   import { FEATURE_TABS, railShownNote, type AgentFeatures } from "../agentMode.js";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
-  import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, type GrantErrors } from "../agentForm.js";
+  import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject } from "../agentForm.js";
   import type { SettingsTab } from "../agentsRouter.js";
   import { PERSONA_KIND, personaInput, type PersonaDraft, type PersonaTarget } from "../personaGen.js";
 
@@ -70,7 +70,7 @@
   let catalog = $state<AgentConnector[]>([]);
   let catalogError = $state("");
   let catalogLoading = $state(true);
-  let projects = $state<{ id: string; name: string }[]>([]);
+  let projects = $state<PickerProject[]>([]);
   // The agent's own project is often hidden from the picker list; keep it
   // selectable so the select never shows a blank value.
   const projectChoices = $derived.by(() => {
@@ -479,7 +479,7 @@
       <label class={label} for="as-project">Project</label>
       <select id="as-project" class={input} value={draft.project_id} onchange={(e) => switchProject((e.currentTarget as HTMLSelectElement).value)}>
         {#each projectChoices as p (p.id)}
-          <option value={p.id}>{p.name}</option>
+          <option value={p.id}>{projectOptionLabel(p)}</option>
         {/each}
       </select>
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">
