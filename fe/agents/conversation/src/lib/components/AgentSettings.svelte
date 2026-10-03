@@ -1,8 +1,11 @@
 <script lang="ts">
-  /* Settings drawer for one agent. Four pill tabs share one draft and one
-     Save, so switching tabs never loses an edit. Only the fields that
-     differ from the loaded agent are PATCHed: the persona half lands in the
-     project's meta.json server-side, and a no-op save must not rewrite it. */
+  /* Settings drawer for one agent. Every change saves itself: toggles,
+     selects and checklists at once, text fields ~800ms after the last
+     keystroke or on blur. Only the fields that differ from the last saved
+     state are PATCHed (the persona half lands in the project's meta.json
+     server-side, and a no-op save must not rewrite it). One PATCH is in
+     flight per agent; edits made meanwhile go out in the next one. A
+     rejected PATCH keeps the local value and shows the error inline. */
   import { onMount, untrack } from "svelte";
   import { ProviderPicker, Toggle, buildProviderOptions } from "@wick-fe/common-ui";
   import { toastOk } from "@wick-fe/common-stores";
@@ -47,12 +50,18 @@
     };
   }
   let draft = $state<Draft>(untrack(() => draftOf(agent)));
+  // saved is what the server last confirmed; patch diffs the draft
+  // against it, not against the roster's copy, so a slow roster poll
+  // never re-sends an edit.
+  let saved = $state<AgentItem>(untrack(() => agent));
   // Reset only when a different agent is opened, not on every roster poll.
   let loadedId = untrack(() => agent.id);
   $effect(() => {
     if (agent.id !== loadedId) {
       loadedId = agent.id;
       draft = draftOf(agent);
+      saved = agent;
+      failedKey = "";
     }
   });
 
@@ -72,6 +81,10 @@
   let grantErrors = $state<GrantErrors | null>(null);
   let saving = $state(false);
   let error = $state("");
+  let status = $state<"" | "saving" | "saved" | "error">("");
+  // failedKey is the patch the server last refused: it is not re-sent on
+  // its own (that would loop), only after another edit or Retry.
+  let failedKey = $state("");
   let confirmDelete = $state(false);
 
   onMount(() => {
@@ -134,50 +147,78 @@
   const patch = $derived.by((): AgentWrite => {
     const p: AgentWrite = {};
     const d = draft;
-    if (d.handle !== agent.handle) p.handle = d.handle;
+    if (d.handle !== saved.handle) p.handle = d.handle;
     // "" would be a 400: an agent always has a project.
-    if (d.project_id && d.project_id !== agent.project_id) p.project_id = d.project_id;
-    if (d.name !== agent.name) p.name = d.name;
-    if (d.description !== agent.description) p.description = d.description;
-    if (d.system_prompt !== agent.system_prompt) p.system_prompt = d.system_prompt;
-    if (d.pick !== joinPick(agent.provider, agent.model)) {
+    if (d.project_id && d.project_id !== saved.project_id) p.project_id = d.project_id;
+    if (d.name !== saved.name) p.name = d.name;
+    if (d.description !== saved.description) p.description = d.description;
+    if (d.system_prompt !== saved.system_prompt) p.system_prompt = d.system_prompt;
+    if (d.pick !== joinPick(saved.provider, saved.model)) {
       const { provider, model } = splitPick(d.pick);
       p.provider = provider;
       p.model = model;
     }
-    if (JSON.stringify(d.features) !== JSON.stringify(agent.features)) p.features = { ...d.features };
-    if (JSON.stringify(d.avatar) !== JSON.stringify(agent.avatar)) p.avatar = { ...d.avatar };
-    if (JSON.stringify(d.grants) !== JSON.stringify(agent.allowed_connectors ?? [])) {
+    if (JSON.stringify(d.features) !== JSON.stringify(saved.features)) p.features = { ...d.features };
+    if (JSON.stringify(d.avatar) !== JSON.stringify(saved.avatar)) p.avatar = { ...d.avatar };
+    if (JSON.stringify(d.grants) !== JSON.stringify(saved.allowed_connectors ?? [])) {
       p.allowed_connectors = $state.snapshot(d.grants) as ConnectorGrant[];
     }
-    if (d.include_new_connectors !== agent.include_new_connectors) p.include_new_connectors = d.include_new_connectors;
-    if (d.run_as !== (agent.run_as ?? "caller")) p.run_as = d.run_as;
-    if (d.disabled !== agent.disabled) p.disabled = d.disabled;
-    if (d.allow_provider_switch !== !!agent.allow_provider_switch) p.allow_provider_switch = d.allow_provider_switch;
+    if (d.include_new_connectors !== saved.include_new_connectors) p.include_new_connectors = d.include_new_connectors;
+    if (d.run_as !== (saved.run_as ?? "caller")) p.run_as = d.run_as;
+    if (d.disabled !== saved.disabled) p.disabled = d.disabled;
+    if (d.allow_provider_switch !== !!saved.allow_provider_switch) p.allow_provider_switch = d.allow_provider_switch;
     return p;
   });
   const dirty = $derived(Object.keys(patch).length > 0);
   const handleOk = $derived(HANDLE_RE.test(draft.handle));
 
+  const TEXT_KEYS = ["handle", "name", "description", "system_prompt"];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const key = JSON.stringify(patch);
+    if (!dirty || !handleOk || key === failedKey) return;
+    clearTimeout(timer);
+    const typing = Object.keys(patch).some((k) => TEXT_KEYS.includes(k));
+    timer = setTimeout(() => void save(), typing ? 800 : 0);
+    return () => clearTimeout(timer);
+  });
+  /** flush sends a pending text edit now (field blur). */
+  function flush() {
+    if (!dirty || !handleOk) return;
+    clearTimeout(timer);
+    void save();
+  }
+  function retry() {
+    failedKey = "";
+    flush();
+  }
+
   async function save() {
-    if (!dirty || !handleOk || saving) return;
+    if (!dirty || !handleOk) return;
+    if (saving) return; // the effect re-fires once the in-flight PATCH settles
+    const sent = $state.snapshot(patch) as AgentWrite;
+    const key = JSON.stringify(sent);
     saving = true;
+    status = "saving";
     error = "";
     try {
-      const next = await runApi(updateAgent(base, agent.id, patch));
+      const next = await runApi(updateAgent(base, agent.id, sent));
       onSaved(next);
-      draft = draftOf(next);
+      saved = next;
+      failedKey = "";
       pruned = 0;
       grantErrors = null;
-      toastOk("Agent saved");
+      status = "saved";
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      failedKey = key;
+      status = "error";
       const ge = parseGrantErrors(msg, catalog);
       if (ge.general) {
         grantErrors = null;
         error = msg;
       } else {
-        // Item-level rejections are drawn on their rows in Akses.
+        // Item-level rejections are drawn on their rows in Access.
         grantErrors = ge;
         error = tab === "access" ? "" : "The server rejected some access — see the Access tab.";
       }
@@ -200,6 +241,9 @@
     }
   }
 
+  // Features now governed by Access (Platform/System rows); the Tools tab
+  // keeps panel-only switches.
+  const ACCESS_FEATURES: (keyof AgentFeatures)[] = ["source", "schedule", "subagents", "notes", "tickets"];
   const TABS: { id: SettingsTab; label: string }[] = [
     { id: "persona", label: "Persona" },
     { id: "access", label: "Access" },
@@ -220,6 +264,19 @@
   {onClose}
 />
 
+<div class="flex shrink-0 items-center justify-end gap-2 px-6 pb-2 text-xs" aria-live="polite">
+  {#if status === "saving" || (dirty && handleOk && JSON.stringify(patch) !== failedKey)}
+    <span class="text-black-800 dark:text-black-600">Saving…</span>
+  {:else if status === "error"}
+    <span class="text-neg-400">Not saved</span>
+    <button type="button" class="font-medium text-green-600 hover:underline" onclick={retry}>Retry</button>
+  {:else if !handleOk}
+    <span class="text-neg-400">Not saved — fix the handle</span>
+  {:else if status === "saved"}
+    <span class="text-black-800 dark:text-black-600">✓ Saved</span>
+  {/if}
+</div>
+
 <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-white-300 px-6 pb-3 dark:border-navy-600" role="tablist">
   {#each TABS as t (t.id)}
     <button
@@ -234,7 +291,7 @@
   {/each}
 </div>
 
-<div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
+<div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4" onfocusout={flush}>
   {#if tab === "persona"}
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Persona</p>
@@ -301,7 +358,7 @@
   {:else if tab === "tools"}
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Tools &amp; features</p>
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Turning a feature off also hides its rail tab in the agent's chat.</p>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Panels of the agent's chat. Notes, Tickets, Source, Schedule and Sub-agents are switched in Access › Platform / System; the Browser is a connector in Access › Connectors.</p>
     </div>
     <div class="rounded-xl border border-white-300 px-4 py-3 opacity-60 dark:border-navy-600" aria-disabled="true">
       <p class="text-sm font-medium text-black-900 dark:text-white-100">
@@ -313,7 +370,7 @@
     <div>
       <span class={label}>wick features</span>
       <div class="space-y-3">
-        {#each FEATURE_TABS as f (f.feature)}
+        {#each FEATURE_TABS.filter((f) => !ACCESS_FEATURES.includes(f.feature)) as f (f.feature)}
           <!-- Toggle draws only the switch; the name and hint sit beside it. -->
           <div class="flex items-start gap-3">
             <Toggle checked={draft.features[f.feature]} onChange={(v) => (draft.features[f.feature] = v)} label={f.label} describedBy={f.hint ? `as-ft-${f.feature}` : undefined} />
@@ -435,12 +492,5 @@
 </div>
 
 <div class="flex items-center justify-end gap-2 border-t border-white-300 px-6 py-4 dark:border-navy-600">
-  {#if dirty}<span class="mr-auto text-xs text-black-800 dark:text-black-600">Unsaved changes</span>{/if}
   <button type="button" class="rounded-lg px-4 py-2 text-sm text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600" onclick={onClose}>Close</button>
-  <button
-    type="button"
-    class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:opacity-50"
-    disabled={!dirty || !handleOk || saving}
-    onclick={save}
-  >{saving ? "Saving…" : "Save"}</button>
 </div>
