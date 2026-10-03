@@ -38,15 +38,39 @@ func personOf(ctx context.Context, callerUID string) *entity.User {
 	return nil
 }
 
-// seesAllSessions mirrors canManageSession's bypass.
-func seesAllSessions(u *entity.User) bool {
-	return u != nil && (u.IsAdmin() || u.CanSeeAllSessions())
+// InAgent reports whether ctx is an agent session's call.
+func InAgent(ctx context.Context) bool { return agentScopeFrom(ctx) != nil }
+
+// AgentOwner is the owner of the agent whose session ctx belongs to; ok is
+// false outside an agent session.
+func AgentOwner(ctx context.Context) (string, bool) {
+	s := agentScopeFrom(ctx)
+	if s == nil {
+		return "", false
+	}
+	return s.ownerID, true
+}
+
+// seesAllSessions mirrors canManageSession's bypass. It never applies
+// inside an agent session: an agent — the Captain included — stays within
+// its owner's own data however wide the owner's own rights are.
+func seesAllSessions(ctx context.Context, u *entity.User) bool {
+	return u != nil && agentScopeFrom(ctx) == nil && (u.IsAdmin() || u.CanSeeAllSessions())
 }
 
 // projectAccessOf is the project.Access of the person the call runs for.
 func projectAccessOf(ctx context.Context, callerUID string) project.Access {
+	if owner, ok := AgentOwner(ctx); ok {
+		// An agent sees projects as its owner would without any admin
+		// bypass: owned, tag-shared, or shared with everyone.
+		acc := project.Access{UserID: owner}
+		if u := login.GetUser(ctx); u != nil && u.ID == owner {
+			acc.TagIDs = login.GetUserTagIDs(ctx)
+		}
+		return acc
+	}
 	u := personOf(ctx, callerUID)
-	acc := project.Access{UserID: callerUID, IsAdmin: seesAllSessions(u)}
+	acc := project.Access{UserID: callerUID, IsAdmin: seesAllSessions(ctx, u)}
 	if u != nil {
 		acc.TagIDs = login.GetUserTagIDs(ctx)
 	}
@@ -87,7 +111,7 @@ func CheckSessionTarget(ctx context.Context, layout config.Layout, callerUID, ca
 	if err := agentNeedsCaller(ctx, callerUID, notFound); err != nil {
 		return err
 	}
-	if callerUID != "" && !seesAllSessions(personOf(ctx, callerUID)) && sess.Meta.UserID != callerUID {
+	if callerUID != "" && !seesAllSessions(ctx, personOf(ctx, callerUID)) && sess.Meta.UserID != callerUID {
 		return notFound
 	}
 	return checkAgentSession(ctx, layout, targetSID, notFound)
@@ -101,7 +125,16 @@ func CheckAgentSession(ctx context.Context, layout config.Layout, targetSID stri
 
 func checkAgentSession(ctx context.Context, layout config.Layout, targetSID string, notFound error) error {
 	s := agentScopeFrom(ctx)
-	if s == nil || s.captain {
+	if s == nil {
+		return nil
+	}
+	if s.captain {
+		// The Captain reaches its owner's sessions only — never another
+		// user's, whatever admin rights the owner has as a person.
+		sess, err := session.Load(layout, targetSID)
+		if err != nil || s.ownerID == "" || sess.Meta.UserID != s.ownerID {
+			return notFound
+		}
 		return nil
 	}
 	if s.denyAll || s.agentID == "" {

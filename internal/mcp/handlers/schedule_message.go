@@ -256,6 +256,10 @@ func scheduleList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 	}
 
 	ownerID, allOwners := scheduleScope(user)
+	if owner, ok := team.AgentOwner(r.Context()); ok {
+		// An agent lists its owner's schedules only, never everyone's.
+		ownerID, allOwners = owner, false
+	}
 	statuses, paused := scheduleListStatuses(args)
 	q := schedule.ListQuery{
 		OwnerUserID: ownerID,
@@ -683,7 +687,13 @@ func scheduleCanManage(r *http.Request, layout agentconfig.Layout, m entity.Sche
 	if !scheduleAgentMayManage(r, layout, m) {
 		return false
 	}
-	if canManageSession(user, m.OwnerUserID) {
+	if owner, ok := team.AgentOwner(r.Context()); ok {
+		// No admin / see-all bypass for an agent: its owner's rows, or a
+		// project row the owner reaches as a plain member.
+		if owner != "" && m.OwnerUserID == owner {
+			return true
+		}
+	} else if canManageSession(user, m.OwnerUserID) {
 		return true
 	}
 	if !m.IsProjectScoped() || m.ProjectID == "" {
@@ -728,6 +738,15 @@ func scheduleAgentProject(r *http.Request, layout agentconfig.Layout, projectID 
 func scheduleProjectAccess(r *http.Request, user *entity.User) project.Access {
 	if user == nil {
 		return project.Access{IsAdmin: true}
+	}
+	// An agent never borrows its owner's admin / see-all bypass, and is
+	// judged as its owner whatever login identity carries the call.
+	if owner, ok := team.AgentOwner(r.Context()); ok {
+		acc := project.Access{UserID: owner}
+		if user.ID == owner {
+			acc.TagIDs = login.GetUserTagIDs(r.Context())
+		}
+		return acc
 	}
 	return project.Access{
 		UserID:  user.ID,

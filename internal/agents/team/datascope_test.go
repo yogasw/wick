@@ -39,7 +39,7 @@ func dataScopeLayout(t *testing.T) config.Layout {
 
 func agentCtx(id string, captain bool) context.Context {
 	s := NewScope(nil, false, captain, nil)
-	s.agentID = id
+	s.agentID, s.ownerID = id, "u1"
 	return connectors.WithAgentScope(context.Background(), s)
 }
 
@@ -138,5 +138,27 @@ func TestDataScopeAgentWithoutCaller(t *testing.T) {
 	// Its own session and project stay usable.
 	if CheckSessionTarget(capt, layout, "", "cap-main", "cap-main") != nil || CheckProjectTarget(capt, layout, "", "cap-main", "p-cap") != nil {
 		t.Fatal("own session/project refused")
+	}
+}
+
+// The owner's admin / see-all rights never reach through an agent: the
+// Captain of an admin owner stays within the owner's own sessions and
+// projects, while the admin as a person keeps the bypass.
+func TestDataScopeAgentIgnoresOwnerAdmin(t *testing.T) {
+	layout := dataScopeLayout(t)
+	admin := &entity.User{ID: "u1", Role: entity.RoleAdmin, Approved: true}
+	capt := login.WithUser(agentCtx("cap", true), admin, nil)
+	if err := CheckSessionTarget(capt, layout, "u1", "cap-main", "other"); err == nil {
+		t.Fatal("captain of an admin owner reached another user's session")
+	}
+	if err := CheckProjectTarget(capt, layout, "u1", "cap-main", "p-u2"); err == nil {
+		t.Fatal("captain of an admin owner reached another user's project")
+	}
+	if err := CheckSessionTarget(capt, layout, "u1", "cap-main", "ops-main"); err != nil {
+		t.Fatalf("captain refused its owner's session: %v", err)
+	}
+	person := login.WithUser(context.Background(), admin, nil)
+	if CheckSessionTarget(person, layout, "u1", "plain", "other") != nil || CheckProjectTarget(person, layout, "u1", "plain", "p-u2") != nil {
+		t.Fatal("admin as a person lost the bypass")
 	}
 }

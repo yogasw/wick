@@ -64,3 +64,29 @@ func TestScheduleAgentMayManage(t *testing.T) {
 		})
 	}
 }
+
+// The Captain of an admin owner gets no admin bypass: another user's
+// schedule stays out of reach, its owner's own stays manageable.
+func TestScheduleCanManageCaptainOfAdmin(t *testing.T) {
+	layout := agentconfig.NewLayout(t.TempDir())
+	if _, err := project.Create(layout, project.CreateOptions{ID: "p-u2", Name: "u2", OwnerUserID: "u2", Tags: []string{"t-x"}}); err != nil {
+		t.Fatal(err)
+	}
+	admin := &entity.User{ID: "u1", Role: entity.RoleAdmin, Approved: true}
+	capt := team.ScopeOf(entity.AgentPersona{ID: "cap", OwnerUserID: "u1", IsCaptain: true}, nil)
+	r := httptest.NewRequest("POST", "/", nil)
+	agentReq := r.WithContext(connectors.WithAgentScope(r.Context(), capt))
+	other := entity.ScheduledMessage{OwnerUserID: "u2", ProjectID: "p-u2"}
+	if scheduleCanManage(agentReq, layout, other, admin) {
+		t.Fatal("captain of an admin owner managed another user's schedule")
+	}
+	if !scheduleCanManage(agentReq, layout, entity.ScheduledMessage{OwnerUserID: "u1"}, admin) {
+		t.Fatal("captain refused its owner's schedule")
+	}
+	if !scheduleCanManage(r, layout, other, admin) {
+		t.Fatal("admin as a person lost the bypass")
+	}
+	if owner, all := scheduleScope(admin); owner != "" || !all {
+		t.Fatal("person admin list scope changed")
+	}
+}

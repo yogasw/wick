@@ -24,8 +24,9 @@ type Scope struct {
 	// captain unlocks the TierSystem default and the owner-wide data
 	// scope (see CheckSessionTarget).
 	captain bool
-	// agentID is the agent this scope was built for.
-	agentID string
+	// agentID is the agent this scope was built for, ownerID its owner:
+	// the data scope's hard edge, whoever the call's login identity is.
+	agentID, ownerID string
 	// reach is the owner's catalog (see Reach). nil (unknown, or the
 	// lookup failed) leaves explicit grants working and every default off.
 	reach Reach
@@ -119,7 +120,7 @@ func ScopeOf(p entity.AgentPersona, reach Reach) *Scope {
 	}
 	f, grants, _ := MigrateFeatures(DecodeFeatures(p.Features), DecodeGrants(p.AllowedConnectors), reach)
 	s := NewScope(grants, p.IncludeNewConnectors, p.IsCaptain, reach).WithFeatures(f)
-	s.agentID = p.ID
+	s.agentID, s.ownerID = p.ID, p.OwnerUserID
 	return s
 }
 
