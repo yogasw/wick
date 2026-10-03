@@ -631,7 +631,9 @@
   let processes = $state<ProcessInfo[]>([]);
   // note carries the reason the dialog was opened from a running tool card,
   // so the confirm can explain why a "cancel" turned into "stop the agent".
-  let confirmKill = $state<{ sid: string; queued: boolean; note?: string } | null>(null);
+  // subAgents: busy sub-agents the composer's Stop will interrupt too.
+  // quick: a composer Stop — confirms with a small "Stopped" toast.
+  let confirmKill = $state<{ sid: string; queued: boolean; note?: string; subAgents?: number; quick?: boolean } | null>(null);
   // Guard against overlapping /processes requests: a burst of SSE `lifecycle`
   // events would otherwise stack into a pile of pending fetches. Skip while
   // one is already in flight.
@@ -1850,10 +1852,38 @@
     };
   }
 
+  /* The composer's Stop/Cancel. No confirm: it is there to cut off an
+     agent that is wandering, and a dialog in the way defeats that — the
+     chat history survives a stop and the next message resumes it. Busy
+     sub-agents are the exception: stopping them too is a bigger call, so
+     that one goes through the dialog. */
+  const composerQueued = $derived(
+    agentLifecycle.state === "queued" ||
+      liveProcesses.some((p) => p.session_id === sessionId && p.lifecycle === "queued"),
+  );
+  const composerRunning = $derived(
+    !composerQueued &&
+      (typing.active || live !== null || agentLifecycle.state === "working" || agentLifecycle.state === "spawning"),
+  );
+  function handleStopFromComposer() {
+    if (composerQueued) {
+      confirmKill = { sid: sessionId, queued: true, quick: true };
+      doKill();
+      return;
+    }
+    if (busySubAgentCount > 0) {
+      confirmKill = { sid: sessionId, queued: false, subAgents: busySubAgentCount, quick: true };
+      return;
+    }
+    confirmKill = { sid: sessionId, queued: false, quick: true };
+    doKill();
+  }
+
   function doKill() {
     const target = confirmKill;
     confirmKill = null;
     if (!target) return;
+    if (target.subAgents) stopAllSubAgents();
     const action = target.queued
       ? dequeueProcess(base, target.sid)
       : killProcess(base, target.sid);
@@ -1868,6 +1898,7 @@
         if (target.sid === sessionId && !target.queued) {
           thread.handleKilledLocally();
         }
+        if (target.quick) toastOk(target.queued ? "Cancelled" : "Stopped");
         return loadProcesses();
       })
       .catch((e: unknown) => toastError(`Kill: ${e instanceof Error ? e.message : String(e)}`));
@@ -2697,6 +2728,9 @@
                 }
               : undefined}
             caption={agentMode?.agent?.caption}
+            running={composerRunning}
+            queued={composerQueued}
+            onStop={handleStopFromComposer}
           />
         </div>
       </div>
@@ -3401,11 +3435,13 @@
 
 <ConfirmDialog
   open={confirmKill !== null}
-  title={confirmKill?.queued ? "Cancel queued agent?" : "Stop this agent?"}
+  title={confirmKill?.queued ? "Cancel queued agent?" : confirmKill?.subAgents ? "Stop this agent and its sub-agents?" : "Stop this agent?"}
   body={confirmKill?.queued
     ? "The queued spawn will be dropped."
-    : (confirmKill?.note ? confirmKill.note + " The running agent process will be terminated." : "The running agent process will be terminated.")}
-  confirmLabel={confirmKill?.queued ? "Cancel spawn" : "Stop agent"}
+    : confirmKill?.subAgents
+      ? `${confirmKill.subAgents} ${confirmKill.subAgents === 1 ? "sub-agent is" : "sub-agents are"} still working and will be stopped too. The chat history is kept.`
+      : (confirmKill?.note ? confirmKill.note + " The running agent process will be terminated." : "The running agent process will be terminated.")}
+  confirmLabel={confirmKill?.queued ? "Cancel spawn" : confirmKill?.subAgents ? "Stop all" : "Stop agent"}
   destructive={true}
   onConfirm={doKill}
   onCancel={() => { confirmKill = null; }}

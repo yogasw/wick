@@ -713,3 +713,32 @@ describe("Composer — @ mention groups", () => {
     expect(screen.queryByText("Files")).toBeNull();
   });
 });
+
+describe("Composer — Stop button", () => {
+  test("hidden without onStop, and hidden while idle", () => {
+    const { unmount } = render(Composer, { props: { onSend: vi.fn(), running: true } });
+    expect(screen.queryByTestId("composer-stop")).toBeNull();
+    unmount();
+    render(Composer, { props: { onSend: vi.fn(), onStop: vi.fn() } });
+    expect(screen.queryByTestId("composer-stop")).toBeNull();
+  });
+
+  test("shown while running beside Send, and calls onStop", async () => {
+    const onStop = vi.fn();
+    render(Composer, { props: { onSend: vi.fn(), running: true, onStop } });
+    const btn = screen.getByRole("button", { name: "Stop the agent" });
+    expect(btn.getAttribute("title")).toBe("Stop (the chat history is kept)");
+    expect(screen.getByRole("button", { name: /send/i })).toBeTruthy();
+    await fireEvent.click(btn);
+    expect(onStop).toHaveBeenCalledOnce();
+  });
+
+  test("queued reads Cancel", async () => {
+    const onStop = vi.fn();
+    render(Composer, { props: { onSend: vi.fn(), queued: true, onStop } });
+    const btn = screen.getByTestId("composer-stop");
+    expect(btn.textContent?.trim()).toBe("Cancel");
+    await fireEvent.click(btn);
+    expect(onStop).toHaveBeenCalledOnce();
+  });
+});

@@ -63,6 +63,14 @@
         in the toolbar beside the context meter rather than on a row of
         its own under the composer. */
     caption?: string;
+    /** A turn is running: with onStop set, a Stop button sits beside Send
+        (Send stays, so a message can still be queued behind the turn). */
+    running?: boolean;
+    /** The agent is waiting for a pool slot: the same button reads
+        "Cancel" and drops the queued spawn instead. */
+    queued?: boolean;
+    /** Stop the running turn / cancel the queued spawn. Omit → no button. */
+    onStop?: () => void;
   };
 
   /** ContextMeter is the composer's view of the model's context window.
@@ -96,6 +104,9 @@
     contextMeter,
     caption,
     commands = [],
+    running = false,
+    queued = false,
+    onStop,
   }: Props = $props();
 
   let text = $state("");
@@ -1541,6 +1552,29 @@
         >
           {@render provIcon(providerChip.value, "h-5 w-5")}
         </button>
+      {/if}
+      {#if onStop && (running || queued)}
+        {#if queued}
+          <button
+            type="button"
+            aria-label="Cancel the queued agent"
+            title="Cancel (the agent is still waiting for a slot)"
+            data-testid="composer-stop"
+            class="inline-flex items-center justify-center shrink-0 h-8 px-3 rounded-lg border border-white-300 dark:border-navy-600 text-xs font-medium text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600 transition-colors"
+            onclick={onStop}
+          >Cancel</button>
+        {:else}
+          <button
+            type="button"
+            aria-label="Stop the agent"
+            title="Stop (the chat history is kept)"
+            data-testid="composer-stop"
+            class="inline-flex items-center justify-center shrink-0 h-8 w-8 rounded-lg border border-white-300 dark:border-navy-600 text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600 transition-colors"
+            onclick={onStop}
+          >
+            <svg viewBox="0 0 16 16" class="h-3 w-3" fill="currentColor" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5"></rect></svg>
+          </button>
+        {/if}
       {/if}
       <button
         type="button"

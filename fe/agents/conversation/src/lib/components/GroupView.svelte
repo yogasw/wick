@@ -11,6 +11,8 @@
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import GroupAvatars from "./GroupAvatars.svelte";
   import { Composer } from "@wick-fe/common-ui";
+  import { toastOk, toastError } from "@wick-fe/common-stores";
+  import { killProcess } from "../api/processes.js";
   import ThreadMessage from "./ThreadMessage.svelte";
   import { teamMentionAgents } from "../teamMention.js";
   import type { ConversationTurn } from "../types/agents.js";
@@ -34,6 +36,9 @@
   let sending = $state(false);
   let error = $state("");
   let typing = $state<Record<string, boolean>>({});
+  // Each member answers in its own backing session; the typing push names
+  // it so Stop knows which turns to kill.
+  let typingSession = $state<Record<string, string>>({});
   let pendingUntil = $state(0);
   let threadEl = $state<HTMLDivElement | null>(null);
 
@@ -75,8 +80,9 @@
     es.addEventListener("system_event", onTurn);
     es.addEventListener("group_typing", (ev: MessageEvent) => {
       try {
-        const d = JSON.parse(ev.data) as { agent_id: string; state: string };
+        const d = JSON.parse(ev.data) as { agent_id: string; state: string; session_id?: string };
         typing = { ...typing, [d.agent_id]: d.state === "start" };
+        if (d.session_id) typingSession = { ...typingSession, [d.agent_id]: d.session_id };
       } catch {
         /* ignore */
       }
@@ -95,6 +101,27 @@
     void turns.length;
     if (threadEl) queueMicrotask(() => threadEl && (threadEl.scrollTop = threadEl.scrollHeight));
   });
+
+  /* The composer's Stop: kills the turn of every member typing right now,
+     no confirm. A member whose push carried no session (an older server)
+     falls back to the session its last reply came from. */
+  async function stopTyping() {
+    const ids = Object.keys(typing).filter((id) => typing[id]);
+    const sids = ids
+      .map((id) => typingSession[id] || [...turns].reverse().find((t) => t.speaker?.agent_id === id)?.speaker?.session_id || "")
+      .filter(Boolean);
+    if (!sids.length) return;
+    const res = await Promise.allSettled(sids.map((sid) => runApi(killProcess(base, sid))));
+    const failed = res.find((r) => r.status === "rejected");
+    if (failed) {
+      const e = (failed as PromiseRejectedResult).reason;
+      toastError(`Stop: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    typing = {};
+    toastOk("Stopped");
+    await load();
+  }
 
   async function send(msg: { text: string; files: File[] }) {
     const t = msg.text.trim();
@@ -170,6 +197,8 @@
       {mentionAgents}
       {mentionAvatar}
       caption={hint.caption}
+      running={typingHandles.length > 0}
+      onStop={stopTyping}
     />
     {#if error}<p class="mt-1 px-2 text-xs text-neg-400">{error}</p>{/if}
   </div>

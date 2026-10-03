@@ -513,7 +513,8 @@ func sendGroupMessage(c *tool.Ctx, sess session.Session, text string) {
 			if on {
 				state = "start"
 			}
-			body, _ := json.Marshal(map[string]string{"agent_id": p.ID, "handle": p.Handle, "state": state})
+			// session_id lets the group's Stop kill the member's running turn.
+			body, _ := json.Marshal(map[string]string{"agent_id": p.ID, "handle": p.Handle, "state": state, "session_id": backing[p.ID]})
 			if globalBcast != nil {
 				globalBcast.PublishRaw(sess.ID, "", evGroupTyping, string(body))
 			}
