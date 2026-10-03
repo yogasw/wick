@@ -1483,6 +1483,12 @@ func (s *Service) OperationStates(ctx context.Context, connectorID, key string) 
 	if err != nil {
 		return nil, err
 	}
+	return s.liveOpStates(ctx, connectorID, key, full), nil
+}
+
+// liveOpStates collapses full states into the enabled map the MCP catalog
+// reads (see OperationStates).
+func (s *Service) liveOpStates(ctx context.Context, connectorID, key string, full map[string]OpState) map[string]bool {
 	out := make(map[string]bool, len(full))
 	for k, st := range full {
 		// SystemDisabled is advisory — admin override via Enabled takes precedence.
@@ -1503,7 +1509,7 @@ func (s *Service) OperationStates(ctx context.Context, connectorID, key string) 
 			}
 		}
 	}
-	return out, nil
+	return out
 }
 
 // OpState bundles the effective state of one operation on one connector
@@ -1538,6 +1544,12 @@ func (s *Service) OperationStatesFull(ctx context.Context, connectorID, key stri
 	if err != nil {
 		return nil, err
 	}
+	return foldOpStates(mod, rows), nil
+}
+
+// foldOpStates folds a connector's stored toggle rows over its module's
+// ops (see OperationStatesFull).
+func foldOpStates(mod connector.Module, rows []entity.ConnectorOperation) map[string]OpState {
 	stored := make(map[string]entity.ConnectorOperation, len(rows))
 	for _, r := range rows {
 		stored[r.OperationKey] = r
@@ -1554,7 +1566,7 @@ func (s *Service) OperationStatesFull(ctx context.Context, connectorID, key stri
 		}
 		out[op.Key] = st
 	}
-	return out, nil
+	return out
 }
 
 // HealthCheckResult bundles the outcome of a health-check run for one

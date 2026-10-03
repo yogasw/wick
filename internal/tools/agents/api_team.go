@@ -266,14 +266,32 @@ func decodeTeamAgentReq(c *tool.Ctx) (teamAgentWriteReq, bool) {
 // shows them — with any agent scope stripped from ctx, since the checklist
 // is what an agent is narrowed FROM. Every route here acts on the caller's
 // own agents, so the caller is the owner.
+//
+// Read once per request: a PATCH validates grants, migrates switches and
+// labels the access diff off the same catalog, and each read is a handful
+// of queries to the database.
 func ownerCatalog(c *tool.Ctx) ([]connectors.CatalogEntry, error) {
 	if globalConnectors == nil {
 		return nil, nil
 	}
+	if m, ok := c.Context().Value(ownerCatalogKey{}).(*ownerCatalogMemo); ok {
+		return m.cat, m.err
+	}
 	u := login.GetUser(c.Context())
 	isAdmin := u != nil && u.IsAdmin()
 	ctx := connectors.WithoutAgentScope(c.Context())
-	return globalConnectors.AgentCatalog(ctx, actorID(c), login.GetUserTagIDs(c.Context()), isAdmin)
+	m := &ownerCatalogMemo{}
+	m.cat, m.err = globalConnectors.AgentCatalog(ctx, actorID(c), login.GetUserTagIDs(c.Context()), isAdmin)
+	c.R = c.R.WithContext(context.WithValue(c.Context(), ownerCatalogKey{}, m))
+	return m.cat, m.err
+}
+
+// ownerCatalogKey holds the request's ownerCatalogMemo on its context.
+type ownerCatalogKey struct{}
+
+type ownerCatalogMemo struct {
+	cat []connectors.CatalogEntry
+	err error
 }
 
 // ownerReach is ownerCatalog indexed for team.MigrateFeatures; nil when

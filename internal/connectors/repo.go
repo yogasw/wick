@@ -488,6 +488,24 @@ func (r *Repo) ListOperations(ctx context.Context, connectorID string) ([]entity
 	return out, err
 }
 
+// ListOperationsFor is ListOperations for MANY connectors in one query,
+// keyed by connector id. The agent catalog reads every instance the caller
+// reaches, and one round trip per row made it seconds on a remote database.
+func (r *Repo) ListOperationsFor(ctx context.Context, connectorIDs []string) (map[string][]entity.ConnectorOperation, error) {
+	out := map[string][]entity.ConnectorOperation{}
+	if len(connectorIDs) == 0 {
+		return out, nil
+	}
+	var rows []entity.ConnectorOperation
+	if err := r.db.WithContext(ctx).Where("connector_id IN ?", connectorIDs).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, op := range rows {
+		out[op.ConnectorID] = append(out[op.ConnectorID], op)
+	}
+	return out, nil
+}
+
 // SetOperation upserts the toggle for a single (connector, op) pair.
 // Insert when no row exists, update when it does. Uses an explicit
 // OnConflict upsert on the composite PK with a map payload so the boolean

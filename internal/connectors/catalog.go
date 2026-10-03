@@ -60,7 +60,32 @@ func (s *Service) catalog(ctx context.Context, userID string, tagIDs []string, i
 	if err != nil {
 		return nil, err
 	}
+	// Op toggles and accounts for every row up front: one query each
+	// instead of one (or three) per row, which on a remote database made
+	// this listing — read by every Team roster load — take seconds.
+	ids := make([]string, 0, len(rows))
+	var oauthIDs []string
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+		if mod, ok := s.Module(row.Key); ok && mod.OAuth != nil {
+			oauthIDs = append(oauthIDs, row.ID)
+		}
+	}
+	opRows, err := s.repo.ListOperationsFor(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	accRows, aerr := s.repo.ListAccountsFor(ctx, oauthIDs)
+	if aerr != nil {
+		log.Ctx(ctx).Warn().Err(aerr).Msg("catalog: list accounts")
+	}
+	// Type switches once too: TypeEnabled is a query per call.
+	disabled := s.DisabledTypeKeys()
 	out := make([]CatalogEntry, 0, len(rows))
+	// needTags are the entries whose accounts still hang on their filter
+	// tags; those are resolved in one query after the loop.
+	var needTags []int
+	var callers []AccountAccess
 	for _, row := range rows {
 		if row.Key == wickManagerKey && !withManager {
 			continue
@@ -71,14 +96,10 @@ func (s *Service) catalog(ctx context.Context, userID string, tagIDs []string, i
 		}
 		// Type-level off-switch: a disabled connector type is hidden from the
 		// LLM entirely (the manager UI still shows it with a Disabled badge).
-		if !s.TypeEnabled(row.Key) {
+		if disabled[row.Key] {
 			continue
 		}
-		states, err := s.OperationStates(ctx, row.ID, row.Key)
-		if err != nil {
-			continue
-		}
-		ops := enabledOps(mod, states)
+		ops := enabledOps(mod, s.liveOpStates(ctx, row.ID, row.Key, foldOpStates(mod, opRows[row.ID])))
 		// Live-catalog modules (custom MCP) at zero ops may simply not
 		// have synced yet — run the lazy refresh (throttled) and
 		// recount before deciding to hide the connector. Without this,
@@ -88,7 +109,8 @@ func (s *Service) catalog(ctx context.Context, userID string, tagIDs []string, i
 			s.CatalogRefresh(ctx, row.Key, row.ID)
 			if fresh, ok2 := s.Module(row.Key); ok2 {
 				mod = fresh
-				if states, err = s.OperationStates(ctx, row.ID, row.Key); err != nil {
+				states, err := s.OperationStates(ctx, row.ID, row.Key)
+				if err != nil {
 					continue
 				}
 				ops = enabledOps(mod, states)
@@ -102,15 +124,31 @@ func (s *Service) catalog(ctx context.Context, userID string, tagIDs []string, i
 			continue
 		}
 		e := CatalogEntry{Row: row, Module: mod, Status: status, Ops: ops}
-		if mod.OAuth != nil {
+		if mod.OAuth != nil && aerr == nil {
 			caller := s.AccountAccessFor(row, userID, isAdmin, tagIDs)
-			accs, aerr := s.ListAccountsVisibleTo(ctx, row, caller)
-			if aerr != nil {
-				log.Ctx(ctx).Warn().Err(aerr).Str("connector", row.ID).Msg("catalog: list accounts")
+			e.Accounts = filterAccountsByScope(ctx, row.ID, accRows[row.ID])
+			// Skip the tag lookup when the answer cannot depend on it.
+			if !caller.Privileged && !row.AllowOthersSeeAccounts && len(e.Accounts) > 0 {
+				needTags = append(needTags, len(out))
+				callers = append(callers, caller)
 			}
-			e.Accounts = accs
 		}
 		out = append(out, e)
+	}
+	if len(needTags) > 0 {
+		var accs []entity.ConnectorAccount
+		for _, i := range needTags {
+			accs = append(accs, out[i].Accounts...)
+		}
+		tags, err := s.AccountTagIDs(ctx, accs)
+		for n, i := range needTags {
+			if err != nil {
+				log.Ctx(ctx).Warn().Err(err).Str("connector", out[i].Row.ID).Msg("catalog: list accounts")
+				out[i].Accounts = nil
+				continue
+			}
+			out[i].Accounts = AccountsVisibleTo(out[i].Row, out[i].Accounts, tags, callers[n])
+		}
 	}
 	return out, nil
 }
