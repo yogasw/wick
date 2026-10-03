@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -74,5 +75,37 @@ func TestSpawnPromptForTeamInstructions(t *testing.T) {
 	}
 	if sp, ok := svc.SpawnPromptFor(ctx, "s-theirs"); !ok || sp.TeamInstructions != "" {
 		t.Errorf("another owner's agent got u1's instructions: %q", sp.TeamInstructions)
+	}
+}
+
+// Every registered setting is on the wire, and ApplySettings is all or
+// nothing: an unknown key or a bad value leaves the row as it was.
+func TestApplySettingsRegistry(t *testing.T) {
+	st := entity.TeamSettings{UserID: "u1", Prompt: "old"}
+	vals := SettingValues(st)
+	for _, f := range SettingFields {
+		if _, ok := vals[f.Key]; !ok {
+			t.Errorf("setting %q missing from SettingValues", f.Key)
+		}
+	}
+	if len(vals) != len(SettingFields) {
+		t.Errorf("SettingValues has %d keys, registry %d", len(vals), len(SettingFields))
+	}
+
+	raw := func(s string) json.RawMessage { return json.RawMessage(s) }
+	if err := ApplySettings(&st, map[string]json.RawMessage{"prompt": raw(`"new"`), "nope": raw(`1`)}); err == nil || !strings.Contains(err.Error(), `"nope"`) {
+		t.Fatalf("unknown key: err=%v", err)
+	}
+	if err := ApplySettings(&st, map[string]json.RawMessage{"prompt": raw(`"new"`), "open_team": raw(`"yes"`)}); err == nil {
+		t.Fatal("mistyped open_team accepted")
+	}
+	if st.Prompt != "old" || st.ClassicHome {
+		t.Fatalf("refused patch changed the row: %+v", st)
+	}
+	if err := ApplySettings(&st, map[string]json.RawMessage{"prompt": raw(`"new"`), "open_team": raw(`false`)}); err != nil {
+		t.Fatal(err)
+	}
+	if st.Prompt != "new" || st.OpenTeam() {
+		t.Fatalf("patch not applied: %+v", st)
 	}
 }
