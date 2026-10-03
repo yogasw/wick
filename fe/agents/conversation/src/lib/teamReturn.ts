@@ -1,4 +1,4 @@
-/* Where the Team app's "Agents" nav row goes: back to the wick page the user came
+/* Where the Team app's "Switch to Agents" menu item goes: back to the wick page the user came
    from. The sidebar's "Team" link stores that page in sessionStorage under
    RETURN_KEY on click (layout.templ); other entries (the Overview card, a
    typed URL) fall back to document.referrer, and when neither is usable
@@ -32,7 +32,7 @@ export function returnHref(stored: string | null, referrer: string, origin: stri
 export const CLASSIC_VIEW = "view=classic";
 
 /** classicHref marks href with CLASSIC_VIEW when it is the Agents landing
-    itself (base or base + "/", any query), so the nav's "Agents" link
+    itself (base or base + "/", any query), so "Switch to Agents"
     cannot loop back into Team. Any other page is left as it is: only the
     bare landing redirects. */
 export function classicHref(href: string, base: string): string {

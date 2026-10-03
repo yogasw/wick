@@ -1625,7 +1625,7 @@ func agentsAppPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	c.HTML(view.AgentsApp(view.AgentsAppVM{
+	vm := view.AgentsAppVM{
 		Base:          c.Base(),
 		AssetURL:      spaAssetURL("conversation"),
 		ScmAsset:      spaAssetURL("scm"),
@@ -1633,7 +1633,16 @@ func agentsAppPage(c *tool.Ctx) {
 		RailPrefs:     railPrefsJSON(c),
 		ViewerID:      viewerID(c),
 		ViewerName:    viewerName(c),
-	}))
+	}
+	if u := login.GetUser(c.Context()); u != nil {
+		vm.ThemeMode = "light"
+		if ui.ThemeByID(ui.EffectiveTheme(u.Metadata.Theme)).IsDark {
+			vm.ThemeMode = "dark"
+		}
+		vm.ThemeLight = ui.EffectiveLightTheme(u.Metadata.LightTheme)
+		vm.ThemeDark = ui.EffectiveDarkTheme(u.Metadata.DarkTheme)
+	}
+	c.HTML(view.AgentsApp(vm))
 }
 
 // railPrefsJSON is the caller's saved rail layout, inlined into the SPA shell

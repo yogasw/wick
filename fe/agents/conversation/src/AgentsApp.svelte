@@ -19,16 +19,20 @@
   import { listAgents, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
   import { rosterStatus, withTurn } from "./lib/rosterStatus.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
-  import TeamNav from "./lib/components/TeamNav.svelte";
+  import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
   import TeamSettings from "./lib/components/TeamSettings.svelte";
   import { RETURN_KEY, returnHref, classicHref } from "./lib/teamReturn.js";
 
   const appEl = document.getElementById("app");
   const base = appEl?.dataset.base ?? "";
   const viewerName = appEl?.dataset.viewerName ?? "";
-  const viewerInitial = (viewerName.trim()[0] ?? "?").toUpperCase();
+  const themeMode = appEl?.dataset.themeMode;
+  const theme =
+    themeMode === "light" || themeMode === "dark"
+      ? { mode: themeMode, light: appEl?.dataset.themeLight ?? "", dark: appEl?.dataset.themeDark ?? "" }
+      : null;
 
-  /* The nav's "Agents" row goes back to the wick page the user entered
+  /* The account menu's "Switch to Agents" goes back to the wick page the user entered
      from. The stored page is read once and dropped, so a later entry from
      elsewhere (the Overview card) is not sent to a stale one; a reload
      keeps document.referrer. classicHref keeps a landing target from
@@ -299,17 +303,31 @@
   <aside
     class="{rosterOpen ? 'flex' : 'hidden'} lg:flex fixed lg:sticky inset-y-0 left-0 z-40 w-[300px] shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700"
   >
-    <div class="flex items-center gap-1.5 px-3 pt-3.5 pb-2.5">
-      <h1 class="flex-1 text-base font-bold text-black-900 dark:text-white-100">Team</h1>
+    <!-- Header laid out like the wick Agents sidebar's: mark + title with a
+         small uppercase line, then + Agent and the account menu. -->
+    <div class="flex items-center gap-2 border-b border-white-300 px-3 py-2.5 dark:border-navy-600">
+      <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-green-500 text-xs font-semibold text-white-100 select-none" aria-hidden="true">✦</div>
+      <div class="flex min-w-0 flex-1 flex-col leading-tight">
+        <h1 class="truncate text-sm font-semibold text-black-900 dark:text-white-100">Team</h1>
+        <span class="truncate text-[10px] font-medium uppercase tracking-wider text-black-600 dark:text-black-700" data-testid="team-count">
+          {loaded ? `${agents.length} agent${agents.length === 1 ? "" : "s"}` : "\u00a0"}
+        </span>
+      </div>
       <button
         type="button"
-        class="new-agent flex h-8 w-8 items-center justify-center rounded-full bg-green-500 text-lg leading-none text-white-100 hover:bg-green-600"
+        class="new-agent flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-500 text-lg leading-none text-white-100 hover:bg-green-600"
         title="+ Agent"
         aria-label="New agent"
         onclick={() => { rosterOpen = false; openPanel({ kind: "new" }); }}
       >+</button>
+      <TeamAccountMenu
+        {viewerName}
+        {exitHref}
+        {theme}
+        onSettings={() => { rosterOpen = false; openPanel({ kind: "team-settings", tab: "general" }); }}
+      />
     </div>
-    <label class="mx-3 mb-2 flex items-center gap-2 rounded-xl border border-transparent bg-white-300 px-3 py-2 focus-within:border-green-500 dark:bg-navy-600">
+    <label class="mx-3 mb-2 mt-3 flex items-center gap-2 rounded-xl border border-transparent bg-white-300 px-3 py-2 focus-within:border-green-500 dark:bg-navy-600">
       <svg class="h-4 w-4 shrink-0 text-black-700" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg>
       <input
         type="search"
@@ -356,16 +374,6 @@
         </button>
       {/each}
     </nav>
-    <TeamNav
-      {exitHref}
-      settingsActive={route.panel?.kind === "team-settings"}
-      onSettings={() => { rosterOpen = false; openPanel({ kind: "team-settings", tab: "general" }); }}
-    />
-    <div class="flex items-center gap-2.5 border-t border-white-300 px-3 py-2.5 dark:border-navy-600">
-      <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-200 text-xs font-bold text-green-700 select-none">{viewerInitial}</span>
-      <span class="min-w-0 flex-1 truncate text-[13px] font-medium text-black-900 dark:text-white-100">{viewerName || "You"}</span>
-      <span class="shrink-0 text-xs text-black-700">{agents.length} agent{agents.length === 1 ? "" : "s"}</span>
-    </div>
   </aside>
 
   <!-- Chat -->

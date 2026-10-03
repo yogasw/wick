@@ -40,7 +40,7 @@
   <span class="min-w-0">
     <span class="block text-sm text-black-900 dark:text-white-100">Open Team when I open Agents</span>
     <span id="ts-open-team-hint" class="block text-xs text-black-800 dark:text-black-600">
-      The Agents home opens Team. The "Agents" link at the bottom of the roster still takes you to the classic page.
+      The Agents home opens Team. "Switch to Agents" in your account menu still takes you to the classic page.
     </span>
   </span>
 </div>

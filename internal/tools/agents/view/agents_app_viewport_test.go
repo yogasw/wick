@@ -29,3 +29,18 @@ func TestAgentsApp_SizedToVisualViewport(t *testing.T) {
 		t.Error("shell must not add its own safe-area padding")
 	}
 }
+
+// The account menu's Light/Dark switch reads the mode and the user's
+// paired theme ids off the mount point.
+func TestAgentsApp_CarriesThemeForAccountMenu(t *testing.T) {
+	var buf bytes.Buffer
+	vm := AgentsAppVM{Base: "/tools/agents", AssetURL: "/x.js", ThemeMode: "dark", ThemeLight: "github-light", ThemeDark: "dracula"}
+	if err := AgentsApp(vm).Render(context.Background(), &buf); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`data-theme-mode="dark"`, `data-theme-light="github-light"`, `data-theme-dark="dracula"`} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("AgentsApp output missing %s", want)
+		}
+	}
+}
