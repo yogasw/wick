@@ -83,7 +83,7 @@
            and it is how branch compare is reached at all — it is not a tab,
            because two ref lists plus a file list do not fit the dock. -->
       {#if onCompare}
-        <button type="button" class={item} onclick={() => { open = false; onCompare(); }}>Compare branches…</button>
+        <button type="button" class={item} onclick={() => { open = false; onCompare(); }}>Compare…</button>
         <div class="my-1 border-t border-white-300 dark:border-navy-600"></div>
       {/if}
       <!-- No Pull/Push here: their buttons are two inches to the left, and

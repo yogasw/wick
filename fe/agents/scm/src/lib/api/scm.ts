@@ -301,8 +301,22 @@ export type CompareResult = {
   ahead: number;
   behind: number;
   files: CompareFile[];
+  /** The commits base..head brings in, newest first (capped server-side).
+   *  For a working-tree head these are the commits up to HEAD. */
+  commits?: RangeCommit[];
+  commits_truncated?: boolean;
 };
 
+export type RangeCommit = {
+  sha: string;
+  subject: string;
+  author: string;
+  rel_date: string;
+  iso_date: string;
+};
+
+// base/head are a branch, tag or sha; head may also be ":worktree" (staged
+// + unstaged) or ":staged" (the index only).
 // threeDot asks the merge-base question ("what does head add?"), which is
 // what a reviewer means by comparing two branches — and what JetBrains
 // does by default. Without it the two trees are diffed directly.

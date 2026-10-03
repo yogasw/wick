@@ -15,6 +15,7 @@
   import HistoryView from "$lib/components/HistoryView.svelte";
   import FilesTab from "$lib/components/FilesTab.svelte";
   import CompareModal from "$lib/components/CompareModal.svelte";
+  import type { ComparePair } from "$lib/compare-picker";
   import MonacoView from "$lib/components/MonacoView.svelte";
   import * as api from "$lib/api/scm";
   import { get } from "svelte/store";
@@ -66,6 +67,14 @@
   // Branch compare overlay. Not a tab and not per-layout: it covers the
   // viewport from either one, so one flag serves both.
   let comparing = $state(false);
+  // The pair the graph asked for; unset when the overlay comes from the
+  // repo menu, which reopens the last pair instead.
+  let compareInit = $state<(ComparePair & { pickHead?: boolean }) | undefined>(undefined);
+
+  function openCompareWith(p: ComparePair & { pickHead?: boolean }) {
+    compareInit = p;
+    comparing = true;
+  }
   let viewMode = $state<"tree" | "list">(
     (typeof localStorage !== "undefined" && (localStorage.getItem(VIEW_MODE_KEY) as "tree" | "list")) || "tree",
   );
@@ -238,7 +247,7 @@
         <RepoMenu
           {viewMode}
           onToggleViewMode={() => setViewMode(viewMode === "tree" ? "list" : "tree")}
-          onCompare={() => (comparing = true)}
+          onCompare={() => { compareInit = undefined; comparing = true; }}
         />
         <!-- Pin only makes sense for the desktop push dock; on mobile the
              panel is a full-screen overlay, so hide the pin below lg. -->
@@ -299,7 +308,7 @@
           {/if}
         </div>
       {:else if view === "history"}
-        <HistoryView onOpenCommitFile={openCommitFile} onShowChanges={() => setView("changes")} />
+        <HistoryView onOpenCommitFile={openCommitFile} onShowChanges={() => setView("changes")} onCompare={openCompareWith} />
       {:else}
         <FilesTab mode="sidebar" />
       {/if}
@@ -346,7 +355,7 @@
         <!-- The same repo menu the dock header carries. It used to live only
              there, which left branch compare — and Fetch — unreachable once
              the panel was widened. -->
-        <RepoMenu onCompare={() => (comparing = true)} />
+        <RepoMenu onCompare={() => { compareInit = undefined; comparing = true; }} />
       </div>
     </div>
 
@@ -409,7 +418,7 @@
               </div>
             {/if}
           {:else}
-            <HistoryView onOpenCommitFile={openCommitFile} onShowChanges={() => setView("changes")} />
+            <HistoryView onOpenCommitFile={openCommitFile} onShowChanges={() => setView("changes")} onCompare={openCompareWith} />
           {/if}
           {#if $branch}<BranchBar branch={$branch} {busy} />{/if}
         </aside>
@@ -507,7 +516,7 @@
 {/if}
 
 {#if comparing}
-  <CompareModal onClose={() => (comparing = false)} />
+  <CompareModal initial={compareInit} onClose={() => { comparing = false; compareInit = undefined; }} />
 {/if}
 
 {#if mode === "sidebar" && compare}
