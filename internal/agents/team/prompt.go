@@ -110,7 +110,7 @@ func (s *Service) teamPrompt(ctx context.Context, p entity.AgentPersona) string 
 // tagline off its row); a
 // missing project leaves the handle as the name.
 func (s *Service) memberOf(p entity.AgentPersona) Member {
-	m := Member{Name: p.Handle, Handle: p.Handle, Tagline: p.Tagline, IsCaptain: p.IsCaptain, MentionFrom: p.MentionFrom}
+	m := Member{Name: p.Handle, Handle: p.Handle, Tagline: p.Tagline, IsCaptain: p.IsCaptain, MentionFrom: p.MentionFrom, Remote: p.Kind != ""}
 	if p.ProjectID != "" {
 		if proj, err := project.Load(s.layout, p.ProjectID); err == nil {
 			if proj.Meta.Name != "" {

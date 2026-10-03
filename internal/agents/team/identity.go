@@ -34,6 +34,9 @@ type Member struct {
 	IsCaptain                          bool
 	// MentionFrom is the member's mention policy (teamlink.Mention*).
 	MentionFrom string
+	// Remote marks an agent that runs outside wick (Slack, A2A, plugin):
+	// it gets only the message text, and "Nobody" keeps it to its owner.
+	Remote bool
 }
 
 // WhoYouAre is the dynamic "Who you are" block of a Team agent's prompt,
@@ -125,15 +128,24 @@ func YourTeam(team []Member) string {
 		if m.IsCaptain {
 			line += " (Captain)"
 		}
-		line += "; " + mentionPolicyText(m.MentionFrom)
+		line += "; " + mentionPolicyText(m)
 		b.WriteString(line + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
 // mentionPolicyText says in a few words whom a member takes mentions from.
-func mentionPolicyText(v string) string {
-	switch teamlink.NormalizeMentionFrom(v) {
+// A remote member says so, and one set to "Nobody" says why agents are
+// refused and how the owner lifts it, so the caller explains instead of
+// guessing.
+func mentionPolicyText(m Member) string {
+	if m.Remote {
+		if teamlink.NormalizeMentionFrom(m.MentionFrom) == teamlink.MentionOff {
+			return "remote agent; only the owner may use it — agents (you too) are refused; the owner can switch its Settings › Mention to \"Any of my agents\""
+		}
+		return "remote agent (gets only your message text); " + mentionPolicyText(Member{MentionFrom: m.MentionFrom})
+	}
+	switch teamlink.NormalizeMentionFrom(m.MentionFrom) {
 	case teamlink.MentionCaptain:
 		return "takes mentions from the Captain only"
 	case teamlink.MentionList:

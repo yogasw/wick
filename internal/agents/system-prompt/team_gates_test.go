@@ -86,3 +86,17 @@ func TestImmutableForTeamGatesHTMLOnFiles(t *testing.T) {
 		t.Error("non-Team prompt changed")
 	}
 }
+
+// The Team overlay tells an agent where teammates come from and how to
+// match a loose name, and no longer says managing the Team is unavailable.
+func TestImmutableTeamRosterRules(t *testing.T) {
+	got := ImmutableTeam()
+	for _, want := range []string{"Who is on the Team", "list_agents", "halo dev", "A bare @mention that points back", "Managing your Team"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("immutable_team lacks %q", want)
+		}
+	}
+	if strings.Contains(got, "not available from chat yet") {
+		t.Error("immutable_team still says managing the Team is unavailable")
+	}
+}

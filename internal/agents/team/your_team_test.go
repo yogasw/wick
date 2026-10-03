@@ -34,3 +34,25 @@ func TestYourTeamBlock(t *testing.T) {
 		t.Fatalf("Your team block is %d bytes", len(got))
 	}
 }
+
+// A remote member set to "Nobody" says plainly that agents are refused
+// and how the owner lifts it; a remote one open to agents says it is
+// remote and still names its policy.
+func TestYourTeamRemoteMember(t *testing.T) {
+	got := YourTeam([]Member{
+		{Name: "Halodev", Handle: "halodev", Tagline: "spesialis product", MentionFrom: "off", Remote: true},
+		{Name: "Research", Handle: "research", MentionFrom: "all", Remote: true},
+	})
+	for _, want := range []string{
+		"- @halodev — Halodev, spesialis product; remote agent; only the owner may use it",
+		"Settings › Mention",
+		"- @research — Research; remote agent (gets only your message text); takes mentions from anyone",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("YourTeam missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "halodev — Halodev, spesialis product; takes mentions from anyone") {
+		t.Fatalf("owner-only remote advertised as open:\n%s", got)
+	}
+}
