@@ -357,6 +357,9 @@ func Register(r tool.Router) {
 	r.POST("/api/team/agents/{id}/chat", apiTeamAgentChat)
 	r.GET("/api/team/agents/{id}/sessions", apiTeamAgentSessions)
 	r.POST("/api/team/agents/{id}/read", apiTeamAgentRead)
+	// The caller's own Team settings (Team instructions, landing choice).
+	r.GET("/api/team/settings", apiTeamSettingsGet)
+	r.PUT("/api/team/settings", apiTeamSettingsSave)
 
 	r.GET("/api/presets", apiPresetList)
 	r.GET("/api/presets/{name}", apiPresetDetail)

@@ -42,6 +42,9 @@ type SpawnPrompt struct {
 	// UseGlobalPrompt: the operator prompt is system_prompt, not
 	// system_prompt_team (entity.AgentPersona.UseGlobalPrompt).
 	UseGlobalPrompt bool
+	// TeamInstructions is the agent OWNER's Team prompt (Team settings),
+	// whoever sent the message; "" when they set none.
+	TeamInstructions string
 }
 
 // SpawnPromptFor returns the spawn prompt parts of the Team agent
@@ -67,8 +70,19 @@ func (s *Service) SpawnPromptFor(ctx context.Context, sessionID string) (SpawnPr
 		Subagents: f.Subagents && scope.AllowKey("sub-agents") && scope.AllowTool("wick_agent_delegate"),
 		Schedule:  f.Schedule && scope.AllowTool("wick_schedule_message"),
 
-		UseGlobalPrompt: p.UseGlobalPrompt,
+		UseGlobalPrompt:  p.UseGlobalPrompt,
+		TeamInstructions: s.teamInstructions(ctx, p.OwnerUserID),
 	}, true
+}
+
+// teamInstructions is ownerID's Team prompt. A failed read is "": the
+// spawn goes ahead without the section rather than not at all.
+func (s *Service) teamInstructions(ctx context.Context, ownerID string) string {
+	st, err := s.Settings(ctx, ownerID)
+	if err != nil {
+		return ""
+	}
+	return st.Prompt
 }
 
 // teamPrompt is the Team overlay plus p's "Who you are" block.

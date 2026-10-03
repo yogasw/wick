@@ -154,3 +154,29 @@ func TestComposePrompt_TeamUseGlobalPrompt(t *testing.T) {
 		t.Error("system_prompt_team used despite UseGlobalPrompt")
 	}
 }
+
+// The owner's Team instructions sit after the operator prompt and before
+// the persona; empty ones leave no heading, and a sub-agent never gets
+// them.
+func TestComposePrompt_TeamInstructions(t *testing.T) {
+	f := composeFactory(t, true, testTeamOperator)
+	f.TeamSpawnLoader = func(string) (TeamSpawn, bool) {
+		return TeamSpawn{Prompt: testTeamBlock, Access: testAccessBlock, TeamInstructions: "  OWNER-TEAM-RULES\n"}, true
+	}
+	got := f.composePrompt(FactoryOptions{SessionID: "s1", SystemAddon: testPersona}, "claude")
+	inOrder(t, got, testTeamOperator, "## Team instructions\n\nOWNER-TEAM-RULES\n\n## Your persona\n\n"+testPersona, "## This session")
+
+	f.TeamSpawnLoader = func(string) (TeamSpawn, bool) {
+		return TeamSpawn{Prompt: testTeamBlock, Access: testAccessBlock, TeamInstructions: " \n "}, true
+	}
+	if got := f.composePrompt(FactoryOptions{SessionID: "s1", SystemAddon: testPersona}, "claude"); strings.Contains(got, "## Team instructions") {
+		t.Error("blank Team instructions still got a heading")
+	}
+
+	f.TeamSpawnLoader = func(string) (TeamSpawn, bool) {
+		return TeamSpawn{Prompt: testTeamBlock, TeamInstructions: "OWNER-TEAM-RULES"}, true
+	}
+	if got := f.composePrompt(FactoryOptions{SessionID: "s1", IsSubAgent: true, SystemAddon: "ROLE"}, "claude"); strings.Contains(got, "OWNER-TEAM-RULES") {
+		t.Error("a sub-agent got the Team instructions")
+	}
+}

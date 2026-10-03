@@ -779,6 +779,9 @@ type TeamSpawn struct {
 	// UseGlobalPrompt swaps system_prompt_team for the global
 	// system_prompt (an agent converted from a project keeps its rules).
 	UseGlobalPrompt bool
+	// TeamInstructions is the owner's Team prompt, for every agent in
+	// their Team; "" = no "## Team instructions" section.
+	TeamInstructions string
 }
 
 // composePrompt assembles the system prompt of one spawn. Layered, top
@@ -798,7 +801,8 @@ type TeamSpawn struct {
 // A Team agent's own session is assembled differently: immutable (with
 // its gated sections cut to the agent's access) → Team overlay + "Who
 // you are" → "Your access" → catalog → preset → `system_prompt_team` →
-// "## Your persona" → session block. The operator prompt moves BEFORE
+// "## Team instructions" (the owner's Team settings, skipped when empty)
+// → "## Your persona" → session block. The operator prompt moves BEFORE
 // the persona so it no longer talks over it, and the persona is the last
 // word before the session block.
 func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) string {
@@ -860,6 +864,11 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 			}
 		} else if f.TeamSystemPromptLoader != nil {
 			add(f.TeamSystemPromptLoader())
+		}
+		// The owner's own words for all their agents: after the operator
+		// prompt they cannot edit, before the one agent's persona.
+		if ti := strings.TrimSpace(ts.TeamInstructions); ti != "" {
+			add("## Team instructions\n\n" + ti)
 		}
 		if addon := strings.TrimSpace(opt.SystemAddon); addon != "" {
 			add("## Your persona\n\n" + addon)

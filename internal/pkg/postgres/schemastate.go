@@ -100,6 +100,8 @@ var migratedModels = []any{
 	// Agents app: chat-able agents backed by a project, with a per-agent
 	// connector checklist. See internal/agents/team.
 	&entity.AgentPersona{},
+	// Per-user Team settings (Team instructions, landing choice).
+	&entity.TeamSettings{},
 }
 
 // modelFingerprint derives a stable hash of the models' shape. Purely

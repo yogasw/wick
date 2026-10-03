@@ -30,7 +30,7 @@ func testDB(t *testing.T) *gorm.DB {
 		t.Fatalf("sql handle: %v", err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&entity.AgentPersona{}); err != nil {
+	if err := db.AutoMigrate(&entity.AgentPersona{}, &entity.TeamSettings{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db
