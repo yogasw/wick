@@ -127,3 +127,24 @@ func TestTailPreview(t *testing.T) {
 		t.Errorf("TailPreview = %q", got)
 	}
 }
+
+func TestTurnStatus(t *testing.T) {
+	cases := []struct {
+		meta, lifecycle, want string
+	}{
+		// A warm process between turns: the meta still says running.
+		{"running", "idle", "idle"},
+		{"running", "working", "running"},
+		{"running", "spawning", "running"},
+		// The process is gone; a stale running meta is not a turn.
+		{"running", "", "idle"},
+		{"running", "killed", "idle"},
+		{"queued", "", "queued"},
+		{"idle", "", "idle"},
+	}
+	for _, c := range cases {
+		if got := TurnStatus(c.meta, c.lifecycle); got != c.want {
+			t.Errorf("TurnStatus(%q, %q) = %q, want %q", c.meta, c.lifecycle, got, c.want)
+		}
+	}
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rosterStatus } from "../rosterStatus.js";
+import { rosterStatus, withTurn } from "../rosterStatus.js";
 
 const row = (p: Record<string, unknown> = {}) => ({ id: "a1", status: "idle", disabled: false, ...p });
 
@@ -49,5 +49,24 @@ describe("rosterStatus", () => {
 
   it("rows from an older server (no P13 fields) read as idle", () => {
     expect(rosterStatus({ id: "x", status: "idle", disabled: false }).tip).toBe("online · idle");
+  });
+});
+
+describe("withTurn", () => {
+  const list = [
+    { id: "a1", status: "running", current_action: "query_range" },
+    { id: "a2", status: "running", current_action: "search" },
+  ];
+
+  it("a finished turn reads idle at once and drops its tool", () => {
+    const out = withTurn(list, "a1", false);
+    expect(out[0]).toEqual({ id: "a1", status: "idle", current_action: "" });
+    expect(out[1]).toBe(list[1]);
+    expect(rosterStatus({ ...out[0], disabled: false }).typing).toBeNull();
+  });
+
+  it("a started turn reads running and keeps the tool it knows", () => {
+    const out = withTurn([{ id: "a1", status: "idle", current_action: "x" }], "a1", true);
+    expect(out[0]).toEqual({ id: "a1", status: "running", current_action: "x" });
   });
 });

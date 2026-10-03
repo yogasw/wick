@@ -137,6 +137,15 @@
   const unsubTurns = thread.turns.subscribe((v) => { turns = v; });
   const unsubLive = thread.live.subscribe((v) => { live = v; });
   const unsubTyping = thread.typing.subscribe((v) => { typing = v; });
+  /* Report turn start/end to an agent-mode host, edges only. Starts at
+     false so mounting an idle chat reports nothing. */
+  let turnActive = false;
+  $effect(() => {
+    const active = typing.active;
+    if (active === turnActive) return;
+    turnActive = active;
+    untrack(() => agentMode?.onTurnChange?.(active));
+  });
   const unsubLifecycle = thread.lifecycle.subscribe((v) => { agentLifecycle = v; });
   /* When the running turn started, for the context panel's live line. A
      turn can go minutes without saying anything, and every other figure

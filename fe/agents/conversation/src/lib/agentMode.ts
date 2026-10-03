@@ -34,6 +34,10 @@ export type AgentMode = {
       "Message {name}…" placeholder, the composer caption and the avatar
       as the typing indicator; absent, DetailView looks as on /sessions. */
   agent?: AgentIdentity;
+  /** Told when this chat's turn starts or ends, off the same SSE stream
+      that drives the typing bubble, so the host's "typing" cue follows the
+      turn instead of waiting for its next roster poll. */
+  onTurnChange?: (active: boolean) => void;
 };
 
 /** What the chat area shows of the agent it talks to. */

@@ -36,3 +36,16 @@ export function rosterStatus(a: Row, opts: { activeId?: string; hatching?: boole
   else tip = "online · idle";
   return { unread, attention, typing: working ? action || "Typing" : null, tip };
 }
+
+/** withTurn is the roster after agent id's main-chat turn started or
+    ended on the stream: the row reads working (or idle, with its tool
+    cleared) at once instead of after the next poll. */
+export function withTurn<T extends Pick<AgentItem, "id" | "status"> & Partial<Pick<AgentItem, "current_action">>>(
+  agents: T[],
+  id: string,
+  active: boolean,
+): T[] {
+  return agents.map((x) =>
+    x.id === id ? { ...x, status: active ? "running" : "idle", current_action: active ? x.current_action : "" } : x,
+  );
+}

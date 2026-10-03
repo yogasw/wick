@@ -47,6 +47,22 @@ func CurrentAction(evs []store.TurnEvent) string {
 	return ""
 }
 
+// TurnStatus is the roster status of a session: "running" only while a
+// turn is in flight. metaStatus is the persisted session status, which
+// the pool sets to running at spawn and back to idle only when the
+// process exits — a warm process between turns still reads "running"
+// there. lifecycle is the pool's live view ("" when no process).
+func TurnStatus(metaStatus, lifecycle string) string {
+	switch lifecycle {
+	case "working", "spawning":
+		return "running"
+	}
+	if lifecycle == "" && metaStatus == "queued" {
+		return "queued"
+	}
+	return "idle"
+}
+
 // ActionLabel shortens a tool call to what a person reads in the roster:
 // an MCP tool loses its "mcp__<server>__" prefix, and a wick_execute call
 // shows the connector op it runs ("query_range") rather than the

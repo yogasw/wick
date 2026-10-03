@@ -268,14 +268,16 @@ func timePtr(t time.Time) *time.Time {
 // teamLive is the in-memory turn state of every session, read once per
 // response so a roster of N agents costs one pool snapshot rather than N.
 type teamLive struct {
-	actions   map[string]string // session id → CurrentAction
-	approvals map[string]string // session id → tool of a pending approval
+	actions    map[string]string // session id → CurrentAction
+	lifecycles map[string]string // session id → pool lifecycle
+	approvals  map[string]string // session id → tool of a pending approval
 }
 
 func teamLiveNow() teamLive {
-	l := teamLive{actions: map[string]string{}, approvals: map[string]string{}}
+	l := teamLive{actions: map[string]string{}, lifecycles: map[string]string{}, approvals: map[string]string{}}
 	if globalPool != nil {
 		for _, e := range globalPool.ActiveSnapshot() {
+			l.lifecycles[e.SessionID] = e.Lifecycle
 			if a := team.CurrentAction(e.InFlightEvents); a != "" {
 				l.actions[e.SessionID] = a
 			}
@@ -418,7 +420,9 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 	if s, ok := mainSessionOf(p.OwnerUserID, p.ID); ok {
 		it.MainSessionID = s.ID
 		it.LastActive = timePtr(s.Meta.LastActive)
-		it.Status = string(s.Meta.Status)
+		// Meta.Status stays "running" for as long as the process is warm,
+		// turn or no turn; the pool lifecycle is what says a turn is on.
+		it.Status = team.TurnStatus(string(s.Meta.Status), live.lifecycles[s.ID])
 		it.Unread = team.Unread(s.Meta.LastActive, p.LastReadAt)
 		if it.Status != string(session.StatusIdle) {
 			it.CurrentAction = live.actions[s.ID]

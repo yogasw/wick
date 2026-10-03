@@ -17,7 +17,7 @@
   import { connectorCaption, hiddenTabsFor } from "./lib/agentMode.js";
   import { rosterTime } from "./lib/timeFormat.js";
   import { listAgents, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
-  import { rosterStatus } from "./lib/rosterStatus.js";
+  import { rosterStatus, withTurn } from "./lib/rosterStatus.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import { RETURN_KEY, returnHref } from "./lib/teamReturn.js";
 
@@ -230,6 +230,17 @@
       : { label: "Nonaktifkan", hint: "semua akses connector ditutup", danger: true, onclick: toggleDisabled },
   ]);
 
+  /* The main chat's turn started or ended on the stream: flip the row and
+     header now, and re-read the roster once it ends so the preview and
+     status match the server. Another conversation on screen is not the
+     main chat, so it leaves the row alone. */
+  function onTurnChange(active: boolean) {
+    const a = selected;
+    if (!a || route.session) return;
+    agents = withTurn(agents, a.id, active);
+    if (!active) load();
+  }
+
   /* The header's panel button drives DetailView's rail: a press bumps the
      count, DetailView reports back whether the rail is open. */
   let railToggle = $state(0);
@@ -240,6 +251,7 @@
     hideHeader: true,
     hidePickers: true,
     onDeleted: () => go({ session: null }),
+    onTurnChange,
     agent: selected
       ? {
           name: selected.name,
