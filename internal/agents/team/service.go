@@ -96,7 +96,12 @@ func (s *Service) ScopeForSession(ctx context.Context, sessionID string) connect
 	if s == nil || sessionID == "" {
 		return nil
 	}
-	agentID := AgentOfSession(s.layout, sessionID)
+	agentID, err := AgentOfSession(s.layout, sessionID)
+	if err != nil {
+		// The chain broke above this session: it may be an agent's
+		// sub-agent, so it gets nothing rather than its owner's reach.
+		return DenyAll()
+	}
 	if agentID == "" {
 		return nil
 	}

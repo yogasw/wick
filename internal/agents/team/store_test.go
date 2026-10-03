@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -115,14 +116,45 @@ func TestAgentOfSessionWalksParents(t *testing.T) {
 	mk("s-child", "s-root", "")
 	mk("s-grand", "s-child", "")
 	mk("s-plain", "", "")
-	if got := AgentOfSession(layout, "s-grand"); got != "agent-1" {
-		t.Errorf("grandchild = %q, want agent-1", got)
+	if got, err := AgentOfSession(layout, "s-grand"); err != nil || got != "agent-1" {
+		t.Errorf("grandchild = %q, %v, want agent-1", got, err)
 	}
-	if got := AgentOfSession(layout, "s-plain"); got != "" {
-		t.Errorf("plain = %q, want empty", got)
+	if got, err := AgentOfSession(layout, "s-plain"); err != nil || got != "" {
+		t.Errorf("plain = %q, %v, want empty", got, err)
 	}
-	if got := AgentOfSession(layout, "missing"); got != "" {
-		t.Errorf("missing = %q, want empty", got)
+	if got, err := AgentOfSession(layout, "missing"); err != nil || got != "" {
+		t.Errorf("missing = %q, %v, want empty", got, err)
+	}
+}
+
+// A parent that vanished mid-chain must not turn a sub-agent into an
+// ordinary session.
+func TestAgentOfSessionBrokenChainFailsClosed(t *testing.T) {
+	layout := config.NewLayout(t.TempDir())
+	ctx := context.Background()
+	if _, err := session.Create(ctx, layout, session.CreateOptions{ID: "s-orphan", ParentSessionID: "s-deleted"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AgentOfSession(layout, "s-orphan"); !errors.Is(err, ErrBrokenChain) {
+		t.Fatalf("orphan err = %v, want ErrBrokenChain", err)
+	}
+	// A chain longer than maxParentHops is treated as corrupt.
+	parent := ""
+	for i := 0; i <= maxParentHops+1; i++ {
+		id := fmt.Sprintf("s-deep-%d", i)
+		if _, err := session.Create(ctx, layout, session.CreateOptions{ID: id, ParentSessionID: parent}); err != nil {
+			t.Fatal(err)
+		}
+		parent = id
+	}
+	if _, err := AgentOfSession(layout, parent); !errors.Is(err, ErrBrokenChain) {
+		t.Fatalf("deep chain err = %v, want ErrBrokenChain", err)
+	}
+
+	svc := NewService(testDB(t), layout)
+	sc := svc.ScopeForSession(ctx, "s-orphan")
+	if sc == nil || sc.AllowConnector("c1") {
+		t.Fatal("broken chain must resolve to deny-all, not unscoped")
 	}
 }
 
