@@ -63,4 +63,14 @@ describe("AgentSettings delete agent", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Delete agent" }));
     await waitFor(() => expect(deleteAgent).toHaveBeenCalledWith("/tools/agents", "a1", "keep"));
   });
+
+  test("Danger zone labels both controls: Disable is a checkbox with what it does", async () => {
+    mount();
+    const box = screen.getByRole("checkbox", { name: /^Disable agent/ }) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    expect(screen.getByTestId("danger-zone").textContent).toContain("Its chats and memory stay.");
+    expect(screen.getByText("Delete agent")).toBeDefined();
+    await fireEvent.click(box);
+    expect(box.checked).toBe(true);
+  });
 });

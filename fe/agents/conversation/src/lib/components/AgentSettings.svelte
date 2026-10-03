@@ -737,13 +737,26 @@
 {#snippet dangerZone()}
     <div class="space-y-3 border-t border-white-300 pt-4 dark:border-navy-600">
       <p class="text-sm font-semibold text-neg-400">Danger zone</p>
-      <Toggle checked={draft.disabled} onChange={(v) => (draft.disabled = v)} label="Disable agent" />
-      <div>
-        <button type="button" class="rounded-lg border border-neg-300 px-3 py-1 text-sm text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600" onclick={openDelete}>Delete agent…</button>
-        <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-          You choose what happens to its chats and memory.
-          {#if agent.is_captain}The Captain cannot be deleted while other agents exist.{/if}
-        </p>
+      <div class="divide-y divide-white-300 rounded-lg border border-neg-300 dark:divide-navy-600" data-testid="danger-zone">
+        <label class="flex cursor-pointer items-start gap-3 px-3 py-3">
+          <input type="checkbox" class="mt-1" checked={draft.disabled} onchange={(e) => (draft.disabled = e.currentTarget.checked)} aria-describedby="agent-disable-hint" />
+          <span>
+            <span class="block text-sm font-medium text-black-900 dark:text-white-100">Disable agent</span>
+            <span id="agent-disable-hint" class="block text-xs text-black-800 dark:text-black-600">
+              It stops taking @mentions, Team messages and Slack, leaves the Team roster, and its scheduled messages are held until you enable it again. Its chats and memory stay.
+            </span>
+          </span>
+        </label>
+        <div class="flex items-start justify-between gap-3 px-3 py-3">
+          <div>
+            <p class="text-sm font-medium text-black-900 dark:text-white-100">Delete agent</p>
+            <p class="text-xs text-black-800 dark:text-black-600">
+              You choose what happens to its chats and memory.
+              {#if agent.is_captain}The Captain cannot be deleted while other agents exist.{/if}
+            </p>
+          </div>
+          <button type="button" class="shrink-0 rounded-lg border border-neg-300 px-3 py-1 text-sm text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600" onclick={openDelete}>Delete agent…</button>
+        </div>
       </div>
     </div>
 {/snippet}
