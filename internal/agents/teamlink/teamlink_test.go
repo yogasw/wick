@@ -1,0 +1,257 @@
+package teamlink
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+type fakeDir struct{ peers []Peer }
+
+func (d *fakeDir) Peers(_ context.Context, owner string) ([]Peer, error) {
+	var out []Peer
+	for _, p := range d.peers {
+		if p.OwnerID == owner {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+func (d *fakeDir) Get(_ context.Context, id string) (Peer, error) {
+	for _, p := range d.peers {
+		if p.ID == id {
+			return p, nil
+		}
+	}
+	return Peer{}, errors.New("not found")
+}
+
+// fakeTurns answers every turn with reply(agent, text). gate, when set,
+// holds each turn until it is closed.
+type fakeTurns struct {
+	mu    sync.Mutex
+	seen  []string
+	reply func(Peer, string) string
+	gate  chan struct{}
+	hub   *Hub
+	// nested, when set, runs inside the turn of the agent it names —
+	// a teammate messaging onwards while it answers.
+	nested map[string]func() error
+	errs   []error
+}
+
+func (f *fakeTurns) Run(_ context.Context, agent Peer, text string) (string, string, error) {
+	f.mu.Lock()
+	f.seen = append(f.seen, agent.Handle+" <- "+text)
+	f.mu.Unlock()
+	if f.gate != nil {
+		<-f.gate
+	}
+	if fn := f.nested[agent.ID]; fn != nil {
+		err := fn()
+		f.mu.Lock()
+		f.errs = append(f.errs, err)
+		f.mu.Unlock()
+	}
+	return "sess-" + agent.ID, f.reply(agent, text), nil
+}
+
+type fakeNotify struct {
+	mu        sync.Mutex
+	delivered []string
+	audits    []string
+}
+
+func (n *fakeNotify) Deliver(_ context.Context, sessionID, text string) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.delivered = append(n.delivered, sessionID+": "+text)
+	return nil
+}
+
+func (n *fakeNotify) Audit(_ context.Context, sessionID string, h Handoff) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.audits = append(n.audits, sessionID+" "+h.From+"->"+h.To+" "+stateName(h.State))
+}
+
+func (n *fakeNotify) snapshot() ([]string, []string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]string(nil), n.delivered...), append([]string(nil), n.audits...)
+}
+
+func newTestHub(reply func(Peer, string) string) (*Hub, *fakeTurns, *fakeNotify) {
+	dir := &fakeDir{peers: []Peer{
+		{ID: "a-cap", OwnerID: "u1", Handle: "captain", Name: "Yoga Bot", IsCaptain: true},
+		{ID: "a-anton", OwnerID: "u1", Handle: "anton", Name: "Anton", Description: "reads logs"},
+		{ID: "a-vera", OwnerID: "u1", Handle: "vera", Name: "Vera"},
+		{ID: "a-off", OwnerID: "u1", Handle: "sleepy", Name: "Sleepy", Disabled: true},
+		{ID: "a-other", OwnerID: "u2", Handle: "mallory", Name: "Mallory"},
+	}}
+	turns := &fakeTurns{reply: reply}
+	note := &fakeNotify{}
+	h := NewHub(dir, turns, note)
+	h.poll = 5 * time.Millisecond
+	turns.hub = h
+	return h, turns, note
+}
+
+func TestSendSyncCaptainToAnton(t *testing.T) {
+	h, turns, note := newTestHub(func(p Peer, _ string) string { return "no 401s since 09:00" })
+	res, err := h.Send(context.Background(), SendInput{
+		CallerSession: "sess-cap", CallerAgentID: "a-cap", To: "@anton", Text: "any 401s today?",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State != "completed" || res.ReplyText != "no 401s since 09:00" || res.ContextID == "" || res.TaskID == "" {
+		t.Fatalf("result = %+v", res)
+	}
+	if got := turns.seen[0]; got != "anton <- Message from Yoga Bot (@captain):\nany 401s today?" {
+		t.Fatalf("framed = %q", got)
+	}
+	_, audits := note.snapshot()
+	if len(audits) != 2 || audits[0] != "sess-cap captain->anton completed" || audits[1] != "sess-a-anton captain->anton completed" {
+		t.Fatalf("audits = %v", audits)
+	}
+	t.Logf("trace: %s | result %+v | audits %v", turns.seen[0], *res, audits)
+
+	got, err := h.GetTask(context.Background(), "a-cap", res.TaskID)
+	if err != nil || got.State != "completed" || got.ReplyText != res.ReplyText {
+		t.Fatalf("get_task = %+v, %v", got, err)
+	}
+	if _, err := h.GetTask(context.Background(), "a-vera", res.TaskID); !errors.Is(err, ErrUnknownTask) {
+		t.Fatalf("another agent read the task: %v", err)
+	}
+}
+
+func TestSendRefusals(t *testing.T) {
+	h, turns, _ := newTestHub(func(Peer, string) string { return "x" })
+	ctx := context.Background()
+	cases := map[string]struct {
+		in   SendInput
+		want error
+	}{
+		"other owner": {SendInput{CallerAgentID: "a-cap", To: "mallory", Text: "hi"}, ErrUnknownHandle},
+		"disabled":    {SendInput{CallerAgentID: "a-cap", To: "sleepy", Text: "hi"}, ErrUnknownHandle},
+		"self":        {SendInput{CallerAgentID: "a-cap", To: "@Captain", Text: "hi"}, ErrSelf},
+		"no agent":    {SendInput{To: "anton", Text: "hi"}, ErrNotTeamSession},
+	}
+	for name, c := range cases {
+		if _, err := h.Send(ctx, c.in); !errors.Is(err, c.want) {
+			t.Errorf("%s: err = %v, want %v", name, err, c.want)
+		}
+	}
+	if len(turns.seen) != 0 {
+		t.Fatalf("a refused message ran a turn: %v", turns.seen)
+	}
+	if _, _, err := h.Resolve(ctx, "u2", "anton"); !errors.Is(err, ErrUnknownHandle) {
+		t.Fatalf("resolved across owners: %v", err)
+	}
+	card, _, err := h.Resolve(ctx, "u1", "anton")
+	if err != nil || card.Name != "Anton" || card.SupportedInterfaces[0].URL != LocalURL("a-anton") {
+		t.Fatalf("card = %+v, %v", card, err)
+	}
+}
+
+func TestContextTurnLimit(t *testing.T) {
+	h, _, _ := newTestHub(func(Peer, string) string { return "ok" })
+	ctx := context.Background()
+	first, err := h.Send(ctx, SendInput{CallerAgentID: "a-cap", To: "anton", Text: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 2; i <= MaxContextTurns; i++ {
+		if _, err := h.Send(ctx, SendInput{CallerAgentID: "a-cap", To: "anton", Text: "more", ContextID: first.ContextID}); err != nil {
+			t.Fatalf("turn %d: %v", i, err)
+		}
+	}
+	_, err = h.Send(ctx, SendInput{CallerAgentID: "a-cap", To: "anton", Text: "again", ContextID: first.ContextID})
+	if !errors.Is(err, ErrHopLimit) || !strings.Contains(err.Error(), "summarise and report to the user") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// A→B→A: Anton, answering the Captain, asks the Captain back; that turn
+// shares the context and counts against it, and the chain depth grows.
+func TestChainDepthAndPingPong(t *testing.T) {
+	h, turns, _ := newTestHub(func(p Peer, _ string) string { return "from " + p.Handle })
+	ctx := context.Background()
+	var inner *Result
+	turns.nested = map[string]func() error{
+		"a-anton": func() (err error) {
+			inner, err = h.Send(ctx, SendInput{CallerAgentID: "a-anton", To: "vera", Text: "help"})
+			return err
+		},
+		"a-vera": func() error {
+			_, err := h.Send(ctx, SendInput{CallerAgentID: "a-vera", To: "captain", Text: "back to you"})
+			return err
+		},
+		"a-cap": func() error {
+			_, err := h.Send(ctx, SendInput{CallerAgentID: "a-cap", To: "anton", Text: "fourth hop"})
+			return err
+		},
+	}
+	outer, err := h.Send(ctx, SendInput{CallerAgentID: "a-cap", To: "anton", Text: "start"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inner == nil || inner.ContextID != outer.ContextID {
+		t.Fatalf("nested send left the context: outer %+v inner %+v", outer, inner)
+	}
+	// anton→vera (depth 2) ok, vera→captain (depth 3) ok, captain→anton
+	// would be depth 4. errs fill innermost first.
+	if len(turns.errs) != 3 || !errors.Is(turns.errs[0], ErrHopLimit) || turns.errs[1] != nil || turns.errs[2] != nil {
+		t.Fatalf("errs = %v", turns.errs)
+	}
+}
+
+func TestSendAsyncDeliversLateReply(t *testing.T) {
+	h, turns, note := newTestHub(func(Peer, string) string { return "done looking" })
+	turns.gate = make(chan struct{})
+	res, err := h.Send(context.Background(), SendInput{
+		CallerSession: "sess-cap", CallerAgentID: "a-cap", To: "anton", Text: "slow job", Wait: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State != "working" || res.ReplyText != "" {
+		t.Fatalf("result = %+v", res)
+	}
+	close(turns.gate)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		delivered, _ := note.snapshot()
+		if len(delivered) == 1 {
+			want := "sess-cap: Reply from Anton (@anton) [task " + res.TaskID + ", completed]:\n\ndone looking"
+			if delivered[0] != want {
+				t.Fatalf("delivered = %q", delivered[0])
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("late reply never delivered")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	got, err := h.GetTask(context.Background(), "a-cap", res.TaskID)
+	if err != nil || got.State != "completed" || got.ReplyText != "done looking" {
+		t.Fatalf("get_task = %+v, %v", got, err)
+	}
+}
+
+func TestSilentReply(t *testing.T) {
+	h, _, note := newTestHub(func(Peer, string) string { return " [silent] " })
+	res, err := h.Send(context.Background(), SendInput{CallerSession: "s", CallerAgentID: "a-cap", To: "anton", Text: "fyi"})
+	if err != nil || res.State != "completed" || res.ReplyText != "" {
+		t.Fatalf("result = %+v, %v", res, err)
+	}
+	if delivered, _ := note.snapshot(); len(delivered) != 0 {
+		t.Fatalf("silent reply delivered: %v", delivered)
+	}
+}
