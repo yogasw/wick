@@ -10,6 +10,7 @@ import (
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/tool"
 	"net/http"
+	"strings"
 )
 
 type Handler struct {
@@ -97,6 +98,23 @@ func (h *Handler) APITools(w http.ResponseWriter, r *http.Request) {
 type ToolMetaEntry struct {
 	GroupNames []string
 	Bookmarked bool
+	// PluginVersion is set when the tool runs as a plugin (badge on the card).
+	PluginVersion string
+}
+
+// PluginVersions reports the installed version of a tool plugin by key; ok
+// is false for a tool compiled into wick. Installed by the server at boot.
+var PluginVersions func(key string) (string, bool)
+
+func pluginVersion(path string) (string, bool) {
+	if PluginVersions == nil {
+		return "", false
+	}
+	key, ok := strings.CutPrefix(path, "/tools/")
+	if !ok {
+		return "", false
+	}
+	return PluginVersions(key)
 }
 
 // ItemMeta returns a map from item path to display metadata.
@@ -123,7 +141,11 @@ func (h *Handler) ItemMeta(ctx context.Context, user *entity.User, visible []too
 				names = append(names, n)
 			}
 		}
-		out[t.Path] = ToolMetaEntry{GroupNames: names, Bookmarked: bookmarked[t.Path]}
+		entry := ToolMetaEntry{GroupNames: names, Bookmarked: bookmarked[t.Path]}
+		if v, ok := pluginVersion(t.Path); ok {
+			entry.PluginVersion = v
+		}
+		out[t.Path] = entry
 	}
 	return out
 }
