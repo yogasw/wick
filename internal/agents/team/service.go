@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -37,6 +38,9 @@ type Service struct {
 	// their AgentCatalog — with each one's tier. nil (not wired) leaves
 	// explicit grants working and every default off.
 	ownerReach OwnerReachFunc
+	// ownerCatalog is the owner's full catalog (accounts and ops), what a
+	// Captain's access proposal is checked against.
+	ownerCatalog OwnerCatalogFunc
 }
 
 // OwnerReachFunc returns userID's own catalog (see connectors
@@ -105,10 +109,12 @@ func (s *Service) ScopeForSession(ctx context.Context, sessionID string) connect
 	s.mu.Lock()
 	if e, ok := s.cache[agentID]; ok && now.Before(e.expiry) {
 		s.mu.Unlock()
-		return e.scope
+		_, direct := s.directAgent(sessionID)
+		return scopeFor(e.scope, direct)
 	}
 	s.mu.Unlock()
 
+	_, direct := s.directAgent(sessionID)
 	var scope connectors.AgentScope
 	p, err := s.Get(ctx, agentID)
 	switch {
@@ -125,7 +131,32 @@ func (s *Service) ScopeForSession(ctx context.Context, sessionID string) connect
 	s.mu.Lock()
 	s.cache[agentID] = scopeEntry{scope: scope, expiry: now.Add(scopeCacheTTL)}
 	s.mu.Unlock()
+	return scopeFor(scope, direct)
+}
+
+// scopeFor is the cached agent scope as one session sees it: a sub-agent
+// delegated under the agent never inherits "Manage other agents".
+func scopeFor(scope connectors.AgentScope, direct bool) connectors.AgentScope {
+	if sc, ok := scope.(*Scope); ok && !direct && sc.manageAgents {
+		cp := *sc
+		cp.manageAgents = false
+		return &cp
+	}
 	return scope
+}
+
+// directAgent is the agent sessionID itself carries (meta.agent_id), and
+// whether it carries one at all — false for a sub-agent, whose agent is
+// only found up the parent chain.
+func (s *Service) directAgent(sessionID string) (string, bool) {
+	if s == nil || sessionID == "" {
+		return "", false
+	}
+	sess, err := session.Load(s.layout, sessionID)
+	if err != nil || sess.Meta.AgentID == "" || sess.Meta.ParentSessionID != "" {
+		return "", false
+	}
+	return sess.Meta.AgentID, true
 }
 
 // Invalidate drops the cached scope of one agent so an edit applies on

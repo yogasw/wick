@@ -96,7 +96,7 @@ func (s *Service) teamPrompt(ctx context.Context, p entity.AgentPersona) string 
 			}
 		}
 	}
-	return systemprompt.ImmutableTeam() + "\n\n" + WhoYouAre(s.memberOf(p), others)
+	return systemprompt.ImmutableTeam() + "\n\n" + WhoYouAre(s.memberOf(p), others) + manageAgentsBlock(p)
 }
 
 // memberOf reads an agent's name and description off its project (the

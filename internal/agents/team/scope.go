@@ -24,6 +24,9 @@ type Scope struct {
 	// captain unlocks the TierSystem default and the owner-wide data
 	// scope (see CheckSessionTarget).
 	captain bool
+	// manageAgents switches on the agents.* connector (ManageAgentsKey):
+	// the agent's "Manage other agents" permission, never a sub-agent's.
+	manageAgents bool
 	// agentID is the agent this scope was built for, ownerID its owner:
 	// the data scope's hard edge, whoever the call's login identity is.
 	agentID, ownerID string
@@ -121,6 +124,7 @@ func ScopeOf(p entity.AgentPersona, reach Reach) *Scope {
 	f, grants, _ := MigrateFeatures(DecodeFeatures(p.Features), DecodeGrants(p.AllowedConnectors), reach)
 	s := NewScope(grants, p.IncludeNewConnectors, p.IsCaptain, reach).WithFeatures(f)
 	s.agentID, s.ownerID = p.ID, p.OwnerUserID
+	s.manageAgents = ManagesAgents(p)
 	return s
 }
 
@@ -178,6 +182,9 @@ func (s *Scope) resolve(connectorID string) (string, *ConnectorGrant) {
 
 // AllowKey implements connectors.AgentFeatureScope.
 func (s *Scope) AllowKey(connectorKey string) bool {
+	if connectorKey == ManageAgentsKey && !s.manageAgents {
+		return false
+	}
 	return !s.denyAll && !s.offKeys[connectorKey]
 }
 

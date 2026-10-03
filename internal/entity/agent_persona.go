@@ -69,6 +69,15 @@ type AgentPersona struct {
 	// agents involved wins. 0 = teamlink.DefaultMaxHops.
 	MaxHops int `gorm:"not null;default:0" json:"max_hops"`
 
+	// ManageAgents lets the agent run the agents.* ops (list, create,
+	// edit persona, propose access) on its owner's other agents. nil =
+	// never set: on for the Captain, off for everyone else (see
+	// team.ManagesAgents). A sub-agent never inherits it.
+	ManageAgents *bool `json:"manage_agents"`
+	// CaptainCan is a JSON object of team.CaptainCan: what the Captain
+	// may do to THIS agent. "{}" reads as the defaults.
+	CaptainCan string `gorm:"type:text;not null;default:'{}'" json:"captain_can"`
+
 	Disabled bool `gorm:"not null;default:false" json:"disabled"`
 	// AllowProviderSwitch lets the agent's chat pick another provider or
 	// model from the composer. nil = never set: see
