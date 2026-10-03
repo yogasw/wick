@@ -9,12 +9,22 @@
      Every avatar on the page rides one shared rAF and one pointermove
      listener (avatarTicker.ts), paused while the tab is hidden. Under
      prefers-reduced-motion (or with `still`) nothing subscribes and the
-     still frame is drawn. */
+     still frame is drawn.
+
+     kind="blob" hands drawing to BlobAvatar (the vendored blob mascot):
+     still PNG by default, animated only where `live` is set. The state
+     logic below (working → thinking, notify after a turn, …) is shared. */
+  import BlobAvatar from "./BlobAvatar.svelte";
+  import { isBlobKind, blobStateFor } from "./blob.js";
   import { blobPath, eyesAt, orbitDot, gazeTarget, approach, followsPointer, normalizeShape, normalizeState, stateFor, DOT_R, type AvatarState, type Vec } from "./shape.js";
   import { subscribe, pointer, pointerActive, prefersReducedMotion } from "./ticker.js";
 
   type Props = {
+    /** "" / absent = classic, "blob" = blob mascot (team.Avatar.kind). */
+    kind?: string;
     shape?: string;
+    /** Blob only: one of BLOB_EXPRESSIONS. */
+    expression?: string;
     color?: string;
     size?: number;
     working?: boolean;
@@ -32,10 +42,15 @@
     pose?: AvatarState;
     /** Draw one still frame and never animate (cards, dense lists). */
     still?: boolean;
+    /** Blob only: animate this one (header, empty state, preview). A blob
+        without it is a cached still frame, so lists stay cheap. */
+    live?: boolean;
     title?: string;
   };
   let {
+    kind,
     shape = "circle",
+    expression,
     color = "#6366f1",
     size = 40,
     working = false,
@@ -46,8 +61,11 @@
     notify = false,
     pose,
     still = false,
+    live = false,
     title,
   }: Props = $props();
+
+  const blob = $derived(isBlobKind(kind));
 
   const NOTIFY_MS = 2400;
   const WINK_MS = 450;
@@ -92,7 +110,7 @@
   let gaze = $state<Vec>({ x: 0, y: 0 });
 
   $effect(() => {
-    if (reduced) return;
+    if (reduced || blob) return;
     return subscribe((now) => {
       t = now;
       let target: Vec = { x: 0, y: 0 };
@@ -112,6 +130,9 @@
   const fill = $derived(/^#[0-9a-f]{3,8}$/i.test(color) ? color : "#6366f1");
 </script>
 
+{#if blob}
+  <BlobAvatar {shape} {expression} {color} {size} pose={blobStateFor(current)} {live} {still} hatching={hatching && !reduced} {title} />
+{:else}
 <!-- The click is a reaction, not an action: the row button around the
      avatar does the navigating, so there is nothing for a key to trigger. -->
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
@@ -138,6 +159,7 @@
   {/each}
   {#if dot}<circle cx={dot.x.toFixed(3)} cy={dot.y.toFixed(3)} r={DOT_R} fill="#27b199" />{/if}
 </svg>
+{/if}
 
 <style>
   .agent-avatar {

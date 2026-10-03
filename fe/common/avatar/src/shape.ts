@@ -3,8 +3,8 @@
    tested without a DOM. This is a light imitation of the bloub engine
    (PLAN 6.5), not a port of it: a superformula outline that breathes,
    two dark eyes that blink and follow the pointer, and a few states. No
-   bloub code is copied here, so its MIT notice does not apply; whoever
-   ports the real engine into this package adds the notice with it.
+   bloub code is copied here. The "blob" avatar kind is a separate,
+   vendored engine with its own MIT notice: see blob.ts and blob/.
 
    Coordinates are unit space: the outline's widest point sits at radius
    BODY_R around (0, 0), drawn in a viewBox of -1.4..1.4 so a wobble or a
