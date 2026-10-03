@@ -138,7 +138,6 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 				</a>
 				@agentsNavLink(vm.Base+"/overview", "Overview", vm.ActivePage == "overview")
 				@agentsAppNavLink(vm.Base + "/team")
-				@agentsNavLink(vm.Base+"/workflows", "Workflows", vm.ActivePage == "workflows")
 				@agentsNavLink(vm.Base+"/connectors", "Connectors", vm.ActivePage == "connectors")
 				{{ moreItems := AgentsMoreItems(vm, user) }}
 				// The page you are on is lifted OUT of the collapsed group and
