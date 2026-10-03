@@ -116,7 +116,10 @@ func TestSendSyncCaptainToAnton(t *testing.T) {
 		t.Fatalf("framed = %q", got)
 	}
 	_, audits := note.snapshot()
-	if len(audits) != 2 || audits[0] != "sess-cap captain->anton completed" || audits[1] != "sess-a-anton captain->anton completed" {
+	// working is audited before the turn runs; fakeTurns is no
+	// SessionLocator, so only the caller's side knows its session then.
+	if len(audits) != 3 || audits[0] != "sess-cap captain->anton working" ||
+		audits[1] != "sess-cap captain->anton completed" || audits[2] != "sess-a-anton captain->anton completed" {
 		t.Fatalf("audits = %v", audits)
 	}
 	t.Logf("trace: %s | result %+v | audits %v", turns.seen[0], *res, audits)

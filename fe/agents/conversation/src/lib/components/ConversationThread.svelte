@@ -11,6 +11,7 @@
   import { turnDay, turnDayKey, activeDayLabel } from "../timeFormat.js";
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import type { AgentIdentity } from "../agentMode.js";
+  import { collapseHandoffs } from "../teamMention.js";
 
   type Props = {
     turns: ConversationTurn[];
@@ -112,11 +113,13 @@
      Deliberately narrow. A user message in between means the agent was
      answering something new, and both turns stay. */
   const shownTurns = $derived(
-    turns.filter((t, i) => {
-      if (!t.interrupted || t.role !== "assistant") return true;
-      const next = turns[i + 1];
-      return !next || next.role !== "assistant";
-    }),
+    collapseHandoffs(
+      turns.filter((t, i) => {
+        if (!t.interrupted || t.role !== "assistant") return true;
+        const next = turns[i + 1];
+        return !next || next.role !== "assistant";
+      }),
+    ),
   );
 
   const isEmpty = $derived(shownTurns.length === 0 && !live && !typing.active);

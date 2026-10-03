@@ -79,6 +79,9 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		if sl, ok := h.Turns.(SessionLocator); ok {
 			session = sl.MainSession(ctx, target)
 		}
+		// The handoff row appears as soon as the task is picked up and is
+		// moved to its final state below (same task id, so one row).
+		e.audit(ctx, from, target, callerSession, session, ec, a2a.TaskStateWorking)
 		h.mu.Lock()
 		if h.inflight[e.agentID] == nil {
 			h.inflight[e.agentID] = map[a2a.TaskID]inbound{}
@@ -120,7 +123,8 @@ func (e *executor) fail(ctx context.Context, ec *a2asrv.ExecutorContext, yield f
 	e.hub.finished(ctx, ec.TaskID, a2a.TaskStateFailed, err.Error())
 }
 
-// audit writes mention_handoff into both threads.
+// audit writes mention_handoff into both threads: once as working when
+// the task is picked up, once more with its final state.
 func (e *executor) audit(ctx context.Context, from, to Peer, callerSession, targetSession string, ec *a2asrv.ExecutorContext, state a2a.TaskState) {
 	if e.hub.Notify == nil {
 		return
