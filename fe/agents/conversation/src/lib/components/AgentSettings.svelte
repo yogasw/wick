@@ -14,7 +14,7 @@
     type AgentItem, type AgentWrite, type ConnectorGrant, type AgentConnector,
   } from "../api/team.js";
   import { FEATURE_TABS, type AgentFeatures } from "../agentMode.js";
-  import { AVATAR_SHAPES, AVATAR_COLORS } from "../avatarShape.js";
+  import { AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, colorInputValue } from "../avatarShape.js";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, type GrantErrors } from "../agentForm.js";
   import type { SettingsTab } from "../agentsRouter.js";
@@ -310,6 +310,26 @@
             aria-pressed={draft.avatar.color.toLowerCase() === col}
             onclick={() => (draft.avatar.color = col)}
           ></button>
+        {/each}
+        <!-- Any color, not only the swatches: the server takes free hex. -->
+        <input
+          type="color"
+          class="h-8 w-10 cursor-pointer rounded-lg border border-white-300 dark:border-navy-600 bg-transparent p-0.5"
+          aria-label="Warna lain"
+          title="Warna lain"
+          value={colorInputValue(draft.avatar.color)}
+          oninput={(e) => (draft.avatar.color = e.currentTarget.value)}
+        />
+      </div>
+    </div>
+    <div>
+      <span class={label}>State</span>
+      <div class="grid grid-cols-3 gap-3 sm:grid-cols-6">
+        {#each AVATAR_STATES as st (st)}
+          <div class="flex flex-col items-center gap-1.5 text-center">
+            <AgentAvatar shape={draft.avatar.shape} color={draft.avatar.color} size={40} pose={st} />
+            <span class="text-[11px] text-black-800 dark:text-black-600">{AVATAR_STATE_LABELS[st]}</span>
+          </div>
         {/each}
       </div>
     </div>

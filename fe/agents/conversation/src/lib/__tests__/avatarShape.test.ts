@@ -1,11 +1,14 @@
 import { describe, test, expect } from "vitest";
 import {
+  AVATAR_COLORS,
   AVATAR_SHAPES,
   AVATAR_STATES,
+  AVATAR_STATE_LABELS,
   BLINK_EVERY,
   BODY_R,
   approach,
   blobPath,
+  colorInputValue,
   eyesAt,
   followsPointer,
   gazeTarget,
@@ -139,4 +142,22 @@ describe("eyesAt", () => {
     expect(l.ry).toBeCloseTo(0.2);
     expect(r.ry).toBeLessThan(0.05);
   });
+});
+
+describe("colorInputValue", () => {
+  test("passes a #rrggbb through, lowercased", () => {
+    expect(colorInputValue("#27B199")).toBe("#27b199");
+  });
+  test("expands a short #rgb", () => {
+    expect(colorInputValue("#0aF")).toBe("#00aaff");
+  });
+  test("falls back to the default for what the picker cannot show", () => {
+    expect(colorInputValue("tomato")).toBe(AVATAR_COLORS[0]);
+    expect(colorInputValue("")).toBe(AVATAR_COLORS[0]);
+    expect(colorInputValue(undefined)).toBe(AVATAR_COLORS[0]);
+  });
+});
+
+test("every avatar state has a grid caption", () => {
+  for (const s of AVATAR_STATES) expect(AVATAR_STATE_LABELS[s]).toBeTruthy();
 });

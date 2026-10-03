@@ -21,6 +21,26 @@ export const AVATAR_COLORS = [
 export type AvatarState = "idle" | "thinking" | "alert" | "notify" | "sleep" | "egg";
 export const AVATAR_STATES: AvatarState[] = ["idle", "thinking", "alert", "notify", "sleep", "egg"];
 
+/** Captions for the state grid in Settings → Avatar. */
+export const AVATAR_STATE_LABELS: Record<AvatarState, string> = {
+  idle: "diam",
+  thinking: "bekerja",
+  alert: "perlu perhatian",
+  notify: "pesan baru",
+  sleep: "nonaktif",
+  egg: "menetas",
+};
+
+/** colorInputValue turns a stored color into what <input type="color">
+    accepts (#rrggbb, lowercase). A short #rgb is expanded; anything else
+    (a CSS name, rgb()) shows the default rather than black. */
+export function colorInputValue(c: string | null | undefined): string {
+  const v = (c ?? "").trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(v)) return v;
+  if (/^#[0-9a-f]{3}$/.test(v)) return "#" + [...v.slice(1)].map((h) => h + h).join("");
+  return AVATAR_COLORS[0];
+}
+
 /* a = wobble amplitude, k = lobes, w = wobble speed, open = eye height
    (1 = normal), ey = eye vertical shift, blink = blinks every BLINK_EVERY s,
    look = eyes wander up and sideways (thinking), egg = taller, narrower. */
