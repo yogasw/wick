@@ -116,9 +116,15 @@
     /* Set when the Agents app hosts this view (/team). Unset = the normal
        /sessions page, whose behaviour this must not change. */
     agentMode?: AgentMode;
+    /* Host-owned rail button (Team header): each increment toggles the
+       rail, reopening the last tab or else the first one shown. */
+    railToggle?: number;
+    /* Told whenever the rail opens or closes, so the host button can
+       show its pressed state. */
+    onRailChange?: (open: boolean) => void;
   };
 
-  let { base, sessionId, agentMode }: Props = $props();
+  let { base, sessionId, agentMode, railToggle = 0, onRailChange }: Props = $props();
 
   /* ── thread store ──────────────────────────────────────────────── */
   const thread = createThreadStore();
@@ -1934,6 +1940,29 @@
     // checklist no longer closes it under them.
     todosAutoOpened = false;
   }
+
+  // The host's rail button. The count it starts at is not a press: the
+  // view is re-mounted per conversation with the host's running count.
+  let railTogglesSeen = untrack(() => railToggle);
+  let railLastTab: RailTab | null = null;
+  $effect(() => {
+    if (railTab !== null) railLastTab = railTab;
+  });
+  $effect(() => {
+    const n = railToggle;
+    if (n === railTogglesSeen) return;
+    railTogglesSeen = n;
+    untrack(() => {
+      if (railTab !== null) { railTab = null; return; }
+      const shown = railTabs.map((t) => t.id);
+      const next = railLastTab && shown.includes(railLastTab) ? railLastTab : shown[0];
+      if (next) toggleRail(next);
+    });
+  });
+  $effect(() => {
+    const open = railTab !== null;
+    untrack(() => onRailChange?.(open));
+  });
 
   // When a panel opens (via a `/` command or a tab click), move focus into it so
   // it's immediately keyboard-navigable and Esc feels natural.

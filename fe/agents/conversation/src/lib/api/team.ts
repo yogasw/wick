@@ -43,9 +43,13 @@ export type AgentItem = {
   unread?: boolean;
   /** Main chat waits on the owner: an ask_user question or an approval. */
   needs_attention?: boolean;
+  /** What needs_attention waits on, e.g. "Butuh input: …"; shown in amber
+      ahead of last_preview. */
+  attention_preview?: string;
   /** Tool the running turn is on ("Bash", "query_range"); "" otherwise. */
   current_action?: string;
-  /** Other agents of this owner on the same project. */
+  /** Everything else on the same project: other agents (any owner) and
+      web/channel conversations. */
   shared_with?: number;
 };
 

@@ -219,15 +219,21 @@
     }
   }
 
+  /* Same order as the mockup: where to go first, then what to do to the
+     agent. A new chat lives in the Percakapan drawer, not here. */
   const menuItems = $derived([
-    { label: "Settings", hint: "persona, akses, tools, lanjutan", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
-    { label: "Percakapan lain", hint: "chat utama dan riwayat", onclick: () => openPanel({ kind: "sessions" }) },
-    { label: "Chat baru", hint: "mulai dari kosong", onclick: newChat },
-    { label: "Duplikat agent", hint: "salinan persona & akses, @handle baru", divider: true, onclick: duplicate },
+    { label: "Percakapan", hint: "chat utama dan riwayat", onclick: () => openPanel({ kind: "sessions" }) },
+    { label: "Settings", hint: "persona, akses, tools, avatar", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
+    { label: "Duplikat agent", hint: "salinan persona & akses, tanpa connection", divider: true, onclick: duplicate },
     selected?.disabled
       ? { label: "Aktifkan", hint: "agent bisa dipakai lagi", onclick: toggleDisabled }
       : { label: "Nonaktifkan", hint: "semua akses connector ditutup", danger: true, onclick: toggleDisabled },
   ]);
+
+  /* The header's panel button drives DetailView's rail: a press bumps the
+     count, DetailView reports back whether the rail is open. */
+  let railToggle = $state(0);
+  let railOpen = $state(false);
 
   const agentMode = $derived({
     hideTabs: hiddenTabsFor(selected?.features),
@@ -247,7 +253,7 @@
 
   function rowPreview(a: AgentItem): string {
     if (a.disabled) return "Nonaktif";
-    return a.last_preview || a.description || "Belum ada percakapan";
+    return a.attention_preview || a.last_preview || a.description || "Belum ada percakapan";
   }
 
 </script>
@@ -327,7 +333,7 @@
               </span>
               <span class="shrink-0 text-xs text-black-700">{rosterTime(a.last_active)}</span>
             </span>
-            <span class="mt-0.5 block truncate text-[13px] {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : 'text-black-800 dark:text-black-600'}">
+            <span class="mt-0.5 block truncate text-[13px] {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-black-800 dark:text-black-600'}">
               {#if st.typing !== null}{st.typing}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>{:else}{rowPreview(a)}{/if}
             </span>
           </span>
@@ -388,6 +394,17 @@
           <svg class="h-3 w-3 shrink-0 text-black-700" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg>
         </button>
         <KebabMenu items={menuItems} ariaLabel="Menu agent" width={240} />
+        <button
+          type="button"
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600 {railOpen ? 'bg-white-300 dark:bg-navy-600' : ''}"
+          title="Panel"
+          aria-label="Panel"
+          aria-pressed={railOpen}
+          data-rail-toggle
+          onclick={() => railToggle++}
+        >
+          <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="2"></rect><path d="M10 2.5v11"></path></svg>
+        </button>
       {:else}
         <div class="flex-1"></div>
       {/if}
@@ -395,7 +412,7 @@
     <div class="min-h-0 flex-1">
       {#if selected && chatSessionId}
         {#key chatSessionId}
-          <DetailView {base} sessionId={chatSessionId} {agentMode} />
+          <DetailView {base} sessionId={chatSessionId} {agentMode} {railToggle} onRailChange={(open) => (railOpen = open)} />
         {/key}
       {:else if loaded && !loadError && selected}
         <div class="flex h-full items-center justify-center text-sm text-black-800 dark:text-black-600">Membuka chat…</div>

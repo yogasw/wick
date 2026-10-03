@@ -63,19 +63,42 @@ export type AgentFeatures = {
 
 /** Feature flag → the rail tab it gates. The names differ in two places
     (schedule/scheduled, tickets/ticket) because the flags are the
-    persona's vocabulary and the tabs are DetailView's. */
-export const FEATURE_TABS: { feature: keyof AgentFeatures; tab: RailTab; label: string }[] = [
-  { feature: "source", tab: "source", label: "Source" },
+    persona's vocabulary and the tabs are DetailView's. Todos and Workspace
+    are not here on purpose: they are always shown (plan §6.0b), so an old
+    todos/workspace flag set to false is ignored. Files and Process stay
+    flags until native tools land. */
+export const FEATURE_TABS: { feature: keyof AgentFeatures; tab: RailTab; label: string; hint?: string }[] = [
+  { feature: "source", tab: "source", label: "Source panel (git)" },
+  { feature: "schedule", tab: "scheduled", label: "Routines / Schedule" },
+  { feature: "browser", tab: "browser", label: "Browser", hint: "butuh connector Playwright dicentang" },
+  { feature: "subagents", tab: "subagents", label: "Sub-agent / delegasi" },
+  { feature: "notes", tab: "notes", label: "Notes" },
+  { feature: "tickets", tab: "ticket", label: "Tickets" },
   { feature: "files", tab: "files", label: "Files" },
   { feature: "process", tab: "process", label: "Process" },
-  { feature: "workspace", tab: "workspace", label: "Workspace" },
-  { feature: "schedule", tab: "scheduled", label: "Scheduled" },
-  { feature: "browser", tab: "browser", label: "Browser" },
-  { feature: "subagents", tab: "subagents", label: "Sub-agents" },
-  { feature: "tickets", tab: "ticket", label: "Ticket" },
-  { feature: "notes", tab: "notes", label: "Notes" },
-  { feature: "todos", tab: "todos", label: "Todos" },
 ];
+
+/** Every rail tab with the name the Tools & fitur hint uses, in rail order. */
+const RAIL_LABELS: { tab: RailTab; label: string }[] = [
+  { tab: "source", label: "Source" },
+  { tab: "scheduled", label: "Routines" },
+  { tab: "files", label: "Files" },
+  { tab: "process", label: "Process" },
+  { tab: "browser", label: "Browser" },
+  { tab: "subagents", label: "Sub-agents" },
+  { tab: "notes", label: "Notes" },
+  { tab: "ticket", label: "Ticket" },
+  { tab: "workspace", label: "Workspace" },
+  { tab: "todos", label: "Todos" },
+];
+
+/** railShownNote is the hint under the feature switches: which rail tabs
+    the agent gets with these flags ("rail tampil: Source, Files, …"). */
+export function railShownNote(f: Partial<AgentFeatures> | null | undefined): string {
+  const hidden = hiddenTabsFor(f);
+  const shown = RAIL_LABELS.filter((r) => !hidden.includes(r.tab)).map((r) => r.label);
+  return `rail tampil: ${shown.join(", ")}`;
+}
 
 /** hiddenTabsFor lists the rail tabs to hide for a feature set. A missing
     features object hides nothing — an agent loaded before the server sent

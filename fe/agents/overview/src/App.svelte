@@ -197,7 +197,7 @@
       <div class="min-w-0">
         <h2 class="flex items-center gap-2 text-sm font-semibold text-black-900 dark:text-white-100">
           Team
-          <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold leading-none bg-prog-100 text-prog-400">BARU</span>
+          <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold leading-none tracking-wide bg-green-500 text-white-100">BARU</span>
         </h2>
         <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Agent dengan persona, avatar, dan akses sendiri. Dibuka sebagai app full-screen.</p>
       </div>
