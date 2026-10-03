@@ -162,18 +162,27 @@ export const markAgentRead = (base: string, id: string) =>
 export const listAgentSessions = (base: string, id: string) =>
   apiGetE<AgentSessionItem[] | null>(`${base}/api/team/agents/${enc(id)}/sessions`);
 
-/** The caller's own Team settings (GET/PUT /api/team/settings). */
-export type TeamSettings = {
+/** The editable Team settings, one key per entry of the server's
+    team.SettingFields. A new setting is added here, to TEAM_SETTING_KEYS,
+    and to the tab that shows it (teamSettingsTabs.ts). */
+export type TeamSettingValues = {
   /** Team instructions: markdown for every agent in the caller's Team. */
   prompt: string;
   /** "Open Team when I open Agents". */
   open_team: boolean;
+};
+export const TEAM_SETTING_KEYS: (keyof TeamSettingValues)[] = ["prompt", "open_team"];
+
+/** The caller's own Team settings (GET/PUT /api/team/settings): the
+    values plus read-only hints for drawing them. */
+export type TeamSettings = TeamSettingValues & {
   max_prompt_bytes: number;
   /** Admins only: the page that edits the operator prompt of all users. */
   operator_prompt_href?: string;
 };
 
-export type TeamSettingsWrite = { prompt?: string; open_team?: boolean };
+/** A PUT names any subset; the server refuses unknown keys. */
+export type TeamSettingsWrite = Partial<TeamSettingValues>;
 
 export const getTeamSettings = (base: string) => apiGetE<TeamSettings>(`${base}/api/team/settings`);
 

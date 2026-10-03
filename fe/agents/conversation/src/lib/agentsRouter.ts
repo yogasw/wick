@@ -1,4 +1,5 @@
 import { writable, type Readable } from "svelte/store";
+import { teamSettingsTabOf, type TeamSettingsTab } from "./teamSettingsTabs.js";
 
 /* Client router for the Agents app (/team). It is a separate router from
    router.ts on purpose: that one owns /sessions/<id> and turns every
@@ -31,13 +32,7 @@ export function settingsTabOf(t: string | null): SettingsTab {
   return TAB_ALIASES[t] ?? "persona";
 }
 
-export type TeamSettingsTab = "general";
-export const TEAM_SETTINGS_TABS: TeamSettingsTab[] = ["general"];
-
-/** teamSettingsTabOf resolves a Team settings `tab=` value; unknown → general. */
-export function teamSettingsTabOf(t: string | null): TeamSettingsTab {
-  return (TEAM_SETTINGS_TABS as string[]).includes(t ?? "") ? (t as TeamSettingsTab) : "general";
-}
+export { teamSettingsTabOf, type TeamSettingsTab } from "./teamSettingsTabs.js";
 
 export type AgentsPanel =
   | { kind: "settings"; tab: SettingsTab }
