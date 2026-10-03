@@ -15,6 +15,9 @@ type GeneralConfig struct {
 	KillAfterIdleSec int    `wick:"number;group=Concurrency & Lifecycle;desc=Extra seconds after idle timeout before the subprocess is killed. 0 = kill immediately at idle timeout. Default: 0."`
 	PreemptIdle      bool   `wick:"bool;group=Concurrency & Lifecycle;desc=When the pool is full and a new session is queued, preempt the longest-idle active subprocess to free its slot. Killed sessions resume via --resume on their next message."`
 	AutoRescan       bool   `wick:"bool;group=Concurrency & Lifecycle;desc=Auto re-probe provider binaries when cached version is older than 24h. Off = refresh only via Rescan button."`
+	// A2ARemoteAllowedHosts limits which hosts an A2A remote agent may be
+	// connected to (package a2aremote). Empty = any public host.
+	A2ARemoteAllowedHosts string `wick:"textarea;key=a2a_remote_allowed_hosts;group=A2A Remote Agents|Agents of other systems that people add to their Team over A2A.;desc=Hosts an A2A remote agent may be connected to, separated by commas or new lines; *.example.com matches every subdomain. Empty = any public host, while loopback, link-local and cloud metadata addresses are always refused. A host listed here is allowed even when it resolves to one of those, for an agent running beside wick."`
 	// Per-user identity for shared sessions. A running subprocess carries the
 	// MCP credential of whoever spawned it (it sits in the process argv and
 	// cannot be swapped in place), so a second user sending into the same

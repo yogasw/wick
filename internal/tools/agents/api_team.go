@@ -47,8 +47,12 @@ func SetTeam(s *team.Service) {
 // (name … preset) is read from the agent's project at response time, never
 // stored on the row, so it can never disagree with the project settings.
 type TeamAgentItem struct {
-	ID                   string                `json:"id"`
-	Handle               string                `json:"handle"`
+	ID     string `json:"id"`
+	Handle string `json:"handle"`
+	// Kind is "" for a local agent, "a2a-remote" for a remote one; Remote
+	// carries the remote's settings then (never its secret).
+	Kind                 string                `json:"kind"`
+	Remote               *RemoteAgentInfo      `json:"remote,omitempty"`
 	IsCaptain            bool                  `json:"is_captain"`
 	ProjectID            string                `json:"project_id"`
 	Name                 string                `json:"name"`
@@ -579,6 +583,8 @@ func (u teamProjectUsers) others(p entity.AgentPersona) int {
 func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLive, reach team.Reach) TeamAgentItem {
 	it := TeamAgentItem{
 		ID: p.ID, Handle: p.Handle, IsCaptain: p.IsCaptain, ProjectID: p.ProjectID,
+		Kind:                 p.Kind,
+		Remote:               remoteInfoFor(p),
 		Name:                 p.Handle,
 		Tagline:              p.Tagline,
 		Features:             team.EffectiveFeatures(p, reach),
@@ -1158,6 +1164,7 @@ func apiTeamAgentDelete(c *tool.Ctx) {
 		return
 	}
 	removeAgentSlack(p.ID)
+	removeAgentRemote(p)
 	// Before the project goes: the scope is read from the live sessions.
 	deleteAgentSchedules(c.Context(), p)
 	if err := releaseTeamAgentProject(c.Context(), p, rows, c.Query("chats") == "delete"); err != nil {

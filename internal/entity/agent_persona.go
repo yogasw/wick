@@ -26,6 +26,10 @@ type AgentPersona struct {
 	// Handle is the @mention name, lowercase-kebab, unique per owner.
 	Handle    string `gorm:"type:varchar(64);not null;index:idx_persona_owner_handle,unique,priority:2" json:"handle"`
 	ProjectID string `gorm:"type:varchar(64);not null;default:''" json:"project_id"`
+	// Kind is "" for an agent wick runs itself and "a2a-remote" for an
+	// agent of another system reached over A2A (package a2aremote), whose
+	// project only holds its transcript.
+	Kind string `gorm:"type:varchar(16);not null;default:''" json:"kind"`
 	// Tagline is the short label people know the agent by ("The Critic",
 	// "Log Hunter"), shown beside its name. "" = none. A project has no
 	// field for it, so it lives on the row.
