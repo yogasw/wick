@@ -21,8 +21,11 @@ type Scope struct {
 	// through with read-only ops — the owner's, not whoever triggers the
 	// turn.
 	includeNew bool
-	// captain unlocks the TierSystem default.
+	// captain unlocks the TierSystem default and the owner-wide data
+	// scope (see CheckSessionTarget).
 	captain bool
+	// agentID is the agent this scope was built for.
+	agentID string
 	// reach is the owner's catalog (see Reach). nil (unknown, or the
 	// lookup failed) leaves explicit grants working and every default off.
 	reach Reach
@@ -115,7 +118,9 @@ func ScopeOf(p entity.AgentPersona, reach Reach) *Scope {
 		return DenyAll()
 	}
 	f, grants, _ := MigrateFeatures(DecodeFeatures(p.Features), DecodeGrants(p.AllowedConnectors), reach)
-	return NewScope(grants, p.IncludeNewConnectors, p.IsCaptain, reach).WithFeatures(f)
+	s := NewScope(grants, p.IncludeNewConnectors, p.IsCaptain, reach).WithFeatures(f)
+	s.agentID = p.ID
+	return s
 }
 
 // DenyAll returns a scope that permits nothing.

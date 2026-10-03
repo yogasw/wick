@@ -9,6 +9,7 @@ import (
 	"time"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/schedule"
 	"github.com/yogasw/wick/internal/agents/session"
@@ -227,7 +228,7 @@ func scheduleList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 			rsp.ToolError(w, req.ID, "load session: "+err.Error(), scheduleToolName)
 			return
 		}
-		if !canManageSession(user, sess.Meta.UserID) {
+		if !canManageSession(user, sess.Meta.UserID) || team.CheckAgentSession(r.Context(), layout, sessionID) != nil {
 			rsp.ToolError(w, req.ID, fmt.Sprintf("session not found: %s", sessionID), scheduleToolName)
 			return
 		}
@@ -238,7 +239,7 @@ func scheduleList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 	projectID := strings.TrimSpace(argString(args, "project_id"))
 	if projectID != "" {
 		p, err := project.Load(layout, projectID)
-		if err != nil || !project.CanAccess(p.Meta, scheduleProjectAccess(r, user)) {
+		if err != nil || !project.CanAccess(p.Meta, scheduleProjectAccess(r, user)) || scheduleAgentProject(r, layout, projectID) != nil {
 			rsp.ToolError(w, req.ID, fmt.Sprintf("project not found: %s", projectID), scheduleToolName)
 			return
 		}
@@ -248,7 +249,7 @@ func scheduleList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 	targetSessionID := strings.TrimSpace(argString(args, "target_session_id"))
 	if targetSessionID != "" && targetSessionID != sessionID {
 		sess, err := session.Load(layout, targetSessionID)
-		if err != nil || !canManageSession(user, sess.Meta.UserID) {
+		if err != nil || !canManageSession(user, sess.Meta.UserID) || team.CheckAgentSession(r.Context(), layout, targetSessionID) != nil {
 			rsp.ToolError(w, req.ID, fmt.Sprintf("session not found: %s", targetSessionID), scheduleToolName)
 			return
 		}
@@ -652,7 +653,7 @@ func scheduleAuthorizeTarget(r *http.Request, layout agentconfig.Layout, target 
 		if err != nil {
 			return "", fmt.Errorf("load session: %w", err)
 		}
-		if !canManageSession(user, sess.Meta.UserID) {
+		if !canManageSession(user, sess.Meta.UserID) || team.CheckAgentSession(r.Context(), layout, target.SessionID) != nil {
 			// Match the title tools: don't leak that the session exists.
 			return "", fmt.Errorf("session not found: %s", target.SessionID)
 		}
@@ -663,7 +664,7 @@ func scheduleAuthorizeTarget(r *http.Request, layout agentconfig.Layout, target 
 	if err != nil {
 		return "", fmt.Errorf("project not found: %s", target.ProjectID)
 	}
-	if !project.CanAccess(meta.Meta, scheduleProjectAccess(r, user)) {
+	if !project.CanAccess(meta.Meta, scheduleProjectAccess(r, user)) || scheduleAgentProject(r, layout, target.ProjectID) != nil {
 		return "", fmt.Errorf("project not found: %s", target.ProjectID)
 	}
 	owner := meta.Meta.OwnerUserID
@@ -695,6 +696,17 @@ func scheduleCanManage(r *http.Request, layout agentconfig.Layout, m entity.Sche
 // scheduleProjectAccess builds the project-visibility identity for the
 // calling principal. A nil user (stdio / tests) is treated as admin, matching
 // scheduleScope's unscoped behavior on those transports.
+// scheduleAgentProject keeps an ordinary agent's schedules inside its own
+// project (the calling session's); the Captain and people are unaffected.
+func scheduleAgentProject(r *http.Request, layout agentconfig.Layout, projectID string) error {
+	if sid := SessionIDFrom(r.Context()); sid != "" {
+		if sess, err := session.Load(layout, sid); err == nil && sess.Meta.ProjectID == projectID {
+			return nil
+		}
+	}
+	return team.CheckAgentProject(r.Context(), projectID)
+}
+
 func scheduleProjectAccess(r *http.Request, user *entity.User) project.Access {
 	if user == nil {
 		return project.Access{IsAdmin: true}
