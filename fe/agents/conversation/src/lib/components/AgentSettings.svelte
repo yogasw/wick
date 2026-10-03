@@ -32,6 +32,8 @@
   import { nativeToolsOf } from "../nativeTools.js";
   import { MAX_PROMPTS, promptsToSave } from "../suggestedPrompts.js";
   import type { BashRule } from "../api/team.js";
+  import RemoteAgentPanel from "./team/RemoteAgentPanel.svelte";
+  import { isRemoteAgent, remoteSettingsTab, REMOTE_SETTINGS_TABS } from "../remoteAgent.js";
 
   type Props = {
     base: string;
@@ -114,7 +116,8 @@
   let projectPreview = $state<AgentProjectPreview | null>(null);
   const agentLabel = $derived(agent.name || agent.handle);
   function openDelete() {
-    alsoDeleteProject = true;
+    // A remote agent's project is only its transcript: kept by default.
+    alsoDeleteProject = !remote;
     typedName = "";
     projectPreview = null;
     confirmDelete = true;
@@ -280,7 +283,7 @@
       } else {
         // Item-level rejections are drawn on their rows in Access.
         grantErrors = ge;
-        error = tab === "access" ? "" : "The server rejected some access — see the Access tab.";
+        error = view === "access" ? "" : "The server rejected some access — see the Access tab.";
       }
     } finally {
       saving = false;
@@ -312,6 +315,11 @@
     { id: "avatar", label: "Avatar" },
     { id: "advanced", label: "Advanced" },
   ];
+  /* An A2A remote agent has its own tab set (Remote A2A first); a tab it
+     lacks — Persona, Access, … from a menu or bookmark — opens Remote A2A. */
+  const remote = $derived(isRemoteAgent(agent));
+  const tabs = $derived(remote ? REMOTE_SETTINGS_TABS : TABS);
+  const view = $derived<SettingsTab>(remote ? remoteSettingsTab(tab) : tab === "remote" ? "persona" : tab);
   const input =
     "w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100";
   const label = "mb-1 block text-xs font-medium text-black-800 dark:text-black-600";
@@ -326,12 +334,12 @@
 />
 
 <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-white-300 px-6 pb-3 dark:border-navy-600" role="tablist">
-  {#each TABS as t (t.id)}
+  {#each tabs as t (t.id)}
     <button
       type="button"
       role="tab"
-      aria-selected={tab === t.id}
-      class="whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-medium {tab === t.id
+      aria-selected={view === t.id}
+      class="whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-medium {view === t.id
         ? 'bg-black-900 text-white-100 dark:bg-white-200 dark:text-navy-700'
         : 'text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600'}"
       onclick={() => onTab(t.id)}
@@ -340,7 +348,7 @@
 </div>
 
 <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4" onfocusout={flush}>
-  {#if tab === "persona"}
+  {#if view === "persona"}
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Persona</p>
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">
@@ -441,7 +449,7 @@
         >+ Add prompt</button>
       {/if}
     </div>
-  {:else if tab === "access"}
+  {:else if view === "access"}
     <p class="text-xs text-black-800 dark:text-black-600">
       Connectors are off until you add them. Platform tools are on for every agent; System
       tools are for the Captain. An agent never gets more than your own access.
@@ -464,7 +472,7 @@
     {#key agent.id}
       <AccessHistory {base} agentId={agent.id} />
     {/key}
-  {:else if tab === "tools"}
+  {:else if view === "tools"}
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Tools &amp; features</p>
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">Panels of the agent's chat. Files shows while Read, Edit or Write is on and Process while Bash is on; Notes, Tickets, Source, Scheduled and Sub-agents follow Access › Platform, and the Browser tab follows the Playwright connector in Access › Connectors.</p>
@@ -477,15 +485,15 @@
       onTools={(t) => (draft.native_tools = t)}
       onRules={(r) => (draft.bash_rules = r)}
     />
-  {:else if tab === "skills"}
+  {:else if view === "skills"}
     {#key agent.id}
       <AgentSkillsTab {base} agentId={agent.id} mainSessionId={agent.main_session_id} disabled={draft.disabled_skills} onChange={(d) => (draft.disabled_skills = d)} />
     {/key}
-  {:else if tab === "session"}
+  {:else if view === "session"}
     {#key agent.id}
       <AgentSessionTab {base} agentId={agent.id} onOpenConnections={() => navigate({ handle: agent.handle, session: null, panel: { kind: "connections" } })} />
     {/key}
-  {:else if tab === "avatar"}
+  {:else if view === "avatar"}
     <div class="flex items-center gap-4">
       <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={72} live />
       <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={72} working live />
@@ -564,7 +572,7 @@
         {/each}
       </div>
     </div>
-  {:else if tab === "mention"}
+  {:else if view === "mention"}
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Mention between agents</p>
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">Who in your Team can hand @{agent.handle} a turn with an @mention. You can always mention it yourself.</p>
@@ -616,7 +624,7 @@
       />
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">{hopsNote(draft.max_hops)}</p>
     </div>
-  {:else if tab === "captain"}
+  {:else if view === "captain"}
     {#if agent.is_captain}
       <div class="space-y-2" data-testid="captain-manage">
         <p class="text-sm font-semibold text-black-900 dark:text-white-100">Manage other agents</p>
@@ -644,7 +652,12 @@
         <p class="text-xs text-black-800 dark:text-black-600">{CAPTAIN_ACCESS_NOTE}</p>
       </div>
     {/if}
-  {:else if tab === "advanced"}
+  {:else if view === "remote"}
+    <RemoteAgentPanel {base} {agent} section="remote" onChanged={(r) => onSaved({ ...saved, remote: r })} />
+  {:else if view === "advanced" && remote}
+    <RemoteAgentPanel {base} {agent} section="advanced" onChanged={(r) => onSaved({ ...saved, remote: r })} />
+    {@render dangerZone()}
+  {:else if view === "advanced"}
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Advanced</p>
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">The project behind this agent — usually best left alone.</p>
@@ -681,17 +694,7 @@
         Off: every chat uses the provider above. On: a chat can pick another provider before its first message, and another model of the same provider any time. Neither changes the agent's default.
       </p>
     </div>
-    <div class="space-y-3 border-t border-white-300 pt-4 dark:border-navy-600">
-      <p class="text-sm font-semibold text-neg-400">Danger zone</p>
-      <Toggle checked={draft.disabled} onChange={(v) => (draft.disabled = v)} label="Disable agent" />
-      <div>
-        <button type="button" class="rounded-lg border border-neg-300 px-3 py-1 text-sm text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600" onclick={openDelete}>Delete agent…</button>
-        <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-          You choose what happens to its chats and memory.
-          {#if agent.is_captain}The Captain cannot be deleted while other agents exist.{/if}
-        </p>
-      </div>
-    </div>
+    {@render dangerZone()}
   {/if}
   {#if error}<p class="text-sm text-neg-400">{error}</p>{/if}
 </div>
@@ -714,11 +717,25 @@
   <button type="button" class="rounded-lg px-4 py-2 text-sm text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600" onclick={onClose}>Close</button>
 </div>
 
+{#snippet dangerZone()}
+    <div class="space-y-3 border-t border-white-300 pt-4 dark:border-navy-600">
+      <p class="text-sm font-semibold text-neg-400">Danger zone</p>
+      <Toggle checked={draft.disabled} onChange={(v) => (draft.disabled = v)} label="Disable agent" />
+      <div>
+        <button type="button" class="rounded-lg border border-neg-300 px-3 py-1 text-sm text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600" onclick={openDelete}>Delete agent…</button>
+        <p class="mt-1 text-xs text-black-800 dark:text-black-600">
+          You choose what happens to its chats and memory.
+          {#if agent.is_captain}The Captain cannot be deleted while other agents exist.{/if}
+        </p>
+      </div>
+    </div>
+{/snippet}
+
 <Modal open={confirmDelete} title={`Delete agent ${agent.name || agent.handle}?`} onClose={() => (confirmDelete = false)} size="sm">
   <div class="space-y-3" data-testid="agent-delete-modes">
     <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100">
       <input type="checkbox" bind:checked={alsoDeleteProject} class="mt-1" />
-      <span>Also delete its project (chats, history, files, memory)</span>
+      <span>{remote ? "Also delete its chats (the transcript wick kept)" : "Also delete its project (chats, history, files, memory)"}</span>
     </label>
     {#if alsoDeleteProject}
       <p class="rounded-lg border border-neg-400/40 bg-neg-400/10 px-3 py-2 text-xs leading-relaxed text-neg-400" role="alert" data-testid="agent-delete-alert">
