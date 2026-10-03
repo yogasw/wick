@@ -3,6 +3,7 @@ package skillsync
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -42,7 +43,7 @@ const builtinDescMaxRunes = 160
 //
 // Sorted by name so the rendered prompt is byte-stable across spawns, which
 // keeps the provider's prompt prefix cacheable.
-func BuiltinCatalog() string {
+func BuiltinCatalog(skip ...string) string {
 	dir := BuiltinDir()
 	if dir == "" {
 		return ""
@@ -53,6 +54,11 @@ func BuiltinCatalog() string {
 
 	names := make([]string, 0, len(BuiltinNames()))
 	for name := range BuiltinNames() {
+		// A skill switched off for a Team agent is left out, unless wick
+		// cannot work without it (IsRequiredSkill).
+		if slices.Contains(skip, name) && !IsRequiredSkill(name) {
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -119,8 +125,10 @@ func BuiltinCatalog() string {
 // An empty preset still gets the catalog. A spawn with no preset is a bare
 // agent, and a bare agent is exactly the one that most needs to be told the
 // shipped skills exist.
-func AppendBuiltinCatalog(preset string) string {
-	cat := BuiltinCatalog()
+//
+// skip names skills to leave out (a Team agent's disabled skills).
+func AppendBuiltinCatalog(preset string, skip ...string) string {
+	cat := BuiltinCatalog(skip...)
 	if cat == "" {
 		return preset
 	}
@@ -142,3 +150,11 @@ func truncateRunes(s string, n int) string {
 	}
 	return strings.TrimRight(string(r[:n]), " ") + "…"
 }
+
+// requiredSkills are the shipped skills a Team agent cannot switch off:
+// without them it cannot draw the cards and reach the connectors its
+// chat is built on.
+var requiredSkills = []string{"wick-agent-cards", "wick-connectors"}
+
+// IsRequiredSkill reports whether name is one of requiredSkills.
+func IsRequiredSkill(name string) bool { return slices.Contains(requiredSkills, name) }

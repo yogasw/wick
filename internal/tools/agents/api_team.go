@@ -20,6 +20,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/connectors"
@@ -57,6 +58,13 @@ type TeamAgentItem struct {
 	Avatar               team.Avatar           `json:"avatar"`
 	AllowedConnectors    []team.ConnectorGrant `json:"allowed_connectors"`
 	IncludeNewConnectors bool                  `json:"include_new_connectors"`
+	// AllowedNativeTools, BashRules and DisabledSkills are the Tools &
+	// features and Skills tabs (team/tools.go). NativeToolsEnforced is
+	// false when the agent's provider cannot be held to them.
+	AllowedNativeTools  []string        `json:"allowed_native_tools"`
+	BashRules           []team.BashRule `json:"bash_rules"`
+	DisabledSkills      []string        `json:"disabled_skills"`
+	NativeToolsEnforced bool            `json:"native_tools_enforced"`
 	// RunAs is team.RunAsCaller or team.RunAsOwner: whose access a turn
 	// runs with (see team.SpawnIdentity).
 	RunAs    string `json:"run_as"`
@@ -155,6 +163,9 @@ type teamAgentWriteReq struct {
 	Features             *team.Features         `json:"features"`
 	AllowedConnectors    *[]team.ConnectorGrant `json:"allowed_connectors"`
 	IncludeNewConnectors *bool                  `json:"include_new_connectors"`
+	AllowedNativeTools   *[]string              `json:"allowed_native_tools"`
+	BashRules            *[]team.BashRule       `json:"bash_rules"`
+	DisabledSkills       *[]string              `json:"disabled_skills"`
 	RunAs                *string                `json:"run_as"`
 	Disabled             *bool                  `json:"disabled"`
 	AllowProviderSwitch  *bool                  `json:"allow_provider_switch"`
@@ -567,6 +578,9 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		Avatar:               team.DecodeAvatar(p.Avatar),
 		AllowedConnectors:    team.DecodeGrants(p.AllowedConnectors),
 		IncludeNewConnectors: p.IncludeNewConnectors,
+		AllowedNativeTools:   team.DecodeNativeTools(p.AllowedNativeTools),
+		BashRules:            team.DecodeBashRules(p.BashRules),
+		DisabledSkills:       team.DecodeSkillNames(p.DisabledSkills),
 		RunAs:                team.NormalizeRunAs(p.RunAs),
 		Disabled:             p.Disabled,
 		MentionFrom:          teamlink.NormalizeMentionFrom(p.MentionFrom),
@@ -589,6 +603,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 			it.Provider, it.Model, it.Preset = m.Defaults.Provider, m.Defaults.Model, m.Defaults.Preset
 		}
 	}
+	it.NativeToolsEnforced = team.NativeToolsEnforced(providerTypeOf(it.Provider))
 	if s, ok := mainSessionOf(p.OwnerUserID, p.ID); ok {
 		it.MainSessionID = s.ID
 		it.LastActive = timePtr(s.Meta.LastActive)
@@ -948,6 +963,9 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		Features:             team.EncodeFeatures(feats),
 		Avatar:               team.EncodeAvatar(av),
 	}
+	if !applyToolSettings(c, p, req) {
+		return
+	}
 	if err := globalTeam.Create(c.Context(), p); err != nil {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
@@ -1028,6 +1046,9 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	}
 	if req.IncludeNewConnectors != nil {
 		p.IncludeNewConnectors = *req.IncludeNewConnectors
+	}
+	if !applyToolSettings(c, &p, req) {
+		return
 	}
 	if p.RunAs, ok = validRunAs(c, req.RunAs, p.RunAs); !ok {
 		return
@@ -1393,3 +1414,33 @@ func apiTeamAgentAccessHistory(c *tool.Ctx) {
 	}
 	c.JSON(http.StatusOK, map[string]any{"items": out})
 }
+
+// applyToolSettings copies the Tools & features and Skills fields of req
+// onto p, answering 400 (and false) for an unknown tool or a Bash rule
+// that could chain a second command.
+func applyToolSettings(c *tool.Ctx, p *entity.AgentPersona, req teamAgentWriteReq) bool {
+	if req.AllowedNativeTools != nil {
+		if err := team.ValidateNativeTools(*req.AllowedNativeTools); err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return false
+		}
+		p.AllowedNativeTools = team.EncodeNativeTools(*req.AllowedNativeTools)
+	}
+	if req.BashRules != nil {
+		rules := make([]team.BashRule, 0, len(*req.BashRules))
+		for i, r := range *req.BashRules {
+			if err := team.ValidateBashRule(r); err != nil {
+				c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error(), "index": i})
+				return false
+			}
+			rules = append(rules, team.BashRule{Pattern: strings.TrimSpace(r.Pattern), Scope: strings.TrimSpace(r.Scope)})
+		}
+		p.BashRules = team.EncodeBashRules(rules)
+	}
+	if req.DisabledSkills != nil {
+		names := slices.DeleteFunc(slices.Clone(*req.DisabledSkills), skillsync.IsRequiredSkill)
+		p.DisabledSkills = team.EncodeSkillNames(names)
+	}
+	return true
+}
+

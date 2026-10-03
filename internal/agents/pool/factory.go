@@ -3,6 +3,7 @@ package pool
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -130,6 +131,12 @@ type ClaudeFactory struct {
 	// prompt is assembled in the Team order (see composePrompt) and
 	// TeamPromptLoader is not consulted.
 	TeamSpawnLoader func(sessionID string) (TeamSpawn, bool)
+
+	// TeamLimitsLoader (optional) returns the native-tool and Bash limits
+	// of the Team agent sessionID works for — its own session or any
+	// sub-agent under it, so a delegated child is held to the same limits
+	// (see TeamLimits); false outside the Team.
+	TeamLimitsLoader func(sessionID string) (TeamLimits, bool)
 
 	// TeamSystemPromptLoader (optional) returns the `system_prompt_team`
 	// config row: the operator prompt of Team agent sessions, in place of
@@ -437,6 +444,43 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 
 	insCopy := resolvedIns
 
+	// A Team agent's native tools and Bash rules (claude only — the other
+	// providers take no tool deny list; the UI says they are not enforced).
+	extraArgs := resolvedIns.ExtraArgs
+	spawnGateBin := gateBin
+	var skipSkills []string
+	if f.TeamLimitsLoader != nil {
+		if lim, ok := f.TeamLimitsLoader(opt.SessionID); ok {
+			skipSkills = lim.DisabledSkills
+		}
+	}
+	if f.TeamLimitsLoader != nil && pType == provider.TypeClaude {
+		if lim, ok := f.TeamLimitsLoader(opt.SessionID); ok {
+			gateOn := gateBin != "" && !bypassPerms && opt.Workspace != "" &&
+				resolvedIns.HookEnabled(provider.HookEventPreToolUse)
+			var specPath string
+			if gateOn {
+				specPath = gate.AgentSpecPath(gateAppName(activeGate), lim.AgentID)
+			}
+			args, hookBin := teamLimitArgs(lim, gateBin, gateOn, specPath)
+			if specPath != "" && lim.BashAllowed {
+				if err := gate.WriteAgentSpec(specPath, gate.AgentSpec{
+					AgentID: lim.AgentID, Rules: lim.BashRules, DefaultScope: lim.DefaultScope,
+				}); err != nil {
+					// No spec, no Bash: the hook would block every command
+					// anyway, so say so at spawn instead.
+					log.Warn().Err(err).Str("session", opt.SessionID).Msg("agents.spawn: agent gate spec write failed — Bash off")
+					args, hookBin = teamLimitArgs(lim, gateBin, false, "")
+				}
+			}
+			if !gateOn && lim.BashAllowed {
+				log.Warn().Str("session", opt.SessionID).Msg("agents.spawn: gate hook inactive — Bash off for this Team agent")
+			}
+			extraArgs = append(slices.Clone(extraArgs), args...)
+			spawnGateBin = hookBin
+		}
+	}
+
 	// Memory guard, resolved per instance: the global ceiling is the
 	// default, and an instance may set its own — higher OR lower. See
 	// config.ResolveAgentLimitMB for why this is not a min().
@@ -482,7 +526,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			writeStartEvent(pid, binary, argv, env, firstMsg)
 		},
 		Instance:   &insCopy,
-		GateBinary: gateBin,
+		GateBinary: spawnGateBin,
 		Preset:     presetContent,
 		// Only the wick provider reads this (it rebuilds prompts from
 		// conversation.jsonl); the CLI providers resume from their own
@@ -505,8 +549,9 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			}
 			return f.ToolMemoryLoader()
 		}(),
-		ExtraArgs: resolvedIns.ExtraArgs,
-		ExtraEnv:  resolvedIns.Env,
+		ExtraArgs:  extraArgs,
+		SkipSkills: skipSkills,
+		ExtraEnv:   resolvedIns.Env,
 		// claude = persistent stdin (append); codex = one-shot per turn,
 		// queue mid-turn sends so spam doesn't stack subprocesses. A
 		// per-instance override (providers UI) takes precedence over the
@@ -762,6 +807,63 @@ func envValue(env []string, key string) string {
 		}
 	}
 	return out
+}
+
+// TeamLimits holds a Team agent's spawns to its native-tool switches and
+// Bash allow-list. Defined here so the pool does not import the team
+// package; server.go adapts team.Limits.
+type TeamLimits struct {
+	AgentID string
+	// DisallowedTools is the claude --disallowedTools list for the
+	// switches that are off (Bash included when it is off).
+	DisallowedTools []string
+	// BashAllowed is the Bash switch. It only holds while the gate hook
+	// is installed: without it Bash would run every command unasked, so
+	// the spawn turns it off instead.
+	BashAllowed bool
+	// BashRules run without asking; anything else goes to the approval
+	// prompt. Empty = every command asks.
+	BashRules    []gate.CommandRule
+	DefaultScope string
+	// DisabledSkills are left out of the built-in skill catalog (every
+	// provider) and denied as Skill(<name>) on claude, which is how a
+	// local or global skill — discovered by the CLI itself — is kept out.
+	DisabledSkills []string
+}
+
+// bashTools are the claude tools behind the Bash switch.
+var bashTools = []string{"Bash", "BashOutput", "KillShell"}
+
+// teamLimitArgs is the extra claude argv and hook command for lim. With
+// gateOn the hook runs the gate against the agent's spec at specPath;
+// without it Bash is disallowed outright.
+func teamLimitArgs(lim TeamLimits, gateBin string, gateOn bool, specPath string) (args []string, hookBin string) {
+	deny := slices.Clone(lim.DisallowedTools)
+	hookBin = gateBin
+	if lim.BashAllowed && gateOn {
+		hookBin = gate.HookCommand(gateBin, specPath)
+	} else {
+		for _, t := range bashTools {
+			if !slices.Contains(deny, t) {
+				deny = append(deny, t)
+			}
+		}
+	}
+	for _, sk := range lim.DisabledSkills {
+		deny = append(deny, "Skill("+sk+")")
+	}
+	if len(deny) > 0 {
+		args = []string{"--disallowedTools", strings.Join(deny, ",")}
+	}
+	return args, hookBin
+}
+
+// gateAppName is the app name a gate config writes its files under.
+func gateAppName(cfg *GateConfig) string {
+	if cfg == nil || cfg.AppName == "" {
+		return "wick"
+	}
+	return cfg.AppName
 }
 
 // TeamSpawn is what a Team agent's own session adds to its prompt beyond

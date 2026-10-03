@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strconv"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,6 +53,7 @@ import (
 	agentskills "github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/terminal"
 	"github.com/yogasw/wick/internal/agents/ticket"
@@ -1146,6 +1148,20 @@ func NewServer() *Server {
 	agentsFactory.TeamSpawnLoader = func(sessionID string) (agentpool.TeamSpawn, bool) {
 		sp, ok := teamSvc.SpawnPromptFor(context.Background(), sessionID)
 		return agentpool.TeamSpawn{Prompt: sp.Prompt, Access: sp.Access, Subagents: sp.Subagents, Schedule: sp.Schedule, UseGlobalPrompt: sp.UseGlobalPrompt, TeamInstructions: sp.TeamInstructions}, ok
+	}
+	agentsFactory.TeamLimitsLoader = func(sessionID string) (agentpool.TeamLimits, bool) {
+		lim, ok := teamSvc.LimitsFor(context.Background(), sessionID)
+		if !ok {
+			return agentpool.TeamLimits{}, false
+		}
+		return agentpool.TeamLimits{
+			AgentID:         lim.AgentID,
+			DisallowedTools: team.DisallowedClaudeTools(lim.NativeTools),
+			BashAllowed:     slices.Contains(lim.NativeTools, "Bash"),
+			BashRules:       lim.BashRules,
+			DefaultScope:    lim.ProjectDir,
+			DisabledSkills:  slices.DeleteFunc(slices.Clone(lim.DisabledSkills), skillsync.IsRequiredSkill),
+		}, true
 	}
 	agentsession.ProjectAgent = func(projectID string) string {
 		return teamSvc.AgentOfProject(context.Background(), projectID)

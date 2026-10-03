@@ -254,6 +254,8 @@ type Options struct {
 	// ExtraArgs is appended after the spawner's own ExtraArgs on every
 	// spawn. Populated by the factory from Instance.ExtraArgs.
 	ExtraArgs []string
+	// SkipSkills is forwarded to SpawnOptions.SkipSkills.
+	SkipSkills []string
 	// SessionDir is the per-session storage dir, forwarded into every
 	// SpawnOptions so providers write session-scoped files (codex's
 	// soul.md) there instead of the shared project workspace.
@@ -410,6 +412,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		ResumeID:         a.resumeID,
 		ExtraEnv:         a.cfg.ExtraEnv,
 		ExtraArgs:        a.cfg.ExtraArgs,
+		SkipSkills:       a.cfg.SkipSkills,
 		Instance:         a.cfg.Instance,
 		GateBinary:       a.cfg.GateBinary,
 		Preset:           a.cfg.Preset,
@@ -644,6 +647,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 		ResumeID:         resumeID,
 		ExtraEnv:         a.cfg.ExtraEnv,
 		ExtraArgs:        a.cfg.ExtraArgs,
+		SkipSkills:       a.cfg.SkipSkills,
 		Instance:         a.cfg.Instance,
 		GateBinary:       a.cfg.GateBinary,
 		Preset:           a.cfg.Preset,

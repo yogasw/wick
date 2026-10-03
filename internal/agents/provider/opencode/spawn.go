@@ -43,7 +43,7 @@ func buildArgs(opt provider.SpawnOptions, extra []string, model string, modelInA
 
 // writeSoul writes the wick system prompt under the per-session dir.
 func writeSoul(opt provider.SpawnOptions) string {
-	soul := skillsync.AppendBuiltinCatalog(opt.Preset)
+	soul := skillsync.AppendBuiltinCatalog(opt.Preset, opt.SkipSkills...)
 	dir := opt.SessionDir
 	if dir == "" {
 		dir = opt.Workspace
@@ -256,7 +256,7 @@ func (s Spawner) spawnServe(ctx context.Context, opt provider.SpawnOptions, ins 
 		resumeID: opt.ResumeID,
 		title:    "wick " + opt.SessionID,
 		model:    model,
-		system:   skillsync.AppendBuiltinCatalog(opt.Preset),
+		system:   skillsync.AppendBuiltinCatalog(opt.Preset, opt.SkipSkills...),
 		prompt:   opt.InitialMessage,
 	}
 	if endpoint := mcpEndpointFromEnv(); endpoint != "" && s.MCPToken != "" {

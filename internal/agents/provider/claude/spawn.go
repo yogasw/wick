@@ -198,7 +198,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// loader never sees them. Naming them here is what makes them reachable;
 	// skillAddDirArgs above is what makes the paths readable.
 	args = append(args, systemPromptArgs(opt.SessionDir, opt.Workspace,
-		skillsync.AppendBuiltinCatalog(opt.Preset))...)
+		skillsync.AppendBuiltinCatalog(opt.Preset, opt.SkipSkills...))...)
 	// One id per conversation, chosen by wick rather than claude: the
 	// first spawn NAMES the session with --session-id (the wick session
 	// id), later spawns RESUME that same name. Otherwise claude mints its

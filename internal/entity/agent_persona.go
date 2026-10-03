@@ -43,6 +43,17 @@ type AgentPersona struct {
 	// Features is a JSON object of team.Features (which conversation
 	// rail panels the agent's chat shows).
 	Features string `gorm:"type:text;not null;default:'{}'" json:"features"`
+	// AllowedNativeTools is a JSON array of the provider-native tools the
+	// agent may call (team.NativeTools). "" is a row saved before the
+	// column existed and keeps every tool on, so an upgrade changes no
+	// running agent; a new agent is stored with team.DefaultNativeTools.
+	AllowedNativeTools string `gorm:"type:text;not null;default:''" json:"allowed_native_tools"`
+	// BashRules is a JSON array of team.BashRule: the commands Bash may
+	// run without asking. Anything else goes to the approval gate.
+	BashRules string `gorm:"type:text;not null;default:'[]'" json:"bash_rules"`
+	// DisabledSkills is a JSON array of skill names the agent's spawns
+	// leave out of the skill catalog.
+	DisabledSkills string `gorm:"type:text;not null;default:'[]'" json:"disabled_skills"`
 	// Avatar is a JSON object of team.Avatar (shape + color).
 	Avatar string `gorm:"type:text;not null;default:'{}'" json:"avatar"`
 

@@ -73,7 +73,7 @@ func buildArgs(ins provider.Instance, opt provider.SpawnOptions, soulPath, overl
 // writeSoul writes the wick system prompt (preset + shipped-skill catalog)
 // under the per-session dir — never the shared workspace, see codex/spawn.go.
 func writeSoul(opt provider.SpawnOptions) string {
-	soul := skillsync.AppendBuiltinCatalog(opt.Preset)
+	soul := skillsync.AppendBuiltinCatalog(opt.Preset, opt.SkipSkills...)
 	dir := opt.SessionDir
 	if dir == "" {
 		dir = opt.Workspace

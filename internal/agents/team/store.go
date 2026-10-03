@@ -126,6 +126,17 @@ func (s *Store) save(ctx context.Context, p *entity.AgentPersona, create bool) e
 	if p.Avatar == "" {
 		p.Avatar = EncodeAvatar(DefaultAvatar())
 	}
+	if create && p.AllowedNativeTools == "" {
+		// A new agent starts default-deny on the risky tools; an existing
+		// row keeps "" (every tool), see DecodeNativeTools.
+		p.AllowedNativeTools = EncodeNativeTools(DefaultNativeTools)
+	}
+	if p.BashRules == "" {
+		p.BashRules = "[]"
+	}
+	if p.DisabledSkills == "" {
+		p.DisabledSkills = "[]"
+	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Checked up front rather than left to the unique index so the
 		// caller gets a sentence instead of a driver error, and the same
