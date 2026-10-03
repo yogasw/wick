@@ -2442,9 +2442,11 @@
       </div>
 
       <!-- Zone 3: ask inline. Its top edge fades the thread text scrolling
-           under it, the way the composer edge does on claude.ai. -->
+           under it, the way the composer edge does on claude.ai. bottom-full
+           (not -top-6) because the shared app.css has no -top-6; without it the
+           fade fell back to top:auto and covered the ask card's title row. -->
       <div class="relative shrink-0 px-4 md:px-6 bg-white-200 dark:bg-navy-800">
-        <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 -top-6 h-6 bg-gradient-to-t from-white-200 to-transparent dark:from-navy-800"></div>
+        <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 bottom-full h-6 bg-gradient-to-t from-white-200 to-transparent dark:from-navy-800"></div>
         <div class="page-col">
           <AskUserModal
             request={$currentAsk}
