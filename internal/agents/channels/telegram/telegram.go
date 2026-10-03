@@ -16,6 +16,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/rs/zerolog/log"
 
+	"github.com/yogasw/wick/internal/agents/actioncard"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
@@ -510,6 +511,16 @@ func (t *Channel) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	// UI without touching the message text itself.
 	userCtx := agentchannels.WithCallerUserID(ctx, callerUserID)
 	userCtx = agentchannels.WithSender(userCtx, senderFor(msg, callerUserID))
+	if fn := agentchannels.CardNumberPostback; fn != nil {
+		if label, ok, err := fn(userCtx, sessionID, "telegram", msg.Text); ok {
+			if err != nil {
+				t.postMessage(chatID, "Could not send your choice: "+err.Error())
+			} else {
+				log.Debug().Str("channel", "telegram").Str("session", sessionID).Str("choice", label).Msg("numbered reply sent as postback")
+			}
+			return
+		}
+	}
 	if err := sendFn(userCtx, sessionID, agentName, "telegram", "user", msg.Text); err != nil {
 		log.Error().Str("channel", "telegram").Str("session", sessionID).Err(err).Msg("pool send failed")
 		t.postMessage(chatID, "Agent error: could not queue message. Check the dashboard for details.")
@@ -694,6 +705,9 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 			t.postMessage(chatID, "Agent error: "+ev.ErrorMsg)
 			return
 		}
+		// No buttons here: a card becomes a numbered list, and a bare
+		// number reply is mapped back to the button (handleMessage).
+		text, _ = actioncard.Split(text, actioncard.PlainText)
 		if text != "" {
 			t.postChunked(chatID, text)
 		}

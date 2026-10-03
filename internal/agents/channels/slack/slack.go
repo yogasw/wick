@@ -26,6 +26,7 @@ import (
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
 
+	"github.com/yogasw/wick/internal/agents/actioncard"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
@@ -2519,6 +2520,12 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	// continuation chunks) works from the same clean text, and so the
 	// text == lastSent comparison matches what flushLiveMessage actually sent.
 	text = stripSilentMarker(text)
+	// Action cards go out as Block Kit messages after the text; the text
+	// keeps a one-line pointer where each fence was.
+	text, cards := actioncard.Split(text, cardPointer)
+	if len(cards) > 0 {
+		defer s.postCards(channelID, threadTS, sessionKey, cards)
+	}
 	defer func() {
 		s.mu.Lock()
 		if cur := s.turns[sessionKey]; cur != nil {
@@ -3203,6 +3210,10 @@ func (s *Channel) handleInteraction(ctx context.Context, cb slackgo.InteractionC
 		return
 	}
 	action := cb.ActionCallback.BlockActions[0]
+	if action.BlockID == cardBlockID {
+		s.handleCardClick(ctx, cb, action)
+		return
+	}
 	if action.BlockID != "gate_approval" {
 		return
 	}

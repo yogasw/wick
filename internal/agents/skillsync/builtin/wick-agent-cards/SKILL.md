@@ -89,7 +89,9 @@ for this agent / Decline) are made by wick, not by you. You cannot write one.
 
 ## Where cards work
 
-Cards render in the wick web chat. Slack and Telegram show the card as
-text with numbered options for now — so keep `label`s short and meaningful
-on their own, and accept a typed "1"/"2" or the option's words as the same
-answer.
+Cards render in the wick web chat and, in Slack, as a Block Kit message
+with real buttons (a click reaches you as the same `[postback …]`).
+Telegram and other text-only channels show the card as text with numbered
+options; a bare "1"/"2" reply comes back as the postback too. So keep
+`label`s short and meaningful on their own, and still accept the option's
+words typed as the same answer.

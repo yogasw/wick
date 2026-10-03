@@ -1149,6 +1149,10 @@ func NewServer() *Server {
 		sp, ok := teamSvc.SpawnPromptFor(context.Background(), sessionID)
 		return agentpool.TeamSpawn{Prompt: sp.Prompt, Access: sp.Access, Subagents: sp.Subagents, Schedule: sp.Schedule, Files: sp.Files, UseGlobalPrompt: sp.UseGlobalPrompt, TeamInstructions: sp.TeamInstructions}, ok
 	}
+	// Action cards outside the web UI: Slack buttons and numbered replies
+	// reach the agent through the same postback check as the web endpoint.
+	agentchannels.CardPostback = agentstool.ChannelPostback
+	agentchannels.CardNumberPostback = agentstool.ChannelNumberPostback
 	agentsFactory.TeamLimitsLoader = func(sessionID string) (agentpool.TeamLimits, bool) {
 		lim, ok := teamSvc.LimitsFor(context.Background(), sessionID)
 		if !ok {
