@@ -7,6 +7,7 @@ import "katex/dist/katex.min.css";
 import "./richRender.css";
 import { mount } from "svelte";
 import { attachToolbar } from "./blockToolbar.js";
+import { setTraceHighlighter } from "@wick-fe/common-ui";
 import { renderMarkdown, esc } from "./markdown.js";
 import HtmlArtifact from "./components/HtmlArtifact.svelte";
 import type { WidgetPolicy } from "./types/agents.js";
@@ -1197,3 +1198,10 @@ export function renderLive(node: HTMLElement, text: string) {
     destroy() { clearTimeout(timer); },
   };
 }
+
+// Trace blocks (common-ui TraceBody) highlight with the same lazy hljs —
+// only for a language hljs knows, so an unknown lang stays plain text.
+setTraceHighlighter(async (code, lang) => {
+  const hljs = await loadHljs();
+  return hljs.getLanguage(lang) ? hljs.highlight(code, { language: lang }).value : null;
+});

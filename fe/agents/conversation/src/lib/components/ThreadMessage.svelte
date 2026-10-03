@@ -22,13 +22,15 @@
     // with large:true carries no text) — wired to
     // GET /sessions/{id}/turns/{turn_id}/events/{event_id}.
     loadTraceEvent?: (turnId: string, eventId: string) => Promise<TurnEventPayload>;
+    // Fetches a stored trace binary (blob_ref) when its chip is clicked.
+    loadTraceBlob?: (turnId: string, ref: string) => Promise<Blob>;
     /** Team agents by handle, for a teammate's avatar on its messages. */
     teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }>;
     /** Opens a Team agent's chat; unset (outside the Team app) the
         handoff row's target is plain text. */
     onOpenAgent?: (handle: string) => void;
   };
-  let { turn, loadTrace, loadTraceEvent, teamAgents = {}, onOpenAgent }: Props = $props();
+  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, teamAgents = {}, onOpenAgent }: Props = $props();
 
   /* A teammate's message (source "team", framed "Message from Name
      (@handle):") reads as from that agent — its avatar and name on the
@@ -291,6 +293,8 @@
           resultSize: res?.size,
           resultEventId: res?.event_id,
           isError: res?.is_error,
+          inputDisplay: ev.display,
+          resultDisplay: res?.display,
           startedAt: parseEventTime(ev.at),
           endedAt: parseEventTime(res?.end_at ?? res?.at),
         });
@@ -311,6 +315,7 @@
           resultSize: ev.size,
           resultEventId: ev.event_id,
           isError: ev.is_error,
+          resultDisplay: ev.display,
           endedAt: parseEventTime(ev.end_at ?? ev.at),
         });
       } else if (ev.type === "raw") {
@@ -659,6 +664,9 @@
                     interrupted={turn.interrupted}
                     loadEventPayload={loadTraceEvent && !isSyntheticId
                       ? (eventId) => loadTraceEvent!(turn.turn_id, eventId)
+                      : undefined}
+                    loadBlob={loadTraceBlob && !isSyntheticId
+                      ? (ref) => loadTraceBlob!(turn.turn_id, ref)
                       : undefined}
                   />
                 {/if}

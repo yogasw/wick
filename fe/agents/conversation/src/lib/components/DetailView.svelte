@@ -24,7 +24,7 @@
   import { readScmWidth, writeScmWidth, clampScmWidth, RAIL_GUTTER_PX } from "../scmWidth.js";
   import { isValidFileName } from "../fileName.js";
 
-  import { getConversation, getSessionMeta, deleteSession, getTurnTrace, getTurnEvent, cancelRun } from "../api/sessions.js";
+  import { getConversation, getSessionMeta, deleteSession, getTurnTrace, getTurnEvent, getTurnBlob, cancelRun } from "../api/sessions.js";
   import { getProviderOptions, getProviderOptionModels, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
   import { getAsks, answerAsk } from "../api/asks.js";
   import { getTodos, type TodoList } from "../api/todos.js";
@@ -2540,7 +2540,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} />
+          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} />
         </div>
       </div>
 

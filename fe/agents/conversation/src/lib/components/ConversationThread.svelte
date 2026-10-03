@@ -20,6 +20,7 @@
     loadTrace?: (turnId: string) => Promise<TurnEvent[]>;
     // Fetches one large (spilled) trace event's payload on demand.
     loadTraceEvent?: (turnId: string, eventId: string) => Promise<TurnEventPayload>;
+    loadTraceBlob?: (turnId: string, ref: string) => Promise<Blob>;
     onOpenPath?: (path: string) => void;
     // Cancel an in-flight connector run behind a running tool call.
     onCancelRun?: (runId: string) => void;
@@ -42,7 +43,7 @@
     onOpenAgent?: (handle: string) => void;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, agent, teamAgents = {}, onOpenAgent }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, agent, teamAgents = {}, onOpenAgent }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -225,7 +226,7 @@
         <span class="rounded-md bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm">{label}</span>
       </div>
     {/if}
-    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {teamAgents} {onOpenAgent} />
+    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {teamAgents} {onOpenAgent} />
   {/each}
 
   {#if live && turns.length === 0}

@@ -1,3 +1,4 @@
+import type { TraceDisplay } from "@wick-fe/common-ui";
 export type AskOption = { label: string; value: string; description?: string };
 
 export type AskField = {
@@ -110,6 +111,9 @@ export type TurnEvent = {
   large?: boolean;
   /** Payload size in bytes; set only alongside large. */
   size?: number;
+  /** Render hint (event.Display). On a large row it is header-only — the
+      body arrives with the payload. Absent on traces recorded before it. */
+  display?: TraceDisplay;
 };
 
 /** thinking/<turn_id>/<event_id>.json — the spilled payload of one large
@@ -122,6 +126,7 @@ export type TurnEventPayload = {
   tool_input?: string;
   /** true when the stored payload was capped by traceEventMaxBytes. */
   truncated?: boolean;
+  display?: TraceDisplay;
 };
 
 export type Attachment = {
@@ -410,6 +415,10 @@ export type ThreadBlock =
       resultSize?: number;
       resultEventId?: string;
       isError?: boolean;
+      // event.Display of the call input / the result, when the trace has
+      // one; ToolCard classifies the raw text itself otherwise.
+      inputDisplay?: TraceDisplay;
+      resultDisplay?: TraceDisplay;
       startedAt?: number;
       endedAt?: number;
       // Set from a `connector_run` SSE event while the underlying connector run

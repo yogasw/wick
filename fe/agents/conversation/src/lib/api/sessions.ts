@@ -83,3 +83,13 @@ export const getTurnTrace = (base: string, id: string, turnId: string) =>
 // thinking/<turn_id>/<event_id>.json behind this endpoint.
 export const getTurnEvent = (base: string, id: string, turnId: string, eventId: string) =>
   apiGetE<TurnEventPayload>(`${base}/sessions/${id}/turns/${turnId}/events/${eventId}`);
+
+// getTurnBlob fetches a binary a trace event stored as a blob (an image a
+// tool returned) — only when its chip is clicked. Plain fetch: the body is
+// bytes, not JSON. The server answers 404 for a session the caller cannot
+// see, so a failure here reads as "failed to load", never as data.
+export async function getTurnBlob(base: string, id: string, turnId: string, ref: string): Promise<Blob> {
+  const res = await fetch(`${base}/sessions/${id}/turns/${turnId}/blobs/${encodeURIComponent(ref)}`, { credentials: "same-origin" });
+  if (!res.ok) throw new Error(`blob ${ref}: ${res.status}`);
+  return res.blob();
+}
