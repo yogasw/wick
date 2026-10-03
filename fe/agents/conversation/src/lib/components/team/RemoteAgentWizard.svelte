@@ -10,6 +10,7 @@
      created is always what was last fetched. */
   import { AgentAvatar, defaultAvatarFor } from "@wick-fe/common-avatar";
   import RemoteAuthFields from "./RemoteAuthFields.svelte";
+  import RemoteSourcePicker from "./RemoteSourcePicker.svelte";
   import {
     createRemoteAgent, resolveRemoteCard, testRemoteAgent, runApi,
     type AgentItem, type RemoteAuthType, type RemoteResolved, type RemoteTestResult, type RemoteUsage,
@@ -22,8 +23,8 @@
     taken: string[];
     onClose: () => void;
     onCreated: (a: AgentItem) => void;
-    /** Back to the wick-agent wizard. */
-    onType?: (t: "local" | "remote") => void;
+    /** Back to the wick-agent wizard, or to another remote source. */
+    onType?: (t: "local" | "remote" | "slack") => void;
   };
   let { base, taken, onClose, onCreated, onType }: Props = $props();
 
@@ -147,9 +148,10 @@
   <div class="px-6 pt-3">
     <div class="inline-flex rounded-lg border border-white-300 p-0.5 dark:border-navy-600" role="group" aria-label="Agent type">
       <button type="button" class="rounded-md px-3 py-1 text-xs text-black-800 dark:text-black-600" aria-pressed="false" onclick={() => onType?.("local")}>Wick agent</button>
-      <button type="button" class="rounded-md bg-green-500 px-3 py-1 text-xs text-white-100" aria-pressed="true">A2A remote</button>
+      <button type="button" class="rounded-md bg-green-500 px-3 py-1 text-xs text-white-100" aria-pressed="true">Remote agent</button>
     </div>
   </div>
+  <RemoteSourcePicker value="a2a" onSource={(s) => { if (s === "slack") onType?.("slack"); }} />
 {/if}
 
 <ol class="flex items-center gap-2 px-6 pt-3 pb-4 text-xs" aria-label="Steps">

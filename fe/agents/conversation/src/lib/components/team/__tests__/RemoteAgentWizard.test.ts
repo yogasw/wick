@@ -103,4 +103,13 @@ describe("RemoteAgentWizard", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Wick agent" }));
     expect(p.onType).toHaveBeenCalledWith("local");
   });
+
+  test("Remote agent shows the source picker; Slack opens its wizard", async () => {
+    const p = props();
+    render(RemoteAgentWizard, p);
+    expect(screen.getByRole("button", { name: "Remote agent" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("remote-source-a2a").getAttribute("aria-checked")).toBe("true");
+    await fireEvent.click(screen.getByTestId("remote-source-slack"));
+    expect(p.onType).toHaveBeenCalledWith("slack");
+  });
 });

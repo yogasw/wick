@@ -1,6 +1,7 @@
 import type { AgentItem, RemoteAuthReq, RemoteAuthType, RemoteUsage } from "./api/team.js";
 import type { RailTab } from "./agentMode.js";
 import type { SettingsTab } from "./agentsRouter.js";
+import { SLACK_REMOTE_KIND, slackCaption, targetLabel } from "./slackRemote.js";
 
 /* A2A remote agents in the Team app (plan §6.2b): another system's agent
    that wick talks to as an A2A client. Nothing runs locally, so the chat
@@ -9,9 +10,32 @@ import type { SettingsTab } from "./agentsRouter.js";
 
 export const REMOTE_KIND = "a2a-remote";
 
+/** Any remote agent, A2A or Slack: no rail, no persona, its own Settings. */
 export function isRemoteAgent(a: Pick<AgentItem, "kind"> | null | undefined): boolean {
+  return a?.kind === REMOTE_KIND || a?.kind === SLACK_REMOTE_KIND;
+}
+
+export function isA2ARemote(a: Pick<AgentItem, "kind"> | null | undefined): boolean {
   return a?.kind === REMOTE_KIND;
 }
+
+export function isSlackRemote(a: Pick<AgentItem, "kind"> | null | undefined): boolean {
+  return a?.kind === SLACK_REMOTE_KIND;
+}
+
+/** The roster badge of a remote agent ("" for a wick agent). */
+export function remoteBadge(a: Pick<AgentItem, "kind">): string {
+  return isSlackRemote(a) ? "Slack remote" : isA2ARemote(a) ? "A2A remote" : "";
+}
+
+/** Sources + Agent › Remote agent offers; the disabled ones are not built yet. */
+export type RemoteSource = "a2a" | "slack" | "http" | "plugin";
+export const REMOTE_SOURCES: { value: RemoteSource; label: string; hint: string; disabled?: boolean }[] = [
+  { value: "a2a", label: "A2A", hint: "An agent that speaks the A2A protocol." },
+  { value: "slack", label: "Slack", hint: "A bot or person you reach in a Slack DM, channel or thread." },
+  { value: "http", label: "HTTP", hint: "Coming later", disabled: true },
+  { value: "plugin", label: "Plugin", hint: "Coming later", disabled: true },
+];
 
 /** Every rail tab: a remote agent has no project tools to show. */
 export const REMOTE_HIDDEN_TABS: RailTab[] = [
@@ -33,8 +57,17 @@ export const REMOTE_SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: "advanced", label: "Advanced" },
 ];
 
+/** A Slack remote agent's tabs: the same set, its first one named Remote. */
+export const SLACK_REMOTE_SETTINGS_TABS: { id: SettingsTab; label: string }[] = REMOTE_SETTINGS_TABS.map((t) =>
+  t.id === "remote" ? { ...t, label: "Remote" } : t,
+);
+
+export function remoteSettingsTabs(a: Pick<AgentItem, "kind">): { id: SettingsTab; label: string }[] {
+  return isSlackRemote(a) ? SLACK_REMOTE_SETTINGS_TABS : REMOTE_SETTINGS_TABS;
+}
+
 /** remoteSettingsTab maps a requested tab onto one a remote agent has;
-    Persona, Access and the rest open Remote A2A. */
+    Persona, Access and the rest open the Remote tab. */
 export function remoteSettingsTab(t: SettingsTab): SettingsTab {
   return REMOTE_SETTINGS_TABS.some((x) => x.id === t) ? t : "remote";
 }
@@ -127,12 +160,20 @@ export function testSummary(r: { ok: boolean; state: string; latency_ms: number;
 
 /** remoteChatMode is what DetailView's agentMode differs in for a remote
     agent: no rail tabs, a footer saying why, the A2A composer caption. */
-export function remoteChatMode(a: Pick<AgentItem, "remote">): { hideTabs: RailTab[]; railNote: string; caption: string } {
+export function remoteChatMode(a: Pick<AgentItem, "remote" | "kind" | "slack_remote">): { hideTabs: RailTab[]; railNote: string; caption: string } {
+  if (isSlackRemote(a)) {
+    return {
+      hideTabs: [...REMOTE_HIDDEN_TABS],
+      railNote: "No local tools — this agent answers in Slack.",
+      caption: slackCaption(a.slack_remote ? targetLabel(a.slack_remote) : ""),
+    };
+  }
   return { hideTabs: [...REMOTE_HIDDEN_TABS], railNote: REMOTE_RAIL_NOTE, caption: remoteCaption(a.remote?.host) };
 }
 
 /** remoteSubtitle is the chat header's second line: badge, card version, host. */
-export function remoteSubtitle(a: Pick<AgentItem, "remote">): string {
+export function remoteSubtitle(a: Pick<AgentItem, "remote" | "kind" | "slack_remote">): string {
+  if (isSlackRemote(a)) return ["Slack remote", a.slack_remote ? targetLabel(a.slack_remote) : ""].filter(Boolean).join(" · ");
   const r = a.remote;
   if (!r) return "A2A remote";
   return ["A2A remote", r.card?.version ? `v${r.card.version}` : "", r.host].filter(Boolean).join(" · ");

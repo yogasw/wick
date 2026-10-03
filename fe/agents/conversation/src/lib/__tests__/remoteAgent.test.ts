@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 import {
   authReq, egressWarning, formatBytes, hostOf, isRemoteAgent, limitsError, remoteCaption, remoteSettingsTab,
   REMOTE_HIDDEN_TABS, remoteChatMode, remoteSubtitle, testSummary,
+  isA2ARemote, isSlackRemote, remoteBadge, remoteSettingsTabs, REMOTE_SOURCES,
 } from "../remoteAgent.js";
 
 describe("remoteAgent", () => {
@@ -73,5 +74,28 @@ describe("remote chat mode", () => {
   test("the header subtitle carries the card version and host", () => {
     expect(remoteSubtitle(remote)).toBe("A2A remote · v1.4.0 · research.example.com");
     expect(remoteSubtitle({})).toBe("A2A remote");
+  });
+
+  test("a Slack remote agent is remote, with its own badge, caption, subtitle and Remote tab", () => {
+    const slack = {
+      kind: "slack-remote",
+      slack_remote: { connector_id: "c1", identity: "bot", target: "channel", channel: "C1", target_name: "#ops", listen: "target" },
+    } as unknown as Parameters<typeof remoteChatMode>[0];
+    expect(isRemoteAgent(slack)).toBe(true);
+    expect(isSlackRemote(slack)).toBe(true);
+    expect(isA2ARemote(slack)).toBe(false);
+    expect(remoteBadge(slack)).toBe("Slack remote");
+    expect(remoteBadge({ kind: "a2a-remote" })).toBe("A2A remote");
+    expect(remoteBadge({ kind: "" })).toBe("");
+    const m = remoteChatMode(slack);
+    expect(m.caption).toBe("via Slack · #ops · no local tools");
+    expect(m.hideTabs).toEqual(REMOTE_HIDDEN_TABS);
+    expect(remoteSubtitle(slack)).toBe("Slack remote · #ops");
+    expect(remoteSettingsTabs(slack).map((t) => t.label)).toEqual(["Remote", "Mention", "Avatar", "Advanced"]);
+    expect(remoteSettingsTabs({ kind: "a2a-remote" })[0].label).toBe("Remote A2A");
+  });
+
+  test("sources: A2A and Slack open, HTTP and Plugin coming later", () => {
+    expect(REMOTE_SOURCES.map((s) => [s.value, !!s.disabled])).toEqual([["a2a", false], ["slack", false], ["http", true], ["plugin", true]]);
   });
 });

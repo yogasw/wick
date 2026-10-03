@@ -29,8 +29,8 @@
     convertProject?: string;
     onClose: () => void;
     onCreated: (a: AgentItem) => void;
-    /** Switches + Agent to the A2A remote wizard (not when converting). */
-    onType?: (t: "local" | "remote") => void;
+    /** Switches + Agent to a remote agent's wizard (not when converting). */
+    onType?: (t: "local" | "remote" | "slack") => void;
   };
   let { base, taken, convertProject, onClose, onCreated, onType }: Props = $props();
 
@@ -247,7 +247,7 @@
   <div class="px-6 pt-3">
     <div class="inline-flex rounded-lg border border-white-300 p-0.5 dark:border-navy-600" role="group" aria-label="Agent type">
       <button type="button" class="rounded-md bg-green-500 px-3 py-1 text-xs text-white-100" aria-pressed="true">Wick agent</button>
-      <button type="button" class="rounded-md px-3 py-1 text-xs text-black-800 dark:text-black-600" aria-pressed="false" data-testid="aw-type-remote" onclick={() => onType?.("remote")}>A2A remote</button>
+      <button type="button" class="rounded-md px-3 py-1 text-xs text-black-800 dark:text-black-600" aria-pressed="false" data-testid="aw-type-remote" onclick={() => onType?.("remote")}>Remote agent</button>
     </div>
   </div>
 {/if}

@@ -13,8 +13,9 @@
   import AgentSettings from "./lib/components/AgentSettings.svelte";
   import AgentWizard from "./lib/components/AgentWizard.svelte";
   import RemoteAgentWizard from "./lib/components/team/RemoteAgentWizard.svelte";
+  import SlackRemoteWizard from "./lib/components/team/SlackRemoteWizard.svelte";
   import RemoteQuestionCard from "./lib/components/team/RemoteQuestionCard.svelte";
-  import { isRemoteAgent, remoteChatMode, remoteSubtitle } from "./lib/remoteAgent.js";
+  import { isA2ARemote, isRemoteAgent, isSlackRemote, remoteBadge, remoteChatMode, remoteSubtitle } from "./lib/remoteAgent.js";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
   import AgentConnections from "./lib/components/AgentConnections.svelte";
   import AgentScheduled from "./lib/components/AgentScheduled.svelte";
@@ -78,8 +79,9 @@
   const groupSettingsOpen = $derived(route.panel?.kind === "group-settings");
   let newGroupOpen = $state(false);
   let addMenuOpen = $state(false);
-  /* + Agent's type: a wick agent or an A2A remote one (its own wizard). */
-  let newType = $state<"local" | "remote">("local");
+  /* + Agent's type: a wick agent, or a remote one by source (A2A or
+     Slack), each with its own wizard. */
+  let newType = $state<"local" | "remote" | "slack">("local");
   const activeGroup = $derived(groups.find((g) => g.id === activeGroupId));
   async function loadGroups() {
     try {
@@ -272,7 +274,7 @@
   const menuItems = $derived([
     { label: "Chats", hint: "main chat and history", onclick: () => openPanel({ kind: "sessions" }) },
     selected && isRemoteAgent(selected)
-      ? { label: "Settings", hint: "remote A2A, mention, avatar", onclick: () => openPanel({ kind: "settings", tab: "remote" }) }
+      ? { label: "Settings", hint: isSlackRemote(selected) ? "remote Slack, mention, avatar" : "remote A2A, mention, avatar", onclick: () => openPanel({ kind: "settings", tab: "remote" }) }
       : { label: "Settings", hint: "persona, access, tools, avatar", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
     { label: "Connections", hint: "Slack and health", onclick: () => openPanel({ kind: "connections" }) },
     { label: "Scheduled", hint: "work it runs on a schedule", onclick: () => openPanel({ kind: "scheduled" }) },
@@ -419,7 +421,7 @@
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-2">
               <span class="roster-name min-w-0 flex-1 truncate font-semibold text-black-900 dark:text-white-100">
-                {a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[9px] font-bold tracking-wider text-green-600 dark:text-green-400">★ CAPTAIN</span>{/if}{#if isRemoteAgent(a)}<span class="ml-1.5 rounded-full bg-white-300 px-1.5 py-px align-middle text-[9px] font-bold uppercase tracking-wider text-black-800 dark:bg-navy-600 dark:text-black-600" data-testid="roster-remote-badge">A2A remote</span>{/if}
+                {a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[9px] font-bold tracking-wider text-green-600 dark:text-green-400">★ CAPTAIN</span>{/if}{#if isRemoteAgent(a)}<span class="ml-1.5 rounded-full bg-white-300 px-1.5 py-px align-middle text-[9px] font-bold uppercase tracking-wider text-black-800 dark:bg-navy-600 dark:text-black-600" data-testid="roster-remote-badge">{remoteBadge(a)}</span>{/if}
               </span>
               <span class="shrink-0 text-xs text-black-700">{rosterTime(a.last_active)}</span>
             </span>
@@ -531,7 +533,7 @@
         <div class="flex-1"></div>
       {/if}
     </header>
-    {#if selected && chatSessionId && remoteMode}
+    {#if selected && chatSessionId && remoteMode && isA2ARemote(selected)}
       <RemoteQuestionCard
         {base}
         agentId={selected.id}
@@ -594,7 +596,9 @@
           onClose={() => openPanel(null)}
         />
       {:else if route.panel.kind === "new"}
-        {#if newType === "remote" && !route.panel.project}
+        {#if newType === "slack" && !route.panel.project}
+          <SlackRemoteWizard {base} taken={agents.map((a) => a.handle)} onClose={() => openPanel(null)} {onCreated} onType={(t) => (newType = t)} />
+        {:else if newType === "remote" && !route.panel.project}
           <RemoteAgentWizard {base} taken={agents.map((a) => a.handle)} onClose={() => openPanel(null)} {onCreated} onType={(t) => (newType = t)} />
         {:else}
           <AgentWizard {base} taken={agents.map((a) => a.handle)} convertProject={route.panel.project} onClose={() => openPanel(null)} {onCreated} onType={(t) => (newType = t)} />

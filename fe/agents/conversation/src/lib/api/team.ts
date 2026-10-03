@@ -82,9 +82,11 @@ export type AgentItem = {
       web/channel conversations. */
   shared_with?: number;
   /** "" = an agent wick runs itself, "a2a-remote" = another system's A2A
-      agent; then `remote` holds its card and settings. */
-  kind?: "" | "a2a-remote";
+      agent (then `remote` holds its card and settings), "slack-remote" =
+      an agent reached through Slack (then `slack_remote`). */
+  kind?: "" | "a2a-remote" | "slack-remote";
   remote?: RemoteAgentInfo;
+  slack_remote?: SlackRemoteInfo;
 };
 
 /* A2A remote agents (api_team_a2a_remote.go). The auth secret goes out
@@ -262,6 +264,72 @@ export const updateRemoteAgent = (base: string, id: string, body: RemoteUpdate) 
 /** Re-reads the card: skills, version and streaming change; handle and avatar stay. */
 export const refreshRemoteCard = (base: string, id: string) =>
   apiPostE<RemoteAgentInfo>(`${base}/api/team/agents/${enc(id)}/a2a-remote/refresh-card`, {});
+
+/* Slack remote agents (api_team_slack_remote.go): wick posts the turn to
+   a DM, channel or thread and reads the reply back. No token is ever in a
+   response; identity "user" needs an account the caller connected. */
+
+export type SlackIdentity = "bot" | "user";
+export type SlackTarget = "dm" | "channel" | "thread";
+export type SlackListen = "target" | "anyone";
+
+export type SlackRemoteConfig = {
+  connector_id: string;
+  identity: SlackIdentity;
+  account_id?: string;
+  target: SlackTarget;
+  channel?: string;
+  /** DM: the user or bot user id. */
+  user?: string;
+  /** Channel: who is @-mentioned when a chat opens its thread. */
+  mention_id?: string;
+  thread_ts?: string;
+  /** UI label ("#ops", "@helper"). */
+  target_name?: string;
+  listen: SlackListen;
+  /** END RESPONSE marker; unset = on. */
+  marker?: boolean;
+  /** 0 = the server default (20 s / 180 s), at most 900. */
+  idle_sec?: number;
+  max_sec?: number;
+  usage?: RemoteUsage;
+};
+
+export type SlackRemoteInfo = SlackRemoteConfig & {
+  updated_at: string;
+  marker: boolean;
+  idle_sec_effective: number;
+  max_sec_effective: number;
+  listen_effective: string;
+  usage_effective: string;
+  warning: string;
+  session?: { channel?: string; thread_ts?: string; last_ts?: string; updated_at: string };
+};
+
+export type SlackTestState = "replied" | "no_reply" | "send_failed" | "auth_failed";
+export type SlackTestResult = { ok: boolean; state: SlackTestState | string; latency_ms: number; reply?: string; error?: string };
+
+export type SlackIdentities = { bot: boolean; accounts: { id: string; display_name: string }[] | null };
+
+export type SlackRemoteCreate = SlackRemoteConfig & { name?: string; handle?: string; tagline?: string };
+
+/** Only the caller's own OAuth accounts on that connector. */
+export const getSlackIdentities = (base: string, connectorId: string) =>
+  apiGetE<SlackIdentities>(`${base}/api/team/slack-remote/identities?connector_id=${enc(connectorId)}`);
+
+/** By config (wizard) or agent_id (Settings). Posts a real "ping". */
+export const testSlackRemote = (base: string, body: SlackRemoteConfig | { agent_id: string }) =>
+  apiPostE<SlackTestResult>(`${base}/api/team/slack-remote/test`, body);
+
+export const createSlackRemote = (base: string, body: SlackRemoteCreate) =>
+  apiPostE<AgentItem>(`${base}/api/team/slack-remote`, body);
+
+export const getSlackRemote = (base: string, id: string) =>
+  apiGetE<SlackRemoteInfo>(`${base}/api/team/agents/${enc(id)}/slack-remote`);
+
+/** Sent fields overwrite, the rest stay. */
+export const updateSlackRemote = (base: string, id: string, body: Partial<SlackRemoteConfig>) =>
+  apiPatchE<SlackRemoteInfo>(`${base}/api/team/agents/${enc(id)}/slack-remote`, body);
 
 export const listAgents = (base: string) =>
   apiGetE<{ agents: AgentItem[] | null; captain_id: string }>(`${base}/api/team/agents`);
