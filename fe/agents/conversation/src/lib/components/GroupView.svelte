@@ -149,7 +149,7 @@
         {@const link = backingLink(t)}
         {#if link}
           <a
-            class="-mt-2 ml-7 inline-block text-[11px] text-black-700 hover:text-green-600 hover:underline dark:hover:text-green-400"
+            style="margin-left:28px" class="-mt-2 inline-block text-[11px] text-black-700 hover:text-green-600 hover:underline dark:hover:text-green-400"
             href={formatAgentsRoute({ handle: link.handle, session: link.session, panel: null }, base)}
             data-testid="backing-link"
             onclick={(e) => { e.preventDefault(); navigate({ handle: link.handle, session: link.session, panel: null }); }}
