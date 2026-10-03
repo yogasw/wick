@@ -55,4 +55,24 @@ describe("ServiceDetail", () => {
     await fireEvent.click(screen.getAllByRole("button", { name: "Revoke" })[0]);
     expect(api.revokeServiceToken).toHaveBeenCalledWith("example_a2a_repeater", "t1");
   });
+
+  it("config form: secret never prefilled, Save sends only edits", async () => {
+    const configs = [
+      { key: "prefix", value: "echo: ", description: "Reply prefix", is_secret: false, has_value: true, required: false },
+      { key: "api_key", value: "", is_secret: true, has_value: true, required: true },
+    ];
+    vi.mocked(api.getServicePlugin).mockResolvedValue(makeSvc({ configs }));
+    vi.mocked(api.setServiceConfig).mockResolvedValue(makeSvc({ configs }));
+    const { container } = render(ServiceDetail, { serviceKey: "example_a2a_repeater" });
+    await waitFor(() => expect(screen.getByTestId("service-config")).toBeTruthy());
+    expect(screen.getByText("Stored — leave blank to keep.")).toBeTruthy();
+    const secret = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    expect(secret.value).toBe("");
+    const save = screen.getByRole("button", { name: "Save configuration" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    await fireEvent.input(secret, { target: { value: "new-key" } });
+    await waitFor(() => expect(save.disabled).toBe(false));
+    await fireEvent.click(save);
+    expect(api.setServiceConfig).toHaveBeenCalledWith("example_a2a_repeater", { api_key: "new-key" });
+  });
 });

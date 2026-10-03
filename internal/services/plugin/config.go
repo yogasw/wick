@@ -9,8 +9,8 @@ import (
 	"github.com/yogasw/wick/pkg/entity"
 )
 
-// SecretMask stands in for a stored secret in every admin response; sending
-// it (or "") back keeps the stored value.
+// SecretMask, like "", sent back for a secret keeps the stored value (for
+// clients that echo a masked placeholder).
 const SecretMask = "••••••••"
 
 // ConfigStore is the slice of the configs service a host needs.
@@ -24,15 +24,16 @@ type ConfigStore interface {
 func ConfigOwner(key string) string { return "service_plugin:" + key }
 
 // ConfigField is one config row as the admin page shows it: a secret's
-// value never leaves the server, only SecretMask when one is stored.
+// value never leaves the server, only HasValue tells one is stored.
 type ConfigField struct {
 	Key         string `json:"key"`
 	Value       string `json:"value"`
 	Type        string `json:"type,omitempty"`
 	Options     string `json:"options,omitempty"`
 	Description string `json:"description,omitempty"`
-	IsSecret    bool   `json:"is_secret,omitempty"`
-	Required    bool   `json:"required,omitempty"`
+	IsSecret    bool   `json:"is_secret"`
+	HasValue    bool   `json:"has_value"`
+	Required    bool   `json:"required"`
 }
 
 // configValues is what the plugin receives: plaintext values by key.
@@ -67,12 +68,9 @@ func (h *Host) configFields(s *Service) []ConfigField {
 		v := c.Value
 		if d.IsSecret {
 			v = ""
-			if c.Value != "" {
-				v = SecretMask
-			}
 		}
 		out = append(out, ConfigField{Key: d.Key, Value: v, Type: d.Type, Options: d.Options,
-			Description: d.Description, IsSecret: d.IsSecret, Required: d.Required})
+			Description: d.Description, IsSecret: d.IsSecret, HasValue: c.Value != "", Required: d.Required})
 	}
 	return out
 }

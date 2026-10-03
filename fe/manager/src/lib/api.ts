@@ -567,8 +567,20 @@ export type ServicePlugin = {
   capabilities?: string[];
   callback_scopes?: string[];
   callback_revoked: boolean;
+  /* Manifest config rows; a secret's value is never sent (has_value only). */
+  configs?: ServiceConfigField[];
   tokens?: ServiceToken[];
   logs?: string[];
+};
+export type ServiceConfigField = {
+  key: string;
+  value: string;
+  type?: string;
+  options?: string;
+  description?: string;
+  is_secret: boolean;
+  has_value: boolean;
+  required: boolean;
 };
 export type ServiceTokenSecret = { token: ServiceToken; secret: string };
 
@@ -580,6 +592,12 @@ export function getServicePlugin(key: string): Promise<ServicePlugin> {
 
 export function serviceAction(key: string, action: "start" | "stop" | "restart" | "callback-revoke" | "callback-allow"): Promise<ServicePlugin> {
   return apiPost<ServicePlugin>(`${serviceBase(key)}/${action}`);
+}
+
+/* Saves config values (an empty secret keeps the stored one); wick pushes
+   them to the running plugin, restarting it when it cannot take a push. */
+export function setServiceConfig(key: string, values: Record<string, string>): Promise<ServicePlugin> {
+  return apiPost<ServicePlugin>(`${serviceBase(key)}/config`, { values });
 }
 
 export function generateServiceToken(key: string, name: string): Promise<ServiceTokenSecret> {

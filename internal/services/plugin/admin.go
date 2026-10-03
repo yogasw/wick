@@ -85,7 +85,7 @@ func (h *Host) RegisterAdmin(mux *http.ServeMux, wrap func(http.Handler) http.Ha
 	mux.Handle("GET "+base+"/{key}", hf(h.withService(func(w http.ResponseWriter, _ *http.Request, s *Service) {
 		writeJSON(w, http.StatusOK, h.View(s, true))
 	})))
-	mux.Handle("PUT "+base+"/{key}/config", hf(h.withService(h.serveSetConfig)))
+	mux.Handle("POST "+base+"/{key}/config", hf(h.withService(h.serveSetConfig)))
 	mux.Handle("POST "+base+"/{key}/{action}", hf(h.withService(func(w http.ResponseWriter, r *http.Request, s *Service) {
 		switch r.PathValue("action") {
 		case "start":

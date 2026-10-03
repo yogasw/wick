@@ -113,7 +113,7 @@ func configHost(t *testing.T, reject bool) (*Host, *Service, *fakeProcs, *[]*cfg
 func putConfig(t *testing.T, srv *httptest.Server, values map[string]string) (int, ServiceView) {
 	t.Helper()
 	b, _ := json.Marshal(map[string]any{"values": values})
-	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/manager/api/service-plugins/cfgsvc/config", strings.NewReader(string(b)))
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/manager/api/service-plugins/cfgsvc/config", strings.NewReader(string(b)))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -141,12 +141,12 @@ func TestServiceConfigSeedMaskAndPush(t *testing.T) {
 	}
 	code, v := putConfig(t, srv, map[string]string{"prefix": "hi: ", "api_key": "s3cret"})
 	if code != http.StatusOK {
-		t.Fatalf("PUT config = %d", code)
+		t.Fatalf("save config = %d", code)
 	}
-	if fieldOf(v, "api_key").Value != SecretMask || fieldOf(v, "prefix").Value != "hi: " {
+	if k := fieldOf(v, "api_key"); k.Value != "" || !k.HasValue || fieldOf(v, "prefix").Value != "hi: " {
 		t.Fatalf("view configs = %+v", v.Configs)
 	}
-	// The secret never comes back in plaintext, from PUT or GET.
+	// The secret never comes back in plaintext, from save or GET.
 	resp, err := http.Get(srv.URL + "/manager/api/service-plugins/cfgsvc")
 	if err != nil {
 		t.Fatal(err)

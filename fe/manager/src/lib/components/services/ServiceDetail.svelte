@@ -1,14 +1,17 @@
 <script lang="ts">
   /* Admin view of one service plugin: supervisor status with Stop / Start /
-     Restart, the routes and who may reach them, access tokens (Generate /
+     Restart, the manifest config (secrets write-only; saved values are pushed
+     to the running plugin), the routes and who may reach them, access tokens (Generate /
      Rotate / Revoke — the secret is shown once), the callback token switch,
      and the last log lines (refreshed every 3 s). */
   import { Button, TextInput } from "@wick-fe/common-ui";
   import { toastError } from "@wick-fe/common-stores";
   import {
-    getServicePlugin, serviceAction, generateServiceToken, rotateServiceToken, revokeServiceToken,
-    type ServicePlugin,
+    getServicePlugin, serviceAction, setServiceConfig, generateServiceToken, rotateServiceToken, revokeServiceToken,
+    type ServicePlugin, type ServiceConfigField,
   } from "$lib/api.js";
+  import type { ConfigField } from "$lib/types.js";
+  import FieldWidget from "$lib/components/fields/FieldWidget.svelte";
   import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
 
   type Props = { serviceKey: string };
@@ -22,6 +25,29 @@
   let busy = $state("");
   let tokenName = $state("");
   let secret = $state<{ name: string; value: string } | null>(null);
+  /* Edits in progress, by key. The 3 s refresh never touches them, so typing
+     is not clobbered; Save sends only these. */
+  let draft = $state<Record<string, string>>({});
+  let formKey = $state(0);
+
+  const asField = (c: ServiceConfigField): ConfigField => ({
+    key: c.key, type: c.type || "text", value: c.value, options: c.options || "", required: c.required,
+    is_secret: c.is_secret, has_value: c.has_value, description: c.description || "", visible_when: "", env_override: "",
+  });
+  let dirty = $derived(Object.keys(draft).length > 0);
+
+  async function saveConfig(): Promise<void> {
+    busy = "config";
+    try {
+      data = await setServiceConfig(serviceKey, draft);
+      draft = {};
+      formKey++; // remount the inputs so secrets clear back to "stored"
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : String(e));
+    } finally {
+      busy = "";
+    }
+  }
 
   async function load(silent = false): Promise<void> {
     if (!silent) loading = true;
@@ -155,6 +181,35 @@
         <p class="mt-1 truncate text-sm text-black-900 dark:text-white-100" title={data.status.last_error}>{data.status.last_error || "—"}</p>
       </div>
     </section>
+
+    {#if data.configs?.length}
+      <section data-testid="service-config">
+        <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Configuration</h2>
+        <p class="mt-1 text-sm text-black-800 dark:text-black-600">Sent to the plugin when it starts and pushed again on save. Secrets are stored encrypted and never shown.</p>
+        <div class="mt-3 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
+          {#key formKey}
+            {#each data.configs as c (c.key)}
+              <div class="grid grid-cols-1 gap-2 border-b border-white-300 dark:border-navy-600 px-4 py-3 sm:grid-cols-3 sm:items-center">
+                <div>
+                  <p class="font-mono text-sm text-black-900 dark:text-white-100">{c.key}{#if c.required}<span class="text-neg-400"> *</span>{/if}</p>
+                  {#if c.description}<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">{c.description}</p>{/if}
+                </div>
+                <div class="sm:col-span-2">
+                  <FieldWidget field={asField(c)} value={draft[c.key] ?? c.value} disabled={!!busy} onChange={(v) => (draft = { ...draft, [c.key]: v })} />
+                  {#if c.is_secret}
+                    <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">{c.has_value ? "Stored — leave blank to keep." : "Not set."}</p>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          {/key}
+          <div class="flex items-center justify-end gap-2 px-4 py-3">
+            {#if dirty}<Button size="sm" variant="secondary" disabled={!!busy} onclick={() => { draft = {}; formKey++; }}>Discard</Button>{/if}
+            <Button size="sm" disabled={!dirty || !!busy} onclick={saveConfig}>{busy === "config" ? "Saving…" : "Save configuration"}</Button>
+          </div>
+        </div>
+      </section>
+    {/if}
 
     <section>
       <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Routes</h2>
