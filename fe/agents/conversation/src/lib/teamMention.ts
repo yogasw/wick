@@ -39,11 +39,22 @@ function tagline(desc: string): string | undefined {
 }
 
 /** teamSender reads the frame teamlink puts on a teammate's message
-    ("Message from <Name> (@handle):\n<body>"). Only trusted on a turn whose
-    source is "team" — a person typing the same words stays a person. */
+    ("Message from <Name> (@handle):\n<body>") and the reply teamlink hands
+    back. Only trusted on a turn whose source is "team" or "subagent" — a
+    person typing the same words stays a person. */
 export function teamSender(source: string | undefined, text: string): { name: string; handle: string; body: string } | null {
-  if ((source ?? "").trim().toLowerCase() !== "team") return null;
-  const m = /^Message from (.+) \(@([a-z0-9][a-z0-9-]*)\):\n?/.exec(text ?? "");
+  const src = (source ?? "").trim().toLowerCase();
+  // An @mentioned teammate's answer handed back into the caller's session
+  // ("Reply from <Name> (@handle) [task <id>, <state>]:\n\n<body>"). It is
+  // stored as a user turn carrying the session owner as sender, so without
+  // this it would read as a bubble the person typed.
+  const re =
+    src === "team"
+      ? /^Message from (.+) \(@([a-z0-9][a-z0-9-]*)\):\n?/
+      : src === "subagent"
+        ? /^Reply from (.+) \(@([a-z0-9][a-z0-9-]*)\) \[task [^\]\n]*\]:\n*/
+        : null;
+  const m = re?.exec(text ?? "");
   if (!m) return null;
   return { name: m[1].trim(), handle: m[2], body: text.slice(m[0].length) };
 }

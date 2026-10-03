@@ -22,6 +22,13 @@ describe("teamSender / handoffState", () => {
     expect(teamSender("team", "Message from Anton (@anton):\nhi")).toEqual({ name: "Anton", handle: "anton", body: "hi" });
     expect(teamSender("ui", "Message from Anton (@anton):\nhi")).toBeNull();
   });
+  test("a teammate's reply handed back over the Team link is from that agent", () => {
+    const text = "Reply from Luna (@luna) [task 01a1, completed]:\n\nHalo!\nSiap.";
+    expect(teamSender("subagent", text)).toEqual({ name: "Luna", handle: "luna", body: "Halo!\nSiap." });
+    // Typed by a person, or another source: stays a person's message.
+    expect(teamSender("ui", text)).toBeNull();
+    expect(teamSender("subagent", "Reply from Luna: hi")).toBeNull();
+  });
   test("A2A states map to short words", () => {
     expect(handoffState("TASK_STATE_COMPLETED")).toBe("completed");
     expect(handoffState("TASK_STATE_INPUT_REQUIRED")).toBe("needs input");

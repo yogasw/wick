@@ -624,8 +624,21 @@ export function createThreadStore(): ThreadStore {
         // the one this store echoed, its twin was never recognised, and the
         // message sat on screen twice until a reload. The server no longer
         // stores it that way; this stops the match depending on that.
-        const keyOf = (t: ConversationTurn) =>
-          `${t.role} ${(t.text ?? "").replace(/\r\n/g, "\n").trim()}`;
+        //
+        // The "[routed] …" note goes too. When a message @mentions an agent
+        // the server appends that note to the copy it stores, while the echo
+        // here holds only what was typed — so the twin was never found, the
+        // echo survived as pending, and after the refetch the message sat at
+        // the BOTTOM of the thread, below the handoff and the replies it
+        // started. The bubble hides the note anyway (ThreadMessage).
+        const keyOf = (t: ConversationTurn) => {
+          let text = (t.text ?? "").replace(/\r\n/g, "\n");
+          if (t.role === "user") {
+            const at = text.lastIndexOf("\n\n[routed]");
+            if (at >= 0) text = text.slice(0, at);
+          }
+          return `${t.role} ${text.trim()}`;
+        };
 
         const localByKey = new Map<string, ConversationTurn>();
         for (const t of cur) {

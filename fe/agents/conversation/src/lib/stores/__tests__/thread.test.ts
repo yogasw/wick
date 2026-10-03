@@ -1,6 +1,8 @@
 import { describe, test, expect, beforeEach } from "vitest";
 import { get } from "svelte/store";
 import { createThreadStore } from "../thread.js";
+import { foldSystemEvents } from "../../systemEvents.js";
+import { teamSender } from "../../teamMention.js";
 import type { ConversationTurn, AgentEvent } from "../../types/agents.js";
 
 function makeTurn(overrides: Partial<ConversationTurn> = {}): ConversationTurn {
@@ -81,6 +83,50 @@ describe("createThreadStore", () => {
     store.setHistory([makeTurn({ turn_id: "p1", role: "user", text: "line one\r\nline two" })]);
     const ids = get(store.turns).map((t) => t.turn_id);
     expect(ids).toEqual(["p1"]);
+  });
+
+  test("setHistory keeps an @mention message in place after the refetch", () => {
+    // The six turns one "@luna …" round leaves on disk, in order. The stored
+    // user turn carries the "[routed]" note the echo below never had, so the
+    // echo used to survive as pending and land BELOW the replies.
+    const sender = { id: "u1", name: "Owner", channel: "ui", wick_user_id: "u1" };
+    const handoff = (turn_id: string, state: string) =>
+      makeTurn({
+        turn_id,
+        role: "system",
+        kind: "mention_handoff",
+        text: `@captain → @luna · ${state}`,
+        extras: { from: "captain", to: "luna", state, task_id: "task-1" },
+      });
+    const persisted = [
+      makeTurn({
+        turn_id: "turn-2",
+        role: "user",
+        source: "ui",
+        sender,
+        text: "@luna kamu lagi apa\n\n[routed] wick is dispatching @luna for the message above.",
+      }),
+      handoff("h1", "TASK_STATE_WORKING"),
+      handoff("h2", "TASK_STATE_COMPLETED"),
+      makeTurn({
+        turn_id: "turn-5",
+        role: "user",
+        source: "subagent",
+        sender,
+        text: "Reply from Luna (@luna) [task task-1, completed]:\n\nHalo Captain!",
+      }),
+      makeTurn({ turn_id: "a1", role: "assistant", text: "Pesan buat @luna sudah dikirim" }),
+      makeTurn({ turn_id: "a2", role: "assistant", text: "Luna sudah balas" }),
+    ];
+    store.appendUserTurn("@luna kamu lagi apa");
+    store.setHistory(persisted);
+
+    const shown = foldSystemEvents(get(store.turns));
+    expect(shown.map((t) => t.turn_id)).toEqual(["turn-2", "h1", "turn-5", "a1", "a2"]);
+    expect(shown[1].extras?.state).toBe("TASK_STATE_COMPLETED");
+    // The handed-back reply reads as Luna's, not as the owner's bubble.
+    expect(teamSender(shown[2].source, shown[2].text)).toEqual({ name: "Luna", handle: "luna", body: "Halo Captain!" });
+    expect(teamSender(shown[0].source, shown[0].text)).toBeNull();
   });
 
   test("setHistory grafts a dropped local turn's trace onto a trace-less persisted twin", () => {
