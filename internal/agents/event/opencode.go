@@ -29,7 +29,7 @@ import (
 // Concurrency: one parser per subprocess.
 type OpencodeParser struct {
 	// tools pairs calls with results for Display (see display.go).
-	tools toolCalls
+	tools          toolCalls
 	instance       string
 	sessionEmitted bool
 	usage          TokenUsage

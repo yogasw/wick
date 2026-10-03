@@ -34,7 +34,7 @@ import (
 // Concurrency: not safe for concurrent use. One parser per subprocess.
 type CodexParser struct {
 	// tools pairs calls with results for Display (see display.go).
-	tools toolCalls
+	tools          toolCalls
 	sessionEmitted bool
 	// agentMsgText tracks the most recent text snapshot per item.id for
 	// agent_message items so item.updated emits only the appended tail
