@@ -16,6 +16,19 @@ export function slugHandle(name: string): string {
     .replace(/-+$/, "");
 }
 
+/** uniqueHandle makes a suggested handle free: taken → `<handle>-2`,
+    `-3`, … cut short so the suffix still fits the 31-character limit. An
+    empty suggestion stays empty (the user has not typed a name yet). */
+export function uniqueHandle(handle: string, taken: Iterable<string>): string {
+  const used = new Set(taken);
+  if (!handle || !used.has(handle)) return handle;
+  for (let n = 2; ; n++) {
+    const suffix = `-${n}`;
+    const next = handle.slice(0, 31 - suffix.length).replace(/-+$/, "") + suffix;
+    if (!used.has(next)) return next;
+  }
+}
+
 /** splitPick unpacks ProviderPicker's "type/name::model" value. */
 export function splitPick(v: string): { provider: string; model: string } {
   const i = v.indexOf("::");

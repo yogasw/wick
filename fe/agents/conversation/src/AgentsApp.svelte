@@ -368,7 +368,7 @@
     </div>
   </section>
 
-  <!-- Drawer (Settings / Percakapan lain / + Agent) -->
+  <!-- Drawer (Settings / Percakapan lain) or the centred + Agent modal -->
   {#if route.panel}
     <button
       type="button"
@@ -377,12 +377,12 @@
       onclick={() => openPanel(null)}
     ></button>
     <div
-      class="agent-drawer fixed z-50 flex flex-col overflow-hidden border border-white-300 bg-white-100 shadow-2xl dark:border-navy-600 dark:bg-navy-700"
+      class="{route.panel.kind === 'new' ? 'agent-modal' : 'agent-drawer'} fixed z-50 flex flex-col overflow-hidden border border-white-300 bg-white-100 shadow-2xl dark:border-navy-600 dark:bg-navy-700"
       role="dialog"
       aria-modal="true"
     >
       {#if route.panel.kind === "new"}
-        <AgentWizard {base} onClose={() => openPanel(null)} {onCreated} />
+        <AgentWizard {base} taken={agents.map((a) => a.handle)} onClose={() => openPanel(null)} {onCreated} />
       {:else if selected && route.panel.kind === "settings"}
         <AgentSettings
           {base}
@@ -449,6 +449,19 @@
     border-radius: 20px;
     animation: agent-drawer-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
   }
+  /* + Agent wizard (mockup .modal): centred, capped at the viewport. */
+  .agent-modal {
+    top: 50%;
+    left: 50%;
+    width: min(620px, calc(100% - 24px));
+    max-height: calc(100% - 48px);
+    border-radius: 20px;
+    transform: translate(-50%, -50%);
+    animation: agent-modal-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  @keyframes agent-modal-in {
+    from { opacity: 0; transform: translate(-50%, calc(-50% + 12px)) scale(0.98); }
+  }
   .agent-scrim {
     background: rgb(10 12 16 / 0.28);
     backdrop-filter: blur(1.5px);
@@ -463,6 +476,6 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .dots i { animation: none; opacity: 0.7; }
-    .agent-drawer, .agent-scrim { animation: none; }
+    .agent-drawer, .agent-modal, .agent-scrim { animation: none; }
   }
 </style>
