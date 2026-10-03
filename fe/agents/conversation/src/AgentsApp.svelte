@@ -14,7 +14,7 @@
   import AgentWizard from "./lib/components/AgentWizard.svelte";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
   import { agentsRoute, navigate, type AgentsRoute, type AgentsPanel } from "./lib/agentsRouter.js";
-  import { hiddenTabsFor } from "./lib/agentMode.js";
+  import { connectorCaption, hiddenTabsFor } from "./lib/agentMode.js";
   import { rosterTime } from "./lib/timeFormat.js";
   import { listAgents, openAgentChat, createAgent, updateAgent, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
@@ -215,6 +215,15 @@
     hideHeader: true,
     hidePickers: true,
     onDeleted: () => go({ session: null }),
+    agent: selected
+      ? {
+          name: selected.name,
+          description: selected.description,
+          shape: selected.avatar?.shape,
+          color: selected.avatar?.color,
+          caption: connectorCaption(selected.allowed_connectors),
+        }
+      : undefined,
   });
 
   function rowPreview(a: AgentItem): string {

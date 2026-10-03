@@ -19,7 +19,7 @@
   import { currentApproval, showApproval, hideApproval, isExpiredApprovalError } from "../stores/approvals.js";
   import { notify } from "../notify.js";
   import { push } from "../router.js";
-  import type { AgentMode, RailTab } from "../agentMode.js";
+  import { composerPlaceholder, hiddenTabNote, type AgentMode, type RailTab } from "../agentMode.js";
   import { bareToolName } from "../todoGroups.js";
   import { readScmWidth, writeScmWidth, clampScmWidth, RAIL_GUTTER_PX } from "../scmWidth.js";
   import { isValidFileName } from "../fileName.js";
@@ -2150,6 +2150,10 @@
       (notesInfo.ticket_enabled !== false || notesInfo.ticket != null),
   );
 
+  /* The Team app's rail footer: says the missing tabs were withheld from
+     the agent, so their absence does not read as a fault. */
+  const railHiddenNote = $derived(agentMode ? hiddenTabNote(agentMode.hideTabs) : "");
+
   const railTabs = $derived(
     railTabsAll.filter(
       (t) =>
@@ -2433,7 +2437,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} />
+          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} />
         </div>
       </div>
 
@@ -2518,7 +2522,7 @@
           <Composer
             bind:this={composerRef}
             onSend={handleSend}
-            placeholder="Ask anything…   / commands · @ files"
+            placeholder={agentMode?.agent ? composerPlaceholder(agentMode.agent.name) : "Ask anything…   / commands · @ files"}
             notifyKey={NOTIFY_KEY}
             provider={agentMode?.hidePickers ? undefined : providerSelect}
             project={agentMode?.hidePickers ? undefined : projectSelect}
@@ -2538,6 +2542,9 @@
                 }
               : undefined}
           />
+          {#if agentMode?.agent?.caption}
+            <p class="mt-1.5 pr-1 text-right text-[11px] text-black-600 dark:text-black-700">{agentMode.agent.caption}</p>
+          {/if}
         </div>
       </div>
     {:else if activeView === "approvals"}
@@ -2849,6 +2856,9 @@
       {:else if railTab === "browser"}
         <BrowserPanel onError={(m) => toastError(m)} />
       {/if}
+      {#if railHiddenNote}
+        <p class="shrink-0 border-t border-white-300 dark:border-navy-600 px-4 py-2.5 text-[11px] text-black-600 dark:text-black-700">{railHiddenNote}</p>
+      {/if}
     </div>
 
     <!-- Mobile slide-over for context/process/workspace (below lg) -->
@@ -3043,6 +3053,9 @@
             <BrowserPanel onError={(m) => toastError(m)} />
           {/if}
         </div>
+        {#if railHiddenNote}
+          <p class="shrink-0 border-t border-white-300 dark:border-navy-600 px-4 py-2.5 text-[11px] text-black-600 dark:text-black-700">{railHiddenNote}</p>
+        {/if}
       </div>
     </div>
   {/if}

@@ -30,6 +30,21 @@ export type AgentMode = {
       chat lives in the agent's project, and moving it elsewhere from here
       would detach it from the agent. */
   hidePickers?: boolean;
+  /** Who the chat is with. Turns on the agent-flavoured empty state, the
+      "Message {name}…" placeholder, the composer caption and the avatar
+      as the typing indicator; absent, DetailView looks as on /sessions. */
+  agent?: AgentIdentity;
+};
+
+/** What the chat area shows of the agent it talks to. */
+export type AgentIdentity = {
+  name: string;
+  description: string;
+  /** Avatar spec; unset falls back to AgentAvatar's defaults. */
+  shape?: string;
+  color?: string;
+  /** Right-hand composer caption, e.g. "3 connector". */
+  caption: string;
 };
 
 /** Persona feature flags as the server sends them (snake_case JSON). */
@@ -68,4 +83,27 @@ export const FEATURE_TABS: { feature: keyof AgentFeatures; tab: RailTab; label: 
 export function hiddenTabsFor(f: Partial<AgentFeatures> | null | undefined): RailTab[] {
   if (!f) return [];
   return FEATURE_TABS.filter((m) => f[m.feature] === false).map((m) => m.tab);
+}
+
+/** hiddenTabNote is the rail footer that says why tabs are missing: a
+    tab gone because the agent may not use it should not read as broken.
+    Empty when nothing is hidden. Duplicates count once. */
+export function hiddenTabNote(hidden: RailTab[] | null | undefined): string {
+  const n = new Set(hidden ?? []).size;
+  return n > 0 ? `${n} tab disembunyikan — fiturnya tidak diizinkan` : "";
+}
+
+/** composerPlaceholder addresses the agent by name; a nameless one (still
+    loading) falls back to a neutral word rather than "Message …". */
+export function composerPlaceholder(name: string | null | undefined): string {
+  const n = (name ?? "").trim();
+  return `Message ${n || "agent"}…`;
+}
+
+/** connectorCaption counts the connectors the agent is granted, one per
+    connector however many accounts the grant covers. Native tools are not
+    a persona field yet, so they are not counted here. */
+export function connectorCaption(grants: { connector_id: string }[] | null | undefined): string {
+  const n = new Set((grants ?? []).map((g) => g.connector_id)).size;
+  return `${n} connector`;
 }

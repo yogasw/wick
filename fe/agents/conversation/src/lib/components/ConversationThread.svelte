@@ -9,6 +9,8 @@
   import ToolCard from "./ToolCard.svelte";
   import TodoCard from "./TodoCard.svelte";
   import { turnDay, turnDayKey, activeDayLabel } from "../timeFormat.js";
+  import AgentAvatar from "./AgentAvatar.svelte";
+  import type { AgentIdentity } from "../agentMode.js";
 
   type Props = {
     turns: ConversationTurn[];
@@ -31,9 +33,12 @@
         turn, so without this the thread would say "thinking…" while the
         conversation is being rewritten underneath the reader. */
     compacting?: boolean;
+    /** Set in the Team app: the empty thread introduces the agent and its
+        avatar stands in for the typing spinner. */
+    agent?: AgentIdentity;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, agent }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -186,7 +191,17 @@
       <span class="rounded-md bg-white-200/95 dark:bg-navy-800/95 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm backdrop-blur-sm transition-opacity duration-300 {floatVisible ? 'opacity-100' : 'opacity-0'}">{floatLabel}</span>
     {/if}
   </div>
-  {#if isEmpty}
+  {#if isEmpty && agent}
+    <div class="flex flex-col items-center justify-center py-16 text-center gap-3">
+      <AgentAvatar shape={agent.shape} color={agent.color} size={72} />
+      <div class="flex flex-col gap-1">
+        <p class="text-lg font-semibold text-black-900 dark:text-white-100">{agent.name}</p>
+        {#if agent.description}
+          <p class="max-w-md text-sm text-black-700 dark:text-black-600">{agent.description}</p>
+        {/if}
+      </div>
+    </div>
+  {:else if isEmpty}
     <div class="flex flex-col items-center justify-center py-16 text-center gap-1">
       <p class="text-sm font-medium text-black-700 dark:text-black-600">No messages yet</p>
       <p class="text-xs text-black-600 dark:text-black-700">Send a message to start.</p>
@@ -285,6 +300,12 @@
               ? "text-amber-700 dark:text-amber-300"
               : "text-black-600 dark:text-black-700")}
         >
+          <!-- The agent's own avatar, in its working pose, is the typing
+               indicator in the Team app. A compaction keeps the amber
+               spinner: that wait is not the agent answering. -->
+          {#if agent && !compacting}
+            <AgentAvatar shape={agent.shape} color={agent.color} size={20} working={true} />
+          {:else}
           <svg
             class={"h-3 w-3 shrink-0 animate-spin " + (compacting ? "text-amber-500" : "text-green-500")}
             viewBox="0 0 16 16"
@@ -294,6 +315,7 @@
           >
             <path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path>
           </svg>
+          {/if}
           <span class="italic">{activityLabel}</span>
         </div>
       </div>
