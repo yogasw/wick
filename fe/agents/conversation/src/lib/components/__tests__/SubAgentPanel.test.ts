@@ -406,6 +406,6 @@ describe("SubAgentPanel - Team and continued rows", () => {
     });
     expect(screen.getByText("Find the flaky test")).toBeTruthy();
     expect(screen.getByTestId("resumed-badge").textContent).toContain("Resumed ×1");
-    expect(screen.getByText(/11\/61 turns · leg 2 of 2 · 51 total/)).toBeTruthy();
+    expect(screen.getByText(/11 turns this leg · 51 total/)).toBeTruthy();
   });
 });

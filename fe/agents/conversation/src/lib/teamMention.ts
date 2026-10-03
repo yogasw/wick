@@ -99,14 +99,15 @@ export function subAgentTitle(s: { label: string; title?: string }): string {
 }
 
 /** subAgentTurns labels turns per leg once a row has been continued:
-    "12/50 turns · leg 2 of 2 · 51 total"; a single leg keeps "x/y turns". */
+    "11 turns this leg · 51 total"; a single leg keeps "x/y turns". The
+    per-leg cap and "leg n of n" were dropped: the cap read like a second
+    budget and the leg count only ever said "the latest of all of them". */
 export function subAgentTurns(s: { turns_used: number; max_turns: number; resumes?: number; leg_base_turns?: number }): string {
   const resumes = s.resumes ?? 0;
   if (resumes <= 0) return s.max_turns > 0 ? `${s.turns_used}/${s.max_turns} turns` : `${s.turns_used} turns`;
   const base = s.leg_base_turns ?? 0;
   const used = Math.max(0, s.turns_used - base);
-  const cap = s.max_turns > base ? `/${s.max_turns - base}` : "";
-  return `${used}${cap} turns · leg ${resumes + 1} of ${resumes + 1} · ${s.turns_used} total`;
+  return `${used} turns this leg · ${s.turns_used} total`;
 }
 
 /** collapseHandoffs folds the mention_handoff turns of one task into one

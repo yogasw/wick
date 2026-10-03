@@ -37,7 +37,7 @@ describe("sub-agent card", () => {
   });
   test("turns are per leg once continued", () => {
     expect(subAgentTurns({ turns_used: 5, max_turns: 20 })).toBe("5/20 turns");
-    expect(subAgentTurns({ turns_used: 51, max_turns: 101, resumes: 1, leg_base_turns: 40 })).toBe("11/61 turns · leg 2 of 2 · 51 total");
+    expect(subAgentTurns({ turns_used: 51, max_turns: 101, resumes: 1, leg_base_turns: 40 })).toBe("11 turns this leg · 51 total");
   });
 });
 
