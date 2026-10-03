@@ -69,9 +69,9 @@ func (f *fake) Fetch(_ context.Context, h Handle) ([]Event, Handle, error) {
 }
 
 func fastPull(t *testing.T) {
-	old := pullSteps
-	pullSteps = []time.Duration{5 * time.Millisecond, 10 * time.Millisecond, 25 * time.Millisecond, 50 * time.Millisecond}
-	t.Cleanup(func() { pullSteps = old })
+	old := PullSteps
+	PullSteps = []time.Duration{5 * time.Millisecond, 10 * time.Millisecond, 25 * time.Millisecond, 50 * time.Millisecond}
+	t.Cleanup(func() { PullSteps = old })
 }
 
 // run spawns src, sends one message and returns the text and closing line.

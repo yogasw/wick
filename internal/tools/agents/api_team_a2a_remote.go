@@ -59,8 +59,12 @@ func remoteStore() *a2aremote.Store {
 	return a2aremote.NewStore(globalDB)
 }
 
-// IsRemoteAgent reports whether p is an A2A remote agent.
-func IsRemoteAgent(p entity.AgentPersona) bool { return p.Kind == a2aremote.Kind }
+// IsRemoteAgent reports whether p is a remote agent of any source (A2A,
+// Slack): no local process, its brain lives elsewhere.
+func IsRemoteAgent(p entity.AgentPersona) bool { return isA2ARemote(p) || isSlackRemote(p) }
+
+// isA2ARemote reports whether p is an A2A remote agent.
+func isA2ARemote(p entity.AgentPersona) bool { return p.Kind == a2aremote.Kind }
 
 /* ── DTOs ────────────────────────────────────────────────────────────────── */
 
@@ -124,7 +128,7 @@ func hostOf(raw string) string {
 // remoteInfoFor loads p's remote settings for TeamAgentItem; nil when p is
 // local or the row is missing.
 func remoteInfoFor(p entity.AgentPersona) *RemoteAgentInfo {
-	if !IsRemoteAgent(p) || remoteStore() == nil {
+	if !isA2ARemote(p) || remoteStore() == nil {
 		return nil
 	}
 	c, ok, err := remoteStore().Load(p.ID)
@@ -167,7 +171,7 @@ func loadOwnRemoteAgent(c *tool.Ctx) (entity.AgentPersona, a2aremote.Config, boo
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return p, cfg, false
 	}
-	if !IsRemoteAgent(p) || !found {
+	if !isA2ARemote(p) || !found {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "not an A2A remote agent"})
 		return p, cfg, false
 	}
@@ -288,7 +292,7 @@ func apiTeamRemoteTest(c *tool.Ctx) {
 	target := req.URL
 	if req.AgentID != "" {
 		p, err := globalTeam.Get(c.Context(), req.AgentID)
-		if err != nil || p.OwnerUserID != actorID(c) || !IsRemoteAgent(p) {
+		if err != nil || p.OwnerUserID != actorID(c) || !isA2ARemote(p) {
 			c.JSON(http.StatusNotFound, map[string]string{"error": "agent not found"})
 			return
 		}
@@ -484,6 +488,9 @@ func RemoteSpawnerFor(sessionID string) (provider.Spawner, bool) {
 	if err != nil || !IsRemoteAgent(p) {
 		return nil, false
 	}
+	if isSlackRemote(p) {
+		return slackRemoteSpawner(p), true
+	}
 	cfg, found, err := remoteStore().Load(p.ID)
 	if err != nil || !found {
 		log.Warn().Err(err).Str("agent", p.ID).Msg("team: remote agent settings missing")
@@ -588,7 +595,13 @@ func apiTeamRemoteRefresh(c *tool.Ctx) {
 // removeAgentRemote drops a deleted agent's remote settings. Its sessions
 // stay: the transcript is kept unless the delete asked for the chats too.
 func removeAgentRemote(p entity.AgentPersona) {
-	if !IsRemoteAgent(p) || remoteStore() == nil {
+	if isSlackRemote(p) && slackRemoteStore() != nil {
+		if err := slackRemoteStore().Delete(p.ID); err != nil {
+			log.Warn().Err(err).Str("agent", p.ID).Msg("team: drop slack remote agent settings")
+		}
+		return
+	}
+	if !isA2ARemote(p) || remoteStore() == nil {
 		return
 	}
 	if err := remoteStore().Delete(p.ID); err != nil {

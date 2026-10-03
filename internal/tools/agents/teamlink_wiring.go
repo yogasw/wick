@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/yogasw/wick/internal/agents/a2aremote"
+	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"net/http"
 	"strings"
 	"time"
@@ -93,6 +94,13 @@ func (d teamDirectory) peer(p entity.AgentPersona) teamlink.Peer {
 func remoteOwnerOnly(p entity.AgentPersona) bool {
 	if !IsRemoteAgent(p) {
 		return false
+	}
+	if isSlackRemote(p) {
+		if slackRemoteStore() == nil {
+			return true
+		}
+		cfg, ok, err := slackRemoteStore().Load(p.ID)
+		return err != nil || !ok || cfg.EffectiveUsage() != slackremote.UsageMeAndAgents
 	}
 	if remoteStore() == nil {
 		return true

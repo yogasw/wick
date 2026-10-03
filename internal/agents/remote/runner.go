@@ -24,10 +24,10 @@ type Spawner struct{ Source Source }
 // remote is silent mid-turn.
 var heartbeatEvery = 20 * time.Second
 
-// pullSteps is the pull backoff: the wait before each Fetch while nothing
+// PullSteps is the pull backoff: the wait before each Fetch while nothing
 // new arrives, reset to the first step whenever something does. Pull only
 // runs while a turn waits.
-var pullSteps = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second}
+var PullSteps = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second}
 
 // pushGrace is how long a push source gets, after the turn's deadline, to
 // close with its own terminal event before the runner reports the timeout.
@@ -302,7 +302,7 @@ func (p *process) turn(text string) {
 	var pullC <-chan time.Time
 	var pullT *time.Timer
 	if canPull {
-		pullT = time.NewTimer(pullSteps[0])
+		pullT = time.NewTimer(PullSteps[0])
 		defer pullT.Stop()
 		pullC = pullT.C
 	}
@@ -351,7 +351,7 @@ func (p *process) turn(text string) {
 				return
 			}
 			step = 0
-			resetPull(pullSteps[0])
+			resetPull(PullSteps[0])
 		case <-pullC:
 			evs, nh, err := puller.Fetch(ctx, h)
 			wait := time.Duration(0)
@@ -374,11 +374,11 @@ func (p *process) turn(text string) {
 			}
 			if len(evs) > 0 {
 				step = 0
-			} else if step < len(pullSteps)-1 {
+			} else if step < len(PullSteps)-1 {
 				step++
 			}
-			if wait < pullSteps[step] {
-				wait = pullSteps[step]
+			if wait < PullSteps[step] {
+				wait = PullSteps[step]
 			}
 			resetPull(wait)
 		case <-idleC:

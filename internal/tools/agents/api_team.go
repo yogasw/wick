@@ -19,6 +19,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/a2aremote"
 	"github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/store"
@@ -52,8 +53,11 @@ type TeamAgentItem struct {
 	Handle string `json:"handle"`
 	// Kind is "" for a local agent, "a2a-remote" for a remote one; Remote
 	// carries the remote's settings then (never its secret).
-	Kind                 string                `json:"kind"`
-	Remote               *RemoteAgentInfo      `json:"remote,omitempty"`
+	Kind   string           `json:"kind"`
+	Remote *RemoteAgentInfo `json:"remote,omitempty"`
+	// SlackRemote carries a Slack remote agent's settings (kind
+	// "slack-remote"); never a token.
+	SlackRemote          *SlackRemoteInfo      `json:"slack_remote,omitempty"`
 	IsCaptain            bool                  `json:"is_captain"`
 	ProjectID            string                `json:"project_id"`
 	Name                 string                `json:"name"`
@@ -586,6 +590,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		ID: p.ID, Handle: p.Handle, IsCaptain: p.IsCaptain, ProjectID: p.ProjectID,
 		Kind:                 p.Kind,
 		Remote:               remoteInfoFor(p),
+		SlackRemote:          slackRemoteInfoFor(p),
 		Name:                 p.Handle,
 		Tagline:              p.Tagline,
 		Features:             team.EffectiveFeatures(p, reach),
@@ -1301,6 +1306,9 @@ func createTeamAgentSession(c *tool.Ctx, p entity.AgentPersona, main bool) (stri
 	if IsRemoteAgent(p) {
 		// No local provider: the pool hands the session to a2aremote.
 		prov, modelID = a2aremote.ProviderKey, ""
+		if isSlackRemote(p) {
+			prov = slackremote.ProviderKey
+		}
 	}
 	presetName := "default"
 	label := p.Handle
