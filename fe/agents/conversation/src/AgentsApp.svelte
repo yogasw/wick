@@ -18,11 +18,26 @@
   import { rosterTime } from "./lib/timeFormat.js";
   import { listAgents, openAgentChat, createAgent, updateAgent, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
+  import { RETURN_KEY, returnHref } from "./lib/teamReturn.js";
 
   const appEl = document.getElementById("app");
   const base = appEl?.dataset.base ?? "";
   const viewerName = appEl?.dataset.viewerName ?? "";
   const viewerInitial = (viewerName.trim()[0] ?? "?").toUpperCase();
+
+  /* ↩ goes back to the wick page the user entered from. The stored page is
+     read once and dropped, so a later entry from elsewhere (the Overview
+     card) is not sent to a stale one; a reload keeps document.referrer. */
+  const exitHref = (() => {
+    let stored: string | null = null;
+    try {
+      stored = sessionStorage.getItem(RETURN_KEY);
+      sessionStorage.removeItem(RETURN_KEY);
+    } catch {
+      // storage blocked: referrer only
+    }
+    return returnHref(stored, document.referrer, location.origin, base);
+  })();
 
   let route = $state<AgentsRoute>({ handle: null, session: null, panel: null });
   agentsRoute.subscribe((v) => { route = v; });
@@ -221,7 +236,7 @@
 
 <ToastHost />
 
-<div class="relative flex h-full w-full overflow-hidden bg-white-100 dark:bg-navy-800">
+<div class="team-app relative flex h-full w-full overflow-hidden bg-white-100 dark:bg-navy-800">
   <!-- Roster -->
   {#if rosterOpen}
     <button
@@ -236,7 +251,7 @@
   >
     <div class="flex items-center gap-1.5 px-3 pt-3.5 pb-2.5">
       <a
-        href="{base}/sessions"
+        href={exitHref}
         class="flex h-8 w-8 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600"
         title="Kembali ke wick"
         aria-label="Kembali ke wick"
@@ -409,6 +424,9 @@
 </div>
 
 <style>
+  /* Entering from wick is a full page load; a short fade makes it feel like
+     opening an app rather than a blank flash. */
+  .team-app { animation: agent-fade 0.25s ease-out; }
   /* Roster bits the token scale has no exact step for (mockup sizes). */
   .roster-name { font-size: 15px; }
   .new-agent { box-shadow: 0 4px 12px rgba(39, 177, 153, 0.35); }
@@ -476,6 +494,6 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .dots i { animation: none; opacity: 0.7; }
-    .agent-drawer, .agent-modal, .agent-scrim { animation: none; }
+    .team-app, .agent-drawer, .agent-modal, .agent-scrim { animation: none; }
   }
 </style>

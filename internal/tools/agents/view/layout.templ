@@ -136,8 +136,8 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 					</svg>
 					<span>New session</span>
 				</a>
-				@agentsAppNavLink(vm.Base + "/team")
 				@agentsNavLink(vm.Base+"/overview", "Overview", vm.ActivePage == "overview")
+				@agentsAppNavLink(vm.Base + "/team")
 				@agentsNavLink(vm.Base+"/workflows", "Workflows", vm.ActivePage == "workflows")
 				@agentsNavLink(vm.Base+"/connectors", "Connectors", vm.ActivePage == "connectors")
 				{{ moreItems := AgentsMoreItems(vm, user) }}
@@ -832,9 +832,12 @@ templ agentsNavLink(href, label string, active bool) {
 // agentsAppNavLink opens the full-screen Team app. Its own templ rather
 // than an agentsNavLink: it is never "active" (the app has no wick sidebar
 // to highlight it in) and it carries the "BARU" chip while the app is new.
+// The click remembers the page it left from, so the app's ↩ button can
+// bring the user back there (teamReturn.ts reads the same key).
 templ agentsAppNavLink(href string) {
 	<a
 		href={ templ.SafeURL(href) }
+		onclick="try{sessionStorage.setItem('wick.team.return',location.pathname+location.search+location.hash)}catch(e){}"
 		class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100"
 	>
 		// Three heads side by side — a team, not a single session.
@@ -845,7 +848,7 @@ templ agentsAppNavLink(href string) {
 			<path d="M4.5 13.5a3.5 3.5 0 017 0M1 13a2.5 2.5 0 013-2.4M15 13a2.5 2.5 0 00-3-2.4" stroke-linecap="round"></path>
 		</svg>
 		<span class="flex-1">Team</span>
-		<span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold leading-none bg-prog-100 text-prog-400">BARU</span>
+		<span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold leading-none tracking-wide bg-green-500 text-white-100">BARU</span>
 	</a>
 }
 
