@@ -9,19 +9,57 @@ import (
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/login"
 )
 
 // Data scope: which sessions and projects wick's own per-session data
 // (notes, tickets, schedules) may be read or written in. It sits on top of
 // the connector level a Scope resolves:
 //
-//   - never across users: a session or project of another person is
-//     refused for everyone, agent or not;
+//   - never across users: a person reaches a session they own (or any,
+//     when admin / allowed to see all sessions) and a project
+//     project.CanAccess lets them see — the same rules the schedule and
+//     title tools use;
 //   - an ordinary agent reaches only its own sessions (and the sub-agent
 //     sessions under them) and its own project;
 //   - the Captain reaches every session and project of its owner.
 //
-// Errors read "not found" so a caller cannot probe what exists.
+// Errors read "not found" so a caller cannot probe what exists. Inside an
+// agent session a call with no person behind it (callerUID "") fails
+// closed.
+
+// personOf is the signed-in user on ctx when it is the person the call
+// runs for; nil otherwise (the agent's internal identity, or none).
+func personOf(ctx context.Context, callerUID string) *entity.User {
+	if u := login.GetUser(ctx); u != nil && u.ID == callerUID {
+		return u
+	}
+	return nil
+}
+
+// seesAllSessions mirrors canManageSession's bypass.
+func seesAllSessions(u *entity.User) bool {
+	return u != nil && (u.IsAdmin() || u.CanSeeAllSessions())
+}
+
+// projectAccessOf is the project.Access of the person the call runs for.
+func projectAccessOf(ctx context.Context, callerUID string) project.Access {
+	u := personOf(ctx, callerUID)
+	acc := project.Access{UserID: callerUID, IsAdmin: seesAllSessions(u)}
+	if u != nil {
+		acc.TagIDs = login.GetUserTagIDs(ctx)
+	}
+	return acc
+}
+
+// agentNeedsCaller fails an agent call with no person behind it.
+func agentNeedsCaller(ctx context.Context, callerUID string, notFound error) error {
+	if callerUID == "" && agentScopeFrom(ctx) != nil {
+		return notFound
+	}
+	return nil
+}
 
 // AgentID is the agent the scope was built for ("" for DenyAll).
 func (s *Scope) AgentID() string { return s.agentID }
@@ -46,7 +84,10 @@ func CheckSessionTarget(ctx context.Context, layout config.Layout, callerUID, ca
 	if err != nil {
 		return notFound
 	}
-	if callerUID != "" && sess.Meta.UserID != "" && sess.Meta.UserID != callerUID {
+	if err := agentNeedsCaller(ctx, callerUID, notFound); err != nil {
+		return err
+	}
+	if callerUID != "" && !seesAllSessions(personOf(ctx, callerUID)) && sess.Meta.UserID != callerUID {
 		return notFound
 	}
 	return checkAgentSession(ctx, layout, targetSID, notFound)
@@ -89,7 +130,10 @@ func CheckProjectTarget(ctx context.Context, layout config.Layout, callerUID, ca
 	if err != nil {
 		return notFound
 	}
-	if callerUID != "" && p.Meta.OwnerUserID != "" && p.Meta.OwnerUserID != callerUID {
+	if err := agentNeedsCaller(ctx, callerUID, notFound); err != nil {
+		return err
+	}
+	if callerUID != "" && !project.CanAccess(p.Meta, projectAccessOf(ctx, callerUID)) {
 		return notFound
 	}
 	return CheckAgentProject(ctx, projectID)

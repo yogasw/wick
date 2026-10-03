@@ -8,6 +8,8 @@ import (
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/login"
 )
 
 // Sessions: ops-main and its sub-agent ops-child belong to agent "ops",
@@ -16,7 +18,7 @@ func dataScopeLayout(t *testing.T) config.Layout {
 	t.Helper()
 	ctx := context.Background()
 	layout := config.NewLayout(t.TempDir())
-	for _, p := range []project.CreateOptions{{ID: "p-ops", Name: "ops", OwnerUserID: "u1"}, {ID: "p-cap", Name: "cap", OwnerUserID: "u1"}, {ID: "p-u2", Name: "u2", OwnerUserID: "u2"}} {
+	for _, p := range []project.CreateOptions{{ID: "p-ops", Name: "ops", OwnerUserID: "u1"}, {ID: "p-cap", Name: "cap", OwnerUserID: "u1"}, {ID: "p-u2", Name: "u2", OwnerUserID: "u2"}, {ID: "p-shared", Name: "shared", OwnerUserID: "u2", Tags: []string{"t-team"}}} {
 		if _, err := project.Create(layout, p); err != nil {
 			t.Fatal(err)
 		}
@@ -99,5 +101,42 @@ func TestCheckOwnerRecipient(t *testing.T) {
 	}
 	if CheckOwnerRecipient(context.Background(), "u1", "u2") != nil {
 		t.Fatal("people are not limited by the agent rule")
+	}
+}
+
+// People keep the rules they had before Team agents: an admin (or a user
+// allowed to see all sessions) reaches other people's sessions and
+// projects, and a project shared by tag is open to its members.
+func TestDataScopePeopleRules(t *testing.T) {
+	layout := dataScopeLayout(t)
+	admin := login.WithUser(context.Background(), &entity.User{ID: "u1", Role: entity.RoleAdmin, Approved: true}, nil)
+	member := login.WithUser(context.Background(), &entity.User{ID: "u1", Role: entity.RoleUser, Approved: true}, []string{"t-team"})
+	if err := CheckSessionTarget(admin, layout, "u1", "plain", "other"); err != nil {
+		t.Fatalf("admin refused another user's session: %v", err)
+	}
+	if err := CheckProjectTarget(admin, layout, "u1", "plain", "p-u2"); err != nil {
+		t.Fatalf("admin refused another user's project: %v", err)
+	}
+	if err := CheckProjectTarget(member, layout, "u1", "plain", "p-shared"); err != nil {
+		t.Fatalf("tag member refused a shared project: %v", err)
+	}
+	if err := CheckProjectTarget(member, layout, "u1", "plain", "p-u2"); err == nil {
+		t.Fatal("tag member reached an unshared project")
+	}
+}
+
+// Inside an agent session a call with no person behind it fails closed.
+func TestDataScopeAgentWithoutCaller(t *testing.T) {
+	layout := dataScopeLayout(t)
+	capt := agentCtx("cap", true)
+	if err := CheckSessionTarget(capt, layout, "", "cap-main", "ops-main"); err == nil {
+		t.Fatal("agent call without a caller reached another session")
+	}
+	if err := CheckProjectTarget(capt, layout, "", "cap-main", "p-ops"); err == nil {
+		t.Fatal("agent call without a caller reached another project")
+	}
+	// Its own session and project stay usable.
+	if CheckSessionTarget(capt, layout, "", "cap-main", "cap-main") != nil || CheckProjectTarget(capt, layout, "", "cap-main", "p-cap") != nil {
+		t.Fatal("own session/project refused")
 	}
 }

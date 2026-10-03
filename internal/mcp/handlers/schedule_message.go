@@ -680,6 +680,9 @@ func scheduleAuthorizeTarget(r *http.Request, layout agentconfig.Layout, target 
 // project), so a teammate who can open the project can also pause the job
 // running in it. Session-scoped rows keep the stricter owner/admin rule.
 func scheduleCanManage(r *http.Request, layout agentconfig.Layout, m entity.ScheduledMessage, user *entity.User) bool {
+	if !scheduleAgentMayManage(r, layout, m) {
+		return false
+	}
 	if canManageSession(user, m.OwnerUserID) {
 		return true
 	}
@@ -693,9 +696,21 @@ func scheduleCanManage(r *http.Request, layout agentconfig.Layout, m entity.Sche
 	return project.CanAccess(p.Meta, scheduleProjectAccess(r, user))
 }
 
-// scheduleProjectAccess builds the project-visibility identity for the
-// calling principal. A nil user (stdio / tests) is treated as admin, matching
-// scheduleScope's unscoped behavior on those transports.
+// scheduleAgentMayManage applies the Team data scope to a schedule acted on
+// by id: an ordinary agent manages only rows that deliver into its own
+// sessions or were created from them, or that live in its own project.
+func scheduleAgentMayManage(r *http.Request, layout agentconfig.Layout, m entity.ScheduledMessage) bool {
+	if team.CheckAgentProject(r.Context(), m.ProjectID) == nil {
+		return true // a person or the Captain: the owner rules decide
+	}
+	for _, sid := range []string{m.SessionID, m.SourceSessionID} {
+		if sid != "" && team.CheckAgentSession(r.Context(), layout, sid) == nil {
+			return true
+		}
+	}
+	return m.ProjectID != "" && scheduleAgentProject(r, layout, m.ProjectID) == nil
+}
+
 // scheduleAgentProject keeps an ordinary agent's schedules inside its own
 // project (the calling session's); the Captain and people are unaffected.
 func scheduleAgentProject(r *http.Request, layout agentconfig.Layout, projectID string) error {
@@ -707,6 +722,9 @@ func scheduleAgentProject(r *http.Request, layout agentconfig.Layout, projectID 
 	return team.CheckAgentProject(r.Context(), projectID)
 }
 
+// scheduleProjectAccess builds the project-visibility identity for the
+// calling principal. A nil user (stdio / tests) is treated as admin, matching
+// scheduleScope's unscoped behavior on those transports.
 func scheduleProjectAccess(r *http.Request, user *entity.User) project.Access {
 	if user == nil {
 		return project.Access{IsAdmin: true}
