@@ -28,6 +28,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/airouter"
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	"github.com/yogasw/wick/internal/agents/a2aserver"
 	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
 	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
 	telegramch "github.com/yogasw/wick/internal/agents/channels/telegram"
@@ -1510,6 +1511,13 @@ func NewServer() *Server {
 	channelStore := agentchannels.NewDBStore(db)
 	channelStore.Configs = configsSvc
 	channelsetup.All(channelReg, channelStore, sendFnFor, tokensSvc)
+
+	// Team agents as A2A servers (/integrations/a2a/<agent_id>). One channel
+	// serves every agent; each agent's connection row decides if it answers.
+	a2aSrv := a2aserver.New(agentstool.A2ADirectory(), a2aserver.NewStore(db), tokensSvc, configsSvc.AppURL)
+	channelReg.Add(a2aSrv, nil)
+	a2aSrv.SetSendFunc(sendFnFor("a2a"))
+	agentstool.SetA2AServer(a2aSrv)
 
 	// Wire each channel's workflow integration surface — registers
 	// per-event + per-action descriptors and attaches the inbound
