@@ -53,11 +53,15 @@ func spawnProcess(binary, socket string) (func(), wickplugin.ToolConn, func() bo
 
 // proc is one running plugin process.
 type proc struct {
-	kill    func()
-	conn    wickplugin.ToolConn
-	alive   func() bool
-	socket  string
-	rt      http.RoundTripper
+	kill   func()
+	conn   wickplugin.ToolConn
+	alive  func() bool
+	socket string
+	rt     http.RoundTripper
+
+	// cfgMu guards cfgHash and is held across Configure, so concurrent
+	// requests push a changed cfg once without holding Runner.mu over the RPC.
+	cfgMu   sync.Mutex
 	cfgHash string
 }
 
@@ -109,19 +113,28 @@ func (r *Runner) Acquire(ctx context.Context, cfg map[string]string) (http.Round
 		release()
 		return nil, nil, err
 	}
-	if h := hashCfg(cfg); h != p.cfgHash {
-		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err := p.conn.Configure(cctx, cfg)
-		cancel()
-		if err != nil {
-			release()
-			return nil, nil, fmt.Errorf("%w: configure: %v", ErrNotReady, err)
-		}
-		r.mu.Lock()
-		p.cfgHash = h
-		r.mu.Unlock()
+	if err := p.configure(ctx, cfg); err != nil {
+		release()
+		return nil, nil, fmt.Errorf("%w: configure: %v", ErrNotReady, err)
 	}
 	return p.rt, release, nil
+}
+
+// configure pushes cfg to the plugin unless it already holds the same one.
+func (p *proc) configure(ctx context.Context, cfg map[string]string) error {
+	h := hashCfg(cfg)
+	p.cfgMu.Lock()
+	defer p.cfgMu.Unlock()
+	if h == p.cfgHash {
+		return nil
+	}
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := p.conn.Configure(cctx, cfg); err != nil {
+		return err
+	}
+	p.cfgHash = h
+	return nil
 }
 
 func (r *Runner) touch() { r.lastUsed.Store(r.now().UnixNano()) }
