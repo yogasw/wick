@@ -480,6 +480,25 @@ func applyProjectFields(m *project.Meta, req teamAgentWriteReq) bool {
 	return changed
 }
 
+// requireAgentProjectAccess re-checks that the caller (the agent's owner)
+// still reaches the project the agent is linked to. Access can be revoked
+// after the link was made, and the link alone must not keep the project
+// open to them. A project that no longer exists passes: the agent then
+// runs unscoped (see createTeamAgentSession). Writes the 403; false = stop.
+func requireAgentProjectAccess(c *tool.Ctx, p entity.AgentPersona) bool {
+	if p.ProjectID == "" {
+		return true
+	}
+	if _, ok := globalMgr.Registry().Project(p.ProjectID); !ok {
+		return true
+	}
+	if callerProjectAccess(c).allowProject(p.ProjectID) {
+		return true
+	}
+	c.JSON(http.StatusForbidden, map[string]string{"error": "you no longer have access to this agent's project; link it to another project first"})
+	return false
+}
+
 // requireUsableProject checks a project_id the caller named: it must exist
 // and be one the caller may already open.
 func requireUsableProject(c *tool.Ctx, id string) bool {
@@ -697,6 +716,11 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 		}
 		p.ProjectID = pid
 	}
+	// Moving the agent to a project the caller reaches is the way out;
+	// anything else on a project they lost is refused.
+	if !requireAgentProjectAccess(c, p) {
+		return
+	}
 	if req.Handle != nil {
 		p.Handle = team.NormalizeHandle(*req.Handle)
 		if err := team.ValidateHandle(p.Handle); err != nil {
@@ -840,6 +864,9 @@ func apiTeamAgentChat(c *tool.Ctx) {
 	}
 	if err := json.NewDecoder(io.LimitReader(c.R.Body, 1<<16)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	if !requireAgentProjectAccess(c, p) {
 		return
 	}
 	if !body.New {
