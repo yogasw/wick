@@ -8,6 +8,7 @@
   import DrawerHeader from "./DrawerHeader.svelte";
   import ConnectionA2ACard from "./team/ConnectionA2ACard.svelte";
   import ConnectionRESTCard from "./team/ConnectionRESTCard.svelte";
+  import ConnectionTelegramCard from "./team/ConnectionTelegramCard.svelte";
   import SlackInstantCard from "./team/SlackInstantCard.svelte";
   import {
     getAgentSlack, connectAgentSlack, updateAgentSlack, disconnectAgentSlack, getAgentSlackHealth, getAgentSlackManifest, runApi,
@@ -281,5 +282,5 @@
 
   <ConnectionA2ACard {base} {agent} />
   <ConnectionRESTCard {base} {agent} />
-  <section class="rounded-xl border border-dashed border-white-300 p-4 {muted} dark:border-navy-600">Telegram connections are coming later.</section>
+  <ConnectionTelegramCard {base} {agent} />
 </div>
