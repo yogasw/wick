@@ -21,7 +21,7 @@
   import GroupView from "./lib/components/GroupView.svelte";
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
   import GroupSettings from "./lib/components/GroupSettings.svelte";
-  import { stacked } from "./lib/teamGroups.js";
+  import GroupAvatars from "./lib/components/GroupAvatars.svelte";
   import { rosterStatus, withTurn } from "./lib/rosterStatus.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
@@ -408,7 +408,6 @@
         <p class="px-3 pb-1 pt-3 text-[10px] font-medium uppercase tracking-wider text-black-600 dark:text-black-700">Groups</p>
       {/if}
       {#each groups as g (g.id)}
-        {@const st = stacked(g.members, 3)}
         <button
           type="button"
           class="roster-row relative mb-0.5 flex w-full items-center gap-3 rounded-2xl px-2.5 py-2.5 text-left {activeGroupId === g.id ? 'bg-white-300 dark:bg-navy-600' : 'hover:bg-white-300 dark:hover:bg-navy-600'}"
@@ -416,11 +415,7 @@
           data-testid="roster-group"
           onclick={() => { rosterOpen = false; activeGroupId = g.id; g.unread = false; }}
         >
-          <span class="relative flex h-11 w-11 shrink-0 items-center">
-            {#each st.shown.slice(0, 2) as m, i (m.id)}
-              <span class="absolute rounded-full ring-2 ring-white-200 dark:ring-navy-700" style="left:{i * 12}px;top:{i * 12}px"><AgentAvatar kind={m.avatar?.kind} shape={m.avatar?.shape} expression={m.avatar?.expression} color={m.avatar?.color} size={30} /></span>
-            {/each}
-          </span>
+          <span class="flex h-11 w-11 shrink-0 items-center"><GroupAvatars members={g.members} size={22} max={2} ring="bg-white-200 dark:bg-navy-700" /></span>
           {#if g.unread && activeGroupId !== g.id}<span class="roster-udot rounded-full border-2 border-white-200 bg-neg-400 dark:border-navy-700" aria-label="new message"></span>{/if}
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-2">

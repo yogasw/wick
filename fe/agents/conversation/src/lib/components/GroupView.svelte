@@ -8,12 +8,13 @@
      is pending. Group Settings opens in the app's drawer (GroupSettings). */
   import { onMount } from "svelte";
   import { AgentAvatar } from "@wick-fe/common-avatar";
+  import GroupAvatars from "./GroupAvatars.svelte";
   import { renderMarkdown } from "../markdown.js";
   import {
     groupConversation, sendToGroup, markGroupRead, runApi,
     type AgentItem, type GroupItem, type GroupTurn,
   } from "../api/team.js";
-  import { composerHint, handlesLine, mergeTurn, stacked } from "../teamGroups.js";
+  import { composerHint, handlesLine, mergeTurn } from "../teamGroups.js";
   import { getSystemEvent } from "../systemEvents.js";
 
   type Props = {
@@ -34,7 +35,6 @@
   let threadEl = $state<HTMLDivElement | null>(null);
 
   const hint = $derived(composerHint(group));
-  const stack = $derived(stacked(group.members));
   const byId = $derived(Object.fromEntries(group.members.map((m) => [m.id, m])));
   const typingHandles = $derived(group.members.filter((m) => typing[m.id]).map((m) => m.handle));
 
@@ -119,12 +119,7 @@
         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
       </button>
     {/if}
-    <div class="flex shrink-0 -space-x-3">
-      {#each stack.shown as m (m.id)}
-        <span class="rounded-full ring-2 ring-white-100 dark:ring-navy-800"><AgentAvatar kind={m.avatar?.kind} shape={m.avatar?.shape} expression={m.avatar?.expression} color={m.avatar?.color} size={32} asleep={m.disabled} /></span>
-      {/each}
-      {#if stack.more}<span class="flex h-8 w-8 items-center justify-center rounded-full bg-white-300 text-xs font-semibold text-black-900 ring-2 ring-white-100 dark:bg-navy-600 dark:text-white-100 dark:ring-navy-800">+{stack.more}</span>{/if}
-    </div>
+    <GroupAvatars members={group.members} size={30} />
     <div class="min-w-0 flex-1">
       <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">{group.name}</div>
       <div class="truncate text-xs text-black-800 dark:text-black-600">
