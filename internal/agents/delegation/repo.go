@@ -572,15 +572,18 @@ func (r *Repo) ReopenForContinue(ctx context.Context, d *entity.AgentDelegation)
 	res := r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
 		Where("id = ? AND status IN ?", d.ID, entity.TerminalDelegationStatuses).
 		Updates(map[string]any{
-			"status":       entity.DelegationRunning,
-			"task":         d.Task,
-			"context_text": d.ContextText,
-			"max_turns":    d.MaxTurns,
-			"max_tokens":   d.MaxTokens,
-			"mode":         d.Mode,
-			"detached":     d.Detached,
-			"result":       "",
-			"error_msg":    "",
+			"status":         entity.DelegationRunning,
+			"task":           d.Task,
+			"title":          d.Title,
+			"resumes":        d.Resumes,
+			"leg_base_turns": d.LegBaseTurns,
+			"context_text":   d.ContextText,
+			"max_turns":      d.MaxTurns,
+			"max_tokens":     d.MaxTokens,
+			"mode":           d.Mode,
+			"detached":       d.Detached,
+			"result":         "",
+			"error_msg":      "",
 			// gorm.Expr, not a plain nil: Updates with a map drops nil
 			// values, so a plain nil would leave the previous leg's end
 			// time in place and a monitor reading the row mid-continuation

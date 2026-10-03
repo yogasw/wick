@@ -489,6 +489,7 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 		ChildSessionID:  childSessionID,
 		ChildAgent:      agentName,
 		Task:            req.Task,
+		Title:           req.Task,
 		Depth:           depth,
 		Mode:            mode,
 		DeliverySink:    sink,

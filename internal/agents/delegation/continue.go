@@ -108,7 +108,14 @@ func (s *Service) Continue(ctx context.Context, req ContinueRequest) (*Result, e
 	resumable := s.childIsResumable(row)
 	priorStatus := row.Status
 
+	if row.Title == "" {
+		// A row from before Title existed: its Task is still the first
+		// leg's unless an earlier continue already reframed it.
+		row.Title = row.Task
+	}
 	row.Task = continuationTask(req.Task, priorStatus, resumable)
+	row.Resumes++
+	row.LegBaseTurns = row.TurnsUsed
 	// The caller's original `context` argument belongs to the first leg.
 	// Replaying it here would re-deliver background the sub-agent has
 	// already read and acted on.

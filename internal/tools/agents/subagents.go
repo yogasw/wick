@@ -35,8 +35,13 @@ type SubAgentItem struct {
 	// resolves to. Empty on rows written before handles existed.
 	Handle string `json:"handle,omitempty"`
 	// Label is the task, truncated for display.
-	Label  string `json:"label"`
-	Status string `json:"status"`
+	Label string `json:"label"`
+	// Title is the first leg's task (truncated); Resumes counts continues
+	// and LegBaseTurns is where the current leg's turn count started.
+	Title        string `json:"title,omitempty"`
+	Resumes      int    `json:"resumes,omitempty"`
+	LegBaseTurns int    `json:"leg_base_turns,omitempty"`
+	Status       string `json:"status"`
 	// Lifecycle is merged in from the pool's live snapshot; "" when the
 	// child has no active process. Same merge apiSessionList does, so
 	// there is only ever one source of truth for liveness.
@@ -112,6 +117,9 @@ func sessionSubAgents(c *tool.Ctx) {
 			ProfileKey:     d.ProfileKey,
 			Handle:         d.Handle,
 			Label:          truncateRunes(d.Task, subAgentLabelRunes),
+			Title:          truncateRunes(firstTaskLine(d.Title), subAgentLabelRunes),
+			Resumes:        d.Resumes,
+			LegBaseTurns:   d.LegBaseTurns,
 			Status:         d.Status,
 			Lifecycle:      lcBySession[d.ChildSessionID],
 			Depth:          d.Depth,
@@ -508,4 +516,14 @@ func resetSessionHops(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"ok": true})
+}
+
+// firstTaskLine is a task's first non-blank line: its title.
+func firstTaskLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			return l
+		}
+	}
+	return ""
 }
