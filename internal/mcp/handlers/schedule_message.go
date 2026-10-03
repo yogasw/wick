@@ -736,17 +736,18 @@ func scheduleAgentProject(r *http.Request, layout agentconfig.Layout, projectID 
 // calling principal. A nil user (stdio / tests) is treated as admin, matching
 // scheduleScope's unscoped behavior on those transports.
 func scheduleProjectAccess(r *http.Request, user *entity.User) project.Access {
-	if user == nil {
-		return project.Access{IsAdmin: true}
-	}
 	// An agent never borrows its owner's admin / see-all bypass, and is
-	// judged as its owner whatever login identity carries the call.
+	// judged as its owner whatever login identity carries the call — also
+	// when no user rides on the request, which must not read as admin.
 	if owner, ok := team.AgentOwner(r.Context()); ok {
 		acc := project.Access{UserID: owner}
-		if user.ID == owner {
+		if user != nil && user.ID == owner {
 			acc.TagIDs = login.GetUserTagIDs(r.Context())
 		}
 		return acc
+	}
+	if user == nil {
+		return project.Access{IsAdmin: true}
 	}
 	return project.Access{
 		UserID:  user.ID,
