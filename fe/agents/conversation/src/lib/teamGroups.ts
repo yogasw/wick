@@ -33,8 +33,8 @@ export function composerHint(g: Pick<GroupItem, "responder" | "max_hops">): { ro
   return {
     route: `Message the group — no @ goes to ${who}`,
     cap,
-    // The Composer caption has little room: the rule and the cap first.
-    caption: `No @ → ${who} · ${cap}`,
+    // The Composer caption fits ~30 characters: the rule and the bare cap.
+    caption: `No @ → ${who} · max ${n} turn${n === 1 ? "" : "s"}`,
   };
 }
 
