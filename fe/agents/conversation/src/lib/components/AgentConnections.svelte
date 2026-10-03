@@ -6,6 +6,7 @@
   import { Button, Toggle } from "@wick-fe/common-ui";
   import { toastOk } from "@wick-fe/common-stores";
   import DrawerHeader from "./DrawerHeader.svelte";
+  import ConnectionA2ACard from "./team/ConnectionA2ACard.svelte";
   import {
     getAgentSlack, connectAgentSlack, updateAgentSlack, disconnectAgentSlack, getAgentSlackHealth, getAgentSlackManifest, runApi,
     type AgentItem, type AgentSlackStatus, type AgentSlackHealth,
@@ -255,5 +256,6 @@
     </section>
   {/if}
 
-  <section class="rounded-xl border border-dashed border-white-300 p-4 {muted} dark:border-navy-600">A2A, Telegram and REST connections are coming later.</section>
+  <ConnectionA2ACard {base} {agent} />
+  <section class="rounded-xl border border-dashed border-white-300 p-4 {muted} dark:border-navy-600">Telegram and REST connections are coming later.</section>
 </div>
