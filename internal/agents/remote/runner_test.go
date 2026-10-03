@@ -192,7 +192,7 @@ func TestRewriteKeptForResult(t *testing.T) {
 }
 
 func TestRegistry(t *testing.T) {
-	Register(Adapter{Kind: "zz-test", Label: "Test", Listen: []ListenMode{ListenPull}})
+	Register(Adapter{Kind: "zz-test", Label: "Test", Listen: []ListenMode{ListenPull}, Schema: SchemaVersion})
 	if a, ok := Lookup("zz-test"); !ok || a.Label != "Test" {
 		t.Fatalf("lookup: %+v %v", a, ok)
 	}
@@ -203,4 +203,10 @@ func TestRegistry(t *testing.T) {
 	if !found {
 		t.Fatal("Adapters misses zz-test")
 	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Register took an adapter of another event schema")
+		}
+	}()
+	Register(Adapter{Kind: "zz-old", Label: "Old", Listen: []ListenMode{ListenPull}, Schema: SchemaVersion + 1})
 }

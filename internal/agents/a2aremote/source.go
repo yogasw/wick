@@ -13,7 +13,7 @@ const AdapterKind = "a2a"
 
 func init() {
 	remote.Register(remote.Adapter{
-		Kind: AdapterKind, Label: "A2A",
+		Kind: AdapterKind, Label: "A2A", Schema: remote.SchemaVersion,
 		// Stream first; a task that is still working after the stream (or
 		// a non-streaming send) is polled with tasks/get inside the call.
 		Listen: []remote.ListenMode{remote.ListenPush},

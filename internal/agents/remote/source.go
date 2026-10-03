@@ -9,6 +9,7 @@ package remote
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -115,6 +116,9 @@ type Adapter struct {
 	// Listen is the kind's listen modes, preferred first (plan 6.2c
 	// "Cara listen per kanal").
 	Listen []ListenMode `json:"listen"`
+	// Schema is the Event schema version the adapter emits; it must be
+	// SchemaVersion (see event.go).
+	Schema int `json:"schema"`
 }
 
 var (
@@ -122,8 +126,13 @@ var (
 	registry = map[string]Adapter{}
 )
 
-// Register adds an adapter kind; adapters call it from init.
+// Register adds an adapter kind; adapters call it from init. An adapter
+// built against another Event schema panics at start rather than feed the
+// runner events it would misread.
 func Register(a Adapter) {
+	if a.Schema != SchemaVersion {
+		panic(fmt.Sprintf("remote: adapter %q speaks event schema v%d, runner speaks v%d", a.Kind, a.Schema, SchemaVersion))
+	}
 	regMu.Lock()
 	defer regMu.Unlock()
 	registry[a.Kind] = a

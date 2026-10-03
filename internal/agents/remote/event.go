@@ -1,7 +1,10 @@
 package remote
 
-// SchemaVersion is the version of the Event schema every adapter speaks.
-// Bump it only with a change a consumer must know about.
+// SchemaVersion is the version of the Event schema every adapter speaks;
+// each adapter names it in its Adapter.Schema and Register refuses any
+// other. v1 is the EventKind set and Event fields below. Adding an
+// optional field is still v1; renaming or removing one, or changing what
+// a kind means, is v2 and every adapter moves with it.
 const SchemaVersion = 1
 
 // EventKind names what an Event carries.

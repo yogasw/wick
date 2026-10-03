@@ -14,7 +14,7 @@ import (
 
 func init() {
 	remote.Register(remote.Adapter{
-		Kind: AdapterKind, Label: "Slack",
+		Kind: AdapterKind, Label: "Slack", Schema: remote.SchemaVersion,
 		// Events wick already receives first; conversations.replies polling
 		// covers what the app cannot see (a DM sent as a user, a channel
 		// the app is not in).
