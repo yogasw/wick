@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -16,16 +17,18 @@ type PushHandler struct {
 	auth *login.Service
 	// sendTest and after are the seams the handler tests replace; they
 	// default to the service and time.AfterFunc.
-	sendTest func(ctx context.Context, userID, endpoint string) (int, error)
-	after    func(d time.Duration, f func())
+	sendTest   func(ctx context.Context, userID, endpoint string) (int, error)
+	ownsDevice func(ctx context.Context, userID, endpoint string) (bool, error)
+	after      func(d time.Duration, f func())
 }
 
 func NewPushHandler(svc *PushService, auth *login.Service) *PushHandler {
 	return &PushHandler{
 		svc:      svc,
 		auth:     auth,
-		sendTest: svc.SendTest,
-		after:    func(d time.Duration, f func()) { time.AfterFunc(d, f) },
+		sendTest:   svc.SendTest,
+		ownsDevice: svc.OwnsEndpoint,
+		after:      func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 	}
 }
 
@@ -110,6 +113,20 @@ func (h *PushHandler) test(w http.ResponseWriter, r *http.Request) {
 		DelaySeconds int    `json:"delay_seconds"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
+	// No endpoint = every device of the caller. An endpoint must be one of
+	// the caller's own devices: someone else's subscription is refused
+	// rather than silently matching nothing (or, delayed, answering 202).
+	if req.Endpoint = strings.TrimSpace(req.Endpoint); req.Endpoint != "" {
+		owned, err := h.ownsDevice(r.Context(), user.ID, req.Endpoint)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !owned {
+			http.Error(w, "device not found", http.StatusNotFound)
+			return
+		}
+	}
 	// A delay lets the user close the window first and see the OS
 	// notification land. It has to run here: a closed tab runs no JS.
 	if delay := min(max(req.DelaySeconds, 0), maxTestDelay); delay > 0 {
