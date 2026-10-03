@@ -124,6 +124,21 @@ func (s *Store) PendingAccess(ctx context.Context, approvalID string) (entity.Ag
 	return h, ch, nil
 }
 
+// AccessProposal returns the proposal behind approvalID whatever its
+// status; ErrNotPending when there is none.
+func (s *Store) AccessProposal(ctx context.Context, approvalID string) (entity.AgentAccessHistory, AccessChange, error) {
+	var h entity.AgentAccessHistory
+	var ch AccessChange
+	if approvalID == "" {
+		return h, ch, ErrNotPending
+	}
+	if err := s.db.WithContext(ctx).Where("approval_id = ?", approvalID).First(&h).Error; err != nil {
+		return h, ch, ErrNotPending
+	}
+	_ = json.Unmarshal([]byte(h.Change), &ch)
+	return h, ch, nil
+}
+
 // SettleAccess moves a pending proposal to status. Conditional on it
 // still being pending, so two clicks cannot both apply it.
 func (s *Store) SettleAccess(ctx context.Context, id, status, decidedBy string) error {

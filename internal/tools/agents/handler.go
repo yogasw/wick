@@ -357,6 +357,7 @@ func Register(r tool.Router) {
 	r.POST("/api/team/agents/{id}/chat", apiTeamAgentChat)
 	r.GET("/api/team/agents/{id}/sessions", apiTeamAgentSessions)
 	r.POST("/api/team/agents/{id}/read", apiTeamAgentRead)
+	r.GET("/api/team/agents/{id}/access-history", apiTeamAgentAccessHistory)
 	r.GET("/api/team/groups", apiTeamGroupList)
 	r.POST("/api/team/groups", apiTeamGroupCreate)
 	r.PATCH("/api/team/groups/{id}", apiTeamGroupUpdate)

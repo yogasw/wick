@@ -200,6 +200,12 @@ const KindProviderSwitch = "provider_switch"
 const (
 	KindAgentCreated      = "agent_created"
 	KindAccessChanged     = "access_changed"
+	// KindAccessChangeDeclined: the owner declined an access change the
+	// Captain proposed (agents.set_access).
+	KindAccessChangeDeclined = "access_change_declined"
+	// KindPersonaChanged: the Captain edited the agent's persona
+	// (agents.update_persona).
+	KindPersonaChanged = "persona_changed"
 	KindMentionHandoff    = "mention_handoff"
 	KindHopLimit          = "hop_limit"
 	KindRoutineFired      = "routine_fired"

@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/team"
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
@@ -166,11 +168,16 @@ func actorName(c *tool.Ctx) string {
 // connectorLabeler maps a connector id to the label the caller sees; an
 // id missing from the caller's catalog shows as itself.
 func connectorLabeler(c *tool.Ctx) func(string) string {
+	cat, _ := ownerCatalog(c)
+	return labelerOf(cat)
+}
+
+// labelerOf maps a connector id to its label in cat; an id missing from
+// cat shows as itself.
+func labelerOf(cat []connectors.CatalogEntry) func(string) string {
 	labels := map[string]string{}
-	if cat, err := ownerCatalog(c); err == nil {
-		for _, e := range cat {
-			labels[e.Row.ID] = e.Row.Label
-		}
+	for _, e := range cat {
+		labels[e.Row.ID] = e.Row.Label
 	}
 	return func(id string) string {
 		if l := labels[id]; l != "" {
@@ -241,6 +248,20 @@ func announceAgentCreated(c *tool.Ctx, p entity.AgentPersona, name, how string) 
 // left access as it was (the drawer autosaves every field).
 func announceAccessChanged(c *tool.Ctx, before, after entity.AgentPersona) {
 	label := connectorLabeler(c)
+	changes := accessChangeList(before, after, label)
+	if len(changes) == 0 {
+		return
+	}
+	who := actorName(c)
+	recordAccessHistory(c.Context(), &entity.AgentAccessHistory{
+		AgentID: after.ID, OwnerUserID: after.OwnerUserID, Actor: who, Status: team.AccessApplied,
+	}, team.AccessChange{Diff: changes})
+	emitAccessChanged(after, changes, who, "", label)
+}
+
+// accessChangeList is what moved between two saves of an agent's access:
+// grants, the include-new switch and the run-as identity.
+func accessChangeList(before, after entity.AgentPersona, label func(string) string) []string {
 	changes := grantsDiff(team.DecodeGrants(before.AllowedConnectors), team.DecodeGrants(after.AllowedConnectors), label)
 	if before.IncludeNewConnectors != after.IncludeNewConnectors {
 		if after.IncludeNewConnectors {
@@ -252,21 +273,37 @@ func announceAccessChanged(c *tool.Ctx, before, after entity.AgentPersona) {
 	if before.RunAs != after.RunAs {
 		changes = append(changes, "runs as: "+after.RunAs)
 	}
-	if len(changes) == 0 {
-		return
-	}
+	return changes
+}
+
+// emitAccessChanged records access_changed in the agent's main chat.
+// approvedBy is set when the change was a Captain's proposal the owner
+// accepted.
+func emitAccessChanged(after entity.AgentPersona, changes []string, who, approvedBy string, label func(string) string) {
 	s, ok := mainSessionOf(after.OwnerUserID, after.ID)
 	if !ok {
 		return
 	}
-	who := actorName(c)
 	summary := strings.Join(changes, ", ")
 	text := fmt.Sprintf("Access of @%s changed: %s", after.Handle, summary)
 	if who != "" {
 		text += " · by " + who
 	}
+	if approvedBy != "" {
+		text += " · approved by " + approvedBy
+	}
 	emitSystemEvent(s.ID, store.KindAccessChanged, text, map[string]string{
-		"agent_id": after.ID, "handle": after.Handle, "changed_by": who,
+		"agent_id": after.ID, "handle": after.Handle, "changed_by": who, "approved_by": approvedBy,
 		"changes": summary, "grants_summary": grantsSummary(team.DecodeGrants(after.AllowedConnectors), label),
 	})
+}
+
+// recordAccessHistory writes one audit row; best-effort, like the chip.
+func recordAccessHistory(ctx context.Context, h *entity.AgentAccessHistory, ch team.AccessChange) {
+	if globalTeam == nil {
+		return
+	}
+	if err := globalTeam.RecordAccess(ctx, h, ch); err != nil {
+		log.Warn().Err(err).Str("agent", h.AgentID).Msg("agents: access history write failed")
+	}
 }

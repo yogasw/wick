@@ -189,7 +189,7 @@ type approvalDecisionReq struct {
 // pending in the session the route names, so a session the caller can
 // open is the only one whose prompts they can answer.
 func sessionApprovalDecision(c *tool.Ctx) {
-	if notReady(c) || notReadyApprovals(c) {
+	if notReady(c) {
 		return
 	}
 	sessionID, approvalID := c.PathValue("id"), c.PathValue("approvalID")
@@ -206,6 +206,13 @@ func sessionApprovalDecision(c *tool.Ctx) {
 	decision, ok := gateDecision(req.Decision)
 	if !ok {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "decision must be accept | accept_for_session | decline"})
+		return
+	}
+	// A Captain's access proposal is decided here, not by the gate.
+	if resolveAccessApproval(c, sessionID, approvalID, decision) {
+		return
+	}
+	if notReadyApprovals(c) {
 		return
 	}
 	pr, ok := approvalCards.lookup(sessionID, approvalID)

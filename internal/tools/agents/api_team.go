@@ -71,7 +71,12 @@ type TeamAgentItem struct {
 	// system_prompt_team (on for agents converted from a project).
 	UseGlobalPrompt bool `json:"use_global_prompt"`
 	// AllowProviderSwitch is the effective value (default applied).
-	AllowProviderSwitch bool       `json:"allow_provider_switch"`
+	AllowProviderSwitch bool `json:"allow_provider_switch"`
+	// ManageAgents is the effective "Manage other agents" permission
+	// (on for the Captain unless switched off); CaptainCan is what the
+	// Captain may do to this agent. See team.ManagesAgents.
+	ManageAgents        bool            `json:"manage_agents"`
+	CaptainCan          team.CaptainCan `json:"captain_can"`
 	MainSessionID       string     `json:"main_session_id"`
 	LastActive          *time.Time `json:"last_active"`
 	LastPreview         string     `json:"last_preview"`
@@ -158,6 +163,8 @@ type teamAgentWriteReq struct {
 	MentionFrom          *string                `json:"mention_from"`
 	MentionAllow         *[]string              `json:"mention_allow"`
 	MaxHops              *int                   `json:"max_hops"`
+	ManageAgents         *bool                  `json:"manage_agents"`
+	CaptainCan           *team.CaptainCan       `json:"captain_can"`
 	// Convert (create only, with ProjectID) turns an ordinary project
 	// into this agent's own: the project gets the Team tag, so it leaves
 	// the sidebar and lives on in the Team app. See checkConvertProject.
@@ -567,6 +574,8 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		MaxHops:              teamlink.EffectiveHops(p.MaxHops),
 		UseGlobalPrompt:      p.UseGlobalPrompt,
 		AllowProviderSwitch:  team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain),
+		ManageAgents:         team.ManagesAgents(p),
+		CaptainCan:           team.DecodeCaptainCan(p.CaptainCan),
 		Status:               string(session.StatusIdle),
 	}
 	if p.ProjectID != "" {
@@ -738,12 +747,18 @@ func stampProjectSessions(c *tool.Ctx, pid, agentID string) int {
 
 // createTeamAgentProject makes the project a new agent's persona lives in.
 func createTeamAgentProject(c *tool.Ctx, name, icon, description, systemPrompt, provider, model, preset string) (string, error) {
+	return createAgentProjectFor(c.Context(), actorID(c), name, icon, description, systemPrompt, provider, model, preset)
+}
+
+// createAgentProjectFor is createTeamAgentProject for an owner named
+// outright — the Captain's agents.create has no HTTP request.
+func createAgentProjectFor(ctx context.Context, owner, name, icon, description, systemPrompt, provider, model, preset string) (string, error) {
 	opt := project.CreateOptions{
 		ID:          uuid.New().String(),
 		Name:        name,
 		Icon:        strings.TrimSpace(icon),
 		Description: description,
-		OwnerUserID: actorID(c),
+		OwnerUserID: owner,
 		Tags:        []string{project.AgentTag},
 		Defaults: project.Defaults{
 			Provider:    strings.TrimSpace(provider),
@@ -752,11 +767,11 @@ func createTeamAgentProject(c *tool.Ctx, name, icon, description, systemPrompt, 
 			SystemAddon: systemPrompt,
 		},
 	}
-	if _, err := globalMgr.CreateProject(c.Context(), opt); err != nil {
+	if _, err := globalMgr.CreateProject(ctx, opt); err != nil {
 		return "", err
 	}
 	if globalTagsSvc != nil {
-		_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), opt.ID, actorID(c))
+		_ = globalTagsSvc.CreateResourceOwnerTag(ctx, opt.ID, owner)
 	}
 	return opt.ID, nil
 }
@@ -1038,6 +1053,13 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	}
 	if req.Avatar != nil {
 		p.Avatar = team.EncodeAvatar(*req.Avatar)
+	}
+	if req.ManageAgents != nil {
+		v := *req.ManageAgents
+		p.ManageAgents = &v
+	}
+	if req.CaptainCan != nil {
+		p.CaptainCan = team.EncodeCaptainCan(*req.CaptainCan)
 	}
 	if req.IsCaptain != nil {
 		// Captaincy moves by promoting another agent; un-ticking the
@@ -1333,4 +1355,41 @@ func validateTeamHandle(ctx context.Context, handle string) error {
 		}
 	}
 	return nil
+}
+
+// teamAccessHistoryItem is one row of Settings › Access › History.
+type teamAccessHistoryItem struct {
+	ID        string    `json:"id"`
+	Actor     string    `json:"actor"`
+	Status    string    `json:"status"`
+	Diff      []string  `json:"diff"`
+	DecidedBy string    `json:"decided_by,omitempty"`
+	At        time.Time `json:"at"`
+}
+
+// apiTeamAgentAccessHistory handles GET /api/team/agents/{id}/access-history:
+// the agent's latest access changes, newest first.
+func apiTeamAgentAccessHistory(c *tool.Ctx) {
+	if !teamReady(c) {
+		return
+	}
+	p, ok := loadOwnTeamAgent(c)
+	if !ok {
+		return
+	}
+	rows, err := globalTeam.AccessHistory(c.Context(), p.ID, team.HistoryLimit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	out := make([]teamAccessHistoryItem, 0, len(rows))
+	for _, r := range rows {
+		var ch team.AccessChange
+		_ = json.Unmarshal([]byte(r.Change), &ch)
+		if ch.Diff == nil {
+			ch.Diff = []string{}
+		}
+		out = append(out, teamAccessHistoryItem{ID: r.ID, Actor: r.Actor, Status: r.Status, Diff: ch.Diff, DecidedBy: r.DecidedBy, At: r.At})
+	}
+	c.JSON(http.StatusOK, map[string]any{"items": out})
 }

@@ -82,6 +82,7 @@ import (
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	sourceconn "github.com/yogasw/wick/internal/connectors/source"
 	subagents "github.com/yogasw/wick/internal/connectors/sub-agents"
+	teamagentsconn "github.com/yogasw/wick/internal/connectors/team-agents"
 	teamlinkconn "github.com/yogasw/wick/internal/connectors/team-link"
 	ticketconn "github.com/yogasw/wick/internal/connectors/tickets"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
@@ -1508,13 +1509,17 @@ func NewServer() *Server {
 	connectorsSvc.SetMetrics(metricsRec)
 	// An agent's tier defaults and "include new connectors" toggle reach
 	// only what its owner's own catalog lists — not the triggering user's.
-	teamSvc.SetOwnerReach(func(ctx context.Context, userID string) (team.Reach, error) {
+	ownerCatalog := func(ctx context.Context, userID string) ([]connectors.CatalogEntry, error) {
 		u, err := authSvc.GetUserByID(ctx, userID)
 		if err != nil {
 			return nil, err
 		}
 		ctx = connectors.WithoutAgentScope(ctx)
-		cat, err := connectorsSvc.AgentCatalog(ctx, userID, authSvc.GetUserFilterTagIDs(ctx, userID), u.IsAdmin())
+		return connectorsSvc.AgentCatalog(ctx, userID, authSvc.GetUserFilterTagIDs(ctx, userID), u.IsAdmin())
+	}
+	teamSvc.SetOwnerCatalog(ownerCatalog)
+	teamSvc.SetOwnerReach(func(ctx context.Context, userID string) (team.Reach, error) {
+		cat, err := ownerCatalog(ctx, userID)
 		if err != nil {
 			return nil, err
 		}
@@ -1718,6 +1723,7 @@ func NewServer() *Server {
 		return teamHub
 	}
 	connectors.Register(teamlinkconn.Module(teamlinkconn.Deps{Hub: hub, AgentOf: agentstool.TeamAgentOf}))
+	connectors.Register(teamagentsconn.Module(teamagentsconn.Deps{Ops: agentstool.TeamAgentOps}))
 	agentstool.SetTeamHub(hub)
 	// team_* tools only in a Team agent's session with a reachable teammate.
 	mcphandlers.TeamToolsVisible = func(ctx context.Context, sessionID string) bool {
