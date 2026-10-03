@@ -49,7 +49,10 @@
       {#each BLOB_EXPRESSIONS as e (e)}
         <button type="button" class={tileClass(look.expression === e)} aria-label={e} title={e} aria-pressed={look.expression === e} onclick={() => set({ expression: e })}>
           <BlobAvatar shape={look.shape} expression={e} color={look.color} size={tile} />
-          {#if !compact}<span class="mt-0.5 max-w-full truncate text-[10px] text-black-800 dark:text-black-600">{e}</span>{/if}
+          <!-- Labelled in both sizes: a face alone does not say "thinking" from
+               "focused", and the compact wizard picker read as unlabelled
+               next to Settings. -->
+          <span class="mt-0.5 max-w-full truncate text-[10px] text-black-800 dark:text-black-600" style:line-height="12px">{e}</span>
         </button>
       {/each}
     </div>
