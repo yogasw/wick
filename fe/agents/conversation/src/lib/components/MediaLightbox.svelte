@@ -1,5 +1,6 @@
 <script lang="ts">
   import { renderMarkdown } from "../markdown.js";
+  import { pushLayer } from "@wick-fe/common-ui";
   import { buildArtifactSrcdoc, artifactSandbox } from "../richRender.js";
 
   type Item = {
@@ -135,10 +136,12 @@
   /* Keyboard: Esc closes, +/-/0 zoom (image only), arrows page the gallery. */
   $effect(() => {
     if (!item) return;
+    // Escape goes through the shared layer stack, so it closes the preview
+    // and not also the panel or modal it was opened from.
+    const release = pushLayer(null, { onEscape: () => onClose(), focus: false });
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
+        return;
       } else if (e.key === "ArrowRight" && many) {
         e.preventDefault();
         go(1);
@@ -154,7 +157,10 @@
       }
     }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      release();
+    };
   });
 </script>
 

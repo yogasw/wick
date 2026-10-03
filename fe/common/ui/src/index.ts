@@ -122,3 +122,5 @@ export { setTraceHighlighter } from "./trace/highlight.js";
 export { humanBytes } from "./trace/format.js";
 export type { TraceDisplay, TraceContext, TraceMedia } from "./trace/types.js";
 export { isBinaryKind } from "./trace/types.js";
+export { pushLayer, layer, topLayerNode, layerDepth } from "./layers.js";
+export type { LayerOptions } from "./layers.js";

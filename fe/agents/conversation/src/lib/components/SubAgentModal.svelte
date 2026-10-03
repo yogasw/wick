@@ -18,6 +18,7 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastError } from "@wick-fe/common-stores";
+  import { layer } from "@wick-fe/common-ui";
   import {
     Composer,
     budgetText,
@@ -266,12 +267,6 @@
     if (index < stack.length - 1) stack = stack.slice(0, index + 1);
   }
 
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      back();
-    }
-  }
 
   /* ── actions ────────────────────────────────────────────────────── */
   function stop() {
@@ -319,7 +314,6 @@
   );
 </script>
 
-<svelte:window on:keydown={onKeydown} />
 
 {#if current}
   <div
@@ -335,8 +329,9 @@
       aria-modal="true"
       aria-label={`Sub-agent ${current.profile_key}`}
       tabindex="-1"
+      use:layer={{ onEscape: back }}
       onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
+      onkeydown={(e) => { if (e.key !== "Escape") e.stopPropagation(); }}
     >
       <!-- header: breadcrumb + status + actions -->
       <div class="flex items-center gap-2 border-b border-white-300 dark:border-navy-600 px-4 py-3">

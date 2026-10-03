@@ -23,6 +23,7 @@
      that looks like one: without them a keyboard lands behind the dialog,
      and closing drops the reader wherever the page happened to scroll to. */
   import type { Snippet } from "svelte";
+  import { pushLayer } from "./layers.js";
 
   type Size = "sm" | "md" | "lg" | "xl" | "2xl";
   type Props = {
@@ -58,15 +59,6 @@
     "2xl": "max-w-6xl",
   };
 
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key !== "Escape" || !open) return;
-    // Only the innermost dialog closes. A modal that has just been opened by
-    // this very keypress is not on the stack yet, which is exactly right: it
-    // did not exist when the key went down.
-    if (stack[stack.length - 1] !== token) return;
-    onClose();
-  }
-
   // The panel itself, so opening can move focus into it.
   let panel = $state<HTMLElement | null>(null);
   // Bookkeeping for the effect below — plain lets, since nothing renders from
@@ -74,8 +66,13 @@
   let returnTo: HTMLElement | null = null;
   let wasOpen = false;
   let token = 0;
+  // Escape and focus belong to the shared layer stack, so a Modal over the
+  // side panel (or over another overlay) closes alone — see layers.ts.
+  let releaseLayer: (() => void) | null = null;
 
   function leave(): void {
+    releaseLayer?.();
+    releaseLayer = null;
     stack = stack.filter((t) => t !== token);
     if (stack.length === 0) document.body.style.overflow = "";
   }
@@ -90,6 +87,7 @@
       panel?.focus();
       token = ++seq;
       stack.push(token);
+      releaseLayer = pushLayer(panel, { onEscape: () => onClose(), focus: false });
       document.body.style.overflow = "hidden";
       return;
     }
@@ -106,10 +104,8 @@
   });
 </script>
 
-<svelte:window onkeydown={onKeydown} />
-
 {#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events -- backdrop click is an enhancement; Escape (svelte:window) is the keyboard close path -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -- backdrop click is an enhancement; Escape (layers.ts) is the keyboard close path -->
   <div
     class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black-900/40 dark:bg-navy-900/60 backdrop-blur-sm"
     role="presentation"

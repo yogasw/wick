@@ -214,3 +214,26 @@ describe("SubAgentModal", () => {
     expect(calls.stopped).toEqual(["d1"]);
   });
 });
+
+// Escape used to die on the dialog's own stopPropagation, so the modal could
+// not be closed from the keyboard at all. It is a layer now (layers.ts).
+describe("SubAgentModal — Escape", () => {
+  test("Escape closes the modal, also from the follow-up composer", async () => {
+    replies.set("conversation:root--sub-9f2c81ab40de", { turns: [turn("done")] });
+    const p = props();
+    render(SubAgentModal, { props: p });
+    const box = await screen.findByPlaceholderText(/follow-up/i);
+    box.focus();
+    await fireEvent.keyDown(box, { key: "Escape" });
+    expect(p.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("Escape with nothing focused closes it too", async () => {
+    replies.set("conversation:root--sub-9f2c81ab40de", { turns: [turn("done")] });
+    const p = props();
+    render(SubAgentModal, { props: p });
+    await screen.findByPlaceholderText(/follow-up/i);
+    await fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    expect(p.onClose).toHaveBeenCalledTimes(1);
+  });
+});

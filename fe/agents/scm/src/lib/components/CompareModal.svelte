@@ -13,7 +13,7 @@
   import CompareTreeNode from "$lib/components/CompareTreeNode.svelte";
   import { splitPath } from "$lib/tree";
   import { byPath, compareTree, statsByPath, visibleFiles } from "$lib/compare-tree";
-  import { ConfirmDialog } from "@wick-fe/common-ui";
+  import { ConfirmDialog, layer } from "@wick-fe/common-ui";
   import * as api from "$lib/api/scm";
   import type { HistoryRef } from "$lib/api/scm";
   import { sessionID, activeRepo, branch } from "$lib/stores/scm";
@@ -266,15 +266,15 @@
     listEl?.querySelector(sel)?.scrollIntoView({ block: "nearest" });
   }
 
+  // One step per Escape, so it never skips one: an open picker or menu
+  // closes first. A confirm dialog is its own layer on top and owns the key.
+  function onEscape() {
+    if (picker) picker = null;
+    else if (resetMenu) resetMenu = false;
+    else onClose();
+  }
+
   function onKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      // One layer per press, so Escape never skips a step: an open picker
-      // or menu closes first, and a confirm dialog owns the key entirely.
-      if (picker) picker = null;
-      else if (resetMenu) resetMenu = false;
-      else if (!ask) onClose();
-      return;
-    }
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     if (picker || resetMenu || ask) return;
     const t = e.target as HTMLElement | null;
@@ -382,7 +382,7 @@
     "flex min-w-0 max-w-[16rem] items-center gap-1 rounded border border-white-300 dark:border-navy-600 px-2 py-1 text-[11px] text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors";
 </script>
 
-<!-- Escape closes and ↑/↓ walk the file list — see onKeydown. -->
+<!-- ↑/↓ walk the file list — see onKeydown. Escape is the layer's (onEscape). -->
 <svelte:window onkeydown={onKeydown} />
 
 {#snippet refPicker(side: "base" | "head", value: string)}
@@ -433,6 +433,7 @@
 
 <div
   use:portal
+  use:layer={{ onEscape, focus: false }}
   style="z-index:9999"
   class="fixed inset-0 flex items-stretch justify-center bg-black/60 backdrop-blur-sm sm:p-4"
   role="presentation"
