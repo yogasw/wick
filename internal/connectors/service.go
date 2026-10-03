@@ -1738,6 +1738,22 @@ type ExecuteResult struct {
 	LatencyMs    int
 }
 
+// baseAllowsOp reports whether scope permits op on any row of the base
+// connector key a session-workspace instance clones. Grants name rows,
+// not keys, so the instance inherits the widest grant among them.
+func (s *Service) baseAllowsOp(ctx context.Context, scope AgentScope, key string, op *connector.Operation) (bool, error) {
+	rows, err := s.repo.ListByKey(ctx, key)
+	if err != nil {
+		return false, fmt.Errorf("resolve base connector: %w", err)
+	}
+	for _, r := range rows {
+		if scope.AllowConnector(r.ID) && scope.AllowOp(r.ID, op.Key, op.Destructive) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Execute runs one operation against one connector row, logging a
 // ConnectorRun with the request, response, latency, and IP/UA.
 //
@@ -1840,8 +1856,19 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	}
 
 	// Agent checklist: the instance, the identity it runs as, and the op
-	// must all be on it. Session-workspace instances are scoped by their
-	// session instead and are not part of any checklist.
+	// must all be on it. A session-workspace instance is no checklist
+	// entry of its own; it runs with what the checklist grants the base
+	// connector it clones, so a session instance is no way around a
+	// "read only" grant.
+	if scope := AgentScopeFrom(ctx); scope != nil && virtual {
+		ok, err := s.baseAllowsOp(ctx, scope, c.Key, op)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("operation %q is not allowed for this agent on a %q session instance", op.Key, c.Key)
+		}
+	}
 	if scope := AgentScopeFrom(ctx); scope != nil && !virtual {
 		if !scope.AllowConnector(c.ID) {
 			return nil, fmt.Errorf("connector %q is not in this agent's access list", c.ID)

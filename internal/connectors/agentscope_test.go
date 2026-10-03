@@ -104,4 +104,30 @@ func TestServiceHonoursAgentScope(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "as that account")
 	})
+
+	t.Run("Session instance follows the base connector's grant", func(t *testing.T) {
+		virt := func(op string) ExecuteParams {
+			return ExecuteParams{
+				ConnectorID:     "sw_agent-instance",
+				OperationKey:    op,
+				Input:           map[string]string{"v": "x"},
+				Source:          entity.ConnectorRunSourceTest,
+				UserID:          "user-1",
+				IsAdmin:         true,
+				SessionInstance: &SessionInstanceTarget{BaseKey: "acl-stub", Label: "Stub (session)"},
+			}
+		}
+		_, err := svc.Execute(readOnly, virt("read"))
+		require.NoError(t, err)
+		_, err = svc.Execute(readOnly, virt("write"))
+		require.Error(t, err, "read-only grant on the base must cover its session instances")
+		assert.Contains(t, err.Error(), "session instance")
+		_, err = svc.Execute(elsewhere, virt("read"))
+		require.Error(t, err, "a base off the checklist grants its instances nothing")
+		full := WithAgentScope(bg, stubScope{conn: id, allDestructive: true})
+		_, err = svc.Execute(full, virt("write"))
+		require.NoError(t, err)
+		_, err = svc.Execute(bg, virt("write"))
+		require.NoError(t, err, "outside an agent session instances are unscoped")
+	})
 }
