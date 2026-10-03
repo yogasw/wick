@@ -72,7 +72,11 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 				e.fail(ctx, ec, yield, ErrUnknownHandle)
 				return
 			}
-			text = Frame(from, text)
+			// A remote agent gets the mention text alone: the frame names
+			// a local agent, which is not the remote's business.
+			if !target.Remote {
+				text = Frame(from, text)
+			}
 		}
 
 		var session string

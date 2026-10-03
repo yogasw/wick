@@ -83,6 +83,9 @@ var (
 	// ErrMentionsOff refuses a turn the target's mention setting does not
 	// take from the caller (Peer.AcceptsFrom).
 	ErrMentionsOff = errors.New("that agent does not take turns from you — tell the user instead")
+	// ErrRemoteOwnerOnly refuses an agent's turn for an A2A remote agent
+	// whose owner keeps it to themselves (usage "only_me").
+	ErrRemoteOwnerOnly = errors.New("that agent is an A2A remote agent only its owner may use — tell the user instead")
 )
 
 // Peer is one Team agent as the registry sees it.
@@ -95,6 +98,11 @@ type Peer struct {
 	MentionFrom  string
 	MentionAllow []string
 	MaxHops      int
+	// Remote marks an A2A remote agent (package a2aremote): its turn goes
+	// out of wick, so it gets only the mention text, without the framing
+	// that names the sender. RemoteOwnerOnly refuses every agent's turn
+	// (usage "only_me"); a person's mention still goes through.
+	Remote, RemoteOwnerOnly bool
 }
 
 // Label is how a peer is named in framing and replies.
@@ -379,6 +387,9 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	// target's consent.
 	if err == nil && !in.Human && !target.AcceptsFrom(caller) {
 		err = ErrMentionsOff
+		if target.Remote && target.RemoteOwnerOnly {
+			err = ErrRemoteOwnerOnly
+		}
 	}
 	if err != nil {
 		if in.Mention {

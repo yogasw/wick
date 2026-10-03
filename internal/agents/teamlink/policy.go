@@ -70,6 +70,9 @@ func MinHops(peers ...Peer) int {
 // AcceptsFrom reports whether p takes a turn handed over by caller (an
 // agent, never a person).
 func (p Peer) AcceptsFrom(caller Peer) bool {
+	if p.Remote && p.RemoteOwnerOnly {
+		return false
+	}
 	switch NormalizeMentionFrom(p.MentionFrom) {
 	case MentionOff:
 		return false

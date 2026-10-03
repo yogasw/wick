@@ -386,3 +386,30 @@ func TestRefusalsReachNotifier(t *testing.T) {
 		t.Fatalf("hop limit = %+v", r)
 	}
 }
+
+// TestRemotePeer: an A2A remote agent gets the mention text without the
+// frame, and one kept to its owner refuses agents but not a person.
+func TestRemotePeer(t *testing.T) {
+	h, turns, _ := newTestHub(func(Peer, string) string { return "ok" })
+	d := h.Dir.(*fakeDir)
+	d.peers = append(d.peers,
+		Peer{ID: "a-res", OwnerID: "u1", Handle: "research", Name: "Research", Remote: true},
+		Peer{ID: "a-priv", OwnerID: "u1", Handle: "private", Name: "Private", Remote: true, RemoteOwnerOnly: true},
+	)
+	ctx := context.Background()
+	if _, err := h.Send(ctx, SendInput{CallerSession: "s", CallerAgentID: "a-cap", To: "research", Text: "summarise RFC 9110"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := turns.seen[0]; got != "research <- summarise RFC 9110" {
+		t.Fatalf("remote got %q", got)
+	}
+	if _, err := h.Send(ctx, SendInput{CallerSession: "s", CallerAgentID: "a-cap", To: "private", Text: "hi", Mention: true}); !errors.Is(err, ErrRemoteOwnerOnly) {
+		t.Fatalf("owner-only remote: %v", err)
+	}
+	if _, err := h.Send(ctx, SendInput{CallerSession: "s", CallerAgentID: "a-cap", To: "private", Text: "hi", Human: true}); err != nil {
+		t.Fatalf("person's mention refused: %v", err)
+	}
+	if (Peer{Remote: true, RemoteOwnerOnly: true}).AcceptsFrom(Peer{IsCaptain: true}) {
+		t.Fatal("AcceptsFrom let an agent reach an owner-only remote")
+	}
+}

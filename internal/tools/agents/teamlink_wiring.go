@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/yogasw/wick/internal/agents/a2aremote"
 	"net/http"
 	"strings"
 	"time"
@@ -83,7 +84,21 @@ func (d teamDirectory) peer(p entity.AgentPersona) teamlink.Peer {
 		IsCaptain: p.IsCaptain, Disabled: p.Disabled,
 		MentionFrom: teamlink.NormalizeMentionFrom(p.MentionFrom), MentionAllow: decodeIDList(p.MentionAllow),
 		MaxHops: p.MaxHops,
+		Remote:  IsRemoteAgent(p), RemoteOwnerOnly: remoteOwnerOnly(p),
 	}
+}
+
+// remoteOwnerOnly reports whether p is a remote agent its owner keeps to
+// themselves. Missing or unreadable settings count as owner-only.
+func remoteOwnerOnly(p entity.AgentPersona) bool {
+	if !IsRemoteAgent(p) {
+		return false
+	}
+	if remoteStore() == nil {
+		return true
+	}
+	cfg, ok, err := remoteStore().Load(p.ID)
+	return err != nil || !ok || cfg.EffectiveUsage() != a2aremote.UsageMeAndAgents
 }
 
 func (d teamDirectory) Peers(ctx context.Context, ownerID string) ([]teamlink.Peer, error) {
