@@ -306,12 +306,15 @@ func apiSessionConversation(c *tool.Ctx) {
 	resolveLabelFromTurns(globalLayout, id, turns)
 	backfillTurnIDs(turns)
 	stampSpeakers(turns, sessionSpeaker(c, id))
+	cards := actionCardStates(turns)
 	limit, _ := strconv.Atoi(c.Query("limit"))
 	page, hasMore := pageTurns(turns, c.Query("before"), limit)
 	if cwd, err := resolveSessionCwd(sess); err == nil {
 		attachArtifactsToTurns(globalLayout, id, c.Base(), cwd, page)
 	}
-	c.JSON(http.StatusOK, map[string]any{"turns": page, "has_more": hasMore})
+	// Card state needs the whole thread (a click may sit pages after its
+	// card), so it is worked out before paging trims anything.
+	c.JSON(http.StatusOK, map[string]any{"turns": page, "has_more": hasMore, "cards": cards})
 }
 
 // apiSessionMeta handles GET /api/sessions/{id}/meta and returns the
