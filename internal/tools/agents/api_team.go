@@ -1168,6 +1168,7 @@ func apiTeamAgentDelete(c *tool.Ctx) {
 		return
 	}
 	removeAgentSlack(p.ID)
+	removeAgentSlackInstant(p.ID)
 	removeAgentRemote(p)
 	// Before the project goes: the scope is read from the live sessions.
 	deleteAgentSchedules(c.Context(), p)

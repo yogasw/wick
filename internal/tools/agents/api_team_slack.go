@@ -304,6 +304,10 @@ func apiTeamAgentSlackConnect(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "HTTP mode needs the signing secret"})
 		return
 	}
+	if _, _, instant, err := instantRow(globalDB, p.ID); err == nil && instant {
+		c.JSON(http.StatusConflict, map[string]string{"error": "this agent answers through the shared Slack app (Instant mode) — turn that off before connecting its own app"})
+		return
+	}
 	botID, botUserID, botName, teamName, err := slackBotIdentity(secrets["bot_token"])
 	if err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "Slack rejected the bot token: " + err.Error()})
@@ -538,6 +542,9 @@ func syncAgentSlack(ctx context.Context, p entity.AgentPersona) {
 // RegisterAgentSlackInstances adds every enabled agent's bot to the
 // registry at boot, before the server wires and starts the channels.
 func RegisterAgentSlackInstances(ctx context.Context) {
+	// Instant agents ride the shared instances; every Slack instance asks
+	// this router which agent answers a message.
+	agentslack.SetPersonaRouter(instantRouter{})
 	if globalChannels == nil || globalDB == nil || globalTeam == nil {
 		return
 	}
