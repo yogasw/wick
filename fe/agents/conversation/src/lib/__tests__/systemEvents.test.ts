@@ -5,6 +5,8 @@ describe("system event registry", () => {
   test("known kinds have their own icon; unknown kinds fall back to the server text", () => {
     expect(getSystemEvent("agent_created").icon).toBe("user-plus");
     expect(getSystemEvent("hop_limit").tone).toBe("warn");
+    expect(getSystemEvent("scheduled_fired").icon).toBe("clock");
+    expect(getSystemEvent("routine_fired").icon).toBe("clock");
     expect(isSystemEventKind("access_changed")).toBe(true);
     expect(isSystemEventKind("persona_changed")).toBe(true);
     expect(isSystemEventKind("access_change_declined")).toBe(true);

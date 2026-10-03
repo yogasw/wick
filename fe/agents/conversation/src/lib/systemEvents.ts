@@ -70,6 +70,8 @@ registerSystemEvent("hop_limit", { icon: "stop", tone: "warn" });
 registerSystemEvent("mention_refused", { icon: "ban", tone: "warn" });
 registerSystemEvent("group_member_added", { icon: "user-plus" });
 registerSystemEvent("group_member_removed", { icon: "ban" });
+registerSystemEvent("scheduled_fired", { icon: "clock" });
+// The old name of scheduled_fired, still in stored history.
 registerSystemEvent("routine_fired", { icon: "clock" });
 registerSystemEvent("connection_changed", { icon: "plug" });
 registerSystemEvent("a2a_context", { icon: "link" });
