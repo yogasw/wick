@@ -122,6 +122,11 @@ func BuildSelfToolManifest(tm ToolModule, signKeyPath string) (Manifest, error) 
 // this package, such as toolplugin.ServeTool.
 func ApplyRlimits() { applyRlimits() }
 
+// GRPCServer is the go-plugin GRPCServer factory every wick plugin kind
+// serves with (raised message limits). Setting it is also what makes
+// go-plugin speak gRPC instead of net/rpc.
+func GRPCServer(opts []grpc.ServerOption) *grpc.Server { return grpcServerWithLimits(opts) }
+
 // ── host side ──────────────────────────────────────────────────────────
 
 // ToolConn is the host-facing control surface of a running tool plugin.

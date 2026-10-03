@@ -201,6 +201,7 @@ func ServeTool(mod tool.Module, opts ...Option) {
 		VersionedPlugins: map[int]goplugin.PluginSet{
 			wickplugin.ProtoVersion: {wickplugin.ToolPluginName: &wickplugin.ToolGRPCPlugin{Impl: &toolServer{schema: schema, cfg: store}}},
 		},
+		GRPCServer: wickplugin.GRPCServer,
 	})
 	_ = os.Remove(sock)
 }
