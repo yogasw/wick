@@ -243,7 +243,7 @@
 
   // Features now governed by Access (Platform/System rows); the Tools tab
   // keeps panel-only switches.
-  const ACCESS_FEATURES: (keyof AgentFeatures)[] = ["source", "schedule", "subagents", "notes", "tickets"];
+  const ACCESS_FEATURES: (keyof AgentFeatures)[] = ["source", "schedule", "subagents", "notes", "tickets", "browser"];
   const TABS: { id: SettingsTab; label: string }[] = [
     { id: "persona", label: "Persona" },
     { id: "access", label: "Access" },
@@ -263,19 +263,6 @@
   bordered={false}
   {onClose}
 />
-
-<div class="flex shrink-0 items-center justify-end gap-2 px-6 pb-2 text-xs" aria-live="polite">
-  {#if status === "saving" || (dirty && handleOk && JSON.stringify(patch) !== failedKey)}
-    <span class="text-black-800 dark:text-black-600">Saving…</span>
-  {:else if status === "error"}
-    <span class="text-neg-400">Not saved</span>
-    <button type="button" class="font-medium text-green-600 hover:underline" onclick={retry}>Retry</button>
-  {:else if !handleOk}
-    <span class="text-neg-400">Not saved — fix the handle</span>
-  {:else if status === "saved"}
-    <span class="text-black-800 dark:text-black-600">✓ Saved</span>
-  {/if}
-</div>
 
 <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-white-300 px-6 pb-3 dark:border-navy-600" role="tablist">
   {#each TABS as t (t.id)}
@@ -337,12 +324,12 @@
     </div>
   {:else if tab === "access"}
     <p class="text-xs text-black-800 dark:text-black-600">
-      Connectors <b>you</b> can use. Check the ones this agent may use; an agent never
-      gets more than your own access.
+      Connectors are off until you add them. Platform tools are on for every agent; System
+      tools are for the Captain. An agent never gets more than your own access.
     </p>
     {#if pruned > 0}
       <p class="text-xs text-black-800 dark:text-black-600">
-        {pruned} old grant{pruned === 1 ? "" : "s"} you can no longer use {pruned === 1 ? "was" : "were"} removed from the list — save to apply.
+        {pruned} old grant{pruned === 1 ? "" : "s"} you can no longer use {pruned === 1 ? "was" : "were"} removed from the list.
       </p>
     {/if}
     <ConnectorChecklist
@@ -358,7 +345,7 @@
   {:else if tab === "tools"}
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Tools &amp; features</p>
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Panels of the agent's chat. Notes, Tickets, Source, Schedule and Sub-agents are switched in Access › Platform / System; the Browser is a connector in Access › Connectors.</p>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Panels of the agent's chat. Notes, Tickets, Source, Schedule and Sub-agents follow Access › Platform, and the Browser tab follows the Playwright connector in Access › Connectors.</p>
     </div>
     <div class="rounded-xl border border-white-300 px-4 py-3 opacity-60 dark:border-navy-600" aria-disabled="true">
       <p class="text-sm font-medium text-black-900 dark:text-white-100">
@@ -492,5 +479,19 @@
 </div>
 
 <div class="flex items-center justify-end gap-2 border-t border-white-300 px-6 py-4 dark:border-navy-600">
+  <span class="mr-auto flex items-center gap-2 text-xs" aria-live="polite" data-testid="autosave-status">
+    {#if status === "saving" || (dirty && handleOk && JSON.stringify(patch) !== failedKey)}
+      <span class="text-black-800 dark:text-black-600">Saving…</span>
+    {:else if status === "error"}
+      <span class="text-neg-400">Not saved</span><span aria-hidden="true" class="text-black-700">·</span>
+      <button type="button" class="font-medium text-green-600 hover:underline" onclick={retry}>Retry</button>
+    {:else if !handleOk}
+      <span class="text-neg-400">Not saved — fix the handle</span>
+    {:else if status === "saved"}
+      <span class="text-black-800 dark:text-black-600">Saved ✓</span>
+    {:else}
+      <span class="text-black-700 dark:text-black-700">All changes saved</span>
+    {/if}
+  </span>
   <button type="button" class="rounded-lg px-4 py-2 text-sm text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600" onclick={onClose}>Close</button>
 </div>

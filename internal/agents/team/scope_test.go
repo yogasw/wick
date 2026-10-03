@@ -274,6 +274,14 @@ func TestEffectiveFeatures(t *testing.T) {
 	if f.Notes || f.Schedule || !f.Tickets || !f.Source || !f.Subagents {
 		t.Fatalf("effective = %+v", f)
 	}
+	if f.Browser {
+		t.Fatal("browser tab without a browser connector")
+	}
+	reach["pw"] = ReachItem{Key: "playwright_browser"}
+	p.AllowedConnectors = EncodeGrants([]ConnectorGrant{{ConnectorID: "pw", Level: LevelRead}})
+	if !EffectiveFeatures(p, reach).Browser {
+		t.Fatal("granted browser connector must show the tab")
+	}
 	if g := EffectiveFeatures(p, nil); !g.Notes {
 		t.Fatal("unknown reach must leave stored switches alone")
 	}

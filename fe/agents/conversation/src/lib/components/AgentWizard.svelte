@@ -3,7 +3,7 @@
      1 Persona — avatar, name, handle, system prompt, and the project behind
        it under "Lanjutan" (default: a new one made from these fields).
      2 Access — the same connector checklist as Settings › Access, starting
-       empty (deny-by-default). A new agent runs as the caller with
+       empty (off until added). A new agent runs as the caller with
        include-new off; both are changed later in Settings › Access.
      The provider lives in Settings › Lanjutan; the mockup's third "Connect"
      step waits for Slack/A2A (phase 1b). */
@@ -251,7 +251,7 @@
       </div>
     </details>
   {:else}
-    <p class="text-sm text-black-800 dark:text-black-600">Check the connectors of yours this agent may use. None by default (deny-by-default).</p>
+    <p class="text-sm text-black-800 dark:text-black-600">Connectors are off until you add them. Platform tools are on for every agent; System tools are for the Captain.</p>
     <ConnectorChecklist
       {catalog}
       loading={catalogLoading}

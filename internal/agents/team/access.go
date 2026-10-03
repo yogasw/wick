@@ -148,8 +148,9 @@ func isToolGrant(id string) bool {
 
 // EffectiveFeatures is p's features with the access-backed ones (Notes,
 // Tickets, Source, Sub-agents, Schedule) switched off when the agent's
-// resolved level on every matching entry is LevelOff, so the chat rail
-// hides a tab whose tool the agent cannot use. reach nil leaves the
+// resolved level on every matching entry is LevelOff, and Browser on
+// exactly when a browser instance is reachable, so the chat rail shows a
+// tab only for a tool the agent can use. reach nil leaves the
 // stored switches as they are.
 func EffectiveFeatures(p entity.AgentPersona, reach Reach) Features {
 	f, _, _ := MigrateFeatures(DecodeFeatures(p.Features), DecodeGrants(p.AllowedConnectors), reach)
@@ -178,5 +179,16 @@ func EffectiveFeatures(p entity.AgentPersona, reach Reach) Features {
 			fk.clear(&f)
 		}
 	}
+	// The browser is an ordinary connector: its tab shows when the agent
+	// can reach a Playwright browser instance at all.
+	f.Browser = false
+	for id, it := range reach {
+		if it.Key == browserKey && s.Level(id) != LevelOff {
+			f.Browser = true
+		}
+	}
 	return f
 }
+
+// browserKey mirrors the Playwright plugin's connector key.
+const browserKey = "playwright_browser"

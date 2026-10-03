@@ -8,7 +8,7 @@
      The arithmetic lives in agentForm.ts / accessTiers.ts. */
   import { Toggle } from "@wick-fe/common-ui";
   import type { ConnectorGrant, AgentConnector } from "../api/team.js";
-  import { opStats, destructiveAllowed, writeConnectors, type GrantErrors } from "../agentForm.js";
+  import { opStats, writeConnectors, type GrantErrors } from "../agentForm.js";
   import {
     tierOf, tierDefault, overrideOf, setOverride, tickedAccounts, toggleAccount, setLevelFor,
     type Tier, type Override,
@@ -66,7 +66,18 @@
   const addable = $derived(
     tier === "connectors" && (adding || query.trim() !== "") ? rows.filter((c) => !grantOf(c.id)) : [],
   );
-  const writes = $derived(destructiveAllowed(grants, catalog));
+  // Write ops the Connectors list grants, by their real op keys.
+  const writes = $derived.by(() => {
+    const out: string[] = [];
+    for (const g of grants) {
+      const c = catalog.find((x) => x.id === g.connector_id);
+      if (!c || tierOf(c) !== "connectors") continue;
+      for (const op of c.ops ?? []) {
+        if (op.destructive && (g.level === "all" || (g.level === "pick" && g.ops.includes(op.key)))) out.push(`${c.label} · ${op.key}`);
+      }
+    }
+    return out;
+  });
   const writeConns = $derived(writeConnectors(grants, catalog));
   const tierLabel: Record<Tier, string> = { connectors: "Connectors", platform: "Platform", system: "System" };
   const tierHint: Record<Tier, string> = {
@@ -121,8 +132,8 @@
       class="w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
       bind:value={runAs}
     >
-      <option value="caller">Caller (default) — the caller's access ∩ checklist</option>
-      <option value="owner">Owner — always your access ∩ checklist</option>
+      <option value="caller">Caller (default) — your access, limited to this list</option>
+      <option value="owner">Owner — always your access, limited to this list</option>
     </select>
     <p class="mt-1 text-xs text-black-800 dark:text-black-600">Bot, schedule and cron triggers use the owner's access.</p>
     {#if errors?.runAs}<p class="mt-1 text-xs text-neg-400">{errors.runAs}</p>{/if}
@@ -295,20 +306,23 @@
   </ul>
 {/if}
 
-{#if showIncludeNew}
-  <div>
-    <div class="flex items-center gap-3">
-      <Toggle checked={includeNew} onChange={(v) => (includeNew = v)} label="Also allow connectors not granted here, read only (new ones included)" />
-    </div>
-    <p class="mt-1 text-xs text-black-800 dark:text-black-600">Applies to the Connectors list only: every connector you can use that is not granted above opens with read operations — suits a personal agent; off by default.</p>
+{#if showIncludeNew && tier === "connectors"}
+  <div class="flex items-start gap-3">
+    <Toggle checked={includeNew} onChange={(v) => (includeNew = v)} label="Open other connectors read-only" describedBy="cc-incl-hint" />
+    <span class="min-w-0">
+      <span class="block text-sm text-black-900 dark:text-white-100">Open other connectors read-only</span>
+      <span id="cc-incl-hint" class="block text-xs text-black-800 dark:text-black-600">Connectors not added above, new ones included, open with read operations only.</span>
+    </span>
   </div>
 {/if}
 
-{#if writes.length > 0}
-  <div class="rounded-xl border border-white-300 px-4 py-2 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">
-    <p class="font-medium text-black-900 dark:text-white-100">Write operations allowed ({writes.length})</p>
-    <p class="mt-1">{writes.slice(0, 8).join(", ")}{writes.length > 8 ? ", …" : ""}</p>
-  </div>
+{#if tier === "connectors" && writes.length > 0}
+  <details class="rounded-xl border border-white-300 px-4 py-2 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">
+    <summary class="cursor-pointer select-none font-medium text-black-900 dark:text-white-100">Write operations allowed ({writes.length})</summary>
+    <ul class="mt-2 space-y-0.5">
+      {#each writes as w (w)}<li class="font-mono text-[11px]">{w}</li>{/each}
+    </ul>
+  </details>
 {/if}
 
 {#if showRunAs && runAs === "owner"}

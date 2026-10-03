@@ -57,4 +57,16 @@ describe("ConnectorChecklist", () => {
     expect((screen.getByLabelText(/Bot \/ instance/) as HTMLInputElement).checked).toBe(false);
     expect((screen.getByLabelText(/@me \(yours\)/) as HTMLInputElement).checked).toBe(true);
   });
+
+  test("include-new and write ops live on the Connectors chip only", async () => {
+    const withWrite = catalog.map((x) => (x.id === "http" ? { ...x, ops: [{ key: "post_req", name: "Post", destructive: true }] } : x));
+    render(ConnectorChecklist, { props: { catalog: withWrite, grants: [{ connector_id: "http", accounts: [], level: "all", ops: [] }] } });
+    expect(screen.getAllByText("Open other connectors read-only").length).toBeGreaterThan(0);
+    const card = screen.getByText(/Write operations allowed \(1\)/).closest("details") as HTMLDetailsElement;
+    expect(card.open).toBe(false);
+    expect(card.textContent).toContain("post_req");
+    await fireEvent.click(screen.getByRole("tab", { name: /Platform/ }));
+    expect(screen.queryByText("Open other connectors read-only")).toBeNull();
+    expect(screen.queryByText(/Write operations allowed/)).toBeNull();
+  });
 });
