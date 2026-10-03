@@ -406,6 +406,7 @@ func Register(r tool.Router) {
 	r.POST("/api/team/agents/{id}/scheduled/{sid}/pause", apiTeamAgentScheduledMutate("pause"))
 	r.POST("/api/team/agents/{id}/scheduled/{sid}/resume", apiTeamAgentScheduledMutate("resume"))
 	r.POST("/api/team/agents/{id}/scheduled/{sid}/run", apiTeamAgentScheduledMutate("run_now"))
+	r.GET("/api/team/agents/{id}/scheduled/{sid}/runs", apiTeamAgentScheduledRuns)
 	r.GET("/api/team/agents/{id}/session", apiTeamAgentSessionGet)
 	r.PATCH("/api/team/agents/{id}/session", apiTeamAgentSessionSave)
 	r.POST("/api/team/agents/{id}/compact", apiTeamAgentCompact)

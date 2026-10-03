@@ -683,7 +683,7 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 	switch ev.Type {
 	case event.TextDelta:
 		t.mu.Lock()
-		tn := t.turns[sessionID]
+		tn := t.turnLocked(sessionID)
 		if tn != nil {
 			tn.buf.WriteString(ev.Text)
 		}
@@ -743,6 +743,34 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 		}
 		t.postMessage(tn.chatID, text)
 	}
+}
+
+// turnLocked is the reply sink of sessionID. A turn opened by a message
+// from Telegram is already there; a turn nobody typed — a schedule firing
+// into one of this bot's chats, maybe after a restart emptied the map —
+// gets one from the chat id the session id carries. Caller holds t.mu.
+func (t *Channel) turnLocked(sessionID string) *turn {
+	if tn := t.turns[sessionID]; tn != nil {
+		return tn
+	}
+	chatID, ok := ChatIDOf(t.sessionPrefix, sessionID)
+	if !ok {
+		return nil
+	}
+	tn := &turn{chatID: chatID}
+	t.turns[sessionID] = tn
+	return tn
+}
+
+// ChatIDOf is the Telegram chat behind sessionID, for an instance whose
+// sessions are prefix+"tg-<chat id>". false = not one of its chats.
+func ChatIDOf(prefix, sessionID string) (int64, bool) {
+	rest, ok := strings.CutPrefix(sessionID, prefix+"tg-")
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(rest, 10, 64)
+	return id, err == nil
 }
 
 func (t *Channel) postMessage(chatID int64, text string) {

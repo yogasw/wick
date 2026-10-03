@@ -32,8 +32,9 @@ const scheduledHistory = 7 * 24 * time.Hour
 // sessions, plus its project when the project is the agent's (Team tag) —
 // a project several things share would drag unrelated jobs in.
 func agentScheduleScope(p entity.AgentPersona) (projectID string, sessionIDs []string) {
+	tgPrefix := agentTelegramSessionPrefix(p.ID)
 	for _, s := range globalMgr.Registry().Sessions() {
-		if s.Meta.AgentID == p.ID {
+		if s.Meta.AgentID == p.ID || strings.HasPrefix(s.ID, tgPrefix) {
 			sessionIDs = append(sessionIDs, s.ID)
 		}
 	}
@@ -51,18 +52,23 @@ type agentScheduleVM struct {
 	scheduleVM
 	Title       string `json:"title"`
 	Destination string `json:"destination"`
-	HeldByAgent bool   `json:"held_by_agent,omitempty"`
+	// TelegramSession is the chat a "telegram" destination posts into.
+	TelegramSession string `json:"telegram_session,omitempty"`
+	HeldByAgent     bool   `json:"held_by_agent,omitempty"`
 }
 
-func agentScheduleToVM(m entity.ScheduledMessage, mainID string) agentScheduleVM {
-	dest := "chat"
+func agentScheduleToVM(m entity.ScheduledMessage, mainID, agentID string) agentScheduleVM {
+	dest, tg := "chat", ""
 	switch {
 	case m.Mode() != entity.ScheduledSessionExisting:
 		dest = "new_chat"
 	case m.SessionID == mainID:
-		dest = "main"
+		dest = scheduleDestMain
+	case strings.HasPrefix(m.SessionID, agentTelegramSessionPrefix(agentID)):
+		dest, tg = scheduleDestTelegram, m.SessionID
 	}
-	return agentScheduleVM{scheduleVM: scheduleToVM(m), Title: scheduledTitle(m.Message), Destination: dest, HeldByAgent: m.HeldByAgent}
+	return agentScheduleVM{scheduleVM: scheduleToVM(m), Title: scheduledTitle(m.Message), Destination: dest,
+		TelegramSession: tg, HeldByAgent: m.HeldByAgent}
 }
 
 // scheduledTitle is the first line of the message, clipped — schedules
@@ -109,23 +115,34 @@ func apiTeamAgentScheduledList(c *tool.Ctx) {
 	}
 	items := make([]agentScheduleVM, 0, len(rows))
 	for _, m := range rows {
-		items = append(items, agentScheduleToVM(m, mainID))
+		items = append(items, agentScheduleToVM(m, mainID, p.ID))
 	}
 	st, _ := agentSlackOf(p)
 	slackOnline := st.Connected && st.Online && !st.Disabled
+	// The Telegram option only exists while the bot is connected.
+	tgChats := []telegramChatVM{}
+	tgReady := agentTelegramReady(p)
+	if tgReady {
+		if ch := agentTelegramChats(p); ch != nil {
+			tgChats = ch
+		}
+	}
 	c.JSON(http.StatusOK, map[string]any{
-		"items":           items,
-		"feature_on":      team.DecodeFeatures(p.Features).Schedule,
-		"agent_disabled":  p.Disabled,
-		"server_timezone": schedule.ServerZoneLabel(time.Now()),
-		"main_session_id": mainID,
-		"slack_online":    slackOnline,
+		"telegram_connected": tgReady,
+		"telegram_chats":     tgChats,
+		"items":              items,
+		"feature_on":         team.DecodeFeatures(p.Features).Schedule,
+		"agent_disabled":     p.Disabled,
+		"server_timezone":    schedule.ServerZoneLabel(time.Now()),
+		"main_session_id":    mainID,
+		"slack_online":       slackOnline,
 	})
 }
 
 // apiTeamAgentScheduledCreate handles POST /api/team/agents/{id}/scheduled:
-// a schedule into the agent's main chat (created on first use). Slack as a
-// destination is not offered yet; the drawer shows it as coming soon.
+// a schedule into the agent's main chat (created on first use) or one of
+// its Telegram bot's chats. Slack as a destination is not offered yet; the
+// drawer shows it as coming soon.
 func apiTeamAgentScheduledCreate(c *tool.Ctx) {
 	p, ok := loadScheduledAgent(c)
 	if !ok {
@@ -137,13 +154,16 @@ func apiTeamAgentScheduledCreate(c *tool.Ctx) {
 		Cron        string `json:"cron"`
 		Message     string `json:"message"`
 		Destination string `json:"destination"`
+		// TelegramSession picks the chat of a "telegram" destination.
+		TelegramSession string `json:"telegram_session"`
 	}
 	if err := c.BindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
-	if body.Destination != "" && body.Destination != "main" {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "only the main chat is supported as a destination"})
+	target, toMain, err := scheduleDestination(p, body.Destination, body.TelegramSession)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	message := strings.TrimSpace(body.Message)
@@ -163,16 +183,21 @@ func apiTeamAgentScheduledCreate(c *tool.Ctx) {
 	mainID := ""
 	if s, ok := mainSessionOf(p.OwnerUserID, p.ID); ok {
 		mainID = s.ID
-	} else if mainID, err = createTeamAgentSession(c, p, true); err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+	} else if toMain {
+		if mainID, err = createTeamAgentSession(c, p, true); err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if toMain {
+		target = mainID
 	}
 	row := &entity.ScheduledMessage{
-		SessionID:       mainID,
+		SessionID:       target,
 		SessionMode:     entity.ScheduledSessionExisting,
 		OwnerUserID:     p.OwnerUserID,
 		CreatedBy:       entity.ScheduledByUser,
-		SourceSessionID: mainID,
+		SourceSessionID: target,
 		Message:         message,
 		RunAt:           spec.FirstRunAt,
 		// A disabled agent's schedules are held; a new one joins them.
@@ -190,7 +215,7 @@ func apiTeamAgentScheduledCreate(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, agentScheduleToVM(*m, mainID))
+	c.JSON(http.StatusOK, agentScheduleToVM(*m, mainID, p.ID))
 }
 
 // agentScheduleOf loads the {sid} schedule and checks it is aimed at p.
@@ -231,10 +256,7 @@ func apiTeamAgentScheduledMutate(action string) func(*tool.Ctx) {
 				err = globalSchedule.SetPaused(c.Context(), m.ID, false, next)
 			}
 		case "edit":
-			var patch schedule.SchedulePatch
-			if patch, err = scheduleParsePatchUI(*m, c, m.SessionID, time.Now()); err == nil {
-				err = globalSchedule.Reschedule(c.Context(), m.ID, patch)
-			}
+			err = editAgentSchedule(c, p, m)
 		case "run_now":
 			if err = globalSchedule.RunNow(c.Context(), m.ID); err == nil {
 				schedule.WakeRunner()
@@ -257,7 +279,7 @@ func apiTeamAgentScheduledMutate(action string) func(*tool.Ctx) {
 		if s, ok := mainSessionOf(p.OwnerUserID, p.ID); ok {
 			mainID = s.ID
 		}
-		c.JSON(http.StatusOK, agentScheduleToVM(*fresh, mainID))
+		c.JSON(http.StatusOK, agentScheduleToVM(*fresh, mainID, p.ID))
 	}
 }
 
