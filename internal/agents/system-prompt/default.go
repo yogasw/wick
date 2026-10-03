@@ -106,10 +106,41 @@ func DefaultSystemPrompt() string {
 // connectors service to filter for ready instances, which only the
 // factory can wire. See ClaudeFactory.ConnectorCatalogLoader.
 func ImmutableFor(providerType string, subAgent bool) string {
-	audience := mainImmutable()
+	audience := mainImmutable(nil)
 	if subAgent {
 		audience = strings.TrimSpace(immutableSubagentTemplate)
 	}
+	return immutableWith(providerType, audience)
+}
+
+// TeamGates is what a Team agent's own access switches on in the main
+// overlay. Each false drops the matching gated section of
+// immutable_main.md: an agent that cannot delegate or schedule has no use
+// for the rules on how to, and they cost every turn.
+type TeamGates struct {
+	// Subagents keeps "Delegating work" (the Sub-agents access is not Off).
+	Subagents bool
+	// Schedule keeps "Scheduling yourself" (the Schedule access is not Off).
+	Schedule bool
+}
+
+// ImmutableForTeam is ImmutableFor for a Team agent's own session (never
+// a sub-agent's: that one keeps the delegated-child overlay). The
+// "Session title" section always goes — a Team agent's chat is titled by
+// the agent's name — and the delegation and scheduling sections stay
+// only when g says the agent has that access.
+func ImmutableForTeam(providerType string, g TeamGates) string {
+	skip := map[string]bool{
+		gateSessionTitle: true,
+		gateDelegating:   !g.Subagents,
+		gateScheduling:   !g.Schedule,
+	}
+	return immutableWith(providerType, mainImmutable(skip))
+}
+
+// immutableWith joins the global core, one audience overlay and the
+// provider overlay.
+func immutableWith(providerType, audience string) string {
 	base := strings.TrimSpace(immutableSystemPromptTemplate) + "\n\n" + audience
 
 	overlay := immutableSystemPromptClaudeTemplate
@@ -122,17 +153,58 @@ func ImmutableFor(providerType string, subAgent bool) string {
 	return resolve(joinImmutable(base, overlay))
 }
 
+// Gated sections of immutable_main.md. Each is fenced by a pair of
+// marker lines, "<!-- gate:NAME -->" before its heading and
+// "<!-- /gate:NAME -->" after its last line.
+const (
+	gateSessionTitle = "session_title"
+	gateDelegating   = "delegating"
+	gateScheduling   = "scheduling"
+)
+
 // mainImmutable assembles the main-agent overlay by splicing each
 // split-out section file into its placeholder in immutable_main.md. The
 // overlay file owns ordering — move a {{TOKEN}} to move the section. A
 // new main-only section = new .md under system-prompt/, embed it, add a
 // {{TOKEN}} where it should land, and a line here.
-func mainImmutable() string {
+//
+// skip names the gated sections to drop; every other gate only loses its
+// marker lines, so a nil skip yields the overlay as it read before gates
+// existed.
+func mainImmutable(skip map[string]bool) string {
 	r := strings.NewReplacer(
 		"{{ASKING_USER}}", strings.TrimSpace(immutableAskUserTemplate),
 		"{{RENDER_FORMATS}}", strings.TrimSpace(immutableRenderFormatsTemplate),
 	)
-	return strings.TrimSpace(r.Replace(immutableMainTemplate))
+	return strings.TrimSpace(r.Replace(applyGates(immutableMainTemplate, skip)))
+}
+
+// applyGates drops each gated section named in skip, marker lines
+// included, and strips the marker lines of the rest. An unclosed gate is
+// left as is rather than eating the rest of the file.
+func applyGates(s string, skip map[string]bool) string {
+	for {
+		i := strings.Index(s, "<!-- gate:")
+		if i < 0 {
+			return s
+		}
+		end := strings.Index(s[i:], " -->\n")
+		if end < 0 {
+			return s
+		}
+		name := s[i+len("<!-- gate:") : i+end]
+		open := s[i : i+end+len(" -->\n")]
+		closer := "<!-- /gate:" + name + " -->\n"
+		j := strings.Index(s, closer)
+		if j < i {
+			return s
+		}
+		if skip[name] {
+			s = s[:i] + s[j+len(closer):]
+			continue
+		}
+		s = s[:i] + s[i+len(open):j] + s[j+len(closer):]
+	}
 }
 
 // ImmutableSystemPrompt returns the main-agent rules with the

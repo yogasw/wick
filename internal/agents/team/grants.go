@@ -42,7 +42,14 @@ func CatalogOf(entries []connectors.CatalogEntry) Catalog {
 func ReachOf(entries []connectors.CatalogEntry) Reach {
 	out := make(Reach, len(entries))
 	for _, e := range entries {
-		out[e.Row.ID] = ReachItem{Key: e.Row.Key, Tier: TierOf(e.Module.Meta.DefaultTags)}
+		it := ReachItem{Key: e.Row.Key, Tier: TierOf(e.Module.Meta.DefaultTags), Label: e.Row.Label}
+		if len(e.Accounts) > 0 {
+			it.Accounts = make(map[string]string, len(e.Accounts))
+			for _, a := range e.Accounts {
+				it.Accounts[a.ID] = a.DisplayName
+			}
+		}
+		out[e.Row.ID] = it
 	}
 	return out
 }

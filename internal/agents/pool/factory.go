@@ -120,6 +120,18 @@ type ClaudeFactory struct {
 	// any persona, so a persona cannot talk over it.
 	TeamPromptLoader func(sessionID string, subAgent bool) string
 
+	// TeamSpawnLoader (optional) returns the spawn parts of a Team
+	// agent's OWN session (see TeamSpawn); false for any other session,
+	// a sub-agent under a Team session included. When it answers true the
+	// prompt is assembled in the Team order (see composePrompt) and
+	// TeamPromptLoader is not consulted.
+	TeamSpawnLoader func(sessionID string) (TeamSpawn, bool)
+
+	// TeamSystemPromptLoader (optional) returns the `system_prompt_team`
+	// config row: the operator prompt of Team agent sessions, in place of
+	// SystemPromptLoader. Empty = no operator prompt at all.
+	TeamSystemPromptLoader func() string
+
 	// SpawnLogger (optional) writes one jsonl per spawn under
 	// `<base>/backends/spawns/`. Each spawn emits `start` on Build +
 	// `exit` from the OnExit hook so the Backends UI can list spawn
@@ -210,71 +222,12 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		TraceEventMaxBytes: traceEventMaxBytes,
 	})
 
-	// Layered system prompt (top wins on conflict):
-	//   1. immutable wick rules (e.g. ban AskUserQuestion) — set in code
-	//   2. preset body (per-preset persona)
-	//   3. operator-edited `system_prompt` config row
-	// Layer 1 must lead so its guards override anything the preset /
-	// config below tries to relax.
 	// Normalize provider type early so immutable prompt selection is correct.
 	pTypeStrEarly := opt.ProviderType
 	if pTypeStrEarly == "" {
 		pTypeStrEarly = string(provider.TypeClaude)
 	}
-	// Audience — a sub-agent spawn gets the delegated-child overlay
-	// (report_result, no ask_user) instead of the human-facing one
-	// (render formats, session title, scheduling). Decided by the
-	// session's parentage, which the pool read off meta; a role or
-	// preset cannot override it.
-	immutable := systemprompt.ImmutableFor(pTypeStrEarly, opt.IsSubAgent)
-	presetContent := immutable
-	if f.TeamPromptLoader != nil {
-		if t := strings.TrimSpace(f.TeamPromptLoader(opt.SessionID, opt.IsSubAgent)); t != "" {
-			presetContent += "\n\n" + t
-		}
-	}
-	if f.ConnectorCatalogLoader != nil {
-		if catalog := strings.TrimSpace(f.ConnectorCatalogLoader()); catalog != "" {
-			presetContent += "\n\n" + catalog
-		}
-	}
-	if opt.PresetName != "" {
-		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil && strings.TrimSpace(p.Body) != "" {
-			presetContent += "\n\n" + p.Body
-		}
-	}
-	// Per-session free-text addon, after the named preset so it can
-	// refine it. This is how a sub-agent role's system prompt reaches its
-	// spawn — a role is not a named preset and must not pollute the
-	// shared preset list.
-	if addon := strings.TrimSpace(opt.SystemAddon); addon != "" {
-		presetContent += "\n\n" + addon
-	}
-	if f.SystemPromptLoader != nil {
-		if extra := strings.TrimSpace(f.SystemPromptLoader()); extra != "" {
-			presetContent += "\n\n" + extra
-		}
-	}
-	// Per-session identity block, appended last so it is the "This
-	// session" block at the very end of the assembled prompt (the
-	// immutable rules reference it by that name). The agent needs the
-	// session_id for wick_session_info / wick_set_title / ask_user, and
-	// having it in the system prompt means it is always available — not
-	// only on the first turn where channels inject a one-time context
-	// message.
-	presetContent += "\n\n" + sessionIdentityBlock(opt.SessionID, opt.Origin, opt.Title, opt.TitleCustom,
-		f.activeRepoLine(opt.SessionID, opt.Workspace))
-
-	// Ticket / notes pointer — a COUNT and an id, never the note bodies.
-	// A ticket accumulates notes for as long as the work lasts, so
-	// inlining them would charge that growing cost on every turn forever;
-	// the agent reads what it needs through the notes connector instead.
-	// Fixed size, and omitted entirely when there is nothing to point at.
-	if f.TicketPointerLoader != nil {
-		if line := strings.TrimSpace(f.TicketPointerLoader(opt.SessionID)); line != "" {
-			presetContent += "\n\n" + line
-		}
-	}
+	presetContent := f.composePrompt(opt, pTypeStrEarly)
 
 	bypassPerms := false
 	if f.PermissionModeLoader != nil {
@@ -798,4 +751,126 @@ func envValue(env []string, key string) string {
 		}
 	}
 	return out
+}
+
+// TeamSpawn is what a Team agent's own session adds to its prompt beyond
+// the persona. Defined here rather than taken from the team package so
+// the pool does not depend on it; server.go adapts team.SpawnPrompt.
+type TeamSpawn struct {
+	// Prompt is the Team overlay plus the "Who you are" block.
+	Prompt string
+	// Access is the "Your access" block.
+	Access string
+	// Subagents and Schedule keep the matching gated sections of the
+	// immutable main overlay (see systemprompt.TeamGates).
+	Subagents bool
+	Schedule  bool
+}
+
+// composePrompt assembles the system prompt of one spawn. Layered, top
+// wins on conflict:
+//
+//  1. immutable wick rules (e.g. ban AskUserQuestion) — set in code
+//  2. Team overlay + "Who you are" (Team sessions)
+//  3. connector catalog
+//  4. preset body (per-preset persona)
+//  5. the session's addon (project default + its own) and the
+//     operator-edited `system_prompt` config row
+//  6. the "This session" block and the ticket pointer
+//
+// Layer 1 must lead so its guards override anything the preset /
+// config below tries to relax.
+//
+// A Team agent's own session is assembled differently: immutable (with
+// its gated sections cut to the agent's access) → Team overlay + "Who
+// you are" → "Your access" → catalog → preset → `system_prompt_team` →
+// "## Your persona" → session block. The operator prompt moves BEFORE
+// the persona so it no longer talks over it, and the persona is the last
+// word before the session block.
+func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) string {
+	var ts TeamSpawn
+	isTeam := false
+	if f.TeamSpawnLoader != nil && !opt.IsSubAgent {
+		ts, isTeam = f.TeamSpawnLoader(opt.SessionID)
+	}
+	var b strings.Builder
+	// addRaw keeps s as given (the preset body and the session block
+	// always were); add trims it first. Both skip a blank s.
+	addRaw := func(s string) {
+		if strings.TrimSpace(s) == "" {
+			return
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(s)
+	}
+	add := func(s string) { addRaw(strings.TrimSpace(s)) }
+	if isTeam {
+		add(systemprompt.ImmutableForTeam(providerType, systemprompt.TeamGates{
+			Subagents: ts.Subagents,
+			Schedule:  ts.Schedule,
+		}))
+		add(ts.Prompt)
+		add(ts.Access)
+	} else {
+		// Audience — a sub-agent spawn gets the delegated-child overlay
+		// (report_result, no ask_user) instead of the human-facing one
+		// (render formats, session title, scheduling). Decided by the
+		// session's parentage, which the pool read off meta; a role or
+		// preset cannot override it.
+		addRaw(systemprompt.ImmutableFor(providerType, opt.IsSubAgent))
+		if f.TeamPromptLoader != nil {
+			add(f.TeamPromptLoader(opt.SessionID, opt.IsSubAgent))
+		}
+	}
+	if f.ConnectorCatalogLoader != nil {
+		add(f.ConnectorCatalogLoader())
+	}
+	if opt.PresetName != "" {
+		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil {
+			addRaw(p.Body)
+		}
+	}
+	if isTeam {
+		// Team sessions never fall back to `system_prompt`: that row holds
+		// the operator's rules for the default support agent (session
+		// titles, Slack identity, file policy), which is exactly what made
+		// a Team agent behave like that agent instead of its persona.
+		// Empty `system_prompt_team` means no operator prompt at all.
+		if f.TeamSystemPromptLoader != nil {
+			add(f.TeamSystemPromptLoader())
+		}
+		if addon := strings.TrimSpace(opt.SystemAddon); addon != "" {
+			add("## Your persona\n\n" + addon)
+		}
+	} else {
+		// Per-session free-text addon, after the named preset so it can
+		// refine it. This is how a sub-agent role's system prompt reaches
+		// its spawn — a role is not a named preset and must not pollute
+		// the shared preset list.
+		add(opt.SystemAddon)
+		if f.SystemPromptLoader != nil {
+			add(f.SystemPromptLoader())
+		}
+	}
+	// Per-session identity block, appended last so it is the "This
+	// session" block at the very end of the assembled prompt (the
+	// immutable rules reference it by that name). The agent needs the
+	// session_id for wick_session_info / wick_set_title / ask_user, and
+	// having it in the system prompt means it is always available — not
+	// only on the first turn where channels inject a one-time context
+	// message.
+	addRaw(sessionIdentityBlock(opt.SessionID, opt.Origin, opt.Title, opt.TitleCustom,
+		f.activeRepoLine(opt.SessionID, opt.Workspace)))
+
+	// Ticket / notes pointer — a COUNT and an id, never the note bodies.
+	// A ticket accumulates notes for as long as the work lasts, so
+	// inlining them would charge that growing cost on every turn forever;
+	// the agent reads what it needs through the notes connector instead.
+	// Fixed size, and omitted entirely when there is nothing to point at.
+	if f.TicketPointerLoader != nil {
+		add(f.TicketPointerLoader(opt.SessionID))
+	}
+	return b.String()
 }

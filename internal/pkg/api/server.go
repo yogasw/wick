@@ -668,6 +668,11 @@ func NewServer() *Server {
 	agentsFactory.SystemPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", "system_prompt")
 	}
+	// A Team agent's session reads its own operator row instead, never
+	// system_prompt (see ClaudeFactory.composePrompt).
+	agentsFactory.TeamSystemPromptLoader = func() string {
+		return configsSvc.GetOwned("agents", "system_prompt_team")
+	}
 	// How much of a message sender's identity reaches the model. Read per
 	// Build so the setting takes effect on the next spawn without a restart.
 	// The wick provider is the one that needs it: it rebuilds prompts from
@@ -1127,6 +1132,10 @@ func NewServer() *Server {
 	// on the next spawn.
 	agentsFactory.TeamPromptLoader = func(sessionID string, subAgent bool) string {
 		return teamSvc.PromptFor(context.Background(), sessionID, subAgent)
+	}
+	agentsFactory.TeamSpawnLoader = func(sessionID string) (agentpool.TeamSpawn, bool) {
+		sp, ok := teamSvc.SpawnPromptFor(context.Background(), sessionID)
+		return agentpool.TeamSpawn{Prompt: sp.Prompt, Access: sp.Access, Subagents: sp.Subagents, Schedule: sp.Schedule}, ok
 	}
 	mcp.SetAgentScopeResolver(teamSvc.ScopeForSession)
 	agentstool.SetTeam(teamSvc)

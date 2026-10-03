@@ -48,6 +48,10 @@ func TierOf(defaults []tool.DefaultTag) string {
 type ReachItem struct {
 	Key  string
 	Tier string
+	// Label and Accounts (account id → display name) only name things in
+	// the agent's "Your access" prompt block; no check reads them.
+	Label    string
+	Accounts map[string]string
 }
 
 // Reach is the owner's catalog keyed by connector id. Grants and tier
