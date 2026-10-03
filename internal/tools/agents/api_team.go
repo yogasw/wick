@@ -1,12 +1,15 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,7 +70,11 @@ type TeamAgentItem struct {
 	// waiting on ("Bash", "query_range"); "" when idle, thinking or
 	// writing.
 	CurrentAction string `json:"current_action"`
-	// SharedWith counts the owner's OTHER agents on the same project, so
+	// AttentionPreview is the short line of what NeedsAttention waits on
+	// ("Butuh input: …", "Bash — butuh approval"); also LastPreview then.
+	AttentionPreview string `json:"attention_preview,omitempty"`
+	// SharedWith counts everything else on the same project — other
+	// agents of any owner and non-agent web/channel conversations — so
 	// the editor can warn that a persona edit changes them too.
 	SharedWith int `json:"shared_with"`
 }
@@ -262,11 +269,11 @@ func timePtr(t time.Time) *time.Time {
 // response so a roster of N agents costs one pool snapshot rather than N.
 type teamLive struct {
 	actions   map[string]string // session id → CurrentAction
-	approvals map[string]bool   // session id → a tool approval is pending
+	approvals map[string]string // session id → tool of a pending approval
 }
 
 func teamLiveNow() teamLive {
-	l := teamLive{actions: map[string]string{}, approvals: map[string]bool{}}
+	l := teamLive{actions: map[string]string{}, approvals: map[string]string{}}
 	if globalPool != nil {
 		for _, e := range globalPool.ActiveSnapshot() {
 			if a := team.CurrentAction(e.InFlightEvents); a != "" {
@@ -276,23 +283,116 @@ func teamLiveNow() teamLive {
 	}
 	if globalApprovals != nil {
 		for _, r := range globalApprovals.PendingFor("") {
-			l.approvals[r.SessionID] = true
+			if _, seen := l.approvals[r.SessionID]; !seen {
+				l.approvals[r.SessionID] = r.Tool
+			}
 		}
 	}
 	return l
 }
 
-// needsAttention reports whether sessionID waits on a person.
-func (l teamLive) needsAttention(sessionID string) bool {
-	if l.approvals[sessionID] {
-		return true
+// attention returns the roster preview of what sessionID waits on a
+// person for — an ask_user question first, then a tool approval — or ""
+// when it waits on nobody.
+func (l teamLive) attention(sessionID string) string {
+	if globalAskUsers != nil {
+		if asks := globalAskUsers.PendingFor(sessionID); len(asks) > 0 {
+			return team.AskPreview(asks[0].Question)
+		}
 	}
-	return globalAskUsers != nil && len(globalAskUsers.PendingFor(sessionID)) > 0
+	if tool, ok := l.approvals[sessionID]; ok {
+		return team.ApprovalPreview(tool)
+	}
+	return ""
 }
 
-// teamAgentToItem renders one row. siblings is the owner's full list, used
-// for SharedWith; pass nil to skip the count.
-func teamAgentToItem(p entity.AgentPersona, siblings []entity.AgentPersona, live teamLive) TeamAgentItem {
+// teamPreviewCache keeps the last roster preview per conversation file,
+// keyed by its size and mtime, so an unchanged chat costs one stat per
+// roster load instead of a read.
+var teamPreviewCache = struct {
+	sync.Mutex
+	m map[string]teamPreviewEntry
+}{m: map[string]teamPreviewEntry{}}
+
+type teamPreviewEntry struct {
+	size int64
+	mod  time.Time
+	text string
+}
+
+// lastPreview returns the one-line preview of sessionID's newest message.
+func lastPreview(sessionID string) string {
+	path := globalLayout.SessionConversation(sessionID)
+	st, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	teamPreviewCache.Lock()
+	e, ok := teamPreviewCache.m[path]
+	teamPreviewCache.Unlock()
+	if ok && e.size == st.Size() && e.mod.Equal(st.ModTime()) {
+		return e.text
+	}
+	text := team.TailPreview(path)
+	teamPreviewCache.Lock()
+	teamPreviewCache.m[path] = teamPreviewEntry{size: st.Size(), mod: st.ModTime(), text: text}
+	teamPreviewCache.Unlock()
+	return text
+}
+
+// teamProjectUsers counts, per project, who else a persona edit reaches:
+// every agent on it (any owner) and every non-agent conversation (web,
+// channel) run in it. Built once per response.
+type teamProjectUsers struct {
+	agents   map[string]int // project id → agents on it
+	sessions map[string]int // project id → non-agent top-level sessions
+}
+
+func teamProjectUsersFor(ctx context.Context, rows []entity.AgentPersona) teamProjectUsers {
+	u := teamProjectUsers{agents: map[string]int{}, sessions: map[string]int{}}
+	want := map[string]bool{}
+	var ids []string
+	for _, r := range rows {
+		if r.ProjectID != "" && !want[r.ProjectID] {
+			want[r.ProjectID] = true
+			ids = append(ids, r.ProjectID)
+		}
+	}
+	if len(ids) == 0 {
+		return u
+	}
+	if all, err := globalTeam.ListByProjects(ctx, ids); err == nil {
+		for _, a := range all {
+			u.agents[a.ProjectID]++
+		}
+	}
+	for _, s := range globalMgr.Registry().Sessions() {
+		m := s.Meta
+		// Sub-agent sessions belong to their parent's count; agent
+		// sessions are already counted as their agent.
+		if want[m.ProjectID] && m.AgentID == "" && m.ParentSessionID == "" {
+			u.sessions[m.ProjectID]++
+		}
+	}
+	return u
+}
+
+// others is how many agents and conversations besides agent p use its
+// project.
+func (u teamProjectUsers) others(p entity.AgentPersona) int {
+	if p.ProjectID == "" {
+		return 0
+	}
+	n := u.agents[p.ProjectID] - 1 // p itself
+	if n < 0 {
+		n = 0
+	}
+	return n + u.sessions[p.ProjectID]
+}
+
+// teamAgentToItem renders one row. users feeds SharedWith; the zero
+// value counts nothing.
+func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLive) TeamAgentItem {
 	it := TeamAgentItem{
 		ID: p.ID, Handle: p.Handle, IsCaptain: p.IsCaptain, ProjectID: p.ProjectID,
 		Name:                 p.Handle,
@@ -320,19 +420,18 @@ func teamAgentToItem(p entity.AgentPersona, siblings []entity.AgentPersona, live
 		it.LastActive = timePtr(s.Meta.LastActive)
 		it.Status = string(s.Meta.Status)
 		it.Unread = team.Unread(s.Meta.LastActive, p.LastReadAt)
-		it.NeedsAttention = live.needsAttention(s.ID)
 		if it.Status != string(session.StatusIdle) {
 			it.CurrentAction = live.actions[s.ID]
 		}
-		// The preview is left empty on purpose for now: the last message
-		// lives in conversation.jsonl, and reading one file per agent on
-		// every roster load is the cost the sidebar was built to avoid.
-	}
-	for _, o := range siblings {
-		if o.ID != p.ID && o.ProjectID != "" && o.ProjectID == p.ProjectID {
-			it.SharedWith++
+		// What the agent waits on outranks what it last said.
+		if it.AttentionPreview = live.attention(s.ID); it.AttentionPreview != "" {
+			it.NeedsAttention = true
+			it.LastPreview = it.AttentionPreview
+		} else {
+			it.LastPreview = lastPreview(s.ID)
 		}
 	}
+	it.SharedWith = users.others(p)
 	return it
 }
 
@@ -461,9 +560,9 @@ func apiTeamAgentList(c *tool.Ctx) {
 	}
 	items := make([]TeamAgentItem, 0, len(rows))
 	captainID := ""
-	live := teamLiveNow()
+	live, users := teamLiveNow(), teamProjectUsersFor(c.Context(), rows)
 	for _, r := range rows {
-		items = append(items, teamAgentToItem(r, rows, live))
+		items = append(items, teamAgentToItem(r, users, live))
 		if r.IsCaptain {
 			captainID = r.ID
 		}
@@ -545,8 +644,8 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
-	rows, _ := globalTeam.List(c.Context(), actorID(c))
-	c.JSON(http.StatusOK, teamAgentToItem(*p, rows, teamLiveNow()))
+	users := teamProjectUsersFor(c.Context(), []entity.AgentPersona{*p})
+	c.JSON(http.StatusOK, teamAgentToItem(*p, users, teamLiveNow()))
 }
 
 // apiTeamAgentUpdate handles PATCH /api/team/agents/{id}.
@@ -628,8 +727,8 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
-	rows, _ := globalTeam.List(c.Context(), actorID(c))
-	c.JSON(http.StatusOK, teamAgentToItem(p, rows, teamLiveNow()))
+	users := teamProjectUsersFor(c.Context(), []entity.AgentPersona{p})
+	c.JSON(http.StatusOK, teamAgentToItem(p, users, teamLiveNow()))
 }
 
 // apiTeamAgentDelete handles DELETE /api/team/agents/{id}. Only the row goes;

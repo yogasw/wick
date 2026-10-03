@@ -40,11 +40,12 @@ func TestScope(t *testing.T) {
 		{"absent connector", false, "other", "get", false, "", false, false, false},
 		{"absent + includeNew safe", true, "other", "get", false, "a9", true, true, true},
 		{"absent + includeNew destructive", true, "other", "delete", true, "", true, false, true},
+		{"absent + includeNew outside owner reach", true, "elsewhere", "get", false, "", false, false, false},
 		{"present ignores includeNew", true, "read", "delete", true, "", true, false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := NewScope(grants, tc.includeNew)
+			s := NewScope(grants, tc.includeNew, map[string]bool{"other": true, "read": true})
 			if got := s.AllowConnector(tc.conn); got != tc.wantConn {
 				t.Errorf("AllowConnector = %v, want %v", got, tc.wantConn)
 			}
@@ -64,14 +65,29 @@ func TestScopeOfDisabledDeniesAll(t *testing.T) {
 		AllowedConnectors:    EncodeGrants([]ConnectorGrant{{ConnectorID: "c", Level: LevelAll}}),
 		IncludeNewConnectors: true,
 	}
-	s := ScopeOf(p)
+	s := ScopeOf(p, map[string]bool{"c": true, "x": true})
 	if s.AllowConnector("c") || s.AllowConnector("x") || s.AllowOp("c", "get", false) || s.AllowAccount("c", "") {
 		t.Fatal("disabled agent scope must deny everything")
 	}
 }
 
+func TestScopeIncludeNewNeedsReach(t *testing.T) {
+	p := entity.AgentPersona{IncludeNewConnectors: true}
+	if ScopeOf(p, nil).AllowConnector("c") {
+		t.Fatal("include-new without a known owner catalog must let nothing in")
+	}
+	s := ScopeOf(p, map[string]bool{"c": true})
+	if !s.AllowConnector("c") || !s.AllowOp("c", "get", false) || s.AllowOp("c", "delete", true) {
+		t.Fatal("include-new must admit owner-catalog connectors read-only")
+	}
+	// wickmanager is never in a catalog, so it is never in reach.
+	if s.AllowConnector("wickmanager-row") {
+		t.Fatal("a connector outside the owner's catalog must stay out")
+	}
+}
+
 func TestScopeOfMalformedGrantsDeny(t *testing.T) {
-	s := ScopeOf(entity.AgentPersona{AllowedConnectors: "{not json"})
+	s := ScopeOf(entity.AgentPersona{AllowedConnectors: "{not json"}, nil)
 	if s.AllowConnector("c") {
 		t.Fatal("malformed grants must decode to deny")
 	}

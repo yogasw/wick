@@ -1,7 +1,11 @@
 package team
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
+	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -80,4 +84,84 @@ func opOfToolID(id string) string {
 		op = op[:j]
 	}
 	return op
+}
+
+// maxPreviewRunes bounds a roster preview to one line of the row.
+const maxPreviewRunes = 80
+
+// previewTailBytes is how much of conversation.jsonl a preview reads:
+// enough for the last turn or two, never the whole transcript.
+const previewTailBytes = 64 << 10
+
+// AskPreview is the roster preview while an ask_user question waits.
+func AskPreview(question string) string {
+	return PreviewText("Butuh input: " + question)
+}
+
+// ApprovalPreview is the roster preview while a tool approval waits.
+func ApprovalPreview(tool string) string {
+	if strings.TrimSpace(tool) == "" {
+		tool = "Aksi"
+	}
+	return PreviewText(ActionLabel(tool, "") + " — butuh approval")
+}
+
+// PreviewText flattens a message to one plain line: markdown markers
+// and links collapse to their text, whitespace to single spaces, and the
+// result is clipped to maxPreviewRunes.
+func PreviewText(s string) string {
+	s = mdLink.ReplaceAllString(s, "$1")
+	s = mdFence.ReplaceAllString(s, " ")
+	s = mdLinePrefix.ReplaceAllString(s, "")
+	s = strings.NewReplacer("**", "", "__", "", "`", "", "~~", "").Replace(s)
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > maxPreviewRunes {
+		s = strings.TrimSpace(string(r[:maxPreviewRunes-1])) + "…"
+	}
+	return s
+}
+
+var (
+	mdLink       = regexp.MustCompile(`!?\[([^\]]*)\]\([^)]*\)`)
+	mdFence      = regexp.MustCompile("(?m)^```.*$")
+	mdLinePrefix = regexp.MustCompile(`(?m)^\s*(#{1,6}\s+|>\s?|[-*+]\s+|\d+\.\s+)`)
+)
+
+// TailPreview returns the preview of the newest user or assistant turn
+// in a conversation.jsonl, reading only its last previewTailBytes. ""
+// when the file is missing or the tail holds no turn with text.
+func TailPreview(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	off := st.Size() - previewTailBytes
+	if off < 0 {
+		off = 0
+	}
+	buf := make([]byte, st.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil && err != io.EOF {
+		return ""
+	}
+	lines := bytes.Split(buf, []byte{'\n'})
+	// A cut tail starts mid-line; that fragment never parses, so it is
+	// skipped like any other bad line.
+	for i := len(lines) - 1; i >= 0; i-- {
+		var t store.ConversationTurn
+		if json.Unmarshal(lines[i], &t) != nil {
+			continue
+		}
+		if t.Role != "user" && t.Role != "assistant" {
+			continue
+		}
+		if p := PreviewText(t.Text); p != "" {
+			return p
+		}
+	}
+	return ""
 }

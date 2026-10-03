@@ -43,11 +43,18 @@ type topLevelConnector struct {
 var wickManagerTopLevel = topLevelConnector{key: wickManagerKey, prefix: WickManagerPrefix}
 var subAgentsTopLevel = topLevelConnector{key: subAgentsKey, prefix: SubAgentsPrefix, withSessionID: true}
 
+// agentDenied reports whether an agent session must never reach this
+// connector. wickmanager manages wick itself and is no checklist entry, so
+// no agent scope can grant it — not even through include-new.
+func (t topLevelConnector) agentDenied(ctx context.Context) bool {
+	return t.key == wickManagerKey && connectors.AgentScopeFrom(ctx) != nil
+}
+
 // descriptors expands the connector's enabled ops into top-level
 // descriptors, gated by row visibility. Returns nil when the connector
 // is absent or the caller can't see it.
 func (t topLevelConnector) descriptors(ctx context.Context, svc *connectors.Service, tagIDs []string, isAdmin bool) []ToolDescriptor {
-	if svc == nil {
+	if svc == nil || t.agentDenied(ctx) {
 		return nil
 	}
 	rows, err := svc.ListByKey(ctx, t.key)
@@ -104,6 +111,10 @@ func withSessionIDProperty(schema JSONSchema) JSONSchema {
 // session_id, the arg is lifted out of params to the top level where
 // ResolveCallSession expects it (the transport header still wins).
 func (t topLevelConnector) execute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, name string, params map[string]any, user *entity.User, tagIDs []string) {
+	if t.agentDenied(r.Context()) {
+		rsp.ToolError(w, req.ID, t.key+" is not available to agent sessions", name)
+		return
+	}
 	rows, err := svc.ListByKey(r.Context(), t.key)
 	if err != nil || len(rows) == 0 {
 		rsp.ToolError(w, req.ID, t.key+" connector not available", name)

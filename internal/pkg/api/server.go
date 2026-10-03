@@ -1460,6 +1460,25 @@ func NewServer() *Server {
 	connectorsSvc.SetConfigs(configsSvc)
 	metricsRec := metrics.NewSimpleRecorder()
 	connectorsSvc.SetMetrics(metricsRec)
+	// An agent's "include new connectors" toggle reaches only what its
+	// owner's own catalog lists — not the triggering user's, and never a
+	// connector the catalog skips on purpose (wickmanager).
+	teamSvc.SetOwnerReach(func(ctx context.Context, userID string) (map[string]bool, error) {
+		u, err := authSvc.GetUserByID(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		ctx = connectors.WithoutAgentScope(ctx)
+		cat, err := connectorsSvc.VisibleCatalog(ctx, userID, authSvc.GetUserFilterTagIDs(ctx, userID), u.IsAdmin())
+		if err != nil {
+			return nil, err
+		}
+		reach := make(map[string]bool, len(cat))
+		for _, e := range cat {
+			reach[e.Row.ID] = true
+		}
+		return reach, nil
+	})
 
 	// Map an agent session to the Slack bot that owns it, so the Slack
 	// connector's "Sent using @bot" footer always names the session

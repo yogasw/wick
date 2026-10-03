@@ -176,6 +176,20 @@ func (s *Store) MarkRead(ctx context.Context, id string, t time.Time) error {
 	return nil
 }
 
+// ListByProjects returns every agent, of any owner, on one of the given
+// projects: the people a persona edit on that project reaches.
+func (s *Store) ListByProjects(ctx context.Context, projectIDs []string) ([]entity.AgentPersona, error) {
+	var rows []entity.AgentPersona
+	if len(projectIDs) == 0 {
+		return rows, nil
+	}
+	err := s.db.WithContext(ctx).
+		Select("id", "project_id").
+		Where("project_id IN ?", projectIDs).
+		Find(&rows).Error
+	return rows, err
+}
+
 // Delete removes the row. The project and sessions it pointed at stay:
 // they are the owner's work, not the agent's.
 func (s *Store) Delete(ctx context.Context, id string) error {

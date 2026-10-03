@@ -197,3 +197,32 @@ func TestStoreMarkReadSurvivesSave(t *testing.T) {
 		t.Fatalf("missing agent: err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestStoreListByProjectsCrossesOwners(t *testing.T) {
+	ctx := context.Background()
+	st := NewStore(testDB(t))
+	for _, p := range []*entity.AgentPersona{
+		{OwnerUserID: "u1", Handle: "aa", ProjectID: "p1"},
+		{OwnerUserID: "u2", Handle: "bb", ProjectID: "p1"},
+		{OwnerUserID: "u1", Handle: "cc", ProjectID: "p2"},
+		{OwnerUserID: "u1", Handle: "dd", ProjectID: "p3"},
+	} {
+		if err := st.Create(ctx, p); err != nil {
+			t.Fatalf("create %s: %v", p.Handle, err)
+		}
+	}
+	rows, err := st.ListByProjects(ctx, []string{"p1", "p2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	per := map[string]int{}
+	for _, r := range rows {
+		per[r.ProjectID]++
+	}
+	if per["p1"] != 2 || per["p2"] != 1 || per["p3"] != 0 {
+		t.Errorf("per project = %v", per)
+	}
+	if rows, _ := st.ListByProjects(ctx, nil); len(rows) != 0 {
+		t.Errorf("nil ids returned %d rows", len(rows))
+	}
+}

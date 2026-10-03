@@ -32,6 +32,46 @@ type Service struct {
 	mu    sync.Mutex
 	cache map[string]scopeEntry
 	now   func() time.Time
+
+	// ownerReach answers which connector ids an agent's owner reaches —
+	// their VisibleCatalog — for the include-new toggle. nil (not wired)
+	// means include-new lets nothing in.
+	ownerReach OwnerReachFunc
+}
+
+// OwnerReachFunc returns the connector ids in userID's own catalog (the
+// set wick_list shows them), with no agent scope applied.
+type OwnerReachFunc func(ctx context.Context, userID string) (map[string]bool, error)
+
+// SetOwnerReach wires the owner-catalog lookup. Set at boot, once the
+// connectors service exists.
+func (s *Service) SetOwnerReach(f OwnerReachFunc) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.ownerReach = f
+	s.mu.Unlock()
+}
+
+// reachOf is p's owner catalog when p's include-new toggle needs it, nil
+// otherwise. A failed lookup is nil too: include-new then lets nothing
+// in, the ticked connectors still work.
+func (s *Service) reachOf(ctx context.Context, p entity.AgentPersona) map[string]bool {
+	if !p.IncludeNewConnectors {
+		return nil
+	}
+	s.mu.Lock()
+	f := s.ownerReach
+	s.mu.Unlock()
+	if f == nil {
+		return nil
+	}
+	reach, err := f(ctx, p.OwnerUserID)
+	if err != nil {
+		return nil
+	}
+	return reach
 }
 
 // NewService builds the service over db and the agents layout (needed to
@@ -79,7 +119,7 @@ func (s *Service) ScopeForSession(ctx context.Context, sessionID string) connect
 	case err != nil:
 		return DenyAll()
 	default:
-		scope = ScopeOf(p)
+		scope = ScopeOf(p, s.reachOf(ctx, p))
 	}
 	s.mu.Lock()
 	s.cache[agentID] = scopeEntry{scope: scope, expiry: now.Add(scopeCacheTTL)}

@@ -1,6 +1,9 @@
 package team
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,5 +73,57 @@ func TestActionLabel(t *testing.T) {
 	long := ActionLabel("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz", "")
 	if r := []rune(long); len(r) != maxActionRunes || r[len(r)-1] != '…' {
 		t.Errorf("long label not truncated: %q", long)
+	}
+}
+
+func TestPreviewText(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"  halo\n\n  dunia  ", "halo dunia"},
+		{"## Hasil\n- **satu** dan `dua`\n> kutip", "Hasil satu dan dua kutip"},
+		{"lihat [dashboard](https://x.example/a?b=c)", "lihat dashboard"},
+		{"```go\nfmt.Println(1)\n```", "fmt.Println(1)"},
+	}
+	for _, c := range cases {
+		if got := PreviewText(c.in); got != c.want {
+			t.Errorf("PreviewText(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	long := PreviewText(strings.Repeat("a", 200))
+	if r := []rune(long); len(r) != maxPreviewRunes || !strings.HasSuffix(long, "…") {
+		t.Errorf("long preview = %d runes %q", len(r), long)
+	}
+}
+
+func TestAttentionPreviews(t *testing.T) {
+	if got := AskPreview("Deploy ke prod?\nPilih satu"); got != "Butuh input: Deploy ke prod? Pilih satu" {
+		t.Errorf("AskPreview = %q", got)
+	}
+	if got := ApprovalPreview("mcp__wick__wick_execute"); got != "wick_execute — butuh approval" {
+		t.Errorf("ApprovalPreview = %q", got)
+	}
+	if got := ApprovalPreview(""); got != "Aksi — butuh approval" {
+		t.Errorf("ApprovalPreview empty = %q", got)
+	}
+}
+
+func TestTailPreview(t *testing.T) {
+	dir := t.TempDir()
+	if got := TailPreview(filepath.Join(dir, "missing.jsonl")); got != "" {
+		t.Errorf("missing file = %q", got)
+	}
+	p := filepath.Join(dir, "conversation.jsonl")
+	var b strings.Builder
+	// Old filler pushes the first turn out of the tail window.
+	b.WriteString(`{"role":"user","text":"` + strings.Repeat("x", previewTailBytes) + `"}` + "\n")
+	b.WriteString(`{"role":"user","text":"cek log"}` + "\n")
+	b.WriteString(`{"role":"assistant","text":"**Sudah** dicek, aman."}` + "\n")
+	b.WriteString(`{"role":"system","text":"turn selesai"}` + "\n")
+	b.WriteString(`{"role":"assistant","text":"   "}` + "\n")
+	if err := os.WriteFile(p, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := TailPreview(p); got != "Sudah dicek, aman." {
+		t.Errorf("TailPreview = %q", got)
 	}
 }
