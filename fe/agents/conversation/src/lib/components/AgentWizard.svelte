@@ -73,8 +73,13 @@
   // at Write plus new ones, run as the caller, the global system prompt.
   // The user can narrow it on the Access step.
   let includeNew = $state(false);
-  type ConvertPreview = { chats: number; channels: string[] | null; schedules: number };
+  let useGlobalPrompt = $state(true);
+  type ConvertPreview = { name?: string; chats: number; channels: string[] | null; schedules: number; workflows?: string[] | null };
   let convertInfo = $state<ConvertPreview | null>(null);
+
+  const convertProjectName = $derived(
+    convertInfo?.name || projects.find((p) => p.id === convertProject)?.name || convertProject || "",
+  );
 
   let saving = $state(false);
   let error = $state("");
@@ -192,7 +197,7 @@
           allowed_connectors: $state.snapshot(grants) as ConnectorGrant[],
           include_new_connectors: includeNew,
           run_as: "caller",
-          ...(convertProject && projectId === convertProject ? { use_global_prompt: true } : {}),
+          ...(convertProject && projectId === convertProject ? { use_global_prompt: useGlobalPrompt } : {}),
         }),
       );
       onCreated(a);
@@ -253,9 +258,9 @@
       <p class="rounded-xl bg-white-200 px-3 py-2 text-xs text-black-800 dark:bg-navy-800 dark:text-black-600" data-testid="aw-convert-note">
         This project becomes the agent's own: its chats and files stay, it leaves the Projects list and lives on in Team.
         {#if convertInfo}
-          <br /><span data-testid="aw-convert-summary">{convertSummary(convertInfo.chats, convertInfo.channels ?? [], convertInfo.schedules)}</span>
+          <br /><span data-testid="aw-convert-summary">{convertSummary(convertInfo.chats, convertInfo.channels ?? [], convertInfo.schedules, convertInfo.workflows ?? [])}</span>
         {/if}
-        <br />What they do now is kept: every connector at Write (plus new ones), run as the caller, and the global system prompt — narrow it on the next step or later in Settings.
+        <br />What they do now is kept: every connector at Write (plus new ones), run as the caller, and the global system prompt — both shown, and changeable, on the next step.
       </p>
     {/if}
     <div class="rounded-xl border border-white-300 p-3 dark:border-navy-600">
@@ -349,6 +354,13 @@
       <label class={label} for="aw-sys">System prompt (persona)</label>
       <textarea id="aw-sys" class="{input} min-h-24" rows="4" bind:value={systemPrompt} placeholder="What this agent focuses on, e.g. Investigate production errors from Loki and summarise the cause."></textarea>
     </div>
+    {#if convertProject}
+      <!-- Converting: the project already exists and IS the agent's home, so
+           there is nothing to choose — say which one, read-only. -->
+      <p class="text-sm text-black-800 dark:text-black-600" data-testid="aw-convert-project">
+        Project: <span class="font-medium text-black-900 dark:text-white-100">{convertProjectName}</span> (this project)
+      </p>
+    {:else}
     <details class="text-sm text-black-800 dark:text-black-600">
       <summary class="cursor-pointer select-none">Advanced — project (default: created automatically)</summary>
       <div class="mt-2">
@@ -363,8 +375,19 @@
         {/if}
       </div>
     </details>
+    {/if}
   {:else}
+    {#if convertProject}
+      <p class="rounded-xl bg-white-200 px-3 py-2 text-xs text-black-800 dark:bg-navy-800 dark:text-black-600" data-testid="aw-convert-access">
+        <span class="font-medium text-black-900 dark:text-white-100">Default for a converted project:</span> every connector at Write, and new connectors included — what its chats can do today. Narrow it below or later in Settings.
+      </p>
+      <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100" data-testid="aw-global-prompt">
+        <input type="checkbox" class="mt-1" bind:checked={useGlobalPrompt} />
+        <span>Use the global system prompt<br /><span class="text-xs text-black-800 dark:text-black-600">On by default: the project's chats already run with it. Turn off to run on the persona alone.</span></span>
+      </label>
+    {:else}
     <p class="text-sm text-black-800 dark:text-black-600">Connectors are off until you add them. Platform tools are on for every agent; System tools are for the Captain.</p>
+    {/if}
     {#if suggestions.length > 0}
       <div class="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-green-500 px-3 py-2 text-xs text-black-800 dark:text-black-600" data-testid="aw-suggested">
         <span class="font-medium">✨ Suggested:</span>

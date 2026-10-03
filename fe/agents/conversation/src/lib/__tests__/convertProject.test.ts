@@ -21,4 +21,9 @@ describe("convertSummary", () => {
     );
     expect(convertSummary(1, [], 0)).toBe("1 chat becomes the agent's.");
   });
+  it("names the workflows bound to the project", () => {
+    expect(convertSummary(2, [], 0, ["Nightly digest", "Triage"])).toBe(
+      "2 chats become the agent's; workflows keep sending into it: Nightly digest, Triage.",
+    );
+  });
 });

@@ -12,9 +12,10 @@ export function convertGrants(catalog: AgentConnector[]): ConnectorGrant[] {
 }
 
 /** convertSummary says what moves over to the agent and keeps running. */
-export function convertSummary(chats: number, channels: string[], schedules: number): string {
+export function convertSummary(chats: number, channels: string[], schedules: number, workflows: string[] = []): string {
   const parts = [`${chats} chat${chats === 1 ? " becomes" : "s become"} the agent's`];
   if (channels.length) parts.push(`channels keep running as the agent: ${channels.join(", ")}`);
   if (schedules) parts.push(`${schedules} schedule${schedules === 1 ? "" : "s"} keep firing into it`);
+  if (workflows.length) parts.push(`workflows keep sending into it: ${workflows.join(", ")}`);
   return parts.join("; ") + ".";
 }
