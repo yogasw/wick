@@ -17,6 +17,7 @@ Telegram) the raw source still reads fine.
 | **HTML preview (inline)** | fence tagged ` ```html ` containing the full document | sandboxed live-preview iframe (see "HTML artifacts" below) |
 | **HTML preview (by file)** | fence tagged ` ```htmlfile ` containing just the **path** to a saved `.html` file | same sandboxed preview, but the transcript stores only the path — not the markup (see below) |
 | **Mermaid diagrams** | fence tagged ` ```mermaid ` containing any Mermaid source | colored diagram, theme-aware light/dark |
+| **Action card** | fence tagged ` ```actioncard ` with one JSON object (`id`, `title`, `rows`, `actions`, …) | card with buttons; a click comes back to you as `[postback card=… value=…]` (see "Action cards" below) |
 | **Inline math** | `$…$` — e.g. `$E = mc^2$` | KaTeX inline |
 | **Display math** | `$$…$$` on its own line(s) | KaTeX centered block |
 
@@ -125,6 +126,14 @@ sequenceDiagram
 Always tag the language so the block is highlighted (and so it's clear
 what the snippet is). An untagged fence still renders as a monospace
 block, just without color.
+
+### Action cards
+
+Use an ` ```actioncard ` fence when the user's next step is a click — a
+proposal to approve, a choice, a progress summary. A later card with the
+same `id` replaces the earlier one. Schema, variants and postbacks: skill
+`wick-agent-cards`. A click is never a permission: risky actions still go
+through `ask_user` / the approval gate.
 
 ### Math
 
