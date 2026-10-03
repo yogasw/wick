@@ -75,7 +75,7 @@ export const FEATURE_TABS: { feature: keyof AgentFeatures; tab: RailTab; label: 
   { feature: "source", tab: "source", label: "Source panel (git)" },
   { feature: "schedule", tab: "scheduled", label: "Routines / Schedule" },
   { feature: "browser", tab: "browser", label: "Browser", hint: "needs the Playwright connector checked" },
-  { feature: "subagents", tab: "subagents", label: "Sub-agent / delegasi" },
+  { feature: "subagents", tab: "subagents", label: "Sub-agents / delegation" },
   { feature: "notes", tab: "notes", label: "Notes" },
   { feature: "tickets", tab: "ticket", label: "Tickets" },
   { feature: "files", tab: "files", label: "Files" },
