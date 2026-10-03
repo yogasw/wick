@@ -188,3 +188,10 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "…"
 }
+
+func hostOf(raw string) string {
+	if u, err := url.Parse(raw); err == nil {
+		return u.Host
+	}
+	return ""
+}

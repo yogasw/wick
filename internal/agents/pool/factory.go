@@ -132,6 +132,12 @@ type ClaudeFactory struct {
 	// TeamPromptLoader is not consulted.
 	TeamSpawnLoader func(sessionID string) (TeamSpawn, bool)
 
+	// RemoteSpawnerLoader (optional) returns the spawner of a session that
+	// talks to an A2A remote agent (package a2aremote): no process, each
+	// turn is a call to the remote. false for any other session. It wins
+	// over the provider type, so such a session never starts a local CLI.
+	RemoteSpawnerLoader func(sessionID string) (provider.Spawner, bool)
+
 	// TeamLimitsLoader (optional) returns the native-tool and Bash limits
 	// of the Team agent sessionID works for — its own session or any
 	// sub-agent under it, so a delegated child is held to the same limits
@@ -296,6 +302,11 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	// for providers that get no MCP credential at all.
 	var runAsUserID string
 	spawner := f.Spawner
+	if spawner == nil && f.RemoteSpawnerLoader != nil {
+		if rs, ok := f.RemoteSpawnerLoader(opt.SessionID); ok {
+			spawner = rs
+		}
+	}
 	if spawner == nil {
 		bin, src := resolveProviderBinary(opt.ProviderType, opt.ProviderName)
 		log.Info().

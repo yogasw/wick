@@ -1206,6 +1206,7 @@ func NewServer() *Server {
 	agentsFactory.TeamPromptLoader = func(sessionID string, subAgent bool) string {
 		return teamSvc.PromptFor(context.Background(), sessionID, subAgent)
 	}
+	agentsFactory.RemoteSpawnerLoader = agentstool.RemoteSpawnerFor
 	agentsFactory.TeamSpawnLoader = func(sessionID string) (agentpool.TeamSpawn, bool) {
 		sp, ok := teamSvc.SpawnPromptFor(context.Background(), sessionID)
 		return agentpool.TeamSpawn{Prompt: sp.Prompt, Access: sp.Access, Subagents: sp.Subagents, Schedule: sp.Schedule, Files: sp.Files, UseGlobalPrompt: sp.UseGlobalPrompt, TeamInstructions: sp.TeamInstructions}, ok

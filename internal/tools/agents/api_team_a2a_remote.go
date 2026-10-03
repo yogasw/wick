@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/agents/a2aremote"
+	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/tool"
@@ -90,6 +91,8 @@ type RemoteAgentInfo struct {
 	MaxResponseBytes int64          `json:"max_response_bytes"`
 	Usage            string         `json:"usage"`
 	RefreshedAt      time.Time      `json:"refreshed_at"`
+	// Session is set only when GET names a session_id.
+	Session *a2aremote.State `json:"session,omitempty"`
 }
 
 func remoteInfoOf(c a2aremote.Config) *RemoteAgentInfo {
@@ -441,16 +444,65 @@ func createRemoteAgentProject(ctx context.Context, owner string, card a2aremote.
 	return pid, nil
 }
 
-// apiTeamRemoteGet handles GET /api/team/agents/{id}/a2a-remote.
+// apiTeamRemoteGet handles GET /api/team/agents/{id}/a2a-remote. With
+// ?session_id= (one of the agent's sessions) it adds that chat's A2A
+// state: its contextId and whether the remote waits for an answer
+// (input_required), for the question card.
 func apiTeamRemoteGet(c *tool.Ctx) {
 	if !remoteReady(c) {
 		return
 	}
-	_, cfg, ok := loadOwnRemoteAgent(c)
+	p, cfg, ok := loadOwnRemoteAgent(c)
 	if !ok {
 		return
 	}
-	c.JSON(http.StatusOK, remoteInfoOf(cfg))
+	info := remoteInfoOf(cfg)
+	if sid := c.Query("session_id"); sid != "" {
+		s, found := globalMgr.Registry().Session(sid)
+		if !found || s.Meta.AgentID != p.ID {
+			c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+			return
+		}
+		st := a2aremote.LoadState(globalLayout.SessionDir(sid))
+		info.Session = &st
+	}
+	c.JSON(http.StatusOK, info)
+}
+
+// RemoteSpawnerFor is the pool factory's RemoteSpawnerLoader: a session
+// bound to an A2A remote agent runs on that remote. The auth secret is
+// decrypted here, per spawn, and kept only in the spawner's memory.
+func RemoteSpawnerFor(sessionID string) (provider.Spawner, bool) {
+	if globalMgr == nil || globalTeam == nil || remoteStore() == nil {
+		return nil, false
+	}
+	s, ok := globalMgr.Registry().Session(sessionID)
+	if !ok || s.Meta.AgentID == "" {
+		return nil, false
+	}
+	p, err := globalTeam.Get(context.Background(), s.Meta.AgentID)
+	if err != nil || !IsRemoteAgent(p) {
+		return nil, false
+	}
+	cfg, found, err := remoteStore().Load(p.ID)
+	if err != nil || !found {
+		log.Warn().Err(err).Str("agent", p.ID).Msg("team: remote agent settings missing")
+		return remoteFailSpawner{msg: "This A2A remote agent has no settings; add it again."}, true
+	}
+	auth, err := cfg.Auth.Plain(remoteCodec())
+	if err != nil {
+		return remoteFailSpawner{msg: "Could not read the remote agent's auth: " + err.Error()}, true
+	}
+	return a2aremote.Spawner{Runtime: a2aremote.Runtime{Config: cfg, Auth: auth, Guard: remoteGuard()}}, true
+}
+
+// remoteFailSpawner refuses a remote session that cannot run. It still
+// answers true from the loader so the session never falls back to a
+// local CLI under the remote agent's name.
+type remoteFailSpawner struct{ msg string }
+
+func (f remoteFailSpawner) Spawn(context.Context, provider.SpawnOptions) (provider.Process, error) {
+	return nil, errors.New(f.msg)
 }
 
 // apiTeamRemoteUpdate handles PATCH /api/team/agents/{id}/a2a-remote

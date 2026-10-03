@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
+	"github.com/yogasw/wick/internal/agents/a2aremote"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/skillsync"
@@ -1297,6 +1298,10 @@ func createTeamAgentSession(c *tool.Ctx, p entity.AgentPersona, main bool) (stri
 		}
 	}
 	prov, modelID := resolveSessionTarget(c, "", "", projectID)
+	if IsRemoteAgent(p) {
+		// No local provider: the pool hands the session to a2aremote.
+		prov, modelID = a2aremote.ProviderKey, ""
+	}
 	presetName := "default"
 	label := p.Handle
 	if projectID != "" {

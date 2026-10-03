@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/a2aremote"
 	"github.com/yogasw/wick/internal/agents/a2aremote/a2aremotetest"
+	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/tool"
@@ -144,5 +146,56 @@ func TestRemoteRefusesLoopbackWithoutAllowlist(t *testing.T) {
 	}
 	if len(srv.Received()) != 0 || len(srv.Auths()) != 0 {
 		t.Fatal("the refused host was contacted")
+	}
+}
+
+// TestRemoteAgentChatRunsOnRemote: the agent's chat session runs under the
+// a2a-remote provider key and the factory's loader hands it the remote
+// spawner, whose turn reaches the fake with the stored bearer.
+func TestRemoteAgentChatRunsOnRemote(t *testing.T) {
+	withRemoteWorld(t, "127.0.0.1")
+	srv := a2aremotetest.New("Echo")
+	srv.Bearer = "tok"
+	defer srv.Close()
+	u := &entity.User{ID: "u1"}
+	code, out, raw := remoteCall(t, u, http.MethodPost, "/api/team/a2a-remote", map[string]any{"url": srv.URL, "auth": map[string]any{"type": "bearer", "secret": "tok"}}, apiTeamRemoteCreate)
+	if code != http.StatusOK {
+		t.Fatalf("create: %d %s", code, raw)
+	}
+	id := out["id"].(string)
+	code, out, raw = remoteCall(t, u, http.MethodPost, "/api/team/agents/"+id+"/chat", map[string]any{}, apiTeamAgentChat)
+	if code != http.StatusOK {
+		t.Fatalf("chat: %d %s", code, raw)
+	}
+	sid := out["session_id"].(string)
+	s, _ := globalMgr.Registry().Session(sid)
+	if len(s.Agents) == 0 || s.Agents[0].Provider != a2aremote.ProviderKey {
+		t.Fatalf("session provider: %+v", s.Agents)
+	}
+	sp, ok := RemoteSpawnerFor(sid)
+	if !ok {
+		t.Fatal("no remote spawner for the agent's session")
+	}
+	if _, ok := RemoteSpawnerFor("nope"); ok {
+		t.Fatal("remote spawner for an unknown session")
+	}
+	p, err := sp.Spawn(t.Context(), provider.SpawnOptions{SessionDir: globalLayout.SessionDir(sid)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = p.Kill() }()
+	_, _ = p.Stdin().Write([]byte(`{"type":"user","message":{"role":"user","content":"hi"}}` + "\n"))
+	sc := bufio.NewScanner(p.Stdout())
+	for sc.Scan() {
+		if strings.Contains(sc.Text(), `"type":"result"`) {
+			if !strings.Contains(sc.Text(), `"result":"echo: hi"`) {
+				t.Fatalf("turn: %s", sc.Text())
+			}
+			break
+		}
+	}
+	code, out, raw = remoteCall(t, u, http.MethodGet, "/api/team/agents/"+id+"/a2a-remote?session_id="+sid, nil, apiTeamRemoteGet)
+	if code != http.StatusOK || out["session"].(map[string]any)["context_id"] == "" {
+		t.Fatalf("session state: %d %s", code, raw)
 	}
 }

@@ -133,7 +133,9 @@ func (e executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter.
 		if !yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateWorking, nil), nil) {
 			return
 		}
-		say := func(s string) *a2a.Message { return a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, a2a.NewTextPart(s)) }
+		say := func(s string) *a2a.Message {
+			return a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, a2a.NewTextPart(s))
+		}
 		switch {
 		case ec.StoredTask != nil && ec.StoredTask.Status.State == a2a.TaskStateInputRequired:
 			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, say("deploying to "+text)), nil)
