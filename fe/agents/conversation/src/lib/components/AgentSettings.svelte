@@ -33,7 +33,8 @@
   import { MAX_PROMPTS, promptsToSave } from "../suggestedPrompts.js";
   import type { BashRule } from "../api/team.js";
   import RemoteAgentPanel from "./team/RemoteAgentPanel.svelte";
-  import { isRemoteAgent, remoteSettingsTab, REMOTE_SETTINGS_TABS } from "../remoteAgent.js";
+  import SlackRemotePanel from "./team/SlackRemotePanel.svelte";
+  import { isRemoteAgent, isSlackRemote, remoteSettingsTab, remoteSettingsTabs } from "../remoteAgent.js";
 
   type Props = {
     base: string;
@@ -315,10 +316,12 @@
     { id: "avatar", label: "Avatar" },
     { id: "advanced", label: "Advanced" },
   ];
-  /* An A2A remote agent has its own tab set (Remote A2A first); a tab it
-     lacks — Persona, Access, … from a menu or bookmark — opens Remote A2A. */
+  /* A remote agent (A2A or Slack) has its own tab set (Remote first); a
+     tab it lacks — Persona, Access, … from a menu or bookmark — opens
+     Remote. */
   const remote = $derived(isRemoteAgent(agent));
-  const tabs = $derived(remote ? REMOTE_SETTINGS_TABS : TABS);
+  const slack = $derived(isSlackRemote(agent));
+  const tabs = $derived(remote ? remoteSettingsTabs(agent) : TABS);
   const view = $derived<SettingsTab>(remote ? remoteSettingsTab(tab) : tab === "remote" ? "persona" : tab);
   const input =
     "w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100";
@@ -652,6 +655,11 @@
         <p class="text-xs text-black-800 dark:text-black-600">{CAPTAIN_ACCESS_NOTE}</p>
       </div>
     {/if}
+  {:else if view === "remote" && slack}
+    <SlackRemotePanel {base} {agent} section="remote" onChanged={(r) => onSaved({ ...saved, slack_remote: r })} />
+  {:else if view === "advanced" && slack}
+    <SlackRemotePanel {base} {agent} section="advanced" onChanged={(r) => onSaved({ ...saved, slack_remote: r })} />
+    {@render dangerZone()}
   {:else if view === "remote"}
     <RemoteAgentPanel {base} {agent} section="remote" onChanged={(r) => onSaved({ ...saved, remote: r })} />
   {:else if view === "advanced" && remote}
