@@ -370,7 +370,7 @@
     <!-- Mobile drawer only: three big agents to jump to; the list below
          then skips them (lg shows every row, pins hidden). -->
     {#if pins.length}
-      <div class="flex justify-around px-2 pb-3 pt-1 lg:hidden" data-testid="roster-pins">
+      <div class="flex justify-center gap-2 px-2 pb-3 pt-1 lg:hidden" data-testid="roster-pins">
         {#each pins as a (a.id)}
           <button type="button" class="flex w-20 flex-col items-center gap-1.5 rounded-xl py-1 text-xs text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600" onclick={() => openAgent(a)}>
             <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={54} working={isWorking(a.status)} asleep={a.disabled} />
