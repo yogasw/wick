@@ -114,10 +114,16 @@ func (s *Store) Save(c Connection) error {
 			Updates(map[string]any{"config": string(data), "enabled": c.Enabled, "updated_at": now}).Error
 	}
 	owner := c.OwnerUserID
-	return s.db.Create(&entity.AgentChannel{
+	if err := s.db.Create(&entity.AgentChannel{
 		ID: RowID(c.AgentID), Type: RowType, Name: c.AgentID, UserID: &owner,
 		Enabled: c.Enabled, Config: string(data), CreatedAt: now, UpdatedAt: now,
-	}).Error
+	}).Error; err != nil || c.Enabled {
+		return err
+	}
+	// The column defaults to true and Create drops a false bool as a zero
+	// value, so an off row is written off explicitly.
+	return s.db.Model(&entity.AgentChannel{}).Where("type = ? AND name = ?", RowType, c.AgentID).
+		Update("enabled", false).Error
 }
 
 // Delete drops agentID's connection, if any.

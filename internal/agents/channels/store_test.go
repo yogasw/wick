@@ -104,3 +104,22 @@ func TestOwnerRowIsolation(t *testing.T) {
 		t.Fatalf("user-a isolation broken: got %q", userMap["bot_token"])
 	}
 }
+
+// A Slack connection created off must read back off; the enabled column
+// defaults to true.
+func TestSaveAgentSlackCreateKeepsDisabled(t *testing.T) {
+	db := testDB(t)
+	if err := SaveAgentSlack(db, "a1", "u1", map[string]string{"k": "v"}, false); err != nil {
+		t.Fatal(err)
+	}
+	row, ok, err := AgentSlackRow(db, "a1")
+	if err != nil || !ok || row.Enabled {
+		t.Fatalf("row = %+v ok=%v err=%v, want disabled", row, ok, err)
+	}
+	if err := SaveAgentSlack(db, "a2", "u1", map[string]string{}, true); err != nil {
+		t.Fatal(err)
+	}
+	if row, _, _ := AgentSlackRow(db, "a2"); !row.Enabled {
+		t.Fatalf("enabled row = %+v", row)
+	}
+}

@@ -436,10 +436,16 @@ func SaveAgentSlack(db *gorm.DB, agentID, ownerID string, m map[string]string, e
 		}).Error
 	}
 	owner := ownerID
-	return db.Create(&entity.AgentChannel{
+	row := entity.AgentChannel{
 		ID: uuid.New().String(), Type: AgentSlackType, Name: agentID, UserID: &owner,
 		Enabled: enabled, Config: string(data), CreatedAt: time.Now(), UpdatedAt: time.Now(),
-	}).Error
+	}
+	if err := db.Create(&row).Error; err != nil || enabled {
+		return err
+	}
+	// The column defaults to true and Create drops a false bool as a zero
+	// value, so an off row is written off explicitly.
+	return db.Model(&entity.AgentChannel{}).Where("id = ?", row.ID).Update("enabled", false).Error
 }
 
 // DeleteAgentSlack drops agentID's connection row, if any.

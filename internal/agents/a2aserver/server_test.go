@@ -469,3 +469,37 @@ func TestStoreKeepsOnlyHash(t *testing.T) {
 		t.Fatal("delete kept the row")
 	}
 }
+
+// A connection created off must stay off: the enabled column defaults to
+// true, so a dropped zero value would turn A2A on behind the owner's back.
+func TestStoreCreateKeepsDisabled(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&entity.AgentChannel{}); err != nil {
+		t.Fatal(err)
+	}
+	st := NewStore(db)
+	if err := st.Save(Connection{AgentID: "a1", OwnerUserID: owner}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, _ := st.Load("a1"); !ok || got.Enabled {
+		t.Fatalf("new row = %+v ok=%v, want disabled", got, ok)
+	}
+	// Editing the public card (or callers) before Enable keeps it off.
+	if err := st.Save(Connection{AgentID: "a2", OwnerUserID: owner, PublicCard: true}); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := st.Load("a2")
+	if got.Enabled || !got.PublicCard {
+		t.Fatalf("public card before enable = %+v, want off with card public", got)
+	}
+	got.AllowedCallers = []string{"u2"}
+	if err := st.Save(got); err != nil {
+		t.Fatal(err)
+	}
+	if again, _, _ := st.Load("a2"); again.Enabled {
+		t.Fatalf("callers before enable turned it on: %+v", again)
+	}
+}
