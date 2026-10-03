@@ -137,9 +137,15 @@ type teamAgentWriteReq struct {
 }
 
 // captainSystemAddon is the starting persona of the auto-created Captain.
-// Kept short: the owner is expected to rewrite it.
-const captainSystemAddon = "You are the Captain: the lead agent of this owner's team. Help the owner organise their team of agents — " +
-	"who does what — and handle yourself whatever fits no other agent. Reply in the language the owner writes in."
+// Kept short: the owner is expected to rewrite it. It names no one: the
+// agent's name and handle come from the "Who you are" block built at
+// spawn (team.WhoYouAre), so a rename never leaves a stale name here.
+const captainSystemAddon = "You are the owner's main agent. Help the owner run their Team — who handles what — " +
+	"and handle yourself whatever doesn't fit another agent."
+
+// defaultAgentSystemAddon is saved for a new agent created with an empty
+// system prompt, so its persona is never blank.
+const defaultAgentSystemAddon = "Help the user with tasks in your area. Be concise and say when something is outside your access."
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -674,7 +680,11 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 			return
 		}
 		var err error
-		pid, err = createTeamAgentProject(c, name, str(req.Icon), str(req.Description), str(req.SystemPrompt), str(req.Provider), str(req.Model), str(req.Preset))
+		sys := str(req.SystemPrompt)
+		if strings.TrimSpace(sys) == "" {
+			sys = defaultAgentSystemAddon
+		}
+		pid, err = createTeamAgentProject(c, name, str(req.Icon), str(req.Description), sys, str(req.Provider), str(req.Model), str(req.Preset))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return

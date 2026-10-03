@@ -39,6 +39,21 @@ var immutableMainTemplate string
 //go:embed immutable_subagent.md
 var immutableSubagentTemplate string
 
+// immutable_team.md is a fourth, narrower overlay: only the spawn of a
+// Team agent's own session gets it, right after the main overlay and
+// before the agent's persona, followed by a "Who you are" block that
+// team.WhoYouAre generates at spawn from the agent's row. A sub-agent
+// delegated from such a session gets neither — just one line saying
+// whom it works for — and an ordinary session gets no Team text at all.
+// The assembly lives in team.Service.PromptFor; pool/factory.go splices
+// it in through Factory.TeamPromptLoader.
+//
+//go:embed immutable_team.md
+var immutableTeamTemplate string
+
+// ImmutableTeam is the static Team-agent overlay (immutable_team.md).
+func ImmutableTeam() string { return resolve(strings.TrimSpace(immutableTeamTemplate)) }
+
 // Split-out sections spliced into the MAIN overlay. Each lives as its
 // own .md file in this package so a topic is easy to find and extend in
 // isolation; immutable_main.md controls WHERE each lands via a

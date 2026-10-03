@@ -113,6 +113,13 @@ type ClaudeFactory struct {
 	// (no ticket, no notes) and nothing is appended.
 	TicketPointerLoader func(sessionID string) string
 
+	// TeamPromptLoader (optional) returns the Team part of the prompt for
+	// sessionID: the Team overlay plus "Who you are" for a Team agent's
+	// own session, one line for a sub-agent working under one, "" for an
+	// ordinary session. Spliced right after the immutable rules, before
+	// any persona, so a persona cannot talk over it.
+	TeamPromptLoader func(sessionID string, subAgent bool) string
+
 	// SpawnLogger (optional) writes one jsonl per spawn under
 	// `<base>/backends/spawns/`. Each spawn emits `start` on Build +
 	// `exit` from the OnExit hook so the Backends UI can list spawn
@@ -221,6 +228,11 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	// preset cannot override it.
 	immutable := systemprompt.ImmutableFor(pTypeStrEarly, opt.IsSubAgent)
 	presetContent := immutable
+	if f.TeamPromptLoader != nil {
+		if t := strings.TrimSpace(f.TeamPromptLoader(opt.SessionID, opt.IsSubAgent)); t != "" {
+			presetContent += "\n\n" + t
+		}
+	}
 	if f.ConnectorCatalogLoader != nil {
 		if catalog := strings.TrimSpace(f.ConnectorCatalogLoader()); catalog != "" {
 			presetContent += "\n\n" + catalog

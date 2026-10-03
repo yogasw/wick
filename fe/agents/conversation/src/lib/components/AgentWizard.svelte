@@ -234,7 +234,7 @@
     </div>
     <div>
       <label class={label} for="aw-sys">System prompt (persona)</label>
-      <textarea id="aw-sys" class="{input} min-h-24" rows="4" bind:value={systemPrompt} placeholder="You are …"></textarea>
+      <textarea id="aw-sys" class="{input} min-h-24" rows="4" bind:value={systemPrompt} placeholder="What this agent focuses on, e.g. Investigate production errors from Loki and summarise the cause."></textarea>
     </div>
     <details class="text-sm text-black-800 dark:text-black-600">
       <summary class="cursor-pointer select-none">Advanced — project (default: created automatically)</summary>

@@ -1123,6 +1123,11 @@ func NewServer() *Server {
 	// Agents app: the MCP layer narrows an agent session's connector
 	// reach to that agent's checklist through this resolver.
 	teamSvc = team.NewService(db, agentsLayout)
+	// Team identity: read per Build so a rename or a new teammate shows up
+	// on the next spawn.
+	agentsFactory.TeamPromptLoader = func(sessionID string, subAgent bool) string {
+		return teamSvc.PromptFor(context.Background(), sessionID, subAgent)
+	}
 	mcp.SetAgentScopeResolver(teamSvc.ScopeForSession)
 	agentstool.SetTeam(teamSvc)
 	agentstool.SetChannelRegistry(channelReg)
