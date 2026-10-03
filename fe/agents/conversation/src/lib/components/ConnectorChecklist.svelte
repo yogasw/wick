@@ -190,8 +190,8 @@
 
 {#if showIncludeNew}
   <div>
-    <Toggle checked={includeNew} onChange={(v) => (includeNew = v)} label="Sertakan connector baru (read-only)" />
-    <p class="mt-1 text-xs text-black-800 dark:text-black-600">Ikutkan semua connector saya, termasuk yang baru nanti — cocok untuk agent pribadi; default mati.</p>
+    <Toggle checked={includeNew} onChange={(v) => (includeNew = v)} label="Ikutkan semua connector saya, termasuk yang baru (hanya baca)" />
+    <p class="mt-1 text-xs text-black-800 dark:text-black-600">Connector yang tidak dicentang ikut terbuka dengan operasi baca saja, terbatas pada connector yang Anda sendiri punya — cocok untuk agent pribadi; default mati.</p>
   </div>
 {/if}
 
