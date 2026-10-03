@@ -1693,6 +1693,9 @@
   const HISTORY_PAGE = 20;
   let hasMoreHistory = $state(false);
   let loadingOlder = $state(false);
+  /* The first history read is still out: the thread shows a loading state
+     instead of the agent's "no messages yet" card. */
+  let historyLoaded = $state(false);
 
   /* Refetch the persisted conversation so a just-completed turn picks up
      server-derived artifacts — the live SSE turn is built client-side and
@@ -1714,7 +1717,8 @@
       })
       .catch((e: unknown) => {
         if (showError) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
-      });
+      })
+      .finally(() => { historyLoaded = true; });
   }
 
   /* Pull one older page and keep the viewport anchored on the turn the
@@ -2627,7 +2631,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} />
+          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} />
         </div>
       </div>
 

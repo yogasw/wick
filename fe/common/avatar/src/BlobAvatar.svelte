@@ -28,11 +28,13 @@
     pose?: BlobState;
     /** Animate (header, empty state, settings preview). Off = still PNG. */
     live?: boolean;
+    /** Waiting on something: fidget often (blob/motion/fidget.ts). */
+    restless?: boolean;
     still?: boolean;
     hatching?: boolean;
     title?: string;
   };
-  let { shape, expression, color, size = 40, pose = "idle", live = false, still = false, hatching = false, title }: Props = $props();
+  let { shape, expression, color, size = 40, pose = "idle", live = false, restless = false, still = false, hatching = false, title }: Props = $props();
 
   const WINK_MS = 450;
   const reduced = prefersReducedMotion();
@@ -101,6 +103,7 @@
         busy: c.shown !== "idle",
         enabled: idleAnimationsOn(),
         hidden: document.visibilityState === "hidden",
+        restless,
       });
       // A peek at the cursor: wherever the pointer last was, if it ever moved.
       if (fp?.gaze === "cursor") fp = { ...fp, gaze: pointer.at > 0 ? toPointer() : { yaw: 20, pitch: 0 } };

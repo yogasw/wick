@@ -41,13 +41,15 @@
     agent?: AgentIdentity;
     /** Team agents by handle and the opener for their chats; see ThreadMessage. */
     teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }>;
+    /** History has not arrived yet: a loading state, not "no messages". */
+    loading?: boolean;
     onOpenAgent?: (handle: string) => void;
     cards?: Record<string, import("../types/agents.js").CardState>;
     onCardAction?: (cardId: string, value: string, label: string) => void;
     onApprovalDecide?: (approvalId: string, decision: import("../interactiveCards.js").ApprovalDecisionChoice) => void;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -202,7 +204,16 @@
       <span class="rounded-md bg-white-200/95 dark:bg-navy-800/95 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm backdrop-blur-sm transition-opacity duration-300 {floatVisible ? 'opacity-100' : 'opacity-0'}">{floatLabel}</span>
     {/if}
   </div>
-  {#if isEmpty && agent}
+  {#if isEmpty && loading}
+    <!-- The avatar fills the wait with random fidgets (restless). -->
+    <div class="flex flex-col items-center justify-center py-16 text-center gap-3" data-testid="thread-loading" aria-busy="true">
+      {#if agent}
+        <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={72} live restless />
+        <p class="text-lg font-semibold text-black-900 dark:text-white-100">{agent.name}</p>
+      {/if}
+      <p class="text-sm text-black-700 dark:text-black-600">Loading messages…</p>
+    </div>
+  {:else if isEmpty && agent}
     <div class="flex flex-col items-center justify-center py-16 text-center gap-3">
       <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={72} live />
       <div class="flex flex-col gap-1">

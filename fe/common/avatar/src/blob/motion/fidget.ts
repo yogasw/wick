@@ -15,6 +15,10 @@ export const FIDGET_MIN_GAP = 8;
 export const FIDGET_MAX_GAP = 25;
 /** Seconds of idling before the avatar dozes off. */
 export const FIDGET_DROWSY_AFTER = 600;
+/** Seconds between two fidgets while restless (a chat still loading):
+    the avatar fills the wait instead of dozing through it. */
+export const FIDGET_RESTLESS_MIN_GAP = 0.6;
+export const FIDGET_RESTLESS_MAX_GAP = 2.5;
 /** Avatars fidgeting at once, page-wide. */
 export const FIDGET_MAX_ACTIVE = 3;
 /** Below this size only the subtle bits (eyes) play. */
@@ -92,8 +96,10 @@ export function fidgetActionsFor(size: number): readonly FidgetAction[] {
   return size >= FIDGET_BIG_MIN ? FIDGET_ACTIONS : FIDGET_ACTIONS.filter((a) => !a.heavy);
 }
 
-/** pickFidget draws one action by weight. */
-export function pickFidget(actions: readonly FidgetAction[], rand: () => number): FidgetAction {
+/** pickFidget draws one action by weight; `not` (the one just played)
+    is left out when there is anything else to draw. */
+export function pickFidget(actions: readonly FidgetAction[], rand: () => number, not = ""): FidgetAction {
+  if (not && actions.length > 1) actions = actions.filter((a) => a.id !== not);
   const total = actions.reduce((s, a) => s + a.weight, 0);
   let r = rand() * total;
   for (const a of actions) {
@@ -142,6 +148,9 @@ export type FidgetEnv = {
   hidden?: boolean;
   offscreen?: boolean;
   reduced?: boolean;
+  /** Waiting on something (a chat loading): short random gaps, no
+      repeat of the last bit, never drowsy. */
+  restless?: boolean;
 };
 
 /** fidgetPaused: no fidget and no drowsing this frame. */
@@ -176,7 +185,12 @@ export function createFidget(o: { now: number; rand?: () => number; slots?: Fidg
   const rand = o.rand ?? Math.random;
   const slots = o.slots ?? sharedFidgetSlots;
   const owner = {};
-  const gap = () => FIDGET_MIN_GAP + rand() * (FIDGET_MAX_GAP - FIDGET_MIN_GAP);
+  let restless = false;
+  const gap = () =>
+    restless
+      ? FIDGET_RESTLESS_MIN_GAP + rand() * (FIDGET_RESTLESS_MAX_GAP - FIDGET_RESTLESS_MIN_GAP)
+      : FIDGET_MIN_GAP + rand() * (FIDGET_MAX_GAP - FIDGET_MIN_GAP);
+  let last = "";
 
   let idleSince = o.now;
   // Each avatar draws its own first wait, so a page of them never moves
@@ -194,7 +208,8 @@ export function createFidget(o: { now: number; rand?: () => number; slots?: Fidg
   return {
     step(env) {
       const t = env.time;
-      if (env.busy) idleSince = t;
+      restless = !!env.restless;
+      if (env.busy || restless) idleSince = t;
       if (fidgetPaused(env)) {
         end();
         drowsy = false;
@@ -221,13 +236,16 @@ export function createFidget(o: { now: number; rand?: () => number; slots?: Fidg
         end();
         nextAt = t + gap();
       }
+      // Turning restless mid-wait cuts a long idle gap short.
+      if (restless && nextAt - t > FIDGET_RESTLESS_MAX_GAP) nextAt = t + gap();
       if (t < nextAt) return null;
       if (!slots.acquire(owner)) {
         // The page is busy fidgeting: try again shortly.
         nextAt = t + 2 + rand() * 3;
         return null;
       }
-      const action = pickFidget(fidgetActionsFor(env.size), rand);
+      const action = pickFidget(fidgetActionsFor(env.size), rand, restless ? last : "");
+      last = action.id;
       const [lo, hi] = action.duration;
       active = { action, start: t, dur: lo + rand() * (hi - lo) };
       return action.pose(0);

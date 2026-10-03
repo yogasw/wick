@@ -153,3 +153,22 @@ describe("Idle animations switch", () => {
     setIdleAnimations(true);
   });
 });
+
+describe("restless (a chat loading)", () => {
+  test("fidgets every few seconds, never the same bit twice in a row, never dozes", () => {
+    const f = createFidget({ now: 0, rand: seededRand(7), slots: createFidgetSlots(10) });
+    const starts = run(f, 0, FIDGET_DROWSY_AFTER + 30, { size: BIG, restless: true });
+    expect(starts.length).toBeGreaterThan(100);
+    for (let i = 1; i < starts.length; i++) expect(starts[i].id).not.toBe(starts[i - 1].id);
+    expect(new Set(starts.map((s) => s.id)).size).toBeGreaterThan(4);
+    expect(f.current).not.toBe("drowsy");
+  });
+
+  test("turning restless cuts a long idle wait short; reduced motion still wins", () => {
+    const f = createFidget({ now: 0, rand: () => 0.99, slots: createFidgetSlots(10) });
+    f.step({ time: 0, size: BIG });
+    expect(run(f, 0.1, 4, { size: BIG, restless: true }).length).toBeGreaterThan(0);
+    const g = createFidget({ now: 0, rand: seededRand(3), slots: createFidgetSlots(10) });
+    expect(run(g, 0, 60, { size: BIG, restless: true, reduced: true })).toEqual([]);
+  });
+});

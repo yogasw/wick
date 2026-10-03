@@ -24,6 +24,16 @@ const TURN_B = makeTurn("t-2", "assistant", "Hello from assistant");
 const TURN_C = makeTurn("t-3", "user", "Another message");
 
 describe("ConversationThread", () => {
+  test("while history loads it shows a loading state, not the agent's empty card", () => {
+    const agent = { id: "a1", handle: "captain", name: "Captain", description: "Lead agent" };
+    const { rerender } = render(ConversationThread, { props: { turns: [], live: null, typing: { active: false }, loading: true, agent } });
+    expect(screen.getByTestId("thread-loading").textContent).toContain("Loading messages");
+    expect(screen.queryByText("Lead agent")).toBeNull();
+    rerender({ turns: [], live: null, typing: { active: false }, loading: false, agent });
+    expect(screen.queryByTestId("thread-loading")).toBeNull();
+    expect(screen.getByText("Lead agent")).toBeDefined();
+  });
+
   test("renders all historical turns", () => {
     render(ConversationThread, {
       props: {

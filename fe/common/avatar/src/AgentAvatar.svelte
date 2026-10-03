@@ -18,6 +18,8 @@
   import { isBlobKind, blobStateFor } from "./blob.js";
   import { blobPath, eyesAt, orbitDot, gazeTarget, approach, followsPointer, normalizeShape, normalizeState, stateFor, DOT_R, type AvatarState, type Vec } from "./shape.js";
   import { subscribe, pointer, pointerActive, prefersReducedMotion } from "./ticker.js";
+  import { createFidget, type FidgetPose } from "./blob/motion/fidget";
+  import { idleAnimationsOn } from "./idle.js";
 
   type Props = {
     /** "" / absent = classic, "blob" = blob mascot (team.Avatar.kind). */
@@ -45,6 +47,9 @@
     /** Blob only: animate this one (header, empty state, preview). A blob
         without it is a cached still frame, so lists stay cheap. */
     live?: boolean;
+    /** Waiting on something (a chat loading): a live avatar fidgets
+        often, a random bit each time (blob/motion/fidget.ts). */
+    restless?: boolean;
     title?: string;
   };
   let {
@@ -62,6 +67,7 @@
     pose,
     still = false,
     live = false,
+    restless = false,
     title,
   }: Props = $props();
 
@@ -109,29 +115,49 @@
   let t = $state(0);
   let gaze = $state<Vec>({ x: 0, y: 0 });
 
+  /* A live classic avatar fidgets on the same schedule as the blob one:
+     a glance or a wink moves the eyes, a hop or a tilt the whole body. */
+  const fidget = createFidget({ now: typeof performance === "undefined" ? 0 : performance.now() / 1000 });
+  $effect(() => () => fidget.stop());
+  let fp = $state<FidgetPose | null>(null);
+
   $effect(() => {
     if (reduced || blob) return;
-    return subscribe((now) => {
+    const off = subscribe((now) => {
       t = now;
+      const next = live
+        ? fidget.step({ time: now, size, busy: current !== "idle" || hover, enabled: idleAnimationsOn(), hidden: document.visibilityState === "hidden", restless })
+        : null;
+      if (next !== fp) fp = next;
       let target: Vec = { x: 0, y: 0 };
-      if (svgEl && followsPointer(current) && pointerActive(performance.now())) {
+      const look = fp?.gaze;
+      if (look && look !== "cursor") target = gazeTarget(look.yaw * 6, look.pitch * 6);
+      else if (svgEl && (look === "cursor" || followsPointer(current)) && pointerActive(performance.now())) {
         const r = svgEl.getBoundingClientRect();
         target = gazeTarget(pointer.x - (r.left + r.width / 2), pointer.y - (r.top + r.height / 2));
       }
-      const next = approach(gaze, target);
       // Settled: skip the write so an idle avatar does not re-render the eyes for nothing.
-      if (Math.abs(next.x - gaze.x) > 1e-4 || Math.abs(next.y - gaze.y) > 1e-4) gaze = next;
+      const g = approach(gaze, target);
+      if (Math.abs(g.x - gaze.x) > 1e-4 || Math.abs(g.y - gaze.y) > 1e-4) gaze = g;
     });
+    return () => {
+      off();
+      fidget.stop();
+    };
   });
+  // The body part of a fidget: a hop lifts it, a tilt leans it.
+  const body = $derived(
+    fp?.motion ? `translate(0 ${((fp.motion.bounce ?? 0) * 0.02).toFixed(3)}) rotate(${(((fp.motion.tilt ?? 0) * 180) / Math.PI).toFixed(2)})` : "",
+  );
 
   const path = $derived(blobPath(s, current, t, !reduced));
-  const eyes = $derived(eyesAt(current, t, gaze, { animate: !reduced, hover, wink }));
+  const eyes = $derived(eyesAt(current, t, gaze, { animate: !reduced, hover, wink: wink || (fp?.wink ?? 0) > 0.5 }));
   const dot = $derived(orbitDot(current, t, !reduced));
   const fill = $derived(/^#[0-9a-f]{3,8}$/i.test(color) ? color : "#6366f1");
 </script>
 
 {#if blob}
-  <BlobAvatar {shape} {expression} {color} {size} pose={blobStateFor(current)} {live} {still} hatching={hatching && !reduced} {title} />
+  <BlobAvatar {shape} {expression} {color} {size} pose={blobStateFor(current)} {live} {restless} {still} hatching={hatching && !reduced} {title} />
 {:else}
 <!-- The click is a reaction, not an action: the row button around the
      avatar does the navigating, so there is nothing for a key to trigger. -->
@@ -153,10 +179,12 @@
   onclick={onClick}
 >
   {#if title}<title>{title}</title>{/if}
+  <g transform={body} data-fidget={fidget.current || undefined}>
   <path d={path} fill={fill} transform="translate({(gaze.x * 0.35).toFixed(3)} {(gaze.y * 0.35).toFixed(3)})" />
   {#each eyes as e, i (i)}
     <ellipse cx={e.cx.toFixed(3)} cy={e.cy.toFixed(3)} rx={e.rx} ry={e.ry.toFixed(3)} fill="#16181d" opacity="0.88" />
   {/each}
+  </g>
   {#if dot}<circle cx={dot.x.toFixed(3)} cy={dot.y.toFixed(3)} r={DOT_R} fill="#27b199" />{/if}
 </svg>
 {/if}
