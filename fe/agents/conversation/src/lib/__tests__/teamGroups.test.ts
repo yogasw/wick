@@ -42,3 +42,12 @@ describe("group composer hint", () => {
     expect(mergeTurn(mergeTurn([], t), t)).toHaveLength(1);
   });
 });
+
+describe("backing link", () => {
+  it("points a member reply at the session it ran in", async () => {
+    const { backingLink } = await import("../teamGroups.js");
+    expect(backingLink({ speaker: { agent_id: "a1", handle: "anton", via: "group", session_id: "s1" } })).toEqual({ handle: "anton", session: "s1" });
+    expect(backingLink({ speaker: { agent_id: "a1", handle: "anton", via: "group" } })).toBeNull();
+    expect(backingLink({ speaker: null })).toBeNull();
+  });
+});

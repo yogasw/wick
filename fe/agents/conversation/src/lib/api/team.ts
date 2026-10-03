@@ -245,7 +245,8 @@ export type GroupTurn = {
   extras?: Record<string, string>;
   is_error?: boolean;
   sender?: { name?: string } | null;
-  speaker?: { agent_id: string; handle?: string; via: string } | null;
+  /** session_id: the member's backing session the turn ran in (via "group"). */
+  speaker?: { agent_id: string; handle?: string; via: string; session_id?: string } | null;
 };
 
 export const listGroups = (base: string) => apiGetE<{ groups: GroupItem[] | null }>(`${base}/api/team/groups`);

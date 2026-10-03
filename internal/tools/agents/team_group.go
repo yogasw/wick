@@ -491,7 +491,7 @@ func sendGroupMessage(c *tool.Ctx, sess session.Session, text string) {
 			map[string]string{"from": "user", "to": h, "reason": "not an enabled member"})
 	}
 	run := &groupRun{
-		group: g, members: members, limit: teamlink.GroupLimit(members, g.MaxHopsOverride),
+		group: g, members: members, limit: teamlink.GroupLimit(members, g.MaxHopsOverride), backing: backing,
 		turn: func(ctx context.Context, p teamlink.Peer, prompt string) (string, error) {
 			return runBackingTurn(ctx, backing[p.ID], prompt)
 		},
@@ -585,6 +585,8 @@ type groupRun struct {
 	members []teamlink.Peer
 	limit   int
 	turn    func(ctx context.Context, p teamlink.Peer, prompt string) (string, error)
+	// backing names each member's backing session, for the turn's link.
+	backing map[string]string
 	history func() []store.ConversationTurn
 	record  func(store.ConversationTurn)
 	typing  func(p teamlink.Peer, on bool)
@@ -661,7 +663,7 @@ func (r *groupRun) answer(ctx context.Context, j groupJob) string {
 	}
 	r.record(store.ConversationTurn{
 		TurnID: fmt.Sprintf("%d", now.UnixNano()), Timestamp: now, Role: "assistant", Source: sourceGroup, Text: reply,
-		Speaker: &store.Speaker{AgentID: j.to.ID, Handle: j.to.Handle, Via: store.ViaGroup},
+		Speaker: &store.Speaker{AgentID: j.to.ID, Handle: j.to.Handle, Via: store.ViaGroup, SessionID: r.backing[j.to.ID]},
 	})
 	return reply
 }

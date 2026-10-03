@@ -148,6 +148,10 @@ type Speaker struct {
 	AgentID string `json:"agent_id"`
 	Handle  string `json:"handle,omitempty"`
 	Via     string `json:"via"`
+	// SessionID is where a group turn actually ran — the member's backing
+	// session, whose trace and tool calls the group thread does not copy.
+	// Set for via "group" only.
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // Speaker.Via values.

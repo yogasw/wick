@@ -14,7 +14,8 @@
     groupConversation, sendToGroup, markGroupRead, runApi,
     type AgentItem, type GroupItem, type GroupTurn,
   } from "../api/team.js";
-  import { composerHint, handlesLine, mergeTurn } from "../teamGroups.js";
+  import { backingLink, composerHint, handlesLine, mergeTurn } from "../teamGroups.js";
+  import { formatAgentsRoute, navigate } from "../agentsRouter.js";
   import { getSystemEvent } from "../systemEvents.js";
 
   type Props = {
@@ -152,6 +153,15 @@
           <div class="min-w-0 max-w-[80%]">
             <div class="mb-0.5 text-xs font-semibold text-black-900 dark:text-white-100">{m?.name ?? t.speaker?.handle ?? "agent"} <span class="font-normal text-black-700">@{t.speaker?.handle ?? ""}</span></div>
             <div class="prose-sm rounded-2xl rounded-tl-md bg-white-200 px-3.5 py-2 text-sm text-black-900 dark:bg-navy-700 dark:text-white-100">{@html renderMarkdown(t.text)}</div>
+            {@const link = backingLink(t)}
+            {#if link}
+              <a
+                class="mt-0.5 inline-block text-[11px] text-black-700 hover:text-green-600 hover:underline dark:hover:text-green-400"
+                href={formatAgentsRoute({ handle: link.handle, session: link.session, panel: null }, base)}
+                data-testid="backing-link"
+                onclick={(e) => { e.preventDefault(); navigate({ handle: link.handle, session: link.session, panel: null }); }}
+              >open in @{link.handle}'s chat ↗</a>
+            {/if}
           </div>
         </div>
       {/if}

@@ -25,6 +25,7 @@ func (f *fakeGroup) run(members []teamlink.Peer, override int) *groupRun {
 	n := 0
 	return &groupRun{
 		group: g, members: members, limit: teamlink.GroupLimit(members, override),
+		backing: map[string]string{"a-anton": "s-anton", "a-vera": "s-vera"},
 		turn: func(_ context.Context, p teamlink.Peer, prompt string) (string, error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
@@ -61,7 +62,8 @@ func TestGroupRunMembersAnswerSideBySide(t *testing.T) {
 	if strings.Join(f.asked, ",") != "anton,vera" {
 		t.Fatalf("asked = %v", f.asked)
 	}
-	if len(f.thread) != 2 || f.thread[0].Speaker.Handle != "anton" || f.thread[1].Speaker.Via != store.ViaGroup || f.thread[0].Role != "assistant" {
+	if len(f.thread) != 2 || f.thread[0].Speaker.Handle != "anton" || f.thread[1].Speaker.Via != store.ViaGroup || f.thread[0].Role != "assistant" ||
+		f.thread[0].Speaker.SessionID != "s-anton" {
 		t.Fatalf("thread = %+v", f.thread)
 	}
 	if !strings.Contains(f.prompts[1], "--- @anton:\nok from anton") || !strings.Contains(f.prompts[1], "you are @vera") {

@@ -47,6 +47,15 @@ export function overrideChoices(membersMaxHops: number): { value: number; label:
   return out;
 }
 
+/** backingLink is the "open in @x's chat" target of a member's group
+    reply: that agent's backing session in the Team app, or null when the
+    turn names none (older turns). */
+export function backingLink(t: Pick<GroupTurn, "speaker">): { handle: string; session: string } | null {
+  const s = t.speaker;
+  if (!s?.handle || !s.session_id) return null;
+  return { handle: s.handle, session: s.session_id };
+}
+
 /** mergeTurn adds a live turn to the thread once (by turn_id). */
 export function mergeTurn(turns: GroupTurn[], t: GroupTurn): GroupTurn[] {
   if (t.turn_id && turns.some((x) => x.turn_id === t.turn_id)) return turns;
