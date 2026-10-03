@@ -26,12 +26,15 @@ export function stacked(members: GroupMember[], max = 3): { shown: GroupMember[]
 }
 
 /** composerHint is the line under the group composer: where a message with no @ goes and the cap. */
-export function composerHint(g: Pick<GroupItem, "responder" | "max_hops">): { route: string; cap: string } {
+export function composerHint(g: Pick<GroupItem, "responder" | "max_hops">): { route: string; cap: string; caption: string } {
   const who = g.responder ? `@${g.responder}` : "nobody (no enabled agent)";
   const n = g.max_hops;
+  const cap = `max ${n} agent-to-agent turn${n === 1 ? "" : "s"}`;
   return {
     route: `Message the group — no @ goes to ${who}`,
-    cap: `max ${n} agent-to-agent turn${n === 1 ? "" : "s"}`,
+    cap,
+    // The Composer caption has little room: the rule and the cap first.
+    caption: `No @ → ${who} · ${cap}`,
   };
 }
 

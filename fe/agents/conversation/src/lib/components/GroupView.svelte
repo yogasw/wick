@@ -169,7 +169,7 @@
       placeholder={`Message ${group.name} — @ asks one member`}
       {mentionAgents}
       {mentionAvatar}
-      caption={`${hint.route} · ${hint.cap}`}
+      caption={hint.caption}
     />
     {#if error}<p class="mt-1 px-2 text-xs text-neg-400">{error}</p>{/if}
   </div>

@@ -424,7 +424,7 @@
           data-testid="roster-group"
           onclick={() => { rosterOpen = false; g.unread = false; navigate({ handle: null, session: null, panel: null, group: g.id }); }}
         >
-          <span class="flex h-11 w-11 shrink-0 items-center"><GroupAvatars members={g.members} size={20} max={2} ring="bg-white-200 dark:bg-navy-700" /></span>
+          <span class="flex h-11 w-11 shrink-0 items-center"><GroupAvatars members={g.members} size={20} max={2} showMore={false} ring="bg-white-200 dark:bg-navy-700" /></span>
           {#if g.unread && activeGroupId !== g.id}<span class="roster-udot rounded-full border-2 border-white-200 bg-neg-400 dark:border-navy-700" aria-label="new message"></span>{/if}
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-2">

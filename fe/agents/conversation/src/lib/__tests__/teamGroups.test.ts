@@ -31,6 +31,7 @@ describe("group composer hint", () => {
     expect(composerHint({ responder: "captain", max_hops: 3 })).toEqual({
       route: "Message the group — no @ goes to @captain",
       cap: "max 3 agent-to-agent turns",
+      caption: "No @ → @captain · max 3 agent-to-agent turns",
     });
     expect(composerHint({ responder: "", max_hops: 1 }).cap).toBe("max 1 agent-to-agent turn");
   });
