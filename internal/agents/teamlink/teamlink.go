@@ -143,7 +143,10 @@ type Hub struct {
 	stores   map[string]*genStore
 	tasks    map[a2a.TaskID]*taskRef
 	contexts map[string]*contextState
-	inflight map[string]inbound
+	// inflight holds every inbound task an agent is answering right now,
+	// per task: two messages to one agent run side by side and neither
+	// may overwrite or clear the other's chain.
+	inflight map[string]map[a2a.TaskID]inbound
 	// pruned is when the janitor last ran.
 	pruned time.Time
 	// last is the inbound task each agent answered most recently. A
@@ -180,6 +183,15 @@ type inbound struct {
 	contextID string
 	depth     int
 	at        time.Time
+	// session is the conversation answering it, when Turns can say.
+	session string
+}
+
+// SessionLocator is optionally implemented by Turns: the session a turn
+// of agent will run in. It lets a message sent from that session be tied
+// to the inbound task it is answering.
+type SessionLocator interface {
+	MainSession(ctx context.Context, agent Peer) string
 }
 
 // NewHub returns an empty Hub.
@@ -192,7 +204,7 @@ func NewHub(dir Directory, turns Turns, notify Notifier) *Hub {
 		stores:   map[string]*genStore{},
 		tasks:    map[a2a.TaskID]*taskRef{},
 		contexts: map[string]*contextState{},
-		inflight: map[string]inbound{},
+		inflight: map[string]map[a2a.TaskID]inbound{},
 		last:     map[string]inbound{},
 	}
 }
@@ -319,7 +331,7 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, errors.New("message is empty")
 	}
-	contextID, depth, err := h.admit(caller.ID, in.ContextID, in.Mention && !in.Human)
+	contextID, depth, err := h.admit(caller.ID, in.CallerSession, in.ContextID, in.Mention && !in.Human)
 	if err != nil {
 		return nil, err
 	}
@@ -359,11 +371,11 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 
 // admit charges one turn to the context and works out the depth. A
 // caller answering an inbound task continues that task's context.
-func (h *Hub) admit(callerID, contextID string, afterReply bool) (string, int, error) {
+func (h *Hub) admit(callerID, callerSession, contextID string, afterReply bool) (string, int, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	depth := 1
-	cur, ok := h.inflight[callerID]
+	cur, ok := h.inboundOf(callerID, callerSession)
 	if !ok && afterReply {
 		cur, ok = h.last[callerID]
 	}
@@ -391,6 +403,29 @@ func (h *Hub) admit(callerID, contextID string, afterReply bool) (string, int, e
 	cs.turns++
 	cs.touched = h.now()
 	return contextID, depth, nil
+}
+
+// inboundOf picks the inbound task a message from callerID continues:
+// the one running in callerSession when that is known, else the deepest
+// — with several in flight and no way to tell them apart, the strictest
+// chain is the one whose budget must not be dodged.
+func (h *Hub) inboundOf(callerID, callerSession string) (inbound, bool) {
+	deepest := func(match func(inbound) bool) (inbound, bool) {
+		var best inbound
+		found := false
+		for _, in := range h.inflight[callerID] {
+			if match(in) && (!found || in.depth > best.depth) {
+				best, found = in, true
+			}
+		}
+		return best, found
+	}
+	if callerSession != "" {
+		if in, ok := deepest(func(in inbound) bool { return in.session == callerSession }); ok {
+			return in, true
+		}
+	}
+	return deepest(func(inbound) bool { return true })
 }
 
 // pruneLocked is the janitor: settled tasks and idle contexts older than

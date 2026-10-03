@@ -75,12 +75,22 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			text = Frame(from, text)
 		}
 
+		var session string
+		if sl, ok := h.Turns.(SessionLocator); ok {
+			session = sl.MainSession(ctx, target)
+		}
 		h.mu.Lock()
-		h.inflight[e.agentID] = inbound{contextID: ec.ContextID, depth: depth}
+		if h.inflight[e.agentID] == nil {
+			h.inflight[e.agentID] = map[a2a.TaskID]inbound{}
+		}
+		h.inflight[e.agentID][ec.TaskID] = inbound{contextID: ec.ContextID, depth: depth, session: session}
 		h.mu.Unlock()
 		sessionID, reply, runErr := h.Turns.Run(ctx, target, text)
 		h.mu.Lock()
-		delete(h.inflight, e.agentID)
+		delete(h.inflight[e.agentID], ec.TaskID)
+		if len(h.inflight[e.agentID]) == 0 {
+			delete(h.inflight, e.agentID)
+		}
 		h.last[e.agentID] = inbound{contextID: ec.ContextID, depth: depth, at: h.now()}
 		h.mu.Unlock()
 

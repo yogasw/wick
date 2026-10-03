@@ -85,6 +85,14 @@ func (poolTurns) Run(ctx context.Context, agent teamlink.Peer, text string) (str
 	return s.ID, collectTurn(ctx, ch), nil
 }
 
+// MainSession is the session a turn of agent runs in (SessionLocator).
+func (poolTurns) MainSession(_ context.Context, agent teamlink.Peer) string {
+	if s, ok := mainSessionOf(agent.OwnerID, agent.ID); ok {
+		return s.ID
+	}
+	return ""
+}
+
 // collectTurn joins the text of one turn, up to its Done.
 func collectTurn(ctx context.Context, ch <-chan delegation.StreamEvent) string {
 	var b strings.Builder
