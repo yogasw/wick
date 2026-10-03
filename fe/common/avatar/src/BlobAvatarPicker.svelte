@@ -35,7 +35,7 @@
         onclick={() => onChange(randomBlob())}
       >Shuffle</button>
     </div>
-    <div class="grid grid-cols-6 gap-1.5">
+    <div class="grid gap-1.5" style:grid-template-columns="repeat(6, minmax(0, 1fr))">
       {#each BLOB_SHAPES as s (s)}
         <button type="button" class={tileClass(look.shape === s)} aria-label={s} title={s} aria-pressed={look.shape === s} onclick={() => set({ shape: s })}>
           <BlobAvatar shape={s} expression={look.expression} color={look.color} size={tile} />
@@ -45,7 +45,7 @@
   </div>
   <div>
     <span class={labelClass}>Expression</span>
-    <div class="grid grid-cols-6 gap-1.5">
+    <div class="grid gap-1.5" style:grid-template-columns="repeat(6, minmax(0, 1fr))">
       {#each BLOB_EXPRESSIONS as e (e)}
         <button type="button" class={tileClass(look.expression === e)} aria-label={e} title={e} aria-pressed={look.expression === e} onclick={() => set({ expression: e })}>
           <BlobAvatar shape={look.shape} expression={e} color={look.color} size={tile} />
