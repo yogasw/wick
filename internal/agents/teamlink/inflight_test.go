@@ -72,7 +72,7 @@ func TestConcurrentInboundKeepsEachChain(t *testing.T) {
 	// Vera is herself two hops deep, so her message to Anton is depth 3.
 	h.mu.Lock()
 	h.inflight["a-vera"] = map[a2a.TaskID]inbound{"x": {contextID: "chain-v", depth: 2}}
-	h.contexts["chain-v"] = &contextState{turns: 2, touched: h.now()}
+	h.contexts["chain-v"] = &contextState{turns: 2, touched: h.now(), owner: "u1"}
 	h.mu.Unlock()
 
 	if _, err := h.Send(ctx, SendInput{CallerAgentID: "a-cap", To: "anton", Text: "from captain", Wait: -1}); err != nil {

@@ -274,3 +274,46 @@ func TestMentionAfterReplyContinuesContext(t *testing.T) {
 		t.Fatalf("a person's mention reused the agents' context: %+v, %v", human, err)
 	}
 }
+
+// A context_id is only honoured for an exchange the caller's owner
+// opened, and inside a chain it cannot reset the chain's budget.
+func TestContextIDIsChecked(t *testing.T) {
+	h, turns, _ := newTestHub(func(Peer, string) string { return "ok" })
+	ctx := context.Background()
+	for name, id := range map[string]string{"made up": "random-123", "empty-ish": "x"} {
+		if _, err := h.Send(ctx, SendInput{CallerAgentID: "a-cap", To: "anton", Text: "hi", ContextID: id}); !errors.Is(err, ErrUnknownContext) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	// Another owner's exchange.
+	h.Dir.(*fakeDir).peers = append(h.Dir.(*fakeDir).peers, Peer{ID: "a-eve", OwnerID: "u2", Handle: "eve"})
+	theirs, err := h.Send(ctx, SendInput{CallerAgentID: "a-other", To: "eve", Text: "private"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Send(ctx, SendInput{CallerAgentID: "a-cap", To: "anton", Text: "join", ContextID: theirs.ContextID}); !errors.Is(err, ErrUnknownContext) {
+		t.Fatalf("joined another owner's context: %v", err)
+	}
+	// Own exchange: fine.
+	mine, err := h.Send(ctx, SendInput{CallerAgentID: "a-cap", To: "anton", Text: "q"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Send(ctx, SendInput{CallerAgentID: "a-cap", To: "anton", Text: "q2", ContextID: mine.ContextID}); err != nil {
+		t.Fatalf("own context refused: %v", err)
+	}
+
+	// Inside a chain, a fresh context_id is ignored for the chain's own.
+	var inner *Result
+	turns.nested = map[string]func() error{"a-anton": func() (err error) {
+		inner, err = h.Send(ctx, SendInput{CallerAgentID: "a-anton", To: "vera", Text: "dodge", ContextID: mine.ContextID})
+		return err
+	}}
+	outer, err := h.Send(ctx, SendInput{CallerAgentID: "a-cap", To: "anton", Text: "start"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inner == nil || inner.ContextID != outer.ContextID {
+		t.Fatalf("chain escaped its context: outer %s inner %+v", outer.ContextID, inner)
+	}
+}

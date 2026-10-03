@@ -75,6 +75,9 @@ var (
 	ErrSelf = errors.New("you can't message yourself — pick a teammate from your Team")
 	// ErrNotTeamSession refuses a caller that is not a Team agent.
 	ErrNotTeamSession = errors.New("team messaging is only available in a Team agent's session")
+	// ErrUnknownContext refuses a context_id this owner never opened (or
+	// one already aged out).
+	ErrUnknownContext = errors.New("unknown context_id — omit it to start a new exchange")
 	// ErrUnknownTask means the task id was never issued to this caller.
 	ErrUnknownTask = errors.New("unknown task id")
 )
@@ -175,6 +178,9 @@ type taskRef struct {
 type contextState struct {
 	turns   int
 	touched time.Time
+	// owner is the user whose agents opened the exchange; nobody else's
+	// agent may continue it.
+	owner string
 }
 
 // inbound is the task an agent is currently answering. A message the
@@ -331,7 +337,7 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, errors.New("message is empty")
 	}
-	contextID, depth, err := h.admit(caller.ID, in.CallerSession, in.ContextID, in.Mention && !in.Human)
+	contextID, depth, err := h.admit(caller.OwnerID, caller.ID, in.CallerSession, in.ContextID, in.Mention && !in.Human)
 	if err != nil {
 		return nil, err
 	}
@@ -371,18 +377,25 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 
 // admit charges one turn to the context and works out the depth. A
 // caller answering an inbound task continues that task's context.
-func (h *Hub) admit(callerID, callerSession, contextID string, afterReply bool) (string, int, error) {
+func (h *Hub) admit(ownerID, callerID, callerSession, contextID string, afterReply bool) (string, int, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.pruneLocked()
 	depth := 1
 	cur, ok := h.inboundOf(callerID, callerSession)
 	if !ok && afterReply {
 		cur, ok = h.last[callerID]
 	}
-	if ok {
+	switch {
+	case ok:
+		// Inside a chain the chain's context is the only one: a different
+		// or made-up context_id would otherwise reset the turn budget.
 		depth = cur.depth + 1
-		if contextID == "" {
-			contextID = cur.contextID
+		contextID = cur.contextID
+	case contextID != "":
+		// Only an exchange this owner already has may be continued.
+		if cs := h.contexts[contextID]; cs == nil || cs.owner != ownerID {
+			return "", 0, ErrUnknownContext
 		}
 	}
 	if depth > MaxDepth {
@@ -391,10 +404,9 @@ func (h *Hub) admit(callerID, callerSession, contextID string, afterReply bool) 
 	if contextID == "" {
 		contextID = uuid.NewString()
 	}
-	h.pruneLocked()
 	cs := h.contexts[contextID]
 	if cs == nil {
-		cs = &contextState{}
+		cs = &contextState{owner: ownerID}
 		h.contexts[contextID] = cs
 	}
 	if cs.turns >= MaxContextTurns {
