@@ -484,6 +484,15 @@
     });
   }
 
+  // rowRadius rounds the outer corners of the first/last device row, which
+  // the list's overflow-hidden used to clip for us.
+  function rowRadius(i, n) {
+    var r = [];
+    if (i === 0) r.push('border-top-left-radius:0.5rem;border-top-right-radius:0.5rem');
+    if (i === n - 1) r.push('border-bottom-left-radius:0.5rem;border-bottom-right-radius:0.5rem');
+    return r.length ? ' style="' + r.join(';') + '"' : '';
+  }
+
   function renderDeviceList(devices, currentEndpoint) {
     var list = document.getElementById('push-device-list');
     if (!list) return;
@@ -491,11 +500,14 @@
       list.innerHTML = '<div class="flex flex-col gap-2 bg-white-200 dark:bg-navy-800 px-4 py-5 text-sm text-black-800 dark:text-black-600"><span class="font-medium text-black-900 dark:text-white-100">No notification devices yet.</span><span class="text-xs text-black-700 dark:text-black-600">Enable notifications to add this browser.</span></div>';
       return;
     }
-    list.innerHTML = devices.map(function (d) {
+    // The ⋮ menu drops out of its row; the template's overflow-hidden (kept
+    // for the rounded corners) would clip it on the last device.
+    list.classList.remove('overflow-hidden');
+    list.innerHTML = devices.map(function (d, i) {
       var isCurrent = d.endpoint === currentEndpoint;
       var label = escapeHTML(d.deviceLabel || 'Browser device');
       var seen = d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString() : 'Never';
-      return '<div class="flex flex-col gap-3 border-b border-white-300 bg-white-100 px-4 py-4 last:border-b-0 dark:border-navy-600 dark:bg-navy-700 sm:flex-row sm:items-center sm:justify-between">' +
+      return '<div class="flex flex-col gap-3 border-b border-white-300 bg-white-100 px-4 py-4 last:border-b-0 dark:border-navy-600 dark:bg-navy-700 sm:flex-row sm:items-center sm:justify-between"' + rowRadius(i, devices.length) + '>' +
         '<div class="min-w-0">' +
         '<div class="flex flex-wrap items-center gap-2"><span class="text-sm font-medium text-black-900 dark:text-white-100">' + label + '</span>' +
         (isCurrent ? '<span class="rounded-full bg-pos-100 px-2 py-0.5 text-xs font-medium text-pos-400">This browser</span>' : '') +
