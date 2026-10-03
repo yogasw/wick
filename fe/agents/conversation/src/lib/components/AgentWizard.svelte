@@ -1,18 +1,23 @@
 <script lang="ts">
   /* + Agent: a centred modal in two steps (mockup create()).
-     1 Persona — avatar, name, handle, system prompt, and the project behind
-       it under "Lanjutan" (default: a new one made from these fields).
+     1 Persona — an optional one-line brief whose ✨ Generate fills the
+       fields below (queued aigen job), then avatar, name, tagline, handle,
+       description, system prompt, and the project behind it under
+       "Advanced" (default: a new one made from these fields).
      2 Access — the same connector checklist as Settings › Access, starting
        empty (off until added). A new agent runs as the caller with
        include-new off; both are changed later in Settings › Access.
      The provider lives in Settings › Lanjutan; the mockup's third "Connect"
      step waits for Slack/A2A (phase 1b). */
   import { onMount } from "svelte";
+  import { AIGenerateButton } from "@wick-fe/common-ui";
   import { AgentAvatar, AVATAR_SHAPES, AVATAR_COLORS, defaultAvatarFor } from "@wick-fe/common-avatar";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { getProjectOptions } from "../api/options.js";
   import { createAgent, getProjectPersona, listAgentConnectors, runApi, type AgentItem, type AgentConnector, type ConnectorGrant } from "../api/team.js";
   import { HANDLE_RE, slugHandle, uniqueHandle, parseGrantErrors, type GrantErrors } from "../agentForm.js";
+  import { PERSONA_KIND, personaInput, suggestedConnectors, type PersonaDraft } from "../personaGen.js";
+  import { setOverride } from "../accessTiers.js";
 
   type Props = {
     base: string;
@@ -26,6 +31,8 @@
   const STEPS = ["Persona", "Access"];
   let step = $state(1);
 
+  let brief = $state("");
+  let suggested = $state<string[]>([]);
   let name = $state("");
   let tagline = $state("");
   let description = $state("");
@@ -102,6 +109,26 @@
       projectLoading = false;
     }
   }
+
+  /* The brief was asked for in so many words, so its draft fills the form
+     at once; every field stays editable before Next. */
+  function useDraft(d: PersonaDraft) {
+    if (d.name) name = d.name;
+    if (d.handle) {
+      handle = uniqueHandle(d.handle, taken);
+      handleTouched = true;
+    }
+    tagline = d.tagline;
+    description = d.description;
+    systemPrompt = d.system_prompt;
+    if (d.avatar_shape || d.avatar_color) {
+      if (d.avatar_shape) shape = d.avatar_shape;
+      if (d.avatar_color) color = d.avatar_color;
+      avatarTouched = true;
+    }
+    suggested = d.connectors ?? [];
+  }
+  const suggestions = $derived(suggestedConnectors(suggested, catalog, grants.map((g) => g.connector_id)));
 
   const handleOk = $derived(HANDLE_RE.test(handle));
   const handleTaken = $derived(taken.includes(handle));
@@ -186,6 +213,20 @@
 
 <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 pb-2">
   {#if step === 1}
+    <div class="rounded-xl border border-white-300 p-3 dark:border-navy-600">
+      <label class={label} for="aw-brief">What should this agent do?</label>
+      <textarea id="aw-brief" class="{input} min-h-16" rows="2" bind:value={brief} placeholder="e.g. Review pull requests critically and point out risky changes"></textarea>
+      <div class="mt-2">
+        <AIGenerateButton
+          kind={PERSONA_KIND}
+          autoUse
+          testid="aw-generate"
+          validate={() => (brief.trim() ? "" : "Describe what the agent should do first.")}
+          input={() => personaInput("all", brief, {}, catalog)}
+          onUse={(d: PersonaDraft) => useDraft(d)}
+        />
+      </div>
+    </div>
     <div class="flex items-center gap-4">
       <AgentAvatar {shape} {color} size={64} />
       <div class="space-y-2">
@@ -264,6 +305,19 @@
     </details>
   {:else}
     <p class="text-sm text-black-800 dark:text-black-600">Connectors are off until you add them. Platform tools are on for every agent; System tools are for the Captain.</p>
+    {#if suggestions.length > 0}
+      <div class="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-green-500 px-3 py-2 text-xs text-black-800 dark:text-black-600" data-testid="aw-suggested">
+        <span class="font-medium">✨ Suggested:</span>
+        {#each suggestions as c (c.id)}
+          <button
+            type="button"
+            class="rounded-full border border-white-300 px-2.5 py-1 font-medium text-black-900 hover:border-green-500 dark:border-navy-600 dark:text-white-100"
+            title="Add {c.label} read-only"
+            onclick={() => (grants = setOverride(grants, c.id, "read"))}
+          >+ {c.label}</button>
+        {/each}
+      </div>
+    {/if}
     <ConnectorChecklist
       {catalog}
       loading={catalogLoading}

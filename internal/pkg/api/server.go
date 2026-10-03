@@ -1771,6 +1771,9 @@ func NewServer() *Server {
 			return customconn.DraftFromAIResult(res)
 		},
 	})
+	// "agent-persona": the Team app's New agent brief and Settings ›
+	// Persona Generate / Improve.
+	aigenSvc.Register(team.PersonaKindSpec())
 	aigenHandler := aigen.NewHandler(aigenSvc)
 	if err := customConnSvc.RegisterAllAtBoot(context.Background()); err != nil {
 		log.Error().Err(err).Msg("custom connectors: boot registration failed")

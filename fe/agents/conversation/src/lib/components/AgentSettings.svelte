@@ -7,7 +7,7 @@
      flight per agent; edits made meanwhile go out in the next one. A
      rejected PATCH keeps the local value and shows the error inline. */
   import { onMount, untrack } from "svelte";
-  import { Button, Modal, ProviderPicker, Toggle, buildProviderOptions } from "@wick-fe/common-ui";
+  import { AIGenerateButton, Button, Modal, ProviderPicker, Toggle, buildProviderOptions } from "@wick-fe/common-ui";
   import { toastOk } from "@wick-fe/common-stores";
   import DrawerHeader from "./DrawerHeader.svelte";
   import { AgentAvatar, AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, colorInputValue } from "@wick-fe/common-avatar";
@@ -20,6 +20,7 @@
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, type GrantErrors } from "../agentForm.js";
   import type { SettingsTab } from "../agentsRouter.js";
+  import { PERSONA_KIND, personaInput, type PersonaDraft, type PersonaTarget } from "../personaGen.js";
 
   type Props = {
     base: string;
@@ -143,6 +144,15 @@
     agent.shared_with ??
       (agent.project_id ? agents.filter((a) => a.id !== agent.id && a.project_id === agent.project_id).length : 0),
   );
+
+  /* ✨ Generate / Improve read the form as it is now; their draft only
+     lands on Use (then autosaves like typing). */
+  const genInput = (target: PersonaTarget) => () =>
+    personaInput(target, "", {
+      name: draft.name, tagline: draft.tagline, description: draft.description, system_prompt: draft.system_prompt,
+    }, catalog);
+  const genRefuse = () =>
+    draft.name.trim() || draft.description.trim() || draft.system_prompt.trim() ? "" : "Write a name, description or system prompt first.";
 
   /* ── save ──────────────────────────────────────────────────────── */
   const patch = $derived.by((): AgentWrite => {
@@ -320,11 +330,42 @@
     <div>
       <label class={label} for="as-desc">Short description</label>
       <input id="as-desc" class={input} bind:value={draft.description} />
+      <div class="mt-2">
+        <AIGenerateButton
+          kind={PERSONA_KIND}
+          testid="as-gen-desc"
+          label={draft.description.trim() || draft.tagline.trim() ? "✨ Improve tagline & description" : "✨ Generate tagline & description"}
+          validate={genRefuse}
+          input={genInput("description")}
+          current={[draft.tagline, draft.description].filter((s) => s.trim()).join(" — ")}
+          onUse={(d: PersonaDraft) => { draft.tagline = d.tagline; draft.description = d.description; }}
+        >
+          {#snippet preview(d: PersonaDraft)}
+            <p class="text-xs font-semibold text-black-900 dark:text-white-100">{d.tagline}</p>
+            <p class="mt-0.5 text-xs text-black-900 dark:text-white-100">{d.description}</p>
+          {/snippet}
+        </AIGenerateButton>
+      </div>
     </div>
     <div>
       <label class={label} for="as-sys">System prompt (persona)</label>
       <textarea id="as-sys" class={input} rows="8" bind:value={draft.system_prompt}></textarea>
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">appended after the base preset</p>
+      <div class="mt-1 flex flex-wrap items-start justify-between gap-2">
+        <p class="text-xs text-black-800 dark:text-black-600">appended after the base preset</p>
+        <AIGenerateButton
+          kind={PERSONA_KIND}
+          testid="as-gen-sys"
+          label={draft.system_prompt.trim() ? "✨ Improve" : "✨ Generate"}
+          validate={genRefuse}
+          input={genInput("system_prompt")}
+          current={draft.system_prompt}
+          onUse={(d: PersonaDraft) => { draft.system_prompt = d.system_prompt; }}
+        >
+          {#snippet preview(d: PersonaDraft)}
+            <pre class="max-h-64 overflow-auto whitespace-pre-wrap font-sans text-xs text-black-900 dark:text-white-100">{d.system_prompt}</pre>
+          {/snippet}
+        </AIGenerateButton>
+      </div>
     </div>
   {:else if tab === "access"}
     <p class="text-xs text-black-800 dark:text-black-600">

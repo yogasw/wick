@@ -55,7 +55,7 @@ func TestTeamAgentCreateRejectsBadInput(t *testing.T) {
 			"handle":             "worker",
 			"allowed_connectors": []team.ConnectorGrant{{ConnectorID: "not-mine", Level: team.LevelAll}},
 		},
-		"invalid run_as": {"handle": "worker", "run_as": "root"},
+		"invalid run_as":   {"handle": "worker", "run_as": "root"},
 		"tagline too long": {"handle": "worker", "tagline": "a tagline far longer than thirty-two characters"},
 	}
 	for name, body := range cases {
