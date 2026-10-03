@@ -110,3 +110,15 @@ export { matchModelFilter, MODEL_FILTER_HELP } from "./modelFilter.js";
 export { encodePath, decodePath, encodePin, decodePin } from "./model-path.js";
 export { withModelListMeta, optionModelsWithMeta, modelListMeta, describeModelListMeta } from "./model-list-meta.js";
 export type { ModelListMeta } from "./model-list-meta.js";
+// Trace rendering — one tool call / result, dispatched on its Display kind.
+// See src/trace/README.md for adding a kind.
+export { default as TraceBody } from "./trace/TraceBody.svelte";
+export { default as ScrollBox } from "./trace/ScrollBox.svelte";
+export { default as JsonTree } from "./JsonTree.svelte";
+export { registerTraceRenderer, getTraceRenderer } from "./trace/registry.js";
+export type { TraceRenderer, TraceRendererProps } from "./trace/registry.js";
+export { classifyCall, classifyResult, registerTraceDetector, toolFamily, langForPath } from "./trace/classify.js";
+export { setTraceHighlighter } from "./trace/highlight.js";
+export { humanBytes } from "./trace/format.js";
+export type { TraceDisplay, TraceContext, TraceMedia } from "./trace/types.js";
+export { isBinaryKind } from "./trace/types.js";

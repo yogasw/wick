@@ -83,7 +83,7 @@
   import ConversationHeader from "./ConversationHeader.svelte";
   import ConversationThread from "./ConversationThread.svelte";
   import { bareSlashCommand } from "../slashCommand.js";
-  import JsonTree from "./JsonTree.svelte";
+  import { JsonTree } from "@wick-fe/common-ui";
   import { FileBrowser } from "@wick-fe/common-ui";
   import FileViewerModal from "./FileViewerModal.svelte";
   import SwitchModal from "./SwitchModal.svelte";
