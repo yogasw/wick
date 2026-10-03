@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/preset"
@@ -265,6 +267,7 @@ func Register(r tool.Router) {
 	r.GET("/sessions/{id}/uploads/{name}", sessionUploadServe)
 	r.GET("/sessions/{id}/turns/{turn_id}", sessionTurnTrace)
 	r.GET("/sessions/{id}/turns/{turn_id}/events/{event_id}", sessionTurnEvent)
+	r.GET("/sessions/{id}/turns/{turn_id}/blobs/{blob_ref}", sessionTurnBlob)
 
 	r.GET("/sessions/{id}/files", sessionContextList)
 	r.GET("/sessions/{id}/files/search", sessionContextSearch)
@@ -2393,6 +2396,52 @@ func sessionTurnEvent(c *tool.Ctx) {
 		return
 	}
 	c.W.Header().Set("Content-Type", "application/json")
+	_, _ = c.W.Write(data)
+}
+
+// traceBlobRefRe matches what the store names a blob: the event id, or
+// "<event_id>-p<n>" for one part of a mixed result. turnIDRe is the
+// nanosecond turn id. Both keep the path a single plain segment.
+var (
+	traceBlobRefRe = regexp.MustCompile(`^e\d+(-p\d+)?$`)
+	traceTurnIDRe  = regexp.MustCompile(`^[0-9A-Za-z_-]+$`)
+)
+
+// sessionTurnBlob serves the binary payload of one trace event (an image,
+// pdf, audio or video a tool returned), stored whole at
+// thinking/<turn_id>/<blob_ref>.bin — Display.BlobRef names it. Same
+// ownership rule as the trace itself: 404 for a session the caller cannot
+// see. The type comes from the bytes' magic, and the response is
+// sandboxed so a hostile payload cannot run as a page on this origin.
+func sessionTurnBlob(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no blob"})
+		return
+	}
+	turnID, ref := c.PathValue("turn_id"), c.PathValue("blob_ref")
+	if !traceTurnIDRe.MatchString(turnID) || !traceBlobRefRe.MatchString(ref) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no blob"})
+		return
+	}
+	data, err := os.ReadFile(globalLayout.SessionThinkingBlob(id, turnID, ref))
+	if errors.Is(err, os.ErrNotExist) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no blob"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	h := c.W.Header()
+	h.Set("Content-Type", event.SniffMime(data))
+	h.Set("Content-Length", strconv.Itoa(len(data)))
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	h.Set("Cache-Control", "private, max-age=86400")
 	_, _ = c.W.Write(data)
 }
 
