@@ -1689,6 +1689,7 @@ func NewServer() *Server {
 		return teamHub
 	}
 	connectors.Register(teamlinkconn.Module(teamlinkconn.Deps{Hub: hub, AgentOf: agentstool.TeamAgentOf}))
+	agentstool.SetTeamHub(hub)
 	// team_* tools only in a Team agent's session with a reachable teammate.
 	mcphandlers.TeamToolsVisible = func(ctx context.Context, sessionID string) bool {
 		h := hub()

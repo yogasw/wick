@@ -3,15 +3,21 @@ package agents
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/delegation"
 	"github.com/yogasw/wick/internal/agents/event"
+	"github.com/yogasw/wick/internal/agents/storage"
+	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/pkg/tool"
 )
 
 // Wiring of the Team A2A link (internal/agents/teamlink) onto the pool.
@@ -32,6 +38,38 @@ func TeamAgentOf(ctx context.Context, sessionID string) string {
 		return p.ID
 	}
 	return ""
+}
+
+// globalTeamHub is the server's late-bound Hub, set by SetTeamHub; nil
+// until wiring runs (and on installs without Team).
+var globalTeamHub func() *teamlink.Hub
+
+// SetTeamHub hands the Hub accessor to the HTTP handlers.
+func SetTeamHub(f func() *teamlink.Hub) { globalTeamHub = f }
+
+// sessionTeamTasks handles GET /api/sessions/{id}/team-tasks: the
+// team_message / @mention tasks this session sent, for the Sub-agents
+// panel's Team section. Read-only; the session must be the caller's.
+func sessionTeamTasks(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	var tasks []teamlink.TaskView
+	if globalTeamHub != nil {
+		if h := globalTeamHub(); h != nil {
+			tasks = h.SentFrom(id)
+		}
+	}
+	if tasks == nil {
+		tasks = []teamlink.TaskView{}
+	}
+	c.JSON(http.StatusOK, map[string]any{"tasks": tasks})
 }
 
 type teamDirectory struct{ svc *team.Service }
@@ -125,11 +163,35 @@ func (n teamNotifier) Deliver(ctx context.Context, sessionID, text string) error
 	return n.deliver(ctx, sessionID, text)
 }
 
-// Audit logs one mention_handoff per side.
+// Audit logs one mention_handoff per side and records it in that thread
+// as a kind:"mention_handoff" system turn, which the front-end draws as a
+// one-line "@from → @to · state" row.
 func (teamNotifier) Audit(_ context.Context, sessionID string, h teamlink.Handoff) {
 	log.Info().Str("event", "mention_handoff").Str("session", sessionID).
 		Str("from", h.From).Str("to", h.To).Str("context_id", h.ContextID).
 		Str("task_id", h.TaskID).Str("state", string(h.State)).Msg("team: handoff")
+	if err := appendHandoff(globalLayout, sessionID, h, time.Now()); err != nil {
+		log.Warn().Err(err).Str("session", sessionID).Msg("team: handoff — thread write failed")
+	}
+}
+
+// appendHandoff writes h into sessionID's conversation as a system turn.
+func appendHandoff(layout agentconfig.Layout, sessionID string, h teamlink.Handoff, now time.Time) error {
+	if layout.BaseDir == "" || sessionID == "" {
+		return nil
+	}
+	now = now.UTC()
+	return storage.AppendJSONL(layout.SessionConversation(sessionID), "wick-conv-v1", sessionID, store.ConversationTurn{
+		TurnID:    fmt.Sprintf("%d", now.UnixNano()),
+		Timestamp: now,
+		Role:      "system",
+		Kind:      "mention_handoff",
+		Text:      fmt.Sprintf("@%s → @%s · %s", h.From, h.To, h.State),
+		Extras: map[string]string{
+			"from": h.From, "to": h.To, "to_agent_id": h.ToID, "state": string(h.State),
+			"task_id": h.TaskID, "context_id": h.ContextID,
+		},
+	})
 }
 
 // TeamMentionRouter adapts the Hub to delegation.TeamRouter: an @handle

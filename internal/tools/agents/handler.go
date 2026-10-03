@@ -288,6 +288,7 @@ func Register(r tool.Router) {
 	// JSON API — Sub-agents rail panel. Registered alongside the other
 	// /api/sessions routes so sessionAccessMW covers them too.
 	r.GET("/api/sessions/{id}/subagents", sessionSubAgents)
+	r.GET("/api/sessions/{id}/team-tasks", sessionTeamTasks)
 	r.POST("/api/sessions/{id}/subagents/interrupt-all", interruptAllSubAgents)
 	// Agent-to-agent thread + the human-only hop refill.
 	r.GET("/api/sessions/{id}/messages", sessionMessages)

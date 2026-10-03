@@ -125,7 +125,7 @@ func (e *executor) audit(ctx context.Context, from, to Peer, callerSession, targ
 	if e.hub.Notify == nil {
 		return
 	}
-	ev := Handoff{From: from.Handle, To: to.Handle, ContextID: ec.ContextID, TaskID: string(ec.TaskID), State: state}
+	ev := Handoff{From: from.Handle, To: to.Handle, ToID: to.ID, ContextID: ec.ContextID, TaskID: string(ec.TaskID), State: state}
 	if ev.From == "" {
 		ev.From = "user"
 	}

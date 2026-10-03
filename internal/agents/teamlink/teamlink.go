@@ -126,7 +126,9 @@ type Notifier interface {
 // Handoff is one mention_handoff audit event.
 type Handoff struct {
 	From, To, ContextID, TaskID string
-	State                       a2a.TaskState
+	// ToID is the target agent's id, so the thread can link to its chat.
+	ToID  string
+	State a2a.TaskState
 }
 
 // Hub is the registry, the client and the bookkeeping, in one place so
@@ -172,6 +174,10 @@ type taskRef struct {
 	state                           a2a.TaskState
 	// touched is the last time the task changed; the janitor ages from it.
 	touched time.Time
+	// contextID, title and started describe the task for the UI list.
+	contextID string
+	title     string
+	started   time.Time
 }
 
 // contextState is one exchange's turn count.
@@ -370,6 +376,7 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	}
 	ref.agentID, ref.callerAgentID, ref.callerSession, ref.to = target.ID, caller.ID, in.CallerSession, target
 	ref.touched = h.now()
+	ref.contextID, ref.title, ref.started = contextID, firstLine(in.Text), ref.touched
 	h.mu.Unlock()
 
 	return h.wait(ctx, cl, task.ID, contextID, target, in.Wait)
@@ -585,6 +592,67 @@ func (h *Hub) finished(ctx context.Context, id a2a.TaskID, state a2a.TaskState, 
 	if err := h.Notify.Deliver(context.WithoutCancel(ctx), session, text); err != nil {
 		_ = err // best-effort: the task store still holds the result
 	}
+}
+
+// TaskView is one task a session sent, as the Sub-agents panel lists it.
+type TaskView struct {
+	TaskID    string    `json:"task_id"`
+	ContextID string    `json:"context_id"`
+	ToID      string    `json:"to_agent_id"`
+	ToHandle  string    `json:"to_handle"`
+	ToName    string    `json:"to_name"`
+	Title     string    `json:"title"`
+	State     string    `json:"state"`
+	Turns     int       `json:"turns"`
+	MaxTurns  int       `json:"max_turns"`
+	Started   time.Time `json:"started_at"`
+	Updated   time.Time `json:"updated_at"`
+}
+
+// SentFrom lists the tasks sessionID sent and the Hub still remembers,
+// newest first. Unfinished tasks read "working".
+func (h *Hub) SentFrom(sessionID string) []TaskView {
+	if sessionID == "" {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pruneLocked()
+	out := []TaskView{}
+	for id, ref := range h.tasks {
+		if ref.callerSession != sessionID || ref.started.IsZero() {
+			continue
+		}
+		state := "working"
+		if ref.finished {
+			state = stateName(ref.state)
+		}
+		turns := 0
+		if c := h.contexts[ref.contextID]; c != nil {
+			turns = c.turns
+		}
+		out = append(out, TaskView{
+			TaskID: string(id), ContextID: ref.contextID,
+			ToID: ref.to.ID, ToHandle: ref.to.Handle, ToName: ref.to.Name,
+			Title: ref.title, State: state, Turns: turns, MaxTurns: MaxContextTurns,
+			Started: ref.started, Updated: ref.touched,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Started.After(out[j].Started) })
+	return out
+}
+
+// firstLine is the task's title: its first non-blank line, capped.
+func firstLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			if r := []rune(l); len(r) > 120 {
+				return string(r[:119]) + "…"
+			}
+			return l
+		}
+	}
+	return ""
 }
 
 // stateName shortens an A2A state to the word the tool reports.

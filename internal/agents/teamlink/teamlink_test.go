@@ -317,3 +317,28 @@ func TestContextIDIsChecked(t *testing.T) {
 		t.Fatalf("chain escaped its context: outer %s inner %+v", outer.ContextID, inner)
 	}
 }
+
+func TestSentFromListsSessionTasks(t *testing.T) {
+	h, _, _ := newTestHub(func(Peer, string) string { return "done" })
+	res, err := h.Send(context.Background(), SendInput{
+		CallerSession: "sess-cap", CallerAgentID: "a-cap", To: "anton", Text: "\n  check the 401s\nmore detail",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := h.SentFrom("sess-cap")
+	if len(got) != 1 {
+		t.Fatalf("tasks = %+v", got)
+	}
+	v := got[0]
+	if v.TaskID != res.TaskID || v.ToHandle != "anton" || v.ToID != "a-anton" || v.ToName != "Anton" ||
+		v.Title != "check the 401s" || v.State != "completed" || v.Turns != 1 || v.MaxTurns != MaxContextTurns || v.Started.IsZero() {
+		t.Fatalf("view = %+v", v)
+	}
+	if other := h.SentFrom("sess-other"); len(other) != 0 {
+		t.Fatalf("another session saw the task: %+v", other)
+	}
+	if none := h.SentFrom(""); none != nil {
+		t.Fatalf("empty session = %+v", none)
+	}
+}
