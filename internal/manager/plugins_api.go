@@ -35,6 +35,15 @@ type PluginsHandler struct {
 	registry *connplugin.Catalog
 	dir      string
 	reloader reconciler // nil when plugins are disabled; reload() is a no-op then
+	// sources updates plugins that were installed from a plugin source
+	// (url / GitHub) from that source instead of the connector catalog.
+	sources *PluginSourcesHandler
+}
+
+// SetSources routes updates of source-installed plugins to their source.
+func (h *PluginsHandler) SetSources(s *PluginSourcesHandler) *PluginsHandler {
+	h.sources = s
+	return h
 }
 
 // NewPluginsHandler builds the marketplace handler. db backs the enable/disable
@@ -243,6 +252,9 @@ func (h *PluginsHandler) apiUpdate(w http.ResponseWriter, r *http.Request) {
 	k := r.PathValue("key")
 	if k == "" {
 		http.Error(w, "key required", http.StatusBadRequest)
+		return
+	}
+	if h.sources.updateFromSource(w, r, k) {
 		return
 	}
 	ctx := r.Context()

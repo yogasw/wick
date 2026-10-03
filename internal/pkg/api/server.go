@@ -85,6 +85,7 @@ import (
 	notesconn "github.com/yogasw/wick/internal/connectors/notes"
 	"github.com/yogasw/wick/internal/connectors/notifications"
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
+	pluginsource "github.com/yogasw/wick/internal/plugins/source"
 	sourceconn "github.com/yogasw/wick/internal/connectors/source"
 	subagents "github.com/yogasw/wick/internal/connectors/sub-agents"
 	teamagentsconn "github.com/yogasw/wick/internal/connectors/team-agents"
@@ -3026,6 +3027,45 @@ func NewServer() *Server {
 	r.Handle("/x/", servicePlugins)
 	serviceplugin.SetDefault(servicePlugins)
 	servicePlugins.Start()
+
+	// Plugin sources (url / GitHub releases): Admin → Plugins → Sources,
+	// Available, Add (upload / link / GitHub). Installs land in the kind
+	// folder; connectors reconcile through the reloader, a service plugin is
+	// restarted on its new binary, tools and jobs pick it up on next spawn.
+	pluginSources := &pluginsource.Manager{
+		DB:      db,
+		Client:  pluginsource.NewClient(configsSvc.DecryptSecret),
+		Encrypt: configsSvc.EncryptSecret,
+		OnInstalled: func(ctx context.Context, kind, key string) {
+			switch kind {
+			case wickplugin.KindConnector:
+				if pluginReloader != nil {
+					pluginReloader.Reload(ctx)
+				}
+			case wickplugin.KindService:
+				if svc, ok := servicePlugins.Get(key); ok {
+					svc.Sup.Restart()
+				}
+			}
+		},
+	}
+	pluginSourcesHandler := &manager.PluginSourcesHandler{
+		Sources: pluginSources,
+		Health: manager.InstalledHealth(func(kind, key string) (bool, string) {
+			if kind != wickplugin.KindService {
+				return true, "verified"
+			}
+			svc, ok := servicePlugins.Get(key)
+			if !ok {
+				return false, "not loaded (reload wick)"
+			}
+			st := svc.Sup.Status()
+			return st.State == "running", st.State
+		}),
+	}
+	pluginSourcesHandler.RegisterRoutes(r, authMidd)
+	pluginsHandler.SetSources(pluginSourcesHandler)
+	go pluginSources.Run(context.Background(), time.Minute)
 
 	// Tool routes — per-tool visibility enforced via RequireToolAccess.
 	// Public tools are reachable without login; Private tools require
