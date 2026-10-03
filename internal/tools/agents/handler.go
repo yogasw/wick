@@ -1322,6 +1322,13 @@ func newSessionCompose(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
+	// "Open Team when I open Agents" (Team settings): the bare landing
+	// becomes the Team app. Checked before the pinned-project redirect,
+	// which would otherwise add a query and hide the landing from it.
+	if teamLandingRedirect(c) {
+		c.Redirect(c.Base()+"/team", http.StatusFound)
+		return
+	}
 	ensurePersonalProjectForUser(c)
 	access := callerProjectAccess(c)
 	scoped := c.Query("project")
