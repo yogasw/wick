@@ -517,6 +517,7 @@ func Register(r tool.Router) {
 	r.POST("/projects", createProject)
 	r.POST("/projects/{id}", updateProject)
 	r.POST("/projects/{id}/pin", toggleProjectPin)
+	r.GET("/projects/{id}/delete-preview", projectDeletePreviewJSON)
 	r.DELETE("/projects/{id}", deleteProject)
 
 	r.GET("/agent-profiles", agentProfilesPage)
@@ -2882,10 +2883,10 @@ func deleteProject(c *tool.Ctx) {
 		return
 	}
 	if project.IsProtected(p.Meta) {
-		c.JSON(http.StatusForbidden, map[string]string{"error": "this project is protected and cannot be deleted"})
+		c.JSON(http.StatusForbidden, map[string]string{"error": errProtectedProject.Error()})
 		return
 	}
-	if err := globalMgr.DeleteProject(c.Context(), id); err != nil {
+	if err := purgeProject(c.Context(), p, "user"); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("delete project %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

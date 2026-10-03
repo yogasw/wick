@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -871,8 +872,14 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	c.JSON(http.StatusOK, teamAgentToItem(p, users, teamLiveNow(), reach))
 }
 
-// apiTeamAgentDelete handles DELETE /api/team/agents/{id}. Only the row goes;
-// its project and conversations stay as the owner's ordinary work.
+// apiTeamAgentDelete handles DELETE /api/team/agents/{id}?chats=delete|keep.
+//
+// chats=delete removes the agent's own project with it — conversations,
+// managed folder and the provider memory of it (purgeProject). Anything
+// else keeps them: the project loses its Team tag so it shows in the
+// sidebar as an ordinary project instead of going invisible. A project the
+// agent was merely pointed at (no Team tag) or that another agent still
+// uses is never deleted.
 func apiTeamAgentDelete(c *tool.Ctx) {
 	if !teamReady(c) {
 		return
@@ -881,22 +888,47 @@ func apiTeamAgentDelete(c *tool.Ctx) {
 	if !ok {
 		return
 	}
-	if p.IsCaptain {
-		rows, err := globalTeam.List(c.Context(), actorID(c))
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		if len(rows) > 1 {
-			c.JSON(http.StatusConflict, map[string]string{"error": "make another agent Captain before deleting this one"})
-			return
-		}
+	rows, err := globalTeam.List(c.Context(), actorID(c))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if p.IsCaptain && len(rows) > 1 {
+		c.JSON(http.StatusConflict, map[string]string{"error": "make another agent Captain before deleting this one"})
+		return
 	}
 	if err := globalTeam.Delete(c.Context(), p.ID); err != nil {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
+	if err := releaseTeamAgentProject(c.Context(), p, rows, c.Query("chats") == "delete"); err != nil {
+		log.Ctx(c.Context()).Error().Err(err).Str("project", p.ProjectID).Msg("team: release agent project")
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": "agent deleted, but its project was not: " + err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// releaseTeamAgentProject settles the project of a deleted agent: purge it
+// or untag it (see apiTeamAgentDelete). rows is the owner's roster as it was
+// before the delete.
+func releaseTeamAgentProject(ctx context.Context, agent entity.AgentPersona, rows []entity.AgentPersona, purge bool) error {
+	pr, ok := globalMgr.Registry().Project(agent.ProjectID)
+	if agent.ProjectID == "" || !ok || !slices.Contains(pr.Meta.Tags, project.AgentTag) {
+		return nil
+	}
+	for _, r := range rows {
+		if r.ID != agent.ID && r.ProjectID == agent.ProjectID {
+			return nil
+		}
+	}
+	if purge {
+		return purgeProject(ctx, pr, "user")
+	}
+	meta := pr.Meta
+	meta.Tags = slices.DeleteFunc(slices.Clone(meta.Tags), func(t string) bool { return t == project.AgentTag })
+	_, err := globalMgr.UpdateProject(ctx, pr.Meta.ID, meta)
+	return err
 }
 
 // apiTeamAgentConnectors handles GET /api/team/agents/connectors: the checklist
