@@ -1,14 +1,16 @@
 <script lang="ts">
-  /* The roster header's account button: the viewer's initial and a
-     chevron, opening a dropdown laid out like wick's own account menu
-     (nav.templ UserMenu): the name on top, then Team settings, Theme,
-     Mini Tools and, past a divider, the way back to the Agents pages.
-     Esc or a press outside closes it; Esc gives focus back to the button. */
+  /* The roster's account row, at the foot of the sidebar (team-sidebar
+     mockup): the viewer's initial and name open a menu that rises above
+     it, laid out like wick's own account menu (nav.templ UserMenu): the
+     name on top, then Team settings, Theme and Mini Tools. The ghost ↩
+     right of the name is the way back to the Agents pages, one click.
+     Esc or a press outside closes the menu; Esc gives focus back to the
+     row. */
   import { tick } from "svelte";
 
   type Props = {
     viewerName: string;
-    /** Where "Switch to Agents" goes (teamReturn.ts, marked classic). */
+    /** Where the ↩ "Back to Agents" goes (teamReturn.ts, marked classic). */
     exitHref: string;
     /** The Light/Dark switch: the mode on screen and the user's paired
         theme ids, posted to wick's /theme. null hides it (signed out). */
@@ -49,21 +51,29 @@
 
 <svelte:window onkeydowncapture={onKey} onpointerdown={onPointer} />
 
-<div class="relative" bind:this={root}>
+<div class="relative flex items-center gap-1" bind:this={root}>
   <button
     type="button"
     bind:this={button}
-    class="flex items-center gap-1 rounded-lg p-1 transition-colors hover:bg-white-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-400 dark:hover:bg-navy-600"
+    class="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2 py-1.5 text-left transition-colors hover:bg-white-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-400 dark:hover:bg-navy-600 {open ? 'bg-white-300 dark:bg-navy-600' : ''}"
     aria-label="Account menu"
     aria-haspopup="menu"
     aria-expanded={open}
     onclick={() => (open = !open)}
   >
-    <span class="flex h-7 w-7 items-center justify-center rounded-full bg-green-200 text-xs font-semibold text-green-700 select-none">{initial}</span>
-    <svg class="h-3.5 w-3.5 text-black-700 transition-transform dark:text-black-600 {open ? 'rotate-180' : ''}" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m6 9 6 6 6-6" /></svg>
+    <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-200 text-xs font-semibold text-green-700 select-none" aria-hidden="true">{initial}</span>
+    <span class="min-w-0 flex-1 truncate text-sm font-medium text-black-900 dark:text-white-100" data-testid="account-name">{viewerName || "You"}</span>
   </button>
+  <a
+    href={exitHref}
+    class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-black-700 transition-colors hover:bg-white-300 hover:text-black-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-400 dark:text-black-600 dark:hover:bg-navy-600 dark:hover:text-white-100"
+    title="Back to Agents"
+    aria-label="Back to Agents"
+  >
+    <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4L2 8l4 4"></path><path d="M2 8h8a4 4 0 014 4v1"></path></svg>
+  </a>
   {#if open}
-    <div class="absolute right-0 top-full z-50 mt-2 w-52 rounded-xl border border-white-300 bg-white-100 shadow-lg dark:border-navy-600 dark:bg-navy-700" role="menu" aria-label="Account">
+    <div class="absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-white-300 bg-white-100 shadow-lg dark:border-navy-600 dark:bg-navy-700" role="menu" aria-label="Account">
       <div class="border-b border-white-300 px-4 py-3 dark:border-navy-600">
         <p class="truncate text-sm font-medium text-black-900 dark:text-white-100">{viewerName || "You"}</p>
       </div>
@@ -99,12 +109,6 @@
         <a href="/mini-tools" role="menuitem" class={item}>
           <svg class="h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6.5 2.5a3 3 0 00-3.5 4l-1 1 2.5 2.5 1-1a3 3 0 004-3.5L7.5 7 6 5.5l1-3z" stroke-linejoin="round"></path></svg>
           Mini Tools
-        </a>
-      </div>
-      <div class="border-t border-white-300 py-1 dark:border-navy-600">
-        <a href={exitHref} role="menuitem" class={item}>
-          <svg class="h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4L2 8l4 4"></path><path d="M2 8h8a4 4 0 014 4v1"></path></svg>
-          Switch to Agents
         </a>
       </div>
     </div>

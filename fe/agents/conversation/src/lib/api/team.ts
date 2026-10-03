@@ -71,6 +71,9 @@ export type AgentItem = {
   status: string;
   /** Main chat moved since the owner last opened it (markAgentRead). */
   unread?: boolean;
+  /** How many messages arrived unread, for the roster's green pill; omitted
+      by servers that only flag unread. */
+  unread_count?: number;
   /** Main chat waits on the owner: an ask_user question or an approval. */
   needs_attention?: boolean;
   /** What needs_attention waits on, e.g. "Butuh input: …"; shown in amber
@@ -444,6 +447,8 @@ export type GroupItem = {
   last_active: string | null;
   last_preview: string;
   unread: boolean;
+  /** See AgentItem.unread_count. */
+  unread_count?: number;
 };
 
 export type GroupWrite = Partial<{

@@ -32,6 +32,8 @@
   import { rosterStatus, withTurn } from "./lib/rosterStatus.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
+  import TeamAddMenu from "./lib/components/TeamAddMenu.svelte";
+  import { rosterEntries, mobilePins, canMakeGroup, unreadLabel } from "./lib/rosterList.js";
   import TeamSettings from "./lib/components/TeamSettings.svelte";
   import { RETURN_KEY, returnHref, classicHref } from "./lib/teamReturn.js";
 
@@ -78,7 +80,6 @@
   const activeGroupId = $derived(route.group ?? "");
   const groupSettingsOpen = $derived(route.panel?.kind === "group-settings");
   let newGroupOpen = $state(false);
-  let addMenuOpen = $state(false);
   /* + Agent's type: a wick agent, or a remote one by source (A2A or
      Slack), each with its own wizard. */
   let newType = $state<"local" | "remote" | "slack">("local");
@@ -119,18 +120,11 @@
 
   const captain = $derived(agents.find((a) => a.id === captainId) ?? agents.find((a) => a.is_captain));
 
-  /* Captain pinned on top, the rest by last activity, newest first. */
-  const roster = $derived.by(() => {
-    const q = query.trim().toLowerCase();
-    const list = agents.filter(
-      (a) => !q || a.name.toLowerCase().includes(q) || a.handle.toLowerCase().includes(q),
-    );
-    const ts = (a: AgentItem) => (a.last_active ? Date.parse(a.last_active) || 0 : 0);
-    return list.sort((a, b) => {
-      if (a.is_captain !== b.is_captain) return a.is_captain ? -1 : 1;
-      return ts(b) - ts(a) || a.name.localeCompare(b.name);
-    });
-  });
+  /* Agents and groups in one list, newest activity first. The mobile
+     drawer's pins (shown only while not searching) leave the list there. */
+  const entries = $derived(rosterEntries(agents, groups, query));
+  const pins = $derived(query.trim() ? [] : mobilePins(agents));
+  const pinIds = $derived(new Set(pins.map((a) => a.id)));
 
   const selected = $derived(
     route.handle ? agents.find((a) => a.handle === route.handle) : captain,
@@ -202,6 +196,11 @@
   }
   function openPanel(panel: AgentsPanel | null) {
     go({ panel });
+  }
+  function newAgent() {
+    rosterOpen = false;
+    newType = "local";
+    openPanel({ kind: "new" });
   }
 
   async function newChat() {
@@ -353,31 +352,103 @@
   <aside
     class="{rosterOpen ? 'flex' : 'hidden'} lg:flex fixed lg:sticky inset-y-0 left-0 z-40 w-[300px] shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700"
   >
-    <!-- Header laid out like the wick Agents sidebar's: mark + title with a
-         small uppercase line, then + Agent and the account menu. -->
-    <div class="flex items-center gap-2 border-b border-white-300 px-3 py-2.5 dark:border-navy-600">
-      <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-green-500 text-xs font-semibold text-white-100 select-none" aria-hidden="true">✦</div>
-      <div class="flex min-w-0 flex-1 flex-col leading-tight">
-        <h1 class="truncate text-sm font-semibold text-black-900 dark:text-white-100">Team</h1>
-        <span class="truncate text-[10px] font-medium uppercase tracking-wider text-black-600 dark:text-black-700" data-testid="team-count">
-          {loaded ? `${agents.length} agent${agents.length === 1 ? "" : "s"}` : "\u00a0"}
-        </span>
+    <!-- No title bar (team-sidebar mockup, final): Search and the grey +
+         on top, the list, then the account row at the foot. -->
+    <div class="flex items-center gap-1.5 px-2.5 pb-2 pt-3">
+      <label class="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl border border-transparent bg-white-300 px-3 focus-within:border-green-500 dark:bg-navy-600">
+        <svg class="h-4 w-4 shrink-0 text-black-700" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg>
+        <input
+          type="search"
+          bind:value={query}
+          placeholder="Search"
+          aria-label="Search agents"
+          class="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-black-900 placeholder:text-black-700 focus:outline-none dark:text-white-100"
+        />
+      </label>
+      <TeamAddMenu canGroup={canMakeGroup(agents)} onAgent={newAgent} onGroup={() => { rosterOpen = false; newGroupOpen = true; }} />
+    </div>
+    <!-- Mobile drawer only: three big agents to jump to; the list below
+         then skips them (lg shows every row, pins hidden). -->
+    {#if pins.length}
+      <div class="flex justify-around px-2 pb-3 pt-1 lg:hidden" data-testid="roster-pins">
+        {#each pins as a (a.id)}
+          <button type="button" class="flex w-20 flex-col items-center gap-1.5 rounded-xl py-1 text-xs text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600" onclick={() => openAgent(a)}>
+            <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={54} working={isWorking(a.status)} asleep={a.disabled} />
+            <span class="w-full truncate text-center">{a.name}</span>
+          </button>
+        {/each}
       </div>
-      <button
-        type="button"
-        class="new-agent flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-500 text-lg leading-none text-white-100 hover:bg-green-600"
-        title="New agent or group"
-        aria-label="New agent or group"
-        aria-haspopup="menu"
-        aria-expanded={addMenuOpen}
-        onclick={() => (addMenuOpen = !addMenuOpen)}
-      >+</button>
-      {#if addMenuOpen}
-        <div class="absolute left-[150px] top-11 z-50 w-40 rounded-xl border border-white-300 bg-white-100 py-1 shadow-lg dark:border-navy-600 dark:bg-navy-800" role="menu">
-          <button type="button" role="menuitem" class="block w-full px-3 py-2 text-left text-sm text-black-900 hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-700" onclick={() => { addMenuOpen = false; rosterOpen = false; newType = "local"; openPanel({ kind: "new" }); }}>New agent</button>
-          <button type="button" role="menuitem" class="block w-full px-3 py-2 text-left text-sm text-black-900 hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-700" onclick={() => { addMenuOpen = false; rosterOpen = false; newGroupOpen = true; }}>New group</button>
+    {/if}
+    <nav class="flex-1 overflow-y-auto px-1.5 pb-2" aria-label="Agent list">
+      {#if !loaded}
+        <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">Loading…</p>
+      {:else if loadError}
+        <p class="px-3 py-4 text-sm text-neg-400">{loadError}</p>
+      {:else if agents.length === 0}
+        <div class="flex flex-col items-center gap-3 px-4 py-10 text-center" data-testid="roster-empty">
+          <p class="text-sm text-black-800 dark:text-black-600">No agents yet.</p>
+          <button type="button" class="rounded-xl bg-green-500 px-4 py-2 text-sm font-semibold text-white-100 hover:bg-green-600" onclick={newAgent}>New agent</button>
         </div>
+      {:else if entries.length === 0}
+        <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">No matches.</p>
       {/if}
+      {#each entries as e (e.kind + e.id)}
+        {#if e.kind === "agent"}
+          {@const a = e.agent}
+          {@const active = !route.group && selected?.id === a.id}
+          {@const st = rosterStatus(a, { activeId: selected?.id, hatching: hatching.includes(a.id) })}
+          <button
+            type="button"
+            class="roster-row relative mb-0.5 w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left {pinIds.has(a.id) ? 'hidden lg:flex' : 'flex'} {active
+              ? 'bg-white-300 dark:bg-navy-600'
+              : 'hover:bg-white-300 dark:hover:bg-navy-600'}"
+            aria-current={active ? "page" : undefined}
+            data-testid="roster-agent"
+            onclick={() => openAgent(a)}
+          >
+            <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} working={isWorking(a.status)} tool={!!a.current_action} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
+            <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{st.tip}</span>
+            <span class="min-w-0 flex-1">
+              <span class="flex items-baseline gap-2">
+                <span class="min-w-0 flex-1 truncate text-sm font-semibold text-black-900 dark:text-white-100">
+                  {a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[10px] font-semibold tracking-wider text-green-600 dark:text-green-400">CAPTAIN</span>{/if}{#if isRemoteAgent(a)}<span class="ml-1.5 rounded-full bg-white-300 px-1.5 py-px align-middle text-[9px] font-bold uppercase tracking-wider text-black-800 dark:bg-navy-600 dark:text-black-600" data-testid="roster-remote-badge">{remoteBadge(a)}</span>{/if}
+                </span>
+                <span class="shrink-0 text-[11px] text-black-700">{rosterTime(a.last_active)}</span>
+              </span>
+              <span class="mt-0.5 flex items-center gap-1.5">
+                <span class="min-w-0 flex-1 truncate text-xs {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-black-800 dark:text-black-600'}">
+                  {#if st.typing !== null}typing…{:else}{rowPreview(a)}{/if}
+                </span>
+                {#if st.unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" aria-label="new message">{unreadLabel(a.unread_count)}</span>{/if}
+              </span>
+            </span>
+          </button>
+        {:else}
+          {@const g = e.group}
+          {@const unread = g.unread && activeGroupId !== g.id}
+          <button
+            type="button"
+            class="roster-row relative mb-0.5 flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left {activeGroupId === g.id ? 'bg-white-300 dark:bg-navy-600' : 'hover:bg-white-300 dark:hover:bg-navy-600'}"
+            aria-current={activeGroupId === g.id ? "page" : undefined}
+            data-testid="roster-group"
+            onclick={() => { rosterOpen = false; g.unread = false; navigate({ handle: null, session: null, panel: null, group: g.id }); }}
+          >
+            <span class="flex shrink-0 items-center justify-center" style="width:38px;height:38px"><GroupAvatars members={g.members} size={17} max={2} showMore={false} ring="bg-white-200 dark:bg-navy-700" /></span>
+            <span class="min-w-0 flex-1">
+              <span class="flex items-baseline gap-2">
+                <span class="min-w-0 flex-1 truncate text-sm font-semibold text-black-900 dark:text-white-100">{g.name}</span>
+                <span class="shrink-0 text-[11px] text-black-700">{rosterTime(g.last_active)}</span>
+              </span>
+              <span class="mt-0.5 flex items-center gap-1.5">
+                <span class="min-w-0 flex-1 truncate text-xs text-black-800 dark:text-black-600">{g.last_preview || `${g.members.length} agents`}</span>
+                {#if unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" aria-label="new message">{unreadLabel(g.unread_count)}</span>{/if}
+              </span>
+            </span>
+          </button>
+        {/if}
+      {/each}
+    </nav>
+    <div class="border-t border-white-300 px-1.5 pb-2.5 pt-1.5 dark:border-navy-600" data-testid="roster-account">
       <TeamAccountMenu
         {viewerName}
         {exitHref}
@@ -385,75 +456,6 @@
         onSettings={() => { rosterOpen = false; openPanel({ kind: "team-settings", tab: "general" }); }}
       />
     </div>
-    <label class="mx-3 mb-2 mt-3 flex items-center gap-2 rounded-xl border border-transparent bg-white-300 px-3 py-2 focus-within:border-green-500 dark:bg-navy-600">
-      <svg class="h-4 w-4 shrink-0 text-black-700" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg>
-      <input
-        type="search"
-        bind:value={query}
-        placeholder="Search"
-        aria-label="Search agents"
-        class="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-black-900 placeholder:text-black-700 focus:outline-none dark:text-white-100"
-      />
-    </label>
-    <nav class="flex-1 overflow-y-auto px-2 pb-4" aria-label="Agent list">
-      {#if !loaded}
-        <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">Loading…</p>
-      {:else if loadError}
-        <p class="px-3 py-4 text-sm text-neg-400">{loadError}</p>
-      {:else if roster.length === 0}
-        <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">No matching agents.</p>
-      {/if}
-      {#each roster as a (a.id)}
-        {@const active = !route.group && selected?.id === a.id}
-        {@const working = isWorking(a.status)}
-        {@const st = rosterStatus(a, { activeId: selected?.id, hatching: hatching.includes(a.id) })}
-        <button
-          type="button"
-          class="roster-row relative mb-0.5 flex w-full items-center gap-3 rounded-2xl px-2.5 py-2.5 text-left {active
-            ? 'bg-white-300 dark:bg-navy-600'
-            : 'hover:bg-white-300 dark:hover:bg-navy-600'}"
-          aria-current={active ? "page" : undefined}
-          onclick={() => openAgent(a)}
-        >
-          <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={44} {working} tool={!!a.current_action} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
-          {#if st.unread}<span class="roster-udot rounded-full border-2 border-white-200 bg-neg-400 dark:border-navy-700" aria-label="new message"></span>{/if}
-          <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{st.tip}</span>
-          <span class="min-w-0 flex-1">
-            <span class="flex items-baseline gap-2">
-              <span class="roster-name min-w-0 flex-1 truncate font-semibold text-black-900 dark:text-white-100">
-                {a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[9px] font-bold tracking-wider text-green-600 dark:text-green-400">★ CAPTAIN</span>{/if}{#if isRemoteAgent(a)}<span class="ml-1.5 rounded-full bg-white-300 px-1.5 py-px align-middle text-[9px] font-bold uppercase tracking-wider text-black-800 dark:bg-navy-600 dark:text-black-600" data-testid="roster-remote-badge">{remoteBadge(a)}</span>{/if}
-              </span>
-              <span class="shrink-0 text-xs text-black-700">{rosterTime(a.last_active)}</span>
-            </span>
-            <span class="mt-0.5 block truncate text-[13px] {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-black-800 dark:text-black-600'}">
-              {#if st.typing !== null}{st.typing}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>{:else}{rowPreview(a)}{/if}
-            </span>
-          </span>
-        </button>
-      {/each}
-      {#if groups.length}
-        <p class="px-3 pb-1 pt-3 text-[10px] font-medium uppercase tracking-wider text-black-600 dark:text-black-700">Groups</p>
-      {/if}
-      {#each groups as g (g.id)}
-        <button
-          type="button"
-          class="roster-row relative mb-0.5 flex w-full items-center gap-3 rounded-2xl px-2.5 py-2.5 text-left {activeGroupId === g.id ? 'bg-white-300 dark:bg-navy-600' : 'hover:bg-white-300 dark:hover:bg-navy-600'}"
-          aria-current={activeGroupId === g.id ? "page" : undefined}
-          data-testid="roster-group"
-          onclick={() => { rosterOpen = false; g.unread = false; navigate({ handle: null, session: null, panel: null, group: g.id }); }}
-        >
-          <span class="flex h-11 w-11 shrink-0 items-center"><GroupAvatars members={g.members} size={20} max={2} showMore={false} ring="bg-white-200 dark:bg-navy-700" /></span>
-          {#if g.unread && activeGroupId !== g.id}<span class="roster-udot rounded-full border-2 border-white-200 bg-neg-400 dark:border-navy-700" aria-label="new message"></span>{/if}
-          <span class="min-w-0 flex-1">
-            <span class="flex items-baseline gap-2">
-              <span class="roster-name min-w-0 flex-1 truncate font-semibold text-black-900 dark:text-white-100">{g.name}</span>
-              <span class="shrink-0 text-xs text-black-700">{rosterTime(g.last_active)}</span>
-            </span>
-            <span class="mt-0.5 block truncate text-[13px] text-black-800 dark:text-black-600">{g.last_preview || `${g.members.length} agents`}</span>
-          </span>
-        </button>
-      {/each}
-    </nav>
   </aside>
 
   <!-- Chat -->
@@ -636,28 +638,28 @@
   /* Entering from wick is a full page load; a short fade makes it feel like
      opening an app rather than a blank flash. */
   .team-app { animation: agent-fade 0.25s ease-out; }
-  /* Roster bits the token scale has no exact step for (mockup sizes). */
-  .roster-name { font-size: 15px; }
-  .new-agent { box-shadow: 0 4px 12px rgba(39, 177, 153, 0.35); }
+  /* Roster bits the token scale has no exact step for (mockup sizes):
+     the green unread count pill. */
+  .roster-badge {
+    display: grid;
+    place-items: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+  }
   .roster-tip {
     display: none;
     position: absolute;
-    left: 60px;
-    top: -4px;
+    left: 52px;
+    top: -6px;
     z-index: 30;
     white-space: nowrap;
     pointer-events: none;
   }
   .roster-row:hover .roster-tip { display: block; }
-  /* Unread dot over the avatar's top-right (mockup .udot); the ring is the
-     roster background so it reads as cut out of the avatar. */
-  .roster-udot {
-    position: absolute;
-    left: 44px;
-    top: 9px;
-    width: 11px;
-    height: 11px;
-  }
   /* Three dots that bounce in turn: the "typing" cue in the header and the
      roster. Tailwind has no staggered keyframe, hence the local rule. */
   .dots i {

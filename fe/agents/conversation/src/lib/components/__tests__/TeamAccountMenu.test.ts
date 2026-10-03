@@ -13,12 +13,26 @@ function mount(over: Record<string, unknown> = {}) {
 }
 
 describe("TeamAccountMenu", () => {
-  test("closed by default; the button announces a menu", () => {
+  test("closed by default; the row shows initial and name and announces a menu", () => {
     const { button } = mount();
     expect(button.getAttribute("aria-haspopup")).toBe("menu");
     expect(button.getAttribute("aria-expanded")).toBe("false");
     expect(button.textContent).toContain("Y");
+    expect(button.textContent).toContain("Yoga Setiawan");
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  test("the ↩ beside the name goes back to Agents in one click", () => {
+    mount();
+    const back = screen.getByRole("link", { name: "Back to Agents" });
+    expect(back.getAttribute("href")).toBe("/tools/agents/sessions");
+    expect(back.getAttribute("title")).toBe("Back to Agents");
+  });
+
+  test("the menu rises above the row (it sits at the sidebar's foot)", async () => {
+    const { button } = mount();
+    await fireEvent.click(button);
+    expect(screen.getByRole("menu").className).toContain("bottom-full");
   });
 
   test("opens with the name, then items in order", async () => {
@@ -28,9 +42,9 @@ describe("TeamAccountMenu", () => {
     const menu = screen.getByRole("menu");
     expect(menu.textContent).toContain("Yoga Setiawan");
     const labels = screen.getAllByRole("menuitem").map((el) => el.textContent?.trim());
-    expect(labels).toEqual(["Team settings", "Mini Tools", "Switch to Agents"]);
+    // "Switch to Agents" is the ↩ icon now, not a menu item.
+    expect(labels).toEqual(["Team settings", "Mini Tools"]);
     expect(screen.getByRole("menuitem", { name: "Mini Tools" }).getAttribute("href")).toBe("/mini-tools");
-    expect(screen.getByRole("menuitem", { name: "Switch to Agents" }).getAttribute("href")).toBe("/tools/agents/sessions");
     // Theme sits between Team settings and Mini Tools.
     const text = menu.textContent ?? "";
     expect(text.indexOf("Team settings")).toBeLessThan(text.indexOf("Theme"));
