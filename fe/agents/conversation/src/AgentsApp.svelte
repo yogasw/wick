@@ -97,21 +97,48 @@
     }
   }
 
-  async function load() {
-    try {
-      const r = await runApi(listAgents(base));
-      agents = r.agents ?? [];
-      captainId = r.captain_id ?? "";
-      loadError = "";
-    } catch (e) {
-      loadError = e instanceof Error ? e.message : String(e);
-    } finally {
-      loaded = true;
+  /* The last roster this tab read, shown at once on the next open so the
+     selected agent's chat (main_session_id) loads in parallel with the
+     roster instead of after it. `loaded` still waits for the server, so a
+     stale cache never sends an unknown handle away. */
+  const ROSTER_CACHE = "wick.team.roster";
+  try {
+    const c = JSON.parse(sessionStorage.getItem(ROSTER_CACHE) ?? "null") as { agents?: AgentItem[]; captain_id?: string } | null;
+    if (c?.agents?.length) {
+      agents = c.agents;
+      captainId = c.captain_id ?? "";
     }
+  } catch {
+    /* no cache */
   }
 
-  // Status dots go stale without a refresh; the roster is small and the
-  // list endpoint reads only the in-memory registry, so a slow poll is fine.
+  /* One roster read at a time: the poll, a finished turn and a save can
+     all ask at once, and they share the request in flight. */
+  let inflight: Promise<void> | null = null;
+  function load(): Promise<void> {
+    inflight ??= (async () => {
+      try {
+        const r = await runApi(listAgents(base));
+        agents = r.agents ?? [];
+        captainId = r.captain_id ?? "";
+        loadError = "";
+        try {
+          sessionStorage.setItem(ROSTER_CACHE, JSON.stringify({ agents, captain_id: captainId }));
+        } catch {
+          /* storage full or off */
+        }
+      } catch (e) {
+        loadError = e instanceof Error ? e.message : String(e);
+      } finally {
+        loaded = true;
+        inflight = null;
+      }
+    })();
+    return inflight;
+  }
+
+  // Status dots go stale without a refresh. The open chat's own turns
+  // already refresh it (onTurnChange), so the poll only catches the rest.
   /* Team settings › Idle animations applies to every avatar on the page;
      the drawer updates it on save. A failed read keeps the default (on). */
   async function loadIdleAnimations() {
@@ -128,7 +155,7 @@
     void loadIdleAnimations();
     const t = setInterval(() => {
       if (document.visibilityState === "visible") { load(); loadGroups(); }
-    }, 15000);
+    }, 30000);
     return () => clearInterval(t);
   });
 
