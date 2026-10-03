@@ -418,6 +418,7 @@ func apiTeamRemoteCreate(c *tool.Ctx) {
 	}
 	p := &entity.AgentPersona{
 		OwnerUserID: owner, Handle: handle, ProjectID: pid, Kind: a2aremote.Kind, Tagline: tagline,
+		MentionFrom:       remoteMentionDefault(req.Usage),
 		AllowedConnectors: "[]", AllowedNativeTools: "[]",
 		// A remote agent has no local process: no rail panel applies.
 		Features: team.EncodeFeatures(team.Features{}),
@@ -431,7 +432,7 @@ func apiTeamRemoteCreate(c *tool.Ctx) {
 	cfg := a2aremote.Config{
 		AgentID: p.ID, OwnerUserID: owner, CardURL: res.CardURL, Card: snap, CardJSON: res.JSON,
 		Auth: sealed, TimeoutSec: req.TimeoutSec, MaxResponseBytes: req.MaxResponseBytes,
-		Usage: req.Usage, RefreshedAt: time.Now().UTC(),
+		Usage: a2aremote.UsageByMention, RefreshedAt: time.Now().UTC(),
 	}
 	if err := remoteStore().Save(cfg); err != nil {
 		_ = globalTeam.Delete(c.Context(), p.ID)
@@ -560,7 +561,9 @@ func apiTeamRemoteUpdate(c *tool.Ctx) {
 	if req.MaxResponseBytes != nil {
 		cfg.MaxResponseBytes = *req.MaxResponseBytes
 	}
-	if req.Usage != nil {
+	// Who may use it lives in the mention policy now: an older client's
+	// usage never takes the agent back from it.
+	if req.Usage != nil && cfg.Usage != a2aremote.UsageByMention {
 		cfg.Usage = *req.Usage
 	}
 	if err := a2aremote.ValidateLimits(cfg.TimeoutSec, cfg.MaxResponseBytes, cfg.Usage); err != nil {

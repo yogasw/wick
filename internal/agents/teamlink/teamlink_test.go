@@ -413,3 +413,25 @@ func TestRemotePeer(t *testing.T) {
 		t.Fatal("AcceptsFrom let an agent reach an owner-only remote")
 	}
 }
+
+// TestRemoteNobodyExplains: a remote agent whose Mention is "Nobody"
+// refuses even the Captain, and the error names the agent, the setting
+// and the way out, so the Captain can explain instead of guessing.
+func TestRemoteNobodyExplains(t *testing.T) {
+	h, _, _ := newTestHub(func(Peer, string) string { return "ok" })
+	d := h.Dir.(*fakeDir)
+	d.peers = append(d.peers, Peer{ID: "a-halo", OwnerID: "u1", Handle: "halodev", Name: "Halodev", Remote: true, MentionFrom: MentionOff})
+	_, err := h.Send(context.Background(), SendInput{CallerSession: "s", CallerAgentID: "a-cap", To: "halodev", Text: "any commit today?"})
+	if !errors.Is(err, ErrRemoteOwnerOnly) {
+		t.Fatalf("err = %v", err)
+	}
+	msg := err.Error()
+	for _, want := range []string{"@halodev", "Nobody", "Settings › Mention", "Any of my agents"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error %q lacks %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "A2A") {
+		t.Fatalf("error still names A2A: %q", msg)
+	}
+}

@@ -261,6 +261,7 @@ func apiTeamSlackRemoteCreate(c *tool.Ctx) {
 	}
 	p := &entity.AgentPersona{
 		OwnerUserID: owner, Handle: handle, ProjectID: pid, Kind: slackremote.Kind, Tagline: tagline,
+		MentionFrom:       remoteMentionDefault(cfg.Usage),
 		AllowedConnectors: "[]", AllowedNativeTools: "[]",
 		Features: team.EncodeFeatures(team.Features{}),
 		Avatar:   team.EncodeAvatar(av),
@@ -271,6 +272,7 @@ func apiTeamSlackRemoteCreate(c *tool.Ctx) {
 		return
 	}
 	cfg.AgentID, cfg.OwnerUserID = p.ID, owner
+	cfg.Usage = slackremote.UsageByMention
 	if err := slackRemoteStore().Save(cfg); err != nil {
 		_ = globalTeam.Delete(c.Context(), p.ID)
 		discardTeamAgentProject(c, pid)
@@ -330,11 +332,17 @@ func apiTeamSlackRemoteUpdate(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	usage := cfg.Usage
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &cfg); err != nil {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 			return
 		}
+	}
+	// Who may use it lives in the mention policy now: an older client's
+	// usage never takes the agent back from it.
+	if usage == slackremote.UsageByMention {
+		cfg.Usage = usage
 	}
 	cfg.AgentID, cfg.OwnerUserID = p.ID, p.OwnerUserID
 	if err := cfg.Normalize(); err != nil {

@@ -66,6 +66,14 @@ func (s *Store) List(ctx context.Context, ownerID string) ([]entity.AgentPersona
 	return rows, err
 }
 
+// ListKinds returns every owner's agents of the given kinds (remote
+// sources), oldest first.
+func (s *Store) ListKinds(ctx context.Context, kinds ...string) ([]entity.AgentPersona, error) {
+	var rows []entity.AgentPersona
+	err := s.db.WithContext(ctx).Where("kind IN ?", kinds).Order("created_at ASC").Order("id ASC").Find(&rows).Error
+	return rows, err
+}
+
 // Get returns one agent by id.
 func (s *Store) Get(ctx context.Context, id string) (entity.AgentPersona, error) {
 	var row entity.AgentPersona

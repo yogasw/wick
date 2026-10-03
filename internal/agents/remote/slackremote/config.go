@@ -60,6 +60,7 @@ const (
 const (
 	UsageOnlyMe      = "only_me"
 	UsageMeAndAgents = "me_and_my_agents"
+	UsageByMention   = "mention"
 )
 
 const (
@@ -129,8 +130,9 @@ func (c Config) EffectiveListen() string {
 }
 
 func (c Config) EffectiveUsage() string {
-	if c.Usage == UsageMeAndAgents {
-		return UsageMeAndAgents
+	switch c.Usage {
+	case UsageMeAndAgents, UsageByMention:
+		return c.Usage
 	}
 	return UsageOnlyMe
 }
@@ -182,9 +184,9 @@ func (c *Config) Normalize() error {
 		return fmt.Errorf("listen must be %q or %q", ListenTarget, ListenAnyone)
 	}
 	switch c.Usage {
-	case "", UsageOnlyMe, UsageMeAndAgents:
+	case "", UsageOnlyMe, UsageMeAndAgents, UsageByMention:
 	default:
-		return fmt.Errorf("usage must be %q or %q", UsageOnlyMe, UsageMeAndAgents)
+		return fmt.Errorf("usage must be %q, %q or %q", UsageOnlyMe, UsageMeAndAgents, UsageByMention)
 	}
 	if c.IdleSec < 0 || c.IdleSec > MaxMaxSec {
 		return fmt.Errorf("idle_sec must be between 0 and %d", MaxMaxSec)

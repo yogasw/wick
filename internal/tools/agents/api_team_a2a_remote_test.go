@@ -75,7 +75,7 @@ func TestRemoteAgentLifecycle(t *testing.T) {
 			t.Fatalf("create response leaks the secret: %s", raw)
 		}
 		rem := out["remote"].(map[string]any)
-		if rem["auth_set"] != true || rem["auth_type"] != "bearer" || rem["usage"] != "me_and_my_agents" || rem["timeout_sec"] != float64(120) {
+		if rem["auth_set"] != true || rem["auth_type"] != "bearer" || rem["usage"] != "mention" || out["mention_from"] != "all" || rem["timeout_sec"] != float64(120) {
 			t.Fatalf("remote info: %s", raw)
 		}
 		ids = append(ids, out["id"].(string))
@@ -111,7 +111,7 @@ func TestRemoteAgentLifecycle(t *testing.T) {
 		t.Fatalf("bad timeout: %d", code)
 	}
 	code, out, raw = remoteCall(t, u, http.MethodPatch, base, map[string]any{"timeout_sec": 30, "max_response_bytes": 4096, "usage": "only_me"}, apiTeamRemoteUpdate)
-	if code != http.StatusOK || out["timeout_sec"] != float64(30) || out["auth_set"] != true || out["usage"] != "only_me" {
+	if code != http.StatusOK || out["timeout_sec"] != float64(30) || out["auth_set"] != true || out["usage"] != "mention" {
 		t.Fatalf("patch: %d %s", code, raw)
 	}
 	code, out, _ = remoteCall(t, u, http.MethodPatch, base, map[string]any{"auth": map[string]any{"type": "none"}}, apiTeamRemoteUpdate)

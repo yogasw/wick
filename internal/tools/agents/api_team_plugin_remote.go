@@ -141,6 +141,7 @@ func apiTeamPluginRemoteCreate(c *tool.Ctx) {
 	}
 	p := &entity.AgentPersona{
 		OwnerUserID: owner, Handle: handle, ProjectID: pid, Kind: pluginremote.Kind, Tagline: tagline,
+		MentionFrom:       remoteMentionDefault(""),
 		AllowedConnectors: "[]", AllowedNativeTools: "[]",
 		Features: team.EncodeFeatures(team.Features{}),
 		Avatar:   team.EncodeAvatar(av),
@@ -150,7 +151,7 @@ func apiTeamPluginRemoteCreate(c *tool.Ctx) {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
-	if err := st.Save(pluginremote.Config{AgentID: p.ID, OwnerUserID: owner, PluginKey: src.Key}); err != nil {
+	if err := st.Save(pluginremote.Config{AgentID: p.ID, OwnerUserID: owner, PluginKey: src.Key, Usage: pluginremote.UsageByMention}); err != nil {
 		_ = globalTeam.Delete(c.Context(), p.ID)
 		discardTeamAgentProject(c, pid)
 		log.Ctx(c.Context()).Warn().Err(err).Msg("team: save plugin remote settings")

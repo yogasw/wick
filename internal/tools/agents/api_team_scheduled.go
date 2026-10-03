@@ -505,6 +505,7 @@ var startTeamBackground sync.Once
 func startTeamJobs() {
 	startTeamBackground.Do(func() {
 		schedule.SetFiredHook(onScheduledFired)
+		go migrateRemoteUsage(context.Background())
 		c := &team.IdleCompactor{
 			Agents: func(ctx context.Context) ([]entity.AgentPersona, error) {
 				if globalTeam == nil || globalPool == nil || globalMgr == nil {

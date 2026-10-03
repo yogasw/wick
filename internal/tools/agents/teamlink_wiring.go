@@ -3,9 +3,8 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/yogasw/wick/internal/agents/a2aremote"
-	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"net/http"
 	"strings"
 	"time"
@@ -90,23 +89,15 @@ func (d teamDirectory) peer(p entity.AgentPersona) teamlink.Peer {
 }
 
 // remoteOwnerOnly reports whether p is a remote agent its owner keeps to
-// themselves. Missing or unreadable settings count as owner-only.
+// themselves by the old usage setting, not yet carried into its mention
+// policy (migrateRemoteUsage). Missing or unreadable settings count as
+// owner-only. Once carried over, MentionFrom alone decides.
 func remoteOwnerOnly(p entity.AgentPersona) bool {
 	if !IsRemoteAgent(p) {
 		return false
 	}
-	if isSlackRemote(p) {
-		if slackRemoteStore() == nil {
-			return true
-		}
-		cfg, ok, err := slackRemoteStore().Load(p.ID)
-		return err != nil || !ok || cfg.EffectiveUsage() != slackremote.UsageMeAndAgents
-	}
-	if remoteStore() == nil {
-		return true
-	}
-	cfg, ok, err := remoteStore().Load(p.ID)
-	return err != nil || !ok || cfg.EffectiveUsage() != a2aremote.UsageMeAndAgents
+	usage, ok := remoteUsage(p)
+	return !ok || usage != remoteUsageByMention
 }
 
 func (d teamDirectory) Peers(ctx context.Context, ownerID string) ([]teamlink.Peer, error) {
@@ -249,6 +240,9 @@ func refusalTurn(r teamlink.Refusal, now time.Time) store.ConversationTurn {
 			limit = teamlink.MaxContextTurns
 		}
 		return hopLimitTurn(extras, limit, now)
+	}
+	if errors.Is(r.Err, teamlink.ErrRemoteOwnerOnly) {
+		return systemTurn(store.KindMentionRefused, fmt.Sprintf("@%s takes messages from its owner only — switch its Settings › Mention to \"Any of my agents\" to let agents reach it", r.To), extras, now)
 	}
 	return systemTurn(store.KindMentionRefused, fmt.Sprintf("@%s doesn't take mentions", r.To), extras, now)
 }

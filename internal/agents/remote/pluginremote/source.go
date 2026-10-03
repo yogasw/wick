@@ -216,7 +216,14 @@ type Config struct {
 	AgentID     string `json:"agent_id"`
 	OwnerUserID string `json:"owner_user_id"`
 	PluginKey   string `json:"plugin_key"`
+	// Usage is UsageByMention once the agent's mention policy decides who
+	// may reach it; "" for a row saved before, which took no agent's turn.
+	Usage string `json:"usage,omitempty"`
 }
+
+// UsageByMention marks a plugin remote agent whose mention policy decides
+// who may reach it.
+const UsageByMention = "mention"
 
 // Store keeps Config in agent_channels (type plugin-remote, name agent id).
 type Store struct{ db *gorm.DB }
@@ -233,6 +240,13 @@ func (s *Store) Load(agentID string) (Config, bool, error) {
 	var c Config
 	err := json.Unmarshal([]byte(rows[0].Config), &c)
 	return c, err == nil, err
+}
+
+// Update rewrites an existing row's settings.
+func (s *Store) Update(c Config) error {
+	data, _ := json.Marshal(c)
+	return s.db.Model(&entity.AgentChannel{}).Where("type = ? AND name = ?", RowType, c.AgentID).
+		Updates(map[string]any{"config": string(data), "updated_at": time.Now()}).Error
 }
 
 // Save writes c.

@@ -60,6 +60,10 @@ const (
 	UsageOnlyMe = "only_me"
 	// UsageMeAndAgents — the owner, plus the owner's agents via @mention.
 	UsageMeAndAgents = "me_and_my_agents"
+	// UsageByMention — the agent's mention policy decides (Settings ›
+	// Mention); a remote agent saved since the two settings merged, or
+	// one whose old usage was carried into the policy.
+	UsageByMention = "mention"
 )
 
 // Auth types.
@@ -257,8 +261,9 @@ func (c Config) MaxBytes() int64 {
 
 // EffectiveUsage is Usage with the default applied.
 func (c Config) EffectiveUsage() string {
-	if c.Usage == UsageMeAndAgents {
-		return UsageMeAndAgents
+	switch c.Usage {
+	case UsageMeAndAgents, UsageByMention:
+		return c.Usage
 	}
 	return UsageOnlyMe
 }
@@ -280,9 +285,9 @@ func ValidateLimits(timeoutSec int, maxBytes int64, usage string) error {
 		return fmt.Errorf("max_response_bytes must be %d..%d", minMaxResponseBytes, MaxMaxResponseBytes)
 	}
 	switch usage {
-	case "", UsageOnlyMe, UsageMeAndAgents:
+	case "", UsageOnlyMe, UsageMeAndAgents, UsageByMention:
 	default:
-		return fmt.Errorf("usage must be %s or %s", UsageOnlyMe, UsageMeAndAgents)
+		return fmt.Errorf("usage must be %s, %s or %s", UsageOnlyMe, UsageMeAndAgents, UsageByMention)
 	}
 	return nil
 }

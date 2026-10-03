@@ -91,10 +91,25 @@ var (
 	// ErrMentionsOff refuses a turn the target's mention setting does not
 	// take from the caller (Peer.AcceptsFrom).
 	ErrMentionsOff = errors.New("that agent does not take turns from you — tell the user instead")
-	// ErrRemoteOwnerOnly refuses an agent's turn for an A2A remote agent
-	// whose owner keeps it to themselves (usage "only_me").
-	ErrRemoteOwnerOnly = errors.New("that agent is an A2A remote agent only its owner may use — tell the user instead")
+	// ErrRemoteOwnerOnly refuses an agent's turn for a remote agent whose
+	// owner keeps it to themselves (Mention "Nobody", or the old usage
+	// "only_me"). Send returns it wrapped in an OwnerOnlyError that names
+	// the agent and the way out.
+	ErrRemoteOwnerOnly = errors.New("that remote agent is set to take messages from its owner only — tell the user instead")
 )
+
+// OwnerOnlyError is ErrRemoteOwnerOnly for one agent: it says which
+// setting blocks the turn and how the owner lifts it, so the caller can
+// explain instead of guessing.
+type OwnerOnlyError struct{ Handle string }
+
+func (e *OwnerOnlyError) Error() string {
+	return fmt.Sprintf("@%s is a remote agent set to \"Nobody\" in its Settings › Mention, so only its owner may use it — "+
+		"tell the user; the owner can switch it to \"Any of my agents\" there", e.Handle)
+}
+
+// Is makes errors.Is(err, ErrRemoteOwnerOnly) hold.
+func (e *OwnerOnlyError) Is(target error) bool { return target == ErrRemoteOwnerOnly }
 
 // Peer is one Team agent as the registry sees it.
 type Peer struct {
@@ -106,10 +121,11 @@ type Peer struct {
 	MentionFrom  string
 	MentionAllow []string
 	MaxHops      int
-	// Remote marks an A2A remote agent (package a2aremote): its turn goes
-	// out of wick, so it gets only the mention text, without the framing
-	// that names the sender. RemoteOwnerOnly refuses every agent's turn
-	// (usage "only_me"); a person's mention still goes through.
+	// Remote marks a remote agent (A2A, Slack, plugin): its turn goes out
+	// of wick, so it gets only the mention text, without the framing that
+	// names the sender. RemoteOwnerOnly refuses every agent's turn — the
+	// old usage "only_me" not yet carried into MentionFrom; a person's
+	// mention still goes through.
 	Remote, RemoteOwnerOnly bool
 	// ChatUser is whose conversation with the agent a turn runs in: ""
 	// for the owner's own main chat, a recipient's id for an agent shared
@@ -457,8 +473,8 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	}
 	if err == nil && !in.Human && !target.AcceptsFrom(caller) {
 		err = ErrMentionsOff
-		if target.Remote && target.RemoteOwnerOnly {
-			err = ErrRemoteOwnerOnly
+		if target.Remote && (target.RemoteOwnerOnly || NormalizeMentionFrom(target.MentionFrom) == MentionOff) {
+			err = &OwnerOnlyError{Handle: target.Handle}
 		}
 	}
 	if err != nil {
