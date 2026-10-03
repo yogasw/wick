@@ -65,6 +65,28 @@ func Scan(dir string) ([]Found, error) {
 	return out, nil
 }
 
+// ScanKind is Scan restricted to one kind: a manifest whose kind does not
+// match the folder it sits in is rejected (logged, not returned), so a job
+// binary dropped into plugins/connectors never loads as a connector and
+// vice versa.
+func ScanKind(dir, kind string) ([]Found, error) {
+	found, err := Scan(dir)
+	if err != nil {
+		return nil, err
+	}
+	kind = wickplugin.NormalizeKind(kind)
+	out := found[:0]
+	for _, f := range found {
+		if k := wickplugin.NormalizeKind(f.Manifest.Kind); k != kind {
+			log.Warn().Str("plugin", f.Key).Str("kind", k).Str("folder", kind).
+				Msg("plugin scan: skipped (kind does not match its folder)")
+			continue
+		}
+		out = append(out, f)
+	}
+	return out, nil
+}
+
 // registerFn matches connectors.Register; injected for tests.
 type registerFn func(connector.Module)
 

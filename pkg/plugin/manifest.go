@@ -36,23 +36,33 @@ type Manifest struct {
 // ManifestSchemaVersion is the current envelope format version.
 const ManifestSchemaVersion = 1
 
-// Plugin kinds. connector is the default and the only kind with a host-side
-// execution adapter today; tool/job are accepted by the manifest + build
-// tooling so the layout and CLI are forward-compatible (§18).
+// Plugin kinds. connector and job have host-side adapters; tool/service are
+// accepted by the manifest + build tooling so the layout and CLI are
+// forward-compatible.
 const (
 	KindConnector = "connector"
 	KindTool      = "tool"
 	KindJob       = "job"
+	KindService   = "service"
 )
+
+// Kinds lists every plugin kind in display order.
+var Kinds = []string{KindConnector, KindTool, KindJob, KindService}
 
 // NormalizeKind returns a valid kind, defaulting empty/unknown to connector.
 func NormalizeKind(k string) string {
 	switch k {
-	case KindTool, KindJob:
+	case KindTool, KindJob, KindService:
 		return k
 	default:
 		return KindConnector
 	}
+}
+
+// KindFolder is the per-kind install folder under the plugins root
+// (plugins/connectors, plugins/jobs, plugins/tools, plugins/services).
+func KindFolder(kind string) string {
+	return NormalizeKind(kind) + "s"
 }
 
 // ValidateKey enforces that a plugin's Meta.Key is a safe slug. Key is the one

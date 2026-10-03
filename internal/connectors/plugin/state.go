@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/yogasw/wick/internal/entity"
+	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
 // StateStore reads and writes the plugin enable/disable overlay.
@@ -53,4 +54,34 @@ func (s *StateStore) List() (map[string]bool, error) {
 		out[r.Key] = r.Enabled
 	}
 	return out, nil
+}
+
+// Record upserts the kind + installed version for key without touching the
+// enable flag (a new row starts enabled).
+func (s *StateStore) Record(key, kind, version string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Model(&entity.PluginState{}).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"kind", "installed_version", "updated_at"}),
+	}).Create(map[string]interface{}{
+		"key":               key,
+		"enabled":           true,
+		"kind":              wickplugin.NormalizeKind(kind),
+		"installed_version": version,
+		"updated_at":        time.Now(),
+	}).Error
+}
+
+// Get returns the overlay row for key; ok=false when there is none.
+func (s *StateStore) Get(key string) (entity.PluginState, bool) {
+	var st entity.PluginState
+	if s == nil || s.db == nil {
+		return st, false
+	}
+	if err := s.db.Where("key = ?", key).First(&st).Error; err != nil {
+		return st, false
+	}
+	return st, true
 }
