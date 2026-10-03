@@ -175,3 +175,56 @@ func revokeApproval(c *tool.Ctx) {
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "revoked"})
 }
+
+// approvalDecisionReq is the body for POST
+// /api/sessions/{id}/approvals/{approvalID}: a click on an
+// approval_request card.
+type approvalDecisionReq struct {
+	Decision string `json:"decision"` // accept | accept_for_session | decline
+	Reason   string `json:"reason,omitempty"`
+}
+
+// sessionApprovalDecision resolves a pending gate approval from its card.
+// It is the same gate path as /sessions/{id}/approve; the request must be
+// pending in the session the route names, so a session the caller can
+// open is the only one whose prompts they can answer.
+func sessionApprovalDecision(c *tool.Ctx) {
+	if notReady(c) || notReadyApprovals(c) {
+		return
+	}
+	sessionID, approvalID := c.PathValue("id"), c.PathValue("approvalID")
+	sess, ok := globalMgr.Registry().Session(sessionID)
+	if !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	var req approvalDecisionReq
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	decision, ok := gateDecision(req.Decision)
+	if !ok {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "decision must be accept | accept_for_session | decline"})
+		return
+	}
+	pr, ok := approvalCards.lookup(sessionID, approvalID)
+	if !ok {
+		c.JSON(http.StatusGone, map[string]string{
+			"error": "request id no longer pending (timed out or already resolved)",
+		})
+		return
+	}
+	resolved, err := globalApprovals.Resolve(sessionID, approvalID, decision, req.Reason, pr.matchKey)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !resolved {
+		c.JSON(http.StatusGone, map[string]string{
+			"error": "request id no longer pending (timed out or already resolved)",
+		})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "resolved", "decision": decision})
+}

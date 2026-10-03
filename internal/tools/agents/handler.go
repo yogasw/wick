@@ -295,6 +295,7 @@ func Register(r tool.Router) {
 	// Interactive messages: an actioncard click, and a decision on an
 	// approval_request card.
 	r.POST("/api/sessions/{id}/postback", sessionPostback)
+	r.POST("/api/sessions/{id}/approvals/{approvalID}", sessionApprovalDecision)
 	r.POST("/api/sessions/{id}/subagents/interrupt-all", interruptAllSubAgents)
 	// Agent-to-agent thread + the human-only hop refill.
 	r.GET("/api/sessions/{id}/messages", sessionMessages)

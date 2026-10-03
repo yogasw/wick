@@ -1351,10 +1351,12 @@ func NewServer() *Server {
 			return "", false
 		},
 		OnRequest: func(sessionID string, r gate.ApprovalRequest) {
+			agentstool.RecordApprovalRequest(sessionID, r)
 			agentsBcast.PublishApprovalRequest(sessionID, r)
 			channelReg.DispatchApprovalRequest(sessionID, r)
 		},
 		OnResolved: func(sessionID, requestID, decision string) {
+			agentstool.RecordApprovalResolved(sessionID, requestID, decision)
 			agentsBcast.PublishApprovalResolved(sessionID, requestID, decision)
 			channelReg.DispatchApprovalResolved(sessionID, requestID, decision)
 		},

@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/yogasw/wick/internal/agents/askuser"
+	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/store"
 )
 
@@ -118,4 +120,104 @@ func answerLabel(req askuser.AskRequest, ans askuser.Answer) string {
 		return "submitted"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// Approval card decisions (the codex app-server enum), mapped onto the
+// gate's own decisions so a card click resolves exactly as the modal does.
+const (
+	ApprovalAccept           = "accept"
+	ApprovalAcceptForSession = "accept_for_session"
+	ApprovalDecline          = "decline"
+)
+
+// gateDecision maps a card decision to the gate's. ok=false for anything
+// else.
+func gateDecision(d string) (string, bool) {
+	switch d {
+	case ApprovalAccept:
+		return gate.DecisionApproveOnce, true
+	case ApprovalAcceptForSession:
+		return gate.DecisionApproveSession, true
+	case ApprovalDecline:
+		return gate.DecisionBlock, true
+	}
+	return "", false
+}
+
+// RecordApprovalRequest writes a gate approval prompt into its session's
+// thread as a kind:"approval_request" turn — the card is made by the
+// server, never by the agent.
+func RecordApprovalRequest(sessionID string, r gate.ApprovalRequest) {
+	if r.Probe {
+		return
+	}
+	approvalCards.add(r.ID, sessionID, r.MatchKey)
+	text := r.Tool
+	if r.Cmd != "" {
+		text = strings.TrimSpace(r.Tool + ": " + r.Cmd)
+	}
+	emitSystemEvent(sessionID, store.KindApprovalRequest, text, map[string]string{
+		"approval_id": r.ID, "state": "pending", "agent": r.AgentName,
+		"tool": r.Tool, "cmd": r.Cmd, "work_dir": r.WorkDir, "match_key": r.MatchKey,
+	})
+}
+
+// RecordApprovalResolved writes how the prompt was settled under the same
+// approval_id; decision is the gate's (approve_once, approve_session,
+// approve_always, block, guide, or a timeout's block).
+func RecordApprovalResolved(sessionID, requestID, decision string) {
+	approvalCards.drop(requestID)
+	emitSystemEvent(sessionID, store.KindApprovalRequest, approvalDecisionText(decision), map[string]string{
+		"approval_id": requestID, "state": decision,
+	})
+}
+
+func approvalDecisionText(decision string) string {
+	switch decision {
+	case gate.DecisionApproveOnce:
+		return "accepted"
+	case gate.DecisionApproveSession:
+		return "accepted for this agent"
+	case gate.DecisionApproveAlways:
+		return "always allowed"
+	case gate.DecisionGuide:
+		return "declined with guidance"
+	default:
+		return "declined"
+	}
+}
+
+// approvalIndex remembers which WICK session each open approval belongs
+// to. The gate's own ApprovalRequest.SessionID is the CLI's session id
+// (and in-process requests are not in the socket's pending list), so the
+// session the daemon routed the prompt to is kept here, from OnRequest
+// until OnResolved.
+type approvalIndex struct {
+	mu   sync.Mutex
+	open map[string]approvalRef
+}
+
+type approvalRef struct{ sessionID, matchKey string }
+
+var approvalCards = &approvalIndex{open: map[string]approvalRef{}}
+
+func (x *approvalIndex) add(id, sessionID, matchKey string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.open[id] = approvalRef{sessionID, matchKey}
+}
+
+func (x *approvalIndex) drop(id string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	delete(x.open, id)
+}
+
+// lookup returns the open approval id in sessionID, ok=false when it is
+// settled or belongs to another session.
+func (x *approvalIndex) lookup(sessionID, id string) (approvalRef, bool) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	ref, ok := x.open[id]
+	return ref, ok && ref.sessionID == sessionID
 }
