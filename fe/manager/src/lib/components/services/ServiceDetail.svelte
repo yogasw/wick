@@ -4,6 +4,7 @@
      to the running plugin), the routes and who may reach them, access tokens (Generate /
      Rotate / Revoke — the secret is shown once), the callback token switch,
      and the last log lines (refreshed every 3 s). */
+  import PluginUpdateMenu from "$lib/components/plugins/PluginUpdateMenu.svelte";
   import { Button, TextInput } from "@wick-fe/common-ui";
   import { toastError } from "@wick-fe/common-stores";
   import {
@@ -148,6 +149,7 @@
         <div>
           <div class="flex items-center gap-2">
             <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">{data.name || data.key}</h1>
+            <PluginUpdateMenu pluginKey={serviceKey} />
             <span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">plugin v{data.version}</span>
             <span class="rounded-full px-2 py-0.5 text-[10px] font-medium {stateClasses[data.status.state]}" data-testid="service-state">{data.status.state}</span>
           </div>

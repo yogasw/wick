@@ -35,7 +35,7 @@ func (h *PluginSourcesHandler) RegisterRoutes(mux *http.ServeMux, authMidd *logi
 	admin := func(next http.HandlerFunc) http.Handler { return authMidd.RequireAdmin(next) }
 	mux.Handle("GET /manager/api/plugin-sources", auth(h.apiList))
 	mux.Handle("POST /manager/api/plugin-sources", admin(h.apiCreate))
-	mux.Handle("PUT /manager/api/plugin-sources/{id}", admin(h.apiEdit))
+	mux.Handle("POST /manager/api/plugin-sources/{id}", admin(h.apiEdit))
 	mux.Handle("DELETE /manager/api/plugin-sources/{id}", admin(h.apiDelete))
 	mux.Handle("POST /manager/api/plugin-sources/{id}/test", admin(h.apiTest))
 	mux.Handle("POST /manager/api/plugin-sources/{id}/check", admin(h.apiCheck))

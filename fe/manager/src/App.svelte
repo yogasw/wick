@@ -15,6 +15,7 @@
   import ToolDetail from "$lib/components/tools/ToolDetail.svelte";
   import ServiceDetail from "$lib/components/services/ServiceDetail.svelte";
   import AuditLog from "$lib/components/audit/AuditLog.svelte";
+  import PluginsAdmin from "$lib/components/plugins/PluginsAdmin.svelte";
   import { breadcrumbNames } from "$lib/stores/breadcrumb.js";
   import type { BreadcrumbItem } from "@wick-fe/common-ui";
 
@@ -35,6 +36,7 @@
   let reviewRoute = $derived(currentRoute === "/custom/review");
   let mcpNewRoute = $derived(currentRoute === "/custom/mcp");
   let auditRoute = $derived(currentRoute === "/audit");
+  let pluginsRoute = $derived(currentRoute === "/plugins");
   let mcpEditParams = $derived(match("/custom/mcp/:serverID/edit", currentRoute));
   let editParams = $derived(match("/custom/:defID/edit", currentRoute));
   let jobParams = $derived(match("/jobs/:key", currentRoute));
@@ -71,6 +73,9 @@
   let items = $derived.by<BreadcrumbItem[]>(() => {
     if (auditRoute) {
       return [{ label: "Audit Log" }];
+    }
+    if (pluginsRoute) {
+      return [{ label: "Plugins" }];
     }
     if (jobParams) {
       return [
@@ -120,6 +125,8 @@
   {#key currentRoute}
     {#if auditRoute}
       <AuditLog />
+    {:else if pluginsRoute}
+      <PluginsAdmin />
     {:else if jobParams}
       <JobDetail jobKey={jobParams.key} />
     {:else if toolParams}

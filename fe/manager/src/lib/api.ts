@@ -616,3 +616,99 @@ export function rotateServiceToken(key: string, id: string): Promise<ServiceToke
 export function revokeServiceToken(key: string, id: string): Promise<void> {
   return apiDelete<void>(`${serviceBase(key)}/tokens/${encodeURIComponent(id)}`);
 }
+
+/* ── Plugin sources (Admin → Plugins). Backed by internal/manager/plugin_sources_api.go.
+   Reading is open to any logged-in user; every action is admin-only. The PAT is
+   write-only: responses only carry has_pat. ── */
+
+export type PluginSource = {
+  id: string;
+  name: string;
+  type: "url" | "github";
+  url?: string;
+  repo?: string;
+  private: boolean;
+  has_pat: boolean;
+  pub_key?: string;
+  key_filter?: string;
+  allow_prerelease: boolean;
+  auto_update: boolean;
+  poll_minutes: number;
+  enabled: boolean;
+  last_check_at?: string;
+  last_status?: string;
+  last_error?: string;
+  plugins: number;
+};
+export type PluginSourceInput = {
+  name?: string;
+  type: "url" | "github";
+  url?: string;
+  repo?: string;
+  private?: boolean;
+  pat?: string;
+  pub_key?: string;
+  key_filter?: string;
+  allow_prerelease?: boolean;
+  auto_update?: boolean;
+  poll_minutes?: number;
+};
+export type SourceStep = { n: number; name: string; status: "ok" | "fail" | "skip"; message: string };
+export type AvailablePlugin = {
+  source_id: string;
+  source_name: string;
+  key: string;
+  kind: string;
+  name: string;
+  description?: string;
+  version: string;
+  installed_version?: string;
+  arch_ok: boolean;
+  os_arch: string[];
+};
+export type PluginSourceStatus = {
+  key: string;
+  kind: string;
+  source_id?: string;
+  source_name?: string;
+  installed_version?: string;
+  available_version?: string;
+  is_admin: boolean;
+};
+
+const sourcesBase = "/manager/api/plugin-sources";
+
+export function listPluginSources(): Promise<{ sources: PluginSource[]; is_admin: boolean }> {
+  return apiGet(sourcesBase);
+}
+export function savePluginSource(input: PluginSourceInput, id?: string): Promise<PluginSource> {
+  return apiPost(id ? `${sourcesBase}/${encodeURIComponent(id)}` : sourcesBase, input);
+}
+export function deletePluginSource(id: string): Promise<{ ok: boolean }> {
+  return apiDelete(`${sourcesBase}/${encodeURIComponent(id)}`);
+}
+export function testPluginSource(id: string): Promise<{ steps: SourceStep[] }> {
+  return apiPost(`${sourcesBase}/${encodeURIComponent(id)}/test`);
+}
+export function checkPluginSource(id: string): Promise<{ updates?: string[] | null }> {
+  return apiPost(`${sourcesBase}/${encodeURIComponent(id)}/check`);
+}
+export function installFromSource(id: string, key: string): Promise<{ ok: boolean; version: string }> {
+  return apiPost(`${sourcesBase}/${encodeURIComponent(id)}/install`, { key });
+}
+export function listAvailablePlugins(): Promise<{ available: AvailablePlugin[]; is_admin: boolean }> {
+  return apiGet("/manager/api/plugin-available");
+}
+export function getPluginSourceStatus(key: string): Promise<PluginSourceStatus> {
+  return apiGet(`/manager/api/plugins/${encodeURIComponent(key)}/source`);
+}
+
+/* Multipart upload: the shared JSON client cannot send FormData. */
+export async function uploadPluginZip(file: File): Promise<{ key: string; kind: string; version: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/manager/api/plugins/upload", { method: "POST", body: form, credentials: "same-origin" });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `upload failed (${res.status})`);
+  return body;
+}
