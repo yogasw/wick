@@ -4,6 +4,7 @@ package plugintest
 
 import (
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -28,7 +29,11 @@ func StartRepeater(t *testing.T) *serviceplugin.Host {
 	_, file, _, _ := runtime.Caller(0)
 	bin := filepath.Join(t.TempDir(), RepeaterKey)
 	cmd := exec.Command("go", "build", "-o", bin, "./service/"+RepeaterKey)
-	cmd.Dir = filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "plugins")
+	root := filepath.Join(filepath.Dir(file), "..", "..", "..", "..")
+	cmd.Dir = filepath.Join(root, "plugins")
+	// plugins/ requires a released wick; only the repo go.work points it at
+	// this checkout, so force it even when the caller runs with GOWORK=off.
+	cmd.Env = append(os.Environ(), "GOWORK="+filepath.Join(root, "go.work"))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build %s: %v\n%s", RepeaterKey, err, out)
 	}

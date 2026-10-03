@@ -23,7 +23,12 @@ func buildRepeater(t *testing.T) string {
 	}
 	bin := filepath.Join(t.TempDir(), "example_a2a_repeater")
 	cmd := exec.Command("go", "build", "-o", bin, "./service/example_a2a_repeater")
-	cmd.Dir = filepath.Join("..", "..", "..", "plugins")
+	_, file, _, _ := runtime.Caller(0)
+	root := filepath.Join(filepath.Dir(file), "..", "..", "..")
+	cmd.Dir = filepath.Join(root, "plugins")
+	// plugins/ requires a released wick; only the repo go.work points it at
+	// this checkout, so force it even when the caller runs with GOWORK=off.
+	cmd.Env = append(os.Environ(), "GOWORK="+filepath.Join(root, "go.work"))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build example_a2a_repeater: %v\n%s", err, out)
 	}
