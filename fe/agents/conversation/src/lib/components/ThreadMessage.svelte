@@ -11,6 +11,7 @@
   import { teamSender } from "../teamMention.js";
   import { isSystemEventKind } from "../systemEvents.js";
   import SystemEventChip from "./system/SystemEventChip.svelte";
+  import InputRequestCard from "./system/InputRequestCard.svelte";
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import ToolCard from "./ToolCard.svelte";
   import TodoCard from "./TodoCard.svelte";
@@ -423,6 +424,8 @@
           </span>
           <div class="h-px flex-1 bg-white-300 dark:bg-navy-600"></div>
         </div>
+      {:else if turn.kind === "input_request"}
+        <InputRequestCard {turn} />
       {:else if isSystemEvent}
         <!-- A server-recorded event (agent created, access changed, a Team
              handoff, a refused mention, …): one chip, drawn from the

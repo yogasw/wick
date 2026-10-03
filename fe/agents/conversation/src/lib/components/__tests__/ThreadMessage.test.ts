@@ -1260,3 +1260,17 @@ describe("ThreadMessage - speaker", () => {
     expect(screen.queryByTestId("speaker-chip")).toBeNull();
   });
 });
+
+describe("ThreadMessage - input_request", () => {
+  test("pending question stays a record pointing to the composer box", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "system", kind: "input_request", text: "Deploy now?", extras: { ask_id: "a", state: "pending", question: "Deploy now?" } }) } });
+    const card = screen.getByTestId("input-request");
+    expect(card.textContent).toContain("Deploy now?");
+    expect(card.textContent).toContain("Waiting for your answer");
+    expect(screen.queryByTestId("input-request-pill")).toBeNull();
+  });
+  test("answered shows the pill", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "system", kind: "input_request", text: "answered: Ship it", extras: { ask_id: "a", state: "answered", question: "Deploy now?", answer: "Ship it" } }) } });
+    expect(screen.getByTestId("input-request-pill").textContent).toContain("answered: Ship it");
+  });
+});
