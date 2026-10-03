@@ -505,6 +505,7 @@ func (r *Registry) StartAll(ctx context.Context) {
 		}
 		ch := c // capture
 		go func() {
+			defer RecoverPanic(ch.Name(), "start")
 			if err := ch.Start(ctx); err != nil {
 				log.Error().Str("channel", ch.Name()).Err(err).Msg("channel stopped")
 			}

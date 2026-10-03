@@ -11,6 +11,7 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
+	"github.com/slack-go/slack/socketmode"
 )
 
 // callLog records every Slack Web API call by method, answering ok to all.
@@ -71,4 +72,20 @@ func TestHandleMessageWithoutSendFnRepliesInsteadOfPanicking(t *testing.T) {
 	if len(reacts) == 0 || reacts[len(reacts)-1].Get("name") != reactionError {
 		t.Fatalf("want %q reaction, got %v", reactionError, reacts)
 	}
+}
+
+// A panic while handling one socket event (here: acking with no socket
+// client) must be recovered inside the handler, so the Start loop and
+// the daemon keep running.
+func TestHandleSocketEventRecoversPanic(t *testing.T) {
+	c := &Channel{turns: map[string]*turn{}}
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panic escaped handleSocketEvent: %v", r)
+		}
+	}()
+	c.handleSocketEvent(context.Background(), socketmode.Event{
+		Type:    socketmode.EventTypeEventsAPI,
+		Request: &socketmode.Request{},
+	})
 }

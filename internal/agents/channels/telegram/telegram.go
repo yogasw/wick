@@ -416,6 +416,7 @@ func (t *Channel) Reload(ctx context.Context, cfg agentconfig.TelegramChannelCon
 
 	log.Info().Str("channel", "telegram").Str("bot", bot.Self.UserName).Msg("reload: restarting with new config")
 	go func() {
+		defer agentchannels.RecoverPanic("telegram", "reload")
 		if err := t.Start(ctx); err != nil {
 			log.Error().Str("channel", "telegram").Err(err).Msg("telegram channel stopped after reload")
 		}
@@ -423,6 +424,7 @@ func (t *Channel) Reload(ctx context.Context, cfg agentconfig.TelegramChannelCon
 }
 
 func (t *Channel) handleUpdate(ctx context.Context, update tgbotapi.Update) {
+	defer agentchannels.RecoverPanic("telegram", "update")
 	switch {
 	case update.CallbackQuery != nil:
 		t.handleCallback(ctx, update.CallbackQuery)

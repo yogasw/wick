@@ -533,6 +533,7 @@ func syncAgentSlack(ctx context.Context, p entity.AgentPersona) {
 		channelWirer(ch)
 	}
 	go func() {
+		defer agentchannels.RecoverPanic("slack", key)
 		if err := ch.Start(ctx); err != nil {
 			log.Warn().Str("instance", key).Err(err).Msg("team: agent slack instance stopped")
 		}

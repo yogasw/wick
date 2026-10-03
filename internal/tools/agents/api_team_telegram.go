@@ -317,6 +317,7 @@ func syncAgentTelegram(ctx context.Context, p entity.AgentPersona) {
 		channelWirer(ch)
 	}
 	go func() {
+		defer agentchannels.RecoverPanic("telegram", key)
 		if err := ch.Start(ctx); err != nil {
 			log.Warn().Str("instance", key).Err(err).Msg("team: agent telegram instance stopped")
 		}

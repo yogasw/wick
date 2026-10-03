@@ -404,6 +404,7 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 	sessPrefix := channelsetup.SessionPrefix(channelType, userID)
 	startInstance := func(ch agentchannels.Channel) {
 		go func() {
+			defer agentchannels.RecoverPanic(channelType, iKey)
 			if err := ch.Start(ctx); err != nil {
 				log.Warn().Str("instance", iKey).Err(err).Msg("agents: channel instance stopped")
 			}

@@ -1185,6 +1185,7 @@ func (s *Channel) Reload(ctx context.Context, cfg agentconfig.SlackChannelConfig
 
 	log.Info().Str("channel", "slack").Msg("reload: restarting with new config")
 	go func() {
+		defer agentchannels.RecoverPanic("slack", "reload")
 		if err := s.Start(ctx); err != nil {
 			log.Error().Str("channel", "slack").Err(err).Msg("slack channel stopped after reload")
 		}
@@ -1192,6 +1193,7 @@ func (s *Channel) Reload(ctx context.Context, cfg agentconfig.SlackChannelConfig
 }
 
 func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
+	defer agentchannels.RecoverPanic("slack", "socket event")
 	switch evt.Type {
 	case socketmode.EventTypeEventsAPI:
 		s.socket.Ack(*evt.Request)
@@ -1236,6 +1238,7 @@ func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
 // The Slack channel itself has no agent-session role for slash
 // commands — they exist purely to be workflow-driven.
 func (s *Channel) handleSlashCommand(ctx context.Context, cmd slackgo.SlashCommand) {
+	defer agentchannels.RecoverPanic("slack", "slash command")
 	s.emitWorkflow(ctx, "command", map[string]any{
 		"user":         cmd.UserID,
 		"command":      cmd.Command,
@@ -1248,6 +1251,7 @@ func (s *Channel) handleSlashCommand(ctx context.Context, cmd slackgo.SlashComma
 }
 
 func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsAPIEvent) {
+	defer agentchannels.RecoverPanic("slack", "events api")
 	switch outer.Type {
 	case slackevents.CallbackEvent:
 		chType := ""
@@ -3284,6 +3288,7 @@ func (s *Channel) OnApprovalResolved(sessionID, requestID, decision string) {
 }
 
 func (s *Channel) handleInteraction(ctx context.Context, cb slackgo.InteractionCallback) {
+	defer agentchannels.RecoverPanic("slack", "interaction")
 	// Workflow surface first — emit a typed event for every interaction
 	// type so workflows can route by callback_id / action_id without
 	// caring about the gate-approval channel-side hijack below.
