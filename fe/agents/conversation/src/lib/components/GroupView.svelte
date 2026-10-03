@@ -270,7 +270,7 @@
         <span class={sLabel}>Default responder (message with no @)</span>
         <div class="flex gap-2">
           {#each [["captain", "Captain"], ["first", "First agent"]] as [v, l] (v)}
-            <button type="button" class="rounded-full border px-3 py-1 text-xs {sResponder === v ? 'border-green-500 bg-green-100 text-black-900 dark:bg-navy-700 dark:text-white-100' : 'border-white-300 text-black-800 dark:border-navy-600 dark:text-black-600'}" onclick={() => { sResponder = v as "captain" | "first"; saveSettings({ default_responder: sResponder }); }}>{l}</button>
+            <button type="button" class="rounded-full border px-3 py-1 text-xs {sResponder === v ? 'border-green-500 bg-green-50 text-black-900 dark:bg-navy-700 dark:text-white-100' : 'border-white-300 text-black-800 dark:border-navy-600 dark:text-black-600'}" onclick={() => { sResponder = v as "captain" | "first"; saveSettings({ default_responder: sResponder }); }}>{l}</button>
           {/each}
         </div>
         <p class="mt-1 text-xs text-black-800 dark:text-black-600">Now: @{group.responder}. Captain falls back to the first agent when the Captain isn't a member.</p>

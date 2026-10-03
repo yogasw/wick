@@ -526,7 +526,7 @@
     </div>
     <div class="space-y-2" role="radiogroup" aria-label="Who can mention this agent" data-testid="mention-from">
       {#each MENTION_FROM_OPTIONS as o (o.value)}
-        <label class="flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 {draft.mention_from === o.value ? 'border-green-500 bg-green-100 dark:bg-navy-700' : 'border-white-300 dark:border-navy-600'}">
+        <label class="flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 {draft.mention_from === o.value ? 'border-green-500 bg-green-50 dark:bg-navy-700' : 'border-white-300 dark:border-navy-600'}">
           <input type="radio" name="mention-from" class="mt-1" value={o.value} checked={draft.mention_from === o.value} onchange={() => (draft.mention_from = o.value)} />
           <span>
             <span class="block text-sm font-medium text-black-900 dark:text-white-100">{o.label}</span>
