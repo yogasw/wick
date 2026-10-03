@@ -383,6 +383,14 @@ type CreateOptions struct {
 	AgentMain bool
 }
 
+// ProjectAgent, when set, names the Team agent that owns a project ("" =
+// none). Create stamps it on every new top-level session of that project
+// that names no agent itself, so a channel thread, a schedule fire or a
+// workflow run in a project converted into an agent is that agent's
+// session — one rule at the one place sessions are made, instead of one
+// per creator. Wired at boot by the Team service.
+var ProjectAgent func(projectID string) string
+
 // Create materializes sessions/<id>/: meta.json, agents.json (empty
 // array), agent.md snapshot. No filesystem work touches the project
 // folder — project folders live under projects/<id>/ and are shared
@@ -422,6 +430,9 @@ func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session
 		ParentSessionID: opt.ParentSessionID,
 		AgentID:         opt.AgentID,
 		AgentMain:       opt.AgentMain,
+	}
+	if meta.AgentID == "" && meta.ParentSessionID == "" && meta.ProjectID != "" && ProjectAgent != nil {
+		meta.AgentID = ProjectAgent(meta.ProjectID)
 	}
 	// The creator is the first participant. Written at create rather than
 	// backfilled on the next message so the very first turn already reads

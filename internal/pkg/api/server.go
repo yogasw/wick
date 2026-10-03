@@ -1140,7 +1140,10 @@ func NewServer() *Server {
 	}
 	agentsFactory.TeamSpawnLoader = func(sessionID string) (agentpool.TeamSpawn, bool) {
 		sp, ok := teamSvc.SpawnPromptFor(context.Background(), sessionID)
-		return agentpool.TeamSpawn{Prompt: sp.Prompt, Access: sp.Access, Subagents: sp.Subagents, Schedule: sp.Schedule}, ok
+		return agentpool.TeamSpawn{Prompt: sp.Prompt, Access: sp.Access, Subagents: sp.Subagents, Schedule: sp.Schedule, UseGlobalPrompt: sp.UseGlobalPrompt}, ok
+	}
+	agentsession.ProjectAgent = func(projectID string) string {
+		return teamSvc.AgentOfProject(context.Background(), projectID)
 	}
 	mcp.SetAgentScopeResolver(teamSvc.ScopeForSession)
 	agentstool.SetTeam(teamSvc)

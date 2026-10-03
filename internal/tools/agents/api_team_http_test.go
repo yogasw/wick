@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/tool"
@@ -147,8 +148,23 @@ func TestTeamAgentConvertProject(t *testing.T) {
 		apiTeamAgentCreate(c)
 		return w.Code
 	}
+	mkProjectSession(t, "old-chat", "p1", "")
 	if code := create("conv", "p1"); code != http.StatusOK {
 		t.Fatalf("convert: status %d", code)
+	}
+	agent, _ := globalTeam.GetByHandle(context.Background(), u.ID, "conv")
+	if !agent.UseGlobalPrompt {
+		t.Error("a converted agent must default to the global system prompt")
+	}
+	if s, _ := globalMgr.Registry().Session("old-chat"); s.Meta.AgentID != agent.ID || s.Meta.ProjectID != "p1" {
+		t.Errorf("existing session not stamped: agent %q project %q", s.Meta.AgentID, s.Meta.ProjectID)
+	}
+	// A channel thread created after the convert is the agent's too.
+	prev := session.ProjectAgent
+	session.ProjectAgent = func(pid string) string { return globalTeam.AgentOfProject(context.Background(), pid) }
+	t.Cleanup(func() { session.ProjectAgent = prev })
+	if s, err := globalMgr.CreateSession(context.Background(), session.CreateOptions{ID: "slack-new", ProjectID: "p1", Origin: session.OriginSlack}); err != nil || s.Meta.AgentID != agent.ID {
+		t.Errorf("new channel session: agent %q, err %v", s.Meta.AgentID, err)
 	}
 	if p, _ := globalMgr.Registry().Project("p1"); !project.IsAgentProject(p.Meta) {
 		t.Fatalf("project not tagged: %v", p.Meta.Tags)

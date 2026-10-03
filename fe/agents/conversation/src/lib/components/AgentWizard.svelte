@@ -18,6 +18,7 @@
   import { HANDLE_RE, slugHandle, uniqueHandle, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject } from "../agentForm.js";
   import { PERSONA_KIND, personaInput, suggestedConnectors, type PersonaDraft } from "../personaGen.js";
   import { setOverride } from "../accessTiers.js";
+  import { convertGrants, convertSummary } from "../convertProject.js";
 
   type Props = {
     base: string;
@@ -59,6 +60,13 @@
   let catalogError = $state("");
   let grants = $state<ConnectorGrant[]>([]);
 
+  // Convert keeps what the project's chats can do today: every connector
+  // at Write plus new ones, run as the caller, the global system prompt.
+  // The user can narrow it on the Access step.
+  let includeNew = $state(false);
+  type ConvertPreview = { chats: number; channels: string[] | null; schedules: number };
+  let convertInfo = $state<ConvertPreview | null>(null);
+
   let saving = $state(false);
   let error = $state("");
   let handleError = $state("");
@@ -66,9 +74,18 @@
 
   onMount(() => {
     runApi(getProjectOptions(base, { hideTeam: true })).then((p) => { projects = p ?? []; }).catch(() => {});
-    if (convertProject) void pickProject(convertProject);
+    if (convertProject) {
+      void pickProject(convertProject);
+      includeNew = true;
+      fetch(`${base}/projects/${encodeURIComponent(convertProject)}/delete-preview`, { credentials: "same-origin" })
+        .then(async (r) => { if (r.ok) convertInfo = (await r.json()) as ConvertPreview; })
+        .catch(() => {});
+    }
     runApi(listAgentConnectors(base))
-      .then((c) => { catalog = c ?? []; })
+      .then((c) => {
+        catalog = c ?? [];
+        if (convertProject) grants = convertGrants(catalog);
+      })
       .catch((e) => { catalogError = e instanceof Error ? e.message : String(e); })
       .finally(() => { catalogLoading = false; });
   });
@@ -160,8 +177,9 @@
           ...(projectId ? { project_id: projectId } : {}),
           ...(convertProject && projectId === convertProject ? { convert: true } : {}),
           allowed_connectors: $state.snapshot(grants) as ConnectorGrant[],
-          include_new_connectors: false,
+          include_new_connectors: includeNew,
           run_as: "caller",
+          ...(convertProject && projectId === convertProject ? { use_global_prompt: true } : {}),
         }),
       );
       onCreated(a);
@@ -221,6 +239,10 @@
     {#if convertProject}
       <p class="rounded-xl bg-white-200 px-3 py-2 text-xs text-black-800 dark:bg-navy-800 dark:text-black-600" data-testid="aw-convert-note">
         This project becomes the agent's own: its chats and files stay, it leaves the Projects list and lives on in Team.
+        {#if convertInfo}
+          <br /><span data-testid="aw-convert-summary">{convertSummary(convertInfo.chats, convertInfo.channels ?? [], convertInfo.schedules)}</span>
+        {/if}
+        <br />What they do now is kept: every connector at Write (plus new ones), run as the caller, and the global system prompt — narrow it on the next step or later in Settings.
       </p>
     {/if}
     <div class="rounded-xl border border-white-300 p-3 dark:border-navy-600">
@@ -333,9 +355,10 @@
       loading={catalogLoading}
       loadError={catalogError}
       bind:grants
+      bind:includeNew
       errors={grantErrors}
       showRunAs={false}
-      showIncludeNew={false}
+      showIncludeNew={!!convertProject}
     />
   {/if}
   {#if error}<p class="text-sm text-neg-400">{error}</p>{/if}

@@ -140,3 +140,17 @@ func TestComposePrompt_TeamSize(t *testing.T) {
 		}
 	}
 }
+
+// An agent converted from a project (UseGlobalPrompt) carries the global
+// system_prompt in system_prompt_team's place.
+func TestComposePrompt_TeamUseGlobalPrompt(t *testing.T) {
+	f := composeFactory(t, true, testTeamOperator)
+	f.TeamSpawnLoader = func(string) (TeamSpawn, bool) {
+		return TeamSpawn{Prompt: testTeamBlock, Access: testAccessBlock, UseGlobalPrompt: true}, true
+	}
+	got := f.composePrompt(FactoryOptions{SessionID: "s1", SystemAddon: testPersona}, "claude")
+	inOrder(t, got, testTeamBlock, testAccessBlock, testOperator, "## Your persona\n\n"+testPersona)
+	if strings.Contains(got, testTeamOperator) {
+		t.Error("system_prompt_team used despite UseGlobalPrompt")
+	}
+}

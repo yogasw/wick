@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/entity"
@@ -107,4 +108,23 @@ func (s *Service) AgentFor(ctx context.Context, sessionID string) *entity.AgentP
 func (s *Service) IdentityFixed(ctx context.Context, sessionID string) bool {
 	p := s.AgentFor(ctx, sessionID)
 	return p != nil && NormalizeRunAs(p.RunAs) == RunAsOwner
+}
+
+// AgentOfProject names the agent that owns projectID: the project carries
+// the Team tag and exactly one agent points at it. "" otherwise — an
+// ordinary project, or one several agents share, where no single agent
+// can claim a new session. Backs session.ProjectAgent.
+func (s *Service) AgentOfProject(ctx context.Context, projectID string) string {
+	if s == nil || projectID == "" {
+		return ""
+	}
+	p, err := project.Load(s.layout, projectID)
+	if err != nil || !project.IsAgentProject(p.Meta) {
+		return ""
+	}
+	rows, err := s.ListByProjects(ctx, []string{projectID})
+	if err != nil || len(rows) != 1 {
+		return ""
+	}
+	return rows[0].ID
 }

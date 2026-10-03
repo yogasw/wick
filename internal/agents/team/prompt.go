@@ -39,6 +39,9 @@ type SpawnPrompt struct {
 	// every entry backing it resolves to off.
 	Subagents bool
 	Schedule  bool
+	// UseGlobalPrompt: the operator prompt is system_prompt, not
+	// system_prompt_team (entity.AgentPersona.UseGlobalPrompt).
+	UseGlobalPrompt bool
 }
 
 // SpawnPromptFor returns the spawn prompt parts of the Team agent
@@ -63,6 +66,8 @@ func (s *Service) SpawnPromptFor(ctx context.Context, sessionID string) (SpawnPr
 		Access:    YourAccess(scope, reach),
 		Subagents: f.Subagents && scope.AllowKey("sub-agents") && scope.AllowTool("wick_agent_delegate"),
 		Schedule:  f.Schedule && scope.AllowTool("wick_schedule_message"),
+
+		UseGlobalPrompt: p.UseGlobalPrompt,
 	}, true
 }
 

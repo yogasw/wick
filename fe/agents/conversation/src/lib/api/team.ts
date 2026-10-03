@@ -38,6 +38,9 @@ export type AgentItem = {
   /** Whose access a turn runs with; rows older than the field read "caller". */
   run_as?: "caller" | "owner";
   disabled: boolean;
+  /** Spawns carry the global system prompt instead of the Team one
+      (on for agents converted from a project). */
+  use_global_prompt?: boolean;
   /** Whether the chat may pick another provider/model (server applies
       the default: Captain on, others off). */
   allow_provider_switch?: boolean;
@@ -81,6 +84,7 @@ export type AgentWrite = Partial<{
   is_captain: boolean;
   /** Create only, with project_id: make that project this agent's own. */
   convert: boolean;
+  use_global_prompt: boolean;
 }>;
 
 export type AgentConnector = {

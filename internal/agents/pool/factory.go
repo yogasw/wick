@@ -765,6 +765,9 @@ type TeamSpawn struct {
 	// immutable main overlay (see systemprompt.TeamGates).
 	Subagents bool
 	Schedule  bool
+	// UseGlobalPrompt swaps system_prompt_team for the global
+	// system_prompt (an agent converted from a project keeps its rules).
+	UseGlobalPrompt bool
 }
 
 // composePrompt assembles the system prompt of one spawn. Layered, top
@@ -838,7 +841,13 @@ func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) s
 		// titles, Slack identity, file policy), which is exactly what made
 		// a Team agent behave like that agent instead of its persona.
 		// Empty `system_prompt_team` means no operator prompt at all.
-		if f.TeamSystemPromptLoader != nil {
+		// An agent converted from a project opts back in to
+		// `system_prompt`, where its channels' rules live.
+		if ts.UseGlobalPrompt {
+			if f.SystemPromptLoader != nil {
+				add(f.SystemPromptLoader())
+			}
+		} else if f.TeamSystemPromptLoader != nil {
 			add(f.TeamSystemPromptLoader())
 		}
 		if addon := strings.TrimSpace(opt.SystemAddon); addon != "" {

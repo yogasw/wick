@@ -42,7 +42,7 @@ func TestPurgeProjectManagedForgetsWorkspace(t *testing.T) {
 	mkProjectSession(t, "s1-sub", "", "s1")
 
 	p, _ := globalMgr.Registry().Project("p1")
-	if got := previewProjectDelete(p); got.Chats != 2 || got.Protected {
+	if got := previewProjectDelete(context.Background(), p); got.Chats != 2 || got.Protected {
 		t.Fatalf("preview = %+v, want 2 chats, not protected", got)
 	}
 	if err := purgeProject(context.Background(), p, "user"); err != nil {

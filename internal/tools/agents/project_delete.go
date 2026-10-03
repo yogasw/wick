@@ -12,6 +12,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/claude"
 	"github.com/yogasw/wick/internal/agents/provider/logintty"
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -40,16 +41,54 @@ type projectDeletePreview struct {
 	Chats      int    `json:"chats"`
 	CustomPath string `json:"custom_path,omitempty"`
 	Protected  bool   `json:"protected"`
+	// Channels names the channel conversations in the project
+	// ("slack · C0123"), Schedules counts the live schedules firing into
+	// it — what stops if the project goes, and what keeps running (now as
+	// the agent) if it is converted.
+	Channels  []string `json:"channels"`
+	Schedules int64    `json:"schedules"`
 }
 
-func previewProjectDelete(p project.Project) projectDeletePreview {
-	return projectDeletePreview{
+func previewProjectDelete(ctx context.Context, p project.Project) projectDeletePreview {
+	sids := globalMgr.ProjectSessionIDs(p.Meta.ID)
+	pv := projectDeletePreview{
 		ID:         p.Meta.ID,
 		Name:       p.Meta.Name,
-		Chats:      len(globalMgr.ProjectSessionIDs(p.Meta.ID)),
+		Chats:      len(sids),
 		CustomPath: p.Meta.CustomPath,
 		Protected:  project.IsProtected(p.Meta),
+		Channels:   projectChannels(sids),
 	}
+	if globalSchedule != nil {
+		pv.Schedules, _ = globalSchedule.CountTargeting(ctx, p.Meta.ID, sids)
+	}
+	return pv
+}
+
+// projectChannels lists the distinct channels (origin + channel id) the
+// top-level sessions of sids came from; web, API and schedule chats are
+// not channels.
+func projectChannels(sids []string) []string {
+	out := []string{}
+	for _, sid := range sids {
+		s, ok := globalMgr.Registry().Session(sid)
+		if !ok || s.Meta.ParentSessionID != "" {
+			continue
+		}
+		switch s.Meta.Origin {
+		case session.OriginUI, session.OriginREST, session.OriginSchedule, "":
+			continue
+		}
+		label := string(s.Meta.Origin)
+		if s.Meta.ChannelID != "" {
+			label += " · " + s.Meta.ChannelID
+		}
+		if !slices.Contains(out, label) {
+			out = append(out, label)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // projectDeletePreviewJSON handles GET /projects/{id}/delete-preview.
@@ -63,7 +102,7 @@ func projectDeletePreviewJSON(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
 		return
 	}
-	c.JSON(http.StatusOK, previewProjectDelete(p))
+	c.JSON(http.StatusOK, previewProjectDelete(c.Context(), p))
 }
 
 // purgeProject deletes a project for good: it stops the agents running in

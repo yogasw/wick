@@ -38,7 +38,7 @@
     handle: string; name: string; tagline: string; description: string; system_prompt: string;
     pick: string; features: AgentFeatures; avatar: { shape: string; color: string };
     project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; run_as: "caller" | "owner";
-    disabled: boolean; allow_provider_switch: boolean;
+    disabled: boolean; allow_provider_switch: boolean; use_global_prompt: boolean;
   };
   function draftOf(a: AgentItem): Draft {
     return {
@@ -47,7 +47,7 @@
       features: { ...a.features }, avatar: { ...a.avatar }, project_id: a.project_id,
       grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
       include_new_connectors: a.include_new_connectors, run_as: a.run_as ?? "caller",
-      disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch,
+      disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, use_global_prompt: !!a.use_global_prompt,
     };
   }
   let draft = $state<Draft>(untrack(() => draftOf(agent)));
@@ -179,6 +179,7 @@
     if (d.run_as !== (saved.run_as ?? "caller")) p.run_as = d.run_as;
     if (d.disabled !== saved.disabled) p.disabled = d.disabled;
     if (d.allow_provider_switch !== !!saved.allow_provider_switch) p.allow_provider_switch = d.allow_provider_switch;
+    if (d.use_global_prompt !== !!saved.use_global_prompt) p.use_global_prompt = d.use_global_prompt;
     return p;
   });
   const dirty = $derived(Object.keys(patch).length > 0);
@@ -494,6 +495,12 @@
         onChange={(v) => (draft.pick = v)}
         placeholder="Default project"
       />
+    </div>
+    <div>
+      <Toggle checked={draft.use_global_prompt} onChange={(v) => (draft.use_global_prompt = v)} label="Use the global system prompt" />
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
+        On: this agent's chats carry the global system prompt (channel rules such as Slack formatting live there) instead of the Team agents prompt. On by default for an agent made from a project.
+      </p>
     </div>
     <div>
       <Toggle checked={draft.allow_provider_switch} onChange={(v) => (draft.allow_provider_switch = v)} label="Allow provider switch in chat" />

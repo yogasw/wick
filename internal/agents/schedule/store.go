@@ -252,13 +252,24 @@ func (s *Store) Cancel(ctx context.Context, id string) error {
 	return nil
 }
 
-// CancelTargeting cancels every live schedule that would fire into the
-// project or into one of the given sessions — what a project delete must
-// do so nothing fires into a conversation that no longer exists. A row that
-// was only REQUESTED from one of those sessions (SourceSessionID) but
-// targets elsewhere is left alone: its target is still there. Returns how
-// many rows were cancelled.
-func (s *Store) CancelTargeting(ctx context.Context, projectID string, sessionIDs []string) (int64, error) {
+// CountTargeting counts the live schedules CancelTargeting would cancel,
+// for a dialog that names what is connected to a project.
+func (s *Store) CountTargeting(ctx context.Context, projectID string, sessionIDs []string) (int64, error) {
+	cond, args := targetingCond(projectID, sessionIDs)
+	if cond == "" {
+		return 0, nil
+	}
+	var n int64
+	err := s.db.WithContext(ctx).Model(&entity.ScheduledMessage{}).
+		Where("status IN ?", liveStatuses).
+		Where(cond, args...).
+		Count(&n).Error
+	return n, err
+}
+
+// targetingCond is the WHERE of "fires into the project or one of the
+// sessions"; "" when both are empty.
+func targetingCond(projectID string, sessionIDs []string) (string, []any) {
 	cond, args := "", []any{}
 	if projectID != "" {
 		cond = "project_id = ?"
@@ -271,6 +282,17 @@ func (s *Store) CancelTargeting(ctx context.Context, projectID string, sessionID
 		cond += "session_id IN ?"
 		args = append(args, sessionIDs)
 	}
+	return cond, args
+}
+
+// CancelTargeting cancels every live schedule that would fire into the
+// project or into one of the given sessions — what a project delete must
+// do so nothing fires into a conversation that no longer exists. A row that
+// was only REQUESTED from one of those sessions (SourceSessionID) but
+// targets elsewhere is left alone: its target is still there. Returns how
+// many rows were cancelled.
+func (s *Store) CancelTargeting(ctx context.Context, projectID string, sessionIDs []string) (int64, error) {
+	cond, args := targetingCond(projectID, sessionIDs)
 	if cond == "" {
 		return 0, nil
 	}

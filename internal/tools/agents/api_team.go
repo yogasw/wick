@@ -59,6 +59,9 @@ type TeamAgentItem struct {
 	// runs with (see team.SpawnIdentity).
 	RunAs    string `json:"run_as"`
 	Disabled bool   `json:"disabled"`
+	// UseGlobalPrompt: spawns carry the global system_prompt instead of
+	// system_prompt_team (on for agents converted from a project).
+	UseGlobalPrompt bool `json:"use_global_prompt"`
 	// AllowProviderSwitch is the effective value (default applied).
 	AllowProviderSwitch bool       `json:"allow_provider_switch"`
 	MainSessionID       string     `json:"main_session_id"`
@@ -143,6 +146,7 @@ type teamAgentWriteReq struct {
 	Disabled             *bool                  `json:"disabled"`
 	AllowProviderSwitch  *bool                  `json:"allow_provider_switch"`
 	IsCaptain            *bool                  `json:"is_captain"`
+	UseGlobalPrompt      *bool                  `json:"use_global_prompt"`
 	// Convert (create only, with ProjectID) turns an ordinary project
 	// into this agent's own: the project gets the Team tag, so it leaves
 	// the sidebar and lives on in the Team app. See checkConvertProject.
@@ -479,6 +483,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		IncludeNewConnectors: p.IncludeNewConnectors,
 		RunAs:                team.NormalizeRunAs(p.RunAs),
 		Disabled:             p.Disabled,
+		UseGlobalPrompt:      p.UseGlobalPrompt,
 		AllowProviderSwitch:  team.AllowsProviderSwitch(p.AllowProviderSwitch, p.IsCaptain),
 		Status:               string(session.StatusIdle),
 	}
@@ -615,6 +620,38 @@ func checkConvertProject(c *tool.Ctx, pid string) bool {
 		return refuse(http.StatusConflict, "an agent already uses this project")
 	}
 	return true
+}
+
+// boolOr is *v, or def when v is nil.
+func boolOr(v *bool, def bool) bool {
+	if v == nil {
+		return def
+	}
+	return *v
+}
+
+// stampProjectSessions makes every top-level session of a converted
+// project the agent's: channel threads, schedule fires and web chats
+// alike. Their bindings (channel → project, schedule → project) are
+// untouched, so they keep running; from now on they run as the agent.
+// Sessions created later get the same stamp from session.ProjectAgent.
+// Returns how many sessions were stamped.
+func stampProjectSessions(c *tool.Ctx, pid, agentID string) int {
+	n := 0
+	for _, sid := range globalMgr.ProjectSessionIDs(pid) {
+		sess, ok := globalMgr.Registry().Session(sid)
+		if !ok || sess.Meta.ParentSessionID != "" || sess.Meta.AgentID != "" {
+			continue
+		}
+		sess.Meta.AgentID = agentID
+		if err := session.SaveMeta(globalLayout, sid, sess.Meta); err != nil {
+			log.Ctx(c.Context()).Warn().Err(err).Str("session", sid).Msg("team convert: stamp session")
+			continue
+		}
+		_ = globalMgr.RefreshSession(sid)
+		n++
+	}
+	return n
 }
 
 // createTeamAgentProject makes the project a new agent's persona lives in.
@@ -806,6 +843,8 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 	}
 	p := &entity.AgentPersona{
 		OwnerUserID: actorID(c), Handle: handle, ProjectID: pid, Tagline: tagline,
+		// A converted project keeps its operator prompt unless told not to.
+		UseGlobalPrompt:      boolOr(req.UseGlobalPrompt, req.Convert),
 		AllowedConnectors:    grants,
 		IncludeNewConnectors: req.IncludeNewConnectors != nil && *req.IncludeNewConnectors,
 		RunAs:                runAs,
@@ -833,6 +872,9 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 					return
 				}
 			}
+		}
+		if req.Convert {
+			stampProjectSessions(c, pid, p.ID)
 		}
 	}
 	users := teamProjectUsersFor(c.Context(), []entity.AgentPersona{*p})
@@ -892,6 +934,9 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	}
 	if req.Disabled != nil {
 		p.Disabled = *req.Disabled
+	}
+	if req.UseGlobalPrompt != nil {
+		p.UseGlobalPrompt = *req.UseGlobalPrompt
 	}
 	if req.AllowProviderSwitch != nil {
 		v := *req.AllowProviderSwitch

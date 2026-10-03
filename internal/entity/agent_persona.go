@@ -50,6 +50,11 @@ type AgentPersona struct {
 	// "caller" (the human who triggered the turn, the owner when none did)
 	// or "owner" (always the owner). See team.SpawnIdentity.
 	RunAs string `gorm:"type:varchar(16);not null;default:'caller'" json:"run_as"`
+	// UseGlobalPrompt makes the agent's spawns carry the operator's
+	// global system_prompt instead of system_prompt_team. On for a
+	// project converted into an agent, whose channel rules (Slack format,
+	// identity) live in that prompt; off for a new agent.
+	UseGlobalPrompt bool `gorm:"not null;default:false" json:"use_global_prompt"`
 
 	Disabled bool `gorm:"not null;default:false" json:"disabled"`
 	// AllowProviderSwitch lets the agent's chat pick another provider or
