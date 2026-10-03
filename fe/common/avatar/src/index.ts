@@ -12,3 +12,8 @@ export {
 } from "./blob.js";
 export * from "./shape.js";
 export { subscribe, pointer, pointerActive, prefersReducedMotion, POINTER_IDLE_MS } from "./ticker.js";
+export { idleAnimationsOn, setIdleAnimations } from "./idle.js";
+export {
+  createFidget, createFidgetSlots, seededRand, FIDGET_MAX_ACTIVE, FIDGET_DROWSY_AFTER, FIDGET_BIG_MIN,
+  type Fidget, type FidgetEnv, type FidgetPose,
+} from "./blob/motion/fidget";

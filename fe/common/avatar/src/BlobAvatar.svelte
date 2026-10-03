@@ -7,13 +7,18 @@
        - live: a canvas stepped by the shared ticker (one rAF for every
          avatar on the page), subscribed only while the canvas is on
          screen. The eyes follow the pointer from BLOB_GAZE_MIN up.
-     prefers-reduced-motion and `still` always get the still frame. */
+     prefers-reduced-motion and `still` always get the still frame.
+     A live avatar left idle fidgets now and then (blob/motion/fidget.ts):
+     only while on screen, the tab shown and Idle animations on; a hover
+     wakes one that dozed off. */
   import { onMount, untrack } from "svelte";
   import {
     blobAnimates, blobColor, blobFollowsGaze, createRuntime, drawFrame, gazeFromOffset,
     normalizeBlobExpression, normalizeBlobShape, snapshotOf, stillUrl, type BlobState, type Gaze,
   } from "./blob.js";
   import { subscribe, pointer, pointerActive, prefersReducedMotion } from "./ticker.js";
+  import { createFidget, type FidgetPose } from "./blob/motion/fidget";
+  import { idleAnimationsOn } from "./idle.js";
 
   type Props = {
     shape?: string;
@@ -50,6 +55,15 @@
 
   const src = $derived(animate ? "" : stillUrl(look, shown, px));
 
+  // One schedule per avatar, kept across scroll-aways so its idle clock
+  // (and drowsiness) survives them.
+  const now = () => (typeof performance === "undefined" ? 0 : performance.now() / 1000);
+  const fidget = createFidget({ now: now() });
+  onMount(() => () => fidget.stop());
+  function onHover() {
+    fidget.wake(now());
+  }
+
   let canvas: HTMLCanvasElement | undefined = $state();
   let onScreen = $state(true);
 
@@ -76,14 +90,29 @@
       const dt = last < 0 ? 1 : Math.min(0.05, Math.max(0, t - last));
       last = t;
       let gaze: Gaze = { yaw: 0, pitch: 0 };
-      if (blobFollowsGaze(size, c.shown) && pointerActive(performance.now())) {
+      const toPointer = () => {
         const r = el.getBoundingClientRect();
-        gaze = gazeFromOffset(pointer.x - (r.left + r.width / 2), pointer.y - (r.top + r.height / 2), window.innerWidth, window.innerHeight);
-      }
-      drawFrame(ctx, runtime.step(snapshotOf(c.look, c.shown, gaze), dt, t), c.px, t);
+        return gazeFromOffset(pointer.x - (r.left + r.width / 2), pointer.y - (r.top + r.height / 2), window.innerWidth, window.innerHeight);
+      };
+      if (blobFollowsGaze(size, c.shown) && pointerActive(performance.now())) gaze = toPointer();
+      let fp: FidgetPose | null = fidget.step({
+        time: t,
+        size,
+        busy: c.shown !== "idle",
+        enabled: idleAnimationsOn(),
+        hidden: document.visibilityState === "hidden",
+      });
+      // A peek at the cursor: wherever the pointer last was, if it ever moved.
+      if (fp?.gaze === "cursor") fp = { ...fp, gaze: pointer.at > 0 ? toPointer() : { yaw: 20, pitch: 0 } };
+      drawFrame(ctx, runtime.step(snapshotOf(c.look, c.shown, gaze), dt, t, fp), c.px, t);
     };
     draw(performance.now() / 1000);
-    return subscribe(draw);
+    const off = subscribe(draw);
+    return () => {
+      off();
+      // Scrolled away or turned still: a running fidget gives its slot back.
+      fidget.stop();
+    };
   });
 </script>
 
@@ -102,6 +131,7 @@
     data-mode="live"
     data-state={shown}
     onclick={onClick}
+    onpointerenter={onHover}
   ><canvas bind:this={canvas} width={px} height={px} class="block" style:width="{size}px" style:height="{size}px" aria-hidden="true"></canvas></span>
 {:else if src}
   <img

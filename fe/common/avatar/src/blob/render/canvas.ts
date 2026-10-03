@@ -147,7 +147,7 @@ export function drawFrame(
     split,
   );
   const canBlink = frame.face.kind < 0.55 && frame.state !== "sleep";
-  const wink = frame.state === "wink" ? 1 : 0;
+  const wink = frame.state === "wink" ? 1 : (frame.wink ?? 0);
   const leftBlink = canBlink ? Math.max(frame.blink, wink) : 0;
   const rightBlink = canBlink ? frame.blink : 0;
   const pad = faceR * 0.32;
