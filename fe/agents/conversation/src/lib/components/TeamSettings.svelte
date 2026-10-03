@@ -136,11 +136,15 @@
         </span>
       </div>
     </div>
-    <div>
-      <Toggle checked={openTeam} onChange={(v) => (openTeam = v)} label="Open Team when I open Agents" />
-      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-        On: the Agents home opens Team. The "Agents" link at the bottom of the roster still takes you to the classic page.
-      </p>
+    <!-- Toggle draws only the switch; the name and hint sit beside it. -->
+    <div class="flex items-start gap-3">
+      <Toggle checked={openTeam} onChange={(v) => (openTeam = v)} label="Open Team when I open Agents" describedBy="ts-open-team-hint" />
+      <span class="min-w-0">
+        <span class="block text-sm text-black-900 dark:text-white-100">Open Team when I open Agents</span>
+        <span id="ts-open-team-hint" class="block text-xs text-black-800 dark:text-black-600">
+          The Agents home opens Team. The "Agents" link at the bottom of the roster still takes you to the classic page.
+        </span>
+      </span>
     </div>
     {#if saved.operator_prompt_href}
       <div class="border-t border-white-300 pt-4 dark:border-navy-600">
