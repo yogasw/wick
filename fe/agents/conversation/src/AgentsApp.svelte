@@ -20,6 +20,7 @@
   import { listGroups, type GroupItem } from "./lib/api/team.js";
   import GroupView from "./lib/components/GroupView.svelte";
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
+  import GroupSettings from "./lib/components/GroupSettings.svelte";
   import { stacked } from "./lib/teamGroups.js";
   import { rosterStatus, withTurn } from "./lib/rosterStatus.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
@@ -69,6 +70,7 @@
   let activeGroupId = $state("");
   let newGroupOpen = $state(false);
   let addMenuOpen = $state(false);
+  let groupSettingsOpen = $state(false);
   const activeGroup = $derived(groups.find((g) => g.id === activeGroupId));
   async function loadGroups() {
     try {
@@ -441,8 +443,7 @@
         group={activeGroup}
         {agents}
         onMenu={() => (rosterOpen = true)}
-        onChanged={(g) => (groups = groups.map((x) => (x.id === g.id ? g : x)))}
-        onDeleted={() => { groups = groups.filter((x) => x.id !== activeGroupId); activeGroupId = ""; toastOk("Group deleted"); }}
+        onSettings={() => (groupSettingsOpen = true)}
       />
     {/key}
   </section>
@@ -524,6 +525,20 @@
 
   {#if newGroupOpen}
     <NewGroupDialog {base} {agents} onClose={() => (newGroupOpen = false)} onCreated={(g) => { newGroupOpen = false; groups = [g, ...groups]; activeGroupId = g.id; }} />
+  {/if}
+
+  {#if groupSettingsOpen && activeGroup}
+    <button type="button" class="agent-scrim fixed inset-0 z-40" aria-label="Close panel" onclick={() => (groupSettingsOpen = false)}></button>
+    <div class="agent-drawer fixed z-50 flex flex-col overflow-hidden border border-white-300 bg-white-100 shadow-2xl dark:border-navy-600 dark:bg-navy-700" role="dialog" aria-modal="true">
+      <GroupSettings
+        {base}
+        group={activeGroup}
+        {agents}
+        onClose={() => (groupSettingsOpen = false)}
+        onChanged={(g) => (groups = groups.map((x) => (x.id === g.id ? g : x)))}
+        onDeleted={() => { groupSettingsOpen = false; groups = groups.filter((x) => x.id !== activeGroupId); activeGroupId = ""; toastOk("Group deleted"); }}
+      />
+    </div>
   {/if}
 
   <!-- Drawer (Settings / Team settings / Other chats) or the centred + Agent modal -->
