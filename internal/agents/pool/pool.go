@@ -318,6 +318,10 @@ type BuildResult struct {
 	// rather than leaving it valid until its TTL. Empty when the spawn used
 	// the shared internal token, which is per-boot and must NOT be revoked.
 	MCPToken string
+	// RunAsUserID is the wick user that per-session credential was minted
+	// for. Empty when no per-user credential was minted (shared token, or a
+	// provider with no MCP surface).
+	RunAsUserID string
 }
 
 // SpawnStartMeta is the post-Start snapshot the pool feeds back to
@@ -419,6 +423,12 @@ type runEntry struct {
 	// Empty = spawned with no resolved caller (cron, system job, legacy
 	// session); such a run is never recycled on caller grounds.
 	callerUserID string
+	// runAsUserID is who this process is shown as belonging to: the identity
+	// its credential was minted for, else the caller, else the session
+	// owner. Unlike callerUserID it is set when no human woke the spawn (a
+	// delegation result, a schedule fire) — the minter still picked a person
+	// then. Display only; respawn decisions stay on callerUserID.
+	runAsUserID string
 	// mcpToken is the per-session MCP credential handed to this spawn, kept
 	// so it can be revoked the moment the subprocess dies instead of idling
 	// until its TTL. Empty for spawns using the shared internal token, which
@@ -696,6 +706,19 @@ func (p *Pool) resolveAgentName(sessionID, agentName string) string {
 		}
 	}
 	return sess.Agents[0].Name
+}
+
+// runAsIdentity picks whose spawn this is for display: the identity the
+// credential was minted for, then the message's caller, then the session
+// owner. All three empty — an ownerless session no human woke — stays empty;
+// there is nobody to name.
+func runAsIdentity(minted, caller, owner string) string {
+	for _, id := range []string{minted, caller, owner} {
+		if id != "" {
+			return id
+		}
+	}
+	return ""
 }
 
 // callerChanged reports whether this message comes from a different user
@@ -1231,6 +1254,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		// identity is fixed in the argv) and so the credential dies with the
 		// process instead of idling until its TTL.
 		callerUserID: callerUserID,
+		runAsUserID:  runAsIdentity(br.RunAsUserID, callerUserID, sess.Meta.UserID),
 		mcpToken:     br.MCPToken,
 	}
 	// Spawn-local logger derived from the same ctx — consumers in the
@@ -2220,7 +2244,7 @@ func (p *Pool) ActiveSnapshot() []ActiveEntry {
 			ProviderType: e.provType,
 			ProviderName: e.provName,
 			CWD:          e.cwd,
-			CallerUserID: e.callerUserID,
+			CallerUserID: e.runAsUserID,
 		}
 		if e.state != nil {
 			entry.Lifecycle = e.state.Lifecycle().String()
@@ -2258,8 +2282,9 @@ type ActiveEntry struct {
 	// fixed for the life of the process. Not the session owner: on a shared
 	// session the two differ, and the spawn's reach follows this one.
 	//
-	// Empty for a spawn with no human behind it (a schedule fire, a cron
-	// job, a session predating ownership tracking).
+	// A spawn no human woke (a delegation result, a schedule fire) still
+	// carries the owner its credential was minted for. Empty only when the
+	// session has no owner either.
 	CallerUserID   string
 	PID            int
 	Queued         int  // messages waiting after the current turn (RespawnQueue)

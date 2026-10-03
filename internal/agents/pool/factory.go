@@ -165,7 +165,13 @@ type ClaudeFactory struct {
 	// Returning ok=false means "no real owner" and the caller falls back to
 	// MCPToken — an ownerless session must keep working rather than lose
 	// MCP entirely. nil = per-user identity disabled (fallback for all).
-	SessionMCPToken func(sessionID, callerUserID string) (token string, ok bool)
+	//
+	// identity is the wick user the token was minted for. The pool only
+	// knows the caller of the message that woke the spawn, which is empty
+	// whenever no human did (a delegation result, a schedule fire) even
+	// though the minter then picked the owner — so the minter, the one place
+	// that decides, reports it back.
+	SessionMCPToken func(sessionID, callerUserID string) (token, identity string, ok bool)
 
 	// InstanceOverride pins a specific Instance for every Build call,
 	// bypassing the provider.Find registry lookup. Tests use this to
@@ -285,6 +291,10 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	// spawn, reported via BuildResult so the pool can revoke it on exit.
 	// Empty when the spawn used the shared per-boot token (not revocable).
 	var claudeMCPToken string
+	// runAsUserID is the identity the minted credential authenticates as,
+	// reported via BuildResult for display. Empty for the shared token and
+	// for providers that get no MCP credential at all.
+	var runAsUserID string
 	spawner := f.Spawner
 	if spawner == nil {
 		bin, src := resolveProviderBinary(opt.ProviderType, opt.ProviderName)
@@ -300,7 +310,8 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			// Same per-session credential claude gets, so a codex spawn also
 			// reaches wick's tools as the human behind the session rather than
 			// having no wick surface at all.
-			tok := f.mcpTokenFor(opt.SessionID, opt.CallerUserID)
+			tok, identity := f.mcpCredentialFor(opt.SessionID, opt.CallerUserID)
+			runAsUserID = identity
 			if tok != f.MCPToken {
 				// Per-session credential: revocable when the process dies. The
 				// shared per-boot token is not, so it stays unreported.
@@ -313,7 +324,8 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			// Same per-session MCP credential codex gets. Both run with
 			// approvals off unconditionally: there is no gate hook for
 			// them, and a headless run cannot answer a prompt.
-			tok := f.mcpTokenFor(opt.SessionID, opt.CallerUserID)
+			tok, identity := f.mcpCredentialFor(opt.SessionID, opt.CallerUserID)
+			runAsUserID = identity
 			if pType == provider.TypeOMP {
 				// omp revokes its own per-session token: in server mode it
 				// lives as long as the session's RPC process, not one turn
@@ -333,7 +345,8 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		default:
 			// Mint ONCE: calling mcpTokenFor twice would issue two tokens
 			// and leak the one not handed to the spawner.
-			tok := f.mcpTokenFor(opt.SessionID, opt.CallerUserID)
+			tok, identity := f.mcpCredentialFor(opt.SessionID, opt.CallerUserID)
+			runAsUserID = identity
 			if tok != f.MCPToken {
 				// Per-session credential: revocable when the process dies.
 				// The shared per-boot token is not, so it stays unreported.
@@ -558,7 +571,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		// type default.
 		SendMode: sendModeFor(pType, resolvedIns.SendMode),
 	})
-	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted, MCPToken: claudeMCPToken}, nil
+	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted, MCPToken: claudeMCPToken, RunAsUserID: runAsUserID}, nil
 }
 
 // sendModeFor resolves an instance's Send behaviour. A non-empty
@@ -670,12 +683,20 @@ func sessionIdentityBlock(sessionID, channel, title string, titleCustom bool, ac
 // human at all; refusing to spawn them, or spawning them with no MCP access,
 // would break working setups to enforce an attribution nobody asked for.
 func (f *ClaudeFactory) mcpTokenFor(sessionID, callerUserID string) string {
+	tok, _ := f.mcpCredentialFor(sessionID, callerUserID)
+	return tok
+}
+
+// mcpCredentialFor is mcpTokenFor plus the identity the token was minted
+// for. identity is "" on the shared-token fallback: that token belongs to
+// no human, and naming one would be a guess.
+func (f *ClaudeFactory) mcpCredentialFor(sessionID, callerUserID string) (token, identity string) {
 	if f.SessionMCPToken != nil && sessionID != "" {
-		if tok, ok := f.SessionMCPToken(sessionID, callerUserID); ok && tok != "" {
-			return tok
+		if tok, id, ok := f.SessionMCPToken(sessionID, callerUserID); ok && tok != "" {
+			return tok, id
 		}
 	}
-	return f.MCPToken
+	return f.MCPToken, ""
 }
 
 func sendModeFor(pType provider.Type, override string) provider.SendMode {
