@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { returnHref } from "../teamReturn.js";
+import { returnHref, classicHref } from "../teamReturn.js";
 
 const O = "https://wick.example";
 const B = "/tools/agents";
@@ -36,5 +36,18 @@ describe("returnHref", () => {
   });
   it("tolerates an unparsable referrer", () => {
     expect(returnHref(null, "not a url", O, B)).toBe("/tools/agents/sessions");
+  });
+});
+
+describe("classicHref", () => {
+  it("marks the bare Agents landing so it does not redirect back to Team", () => {
+    expect(classicHref("/tools/agents", B)).toBe("/tools/agents?view=classic");
+    expect(classicHref("/tools/agents/", B)).toBe("/tools/agents/?view=classic");
+    expect(classicHref("/tools/agents?project=p1#x", B)).toBe("/tools/agents?project=p1&view=classic#x");
+  });
+  it("leaves other pages and an already-marked landing alone", () => {
+    expect(classicHref("/tools/agents/sessions", B)).toBe("/tools/agents/sessions");
+    expect(classicHref("/tools/agents/overview?x=1", B)).toBe("/tools/agents/overview?x=1");
+    expect(classicHref("/tools/agents?view=classic", B)).toBe("/tools/agents?view=classic");
   });
 });

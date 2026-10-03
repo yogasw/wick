@@ -13,7 +13,10 @@ import { writable, type Readable } from "svelte/store";
      /team/<handle>?panel=sessions       "Other chats" drawer
      /team?panel=new                     the + Agent wizard
      /team?panel=new&project=<id>        the wizard converting that project
-                                         ("Make this an agent…") */
+                                         ("Make this an agent…")
+     /team[/<handle>]?panel=team-settings&tab=…
+                                         Team settings drawer (the user's
+                                         own Team, not one agent) */
 
 export type SettingsTab = "persona" | "access" | "tools" | "avatar" | "advanced";
 export const SETTINGS_TABS: SettingsTab[] = ["persona", "access", "tools", "avatar", "advanced"];
@@ -28,8 +31,17 @@ export function settingsTabOf(t: string | null): SettingsTab {
   return TAB_ALIASES[t] ?? "persona";
 }
 
+export type TeamSettingsTab = "general";
+export const TEAM_SETTINGS_TABS: TeamSettingsTab[] = ["general"];
+
+/** teamSettingsTabOf resolves a Team settings `tab=` value; unknown → general. */
+export function teamSettingsTabOf(t: string | null): TeamSettingsTab {
+  return (TEAM_SETTINGS_TABS as string[]).includes(t ?? "") ? (t as TeamSettingsTab) : "general";
+}
+
 export type AgentsPanel =
   | { kind: "settings"; tab: SettingsTab }
+  | { kind: "team-settings"; tab: TeamSettingsTab }
   | { kind: "sessions" }
   | { kind: "new"; project?: string };
 
@@ -68,6 +80,9 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
       panel = { kind: "settings", tab: settingsTabOf(q.get("tab")) };
       break;
     }
+    case "team-settings":
+      panel = { kind: "team-settings", tab: teamSettingsTabOf(q.get("tab")) };
+      break;
     case "sessions":
       panel = { kind: "sessions" };
       break;
@@ -87,7 +102,7 @@ export function formatAgentsRoute(r: AgentsRoute, base: string): string {
   if (r.handle && r.session) q.set("session", r.session);
   if (r.panel) {
     q.set("panel", r.panel.kind);
-    if (r.panel.kind === "settings") q.set("tab", r.panel.tab);
+    if (r.panel.kind === "settings" || r.panel.kind === "team-settings") q.set("tab", r.panel.tab);
     if (r.panel.kind === "new" && r.panel.project) q.set("project", r.panel.project);
   }
   const qs = q.toString();

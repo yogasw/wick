@@ -19,16 +19,19 @@
   import { listAgents, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
   import { rosterStatus, withTurn } from "./lib/rosterStatus.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
-  import { RETURN_KEY, returnHref } from "./lib/teamReturn.js";
+  import TeamNav from "./lib/components/TeamNav.svelte";
+  import { RETURN_KEY, returnHref, classicHref } from "./lib/teamReturn.js";
 
   const appEl = document.getElementById("app");
   const base = appEl?.dataset.base ?? "";
   const viewerName = appEl?.dataset.viewerName ?? "";
   const viewerInitial = (viewerName.trim()[0] ?? "?").toUpperCase();
 
-  /* ↩ goes back to the wick page the user entered from. The stored page is
-     read once and dropped, so a later entry from elsewhere (the Overview
-     card) is not sent to a stale one; a reload keeps document.referrer. */
+  /* The nav's "Agents" row goes back to the wick page the user entered
+     from. The stored page is read once and dropped, so a later entry from
+     elsewhere (the Overview card) is not sent to a stale one; a reload
+     keeps document.referrer. classicHref keeps a landing target from
+     redirecting straight back here ("Open Team when I open Agents"). */
   const exitHref = (() => {
     let stored: string | null = null;
     try {
@@ -37,7 +40,7 @@
     } catch {
       // storage blocked: referrer only
     }
-    return returnHref(stored, document.referrer, location.origin, base);
+    return classicHref(returnHref(stored, document.referrer, location.origin, base), base);
   })();
 
   let route = $state<AgentsRoute>({ handle: null, session: null, panel: null });
@@ -296,14 +299,6 @@
     class="{rosterOpen ? 'flex' : 'hidden'} lg:flex fixed lg:sticky inset-y-0 left-0 z-40 w-[300px] shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700"
   >
     <div class="flex items-center gap-1.5 px-3 pt-3.5 pb-2.5">
-      <a
-        href={exitHref}
-        class="flex h-8 w-8 items-center justify-center rounded-lg text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600"
-        title="Back to wick"
-        aria-label="Back to wick"
-      >
-        <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4L2 8l4 4"></path><path d="M2 8h8a4 4 0 014 4v1"></path></svg>
-      </a>
       <h1 class="flex-1 text-base font-bold text-black-900 dark:text-white-100">Team</h1>
       <button
         type="button"
@@ -360,6 +355,11 @@
         </button>
       {/each}
     </nav>
+    <TeamNav
+      {exitHref}
+      settingsActive={route.panel?.kind === "team-settings"}
+      onSettings={() => { rosterOpen = false; openPanel({ kind: "team-settings", tab: "general" }); }}
+    />
     <div class="flex items-center gap-2.5 border-t border-white-300 px-3 py-2.5 dark:border-navy-600">
       <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-200 text-xs font-bold text-green-700 select-none">{viewerInitial}</span>
       <span class="min-w-0 flex-1 truncate text-[13px] font-medium text-black-900 dark:text-white-100">{viewerName || "You"}</span>

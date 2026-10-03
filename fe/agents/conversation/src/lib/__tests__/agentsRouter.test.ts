@@ -57,6 +57,15 @@ describe("parseAgentsRoute", () => {
     expect(parseAgentsRoute("/tools/agents/team", "?session=s9", B).session).toBeNull();
   });
 
+  test("team settings panel, with or without an agent; unknown tab is general", () => {
+    expect(parseAgentsRoute("/tools/agents/team", "?panel=team-settings", B).panel).toEqual({ kind: "team-settings", tab: "general" });
+    expect(parseAgentsRoute("/tools/agents/team/a1", "?panel=team-settings&tab=nope", B)).toEqual({
+      handle: "a1",
+      session: null,
+      panel: { kind: "team-settings", tab: "general" },
+    });
+  });
+
   test("a path outside /team is the roster root", () => {
     expect(parseAgentsRoute("/tools/agents/sessions/x", "", B)).toEqual({ handle: null, session: null, panel: null });
   });
@@ -76,6 +85,10 @@ describe("formatAgentsRoute", () => {
       "/tools/agents/team/a1?panel=settings&tab=advanced",
     ],
     [{ handle: "a1", session: "s2", panel: { kind: "sessions" } }, "/tools/agents/team/a1?session=s2&panel=sessions"],
+    [
+      { handle: "captain", session: null, panel: { kind: "team-settings", tab: "general" } },
+      "/tools/agents/team/captain?panel=team-settings&tab=general",
+    ],
   ];
   test.each(cases)("%j → %s", (r, url) => {
     expect(formatAgentsRoute(r, B)).toBe(url);
