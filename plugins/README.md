@@ -21,7 +21,7 @@ plugins/
 │       ├── main.go        #   package main → wickplugin.Serve(mod)
 │       ├── connector.go   #   the connector.Module (Meta + Operations + Configs)
 │       └── VERSION        #   source of truth for this plugin's version
-├── tool/                  # (later) kind=tool — same build flow
+├── tool/                  # kind=tool — toolplugin.ServeTool; _template + example_counter
 └── job/                   # kind=job — wickplugin.ServeJob; _template + example_heartbeat
 ```
 
@@ -77,6 +77,31 @@ each run spawns the binary, calls `Run` once, then kills the process. Lines
 logged with `job.Logf(ctx, ...)` and the returned markdown land in the run
 history. A run is bounded by `WICK_JOB_PLUGIN_TIMEOUT` (default 30m). Start from
 `job/_template/`.
+
+### Tool plugins
+
+`tool/<name>/` calls `toolplugin.ServeTool(tool.Module{...})` — the same
+`tool.Module` (meta, `Configs`, `Register(r tool.Router)`) a built-in tool
+uses, so moving a tool out of the binary only changes its `main.go`. The host
+installs it under `plugins/tools/<key>/`, lists it on the home grid with a
+"plugin" badge, and reverse-proxies `/tools/<key>/*` to the plugin's HTTP
+server on a unix socket:
+
+- `c.HTML(...)` pages come back as fragments and wick wraps them in its
+  layout; `c.JSON` and HTMX requests pass through as-is.
+- `c.User()` and `c.Cfg(...)` work as usual: the host injects the signed-in
+  user as `X-Wick-User-*` headers (client-sent ones are dropped) and pushes
+  config at spawn and whenever it changes.
+- Only routes declared on `r.WebhookGroup(...)` answer without a login, and
+  only the exact ones the manifest lists.
+- The process starts on the first request (held up to 10 s, then 503), and
+  stops after `WICK_TOOL_PLUGIN_IDLE` (default 10m) without traffic — never
+  while a request or stream is open. `toolplugin.ServeTool(mod,
+  toolplugin.KeepWarm())` keeps it running for webhooks that must answer
+  fast.
+
+Start from `tool/_template/`; `tool/example_counter/` shows a page, a JSON
+endpoint, and a webhook.
 
 ## Installing (consumption side)
 
