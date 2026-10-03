@@ -259,8 +259,11 @@ type Service struct {
 	// unblock a Run that is waiting on its child.
 	inflight map[string]context.CancelFunc
 	// slotWaiters maps root id → callers parked in waitForSlot. Woken by
-	// pokeSlot when a delegation in that tree reaches a terminal status.
+	// pokeSlot when any delegation reaches a terminal status.
 	slotWaiters map[string][]chan struct{}
+	// slotMu serialises "is a slot free → claim it" so two callers can
+	// never both see the last slot free (see claimSlot).
+	slotMu sync.Mutex
 }
 
 // Request is one wick_delegate call.
@@ -548,13 +551,18 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 	}
 
 	// Wait our turn. The room runs one sub-agent at a time by default.
-	if !s.hasSlot(ctx, rootID) {
+	// The check and the claim are one step (claimSlot), and the head of
+	// the conversation's queue goes first: a new call does not jump work
+	// that was already waiting.
+	claimed, cerr := s.claimSlot(ctx, rootID, id)
+	if !claimed && cerr == nil {
 		if mode == ModeAsync {
 			pos, _ := s.Repo.QueuePosition(ctx, rootID, id)
 			s.announceBackground(context.WithoutCancel(ctx), row, true)
 			return queuedResult(row, pos), nil
 		}
-		if werr := s.waitForSlot(ctx, rootID, id); werr != nil {
+		cerr = s.waitForSlot(ctx, rootID, id)
+		if cerr != nil && !errors.Is(cerr, errNotQueued) {
 			s.finish(ctx, row, entity.DelegationQueued, entity.DelegationInterrupted,
 				"", "the caller went away while this was queued", 0)
 			return &Result{
@@ -564,9 +572,8 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 			}, nil
 		}
 	}
-
-	if res, ok := s.claimForRun(ctx, row); !ok {
-		return res, nil
+	if errors.Is(cerr, errNotQueued) {
+		return s.lostClaimResult(ctx, row), nil
 	}
 	row.Status = entity.DelegationRunning
 	if mode == ModeAsync {
@@ -591,6 +598,12 @@ func (s *Service) claimForRun(ctx context.Context, row *entity.AgentDelegation) 
 		log.Warn().Err(err).Str("delegation", row.ID).Msg("delegation: mark running failed")
 		return nil, true
 	}
+	return s.lostClaimResult(ctx, row), false
+}
+
+// lostClaimResult is what a caller gets when the queue started its row
+// first: no answer in this reply, and where the answer will go instead.
+func (s *Service) lostClaimResult(ctx context.Context, row *entity.AgentDelegation) *Result {
 	status := entity.DelegationRunning
 	if cur, gerr := s.Repo.Get(ctx, row.ID); gerr == nil && cur != nil {
 		status = cur.Status
@@ -611,7 +624,7 @@ func (s *Service) claimForRun(ctx context.Context, row *entity.AgentDelegation) 
 		DelegationID: row.ID, Profile: row.ProfileKey, Status: status,
 		Mode: ModeLabel(row.Mode), Note: note,
 		WorkspaceNote: row.WorkspaceNote, TurnsNote: row.TurnsNote,
-	}, false
+	}
 }
 
 // execute spawns and drives a delegation whose row already exists, is

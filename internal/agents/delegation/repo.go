@@ -387,13 +387,34 @@ func (r *Repo) ListCollectable(ctx context.Context, parentSessionID string) ([]e
 // paused on a synchronous child; counting them deadlocks a serial room,
 // because the parent cannot finish until a child that can never start
 // does.
+//
+// The slot belongs to the CONVERSATION, not the tree: every top-level
+// delegate call from a leader starts a tree of its own, so a per-tree
+// count let four background delegations from one room run at once under
+// a cap of one. See slotScope.
 func (r *Repo) CountActiveByRoot(ctx context.Context, rootID string) (int64, error) {
 	var n int64
-	err := r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
-		Where("root_id = ? AND status = ? AND blocked = ?",
-			rootID, entity.DelegationRunning, false).
+	err := r.slotScope(ctx, rootID).
+		Where("status = ? AND blocked = ?", entity.DelegationRunning, false).
 		Count(&n).Error
 	return n, err
+}
+
+// slotScope narrows a query to every tree started from the same
+// conversation as rootID — the trees whose root row shares its
+// parent_session_id. A root row that cannot be read (or has no parent
+// session) falls back to the tree alone: narrower, never wider.
+func (r *Repo) slotScope(ctx context.Context, rootID string) *gorm.DB {
+	q := r.db.WithContext(ctx).Model(&entity.AgentDelegation{})
+	var root entity.AgentDelegation
+	err := r.db.WithContext(ctx).Select("parent_session_id").
+		Where("id = ?", rootID).Take(&root).Error
+	if err != nil || root.ParentSessionID == "" {
+		return q.Where("root_id = ?", rootID)
+	}
+	roots := r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).Select("id").
+		Where("id = root_id AND parent_session_id = ?", root.ParentSessionID)
+	return q.Where("root_id IN (?)", roots)
 }
 
 // SetBlocked flips the waiting flag on a running delegation.
@@ -406,8 +427,8 @@ func (r *Repo) SetBlocked(ctx context.Context, id string, blocked bool) error {
 		Update("blocked", blocked).Error
 }
 
-// OldestQueued returns the next delegation in line for a tree, or nil
-// when nothing is waiting.
+// OldestQueued returns the next delegation in line for a tree's
+// conversation (see slotScope), or nil when nothing is waiting.
 //
 // FIFO by StartedAt, which for a queued row is its enqueue moment. There
 // is deliberately no priority column: on a queue this short, priority
@@ -415,8 +436,8 @@ func (r *Repo) SetBlocked(ctx context.Context, id string, blocked bool) error {
 // work in is the order it expects it back in.
 func (r *Repo) OldestQueued(ctx context.Context, rootID string) (*entity.AgentDelegation, error) {
 	var d entity.AgentDelegation
-	err := r.db.WithContext(ctx).
-		Where("root_id = ? AND status = ?", rootID, entity.DelegationQueued).
+	err := r.slotScope(ctx, rootID).
+		Where("status = ?", entity.DelegationQueued).
 		Order("started_at asc").First(&d).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
@@ -439,9 +460,8 @@ func (r *Repo) QueuePosition(ctx context.Context, rootID, id string) (int, error
 		return 0, nil
 	}
 	var ahead int64
-	err = r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
-		Where("root_id = ? AND status = ? AND started_at < ?",
-			rootID, entity.DelegationQueued, row.StartedAt).
+	err = r.slotScope(ctx, rootID).
+		Where("status = ? AND started_at < ?", entity.DelegationQueued, row.StartedAt).
 		Count(&ahead).Error
 	if err != nil {
 		return 0, err
@@ -568,33 +588,41 @@ func (r *Repo) MarkRunning(ctx context.Context, id string) error {
 // and the flags that record one-shot events against it. Leaving
 // `collected` set would make the continuation's own result unreachable —
 // collect refuses a row it has already handed over.
-func (r *Repo) ReopenForContinue(ctx context.Context, d *entity.AgentDelegation) (bool, error) {
+//
+// status is running when the conversation has a free slot, queued when it
+// does not; a queued reopen restamps started_at so the leg joins the back
+// of the line instead of jumping it with its first leg's start time.
+func (r *Repo) ReopenForContinue(ctx context.Context, d *entity.AgentDelegation, status string) (bool, error) {
+	fields := map[string]any{
+		"status":         status,
+		"task":           d.Task,
+		"title":          d.Title,
+		"resumes":        d.Resumes,
+		"leg_base_turns": d.LegBaseTurns,
+		"context_text":   d.ContextText,
+		"max_turns":      d.MaxTurns,
+		"max_tokens":     d.MaxTokens,
+		"mode":           d.Mode,
+		"detached":       d.Detached,
+		"result":         "",
+		"error_msg":      "",
+		// gorm.Expr, not a plain nil: Updates with a map drops nil
+		// values, so a plain nil would leave the previous leg's end
+		// time in place and a monitor reading the row mid-continuation
+		// would see a delegation that is running and ended.
+		"ended_at":       gorm.Expr("NULL"),
+		"collected":      false,
+		"collect_nudged": false,
+		"intake_reasked": false,
+		"blocked":        false,
+		"result_json":    "",
+	}
+	if status == entity.DelegationQueued {
+		fields["started_at"] = time.Now().UTC()
+	}
 	res := r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
 		Where("id = ? AND status IN ?", d.ID, entity.TerminalDelegationStatuses).
-		Updates(map[string]any{
-			"status":         entity.DelegationRunning,
-			"task":           d.Task,
-			"title":          d.Title,
-			"resumes":        d.Resumes,
-			"leg_base_turns": d.LegBaseTurns,
-			"context_text":   d.ContextText,
-			"max_turns":      d.MaxTurns,
-			"max_tokens":     d.MaxTokens,
-			"mode":           d.Mode,
-			"detached":       d.Detached,
-			"result":         "",
-			"error_msg":      "",
-			// gorm.Expr, not a plain nil: Updates with a map drops nil
-			// values, so a plain nil would leave the previous leg's end
-			// time in place and a monitor reading the row mid-continuation
-			// would see a delegation that is running and ended.
-			"ended_at":       gorm.Expr("NULL"),
-			"collected":      false,
-			"collect_nudged": false,
-			"intake_reasked": false,
-			"blocked":        false,
-			"result_json":    "",
-		})
+		Updates(fields)
 	if res.Error != nil {
 		return false, res.Error
 	}
