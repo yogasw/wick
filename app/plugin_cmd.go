@@ -30,7 +30,7 @@ func withPluginStore(fn func(store *connplugin.StateStore) error) error {
 
 func pluginCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "plugin", Short: "Manage connector plugins"}
-	cmd.AddCommand(pluginSearchCmd(), pluginInstallCmd(), pluginListCmd(), pluginRemoveCmd(), pluginEnableCmd(), pluginDisableCmd())
+	cmd.AddCommand(pluginSearchCmd(), pluginInstallCmd(), pluginListCmd(), pluginRemoveCmd(), pluginEnableCmd(), pluginDisableCmd(), pluginSourceCmd())
 	return cmd
 }
 
