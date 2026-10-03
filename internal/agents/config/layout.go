@@ -277,6 +277,13 @@ func (l Layout) SessionThinkingEvent(sessionID, turnID, eventID string) string {
 	return filepath.Join(l.SessionThinkingTurnDir(sessionID, turnID), eventID+".json")
 }
 
+// SessionThinkingBlob returns the binary payload file of one trace event
+// (an image/pdf/… a tool returned): thinking/<turn_id>/<blob_ref>.bin.
+// blobRef is the event id, or "<event_id>-p<n>" for the n-th part.
+func (l Layout) SessionThinkingBlob(sessionID, turnID, blobRef string) string {
+	return filepath.Join(l.SessionThinkingTurnDir(sessionID, turnID), blobRef+".bin")
+}
+
 // EnsureLayout creates the three top-level folders if they don't exist.
 // Idempotent — safe to call on every boot.
 func (l Layout) EnsureLayout() error {

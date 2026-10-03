@@ -86,6 +86,7 @@ type GeneralConfig struct {
 	AirouterEnabled           bool   `wick:"bool;group=AI Router|Embedded AI-router lifecycle (9router, OmniRoute, …). Access is managed at /admin/tools; per-router autostart + external-API toggles live on the AI Router page.;desc=Master switch for the embedded AI routers. Off = every dashboard, the /airouter/<id>/v1 API proxies, autostart, and all controls are disabled."`
 	TraceEventInlineKB        int    `wick:"number;group=Tracing|Limits on how trace-event payloads are stored on disk.;desc=Max KB for a trace event payload stored inline in the turn index. Events larger than this are written to a separate file and loaded on demand. Default: 10."`
 	TraceEventMaxKB           int    `wick:"number;group=Tracing;desc=Hard cap in KB for a single trace event payload file. Payloads exceeding this are truncated before write. 0 = no cap. Default: 512."`
+	TraceBlobMaxMB            int    `wick:"number;group=Tracing;desc=Max MB for one binary trace payload (image/pdf/audio/video a tool returned). Binaries are never truncated: up to this size they are kept whole as a separate blob the trace can open; above it the trace keeps only the type and size. 0 = default 10."`
 	// The two Access knobs below are read through internal/pkg/adminscope,
 	// which every surface shares so "how far does an admin see" has exactly
 	// one answer per question. Field name = config key.
@@ -179,6 +180,7 @@ func DefaultGeneralConfig() GeneralConfig {
 		WorkflowRunRetentionDays: 7,
 		TraceEventInlineKB:       10,
 		TraceEventMaxKB:          512,
+		TraceBlobMaxMB:           10,
 		AirouterEnabled:          true,
 		// Memory guard ships OFF: an install that never opts in must behave
 		// byte-identically to one built before the feature existed. The four

@@ -829,6 +829,10 @@ func NewServer() *Server {
 		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "trace_event_max_kb"))
 		return v
 	}
+	agentsFactory.TraceBlobMaxMBLoader = func() int {
+		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "trace_blob_max_mb"))
+		return v
+	}
 
 	// syncSharedSpec rewrites the shared spec.json on every spawn so
 	// allowed_cmds edits take effect without a server restart.

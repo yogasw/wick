@@ -89,6 +89,10 @@ type ClaudeFactory struct {
 	// config value. 0 = no cap.
 	TraceEventMaxKBLoader func() int
 
+	// TraceBlobMaxMBLoader (optional) returns the current trace_blob_max_mb
+	// config value. 0 = store default (10 MB).
+	TraceBlobMaxMBLoader func() int
+
 	// TraceInlineKBLoader (optional) returns the current trace_event_inline_kb
 	// config value. Called on every Build so operators can change the threshold
 	// without restarting the server. 0 or negative = use DefaultTraceInlineBytes.
@@ -212,6 +216,12 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			traceEventMaxBytes = kb * 1024
 		}
 	}
+	traceBlobMaxBytes := 0
+	if f.TraceBlobMaxMBLoader != nil {
+		if mb := f.TraceBlobMaxMBLoader(); mb > 0 {
+			traceBlobMaxBytes = mb << 20
+		}
+	}
 	sto := store.New(store.Options{
 		Layout:             f.Layout,
 		SessionID:          opt.SessionID,
@@ -220,6 +230,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		RecordRaw:          f.RecordRaw,
 		TraceInlineBytes:   traceInlineBytes,
 		TraceEventMaxBytes: traceEventMaxBytes,
+		TraceBlobMaxBytes:  traceBlobMaxBytes,
 	})
 
 	// Normalize provider type early so immutable prompt selection is correct.

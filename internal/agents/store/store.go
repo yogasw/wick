@@ -43,6 +43,10 @@ type TurnEvent struct {
 	Text      string    `json:"text,omitempty"`     // tool_result body / thinking text / text segment
 	At        time.Time `json:"at,omitempty"`       // when this event arrived
 	EndAt     time.Time `json:"end_at,omitempty"`   // tool_result: when tool finished
+	// Display is how the tool_use input / tool_result body renders, set by
+	// the parser on the full payload. Absent on traces written before it
+	// existed — the UI classifies those itself.
+	Display *event.Display `json:"display,omitempty"`
 }
 
 // Attachment is one file uploaded with a user turn. The file content
@@ -160,6 +164,10 @@ type TurnEventIndex struct {
 	// Large=true means payload lives in <event_id>.json, fetch on demand.
 	Large bool  `json:"large,omitempty"`
 	Size  int64 `json:"size,omitempty"`
+	// Display rides in the index so the card header (kind, title, size,
+	// binary chip) renders before a Large payload is fetched; for Large
+	// events its Body is empty and lives in the payload file instead.
+	Display *event.Display `json:"display,omitempty"`
 }
 
 // TurnEventPayload is written to thinking/<turn_id>/<event_id>.json
@@ -170,12 +178,17 @@ type TurnEventPayload struct {
 	Text      string `json:"text,omitempty"`
 	ToolInput string `json:"tool_input,omitempty"`
 	Truncated bool   `json:"truncated,omitempty"`
+	// Display carries the (possibly truncated) render body.
+	Display *event.Display `json:"display,omitempty"`
 }
 
 // DefaultTraceInlineBytes is the fallback threshold when no config is set.
 // Events with combined text+tool_input payload below this are stored inline
 // in the trace index; larger events get their own file.
 const DefaultTraceInlineBytes = 10 * 1024
+
+// DefaultTraceBlobMaxBytes caps one binary trace payload (trace_blob_max_mb).
+const DefaultTraceBlobMaxBytes = 10 << 20
 
 // Store collects events for one session+agent and persists them.
 type Store struct {
@@ -220,6 +233,8 @@ type Store struct {
 	traceInlineBytes int
 	// traceEventMaxBytes caps per-event file payload. 0 = no cap.
 	traceEventMaxBytes int
+	// traceBlobMaxBytes caps one binary blob. 0 = DefaultTraceBlobMaxBytes.
+	traceBlobMaxBytes int
 
 	// lastLevelWrite throttles the mid-turn context-level writes. The
 	// level arrives on every frame of a long turn and the ledger is
@@ -242,6 +257,7 @@ type Options struct {
 	RecordRaw          bool
 	TraceInlineBytes   int              // 0 = DefaultTraceInlineBytes
 	TraceEventMaxBytes int              // 0 = no cap on per-event file size
+	TraceBlobMaxBytes  int              // 0 = DefaultTraceBlobMaxBytes
 	Now                func() time.Time // optional; defaults to time.Now
 }
 
@@ -264,6 +280,7 @@ func New(opt Options) *Store {
 		recordRaw:          opt.RecordRaw,
 		traceInlineBytes:   inlineBytes,
 		traceEventMaxBytes: opt.TraceEventMaxBytes,
+		traceBlobMaxBytes:  opt.TraceBlobMaxBytes,
 		now:                now,
 	}
 }
@@ -392,6 +409,7 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 			ToolInput: ev.ToolInput,
 			ToolUseID: ev.ToolUseID,
 			At:        now,
+			Display:   ev.Display,
 		}
 		s.mu.Lock()
 		s.flushTextSegmentLocked(now)
@@ -403,6 +421,7 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 			ToolInput: ev.ToolInput,
 			ToolUseID: ev.ToolUseID,
 			At:        now,
+			Display:   ev.Display,
 		})
 		return false, nil
 
@@ -422,6 +441,7 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 			IsError:   ev.IsError,
 			Text:      ev.Text,
 			At:        now,
+			Display:   ev.Display,
 		})
 		s.mu.Unlock()
 		_ = s.appendInflight(InflightEntry{
@@ -430,6 +450,7 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 			IsError:   ev.IsError,
 			Text:      ev.Text,
 			At:        now,
+			Display:   ev.Display,
 		})
 		return false, nil
 
@@ -844,6 +865,7 @@ func (s *Store) writeTraceIndex(turnID string, evs []TurnEvent) bool {
 	idx := TurnTraceIndex{TurnID: turnID}
 	for i, ev := range evs {
 		eventID := fmt.Sprintf("e%d", i)
+		ev = s.storeBlobs(turnID, eventID, ev)
 		payload := ev.Text + ev.ToolInput
 		row := TurnEventIndex{
 			EventID:   eventID,
@@ -853,21 +875,44 @@ func (s *Store) writeTraceIndex(turnID string, evs []TurnEvent) bool {
 			IsError:   ev.IsError,
 			At:        ev.At,
 			EndAt:     ev.EndAt,
+			Display:   ev.Display,
 		}
 		if len(payload) >= s.traceInlineBytes {
-			// Apply per-event max cap before writing to file.
+			// Apply per-event max cap before writing to file. Cut on a rune
+			// boundary so a multibyte character is never split in half.
 			text := ev.Text
 			toolInput := ev.ToolInput
+			disp := ev.Display
 			truncated := false
 			if s.traceEventMaxBytes > 0 {
 				if len(text) > s.traceEventMaxBytes {
-					text = text[:s.traceEventMaxBytes]
+					text = truncateUTF8(text, s.traceEventMaxBytes)
 					truncated = true
 				}
 				if len(toolInput) > s.traceEventMaxBytes {
-					toolInput = toolInput[:s.traceEventMaxBytes]
+					toolInput = truncateUTF8(toolInput, s.traceEventMaxBytes)
 					truncated = true
 				}
+				if disp != nil && len(disp.Body) > s.traceEventMaxBytes {
+					d := *disp
+					d.Body = truncateUTF8(d.Body, s.traceEventMaxBytes)
+					d.Truncated = true
+					disp = &d
+				}
+			}
+			if disp != nil && truncated && !disp.Truncated && !disp.HasBinary() {
+				// The raw text was cut even though the body fit: the trace
+				// copy is still partial, say so.
+				d := *disp
+				d.Truncated = true
+				disp = &d
+			}
+			if disp != nil {
+				// The index keeps the header facts; the body is fetched with
+				// the payload.
+				head := *disp
+				head.Body = ""
+				row.Display = &head
 			}
 			ep := TurnEventPayload{
 				EventID:   eventID,
@@ -875,6 +920,7 @@ func (s *Store) writeTraceIndex(turnID string, evs []TurnEvent) bool {
 				Text:      text,
 				ToolInput: toolInput,
 				Truncated: truncated,
+				Display:   disp,
 			}
 			if data, err := json.Marshal(ep); err == nil {
 				_ = os.WriteFile(s.layout.SessionThinkingEvent(s.sessionID, turnID, eventID), data, 0o644)
@@ -906,6 +952,9 @@ type InflightEntry struct {
 	ToolUseID string    `json:"tool_use_id,omitempty"`
 	IsError   bool      `json:"is_error,omitempty"`
 	At        time.Time `json:"at,omitempty"`
+	// Display mirrors TurnEvent.Display. A binary's bytes are not in it
+	// (Blob is never serialized); recovery re-derives them from Text.
+	Display *event.Display `json:"display,omitempty"`
 }
 
 // appendInflight writes one entry to the session's inflight.jsonl.
@@ -1003,6 +1052,7 @@ func RecoverInflight(layout config.Layout, sessionID, agentName, provider string
 				IsError:   e.IsError,
 				Text:      e.Text,
 				At:        e.At,
+				Display:   e.Display,
 			})
 		}
 	}
