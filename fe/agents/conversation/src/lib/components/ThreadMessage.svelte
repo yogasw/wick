@@ -8,7 +8,9 @@
   import { avatarTone } from "../senderTone.js";
   import { isViewer } from "../viewer.js";
   import { bareSlashCommand } from "../slashCommand.js";
-  import { teamSender, handoffOf, handoffState } from "../teamMention.js";
+  import { teamSender } from "../teamMention.js";
+  import { isSystemEventKind } from "../systemEvents.js";
+  import SystemEventChip from "./system/SystemEventChip.svelte";
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import ToolCard from "./ToolCard.svelte";
   import TodoCard from "./TodoCard.svelte";
@@ -37,7 +39,8 @@
      chip, the frame dropped from the bubble — not as the person typing. */
   const teamFrom = $derived(isUserTurn(turn) ? teamSender(turn.source, turn.text ?? "") : null);
   const teamFromAgent = $derived(teamFrom ? teamAgents[teamFrom.handle] : undefined);
-  const handoff = $derived(turn.kind === "mention_handoff" ? handoffOf(turn.extras) : null);
+  const isSystemEvent = $derived(turn.role === "system" && isSystemEventKind(turn.kind));
+  const teamNames = $derived(Object.fromEntries(Object.entries(teamAgents).map(([h, a]) => [h, a.name])));
   function isUserTurn(t: ConversationTurn) {
     return t.role === "user";
   }
@@ -407,22 +410,11 @@
           </span>
           <div class="h-px flex-1 bg-white-300 dark:bg-navy-600"></div>
         </div>
-      {:else if handoff}
-        <!-- A Team handoff: who handed what to whom and how it ended, on
-             one line. The target opens its own chat in the Team app. -->
-        <div data-testid="mention-handoff" class="inline-flex items-center gap-1.5 rounded-2xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 text-xs text-black-700 dark:text-black-600 max-w-full" title={turn.text}>
-          <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-            <path d="M2 6h7M6.5 3.5 9 6 6.5 8.5" stroke-linecap="round" stroke-linejoin="round"></path>
-          </svg>
-          <span class="truncate">{handoff.from === "user" ? "You" : (teamAgents[handoff.from]?.name ?? "@" + handoff.from)}</span>
-          <span aria-hidden="true">→</span>
-          {#if onOpenAgent && handoff.to}
-            <button type="button" class="font-medium text-green-600 dark:text-green-400 hover:underline" onclick={() => onOpenAgent?.(handoff.to)}>@{handoff.to}</button>
-          {:else}
-            <span class="font-medium">@{handoff.to}</span>
-          {/if}
-          <span class="opacity-70">· {handoffState(handoff.state)}</span>
-        </div>
+      {:else if isSystemEvent}
+        <!-- A server-recorded event (agent created, access changed, a Team
+             handoff, a refused mention, …): one chip, drawn from the
+             systemEvents registry. A handoff's target opens its own chat. -->
+        <SystemEventChip {turn} names={teamNames} {onOpenAgent} />
       {:else if turn.is_error}
         <div class="inline-flex items-start gap-1.5 rounded-2xl border border-neg-400/40 bg-neg-400/10 px-3 py-1 text-xs text-neg-400 max-w-full">
           <svg viewBox="0 0 12 12" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { teamMentionAgents, teamSender, handoffState, subAgentTitle, subAgentTurns, collapseHandoffs } from "../teamMention.js";
+import { teamMentionAgents, teamSender, handoffState, subAgentTitle, subAgentTurns } from "../teamMention.js";
 
 describe("teamMentionAgents", () => {
   const peers = [
@@ -38,19 +38,5 @@ describe("sub-agent card", () => {
   test("turns are per leg once continued", () => {
     expect(subAgentTurns({ turns_used: 5, max_turns: 20 })).toBe("5/20 turns");
     expect(subAgentTurns({ turns_used: 51, max_turns: 101, resumes: 1, leg_base_turns: 40 })).toBe("11 turns this leg · 51 total");
-  });
-});
-
-describe("collapseHandoffs", () => {
-  const h = (id: string, task: string, state: string) => ({ turn_id: id, role: "system", kind: "mention_handoff", text: state, extras: { task_id: task, state } });
-  test("one row per task: first position, latest state", () => {
-    const turns = [h("1", "t1", "working"), { turn_id: "2", role: "user", text: "hi" }, h("3", "t1", "completed"), h("4", "t2", "working")];
-    const out = collapseHandoffs(turns as any[]);
-    expect(out.map((t) => t.turn_id)).toEqual(["1", "2", "4"]);
-    expect(out[0].extras.state).toBe("completed");
-  });
-  test("no handoffs → same array", () => {
-    const turns = [{ role: "user", text: "x" }];
-    expect(collapseHandoffs(turns)).toBe(turns);
   });
 });

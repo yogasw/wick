@@ -831,15 +831,29 @@ describe("createThreadStore — live context level", () => {
   });
 });
 
-describe("thread store — mention_handoff", () => {
-  test("a live mention_handoff event appends a system handoff turn", () => {
+describe("thread store — system_event", () => {
+  const ev = (type: string, turn: object) => ({ type, data: JSON.stringify(turn) }) as AgentEvent;
+  const handoff = { turn_id: "9", role: "system", kind: "mention_handoff", text: "@captain → @anton · working", extras: { task_id: "t1", to: "anton", state: "working" } };
+
+  test("a live system_event appends the server's turn under its own turn_id", () => {
     const s = createThreadStore();
-    s.handleEvent({
-      type: "mention_handoff",
-      data: JSON.stringify({ turn_id: "9", kind: "mention_handoff", text: "@captain → @anton · TASK_STATE_WORKING", extras: { task_id: "t1", to: "anton", state: "TASK_STATE_WORKING" } }),
-    } as AgentEvent);
+    s.handleEvent(ev("system_event", handoff));
     const ts = get(s.turns);
     expect(ts).toHaveLength(1);
-    expect(ts[0]).toMatchObject({ role: "system", kind: "mention_handoff", extras: { task_id: "t1" } });
+    expect(ts[0]).toMatchObject({ turn_id: "9", role: "system", kind: "mention_handoff", extras: { task_id: "t1" } });
+  });
+
+  test("the legacy mention_handoff twin and a replay do not draw it twice", () => {
+    const s = createThreadStore();
+    s.handleEvent(ev("system_event", handoff));
+    s.handleEvent(ev("mention_handoff", handoff));
+    s.handleEvent(ev("system_event", handoff));
+    expect(get(s.turns)).toHaveLength(1);
+  });
+
+  test("a non-system payload is ignored", () => {
+    const s = createThreadStore();
+    s.handleEvent(ev("system_event", { turn_id: "1", role: "assistant", kind: "x", text: "nope" }));
+    expect(get(s.turns)).toHaveLength(0);
   });
 });

@@ -109,26 +109,3 @@ export function subAgentTurns(s: { turns_used: number; max_turns: number; resume
   const used = Math.max(0, s.turns_used - base);
   return `${used} turns this leg · ${s.turns_used} total`;
 }
-
-/** collapseHandoffs folds the mention_handoff turns of one task into one
-    row: it stays where the first (working) turn sits and takes the latest
-    turn's state. The server appends one turn per transition. */
-export function collapseHandoffs<T extends { role: string; kind?: string; text: string; extras?: Record<string, string> }>(turns: T[]): T[] {
-  const latest = new Map<string, T>();
-  for (const t of turns) {
-    const id = t.kind === "mention_handoff" ? t.extras?.task_id : undefined;
-    if (id) latest.set(id, t);
-  }
-  if (latest.size === 0) return turns;
-  const seen = new Set<string>();
-  const out: T[] = [];
-  for (const t of turns) {
-    const id = t.kind === "mention_handoff" ? t.extras?.task_id : undefined;
-    if (!id) { out.push(t); continue; }
-    if (seen.has(id)) continue;
-    seen.add(id);
-    const last = latest.get(id)!;
-    out.push(last === t ? t : { ...t, text: last.text, extras: { ...t.extras, ...last.extras } });
-  }
-  return out;
-}

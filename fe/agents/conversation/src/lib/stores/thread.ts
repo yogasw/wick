@@ -388,21 +388,28 @@ export function createThreadStore(): ThreadStore {
         break;
       }
 
-      case "mention_handoff": {
-        // A Team handoff row, pushed live (the same turn the server wrote
-        // to the transcript). Its working → completed turns share a
-        // task_id and are folded into one row when rendered.
+      case "system_event": {
+        // A turn the server recorded on its own — agent_created,
+        // access_changed, mention_handoff, hop_limit, input_request, … — pushed
+        // live as the same turn it wrote to the transcript. Kept under its real
+        // turn_id so a replayed event (stream resubscribe) and the reload that
+        // follows recognise it instead of drawing it twice. Turns that share a
+        // fold key (task_id, ask_id, approval_id) are folded when rendered.
+        // The legacy `mention_handoff` event carries the same turn and is
+        // deliberately ignored now (falls to default).
         try {
           const d = JSON.parse(ev.data ?? "{}") as Partial<ConversationTurn> & { ts?: string };
-          if (d.kind === "mention_handoff") {
+          if (d.role === "system" && d.kind) {
+            const id = d.turn_id ? String(d.turn_id) : `sysev-${Date.now()}`;
             const turn: ConversationTurn = {
-              turn_id: `handoff-${d.turn_id ?? Date.now()}`,
+              turn_id: id,
               role: "system",
-              agent: "",
+              agent: d.agent ?? "",
               provider: "",
               text: d.text ?? "",
-              kind: "mention_handoff",
+              kind: d.kind,
               extras: d.extras ?? {},
+              ts: d.ts,
               timestamp: Date.now(),
               truncated: false,
               interrupted: false,
@@ -410,7 +417,7 @@ export function createThreadStore(): ThreadStore {
               events: [],
               attachments: [],
             };
-            turns.update((ts) => [...ts, turn]);
+            turns.update((ts) => (ts.some((t) => t.turn_id === id) ? ts : [...ts, turn]));
           }
         } catch (_) {}
         break;

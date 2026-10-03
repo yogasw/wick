@@ -1193,7 +1193,7 @@ describe("ThreadMessage - Team", () => {
         onOpenAgent,
       },
     });
-    const row = screen.getByTestId("mention-handoff");
+    const row = screen.getByTestId("system-event");
     expect(row.textContent).toContain("Captain");
     expect(row.textContent).toContain("completed");
     await fireEvent.click(screen.getByText("@anton"));
