@@ -104,6 +104,8 @@ func eventTypeFromString(s string) event.EventType {
 		return event.Warning
 	case "trace":
 		return event.Trace
+	case "text_replace":
+		return event.TextReplace
 	default:
 		return event.Unknown
 	}

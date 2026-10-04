@@ -308,6 +308,8 @@ export type SlackRemoteConfig = {
   /** 0 = the server default (20 s / 180 s), at most 900. */
   idle_sec?: number;
   max_sec?: number;
+  /** Longest wait between two thread reads; 0 = the default backoff. */
+  poll_sec?: number;
   usage?: RemoteUsage;
 };
 

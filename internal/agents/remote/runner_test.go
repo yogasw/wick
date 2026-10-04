@@ -203,6 +203,65 @@ func TestDraftShownOnlyAtEnd(t *testing.T) {
 	}
 }
 
+// fakeClock drives the idle window by hand.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) now() time.Time      { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *fakeClock) add(d time.Duration) { c.mu.Lock(); c.t = c.t.Add(d); c.mu.Unlock() }
+
+func TestIdleWaitsWhileBusyThenEnds(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(1_700_000_000, 0)}
+	oldNow, oldTick := now, idleTick
+	now, idleTick = clk.now, 5*time.Millisecond
+	t.Cleanup(func() { now, idleTick = oldNow, oldTick })
+	f := &fake{listen: []ListenMode{ListenPush}, limits: Limits{Max: 10 * time.Second, Idle: 30 * time.Second}, push: make(chan Event, 8)}
+	f.push <- Event{Kind: EventText, Text: "first"}
+	f.push <- Event{Kind: EventStatus, Status: StatusWorking, Detail: "checking"}
+	type res struct {
+		text string
+		l    line
+	}
+	got := make(chan res, 1)
+	go func() { text, l := run(t, f); got <- res{text, l} }()
+	time.Sleep(50 * time.Millisecond)
+	clk.add(5 * time.Minute) // a long tool run: still working, no end
+	select {
+	case r := <-got:
+		t.Fatalf("ended while busy: %+v", r)
+	case <-time.After(100 * time.Millisecond):
+	}
+	f.push <- Event{Kind: EventText, Text: "first\n\nsecond"}
+	time.Sleep(50 * time.Millisecond)
+	clk.add(29 * time.Second) // under the window: a new message reset it
+	select {
+	case r := <-got:
+		t.Fatalf("ended inside the idle window: %+v", r)
+	case <-time.After(100 * time.Millisecond):
+	}
+	clk.add(2 * time.Second)
+	select {
+	case r := <-got:
+		if r.text != "first\n\nsecond" || r.l.Result != "first\n\nsecond" || r.l.RemoteNote != NoteNoMarker {
+			t.Fatalf("text=%q line=%+v", r.text, r.l)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle window never ended the turn")
+	}
+}
+
+func TestPullStepsCapped(t *testing.T) {
+	got := pullSteps(3 * time.Second)
+	if got[0] != time.Second || got[len(got)-1] != 3*time.Second {
+		t.Fatalf("steps = %v", got)
+	}
+	if len(pullSteps(0)) != len(PullSteps) {
+		t.Fatal("no cap changed the steps")
+	}
+}
+
 func TestRegistry(t *testing.T) {
 	Register(Adapter{Kind: "zz-test", Label: "Test", Listen: []ListenMode{ListenPull}, Schema: SchemaVersion})
 	if a, ok := Lookup("zz-test"); !ok || a.Label != "Test" {

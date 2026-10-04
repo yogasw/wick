@@ -251,6 +251,9 @@ func collectTurn(ctx context.Context, ch <-chan delegation.StreamEvent) string {
 			switch ev.Type {
 			case event.TextDelta:
 				b.WriteString(ev.Text)
+			case event.TextReplace:
+				b.Reset()
+				b.WriteString(ev.Text)
 			case event.Done:
 				return b.String()
 			}

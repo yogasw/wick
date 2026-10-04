@@ -63,6 +63,10 @@ const (
 	// verbatim line. Non-fatal; never ends the turn. Pure control frames
 	// (started/ping/snapshots) stay Unknown and are skipped.
 	Trace
+	// TextReplace swaps the whole reply streamed so far this turn for
+	// .Text: a remote agent edited a message it had already sent.
+	// Consumers that only append may ignore it and keep the old text.
+	TextReplace
 )
 
 // String makes log lines readable. Not used for serialization.
@@ -88,6 +92,8 @@ func (t EventType) String() string {
 		return "compaction"
 	case Trace:
 		return "trace"
+	case TextReplace:
+		return "text_replace"
 	default:
 		return "unknown"
 	}

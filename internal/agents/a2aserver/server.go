@@ -331,7 +331,7 @@ func (t *turn) drain() []event.AgentEvent {
 // events go to the session's head turn; a terminal one pops it. Sessions
 // this server did not dispatch find no queue.
 func (s *Server) OnAgentEvent(sessionID string, ev event.AgentEvent) {
-	if ev.Type != event.TextDelta && ev.Type != event.Done && ev.Type != event.Error {
+	if ev.Type != event.TextDelta && ev.Type != event.TextReplace && ev.Type != event.Done && ev.Type != event.Error {
 		return
 	}
 	s.mu.Lock()

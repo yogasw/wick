@@ -64,7 +64,7 @@ const (
 )
 
 const (
-	DefaultIdleSec = 20
+	DefaultIdleSec = 30
 	DefaultMaxSec  = 180
 	MaxMaxSec      = 900
 )
@@ -101,10 +101,13 @@ type Config struct {
 	// MentionTarget off = turns are posted as written. Unset (agents saved
 	// before the setting existed) = on: many Slack bots answer only when
 	// @-mentioned.
-	MentionTarget *bool  `json:"mention_target,omitempty"`
-	IdleSec       int    `json:"idle_sec,omitempty"`
-	MaxSec        int    `json:"max_sec,omitempty"`
-	Usage         string `json:"usage,omitempty"`
+	MentionTarget *bool `json:"mention_target,omitempty"`
+	IdleSec       int   `json:"idle_sec,omitempty"`
+	MaxSec        int   `json:"max_sec,omitempty"`
+	// PollSec caps the wait between two reads of the thread while no
+	// event arrives. 0 = the runner's backoff (up to 10s).
+	PollSec int    `json:"poll_sec,omitempty"`
+	Usage   string `json:"usage,omitempty"`
 
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -131,6 +134,9 @@ func (c Config) Idle() time.Duration {
 	}
 	return time.Duration(c.IdleSec) * time.Second
 }
+
+// Poll is the longest wait between two reads; 0 = no cap.
+func (c Config) Poll() time.Duration { return time.Duration(c.PollSec) * time.Second }
 
 func (c Config) Max() time.Duration {
 	if c.MaxSec <= 0 {
@@ -204,6 +210,9 @@ func (c *Config) Normalize() error {
 	case "", UsageOnlyMe, UsageMeAndAgents, UsageByMention:
 	default:
 		return fmt.Errorf("usage must be %q, %q or %q", UsageOnlyMe, UsageMeAndAgents, UsageByMention)
+	}
+	if c.PollSec < 0 || c.PollSec > MaxMaxSec {
+		return fmt.Errorf("poll_sec must be between 0 and %d", MaxMaxSec)
 	}
 	if c.IdleSec < 0 || c.IdleSec > MaxMaxSec {
 		return fmt.Errorf("idle_sec must be between 0 and %d", MaxMaxSec)

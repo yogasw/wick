@@ -473,6 +473,19 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		}
 		return false, nil
 
+	case event.TextReplace:
+		s.mu.Lock()
+		s.turnBuf.Reset()
+		s.turnBuf.WriteString(ev.Text)
+		s.textSeen = 0
+		s.mu.Unlock()
+		_ = s.appendInflight(InflightEntry{
+			Type: "text_replace",
+			Text: ev.Text,
+			At:   s.now().UTC(),
+		})
+		return false, nil
+
 	case event.TextDelta:
 		s.mu.Lock()
 		s.turnBuf.WriteString(ev.Text)

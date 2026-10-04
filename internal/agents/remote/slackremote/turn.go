@@ -35,8 +35,14 @@ type tracker struct {
 	lastTS   string
 	shown    string
 	status   string
-	done     bool
-	events   chan remote.Event
+	// What says the remote still works: ⏳ on our message, the message
+	// whose metadata set a status, the newest progress note and its label.
+	hourglass  bool
+	statusTS   string
+	progressTS string
+	label      string
+	done       bool
+	events     chan remote.Event
 }
 
 func newTracker(channel, threadTS, sentTS, token string, topLevel bool, ignore map[string]bool, accept func(Message) bool) *tracker {
@@ -69,6 +75,13 @@ func (t *tracker) belongs(m Message) bool {
 }
 
 // observe takes one message and returns the events it causes.
+//
+// Every answer message is passed on as it comes (EventText, the replies
+// joined in order), an edit changes it in place, a deletion drops it.
+// The turn ends at once on the marker, a ✅/❌ reaction on our message or
+// a done status; otherwise the runner's idle window ends it, which does
+// not run while the remote shows it is working: its latest message is a
+// progress note, our message carries ⏳, or a status is set.
 func (t *tracker) observe(m Message) []remote.Event {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -76,15 +89,26 @@ func (t *tracker) observe(m Message) []remote.Event {
 		return nil
 	}
 	var out []remote.Event
-	// Our own message: its reactions say the remote saw it (👀) or works (⏳).
+	// Our own message: its reactions say the remote saw it (👀), works
+	// (⏳) or finished (✅/❌).
 	if m.TS == t.sentTS {
+		hourglass, finished := false, false
 		for _, r := range m.Reactions {
 			switch {
 			case r == "eyes":
 				out = t.setStatus(out, remote.StatusThinking, "")
 			case strings.HasPrefix(r, "hourglass"):
-				out = t.setStatus(out, remote.StatusWorking, "")
+				hourglass = true
+			case r == "white_check_mark" || r == "heavy_check_mark" || r == "x":
+				finished = true
 			}
+		}
+		t.hourglass = hourglass
+		out = t.busyStatus(out)
+		if finished {
+			visible, _ := t.compose()
+			t.done = true
+			out = append(out, remote.Event{Kind: remote.EventDone, Text: visible})
 		}
 		return out
 	}
@@ -96,42 +120,93 @@ func (t *tracker) observe(m Message) []remote.Event {
 	}
 	finished := false
 	switch strings.ToLower(m.Status) {
-	case "thinking":
-		out = t.setStatus(out, remote.StatusThinking, "")
-	case "working", "tool":
-		out = t.setStatus(out, remote.StatusWorking, "")
+	case "thinking", "working", "tool":
+		t.statusTS = m.TS
 	case "done", "completed", "complete":
-		finished = true
+		t.statusTS, finished = "", true
+	default:
+		// The status this message carried was cleared: the remote is done.
+		if t.statusTS == m.TS {
+			t.statusTS, finished = "", true
+		}
 	}
-	// An edit replaces the message's text; a deletion or an edit into a
-	// progress note takes it out of the reply.
+	// An edit replaces the message's text; a deletion takes it out of the
+	// reply; a progress note — or an answer edited back into one — is a
+	// status label, never reply text.
 	text := t.clean(m.Text)
 	if label, ok := progressLine(text); ok && !m.Deleted {
 		delete(t.msgs, m.TS)
-		out = t.setStatus(out, remote.StatusWorking, label)
-	} else if text != "" && !m.Deleted {
-		t.msgs[m.TS] = text
+		t.label = label
+		if !tsLess(m.TS, t.progressTS) {
+			t.progressTS = m.TS
+		}
 	} else {
-		delete(t.msgs, m.TS)
+		if t.progressTS == m.TS {
+			t.progressTS = ""
+		}
+		if text != "" && !m.Deleted {
+			t.msgs[m.TS] = text
+		} else {
+			delete(t.msgs, m.TS)
+		}
 	}
+	out = t.busyStatus(out)
 	return t.report(out, finished)
 }
 
-// report sends the reply so far as a draft — a remote may still rewrite,
-// delete or repeat what it posted, so nothing is shown before the turn
-// ends — and ends the turn on the marker or a done status.
+// busy: the remote shows it is still working.
+func (t *tracker) busy() bool {
+	if t.hourglass || t.statusTS != "" {
+		return true
+	}
+	if t.progressTS == "" {
+		return false
+	}
+	for ts := range t.msgs {
+		if tsLess(t.progressTS, ts) {
+			return false // an answer came after the progress note
+		}
+	}
+	return true
+}
+
+// busyStatus reports a change of busy: working (with the progress label)
+// or idle, which lets the runner's idle window run again.
+func (t *tracker) busyStatus(out []remote.Event) []remote.Event {
+	if t.busy() {
+		label := ""
+		if t.progressTS != "" {
+			label = t.label
+		}
+		return t.setStatus(out, remote.StatusWorking, label)
+	}
+	if t.status != "" && t.status != remote.StatusThinking {
+		return t.setStatus(out, remote.StatusIdle, "")
+	}
+	return out
+}
+
+// report passes the reply on whenever it changed and ends the turn on
+// the marker or a done status.
 func (t *tracker) report(out []remote.Event, finished bool) []remote.Event {
 	visible, marked := t.compose()
 	if visible != t.shown {
-		out = t.setStatus(out, remote.StatusWorking, "")
 		t.shown = visible
-		out = append(out, remote.Event{Kind: remote.EventDraft, Text: visible})
+		out = append(out, remote.Event{Kind: remote.EventText, Text: visible})
 	}
 	if marked || (finished && visible != "") {
 		t.done = true
 		out = append(out, remote.Event{Kind: remote.EventDone, Text: visible})
 	}
 	return out
+}
+
+func (t *tracker) setStatus(out []remote.Event, status, detail string) []remote.Event {
+	if t.status == status+detail {
+		return out
+	}
+	t.status = status + detail
+	return append(out, remote.Event{Kind: remote.EventStatus, Status: status, Detail: detail})
 }
 
 // prune drops the replies a full read of the thread no longer has: they
@@ -176,14 +251,6 @@ func (t *tracker) clean(text string) string {
 		return m[2] + " (" + m[1] + ")"
 	})
 	return strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace(text)
-}
-
-func (t *tracker) setStatus(out []remote.Event, status, detail string) []remote.Event {
-	if t.status == status+detail || t.shown != "" && detail == "" {
-		return out
-	}
-	t.status = status + detail
-	return append(out, remote.Event{Kind: remote.EventStatus, Status: status, Detail: detail})
 }
 
 // compose joins the replies in order and handles the marker: a reply

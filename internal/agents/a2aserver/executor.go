@@ -110,6 +110,12 @@ type translator struct {
 // next maps ev; last reports a terminal event.
 func (t *translator) next(ev event.AgentEvent) (out a2a.Event, last bool) {
 	switch ev.Type {
+	case event.TextReplace:
+		// The artifact streamed so far cannot be taken back; the final
+		// message carries the whole reply.
+		t.full.Reset()
+		t.full.WriteString(ev.Text)
+		return nil, false
 	case event.TextDelta:
 		if ev.Text == "" {
 			return nil, false

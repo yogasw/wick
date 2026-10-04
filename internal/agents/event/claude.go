@@ -80,6 +80,8 @@ type claudeRaw struct {
 	SessionID string `json:"session_id,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`
 	Result    string `json:"result,omitempty"`
+	// ReplaceText is the whole reply of a system remote_replace line.
+	ReplaceText string `json:"replace_text,omitempty"`
 
 	// `assistant` and `user` wrap content blocks under .message.content
 	Message *claudeMessage `json:"message,omitempty"`
@@ -354,6 +356,11 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		// system subtypes (`hook_started`, `hook_response`,
 		// `compaction`, ...) are noise from claude's lifecycle hooks
 		// and don't map to anything user-visible.
+		// A remote agent's runner rewrites the reply it streamed when the
+		// remote edited a message already passed on.
+		if raw.Subtype == "remote_replace" {
+			return AgentEvent{Type: TextReplace, Text: raw.ReplaceText, Raw: trimmed}, nil
+		}
 		if raw.Subtype == "init" && raw.SessionID != "" {
 			if !p.sessionEmitted {
 				p.sessionID = raw.SessionID

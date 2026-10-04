@@ -44,10 +44,14 @@ type Handle struct {
 
 // Limits bound a turn. Max is the hard limit (a turn still running then
 // fails); Idle > 0 ends a turn that has shown text and then went quiet for
-// that long, labelled NoteNoMarker.
+// that long, labelled NoteNoMarker — never while the remote still shows
+// it is working. Poll > 0 caps the wait between two pulls.
+//
+// TODO: learn per remote (marker use, typical answer time) and adapt Idle.
 type Limits struct {
 	Max  time.Duration
 	Idle time.Duration
+	Poll time.Duration
 }
 
 // Description is what Describe shows before an agent is added.

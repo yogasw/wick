@@ -38,6 +38,10 @@ const (
 	StatusThinking      = "thinking"
 	StatusWorking       = "working"
 	StatusInputRequired = "input_required"
+	// StatusIdle: the remote no longer shows it is working (an hourglass
+	// or assistant status went away). Not shown; it lets the idle window
+	// run again.
+	StatusIdle = "idle"
 )
 
 // Event is one thing a remote did during a turn, the same shape for every

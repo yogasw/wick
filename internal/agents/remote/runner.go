@@ -33,6 +33,12 @@ var PullSteps = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 1
 // close with its own terminal event before the runner reports the timeout.
 var pushGrace = 2 * time.Second
 
+// now and idleTick are the idle window's clock; tests replace them.
+var (
+	now      = time.Now
+	idleTick = time.Second
+)
+
 // RetryAfterError asks the runner to wait After before the next Fetch — a
 // rate limit's Retry-After.
 type RetryAfterError struct {
@@ -218,6 +224,12 @@ func (p *process) emitError(msg string) {
 
 // emitStatus reports what the remote is doing. It is a system line, like
 // the heartbeat, so a reader that does not know it skips it.
+// emitReplace swaps the reply streamed so far for text: the remote edited
+// a message already passed on.
+func (p *process) emitReplace(text string) {
+	p.emit(map[string]any{"type": "system", "subtype": "remote_replace", "replace_text": text})
+}
+
 func (p *process) emitStatus(status, detail string) {
 	line := map[string]any{"type": "system", "subtype": "remote_status", "status": status}
 	if detail != "" {
@@ -320,7 +332,7 @@ func (p *process) turn(text string) {
 	var pullC <-chan time.Time
 	var pullT *time.Timer
 	if canPull {
-		pullT = time.NewTimer(PullSteps[0])
+		pullT = time.NewTimer(pullSteps(lim.Poll)[0])
 		defer pullT.Stop()
 		pullC = pullT.C
 	}
@@ -337,10 +349,11 @@ func (p *process) turn(text string) {
 		pullT.Reset(d)
 	}
 	var idleC <-chan time.Time
+	steps := pullSteps(lim.Poll)
 	if lim.Idle > 0 {
 		every := lim.Idle / 4
-		if every > time.Second {
-			every = time.Second
+		if every > idleTick {
+			every = idleTick
 		}
 		tk := time.NewTicker(every)
 		defer tk.Stop()
@@ -369,7 +382,7 @@ func (p *process) turn(text string) {
 				return
 			}
 			step = 0
-			resetPull(PullSteps[0])
+			resetPull(steps[0])
 		case <-pullC:
 			evs, nh, err := puller.Fetch(ctx, h)
 			wait := time.Duration(0)
@@ -392,15 +405,15 @@ func (p *process) turn(text string) {
 			}
 			if len(evs) > 0 {
 				step = 0
-			} else if step < len(PullSteps)-1 {
+			} else if step < len(steps)-1 {
 				step++
 			}
-			if wait < PullSteps[step] {
-				wait = PullSteps[step]
+			if wait < steps[step] {
+				wait = steps[step]
 			}
 			resetPull(wait)
 		case <-idleC:
-			if t.sawText && time.Since(t.last) >= lim.Idle {
+			if t.sawText && !t.busy && now().Sub(t.last) >= lim.Idle {
 				t.handle(Event{Kind: EventDone, Note: NoteNoMarker})
 				return
 			}
@@ -439,12 +452,30 @@ func (p *process) drain(t *turnOut, push <-chan Event) bool {
 	}
 }
 
+// pullSteps is PullSteps with no step longer than max (0 = no cap).
+func pullSteps(max time.Duration) []time.Duration {
+	if max <= 0 {
+		return PullSteps
+	}
+	out := make([]time.Duration, 0, len(PullSteps))
+	for _, d := range PullSteps {
+		if d > max {
+			d = max
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 // turnOut writes one turn's events as stream-json lines.
 type turnOut struct {
 	p       *process
 	out     strings.Builder
 	sawText bool
-	last    time.Time
+	// busy: the remote shows it is still working (a progress note, a
+	// working status); the idle window does not run meanwhile.
+	busy bool
+	last time.Time
 	// full is the latest whole reply from an EventText that did not grow
 	// what was shown (an edit that rewrote it), used as the final result.
 	full string
@@ -460,19 +491,23 @@ func (t *turnOut) write(s string) {
 
 // handle writes ev; true when it ended the turn.
 func (t *turnOut) handle(ev Event) bool {
-	t.last = time.Now()
+	t.last = now()
 	switch ev.Kind {
 	case EventTextDelta:
 		t.sawText = t.sawText || ev.Text != ""
 		t.write(ev.Text)
 	case EventText:
 		t.sawText = t.sawText || ev.Text != ""
-		t.grow(ev.Text)
+		t.busy = false
+		t.replace(ev.Text)
 	case EventDraft:
 		t.sawText = t.sawText || ev.Text != ""
 		t.full = ev.Text
 	case EventStatus:
-		t.p.emitStatus(ev.Status, ev.Detail)
+		t.busy = ev.Status == StatusWorking || ev.Status == StatusThinking
+		if ev.Status != StatusIdle {
+			t.p.emitStatus(ev.Status, ev.Detail)
+		}
 	case EventAttachment:
 		t.sawText = true
 		line := "📎 " + ev.Name
@@ -484,11 +519,10 @@ func (t *turnOut) handle(ev Event) bool {
 		}
 		t.write(line + "\n")
 	case EventDone:
-		if whole := ev.Text; whole != "" || t.full != "" {
-			if whole == "" {
-				whole = t.full
-			}
-			t.grow(whole)
+		if ev.Text != "" {
+			t.replace(ev.Text)
+		} else if t.full != "" {
+			t.grow(t.full)
 		}
 		final := t.out.String()
 		if t.full != "" {
@@ -501,6 +535,21 @@ func (t *turnOut) handle(ev Event) bool {
 		return true
 	}
 	return false
+}
+
+// replace shows whole as the reply: the new part appended, or — when an
+// edit changed what was already shown — the whole reply swapped in.
+func (t *turnOut) replace(whole string) {
+	shown := t.out.String()
+	if strings.HasPrefix(whole, shown) {
+		t.write(whole[len(shown):])
+		t.full = ""
+		return
+	}
+	t.out.Reset()
+	t.out.WriteString(whole)
+	t.full = ""
+	t.p.emitReplace(whole)
 }
 
 // grow shows the part of whole not shown yet. A whole that does not start

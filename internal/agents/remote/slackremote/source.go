@@ -64,7 +64,9 @@ func (s *Source) Label() string {
 func (s *Source) Listen() []remote.ListenMode {
 	return []remote.ListenMode{remote.ListenPush, remote.ListenPull}
 }
-func (s *Source) Limits() remote.Limits { return remote.Limits{Max: s.cfg.Max(), Idle: s.cfg.Idle()} }
+func (s *Source) Limits() remote.Limits {
+	return remote.Limits{Max: s.cfg.Max(), Idle: s.cfg.Idle(), Poll: s.cfg.Poll()}
+}
 
 // ResumeID names the session by its thread.
 func (s *Source) ResumeID(dir string) string {

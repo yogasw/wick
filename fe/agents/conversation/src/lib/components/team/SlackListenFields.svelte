@@ -4,8 +4,8 @@
   import type { SlackListen } from "../../api/team.js";
   import { LISTEN_OPTIONS, IDLE_DEFAULT, MAX_DEFAULT, SEC_CAP, secError } from "../../slackRemote.js";
 
-  type Props = { listen: SlackListen; marker: boolean; mention: boolean; idleSec: number; maxSec: number; idPrefix: string };
-  let { listen = $bindable(), marker = $bindable(), mention = $bindable(), idleSec = $bindable(), maxSec = $bindable(), idPrefix }: Props = $props();
+  type Props = { listen: SlackListen; marker: boolean; mention: boolean; idleSec: number; maxSec: number; pollSec?: number; idPrefix: string };
+  let { listen = $bindable(), marker = $bindable(), mention = $bindable(), idleSec = $bindable(), maxSec = $bindable(), pollSec = $bindable(0), idPrefix }: Props = $props();
 
   const why = $derived(secError(idleSec, maxSec));
   const label = "mb-1 block text-xs font-medium text-black-800 dark:text-black-600";
@@ -48,6 +48,11 @@
       <label class={label} for="{idPrefix}-max">Max (seconds)</label>
       <input id="{idPrefix}-max" type="number" min="0" max={SEC_CAP} class={input} bind:value={maxSec} />
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">Longest wait for a turn. 0 = {MAX_DEFAULT} s.</p>
+    </div>
+    <div>
+      <label class={label} for="{idPrefix}-poll">Poll every (seconds)</label>
+      <input id="{idPrefix}-poll" type="number" min="0" max={SEC_CAP} class={input} bind:value={pollSec} />
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">Longest gap between thread reads when no Slack event arrives. 0 = up to 10 s.</p>
     </div>
   </div>
   {#if why}<p class="text-xs text-neg-400">{why}</p>{/if}
