@@ -6,7 +6,10 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+- **Team** — persistent agents at `/tools/agents/team` with persona, access checklist, Captain, @mentions and group chats, sharing, Scheduled, remote agents (A2A, Slack, plugin) and Connections (Slack, Telegram, A2A, REST). See [Team](/guide/agents/team/).
+- **Slack remote target search** — pick the DM user/bot or channel by name (`users:read`, `channels:read`, `groups:read`); the id can still be typed.
+- **Open Team when I open Agents** is now off by default (opt-in).
+- **Plugin platform** — job, tool and service plugins from upload, URL or GitHub sources. See [Plugins](/plugins/overview).
 
 ---
 

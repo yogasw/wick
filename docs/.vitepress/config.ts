@@ -155,6 +155,17 @@ export default withMermaid(defineConfig({
           { text: 'Pool & Sessions', link: '/guide/agents/pool' },
           { text: 'Memory Guard', link: '/guide/agents/memory-guard' },
           { text: 'Sub-agents', link: '/guide/agents/sub-agents' },
+          {
+            text: 'Team',
+            collapsed: false,
+            items: [
+              { text: 'Overview', link: '/guide/agents/team/' },
+              { text: 'Access & sharing', link: '/guide/agents/team/access-sharing' },
+              { text: 'Mentions & remote agents', link: '/guide/agents/team/mentions-remote' },
+              { text: 'Connections', link: '/guide/agents/team/connections' },
+              { text: 'Scheduled', link: '/guide/agents/team/scheduled' },
+            ],
+          },
           { text: 'Source Control', link: '/guide/agents/source-control' },
           { text: 'AI Router', link: '/guide/agents/airouter' },
           { text: 'Command Gate', link: '/guide/command-gate' },
