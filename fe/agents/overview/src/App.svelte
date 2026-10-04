@@ -243,7 +243,7 @@
             <div class="mt-2 flex items-start gap-2 rounded-lg bg-white-200 dark:bg-navy-800 px-3 py-2" data-testid="queue-reason">
               <svg viewBox="0 0 16 16" class="mt-0.5 h-4 w-4 shrink-0 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M8 4.5V8l2.5 1.5" stroke-linecap="round"></path></svg>
               <div class="min-w-0 text-xs">
-                <p class="font-medium text-black-900 dark:text-white-100">{queueExplain.title}{#if queueExplain.since}<span class="font-normal text-black-700 dark:text-black-600"> · {queueExplain.since}</span>{/if}</p>
+                <p class="font-medium text-black-900 dark:text-white-100">{queueExplain.title}{#if queueExplain.since}<span class="font-normal text-black-700 dark:text-black-600">{" · "}{queueExplain.since}</span>{/if}</p>
                 <p class="mt-0.5 text-black-700 dark:text-black-600">{queueExplain.detail} {queueExplain.next}</p>
               </div>
             </div>
@@ -296,7 +296,7 @@
                 <span class="block truncate font-mono text-xs text-black-900 dark:text-white-100">{shortID(q.session_id)}</span>
               {/if}
               <span class="block text-[11px] text-black-700 dark:text-black-600">
-                {#if q.project}{q.project} · {/if}{fmtWait(q.waiting_ms)}
+                {#if q.project}{q.project}{" · "}{/if}{fmtWait(q.waiting_ms)}
               </span>
             </a>
             <button

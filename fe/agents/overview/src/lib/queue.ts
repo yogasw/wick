@@ -20,6 +20,15 @@ export interface QueueExplain {
   since: string;
 }
 
+// sentence capitalises a guard detail and ends it with a full stop, so it
+// reads as one sentence before "New chats start when …".
+function sentence(s: string): string {
+  const t = s.trim();
+  if (!t) return t;
+  const c = t[0].toUpperCase() + t.slice(1);
+  return /[.!?]$/.test(c) ? c : c + ".";
+}
+
 export function explainQueue(r: QueueReason | null | undefined, active: number, poolMax: number, now = Date.now()): QueueExplain {
   const sinceMs = r?.since ? Date.parse(r.since) : NaN;
   const since = Number.isFinite(sinceMs) && sinceMs > 0
@@ -29,7 +38,7 @@ export function explainQueue(r: QueueReason | null | undefined, active: number, 
     case "guard_hold":
       return {
         title: "Paused by Resource Guard",
-        detail: r.detail ? r.detail.replace(/;?\s*stopping agent work.*$/, "") : "The machine is close to running out of CPU or memory.",
+        detail: r.detail ? sentence(r.detail.replace(/;?\s*stopping agent work.*$/, "")) : "The machine is close to running out of CPU or memory.",
         next: r.safe_pct ? `New chats start when CPU and memory drop under ${r.safe_pct}%.` : "New chats start once CPU and memory are back to normal.",
         since,
       };

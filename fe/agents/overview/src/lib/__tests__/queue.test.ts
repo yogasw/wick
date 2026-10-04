@@ -18,7 +18,7 @@ describe("explainQueue", () => {
       1, 3, now,
     );
     expect(e.title).toBe("Paused by Resource Guard");
-    expect(e.detail).toContain("CPU 100%");
+    expect(e.detail).toBe("Host near a hang (CPU 100% busy with pressure 40% for 30s).");
     expect(e.detail).not.toContain("stopping agent work");
     expect(e.next).toContain("under 80%");
     expect(e.since).toMatch(/^since 13[:.]46 \(26m ago\)$/);
