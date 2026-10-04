@@ -2,6 +2,7 @@
   import { ToastHost, ConfirmDialog } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import { fetchOverview, fetchTeam, killSession, dequeueSession } from "$lib/api.js";
+  import { explainQueue, waitText } from "$lib/queue.js";
   import type { QueuedEntry, ActiveEntry, OverviewStats, TeamResponse } from "$lib/types.js";
   import { AgentAvatar } from "@wick-fe/common-avatar";
 
@@ -39,8 +40,10 @@
   }
 
   function fmtWait(ms: number): string {
-    return `waiting ${Math.floor(ms / 1000)}s`;
+    return `waiting ${waitText(ms)}`;
   }
+
+  const queueExplain = $derived(explainQueue(stats.queue_reason, stats.active, stats.pool_max));
 
   const filteredQueue = $derived(
     queueSearch.trim() === ""
@@ -229,32 +232,42 @@
   </div>
 
   {#if queued.length > 0}
-    <div class="rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 shadow-sm overflow-visible">
-      <div class="border-b border-amber-300 dark:border-amber-700 px-5 py-3">
-        <div class="flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <h2 class="text-sm font-semibold text-amber-800 dark:text-amber-300">Queue</h2>
-            <p class="text-xs text-amber-700 dark:text-amber-400 mt-0.5">Sessions waiting for a slot. Kill to release — killed entries won't execute.</p>
+    <!-- Neutral card: waiting is a state, not an error. Red is kept for the
+         Kill actions only. The headline says WHY sessions wait, read from
+         the pool / Resource Guard state the server reports. -->
+    <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-visible" data-testid="queue-card">
+      <div class="border-b border-white-300 dark:border-navy-600 px-5 py-3">
+        <div class="flex items-start justify-between gap-3 flex-wrap">
+          <div class="min-w-0">
+            <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Queue <span class="ml-1 rounded-full bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 text-[11px] font-medium text-black-800 dark:text-black-600">{queued.length}</span></h2>
+            <div class="mt-2 flex items-start gap-2 rounded-lg bg-white-200 dark:bg-navy-800 px-3 py-2" data-testid="queue-reason">
+              <svg viewBox="0 0 16 16" class="mt-0.5 h-4 w-4 shrink-0 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M8 4.5V8l2.5 1.5" stroke-linecap="round"></path></svg>
+              <div class="min-w-0 text-xs">
+                <p class="font-medium text-black-900 dark:text-white-100">{queueExplain.title}{#if queueExplain.since}<span class="font-normal text-black-700 dark:text-black-600"> · {queueExplain.since}</span>{/if}</p>
+                <p class="mt-0.5 text-black-700 dark:text-black-600">{queueExplain.detail} {queueExplain.next}</p>
+              </div>
+            </div>
           </div>
-          <button
-            type="button"
-            disabled={selected.size === 0}
-            onclick={killSelected}
-            class="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-red-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >Kill selected ({selected.size})</button>
+          {#if selected.size > 0}
+            <button
+              type="button"
+              onclick={killSelected}
+              class="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-red-700 transition-colors"
+            >Kill selected ({selected.size})</button>
+          {/if}
         </div>
         <div class="mt-3 flex items-center gap-3">
-          <label class="flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300 cursor-pointer shrink-0">
+          <label class="flex items-center gap-2 text-xs text-black-800 dark:text-black-600 cursor-pointer shrink-0">
             <input
               type="checkbox"
               checked={allChecked}
               onchange={toggleAll}
-              class="h-3.5 w-3.5 accent-red-600 rounded cursor-pointer"
+              class="h-3.5 w-3.5 rounded cursor-pointer"
             />
             Select all
           </label>
           <div class="relative flex-1 min-w-0">
-            <svg viewBox="0 0 16 16" class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-amber-600 dark:text-amber-500 pointer-events-none" fill="none" stroke="currentColor" stroke-width="1.5">
+            <svg viewBox="0 0 16 16" class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-black-600 dark:text-black-700 pointer-events-none" fill="none" stroke="currentColor" stroke-width="1.5">
               <circle cx="6.5" cy="6.5" r="4.5"></circle>
               <path d="M10.5 10.5l3 3" stroke-linecap="round"></path>
             </svg>
@@ -262,19 +275,19 @@
               type="text"
               bind:value={queueSearch}
               placeholder="Filter queue by chat, project, or id..."
-              class="w-full rounded-md border border-amber-300 dark:border-amber-700 bg-white-100 dark:bg-navy-800 pl-8 pr-3 py-1.5 text-xs text-black-900 dark:text-white-100 placeholder-amber-600/70 dark:placeholder-amber-500/60 focus:border-amber-500 focus:outline-none"
+              class="w-full rounded-md border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 pl-8 pr-3 py-1.5 text-xs text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:outline-none"
             />
           </div>
         </div>
       </div>
-      <ul class="divide-y divide-amber-200 dark:divide-amber-800 text-sm">
+      <ul class="divide-y divide-white-300 dark:divide-navy-600 text-sm">
         {#each filteredQueue as q (q.session_id)}
           <li class="group flex items-center gap-3 px-5 py-2.5">
             <input
               type="checkbox"
               checked={selected.has(q.session_id)}
               onchange={() => toggleOne(q.session_id)}
-              class="h-3.5 w-3.5 accent-red-600 rounded cursor-pointer shrink-0"
+              class="h-3.5 w-3.5 rounded cursor-pointer shrink-0"
             />
             <a href={`${base}/sessions/${q.session_id}`} class="min-w-0 flex-1 hover:underline">
               {#if q.label}
@@ -282,20 +295,22 @@
               {:else}
                 <span class="block truncate font-mono text-xs text-black-900 dark:text-white-100">{shortID(q.session_id)}</span>
               {/if}
-              <span class="block text-[11px] text-amber-700 dark:text-amber-400">
+              <span class="block text-[11px] text-black-700 dark:text-black-600">
                 {#if q.project}{q.project} · {/if}{fmtWait(q.waiting_ms)}
               </span>
             </a>
             <button
               type="button"
               onclick={() => confirmDequeue(q.session_id)}
-              class="shrink-0 rounded-md border border-red-300 dark:border-red-800 px-2 py-0.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+              title="Kill this queue entry"
+              aria-label="Kill queue entry"
+              class="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-black-600 dark:text-black-700 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
             >Kill</button>
           </li>
         {/each}
       </ul>
       {#if filteredQueue.length === 0}
-        <p class="px-5 py-4 text-center text-xs text-amber-700 dark:text-amber-400">No queued sessions match your filter.</p>
+        <p class="px-5 py-4 text-center text-xs text-black-700 dark:text-black-600">No queued sessions match your filter.</p>
       {/if}
     </div>
   {/if}

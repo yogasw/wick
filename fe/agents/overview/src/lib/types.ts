@@ -14,10 +14,18 @@ export interface ActiveEntry {
   project_id: string;
 }
 
+export interface QueueReason {
+  kind: "guard_hold" | "slots_full" | "waiting";
+  detail?: string;
+  since?: string;
+  safe_pct?: number;
+}
+
 export interface OverviewStats {
   active: number;
   pool_max: number;
   queue_len: number;
+  queue_reason?: QueueReason | null;
 }
 
 export interface OverviewResponse {
