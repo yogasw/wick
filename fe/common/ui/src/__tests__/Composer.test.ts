@@ -746,30 +746,47 @@ describe("Composer — @ mention groups", () => {
   });
 });
 
-describe("Composer — Stop button", () => {
-  test("hidden without onStop, and hidden while idle", () => {
+describe("Composer — Send/Stop button", () => {
+  test("idle shows only Send, with or without onStop", () => {
     const { unmount } = render(Composer, { props: { onSend: vi.fn(), running: true } });
     expect(screen.queryByTestId("composer-stop")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
     unmount();
     render(Composer, { props: { onSend: vi.fn(), onStop: vi.fn() } });
     expect(screen.queryByTestId("composer-stop")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
   });
 
-  test("shown while running beside Send, and calls onStop", async () => {
+  test("running turns Send into one Stop button with a spinner, and calls onStop", async () => {
     const onStop = vi.fn();
     render(Composer, { props: { onSend: vi.fn(), running: true, onStop } });
-    const btn = screen.getByRole("button", { name: "Stop the agent" });
+    const btn = screen.getByRole("button", { name: "Stop" });
     expect(btn.getAttribute("title")).toBe("Stop (the chat history is kept)");
-    expect(screen.getByRole("button", { name: /send/i })).toBeTruthy();
+    expect(btn.querySelector(".stop-ring")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.getAllByTestId("composer-stop")).toHaveLength(1);
     await fireEvent.click(btn);
     expect(onStop).toHaveBeenCalledOnce();
   });
 
-  test("queued reads Cancel", async () => {
+  test("running still sends typed text on Enter", async () => {
+    const onSend = vi.fn();
+    const onStop = vi.fn();
+    render(Composer, { props: { onSend, running: true, onStop } });
+    const textarea = screen.getByRole("textbox");
+    await fireEvent.input(textarea, { target: { value: "one more thing" } });
+    await fireEvent.keyDown(textarea, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith({ text: "one more thing", files: [] });
+    expect(onStop).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+  });
+
+  test("queued reads Cancel in the same slot", async () => {
     const onStop = vi.fn();
     render(Composer, { props: { onSend: vi.fn(), queued: true, onStop } });
     const btn = screen.getByTestId("composer-stop");
     expect(btn.textContent?.trim()).toBe("Cancel");
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     await fireEvent.click(btn);
     expect(onStop).toHaveBeenCalledOnce();
   });

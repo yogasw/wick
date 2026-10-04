@@ -40,10 +40,10 @@ describe("GroupView — composer Stop", () => {
 
   test("kills the backing session of every member typing, no confirm", async () => {
     render(GroupView, { props: { base: "/api", group, agents: [], onSettings: () => {} } as never });
-    expect(screen.queryByRole("button", { name: "Stop the agent" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
     sources[0].emit("group_typing", { agent_id: "a1", state: "start", session_id: "s-ana" });
     sources[0].emit("group_typing", { agent_id: "b1", state: "start", session_id: "s-bob" });
-    await fireEvent.click(await screen.findByRole("button", { name: "Stop the agent" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
     await waitFor(() => expect(toastOk).toHaveBeenCalledWith("Stopped"));
     expect(killProcess).toHaveBeenCalledWith("/api", "s-ana");
     expect(killProcess).toHaveBeenCalledWith("/api", "s-bob");

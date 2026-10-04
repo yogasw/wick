@@ -825,14 +825,14 @@ describe("DetailView — composer Stop", () => {
 
   test("no Stop while the agent is idle", () => {
     render(DetailView, { props: TEAM_PROPS });
-    expect(screen.queryByRole("button", { name: "Stop the agent" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
   });
 
   test("Team mode: Stop shows while running and kills without a confirm", async () => {
     threadState.typing = { active: true };
     render(DetailView, { props: TEAM_PROPS as never });
     expect(screen.queryByRole("button", { name: /kill session/i })).toBeNull();
-    await fireEvent.click(screen.getByRole("button", { name: "Stop the agent" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(killProcess).toHaveBeenCalledWith("/api", "test-sess");
     expect(screen.queryByText("Stop this agent?")).toBeNull();
   });
@@ -849,7 +849,7 @@ describe("DetailView — composer Stop", () => {
     render(DetailView, { props: TEAM_PROPS as never });
     await waitFor(() => expect(getSubAgentPanel).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 0));
-    await fireEvent.click(screen.getByRole("button", { name: "Stop the agent" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(killProcess).not.toHaveBeenCalled();
     expect(screen.getByText("Stop this agent and its sub-agents?")).toBeDefined();
     await fireEvent.click(screen.getByRole("button", { name: /^stop all$/i }));

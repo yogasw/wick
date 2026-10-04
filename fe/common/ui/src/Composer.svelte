@@ -63,10 +63,10 @@
         in the toolbar beside the context meter rather than on a row of
         its own under the composer. */
     caption?: string;
-    /** A turn is running: with onStop set, a Stop button sits beside Send
-        (Send stays, so a message can still be queued behind the turn). */
+    /** A turn is running: with onStop set, the Send button becomes Stop
+        (Enter still sends, so a message can be queued behind the turn). */
     running?: boolean;
-    /** The agent is waiting for a pool slot: the same button reads
+    /** The agent is waiting for a pool slot: the action button reads
         "Cancel" and drops the queued spawn instead. */
     queued?: boolean;
     /** Stop the running turn / cancel the queued spawn. Omit → no button. */
@@ -1556,41 +1556,48 @@
           {@render provIcon(providerChip.value, "h-5 w-5")}
         </button>
       {/if}
-      {#if onStop && (running || queued)}
-        {#if queued}
-          <button
-            type="button"
-            aria-label="Cancel the queued agent"
-            title="Cancel (the agent is still waiting for a slot)"
-            data-testid="composer-stop"
-            class="inline-flex items-center justify-center shrink-0 h-8 px-3 rounded-lg border border-white-300 dark:border-navy-600 text-xs font-medium text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600 transition-colors"
-            onclick={onStop}
-          >Cancel</button>
-        {:else}
-          <button
-            type="button"
-            aria-label="Stop the agent"
-            title="Stop (the chat history is kept)"
-            data-testid="composer-stop"
-            class="inline-flex items-center justify-center shrink-0 h-8 w-8 rounded-lg border border-white-300 dark:border-navy-600 text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600 transition-colors"
-            onclick={onStop}
-          >
-            <svg viewBox="0 0 16 16" class="h-3 w-3" fill="currentColor" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5"></rect></svg>
-          </button>
-        {/if}
+      {#if onStop && queued}
+        <!-- One action slot: while the spawn waits for a pool slot it
+             reads Cancel; Enter still queues a typed message. -->
+        <button
+          type="button"
+          aria-label="Cancel the queued agent"
+          title="Cancel (the agent is still waiting for a slot)"
+          data-testid="composer-stop"
+          class="inline-flex items-center justify-center shrink-0 h-8 px-3 rounded-lg border border-white-300 dark:border-navy-600 text-xs font-medium text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600 transition-colors"
+          onclick={onStop}
+        >Cancel</button>
+      {:else if onStop && running}
+        <!-- Send turns into Stop while a turn runs: a ring spins around ■.
+             Enter still sends, so a message can be queued behind the turn. -->
+        <button
+          type="button"
+          aria-label="Stop"
+          title="Stop (the chat history is kept)"
+          data-testid="composer-stop"
+          class="relative inline-flex items-center justify-center shrink-0 h-8 w-8 rounded-lg bg-green-500 text-white-100 transition-colors hover:bg-green-600 active:bg-green-700"
+          onclick={onStop}
+        >
+          <svg viewBox="0 0 24 24" class="stop-ring absolute h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" stroke-opacity="0.3"></circle>
+            <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"></path>
+          </svg>
+          <svg viewBox="0 0 16 16" class="h-2.5 w-2.5" fill="currentColor" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2"></rect></svg>
+        </button>
+      {:else}
+        <button
+          type="button"
+          aria-label="Send"
+          disabled={!canSend}
+          class="inline-flex items-center justify-center gap-1.5 shrink-0 rounded-lg bg-green-500 text-white-100 font-medium transition-colors hover:bg-green-600 active:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed {submitLabel ? 'px-3 py-1.5 text-xs' : 'h-8 w-8'}"
+          onclick={doSend}
+        >
+          {#if submitLabel}<span>{submitLabel}</span>{/if}
+          <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M2.5 8h11M9 3.5L13.5 8 9 12.5" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </button>
       {/if}
-      <button
-        type="button"
-        aria-label="Send"
-        disabled={!canSend}
-        class="inline-flex items-center justify-center gap-1.5 shrink-0 rounded-lg bg-green-500 text-white-100 font-medium transition-colors hover:bg-green-600 active:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed {submitLabel ? 'px-3 py-1.5 text-xs' : 'h-8 w-8'}"
-        onclick={doSend}
-      >
-        {#if submitLabel}<span>{submitLabel}</span>{/if}
-        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5">
-          <path d="M2.5 8h11M9 3.5L13.5 8 9 12.5" stroke-linecap="round" stroke-linejoin="round"></path>
-        </svg>
-      </button>
     </div>
   </div>
   </div>
@@ -1621,5 +1628,15 @@
   }
   .no-scrollbar::-webkit-scrollbar {
     display: none; /* Chrome / Safari */
+  }
+  /* The ring on the Stop button; reduced motion keeps a still ■ + ring. */
+  .stop-ring {
+    animation: stop-ring-spin 1s linear infinite;
+  }
+  @keyframes stop-ring-spin {
+    to { transform: rotate(360deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .stop-ring { animation: none; }
   }
 </style>
