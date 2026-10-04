@@ -118,7 +118,7 @@
     class="inline-flex max-w-full items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 px-2.5 py-1 text-[11px] text-black-900 dark:text-white-100 hover:bg-white-300 dark:hover:bg-navy-600 disabled:cursor-default disabled:opacity-80"
   >
     <span aria-hidden="true">{icon}</span>
-    <span class="truncate font-mono {fileState?.state === 'missing' || blobGone ? 'line-through decoration-black-500' : ''}">{text}</span>
+    <span class="truncate font-mono {fileState?.state === 'missing' || blobGone ? 'line-through' : ''}">{text}</span>
     {#if checking}<span class="opacity-60">memeriksa…</span>{/if}
     {#if display.too_large && !fromPath}<span class="text-amber-700 dark:text-amber-300">— too large to keep in trace</span>{/if}
     {#if loading}<span class="opacity-60">loading…</span>{/if}

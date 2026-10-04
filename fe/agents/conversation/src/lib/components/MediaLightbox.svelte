@@ -176,7 +176,7 @@
     <div class="flex items-center justify-between gap-4 px-4 py-2 text-white-100">
       <span class="flex min-w-0 items-center gap-2">
         <span class="text-sm truncate">{item.name}</span>
-        {#if item.note}<span data-lightbox-note class="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 text-[11px] text-amber-200">{item.note}</span>{/if}
+        {#if item.note}<span data-lightbox-note class="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 text-[11px] text-amber-300">{item.note}</span>{/if}
       </span>
       <div class="flex items-center gap-1.5 shrink-0">
         {#if many}
