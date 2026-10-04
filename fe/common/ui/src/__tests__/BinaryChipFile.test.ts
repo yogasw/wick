@@ -36,8 +36,8 @@ describe("traceFileState", () => {
   it("changed: written after the call, sizes in the title", () => {
     const s = traceFileState({ status: "present", size: 9216, mtime: CALLED + 120_000 }, 8192, CALLED);
     expect(s.state).toBe("changed");
-    expect(s.label).toBe("diperbarui setelah trace ini");
-    expect(s.title).toContain("8 KB tercatat, sekarang 9 KB");
+    expect(s.label).toBe("changed since this trace");
+    expect(s.title).toContain("8 KB recorded, now 9 KB");
   });
   it("a size difference alone does not claim a change when the mtime says otherwise", () => {
     expect(traceFileState({ status: "present", size: 9216, mtime: CALLED - 1000 }, 8192, CALLED).state).toBe("same");
@@ -47,8 +47,8 @@ describe("traceFileState", () => {
     expect(traceFileState({ status: "present", size: 9216, mtime: 1 }).state).toBe("same");
   });
   it("missing and unknown", () => {
-    expect(traceFileState({ status: "missing" }).label).toBe("sudah dihapus");
-    expect(traceFileState({ status: "unknown" }).label).toBe("tidak bisa dicek");
+    expect(traceFileState({ status: "missing" }).label).toBe("deleted");
+    expect(traceFileState({ status: "unknown" }).label).toBe("can't check");
     expect(traceFileState(null).state).toBe("unknown");
   });
 });
@@ -75,15 +75,15 @@ describe("BinaryChip falls back to the file a call named", () => {
     const c = ctx({ status: "present", rel: "shots/shot.png", size: 9216, mtime: CALLED + 120_000 });
     const el = await chip(c);
     expect(el.dataset.fileState).toBe("changed");
-    expect(el.textContent).toContain("shot.png · PNG · 8 KB · diperbarui setelah trace ini");
-    expect(el.title).toContain("8 KB tercatat, sekarang 9 KB");
+    expect(el.textContent).toContain("shot.png · PNG · 8 KB · changed since this trace");
+    expect(el.title).toContain("8 KB recorded, now 9 KB");
     expect(el.disabled).toBe(false);
     globalThis.URL.createObjectURL = vi.fn(() => "blob:g");
     await fireEvent.click(el);
     const note = await waitFor(() => el.parentElement!.querySelector("[data-binary-note]")!);
-    expect(note.textContent).toBe("Ini versi sekarang, bukan versi saat trace");
+    expect(note.textContent).toBe("Current file, not the version in this trace");
     await fireEvent.click(el.parentElement!.querySelector("img")!.closest("button")!);
-    expect(c.onOpenMedia).toHaveBeenCalledWith(expect.objectContaining({ note: "Ini versi sekarang, bukan versi saat trace" }));
+    expect(c.onOpenMedia).toHaveBeenCalledWith(expect.objectContaining({ note: "Current file, not the version in this trace" }));
   });
 
   it("deleted: disabled, keeps the recorded size", async () => {
@@ -91,16 +91,16 @@ describe("BinaryChip falls back to the file a call named", () => {
     const el = await chip(c);
     expect(el.dataset.fileState).toBe("missing");
     expect(el.disabled).toBe(true);
-    expect(el.textContent).toContain("shot.png · PNG · 8 KB · sudah dihapus");
-    expect(el.title).toBe("File sudah dihapus dari disk");
+    expect(el.textContent).toContain("shot.png · PNG · 8 KB · deleted");
+    expect(el.title).toBe("Deleted from disk");
   });
 
   it("outside the session folder: cannot be checked, no claim", async () => {
     const el = await chip(ctx({ status: "unknown" }));
     expect(el.dataset.fileState).toBe("unknown");
     expect(el.disabled).toBe(true);
-    expect(el.textContent).toContain("· tidak bisa dicek");
-    expect(el.textContent).not.toContain("dihapus");
+    expect(el.textContent).toContain("· can't check");
+    expect(el.textContent).not.toContain("deleted");
   });
 
   it("a file deleted between the check and the click turns into deleted, not an error", async () => {
@@ -128,7 +128,7 @@ describe("BinaryChip falls back to the file a call named", () => {
     const el = container.querySelector("[data-binary-chip]") as HTMLButtonElement;
     expect(statPath).not.toHaveBeenCalled();
     await fireEvent.click(el);
-    await waitFor(() => expect(el.textContent).toContain("output trace sudah dihapus"));
+    await waitFor(() => expect(el.textContent).toContain("trace output deleted"));
     expect(el.disabled).toBe(true);
   });
 });

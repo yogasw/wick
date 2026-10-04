@@ -31,14 +31,14 @@
   let rel = "";
 
   const available = $derived(inTrace || (fromPath && (fileState?.state === "same" || fileState?.state === "changed")));
-  const note = $derived(fileState?.state === "changed" ? "Ini versi sekarang, bukan versi saat trace" : "");
-  const suffix = $derived(blobGone ? "output trace sudah dihapus" : (fromPath ? fileState?.label ?? "" : ""));
+  const note = $derived(fileState?.state === "changed" ? "Current file, not the version in this trace" : "");
+  const suffix = $derived(blobGone ? "trace output deleted" : (fromPath ? fileState?.label ?? "" : ""));
   const text = $derived([name, label, size, suffix].filter(Boolean).join(" · "));
   const title = $derived(
     display.too_large && !fromPath ? "Too large to keep in the trace"
-      : blobGone ? "Output trace sudah dihapus"
+      : blobGone ? "Trace output deleted"
       : inTrace ? "Click to load"
-      : fromPath ? (fileState?.title ?? "Memeriksa file…")
+      : fromPath ? (fileState?.title ?? "Checking file…")
       : "Not stored in the trace",
   );
 

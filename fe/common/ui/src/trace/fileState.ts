@@ -6,7 +6,7 @@ import type { TraceFileStat } from "./types.js";
    present/missing. */
 export type TraceFileState = {
   state: "same" | "changed" | "missing" | "unknown";
-  /* Short suffix for the chip ("sudah dihapus"); empty when same. */
+  /* Short suffix for the chip ("deleted"); empty when same. */
   label: string;
   /* Longer explanation for the tooltip. */
   title: string;
@@ -18,18 +18,18 @@ const SLACK_MS = 2000;
 
 export function traceFileState(st: TraceFileStat | null | undefined, recordedBytes?: number, calledAt?: number): TraceFileState {
   if (!st || st.status === "unknown") {
-    return { state: "unknown", label: "tidak bisa dicek", title: "File di luar folder sesi atau tidak bisa dicek" };
+    return { state: "unknown", label: "can't check", title: "Outside the session folder or can't be checked" };
   }
-  if (st.status === "missing") return { state: "missing", label: "sudah dihapus", title: "File sudah dihapus dari disk" };
+  if (st.status === "missing") return { state: "missing", label: "deleted", title: "Deleted from disk" };
   const sizes = recordedBytes && st.size !== undefined && st.size !== recordedBytes
-    ? ` — ${humanBytes(recordedBytes)} tercatat, sekarang ${humanBytes(st.size)}`
+    ? ` — ${humanBytes(recordedBytes)} recorded, now ${humanBytes(st.size)}`
     : "";
   // The file's mtime is the proof it was written after the call. A size
   // difference alone is not: a tool may re-encode what it returns.
   const newer = !!calledAt && !!st.mtime && st.mtime > calledAt + SLACK_MS;
   const sizeOnly = !calledAt && !!sizes;
   if (newer || sizeOnly) {
-    return { state: "changed", label: "diperbarui setelah trace ini", title: `Diperbarui setelah trace ini${sizes}` };
+    return { state: "changed", label: "changed since this trace", title: `Changed since this trace${sizes}` };
   }
   return { state: "same", label: "", title: "Click to load from file" };
 }
