@@ -34,6 +34,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/pkg/slackmd"
 )
 
 const (
@@ -2464,10 +2465,7 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 	}
 	// While streaming, only the first chunk is shown in the live message;
 	// any overflow lands as continuation replies during the Done reconcile.
-	shown := body
-	if len(shown) > maxSlackChunk {
-		shown = chunkText(body, maxSlackChunk)[0]
-	}
+	shown := replyChunks(body)[0]
 
 	s.cfgMu.Lock()
 	api := s.api
@@ -2479,7 +2477,7 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 	if liveTS == "" {
 		var newTS string
 		s.withBackoff(func() error {
-			ts, err := s.postThread(api, channelID, threadTS, slackgo.MsgOptionText(shown, false))
+			ts, err := s.postThread(api, channelID, threadTS, replyMsgOptions(shown, false)...)
 			if err == nil {
 				newTS = ts
 			}
@@ -2500,7 +2498,7 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 	s.withBackoff(func() error {
 		_, _, _, err := api.UpdateMessage(
 			channelID, liveTS,
-			slackgo.MsgOptionText(shown, false),
+			replyMsgOptions(shown, slackmd.NeedsBlock(lastSent))...,
 		)
 		return err
 	})
@@ -2644,7 +2642,7 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 		s.withBackoff(func() error {
 			_, _, _, err := api.UpdateMessage(
 				channelID, liveTS,
-				slackgo.MsgOptionText(plan.first, false),
+				replyMsgOptions(plan.first, slackmd.NeedsBlock(lastSent))...,
 			)
 			return err
 		})
@@ -2678,7 +2676,7 @@ func reconcilePlan(text, liveTS, lastSent string) replyPlan {
 	if liveTS == "" {
 		return replyPlan{postFresh: true}
 	}
-	chunks := chunkText(text, maxSlackChunk)
+	chunks := replyChunks(text)
 	return replyPlan{
 		update:        chunks[0] != lastSent,
 		first:         chunks[0],
@@ -3414,7 +3412,7 @@ func (s *Channel) setReaction(newReaction, channelID, msgTS, oldReaction string)
 }
 
 func (s *Channel) postChunked(channelID, threadTS, text string) {
-	chunks := chunkText(text, maxSlackChunk)
+	chunks := replyChunks(text)
 	for _, chunk := range chunks {
 		s.postReply(channelID, threadTS, chunk)
 	}

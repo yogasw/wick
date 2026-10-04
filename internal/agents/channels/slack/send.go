@@ -30,6 +30,7 @@ import (
 	slackgo "github.com/slack-go/slack"
 
 	"github.com/yogasw/wick/internal/appname"
+	"github.com/yogasw/wick/internal/pkg/slackmd"
 )
 
 // ConnectorTokenFn resolves an xoxp user token from the connectors service
@@ -151,15 +152,19 @@ func (s *Channel) sendHandler() http.Handler {
 			return
 		}
 
-		// Build Block Kit message with muted context-block footer.
-		blocks := []slackgo.Block{
-			slackgo.NewSectionBlock(
-				slackgo.NewTextBlockObject(slackgo.MarkdownType, body.Text, false, false),
-				nil, nil,
-			),
-			s.signedContextBlock(),
+		// Build Block Kit message with muted context-block footer. Markdown
+		// that mrkdwn cannot render (tables, headings, …) goes in a markdown
+		// block with a plain fallback text; anything else keeps the section.
+		var opts []slackgo.MsgOption
+		var bodyBlock slackgo.Block = slackgo.NewSectionBlock(
+			slackgo.NewTextBlockObject(slackgo.MarkdownType, body.Text, false, false),
+			nil, nil,
+		)
+		if slackmd.NeedsBlock(body.Text) && len(body.Text) <= slackmd.MaxBlockChars {
+			bodyBlock = slackgo.NewMarkdownBlock("", body.Text)
+			opts = append(opts, slackgo.MsgOptionText(slackmd.Fallback(body.Text), false))
 		}
-		opts := []slackgo.MsgOption{slackgo.MsgOptionBlocks(blocks...)}
+		opts = append(opts, slackgo.MsgOptionBlocks(bodyBlock, s.signedContextBlock()))
 
 		// Resolve the xoxp token for the sender when provided.
 		var xoxpClient *slackgo.Client
@@ -331,7 +336,7 @@ func (s *Channel) postReply(channelID, threadTS, text string) {
 	api := s.api
 	s.cfgMu.Unlock()
 	s.withBackoff(func() error {
-		_, err := s.postThread(api, channelID, threadTS, slackgo.MsgOptionText(text, false))
+		_, err := s.postThread(api, channelID, threadTS, replyMsgOptions(text, false)...)
 		return err
 	})
 }
