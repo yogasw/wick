@@ -25,6 +25,9 @@ func withOwnerLookup(t *testing.T, found bool) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "users.list") || strings.Contains(r.URL.Path, "users.info") {
+			t.Errorf("owner resolution called %s: only users.lookupByEmail may identify the owner", r.URL.Path)
+		}
 		if strings.Contains(r.URL.Path, "users.lookupByEmail") {
 			if !found || r.Form.Get("email") != "owner@example.test" {
 				_, _ = w.Write([]byte(`{"ok":false,"error":"users_not_found"}`))
@@ -81,14 +84,15 @@ func TestAgentSlackNewAppDefaultsToOwnerOnly(t *testing.T) {
 	if list, _ := settingValue(st, "allowed_users"); !strings.Contains(list, `"UOWNER"`) {
 		t.Fatalf("allowed_users = %q, want the owner", list)
 	}
-	if st.OwnerID != "UOWNER" || st.OwnerName != "Owner Person" {
-		t.Fatalf("owner = %q/%q", st.OwnerID, st.OwnerName)
+	if st.OwnerID != "UOWNER" || st.OwnerName != "Owner Person" || st.OwnerHandle != "owner" {
+		t.Fatalf("owner = %q/%q/%q", st.OwnerID, st.OwnerName, st.OwnerHandle)
 	}
 }
 
-// When Slack cannot find the owner the app stays open (no guessing by
-// name) and the settings carry no owner, so the card asks for a manual pick.
-func TestAgentSlackOwnerNotFoundStaysOpen(t *testing.T) {
+// When Slack cannot find the owner nothing is guessed by name: the app is
+// closed (whitelist, empty list) and the settings carry no owner, so the
+// card warns and asks for a manual pick.
+func TestAgentSlackOwnerNotFoundStaysClosed(t *testing.T) {
 	withAgentSlackWorld(t)
 	withOwnerLookup(t, false)
 	seedTeamProject(t, "p1", "u1")
@@ -98,8 +102,11 @@ func TestAgentSlackOwnerNotFoundStaysOpen(t *testing.T) {
 		t.Fatalf("connect: %d %s", w.Code, w.Body.String())
 	}
 	st := getSlackSettings(t, u, a.ID)
-	if mode, _ := settingValue(st, "users_mode"); mode != "all" {
-		t.Fatalf("users_mode = %q, want all", mode)
+	if mode, _ := settingValue(st, "users_mode"); mode != "whitelist" {
+		t.Fatalf("users_mode = %q, want whitelist", mode)
+	}
+	if list, _ := settingValue(st, "allowed_users"); list != "[]" {
+		t.Fatalf("allowed_users = %q, want an empty list", list)
 	}
 	if st.OwnerID != "" {
 		t.Fatalf("owner resolved without Slack: %q", st.OwnerID)
@@ -166,5 +173,19 @@ func TestAgentSlackSettingsGroupsAndPatch(t *testing.T) {
 	}
 	if v, _ := settingValue(getSlackSettings(t, u, a.ID), "bots_mode"); v != "whitelist" {
 		t.Fatalf("bots_mode after patch = %q", v)
+	}
+}
+
+// users.lookupByEmail needs users:read.email, so the app manifest asks for it.
+func TestAgentSlackManifestAsksForEmailScope(t *testing.T) {
+	withAgentSlackWorld(t)
+	seedTeamProject(t, "p1", "u1")
+	a := seedTeamAgent(t, "u1", "captain", "p1")
+	b, err := json.Marshal(agentSlackManifest(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"users:read.email"`) {
+		t.Fatalf("manifest lacks users:read.email: %s", b)
 	}
 }

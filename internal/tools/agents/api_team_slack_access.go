@@ -31,8 +31,9 @@ var agentSlackSettingGroups = map[string]bool{
 
 // Owner identity, stored on the connection row when it is first resolved.
 const (
-	agentSlackKeyOwnerSlackID   = "owner_slack_id"
-	agentSlackKeyOwnerSlackName = "owner_slack_name"
+	agentSlackKeyOwnerSlackID     = "owner_slack_id"
+	agentSlackKeyOwnerSlackName   = "owner_slack_name"
+	agentSlackKeyOwnerSlackHandle = "owner_slack_handle"
 )
 
 // agentSlackField is one setting of the Team card: the wick tag of a
@@ -87,8 +88,9 @@ func agentSlackSettingKey(key string) bool {
 }
 
 // agentSlackOwner resolves the agent owner's Slack user through the agent's
-// own bot (users.lookupByEmail) and remembers it on the row. Best effort:
-// "" when the owner has no email or Slack does not know it.
+// own bot (users.lookupByEmail, needs users:read.email) and remembers it on
+// the row. Email is the only key: "" when the owner has no email, the scope
+// is missing or Slack does not know it — a name is never matched instead.
 func agentSlackOwner(p entity.AgentPersona, m map[string]string, api *slackgo.Client) (id, name string) {
 	if m[agentSlackKeyOwnerSlackID] != "" {
 		return m[agentSlackKeyOwnerSlackID], m[agentSlackKeyOwnerSlackName]
@@ -106,7 +108,7 @@ func agentSlackOwner(p entity.AgentPersona, m map[string]string, api *slackgo.Cl
 		return "", ""
 	}
 	name = firstNonEmpty(su.RealName, su.Profile.DisplayName, su.Name, su.ID)
-	m[agentSlackKeyOwnerSlackID], m[agentSlackKeyOwnerSlackName] = su.ID, name
+	m[agentSlackKeyOwnerSlackID], m[agentSlackKeyOwnerSlackName], m[agentSlackKeyOwnerSlackHandle] = su.ID, name, su.Name
 	return su.ID, name
 }
 
@@ -119,19 +121,26 @@ func slackClient(token string) *slackgo.Client {
 	return slackgo.New(token, opts...)
 }
 
-// onlyOwnerAccess is the "Only me" default of a newly connected app: the
-// users whitelist holds the owner alone.
+// onlyOwnerAccess is the "Only me" default of a newly connected app: a
+// preset that fills the users whitelist with the owner alone. With no
+// resolved owner the whitelist stays empty — closed, never open to the
+// whole workspace — and the card asks for a manual pick.
 func onlyOwnerAccess(m map[string]string, ownerID, ownerName string) {
-	b, _ := json.Marshal([]map[string]string{{"id": ownerID, "name": ownerName}})
+	list := []map[string]string{}
+	if ownerID != "" {
+		list = append(list, map[string]string{"id": ownerID, "name": ownerName})
+	}
+	b, _ := json.Marshal(list)
 	m["users_mode"] = "whitelist"
 	m["allowed_users"] = string(b)
 }
 
 // AgentSlackSettings is GET /api/team/agents/{id}/slack/settings.
 type AgentSlackSettings struct {
-	Fields    []agentSlackField `json:"fields"`
-	OwnerID   string            `json:"owner_slack_id,omitempty"`
-	OwnerName string            `json:"owner_slack_name,omitempty"`
+	Fields      []agentSlackField `json:"fields"`
+	OwnerID     string            `json:"owner_slack_id,omitempty"`
+	OwnerName   string            `json:"owner_slack_name,omitempty"`
+	OwnerHandle string            `json:"owner_slack_handle,omitempty"`
 }
 
 func agentSlackSettingsOf(p entity.AgentPersona) (AgentSlackSettings, bool) {
@@ -148,9 +157,10 @@ func agentSlackSettingsOf(p entity.AgentPersona) (AgentSlackSettings, bool) {
 		}
 	}
 	return AgentSlackSettings{
-		Fields:    agentSlackSettingFields(m),
-		OwnerID:   m[agentSlackKeyOwnerSlackID],
-		OwnerName: m[agentSlackKeyOwnerSlackName],
+		Fields:      agentSlackSettingFields(m),
+		OwnerID:     m[agentSlackKeyOwnerSlackID],
+		OwnerName:   m[agentSlackKeyOwnerSlackName],
+		OwnerHandle: m[agentSlackKeyOwnerSlackHandle],
 	}, true
 }
 

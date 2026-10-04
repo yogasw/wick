@@ -24,6 +24,7 @@
   let values = $state<Record<string, string>>({});
   let ownerID = $state("");
   let ownerName = $state("");
+  let ownerHandle = $state("");
   let loadError = $state("");
   let saveState = $state<"" | "saving" | "saved" | "error">("");
   let customPeople = $state(false);
@@ -35,6 +36,7 @@
     values = Object.fromEntries(s.fields.map((f) => [f.key, f.value]));
     ownerID = s.owner_slack_id ?? "";
     ownerName = s.owner_slack_name ?? "";
+    ownerHandle = s.owner_slack_handle ?? "";
   }
 
   $effect(() => {
@@ -113,13 +115,13 @@
         {#if g.title === "Access Control"}
           <fieldset data-testid="people-choice">
             <legend class="text-xs font-medium text-black-900 dark:text-white-100">People</legend>
-            {#each [["all", "Everyone in the workspace"], ["me", ownerID ? `Only me (${ownerName || "me"} · ${ownerID})` : "Only me"], ["custom", "Specific people & groups"]] as [c, lbl] (c)}
+            {#each [["all", "Everyone in the workspace"], ["me", ownerID ? `Only me (@${ownerHandle || ownerName} · ${ownerID})` : "Only me"], ["custom", "Specific people & groups"]] as [c, lbl] (c)}
               <label class="mt-1 flex items-center gap-2 text-xs text-black-900 dark:text-white-100">
                 <input type="radio" name="people-{agent.id}" value={c} checked={choice === c} disabled={c === "me" && !ownerID} onchange={() => pickPeople(c as PeopleChoice)} />
                 {lbl}
               </label>
             {/each}
-            {#if !ownerID}<p class="mt-1 text-xs text-neg-400" data-testid="owner-unresolved">Couldn't find your Slack account by email in this workspace — pick people manually under "Specific people & groups".</p>{/if}
+            {#if !ownerID}<p class="mt-1 text-xs text-neg-400" data-testid="owner-unresolved">Your account wasn't found in this workspace — pick people manually.</p>{/if}
           </fieldset>
         {/if}
         {#each g.fields as f (f.key)}

@@ -44,7 +44,7 @@ describe("SlackSettingsGroups", () => {
   beforeEach(() => patch.mockClear());
 
   test("renders the four groups, all closed, with Bots inside Access Control", async () => {
-    current = { fields: fields({ users_mode: "whitelist", allowed_users: ONLY_ME }), owner_slack_id: "UOWNER", owner_slack_name: "Yoga" };
+    current = { fields: fields({ users_mode: "whitelist", allowed_users: ONLY_ME }), owner_slack_id: "UOWNER", owner_slack_name: "Yoga", owner_slack_handle: "yoga" };
     render(SlackSettingsGroups, { props: { base: "/b", agent } });
     await waitFor(() => expect(screen.getAllByTestId("slack-group").length).toBe(4));
     const groups = screen.getAllByTestId("slack-group") as HTMLDetailsElement[];
@@ -55,10 +55,10 @@ describe("SlackSettingsGroups", () => {
   });
 
   test("a new app reads as Only me with the owner's handle and id", async () => {
-    current = { fields: fields({ users_mode: "whitelist", allowed_users: ONLY_ME }), owner_slack_id: "UOWNER", owner_slack_name: "Yoga" };
+    current = { fields: fields({ users_mode: "whitelist", allowed_users: ONLY_ME }), owner_slack_id: "UOWNER", owner_slack_name: "Yoga", owner_slack_handle: "yoga" };
     const onSummary = vi.fn();
     render(SlackSettingsGroups, { props: { base: "/b", agent, onSummary } });
-    const me = (await screen.findByLabelText("Only me (Yoga · UOWNER)")) as HTMLInputElement;
+    const me = (await screen.findByLabelText("Only me (@yoga · UOWNER)")) as HTMLInputElement;
     expect(me.checked).toBe(true);
     await waitFor(() => expect(onSummary).toHaveBeenLastCalledWith("Access: only Yoga · all channels", false));
     // people fields stay hidden unless "Specific people & groups" is chosen
@@ -66,26 +66,30 @@ describe("SlackSettingsGroups", () => {
   });
 
   test("an existing open connection reports open, and Only me writes the owner", async () => {
-    current = { fields: fields(), owner_slack_id: "UOWNER", owner_slack_name: "Yoga" };
+    current = { fields: fields(), owner_slack_id: "UOWNER", owner_slack_name: "Yoga", owner_slack_handle: "yoga" };
     const onSummary = vi.fn();
     render(SlackSettingsGroups, { props: { base: "/b", agent, onSummary } });
     const all = (await screen.findByLabelText("Everyone in the workspace")) as HTMLInputElement;
     expect(all.checked).toBe(true);
     await waitFor(() => expect(onSummary).toHaveBeenLastCalledWith("Access: everyone · all channels", true));
-    await fireEvent.click(screen.getByLabelText("Only me (Yoga · UOWNER)"));
+    await fireEvent.click(screen.getByLabelText("Only me (@yoga · UOWNER)"));
     await waitFor(() => expect(patch).toHaveBeenCalledWith("users_mode", "whitelist"));
     expect(patch).toHaveBeenCalledWith("allowed_users", ONLY_ME);
   });
 
-  test("owner not found in Slack: Only me is disabled and a manual pick is asked for", async () => {
-    current = { fields: fields() };
-    render(SlackSettingsGroups, { props: { base: "/b", agent } });
-    expect(await screen.findByTestId("owner-unresolved")).toBeTruthy();
+  test("owner not found in Slack: closed by default, Only me disabled, the user picker asked for", async () => {
+    current = { fields: fields({ users_mode: "whitelist", allowed_users: "[]" }) };
+    const onSummary = vi.fn();
+    render(SlackSettingsGroups, { props: { base: "/b", agent, onSummary } });
+    expect((await screen.findByTestId("owner-unresolved")).textContent).toContain("pick people manually");
     expect((screen.getByLabelText("Only me") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText("Specific people & groups") as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByLabelText("Allowed users")).toBeTruthy();
+    await waitFor(() => expect(onSummary).toHaveBeenLastCalledWith("Access: nobody yet · all channels", false));
   });
 
   test("picking a bot from the bots picker saves allowed_bots", async () => {
-    current = { fields: fields({ bots_mode: "whitelist" }), owner_slack_id: "UOWNER", owner_slack_name: "Yoga" };
+    current = { fields: fields({ bots_mode: "whitelist" }), owner_slack_id: "UOWNER", owner_slack_name: "Yoga", owner_slack_handle: "yoga" };
     render(SlackSettingsGroups, { props: { base: "/b", agent } });
     const box = await screen.findByLabelText("Allowed bots");
     await fireEvent.input(box, { target: { value: "dep" } });

@@ -14,7 +14,8 @@ export type SlackSettingField = {
   group_desc?: string;
   visible_when?: string;
 };
-export type AgentSlackSettings = { fields: SlackSettingField[]; owner_slack_id?: string; owner_slack_name?: string };
+/** owner_slack_* is the agent owner's Slack account, found by email only. */
+export type AgentSlackSettings = { fields: SlackSettingField[]; owner_slack_id?: string; owner_slack_name?: string; owner_slack_handle?: string };
 export type PickerItem = { id: string; name: string };
 
 const enc = encodeURIComponent;
@@ -100,7 +101,7 @@ export function accessSummary(values: Record<string, string>, ownerID?: string, 
   else {
     const n = (values.users_mode === "whitelist" ? pickerItems(values.allowed_users).length : 0) +
       (values.groups_mode === "whitelist" ? pickerItems(values.allowed_groups).length : 0);
-    parts.push(n === 1 && values.users_mode === "whitelist" ? `only ${pickerItems(values.allowed_users)[0]?.name}` : `${n} people & groups`);
+    parts.push(n === 0 ? "nobody yet" : n === 1 && values.users_mode === "whitelist" ? `only ${pickerItems(values.allowed_users)[0]?.name}` : `${n} people & groups`);
   }
   parts.push(values.channels_mode === "whitelist" ? plural(pickerItems(values.allowed_channels).length, "channel") : "all channels");
   if (values.bots_mode === "all") parts.push("any bot");

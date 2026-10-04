@@ -316,12 +316,12 @@ func apiTeamAgentSlackConnect(c *tool.Ctx) {
 		c.JSON(status, map[string]string{"error": err.Error()})
 		return
 	}
-	// A brand-new app starts as "Only me": the owner alone may use it.
+	// A brand-new app starts as "Only me": the owner alone may use it, or
+	// nobody until someone is picked when the owner is not found by email.
 	// Connections that already exist keep whatever access they had.
 	if m["bot_token"] == "" && m["users_mode"] == "" {
-		if id, name := agentSlackOwner(p, m, slackClient(secrets["bot_token"])); id != "" {
-			onlyOwnerAccess(m, id, name)
-		}
+		id, name := agentSlackOwner(p, m, slackClient(secrets["bot_token"]))
+		onlyOwnerAccess(m, id, name)
 	}
 	m["mode"] = mode
 	m["project_id"] = p.ProjectID
