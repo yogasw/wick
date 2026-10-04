@@ -13,6 +13,7 @@
   import { AIGenerateButton } from "@wick-fe/common-ui";
   import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, defaultAvatarFor, isBlobKind, switchAvatarKind } from "@wick-fe/common-avatar";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
+  import { accessPayload, type AccessMode } from "../accessList.js";
   import { getProjectOptions } from "../api/options.js";
   import { createAgent, getProjectPersona, listAgentConnectors, runApi, type AgentItem, type AgentConnector, type ConnectorGrant } from "../api/team.js";
   import { HANDLE_RE, slugHandle, uniqueHandle, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject, TAGLINE_MAX } from "../agentForm.js";
@@ -75,6 +76,7 @@
   // at Write plus new ones, run as the caller, the global system prompt.
   // The user can narrow it on the Access step.
   let includeNew = $state(false);
+  let accessMode = $state<AccessMode>("choose");
   let useGlobalPrompt = $state(true);
   type ConvertPreview = { name?: string; chats: number; channels: string[] | null; schedules: number; workflows?: string[] | null };
   let convertInfo = $state<ConvertPreview | null>(null);
@@ -196,8 +198,7 @@
           avatar: isBlobKind(kind) ? { kind, shape, color, expression } : { shape, color },
           ...(projectId ? { project_id: projectId } : {}),
           ...(convertProject && projectId === convertProject ? { convert: true } : {}),
-          allowed_connectors: $state.snapshot(grants) as ConnectorGrant[],
-          include_new_connectors: includeNew,
+          ...accessPayload(accessMode, $state.snapshot(grants) as ConnectorGrant[], includeNew),
           run_as: "caller",
           ...(convertProject && projectId === convertProject ? { use_global_prompt: useGlobalPrompt } : {}),
         }),
@@ -418,6 +419,7 @@
       loadError={catalogError}
       bind:grants
       bind:includeNew
+      bind:accessMode
       errors={grantErrors}
       showRunAs={false}
       showIncludeNew={!!convertProject}

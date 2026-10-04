@@ -53,10 +53,10 @@ describe("AgentSettings loads the agent when opened", () => {
     render(AgentSettings, { props: { base: "/tools/agents", agent, agents: [agent], tab: "access", onTab: vi.fn(), onClose: vi.fn(), onSaved, onDeleted: vi.fn() } });
     expect(getAgent).toHaveBeenCalledWith("/tools/agents", "a1");
     expect(screen.getByTestId("access-skeleton")).toBeDefined();
-    expect(screen.queryByLabelText("Grant Slack")).toBeNull();
+    expect(screen.queryByLabelText("Select Slack")).toBeNull();
 
     release(resolved);
-    await screen.findByLabelText("Grant Slack");
+    await screen.findByLabelText("Select Slack");
     expect(screen.queryByTestId("access-skeleton")).toBeNull();
     expect(onSaved).toHaveBeenCalledWith(resolved);
     await new Promise((r) => setTimeout(r, 1200));
@@ -66,7 +66,7 @@ describe("AgentSettings loads the agent when opened", () => {
   test("a failed load still opens the roster copy", async () => {
     getAgent.mockImplementationOnce(() => Promise.reject(new Error("boom")));
     render(AgentSettings, { props: { base: "/tools/agents", agent, agents: [agent], tab: "access", onTab: vi.fn(), onClose: vi.fn(), onSaved: vi.fn(), onDeleted: vi.fn() } });
-    await screen.findByLabelText("Grant Slack");
+    await screen.findByLabelText("Select Slack");
     await waitFor(() => expect(screen.queryByTestId("access-skeleton")).toBeNull());
   });
 });

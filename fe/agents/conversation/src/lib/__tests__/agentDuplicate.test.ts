@@ -80,6 +80,7 @@ describe("duplicateBody", () => {
       features: { source: true },
       allowed_connectors: [],
       include_new_connectors: true,
+      access_mode: "choose",
       run_as: "owner",
     });
   });

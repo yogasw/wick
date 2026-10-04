@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/svelte";
+import { render, screen, fireEvent, within } from "@testing-library/svelte";
 import { tick } from "svelte";
 import ConnectorChecklist from "../ConnectorChecklist.svelte";
 import type { AgentConnector } from "../../api/team.js";
@@ -20,9 +20,10 @@ describe("ConnectorChecklist", () => {
     const { unmount } = render(ConnectorChecklist, { props: { catalog, grants: [] } });
     expect(screen.getByRole("tab", { name: /Connectors/ })).toBeTruthy();
     expect(screen.getByRole("tab", { name: /System/ })).toBeTruthy();
-    // Connectors: nothing granted, unticked ones not rendered until searched.
-    expect(screen.getByText(/No connectors granted yet/)).toBeTruthy();
-    expect(screen.queryByText("HTTP")).toBeNull();
+    // Connectors: one list, granted or not, every row at Off.
+    expect(screen.getByText("HTTP")).toBeTruthy();
+    expect(screen.getAllByRole("radio", { name: "Off", checked: true }).length).toBe(2);
+    expect(screen.queryByText(/\+ Read|Done adding|Set level for/)).toBeNull();
     await fireEvent.click(screen.getByRole("tab", { name: /Platform/ }));
     expect(screen.getByText("Notes")).toBeTruthy();
     expect(screen.queryByText("Slack")).toBeNull();
@@ -40,11 +41,11 @@ describe("ConnectorChecklist", () => {
     expect(screen.getByRole("radio", { name: "Default (Write)" })).toBeTruthy();
   });
 
-  test("override shows Custom and Reset", async () => {
+  test("override shows Custom; the Default choice resets it", async () => {
     render(ConnectorChecklist, { props: { catalog, grants: [{ connector_id: "notes", accounts: [], level: "off", ops: [] }] } });
     await fireEvent.click(screen.getByRole("tab", { name: /Platform/ }));
     expect(screen.getByText("Custom")).toBeTruthy();
-    await fireEvent.click(screen.getByRole("button", { name: /Reset Notes/ }));
+    await fireEvent.click(screen.getByRole("radio", { name: "Default (Write)" }));
     await tick();
     expect(screen.queryByText("Custom")).toBeNull();
   });
@@ -70,5 +71,69 @@ describe("ConnectorChecklist", () => {
     await fireEvent.click(screen.getByRole("tab", { name: /Platform/ }));
     expect(screen.queryByText("Open other connectors read-only")).toBeNull();
     expect(screen.queryByText(/Write operations allowed/)).toBeNull();
+  });
+
+  const levelOf = (label: string) =>
+    (within(screen.getByRole("radiogroup", { name: `Access level for ${label}` })).getByRole("radio", { checked: true }) as HTMLElement).textContent;
+
+  test("checkboxes only select; the bulk bar appears with a selection and acts on it", async () => {
+    render(ConnectorChecklist, { props: { catalog, grants: [] } });
+    expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).toBeNull();
+    await fireEvent.click(screen.getByLabelText("Select HTTP"));
+    await tick();
+    expect(levelOf("HTTP")).toBe("Off");
+    const bar = screen.getByRole("toolbar", { name: "Bulk actions" });
+    expect(bar.textContent).toContain("1 selected");
+    await fireEvent.click(within(bar).getByRole("button", { name: "Set Write" }));
+    await tick();
+    expect(levelOf("HTTP")).toBe("Write");
+    expect(levelOf("Slack")).toBe("Off");
+    await fireEvent.click(within(bar).getByRole("button", { name: "Remove access" }));
+    await tick();
+    expect(levelOf("HTTP")).toBe("Off");
+    await fireEvent.click(within(bar).getByRole("button", { name: "Clear" }));
+    await tick();
+    expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).toBeNull();
+  });
+
+  test("select all picks the shown rows, indeterminate when partial", async () => {
+    render(ConnectorChecklist, { props: { catalog, grants: [] } });
+    const all = screen.getByLabelText("Select all shown") as HTMLInputElement;
+    await fireEvent.click(screen.getByLabelText("Select Slack"));
+    await tick();
+    expect(all.indeterminate).toBe(true);
+    await fireEvent.input(screen.getByRole("searchbox"), { target: { value: "htt" } });
+    await tick();
+    await fireEvent.click(screen.getByLabelText("Select all shown"));
+    await tick();
+    // HTTP shown and selected; Slack, hidden by the search, stays selected.
+    expect(screen.getByRole("toolbar", { name: "Bulk actions" }).textContent).toContain("2 selected");
+  });
+
+  test("Granted filter and a row's own level control", async () => {
+    render(ConnectorChecklist, { props: { catalog, grants: [{ connector_id: "slack", accounts: [], level: "read", ops: [] }] } });
+    expect(screen.getByRole("button", { name: /Granted · 1/ })).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: /^Granted/ }));
+    await tick();
+    expect(screen.queryByText("HTTP")).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: /Not granted · 1/ }));
+    await tick();
+    within(screen.getByRole("radiogroup", { name: "Access level for HTTP" })).getByRole("radio", { name: "Read" }).click();
+    await tick();
+    expect(screen.getByRole("button", { name: /Granted · 2/ })).toBeTruthy();
+  });
+
+  test("Same as me replaces the Connectors list; tier chips stay editable", async () => {
+    render(ConnectorChecklist, { props: { catalog, grants: [], accessMode: "owner" } });
+    expect(screen.getByRole("radio", { name: "Same as me", checked: true })).toBeTruthy();
+    expect(screen.getByTestId("same-as-me")).toBeTruthy();
+    expect(screen.queryByText("HTTP")).toBeNull();
+    expect(screen.queryByText("Open other connectors read-only")).toBeNull();
+    await fireEvent.click(screen.getByRole("tab", { name: /Platform/ }));
+    expect(screen.getByText("Notes")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("tab", { name: /Connectors/ }));
+    await fireEvent.click(screen.getByRole("radio", { name: "Choose connectors" }));
+    await tick();
+    expect(screen.getByText("HTTP")).toBeTruthy();
   });
 });

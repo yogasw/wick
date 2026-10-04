@@ -1,4 +1,5 @@
 import type { AgentItem, AgentWrite } from "./api/team.js";
+import { normalizeAccessMode } from "./accessList.js";
 
 /* Pure helpers behind "Duplikat agent" in the Team header menu. */
 
@@ -63,6 +64,7 @@ export function duplicateBody(a: AgentItem, taken: Iterable<string>): AgentWrite
     features: a.features,
     allowed_connectors: a.allowed_connectors ?? [],
     include_new_connectors: a.include_new_connectors,
+    access_mode: normalizeAccessMode(a.access_mode),
     run_as: a.run_as ?? "caller",
   };
 }

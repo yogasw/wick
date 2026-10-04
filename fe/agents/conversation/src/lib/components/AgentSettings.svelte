@@ -18,6 +18,7 @@
   } from "../api/team.js";
   import type { AgentFeatures } from "../agentMode.js";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
+  import { normalizeAccessMode, type AccessMode } from "../accessList.js";
   import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject, TAGLINE_MAX } from "../agentForm.js";
   import { navigate, type SettingsTab } from "../agentsRouter.js";
   import { deleteAlert, canDeleteAgent, type AgentProjectPreview } from "../agentDelete.js";
@@ -53,7 +54,7 @@
   type Draft = {
     handle: string; name: string; tagline: string; description: string; system_prompt: string;
     pick: string; features: AgentFeatures; avatar: AvatarSpec;
-    project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; run_as: "caller" | "owner";
+    project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; access_mode: AccessMode; run_as: "caller" | "owner";
     disabled: boolean; allow_provider_switch: boolean; use_global_prompt: boolean;
     mention_from: MentionFrom; mention_allow: string[]; max_hops: number;
     manage_agents: boolean; captain_can: CaptainCan;
@@ -66,7 +67,7 @@
       system_prompt: a.system_prompt, pick: joinPick(a.provider, a.model),
       features: { ...a.features }, avatar: { ...a.avatar }, project_id: a.project_id,
       grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
-      include_new_connectors: a.include_new_connectors, run_as: a.run_as ?? "caller",
+      include_new_connectors: a.include_new_connectors, access_mode: normalizeAccessMode(a.access_mode), run_as: a.run_as ?? "caller",
       disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, use_global_prompt: !!a.use_global_prompt,
       mention_from: mentionFromOf(a.mention_from), mention_allow: [...(a.mention_allow ?? [])], max_hops: clampHops(a.max_hops),
       manage_agents: a.manage_agents ?? a.is_captain, captain_can: captainCanOf(a.captain_can),
@@ -243,6 +244,7 @@
       p.allowed_connectors = $state.snapshot(d.grants) as ConnectorGrant[];
     }
     if (d.include_new_connectors !== saved.include_new_connectors) p.include_new_connectors = d.include_new_connectors;
+    if (d.access_mode !== normalizeAccessMode(saved.access_mode)) p.access_mode = d.access_mode;
     if (d.run_as !== (saved.run_as ?? "caller")) p.run_as = d.run_as;
     if (d.disabled !== saved.disabled) p.disabled = d.disabled;
     if (d.allow_provider_switch !== !!saved.allow_provider_switch) p.allow_provider_switch = d.allow_provider_switch;
@@ -513,6 +515,7 @@
         bind:grants={draft.grants}
         bind:includeNew={draft.include_new_connectors}
         bind:runAs={draft.run_as}
+        bind:accessMode={draft.access_mode}
         errors={grantErrors}
         isCaptain={agent.is_captain}
       />
