@@ -5,7 +5,7 @@
   import { fetchProcessesE, killProcessE } from "$lib/api.js";
   import CommandLine from "$lib/CommandLine.svelte";
   import RowMenu from "$lib/RowMenu.svelte";
-  import { humanBytes, humanBps, humanPct } from "$lib/format.js";
+  import { humanBytes, humanBps, humanPct, cpuShare, humanCores } from "$lib/format.js";
   import type { ProcessListResponse } from "$lib/types.js";
 
   interface Props {
@@ -259,12 +259,11 @@
             </th>
             <th class="px-5 py-2 font-medium">
               CPU
-              {#if (data?.cpu_cores ?? 0) > 1}
-                <!-- Percent of ONE core, so a busy browser legitimately
-                     reads 444% here. Without the ceiling stated, that
-                     looks like a bug. -->
+              {#if (data?.cpu_cores ?? 0) > 0}
+                <!-- A share of ALL cores, like the charts above: 100% is
+                     the whole machine busy. -->
                 <span class="font-normal normal-case text-black-600 dark:text-black-700">
-                  of {data!.cpu_cores * 100}%
+                  of {data!.cpu_cores} {data!.cpu_cores === 1 ? "core" : "cores"}
                 </span>
               {/if}
             </th>
@@ -360,8 +359,8 @@
                   {/if}
                 </div>
               </td>
-              <td class="px-5 py-2 tabular-nums text-black-900 dark:text-white-100">
-                {humanPct(g.cpu_pct)}
+              <td class="px-5 py-2 tabular-nums text-black-900 dark:text-white-100" title={humanCores(g.cpu_pct)}>
+                {humanPct(cpuShare(g.cpu_pct, data?.cpu_cores ?? 0))}
               </td>
               <td class="px-5 py-2 text-xs tabular-nums text-black-700 dark:text-black-600">
                 {humanBps(g.io_read_bps + g.io_write_bps)}
@@ -428,8 +427,8 @@
                       </span>
                     </div>
                   </td>
-                  <td class="px-5 py-1 tabular-nums text-black-700 dark:text-black-600">
-                    {humanPct(m.cpu_pct)}
+                  <td class="px-5 py-1 tabular-nums text-black-700 dark:text-black-600" title={humanCores(m.cpu_pct)}>
+                    {humanPct(cpuShare(m.cpu_pct, data?.cpu_cores ?? 0))}
                   </td>
                   <td class="px-5 py-1 tabular-nums text-black-700 dark:text-black-600">
                     {humanBps(m.io_read_bps + m.io_write_bps)}

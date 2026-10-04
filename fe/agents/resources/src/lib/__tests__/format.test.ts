@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { humanBytes, humanBps, humanPct, humanDuration, pctOf, middleTruncate, machineShare, guardKindLabel, quotaShare } from "../format.js";
+import { humanBytes, humanBps, humanPct, humanDuration, pctOf, middleTruncate, machineShare, guardKindLabel, quotaShare, cpuShare, coresLabel, humanCores } from "../format.js";
 
 // These render the numbers an operator reads a limit decision off, so the
 // boundaries matter more than the happy path.
@@ -126,5 +126,31 @@ describe("quotaShare", () => {
     expect(quotaShare(140, 2)).toBe("140% = 70% of this machine");
     expect(quotaShare(0, 2)).toBe("uncapped");
     expect(quotaShare(150, 0)).toBe("150% of one core");
+  });
+});
+
+describe("cpuShare / coresLabel / humanCores", () => {
+  it("reads per-core CPU as a share of all cores", () => {
+    expect(cpuShare(200, 2)).toBe(100);
+    expect(cpuShare(148, 2)).toBe(74);
+    expect(cpuShare(37, 1)).toBe(37);
+  });
+  it("never passes 100% and treats idle or junk as 0", () => {
+    expect(cpuShare(260, 2)).toBe(100);
+    expect(cpuShare(0, 2)).toBe(0);
+    expect(cpuShare(NaN, 2)).toBe(0);
+  });
+  it("leaves the reading alone when the core count is unknown", () => {
+    expect(cpuShare(148, 0)).toBe(148);
+  });
+  it("names the core count", () => {
+    expect(coresLabel(2)).toBe("CPU · 2 cores");
+    expect(coresLabel(1)).toBe("CPU · 1 core");
+    expect(coresLabel(0)).toBe("CPU");
+  });
+  it("reads per-core CPU as cores in use", () => {
+    expect(humanCores(150)).toBe("≈ 1.5 cores");
+    expect(humanCores(100)).toBe("≈ 1.0 core");
+    expect(humanCores(0)).toBe("");
   });
 });

@@ -109,6 +109,31 @@ export function guardKindLabel(kind: string): string {
   }
 }
 
+// cpuShare turns a CPU reading in top's per-core units (100 = one core
+// busy, so 200 on a two-core box) into a share of the WHOLE machine,
+// 0..100: 100 means every core is busy. The per-core scale made a full
+// two-core box read 200%, which is hard to judge at a glance. Unknown
+// cores leave the reading as it is rather than inventing a denominator.
+export function cpuShare(pct: number, cores: number): number {
+  if (!Number.isFinite(pct) || pct <= 0) return 0;
+  if (!Number.isFinite(cores) || cores <= 0) return pct;
+  return Math.min(100, pct / cores);
+}
+
+// coresLabel names the machine's CPU ceiling: "CPU · 2 cores".
+export function coresLabel(cores: number): string {
+  if (!Number.isFinite(cores) || cores <= 0) return "CPU";
+  return `CPU · ${cores} ${cores === 1 ? "core" : "cores"}`;
+}
+
+// humanCores reads a per-core CPU figure as cores in use, "≈ 1.5 cores",
+// for a tooltip beside the machine share. Empty when idle.
+export function humanCores(pct: number): string {
+  if (!Number.isFinite(pct) || pct <= 0) return "";
+  const n = pct / 100;
+  return `≈ ${n.toFixed(1)} ${n.toFixed(1) === "1.0" ? "core" : "cores"}`;
+}
+
 // quotaShare reads a CPU quota (percent of ONE core) as a share of the
 // whole machine: "140% = 70% of this machine" on two cores. Without it a
 // quota above 100 looks like a typo.
