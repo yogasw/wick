@@ -1,5 +1,6 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
+import { tick } from "svelte";
 import Composer from "../Composer.svelte";
 import { optionModelsWithMeta } from "../model-list-meta.js";
 
@@ -789,5 +790,89 @@ describe("Composer — Send/Stop button", () => {
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     await fireEvent.click(btn);
     expect(onStop).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Composer — Send or Stop while running", () => {
+  function setup() {
+    const onSend = vi.fn();
+    const onStop = vi.fn();
+    render(Composer, { props: { onSend, running: true, onStop } });
+    return { onSend, onStop, textarea: screen.getByRole("textbox") as HTMLTextAreaElement };
+  }
+
+  async function hold(btn: HTMLElement) {
+    vi.useFakeTimers();
+    try {
+      await fireEvent.pointerDown(btn, { button: 0 });
+      vi.advanceTimersByTime(500);
+      await tick();
+      await fireEvent.pointerUp(btn, { button: 0 });
+      // The release of a hold still produces a click in a real browser.
+      await fireEvent.click(btn);
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  test("running with an empty box shows Stop", () => {
+    setup();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    expect(screen.queryByTestId("composer-send")).toBeNull();
+  });
+
+  test("running with text shows Send, and a click sends without stopping", async () => {
+    const { onSend, onStop, textarea } = setup();
+    await fireEvent.input(textarea, { target: { value: "Ow iya" } });
+    expect(screen.queryByTestId("composer-stop")).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Send (hold for Stop)" }));
+    expect(onSend).toHaveBeenCalledWith({ text: "Ow iya", files: [] });
+    expect(onStop).not.toHaveBeenCalled();
+    // The box is empty again, so the slot goes back to Stop.
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+  });
+
+  test("a long-press opens Send/Stop; Stop stops and keeps the draft", async () => {
+    const { onSend, onStop, textarea } = setup();
+    await fireEvent.input(textarea, { target: { value: "Ow iya" } });
+    await hold(screen.getByTestId("composer-send"));
+    const menu = screen.getByRole("menu");
+    expect(screen.getByRole("menuitem", { name: "Send" })).toBeTruthy();
+    expect(menu.textContent).toContain("Stop");
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Stop" }));
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("Ow iya");
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  test("a long-press does not send by itself", async () => {
+    const { onSend, textarea } = setup();
+    await fireEvent.input(textarea, { target: { value: "Ow iya" } });
+    await hold(screen.getByTestId("composer-send"));
+    expect(onSend).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Send" }));
+    expect(onSend).toHaveBeenCalledWith({ text: "Ow iya", files: [] });
+  });
+
+  test("the menu opens from the keyboard and Escape closes it", async () => {
+    const { textarea } = setup();
+    await fireEvent.input(textarea, { target: { value: "Ow iya" } });
+    await fireEvent.keyDown(screen.getByTestId("composer-send"), { key: "ArrowUp" });
+    expect(screen.getByRole("menu")).toBeTruthy();
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  test("idle stays a plain Send with no menu", async () => {
+    const onSend = vi.fn();
+    render(Composer, { props: { onSend, onStop: vi.fn() } });
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "hi" } });
+    const btn = screen.getByRole("button", { name: "Send" });
+    expect(btn.getAttribute("aria-haspopup")).toBeNull();
+    await hold(btn);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(onSend).toHaveBeenCalledOnce();
   });
 });

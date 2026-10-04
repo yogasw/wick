@@ -63,8 +63,9 @@
         in the toolbar beside the context meter rather than on a row of
         its own under the composer. */
     caption?: string;
-    /** A turn is running: with onStop set, the Send button becomes Stop
-        (Enter still sends, so a message can be queued behind the turn). */
+    /** A turn is running: with onStop set and the box empty, the Send
+        button becomes Stop. With a draft it stays Send (Enter or a click
+        queues it behind the turn) and holding it offers Send / Stop. */
     running?: boolean;
     /** The agent is waiting for a pool slot: the action button reads
         "Cancel" and drops the queued spawn instead. */
@@ -469,6 +470,112 @@
     closeMenu();
     if (textareaEl) textareaEl.style.height = `${minHeightPx}px`;
   }
+
+  /* ── Send or Stop while a turn runs ──────────────────────────────────
+     An empty box while the agent works means the only thing to do is stop
+     it, so the action slot reads Stop. Once something is typed the slot
+     reads Send again — the draft is what the reader is about to act on —
+     and Stop moves behind a hold (long-press, mouse hold, right-click) or,
+     from the keyboard, ArrowUp / the context-menu key on the focused
+     button. The hold opens a small menu instead of acting directly so a
+     press that ran long never stops a turn by accident. */
+  const hasDraft = $derived(text.trim().length > 0 || files.length > 0);
+  const holdable = $derived(!!onStop && running && !queued);
+  const HOLD_MS = 500;
+  let holdOpen = $state(false);
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  // Set when a hold opened the menu, so the click the release produces
+  // does not also send.
+  let holdFired = false;
+  let holdMenuEl: HTMLDivElement | undefined = $state();
+
+  function holdStart(e: PointerEvent) {
+    if (!holdable || e.button > 0) return;
+    holdFired = false;
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => {
+      holdFired = true;
+      holdOpen = true;
+    }, HOLD_MS);
+  }
+
+  function holdCancel() {
+    clearTimeout(holdTimer);
+    holdTimer = undefined;
+  }
+
+  function sendClick() {
+    if (holdFired) {
+      holdFired = false;
+      return;
+    }
+    doSend();
+  }
+
+  function openHoldMenu(focusFirst: boolean) {
+    holdCancel();
+    holdOpen = true;
+    if (focusFirst) {
+      requestAnimationFrame(() => holdMenuEl?.querySelector<HTMLButtonElement>("[role=menuitem]")?.focus());
+    }
+  }
+
+  function sendContextMenu(e: MouseEvent) {
+    if (!holdable) return;
+    // Mobile browsers raise contextmenu on a long-press too; the menu is
+    // the answer to both, and the native one would cover it.
+    e.preventDefault();
+    holdFired = true;
+    openHoldMenu(false);
+  }
+
+  function sendKeyDown(e: KeyboardEvent) {
+    if (!holdable) return;
+    if (e.key === "ArrowUp" || e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
+      e.preventDefault();
+      openHoldMenu(true);
+    }
+  }
+
+  function closeHoldMenu() {
+    holdOpen = false;
+    holdFired = false;
+  }
+
+  function holdPick(action: "send" | "stop") {
+    closeHoldMenu();
+    if (action === "send") doSend();
+    else onStop?.();
+  }
+
+  // The menu belongs to the Send-while-running state only: once the box
+  // empties (it became Stop) or the turn ended, there is nothing to pick.
+  $effect(() => {
+    if (holdOpen && (!holdable || !hasDraft)) closeHoldMenu();
+  });
+
+  $effect(() => {
+    if (!holdOpen) return;
+    function onDown(e: PointerEvent) {
+      const t = e.target as Node | null;
+      if (t && holdMenuEl?.parentElement?.contains(t)) return;
+      closeHoldMenu();
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeHoldMenu();
+      }
+    }
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  });
+
+  $effect(() => () => clearTimeout(holdTimer));
 
   function handleKeyDown(e: KeyboardEvent) {
     if (handleMenuKeys(e)) return;
@@ -1567,9 +1674,9 @@
           class="inline-flex items-center justify-center shrink-0 h-8 px-3 rounded-lg border border-white-300 dark:border-navy-600 text-xs font-medium text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600 transition-colors"
           onclick={onStop}
         >Cancel</button>
-      {:else if onStop && running}
-        <!-- Send turns into Stop while a turn runs: a ring spins around ■.
-             Enter still sends, so a message can be queued behind the turn. -->
+      {:else if holdable && !hasDraft}
+        <!-- Send turns into Stop while a turn runs and the box is empty: a
+             ring spins around ■. Typing turns it back into Send. -->
         <button
           type="button"
           aria-label="Stop"
@@ -1585,18 +1692,64 @@
           <svg viewBox="0 0 16 16" class="h-2.5 w-2.5" fill="currentColor" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2"></rect></svg>
         </button>
       {:else}
-        <button
-          type="button"
-          aria-label="Send"
-          disabled={!canSend}
-          class="inline-flex items-center justify-center gap-1.5 shrink-0 rounded-lg bg-green-500 text-white-100 font-medium transition-colors hover:bg-green-600 active:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed {submitLabel ? 'px-3 py-1.5 text-xs' : 'h-8 w-8'}"
-          onclick={doSend}
-        >
-          {#if submitLabel}<span>{submitLabel}</span>{/if}
-          <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5">
-            <path d="M2.5 8h11M9 3.5L13.5 8 9 12.5" stroke-linecap="round" stroke-linejoin="round"></path>
-          </svg>
-        </button>
+        <span class="relative inline-flex shrink-0">
+          <!-- While a turn runs this Send also carries Stop behind a hold
+               (or ArrowUp / the context-menu key from the keyboard). -->
+          <button
+            type="button"
+            aria-label={holdable ? "Send (hold for Stop)" : "Send"}
+            title={holdable ? "Send — hold for Stop" : undefined}
+            aria-haspopup={holdable ? "menu" : undefined}
+            aria-expanded={holdable ? holdOpen : undefined}
+            disabled={!canSend}
+            data-testid="composer-send"
+            class="inline-flex items-center justify-center gap-1.5 shrink-0 rounded-lg bg-green-500 text-white-100 font-medium transition-colors hover:bg-green-600 active:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed {submitLabel ? 'px-3 py-1.5 text-xs' : 'h-8 w-8'} {holdable ? 'select-none touch-manipulation [-webkit-touch-callout:none]' : ''}"
+            onclick={sendClick}
+            onpointerdown={holdStart}
+            onpointerup={holdCancel}
+            onpointerleave={holdCancel}
+            onpointercancel={holdCancel}
+            oncontextmenu={sendContextMenu}
+            onkeydown={sendKeyDown}
+          >
+            {#if submitLabel}<span>{submitLabel}</span>{/if}
+            <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M2.5 8h11M9 3.5L13.5 8 9 12.5" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </button>
+          {#if holdOpen}
+            <!-- Opens above the button and hugs its right edge, so on a
+                 390px screen it grows inward and never off the side. -->
+            <div
+              bind:this={holdMenuEl}
+              role="menu"
+              aria-label="Send or stop"
+              data-testid="composer-hold-menu"
+              class="hold-menu absolute bottom-full right-0 z-30 mb-2 w-36 overflow-hidden rounded-xl border border-white-300 bg-white-100 py-1 shadow-lg dark:border-navy-600 dark:bg-navy-800"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                class="flex min-h-10 w-full items-center gap-2 px-3 text-left text-sm text-black-900 hover:bg-white-200 focus:bg-white-200 focus:outline-none dark:text-white-100 dark:hover:bg-navy-700 dark:focus:bg-navy-700"
+                onclick={() => holdPick("send")}
+              >
+                <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                  <path d="M2.5 8h11M9 3.5L13.5 8 9 12.5" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+                Send
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class="flex min-h-10 w-full items-center gap-2 px-3 text-left text-sm text-neg-400 hover:bg-neg-100 focus:bg-neg-100 focus:outline-none dark:hover:bg-navy-700 dark:focus:bg-navy-700"
+                onclick={() => holdPick("stop")}
+              >
+                <svg viewBox="0 0 16 16" class="h-3 w-3" fill="currentColor" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2"></rect></svg>
+                Stop
+              </button>
+            </div>
+          {/if}
+        </span>
       {/if}
     </div>
   </div>
@@ -1636,7 +1789,15 @@
   @keyframes stop-ring-spin {
     to { transform: rotate(360deg); }
   }
+  /* The Send/Stop menu fades up out of the button it belongs to. */
+  .hold-menu {
+    animation: hold-menu-in 120ms ease-out;
+  }
+  @keyframes hold-menu-in {
+    from { opacity: 0; transform: translateY(4px); }
+  }
   @media (prefers-reduced-motion: reduce) {
     .stop-ring { animation: none; }
+    .hold-menu { animation: none; }
   }
 </style>
