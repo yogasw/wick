@@ -10,6 +10,8 @@
     /* For an image card: the page the image was found on. Drives the
        favicon + domain caption at the bottom of the viewer. */
     sourceUrl?: string;
+    /* A caveat shown beside the name (e.g. "this is the file as it is now"). */
+    note?: string;
   };
   /* A gallery: `items` is the full set the viewer can page through and `index`
      is where it opens. A single attachment / artifact is just a one-element
@@ -172,7 +174,10 @@
     onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}
   >
     <div class="flex items-center justify-between gap-4 px-4 py-2 text-white-100">
-      <span class="text-sm truncate">{item.name}</span>
+      <span class="flex min-w-0 items-center gap-2">
+        <span class="text-sm truncate">{item.name}</span>
+        {#if item.note}<span data-lightbox-note class="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 text-[11px] text-amber-200">{item.note}</span>{/if}
+      </span>
       <div class="flex items-center gap-1.5 shrink-0">
         {#if many}
           <span data-lightbox-counter class="px-2 text-xs tabular-nums text-white-100/70">{cur + 1} / {list.length}</span>

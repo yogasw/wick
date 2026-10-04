@@ -35,6 +35,7 @@
   import { getSubAgents, interruptSubAgent } from "../api/subagents.js";
   import { fetchSessionContext, type SessionContext } from "../api/context.js";
   import { sendMessage } from "../api/messages.js";
+  import { makeTraceFiles } from "../api/files.js";
   import ConversationThread from "./ConversationThread.svelte";
   import { timeAgo, exactTime, shortDuration, parseEventTime } from "../timeFormat.js";
   import { now } from "../stores/now.js";
@@ -169,6 +170,8 @@
   // A binary the child's trace stored (a Read of a screenshot). Without this
   // the image chip in a sub-agent trace stayed disabled even though the blob
   // was on disk.
+  const traceFiles = $derived(makeTraceFiles(base, currentSessionId));
+
   function loadTraceBlob(turnId: string, ref: string): Promise<Blob> {
     return getTurnBlob(base, currentSessionId, turnId, ref);
   }
@@ -490,6 +493,7 @@
             {loadTrace}
             {loadTraceEvent}
             {loadTraceBlob}
+            {traceFiles}
             onOpenSubAgent={openDelegation}
           />
         {/if}

@@ -2,6 +2,7 @@
   import TraceNote from "./TraceNote.svelte";
   import { onMount } from "svelte";
   import type { ConversationTurn, LiveTurn, TypingState, TurnEvent, TurnEventPayload } from "../types/agents.js";
+  import type { TraceFiles } from "../api/files.js";
   import { renderLive } from "../richRender.js";
   import { mergeTodoItemsWithSteps, stripTodoBlocks, latestTodoGoal, bareToolName } from "../todoGroups.js";
   import type { ThreadBlock } from "../types/agents.js";
@@ -22,6 +23,8 @@
     // Fetches one large (spilled) trace event's payload on demand.
     loadTraceEvent?: (turnId: string, eventId: string) => Promise<TurnEventPayload>;
     loadTraceBlob?: (turnId: string, ref: string) => Promise<Blob>;
+    // Session file access for trace chips whose bytes were not kept.
+    traceFiles?: TraceFiles;
     onOpenPath?: (path: string) => void;
     // Cancel an in-flight connector run behind a running tool call.
     onCancelRun?: (runId: string) => void;
@@ -49,7 +52,7 @@
     onApprovalDecide?: (approvalId: string, decision: import("../interactiveCards.js").ApprovalDecisionChoice) => void;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -269,7 +272,7 @@
         <span class="rounded-md bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm">{label}</span>
       </div>
     {/if}
-    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} />
+    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} />
   {/each}
 
   {#if live && turns.length === 0}
@@ -358,7 +361,7 @@
             <div class="flex flex-col gap-1">
               {#each liveNonTodoBlocks as block, bi (bi)}
                 {#if block.kind === "tool"}
-                  <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} onCancel={onCancelRun} {onStopTurn} onDismiss={onDismissTool} {onOpenSubAgent} />
+                  <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} onCancel={onCancelRun} {onStopTurn} onDismiss={onDismissTool} {onOpenSubAgent} {traceFiles} />
                 {:else if block.kind === "thinking" || block.kind === "text"}
                   <TraceNote kind={block.kind} text={(block as Extract<ThreadBlock, { kind: "thinking" | "text" }>).text} />
                 {/if}

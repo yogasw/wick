@@ -32,7 +32,7 @@
   import { getTodos, type TodoList } from "../api/todos.js";
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
   import { sendMessage } from "../api/messages.js";
-  import { listFiles, searchTree, searchMentionPaths, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
+  import { listFiles, searchTree, searchMentionPaths, readFile, saveFile, createFile, deleteFile, downloadURL, makeTraceFiles } from "../api/files.js";
   import { listComposerCommands, type ComposerApiCommand } from "../api/composer.js";
   import {
     getComposerUsage, normalizeComposerUsage, refreshComposerUsage, normalizeUsageRefresh,
@@ -132,6 +132,8 @@
   };
 
   let { base, sessionId, agentMode, railToggle = 0, onRailChange }: Props = $props();
+  // Trace chips stat the files a tool call named; cached per session.
+  const traceFiles = $derived(makeTraceFiles(base, sessionId));
 
   /* ── thread store ──────────────────────────────────────────────── */
   const thread = createThreadStore();
@@ -2631,7 +2633,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} />
+          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} />
         </div>
       </div>
 

@@ -1,5 +1,6 @@
 <script lang="ts">
   import TraceNote from "./TraceNote.svelte";
+  import type { TraceFiles } from "../api/files.js";
   import type { ConversationTurn, ThreadBlock, TurnEvent, TurnEventPayload } from "../types/agents.js";
   import { renderMarkdown, linkifyText } from "../markdown.js";
   import { turnTime, parseEventTime } from "../timeFormat.js";
@@ -32,6 +33,7 @@
     loadTraceEvent?: (turnId: string, eventId: string) => Promise<TurnEventPayload>;
     // Fetches a stored trace binary (blob_ref) when its chip is clicked.
     loadTraceBlob?: (turnId: string, ref: string) => Promise<Blob>;
+    traceFiles?: TraceFiles;
     /** Team agents by handle, for a teammate's avatar on its messages. */
     teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }>;
     /** Opens a Team agent's chat; unset (outside the Team app) the
@@ -48,7 +50,7 @@
     /** Settles an approval_request card through the gate. */
     onApprovalDecide?: (approvalId: string, decision: ApprovalDecisionChoice) => void;
   };
-  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide }: Props = $props();
+  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -714,6 +716,7 @@
                     loadBlob={loadTraceBlob && !isSyntheticId
                       ? (ref) => loadTraceBlob!(turn.turn_id, ref)
                       : undefined}
+                    {traceFiles}
                   />
                 {/if}
               {/each}

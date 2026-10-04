@@ -30,7 +30,14 @@ export type TraceDisplay = {
   data?: string;
 };
 
-export type TraceMedia = { url: string; name: string; kind: "image" | "pdf" | "file"; mime: string };
+/* note: a caveat the viewer shows over the media, e.g. that it is the file
+   as it is now rather than as the trace saw it. */
+export type TraceMedia = { url: string; name: string; kind: "image" | "pdf" | "file"; mime: string; note?: string };
+
+/* What the session's file endpoint says about a path a trace named.
+   "unknown" covers anything outside the session folder or that could not
+   be checked — never a claim either way. rel feeds loadPath. */
+export type TraceFileStat = { status: "present" | "missing" | "unknown"; rel?: string; size?: number; mtime?: number };
 
 /* What a renderer may reach outside its own display. All optional: a
    renderer must still work (degraded) when a caller wires none of it. */
@@ -39,6 +46,14 @@ export type TraceContext = {
   loadBlob?: (ref: string) => Promise<Blob>;
   /* Opens a clicked media item in the host app's viewer (lightbox). */
   onOpenMedia?: (m: TraceMedia) => void;
+  /* The file the tool call named (Read/Write/Edit file_path), and when the
+     call ran (ms). A binary the trace did not keep can still be opened from
+     disk through these, and its chip says whether the file is gone or has
+     changed since. */
+  sourcePath?: string;
+  calledAt?: number;
+  statPath?: (path: string) => Promise<TraceFileStat>;
+  loadPath?: (rel: string) => Promise<Blob>;
 };
 
 export const BINARY_KINDS = new Set(["image", "pdf", "audio", "video", "binary"]);

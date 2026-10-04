@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { apiGetE, apiPostE, apiDeleteE } from "@wick-fe/common-api";
+import type { TraceFileStat } from "@wick-fe/common-ui";
 import type { SessionFileEntry, FileContent } from "../types/agents.js";
 
 /* One directory's immediate children — the session cwd when path is empty.
@@ -48,3 +49,50 @@ export const deleteFile = (base: string, id: string, path: string) =>
 
 export const downloadURL = (base: string, id: string, path: string): string =>
   `${base}/sessions/${id}/files/download?path=${encodeURIComponent(path)}`;
+
+/* Files a trace named, checked lazily: every stat asked for in the same tick
+   goes out as one request, and each path is asked once per session. */
+export type TraceFiles = {
+  stat: (path: string) => Promise<TraceFileStat>;
+  load: (rel: string) => Promise<Blob>;
+};
+
+export function makeTraceFiles(base: string, id: string, fetchImpl: typeof fetch = (...a) => fetch(...a)): TraceFiles {
+  const cache = new Map<string, Promise<TraceFileStat>>();
+  let pending: { path: string; resolve: (s: TraceFileStat) => void }[] = [];
+
+  async function flush(batch: typeof pending): Promise<void> {
+    const q = batch.map((b) => `path=${encodeURIComponent(b.path)}`).join("&");
+    let files: (TraceFileStat & { path: string })[] = [];
+    try {
+      const res = await fetchImpl(`${base}/sessions/${id}/files/stat?${q}`, { credentials: "same-origin" });
+      if (res.ok) files = ((await res.json()) as { files?: typeof files }).files ?? [];
+    } catch {
+      // Unreachable reads as "could not check", never as deleted.
+    }
+    for (const b of batch) {
+      const hit = files.find((f) => f.path === b.path);
+      if (!hit) cache.delete(b.path);
+      b.resolve(hit ?? { status: "unknown" });
+    }
+  }
+
+  return {
+    stat(path) {
+      let p = cache.get(path);
+      if (!p) {
+        p = new Promise<TraceFileStat>((resolve) => {
+          if (!pending.length) queueMicrotask(() => { const b = pending; pending = []; void flush(b); });
+          pending.push({ path, resolve });
+        });
+        cache.set(path, p);
+      }
+      return p;
+    },
+    async load(rel) {
+      const res = await fetchImpl(`${base}/sessions/${id}/files/raw?path=${encodeURIComponent(rel)}`, { credentials: "same-origin" });
+      if (!res.ok) throw new Error(`file ${rel}: ${res.status}`);
+      return res.blob();
+    },
+  };
+}

@@ -2,6 +2,7 @@
   import type { ThreadBlock, TurnEventPayload } from "../types/agents.js";
   import { subAgentStatusCls, subAgentStatusLabel } from "../lifecycleCls.js";
   import { TraceBody, isBinaryKind, type TraceDisplay, type TraceMedia } from "@wick-fe/common-ui";
+  import type { TraceFiles } from "../api/files.js";
   import MediaLightbox from "./MediaLightbox.svelte";
 
   type ToolBlock = Extract<ThreadBlock, { kind: "tool" }>;
@@ -30,12 +31,33 @@
     loadEventPayload?: (eventId: string) => Promise<TurnEventPayload>;
     // Fetches a stored binary (Display.blob_ref) when its chip is clicked.
     loadBlob?: (ref: string) => Promise<Blob>;
+    // Stats / fetches the file a call named (Read file_path) when the trace
+    // kept no bytes for it, and tells the chip if it is gone or changed.
+    traceFiles?: TraceFiles;
   };
-  let { block, onCancel, onStopTurn, onDismiss, interrupted = false, onOpenSubAgent, loadEventPayload, loadBlob }: Props = $props();
+  let { block, onCancel, onStopTurn, onDismiss, interrupted = false, onOpenSubAgent, loadEventPayload, loadBlob, traceFiles }: Props = $props();
 
   // A clicked image/pdf chip opens in the same viewer chat media uses.
   let media = $state<TraceMedia | null>(null);
-  const traceCtx = $derived({ loadBlob, onOpenMedia: (m: TraceMedia) => { media = m; } });
+  const traceCtx = $derived({
+    loadBlob,
+    onOpenMedia: (m: TraceMedia) => { media = m; },
+    sourcePath: callPath(block.inputDisplay, block.toolInput),
+    calledAt: block.endedAt ?? block.startedAt,
+    statPath: traceFiles?.stat,
+    loadPath: traceFiles?.load,
+  });
+
+  function callPath(d: TraceDisplay | undefined, input: string): string | undefined {
+    if (d?.path) return d.path;
+    try {
+      const o = JSON.parse(input) as Record<string, unknown>;
+      const p = o.file_path ?? o.notebook_path ?? o.path;
+      return typeof p === "string" && p ? p : undefined;
+    } catch {
+      return undefined;
+    }
+  }
 
   let cancelling = $state(false);
 
@@ -432,7 +454,7 @@
 
 {#if media}
   <MediaLightbox
-    items={[{ url: media.url, name: media.name, kind: media.kind }]}
+    items={[{ url: media.url, name: media.name, kind: media.kind, note: media.note }]}
     onClose={() => { media = null; }}
   />
 {/if}

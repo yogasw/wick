@@ -68,3 +68,29 @@ describe("ToolCard renders trace bodies through TraceBody", () => {
     expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:z");
   });
 });
+
+describe("ToolCard hands the chip the file the call named", () => {
+  it("a Read image with no stored bytes stats file_path and opens from disk", async () => {
+    const stat = vi.fn(async () => ({ status: "present" as const, rel: "shots/a.png", size: 8192, mtime: 1000 }));
+    const load = vi.fn(async () => new Blob(["x"], { type: "image/png" }));
+    globalThis.URL.createObjectURL = vi.fn(() => "blob:r");
+    const { container } = render(ToolCard, {
+      block: {
+        ...base,
+        toolName: "Read",
+        toolInput: '{"file_path":"/proj/files/shots/a.png"}',
+        startedAt: 5000,
+        result: "[image/png · 8 KB]",
+        resultDisplay: { kind: "image", mime: "image/png", original_bytes: 8192, name: "a.png", summary: "PNG · 8 KB" },
+      },
+      traceFiles: { stat, load },
+    });
+    await openResult(container);
+    await tick();
+    const chip = container.querySelector("[data-binary-chip]") as HTMLButtonElement;
+    expect(stat).toHaveBeenCalledWith("/proj/files/shots/a.png");
+    await vi.waitFor(() => expect(chip.dataset.fileState).toBe("same"));
+    await fireEvent.click(chip);
+    await vi.waitFor(() => expect(load).toHaveBeenCalledWith("shots/a.png"));
+  });
+});
