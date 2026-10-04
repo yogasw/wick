@@ -34,7 +34,8 @@ func viewerAvatar(u *entity.User) string {
 
 // sidebarResizeCSS is the <style> behind sidebarResize: the sidebar takes
 // --wick-sidebar-w on desktop (the saved width when there is one, else the
-// space's default), and the drag handle on its right edge. Built here rather
+// space's default), and the drag handle on its right edge. The handle's base rule hides it and
+// must come before the @media rule that shows it on desktop. Built here rather
 // than with Tailwind classes so no build step has to know about them.
 func sidebarResizeCSS(space string, width int) string {
 	sel, bp, def := "aside[data-space-sidebar]", 1024, "300px"
@@ -46,8 +47,8 @@ func sidebarResizeCSS(space string, width int) string {
 		saved = fmt.Sprintf(":root{--wick-sidebar-w:%dpx}", w)
 	}
 	return fmt.Sprintf(`<style>%s
-@media (min-width:%dpx){%s{width:var(--wick-sidebar-w,%s)}[data-sidebar-resize]{display:block}}
 [data-sidebar-resize]{display:none;position:absolute;top:0;bottom:0;right:-4px;width:8px;cursor:col-resize;z-index:20;touch-action:none}
+@media (min-width:%dpx){%s{width:var(--wick-sidebar-w,%s)}[data-sidebar-resize]{display:block}}
 [data-sidebar-resize]::after{content:"";position:absolute;top:0;bottom:0;left:3px;width:2px;background:#22c55e;opacity:0;transition:opacity 120ms}
 [data-sidebar-resize]:hover::after,html.wick-sidebar-resizing [data-sidebar-resize]::after{opacity:1}
 html.wick-sidebar-resizing,html.wick-sidebar-resizing *{cursor:col-resize!important;user-select:none!important}

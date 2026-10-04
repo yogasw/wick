@@ -153,3 +153,16 @@ func TestSidebarResizeCSSClamps(t *testing.T) {
 		t.Errorf("agents width not clamped / wrong default: %s", css)
 	}
 }
+
+// The handle's hiding base rule must precede the desktop @media rule that
+// shows it; with equal specificity the later rule wins.
+func TestSidebarResizeHandleShownOnDesktop(t *testing.T) {
+	for _, space := range []string{"team", "agents"} {
+		css := sidebarResizeCSS(space, 0)
+		hide := strings.Index(css, "[data-sidebar-resize]{display:none")
+		show := strings.Index(css, "[data-sidebar-resize]{display:block}")
+		if hide < 0 || show < 0 || hide > show {
+			t.Errorf("%s: handle hidden on desktop (hide at %d, show at %d)", space, hide, show)
+		}
+	}
+}
