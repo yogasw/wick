@@ -45,7 +45,24 @@ func (e *RetryAfterError) Unwrap() error { return e.Err }
 
 // TimeoutMessage is the error of a turn that ran past max.
 func TimeoutMessage(max time.Duration) string {
-	return fmt.Sprintf("The remote agent did not finish within %s.", max)
+	return fmt.Sprintf("No reply from the remote agent after %s.", max)
+}
+
+// TimeoutHinter is a Source that can say why a turn may have gone
+// unanswered ("this bot answers only when @mentioned"). "" = no hint.
+type TimeoutHinter interface {
+	TimeoutHint() string
+}
+
+// timeoutMessage is TimeoutMessage plus src's hint, if it has one.
+func timeoutMessage(src Source, max time.Duration) string {
+	msg := TimeoutMessage(max)
+	if h, ok := src.(TimeoutHinter); ok {
+		if hint := h.TimeoutHint(); hint != "" {
+			msg += " " + hint
+		}
+	}
+	return msg
 }
 
 // Spawn starts the turn loop.
@@ -272,7 +289,7 @@ func (p *process) turn(text string) {
 		switch {
 		case p.ctx.Err() != nil:
 		case errors.Is(ctx.Err(), context.DeadlineExceeded):
-			p.emitError(TimeoutMessage(lim.Max))
+			p.emitError(timeoutMessage(src, lim.Max))
 		default:
 			p.emitError(err.Error())
 		}
@@ -342,7 +359,7 @@ func (p *process) turn(text string) {
 				switch {
 				case p.ctx.Err() != nil:
 				case errors.Is(ctx.Err(), context.DeadlineExceeded):
-					p.emitError(TimeoutMessage(lim.Max))
+					p.emitError(timeoutMessage(src, lim.Max))
 				default:
 					t.handle(Event{Kind: EventDone})
 				}
@@ -394,7 +411,7 @@ func (p *process) turn(text string) {
 			if push != nil && p.drain(t, push) {
 				return
 			}
-			p.emitError(TimeoutMessage(lim.Max))
+			p.emitError(timeoutMessage(src, lim.Max))
 			return
 		}
 	}

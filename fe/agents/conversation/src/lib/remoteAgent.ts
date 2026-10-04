@@ -3,6 +3,24 @@ import type { RailTab } from "./agentMode.js";
 import type { SettingsTab } from "./agentsRouter.js";
 import { SLACK_REMOTE_KIND, slackCaption, targetLabel } from "./slackRemote.js";
 
+/** remoteMaxSec is how long a remote turn may wait for its answer; 0 = unknown. */
+export function remoteMaxSec(a: Pick<AgentItem, "kind" | "remote" | "slack_remote">): number {
+  if (isSlackRemote(a)) return a.slack_remote?.max_sec_effective ?? 0;
+  return a.remote?.timeout_sec ?? 0;
+}
+
+/** remoteWaitLabel replaces "typing" for a remote agent: it is not
+    writing, wick is waiting for the other side. "Waiting for @halodev's
+    reply · 12s / 180s"; a channel target waits for a reply in #ops. */
+export function remoteWaitLabel(a: Pick<AgentItem, "kind" | "handle" | "remote" | "slack_remote">, elapsedSec: number): string {
+  const s = a.slack_remote;
+  const who = s && s.target !== "dm" ? `a reply in ${targetLabel(s)}` : `@${a.handle}'s reply`;
+  const max = remoteMaxSec(a);
+  const secs = Math.max(0, Math.floor(elapsedSec));
+  return `Waiting for ${who} · ${secs}s${max > 0 ? ` / ${max}s` : ""}`;
+}
+
+
 /* A2A remote agents in the Team app (plan §6.2b): another system's agent
    that wick talks to as an A2A client. Nothing runs locally, so the chat
    has no rail, Settings has no Persona/Access/Tools/Captain, and every
@@ -163,9 +181,15 @@ export function remoteChatMode(a: Pick<AgentItem, "remote" | "kind" | "slack_rem
   return { hideTabs: [...REMOTE_HIDDEN_TABS], railNote: REMOTE_RAIL_NOTE, caption: remoteCaption(a.remote?.host) };
 }
 
-/** remoteSubtitle is the chat header's second line: badge, card version, host. */
-export function remoteSubtitle(a: Pick<AgentItem, "remote" | "kind" | "slack_remote">): string {
-  if (isSlackRemote(a)) return ["Slack remote", a.slack_remote ? targetLabel(a.slack_remote) : ""].filter(Boolean).join(" · ");
+/** remoteSubtitle is the chat header's second line: badge, card version, host.
+    A Slack target named like the agent's own handle is left out, so the
+    line does not read "@halodev · Slack remote · @halodev". */
+export function remoteSubtitle(a: Pick<AgentItem, "remote" | "kind" | "slack_remote"> & { handle?: string }): string {
+  if (isSlackRemote(a)) {
+    const target = a.slack_remote ? targetLabel(a.slack_remote) : "";
+    const same = !!a.handle && target.replace(/^@/, "").toLowerCase() === a.handle.toLowerCase();
+    return ["Slack remote", same ? "" : target].filter(Boolean).join(" · ");
+  }
   const r = a.remote;
   if (!r) return "A2A remote";
   return ["A2A remote", r.card?.version ? `v${r.card.version}` : "", r.host].filter(Boolean).join(" · ");

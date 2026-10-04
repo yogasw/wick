@@ -175,7 +175,7 @@ func TestMaxTimesOut(t *testing.T) {
 	t.Cleanup(func() { pushGrace = old })
 	f := &fake{listen: []ListenMode{ListenPush}, limits: Limits{Max: 50 * time.Millisecond}, push: make(chan Event)}
 	_, l := run(t, f)
-	if !l.IsError || !strings.Contains(l.Result, "did not finish within") {
+	if !l.IsError || !strings.Contains(l.Result, "No reply from the remote agent after") {
 		t.Fatalf("line=%+v", l)
 	}
 }

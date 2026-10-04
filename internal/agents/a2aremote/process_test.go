@@ -147,7 +147,7 @@ func TestTurnLimits(t *testing.T) {
 	defer srv.Close()
 	h := spawn(t, srv, PlainAuth{}, func(c *Config) { c.TimeoutSec = 1; c.MaxResponseBytes = 1024 })
 	start := time.Now()
-	if _, res := h.say("slow"); !res.IsError || !strings.Contains(res.Result, "did not finish") || time.Since(start) > 2500*time.Millisecond {
+	if _, res := h.say("slow"); !res.IsError || !strings.Contains(res.Result, "No reply from the remote agent after") || time.Since(start) > 2500*time.Millisecond {
 		t.Fatalf("timeout: %+v after %s", res, time.Since(start))
 	}
 	if _, res := h.say("big 5000"); !res.IsError || !strings.Contains(res.Result, "byte limit") {

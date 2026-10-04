@@ -99,3 +99,22 @@ describe("remote chat mode", () => {
     expect(REMOTE_SOURCES.map((s) => s.value)).toEqual(["a2a", "slack", "plugin"]);
   });
 });
+
+import { remoteWaitLabel } from "../remoteAgent.js";
+describe("remote wait label", () => {
+  const dm = { kind: "slack-remote" as const, handle: "halodev", slack_remote: { target: "dm", user: "U1", target_name: "@halodev", max_sec_effective: 180 } } as never;
+  test("waits for the target instead of typing, with the max", () => {
+    expect(remoteWaitLabel(dm, 12.7)).toBe("Waiting for @halodev's reply · 12s / 180s");
+  });
+  test("a channel target waits for a reply there", () => {
+    const ch = { kind: "slack-remote", handle: "ops", slack_remote: { target: "channel", channel: "C1", target_name: "#ops", max_sec_effective: 60 } } as never;
+    expect(remoteWaitLabel(ch, 3)).toBe("Waiting for a reply in #ops · 3s / 60s");
+  });
+  test("A2A without a known max shows the seconds only", () => {
+    expect(remoteWaitLabel({ kind: "a2a-remote", handle: "res" } as never, 5)).toBe("Waiting for @res's reply · 5s");
+  });
+  test("header does not repeat a target named like the handle", () => {
+    expect(remoteSubtitle({ ...(dm as object), handle: "halodev" } as never)).toBe("Slack remote");
+    expect(remoteSubtitle({ ...(dm as object), handle: "other" } as never)).toBe("Slack remote · @halodev");
+  });
+});

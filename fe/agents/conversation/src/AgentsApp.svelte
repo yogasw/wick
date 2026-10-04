@@ -18,7 +18,7 @@
   import SlackRemoteWizard from "./lib/components/team/SlackRemoteWizard.svelte";
   import PluginRemoteWizard from "./lib/components/team/PluginRemoteWizard.svelte";
   import RemoteQuestionCard from "./lib/components/team/RemoteQuestionCard.svelte";
-  import { isA2ARemote, isRemoteAgent, isSlackRemote, remoteBadge, remoteChatMode, remoteSubtitle } from "./lib/remoteAgent.js";
+  import { isA2ARemote, isRemoteAgent, isSlackRemote, remoteBadge, remoteChatMode, remoteSubtitle, remoteWaitLabel } from "./lib/remoteAgent.js";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
   import AgentConnections from "./lib/components/AgentConnections.svelte";
   import AgentScheduled from "./lib/components/AgentScheduled.svelte";
@@ -212,6 +212,22 @@
      owner's own messages and the replies they watched arrive while it is
      open. The dot drops locally at once; the POST is best-effort. */
   let readId = "";
+  // A remote agent is not typing: wick is waiting for the other side.
+  // waitStart is when the selected one began waiting; the header counts up.
+  let waitStart = $state<number | null>(null);
+  let waitNow = $state(Date.now());
+  const remoteWaiting = $derived(!!selected && isRemoteAgent(selected) && isWorking(selected.status));
+  const waitKey = $derived(remoteWaiting && selected ? selected.id : "");
+  $effect(() => {
+    if (!waitKey) {
+      waitStart = null;
+      return;
+    }
+    waitStart = waitNow = Date.now();
+    const t = setInterval(() => (waitNow = Date.now()), 1000);
+    return () => clearInterval(t);
+  });
+
   function markRead(id: string) {
     agents = agents.map((x) => (x.id === id && x.unread ? { ...x, unread: false } : x));
     runApi(markAgentRead(base, id)).catch(() => {});
@@ -541,7 +557,9 @@
             {selected.name}{#if selected.tagline}<span class="font-normal text-black-700 dark:text-black-600">&nbsp;·&nbsp;{selected.tagline}</span>{/if}
           </div>
           <div class="truncate text-xs text-black-800 dark:text-black-600">
-            {#if isWorking(selected.status)}
+            {#if remoteWaiting}
+              <span class="font-medium text-green-600 dark:text-green-400" data-testid="header-waiting">{remoteWaitLabel(selected, waitStart === null ? 0 : (waitNow - waitStart) / 1000)}</span>
+            {:else if isWorking(selected.status)}
               <span class="font-medium text-green-600 dark:text-green-400">typing<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
             {:else if selected.disabled}
               disabled

@@ -155,6 +155,18 @@ func (s *Source) place(ctx context.Context, st State) (string, string, error) {
 	}
 }
 
+// TimeoutHint says why a Slack turn may have gone unanswered: many bots
+// answer only when @-mentioned.
+func (s *Source) TimeoutHint() string {
+	switch {
+	case !s.cfg.MentionOn():
+		return "Slack bots often reply only when @mentioned — turn on \"Always @mention the target\" in Settings › Remote."
+	case s.cfg.TargetID() == "":
+		return "Slack bots often reply only when @mentioned — set the bot's ID under Mention in Settings › Remote."
+	}
+	return ""
+}
+
 // outgoing is the text posted for a turn. With the mention on, every
 // turn — the first and each follow-up in the thread — starts with the
 // target's @-mention, unless the text already mentions it.

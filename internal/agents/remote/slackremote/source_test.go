@@ -373,3 +373,16 @@ func TestMentionTargetJSONDefault(t *testing.T) {
 		t.Fatalf("explicit off not kept: %v", err)
 	}
 }
+
+func TestTimeoutHint(t *testing.T) {
+	off := false
+	if h := NewSource(Config{Target: TargetDM, User: "U1"}, Deps{}).TimeoutHint(); h != "" {
+		t.Fatalf("mention on with a target: hint %q", h)
+	}
+	if h := NewSource(Config{Target: TargetDM, User: "U1", MentionTarget: &off}, Deps{}).TimeoutHint(); !strings.Contains(h, "Always @mention the target") {
+		t.Fatalf("mention off: hint %q", h)
+	}
+	if h := NewSource(Config{Target: TargetChannel, Channel: "C1"}, Deps{}).TimeoutHint(); !strings.Contains(h, "bot's ID") {
+		t.Fatalf("no target id: hint %q", h)
+	}
+}
