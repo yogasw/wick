@@ -222,3 +222,80 @@ func TestTeamAgentConvertProject(t *testing.T) {
 		t.Fatalf("protected: status %d, want 400", code)
 	}
 }
+
+// show_in_projects is stored as project.VisibleTag on the agent's own
+// project: on create (new project and convert), and on PATCH. Without it a
+// new agent's project stays hidden, as before.
+func TestTeamAgentShowInProjects(t *testing.T) {
+	withTeamWorld(t)
+	u := &entity.User{ID: "u1"}
+	create := func(body map[string]any) TeamAgentItem {
+		t.Helper()
+		w, c := teamReq(t, u, http.MethodPost, "/api/team/agents", body, nil)
+		apiTeamAgentCreate(c)
+		if w.Code != http.StatusOK {
+			t.Fatalf("create %v: status %d: %s", body, w.Code, w.Body)
+		}
+		row, err := globalTeam.GetByHandle(context.Background(), u.ID, body["handle"].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return teamAgentToItem(row, teamProjectUsers{}, teamLive{}, nil)
+	}
+	shows := func(pid string) bool {
+		t.Helper()
+		p, _ := globalMgr.Registry().Project(pid)
+		return project.ShowsInProjects(p.Meta)
+	}
+
+	shown := create(map[string]any{"handle": "shown", "show_in_projects": true})
+	if !shown.OwnProject || !shown.ShowInProjects || !shows(shown.ProjectID) {
+		t.Fatalf("new agent with show_in_projects: own %v show %v", shown.OwnProject, shown.ShowInProjects)
+	}
+	hidden := create(map[string]any{"handle": "hidden"})
+	if !hidden.OwnProject || hidden.ShowInProjects || shows(hidden.ProjectID) {
+		t.Fatalf("new agent without the flag must stay hidden")
+	}
+
+	seedTeamProject(t, "p1", u.ID)
+	conv := create(map[string]any{"handle": "conv", "project_id": "p1", "convert": true, "show_in_projects": true})
+	if p, _ := globalMgr.Registry().Project("p1"); !project.IsAgentProject(p.Meta) || !shows("p1") || !conv.ShowInProjects {
+		t.Fatalf("converted project tags %v", p.Meta.Tags)
+	}
+
+	// A project the agent was merely pointed at always shows; the flag is
+	// not stamped on it.
+	seedTeamProject(t, "p2", u.ID)
+	ptd := create(map[string]any{"handle": "pointed", "project_id": "p2", "show_in_projects": false})
+	if p, _ := globalMgr.Registry().Project("p2"); ptd.OwnProject || !ptd.ShowInProjects || len(p.Meta.Tags) != 0 {
+		t.Fatalf("pointed project: own %v show %v tags %v", ptd.OwnProject, ptd.ShowInProjects, p.Meta.Tags)
+	}
+
+	patch := func(id string, body map[string]any) TeamAgentItem {
+		t.Helper()
+		w, c := teamReq(t, u, http.MethodPatch, "/api/team/agents/"+id, body, map[string]string{"id": id})
+		apiTeamAgentUpdate(c)
+		if w.Code != http.StatusOK {
+			t.Fatalf("patch %v: status %d: %s", body, w.Code, w.Body)
+		}
+		return teamAgentToItem(mustAgent(t, id), teamProjectUsers{}, teamLive{}, nil)
+	}
+	if it := patch(hidden.ID, map[string]any{"show_in_projects": true}); !it.ShowInProjects || !shows(hidden.ProjectID) {
+		t.Fatal("patch on: project still hidden")
+	}
+	if it := patch(hidden.ID, map[string]any{"tagline": "Ops"}); !it.ShowInProjects {
+		t.Fatal("an unrelated patch dropped the flag")
+	}
+	if it := patch(hidden.ID, map[string]any{"show_in_projects": false}); it.ShowInProjects || shows(hidden.ProjectID) {
+		t.Fatal("patch off: project still shown")
+	}
+}
+
+func mustAgent(t *testing.T, id string) entity.AgentPersona {
+	t.Helper()
+	row, err := globalTeam.Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row
+}

@@ -51,6 +51,11 @@ export type AgentItem = {
   /** Spawns carry the global system prompt instead of the Team one
       (on for agents converted from a project). */
   use_global_prompt?: boolean;
+  /** The agent's project is its own (Team tag); only then does
+      show_in_projects apply. Older servers omit both. */
+  own_project?: boolean;
+  /** The project is listed in the sidebar's Projects too. */
+  show_in_projects?: boolean;
   /** Whether the chat may pick another provider/model (server applies
       the default: Captain on, others off). */
   allow_provider_switch?: boolean;
@@ -190,6 +195,8 @@ export type AgentWrite = Partial<{
   /** Create only, with project_id: make that project this agent's own. */
   convert: boolean;
   use_global_prompt: boolean;
+  /** Keep the agent's own project in the sidebar's Projects list too. */
+  show_in_projects: boolean;
   mention_from: MentionFrom;
   mention_allow: string[];
   max_hops: number;

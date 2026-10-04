@@ -55,7 +55,7 @@
     handle: string; name: string; tagline: string; description: string; system_prompt: string;
     pick: string; features: AgentFeatures; avatar: AvatarSpec;
     project_id: string; grants: ConnectorGrant[]; include_new_connectors: boolean; access_mode: AccessMode; run_as: "caller" | "owner";
-    disabled: boolean; allow_provider_switch: boolean; use_global_prompt: boolean;
+    disabled: boolean; allow_provider_switch: boolean; use_global_prompt: boolean; show_in_projects: boolean;
     mention_from: MentionFrom; mention_allow: string[]; max_hops: number;
     manage_agents: boolean; captain_can: CaptainCan;
     native_tools: string[]; bash_rules: BashRule[]; disabled_skills: string[];
@@ -69,6 +69,7 @@
       grants: $state.snapshot(a.allowed_connectors ?? []) as ConnectorGrant[],
       include_new_connectors: a.include_new_connectors, access_mode: normalizeAccessMode(a.access_mode), run_as: a.run_as ?? "caller",
       disabled: a.disabled, allow_provider_switch: !!a.allow_provider_switch, use_global_prompt: !!a.use_global_prompt,
+      show_in_projects: a.show_in_projects ?? !a.own_project,
       mention_from: mentionFromOf(a.mention_from), mention_allow: [...(a.mention_allow ?? [])], max_hops: clampHops(a.max_hops),
       manage_agents: a.manage_agents ?? a.is_captain, captain_can: captainCanOf(a.captain_can),
       native_tools: nativeToolsOf(a.allowed_native_tools), bash_rules: (a.bash_rules ?? []).map((r) => ({ ...r })),
@@ -249,6 +250,7 @@
     if (d.disabled !== saved.disabled) p.disabled = d.disabled;
     if (d.allow_provider_switch !== !!saved.allow_provider_switch) p.allow_provider_switch = d.allow_provider_switch;
     if (d.use_global_prompt !== !!saved.use_global_prompt) p.use_global_prompt = d.use_global_prompt;
+    if (d.show_in_projects !== (saved.show_in_projects ?? !saved.own_project)) p.show_in_projects = d.show_in_projects;
     if (d.mention_from !== mentionFromOf(saved.mention_from)) p.mention_from = d.mention_from;
     if (!sameValue(d.mention_allow, saved.mention_allow ?? [])) p.mention_allow = [...d.mention_allow];
     if (clampHops(d.max_hops) !== clampHops(saved.max_hops)) p.max_hops = clampHops(d.max_hops);
@@ -753,6 +755,14 @@
         Switching projects reloads the persona from that project at once, and saved persona changes apply to it; old chats stay in the old project.
       </p>
     </div>
+    {#if saved.own_project && draft.project_id === saved.project_id}
+      <div data-testid="as-show-in-projects">
+        <Toggle checked={draft.show_in_projects} onChange={(v) => (draft.show_in_projects = v)} label="Keep the project in Agents → Projects" />
+        <p class="mt-1 text-xs text-black-800 dark:text-black-600">
+          On: the project is listed in Agents → Projects as well as in Team. Off: only in Team (still reachable from this agent).
+        </p>
+      </div>
+    {/if}
     <div>
       <span class={label}>Provider / model</span>
       <ProviderPicker

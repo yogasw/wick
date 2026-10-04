@@ -650,7 +650,7 @@
             <h3 class="text-xs font-semibold text-black-900 dark:text-white-100">Make this an agent</h3>
             <p class="mt-1 text-xs leading-relaxed text-black-700 dark:text-black-600">
               Turn this project into a Team agent with its name, description and system prompt. Its chats and files
-              stay; it moves from the Projects list to Team. Only the project's owner can do this.
+              stay; it shows in Team and, unless you turn that off, in the Projects list too. Only the project's owner can do this.
             </p>
             <a
               href={`${base}/team?panel=new&project=${encodeURIComponent(projectID)}`}

@@ -7,16 +7,18 @@
      2 Access — the same connector checklist as Settings › Access, starting
        empty (off until added). A new agent runs as the caller with
        include-new off; both are changed later in Settings › Access.
-     The provider lives in Settings › Lanjutan; the mockup's third "Connect"
-     step waits for Slack/A2A (phase 1b). */
+     3 Model — provider and model (or sub model) through the same picker
+       as Project Settings, picked by hand: Create stays off until both are
+       chosen. Changed later in Settings › Advanced.
+     The mockup's "Connect" step waits for Slack/A2A (phase 1b). */
   import { onMount } from "svelte";
-  import { AIGenerateButton } from "@wick-fe/common-ui";
+  import { AIGenerateButton, ProviderPicker, buildProviderOptions } from "@wick-fe/common-ui";
   import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, defaultAvatarFor, isBlobKind, switchAvatarKind } from "@wick-fe/common-avatar";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { accessPayload, type AccessMode } from "../accessList.js";
-  import { getProjectOptions } from "../api/options.js";
+  import { getProjectOptions, getProviderOptions, getProviderOptionModels } from "../api/options.js";
   import { createAgent, getProjectPersona, listAgentConnectors, runApi, type AgentItem, type AgentConnector, type ConnectorGrant } from "../api/team.js";
-  import { HANDLE_RE, slugHandle, uniqueHandle, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject, TAGLINE_MAX } from "../agentForm.js";
+  import { HANDLE_RE, splitPick, slugHandle, uniqueHandle, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject, TAGLINE_MAX } from "../agentForm.js";
   import { PERSONA_KIND, personaInput, suggestedConnectors, type PersonaDraft } from "../personaGen.js";
   import { setOverride } from "../accessTiers.js";
   import { convertGrants, convertSummary } from "../convertProject.js";
@@ -35,7 +37,7 @@
   };
   let { base, taken, convertProject, onClose, onCreated, onType }: Props = $props();
 
-  const STEPS = ["Persona", "Access"];
+  const STEPS = ["Persona", "Access", "Model"];
   let step = $state(1);
 
   let brief = $state("");
@@ -78,6 +80,20 @@
   let includeNew = $state(false);
   let accessMode = $state<AccessMode>("choose");
   let useGlobalPrompt = $state(true);
+  // On by default: the agent's project stays in Agents → Projects as well.
+  let showInProjects = $state(true);
+  // Step 3: "type/name::modelID", empty until picked by hand.
+  let providers = $state<{ type: string; name: string; models?: { id: string; label: string; default: boolean }[] }[]>([]);
+  let pick = $state("");
+  // The picker only sets a value from the model level: a model (or sub
+  // model), or its "Use default model" row for an instance that lists none.
+  const modelOk = $derived(splitPick(pick).provider !== "");
+  function loadProviderModels(optionValue: string, opts?: { entry?: string; refresh?: boolean }) {
+    const slash = optionValue.indexOf("/");
+    const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
+    const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);
+    return runApi(getProviderOptionModels(base, type, name, opts));
+  }
   type ConvertPreview = { name?: string; chats: number; channels: string[] | null; schedules: number; workflows?: string[] | null };
   let convertInfo = $state<ConvertPreview | null>(null);
 
@@ -92,6 +108,7 @@
 
   onMount(() => {
     runApi(getProjectOptions(base, { hideTeam: true })).then((p) => { projects = p ?? []; }).catch(() => {});
+    runApi(getProviderOptions(base)).then((p) => { providers = p ?? []; }).catch(() => {});
     if (convertProject) {
       void pickProject(convertProject);
       includeNew = true;
@@ -179,10 +196,11 @@
 
   function next() {
     if (step === 1 && personaOk) step = 2;
+    else if (step === 2) step = 3;
   }
 
   async function submit() {
-    if (!personaOk || saving) return;
+    if (!personaOk || !modelOk || saving) return;
     saving = true;
     error = "";
     handleError = "";
@@ -201,6 +219,10 @@
           ...accessPayload(accessMode, $state.snapshot(grants) as ConnectorGrant[], includeNew),
           run_as: "caller",
           ...(convertProject && projectId === convertProject ? { use_global_prompt: useGlobalPrompt } : {}),
+          // Only the agent's own project (new or converted) can be hidden.
+          ...(!projectId || projectId === convertProject ? { show_in_projects: showInProjects } : {}),
+          provider: splitPick(pick).provider,
+          model: splitPick(pick).model,
         }),
       );
       onCreated(a);
@@ -388,7 +410,13 @@
       </div>
     </details>
     {/if}
-  {:else}
+    {#if !projectId || projectId === convertProject}
+      <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100" data-testid="aw-show-in-projects">
+        <input type="checkbox" class="mt-1" bind:checked={showInProjects} />
+        <span>Keep the project in Agents → Projects<br /><span class="text-xs text-black-800 dark:text-black-600">It is always in Team. Turn off to list it only there.</span></span>
+      </label>
+    {/if}
+  {:else if step === 2}
     {#if convertProject}
       <p class="rounded-xl bg-white-200 px-3 py-2 text-xs text-black-800 dark:bg-navy-800 dark:text-black-600" data-testid="aw-convert-access">
         <span class="font-medium text-black-900 dark:text-white-100">Default for a converted project:</span> every connector you have at Write, and connectors added later open read-only — so its chats keep doing what they do today. Narrow it below or later in Settings.
@@ -424,19 +452,36 @@
       showRunAs={false}
       showIncludeNew={!!convertProject}
     />
+  {:else}
+    <!-- Step 3: the same picker as Project Settings (provider → model / sub
+         model). No default is filled in: the user picks one on purpose. -->
+    <div data-testid="aw-model-step">
+      <label class={label} for="aw-provider">Provider &amp; model</label>
+      <ProviderPicker
+        id="aw-provider"
+        options={buildProviderOptions(providers, pick)}
+        value={pick}
+        onChange={(v) => (pick = v)}
+        loadModels={loadProviderModels}
+        placeholder="Choose provider & model…"
+      />
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">
+        {modelOk ? "Saved as the agent's project default; change it later in Settings → Advanced." : "Pick a provider, then a model, to create the agent."}
+      </p>
+    </div>
   {/if}
   {#if error}<p class="text-sm text-neg-400">{error}</p>{/if}
 </div>
 
 <div class="flex items-center justify-between gap-2 px-6 py-4">
   {#if step > 1}
-    <button type="button" class={ghost} onclick={() => (step = 1)}>← Back</button>
+    <button type="button" class={ghost} onclick={() => (step -= 1)}>← Back</button>
   {:else}
     <span></span>
   {/if}
   {#if step < STEPS.length}
     <button type="button" class={primary} disabled={!personaOk} onclick={next}>Next →</button>
   {:else}
-    <button type="button" class={primary} disabled={!personaOk || saving} onclick={submit}>{saving ? "Creating…" : "Create agent"}</button>
+    <button type="button" class={primary} disabled={!personaOk || !modelOk || saving} onclick={submit}>{saving ? "Creating…" : "Create agent"}</button>
   {/if}
 </div>

@@ -92,6 +92,12 @@ type TeamAgentItem struct {
 	// UseGlobalPrompt: spawns carry the global system_prompt instead of
 	// system_prompt_team (on for agents converted from a project).
 	UseGlobalPrompt bool `json:"use_global_prompt"`
+	// OwnProject: the agent's project is its own (Team tag), so
+	// ShowInProjects applies; a project it was pointed at always shows.
+	OwnProject bool `json:"own_project"`
+	// ShowInProjects: the project is listed in the sidebar's Projects
+	// too (project.ShowsInProjects).
+	ShowInProjects bool `json:"show_in_projects"`
 	// AllowProviderSwitch is the effective value (default applied).
 	AllowProviderSwitch bool                   `json:"allow_provider_switch"`
 	SuggestedPrompts    []team.SuggestedPrompt `json:"suggested_prompts"`
@@ -203,6 +209,10 @@ type teamAgentWriteReq struct {
 	MaxHops              *int                    `json:"max_hops"`
 	ManageAgents         *bool                   `json:"manage_agents"`
 	CaptainCan           *team.CaptainCan        `json:"captain_can"`
+	// ShowInProjects keeps the agent's own project in the sidebar's
+	// Projects list as well (project.VisibleTag). Nil leaves it as is;
+	// on create, nil means hidden.
+	ShowInProjects *bool `json:"show_in_projects"`
 	// Convert (create only, with ProjectID) turns an ordinary project
 	// into this agent's own: the project gets the Team tag, so it leaves
 	// the sidebar and lives on in the Team app. See checkConvertProject.
@@ -730,6 +740,8 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 			it.Icon, it.Description = m.Icon, m.Description
 			it.SystemPrompt = m.Defaults.SystemAddon
 			it.Provider, it.Model, it.Preset = m.Defaults.Provider, m.Defaults.Model, m.Defaults.Preset
+			it.OwnProject = project.IsAgentProject(m)
+			it.ShowInProjects = project.ShowsInProjects(m)
 		}
 	}
 	it.NativeToolsEnforced = team.NativeToolsEnforced(providerTypeOf(it.Provider))
@@ -779,6 +791,10 @@ func applyProjectFields(m *project.Meta, req teamAgentWriteReq) bool {
 			m.Defaults.Model = nv
 			changed = true
 		}
+	}
+	// Only the agent's own project can be hidden, so only it takes the flag.
+	if req.ShowInProjects != nil && project.IsAgentProject(*m) && project.SetShowInProjects(m, *req.ShowInProjects) {
+		changed = true
 	}
 	return changed
 }
@@ -1109,27 +1125,32 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
-	if existing {
-		// "Pakai project yang ada": the wizard shows that project's persona
-		// and sends back what is in the form, so a name typed there is the
-		// agent's name rather than being dropped for the project's.
-		if proj, ok := globalMgr.Registry().Project(pid); ok {
-			meta := proj.Meta
-			changed := applyProjectFields(&meta, req)
-			if req.Convert && !project.IsAgentProject(meta) {
-				meta.Tags = append(slices.Clone(meta.Tags), project.AgentTag)
-				changed = true
-			}
-			if changed {
-				if _, err := globalMgr.UpdateProject(c.Context(), pid, meta); err != nil {
-					c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-					return
-				}
+	if proj, ok := globalMgr.Registry().Project(pid); ok {
+		meta := proj.Meta
+		changed := false
+		// Tagged first, so applyProjectFields sees an agent project and
+		// takes ShowInProjects.
+		if req.Convert && !project.IsAgentProject(meta) {
+			meta.Tags = append(slices.Clone(meta.Tags), project.AgentTag)
+			changed = true
+		}
+		if existing {
+			// "Pakai project yang ada": the wizard shows that project's persona
+			// and sends back what is in the form, so a name typed there is the
+			// agent's name rather than being dropped for the project's.
+			changed = applyProjectFields(&meta, req) || changed
+		} else if req.ShowInProjects != nil && project.SetShowInProjects(&meta, *req.ShowInProjects) {
+			changed = true
+		}
+		if changed {
+			if _, err := globalMgr.UpdateProject(c.Context(), pid, meta); err != nil {
+				c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
 			}
 		}
-		if req.Convert {
-			stampProjectSessions(c, pid, p.ID)
-		}
+	}
+	if existing && req.Convert {
+		stampProjectSessions(c, pid, p.ID)
 	}
 	how := "wizard"
 	if req.Convert {
@@ -1325,7 +1346,9 @@ func releaseTeamAgentProject(ctx context.Context, agent entity.AgentPersona, row
 		return purgeProject(ctx, pr, "user")
 	}
 	meta := pr.Meta
-	meta.Tags = slices.DeleteFunc(slices.Clone(meta.Tags), func(t string) bool { return t == project.AgentTag })
+	meta.Tags = slices.DeleteFunc(slices.Clone(meta.Tags), func(t string) bool {
+		return t == project.AgentTag || t == project.VisibleTag
+	})
 	_, err := globalMgr.UpdateProject(ctx, pr.Meta.ID, meta)
 	return err
 }
