@@ -1,5 +1,6 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
+import { tick } from "svelte";
 import SubAgentPanel from "../SubAgentPanel.svelte";
 import type { SubAgentItem } from "../../types/agents.js";
 
@@ -288,9 +289,81 @@ describe("SubAgentPanel", () => {
     const p = props({ subAgents: [subAgent({ status: "running" })] });
     render(SubAgentPanel, { props: p });
 
+    await fireEvent.pointerEnter(screen.getByRole("button", { name: /open sub-agent/i }));
+    await fireEvent.click(screen.getByRole("button", { name: /^stop$/i }));
     await fireEvent.click(screen.getByRole("button", { name: /^stop$/i }));
     expect(p.onInterrupt).toHaveBeenCalledWith("d1");
     expect(p.onSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("SubAgentPanel — Stop kept out of the way", () => {
+  test("a live row shows no Stop until it is hovered", async () => {
+    render(SubAgentPanel, { props: props({ subAgents: [subAgent({ status: "running" })] }) });
+    expect(screen.queryByRole("button", { name: /^stop$/i })).toBeNull();
+    const row = screen.getByRole("button", { name: /open sub-agent/i });
+    await fireEvent.pointerEnter(row);
+    expect(screen.getByRole("button", { name: /^stop$/i })).toBeTruthy();
+    await fireEvent.pointerLeave(row);
+    expect(screen.queryByRole("button", { name: /^stop$/i })).toBeNull();
+  });
+
+  test("a long-press reveals Stop without opening the row, then asks first", async () => {
+    const p = props({ subAgents: [subAgent({ status: "running", handle: "log-investigator" })] });
+    render(SubAgentPanel, { props: p });
+    const row = screen.getByRole("button", { name: /open sub-agent/i });
+    vi.useFakeTimers();
+    try {
+      await fireEvent.pointerDown(row, { button: 0, pointerType: "touch" });
+      vi.advanceTimersByTime(500);
+      await tick();
+      await fireEvent.pointerUp(row, { button: 0, pointerType: "touch" });
+      await fireEvent.click(row);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(p.onSelect).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole("button", { name: /^stop$/i }));
+    expect(screen.getByText("Stop log-investigator?")).toBeTruthy();
+    expect(p.onInterrupt).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole("button", { name: /^stop$/i }));
+    expect(p.onInterrupt).toHaveBeenCalledWith("d1");
+  });
+
+  test("a short tap still opens the row", async () => {
+    const p = props({ subAgents: [subAgent({ status: "running" })] });
+    render(SubAgentPanel, { props: p });
+    const row = screen.getByRole("button", { name: /open sub-agent/i });
+    await fireEvent.pointerDown(row, { button: 0 });
+    await fireEvent.pointerUp(row, { button: 0 });
+    await fireEvent.click(row);
+    expect(p.onSelect).toHaveBeenCalledOnce();
+  });
+
+  test("⋯ → Stop all counts only running rows and asks first", async () => {
+    const p = props({
+      subAgents: [
+        subAgent({ delegation_id: "d1", child_session_id: "c1", status: "running" }),
+        subAgent({ delegation_id: "d2", child_session_id: "c2", status: "queued" }),
+        subAgent({ delegation_id: "d3", child_session_id: "c3", status: "done" }),
+      ],
+    });
+    render(SubAgentPanel, { props: p });
+    await fireEvent.click(screen.getByRole("button", { name: "Sub-agent actions" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Stop all (2 running)" }));
+    expect(p.onInterruptAll).not.toHaveBeenCalled();
+    expect(screen.getByText(/Stop 2 running sub-agents\?/)).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: /^stop all$/i }));
+    expect(p.onInterruptAll).toHaveBeenCalledOnce();
+    expect(p.onInterrupt).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  test("Stop all is disabled when nothing is running", async () => {
+    render(SubAgentPanel, { props: props({ subAgents: [subAgent({ status: "done" })] }) });
+    await fireEvent.click(screen.getByRole("button", { name: "Sub-agent actions" }));
+    const item = screen.getByRole("menuitem", { name: "Stop all (0 running)" }) as HTMLButtonElement;
+    expect(item.disabled).toBe(true);
   });
 });
 

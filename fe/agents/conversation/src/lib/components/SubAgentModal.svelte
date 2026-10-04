@@ -384,13 +384,6 @@
           >· {stampText}</span>
         {/if}
 
-        {#if live_}
-          <button
-            type="button"
-            onclick={stop}
-            class="shrink-0 rounded px-2 py-1 text-[10px] font-medium bg-neg-100 text-neg-400 transition-colors hover:bg-neg-200"
-          >Stop</button>
-        {/if}
         <button
           type="button"
           onclick={onClose}
@@ -495,9 +488,14 @@
       </div>
 
       <div class="border-t border-white-300 dark:border-navy-600 p-3">
+        <!-- Stop lives in the composer's action slot, exactly as it does
+             for the main agent: Stop on an empty box, Send with a draft,
+             hold Send for the choice. -->
         <Composer
           onSend={send}
           disabled={sending}
+          running={live_}
+          onStop={stop}
           minRows={1}
           placeholder={live_ ? "Send a message to this sub-agent…" : "Ask this sub-agent a follow-up…"}
         />

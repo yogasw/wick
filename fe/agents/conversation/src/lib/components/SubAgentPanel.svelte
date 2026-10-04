@@ -92,7 +92,133 @@
     continueTask = "";
   }
 
-  const anyLive = $derived(subAgents.some((s) => isSubAgentLive(s.status)));
+  const liveCount = $derived(subAgents.filter((s) => isSubAgentLive(s.status)).length);
+
+  /* ── Stop, kept out of the way ─────────────────────────────────────
+     A Stop on every live row is a red button the reader scrolls past all
+     day and hits by accident on a phone. It stays hidden until asked for:
+     hovering the row (a mouse), focusing it (a keyboard), or holding it
+     (a finger, ~500 ms — the hold must not also open the row). Even then
+     it asks once before stopping. */
+  const HOLD_MS = 500;
+  let hoverId = $state<string | null>(null);
+  let focusId = $state<string | null>(null);
+  let revealedId = $state<string | null>(null);
+  let confirmId = $state<string | null>(null);
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  let holdFired = false;
+
+  function stopShown(id: string): boolean {
+    return hoverId === id || focusId === id || revealedId === id || confirmId === id;
+  }
+
+  function rowPointerEnter(e: PointerEvent, id: string) {
+    // A tap raises pointerenter too; only a real pointer hovers.
+    if (e.pointerType === "touch") return;
+    hoverId = id;
+  }
+
+  function rowPointerLeave(id: string) {
+    if (hoverId === id) hoverId = null;
+    holdCancel();
+  }
+
+  function rowFocusOut(e: FocusEvent, id: string) {
+    const next = e.relatedTarget as Node | null;
+    if (next && (e.currentTarget as HTMLElement).contains(next)) return;
+    if (focusId === id) focusId = null;
+  }
+
+  function holdStart(e: PointerEvent, id: string) {
+    if (e.button > 0) return;
+    holdFired = false;
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => {
+      holdFired = true;
+      revealedId = id;
+    }, HOLD_MS);
+  }
+
+  function holdCancel() {
+    clearTimeout(holdTimer);
+    holdTimer = undefined;
+  }
+
+  function rowContextMenu(e: MouseEvent, id: string) {
+    // Mobile browsers raise contextmenu on a long-press; the native menu
+    // would cover the Stop it just revealed.
+    e.preventDefault();
+    holdCancel();
+    holdFired = true;
+    revealedId = id;
+  }
+
+  function rowOpen(childSessionId: string) {
+    if (holdFired) {
+      holdFired = false;
+      return;
+    }
+    onSelect(childSessionId);
+  }
+
+  function askStop(id: string) {
+    confirmId = id;
+  }
+
+  function confirmStop(id: string) {
+    confirmId = null;
+    revealedId = null;
+    onInterrupt(id);
+  }
+
+  function cancelStop() {
+    confirmId = null;
+    revealedId = null;
+  }
+
+  /* ── header ⋯ menu ─────────────────────────────────────────────────── */
+  let menuOpen = $state(false);
+  let confirmAll = $state(false);
+  let menuWrapEl: HTMLDivElement | undefined = $state();
+
+  function toggleMenu() {
+    menuOpen = !menuOpen;
+    confirmAll = false;
+  }
+
+  function closeMenu() {
+    menuOpen = false;
+    confirmAll = false;
+  }
+
+  function stopAll() {
+    closeMenu();
+    onInterruptAll();
+  }
+
+  // One outside-tap / Escape closes whatever is open: the ⋯ menu, a held
+  // row's Stop, or its confirm.
+  $effect(() => {
+    if (!menuOpen && !revealedId && !confirmId) return;
+    function onDown(e: PointerEvent) {
+      const t = e.target as Element | null;
+      if (menuOpen && !(t && menuWrapEl?.contains(t))) closeMenu();
+      if ((revealedId || confirmId) && !t?.closest?.(`[data-subagent-row="${confirmId ?? revealedId}"]`)) cancelStop();
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      closeMenu();
+      cancelStop();
+    }
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  });
+
+  $effect(() => () => clearTimeout(holdTimer));
 
   /* A room runs one sub-agent at a time, so the rail's job is to answer
      "what is happening, what is next, what is done" in that order.
@@ -155,12 +281,61 @@
     class="flex items-center justify-between gap-2 border-b border-white-300 dark:border-navy-600 px-4 py-3"
   >
     <span class="text-xs font-semibold text-black-900 dark:text-white-100">Sub-agents</span>
-    {#if anyLive}
-      <button
-        type="button"
-        onclick={onInterruptAll}
-        class="shrink-0 rounded px-2 py-1 text-[10px] font-medium bg-neg-100 text-neg-400 hover:bg-neg-200 transition-colors"
-      >Stop all</button>
+    {#if subAgents.length > 0}
+      <div class="relative -my-2 -mr-2" bind:this={menuWrapEl}>
+        <button
+          type="button"
+          aria-label="Sub-agent actions"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onclick={toggleMenu}
+          class="inline-flex h-10 w-10 items-center justify-center rounded-lg text-black-700 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700"
+        >
+          <svg viewBox="0 0 16 16" class="h-4 w-4" fill="currentColor" aria-hidden="true">
+            <circle cx="3" cy="8" r="1.5"></circle><circle cx="8" cy="8" r="1.5"></circle><circle cx="13" cy="8" r="1.5"></circle>
+          </svg>
+        </button>
+        {#if menuOpen}
+          <!-- Hugs the rail's right edge and opens downward, so on a
+               390px screen it grows inward and is never cut off. -->
+          <div
+            role="menu"
+            aria-label="Sub-agent actions"
+            class="absolute right-0 top-full z-30 mt-1 w-60 max-w-[calc(100vw-1rem)] overflow-hidden rounded-xl border border-white-300 bg-white-100 py-1 shadow-lg dark:border-navy-600 dark:bg-navy-800"
+          >
+            {#if confirmAll}
+              <div class="space-y-2 px-3 py-2">
+                <p class="text-xs text-black-900 dark:text-white-100">
+                  Stop {liveCount} running sub-agent{liveCount === 1 ? "" : "s"}? Finished ones are left alone.
+                </p>
+                <div class="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onclick={() => (confirmAll = false)}
+                    class="min-h-10 rounded-lg px-3 text-xs font-medium text-black-800 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700"
+                  >Cancel</button>
+                  <button
+                    type="button"
+                    onclick={stopAll}
+                    class="min-h-10 rounded-lg bg-neg-400 px-3 text-xs font-medium text-white-100 transition-colors hover:opacity-90"
+                  >Stop all</button>
+                </div>
+              </div>
+            {:else}
+              <button
+                type="button"
+                role="menuitem"
+                disabled={liveCount === 0}
+                onclick={() => (confirmAll = true)}
+                class="flex min-h-10 w-full items-center gap-2 px-3 text-left text-sm text-neg-400 transition-colors hover:bg-neg-100 disabled:cursor-not-allowed disabled:text-black-600 disabled:hover:bg-transparent dark:hover:bg-navy-700 dark:disabled:text-black-700"
+              >
+                <svg viewBox="0 0 16 16" class="h-3 w-3" fill="currentColor" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2"></rect></svg>
+                Stop all ({liveCount} running)
+              </button>
+            {/if}
+          </div>
+        {/if}
+      </div>
     {/if}
   </div>
 
@@ -233,6 +408,7 @@
       >{group.title}</p>
       {#each group.rows as sub (sub.delegation_id)}
         {@const ts = stamp(sub)}
+        {@const live = isSubAgentLive(sub.status)}
         <div style={indentStyle(sub.depth)}>
           <!--
             The whole card opens the sub-agent, not just its title. The most
@@ -248,15 +424,26 @@
           <div
             role="button"
             tabindex="0"
+            data-subagent-row={sub.delegation_id}
             aria-label={`Open sub-agent ${sub.handle || sub.profile_key}`}
-            onclick={() => onSelect(sub.child_session_id)}
+            onclick={() => rowOpen(sub.child_session_id)}
             onkeydown={(e) => {
+              if (e.target !== e.currentTarget) return;
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 onSelect(sub.child_session_id);
               }
             }}
+            onpointerenter={live ? (e) => rowPointerEnter(e, sub.delegation_id) : undefined}
+            onpointerleave={live ? () => rowPointerLeave(sub.delegation_id) : undefined}
+            onpointerdown={live ? (e) => holdStart(e, sub.delegation_id) : undefined}
+            onpointerup={live ? holdCancel : undefined}
+            onpointercancel={live ? holdCancel : undefined}
+            oncontextmenu={live ? (e) => rowContextMenu(e, sub.delegation_id) : undefined}
+            onfocusin={live ? () => (focusId = sub.delegation_id) : undefined}
+            onfocusout={live ? (e) => rowFocusOut(e, sub.delegation_id) : undefined}
             class={"cursor-pointer rounded-xl border p-3 space-y-2 text-left transition-colors " +
+              (live ? "select-none [-webkit-touch-callout:none] " : "") +
               (selectedId === sub.child_session_id
                 ? "border-green-500 bg-white-200 dark:bg-navy-800"
                 : "border-white-300 hover:border-green-500 dark:border-navy-600 dark:hover:border-green-500 bg-white-200 dark:bg-navy-800")}
@@ -299,12 +486,15 @@
                 sub-agent: a Stop that also opened the transcript would put
                 a panel in front of the thing you just asked to end.
               -->
-              {#if isSubAgentLive(sub.status)}
-                <button
-                  type="button"
-                  onclick={(e) => { e.stopPropagation(); onInterrupt(sub.delegation_id); }}
-                  class="shrink-0 rounded px-2 py-1 text-[10px] font-medium bg-neg-100 text-neg-400 hover:bg-neg-200 transition-colors"
-                >Stop</button>
+              {#if live}
+                {#if stopShown(sub.delegation_id) && confirmId !== sub.delegation_id}
+                  <button
+                    type="button"
+                    onclick={(e) => { e.stopPropagation(); askStop(sub.delegation_id); }}
+                    onpointerdown={(e) => e.stopPropagation()}
+                    class="-my-2 -mr-2 inline-flex h-10 shrink-0 items-center rounded-lg px-3 text-[11px] font-medium text-neg-400 hover:bg-neg-100 transition-colors"
+                  >Stop</button>
+                {/if}
               {:else if onContinue}
                 <!--
                   Only on a stopped row: continuing a working sub-agent
@@ -323,6 +513,30 @@
                 >Continue</button>
               {/if}
             </div>
+
+            {#if confirmId === sub.delegation_id}
+              <div
+                role="presentation"
+                onclick={(e) => e.stopPropagation()}
+                onkeydown={(e) => e.stopPropagation()}
+                onpointerdown={(e) => e.stopPropagation()}
+                class="flex items-center justify-between gap-2 rounded-lg border border-neg-200 bg-neg-100 px-2 py-1 dark:border-navy-600 dark:bg-navy-700"
+              >
+                <span class="min-w-0 truncate text-[11px] font-medium text-neg-400">Stop {sub.handle || sub.profile_key}?</span>
+                <div class="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    onclick={cancelStop}
+                    class="min-h-10 rounded-lg px-3 text-[11px] font-medium text-black-800 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600"
+                  >Cancel</button>
+                  <button
+                    type="button"
+                    onclick={() => confirmStop(sub.delegation_id)}
+                    class="min-h-10 rounded-lg bg-neg-400 px-3 text-[11px] font-medium text-white-100 transition-colors hover:opacity-90"
+                  >Stop</button>
+                </div>
+              </div>
+            {/if}
 
             <p class="text-[11px] text-black-800 dark:text-black-600 line-clamp-2" title={sub.label}>{subAgentTitle(sub)}</p>
             {#if (sub.resumes ?? 0) > 0}

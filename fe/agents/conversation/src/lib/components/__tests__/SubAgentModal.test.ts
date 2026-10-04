@@ -199,7 +199,8 @@ describe("SubAgentModal", () => {
   });
 
   // Stopping is offered only while there is something to stop; a Stop button
-  // on a finished sub-agent would be a click that does nothing.
+  // on a finished sub-agent would be a click that does nothing. It lives in
+  // the composer, as it does for the main agent — never in the header.
   test("Stop shows only while the sub-agent is live, and interrupts its delegation", async () => {
     replies.set("conversation:root--sub-9f2c81ab40de", { turns: [] });
 
@@ -210,8 +211,24 @@ describe("SubAgentModal", () => {
     render(SubAgentModal, {
       props: { ...props(), row: subAgent({ status: "running" }) },
     });
-    await fireEvent.click(await screen.findByRole("button", { name: /^stop$/i }));
+    const stop = await screen.findByRole("button", { name: /^stop$/i });
+    expect(stop.getAttribute("data-testid")).toBe("composer-stop");
+    expect(screen.getAllByRole("button", { name: /stop/i })).toHaveLength(1);
+    await fireEvent.click(stop);
     expect(calls.stopped).toEqual(["d1"]);
+  });
+
+  test("running with a draft: Send, and holding it offers Stop", async () => {
+    replies.set("conversation:root--sub-9f2c81ab40de", { turns: [] });
+    render(SubAgentModal, {
+      props: { ...props(), row: subAgent({ status: "running" }) },
+    });
+    await fireEvent.input(await screen.findByRole("textbox"), { target: { value: "Ow iya" } });
+    expect(screen.queryByTestId("composer-stop")).toBeNull();
+    await fireEvent.keyDown(screen.getByTestId("composer-send"), { key: "ArrowUp" });
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Stop" }));
+    expect(calls.stopped).toEqual(["d1"]);
+    expect(calls.sent).toEqual([]);
   });
 });
 
