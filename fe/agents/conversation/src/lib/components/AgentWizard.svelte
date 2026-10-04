@@ -15,7 +15,7 @@
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { getProjectOptions } from "../api/options.js";
   import { createAgent, getProjectPersona, listAgentConnectors, runApi, type AgentItem, type AgentConnector, type ConnectorGrant } from "../api/team.js";
-  import { HANDLE_RE, slugHandle, uniqueHandle, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject } from "../agentForm.js";
+  import { HANDLE_RE, slugHandle, uniqueHandle, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject, TAGLINE_MAX } from "../agentForm.js";
   import { PERSONA_KIND, personaInput, suggestedConnectors, type PersonaDraft } from "../personaGen.js";
   import { setOverride } from "../accessTiers.js";
   import { convertGrants, convertSummary } from "../convertProject.js";
@@ -337,7 +337,7 @@
         <!-- svelte-ignore a11y_autofocus -->
         <input id="aw-name" class={input} bind:value={name} placeholder="Log Hunter" autofocus />
         <label class="{label} mt-3" for="aw-tagline">Tagline</label>
-        <input id="aw-tagline" class={input} bind:value={tagline} maxlength="32" placeholder="e.g. The Critic" />
+        <input id="aw-tagline" class={input} bind:value={tagline} maxlength={TAGLINE_MAX} placeholder="e.g. The Critic" />
       </div>
       <div>
         <label class={label} for="aw-handle">Handle</label>

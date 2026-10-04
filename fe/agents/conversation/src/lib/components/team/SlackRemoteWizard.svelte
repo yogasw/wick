@@ -18,7 +18,7 @@
     type AgentConnector, type AgentItem, type SlackIdentity, type SlackListen,
     type SlackRemoteConfig, type SlackTarget, type SlackTestResult,
   } from "../../api/team.js";
-  import { HANDLE_RE } from "../../agentForm.js";
+  import { HANDLE_RE, TAGLINE_MAX } from "../../agentForm.js";
   import { cleanConfig, configError, secError, slackTestSummary, slackWarning, targetLabel } from "../../slackRemote.js";
 
   type Props = {
@@ -230,7 +230,7 @@
       </div>
       <div class="sm:col-span-2">
         <label class={label} for="sw-tagline">Tagline</label>
-        <input id="sw-tagline" class={input} bind:value={tagline} maxlength="32" placeholder="optional" />
+        <input id="sw-tagline" class={input} bind:value={tagline} maxlength={TAGLINE_MAX} placeholder="optional" />
       </div>
     </div>
     <div class="flex flex-wrap items-center gap-2">

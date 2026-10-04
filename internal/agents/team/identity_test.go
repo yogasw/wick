@@ -85,11 +85,11 @@ func TestNormalizeTagline(t *testing.T) {
 	if got, err := NormalizeTagline(""); err != nil || got != "" {
 		t.Fatalf("empty: %q, %v", got, err)
 	}
-	// 32 multi-byte characters fit; 33 do not.
-	if _, err := NormalizeTagline(strings.Repeat("é", 32)); err != nil {
-		t.Fatalf("32 chars refused: %v", err)
+	// 50 multi-byte characters fit; 51 do not.
+	if _, err := NormalizeTagline(strings.Repeat("é", 50)); err != nil {
+		t.Fatalf("50 chars refused: %v", err)
 	}
-	if _, err := NormalizeTagline(strings.Repeat("a", 33)); err == nil {
-		t.Fatal("33 chars accepted")
+	if _, err := NormalizeTagline(strings.Repeat("a", 51)); err == nil {
+		t.Fatal("51 chars accepted")
 	}
 }

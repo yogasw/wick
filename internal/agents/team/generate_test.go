@@ -12,7 +12,7 @@ func TestPersonaFromResultNormalizes(t *testing.T) {
 	d, err := PersonaFromResult(wfprovider.StructuredResult{OK: true, Parsed: map[string]any{
 		"name":          "Anton",
 		"handle":        "@Anton The Critic!",
-		"tagline":       "  The   Critic of every pull request ever written ",
+		"tagline":       "  The   Critic of every pull request ever written, twice over ",
 		"description":   "Reviews changes.",
 		"system_prompt": "You review code.",
 		"avatar_shape":  "hexagon",
@@ -25,7 +25,7 @@ func TestPersonaFromResultNormalizes(t *testing.T) {
 	if d.Handle != "anton-the-critic" {
 		t.Errorf("handle %q", d.Handle)
 	}
-	if d.Tagline != "The Critic of every pull request" {
+	if d.Tagline != "The Critic of every pull request ever written, twi" {
 		t.Errorf("tagline %q (%d)", d.Tagline, len([]rune(d.Tagline)))
 	}
 	if d.AvatarShape != "" || d.AvatarColor != "#ff8800" {

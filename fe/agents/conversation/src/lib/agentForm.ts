@@ -3,6 +3,9 @@
 import type { ConnectorGrant, AgentConnector } from "./api/team.js";
 
 /** Same rule the server enforces (persona store): lowercase, digits, "-". */
+/** TAGLINE_MAX mirrors team.MaxTagline on the server. */
+export const TAGLINE_MAX = 50;
+
 export const HANDLE_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
 
 /** slugHandle derives a handle suggestion from a display name. */

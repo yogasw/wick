@@ -72,7 +72,7 @@ Rules:
 - Write in the language of the user's brief (English when it is English or unclear).
 - system_prompt: a concise persona, 4-10 short lines: focus, how it works, what it hands back, tone. Address the agent as "you". NEVER put the agent's name or handle in it — the app adds an identity block with the current name. Do not claim tools, data or access the agent may not have; say what to do when something is outside its access.
 - name: a short human-friendly name (1-2 words). handle: lowercase-kebab of the name, 2-31 chars of a-z, 0-9, "-".
-- tagline: a short label people know it by, at most 32 characters, e.g. "The Critic", "Log Hunter", "Si Kritikus".
+- tagline: a short label people know it by, at most 50 characters, e.g. "The Critic", "Log Hunter", "Si Kritikus".
 - description: one sentence on what it is for.
 - avatar_shape: one of circle, squircle, triangle, diamond. avatar_color: a #rrggbb color that fits.
 - connectors: keys from AVAILABLE CONNECTORS that the agent would likely need (empty when none fit). Never invent a key.

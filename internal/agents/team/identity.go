@@ -9,8 +9,10 @@ import (
 )
 
 // MaxTagline is the longest tagline, in characters: a label that sits
-// beside a name, not a sentence.
-const MaxTagline = 32
+// beside a name, not a sentence. Room for a short role phrase such as
+// "spesialis product qiscus dan Support"; the persona column is
+// varchar(64), so it must stay at or under that.
+const MaxTagline = 50
 
 // NormalizeTagline trims a tagline and refuses one longer than
 // MaxTagline. "" is valid (no tagline).

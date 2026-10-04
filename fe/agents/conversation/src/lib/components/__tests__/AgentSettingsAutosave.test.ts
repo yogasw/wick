@@ -80,3 +80,11 @@ describe("AgentSettings autosave", () => {
     await waitFor(() => expect(footer()).toContain("Saved ✓"));
   });
 });
+
+describe("AgentSettings tagline", () => {
+  test("takes up to 50 characters", async () => {
+    render(AgentSettings, { props: { ...props(), tab: "persona" as never } });
+    const input = document.getElementById("as-tagline") as HTMLInputElement;
+    expect(input.maxLength).toBe(50);
+  });
+});

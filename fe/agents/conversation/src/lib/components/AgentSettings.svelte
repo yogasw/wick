@@ -18,7 +18,7 @@
   } from "../api/team.js";
   import type { AgentFeatures } from "../agentMode.js";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
-  import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject } from "../agentForm.js";
+  import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject, TAGLINE_MAX } from "../agentForm.js";
   import { navigate, type SettingsTab } from "../agentsRouter.js";
   import { deleteAlert, canDeleteAgent, type AgentProjectPreview } from "../agentDelete.js";
   import { PERSONA_KIND, personaInput, type PersonaDraft, type PersonaTarget } from "../personaGen.js";
@@ -380,7 +380,7 @@
         <label class={label} for="as-name">Name</label>
         <input id="as-name" class={input} bind:value={draft.name} />
         <label class="{label} mt-3" for="as-tagline">Tagline</label>
-        <input id="as-tagline" class={input} bind:value={draft.tagline} maxlength="32" placeholder="e.g. The Critic" />
+        <input id="as-tagline" class={input} bind:value={draft.tagline} maxlength={TAGLINE_MAX} placeholder="e.g. The Critic" />
       </div>
       <div>
         <label class={label} for="as-handle">Handle</label>
@@ -413,7 +413,7 @@
           onUse={(d: PersonaDraft) => { draft.tagline = d.tagline; draft.description = d.description; }}
         >
           {#snippet preview(d: PersonaDraft)}
-            <p class="text-xs font-semibold text-black-900 dark:text-white-100">{d.tagline}</p>
+            <p class="truncate text-xs font-semibold text-black-900 dark:text-white-100">{d.tagline}</p>
             <p class="mt-0.5 text-xs text-black-900 dark:text-white-100">{d.description}</p>
           {/snippet}
         </AIGenerateButton>

@@ -129,8 +129,8 @@ func (o CaptainOps) Create(ctx context.Context, sessionID string, in teamagents.
 		name = handle
 	}
 	tagline := strings.TrimSpace(in.Tagline)
-	if len([]rune(tagline)) > 64 {
-		return nil, errors.New("tagline is at most 64 characters")
+	if len([]rune(tagline)) > team.MaxTagline {
+		return nil, fmt.Errorf("tagline is at most %d characters", team.MaxTagline)
 	}
 	if _, err := globalTeam.GetByHandle(ctx, mgr.OwnerUserID, handle); err == nil {
 		return nil, team.ErrHandleTaken
@@ -197,8 +197,8 @@ func (o CaptainOps) UpdatePersona(ctx context.Context, sessionID string, in team
 	var changed []string
 	if in.Tagline != nil {
 		t := strings.TrimSpace(*in.Tagline)
-		if len([]rune(t)) > 64 {
-			return nil, errors.New("tagline is at most 64 characters")
+		if len([]rune(t)) > team.MaxTagline {
+			return nil, fmt.Errorf("tagline is at most %d characters", team.MaxTagline)
 		}
 		if t != p.Tagline {
 			p.Tagline = t

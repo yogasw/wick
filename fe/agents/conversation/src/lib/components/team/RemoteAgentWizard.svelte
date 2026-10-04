@@ -15,7 +15,7 @@
     createRemoteAgent, resolveRemoteCard, testRemoteAgent, runApi,
     type AgentItem, type RemoteAuthType, type RemoteResolved, type RemoteTestResult,
   } from "../../api/team.js";
-  import { HANDLE_RE } from "../../agentForm.js";
+  import { HANDLE_RE, TAGLINE_MAX } from "../../agentForm.js";
   import { authReq, egressWarning, testSummary } from "../../remoteAgent.js";
 
   type Props = {
@@ -231,7 +231,7 @@
         </div>
         <div>
           <label class={label} for="rw-tagline">Tagline</label>
-          <input id="rw-tagline" class={input} bind:value={tagline} maxlength="32" placeholder="optional" />
+          <input id="rw-tagline" class={input} bind:value={tagline} maxlength={TAGLINE_MAX} placeholder="optional" />
         </div>
       </div>
       <p class="text-xs text-black-800 dark:text-black-600">Name and avatar come from the card; change them later in Settings.</p>

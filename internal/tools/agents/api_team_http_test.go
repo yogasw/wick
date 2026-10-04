@@ -58,7 +58,7 @@ func TestTeamAgentCreateRejectsBadInput(t *testing.T) {
 			"allowed_connectors": []team.ConnectorGrant{{ConnectorID: "not-mine", Level: team.LevelAll}},
 		},
 		"invalid run_as":   {"handle": "worker", "run_as": "root"},
-		"tagline too long": {"handle": "worker", "tagline": "a tagline far longer than thirty-two characters"},
+		"tagline too long": {"handle": "worker", "tagline": "a tagline far longer than fifty characters, which is the cap"},
 	}
 	for name, body := range cases {
 		w, c := teamReq(t, u, http.MethodPost, "/api/team/agents", body, nil)
