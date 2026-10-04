@@ -40,7 +40,8 @@ func Frame(from Peer, text string) string {
 	return fmt.Sprintf("Message from %s:\n%s", from.Label(), text)
 }
 
-// Execute runs one turn of the agent's main conversation for the message.
+// Execute runs one turn of the agent's main conversation for the message —
+// or of the chat a new_chat opened for its exchange.
 func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
 		if ec.StoredTask == nil {
@@ -90,8 +91,14 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			}
 		}
 
-		var session string
-		if sl, ok := h.Turns.(SessionLocator); ok {
+		newChat, _ := meta[metaNewChat].(bool)
+		chat, err := h.chatFor(ctx, ec.ContextID, target, newChat)
+		if err != nil {
+			e.fail(ctx, ec, yield, err)
+			return
+		}
+		session := chat
+		if sl, ok := h.Turns.(SessionLocator); ok && session == "" {
 			session = sl.MainSession(ctx, target)
 		}
 		// The handoff row appears as soon as the task is picked up and is
@@ -103,7 +110,13 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		}
 		h.inflight[e.agentID][ec.TaskID] = inbound{contextID: ec.ContextID, depth: depth, session: session}
 		h.mu.Unlock()
-		sessionID, reply, runErr := h.Turns.Run(ctx, target, text)
+		var sessionID, reply string
+		var runErr error
+		if op, ok := h.Turns.(ChatOpener); ok && chat != "" {
+			sessionID, reply, runErr = op.RunIn(ctx, target, chat, text)
+		} else {
+			sessionID, reply, runErr = h.Turns.Run(ctx, target, text)
+		}
 		h.mu.Lock()
 		delete(h.inflight[e.agentID], ec.TaskID)
 		if len(h.inflight[e.agentID]) == 0 {

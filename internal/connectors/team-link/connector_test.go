@@ -113,3 +113,11 @@ func TestMessageRefusesNonTeamSession(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// new_chat reaches the hub: turns here cannot open a chat, so it is refused.
+func TestMessagePassesNewChat(t *testing.T) {
+	d := deps(teamlink.NewHub(dir{}, turns{}, &notify{}))
+	if _, err := call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "hi", "new_chat": "true"}); !errors.Is(err, teamlink.ErrNewChatUnsupported) {
+		t.Fatalf("err = %v", err)
+	}
+}

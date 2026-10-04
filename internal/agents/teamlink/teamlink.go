@@ -67,6 +67,9 @@ const (
 	metaSession = "wick.caller_session"
 	// metaChatUser names the recipient a shared agent's turn is for.
 	metaChatUser = "wick.chat_user"
+	// metaNewChat asks for the turn in a fresh chat of the target
+	// instead of its main one (SendInput.NewChat).
+	metaNewChat = "wick.new_chat"
 )
 
 var (
@@ -88,6 +91,8 @@ var (
 	// ErrUnknownContext refuses a context_id this owner never opened (or
 	// one already aged out).
 	ErrUnknownContext = errors.New("unknown context_id — omit it to start a new exchange")
+	// ErrNewChatUnsupported refuses new_chat where Turns cannot open one.
+	ErrNewChatUnsupported = errors.New("new_chat is not available here — send without it to reach the main chat")
 	// ErrUnknownTask means the task id was never issued to this caller.
 	ErrUnknownTask = errors.New("unknown task id")
 	// ErrMentionsOff refuses a turn the target's mention setting does not
@@ -314,6 +319,10 @@ type contextState struct {
 	// limit is the exchange's turn budget: the smallest MaxHops of every
 	// agent that took part so far.
 	limit int
+	// chats is the session each agent answers this exchange in when it
+	// was opened with new_chat (chatKey → session id); an agent missing
+	// here answers in its main chat.
+	chats map[string]string
 }
 
 // inbound is the task an agent is currently answering. A message the
@@ -332,6 +341,19 @@ type inbound struct {
 type SessionLocator interface {
 	MainSession(ctx context.Context, agent Peer) string
 }
+
+// ChatOpener is optionally implemented by Turns: a fresh chat of an agent
+// beside its main one, and a turn in a chosen chat. new_chat needs it.
+type ChatOpener interface {
+	// NewChat opens a new, non-main chat of agent and returns its id.
+	NewChat(ctx context.Context, agent Peer) (string, error)
+	// RunIn is Run in sessionID instead of the main chat.
+	RunIn(ctx context.Context, agent Peer, sessionID, text string) (string, string, error)
+}
+
+// chatKey names one agent's side of an exchange: a shared agent's chat
+// with a recipient is not its owner's.
+func chatKey(p Peer) string { return p.ID + "\x00" + p.ChatUser }
 
 // NewHub returns an empty Hub.
 func NewHub(dir Directory, turns Turns, notify Notifier) *Hub {
@@ -442,6 +464,9 @@ type SendInput struct {
 	// the exchange that reply answered. A person's mention (Human) always
 	// starts a fresh exchange.
 	Mention, Human bool
+	// NewChat runs the turn in a new chat of the target instead of its
+	// main one; later messages of the same context_id go to that chat.
+	NewChat bool
 }
 
 // Result is what a caller gets back.
@@ -491,6 +516,9 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, errors.New("message is empty")
 	}
+	if _, ok := h.Turns.(ChatOpener); in.NewChat && !ok {
+		return nil, ErrNewChatUnsupported
+	}
 	contextID, depth, limit, err := h.admit(caller.OwnerID, caller.ID, in.CallerSession, in.ContextID, in.Mention && !in.Human, MinHops(caller, target))
 	if err != nil {
 		if errors.Is(err, ErrHopLimit) {
@@ -504,6 +532,9 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	msg.Metadata = map[string]any{metaFrom: caller.ID, metaDepth: depth, metaSession: in.CallerSession}
 	if target.ChatUser != "" {
 		msg.Metadata[metaChatUser] = target.ChatUser
+	}
+	if in.NewChat {
+		msg.Metadata[metaNewChat] = true
 	}
 
 	cl, err := h.client(ctx, card)
@@ -646,6 +677,38 @@ func (h *Hub) pruneLocked() {
 	for _, st := range h.stores {
 		st.rotate(now, TaskTTL)
 	}
+}
+
+// chatFor is the session target answers contextID in: a new chat when
+// newChat asks for one (remembered for the rest of the exchange), the
+// chat an earlier new_chat opened, else "" — its main chat.
+func (h *Hub) chatFor(ctx context.Context, contextID string, target Peer, newChat bool) (string, error) {
+	key := chatKey(target)
+	if !newChat {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if cs := h.contexts[contextID]; cs != nil {
+			return cs.chats[key], nil
+		}
+		return "", nil
+	}
+	op, ok := h.Turns.(ChatOpener)
+	if !ok {
+		return "", ErrNewChatUnsupported
+	}
+	id, err := op.NewChat(ctx, target)
+	if err != nil {
+		return "", err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if cs := h.contexts[contextID]; cs != nil {
+		if cs.chats == nil {
+			cs.chats = map[string]string{}
+		}
+		cs.chats[key] = id
+	}
+	return id, nil
 }
 
 // wait polls the task until it settles or the wait runs out.

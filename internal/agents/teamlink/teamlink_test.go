@@ -467,3 +467,65 @@ func TestSendWaitClampedBelowOpTimeout(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// openerTurns is fakeTurns that can open chats (ChatOpener).
+type openerTurns struct {
+	*fakeTurns
+	opened []string
+	ran    []string
+}
+
+func (c *openerTurns) NewChat(_ context.Context, agent Peer) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.opened = append(c.opened, agent.Handle)
+	return "chat-" + agent.Handle + "-" + string(rune('0'+len(c.opened))), nil
+}
+
+func (c *openerTurns) RunIn(ctx context.Context, agent Peer, sessionID, text string) (string, string, error) {
+	c.mu.Lock()
+	c.ran = append(c.ran, agent.Handle+"@"+sessionID)
+	c.mu.Unlock()
+	_, reply, err := c.Run(ctx, agent, text)
+	return sessionID, reply, err
+}
+
+func TestNewChatOpensAndKeepsAChat(t *testing.T) {
+	h, turns, _ := newTestHub(func(Peer, string) string { return "ok" })
+	h.Dir.(*fakeDir).peers = append(h.Dir.(*fakeDir).peers,
+		Peer{ID: "a-res", OwnerID: "u1", Handle: "research", Name: "Research", Remote: true})
+	ct := &openerTurns{fakeTurns: turns}
+	h.Turns = ct
+	ctx := context.Background()
+	for _, to := range []string{"anton", "research"} {
+		first, err := h.Send(ctx, SendInput{CallerSession: "s", CallerAgentID: "a-cap", To: to, Text: "fresh start", NewChat: true})
+		if err != nil || first.State != "completed" {
+			t.Fatalf("%s new_chat: %+v, %v", to, first, err)
+		}
+		// The same exchange stays in the chat new_chat opened.
+		if _, err := h.Send(ctx, SendInput{CallerSession: "s", CallerAgentID: "a-cap", To: to, Text: "and then", ContextID: first.ContextID}); err != nil {
+			t.Fatal(err)
+		}
+		// A fresh exchange goes back to the main chat.
+		if _, err := h.Send(ctx, SendInput{CallerSession: "s", CallerAgentID: "a-cap", To: to, Text: "main again"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if strings.Join(ct.opened, ",") != "anton,research" {
+		t.Fatalf("opened = %v", ct.opened)
+	}
+	if got := strings.Join(ct.ran, ","); got != "anton@chat-anton-1,anton@chat-anton-1,research@chat-research-2,research@chat-research-2" {
+		t.Fatalf("ran in = %s", got)
+	}
+	if len(turns.seen) != 6 {
+		t.Fatalf("turns = %v", turns.seen)
+	}
+}
+
+func TestNewChatUnsupported(t *testing.T) {
+	h, _, _ := newTestHub(func(Peer, string) string { return "ok" })
+	_, err := h.Send(context.Background(), SendInput{CallerSession: "s", CallerAgentID: "a-cap", To: "anton", Text: "hi", NewChat: true})
+	if !errors.Is(err, ErrNewChatUnsupported) {
+		t.Fatalf("err = %v", err)
+	}
+}

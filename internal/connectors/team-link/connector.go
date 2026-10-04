@@ -61,6 +61,7 @@ type messageInput struct {
 	To          string `wick:"required;desc=The teammate's handle, e.g. @anton. Only agents of your own Team."`
 	Message     string `wick:"required;textarea;desc=What YOU need from them, composed by you. Lead with the point. wick signs it with your name — do not prefix it."`
 	ContextID   string `wick:"desc=Continue an earlier exchange: pass the context_id a previous call returned."`
+	NewChat     bool   `wick:"desc=true starts a NEW chat with the teammate instead of its main chat (a clean context). Later messages that pass the returned context_id go to that same chat. A Slack remote agent gets a new Slack thread — except one whose Remote target is a specific thread, which always posts in that thread."`
 	WaitSeconds int    `wick:"desc=How long to wait for the reply (default 90, max 150). If it is not ready by then you get state=working and the reply is delivered into this conversation later."`
 }
 
@@ -77,6 +78,7 @@ func Operations(deps Deps) []connector.Category {
 					"Returns {task_id, context_id, state, reply_text}. state=completed carries the reply; an empty reply_text means the teammate had nothing to add. "+
 					"state=working means it is still on it: end your turn — the reply is delivered into this conversation when it lands; do not poll or resend. "+
 					"state=failed carries the reason. Pass context_id to continue the same exchange. "+
+					"Set new_chat=true only when the user asks for a new/separate chat or session with the teammate; by default it lands in their main chat. "+
 					"Agent-to-agent turns are capped per exchange; on \"hop limit reached\" stop and report to the user.",
 				messageInput{}, deps.message, wickdocs.Docs{}),
 			connector.Op("get_task", "Check a Team Task",
@@ -114,6 +116,7 @@ func (d Deps) message(c *connector.Ctx) (any, error) {
 		Text:          c.Input("message"),
 		ContextID:     strings.TrimSpace(c.Input("context_id")),
 		Wait:          wait,
+		NewChat:       c.InputBool("new_chat"),
 	})
 }
 

@@ -9,11 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/delegation"
 	"github.com/yogasw/wick/internal/agents/event"
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/team"
@@ -141,22 +143,81 @@ func (d teamDirectory) Get(ctx context.Context, agentID string) (teamlink.Peer, 
 // are applied by the ordinary spawn path, which keys off the session).
 type poolTurns struct{}
 
-func (poolTurns) Run(ctx context.Context, agent teamlink.Peer, text string) (string, string, error) {
+func (t poolTurns) Run(ctx context.Context, agent teamlink.Peer, text string) (string, string, error) {
+	s, err := mainChatOf(agent)
+	if err != nil {
+		return "", "", err
+	}
+	return t.RunIn(ctx, agent, s.ID, text)
+}
+
+// mainChatOf is the agent's main chat, or the error a turn reports
+// when it has none yet.
+func mainChatOf(agent teamlink.Peer) (session.Session, error) {
 	s, ok := mainSessionOf(chatUserOf(agent), agent.ID)
 	if !ok {
 		if agent.ChatUser != "" {
-			return "", "", fmt.Errorf("@%s has no chat with you yet — open it once from your Team roster", agent.Handle)
+			return s, fmt.Errorf("@%s has no chat with you yet — open it once from your Team roster", agent.Handle)
 		}
-		return "", "", fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
+		return s, fmt.Errorf("@%s has no main chat yet — its owner has to open it once in the Agents app", agent.Handle)
 	}
+	return s, nil
+}
+
+// RunIn is Run in sessionID (teamlink.ChatOpener).
+func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text string) (string, string, error) {
 	// Subscribe BEFORE sending, or a fast turn ends unseen.
-	ch, unsub := NewDelegationStream(globalBcast).SubscribeSession(s.ID)
+	ch, unsub := NewDelegationStream(globalBcast).SubscribeSession(sessionID)
 	defer unsub()
 	// WithoutCancel: the turn must outlive the call that carried it.
-	if err := globalPool.Send(context.WithoutCancel(ctx), s.ID, "", sourceTeam, "user", text); err != nil {
-		return s.ID, "", err
+	if err := globalPool.Send(context.WithoutCancel(ctx), sessionID, "", sourceTeam, "user", text); err != nil {
+		return sessionID, "", err
 	}
-	return s.ID, collectTurn(ctx, ch), nil
+	return sessionID, collectTurn(ctx, ch), nil
+}
+
+// NewChat opens a chat of agent beside its main one, set up like it —
+// same owner, project, preset, provider and model — but not main
+// (teamlink.ChatOpener). A remote agent's chat keeps its own remote
+// state, so a Slack remote starts a new thread there.
+func (poolTurns) NewChat(ctx context.Context, agent teamlink.Peer) (string, error) {
+	main, err := mainChatOf(agent)
+	if err != nil {
+		return "", err
+	}
+	id := uuid.New().String()
+	if _, err := globalMgr.CreateSession(ctx, session.CreateOptions{
+		ID:        id,
+		ProjectID: main.Meta.ProjectID,
+		Origin:    session.OriginUI,
+		Preset:    main.Meta.Preset,
+		UserID:    main.Meta.UserID,
+		AgentID:   agent.ID,
+	}); err != nil {
+		return "", err
+	}
+	for _, a := range main.Agents {
+		if a.Name != "main" {
+			continue
+		}
+		if err := globalMgr.AddAgent(id, "main", a.Provider); err != nil {
+			return "", err
+		}
+		if a.ModelID != "" {
+			if err := session.SetModelID(globalLayout, id, "main", a.ModelID); err != nil {
+				log.Ctx(ctx).Warn().Msgf("team new chat set model id: %s", err.Error())
+			}
+		}
+	}
+	// Titled like the main chat, so it reads as the agent's in every list.
+	if sess, ok := globalMgr.Registry().Session(id); ok {
+		sess.Meta.Label = main.Meta.Label
+		sess.Meta.TitleCustom = true
+		if err := session.SaveMeta(globalLayout, id, sess.Meta); err == nil {
+			_ = globalMgr.RefreshSession(id)
+		}
+	}
+	return id, nil
 }
 
 // MainSession is the session a turn of agent runs in (SessionLocator).
