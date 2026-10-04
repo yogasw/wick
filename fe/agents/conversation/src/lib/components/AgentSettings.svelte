@@ -13,7 +13,7 @@
   import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, colorInputValue, isBlobKind, switchAvatarKind, type AvatarSpec } from "@wick-fe/common-avatar";
   import { getProviderOptions, getProjectOptions } from "../api/options.js";
   import {
-    getAgent, updateAgent, deleteAgent, getProjectPersona, listAgentConnectors, runApi,
+    getAgent, updateAgent, deleteAgent, getProjectPersona, listAgentConnectors, listAgentShares, makeCaptain, runApi,
     type AgentItem, type AgentWrite, type SuggestedPrompt, type ConnectorGrant, type AgentConnector,
   } from "../api/team.js";
   import type { AgentFeatures } from "../agentMode.js";
@@ -25,7 +25,7 @@
   import { PERSONA_KIND, personaInput, type PersonaDraft, type PersonaTarget } from "../personaGen.js";
   import { MENTION_FROM_OPTIONS, MAX_HOPS_MIN, MAX_HOPS_MAX, clampHops, hopsNote, mentionFromOf } from "../mentionSettings.js";
   import type { MentionFrom, CaptainCan } from "../api/team.js";
-  import { CAPTAIN_CAN_OPTIONS, CAPTAIN_ACCESS_NOTE, MANAGE_AGENTS_NOTE, captainCanOf } from "../captainSettings.js";
+  import { CAPTAIN_CAN_OPTIONS, CAPTAIN_ACCESS_NOTE, MANAGE_AGENTS_NOTE, captainCanOf, captainBlock } from "../captainSettings.js";
   import AccessHistory from "./AccessHistory.svelte";
   import NativeToolsSection from "./NativeToolsSection.svelte";
   import AgentSkillsTab from "./AgentSkillsTab.svelte";
@@ -139,6 +139,41 @@
   // its own (that would loop), only after another edit or Retry.
   let failedKey = $state("");
   let confirmDelete = $state(false);
+
+  /* Settings › Captain: "Make Captain" moves the role here in one server
+     transaction. The current Captain shows a read-only line instead of a
+     switch, so the Team is never left without one. A shared agent is
+     refused until its shares are gone, so they are counted first. */
+  const currentCaptain = $derived(agents.find((a) => a.is_captain && a.id !== agent.id));
+  let captainShares = $state<number | null>(null);
+  let confirmCaptain = $state(false);
+  let captainSaving = $state(false);
+  let captainError = $state("");
+  $effect(() => {
+    if (view !== "captain" || agent.is_captain || remote) return;
+    const id = agent.id;
+    captainShares = null;
+    runApi(listAgentShares(base, id))
+      .then((r) => { if (agent.id === id) captainShares = r.shares?.length ?? 0; })
+      .catch(() => { if (agent.id === id) captainShares = 0; });
+  });
+  const captainReason = $derived(captainBlock(agent, captainShares ?? 0));
+  async function doMakeCaptain() {
+    captainSaving = true;
+    captainError = "";
+    try {
+      const r = await runApi(makeCaptain(base, agent.id));
+      saved = r.agent;
+      draft.manage_agents = r.agent.manage_agents ?? r.agent.is_captain;
+      onSaved(r.agent);
+      confirmCaptain = false;
+      toastOk(`@${r.agent.handle} is now your Team's Captain`);
+    } catch (err) {
+      captainError = err instanceof Error ? err.message : String(err);
+    } finally {
+      captainSaving = false;
+    }
+  }
   // "Also delete its project" starts ticked; unticked keeps the chats as
   // a normal project. Ticked needs the agent's name typed.
   let alsoDeleteProject = $state(true);
@@ -703,6 +738,24 @@
     </div>
   {:else if view === "captain"}
     {#if agent.is_captain}
+      <div class="rounded-lg border border-green-500/40 bg-green-500/10 px-3 py-2 text-sm" data-testid="captain-status">
+        <p class="font-semibold text-black-900 dark:text-white-100">🧭 This agent is your Team's Captain.</p>
+        <p class="mt-0.5 text-xs text-black-800 dark:text-black-600">To move the role, open another agent's Settings → Captain → Make Captain.</p>
+      </div>
+    {:else}
+      <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600" data-testid="captain-make">
+        <span>
+          <span class="block text-sm font-medium text-black-900 dark:text-white-100">Captain role</span>
+          <span class="block text-xs text-black-800 dark:text-black-600">
+            {#if captainReason}{captainReason}{:else if currentCaptain}@{currentCaptain.handle} is your Captain now. Make @{agent.handle} the Captain instead — name, persona, chats and memory stay as they are.{:else}Your Team has no Captain. Make @{agent.handle} the Captain.{/if}
+          </span>
+        </span>
+        <span class="shrink-0 whitespace-nowrap">
+          <Button variant="secondary" disabled={captainShares === null || !!captainReason || captainSaving} onclick={() => { captainError = ""; confirmCaptain = true; }}>Make Captain</Button>
+        </span>
+      </div>
+    {/if}
+    {#if agent.is_captain}
       <div class="space-y-2" data-testid="captain-manage">
         <p class="text-sm font-semibold text-black-900 dark:text-white-100">Manage other agents</p>
         <div class="flex items-start justify-between gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600">
@@ -855,5 +908,19 @@
   {#snippet footer()}
     <Button variant="secondary" onclick={() => (confirmDelete = false)}>Cancel</Button>
     <Button variant="danger" disabled={saving || !canDeleteAgent(alsoDeleteProject, typedName, agentLabel)} onclick={remove}>{alsoDeleteProject ? "Delete agent and project" : "Delete agent"}</Button>
+  {/snippet}
+</Modal>
+
+<Modal open={confirmCaptain} title={`Make @${agent.handle} the Captain?`} onClose={() => (confirmCaptain = false)} size="sm">
+  <div class="space-y-2 text-sm text-black-900 dark:text-white-100" data-testid="captain-confirm">
+    <p>
+      {#if currentCaptain}<b>@{currentCaptain.handle}</b> stops being the Captain;{" "}{/if}<b>@{agent.handle}</b> takes over coordinating your Team.
+    </p>
+    <p class="text-xs text-black-800 dark:text-black-600">Only the role moves: names, personas, chats and memory stay as they are. Mentions set to "Captain only" now come from @{agent.handle}.</p>
+    {#if captainError}<p class="text-xs text-neg-400" role="alert">{captainError}</p>{/if}
+  </div>
+  {#snippet footer()}
+    <Button variant="secondary" onclick={() => (confirmCaptain = false)}>Cancel</Button>
+    <Button disabled={captainSaving} onclick={doMakeCaptain}>Make Captain</Button>
   {/snippet}
 </Modal>

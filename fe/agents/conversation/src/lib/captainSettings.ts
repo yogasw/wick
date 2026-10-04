@@ -40,3 +40,34 @@ export function historyStatus(it: AccessHistoryItem): string {
       return it.decided_by ? `approved by ${it.decided_by}` : "applied";
   }
 }
+
+/* Captain is a role, not a fixed agent: the first Wick agent takes it and
+   "Make Captain" (Settings › Captain) moves it. */
+
+/** CAPTAIN_FACTS is the wizard's "What is a Captain?" list. */
+export const CAPTAIN_FACTS = [
+  "Coordinates your Team: answers when nobody else is @mentioned and hands tasks to the right agent.",
+  "Can manage teammates' personas and routines (you control this in its Captain tab).",
+  "One per Team, always a Wick agent, never shared.",
+  "Not permanent: any other agent can take over via Settings → Captain → Make Captain.",
+];
+
+/** CAPTAIN_STARTER is the optional example persona the wizard fills in. */
+export const CAPTAIN_STARTER = {
+  name: "Captain",
+  handle: "captain",
+  description: "Lead agent that coordinates the Team.",
+  system_prompt: "Lead agent: coordinates the Team, routes work to the right agent and keeps the user posted.",
+};
+
+/** REMOTE_NOT_CAPTAIN is said wherever a remote agent meets the role. */
+export const REMOTE_NOT_CAPTAIN = "Remote agents (Slack / A2A) can join the Team, but cannot be the Captain.";
+
+/** captainBlock says why `agent` can't take the Captain role, "" when it
+    can. sharedCount is how many people it is shared with. */
+export function captainBlock(agent: { kind?: string; role?: string }, sharedCount: number): string {
+  if (agent.kind) return "A remote agent can't be the Captain — the Captain is always a Wick agent.";
+  if (agent.role === "viewer") return "Only the owner can make this agent Captain.";
+  if (sharedCount > 0) return "This agent is shared. The Captain runs your Team and can't be shared — stop sharing it first.";
+  return "";
+}

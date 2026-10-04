@@ -411,6 +411,11 @@ export const getAgent = (base: string, id: string) =>
 export const updateAgent = (base: string, id: string, body: AgentWrite) =>
   apiPatchE<AgentItem>(`${base}/api/team/agents/${enc(id)}`, body);
 
+/** makeCaptain moves the Captain role to agent id (one transaction
+    server-side); previous_id is the agent that held it, "" if none. */
+export const makeCaptain = (base: string, id: string) =>
+  apiPostE<{ agent: AgentItem; previous_id: string }>(`${base}/api/team/agents/${enc(id)}/captain`, {});
+
 /** The agent's latest 20 access changes, newest first. */
 export const getAccessHistory = (base: string, id: string) =>
   apiGetE<{ items: AccessHistoryItem[] | null }>(`${base}/api/team/agents/${enc(id)}/access-history`);

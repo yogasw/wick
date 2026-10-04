@@ -219,13 +219,6 @@ type teamAgentWriteReq struct {
 	Convert bool `json:"convert"`
 }
 
-// captainSystemAddon is the starting persona of the auto-created Captain.
-// Kept short: the owner is expected to rewrite it. It names no one: the
-// agent's name and handle come from the "Who you are" block built at
-// spawn (team.WhoYouAre), so a rename never leaves a stale name here.
-const captainSystemAddon = "You are the owner's main agent. Help the owner run their Team — who handles what — " +
-	"and handle yourself whatever doesn't fit another agent."
-
 // defaultAgentSystemAddon is saved for a new agent created with an empty
 // system prompt, so its persona is never blank.
 const defaultAgentSystemAddon = "Help the user with tasks in your area. Be concise and say when something is outside your access."
@@ -932,38 +925,6 @@ func discardTeamAgentProject(c *tool.Ctx, pid string) {
 	}
 }
 
-// ensureCaptain creates the owner's Captain when they have no agent yet,
-// so the app never opens on an empty roster.
-func ensureCaptain(c *tool.Ctx) ([]entity.AgentPersona, error) {
-	owner := actorID(c)
-	rows, err := globalTeam.List(c.Context(), owner)
-	if err != nil || len(rows) > 0 {
-		return rows, err
-	}
-	pid, err := createTeamAgentProject(c, "Captain", "🧭", "Lead agent that helps organise the team.", captainSystemAddon, "", "", "")
-	if err != nil {
-		return nil, err
-	}
-	p := &entity.AgentPersona{
-		OwnerUserID: owner, Handle: "captain", ProjectID: pid, IsCaptain: true,
-		AllowedConnectors: "[]",
-		Features:          team.EncodeFeatures(team.DefaultFeatures()),
-		Avatar:            team.EncodeAvatar(team.Avatar{Shape: "squircle", Color: "#f59e0b"}),
-	}
-	if err := globalTeam.Create(c.Context(), p); err != nil {
-		// Either way the project made above has no agent and nothing
-		// else knows its fresh id, so it goes rather than lingering as
-		// an orphan in the Projects list.
-		discardTeamAgentProject(c, pid)
-		if !errors.Is(err, team.ErrHandleTaken) {
-			return nil, err
-		}
-		// ErrHandleTaken = a concurrent first load won the race; its
-		// Captain is the one to show.
-	}
-	return globalTeam.List(c.Context(), owner)
-}
-
 /* ── handlers ────────────────────────────────────────────────────────────── */
 
 // apiTeamAgentList handles GET /api/team/agents.
@@ -971,15 +932,11 @@ func apiTeamAgentList(c *tool.Ctx) {
 	if !teamReady(c) {
 		return
 	}
-	// ?ensure=0 is the read-only roster (the Overview card): it never
-	// creates the Captain, which only the Team app itself should do.
-	var rows []entity.AgentPersona
-	var err error
-	if c.R.URL.Query().Get("ensure") == "0" {
-		rows, err = globalTeam.List(c.Context(), actorID(c))
-	} else {
-		rows, err = ensureCaptain(c)
-	}
+	// Read-only: no Captain is made here. An empty roster stays empty
+	// (the Team app shows its empty state) and the first agent created
+	// becomes the Captain (apiTeamAgentCreate). ?ensure=0, which the
+	// Overview card still sends, has nothing left to switch off.
+	rows, err := globalTeam.List(c.Context(), actorID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -1099,6 +1056,18 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 			return
 		}
 	}
+	// The owner's first Wick agent becomes their Captain, whatever its
+	// name: the role, not a fixed "captain" agent, runs the Team. A
+	// remote agent never does (it is made elsewhere), so an owner who
+	// started with one gets the Captain on their first Wick agent.
+	hasCaptain, err := globalTeam.HasCaptain(c.Context(), actorID(c))
+	if err != nil {
+		if !existing {
+			discardTeamAgentProject(c, pid)
+		}
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
 	feats := team.DefaultFeatures()
 	if req.Features != nil {
 		feats = *req.Features
@@ -1117,6 +1086,7 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		AccessMode:           accessMode,
 		Features:             team.EncodeFeatures(feats),
 		Avatar:               team.EncodeAvatar(av),
+		IsCaptain:            !hasCaptain,
 	}
 	if !applyToolSettings(c, p, req) {
 		return
@@ -1245,14 +1215,21 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	if req.CaptainCan != nil {
 		p.CaptainCan = team.EncodeCaptainCan(*req.CaptainCan)
 	}
+	// Captaincy moves by promoting another agent; un-ticking the current
+	// one would leave the owner with none. Promoting goes through the same
+	// checks and transfer as "Make Captain", after the rest is saved.
+	promote := false
 	if req.IsCaptain != nil {
-		// Captaincy moves by promoting another agent; un-ticking the
-		// current one would leave the owner with none.
 		if !*req.IsCaptain && p.IsCaptain {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": "make another agent Captain instead"})
 			return
 		}
-		p.IsCaptain = *req.IsCaptain
+		if *req.IsCaptain && !p.IsCaptain {
+			if !checkCaptainCandidate(c, p) {
+				return
+			}
+			promote = true
+		}
 	}
 
 	// Persona text goes to the project (after any project switch above,
@@ -1273,6 +1250,15 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	if err := globalTeam.Update(c.Context(), &p); err != nil {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
+	}
+	if promote {
+		if _, err := globalTeam.MakeCaptain(c.Context(), p.OwnerUserID, p.ID); err != nil {
+			c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
+			return
+		}
+		if fresh, err := globalTeam.Get(c.Context(), p.ID); err == nil {
+			p = fresh
+		}
 	}
 	announceAccessChanged(c, accessBefore, p)
 	// Disabling holds the agent's schedules, enabling releases them.

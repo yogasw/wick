@@ -6,6 +6,8 @@ const getAccessHistory = vi.fn(() => Promise.resolve({ items: [
   { id: "h1", actor: "@captain", status: "applied", diff: ["+Notion (read)"], decided_by: "Yoga", at: "2026-10-03T10:00:00Z" },
   { id: "h2", actor: "@captain", status: "declined", diff: ["-Slack"], decided_by: "Yoga", at: "2026-10-03T09:00:00Z" },
 ] }));
+let shareCount = 0;
+const makeCaptain = vi.fn((_b: string, id: string) => Promise.resolve({ agent: { ...worker, id, is_captain: true, manage_agents: true }, previous_id: "c1" }));
 vi.mock("../../api/team.js", async (orig) => ({
   ...(await orig<typeof import("../../api/team.js")>()),
   updateAgent: (b: string, id: string, body: unknown) => updateAgent(b, id, body),
@@ -13,6 +15,8 @@ vi.mock("../../api/team.js", async (orig) => ({
   listAgentConnectors: () => Promise.resolve([]),
   getAgent: () => Promise.resolve(null),
   getProjectPersona: () => Promise.resolve(null),
+  listAgentShares: () => Promise.resolve({ shares: Array.from({ length: shareCount }, (_, i) => ({ user_id: `u${i}`, name: "x", created_at: "" })), shareable: true, reason: "" }),
+  makeCaptain: (b: string, id: string) => makeCaptain(b, id),
   runApi: <T,>(p: Promise<T>) => p,
 }));
 vi.mock("../../api/options.js", () => ({
@@ -36,7 +40,41 @@ const props = (agent: AgentItem, tab: string) => ({
 const lastBody = () => updateAgent.mock.calls.at(-1)?.[2] as Record<string, unknown> | undefined;
 
 describe("AgentSettings › Captain", () => {
-  beforeEach(() => { updateAgent.mockClear(); getAccessHistory.mockClear(); });
+  beforeEach(() => { updateAgent.mockClear(); getAccessHistory.mockClear(); makeCaptain.mockClear(); shareCount = 0; });
+
+  test("a teammate gets Make Captain, confirmed in a dialog naming the current Captain", async () => {
+    const p = props(worker, "captain");
+    render(AgentSettings, { props: p });
+    const btn = screen.getByRole("button", { name: "Make Captain" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    expect(screen.getByTestId("captain-make").textContent).toContain("@captain is your Captain now");
+    await fireEvent.click(btn);
+    const dlg = await screen.findByTestId("captain-confirm");
+    expect(dlg.textContent).toContain("@captain stops being the Captain");
+    expect(dlg.textContent).toContain("@worker takes over coordinating your Team");
+    expect(makeCaptain).not.toHaveBeenCalled();
+    const confirm = screen.getAllByRole("button", { name: "Make Captain" }).at(-1)!;
+    await fireEvent.click(confirm);
+    await waitFor(() => expect(makeCaptain).toHaveBeenCalledWith("/tools/agents", "a1"));
+    await waitFor(() => expect(p.onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: "a1", is_captain: true })));
+    // The transfer is its own call, never a PATCH of is_captain.
+    expect(updateAgent.mock.calls.some((c) => "is_captain" in (c[2] as object))).toBe(false);
+  });
+
+  test("the Captain shows a read-only status, no Make Captain and no switch", () => {
+    render(AgentSettings, { props: props(captain, "captain") });
+    expect(screen.getByTestId("captain-status").textContent).toContain("This agent is your Team's Captain.");
+    expect(screen.getByTestId("captain-status").textContent).toContain("Make Captain");
+    expect(screen.queryByRole("button", { name: "Make Captain" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: /captain/i })).toBeNull();
+  });
+
+  test("a shared agent cannot be made Captain and says why", async () => {
+    shareCount = 1;
+    render(AgentSettings, { props: props(worker, "captain") });
+    await waitFor(() => expect(screen.getByTestId("captain-make").textContent).toContain("stop sharing it first"));
+    expect(screen.getByRole("button", { name: "Make Captain" }).hasAttribute("disabled")).toBe(true);
+  });
 
   test("a teammate shows the three Captain-can toggles with defaults", () => {
     render(AgentSettings, { props: props(worker, "captain") });

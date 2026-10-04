@@ -12,7 +12,7 @@ func TestWhoYouAre(t *testing.T) {
 		"## Who you are",
 		"Your name is Captain. People and other agents call you @captain",
 		"Your role: Lead agent.",
-		"You are the Captain — the owner's main agent.",
+		"You are the Captain — the owner's main agent. " + CaptainRoleAddon,
 		"Your Team: Log Hunter (@log-hunter) — reads logs; Bob (@bob)",
 		"the name and handle above are the current ones",
 	} {
@@ -91,5 +91,16 @@ func TestNormalizeTagline(t *testing.T) {
 	}
 	if _, err := NormalizeTagline(strings.Repeat("a", 51)); err == nil {
 		t.Fatal("51 chars accepted")
+	}
+}
+
+// The Captain addon rides on the role, not the persona: only the Captain's
+// block carries it.
+func TestWhoYouAreCaptainAddonFollowsRole(t *testing.T) {
+	if got := WhoYouAre(Member{Name: "Ops", Handle: "ops", IsCaptain: true}, nil); !strings.Contains(got, CaptainRoleAddon) {
+		t.Fatalf("captain block lacks the addon:\n%s", got)
+	}
+	if got := WhoYouAre(Member{Name: "Ops", Handle: "ops"}, nil); strings.Contains(got, CaptainRoleAddon) {
+		t.Fatalf("non-captain got the addon:\n%s", got)
 	}
 }

@@ -14,6 +14,7 @@
   import SharedAgentInfo from "./lib/components/SharedAgentInfo.svelte";
   import { agentMenu, isSharedAgent, sharedChatMode, sharedLabel } from "./lib/agentSharing.js";
   import AgentWizard from "./lib/components/AgentWizard.svelte";
+  import TeamEmptyState from "./lib/components/TeamEmptyState.svelte";
   import RemoteAgentWizard from "./lib/components/team/RemoteAgentWizard.svelte";
   import SlackRemoteWizard from "./lib/components/team/SlackRemoteWizard.svelte";
   import PluginRemoteWizard from "./lib/components/team/PluginRemoteWizard.svelte";
@@ -270,6 +271,15 @@
     newType = "local";
     openPanel({ kind: "new" });
   }
+  /* "Connect a remote agent" from the empty Team: the + Agent modal on
+     its Remote tab. */
+  function newRemoteAgent() {
+    newAgent();
+    newType = "remote";
+  }
+  /* No Captain yet: the next Wick agent made takes the role (server-side),
+     so the wizard says so and a remote wizard points back to it. */
+  const firstAgent = $derived(loaded && !agents.some((a) => a.is_captain));
 
   /* "+ New chat" opens a draft for the agent: no session yet, so clicking
      it twice or walking away leaves no empty chats. The draft ends when
@@ -340,6 +350,10 @@
 
   function onCreated(a: AgentItem) {
     agents = [...agents, a];
+    if (a.is_captain) {
+      captainId = a.id;
+      toastOk(`🧭 @${a.handle} is created and is now your Team's Captain`);
+    }
     hatching = [...hatching, a.id];
     setTimeout(() => (hatching = hatching.filter((id) => id !== a.id)), HATCH_MS);
     navigate({ handle: a.handle, session: null, panel: null });
@@ -536,9 +550,21 @@
       {:else if loadError}
         <p class="px-3 py-4 text-sm text-neg-400">{loadError}</p>
       {:else if agents.length === 0}
-        <div class="flex flex-col items-center gap-3 px-4 py-10 text-center" data-testid="roster-empty">
-          <p class="text-sm text-black-800 dark:text-black-600">No agents yet.</p>
-          <button type="button" class="rounded-xl bg-green-500 px-4 py-2 text-sm font-semibold text-white-100 hover:bg-green-600" onclick={newAgent}>New agent</button>
+        <!-- Empty Team: a short hint over ghost rows; the main pane has
+             the full explanation and buttons (TeamEmptyState). -->
+        <div class="px-1.5 pt-1" data-testid="roster-empty">
+          <p class="mb-2 rounded-xl border border-dashed border-white-300 px-3 py-2.5 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">
+            <b class="text-black-900 dark:text-white-100">No agents yet</b><br />Your first agent becomes your <b class="text-black-900 dark:text-white-100">Captain</b>.
+          </p>
+          {#each [{ o: 0.55, a: 60, b: 85 }, { o: 0.35, a: 45, b: 70 }, { o: 0.2, a: 55, b: 65 }] as g}
+            <div class="flex items-center gap-2.5 px-2 py-2" style:opacity={g.o} aria-hidden="true">
+              <span class="h-9 w-9 shrink-0 rounded-full border-2 border-dashed border-white-300 dark:border-navy-600"></span>
+              <span class="min-w-0 flex-1">
+                <span class="mb-1.5 block h-2 rounded bg-white-300 dark:bg-navy-600" style="width:{g.a}%"></span>
+                <span class="block h-2 rounded bg-white-300 dark:bg-navy-600" style="width:{g.b}%"></span>
+              </span>
+            </div>
+          {/each}
         </div>
       {:else if entries.length === 0}
         <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">No matches.</p>
@@ -717,7 +743,7 @@
           {/each}
         </div>
       {:else if loaded && !loadError && agents.length === 0}
-        <div class="flex h-full items-center justify-center text-sm text-black-800 dark:text-black-600">No agents yet.</div>
+        <TeamEmptyState onCreate={newAgent} onRemote={newRemoteAgent} />
       {/if}
     </div>
   </section>
@@ -762,6 +788,13 @@
           onClose={() => openPanel(null)}
         />
       {:else if route.panel.kind === "new"}
+        {#if firstAgent && newType !== "local" && !route.panel.project}
+          <div class="mx-4 mt-4 flex items-start gap-2.5 rounded-xl border border-white-300 bg-white-200 px-3 py-2.5 text-xs text-black-800 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600" data-testid="remote-not-captain">
+            <span aria-hidden="true">ℹ️</span>
+            <span class="min-w-0 flex-1">Remote agents <b class="text-black-900 dark:text-white-100">can't be the Captain</b>. Your Team has no Captain yet, so create a Wick agent first — it becomes the Captain.</span>
+            <button type="button" class="shrink-0 rounded-lg bg-green-500 px-3 py-1 text-xs font-semibold text-white-100 hover:bg-green-600" onclick={() => (newType = "local")}>Create a Wick agent first</button>
+          </div>
+        {/if}
         {#if newType === "slack" && !route.panel.project}
           <SlackRemoteWizard {base} taken={agents.map((a) => a.handle)} onClose={() => openPanel(null)} {onCreated} onType={(t) => (newType = t)} />
         {:else if newType === "plugin" && !route.panel.project}
@@ -769,7 +802,7 @@
         {:else if newType === "remote" && !route.panel.project}
           <RemoteAgentWizard {base} taken={agents.map((a) => a.handle)} onClose={() => openPanel(null)} {onCreated} onType={(t) => (newType = t)} />
         {:else}
-          <AgentWizard {base} taken={agents.map((a) => a.handle)} convertProject={route.panel.project} onClose={() => openPanel(null)} {onCreated} onType={(t) => (newType = t)} />
+          <AgentWizard {base} taken={agents.map((a) => a.handle)} convertProject={route.panel.project} {firstAgent} onClose={() => openPanel(null)} {onCreated} onType={(t) => (newType = t)} />
         {/if}
       {:else if selected && isSharedAgent(selected) && route.panel.kind !== "sessions"}
         <SharedAgentInfo agent={selected} onClose={() => openPanel(null)} />

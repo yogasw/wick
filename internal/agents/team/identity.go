@@ -28,6 +28,13 @@ func NormalizeTagline(s string) (string, error) {
 // does not grow every spawn's prompt; the rest is counted, not named.
 const maxTeamListed = 12
 
+// CaptainRoleAddon is what the Captain role adds to the agent's own
+// persona. It lives here, in the spawn-time "Who you are" block, rather
+// than in the persona text, so it follows the role when "Make Captain"
+// moves it and the owner's persona is never overwritten.
+const CaptainRoleAddon = "Help the owner run their Team — who handles what — " +
+	"and handle yourself whatever doesn't fit another agent."
+
 // Member is one Team agent as the identity block names it. Name and
 // Description come from the agent's project, Handle from its row; Tagline
 // is the short one-liner when the agent has one.
@@ -57,7 +64,7 @@ func WhoYouAre(self Member, team []Member) string {
 		fmt.Fprintf(&b, " People know you as %s, %s.", self.Name, strings.TrimRight(t, ". "))
 	}
 	if self.IsCaptain {
-		b.WriteString(" You are the Captain — the owner's main agent.")
+		b.WriteString(" You are the Captain — the owner's main agent. " + CaptainRoleAddon)
 	}
 	b.WriteString("\n")
 	if self.IsCaptain {

@@ -235,3 +235,51 @@ func (s *Store) ListIdleCompact(ctx context.Context) ([]entity.AgentPersona, err
 		Order("id ASC").Find(&rows).Error
 	return rows, err
 }
+
+// MakeCaptain moves the owner's Captain role to agent id in one
+// transaction: the current Captain is cleared and id set, so the owner
+// never has none or two. The old Captain's "Manage other agents" choice
+// moves with the role (its own stored value goes back to the default,
+// which is off for a non-Captain). Returns the previous Captain, zero
+// when there was none or id already was it.
+func (s *Store) MakeCaptain(ctx context.Context, ownerID, id string) (entity.AgentPersona, error) {
+	var prev entity.AgentPersona
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var next entity.AgentPersona
+		if err := tx.Where("id = ? AND owner_user_id = ?", id, ownerID).First(&next).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if next.IsCaptain {
+			return nil
+		}
+		var olds []entity.AgentPersona
+		if err := tx.Where("owner_user_id = ? AND is_captain = ? AND id <> ?", ownerID, true, id).Find(&olds).Error; err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		manage := next.ManageAgents
+		for i, o := range olds {
+			if i == 0 {
+				prev, manage = o, o.ManageAgents
+			}
+			if err := tx.Model(&entity.AgentPersona{}).Where("id = ?", o.ID).
+				Updates(map[string]any{"is_captain": false, "manage_agents": nil, "updated_at": now}).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Model(&entity.AgentPersona{}).Where("id = ?", id).
+			Updates(map[string]any{"is_captain": true, "manage_agents": manage, "updated_at": now}).Error
+	})
+	return prev, err
+}
+
+// HasCaptain reports whether the owner has a Captain.
+func (s *Store) HasCaptain(ctx context.Context, ownerID string) (bool, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Model(&entity.AgentPersona{}).
+		Where("owner_user_id = ? AND is_captain = ?", ownerID, true).Count(&n).Error
+	return n > 0, err
+}

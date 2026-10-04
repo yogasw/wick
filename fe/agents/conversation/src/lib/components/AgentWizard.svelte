@@ -22,6 +22,7 @@
   import { PERSONA_KIND, personaInput, suggestedConnectors, type PersonaDraft } from "../personaGen.js";
   import { setOverride } from "../accessTiers.js";
   import { convertGrants, convertSummary } from "../convertProject.js";
+  import { CAPTAIN_STARTER, CAPTAIN_FACTS } from "../captainSettings.js";
 
   type Props = {
     base: string;
@@ -34,8 +35,11 @@
     onCreated: (a: AgentItem) => void;
     /** Switches + Agent to a remote agent's wizard (not when converting). */
     onType?: (t: "local" | "remote" | "slack" | "plugin") => void;
+    /** The Team has no Captain yet: the agent made here becomes it, so
+        the Persona step says so and offers a starter persona. */
+    firstAgent?: boolean;
   };
-  let { base, taken, convertProject, onClose, onCreated, onType }: Props = $props();
+  let { base, taken, convertProject, onClose, onCreated, onType, firstAgent = false }: Props = $props();
 
   const STEPS = ["Persona", "Access", "Model"];
   let step = $state(1);
@@ -190,6 +194,16 @@
   }
   const suggestions = $derived(suggestedConnectors(suggested, catalog, grants.map((g) => g.connector_id)));
 
+  /* "Use Captain starter persona": an optional example the owner edits;
+     the Captain role's own prompt is added server-side whatever is here. */
+  function useCaptainStarter() {
+    name = CAPTAIN_STARTER.name;
+    handle = uniqueHandle(CAPTAIN_STARTER.handle, taken);
+    handleTouched = true;
+    description = CAPTAIN_STARTER.description;
+    systemPrompt = CAPTAIN_STARTER.system_prompt;
+  }
+
   const handleOk = $derived(HANDLE_RE.test(handle));
   const handleTaken = $derived(taken.includes(handle));
   const personaOk = $derived(name.trim() !== "" && handleOk && !handleTaken);
@@ -296,6 +310,26 @@
         {/if}
         <br />What they do now is kept: every connector at Write (plus new ones), run as the caller, and the global system prompt — both shown, and changeable, on the next step.
       </p>
+    {/if}
+    {#if firstAgent && !convertProject}
+      <div class="flex gap-2.5 rounded-xl border border-green-500/40 bg-green-500/10 px-3 py-2.5 text-sm text-black-900 dark:text-white-100" data-testid="aw-captain-note">
+        <span aria-hidden="true">🧭</span>
+        <div class="min-w-0">
+          <b>This agent will be your Captain.</b> Name it anything and write its own persona below.
+          <details class="mt-1.5 text-xs text-black-800 dark:text-black-600" data-testid="aw-captain-what">
+            <summary class="cursor-pointer select-none">What is a Captain?</summary>
+            <ul class="mt-1.5 list-disc space-y-0.5 pl-4">
+              {#each CAPTAIN_FACTS as f (f)}<li>{f}</li>{/each}
+            </ul>
+          </details>
+          <button
+            type="button"
+            class="mt-2 rounded-full border border-white-300 bg-white-100 px-3 py-1 text-xs text-black-900 hover:bg-white-200 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100 dark:hover:bg-navy-600"
+            data-testid="aw-captain-starter"
+            onclick={useCaptainStarter}
+          >Use Captain starter persona</button>
+        </div>
+      </div>
     {/if}
     <div class="rounded-xl border border-white-300 p-3 dark:border-navy-600">
       <label class={label} for="aw-brief">What should this agent do?</label>
