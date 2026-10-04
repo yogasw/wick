@@ -36,7 +36,7 @@ func TestTeamSettingsAPIOwnRowOnly(t *testing.T) {
 
 	w, c := teamReq(t, u1, http.MethodGet, "/api/team/settings", nil, nil)
 	apiTeamSettingsGet(c)
-	if d := decodeTeamSettings(t, w.Body.String()); w.Code != http.StatusOK || d.Prompt != "" || !d.OpenTeam || !d.IdleAnimations || d.MaxPromptBytes != team.MaxTeamPromptBytes {
+	if d := decodeTeamSettings(t, w.Body.String()); w.Code != http.StatusOK || d.Prompt != "" || d.OpenTeam || !d.IdleAnimations || d.MaxPromptBytes != team.MaxTeamPromptBytes {
 		t.Fatalf("defaults: %d %s", w.Code, w.Body)
 	}
 
@@ -45,10 +45,15 @@ func TestTeamSettingsAPIOwnRowOnly(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("save prompt: %d %s", w.Code, w.Body)
 	}
+	w, c = teamReq(t, u1, http.MethodPut, "/api/team/settings", map[string]any{"open_team": true}, nil)
+	apiTeamSettingsSave(c)
+	if d := decodeTeamSettings(t, w.Body.String()); d.Prompt != "U1 RULES" || !d.OpenTeam {
+		t.Fatalf("toggle on lost the prompt or did not stick: %s", w.Body)
+	}
 	w, c = teamReq(t, u1, http.MethodPut, "/api/team/settings", map[string]any{"open_team": false}, nil)
 	apiTeamSettingsSave(c)
 	if d := decodeTeamSettings(t, w.Body.String()); d.Prompt != "U1 RULES" || d.OpenTeam {
-		t.Fatalf("toggle lost the prompt or did not stick: %s", w.Body)
+		t.Fatalf("toggle off lost the prompt or did not stick: %s", w.Body)
 	}
 
 	w, c = teamReq(t, u1, http.MethodPut, "/api/team/settings", map[string]any{"idle_animations": false}, nil)
@@ -59,7 +64,7 @@ func TestTeamSettingsAPIOwnRowOnly(t *testing.T) {
 
 	w, c = teamReq(t, u2, http.MethodGet, "/api/team/settings", nil, nil)
 	apiTeamSettingsGet(c)
-	if d := decodeTeamSettings(t, w.Body.String()); d.Prompt != "" || !d.OpenTeam || !d.IdleAnimations {
+	if d := decodeTeamSettings(t, w.Body.String()); d.Prompt != "" || d.OpenTeam || !d.IdleAnimations {
 		t.Fatalf("u2 reads u1's settings: %s", w.Body)
 	}
 	if d := decodeTeamSettings(t, w.Body.String()); d.OperatorPromptHref != "" {
@@ -121,7 +126,7 @@ func TestTeamSettingsAPIRejectsUnknownAndMistyped(t *testing.T) {
 	}
 	w, c := teamReq(t, u, http.MethodGet, "/api/team/settings", nil, nil)
 	apiTeamSettingsGet(c)
-	if d := decodeTeamSettings(t, w.Body.String()); d.Prompt != "" || !d.OpenTeam {
+	if d := decodeTeamSettings(t, w.Body.String()); d.Prompt != "" || d.OpenTeam {
 		t.Fatalf("a refused body was partly saved: %s", w.Body)
 	}
 }

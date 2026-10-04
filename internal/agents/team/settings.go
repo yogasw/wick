@@ -99,7 +99,7 @@ var SettingFields = []SettingField{
 			if err := json.Unmarshal(raw, &v); err != nil {
 				return errors.New("open_team must be true or false")
 			}
-			st.ClassicHome = !v
+			st.TeamHome = v
 			return nil
 		},
 	},

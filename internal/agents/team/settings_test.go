@@ -18,17 +18,17 @@ func TestTeamSettingsRoundTrip(t *testing.T) {
 	st := NewStore(testDB(t))
 
 	got, err := st.Settings(ctx, "u1")
-	if err != nil || got.Prompt != "" || !got.OpenTeam() {
+	if err != nil || got.Prompt != "" || got.OpenTeam() {
 		t.Fatalf("defaults: %+v err=%v", got, err)
 	}
-	if err := st.SaveSettings(ctx, &entity.TeamSettings{UserID: "u1", Prompt: "Answer in Indonesian.", ClassicHome: true}); err != nil {
+	if err := st.SaveSettings(ctx, &entity.TeamSettings{UserID: "u1", Prompt: "Answer in Indonesian.", TeamHome: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SaveSettings(ctx, &entity.TeamSettings{UserID: "u1", Prompt: "Be brief."}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = st.Settings(ctx, "u1")
-	if got.Prompt != "Be brief." || !got.OpenTeam() {
+	if got.Prompt != "Be brief." || got.OpenTeam() {
 		t.Fatalf("after update: %+v", got)
 	}
 	if other, _ := st.Settings(ctx, "u2"); other.Prompt != "" {
@@ -99,7 +99,7 @@ func TestApplySettingsRegistry(t *testing.T) {
 	if err := ApplySettings(&st, map[string]json.RawMessage{"prompt": raw(`"new"`), "open_team": raw(`"yes"`)}); err == nil {
 		t.Fatal("mistyped open_team accepted")
 	}
-	if st.Prompt != "old" || st.ClassicHome {
+	if st.Prompt != "old" || st.TeamHome {
 		t.Fatalf("refused patch changed the row: %+v", st)
 	}
 	if err := ApplySettings(&st, map[string]json.RawMessage{"prompt": raw(`"new"`), "open_team": raw(`false`)}); err != nil {

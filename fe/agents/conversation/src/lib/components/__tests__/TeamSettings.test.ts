@@ -13,7 +13,7 @@ vi.mock("../../api/team.js", async (orig) => ({
 import TeamSettings from "../TeamSettings.svelte";
 import { idleAnimationsOn, setIdleAnimations } from "@wick-fe/common-avatar";
 
-const settings = (over: Record<string, unknown> = {}) => ({ prompt: "Be brief.", open_team: true, idle_animations: true, max_prompt_bytes: 16384, ...over });
+const settings = (over: Record<string, unknown> = {}) => ({ prompt: "Be brief.", open_team: false, idle_animations: true, max_prompt_bytes: 16384, ...over });
 
 function mount() {
   return render(TeamSettings, { props: { base: "/tools/agents", tab: "general", onTab: vi.fn(), onClose: vi.fn() } });
@@ -39,7 +39,7 @@ describe("TeamSettings", () => {
     mount();
     await screen.findByLabelText("Team prompt");
     await fireEvent.click(screen.getByRole("switch", { name: "Open Team when I open Agents" }));
-    await waitFor(() => expect(saveTeamSettings).toHaveBeenCalledWith("/tools/agents", { open_team: false }));
+    await waitFor(() => expect(saveTeamSettings).toHaveBeenCalledWith("/tools/agents", { open_team: true }));
     await waitFor(() => expect(screen.getByTestId("autosave-status").textContent).toContain("Saved"));
   });
 
