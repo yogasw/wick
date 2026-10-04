@@ -22,6 +22,11 @@ describe("TeamAccountMenu", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  test("the row shows the viewer's picture like the Agents sidebar, initial without one", () => {
+    mount({ viewerAvatar: "https://example.com/y.png" });
+    expect(screen.getByTestId("account-avatar").getAttribute("src")).toBe("https://example.com/y.png");
+  });
+
   test("no ↩ beside the name: the Team | Agents switch is the way back", () => {
     mount();
     expect(screen.queryByRole("link", { name: "Back to Agents" })).toBeNull();
@@ -42,7 +47,11 @@ describe("TeamAccountMenu", () => {
     const labels = screen.getAllByRole("menuitem").map((el) => el.textContent?.trim());
     expect(menu.textContent).toContain("yoga@example.com");
     // Same items as wick's account menu; no Agents item (the switch covers it).
-    expect(labels).toEqual(["Profile", "Access Tokens", "Connected Apps", "MCP", "Team settings", "Mini Tools", "Sign out"]);
+    // Team settings comes first, in its own section set apart by a divider.
+    expect(labels).toEqual(["Team settings", "Profile", "Access Tokens", "Connected Apps", "MCP", "Mini Tools", "Sign out"]);
+    const section = screen.getByTestId("space-settings");
+    expect(section.className).toContain("border-b");
+    expect(section.textContent?.trim()).toBe("Team settings");
     expect(screen.getByRole("menuitem", { name: "Mini Tools" }).getAttribute("href")).toBe("/mini-tools");
     expect(screen.getByRole("menuitem", { name: "Access Tokens" }).getAttribute("href")).toBe("/profile/tokens");
     expect(screen.getByRole("menuitem", { name: "Sign out" }).closest("form")!.getAttribute("action")).toBe("/auth/logout");

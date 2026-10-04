@@ -56,6 +56,12 @@ type UserMetadata struct {
 	// with them.
 	Rail RailPrefs `json:"rail,omitempty"`
 
+	// Sidebar holds the width the user dragged each sidebar to, like the
+	// theme: it travels with the account, not the browser. Team and Agents
+	// keep their own, since they are different spaces (a wide chat list vs
+	// a dense navigation column).
+	Sidebar SidebarWidths `json:"sidebar,omitempty"`
+
 	// AutoDeleteEmptyTickets answers "delete this ticket now that its last
 	// chat moved away?" without asking again. Set by the "Don't ask again"
 	// box on that prompt, and resettable in the profile.
@@ -72,6 +78,33 @@ const (
 	AutoDeleteEmptyAlways = "always"
 	AutoDeleteEmptyNever  = "never"
 )
+
+// SidebarWidths is the dragged width, in CSS px, of each sidebar. 0 means
+// "never resized": the page uses its own default.
+type SidebarWidths struct {
+	Team   int `json:"team,omitempty"`
+	Agents int `json:"agents,omitempty"`
+}
+
+// Sidebar width bounds. Anything outside is clamped, so a stray value can
+// never hide the sidebar or swallow the page.
+const (
+	SidebarMinWidth = 200
+	SidebarMaxWidth = 480
+)
+
+// ClampSidebarWidth keeps w inside the bounds; 0 stays 0 (reset to default).
+func ClampSidebarWidth(w int) int {
+	switch {
+	case w <= 0:
+		return 0
+	case w < SidebarMinWidth:
+		return SidebarMinWidth
+	case w > SidebarMaxWidth:
+		return SidebarMaxWidth
+	}
+	return w
+}
 
 // RailPrefs is one user's conversation-rail layout.
 type RailPrefs struct {

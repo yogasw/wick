@@ -491,6 +491,9 @@ func Register(r tool.Router) {
 	r.GET("/api/me/rail", apiRailPrefsGet)
 	r.PUT("/api/me/rail", apiRailPrefsSave)
 
+	// Dragged sidebar width, per space (team / agents), saved on the account.
+	r.PUT("/api/me/sidebar", apiSidebarWidthSave)
+
 	// Standing answers to ticket prompts ("don't ask again").
 	r.GET("/api/me/ticket-prefs", apiTicketPrefsGet)
 	r.PUT("/api/me/ticket-prefs", apiTicketPrefsSave)

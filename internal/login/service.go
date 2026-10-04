@@ -229,6 +229,26 @@ func (s *Service) SetRailPrefs(ctx context.Context, userID string, p entity.Rail
 	return s.repo.SetMetadata(ctx, userID, meta)
 }
 
+// SetSidebarWidth saves how wide the user dragged the "team" or "agents"
+// sidebar. width 0 resets it to the page default; others are clamped.
+func (s *Service) SetSidebarWidth(ctx context.Context, userID, space string, width int) error {
+	if space != "team" && space != "agents" {
+		return errors.New(`space must be "team" or "agents"`)
+	}
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	meta := u.Metadata
+	w := entity.ClampSidebarWidth(width)
+	if space == "team" {
+		meta.Sidebar.Team = w
+	} else {
+		meta.Sidebar.Agents = w
+	}
+	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
 // SetAutoDeleteEmptyTickets records the user's standing answer to "delete
 // this ticket now that its last chat left?". Only the empty case: deleting a
 // ticket that still holds chats always asks, because that one takes

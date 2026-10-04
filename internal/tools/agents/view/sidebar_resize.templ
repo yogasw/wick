@@ -1,0 +1,54 @@
+package view
+
+// sidebarResize makes the Team or Agents sidebar resizable by dragging its
+// right edge, and puts back the width the user saved on their account (like
+// the theme, it follows them across browsers). space is "team" or "agents";
+// each keeps its own width because they are different spaces. A double-click
+// on the edge goes back to the default. The handle is drawn by the page
+// ([data-sidebar-resize]); this only adds the styles and the drag.
+templ sidebarResize(space string, width int) {
+	@templ.Raw(sidebarResizeCSS(space, width))
+	<script>
+		(function () {
+			if (window.__wickSidebarResize) return;
+			window.__wickSidebarResize = true;
+			var root = document.documentElement;
+			function save(h, w) {
+				fetch(h.getAttribute("data-sidebar-resize"), {
+					method: "PUT",
+					credentials: "same-origin",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ space: h.getAttribute("data-space"), width: w }),
+				}).catch(function () {});
+			}
+			document.addEventListener("pointerdown", function (e) {
+				var h = e.target.closest && e.target.closest("[data-sidebar-resize]");
+				var aside = h && h.closest("[data-space-sidebar]");
+				if (!aside || e.button !== 0) return;
+				e.preventDefault();
+				var x0 = e.clientX, w0 = Math.round(aside.getBoundingClientRect().width), w = w0;
+				root.classList.add("wick-sidebar-resizing");
+				function move(ev) {
+					w = Math.max(200, Math.min(480, Math.round(w0 + ev.clientX - x0)));
+					root.style.setProperty("--wick-sidebar-w", w + "px");
+				}
+				function up() {
+					removeEventListener("pointermove", move);
+					removeEventListener("pointerup", up);
+					removeEventListener("pointercancel", up);
+					root.classList.remove("wick-sidebar-resizing");
+					if (w !== w0) save(h, w);
+				}
+				addEventListener("pointermove", move);
+				addEventListener("pointerup", up);
+				addEventListener("pointercancel", up);
+			});
+			document.addEventListener("dblclick", function (e) {
+				var h = e.target.closest && e.target.closest("[data-sidebar-resize]");
+				if (!h) return;
+				root.style.setProperty("--wick-sidebar-w", h.getAttribute("data-default"));
+				save(h, 0);
+			});
+		})();
+	</script>
+}

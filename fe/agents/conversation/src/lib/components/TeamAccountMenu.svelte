@@ -3,8 +3,8 @@
      mockup): the viewer's initial and name open a menu that rises above
      it with the same items as wick's own account menu (nav.templ
      userMenu, sidebar variant): name and email, the Viewing as banner with
-     its way back, Profile, Access Tokens, Connected Apps, MCP, Team
-     settings, Mini Tools, Admin panel (admins), Theme, versions, Sign out.
+     its way back, Team settings (set apart at the top), Profile, Access Tokens,
+     Connected Apps, MCP, Mini Tools, Admin panel (admins), Theme, versions, Sign out.
      The Team | Agents switch at the top of the sidebar is the way to the
      Agents pages, so there is no Agents item here.
      Esc or a press outside closes the menu; Esc gives focus back to the
@@ -14,6 +14,8 @@
   type Props = {
     viewerName: string;
     viewerEmail?: string;
+    /** Picture URL; "" shows the initial, as the Agents sidebar does. */
+    viewerAvatar?: string;
     isAdmin?: boolean;
     /** Who the admin is viewing wick as; "" when not impersonating. */
     viewingAs?: string;
@@ -24,7 +26,7 @@
     theme: { mode: "light" | "dark"; light: string; dark: string } | null;
     onSettings: () => void;
   };
-  let { viewerName, viewerEmail = "", isAdmin = false, viewingAs = "", appVersion = "", wickVersion = "", theme, onSettings }: Props = $props();
+  let { viewerName, viewerEmail = "", viewerAvatar = "", isAdmin = false, viewingAs = "", appVersion = "", wickVersion = "", theme, onSettings }: Props = $props();
 
   let open = $state(false);
   let root = $state<HTMLDivElement>();
@@ -68,13 +70,18 @@
     aria-expanded={open}
     onclick={() => (open = !open)}
   >
-    <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-200 text-xs font-semibold text-green-700 select-none" aria-hidden="true">{initial}</span>
+    <!-- Same avatar as the Agents sidebar's account row (nav.templ). -->
+    {#if viewerAvatar}
+      <img src={viewerAvatar} alt="" referrerpolicy="no-referrer" class="h-8 w-8 shrink-0 rounded-full border border-white-300 object-cover dark:border-navy-600" data-testid="account-avatar" />
+    {:else}
+      <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-200 text-xs font-semibold text-green-700 select-none" aria-hidden="true">{initial}</span>
+    {/if}
     <span class="min-w-0 flex-1 truncate text-sm font-medium text-black-900 dark:text-white-100" data-testid="account-name">{viewerName || "You"}</span>
     {#if viewingAs}<span class="h-2.5 w-2.5 shrink-0 rounded-full bg-cau-400" title="Viewing as {viewingAs}" data-testid="viewing-as-dot"></span>{/if}
     <svg class="h-3.5 w-3.5 shrink-0 text-black-700 transition-transform dark:text-black-600 {open ? '' : 'rotate-180'}" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m6 9 6 6 6-6" /></svg>
   </button>
   {#if open}
-    <div class="absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-white-300 bg-white-100 shadow-lg dark:border-navy-600 dark:bg-navy-700" role="menu" aria-label="Account">
+    <div class="absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-white-300 bg-white-100 shadow-lg dark:border-navy-600 dark:bg-navy-700" role="menu" aria-label="Account" data-account-menu>
       <div class="border-b border-white-300 px-4 py-3 dark:border-navy-600">
         <p class="truncate text-sm font-medium text-black-900 dark:text-white-100">{viewerName || "You"}</p>
         {#if viewerEmail}<p class="truncate text-xs text-black-700 dark:text-black-600">{viewerEmail}</p>{/if}
@@ -91,6 +98,14 @@
           </form>
         </div>
       {/if}
+      <!-- Team's own settings, apart from the account-wide items below
+           (the Agents sidebar does the same with Agent settings). -->
+      <div class="border-b border-white-300 py-1 dark:border-navy-600" data-testid="space-settings">
+        <button type="button" role="menuitem" class={item} onclick={() => { void close(false); onSettings(); }}>
+          <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /></svg>
+          Team settings
+        </button>
+      </div>
       <div class="py-1">
         <!-- Same links and icons as wick's account menu (nav.templ). -->
         {#each [{ href: "/profile", label: "Profile", d: ["M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z"] }, { href: "/profile/tokens", label: "Access Tokens", d: ["M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z"] }, { href: "/profile/connections", label: "Connected Apps", d: ["M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244"] }, { href: "/profile/mcp", label: "MCP", d: ["M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z"] }] as l (l.href)}
@@ -99,10 +114,6 @@
             {l.label}
           </a>
         {/each}
-        <button type="button" role="menuitem" class={item} onclick={() => { void close(false); onSettings(); }}>
-          <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /></svg>
-          Team settings
-        </button>
         <a href="/mini-tools" role="menuitem" class={item}>
           <svg class="h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6.5 2.5a3 3 0 00-3.5 4l-1 1 2.5 2.5 1-1a3 3 0 004-3.5L7.5 7 6 5.5l1-3z" stroke-linejoin="round"></path></svg>
           Mini Tools

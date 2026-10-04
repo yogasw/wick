@@ -1329,6 +1329,33 @@ func apiRailPrefsSave(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// apiSidebarWidthSave handles PUT /api/me/sidebar {"space":"team|agents","width":N}.
+// width 0 resets to the default.
+func apiSidebarWidthSave(c *tool.Ctx) {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "login required"})
+		return
+	}
+	var body struct {
+		Space string `json:"space"`
+		Width int    `json:"width"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	if globalAuth == nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": "auth service unavailable"})
+		return
+	}
+	if err := globalAuth.SetSidebarWidth(c.Context(), u.ID, body.Space, body.Width); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"status": "ok", "width": entity.ClampSidebarWidth(body.Width)})
+}
+
 // apiTicketFilterGet handles GET /api/me/ticket-filters/{projectID}.
 func apiTicketFilterGet(c *tool.Ctx) {
 	u := login.GetUser(c.Context())

@@ -48,6 +48,7 @@
   const viewerName = appEl?.dataset.viewerName ?? "";
   const account = {
     viewerEmail: appEl?.dataset.viewerEmail ?? "",
+    viewerAvatar: appEl?.dataset.viewerAvatar ?? "",
     isAdmin: appEl?.dataset.viewerAdmin !== undefined,
     viewingAs: appEl?.dataset.viewingAs ?? "",
     appVersion: appEl?.dataset.appVersion ?? "",
@@ -457,18 +458,22 @@
     ></button>
   {/if}
   <aside
+    data-space-sidebar
     class="{rosterOpen ? 'flex' : 'hidden'} lg:flex fixed lg:sticky inset-y-0 left-0 z-40 w-[300px] shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700"
   >
+    <!-- Drag the right edge to resize (sidebarResize in agents_app.templ
+         does the drag and saves the width on the account). -->
+    <div data-sidebar-resize="{base}/api/me/sidebar" data-space="team" data-default="300px" title="Drag to resize · double-click to reset"></div>
     <!-- The Team | Agents switch on top (same control as the Agents
          sidebar, layout.templ sidebarSpaceSwitch), then Search and the grey
          +, the list, and the account row at the foot. -->
     <div class="px-2.5 pt-3">
-      <div class="flex rounded-xl bg-white-300 p-0.5 dark:bg-navy-800" role="group" aria-label="Switch between Team and Agents" data-testid="space-switch">
-        <span aria-current="page" class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-white-100 px-2 py-1.5 text-xs font-medium text-black-900 shadow-sm dark:bg-navy-600 dark:text-white-100">
+      <div class="flex rounded-xl bg-white-300 p-0.5 dark:bg-navy-800" role="group" aria-label="Switch between Team and Agents" data-testid="space-switch" data-space-switch>
+        <span aria-current="page" data-space-active class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-white-100 px-2 py-1.5 text-xs font-medium text-black-900 shadow-sm dark:bg-navy-600 dark:text-white-100">
           <svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="5" r="2"></circle><circle cx="3.5" cy="7" r="1.5"></circle><circle cx="12.5" cy="7" r="1.5"></circle><path d="M4.5 13.5a3.5 3.5 0 017 0M1 13a2.5 2.5 0 013-2.4M15 13a2.5 2.5 0 00-3-2.4" stroke-linecap="round"></path></svg>
           Team
         </span>
-        <a href={exitHref} class="flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-black-700 transition-colors hover:text-black-900 dark:text-black-600 dark:hover:text-white-100" data-testid="switch-agents">
+        <a href={exitHref} onclick={() => document.documentElement.classList.add("wick-space-loading")} class="flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-black-700 transition-colors hover:text-black-900 dark:text-black-600 dark:hover:text-white-100" data-testid="switch-agents">
           <svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="2"></rect><path d="M5.5 7h5M5.5 10h3" stroke-linecap="round"></path></svg>
           Agents
         </a>
@@ -505,7 +510,21 @@
     {/if}
     <nav class="flex-1 overflow-y-auto px-1.5 pb-2" aria-label="Agent list">
       {#if !loaded}
-        <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">Loading…</p>
+        <!-- Skeleton rows while the roster loads (a cached roster shows at
+             once instead, see ROSTER_CACHE). -->
+        {#if agents.length === 0}
+          <div class="animate-pulse" aria-label="Loading agents" data-testid="roster-skeleton">
+            {#each [62, 48, 70, 55, 40] as w}
+              <div class="flex items-center gap-2.5 px-2 py-2">
+                <span class="h-[38px] w-[38px] shrink-0 rounded-full bg-white-300 dark:bg-navy-600"></span>
+                <span class="min-w-0 flex-1">
+                  <span class="mb-1.5 block h-2.5 rounded bg-white-300 dark:bg-navy-600" style="width:{w}%"></span>
+                  <span class="block h-2 w-4/5 rounded bg-white-300 dark:bg-navy-600"></span>
+                </span>
+              </div>
+            {/each}
+          </div>
+        {/if}
       {:else if loadError}
         <p class="px-3 py-4 text-sm text-neg-400">{loadError}</p>
       {:else if agents.length === 0}
@@ -574,7 +593,7 @@
         {/if}
       {/each}
     </nav>
-    <div class="border-t border-white-300 px-1.5 pb-2.5 pt-1.5 dark:border-navy-600" data-testid="roster-account">
+    <div class="border-t border-white-300 px-1.5 pb-2.5 pt-1.5 dark:border-navy-600" data-testid="roster-account" data-space-account>
       <TeamAccountMenu
         {viewerName}
         {...account}
@@ -680,8 +699,13 @@
         {#key chatSessionId}
           <DetailView {base} sessionId={chatSessionId} {agentMode} {railToggle} onRailChange={(open) => (railOpen = open)} />
         {/key}
-      {:else if loaded && !loadError && selected}
-        <div class="flex h-full items-center justify-center text-sm text-black-800 dark:text-black-600">Opening chat…</div>
+      {:else if (loaded && !loadError && selected) || (!loaded && agents.length === 0)}
+        <!-- Chat skeleton while the roster or the chat is still on its way. -->
+        <div class="flex h-full animate-pulse flex-col gap-3 p-4" aria-label="Opening chat" data-testid="chat-skeleton">
+          {#each [{ w: 46, me: false }, { w: 32, me: true }, { w: 58, me: false }, { w: 38, me: true }] as b}
+            <span class="h-9 rounded-2xl bg-white-300 dark:bg-navy-600 {b.me ? 'self-end' : ''}" style="width:{b.w}%"></span>
+          {/each}
+        </div>
       {:else if loaded && !loadError && agents.length === 0}
         <div class="flex h-full items-center justify-center text-sm text-black-800 dark:text-black-600">No agents yet.</div>
       {/if}

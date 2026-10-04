@@ -75,6 +75,33 @@ func TestSidebarAccountMenuItems(t *testing.T) {
 	}
 }
 
+// Settings is no longer a row of its own above the account row: it is the
+// menu's first section, "Agent settings", set apart from the account-wide
+// items by a divider. A mouse click leaves no ring on the row.
+func TestSidebarAgentSettingsInAccountMenu(t *testing.T) {
+	got := renderLayout(t, namedAdmin(), "")
+	foot := accountPanel(t, got)
+	foot = foot[:strings.Index(foot, "<details")]
+	if strings.Contains(foot, "/tools/agents/settings") {
+		t.Error("Settings is still a row above the account menu")
+	}
+	menu := accountPanel(t, got)
+	sec := strings.Index(menu, "data-space-settings")
+	if sec < 0 {
+		t.Fatal("no separate settings section in the account menu")
+	}
+	part := menu[sec:]
+	if !strings.Contains(part[:strings.Index(part, "</div>")], "Agent settings") {
+		t.Error("the settings section does not hold Agent settings")
+	}
+	if sec > strings.Index(menu, `href="/profile"`) {
+		t.Error("Agent settings should come before the account-wide items")
+	}
+	if strings.Contains(menu, "focus:ring-2") {
+		t.Error("the account row still draws a ring on a mouse click")
+	}
+}
+
 func TestSidebarAccountMenuAdminGating(t *testing.T) {
 	u := &entity.User{ID: "u1", Name: "Member", Email: "m@example.com", Role: entity.RoleUser, Approved: true}
 	menu := accountPanel(t, renderLayout(t, u, ""))
@@ -99,4 +126,30 @@ func TestSidebarAccountMenuViewingAs(t *testing.T) {
 // namedAdmin has a name: the account row shows its initial.
 func namedAdmin() *entity.User {
 	return &entity.User{ID: "a", Name: "Admin", Email: "a@example.com", Approved: true, Role: entity.RoleAdmin}
+}
+
+// The Agents sidebar can be dragged wider; the width saved on the account
+// comes back on the next page load, and the edge carries the save URL.
+func TestAgentsSidebarResizeUsesSavedWidth(t *testing.T) {
+	u := namedAdmin()
+	u.Metadata.Sidebar.Agents = 333
+	got := renderLayout(t, u, "")
+	if !strings.Contains(got, ":root{--wick-sidebar-w:333px}") {
+		t.Error("saved sidebar width is not applied on first paint")
+	}
+	if !strings.Contains(got, `data-sidebar-resize="/tools/agents/api/me/sidebar"`) || !strings.Contains(got, `data-space="agents"`) {
+		t.Error("no resize handle on the Agents sidebar")
+	}
+	if strings.Contains(renderLayout(t, namedAdmin(), ""), "--wick-sidebar-w:") && strings.Contains(renderLayout(t, namedAdmin(), ""), ":root{") {
+		t.Error("a user who never resized still gets a fixed width")
+	}
+}
+
+func TestSidebarResizeCSSClamps(t *testing.T) {
+	if css := sidebarResizeCSS("team", 9999); !strings.Contains(css, "--wick-sidebar-w:480px") || !strings.Contains(css, "min-width:1024px") {
+		t.Errorf("team width not clamped / wrong breakpoint: %s", css)
+	}
+	if css := sidebarResizeCSS("agents", 50); !strings.Contains(css, "--wick-sidebar-w:200px") || !strings.Contains(css, "15rem") {
+		t.Errorf("agents width not clamped / wrong default: %s", css)
+	}
 }

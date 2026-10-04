@@ -33,12 +33,37 @@ type AgentsAppVM struct {
 // chrome (head, CSS, theme) still comes from the app-wide renderer, so
 // light/dark and fonts match every other page.
 templ AgentsApp(vm AgentsAppVM) {
+	@sidebarResize("team", sidebarWidth(login.GetUser(ctx), "team"))
 	@tooltipStyles()
 	@scrollbarStyles()
 	<style>
 		html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
 		[data-agents-app] { height: calc(var(--wick-vvh, 100svh) - var(--wick-chrome-top, 0px)); }
+		/* Team and Agents are two pages; a cross-document view transition
+		   keeps the sidebar (same width and header in both) in place and
+		   fades only what changes, so the switch does not feel like a page
+		   load. Browsers without it just navigate. */
+		@view-transition { navigation: auto; }
+		[data-space-sidebar] { view-transition-name: wick-space-sidebar; }
+		[data-space-switch] { view-transition-name: wick-space-switch; }
+		[data-space-account] { view-transition-name: wick-space-account; }
+		/* the selected half of the switch slides across, like a pill */
+		[data-space-active] { view-transition-name: wick-space-pill; }
+		::view-transition-group(*) { animation-duration: 220ms; animation-timing-function: cubic-bezier(.2, 0, 0, 1); }
+		/* Thin green bar on top from the switch click until the other page
+		   paints; pageshow clears it when the page comes back from bfcache. */
+		html.wick-space-loading::before {
+			content: ""; position: fixed; top: 0; left: 0; z-index: 9999; height: 2px; background: #22c55e;
+			animation: wick-space-load 1.4s cubic-bezier(.2, 0, 0, 1) forwards;
+		}
+		@keyframes wick-space-load { from { width: 0 } to { width: 85% } }
+		/* The account menu rises in instead of popping. */
+		[data-account-panel], [data-account-menu] { animation: wick-menu-in 140ms ease-out; }
+		@keyframes wick-menu-in { from { opacity: 0; transform: translateY(6px) } }
 	</style>
+	<script>
+		addEventListener("pageshow", function () { document.documentElement.classList.remove("wick-space-loading"); });
+	</script>
 	// The shell is sized to what is actually visible. 100svh does not shrink
 	// for the on-screen keyboard on every mobile browser (Edge on Android
 	// leaves a gap twice the composer padding under it), so --wick-vvh
@@ -85,6 +110,7 @@ templ AgentsApp(vm AgentsAppVM) {
 				data-viewer-id={ vm.ViewerID }
 				data-viewer-name={ vm.ViewerName }
 				data-viewer-email={ viewerEmail(login.GetUser(ctx)) }
+				data-viewer-avatar={ viewerAvatar(login.GetUser(ctx)) }
 				data-viewer-admin?={ login.GetUser(ctx) != nil && login.GetUser(ctx).IsAdmin() }
 				data-viewing-as={ ui.ImpersonationFromContext(ctx).ActingAs }
 				data-app-version={ ui.VersionInfoFromContext(ctx).AppVersion }
