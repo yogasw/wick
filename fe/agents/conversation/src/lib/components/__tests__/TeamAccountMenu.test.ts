@@ -7,7 +7,7 @@ const theme = { mode: "light" as const, light: "github-light", dark: "github-dar
 function mount(over: Record<string, unknown> = {}) {
   const onSettings = vi.fn();
   render(TeamAccountMenu, {
-    props: { viewerName: "Yoga Setiawan", exitHref: "/tools/agents/sessions", theme, onSettings, ...over },
+    props: { viewerName: "Yoga Setiawan", viewerEmail: "yoga@example.com", theme, onSettings, ...over },
   });
   return { onSettings, button: screen.getByRole("button", { name: "Account menu" }) };
 }
@@ -22,11 +22,9 @@ describe("TeamAccountMenu", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  test("the ↩ beside the name goes back to Agents in one click", () => {
+  test("no ↩ beside the name: the Team | Agents switch is the way back", () => {
     mount();
-    const back = screen.getByRole("link", { name: "Back to Agents" });
-    expect(back.getAttribute("href")).toBe("/tools/agents/sessions");
-    expect(back.getAttribute("title")).toBe("Back to Agents");
+    expect(screen.queryByRole("link", { name: "Back to Agents" })).toBeNull();
   });
 
   test("the menu rises above the row (it sits at the sidebar's foot)", async () => {
@@ -42,13 +40,14 @@ describe("TeamAccountMenu", () => {
     const menu = screen.getByRole("menu");
     expect(menu.textContent).toContain("Yoga Setiawan");
     const labels = screen.getAllByRole("menuitem").map((el) => el.textContent?.trim());
-    // "Switch to Agents" is the ↩ icon now, not a menu item.
-    expect(labels).toEqual(["Team settings", "Mini Tools"]);
+    expect(menu.textContent).toContain("yoga@example.com");
+    // Same items as wick's account menu; no Agents item (the switch covers it).
+    expect(labels).toEqual(["Profile", "Access Tokens", "Connected Apps", "MCP", "Team settings", "Mini Tools", "Sign out"]);
     expect(screen.getByRole("menuitem", { name: "Mini Tools" }).getAttribute("href")).toBe("/mini-tools");
-    // Theme sits between Team settings and Mini Tools.
+    expect(screen.getByRole("menuitem", { name: "Access Tokens" }).getAttribute("href")).toBe("/profile/tokens");
+    expect(screen.getByRole("menuitem", { name: "Sign out" }).closest("form")!.getAttribute("action")).toBe("/auth/logout");
     const text = menu.textContent ?? "";
-    expect(text.indexOf("Team settings")).toBeLessThan(text.indexOf("Theme"));
-    expect(text.indexOf("Theme")).toBeLessThan(text.indexOf("Mini Tools"));
+    expect(text.indexOf("Mini Tools")).toBeLessThan(text.indexOf("Theme"));
   });
 
   test("Theme posts the user's paired theme to /theme, current mode checked", async () => {
@@ -89,5 +88,40 @@ describe("TeamAccountMenu", () => {
     await fireEvent.click(button);
     await fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  test("Admin panel only for admins", async () => {
+    mount({ isAdmin: true });
+    await fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    expect(screen.getByRole("menuitem", { name: "Admin panel" }).getAttribute("href")).toBe("/admin");
+  });
+
+  test("non-admins get no Admin panel", async () => {
+    mount();
+    await fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    expect(screen.queryByRole("menuitem", { name: "Admin panel" })).toBeNull();
+  });
+
+  test("Viewing as: a dot on the row, and the banner posts Back to my account", async () => {
+    mount({ viewingAs: "Member" });
+    expect(screen.getByTestId("viewing-as-dot")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    expect(screen.getByTestId("viewing-as").textContent).toContain("Viewing as Member");
+    const form = screen.getByRole("button", { name: "Back to my account" }).closest("form")!;
+    expect(form.getAttribute("action")).toBe("/admin/impersonate/stop");
+    expect(form.getAttribute("method")).toBe("POST");
+  });
+
+  test("no banner and no dot when not viewing as someone", async () => {
+    mount();
+    expect(screen.queryByTestId("viewing-as-dot")).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    expect(screen.queryByTestId("viewing-as")).toBeNull();
+  });
+
+  test("versions show when known", async () => {
+    mount({ appVersion: "1.2.3", wickVersion: "0.9.0" });
+    await fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    expect(screen.getByTestId("versions").textContent).toContain("1.2.3");
   });
 });

@@ -46,6 +46,13 @@
   const appEl = document.getElementById("app");
   const base = appEl?.dataset.base ?? "";
   const viewerName = appEl?.dataset.viewerName ?? "";
+  const account = {
+    viewerEmail: appEl?.dataset.viewerEmail ?? "",
+    isAdmin: appEl?.dataset.viewerAdmin !== undefined,
+    viewingAs: appEl?.dataset.viewingAs ?? "",
+    appVersion: appEl?.dataset.appVersion ?? "",
+    wickVersion: appEl?.dataset.wickVersion ?? "",
+  };
   const themeMode = appEl?.dataset.themeMode;
   const theme =
     themeMode === "light" || themeMode === "dark"
@@ -452,8 +459,21 @@
   <aside
     class="{rosterOpen ? 'flex' : 'hidden'} lg:flex fixed lg:sticky inset-y-0 left-0 z-40 w-[300px] shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700"
   >
-    <!-- No title bar (team-sidebar mockup, final): Search and the grey +
-         on top, the list, then the account row at the foot. -->
+    <!-- The Team | Agents switch on top (same control as the Agents
+         sidebar, layout.templ sidebarSpaceSwitch), then Search and the grey
+         +, the list, and the account row at the foot. -->
+    <div class="px-2.5 pt-3">
+      <div class="flex rounded-xl bg-white-300 p-0.5 dark:bg-navy-800" role="group" aria-label="Switch between Team and Agents" data-testid="space-switch">
+        <span aria-current="page" class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-white-100 px-2 py-1.5 text-xs font-medium text-black-900 shadow-sm dark:bg-navy-600 dark:text-white-100">
+          <svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="5" r="2"></circle><circle cx="3.5" cy="7" r="1.5"></circle><circle cx="12.5" cy="7" r="1.5"></circle><path d="M4.5 13.5a3.5 3.5 0 017 0M1 13a2.5 2.5 0 013-2.4M15 13a2.5 2.5 0 00-3-2.4" stroke-linecap="round"></path></svg>
+          Team
+        </span>
+        <a href={exitHref} class="flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-black-700 transition-colors hover:text-black-900 dark:text-black-600 dark:hover:text-white-100" data-testid="switch-agents">
+          <svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="2"></rect><path d="M5.5 7h5M5.5 10h3" stroke-linecap="round"></path></svg>
+          Agents
+        </a>
+      </div>
+    </div>
     <div class="flex items-center gap-1.5 px-2.5 pb-2 pt-3">
       <label class="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl border border-transparent bg-white-300 px-3 focus-within:border-green-500 dark:bg-navy-600">
         <svg class="h-4 w-4 shrink-0 text-black-700" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg>
@@ -557,7 +577,7 @@
     <div class="border-t border-white-300 px-1.5 pb-2.5 pt-1.5 dark:border-navy-600" data-testid="roster-account">
       <TeamAccountMenu
         {viewerName}
-        {exitHref}
+        {...account}
         {theme}
         onSettings={() => { rosterOpen = false; openPanel({ kind: "team-settings", tab: "general" }); }}
       />

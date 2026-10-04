@@ -125,11 +125,30 @@ templ ThemePicker(current Theme, lightPref, darkPref string) {
 // Pass false where a ThemePicker already sits next to the avatar (the home
 // navbar, manager, profile layouts) to avoid a duplicate control.
 templ UserMenu(user *entity.User, showTheme bool) {
+	@userMenu(user, showTheme, false)
+}
+
+// SidebarAccountMenu is the same account menu as UserMenu, mounted as the
+// account row at the foot of the agents sidebar: avatar, name, a caution dot
+// while viewing as someone else, and a caret. The panel rises above the row.
+// The sidebar's Team | Agents switch already moves between the two, so the
+// "Agents" item is left out, and Mini Tools moves in here from the sidebar.
+templ SidebarAccountMenu(user *entity.User) {
+	@userMenu(user, true, true)
+}
+
+templ userMenu(user *entity.User, showTheme bool, sidebar bool) {
 	if user != nil {
 		{{ imp := ImpersonationFromContext(ctx) }}
 		<div class="relative">
 			<details class="group" data-menu>
-				<summary class="flex cursor-pointer list-none items-center gap-2 rounded-lg p-1 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors focus:outline-none focus:ring-2 focus:ring-green-400">
+				<summary
+					data-account-row?={ sidebar }
+					class={
+						"flex cursor-pointer list-none items-center gap-2 rounded-lg p-1 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors focus:outline-none focus:ring-2 focus:ring-green-400",
+						templ.KV("w-full gap-2.5 px-2 py-1.5 group-open:bg-white-300 dark:group-open:bg-navy-600", sidebar),
+					}
+				>
 					<!-- The avatar carries the "you are someone else" signal once
 					     the banner is collapsed: a caution dot on the corner. It
 					     has to live on chrome that is always on screen, because
@@ -146,13 +165,16 @@ templ UserMenu(user *entity.User, showTheme bool) {
 							<span class="absolute -top-1 -right-1 h-3.5 w-3.5 rounded-full bg-cau-400"></span>
 						}
 					</span>
-					<!-- chevron -->
-					<svg class="h-3.5 w-3.5 text-black-700 dark:text-black-600 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+					if sidebar {
+						<span class="min-w-0 flex-1 truncate text-left text-sm font-medium text-black-900 dark:text-white-100">{ user.Name }</span>
+					}
+					<!-- chevron (points up in the sidebar: the panel opens above) -->
+					<svg class={ "h-3.5 w-3.5 text-black-700 dark:text-black-600 transition-transform group-open:rotate-180", templ.KV("rotate-180 group-open:rotate-0", sidebar) } fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
 						<path stroke-linecap="round" stroke-linejoin="round" d="m6 9 6 6 6-6"/>
 					</svg>
 				</summary>
 				<!-- Dropdown panel -->
-				<div class="absolute right-0 top-full mt-2 w-52 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg z-50">
+				<div data-account-panel class={ "absolute w-52 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg z-50", templ.KV("right-0 top-full mt-2", !sidebar), templ.KV("left-0 bottom-full mb-2 w-56", sidebar) }>
 					<!-- User info header -->
 					<div class="border-b border-white-300 dark:border-navy-600 px-4 py-3">
 						<p class="truncate text-sm font-medium text-black-900 dark:text-white-100">{ user.Name }</p>
@@ -220,7 +242,7 @@ templ UserMenu(user *entity.User, showTheme bool) {
 							MCP
 						</a>
 						{{ navP := NavParamsFor(ctx, user) }}
-						if navP.CanSeeAgents {
+						if navP.CanSeeAgents && !sidebar {
 							<a
 								href="/tools/agents"
 								class="flex items-center gap-2.5 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100 transition-colors"
@@ -229,6 +251,17 @@ templ UserMenu(user *entity.User, showTheme bool) {
 									<path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z"/>
 								</svg>
 								Agents
+							</a>
+						}
+						if sidebar {
+							<a
+								href="/mini-tools"
+								class="flex items-center gap-2.5 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+							>
+								<svg class="h-4 w-4 flex-shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+									<path d="M6.5 2.5a3 3 0 00-3.5 4l-1 1 2.5 2.5 1-1a3 3 0 004-3.5L7.5 7 6 5.5l1-3z" stroke-linejoin="round"></path>
+								</svg>
+								Mini Tools
 							</a>
 						}
 						if user.IsAdmin() {

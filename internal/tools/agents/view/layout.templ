@@ -94,16 +94,10 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 		></div>
 		<!-- Sidebar: fixed drawer on mobile, static column on md+ -->
 		<aside data-sidebar class="fixed inset-y-0 left-0 z-50 flex w-72 shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 -translate-x-full transition-transform duration-200 ease-out md:static md:w-60 md:translate-x-0 md:transition-none">
-			<!-- Header: brand + project + profile (single row, replaces global navbar) -->
+			<!-- Top: the Team | Agents switch (replaces the brand bar; the
+			     account moved to the row at the foot of the sidebar). -->
 			<div data-agents-top-widgets class="flex items-center gap-2 px-3 py-2.5 border-b border-white-300 dark:border-navy-600">
-				<a href="/" class="flex flex-1 min-w-0 items-center gap-2 hover:opacity-80 transition-opacity" title={ ui.AppNameFromContext(ctx) }>
-					<div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-green-500 text-xs text-white-100 font-semibold select-none">✦</div>
-					<div class="flex min-w-0 flex-col leading-tight">
-						<span class="truncate text-sm font-semibold text-black-900 dark:text-white-100">{ ui.AppNameFromContext(ctx) }</span>
-						<span class="truncate text-[10px] font-medium text-black-600 dark:text-black-700 uppercase tracking-wider">Agents</span>
-					</div>
-				</a>
-				@ui.UserMenu(user, true)
+				@sidebarSpaceSwitch(vm.Base + "/team")
 				<!-- Mobile close drawer (md:hidden) -->
 				<button
 					type="button"
@@ -137,7 +131,6 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 					<span>New session</span>
 				</a>
 				@agentsNavLink(vm.Base+"/overview", "Overview", vm.ActivePage == "overview")
-				@agentsAppNavLink(vm.Base + "/team")
 				@agentsNavLink(vm.Base+"/connectors", "Connectors", vm.ActivePage == "connectors")
 				{{ moreItems := AgentsMoreItems(vm, user) }}
 				// The page you are on is lifted OUT of the collapsed group and
@@ -223,13 +216,14 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 					}
 				</div>
 			</div>
-			<!-- Bottom: Mini Tools (all users) + Settings (admin-only) -->
+			<!-- Bottom: Settings (admin-only) + the account row. Mini Tools
+			     lives in the account menu now. -->
 			if user != nil {
-				<div class="border-t border-white-300 dark:border-navy-600 px-2 py-2">
-					@agentsNavLink("/mini-tools", "Mini Tools", false)
+				<div class="border-t border-white-300 dark:border-navy-600 px-2 py-2" data-sidebar-account>
 					if user.IsAdmin() {
 						@agentsNavLink(vm.Base+"/settings", "Settings", vm.ActivePage == "settings")
 					}
+					@ui.SidebarAccountMenu(user)
 				</div>
 			}
 			<!-- Constrain top-widget dropdowns to sidebar width so menus don't overflow -->
@@ -837,27 +831,40 @@ templ agentsNavLink(href, label string, active bool) {
 	</a>
 }
 
-// agentsAppNavLink opens the full-screen Team app. Its own templ rather
-// than an agentsNavLink: it is never "active" (the app has no wick sidebar
-// to highlight it in) and it carries the "NEW" chip while the app is new.
-// The click remembers the page it left from, so the app's ↩ button can
-// bring the user back there (teamReturn.ts reads the same key).
-templ agentsAppNavLink(href string) {
-	<a
-		href={ templ.SafeURL(href) }
-		onclick="try{sessionStorage.setItem('wick.team.return',location.pathname+location.search+location.hash)}catch(e){}"
-		class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100"
-	>
-		// Three heads side by side — a team, not a single session.
-		<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
-			<circle cx="8" cy="5" r="2"></circle>
-			<circle cx="3.5" cy="7" r="1.5"></circle>
-			<circle cx="12.5" cy="7" r="1.5"></circle>
-			<path d="M4.5 13.5a3.5 3.5 0 017 0M1 13a2.5 2.5 0 013-2.4M15 13a2.5 2.5 0 00-3-2.4" stroke-linecap="round"></path>
-		</svg>
-		<span class="flex-1">Team</span>
-		<span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold leading-none tracking-wide bg-green-500 text-white-100">NEW</span>
-	</a>
+// sidebarSpaceSwitch is the segmented Team | Agents switch at the top of the
+// sidebar, the same control the Team app shows at the top of its own. Agents
+// is the page you are on, so only Team is a link. The click remembers the
+// page it left from, so Team's switch can bring the user back there
+// (teamReturn.ts reads the same key).
+templ sidebarSpaceSwitch(teamHref string) {
+	<div data-space-switch class="flex min-w-0 flex-1 rounded-xl bg-white-300 p-0.5 dark:bg-navy-800" role="group" aria-label="Switch between Team and Agents">
+		<a
+			href={ templ.SafeURL(teamHref) }
+			data-space-team
+			onclick="try{sessionStorage.setItem('wick.team.return',location.pathname+location.search+location.hash)}catch(e){}"
+			class="flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-black-700 transition-colors hover:text-black-900 dark:text-black-600 dark:hover:text-white-100"
+		>
+			// Three heads side by side — a team, not a single session.
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<circle cx="8" cy="5" r="2"></circle>
+				<circle cx="3.5" cy="7" r="1.5"></circle>
+				<circle cx="12.5" cy="7" r="1.5"></circle>
+				<path d="M4.5 13.5a3.5 3.5 0 017 0M1 13a2.5 2.5 0 013-2.4M15 13a2.5 2.5 0 00-3-2.4" stroke-linecap="round"></path>
+			</svg>
+			Team
+		</a>
+		<span
+			data-space-agents
+			aria-current="page"
+			class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-white-100 px-2 py-1.5 text-xs font-medium text-black-900 shadow-sm dark:bg-navy-600 dark:text-white-100"
+		>
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<rect x="2.5" y="3" width="11" height="10" rx="2"></rect>
+				<path d="M5.5 7h5M5.5 10h3" stroke-linecap="round"></path>
+			</svg>
+			Agents
+		</span>
+	</div>
 }
 
 templ agentsNavIcon(label string) {
