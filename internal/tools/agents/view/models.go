@@ -23,7 +23,7 @@ type AgentsLayoutVM struct {
 	Projects    map[string]project.Project
 	ProjectList []string
 	// SharedOwners maps a project the viewer reaches but does not own to
-	// its owner's name, for the sidebar's "Shared" badge. Absent = theirs.
+	// its owner's name, for the sidebar's hover-only shared icon. Absent = theirs.
 	SharedOwners map[string]string
 	// SidebarOwner is the sidebar session list's scope: "me" (default)
 	// shows only the caller's sessions, "all" everything they may see.
