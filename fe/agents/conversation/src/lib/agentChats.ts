@@ -24,3 +24,25 @@ export async function pinChatVia(
   await save(id);
   return pinChat(items, id);
 }
+
+/** A draft chat's first message: what the composer hands over. */
+export type DraftMessage = { text: string; files: File[] };
+
+/** startDraftChat turns a draft into a chat. "+ New chat" opens a draft
+    with no session behind it; the session is created here, on the first
+    Send, and the message goes into it. Leaving a draft unsent leaves
+    nothing behind. A send that fails after the create still returns the
+    new chat (with the error), so the user lands in it and can retry. */
+export async function startDraftChat(
+  msg: DraftMessage,
+  open: () => Promise<{ session_id: string }>,
+  send: (sessionId: string, msg: DraftMessage) => Promise<unknown>,
+): Promise<{ sessionId: string; error?: string }> {
+  const { session_id } = await open();
+  try {
+    await send(session_id, msg);
+    return { sessionId: session_id };
+  } catch (e) {
+    return { sessionId: session_id, error: e instanceof Error ? e.message : String(e) };
+  }
+}

@@ -20,6 +20,9 @@
   import RemoteQuestionCard from "./lib/components/team/RemoteQuestionCard.svelte";
   import { isA2ARemote, isRemoteAgent, isSlackRemote, remoteBadge, remoteChatMode, remoteSubtitle, remoteWaitLabel } from "./lib/remoteAgent.js";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
+  import DraftChat from "./lib/components/DraftChat.svelte";
+  import { startDraftChat, type DraftMessage } from "./lib/agentChats.js";
+  import { sendMessage } from "./lib/api/messages.js";
   import AgentConnections from "./lib/components/AgentConnections.svelte";
   import AgentScheduled from "./lib/components/AgentScheduled.svelte";
   import { agentsRoute, navigate, type AgentsRoute, type AgentsPanel } from "./lib/agentsRouter.js";
@@ -260,11 +263,33 @@
     openPanel({ kind: "new" });
   }
 
-  async function newChat() {
+  /* "+ New chat" opens a draft for the agent: no session yet, so clicking
+     it twice or walking away leaves no empty chats. The draft ends when
+     the page moves to another agent or chat. */
+  let draftFor = $state<string | null>(null);
+  let draftAt = "";
+  function newChat() {
     if (!selected) return;
+    draftFor = selected.id;
+    draftAt = `${route.handle}|${route.session ?? ""}`;
+    go({ panel: null });
+  }
+  $effect(() => {
+    const at = `${route.handle}|${route.session ?? ""}`;
+    if (draftFor && (selected?.id !== draftFor || at !== draftAt)) untrack(() => (draftFor = null));
+  });
+  async function sendDraft(msg: DraftMessage) {
+    const a = selected;
+    if (!a) return;
     try {
-      const r = await runApi(openAgentChat(base, selected.id, true));
-      go({ session: r.session_id, panel: null });
+      const r = await startDraftChat(
+        msg,
+        () => runApi(openAgentChat(base, a.id, true)),
+        (id, m) => runApi(sendMessage(base, id, m)),
+      );
+      draftFor = null;
+      go({ session: r.sessionId, panel: null });
+      if (r.error) toastError(`Send: ${r.error}`);
     } catch (e) {
       toastError(`New chat: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -616,7 +641,7 @@
         <div class="flex-1"></div>
       {/if}
     </header>
-    {#if selected && chatSessionId && remoteMode && isA2ARemote(selected)}
+    {#if selected && chatSessionId && remoteMode && isA2ARemote(selected) && draftFor !== selected.id}
       <RemoteQuestionCard
         {base}
         agentId={selected.id}
@@ -627,7 +652,9 @@
       />
     {/if}
     <div class="min-h-0 flex-1">
-      {#if selected && chatSessionId}
+      {#if selected && draftFor === selected.id}
+        <DraftChat agent={selected} onSend={sendDraft} />
+      {:else if selected && chatSessionId}
         {#key chatSessionId}
           <DetailView {base} sessionId={chatSessionId} {agentMode} {railToggle} onRailChange={(open) => (railOpen = open)} />
         {/key}
@@ -723,7 +750,7 @@
           agent={selected}
           current={chatSessionId}
           onClose={() => openPanel(null)}
-          onPick={(id, main) => go({ session: main ? null : id, panel: null })}
+          onPick={(id, main) => { draftFor = null; go({ session: main ? null : id, panel: null }); }}
           onNew={newChat}
           onPinned={pinnedMain}
         />
