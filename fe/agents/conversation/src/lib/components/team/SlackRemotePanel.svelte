@@ -47,6 +47,7 @@
   let idleSec = $state(0);
   let maxSec = $state(0);
   let pollSec = $state(0);
+  let graceSec = $state(0);
 
   function take(r: SlackRemoteInfo) {
     info = r;
@@ -64,6 +65,7 @@
     idleSec = r.idle_sec ?? 0;
     maxSec = r.max_sec ?? 0;
     pollSec = r.poll_sec ?? 0;
+    graceSec = r.grace_sec ?? 0;
   }
   untrack(() => { if (info) take(info); });
 
@@ -81,7 +83,7 @@
       ? cleanConfig({
           connector_id: info.connector_id, identity, account_id: accountId, target, channel, user,
           mention_id: mentionId, thread_ts: threadTs, target_name: targetName, listen, marker, mention_target: mention,
-          idle_sec: idleSec, max_sec: maxSec, poll_sec: pollSec,
+          idle_sec: idleSec, max_sec: maxSec, poll_sec: pollSec, grace_sec: graceSec,
         })
       : null,
   );
@@ -148,7 +150,7 @@
     <p class="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500 dark:bg-navy-800 dark:text-amber-300" data-testid="slack-remote-warning">{info.warning}</p>
     <SlackTargetFields {base} connectorId={info.connector_id} {identity} {accountId} bind:target bind:channel bind:user bind:mentionId bind:threadTs bind:targetName idPrefix="ss" />
     <SlackIdentityFields {base} connectorId={info.connector_id} bind:identity bind:accountId idPrefix="ss" />
-    <SlackListenFields bind:listen bind:marker bind:mention bind:idleSec bind:maxSec bind:pollSec idPrefix="ss" />
+    <SlackListenFields bind:listen bind:marker bind:mention bind:idleSec bind:maxSec bind:pollSec bind:graceSec idPrefix="ss" />
     <div class="flex flex-wrap items-center gap-2">
       <button type="button" class={primary} disabled={!dirty || !!why || !!busy} data-testid="ss-save" onclick={save}>{busy === "save" ? "Saving…" : "Save"}</button>
       <button type="button" class={outline} disabled={!!busy || dirty} data-testid="ss-test" onclick={test}>{busy === "test" ? "Waiting for a reply…" : "Test"}</button>

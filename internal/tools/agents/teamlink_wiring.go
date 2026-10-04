@@ -15,6 +15,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/delegation"
 	"github.com/yogasw/wick/internal/agents/event"
+	"github.com/yogasw/wick/internal/agents/remote"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
@@ -33,7 +34,10 @@ const sourceTeam = team.SourceTeam
 // NewTeamLinkHub builds the Hub over the Team service and the pool.
 // deliver wakes a session with a late reply (the sub-agent delivery path).
 func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, sessionID, text string) error) *teamlink.Hub {
-	return teamlink.NewHub(teamDirectory{svc: svc}, poolTurns{}, teamNotifier{deliver: deliver})
+	hub := teamlink.NewHub(teamDirectory{svc: svc}, poolTurns{}, teamNotifier{deliver: deliver})
+	// A remote agent's late reply goes to the agent that asked it too.
+	remote.OnFollowUp = func(sessionID, text string) { hub.FollowUp(context.Background(), sessionID, text) }
+	return hub
 }
 
 // TeamAgentOf returns the Team agent a session belongs to, "" for none.

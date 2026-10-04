@@ -121,6 +121,10 @@ func (t *tracker) observe(m Message) []remote.Event {
 		t.lastTS = m.TS
 	}
 	finished := false
+	// The status is read from a message's metadata (event_type
+	// agent_status) only. Slack sends no event when another app sets its
+	// assistant thread status (assistant.threads.setStatus), so that
+	// status is not seen here.
 	switch strings.ToLower(m.Status) {
 	case "thinking", "working", "tool":
 		t.statusTS = m.TS

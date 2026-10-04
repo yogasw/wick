@@ -123,6 +123,11 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			delete(h.inflight, e.agentID)
 		}
 		h.last[e.agentID] = inbound{contextID: ec.ContextID, depth: depth, at: h.now()}
+		if sessionID != "" {
+			h.answered[sessionID] = ec.TaskID
+		} else if session != "" {
+			h.answered[session] = ec.TaskID
+		}
 		h.mu.Unlock()
 
 		state := a2a.TaskStateCompleted

@@ -44,6 +44,8 @@ describe("slackRemote", () => {
     expect(c).toEqual({ connector_id: "c1", identity: "bot", target: "channel", channel: "C1", mention_id: "U9", listen: "target", marker: true, mention_target: true, idle_sec: 0, max_sec: 0 });
     expect(cleanConfig({ ...base, identity: "user", account_id: "a1", marker: false }).account_id).toBe("a1");
     expect(cleanConfig({ ...base, marker: false }).marker).toBe(false);
+    expect(cleanConfig({ ...base, grace_sec: -1 }).grace_sec).toBe(-1);
+    expect(cleanConfig({ ...base, grace_sec: 0 })).not.toHaveProperty("grace_sec");
   });
 
   test("slackTestSummary words each state", () => {

@@ -20,6 +20,8 @@ export const LISTEN_OPTIONS: { value: SlackListen; label: string; hint: string }
 
 /** Server defaults for 0 and its ceiling (slackremote.Config). */
 export const IDLE_DEFAULT = 30;
+/** GRACE_DEFAULT is how long late replies are still passed on (grace_sec 0). */
+export const GRACE_DEFAULT = 120;
 export const MAX_DEFAULT = 180;
 export const SEC_CAP = 900;
 
@@ -93,6 +95,7 @@ export function cleanConfig(c: SlackRemoteConfig): SlackRemoteConfig {
   };
   // Sent only when set: the saved config is replaced whole, so 0 = default.
   if ((c.poll_sec ?? 0) > 0) out.poll_sec = c.poll_sec;
+  if ((c.grace_sec ?? 0) !== 0) out.grace_sec = c.grace_sec;
   if (c.identity === "user" && c.account_id) out.account_id = c.account_id;
   const t = (v?: string) => (v ?? "").trim();
   if (c.target === "dm") out.user = t(c.user);

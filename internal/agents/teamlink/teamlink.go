@@ -287,6 +287,9 @@ type Hub struct {
 	// mention in that answer continues it, so "@a thanks" → "@b thanks"
 	// stays inside one context's turn budget instead of starting fresh.
 	last map[string]inbound
+	// answered is the task each session answered most recently, so a
+	// reply it sends after that task ended (FollowUp) reaches the asker.
+	answered map[string]a2a.TaskID
 }
 
 // taskRef is what the Hub remembers about a task it sent.
@@ -368,6 +371,7 @@ func NewHub(dir Directory, turns Turns, notify Notifier) *Hub {
 		contexts: map[string]*contextState{},
 		inflight: map[string]map[a2a.TaskID]inbound{},
 		last:     map[string]inbound{},
+		answered: map[string]a2a.TaskID{},
 	}
 }
 
@@ -814,6 +818,30 @@ func (h *Hub) finished(ctx context.Context, id a2a.TaskID, state a2a.TaskState, 
 	if err := h.Notify.Deliver(context.WithoutCancel(ctx), session, text); err != nil {
 		_ = err // best-effort: the task store still holds the result
 	}
+}
+
+// FollowUp hands text — a reply the agent answering in sessionID sent
+// after its task had ended, such as a remote agent's late message — to
+// whoever asked, delivered into the asker's session like a late reply.
+// False when the session answered no task the Hub still remembers.
+func (h *Hub) FollowUp(ctx context.Context, sessionID, text string) bool {
+	if sessionID == "" || strings.TrimSpace(text) == "" || h.Notify == nil {
+		return false
+	}
+	h.mu.Lock()
+	id, ok := h.answered[sessionID]
+	ref := h.tasks[id]
+	var session string
+	var to Peer
+	if ok && ref != nil {
+		session, to = ref.callerSession, ref.to
+	}
+	h.mu.Unlock()
+	if session == "" {
+		return false
+	}
+	msg := fmt.Sprintf("Follow-up from %s [task %s]:\n\n%s", to.Label(), id, text)
+	return h.Notify.Deliver(context.WithoutCancel(ctx), session, msg) == nil
 }
 
 // TaskView is one task a session sent, as the Sub-agents panel lists it.

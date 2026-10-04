@@ -529,3 +529,21 @@ func TestNewChatUnsupported(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestFollowUpReachesTheAsker(t *testing.T) {
+	h, _, note := newTestHub(func(p Peer, _ string) string { return "first answer" })
+	if _, err := h.Send(context.Background(), SendInput{CallerSession: "sess-cap", CallerAgentID: "a-cap", To: "@anton", Text: "check"}); err != nil {
+		t.Fatal(err)
+	}
+	if !h.FollowUp(context.Background(), "sess-a-anton", "one more thing") {
+		t.Fatal("follow-up not delivered")
+	}
+	delivered, _ := note.snapshot()
+	last := delivered[len(delivered)-1]
+	if !strings.HasPrefix(last, "sess-cap: Follow-up from ") || !strings.HasSuffix(last, "one more thing") {
+		t.Fatalf("delivered = %q", delivered)
+	}
+	if h.FollowUp(context.Background(), "sess-unknown", "x") {
+		t.Fatal("delivered for a session that answered nothing")
+	}
+}

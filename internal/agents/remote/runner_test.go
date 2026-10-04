@@ -287,7 +287,10 @@ func (f *fake) Reopen(Handle) {}
 func TestGraceWindowPassesOnALateMessage(t *testing.T) {
 	old := followUpQuiet
 	followUpQuiet = 10 * time.Millisecond
-	t.Cleanup(func() { followUpQuiet = old })
+	var asked []string
+	var amu sync.Mutex
+	OnFollowUp = func(sid, text string) { amu.Lock(); asked = append(asked, text); amu.Unlock() }
+	t.Cleanup(func() { followUpQuiet, OnFollowUp = old, nil })
 	f := &fake{listen: []ListenMode{ListenPush}, limits: Limits{Max: 5 * time.Second, Grace: 2 * time.Second}, push: make(chan Event, 8)}
 	f.push <- Event{Kind: EventText, Text: "first"}
 	f.push <- Event{Kind: EventDone, Text: "first"}
@@ -318,5 +321,10 @@ func TestGraceWindowPassesOnALateMessage(t *testing.T) {
 	}
 	if len(results) != 2 || results[1].Result != "late addition" || results[1].RemoteNote != NoteFollowUp {
 		t.Fatalf("results=%+v texts=%q", results, texts)
+	}
+	amu.Lock()
+	defer amu.Unlock()
+	if len(asked) != 1 || asked[0] != "late addition" {
+		t.Fatalf("asker got %q", asked)
 	}
 }

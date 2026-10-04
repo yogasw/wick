@@ -310,6 +310,8 @@ export type SlackRemoteConfig = {
   max_sec?: number;
   /** Longest wait between two thread reads; 0 = the default backoff. */
   poll_sec?: number;
+  /** Seconds late replies are still passed on; 0 = default, -1 = off. */
+  grace_sec?: number;
   usage?: RemoteUsage;
 };
 
