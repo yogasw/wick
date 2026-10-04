@@ -1,10 +1,12 @@
 <script lang="ts">
   /* Where a Slack remote agent's turns go: a DM, a channel (each chat opens
      a thread there) or one existing thread. Shared by the + Agent wizard
-     and Settings. There is no channel/user search API for the browser yet,
-     so ids are typed; a pasted message link fills channel and thread. */
-  import type { SlackTarget } from "../../api/team.js";
+     and Settings. Users, bots and channels are picked by searching the
+     workspace (ids can still be typed); a pasted message link fills
+     channel and thread. */
+  import type { SlackIdentity, SlackTarget } from "../../api/team.js";
   import { TARGET_OPTIONS, parseSlackLink } from "../../slackRemote.js";
+  import SlackDirectoryPicker from "./SlackDirectoryPicker.svelte";
 
   type Props = {
     target: SlackTarget;
@@ -14,10 +16,16 @@
     threadTs: string;
     targetName: string;
     idPrefix: string;
+    /* The workspace searched; without a connector only typing ids works. */
+    base?: string;
+    connectorId?: string;
+    identity?: SlackIdentity;
+    accountId?: string;
   };
   let {
     target = $bindable(), channel = $bindable(), user = $bindable(), mentionId = $bindable(),
     threadTs = $bindable(), targetName = $bindable(), idPrefix,
+    base = "", connectorId = "", identity = "bot", accountId = "",
   }: Props = $props();
 
   let link = $state("");
@@ -59,11 +67,10 @@
   </div>
 
   {#if target === "dm"}
-    <div>
-      <label class={label} for="{idPrefix}-user">User or bot ID</label>
-      <input id="{idPrefix}-user" class="{input} font-mono" bind:value={user} placeholder="U0123ABCD" />
-      <p class={hint}>From the Slack profile: ⋮ › Copy member ID.</p>
-    </div>
+    <SlackDirectoryPicker
+      {base} {connectorId} {identity} {accountId} kind="users" bind:value={user} bind:name={targetName}
+      inputId="{idPrefix}-user" idLabel="User or bot ID" idPlaceholder="U0123ABCD" idHint="From the Slack profile: ⋮ › Copy member ID."
+    />
   {:else}
     {#if target === "thread"}
       <div>
@@ -72,11 +79,11 @@
         {#if linkError}<p class="mt-1 text-xs text-neg-400">{linkError}</p>{:else}<p class={hint}>Paste the message link; channel and thread fill in.</p>{/if}
       </div>
     {/if}
+    <SlackDirectoryPicker
+      {base} {connectorId} {identity} {accountId} kind="channels" bind:value={channel} bind:name={targetName}
+      inputId="{idPrefix}-channel" idLabel="Channel ID" idPlaceholder="C0123ABCD"
+    />
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      <div>
-        <label class={label} for="{idPrefix}-channel">Channel ID</label>
-        <input id="{idPrefix}-channel" class="{input} font-mono" bind:value={channel} placeholder="C0123ABCD" />
-      </div>
       {#if target === "thread"}
         <div>
           <label class={label} for="{idPrefix}-thread">Thread timestamp</label>

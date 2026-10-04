@@ -396,6 +396,7 @@ func Register(r tool.Router) {
 	r.POST("/api/team/agents/{id}/a2a-remote/refresh-card", apiTeamRemoteRefresh)
 	r.POST("/api/team/slack-remote/test", apiTeamSlackRemoteTest)
 	r.GET("/api/team/slack-remote/identities", apiTeamSlackRemoteIdentities)
+	r.GET("/api/team/slack-remote/directory", apiTeamSlackRemoteDirectory)
 	r.POST("/api/team/slack-remote", apiTeamSlackRemoteCreate)
 	r.GET("/api/team/plugin-sources", apiTeamPluginSources)
 	r.POST("/api/team/plugin-remote", apiTeamPluginRemoteCreate)

@@ -111,6 +111,58 @@ func slackRemoteSource(ctx context.Context, owner string, cfg slackremote.Config
 	return slackremote.NewSource(cfg, slackremote.Deps{API: api}), nil
 }
 
+// slackDirectory caches workspace listings for the target search.
+var slackDirectory = slackremote.NewDirectory()
+
+// slackDirectoryOverride replaces the Slack Web API in tests.
+var slackDirectoryOverride func(token string) slackremote.DirectoryAPI
+
+// apiTeamSlackRemoteDirectory handles GET /api/team/slack-remote/directory
+// ?connector_id=&identity=&account_id=&kind=users|channels&q=: the users,
+// bots or channels whose names contain q, for a person to pick a target
+// from. Only the picked id is ever stored; nothing here matches a person
+// by name. A token without the read scope answers 200 with error and
+// missing_scope so the form falls back to typing the id.
+func apiTeamSlackRemoteDirectory(c *tool.Ctx) {
+	if !slackRemoteReady(c) {
+		return
+	}
+	cfg := slackremote.Config{ConnectorID: c.Query("connector_id"), Identity: c.Query("identity"), AccountID: c.Query("account_id")}
+	if cfg.Identity != slackremote.IdentityUser {
+		cfg.Identity, cfg.AccountID = slackremote.IdentityBot, ""
+	}
+	owner := actorID(c)
+	if err := checkSlackRemoteAccess(c.Context(), owner, isAdminCtx(c), cfg); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	token, err := globalConnectors.ResolveToken(c.Context(), cfg.ConnectorID, cfg.AccountID, owner)
+	if err != nil {
+		c.JSON(http.StatusOK, map[string]any{"entries": []slackremote.DirEntry{}, "error": err.Error()})
+		return
+	}
+	var api slackremote.DirectoryAPI = slackremote.HTTPAPI{Token: token}
+	if slackDirectoryOverride != nil {
+		api = slackDirectoryOverride(token)
+	}
+	key := cfg.ConnectorID + "|" + cfg.Identity + "|" + cfg.AccountID
+	entries, err := slackDirectory.Search(c.Context(), api, key, c.Query("kind"), c.Query("q"))
+	if err != nil {
+		var ms *slackremote.MissingScopeError
+		if errors.As(err, &ms) {
+			c.JSON(http.StatusOK, map[string]any{"entries": []slackremote.DirEntry{}, "error": err.Error(), "missing_scope": true})
+			return
+		}
+		if c.Query("kind") != slackremote.DirUsers && c.Query("kind") != slackremote.DirChannels {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, map[string]any{"entries": []slackremote.DirEntry{}, "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"entries": entries})
+}
+
 func isAdminCtx(c *tool.Ctx) bool {
 	u := login.GetUser(c.Context())
 	return u != nil && u.IsAdmin()

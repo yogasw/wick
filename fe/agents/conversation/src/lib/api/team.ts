@@ -330,6 +330,28 @@ export type SlackRemoteCreate = SlackRemoteConfig & { name?: string; handle?: st
 export const getSlackIdentities = (base: string, connectorId: string) =>
   apiGetE<SlackIdentities>(`${base}/api/team/slack-remote/identities?connector_id=${enc(connectorId)}`);
 
+/** One pickable Slack user, bot or channel from the target search. */
+export type SlackDirEntry = {
+  id: string;
+  name: string;
+  real_name?: string;
+  display_name?: string;
+  avatar?: string;
+  is_bot?: boolean;
+  is_private?: boolean;
+};
+export type SlackDirectory = { entries: SlackDirEntry[] | null; error?: string; missing_scope?: boolean };
+
+/** Users+bots or channels whose names contain q, for a person to pick
+    from; the server caches each workspace listing for a few minutes. */
+export const searchSlackDirectory = (
+  base: string,
+  p: { connectorId: string; identity: SlackIdentity; accountId: string; kind: "users" | "channels"; q: string },
+) =>
+  apiGetE<SlackDirectory>(
+    `${base}/api/team/slack-remote/directory?connector_id=${enc(p.connectorId)}&identity=${enc(p.identity)}&account_id=${enc(p.accountId)}&kind=${p.kind}&q=${enc(p.q)}`,
+  );
+
 /** By config (wizard) or agent_id (Settings). Posts a real "ping". */
 export const testSlackRemote = (base: string, body: SlackRemoteConfig | { agent_id: string }) =>
   apiPostE<SlackTestResult>(`${base}/api/team/slack-remote/test`, body);

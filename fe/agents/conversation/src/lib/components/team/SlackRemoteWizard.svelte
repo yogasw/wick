@@ -207,7 +207,7 @@
       </div>
     {/if}
   {:else if step === 2}
-    <SlackTargetFields bind:target bind:channel bind:user bind:mentionId bind:threadTs bind:targetName idPrefix="sw" />
+    <SlackTargetFields {base} {connectorId} {identity} {accountId} bind:target bind:channel bind:user bind:mentionId bind:threadTs bind:targetName idPrefix="sw" />
   {:else if step === 3}
     <SlackIdentityFields {base} {connectorId} bind:identity bind:accountId idPrefix="sw" />
   {:else if step === 4}
