@@ -156,6 +156,21 @@ export type Sender = {
   // "slack" | "telegram" | "rest" | "ui"
   channel: string;
   wick_user_id?: string;
+  /** Opens the original message on its platform (Slack). Absent on turns
+      saved before it was recorded. */
+  permalink?: string;
+};
+
+/** Whether an assistant reply reached the channel thread it answers.
+    Mirrors agentstore.Delivery. */
+export type Delivery = {
+  channel: string;
+  status: "sending" | "sent" | "failed";
+  /** The posted reply (its first message when split). */
+  permalink?: string;
+  /** Slack's short reason: channel_not_found, rate_limited, timeout, … */
+  error?: string;
+  at?: string;
 };
 
 export type ConversationTurn = {
@@ -196,6 +211,8 @@ export type ConversationTurn = {
   /** assistant turn of a remote agent — how it ended: "ended without
       marker", "follow-up", "late reply" (remote.Note*). */
   remote_note?: string;
+  /** assistant turn — its reply's delivery to Slack, when posted there. */
+  delivery?: Delivery;
   /** system turn only — "provider_switch", "interrupted", "compaction", …
       Tags a structured notice so it renders as itself instead of a plain
       grey line. */

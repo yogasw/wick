@@ -1352,3 +1352,78 @@ describe("ThreadMessage - Captain chips", () => {
     expect(screen.getByText(/Access change for @worker declined/)).toBeDefined();
   });
 });
+
+describe("ThreadMessage - Slack jump & delivery", () => {
+  const link = "https://example.slack.com/archives/C1/p1700000000000100";
+
+  test("a Slack message links back to its thread in a new tab", () => {
+    setViewerId("wick-viewer");
+    render(ThreadMessage, {
+      props: {
+        turn: makeTurn({
+          role: "user",
+          source: "slack",
+          sender: { id: "U1", name: "Rina Contoh", channel: "slack", permalink: link },
+        }),
+      },
+    });
+    const a = screen.getByTestId("jump-to-thread") as HTMLAnchorElement;
+    expect(a.getAttribute("href")).toBe(link);
+    expect(a.getAttribute("target")).toBe("_blank");
+    expect(a.getAttribute("rel")).toContain("noopener");
+  });
+
+  test("a Team message relayed from Slack links too", () => {
+    setViewerId("wick-viewer");
+    render(ThreadMessage, {
+      props: {
+        turn: makeTurn({
+          role: "user",
+          source: "team",
+          sender: { id: "U1", name: "Rina Contoh", channel: "slack", permalink: link },
+        }),
+      },
+    });
+    expect(screen.getByTestId("jump-to-thread").getAttribute("href")).toBe(link);
+  });
+
+  test("old turns and web messages get no link", () => {
+    setViewerId("wick-viewer");
+    render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "user", source: "slack", sender: { id: "U1", name: "Rina", channel: "slack" } }) },
+    });
+    expect(screen.queryByTestId("jump-to-thread")).toBeNull();
+  });
+
+  test("a reply sent to Slack says so and links to it", () => {
+    render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "assistant", text: "Done.", delivery: { channel: "slack", status: "sent", permalink: link } }) },
+    });
+    const row = screen.getByTestId("delivery-status");
+    expect(row.dataset.state).toBe("sent");
+    expect(row.textContent).toContain("Sent to Slack");
+    expect(screen.getByTestId("delivery-jump").getAttribute("href")).toBe(link);
+  });
+
+  test("a failed reply shows the reason, no link", () => {
+    render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "assistant", text: "Done.", delivery: { channel: "slack", status: "failed", error: "not_in_channel" } }) },
+    });
+    const row = screen.getByTestId("delivery-status");
+    expect(row.dataset.state).toBe("failed");
+    expect(row.textContent).toContain("Not sent to Slack: not_in_channel");
+    expect(screen.queryByTestId("delivery-jump")).toBeNull();
+  });
+
+  test("a reply still going out says sending", () => {
+    render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "assistant", text: "Done.", delivery: { channel: "slack", status: "sending" } }) },
+    });
+    expect(screen.getByTestId("delivery-status").textContent).toContain("Sending to Slack…");
+  });
+
+  test("a web-only reply shows no delivery row", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "assistant", text: "Done." }) } });
+    expect(screen.queryByTestId("delivery-status")).toBeNull();
+  });
+});

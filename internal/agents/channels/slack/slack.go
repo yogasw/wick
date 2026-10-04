@@ -246,6 +246,9 @@ type Channel struct {
 	sendFn      agentchannels.SendFunc
 	ownerFn     func(ctx context.Context, sessionID, userID string)
 	ownerUserID string // wick user who owns this channel row; empty = App Owner
+	// deliveryFn records whether a turn's reply reached its Slack thread.
+	// nil = not recorded (tests, installs without the agents UI).
+	deliveryFn DeliveryFunc
 
 	// identitySink persists the bot identity (id, display name, team) the
 	// moment auth.test resolves it, so the next boot can label this
@@ -2132,6 +2135,12 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	// structured fields, so the message the user typed stays untouched in
 	// storage and in the web UI.
 	sender := s.resolveSender(ev.User)
+	// The link back to this very message, so the web UI can jump to the
+	// Slack thread it came from. Fetched once here and stored with the turn
+	// rather than on every render; no link when Slack will not give one.
+	if sender != nil {
+		sender.Permalink = s.messagePermalink(ev.Channel, ev.TimeStamp)
+	}
 	// Append an attachment manifest so the agent knows the user posted files
 	// (images, PDFs, …) and has a permalink to fetch each one — the bytes
 	// themselves aren't downloaded here. Empty when the message had no files.
@@ -2693,8 +2702,29 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	}()
 
 	plan := reconcilePlan(text, liveTS, lastSent)
+	if text == "" {
+		return
+	}
+	// Record the outcome for the web UI. Posting itself is unchanged: the
+	// same calls, retries and give-ups as before, only their result is kept.
+	turnID := s.reportDelivery(sessionKey, "", store.Delivery{Status: store.DeliverySending})
+	var firstTS string
+	var failed error
+	note := func(ts string, err error) {
+		if firstTS == "" {
+			firstTS = ts
+		}
+		if err != nil && failed == nil {
+			failed = err
+		}
+	}
+	defer func() { s.finishDelivery(sessionKey, turnID, channelID, firstTS, failed) }()
+
 	if plan.postFresh {
-		s.postChunked(channelID, threadTS, text)
+		// postChunked, with each chunk's result kept.
+		for _, chunk := range replyChunks(text) {
+			note(s.postReplyTS(channelID, threadTS, chunk))
+		}
 		return
 	}
 
@@ -2702,20 +2732,23 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	api := s.api
 	s.cfgMu.Unlock()
 	if api == nil {
+		note("", errSlackNotConnected)
 		return
 	}
 
+	// The live message already carries the reply's opening.
+	firstTS = liveTS
 	if plan.update {
-		s.withBackoff(func() error {
+		note("", s.withBackoffErr(func() error {
 			_, _, _, err := api.UpdateMessage(
 				channelID, liveTS,
 				replyMsgOptions(plan.first, slackmd.NeedsBlock(lastSent))...,
 			)
 			return err
-		})
+		}))
 	}
 	for _, chunk := range plan.continuations {
-		s.postReply(channelID, threadTS, chunk)
+		note(s.postReplyTS(channelID, threadTS, chunk))
 	}
 }
 
@@ -3685,15 +3718,22 @@ func subAgentStatusLabel(ev event.AgentEvent) string {
 }
 
 func (s *Channel) withBackoff(fn func() error) {
+	_ = s.withBackoffErr(fn)
+}
+
+// withBackoffErr is withBackoff that also hands back how the call ended: nil
+// once it succeeded, else the last error. Retries are unchanged.
+func (s *Channel) withBackoffErr(fn func() error) error {
 	const maxRetries = 5
+	var err error
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		err := fn()
+		err = fn()
 		if err == nil {
-			return
+			return nil
 		}
 		if !isRateLimit(err) {
 			log.Warn().Str("channel", "slack").Err(err).Msg("slack api call failed")
-			return
+			return err
 		}
 		wait := time.Duration(math.Pow(2, float64(attempt))) * time.Second
 		if wait > 32*time.Second {
@@ -3703,6 +3743,7 @@ func (s *Channel) withBackoff(fn func() error) {
 		time.Sleep(wait)
 	}
 	log.Error().Str("channel", "slack").Msg("slack api call failed after max retries")
+	return err
 }
 
 func isRateLimit(err error) bool {

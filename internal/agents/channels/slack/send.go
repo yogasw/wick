@@ -332,13 +332,24 @@ func (s *Channel) signedContextBlock() slackgo.Block {
 // postReply posts a plain-text reply in a Slack thread, with retry backoff
 // on rate-limit errors.
 func (s *Channel) postReply(channelID, threadTS, text string) {
+	_, _ = s.postReplyTS(channelID, threadTS, text)
+}
+
+// postReplyTS is postReply that reports the posted message's ts, or the
+// error it finally gave up on.
+func (s *Channel) postReplyTS(channelID, threadTS, text string) (string, error) {
 	s.cfgMu.Lock()
 	api := s.api
 	s.cfgMu.Unlock()
-	s.withBackoff(func() error {
-		_, err := s.postThread(api, channelID, threadTS, replyMsgOptions(text, false)...)
+	var ts string
+	err := s.withBackoffErr(func() error {
+		posted, err := s.postThread(api, channelID, threadTS, replyMsgOptions(text, false)...)
+		if err == nil {
+			ts = posted
+		}
 		return err
 	})
+	return ts, err
 }
 
 // postReplyWithFooter posts the message body as a section block and appends

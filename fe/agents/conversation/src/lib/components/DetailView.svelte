@@ -1798,6 +1798,10 @@
             approvalsTabPending = approvalsTabPending.filter((p) => p.id !== payload.id);
           }
         } catch (_) { /* skip */ }
+      } else if (ev.type === "delivery") {
+        // A reply's trip to Slack settled (sending → sent / failed). The
+        // status is stamped on the turn server-side, so reload to show it.
+        void loadConversation();
       } else if (ev.type === "done" || ev.type === "error") {
         void loadConversation();
         // A sub-agent's own lifecycle events are published on the CHILD's

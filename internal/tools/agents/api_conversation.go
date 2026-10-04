@@ -306,6 +306,7 @@ func apiSessionConversation(c *tool.Ctx) {
 	resolveLabelFromTurns(globalLayout, id, turns)
 	backfillTurnIDs(turns)
 	stampSpeakers(turns, sessionSpeaker(c, id))
+	agentstore.StampDeliveries(turns, agentstore.LoadDeliveries(globalLayout, id))
 	cards := actionCardStates(turns)
 	limit, _ := strconv.Atoi(c.Query("limit"))
 	page, hasMore := pageTurns(turns, c.Query("before"), limit)

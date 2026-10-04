@@ -81,6 +81,10 @@ type Sender struct {
 	Handle     string `json:"handle,omitempty"`       // @handle, without the @
 	Channel    string `json:"channel"`                // slack | telegram | rest | ui
 	WickUserID string `json:"wick_user_id,omitempty"` // resolved wick account, when mapped
+	// Permalink opens the original message on its platform (Slack today).
+	// Captured once when the message arrives; empty when the channel has
+	// no such link or could not get one.
+	Permalink string `json:"permalink,omitempty"`
 }
 
 // Artifact is a file produced by an assistant turn, derived from the turn's
@@ -126,6 +130,11 @@ type ConversationTurn struct {
 	// RemoteNote is how a remote agent's turn ended ("ended without
 	// marker", "follow-up", "late reply"); assistant turn only.
 	RemoteNote string `json:"remote_note,omitempty"`
+	// Delivery is whether this assistant turn's reply reached the channel
+	// thread it answers (Slack). Never written to conversation.jsonl: it is
+	// recorded after the turn is saved and stamped on at read time from
+	// deliveries.json. Nil for a turn no channel posted.
+	Delivery *Delivery `json:"delivery,omitempty"`
 
 	// Kind tags a structured system turn so the UI can render it specially
 	// and callers can identify it (e.g. "provider_switch"). Empty for a

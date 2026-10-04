@@ -26,6 +26,7 @@
   import RemoteRecheck from "./RemoteRecheck.svelte";
   import type { SlackRecheck } from "../api/team.js";
   import { isRemoteTimeout, isLateReply, NOTE_NO_MARKER } from "../remoteRecheck.js";
+  import { jumpLink, deliveryView } from "../slackDelivery.js";
 
   type Props = {
     turn: ConversationTurn;
@@ -213,6 +214,12 @@
      renders). Reads `ts` (RFC3339 from history) first, falls back to
      `timestamp` (epoch ms on client-built live turns). */
   const stamp = $derived(turnTime(turn));
+
+  /* Back to the Slack thread a message came from, and proof an agent reply
+     made it there. Both are recorded by the server when the message passed
+     through Slack; older turns simply have neither. */
+  const sourceJump = $derived(isUser ? jumpLink(turn.sender?.permalink) : "");
+  const delivery = $derived(turn.role === "assistant" ? deliveryView(turn.delivery) : null);
 
   const safeEvents = $derived(turn.events ?? []);
   const safeAttachments = $derived(turn.attachments ?? []);
@@ -608,6 +615,21 @@
               {/if}
             </span>
           {/if}
+          {#if sourceJump}
+            <a
+              data-testid="jump-to-thread"
+              href={sourceJump}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open this message's thread in Slack"
+              class="inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-1 -my-1 text-[11px] leading-4 text-green-700 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-green-400"
+            >
+              Jump to thread
+              <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7 9" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+            </a>
+          {/if}
           {#if command}
             <!-- A command, not a line of chat: monospace on a quiet surface
                  with a prompt caret, so it reads as something that was RUN.
@@ -781,6 +803,51 @@
             <p class="mt-2 text-xs text-black-600 dark:text-black-700 italic border-t border-white-300 dark:border-navy-600 pt-2">Output truncated — see raw.jsonl for full content.</p>
           {/if}
         </div>
+      {/if}
+
+      {#if delivery}
+        <!-- Did the reply really reach Slack? Sent links to the posted message;
+             failed says Slack's reason, so a silent drop is never mistaken for
+             a delivered answer. -->
+        <span
+          data-testid="delivery-status"
+          data-state={delivery.state}
+          class={"self-start inline-flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] leading-4 " +
+            (delivery.state === "failed"
+              ? "text-red-600 dark:text-red-400"
+              : "text-black-500 dark:text-black-600")}
+        >
+          {#if delivery.state === "sent"}
+            <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M3 8.5 6.5 12 13 4.5" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          {:else if delivery.state === "failed"}
+            <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <path d="M8 2L1.5 13.5h13L8 2z" stroke-linejoin="round"></path>
+              <path d="M8 6v4M8 11.5v.5" stroke-linecap="round"></path>
+            </svg>
+          {:else}
+            <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 animate-spin motion-reduce:animate-none" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M8 2a6 6 0 1 1-6 6" stroke-linecap="round"></path>
+            </svg>
+          {/if}
+          <span class="break-words">{delivery.label}</span>
+          {#if delivery.link}
+            <span aria-hidden="true">·</span>
+            <a
+              data-testid="delivery-jump"
+              href={delivery.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-0.5 rounded px-1 py-1 -my-1 text-green-700 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-green-400"
+            >
+              Jump to thread
+              <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7 9" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+            </a>
+          {/if}
+        </span>
       {/if}
 
       {#if onRemoteRecheck && turn.role === "assistant" && turn.remote_note === NOTE_NO_MARKER}

@@ -250,6 +250,12 @@ func (l Layout) SessionWorkspace(id string) string {
 // on every message.
 func (l Layout) SessionUsage(id string) string { return filepath.Join(l.SessionDir(id), "usage.json") }
 
+// SessionDeliveries records, per assistant turn, whether its reply reached
+// the channel it was posted to (Slack today). See store/delivery.go.
+func (l Layout) SessionDeliveries(id string) string {
+	return filepath.Join(l.SessionDir(id), "deliveries.json")
+}
+
 func (l Layout) SessionInflight(id string) string {
 	return filepath.Join(l.SessionDir(id), "inflight.jsonl")
 }

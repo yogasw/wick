@@ -2017,6 +2017,10 @@ func NewServer() *Server {
 				})
 			}
 
+			// Record whether each reply reached its Slack thread, for the
+			// web UI's "Sent to Slack" status on the bubble.
+			slackCh.SetDeliveryFn(agentstool.RecordChannelDelivery)
+
 			// Background ticker: refresh every 5 minutes.
 			go func(ch *slackch.Channel) {
 				ticker := time.NewTicker(5 * time.Minute)
