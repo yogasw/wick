@@ -99,6 +99,30 @@
         : typingLabel(typing.substate, typing.toolName),
   );
 
+  /* The working bubble stays up through a turn: typing can drop for an
+     instant between events (an idle edge before done, a turn that ends and
+     wakes again on a sub-agent's result), and unmounting it on each drop
+     bounces the whole thread. Showing is immediate, hiding waits
+     TYPING_HIDE_MS and is cancelled if typing comes back; the label keeps
+     its last value meanwhile. */
+  const TYPING_HIDE_MS = 450;
+  let typingShown = $state(false);
+  let typingLabelShown = $state<string | undefined>(undefined);
+  let typingHideTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const active = typing.active;
+    const label = activityLabel;
+    if (active) {
+      if (typingHideTimer) { clearTimeout(typingHideTimer); typingHideTimer = undefined; }
+      typingShown = true;
+      typingLabelShown = label;
+      return;
+    }
+    if (!typingShown || typingHideTimer) return;
+    typingHideTimer = setTimeout(() => { typingShown = false; typingHideTimer = undefined; }, TYPING_HIDE_MS);
+  });
+  $effect(() => () => { if (typingHideTimer) clearTimeout(typingHideTimer); });
+
   let liveTraceOpen = $state(false);
   let floatLabel = $state("");
   let floatVisible = $state(false);
@@ -305,7 +329,7 @@
     </div>
   {/if}
 
-  {#if typing.active && liveMergedTodoItems.length === 0}
+  {#if typingShown && liveMergedTodoItems.length === 0}
     <!-- Floating "what's running" bubble is now redundant WHEN a todo card
          exists (its activity shows inline instead) — only render this
          fallback when there's no todo card to attach it to. -->
@@ -341,7 +365,7 @@
             <path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path>
           </svg>
           {/if}
-          <span class="italic">{activityLabel}</span>
+          <span class="italic" data-testid="typing-label">{typingLabelShown}</span>
         </div>
       </div>
     </div>

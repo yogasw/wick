@@ -498,6 +498,37 @@ describe("createThreadStore", () => {
     expect(get(store.typing).active).toBe(false);
   });
 
+  test("a turn's indicator stays up through a realistic event run", () => {
+    const seen: boolean[] = [];
+    const labels = new Set<string>();
+    const unsub = store.typing.subscribe((v) => {
+      seen.push(v.active);
+      if (v.active) labels.add(v.substate ?? "");
+    });
+    store.handleEvent(ev("session_start"));
+    store.handleEvent(ev("lifecycle", { lifecycle: "working", data: "claude/engineer" }));
+    store.handleEvent(ev("thinking", { data: "Let me look" }));
+    store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "shell", tool_input: "{}", at: 1 }));
+    // An idle edge that lands before the turn's done event.
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle", data: "claude/engineer" }));
+    store.handleEvent(ev("tool_result", { tool_use_id: "u1", data: "ok" }));
+    store.handleEvent(ev("lifecycle", { lifecycle: "working", data: "claude" }));
+    store.handleEvent(ev("thinking", { data: "Now answer" }));
+    store.handleEvent(ev("text_delta", { data: "Done." }));
+    const beforeEnd = [...seen];
+    store.handleEvent(ev("done"));
+    unsub();
+    expect(beforeEnd.slice(beforeEnd.indexOf(true))).not.toContain(false);
+    expect([...labels].some((l) => l.includes("claude"))).toBe(false);
+    expect(get(store.typing).active).toBe(false);
+  });
+
+  test("lifecycle idle with no live turn still clears typing", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "working", data: "" }));
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle" }));
+    expect(get(store.typing).active).toBe(false);
+  });
+
   test("lifecycle killed sets typing inactive", () => {
     store.handleEvent(ev("session_start"));
     store.handleEvent(ev("lifecycle", { lifecycle: "killed" }));
@@ -538,9 +569,12 @@ describe("createThreadStore", () => {
     expect(get(store.typing).toolName).toBeUndefined();
   });
 
-  test("lifecycle idle clears typing.toolName", () => {
+  test("lifecycle idle mid-turn keeps the indicator; done clears it", () => {
     store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "shell", tool_input: "{}", at: 1 }));
     store.handleEvent(ev("lifecycle", { lifecycle: "idle" }));
+    expect(get(store.typing)).toMatchObject({ active: true, toolName: "shell" });
+    store.handleEvent(ev("done"));
+    expect(get(store.typing).active).toBe(false);
     expect(get(store.typing).toolName).toBeUndefined();
   });
 

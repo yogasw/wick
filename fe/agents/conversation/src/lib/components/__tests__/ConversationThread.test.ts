@@ -232,3 +232,28 @@ describe("ConversationThread - compaction in flight", () => {
     expect(container.innerHTML).toContain("amber");
   });
 });
+
+describe("ConversationThread working indicator", () => {
+  test("stays mounted through a brief drop and hides only after the turn ends", async () => {
+    vi.useFakeTimers();
+    try {
+      const props = (typing: TypingState) => ({ turns: [], live: null, typing, loading: false });
+      const { rerender } = render(ConversationThread, { props: props({ active: true, substate: "thinking" }) });
+      const first = screen.getByTestId("typing-label");
+      expect(first.textContent).toBe("thinking…");
+      // A drop between two events, then the turn goes on.
+      await rerender(props({ active: false }));
+      await vi.advanceTimersByTimeAsync(200);
+      expect(screen.getByTestId("typing-label")).toBe(first);
+      await rerender(props({ active: true, toolName: "shell" }));
+      expect(screen.getByTestId("typing-label")).toBe(first);
+      expect(first.textContent).toBe("running command…");
+      // The real end: gone once the hide delay passed.
+      await rerender(props({ active: false }));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(screen.queryByTestId("typing-label")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

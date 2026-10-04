@@ -23,6 +23,9 @@ import type {
   TypingState,
 } from "../types/agents.js";
 
+/** Provider types a lifecycle edge may name in its data. */
+const PROVIDER_TYPES = new Set(["claude", "codex", "gemini", "opencode", "omp", "wick", "slack-remote", "a2a-remote", "plugin-remote"]);
+
 export interface ThreadMeta {
   title?: string;
 }
@@ -170,6 +173,17 @@ export function createThreadStore(): ThreadStore {
     stopClock();
   }
 
+  /* The pool's lifecycle edge carries the PROVIDER in data ("claude",
+     "claude/engineer"), a snapshot carries the real substate ("thinking",
+     "running_tool"). A provider is not something the agent is doing:
+     taken as a substate it renders "running claude/engineer…" and swaps
+     the label back and forth through a turn. */
+  function lifecycleSubstate(data: string | undefined, prev: string | undefined): string {
+    const d = data ?? "";
+    if (d.includes("/") || PROVIDER_TYPES.has(d)) return prev ?? "";
+    return d;
+  }
+
   function handleEvent(ev: AgentEvent): void {
     /* Before the switch: the frame carrying the newest level is often one
        the switch ignores — a suppressed duplicate of text that already
@@ -186,14 +200,18 @@ export function createThreadStore(): ThreadStore {
 
       case "lifecycle": {
         const lc = ev.lifecycle ?? "";
-        if (lc === "idle" || lc === "killed") {
+        if (lc === "killed" || (lc === "idle" && get(live) === null)) {
           typing.update((t) => ({ ...t, active: false, toolName: undefined }));
           stopClock();
+        } else if (lc === "idle") {
+          // An idle edge while the turn is still streaming: its done event
+          // (which finalizes and clears typing) is on its way. Clearing here
+          // would drop the indicator for a moment and bounce the thread.
         } else if (lc === "spawning") {
           typing.set({ active: true, substate: "spawning" });
           startClock(ev.at);
         } else if (lc === "working") {
-          typing.update((t) => ({ active: true, substate: ev.data ?? "", toolName: t.toolName }));
+          typing.update((t) => ({ active: true, substate: lifecycleSubstate(ev.data, t.substate), toolName: t.toolName }));
           startClock(ev.at);
         }
         const lcState = (lc === "spawning" || lc === "working" || lc === "idle" || lc === "killed")
