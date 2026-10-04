@@ -31,3 +31,13 @@ in-memory base64 in `display.data` (live turn).
 No render site changes. A kind with no renderer falls back to `TextBlock`.
 
 Syntax highlighting is app-provided: call `setTraceHighlighter(fn)` once.
+
+## Skill cards
+
+A read result whose path ends in `SKILL.md` (and a `Skill` tool result that
+starts with frontmatter) is re-kinded `skill` in `TraceBody` via
+`skillDisplay()` (`skill.ts`) and drawn by `SkillBlock`: name/description
+from the frontmatter, scope from the path (Built-in wick / Global /
+Project), the `<!-- MANAGED BY WICK … -->` comment shown as a badge, the
+body as markdown, and a "partial" badge for offset/limit reads. FE-only:
+Raw still shows the file exactly as the agent read it.

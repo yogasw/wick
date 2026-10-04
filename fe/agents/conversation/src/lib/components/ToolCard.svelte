@@ -439,6 +439,7 @@
               toolName={block.toolName}
               isError={block.isError}
               callDisplay={inputDisplay}
+              callInput={displayInput}
               truncated={loadedTruncated}
               ctx={traceCtx}
             />

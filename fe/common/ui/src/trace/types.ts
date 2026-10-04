@@ -28,6 +28,9 @@ export type TraceDisplay = {
      before the backend stored it as a blob. Never decoded until the chip
      is clicked. */
   data?: string;
+  /* In-memory only: the file lines a skill card shows (skill.ts) — the
+     range of a numbered read and whether it was only part of the file. */
+  lines?: { from: number; to: number; partial: boolean };
 };
 
 /* note: a caveat the viewer shows over the media, e.g. that it is the file

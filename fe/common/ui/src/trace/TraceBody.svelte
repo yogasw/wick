@@ -7,6 +7,7 @@
   import { getTraceRenderer } from "./registry.js";
   import { classifyCall, classifyResult } from "./classify.js";
   import { rawPreview, truncationNote } from "./format.js";
+  import { skillDisplay } from "./skill.js";
   import { isBinaryKind, type TraceContext, type TraceDisplay } from "./types.js";
   import ScrollBox from "./ScrollBox.svelte";
   import CopyButton from "./blocks/CopyButton.svelte";
@@ -22,12 +23,15 @@
     /* The matching call's display (result side): gives read results the
        call's path and language. */
     callDisplay?: TraceDisplay | null;
+    /* The matching call's input text (result side): a read's offset/limit,
+       so a partial read of a SKILL.md says so on its card. */
+    callInput?: string;
     /* The payload file said the store cut it (TurnEventPayload.truncated). */
     truncated?: boolean;
     ctx?: TraceContext;
     maxHeight?: number;
   };
-  let { display, raw = "", toolName = "", call = false, isError = false, callDisplay, truncated = false, ctx, maxHeight = 320 }: Props = $props();
+  let { display, raw = "", toolName = "", call = false, isError = false, callDisplay, callInput, truncated = false, ctx, maxHeight = 320 }: Props = $props();
 
   let showRaw = $state(false);
 
@@ -53,6 +57,9 @@
       if (out.parts) out = { ...out, parts: out.parts.map(fill) };
     }
     if (truncated && !out.truncated) out = { ...out, truncated: true };
+    // A read of a SKILL.md renders as a skill card, whatever kind the
+    // backend gave the file text.
+    if (!call) out = skillDisplay(out, toolName, callDisplay, callInput) ?? out;
     return out;
   });
 

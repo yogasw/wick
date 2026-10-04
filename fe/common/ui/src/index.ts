@@ -120,6 +120,8 @@ export type { TraceRenderer, TraceRendererProps } from "./trace/registry.js";
 export { classifyCall, classifyResult, registerTraceDetector, toolFamily, langForPath } from "./trace/classify.js";
 export { setTraceHighlighter } from "./trace/highlight.js";
 export { humanBytes } from "./trace/format.js";
+export { parseSkill, skillDisplay, skillScope, isSkillPath } from "./trace/skill.js";
+export type { SkillDoc, SkillScope } from "./trace/skill.js";
 export type { TraceDisplay, TraceContext, TraceMedia, TraceFileStat } from "./trace/types.js";
 export { traceFileState, type TraceFileState } from "./trace/fileState.js";
 export { isBinaryKind } from "./trace/types.js";
