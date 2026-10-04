@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
-	slackgo "github.com/slack-go/slack"
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 
@@ -200,11 +199,7 @@ func (e errBotTaken) Error() string {
 
 // slackBotIdentity runs auth.test with token.
 func slackBotIdentity(token string) (botID, botUserID, botName, teamName string, err error) {
-	var opts []slackgo.Option
-	if slackAPIURL != "" {
-		opts = append(opts, slackgo.OptionAPIURL(slackAPIURL))
-	}
-	resp, err := slackgo.New(token, opts...).AuthTest()
+	resp, err := slackClient(token).AuthTest()
 	if err != nil {
 		return "", "", "", "", err
 	}
@@ -320,6 +315,13 @@ func apiTeamAgentSlackConnect(c *tool.Ctx) {
 		}
 		c.JSON(status, map[string]string{"error": err.Error()})
 		return
+	}
+	// A brand-new app starts as "Only me": the owner alone may use it.
+	// Connections that already exist keep whatever access they had.
+	if m["bot_token"] == "" && m["users_mode"] == "" {
+		if id, name := agentSlackOwner(p, m, slackClient(secrets["bot_token"])); id != "" {
+			onlyOwnerAccess(m, id, name)
+		}
 	}
 	m["mode"] = mode
 	m["project_id"] = p.ProjectID
