@@ -176,7 +176,7 @@ func TestRemoteSlackAgentOverA2A(t *testing.T) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if len(d.posts) != 1 || !strings.HasPrefix(d.posts[0], "ping") {
+	if len(d.posts) != 1 || !strings.HasPrefix(d.posts[0], "<@UBOT> ping") {
 		t.Fatalf("slack posts = %q", d.posts)
 	}
 }
