@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/svelte";
+import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 
 /* Opening Settings › Access must not save anything by itself: the autosave
    only fires for a real change, once, and its own response does not count
@@ -51,9 +51,9 @@ describe("AgentSettings › Access autosave", () => {
   test("one change sends exactly one PATCH, and its response triggers no other", async () => {
     render(AgentSettings, { props: props(agent) });
     await screen.findByLabelText("Select Slack");
-    await fireEvent.input(screen.getByLabelText("Search Connectors"), { target: { value: "Loki" } });
-    const loki = await screen.findByRole("radiogroup", { name: "Access level for Loki" });
-    await fireEvent.click(within(loki).getByRole("radio", { name: "Read" }));
+    await fireEvent.click(screen.getByRole("button", { name: "+ Add connectors" }));
+    await fireEvent.click(await screen.findByLabelText("Pick Loki"));
+    await fireEvent.click(screen.getByRole("button", { name: "Add 1 as Read" }));
     await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1));
     expect(Object.keys(updateAgent.mock.calls[0][2] as object)).toEqual(["allowed_connectors"]);
     await settle();
