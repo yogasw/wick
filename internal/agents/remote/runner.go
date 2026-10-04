@@ -468,6 +468,9 @@ func (t *turnOut) handle(ev Event) bool {
 	case EventText:
 		t.sawText = t.sawText || ev.Text != ""
 		t.grow(ev.Text)
+	case EventDraft:
+		t.sawText = t.sawText || ev.Text != ""
+		t.full = ev.Text
 	case EventStatus:
 		t.p.emitStatus(ev.Status, ev.Detail)
 	case EventAttachment:

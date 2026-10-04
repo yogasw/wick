@@ -1867,6 +1867,12 @@ func routeToRemoteTurns(ev *slackevents.MessageEvent) {
 			User: ev.Message.User, BotID: ev.Message.BotID, Text: ev.Message.Text,
 		}
 	}
+	if ev.SubType == "message_deleted" && ev.PreviousMessage != nil {
+		edited = &slackremote.Message{
+			TS: ev.DeletedTimeStamp, ThreadTS: ev.PreviousMessage.ThreadTimestamp,
+			User: ev.PreviousMessage.User, BotID: ev.PreviousMessage.BotID,
+		}
+	}
 	if m, ok := slackremote.FromEvent(ev.Channel, ev.SubType, ev.TimeStamp, ev.ThreadTimeStamp, ev.User, ev.BotID, ev.Text, edited); ok {
 		slackremote.Shared.Dispatch(m)
 	}

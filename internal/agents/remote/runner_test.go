@@ -192,6 +192,17 @@ func TestRewriteKeptForResult(t *testing.T) {
 	}
 }
 
+func TestDraftShownOnlyAtEnd(t *testing.T) {
+	f := &fake{listen: []ListenMode{ListenPush}, limits: Limits{Max: 5 * time.Second}, push: make(chan Event, 8)}
+	f.push <- Event{Kind: EventDraft, Text: "partial"}
+	f.push <- Event{Kind: EventDraft, Text: "the whole answer"}
+	f.push <- Event{Kind: EventDone}
+	text, l := run(t, f)
+	if text != "the whole answer" || l.Result != "the whole answer" {
+		t.Fatalf("text=%q line=%+v", text, l)
+	}
+}
+
 func TestRegistry(t *testing.T) {
 	Register(Adapter{Kind: "zz-test", Label: "Test", Listen: []ListenMode{ListenPull}, Schema: SchemaVersion})
 	if a, ok := Lookup("zz-test"); !ok || a.Label != "Test" {

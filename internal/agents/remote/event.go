@@ -16,6 +16,11 @@ const (
 	// EventText is the reply so far in full; the runner shows only the
 	// part not shown yet.
 	EventText EventKind = "text"
+	// EventDraft is the reply so far in full, not shown yet: the remote
+	// may still rewrite it, so the runner keeps it as the turn's result
+	// and shows it when the turn ends. Added within v1: a runner that
+	// does not know it only shows the reply later.
+	EventDraft EventKind = "draft"
 	// EventStatus reports what the remote is doing: Status is one of the
 	// Status* values, Detail a short label ("Bash: ls").
 	EventStatus EventKind = "status"

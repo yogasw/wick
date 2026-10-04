@@ -26,6 +26,8 @@ type Message struct {
 	Text     string
 	// Edited is set for a message_changed event.
 	Edited bool
+	// Deleted is set for a message_deleted event: TS is the deleted one.
+	Deleted bool
 	// Reactions are emoji names on the message.
 	Reactions []string
 	// Status is metadata event_type agent_status's payload status, if any.
@@ -142,6 +144,9 @@ func (a HTTPAPI) Post(ctx context.Context, channel, text, threadTS string) (stri
 	return r.TS, nil
 }
 
+// repliesLimit is the page size of a thread or history read.
+const repliesLimit = 100
+
 // wireMessage is a message as the Web API returns it.
 type wireMessage struct {
 	TS        string `json:"ts"`
@@ -174,7 +179,7 @@ func (a HTTPAPI) list(ctx context.Context, method string, form url.Values, chann
 		Messages []wireMessage `json:"messages"`
 	}
 	form.Set("include_all_metadata", "true")
-	form.Set("limit", "100")
+	form.Set("limit", strconv.Itoa(repliesLimit))
 	if err := a.call(ctx, method, form, &r); err != nil {
 		return nil, err
 	}

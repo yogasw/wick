@@ -250,16 +250,25 @@ func (s *Source) fetch(ctx context.Context, t *tracker) ([]remote.Event, error) 
 	if err != nil {
 		return nil, err
 	}
+	whole := len(msgs) < repliesLimit
 	if t.topLevel {
 		top, err := s.deps.API.History(ctx, t.channel, t.sentTS)
 		if err != nil {
 			return nil, err
 		}
+		whole = whole && len(top) < repliesLimit
 		msgs = append(msgs, top...)
 	}
 	var out []remote.Event
+	seen := map[string]bool{}
 	for _, m := range msgs {
+		seen[m.TS] = true
 		out = append(out, t.observe(m)...)
+	}
+	// A page short of the limit is the whole thread since the turn's
+	// message: a reply missing from it was deleted.
+	if whole {
+		out = append(out, t.prune(seen)...)
 	}
 	// Push may have delivered the same change; the tracker reports each
 	// change once, so whatever is left in its buffer is drained here too.
@@ -347,7 +356,7 @@ func (s *Source) Test(ctx context.Context) remote.TestResult {
 	for {
 		if evs, ferr := s.fetch(ctx, t); ferr == nil {
 			for _, ev := range evs {
-				if ev.Kind == remote.EventText && ev.Text != "" {
+				if (ev.Kind == remote.EventText || ev.Kind == remote.EventDraft) && ev.Text != "" {
 					reply := ev.Text
 					if len(reply) > 500 {
 						reply = reply[:500] + "…"

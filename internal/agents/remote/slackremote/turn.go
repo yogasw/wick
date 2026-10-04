@@ -1,6 +1,7 @@
 package slackremote
 
 import (
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -102,23 +103,79 @@ func (t *tracker) observe(m Message) []remote.Event {
 	case "done", "completed", "complete":
 		finished = true
 	}
-	text := strings.TrimSpace(m.Text)
-	if label, ok := progressLine(text); ok {
+	// An edit replaces the message's text; a deletion or an edit into a
+	// progress note takes it out of the reply.
+	text := t.clean(m.Text)
+	if label, ok := progressLine(text); ok && !m.Deleted {
 		delete(t.msgs, m.TS)
 		out = t.setStatus(out, remote.StatusWorking, label)
-	} else if text != "" {
+	} else if text != "" && !m.Deleted {
 		t.msgs[m.TS] = text
+	} else {
+		delete(t.msgs, m.TS)
 	}
+	return t.report(out, finished)
+}
+
+// report sends the reply so far as a draft — a remote may still rewrite,
+// delete or repeat what it posted, so nothing is shown before the turn
+// ends — and ends the turn on the marker or a done status.
+func (t *tracker) report(out []remote.Event, finished bool) []remote.Event {
 	visible, marked := t.compose()
 	if visible != t.shown {
+		out = t.setStatus(out, remote.StatusWorking, "")
 		t.shown = visible
-		out = append(out, remote.Event{Kind: remote.EventText, Text: visible})
+		out = append(out, remote.Event{Kind: remote.EventDraft, Text: visible})
 	}
 	if marked || (finished && visible != "") {
 		t.done = true
 		out = append(out, remote.Event{Kind: remote.EventDone, Text: visible})
 	}
 	return out
+}
+
+// prune drops the replies a full read of the thread no longer has: they
+// were deleted while no event said so.
+func (t *tracker) prune(seen map[string]bool) []remote.Event {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.done {
+		return nil
+	}
+	gone := false
+	for ts := range t.msgs {
+		if !seen[ts] {
+			delete(t.msgs, ts)
+			gone = true
+		}
+	}
+	if !gone {
+		return nil
+	}
+	return t.report(nil, false)
+}
+
+var (
+	slackLink    = regexp.MustCompile(`<((?:https?|mailto):[^|>]+)(?:\|([^>]*))?>`)
+	slackMention = regexp.MustCompile(`^<@([A-Z0-9]+)(?:\|[^>]*)?>\s*`)
+)
+
+// clean reads Slack's mrkdwn back as plain text: a leading mention of
+// wick's own identity goes, a link becomes "label (url)", and the three
+// escaped characters are restored.
+func (t *tracker) clean(text string) string {
+	text = strings.TrimSpace(text)
+	if m := slackMention.FindStringSubmatch(text); m != nil && t.ignore[m[1]] {
+		text = text[len(m[0]):]
+	}
+	text = slackLink.ReplaceAllStringFunc(text, func(s string) string {
+		m := slackLink.FindStringSubmatch(s)
+		if m[2] == "" || m[2] == m[1] {
+			return m[1]
+		}
+		return m[2] + " (" + m[1] + ")"
+	})
+	return strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace(text)
 }
 
 func (t *tracker) setStatus(out []remote.Event, status, detail string) []remote.Event {
@@ -129,9 +186,11 @@ func (t *tracker) setStatus(out []remote.Event, status, detail string) []remote.
 	return append(out, remote.Event{Kind: remote.EventStatus, Status: status, Detail: detail})
 }
 
-// compose joins the replies in order and handles the marker: a final line
-// carrying the turn's token ends the turn and is dropped; a final line
-// that may still grow into it is held back.
+// compose joins the replies in order and handles the marker: a reply
+// ending with the turn's token ends the turn and the token is dropped; a
+// final line that may still grow into it is held back. A reply that a
+// later one starts with (an opening the final message repeats) is left
+// out, so it is not there twice.
 func (t *tracker) compose() (string, bool) {
 	keys := make([]string, 0, len(t.msgs))
 	for k := range t.msgs {
@@ -139,14 +198,28 @@ func (t *tracker) compose() (string, bool) {
 	}
 	sort.Slice(keys, func(i, j int) bool { return tsLess(keys[i], keys[j]) })
 	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, t.msgs[k])
+	for i, k := range keys {
+		repeated := false
+		for _, later := range keys[i+1:] {
+			if strings.HasPrefix(t.msgs[later], t.msgs[k]) {
+				repeated = true
+				break
+			}
+		}
+		if !repeated {
+			parts = append(parts, t.msgs[k])
+		}
 	}
 	text := strings.Join(parts, "\n\n")
 	if t.token == "" {
 		return text, false
 	}
 	marker := MarkerPrefix + t.token
+	// Some bots post rich text whose plain form runs the lines together,
+	// so the marker can close the last line instead of standing alone.
+	if body := strings.TrimRight(text, " \n*_`~"); strings.HasSuffix(body, marker) {
+		return strings.TrimRight(body[:len(body)-len(marker)], " \n*_`~"), true
+	}
 	head, last := text, ""
 	if i := strings.LastIndex(text, "\n"); i >= 0 {
 		head, last = text[:i], text[i+1:]
@@ -163,12 +236,25 @@ func (t *tracker) compose() (string, bool) {
 	return text, false
 }
 
-// progressLine reads a wick-style progress footer ("Thinking…",
-// "_Bash: ls_", ":hourglass: Working") that a message is made of alone.
+// progressLine reads a progress note that a message is made of alone: a
+// wick-style footer ("Thinking…", "_Bash: ls_", ":hourglass: Working"),
+// or one short italic or trailing-ellipsis line ("_checking the repo…_").
+// Its label becomes the turn's status, never part of the reply.
 func progressLine(text string) (string, bool) {
 	if text == "" || strings.Contains(text, "\n") || len(text) > 120 {
 		return "", false
 	}
+	if inner := strings.TrimSpace(strings.Trim(text, "_")); inner != "" && !strings.Contains(inner, "_") &&
+		(len(text) > 2 && text[0] == '_' && text[len(text)-1] == '_' || strings.HasSuffix(inner, "…") || strings.HasSuffix(inner, "...")) {
+		if label, ok := wickProgress(inner); ok {
+			return label, true
+		}
+		return inner, true
+	}
+	return wickProgress(text)
+}
+
+func wickProgress(text string) (string, bool) {
 	s := strings.Trim(text, "_*` ")
 	for _, p := range []string{":hourglass_flowing_sand:", ":hourglass:", "⏳", ":eyes:", "👀"} {
 		s = strings.TrimSpace(strings.TrimPrefix(s, p))

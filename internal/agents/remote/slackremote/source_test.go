@@ -285,7 +285,7 @@ func TestAccountOwner(t *testing.T) {
 }
 
 func TestProgressLine(t *testing.T) {
-	for in, want := range map[string]bool{"Thinking…": true, "_Bash: ls -la_": true, ":hourglass: Working": true, "Bash is a shell": false, "Hello": false} {
+	for in, want := range map[string]bool{"Thinking…": true, "_Bash: ls -la_": true, ":hourglass: Working": true, "Bash is a shell": false, "Hello": false, "_checking the repo list…_": true, "Looking into it...": true, "Here is the answer.": false} {
 		if _, ok := progressLine(in); ok != want {
 			t.Errorf("progressLine(%q) = %v", in, ok)
 		}
@@ -309,8 +309,15 @@ func TestFromEventAndRouterKeys(t *testing.T) {
 		t.Fatalf("foreign messages routed: %d", len(tr.events))
 	}
 	rt.Dispatch(m)
-	if ev := <-tr.events; ev.Kind != remote.EventText || ev.Text != "edited" {
+	if ev := <-tr.events; ev.Kind != remote.EventStatus || ev.Status != remote.StatusWorking {
 		t.Fatalf("event = %+v", ev)
+	}
+	if ev := <-tr.events; ev.Kind != remote.EventDraft || ev.Text != "edited" {
+		t.Fatalf("event = %+v", ev)
+	}
+	d, ok := FromEvent("C1", "message_deleted", "9.9", "", "", "", "", &Message{TS: "1.2", ThreadTS: "1.0", User: "UBOT"})
+	if !ok || d.TS != "1.2" || !d.Deleted {
+		t.Fatalf("message_deleted = %+v %v", d, ok)
 	}
 	rt.remove(tr)
 	if rt.Waiting() != 0 {

@@ -16,7 +16,8 @@ type Router struct {
 }
 
 // FromEvent is a message event as the Slack channel received it, flattened
-// for Dispatch: a message_changed carries the edited message.
+// for Dispatch: a message_changed carries the edited message, a
+// message_deleted the one removed.
 func FromEvent(channel, subtype, ts, threadTS, user, botID, text string, edited *Message) (Message, bool) {
 	switch subtype {
 	case "", "bot_message", "thread_broadcast", "file_share", "me_message":
@@ -27,6 +28,14 @@ func FromEvent(channel, subtype, ts, threadTS, user, botID, text string, edited 
 		}
 		m := *edited
 		m.Channel, m.Edited = channel, true
+		return m, true
+	case "message_deleted":
+		// edited is the message as it was before; its TS is the one gone.
+		if edited == nil {
+			return Message{}, false
+		}
+		m := *edited
+		m.Channel, m.Deleted = channel, true
 		return m, true
 	}
 	return Message{}, false
