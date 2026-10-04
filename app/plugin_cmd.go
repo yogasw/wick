@@ -12,6 +12,7 @@ import (
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
+	"github.com/yogasw/wick/internal/plugins/source"
 	"github.com/yogasw/wick/internal/userconfig"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
@@ -28,8 +29,29 @@ func withPluginStore(fn func(store *connplugin.StateStore) error) error {
 	return fn(connplugin.NewStateStore(db))
 }
 
+// installedPlugin is one plugin found on disk, with the kind folder it sits in.
+type installedPlugin struct {
+	kind string
+	connplugin.Found
+}
+
+// scanInstalled lists the installed plugins of every kind, in kind order.
+func scanInstalled() ([]installedPlugin, error) {
+	var out []installedPlugin
+	for _, k := range wickplugin.Kinds {
+		found, err := connplugin.ScanKind(connplugin.KindDir(k), k)
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range found {
+			out = append(out, installedPlugin{kind: k, Found: f})
+		}
+	}
+	return out, nil
+}
+
 func pluginCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "plugin", Short: "Manage connector plugins"}
+	cmd := &cobra.Command{Use: "plugin", Short: "Manage plugins (connectors, tools, jobs, services)"}
 	cmd.AddCommand(pluginSearchCmd(), pluginInstallCmd(), pluginListCmd(), pluginRemoveCmd(), pluginEnableCmd(), pluginDisableCmd(), pluginSourceCmd())
 	return cmd
 }
@@ -37,7 +59,7 @@ func pluginCmd() *cobra.Command {
 func pluginSearchCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "search [query]",
-		Short: "List connector plugins available to install from the marketplace registry",
+		Short: "List plugins available to install from the marketplace registry",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			query := ""
@@ -64,7 +86,7 @@ func pluginSearchCmd() *cobra.Command {
 				shown++
 			}
 			if shown == 0 {
-				fmt.Println("no matching connectors in the registry")
+				fmt.Println("no matching plugins in the registry")
 			}
 			return nil
 		},
@@ -74,8 +96,9 @@ func pluginSearchCmd() *cobra.Command {
 func pluginInstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install <name|path|url>",
-		Short: "Install a connector plugin by registry name, or from a local path, archive, or URL",
-		Long: `Install a connector plugin.
+		Short: "Install a plugin by registry name, or from a local path, archive, or URL",
+		Long: `Install a plugin. The kind in its plugin.json (connector, tool, job,
+service) decides which plugins folder it lands in.
 
   <name>  resolve the latest matching release from the marketplace registry
           (the arch-matching zip is downloaded, verified, and installed)
@@ -100,15 +123,16 @@ default branch; override its URL with WICK_PLUGIN_CATALOG.`,
 					src = url
 				}
 			}
-			dir, cleanup, err := connplugin.ResolveSource(cmd.Context(), src)
+			in, err := source.InstallPath(cmd.Context(), src, source.InstallOptions{})
 			if err != nil {
 				return err
 			}
-			defer cleanup()
-			if err := connplugin.InstallFromDir(dir, connplugin.DefaultDir()); err != nil {
-				return err
+			fmt.Printf("%s plugin %q v%s installed into %s\n", in.Kind, in.Key, in.Version, connplugin.KindDir(in.Kind))
+			if in.Kind == wickplugin.KindConnector {
+				fmt.Println("a running wick will pick it up shortly")
+			} else {
+				fmt.Println("restart or reload wick to load it")
 			}
-			fmt.Println("plugin installed; a running wick will pick it up shortly")
 			return nil
 		},
 	}
@@ -117,9 +141,9 @@ default branch; override its URL with WICK_PLUGIN_CATALOG.`,
 func pluginListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List installed connector plugins",
+		Short: "List installed plugins of every kind",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			found, err := connplugin.Scan(connplugin.DefaultDir())
+			found, err := scanInstalled()
 			if err != nil {
 				return err
 			}
@@ -150,7 +174,7 @@ func pluginListCmd() *cobra.Command {
 				if v, ok := states[f.Key]; ok && !v {
 					status = "disabled"
 				}
-				fmt.Printf("%-20s %-12s arch:%s signed:%s %s\n", f.Key, f.Manifest.Version, archOK, signed, status)
+				fmt.Printf("%-20s %-10s %-12s arch:%s signed:%s %s\n", f.Key, f.kind, f.Manifest.Version, archOK, signed, status)
 			}
 			return nil
 		},
@@ -160,10 +184,10 @@ func pluginListCmd() *cobra.Command {
 func pluginRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove <key>",
-		Short: "Remove an installed connector plugin",
+		Short: "Remove an installed plugin of any kind",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			found, err := connplugin.Scan(connplugin.DefaultDir())
+			found, err := scanInstalled()
 			if err != nil {
 				return err
 			}
@@ -173,7 +197,7 @@ func pluginRemoveCmd() *cobra.Command {
 					if err := os.RemoveAll(dir); err != nil {
 						return err
 					}
-					fmt.Printf("removed plugin %q\n", args[0])
+					fmt.Printf("removed %s plugin %q\n", f.kind, args[0])
 					return nil
 				}
 			}
@@ -185,7 +209,7 @@ func pluginRemoveCmd() *cobra.Command {
 func pluginEnableCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "enable <key>",
-		Short: "Enable a connector plugin (running wick picks it up shortly)",
+		Short: "Enable a plugin of any kind (running wick picks it up shortly)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			return withPluginStore(func(store *connplugin.StateStore) error {
@@ -202,7 +226,7 @@ func pluginEnableCmd() *cobra.Command {
 func pluginDisableCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "disable <key>",
-		Short: "Disable a connector plugin without removing it",
+		Short: "Disable a plugin of any kind without removing it",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			return withPluginStore(func(store *connplugin.StateStore) error {

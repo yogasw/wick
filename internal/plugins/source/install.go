@@ -95,6 +95,32 @@ func installArchive(archive, sum string, a Asset, wantKind string, pinned []stri
 	if err != nil {
 		return Installed{}, err
 	}
+	return installDir(dir, sum, wantKind, opts)
+}
+
+// InstallDir installs an already-extracted {binary, plugin.json} directory
+// (the CLI's path/archive/URL/registry sources) through the same manifest
+// checks and kind routing as an upload.
+func InstallDir(dir string, opts InstallOptions) (Installed, error) {
+	return installDir(dir, "", "", opts)
+}
+
+// InstallPath installs from a local directory, a local .zip / .tar.gz, or a
+// direct http(s) archive URL — the `plugin install` CLI sources — routing the
+// plugin into its kind folder like an upload.
+func InstallPath(ctx context.Context, src string, opts InstallOptions) (Installed, error) {
+	dir, cleanup, err := connplugin.ResolveSource(ctx, src)
+	if err != nil {
+		return Installed{}, err
+	}
+	defer cleanup()
+	return InstallDir(dir, opts)
+}
+
+// installDir checks the manifest in dir (kind, arch, proto, binary sha256)
+// and copies it into the folder of its kind.
+func installDir(dir, sum, wantKind string, opts InstallOptions) (Installed, error) {
+	pf := opts.Progress
 	raw, err := os.ReadFile(filepath.Join(dir, "plugin.json"))
 	if err != nil {
 		return Installed{}, fmt.Errorf("read plugin.json: %w", err)
@@ -102,6 +128,11 @@ func installArchive(archive, sum string, a Asset, wantKind string, pinned []stri
 	var m wickplugin.Manifest
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return Installed{}, fmt.Errorf("parse plugin.json: %w", err)
+	}
+	// NormalizeKind maps an unknown kind to connector — reject it here so a
+	// typo'd or future kind is not silently installed as a connector.
+	if m.Kind != "" && wickplugin.NormalizeKind(m.Kind) != m.Kind {
+		return Installed{}, fmt.Errorf("plugin.json has unknown kind %q (want one of %s)", m.Kind, strings.Join(wickplugin.Kinds, ", "))
 	}
 	kind := wickplugin.NormalizeKind(m.Kind)
 	if wantKind != "" && wickplugin.NormalizeKind(wantKind) != kind {
