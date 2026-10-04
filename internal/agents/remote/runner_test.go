@@ -138,9 +138,10 @@ func TestPullBacksOffAndStopsAfterDone(t *testing.T) {
 	if n != 6 {
 		t.Fatalf("fetches = %d, want 6", n)
 	}
-	// The gap grows while nothing comes back.
-	if fs[3].Sub(fs[2]) <= fs[1].Sub(fs[0]) {
-		t.Fatalf("no backoff: %v then %v", fs[1].Sub(fs[0]), fs[3].Sub(fs[2]))
+	// The gap grows while nothing comes back. A timer never fires early, so
+	// the lower bound holds on a loaded host where comparing two gaps does not.
+	if gap := fs[3].Sub(fs[2]); gap < PullSteps[3] {
+		t.Fatalf("no backoff: third empty gap %v, want >= %v", gap, PullSteps[3])
 	}
 	time.Sleep(80 * time.Millisecond)
 	f.mu.Lock()
