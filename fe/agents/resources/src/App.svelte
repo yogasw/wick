@@ -265,7 +265,7 @@
     <!-- Degrading silently is how an operator ends up believing they are
          protected when nothing is enforcing anything. -->
     <div
-      class="rounded-xl border border-yellow-300 bg-yellow-50 p-4 text-sm text-yellow-800 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-300"
+      class="rounded-xl border border-yellow-300 bg-yellow-100 p-4 text-sm text-yellow-800 dark:border-yellow-800 dark:bg-yellow-500/15 dark:text-yellow-300"
     >
       {report.notice}
     </div>
@@ -346,7 +346,7 @@
           </p>
         </div>
         {#if report.guard.hold_spawns}
-          <span class="rounded-lg bg-yellow-100 px-2 py-1 text-xs font-medium text-yellow-800 dark:bg-yellow-950 dark:text-yellow-300">
+          <span class="rounded-lg bg-yellow-100 px-2 py-1 text-xs font-medium text-yellow-800 dark:bg-yellow-500/15 dark:text-yellow-300">
             New agents held — memory falling
           </span>
         {/if}
