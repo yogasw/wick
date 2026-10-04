@@ -204,7 +204,7 @@
   <p class="mt-1 text-xs text-black-800 dark:text-black-600">
     {accessMode === "owner"
       ? "Every connector you can use, at your level, new ones included."
-      : "Only the connectors you grant below."}
+      : "Only the connectors you add below."}
   </p>
 </div>
 
@@ -350,7 +350,7 @@
           {@const all = accIds(c)}
           {@const ticked = tickedAccounts(g, all)}
           {@const rowErr = errors?.byConnector[c.id] ?? []}
-          <li class="px-3 py-2 {rowErr.length > 0 ? 'bg-neg-50 dark:bg-neg-900/20' : selected.has(c.id) ? 'bg-green-50 dark:bg-green-900/10' : ''}">
+          <li class="px-3 py-2 {rowErr.length > 0 ? 'bg-neg-100/40 dark:bg-neg-400/10' : selected.has(c.id) ? 'bg-green-50 dark:bg-green-900/10' : ''}">
             <div class="flex flex-wrap items-center gap-3">
               <input type="checkbox" class="h-4 w-4 shrink-0 accent-green-500" id="sel-{c.id}" checked={selected.has(c.id)}
                 onchange={(e) => (selected = toggleOne(selected, c.id, (e.currentTarget as HTMLInputElement).checked))} aria-label="Select {c.label}" />
@@ -403,7 +403,7 @@
   </div>
 {/if}
 
-{#if tier === "connectors" && accessMode !== "owner" && writes.length > 0}
+{#if tier === "connectors" && accessMode !== "owner" && !adding && writes.length > 0}
   <details class="rounded-xl border border-white-300 px-4 py-2 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">
     <summary class="cursor-pointer select-none font-medium text-black-900 dark:text-white-100">Write operations allowed ({writes.length})</summary>
     <ul class="mt-2 space-y-0.5">
