@@ -475,3 +475,26 @@ func TestOutsideMemoryLoadHoldsSpawnsOnly(t *testing.T) {
 		t.Fatal("spawns not held with memory nearly gone")
 	}
 }
+
+// An unset CPU pressure limit is 90: 75% pressure on a full CPU is a busy
+// host, not a hang.
+func TestDefaultCPUPressureLimitIs90(t *testing.T) {
+	h := agentTree()
+	cfg := enforce()
+	cfg.CPUPSIMax = 0
+	g, c := newTestGuard(h, cfg)
+	hotCPU(h, g, c, 9_000_000, 12)
+	if len(h.signals) != 0 {
+		t.Fatalf("75%% pressure acted with the default limit: %v", h.signals)
+	}
+	h.cpuSome = 95
+	for i := 0; i < 12; i++ {
+		p := h.procs[103]
+		p.CPUTicks += 190
+		h.procs[103] = p
+		ticks(g, c, 1)
+	}
+	if len(h.signals) == 0 || h.signals[0] != "killed:go" {
+		t.Fatalf("signals = %v, want the hog killed above 90%%", h.signals)
+	}
+}

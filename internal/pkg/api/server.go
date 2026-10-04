@@ -930,7 +930,7 @@ func NewServer() *Server {
 			SafePct:     atoiOr("resource_guard_safe_pct", 80),
 			HorizonSec:  atoiOr("resource_guard_exhaust_horizon_sec", 20),
 			MinFreeMB:   atoi("min_free_memory_mb"),
-			CPUPSIMax:   float64(atoiOr("resource_guard_cpu_psi_max", 60)),
+			CPUPSIMax:   float64(atoiOr("resource_guard_cpu_psi_max", 90)),
 			CPUQuotaPct: atoi("agents_cpu_quota_pct"),
 			CPUWeight:   atoi("agents_cpu_weight"),
 			TasksMax:    atoi("agents_tasks_max"),

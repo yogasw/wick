@@ -47,7 +47,7 @@ const (
 	tickLagMax      = time.Second
 	historyMax      = 100
 	defaultSafePct  = 80
-	defaultPSICPU   = 60
+	defaultPSICPU   = 90
 	defaultInterval = time.Second
 	// outsideShareMax: when agents use less than this share of the busy
 	// CPU (or of the used memory), the load comes from outside wick and

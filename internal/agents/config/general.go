@@ -77,7 +77,7 @@ type GeneralConfig struct {
 	ResourceGuardSafePct           int    `wick:"number;group=Resource Guard;desc=The safe line, in percent of this machine. When CPU or memory nears a hang (memory 90% used or about to run out, or CPU fully busy with tasks queueing for 10s), the watchdog stops agent child processes one at a time — the biggest memory user, or the biggest CPU user — re-measuring in between, until host CPU AND memory are both below this. 80 is the default."`
 	ResourceGuardIntervalMS        int    `wick:"number;group=Resource Guard;desc=How often the fast watchdog samples memory and CPU, in milliseconds. 1000 suits a small machine. Only runs in 'enforce' mode on Linux."`
 	ResourceGuardExhaustHorizonSec int    `wick:"number;group=Resource Guard;desc=Treat memory as near a hang when, at its current rate of fall, it would run out within this many seconds while already above the safe line. New agents are held back while the projection is within twice this. 20 is the default."`
-	ResourceGuardCpuPsiMax         int    `wick:"number;group=Resource Guard;desc=CPU pressure (percent of time tasks waited for a CPU, 10-second average) above which a fully busy CPU counts as near a hang. A CPU that is busy with nothing waiting is a build using idle time and is left alone. 60 is the default."`
+	ResourceGuardCpuPsiMax         int    `wick:"number;group=Resource Guard;desc=CPU pressure (percent of time tasks waited for a CPU, 10-second average) above which a fully busy CPU counts as near a hang. A CPU that is busy with nothing waiting is a build using idle time and is left alone. 90 is the default."`
 	ResourceGuardAction            string `wick:"dropdown=off|log|pause|kill;group=Resource Guard;desc=How far the watchdog may go in 'enforce' mode ('measure' always only records). off = no watchdog. log = record what it would do. pause = pause processes and freeze agents instead of killing, they resume after 30s calm. kill (default) = kill agent child processes one at a time (builds, test runners, browsers, scripts — never the agent itself or wick), and only when none is left, stop the heaviest agent, its conversation resumes on the next message."`
 
 	// Usage history. Independent of the guard mode: measuring is how an
@@ -217,7 +217,7 @@ func DefaultGeneralConfig() GeneralConfig {
 		// host; it only runs once the guard mode is enforce.
 		ResourceGuardIntervalMS:        1000,
 		ResourceGuardExhaustHorizonSec: 20,
-		ResourceGuardCpuPsiMax:         60,
+		ResourceGuardCpuPsiMax:         90,
 		ResourceGuardSafePct:           80,
 		ResourceGuardAction:            "kill",
 		// History defaults ON: it changes nothing about how agents run,
