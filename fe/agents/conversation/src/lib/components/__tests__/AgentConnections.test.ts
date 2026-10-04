@@ -21,9 +21,9 @@ vi.mock("../../api/team.js", async (orig) => ({
   getAgentSlackHealth: () => Promise.resolve({
     checks: [{ name: "auth.test", ok: true }],
     matrix: [
-      { key: "core", label: "Mentions and replies", need: "always", status: "ok", scopes: [{ name: "chat:write", status: "ok" }], events: [{ name: "app_mention", status: "ok" }] },
+      { key: "core", label: "Mentions and replies", need: "always", status: "ok", scopes: [{ name: "chat:write", status: "ok" }], events: [{ name: "app_mention", status: "ok" }, { name: "message.channels", status: "pending", hint: "not seen yet — mention the bot or send it a DM to confirm" }], events_from: "received" },
       { key: "dm", label: "Direct messages", need: "always", status: "error", scopes: [{ name: "im:write", status: "error", hint: "in the manifest but not in the token — reinstall the app to your workspace" }], events: [] },
-      { key: "reaction_reply", label: "🤖 auto-reply", need: "when_on", status: "off", scopes: [{ name: "reactions:read", status: "off" }], events: [] },
+      { key: "reaction_reply", label: "🤖 auto-reply", need: "when_on", status: "off", scopes: [{ name: "reactions:read", status: "off", hint: "off — not checked" }], events: [] },
     ],
   }),
   runApi: <T,>(p: Promise<T>) => p,
@@ -71,6 +71,11 @@ describe("AgentConnections", () => {
     const matrix = await screen.findByTestId("slack-matrix");
     expect(matrix.textContent).toContain("reinstall the app");
     expect(matrix.querySelector('[data-status="off"]')).toBeTruthy();
+    // An event not seen yet is neutral (⏳), and the off row says it was not checked.
+    expect(matrix.textContent).toContain("⏳ message.channels");
+    expect(matrix.textContent).toContain("not seen yet — mention the bot");
+    expect(matrix.textContent).toContain("off — not checked");
+    expect(screen.getByTestId("events-source").textContent).toContain("received since wick started");
     await fireEvent.click(screen.getByRole("switch", { name: "DMs continue the sender's main chat" }));
     await waitFor(() => expect(updateAgentSlack).toHaveBeenCalledWith("/tools/agents", "a1", { dm_main_chat: false }));
   });

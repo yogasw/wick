@@ -537,9 +537,11 @@ export type AgentSlackConnect = Partial<{
   dm_main_chat: boolean;
 }>;
 export type SlackMatrixItem = { name: string; status: SlackMatrixStatus; hint?: string };
-export type SlackMatrixStatus = "ok" | "warn" | "error" | "off";
+export type SlackMatrixStatus = "ok" | "warn" | "error" | "off" | "pending";
 export type SlackMatrixRow = {
   key: string; label: string; need: string; status: SlackMatrixStatus;
+  /** Where the event verdicts come from. */
+  events_from?: "manifest" | "received";
   scopes: SlackMatrixItem[]; events: SlackMatrixItem[];
 };
 export type SlackHealthCheck = { name: string; ok: boolean; error?: string; detail?: string };

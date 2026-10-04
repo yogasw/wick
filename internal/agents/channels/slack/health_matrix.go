@@ -24,7 +24,20 @@ const (
 	StatusWarn  = "warn"
 	StatusError = "error"
 	StatusOff   = "off"
+	// StatusPending is an event not seen since boot when no manifest says
+	// whether it is subscribed: unknown, not wrong. A fresh app or a fresh
+	// restart has simply not had one yet, so it never makes a row warn.
+	StatusPending = "pending"
 )
+
+// EventsFrom values: how a row's events were judged.
+const (
+	EventsFromManifest = "manifest"
+	EventsFromReceived = "received"
+)
+
+// offHint labels an item of a feature that is switched off.
+const offHint = "off — not checked"
 
 // MatrixItem is one scope or event of a feature row.
 type MatrixItem struct {
@@ -41,6 +54,9 @@ type MatrixRow struct {
 	Status string       `json:"status"`
 	Scopes []MatrixItem `json:"scopes"`
 	Events []MatrixItem `json:"events"`
+	// EventsFrom says where the event verdicts come from: the manifest
+	// (certain) or the events received since boot (only proves what came).
+	EventsFrom string `json:"events_from"`
 }
 
 // MatrixInput is everything a verdict depends on. Manifest* are nil when
@@ -57,7 +73,10 @@ type MatrixInput struct {
 func BuildMatrix(in MatrixInput) []MatrixRow {
 	rows := make([]MatrixRow, 0, len(requirements))
 	for _, f := range Requirements() {
-		r := MatrixRow{Key: f.Key, Label: f.Label, Need: f.Need, Scopes: []MatrixItem{}, Events: []MatrixItem{}}
+		r := MatrixRow{Key: f.Key, Label: f.Label, Need: f.Need, Scopes: []MatrixItem{}, Events: []MatrixItem{}, EventsFrom: EventsFromReceived}
+		if in.ManifestEvents != nil {
+			r.EventsFrom = EventsFromManifest
+		}
 		active := in.Active == nil || in.Active(f.Key)
 		miss := StatusError
 		if f.Need == NeedOptional || f.Need == NeedInfo || f.Key == FeatureInstant {
@@ -67,7 +86,7 @@ func BuildMatrix(in MatrixInput) []MatrixRow {
 			it := MatrixItem{Name: sc, Status: StatusOK}
 			switch {
 			case !active:
-				it.Status = StatusOff
+				it.Status, it.Hint = StatusOff, offHint
 			case slices.Contains(in.TokenScopes, sc):
 			case in.ManifestScopes != nil && slices.Contains(in.ManifestScopes, sc):
 				it.Status, it.Hint = miss, "in the manifest but not in the token — reinstall the app to your workspace"
@@ -80,14 +99,14 @@ func BuildMatrix(in MatrixInput) []MatrixRow {
 			it := MatrixItem{Name: ev, Status: StatusOK}
 			switch {
 			case !active:
-				it.Status = StatusOff
+				it.Status, it.Hint = StatusOff, offHint
 			case in.ManifestEvents != nil:
 				if !slices.Contains(in.ManifestEvents, ev) {
 					it.Status, it.Hint = miss, "add "+ev+" under Event Subscriptions, then reinstall the app"
 				}
 			default:
 				if _, ok := in.Seen[ev]; !ok {
-					it.Status, it.Hint = StatusWarn, "never received since boot — check Event Subscriptions has "+ev
+					it.Status, it.Hint = StatusPending, "not seen yet — mention the bot or send it a DM to confirm"
 				}
 			}
 			r.Events = append(r.Events, it)

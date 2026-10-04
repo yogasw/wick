@@ -14,7 +14,7 @@
     getAgentSlack, connectAgentSlack, updateAgentSlack, disconnectAgentSlack, getAgentSlackHealth, getAgentSlackManifest, runApi,
     type AgentItem, type AgentSlackStatus, type AgentSlackHealth,
   } from "../api/team.js";
-  import { MATRIX_ICON, MATRIX_LABEL, MASKED, connectBody, statusLine, tokenError, type TokenDraft, TOKEN_HINTS } from "../slackConnection.js";
+  import { MATRIX_ICON, MATRIX_LABEL, MASKED, eventsSourceNote, connectBody, statusLine, tokenError, type TokenDraft, TOKEN_HINTS } from "../slackConnection.js";
   import { getAgentSlackInstant, instantStatusLine, type AgentSlackInstantStatus } from "../slackInstant.js";
 
   type Props = { base: string; agent: AgentItem; onClose: () => void };
@@ -271,6 +271,7 @@
             {/each}
           </tbody>
         </table>
+        <p class="mt-1 {muted}" data-testid="events-source">{eventsSourceNote(health.matrix[0]?.events_from)}</p>
       {/if}
       {#if health?.checks?.length}
         <ul class="mt-3 space-y-1 text-xs">

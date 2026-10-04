@@ -141,6 +141,9 @@ func TestMatrixReinstallVerdict(t *testing.T) {
 	manifest := slices.DeleteFunc(slices.Clone(all), func(s string) bool { return s == "im:read" })
 	rows := BuildMatrix(MatrixInput{TokenScopes: token, ManifestScopes: manifest, ManifestEvents: RequiredBotEvents()})
 	dm := rowOf(rows, FeatureDM)
+	if dm.EventsFrom != EventsFromManifest {
+		t.Errorf("events_from = %q, want manifest", dm.EventsFrom)
+	}
 	if dm.Status != StatusError {
 		t.Fatalf("dm status = %q", dm.Status)
 	}
@@ -170,13 +173,14 @@ func TestMatrixEventObservationAndOff(t *testing.T) {
 		t.Errorf("message.im = %+v", it)
 	}
 	core := rowOf(rows, FeatureCore)
-	if it := itemOf(core.Events, "message.channels"); it.Status != StatusWarn || !contains(it.Hint, "never received") {
+	// Not seen since boot is pending, not a warning: the row stays ok.
+	if it := itemOf(core.Events, "message.channels"); it.Status != StatusPending || !contains(it.Hint, "not seen yet") {
 		t.Errorf("message.channels = %+v", it)
 	}
-	if core.Status != StatusWarn {
-		t.Errorf("core = %q, want warn", core.Status)
+	if core.Status != StatusOK || core.EventsFrom != EventsFromReceived {
+		t.Errorf("core = %q from %q, want ok from received", core.Status, core.EventsFrom)
 	}
-	if r := rowOf(rows, FeatureReactionReply); r.Status != StatusOff || r.Scopes[0].Status != StatusOff {
+	if r := rowOf(rows, FeatureReactionReply); r.Status != StatusOff || r.Scopes[0].Status != StatusOff || r.Scopes[0].Hint != "off — not checked" {
 		t.Errorf("reaction row = %+v", r)
 	}
 	if observedEventName("message", "group") != "message.groups" || observedEventName("message", "channel") != "message.channels" {

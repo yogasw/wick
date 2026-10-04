@@ -1,8 +1,15 @@
 /* Connections › Slack: the pure half of AgentConnections.svelte. */
 import type { AgentSlackStatus, SlackMatrixStatus } from "./api/team.js";
 
-export const MATRIX_ICON: Record<SlackMatrixStatus, string> = { ok: "✅", warn: "⚠️", error: "❌", off: "·" };
-export const MATRIX_LABEL: Record<SlackMatrixStatus, string> = { ok: "ok", warn: "warning", error: "missing", off: "off" };
+export const MATRIX_ICON: Record<SlackMatrixStatus, string> = { ok: "✅", warn: "⚠️", error: "❌", off: "·", pending: "⏳" };
+export const MATRIX_LABEL: Record<SlackMatrixStatus, string> = { ok: "ok", warn: "warning", error: "missing", off: "off", pending: "not seen yet" };
+
+/** eventsSourceNote says how the matrix judged events. */
+export function eventsSourceNote(from: string | undefined): string {
+  return from === "manifest"
+    ? "Events checked from the app manifest."
+    : "Events checked from events received since wick started — ⏳ means not seen yet, not missing.";
+}
 
 /** What the masked field shows for a secret the server holds. */
 export const MASKED = "••••••••";
