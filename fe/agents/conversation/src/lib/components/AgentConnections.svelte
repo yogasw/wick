@@ -14,7 +14,7 @@
     getAgentSlack, connectAgentSlack, updateAgentSlack, disconnectAgentSlack, getAgentSlackHealth, getAgentSlackManifest, runApi,
     type AgentItem, type AgentSlackStatus, type AgentSlackHealth,
   } from "../api/team.js";
-  import { MATRIX_ICON, MATRIX_LABEL, MASKED, connectBody, statusLine, tokenError, type TokenDraft } from "../slackConnection.js";
+  import { MATRIX_ICON, MATRIX_LABEL, MASKED, connectBody, statusLine, tokenError, type TokenDraft, TOKEN_HINTS } from "../slackConnection.js";
   import { getAgentSlackInstant, instantStatusLine, type AgentSlackInstantStatus } from "../slackInstant.js";
 
   type Props = { base: string; agent: AgentItem; onClose: () => void };
@@ -194,17 +194,19 @@
             <div>
               <label class={label} for="sl-bot">Bot token (xoxb-…)</label>
               <input id="sl-bot" type="password" autocomplete="off" class={input} bind:value={draft.bot_token} placeholder={status?.secrets?.bot_token ? MASKED : "xoxb-…"} onfocus={() => (step = Math.max(step, 2))} />
+              <p class="mt-1 {muted}" data-testid="hint-bot">{TOKEN_HINTS.bot_token}</p>
             </div>
             {#if draft.mode === "socket"}
               <div>
                 <label class={label} for="sl-app">App token (xapp-…)</label>
                 <input id="sl-app" type="password" autocomplete="off" class={input} bind:value={draft.app_token} placeholder={status?.secrets?.app_token ? MASKED : "xapp-…"} />
-                <p class="mt-1 {muted}">Basic Information › App-Level Tokens, scope connections:write.</p>
+                <p class="mt-1 {muted}" data-testid="hint-app">{TOKEN_HINTS.app_token}</p>
               </div>
             {:else}
               <div>
                 <label class={label} for="sl-sign">Signing secret</label>
                 <input id="sl-sign" type="password" autocomplete="off" class={input} bind:value={draft.signing_secret} placeholder={status?.secrets?.signing_secret ? MASKED : ""} />
+                <p class="mt-1 {muted}" data-testid="hint-sign">{TOKEN_HINTS.signing_secret}</p>
               </div>
             {/if}
           </div>

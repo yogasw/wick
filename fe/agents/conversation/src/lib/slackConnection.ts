@@ -7,6 +7,13 @@ export const MATRIX_LABEL: Record<SlackMatrixStatus, string> = { ok: "ok", warn:
 /** What the masked field shows for a secret the server holds. */
 export const MASKED = "••••••••";
 
+/** TOKEN_HINTS says where in the Slack app's settings each secret lives. */
+export const TOKEN_HINTS = {
+  bot_token: "OAuth & Permissions › Install to Workspace (or Reinstall) › Bot User OAuth Token.",
+  app_token: "Basic Information › App-Level Tokens › Generate, scope connections:write.",
+  signing_secret: "Basic Information › App Credentials › Signing Secret.",
+} as const;
+
 export type TokenDraft = { mode: "socket" | "http"; bot_token: string; app_token: string; signing_secret: string };
 
 /** tokenError is why step 2 cannot connect yet, "" when it can. A blank

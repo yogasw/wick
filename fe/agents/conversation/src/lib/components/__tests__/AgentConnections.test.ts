@@ -103,6 +103,16 @@ describe("AgentConnections Slack mode", () => {
 });
 
 describe("slackConnection", () => {
+  test("wizard: each token says where in Slack it comes from", async () => {
+    current = disconnected;
+    render(AgentConnections, { props: props() });
+    await screen.findByTestId("slack-wizard");
+    expect(screen.getByTestId("hint-bot").textContent).toBe("OAuth & Permissions › Install to Workspace (or Reinstall) › Bot User OAuth Token.");
+    expect(screen.getByTestId("hint-app").textContent).toBe("Basic Information › App-Level Tokens › Generate, scope connections:write.");
+    await fireEvent.click(screen.getByRole("button", { name: "HTTP" }));
+    expect(screen.getByTestId("hint-sign").textContent).toBe("Basic Information › App Credentials › Signing Secret.");
+  });
+
   test("a stored secret may be left blank; HTTP needs the signing secret", () => {
     const d = { mode: "socket" as const, bot_token: "", app_token: "", signing_secret: "" };
     expect(tokenError(d, connected)).toBe("");
