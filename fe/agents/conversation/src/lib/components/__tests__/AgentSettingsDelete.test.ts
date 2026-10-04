@@ -6,6 +6,7 @@ vi.mock("../../api/team.js", async (orig) => ({
   ...(await orig<typeof import("../../api/team.js")>()),
   deleteAgent: (...a: unknown[]) => deleteAgent(...a),
   listAgentConnectors: () => Promise.resolve([]),
+  getAgent: () => Promise.resolve(null),
   getProjectPersona: () => Promise.resolve(null),
   runApi: <T,>(p: Promise<T>) => p,
 }));

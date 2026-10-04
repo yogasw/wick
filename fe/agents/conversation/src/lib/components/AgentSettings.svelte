@@ -13,7 +13,7 @@
   import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, colorInputValue, isBlobKind, switchAvatarKind, type AvatarSpec } from "@wick-fe/common-avatar";
   import { getProviderOptions, getProjectOptions } from "../api/options.js";
   import {
-    updateAgent, deleteAgent, getProjectPersona, listAgentConnectors, runApi,
+    getAgent, updateAgent, deleteAgent, getProjectPersona, listAgentConnectors, runApi,
     type AgentItem, type AgentWrite, type SuggestedPrompt, type ConnectorGrant, type AgentConnector,
   } from "../api/team.js";
   import type { AgentFeatures } from "../agentMode.js";
@@ -88,8 +88,32 @@
       draft = draftOf(agent);
       saved = agent;
       failedKey = "";
+      untrack(() => loadAgent(agent.id));
     }
   });
+
+  /* The roster never reads the connector catalog, so its features are
+     the stored switches and its access may still be in the old format.
+     The drawer loads the agent as the server resolves it and takes every
+     field not edited meanwhile; the roster row gets the same copy, so the
+     chat rail hides exactly the tabs Access turns off. */
+  let agentLoading = $state(true);
+  function loadAgent(id: string) {
+    agentLoading = true;
+    runApi(getAgent(base, id))
+      .then((a) => {
+        if (!a || agent.id !== id) return;
+        const before = draftOf(saved);
+        const next = draftOf(a);
+        for (const k of Object.keys(next) as (keyof Draft)[]) {
+          if (sameValue(draft[k], before[k])) (draft as Record<keyof Draft, unknown>)[k] = next[k];
+        }
+        saved = a;
+        onSaved(a);
+      })
+      .catch(() => {})
+      .finally(() => { if (agent.id === id) agentLoading = false; });
+  }
 
   let providers = $state<{ type: string; name: string; models?: { id: string; label: string; default: boolean }[] }[]>([]);
   let catalog = $state<AgentConnector[]>([]);
@@ -132,6 +156,7 @@
   }
 
   onMount(() => {
+    loadAgent(agent.id);
     runApi(getProviderOptions(base)).then((p) => { providers = p; }).catch(() => {});
     runApi(getProjectOptions(base, { hideTeam: true, include: [agent.project_id] })).then((p) => { projects = p ?? []; }).catch(() => {});
     runApi(listAgentConnectors(base))
@@ -474,16 +499,24 @@
         {pruned} old grant{pruned === 1 ? "" : "s"} you can no longer use {pruned === 1 ? "was" : "were"} removed from the list.
       </p>
     {/if}
-    <ConnectorChecklist
-      {catalog}
-      loading={catalogLoading}
-      loadError={catalogError}
-      bind:grants={draft.grants}
-      bind:includeNew={draft.include_new_connectors}
-      bind:runAs={draft.run_as}
-      errors={grantErrors}
-      isCaptain={agent.is_captain}
-    />
+    {#if agentLoading}
+      <div class="space-y-2" aria-busy="true" data-testid="access-skeleton">
+        {#each [0, 1, 2] as i (i)}
+          <div class="h-12 animate-pulse rounded-lg bg-white-200 dark:bg-navy-600"></div>
+        {/each}
+      </div>
+    {:else}
+      <ConnectorChecklist
+        {catalog}
+        loading={catalogLoading}
+        loadError={catalogError}
+        bind:grants={draft.grants}
+        bind:includeNew={draft.include_new_connectors}
+        bind:runAs={draft.run_as}
+        errors={grantErrors}
+        isCaptain={agent.is_captain}
+      />
+    {/if}
     {#key agent.id}
       <AccessHistory {base} agentId={agent.id} />
     {/key}

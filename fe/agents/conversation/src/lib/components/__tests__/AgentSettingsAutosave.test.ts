@@ -19,6 +19,7 @@ vi.mock("../../api/team.js", async (orig) => ({
   ...(await orig<typeof import("../../api/team.js")>()),
   updateAgent: (b: string, id: string, body: unknown) => updateAgent(b, id, body),
   listAgentConnectors: () => Promise.resolve([]),
+  getAgent: () => Promise.resolve(null),
   getProjectPersona: () => Promise.resolve(null),
   runApi: <T,>(p: Promise<T>) => p,
 }));

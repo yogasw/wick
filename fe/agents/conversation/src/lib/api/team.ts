@@ -377,6 +377,13 @@ export const listAgentRoster = (base: string) =>
 export const createAgent = (base: string, body: AgentWrite) =>
   apiPostE<AgentItem>(`${base}/api/team/agents`, body);
 
+/** getAgent is one agent as the Settings drawer edits it: features
+    resolved against the owner's connector catalog and old access switches
+    migrated. The roster skips that work, so its features are the stored
+    switches. */
+export const getAgent = (base: string, id: string) =>
+  apiGetE<AgentItem>(`${base}/api/team/agents/${enc(id)}`);
+
 export const updateAgent = (base: string, id: string, body: AgentWrite) =>
   apiPatchE<AgentItem>(`${base}/api/team/agents/${enc(id)}`, body);
 

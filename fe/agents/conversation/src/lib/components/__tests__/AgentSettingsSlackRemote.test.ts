@@ -20,6 +20,7 @@ vi.mock("../../api/team.js", async (orig) => ({
   getSlackIdentities: () => Promise.resolve({ bot: true, accounts: [] }),
   updateAgent: (_b: string, _id: string, body: unknown) => Promise.resolve({ ...slack, ...(body as object) }),
   listAgentConnectors: () => Promise.resolve([{ id: "slk1", key: "slack", label: "Acme Slack", description: "", accounts: [], ops: [] }]),
+  getAgent: () => Promise.resolve(null),
   getProjectPersona: () => Promise.resolve(null),
   runApi: <T,>(p: Promise<T>) => p,
 }));

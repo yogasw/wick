@@ -319,3 +319,22 @@ func TestEffectiveFeaturesFilesProcessFromTools(t *testing.T) {
 		t.Fatalf("legacy row: %+v", f)
 	}
 }
+
+// RosterFeatures needs no catalog: Schedule follows its tool grant,
+// connector-backed switches stay as stored, Browser reads on.
+func TestRosterFeatures(t *testing.T) {
+	p := entity.AgentPersona{
+		Features:          `{"notes":false,"tickets":true,"source":true,"subagents":true,"schedule":true}`,
+		AllowedConnectors: `[{"connector_id":"tool:wick_schedule_message","level":"off"}]`,
+	}
+	f := RosterFeatures(p)
+	if f.Schedule {
+		t.Error("Schedule must follow its off tool grant")
+	}
+	if f.Notes || !f.Tickets {
+		t.Errorf("stored switches changed: %+v", f)
+	}
+	if !f.Browser {
+		t.Error("Browser must read on without a catalog")
+	}
+}

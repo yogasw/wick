@@ -196,6 +196,28 @@ func EffectiveFeatures(p entity.AgentPersona, reach Reach) Features {
 	return f
 }
 
+// RosterFeatures is EffectiveFeatures without the owner's catalog, for
+// the roster, which must not read it: the stored switches, Files and
+// Process from the native tools, and Schedule off when its tool grant is
+// Off — the parts that need no catalog. Notes, Tickets, Source and
+// Sub-agents stay as stored, and Browser reads on (whether a browser
+// instance is reachable is a catalog question), so a tab is never hidden
+// on a guess; the Settings drawer and every save return the exact set.
+func RosterFeatures(p entity.AgentPersona) Features {
+	f := EffectiveFeatures(p, nil)
+	if p.Disabled {
+		return f
+	}
+	s := ScopeOf(p, nil)
+	for _, fk := range featureKeys {
+		if fk.tool != "" && !fk.off(f) && s.Level(toolGrantID(fk.tool)) == LevelOff {
+			fk.clear(&f)
+		}
+	}
+	f.Browser = true
+	return f
+}
+
 // FeaturesFromTools derives the Files and Process flags from the agent's
 // native tools, overriding whatever the stored row says: Files is on while
 // Read, Edit or Write is, Process while Bash is. The web rail applies the

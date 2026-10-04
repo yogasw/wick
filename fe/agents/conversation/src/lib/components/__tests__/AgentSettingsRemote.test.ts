@@ -24,6 +24,7 @@ vi.mock("../../api/team.js", async (orig) => ({
   testRemoteAgent: () => test_(),
   updateAgent: (_b: string, _id: string, body: unknown) => Promise.resolve({ ...remote, ...(body as object) }),
   listAgentConnectors: () => Promise.resolve([]),
+  getAgent: () => Promise.resolve(null),
   getProjectPersona: () => Promise.resolve(null),
   runApi: <T,>(p: Promise<T>) => p,
 }));

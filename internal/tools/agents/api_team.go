@@ -271,9 +271,6 @@ func decodeTeamAgentReq(c *tool.Ctx) (teamAgentWriteReq, bool) {
 // labels the access diff off the same catalog, and each read is a handful
 // of queries to the database.
 func ownerCatalog(c *tool.Ctx) ([]connectors.CatalogEntry, error) {
-	if globalConnectors == nil {
-		return nil, nil
-	}
 	if m, ok := c.Context().Value(ownerCatalogKey{}).(*ownerCatalogMemo); ok {
 		return m.cat, m.err
 	}
@@ -281,9 +278,18 @@ func ownerCatalog(c *tool.Ctx) ([]connectors.CatalogEntry, error) {
 	isAdmin := u != nil && u.IsAdmin()
 	ctx := connectors.WithoutAgentScope(c.Context())
 	m := &ownerCatalogMemo{}
-	m.cat, m.err = globalConnectors.AgentCatalog(ctx, actorID(c), login.GetUserTagIDs(c.Context()), isAdmin)
+	m.cat, m.err = readAgentCatalog(ctx, actorID(c), login.GetUserTagIDs(c.Context()), isAdmin)
 	c.R = c.R.WithContext(context.WithValue(c.Context(), ownerCatalogKey{}, m))
 	return m.cat, m.err
+}
+
+// readAgentCatalog is the catalog read behind ownerCatalog; tests swap it
+// to count reads or serve a fixed catalog.
+var readAgentCatalog = func(ctx context.Context, userID string, tagIDs []string, isAdmin bool) ([]connectors.CatalogEntry, error) {
+	if globalConnectors == nil {
+		return nil, nil
+	}
+	return globalConnectors.AgentCatalog(ctx, userID, tagIDs, isAdmin)
 }
 
 // ownerCatalogKey holds the request's ownerCatalogMemo on its context.
@@ -611,10 +617,20 @@ func (u teamProjectUsers) others(p entity.AgentPersona) int {
 	return n + u.sessions[p.ProjectID]
 }
 
+// teamItemFeatures is the agent's features resolved against reach, or
+// the catalog-free roster set when reach is nil.
+func teamItemFeatures(p entity.AgentPersona, reach team.Reach) team.Features {
+	if reach == nil {
+		return team.RosterFeatures(p)
+	}
+	return team.EffectiveFeatures(p, reach)
+}
+
 // teamAgentToItem renders one row. users feeds SharedWith; the zero
-// value counts nothing. reach (the owner's catalog, may be nil) turns
-// Features into what the agent can actually use, so the chat rail hides a
-// tab whose Access row is Off.
+// value counts nothing. reach (the owner's catalog) turns Features into
+// what the agent can actually use, so the chat rail hides a tab whose
+// Access row is Off; nil is the roster, which never reads the catalog
+// (team.RosterFeatures).
 func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLive, reach team.Reach) TeamAgentItem {
 	it := TeamAgentItem{
 		ID: p.ID, Handle: p.Handle, IsCaptain: p.IsCaptain, ProjectID: p.ProjectID,
@@ -623,7 +639,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		SlackRemote:          slackRemoteInfoFor(p),
 		Name:                 p.Handle,
 		Tagline:              p.Tagline,
-		Features:             team.EffectiveFeatures(p, reach),
+		Features:             teamItemFeatures(p, reach),
 		Avatar:               team.DecodeAvatar(p.Avatar),
 		AllowedConnectors:    team.DecodeGrants(p.AllowedConnectors),
 		IncludeNewConnectors: p.IncludeNewConnectors,
@@ -892,13 +908,12 @@ func apiTeamAgentList(c *tool.Ctx) {
 	items := make([]TeamAgentItem, 0, len(rows))
 	captainID := ""
 	live, users := teamLiveNow(), teamProjectUsersFor(c.Context(), rows)
-	reach := ownerReach(c)
+	// No connector catalog here: reading it is most of a roster load, and
+	// the roster only needs the stored switches. The catalog-backed
+	// features and the access migration come with the Settings drawer
+	// (apiTeamAgentGet) and every save.
 	for _, r := range rows {
-		if migrateTeamAccess(&r, reach) {
-			// Best effort: the next load retries a failed save.
-			_ = globalTeam.Update(c.Context(), &r)
-		}
-		items = append(items, teamAgentToItem(r, users, live, reach))
+		items = append(items, teamAgentToItem(r, users, live, nil))
 		if r.IsCaptain {
 			captainID = r.ID
 		}
@@ -906,6 +921,27 @@ func apiTeamAgentList(c *tool.Ctx) {
 	// Agents other owners shared with the caller come after their own.
 	items = append(items, sharedRosterItems(c, live)...)
 	c.JSON(http.StatusOK, map[string]any{"agents": items, "captain_id": captainID})
+}
+
+// apiTeamAgentGet handles GET /api/team/agents/{id}: one of the caller's
+// agents as the Settings drawer edits it — Features resolved against the
+// owner's connector catalog, and old Notes/Tickets/Source/Sub-agents/
+// Schedule switches migrated into grants and saved (migrateTeamAccess).
+func apiTeamAgentGet(c *tool.Ctx) {
+	if !teamReady(c) {
+		return
+	}
+	p, ok := loadOwnTeamAgent(c)
+	if !ok {
+		return
+	}
+	reach := ownerReach(c)
+	if migrateTeamAccess(&p, reach) {
+		// Best effort: the next open retries a failed save.
+		_ = globalTeam.Update(c.Context(), &p)
+	}
+	users := teamProjectUsersFor(c.Context(), []entity.AgentPersona{p})
+	c.JSON(http.StatusOK, teamAgentToItem(p, users, teamLiveNow(), reach))
 }
 
 // apiTeamAgentCreate handles POST /api/team/agents.
