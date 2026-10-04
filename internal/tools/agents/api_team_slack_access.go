@@ -20,13 +20,25 @@ import (
 )
 
 // agentSlackSettingGroups are the SlackChannelConfig groups an agent's own
-// Slack card shows in Team. Connection and Routing are left out: the connect
-// wizard owns the tokens and the agent owns its project.
+// Slack card edits in Team, saved per key on the agent's connection row.
 var agentSlackSettingGroups = map[string]bool{
 	"Access Control":      true,
 	"Agent Behaviour":     true,
 	"Reaction Auto-Reply": true,
 	"Approval Gates":      true,
+}
+
+// agentSlackReadOnlyNotes covers the rest of the Channels page schema
+// (Connection, Routing): shown on the Team card read-only, after the four
+// editable groups, each with why it is not set there. Every schema field is
+// either editable or listed here — TestAgentSlackSettingsCoverSchema.
+var agentSlackReadOnlyNotes = map[string]string{
+	"mode":           "Set by the connect wizard: an agent's own app runs in socket mode.",
+	"bot_token":      "Managed with Replace tokens on this card.",
+	"app_token":      "Managed with Replace tokens on this card.",
+	"signing_secret": "HTTP mode only — not used by an agent's own app.",
+	"project_id":     "Sessions run in the agent's own project.",
+	"public_url":     "Set globally in Channels › Slack › Routing.",
 }
 
 // Owner identity, stored on the connection row when it is first resolved.
@@ -47,31 +59,54 @@ type agentSlackField struct {
 	Group       string `json:"group"`
 	GroupDesc   string `json:"group_desc,omitempty"`
 	VisibleWhen string `json:"visible_when,omitempty"`
+	// ReadOnly fields are shown, never saved from Team; Note says why.
+	ReadOnly bool   `json:"readonly,omitempty"`
+	Note     string `json:"note,omitempty"`
 }
 
 // agentSlackSettingFields renders SlackChannelConfig's schema for the Team
 // card with the agent's stored values. Same tags as the Channels page; a
 // group's description sits on its first field, so it is carried forward.
-func agentSlackSettingFields(m map[string]string) []agentSlackField {
+// The four editable groups come first, then the read-only ones; global
+// holds the Channels page values the read-only fields show.
+func agentSlackSettingFields(m, global map[string]string) []agentSlackField {
 	rows := pkgentity.StructToConfigs(agentconfig.DefaultSlackChannelConfig())
-	out := make([]agentSlackField, 0, len(rows))
+	var edit, ro []agentSlackField
 	groupDesc := map[string]string{}
 	for _, r := range rows {
 		title, desc, _ := strings.Cut(r.Group, "|")
-		if !agentSlackSettingGroups[title] || r.IsSecret {
-			continue
-		}
 		if desc != "" && groupDesc[title] == "" {
 			groupDesc[title] = desc
 		}
-		if v, ok := m[r.Key]; ok {
-			r.Value = v
-		}
-		out = append(out, agentSlackField{
+		f := agentSlackField{
 			Key: r.Key, Value: r.Value, Type: r.Type, Options: r.Options, Desc: r.Description,
 			Group: title, VisibleWhen: r.VisibleWhen,
-		})
+		}
+		if agentSlackSettingGroups[title] && !r.IsSecret {
+			if v, ok := m[r.Key]; ok {
+				f.Value = v
+			}
+			edit = append(edit, f)
+			continue
+		}
+		f.ReadOnly, f.Note, f.VisibleWhen = true, agentSlackReadOnlyNotes[r.Key], ""
+		switch {
+		case r.IsSecret:
+			// Never echoed: only whether it is set.
+			f.Value = ""
+			if m[r.Key] != "" {
+				f.Value = "set"
+			}
+		case r.Key == "public_url":
+			f.Value = global[r.Key]
+		default:
+			if v, ok := m[r.Key]; ok {
+				f.Value = v
+			}
+		}
+		ro = append(ro, f)
 	}
+	out := append(edit, ro...)
 	for i := range out {
 		out[i].GroupDesc = groupDesc[out[i].Group]
 	}
@@ -79,9 +114,9 @@ func agentSlackSettingFields(m map[string]string) []agentSlackField {
 }
 
 func agentSlackSettingKey(key string) bool {
-	for _, r := range agentSlackSettingFields(nil) {
+	for _, r := range agentSlackSettingFields(nil, nil) {
 		if r.Key == key {
-			return true
+			return !r.ReadOnly
 		}
 	}
 	return false
@@ -156,8 +191,17 @@ func agentSlackSettingsOf(p entity.AgentPersona) (AgentSlackSettings, bool) {
 			}
 		}
 	}
+	global, _ := agentchannels.GetChannelConfigMap(globalDB, "slack")
+	fields := agentSlackSettingFields(m, global)
+	for i := range fields {
+		if fields[i].Key == "project_id" && fields[i].Value != "" && globalMgr != nil {
+			if proj, ok := globalMgr.Registry().Project(fields[i].Value); ok && proj.Meta.Name != "" {
+				fields[i].Value = proj.Meta.Name
+			}
+		}
+	}
 	return AgentSlackSettings{
-		Fields:      agentSlackSettingFields(m),
+		Fields:      fields,
 		OwnerID:     m[agentSlackKeyOwnerSlackID],
 		OwnerName:   m[agentSlackKeyOwnerSlackName],
 		OwnerHandle: m[agentSlackKeyOwnerSlackHandle],

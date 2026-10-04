@@ -13,6 +13,9 @@ export type SlackSettingField = {
   group: string;
   group_desc?: string;
   visible_when?: string;
+  /** Shown but never saved from Team (Connection, Routing); note says why. */
+  readonly?: boolean;
+  note?: string;
 };
 /** owner_slack_* is the agent owner's Slack account, found by email only. */
 export type AgentSlackSettings = { fields: SlackSettingField[]; owner_slack_id?: string; owner_slack_name?: string; owner_slack_handle?: string };
@@ -92,19 +95,46 @@ export const isOpenToWorkspace = (values: Record<string, string>) => peopleChoic
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
-/** Header line of the Slack card, e.g. "Access: only Yoga · 2 channels · 1 bot". */
+/** Header line of the Slack card, people · bots · channels, e.g.
+    "Access: only Yoga · 1 group · 1 bot · 2 channels" or
+    "Access: 1 user · 1 group · 1 bot · all channels". */
 export function accessSummary(values: Record<string, string>, ownerID?: string, ownerName?: string): string {
   const parts: string[] = [];
   const choice = peopleChoice(values, ownerID);
   if (choice === "all") parts.push("everyone");
   else if (choice === "me") parts.push(`only ${ownerName || "you"}`);
   else {
-    const n = (values.users_mode === "whitelist" ? pickerItems(values.allowed_users).length : 0) +
-      (values.groups_mode === "whitelist" ? pickerItems(values.allowed_groups).length : 0);
-    parts.push(n === 0 ? "nobody yet" : n === 1 && values.users_mode === "whitelist" ? `only ${pickerItems(values.allowed_users)[0]?.name}` : `${n} people & groups`);
+    const users = values.users_mode === "whitelist" ? pickerItems(values.allowed_users) : [];
+    const groups = values.groups_mode === "whitelist" ? pickerItems(values.allowed_groups).length : 0;
+    if (users.length + groups === 0) parts.push("nobody yet");
+    else {
+      if (users.length === 1 && ownerID && users[0].id === ownerID) parts.push(`only ${ownerName || "you"}`);
+      else if (users.length) parts.push(plural(users.length, "user"));
+      if (groups) parts.push(plural(groups, "group"));
+    }
   }
-  parts.push(values.channels_mode === "whitelist" ? plural(pickerItems(values.allowed_channels).length, "channel") : "all channels");
   if (values.bots_mode === "all") parts.push("any bot");
   else if (values.bots_mode === "whitelist") parts.push(plural(pickerItems(values.allowed_bots).length, "bot"));
+  parts.push(values.channels_mode === "whitelist" ? plural(pickerItems(values.allowed_channels).length, "channel") : "all channels");
   return "Access: " + parts.join(" · ");
+}
+
+/** Lists kept under "Specific people & groups" while Everyone / Only me is
+    chosen, e.g. ["Groups: 1 chosen"], so they don't look lost. Only me's
+    own entry in allowed_users is not counted. */
+export function hiddenPeople(values: Record<string, string>, choice: PeopleChoice, ownerID?: string): string[] {
+  if (choice === "custom") return [];
+  const out: string[] = [];
+  const users = pickerItems(values.allowed_users).filter((u) => !(choice === "me" && u.id === ownerID)).length;
+  const groups = pickerItems(values.allowed_groups).length;
+  if (users) out.push(`Users: ${users} chosen`);
+  if (groups) out.push(`Groups: ${groups} chosen`);
+  return out;
+}
+
+/** Which Access Control sub-section a key belongs to. */
+export function accessDimension(key: string): "people" | "bots" | "channels" {
+  if (key.includes("bots")) return "bots";
+  if (key.includes("channels")) return "channels";
+  return "people";
 }

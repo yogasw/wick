@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/entity"
+	pkgentity "github.com/yogasw/wick/pkg/entity"
 )
 
 // withOwnerLookup seeds owner u1 with an email and swaps the Slack stub for
@@ -131,7 +133,8 @@ func TestAgentSlackExistingConnectionKeepsAccess(t *testing.T) {
 	}
 }
 
-// The card shows exactly the four setting groups, and only their keys save.
+// The card edits the four setting groups and shows Connection and Routing
+// read-only; only the editable keys save.
 func TestAgentSlackSettingsGroupsAndPatch(t *testing.T) {
 	withAgentSlackWorld(t)
 	seedTeamProject(t, "p1", "u1")
@@ -141,20 +144,29 @@ func TestAgentSlackSettingsGroupsAndPatch(t *testing.T) {
 		t.Fatalf("connect: %d %s", w.Code, w.Body.String())
 	}
 	st := getSlackSettings(t, u, a.ID)
-	groups := map[string]bool{}
+	var order []string
+	editable := map[string]bool{}
 	for _, f := range st.Fields {
-		groups[f.Group] = true
+		if len(order) == 0 || order[len(order)-1] != f.Group {
+			order = append(order, f.Group)
+		}
+		editable[f.Group] = editable[f.Group] || !f.ReadOnly
 		if f.Group == "Access Control" && f.GroupDesc == "" {
 			t.Errorf("field %q lost its group description", f.Key)
 		}
-	}
-	for _, g := range []string{"Access Control", "Agent Behaviour", "Reaction Auto-Reply", "Approval Gates"} {
-		if !groups[g] {
-			t.Errorf("group %q missing", g)
+		if f.ReadOnly && f.Note == "" {
+			t.Errorf("read-only field %q has no note", f.Key)
+		}
+		if (f.Key == "bot_token" || f.Key == "app_token") && f.Value != "set" {
+			t.Errorf("%s = %q, want only \"set\"", f.Key, f.Value)
 		}
 	}
-	if groups["Connection"] || groups["Routing"] || len(groups) != 4 {
-		t.Errorf("groups = %v, want exactly the four", groups)
+	want := []string{"Access Control", "Agent Behaviour", "Reaction Auto-Reply", "Approval Gates", "Connection", "Routing"}
+	if strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Errorf("groups = %v, want %v", order, want)
+	}
+	if editable["Connection"] || editable["Routing"] {
+		t.Errorf("Connection/Routing editable: %v", editable)
 	}
 	if v, ok := settingValue(st, "bots_mode"); !ok || v != "none" {
 		t.Errorf("bots_mode = %q (present %v), want none", v, ok)
@@ -165,8 +177,10 @@ func TestAgentSlackSettingsGroupsAndPatch(t *testing.T) {
 		apiTeamAgentSlackSettingsPatch(c)
 		return w
 	}
-	if w := patch("bot_token", "xoxb-evil"); w.Code != http.StatusBadRequest {
-		t.Fatalf("patching a token: %d, want 400", w.Code)
+	for _, k := range []string{"bot_token", "mode", "project_id", "public_url"} {
+		if w := patch(k, "x"); w.Code != http.StatusBadRequest {
+			t.Fatalf("patching read-only %s: %d, want 400", k, w.Code)
+		}
 	}
 	if w := patch("bots_mode", "whitelist"); w.Code != http.StatusOK {
 		t.Fatalf("patch bots_mode: %d %s", w.Code, w.Body.String())
@@ -187,5 +201,68 @@ func TestAgentSlackManifestAsksForEmailScope(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"users:read.email"`) {
 		t.Fatalf("manifest lacks users:read.email: %s", b)
+	}
+}
+
+// Every field of the Channels page schema reaches the Team card: the four
+// groups editable with the same tags, everything else read-only with a note.
+func TestAgentSlackSettingsCoverSchema(t *testing.T) {
+	rows := pkgentity.StructToConfigs(agentconfig.DefaultSlackChannelConfig())
+	got := map[string]agentSlackField{}
+	for _, f := range agentSlackSettingFields(nil, nil) {
+		got[f.Key] = f
+	}
+	if len(got) != len(rows) {
+		t.Errorf("card has %d fields, schema %d", len(got), len(rows))
+	}
+	for _, r := range rows {
+		f, ok := got[r.Key]
+		title, _, _ := strings.Cut(r.Group, "|")
+		switch {
+		case !ok:
+			t.Errorf("schema field %q missing from the card", r.Key)
+		case f.Group != title:
+			t.Errorf("%q in group %q, schema says %q", r.Key, f.Group, title)
+		case agentSlackSettingGroups[title] && !r.IsSecret:
+			if f.ReadOnly || f.Type != r.Type || f.Options != r.Options || f.VisibleWhen != r.VisibleWhen {
+				t.Errorf("%q differs from the schema: %+v vs %+v", r.Key, f, r)
+			}
+		default:
+			if !f.ReadOnly || agentSlackReadOnlyNotes[r.Key] == "" {
+				t.Errorf("%q should be read-only with a note: %+v", r.Key, f)
+			}
+		}
+	}
+}
+
+// Yoga's scenario 1 is set from the card: users and groups whitelists both
+// on, bots specific, every channel — each key saved on the agent's row.
+func TestAgentSlackSettingsScenarioUsersGroupsBots(t *testing.T) {
+	withAgentSlackWorld(t)
+	seedTeamProject(t, "p1", "u1")
+	a := seedTeamAgent(t, "u1", "captain", "p1")
+	u := &entity.User{ID: "u1"}
+	if w := connectSlack(t, u, a.ID, map[string]any{"bot_token": "xoxb-x-B1", "app_token": "xapp-1"}); w.Code != http.StatusOK {
+		t.Fatalf("connect: %d %s", w.Code, w.Body.String())
+	}
+	set := map[string]string{
+		"users_mode": "whitelist", "allowed_users": `[{"id":"UA","name":"User A"}]`,
+		"groups_mode": "whitelist", "allowed_groups": `[{"id":"SB","name":"Group B"}]`,
+		"bots_mode": "whitelist", "allowed_bots": `[{"id":"UBA","name":"Bot A"}]`,
+		"channels_mode": "all",
+	}
+	for k, v := range set {
+		w, c := teamReq(t, u, http.MethodPatch, "/api/team/agents/"+a.ID+"/slack/settings", map[string]any{"key": k, "value": v}, map[string]string{"id": a.ID})
+		apiTeamAgentSlackSettingsPatch(c)
+		if w.Code != http.StatusOK {
+			t.Fatalf("patch %s: %d %s", k, w.Code, w.Body.String())
+		}
+	}
+	m, _ := agentchannels.AgentSlackConfig(globalDB, a.ID)
+	var cfg agentconfig.SlackChannelConfig
+	pkgentity.MapToStruct(m, &cfg)
+	if cfg.UsersMode != "whitelist" || cfg.GroupsMode != "whitelist" || cfg.BotsMode != "whitelist" || cfg.ChannelsMode != "all" ||
+		cfg.AllowedUsers != set["allowed_users"] || cfg.AllowedGroups != set["allowed_groups"] || cfg.AllowedBots != set["allowed_bots"] {
+		t.Fatalf("saved config = %+v", cfg)
 	}
 }

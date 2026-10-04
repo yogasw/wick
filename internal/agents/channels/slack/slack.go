@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -304,6 +305,12 @@ type Channel struct {
 	// botTurns counts recent bot-triggered turns per session (allowBotTurn).
 	botTurnsMu sync.Mutex
 	botTurns   map[string][]time.Time
+
+	// userGroups caches usergroups.list (with members) for userGroupsTTL so
+	// every mention does not ask Slack again (resolveUserGroups).
+	userGroupsMu sync.Mutex
+	userGroups   []slackgo.UserGroup
+	userGroupsAt time.Time
 
 	// users resolves a Slack sender's EMAIL to a wick user, and creates one
 	// when auto-register is on. Email is the only field both sides agree on,
@@ -3825,11 +3832,16 @@ func pickerHas(jsonList, id string) bool {
 	return false
 }
 
+// userGroupsTTL is how long a user group membership snapshot is reused. A
+// person added to a group in Slack passes the groups whitelist once it runs
+// out — no restart needed.
+const userGroupsTTL = time.Minute
+
+// resolveUserGroups returns the IDs of the user groups userID belongs to,
+// read from usergroups.list (needs usergroups:read) and cached for
+// userGroupsTTL.
 func (s *Channel) resolveUserGroups(userID string) ([]string, error) {
-	s.cfgMu.Lock()
-	api := s.api
-	s.cfgMu.Unlock()
-	groups, err := api.GetUserGroups(slackgo.GetUserGroupsOptionIncludeUsers(true))
+	groups, err := s.userGroupMembers()
 	if err != nil {
 		return nil, err
 	}
@@ -3843,6 +3855,28 @@ func (s *Channel) resolveUserGroups(userID string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// userGroupMembers is usergroups.list with members, served from the cache
+// while it is younger than userGroupsTTL.
+func (s *Channel) userGroupMembers() ([]slackgo.UserGroup, error) {
+	s.userGroupsMu.Lock()
+	defer s.userGroupsMu.Unlock()
+	if !s.userGroupsAt.IsZero() && time.Since(s.userGroupsAt) < userGroupsTTL {
+		return s.userGroups, nil
+	}
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return nil, errors.New("slack client not ready")
+	}
+	groups, err := api.GetUserGroups(slackgo.GetUserGroupsOptionIncludeUsers(true))
+	if err != nil {
+		return nil, err
+	}
+	s.userGroups, s.userGroupsAt = groups, time.Now()
+	return groups, nil
 }
 
 func (s *Channel) handleMetaCmd(_ context.Context, meta agentchannels.MetaResult, channelID, threadTS string) {
