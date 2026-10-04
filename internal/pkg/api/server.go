@@ -14,6 +14,7 @@ import (
 	neturl "net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -761,7 +762,7 @@ func NewServer() *Server {
 			// Contention controls; 0 = kernel default. Enforce-mode only —
 			// sliceLimits() drops them in measure.
 			CPUWeight:   atoi("agents_cpu_weight"),
-			CPUQuotaPct: atoi("agents_cpu_quota_pct"),
+			CPUQuotaPct: agentconfig.CPUQuotaCorePct(agentconfig.CPUQuotaMachinePct(configsSvc.GetOwned("agents", "agents_cpu_quota_pct"), runtime.NumCPU()), runtime.NumCPU()),
 			TasksMax:    atoi("agents_tasks_max"),
 			IOWeight:    atoi("agents_io_weight"),
 		}
@@ -931,7 +932,7 @@ func NewServer() *Server {
 			HorizonSec:  atoiOr("resource_guard_exhaust_horizon_sec", 20),
 			MinFreeMB:   atoi("min_free_memory_mb"),
 			CPUPSIMax:   float64(atoiOr("resource_guard_cpu_psi_max", 90)),
-			CPUQuotaPct: atoi("agents_cpu_quota_pct"),
+			CPUQuotaPct: agentconfig.CPUQuotaCorePct(agentconfig.CPUQuotaMachinePct(configsSvc.GetOwned("agents", "agents_cpu_quota_pct"), runtime.NumCPU()), runtime.NumCPU()),
 			CPUWeight:   atoi("agents_cpu_weight"),
 			TasksMax:    atoi("agents_tasks_max"),
 		}

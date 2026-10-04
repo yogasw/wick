@@ -342,7 +342,7 @@
                 : "Off. Switch the mode to 'measure' or 'enforce'."}
           </p>
           <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
-            Safe line {report.guard.safe_pct || 80}% CPU and memory · agent CPU quota {quotaShare(report.guard.cpu_quota_pct, report.cpu_cores)}
+            Safe line {report.guard.safe_pct || 80}% CPU and memory · agent CPU quota {quotaShare(report.guard.cpu_quota_pct)}
           </p>
         </div>
         {#if report.guard.hold_spawns}

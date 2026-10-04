@@ -162,8 +162,7 @@ type memoryReport struct {
 type resourceGuardReport struct {
 	Action  string `json:"action"`
 	SafePct int    `json:"safe_pct"`
-	// CPUQuotaPct is percent of ONE core; the UI also shows it as a
-	// share of the whole machine using CPUCores.
+	// CPUQuotaPct is percent of the whole machine, 0 = uncapped.
 	CPUQuotaPct int                   `json:"cpu_quota_pct"`
 	IntervalMS  int                   `json:"interval_ms"`
 	HorizonSec  int                   `json:"exhaust_horizon_sec"`
@@ -489,7 +488,7 @@ func buildMemoryReport() memoryReport {
 	rep.Guard = resourceGuardReport{
 		Action:      memGuardConfig("resource_guard_action", resourceguard.ActionKill),
 		SafePct:     memGuardInt("resource_guard_safe_pct"),
-		CPUQuotaPct: memGuardInt("agents_cpu_quota_pct"),
+		CPUQuotaPct: agentconfig.CPUQuotaMachinePct(memGuardConfig("agents_cpu_quota_pct", ""), runtime.NumCPU()),
 		IntervalMS:  memGuardInt("resource_guard_interval_ms"),
 		HorizonSec:  memGuardInt("resource_guard_exhaust_horizon_sec"),
 		CPUPSIMax:   memGuardInt("resource_guard_cpu_psi_max"),

@@ -4,7 +4,38 @@ package config
 // its defaults. The mechanism lives in internal/agents/provider/memscope;
 // this file only decides the numbers.
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// DefaultCPUQuotaPct is agents_cpu_quota_pct when it was never set: 80% of
+// the whole machine, a safe cap whatever the core count.
+const DefaultCPUQuotaPct = 80
+
+// CPUQuotaMachinePct reads agents_cpu_quota_pct as a share of the whole
+// machine, 0..100 (0 = no cap). Empty or unreadable is DefaultCPUQuotaPct.
+// A value above 100 was saved when the setting meant percent of ONE core,
+// so it is read that way: divided by cores (140 on 2 cores = 70).
+func CPUQuotaMachinePct(raw string, cores int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	switch {
+	case err != nil:
+		return DefaultCPUQuotaPct
+	case n <= 0:
+		return 0
+	case n > 100:
+		return min(100, n/max(1, cores))
+	}
+	return n
+}
+
+// CPUQuotaCorePct turns a machine share into systemd's CPUQuota, which is
+// percent of one core: 80% of a 2-core machine = 160.
+func CPUQuotaCorePct(machinePct, cores int) int {
+	return machinePct * max(1, cores)
+}
 
 // Guard modes. off is genuinely nothing — no slice unit, no oom_score_adj,
 // no argv wrapping — so an install that never opts in behaves exactly as

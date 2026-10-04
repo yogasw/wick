@@ -67,7 +67,7 @@ type GeneralConfig struct {
 	// COMPETE — with wick and with each other. All default to 0 = leave
 	// the kernel default.
 	AgentsCPUWeight   int `wick:"number;group=Resource Guard;desc=CPU priority of agents when the CPU is busy, relative to the rest of the system (default weight is 100). Set below 100 (e.g. 50) so wick and the OS stay responsive while agents work, agents still use all idle CPU. 0 = no preference. Only applies in 'enforce' mode."`
-	AgentsCPUQuotaPct int `wick:"number;group=Resource Guard;desc=Hard cap on combined CPU of all agents, as a percentage of one core (100 = one full core, 200 = two, on a 2-core machine 140 = 70% of the machine). Applied live. Slows heavy work down even when the machine is idle, so most setups should leave this at 0 = no cap and rely on the priority setting above. Only applies in 'enforce' mode."`
+	AgentsCPUQuotaPct int `wick:"number;group=Resource Guard;desc=Hard cap on combined CPU of all agents, as a percentage of the whole machine, 0 to 100 (wick multiplies it by the number of cores, so 80 on 2 cores = 1.6 cores). Applied live. Empty = 80, 0 = no cap. A value above 100 was saved as percent of one core and is divided by the number of cores (140 on 2 cores = 70). Only applies in 'enforce' mode."`
 	AgentsTasksMax    int `wick:"number;group=Resource Guard;desc=Maximum number of processes and threads all agents may have at once. Stops a runaway script that keeps starting processes — thousands of tiny ones can freeze a machine while staying under every memory limit. 512 is a generous ceiling. 0 = no limit. Only applies in 'enforce' mode."`
 	AgentsIOWeight    int `wick:"number;group=Resource Guard;desc=Disk-access priority of agents when the disk is busy, relative to the rest of the system (default weight is 100). Set below 100 so heavy agent file work does not starve wick. 0 = no preference. Only applies in 'enforce' mode."`
 
@@ -209,10 +209,11 @@ func DefaultGeneralConfig() GeneralConfig {
 		// Machine-independent safe values, unlike the byte limits above
 		// which must be derived from RAM. Weight 50 = agents yield to wick
 		// under load, full speed when idle; 512 tasks is generous for real
-		// work while stopping a fork bomb. Quota and IO stay 0 (off):
-		// a CPU cap slows legitimate work even on an idle machine.
-		AgentsCPUWeight: 50,
-		AgentsTasksMax:  512,
+		// work while stopping a fork bomb. Quota 80% of the machine keeps
+		// some CPU for wick and the OS whatever the core count. IO stays 0.
+		AgentsCPUWeight:   50,
+		AgentsCPUQuotaPct: DefaultCPUQuotaPct,
+		AgentsTasksMax:    512,
 		// Watchdog defaults are machine-independent and safe on a small
 		// host; it only runs once the guard mode is enforce.
 		ResourceGuardIntervalMS:        1000,

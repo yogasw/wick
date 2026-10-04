@@ -136,11 +136,9 @@ export function humanCores(pct: number): string {
   return `≈ ${n.toFixed(1)} ${n.toFixed(1) === "1.0" ? "core" : "cores"}`;
 }
 
-// quotaShare reads a CPU quota (percent of ONE core) as a share of the
-// whole machine: "140% = 70% of this machine" on two cores. Without it a
-// quota above 100 looks like a typo.
-export function quotaShare(pct: number, cores: number): string {
+// quotaShare words the agent CPU quota, already a share of the whole
+// machine (0 = uncapped).
+export function quotaShare(pct: number): string {
   if (!Number.isFinite(pct) || pct <= 0) return "uncapped";
-  if (!Number.isFinite(cores) || cores <= 0) return `${pct}% of one core`;
-  return `${pct}% = ${Math.round(pct / cores)}% of this machine`;
+  return `${Math.min(100, Math.round(pct))}% of machine`;
 }

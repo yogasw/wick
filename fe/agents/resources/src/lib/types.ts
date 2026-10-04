@@ -144,7 +144,7 @@ export interface GuardEvent {
 export interface GuardReport {
   action: string;
   safe_pct: number;
-  // Percent of ONE core; see quotaShare for the whole-machine reading.
+  // Percent of the whole machine, 0 = uncapped.
   cpu_quota_pct: number;
   interval_ms: number;
   exhaust_horizon_sec: number;

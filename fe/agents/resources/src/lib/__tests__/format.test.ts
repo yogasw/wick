@@ -123,10 +123,9 @@ describe("guardKindLabel", () => {
 });
 
 describe("quotaShare", () => {
-  it("reads a per-core quota as a share of the machine", () => {
-    expect(quotaShare(140, 2)).toBe("140% = 70% of this machine");
-    expect(quotaShare(0, 2)).toBe("uncapped");
-    expect(quotaShare(150, 0)).toBe("150% of one core");
+  it("words a machine share", () => {
+    expect(quotaShare(70)).toBe("70% of machine");
+    expect(quotaShare(0)).toBe("uncapped");
   });
 });
 

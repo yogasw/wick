@@ -185,3 +185,25 @@ func TestValidateMemoryBudget(t *testing.T) {
 		t.Fatalf("unknown RAM refused: %v", err)
 	}
 }
+
+func TestCPUQuotaMachinePct(t *testing.T) {
+	cases := []struct {
+		raw   string
+		cores int
+		want  int
+	}{
+		{"", 2, 80}, {"junk", 8, 80}, {"0", 2, 0}, {"-5", 2, 0}, {"70", 2, 70}, {"100", 1, 100},
+		{"140", 2, 70}, {"150", 1, 100}, {"400", 8, 50},
+	}
+	for _, c := range cases {
+		if got := CPUQuotaMachinePct(c.raw, c.cores); got != c.want {
+			t.Errorf("CPUQuotaMachinePct(%q, %d) = %d, want %d", c.raw, c.cores, got, c.want)
+		}
+	}
+	// The default of 80% of the machine as systemd CPUQuota.
+	for cores, want := range map[int]int{1: 80, 2: 160, 8: 640} {
+		if got := CPUQuotaCorePct(CPUQuotaMachinePct("", cores), cores); got != want {
+			t.Errorf("default on %d cores = %d, want %d", cores, got, want)
+		}
+	}
+}

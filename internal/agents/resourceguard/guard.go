@@ -519,7 +519,7 @@ func (g *Guard) release(cfg Config, now time.Time, aboveSafe bool) {
 		g.throttled = false
 		q := [3]int{cfg.CPUQuotaPct, cfg.CPUWeight, cfg.TasksMax}
 		g.appliedQuota = &q
-		g.emit(Event{Kind: "restore", Detail: "host calm; agent CPU quota back to " + quotaLabel(cfg.CPUQuotaPct)})
+		g.emit(Event{Kind: "restore", Detail: "host calm; agent CPU quota back to " + quotaLabel(cfg.CPUQuotaPct, g.host.NumCPU())})
 	}
 }
 
@@ -661,9 +661,11 @@ func describe(p agentProc) string {
 	return cmd
 }
 
-func quotaLabel(pct int) string {
+// quotaLabel reads a slice quota (percent of one core) as a share of the
+// machine, the unit the setting is given in.
+func quotaLabel(pct, cores int) string {
 	if pct <= 0 {
 		return "uncapped"
 	}
-	return fmt.Sprintf("%d%%", pct)
+	return fmt.Sprintf("%d%% of the machine", pct/max(1, cores))
 }
