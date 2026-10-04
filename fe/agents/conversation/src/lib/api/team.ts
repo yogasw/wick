@@ -36,6 +36,9 @@ export type AgentItem = {
   avatar: AgentAvatarSpec;
   allowed_connectors: ConnectorGrant[] | null;
   include_new_connectors: boolean;
+  /** "owner" = Same as me (every connector the owner has, write included);
+      older servers omit it, which reads as "choose". */
+  access_mode?: "choose" | "owner";
   /** Whose access a turn runs with; rows older than the field read "caller". */
   run_as?: "caller" | "owner";
   disabled: boolean;
@@ -179,6 +182,7 @@ export type AgentWrite = Partial<{
   features: AgentFeatures;
   allowed_connectors: ConnectorGrant[];
   include_new_connectors: boolean;
+  access_mode: "choose" | "owner";
   run_as: "caller" | "owner";
   disabled: boolean;
   allow_provider_switch: boolean;
