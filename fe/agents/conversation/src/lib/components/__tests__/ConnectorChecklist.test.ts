@@ -84,7 +84,7 @@ describe("ConnectorChecklist", () => {
     await fireEvent.click(screen.getByRole("button", { name: "+ Add connectors" }));
     const picker = screen.getByRole("region", { name: "Add connectors" });
     expect(within(picker).queryByText("Slack")).toBeNull();
-    expect(picker.textContent).toContain("1 available");
+    expect(picker.textContent).toContain("Available · 1");
     const addRead = within(picker).getByRole("button", { name: "Add 0 as Read" }) as HTMLButtonElement;
     expect(addRead.disabled).toBe(true);
     await fireEvent.click(within(picker).getByLabelText("Select all available shown"));
@@ -138,6 +138,7 @@ describe("ConnectorChecklist", () => {
     render(ConnectorChecklist, { props: { catalog, grants: slackRead } });
     expect(screen.getByText(/Read: can look things up · Write: can also change things/)).toBeTruthy();
     expect(screen.getByText("Connectors this agent can use.")).toBeTruthy();
+    expect(screen.getByText(/Granted/).textContent).toContain("· 1");
   });
 
   test("Same as me replaces the Connectors list; tier tabs stay editable", async () => {

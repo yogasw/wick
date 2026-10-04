@@ -219,7 +219,7 @@
     >
       {tierLabel[x.t]} <span class="text-black-700">· {x.items.length}</span>
       {#if x.t === "connectors" && accessMode === "owner"}<span class="rounded-full bg-white-200 px-1.5 text-[10px] dark:bg-navy-600">same as you</span>
-      {:else if x.custom > 0}<span class="rounded-full bg-white-200 px-1.5 text-[10px] dark:bg-navy-600">{x.custom} {x.t === "connectors" ? "added" : "changed"}</span>{/if}
+      {:else if x.custom > 0}<span class="rounded-full bg-white-200 px-1.5 text-[10px] dark:bg-navy-600">{x.custom} {x.t === "connectors" ? "granted" : "changed"}</span>{/if}
     </button>
   {/each}
 </div>
@@ -262,7 +262,7 @@
 {:else if adding}
   <section class="overflow-hidden rounded-xl border border-green-300 dark:border-green-700" aria-label="Add connectors">
     <div class="border-b border-white-300 px-3 py-2 dark:border-navy-600">
-      <p class="text-sm font-medium text-black-900 dark:text-white-100">Add connectors <span class="text-black-700">· {available.length} available</span></p>
+      <p class="text-sm font-medium text-black-900 dark:text-white-100">Available <span class="text-black-700">· {available.length}</span></p>
       <p class="text-xs text-black-800 dark:text-black-600">Pick connectors to give this agent.</p>
     </div>
     {#if available.length === 0}
@@ -302,7 +302,7 @@
   <div class="flex flex-wrap items-center justify-between gap-2">
     <div class="min-w-0">
       <p class="text-sm font-medium text-black-900 dark:text-white-100">
-        {tier === "connectors" ? "Added" : tierLabel[tier]} <span class="text-black-700">· {added.length}</span>
+        {tier === "connectors" ? "Granted" : tierLabel[tier]} <span class="text-black-700">· {added.length}</span>
       </p>
       <p class="text-xs text-black-800 dark:text-black-600">{tierHint[tier]}</p>
     </div>
