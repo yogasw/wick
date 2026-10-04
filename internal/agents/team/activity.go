@@ -191,3 +191,103 @@ func TailPreview(path string) string {
 	}
 	return ""
 }
+
+// SourceTeam is the Source of a user turn wick posted on a teammate's
+// behalf: another agent asked (team_message, an @mention, A2A).
+const SourceTeam = "team"
+
+// unreadTailBytes is how much of conversation.jsonl UnreadCount reads.
+const unreadTailBytes = 512 << 10
+
+// UndeliveredAfter is how long an answer to a teammate may wait for its
+// task to be marked done before it counts as reaching no one.
+const UndeliveredAfter = time.Minute
+
+// UnreadCount counts the replies of a main session the owner has not
+// read: every reply after lastRead to a person (web chat, a Slack
+// mention, a schedule), but a reply to a teammate only when it reached
+// no one — its task failed, was canceled, or never closed within
+// UndeliveredAfter. A delivered one is the asker's to report, so it is
+// read here. settled is false while an answer still waits on its task:
+// the count may change with no new line in the file.
+func UnreadCount(path string, lastRead *time.Time, now time.Time) (n int, settled bool) {
+	buf := readTail(path, unreadTailBytes)
+	var (
+		lastWorking string      // task of the latest working handoff
+		asked       bool        // the running turn came from a teammate
+		askTask     string      // that teammate's task, "" when unknown
+		waiting     []time.Time // replies to it, not yet delivered
+	)
+	resolve := func(delivered bool) {
+		if !delivered {
+			n += len(waiting)
+		}
+		waiting = nil
+	}
+	for _, line := range bytes.Split(buf, []byte{'\n'}) {
+		var t store.ConversationTurn
+		if json.Unmarshal(line, &t) != nil {
+			continue
+		}
+		fresh := lastRead == nil || t.Timestamp.After(*lastRead)
+		switch {
+		case t.Role == "user":
+			// A new message while an answer still waits: that task
+			// never closed, so the answer reached no one.
+			resolve(false)
+			asked, askTask = t.Source == SourceTeam, ""
+			if asked {
+				askTask = lastWorking
+			}
+		case t.Role == "system" && t.Kind == store.KindMentionHandoff:
+			state := strings.ToLower(t.Extras["state"])
+			task := t.Extras["task_id"]
+			if strings.Contains(state, "working") || strings.Contains(state, "submitted") {
+				lastWorking = task
+				continue
+			}
+			if asked && len(waiting) > 0 && (askTask == "" || task == askTask) {
+				resolve(strings.Contains(state, "completed"))
+			}
+		case t.Role == "assistant" || t.Role == "system" && t.IsError:
+			if !fresh {
+				continue
+			}
+			if asked {
+				waiting = append(waiting, t.Timestamp)
+			} else {
+				n++
+			}
+		}
+	}
+	if len(waiting) > 0 {
+		if now.Sub(waiting[len(waiting)-1]) < UndeliveredAfter {
+			return n, false
+		}
+		n += len(waiting)
+	}
+	return n, true
+}
+
+// readTail returns up to the last max bytes of path; a cut first line
+// never parses, so callers skip it like any other bad line.
+func readTail(path string, max int64) []byte {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	off := st.Size() - max
+	if off < 0 {
+		off = 0
+	}
+	buf := make([]byte, st.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil && err != io.EOF {
+		return nil
+	}
+	return buf
+}

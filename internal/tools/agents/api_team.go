@@ -107,6 +107,10 @@ type TeamAgentItem struct {
 	// Unread is true when the main session moved after the owner last
 	// opened the chat (POST /api/team/agents/{id}/read).
 	Unread bool `json:"unread"`
+	// UnreadCount is how many replies Unread stands for; a reply to
+	// another agent that was handed back to it is not one (see
+	// team.UnreadCount).
+	UnreadCount int `json:"unread_count,omitempty"`
 	// NeedsAttention is true while the main session waits on the owner:
 	// an ask_user question or a tool approval.
 	NeedsAttention bool `json:"needs_attention"`
@@ -562,6 +566,47 @@ type teamPreviewEntry struct {
 	size int64
 	mod  time.Time
 	text string
+}
+
+// teamUnreadCache keeps the last unread count per conversation file and
+// last-read time, like teamPreviewCache; a count still waiting on a
+// teammate's task is not kept.
+var teamUnreadCache = struct {
+	sync.Mutex
+	m map[string]teamUnreadEntry
+}{m: map[string]teamUnreadEntry{}}
+
+type teamUnreadEntry struct {
+	size     int64
+	mod      time.Time
+	lastRead time.Time
+	n        int
+}
+
+// unreadCount is team.UnreadCount of sessionID's conversation.
+func unreadCount(sessionID string, lastRead *time.Time) int {
+	path := globalLayout.SessionConversation(sessionID)
+	st, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	var read time.Time
+	if lastRead != nil {
+		read = *lastRead
+	}
+	teamUnreadCache.Lock()
+	e, ok := teamUnreadCache.m[path]
+	teamUnreadCache.Unlock()
+	if ok && e.size == st.Size() && e.mod.Equal(st.ModTime()) && e.lastRead.Equal(read) {
+		return e.n
+	}
+	n, settled := team.UnreadCount(path, lastRead, time.Now())
+	if settled {
+		teamUnreadCache.Lock()
+		teamUnreadCache.m[path] = teamUnreadEntry{size: st.Size(), mod: st.ModTime(), lastRead: read, n: n}
+		teamUnreadCache.Unlock()
+	}
+	return n
 }
 
 // lastPreview returns the one-line preview of sessionID's newest message.

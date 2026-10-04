@@ -287,7 +287,7 @@ func sharedTeamAgentItem(p entity.AgentPersona, sh entity.AgentShare, viewer str
 // fillChatState sets the main-chat fields of it from userID's main chat
 // with agentID (empty when they have none yet).
 func fillChatState(it *TeamAgentItem, userID, agentID string, lastRead *time.Time, live teamLive) {
-	it.MainSessionID, it.LastActive, it.Unread = "", nil, false
+	it.MainSessionID, it.LastActive, it.Unread, it.UnreadCount = "", nil, false, 0
 	it.Status, it.CurrentAction = string(session.StatusIdle), ""
 	it.AttentionPreview, it.NeedsAttention, it.LastPreview = "", false, ""
 	s, ok := mainSessionOf(userID, agentID)
@@ -299,7 +299,12 @@ func fillChatState(it *TeamAgentItem, userID, agentID string, lastRead *time.Tim
 	// Meta.Status stays "running" for as long as the process is warm,
 	// turn or no turn; the pool lifecycle is what says a turn is on.
 	it.Status = team.TurnStatus(string(s.Meta.Status), live.lifecycles[s.ID])
-	it.Unread = team.Unread(s.Meta.LastActive, lastRead)
+	// Something moved since the owner looked; it is unread only if it
+	// holds a reply for the owner, not one handed back to another agent.
+	if team.Unread(s.Meta.LastActive, lastRead) {
+		it.UnreadCount = unreadCount(s.ID, lastRead)
+		it.Unread = it.UnreadCount > 0
+	}
 	if it.Status != string(session.StatusIdle) {
 		it.CurrentAction = live.actions[s.ID]
 	}

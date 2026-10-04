@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { rosterEntries, mobilePins, canMakeGroup, unreadLabel } from "../rosterList.js";
+import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone } from "../rosterList.js";
 import type { AgentItem, GroupItem } from "../api/team.js";
 
 const agent = (id: string, last: string | null, over: Partial<AgentItem> = {}) =>
@@ -72,9 +72,21 @@ test("canMakeGroup needs two agents", () => {
   expect(canMakeGroup([{ id: "a" }, { id: "b" }])).toBe(true);
 });
 
-test("unreadLabel: count, capped; empty when the server sends none", () => {
+test("unreadLabel: count, capped at 9+; empty when the server sends none", () => {
   expect(unreadLabel(undefined)).toBe("");
   expect(unreadLabel(0)).toBe("");
-  expect(unreadLabel(3)).toBe("3");
-  expect(unreadLabel(140)).toBe("99+");
+  expect(unreadLabel(1)).toBe("1");
+  expect(unreadLabel(9)).toBe("9");
+  expect(unreadLabel(12)).toBe("9+");
+});
+
+test("rowTone: unread is bold with an accent time, read stays plain", () => {
+  const on = rowTone(true);
+  const off = rowTone(false);
+  expect(on.name).toContain("font-bold");
+  expect(on.preview).toContain("font-semibold");
+  expect(on.time).toContain("text-green-600");
+  expect(off.name).not.toContain("font-bold");
+  expect(off.preview).toContain("text-black-800");
+  expect(off.time).toBe("text-black-700");
 });

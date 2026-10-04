@@ -39,7 +39,7 @@
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
   import TeamAddMenu from "./lib/components/TeamAddMenu.svelte";
-  import { rosterEntries, mobilePins, canMakeGroup, unreadLabel } from "./lib/rosterList.js";
+  import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone } from "./lib/rosterList.js";
   import TeamSettings from "./lib/components/TeamSettings.svelte";
   import { RETURN_KEY, returnHref, classicHref } from "./lib/teamReturn.js";
 
@@ -501,6 +501,7 @@
           {@const a = e.agent}
           {@const active = !route.group && selected?.id === a.id}
           {@const st = rosterStatus(a, { activeId: selected?.id, hatching: hatching.includes(a.id) })}
+          {@const tone = rowTone(st.unread)}
           <button
             type="button"
             class="roster-row relative mb-0.5 w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left {pinIds.has(a.id) ? 'hidden lg:flex' : 'flex'} {active
@@ -514,22 +515,23 @@
             <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{st.tip}</span>
             <span class="min-w-0 flex-1">
               <span class="flex items-baseline gap-2">
-                <span class="min-w-0 flex-1 truncate text-sm font-semibold text-black-900 dark:text-white-100">
+                <span class="min-w-0 flex-1 truncate text-sm {tone.name}">
                   {a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[10px] font-semibold tracking-wider text-green-600 dark:text-green-400">CAPTAIN</span>{/if}{#if isRemoteAgent(a)}<span class="ml-1.5 rounded-full bg-white-300 px-1.5 py-px align-middle text-[9px] font-bold uppercase tracking-wider text-black-800 dark:bg-navy-600 dark:text-black-600" data-testid="roster-remote-badge">{remoteBadge(a)}</span>{/if}{#if isSharedAgent(a)}<span class="ml-1.5 rounded-full bg-white-300 px-1.5 py-px align-middle text-[9px] font-bold uppercase tracking-wider text-black-800 dark:bg-navy-600 dark:text-black-600" title={sharedLabel(a)} data-testid="roster-shared-badge">Shared</span>{/if}
                 </span>
-                <span class="shrink-0 text-[11px] text-black-700">{rosterTime(a.last_active)}</span>
+                <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(a.last_active)}</span>
               </span>
-              <span class="mt-0.5 flex items-center gap-1.5">
-                <span class="min-w-0 flex-1 truncate text-xs {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-black-800 dark:text-black-600'}">
+              <span class="roster-line2 mt-0.5 flex items-center gap-1.5">
+                <span class="min-w-0 flex-1 truncate text-xs {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : tone.preview}">
                   {#if st.typing !== null}typing…{:else}{rowPreview(a)}{/if}
                 </span>
-                {#if st.unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" aria-label="new message">{unreadLabel(a.unread_count)}</span>{/if}
+                {#if st.unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" class:roster-badge-dot={!unreadLabel(a.unread_count)} aria-label="{a.unread_count || 'new'} unread" data-testid="roster-unread">{unreadLabel(a.unread_count)}</span>{/if}
               </span>
             </span>
           </button>
         {:else}
           {@const g = e.group}
           {@const unread = g.unread && activeGroupId !== g.id}
+          {@const tone = rowTone(!!unread)}
           <button
             type="button"
             class="roster-row relative mb-0.5 flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left {activeGroupId === g.id ? 'bg-white-300 dark:bg-navy-600' : 'hover:bg-white-300 dark:hover:bg-navy-600'}"
@@ -540,12 +542,12 @@
             <span class="flex shrink-0 items-center justify-center" style="width:38px;height:38px"><GroupAvatars members={g.members} size={17} max={2} showMore={false} ring="bg-white-200 dark:bg-navy-700" /></span>
             <span class="min-w-0 flex-1">
               <span class="flex items-baseline gap-2">
-                <span class="min-w-0 flex-1 truncate text-sm font-semibold text-black-900 dark:text-white-100">{g.name}</span>
-                <span class="shrink-0 text-[11px] text-black-700">{rosterTime(g.last_active)}</span>
+                <span class="min-w-0 flex-1 truncate text-sm {tone.name}">{g.name}</span>
+                <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(g.last_active)}</span>
               </span>
-              <span class="mt-0.5 flex items-center gap-1.5">
-                <span class="min-w-0 flex-1 truncate text-xs text-black-800 dark:text-black-600">{g.last_preview || `${g.members.length} agents`}</span>
-                {#if unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" aria-label="new message">{unreadLabel(g.unread_count)}</span>{/if}
+              <span class="roster-line2 mt-0.5 flex items-center gap-1.5">
+                <span class="min-w-0 flex-1 truncate text-xs {tone.preview}">{g.last_preview || `${g.members.length} agents`}</span>
+                {#if unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" class:roster-badge-dot={!unreadLabel(g.unread_count)} aria-label="{g.unread_count || 'new'} unread">{unreadLabel(g.unread_count)}</span>{/if}
               </span>
             </span>
           </button>
@@ -764,17 +766,22 @@
      opening an app rather than a blank flash. */
   .team-app { animation: agent-fade 0.25s ease-out; }
   /* Roster bits the token scale has no exact step for (mockup sizes):
-     the green unread count pill. */
+     the unread count pill (18px tall, 11px text) and the second line it
+     sits on, kept at the pill's height so a row never grows with it. */
+  .roster-line2 { min-height: 18px; }
   .roster-badge {
     display: grid;
     place-items: center;
-    min-width: 16px;
-    height: 16px;
-    padding: 0 4px;
-    font-size: 10px;
-    font-weight: 600;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    font-size: 11px;
+    font-weight: 700;
     line-height: 1;
+    font-variant-numeric: tabular-nums;
   }
+  /* No count from the server (a group chat): a small dot, not an empty pill. */
+  .roster-badge-dot { min-width: 8px; height: 8px; padding: 0; margin-right: 5px; }
   .roster-tip {
     display: none;
     position: absolute;

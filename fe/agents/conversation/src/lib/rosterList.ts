@@ -58,10 +58,27 @@ export function canMakeGroup(agents: Pick<AgentItem, "id">[]): boolean {
   return agents.length >= MIN_GROUP_MEMBERS;
 }
 
-/** unreadLabel is the number in a row's green unread pill: the count when
-    the server sends one, capped at "99+"; "" leaves a plain green dot
-    (the roster API only flags unread today). */
+/** unreadLabel is the number in a row's unread pill: the count of
+    replies not read yet, capped at "9+" like a chat app's badge; "" when
+    the server sends no count (a group chat), which leaves a small dot. */
 export function unreadLabel(count?: number): string {
   if (!count || count < 1) return "";
-  return count > 99 ? "99+" : String(Math.floor(count));
+  return count > 9 ? "9+" : String(Math.floor(count));
+}
+
+/** rowTone is how a roster row reads (chat-app pattern): an unread row
+    has its name and preview in bold and its time in the accent colour;
+    a read one stays plain and grey. */
+export function rowTone(unread: boolean): { name: string; preview: string; time: string } {
+  return unread
+    ? {
+        name: "font-bold text-black-900 dark:text-white-100",
+        preview: "font-semibold text-black-900 dark:text-white-100",
+        time: "font-semibold text-green-600 dark:text-green-400",
+      }
+    : {
+        name: "font-medium text-black-900 dark:text-white-100",
+        preview: "text-black-800 dark:text-black-600",
+        time: "text-black-700",
+      };
 }

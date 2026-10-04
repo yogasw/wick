@@ -28,7 +28,7 @@ import (
 
 // sourceTeam marks a turn wick posted on a teammate's behalf, so the
 // front-end badges it instead of showing it as the person typing.
-const sourceTeam = "team"
+const sourceTeam = team.SourceTeam
 
 // NewTeamLinkHub builds the Hub over the Team service and the pool.
 // deliver wakes a session with a late reply (the sub-agent delivery path).
