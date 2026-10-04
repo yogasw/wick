@@ -31,7 +31,7 @@
 
   import { createThreadStore } from "../stores/thread.js";
   import { connectSession } from "../stores/sse.js";
-  import { getConversation, getTurnTrace, getTurnEvent } from "../api/sessions.js";
+  import { getConversation, getTurnTrace, getTurnEvent, getTurnBlob } from "../api/sessions.js";
   import { getSubAgents, interruptSubAgent } from "../api/subagents.js";
   import { fetchSessionContext, type SessionContext } from "../api/context.js";
   import { sendMessage } from "../api/messages.js";
@@ -164,6 +164,13 @@
   // ToolCard can show its own inline error + retry.
   function loadTraceEvent(turnId: string, eventId: string) {
     return run(getTurnEvent(base, currentSessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)));
+  }
+
+  // A binary the child's trace stored (a Read of a screenshot). Without this
+  // the image chip in a sub-agent trace stayed disabled even though the blob
+  // was on disk.
+  function loadTraceBlob(turnId: string, ref: string): Promise<Blob> {
+    return getTurnBlob(base, currentSessionId, turnId, ref);
   }
 
   /* ── this crumb's own sub-agents ───────────────────────────────── */
@@ -482,6 +489,7 @@
             {typing}
             {loadTrace}
             {loadTraceEvent}
+            {loadTraceBlob}
             onOpenSubAgent={openDelegation}
           />
         {/if}
