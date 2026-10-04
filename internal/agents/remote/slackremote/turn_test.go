@@ -206,3 +206,19 @@ func TestCleanMrkdwn(t *testing.T) {
 		}
 	}
 }
+
+func TestReopenTakesLateMessages(t *testing.T) {
+	tr := markerTracker()
+	if _, done, _ := feed(tr, Message{TS: "1.1", Text: "Answer. END RESPONSE tok1"}); done != "Answer." {
+		t.Fatalf("done = %q", done)
+	}
+	if evs, _, _ := feed(tr, Message{TS: "1.2", Text: "One more thing."}); len(evs) != 0 {
+		t.Fatalf("ended turn still reported: %+v", evs)
+	}
+	src := &Source{cur: tr}
+	src.Reopen(remote.Handle{})
+	evs, _, _ := feed(tr, Message{TS: "1.3", Text: "And a fix."})
+	if got := shown(evs); len(got) != 1 || got[0] != "Answer.\n\nAnd a fix." {
+		t.Fatalf("after reopen = %+v", evs)
+	}
+}

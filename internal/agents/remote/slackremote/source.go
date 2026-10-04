@@ -65,7 +65,7 @@ func (s *Source) Listen() []remote.ListenMode {
 	return []remote.ListenMode{remote.ListenPush, remote.ListenPull}
 }
 func (s *Source) Limits() remote.Limits {
-	return remote.Limits{Max: s.cfg.Max(), Idle: s.cfg.Idle(), Poll: s.cfg.Poll()}
+	return remote.Limits{Max: s.cfg.Max(), Idle: s.cfg.Idle(), Poll: s.cfg.Poll(), Grace: s.cfg.Grace()}
 }
 
 // ResumeID names the session by its thread.
@@ -213,6 +213,16 @@ func (s *Source) Send(ctx context.Context, turn remote.Turn) (remote.Handle, err
 	s.mu.Unlock()
 	s.deps.Router.add(t)
 	return remote.Handle{ID: threadKey(channel, threadTS), Cursor: ts}, nil
+}
+
+// Reopen lets the turn's tracker report again after it ended, for the
+// runner's grace window: a late message or edit in the same thread.
+func (s *Source) Reopen(remote.Handle) {
+	if t := s.current(); t != nil {
+		t.mu.Lock()
+		t.done, t.reopened = false, true
+		t.mu.Unlock()
+	}
 }
 
 func (s *Source) current() *tracker {

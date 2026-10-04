@@ -158,7 +158,7 @@ func waitPost(t *testing.T, f *fakeSlack) {
 }
 
 func TestMarkerEndsTurnAndIsStripped(t *testing.T) {
-	f, src, _ := setup(t, Config{ConnectorID: "c", Target: TargetDM, User: "UBOT"})
+	f, src, _ := setup(t, Config{ConnectorID: "c", Target: TargetDM, User: "UBOT", GraceSec: -1})
 	wait := start(t, src, "hello")
 	waitPost(t, f)
 	f.mu.Lock()
@@ -223,7 +223,7 @@ func TestMultiMessageAndLoopGuard(t *testing.T) {
 }
 
 func TestPushEditsStream(t *testing.T) {
-	f, src, rt := setup(t, Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1"})
+	f, src, rt := setup(t, Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1", GraceSec: -1})
 	remote.PullSteps = []time.Duration{time.Hour} // events only
 	wait := start(t, src, "q")
 	waitPost(t, f)

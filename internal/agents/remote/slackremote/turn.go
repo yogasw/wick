@@ -37,7 +37,9 @@ type tracker struct {
 	status   string
 	// What says the remote still works: ⏳ on our message, the message
 	// whose metadata set a status, the newest progress note and its label.
-	hourglass  bool
+	hourglass bool
+	// reopened: the turn ended and a grace window follows it (Reopen).
+	reopened   bool
 	statusTS   string
 	progressTS string
 	label      string
@@ -277,11 +279,24 @@ func (t *tracker) compose() (string, bool) {
 			parts = append(parts, t.msgs[k])
 		}
 	}
-	text := strings.Join(parts, "\n\n")
 	if t.token == "" {
-		return text, false
+		return strings.Join(parts, "\n\n"), false
 	}
 	marker := MarkerPrefix + t.token
+	// A marker already seen — in a message before the last, or anywhere
+	// once a grace window reopened the turn — is dropped, never shown,
+	// and does not end the turn again.
+	for i := range parts {
+		if i < len(parts)-1 || t.reopened {
+			if body := strings.TrimRight(parts[i], " \n*_`~"); strings.HasSuffix(body, marker) {
+				parts[i] = strings.TrimRight(body[:len(body)-len(marker)], " \n*_`~")
+			}
+		}
+	}
+	text := strings.Join(parts, "\n\n")
+	if t.reopened {
+		return text, false
+	}
 	// Some bots post rich text whose plain form runs the lines together,
 	// so the marker can close the last line instead of standing alone.
 	if body := strings.TrimRight(text, " \n*_`~"); strings.HasSuffix(body, marker) {

@@ -52,6 +52,15 @@ type Limits struct {
 	Max  time.Duration
 	Idle time.Duration
 	Poll time.Duration
+	// Grace > 0 keeps listening that long after a turn ended, for a
+	// message or an edit the remote sends late (a Reopener only).
+	Grace time.Duration
+}
+
+// Reopener is a Source that can keep following a finished turn's thread
+// for late messages: Reopen lets the turn's tracker report again.
+type Reopener interface {
+	Reopen(h Handle)
 }
 
 // Description is what Describe shows before an agent is added.

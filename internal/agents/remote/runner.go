@@ -104,7 +104,11 @@ type process struct {
 	once   sync.Once
 	src    Source
 	dir    string
-	id     string
+	// next is a message that arrived during a grace window (graceAfter),
+	// to send next; inputDone: msgs closed meanwhile. Loop-only.
+	next      string
+	inputDone bool
+	id        string
 }
 
 func (p *process) Stdout() io.Reader     { return p.r }
@@ -248,11 +252,22 @@ func (p *process) loop(opt provider.SpawnOptions) {
 		sid = uuid.NewString()
 	}
 	p.emit(map[string]any{"type": "system", "subtype": "init", "session_id": sid})
-	if opt.InitialMessage != "" {
-		p.turn(opt.InitialMessage)
-	}
-	for text := range p.msgs {
-		p.turn(text)
+	next := opt.InitialMessage
+	for {
+		if next == "" {
+			text, ok := <-p.msgs
+			if !ok {
+				return
+			}
+			next = text
+		}
+		cur := next
+		p.next, next = "", ""
+		p.turn(cur)
+		if p.inputDone {
+			return
+		}
+		next = p.next
 	}
 }
 
@@ -379,6 +394,9 @@ func (p *process) turn(text string) {
 				return
 			}
 			if t.handle(ev) {
+				if t.ok {
+					p.graceAfter(h, push, puller, canPull, t.out.String(), lim)
+				}
 				return
 			}
 			step = 0
@@ -400,6 +418,9 @@ func (p *process) turn(text string) {
 			}
 			for _, ev := range evs {
 				if t.handle(ev) {
+					if t.ok {
+						p.graceAfter(h, push, puller, canPull, t.out.String(), lim)
+					}
 					return
 				}
 			}
@@ -452,6 +473,97 @@ func (p *process) drain(t *turnOut, push <-chan Event) bool {
 	}
 }
 
+// followUpQuiet is how long a late change must stay still before it is
+// passed on, so a remote streaming by edits gives one follow-up, not ten.
+var followUpQuiet = 3 * time.Second
+
+// graceAfter keeps following a finished turn for lim.Grace: a message the
+// remote sends — or an edit it makes — after its turn ended is passed on
+// as a follow-up reply of its own (NoteFollowUp), the added part or the
+// whole edited reply. A new message to send ends the window at once; it
+// is kept in p.next for the loop.
+func (p *process) graceAfter(h Handle, push <-chan Event, puller Puller, canPull bool, final string, lim Limits) {
+	rs, ok := p.src.(Reopener)
+	if lim.Grace <= 0 || !ok {
+		return
+	}
+	rs.Reopen(h)
+	deadline := time.NewTimer(lim.Grace)
+	defer deadline.Stop()
+	quiet := time.NewTimer(time.Hour)
+	quiet.Stop()
+	defer quiet.Stop()
+	steps := pullSteps(lim.Poll)
+	step := 0
+	var pullC <-chan time.Time
+	var pt *time.Timer
+	if canPull {
+		pt = time.NewTimer(steps[0])
+		defer pt.Stop()
+		pullC = pt.C
+	}
+	shown, pending := final, ""
+	take := func(ev Event) bool {
+		if (ev.Kind == EventText || ev.Kind == EventDone) && ev.Text != "" && ev.Text != shown {
+			pending = ev.Text
+			quiet.Reset(followUpQuiet)
+			return true
+		}
+		return false
+	}
+	flush := func() {
+		if pending == "" || pending == shown {
+			return
+		}
+		text := pending
+		if strings.HasPrefix(pending, shown) {
+			text = strings.TrimLeft(pending[len(shown):], "\n")
+		}
+		p.emitText(text)
+		p.emitDone(text, NoteFollowUp)
+		shown, pending = pending, ""
+	}
+	for {
+		select {
+		case text, ok := <-p.msgs:
+			flush()
+			if !ok {
+				p.inputDone = true
+			} else {
+				p.next = text
+			}
+			return
+		case ev, ok := <-push:
+			if !ok {
+				push = nil
+				continue
+			}
+			take(ev)
+		case <-pullC:
+			changed := false
+			if evs, nh, err := puller.Fetch(p.ctx, h); err == nil {
+				h = nh
+				for _, ev := range evs {
+					changed = take(ev) || changed
+				}
+			}
+			if changed {
+				step = 0
+			} else if step < len(steps)-1 {
+				step++
+			}
+			pt.Reset(steps[step])
+		case <-quiet.C:
+			flush()
+		case <-deadline.C:
+			flush()
+			return
+		case <-p.ctx.Done():
+			return
+		}
+	}
+}
+
 // pullSteps is PullSteps with no step longer than max (0 = no cap).
 func pullSteps(max time.Duration) []time.Duration {
 	if max <= 0 {
@@ -475,6 +587,8 @@ type turnOut struct {
 	// busy: the remote shows it is still working (a progress note, a
 	// working status); the idle window does not run meanwhile.
 	busy bool
+	// ok: the turn ended with a reply (EventDone), not an error.
+	ok   bool
 	last time.Time
 	// full is the latest whole reply from an EventText that did not grow
 	// what was shown (an edit that rewrote it), used as the final result.
@@ -529,6 +643,7 @@ func (t *turnOut) handle(ev Event) bool {
 			final = t.full
 		}
 		t.p.emitDone(final, ev.Note)
+		t.ok = true
 		return true
 	case EventError:
 		t.p.emitError(ev.Text)

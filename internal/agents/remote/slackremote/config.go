@@ -64,9 +64,10 @@ const (
 )
 
 const (
-	DefaultIdleSec = 30
-	DefaultMaxSec  = 180
-	MaxMaxSec      = 900
+	DefaultIdleSec  = 30
+	DefaultGraceSec = 120
+	DefaultMaxSec   = 180
+	MaxMaxSec       = 900
 )
 
 // Config is one Slack remote agent's settings. It holds no secret: the
@@ -106,8 +107,11 @@ type Config struct {
 	MaxSec        int   `json:"max_sec,omitempty"`
 	// PollSec caps the wait between two reads of the thread while no
 	// event arrives. 0 = the runner's backoff (up to 10s).
-	PollSec int    `json:"poll_sec,omitempty"`
-	Usage   string `json:"usage,omitempty"`
+	PollSec int `json:"poll_sec,omitempty"`
+	// GraceSec is how long a late message or edit after a turn ended is
+	// still passed on. 0 = DefaultGraceSec, -1 = off.
+	GraceSec int    `json:"grace_sec,omitempty"`
+	Usage    string `json:"usage,omitempty"`
 
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -133,6 +137,17 @@ func (c Config) Idle() time.Duration {
 		return DefaultIdleSec * time.Second
 	}
 	return time.Duration(c.IdleSec) * time.Second
+}
+
+// Grace is the window for late messages after a turn ended.
+func (c Config) Grace() time.Duration {
+	switch {
+	case c.GraceSec < 0:
+		return 0 // off
+	case c.GraceSec == 0:
+		return DefaultGraceSec * time.Second
+	}
+	return time.Duration(c.GraceSec) * time.Second
 }
 
 // Poll is the longest wait between two reads; 0 = no cap.
@@ -210,6 +225,9 @@ func (c *Config) Normalize() error {
 	case "", UsageOnlyMe, UsageMeAndAgents, UsageByMention:
 	default:
 		return fmt.Errorf("usage must be %q, %q or %q", UsageOnlyMe, UsageMeAndAgents, UsageByMention)
+	}
+	if c.GraceSec < -1 || c.GraceSec > MaxMaxSec {
+		return fmt.Errorf("grace_sec must be between -1 (off) and %d", MaxMaxSec)
 	}
 	if c.PollSec < 0 || c.PollSec > MaxMaxSec {
 		return fmt.Errorf("poll_sec must be between 0 and %d", MaxMaxSec)

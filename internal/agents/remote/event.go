@@ -63,3 +63,7 @@ func (e Event) Terminal() bool { return e.Kind == EventDone || e.Kind == EventEr
 
 // NoteNoMarker labels a turn that went quiet without its end marker.
 const NoteNoMarker = "ended without marker"
+
+// NoteFollowUp labels a reply the remote sent or edited after its turn
+// had ended, inside the grace window.
+const NoteFollowUp = "follow-up"

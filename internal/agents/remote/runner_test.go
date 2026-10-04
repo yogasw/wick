@@ -281,3 +281,42 @@ func TestRegistry(t *testing.T) {
 	}()
 	Register(Adapter{Kind: "zz-old", Label: "Old", Listen: []ListenMode{ListenPull}, Schema: SchemaVersion + 1})
 }
+
+func (f *fake) Reopen(Handle) {}
+
+func TestGraceWindowPassesOnALateMessage(t *testing.T) {
+	old := followUpQuiet
+	followUpQuiet = 10 * time.Millisecond
+	t.Cleanup(func() { followUpQuiet = old })
+	f := &fake{listen: []ListenMode{ListenPush}, limits: Limits{Max: 5 * time.Second, Grace: 2 * time.Second}, push: make(chan Event, 8)}
+	f.push <- Event{Kind: EventText, Text: "first"}
+	f.push <- Event{Kind: EventDone, Text: "first"}
+	p, err := Spawner{Source: f}.Spawn(context.Background(), provider.SpawnOptions{InitialMessage: "hi", SessionDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Kill()
+	sc := bufio.NewScanner(p.Stdout())
+	var results []line
+	var texts []string
+	for len(results) < 2 && sc.Scan() {
+		var l line
+		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
+			t.Fatal(err)
+		}
+		switch l.Type {
+		case "assistant":
+			for _, c := range l.Message.Content {
+				texts = append(texts, c.Text)
+			}
+		case "result":
+			results = append(results, l)
+			if len(results) == 1 {
+				f.push <- Event{Kind: EventText, Text: "first\n\nlate addition"}
+			}
+		}
+	}
+	if len(results) != 2 || results[1].Result != "late addition" || results[1].RemoteNote != NoteFollowUp {
+		t.Fatalf("results=%+v texts=%q", results, texts)
+	}
+}
