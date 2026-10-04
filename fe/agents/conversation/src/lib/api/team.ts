@@ -432,6 +432,12 @@ export const markAgentRead = (base: string, id: string) =>
 export const listAgentSessions = (base: string, id: string) =>
   apiGetE<AgentSessionItem[] | null>(`${base}/api/team/agents/${enc(id)}/sessions`);
 
+/** setAgentMainChat makes sessionId the agent's main chat — where @mentions,
+    schedules to "Main chat" and opening the agent land. The old main stays
+    as an ordinary chat. */
+export const setAgentMainChat = (base: string, id: string, sessionId: string) =>
+  apiPostE<{ session_id: string }>(`${base}/api/team/agents/${enc(id)}/main`, { session_id: sessionId });
+
 /** The editable Team settings, one key per entry of the server's
     team.SettingFields. A new setting is added here, to TEAM_SETTING_KEYS,
     and to the tab that shows it (teamSettingsTabs.ts). */

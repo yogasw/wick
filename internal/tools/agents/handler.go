@@ -360,6 +360,7 @@ func Register(r tool.Router) {
 	r.POST("/api/team/agents/{id}/chat", apiTeamAgentChat)
 	r.GET("/api/team/agents/{id}/sessions", apiTeamAgentSessions)
 	r.POST("/api/team/agents/{id}/read", apiTeamAgentRead)
+	r.POST("/api/team/agents/{id}/main", apiTeamAgentSetMain)
 	r.GET("/api/team/agents/{id}/shares", apiTeamAgentShares)
 	r.POST("/api/team/agents/{id}/shares", apiTeamAgentShareAdd)
 	r.DELETE("/api/team/agents/{id}/shares/{uid}", apiTeamAgentShareRemove)

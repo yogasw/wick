@@ -270,6 +270,17 @@
     }
   }
 
+  /* A chat was pinned as the main chat. The page stays on the chat it
+     shows: the old main, open as "the main chat", is now addressed by id. */
+  function pinnedMain(id: string) {
+    const a = selected;
+    if (!a) return;
+    const prev = a.main_session_id;
+    agents = agents.map((x) => (x.id === a.id ? { ...x, main_session_id: id } : x));
+    if (route.session === id) go({ session: null }, true);
+    else if (!route.session && prev) go({ session: prev }, true);
+  }
+
   function onKey(e: KeyboardEvent) {
     if (e.key === "Escape" && route.panel) {
       e.preventDefault();
@@ -714,6 +725,7 @@
           onClose={() => openPanel(null)}
           onPick={(id, main) => go({ session: main ? null : id, panel: null })}
           onNew={newChat}
+          onPinned={pinnedMain}
         />
       {/if}
     </div>

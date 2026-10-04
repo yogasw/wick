@@ -1462,6 +1462,64 @@ func apiTeamAgentSessions(c *tool.Ctx) {
 	c.JSON(http.StatusOK, out)
 }
 
+// teamMainMu serialises main-chat moves, so an agent never ends up with
+// two main chats.
+var teamMainMu sync.Mutex
+
+// apiTeamAgentSetMain handles POST /api/team/agents/{id}/main
+// {session_id}: one of the caller's chats with the agent becomes its main
+// chat — where @mentions, schedules to "Main chat" and opening the agent
+// land. The old main chat stays as an ordinary chat.
+func apiTeamAgentSetMain(c *tool.Ctx) {
+	if !teamReady(c) {
+		return
+	}
+	p, shared, ok := loadChatTeamAgent(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(io.LimitReader(c.R.Body, 1<<16)).Decode(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	if !shared && !requireAgentProjectAccess(c, p) {
+		return
+	}
+	teamMainMu.Lock()
+	defer teamMainMu.Unlock()
+	// Only the caller's own chats with this agent: a recipient's chats
+	// are not the owner's, and the other way round.
+	chats := agentSessions(actorID(c), p.ID)
+	found := false
+	for _, s := range chats {
+		found = found || s.ID == body.SessionID
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "chat not found"})
+		return
+	}
+	// The old main is cleared before the new one is set: a failure in
+	// between leaves no main chat (the next open makes one), never two.
+	for _, want := range []bool{false, true} {
+		for _, s := range chats {
+			if (s.ID == body.SessionID) != want || s.Meta.AgentMain == want {
+				continue
+			}
+			s.Meta.AgentMain = want
+			if err := session.SaveMeta(globalLayout, s.ID, s.Meta); err != nil {
+				log.Ctx(c.Context()).Error().Err(err).Str("agent", p.ID).Msg("team agent set main chat")
+				c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			_ = globalMgr.RefreshSession(s.ID)
+		}
+	}
+	c.JSON(http.StatusOK, map[string]string{"session_id": body.SessionID})
+}
+
 // validateTeamHandle is team.ValidateHandle plus one rule the team package
 // cannot see: a handle may not equal a sub-agent role key, or "@handle"
 // would mean two different things to the mention router.
