@@ -50,6 +50,7 @@
 
   let listen = $state<SlackListen>("target");
   let marker = $state(true);
+  let mention = $state(true);
   let idleSec = $state(0);
   let maxSec = $state(0);
 
@@ -78,7 +79,7 @@
     cleanConfig({
       connector_id: connectorId, identity, account_id: accountId, target, channel, user,
       mention_id: mentionId, thread_ts: threadTs, target_name: targetName,
-      listen, marker, idle_sec: idleSec, max_sec: maxSec,
+      listen, marker, mention_target: mention, idle_sec: idleSec, max_sec: maxSec,
     }),
   );
   const where = $derived(targetLabel(cfg));
@@ -210,7 +211,7 @@
   {:else if step === 3}
     <SlackIdentityFields {base} {connectorId} bind:identity bind:accountId idPrefix="sw" />
   {:else if step === 4}
-    <SlackListenFields bind:listen bind:marker bind:idleSec bind:maxSec idPrefix="sw" />
+    <SlackListenFields bind:listen bind:marker bind:mention bind:idleSec bind:maxSec idPrefix="sw" />
   {:else}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <div>

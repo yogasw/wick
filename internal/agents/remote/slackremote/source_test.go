@@ -164,7 +164,7 @@ func TestMarkerEndsTurnAndIsStripped(t *testing.T) {
 	f.mu.Lock()
 	post := f.posts[0]
 	f.mu.Unlock()
-	if post["channel"] != "D1" || !strings.HasPrefix(post["text"], "hello\n\nWhen your reply is complete") {
+	if post["channel"] != "D1" || !strings.HasPrefix(post["text"], "<@UBOT> hello\n\nWhen your reply is complete") {
 		t.Fatalf("post = %+v", post)
 	}
 	tok := f.lastToken(t)
@@ -315,5 +315,61 @@ func TestFromEventAndRouterKeys(t *testing.T) {
 	rt.remove(tr)
 	if rt.Waiting() != 0 {
 		t.Fatal("still waiting")
+	}
+}
+
+func TestMentionTargetEveryTurn(t *testing.T) {
+	off := false
+	for name, tc := range map[string]struct {
+		cfg   Config
+		want1 string
+		want2 string
+	}{
+		// Unset = on, as for agents saved before the setting existed.
+		"dm default on": {Config{ConnectorID: "c", Target: TargetDM, User: "UBOT", Marker: &off}, "<@UBOT> q1", "<@UBOT> q2"},
+		"channel on":    {Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1", MentionID: "UBOT", Marker: &off}, "<@UBOT> q1", "<@UBOT> q2"},
+		"channel off":   {Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1", MentionID: "UBOT", Marker: &off, MentionTarget: &off}, "q1", "q2"},
+		"no target id":  {Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1", Marker: &off}, "q1", "q2"},
+		"already there": {Config{ConnectorID: "c", Target: TargetDM, User: "UBOT", Marker: &off}, "<@UBOT> q1", "<@UBOT> q2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, src, _ := setup(t, tc.cfg)
+			dir := t.TempDir()
+			first, second := "q1", "q2"
+			if name == "already there" {
+				first, second = "<@UBOT> q1", "<@UBOT> q2"
+			}
+			if _, err := src.Send(context.Background(), remote.Turn{Text: first, SessionDir: dir}); err != nil {
+				t.Fatal(err)
+			}
+			// The follow-up goes to the thread the first turn opened.
+			if _, err := src.Send(context.Background(), remote.Turn{Text: second, SessionDir: dir}); err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if len(f.posts) != 2 {
+				t.Fatalf("posts = %d", len(f.posts))
+			}
+			if f.posts[0]["text"] != tc.want1 || f.posts[1]["text"] != tc.want2 {
+				t.Fatalf("texts = %q, %q", f.posts[0]["text"], f.posts[1]["text"])
+			}
+			if f.posts[1]["thread_ts"] == "" {
+				t.Fatal("follow-up not in the thread")
+			}
+		})
+	}
+}
+
+func TestMentionTargetJSONDefault(t *testing.T) {
+	var c Config
+	if err := json.Unmarshal([]byte(`{"connector_id":"c","target":"dm","user":"U1"}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	if !c.MentionOn() {
+		t.Fatal("an agent saved before mention_target existed must default to on")
+	}
+	if err := json.Unmarshal([]byte(`{"mention_target":false}`), &c); err != nil || c.MentionOn() {
+		t.Fatalf("explicit off not kept: %v", err)
 	}
 }

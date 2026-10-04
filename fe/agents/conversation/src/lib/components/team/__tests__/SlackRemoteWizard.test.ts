@@ -54,6 +54,7 @@ describe("SlackRemoteWizard", () => {
     await fireEvent.click(nextBtn());
     await fireEvent.click(screen.getByLabelText(/Anyone in the thread/));
     await fireEvent.click(screen.getByTestId("sw-marker"));
+    expect((screen.getByTestId("sw-mention-target") as HTMLInputElement).checked).toBe(true);
     await fireEvent.input(screen.getByLabelText("Idle (seconds)"), { target: { value: "30" } });
     await fireEvent.click(nextBtn());
 
@@ -62,7 +63,7 @@ describe("SlackRemoteWizard", () => {
     await waitFor(() => expect(screen.getByTestId("sw-test-result").textContent).toContain("Replied in 640 ms"));
     const want = {
       connector_id: "slk1", identity: "bot", target: "channel", channel: "C0OPS", mention_id: "U0BOT", target_name: "#ops",
-      listen: "anyone", marker: false, idle_sec: 30, max_sec: 0,
+      listen: "anyone", marker: false, mention_target: true, idle_sec: 30, max_sec: 0,
     };
     expect(testSlack).toHaveBeenCalledWith("/tools/agents", want);
     await fireEvent.click(screen.getByRole("button", { name: "Create agent" }));

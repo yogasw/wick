@@ -87,6 +87,7 @@ export function cleanConfig(c: SlackRemoteConfig): SlackRemoteConfig {
     target: c.target,
     listen: c.listen,
     marker: c.marker ?? true,
+    mention_target: c.mention_target ?? true,
     idle_sec: c.idle_sec ?? 0,
     max_sec: c.max_sec ?? 0,
   };

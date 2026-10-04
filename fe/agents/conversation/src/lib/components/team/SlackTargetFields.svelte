@@ -89,7 +89,7 @@
         </div>
       {/if}
     </div>
-    {#if target === "channel"}<p class={hint}>The user or bot @-mentioned when a chat opens its thread.</p>{/if}
+    {#if target === "channel"}<p class={hint}>The user or bot @-mentioned in each message (see "Always @mention the target").</p>{/if}
   {/if}
 
   <div>

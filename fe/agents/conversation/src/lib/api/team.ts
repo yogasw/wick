@@ -299,6 +299,8 @@ export type SlackRemoteConfig = {
   listen: SlackListen;
   /** END RESPONSE marker; unset = on. */
   marker?: boolean;
+  /** Start every turn with @target; unset = on. */
+  mention_target?: boolean;
   /** 0 = the server default (20 s / 180 s), at most 900. */
   idle_sec?: number;
   max_sec?: number;
@@ -308,6 +310,7 @@ export type SlackRemoteConfig = {
 export type SlackRemoteInfo = SlackRemoteConfig & {
   updated_at: string;
   marker: boolean;
+  mention_target: boolean;
   idle_sec_effective: number;
   max_sec_effective: number;
   listen_effective: string;

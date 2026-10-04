@@ -4,8 +4,8 @@
   import type { SlackListen } from "../../api/team.js";
   import { LISTEN_OPTIONS, IDLE_DEFAULT, MAX_DEFAULT, SEC_CAP, secError } from "../../slackRemote.js";
 
-  type Props = { listen: SlackListen; marker: boolean; idleSec: number; maxSec: number; idPrefix: string };
-  let { listen = $bindable(), marker = $bindable(), idleSec = $bindable(), maxSec = $bindable(), idPrefix }: Props = $props();
+  type Props = { listen: SlackListen; marker: boolean; mention: boolean; idleSec: number; maxSec: number; idPrefix: string };
+  let { listen = $bindable(), marker = $bindable(), mention = $bindable(), idleSec = $bindable(), maxSec = $bindable(), idPrefix }: Props = $props();
 
   const why = $derived(secError(idleSec, maxSec));
   const label = "mb-1 block text-xs font-medium text-black-800 dark:text-black-600";
@@ -28,6 +28,13 @@
     <input type="checkbox" class="mt-1" bind:checked={marker} data-testid="{idPrefix}-marker" />
     <span>END RESPONSE marker<br /><span class="text-xs text-black-800 dark:text-black-600">
       {marker ? "Each turn asks the agent to end its reply with a marker line; the turn ends there." : "No marker: the turn ends once the reply has been quiet for the idle time."}
+    </span></span>
+  </label>
+
+  <label class="flex items-start gap-2 text-sm text-black-900 dark:text-white-100">
+    <input type="checkbox" class="mt-1" bind:checked={mention} data-testid="{idPrefix}-mention-target" />
+    <span>Always @mention the target<br /><span class="text-xs text-black-800 dark:text-black-600">
+      {mention ? "Each message starts with @target so bots that only answer mentions are triggered." : "Messages are posted as written, with no @mention."}
     </span></span>
   </label>
 

@@ -97,16 +97,33 @@ type Config struct {
 
 	Listen string `json:"listen"`
 	// Marker off = no end-marker instruction (a human on the other side).
-	Marker  *bool  `json:"marker,omitempty"`
-	IdleSec int    `json:"idle_sec,omitempty"`
-	MaxSec  int    `json:"max_sec,omitempty"`
-	Usage   string `json:"usage,omitempty"`
+	Marker *bool `json:"marker,omitempty"`
+	// MentionTarget off = turns are posted as written. Unset (agents saved
+	// before the setting existed) = on: many Slack bots answer only when
+	// @-mentioned.
+	MentionTarget *bool  `json:"mention_target,omitempty"`
+	IdleSec       int    `json:"idle_sec,omitempty"`
+	MaxSec        int    `json:"max_sec,omitempty"`
+	Usage         string `json:"usage,omitempty"`
 
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // MarkerOn reports whether turns carry the end-marker instruction.
 func (c Config) MarkerOn() bool { return c.Marker == nil || *c.Marker }
+
+// MentionOn reports whether every turn starts with an @-mention of the
+// target.
+func (c Config) MentionOn() bool { return c.MentionTarget == nil || *c.MentionTarget }
+
+// TargetID is the user or bot id turns @-mention: the DM user, or the
+// mention id of a channel or thread target. "" = none known.
+func (c Config) TargetID() string {
+	if c.Target == TargetDM {
+		return c.User
+	}
+	return c.MentionID
+}
 
 func (c Config) Idle() time.Duration {
 	if c.IdleSec <= 0 {

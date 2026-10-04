@@ -155,10 +155,12 @@ func (s *Source) place(ctx context.Context, st State) (string, string, error) {
 	}
 }
 
-// outgoing is the text posted for a turn.
-func (s *Source) outgoing(text, threadTS, token string) string {
-	if s.cfg.Target == TargetChannel && s.cfg.MentionID != "" && threadTS == "" {
-		text = "<@" + s.cfg.MentionID + "> " + text
+// outgoing is the text posted for a turn. With the mention on, every
+// turn — the first and each follow-up in the thread — starts with the
+// target's @-mention, unless the text already mentions it.
+func (s *Source) outgoing(text, token string) string {
+	if id := s.cfg.TargetID(); s.cfg.MentionOn() && id != "" && !strings.Contains(text, "<@"+id+">") {
+		text = "<@" + id + "> " + text
 	}
 	if token != "" {
 		text = strings.TrimRight(text, "\n") + "\n\n" + MarkerInstruction(token)
@@ -182,7 +184,7 @@ func (s *Source) Send(ctx context.Context, turn remote.Turn) (remote.Handle, err
 	if s.cfg.MarkerOn() {
 		token = newToken()
 	}
-	ts, err := s.deps.API.Post(ctx, channel, s.outgoing(turn.Text, threadTS, token), threadTS)
+	ts, err := s.deps.API.Post(ctx, channel, s.outgoing(turn.Text, token), threadTS)
 	if err != nil {
 		return remote.Handle{}, errors.New("Slack: " + err.Error())
 	}
@@ -320,7 +322,7 @@ func (s *Source) Test(ctx context.Context) remote.TestResult {
 	if err != nil {
 		return remote.TestResult{State: "send_failed", Error: err.Error()}
 	}
-	ts, err := s.deps.API.Post(ctx, channel, s.outgoing("ping", threadTS, ""), threadTS)
+	ts, err := s.deps.API.Post(ctx, channel, s.outgoing("ping", ""), threadTS)
 	if err != nil {
 		return remote.TestResult{State: "send_failed", Error: err.Error()}
 	}

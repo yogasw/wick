@@ -41,7 +41,7 @@ describe("slackRemote", () => {
 
   test("cleanConfig drops what the target and identity do not use", () => {
     const c = cleanConfig({ ...base, target: "channel", channel: " C1 ", user: "U1", thread_ts: "1.2", mention_id: "U9", account_id: "a1" });
-    expect(c).toEqual({ connector_id: "c1", identity: "bot", target: "channel", channel: "C1", mention_id: "U9", listen: "target", marker: true, idle_sec: 0, max_sec: 0 });
+    expect(c).toEqual({ connector_id: "c1", identity: "bot", target: "channel", channel: "C1", mention_id: "U9", listen: "target", marker: true, mention_target: true, idle_sec: 0, max_sec: 0 });
     expect(cleanConfig({ ...base, identity: "user", account_id: "a1", marker: false }).account_id).toBe("a1");
     expect(cleanConfig({ ...base, marker: false }).marker).toBe(false);
   });
@@ -57,7 +57,7 @@ describe("slackRemote", () => {
 describe("patchBody", () => {
   test("sends blanks for cleared and unused fields", () => {
     expect(patchBody({ connector_id: "c1", identity: "bot", target: "dm", user: "U1", listen: "target", mention_id: "U9" })).toEqual({
-      connector_id: "c1", identity: "bot", target: "dm", user: "U1", listen: "target", marker: true, idle_sec: 0, max_sec: 0,
+      connector_id: "c1", identity: "bot", target: "dm", user: "U1", listen: "target", marker: true, mention_target: true, idle_sec: 0, max_sec: 0,
       account_id: "", channel: "", mention_id: "", thread_ts: "", target_name: "",
     });
   });

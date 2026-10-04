@@ -4,7 +4,7 @@ import type { AgentItem, SlackRemoteInfo } from "../../api/team.js";
 
 const info: SlackRemoteInfo = {
   connector_id: "slk1", identity: "bot", target: "channel", channel: "C0OPS", target_name: "#ops", listen: "target",
-  marker: true, idle_sec: 0, max_sec: 0, updated_at: "2026-10-03T10:00:00Z",
+  marker: true, mention_target: true, idle_sec: 0, max_sec: 0, updated_at: "2026-10-03T10:00:00Z",
   idle_sec_effective: 20, max_sec_effective: 180, listen_effective: "target", usage_effective: "only_me",
   warning: "Messages you send to this agent, including other agents' output that mentions it, will be posted to #ops in Slack.",
 };
@@ -65,11 +65,15 @@ describe("AgentSettings › Slack remote", () => {
     await fireEvent.input(screen.getByLabelText("User or bot ID"), { target: { value: "U0HELP" } });
     await fireEvent.input(screen.getByLabelText("Display name"), { target: { value: "" } });
     await fireEvent.click(screen.getByTestId("ss-marker"));
+    // Always @mention starts on and can be switched off.
+    expect((screen.getByTestId("ss-mention-target") as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText(/Each message starts with @target so bots that only answer mentions are triggered/)).toBeDefined();
+    await fireEvent.click(screen.getByTestId("ss-mention-target"));
     await fireEvent.input(screen.getByLabelText("Max (seconds)"), { target: { value: "600" } });
     expect((screen.getByTestId("ss-test") as HTMLButtonElement).disabled).toBe(true);
     await fireEvent.click(screen.getByTestId("ss-save"));
     await waitFor(() => expect(update).toHaveBeenCalledWith("/tools/agents", "s1", {
-      connector_id: "slk1", identity: "bot", target: "dm", user: "U0HELP", listen: "target", marker: false, idle_sec: 0, max_sec: 600,
+      connector_id: "slk1", identity: "bot", target: "dm", user: "U0HELP", listen: "target", marker: false, mention_target: false, idle_sec: 0, max_sec: 600,
       account_id: "", channel: "", mention_id: "", thread_ts: "", target_name: "",
     }));
     expect(p.onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: "s1", slack_remote: expect.objectContaining({ target: "dm" }) }));

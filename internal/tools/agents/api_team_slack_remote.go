@@ -38,6 +38,7 @@ func isSlackRemote(p entity.AgentPersona) bool { return p.Kind == slackremote.Ki
 type SlackRemoteInfo struct {
 	slackremote.Config
 	Marker     bool               `json:"marker"`
+	Mention    bool               `json:"mention_target"`
 	IdleSecEff int                `json:"idle_sec_effective"`
 	MaxSecEff  int                `json:"max_sec_effective"`
 	ListenEff  string             `json:"listen_effective"`
@@ -49,7 +50,7 @@ type SlackRemoteInfo struct {
 func slackRemoteInfoOf(c slackremote.Config) *SlackRemoteInfo {
 	d, _ := slackremote.NewSource(c, slackremote.Deps{}).Describe(context.Background())
 	return &SlackRemoteInfo{
-		Config: c, Marker: c.MarkerOn(), IdleSecEff: int(c.Idle().Seconds()), MaxSecEff: int(c.Max().Seconds()),
+		Config: c, Marker: c.MarkerOn(), Mention: c.MentionOn(), IdleSecEff: int(c.Idle().Seconds()), MaxSecEff: int(c.Max().Seconds()),
 		ListenEff: c.EffectiveListen(), UsageEff: c.EffectiveUsage(), Warning: d.Warning,
 	}
 }
