@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -79,7 +80,9 @@ func detectMusl() bool {
 	if err != nil {
 		return false
 	}
-	out, _ := safeexec.CommandContext(ctx, ldd, "--version").CombinedOutput()
+	c := safeexec.CommandContext(ctx, ldd, "--version")
+	c.Env = envscrub.ScrubOSEnv()
+	out, _ := c.CombinedOutput()
 	return bytes.Contains(bytes.ToLower(out), []byte("musl"))
 }
 

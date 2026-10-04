@@ -5,7 +5,6 @@ package plugintest
 import (
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -13,6 +12,7 @@ import (
 
 	serviceplugin "github.com/yogasw/wick/internal/services/plugin"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // RepeaterKey is the service key of example_a2a_repeater.
@@ -28,7 +28,7 @@ func StartRepeater(t *testing.T) *serviceplugin.Host {
 	}
 	_, file, _, _ := runtime.Caller(0)
 	bin := filepath.Join(t.TempDir(), RepeaterKey)
-	cmd := exec.Command("go", "build", "-o", bin, "./service/"+RepeaterKey)
+	cmd := safeexec.Command("go", "build", "-o", bin, "./service/"+RepeaterKey)
 	root := filepath.Join(filepath.Dir(file), "..", "..", "..", "..")
 	cmd.Dir = filepath.Join(root, "plugins")
 	// plugins/ requires a released wick; only the repo go.work points it at

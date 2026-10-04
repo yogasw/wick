@@ -50,7 +50,6 @@ var inheritAllowed = map[string]string{
 
 	// Process bookkeeping: fixed tools, no caller-supplied command.
 	"internal/agents/provider/terminate_windows.go":          "taskkill",
-	"internal/agents/provider/provider.go":                   "resolves a provider binary's version",
 	"internal/agents/gate/claude_hook.go":                    "reads claude's own version/config",
 	"internal/agents/airouter/manager.go":                    "version probe; the router spawn itself is scrubbed",
 	"plugins/connector/playwright_browser/orphan_windows.go": "taskkill of an orphaned browser",

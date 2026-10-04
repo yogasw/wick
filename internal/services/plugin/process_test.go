@@ -2,13 +2,13 @@ package plugin
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"testing"
 
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // buildRepeater builds plugins/service/example_a2a_repeater (its own module)
@@ -22,7 +22,7 @@ func buildRepeater(t *testing.T) string {
 		t.Skip("process checks read /proc")
 	}
 	bin := filepath.Join(t.TempDir(), "example_a2a_repeater")
-	cmd := exec.Command("go", "build", "-o", bin, "./service/example_a2a_repeater")
+	cmd := safeexec.Command("go", "build", "-o", bin, "./service/example_a2a_repeater")
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Join(filepath.Dir(file), "..", "..", "..")
 	cmd.Dir = filepath.Join(root, "plugins")
