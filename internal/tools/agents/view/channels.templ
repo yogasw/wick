@@ -91,7 +91,7 @@ templ ChannelConfigPage(vm ChannelConfigVM) {
 			</p>
 			@integrationTestPanel(vm.Base + "/channels/test/" + vm.ChannelSlug)
 			@integrationStatusPanel(vm.Base + "/channels/" + vm.ChannelSlug + "/status")
-			@managerview.ConfigsTableFull(vm.Rows, vm.ActionBase)
+			@managerview.ConfigsTableCollapsed(vm.Rows, vm.ActionBase)
 			if vm.Docs != nil {
 				<div class="mt-8">
 					@vm.Docs
