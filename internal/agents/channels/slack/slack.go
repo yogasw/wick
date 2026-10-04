@@ -300,6 +300,11 @@ type Channel struct {
 	teamDomain     string           // Workspace subdomain extracted from resp.URL
 	connectorToken ConnectorTokenFn // optional; nil = no user-token DM support
 	wickUserIDFn   WickUserIDFn     // optional; resolves Slack user ID → wick user ID
+
+	// botTurns counts recent bot-triggered turns per session (allowBotTurn).
+	botTurnsMu sync.Mutex
+	botTurns   map[string][]time.Time
+
 	// users resolves a Slack sender's EMAIL to a wick user, and creates one
 	// when auto-register is on. Email is the only field both sides agree on,
 	// so it is the join key; wickUserIDFn above only covers senders who
@@ -1263,7 +1268,20 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 		s.observeEvent(observedEventName(outer.InnerEvent.Type, chType))
 		switch ev := outer.InnerEvent.Data.(type) {
 		case *slackevents.AppMentionEvent:
+			// Another app mentioning the agent: handleMessage decides via
+			// BotsMode whether it may run (default: ignored). Bot mentions
+			// never reach the app_mention workflow surface, as before.
 			if ev.BotID != "" {
+				s.handleMessage(ctx, &slackevents.MessageEvent{
+					Type:            ev.Type,
+					User:            ev.User,
+					BotID:           ev.BotID,
+					Text:            stripBotMention(ev.Text),
+					TimeStamp:       ev.TimeStamp,
+					ThreadTimeStamp: ev.ThreadTimeStamp,
+					Channel:         ev.Channel,
+					ChannelType:     "channel",
+				}, ev.Files)
 				return
 			}
 			cleanText := stripBotMention(ev.Text)
@@ -1324,6 +1342,12 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				s.emitWorkflow(ctx, "message", botPayload)
 				if ev.ThreadTimeStamp == "" || ev.ThreadTimeStamp == ev.TimeStamp {
 					s.emitWorkflow(ctx, "thread_started", botPayload)
+				}
+				// A DM from a whitelisted bot reaches the agent here. In a
+				// channel only the app_mention path dispatches a bot, and
+				// the 🤖 auto-reply switch never does (bot loop guard).
+				if ev.ChannelType == "im" || ev.ChannelType == "mpim" {
+					s.handleMessage(ctx, ev, nil)
 				}
 				return
 			}
@@ -1934,11 +1958,19 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		Msg("incoming message")
 
 	cfg := s.snapshot()
-	groupIDs, err := s.resolveUserGroups(ev.User)
-	if err != nil {
-		log.Warn().Str("channel", "slack").Str("user", ev.User).Err(err).Msg("resolve groups failed; falling back to empty")
-	}
-	if ok, reason := s.allowedCfg(cfg, ev.User, groupIDs, ev.Channel); !ok {
+	fromBot := isFromBot(ev)
+	if fromBot {
+		// Bots are refused silently: no 🚫 and no DM, so two apps can never
+		// argue with each other through access-denied notices.
+		if ok, reason := s.allowedBotCfg(cfg, ev, ev.Channel); !ok {
+			log.Debug().Str("channel", "slack").Str("user", ev.User).Str("bot_id", ev.BotID).
+				Str("slack_channel", ev.Channel).Str("reason", reason).Msg("bot message ignored")
+			return
+		}
+		if !s.allowBotTurn(s.sessionKey(threadTS), time.Now()) {
+			return
+		}
+	} else if ok, reason, groupIDs := s.allowedSender(cfg, ev.User, ev.Channel); !ok {
 		log.Warn().Str("channel", "slack").
 			Str("user", ev.User).
 			Str("slack_channel", ev.Channel).
@@ -1961,14 +1993,18 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	// reach — so a sender we cannot map has to be refused BEFORE a spawn,
 	// not after. Running the turn anyway would execute it under the channel
 	// owner's access, which is exactly the confusion this prevents.
-	if msg := s.checkSenderIdentity(ev.User); msg != "" {
-		log.Warn().Str("channel", "slack").
-			Str("user", ev.User).
-			Str("slack_channel", ev.Channel).
-			Msg("identity unresolved, refusing message")
-		s.setReaction(reactionBlocked, ev.Channel, ev.TimeStamp, "")
-		s.postReply(ev.Channel, threadTS, msg)
-		return
+	// A whitelisted bot has no wick account behind it, so it is not
+	// mapped: its turns run as the channel owner (see callerUserID below).
+	if !fromBot {
+		if msg := s.checkSenderIdentity(ev.User); msg != "" {
+			log.Warn().Str("channel", "slack").
+				Str("user", ev.User).
+				Str("slack_channel", ev.Channel).
+				Msg("identity unresolved, refusing message")
+			s.setReaction(reactionBlocked, ev.Channel, ev.TimeStamp, "")
+			s.postReply(ev.Channel, threadTS, msg)
+			return
+		}
 	}
 
 	meta := agentchannels.ParseMeta(ev.Text)
@@ -2091,7 +2127,13 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	// once an owner exists, so the repeat is idempotent and it also backfills
 	// threads created before per-user identity shipped.
 	callerUserID := ""
-	if wickUserID, ok := s.resolveSessionOwner(ev.User); ok {
+	// A bot is never resolved (that could auto-register it as a wick user):
+	// it falls through to the channel owner, or is refused when there is none.
+	wickUserID, resolved := "", false
+	if !fromBot {
+		wickUserID, resolved = s.resolveSessionOwner(ev.User)
+	}
+	if resolved {
 		callerUserID = wickUserID
 	} else if s.ownerUserID != "" {
 		callerUserID = s.ownerUserID
@@ -3360,6 +3402,11 @@ func (s *Channel) handleInteraction(ctx context.Context, cb slackgo.InteractionC
 //   - admins: workspace admins / owners (via users.info).
 //   - custom: GateApproverUsers list OR a user group in GateApproverGroups.
 func (s *Channel) approverAllowed(cfg agentconfig.SlackChannelConfig, userID string) bool {
+	// Gates are human-only: a bot let in through BotsMode may trigger a
+	// turn but never approves one, and neither does this instance's bot.
+	if s.isBotUser(userID) || pickerHas(cfg.AllowedBots, userID) {
+		return false
+	}
 	switch cfg.GateApprovers {
 	case "trigger_users", "":
 		groupIDs, _ := s.resolveUserGroups(userID)
@@ -3377,7 +3424,7 @@ func (s *Channel) approverAllowed(cfg agentconfig.SlackChannelConfig, userID str
 			log.Debug().Str("channel", "slack").Err(err).Msg("users.info failed during approver check")
 			return false
 		}
-		return info.IsAdmin || info.IsOwner || info.IsPrimaryOwner
+		return !info.IsBot && (info.IsAdmin || info.IsOwner || info.IsPrimaryOwner)
 	case "custom":
 		if pickerHas(cfg.GateApproverUsers, userID) {
 			return true
@@ -3694,6 +3741,17 @@ func (s *Channel) allowedCfg(cfg agentconfig.SlackChannelConfig, userID string, 
 		return false, "channels"
 	}
 	return true, ""
+}
+
+// allowedSender resolves the sender's user groups and runs allowedCfg. The
+// groups are returned for logging.
+func (s *Channel) allowedSender(cfg agentconfig.SlackChannelConfig, userID, channelID string) (bool, string, []string) {
+	groupIDs, err := s.resolveUserGroups(userID)
+	if err != nil {
+		log.Warn().Str("channel", "slack").Str("user", userID).Err(err).Msg("resolve groups failed; falling back to empty")
+	}
+	ok, reason := s.allowedCfg(cfg, userID, groupIDs, channelID)
+	return ok, reason, groupIDs
 }
 
 // notifyAccessDenied DMs the user who was blocked, explaining why, so the

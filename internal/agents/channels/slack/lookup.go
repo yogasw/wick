@@ -38,6 +38,7 @@ var (
 // Lookup satisfies channels.LookupProvider. Supported sources:
 //   - "slack.users"      → workspace users (skips bots / deleted)
 //   - "slack.usergroups" → user groups (matches name + handle)
+//   - "slack.bots"       → bot / app users (users.list is_bot, not deleted)
 //   - "slack.channels"   → public + private channels this bot is a MEMBER of
 func (s *Channel) Lookup(source, query string) ([]agentchannels.LookupItem, error) {
 	s.cfgMu.Lock()
@@ -74,6 +75,8 @@ func (s *Channel) Lookup(source, query string) ([]agentchannels.LookupItem, erro
 		}
 	case "slack.usergroups":
 		items, err = lookupSlackUserGroups(api, q)
+	case "slack.bots":
+		items, err = lookupSlackBots(api, q)
 	case "slack.channels":
 		// No assistant.search.context here: it searches the whole
 		// workspace, which is exactly what this source must NOT offer.
@@ -148,6 +151,38 @@ func lookupSlackUsers(api *slackgo.Client, q string) ([]agentchannels.LookupItem
 			name = u.Name
 		}
 		if q != "" && !containsFold(name, q) && !containsFold(u.Name, q) && !containsFold(u.ID, q) {
+			continue
+		}
+		out = append(out, agentchannels.LookupItem{ID: u.ID, Name: name})
+		if len(out) >= lookupMaxResults {
+			break
+		}
+	}
+	return out, nil
+}
+
+// lookupSlackBots lists the workspace's bot users for the BotsMode allow
+// list. The item id is the bot's user id (U...), which is what a bot's
+// message event carries in its user field. Slackbot is skipped: it is a
+// bot user in users.list but never a meaningful trigger.
+func lookupSlackBots(api *slackgo.Client, q string) ([]agentchannels.LookupItem, error) {
+	users, err := api.GetUsers()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agentchannels.LookupItem, 0, lookupMaxResults)
+	for _, u := range users {
+		if u.Deleted || !u.IsBot || u.ID == "USLACKBOT" {
+			continue
+		}
+		name := u.RealName
+		if name == "" {
+			name = u.Profile.DisplayName
+		}
+		if name == "" {
+			name = u.Name
+		}
+		if q != "" && !containsFold(name, q) && !containsFold(u.Name, q) && !containsFold(u.ID, q) && !containsFold(u.Profile.BotID, q) {
 			continue
 		}
 		out = append(out, agentchannels.LookupItem{ID: u.ID, Name: name})
