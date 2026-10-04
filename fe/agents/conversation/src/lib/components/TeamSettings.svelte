@@ -14,6 +14,7 @@
   } from "../api/team.js";
   import { TEAM_SETTINGS_TABS, invalidReason, isTextKey, type TeamSettingsTab } from "../teamSettingsTabs.js";
   import { setIdleAnimations } from "@wick-fe/common-avatar";
+  import { AUTOSAVE_DELAY_MS, TEXT_DELAY_MS, SLOW_SAVE_MS, patchKey } from "../settingsAutosave.js";
 
   type Props = {
     base: string;
@@ -34,6 +35,7 @@
   let error = $state("");
   let status = $state<"idle" | "saving" | "saved" | "error">("idle");
   let saving = false;
+  let slow = $state(false);
   let failedKey = $state("");
 
   const pick = (s: TeamSettings): TeamSettingValues =>
@@ -66,10 +68,10 @@
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
-    const key = JSON.stringify(patch);
+    const key = patchKey(patch);
     if (!dirty || invalid || key === failedKey) return;
     clearTimeout(timer);
-    timer = setTimeout(() => void save(), Object.keys(patch).some(isTextKey) ? 800 : 0);
+    timer = setTimeout(() => void save(), Object.keys(patch).some(isTextKey) ? TEXT_DELAY_MS : AUTOSAVE_DELAY_MS);
     return () => clearTimeout(timer);
   });
   /** flush sends a pending text edit now (field blur). */
@@ -88,17 +90,21 @@
     const sent = $state.snapshot(patch) as TeamSettingsWrite;
     saving = true;
     status = "saving";
+    slow = false;
+    const slowTimer = setTimeout(() => (slow = true), SLOW_SAVE_MS);
     error = "";
     try {
       saved = await runApi(saveTeamSettings(base, sent));
       failedKey = "";
       status = "saved";
     } catch (e) {
-      failedKey = JSON.stringify(sent);
+      failedKey = patchKey(sent);
       error = e instanceof Error ? e.message : String(e);
       status = "error";
     } finally {
+      clearTimeout(slowTimer);
       saving = false;
+      slow = false;
     }
   }
 
@@ -136,10 +142,10 @@
   <span class="mr-auto flex items-center gap-2 text-xs" aria-live="polite" data-testid="autosave-status">
     {#if invalid}
       <span class="text-neg-400">Not saved — {invalid}</span>
-    {:else if status === "saving" || (dirty && JSON.stringify(patch) !== failedKey)}
-      <span class="text-black-800 dark:text-black-600">Saving…</span>
+    {:else if status === "saving" || (dirty && patchKey(patch) !== failedKey)}
+      <span class="text-black-800 dark:text-black-600">{slow ? "Still saving…" : "Saving…"}</span>
     {:else if status === "error"}
-      <span class="text-neg-400">Not saved</span><span aria-hidden="true" class="text-black-700">·</span>
+      <span class="text-neg-400">Couldn't save</span><span aria-hidden="true" class="text-black-700">·</span>
       <button type="button" class="font-medium text-green-600 hover:underline" onclick={retry}>Retry</button>
     {:else if status === "saved"}
       <span class="text-black-800 dark:text-black-600">Saved ✓</span>

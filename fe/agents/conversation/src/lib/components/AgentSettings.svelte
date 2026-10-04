@@ -30,6 +30,7 @@
   import AgentSkillsTab from "./AgentSkillsTab.svelte";
   import AgentSessionTab from "./AgentSessionTab.svelte";
   import { nativeToolsOf } from "../nativeTools.js";
+  import { AUTOSAVE_DELAY_MS, TEXT_DELAY_MS, SLOW_SAVE_MS, patchKey, sameValue } from "../settingsAutosave.js";
   import { MAX_PROMPTS, promptsToSave } from "../suggestedPrompts.js";
   import type { BashRule } from "../api/team.js";
   import RemoteAgentPanel from "./team/RemoteAgentPanel.svelte";
@@ -107,6 +108,7 @@
   let saving = $state(false);
   let error = $state("");
   let status = $state<"" | "saving" | "saved" | "error">("");
+  let slow = $state(false);
   // failedKey is the patch the server last refused: it is not re-sent on
   // its own (that would loop), only after another edit or Retry.
   let failedKey = $state("");
@@ -210,9 +212,9 @@
       p.provider = provider;
       p.model = model;
     }
-    if (JSON.stringify(d.features) !== JSON.stringify(saved.features)) p.features = { ...d.features };
-    if (JSON.stringify(d.avatar) !== JSON.stringify(saved.avatar)) p.avatar = { ...d.avatar };
-    if (JSON.stringify(d.grants) !== JSON.stringify(saved.allowed_connectors ?? [])) {
+    if (!sameValue(d.features, saved.features)) p.features = { ...d.features };
+    if (!sameValue(d.avatar, saved.avatar)) p.avatar = { ...d.avatar };
+    if (!sameValue(d.grants, saved.allowed_connectors ?? [])) {
       p.allowed_connectors = $state.snapshot(d.grants) as ConnectorGrant[];
     }
     if (d.include_new_connectors !== saved.include_new_connectors) p.include_new_connectors = d.include_new_connectors;
@@ -221,16 +223,16 @@
     if (d.allow_provider_switch !== !!saved.allow_provider_switch) p.allow_provider_switch = d.allow_provider_switch;
     if (d.use_global_prompt !== !!saved.use_global_prompt) p.use_global_prompt = d.use_global_prompt;
     if (d.mention_from !== mentionFromOf(saved.mention_from)) p.mention_from = d.mention_from;
-    if (JSON.stringify(d.mention_allow) !== JSON.stringify(saved.mention_allow ?? [])) p.mention_allow = [...d.mention_allow];
+    if (!sameValue(d.mention_allow, saved.mention_allow ?? [])) p.mention_allow = [...d.mention_allow];
     if (clampHops(d.max_hops) !== clampHops(saved.max_hops)) p.max_hops = clampHops(d.max_hops);
     if (d.manage_agents !== (saved.manage_agents ?? saved.is_captain)) p.manage_agents = d.manage_agents;
-    if (JSON.stringify(d.captain_can) !== JSON.stringify(captainCanOf(saved.captain_can))) p.captain_can = { ...d.captain_can };
-    if (JSON.stringify(d.native_tools) !== JSON.stringify(nativeToolsOf(saved.allowed_native_tools))) p.allowed_native_tools = [...d.native_tools];
-    if (JSON.stringify(d.bash_rules) !== JSON.stringify(saved.bash_rules ?? [])) p.bash_rules = d.bash_rules.map((r) => ({ ...r }));
-    if (JSON.stringify(d.disabled_skills) !== JSON.stringify(saved.disabled_skills ?? [])) p.disabled_skills = [...d.disabled_skills];
+    if (!sameValue(d.captain_can, captainCanOf(saved.captain_can))) p.captain_can = { ...d.captain_can };
+    if (!sameValue(d.native_tools, nativeToolsOf(saved.allowed_native_tools))) p.allowed_native_tools = [...d.native_tools];
+    if (!sameValue(d.bash_rules, saved.bash_rules ?? [])) p.bash_rules = d.bash_rules.map((r) => ({ ...r }));
+    if (!sameValue(d.disabled_skills, saved.disabled_skills ?? [])) p.disabled_skills = [...d.disabled_skills];
     {
       const prompts = promptsToSave(d.suggested_prompts);
-      if (JSON.stringify(prompts) !== JSON.stringify(saved.suggested_prompts ?? [])) p.suggested_prompts = prompts;
+      if (!sameValue(prompts, saved.suggested_prompts ?? [])) p.suggested_prompts = prompts;
     }
     return p;
   });
@@ -240,11 +242,13 @@
   const TEXT_KEYS = ["handle", "name", "tagline", "description", "system_prompt"];
   let timer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
-    const key = JSON.stringify(patch);
+    const key = patchKey(patch);
     if (!dirty || !handleOk || key === failedKey) return;
     clearTimeout(timer);
+    // A burst of clicks becomes one PATCH carrying the last state; a PATCH
+    // already in flight is followed by one more once it settles.
     const typing = Object.keys(patch).some((k) => TEXT_KEYS.includes(k));
-    timer = setTimeout(() => void save(), typing ? 800 : 0);
+    timer = setTimeout(() => void save(), typing ? TEXT_DELAY_MS : AUTOSAVE_DELAY_MS);
     return () => clearTimeout(timer);
   });
   /** flush sends a pending text edit now (field blur). */
@@ -262,9 +266,11 @@
     if (!dirty || !handleOk) return;
     if (saving) return; // the effect re-fires once the in-flight PATCH settles
     const sent = $state.snapshot(patch) as AgentWrite;
-    const key = JSON.stringify(sent);
+    const key = patchKey(sent);
     saving = true;
     status = "saving";
+    slow = false;
+    const slowTimer = setTimeout(() => (slow = true), SLOW_SAVE_MS);
     error = "";
     try {
       const next = await runApi(updateAgent(base, agent.id, sent));
@@ -288,7 +294,9 @@
         error = view === "access" ? "" : "The server rejected some access — see the Access tab.";
       }
     } finally {
+      clearTimeout(slowTimer);
       saving = false;
+      slow = false;
     }
   }
 
@@ -718,10 +726,10 @@
 
 <div class="flex items-center justify-end gap-2 border-t border-white-300 px-6 py-4 dark:border-navy-600">
   <span class="mr-auto flex items-center gap-2 text-xs" aria-live="polite" data-testid="autosave-status">
-    {#if status === "saving" || (dirty && handleOk && JSON.stringify(patch) !== failedKey)}
-      <span class="text-black-800 dark:text-black-600">Saving…</span>
+    {#if status === "saving" || (dirty && handleOk && patchKey(patch) !== failedKey)}
+      <span class="text-black-800 dark:text-black-600">{slow ? "Still saving…" : "Saving…"}</span>
     {:else if status === "error"}
-      <span class="text-neg-400">Not saved</span><span aria-hidden="true" class="text-black-700">·</span>
+      <span class="text-neg-400">Couldn't save</span><span aria-hidden="true" class="text-black-700">·</span>
       <button type="button" class="font-medium text-green-600 hover:underline" onclick={retry}>Retry</button>
     {:else if !handleOk}
       <span class="text-neg-400">Not saved — fix the handle</span>
