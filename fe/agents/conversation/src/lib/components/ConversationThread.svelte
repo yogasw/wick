@@ -160,6 +160,10 @@
   // progress instead of a stacked card per call.
   const liveMergedTodoItems = $derived(mergeTodoItemsWithSteps(live?.blocks ?? []));
   const liveNonTodoBlocks = $derived(stripTodoBlocks(live?.blocks ?? []));
+  /* The working indicator is on from a turn's start to its end: while
+     typing is up (hide debounced) or the live turn has not been committed.
+     A todo card carries the activity instead when there is one. */
+  const indicatorOn = $derived((typingShown || live !== null) && liveMergedTodoItems.length === 0);
   const liveTodoGoal = $derived(latestTodoGoal(live?.blocks ?? []));
 
   function findScrollParent(el: HTMLElement | null): HTMLElement | null {
@@ -274,9 +278,51 @@
     </div>
   {/if}
 
-  {#if live}
+  {#if live || indicatorOn}
     <div class="flex justify-start">
       <div class="flex flex-col gap-1.5 max-w-[92%] min-w-0">
+        {#if indicatorOn}
+          <!-- Top of the turn, right under the person's message: content
+               grows below it, so it never moves, and it stays from the
+               turn's start to its end — only its label changes. With a todo
+               card the activity shows inside the card instead. -->
+        <div class="flex justify-start items-end">
+          <!-- Amber while compacting: the same bubble in the same place would
+               read as a normal wait, and this one is not — turns are being
+               replaced by a summary while it spins. -->
+          <div
+            class={"rounded-2xl rounded-tl-sm border px-4 py-2.5 " +
+              (compacting
+                ? "border-amber-500/40 bg-amber-500/10"
+                : "border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800")}
+          >
+            <div
+              class={"flex items-center gap-2 text-xs " +
+                (compacting
+                  ? "text-amber-700 dark:text-amber-300"
+                  : "text-black-600 dark:text-black-700")}
+            >
+              <!-- The agent's own avatar, in its working pose, is the typing
+                   indicator in the Team app. A compaction keeps the amber
+                   spinner: that wait is not the agent answering. -->
+              {#if agent && !compacting}
+                <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={20} working={true} />
+              {:else}
+              <svg
+                class={"h-3 w-3 shrink-0 animate-spin " + (compacting ? "text-amber-500" : "text-green-500")}
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+              >
+                <path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path>
+              </svg>
+              {/if}
+              <span class="italic" data-testid="typing-label">{typingLabelShown ?? "thinking…"}</span>
+            </div>
+          </div>
+        </div>
+        {/if}
         {#if liveMergedTodoItems.length > 0 || liveTodoGoal}
           <!-- Always shown regardless of liveTraceOpen — the todo card is
                task PROGRESS, not raw trace detail, so collapsing the trace
@@ -290,7 +336,7 @@
             currentActivity={activityLabel}
           />
         {/if}
-        {#if live.blocks.length > 0}
+        {#if live && live.blocks.length > 0}
           <button
             type="button"
             data-live-trace-toggle
@@ -320,53 +366,11 @@
             </div>
           {/if}
         {/if}
-        {#if live.text}
+        {#if live?.text}
           <!-- renderLive owns innerHTML (no {@html}) so streaming tokens don't
                wipe already-rendered diagrams — prevents text↔image flicker. -->
           <div use:renderLive={live.text} class="rounded-2xl rounded-tl-sm bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm"></div>
         {/if}
-      </div>
-    </div>
-  {/if}
-
-  {#if typingShown && liveMergedTodoItems.length === 0}
-    <!-- Floating "what's running" bubble is now redundant WHEN a todo card
-         exists (its activity shows inline instead) — only render this
-         fallback when there's no todo card to attach it to. -->
-    <div class="flex justify-start items-end">
-      <!-- Amber while compacting: the same bubble in the same place would
-           read as a normal wait, and this one is not — turns are being
-           replaced by a summary while it spins. -->
-      <div
-        class={"rounded-2xl rounded-tl-sm border px-4 py-2.5 " +
-          (compacting
-            ? "border-amber-500/40 bg-amber-500/10"
-            : "border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800")}
-      >
-        <div
-          class={"flex items-center gap-2 text-xs " +
-            (compacting
-              ? "text-amber-700 dark:text-amber-300"
-              : "text-black-600 dark:text-black-700")}
-        >
-          <!-- The agent's own avatar, in its working pose, is the typing
-               indicator in the Team app. A compaction keeps the amber
-               spinner: that wait is not the agent answering. -->
-          {#if agent && !compacting}
-            <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={20} working={true} />
-          {:else}
-          <svg
-            class={"h-3 w-3 shrink-0 animate-spin " + (compacting ? "text-amber-500" : "text-green-500")}
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-          >
-            <path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path>
-          </svg>
-          {/if}
-          <span class="italic" data-testid="typing-label">{typingLabelShown}</span>
-        </div>
       </div>
     </div>
   {/if}

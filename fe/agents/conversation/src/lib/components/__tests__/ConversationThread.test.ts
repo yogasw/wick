@@ -257,3 +257,23 @@ describe("ConversationThread working indicator", () => {
     }
   });
 });
+
+describe("ConversationThread working indicator placement", () => {
+  test("sits above the turn's trace and stays while the live turn runs", async () => {
+    vi.useFakeTimers();
+    try {
+      const live = { text: "", blocks: [{ kind: "tool", tool_use_id: "u1", name: "shell", input: "{}", status: "running" }] } as unknown as LiveTurn;
+      const props = (typing: TypingState) => ({ turns: [], live, typing, loading: false });
+      const { rerender, container } = render(ConversationThread, { props: props({ active: true, substate: "thinking" }) });
+      const label = screen.getByTestId("typing-label");
+      const toggle = container.querySelector("[data-live-trace-toggle]")!;
+      expect(label.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      // Typing drops with no text yet: the live turn is still running.
+      await rerender(props({ active: false }));
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(screen.getByTestId("typing-label")).toBe(label);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
