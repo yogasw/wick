@@ -19,6 +19,8 @@ import (
 	"github.com/yogasw/wick/internal/jobs"
 	"github.com/yogasw/wick/pkg/job"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // DefaultTimeout bounds one plugin run; WICK_JOB_PLUGIN_TIMEOUT (a Go
@@ -142,7 +144,9 @@ func buildModule(f connplugin.Found, spawn spawnFn, limit time.Duration) job.Mod
 		result, err := conn.Run(ctx, TriggerScheduled, cfg, func(line string) {
 			lines = append(lines, line)
 		})
-		if ctx.Err() == context.DeadlineExceeded {
+		// gRPC enforces the same deadline with its own timer, so the call
+		// can fail with DeadlineExceeded a moment before ctx.Err() is set.
+		if ctx.Err() == context.DeadlineExceeded || status.Code(err) == codes.DeadlineExceeded {
 			err = fmt.Errorf("job plugin %s timed out after %s", meta.Key, limit)
 		}
 		return withLog(result, version, lines), err
