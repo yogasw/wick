@@ -93,8 +93,12 @@ var (
 	ErrUnknownContext = errors.New("unknown context_id — omit it to start a new exchange")
 	// ErrNewChatUnsupported refuses new_chat where Turns cannot open one.
 	ErrNewChatUnsupported = errors.New("new_chat is not available here — send without it to reach the main chat")
-	// ErrUnknownTask means the task id was never issued to this caller.
-	ErrUnknownTask = errors.New("unknown task id")
+	// ErrUnknownTask means the task id is not known to this caller: never
+	// issued to it, or lost when wick restarted (tasks live in memory).
+	ErrUnknownTask = errors.New("unknown task id — never issued to you, or lost when wick restarted (tasks are kept in memory only)")
+	// ErrTaskExpired is an ErrUnknownTask for a task this caller did send
+	// but whose record was cleaned up (TaskTTL after it settled).
+	ErrTaskExpired = fmt.Errorf("%w: this task expired — its result is kept 1 hour after it settles; its reply was already delivered into the conversation that sent it", ErrUnknownTask)
 	// ErrMentionsOff refuses a turn the target's mention setting does not
 	// take from the caller (Peer.AcceptsFrom).
 	ErrMentionsOff = errors.New("that agent does not take turns from you — tell the user instead")
@@ -276,6 +280,9 @@ type Hub struct {
 	handlers map[string]a2asrv.RequestHandler
 	stores   map[string]*genStore
 	tasks    map[a2a.TaskID]*taskRef
+	// gone notes the caller of each task the janitor dropped, for goneTTL,
+	// so GetTask can say "expired" rather than "never issued".
+	gone     map[a2a.TaskID]goneTask
 	contexts map[string]*contextState
 	// inflight holds every inbound task an agent is answering right now,
 	// per task: two messages to one agent run side by side and neither
@@ -368,6 +375,7 @@ func NewHub(dir Directory, turns Turns, notify Notifier) *Hub {
 		handlers: map[string]a2asrv.RequestHandler{},
 		stores:   map[string]*genStore{},
 		tasks:    map[a2a.TaskID]*taskRef{},
+		gone:     map[a2a.TaskID]goneTask{},
 		contexts: map[string]*contextState{},
 		inflight: map[string]map[a2a.TaskID]inbound{},
 		last:     map[string]inbound{},
@@ -641,6 +649,15 @@ func (h *Hub) inboundOf(callerID, callerSession string) (inbound, bool) {
 	return deepest(func(inbound) bool { return true })
 }
 
+// goneTTL is how long a dropped task is still known as expired.
+const goneTTL = 24 * time.Hour
+
+// goneTask is a dropped task's caller and when it was dropped.
+type goneTask struct {
+	caller string
+	at     time.Time
+}
+
 // pruneLocked is the janitor: settled tasks and idle contexts older than
 // TaskTTL, reply exchanges older than LastTTL, tasks past MaxTasks
 // (oldest first), and the task stores' old generation. Runs from Send at
@@ -655,7 +672,12 @@ func (h *Hub) pruneLocked() {
 		// A task nobody finished is still dropped after 2×TTL: its turn
 		// is long gone, and the ref would otherwise never leave.
 		if age := now.Sub(t.touched); (t.finished && age > TaskTTL) || age > 2*TaskTTL {
-			delete(h.tasks, id)
+			h.dropLocked(id, now)
+		}
+	}
+	for id, g := range h.gone {
+		if now.Sub(g.at) > goneTTL || len(h.gone) > 8*MaxTasks {
+			delete(h.gone, id)
 		}
 	}
 	if extra := len(h.tasks) - MaxTasks; extra > 0 {
@@ -665,7 +687,7 @@ func (h *Hub) pruneLocked() {
 		}
 		sort.Slice(ids, func(i, j int) bool { return h.tasks[ids[i]].touched.Before(h.tasks[ids[j]].touched) })
 		for _, id := range ids[:extra] {
-			delete(h.tasks, id)
+			h.dropLocked(id, now)
 		}
 	}
 	for id, c := range h.contexts {
@@ -681,6 +703,22 @@ func (h *Hub) pruneLocked() {
 	for _, st := range h.stores {
 		st.rotate(now, TaskTTL)
 	}
+}
+
+// dropLocked forgets task id, noting it as gone.
+func (h *Hub) dropLocked(id a2a.TaskID, now time.Time) {
+	if t := h.tasks[id]; t != nil && h.gone != nil {
+		h.gone[id] = goneTask{caller: t.callerAgentID, at: now}
+	}
+	delete(h.tasks, id)
+}
+
+// unknownLocked is the error of a task id caller has no record of.
+func (h *Hub) unknownLocked(callerAgentID string, id a2a.TaskID) error {
+	if g, ok := h.gone[id]; ok && g.caller == callerAgentID && callerAgentID != "" {
+		return ErrTaskExpired
+	}
+	return ErrUnknownTask
 }
 
 // chatFor is the session target answers contextID in: a new chat when
@@ -730,7 +768,7 @@ func (h *Hub) wait(ctx context.Context, cl *a2aclient.Client, id a2a.TaskID, con
 		if ref == nil {
 			// Pruned under a caller that waited past TaskTTL.
 			h.mu.Unlock()
-			return nil, ErrUnknownTask
+			return nil, ErrTaskExpired
 		}
 		if ref.finished {
 			ref.delivered = true
@@ -765,8 +803,9 @@ func (h *Hub) GetTask(ctx context.Context, callerAgentID, taskID string) (*Resul
 	h.mu.Lock()
 	ref, ok := h.tasks[a2a.TaskID(taskID)]
 	if !ok || ref.callerAgentID != callerAgentID || callerAgentID == "" {
+		err := h.unknownLocked(callerAgentID, a2a.TaskID(taskID))
 		h.mu.Unlock()
-		return nil, ErrUnknownTask
+		return nil, err
 	}
 	agentID, to := ref.agentID, ref.to
 	if ref.finished {

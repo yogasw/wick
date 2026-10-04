@@ -1268,9 +1268,13 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 	switch outer.Type {
 	case slackevents.CallbackEvent:
 		chType := ""
+		// remoteOwned: a Slack remote agent's reply (or late reply) in its
+		// turn's thread. It belongs to that turn, never to an agent here
+		// as a new message.
+		remoteOwned := false
 		if m, ok := outer.InnerEvent.Data.(*slackevents.MessageEvent); ok {
 			chType = m.ChannelType
-			routeToRemoteTurns(m)
+			remoteOwned = routeToRemoteTurns(m)
 		}
 		s.observeEvent(observedEventName(outer.InnerEvent.Type, chType))
 		switch ev := outer.InnerEvent.Data.(type) {
@@ -1279,6 +1283,11 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 			// BotsMode whether it may run (default: ignored). Bot mentions
 			// never reach the app_mention workflow surface, as before.
 			if ev.BotID != "" {
+				if slackremote.Shared.Owns(slackremote.Message{
+					Channel: ev.Channel, TS: ev.TimeStamp, ThreadTS: ev.ThreadTimeStamp, User: ev.User, BotID: ev.BotID,
+				}) {
+					return
+				}
 				s.handleMessage(ctx, &slackevents.MessageEvent{
 					Type:            ev.Type,
 					User:            ev.User,
@@ -1397,6 +1406,9 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 			// auto-reply thread that MessageEvent would otherwise pass the gate
 			// below and dispatch the SAME message a second time — so skip any
 			// channel message that mentions the bot; AppMentionEvent owns it.
+			if remoteOwned {
+				return
+			}
 			if ev.ChannelType != "im" && ev.ChannelType != "mpim" {
 				if s.mentionsBot(ev.Text) {
 					return
@@ -1421,8 +1433,10 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 		case *slackevents.AssistantThreadStartedEvent:
 			s.handleAssistantThreadStarted(ctx, ev)
 		case *slackevents.ReactionAddedEvent:
+			slackremote.Shared.DispatchReaction(ev.Item.Channel, ev.Item.Timestamp, ev.User, ev.Reaction, true)
 			s.handleReactionAdded(ctx, ev)
 		case *slackevents.ReactionRemovedEvent:
+			slackremote.Shared.DispatchReaction(ev.Item.Channel, ev.Item.Timestamp, ev.User, ev.Reaction, false)
 			s.handleReactionRemoved(ev)
 		}
 	}
@@ -1887,11 +1901,10 @@ func (s *Channel) HTTPHandler() http.Handler {
 
 // routeToRemoteTurns hands a message event to the turns of Slack remote
 // agents waiting in that thread — the shared listener of plan 6.2c, so a
-// remote agent opens no connection of its own. A no-op while none waits.
-func routeToRemoteTurns(ev *slackevents.MessageEvent) {
-	if slackremote.Shared.Waiting() == 0 {
-		return
-	}
+// remote agent opens no connection of its own. True when the message is
+// such a remote's own, in a thread its turns use: the caller then leaves
+// it alone.
+func routeToRemoteTurns(ev *slackevents.MessageEvent) bool {
 	var edited *slackremote.Message
 	if ev.Message != nil {
 		edited = &slackremote.Message{
@@ -1905,9 +1918,14 @@ func routeToRemoteTurns(ev *slackevents.MessageEvent) {
 			User: ev.PreviousMessage.User, BotID: ev.PreviousMessage.BotID,
 		}
 	}
-	if m, ok := slackremote.FromEvent(ev.Channel, ev.SubType, ev.TimeStamp, ev.ThreadTimeStamp, ev.User, ev.BotID, ev.Text, edited); ok {
+	m, ok := slackremote.FromEvent(ev.Channel, ev.SubType, ev.TimeStamp, ev.ThreadTimeStamp, ev.User, ev.BotID, ev.Text, edited)
+	if !ok {
+		return false
+	}
+	if slackremote.Shared.Waiting() > 0 {
 		slackremote.Shared.Dispatch(m)
 	}
+	return slackremote.Shared.Owns(m)
 }
 
 // verifySlackSignature validates the HMAC-SHA256 signature Slack attaches

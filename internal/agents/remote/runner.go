@@ -33,6 +33,15 @@ var PullSteps = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 1
 // close with its own terminal event before the runner reports the timeout.
 var pushGrace = 2 * time.Second
 
+// activeWindow is how recent the remote's last sign of life must be for
+// the max to move on when the Source has no idle window.
+var activeWindow = 30 * time.Second
+
+// lateListen is how long, after the grace window, a finished or timed-out
+// turn keeps taking pushed messages, so a reply the remote finishes late
+// still reaches the session it answers.
+var lateListen = 30 * time.Minute
+
 // now and idleTick are the idle window's clock; tests replace them.
 var (
 	now      = time.Now
@@ -306,8 +315,19 @@ func listens(src Source, m ListenMode) bool {
 func (p *process) turn(text string) {
 	src := p.src
 	lim := src.Limits()
-	ctx, cancel := context.WithTimeout(p.ctx, lim.Max)
+	// Max is moved on while the remote still shows life — new text, an
+	// edit, a working status — up to Ceiling; a turn ends on Max only when
+	// the remote went still.
+	ceiling := lim.Max
+	if lim.Ceiling > ceiling {
+		ceiling = lim.Ceiling
+	}
+	start := now()
+	ctx, cancel := context.WithTimeout(p.ctx, ceiling)
 	defer cancel()
+	maxT := time.NewTimer(lim.Max)
+	defer maxT.Stop()
+	waited, extended := lim.Max, false
 	stopBeat := p.heartbeat(ctx)
 	defer stopBeat()
 
@@ -343,6 +363,16 @@ func (p *process) turn(text string) {
 	}
 
 	t := &turnOut{p: p}
+	// timedOut reports the timeout, then keeps following the thread: a
+	// reply the remote finishes after it still reaches the session.
+	timedOut := func() {
+		p.emitError(timeoutMessage(src, waited))
+		p.graceAfter(h, push, puller, canPull, t.out.String(), lim, NoteLate)
+	}
+	win := lim.Idle
+	if win <= 0 {
+		win = activeWindow
+	}
 	step := 0
 	var pullC <-chan time.Time
 	var pullT *time.Timer
@@ -387,7 +417,7 @@ func (p *process) turn(text string) {
 				switch {
 				case p.ctx.Err() != nil:
 				case errors.Is(ctx.Err(), context.DeadlineExceeded):
-					p.emitError(timeoutMessage(src, lim.Max))
+					p.emitError(timeoutMessage(src, waited))
 				default:
 					t.handle(Event{Kind: EventDone})
 				}
@@ -395,7 +425,7 @@ func (p *process) turn(text string) {
 			}
 			if t.handle(ev) {
 				if t.ok {
-					p.graceAfter(h, push, puller, canPull, t.out.String(), lim)
+					p.graceAfter(h, push, puller, canPull, t.out.String(), lim, NoteFollowUp)
 				}
 				return
 			}
@@ -419,7 +449,7 @@ func (p *process) turn(text string) {
 			for _, ev := range evs {
 				if t.handle(ev) {
 					if t.ok {
-						p.graceAfter(h, push, puller, canPull, t.out.String(), lim)
+						p.graceAfter(h, push, puller, canPull, t.out.String(), lim, NoteFollowUp)
 					}
 					return
 				}
@@ -438,14 +468,33 @@ func (p *process) turn(text string) {
 				t.handle(Event{Kind: EventDone, Note: NoteNoMarker})
 				return
 			}
-		case <-ctx.Done():
-			if p.ctx.Err() != nil {
-				return
+		case <-maxT.C:
+			elapsed := now().Sub(start)
+			if left := ceiling - elapsed; left > 0 && (t.busy || now().Sub(t.last) < win) {
+				if left > win {
+					left = win
+				}
+				maxT.Reset(left)
+				extended = true
+				continue
+			}
+			if extended {
+				waited = elapsed.Round(time.Second)
 			}
 			if push != nil && p.drain(t, push) {
 				return
 			}
-			p.emitError(timeoutMessage(src, lim.Max))
+			timedOut()
+			return
+		case <-ctx.Done():
+			if p.ctx.Err() != nil {
+				return
+			}
+			waited = ceiling
+			if push != nil && p.drain(t, push) {
+				return
+			}
+			p.emitError(timeoutMessage(src, waited))
 			return
 		}
 	}
@@ -483,10 +532,12 @@ var followUpQuiet = 3 * time.Second
 
 // graceAfter keeps following a finished turn for lim.Grace: a message the
 // remote sends — or an edit it makes — after its turn ended is passed on
-// as a follow-up reply of its own (NoteFollowUp), the added part or the
-// whole edited reply. A new message to send ends the window at once; it
-// is kept in p.next for the loop.
-func (p *process) graceAfter(h Handle, push <-chan Event, puller Puller, canPull bool, final string, lim Limits) {
+// as a follow-up reply of its own (note: NoteFollowUp, or NoteLate after
+// a timeout), the added part or the whole edited reply. Pushed messages
+// are then still taken for lateListen, without reading the thread. A new
+// message to send ends the window at once; it is kept in p.next for the
+// loop.
+func (p *process) graceAfter(h Handle, push <-chan Event, puller Puller, canPull bool, final string, lim Limits, note string) {
 	rs, ok := p.src.(Reopener)
 	if lim.Grace <= 0 || !ok {
 		return
@@ -527,9 +578,10 @@ func (p *process) graceAfter(h Handle, push <-chan Event, puller Puller, canPull
 			OnFollowUp(p.id, text)
 		}
 		p.emitText(text)
-		p.emitDone(text, NoteFollowUp)
+		p.emitDone(text, note)
 		shown, pending = pending, ""
 	}
+	late := false
 	for {
 		select {
 		case text, ok := <-p.msgs:
@@ -564,7 +616,13 @@ func (p *process) graceAfter(h Handle, push <-chan Event, puller Puller, canPull
 			flush()
 		case <-deadline.C:
 			flush()
-			return
+			if late || push == nil || lateListen <= 0 {
+				return
+			}
+			// Grace is over: stop reading the thread, keep taking what the
+			// remote pushes.
+			late, pullC = true, nil
+			deadline.Reset(lateListen)
 		case <-p.ctx.Done():
 			return
 		}
@@ -595,8 +653,10 @@ type turnOut struct {
 	// working status); the idle window does not run meanwhile.
 	busy bool
 	// ok: the turn ended with a reply (EventDone), not an error.
-	ok   bool
-	last time.Time
+	ok bool
+	// status is the last status shown.
+	status string
+	last   time.Time
 	// full is the latest whole reply from an EventText that did not grow
 	// what was shown (an edit that rewrote it), used as the final result.
 	full string
@@ -626,7 +686,10 @@ func (t *turnOut) handle(ev Event) bool {
 		t.full = ev.Text
 	case EventStatus:
 		t.busy = ev.Status == StatusWorking || ev.Status == StatusThinking
-		if ev.Status != StatusIdle {
+		// A source repeats a status to say it still works; it is shown once
+		// per change.
+		if ev.Status != StatusIdle && ev.Status+"\x00"+ev.Detail != t.status {
+			t.status = ev.Status + "\x00" + ev.Detail
 			t.p.emitStatus(ev.Status, ev.Detail)
 		}
 	case EventAttachment:

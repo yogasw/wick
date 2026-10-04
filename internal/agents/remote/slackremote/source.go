@@ -65,7 +65,7 @@ func (s *Source) Listen() []remote.ListenMode {
 	return []remote.ListenMode{remote.ListenPush, remote.ListenPull}
 }
 func (s *Source) Limits() remote.Limits {
-	return remote.Limits{Max: s.cfg.Max(), Idle: s.cfg.Idle(), Poll: s.cfg.Poll(), Grace: s.cfg.Grace()}
+	return remote.Limits{Max: s.cfg.Max(), Ceiling: MaxMaxSec * time.Second, Idle: s.cfg.Idle(), Poll: s.cfg.Poll(), Grace: s.cfg.Grace()}
 }
 
 // ResumeID names the session by its thread.
@@ -205,9 +205,10 @@ func (s *Source) Send(ctx context.Context, turn remote.Turn) (remote.Handle, err
 	if threadTS == "" {
 		threadTS = ts
 	}
-	st.Channel, st.ThreadTS, st.LastTS = channel, threadTS, ts
+	st.Channel, st.ThreadTS, st.LastTS, st.SentTS = channel, threadTS, ts, ts
 	saveState(turn.SessionDir, st)
 	t := newTracker(channel, threadTS, ts, token, s.cfg.Target == TargetDM, s.ignoreSet(selfUser, selfBot), s.accept())
+	t.targeted = s.cfg.EffectiveListen() == ListenTarget && s.cfg.TargetID() != ""
 	s.mu.Lock()
 	s.cur, s.dir = t, turn.SessionDir
 	s.mu.Unlock()
@@ -315,6 +316,64 @@ func (s *Source) End(remote.Handle) {
 		st.LastTS = t.lastTS
 		saveState(dir, st)
 	}
+}
+
+// Recheck is the result of reading a turn's thread again.
+type Recheck struct {
+	// Text is the remote's reply as the thread holds it now.
+	Text string `json:"text"`
+	// Busy: the remote still shows it works (⏳, a progress note, a
+	// status); Done: its end marker or ✅/❌ is there.
+	Busy bool `json:"busy"`
+	Done bool `json:"done"`
+	// Label is its progress note, if any.
+	Label string `json:"label,omitempty"`
+}
+
+// ErrNoTurn: the session has posted no turn to read back.
+var ErrNoTurn = errors.New("this session has no Slack turn to check")
+
+// Recheck reads the session's last turn's thread again — for a turn that
+// timed out or ended without a marker — and returns the remote's reply as
+// it is now. It sends nothing to the remote and changes nothing.
+func (s *Source) Recheck(ctx context.Context, sessionDir string) (Recheck, error) {
+	st := LoadState(sessionDir)
+	sent := firstNonEmpty(st.SentTS, st.ThreadTS)
+	if st.Channel == "" || sent == "" {
+		return Recheck{}, ErrNoTurn
+	}
+	selfUser, selfBot, err := s.identity(ctx)
+	if err != nil {
+		return Recheck{}, errors.New("Slack: " + err.Error())
+	}
+	// The marker's token is not kept, so a marker is matched by its
+	// prefix only: a reply that ends with it is complete.
+	t := newTracker(st.Channel, st.ThreadTS, sent, "", s.cfg.Target == TargetDM, s.ignoreSet(selfUser, selfBot), s.accept())
+	evs, err := s.fetch(ctx, t)
+	if err != nil {
+		return Recheck{}, errors.New("Slack: " + err.Error())
+	}
+	var out Recheck
+	for _, ev := range evs {
+		if ev.Kind == remote.EventDone {
+			out.Done = true
+		}
+	}
+	t.mu.Lock()
+	text, _ := t.compose()
+	out.Busy = t.busy()
+	if t.progressTS != "" {
+		out.Label = t.label
+	}
+	t.mu.Unlock()
+	if i := strings.LastIndex(text, MarkerPrefix); i >= 0 && !strings.Contains(text[i:], "\n") {
+		text, out.Done = strings.TrimRight(text[:i], " \n*_`~"), true
+	}
+	out.Text = text
+	if out.Done {
+		out.Busy = false
+	}
+	return out, nil
 }
 
 // ErrNotOwnAccount refuses posting as a Slack account that is not the

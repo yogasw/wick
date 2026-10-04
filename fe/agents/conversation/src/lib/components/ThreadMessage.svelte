@@ -23,6 +23,9 @@
   import TodoCard from "./TodoCard.svelte";
   import ArtifactGallery from "./ArtifactGallery.svelte";
   import MediaLightbox from "./MediaLightbox.svelte";
+  import RemoteRecheck from "./RemoteRecheck.svelte";
+  import type { SlackRecheck } from "../api/team.js";
+  import { isRemoteTimeout, isLateReply, NOTE_NO_MARKER } from "../remoteRecheck.js";
 
   type Props = {
     turn: ConversationTurn;
@@ -49,8 +52,11 @@
     onCardAction?: (cardId: string, value: string, label: string) => void;
     /** Settles an approval_request card through the gate. */
     onApprovalDecide?: (approvalId: string, decision: ApprovalDecisionChoice) => void;
+    /** Reads a Slack remote turn's thread again ("Cek ulang"); unset = no
+        button. Offered on a timeout and on a turn closed without marker. */
+    onRemoteRecheck?: () => Promise<SlackRecheck>;
   };
-  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide }: Props = $props();
+  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -461,6 +467,9 @@
           </svg>
           <span class="whitespace-pre-wrap break-words min-w-0">{turn.text}</span>
         </div>
+        {#if onRemoteRecheck && isRemoteTimeout(turn)}
+          <RemoteRecheck onRecheck={onRemoteRecheck} />
+        {/if}
       {:else}
         <div class="inline-flex items-start gap-1.5 rounded-2xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 text-xs text-black-700 dark:text-black-600 max-w-full">
           <svg viewBox="0 0 12 12" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -726,6 +735,9 @@
       {/if}
 
       {#if turn.text}
+        {#if isLateReply(turn)}
+          <span class="self-start inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] leading-none text-amber-700 dark:text-amber-300" data-testid="late-reply-label">balasan telat</span>
+        {/if}
         {#if stamp || isSilentReply}
           <span class="self-start inline-flex items-center gap-0.5 text-[10px] leading-none text-black-500 dark:text-black-600">
             {#if isSilentReply}
@@ -769,6 +781,10 @@
             <p class="mt-2 text-xs text-black-600 dark:text-black-700 italic border-t border-white-300 dark:border-navy-600 pt-2">Output truncated — see raw.jsonl for full content.</p>
           {/if}
         </div>
+      {/if}
+
+      {#if onRemoteRecheck && turn.role === "assistant" && turn.remote_note === NOTE_NO_MARKER}
+        <RemoteRecheck onRecheck={onRemoteRecheck} shown={turn.text} />
       {/if}
 
       {#if safeArtifacts.length > 0}

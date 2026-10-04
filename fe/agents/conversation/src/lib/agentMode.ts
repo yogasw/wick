@@ -27,6 +27,9 @@ export type AgentMode = {
       and the composer's @file search stays empty — the server refuses
       them all for this chat. */
   chatOnly?: boolean;
+  /** A Slack remote agent's id: its timed-out or unmarked turns get a
+      "Cek ulang" button that reads the Slack thread again. */
+  recheckAgentId?: string;
   /** Called instead of DetailView's own push("/") after the session is
       deleted: in the Agents app that path is the /sessions list, i.e. it
       would throw the user out of the app. */

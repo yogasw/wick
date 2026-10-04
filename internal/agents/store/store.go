@@ -123,6 +123,9 @@ type ConversationTurn struct {
 	HasArtifact     bool         `json:"has_artifact,omitempty"`     // assistant turn — true when Artifacts derived
 	Artifacts       []Artifact   `json:"artifacts,omitempty"`        // assistant turn, derived read-time
 	IsError         bool         `json:"is_error,omitempty"`         // system turn — provider/runtime error, render as a failure
+	// RemoteNote is how a remote agent's turn ended ("ended without
+	// marker", "follow-up", "late reply"); assistant turn only.
+	RemoteNote string `json:"remote_note,omitempty"`
 
 	// Kind tags a structured system turn so the UI can render it specially
 	// and callers can identify it (e.g. "provider_switch"). Empty for a
@@ -293,6 +296,9 @@ type Store struct {
 	sessionID string
 	agentName string
 	provider  string // "type/name" — stamped onto each assistant turn
+	// remoteNote is the closing note of a remote agent's turn, set from
+	// its Done and stamped onto the turn it flushes.
+	remoteNote string
 
 	// turnBuf accumulates TextDelta chunks; flushed on Done.
 	turnBuf strings.Builder
@@ -584,6 +590,7 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 			_ = s.recordLevelPoint(s.turnLevel, s.now().UTC())
 		}
 		s.turnLevel = 0
+		s.remoteNote = ev.RemoteNote
 		if err := s.flushAssistantTurn(false); err != nil {
 			return false, err
 		}
@@ -807,6 +814,8 @@ func (s *Store) noteInterruptOnly() error {
 // Events (tool_use, tool_result, thinking) are written to
 // thinking/<turn_id>.json so conversation.jsonl stays lean.
 func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
+	note := s.remoteNote
+	s.remoteNote = ""
 	if s.turnBuf.Len() == 0 && len(s.eventBuf) == 0 {
 		return nil
 	}
@@ -841,6 +850,7 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		Truncated:   truncated,
 		Interrupted: wasInterrupted,
 		HasTrace:    hasTrace,
+		RemoteNote:  note,
 	}
 	if wasInterrupted {
 		turn.InterruptedBy, turn.InterruptedNote = s.takeInterruptCause()

@@ -31,6 +31,9 @@ type tracker struct {
 	topLevel bool
 	ignore   map[string]bool // wick's own user and bot ids
 	accept   func(Message) bool
+	// targeted: accept hears the target only, so a person there is the
+	// remote too; otherwise only a bot's message is taken as the remote's.
+	targeted bool
 	msgs     map[string]string
 	lastTS   string
 	shown    string
@@ -94,6 +97,12 @@ func (t *tracker) observe(m Message) []remote.Event {
 	// Our own message: its reactions say the remote saw it (👀), works
 	// (⏳) or finished (✅/❌).
 	if m.TS == t.sentTS {
+		// An event of our message (an edit, an unfurl) carries no
+		// reactions: what the reactions said stands until a read or a
+		// reaction event says otherwise.
+		if !m.ReactionsKnown && len(m.Reactions) == 0 {
+			return nil
+		}
 		hourglass, finished := false, false
 		for _, r := range m.Reactions {
 			switch {
@@ -139,12 +148,19 @@ func (t *tracker) observe(m Message) []remote.Event {
 	// An edit replaces the message's text; a deletion takes it out of the
 	// reply; a progress note — or an answer edited back into one — is a
 	// status label, never reply text.
+	// A message may also be an answer still being written with its
+	// progress note as the last line ("found X\n_reading the code…_"):
+	// the text above is the reply so far, the last line the label.
 	text := t.clean(m.Text)
-	if label, ok := progressLine(text); ok && !m.Deleted {
-		delete(t.msgs, m.TS)
+	if body, label, ok := splitProgress(text); ok && !m.Deleted {
 		t.label = label
 		if !tsLess(m.TS, t.progressTS) {
 			t.progressTS = m.TS
+		}
+		if body != "" {
+			t.msgs[m.TS] = body
+		} else {
+			delete(t.msgs, m.TS)
 		}
 	} else {
 		if t.progressTS == m.TS {
@@ -158,6 +174,32 @@ func (t *tracker) observe(m Message) []remote.Event {
 	}
 	out = t.busyStatus(out)
 	return t.report(out, finished)
+}
+
+// react applies a reaction event on our message: ⏳ added or taken off,
+// ✅/❌ added. who is the reacting user; wick's own reactions are not the
+// remote's.
+func (t *tracker) react(ts, who, name string, added bool) []remote.Event {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.done || ts != t.sentTS || t.ignore[who] {
+		return nil
+	}
+	var out []remote.Event
+	switch {
+	case strings.HasPrefix(name, "hourglass"):
+		t.hourglass = added
+	case name == "eyes" && added:
+		out = t.setStatus(out, remote.StatusThinking, "")
+	case added && (name == "white_check_mark" || name == "heavy_check_mark" || name == "x"):
+		out = t.busyStatus(out)
+		visible, _ := t.compose()
+		t.done = true
+		return append(out, remote.Event{Kind: remote.EventDone, Text: visible})
+	default:
+		return nil
+	}
+	return t.busyStatus(out)
 }
 
 // busy: the remote shows it is still working.
@@ -174,6 +216,13 @@ func (t *tracker) busy() bool {
 		}
 	}
 	return true
+}
+
+// owns reports whether m is the remote's message in this turn's thread —
+// one the Slack channel must not also take as a message to wick.
+func (t *tracker) owns(m Message) bool {
+	return t.belongs(m) && m.TS != t.sentTS && !t.ignore[m.User] && !t.ignore[m.BotID] && t.accept(m) &&
+		(t.targeted || m.BotID != "")
 }
 
 // busyStatus reports a change of busy: working (with the progress label)
@@ -199,6 +248,15 @@ func (t *tracker) report(out []remote.Event, finished bool) []remote.Event {
 	if visible != t.shown {
 		t.shown = visible
 		out = append(out, remote.Event{Kind: remote.EventText, Text: visible})
+		// A runner may take new text as the remote going quiet; a remote
+		// still working says so again after it.
+		if t.busy() && !marked {
+			label := ""
+			if t.progressTS != "" {
+				label = t.label
+			}
+			out = append(out, remote.Event{Kind: remote.EventStatus, Status: remote.StatusWorking, Detail: label})
+		}
 	}
 	if marked || (finished && visible != "") {
 		t.done = true
@@ -338,6 +396,32 @@ func progressLine(text string) (string, bool) {
 		return inner, true
 	}
 	return wickProgress(text)
+}
+
+// splitProgress reads a progress note in text: the whole text (see
+// progressLine), or its last line under the reply written so far. A last
+// line counts only when it trails off ("_reading the code…_") or is a
+// wick-style footer — an italic closing line alone ("_hope this helps_")
+// is part of the answer.
+func splitProgress(text string) (body, label string, ok bool) {
+	if label, ok := progressLine(text); ok {
+		return "", label, true
+	}
+	i := strings.LastIndex(text, "\n")
+	if i < 0 {
+		return "", "", false
+	}
+	last := strings.TrimSpace(text[i+1:])
+	inner := strings.TrimSpace(strings.Trim(last, "_*"))
+	trails := strings.HasSuffix(inner, "…") || strings.HasSuffix(inner, "...")
+	if _, wick := wickProgress(last); !trails && !wick {
+		return "", "", false
+	}
+	label, ok = progressLine(last)
+	if !ok {
+		return "", "", false
+	}
+	return strings.TrimRight(text[:i], " \n"), label, true
 }
 
 func wickProgress(text string) (string, bool) {

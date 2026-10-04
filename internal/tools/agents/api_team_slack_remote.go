@@ -369,6 +369,42 @@ func apiTeamSlackRemoteGet(c *tool.Ctx) {
 	c.JSON(http.StatusOK, info)
 }
 
+// apiTeamSlackRemoteRecheck handles POST
+// /api/team/agents/{id}/slack-remote/recheck?session_id=: the "Check
+// again" of a turn that timed out or ended without its marker. It reads
+// the session's last Slack thread again and returns the remote's reply as
+// it is now (slackremote.Recheck) — it never posts to the remote, so
+// calling it twice is harmless. Owner of the agent only.
+func apiTeamSlackRemoteRecheck(c *tool.Ctx) {
+	if !slackRemoteReady(c) {
+		return
+	}
+	p, cfg, ok := loadOwnSlackRemote(c)
+	if !ok {
+		return
+	}
+	sid := c.Query("session_id")
+	s, found := globalMgr.Registry().Session(sid)
+	if sid == "" || !found || s.Meta.AgentID != p.ID {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	src, err := slackRemoteSource(c.Context(), p.OwnerUserID, cfg)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	res, err := src.Recheck(c.Context(), globalLayout.SessionDir(sid))
+	switch {
+	case errors.Is(err, slackremote.ErrNoTurn):
+		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+	case err != nil:
+		c.JSON(http.StatusBadGateway, map[string]string{"error": err.Error()})
+	default:
+		c.JSON(http.StatusOK, res)
+	}
+}
+
 // apiTeamSlackRemoteUpdate handles PATCH /api/team/agents/{id}/slack-remote:
 // the fields sent replace the stored ones, the rest stay; the result is
 // checked as on create.

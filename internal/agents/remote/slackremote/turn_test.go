@@ -154,7 +154,7 @@ func TestBusySignals(t *testing.T) {
 	if busyOf(evs) != remote.StatusWorking {
 		t.Fatalf("hourglass = %+v", evs)
 	}
-	evs, _, _ = feed(tr, Message{TS: "1.0"})
+	evs, _, _ = feed(tr, Message{TS: "1.0", ReactionsKnown: true}) // a read of it without ⏳
 	if busyOf(evs) != remote.StatusIdle {
 		t.Fatalf("hourglass gone = %+v", evs)
 	}

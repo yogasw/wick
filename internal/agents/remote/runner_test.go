@@ -328,3 +328,64 @@ func TestGraceWindowPassesOnALateMessage(t *testing.T) {
 		t.Fatalf("asker got %q", asked)
 	}
 }
+
+// A remote that keeps showing life moves Max on: the turn is not cut at
+// Max while text keeps coming or a working status stands.
+func TestActivityExtendsMax(t *testing.T) {
+	f := &fake{listen: []ListenMode{ListenPush}, limits: Limits{Max: 100 * time.Millisecond, Ceiling: 3 * time.Second, Idle: time.Second}, push: make(chan Event, 16)}
+	f.push <- Event{Kind: EventStatus, Status: StatusWorking, Detail: "reading"}
+	go func() {
+		for i := 1; i <= 4; i++ {
+			time.Sleep(80 * time.Millisecond)
+			f.push <- Event{Kind: EventText, Text: strings.Repeat("x", i)}
+			f.push <- Event{Kind: EventStatus, Status: StatusWorking, Detail: "reading"}
+		}
+		time.Sleep(150 * time.Millisecond) // busy, silent, past Max
+		f.push <- Event{Kind: EventDone, Text: "xxxx done"}
+	}()
+	_, l := run(t, f)
+	if l.IsError || l.Result != "xxxx done" {
+		t.Fatalf("cut while active: %+v", l)
+	}
+}
+
+// A remote that stays silent still times out at Max.
+func TestSilentStillTimesOutAtMax(t *testing.T) {
+	f := &fake{listen: []ListenMode{ListenPush}, limits: Limits{Max: 80 * time.Millisecond, Ceiling: 3 * time.Second}, push: make(chan Event, 1)}
+	start := time.Now()
+	_, l := run(t, f)
+	if !l.IsError || l.Result != TimeoutMessage(80*time.Millisecond) || time.Since(start) > 3*time.Second {
+		t.Fatalf("line=%+v after %s", l, time.Since(start))
+	}
+}
+
+// A reply the remote finishes after its turn timed out still reaches the
+// session, as a late reply of the same turn.
+func TestFinalAfterTimeoutIsDelivered(t *testing.T) {
+	old := followUpQuiet
+	followUpQuiet = 10 * time.Millisecond
+	t.Cleanup(func() { followUpQuiet = old })
+	f := &fake{listen: []ListenMode{ListenPush}, limits: Limits{Max: 60 * time.Millisecond, Grace: 2 * time.Second}, push: make(chan Event, 8)}
+	p, err := Spawner{Source: f}.Spawn(context.Background(), provider.SpawnOptions{InitialMessage: "hi", SessionDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Kill()
+	sc := bufio.NewScanner(p.Stdout())
+	var results []line
+	for len(results) < 2 && sc.Scan() {
+		var l line
+		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
+			t.Fatal(err)
+		}
+		if l.Type == "result" {
+			results = append(results, l)
+			if len(results) == 1 {
+				f.push <- Event{Kind: EventText, Text: "final answer"}
+			}
+		}
+	}
+	if len(results) != 2 || !results[0].IsError || results[1].IsError || results[1].Result != "final answer" || results[1].RemoteNote != NoteLate {
+		t.Fatalf("results=%+v", results)
+	}
+}

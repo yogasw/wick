@@ -193,6 +193,9 @@ export type ConversationTurn = {
   artifacts?: Artifact[];
   // system turn only — a provider/runtime error, rendered as a failure.
   is_error?: boolean;
+  /** assistant turn of a remote agent — how it ended: "ended without
+      marker", "follow-up", "late reply" (remote.Note*). */
+  remote_note?: string;
   /** system turn only — "provider_switch", "interrupted", "compaction", …
       Tags a structured notice so it renders as itself instead of a plain
       grey line. */

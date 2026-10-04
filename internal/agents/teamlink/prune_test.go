@@ -57,8 +57,15 @@ func TestJanitorDropsOldTasksContextsAndStoredTasks(t *testing.T) {
 	if taskKept || ctxKept || lastKept {
 		t.Fatalf("kept task=%v context=%v last=%v", taskKept, ctxKept, lastKept)
 	}
-	if _, err := h.GetTask(ctx, "a-cap", old.TaskID); !errors.Is(err, ErrUnknownTask) {
-		t.Fatalf("pruned task still readable: %v", err)
+	if _, err := h.GetTask(ctx, "a-cap", old.TaskID); !errors.Is(err, ErrUnknownTask) || !errors.Is(err, ErrTaskExpired) {
+		t.Fatalf("pruned task: want expired, got %v", err)
+	}
+	// Another caller, or an id never issued, is unknown — not "expired".
+	if _, err := h.GetTask(ctx, "a-other", old.TaskID); errors.Is(err, ErrTaskExpired) || !errors.Is(err, ErrUnknownTask) {
+		t.Fatalf("other caller: %v", err)
+	}
+	if _, err := h.GetTask(ctx, "a-cap", "no-such-task"); errors.Is(err, ErrTaskExpired) || !errors.Is(err, ErrUnknownTask) {
+		t.Fatalf("never issued: %v", err)
 	}
 	if _, err := h.handler("a-anton").GetTask(ctx, &a2a.GetTaskRequest{ID: a2a.TaskID(old.TaskID)}); err == nil {
 		t.Fatal("task store still holds the pruned task")

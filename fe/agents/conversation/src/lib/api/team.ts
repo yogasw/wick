@@ -370,6 +370,15 @@ export const createSlackRemote = (base: string, body: SlackRemoteCreate) =>
 export const getSlackRemote = (base: string, id: string) =>
   apiGetE<SlackRemoteInfo>(`${base}/api/team/agents/${enc(id)}/slack-remote`);
 
+/** SlackRecheck is a Slack remote turn read again from its thread
+    (slackremote.Recheck): the reply as it is now, and whether the remote
+    still works or finished. */
+export type SlackRecheck = { text: string; busy: boolean; done: boolean; label?: string };
+
+/** Reads the session's last Slack thread again; posts nothing to Slack. */
+export const recheckSlackRemote = (base: string, id: string, sessionId: string) =>
+  apiPostE<SlackRecheck>(`${base}/api/team/agents/${enc(id)}/slack-remote/recheck?session_id=${enc(sessionId)}`, {});
+
 /** Sent fields overwrite, the rest stay. */
 export const updateSlackRemote = (base: string, id: string, body: Partial<SlackRemoteConfig>) =>
   apiPatchE<SlackRemoteInfo>(`${base}/api/team/agents/${enc(id)}/slack-remote`, body);

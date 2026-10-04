@@ -82,6 +82,11 @@ type claudeRaw struct {
 	Result    string `json:"result,omitempty"`
 	// ReplaceText is the whole reply of a system remote_replace line.
 	ReplaceText string `json:"replace_text,omitempty"`
+	// RemoteNote is a remote agent's result line's note (how it ended).
+	RemoteNote string `json:"remote_note,omitempty"`
+	// Detail is a system remote_status line's label: what the remote
+	// says it is doing ("reading the code…").
+	Detail string `json:"detail,omitempty"`
 
 	// `assistant` and `user` wrap content blocks under .message.content
 	Message *claudeMessage `json:"message,omitempty"`
@@ -361,6 +366,11 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		if raw.Subtype == "remote_replace" {
 			return AgentEvent{Type: TextReplace, Text: raw.ReplaceText, Raw: trimmed}, nil
 		}
+		// Its progress label shows as the turn's thinking — what the
+		// remote is doing, never part of the reply.
+		if raw.Subtype == "remote_status" && raw.Detail != "" {
+			return AgentEvent{Type: Thinking, Text: raw.Detail + "\n", Raw: trimmed}, nil
+		}
 		if raw.Subtype == "init" && raw.SessionID != "" {
 			if !p.sessionEmitted {
 				p.sessionID = raw.SessionID
@@ -550,10 +560,11 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		// would report a stale window if that turn reports none.
 		p.lastLevel = 0
 		return AgentEvent{
-			Type:      Done,
-			SessionID: p.sessionID,
-			Raw:       trimmed,
-			Usage:     u,
+			Type:       Done,
+			SessionID:  p.sessionID,
+			Raw:        trimmed,
+			Usage:      u,
+			RemoteNote: raw.RemoteNote,
 		}, nil
 	}
 

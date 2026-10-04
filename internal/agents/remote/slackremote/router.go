@@ -2,8 +2,11 @@ package slackremote
 
 import (
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/yogasw/wick/internal/agents/remote"
 )
 
 // Router is the shared listener's dispatch: the Slack events wick already
@@ -13,7 +16,13 @@ import (
 type Router struct {
 	mu    sync.Mutex
 	turns map[string]map[*tracker]struct{}
+	// past keeps each ended turn's tracker until pastTTL, so the remote's
+	// late messages in its thread are still known as its own (Owns).
+	past map[*tracker]time.Time
 }
+
+// pastTTL is how long a thread a remote turn ran in stays known after it.
+var pastTTL = 24 * time.Hour
 
 // FromEvent is a message event as the Slack channel received it, flattened
 // for Dispatch: a message_changed carries the edited message, a
@@ -44,7 +53,9 @@ func FromEvent(channel, subtype, ts, threadTS, user, botID, text string, edited 
 // Shared is the process-wide router the Slack channel feeds.
 var Shared = NewRouter()
 
-func NewRouter() *Router { return &Router{turns: map[string]map[*tracker]struct{}{}} }
+func NewRouter() *Router {
+	return &Router{turns: map[string]map[*tracker]struct{}{}, past: map[*tracker]time.Time{}}
+}
 
 func threadKey(channel, ts string) string { return channel + "|" + ts }
 
@@ -70,6 +81,7 @@ func (r *Router) add(t *tracker) {
 func (r *Router) remove(t *tracker) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.past[t] = time.Now().Add(pastTTL)
 	for _, k := range r.keys(t) {
 		delete(r.turns[k], t)
 		if len(r.turns[k]) == 0 {
@@ -89,6 +101,51 @@ func (r *Router) Waiting() int {
 		}
 	}
 	return len(seen)
+}
+
+// Owns reports whether m is a remote agent's message in a thread one of
+// its turns runs — or ran, within pastTTL — in. Such a message is the
+// remote's reply (or a late one), never a new message to wick: the Slack
+// channel must not dispatch it to an agent.
+func (r *Router) Owns(m Message) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	nowT := time.Now()
+	for t, until := range r.past {
+		if nowT.After(until) {
+			delete(r.past, t)
+			continue
+		}
+		if t.owns(m) {
+			return true
+		}
+	}
+	for _, ts := range r.turns {
+		for t := range ts {
+			if t.owns(m) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// DispatchReaction routes a reaction added to or removed from message ts
+// to the turn that posted it: ⏳ there says the remote works.
+func (r *Router) DispatchReaction(channel, ts, user, name string, added bool) {
+	r.mu.Lock()
+	var targets []*tracker
+	for _, set := range r.turns {
+		for t := range set {
+			if t.channel == channel && t.sentTS == ts {
+				targets = append(targets, t)
+			}
+		}
+	}
+	r.mu.Unlock()
+	for _, t := range targets {
+		t.send(t.react(ts, user, name, added))
+	}
 }
 
 // Dispatch routes one message (new or edited). It never blocks the event
@@ -117,12 +174,17 @@ func (r *Router) Dispatch(m Message) {
 			continue
 		}
 		seen[t] = true
-		for _, ev := range t.observe(m) {
-			select {
-			case t.events <- ev:
-			default:
-				log.Debug().Str("channel", m.Channel).Msg("slackremote: turn buffer full, event dropped")
-			}
+		t.send(t.observe(m))
+	}
+}
+
+// send hands evs to the turn without blocking.
+func (t *tracker) send(evs []remote.Event) {
+	for _, ev := range evs {
+		select {
+		case t.events <- ev:
+		default:
+			log.Debug().Str("channel", t.channel).Msg("slackremote: turn buffer full, event dropped")
 		}
 	}
 }

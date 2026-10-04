@@ -52,6 +52,9 @@ type Limits struct {
 	Max  time.Duration
 	Idle time.Duration
 	Poll time.Duration
+	// Ceiling > Max lets Max move on while the remote still shows life
+	// (new text, an edit, a working status), up to Ceiling in all.
+	Ceiling time.Duration
 	// Grace > 0 keeps listening that long after a turn ended, for a
 	// message or an edit the remote sends late (a Reopener only).
 	Grace time.Duration

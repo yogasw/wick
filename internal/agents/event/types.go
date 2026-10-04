@@ -115,6 +115,9 @@ type AgentEvent struct {
 	SessionID string // SessionStart: CLI session ID (or first event for Claude)
 	ErrorMsg  string // Error: short reason
 	Raw       string // verbatim source line
+	// RemoteNote labels how a remote agent's turn ended (Done only):
+	// "ended without marker", "follow-up", "late reply".
+	RemoteNote string
 
 	// ExitCode is the process exit status of a ToolResult, set only when
 	// the provider reports one (codex shell calls).

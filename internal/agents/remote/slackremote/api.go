@@ -28,8 +28,10 @@ type Message struct {
 	Edited bool
 	// Deleted is set for a message_deleted event: TS is the deleted one.
 	Deleted bool
-	// Reactions are emoji names on the message.
-	Reactions []string
+	// Reactions are emoji names on the message; ReactionsKnown is set when
+	// the read carried them (a Web API read does, a message event never).
+	Reactions      []string
+	ReactionsKnown bool
 	// Status is metadata event_type agent_status's payload status, if any.
 	Status string
 }
@@ -164,7 +166,7 @@ type wireMessage struct {
 }
 
 func (w wireMessage) message(channel string) Message {
-	m := Message{Channel: channel, TS: w.TS, ThreadTS: w.ThreadTS, User: w.User, BotID: w.BotID, Text: w.Text}
+	m := Message{Channel: channel, TS: w.TS, ThreadTS: w.ThreadTS, User: w.User, BotID: w.BotID, Text: w.Text, ReactionsKnown: true}
 	for _, r := range w.Reactions {
 		m.Reactions = append(m.Reactions, r.Name)
 	}

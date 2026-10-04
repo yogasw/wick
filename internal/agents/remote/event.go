@@ -67,3 +67,7 @@ const NoteNoMarker = "ended without marker"
 // NoteFollowUp labels a reply the remote sent or edited after its turn
 // had ended, inside the grace window.
 const NoteFollowUp = "follow-up"
+
+// NoteLate labels a reply the remote finished after its turn had timed
+// out: a late answer to the same request, not a new message.
+const NoteLate = "late reply"

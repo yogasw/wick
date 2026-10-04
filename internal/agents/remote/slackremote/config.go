@@ -300,9 +300,11 @@ const stateFile = "slack-remote.json"
 
 // State is a session's place in Slack: one wick session = one thread.
 type State struct {
-	Channel   string    `json:"channel,omitempty"`
-	ThreadTS  string    `json:"thread_ts,omitempty"`
-	LastTS    string    `json:"last_ts,omitempty"`
+	Channel  string `json:"channel,omitempty"`
+	ThreadTS string `json:"thread_ts,omitempty"`
+	LastTS   string `json:"last_ts,omitempty"`
+	// SentTS is the last turn's own message: what Recheck reads from.
+	SentTS    string    `json:"sent_ts,omitempty"`
 	LastNote  string    `json:"last_note,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
