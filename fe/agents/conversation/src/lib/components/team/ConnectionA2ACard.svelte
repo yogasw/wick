@@ -4,13 +4,15 @@
      is masked from then on — the server keeps only its hash. */
   import { Button, Toggle } from "@wick-fe/common-ui";
   import { runApi, type AgentItem } from "../../api/team.js";
+  import { connState, type ConnState } from "../../connectionTabs.js";
   import {
     getAgentA2A, updateAgentA2A, rotateAgentA2A, revokeAgentA2A, testAgentA2A,
     maskedKey, probeLine, curlExample, type AgentA2AStatus, type AgentA2AUpdate, type A2AProbe,
   } from "../../a2aConnection.js";
 
-  type Props = { base: string; agent: AgentItem };
-  let { base, agent }: Props = $props();
+  /* onStatus feeds the drawer's tab mark (✓ / ⚠). */
+  type Props = { base: string; agent: AgentItem; onStatus?: (s: ConnState) => void };
+  let { base, agent, onStatus }: Props = $props();
 
   let status = $state<AgentA2AStatus | null>(null);
   let error = $state("");
@@ -92,6 +94,8 @@
     probe = null;
     void load();
   });
+
+  $effect(() => onStatus?.(connState(!!status?.enabled, true, !!error)));
 </script>
 
 <section class="rounded-xl border border-white-300 p-4 dark:border-navy-600" data-testid="a2a-card">

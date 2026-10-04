@@ -5,13 +5,15 @@
      snippets use the $WICK_TOKEN placeholder. */
   import { Button, Toggle } from "@wick-fe/common-ui";
   import { runApi, type AgentItem } from "../../api/team.js";
+  import { connState, type ConnState } from "../../connectionTabs.js";
   import {
     getAgentREST, updateAgentREST, testAgentREST, restCurlExample, restSDKExample,
     type AgentRESTStatus, type RESTTestResult,
   } from "../../restConnection.js";
 
-  type Props = { base: string; agent: AgentItem };
-  let { base, agent }: Props = $props();
+  /* onStatus feeds the drawer's tab mark (✓ / ⚠). */
+  type Props = { base: string; agent: AgentItem; onStatus?: (s: ConnState) => void };
+  let { base, agent, onStatus }: Props = $props();
 
   let status = $state<AgentRESTStatus | null>(null);
   let error = $state("");
@@ -77,6 +79,8 @@
     result = null;
     void load();
   });
+
+  $effect(() => onStatus?.(connState(!!status?.enabled, true, !!error)));
 </script>
 
 <section class="rounded-xl border border-white-300 p-4 dark:border-navy-600" data-testid="rest-card">

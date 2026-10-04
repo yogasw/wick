@@ -332,7 +332,7 @@
     selected && isRemoteAgent(selected)
       ? { label: "Settings", hint: isSlackRemote(selected) ? "remote Slack, mention, avatar" : "remote A2A, mention, avatar", onclick: () => openPanel({ kind: "settings", tab: "remote" }) }
       : { label: "Settings", hint: "persona, access, tools, avatar", onclick: () => openPanel({ kind: "settings", tab: "persona" }) },
-    { label: "Connections", hint: "Slack and health", onclick: () => openPanel({ kind: "connections" }) },
+    { label: "Connections", hint: "Slack, Telegram, A2A, REST", onclick: () => openPanel({ kind: "connections" }) },
     { label: "Scheduled", hint: "work it runs on a schedule", onclick: () => openPanel({ kind: "scheduled" }) },
     // A copy of a remote agent would be a local one with no persona.
     ...(selected && isRemoteAgent(selected) ? [] : [{ label: "Duplicate agent", hint: "copies persona & access, not connections", divider: true, onclick: duplicate }]),
@@ -691,7 +691,13 @@
           onDeleted={() => onDeleted(selected.id)}
         />
       {:else if selected && route.panel.kind === "connections"}
-        <AgentConnections {base} agent={selected} onClose={() => openPanel(null)} />
+        <AgentConnections
+          {base}
+          agent={selected}
+          tab={route.panel.conn ?? null}
+          onTab={(conn) => go({ panel: { kind: "connections", conn } }, true)}
+          onClose={() => openPanel(null)}
+        />
       {:else if selected && route.panel.kind === "scheduled"}
         <AgentScheduled
           {base}

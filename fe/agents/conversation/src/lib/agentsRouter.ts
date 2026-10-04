@@ -1,5 +1,6 @@
 import { writable, type Readable } from "svelte/store";
 import { teamSettingsTabOf, type TeamSettingsTab } from "./teamSettingsTabs.js";
+import { connTabOf, type ConnTab } from "./connectionTabs.js";
 
 /* Client router for the Agents app (/team). It is a separate router from
    router.ts on purpose: that one owns /sessions/<id> and turns every
@@ -12,7 +13,9 @@ import { teamSettingsTabOf, type TeamSettingsTab } from "./teamSettingsTabs.js";
      /team/<handle>?session=<id>         one of its other conversations
      /team/<handle>?panel=settings&tab=… Settings drawer over the chat
      /team/<handle>?panel=sessions       "Other chats" drawer
-     /team/<handle>?panel=connections    Connections drawer (Slack)
+     /team/<handle>?panel=connections    Connections drawer
+     /team/<handle>?panel=connections&conn=a2a
+                                         …on that tab (slack|telegram|a2a|rest)
      /team/<handle>?panel=scheduled      Scheduled drawer
      /team/g/<group session id>          a group chat
      /team/g/<id>?panel=group-settings   its Settings drawer
@@ -43,7 +46,7 @@ export type AgentsPanel =
   | { kind: "settings"; tab: SettingsTab }
   | { kind: "team-settings"; tab: TeamSettingsTab }
   | { kind: "sessions" }
-  | { kind: "connections" }
+  | { kind: "connections"; conn?: ConnTab }
   | { kind: "scheduled" }
   | { kind: "group-settings" }
   | { kind: "new"; project?: string };
@@ -100,9 +103,11 @@ export function parseAgentsRoute(pathname: string, search: string, base: string)
     case "sessions":
       panel = { kind: "sessions" };
       break;
-    case "connections":
-      panel = { kind: "connections" };
+    case "connections": {
+      const conn = connTabOf(q.get("conn"));
+      panel = conn ? { kind: "connections", conn } : { kind: "connections" };
       break;
+    }
     case "scheduled":
       panel = { kind: "scheduled" };
       break;
@@ -128,6 +133,7 @@ export function formatAgentsRoute(r: AgentsRoute, base: string): string {
     q.set("panel", r.panel.kind);
     if (r.panel.kind === "settings" || r.panel.kind === "team-settings") q.set("tab", r.panel.tab);
     if (r.panel.kind === "new" && r.panel.project) q.set("project", r.panel.project);
+    if (r.panel.kind === "connections" && r.panel.conn) q.set("conn", r.panel.conn);
   }
   const qs = q.toString();
   return qs ? `${path}?${qs}` : path;

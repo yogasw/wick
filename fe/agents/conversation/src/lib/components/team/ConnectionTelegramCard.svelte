@@ -4,13 +4,15 @@
      only ever shows the bot's username and link. */
   import { Button } from "@wick-fe/common-ui";
   import { runApi, type AgentItem } from "../../api/team.js";
+  import { connState, type ConnState } from "../../connectionTabs.js";
   import {
     getAgentTelegram, connectAgentTelegram, testAgentTelegram, disconnectAgentTelegram,
     type AgentTelegramStatus, type TelegramTestResult,
   } from "../../telegramConnection.js";
 
-  type Props = { base: string; agent: AgentItem };
-  let { base, agent }: Props = $props();
+  /* onStatus feeds the drawer's tab mark (✓ / ⚠). */
+  type Props = { base: string; agent: AgentItem; onStatus?: (s: ConnState) => void };
+  let { base, agent, onStatus }: Props = $props();
 
   let status = $state<AgentTelegramStatus | null>(null);
   let error = $state("");
@@ -84,6 +86,8 @@
   const badge = $derived(
     !status?.connected ? "Not connected" : status.disabled ? "Agent disabled" : status.online ? "Online" : "Offline",
   );
+
+  $effect(() => onStatus?.(connState(!!status?.connected, !!status?.online && !status.disabled, !!error)));
 </script>
 
 <section class="rounded-xl border border-white-300 p-4 dark:border-navy-600" data-testid="telegram-card">

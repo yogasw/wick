@@ -1,11 +1,15 @@
 <script lang="ts">
-  /* Connections drawer (⋯ → Connections): the agent's own Slack app. A
-     three-step wizard while not connected, then the live card — options
-     autosave, the health matrix shows what the app still lacks. Secrets
-     are write-only: the server only says whether each is set. */
+  /* Connections drawer (⋯ → Connections): one icon tab per channel —
+     Slack, Telegram, A2A, REST — marked ✓ when live and ⚠ when it needs a
+     look. Every card stays mounted (hidden when not picked) so each keeps
+     loading its own status and the marks are right before a tab is opened.
+     Slack: a three-step wizard while not connected, then the live card —
+     options autosave, the health matrix shows what the app still lacks.
+     Secrets are write-only: the server only says whether each is set. */
   import { Button, Toggle } from "@wick-fe/common-ui";
   import { toastOk } from "@wick-fe/common-stores";
   import DrawerHeader from "./DrawerHeader.svelte";
+  import ConnectionIcon from "./ConnectionIcon.svelte";
   import ConnectionA2ACard from "./team/ConnectionA2ACard.svelte";
   import ConnectionRESTCard from "./team/ConnectionRESTCard.svelte";
   import ConnectionTelegramCard from "./team/ConnectionTelegramCard.svelte";
@@ -16,9 +20,12 @@
   } from "../api/team.js";
   import { MATRIX_ICON, MATRIX_LABEL, MASKED, eventsSourceNote, connectBody, statusLine, tokenError, type TokenDraft, TOKEN_HINTS } from "../slackConnection.js";
   import { getAgentSlackInstant, instantStatusLine, type AgentSlackInstantStatus } from "../slackInstant.js";
+  import { CONN_TABS, CONN_MARK, CONN_MARK_LABEL, connState, defaultConnTab, type ConnTab, type ConnState } from "../connectionTabs.js";
 
-  type Props = { base: string; agent: AgentItem; onClose: () => void };
-  let { base, agent, onClose }: Props = $props();
+  /* tab: the `conn=` from the URL; null = the default (first connected,
+     else Slack). onTab writes the pick back to the URL. */
+  type Props = { base: string; agent: AgentItem; onClose: () => void; tab?: ConnTab | null; onTab?: (t: ConnTab) => void };
+  let { base, agent, onClose, tab = null, onTab }: Props = $props();
 
   let status = $state<AgentSlackStatus | null>(null);
   let loadError = $state("");
@@ -92,6 +99,31 @@
 
   const tokenProblem = $derived(tokenError(draft, status));
 
+  let marks = $state<Partial<Record<ConnTab, ConnState>>>({});
+  /* Slack is live through whichever app answers: its own, else Instant. */
+  const slackState = $derived(
+    status?.connected
+      ? connState(true, status.online && !status.disabled, !!loadError)
+      : connState(!!instant?.enabled, !!instant?.shared_online, !!loadError),
+  );
+  const states = $derived({ ...marks, slack: slackState });
+  let picked = $state<ConnTab | null>(null);
+  const active = $derived(tab ?? picked ?? defaultConnTab(states));
+
+  function pick(t: ConnTab) {
+    picked = t;
+    onTab?.(t);
+  }
+
+  function tabKey(e: KeyboardEvent, i: number) {
+    const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const next = CONN_TABS[(i + step + CONN_TABS.length) % CONN_TABS.length].key;
+    pick(next);
+    document.getElementById(`conn-tab-${next}`)?.focus();
+  }
+
   async function connect() {
     if (tokenProblem) return;
     busy = true;
@@ -139,12 +171,41 @@
 
   $effect(() => {
     void agent.id;
+    picked = null;
+    marks = {};
     void load();
   });
 </script>
 
 <DrawerHeader title="Connections" subtitle="@{agent.handle}" avatar={agent.avatar} {onClose} />
-<div class="flex-1 space-y-5 overflow-y-auto px-6 py-5" data-testid="agent-connections">
+<div class="flex shrink-0 gap-1 overflow-x-auto border-b border-white-300 px-4 dark:border-navy-600" role="tablist" aria-label="Connections" data-testid="conn-tabs">
+  {#each CONN_TABS as t, i (t.key)}
+    {@const st = states[t.key] ?? "off"}
+    <button
+      type="button"
+      role="tab"
+      id="conn-tab-{t.key}"
+      aria-controls="conn-panel-{t.key}"
+      aria-selected={active === t.key}
+      tabindex={active === t.key ? 0 : -1}
+      class="-mb-px inline-flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-3 py-2.5 text-sm {active === t.key ? 'border-green-500 font-medium text-black-900 dark:text-white-100' : 'border-transparent text-black-800 hover:text-black-900 dark:text-black-600 dark:hover:text-white-100'}"
+      data-testid="conn-tab-{t.key}"
+      data-state={st}
+      onclick={() => pick(t.key)}
+      onkeydown={(e) => tabKey(e, i)}
+    >
+      <span class="relative inline-flex">
+        <ConnectionIcon kind={t.key} />
+        {#if CONN_MARK[st]}
+          <span class="absolute -right-1.5 -top-1.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full text-[9px] font-bold leading-none text-white-100 ring-2 ring-white-100 dark:ring-navy-700 {st === 'on' ? 'bg-green-500' : 'bg-yellow-500'}" data-testid="conn-mark-{t.key}" aria-hidden="true">{CONN_MARK[st]}</span>
+        {/if}
+      </span>
+      {t.label}<span class="sr-only"> — {CONN_MARK_LABEL[st]}</span>
+    </button>
+  {/each}
+</div>
+<div class="flex-1 overflow-y-auto px-6 py-5" data-testid="agent-connections">
+  <div class="space-y-5" role="tabpanel" id="conn-panel-slack" aria-labelledby="conn-tab-slack" hidden={active !== "slack"}>
   {#if loadError}
     <p class="text-sm text-neg-400">{loadError}</p>
   {/if}
@@ -283,7 +344,15 @@
     </section>
   {/if}
 
-  <ConnectionA2ACard {base} {agent} />
-  <ConnectionRESTCard {base} {agent} />
-  <ConnectionTelegramCard {base} {agent} />
+  </div>
+
+  <div role="tabpanel" id="conn-panel-telegram" aria-labelledby="conn-tab-telegram" hidden={active !== "telegram"}>
+    <ConnectionTelegramCard {base} {agent} onStatus={(s) => (marks.telegram = s)} />
+  </div>
+  <div role="tabpanel" id="conn-panel-a2a" aria-labelledby="conn-tab-a2a" hidden={active !== "a2a"}>
+    <ConnectionA2ACard {base} {agent} onStatus={(s) => (marks.a2a = s)} />
+  </div>
+  <div role="tabpanel" id="conn-panel-rest" aria-labelledby="conn-tab-rest" hidden={active !== "rest"}>
+    <ConnectionRESTCard {base} {agent} onStatus={(s) => (marks.rest = s)} />
+  </div>
 </div>

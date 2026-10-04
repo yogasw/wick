@@ -51,6 +51,8 @@ describe("parseAgentsRoute", () => {
     expect(parseAgentsRoute("/tools/agents/team/a1", "?panel=sessions", B).panel).toEqual({ kind: "sessions" });
     expect(parseAgentsRoute("/tools/agents/team/a1", "?panel=scheduled", B).panel).toEqual({ kind: "scheduled" });
     expect(parseAgentsRoute("/tools/agents/team/a1", "?panel=bogus", B).panel).toBeNull();
+    expect(parseAgentsRoute("/tools/agents/team/a1", "?panel=connections&conn=a2a", B).panel).toEqual({ kind: "connections", conn: "a2a" });
+    expect(parseAgentsRoute("/tools/agents/team/a1", "?panel=connections&conn=fax", B).panel).toEqual({ kind: "connections" });
   });
 
   test("session only counts under a handle", () => {
@@ -87,6 +89,7 @@ describe("formatAgentsRoute", () => {
     ],
     [{ handle: "a1", session: "s2", panel: { kind: "sessions" } }, "/tools/agents/team/a1?session=s2&panel=sessions"],
     [{ handle: "a1", session: null, panel: { kind: "scheduled" } }, "/tools/agents/team/a1?panel=scheduled"],
+    [{ handle: "a1", session: null, panel: { kind: "connections", conn: "telegram" } }, "/tools/agents/team/a1?panel=connections&conn=telegram"],
     [
       { handle: "captain", session: null, panel: { kind: "team-settings", tab: "general" } },
       "/tools/agents/team/captain?panel=team-settings&tab=general",
