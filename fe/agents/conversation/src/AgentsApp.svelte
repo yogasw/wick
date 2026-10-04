@@ -409,6 +409,10 @@
   const remoteMode = $derived(selected && isRemoteAgent(selected) ? remoteChatMode(selected) : null);
   // A shared agent's rail is its owner's project: chat only.
   const sharedMode = $derived(sharedChatMode(selected));
+  // A remote agent's progress label from its chat (DetailView), keyed by
+  // agent so a label never follows the user to another agent's header.
+  let progress = $state<{ id: string; label: string } | null>(null);
+  const progressLabel = $derived(selected && progress?.id === selected.id ? progress.label : undefined);
   const agentMode = $derived({
     hideTabs: sharedMode?.hideTabs ?? remoteMode?.hideTabs ?? hiddenTabsFor(selected?.features, selected ? nativeToolsOf(selected.allowed_native_tools) : null),
     ...(sharedMode ? { railNote: sharedMode.railNote, chatOnly: true } : remoteMode ? { railNote: remoteMode.railNote } : {}),
@@ -417,6 +421,9 @@
     hidePickers: true,
     onDeleted: () => go({ session: null }),
     onTurnChange,
+    ...(selected && isRemoteAgent(selected)
+      ? { remoteProgress: true, onProgress: ((id: string) => (label: string | undefined) => (progress = label ? { id, label } : null))(selected.id) }
+      : {}),
     providerSwitch: !!selected?.allow_provider_switch,
     onOpenSettings: () => openPanel({ kind: "settings", tab: "advanced" }),
     onNewChat: newChat,
@@ -500,7 +507,7 @@
         {#each pins as a (a.id)}
           <button type="button" class="flex w-20 flex-col items-center gap-1.5 rounded-xl py-1 text-xs text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600" onclick={() => openAgent(a)}>
             <span class="relative inline-flex">
-              <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={54} working={isWorking(a.status)} asleep={a.disabled} />
+              <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={54} live working={isWorking(a.status)} asleep={a.disabled} />
               <!-- Same cue as the list's SHARED badge, sized for a pin. -->
               {#if isSharedAgent(a)}<span class="absolute bottom-0 right-0 flex h-5 w-5 items-center justify-center rounded-full border-2 border-white-100 bg-white-300 text-black-800 dark:border-navy-700 dark:bg-navy-600 dark:text-black-600" title={sharedLabel(a)} data-testid="pin-shared-badge"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" /></svg><span class="sr-only">{sharedLabel(a)}</span></span>{/if}
             </span>
@@ -551,7 +558,9 @@
             data-testid="roster-agent"
             onclick={() => openAgent(a)}
           >
-            <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} working={isWorking(a.status)} tool={!!a.current_action} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
+            <!-- live like the header's: the same agent in the same state
+                 moves the same way in both. Rows scrolled away pause. -->
+            <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={isWorking(a.status)} tool={!!a.current_action} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
             <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{st.tip}</span>
             <span class="min-w-0 flex-1">
               <span class="flex items-baseline gap-2">
@@ -629,16 +638,16 @@
         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
       </button>
       {#if selected}
-        <AgentAvatar kind={selected.avatar?.kind} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={isWorking(selected.status)} tool={!!selected.current_action} asleep={selected.disabled} hatching={hatching.includes(selected.id)} />
+        <AgentAvatar kind={selected.avatar?.kind} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={isWorking(selected.status)} tool={!!selected.current_action} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={rosterStatus(selected).attention} />
         <div class="min-w-0 flex-1">
           <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">
             {selected.name}{#if selected.tagline}<span class="font-normal text-black-700 dark:text-black-600">&nbsp;·&nbsp;{selected.tagline}</span>{/if}
           </div>
           <div class="truncate text-xs text-black-800 dark:text-black-600">
             {#if remoteWaiting}
-              <span class="font-medium text-green-600 dark:text-green-400" data-testid="header-waiting">{remoteWaitLabel(selected, waitStart === null ? 0 : (waitNow - waitStart) / 1000)}</span>
+              <span class="font-medium text-green-600 dark:text-green-400" data-testid="header-waiting">{remoteWaitLabel(selected, waitStart === null ? 0 : (waitNow - waitStart) / 1000, progressLabel)}</span>
             {:else if isWorking(selected.status)}
-              <span class="font-medium text-green-600 dark:text-green-400">typing<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
+              <span class="font-medium text-green-600 dark:text-green-400" data-testid="header-typing">{progressLabel ?? "typing"}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
             {:else if selected.disabled}
               disabled
             {:else}

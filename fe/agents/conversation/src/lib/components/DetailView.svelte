@@ -10,6 +10,7 @@
   import { NOTIFY_KEY } from "../notify-pref.js";
 
   import { createThreadStore } from "../stores/thread.js";
+  import { remoteProgress } from "../remoteAgent.js";
   import type { ThreadMeta, LifecycleState } from "../stores/thread.js";
   import { connectSession } from "../stores/sse.js";
   import type { SSEStatus } from "../types/agents.js";
@@ -156,6 +157,16 @@
     if (active === turnActive) return;
     turnActive = active;
     untrack(() => agentMode?.onTurnChange?.(active));
+  });
+  /* A remote agent's progress label ("lagi pakai code read…") for the
+     thinking bubble, and the host's header told of every change. */
+  const progressLabel = $derived(agentMode?.remoteProgress && typing.active ? remoteProgress(live) : undefined);
+  let progressSent: string | undefined;
+  $effect(() => {
+    const p = progressLabel;
+    if (p === progressSent) return;
+    progressSent = p;
+    untrack(() => agentMode?.onProgress?.(p));
   });
   const unsubLifecycle = thread.lifecycle.subscribe((v) => { agentLifecycle = v; });
   /* When the running turn started, for the context panel's live line. A
@@ -2633,7 +2644,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? () => runApi(recheckSlackRemote(base, agentMode!.recheckAgentId!, sessionId)) : undefined} />
+          <ConversationThread {turns} {live} {typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? () => runApi(recheckSlackRemote(base, agentMode!.recheckAgentId!, sessionId)) : undefined} />
         </div>
       </div>
 

@@ -1,12 +1,13 @@
 <script lang="ts">
   /* Blob-mascot avatar (vendored blobmascot core, see ./blob/README.md).
      Two renderers, picked by blobAnimates():
-       - still: one cached PNG frame (stillUrl) in an <img>. Roster rows,
-         mentions and picker grids use this, so a list never owns a
+       - still: one cached PNG frame (stillUrl) in an <img>. Mentions,
+         cards and picker grids use this, so those lists never own a
          canvas or an animation loop.
        - live: a canvas stepped by the shared ticker (one rAF for every
          avatar on the page), subscribed only while the canvas is on
-         screen. The eyes follow the pointer from BLOB_GAZE_MIN up.
+         screen. The roster and the chat header both use it, so an agent
+         moves the same way in each. The eyes follow the pointer from BLOB_GAZE_MIN up.
      prefers-reduced-motion and `still` always get the still frame.
      A live avatar left idle fidgets now and then (blob/motion/fidget.ts):
      only while on screen, the tab shown and Idle animations on; a hover

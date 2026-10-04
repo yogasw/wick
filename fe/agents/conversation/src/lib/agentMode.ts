@@ -50,6 +50,12 @@ export type AgentMode = {
       that drives the typing bubble, so the host's "typing" cue follows the
       turn instead of waiting for its next roster poll. */
   onTurnChange?: (active: boolean) => void;
+  /** A remote agent's chat: its thinking lines are progress labels from
+      the remote ("lagi pakai code read…"), shown in place of "thinking…". */
+  remoteProgress?: boolean;
+  /** Told the current progress label (undefined when none), so the host's
+      header can show it next to its "typing" cue. */
+  onProgress?: (label: string | undefined) => void;
   /** The agent's "Allow provider switch in chat" setting. Off, the
       composer shows the provider read-only; on, the picker works but the
       provider itself is fixed once the chat has started. */

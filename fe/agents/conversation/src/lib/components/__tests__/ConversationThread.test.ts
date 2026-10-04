@@ -258,6 +258,18 @@ describe("ConversationThread working indicator", () => {
   });
 });
 
+describe("ConversationThread remote progress label", () => {
+  test("replaces thinking… while set; a tool label still wins", async () => {
+    const props = (typing: TypingState, progressLabel?: string) => ({ turns: [], live: null, typing, loading: false, progressLabel });
+    const { rerender } = render(ConversationThread, { props: props({ active: true, substate: "thinking" }, "lagi pakai code read…") });
+    expect(screen.getByTestId("typing-label").textContent).toBe("lagi pakai code read…");
+    await rerender(props({ active: true, toolName: "shell" }, "lagi pakai code read…"));
+    expect(screen.getByTestId("typing-label").textContent).toBe("running command…");
+    await rerender(props({ active: true, substate: "thinking" }));
+    expect(screen.getByTestId("typing-label").textContent).toBe("thinking…");
+  });
+});
+
 describe("ConversationThread working indicator placement", () => {
   test("sits above the turn's trace and stays while the live turn runs", async () => {
     vi.useFakeTimers();

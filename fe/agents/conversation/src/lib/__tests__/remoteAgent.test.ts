@@ -3,7 +3,9 @@ import {
   authReq, egressWarning, formatBytes, hostOf, isRemoteAgent, limitsError, remoteCaption, remoteSettingsTab,
   REMOTE_HIDDEN_TABS, remoteChatMode, remoteSubtitle, testSummary,
   isA2ARemote, isSlackRemote, remoteBadge, remoteSettingsTabs, REMOTE_SOURCES,
+  clipLabel, remoteProgress, remoteWaitLabel, PROGRESS_MAX,
 } from "../remoteAgent.js";
+import type { LiveTurn } from "../types/agents.js";
 
 describe("remoteAgent", () => {
   test("isRemoteAgent reads kind", () => {
@@ -116,5 +118,35 @@ describe("remote wait label", () => {
   test("header does not repeat a target named like the handle", () => {
     expect(remoteSubtitle({ ...(dm as object), handle: "halodev" } as never)).toBe("Slack remote");
     expect(remoteSubtitle({ ...(dm as object), handle: "other" } as never)).toBe("Slack remote · @halodev");
+  });
+});
+
+describe("remote progress label", () => {
+  const live = (...thinking: string[]): LiveTurn => ({ text: "", blocks: thinking.map((text) => ({ kind: "thinking" as const, text })) });
+
+  test("is the last line of the last thinking block", () => {
+    expect(remoteProgress(live("lagi baca thread…\n", "lagi pakai code read…\n"))).toBe("lagi pakai code read…");
+    expect(remoteProgress(live("satu\ndua\n\n"))).toBe("dua");
+  });
+
+  test("none without thinking", () => {
+    expect(remoteProgress(null)).toBeUndefined();
+    expect(remoteProgress({ text: "hi", blocks: [{ kind: "text", text: "hi" }] })).toBeUndefined();
+    expect(remoteProgress(live("  \n"))).toBeUndefined();
+  });
+
+  test("a long label is cut on a word with an ellipsis", () => {
+    const long = "lagi membaca semua file konfigurasi webhook dan membandingkan dengan log produksi kemarin";
+    const out = clipLabel(long);
+    expect(out.length).toBeLessThanOrEqual(PROGRESS_MAX);
+    expect(out.endsWith("…")).toBe(true);
+    expect(long.startsWith(out.slice(0, -1))).toBe(true);
+    expect(clipLabel("pendek")).toBe("pendek");
+  });
+
+  test("replaces Waiting for … in the header", () => {
+    const a = { kind: "a2a-remote", handle: "halodev", remote: { timeout_sec: 180 } } as Parameters<typeof remoteWaitLabel>[0];
+    expect(remoteWaitLabel(a, 12)).toBe("Waiting for @halodev's reply · 12s / 180s");
+    expect(remoteWaitLabel(a, 12, "lagi pakai code read…")).toBe("lagi pakai code read… · 12s / 180s");
   });
 });

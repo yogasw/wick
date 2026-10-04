@@ -44,8 +44,9 @@
     pose?: AvatarState;
     /** Draw one still frame and never animate (cards, dense lists). */
     still?: boolean;
-    /** Blob only: animate this one (header, empty state, preview). A blob
-        without it is a cached still frame, so lists stay cheap. */
+    /** Animate this one (roster, header, empty state, preview). A blob
+        without it is a cached still frame, so dense lists stay cheap; a
+        classic one without it skips the fidgets. */
     live?: boolean;
     /** Waiting on something (a chat loading): a live avatar fidgets
         often, a random bit each time (blob/motion/fidget.ts). */

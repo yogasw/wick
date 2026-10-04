@@ -59,3 +59,23 @@ describe("AgentSettings avatar: blob kind", () => {
     await waitFor(() => expect(lastAvatar()).toEqual({ shape: "circle", color: "#111111" }));
   });
 });
+
+describe("AgentSettings avatar: state samples move", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    // jsdom has no matchMedia, which reads as reduced motion: say no.
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
+  });
+
+  test("every blob state sample is live, like the roster and header", () => {
+    const blobAgent = { ...agent, avatar: { kind: "blob", shape: "cloud", color: "#111111", expression: "sad" } } as unknown as AgentItem;
+    const { container } = render(AgentSettings, {
+      props: { base: "/tools/agents", agent: blobAgent, agents: [blobAgent], tab: "avatar", onTab: vi.fn(), onClose: vi.fn(), onSaved: vi.fn(), onDeleted: vi.fn() },
+    });
+    const states = [...container.querySelectorAll("[data-kind=blob]")].map((el) => (el as HTMLElement).dataset.mode);
+    // Drawer header, two previews and seven states; the pickers' tiles stay still.
+    expect(states.filter((m) => m === "live").length).toBe(10);
+    expect(states.filter((m) => m === "still" || m === "dot").length).toBeGreaterThan(0);
+    vi.unstubAllGlobals();
+  });
+});

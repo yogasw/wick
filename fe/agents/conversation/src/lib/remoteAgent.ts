@@ -2,6 +2,7 @@ import type { AgentItem, RemoteAuthReq, RemoteAuthType } from "./api/team.js";
 import type { RailTab } from "./agentMode.js";
 import type { SettingsTab } from "./agentsRouter.js";
 import { SLACK_REMOTE_KIND, slackCaption, targetLabel } from "./slackRemote.js";
+import type { LiveTurn } from "./types/agents.js";
 
 /** remoteMaxSec is how long a remote turn may wait for its answer; 0 = unknown. */
 export function remoteMaxSec(a: Pick<AgentItem, "kind" | "remote" | "slack_remote">): number {
@@ -12,12 +13,42 @@ export function remoteMaxSec(a: Pick<AgentItem, "kind" | "remote" | "slack_remot
 /** remoteWaitLabel replaces "typing" for a remote agent: it is not
     writing, wick is waiting for the other side. "Waiting for @halodev's
     reply · 12s / 180s"; a channel target waits for a reply in #ops. */
-export function remoteWaitLabel(a: Pick<AgentItem, "kind" | "handle" | "remote" | "slack_remote">, elapsedSec: number): string {
+export function remoteWaitLabel(a: Pick<AgentItem, "kind" | "handle" | "remote" | "slack_remote">, elapsedSec: number, progress?: string): string {
   const s = a.slack_remote;
   const who = s && s.target !== "dm" ? `a reply in ${targetLabel(s)}` : `@${a.handle}'s reply`;
   const max = remoteMaxSec(a);
   const secs = Math.max(0, Math.floor(elapsedSec));
-  return `Waiting for ${who} · ${secs}s${max > 0 ? ` / ${max}s` : ""}`;
+  // What the remote says it is doing beats "Waiting for …" once it says it.
+  return `${progress || `Waiting for ${who}`} · ${secs}s${max > 0 ? ` / ${max}s` : ""}`;
+}
+
+/** PROGRESS_MAX caps a progress label so the header and the thinking
+    bubble keep one tidy line. */
+export const PROGRESS_MAX = 60;
+
+/** clipLabel shortens s to max characters on a word boundary, ending "…". */
+export function clipLabel(s: string, max = PROGRESS_MAX): string {
+  const t = s.replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max - 1);
+  const sp = cut.lastIndexOf(" ");
+  return `${(sp > max / 2 ? cut.slice(0, sp) : cut).replace(/[\s.,;:…-]+$/, "")}…`;
+}
+
+/** remoteProgress is a remote agent's latest progress label ("lagi pakai
+    code read…"): its remote_status lines arrive as the live turn's
+    thinking, one line each, so it is the last line of the last thinking
+    block. Only a remote's thinking means this; a local agent's is its
+    reasoning, which callers must not pass here. */
+export function remoteProgress(live: LiveTurn | null | undefined): string | undefined {
+  const blocks = live?.blocks ?? [];
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i];
+    if (b.kind !== "thinking") continue;
+    const line = b.text.split("\n").map((l) => l.trim()).filter(Boolean).pop();
+    return line ? clipLabel(line) : undefined;
+  }
+  return undefined;
 }
 
 

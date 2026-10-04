@@ -39,6 +39,8 @@
         turn, so without this the thread would say "thinking…" while the
         conversation is being rewritten underneath the reader. */
     compacting?: boolean;
+    /** What a remote agent says it is doing; replaces "thinking…". */
+    progressLabel?: string;
     /** Set in the Team app: the empty thread introduces the agent and its
         avatar stands in for the typing spinner. */
     agent?: AgentIdentity;
@@ -54,7 +56,7 @@
     onRemoteRecheck?: () => Promise<import("../api/team.js").SlackRecheck>;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -101,7 +103,7 @@
       ? undefined
       : compacting
         ? "compacting the conversation…"
-        : typingLabel(typing.substate, typing.toolName),
+        : (!typing.toolName && progressLabel) || typingLabel(typing.substate, typing.toolName),
   );
 
   /* The working bubble stays up through a turn: typing can drop for an
@@ -323,7 +325,7 @@
                 <path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path>
               </svg>
               {/if}
-              <span class="italic" data-testid="typing-label">{typingLabelShown ?? "thinking…"}</span>
+              <span class="min-w-0 truncate italic" data-testid="typing-label" title={typingLabelShown}>{typingLabelShown ?? "thinking…"}</span>
             </div>
           </div>
         </div>

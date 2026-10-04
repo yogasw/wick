@@ -360,6 +360,17 @@
   // Sharing comes last on every agent; the Captain's tab says why it can't.
   const tabs = $derived([...(remote ? remoteSettingsTabs(agent) : TABS), { id: "sharing" as SettingsTab, label: "Sharing" }]);
   const view = $derived<SettingsTab>(tab === "sharing" ? "sharing" : remote ? remoteSettingsTab(tab) : tab === "remote" ? "persona" : tab);
+
+  /* The Avatar tab's "hatching" sample: a hatch plays once when an agent
+     is created, so the preview replays it on a loop to have something to
+     show. The avatar itself skips it under prefers-reduced-motion. */
+  const HATCH_REPLAY_MS = 2400;
+  let hatchRun = $state(0);
+  $effect(() => {
+    if (view !== "avatar") return;
+    const id = setInterval(() => (hatchRun += 1), HATCH_REPLAY_MS);
+    return () => clearInterval(id);
+  });
   const input =
     "w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100";
   const label = "mb-1 block text-xs font-medium text-black-800 dark:text-black-600";
@@ -617,7 +628,15 @@
       <div class="grid grid-cols-3 gap-3 sm:grid-cols-7">
         {#each AVATAR_STATES as st (st)}
           <div class="flex flex-col items-center gap-1.5 text-center">
-            <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={40} pose={st} />
+            <!-- live, as in the roster and the chat header: each sample
+                 moves the way that state does there. -->
+            {#if st === "egg"}
+              {#key hatchRun}
+                <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={40} pose={st} hatching live />
+              {/key}
+            {:else}
+              <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={40} pose={st} live />
+            {/if}
             <span class="text-[11px] text-black-800 dark:text-black-600">{AVATAR_STATE_LABELS[st]}</span>
           </div>
         {/each}
