@@ -211,6 +211,12 @@ export type ConversationTurn = {
   /** assistant turn of a remote agent — how it ended: "ended without
       marker", "follow-up", "late reply" (remote.Note*). */
   remote_note?: string;
+  /** the turn this one stands in for — a remote's late reply replacing
+      its timeout (store.ConversationTurn.Replaces). */
+  replaces?: string;
+  /** client-side only (foldReplaced): how long after the replaced turn
+      this reply was kept, in ms. */
+  late_ms?: number;
   /** assistant turn — its reply's delivery to Slack, when posted there. */
   delivery?: Delivery;
   /** system turn only — "provider_switch", "interrupted", "compaction", …

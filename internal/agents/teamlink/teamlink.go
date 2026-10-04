@@ -260,6 +260,10 @@ type Handoff struct {
 	// ToID is the target agent's id, so the thread can link to its chat.
 	ToID  string
 	State a2a.TaskState
+	// FromSession is the caller's conversation, so a reply the target
+	// sends after the task ended can still find its way back after a
+	// restart (the Hub's own memory of the task does not survive one).
+	FromSession string
 }
 
 // Hub is the registry, the client and the bookkeeping, in one place so

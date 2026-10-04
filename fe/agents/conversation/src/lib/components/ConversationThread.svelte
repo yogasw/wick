@@ -13,6 +13,7 @@
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import type { AgentIdentity } from "../agentMode.js";
   import { foldSystemEvents } from "../systemEvents.js";
+  import { foldReplaced } from "../remoteRecheck.js";
   import { speakerVia } from "../teamMention.js";
 
   type Props = {
@@ -53,7 +54,7 @@
     onCardAction?: (cardId: string, value: string, label: string) => void;
     onApprovalDecide?: (approvalId: string, decision: import("../interactiveCards.js").ApprovalDecisionChoice) => void;
     /** "Cek ulang" of a Slack remote turn (see ThreadMessage). */
-    onRemoteRecheck?: () => Promise<import("../api/team.js").SlackRecheck>;
+    onRemoteRecheck?: () => Promise<import("../api/team.js").RemoteRecheck>;
   };
 
   let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck }: Props = $props();
@@ -152,9 +153,9 @@
      answering something new, and both turns stay. */
   const shownTurns = $derived(
     foldSystemEvents(
-      turns.filter((t, i) => {
+      foldReplaced(turns).filter((t, i, all) => {
         if (!t.interrupted || t.role !== "assistant") return true;
-        const next = turns[i + 1];
+        const next = all[i + 1];
         return !next || next.role !== "assistant";
       }),
     ),

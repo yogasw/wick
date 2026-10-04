@@ -523,8 +523,9 @@ func (p *process) drain(t *turnOut, push <-chan Event) bool {
 }
 
 // OnFollowUp, when set, also hands a follow-up reply to whoever asked the
-// session's last turn (another agent over A2A). Set once at startup.
-var OnFollowUp func(sessionID, text string)
+// session's last turn (another agent over A2A). note is NoteFollowUp, or
+// NoteLate for the reply to a turn that timed out. Set once at startup.
+var OnFollowUp func(sessionID, text, note string)
 
 // followUpQuiet is how long a late change must stay still before it is
 // passed on, so a remote streaming by edits gives one follow-up, not ten.
@@ -575,7 +576,7 @@ func (p *process) graceAfter(h Handle, push <-chan Event, puller Puller, canPull
 			text = strings.TrimLeft(pending[len(shown):], "\n")
 		}
 		if OnFollowUp != nil {
-			OnFollowUp(p.id, text)
+			OnFollowUp(p.id, text, note)
 		}
 		p.emitText(text)
 		p.emitDone(text, note)

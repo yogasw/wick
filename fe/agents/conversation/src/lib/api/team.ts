@@ -377,14 +377,24 @@ export const createSlackRemote = (base: string, body: SlackRemoteCreate) =>
 export const getSlackRemote = (base: string, id: string) =>
   apiGetE<SlackRemoteInfo>(`${base}/api/team/agents/${enc(id)}/slack-remote`);
 
-/** SlackRecheck is a Slack remote turn read again from its thread
-    (slackremote.Recheck): the reply as it is now, and whether the remote
-    still works or finished. */
-export type SlackRecheck = { text: string; busy: boolean; done: boolean; label?: string };
+/** RemoteRecheck is a remote turn's reply read again (remote.Recheck): the
+    reply as it is now, whether the remote still works or finished, and —
+    once settled — whether it was kept in place of the timed-out turn and
+    to which asking agent it was forwarded. */
+export type RemoteRecheck = {
+  text: string;
+  busy: boolean;
+  done: boolean;
+  label?: string;
+  replaced?: boolean;
+  forwarded_to?: string;
+};
 
-/** Reads the session's last Slack thread again; posts nothing to Slack. */
-export const recheckSlackRemote = (base: string, id: string, sessionId: string) =>
-  apiPostE<SlackRecheck>(`${base}/api/team/agents/${enc(id)}/slack-remote/recheck?session_id=${enc(sessionId)}`, {});
+/** Reads the session's last remote turn again; posts nothing to the
+    remote. A settled reply replaces the timeout and goes to the asker. */
+export const recheckRemote = (base: string, id: string, sessionId: string) =>
+  apiPostE<RemoteRecheck>(`${base}/api/team/agents/${enc(id)}/remote/recheck?session_id=${enc(sessionId)}`, {});
+
 
 /** Sent fields overwrite, the rest stay. */
 export const updateSlackRemote = (base: string, id: string, body: Partial<SlackRemoteConfig>) =>

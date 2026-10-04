@@ -319,23 +319,15 @@ func (s *Source) End(remote.Handle) {
 }
 
 // Recheck is the result of reading a turn's thread again.
-type Recheck struct {
-	// Text is the remote's reply as the thread holds it now.
-	Text string `json:"text"`
-	// Busy: the remote still shows it works (⏳, a progress note, a
-	// status); Done: its end marker or ✅/❌ is there.
-	Busy bool `json:"busy"`
-	Done bool `json:"done"`
-	// Label is its progress note, if any.
-	Label string `json:"label,omitempty"`
-}
+type Recheck = remote.Recheck
 
 // ErrNoTurn: the session has posted no turn to read back.
-var ErrNoTurn = errors.New("this session has no Slack turn to check")
+var ErrNoTurn = remote.ErrNoTurn
 
 // Recheck reads the session's last turn's thread again — for a turn that
 // timed out or ended without a marker — and returns the remote's reply as
-// it is now. It sends nothing to the remote and changes nothing.
+// it is now (remote.Rechecker). It sends nothing to the remote and
+// changes nothing.
 func (s *Source) Recheck(ctx context.Context, sessionDir string) (Recheck, error) {
 	st := LoadState(sessionDir)
 	sent := firstNonEmpty(st.SentTS, st.ThreadTS)

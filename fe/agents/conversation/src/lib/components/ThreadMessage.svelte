@@ -24,8 +24,8 @@
   import ArtifactGallery from "./ArtifactGallery.svelte";
   import MediaLightbox from "./MediaLightbox.svelte";
   import RemoteRecheck from "./RemoteRecheck.svelte";
-  import type { SlackRecheck } from "../api/team.js";
-  import { isRemoteTimeout, isLateReply, NOTE_NO_MARKER } from "../remoteRecheck.js";
+  import type { RemoteRecheck as RecheckResult } from "../api/team.js";
+  import { isRemoteTimeout, isLateReply, lateLabel, NOTE_NO_MARKER } from "../remoteRecheck.js";
   import { jumpLink, deliveryView } from "../slackDelivery.js";
 
   type Props = {
@@ -55,7 +55,7 @@
     onApprovalDecide?: (approvalId: string, decision: ApprovalDecisionChoice) => void;
     /** Reads a Slack remote turn's thread again ("Cek ulang"); unset = no
         button. Offered on a timeout and on a turn closed without marker. */
-    onRemoteRecheck?: () => Promise<SlackRecheck>;
+    onRemoteRecheck?: () => Promise<RecheckResult>;
   };
   let { turn, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck }: Props = $props();
 
@@ -758,7 +758,7 @@
 
       {#if turn.text}
         {#if isLateReply(turn)}
-          <span class="self-start inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] leading-none text-amber-700 dark:text-amber-300" data-testid="late-reply-label">balasan telat</span>
+          <span class="self-start inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] leading-none text-amber-700 dark:text-amber-300" data-testid="late-reply-label">{lateLabel(turn)}</span>
         {/if}
         {#if stamp || isSilentReply}
           <span class="self-start inline-flex items-center gap-0.5 text-[10px] leading-none text-black-500 dark:text-black-600">

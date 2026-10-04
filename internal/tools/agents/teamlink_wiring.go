@@ -35,8 +35,18 @@ const sourceTeam = team.SourceTeam
 // deliver wakes a session with a late reply (the sub-agent delivery path).
 func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, sessionID, text string) error) *teamlink.Hub {
 	hub := teamlink.NewHub(teamDirectory{svc: svc}, poolTurns{}, teamNotifier{deliver: deliver})
-	// A remote agent's late reply goes to the agent that asked it too.
-	remote.OnFollowUp = func(sessionID, text string) { hub.FollowUp(context.Background(), sessionID, text) }
+	// A remote agent's late reply goes to the agent that asked it too. The
+	// reply to a timed-out turn is found from the conversation, so it still
+	// arrives after a restart; it is sent once (settleLateReply).
+	remote.OnFollowUp = func(sessionID, text, note string) {
+		if note == remote.NoteLate {
+			if _, err := settleLateReply(context.Background(), sessionID, text, ""); err != nil {
+				log.Warn().Err(err).Str("session", sessionID).Msg("team: late reply")
+			}
+			return
+		}
+		hub.FollowUp(context.Background(), sessionID, text)
+	}
 	return hub
 }
 
@@ -177,7 +187,13 @@ func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text
 	if err := globalPool.Send(context.WithoutCancel(ctx), sessionID, "", sourceTeam, "user", text); err != nil {
 		return sessionID, "", err
 	}
-	return sessionID, collectTurn(ctx, ch), nil
+	text, failed := collectTurnErr(ctx, ch)
+	// A remote that timed out is not an empty answer: the asker learns the
+	// reply will follow (settleLateReply forwards it when it does).
+	if waited, ok := remote.IsTimeout(failed); ok && strings.TrimSpace(text) == "" {
+		text = remote.PendingNotice(agent.Handle, waited)
+	}
+	return sessionID, text, nil
 }
 
 // NewChat opens a chat of agent beside its main one, set up like it —
@@ -243,23 +259,34 @@ func chatUserOf(agent teamlink.Peer) string {
 
 // collectTurn joins the text of one turn, up to its Done.
 func collectTurn(ctx context.Context, ch <-chan delegation.StreamEvent) string {
+	text, _ := collectTurnErr(ctx, ch)
+	return text
+}
+
+// collectTurnErr is collectTurn plus the error of a remote turn that
+// timed out, which ends the turn too.
+func collectTurnErr(ctx context.Context, ch <-chan delegation.StreamEvent) (string, string) {
 	var b strings.Builder
 	for {
 		select {
 		case <-ctx.Done():
-			return b.String()
+			return b.String(), ""
 		case ev, ok := <-ch:
 			if !ok {
-				return b.String()
+				return b.String(), ""
 			}
 			switch ev.Type {
+			case event.Error:
+				if _, timedOut := remote.IsTimeout(ev.Text); timedOut {
+					return b.String(), ev.Text
+				}
 			case event.TextDelta:
 				b.WriteString(ev.Text)
 			case event.TextReplace:
 				b.Reset()
 				b.WriteString(ev.Text)
 			case event.Done:
-				return b.String()
+				return b.String(), ""
 			}
 		}
 	}
@@ -341,10 +368,15 @@ func encodeIDList(ids []string) string {
 
 // handoffTurn is h as a conversation system turn.
 func handoffTurn(h teamlink.Handoff, now time.Time) store.ConversationTurn {
-	return systemTurn(store.KindMentionHandoff, fmt.Sprintf("@%s → @%s · %s", h.From, h.To, h.State), map[string]string{
+	extras := map[string]string{
 		"from": h.From, "to": h.To, "to_agent_id": h.ToID, "state": string(h.State),
 		"task_id": h.TaskID, "context_id": h.ContextID,
-	}, now)
+	}
+	// Where to hand a late reply, read back after a restart (lateCaller).
+	if h.FromSession != "" {
+		extras["from_session"] = h.FromSession
+	}
+	return systemTurn(store.KindMentionHandoff, fmt.Sprintf("@%s → @%s · %s", h.From, h.To, h.State), extras, now)
 }
 
 // publishHandoff pushes turn to sessionID's live viewers.

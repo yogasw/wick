@@ -130,6 +130,11 @@ type ConversationTurn struct {
 	// RemoteNote is how a remote agent's turn ended ("ended without
 	// marker", "follow-up", "late reply"); assistant turn only.
 	RemoteNote string `json:"remote_note,omitempty"`
+	// Replaces is the turn this one stands in for: a remote agent's reply
+	// that arrived after its turn timed out takes the place of the timeout
+	// error. The replaced turn stays in the file for audit; the UI shows
+	// this one where it was.
+	Replaces string `json:"replaces,omitempty"`
 	// Delivery is whether this assistant turn's reply reached the channel
 	// thread it answers (Slack). Never written to conversation.jsonl: it is
 	// recorded after the turn is saved and stamped on at read time from
@@ -354,7 +359,41 @@ type Store struct {
 	// steady trickle of pointless IO for a number nobody reads that fast.
 	lastLevelWrite time.Time
 
+	// timedOut is the remote timeout error turn written last, while no
+	// message and no reply followed it: the late reply that comes next
+	// replaces it. Guarded by mu.
+	timedOut string
+
 	now func() time.Time
+}
+
+// Remote turn markers the store reacts to. They mirror remote.NoteLate
+// and remote.TimeoutMessage, kept here so the store stays free of the
+// remote package.
+const (
+	remoteNoteLate      = "late reply"
+	remoteTimeoutPrefix = "No reply from the remote agent after "
+)
+
+// setTimedOut records (or, with "", forgets) the timeout turn a late
+// reply replaces.
+func (s *Store) setTimedOut(id string) {
+	s.mu.Lock()
+	s.timedOut = id
+	s.mu.Unlock()
+}
+
+// replacedBy is the timeout turn a turn noted note replaces, if any; any
+// assistant turn ends the wait.
+func (s *Store) replacedBy(note string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := s.timedOut
+	s.timedOut = ""
+	if note != remoteNoteLate {
+		return ""
+	}
+	return id
 }
 
 // Options configures a Store. AgentName ties assistant turns to the
@@ -427,6 +466,7 @@ func (s *Store) AppendUserTurnWithSender(role, source, text string, atts []Attac
 // AppendUserTurnWithPostback is AppendUserTurnWithSender for a turn that
 // may be an actioncard click. postback nil = an ordinary message.
 func (s *Store) AppendUserTurnWithPostback(role, source, text string, atts []Attachment, sender *Sender, postback *Postback) error {
+	s.setTimedOut("")
 	turn := ConversationTurn{
 		Timestamp:   s.now().UTC(),
 		Role:        role,
@@ -860,6 +900,7 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		Interrupted: wasInterrupted,
 		HasTrace:    hasTrace,
 		RemoteNote:  note,
+		Replaces:    s.replacedBy(note),
 	}
 	if wasInterrupted {
 		turn.InterruptedBy, turn.InterruptedNote = s.takeInterruptCause()
@@ -924,12 +965,20 @@ func (s *Store) appendErrorTurn(msg string) error {
 		Text:      msg,
 		IsError:   true,
 	}
-	return storage.AppendJSONL(
+	if err := storage.AppendJSONL(
 		s.layout.SessionConversation(s.sessionID),
 		"wick-conv-v1",
 		s.sessionID,
 		turn,
-	)
+	); err != nil {
+		return err
+	}
+	if strings.HasPrefix(msg, remoteTimeoutPrefix) {
+		s.setTimedOut(turn.TurnID)
+	} else {
+		s.setTimedOut("")
+	}
+	return nil
 }
 
 // appendCompactionTurn records a compaction boundary as a structured

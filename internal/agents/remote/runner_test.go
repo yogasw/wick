@@ -289,7 +289,7 @@ func TestGraceWindowPassesOnALateMessage(t *testing.T) {
 	followUpQuiet = 10 * time.Millisecond
 	var asked []string
 	var amu sync.Mutex
-	OnFollowUp = func(sid, text string) { amu.Lock(); asked = append(asked, text); amu.Unlock() }
+	OnFollowUp = func(sid, text, _ string) { amu.Lock(); asked = append(asked, text); amu.Unlock() }
 	t.Cleanup(func() { followUpQuiet, OnFollowUp = old, nil })
 	f := &fake{listen: []ListenMode{ListenPush}, limits: Limits{Max: 5 * time.Second, Grace: 2 * time.Second}, push: make(chan Event, 8)}
 	f.push <- Event{Kind: EventText, Text: "first"}

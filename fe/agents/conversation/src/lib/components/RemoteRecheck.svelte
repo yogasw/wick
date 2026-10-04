@@ -1,22 +1,24 @@
 <script lang="ts">
-  import type { SlackRecheck } from "../api/team.js";
+  import type { RemoteRecheck } from "../api/team.js";
   import { recheckNote } from "../remoteRecheck.js";
   import { renderMarkdown } from "../markdown.js";
 
-  /* "Cek ulang" under a Slack remote turn that timed out or ended without
-     its marker: reads the thread again (nothing is sent to the remote)
-     and shows the reply as Slack holds it now. Clicking again re-reads. */
+  /* "Check again" under a remote turn that timed out or ended without its
+     marker: reads the reply again (nothing is sent to the remote) and
+     shows it as it stands now. A settled reply is kept by the server in
+     place of the turn — the thread reloads and shows it there. Clicking
+     again re-reads. */
   type Props = {
-    onRecheck: () => Promise<SlackRecheck>;
+    onRecheck: () => Promise<RemoteRecheck>;
     /** What the turn already shows — a re-read equal to it is "nothing new". */
     shown?: string;
   };
   let { onRecheck, shown = "" }: Props = $props();
 
   let loading = $state(false);
-  let result = $state<SlackRecheck | null>(null);
+  let result = $state<RemoteRecheck | null>(null);
   let error = $state("");
-  const fresh = $derived(!!result && !!result.text.trim() && result.text.trim() !== shown.trim());
+  const fresh = $derived(!!result && !result.replaced && !!result.text.trim() && result.text.trim() !== shown.trim());
 
   async function recheck() {
     if (loading) return;
@@ -44,7 +46,7 @@
         <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" stroke-linecap="round"></path>
         <path d="M13.5 2.5v2.5H11" stroke-linecap="round" stroke-linejoin="round"></path>
       </svg>
-      {loading ? "Mengecek…" : "Cek ulang"}
+      {loading ? "Checking…" : "Check again"}
     </button>
     {#if result && !loading}
       <span class="text-xs text-black-600 dark:text-black-700" data-testid="remote-recheck-note">{recheckNote(result, shown)}</span>
