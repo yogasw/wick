@@ -124,3 +124,4 @@ export type { TraceDisplay, TraceContext, TraceMedia } from "./trace/types.js";
 export { isBinaryKind } from "./trace/types.js";
 export { pushLayer, layer, topLayerNode, layerDepth } from "./layers.js";
 export type { LayerOptions } from "./layers.js";
+export { clock24 } from "./time24.js";

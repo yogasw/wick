@@ -1,3 +1,4 @@
+import { clock24 } from "@wick-fe/common-ui";
 // Formatting helpers shared by the page and its chart.
 //
 // Kept apart from the components so the number rendering — the part an
@@ -39,9 +40,7 @@ export function humanDuration(sec: number): string {
 }
 
 export function clockTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return clock24(iso);
 }
 
 // middleTruncate shortens a long command by removing its MIDDLE, keeping

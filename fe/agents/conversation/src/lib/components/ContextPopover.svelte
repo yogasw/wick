@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { clock24 } from "@wick-fe/common-ui";
   /* The Context window panel — what `/context` opens, and what the ring
      in the composer opens when clicked.
 
@@ -322,7 +323,7 @@
     if (!iso) return "";
     const t = Date.parse(iso);
     return Number.isFinite(t)
-      ? new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      ? clock24(t)
       : "";
   });
 </script>

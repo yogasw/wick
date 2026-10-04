@@ -1,3 +1,4 @@
+import { clock24 } from "./time24.js";
 /* "Last updated" metadata of a live model list (omp/opencode): when the
    server last read it, from where ("files" / "server" = read without
    starting the CLI, "cli" = an explicit Refresh), and whether the caller may
@@ -54,6 +55,6 @@ export function describeModelListMeta(m: ModelListMeta | undefined): string {
   if (!m) return "";
   if (!m.fetchedAt) return m.canRefresh ? "No model list yet — click Refresh" : "No model list yet";
   const d = new Date(m.fetchedAt);
-  const t = Number.isNaN(d.getTime()) ? m.fetchedAt : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const t = Number.isNaN(d.getTime()) ? m.fetchedAt : clock24(d);
   return `Updated ${t}${m.source ? ` · ${m.source}` : ""}`;
 }
