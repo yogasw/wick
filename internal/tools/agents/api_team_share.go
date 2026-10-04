@@ -274,7 +274,7 @@ func sharedTeamAgentItem(p entity.AgentPersona, sh entity.AgentShare, viewer str
 		it.SharedBy = p.OwnerUserID
 	}
 	it.SystemPrompt, it.Preset = "", ""
-	it.AllowedConnectors, it.IncludeNewConnectors = []team.ConnectorGrant{}, false
+	it.AllowedConnectors, it.IncludeNewConnectors, it.AccessMode = []team.ConnectorGrant{}, false, team.AccessChoose
 	it.AllowedNativeTools, it.BashRules, it.DisabledSkills = []string{}, []team.BashRule{}, []string{}
 	it.MentionFrom, it.MentionAllow = "", []string{}
 	it.Remote, it.SlackRemote = nil, nil

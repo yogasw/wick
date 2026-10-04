@@ -48,6 +48,27 @@ func NormalizeRunAs(v string) string {
 	return RunAsCaller
 }
 
+// Access modes for entity.AgentPersona.AccessMode.
+const (
+	// AccessChoose limits the agent to its checklist (grants, tier
+	// defaults, include-new).
+	AccessChoose = "choose"
+	// AccessOwner ("Same as me") opens every Connectors-tier connector the
+	// owner reaches, new ones included, with write ops. Platform and System
+	// rows still follow their tier defaults and overrides.
+	AccessOwner = "owner"
+)
+
+// NormalizeAccessMode maps a stored value to a mode. Empty (a row saved
+// before the column existed) and anything unknown read as AccessChoose,
+// the mode that never widens what an agent had.
+func NormalizeAccessMode(v string) string {
+	if v == AccessOwner {
+		return AccessOwner
+	}
+	return AccessChoose
+}
+
 // ConnectorGrant is one connector instance on an agent's checklist.
 type ConnectorGrant struct {
 	ConnectorID string `json:"connector_id"`

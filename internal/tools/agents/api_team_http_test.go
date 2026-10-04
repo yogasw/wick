@@ -57,8 +57,9 @@ func TestTeamAgentCreateRejectsBadInput(t *testing.T) {
 			"handle":             "worker",
 			"allowed_connectors": []team.ConnectorGrant{{ConnectorID: "not-mine", Level: team.LevelAll}},
 		},
-		"invalid run_as":   {"handle": "worker", "run_as": "root"},
-		"tagline too long": {"handle": "worker", "tagline": "a tagline far longer than fifty characters, which is the cap"},
+		"invalid run_as":      {"handle": "worker", "run_as": "root"},
+		"invalid access_mode": {"handle": "worker", "access_mode": "everything"},
+		"tagline too long":    {"handle": "worker", "tagline": "a tagline far longer than fifty characters, which is the cap"},
 	}
 	for name, body := range cases {
 		w, c := teamReq(t, u, http.MethodPost, "/api/team/agents", body, nil)
@@ -81,6 +82,45 @@ func TestTeamAgentCreateRejectsBadInput(t *testing.T) {
 	apiTeamAgentUpdate(c)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("patch run_as: status %d, want 400", w.Code)
+	}
+}
+
+// access_mode defaults to choose, is stored on PATCH, and a PATCH that
+// does not name it keeps it.
+func TestTeamAgentAccessMode(t *testing.T) {
+	withTeamWorld(t)
+	u := &entity.User{ID: "u1"}
+	seedTeamProject(t, "p1", u.ID)
+	w, c := teamReq(t, u, http.MethodPost, "/api/team/agents", map[string]any{"handle": "anton", "project_id": "p1"}, nil)
+	apiTeamAgentCreate(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create: status %d: %s", w.Code, w.Body)
+	}
+	row, err := globalTeam.GetByHandle(context.Background(), u.ID, "anton")
+	if err != nil || team.NormalizeAccessMode(row.AccessMode) != team.AccessChoose {
+		t.Fatalf("new agent access mode %q, err %v", row.AccessMode, err)
+	}
+	id := map[string]string{"id": row.ID}
+	patch := func(body map[string]any) string {
+		t.Helper()
+		w, c := teamReq(t, u, http.MethodPatch, "/api/team/agents/"+row.ID, body, id)
+		apiTeamAgentUpdate(c)
+		if w.Code != http.StatusOK {
+			t.Fatalf("patch %v: status %d: %s", body, w.Code, w.Body)
+		}
+		got, _ := globalTeam.Get(context.Background(), row.ID)
+		return got.AccessMode
+	}
+	if got := patch(map[string]any{"access_mode": "owner"}); got != team.AccessOwner {
+		t.Fatalf("patched access mode %q", got)
+	}
+	if got := patch(map[string]any{"run_as": "owner"}); got != team.AccessOwner {
+		t.Fatalf("unrelated patch changed access mode to %q", got)
+	}
+	w, c = teamReq(t, u, http.MethodPatch, "/api/team/agents/"+row.ID, map[string]any{"access_mode": "root"}, id)
+	apiTeamAgentUpdate(c)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("patch bad access_mode: status %d, want 400", w.Code)
 	}
 }
 

@@ -260,7 +260,7 @@ func announceAccessChanged(c *tool.Ctx, before, after entity.AgentPersona) {
 }
 
 // accessChangeList is what moved between two saves of an agent's access:
-// grants, the include-new switch and the run-as identity.
+// grants, the include-new switch, the access mode and the run-as identity.
 func accessChangeList(before, after entity.AgentPersona, label func(string) string) []string {
 	changes := grantsDiff(team.DecodeGrants(before.AllowedConnectors), team.DecodeGrants(after.AllowedConnectors), label)
 	if before.IncludeNewConnectors != after.IncludeNewConnectors {
@@ -269,6 +269,9 @@ func accessChangeList(before, after entity.AgentPersona, label func(string) stri
 		} else {
 			changes = append(changes, "-new connectors")
 		}
+	}
+	if a := team.NormalizeAccessMode(after.AccessMode); team.NormalizeAccessMode(before.AccessMode) != a {
+		changes = append(changes, "access: "+a)
 	}
 	if before.RunAs != after.RunAs {
 		changes = append(changes, "runs as: "+after.RunAs)

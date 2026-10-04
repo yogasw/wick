@@ -15,12 +15,18 @@ import (
 // an explicit grant (LevelOff included), else the connector's tier default
 // (TierPlatform: write; TierSystem: write for the Captain only), else the
 // include-new toggle (read only), else nothing. All of it stops at reach.
+// In AccessOwner mode an untiered connector skips the checklist and gets
+// write ops (see sameAsOwner).
 type Scope struct {
 	grants map[string]ConnectorGrant
 	// includeNew lets untiered connectors absent from the checklist
 	// through with read-only ops — the owner's, not whoever triggers the
 	// turn.
 	includeNew bool
+	// sameAsOwner is team.AccessOwner: untiered connectors in reach open
+	// with every op, the grants on them aside (an explicit off still
+	// holds). Tier rows keep their own rules.
+	sameAsOwner bool
 	// captain unlocks the TierSystem default and the owner-wide data
 	// scope (see CheckSessionTarget).
 	captain bool
@@ -125,6 +131,7 @@ func ScopeOf(p entity.AgentPersona, reach Reach) *Scope {
 	s := NewScope(grants, p.IncludeNewConnectors, p.IsCaptain, reach).WithFeatures(f)
 	s.agentID, s.ownerID = p.ID, p.OwnerUserID
 	s.manageAgents = ManagesAgents(p)
+	s.sameAsOwner = NormalizeAccessMode(p.AccessMode) == AccessOwner
 	return s
 }
 
@@ -148,6 +155,12 @@ func (s *Scope) resolve(connectorID string) (string, *ConnectorGrant) {
 	it, inReach := s.reach[connectorID]
 	if s.reach != nil && !inReach && !isToolGrant(connectorID) {
 		return LevelOff, nil
+	}
+	if s.sameAsOwner && inReach && it.Tier == TierConnector && !isToolGrant(connectorID) {
+		if g, ok := s.grants[connectorID]; ok && g.Level == LevelOff {
+			return LevelOff, nil
+		}
+		return LevelAll, nil
 	}
 	if g, ok := s.grants[connectorID]; ok {
 		switch g.Level {

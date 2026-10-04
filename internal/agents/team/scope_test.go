@@ -242,6 +242,40 @@ func TestScopeLevelResolution(t *testing.T) {
 	}
 }
 
+// AccessOwner opens every untiered connector in the owner's reach with
+// write ops, new ones included, and nothing past reach. Tier rows keep
+// their own rules, an explicit off still holds, and an old row (empty
+// mode) stays on its checklist.
+func TestScopeSameAsOwner(t *testing.T) {
+	reach := Reach{
+		"notes1": {Key: "notes", Tier: TierPlatform},
+		"wm":     {Key: "wickmanager", Tier: TierSystem},
+		"slack":  {Key: "slack"},
+		"http":   {Key: "httprest"},
+		"jira":   {Key: "jira"},
+	}
+	grants := `[{"connector_id":"http","level":"read","accounts":["acc-me"]},{"connector_id":"jira","level":"off"},{"connector_id":"notes1","level":"off"}]`
+	owner := ScopeOf(entity.AgentPersona{AccessMode: AccessOwner, AllowedConnectors: grants}, reach)
+	for conn, want := range map[string]string{
+		"slack": LevelAll, "http": LevelAll, "jira": LevelOff,
+		"notes1": LevelOff, "wm": LevelOff, "elsewhere": LevelOff,
+	} {
+		if got := owner.Level(conn); got != want {
+			t.Errorf("owner mode Level(%q) = %q, want %q", conn, got, want)
+		}
+	}
+	if !owner.AllowOp("slack", "delete", true) || !owner.AllowAccount("http", "acc-other") {
+		t.Error("owner mode must open every op and account the owner has")
+	}
+	if ScopeOf(entity.AgentPersona{AccessMode: AccessOwner}, nil).Level("slack") != LevelOff {
+		t.Error("owner mode with unknown reach must open nothing")
+	}
+	old := ScopeOf(entity.AgentPersona{AllowedConnectors: grants}, reach)
+	if old.Level("slack") != LevelOff || old.Level("http") != LevelRead {
+		t.Error("empty access mode must keep the checklist")
+	}
+}
+
 // A grant naming only a personal account refuses ops run as the bot.
 func TestScopePersonalAccountOnly(t *testing.T) {
 	s := NewScope([]ConnectorGrant{{ConnectorID: "slack", Level: LevelAll, Accounts: []string{"acc-me"}}}, false, false, Reach{"slack": {Key: "slack"}})

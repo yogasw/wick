@@ -70,6 +70,8 @@ type TeamAgentItem struct {
 	Avatar               team.Avatar           `json:"avatar"`
 	AllowedConnectors    []team.ConnectorGrant `json:"allowed_connectors"`
 	IncludeNewConnectors bool                  `json:"include_new_connectors"`
+	// AccessMode is team.AccessChoose or team.AccessOwner ("Same as me").
+	AccessMode string `json:"access_mode"`
 	// AllowedNativeTools, BashRules and DisabledSkills are the Tools &
 	// features and Skills tabs (team/tools.go). NativeToolsEnforced is
 	// false when the agent's provider cannot be held to them.
@@ -182,6 +184,7 @@ type teamAgentWriteReq struct {
 	Features             *team.Features          `json:"features"`
 	AllowedConnectors    *[]team.ConnectorGrant  `json:"allowed_connectors"`
 	IncludeNewConnectors *bool                   `json:"include_new_connectors"`
+	AccessMode           *string                 `json:"access_mode"`
 	AllowedNativeTools   *[]string               `json:"allowed_native_tools"`
 	BashRules            *[]team.BashRule        `json:"bash_rules"`
 	SuggestedPrompts     *[]team.SuggestedPrompt `json:"suggested_prompts"`
@@ -363,6 +366,20 @@ func validRunAs(c *tool.Ctx, v *string, current string) (string, bool) {
 		return *v, true
 	}
 	c.JSON(http.StatusBadRequest, map[string]string{"error": "run_as must be caller or owner"})
+	return "", false
+}
+
+// validAccessMode reads req.AccessMode: the stored value (unchanged when
+// absent), or a 400 for anything but choose / owner. false = stop.
+func validAccessMode(c *tool.Ctx, v *string, current string) (string, bool) {
+	if v == nil {
+		return team.NormalizeAccessMode(current), true
+	}
+	switch *v {
+	case team.AccessChoose, team.AccessOwner:
+		return *v, true
+	}
+	c.JSON(http.StatusBadRequest, map[string]string{"error": "access_mode must be choose or owner"})
 	return "", false
 }
 
@@ -643,6 +660,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		Avatar:               team.DecodeAvatar(p.Avatar),
 		AllowedConnectors:    team.DecodeGrants(p.AllowedConnectors),
 		IncludeNewConnectors: p.IncludeNewConnectors,
+		AccessMode:           team.NormalizeAccessMode(p.AccessMode),
 		AllowedNativeTools:   team.DecodeNativeTools(p.AllowedNativeTools),
 		BashRules:            team.DecodeBashRules(p.BashRules),
 		DisabledSkills:       team.DecodeSkillNames(p.DisabledSkills),
@@ -974,6 +992,10 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 	if !ok {
 		return
 	}
+	accessMode, ok := validAccessMode(c, req.AccessMode, "")
+	if !ok {
+		return
+	}
 	tagline, ok := validTagline(c, req.Tagline, "")
 	if !ok {
 		return
@@ -1031,6 +1053,7 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		AllowedConnectors:    grants,
 		IncludeNewConnectors: req.IncludeNewConnectors != nil && *req.IncludeNewConnectors,
 		RunAs:                runAs,
+		AccessMode:           accessMode,
 		Features:             team.EncodeFeatures(feats),
 		Avatar:               team.EncodeAvatar(av),
 	}
@@ -1117,6 +1140,9 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 	}
 	if req.IncludeNewConnectors != nil {
 		p.IncludeNewConnectors = *req.IncludeNewConnectors
+	}
+	if p.AccessMode, ok = validAccessMode(c, req.AccessMode, p.AccessMode); !ok {
+		return
 	}
 	if !applyToolSettings(c, &p, req) {
 		return

@@ -44,6 +44,10 @@ type AgentPersona struct {
 	// IncludeNewConnectors grants, with read-only ops, every connector the
 	// owner gains later without editing the checklist.
 	IncludeNewConnectors bool `gorm:"not null;default:false" json:"include_new_connectors"`
+	// AccessMode is team.AccessChoose (the checklist above) or
+	// team.AccessOwner ("Same as me": every connector the owner reaches,
+	// with write ops). The stored checklist is kept either way.
+	AccessMode string `gorm:"type:varchar(16);not null;default:'choose'" json:"access_mode"`
 	// Features is a JSON object of team.Features (which conversation
 	// rail panels the agent's chat shows).
 	Features string `gorm:"type:text;not null;default:'{}'" json:"features"`
