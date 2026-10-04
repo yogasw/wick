@@ -34,6 +34,11 @@ describe("returnHref", () => {
   it("skips a bad stored value but still uses the referrer", () => {
     expect(returnHref("//x", `${O}/tools/agents/connectors`, O, B)).toBe("/tools/agents/connectors");
   });
+  it("never leaves the Agents space for another wick tool", () => {
+    expect(returnHref("/tools/work-schedule", `${O}/tools/work-schedule`, O, B)).toBe("/tools/agents/sessions");
+    expect(returnHref(null, `${O}/tools/text-counter?x=1`, O, B)).toBe("/tools/agents/sessions");
+    expect(returnHref("/tools/agentsx", "", O, B)).toBe("/tools/agents/sessions");
+  });
   it("tolerates an unparsable referrer", () => {
     expect(returnHref(null, "not a url", O, B)).toBe("/tools/agents/sessions");
   });

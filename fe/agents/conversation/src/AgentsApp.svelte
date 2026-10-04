@@ -60,8 +60,8 @@
       ? { mode: themeMode, light: appEl?.dataset.themeLight ?? "", dark: appEl?.dataset.themeDark ?? "" }
       : null;
 
-  /* The account menu's "Switch to Agents" goes back to the wick page the user entered
-     from. The stored page is read once and dropped, so a later entry from
+  /* The "Agents" switch goes back to the Agents page the user entered from
+     (never another wick tool; else the conversation list). The stored page is read once and dropped, so a later entry from
      elsewhere (the Overview card) is not sent to a stale one; a reload
      keeps document.referrer. classicHref keeps a landing target from
      redirecting straight back here ("Open Team when I open Agents"). */
@@ -412,6 +412,7 @@
   const agentMode = $derived({
     hideTabs: sharedMode?.hideTabs ?? remoteMode?.hideTabs ?? hiddenTabsFor(selected?.features, selected ? nativeToolsOf(selected.allowed_native_tools) : null),
     ...(sharedMode ? { railNote: sharedMode.railNote, chatOnly: true } : remoteMode ? { railNote: remoteMode.railNote } : {}),
+    ...(selected && !sharedMode && isSlackRemote(selected) ? { recheckAgentId: selected.id } : {}),
     hideHeader: true,
     hidePickers: true,
     onDeleted: () => go({ session: null }),

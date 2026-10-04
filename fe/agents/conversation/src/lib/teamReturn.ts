@@ -1,24 +1,25 @@
-/* Where the Team app's "Switch to Agents" menu item goes: back to the wick page the user came
-   from. The sidebar's "Team" link stores that page in sessionStorage under
+/* Where the Team app's "Agents" switch goes: back to the Agents page the user came
+   from — never another wick tool, since the switch reads as "the Agents space". The sidebar's "Team" link stores that page in sessionStorage under
    RETURN_KEY on click (layout.templ); other entries (the Overview card, a
    typed URL) fall back to document.referrer, and when neither is usable
    the conversation list. */
 
 export const RETURN_KEY = "wick.team.return";
 
-/** returnHref picks the "Agents" target. Only a same-origin path outside the Team
-    app counts — anything else (another site, "//host", "/\\host" which
+/** returnHref picks the "Agents" target. Only a same-origin path inside the Agents
+    space (base) and outside the Team app counts — anything else (another site, "//host", "/\\host" which
     browsers read like "//host", the app itself) would make the link an open
     redirect or a loop. */
 export function returnHref(stored: string | null, referrer: string, origin: string, base: string): string {
   const team = base + "/team";
-  const inside = (path: string) =>
-    path.startsWith(team) && (path.length === team.length || "/?#".includes(path[team.length]));
-  if (stored && stored[0] === "/" && stored[1] !== "/" && stored[1] !== "\\" && !inside(stored)) return stored;
+  const within = (path: string, root: string) =>
+    path.startsWith(root) && (path.length === root.length || "/?#".includes(path[root.length]));
+  const ok = (path: string) => within(path, base) && !within(path, team);
+  if (stored && stored[0] === "/" && stored[1] !== "/" && stored[1] !== "\\" && ok(stored)) return stored;
   if (referrer) {
     try {
       const u = new URL(referrer);
-      if (u.origin === origin && !inside(u.pathname)) return u.pathname + u.search + u.hash;
+      if (u.origin === origin && ok(u.pathname)) return u.pathname + u.search + u.hash;
     } catch {
       // not a URL: ignore
     }
