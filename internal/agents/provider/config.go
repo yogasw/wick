@@ -22,7 +22,7 @@ type InstanceConfig struct {
 	// turn, mid-turn messages wait then run in order (none lost). spawn =
 	// one-shot, every message its own parallel process (no queue, contexts
 	// independent — only safe where turns don't need shared history).
-	SendMode string `wick:"key=send_mode;dropdown=default|append|queue|spawn;desc=How a message reaches the CLI.\ndefault — follow the provider type (claude=append; codex, omp, opencode=queue).\nappend — one persistent process, the CLI queues input itself (claude). Not supported by codex, omp or opencode: they read the prompt once, so append runs as queue there.\nqueue — one process per turn; messages sent while busy wait and then run TOGETHER as one turn. Context continues (resume). Nothing is dropped. omp and opencode in server mode take them into the running turn instead (omp: steer), so append is supported there.\nspawn — one process per message, all in parallel. No queue, each runs in its own session, so contexts do NOT share history."`
+	SendMode string `wick:"key=send_mode;dropdown=default|append|queue|spawn;desc=How a message reaches the CLI.\ndefault — follow the provider type (claude=append, codex, omp, opencode=queue).\nappend — one persistent process, the CLI queues input itself (claude). Not supported by codex, omp or opencode: they read the prompt once, so append runs as queue there.\nqueue — one process per turn, messages sent while busy wait and then run TOGETHER as one turn. Context continues (resume). Nothing is dropped. omp and opencode in server mode take them into the running turn instead (omp: steer), so append is supported there.\nspawn — one process per message, all in parallel. No queue, each runs in its own session, so contexts do NOT share history."`
 }
 
 // CLIModelConfig is the model-picker section for CLI providers
@@ -50,14 +50,14 @@ type LiveCLIModelConfig struct {
 // OpencodeModelConfig is the opencode-only model/hosting section.
 type OpencodeModelConfig struct {
 	Model       string `wick:"key=opencode_model;desc=provider/model this instance runs (sent as --model), e.g. openai/gpt-5.5. Required: without it opencode silently uses its hosted default model."`
-	AllowHosted bool `wick:"bool;key=opencode_allow_hosted;desc=Allow opencode/… hosted models (opencode Zen). On by default so every model the CLI lists is offered; they send the whole conversation to opencode's servers — turn off to keep to your own providers."`
+	AllowHosted bool `wick:"bool;key=opencode_allow_hosted;desc=Allow opencode/… hosted models (opencode Zen). On by default so every model the CLI lists is offered, they send the whole conversation to opencode's servers — turn off to keep to your own providers."`
 }
 
 // ServerModeConfig is the shared-CLI-server section (opencode today, omp
 // next). Generic keys so one FE toggle serves every provider that has it.
 type ServerModeConfig struct {
-	ServerMode        bool `wick:"bool;key=server_mode;desc=Keep the CLI running between turns instead of one process per turn. opencode: one shared server per instance (~2 s per turn, ~500 MB shared by all sessions). omp: one RPC process per session (no boot per turn, messages sent mid-turn steer the running turn). Off = one process per turn (the old path: ~6 s and up to ~800 MB each; messages sent mid-turn queue and join the next turn). A change applies from the next turn; a server no longer needed stops once no turn is running."`
-	ServerIdleMinutes int  `wick:"key=server_idle_minutes;desc=Minutes the server may sit without a turn before it is killed (started again on the next turn). Empty or 0 = the pool idle timeout (Settings → General, default 2 minutes, same as claude/codex); it cannot be turned off."`
+	ServerMode        bool `wick:"bool;key=server_mode;desc=Keep the CLI running between turns instead of one process per turn. opencode: one shared server per instance (~2 s per turn, ~500 MB shared by all sessions). omp: one RPC process per session (no boot per turn, messages sent mid-turn steer the running turn). Off = one process per turn (the old path: ~6 s and up to ~800 MB each, messages sent mid-turn queue and join the next turn). A change applies from the next turn, a server no longer needed stops once no turn is running."`
+	ServerIdleMinutes int  `wick:"key=server_idle_minutes;desc=Minutes the server may sit without a turn before it is killed (started again on the next turn). Empty or 0 = the pool idle timeout (Settings → General, default 2 minutes, same as claude/codex), it cannot be turned off."`
 }
 
 // ModelRetryConfig is the omp/opencode "refused model" fallback switch.
@@ -71,7 +71,7 @@ func SupportsAutoRetryModel(t Type) bool { return t == TypeOpencode || t == Type
 // AuthShareConfig is the omp/opencode shared-login section. The FE renders
 // it as a dropdown of the instances this one may take its login from.
 type AuthShareConfig struct {
-	AuthFrom string `wick:"key=auth_from;desc=Use the login of another instance of the same type instead of logging in here. This instance keeps its own profile, config, soul and sessions; only the credentials are shared (omp: wick runs an auth broker for the owner; opencode: auth.json is linked to the owner's). Empty = its own login. The owner cannot itself use another's login."`
+	AuthFrom string `wick:"key=auth_from;desc=Use the login of another instance of the same type instead of logging in here. This instance keeps its own profile, config, soul and sessions, only the credentials are shared (omp: wick runs an auth broker for the owner, opencode: auth.json is linked to the owner's). Empty = its own login. The owner cannot itself use another's login."`
 }
 
 // ExternalSkillsConfig is opencode's host-skill switch (omp has none, so

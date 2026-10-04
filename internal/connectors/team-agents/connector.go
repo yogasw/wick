@@ -114,10 +114,10 @@ type createInput struct {
 
 type personaInput struct {
 	Agent        string `wick:"required;desc=The agent's @handle or id."`
-	Name         string `wick:"desc=New display name; empty = unchanged."`
-	Tagline      string `wick:"desc=New tagline; empty = unchanged."`
-	Description  string `wick:"desc=New short description; empty = unchanged."`
-	SystemPrompt string `wick:"textarea;desc=New system prompt; empty = unchanged."`
+	Name         string `wick:"desc=New display name, empty = unchanged."`
+	Tagline      string `wick:"desc=New tagline, empty = unchanged."`
+	Description  string `wick:"desc=New short description, empty = unchanged."`
+	SystemPrompt string `wick:"textarea;desc=New system prompt, empty = unchanged."`
 }
 
 type accessInput struct {
@@ -133,7 +133,7 @@ type scheduleInput struct {
 	RunAt      string `wick:"desc=One-shot fire time: RFC3339 or an offset like +2h."`
 	Every      string `wick:"desc=Repeat interval, e.g. 30m, 1h30m."`
 	Cron       string `wick:"desc=5-field cron (min hour dom mon dow) in the server time zone, e.g. 0 9 * * 1-5."`
-	Message    string `wick:"textarea;desc=What the agent is told when it fires (create; update = new text, empty = unchanged)."`
+	Message    string `wick:"textarea;desc=What the agent is told when it fires (create, update = new text, empty = unchanged)."`
 }
 
 // Operations lists the connector's ops.
