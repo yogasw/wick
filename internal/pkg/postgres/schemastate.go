@@ -82,6 +82,7 @@ var migratedModels = []any{
 	&entity.PluginState{},
 	&entity.PluginSource{},
 	&entity.PluginAudit{},
+	&entity.PluginReplacement{},
 	&entity.ConnectorState{},
 	&entity.ScheduledMessage{},
 	// Multi-agent sub-agent delegation — see

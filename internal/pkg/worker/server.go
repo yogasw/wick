@@ -18,6 +18,7 @@ import (
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
+	pluginreplace "github.com/yogasw/wick/internal/plugins/replace"
 	"github.com/yogasw/wick/internal/tools"
 	"github.com/yogasw/wick/pkg/job"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
@@ -57,6 +58,10 @@ func NewServer() *Server {
 	if n := jobplugin.Load(connplugin.KindDir(wickplugin.KindJob), jobPluginStore.Enabled, jobPluginStore.Record); n > 0 {
 		log.Info().Int("plugins", n).Msg("job plugins: loaded")
 	}
+	// Jobs replaced by a plugin (job.Meta.Replaces) are dropped here too so
+	// the worker never schedules them; the web server runs the data
+	// migration itself (internal/plugins/replace).
+	pluginreplace.Prepare(jobs.All(), nil, jobs.Unregister, nil)
 
 	// Reconcile the configs table so job.Ctx.Cfg(...) sees the same
 	// cached values the web process uses. Seeds per-tool / per-job
@@ -91,6 +96,7 @@ func NewServer() *Server {
 	}
 
 	jobsSvc := manager.NewServiceFromDB(db)
+	jobsSvc.SetHidden(pluginreplace.IsReplaced)
 	jobsSvc.SetConfigReader(configsSvc)
 
 	return &Server{jobsSvc: jobsSvc, pluginMgr: pluginMgr}

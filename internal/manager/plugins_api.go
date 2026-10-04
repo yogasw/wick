@@ -14,6 +14,8 @@ import (
 
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	"github.com/yogasw/wick/internal/login"
+	pluginreplace "github.com/yogasw/wick/internal/plugins/replace"
+	pkgentity "github.com/yogasw/wick/pkg/entity"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
@@ -38,6 +40,17 @@ type PluginsHandler struct {
 	// sources updates plugins that were installed from a plugin source
 	// (url / GitHub) from that source instead of the connector catalog.
 	sources *PluginSourcesHandler
+	// replacer re-runs the replaces migration on demand; refresh reloads
+	// the configs cache for the new key afterwards (configs.EnsureOwned).
+	replacer *pluginreplace.Migrator
+	refresh  func(ctx context.Context, owner string, rows ...pkgentity.Config) error
+}
+
+// SetReplaceRefresh wires the configs-cache refresh the replace endpoint
+// calls after an apply, so copied values are live without a restart.
+func (h *PluginsHandler) SetReplaceRefresh(fn func(ctx context.Context, owner string, rows ...pkgentity.Config) error) *PluginsHandler {
+	h.refresh = fn
+	return h
 }
 
 // SetSources routes updates of source-installed plugins to their source.
@@ -53,6 +66,7 @@ func NewPluginsHandler(db *gorm.DB) *PluginsHandler {
 		store:    connplugin.NewStateStore(db),
 		registry: connplugin.DefaultRegistry(),
 		dir:      connplugin.DefaultDir(),
+		replacer: pluginreplace.New(db),
 	}
 }
 
@@ -88,6 +102,8 @@ func (h *PluginsHandler) RegisterRoutes(mux *http.ServeMux, authMidd *login.Midd
 	mux.Handle("POST /manager/api/plugins/{key}/enable", admin(h.apiEnable))
 	mux.Handle("POST /manager/api/plugins/{key}/disable", admin(h.apiDisable))
 	mux.Handle("POST /manager/api/plugins/{key}/remove", admin(h.apiRemove))
+	mux.Handle("GET /manager/api/plugins/{key}/replace", admin(h.apiReplacePlan))
+	mux.Handle("POST /manager/api/plugins/{key}/replace", admin(h.apiReplaceApply))
 }
 
 // pluginEntry is the JSON shape the SPA renders. installed=false entries come
@@ -369,4 +385,46 @@ func (h *PluginsHandler) apiRemove(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.Error(w, "plugin not installed", http.StatusNotFound)
+}
+
+// apiReplacePlan is the dry run of the replaces migration for plugin {key}:
+// per old key, which config fields would move (secrets as "set"/"empty"),
+// the job settings and the access merge. Nothing is written.
+func (h *PluginsHandler) apiReplacePlan(w http.ResponseWriter, r *http.Request) {
+	h.replace(w, r, false)
+}
+
+// apiReplaceApply re-runs the migration. A pair migrated before is skipped
+// unless ?force=1; manual values on the plugin are never overwritten.
+func (h *PluginsHandler) apiReplaceApply(w http.ResponseWriter, r *http.Request) {
+	h.replace(w, r, true)
+}
+
+func (h *PluginsHandler) replace(w http.ResponseWriter, r *http.Request, apply bool) {
+	key := r.PathValue("key")
+	pairs := pluginreplace.Lookup(key)
+	if len(pairs) == 0 {
+		http.Error(w, "plugin "+key+" replaces nothing (or is not loaded)", http.StatusNotFound)
+		return
+	}
+	force := r.URL.Query().Get("force") == "1" || r.URL.Query().Get("force") == "true"
+	reports := make([]pluginreplace.Report, 0, len(pairs))
+	for _, p := range pairs {
+		var rep pluginreplace.Report
+		var err error
+		if apply {
+			rep, err = h.replacer.Apply(r.Context(), p, actor(r), force)
+			if err == nil && !rep.AlreadyDone && h.refresh != nil {
+				err = h.refresh(r.Context(), p.New, p.Configs...)
+			}
+		} else {
+			rep, err = h.replacer.Plan(r.Context(), p)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		reports = append(reports, rep)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"key": key, "applied": apply, "reports": reports})
 }

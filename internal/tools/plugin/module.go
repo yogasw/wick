@@ -166,6 +166,7 @@ func (p *Pool) buildModule(f connplugin.Found, spawn spawnFn, sockDir string) to
 		DefaultVisibility: entity.ToolVisibility(m.Visibility),
 		DefaultTags:       m.DefaultTags,
 		FullScreen:        m.FullScreen,
+		Replaces:          m.Replaces,
 	}
 	if meta.Name == "" {
 		meta.Name = f.Manifest.Module.Meta.Name

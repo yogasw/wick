@@ -22,3 +22,16 @@ type PluginState struct {
 	LastHealthDetail string
 	UpdatedAt        time.Time
 }
+
+// PluginReplacement marks that the data of a replaced key (OldKey, usually a
+// built-in) was migrated onto the plugin that declared `replaces` (NewKey).
+// The row is the idempotency marker: boot-time migration runs once per pair
+// and an admin re-run must ask for it explicitly. Detail is a short summary
+// of what moved — never a config value.
+type PluginReplacement struct {
+	OldKey     string `gorm:"primaryKey;type:varchar(100)"`
+	NewKey     string `gorm:"primaryKey;type:varchar(100)"`
+	Kind       string `gorm:"type:varchar(20)"`
+	MigratedAt time.Time
+	Detail     string `gorm:"type:text"`
+}

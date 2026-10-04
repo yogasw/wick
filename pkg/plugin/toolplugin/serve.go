@@ -134,6 +134,7 @@ func build(mod tool.Module, opts []Option) (*router, *cfgStore, wickplugin.ToolM
 			Visibility:  string(mod.Meta.DefaultVisibility),
 			FullScreen:  mod.Meta.FullScreen,
 			DefaultTags: mod.Meta.DefaultTags,
+			Replaces:    mod.Meta.Replaces,
 		},
 		Configs:  mod.Configs,
 		Webhooks: r.webhooks(),

@@ -86,7 +86,6 @@ import (
 	notesconn "github.com/yogasw/wick/internal/connectors/notes"
 	"github.com/yogasw/wick/internal/connectors/notifications"
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
-	pluginsource "github.com/yogasw/wick/internal/plugins/source"
 	sourceconn "github.com/yogasw/wick/internal/connectors/source"
 	subagents "github.com/yogasw/wick/internal/connectors/sub-agents"
 	teamagentsconn "github.com/yogasw/wick/internal/connectors/team-agents"
@@ -120,6 +119,8 @@ import (
 	"github.com/yogasw/wick/internal/pkg/sysmem"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
+	pluginreplace "github.com/yogasw/wick/internal/plugins/replace"
+	pluginsource "github.com/yogasw/wick/internal/plugins/source"
 	"github.com/yogasw/wick/internal/processctl"
 	serviceplugin "github.com/yogasw/wick/internal/services/plugin"
 	"github.com/yogasw/wick/internal/sso"
@@ -263,6 +264,13 @@ func NewServer() *Server {
 	toolPlugins.Start()
 	home.PluginVersions = toolPlugins.Version
 
+	// A job/tool that declares Replaces (a plugin extracted from a built-in)
+	// takes over the old key: the old module is unregistered and its config,
+	// schedule and access are migrated once — before the bootstraps below
+	// seed rows, so the new key starts with the old data.
+	replacePairs := pluginreplace.Prepare(jobs.All(), tools.All(), jobs.Unregister, tools.Unregister)
+	pluginreplace.New(db).ApplyAll(context.Background(), replacePairs)
+
 	// ── Tool modules (discover first so their Specs feed into the
 	// config bootstrap below) ──────────────────────────────────────
 	modules := tools.All()
@@ -397,6 +405,7 @@ func NewServer() *Server {
 	// ── Jobs (background workers) ────────────────────────────────
 	jobsSvc := manager.NewServiceFromDB(db)
 	jobsSvc.SetConfigReader(configsSvc)
+	jobsSvc.SetHidden(pluginreplace.IsReplaced)
 	if err := jobsSvc.Bootstrap(context.Background(), jobs.All()); err != nil {
 		log.Fatal().Msgf("jobs bootstrap: %s", err.Error())
 	}
@@ -3010,7 +3019,7 @@ func NewServer() *Server {
 	// Handler signature stays untouched. Wire the reloader so install / enable /
 	// disable / remove reconcile immediately. Guard the typed-nil: passing a nil
 	// *Reloader into the interface would make it non-nil (and panic on Reload).
-	pluginsHandler := manager.NewPluginsHandler(db)
+	pluginsHandler := manager.NewPluginsHandler(db).SetReplaceRefresh(configsSvc.EnsureOwned)
 	if pluginReloader != nil {
 		pluginsHandler.SetReloader(pluginReloader)
 	}

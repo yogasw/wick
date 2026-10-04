@@ -20,6 +20,24 @@ From the LLM's side a plugin connector is indistinguishable from a built-in one 
 
 Installed under `<data dir>/plugins/{connectors,jobs,tools,services}/<key>/`. Plugin keys use `_`, never `-` — so a built-in tool `text-counter` moved to a plugin becomes `/tools/text_counter`.
 
+## Replacing a built-in (`Replaces`)
+
+When a plugin takes over an existing tool or job under a new key (built-in `notion-ticket-sync` → plugin `notion_ticket_sync`), the plugin declares the old key so it is a **replacement, not a new item**:
+
+```go
+job.Meta{Key: "notion_ticket_sync", Replaces: []string{"notion-ticket-sync"}, ...}   // job plugin
+tool.Tool{Key: "text_counter", Replaces: []string{"text-counter"}, ...}               // tool plugin
+```
+
+It lands in `plugin.json` (`job.meta.Replaces` / `tool.meta.replaces`). On the next boot wick, once per old→new pair:
+
+- copies config fields whose key the plugin also declares — secrets as the stored ciphertext, never decrypted. A field already set on the plugin is kept; only an empty field, or a non-secret still at the plugin default, is filled. A field whose secret flag differs is skipped;
+- for jobs, copies schedule, enabled, max runs and timeout while the plugin's job row is untouched (default cron, disabled, never run); run history stays on the old key;
+- merges the old item's tags, visibility override and bookmarks into the new path;
+- hides the old item (not registered, not listed, its job row disabled on every boot), so the two never both run.
+
+Old rows are not deleted: removing the plugin brings the old item back. Admin re-run: `GET /manager/api/plugins/{key}/replace` is a dry run (secrets shown as `set`/`empty`), `POST …/replace` applies (`?force=1` after a previous run). Each migration is recorded in the plugin audit log (`replace.migrate`).
+
 ## Choosing the right connector form
 
 | | Connector module | Custom connector | Plugin |

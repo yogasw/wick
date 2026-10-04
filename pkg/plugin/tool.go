@@ -53,6 +53,8 @@ type ToolMeta struct {
 	Visibility  string              `json:"visibility,omitempty"` // entity.ToolVisibility; "" = private
 	FullScreen  bool                `json:"full_screen,omitempty"`
 	DefaultTags []entity.DefaultTag `json:"default_tags,omitempty"`
+	// Replaces lists keys of tools this plugin takes over (tool.Tool.Replaces).
+	Replaces []string `json:"replaces,omitempty"`
 }
 
 // ToolWebhook is one route a tool plugin opened with Router.WebhookGroup.
