@@ -234,6 +234,19 @@ get one knob each on the shared slice, `enforce`-mode only.
 All four live on the slice, not per-scope: contention is a machine-level
 phenomenon.
 
+### Load from outside wick
+
+The fast watchdog (`internal/agents/resourceguard`) only acts when the load
+is wick's. Before stopping, pausing or throttling anything it compares the
+agents' share — CPU from `cpu.stat usage_usec` of agents.slice plus the
+detached `run-*` units (exited processes still count), memory as the larger
+of each scope's cgroup memory and its processes' RSS — against what the host
+uses. Under 30% for every near-hang reason means the load is outside wick (a
+build in someone's SSH session): agents keep running, spawns are held only
+when memory really is running out, and one `outside_busy` event names the
+busiest outside process (`<user>/<comm> X% CPU`) on the Resources page. An
+unmeasurable CPU share keeps the old behaviour.
+
 ## Config surface
 
 Global, in `internal/agents/config/general.go`, groups `Memory Guard` and

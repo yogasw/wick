@@ -38,6 +38,15 @@ type Host interface {
 	Signal(pid int, sig syscall.Signal) error
 	// SelfScope is the cgroup the wick daemon itself runs in; never acted on.
 	SelfScope() string
+	// AgentCPUUsec is the CPU time used so far by agents.slice plus the
+	// detached run-* units (cgroup cpu.stat usage_usec), so processes
+	// that already exited still count. ok=false when it cannot be read.
+	AgentCPUUsec() (usec uint64, ok bool)
+	// BusiestOutside is the process outside the agent scopes (skip) that
+	// used the most CPU since the previous call, with its owner's name
+	// and the clock ticks it used. ok=false on the first call or when
+	// nothing outside used CPU.
+	BusiestOutside(skip map[int]bool) (p Proc, user string, ticks uint64, ok bool)
 }
 
 // Scope is one agent's cgroup.

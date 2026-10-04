@@ -117,6 +117,7 @@ describe("guardKindLabel", () => {
   it("names the guard actions and passes unknown kinds through", () => {
     expect(guardKindLabel("kill_child")).toBe("Stopped process");
     expect(guardKindLabel("throttle")).toBe("Capped CPU");
+    expect(guardKindLabel("outside_busy")).toBe("Busy outside wick");
     expect(guardKindLabel("mystery")).toBe("mystery");
   });
 });

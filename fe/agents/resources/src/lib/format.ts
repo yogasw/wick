@@ -104,6 +104,8 @@ export function guardKindLabel(kind: string): string {
       return "Near hang";
     case "resolved":
       return "Back to safe";
+    case "outside_busy":
+      return "Busy outside wick";
     default:
       return kind;
   }

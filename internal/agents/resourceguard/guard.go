@@ -49,6 +49,11 @@ const (
 	defaultSafePct  = 80
 	defaultPSICPU   = 60
 	defaultInterval = time.Second
+	// outsideShareMax: when agents use less than this share of the busy
+	// CPU (or of the used memory), the load comes from outside wick and
+	// stopping agents would not bring the host back.
+	outsideShareMax = 30
+	usecPerTick     = 10_000 // /proc/stat jiffies are USER_HZ (100/s)
 )
 
 // childPattern is what counts as a disposable child: build tools, test
@@ -79,7 +84,7 @@ type Config struct {
 // OnEvent.
 type Event struct {
 	At     time.Time `json:"at"`
-	Kind   string    `json:"kind"` // kill_child|stop_child|cont_child|kill_scope|freeze|thaw|throttle|restore|near_hang|resolved
+	Kind   string    `json:"kind"` // kill_child|stop_child|cont_child|kill_scope|freeze|thaw|throttle|restore|near_hang|resolved|outside_busy
 	Scope  string    `json:"scope,omitempty"`
 	PID    int       `json:"pid,omitempty"`
 	Target string    `json:"target,omitempty"`
@@ -122,6 +127,10 @@ type Guard struct {
 	stopped      map[int]bool    // SIGSTOPped children (pause action)
 	frozen       map[string]bool // frozen scopes (pause action)
 	appliedQuota *[3]int
+
+	prevAgentUsec uint64
+	outside       bool   // an outside-wick episode was already reported
+	topOutside    string // busiest process outside wick, e.g. "bob/compile 70% CPU"
 }
 
 // New builds a guard over host, reading its config through load.
@@ -225,6 +234,11 @@ type hostState struct {
 	running    int
 	cores      int
 	lagging    bool
+	// agentCPUPct is the agents' share of the busy CPU since the last
+	// sample; agentCPUOK is false when it could not be measured.
+	agentCPUPct float64
+	agentCPUOK  bool
+	totalTicks  uint64 // all-core jiffies since the last sample
 }
 
 func (g *Guard) sample(cfg Config, now time.Time) (hostState, bool) {
@@ -238,11 +252,20 @@ func (g *Guard) sample(cfg Config, now time.Time) (hostState, bool) {
 	g.samples = trimWindow(append(g.samples, sample{at: now, availMB: float64(avail)}), now, trendWindow)
 	st.eta = secondsToExhaustion(float64(avail), slopeMBps(g.samples))
 
+	agentUsec, agentOK := g.host.AgentCPUUsec()
 	if busy, tot, ok := g.host.CPUTimes(); ok {
 		if g.prevTotal != 0 && tot > g.prevTotal && busy >= g.prevBusy {
 			st.busyPct = float64(busy-g.prevBusy) * 100 / float64(tot-g.prevTotal)
+			st.totalTicks = tot - g.prevTotal
+			if agentOK && g.prevAgentUsec != 0 && agentUsec >= g.prevAgentUsec && busy > g.prevBusy {
+				st.agentCPUPct = float64(agentUsec-g.prevAgentUsec) * 100 / float64((busy-g.prevBusy)*usecPerTick)
+				st.agentCPUOK = true
+			}
 		}
 		g.prevBusy, g.prevTotal = busy, tot
+	}
+	if agentOK {
+		g.prevAgentUsec = agentUsec
 	}
 	_, st.psiMemFull, _ = g.host.PSI("memory")
 	st.psiCPU, _, _ = g.host.PSI("cpu")
@@ -320,6 +343,29 @@ func (g *Guard) Tick() {
 		cpuReason = fmt.Sprintf("CPU %.0f%% busy with pressure %.0f%% for %s", st.busyPct, st.psiCPU, now.Sub(g.cpuHotSince).Round(time.Second))
 	}
 
+	if !g.cpuHotSince.IsZero() || st.lagging || memReason != "" {
+		g.topOutside = g.busiestOutside(procs, st)
+	}
+	if memReason == "" && cpuReason == "" {
+		g.outside = false
+	} else if memPct, ok := g.fromOutside(st, scopes, procs, memReason, cpuReason); ok {
+		// The load is not ours: stopping agents would not bring the host
+		// back. Leave them running, hold spawns only when memory is
+		// really running out, and undo any earlier step once calm.
+		if !g.outside {
+			g.outside = true
+			top := g.topOutside
+			if top == "" {
+				top = "unknown process"
+			}
+			g.emit(Event{Kind: "outside_busy", Detail: fmt.Sprintf("host busy from outside wick: %s (agents use %.0f%% of busy CPU, %.0f%% of used memory), agents left running", top, st.agentCPUPct, memPct)})
+		}
+		g.setHold(memReason != "")
+		g.incident = false
+		g.release(cfg, now, false)
+		return
+	}
+
 	g.setHold(memReason != "" || g.incident ||
 		(horizon > 0 && st.eta < 2*horizon && st.memUsedPct >= safe))
 
@@ -352,6 +398,59 @@ func (g *Guard) Tick() {
 		return
 	}
 	g.release(cfg, now, aboveSafe)
+}
+
+// fromOutside reports whether every reason the host is near a hang comes
+// from outside wick: agents hold under outsideShareMax of the busy CPU
+// (for a CPU reason) and of the used memory (for a memory reason). An
+// unmeasured CPU share is never "outside", so the guard keeps its old
+// behaviour where it cannot tell. memPct is the agents' memory share.
+func (g *Guard) fromOutside(st hostState, scopes []Scope, procs []agentProc, memReason, cpuReason string) (memPct float64, outside bool) {
+	memPct = agentMemPct(g.host, st, scopes, procs)
+	if cpuReason != "" && (!st.agentCPUOK || st.agentCPUPct >= outsideShareMax) {
+		return memPct, false
+	}
+	if memReason != "" && memPct >= outsideShareMax {
+		return memPct, false
+	}
+	return memPct, true
+}
+
+// agentMemPct is the agents' share of the host's used memory. A scope
+// counts as the larger of its cgroup memory and its processes' RSS.
+func agentMemPct(h Host, st hostState, scopes []Scope, procs []agentProc) float64 {
+	_, totalMB, ok := h.MemAvailable()
+	usedMB := float64(totalMB - st.availMB)
+	if !ok || usedMB <= 0 {
+		return 0
+	}
+	rss := map[string]uint64{}
+	for _, p := range procs {
+		rss[p.scope] += p.RSSBytes
+	}
+	self := h.SelfScope()
+	var agents uint64
+	for _, s := range scopes {
+		if s.Name != self {
+			agents += max(s.MemBytes, rss[s.Name])
+		}
+	}
+	return float64(agents) / (1 << 20) * 100 / usedMB
+}
+
+// busiestOutside names the process outside every agent scope that used
+// the most CPU since the last call, e.g. "bob/compile 70% CPU"; "" when
+// unknown.
+func (g *Guard) busiestOutside(procs []agentProc, st hostState) string {
+	skip := map[int]bool{}
+	for _, p := range procs {
+		skip[p.PID] = true
+	}
+	p, user, t, ok := g.host.BusiestOutside(skip)
+	if !ok || st.totalTicks == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s %.0f%% CPU", user, p.Comm, min(100, float64(t)*100/float64(st.totalTicks)))
 }
 
 // actOnce stops ONE thing, chosen by what is short: memory → the largest

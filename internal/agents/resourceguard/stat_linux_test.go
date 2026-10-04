@@ -12,4 +12,7 @@ func TestParseStatAndCPUMax(t *testing.T) {
 	if cpuMax(140) != "140000 100000" || cpuMax(0) != "max 100000" {
 		t.Fatalf("cpuMax wrong: %q %q", cpuMax(140), cpuMax(0))
 	}
+	if n, ok := parseUsageUsec("usage_usec 123456\nuser_usec 1\n"); !ok || n != 123456 {
+		t.Fatalf("usage_usec = %d %v", n, ok)
+	}
 }

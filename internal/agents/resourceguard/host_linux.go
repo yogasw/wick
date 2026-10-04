@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -23,6 +24,11 @@ type linuxHost struct {
 	user  string // the user manager's cgroup (user@UID.service)
 	slice string // absolute path of agents.slice in the cgroup v2 tree
 	self  string // scope name the daemon runs in
+
+	// outsidePrev is each outside process's CPU ticks at the previous
+	// BusiestOutside call; users caches uid → name.
+	outsidePrev map[int]uint64
+	users       map[string]string
 }
 
 // NewHost finds agents.slice in the cgroup v2 hierarchy. nil when the
@@ -270,3 +276,100 @@ func (h *linuxHost) Signal(pid int, sig syscall.Signal) error {
 }
 
 func (h *linuxHost) SelfScope() string { return h.self }
+
+func (h *linuxHost) AgentCPUUsec() (uint64, bool) {
+	total, ok := readUsageUsec(h.slice)
+	if !ok {
+		return 0, false
+	}
+	app := filepath.Join(h.user, "app.slice")
+	if entries, err := os.ReadDir(app); err == nil {
+		for _, e := range entries {
+			if e.IsDir() && strings.HasPrefix(e.Name(), "run-") {
+				u, _ := readUsageUsec(filepath.Join(app, e.Name()))
+				total += u
+			}
+		}
+	}
+	return total, true
+}
+
+// readUsageUsec reads usage_usec from a cgroup's cpu.stat.
+func readUsageUsec(dir string) (uint64, bool) {
+	b, err := os.ReadFile(filepath.Join(dir, "cpu.stat"))
+	if err != nil {
+		return 0, false
+	}
+	return parseUsageUsec(string(b))
+}
+
+func parseUsageUsec(s string) (uint64, bool) {
+	for _, line := range strings.Split(s, "\n") {
+		if v, ok := strings.CutPrefix(line, "usage_usec "); ok {
+			n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+			return n, err == nil
+		}
+	}
+	return 0, false
+}
+
+func (h *linuxHost) BusiestOutside(skip map[int]bool) (Proc, string, uint64, bool) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return Proc{}, "", 0, false
+	}
+	first := h.outsidePrev == nil
+	now := make(map[int]uint64, len(entries))
+	var best Proc
+	var bestTicks uint64
+	var bestUID string
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || skip[pid] {
+			continue
+		}
+		b, err := os.ReadFile("/proc/" + e.Name() + "/stat")
+		if err != nil {
+			continue
+		}
+		p, ok := parseStat(string(b))
+		if !ok {
+			continue
+		}
+		now[pid] = p.CPUTicks
+		prev, seen := h.outsidePrev[pid]
+		if !seen || p.CPUTicks < prev || p.CPUTicks-prev <= bestTicks {
+			continue
+		}
+		best, bestTicks, bestUID = p, p.CPUTicks-prev, ""
+		if st, err := os.Stat("/proc/" + e.Name()); err == nil {
+			if sys, ok := st.Sys().(*syscall.Stat_t); ok {
+				bestUID = strconv.FormatUint(uint64(sys.Uid), 10)
+			}
+		}
+	}
+	h.outsidePrev = now
+	if first || bestTicks == 0 {
+		return Proc{}, "", 0, false
+	}
+	return best, h.userName(bestUID), bestTicks, true
+}
+
+// userName resolves a uid to its login name, the uid itself when unknown.
+func (h *linuxHost) userName(uid string) string {
+	if uid == "" {
+		return "?"
+	}
+	if h.users == nil {
+		h.users = map[string]string{}
+	}
+	if n, ok := h.users[uid]; ok {
+		return n
+	}
+	n := uid
+	if u, err := user.LookupId(uid); err == nil {
+		n = u.Username
+	}
+	h.users[uid] = n
+	return n
+}

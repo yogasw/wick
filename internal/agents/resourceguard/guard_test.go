@@ -2,6 +2,7 @@ package resourceguard
 
 import (
 	"math"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -23,6 +24,11 @@ type fakeHost struct {
 	killedScopes []string
 	quota        []int
 	self         string
+	// agentStep is the agents' CPU usec per tick; agentOK=false = unknown.
+	agentOK    bool
+	agentStep  uint64
+	agentUsec  uint64
+	outsideTop *Proc
 }
 
 func (f *fakeHost) MemAvailable() (int, int, bool) { return f.avail, f.totalMB, true }
@@ -61,6 +67,19 @@ func (f *fakeHost) Signal(pid int, sig syscall.Signal) error {
 	return nil
 }
 func (f *fakeHost) SelfScope() string { return f.self }
+func (f *fakeHost) AgentCPUUsec() (uint64, bool) {
+	if !f.agentOK {
+		return 0, false
+	}
+	f.agentUsec += f.agentStep
+	return f.agentUsec, true
+}
+func (f *fakeHost) BusiestOutside(map[int]bool) (Proc, string, uint64, bool) {
+	if f.outsideTop == nil {
+		return Proc{}, "", 0, false
+	}
+	return *f.outsideTop, "bob", 700, true
+}
 
 // agentTree: one agent scope with the CLI (100), vitest (101, big), a
 // go build (103, smaller) and a node MCP-ish helper (102); plus wick.
@@ -387,5 +406,72 @@ func TestParsers(t *testing.T) {
 	}
 	if n := parseProcsRunning(stat); n != 7 {
 		t.Fatalf("procs_running = %d", n)
+	}
+}
+
+// hotCPU drives a CPU near-hang for n ticks with agents using step usec
+// of CPU per tick (a tick is 1000 busy jiffies = 10,000,000 usec).
+func hotCPU(h *fakeHost, g *Guard, c *clock, step uint64, n int) {
+	h.agentOK, h.agentStep = true, step
+	h.busyPct, h.cpuSome = 100, 75
+	for i := 0; i < n; i++ {
+		p := h.procs[103]
+		p.CPUTicks += 190
+		h.procs[103] = p
+		ticks(g, c, 1)
+	}
+}
+
+// A build outside wick pinning the CPU: agents use 10% of it, so the
+// guard leaves them running, does not hold spawns, and says who it is.
+func TestOutsideCPULoadLeavesAgentsAlone(t *testing.T) {
+	h := agentTree()
+	h.outsideTop = &Proc{PID: 900, Comm: "compile"}
+	g, c := newTestGuard(h, enforce())
+	hotCPU(h, g, c, 1_000_000, 15)
+	if len(h.signals) != 0 || len(h.killedScopes) != 0 || len(h.frozen) != 0 {
+		t.Fatalf("agents touched for an outside load: signals=%v scopes=%v frozen=%v", h.signals, h.killedScopes, h.frozen)
+	}
+	for _, q := range h.quota {
+		if q == cpuThrottlePct {
+			t.Fatalf("agents throttled for an outside load: %v", h.quota)
+		}
+	}
+	if g.HoldSpawns() {
+		t.Fatal("spawns held for an outside CPU load")
+	}
+	var outside []Event
+	for _, e := range g.History() {
+		if e.Kind == "outside_busy" {
+			outside = append(outside, e)
+		}
+	}
+	if len(outside) != 1 || !strings.Contains(outside[0].Detail, "host busy from outside wick: bob/compile 70% CPU") {
+		t.Fatalf("outside events = %+v", outside)
+	}
+}
+
+// Agents using 90% of the busy CPU: the old behaviour, the hog goes.
+func TestAgentCPULoadStillActs(t *testing.T) {
+	h := agentTree()
+	g, c := newTestGuard(h, enforce())
+	hotCPU(h, g, c, 9_000_000, 12)
+	if len(h.signals) == 0 || h.signals[0] != "killed:go" {
+		t.Fatalf("signals = %v, want the agent's go build killed", h.signals)
+	}
+}
+
+// Memory nearly gone, but agents hold ~13% of it: nothing is killed, yet
+// spawns wait because memory really is running out.
+func TestOutsideMemoryLoadHoldsSpawnsOnly(t *testing.T) {
+	h := agentTree()
+	h.totalMB, h.avail = 16000, 300
+	g, c := newTestGuard(h, enforce())
+	ticks(g, c, 3)
+	if len(h.signals) != 0 || len(h.killedScopes) != 0 {
+		t.Fatalf("agents touched for an outside memory load: %v %v", h.signals, h.killedScopes)
+	}
+	if !g.HoldSpawns() {
+		t.Fatal("spawns not held with memory nearly gone")
 	}
 }
