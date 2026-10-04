@@ -36,6 +36,12 @@ vi.mock("../../slackInstant.js", async (orig) => ({
   listSlackInstantApps: () => Promise.resolve({ apps: [] }),
 }));
 
+let accessFields: { key: string; value: string; type: string; group: string }[] = [];
+vi.mock("../../slackAccess.js", async (orig) => ({
+  ...(await orig<typeof import("../../slackAccess.js")>()),
+  getAgentSlackSettings: () => Promise.resolve({ fields: accessFields, owner_slack_id: "UOWNER", owner_slack_name: "Yoga" }),
+}));
+
 import AgentConnections from "../AgentConnections.svelte";
 import { connectBody, statusLine, tokenError } from "../../slackConnection.js";
 import type { AgentItem } from "../../api/team.js";
@@ -126,5 +132,15 @@ describe("slackConnection", () => {
     expect(connectBody({ ...d, bot_token: " xoxb-2 " })).toEqual({ mode: "socket", bot_token: "xoxb-2" });
     expect(statusLine({ ...connected, disabled: true })).toMatch(/disabled/);
     expect(statusLine(null)).toBe("Not connected");
+  });
+
+  test("connected: the header sums up who can use the agent and flags an open app", async () => {
+    current = connected;
+    const ac = (key: string, value: string) => ({ key, value, type: "dropdown", group: "Access Control" });
+    accessFields = [ac("users_mode", "all"), ac("groups_mode", "all"), ac("channels_mode", "all"), ac("bots_mode", "none")];
+    render(AgentConnections, { props: props() });
+    expect((await screen.findByTestId("slack-access-summary")).textContent).toBe("Access: everyone · all channels");
+    expect(screen.getByTestId("slack-open-badge").textContent).toBe("Open to everyone in the workspace");
+    accessFields = [];
   });
 });

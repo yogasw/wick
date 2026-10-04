@@ -35,20 +35,44 @@ const (
 	agentSlackKeyOwnerSlackName = "owner_slack_name"
 )
 
+// agentSlackField is one setting of the Team card: the wick tag of a
+// SlackChannelConfig field plus the agent's stored value.
+type agentSlackField struct {
+	Key         string `json:"key"`
+	Value       string `json:"value"`
+	Type        string `json:"type"`
+	Options     string `json:"options,omitempty"`
+	Desc        string `json:"desc,omitempty"`
+	Group       string `json:"group"`
+	GroupDesc   string `json:"group_desc,omitempty"`
+	VisibleWhen string `json:"visible_when,omitempty"`
+}
+
 // agentSlackSettingFields renders SlackChannelConfig's schema for the Team
-// card with the agent's stored values. Same tags as the Channels page.
-func agentSlackSettingFields(m map[string]string) []pkgentity.Config {
+// card with the agent's stored values. Same tags as the Channels page; a
+// group's description sits on its first field, so it is carried forward.
+func agentSlackSettingFields(m map[string]string) []agentSlackField {
 	rows := pkgentity.StructToConfigs(agentconfig.DefaultSlackChannelConfig())
-	out := make([]pkgentity.Config, 0, len(rows))
+	out := make([]agentSlackField, 0, len(rows))
+	groupDesc := map[string]string{}
 	for _, r := range rows {
-		title, _, _ := strings.Cut(r.Group, "|")
-		if !agentSlackSettingGroups[title] {
+		title, desc, _ := strings.Cut(r.Group, "|")
+		if !agentSlackSettingGroups[title] || r.IsSecret {
 			continue
+		}
+		if desc != "" && groupDesc[title] == "" {
+			groupDesc[title] = desc
 		}
 		if v, ok := m[r.Key]; ok {
 			r.Value = v
 		}
-		out = append(out, r)
+		out = append(out, agentSlackField{
+			Key: r.Key, Value: r.Value, Type: r.Type, Options: r.Options, Desc: r.Description,
+			Group: title, VisibleWhen: r.VisibleWhen,
+		})
+	}
+	for i := range out {
+		out[i].GroupDesc = groupDesc[out[i].Group]
 	}
 	return out
 }
@@ -105,9 +129,9 @@ func onlyOwnerAccess(m map[string]string, ownerID, ownerName string) {
 
 // AgentSlackSettings is GET /api/team/agents/{id}/slack/settings.
 type AgentSlackSettings struct {
-	Fields    []pkgentity.Config `json:"fields"`
-	OwnerID   string             `json:"owner_slack_id,omitempty"`
-	OwnerName string             `json:"owner_slack_name,omitempty"`
+	Fields    []agentSlackField `json:"fields"`
+	OwnerID   string            `json:"owner_slack_id,omitempty"`
+	OwnerName string            `json:"owner_slack_name,omitempty"`
 }
 
 func agentSlackSettingsOf(p entity.AgentPersona) (AgentSlackSettings, bool) {

@@ -136,10 +136,9 @@ func TestAgentSlackSettingsGroupsAndPatch(t *testing.T) {
 	st := getSlackSettings(t, u, a.ID)
 	groups := map[string]bool{}
 	for _, f := range st.Fields {
-		title, _, _ := strings.Cut(f.Group, "|")
-		groups[title] = true
-		if f.IsSecret {
-			t.Errorf("secret field %q reached the card", f.Key)
+		groups[f.Group] = true
+		if f.Group == "Access Control" && f.GroupDesc == "" {
+			t.Errorf("field %q lost its group description", f.Key)
 		}
 	}
 	for _, g := range []string{"Access Control", "Agent Behaviour", "Reaction Auto-Reply", "Approval Gates"} {

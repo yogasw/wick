@@ -14,6 +14,7 @@
   import ConnectionRESTCard from "./team/ConnectionRESTCard.svelte";
   import ConnectionTelegramCard from "./team/ConnectionTelegramCard.svelte";
   import SlackInstantCard from "./team/SlackInstantCard.svelte";
+  import SlackSettingsGroups from "./team/SlackSettingsGroups.svelte";
   import {
     getAgentSlack, connectAgentSlack, updateAgentSlack, disconnectAgentSlack, getAgentSlackHealth, getAgentSlackManifest, runApi,
     type AgentItem, type AgentSlackStatus, type AgentSlackHealth,
@@ -48,6 +49,9 @@
     "w-full rounded-lg border border-white-300 bg-white-100 px-3 py-2 font-mono text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100";
   const label = "mb-1 block text-xs font-medium text-black-800 dark:text-black-600";
   const muted = "text-xs text-black-800 dark:text-black-600";
+  /* Header line + open badge, fed by SlackSettingsGroups once it loads. */
+  let accessLine = $state("");
+  let accessOpen = $state(false);
 
   async function load() {
     try {
@@ -215,6 +219,10 @@
       <span class="rounded-full px-2 py-0.5 text-xs {(slackMode === "instant" ? instant?.enabled && instant.shared_online : status?.online) ? 'bg-green-50 text-green-700' : 'bg-white-200 text-black-800 dark:bg-navy-600 dark:text-black-600'}">
         {slackMode === "instant" ? instantStatusLine(instant) : statusLine(status)}
       </span>
+      {#if slackMode === "custom" && status?.connected && accessLine}
+        <span class={muted} data-testid="slack-access-summary">{accessLine}</span>
+        {#if accessOpen}<span class="rounded-full bg-neg-50 px-2 py-0.5 text-xs text-neg-400" data-testid="slack-open-badge">Open to everyone in the workspace</span>{/if}
+      {/if}
       {#if saveState && slackMode === "custom"}<span class="ml-auto {muted}" aria-live="polite">{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved" : "Couldn't save"}</span>{/if}
     </div>
     <div class="mt-3 inline-flex rounded-lg border border-white-300 p-0.5 dark:border-navy-600" role="group" aria-label="Slack mode">
@@ -305,6 +313,7 @@
         </div>
         {#if manifest}<p class={muted}>Paste it under App Manifest on your Slack app's page, save, then reinstall the app.</p>{/if}
       </div>
+      <SlackSettingsGroups {base} {agent} onSummary={(line, open) => { accessLine = line; accessOpen = open; }} />
     {/if}
     {/if}
   </section>
