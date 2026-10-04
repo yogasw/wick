@@ -43,8 +43,10 @@ const (
 	MaxDepth = 3
 	// DefaultWait is how long a synchronous call waits for the reply.
 	DefaultWait = 90 * time.Second
-	// MaxWait clamps a caller-supplied wait.
-	MaxWait = 300 * time.Second
+	// MaxWait clamps a caller-supplied wait. It stays well under the
+	// connector op timeout (3m): a wait past that aborts the whole call
+	// instead of handing back state=working.
+	MaxWait = 150 * time.Second
 
 	// TaskTTL is how long a settled task and an idle context are kept.
 	TaskTTL = time.Hour
@@ -260,6 +262,8 @@ type Hub struct {
 
 	// poll is how often a waiting call re-reads its task. Tests shorten it.
 	poll time.Duration
+	// maxWait clamps a caller's wait (MaxWait). Tests shorten it.
+	maxWait time.Duration
 	// now is the clock; tests move it.
 	now func() time.Time
 
@@ -334,6 +338,7 @@ func NewHub(dir Directory, turns Turns, notify Notifier) *Hub {
 	return &Hub{
 		Dir: dir, Turns: turns, Notify: notify,
 		poll:     250 * time.Millisecond,
+		maxWait:  MaxWait,
 		now:      time.Now,
 		handlers: map[string]a2asrv.RequestHandler{},
 		stores:   map[string]*genStore{},
@@ -648,8 +653,8 @@ func (h *Hub) wait(ctx context.Context, cl *a2aclient.Client, id a2a.TaskID, con
 	switch {
 	case wait == 0:
 		wait = DefaultWait
-	case wait > MaxWait:
-		wait = MaxWait
+	case wait > h.maxWait:
+		wait = h.maxWait
 	}
 	deadline := time.Now().Add(wait)
 	for {

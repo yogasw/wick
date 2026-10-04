@@ -61,7 +61,7 @@ type messageInput struct {
 	To          string `wick:"required;desc=The teammate's handle, e.g. @anton. Only agents of your own Team."`
 	Message     string `wick:"required;textarea;desc=What YOU need from them, composed by you. Lead with the point. wick signs it with your name — do not prefix it."`
 	ContextID   string `wick:"desc=Continue an earlier exchange: pass the context_id a previous call returned."`
-	WaitSeconds int    `wick:"desc=How long to wait for the reply (default 90, max 300). If it is not ready by then you get state=working and the reply is delivered into this conversation later."`
+	WaitSeconds int    `wick:"desc=How long to wait for the reply (default 90, max 150). If it is not ready by then you get state=working and the reply is delivered into this conversation later."`
 }
 
 type getTaskInput struct {

@@ -435,3 +435,35 @@ func TestRemoteNobodyExplains(t *testing.T) {
 		t.Fatalf("error still names A2A: %q", msg)
 	}
 }
+
+// A wait past MaxWait is clamped, so the call hands back state=working
+// before the connector op timeout aborts it, and the reply still lands.
+func TestSendWaitClampedBelowOpTimeout(t *testing.T) {
+	if MaxWait >= 3*time.Minute {
+		t.Fatalf("MaxWait %s must stay under the 3m connector op timeout", MaxWait)
+	}
+	h, turns, note := newTestHub(func(Peer, string) string { return "late answer" })
+	h.maxWait = 20 * time.Millisecond
+	turns.gate = make(chan struct{})
+	start := time.Now()
+	res, err := h.Send(context.Background(), SendInput{
+		CallerSession: "sess-cap", CallerAgentID: "a-cap", To: "anton", Text: "slow job", Wait: 300 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State != "working" || time.Since(start) > 5*time.Second {
+		t.Fatalf("result = %+v after %s", res, time.Since(start))
+	}
+	close(turns.gate)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if delivered, _ := note.snapshot(); len(delivered) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("late reply never delivered")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
