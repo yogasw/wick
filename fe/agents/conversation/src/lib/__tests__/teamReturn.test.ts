@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { returnHref, classicHref } from "../teamReturn.js";
+import { returnHref, classicHref, newSessionHref } from "../teamReturn.js";
 
 const O = "https://wick.example";
 const B = "/tools/agents";
@@ -54,5 +54,11 @@ describe("classicHref", () => {
     expect(classicHref("/tools/agents/sessions", B)).toBe("/tools/agents/sessions");
     expect(classicHref("/tools/agents/overview?x=1", B)).toBe("/tools/agents/overview?x=1");
     expect(classicHref("/tools/agents?view=classic", B)).toBe("/tools/agents?view=classic");
+  });
+});
+
+describe("newSessionHref", () => {
+  it("marks the landing classic so Open Team cannot redirect it", () => {
+    expect(newSessionHref(B)).toBe("/tools/agents/?view=classic");
   });
 });

@@ -46,3 +46,10 @@ export function classicHref(href: string, base: string): string {
   if (query.split("&").includes(CLASSIC_VIEW)) return href;
   return `${path}?${query ? query + "&" : ""}${CLASSIC_VIEW}${hash}`;
 }
+
+/** newSessionHref is the "New chat" target inside Agents: the landing marked
+    with CLASSIC_VIEW, since the bare landing is what "Open Team when I open
+    Agents" redirects to Team. */
+export function newSessionHref(base: string): string {
+  return classicHref(base + "/", base);
+}

@@ -9,6 +9,7 @@
   import { listSessions } from "../api/sessions.js";
   import { getProjectOptions, getProviderOptions, pinProject } from "../api/options.js";
   import { push } from "../router.js";
+  import { newSessionHref } from "../teamReturn.js";
   import type { SessionListItem, ProjectOption, ProviderOption } from "../types/agents.js";
 
   type Props = {
@@ -157,7 +158,7 @@
       {hasMore}
       onLoadMore={() => loadSessions(true)}
       {search}
-      newChatHref={`${base}/`}
+      newChatHref={newSessionHref(base)}
       onSearch={(s) => { search = s; }}
       onSelect={(id) => push(`/sessions/${id}`)}
     />

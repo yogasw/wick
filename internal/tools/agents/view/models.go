@@ -75,12 +75,14 @@ func (vm AgentsLayoutVM) ProjectName(id string) string {
 
 // NewSessionHref is the "New session" nav target. When the sidebar is
 // scoped to a project, it carries `?project=<id>` so the compose form
-// auto-selects that project (mockup ②).
+// auto-selects that project (mockup ②). Unscoped it carries ?view=classic:
+// the bare landing is what "Open Team when I open Agents" sends to Team,
+// and a click on New session from inside Agents must stay in Agents.
 func (vm AgentsLayoutVM) NewSessionHref() string {
 	if vm.ScopedProjectID != "" {
 		return vm.Base + "/?project=" + vm.ScopedProjectID
 	}
-	return vm.Base + "/"
+	return vm.Base + "/?view=classic"
 }
 
 // ProjectIcon returns the emoji icon for a project id (📁 fallback).
