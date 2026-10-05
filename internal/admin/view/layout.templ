@@ -34,6 +34,10 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 						{Href: "/admin/tools", Label: "Tools", Active: activeTab == "tools"},
 						{Href: "/admin/connectors", Label: "Connectors", Active: activeTab == "connectors"},
 						{Href: "/admin/jobs", Label: "Jobs", Active: activeTab == "jobs"},
+						// Sources, install, upload and updates for connector,
+						// tool, job and service plugins; the page lives in the
+						// manager SPA.
+						{Href: "/manager/plugins", Label: "Plugins", Active: false},
 						{Href: "/mini-tools", Label: "Mini Tools", Active: false},
 					})
 					@adminDropdown("Agents", isAgentsActive(activeTab), []dropdownItem{
