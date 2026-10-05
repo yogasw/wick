@@ -22,8 +22,9 @@ import (
 type Spawner struct{ Source Source }
 
 // heartbeatEvery keeps the pool's idle timer from reaping a session whose
-// remote is silent mid-turn.
-var heartbeatEvery = 20 * time.Second
+// remote is silent mid-turn. Atomic because a goroutine from an earlier
+// turn can still read it while a test retunes it.
+var heartbeatEvery = newDur(20 * time.Second)
 
 // PullSteps is the pull backoff: the wait before each Fetch while nothing
 // new arrives, reset to the first step whenever something does. Pull only
@@ -40,8 +41,17 @@ var activeWindow = 30 * time.Second
 
 // lateListen is how long, after the grace window, a finished or timed-out
 // turn keeps taking pushed messages, so a reply the remote finishes late
-// still reaches the session it answers.
-var lateListen = 30 * time.Minute
+// still reaches the session it answers. Atomic for the same reason as
+// heartbeatEvery.
+var lateListen = newDur(30 * time.Minute)
+
+// dur is a time.Duration safe to read from one goroutine while another sets it.
+type dur struct{ v atomic.Int64 }
+
+func newDur(d time.Duration) *dur { x := &dur{}; x.v.Store(int64(d)); return x }
+
+func (d *dur) Get() time.Duration  { return time.Duration(d.v.Load()) }
+func (d *dur) Set(x time.Duration) { d.v.Store(int64(x)) }
 
 // now and idleTick are the idle window's clock; tests replace them.
 var (
@@ -298,7 +308,7 @@ func (p *process) loop(opt provider.SpawnOptions) {
 func (p *process) heartbeat(ctx context.Context) func() {
 	stop := make(chan struct{})
 	go func() {
-		tk := time.NewTicker(heartbeatEvery)
+		tk := time.NewTicker(heartbeatEvery.Get())
 		defer tk.Stop()
 		for {
 			select {
@@ -637,13 +647,13 @@ func (p *process) graceAfter(h Handle, push <-chan Event, puller Puller, canPull
 			flush()
 		case <-deadline.C:
 			flush()
-			if late || push == nil || lateListen <= 0 {
+			if late || push == nil || lateListen.Get() <= 0 {
 				return
 			}
 			// Grace is over: stop reading the thread, keep taking what the
 			// remote pushes.
 			late, pullC = true, nil
-			deadline.Reset(lateListen)
+			deadline.Reset(lateListen.Get())
 		case <-p.ctx.Done():
 			return
 		}

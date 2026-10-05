@@ -66,7 +66,7 @@ func PendingNotice(handle string, waited time.Duration) string {
 		within = " within " + waited.String()
 	}
 	return fmt.Sprintf("@%s has not replied%s; its reply will be forwarded automatically if it arrives (up to %d min).",
-		handle, within, int(lateListen/time.Minute))
+		handle, within, int(lateListen.Get()/time.Minute))
 }
 
 // LateForward is a timed-out task's reply, as handed to the agent that

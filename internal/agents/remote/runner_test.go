@@ -394,9 +394,10 @@ func TestFinalAfterTimeoutIsDelivered(t *testing.T) {
 // heartbeat then would flip the agent back to "working" (thinking…) in the
 // UI. Busy keeps the idle timer away instead, until the window closes.
 func TestNoHeartbeatAfterResultButStillBusy(t *testing.T) {
-	oldBeat, oldLate := heartbeatEvery, lateListen
-	heartbeatEvery, lateListen = 5*time.Millisecond, 50*time.Millisecond
-	t.Cleanup(func() { heartbeatEvery, lateListen = oldBeat, oldLate })
+	oldBeat, oldLate := heartbeatEvery.Get(), lateListen.Get()
+	heartbeatEvery.Set(5 * time.Millisecond)
+	lateListen.Set(50 * time.Millisecond)
+	t.Cleanup(func() { heartbeatEvery.Set(oldBeat); lateListen.Set(oldLate) })
 	f := &fake{listen: []ListenMode{ListenPush}, limits: Limits{Max: 5 * time.Second, Grace: 300 * time.Millisecond}, push: make(chan Event, 8)}
 	p, err := Spawner{Source: f}.Spawn(context.Background(), provider.SpawnOptions{InitialMessage: "hi", SessionDir: t.TempDir()})
 	if err != nil {
