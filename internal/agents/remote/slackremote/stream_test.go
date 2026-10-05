@@ -218,3 +218,26 @@ func TestRecheckReadsThreadAgain(t *testing.T) {
 		t.Fatal("recheck posted to the remote")
 	}
 }
+
+// A turn posted top-level while the state named an older target's thread:
+// Check again reads the turn's own thread instead of failing with
+// thread_not_found, and keeps it for the next turn.
+func TestRecheckFallsBackToTheTurnsOwnThread(t *testing.T) {
+	f, src, _ := setup(t, Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1", MentionID: "UHALO"})
+	dir := t.TempDir()
+	saveState(dir, State{Channel: "C1", ThreadTS: "1600000000.000001", SentTS: "1700000000.000001"})
+	f.mu.Lock()
+	f.missing = "1600000000.000001"
+	f.replies = []map[string]any{
+		{"ts": "1700000000.000001", "user": "UWICK", "text": "question"},
+		{"ts": "1700000000.000002", "thread_ts": "1700000000.000001", "user": "UHALO", "bot_id": "BHALO", "text": "Jawaban.\nEND RESPONSE abc123"},
+	}
+	f.mu.Unlock()
+	r, err := src.Recheck(context.Background(), dir)
+	if err != nil || !r.Done || r.Text != "Jawaban." {
+		t.Fatalf("recheck: %+v %v", r, err)
+	}
+	if st := LoadState(dir); st.ThreadTS != "1700000000.000001" || st.Target != "channel:C1" {
+		t.Fatalf("state not repaired: %+v", st)
+	}
+}

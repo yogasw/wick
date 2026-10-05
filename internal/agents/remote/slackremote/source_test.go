@@ -26,6 +26,8 @@ type fakeSlack struct {
 	replies []map[string]any // returned by conversations.replies
 	fetches int
 	token   string
+	// missing is a thread ts conversations.replies answers thread_not_found for.
+	missing string
 }
 
 func (f *fakeSlack) nextTS() string {
@@ -52,6 +54,10 @@ func (f *fakeSlack) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.posts = append(f.posts, map[string]string{"channel": r.Form.Get("channel"), "text": r.Form.Get("text"), "thread_ts": r.Form.Get("thread_ts"), "ts": ts})
 		out["ts"] = ts
 	case "conversations.replies", "conversations.history":
+		if f.missing != "" && r.Form.Get("ts") == f.missing {
+			out = map[string]any{"ok": false, "error": "thread_not_found"}
+			break
+		}
 		f.fetches++
 		out["messages"] = f.replies
 	default:
@@ -388,5 +394,54 @@ func TestTimeoutHint(t *testing.T) {
 	}
 	if h := NewSource(Config{Target: TargetChannel, Channel: "C1"}, Deps{}).TimeoutHint(); !strings.Contains(h, "bot's ID") {
 		t.Fatalf("no target id: hint %q", h)
+	}
+}
+
+// A thread opened for another channel is not continued after the agent is
+// pointed elsewhere: Slack would post top-level in the new channel while
+// the turn listened to the old thread, missing every reply.
+func TestNewTargetStartsANewThread(t *testing.T) {
+	f, src, _ := setup(t, Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1", Marker: new(bool)})
+	dir := t.TempDir()
+	if _, err := src.Send(context.Background(), remote.Turn{Text: "one", SessionDir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	src.End(remote.Handle{})
+	src.cfg.Channel = "C2"
+	if _, err := src.Send(context.Background(), remote.Turn{Text: "two", SessionDir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	src.End(remote.Handle{})
+	if _, err := src.Send(context.Background(), remote.Turn{Text: "three", SessionDir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	src.End(remote.Handle{})
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posts[1]["channel"] != "C2" || f.posts[1]["thread_ts"] != "" {
+		t.Fatalf("turn after the switch reused the old thread: %+v", f.posts[1])
+	}
+	if f.posts[2]["thread_ts"] != f.posts[1]["ts"] {
+		t.Fatalf("next turn not in the new thread: %+v", f.posts[2])
+	}
+}
+
+// State written before Target was kept cannot say which channel its thread
+// is in, so the next turn opens a new thread rather than guess.
+func TestLegacyStateStartsANewThread(t *testing.T) {
+	f, src, _ := setup(t, Config{ConnectorID: "c", Target: TargetChannel, Channel: "C1", Marker: new(bool)})
+	dir := t.TempDir()
+	saveState(dir, State{Channel: "C1", ThreadTS: "1600000000.000001"})
+	if _, err := src.Send(context.Background(), remote.Turn{Text: "one", SessionDir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	src.End(remote.Handle{})
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posts[0]["thread_ts"] != "" {
+		t.Fatalf("legacy thread reused: %+v", f.posts[0])
+	}
+	if st := LoadState(dir); st.Target != "channel:C1" || st.ThreadTS != f.posts[0]["ts"] {
+		t.Fatalf("state = %+v", st)
 	}
 }

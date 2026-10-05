@@ -300,6 +300,10 @@ const stateFile = "slack-remote.json"
 
 // State is a session's place in Slack: one wick session = one thread.
 type State struct {
+	// Target is the placement the thread was opened for ("dm:U…",
+	// "channel:C…"); a thread is only reused while the agent still points
+	// there. Empty in state written before it existed.
+	Target   string `json:"target,omitempty"`
 	Channel  string `json:"channel,omitempty"`
 	ThreadTS string `json:"thread_ts,omitempty"`
 	LastTS   string `json:"last_ts,omitempty"`

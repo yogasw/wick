@@ -143,9 +143,15 @@ func (s *Source) accept() func(Message) bool {
 // place is where this session's turns go: the channel and, after the
 // first turn, the thread.
 func (s *Source) place(ctx context.Context, st State) (string, string, error) {
+	// A thread opened for another target — the agent was pointed at a new
+	// channel or user since — is not continued: Slack would post the turn
+	// top-level in the new channel while the turn listened to the old
+	// thread, and every reply would be missed. State from before Target
+	// was kept cannot tell, so it starts one new thread too.
+	reuse := st.Target != "" && st.Target == s.placeKey()
 	switch s.cfg.Target {
 	case TargetDM:
-		if st.Channel != "" {
+		if reuse && st.Channel != "" {
 			return st.Channel, st.ThreadTS, nil
 		}
 		ch, err := s.deps.API.OpenDM(ctx, s.cfg.User)
@@ -153,7 +159,22 @@ func (s *Source) place(ctx context.Context, st State) (string, string, error) {
 	case TargetThread:
 		return s.cfg.Channel, s.cfg.ThreadTS, nil
 	default:
+		if !reuse {
+			return s.cfg.Channel, "", nil
+		}
 		return s.cfg.Channel, st.ThreadTS, nil
+	}
+}
+
+// placeKey names where the agent's turns go, for State.Target.
+func (s *Source) placeKey() string {
+	switch s.cfg.Target {
+	case TargetDM:
+		return "dm:" + s.cfg.User
+	case TargetThread:
+		return "thread:" + s.cfg.Channel + "/" + s.cfg.ThreadTS
+	default:
+		return "channel:" + s.cfg.Channel
 	}
 }
 
@@ -205,7 +226,7 @@ func (s *Source) Send(ctx context.Context, turn remote.Turn) (remote.Handle, err
 	if threadTS == "" {
 		threadTS = ts
 	}
-	st.Channel, st.ThreadTS, st.LastTS, st.SentTS = channel, threadTS, ts, ts
+	st.Target, st.Channel, st.ThreadTS, st.LastTS, st.SentTS = s.placeKey(), channel, threadTS, ts, ts
 	saveState(turn.SessionDir, st)
 	t := newTracker(channel, threadTS, ts, token, s.cfg.Target == TargetDM, s.ignoreSet(selfUser, selfBot), s.accept())
 	t.targeted = s.cfg.EffectiveListen() == ListenTarget && s.cfg.TargetID() != ""
@@ -342,6 +363,16 @@ func (s *Source) Recheck(ctx context.Context, sessionDir string) (Recheck, error
 	// prefix only: a reply that ends with it is complete.
 	t := newTracker(st.Channel, st.ThreadTS, sent, "", s.cfg.Target == TargetDM, s.ignoreSet(selfUser, selfBot), s.accept())
 	evs, err := s.fetch(ctx, t)
+	if err != nil && strings.Contains(err.Error(), "thread_not_found") && st.SentTS != "" && st.SentTS != st.ThreadTS {
+		// The turn went out top-level while the state still named a thread
+		// from an earlier target, so its replies sit under the turn's own
+		// message. Read that thread, and keep it for the next turn.
+		t = newTracker(st.Channel, st.SentTS, st.SentTS, "", s.cfg.Target == TargetDM, s.ignoreSet(selfUser, selfBot), s.accept())
+		if evs, err = s.fetch(ctx, t); err == nil {
+			st.ThreadTS, st.Target = st.SentTS, s.placeKey()
+			saveState(sessionDir, st)
+		}
+	}
 	if err != nil {
 		return Recheck{}, errors.New("Slack: " + err.Error())
 	}
