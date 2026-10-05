@@ -711,6 +711,8 @@ describe("DetailView — conversation refetch on turn completion (artifacts)", (
    exactly the stretch where you want to see that work has fanned out. */
 describe("DetailView — sub-agent roster follows delegation tool calls", () => {
   const runPromise = Effect.runPromise as unknown as ReturnType<typeof vi.fn>;
+  /* Rows the panel endpoint returns; null = the generic empty shape. */
+  let liveRows: unknown[] | null = null;
   const calls = () => (getSubAgentPanel as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
 
   beforeEach(() => {
@@ -757,6 +759,7 @@ describe("DetailView — sub-agent roster follows delegation tool calls", () => 
       get(target, key) {
         if (key in target) return Reflect.get(target, key);
         if (typeof key !== "string") return undefined;
+        if (key === "subAgents" && liveRows) return liveRows;
         return key in notLists ? notLists[key] : [];
       },
     });
@@ -769,7 +772,35 @@ describe("DetailView — sub-agent roster follows delegation tool calls", () => 
   });
 
   afterEach(() => {
+    liveRows = null;
     runPromise.mockReturnValue(new Promise(() => {}));
+  });
+
+  /* A child's lifecycle rides its own session id; the server re-addresses
+     a sub_agent signal to the leader's stream (stream_subagent.go). */
+  test("a sub_agent signal refreshes the roster", async () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    await waitFor(() => expect(calls()).toBeGreaterThan(0));
+    const before = calls();
+    sseBus.handler!({ type: "sub_agent", data: '{"child_session_id":"c1","state":"turn"}' } as { type: string });
+    await waitFor(() => expect(calls()).toBeGreaterThan(before));
+  });
+
+  /* The old panel polled every 3 s while a sub-agent ran. With the stream
+     up the signal covers it, so a running sub-agent issues no timer fetches. */
+  test("a live sub-agent is not polled while the stream is connected", async () => {
+    liveRows = [{ delegation_id: "d1", child_session_id: "c1", status: "running", lifecycle: "working", role: "x", task: "t" }];
+    vi.useFakeTimers();
+    try {
+      render(DetailView, { props: DEFAULT_PROPS });
+      await vi.advanceTimersByTimeAsync(1000);
+      const before = calls();
+      expect(before).toBeGreaterThan(0);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(calls()).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("a wick_delegate call refreshes the roster", async () => {

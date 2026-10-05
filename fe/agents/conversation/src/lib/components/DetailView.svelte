@@ -1277,21 +1277,19 @@
     return !!name && DELEGATION_TOOLS.has(bareToolName(name));
   }
 
-  /* While a sub-agent is live, poll its row.
-
-     Everything else in this panel rides the leader's SSE stream, but a
-     sub-agent publishes its lifecycle on the CHILD's session id, which
-     this stream is not subscribed to. Between the delegation call and the
-     leader's end-of-turn the leader emits nothing at all — which is
-     exactly the stretch where a running sub-agent's spinner and turn
-     count need to move. Polling stops the moment none are live, so an
-     idle conversation issues no requests. */
-  const SUB_AGENT_POLL_MS = 3000;
+  /* A sub-agent publishes its lifecycle on the CHILD's session id, which
+     this stream is not subscribed to — so the server re-addresses a small
+     `sub_agent` signal {child_session_id, state} to this conversation
+     whenever a child starts, stops or finishes a turn (stream_subagent.go),
+     and the panel refetches on it. Polling is only the fallback while that
+     stream is down and a sub-agent is live: slow, and stopped the moment
+     the stream is back or none are live. */
+  const SUB_AGENT_POLL_MS = 60_000;
   let subAgentPollTimer: ReturnType<typeof setInterval> | null = null;
 
   $effect(() => {
-    const anyLive = liveSubAgents(subAgents).length > 0;
-    if (!anyLive) {
+    const needPoll = liveSubAgents(subAgents).length > 0 && sseStatus !== "connected";
+    if (!needPoll) {
       if (subAgentPollTimer !== null) {
         clearInterval(subAgentPollTimer);
         subAgentPollTimer = null;
@@ -1788,7 +1786,12 @@
     sseStream = stream;
     closeSSE = () => { sseStream = null; stream.close(); };
 
-    stream.status.subscribe((s) => { sseStatus = s; });
+    stream.status.subscribe((s) => {
+      // Back after a drop: sub_agent signals sent meanwhile are gone, so
+      // re-read the rows once.
+      if (s === "connected" && sseStatus === "error") scheduleSubAgentReload();
+      sseStatus = s;
+    });
 
     stream.onEvent((ev) => {
       thread.handleEvent(ev);
@@ -1848,6 +1851,9 @@
         // there, so without its own event the panel would sit on a stale
         // list until something unrelated triggered a fetch.
         scheduleTodoReload();
+      } else if (ev.type === "sub_agent") {
+        // A sub-agent started, stopped or finished a turn.
+        scheduleSubAgentReload();
       } else if (ev.type === "lifecycle") {
         scheduleProcessReload();
         scheduleSubAgentReload();

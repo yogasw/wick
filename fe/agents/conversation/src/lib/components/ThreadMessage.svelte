@@ -608,23 +608,33 @@
                      read "Name · Channel" as a single label. -->
                 <span class="min-w-0 truncate"
                   ><span class="font-medium text-black-900 dark:text-white-100">{sourceBadge.who}</span
-                  >{#if sourceBadge.channelName}<span class="opacity-70">{" · " + sourceBadge.channelName}</span>{/if}</span
+                  >{#if sourceBadge.channelName && sourceJump}<span class="opacity-70">{" · "}</span><a
+                      data-testid="jump-to-thread"
+                      href={sourceJump}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Open this message's thread in Slack"
+                      class="inline-flex items-center gap-0.5 rounded opacity-70 hover:underline hover:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500"
+                      >{sourceBadge.channelName}<svg viewBox="0 0 16 16" class="h-2.5 w-2.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7 9" stroke-linecap="round" stroke-linejoin="round"></path></svg></a
+                    >{:else if sourceBadge.channelName}<span class="opacity-70">{" · " + sourceBadge.channelName}</span>{/if}</span
                 >
               {:else}
                 <span class="truncate">{sourceBadge.label}</span>
               {/if}
             </span>
           {/if}
-          {#if sourceJump}
+          {#if sourceJump && !(sourceBadge?.who && sourceBadge.channelName)}
+            <!-- No "Name · Slack" label to hang the link on: a bare icon, so
+                 the jump never costs a line of its own. -->
             <a
               data-testid="jump-to-thread"
               href={sourceJump}
               target="_blank"
               rel="noopener noreferrer"
               title="Open this message's thread in Slack"
-              class="inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-1 -my-1 text-[11px] leading-4 text-green-700 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-green-400"
+              aria-label="Open this message's thread in Slack"
+              class="inline-flex shrink-0 items-center rounded p-1 -m-1 text-black-500 hover:text-green-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-black-600 dark:hover:text-green-400"
             >
-              Jump to thread
               <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
                 <path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7 9" stroke-linecap="round" stroke-linejoin="round"></path>
               </svg>
@@ -831,21 +841,23 @@
               <path d="M8 2a6 6 0 1 1-6 6" stroke-linecap="round"></path>
             </svg>
           {/if}
-          <span class="break-words">{delivery.label}</span>
           {#if delivery.link}
-            <span aria-hidden="true">·</span>
+            <!-- The status itself is the link: "Sent to Slack ↗". -->
             <a
               data-testid="delivery-jump"
               href={delivery.link}
               target="_blank"
               rel="noopener noreferrer"
-              class="inline-flex items-center gap-0.5 rounded px-1 py-1 -my-1 text-green-700 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-green-400"
+              title="Open the reply's thread in Slack"
+              class="inline-flex items-center gap-0.5 break-words rounded hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500"
             >
-              Jump to thread
-              <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              {delivery.label}
+              <svg viewBox="0 0 16 16" class="h-2.5 w-2.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
                 <path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7 9" stroke-linecap="round" stroke-linejoin="round"></path>
               </svg>
             </a>
+          {:else}
+            <span class="break-words">{delivery.label}</span>
           {/if}
         </span>
       {/if}

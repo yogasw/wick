@@ -3,6 +3,7 @@
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import { fetchOverview, fetchTeam, killSession, dequeueSession } from "$lib/api.js";
   import { explainQueue, waitText } from "$lib/queue.js";
+  import { followOverview } from "$lib/liveOverview.js";
   import type { QueuedEntry, ActiveEntry, OverviewStats, TeamResponse } from "$lib/types.js";
   import { AgentAvatar } from "@wick-fe/common-avatar";
 
@@ -141,28 +142,40 @@
     }
   }
 
+  /* A queued row's wait ages on a local clock between fetches — the data is
+     refetched only when the pool signals a change. */
+  let fetchedAt = $state(Date.now());
+  let clock = $state(Date.now());
+  $effect(() => {
+    const t = setInterval(() => (clock = Date.now()), 1000);
+    return () => clearInterval(t);
+  });
+
+  /* Refreshed by the pool signal on the shared stream, not a 3 s poll
+     (liveOverview.ts). */
   $effect(() => {
     let alive = true;
 
-    async function poll(): Promise<void> {
+    async function load(): Promise<void> {
       try {
         const r = await fetchOverview(base);
         if (!alive) return;
         queued = r.queued;
+        fetchedAt = Date.now();
         activeSessions = r.active;
         stats = r.stats;
       } catch {
-        /* silent — stale data is acceptable during polling */
+        /* silent — stale data is acceptable until the next signal */
       }
     }
 
-    void poll();
-    const timer = setInterval(() => void poll(), 3000);
+    const stop = followOverview(base, () => void load());
     return () => {
       alive = false;
-      clearInterval(timer);
+      stop();
     };
   });
+
 </script>
 
 <div class="min-h-screen p-6 space-y-6">
@@ -296,7 +309,7 @@
                 <span class="block truncate font-mono text-xs text-black-900 dark:text-white-100">{shortID(q.session_id)}</span>
               {/if}
               <span class="block text-[11px] text-black-700 dark:text-black-600">
-                {#if q.project}{q.project}{" · "}{/if}{fmtWait(q.waiting_ms)}
+                {#if q.project}{q.project}{" · "}{/if}{fmtWait(q.waiting_ms + Math.max(0, clock - fetchedAt))}
               </span>
             </a>
             <button

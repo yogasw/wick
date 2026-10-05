@@ -1,8 +1,9 @@
 /*
  * Purpose:    The per-user /stream/sessions stream for the Team roster: each
  *             conversation's turn `activity` (thinking / the running tool /
- *             a failed tool / waiting on a person) plus connection status.
- * Caller:     AgentsApp.svelte
+ *             a failed tool / waiting on a person), the `ticket` signal for open
+ *             boards, plus connection status.
+ * Caller:     AgentsApp.svelte, ProjectLanding.svelte
  * Dependencies: sse-worker.ts (SharedWorker), EventSource fallback
  * Main Functions: connectSessionsStream
  * Side Effects: Joins the SharedWorker's single /stream/sessions connection
@@ -22,8 +23,13 @@ export type SessionActivity = {
   needs_attention?: boolean;
 };
 
+/** One `ticket` signal: a ticket of project_id was written. The board
+    refetches over REST; nothing about the change rides the stream. */
+export type TicketSignal = { project_id: string; ticket_id: string };
+
 export type SessionsStreamHandlers = {
-  onActivity: (ev: SessionActivity) => void;
+  onActivity?: (ev: SessionActivity) => void;
+  onTicket?: (ev: TicketSignal) => void;
   /** "connected" after every (re)open, "error" when the stream drops. */
   onStatus?: (status: "connected" | "error") => void;
 };
@@ -44,7 +50,8 @@ export function connectSessionsStream(base: string, h: SessionsStreamHandlers, p
     p.onmessage = (e) => {
       const msg = e.data as { type?: string; event?: unknown; status?: string } | null;
       if (!msg) return;
-      if (msg.type === "activity" && msg.event) h.onActivity(msg.event as SessionActivity);
+      if (msg.type === "activity" && msg.event) h.onActivity?.(msg.event as SessionActivity);
+      else if (msg.type === "ticket" && msg.event) h.onTicket?.(msg.event as TicketSignal);
       else if (msg.type === "lifecycle-status" && (msg.status === "connected" || msg.status === "error")) h.onStatus?.(msg.status);
     };
     p.start?.();
@@ -61,10 +68,18 @@ export function connectSessionsStream(base: string, h: SessionsStreamHandlers, p
     };
   }
 
-  /* No SharedWorker: one direct stream for this tab. */
+  /* No SharedWorker: one direct stream for this tab. No EventSource at all
+     (a test DOM): nothing to join, and the caller's fallback poll covers it. */
+  if (typeof EventSource === "undefined") {
+    h.onStatus?.("error");
+    return () => {};
+  }
   const es = new EventSource(`${base}/stream/sessions`, { withCredentials: true });
   es.addEventListener("activity", (e) => {
-    try { h.onActivity(JSON.parse((e as MessageEvent).data as string) as SessionActivity); } catch { /* bad frame */ }
+    try { h.onActivity?.(JSON.parse((e as MessageEvent).data as string) as SessionActivity); } catch { /* bad frame */ }
+  });
+  es.addEventListener("ticket", (e) => {
+    try { h.onTicket?.(JSON.parse((e as MessageEvent).data as string) as TicketSignal); } catch { /* bad frame */ }
   });
   es.onopen = () => h.onStatus?.("connected");
   es.onerror = () => h.onStatus?.("error");

@@ -1371,6 +1371,9 @@ describe("ThreadMessage - Slack jump & delivery", () => {
     expect(a.getAttribute("href")).toBe(link);
     expect(a.getAttribute("target")).toBe("_blank");
     expect(a.getAttribute("rel")).toContain("noopener");
+    // The channel name is the link — no separate "Jump to thread" line.
+    expect(a.textContent).toContain("Slack");
+    expect(screen.queryByText(/Jump to thread/)).toBeNull();
   });
 
   test("a Team message relayed from Slack links too", () => {
@@ -1403,6 +1406,8 @@ describe("ThreadMessage - Slack jump & delivery", () => {
     expect(row.dataset.state).toBe("sent");
     expect(row.textContent).toContain("Sent to Slack");
     expect(screen.getByTestId("delivery-jump").getAttribute("href")).toBe(link);
+    expect(screen.getByTestId("delivery-jump").textContent).toContain("Sent to Slack");
+    expect(screen.queryByText(/Jump to thread/)).toBeNull();
   });
 
   test("a failed reply shows the reason, no link", () => {

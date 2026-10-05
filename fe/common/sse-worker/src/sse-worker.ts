@@ -4,7 +4,8 @@
  *             /stream/multi EventSource and fans events to subscribed
  *             MessagePorts by session_id; also owns the single lifecycle
  *             (/stream/sessions) stream — session lifecycle for the sidebar
- *             and turn `activity` for the Team roster. Fetches /stream/snapshot per session
+ *             and turn `activity` for the Team roster, plus a `ticket` signal
+ *             for open boards. Fetches /stream/snapshot per session
  *             on late-join/reconnect so nothing is missed. Self-heals with
  *             backoff once the browser's own reconnect gives up.
  * Caller:     Instantiated via `new SharedWorker(new URL(...), { type: "module" })`
@@ -213,6 +214,21 @@ function connectLifecycle(base: string): void {
     if (parsed.work || parsed.needs_attention) lastActivity.set(parsed.session_id, parsed);
     else lastActivity.delete(parsed.session_id);
     broadcastLifecycle({ type: "activity", event: parsed });
+  });
+
+  /* A ticket was written: a bare {project_id, ticket_id} signal, already
+     filtered by project access server-side. Not cached — an open board
+     refetches on reconnect anyway. */
+  es.addEventListener("ticket", (ev: MessageEvent) => {
+    let parsed: { project_id?: string };
+    try { parsed = JSON.parse(ev.data as string); } catch (_) { return; }
+    if (!parsed || !parsed.project_id) return;
+    broadcastLifecycle({ type: "ticket", event: parsed });
+  });
+
+  /* Something in the pool moved: a bare signal the Overview refetches on. */
+  es.addEventListener("pool", () => {
+    broadcastLifecycle({ type: "pool" });
   });
 
   es.onopen = () => {

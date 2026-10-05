@@ -1281,7 +1281,9 @@ func NewServer() *Server {
 		}
 		return p.Meta.Ticket, true
 	})
-	ticket.SetEmitter(ticketWebhooks)
+	// Teed into the agents stream too, so an open board refetches on a
+	// ticket write instead of polling.
+	ticket.SetEmitter(agentstool.WithTicketStreamSignal(ticketWebhooks))
 	agentstool.SetTicketDispatcher(ticketWebhooks)
 
 	// ask_user Manager: blocks the calling agent over MCP until the

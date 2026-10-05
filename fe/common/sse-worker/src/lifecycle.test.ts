@@ -310,6 +310,24 @@ describe("lifecycle stream sharing", () => {
     expect(acts).toEqual([{ type: "activity", event: { session_id: "s1", work: "tool", action: "Read" } }]);
   });
 
+  /* Boards and the Overview refetch on bare signals off the same
+     connection; neither is cached for late joiners (they refetch anyway). */
+  test("ticket and pool signals ride the same connection, uncached", async () => {
+    const connect = await loadWorker();
+    const first = connect();
+    subLifecycle(first);
+    created[0].emit("ticket", { project_id: "p1", ticket_id: "T-1" });
+    created[0].emit("pool", {});
+    const kinds = first.received.map((m) => (m as { type?: string }).type);
+    expect(first.received).toContainEqual({ type: "ticket", event: { project_id: "p1", ticket_id: "T-1" } });
+    expect(kinds).toContain("pool");
+
+    const late = connect();
+    subLifecycle(late);
+    expect(created).toHaveLength(1);
+    expect(late.received.some((m) => ["ticket", "pool"].includes((m as { type?: string }).type ?? ""))).toBe(false);
+  });
+
   test("subscribe without a base is ignored (no connection opened)", async () => {
     const connect = await loadWorker();
     const port = connect();

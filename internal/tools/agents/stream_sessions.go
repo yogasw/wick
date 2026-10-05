@@ -13,7 +13,9 @@ import (
 // which session is working without polling or a page reload, plus a
 // small `activity` event per turn step (thinking / the running tool /
 // a failed tool / waiting on a person) that the Team roster follows
-// instead of polling (see sessionActivity).
+// instead of polling (see sessionActivity), and a `ticket` signal
+// {project_id, ticket_id} an open board refetches on (see stream_ticket.go),
+// and a bare `pool` signal the Overview refetches on.
 //
 // Deliberately NOT the global /stream. That one carries pool_stats, which
 // lists every active session across all users, and is therefore
@@ -89,12 +91,30 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 	ctx := c.R.Context()
 	keepalive := time.NewTicker(15 * time.Second)
 	defer keepalive.Stop()
+	// The `pool` signal: something in the pool moved (a turn started or
+	// ended, a session was queued). Bare — no session id, no counts — so
+	// the Overview knows to re-read /api/overview, which applies its own
+	// per-user filter, and nobody learns more here than that endpoint
+	// already tells them. Coalesced: at most one per poolSignalEvery.
+	poolTick := time.NewTicker(poolSignalEvery)
+	defer poolTick.Stop()
+	poolDirty := false
 
 	for {
 		select {
 		case ev, open := <-ch:
 			if !open {
 				return
+			}
+			if isPoolChange(ev.Type) {
+				poolDirty = true
+			}
+			if ev.Type == evTicketChanged {
+				if data, ok := projectTicketSignal(ev, access); ok {
+					fmt.Fprintf(w, "event: ticket\ndata: %s\n\n", data)
+					flush()
+				}
+				continue
 			}
 			if ev.SessionID == "" {
 				continue
@@ -127,6 +147,12 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 			}
 			fmt.Fprintf(w, "event: session\ndata: %s\n\n", out.JSON())
 			flush()
+		case <-poolTick.C:
+			if poolDirty {
+				poolDirty = false
+				fmt.Fprintf(w, "event: pool\ndata: {}\n\n")
+				flush()
+			}
 		case <-keepalive.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flush()
@@ -134,4 +160,19 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 			return
 		}
 	}
+}
+
+// poolSignalEvery bounds how often one connection gets the `pool` signal.
+// A var so tests need not wait the full interval.
+var poolSignalEvery = 2 * time.Second
+
+// isPoolChange reports whether a bus event moves what /api/overview shows:
+// a lifecycle transition, the pool counters, or a session's status
+// (queued ↔ running is a status write).
+func isPoolChange(evType string) bool {
+	switch evType {
+	case "lifecycle", "pool_stats", "session_meta":
+		return true
+	}
+	return false
 }

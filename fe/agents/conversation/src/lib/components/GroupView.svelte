@@ -5,8 +5,10 @@
      limited to the members and its caption naming the routing and cap, and the group Settings drawer. Members answer in
      their own sessions server-side (team_group.go); this view only reads
      the group thread and listens for its group_turn / group_typing /
-     system_event pushes, with a short poll as the fallback while a reply
-     is pending. Group Settings opens in the app's drawer (GroupSettings). */
+     system_event pushes on the shared session stream (the SharedWorker's
+     one connection, never an EventSource of its own). A slow poll covers a
+     pending reply only while that stream is down, and a reconnect reloads
+     the thread. Group Settings opens in the app's drawer (GroupSettings). */
   import { onMount } from "svelte";
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import GroupAvatars from "./GroupAvatars.svelte";
@@ -22,6 +24,11 @@
   } from "../api/team.js";
   import { backingLink, composerHint, handlesLine, mergeTurn } from "../teamGroups.js";
   import { formatAgentsRoute, navigate } from "../agentsRouter.js";
+  import { connectSession } from "../stores/sse.js";
+  import type { AgentEvent } from "../types/agents.js";
+
+  /* Fallback poll while a reply is pending AND the stream is down. */
+  const DROPPED_POLL_MS = 60_000;
 
   type Props = {
     base: string;
@@ -68,30 +75,38 @@
   onMount(() => {
     load();
     runApi(markGroupRead(base, group.id)).catch(() => {});
-    const es = new EventSource(`${base}/stream?session=${encodeURIComponent(group.id)}`, { withCredentials: true });
-    const onTurn = (ev: MessageEvent) => {
+    /* Pushes ride the stream as `agent` frames whose type names the push
+       and whose data is its JSON body. */
+    const stream = connectSession(base, group.id);
+    stream.onEvent((ev: AgentEvent) => {
+      if (!ev.data) return;
       try {
-        turns = mergeTurn(turns, JSON.parse(ev.data) as GroupTurn);
+        if (ev.type === "group_turn" || ev.type === "system_event") {
+          turns = mergeTurn(turns, JSON.parse(ev.data) as GroupTurn);
+        } else if (ev.type === "group_typing") {
+          const d = JSON.parse(ev.data) as { agent_id: string; state: string; session_id?: string };
+          typing = { ...typing, [d.agent_id]: d.state === "start" };
+          if (d.session_id) typingSession = { ...typingSession, [d.agent_id]: d.session_id };
+        }
       } catch {
-        /* a malformed push is ignored; the poll catches up */
+        /* a malformed push is ignored; a reconnect reloads */
       }
-    };
-    es.addEventListener("group_turn", onTurn);
-    es.addEventListener("system_event", onTurn);
-    es.addEventListener("group_typing", (ev: MessageEvent) => {
-      try {
-        const d = JSON.parse(ev.data) as { agent_id: string; state: string; session_id?: string };
-        typing = { ...typing, [d.agent_id]: d.state === "start" };
-        if (d.session_id) typingSession = { ...typingSession, [d.agent_id]: d.session_id };
-      } catch {
-        /* ignore */
+    });
+    /* A drop may have swallowed pushes: reload once it is back. */
+    let dropped = false;
+    const unsubStatus = stream.status.subscribe((st) => {
+      if (st === "error") dropped = true;
+      else if (st === "connected" && dropped) {
+        dropped = false;
+        load();
       }
     });
     const poll = setInterval(() => {
-      if (Date.now() < pendingUntil && document.visibilityState === "visible") load();
-    }, 4000);
+      if (dropped && Date.now() < pendingUntil && document.visibilityState === "visible") load();
+    }, DROPPED_POLL_MS);
     return () => {
-      es.close();
+      unsubStatus();
+      stream.close();
       clearInterval(poll);
       runApi(markGroupRead(base, group.id)).catch(() => {});
     };
