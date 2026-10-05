@@ -392,6 +392,9 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 	if globalChannels == nil || globalDB == nil {
 		return
 	}
+	// Callers pass the save request's context; the instance it starts or
+	// reloads must outlive that request (StopAll / RemoveKeyed stop it).
+	ctx = context.WithoutCancel(ctx)
 	store := agentchannels.NewDBStore(globalDB)
 	store.Configs = globalConfigs
 	iKey := channelType + ":" + userID

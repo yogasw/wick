@@ -79,3 +79,33 @@ func TestBeginRunIsVisibleToStopImmediately(t *testing.T) {
 	done()
 	<-waited
 }
+
+// A settings save reloads with its HTTP request's context, which ends right
+// after the response: the restarted run must not end with it.
+func TestReloadOutlivesTheCallersContext(t *testing.T) {
+	cfg := agentconfig.SlackChannelConfig{Mode: "http", BotToken: "xoxb-test", SigningSecret: "s"}
+	s := NewWithOwnerCached(cfg, "", "UBOT", "Bot", "Team")
+	reqCtx, endRequest := context.WithCancel(context.Background())
+	s.Reload(reqCtx, cfg, "")
+	endRequest()
+	time.Sleep(50 * time.Millisecond)
+	s.runMu.Lock()
+	cancel := s.runCancel
+	s.runMu.Unlock()
+	if cancel == nil {
+		t.Fatal("reload did not start a run")
+	}
+	ended := make(chan struct{})
+	go func() { s.runWg.Wait(); close(ended) }()
+	select {
+	case <-ended:
+		t.Fatal("the run ended with the caller's request")
+	case <-time.After(50 * time.Millisecond):
+	}
+	s.Stop()
+	select {
+	case <-ended:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not end the run")
+	}
+}

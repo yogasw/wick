@@ -1253,6 +1253,11 @@ func (s *Channel) Reconnect(ctx context.Context) {
 // Reload stops the current connection, applies new credentials, and
 // restarts if the new config is valid.
 func (s *Channel) Reload(ctx context.Context, cfg agentconfig.SlackChannelConfig, pubURL string) {
+	// The restarted run outlives the call: a settings save passes its HTTP
+	// request's context, which ends with the response and took the socket
+	// (and its watchdog) down with it — the bot then sat on "connecting…"
+	// for good. Stop / StopAll still end it.
+	ctx = context.WithoutCancel(ctx)
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
 	s.Stop()
