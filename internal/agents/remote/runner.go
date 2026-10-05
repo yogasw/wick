@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -118,7 +119,19 @@ type process struct {
 	next      string
 	inputDone bool
 	id        string
+	// answered: the current turn already gave its result, so the heartbeat
+	// goes quiet — a heartbeat is a stdout line, and any line after the
+	// result turns the agent back to "working" in the UI. listening: a turn
+	// (or its grace window) still follows the remote; Busy reports it so the
+	// idle timer does not reap the session meanwhile.
+	answered  atomic.Bool
+	listening atomic.Bool
 }
+
+// Busy keeps the idle timer from reaping the session while a turn or its
+// grace window still follows the remote, now that the heartbeat no longer
+// speaks once the reply is in (provider.BusyReporter).
+func (p *process) Busy() bool { return p.listening.Load() }
 
 func (p *process) Stdout() io.Reader     { return p.r }
 func (p *process) Stdin() io.WriteCloser { return stdin{p} }
@@ -224,6 +237,7 @@ func (p *process) emitText(text string) {
 }
 
 func (p *process) emitDone(result, note string) {
+	p.answered.Store(true)
 	line := map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": result}
 	if note != "" {
 		line["remote_note"] = note
@@ -232,6 +246,7 @@ func (p *process) emitDone(result, note string) {
 }
 
 func (p *process) emitError(msg string) {
+	p.answered.Store(true)
 	p.emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": msg})
 }
 
@@ -288,7 +303,9 @@ func (p *process) heartbeat(ctx context.Context) func() {
 		for {
 			select {
 			case <-tk.C:
-				p.emit(map[string]any{"type": "system", "subtype": "heartbeat"})
+				if !p.answered.Load() {
+					p.emit(map[string]any{"type": "system", "subtype": "heartbeat"})
+				}
 			case <-stop:
 				return
 			case <-ctx.Done():
@@ -313,6 +330,9 @@ func listens(src Source, m ListenMode) bool {
 // and pull, backing off while push keeps it informed, covers a push that
 // never comes (an event the app cannot see).
 func (p *process) turn(text string) {
+	p.answered.Store(false)
+	p.listening.Store(true)
+	defer p.listening.Store(false)
 	src := p.src
 	lim := src.Limits()
 	// Max is moved on while the remote still shows life — new text, an

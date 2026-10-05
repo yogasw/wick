@@ -389,3 +389,64 @@ func TestFinalAfterTimeoutIsDelivered(t *testing.T) {
 		t.Fatalf("results=%+v", results)
 	}
 }
+
+// After the result, the grace window follows the remote silently: a
+// heartbeat then would flip the agent back to "working" (thinking…) in the
+// UI. Busy keeps the idle timer away instead, until the window closes.
+func TestNoHeartbeatAfterResultButStillBusy(t *testing.T) {
+	oldBeat, oldLate := heartbeatEvery, lateListen
+	heartbeatEvery, lateListen = 5*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { heartbeatEvery, lateListen = oldBeat, oldLate })
+	f := &fake{listen: []ListenMode{ListenPush}, limits: Limits{Max: 5 * time.Second, Grace: 300 * time.Millisecond}, push: make(chan Event, 8)}
+	p, err := Spawner{Source: f}.Spawn(context.Background(), provider.SpawnOptions{InitialMessage: "hi", SessionDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Kill()
+	lines := make(chan line, 64)
+	go func() {
+		sc := bufio.NewScanner(p.Stdout())
+		for sc.Scan() {
+			var l line
+			if json.Unmarshal(sc.Bytes(), &l) == nil {
+				lines <- l
+			}
+		}
+		close(lines)
+	}()
+	// Heartbeats flow while the remote has not answered.
+	sawBeat := false
+	for !sawBeat {
+		l := <-lines
+		sawBeat = l.Type == "system" && l.Subtype == "heartbeat"
+	}
+	f.push <- Event{Kind: EventText, Text: "done"}
+	f.push <- Event{Kind: EventDone, Text: "done"}
+	for l := range lines {
+		if l.Type == "result" {
+			break
+		}
+	}
+	busy := p.(provider.BusyReporter)
+	if !busy.Busy() {
+		t.Fatal("not busy during the grace window")
+	}
+	timeout := time.After(150 * time.Millisecond)
+	for quiet := false; !quiet; {
+		select {
+		case l := <-lines:
+			if l.Type == "system" && l.Subtype == "heartbeat" {
+				t.Fatal("heartbeat after the result")
+			}
+		case <-timeout:
+			quiet = true
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for busy.Busy() {
+		if time.Now().After(deadline) {
+			t.Fatal("still busy after the grace window")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
