@@ -151,3 +151,85 @@ type fixedDir struct{ users, channels []DirEntry }
 
 func (f fixedDir) ListUsers(context.Context) ([]DirEntry, error)    { return f.users, nil }
 func (f fixedDir) ListChannels(context.Context) ([]DirEntry, error) { return f.channels, nil }
+
+// slowDir counts listings and blocks each one until release is closed.
+type slowDir struct {
+	calls   atomic.Int32
+	release chan struct{}
+	err     error
+}
+
+func (s *slowDir) ListUsers(ctx context.Context) ([]DirEntry, error) {
+	s.calls.Add(1)
+	<-s.release
+	if s.err != nil {
+		return nil, s.err
+	}
+	return []DirEntry{{ID: "U1", Name: "alpha"}}, nil
+}
+func (s *slowDir) ListChannels(ctx context.Context) ([]DirEntry, error) { return s.ListUsers(ctx) }
+
+// Searches typed while the first listing is still paging share it instead
+// of each paging the workspace again — the burst that tripped the rate limit.
+func TestDirectoryConcurrentSearchesShareOneListing(t *testing.T) {
+	d := NewDirectory()
+	api := &slowDir{release: make(chan struct{})}
+	errs := make(chan error, 5)
+	for _, q := range []string{"a", "al", "alp", "alph", "alpha"} {
+		go func(q string) {
+			got, err := d.Search(context.Background(), api, "ws", DirChannels, q)
+			if err == nil && ids(got) != "U1" {
+				err = errors.New("got " + ids(got))
+			}
+			errs <- err
+		}(q)
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(api.release)
+	for i := 0; i < 5; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := api.calls.Load(); n != 1 {
+		t.Fatalf("listings = %d, want 1", n)
+	}
+}
+
+// A failed refresh (rate limited) keeps serving the expired listing.
+func TestDirectoryServesStaleOnError(t *testing.T) {
+	d := NewDirectory()
+	now := time.Now()
+	d.now = func() time.Time { return now }
+	api := &slowDir{release: make(chan struct{})}
+	close(api.release)
+	if _, err := d.Search(context.Background(), api, "ws", DirUsers, "al"); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(DirectoryTTL + time.Second)
+	api.err = errors.New("slack users.list: rate limited")
+	got, err := d.Search(context.Background(), api, "ws", DirUsers, "al")
+	if err != nil || ids(got) != "U1" {
+		t.Fatalf("stale: %v %v", ids(got), err)
+	}
+}
+
+// A 429 page is retried after Retry-After instead of failing the listing.
+func TestDirectoryRetriesRateLimitedPage(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "channels": []map[string]any{{"id": "C1", "name": "support"}}})
+	}))
+	old := BaseURL
+	BaseURL = srv.URL
+	t.Cleanup(func() { BaseURL = old; srv.Close() })
+	got, err := NewDirectory().Search(context.Background(), HTTPAPI{Token: "x"}, "ws", DirChannels, "sup")
+	if err != nil || ids(got) != "C1" || calls.Load() != 2 {
+		t.Fatalf("got %v err %v calls %d", ids(got), err, calls.Load())
+	}
+}

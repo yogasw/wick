@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/yogasw/wick/internal/agents/remote"
 )
 
 // Directory kinds a search can ask for.
@@ -128,7 +130,7 @@ func (a HTTPAPI) pages(ctx context.Context, method string, form url.Values, each
 			} `json:"response_metadata"`
 		}
 		var body []byte
-		if err := a.call(ctx, method, f, &rawBody{&body}); err != nil {
+		if err := a.callRetrying(ctx, method, f, &rawBody{&body}); err != nil {
 			return err
 		}
 		if err := unmarshal(body, &meta); err != nil {
@@ -144,6 +146,33 @@ func (a HTTPAPI) pages(ctx context.Context, method string, form url.Values, each
 	return nil
 }
 
+// directoryMaxRetries bounds how often one page is retried after a 429, and
+// directoryMaxWait how long a single Retry-After may hold the picker.
+const (
+	directoryMaxRetries = 3
+	directoryMaxWait    = 30 * time.Second
+)
+
+// callRetrying is call that waits out Slack's Retry-After on a 429 instead
+// of failing the whole listing: users.list and conversations.list are tier
+// 2, and a large workspace's paging can trip it on its own.
+func (a HTTPAPI) callRetrying(ctx context.Context, method string, form url.Values, out any) error {
+	for attempt := 0; ; attempt++ {
+		err := a.call(ctx, method, form, out)
+		var ra *remote.RetryAfterError
+		if err == nil || !errors.As(err, &ra) || attempt >= directoryMaxRetries || ra.After > directoryMaxWait {
+			return err
+		}
+		t := time.NewTimer(ra.After)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return err
+		case <-t.C:
+		}
+	}
+}
+
 // DirectoryAPI lists a workspace's users and channels.
 type DirectoryAPI interface {
 	ListUsers(ctx context.Context) ([]DirEntry, error)
@@ -156,9 +185,19 @@ const DirectoryTTL = 5 * time.Minute
 
 // Directory caches listings per key (workspace + identity + kind).
 type Directory struct {
-	mu   sync.Mutex
-	rows map[string]dirCache
-	now  func() time.Time
+	mu       sync.Mutex
+	rows     map[string]dirCache
+	inflight map[string]*dirFetch
+	now      func() time.Time
+}
+
+// dirFetch is one listing in progress. Every keystroke of a search box is
+// its own request, so without it each key typed before the first listing
+// lands would page the whole workspace again and trip the rate limit.
+type dirFetch struct {
+	done    chan struct{}
+	entries []DirEntry
+	err     error
 }
 
 type dirCache struct {
@@ -168,7 +207,7 @@ type dirCache struct {
 
 // NewDirectory returns an empty cache.
 func NewDirectory() *Directory {
-	return &Directory{rows: map[string]dirCache{}, now: time.Now}
+	return &Directory{rows: map[string]dirCache{}, inflight: map[string]*dirFetch{}, now: time.Now}
 }
 
 // Search lists kind through api (or the cached listing under key) and
@@ -183,14 +222,14 @@ func (d *Directory) Search(ctx context.Context, api DirectoryAPI, key, kind, que
 	c, ok := d.rows[key]
 	d.mu.Unlock()
 	if !ok || d.now().Sub(c.at) > DirectoryTTL {
-		var list []DirEntry
-		var err error
-		if kind == DirUsers {
-			list, err = api.ListUsers(ctx)
-		} else {
-			list, err = api.ListChannels(ctx)
-		}
-		if err != nil {
+		list, err := d.fetch(ctx, api, key, kind)
+		switch {
+		case err == nil:
+			c = dirCache{at: d.now(), entries: list}
+		case ok:
+			// A stale listing beats an error: the workspace rarely changes
+			// within minutes, and the refresh is retried on the next search.
+		default:
 			if strings.Contains(err.Error(), "missing_scope") {
 				scopes := "users:read"
 				if kind == DirChannels {
@@ -200,11 +239,6 @@ func (d *Directory) Search(ctx context.Context, api DirectoryAPI, key, kind, que
 			}
 			return nil, err
 		}
-		sort.SliceStable(list, func(i, j int) bool { return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name) })
-		c = dirCache{at: d.now(), entries: list}
-		d.mu.Lock()
-		d.rows[key] = c
-		d.mu.Unlock()
 	}
 	q := strings.ToLower(strings.TrimLeft(strings.TrimSpace(query), "@#"))
 	out := []DirEntry{}
@@ -217,6 +251,50 @@ func (d *Directory) Search(ctx context.Context, api DirectoryAPI, key, kind, que
 		}
 	}
 	return out, nil
+}
+
+// fetch lists kind once per key at a time: a search arriving while a listing
+// is in flight waits for that listing rather than starting another.
+func (d *Directory) fetch(ctx context.Context, api DirectoryAPI, key, kind string) ([]DirEntry, error) {
+	d.mu.Lock()
+	f, ok := d.inflight[key]
+	if !ok {
+		f = &dirFetch{done: make(chan struct{})}
+		d.inflight[key] = f
+		go d.list(context.WithoutCancel(ctx), api, key, kind, f)
+	}
+	d.mu.Unlock()
+	select {
+	case <-f.done:
+		return f.entries, f.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// list runs one listing detached from the request that started it: that
+// request may be cancelled (the user typed on) while others still wait, and
+// the finished listing fills the cache for them either way.
+func (d *Directory) list(ctx context.Context, api DirectoryAPI, key, kind string, f *dirFetch) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	if kind == DirUsers {
+		f.entries, f.err = api.ListUsers(ctx)
+	} else {
+		f.entries, f.err = api.ListChannels(ctx)
+	}
+	if f.err == nil {
+		sort.SliceStable(f.entries, func(i, j int) bool {
+			return strings.ToLower(f.entries[i].Name) < strings.ToLower(f.entries[j].Name)
+		})
+	}
+	d.mu.Lock()
+	if f.err == nil {
+		d.rows[key] = dirCache{at: d.now(), entries: f.entries}
+	}
+	delete(d.inflight, key)
+	d.mu.Unlock()
+	close(f.done)
 }
 
 func matches(e DirEntry, q string) bool {

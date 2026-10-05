@@ -2,8 +2,9 @@
 //
 // Implements channels.LookupProvider so the admin UI's picker widget can
 // search the Slack workspace in real time (users, user groups, channels).
-// Results are cached briefly per (source,query) to avoid hammering Slack's
-// rate limits when the operator types.
+// Results are cached briefly per (source,query), and the workspace listings
+// they are filtered from (users.list, the bot's channels) per bot, so typing
+// filters one listing instead of paging Slack on every key.
 
 package slack
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	slackgo "github.com/slack-go/slack"
+	"golang.org/x/sync/singleflight"
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 )
@@ -23,7 +25,51 @@ import (
 const (
 	lookupMaxResults = 20
 	lookupCacheTTL   = 60 * time.Second
+	// listingTTL is how long one workspace listing is filtered locally
+	// before it is paged from Slack again.
+	listingTTL = 5 * time.Minute
 )
+
+type listingEntry struct {
+	at   time.Time
+	data any
+}
+
+var (
+	listingMu    sync.Mutex
+	listingCache = map[string]listingEntry{}
+	listingGroup singleflight.Group
+)
+
+// cachedListing returns the listing under key, paging it through fetch at
+// most once per listingTTL. Concurrent callers share one fetch, and a failed
+// refresh (rate limited, usually) keeps serving the expired listing.
+func cachedListing[T any](key string, fetch func() ([]T, error)) ([]T, error) {
+	listingMu.Lock()
+	e, ok := listingCache[key]
+	listingMu.Unlock()
+	if ok && time.Since(e.at) < listingTTL {
+		return e.data.([]T), nil
+	}
+	v, err, _ := listingGroup.Do(key, func() (any, error) {
+		list, err := fetch()
+		if err != nil {
+			return nil, err
+		}
+		listingMu.Lock()
+		listingCache[key] = listingEntry{at: time.Now(), data: list}
+		listingMu.Unlock()
+		return list, nil
+	})
+	if err != nil {
+		if ok {
+			log.Debug().Str("channel", "slack").Str("listing", key).Err(err).Msg("listing refresh failed, serving stale")
+			return e.data.([]T), nil
+		}
+		return nil, err
+	}
+	return v.([]T), nil
+}
 
 type lookupCacheEntry struct {
 	at    time.Time
@@ -71,16 +117,16 @@ func (s *Channel) Lookup(source, query string) ([]agentchannels.LookupItem, erro
 			if err != nil {
 				log.Debug().Str("channel", "slack").Err(err).Msg("assistant.search.context users failed, falling back to users.list")
 			}
-			items, err = lookupSlackUsers(api, q)
+			items, err = lookupSlackUsers(api, instance, q)
 		}
 	case "slack.usergroups":
 		items, err = lookupSlackUserGroups(api, q)
 	case "slack.bots":
-		items, err = lookupSlackBots(api, q)
+		items, err = lookupSlackBots(api, instance, q)
 	case "slack.channels":
 		// No assistant.search.context here: it searches the whole
 		// workspace, which is exactly what this source must NOT offer.
-		items, err = lookupSlackChannels(api, q)
+		items, err = lookupSlackChannels(api, instance, q)
 	default:
 		return nil, fmt.Errorf("unknown source %q", source)
 	}
@@ -133,11 +179,21 @@ func lookupSlackUsersAssistant(api *slackgo.Client, q string) ([]agentchannels.L
 	return out, nil
 }
 
-func lookupSlackUsers(api *slackgo.Client, q string) ([]agentchannels.LookupItem, error) {
-	users, err := api.GetUsers()
+// workspaceUsers is users.list for the bot, shared by the users and bots
+// sources.
+func workspaceUsers(api *slackgo.Client, instance string) ([]slackgo.User, error) {
+	return cachedListing(instance+"|users.list", func() ([]slackgo.User, error) { return api.GetUsers() })
+}
+
+func lookupSlackUsers(api *slackgo.Client, instance, q string) ([]agentchannels.LookupItem, error) {
+	users, err := workspaceUsers(api, instance)
 	if err != nil {
 		return nil, err
 	}
+	return userItems(users, q), nil
+}
+
+func userItems(users []slackgo.User, q string) []agentchannels.LookupItem {
 	out := make([]agentchannels.LookupItem, 0, lookupMaxResults)
 	for _, u := range users {
 		if u.Deleted || u.IsBot {
@@ -158,15 +214,15 @@ func lookupSlackUsers(api *slackgo.Client, q string) ([]agentchannels.LookupItem
 			break
 		}
 	}
-	return out, nil
+	return out
 }
 
 // lookupSlackBots lists the workspace's bot users for the BotsMode allow
 // list. The item id is the bot's user id (U...), which is what a bot's
 // message event carries in its user field. Slackbot is skipped: it is a
 // bot user in users.list but never a meaningful trigger.
-func lookupSlackBots(api *slackgo.Client, q string) ([]agentchannels.LookupItem, error) {
-	users, err := api.GetUsers()
+func lookupSlackBots(api *slackgo.Client, instance, q string) ([]agentchannels.LookupItem, error) {
+	users, err := workspaceUsers(api, instance)
 	if err != nil {
 		return nil, err
 	}
@@ -240,33 +296,44 @@ func lookupSlackUserGroups(api *slackgo.Client, q string) ([]agentchannels.Looku
 // non-archived channel in the workspace, so the picker offered hundreds
 // of channels the bot was never invited to — a trigger scoped to one of
 // them can never fire, and a send to it fails with not_in_channel.
-func lookupSlackChannels(api *slackgo.Client, q string) ([]agentchannels.LookupItem, error) {
-	params := &slackgo.GetConversationsForUserParameters{
-		ExcludeArchived: true,
-		Limit:           200,
-		Types:           []string{"public_channel", "private_channel"},
+func lookupSlackChannels(api *slackgo.Client, instance, q string) ([]agentchannels.LookupItem, error) {
+	chans, err := cachedListing(instance+"|users.conversations", func() ([]slackgo.Channel, error) {
+		params := &slackgo.GetConversationsForUserParameters{
+			ExcludeArchived: true,
+			Limit:           200,
+			Types:           []string{"public_channel", "private_channel"},
+		}
+		var all []slackgo.Channel
+		for {
+			page, cursor, err := api.GetConversationsForUser(params)
+			if err != nil {
+				return nil, err
+			}
+			all = append(all, page...)
+			if cursor == "" {
+				return all, nil
+			}
+			params.Cursor = cursor
+		}
+	})
+	if err != nil {
+		return nil, err
 	}
+	return channelItems(chans, q), nil
+}
+
+func channelItems(chans []slackgo.Channel, q string) []agentchannels.LookupItem {
 	out := make([]agentchannels.LookupItem, 0, lookupMaxResults)
-	for {
-		chans, cursor, err := api.GetConversationsForUser(params)
-		if err != nil {
-			return nil, err
+	for _, ch := range chans {
+		if q != "" && !containsFold(ch.Name, q) && !containsFold(ch.ID, q) {
+			continue
 		}
-		for _, ch := range chans {
-			if q != "" && !containsFold(ch.Name, q) && !containsFold(ch.ID, q) {
-				continue
-			}
-			out = append(out, agentchannels.LookupItem{ID: ch.ID, Name: "#" + ch.Name})
-			if len(out) >= lookupMaxResults {
-				return out, nil
-			}
-		}
-		if cursor == "" {
+		out = append(out, agentchannels.LookupItem{ID: ch.ID, Name: "#" + ch.Name})
+		if len(out) >= lookupMaxResults {
 			break
 		}
-		params.Cursor = cursor
 	}
-	return out, nil
+	return out
 }
 
 func containsFold(s, sub string) bool {
