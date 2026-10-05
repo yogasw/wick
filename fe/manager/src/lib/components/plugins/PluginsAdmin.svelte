@@ -110,15 +110,17 @@
     toastOk(`Installed ${e.key} v${e.version}`);
     await load();
   });
-  const update = (p: InstalledPlugin) => run(`update:${p.key}`, async () => {
+  // A connector and a tool may share a key, so rows are told apart by kind too.
+  const rowID = (p: InstalledPlugin) => `${p.kind}:${p.key}`;
+  const update = (p: InstalledPlugin) => run(`update:${rowID(p)}`, async () => {
     // Same stream + progress phases as the connector detail kebab.
-    progress = { ...progress, [p.key]: { phase: "downloading", pct: 0 } };
+    progress = { ...progress, [rowID(p)]: { phase: "downloading", pct: 0 } };
     try {
       await updatePluginStream(p.key, (pr) => {
-        progress = { ...progress, [p.key]: pr };
+        progress = { ...progress, [rowID(p)]: pr };
       });
     } finally {
-      const { [p.key]: _, ...rest } = progress;
+      const { [rowID(p)]: _, ...rest } = progress;
       progress = rest;
     }
     toastOk(`Updated ${p.key} to v${p.latest_version}`);
@@ -304,7 +306,7 @@
       </div>
     </div>
     <div class="divide-y divide-white-300 dark:divide-navy-600 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
-      {#each shown as p (p.key)}
+      {#each shown as p (rowID(p))}
         <div class="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-start sm:justify-between" data-testid="installed-row">
           <div class="min-w-0 space-y-1">
             <div class="flex flex-wrap items-center gap-2">
@@ -338,8 +340,8 @@
                 {#if p.download_url}<a class="text-green-700 hover:underline dark:text-green-300" href={p.download_url} target="_blank" rel="noopener noreferrer">Download ↗</a>{/if}
               </p>
             {/if}
-            {#if progress[p.key]}
-              <PluginUpdateProgress class="mt-2 max-w-xs" progress={progress[p.key]} />
+            {#if progress[rowID(p)]}
+              <PluginUpdateProgress class="mt-2 max-w-xs" progress={progress[rowID(p)]} />
             {/if}
           </div>
           {#if isAdmin}
@@ -349,7 +351,7 @@
               {/if}
               {#if canUpdate(p)}
                 <Button size="sm" onclick={() => update(p)} disabled={busy !== ""}>
-                  {busy === `update:${p.key}` ? pluginPhaseLabel(progress[p.key]) : `Update to v${p.latest_version}`}
+                  {busy === `update:${rowID(p)}` ? pluginPhaseLabel(progress[rowID(p)]) : `Update to v${p.latest_version}`}
                 </Button>
               {/if}
             </div>

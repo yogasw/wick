@@ -63,6 +63,17 @@ describe("PluginsAdmin installed tab", () => {
     expect(screen.getByText("No plugin matches these filters.")).toBeTruthy();
   });
 
+  it("renders a connector and a tool that share a key", async () => {
+    mockAll(true);
+    vi.mocked(api.listInstalledPlugins).mockResolvedValue({
+      plugins: [plugin({ key: "loki", name: "Loki" }), plugin({ key: "loki", name: "Loki Tool", kind: "tool" })],
+      is_admin: true, official: { url: "https://example.test/plugins.json", plugins: 3 },
+    });
+    render(PluginsAdmin);
+    await waitFor(() => expect(screen.getAllByTestId("installed-row")).toHaveLength(2));
+    expect(screen.getByText("Loki Tool")).toBeTruthy();
+  });
+
   it("updates in-row through the streaming endpoint", async () => {
     mockAll(true);
     vi.mocked(api.updatePluginStream).mockResolvedValue();
