@@ -43,6 +43,8 @@ describe("SlackRemoteWizard", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Channel" }));
     expect(nextBtn().disabled).toBe(true);
     await fireEvent.input(screen.getByLabelText("Channel ID"), { target: { value: "C0OPS" } });
+    // The mention is searched like the DM target; the id stays typeable.
+    expect(screen.getByLabelText("Mention (optional) — search users and bots").getAttribute("role")).toBe("combobox");
     await fireEvent.input(screen.getByLabelText("Mention (optional)"), { target: { value: "U0BOT" } });
     await fireEvent.input(screen.getByLabelText("Display name"), { target: { value: "#ops" } });
     await fireEvent.click(nextBtn());

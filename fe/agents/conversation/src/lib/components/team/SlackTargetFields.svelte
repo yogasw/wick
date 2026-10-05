@@ -28,6 +28,8 @@
     base = "", connectorId = "", identity = "bot", accountId = "",
   }: Props = $props();
 
+  // The mention's display name is not stored: targetName names the channel.
+  let mentionName = $state("");
   let link = $state("");
   let linkError = $state("");
 
@@ -83,20 +85,20 @@
       {base} {connectorId} {identity} {accountId} kind="channels" bind:value={channel} bind:name={targetName}
       inputId="{idPrefix}-channel" idLabel="Channel ID" idPlaceholder="C0123ABCD"
     />
-    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      {#if target === "thread"}
-        <div>
-          <label class={label} for="{idPrefix}-thread">Thread timestamp</label>
-          <input id="{idPrefix}-thread" class="{input} font-mono" bind:value={threadTs} placeholder="1700000000.123456" />
-        </div>
-      {:else}
-        <div>
-          <label class={label} for="{idPrefix}-mention">Mention (optional)</label>
-          <input id="{idPrefix}-mention" class="{input} font-mono" bind:value={mentionId} placeholder="U0123ABCD" />
-        </div>
-      {/if}
-    </div>
-    {#if target === "channel"}<p class={hint}>The user or bot @-mentioned in each message (see "Always @mention the target").</p>{/if}
+    {#if target === "thread"}
+      <div>
+        <label class={label} for="{idPrefix}-thread">Thread timestamp</label>
+        <input id="{idPrefix}-thread" class="{input} font-mono" bind:value={threadTs} placeholder="1700000000.123456" />
+      </div>
+    {:else}
+      <!-- Searched like the DM target (users and bots), id still typeable. -->
+      <SlackDirectoryPicker
+        {base} {connectorId} {identity} {accountId} kind="users" bind:value={mentionId} bind:name={mentionName}
+        inputId="{idPrefix}-mention" searchLabel="Mention (optional) — search users and bots"
+        idLabel="Mention (optional)" idPlaceholder="U0123ABCD"
+        idHint={'The user or bot @-mentioned in each message (see "Always @mention the target").'}
+      />
+    {/if}
   {/if}
 
   <div>

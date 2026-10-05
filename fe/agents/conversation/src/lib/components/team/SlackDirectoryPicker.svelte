@@ -18,10 +18,12 @@
     idLabel: string;
     idPlaceholder: string;
     idHint?: string;
+    /** Label of the search box; defaults to "Search users and bots" / "Search channels". */
+    searchLabel?: string;
   };
   let {
     base, connectorId, identity, accountId, kind, value = $bindable(), name = $bindable(),
-    inputId, idLabel, idPlaceholder, idHint = "",
+    inputId, idLabel, idPlaceholder, idHint = "", searchLabel = "",
   }: Props = $props();
 
   let query = $state("");
@@ -83,7 +85,7 @@
 
 <div>
   {#if connectorId}
-    <label class={label} for="{inputId}-search">Search {what}</label>
+    <label class={label} for="{inputId}-search">{searchLabel || `Search ${what}`}</label>
     <div class="relative">
       <input
         id="{inputId}-search"
