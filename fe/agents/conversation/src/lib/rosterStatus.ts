@@ -53,13 +53,13 @@ export function rosterStatus(a: Row, opts: { activeId?: string; hatching?: boole
 /** withTurn is the roster after agent id's main-chat turn started or
     ended on the stream: the row reads working (or idle, with its tool
     cleared) at once instead of after the next poll. */
-export function withTurn<T extends Pick<AgentItem, "id" | "status"> & Partial<Pick<AgentItem, "current_action">>>(
+export function withTurn<T extends Pick<AgentItem, "id" | "status"> & Partial<Pick<AgentItem, "current_action" | "tool_error">>>(
   agents: T[],
   id: string,
   active: boolean,
 ): T[] {
   return agents.map((x) =>
-    x.id === id ? { ...x, status: active ? "running" : "idle", current_action: active ? x.current_action : "" } : x,
+    x.id === id ? { ...x, status: active ? "running" : "idle", current_action: active ? x.current_action : "", ...(!active && x.tool_error ? { tool_error: false } : {}) } : x,
   );
 }
 
@@ -73,7 +73,7 @@ export function liveIds(agents: Pick<AgentItem, "id" | "status" | "disabled">[])
     poll), so only its status is taken. finished = a row went from working
     to idle, time for a full read (preview, unread). The same list comes
     back when nothing moved, so the roster does not re-render. */
-export function withLive<T extends Pick<AgentItem, "id" | "status"> & Partial<Pick<AgentItem, "current_action" | "needs_attention">>>(
+export function withLive<T extends Pick<AgentItem, "id" | "status"> & Partial<Pick<AgentItem, "current_action" | "needs_attention" | "tool_error">>>(
   agents: T[],
   rows: AgentLive[],
   keepAction = "",
@@ -86,10 +86,11 @@ export function withLive<T extends Pick<AgentItem, "id" | "status"> & Partial<Pi
     if (!r) return x;
     const action = r.status === "idle" ? "" : x.id === keepAction ? (x.current_action ?? "") : r.current_action ?? "";
     const attention = !!r.needs_attention;
-    if (r.status === x.status && action === (x.current_action ?? "") && attention === !!x.needs_attention) return x;
+    const failed = r.status !== "idle" && !!r.tool_error;
+    if (r.status === x.status && action === (x.current_action ?? "") && attention === !!x.needs_attention && failed === !!x.tool_error) return x;
     changed = true;
     if (isWorking(x.status) && !isWorking(r.status)) finished = true;
-    return { ...x, status: r.status, current_action: action, needs_attention: attention };
+    return { ...x, status: r.status, current_action: action, needs_attention: attention, tool_error: failed };
   });
   return { agents: changed ? next : agents, finished };
 }

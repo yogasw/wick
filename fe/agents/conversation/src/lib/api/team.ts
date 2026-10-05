@@ -7,7 +7,14 @@ import type { AgentFeatures } from "../agentMode.js";
    caller as owner server-side, so nothing here passes a user id. */
 
 /** team.Avatar: kind "" = classic, "blob" = blob mascot (+ expression). */
-export type AgentAvatarSpec = { kind?: string; shape: string; color: string; expression?: string };
+export type AgentAvatarSpec = {
+  kind?: string;
+  shape: string;
+  color: string;
+  expression?: string;
+  /** Per-event pose overrides (Settings › Avatar, events.ts); absent = defaults. */
+  events?: Record<string, { state?: string; expression?: string; off?: boolean }>;
+};
 
 export type ConnectorGrant = {
   connector_id: string;
@@ -89,6 +96,8 @@ export type AgentItem = {
   attention_preview?: string;
   /** Tool the running turn is on ("Bash", "query_range"); "" otherwise. */
   current_action?: string;
+  /** The running turn's newest tool failed (the avatar's short sad pose). */
+  tool_error?: boolean;
   /** Everything else on the same project: other agents (any owner) and
       web/channel conversations. */
   shared_with?: number;
@@ -404,7 +413,7 @@ export const listAgents = (base: string) =>
   apiGetE<{ agents: AgentItem[] | null; captain_id: string }>(`${base}/api/team/agents`);
 
 /** One agent's turn state from GET /api/team/agents/live. */
-export type AgentLive = Pick<AgentItem, "id" | "status" | "needs_attention"> & { current_action: string };
+export type AgentLive = Pick<AgentItem, "id" | "status" | "needs_attention" | "tool_error"> & { current_action: string };
 
 /** The quick roster read: only the turn state of the agents in ids, for
     the poll that runs while one of them works. */

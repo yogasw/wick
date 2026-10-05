@@ -47,6 +47,21 @@ func CurrentAction(evs []store.TurnEvent) string {
 	return ""
 }
 
+// ToolFailed reports whether the newest finished tool of the in-flight
+// turn failed and the turn has not started another since: the avatar's
+// short "error" pose.
+func ToolFailed(evs []store.TurnEvent) bool {
+	for i := len(evs) - 1; i >= 0; i-- {
+		switch evs[i].Type {
+		case "tool_use":
+			return false
+		case "tool_result":
+			return evs[i].IsError
+		}
+	}
+	return false
+}
+
 // AllowsProviderSwitch reads AllowProviderSwitch with its default: the
 // Captain may switch provider in chat, every other agent stays on the one
 // its settings name, unless the owner said otherwise.

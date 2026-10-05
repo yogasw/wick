@@ -282,7 +282,7 @@
                    a tool runs), is the typing indicator in the Team app. A compaction keeps the amber
                    spinner: that wait is not the agent answering. -->
               {#if agent && !compacting}
-                <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={20} live working={true} tool={!!typing.toolName} />
+                <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={20} live working={true} tool={!!typing.toolName} toolName={typing.toolName} events={agent.avatarEvents} />
               {:else}
               <svg
                 class={"h-3 w-3 shrink-0 animate-spin " + (compacting ? "text-amber-500" : "text-green-500")}

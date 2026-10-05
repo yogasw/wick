@@ -17,3 +17,8 @@ export {
   createFidget, createFidgetSlots, seededRand, FIDGET_MAX_ACTIVE, FIDGET_DROWSY_AFTER, FIDGET_BIG_MIN,
   type Fidget, type FidgetEnv, type FidgetPose,
 } from "./blob/motion/fidget";
+export {
+  AVATAR_EVENTS, AVATAR_EVENT_LABELS, DEFAULT_EVENT_POSES, isAvatarEvent, toolEvent, toolWords, eventOf, poseFor,
+  fallbackState, resolvePose, cleanOverrides, type AvatarEvent, type EventPose, type EventOverride, type EventOverrides, type PoseInput, type ResolvedPose,
+} from "./events.js";
+export { STATES as BLOB_STATES } from "./blob/core/types";

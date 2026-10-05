@@ -124,6 +124,9 @@ type TeamAgentItem struct {
 	// waiting on ("Bash", "query_range"); "" when idle, thinking or
 	// writing.
 	CurrentAction string `json:"current_action"`
+	// ToolError is true while the running turn's newest tool failed and
+	// no other has started: the avatar's short error pose.
+	ToolError bool `json:"tool_error,omitempty"`
 	// AttentionPreview is the short line of what NeedsAttention waits on
 	// ("Butuh input: …", "Bash — butuh approval"); also LastPreview then.
 	AttentionPreview string `json:"attention_preview,omitempty"`
@@ -518,17 +521,21 @@ func timePtr(t time.Time) *time.Time {
 // response so a roster of N agents costs one pool snapshot rather than N.
 type teamLive struct {
 	actions    map[string]string // session id → CurrentAction
+	failed     map[string]bool   // session id → team.ToolFailed
 	lifecycles map[string]string // session id → pool lifecycle
 	approvals  map[string]string // session id → tool of a pending approval
 }
 
 func teamLiveNow() teamLive {
-	l := teamLive{actions: map[string]string{}, lifecycles: map[string]string{}, approvals: map[string]string{}}
+	l := teamLive{actions: map[string]string{}, failed: map[string]bool{}, lifecycles: map[string]string{}, approvals: map[string]string{}}
 	if globalPool != nil {
 		for _, e := range globalPool.ActiveSnapshot() {
 			l.lifecycles[e.SessionID] = e.Lifecycle
 			if a := team.CurrentAction(e.InFlightEvents); a != "" {
 				l.actions[e.SessionID] = a
+			}
+			if team.ToolFailed(e.InFlightEvents) {
+				l.failed[e.SessionID] = true
 			}
 		}
 	}
@@ -966,6 +973,7 @@ type TeamAgentLive struct {
 	ID             string `json:"id"`
 	Status         string `json:"status"`
 	CurrentAction  string `json:"current_action"`
+	ToolError      bool   `json:"tool_error,omitempty"`
 	NeedsAttention bool   `json:"needs_attention"`
 }
 
@@ -984,6 +992,7 @@ func teamLiveRows(userID string, ids []string, live teamLive) []TeamAgentLive {
 			row.Status = team.TurnStatus(string(s.Meta.Status), live.lifecycles[s.ID])
 			if row.Status != string(session.StatusIdle) {
 				row.CurrentAction = live.actions[s.ID]
+				row.ToolError = live.failed[s.ID]
 			}
 			row.NeedsAttention = live.attention(s.ID) != ""
 		}

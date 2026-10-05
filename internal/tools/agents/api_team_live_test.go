@@ -38,6 +38,13 @@ func TestTeamLiveRows(t *testing.T) {
 	if rows[2].Status != "idle" || rows[2].CurrentAction != "" {
 		t.Fatalf("unknown row %+v", rows[2])
 	}
+	// A failed tool shows on its working row only.
+	live.failed = map[string]bool{sa: true, sb: true}
+	live.lifecycles[sb] = "idle"
+	if r := teamLiveRows(owner.ID, []string{a.ID, b.ID}, live); !r[0].ToolError || r[1].ToolError {
+		t.Fatalf("tool error rows %+v", r)
+	}
+	live.failed, live.lifecycles[sb] = nil, "working"
 	// Another user asking about the same agents learns nothing.
 	for _, r := range teamLiveRows("bob", []string{a.ID}, live) {
 		if r.Status != "idle" || r.CurrentAction != "" {

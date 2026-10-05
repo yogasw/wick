@@ -86,7 +86,7 @@ describe("withTurn", () => {
 });
 
 describe("liveIds / withLive", () => {
-  const list = [
+  const list: { id: string; status: string; current_action: string; disabled: boolean; tool_error?: boolean }[] = [
     { id: "a1", status: "running", current_action: "", disabled: false },
     { id: "a2", status: "idle", current_action: "", disabled: false },
     { id: "a3", status: "running", current_action: "", disabled: true },
@@ -112,6 +112,14 @@ describe("liveIds / withLive", () => {
     const done = withLive(list, [{ id: "a1", status: "idle", current_action: "Bash", needs_attention: false }]);
     expect(done.finished).toBe(true);
     expect(done.agents[0].current_action).toBe("");
+  });
+
+  it("a failed tool rides the poll and clears when the turn ends", () => {
+    let r = withLive(list, [{ id: "a1", status: "running", current_action: "", needs_attention: false, tool_error: true }]);
+    expect(r.agents[0].tool_error).toBe(true);
+    r = withLive(r.agents, [{ id: "a1", status: "idle", current_action: "", needs_attention: false, tool_error: true }]);
+    expect(r.agents[0].tool_error).toBe(false);
+    expect(withTurn([{ id: "a1", status: "running", tool_error: true }], "a1", false)[0].tool_error).toBe(false);
   });
 
   it("the agent whose chat streams its tool keeps it; status still comes from the poll", () => {

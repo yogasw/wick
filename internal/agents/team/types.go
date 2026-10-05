@@ -119,6 +119,28 @@ type Avatar struct {
 	Color string `json:"color"`
 	// Expression is one of BlobExpressions; only a blob has one.
 	Expression string `json:"expression,omitempty"`
+	// Events overrides the event → pose table (fe/common/avatar/src/events.ts),
+	// keyed by one of AvatarEvents. Absent = the defaults.
+	Events map[string]AvatarEventPose `json:"events,omitempty"`
+}
+
+// AvatarEventPose is one row of Avatar.Events: a different pose for the
+// event, or Off to let it fall back to the plain cues. An empty State
+// keeps the default; Expression absent keeps the default, "" means the
+// agent's own expression.
+type AvatarEventPose struct {
+	State      string  `json:"state,omitempty"`
+	Expression *string `json:"expression,omitempty"`
+	Off        bool    `json:"off,omitempty"`
+}
+
+// AvatarEvents mirrors AVATAR_EVENTS in fe/common/avatar/src/events.ts.
+var AvatarEvents = []string{"read", "run", "write", "delegate", "ask_user", "remote_wait", "error", "done", "compact"}
+
+// BlobStates mirrors STATES in fe/common/avatar/src/blob/core/types.ts.
+var BlobStates = []string{
+	"idle", "thinking", "wink", "wide", "alert", "notify", "exclaim",
+	"sleep", "play", "orbit", "swirl", "burst", "comet",
 }
 
 // AvatarShapes lists the shapes the avatar component can draw.
@@ -181,7 +203,39 @@ func NormalizeAvatar(a Avatar) Avatar {
 	if a.Color == "" {
 		a.Color = d.Color
 	}
+	a.Events = normalizeAvatarEvents(a.Events)
 	return a
+}
+
+// normalizeAvatarEvents keeps the rows the UI can draw: a known event with
+// Off, a known state or a known (or empty = own) expression. Anything else
+// is dropped, and a table with nothing left is nil.
+func normalizeAvatarEvents(in map[string]AvatarEventPose) map[string]AvatarEventPose {
+	out := map[string]AvatarEventPose{}
+	for k, p := range in {
+		if !slices.Contains(AvatarEvents, k) {
+			continue
+		}
+		if p.Off {
+			out[k] = AvatarEventPose{Off: true}
+			continue
+		}
+		var row AvatarEventPose
+		if slices.Contains(BlobStates, p.State) {
+			row.State = p.State
+		}
+		if p.Expression != nil && (*p.Expression == "" || slices.Contains(BlobExpressions, *p.Expression)) {
+			e := *p.Expression
+			row.Expression = &e
+		}
+		if row.State != "" || row.Expression != nil {
+			out[k] = row
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // DecodeGrants parses entity.AgentPersona.AllowedConnectors. A malformed

@@ -486,6 +486,7 @@
           shape: selected.avatar?.shape,
           color: selected.avatar?.color,
           expression: selected.avatar?.expression,
+          avatarEvents: selected.avatar?.events,
           caption: remoteMode?.caption ?? connectorCaption(selected.allowed_connectors),
         }
       : undefined,
@@ -620,7 +621,7 @@
           >
             <!-- live like the header's: the same agent in the same state
                  moves the same way in both. Rows scrolled away pause. -->
-            <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={isWorking(a.status)} tool={st.work === "tool"} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
+            <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={isWorking(a.status)} tool={st.work === "tool"} toolName={st.work === "tool" ? a.current_action : ""} toolError={a.tool_error} remote={st.work === "waiting"} events={a.avatar?.events} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
             <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{st.tip}</span>
             <span class="min-w-0 flex-1">
               <span class="flex items-baseline gap-2">
@@ -698,7 +699,7 @@
         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
       </button>
       {#if selected}
-        <AgentAvatar kind={selected.avatar?.kind} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={isWorking(selected.status)} tool={headerStatus?.work === "tool"} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
+        <AgentAvatar kind={selected.avatar?.kind} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={isWorking(selected.status)} tool={headerStatus?.work === "tool"} toolName={headerStatus?.work === "tool" ? selected.current_action : ""} toolError={selected.tool_error} remote={headerStatus?.work === "waiting"} events={selected.avatar?.events} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
         <div class="min-w-0 flex-1">
           <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">
             {selected.name}{#if selected.tagline}<span class="font-normal text-black-700 dark:text-black-600">&nbsp;·&nbsp;{selected.tagline}</span>{/if}

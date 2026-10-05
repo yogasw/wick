@@ -99,6 +99,8 @@ export type AgentIdentity = {
   shape?: string;
   color?: string;
   expression?: string;
+  /** Per-event avatar poses (Avatar.events); unset = defaults. */
+  avatarEvents?: Record<string, { state?: string; expression?: string; off?: boolean }>;
   /** Right-hand composer caption, e.g. "3 connector". */
   caption: string;
 };

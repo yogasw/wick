@@ -89,15 +89,17 @@ export function blobColor(c: string | null | undefined): string {
   return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v) ? v.toLowerCase() : BLOB_COLORS[8];
 }
 
-export type AvatarSpec = { kind?: string; shape: string; color: string; expression?: string };
+export type AvatarSpec = { kind?: string; shape: string; color: string; expression?: string; events?: Record<string, { state?: string; expression?: string; off?: boolean }> };
 
 /** switchAvatarKind converts a stored avatar between classic and blob,
     keeping the color and any shape both kinds share (circle, squircle,
     triangle). A classic spec carries no kind/expression keys at all, so it
-    compares and encodes exactly like a row written before blobs. */
+    compares and encodes exactly like a row written before blobs. The
+    event table (events.ts) belongs to the agent, not the look: it stays. */
 export function switchAvatarKind(a: AvatarSpec, kind: string): AvatarSpec {
-  if (isBlobKind(kind)) return { kind: AVATAR_KIND_BLOB, shape: normalizeBlobShape(a.shape), color: a.color, expression: normalizeBlobExpression(a.expression) };
-  return { shape: normalizeShape(a.shape), color: a.color };
+  const ev = a.events ? { events: a.events } : {};
+  if (isBlobKind(kind)) return { kind: AVATAR_KIND_BLOB, shape: normalizeBlobShape(a.shape), color: a.color, expression: normalizeBlobExpression(a.expression), ...ev };
+  return { shape: normalizeShape(a.shape), color: a.color, ...ev };
 }
 
 export function snapshotOf(look: BlobLook, state: BlobState = "idle", gaze: Gaze = { yaw: 0, pitch: 0 }) {

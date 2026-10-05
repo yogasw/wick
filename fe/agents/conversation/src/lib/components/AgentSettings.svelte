@@ -9,6 +9,7 @@
   import { onMount, untrack } from "svelte";
   import { AIGenerateButton, Button, Modal, ProviderPicker, Toggle, buildProviderOptions } from "@wick-fe/common-ui";
   import { toastOk } from "@wick-fe/common-stores";
+  import AvatarEventsTable from "./AvatarEventsTable.svelte";
   import DrawerHeader from "./DrawerHeader.svelte";
   import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, colorInputValue, isBlobKind, switchAvatarKind, type AvatarSpec } from "@wick-fe/common-avatar";
   import { getProviderOptions, getProjectOptions } from "../api/options.js";
@@ -595,7 +596,7 @@
   {:else if view === "avatar"}
     <div class="flex items-center gap-4">
       <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={72} live />
-      <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={72} working live />
+      <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={72} working live events={draft.avatar.events} />
       <span class="text-xs text-black-800 dark:text-black-600">idle · working</span>
     </div>
     <div>
@@ -618,7 +619,7 @@
         expression={draft.avatar.expression}
         color={draft.avatar.color}
         labelClass={label}
-        onChange={(l) => (draft.avatar = { kind: "blob", ...l })}
+        onChange={(l) => (draft.avatar = { kind: "blob", ...l, ...(draft.avatar.events ? { events: draft.avatar.events } : {}) })}
       />
     {:else}
     <div>
@@ -679,6 +680,17 @@
         {/each}
       </div>
     </div>
+    <AvatarEventsTable
+      kind={draft.avatar.kind}
+      shape={draft.avatar.shape}
+      color={draft.avatar.color}
+      expression={draft.avatar.expression}
+      events={draft.avatar.events}
+      onChange={(ev) => {
+        const { events: _old, ...rest } = draft.avatar;
+        draft.avatar = ev ? { ...rest, events: ev } : rest;
+      }}
+    />
   {:else if view === "mention"}
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Mention between agents</p>

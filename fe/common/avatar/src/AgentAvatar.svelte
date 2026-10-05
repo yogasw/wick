@@ -14,13 +14,18 @@
 
      kind="blob" hands drawing to BlobAvatar (the vendored blob mascot):
      still PNG by default, animated only where `live` is set. The state
-     logic below (working → thinking, notify after a turn, …) is shared. */
+     logic below (working → thinking, notify after a turn, …) is shared.
+
+     What the agent does picks the pose (events.ts): the tool it waits on,
+     a failed tool, a remote's wait, a finished turn — each through the
+     agent's own table (`events`), the cues above when a row is off. */
   import BlobAvatar from "./BlobAvatar.svelte";
   import { isBlobKind, blobStateFor } from "./blob.js";
   import { blobPath, eyesAt, orbitDot, thinkDots, gazeTarget, approach, followsPointer, normalizeShape, normalizeState, stateFor, DOT_R, type AvatarState, type Vec } from "./shape.js";
   import { subscribe, pointer, pointerActive, prefersReducedMotion } from "./ticker.js";
   import { createFidget, type FidgetPose } from "./blob/motion/fidget";
   import { idleAnimationsOn } from "./idle.js";
+  import { poseFor, resolvePose, type AvatarEvent, type EventOverrides } from "./events.js";
 
   type Props = {
     /** "" / absent = classic, "blob" = blob mascot (team.Avatar.kind). */
@@ -33,6 +38,16 @@
     working?: boolean;
     /** The running turn is on a tool: orbit instead of thinking. */
     tool?: boolean;
+    /** The tool the running turn waits on: picks the event pose. */
+    toolName?: string;
+    /** The running turn's newest tool failed. */
+    toolError?: boolean;
+    /** A remote agent waiting on the other side. */
+    remote?: boolean;
+    /** The agent's event → pose table (Avatar.events). */
+    events?: EventOverrides | null;
+    /** Show one event's pose (Settings preview). */
+    event?: AvatarEvent;
     /** Greyed and eyes closed: a disabled agent. */
     asleep?: boolean;
     /** Just created: drawn as an egg that pops into the agent. */
@@ -62,6 +77,11 @@
     size = 40,
     working = false,
     tool = false,
+    toolName,
+    toolError = false,
+    remote = false,
+    events,
+    event,
     asleep = false,
     hatching = false,
     alert = false,
@@ -98,9 +118,17 @@
   });
   $effect(() => () => clearTimeout(replyTimer));
 
-  const current = $derived<AvatarState>(
-    pose ? normalizeState(pose) : stateFor({ working, tool, asleep, hatching, alert, notify: notify || justReplied }),
+  const resolved = $derived(
+    resolvePose({ disabled: asleep, hatching, attention: alert, working, toolName, tool, toolError, remote, done: justReplied, notify, overrides: events }),
   );
+  const forced = $derived(event ? poseFor(event, events) : null);
+  const current = $derived<AvatarState>(
+    pose ? normalizeState(pose) : event ? (forced ? normalizeState(forced.state) : stateFor({ working: true, tool: true })) : resolved.classic,
+  );
+  /* The blob's motion and temporary expression; back to the agent's own
+     the moment the event is over. */
+  const blobPose = $derived(pose ? blobStateFor(normalizeState(pose)) : event ? (forced?.state ?? "orbit") : resolved.state);
+  const blobExpression = $derived(pose ? expression : event ? (forced?.expression ?? expression) : (resolved.expression ?? expression));
 
   let hover = $state(false);
   let wink = $state(false);
@@ -160,7 +188,7 @@
 </script>
 
 {#if blob}
-  <BlobAvatar {shape} {expression} {color} {size} pose={blobStateFor(current)} {live} {restless} {still} hatching={hatching && !reduced} {title} />
+  <BlobAvatar {shape} expression={blobExpression} {color} {size} pose={blobPose} {live} {restless} {still} hatching={hatching && !reduced} {title} />
 {:else}
 <!-- The click is a reaction, not an action: the row button around the
      avatar does the navigating, so there is nothing for a key to trigger. -->

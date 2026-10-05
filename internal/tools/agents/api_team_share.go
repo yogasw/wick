@@ -307,6 +307,7 @@ func fillChatState(it *TeamAgentItem, userID, agentID string, lastRead *time.Tim
 	}
 	if it.Status != string(session.StatusIdle) {
 		it.CurrentAction = live.actions[s.ID]
+		it.ToolError = live.failed[s.ID]
 	}
 	// What the agent waits on outranks what it last said.
 	if it.AttentionPreview = live.attention(s.ID); it.AttentionPreview != "" {
