@@ -673,7 +673,7 @@ func (s *Channel) HTTPHandlers() map[string]http.Handler {
 // can render as a proper @mention ("Sent using <@UBOT123>").
 func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string) {
 	api := slackgo.New(cfg.BotToken, slackgo.OptionAppLevelToken(cfg.AppToken))
-	socket := socketmode.New(api)
+	socket := newSocketClient(api)
 
 	s.cfgMu.Lock()
 	cachedFor := s.identityToken
@@ -884,24 +884,97 @@ func (s *Channel) serve(ctx, runCtx context.Context, gen uint64) error {
 	s.setSocketState("starting")
 	log.Info().Str("channel", "slack").Str("bot", s.logBot()).Str("mode", "socket").Msg("starting")
 
-	go func() {
-		if err := socket.RunContext(runCtx); err != nil && runCtx.Err() == nil {
-			log.Error().Str("channel", "slack").Str("bot", s.logBot()).Err(err).Msg("socket run stopped")
-		}
-	}()
 	go s.watchStart(runCtx, gen)
 
+	// slack-go reconnects on its own after a dropped connection, but gives
+	// up for good on a fatal one (invalid_auth, token_revoked, a 404 from
+	// apps.connections.open). Without this loop the bot then stays offline
+	// until its settings are saved again; with it, a fresh client retries
+	// with backoff, so the bot comes back once the cause is fixed.
+	retry := socketRetryMin
+	for {
+		started := time.Now()
+		err := s.runSocket(ctx, runCtx, socket)
+		if runCtx.Err() != nil {
+			return nil
+		}
+		state := "disconnected"
+		if isFatalSocketErr(err) {
+			state = "error"
+		}
+		s.setSocketState(state)
+		if time.Since(started) > socketRetryMax {
+			retry = socketRetryMin
+		}
+		log.Error().Str("channel", "slack").Str("bot", s.logBot()).Err(err).Dur("retry_in", retry).
+			Msg("socket run stopped, reconnecting")
+
+		t := time.NewTimer(retry)
+		select {
+		case <-runCtx.Done():
+			t.Stop()
+			return nil
+		case <-t.C:
+		}
+		retry = min(retry*2, socketRetryMax)
+
+		s.cfgMu.Lock()
+		socket = newSocketClient(s.api)
+		s.socket = socket
+		s.cfgMu.Unlock()
+	}
+}
+
+// runSocket runs one socket client until it stops for good, handling its
+// events meanwhile. Events still buffered when it stops are handled too,
+// so a request Slack already delivered is not dropped.
+func (s *Channel) runSocket(ctx, runCtx context.Context, socket *socketmode.Client) error {
+	done := make(chan error, 1)
+	go func() { done <- socketRunner(runCtx, socket) }()
 	for {
 		select {
 		case <-runCtx.Done():
 			return nil
+		case err := <-done:
+			for {
+				select {
+				case evt := <-socket.Events:
+					s.handleSocketEvent(ctx, evt)
+				default:
+					return err
+				}
+			}
 		case evt, ok := <-socket.Events:
 			if !ok {
-				return nil
+				return <-done
 			}
 			s.handleSocketEvent(ctx, evt)
 		}
 	}
+}
+
+// socketRetryMin / socketRetryMax bound the wait before a stopped socket is
+// replaced; the wait doubles per failure and resets after a run that lasted.
+// Vars for tests, as are socketRunner and newSocketClient.
+var (
+	socketRetryMin  = 5 * time.Second
+	socketRetryMax  = 5 * time.Minute
+	socketRunner    = func(ctx context.Context, c *socketmode.Client) error { return c.RunContext(ctx) }
+	newSocketClient = func(api *slackgo.Client) *socketmode.Client { return socketmode.New(api) }
+)
+
+// isFatalSocketErr reports a credential problem: retrying still helps once
+// the token is fixed, but the status should say error, not just offline.
+func isFatalSocketErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch err.Error() {
+	case "invalid_auth", "account_inactive", "not_authed", "token_revoked":
+		return true
+	}
+	var code slackgo.StatusCodeError
+	return errors.As(err, &code) && code.Code == http.StatusNotFound
 }
 
 // watchStart restarts the instance when its socket run never got as far as
@@ -1283,18 +1356,29 @@ func (s *Channel) Reload(ctx context.Context, cfg agentconfig.SlackChannelConfig
 	}()
 }
 
+// ack answers a socket request on the client currently in use; serve swaps
+// the client when it reconnects, so it is read under cfgMu.
+func (s *Channel) ack(evt socketmode.Event) {
+	s.cfgMu.Lock()
+	socket := s.socket
+	s.cfgMu.Unlock()
+	if socket != nil && evt.Request != nil {
+		socket.Ack(*evt.Request)
+	}
+}
+
 func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
 	defer agentchannels.RecoverPanic("slack", "socket event")
 	switch evt.Type {
 	case socketmode.EventTypeEventsAPI:
-		s.socket.Ack(*evt.Request)
+		s.ack(evt)
 		apiEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
 		if !ok {
 			return
 		}
 		s.handleEventsAPI(ctx, apiEvent)
 	case socketmode.EventTypeInteractive:
-		s.socket.Ack(*evt.Request)
+		s.ack(evt)
 		cb, ok := evt.Data.(slackgo.InteractionCallback)
 		if !ok {
 			return
@@ -1307,10 +1391,10 @@ func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
 		// slack.respond_url action.
 		cmd, ok := evt.Data.(slackgo.SlashCommand)
 		if !ok {
-			s.socket.Ack(*evt.Request)
+			s.ack(evt)
 			return
 		}
-		s.socket.Ack(*evt.Request)
+		s.ack(evt)
 		go s.handleSlashCommand(ctx, cmd)
 	case socketmode.EventTypeConnecting:
 		s.setSocketState("connecting")
@@ -1322,6 +1406,15 @@ func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
 	case socketmode.EventTypeConnectionError:
 		s.setSocketState("error")
 		log.Warn().Str("channel", "slack").Str("bot", s.logBot()).Msg("connection error, will retry")
+
+	case socketmode.EventTypeDisconnect:
+		// Slack asked us to reconnect (it rotates connections); the client
+		// opens a new one right away.
+		s.setSocketState("connecting")
+		log.Info().Str("channel", "slack").Str("bot", s.logBot()).Msg("disconnect requested, reconnecting")
+	case socketmode.EventTypeInvalidAuth:
+		s.setSocketState("error")
+		log.Warn().Str("channel", "slack").Str("bot", s.logBot()).Msg("invalid auth")
 	}
 }
 
