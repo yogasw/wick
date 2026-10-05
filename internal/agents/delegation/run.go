@@ -196,6 +196,20 @@ type Service struct {
 	// must never guess an agent is dead: finishing a delegation that is
 	// actually still working would throw away the run.
 	AgentAlive func(childSessionID, agentName string) bool
+	// AgentBusy reports whether a child has a turn IN FLIGHT in this
+	// process's pool — spawning or working, not merely an idle process kept
+	// warm between legs. Read by Continue, which must not start a second
+	// driver on a session whose previous turn is still running.
+	//
+	// nil = only the predecessor's drain record is consulted.
+	AgentBusy func(childSessionID, agentName string) bool
+	// DrainDir is where a draining predecessor publishes the sessions it is
+	// still running (upgrade.PublishDrainState). The delegation table is
+	// shared by both generations during a handover, so a child spawned by
+	// the old process is alive even though this pool has never seen it.
+	//
+	// "" = only this process's pool is consulted.
+	DrainDir string
 	// Resumable reports whether a child's provider transcript can still be
 	// picked up — i.e. whether the next spawn will carry --resume rather
 	// than start blank. Read by Continue so a leader is told when its
@@ -1248,6 +1262,7 @@ func (s *Service) finish(ctx context.Context, row *entity.AgentDelegation, expec
 	if !ok {
 		log.Debug().Str("delegation", row.ID).Str("status", status).
 			Msg("delegation: finish skipped, row already terminal")
+		s.keepLateResult(ctx, row, status, result, turns)
 		return
 	}
 	// A slot just freed. Poking here rather than on a timer is what keeps
@@ -1444,3 +1459,27 @@ func (s *Service) spawnRosterBlock(ctx context.Context, row *entity.AgentDelegat
 
 // ErrNoService is returned by wiring when delegation is not configured.
 var ErrNoService = errors.New("delegation service not configured")
+
+// keepLateResult saves the answer of a run that finished after its row had
+// already been closed with nothing in it.
+//
+// The sweep closes a run it believes abandoned with whatever partial text it
+// can find — often none. If the sub-agent was in fact alive (in a draining
+// predecessor the sweep could not see, say) and then finishes properly, its
+// answer arrives at a row that is already done, and dropping it there is how
+// a whole report vanished. Only an EMPTY result is filled in: a row closed
+// with real text, or by a human, keeps what it says.
+func (s *Service) keepLateResult(ctx context.Context, row *entity.AgentDelegation, status, result string, turns int) {
+	if status != entity.DelegationDone || strings.TrimSpace(result) == "" {
+		return
+	}
+	n, err := s.Repo.FillEmptyResult(context.WithoutCancel(ctx), row.ID, result, turns)
+	if err != nil {
+		log.Warn().Err(err).Str("delegation", row.ID).Msg("delegation: late result not saved")
+		return
+	}
+	if n {
+		log.Info().Str("delegation", row.ID).
+			Msg("delegation: run finished after its row was closed empty; kept its result")
+	}
+}

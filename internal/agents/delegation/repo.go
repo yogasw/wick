@@ -683,6 +683,18 @@ func (r *Repo) FinishGuarded(
 	return res.RowsAffected > 0, nil
 }
 
+// FillEmptyResult writes result onto a done row whose result is still
+// empty. Reports whether a row was changed. See Service.keepLateResult.
+func (r *Repo) FillEmptyResult(ctx context.Context, id, result string, turns int) (bool, error) {
+	res := r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
+		Where("id = ? AND status = ? AND (result = '' OR result IS NULL)", id, entity.DelegationDone).
+		Updates(map[string]any{"result": result, "turns_used": turns})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
 // decodeStringSlice reads a JSON array column, tolerating empty/invalid
 // values as "no entries" — a malformed ACL column must never be read as
 // a wider permission set.

@@ -2234,6 +2234,14 @@ func NewServer() *Server {
 			}
 			return false
 		},
+		// Continue refuses while the child's previous turn still runs, so
+		// it never starts a second process on the same session.
+		AgentBusy: func(childSessionID, agentName string) bool {
+			return slices.Contains(turnSessions(agentsPool), childSessionID)
+		},
+		// Where a draining predecessor lists the sub-agents it is still
+		// running — the same dir drainForUpgrade publishes into.
+		DrainDir: agentsLayout.BaseDir,
 		// Customer-facing drafts are masked on the way out. The drafter's
 		// prompt asks it not to include credentials; this is what makes
 		// that true when a prompt injection asks otherwise.
@@ -3962,6 +3970,21 @@ func (s *Server) waitBootGate(ctx context.Context) {
 	}
 }
 
+// turnSessions lists the sessions with an agent turn in flight — spawning or
+// working, not an idle process kept warm between turns.
+func turnSessions(p *agentpool.Pool) []string {
+	if p == nil {
+		return nil
+	}
+	var out []string
+	for _, a := range p.ActiveSnapshot() {
+		if a.Lifecycle == "spawning" || a.Lifecycle == "working" {
+			out = append(out, a.SessionID)
+		}
+	}
+	return out
+}
+
 // drainForUpgrade runs in the OLD process once a successor has taken over the
 // listener. It is the whole point of the feature: instead of killing agents
 // mid-turn, this process stops answering HTTP and then simply waits for its
@@ -4035,14 +4058,17 @@ func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, b
 	go func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
-		upgrade.PublishDrainState(drainDir, os.Getpid(), drainStarted, upgrade.Busy())
+		// The session list lets the successor's delegation sweep tell this
+		// process's sub-agents from dead ones: it shares their rows but
+		// cannot see this pool.
+		upgrade.PublishDrainState(drainDir, os.Getpid(), drainStarted, upgrade.Busy(), turnSessions(s.agentsPool)...)
 		for {
 			select {
 			case <-stopPublish:
 				upgrade.ClearDrainState(drainDir)
 				return
 			case <-t.C:
-				upgrade.PublishDrainState(drainDir, os.Getpid(), drainStarted, upgrade.Busy())
+				upgrade.PublishDrainState(drainDir, os.Getpid(), drainStarted, upgrade.Busy(), turnSessions(s.agentsPool)...)
 			}
 		}
 	}()

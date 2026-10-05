@@ -91,6 +91,19 @@ func (s *Service) Continue(ctx context.Context, req ContinueRequest) (*Result, e
 			ErrNotContinuable, row.Handle, row.Status)
 	}
 
+	// Closed, but its last turn is still running. A row can read terminal
+	// while the process carries on — the sweep closed it from a process
+	// that could not see the child (a reload in progress, the child still
+	// finishing in the old one). Continuing now would start a second
+	// process in the same session, two writers on one tree, and the first
+	// one's answer would land on a row that has moved on.
+	if row.ChildSessionID != "" && s.childBusy(row.ChildSessionID, row.ChildAgent) {
+		return nil, fmt.Errorf("%w: @%s's row is closed (%s) but its previous turn is still running "+
+			"(possibly in the previous wick process, still finishing after a reload). "+
+			"Wait for it to finish, then continue — or use message to reach it",
+			ErrNotContinuable, row.Handle, row.Status)
+	}
+
 	profile, err := s.Repo.GetProfileScoped(ctx, row.ProjectID, row.ProfileKey)
 	if err != nil {
 		return nil, fmt.Errorf("the %q role this delegation ran as is no longer available: %w", row.ProfileKey, err)

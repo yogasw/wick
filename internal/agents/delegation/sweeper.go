@@ -226,7 +226,7 @@ func (s *Service) closeAbandonedRuns(ctx context.Context) {
 	}
 	for i := range running {
 		row := &running[i]
-		if row.ChildSessionID == "" || s.AgentAlive(row.ChildSessionID, row.ChildAgent) {
+		if row.ChildSessionID == "" || s.childAlive(row.ChildSessionID, row.ChildAgent) {
 			continue
 		}
 		// A recent progress note also means alive.
@@ -273,6 +273,30 @@ func (s *Service) closeAbandonedRuns(ctx context.Context) {
 		s.pokeSlot(fresh.RootID)
 		s.backgroundEnded(ctx, fresh)
 	}
+}
+
+// childAlive is AgentAlive widened to a draining predecessor.
+//
+// During a reload the old process keeps running the sub-agents it spawned
+// while the new one takes over the socket — and the sweep. Both read the
+// same delegation rows, but each sees only its own pool, so without the
+// predecessor's drain record the new process judged every child of the old
+// one dead and closed its run "(no output)" while it was still working.
+func (s *Service) childAlive(childSessionID, agentName string) bool {
+	if s.AgentAlive != nil && s.AgentAlive(childSessionID, agentName) {
+		return true
+	}
+	return upgrade.PredecessorHolds(s.DrainDir, childSessionID)
+}
+
+// childBusy reports whether a child still has a turn in flight — here, or in
+// a draining predecessor. Unlike childAlive it ignores an idle process kept
+// warm between legs, which a continuation reuses rather than races.
+func (s *Service) childBusy(childSessionID, agentName string) bool {
+	if s.AgentBusy != nil && s.AgentBusy(childSessionID, agentName) {
+		return true
+	}
+	return upgrade.PredecessorHolds(s.DrainDir, childSessionID)
 }
 
 // expireOverrunningInvestigations stops investigations that have run past
