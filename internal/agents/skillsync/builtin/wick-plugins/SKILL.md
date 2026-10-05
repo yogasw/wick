@@ -108,6 +108,8 @@ POST /manager/api/plugins/{key}/update
 
 ## Building a plugin
 
+To write the plugin code itself (pick the kind, template, Module contract, testing, service routes and RemoteSource), use the **wick-plugin-authoring** skill (and **wick-plugin-service** for service plugins). This section covers only the build and release commands.
+
 Building is the producer side and uses the **`wick` dev CLI**, run from the folder holding `connector/ tool/ job/ service/` (each has a `_template` to copy):
 
 ```bash
