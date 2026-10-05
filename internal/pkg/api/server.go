@@ -3062,7 +3062,7 @@ func NewServer() *Server {
 	// Plugin sources (url / GitHub releases): Admin → Plugins → Sources,
 	// Available, Add (upload / link / GitHub). Installs land in the kind
 	// folder; connectors reconcile through the reloader, a service plugin is
-	// restarted on its new binary, tools and jobs pick it up on next spawn.
+	// reloaded from its new manifest and started, tools and jobs pick it up on next spawn.
 	pluginSources := &pluginsource.Manager{
 		DB:      db,
 		Client:  pluginsource.NewClient(configsSvc.DecryptSecret),
@@ -3074,9 +3074,7 @@ func NewServer() *Server {
 					pluginReloader.Reload(ctx)
 				}
 			case wickplugin.KindService:
-				if svc, ok := servicePlugins.Get(key); ok {
-					svc.Sup.Restart()
-				}
+				servicePlugins.Install(connplugin.KindDir(wickplugin.KindService), key, jobPluginStore.Enabled, jobPluginStore.Record)
 			}
 		},
 	}

@@ -52,6 +52,7 @@ type Host struct {
 	cb       map[string]callbackRoute
 	inflight atomic.Int64
 	once     sync.Once
+	started  atomic.Bool
 }
 
 var (
@@ -91,30 +92,70 @@ func (h *Host) Load(dir string, enabled func(string) bool, record func(key, kind
 	}
 	n := 0
 	for _, f := range found {
-		if err := wickplugin.ValidateKey(f.Key); err != nil {
-			log.Warn().Str("plugin", f.Key).Err(err).Msg("service plugin: skipped (invalid key)")
-			continue
+		if h.loadFound(f, enabled, record) != nil {
+			n++
 		}
-		if enabled != nil && !enabled(f.Key) {
-			continue
-		}
-		if f.Manifest.Service == nil {
-			log.Warn().Str("plugin", f.Key).Msg("service plugin: skipped (manifest has no service section)")
-			continue
-		}
-		if err := wickplugin.VerifyManifest(f.Manifest, f.BinaryPath); err != nil {
-			log.Warn().Str("plugin", f.Key).Err(err).Msg("service plugin: skipped (verification failed)")
-			continue
-		}
-		h.Add(f.Key, f.Manifest.Version, *f.Manifest.Service, f.BinaryPath)
-		if record != nil {
-			if err := record(f.Key, wickplugin.KindService, f.Manifest.Version); err != nil {
-				log.Warn().Str("plugin", f.Key).Err(err).Msg("service plugin: state record failed")
-			}
-		}
-		n++
 	}
 	return n
+}
+
+// Install (re)loads service key from dir after a plugin install or update,
+// so a new service runs without a wick reload and an update picks up its
+// new manifest (routes, configs, scopes). The previous process, if any, is
+// stopped first. Once the host has started, the loaded service is started
+// too. Returns false when key is missing, disabled or fails verification.
+func (h *Host) Install(dir, key string, enabled func(string) bool, record func(key, kind, version string) error) bool {
+	found, err := connplugin.ScanKind(dir, wickplugin.KindService)
+	if err != nil {
+		log.Warn().Err(err).Msg("service plugins: scan failed")
+		return false
+	}
+	for _, f := range found {
+		if f.Key != key {
+			continue
+		}
+		if old, ok := h.Get(key); ok {
+			old.Sup.Stop()
+			h.mu.Lock()
+			delete(h.services, key)
+			h.mu.Unlock()
+		}
+		s := h.loadFound(f, enabled, record)
+		if s == nil {
+			return false
+		}
+		if h.started.Load() {
+			s.Sup.Start()
+		}
+		return true
+	}
+	return false
+}
+
+// loadFound validates one scanned plugin and registers it (not started).
+func (h *Host) loadFound(f connplugin.Found, enabled func(string) bool, record func(key, kind, version string) error) *Service {
+	if err := wickplugin.ValidateKey(f.Key); err != nil {
+		log.Warn().Str("plugin", f.Key).Err(err).Msg("service plugin: skipped (invalid key)")
+		return nil
+	}
+	if enabled != nil && !enabled(f.Key) {
+		return nil
+	}
+	if f.Manifest.Service == nil {
+		log.Warn().Str("plugin", f.Key).Msg("service plugin: skipped (manifest has no service section)")
+		return nil
+	}
+	if err := wickplugin.VerifyManifest(f.Manifest, f.BinaryPath); err != nil {
+		log.Warn().Str("plugin", f.Key).Err(err).Msg("service plugin: skipped (verification failed)")
+		return nil
+	}
+	s := h.Add(f.Key, f.Manifest.Version, *f.Manifest.Service, f.BinaryPath)
+	if record != nil {
+		if err := record(f.Key, wickplugin.KindService, f.Manifest.Version); err != nil {
+			log.Warn().Str("plugin", f.Key).Err(err).Msg("service plugin: state record failed")
+		}
+	}
+	return s
 }
 
 // Add registers one service (not started).
@@ -176,6 +217,7 @@ func (h *Host) Start() {
 		for _, s := range h.List() {
 			s.Sup.Start()
 		}
+		h.started.Store(true)
 	})
 }
 
