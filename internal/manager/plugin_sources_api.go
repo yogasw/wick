@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,6 +36,7 @@ func (h *PluginSourcesHandler) RegisterRoutes(mux *http.ServeMux, authMidd *logi
 	admin := func(next http.HandlerFunc) http.Handler { return authMidd.RequireAdmin(next) }
 	mux.Handle("GET /manager/api/plugin-sources", auth(h.apiList))
 	mux.Handle("POST /manager/api/plugin-sources", admin(h.apiCreate))
+	mux.Handle("POST /manager/api/plugin-sources/test", admin(h.apiTestInput))
 	mux.Handle("POST /manager/api/plugin-sources/{id}", admin(h.apiEdit))
 	mux.Handle("DELETE /manager/api/plugin-sources/{id}", admin(h.apiDelete))
 	mux.Handle("POST /manager/api/plugin-sources/{id}/test", admin(h.apiTest))
@@ -121,7 +123,42 @@ func (h *PluginSourcesHandler) save(w http.ResponseWriter, r *http.Request, id s
 	writeJSON(w, http.StatusOK, viewSource(*s))
 }
 
-func (h *PluginSourcesHandler) apiCreate(w http.ResponseWriter, r *http.Request) { h.save(w, r, "") }
+// apiCreate runs the same check as Test before saving; a failed check answers
+// 422 with the steps and stores nothing, so the form can be fixed and resent.
+func (h *PluginSourcesHandler) apiCreate(w http.ResponseWriter, r *http.Request) {
+	var in source.SourceInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&in); err != nil {
+		jsonErr(w, http.StatusBadRequest, err)
+		return
+	}
+	s, steps, err := h.Sources.Add(r.Context(), in, actor(r), h.Health)
+	var verr *source.ValidationError
+	switch {
+	case errors.As(err, &verr):
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": err.Error(), "steps": steps})
+		return
+	case err != nil:
+		jsonErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, viewSource(*s))
+}
+
+// apiTestInput checks an unsaved source from the Add form. Nothing is stored;
+// ?id= tests an edit so a stored PAT is used when the field is left empty.
+func (h *PluginSourcesHandler) apiTestInput(w http.ResponseWriter, r *http.Request) {
+	var in source.SourceInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&in); err != nil {
+		jsonErr(w, http.StatusBadRequest, err)
+		return
+	}
+	steps, err := h.Sources.TestInput(r.Context(), r.URL.Query().Get("id"), in, h.Health)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"steps": steps})
+}
 func (h *PluginSourcesHandler) apiEdit(w http.ResponseWriter, r *http.Request) {
 	h.save(w, r, r.PathValue("id"))
 }

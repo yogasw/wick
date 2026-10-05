@@ -257,7 +257,9 @@ func (c *Client) get(ctx context.Context, src *entity.PluginSource, u, etag, acc
 	}
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return nil, "", false, &StatusError{Code: resp.StatusCode, URL: redact(u), Body: strings.TrimSpace(string(msg))}
+		limited := resp.StatusCode == http.StatusTooManyRequests ||
+			(resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0")
+		return nil, "", false, &StatusError{Code: resp.StatusCode, URL: redact(u), Body: strings.TrimSpace(string(msg)), RateLimited: limited}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxIndexBytes))
 	return body, resp.Header.Get("ETag"), false, err
@@ -268,6 +270,8 @@ type StatusError struct {
 	Code int
 	URL  string
 	Body string
+	// RateLimited is a 429, or a 403 with X-RateLimit-Remaining: 0 (GitHub).
+	RateLimited bool
 }
 
 func (e *StatusError) Error() string { return fmt.Sprintf("%s: status %d", e.URL, e.Code) }
@@ -297,6 +301,10 @@ func splitTag(tag string) (key, version string, ok bool) {
 	}
 	return tag[:i], tag[i+2:], true
 }
+
+// IsZipURL reports whether u points straight at a .zip (a one-off link
+// source) rather than a plugins.json index.
+func IsZipURL(u string) bool { return isZipURL(u) }
 
 func isZipURL(u string) bool { return strings.HasSuffix(strings.ToLower(mustPath(u)), ".zip") }
 

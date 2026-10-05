@@ -77,6 +77,56 @@ type SourceInput struct {
 
 // Save creates (id=="") or updates a source.
 func (m *Manager) Save(id string, in SourceInput, actor string) (*entity.PluginSource, error) {
+	s, err := m.build(id, in)
+	if err != nil {
+		return nil, err
+	}
+	return m.persist(s, id, actor)
+}
+
+// TestInput runs the source health check on in without storing anything, so
+// the Add form can be checked before it is saved. id is the source being
+// edited ("" for a new one) so a stored PAT is still used when left empty.
+func (m *Manager) TestInput(ctx context.Context, id string, in SourceInput, health HealthFunc) ([]Step, error) {
+	s, err := m.build(id, in)
+	if err != nil {
+		return nil, err
+	}
+	return m.Client.Test(ctx, s, health), nil
+}
+
+// ValidationError is an Add rejected by the health check; Steps say where.
+type ValidationError struct{ Steps []Step }
+
+func (e *ValidationError) Error() string {
+	for _, st := range e.Steps {
+		if st.Status == "fail" {
+			return fmt.Sprintf("%s: %s", st.Name, st.Message)
+		}
+	}
+	return "source check failed"
+}
+
+// Add runs the same check as TestInput and saves only when it passes, so a
+// failed Add never leaves a half-made source row behind. "After install" is
+// not a gate: it reports on plugins already installed, not on the source.
+func (m *Manager) Add(ctx context.Context, in SourceInput, actor string, health HealthFunc) (*entity.PluginSource, []Step, error) {
+	s, err := m.build("", in)
+	if err != nil {
+		return nil, nil, err
+	}
+	steps := m.Client.Test(ctx, s, health)
+	for _, st := range steps {
+		if st.Status == "fail" && st.Name != "After install" {
+			return nil, steps, &ValidationError{Steps: steps}
+		}
+	}
+	saved, err := m.persist(s, "", actor)
+	return saved, steps, err
+}
+
+// build applies in onto a new or stored source row without saving it.
+func (m *Manager) build(id string, in SourceInput) (*entity.PluginSource, error) {
 	s := &entity.PluginSource{Enabled: true}
 	if id != "" {
 		cur, err := m.Get(id)
@@ -133,6 +183,10 @@ func (m *Manager) Save(id string, in SourceInput, actor string) (*entity.PluginS
 		}
 	}
 	s.ETag = "" // config changed: next check is a full fetch
+	return s, nil
+}
+
+func (m *Manager) persist(s *entity.PluginSource, id, actor string) (*entity.PluginSource, error) {
 	if err := m.DB.Save(s).Error; err != nil {
 		return nil, err
 	}
@@ -287,7 +341,7 @@ func (m *Manager) Upload(ctx context.Context, zipPath, actor string) (Installed,
 func (m *Manager) recordInstall(ctx context.Context, in Installed, sourceID, from, actor string) {
 	_ = connplugin.NewStateStore(m.DB).Record(in.Key, in.Kind, in.Version)
 	m.DB.Model(&entity.PluginState{}).Where("key = ?", in.Key).
-		Updates(map[string]any{"source_id": sourceID, "available_version": ""})
+		Updates(map[string]any{"source_id": sourceID, "available_version": "", "origin": m.originOf(sourceID)})
 	action := "install"
 	if from != "" {
 		action = "update"
@@ -299,6 +353,19 @@ func (m *Manager) recordInstall(ctx context.Context, in Installed, sourceID, fro
 	if m.OnInstalled != nil {
 		m.OnInstalled(ctx, in.Kind, in.Key)
 	}
+}
+
+// originOf maps the source an install came from to PluginState.Origin:
+// no source = upload, a bare .zip link source = url-zip, anything else =
+// source.
+func (m *Manager) originOf(sourceID string) string {
+	if sourceID == "" {
+		return connplugin.OriginUpload
+	}
+	if s, err := m.Get(sourceID); err == nil && s.Type == TypeURL && isZipURL(s.URL) {
+		return connplugin.OriginURLZip
+	}
+	return connplugin.OriginSource
 }
 
 // Audit returns the newest audit rows.

@@ -178,6 +178,9 @@ func (c *Client) checkAuth(ctx context.Context, src *entity.PluginSource) (strin
 	repo := src.Owner + "/" + src.Repo
 	if c.pat(src) != "" {
 		if _, _, _, err := c.get(ctx, src, c.api()+"/user", "", "application/vnd.github+json"); err != nil {
+			if rateLimited(err) {
+				return "", fmt.Errorf("GitHub rate limit reached (%s); try again later", statusText(err))
+			}
 			return "", fmt.Errorf("PAT rejected by GitHub (%s)", statusText(err))
 		}
 	} else if src.Private {
@@ -185,6 +188,9 @@ func (c *Client) checkAuth(ctx context.Context, src *entity.PluginSource) (strin
 	}
 	if _, _, _, err := c.get(ctx, src, c.api()+"/repos/"+repo, "", "application/vnd.github+json"); err != nil {
 		var se *StatusError
+		if rateLimited(err) {
+			return "", fmt.Errorf("GitHub rate limit reached (%s); try again later or add a PAT", statusText(err))
+		}
 		if errors.As(err, &se) && (se.Code == 403 || se.Code == 404) {
 			if c.pat(src) == "" {
 				return "", fmt.Errorf("%d: %s not found or private (add a PAT)", se.Code, repo)
@@ -197,6 +203,11 @@ func (c *Client) checkAuth(ctx context.Context, src *entity.PluginSource) (strin
 		return "public repo " + repo + " readable without a PAT", nil
 	}
 	return "PAT valid, can read " + repo, nil
+}
+
+func rateLimited(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.RateLimited
 }
 
 func statusText(err error) string {

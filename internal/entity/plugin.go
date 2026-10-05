@@ -13,8 +13,13 @@ type PluginState struct {
 	Enabled bool   `gorm:"default:true"`
 	// Kind is connector / tool / job / service. Old rows predate kinds and
 	// read back as connector.
-	Kind             string `gorm:"default:connector"`
-	SourceID         string
+	Kind     string `gorm:"default:connector"`
+	SourceID string
+	// Origin is how the plugin got here: official (wick connector catalog),
+	// source (a plugin source), url-zip (a one-off .zip link source) or
+	// upload. Empty = not recorded (copied in by hand, CLI path/url install,
+	// or installed before this column existed) — shown as local/unknown.
+	Origin           string
 	InstalledVersion string
 	AvailableVersion string
 	LastHealthAt     *time.Time

@@ -56,6 +56,16 @@ func (s *StateStore) List() (map[string]bool, error) {
 	return out, nil
 }
 
+// All returns every overlay row (origin, source, health, versions).
+func (s *StateStore) All() ([]entity.PluginState, error) {
+	var rows []entity.PluginState
+	if s == nil || s.db == nil {
+		return rows, nil
+	}
+	err := s.db.Find(&rows).Error
+	return rows, err
+}
+
 // Record upserts the kind + installed version for key without touching the
 // enable flag (a new row starts enabled).
 func (s *StateStore) Record(key, kind, version string) error {
@@ -72,6 +82,23 @@ func (s *StateStore) Record(key, kind, version string) error {
 		"installed_version": version,
 		"updated_at":        time.Now(),
 	}).Error
+}
+
+// Plugin origins recorded in PluginState.Origin. "" means not recorded.
+const (
+	OriginOfficial = "official"
+	OriginSource   = "source"
+	OriginURLZip   = "url-zip"
+	OriginUpload   = "upload"
+)
+
+// SetOrigin records how key was installed. Call after Record so the row
+// exists.
+func (s *StateStore) SetOrigin(key, origin string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Model(&entity.PluginState{}).Where("key = ?", key).Update("origin", origin).Error
 }
 
 // Get returns the overlay row for key; ok=false when there is none.

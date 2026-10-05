@@ -433,7 +433,7 @@ func TestManagerURLSourceCheckAndUpdate(t *testing.T) {
 		t.Fatalf("update: %+v %v", in, err)
 	}
 	m.DB.Where("key = ?", "echo").First(&st)
-	if st.AvailableVersion != "" || st.InstalledVersion != "1.1.0" {
+	if st.AvailableVersion != "" || st.InstalledVersion != "1.1.0" || st.Origin != "source" {
 		t.Fatalf("state after update: %+v", st)
 	}
 	if strings.Join(hooks, ",") != "service:echo,service:echo" {

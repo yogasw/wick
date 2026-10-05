@@ -111,6 +111,7 @@ default branch; override its URL with WICK_PLUGIN_CATALOG.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
+			official := false
 			// Bare name (not a URL, not an existing path) → resolve via registry.
 			if !strings.HasPrefix(src, "http://") && !strings.HasPrefix(src, "https://") {
 				if _, statErr := os.Stat(src); statErr != nil {
@@ -121,6 +122,7 @@ default branch; override its URL with WICK_PLUGIN_CATALOG.`,
 					}
 					fmt.Printf("resolved %s v%s → %s\n", avail.Name, avail.Version, url)
 					src = url
+					official = true
 				}
 			}
 			in, err := source.InstallPath(cmd.Context(), src, source.InstallOptions{})
@@ -128,6 +130,19 @@ default branch; override its URL with WICK_PLUGIN_CATALOG.`,
 				return err
 			}
 			fmt.Printf("%s plugin %q v%s installed into %s\n", in.Kind, in.Key, in.Version, connplugin.KindDir(in.Kind))
+			// A registry install is the official catalog; record it so
+			// Admin → Plugins shows the origin. A path / url install stays
+			// unrecorded (local). Best effort: the install itself succeeded.
+			if official {
+				if err := withPluginStore(func(store *connplugin.StateStore) error {
+					if err := store.Record(in.Key, in.Kind, in.Version); err != nil {
+						return err
+					}
+					return store.SetOrigin(in.Key, connplugin.OriginOfficial)
+				}); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not record origin: %v\n", err)
+				}
+			}
 			if in.Kind == wickplugin.KindConnector {
 				fmt.Println("a running wick will pick it up shortly")
 			} else {

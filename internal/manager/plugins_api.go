@@ -97,6 +97,7 @@ func (h *PluginsHandler) RegisterRoutes(mux *http.ServeMux, authMidd *login.Midd
 		return authMidd.RequireAdmin(next)
 	}
 	mux.Handle("GET /manager/api/plugins", auth(h.apiList))
+	mux.Handle("GET /manager/api/plugins/installed", auth(h.apiInstalled))
 	mux.Handle("POST /manager/api/plugins/install", admin(h.apiInstall))
 	mux.Handle("POST /manager/api/plugins/{key}/update", admin(h.apiUpdate))
 	mux.Handle("POST /manager/api/plugins/{key}/enable", admin(h.apiEnable))
@@ -245,14 +246,14 @@ func (h *PluginsHandler) apiInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	_, url, err := h.registry.Resolve(ctx, req.Name, "")
+	avail, url, err := h.registry.Resolve(ctx, req.Name, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	// Register it into the connectors service now so it appears in the
 	// connector list / manager / admin immediately, not after the poll tick.
-	h.installOrUpdate(w, r, key(req.Name), url, map[string]any{"ok": true, "installed": req.Name})
+	h.installOrUpdate(w, r, key(req.Name), url, avail.Version, map[string]any{"ok": true, "installed": req.Name})
 }
 
 // apiUpdate re-downloads the latest catalog version for an already-installed
@@ -279,7 +280,7 @@ func (h *PluginsHandler) apiUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	h.installOrUpdate(w, r, k, url, map[string]any{"ok": true, "updated": k, "version": avail.Version})
+	h.installOrUpdate(w, r, k, url, avail.Version, map[string]any{"ok": true, "updated": k, "version": avail.Version})
 }
 
 // key normalizes a marketplace name to a plugin key for progress labelling.
@@ -292,13 +293,14 @@ func key(name string) string { return name }
 // (`data: {phase,pct}` frames, then a terminal `data: {ok|error}`); otherwise it
 // blocks and returns the plain JSON `done` payload (backward-compatible with the
 // CLI and any non-SSE caller).
-func (h *PluginsHandler) installOrUpdate(w http.ResponseWriter, r *http.Request, k, url string, done map[string]any) {
+func (h *PluginsHandler) installOrUpdate(w http.ResponseWriter, r *http.Request, k, url, version string, done map[string]any) {
 	ctx := r.Context()
 	if !wantsSSE(r) {
 		if err := connplugin.InstallFromURL(ctx, url, h.dir); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		h.recordOfficial(k, version)
 		h.reload(ctx)
 		writeJSON(w, http.StatusOK, done)
 		return
@@ -332,8 +334,17 @@ func (h *PluginsHandler) installOrUpdate(w http.ResponseWriter, r *http.Request,
 		send(map[string]any{"phase": "error", "error": err.Error()})
 		return
 	}
+	h.recordOfficial(k, version)
 	h.reload(ctx)
 	send(done)
+}
+
+// recordOfficial marks k as installed from the official wick catalog (the
+// only thing installOrUpdate installs from), so Admin → Plugins can show
+// its origin. The catalog only carries connectors.
+func (h *PluginsHandler) recordOfficial(k, version string) {
+	_ = h.store.Record(k, wickplugin.KindConnector, version)
+	_ = h.store.SetOrigin(k, connplugin.OriginOfficial)
 }
 
 // wantsSSE reports whether the caller opted into a Server-Sent Events response.

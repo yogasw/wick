@@ -29,15 +29,32 @@ func newSourcesHandler(t *testing.T) *PluginSourcesHandler {
 
 func TestPluginSourcesAPINeverReturnsPAT(t *testing.T) {
 	h := newSourcesHandler(t)
-	body := `{"type":"github","repo":"acme/plugins","private":true,"pat":"ghp_supersecret"}`
-	rec := httptest.NewRecorder()
-	h.apiCreate(rec, httptest.NewRequest(http.MethodPost, "/manager/api/plugin-sources", strings.NewReader(body)))
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"has_pat":true`) {
-		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	gh := httptest.NewServer(http.NotFoundHandler()) // repo unreadable: the check fails
+	defer gh.Close()
+	h.Sources.Client = &source.Client{HTTP: http.DefaultClient, GitHubAPI: gh.URL}
+	body := `{"type":"github","repo":"acme/plugins","private":true,"pat":"ghp_supersecret","auto_update":true}`
+
+	// Test and a failed Add answer with steps, never the PAT, and store nothing.
+	for _, call := range []struct {
+		fn   http.HandlerFunc
+		code int
+	}{{h.apiTestInput, 200}, {h.apiCreate, http.StatusUnprocessableEntity}} {
+		rec := httptest.NewRecorder()
+		call.fn(rec, httptest.NewRequest(http.MethodPost, "/manager/api/plugin-sources", strings.NewReader(body)))
+		if out := rec.Body.String(); rec.Code != call.code || !strings.Contains(out, `"steps"`) || strings.Contains(out, "ghp_") || strings.Contains(out, "wick_cenc_") {
+			t.Fatalf("want %d with steps and no PAT, got %d %s", call.code, rec.Code, out)
+		}
 	}
-	rec = httptest.NewRecorder()
+	if list, _ := h.Sources.List(); len(list) != 0 {
+		t.Fatalf("failed Add stored %d source(s)", len(list))
+	}
+
+	if _, err := h.Sources.Save("", source.SourceInput{Type: "github", Repo: "acme/plugins", Private: true, PAT: "ghp_supersecret"}, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
 	h.apiList(rec, httptest.NewRequest(http.MethodGet, "/manager/api/plugin-sources", nil))
-	if out := rec.Body.String(); strings.Contains(out, "ghp_") || strings.Contains(out, "wick_cenc_") || !strings.Contains(out, `"auto_update":false`) {
+	if out := rec.Body.String(); strings.Contains(out, "ghp_") || strings.Contains(out, "wick_cenc_") || !strings.Contains(out, `"has_pat":true`) || !strings.Contains(out, `"auto_update":false`) {
 		t.Fatalf("list leaks PAT or wrong defaults: %s", out)
 	}
 }

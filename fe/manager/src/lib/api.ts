@@ -551,6 +551,40 @@ export async function removePlugin(key: string): Promise<{ ok: boolean }> {
   return apiPost<{ ok: boolean }>(`/manager/api/plugins/${encodeURIComponent(key)}/remove`);
 }
 
+/* Installed plugins across every kind, with where each came from
+   (plugins_installed_api.go). Every URL is token-free: source_url is the
+   GitHub repo page or the index URL without userinfo/query; private sources
+   only get their release page as download_url. */
+export type PluginOrigin = "official" | "source" | "url-zip" | "upload" | "local";
+export interface InstalledPlugin {
+  key: string;
+  name: string;
+  kind: "connector" | "tool" | "job" | "service";
+  version: string;
+  enabled: boolean;
+  detail_path: string;
+  origin: PluginOrigin;
+  source_id?: string;
+  source_name?: string;
+  source_url?: string;
+  last_check_at?: string;
+  latest_version?: string;
+  update_available: boolean;
+  download_url?: string;
+  last_health_at?: string;
+  last_health_ok: boolean;
+  last_health_detail?: string;
+}
+export interface OfficialCatalog {
+  url: string;
+  plugins: number;
+  last_check_at?: string;
+  error?: string;
+}
+export function listInstalledPlugins(): Promise<{ plugins: InstalledPlugin[]; official: OfficialCatalog; is_admin: boolean }> {
+  return apiGet("/manager/api/plugins/installed");
+}
+
 /* ── Service plugins (always-on, /x/{key}) ── */
 
 export type ServiceRoute = { prefix: string; auth: "public" | "token" | "wick-session" };
@@ -689,6 +723,11 @@ export function deletePluginSource(id: string): Promise<{ ok: boolean }> {
 }
 export function testPluginSource(id: string): Promise<{ steps: SourceStep[] }> {
   return apiPost(`${sourcesBase}/${encodeURIComponent(id)}/test`);
+}
+// Test an unsaved source from the Add form; nothing is stored. id tests an
+// edit so a stored PAT is used when the field is left empty.
+export function testPluginSourceInput(input: PluginSourceInput, id?: string): Promise<{ steps: SourceStep[] }> {
+  return apiPost(`${sourcesBase}/test${id ? `?id=${encodeURIComponent(id)}` : ""}`, input);
 }
 export function checkPluginSource(id: string): Promise<{ updates?: string[] | null }> {
   return apiPost(`${sourcesBase}/${encodeURIComponent(id)}/check`);
