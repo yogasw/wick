@@ -47,6 +47,8 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 
 	ch, unsub := globalBcast.Subscribe("")
 	defer unsub()
+	uid := actorID(c)
+	defer addStreamViewer(uid)()
 
 	// visible gates on the ROOT conversation, since that is the row an
 	// event ends up addressing. A child inherits its parent's visibility:
@@ -112,6 +114,13 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 			if ev.Type == evTicketChanged {
 				if data, ok := projectTicketSignal(ev, access); ok {
 					fmt.Fprintf(w, "event: ticket\ndata: %s\n\n", data)
+					flush()
+				}
+				continue
+			}
+			if ev.Type == evAgentChanged {
+				if data, ok := projectAgentSignal(ev, uid); ok {
+					fmt.Fprintf(w, "event: agent_changed\ndata: %s\n\n", data)
 					flush()
 				}
 				continue

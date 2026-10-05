@@ -4447,3 +4447,7 @@ func (teamAgentLister) TeamAgents(ctx context.Context) ([]admin.TeamAgent, error
 	}
 	return out, nil
 }
+
+func (teamAgentLister) TrackTeamAgentChange(ctx context.Context, id string) func() {
+	return agentstool.TrackTeamAgentChange(ctx, id)
+}

@@ -37,7 +37,7 @@
   import GroupSettings from "./lib/components/GroupSettings.svelte";
   import GroupAvatars from "./lib/components/GroupAvatars.svelte";
   import { rosterStatus, withTurn, withActivity } from "./lib/rosterStatus.js";
-  import { connectSessionsStream } from "./lib/stores/sessionsStream.js";
+  import { liveRoster } from "./lib/rosterLive.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
   import TeamAddMenu from "./lib/components/TeamAddMenu.svelte";
@@ -149,8 +149,6 @@
     return inflight;
   }
 
-  // Status dots go stale without a refresh. The open chat's own turns
-  // already refresh it (onTurnChange), so the poll only catches the rest.
   /* Team settings › Idle animations applies to every avatar on the page;
      the drawer updates it on save. A failed read keeps the default (on). */
   async function loadIdleAnimations() {
@@ -165,36 +163,25 @@
     load();
     loadGroups();
     void loadIdleAnimations();
-    const t = setInterval(() => {
-      if (document.visibilityState === "visible") { load(); loadGroups(); }
-    }, 30000);
-    return () => clearInterval(t);
   });
 
-  /* The 30s poll is too slow to show a turn going from thinking to a tool
-     and back, so each step arrives as an `activity` event on the per-user
-     /stream/sessions stream — the SharedWorker connection the chat already
-     shares, not a poll and not a second stream. A turn it sees end
-     triggers the full read for the preview and unread count, and so does
-     a reconnect: whatever happened while the stream was down is read
-     afresh rather than replayed. */
-  onMount(() => {
-    let dropped = false;
-    return connectSessionsStream(base, {
+  /* The roster stays live off the per-user /stream/sessions stream (see
+     rosterLive.ts): turn steps as `activity`, a turn it sees end triggers
+     the full read for the preview and unread count, and `agent_changed` or
+     a reconnect reads the roster and groups again. No steady poll. */
+  onMount(() =>
+    liveRoster(base, {
+      reload: () => {
+        load();
+        loadGroups();
+      },
       onActivity: (ev) => {
         const next = withActivity(agents, ev);
         agents = next.agents;
         if (next.finished) load();
       },
-      onStatus: (s) => {
-        if (s === "error") dropped = true;
-        else if (dropped) {
-          dropped = false;
-          load();
-        }
-      },
-    });
-  });
+    }),
+  );
 
   const captain = $derived(agents.find((a) => a.id === captainId) ?? agents.find((a) => a.is_captain));
 

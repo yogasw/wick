@@ -61,11 +61,16 @@ func sharedAgentsFor(ctx context.Context, userID string) ([]entity.AgentPersona,
 
 // sharedWithCaller reports whether p is shared with the caller right now.
 func sharedWithCaller(c *tool.Ctx, p entity.AgentPersona) (entity.AgentShare, bool) {
-	uid := actorID(c)
+	return sharedWithUser(c.Context(), p, actorID(c))
+}
+
+// sharedWithUser reports whether p is shared with uid right now — by hand
+// or through a tag they hold (team.Store.ShareOf).
+func sharedWithUser(ctx context.Context, p entity.AgentPersona, uid string) (entity.AgentShare, bool) {
 	if uid == "" || p.OwnerUserID == uid || p.Disabled || shareBlockOf(p) != "" {
 		return entity.AgentShare{}, false
 	}
-	sh, err := globalTeam.ShareOf(c.Context(), p.ID, uid)
+	sh, err := globalTeam.ShareOf(ctx, p.ID, uid)
 	return sh, err == nil
 }
 

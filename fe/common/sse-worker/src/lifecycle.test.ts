@@ -328,6 +328,26 @@ describe("lifecycle stream sharing", () => {
     expect(late.received.some((m) => ["ticket", "pool"].includes((m as { type?: string }).type ?? ""))).toBe(false);
   });
 
+  /* The Team roster refetches on agent_changed; bad frames are dropped. */
+  test("agent_changed rides the same connection, uncached", async () => {
+    const connect = await loadWorker();
+    const first = connect();
+    subLifecycle(first);
+    created[0].emit("agent_changed", { agent_id: "a1" });
+    created[0].emit("agent_changed", { group_id: "g1" });
+    created[0].emit("agent_changed", {});
+    const got = first.received.filter((m) => (m as { type?: string }).type === "agent_changed");
+    expect(got).toEqual([
+      { type: "agent_changed", event: { agent_id: "a1" } },
+      { type: "agent_changed", event: { group_id: "g1" } },
+    ]);
+
+    const late = connect();
+    subLifecycle(late);
+    expect(created).toHaveLength(1);
+    expect(late.received.some((m) => (m as { type?: string }).type === "agent_changed")).toBe(false);
+  });
+
   test("subscribe without a base is ignored (no connection opened)", async () => {
     const connect = await loadWorker();
     const port = connect();

@@ -55,7 +55,9 @@ func ShareBlock(p entity.AgentPersona, remoteOwnerOnly bool) string {
 // AddShare shares agentID with userID. Sharing twice is not an error: the
 // existing row is kept, so the first share's date stays. A tag recipient's
 // read-mark row becomes a real share, keeping its read mark.
-func (s *Store) AddShare(ctx context.Context, agentID, userID, by string) error {
+func (s *Store) AddShare(ctx context.Context, agentID, userID, by string) (err error) {
+	done := s.changing(ctx, agentID)
+	defer func() { done(err) }()
 	if err := s.db.WithContext(ctx).Model(&entity.AgentShare{}).
 		Where("agent_id = ? AND shared_with_user_id = ? AND created_by = ?", agentID, userID, ShareByTags).
 		Updates(map[string]any{"created_by": by, "created_at": time.Now().UTC()}).Error; err != nil {
@@ -69,7 +71,9 @@ func (s *Store) AddShare(ctx context.Context, agentID, userID, by string) error 
 }
 
 // RemoveShare drops one share; a missing one is ErrNotFound.
-func (s *Store) RemoveShare(ctx context.Context, agentID, userID string) error {
+func (s *Store) RemoveShare(ctx context.Context, agentID, userID string) (err error) {
+	done := s.changing(ctx, agentID)
+	defer func() { done(err) }()
 	res := s.db.WithContext(ctx).
 		Where("agent_id = ? AND shared_with_user_id = ?", agentID, userID).
 		Where(explicitShare).
@@ -85,7 +89,9 @@ func (s *Store) RemoveShare(ctx context.Context, agentID, userID string) error {
 
 // DeleteShares drops every share of agentID, its share tags included (the
 // agent is being deleted).
-func (s *Store) DeleteShares(ctx context.Context, agentID string) error {
+func (s *Store) DeleteShares(ctx context.Context, agentID string) (err error) {
+	done := s.changing(ctx, agentID)
+	defer func() { done(err) }()
 	if err := s.db.WithContext(ctx).Where("agent_id = ?", agentID).Delete(&entity.AgentShare{}).Error; err != nil {
 		return err
 	}

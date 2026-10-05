@@ -2,7 +2,8 @@
  * Purpose:    The per-user /stream/sessions stream for the Team roster: each
  *             conversation's turn `activity` (thinking / the running tool /
  *             a failed tool / waiting on a person), the `ticket` signal for open
- *             boards, plus connection status.
+ *             boards, the `agent_changed` signal for the roster, plus
+ *             connection status.
  * Caller:     AgentsApp.svelte, ProjectLanding.svelte
  * Dependencies: sse-worker.ts (SharedWorker), EventSource fallback
  * Main Functions: connectSessionsStream
@@ -27,9 +28,14 @@ export type SessionActivity = {
     refetches over REST; nothing about the change rides the stream. */
 export type TicketSignal = { project_id: string; ticket_id: string };
 
+/** One `agent_changed` signal: a Team agent (agent_id) or group chat
+    (group_id) the user sees changed. The roster refetches over REST. */
+export type AgentChangedSignal = { agent_id?: string; group_id?: string };
+
 export type SessionsStreamHandlers = {
   onActivity?: (ev: SessionActivity) => void;
   onTicket?: (ev: TicketSignal) => void;
+  onAgentChanged?: (ev: AgentChangedSignal) => void;
   /** "connected" after every (re)open, "error" when the stream drops. */
   onStatus?: (status: "connected" | "error") => void;
 };
@@ -52,6 +58,7 @@ export function connectSessionsStream(base: string, h: SessionsStreamHandlers, p
       if (!msg) return;
       if (msg.type === "activity" && msg.event) h.onActivity?.(msg.event as SessionActivity);
       else if (msg.type === "ticket" && msg.event) h.onTicket?.(msg.event as TicketSignal);
+      else if (msg.type === "agent_changed" && msg.event) h.onAgentChanged?.(msg.event as AgentChangedSignal);
       else if (msg.type === "lifecycle-status" && (msg.status === "connected" || msg.status === "error")) h.onStatus?.(msg.status);
     };
     p.start?.();
@@ -80,6 +87,9 @@ export function connectSessionsStream(base: string, h: SessionsStreamHandlers, p
   });
   es.addEventListener("ticket", (e) => {
     try { h.onTicket?.(JSON.parse((e as MessageEvent).data as string) as TicketSignal); } catch { /* bad frame */ }
+  });
+  es.addEventListener("agent_changed", (e) => {
+    try { h.onAgentChanged?.(JSON.parse((e as MessageEvent).data as string) as AgentChangedSignal); } catch { /* bad frame */ }
   });
   es.onopen = () => h.onStatus?.("connected");
   es.onerror = () => h.onStatus?.("error");

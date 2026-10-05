@@ -27,6 +27,14 @@ type TeamAgentLister interface {
 	TeamAgents(ctx context.Context) ([]TeamAgent, error)
 }
 
+// TeamAgentChangeTracker is an optional extra of a TeamAgentLister: it
+// tells the agents tool that an agent's share tags are about to change, so
+// the rosters that gain or lose it refresh. Call the result once the
+// change is saved.
+type TeamAgentChangeTracker interface {
+	TrackTeamAgentChange(ctx context.Context, id string) func()
+}
+
 // SetTeamAgents wires /admin/team-agents. Optional — unset, the page is 503.
 func (h *Handler) SetTeamAgents(l TeamAgentLister) { h.teamAgents = l }
 
@@ -125,10 +133,15 @@ func (h *Handler) setTeamAgentTags(w http.ResponseWriter, r *http.Request) {
 		refuseUnreadableTagForm(w)
 		return
 	}
+	saved := func() {}
+	if t, ok := h.teamAgents.(TeamAgentChangeTracker); ok {
+		saved = t.TrackTeamAgentChange(r.Context(), id)
+	}
 	if err := h.repo.SetToolTags(r.Context(), teamAgentPrefix+id, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	saved()
 	redirectOrNoContent(w, r, "/admin/team-agents")
 }
 

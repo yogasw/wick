@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,6 +51,39 @@ func ValidateHandle(h string) error {
 // Store is the gorm-backed CRUD over agent_personas.
 type Store struct {
 	db *gorm.DB
+
+	hookMu   sync.Mutex
+	onChange ChangeHook
+}
+
+// ChangeHook is told about a write that may change who sees agentID in
+// their roster, or how: it runs before the write and returns what to run
+// once the write succeeded (nil: nothing). Wired at boot by the agents
+// tool, which turns it into the roster's agent_changed signal.
+type ChangeHook func(ctx context.Context, agentID string) func()
+
+// SetChangeHook wires h; nil turns it off.
+func (s *Store) SetChangeHook(h ChangeHook) {
+	s.hookMu.Lock()
+	s.onChange = h
+	s.hookMu.Unlock()
+}
+
+// changing runs the change hook for agentID before a write, and returns
+// what to call after it: done(err) finishes the hook only on success.
+func (s *Store) changing(ctx context.Context, agentID string) func(error) {
+	s.hookMu.Lock()
+	h := s.onChange
+	s.hookMu.Unlock()
+	if h == nil || agentID == "" {
+		return func(error) {}
+	}
+	after := h(ctx, agentID)
+	return func(err error) {
+		if err == nil && after != nil {
+			after()
+		}
+	}
 }
 
 // NewStore wraps db.
@@ -112,7 +146,10 @@ func (s *Store) Create(ctx context.Context, p *entity.AgentPersona) error {
 	if p.ID == "" {
 		p.ID = uuid.NewString()
 	}
-	return s.save(ctx, p, true)
+	done := s.changing(ctx, p.ID)
+	err := s.save(ctx, p, true)
+	done(err)
+	return err
 }
 
 // Update rewrites every column of an existing agent.
@@ -120,7 +157,10 @@ func (s *Store) Update(ctx context.Context, p *entity.AgentPersona) error {
 	if p.ID == "" {
 		return ErrNotFound
 	}
-	return s.save(ctx, p, false)
+	done := s.changing(ctx, p.ID)
+	err := s.save(ctx, p, false)
+	done(err)
+	return err
 }
 
 // save validates p and writes it in one transaction with the Captain
@@ -224,7 +264,9 @@ func (s *Store) ListByProjects(ctx context.Context, projectIDs []string) ([]enti
 
 // Delete removes the row. The project and sessions it pointed at stay:
 // they are the owner's work, not the agent's.
-func (s *Store) Delete(ctx context.Context, id string) error {
+func (s *Store) Delete(ctx context.Context, id string) (err error) {
+	done := s.changing(ctx, id)
+	defer func() { done(err) }()
 	res := s.db.WithContext(ctx).Where("id = ?", id).Delete(&entity.AgentPersona{})
 	if res.Error != nil {
 		return res.Error
@@ -254,6 +296,8 @@ func (s *Store) ListIdleCompact(ctx context.Context) ([]entity.AgentPersona, err
 // when there was none or id already was it.
 func (s *Store) MakeCaptain(ctx context.Context, ownerID, id string) (entity.AgentPersona, error) {
 	var prev entity.AgentPersona
+	// A Captain can never be shared, so its recipients lose it here.
+	done := s.changing(ctx, id)
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var next entity.AgentPersona
 		if err := tx.Where("id = ? AND owner_user_id = ?", id, ownerID).First(&next).Error; err != nil {
@@ -283,6 +327,7 @@ func (s *Store) MakeCaptain(ctx context.Context, ownerID, id string) (entity.Age
 		return tx.Model(&entity.AgentPersona{}).Where("id = ?", id).
 			Updates(map[string]any{"is_captain": true, "manage_agents": manage, "updated_at": now}).Error
 	})
+	done(err)
 	return prev, err
 }
 

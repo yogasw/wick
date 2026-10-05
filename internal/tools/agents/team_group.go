@@ -359,6 +359,7 @@ func apiTeamGroupCreate(c *tool.Ctx) {
 		return
 	}
 	sess, _ := globalMgr.Registry().Session(id)
+	publishGroupChanged(id, sess.Meta.UserID)
 	c.JSON(http.StatusCreated, groupItem(c.Context(), sess, byID))
 }
 
@@ -404,6 +405,7 @@ func apiTeamGroupUpdate(c *tool.Ctx) {
 			map[string]string{"agent_id": id, "handle": p.Handle, "by": by})
 	}
 	sess, _ = globalMgr.Registry().Session(sess.ID)
+	publishGroupChanged(sess.ID, sess.Meta.UserID)
 	c.JSON(http.StatusOK, groupItem(c.Context(), sess, byID))
 }
 
@@ -423,6 +425,7 @@ func apiTeamGroupDelete(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	publishGroupChanged(sess.ID, sess.Meta.UserID)
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
 }
 
