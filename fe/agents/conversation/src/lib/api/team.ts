@@ -412,14 +412,6 @@ export const updateSlackRemote = (base: string, id: string, body: Partial<SlackR
 export const listAgents = (base: string) =>
   apiGetE<{ agents: AgentItem[] | null; captain_id: string }>(`${base}/api/team/agents`);
 
-/** One agent's turn state from GET /api/team/agents/live. */
-export type AgentLive = Pick<AgentItem, "id" | "status" | "needs_attention" | "tool_error"> & { current_action: string };
-
-/** The quick roster read: only the turn state of the agents in ids, for
-    the poll that runs while one of them works. */
-export const listAgentsLive = (base: string, ids: string[]) =>
-  apiGetE<{ agents: AgentLive[] | null }>(`${base}/api/team/agents/live?ids=${ids.map(enc).join(",")}`);
-
 /** The read-only roster (?ensure=0): never creates the Captain, so a chat
     reading it for its `@` menu cannot trigger Team-app side effects. */
 export const listAgentRoster = (base: string) =>

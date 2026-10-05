@@ -355,7 +355,6 @@ func Register(r tool.Router) {
 	r.GET("/api/team/agents", apiTeamAgentList)
 	r.POST("/api/team/agents", apiTeamAgentCreate)
 	r.GET("/api/team/agents/connectors", apiTeamAgentConnectors)
-	r.GET("/api/team/agents/live", apiTeamAgentLive)
 	r.GET("/api/team/agents/{id}", apiTeamAgentGet)
 	r.PATCH("/api/team/agents/{id}", apiTeamAgentUpdate)
 	r.DELETE("/api/team/agents/{id}", apiTeamAgentDelete)

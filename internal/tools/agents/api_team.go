@@ -966,59 +966,6 @@ func apiTeamAgentList(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"agents": items, "captain_id": captainID})
 }
 
-// TeamAgentLive is one row of GET /api/team/agents/live: the turn state
-// of an agent's main chat, without the preview and unread reads of the
-// full roster.
-type TeamAgentLive struct {
-	ID             string `json:"id"`
-	Status         string `json:"status"`
-	CurrentAction  string `json:"current_action"`
-	ToolError      bool   `json:"tool_error,omitempty"`
-	NeedsAttention bool   `json:"needs_attention"`
-}
-
-// maxLiveIDs bounds one live read; the roster asks only for the agents
-// it shows working.
-const maxLiveIDs = 50
-
-// teamLiveRows reads the main chat of each agent in ids for userID. An
-// agent with no main chat of the caller's (unknown, or not theirs) reads
-// idle, so the answer says nothing about other people's agents.
-func teamLiveRows(userID string, ids []string, live teamLive) []TeamAgentLive {
-	out := make([]TeamAgentLive, 0, len(ids))
-	for _, id := range ids {
-		row := TeamAgentLive{ID: id, Status: string(session.StatusIdle)}
-		if s, ok := mainSessionOf(userID, id); ok {
-			row.Status = team.TurnStatus(string(s.Meta.Status), live.lifecycles[s.ID])
-			if row.Status != string(session.StatusIdle) {
-				row.CurrentAction = live.actions[s.ID]
-				row.ToolError = live.failed[s.ID]
-			}
-			row.NeedsAttention = live.attention(s.ID) != ""
-		}
-		out = append(out, row)
-	}
-	return out
-}
-
-// apiTeamAgentLive handles GET /api/team/agents/live?ids=a,b: the quick
-// poll the Team app runs while an agent works, so the roster follows a
-// turn from thinking to a tool and back without re-reading everything.
-func apiTeamAgentLive(c *tool.Ctx) {
-	if !teamReady(c) {
-		return
-	}
-	var ids []string
-	seen := map[string]bool{}
-	for _, id := range strings.Split(c.Query("ids"), ",") {
-		if id = strings.TrimSpace(id); id != "" && !seen[id] && len(ids) < maxLiveIDs {
-			seen[id] = true
-			ids = append(ids, id)
-		}
-	}
-	c.JSON(http.StatusOK, map[string]any{"agents": teamLiveRows(actorID(c), ids, teamLiveNow())})
-}
-
 // apiTeamAgentGet handles GET /api/team/agents/{id}: one of the caller's
 // agents as the Settings drawer edits it — Features resolved against the
 // owner's connector catalog, and old Notes/Tickets/Source/Sub-agents/

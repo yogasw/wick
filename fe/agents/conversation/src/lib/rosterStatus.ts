@@ -1,4 +1,5 @@
-import { isWorking, type AgentItem, type AgentLive } from "./api/team.js";
+import { isWorking, type AgentItem } from "./api/team.js";
+import type { SessionActivity } from "./stores/sessionsStream.js";
 import { THINKING_LABEL, toolActivityLabel } from "./activityLabel.js";
 import { isRemoteAgent, remoteWaitTarget } from "./remoteAgent.js";
 
@@ -63,70 +64,29 @@ export function withTurn<T extends Pick<AgentItem, "id" | "status"> & Partial<Pi
   );
 }
 
-/** liveIds are the agents the quick poll follows: the ones working now. */
-export function liveIds(agents: Pick<AgentItem, "id" | "status" | "disabled">[]): string[] {
-  return agents.filter((a) => isWorking(a.status) && !a.disabled).map((a) => a.id);
-}
-
-/** withLive folds a quick poll's rows into the roster. keepAction is the
-    agent whose open chat reports its tool off the stream (fresher than the
-    poll), so only its status is taken. finished = a row went from working
-    to idle, time for a full read (preview, unread). The same list comes
-    back when nothing moved, so the roster does not re-render. */
-export function withLive<T extends Pick<AgentItem, "id" | "status"> & Partial<Pick<AgentItem, "current_action" | "needs_attention" | "tool_error">>>(
-  agents: T[],
-  rows: AgentLive[],
-  keepAction = "",
-): { agents: T[]; finished: boolean } {
-  const by = new Map(rows.map((r) => [r.id, r]));
-  let changed = false;
+/** withActivity folds one /stream/sessions `activity` event into the
+    roster: the agent whose main chat it is reads working (with the tool,
+    its failure and whether it waits on a person) or idle. finished = a row
+    went from working to idle, time for a full read (preview, unread). An
+    event for no agent on the roster, or one that changes nothing, returns
+    the same list so the roster does not re-render. */
+export function withActivity<
+  T extends Pick<AgentItem, "id" | "status" | "main_session_id"> & Partial<Pick<AgentItem, "current_action" | "needs_attention" | "tool_error">>,
+>(agents: T[], ev: SessionActivity): { agents: T[]; finished: boolean } {
+  if (!ev.session_id) return { agents, finished: false };
   let finished = false;
+  let changed = false;
   const next = agents.map((x) => {
-    const r = by.get(x.id);
-    if (!r) return x;
-    const action = r.status === "idle" ? "" : x.id === keepAction ? (x.current_action ?? "") : r.current_action ?? "";
-    const attention = !!r.needs_attention;
-    const failed = r.status !== "idle" && !!r.tool_error;
-    if (r.status === x.status && action === (x.current_action ?? "") && attention === !!x.needs_attention && failed === !!x.tool_error) return x;
+    if (x.main_session_id !== ev.session_id) return x;
+    const working = ev.work !== "";
+    const status = working ? "running" : isWorking(x.status) ? "idle" : x.status;
+    const action = ev.work === "tool" ? ev.action ?? "" : "";
+    const attention = !!ev.needs_attention;
+    const failed = working && !!ev.tool_error;
+    if (status === x.status && action === (x.current_action ?? "") && attention === !!x.needs_attention && failed === !!x.tool_error) return x;
     changed = true;
-    if (isWorking(x.status) && !isWorking(r.status)) finished = true;
-    return { ...x, status: r.status, current_action: action, needs_attention: attention, tool_error: failed };
+    if (isWorking(x.status) && !isWorking(status)) finished = true;
+    return { ...x, status, current_action: action, needs_attention: attention, tool_error: failed };
   });
   return { agents: changed ? next : agents, finished };
-}
-
-/** LIVE_POLL_MS is how often the quick poll runs while an agent works:
-    a tool call shows on the roster within about this long. */
-export const LIVE_POLL_MS = 2000;
-
-/** createLivePoll runs tick every interval while there is someone to
-    follow (update with a non-empty list) and the tab is visible; an empty
-    list stops the timer. tick gets the ids of the moment and is never run
-    twice at once. */
-export function createLivePoll(o: {
-  tick: (ids: string[]) => Promise<void>;
-  visible?: () => boolean;
-  interval?: number;
-}): { update: (ids: string[]) => void; stop: () => void; running: () => boolean } {
-  let ids: string[] = [];
-  let timer: ReturnType<typeof setInterval> | undefined;
-  let busy = false;
-  const visible = o.visible ?? (() => typeof document === "undefined" || document.visibilityState === "visible");
-  const stop = () => {
-    if (timer !== undefined) clearInterval(timer);
-    timer = undefined;
-  };
-  return {
-    update(next) {
-      ids = next;
-      if (!ids.length) return stop();
-      timer ??= setInterval(() => {
-        if (busy || !ids.length || !visible()) return;
-        busy = true;
-        o.tick(ids).catch(() => {}).finally(() => (busy = false));
-      }, o.interval ?? LIVE_POLL_MS);
-    },
-    stop,
-    running: () => timer !== undefined,
-  };
 }

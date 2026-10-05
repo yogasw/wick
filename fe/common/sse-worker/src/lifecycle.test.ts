@@ -275,6 +275,41 @@ describe("lifecycle stream sharing", () => {
     expect(created[0].closed).toBe(true);
   });
 
+  /* The Team roster follows a turn's step off the same connection: no second
+     EventSource, every port gets each activity event. */
+  test("activity events ride the same connection to every subscriber", async () => {
+    const connect = await loadWorker();
+    const ports = [connect(), connect()];
+    ports.forEach(subLifecycle);
+
+    created[0].emit("activity", { session_id: "s1", work: "tool", action: "Bash" });
+
+    expect(created).toHaveLength(1);
+    ports.forEach((p) => {
+      const acts = p.received.filter((m) => (m as { type?: string }).type === "activity");
+      expect(acts).toEqual([{ type: "activity", event: { session_id: "s1", work: "tool", action: "Bash" } }]);
+    });
+  });
+
+  /* The server replays activity only to a new connection; a page joining an
+     open one gets the live turns from the worker instead — and not the ones
+     that already ended. */
+  test("a late subscriber gets the live turns replayed, not ended ones", async () => {
+    const connect = await loadWorker();
+    const first = connect();
+    subLifecycle(first);
+    created[0].emit("activity", { session_id: "s1", work: "tool", action: "Read" });
+    created[0].emit("activity", { session_id: "s2", work: "thinking", action: "" });
+    created[0].emit("activity", { session_id: "s2", work: "", action: "" });
+
+    const late = connect();
+    subLifecycle(late);
+
+    expect(created).toHaveLength(1);
+    const acts = late.received.filter((m) => (m as { type?: string }).type === "activity");
+    expect(acts).toEqual([{ type: "activity", event: { session_id: "s1", work: "tool", action: "Read" } }]);
+  });
+
   test("subscribe without a base is ignored (no connection opened)", async () => {
     const connect = await loadWorker();
     const port = connect();

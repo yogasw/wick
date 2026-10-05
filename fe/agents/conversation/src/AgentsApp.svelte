@@ -30,13 +30,14 @@
   import { connectorCaption, hiddenTabsFor } from "./lib/agentMode.js";
   import { nativeToolsOf } from "./lib/nativeTools.js";
   import { rosterTime } from "./lib/timeFormat.js";
-  import { listAgents, listAgentsLive, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
+  import { listAgents, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
   import { listGroups, getTeamSettings, type GroupItem } from "./lib/api/team.js";
   import GroupView from "./lib/components/GroupView.svelte";
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
   import GroupSettings from "./lib/components/GroupSettings.svelte";
   import GroupAvatars from "./lib/components/GroupAvatars.svelte";
-  import { rosterStatus, withTurn, withLive, liveIds, createLivePoll } from "./lib/rosterStatus.js";
+  import { rosterStatus, withTurn, withActivity } from "./lib/rosterStatus.js";
+  import { connectSessionsStream } from "./lib/stores/sessionsStream.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
   import TeamAddMenu from "./lib/components/TeamAddMenu.svelte";
@@ -172,25 +173,29 @@
   });
 
   /* The 30s poll is too slow to show a turn going from thinking to a tool
-     and back, so while any agent works a quick poll reads just their turn
-     state (GET /api/team/agents/live) every LIVE_POLL_MS; it stops when
-     nobody works or the tab is hidden. A turn it sees end triggers the
-     full read for the preview and unread count. */
-  let streamId = ""; // the agent whose open chat reports its tool itself
-  const livePoll = createLivePoll({
-    tick: async (ids) => {
-      const r = await runApi(listAgentsLive(base, ids));
-      const next = withLive(agents, r.agents ?? [], streamId);
-      agents = next.agents;
-      if (next.finished) load();
-    },
+     and back, so each step arrives as an `activity` event on the per-user
+     /stream/sessions stream — the SharedWorker connection the chat already
+     shares, not a poll and not a second stream. A turn it sees end
+     triggers the full read for the preview and unread count, and so does
+     a reconnect: whatever happened while the stream was down is read
+     afresh rather than replayed. */
+  onMount(() => {
+    let dropped = false;
+    return connectSessionsStream(base, {
+      onActivity: (ev) => {
+        const next = withActivity(agents, ev);
+        agents = next.agents;
+        if (next.finished) load();
+      },
+      onStatus: (s) => {
+        if (s === "error") dropped = true;
+        else if (dropped) {
+          dropped = false;
+          load();
+        }
+      },
+    });
   });
-  const liveKey = $derived(liveIds(agents).join(","));
-  $effect(() => {
-    const k = liveKey;
-    livePoll.update(k ? k.split(",") : []);
-  });
-  onMount(() => () => livePoll.stop());
 
   const captain = $derived(agents.find((a) => a.id === captainId) ?? agents.find((a) => a.is_captain));
 
@@ -434,7 +439,6 @@
     const a = selected;
     if (!a || route.session) return;
     agents = withTurn(agents, a.id, active);
-    streamId = active ? a.id : "";
     if (!active) load();
   }
 

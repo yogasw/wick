@@ -1,5 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { rosterStatus, withTurn, withLive, liveIds, createLivePoll } from "../rosterStatus.js";
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { rosterStatus, withTurn, withActivity } from "../rosterStatus.js";
+import type { SessionActivity } from "../stores/sessionsStream.js";
 
 const row = (p: Record<string, unknown> = {}) => ({ id: "a1", status: "idle", disabled: false, ...p });
 
@@ -85,90 +88,55 @@ describe("withTurn", () => {
   });
 });
 
-describe("liveIds / withLive", () => {
-  const list: { id: string; status: string; current_action: string; disabled: boolean; tool_error?: boolean }[] = [
-    { id: "a1", status: "running", current_action: "", disabled: false },
-    { id: "a2", status: "idle", current_action: "", disabled: false },
-    { id: "a3", status: "running", current_action: "", disabled: true },
+describe("withActivity (the /stream/sessions activity event)", () => {
+  const list: { id: string; status: string; disabled: boolean; main_session_id: string; current_action: string; needs_attention?: boolean; tool_error?: boolean }[] = [
+    { id: "a1", status: "idle", disabled: false, main_session_id: "s1", current_action: "" },
+    { id: "a2", status: "idle", disabled: false, main_session_id: "s2", current_action: "" },
   ];
+  const ev = (p: Partial<SessionActivity>): SessionActivity => ({ session_id: "s1", work: "", action: "", ...p });
 
-  it("follows only the agents working now", () => {
-    expect(liveIds(list)).toEqual(["a1"]);
-    expect(liveIds([list[1]])).toEqual([]);
-  });
-
-  it("thinking → tool → thinking follows the poll", () => {
-    let r = withLive(list, [{ id: "a1", status: "running", current_action: "Bash", needs_attention: false }]);
-    expect(r.finished).toBe(false);
-    expect(rosterStatus(r.agents[0]).typing).toBe("running Bash…");
-    expect(r.agents[1]).toBe(list[1]);
-    r = withLive(r.agents, [{ id: "a1", status: "running", current_action: "", needs_attention: false }]);
+  it("thinking → tool → thinking → idle, from stream events alone", () => {
+    let r = withActivity(list, ev({ work: "thinking" }));
     expect(rosterStatus(r.agents[0]).work).toBe("thinking");
-  });
-
-  it("nothing moved = the same list; a finished turn asks for a full read", () => {
-    const same = withLive(list, [{ id: "a1", status: "running", current_action: "", needs_attention: false }]);
-    expect(same.agents).toBe(list);
-    const done = withLive(list, [{ id: "a1", status: "idle", current_action: "Bash", needs_attention: false }]);
-    expect(done.finished).toBe(true);
-    expect(done.agents[0].current_action).toBe("");
-  });
-
-  it("a failed tool rides the poll and clears when the turn ends", () => {
-    let r = withLive(list, [{ id: "a1", status: "running", current_action: "", needs_attention: false, tool_error: true }]);
+    expect(r.agents[1]).toBe(list[1]);
+    r = withActivity(r.agents, ev({ work: "tool", action: "Bash" }));
+    expect(rosterStatus(r.agents[0]).typing).toBe("running Bash…");
+    r = withActivity(r.agents, ev({ work: "thinking", tool_error: true }));
+    expect(rosterStatus(r.agents[0]).work).toBe("thinking");
     expect(r.agents[0].tool_error).toBe(true);
-    r = withLive(r.agents, [{ id: "a1", status: "idle", current_action: "", needs_attention: false, tool_error: true }]);
+    expect(r.finished).toBe(false);
+    r = withActivity(r.agents, ev({}));
+    expect(rosterStatus(r.agents[0]).work).toBe("idle");
     expect(r.agents[0].tool_error).toBe(false);
-    expect(withTurn([{ id: "a1", status: "running", tool_error: true }], "a1", false)[0].tool_error).toBe(false);
+    expect(r.finished).toBe(true);
   });
 
-  it("the agent whose chat streams its tool keeps it; status still comes from the poll", () => {
-    const own = [{ id: "a1", status: "running", current_action: "read_file", needs_attention: false }];
-    const r = withLive(own, [{ id: "a1", status: "running", current_action: "Read", needs_attention: true }], "a1");
-    expect(r.agents[0].current_action).toBe("read_file");
-    expect(r.agents[0].needs_attention).toBe(true);
+  it("a session that is no agent's main chat, or no change, returns the same list", () => {
+    expect(withActivity(list, ev({ session_id: "other", work: "tool", action: "Bash" })).agents).toBe(list);
+    expect(withActivity(list, ev({ session_id: "" , work: "thinking" })).agents).toBe(list);
+    const running = withActivity(list, ev({ work: "thinking" })).agents;
+    expect(withActivity(running, ev({ work: "thinking" })).agents).toBe(running);
+  });
+
+  it("needs_attention follows the event; a queued row starts running", () => {
+    const r = withActivity([{ ...list[0], status: "queued" }], ev({ work: "thinking", needs_attention: true }));
+    expect(r.agents[0].status).toBe("running");
+    expect(rosterStatus(r.agents[0]).attention).toBe(true);
+    expect(withTurn([{ id: "a1", status: "running", tool_error: true }], "a1", false)[0].tool_error).toBe(false);
   });
 });
 
-describe("createLivePoll", () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
-
-  it("runs while someone works and stops when nobody does", async () => {
-    const seen: string[][] = [];
-    const p = createLivePoll({ tick: async (ids) => void seen.push(ids), visible: () => true, interval: 2000 });
-    p.update([]);
-    expect(p.running()).toBe(false);
-    p.update(["a1"]);
-    expect(p.running()).toBe(true);
-    await vi.advanceTimersByTimeAsync(2000);
-    p.update(["a1", "a2"]);
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(seen).toEqual([["a1"], ["a1", "a2"]]);
-    p.update([]);
-    expect(p.running()).toBe(false);
-    await vi.advanceTimersByTimeAsync(6000);
-    expect(seen.length).toBe(2);
-  });
-
-  it("skips while the tab is hidden and never overlaps a slow tick", async () => {
-    let visible = false;
-    let calls = 0;
-    let release!: () => void;
-    const p = createLivePoll({
-      tick: () => { calls++; return new Promise<void>((r) => (release = r)); },
-      visible: () => visible,
-      interval: 1000,
-    });
-    p.update(["a1"]);
-    await vi.advanceTimersByTimeAsync(3000);
-    expect(calls).toBe(0);
-    visible = true;
-    await vi.advanceTimersByTimeAsync(3000);
-    expect(calls).toBe(1);
-    release();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(calls).toBe(2);
-    p.stop();
+/* The roster no longer polls its live state: the timers AgentsApp keeps are
+   the 30s full refresh and a local 1s clock (no request), and the 2s live
+   read is gone with its endpoint. */
+describe("no quick poll", () => {
+  it("AgentsApp has no 2s interval and no /agents/live read", () => {
+    const src = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
+    const intervals = [...src.matchAll(/setInterval\([\s\S]*?,\s*(\w+)\s*\)/g)].map((m) => m[1]);
+    expect(intervals).toContain("30000");
+    expect(intervals.filter((ms) => ms !== "30000" && ms !== "1000")).toEqual([]);
+    expect(src).toMatch(/setInterval\(\(\) => \(waitNow = Date\.now\(\)\), 1000\)/);
+    expect(src).not.toMatch(/agents\/live|listAgentsLive|createLivePoll/);
+    expect(src).toMatch(/connectSessionsStream\(/);
   });
 });

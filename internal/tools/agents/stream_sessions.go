@@ -8,9 +8,12 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-// sessionsLifecycleSSE handles GET /stream/sessions — a lifecycle-only
-// stream of every conversation the caller may see, so the shell sidebar
-// can show which session is working without polling or a page reload.
+// sessionsLifecycleSSE handles GET /stream/sessions — the lifecycle of
+// every conversation the caller may see, so the shell sidebar can show
+// which session is working without polling or a page reload, plus a
+// small `activity` event per turn step (thinking / the running tool /
+// a failed tool / waiting on a person) that the Team roster follows
+// instead of polling (see sessionActivity).
 //
 // Deliberately NOT the global /stream. That one carries pool_stats, which
 // lists every active session across all users, and is therefore
@@ -54,13 +57,15 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 		}
 		return access.allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants)
 	}
+	acts := newActivityTracker(sessionParentOf, visible, sessionNeedsAttention)
 
 	fmt.Fprintf(w, ": connected\n\n")
 	// Replay what is running right now, so a freshly loaded page paints
 	// its spinners immediately instead of waiting for the next
 	// transition — which for a long-running turn may be minutes away.
 	if globalPool != nil {
-		for _, e := range globalPool.ActiveSnapshot() {
+		active := globalPool.ActiveSnapshot()
+		for _, e := range active {
 			ev, ok := projectSidebarEvent(e.SessionID, e.Lifecycle, sessionParentOf)
 			if !ok || !visible(ev.SessionID) {
 				continue
@@ -72,6 +77,11 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 				continue
 			}
 			fmt.Fprintf(w, "event: session\ndata: %s\n\n", ev.JSON())
+		}
+		// The same for the turn's step, so the Team roster paints the
+		// running tool at once rather than "thinking" until the next one.
+		for _, a := range acts.replay(active) {
+			fmt.Fprintf(w, "event: activity\ndata: %s\n\n", a.JSON())
 		}
 	}
 	flush()
@@ -86,7 +96,20 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 			if !open {
 				return
 			}
-			if ev.Type != "lifecycle" || ev.SessionID == "" {
+			if ev.SessionID == "" {
+				continue
+			}
+			// Activity goes first: on a turn's end the roster clears the
+			// tool before the session event re-reads it.
+			wrote := false
+			if a, ok := acts.apply(ev); ok {
+				fmt.Fprintf(w, "event: activity\ndata: %s\n\n", a.JSON())
+				wrote = true
+			}
+			if ev.Type != "lifecycle" {
+				if wrote {
+					flush()
+				}
 				continue
 			}
 			// Re-projected rather than forwarded: the source event also
@@ -97,6 +120,9 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 			// conversation that owns it.
 			out, ok := projectSidebarEvent(ev.SessionID, ev.Lifecycle, sessionParentOf)
 			if !ok || !visible(out.SessionID) {
+				if wrote {
+					flush()
+				}
 				continue
 			}
 			fmt.Fprintf(w, "event: session\ndata: %s\n\n", out.JSON())
