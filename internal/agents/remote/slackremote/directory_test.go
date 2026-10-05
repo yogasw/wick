@@ -7,9 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/yogasw/wick/internal/agents/remote"
 )
 
 // fakeSlackDirectory serves users.list in two cursor pages and
@@ -91,12 +94,14 @@ func TestDirectorySearchUsersPagesAndFilters(t *testing.T) {
 	}
 }
 
-// The listing is reused for DirectoryTTL, then fetched again.
-func TestDirectoryCacheExpires(t *testing.T) {
+// The last response answers every search; after DirectoryRefresh one search
+// refreshes it in the background without making the caller wait.
+func TestDirectoryRefreshesInBackground(t *testing.T) {
 	calls := fakeSlackDirectory(t, false)
 	d := NewDirectory()
+	var mu sync.Mutex
 	now := time.Now()
-	d.now = func() time.Time { return now }
+	d.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
 	api := HTTPAPI{Token: "x"}
 	for _, q := range []string{"o", "op", "ops"} {
 		if _, err := d.Search(context.Background(), api, "ws", DirChannels, q); err != nil {
@@ -106,13 +111,19 @@ func TestDirectoryCacheExpires(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("calls = %d, want 1", calls.Load())
 	}
-	now = now.Add(DirectoryTTL + time.Second)
+	mu.Lock()
+	now = now.Add(DirectoryRefresh + time.Second)
+	mu.Unlock()
 	got, _ := d.Search(context.Background(), api, "ws", DirChannels, "ops")
-	if calls.Load() != 2 {
-		t.Fatalf("calls after TTL = %d, want 2", calls.Load())
-	}
 	if ids(got) != "C1,C2" || !got[1].IsPrivate {
 		t.Fatalf("channels: %+v", got)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for calls.Load() != 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("calls after refresh = %d, want 2", calls.Load())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -156,14 +167,20 @@ func (f fixedDir) ListChannels(context.Context) ([]DirEntry, error) { return f.c
 type slowDir struct {
 	calls   atomic.Int32
 	release chan struct{}
+	mu      sync.Mutex
 	err     error
 }
+
+func (s *slowDir) setErr(err error) { s.mu.Lock(); s.err = err; s.mu.Unlock() }
 
 func (s *slowDir) ListUsers(ctx context.Context) ([]DirEntry, error) {
 	s.calls.Add(1)
 	<-s.release
-	if s.err != nil {
-		return nil, s.err
+	s.mu.Lock()
+	err := s.err
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
 	}
 	return []DirEntry{{ID: "U1", Name: "alpha"}}, nil
 }
@@ -196,21 +213,31 @@ func TestDirectoryConcurrentSearchesShareOneListing(t *testing.T) {
 	}
 }
 
-// A failed refresh (rate limited) keeps serving the expired listing.
-func TestDirectoryServesStaleOnError(t *testing.T) {
+// Once a listing has answered, a failing refresh (rate limited) never
+// surfaces, and no further refresh is tried while Retry-After runs.
+func TestDirectoryServesLastResponseOnError(t *testing.T) {
 	d := NewDirectory()
+	var mu sync.Mutex
 	now := time.Now()
-	d.now = func() time.Time { return now }
+	d.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
 	api := &slowDir{release: make(chan struct{})}
 	close(api.release)
 	if _, err := d.Search(context.Background(), api, "ws", DirUsers, "al"); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(DirectoryTTL + time.Second)
-	api.err = errors.New("slack users.list: rate limited")
-	got, err := d.Search(context.Background(), api, "ws", DirUsers, "al")
-	if err != nil || ids(got) != "U1" {
-		t.Fatalf("stale: %v %v", ids(got), err)
+	mu.Lock()
+	now = now.Add(DirectoryRefresh + time.Second)
+	mu.Unlock()
+	api.setErr(&remote.RetryAfterError{After: time.Hour, Err: errors.New("slack users.list: rate limited")})
+	for i := 0; i < 5; i++ {
+		got, err := d.Search(context.Background(), api, "ws", DirUsers, "al")
+		if err != nil || ids(got) != "U1" {
+			t.Fatalf("search %d: %v %v", i, ids(got), err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := api.calls.Load(); n != 2 {
+		t.Fatalf("listings = %d, want 2 (first + one refresh, then cooldown)", n)
 	}
 }
 

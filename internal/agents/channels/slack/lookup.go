@@ -2,14 +2,16 @@
 //
 // Implements channels.LookupProvider so the admin UI's picker widget can
 // search the Slack workspace in real time (users, user groups, channels).
-// Results are cached briefly per (source,query), and the workspace listings
-// they are filtered from (users.list, the bot's channels) per bot, so typing
-// filters one listing instead of paging Slack on every key.
+// Results are cached briefly per (source,query). The workspace listings they
+// are filtered from (users.list, the bot's channels) keep their last response
+// per bot, so typing filters that response instead of paging Slack on every
+// key, and a rate limit shows the last response rather than an error.
 
 package slack
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -25,14 +27,19 @@ import (
 const (
 	lookupMaxResults = 20
 	lookupCacheTTL   = 60 * time.Second
-	// listingTTL is how long one workspace listing is filtered locally
-	// before it is paged from Slack again.
-	listingTTL = 5 * time.Minute
+	// listingRefresh is how often a picker may re-page a listing from Slack.
+	// Between refreshes, and whenever one fails, the last response answers.
+	listingRefresh = 30 * time.Second
+	// listingCooldown holds off refreshes after a failure Slack did not
+	// put a Retry-After on.
+	listingCooldown = 30 * time.Second
 )
 
+// listingEntry is the last successful response of one listing.
 type listingEntry struct {
-	at   time.Time
-	data any
+	at        time.Time
+	data      any
+	coolUntil time.Time
 }
 
 var (
@@ -41,34 +48,57 @@ var (
 	listingGroup singleflight.Group
 )
 
-// cachedListing returns the listing under key, paging it through fetch at
-// most once per listingTTL. Concurrent callers share one fetch, and a failed
-// refresh (rate limited, usually) keeps serving the expired listing.
+// cachedListing answers from the last response of key whenever there is
+// one — retyping or reopening a picker never waits on, or fails with, Slack
+// — and refreshes it in the background at most once per listingRefresh,
+// never while Slack's Retry-After runs. Only the very first call waits for
+// the listing.
 func cachedListing[T any](key string, fetch func() ([]T, error)) ([]T, error) {
 	listingMu.Lock()
 	e, ok := listingCache[key]
 	listingMu.Unlock()
-	if ok && time.Since(e.at) < listingTTL {
+	if ok {
+		now := time.Now()
+		if now.Sub(e.at) >= listingRefresh && now.After(e.coolUntil) {
+			go func() { _, _ = refreshListing(key, fetch) }()
+		}
 		return e.data.([]T), nil
 	}
+	return refreshListing(key, fetch)
+}
+
+// refreshListing pages key once (concurrent callers share the fetch) and
+// keeps the response; a failure leaves the last response in place and
+// starts a cooldown instead.
+func refreshListing[T any](key string, fetch func() ([]T, error)) ([]T, error) {
 	v, err, _ := listingGroup.Do(key, func() (any, error) {
 		list, err := fetch()
+		listingMu.Lock()
+		defer listingMu.Unlock()
 		if err != nil {
+			if e, ok := listingCache[key]; ok {
+				e.coolUntil = time.Now().Add(retryAfter(err))
+				listingCache[key] = e
+			}
 			return nil, err
 		}
-		listingMu.Lock()
 		listingCache[key] = listingEntry{at: time.Now(), data: list}
-		listingMu.Unlock()
 		return list, nil
 	})
 	if err != nil {
-		if ok {
-			log.Debug().Str("channel", "slack").Str("listing", key).Err(err).Msg("listing refresh failed, serving stale")
-			return e.data.([]T), nil
-		}
+		log.Debug().Str("channel", "slack").Str("listing", key).Err(err).Msg("listing refresh failed")
 		return nil, err
 	}
 	return v.([]T), nil
+}
+
+// retryAfter is how long Slack asked us to wait, or listingCooldown.
+func retryAfter(err error) time.Duration {
+	var rl *slackgo.RateLimitedError
+	if errors.As(err, &rl) && rl.RetryAfter > 0 {
+		return rl.RetryAfter
+	}
+	return listingCooldown
 }
 
 type lookupCacheEntry struct {

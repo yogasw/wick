@@ -372,13 +372,19 @@ type Channel struct {
 	runMu     sync.Mutex
 	runCancel context.CancelFunc
 	runWg     sync.WaitGroup
+	runGen    uint64 // bumped per run, so a stale watchdog cannot restart a newer run
+
+	// reloadMu serializes Reload: a config save and a health-check
+	// Reconnect landing together each stopped and started the instance,
+	// and the loser could leave it with no live socket at all.
+	reloadMu sync.Mutex
 
 	// socketState tracks the current Socket Mode connection lifecycle so
 	// the integration test panel can report "subscribed / not subscribed"
 	// without re-initiating a connection. Empty when not started or when
 	// running in HTTP mode. Updated by handleSocketEvent.
 	socketMu    sync.RWMutex
-	socketState string // "", "connecting", "connected", "error", "disconnected"
+	socketState string // "", "starting", "connecting", "connected", "error", "disconnected"
 	socketAt    time.Time
 
 	// unboundWarned holds the sessions already reported as having nowhere to
@@ -804,9 +810,54 @@ func (s *Channel) IsConfigured() bool {
 	return cfg.AppToken != ""
 }
 
+// socketStartTimeout is how long a socket run may go without even reporting
+// "connecting" before the watchdog restarts the instance. A var for tests.
+var socketStartTimeout = 60 * time.Second
+
 // Start begins listening for Slack events. Blocks until ctx is cancelled
 // or Stop/Reload is called.
 func (s *Channel) Start(ctx context.Context) error {
+	runCtx, gen, done := s.beginRun(ctx)
+	defer done()
+	return s.serve(ctx, runCtx, gen)
+}
+
+// beginRun registers a run — its cancel func and its place in runWg — before
+// any goroutine starts, so a Stop or Reload issued right after always sees
+// (and waits for) the run it is replacing.
+func (s *Channel) beginRun(ctx context.Context) (context.Context, uint64, func()) {
+	runCtx, runCancel := context.WithCancel(ctx)
+	s.runMu.Lock()
+	s.runCancel = runCancel
+	s.runGen++
+	gen := s.runGen
+	s.runWg.Add(1)
+	s.runMu.Unlock()
+	return runCtx, gen, func() {
+		runCancel()
+		s.runWg.Done()
+	}
+}
+
+func (s *Channel) currentRun() uint64 {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	return s.runGen
+}
+
+// logBot names the instance in lifecycle logs: one process hosts a Slack
+// instance per owner and per agent, and without it a socket that never
+// connected could not be told apart from its neighbours.
+func (s *Channel) logBot() string {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	if s.botUserName != "" {
+		return s.botUserName + " (" + s.botUserID + ")"
+	}
+	return s.botUserID
+}
+
+func (s *Channel) serve(ctx, runCtx context.Context, gen uint64) error {
 	s.cfgMu.Lock()
 	cfg := s.cfg
 	socket := s.socket
@@ -816,22 +867,11 @@ func (s *Channel) Start(ctx context.Context) error {
 		return fmt.Errorf("slack: bot token is required")
 	}
 
-	runCtx, runCancel := context.WithCancel(ctx)
-	s.runMu.Lock()
-	s.runCancel = runCancel
-	s.runMu.Unlock()
-
-	s.runWg.Add(1)
-	defer func() {
-		s.runWg.Done()
-		runCancel()
-	}()
-
 	if cfg.Mode == "http" {
 		if cfg.SigningSecret == "" {
 			return fmt.Errorf("slack: signing secret is required for http mode")
 		}
-		log.Info().Str("channel", "slack").Str("mode", "http").
+		log.Info().Str("channel", "slack").Str("bot", s.logBot()).Str("mode", "http").
 			Msg("started — receiving events on POST /integrations/slack/events")
 		<-runCtx.Done()
 		return nil
@@ -841,13 +881,15 @@ func (s *Channel) Start(ctx context.Context) error {
 		return fmt.Errorf("slack: app token (xapp-...) is required for socket mode")
 	}
 
-	log.Info().Str("channel", "slack").Str("mode", "socket").Msg("starting")
+	s.setSocketState("starting")
+	log.Info().Str("channel", "slack").Str("bot", s.logBot()).Str("mode", "socket").Msg("starting")
 
 	go func() {
 		if err := socket.RunContext(runCtx); err != nil && runCtx.Err() == nil {
-			log.Error().Str("channel", "slack").Err(err).Msg("socket run stopped")
+			log.Error().Str("channel", "slack").Str("bot", s.logBot()).Err(err).Msg("socket run stopped")
 		}
 	}()
+	go s.watchStart(runCtx, gen)
 
 	for {
 		select {
@@ -860,6 +902,28 @@ func (s *Channel) Start(ctx context.Context) error {
 			s.handleSocketEvent(ctx, evt)
 		}
 	}
+}
+
+// watchStart restarts the instance when its socket run never got as far as
+// "connecting": the bot then sits silently offline — no events, no reactions
+// — until somebody happens to save its settings again.
+func (s *Channel) watchStart(runCtx context.Context, gen uint64) {
+	t := time.NewTimer(socketStartTimeout)
+	defer t.Stop()
+	select {
+	case <-runCtx.Done():
+		return
+	case <-t.C:
+	}
+	if state, _ := s.SocketState(); state != "starting" || s.currentRun() != gen {
+		return
+	}
+	log.Warn().Str("channel", "slack").Str("bot", s.logBot()).Dur("after", socketStartTimeout).
+		Msg("socket never started connecting, restarting")
+	s.cfgMu.Lock()
+	cfg, pubURL := s.cfg, s.pubURL
+	s.cfgMu.Unlock()
+	go s.Reload(context.Background(), cfg, pubURL)
 }
 
 // Stop signals the current Start() to exit gracefully.
@@ -1126,7 +1190,7 @@ func (s *Channel) Status() []agentchannels.StatusField {
 				Value: fmt.Sprintf("connected (%s ago)", time.Since(at).Round(time.Second)),
 				OK:    true,
 			})
-		case "connecting":
+		case "starting", "connecting":
 			out = append(out, agentchannels.StatusField{Label: "Subscribe", Value: "connecting…", Warn: true})
 		case "error", "disconnected":
 			out = append(out, agentchannels.StatusField{Label: "Subscribe", Value: state, Warn: true})
@@ -1180,7 +1244,7 @@ func (s *Channel) Reconnect(ctx context.Context) {
 		return
 	}
 	state, _ := s.SocketState()
-	if state == "connecting" || state == "connected" {
+	if state == "starting" || state == "connecting" || state == "connected" {
 		return
 	}
 	go s.Reload(ctx, cfg, pubURL)
@@ -1189,21 +1253,27 @@ func (s *Channel) Reconnect(ctx context.Context) {
 // Reload stops the current connection, applies new credentials, and
 // restarts if the new config is valid.
 func (s *Channel) Reload(ctx context.Context, cfg agentconfig.SlackChannelConfig, pubURL string) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
 	s.Stop()
 	s.runWg.Wait()
 
 	s.applyConfig(cfg, pubURL)
 
 	if !s.IsConfigured() {
-		log.Info().Str("channel", "slack").Msg("reload: not configured, staying stopped")
+		log.Info().Str("channel", "slack").Str("bot", s.logBot()).Msg("reload: not configured, staying stopped")
 		return
 	}
 
-	log.Info().Str("channel", "slack").Msg("reload: restarting with new config")
+	log.Info().Str("channel", "slack").Str("bot", s.logBot()).Msg("reload: restarting with new config")
+	// Registered before the goroutine, so the next Reload (which waits on
+	// reloadMu) stops this run rather than the one before it.
+	runCtx, gen, done := s.beginRun(ctx)
 	go func() {
+		defer done()
 		defer agentchannels.RecoverPanic("slack", "reload")
-		if err := s.Start(ctx); err != nil {
-			log.Error().Str("channel", "slack").Err(err).Msg("slack channel stopped after reload")
+		if err := s.serve(ctx, runCtx, gen); err != nil {
+			log.Error().Str("channel", "slack").Str("bot", s.logBot()).Err(err).Msg("slack channel stopped after reload")
 		}
 	}()
 }
@@ -1239,14 +1309,14 @@ func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
 		go s.handleSlashCommand(ctx, cmd)
 	case socketmode.EventTypeConnecting:
 		s.setSocketState("connecting")
-		log.Debug().Str("channel", "slack").Msg("connecting")
+		log.Debug().Str("channel", "slack").Str("bot", s.logBot()).Msg("connecting")
 	case socketmode.EventTypeConnected:
 		s.setSocketState("connected")
-		log.Info().Str("channel", "slack").Msg("connected")
+		log.Info().Str("channel", "slack").Str("bot", s.logBot()).Msg("connected")
 		go s.refreshBotUserID(ctx)
 	case socketmode.EventTypeConnectionError:
 		s.setSocketState("error")
-		log.Warn().Str("channel", "slack").Msg("connection error, will retry")
+		log.Warn().Str("channel", "slack").Str("bot", s.logBot()).Msg("connection error, will retry")
 	}
 }
 

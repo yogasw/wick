@@ -1,7 +1,6 @@
 package slack
 
 import (
-	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -64,19 +63,51 @@ func TestCachedListingSharesOneFetch(t *testing.T) {
 	}
 }
 
-// An expired listing whose refresh fails keeps being served.
-func TestCachedListingServesStaleOnError(t *testing.T) {
+// Once a listing has answered, a failing refresh (rate limited) never
+// surfaces: the last response keeps answering and refreshes cool down.
+func TestCachedListingServesLastResponseOnError(t *testing.T) {
 	key := t.Name()
 	if _, err := cachedListing(key, func() ([]string, error) { return []string{"a"}, nil }); err != nil {
 		t.Fatal(err)
 	}
-	listingMu.Lock()
-	e := listingCache[key]
-	e.at = e.at.Add(-listingTTL - time.Second)
-	listingCache[key] = e
-	listingMu.Unlock()
-	got, err := cachedListing(key, func() ([]string, error) { return nil, errors.New("ratelimited") })
+	age := func() {
+		listingMu.Lock()
+		e := listingCache[key]
+		e.at = e.at.Add(-listingRefresh - time.Second)
+		listingCache[key] = e
+		listingMu.Unlock()
+	}
+	age()
+	var calls atomic.Int32
+	failing := func() ([]string, error) {
+		calls.Add(1)
+		return nil, &slackgo.RateLimitedError{RetryAfter: time.Hour}
+	}
+	got, err := cachedListing(key, failing)
 	if err != nil || len(got) != 1 {
 		t.Fatalf("got %v err %v", got, err)
+	}
+	// The background refresh fails and sets the cooldown.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		listingMu.Lock()
+		cool := listingCache[key].coolUntil
+		listingMu.Unlock()
+		if !cool.IsZero() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("refresh never ran")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for i := 0; i < 5; i++ {
+		if got, err := cachedListing(key, failing); err != nil || len(got) != 1 {
+			t.Fatalf("retype %d: %v %v", i, got, err)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("refreshes during Retry-After = %d, want 1", n)
 	}
 }

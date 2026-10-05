@@ -179,11 +179,16 @@ type DirectoryAPI interface {
 	ListChannels(ctx context.Context) ([]DirEntry, error)
 }
 
-// DirectoryTTL is how long one workspace listing is reused, so typing in
-// the search box does not page users.list on every key.
-const DirectoryTTL = 5 * time.Minute
+// DirectoryRefresh is how often a search may re-page a listing. Between
+// refreshes, and whenever one fails, the last response answers.
+const DirectoryRefresh = 30 * time.Second
 
-// Directory caches listings per key (workspace + identity + kind).
+// directoryCooldown holds off refreshes after a failure Slack did not put a
+// Retry-After on.
+const directoryCooldown = 30 * time.Second
+
+// Directory keeps the last response of each listing per key (workspace +
+// identity + kind).
 type Directory struct {
 	mu       sync.Mutex
 	rows     map[string]dirCache
@@ -201,8 +206,9 @@ type dirFetch struct {
 }
 
 type dirCache struct {
-	at      time.Time
-	entries []DirEntry
+	at        time.Time
+	entries   []DirEntry
+	coolUntil time.Time
 }
 
 // NewDirectory returns an empty cache.
@@ -210,9 +216,13 @@ func NewDirectory() *Directory {
 	return &Directory{rows: map[string]dirCache{}, inflight: map[string]*dirFetch{}, now: time.Now}
 }
 
-// Search lists kind through api (or the cached listing under key) and
-// returns at most DirectoryMaxResults entries whose names contain query,
-// case-insensitively. An empty query returns the first entries by name.
+// Search filters the last response of kind's listing under key and returns
+// at most DirectoryMaxResults entries whose names contain query,
+// case-insensitively; an empty query returns the first entries by name.
+// Only the first search of a key waits on Slack: later ones answer from the
+// last response at once and refresh it in the background at most once per
+// DirectoryRefresh, never while Slack's Retry-After runs — so retyping or
+// reopening a picker cannot fail with "rate limited".
 func (d *Directory) Search(ctx context.Context, api DirectoryAPI, key, kind, query string) ([]DirEntry, error) {
 	if kind != DirUsers && kind != DirChannels {
 		return nil, errors.New("kind must be users or channels")
@@ -221,15 +231,13 @@ func (d *Directory) Search(ctx context.Context, api DirectoryAPI, key, kind, que
 	d.mu.Lock()
 	c, ok := d.rows[key]
 	d.mu.Unlock()
-	if !ok || d.now().Sub(c.at) > DirectoryTTL {
+	if ok {
+		if now := d.now(); now.Sub(c.at) >= DirectoryRefresh && now.After(c.coolUntil) {
+			go func() { _, _ = d.fetch(context.WithoutCancel(ctx), api, key, kind) }()
+		}
+	} else {
 		list, err := d.fetch(ctx, api, key, kind)
-		switch {
-		case err == nil:
-			c = dirCache{at: d.now(), entries: list}
-		case ok:
-			// A stale listing beats an error: the workspace rarely changes
-			// within minutes, and the refresh is retried on the next search.
-		default:
+		if err != nil {
 			if strings.Contains(err.Error(), "missing_scope") {
 				scopes := "users:read"
 				if kind == DirChannels {
@@ -239,6 +247,7 @@ func (d *Directory) Search(ctx context.Context, api DirectoryAPI, key, kind, que
 			}
 			return nil, err
 		}
+		c = dirCache{entries: list}
 	}
 	q := strings.ToLower(strings.TrimLeft(strings.TrimSpace(query), "@#"))
 	out := []DirEntry{}
@@ -291,6 +300,14 @@ func (d *Directory) list(ctx context.Context, api DirectoryAPI, key, kind string
 	d.mu.Lock()
 	if f.err == nil {
 		d.rows[key] = dirCache{at: d.now(), entries: f.entries}
+	} else if c, ok := d.rows[key]; ok {
+		wait := directoryCooldown
+		var ra *remote.RetryAfterError
+		if errors.As(f.err, &ra) && ra.After > 0 {
+			wait = ra.After
+		}
+		c.coolUntil = d.now().Add(wait)
+		d.rows[key] = c
 	}
 	delete(d.inflight, key)
 	d.mu.Unlock()
