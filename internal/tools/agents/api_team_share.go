@@ -407,3 +407,29 @@ func sharedChatRailMW(next tool.HandlerFunc) tool.HandlerFunc {
 		next(c)
 	}
 }
+
+// TeamAgentAdminRow is one Team agent as the admin sharing page lists it.
+// Block is shareBlockOf: non-empty when no tag may share the agent.
+type TeamAgentAdminRow struct {
+	ID, Name, Handle, OwnerUserID, Block string
+	Disabled                             bool
+}
+
+// TeamAgentsForAdmin lists every owner's Team agents for /admin/team-agents.
+func TeamAgentsForAdmin(ctx context.Context) ([]TeamAgentAdminRow, error) {
+	if globalTeam == nil {
+		return nil, errors.New("team is not configured")
+	}
+	all, err := globalTeam.ListAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TeamAgentAdminRow, 0, len(all))
+	for _, p := range all {
+		out = append(out, TeamAgentAdminRow{
+			ID: p.ID, Name: globalTeam.MemberOf(p).Name, Handle: p.Handle,
+			OwnerUserID: p.OwnerUserID, Block: shareBlockOf(p), Disabled: p.Disabled,
+		})
+	}
+	return out, nil
+}

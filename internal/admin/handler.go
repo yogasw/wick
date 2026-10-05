@@ -131,6 +131,8 @@ type Handler struct {
 	// post-construction (SetProjectWriter): the page lists projects through
 	// ProjectLister, and only this one endpoint needs to write one back.
 	projectWriter ProjectWriter
+	// teamAgents backs /admin/team-agents (SetTeamAgents); nil = 503.
+	teamAgents TeamAgentLister
 
 	// sys bundles everything the System config page needs: the update
 	// coordinator (nil-safe — page shows "not configured" when absent),
@@ -346,6 +348,8 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("POST /admin/providers/{type}/{name}/manage-tags", admin(h.setProviderManageTags))
 
 	mux.Handle("GET /admin/data-tables", admin(h.dataTablesAdminPage))
+	mux.Handle("GET /admin/team-agents", admin(h.teamAgentsAdminPage))
+	mux.Handle("POST /admin/team-agents/{id}/tags", admin(h.setTeamAgentTags))
 	mux.Handle("POST /admin/data-tables/{slug}/tags", admin(h.setDataTableTags))
 
 	// Personal access tokens (admin override view). PATs authenticate

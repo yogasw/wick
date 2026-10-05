@@ -38,7 +38,7 @@ func withTeamWorld(t *testing.T) {
 	}
 	sqlDB, _ := db.DB()
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&entity.AgentPersona{}, &entity.TeamSettings{}, &entity.AgentAccessHistory{}, &entity.AgentShare{}); err != nil {
+	if err := db.AutoMigrate(&entity.AgentPersona{}, &entity.TeamSettings{}, &entity.AgentAccessHistory{}, &entity.AgentShare{}, &entity.Tag{}, &entity.ToolTag{}, &entity.UserTag{}); err != nil {
 		t.Fatal(err)
 	}
 	reg := registry.New(layout)

@@ -41,6 +41,31 @@ type Service struct {
 	// ownerCatalog is the owner's full catalog (accounts and ops), what a
 	// Captain's access proposal is checked against.
 	ownerCatalog OwnerCatalogFunc
+	// shareBlock is ShareBlock with the remote usage check filled in; nil
+	// checks the Captain only.
+	shareBlock func(entity.AgentPersona) string
+}
+
+// SetShareBlock wires the full share check (the remote "Only me" usage
+// lives outside this package). Set at boot.
+func (s *Service) SetShareBlock(f func(entity.AgentPersona) string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.shareBlock = f
+	s.mu.Unlock()
+}
+
+// blockOf says why p can never be shared, "" when it can.
+func (s *Service) blockOf(p entity.AgentPersona) string {
+	s.mu.Lock()
+	f := s.shareBlock
+	s.mu.Unlock()
+	if f != nil {
+		return f(p)
+	}
+	return ShareBlock(p, false)
 }
 
 // OwnerReachFunc returns userID's own catalog (see connectors

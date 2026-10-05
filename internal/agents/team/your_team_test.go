@@ -56,3 +56,15 @@ func TestYourTeamRemoteMember(t *testing.T) {
 		t.Fatalf("owner-only remote advertised as open:\n%s", got)
 	}
 }
+
+func TestSharedWithOwnerBlock(t *testing.T) {
+	if SharedWithOwner(nil) != "" {
+		t.Fatal("no shared agents must add no block")
+	}
+	got := SharedWithOwner([]Member{{Name: "Ops", Handle: "ops", Tagline: "on-call"}})
+	for _, want := range []string{"## Shared with your owner", "You cannot message them", "- @ops — Ops, on-call"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}

@@ -103,7 +103,26 @@ func (s *Service) teamPrompt(ctx context.Context, p entity.AgentPersona) string 
 	if yt := YourTeam(others); yt != "" {
 		out += "\n\n" + yt
 	}
+	if sw := SharedWithOwner(s.sharedMembers(ctx, p.OwnerUserID)); sw != "" {
+		out += "\n\n" + sw
+	}
 	return out + manageAgentsBlock(p)
+}
+
+// sharedMembers are the agents other people shared with ownerID, by hand
+// or by tag, that may still be shared.
+func (s *Service) sharedMembers(ctx context.Context, ownerID string) []Member {
+	agents, _, err := s.SharedWith(ctx, ownerID)
+	if err != nil {
+		return nil
+	}
+	var out []Member
+	for _, a := range agents {
+		if s.blockOf(a) == "" {
+			out = append(out, s.memberOf(a))
+		}
+	}
+	return out
 }
 
 // memberOf reads an agent's name and description off its project (the

@@ -2819,6 +2819,8 @@ func NewServer() *Server {
 	if agentsMgr != nil {
 		adminHandler.SetProjectWriter(agentsMgr)
 	}
+	// /admin/team-agents — share Team agents by tag.
+	adminHandler.SetTeamAgents(teamAgentLister{})
 	// /admin/workflows — same for a workflow's owner. Only the DB-backed
 	// service can re-stamp one, so the picker appears when that is what is
 	// running and stays a plain label otherwise.
@@ -4403,4 +4405,19 @@ func (n scheduleProjectNamer) ProjectName(id string) string {
 		return ""
 	}
 	return p.Meta.Name
+}
+
+// teamAgentLister feeds /admin/team-agents from the agents tool.
+type teamAgentLister struct{}
+
+func (teamAgentLister) TeamAgents(ctx context.Context) ([]admin.TeamAgent, error) {
+	rows, err := agentstool.TeamAgentsForAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]admin.TeamAgent, len(rows))
+	for i, r := range rows {
+		out[i] = admin.TeamAgent{ID: r.ID, Name: r.Name, Handle: r.Handle, OwnerUserID: r.OwnerUserID, Block: r.Block, Disabled: r.Disabled}
+	}
+	return out, nil
 }

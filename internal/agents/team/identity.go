@@ -143,6 +143,30 @@ func YourTeam(team []Member) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// SharedWithOwner is the "Shared with your owner" block: agents of other
+// people shared with this agent's owner. Agents never hand turns across
+// owners, so it says who can reach them — the owner, by @mention.
+func SharedWithOwner(shared []Member) string {
+	if len(shared) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Shared with your owner\n")
+	b.WriteString("Agents other people shared with your owner. You cannot message them (team_message refuses another owner's agent); your owner reaches one by writing @handle in a chat. Point the owner to one when it fits the request.\n")
+	for i, m := range shared {
+		if i == maxTeamListed {
+			fmt.Fprintf(&b, "- +%d more\n", len(shared)-maxTeamListed)
+			break
+		}
+		line := fmt.Sprintf("- @%s — %s", m.Handle, m.Name)
+		if t := strings.TrimSpace(m.Tagline); t != "" {
+			line += ", " + t
+		}
+		b.WriteString(line + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // mentionPolicyText says in a few words whom a member takes mentions from.
 // A remote member says so, and one set to "Nobody" says why agents are
 // refused and how the owner lifts it, so the caller explains instead of

@@ -37,6 +37,7 @@ var globalTeam *team.Service
 func SetTeam(s *team.Service) {
 	globalTeam = s
 	if s != nil {
+		s.SetShareBlock(shareBlockOf)
 		startTeamJobs()
 	}
 }

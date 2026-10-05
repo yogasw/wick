@@ -14,7 +14,7 @@ import (
 func shareTestStore(t *testing.T) *Store {
 	t.Helper()
 	db := testDB(t)
-	if err := db.AutoMigrate(&entity.AgentShare{}); err != nil {
+	if err := db.AutoMigrate(&entity.AgentShare{}, &entity.Tag{}, &entity.ToolTag{}, &entity.UserTag{}); err != nil {
 		t.Fatal(err)
 	}
 	return NewStore(db)
@@ -79,7 +79,7 @@ func TestShareAddListRemove(t *testing.T) {
 func TestShareDeletedAgentDropsShares(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
-	if err := db.AutoMigrate(&entity.AgentShare{}); err != nil {
+	if err := db.AutoMigrate(&entity.AgentShare{}, &entity.Tag{}, &entity.ToolTag{}, &entity.UserTag{}); err != nil {
 		t.Fatal(err)
 	}
 	svc := NewService(db, config.NewLayout(t.TempDir()))
@@ -95,6 +95,77 @@ func TestShareDeletedAgentDropsShares(t *testing.T) {
 	}
 	if rows, _ := svc.ListShares(ctx, a.ID); len(rows) != 0 {
 		t.Fatalf("shares survived the agent: %+v", rows)
+	}
+}
+
+// An admin shares by tag: everyone holding the filter tag gets the agent,
+// for as long as the tag stays on it, with a read mark of their own.
+func TestShareByTag(t *testing.T) {
+	ctx := context.Background()
+	st := shareTestStore(t)
+	db := st.db
+	a := &entity.AgentPersona{OwnerUserID: "owner", Handle: "helper"}
+	if err := st.Create(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(db.Create(&entity.Tag{ID: "t-team", Name: "team", IsFilter: true}).Error)
+	must(db.Create(&entity.Tag{ID: "t-cat", Name: "category"}).Error)
+	must(db.Create(&entity.UserTag{UserID: "bob", TagID: "t-team"}).Error)
+	must(db.Create(&entity.UserTag{UserID: "carol", TagID: "t-cat"}).Error)
+	must(db.Create(&entity.UserTag{UserID: "owner", TagID: "t-team"}).Error)
+	must(db.Create(&entity.ToolTag{ToolPath: TagSharePath(a.ID), TagID: "t-team"}).Error)
+	must(db.Create(&entity.ToolTag{ToolPath: TagSharePath(a.ID), TagID: "t-cat"}).Error)
+
+	agents, shares, err := st.SharedWith(ctx, "bob")
+	if err != nil || len(agents) != 1 || agents[0].ID != a.ID || shares[0].CreatedBy != ShareByTags {
+		t.Fatalf("bob SharedWith = %+v %+v, %v", agents, shares, err)
+	}
+	// A category tag (not a filter) shares nothing; the owner never sees
+	// their own agent as shared.
+	for _, who := range []string{"carol", "owner"} {
+		if got, _, _ := st.SharedWith(ctx, who); len(got) != 0 {
+			t.Fatalf("%s sees %d shared agents", who, len(got))
+		}
+	}
+	if _, err := st.ShareOf(ctx, a.ID, "carol"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("carol ShareOf = %v", err)
+	}
+	if rows, _ := st.ListShares(ctx, a.ID); len(rows) != 0 {
+		t.Fatalf("a tag share listed as a hand share: %+v", rows)
+	}
+
+	// The first read stamps a mark row; it is not a hand share.
+	must(st.MarkShareRead(ctx, a.ID, "bob", time.Now()))
+	if sh, err := st.ShareOf(ctx, a.ID, "bob"); err != nil || sh.LastReadAt == nil {
+		t.Fatalf("ShareOf after read = %+v, %v", sh, err)
+	}
+	if rows, _ := st.ListShares(ctx, a.ID); len(rows) != 0 {
+		t.Fatalf("read mark listed as a share: %+v", rows)
+	}
+	if err := st.RemoveShare(ctx, a.ID, "bob"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("removing a tag share by hand = %v", err)
+	}
+
+	// Taking the tag off ends the share, read mark or not.
+	must(db.Where("tool_path = ? AND tag_id = ?", TagSharePath(a.ID), "t-team").Delete(&entity.ToolTag{}).Error)
+	if got, _, _ := st.SharedWith(ctx, "bob"); len(got) != 0 {
+		t.Fatalf("untagged agent still shared: %+v", got)
+	}
+	if _, err := st.ShareOf(ctx, a.ID, "bob"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ShareOf after untag = %v", err)
+	}
+
+	// Sharing by hand turns the leftover mark into a real share.
+	must(st.AddShare(ctx, a.ID, "bob", "owner"))
+	rows, err := st.ListShares(ctx, a.ID)
+	if err != nil || len(rows) != 1 || rows[0].CreatedBy != "owner" || rows[0].LastReadAt == nil {
+		t.Fatalf("ListShares = %+v, %v", rows, err)
 	}
 }
 

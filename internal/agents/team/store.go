@@ -66,6 +66,16 @@ func (s *Store) List(ctx context.Context, ownerID string) ([]entity.AgentPersona
 	return rows, err
 }
 
+// ListAll returns every owner's agents, ordered by owner then as List
+// does — the admin sharing page lists them all.
+func (s *Store) ListAll(ctx context.Context) ([]entity.AgentPersona, error) {
+	var rows []entity.AgentPersona
+	err := s.db.WithContext(ctx).
+		Order("owner_user_id ASC").Order("is_captain DESC").Order("created_at ASC").Order("id ASC").
+		Find(&rows).Error
+	return rows, err
+}
+
 // ListKinds returns every owner's agents of the given kinds (remote
 // sources), oldest first.
 func (s *Store) ListKinds(ctx context.Context, kinds ...string) ([]entity.AgentPersona, error) {
