@@ -24,7 +24,7 @@ describe("remoteAgent", () => {
   });
 
   test("tabs a remote agent lacks open Remote A2A", () => {
-    expect(remoteSettingsTab("persona")).toBe("remote");
+    expect(remoteSettingsTab("persona")).toBe("persona");
     expect(remoteSettingsTab("access")).toBe("remote");
     expect(remoteSettingsTab("captain")).toBe("remote");
     expect(remoteSettingsTab("mention")).toBe("mention");
@@ -93,7 +93,7 @@ describe("remote chat mode", () => {
     expect(m.caption).toBe("via Slack · #ops · no local tools");
     expect(m.hideTabs).toEqual(REMOTE_HIDDEN_TABS);
     expect(remoteSubtitle(slack)).toBe("Slack remote · #ops");
-    expect(remoteSettingsTabs(slack).map((t) => t.label)).toEqual(["Remote", "Mention", "Avatar", "Advanced"]);
+    expect(remoteSettingsTabs(slack).map((t) => t.label)).toEqual(["Remote", "Persona", "Mention", "Avatar", "Advanced"]);
     expect(remoteSettingsTabs({ kind: "a2a-remote" })[0].label).toBe("Remote A2A");
   });
 

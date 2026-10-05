@@ -107,6 +107,7 @@ export function remoteCaption(host: string | null | undefined): string {
 /** Settings tabs of a remote agent, Remote A2A first (the default). */
 export const REMOTE_SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: "remote", label: "Remote A2A" },
+  { id: "persona", label: "Persona" },
   { id: "mention", label: "Mention" },
   { id: "avatar", label: "Avatar" },
   { id: "advanced", label: "Advanced" },
@@ -122,7 +123,7 @@ export function remoteSettingsTabs(a: Pick<AgentItem, "kind">): { id: SettingsTa
 }
 
 /** remoteSettingsTab maps a requested tab onto one a remote agent has;
-    Persona, Access and the rest open the Remote tab. */
+    Access, Tools and the rest open the Remote tab. */
 export function remoteSettingsTab(t: SettingsTab): SettingsTab {
   return REMOTE_SETTINGS_TABS.some((x) => x.id === t) ? t : "remote";
 }

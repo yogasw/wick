@@ -48,4 +48,15 @@ describe("AgentSettings › Persona › Improve with AI", () => {
     await fireEvent.click(screen.getByTestId("as-gen-button"));
     expect((await screen.findByRole("alert")).textContent).toContain("Pick at least one field to update.");
   });
+
+  test("a remote agent's Persona: agent description instead of a system prompt", () => {
+    const remote = { ...agent, kind: "a2a-remote" } as AgentItem;
+    render(AgentSettings, { props: { ...props, agent: remote, agents: [remote] } });
+    expect(screen.getByTestId("as-remote-persona-note")).toBeTruthy();
+    expect(screen.getByLabelText("When to call it")).toBeTruthy();
+    expect(document.querySelector('label[for="as-sys"]')?.textContent).toBe("Agent description");
+    expect(screen.queryByLabelText("System prompt (persona)")).toBeNull();
+    expect(screen.getByTestId("as-improve-system_prompt").parentElement?.textContent).toContain("Agent description");
+    expect(screen.queryByTestId("suggested-prompts")).toBeNull();
+  });
 });

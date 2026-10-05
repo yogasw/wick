@@ -256,7 +256,13 @@
      an improve does not rename the agent unasked. */
   let improveText = $state("");
   let improveFields = $state<Record<PersonaUpdateField, boolean>>({ name: false, tagline: true, description: true, system_prompt: true });
-  const improvePicked = $derived(PERSONA_UPDATE_FIELDS.filter((f) => improveFields[f.key]).map((f) => f.key));
+  /* A remote agent runs elsewhere, so its system prompt slot holds its
+     agent description instead: what it does and when to call it, read by
+     the Captain and never sent to the remote. */
+  const personaFields = $derived(
+    remote ? PERSONA_UPDATE_FIELDS.map((f) => (f.key === "system_prompt" ? { ...f, label: "Agent description" } : f)) : PERSONA_UPDATE_FIELDS,
+  );
+  const improvePicked = $derived(personaFields.filter((f) => improveFields[f.key]).map((f) => f.key));
   const genInput = () =>
     improveInput(improveText, {
       name: draft.name, tagline: draft.tagline, description: draft.description, system_prompt: draft.system_prompt,
@@ -454,9 +460,15 @@
   {:else if view === "persona"}
     <div>
       <p class="text-sm font-semibold text-black-900 dark:text-white-100">Persona</p>
+      {#if remote}
+        <p class="mt-1 text-xs text-black-800 dark:text-black-600" data-testid="as-remote-persona-note">
+          It runs elsewhere, so nothing here is sent to it. Its tagline and descriptions tell the Captain and other agents when to call it.
+        </p>
+      {:else}
       <p class="mt-1 text-xs text-black-800 dark:text-black-600">
         Saved to the agent's project (hidden){#if sharedWith > 0} · also used by {sharedWith} agent{sharedWith === 1 ? "" : "s"}{/if}
       </p>
+      {/if}
       {#if projectSwitched}
         <p class="mt-1 text-xs text-black-800 dark:text-black-600">
           {projectLoading ? "Loading persona from the new project…" : "Loaded from the new project (Advanced tab) — saved changes apply to that project."}
@@ -474,7 +486,7 @@
       ></textarea>
       <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1" role="group" aria-label="Fields to update">
         <span class="text-xs text-black-800 dark:text-black-600">Update:</span>
-        {#each PERSONA_UPDATE_FIELDS as f (f.key)}
+        {#each personaFields as f (f.key)}
           <label class="inline-flex items-center gap-1.5 text-xs text-black-900 dark:text-white-100">
             <input type="checkbox" bind:checked={improveFields[f.key]} data-testid="as-improve-{f.key}" />
             {f.label}
@@ -492,7 +504,7 @@
           onUse={useImprove}
         >
           {#snippet preview(d: PersonaDraft)}
-            {#each PERSONA_UPDATE_FIELDS.filter((f) => improveFields[f.key]) as f (f.key)}
+            {#each personaFields.filter((f) => improveFields[f.key]) as f (f.key)}
               <p class="mt-1 text-[11px] font-medium text-black-700 dark:text-black-600">{f.label}</p>
               <pre class="max-h-48 overflow-auto whitespace-pre-wrap font-sans text-xs text-black-900 dark:text-white-100">{d[f.key]}</pre>
             {/each}
@@ -525,16 +537,28 @@
       </div>
     </div>
     <div>
-      <label class={label} for="as-desc">Short description</label>
-      <input id="as-desc" class={input} bind:value={draft.description} />
+      <label class={label} for="as-desc">{remote ? "When to call it" : "Short description"}</label>
+      <input
+        id="as-desc"
+        class={input}
+        bind:value={draft.description}
+        placeholder={remote ? "e.g. Answers WhatsApp Business API questions: Meta error codes, template rejections, OBA" : ""}
+      />
     </div>
     <div>
-      <label class={label} for="as-sys">System prompt (persona)</label>
-      <textarea id="as-sys" class={input} rows="8" bind:value={draft.system_prompt}></textarea>
+      <label class={label} for="as-sys">{remote ? "Agent description" : "System prompt (persona)"}</label>
+      <textarea
+        id="as-sys"
+        class={input}
+        rows="8"
+        bind:value={draft.system_prompt}
+        placeholder={remote ? "What it does, what it knows, what to send it and what it cannot do" : ""}
+      ></textarea>
       <div class="mt-1 flex flex-wrap items-start justify-between gap-2">
-        <p class="text-xs text-black-800 dark:text-black-600">appended after the base preset</p>
+        <p class="text-xs text-black-800 dark:text-black-600">{remote ? "read by the Captain when picking who to call; not sent to the bot" : "appended after the base preset"}</p>
       </div>
     </div>
+    {#if !remote}
     <div data-testid="suggested-prompts">
       <span class={label}>Suggested prompts</span>
       <p class="mb-2 text-xs text-black-800 dark:text-black-600">Up to {MAX_PROMPTS} chips shown when someone opens the agent in Slack. Title is the chip, message is what it sends.</p>
@@ -560,6 +584,7 @@
         >+ Add prompt</button>
       {/if}
     </div>
+    {/if}
   {:else if view === "access"}
     <p class="text-xs text-black-800 dark:text-black-600">
       Connectors are off until you add them. Platform tools are on for every agent; System

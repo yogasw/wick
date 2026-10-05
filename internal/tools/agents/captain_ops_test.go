@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/a2aremote"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/connectors"
@@ -157,6 +158,35 @@ func TestCaptainUpdatePersonaHonoursCaptainCan(t *testing.T) {
 	if _, err := (CaptainOps{}).UpdatePersona(ctx, "s-captain", teamagents.PersonaInput{Agent: "worker", SystemPrompt: &sp}); err == nil ||
 		!strings.Contains(err.Error(), "Settings › Captain") {
 		t.Errorf("persona off must refuse with a clear message, got %v", err)
+	}
+}
+
+// A remote agent's tagline, description and agent description (its system
+// prompt slot) are the Captain's to set: they tell the Team when to call it.
+func TestCaptainUpdatePersonaOfARemoteAgent(t *testing.T) {
+	w := withCaptainWorld(t)
+	ctx := context.Background()
+	p, _ := globalTeam.Get(ctx, w.worker.ID)
+	p.Kind = a2aremote.Kind
+	if err := globalTeam.Update(ctx, &p); err != nil {
+		t.Fatal(err)
+	}
+	tag, desc, long := "WABA expert", "Call for Meta error codes.", "Knows Meta error codes, template rejections and OBA."
+	if _, err := (CaptainOps{}).UpdatePersona(ctx, "s-captain", teamagents.PersonaInput{Agent: "@worker", Tagline: &tag, Description: &desc, SystemPrompt: &long}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := (CaptainOps{}).List(ctx, "s-captain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, it := range out.(map[string]any)["agents"].([]captainListItem) {
+		if it.Handle == "worker" {
+			found = it.Remote && it.Tagline == tag && it.Description == desc && it.AgentDescription == long
+		}
+	}
+	if !found {
+		t.Error("list must show the remote agent's tagline, description and agent description")
 	}
 }
 

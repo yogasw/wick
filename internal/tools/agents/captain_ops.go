@@ -40,18 +40,24 @@ func TeamAgentOps() teamagents.Ops {
 
 // captainListItem is one agent as agents.list reports it.
 type captainListItem struct {
-	ID             string `json:"id"`
-	Handle         string `json:"handle"`
-	Name           string `json:"name"`
-	Tagline        string `json:"tagline,omitempty"`
-	Captain        bool   `json:"captain"`
-	Disabled       bool   `json:"disabled"`
-	Status         string `json:"status"`
-	CurrentAction  string `json:"current_action,omitempty"`
-	NeedsAttention bool   `json:"needs_attention"`
-	Attention      string `json:"attention,omitempty"`
-	Unread         bool   `json:"unread"`
-	LastError      string `json:"last_error,omitempty"`
+	ID          string `json:"id"`
+	Handle      string `json:"handle"`
+	Name        string `json:"name"`
+	Tagline     string `json:"tagline,omitempty"`
+	Description string `json:"description,omitempty"`
+	Remote      bool   `json:"remote,omitempty"`
+	// AgentDescription is a remote agent's longer profile (its system
+	// prompt slot, which nothing sends to the remote): what it does and
+	// when to call it.
+	AgentDescription string `json:"agent_description,omitempty"`
+	Captain          bool   `json:"captain"`
+	Disabled         bool   `json:"disabled"`
+	Status           string `json:"status"`
+	CurrentAction    string `json:"current_action,omitempty"`
+	NeedsAttention   bool   `json:"needs_attention"`
+	Attention        string `json:"attention,omitempty"`
+	Unread           bool   `json:"unread"`
+	LastError        string `json:"last_error,omitempty"`
 }
 
 func (CaptainOps) manager(ctx context.Context, sessionID string) (entity.AgentPersona, error) {
@@ -98,12 +104,16 @@ func (o CaptainOps) List(ctx context.Context, sessionID string) (any, error) {
 		it := teamAgentToItem(p, users, live, nil)
 		row := captainListItem{
 			ID: it.ID, Handle: it.Handle, Name: it.Name, Tagline: it.Tagline,
+			Description: it.Description, Remote: IsRemoteAgent(p),
 			Captain: it.IsCaptain, Disabled: it.Disabled, Status: it.Status,
 			CurrentAction: it.CurrentAction, NeedsAttention: it.NeedsAttention,
 			Attention: it.AttentionPreview, Unread: it.Unread,
 		}
 		if it.Status == "error" {
 			row.LastError = it.LastPreview
+		}
+		if row.Remote {
+			row.AgentDescription = it.SystemPrompt
 		}
 		out = append(out, row)
 	}
