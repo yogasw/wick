@@ -88,14 +88,19 @@ func ValidateKey(key string) error {
 	if len(key) > 64 {
 		return fmt.Errorf("plugin key %q too long (max 64)", key)
 	}
-	// No '-': the release asset name is "<key>-<version>-<goos>-<goarch>.zip" and
-	// the catalog parses it by splitting on '-', so a '-' in the key would make
-	// the os/arch split ambiguous. Use '_' for multi-word keys (google_workspace).
+	// '-' is allowed (a built-in moved to a plugin keeps its old key, e.g.
+	// "convert-text-alt", so its DB rows still match), but not at either end.
+	// The release asset name "<key>-<version>-<goos>-<goarch>.zip" stays
+	// parseable because the version is found by its semver shape, not by
+	// position — see parseZipName in internal/plugins/source.
 	for _, r := range key {
-		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_'
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-'
 		if !ok {
-			return fmt.Errorf("plugin key %q invalid: use lowercase letters, digits, or '_' only (no '-', spaces, slashes, or dots — '-' would break the zip-name split)", key)
+			return fmt.Errorf("plugin key %q invalid: use lowercase letters, digits, '_' or '-' only (no spaces, slashes, or dots)", key)
 		}
+	}
+	if key[0] == '-' || key[len(key)-1] == '-' {
+		return fmt.Errorf("plugin key %q invalid: must not start or end with '-'", key)
 	}
 	return nil
 }

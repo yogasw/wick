@@ -128,8 +128,10 @@ func zipNameOK(e Entry, osArch, assetURL string) bool {
 	return name == want
 }
 
-// parseZipName splits "<key>-<version>-<os>-<arch>.zip" (keys never contain
-// "-"), used when a source is a bare .zip link or a release has no index.
+// parseZipName splits "<key>-<version>-<os>-<arch>.zip", used when a source is
+// a bare .zip link or a release has no index. A key may itself contain '-'
+// (convert-text-alt), so the split point is the first segment where the rest
+// up to os/arch is a semver version starting with a digit.
 func parseZipName(name string) (key, version, osArch string, ok bool) {
 	if !strings.HasSuffix(name, ".zip") {
 		return "", "", "", false
@@ -139,7 +141,14 @@ func parseZipName(name string) (key, version, osArch string, ok bool) {
 		return "", "", "", false
 	}
 	n := len(parts)
-	return parts[0], strings.Join(parts[1:n-2], "-"), parts[n-2] + "/" + parts[n-1], true
+	for i := 1; i <= n-3; i++ {
+		v := strings.Join(parts[i:n-2], "-")
+		if v == "" || v[0] < '0' || v[0] > '9' || !semver.IsValid("v"+v) {
+			continue
+		}
+		return strings.Join(parts[:i], "-"), v, parts[n-2] + "/" + parts[n-1], true
+	}
+	return "", "", "", false
 }
 
 // newer reports whether version a is strictly newer than b (semver, "v"
