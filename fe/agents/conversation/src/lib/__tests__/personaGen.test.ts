@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { personaInput, suggestedConnectors } from "../personaGen.js";
+import { improveInput, personaInput, suggestedConnectors } from "../personaGen.js";
 import type { AgentConnector } from "../api/team.js";
 
 const conn = (id: string, key: string, extra: Partial<AgentConnector> = {}): AgentConnector => ({
@@ -28,5 +28,15 @@ describe("suggestedConnectors", () => {
 
   it("tolerates a missing list", () => {
     expect(suggestedConnectors(null, catalog, [])).toEqual([]);
+  });
+});
+
+describe("improveInput", () => {
+  it("sends the instruction, the current fields and the ticked ones to rewrite", () => {
+    const inp = improveInput("  lebih formal  ", { name: "Anton", tagline: "", system_prompt: "Cek log" }, ["tagline", "system_prompt"], []);
+    expect(inp).toEqual({
+      text: "lebih formal",
+      fields: { target: "improve", name: "Anton", system_prompt: "Cek log", update: "tagline,system_prompt" },
+    });
   });
 });

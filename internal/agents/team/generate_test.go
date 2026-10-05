@@ -79,3 +79,30 @@ func TestPersonaValidateAndPrompt(t *testing.T) {
 		t.Fatal("no schema")
 	}
 }
+
+// Settings' one ✨ panel: the user's instruction plus the fields to change;
+// the rest stay as they are.
+func TestPersonaImprove(t *testing.T) {
+	k := PersonaKindSpec()
+	if err := k.Validate(aigen.Input{Text: "lebih formal", Fields: map[string]string{"target": "improve", "system_prompt": "Cek log."}}); err == nil {
+		t.Fatal("improve with no field to update accepted")
+	}
+	in := aigen.Input{Text: "lebih formal, tambah aturan jangan tebak", Fields: map[string]string{
+		"target": "improve", "update": "tagline, system_prompt, bogus", "system_prompt": "Cek log.", "tagline": "Log hunter",
+	}}
+	if err := k.Validate(in); err != nil {
+		t.Fatal(err)
+	}
+	req, err := k.Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Rewrite only these fields: tagline, system_prompt.", "USER INSTRUCTION:\nlebih formal", "CURRENT TAGLINE:\nLog hunter"} {
+		if !strings.Contains(req.Prompt, want) {
+			t.Errorf("prompt lacks %q", want)
+		}
+	}
+	if strings.Contains(req.Prompt, "bogus") || strings.Contains(req.Prompt, "USER BRIEF") {
+		t.Error("unknown field or brief label leaked into the prompt")
+	}
+}

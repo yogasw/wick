@@ -23,7 +23,7 @@
   import { HANDLE_RE, splitPick, joinPick, pruneGrants, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject, TAGLINE_MAX } from "../agentForm.js";
   import { navigate, type SettingsTab } from "../agentsRouter.js";
   import { deleteAlert, canDeleteAgent, type AgentProjectPreview } from "../agentDelete.js";
-  import { PERSONA_KIND, personaInput, type PersonaDraft, type PersonaTarget } from "../personaGen.js";
+  import { PERSONA_KIND, PERSONA_UPDATE_FIELDS, improveInput, type PersonaDraft, type PersonaUpdateField } from "../personaGen.js";
   import { MENTION_FROM_OPTIONS, MAX_HOPS_MIN, MAX_HOPS_MAX, clampHops, hopsNote, mentionFromOf } from "../mentionSettings.js";
   import type { MentionFrom, CaptainCan } from "../api/team.js";
   import { CAPTAIN_CAN_OPTIONS, CAPTAIN_ACCESS_NOTE, MANAGE_AGENTS_NOTE, captainCanOf, captainBlock } from "../captainSettings.js";
@@ -250,14 +250,26 @@
       (agent.project_id ? agents.filter((a) => a.id !== agent.id && a.project_id === agent.project_id).length : 0),
   );
 
-  /* ✨ Generate / Improve read the form as it is now; their draft only
-     lands on Use (then autosaves like typing). */
-  const genInput = (target: PersonaTarget) => () =>
-    personaInput(target, "", {
+  /* One ✨ panel: what to change, and which fields it may rewrite. It reads
+     the form as it is now; the draft only lands on Use, and only in the
+     ticked fields (then autosaves like typing). Name is off by default so
+     an improve does not rename the agent unasked. */
+  let improveText = $state("");
+  let improveFields = $state<Record<PersonaUpdateField, boolean>>({ name: false, tagline: true, description: true, system_prompt: true });
+  const improvePicked = $derived(PERSONA_UPDATE_FIELDS.filter((f) => improveFields[f.key]).map((f) => f.key));
+  const genInput = () =>
+    improveInput(improveText, {
       name: draft.name, tagline: draft.tagline, description: draft.description, system_prompt: draft.system_prompt,
-    }, catalog);
-  const genRefuse = () =>
-    draft.name.trim() || draft.description.trim() || draft.system_prompt.trim() ? "" : "Write a name, description or system prompt first.";
+    }, improvePicked, catalog);
+  const genRefuse = () => {
+    if (improvePicked.length === 0) return "Pick at least one field to update.";
+    return improveText.trim() || draft.name.trim() || draft.description.trim() || draft.system_prompt.trim()
+      ? "" : "Say what the agent should do, or write a name, description or system prompt first.";
+  };
+  const currentPicked = $derived(improvePicked.map((k) => draft[k]).filter((v) => v.trim()).join(" — "));
+  function useImprove(d: PersonaDraft) {
+    for (const k of improvePicked) if (d[k]?.trim()) draft[k] = k === "tagline" ? d[k].slice(0, TAGLINE_MAX) : d[k];
+  }
 
   /* ── save ──────────────────────────────────────────────────────── */
   const patch = $derived.by((): AgentWrite => {
@@ -451,6 +463,43 @@
         </p>
       {/if}
     </div>
+    <div class="rounded-xl border border-white-300 p-3 dark:border-navy-600" data-testid="as-improve">
+      <label class={label} for="as-improve-text">✨ Improve with AI</label>
+      <textarea
+        id="as-improve-text"
+        class="{input} min-h-16"
+        rows="2"
+        bind:value={improveText}
+        placeholder="What should change? e.g. Make it more formal, always cite the source, and add a rule to never guess numbers"
+      ></textarea>
+      <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1" role="group" aria-label="Fields to update">
+        <span class="text-xs text-black-800 dark:text-black-600">Update:</span>
+        {#each PERSONA_UPDATE_FIELDS as f (f.key)}
+          <label class="inline-flex items-center gap-1.5 text-xs text-black-900 dark:text-white-100">
+            <input type="checkbox" bind:checked={improveFields[f.key]} data-testid="as-improve-{f.key}" />
+            {f.label}
+          </label>
+        {/each}
+      </div>
+      <div class="mt-2">
+        <AIGenerateButton
+          kind={PERSONA_KIND}
+          testid="as-gen"
+          label={improveText.trim() ? "✨ Apply" : "✨ Improve"}
+          validate={genRefuse}
+          input={genInput}
+          current={currentPicked}
+          onUse={useImprove}
+        >
+          {#snippet preview(d: PersonaDraft)}
+            {#each PERSONA_UPDATE_FIELDS.filter((f) => improveFields[f.key]) as f (f.key)}
+              <p class="mt-1 text-[11px] font-medium text-black-700 dark:text-black-600">{f.label}</p>
+              <pre class="max-h-48 overflow-auto whitespace-pre-wrap font-sans text-xs text-black-900 dark:text-white-100">{d[f.key]}</pre>
+            {/each}
+          {/snippet}
+        </AIGenerateButton>
+      </div>
+    </div>
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <div>
         <label class={label} for="as-name">Name</label>
@@ -478,41 +527,12 @@
     <div>
       <label class={label} for="as-desc">Short description</label>
       <input id="as-desc" class={input} bind:value={draft.description} />
-      <div class="mt-2">
-        <AIGenerateButton
-          kind={PERSONA_KIND}
-          testid="as-gen-desc"
-          label={draft.description.trim() || draft.tagline.trim() ? "✨ Improve tagline & description" : "✨ Generate tagline & description"}
-          validate={genRefuse}
-          input={genInput("description")}
-          current={[draft.tagline, draft.description].filter((s) => s.trim()).join(" — ")}
-          onUse={(d: PersonaDraft) => { draft.tagline = d.tagline; draft.description = d.description; }}
-        >
-          {#snippet preview(d: PersonaDraft)}
-            <p class="truncate text-xs font-semibold text-black-900 dark:text-white-100">{d.tagline}</p>
-            <p class="mt-0.5 text-xs text-black-900 dark:text-white-100">{d.description}</p>
-          {/snippet}
-        </AIGenerateButton>
-      </div>
     </div>
     <div>
       <label class={label} for="as-sys">System prompt (persona)</label>
       <textarea id="as-sys" class={input} rows="8" bind:value={draft.system_prompt}></textarea>
       <div class="mt-1 flex flex-wrap items-start justify-between gap-2">
         <p class="text-xs text-black-800 dark:text-black-600">appended after the base preset</p>
-        <AIGenerateButton
-          kind={PERSONA_KIND}
-          testid="as-gen-sys"
-          label={draft.system_prompt.trim() ? "✨ Improve" : "✨ Generate"}
-          validate={genRefuse}
-          input={genInput("system_prompt")}
-          current={draft.system_prompt}
-          onUse={(d: PersonaDraft) => { draft.system_prompt = d.system_prompt; }}
-        >
-          {#snippet preview(d: PersonaDraft)}
-            <pre class="max-h-64 overflow-auto whitespace-pre-wrap font-sans text-xs text-black-900 dark:text-white-100">{d.system_prompt}</pre>
-          {/snippet}
-        </AIGenerateButton>
       </div>
     </div>
     <div data-testid="suggested-prompts">

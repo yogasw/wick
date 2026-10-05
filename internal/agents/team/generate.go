@@ -21,6 +21,10 @@ import (
 //	"system_prompt" a system prompt; rewrites Fields["system_prompt"]
 //	                keeping its intent when there is one
 //	"description"   the tagline and one-line description
+//	"improve"       update the current persona following Input.Text (the
+//	                user's instruction); Fields["update"] lists the fields
+//	                to change (name, tagline, description, system_prompt),
+//	                the rest are kept as they are
 //
 // Fields may also carry name, tagline, description, system_prompt (the
 // current values) and connectors (comma-separated keys the owner has, so
@@ -29,7 +33,21 @@ import (
 const PersonaKind = "agent-persona"
 
 // personaTargets are the accepted Fields["target"] values.
-var personaTargets = []string{"all", "system_prompt", "description"}
+var personaTargets = []string{"all", "system_prompt", "description", "improve"}
+
+// personaUpdatable are the fields an "improve" job may be asked to change.
+var personaUpdatable = []string{"name", "tagline", "description", "system_prompt"}
+
+// personaUpdates is Fields["update"] as known field names, in order.
+func personaUpdates(in aigen.Input) []string {
+	var out []string
+	for _, f := range strings.Split(in.Fields["update"], ",") {
+		if f = strings.TrimSpace(f); slices.Contains(personaUpdatable, f) && !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
 
 // hexColor is the avatar color shape the avatar component draws.
 var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
@@ -100,6 +118,9 @@ func validatePersonaInput(in aigen.Input) error {
 	if target == "all" && brief == "" {
 		return errors.New("describe what the agent should do first")
 	}
+	if target == "improve" && len(personaUpdates(in)) == 0 {
+		return errors.New("pick at least one field to update")
+	}
 	if target != "all" && brief == "" && strings.TrimSpace(in.Fields["system_prompt"]) == "" &&
 		strings.TrimSpace(in.Fields["description"]) == "" && strings.TrimSpace(in.Fields["name"]) == "" {
 		return errors.New("write a name, description or system prompt first")
@@ -128,6 +149,10 @@ func personaPrompt(in aigen.Input) string {
 		}
 	case "description":
 		b.WriteString("Write the tagline and the one-sentence description for the agent described below (its system prompt is the main source). Fill the other fields too.")
+	case "improve":
+		upd := personaUpdates(in)
+		b.WriteString("Update the CURRENT persona below following the USER INSTRUCTION (when there is none, make it tighter and clearer). Rewrite only these fields: " +
+			strings.Join(upd, ", ") + ". Keep their language and every concrete rule the instruction does not change. Return every other field exactly as it is now.")
 	default:
 		b.WriteString("Create the whole persona from the user's brief.")
 	}
@@ -148,7 +173,11 @@ func personaPrompt(in aigen.Input) string {
 		b.WriteString("\nAVAILABLE CONNECTORS: (none — leave connectors empty)\n")
 	}
 	if t := strings.TrimSpace(in.Text); t != "" {
-		fmt.Fprintf(&b, "\nUSER BRIEF:\n%s\n", t)
+		label := "USER BRIEF"
+		if personaTarget(in) == "improve" {
+			label = "USER INSTRUCTION"
+		}
+		fmt.Fprintf(&b, "\n%s:\n%s\n", label, t)
 	}
 	return b.String()
 }

@@ -5,7 +5,24 @@ import type { AgentConnector } from "./api/team.js";
 
 export const PERSONA_KIND = "agent-persona";
 
-export type PersonaTarget = "all" | "system_prompt" | "description";
+export type PersonaTarget = "all" | "system_prompt" | "description" | "improve";
+
+/** The fields Settings' ✨ panel can update, in form order. */
+export const PERSONA_UPDATE_FIELDS = [
+  { key: "name", label: "Name" },
+  { key: "tagline", label: "Tagline" },
+  { key: "description", label: "Description" },
+  { key: "system_prompt", label: "System prompt" },
+] as const;
+export type PersonaUpdateField = (typeof PERSONA_UPDATE_FIELDS)[number]["key"];
+
+/** improveInput is personaInput for the "improve" target: the user's
+    instruction, the current fields and the ones to rewrite. */
+export function improveInput(instruction: string, cur: PersonaFields, update: PersonaUpdateField[], catalog: AgentConnector[]) {
+  const inp = personaInput("improve", instruction, cur, catalog);
+  inp.fields.update = update.join(",");
+  return inp;
+}
 
 /** The job result, as the server shapes it. */
 export type PersonaDraft = {
