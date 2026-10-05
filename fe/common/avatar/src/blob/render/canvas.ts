@@ -179,6 +179,21 @@ export function drawFrame(
     ctx.fill();
   }
 
+  // Thinking: three dots off the top-right edge pulse in turn, the
+  // "mulling it over" cue that tells working apart from idle at a glance.
+  if (frame.state === "thinking") {
+    for (const d of thinkDots(time)) {
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(d.angle) * radius * 1.05, cy + Math.sin(d.angle) * radius * 1.05, radius * d.r, 0, Math.PI * 2);
+      ctx.globalAlpha = d.alpha;
+      // The blob's own colour, just off its edge: readable on a light and
+      // a dark page alike, where the eye ink would vanish on one of them.
+      ctx.fillStyle = frame.color;
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
   if (frame.state === "burst") {
     ctx.strokeStyle = ink;
     ctx.lineWidth = 3;
@@ -199,4 +214,15 @@ export function drawBlob(
   const runtime = createRuntime(snapshot);
   const frame = runtime.step(snapshot, 1, time);
   drawFrame(ctx, frame, size, time);
+}
+
+/** thinkDots is where the thinking pose's three dots sit at time t:
+    fixed angles on the body's top-right edge (radians, canvas y down), a
+    radius as a share of the body's and an opacity, each pulsing a beat
+    after the one before. */
+export function thinkDots(time: number): { angle: number; r: number; alpha: number }[] {
+  return [-1.3, -0.85, -0.4].map((angle, i) => {
+    const p = 0.5 + 0.5 * Math.sin(time * 5 - i * 0.9);
+    return { angle, r: 0.07 + 0.04 * p, alpha: 0.3 + 0.7 * p };
+  });
 }

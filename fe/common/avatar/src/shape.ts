@@ -159,6 +159,17 @@ export function orbitDot(state: AvatarState, t: number, animate = true): Vec | n
   return { x: DOT_ORBIT * Math.cos(a), y: DOT_ORBIT * Math.sin(a) };
 }
 
+/** thinkDots are the thinking pose's three dots at time t: fixed spots
+    on the top-right edge, each pulsing (size and opacity) a beat after the
+    one before. animate=false draws them all full. [] for other states. */
+export function thinkDots(state: AvatarState, t: number, animate = true): { x: number; y: number; r: number; o: number }[] {
+  if (state !== "thinking") return [];
+  return [-1.3, -0.85, -0.4].map((a, i) => {
+    const p = animate ? 0.5 + 0.5 * Math.sin(t * 5 - i * 0.9) : 1;
+    return { x: 1.22 * Math.cos(a), y: 1.22 * Math.sin(a), r: 0.09 + 0.06 * p, o: 0.3 + 0.7 * p };
+  });
+}
+
 /** gazeTarget turns the pointer's offset from the avatar centre (px) into
     an eye offset in unit space: full lean from 160px away, less when the
     pointer is right on top of the avatar. */

@@ -1,7 +1,8 @@
 <script lang="ts">
   /* Agent avatar: a coloured blob (circle / squircle / triangle / diamond)
      with two dark eyes. It is alive rather than a still picture (PLAN 6.5,
-     phase 1a): idle breathes and blinks, thinking wobbles and looks up,
+     phase 1a): idle breathes and blinks, thinking wobbles, looks up and
+     pulses three thought dots,
      orbit (a tool is running) wobbles with a dot circling it, alert opens wide, notify plays once when the agent finishes a turn, a
      disabled agent sleeps and a new one hatches from an egg. The eyes
      follow the pointer, hover makes it attentive and a click winks.
@@ -16,7 +17,7 @@
      logic below (working → thinking, notify after a turn, …) is shared. */
   import BlobAvatar from "./BlobAvatar.svelte";
   import { isBlobKind, blobStateFor } from "./blob.js";
-  import { blobPath, eyesAt, orbitDot, gazeTarget, approach, followsPointer, normalizeShape, normalizeState, stateFor, DOT_R, type AvatarState, type Vec } from "./shape.js";
+  import { blobPath, eyesAt, orbitDot, thinkDots, gazeTarget, approach, followsPointer, normalizeShape, normalizeState, stateFor, DOT_R, type AvatarState, type Vec } from "./shape.js";
   import { subscribe, pointer, pointerActive, prefersReducedMotion } from "./ticker.js";
   import { createFidget, type FidgetPose } from "./blob/motion/fidget";
   import { idleAnimationsOn } from "./idle.js";
@@ -154,6 +155,7 @@
   const path = $derived(blobPath(s, current, t, !reduced));
   const eyes = $derived(eyesAt(current, t, gaze, { animate: !reduced, hover, wink: wink || (fp?.wink ?? 0) > 0.5 }));
   const dot = $derived(orbitDot(current, t, !reduced));
+  const thoughts = $derived(thinkDots(current, t, !reduced));
   const fill = $derived(/^#[0-9a-f]{3,8}$/i.test(color) ? color : "#6366f1");
 </script>
 
@@ -186,6 +188,7 @@
     <ellipse cx={e.cx.toFixed(3)} cy={e.cy.toFixed(3)} rx={e.rx} ry={e.ry.toFixed(3)} fill="#16181d" opacity="0.88" />
   {/each}
   </g>
+  {#each thoughts as d, i (i)}<circle cx={d.x.toFixed(3)} cy={d.y.toFixed(3)} r={d.r.toFixed(3)} fill="#27b199" opacity={d.o.toFixed(2)} />{/each}
   {#if dot}<circle cx={dot.x.toFixed(3)} cy={dot.y.toFixed(3)} r={DOT_R} fill="#27b199" />{/if}
 </svg>
 {/if}

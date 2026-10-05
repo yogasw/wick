@@ -10,13 +10,16 @@ export type MotionSample = {
 
 export function sampleMotion(state: BlobState, time: number): MotionSample {
   switch (state) {
+    // Working: a quicker breath and a head that rocks side to side, so at
+    // roster size it reads as busy next to idle's slow float; calmer than
+    // play (no hop). The pulsing thought dots come from the renderer.
     case "thinking":
       return {
-        breathe: 1 + Math.sin(time * 2.4) * 0.018,
-        squash: 1 + Math.sin(time * 2.4) * 0.02,
-        tilt: Math.sin(time * 1.3) * 0.08,
-        jelly: 0.018,
-        bounce: Math.sin(time * 1.1) * 2,
+        breathe: 1 + Math.sin(time * 3.4) * 0.035,
+        squash: 1 + Math.sin(time * 3.4 + 0.6) * 0.03,
+        tilt: Math.sin(time * 1.9) * 0.17,
+        jelly: 0.03,
+        bounce: Math.sin(time * 3.4) * 2.5,
       };
     case "sleep":
       return {

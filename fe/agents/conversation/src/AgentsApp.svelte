@@ -30,13 +30,13 @@
   import { connectorCaption, hiddenTabsFor } from "./lib/agentMode.js";
   import { nativeToolsOf } from "./lib/nativeTools.js";
   import { rosterTime } from "./lib/timeFormat.js";
-  import { listAgents, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
+  import { listAgents, listAgentsLive, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
   import { listGroups, getTeamSettings, type GroupItem } from "./lib/api/team.js";
   import GroupView from "./lib/components/GroupView.svelte";
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
   import GroupSettings from "./lib/components/GroupSettings.svelte";
   import GroupAvatars from "./lib/components/GroupAvatars.svelte";
-  import { rosterStatus, withTurn } from "./lib/rosterStatus.js";
+  import { rosterStatus, withTurn, withLive, liveIds, createLivePoll } from "./lib/rosterStatus.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
   import TeamAddMenu from "./lib/components/TeamAddMenu.svelte";
@@ -171,6 +171,27 @@
     return () => clearInterval(t);
   });
 
+  /* The 30s poll is too slow to show a turn going from thinking to a tool
+     and back, so while any agent works a quick poll reads just their turn
+     state (GET /api/team/agents/live) every LIVE_POLL_MS; it stops when
+     nobody works or the tab is hidden. A turn it sees end triggers the
+     full read for the preview and unread count. */
+  let streamId = ""; // the agent whose open chat reports its tool itself
+  const livePoll = createLivePoll({
+    tick: async (ids) => {
+      const r = await runApi(listAgentsLive(base, ids));
+      const next = withLive(agents, r.agents ?? [], streamId);
+      agents = next.agents;
+      if (next.finished) load();
+    },
+  });
+  const liveKey = $derived(liveIds(agents).join(","));
+  $effect(() => {
+    const k = liveKey;
+    livePoll.update(k ? k.split(",") : []);
+  });
+  onMount(() => () => livePoll.stop());
+
   const captain = $derived(agents.find((a) => a.id === captainId) ?? agents.find((a) => a.is_captain));
 
   /* Agents and groups in one list, newest activity first. The mobile
@@ -228,6 +249,8 @@
   // waitStart is when the selected one began waiting; the header counts up.
   let waitStart = $state<number | null>(null);
   let waitNow = $state(Date.now());
+  // The header reads the selected agent as its roster row does.
+  const headerStatus = $derived(selected ? rosterStatus(selected) : null);
   const remoteWaiting = $derived(!!selected && isRemoteAgent(selected) && isWorking(selected.status));
   const waitKey = $derived(remoteWaiting && selected ? selected.id : "");
   $effect(() => {
@@ -411,7 +434,17 @@
     const a = selected;
     if (!a || route.session) return;
     agents = withTurn(agents, a.id, active);
+    streamId = active ? a.id : "";
     if (!active) load();
+  }
+
+  /* The main chat's tool, off the same stream as its working bubble: the
+     row and header switch between thinking and the tool with the thread,
+     not a poll later. */
+  function onActivity(tool: string | undefined) {
+    const a = selected;
+    if (!a || route.session) return;
+    agents = agents.map((x) => (x.id === a.id && isWorking(x.status) ? { ...x, current_action: tool ?? "" } : x));
   }
 
   /* The header's panel button drives DetailView's rail: a press bumps the
@@ -435,6 +468,7 @@
     hidePickers: true,
     onDeleted: () => go({ session: null }),
     onTurnChange,
+    onActivity,
     ...(selected && isRemoteAgent(selected)
       ? { remoteProgress: true, onProgress: ((id: string) => (label: string | undefined) => (progress = label ? { id, label } : null))(selected.id) }
       : {}),
@@ -586,7 +620,7 @@
           >
             <!-- live like the header's: the same agent in the same state
                  moves the same way in both. Rows scrolled away pause. -->
-            <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={isWorking(a.status)} tool={!!a.current_action} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
+            <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={isWorking(a.status)} tool={st.work === "tool"} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
             <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{st.tip}</span>
             <span class="min-w-0 flex-1">
               <span class="flex items-baseline gap-2">
@@ -597,7 +631,7 @@
               </span>
               <span class="roster-line2 mt-0.5 flex items-center gap-1.5">
                 <span class="min-w-0 flex-1 truncate text-xs {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : tone.preview}">
-                  {#if st.typing !== null}typing…{:else}{rowPreview(a)}{/if}
+                  {#if st.typing !== null}<span data-testid="roster-working" data-work={st.work}>{st.typing}</span>{:else}{rowPreview(a)}{/if}
                 </span>
                 {#if st.unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" class:roster-badge-dot={!unreadLabel(a.unread_count)} aria-label="{a.unread_count || 'new'} unread" data-testid="roster-unread">{unreadLabel(a.unread_count)}</span>{/if}
               </span>
@@ -664,7 +698,7 @@
         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
       </button>
       {#if selected}
-        <AgentAvatar kind={selected.avatar?.kind} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={isWorking(selected.status)} tool={!!selected.current_action} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={rosterStatus(selected).attention} />
+        <AgentAvatar kind={selected.avatar?.kind} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={isWorking(selected.status)} tool={headerStatus?.work === "tool"} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
         <div class="min-w-0 flex-1">
           <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">
             {selected.name}{#if selected.tagline}<span class="font-normal text-black-700 dark:text-black-600">&nbsp;·&nbsp;{selected.tagline}</span>{/if}
@@ -673,7 +707,7 @@
             {#if remoteWaiting}
               <span class="font-medium text-green-600 dark:text-green-400" data-testid="header-waiting">{remoteWaitLabel(selected, waitStart === null ? 0 : (waitNow - waitStart) / 1000, progressLabel)}</span>
             {:else if isWorking(selected.status)}
-              <span class="font-medium text-green-600 dark:text-green-400" data-testid="header-typing">{progressLabel ?? "typing"}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
+              <span class="font-medium text-green-600 dark:text-green-400" data-testid="header-typing" data-work={headerStatus?.work}>{(headerStatus?.typing ?? "thinking…").replace(/…$/, "")}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
             {:else if selected.disabled}
               disabled
             {:else}

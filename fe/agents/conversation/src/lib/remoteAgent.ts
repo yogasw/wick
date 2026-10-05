@@ -14,12 +14,18 @@ export function remoteMaxSec(a: Pick<AgentItem, "kind" | "remote" | "slack_remot
     writing, wick is waiting for the other side. "Waiting for @halodev's
     reply · 12s / 180s"; a channel target waits for a reply in #ops. */
 export function remoteWaitLabel(a: Pick<AgentItem, "kind" | "handle" | "remote" | "slack_remote">, elapsedSec: number, progress?: string): string {
-  const s = a.slack_remote;
-  const who = s && s.target !== "dm" ? `a reply in ${targetLabel(s)}` : `@${a.handle}'s reply`;
   const max = remoteMaxSec(a);
   const secs = Math.max(0, Math.floor(elapsedSec));
   // What the remote says it is doing beats "Waiting for …" once it says it.
-  return `${progress || `Waiting for ${who}`} · ${secs}s${max > 0 ? ` / ${max}s` : ""}`;
+  return `${progress || remoteWaitTarget(a)} · ${secs}s${max > 0 ? ` / ${max}s` : ""}`;
+}
+
+/** remoteWaitTarget is what a remote agent's turn waits on, without the
+    clock: "Waiting for @halodev's reply", or a reply in #ops. The roster
+    row shows it; the header adds the seconds. */
+export function remoteWaitTarget(a: Pick<AgentItem, "handle" | "slack_remote">): string {
+  const s = a.slack_remote;
+  return `Waiting for ${s && s.target !== "dm" ? `a reply in ${targetLabel(s)}` : `@${a.handle}'s reply`}`;
 }
 
 /** PROGRESS_MAX caps a progress label so the header and the thinking

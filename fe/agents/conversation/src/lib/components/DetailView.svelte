@@ -159,6 +159,14 @@
     turnActive = active;
     untrack(() => agentMode?.onTurnChange?.(active));
   });
+  /* And the tool it is on, on every change: thinking ↔ tool. */
+  let toolSent: string | undefined;
+  $effect(() => {
+    const t = typing.active ? typing.toolName || undefined : undefined;
+    if (t === toolSent) return;
+    toolSent = t;
+    untrack(() => agentMode?.onActivity?.(t));
+  });
   /* A remote agent's progress label ("lagi pakai code read…") for the
      thinking bubble, and the host's header told of every change. */
   const progressLabel = $derived(agentMode?.remoteProgress && typing.active ? remoteProgress(live) : undefined);

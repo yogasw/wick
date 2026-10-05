@@ -50,6 +50,10 @@ export type AgentMode = {
       that drives the typing bubble, so the host's "typing" cue follows the
       turn instead of waiting for its next roster poll. */
   onTurnChange?: (active: boolean) => void;
+  /** Told the tool the running turn waits on (undefined while it only
+      thinks or once it ends), off the same stream, so the host's roster
+      and header show the tool with the thread's bubble. */
+  onActivity?: (tool: string | undefined) => void;
   /** A remote agent's chat: its thinking lines are progress labels from
       the remote ("lagi pakai code read…"), shown in place of "thinking…". */
   remoteProgress?: boolean;

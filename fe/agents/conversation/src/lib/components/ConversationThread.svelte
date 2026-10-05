@@ -4,7 +4,8 @@
   import type { ConversationTurn, LiveTurn, TypingState, TurnEvent, TurnEventPayload } from "../types/agents.js";
   import type { TraceFiles } from "../api/files.js";
   import { renderLive } from "../richRender.js";
-  import { mergeTodoItemsWithSteps, stripTodoBlocks, latestTodoGoal, bareToolName } from "../todoGroups.js";
+  import { mergeTodoItemsWithSteps, stripTodoBlocks, latestTodoGoal } from "../todoGroups.js";
+  import { activityLabel, THINKING_LABEL } from "../activityLabel.js";
   import type { ThreadBlock } from "../types/agents.js";
   import ThreadMessage from "./ThreadMessage.svelte";
   import ToolCard from "./ToolCard.svelte";
@@ -61,50 +62,17 @@
 
   let containerEl: HTMLElement | undefined = $state();
 
-  const TOOL_LABELS: Record<string, string> = {
-    write_file: "writing file…",
-    read_file: "reading file…",
-    edit_file: "editing file…",
-    shell: "running command…",
-    todo: "updating task list…",
-    ask_user: "waiting for your input…",
-    wick_list: "listing…",
-    wick_search: "searching…",
-    wick_schedule_message: "scheduling message…",
-    wick_delegate: "delegating to a sub-agent…",
-    wick_agents: "checking available sub-agents…",
-  };
-
-  function typingLabel(substate?: string, toolName?: string): string {
-    // Match on the bare name so MCP-namespaced calls (mcp__wick__todo)
-    // get their friendly label instead of "running mcp__wick__todo…".
-    if (toolName) {
-      const bare = bareToolName(toolName);
-      return TOOL_LABELS[bare] ?? `running ${bare}…`;
-    }
-    if (!substate || substate === "thinking" || substate === "idle") return "thinking…";
-    if (substate === "spawning") return "spawning…";
-    // "running_tool" is the backend's generic lifecycle substate for "a tool
-    // is executing" (agents/state.State.String()) — it's not a tool name.
-    // It normally arrives together with a tool_use event that fills in
-    // toolName above; this is only the fallback for a race where the
-    // lifecycle ping lands before that event, so it must not render as
-    // "running running_tool…".
-    if (substate === "running_tool") return "running a tool…";
-    return `running ${substate}…`;
-  }
-
   /* What the agent is doing right now, in one place so the inline todo
      card and the floating bubble never disagree. Compaction outranks the
      substate: "thinking…" is technically true during a /compact, but it
      tells the reader nothing about the thing that is actually happening
      to their conversation. */
-  const activityLabel = $derived(
+  const activityText = $derived(
     !typing.active
       ? undefined
       : compacting
         ? "compacting the conversation…"
-        : (!typing.toolName && progressLabel) || typingLabel(typing.substate, typing.toolName),
+        : (!typing.toolName && progressLabel) || activityLabel(typing.substate, typing.toolName),
   );
 
   /* The working bubble stays up through a turn: typing can drop for an
@@ -119,7 +87,7 @@
   let typingHideTimer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
     const active = typing.active;
-    const label = activityLabel;
+    const label = activityText;
     if (active) {
       if (typingHideTimer) { clearTimeout(typingHideTimer); typingHideTimer = undefined; }
       typingShown = true;
@@ -310,11 +278,11 @@
                   ? "text-amber-700 dark:text-amber-300"
                   : "text-black-600 dark:text-black-700")}
             >
-              <!-- The agent's own avatar, in its working pose, is the typing
-                   indicator in the Team app. A compaction keeps the amber
+              <!-- The agent's own avatar, in its working pose (orbit while
+                   a tool runs), is the typing indicator in the Team app. A compaction keeps the amber
                    spinner: that wait is not the agent answering. -->
               {#if agent && !compacting}
-                <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={20} working={true} />
+                <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={20} live working={true} tool={!!typing.toolName} />
               {:else}
               <svg
                 class={"h-3 w-3 shrink-0 animate-spin " + (compacting ? "text-amber-500" : "text-green-500")}
@@ -326,7 +294,7 @@
                 <path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path>
               </svg>
               {/if}
-              <span class="min-w-0 truncate italic" data-testid="typing-label" title={typingLabelShown}>{typingLabelShown ?? "thinking…"}</span>
+              <span class="min-w-0 truncate italic" data-testid="typing-label" title={typingLabelShown}>{typingLabelShown ?? THINKING_LABEL}</span>
             </div>
           </div>
         </div>
@@ -341,7 +309,7 @@
           <TodoCard
             items={liveMergedTodoItems}
             goal={liveTodoGoal}
-            currentActivity={activityLabel}
+            currentActivity={activityText}
           />
         {/if}
         {#if live && live.blocks.length > 0}

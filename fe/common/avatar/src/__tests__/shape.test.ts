@@ -17,6 +17,7 @@ import {
   radiusAt,
   stateFor,
   orbitDot,
+  thinkDots,
   hashHandle,
   defaultAvatarFor,
 } from "../shape.js";
@@ -179,6 +180,23 @@ describe("orbit", () => {
     expect(Math.hypot(a.x, a.y)).toBeGreaterThan(BODY_R);
     expect(a).not.toEqual(b);
     expect(orbitDot("orbit", 0, false)).toEqual(orbitDot("orbit", 9, false));
+  });
+});
+
+describe("thinking", () => {
+  test("only thinking has thought dots; they sit outside the body and pulse in turn", () => {
+    for (const st of AVATAR_STATES) {
+      if (st !== "thinking") expect(thinkDots(st, 1)).toEqual([]);
+    }
+    const a = thinkDots("thinking", 0);
+    expect(a).toHaveLength(3);
+    for (const d of a) expect(Math.hypot(d.x, d.y)).toBeGreaterThan(BODY_R);
+    // Not all at the same beat, and they change over time.
+    expect(new Set(a.map((d) => d.o.toFixed(2))).size).toBeGreaterThan(1);
+    expect(thinkDots("thinking", 0.3)).not.toEqual(a);
+    // Reduced motion: a fixed, fully drawn frame.
+    expect(thinkDots("thinking", 0, false)).toEqual(thinkDots("thinking", 7, false));
+    expect(thinkDots("thinking", 0, false).every((d) => d.o === 1)).toBe(true);
   });
 });
 

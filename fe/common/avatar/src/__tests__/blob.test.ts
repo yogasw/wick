@@ -110,3 +110,24 @@ describe("stillUrl cache", () => {
     for (const shape of BLOB_SHAPES) for (const expression of BLOB_EXPRESSIONS) expect(stillUrl({ shape, expression, color: "#111111" }, "thinking", 32)).not.toBe("");
   });
 });
+
+describe("blob thinking pose", () => {
+  test("moves visibly more than idle, and its thought dots pulse", async () => {
+    const { sampleMotion } = await import("../blob/motion/states");
+    const { thinkDots } = await import("../blob/render/canvas");
+    const span = (st: "idle" | "thinking", key: "tilt" | "breathe") => {
+      let lo = Infinity, hi = -Infinity;
+      for (let t = 0; t < 6; t += 0.05) {
+        const v = sampleMotion(st, t)[key];
+        lo = Math.min(lo, v); hi = Math.max(hi, v);
+      }
+      return hi - lo;
+    };
+    expect(span("thinking", "tilt")).toBeGreaterThan(span("idle", "tilt") * 3);
+    expect(span("thinking", "breathe")).toBeGreaterThan(span("idle", "breathe"));
+    const a = thinkDots(0), b = thinkDots(0.3);
+    expect(a).toHaveLength(3);
+    expect(a.map((d) => d.alpha)).not.toEqual(b.map((d) => d.alpha));
+  });
+});
+
