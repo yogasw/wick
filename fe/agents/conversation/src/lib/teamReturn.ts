@@ -53,3 +53,23 @@ export function classicHref(href: string, base: string): string {
 export function newSessionHref(base: string): string {
   return classicHref(base + "/", base);
 }
+
+/** agentsHomeHref is where the Team app's "Agents" switch goes: the Agents
+    home ("New session"), with the project of the Agents page the user came
+    from picked when that page was a project. The new-session page only
+    picks a project the user can still open, so a project they lost access
+    to falls back to the default one instead of a page they would be stuck
+    on. */
+export function agentsHomeHref(stored: string | null, referrer: string, origin: string, base: string): string {
+  const home = newSessionHref(base);
+  const from = returnHref(stored, referrer, origin, base);
+  const m = from.slice(base.length).match(/^\/projects\/([^/?#]+)/);
+  if (!m) return home;
+  let id = m[1];
+  try {
+    id = decodeURIComponent(id);
+  } catch {
+    // a malformed escape: pass the segment on as it is
+  }
+  return `${home}&project=${encodeURIComponent(id)}`;
+}

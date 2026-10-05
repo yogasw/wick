@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { returnHref, classicHref, newSessionHref } from "../teamReturn.js";
+import { returnHref, classicHref, newSessionHref, agentsHomeHref } from "../teamReturn.js";
 
 const O = "https://wick.example";
 const B = "/tools/agents";
@@ -60,5 +60,18 @@ describe("classicHref", () => {
 describe("newSessionHref", () => {
   it("marks the landing classic so Open Team cannot redirect it", () => {
     expect(newSessionHref(B)).toBe("/tools/agents/?view=classic");
+  });
+});
+
+describe("agentsHomeHref", () => {
+  const base = "/tools/agents", origin = "https://wick.example";
+  it("opens the Agents home with the project the user came from", () => {
+    expect(agentsHomeHref("/tools/agents/projects/p-1", "", origin, base)).toBe("/tools/agents/?view=classic&project=p-1");
+    expect(agentsHomeHref(null, "https://wick.example/tools/agents/projects/p-2?tab=files", origin, base)).toBe("/tools/agents/?view=classic&project=p-2");
+  });
+  it("is the plain Agents home from any other page, never back to it", () => {
+    expect(agentsHomeHref("/tools/agents/sessions/s-1", "", origin, base)).toBe("/tools/agents/?view=classic");
+    expect(agentsHomeHref(null, "", origin, base)).toBe("/tools/agents/?view=classic");
+    expect(agentsHomeHref("//evil/projects/x", "", origin, base)).toBe("/tools/agents/?view=classic");
   });
 });

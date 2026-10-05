@@ -43,7 +43,7 @@
   import TeamAddMenu from "./lib/components/TeamAddMenu.svelte";
   import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone } from "./lib/rosterList.js";
   import TeamSettings from "./lib/components/TeamSettings.svelte";
-  import { RETURN_KEY, returnHref, classicHref } from "./lib/teamReturn.js";
+  import { RETURN_KEY, agentsHomeHref } from "./lib/teamReturn.js";
 
   const appEl = document.getElementById("app");
   const base = appEl?.dataset.base ?? "";
@@ -62,11 +62,10 @@
       ? { mode: themeMode, light: appEl?.dataset.themeLight ?? "", dark: appEl?.dataset.themeDark ?? "" }
       : null;
 
-  /* The "Agents" switch goes back to the Agents page the user entered from
-     (never another wick tool; else the conversation list). The stored page is read once and dropped, so a later entry from
-     elsewhere (the Overview card) is not sent to a stale one; a reload
-     keeps document.referrer. classicHref keeps a landing target from
-     redirecting straight back here ("Open Team when I open Agents"). */
+  /* The "Agents" switch is a tab, not a back button: it opens the Agents
+     home ("New session"), with the project of the page the user came from
+     picked when there was one (agentsHomeHref). The stored page is read once
+     and dropped, so a later entry from elsewhere is not sent to a stale one. */
   const exitHref = (() => {
     let stored: string | null = null;
     try {
@@ -75,7 +74,7 @@
     } catch {
       // storage blocked: referrer only
     }
-    return classicHref(returnHref(stored, document.referrer, location.origin, base), base);
+    return agentsHomeHref(stored, document.referrer, location.origin, base);
   })();
 
   let route = $state<AgentsRoute>({ handle: null, session: null, panel: null });
