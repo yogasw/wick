@@ -170,7 +170,15 @@ func lookupSlackBots(api *slackgo.Client, q string) ([]agentchannels.LookupItem,
 	if err != nil {
 		return nil, err
 	}
-	out := make([]agentchannels.LookupItem, 0, lookupMaxResults)
+	return botItems(users, q), nil
+}
+
+func botItems(users []slackgo.User, q string) []agentchannels.LookupItem {
+	// Apps first, Workflow Builder bots after: every published workflow gets
+	// its own bot user named after the workflow, so one app can sit among
+	// several same-named workflow bots and the app is the one usually meant.
+	apps := make([]agentchannels.LookupItem, 0, lookupMaxResults)
+	var workflows []agentchannels.LookupItem
 	for _, u := range users {
 		if u.Deleted || !u.IsBot || u.ID == "USLACKBOT" {
 			continue
@@ -185,12 +193,23 @@ func lookupSlackBots(api *slackgo.Client, q string) ([]agentchannels.LookupItem,
 		if q != "" && !containsFold(name, q) && !containsFold(u.Name, q) && !containsFold(u.ID, q) && !containsFold(u.Profile.BotID, q) {
 			continue
 		}
-		out = append(out, agentchannels.LookupItem{ID: u.ID, Name: name})
-		if len(out) >= lookupMaxResults {
-			break
+		if isWorkflowBot(u.Name) {
+			workflows = append(workflows, agentchannels.LookupItem{ID: u.ID, Name: name + " (workflow)"})
+			continue
 		}
+		apps = append(apps, agentchannels.LookupItem{ID: u.ID, Name: name})
 	}
-	return out, nil
+	out := append(apps, workflows...)
+	if len(out) > lookupMaxResults {
+		out = out[:lookupMaxResults]
+	}
+	return out
+}
+
+// isWorkflowBot reports a Workflow Builder bot user: Slack names them
+// "wf_bot_<workflow id>", and their display name is the workflow's own.
+func isWorkflowBot(username string) bool {
+	return strings.HasPrefix(username, "wf_bot_")
 }
 
 func lookupSlackUserGroups(api *slackgo.Client, q string) ([]agentchannels.LookupItem, error) {
