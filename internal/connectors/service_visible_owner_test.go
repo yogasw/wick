@@ -27,9 +27,9 @@ func TestListVisibleToIncludesOwnedTaggedRow(t *testing.T) {
 	ctx := context.Background()
 	svc, db := newSvcAccountVisDB(t)
 
-	row, err := svc.Create(ctx, "acct-vis", "Qiscus Coolify (Yoga)", nil, "u-creator")
+	row, err := svc.Create(ctx, "acct-vis", "Abc Coolify (Owner)", nil, "u-creator")
 	require.NoError(t, err)
-	tagRow(t, db, row.ID, "custom:qiscus_coolify")
+	tagRow(t, db, row.ID, "custom:abc_coolify")
 
 	has := func(rows []entity.Connector, id string) bool {
 		for _, r := range rows {

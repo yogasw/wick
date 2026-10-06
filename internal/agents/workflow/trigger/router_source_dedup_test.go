@@ -40,8 +40,8 @@ func TestRouter_FirstDelivery_CollapsesSameEventFromTwoBots(t *testing.T) {
 	withFreshSourceDedup(t)
 	r := &Router{}
 
-	first := slackEvt("thread_started", "C030CBY48KF", "1788921511.134279", "U0BAF9T1PFF")
-	second := slackEvt("thread_started", "C030CBY48KF", "1788921511.134279", "U0BU65EH9PE")
+	first := slackEvt("thread_started", "C0123ABCD", "1788921511.134279", "U0AAA0001")
+	second := slackEvt("thread_started", "C0123ABCD", "1788921511.134279", "U0AAA0002")
 
 	if !r.firstDelivery(first) {
 		t.Fatal("first delivery must be accepted")

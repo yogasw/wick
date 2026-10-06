@@ -328,7 +328,7 @@ func TestWickUsage_AccountCarriesNoEmail(t *testing.T) {
 	layout := usageFixture(t, id)
 
 	quota := func(_ context.Context, key string) (AccountQuota, bool) {
-		return AccountQuota{Provider: key, Supported: true, Connected: true, Plan: "team", Org: "Qiscus"}, true
+		return AccountQuota{Provider: key, Supported: true, Connected: true, Plan: "team", Org: "Abc"}, true
 	}
 	r := httptest.NewRequest("POST", "/mcp", nil)
 	r = r.WithContext(WithSessionID(r.Context(), id))

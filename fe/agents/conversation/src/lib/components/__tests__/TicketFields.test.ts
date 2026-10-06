@@ -6,17 +6,17 @@ import type { TicketField } from "../../types/agents.js";
 const defs: TicketField[] = [
   { key: "app_code", label: "App Code", type: "text" },
   { key: "slack", label: "Slack discussion", type: "text" },
-  { key: "qticket", label: "Qticketing ticket", type: "text" },
+  { key: "helpdesk", label: "Helpdesk ticket", type: "text" },
   { key: "priority", label: "Priority", type: "select", options: ["Low", "High"] },
   { key: "changelog", label: "Change Log", type: "text" },
   { key: "owner", label: "Owner", type: "text", required: true },
 ];
 const values = {
-  app_code: "locot-uv3dlm3k0cgpbla",
-  slack: "https://qiscustech.slack.com/archives/C030CBY48KF/p1790319115225609",
-  qticket: "Qticketing ticket : https://support.qiscus.com/tickets/23188",
+  app_code: "app-abc123",
+  slack: "https://abc.slack.com/archives/C0123/p1700000000000001",
+  helpdesk: "Helpdesk ticket : https://helpdesk.example.com/tickets/1001",
   owner: "Yoga",
-  notion_page_id: "d7f18757-internal",
+  notion_page_id: "page-0001-internal",
 };
 
 function renderFields(over: Record<string, unknown> = {}) {
@@ -29,8 +29,8 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 describe("TicketFields — reading", () => {
   test("only defined fields show; a key nobody defined stays hidden", () => {
     renderFields({ initialVisible: 10 });
-    expect(screen.getByText("locot-uv3dlm3k0cgpbla")).toBeTruthy();
-    expect(screen.queryByText("d7f18757-internal")).toBeNull();
+    expect(screen.getByText("app-abc123")).toBeTruthy();
+    expect(screen.queryByText("page-0001-internal")).toBeNull();
   });
 
   test("a URL is a link, with an open-in-new-tab button that is safe", () => {
@@ -46,10 +46,10 @@ describe("TicketFields — reading", () => {
 
   test("a URL inside text is linked and the text around it kept", () => {
     renderFields({ initialVisible: 10 });
-    const row = screen.getByTestId("ticket-field-qticket");
-    expect(row.textContent).toContain("Qticketing ticket :");
-    expect((screen.getByTestId("ticket-field-open-qticket") as HTMLAnchorElement).getAttribute("href")).toBe(
-      "https://support.qiscus.com/tickets/23188",
+    const row = screen.getByTestId("ticket-field-helpdesk");
+    expect(row.textContent).toContain("Helpdesk ticket :");
+    expect((screen.getByTestId("ticket-field-open-helpdesk") as HTMLAnchorElement).getAttribute("href")).toBe(
+      "https://helpdesk.example.com/tickets/1001",
     );
   });
 
@@ -69,10 +69,10 @@ describe("TicketFields — reading", () => {
 
   test("two filled rows at rest; Show more counts every other field, empty ones too", async () => {
     renderFields();
-    // filled, in project order: app_code, slack, qticket, owner; empty: priority, changelog
+    // filled, in project order: app_code, slack, helpdesk, owner; empty: priority, changelog
     expect(screen.getByTestId("ticket-field-app_code")).toBeTruthy();
     expect(screen.getByTestId("ticket-field-slack")).toBeTruthy();
-    expect(screen.queryByTestId("ticket-field-qticket")).toBeNull();
+    expect(screen.queryByTestId("ticket-field-helpdesk")).toBeNull();
     const toggle = screen.getByTestId("ticket-fields-toggle");
     expect(toggle.textContent).toContain("Show more (4)");
     await fireEvent.click(toggle);
@@ -107,11 +107,11 @@ describe("TicketFields — editing in place", () => {
     const { onSave } = renderFields();
     await fireEvent.click(screen.getByTestId("ticket-field-edit-app_code"));
     const input = screen.getByTestId("ticket-field-input-app_code") as HTMLInputElement;
-    await fireEvent.input(input, { target: { value: "  locot-new  " } });
+    await fireEvent.input(input, { target: { value: "  app-new  " } });
     await fireEvent.keyDown(input, { key: "Enter" });
     await tick();
-    expect(onSave).toHaveBeenCalledWith("app_code", "locot-new");
-    expect(screen.getByText("locot-new")).toBeTruthy();
+    expect(onSave).toHaveBeenCalledWith("app_code", "app-new");
+    expect(screen.getByText("app-new")).toBeTruthy();
   });
 
   // Escape removes the input, which fires blur. That blur must not save the
@@ -125,7 +125,7 @@ describe("TicketFields — editing in place", () => {
     await fireEvent.blur(input);
     await tick();
     expect(onSave).not.toHaveBeenCalled();
-    expect(screen.getByText("locot-uv3dlm3k0cgpbla")).toBeTruthy();
+    expect(screen.getByText("app-abc123")).toBeTruthy();
   });
 
   test("an unchanged value does not call the server", async () => {

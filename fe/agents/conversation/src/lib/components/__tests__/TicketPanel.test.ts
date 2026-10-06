@@ -155,11 +155,11 @@ describe("TicketPanel — the ticket's description", () => {
 describe("TicketPanel — additional info", () => {
   test("the project's fields show under Custom fields", () => {
     renderPanel({
-      ticket: { id: "T-1", title: "Fix retries", status: "open", fields: { app_code: "locot-uv3" } },
+      ticket: { id: "T-1", title: "Fix retries", status: "open", fields: { app_code: "app-abc123" } },
       fields: [{ key: "app_code", label: "App Code", type: "text" }],
     });
     expect(screen.getByTestId("ticket-fields").textContent).toContain("Custom fields");
-    expect(screen.getByText("locot-uv3")).toBeTruthy();
+    expect(screen.getByText("app-abc123")).toBeTruthy();
   });
 
   test("no field definitions means no section", () => {

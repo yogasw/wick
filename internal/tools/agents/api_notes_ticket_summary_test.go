@@ -12,7 +12,7 @@ import (
 func TestNoteTicketSummaryCarriesFields(t *testing.T) {
 	tk := ticket.Ticket{
 		ID: "T-1", Title: "Kalender dokter", Status: "in_progress", Body: "Desc",
-		Fields: map[string]string{"app_code": "locot-uv3", "slack": "https://example.slack.com/archives/C1/p1"},
+		Fields: map[string]string{"app_code": "app-abc123", "slack": "https://example.slack.com/archives/C1/p1"},
 	}
 	got := noteTicketSummary(tk)
 	for k, want := range map[string]string{"id": "T-1", "title": "Kalender dokter", "status": "in_progress", "body": "Desc"} {
@@ -24,7 +24,7 @@ func TestNoteTicketSummaryCarriesFields(t *testing.T) {
 	if !ok {
 		t.Fatalf("fields = %T, want map[string]string", got["fields"])
 	}
-	if fields["app_code"] != "locot-uv3" || fields["slack"] != "https://example.slack.com/archives/C1/p1" {
+	if fields["app_code"] != "app-abc123" || fields["slack"] != "https://example.slack.com/archives/C1/p1" {
 		t.Errorf("fields = %v", fields)
 	}
 }

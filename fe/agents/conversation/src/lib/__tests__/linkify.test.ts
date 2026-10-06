@@ -3,15 +3,15 @@ import { linkify, firstUrl } from "../linkify.js";
 
 describe("linkify", () => {
   test("splits text and a URL", () => {
-    expect(linkify("Slack discussion : https://qiscustech.slack.com/archives/C030/p179")).toEqual([
+    expect(linkify("Slack discussion : https://abc.slack.com/archives/C0123/p179")).toEqual([
       { kind: "text", text: "Slack discussion : " },
-      { kind: "url", url: "https://qiscustech.slack.com/archives/C030/p179" },
+      { kind: "url", url: "https://abc.slack.com/archives/C0123/p179" },
     ]);
   });
 
   test("a value that is only a URL is one url segment", () => {
-    expect(linkify("https://support.qiscus.com/tickets/23188")).toEqual([
-      { kind: "url", url: "https://support.qiscus.com/tickets/23188" },
+    expect(linkify("https://helpdesk.example.com/tickets/1001")).toEqual([
+      { kind: "url", url: "https://helpdesk.example.com/tickets/1001" },
     ]);
   });
 
@@ -45,7 +45,7 @@ describe("linkify", () => {
   });
 
   test("plain text and empty input", () => {
-    expect(linkify("locot-uv3")).toEqual([{ kind: "text", text: "locot-uv3" }]);
+    expect(linkify("app-abc123")).toEqual([{ kind: "text", text: "app-abc123" }]);
     expect(linkify("")).toEqual([]);
     expect(firstUrl(undefined)).toBeNull();
   });
