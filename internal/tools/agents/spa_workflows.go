@@ -17,6 +17,7 @@ import (
 	wfengine "github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
+	wfservice "github.com/yogasw/wick/internal/agents/workflow/service"
 	"github.com/yogasw/wick/internal/agents/workflow/setup"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/login"
@@ -372,10 +373,11 @@ func spaWorkflowSave(c *tool.Ctx) {
 			return
 		}
 	}
-	if a := actorID(c); a != "" {
-		w.CreatedBy = a
-	}
-	if err := globalWorkflowMgr.Service.SaveDraft(id, w); err != nil {
+	// The saver is passed as the editor, not stamped as owner: saving the
+	// canvas used to write the actor into created_by, so whoever saved
+	// last ended up owning the workflow. The owner stays the creator; the
+	// editor is who the pinned-session check judges.
+	if err := wfservice.SaveDraftAs(globalWorkflowMgr.Service, id, w, actorID(c)); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
