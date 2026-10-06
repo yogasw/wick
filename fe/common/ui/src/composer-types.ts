@@ -19,6 +19,20 @@ export type ComposerCommand = {
       duplicate the WHOLE menu rendered empty rather than merely showing the
       row twice. Callers should pass the server-side id (`skill:<folder>`). */
   key?: string;
+  /** `@` menu Team rows only: the agent's avatar spec, drawn by the
+      Composer's mentionAvatar snippet (unset spec → the avatar defaults). */
+  avatar?: { kind?: string; shape?: string; color?: string; expression?: string };
+};
+
+/** One agent the `@` menu offers. `group` picks its section: "team" is a
+    Team agent (shown with its avatar), "subagent" — the default, so older
+    callers keep working — a running sub-agent or a sub-agent role. */
+export type ComposerMentionAgent = {
+  handle: string;
+  label: string;
+  hint?: string;
+  group?: "team" | "subagent";
+  avatar?: { kind?: string; shape?: string; color?: string; expression?: string };
 };
 
 import type { ModelCaps } from "./capability-types.js";

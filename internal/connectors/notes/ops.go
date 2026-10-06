@@ -7,6 +7,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	notestore "github.com/yogasw/wick/internal/agents/notes"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/pkg/connector"
 )
 
@@ -23,9 +24,15 @@ func resolveScope(layout agentconfig.Layout, c *connector.Ctx) (notestore.Scope,
 		if err != nil {
 			return notestore.Scope{}, err
 		}
+		if err := team.CheckProjectTarget(c.Context(), layout, c.CallerUserID(), c.SessionID(), projectID); err != nil {
+			return notestore.Scope{}, err
+		}
 		return notestore.Scope{ProjectID: projectID, TicketID: tid}, nil
 	}
 	if sid := strings.TrimSpace(c.Input("session_id")); sid != "" {
+		if err := team.CheckSessionTarget(c.Context(), layout, c.CallerUserID(), c.SessionID(), sid); err != nil {
+			return notestore.Scope{}, err
+		}
 		return notestore.Resolve(layout, sid)
 	}
 	sid := c.SessionID()

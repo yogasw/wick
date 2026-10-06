@@ -102,6 +102,10 @@ type ScheduledMessage struct {
 	// Paused, when true on a recurring schedule, suspends firing without
 	// deleting the row. Resume clears it and recomputes RunAt.
 	Paused bool `gorm:"default:false"`
+	// HeldByAgent marks a pause wick made, not the user: the Team agent the
+	// schedule fires into was disabled. Enabling the agent resumes exactly
+	// these rows, so a schedule the user paused by hand stays paused.
+	HeldByAgent bool `gorm:"default:false"`
 	// MaxRuns > 0 caps the number of fires for a recurring schedule; after
 	// the RunCount reaches it the schedule finishes (status=done). 0 = no cap.
 	MaxRuns int `gorm:"default:0"`

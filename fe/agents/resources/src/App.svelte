@@ -9,7 +9,7 @@
   import TopTable from "$lib/TopTable.svelte";
   import ProcessExplorer from "$lib/ProcessExplorer.svelte";
   import WrapperPanel from "$lib/WrapperPanel.svelte";
-  import { humanBytes, humanBps, humanPct, humanDuration, clockTime, pctOf } from "$lib/format.js";
+  import { humanBytes, humanBps, humanPct, humanDuration, clockTime, pctOf, machineShare, guardKindLabel, quotaShare, cpuShare, coresLabel, humanCores } from "$lib/format.js";
   import Gauge from "$lib/components/Gauge.svelte";
   import type { MemoryReport, SeriesResponse } from "$lib/types.js";
 
@@ -17,6 +17,8 @@
 
   let report = $state<MemoryReport | null>(null);
   let series = $state<SeriesResponse | null>(null);
+  // CPU ceiling for cpuShare; 0 = unknown.
+  const cores = $derived(report?.cpu_cores ?? 0);
   let loadError = $state("");
   let applying = $state(false);
   let windowMinutes = $state(30);
@@ -70,7 +72,7 @@
 
   // Machine-wide series, split per metric for the charts.
   const machineMem = $derived(series?.machine.map((m) => m.agent_bytes) ?? []);
-  const machineCPU = $derived(series?.machine.map((m) => m.agent_cpu_pct) ?? []);
+  const machineCPU = $derived(series?.machine.map((m) => cpuShare(m.agent_cpu_pct, cores)) ?? []);
   const machineProcs = $derived(series?.machine.map((m) => m.agent_procs) ?? []);
   // Parallel to the series above, so the hover readout can name the moment
   // a spike happened rather than just its height.
@@ -80,7 +82,7 @@
   // running — which is exactly when someone is asking why the box is
   // slow — so these are recorded and drawn alongside them.
   const boxMem = $derived(series?.machine.map((m) => m.machine_used_bytes) ?? []);
-  const boxCPU = $derived(series?.machine.map((m) => m.machine_cpu_pct) ?? []);
+  const boxCPU = $derived(series?.machine.map((m) => cpuShare(m.machine_cpu_pct, cores)) ?? []);
   const boxProcs = $derived(series?.machine.map((m) => m.machine_procs) ?? []);
   // Any agent activity in the window at all? Used to decide whether the
   // agent chart is worth the vertical space on a machine that has none.
@@ -88,11 +90,10 @@
     (series?.machine ?? []).some((m) => m.agent_procs > 0 || m.agent_bytes > 0),
   );
 
-  // CPU is percent of ONE core, so a busy 16-core box legitimately reads
-  // 444%. Naming the ceiling in the label stops that looking like a bug.
-  const cpuLabel = $derived(
-    (report?.cpu_cores ?? 0) > 1 ? `CPU · max ${report!.cpu_cores * 100}%` : "CPU",
-  );
+  // CPU arrives in per-core units (top's 200% on two cores); every CPU
+  // figure on this page is drawn as a share of ALL cores instead, so 100%
+  // means the machine is out of CPU. The label names the core count.
+  const cpuLabel = $derived(coresLabel(cores));
   // Same shape for memory: state the ceiling so the plotted figure has a
   // stated denominator rather than an assumed one.
   const memLabel = $derived(
@@ -182,7 +183,7 @@
     const out = new Map<number, number[]>();
     for (const s of series?.agents ?? []) {
       const cur = out.get(s.pid) ?? [];
-      cur.push(s.cpu_pct);
+      cur.push(cpuShare(s.cpu_pct, cores));
       out.set(s.pid, cur);
     }
     return out;
@@ -264,7 +265,7 @@
     <!-- Degrading silently is how an operator ends up believing they are
          protected when nothing is enforcing anything. -->
     <div
-      class="rounded-xl border border-yellow-300 bg-yellow-50 p-4 text-sm text-yellow-800 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-300"
+      class="rounded-xl border border-yellow-300 bg-yellow-100 p-4 text-sm text-yellow-800 dark:border-yellow-800 dark:bg-yellow-500/15 dark:text-yellow-300"
     >
       {report.notice}
     </div>
@@ -315,9 +316,54 @@
               <span class="text-black-700 dark:text-black-600">→</span>
               <span class="font-semibold">{row.next} MB</span>
             </p>
+            {#if machineShare(row.next, report.total_bytes ?? 0)}
+              <p class="mt-0.5 text-[11px] text-black-600 dark:text-black-700">
+                {row.now ? `${machineShare(row.now, report.total_bytes ?? 0)} → ` : ""}{machineShare(row.next, report.total_bytes ?? 0)}
+              </p>
+            {/if}
           </div>
         {/each}
       </div>
+    </div>
+  {/if}
+
+  <!-- Resource Guard: what the fast watchdog did, newest first -->
+  {#if report?.guard}
+    {@const guardEvents = [...(report.guard.events ?? [])].reverse().slice(0, 10)}
+    <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Resource Guard</h2>
+          <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+            {report.mode === "enforce"
+              ? `Watching CPU and memory every ${report.guard.interval_ms || 1000} ms · action: ${report.guard.action}`
+              : report.mode === "measure"
+                ? "Measure mode: records what it would stop, stops nothing."
+                : "Off. Switch the mode to 'measure' or 'enforce'."}
+          </p>
+          <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+            Safe line {report.guard.safe_pct || 80}% CPU and memory · agent CPU quota {quotaShare(report.guard.cpu_quota_pct)}
+          </p>
+        </div>
+        {#if report.guard.hold_spawns}
+          <span class="rounded-lg bg-yellow-100 px-2 py-1 text-xs font-medium text-yellow-800 dark:bg-yellow-500/15 dark:text-yellow-100">
+            New agents held — memory falling
+          </span>
+        {/if}
+      </div>
+      {#if guardEvents.length === 0}
+        <p class="mt-3 text-xs text-black-700 dark:text-black-600">No actions taken since wick started.</p>
+      {:else}
+        <ul class="mt-3 divide-y divide-white-300">
+          {#each guardEvents as ev, i (ev.at + i)}
+            <li class="py-2 text-xs">
+              <span class="tabular-nums text-black-700 dark:text-black-600">{clockTime(ev.at)}</span>
+              <span class="ml-2 font-semibold text-black-900 dark:text-white-100">{guardKindLabel(ev.kind)}</span>
+              <span class="ml-2 text-black-800 dark:text-white-100">{ev.detail}</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </div>
   {/if}
 
@@ -449,8 +495,8 @@
                   />
                 </td>
                 <td class="px-5 py-3">
-                  <div class="tabular-nums text-black-900 dark:text-white-100">
-                    {humanPct(a.cpu_pct)}
+                  <div class="tabular-nums text-black-900 dark:text-white-100" title={humanCores(a.cpu_pct)}>
+                    {humanPct(cpuShare(a.cpu_pct, cores))}
                   </div>
                   {#if (perAgentCPU.get(a.pid)?.length ?? 0) > 1}
                     <div class="w-24">
@@ -663,6 +709,7 @@
           label={cpuLabel}
           color="#f59e0b"
           format={(v) => `${v.toFixed(0)}%`}
+          max={100}
         />
         <Sparkline
           points={boxProcs}
@@ -693,9 +740,10 @@
         <Sparkline
           points={machineCPU}
           times={machineTimes}
-          label="CPU"
+          label={cpuLabel}
           color="#f59e0b"
           format={(v) => `${v.toFixed(0)}%`}
+          max={100}
         />
         <Sparkline
           points={machineProcs}
@@ -740,6 +788,7 @@
           rows={report.top.by_cpu}
           metric="cpu"
           barColor="#f59e0b"
+          cores={cores}
           emptyText="no CPU activity yet — rates need a second sample"
         />
         <TopTable

@@ -3,6 +3,7 @@ package pool
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -89,6 +90,10 @@ type ClaudeFactory struct {
 	// config value. 0 = no cap.
 	TraceEventMaxKBLoader func() int
 
+	// TraceBlobMaxMBLoader (optional) returns the current trace_blob_max_mb
+	// config value. 0 = store default (10 MB).
+	TraceBlobMaxMBLoader func() int
+
 	// TraceInlineKBLoader (optional) returns the current trace_event_inline_kb
 	// config value. Called on every Build so operators can change the threshold
 	// without restarting the server. 0 or negative = use DefaultTraceInlineBytes.
@@ -113,6 +118,37 @@ type ClaudeFactory struct {
 	// (no ticket, no notes) and nothing is appended.
 	TicketPointerLoader func(sessionID string) string
 
+	// TeamPromptLoader (optional) returns the Team part of the prompt for
+	// sessionID: the Team overlay plus "Who you are" for a Team agent's
+	// own session, one line for a sub-agent working under one, "" for an
+	// ordinary session. Spliced right after the immutable rules, before
+	// any persona, so a persona cannot talk over it.
+	TeamPromptLoader func(sessionID string, subAgent bool) string
+
+	// TeamSpawnLoader (optional) returns the spawn parts of a Team
+	// agent's OWN session (see TeamSpawn); false for any other session,
+	// a sub-agent under a Team session included. When it answers true the
+	// prompt is assembled in the Team order (see composePrompt) and
+	// TeamPromptLoader is not consulted.
+	TeamSpawnLoader func(sessionID string) (TeamSpawn, bool)
+
+	// RemoteSpawnerLoader (optional) returns the spawner of a session that
+	// talks to an A2A remote agent (package a2aremote): no process, each
+	// turn is a call to the remote. false for any other session. It wins
+	// over the provider type, so such a session never starts a local CLI.
+	RemoteSpawnerLoader func(sessionID string) (provider.Spawner, bool)
+
+	// TeamLimitsLoader (optional) returns the native-tool and Bash limits
+	// of the Team agent sessionID works for — its own session or any
+	// sub-agent under it, so a delegated child is held to the same limits
+	// (see TeamLimits); false outside the Team.
+	TeamLimitsLoader func(sessionID string) (TeamLimits, bool)
+
+	// TeamSystemPromptLoader (optional) returns the `system_prompt_team`
+	// config row: the operator prompt of Team agent sessions, in place of
+	// SystemPromptLoader. Empty = no operator prompt at all.
+	TeamSystemPromptLoader func() string
+
 	// SpawnLogger (optional) writes one jsonl per spawn under
 	// `<base>/backends/spawns/`. Each spawn emits `start` on Build +
 	// `exit` from the OnExit hook so the Backends UI can list spawn
@@ -135,7 +171,13 @@ type ClaudeFactory struct {
 	// Returning ok=false means "no real owner" and the caller falls back to
 	// MCPToken — an ownerless session must keep working rather than lose
 	// MCP entirely. nil = per-user identity disabled (fallback for all).
-	SessionMCPToken func(sessionID, callerUserID string) (token string, ok bool)
+	//
+	// identity is the wick user the token was minted for. The pool only
+	// knows the caller of the message that woke the spawn, which is empty
+	// whenever no human did (a delegation result, a schedule fire) even
+	// though the minter then picked the owner — so the minter, the one place
+	// that decides, reports it back.
+	SessionMCPToken func(sessionID, callerUserID string) (token, identity string, ok bool)
 
 	// InstanceOverride pins a specific Instance for every Build call,
 	// bypassing the provider.Find registry lookup. Tests use this to
@@ -193,6 +235,12 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			traceEventMaxBytes = kb * 1024
 		}
 	}
+	traceBlobMaxBytes := 0
+	if f.TraceBlobMaxMBLoader != nil {
+		if mb := f.TraceBlobMaxMBLoader(); mb > 0 {
+			traceBlobMaxBytes = mb << 20
+		}
+	}
 	sto := store.New(store.Options{
 		Layout:             f.Layout,
 		SessionID:          opt.SessionID,
@@ -201,68 +249,15 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		RecordRaw:          f.RecordRaw,
 		TraceInlineBytes:   traceInlineBytes,
 		TraceEventMaxBytes: traceEventMaxBytes,
+		TraceBlobMaxBytes:  traceBlobMaxBytes,
 	})
 
-	// Layered system prompt (top wins on conflict):
-	//   1. immutable wick rules (e.g. ban AskUserQuestion) — set in code
-	//   2. preset body (per-preset persona)
-	//   3. operator-edited `system_prompt` config row
-	// Layer 1 must lead so its guards override anything the preset /
-	// config below tries to relax.
 	// Normalize provider type early so immutable prompt selection is correct.
 	pTypeStrEarly := opt.ProviderType
 	if pTypeStrEarly == "" {
 		pTypeStrEarly = string(provider.TypeClaude)
 	}
-	// Audience — a sub-agent spawn gets the delegated-child overlay
-	// (report_result, no ask_user) instead of the human-facing one
-	// (render formats, session title, scheduling). Decided by the
-	// session's parentage, which the pool read off meta; a role or
-	// preset cannot override it.
-	immutable := systemprompt.ImmutableFor(pTypeStrEarly, opt.IsSubAgent)
-	presetContent := immutable
-	if f.ConnectorCatalogLoader != nil {
-		if catalog := strings.TrimSpace(f.ConnectorCatalogLoader()); catalog != "" {
-			presetContent += "\n\n" + catalog
-		}
-	}
-	if opt.PresetName != "" {
-		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil && strings.TrimSpace(p.Body) != "" {
-			presetContent += "\n\n" + p.Body
-		}
-	}
-	// Per-session free-text addon, after the named preset so it can
-	// refine it. This is how a sub-agent role's system prompt reaches its
-	// spawn — a role is not a named preset and must not pollute the
-	// shared preset list.
-	if addon := strings.TrimSpace(opt.SystemAddon); addon != "" {
-		presetContent += "\n\n" + addon
-	}
-	if f.SystemPromptLoader != nil {
-		if extra := strings.TrimSpace(f.SystemPromptLoader()); extra != "" {
-			presetContent += "\n\n" + extra
-		}
-	}
-	// Per-session identity block, appended last so it is the "This
-	// session" block at the very end of the assembled prompt (the
-	// immutable rules reference it by that name). The agent needs the
-	// session_id for wick_session_info / wick_set_title / ask_user, and
-	// having it in the system prompt means it is always available — not
-	// only on the first turn where channels inject a one-time context
-	// message.
-	presetContent += "\n\n" + sessionIdentityBlock(opt.SessionID, opt.Origin, opt.Title, opt.TitleCustom,
-		f.activeRepoLine(opt.SessionID, opt.Workspace))
-
-	// Ticket / notes pointer — a COUNT and an id, never the note bodies.
-	// A ticket accumulates notes for as long as the work lasts, so
-	// inlining them would charge that growing cost on every turn forever;
-	// the agent reads what it needs through the notes connector instead.
-	// Fixed size, and omitted entirely when there is nothing to point at.
-	if f.TicketPointerLoader != nil {
-		if line := strings.TrimSpace(f.TicketPointerLoader(opt.SessionID)); line != "" {
-			presetContent += "\n\n" + line
-		}
-	}
+	presetContent := f.composePrompt(opt, pTypeStrEarly)
 
 	bypassPerms := false
 	if f.PermissionModeLoader != nil {
@@ -302,7 +297,16 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	// spawn, reported via BuildResult so the pool can revoke it on exit.
 	// Empty when the spawn used the shared per-boot token (not revocable).
 	var claudeMCPToken string
+	// runAsUserID is the identity the minted credential authenticates as,
+	// reported via BuildResult for display. Empty for the shared token and
+	// for providers that get no MCP credential at all.
+	var runAsUserID string
 	spawner := f.Spawner
+	if spawner == nil && f.RemoteSpawnerLoader != nil {
+		if rs, ok := f.RemoteSpawnerLoader(opt.SessionID); ok {
+			spawner = rs
+		}
+	}
 	if spawner == nil {
 		bin, src := resolveProviderBinary(opt.ProviderType, opt.ProviderName)
 		log.Info().
@@ -317,7 +321,8 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			// Same per-session credential claude gets, so a codex spawn also
 			// reaches wick's tools as the human behind the session rather than
 			// having no wick surface at all.
-			tok := f.mcpTokenFor(opt.SessionID, opt.CallerUserID)
+			tok, identity := f.mcpCredentialFor(opt.SessionID, opt.CallerUserID)
+			runAsUserID = identity
 			if tok != f.MCPToken {
 				// Per-session credential: revocable when the process dies. The
 				// shared per-boot token is not, so it stays unreported.
@@ -330,7 +335,8 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			// Same per-session MCP credential codex gets. Both run with
 			// approvals off unconditionally: there is no gate hook for
 			// them, and a headless run cannot answer a prompt.
-			tok := f.mcpTokenFor(opt.SessionID, opt.CallerUserID)
+			tok, identity := f.mcpCredentialFor(opt.SessionID, opt.CallerUserID)
+			runAsUserID = identity
 			if pType == provider.TypeOMP {
 				// omp revokes its own per-session token: in server mode it
 				// lives as long as the session's RPC process, not one turn
@@ -350,7 +356,8 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		default:
 			// Mint ONCE: calling mcpTokenFor twice would issue two tokens
 			// and leak the one not handed to the spawner.
-			tok := f.mcpTokenFor(opt.SessionID, opt.CallerUserID)
+			tok, identity := f.mcpCredentialFor(opt.SessionID, opt.CallerUserID)
+			runAsUserID = identity
 			if tok != f.MCPToken {
 				// Per-session credential: revocable when the process dies.
 				// The shared per-boot token is not, so it stays unreported.
@@ -461,6 +468,43 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 
 	insCopy := resolvedIns
 
+	// A Team agent's native tools and Bash rules (claude only — the other
+	// providers take no tool deny list; the UI says they are not enforced).
+	extraArgs := resolvedIns.ExtraArgs
+	spawnGateBin := gateBin
+	var skipSkills []string
+	if f.TeamLimitsLoader != nil {
+		if lim, ok := f.TeamLimitsLoader(opt.SessionID); ok {
+			skipSkills = lim.DisabledSkills
+		}
+	}
+	if f.TeamLimitsLoader != nil && pType == provider.TypeClaude {
+		if lim, ok := f.TeamLimitsLoader(opt.SessionID); ok {
+			gateOn := gateBin != "" && !bypassPerms && opt.Workspace != "" &&
+				resolvedIns.HookEnabled(provider.HookEventPreToolUse)
+			var specPath string
+			if gateOn {
+				specPath = gate.AgentSpecPath(gateAppName(activeGate), lim.AgentID)
+			}
+			args, hookBin := teamLimitArgs(lim, gateBin, gateOn, specPath)
+			if specPath != "" && lim.BashAllowed {
+				if err := gate.WriteAgentSpec(specPath, gate.AgentSpec{
+					AgentID: lim.AgentID, Rules: lim.BashRules, DefaultScope: lim.DefaultScope,
+				}); err != nil {
+					// No spec, no Bash: the hook would block every command
+					// anyway, so say so at spawn instead.
+					log.Warn().Err(err).Str("session", opt.SessionID).Msg("agents.spawn: agent gate spec write failed — Bash off")
+					args, hookBin = teamLimitArgs(lim, gateBin, false, "")
+				}
+			}
+			if !gateOn && lim.BashAllowed {
+				log.Warn().Str("session", opt.SessionID).Msg("agents.spawn: gate hook inactive — Bash off for this Team agent")
+			}
+			extraArgs = append(slices.Clone(extraArgs), args...)
+			spawnGateBin = hookBin
+		}
+	}
+
 	// Memory guard, resolved per instance: the global ceiling is the
 	// default, and an instance may set its own — higher OR lower. See
 	// config.ResolveAgentLimitMB for why this is not a min().
@@ -506,7 +550,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			writeStartEvent(pid, binary, argv, env, firstMsg)
 		},
 		Instance:   &insCopy,
-		GateBinary: gateBin,
+		GateBinary: spawnGateBin,
 		Preset:     presetContent,
 		// Only the wick provider reads this (it rebuilds prompts from
 		// conversation.jsonl); the CLI providers resume from their own
@@ -529,15 +573,16 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			}
 			return f.ToolMemoryLoader()
 		}(),
-		ExtraArgs: resolvedIns.ExtraArgs,
-		ExtraEnv:  resolvedIns.Env,
+		ExtraArgs:  extraArgs,
+		SkipSkills: skipSkills,
+		ExtraEnv:   resolvedIns.Env,
 		// claude = persistent stdin (append); codex = one-shot per turn,
 		// queue mid-turn sends so spam doesn't stack subprocesses. A
 		// per-instance override (providers UI) takes precedence over the
 		// type default.
 		SendMode: sendModeFor(pType, resolvedIns.SendMode),
 	})
-	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted, MCPToken: claudeMCPToken}, nil
+	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted, MCPToken: claudeMCPToken, RunAsUserID: runAsUserID}, nil
 }
 
 // sendModeFor resolves an instance's Send behaviour. A non-empty
@@ -649,12 +694,20 @@ func sessionIdentityBlock(sessionID, channel, title string, titleCustom bool, ac
 // human at all; refusing to spawn them, or spawning them with no MCP access,
 // would break working setups to enforce an attribution nobody asked for.
 func (f *ClaudeFactory) mcpTokenFor(sessionID, callerUserID string) string {
+	tok, _ := f.mcpCredentialFor(sessionID, callerUserID)
+	return tok
+}
+
+// mcpCredentialFor is mcpTokenFor plus the identity the token was minted
+// for. identity is "" on the shared-token fallback: that token belongs to
+// no human, and naming one would be a guess.
+func (f *ClaudeFactory) mcpCredentialFor(sessionID, callerUserID string) (token, identity string) {
 	if f.SessionMCPToken != nil && sessionID != "" {
-		if tok, ok := f.SessionMCPToken(sessionID, callerUserID); ok && tok != "" {
-			return tok
+		if tok, id, ok := f.SessionMCPToken(sessionID, callerUserID); ok && tok != "" {
+			return tok, id
 		}
 	}
-	return f.MCPToken
+	return f.MCPToken, ""
 }
 
 func sendModeFor(pType provider.Type, override string) provider.SendMode {
@@ -786,4 +839,204 @@ func envValue(env []string, key string) string {
 		}
 	}
 	return out
+}
+
+// TeamLimits holds a Team agent's spawns to its native-tool switches and
+// Bash allow-list. Defined here so the pool does not import the team
+// package; server.go adapts team.Limits.
+type TeamLimits struct {
+	AgentID string
+	// DisallowedTools is the claude --disallowedTools list for the
+	// switches that are off (Bash included when it is off).
+	DisallowedTools []string
+	// BashAllowed is the Bash switch. It only holds while the gate hook
+	// is installed: without it Bash would run every command unasked, so
+	// the spawn turns it off instead.
+	BashAllowed bool
+	// BashRules run without asking; anything else goes to the approval
+	// prompt. Empty = every command asks.
+	BashRules    []gate.CommandRule
+	DefaultScope string
+	// DisabledSkills are left out of the built-in skill catalog (every
+	// provider) and denied as Skill(<name>) on claude, which is how a
+	// local or global skill — discovered by the CLI itself — is kept out.
+	DisabledSkills []string
+}
+
+// bashTools are the claude tools behind the Bash switch.
+var bashTools = []string{"Bash", "BashOutput", "KillShell"}
+
+// teamLimitArgs is the extra claude argv and hook command for lim. With
+// gateOn the hook runs the gate against the agent's spec at specPath;
+// without it Bash is disallowed outright.
+func teamLimitArgs(lim TeamLimits, gateBin string, gateOn bool, specPath string) (args []string, hookBin string) {
+	deny := slices.Clone(lim.DisallowedTools)
+	hookBin = gateBin
+	if lim.BashAllowed && gateOn {
+		hookBin = gate.HookCommand(gateBin, specPath)
+	} else {
+		for _, t := range bashTools {
+			if !slices.Contains(deny, t) {
+				deny = append(deny, t)
+			}
+		}
+	}
+	for _, sk := range lim.DisabledSkills {
+		deny = append(deny, "Skill("+sk+")")
+	}
+	if len(deny) > 0 {
+		args = []string{"--disallowedTools", strings.Join(deny, ",")}
+	}
+	return args, hookBin
+}
+
+// gateAppName is the app name a gate config writes its files under.
+func gateAppName(cfg *GateConfig) string {
+	if cfg == nil || cfg.AppName == "" {
+		return "wick"
+	}
+	return cfg.AppName
+}
+
+// TeamSpawn is what a Team agent's own session adds to its prompt beyond
+// the persona. Defined here rather than taken from the team package so
+// the pool does not depend on it; server.go adapts team.SpawnPrompt.
+type TeamSpawn struct {
+	// Prompt is the Team overlay plus the "Who you are" block.
+	Prompt string
+	// Access is the "Your access" block.
+	Access string
+	// Subagents and Schedule keep the matching gated sections of the
+	// immutable main overlay (see systemprompt.TeamGates).
+	Subagents bool
+	Schedule  bool
+	// Files keeps the HTML render formats (systemprompt.TeamGates.Files).
+	Files bool
+	// UseGlobalPrompt swaps system_prompt_team for the global
+	// system_prompt (an agent converted from a project keeps its rules).
+	UseGlobalPrompt bool
+	// TeamInstructions is the owner's Team prompt, for every agent in
+	// their Team; "" = no "## Team instructions" section.
+	TeamInstructions string
+}
+
+// composePrompt assembles the system prompt of one spawn. Layered, top
+// wins on conflict:
+//
+//  1. immutable wick rules (e.g. ban AskUserQuestion) — set in code
+//  2. Team overlay + "Who you are" (Team sessions)
+//  3. connector catalog
+//  4. preset body (per-preset persona)
+//  5. the session's addon (project default + its own) and the
+//     operator-edited `system_prompt` config row
+//  6. the "This session" block and the ticket pointer
+//
+// Layer 1 must lead so its guards override anything the preset /
+// config below tries to relax.
+//
+// A Team agent's own session is assembled differently: immutable (with
+// its gated sections cut to the agent's access) → Team overlay + "Who
+// you are" → "Your access" → catalog → preset → `system_prompt_team` →
+// "## Team instructions" (the owner's Team settings, skipped when empty)
+// → "## Your persona" → session block. The operator prompt moves BEFORE
+// the persona so it no longer talks over it, and the persona is the last
+// word before the session block.
+func (f *ClaudeFactory) composePrompt(opt FactoryOptions, providerType string) string {
+	var ts TeamSpawn
+	isTeam := false
+	if f.TeamSpawnLoader != nil && !opt.IsSubAgent {
+		ts, isTeam = f.TeamSpawnLoader(opt.SessionID)
+	}
+	var b strings.Builder
+	// addRaw keeps s as given (the preset body and the session block
+	// always were); add trims it first. Both skip a blank s.
+	addRaw := func(s string) {
+		if strings.TrimSpace(s) == "" {
+			return
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(s)
+	}
+	add := func(s string) { addRaw(strings.TrimSpace(s)) }
+	if isTeam {
+		add(systemprompt.ImmutableForTeam(providerType, systemprompt.TeamGates{
+			Subagents: ts.Subagents,
+			Schedule:  ts.Schedule,
+			Files:     ts.Files,
+		}))
+		add(ts.Prompt)
+		add(ts.Access)
+	} else {
+		// Audience — a sub-agent spawn gets the delegated-child overlay
+		// (report_result, no ask_user) instead of the human-facing one
+		// (render formats, session title, scheduling). Decided by the
+		// session's parentage, which the pool read off meta; a role or
+		// preset cannot override it.
+		addRaw(systemprompt.ImmutableFor(providerType, opt.IsSubAgent))
+		if f.TeamPromptLoader != nil {
+			add(f.TeamPromptLoader(opt.SessionID, opt.IsSubAgent))
+		}
+	}
+	if f.ConnectorCatalogLoader != nil {
+		add(f.ConnectorCatalogLoader())
+	}
+	if opt.PresetName != "" {
+		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil {
+			addRaw(p.Body)
+		}
+	}
+	if isTeam {
+		// Team sessions never fall back to `system_prompt`: that row holds
+		// the operator's rules for the default support agent (session
+		// titles, Slack identity, file policy), which is exactly what made
+		// a Team agent behave like that agent instead of its persona.
+		// Empty `system_prompt_team` means no operator prompt at all.
+		// An agent converted from a project opts back in to
+		// `system_prompt`, where its channels' rules live.
+		if ts.UseGlobalPrompt {
+			if f.SystemPromptLoader != nil {
+				add(f.SystemPromptLoader())
+			}
+		} else if f.TeamSystemPromptLoader != nil {
+			add(f.TeamSystemPromptLoader())
+		}
+		// The owner's own words for all their agents: after the operator
+		// prompt they cannot edit, before the one agent's persona.
+		if ti := strings.TrimSpace(ts.TeamInstructions); ti != "" {
+			add("## Team instructions\n\n" + ti)
+		}
+		if addon := strings.TrimSpace(opt.SystemAddon); addon != "" {
+			add("## Your persona\n\n" + addon)
+		}
+	} else {
+		// Per-session free-text addon, after the named preset so it can
+		// refine it. This is how a sub-agent role's system prompt reaches
+		// its spawn — a role is not a named preset and must not pollute
+		// the shared preset list.
+		add(opt.SystemAddon)
+		if f.SystemPromptLoader != nil {
+			add(f.SystemPromptLoader())
+		}
+	}
+	// Per-session identity block, appended last so it is the "This
+	// session" block at the very end of the assembled prompt (the
+	// immutable rules reference it by that name). The agent needs the
+	// session_id for wick_session_info / wick_set_title / ask_user, and
+	// having it in the system prompt means it is always available — not
+	// only on the first turn where channels inject a one-time context
+	// message.
+	addRaw(sessionIdentityBlock(opt.SessionID, opt.Origin, opt.Title, opt.TitleCustom,
+		f.activeRepoLine(opt.SessionID, opt.Workspace)))
+
+	// Ticket / notes pointer — a COUNT and an id, never the note bodies.
+	// A ticket accumulates notes for as long as the work lasts, so
+	// inlining them would charge that growing cost on every turn forever;
+	// the agent reads what it needs through the notes connector instead.
+	// Fixed size, and omitted entirely when there is nothing to point at.
+	if f.TicketPointerLoader != nil {
+		add(f.TicketPointerLoader(opt.SessionID))
+	}
+	return b.String()
 }

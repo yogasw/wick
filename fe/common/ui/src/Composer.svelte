@@ -9,13 +9,15 @@
        - mentionFiles/onSearchFiles: `@` file search (omit → `@` inert)
        - commands: `/` command menu (omit → `/` inert)
        - submitLabel: text beside the send arrow (omit → icon only) */
+  import type { Snippet } from "svelte";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import ImageEditor from "./ImageEditor.svelte";
   import CapabilityChips from "./CapabilityChips.svelte";
   import CapabilityModal from "./CapabilityModal.svelte";
   import ProviderIcon from "./ProviderIcon.svelte";
   import { modelListMeta, describeModelListMeta, type ModelListMeta } from "./model-list-meta.js";
-  import type { ComposerCommand, ComposerSelect, ComposerSelectOption, ComposerModelOption } from "./composer-types.js";
+  import type { ComposerCommand, ComposerSelect, ComposerSelectOption, ComposerModelOption, ComposerMentionAgent } from "./composer-types.js";
+  import { agentMentionRows, fileMentionRows } from "./mention-menu.js";
   import { matchModelFilter } from "./modelFilter.js";
 
   type Props = {
@@ -33,6 +35,10 @@
     /** localStorage key for the notification-bell preference; omit to hide the bell. */
     notifyKey?: string;
     provider?: ComposerSelect;
+    /** A provider shown but not pickable here: the chip draws its icon and
+        a click calls onClick instead of opening the picker. Used when
+        `provider` is omitted. */
+    providerChip?: { value: string; title: string; onClick: () => void };
     project?: ComposerSelect;
     preset?: ComposerSelect;
     /** `@` mention: client-side fallback list used only when onSearchFiles is absent. */
@@ -42,7 +48,10 @@
     /** `@` mention: agents reachable from this conversation. Listed above
         files, because naming an agent asks for work while naming a file
         only supplies context — the more consequential pick goes first. */
-    mentionAgents?: { handle: string; label: string; hint?: string }[];
+    mentionAgents?: ComposerMentionAgent[];
+    /** Draws a Team row's avatar in the `@` menu. A snippet rather than an
+        import so common-ui stays free of the avatar package. */
+    mentionAvatar?: Snippet<[{ shape?: string; color?: string }]>;
     /** `/` command menu entries (built-in actions + skills). */
     commands?: ComposerCommand[];
     /** Context-window meter shown as a ring next to the provider chip.
@@ -50,6 +59,19 @@
         window to report, and an empty ring reads as "0% used" rather
         than "not measured yet". */
     contextMeter?: ContextMeter;
+    /** One short line about this chat (an agent's connector count), shown
+        in the toolbar beside the context meter rather than on a row of
+        its own under the composer. */
+    caption?: string;
+    /** A turn is running: with onStop set and the box empty, the Send
+        button becomes Stop. With a draft it stays Send (Enter or a click
+        queues it behind the turn) and holding it offers Send / Stop. */
+    running?: boolean;
+    /** The agent is waiting for a pool slot: the action button reads
+        "Cancel" and drops the queued spawn instead. */
+    queued?: boolean;
+    /** Stop the running turn / cancel the queued spawn. Omit → no button. */
+    onStop?: () => void;
   };
 
   /** ContextMeter is the composer's view of the model's context window.
@@ -73,13 +95,19 @@
     requireContent = true,
     notifyKey,
     provider,
+    providerChip,
     project,
     preset,
     mentionFiles = [],
     onSearchFiles,
     mentionAgents = [],
+    mentionAvatar,
     contextMeter,
+    caption,
     commands = [],
+    running = false,
+    queued = false,
+    onStop,
   }: Props = $props();
 
   let text = $state("");
@@ -196,29 +224,21 @@
         : commands;
       return matches.slice(0, 50);
     }
-    // Agents first, then files. A handle is a short exact token, so a
-    // plain substring match is enough — and matching on the description
-    // too would surface an agent for a query aimed at a file path.
-    const aq = menuQuery.toLowerCase();
-    const agentRows: MenuItem[] = mentionAgents
-      .filter((a) => !aq || a.handle.toLowerCase().includes(aq))
-      .map((a) => ({
-        value: a.handle,
-        label: a.label,
-        category: a.hint ? `agent · ${a.hint}` : "agent",
-      }));
+    // Team, then Sub-agents, then Files — see mention-menu.ts.
+    const agentRows = agentMentionRows(mentionAgents, menuQuery);
+    const titled = mentionAgents.length > 0;
 
     if (onSearchFiles) {
-      return [...agentRows, ...fileResults.map((p) => ({ value: p, label: p }))].slice(0, 50);
+      return [...agentRows, ...fileMentionRows(fileResults, titled)].slice(0, 50);
     }
     const terms = menuQuery.toLowerCase().split(/\s+/).filter(Boolean);
-    const scored: { item: MenuItem; score: number }[] = [];
+    const scored: { path: string; score: number }[] = [];
     for (const p of mentionFiles) {
       const s = scoreFile(p, terms);
-      if (s !== null) scored.push({ item: { value: p, label: p }, score: s });
+      if (s !== null) scored.push({ path: p, score: s });
     }
     scored.sort((a, b) => a.score - b.score);
-    return [...agentRows, ...scored.map((s) => s.item)].slice(0, 50);
+    return [...agentRows, ...fileMentionRows(scored.map((s) => s.path), titled)].slice(0, 50);
   });
 
   $effect(() => {
@@ -256,7 +276,10 @@
     // so a command/mention can be inserted mid-message, not just as a prefix.
     const slash = /(?:^|\s)\/(\S*)$/.exec(before);
     if (slash) return { kind: "/", query: slash[1], pos: before.length - slash[1].length - 1 };
-    const at = /(?:^|\s)@(\S[^\n]*|)$/.exec(before);
+    // A mention may span spaces ("src main"), but a fresh whitespace-led `@`
+    // starts a new token — so the query never crosses ` @`, and the match is
+    // always the LAST mention on the line, not the first.
+    const at = /(?:^|\s)@((?:\S(?:(?!\s@)[^\n])*)?)$/.exec(before);
     if (at) return { kind: "@", query: at[1], pos: before.length - at[1].length - 1 };
     return null;
   }
@@ -447,6 +470,112 @@
     closeMenu();
     if (textareaEl) textareaEl.style.height = `${minHeightPx}px`;
   }
+
+  /* ── Send or Stop while a turn runs ──────────────────────────────────
+     An empty box while the agent works means the only thing to do is stop
+     it, so the action slot reads Stop. Once something is typed the slot
+     reads Send again — the draft is what the reader is about to act on —
+     and Stop moves behind a hold (long-press, mouse hold, right-click) or,
+     from the keyboard, ArrowUp / the context-menu key on the focused
+     button. The hold opens a small menu instead of acting directly so a
+     press that ran long never stops a turn by accident. */
+  const hasDraft = $derived(text.trim().length > 0 || files.length > 0);
+  const holdable = $derived(!!onStop && running && !queued);
+  const HOLD_MS = 500;
+  let holdOpen = $state(false);
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  // Set when a hold opened the menu, so the click the release produces
+  // does not also send.
+  let holdFired = false;
+  let holdMenuEl: HTMLDivElement | undefined = $state();
+
+  function holdStart(e: PointerEvent) {
+    if (!holdable || e.button > 0) return;
+    holdFired = false;
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => {
+      holdFired = true;
+      holdOpen = true;
+    }, HOLD_MS);
+  }
+
+  function holdCancel() {
+    clearTimeout(holdTimer);
+    holdTimer = undefined;
+  }
+
+  function sendClick() {
+    if (holdFired) {
+      holdFired = false;
+      return;
+    }
+    doSend();
+  }
+
+  function openHoldMenu(focusFirst: boolean) {
+    holdCancel();
+    holdOpen = true;
+    if (focusFirst) {
+      requestAnimationFrame(() => holdMenuEl?.querySelector<HTMLButtonElement>("[role=menuitem]")?.focus());
+    }
+  }
+
+  function sendContextMenu(e: MouseEvent) {
+    if (!holdable) return;
+    // Mobile browsers raise contextmenu on a long-press too; the menu is
+    // the answer to both, and the native one would cover it.
+    e.preventDefault();
+    holdFired = true;
+    openHoldMenu(false);
+  }
+
+  function sendKeyDown(e: KeyboardEvent) {
+    if (!holdable) return;
+    if (e.key === "ArrowUp" || e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
+      e.preventDefault();
+      openHoldMenu(true);
+    }
+  }
+
+  function closeHoldMenu() {
+    holdOpen = false;
+    holdFired = false;
+  }
+
+  function holdPick(action: "send" | "stop") {
+    closeHoldMenu();
+    if (action === "send") doSend();
+    else onStop?.();
+  }
+
+  // The menu belongs to the Send-while-running state only: once the box
+  // empties (it became Stop) or the turn ended, there is nothing to pick.
+  $effect(() => {
+    if (holdOpen && (!holdable || !hasDraft)) closeHoldMenu();
+  });
+
+  $effect(() => {
+    if (!holdOpen) return;
+    function onDown(e: PointerEvent) {
+      const t = e.target as Node | null;
+      if (t && holdMenuEl?.parentElement?.contains(t)) return;
+      closeHoldMenu();
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeHoldMenu();
+      }
+    }
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  });
+
+  $effect(() => () => clearTimeout(holdTimer));
 
   function handleKeyDown(e: KeyboardEvent) {
     if (handleMenuKeys(e)) return;
@@ -1055,7 +1184,15 @@
               <!-- `/` command menu: fixed-width name column so every hint lines
                    up in a straight second column (esp. skills). `@` file mentions
                    have no hint — let the filename use the full row instead. -->
-              <span class="truncate font-mono {menuKind === '/' ? 'w-36 sm:w-44 shrink-0' : ''}">{item.label}</span>
+              {#if item.avatar}
+                <!-- Team row: avatar + name, the @handle and tagline as the hint. -->
+                <span class="flex min-w-0 shrink-0 items-center gap-2" data-testid="mention-team-row">
+                  {#if mentionAvatar}{@render mentionAvatar(item.avatar)}{/if}
+                  <span class="truncate font-medium">{item.label}</span>
+                </span>
+              {:else}
+                <span class="truncate font-mono {menuKind === '/' ? 'w-36 sm:w-44 shrink-0' : ''}">{item.label}</span>
+              {/if}
               {#if item.hint}
                 <span class="min-w-0 flex-1 truncate text-[10px] text-black-500 dark:text-black-600">{item.hint}</span>
               {/if}
@@ -1473,7 +1610,10 @@
     {/if}
 
     <!-- right: context ring + provider chip (Claude-style) + send -->
-    <div class="ml-auto flex items-center gap-2 shrink-0">
+    <div class="ml-auto flex items-center gap-2 min-w-0">
+      {#if caption}
+        <span data-testid="composer-caption" title={caption} class="min-w-0 truncate text-[11px] text-black-600 dark:text-black-700" style="max-width: 14rem">{caption}</span>
+      {/if}
       {#if contextMeter}
         <!-- The ring is a gauge, not a button-with-a-number: at a glance
              you want "how full", and only then the exact figure. It turns
@@ -1512,19 +1652,105 @@
           {@render provIcon(provider.value, "h-5 w-5")}
           {#if selBadge(provider)}<span class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 ring-2 ring-white-100 dark:ring-navy-700" aria-hidden="true"></span>{/if}
         </button>
+      {:else if providerChip}
+        <button
+          type="button"
+          aria-label="Provider"
+          title={providerChip.title}
+          onclick={providerChip.onClick}
+          class="inline-flex items-center justify-center h-8 w-8 shrink-0 rounded-lg border border-white-300 dark:border-navy-600 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600 transition-colors"
+        >
+          {@render provIcon(providerChip.value, "h-5 w-5")}
+        </button>
       {/if}
-      <button
-        type="button"
-        aria-label="Send"
-        disabled={!canSend}
-        class="inline-flex items-center justify-center gap-1.5 shrink-0 rounded-lg bg-green-500 text-white-100 font-medium transition-colors hover:bg-green-600 active:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed {submitLabel ? 'px-3 py-1.5 text-xs' : 'h-8 w-8'}"
-        onclick={doSend}
-      >
-        {#if submitLabel}<span>{submitLabel}</span>{/if}
-        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5">
-          <path d="M2.5 8h11M9 3.5L13.5 8 9 12.5" stroke-linecap="round" stroke-linejoin="round"></path>
-        </svg>
-      </button>
+      {#if onStop && queued}
+        <!-- One action slot: while the spawn waits for a pool slot it
+             reads Cancel; Enter still queues a typed message. -->
+        <button
+          type="button"
+          aria-label="Cancel the queued agent"
+          title="Cancel (the agent is still waiting for a slot)"
+          data-testid="composer-stop"
+          class="inline-flex items-center justify-center shrink-0 h-8 px-3 rounded-lg border border-white-300 dark:border-navy-600 text-xs font-medium text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-600 transition-colors"
+          onclick={onStop}
+        >Cancel</button>
+      {:else if holdable && !hasDraft}
+        <!-- Send turns into Stop while a turn runs and the box is empty: a
+             ring spins around ■. Typing turns it back into Send. -->
+        <button
+          type="button"
+          aria-label="Stop"
+          title="Stop (the chat history is kept)"
+          data-testid="composer-stop"
+          class="relative inline-flex items-center justify-center shrink-0 h-8 w-8 rounded-lg bg-green-500 text-white-100 transition-colors hover:bg-green-600 active:bg-green-700"
+          onclick={onStop}
+        >
+          <svg viewBox="0 0 24 24" class="stop-ring absolute h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" stroke-opacity="0.3"></circle>
+            <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"></path>
+          </svg>
+          <svg viewBox="0 0 16 16" class="h-2.5 w-2.5" fill="currentColor" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2"></rect></svg>
+        </button>
+      {:else}
+        <span class="relative inline-flex shrink-0">
+          <!-- While a turn runs this Send also carries Stop behind a hold
+               (or ArrowUp / the context-menu key from the keyboard). -->
+          <button
+            type="button"
+            aria-label={holdable ? "Send (hold for Stop)" : "Send"}
+            title={holdable ? "Send — hold for Stop" : undefined}
+            aria-haspopup={holdable ? "menu" : undefined}
+            aria-expanded={holdable ? holdOpen : undefined}
+            disabled={!canSend}
+            data-testid="composer-send"
+            class="inline-flex items-center justify-center gap-1.5 shrink-0 rounded-lg bg-green-500 text-white-100 font-medium transition-colors hover:bg-green-600 active:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed {submitLabel ? 'px-3 py-1.5 text-xs' : 'h-8 w-8'} {holdable ? 'select-none touch-manipulation [-webkit-touch-callout:none]' : ''}"
+            onclick={sendClick}
+            onpointerdown={holdStart}
+            onpointerup={holdCancel}
+            onpointerleave={holdCancel}
+            onpointercancel={holdCancel}
+            oncontextmenu={sendContextMenu}
+            onkeydown={sendKeyDown}
+          >
+            {#if submitLabel}<span>{submitLabel}</span>{/if}
+            <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M2.5 8h11M9 3.5L13.5 8 9 12.5" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </button>
+          {#if holdOpen}
+            <!-- Opens above the button and hugs its right edge, so on a
+                 390px screen it grows inward and never off the side. -->
+            <div
+              bind:this={holdMenuEl}
+              role="menu"
+              aria-label="Send or stop"
+              data-testid="composer-hold-menu"
+              class="hold-menu absolute bottom-full right-0 z-30 mb-2 w-36 overflow-hidden rounded-xl border border-white-300 bg-white-100 py-1 shadow-lg dark:border-navy-600 dark:bg-navy-800"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                class="flex min-h-10 w-full items-center gap-2 px-3 text-left text-sm text-black-900 hover:bg-white-200 focus:bg-white-200 focus:outline-none dark:text-white-100 dark:hover:bg-navy-700 dark:focus:bg-navy-700"
+                onclick={() => holdPick("send")}
+              >
+                <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                  <path d="M2.5 8h11M9 3.5L13.5 8 9 12.5" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+                Send
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class="flex min-h-10 w-full items-center gap-2 px-3 text-left text-sm text-neg-400 hover:bg-neg-100 focus:bg-neg-100 focus:outline-none dark:hover:bg-navy-700 dark:focus:bg-navy-700"
+                onclick={() => holdPick("stop")}
+              >
+                <svg viewBox="0 0 16 16" class="h-3 w-3" fill="currentColor" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2"></rect></svg>
+                Stop
+              </button>
+            </div>
+          {/if}
+        </span>
+      {/if}
     </div>
   </div>
   </div>
@@ -1555,5 +1781,23 @@
   }
   .no-scrollbar::-webkit-scrollbar {
     display: none; /* Chrome / Safari */
+  }
+  /* The ring on the Stop button; reduced motion keeps a still ■ + ring. */
+  .stop-ring {
+    animation: stop-ring-spin 1s linear infinite;
+  }
+  @keyframes stop-ring-spin {
+    to { transform: rotate(360deg); }
+  }
+  /* The Send/Stop menu fades up out of the button it belongs to. */
+  .hold-menu {
+    animation: hold-menu-in 120ms ease-out;
+  }
+  @keyframes hold-menu-in {
+    from { opacity: 0; transform: translateY(4px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .stop-ring { animation: none; }
+    .hold-menu { animation: none; }
   }
 </style>

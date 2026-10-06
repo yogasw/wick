@@ -2,6 +2,8 @@ package registry
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -131,21 +133,78 @@ func TestManagerCreateDelete(t *testing.T) {
 	}
 }
 
-func TestManagerDeleteProjectUnscopesSessions(t *testing.T) {
+func TestManagerDeleteProjectRemovesSessionsAndSubAgents(t *testing.T) {
 	layout := newLayout(t)
 	mgr, _ := Bootstrap(layout)
-	_, _ = mgr.CreateProject(context.Background(), project.CreateOptions{ID: "p1", Name: "p"})
-	_, _ = mgr.CreateSession(context.Background(), session.CreateOptions{ID: "S1", ProjectID: "p1", Origin: session.OriginUI})
+	ctx := context.Background()
+	_, _ = mgr.CreateProject(ctx, project.CreateOptions{ID: "p1", Name: "p"})
+	_, _ = mgr.CreateProject(ctx, project.CreateOptions{ID: "p2", Name: "other"})
+	_, _ = mgr.CreateSession(ctx, session.CreateOptions{ID: "S1", ProjectID: "p1", Origin: session.OriginUI})
+	// A sub-agent left unscoped still goes with its parent, and so does
+	// its own sub-agent.
+	_, _ = mgr.CreateSession(ctx, session.CreateOptions{ID: "S1-sub", ParentSessionID: "S1", Origin: session.OriginUI})
+	_, _ = mgr.CreateSession(ctx, session.CreateOptions{ID: "S1-sub-sub", ParentSessionID: "S1-sub", Origin: session.OriginUI})
+	_, _ = mgr.CreateSession(ctx, session.CreateOptions{ID: "S2", ProjectID: "p2", Origin: session.OriginUI})
+	_, _ = mgr.CreateSession(ctx, session.CreateOptions{ID: "S3", Origin: session.OriginUI})
 
-	if err := mgr.DeleteProject(context.Background(), "p1"); err != nil {
+	if got := mgr.ProjectSessionIDs("p1"); len(got) != 3 {
+		t.Fatalf("ProjectSessionIDs = %v, want S1 + two sub-agents", got)
+	}
+	if err := mgr.DeleteProject(ctx, "p1"); err != nil {
 		t.Fatal(err)
 	}
-	got, ok := mgr.Registry().Session("S1")
-	if !ok {
-		t.Fatal("session removed unexpectedly")
+	for _, sid := range []string{"S1", "S1-sub", "S1-sub-sub"} {
+		if _, ok := mgr.Registry().Session(sid); ok {
+			t.Fatalf("session %s survived its project", sid)
+		}
+		if _, err := os.Stat(layout.SessionDir(sid)); !os.IsNotExist(err) {
+			t.Fatalf("session dir %s still on disk: %v", sid, err)
+		}
 	}
-	if got.Meta.ProjectID != "" {
-		t.Fatalf("session not unscoped: %q", got.Meta.ProjectID)
+	for _, sid := range []string{"S2", "S3"} {
+		if _, ok := mgr.Registry().Session(sid); !ok {
+			t.Fatalf("unrelated session %s was deleted", sid)
+		}
+	}
+	if _, err := os.Stat(layout.ProjectDir("p1")); !os.IsNotExist(err) {
+		t.Fatalf("project dir still on disk: %v", err)
+	}
+}
+
+func TestManagerDeleteProjectKeepsCustomPath(t *testing.T) {
+	layout := newLayout(t)
+	mgr, _ := Bootstrap(layout)
+	ctx := context.Background()
+	custom := t.TempDir()
+	keep := filepath.Join(custom, "user-file.txt")
+	if err := os.WriteFile(keep, []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = mgr.CreateProject(ctx, project.CreateOptions{ID: "pc", Name: "custom", CustomPath: custom})
+	_, _ = mgr.CreateSession(ctx, session.CreateOptions{ID: "SC", ProjectID: "pc", Origin: session.OriginUI})
+	if err := mgr.DeleteProject(ctx, "pc"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("custom path file touched: %v", err)
+	}
+	if _, ok := mgr.Registry().Session("SC"); ok {
+		t.Fatal("session of a custom-path project survived")
+	}
+}
+
+func TestManagerDeleteProjectRefusesProtected(t *testing.T) {
+	layout := newLayout(t)
+	mgr, _ := Bootstrap(layout)
+	ctx := context.Background()
+	ids := mgr.Registry().ProjectIDs()
+	def := ids[0]
+	_, _ = mgr.CreateSession(ctx, session.CreateOptions{ID: "SD", ProjectID: def, Origin: session.OriginUI})
+	if err := mgr.DeleteProject(ctx, def); err == nil {
+		t.Fatal("protected project deleted")
+	}
+	if _, ok := mgr.Registry().Session("SD"); !ok {
+		t.Fatal("refused delete still removed a session")
 	}
 }
 

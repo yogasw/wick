@@ -107,6 +107,18 @@ type Instance struct {
 	// modelretry.go). Off = the turn just fails, as before.
 	AutoRetryModel bool
 
+	// IdleCompact* (every type): send /compact to a session that has sat
+	// idle past IdleCompactSeconds with its context past the threshold.
+	// IdleCompactMinutes is the older setting, used while seconds is 0.
+	// See idlecompact.go.
+	IdleCompact          bool
+	IdleCompactSeconds   int
+	IdleCompactMinutes   int
+	IdleCompactTrigger   string
+	IdleCompactThreshold int
+	IdleCompactScope     string
+	IdleCompactMatch     string
+
 	// AuthFrom (omp/opencode only) is the name of another instance of the
 	// same type that owns the login this one uses; empty = its own login.
 	// Profile, config, soul and sessions stay this instance's own. See
@@ -1065,6 +1077,11 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 			ins.LiveModels, ins.LiveModelFilter, ins.LiveModelDefault = boolOr(raw.LiveModels, true), raw.LiveModelFilter, raw.LiveModelDefault
 			ins.RunPerTurn, ins.ServerIdleMinutes, ins.LoadExternalSkills = raw.RunPerTurn, raw.ServerIdleMinutes, raw.LoadExternalSkills
 			ins.AutoRetryModel = raw.AutoRetryModel
+			ins.IdleCompact, ins.IdleCompactMinutes = raw.IdleCompact, raw.IdleCompactMinutes
+			ins.IdleCompactSeconds = raw.IdleCompactSeconds
+			ins.IdleCompactTrigger, ins.IdleCompactThreshold = raw.IdleCompactTrigger, raw.IdleCompactThreshold
+			ins.IdleCompactScope = raw.IdleCompactScope
+			ins.IdleCompactMatch = raw.IdleCompactMatch
 			ins.AuthFrom = raw.AuthFrom
 			if t == TypeOpencode && ins.OpencodeConfig == nil {
 				ins.OpencodeConfig = &OpencodeConfig{}
@@ -1150,6 +1167,11 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 	raw.LiveModels, raw.LiveModelFilter, raw.LiveModelDefault = boolPtr(ins.LiveModels), ins.LiveModelFilter, ins.LiveModelDefault
 	raw.RunPerTurn, raw.ServerIdleMinutes, raw.LoadExternalSkills = ins.RunPerTurn, ins.ServerIdleMinutes, ins.LoadExternalSkills
 	raw.AutoRetryModel = ins.AutoRetryModel
+	raw.IdleCompact, raw.IdleCompactMinutes = ins.IdleCompact, ins.IdleCompactMinutes
+	raw.IdleCompactSeconds = ins.IdleCompactSeconds
+	raw.IdleCompactTrigger, raw.IdleCompactThreshold = ins.IdleCompactTrigger, ins.IdleCompactThreshold
+	raw.IdleCompactScope = ins.IdleCompactScope
+	raw.IdleCompactMatch = ins.IdleCompactMatch
 	raw.AuthFrom = ins.AuthFrom
 	if ins.OpencodeConfig != nil {
 		raw.OpencodeModel = ins.OpencodeConfig.Model

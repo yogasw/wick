@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { clock24 } from "@wick-fe/common-ui";
   /* Provenance chip for a usage reading: a cache glyph plus how long
      ago the numbers were actually fetched ("2m ago").
 
@@ -20,7 +21,7 @@
     if (!fetchedAt) return hint.full;
     const t = new Date(fetchedAt);
     if (Number.isNaN(t.getTime())) return hint.full;
-    return `${hint.full} (at ${t.toLocaleTimeString()})`;
+    return `${hint.full} (at ${clock24(t, true)})`;
   });
 </script>
 

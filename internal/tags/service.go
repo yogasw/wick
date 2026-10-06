@@ -92,6 +92,37 @@ func (s *Service) EnsureToolDefaultTags(ctx context.Context, toolPath string, de
 	return nil
 }
 
+// SwapToolTag moves toolPath from the tag named from onto to, for a tool
+// whose DefaultTags changed after it was first seeded (EnsureToolDefaultTags
+// links only on first registration). It acts only while toolPath still
+// carries from, so it runs once: after the swap, or after an admin unlinks
+// from by hand, it is a no-op and later admin edits survive restarts.
+func (s *Service) SwapToolTag(ctx context.Context, toolPath, from string, to tool.DefaultTag) error {
+	old, err := s.repo.GetTagByName(ctx, from)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	linked, err := s.repo.ToolHasTag(ctx, toolPath, old.ID)
+	if err != nil || !linked {
+		return err
+	}
+	nt, err := s.repo.GetTagByName(ctx, to.Name)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		nt = &entity.Tag{Name: to.Name, Description: to.Description, IsGroup: to.IsGroup, IsFilter: to.IsFilter, IsSystem: to.IsSystem, SortOrder: to.SortOrder}
+		err = s.repo.CreateTag(ctx, nt)
+	}
+	if err != nil {
+		return err
+	}
+	if err := s.repo.LinkToolTag(ctx, toolPath, nt.ID); err != nil {
+		return err
+	}
+	return s.repo.UnlinkToolTag(ctx, toolPath, old.ID)
+}
+
 // TagsByIDs returns Tag rows for the given ids. Used by surfaces that
 // have a list of tag ids from ToolTagIDs and want to render names/flags.
 func (s *Service) TagsByIDs(ctx context.Context, ids []string) ([]*entity.Tag, error) {

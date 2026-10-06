@@ -107,6 +107,21 @@ func (s *PushService) SendTest(ctx context.Context, userID, endpoint string) (in
 	return s.sendToUser(ctx, userID, strings.TrimSpace(endpoint), payload)
 }
 
+// OwnsEndpoint reports whether endpoint is one of userID's active devices,
+// so a per-device test can refuse somebody else's subscription up front.
+func (s *PushService) OwnsEndpoint(ctx context.Context, userID, endpoint string) (bool, error) {
+	rows, err := s.repo.ListActiveByUser(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	for _, row := range rows {
+		if row.Endpoint == endpoint {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (s *PushService) SendToUser(ctx context.Context, userID, title, body, url string) (int, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {

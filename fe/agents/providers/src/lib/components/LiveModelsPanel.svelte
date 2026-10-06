@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { clock24 } from "@wick-fe/common-ui";
   // Live model list for an omp/opencode instance: the models its CLI lists
   // (`omp models` / `opencode models`), narrowed by a filter in the shared
   // grammar, with a pinned default. With the SAVED filter the list and the
@@ -155,7 +156,7 @@
     </span>
     <span class="flex items-center gap-2">
       {#if updating}<span class="text-[11px] text-black-700 dark:text-black-600" data-testid="live-models-updating">updating from the CLI…</span>
-      {:else if fetchedAt}<span class="text-[11px] text-black-700 dark:text-black-600" data-testid="live-models-updated">updated {new Date(fetchedAt).toLocaleTimeString()}{source ? ` · ${source}` : ""}</span>
+      {:else if fetchedAt}<span class="text-[11px] text-black-700 dark:text-black-600" data-testid="live-models-updated">updated {clock24(fetchedAt, true)}{source ? ` · ${source}` : ""}</span>
       {:else if !loading}<span class="text-[11px] text-amber-600 dark:text-amber-400" data-testid="live-models-empty">no model list yet — click Refresh</span>{/if}
       <Button size="sm" variant="secondary" disabled={loading} onclick={() => fetchModels(true)} testid="live-models-refresh">{loading ? "Refreshing…" : "Refresh"}</Button>
     </span>

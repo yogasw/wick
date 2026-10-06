@@ -12,6 +12,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/provider/procgroup"
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -70,6 +71,9 @@ func HelperCommand(ctx context.Context, ins *Instance, label, bin string, args .
 		}
 	}
 	cmd := safeexec.CommandContext(ctx, execBin, execArgs...)
+	// Never the daemon environment (DATABASE_URL and friends): callers that
+	// need an account env overwrite this with their own.
+	cmd.Env = envscrub.ScrubOSEnv()
 	procgroup.Apply(cmd)
 	// On timeout / cancel: the whole group, so a forked child cannot keep
 	// running (or keep the output pipe open: WaitDelay bounds that).

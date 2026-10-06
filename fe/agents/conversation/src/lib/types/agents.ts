@@ -1,3 +1,4 @@
+import type { TraceDisplay } from "@wick-fe/common-ui";
 export type AskOption = { label: string; value: string; description?: string };
 
 export type AskField = {
@@ -110,6 +111,9 @@ export type TurnEvent = {
   large?: boolean;
   /** Payload size in bytes; set only alongside large. */
   size?: number;
+  /** Render hint (event.Display). On a large row it is header-only — the
+      body arrives with the payload. Absent on traces recorded before it. */
+  display?: TraceDisplay;
 };
 
 /** thinking/<turn_id>/<event_id>.json — the spilled payload of one large
@@ -122,6 +126,7 @@ export type TurnEventPayload = {
   tool_input?: string;
   /** true when the stored payload was capped by traceEventMaxBytes. */
   truncated?: boolean;
+  display?: TraceDisplay;
 };
 
 export type Attachment = {
@@ -151,6 +156,21 @@ export type Sender = {
   // "slack" | "telegram" | "rest" | "ui"
   channel: string;
   wick_user_id?: string;
+  /** Opens the original message on its platform (Slack). Absent on turns
+      saved before it was recorded. */
+  permalink?: string;
+};
+
+/** Whether an assistant reply reached the channel thread it answers.
+    Mirrors agentstore.Delivery. */
+export type Delivery = {
+  channel: string;
+  status: "sending" | "sent" | "failed";
+  /** The posted reply (its first message when split). */
+  permalink?: string;
+  /** Slack's short reason: channel_not_found, rate_limited, timeout, … */
+  error?: string;
+  at?: string;
 };
 
 export type ConversationTurn = {
@@ -188,6 +208,17 @@ export type ConversationTurn = {
   artifacts?: Artifact[];
   // system turn only — a provider/runtime error, rendered as a failure.
   is_error?: boolean;
+  /** assistant turn of a remote agent — how it ended: "ended without
+      marker", "follow-up", "late reply" (remote.Note*). */
+  remote_note?: string;
+  /** the turn this one stands in for — a remote's late reply replacing
+      its timeout (store.ConversationTurn.Replaces). */
+  replaces?: string;
+  /** client-side only (foldReplaced): how long after the replaced turn
+      this reply was kept, in ms. */
+  late_ms?: number;
+  /** assistant turn — its reply's delivery to Slack, when posted there. */
+  delivery?: Delivery;
   /** system turn only — "provider_switch", "interrupted", "compaction", …
       Tags a structured notice so it renders as itself instead of a plain
       grey line. */
@@ -195,6 +226,25 @@ export type ConversationTurn = {
   /** system turn only — the numbers behind `kind`, kept as data rather
       than baked into the text (compaction: trigger, pre/post tokens). */
   extras?: Record<string, string>;
+  /** assistant turn of a Team agent's session — who spoke, set by the
+      server. via "mention" = answering a teammate's message. */
+  speaker?: TurnSpeaker;
+  /** user turn made by clicking an actioncard button — set ONLY by the
+      server's postback endpoint, never parsed out of text. */
+  postback?: CardPostback;
+};
+
+export type TurnSpeaker = { agent_id: string; handle: string; via: "direct" | "mention" | "group" | string };
+
+export type CardPostback = { card_id: string; value: string; label: string };
+
+/** Server-computed state of one actioncard id across the whole thread. */
+export type CardState = {
+  /** The assistant turn holding the card's newest version. */
+  turn_id: string;
+  locked?: boolean;
+  postback?: CardPostback;
+  postback_turn_id?: string;
 };
 
 export type ApprovalRequest = {
@@ -287,6 +337,14 @@ export type SubAgentItem = {
   handle?: string;
   // label is the delegated task, truncated server-side.
   label: string;
+  /** The first leg's task (truncated). A continue reframes `label` with a
+      resume preamble; this keeps what the sub-agent was asked to do.
+      Absent on rows from before it existed. */
+  title?: string;
+  /** How many times the row was continued. */
+  resumes?: number;
+  /** turns_used when the current leg started. */
+  leg_base_turns?: number;
   status: SubAgentStatus;
   // lifecycle comes from the live pool snapshot; "" when the sub-agent
   // has no running process (queued, or already finished).
@@ -402,6 +460,10 @@ export type ThreadBlock =
       resultSize?: number;
       resultEventId?: string;
       isError?: boolean;
+      // event.Display of the call input / the result, when the trace has
+      // one; ToolCard classifies the raw text itself otherwise.
+      inputDisplay?: TraceDisplay;
+      resultDisplay?: TraceDisplay;
       startedAt?: number;
       endedAt?: number;
       // Set from a `connector_run` SSE event while the underlying connector run
@@ -534,6 +596,9 @@ export type ProjectOption = {
       the board itself (a chat's jump-to-ticket entry) key off this, so a
       project without one shows none of them. */
   ticketEnabled?: boolean;
+  /** Someone else owns it; the caller sees it through a tag or sharing. */
+  shared?: boolean;
+  owner_name?: string;
 };
 
 /** One column on a project's board. Statuses are per project: a team names
@@ -741,4 +806,20 @@ export type AgentMessageItem = {
   /** Set when wick promoted a closing turn into an answer nobody wrote. */
   auto_reply?: boolean;
   created_at: string;
+};
+
+/** One A2A task this session sent to a Team agent (GET
+    /api/sessions/{id}/team-tasks). */
+export type TeamTaskItem = {
+  task_id: string;
+  context_id: string;
+  to_agent_id: string;
+  to_handle: string;
+  to_name: string;
+  title: string;
+  state: string;
+  turns: number;
+  max_turns: number;
+  started_at: string;
+  updated_at: string;
 };

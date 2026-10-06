@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/pkg/pwa"
@@ -39,7 +40,7 @@ func Meta() connector.Meta {
 
 func Module(deps Deps) connector.Module {
 	m := Meta()
-	m.DefaultTags = []tool.DefaultTag{tags.Connector, tags.Communication}
+	m.DefaultTags = []tool.DefaultTag{tags.Connector, tags.Platform}
 	return connector.Module{
 		Meta:       m,
 		Operations: Operations(deps),
@@ -185,6 +186,9 @@ func (h handlers) sendToUser(c *connector.Ctx) (any, error) {
 	}
 	u, err := h.resolveUser(c)
 	if err != nil {
+		return nil, err
+	}
+	if err := team.CheckOwnerRecipient(c.Context(), c.CallerUserID(), u.ID); err != nil {
 		return nil, err
 	}
 	sent, err := h.deps.Push.SendToUser(c.Context(), u.ID, c.Input("title"), c.Input("body"), c.Input("url"))

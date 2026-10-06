@@ -14,18 +14,23 @@ import (
 	neturl "net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin"
+	"github.com/yogasw/wick/internal/agents/a2aserver"
 	"github.com/yogasw/wick/internal/agents/agentctl"
 	"github.com/yogasw/wick/internal/agents/airouter"
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	agentrest "github.com/yogasw/wick/internal/agents/channels/rest"
 	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
 	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
 	telegramch "github.com/yogasw/wick/internal/agents/channels/telegram"
@@ -45,21 +50,27 @@ import (
 	wickprovider "github.com/yogasw/wick/internal/agents/provider/wick"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
+	"github.com/yogasw/wick/internal/agents/resourceguard"
 	"github.com/yogasw/wick/internal/agents/schedule"
 	agentsession "github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/sessionworkspace"
 	agentskills "github.com/yogasw/wick/internal/agents/skills"
+	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/terminal"
 	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/agents/ticketprompt"
 	"github.com/yogasw/wick/internal/agents/todoprompt"
 	// systemprompt "github.com/yogasw/wick/internal/agents/system-prompt" // disabled: ConnectorCatalog injection (see ConnectorCatalogLoader below)
+	"github.com/yogasw/wick/internal/agents/aigen"
 	"github.com/yogasw/wick/internal/agents/clitoken"
+	"github.com/yogasw/wick/internal/agents/teamlink"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
 	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
+	wfprovider "github.com/yogasw/wick/internal/agents/workflow/provider"
 	wfsetup "github.com/yogasw/wick/internal/agents/workflow/setup"
 	wfstate "github.com/yogasw/wick/internal/agents/workflow/state"
 	wftrigger "github.com/yogasw/wick/internal/agents/workflow/trigger"
@@ -77,6 +88,8 @@ import (
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	sourceconn "github.com/yogasw/wick/internal/connectors/source"
 	subagents "github.com/yogasw/wick/internal/connectors/sub-agents"
+	teamagentsconn "github.com/yogasw/wick/internal/connectors/team-agents"
+	teamlinkconn "github.com/yogasw/wick/internal/connectors/team-link"
 	ticketconn "github.com/yogasw/wick/internal/connectors/tickets"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
@@ -89,6 +102,7 @@ import (
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	connectorrunsreaper "github.com/yogasw/wick/internal/jobs/connector-runs-reaper"
+	jobplugin "github.com/yogasw/wick/internal/jobs/plugin"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
 	"github.com/yogasw/wick/internal/login"
@@ -105,18 +119,23 @@ import (
 	"github.com/yogasw/wick/internal/pkg/sysmem"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
+	pluginreplace "github.com/yogasw/wick/internal/plugins/replace"
+	pluginsource "github.com/yogasw/wick/internal/plugins/source"
 	"github.com/yogasw/wick/internal/processctl"
+	serviceplugin "github.com/yogasw/wick/internal/services/plugin"
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
+	toolplugin "github.com/yogasw/wick/internal/tools/plugin"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
 	"github.com/yogasw/wick/internal/updater"
 	"github.com/yogasw/wick/internal/userconfig"
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/job"
+	wickplugin "github.com/yogasw/wick/pkg/plugin"
 	"github.com/yogasw/wick/pkg/tool"
 	"github.com/yogasw/wick/web"
 
@@ -229,6 +248,28 @@ func NewServer() *Server {
 	// re-register the same key without producing duplicates.
 	tools.RegisterBuiltins()
 	jobs.RegisterBuiltins()
+
+	// Job plugins (plugins/jobs/<key>) register like built-in jobs, before
+	// validation and the configs bootstrap so their config rows get seeded.
+	jobPluginStore := connplugin.NewStateStore(db)
+	if n := jobplugin.Load(connplugin.KindDir(wickplugin.KindJob), jobPluginStore.Enabled, jobPluginStore.Record); n > 0 {
+		log.Info().Int("plugins", n).Msg("job plugins: loaded")
+	}
+	// Tool plugins (plugins/tools/<key>) register like built-in tools whose
+	// routes reverse-proxy to the plugin process (spawned on first use).
+	toolPlugins := toolplugin.NewPool()
+	if n := toolPlugins.Load(connplugin.KindDir(wickplugin.KindTool), jobPluginStore.Enabled, jobPluginStore.Record, tools.Register); n > 0 {
+		log.Info().Int("plugins", n).Msg("tool plugins: loaded")
+	}
+	toolPlugins.Start()
+	home.PluginVersions = toolPlugins.Version
+
+	// A job/tool that declares Replaces (a plugin extracted from a built-in)
+	// takes over the old key: the old module is unregistered and its config,
+	// schedule and access are migrated once — before the bootstraps below
+	// seed rows, so the new key starts with the old data.
+	replacePairs := pluginreplace.Prepare(jobs.All(), tools.All(), jobs.Unregister, tools.Unregister)
+	pluginreplace.New(db).ApplyAll(context.Background(), replacePairs)
 
 	// ── Tool modules (discover first so their Specs feed into the
 	// config bootstrap below) ──────────────────────────────────────
@@ -364,6 +405,7 @@ func NewServer() *Server {
 	// ── Jobs (background workers) ────────────────────────────────
 	jobsSvc := manager.NewServiceFromDB(db)
 	jobsSvc.SetConfigReader(configsSvc)
+	jobsSvc.SetHidden(pluginreplace.IsReplaced)
 	if err := jobsSvc.Bootstrap(context.Background(), jobs.All()); err != nil {
 		log.Fatal().Msgf("jobs bootstrap: %s", err.Error())
 	}
@@ -667,6 +709,11 @@ func NewServer() *Server {
 	agentsFactory.SystemPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", "system_prompt")
 	}
+	// A Team agent's session reads its own operator row instead, never
+	// system_prompt (see ClaudeFactory.composePrompt).
+	agentsFactory.TeamSystemPromptLoader = func() string {
+		return configsSvc.GetOwned("agents", "system_prompt_team")
+	}
 	// How much of a message sender's identity reaches the model. Read per
 	// Build so the setting takes effect on the next spawn without a restart.
 	// The wick provider is the one that needs it: it rebuilds prompts from
@@ -724,7 +771,7 @@ func NewServer() *Server {
 			// Contention controls; 0 = kernel default. Enforce-mode only —
 			// sliceLimits() drops them in measure.
 			CPUWeight:   atoi("agents_cpu_weight"),
-			CPUQuotaPct: atoi("agents_cpu_quota_pct"),
+			CPUQuotaPct: agentconfig.CPUQuotaCorePct(agentconfig.CPUQuotaMachinePct(configsSvc.GetOwned("agents", "agents_cpu_quota_pct"), runtime.NumCPU()), runtime.NumCPU()),
 			TasksMax:    atoi("agents_tasks_max"),
 			IOWeight:    atoi("agents_io_weight"),
 		}
@@ -818,6 +865,10 @@ func NewServer() *Server {
 		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "trace_event_max_kb"))
 		return v
 	}
+	agentsFactory.TraceBlobMaxMBLoader = func() int {
+		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "trace_blob_max_mb"))
+		return v
+	}
 
 	// syncSharedSpec rewrites the shared spec.json on every spawn so
 	// allowed_cmds edits take effect without a server restart.
@@ -860,6 +911,44 @@ func NewServer() *Server {
 	ompprovider.SetMCPTokenRevoker(func(token string) { mcpScopedTokens.Revoke(token) })
 
 	preemptIdle := configsSvc.GetOwned("agents", "preempt_idle") != "false"
+	// Resource Guard: the fast watchdog over the agent tree. Config is
+	// read per tick so mode, action and knobs apply without a restart;
+	// it acts in enforce mode, only records in measure, and runs only on Linux
+	// (NewHost is nil elsewhere and Run returns at once).
+	resourceGuard := resourceguard.New(resourceguard.NewHost(), func() resourceguard.Config {
+		atoiOr := func(key string, def int) int {
+			if n, err := strconv.Atoi(configsSvc.GetOwned("agents", key)); err == nil && n > 0 {
+				return n
+			}
+			return def
+		}
+		atoi := func(key string) int {
+			n, _ := strconv.Atoi(configsSvc.GetOwned("agents", key))
+			return n
+		}
+		action := configsSvc.GetOwned("agents", "resource_guard_action")
+		if action == "" {
+			action = resourceguard.ActionKill
+		}
+		// enforce acts; measure only records what it would stop; off is off.
+		mode := configsSvc.GetOwned("agents", "memory_guard_mode")
+		return resourceguard.Config{
+			Enabled:     mode == agentconfig.MemGuardEnforce || mode == agentconfig.MemGuardMeasure,
+			Measure:     mode == agentconfig.MemGuardMeasure,
+			Action:      action,
+			Interval:    time.Duration(atoiOr("resource_guard_interval_ms", 1000)) * time.Millisecond,
+			SafePct:     atoiOr("resource_guard_safe_pct", 80),
+			HorizonSec:  atoiOr("resource_guard_exhaust_horizon_sec", 20),
+			MinFreeMB:   atoi("min_free_memory_mb"),
+			CPUPSIMax:   float64(atoiOr("resource_guard_cpu_psi_max", 90)),
+			CPUQuotaPct: agentconfig.CPUQuotaCorePct(agentconfig.CPUQuotaMachinePct(configsSvc.GetOwned("agents", "agents_cpu_quota_pct"), runtime.NumCPU()), runtime.NumCPU()),
+			CPUWeight:   atoi("agents_cpu_weight"),
+			TasksMax:    atoi("agents_tasks_max"),
+		}
+	})
+	// Agents app (Team) service: declared ahead of the pool because both
+	// the pool's respawn rule and the MCP minter consult it.
+	var teamSvc *team.Service
 	agentsPool = agentpool.New(agentpool.PoolConfig{
 		MaxConcurrent: maxConc,
 		IdleTimeout:   time.Duration(idleSec) * time.Second,
@@ -921,9 +1010,14 @@ func NewServer() *Server {
 		// Read live so the switch takes effect without a restart, matching
 		// how the other agents settings behave.
 		RespawnOnCallerChange: configsSvc.GetOwned("agents", "respawn_on_caller_change") == "true",
-		Layout:                agentsLayout,
-		Factory:               agentsFactory,
-		DefaultProvider:       configsSvc.GetOwned("agents", "default_provider"),
+		// A Team agent running as its owner keeps one identity whoever
+		// talks to it; teamSvc is assigned below, before any send.
+		IdentityFixed: func(ctx context.Context, sessionID string) bool {
+			return teamSvc.IdentityFixed(ctx, sessionID)
+		},
+		Layout:          agentsLayout,
+		Factory:         agentsFactory,
+		DefaultProvider: configsSvc.GetOwned("agents", "default_provider"),
 		// Queue a spawn instead of starting it while the machine is
 		// already short of memory. Read live so the floor can be changed
 		// in the UI without a restart; 0 (the default) disables it.
@@ -931,6 +1025,9 @@ func NewServer() *Server {
 			v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "min_free_memory_mb"))
 			return v
 		},
+		// Trend gate: hold a spawn while free memory is falling toward the
+		// floor, not only once it is under it.
+		SpawnHold: resourceGuard.HoldSpawns,
 		OnSessionCreated: func(s agentsession.Session) {
 			agentsMgr.Register(s)
 		},
@@ -1038,6 +1135,27 @@ func NewServer() *Server {
 			channelReg.DispatchAgentEvent(ev.SessionID, doneEv)
 		},
 	})
+	// Guard events reach the session whose agent was acted on, as a
+	// system line in its history, and the Resources page reads the rest.
+	resourceGuard.OnEvent = func(e resourceguard.Event) {
+		if e.AgentPID == 0 || e.DryRun {
+			return
+		}
+		for _, a := range agentsPool.ActiveSnapshot() {
+			if a.PID == e.AgentPID {
+				st := store.New(store.Options{Layout: agentsLayout, SessionID: a.SessionID, AgentName: a.AgentName})
+				_ = st.AppendNoticeTurn(e.Detail)
+				return
+			}
+		}
+	}
+	resourceGuard.OnQuotaApplied = func() {
+		if err := agentsFactory.MemGuardLoader().SyncSlice(); err != nil {
+			log.Warn().Err(err).Msg("resource guard: could not persist agents.slice limits")
+		}
+	}
+	agentstool.SetResourceGuard(resourceGuard)
+	go resourceGuard.Run(context.Background())
 	// When the sweeper reaps an idle session's connectors, record a system
 	// turn on that session so its agent's context reflects the deletion. The
 	// session is idle by definition (that's why it was reaped), so a non-user
@@ -1111,6 +1229,42 @@ func NewServer() *Server {
 	agentstool.SetAuth(authSvc)
 	go agentstool.AutoInstallMCP()
 	agentstool.SetDB(db)
+	// Agents app: the MCP layer narrows an agent session's connector
+	// reach to that agent's checklist through this resolver.
+	teamSvc = team.NewService(db, agentsLayout)
+	// Team identity: read per Build so a rename or a new teammate shows up
+	// on the next spawn.
+	agentsFactory.TeamPromptLoader = func(sessionID string, subAgent bool) string {
+		return teamSvc.PromptFor(context.Background(), sessionID, subAgent)
+	}
+	agentsFactory.RemoteSpawnerLoader = agentstool.RemoteSpawnerFor
+	agentsFactory.TeamSpawnLoader = func(sessionID string) (agentpool.TeamSpawn, bool) {
+		sp, ok := teamSvc.SpawnPromptFor(context.Background(), sessionID)
+		return agentpool.TeamSpawn{Prompt: sp.Prompt, Access: sp.Access, Subagents: sp.Subagents, Schedule: sp.Schedule, Files: sp.Files, UseGlobalPrompt: sp.UseGlobalPrompt, TeamInstructions: sp.TeamInstructions}, ok
+	}
+	// Action cards outside the web UI: Slack buttons and numbered replies
+	// reach the agent through the same postback check as the web endpoint.
+	agentchannels.CardPostback = agentstool.ChannelPostback
+	agentchannels.CardNumberPostback = agentstool.ChannelNumberPostback
+	agentsFactory.TeamLimitsLoader = func(sessionID string) (agentpool.TeamLimits, bool) {
+		lim, ok := teamSvc.LimitsFor(context.Background(), sessionID)
+		if !ok {
+			return agentpool.TeamLimits{}, false
+		}
+		return agentpool.TeamLimits{
+			AgentID:         lim.AgentID,
+			DisallowedTools: team.DisallowedClaudeTools(lim.NativeTools),
+			BashAllowed:     slices.Contains(lim.NativeTools, "Bash"),
+			BashRules:       lim.BashRules,
+			DefaultScope:    lim.ProjectDir,
+			DisabledSkills:  slices.DeleteFunc(slices.Clone(lim.DisabledSkills), skillsync.IsRequiredSkill),
+		}, true
+	}
+	agentsession.ProjectAgent = func(projectID string) string {
+		return teamSvc.AgentOfProject(context.Background(), projectID)
+	}
+	mcp.SetAgentScopeResolver(teamSvc.ScopeForSession)
+	agentstool.SetTeam(teamSvc)
 	agentstool.SetChannelRegistry(channelReg)
 	agentstool.SetSyncManager(syncMgr)
 
@@ -1127,7 +1281,9 @@ func NewServer() *Server {
 		}
 		return p.Meta.Ticket, true
 	})
-	ticket.SetEmitter(ticketWebhooks)
+	// Teed into the agents stream too, so an open board refetches on a
+	// ticket write instead of polling.
+	ticket.SetEmitter(agentstool.WithTicketStreamSignal(ticketWebhooks))
 	agentstool.SetTicketDispatcher(ticketWebhooks)
 
 	// ask_user Manager: blocks the calling agent over MCP until the
@@ -1136,12 +1292,16 @@ func NewServer() *Server {
 	// one on resolve) so every open tab updates without polling.
 	askUsersMgr := askuser.NewManager(askuser.Options{
 		OnRequest: func(req askuser.AskRequest) {
+			agentstool.RecordAskRequest(req)
 			payload, _ := json.Marshal(req)
 			agentsBcast.PublishAskUser(req.SessionID, req.AgentName, payload)
 		},
 		OnResolved: func(sessionID, requestID string) {
 			agentsBcast.PublishAskUserResolved(sessionID, requestID)
 		},
+		// The question stays in the thread as an input_request card, with
+		// its answer once settled — not only above the composer.
+		OnSettled: agentstool.RecordAskSettled,
 	})
 	agentstool.SetAskUsers(askUsersMgr)
 	// Bind the askuser unix socket so sibling processes (stdio MCP —
@@ -1235,6 +1395,20 @@ func NewServer() *Server {
 	if err := wfMgr.Start(context.Background()); err != nil {
 		log.Warn().Err(err).Msg("workflow bootstrap failed; workflows tab will be empty")
 	}
+	// Run retention: cap each workflow's finished-run history by count
+	// and age. Re-read per pass so an edit on the settings page applies
+	// without a restart; unset/0 falls back to the package defaults. The
+	// all-workflow sweep starts with cron, once the intake baton is ours.
+	wfMgr.StartRunRetention(func() wfsetup.CleanupOptions {
+		opts := wfsetup.CleanupOptions{}
+		if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "workflow_run_keep_max")); err == nil {
+			opts.KeepMax = n
+		}
+		if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "workflow_run_retention_days")); err == nil {
+			opts.TTL = time.Duration(n) * 24 * time.Hour
+		}
+		return opts
+	})
 	agentstool.SetWorkflowManager(wfMgr)
 	agentstool.SetWorkflowEncService(encSvc)
 	// Wire master-key decryptor into the engine so wick_enc_ workflow
@@ -1293,10 +1467,12 @@ func NewServer() *Server {
 			return "", false
 		},
 		OnRequest: func(sessionID string, r gate.ApprovalRequest) {
+			agentstool.RecordApprovalRequest(sessionID, r)
 			agentsBcast.PublishApprovalRequest(sessionID, r)
 			channelReg.DispatchApprovalRequest(sessionID, r)
 		},
 		OnResolved: func(sessionID, requestID, decision string) {
+			agentstool.RecordApprovalResolved(sessionID, requestID, decision)
 			agentsBcast.PublishApprovalResolved(sessionID, requestID, decision)
 			channelReg.DispatchApprovalResolved(sessionID, requestID, decision)
 		},
@@ -1428,7 +1604,21 @@ func NewServer() *Server {
 	// line never changes.
 	channelStore := agentchannels.NewDBStore(db)
 	channelStore.Configs = configsSvc
+	// Channels added after boot (a Team agent's own bot, a per-user
+	// instance saved from the dashboard) take their dispatch from
+	// SendFuncFor. Without this they get nil and the first message panics.
+	// The closure does not depend on the transport, so one serves all.
+	channelReg.WithSendFunc(sendFnFor("runtime"))
 	channelsetup.All(channelReg, channelStore, sendFnFor, tokensSvc)
+
+	// Team agents as A2A servers (/integrations/a2a/<agent_id>). One channel
+	// serves every agent; each agent's connection row decides if it answers.
+	a2aSrv := a2aserver.New(agentstool.A2ADirectory(), a2aserver.NewStore(db), tokensSvc, configsSvc.AppURL)
+	channelReg.Add(a2aSrv, nil)
+	a2aSrv.SetSendFunc(sendFnFor("a2a"))
+	agentstool.SetA2AServer(a2aSrv)
+	// Team agents over the OpenAI-compatible endpoint ("model": "agent:<handle>").
+	agentrest.SetAgentDirectory(agentstool.RESTDirectory())
 
 	// Wire each channel's workflow integration surface — registers
 	// per-event + per-action descriptors and attaches the inbound
@@ -1446,6 +1636,24 @@ func NewServer() *Server {
 	connectorsSvc.SetConfigs(configsSvc)
 	metricsRec := metrics.NewSimpleRecorder()
 	connectorsSvc.SetMetrics(metricsRec)
+	// An agent's tier defaults and "include new connectors" toggle reach
+	// only what its owner's own catalog lists — not the triggering user's.
+	ownerCatalog := func(ctx context.Context, userID string) ([]connectors.CatalogEntry, error) {
+		u, err := authSvc.GetUserByID(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		ctx = connectors.WithoutAgentScope(ctx)
+		return connectorsSvc.AgentCatalog(ctx, userID, authSvc.GetUserFilterTagIDs(ctx, userID), u.IsAdmin())
+	}
+	teamSvc.SetOwnerCatalog(ownerCatalog)
+	teamSvc.SetOwnerReach(func(ctx context.Context, userID string) (team.Reach, error) {
+		cat, err := ownerCatalog(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		return team.ReachOf(cat), nil
+	})
 
 	// Map an agent session to the Slack bot that owns it, so the Slack
 	// connector's "Sent using @bot" footer always names the session
@@ -1625,6 +1833,38 @@ func NewServer() *Server {
 		Layout:  agentsLayout,
 	}))
 
+	// Team messaging over A2A. Same late binding as sub-agents: the Hub
+	// needs the Team service and the pool, built further down.
+	var (
+		teamHub     *teamlink.Hub
+		teamHubOnce sync.Once
+	)
+	hub := func() *teamlink.Hub {
+		teamHubOnce.Do(func() {
+			if teamSvc == nil {
+				return
+			}
+			d := poolDeliverer{pool: agentsPool, channels: channelReg}
+			teamHub = agentstool.NewTeamLinkHub(teamSvc, func(ctx context.Context, sessionID, text string) error {
+				return d.DeliverToSession(ctx, sessionID, "", text)
+			})
+		})
+		return teamHub
+	}
+	connectors.Register(teamlinkconn.Module(teamlinkconn.Deps{Hub: hub, AgentOf: agentstool.TeamAgentOf}))
+	connectors.Register(teamagentsconn.Module(teamagentsconn.Deps{Ops: agentstool.TeamAgentOps}))
+	agentstool.SetTeamHub(hub)
+	// team_* tools only in a Team agent's session with a reachable teammate.
+	mcphandlers.TeamToolsVisible = func(ctx context.Context, sessionID string) bool {
+		h := hub()
+		id := agentstool.TeamAgentOf(ctx, sessionID)
+		if h == nil || id == "" {
+			return false
+		}
+		peers, err := h.Reachable(ctx, id)
+		return err == nil && len(peers) > 0
+	}
+
 	// Custom connectors: replay admin-built definitions from the DB
 	// into the registry. MUST run before Bootstrap so custom modules
 	// ride the same instance seeding, allItems, and tag passes as
@@ -1652,6 +1892,37 @@ func NewServer() *Server {
 		}
 		return out
 	})
+	// Generate jobs ("✨ Generate" buttons, the paste page's AI tab) run
+	// queued behind the agent pool: each borrows a pool slot before it
+	// forks a CLI, so a burst of clicks waits in line instead of
+	// overloading the host. The provider defaults to the operator's
+	// default_provider, read live.
+	aigenSvc := aigen.New(aigen.Config{
+		Gate: aigen.GateFunc(func(key, pType, pName string) (func(), bool) {
+			if agentsPool == nil {
+				return func() {}, true
+			}
+			return agentsPool.TryLease(key, pType, pName)
+		}),
+		Resolve: aigen.ListResolver(wfsetup.NewCLIProviders, func() string {
+			return configsSvc.GetOwned("agents", "default_provider")
+		}),
+	})
+	aigenSvc.Register(aigen.Kind{
+		Name:     "connector-parse",
+		MaxInput: 8 * 1024,
+		Validate: func(in aigen.Input) error { return customconn.CheckPasteSize(in.Text) },
+		Build: func(in aigen.Input) (wfprovider.StructuredRequest, error) {
+			return customconn.AIParseRequest(in.Text), nil
+		},
+		Finish: func(res wfprovider.StructuredResult) (any, error) {
+			return customconn.DraftFromAIResult(res)
+		},
+	})
+	// "agent-persona": the Team app's New agent brief and Settings ›
+	// Persona Generate / Improve.
+	aigenSvc.Register(team.PersonaKindSpec())
+	aigenHandler := aigen.NewHandler(aigenSvc)
 	if err := customConnSvc.RegisterAllAtBoot(context.Background()); err != nil {
 		log.Error().Err(err).Msg("custom connectors: boot registration failed")
 	}
@@ -1684,7 +1955,11 @@ func NewServer() *Server {
 	// Note: OAuth flow (start/callback) has moved to the generic connector
 	// manager at /manager/connectors/{key}/oauth/*. The Slack channel only
 	// needs token-refresh wiring for the send-proxy feature.
-	for _, ch := range channelReg.Channels() {
+	// Team agents with their own Slack app or Telegram bot join the registry
+	// here so the wiring below (identity, owner, tokens) reaches them too.
+	agentstool.RegisterAgentSlackInstances(context.Background())
+	agentstool.RegisterAgentTelegramInstances(context.Background())
+	wireChannel := func(ch agentchannels.Channel) {
 		if slackCh, ok := ch.(*slackch.Channel); ok {
 			// Wire the refresh function so RefreshTokenMap can rebuild the map
 			// from connector rows without a server restart.
@@ -1753,6 +2028,10 @@ func NewServer() *Server {
 				})
 			}
 
+			// Record whether each reply reached its Slack thread, for the
+			// web UI's "Sent to Slack" status on the bubble.
+			slackCh.SetDeliveryFn(agentstool.RecordChannelDelivery)
+
 			// Background ticker: refresh every 5 minutes.
 			go func(ch *slackch.Channel) {
 				ticker := time.NewTicker(5 * time.Minute)
@@ -1790,6 +2069,11 @@ func NewServer() *Server {
 			}
 		}
 	}
+	for _, ch := range channelReg.Channels() {
+		wireChannel(ch)
+	}
+	// A bot connected while wick runs gets the same wiring.
+	agentstool.SetChannelWirer(wireChannel)
 
 	// ── Personal Access Tokens (MCP bearer auth) ─────────────────
 	// tokensSvc instantiated earlier so the REST channel can reuse it.
@@ -1829,7 +2113,7 @@ func NewServer() *Server {
 	// Shared between the delegation service (which computes the narrowing)
 	// and the MCP minter above (which must apply it).
 	delegationChildGrants := delegation.NewChildGrants()
-	agentsFactory.SessionMCPToken = func(sessionID, callerUserID string) (string, bool) {
+	agentsFactory.SessionMCPToken = func(sessionID, callerUserID string) (string, string, bool) {
 		// A running SUB-AGENT has an identity chosen for it: its triggering
 		// human, with tags already intersected against the role's allowed
 		// list. Honour that first — the delegation computing the narrowing
@@ -1843,13 +2127,13 @@ func NewServer() *Server {
 			if err != nil {
 				log.Warn().Err(err).Str("session", sessionID).
 					Msg("mcp: sub-agent token mint failed; falling back to internal token")
-				return "", false
+				return "", "", false
 			}
-			return tok, true
+			return tok, g.UserID, true
 		}
 		sess, found := agentsMgr.Registry().Session(sessionID)
 		if !found {
-			return "", false
+			return "", "", false
 		}
 		// WHOSE access this spawn gets. The caller wins when a human
 		// triggered it: a turn must run with the reach of the person who
@@ -1866,12 +2150,15 @@ func NewServer() *Server {
 		// them — a schedule fire, a cron job — where there is no caller to
 		// be faithful to. Either way the identity is a real user's own, so
 		// this can only narrow what a spawn reaches.
-		identity := callerUserID
+		//
+		// A Team agent's session follows the agent's run_as mode instead:
+		// "owner" always runs as the agent's owner, "caller" as above but
+		// falling back to the agent's owner. The agent's checklist narrows
+		// either identity — the scope resolver applies it on every MCP
+		// request, and a deleted agent resolves to deny-all.
+		identity := team.SpawnIdentity(sess.Meta, teamSvc.AgentFor(context.Background(), sessionID), callerUserID)
 		if identity == "" {
-			identity = sess.Meta.UserID
-		}
-		if identity == "" {
-			return "", false
+			return "", "", false
 		}
 		// The session rides in the token as well as in the per-spawn
 		// header. claude sends the header; codex cannot send any header at
@@ -1887,9 +2174,9 @@ func NewServer() *Server {
 		if err != nil {
 			log.Warn().Err(err).Str("session", sessionID).Str("identity", identity).
 				Msg("mcp: per-user token mint failed; falling back to internal token")
-			return "", false
+			return "", "", false
 		}
-		return tok, true
+		return tok, identity, true
 	}
 	delegationSvc = &delegation.Service{
 		Repo:     delegation.NewRepo(db),
@@ -1904,6 +2191,8 @@ func NewServer() *Server {
 		Workspaces: delegation.NewGitWorktrees(agentsLayout),
 		// Phase 2/4: where an async result goes once it lands.
 		Deliver: poolDeliverer{pool: agentsPool, channels: channelReg},
+		// @handle lines naming a Team agent go over the Team A2A link.
+		TeamRouter: agentstool.TeamMentionRouter{Hub: hub},
 		// Take-over: a human steering a running sub-agent.
 		Steerer: poolSteerer{pool: agentsPool},
 		// Keeps the "leader stopped, sub-agents still running" thread notice
@@ -1945,6 +2234,14 @@ func NewServer() *Server {
 			}
 			return false
 		},
+		// Continue refuses while the child's previous turn still runs, so
+		// it never starts a second process on the same session.
+		AgentBusy: func(childSessionID, agentName string) bool {
+			return slices.Contains(turnSessions(agentsPool), childSessionID)
+		},
+		// Where a draining predecessor lists the sub-agents it is still
+		// running — the same dir drainForUpgrade publishes into.
+		DrainDir: agentsLayout.BaseDir,
 		// Customer-facing drafts are masked on the way out. The drafter's
 		// prompt asks it not to include credentials; this is what makes
 		// that true when a prompt injection asks otherwise.
@@ -2356,7 +2653,34 @@ func NewServer() *Server {
 	// written from the manager SPA, the legacy form POST, and the
 	// wickmanager MCP tool, and a rule only some of those doors enforce is
 	// not a rule.
-	configsSvc.RegisterValidator("agents", agentconfig.ValidateConfigValue)
+	//
+	// The combined memory ceiling is checked against the machine's real
+	// RAM, read now rather than assumed, together with the free-memory
+	// floor: a ceiling the host cannot hold never binds.
+	configsSvc.RegisterValidator("agents", func(key, value string) error {
+		if err := agentconfig.ValidateConfigValue(key, value); err != nil {
+			return err
+		}
+		if key != "agents_total_memory_mb" && key != "min_free_memory_mb" {
+			return nil
+		}
+		total, _ := strconv.Atoi(configsSvc.GetOwned("agents", "agents_total_memory_mb"))
+		minFree, _ := strconv.Atoi(configsSvc.GetOwned("agents", "min_free_memory_mb"))
+		n, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return nil // not a number: the generic form validation reports it
+		}
+		if key == "agents_total_memory_mb" {
+			total = n
+		} else {
+			minFree = n
+		}
+		ramBytes, ok := sysmem.Total()
+		if !ok {
+			return nil
+		}
+		return agentconfig.ValidateMemoryBudget(total, minFree, int(ramBytes/(1024*1024)))
+	})
 
 	managerHandler.RegisterConfigDecorator("agents", func(rows []pkgentity.Config) []pkgentity.Config {
 		projectIDs, _ := agentproject.List(agentsLayout)
@@ -2503,6 +2827,8 @@ func NewServer() *Server {
 	if agentsMgr != nil {
 		adminHandler.SetProjectWriter(agentsMgr)
 	}
+	// /admin/team-agents — share Team agents by tag.
+	adminHandler.SetTeamAgents(teamAgentLister{})
 	// /admin/workflows — same for a workflow's owner. Only the DB-backed
 	// service can re-stamp one, so the picker appears when that is what is
 	// running and stays a plain label otherwise.
@@ -2646,6 +2972,9 @@ func NewServer() *Server {
 	// Bookmark API (auth-gated inside)
 	bookmarkHandler.Register(r, authMidd)
 
+	// Queued LLM generate jobs (auth-gated inside, owner-scoped).
+	aigenHandler.Register(r, authMidd)
+
 	// Notification API (auth-gated inside)
 	pushHandler.Register(r, authMidd)
 	// Channel connections panel on the account page: which chat accounts this
@@ -2702,11 +3031,103 @@ func NewServer() *Server {
 	// Handler signature stays untouched. Wire the reloader so install / enable /
 	// disable / remove reconcile immediately. Guard the typed-nil: passing a nil
 	// *Reloader into the interface would make it non-nil (and panic on Reload).
-	pluginsHandler := manager.NewPluginsHandler(db)
+	pluginsHandler := manager.NewPluginsHandler(db).SetReplaceRefresh(configsSvc.EnsureOwned)
 	if pluginReloader != nil {
 		pluginsHandler.SetReloader(pluginReloader)
 	}
 	pluginsHandler.RegisterRoutes(r, authMidd)
+
+	// Service plugins (plugins/services/<key>) are supervised with restart
+	// backoff (and auto-off sleep when it applies) and served at /x/{key}/* with per-route auth
+	// (public / admin-issued token / wick session). Admin API under
+	// /manager/api/service-plugins; plugin callbacks under /x/-/api/.
+	servicePlugins := serviceplugin.NewHost(serviceplugin.NewTokens(filepath.Join(connplugin.RootDir(), "service-tokens.json")), "")
+	servicePlugins.BaseURL = func() string { return strings.TrimRight(configsSvc.AppURL(), "/") }
+	servicePlugins.SessionUser = func(req *http.Request) *serviceplugin.User {
+		u := login.GetUser(req.Context())
+		if u == nil {
+			return nil
+		}
+		return &serviceplugin.User{ID: u.ID, Email: u.Email, Name: u.Name, Admin: u.IsAdmin()}
+	}
+	servicePlugins.Configs = configsSvc
+	if n := servicePlugins.Load(connplugin.KindDir(wickplugin.KindService), jobPluginStore.Enabled, jobPluginStore.Record); n > 0 {
+		log.Info().Int("plugins", n).Msg("service plugins: loaded")
+	}
+	servicePlugins.RegisterAdmin(r, authMidd.RequireAdmin)
+	r.Handle("/x/", servicePlugins)
+	serviceplugin.SetDefault(servicePlugins)
+	servicePlugins.Start()
+	// Uninstall stops what is running before the files go: the service
+	// process, the tool runner, and drops a job / tool from its registry so
+	// it is no longer scheduled or listed.
+	pluginsHandler.SetUninstall(func(ctx context.Context, kind, key string) {
+		switch kind {
+		case wickplugin.KindService:
+			servicePlugins.Remove(key)
+		case wickplugin.KindTool:
+			toolPlugins.Remove(key)
+			tools.Unregister(key)
+		case wickplugin.KindJob:
+			jobs.Unregister(key)
+		}
+	}, func(key string) bool {
+		for _, m := range connectors.All() {
+			if m.Meta.Key == key {
+				return true
+			}
+		}
+		for _, m := range tools.All() {
+			if m.Meta.Key == key {
+				return true
+			}
+		}
+		for _, m := range jobs.All() {
+			if m.Meta.Key == key {
+				return true
+			}
+		}
+		return false
+	})
+
+	// Plugin sources (url / GitHub releases): Admin → Plugins → Sources,
+	// Available, Add (upload / link / GitHub). Installs land in the kind
+	// folder; connectors reconcile through the reloader, a service plugin is
+	// reloaded from its new manifest and started, tools and jobs pick it up on next spawn.
+	pluginSources := &pluginsource.Manager{
+		DB:      db,
+		Client:  pluginsource.NewClient(configsSvc.DecryptSecret),
+		Encrypt: configsSvc.EncryptSecret,
+		OnInstalled: func(ctx context.Context, kind, key string) {
+			switch kind {
+			case wickplugin.KindConnector:
+				if pluginReloader != nil {
+					pluginReloader.Reload(ctx)
+				}
+			case wickplugin.KindService:
+				servicePlugins.Install(connplugin.KindDir(wickplugin.KindService), key, jobPluginStore.Enabled, jobPluginStore.Record)
+			}
+		},
+	}
+	pluginSourcesHandler := &manager.PluginSourcesHandler{
+		Sources: pluginSources,
+		Health: manager.InstalledHealth(func(kind, key string) (bool, string) {
+			if kind != wickplugin.KindService {
+				return true, "verified"
+			}
+			svc, ok := servicePlugins.Get(key)
+			if !ok {
+				return false, "not loaded (reload wick)"
+			}
+			st := svc.Sup.Status()
+			// sleeping = stopped by auto-off; the next request wakes it.
+			return st.State == serviceplugin.StateRunning || st.State == serviceplugin.StateSleeping, st.State
+		}),
+	}
+	servicePlugins.Audit = func(actor, key, detail string) { pluginSources.Record(actor, "service_auto_off", key, detail) }
+	pluginSourcesHandler.RegisterRoutes(r, authMidd)
+	pluginsHandler.SetSources(pluginSourcesHandler)
+	go pluginSources.Run(context.Background(), time.Minute)
 
 	// Tool routes — per-tool visibility enforced via RequireToolAccess.
 	// Public tools are reachable without login; Private tools require
@@ -2799,7 +3220,7 @@ func NewServer() *Server {
 		u, err := authSvc.GetUserByID(ctx, userID)
 		return err == nil && u != nil && u.Approved
 	}
-	return &Server{runAsUsable: runAsUsable, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens}
+	return &Server{runAsUsable: runAsUsable, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens}
 }
 
 type Server struct {
@@ -2809,6 +3230,8 @@ type Server struct {
 	agentsPool     *agentpool.Pool
 	agentsLayout   agentconfig.Layout
 	pluginMgr      *connplugin.Manager
+	toolPlugins    *toolplugin.Pool
+	servicePlugins *serviceplugin.Host
 	pluginReloader *connplugin.Reloader
 	// syncSessionMeta reloads one session into the in-memory registry
 	// and broadcasts its meta over SSE. Built in NewServer (where the
@@ -3322,6 +3745,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		s.startChannels(ctx)
 		if s.wfMgr != nil {
 			s.wfMgr.StartCron(ctx)
+			s.wfMgr.StartRunSweep(ctx)
 		}
 		if s.scheduleStore != nil && s.agentsPool != nil {
 			// Boot recovery is implicit — the first tick picks up anything
@@ -3454,6 +3878,14 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		if s.pluginReloader != nil {
 			s.pluginReloader.Stop()
 		}
+		if s.toolPlugins != nil {
+			s.toolPlugins.KillAll()
+		}
+		// Service plugins are always-on children: SIGTERM, then SIGKILL.
+		if s.servicePlugins != nil {
+			s.servicePlugins.Shutdown()
+		}
+		jobplugin.KillAll()
 		if s.pluginMgr != nil {
 			s.pluginMgr.KillAll()
 		}
@@ -3569,6 +4001,21 @@ func (s *Server) waitBootGate(ctx context.Context) {
 	}
 }
 
+// turnSessions lists the sessions with an agent turn in flight — spawning or
+// working, not an idle process kept warm between turns.
+func turnSessions(p *agentpool.Pool) []string {
+	if p == nil {
+		return nil
+	}
+	var out []string
+	for _, a := range p.ActiveSnapshot() {
+		if a.Lifecycle == "spawning" || a.Lifecycle == "working" {
+			out = append(out, a.SessionID)
+		}
+	}
+	return out
+}
+
 // drainForUpgrade runs in the OLD process once a successor has taken over the
 // listener. It is the whole point of the feature: instead of killing agents
 // mid-turn, this process stops answering HTTP and then simply waits for its
@@ -3642,14 +4089,17 @@ func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, b
 	go func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
-		upgrade.PublishDrainState(drainDir, os.Getpid(), drainStarted, upgrade.Busy())
+		// The session list lets the successor's delegation sweep tell this
+		// process's sub-agents from dead ones: it shares their rows but
+		// cannot see this pool.
+		upgrade.PublishDrainState(drainDir, os.Getpid(), drainStarted, upgrade.Busy(), turnSessions(s.agentsPool)...)
 		for {
 			select {
 			case <-stopPublish:
 				upgrade.ClearDrainState(drainDir)
 				return
 			case <-t.C:
-				upgrade.PublishDrainState(drainDir, os.Getpid(), drainStarted, upgrade.Busy())
+				upgrade.PublishDrainState(drainDir, os.Getpid(), drainStarted, upgrade.Busy(), turnSessions(s.agentsPool)...)
 			}
 		}
 	}()
@@ -3702,6 +4152,16 @@ func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, b
 	if s.pluginReloader != nil {
 		s.pluginReloader.Stop()
 	}
+	if s.toolPlugins != nil {
+		s.toolPlugins.KillAll()
+	}
+	// The successor spawns its own service plugins; stop ours (SIGTERM, then
+	// SIGKILL) so none is orphaned by the handover, and reap any job run the
+	// drain left behind.
+	if s.servicePlugins != nil {
+		s.servicePlugins.Shutdown()
+	}
+	jobplugin.KillAll()
 	if s.pluginMgr != nil {
 		s.pluginMgr.KillAll()
 	}
@@ -4002,4 +4462,23 @@ func (n scheduleProjectNamer) ProjectName(id string) string {
 		return ""
 	}
 	return p.Meta.Name
+}
+
+// teamAgentLister feeds /admin/team-agents from the agents tool.
+type teamAgentLister struct{}
+
+func (teamAgentLister) TeamAgents(ctx context.Context) ([]admin.TeamAgent, error) {
+	rows, err := agentstool.TeamAgentsForAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]admin.TeamAgent, len(rows))
+	for i, r := range rows {
+		out[i] = admin.TeamAgent{ID: r.ID, Name: r.Name, Handle: r.Handle, OwnerUserID: r.OwnerUserID, Block: r.Block, Disabled: r.Disabled}
+	}
+	return out, nil
+}
+
+func (teamAgentLister) TrackTeamAgentChange(ctx context.Context, id string) func() {
+	return agentstool.TrackTeamAgentChange(ctx, id)
 }

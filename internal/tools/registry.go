@@ -183,3 +183,17 @@ func registerOnce(m tool.Module) {
 func All() []tool.Module {
 	return extra
 }
+
+// Unregister drops the tool registered under key, if any. Used when a
+// plugin declares it replaces that key (tool.Tool.Replaces): the plugin
+// wins and the old tool gets no routes, card or config rows. Reports
+// whether a tool was removed.
+func Unregister(key string) bool {
+	for i, m := range extra {
+		if m.Meta.Key == key {
+			extra = append(extra[:i:i], extra[i+1:]...)
+			return true
+		}
+	}
+	return false
+}

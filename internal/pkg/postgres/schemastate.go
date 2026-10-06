@@ -80,6 +80,9 @@ var migratedModels = []any{
 	&entity.WorkflowTestCase{},
 	&entity.Skill{},
 	&entity.PluginState{},
+	&entity.PluginSource{},
+	&entity.PluginAudit{},
+	&entity.PluginReplacement{},
 	&entity.ConnectorState{},
 	&entity.ScheduledMessage{},
 	// Multi-agent sub-agent delegation — see
@@ -97,6 +100,16 @@ var migratedModels = []any{
 	// write a row here.
 	&entity.AgentIncident{},
 	&entity.AgentEvidence{},
+	// Agents app: chat-able agents backed by a project, with a per-agent
+	// connector checklist. See internal/agents/team.
+	&entity.AgentPersona{},
+	// Audit trail of every access change of an agent, and the pending
+	// ones a Captain proposed and the owner has not decided yet.
+	&entity.AgentAccessHistory{},
+	// Per-user Team settings (Team instructions, landing choice).
+	&entity.TeamSettings{},
+	// Team agents shared with another user (chat only).
+	&entity.AgentShare{},
 }
 
 // modelFingerprint derives a stable hash of the models' shape. Purely

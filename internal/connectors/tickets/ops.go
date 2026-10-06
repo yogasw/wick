@@ -11,6 +11,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/notes"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/pkg/connector"
 )
@@ -20,6 +21,9 @@ import (
 // an agent working inside a session never has to be told where it is.
 func resolveProject(layout agentconfig.Layout, c *connector.Ctx, explicit string) (string, error) {
 	if p := strings.TrimSpace(explicit); p != "" {
+		if err := team.CheckProjectTarget(c.Context(), layout, c.CallerUserID(), c.SessionID(), p); err != nil {
+			return "", err
+		}
 		return p, nil
 	}
 	sid := c.SessionID()
@@ -58,8 +62,11 @@ func resolveTicket(layout agentconfig.Layout, c *connector.Ctx, projectID, expli
 }
 
 // resolveSession returns the session id to attach/detach.
-func resolveSession(c *connector.Ctx, explicit string) (string, error) {
+func resolveSession(layout agentconfig.Layout, c *connector.Ctx, explicit string) (string, error) {
 	if s := strings.TrimSpace(explicit); s != "" {
+		if err := team.CheckSessionTarget(c.Context(), layout, c.CallerUserID(), c.SessionID(), s); err != nil {
+			return "", err
+		}
 		return s, nil
 	}
 	if sid := c.SessionID(); sid != "" {
@@ -476,7 +483,7 @@ func (h *handlers) attach(c *connector.Ctx) (any, error) {
 	if ticketID == "" {
 		return nil, fmt.Errorf("ticket_id is required")
 	}
-	sid, err := resolveSession(c, c.Input("session_id"))
+	sid, err := resolveSession(h.layout, c, c.Input("session_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -500,7 +507,7 @@ func (h *handlers) detach(c *connector.Ctx) (any, error) {
 	if ticketID == "" {
 		return nil, fmt.Errorf("ticket_id is required")
 	}
-	sid, err := resolveSession(c, c.Input("session_id"))
+	sid, err := resolveSession(h.layout, c, c.Input("session_id"))
 	if err != nil {
 		return nil, err
 	}

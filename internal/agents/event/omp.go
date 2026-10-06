@@ -29,6 +29,8 @@ import (
 //
 // Concurrency: one parser per subprocess.
 type OMPParser struct {
+	// tools pairs calls with results for Display (see display.go).
+	tools          toolCalls
 	instance       string
 	sessionEmitted bool
 	usage          TokenUsage
@@ -87,8 +89,10 @@ type ompUsage struct {
 
 type ompToolResult struct {
 	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text,omitempty"`
+		Type     string `json:"type"`
+		Text     string `json:"text,omitempty"`
+		Data     string `json:"data,omitempty"`
+		MimeType string `json:"mimeType,omitempty"`
 	} `json:"content,omitempty"`
 }
 
@@ -100,6 +104,12 @@ func (r *ompToolResult) text() string {
 	for _, c := range r.Content {
 		if c.Type == "text" && c.Text != "" {
 			parts = append(parts, c.Text)
+		} else if c.Data != "" {
+			// An image block (omp's read of a .png) used to vanish here;
+			// keep the block array so Classify can surface it.
+			if b, err := json.Marshal(r.Content); err == nil {
+				return string(b)
+			}
 		}
 	}
 	return strings.Join(parts, "\n")
@@ -107,6 +117,14 @@ func (r *ompToolResult) text() string {
 
 // Parse decodes one omp line.
 func (p *OMPParser) Parse(line string) (AgentEvent, error) {
+	ev, err := p.parse(line)
+	if err == nil {
+		p.tools.decorate(&ev)
+	}
+	return ev, err
+}
+
+func (p *OMPParser) parse(line string) (AgentEvent, error) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return AgentEvent{}, nil

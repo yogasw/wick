@@ -21,7 +21,7 @@
   import { sessionID, activeRepo, loadStatus } from "$lib/stores/scm";
   import { langFor } from "$lib/git-actions";
   import { toastOk, toastError } from "@wick-fe/common-stores";
-  import { ConfirmDialog, FileBrowser, withAncestorDirs } from "@wick-fe/common-ui";
+  import { ConfirmDialog, FileBrowser, layer, withAncestorDirs } from "@wick-fe/common-ui";
   import type { SessionFileEntry } from "@wick-fe/common-ui";
   import MonacoView from "$lib/components/MonacoView.svelte";
   import {
@@ -381,7 +381,6 @@
       void save();
       return;
     }
-    if (e.key === "Escape" && mode === "sidebar" && openPath) closeFile();
   }
 
   function fmtSize(n: number): string {
@@ -572,7 +571,7 @@
       role="presentation"
       onclick={(e) => { if (e.target === e.currentTarget) closeFile(); }}
     >
-      <div class="flex h-full w-full flex-col overflow-hidden border-t border-white-300 bg-white-100 shadow-2xl sm:h-[90vh] sm:max-w-6xl sm:rounded-2xl sm:border dark:border-navy-600 dark:bg-navy-700">
+      <div use:layer={{ onEscape: closeFile }} role="dialog" aria-modal="true" aria-label={openPath} class="flex h-full w-full flex-col overflow-hidden border-t border-white-300 bg-white-100 shadow-2xl sm:h-[90vh] sm:max-w-6xl sm:rounded-2xl sm:border dark:border-navy-600 dark:bg-navy-700">
         {@render editor()}
       </div>
     </div>

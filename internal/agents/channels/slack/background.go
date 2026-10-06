@@ -260,3 +260,12 @@ func backgroundName(a agentchannels.DetachedSurvivor) string {
 	}
 	return "sub-agent"
 }
+
+// hasBackgroundAgents reports whether sessionKey's turn still tracks
+// sub-agents working in the background.
+func (s *Channel) hasBackgroundAgents(sessionKey string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.turns[sessionKey]
+	return t != nil && len(t.bgAgents) > 0
+}

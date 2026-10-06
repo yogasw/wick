@@ -250,6 +250,12 @@ func (l Layout) SessionWorkspace(id string) string {
 // on every message.
 func (l Layout) SessionUsage(id string) string { return filepath.Join(l.SessionDir(id), "usage.json") }
 
+// SessionDeliveries records, per assistant turn, whether its reply reached
+// the channel it was posted to (Slack today). See store/delivery.go.
+func (l Layout) SessionDeliveries(id string) string {
+	return filepath.Join(l.SessionDir(id), "deliveries.json")
+}
+
 func (l Layout) SessionInflight(id string) string {
 	return filepath.Join(l.SessionDir(id), "inflight.jsonl")
 }
@@ -275,6 +281,13 @@ func (l Layout) SessionThinking(sessionID, turnID string) string {
 // thinking/<turn_id>/<event_id>.json
 func (l Layout) SessionThinkingEvent(sessionID, turnID, eventID string) string {
 	return filepath.Join(l.SessionThinkingTurnDir(sessionID, turnID), eventID+".json")
+}
+
+// SessionThinkingBlob returns the binary payload file of one trace event
+// (an image/pdf/… a tool returned): thinking/<turn_id>/<blob_ref>.bin.
+// blobRef is the event id, or "<event_id>-p<n>" for the n-th part.
+func (l Layout) SessionThinkingBlob(sessionID, turnID, blobRef string) string {
+	return filepath.Join(l.SessionThinkingTurnDir(sessionID, turnID), blobRef+".bin")
 }
 
 // EnsureLayout creates the three top-level folders if they don't exist.

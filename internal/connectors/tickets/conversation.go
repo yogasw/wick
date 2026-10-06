@@ -63,7 +63,7 @@ type conversationReadInput struct {
 	TicketID  string `wick:"desc=Ticket the conversation belongs to. Defaults to the ticket the calling session belongs to."`
 	ProjectID string `wick:"desc=Project the ticket belongs to. Defaults to the calling session's project."`
 	Detail    string `wick:"dropdown=final|trace;desc=final (default) = the messages only. trace = each assistant turn's tool calls and thinking as well — much larger, use it when the question is HOW something was done."`
-	Order     string `wick:"dropdown=newest|oldest;desc=Which end to page from. newest (default) starts at the last message; oldest starts at the first. Either way a page reads oldest-first."`
+	Order     string `wick:"dropdown=newest|oldest;desc=Which end to page from. newest (default) starts at the last message, oldest starts at the first. Either way a page reads oldest-first."`
 	Limit     int    `wick:"desc=Messages per page. Default 20, maximum 100."`
 	Offset    int    `wick:"desc=Messages to skip from the chosen end — 0 is the first page. Use next_offset from the previous response rather than computing it."`
 }

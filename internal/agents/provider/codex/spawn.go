@@ -109,7 +109,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// loader never sees them; this block is what makes them reachable, and the
 	// --add-dir below is what makes the paths it names readable.
 	soulPath := ""
-	soul := skillsync.AppendBuiltinCatalog(opt.Preset)
+	soul := skillsync.AppendBuiltinCatalog(opt.Preset, opt.SkipSkills...)
 	if soul != "" {
 		soulDir := opt.SessionDir
 		if soulDir == "" {

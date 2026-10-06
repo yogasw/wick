@@ -57,6 +57,10 @@
   let height = $state(rememberedHeight ?? DEFAULT_HEIGHT);
   // Last height the document reported, so a resize of the chat can re-fit it.
   let reportedHeight = 0;
+  // Whether the frame scrolls internally now (fitHeight's hysteresis), and
+  // the overflow answer the current document was last sent (null = none yet).
+  let scrolling = false;
+  let postedOverflow: boolean | null = null;
   let showCode = $state(false);
   let fullscreen = $state(false);
   // Bumped on every reload so the iframe remounts even when the refetched
@@ -223,13 +227,20 @@
     // showing): fitting to that would shrink the preview to the minimum, so
     // keep the current height until it measures again.
     if (scroller && scroller.clientHeight === 0) return;
-    const fit = fitHeight(reported, scroller ? scroller.clientHeight : window.innerHeight);
+    const fit = fitHeight(reported, scroller ? scroller.clientHeight : window.innerHeight, scrolling);
     const next = fit.height;
+    scrolling = fit.scroll;
     // Tell the document whether to show its own scrollbar (only when it is
-    // taller than the cap). Sent every time: a remounted frame starts hidden.
-    try {
-      frameEl?.contentWindow?.postMessage({ type: "wick-artifact-overflow", id, on: fit.scroll }, "*");
-    } catch { /* frame gone */ }
+    // taller than the cap). Only on a change: the document re-measures on
+    // every message it acts on, so re-sending the same answer each report
+    // kept a frame near the cap busy. A freshly loaded document starts
+    // hidden, so its load resets postedOverflow.
+    if (fit.scroll !== postedOverflow) {
+      try {
+        frameEl?.contentWindow?.postMessage({ type: "wick-artifact-overflow", id, on: fit.scroll }, "*");
+        postedOverflow = fit.scroll;
+      } catch { /* frame gone */ }
+    }
     rememberHeight(memoKey(), next);
     if (next === height) return;
     // Keep the reader's place when this preview resizes while it sits above
@@ -380,6 +391,7 @@
         {sandbox}
         referrerpolicy="no-referrer"
         title={name}
+        onload={() => { postedOverflow = null; if (scrolling && reportedHeight > 0) applyHeight(reportedHeight); }}
         class="block w-full"
         style="height:{height}px;border:0;background:transparent"
       ></iframe>

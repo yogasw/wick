@@ -344,3 +344,27 @@ func TestContinueDoesNotReplayTheOriginalContext(t *testing.T) {
 		t.Fatalf("continuation replayed the first leg's context: %q", specs[1].Task)
 	}
 }
+
+// A continue reframes Task with a resume preamble; the first leg's task
+// must survive as Title so the panel still names what was asked.
+func TestContinueKeepsTheFirstTaskAsTitle(t *testing.T) {
+	stream := &scriptedStream{events: []StreamEvent{
+		{Type: event.TextDelta, Text: "first answer"},
+		{Type: event.Done},
+	}}
+	first := baseReq()
+	res1, _, _, r := runAndContinue(t, first, ContinueRequest{Task: "now check the tests too"}, stream)
+	row, err := r.Get(context.Background(), res1.DelegationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Title != first.Task {
+		t.Fatalf("title = %q, want the first task %q", row.Title, first.Task)
+	}
+	if row.Resumes != 1 {
+		t.Fatalf("resumes = %d, want 1", row.Resumes)
+	}
+	if row.Task == first.Task {
+		t.Fatal("task was not reframed for the continuation")
+	}
+}

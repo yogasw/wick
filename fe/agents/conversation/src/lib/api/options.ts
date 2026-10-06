@@ -51,6 +51,15 @@ const modelsQuery = (opts?: { entry?: string; refresh?: boolean }) => {
   return s ? `?${s}` : "";
 };
 
+const projectOptionsQuery = (opts?: { hideTeam?: boolean; include?: string[] }) => {
+  const q = new URLSearchParams();
+  if (opts?.hideTeam) q.set("hide_team", "1");
+  const inc = (opts?.include ?? []).filter(Boolean);
+  if (inc.length) q.set("include", inc.join(","));
+  const s = q.toString();
+  return s ? `?${s}` : "";
+};
+
 // getPresetOptions lists the configured presets ([{name}]) so the project
 // landing / init composer can offer a preset selector (same source the
 // new-session page uses).
@@ -59,14 +68,16 @@ export const getPresetOptions = (base: string) =>
     Effect.map((r) => (r ?? []).map((p) => p.name)),
   );
 
-export const getProjectOptions = (base: string) =>
+/** opts.hideTeam leaves out the Team app's agent projects; opts.include
+    names ids that come back regardless (an agent's own project). */
+export const getProjectOptions = (base: string, opts?: { hideTeam?: boolean; include?: string[] }) =>
   apiGetE<
     (ProjectOption & {
       default_provider?: string;
       default_model?: string;
       ticket_enabled?: boolean;
     })[] | null
-  >(`${base}/projects/options`).pipe(
+  >(`${base}/projects/options${projectOptionsQuery(opts)}`).pipe(
     Effect.map((r) =>
       (r ?? []).map((p) => ({
         ...p,

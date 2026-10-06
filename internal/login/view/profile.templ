@@ -124,6 +124,44 @@ templ ProfilePage(user *entity.User, errMsg string, success bool, prefsSaved boo
 								<span class="text-xs text-black-700 dark:text-black-600">Larger cards with full names and descriptions.</span>
 							</span>
 						</label>
+						<!-- Interface size: the root font-size. Dragging previews it on
+						     this page at once; Save stores it for every page. -->
+						{{ uiScale := user.Metadata.UIScaleOrDefault() }}
+						<div class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 p-4">
+							<div class="flex items-center justify-between gap-3">
+								<label for="ui-scale" class="text-sm font-medium text-black-900 dark:text-white-100">Interface size</label>
+								<span class="flex items-center gap-3">
+									<span id="ui-scale-value" class="text-sm tabular-nums text-black-800 dark:text-black-600">{ fmt.Sprintf("%d%%", uiScale) }</span>
+									<button type="button" id="ui-scale-reset" class="rounded-lg px-2 py-1 text-xs text-black-800 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700">Reset</button>
+								</span>
+							</div>
+							<input
+								id="ui-scale"
+								type="range"
+								name="ui_scale"
+								min={ fmt.Sprint(entity.UIScaleMin) }
+								max={ fmt.Sprint(entity.UIScaleMax) }
+								step={ fmt.Sprint(entity.UIScaleStep) }
+								value={ fmt.Sprint(uiScale) }
+								data-default={ fmt.Sprint(entity.UIScaleDefault) }
+								class="mt-3 w-full accent-green-500"
+							/>
+							<span class="mt-1 block text-xs text-black-700 dark:text-black-600">Scales text and spacing on every page. Saved with Save.</span>
+						</div>
+						<script>
+							(function () {
+								var r = document.getElementById("ui-scale");
+								var out = document.getElementById("ui-scale-value");
+								var reset = document.getElementById("ui-scale-reset");
+								if (!r) return;
+								function apply() {
+									out.textContent = r.value + "%";
+									document.documentElement.style.fontSize = r.value + "%";
+								}
+								r.addEventListener("input", apply);
+								reset.addEventListener("click", function () { r.value = r.dataset.default; apply(); });
+							})();
+						</script>
 						<div class="flex justify-end">
 							<button
 								type="submit"

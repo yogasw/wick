@@ -5,7 +5,6 @@ package setup
 
 import (
 	"context"
-	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/pool"
@@ -64,6 +63,10 @@ type Manager struct {
 	// queue/sidebar/session-reuse benefits. See workflow/pool.md.
 	AgentPool      *pool.Pool
 	AgentSubscribe nodes.AgentSubscribeFn
+
+	// retentionOpts is set by StartRunRetention and read by
+	// StartRunSweep, which starts later — once intake is ours.
+	retentionOpts func() CleanupOptions
 }
 
 // New constructs every dependency wired to a single Layout. Channels,
@@ -350,59 +353,6 @@ func ToggleAndReload(ctx context.Context, svc service.Service, router *trigger.R
 		return err
 	}
 	return HotReload(ctx, svc, router, cron, schedAt, id)
-}
-
-// CleanupOptions tunes the daily run-retention pass.
-type CleanupOptions struct {
-	SuccessTTL time.Duration
-	FailedTTL  time.Duration
-	KeepMax    int
-	Now        func() time.Time
-}
-
-// CleanupRuns walks runs/ and removes old ones per policy.
-func CleanupRuns(layout config.Layout, opts CleanupOptions) (removed int, err error) {
-	if opts.Now == nil {
-		opts.Now = time.Now
-	}
-	if opts.SuccessTTL == 0 {
-		opts.SuccessTTL = 30 * 24 * time.Hour
-	}
-	if opts.FailedTTL == 0 {
-		opts.FailedTTL = 90 * 24 * time.Hour
-	}
-	svc := service.New(layout)
-	store := state.New(layout)
-	ids, err := svc.List()
-	if err != nil {
-		return 0, err
-	}
-	for _, id := range ids {
-		runs, err := store.ListRuns(id)
-		if err != nil {
-			continue
-		}
-		for i, rid := range runs {
-			if opts.KeepMax > 0 && i < opts.KeepMax {
-				continue
-			}
-			st, err := store.Load(id, rid)
-			if err != nil {
-				continue
-			}
-			ttl := opts.SuccessTTL
-			if st.Status == workflow.StatusFailed {
-				ttl = opts.FailedTTL
-			}
-			if st.EndedAt != nil && opts.Now().Sub(*st.EndedAt) > ttl {
-				dir := layout.WorkflowRunDir(id, rid)
-				if err := removeAll(dir); err == nil {
-					removed++
-				}
-			}
-		}
-	}
-	return removed, nil
 }
 
 // canPinSession answers whether a workflow author may point a node at an

@@ -1,5 +1,6 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
+import { tick } from "svelte";
 import Composer from "../Composer.svelte";
 import { optionModelsWithMeta } from "../model-list-meta.js";
 
@@ -429,6 +430,25 @@ describe("Composer — @ mention", () => {
     expect(textarea.value).toBe("read @src/main.go ");
   });
 
+  test("a second mention on the same line gets its own query", async () => {
+    const onSearchFiles = vi.fn().mockResolvedValue(["s.txt"]);
+    render(Composer, { props: { onSend: vi.fn(), onSearchFiles } });
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "@wick-feature-implementer @s" } });
+    await waitFor(() => expect(onSearchFiles).toHaveBeenLastCalledWith("s"));
+    expect(await screen.findByText("s.txt")).toBeDefined();
+  });
+
+  test("a new @ after a picked mention opens the menu again", async () => {
+    render(Composer, { props: { onSend: vi.fn(), mentionFiles: ["tune.py", "b.txt"] } });
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await fireEvent.input(textarea, { target: { value: "@tu" } });
+    await fireEvent.mouseDown(screen.getByText("tune.py"));
+    expect(textarea.value).toBe("@tune.py ");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    await fireEvent.input(textarea, { target: { value: "@tune.py @" } });
+    expect(screen.getByText("b.txt")).toBeDefined();
+  });
+
   test("@ does not trigger mid-word (email)", async () => {
     render(Composer, { props: { onSend: vi.fn(), mentionFiles: ["a.txt"] } });
     await fireEvent.input(screen.getByRole("textbox"), { target: { value: "foo@bar" } });
@@ -612,6 +632,19 @@ describe("Composer — a dismissed menu stays dismissed", () => {
     expect(menu()).not.toBeNull();
   });
 
+  test("a second @ on the same line is a new token and opens again", async () => {
+    const textarea = await openThenEscape();
+    await fireEvent.input(textarea, { target: { value: "@ap and more" } });
+    expect(menu()).toBeNull();
+    await fireEvent.input(textarea, { target: { value: "@ap and more @" } });
+    expect(menu()).not.toBeNull();
+    // ...and Esc dismisses that one too.
+    await fireEvent.keyDown(textarea, { key: "Escape" });
+    expect(menu()).toBeNull();
+    await fireEvent.input(textarea, { target: { value: "@ap and more @a" } });
+    expect(menu()).toBeNull();
+  });
+
   test("deleting the mention re-arms it, so retyping @ works", async () => {
     const textarea = await openThenEscape();
     await fireEvent.input(textarea, { target: { value: "" } });
@@ -667,5 +700,179 @@ describe("Composer auto-resize", () => {
     expect(seen.length).toBeGreaterThan(0);
     expect(seen).not.toContain("auto");
     expect(seen[seen.length - 1]).toBe("120px");
+  });
+});
+
+describe("Composer — @ mention groups", () => {
+  const agents = [
+    { handle: "log-investigator", label: "log-investigator", hint: "reads logs", group: "subagent" as const },
+    { handle: "anton", label: "Anton", hint: "Billing specialist", group: "team" as const, avatar: { shape: "blob", color: "#7c3aed" } },
+  ];
+
+  test("lists Team, then Sub-agents, then Files under section titles", async () => {
+    render(Composer, { props: { onSend: vi.fn(), mentionFiles: ["a.txt"], mentionAgents: agents } });
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "@" } });
+    const list = screen.getByRole("listbox");
+    const text = list.textContent ?? "";
+    const iTeam = text.indexOf("Team");
+    const iSub = text.indexOf("Sub-agents");
+    const iFiles = text.indexOf("Files");
+    expect(iTeam).toBeGreaterThanOrEqual(0);
+    expect(iSub).toBeGreaterThan(iTeam);
+    expect(iFiles).toBeGreaterThan(iSub);
+    expect(screen.getByTestId("mention-team-row").textContent).toContain("Anton");
+    expect(screen.getByText("@anton · Billing specialist")).toBeDefined();
+  });
+
+  test("the query filters Team rows by handle or name", async () => {
+    render(Composer, { props: { onSend: vi.fn(), mentionAgents: agents } });
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "@ant" } });
+    expect(screen.getByText("Anton")).toBeDefined();
+    expect(screen.queryByText("log-investigator")).toBeNull();
+  });
+
+  test("picking a Team row inserts its handle", async () => {
+    const onSend = vi.fn();
+    render(Composer, { props: { onSend, mentionAgents: agents } });
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await fireEvent.input(textarea, { target: { value: "@Anton" } });
+    await fireEvent.mouseDown(screen.getByText("Anton"));
+    expect(textarea.value.startsWith("@anton")).toBe(true);
+  });
+
+  test("a files-only menu keeps no section title", async () => {
+    render(Composer, { props: { onSend: vi.fn(), mentionFiles: ["a.txt"] } });
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "@" } });
+    expect(screen.queryByText("Files")).toBeNull();
+  });
+});
+
+describe("Composer — Send/Stop button", () => {
+  test("idle shows only Send, with or without onStop", () => {
+    const { unmount } = render(Composer, { props: { onSend: vi.fn(), running: true } });
+    expect(screen.queryByTestId("composer-stop")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    unmount();
+    render(Composer, { props: { onSend: vi.fn(), onStop: vi.fn() } });
+    expect(screen.queryByTestId("composer-stop")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+  });
+
+  test("running turns Send into one Stop button with a spinner, and calls onStop", async () => {
+    const onStop = vi.fn();
+    render(Composer, { props: { onSend: vi.fn(), running: true, onStop } });
+    const btn = screen.getByRole("button", { name: "Stop" });
+    expect(btn.getAttribute("title")).toBe("Stop (the chat history is kept)");
+    expect(btn.querySelector(".stop-ring")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.getAllByTestId("composer-stop")).toHaveLength(1);
+    await fireEvent.click(btn);
+    expect(onStop).toHaveBeenCalledOnce();
+  });
+
+  test("running still sends typed text on Enter", async () => {
+    const onSend = vi.fn();
+    const onStop = vi.fn();
+    render(Composer, { props: { onSend, running: true, onStop } });
+    const textarea = screen.getByRole("textbox");
+    await fireEvent.input(textarea, { target: { value: "one more thing" } });
+    await fireEvent.keyDown(textarea, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith({ text: "one more thing", files: [] });
+    expect(onStop).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+  });
+
+  test("queued reads Cancel in the same slot", async () => {
+    const onStop = vi.fn();
+    render(Composer, { props: { onSend: vi.fn(), queued: true, onStop } });
+    const btn = screen.getByTestId("composer-stop");
+    expect(btn.textContent?.trim()).toBe("Cancel");
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    await fireEvent.click(btn);
+    expect(onStop).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Composer — Send or Stop while running", () => {
+  function setup() {
+    const onSend = vi.fn();
+    const onStop = vi.fn();
+    render(Composer, { props: { onSend, running: true, onStop } });
+    return { onSend, onStop, textarea: screen.getByRole("textbox") as HTMLTextAreaElement };
+  }
+
+  async function hold(btn: HTMLElement) {
+    vi.useFakeTimers();
+    try {
+      await fireEvent.pointerDown(btn, { button: 0 });
+      vi.advanceTimersByTime(500);
+      await tick();
+      await fireEvent.pointerUp(btn, { button: 0 });
+      // The release of a hold still produces a click in a real browser.
+      await fireEvent.click(btn);
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  test("running with an empty box shows Stop", () => {
+    setup();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    expect(screen.queryByTestId("composer-send")).toBeNull();
+  });
+
+  test("running with text shows Send, and a click sends without stopping", async () => {
+    const { onSend, onStop, textarea } = setup();
+    await fireEvent.input(textarea, { target: { value: "Ow iya" } });
+    expect(screen.queryByTestId("composer-stop")).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Send (hold for Stop)" }));
+    expect(onSend).toHaveBeenCalledWith({ text: "Ow iya", files: [] });
+    expect(onStop).not.toHaveBeenCalled();
+    // The box is empty again, so the slot goes back to Stop.
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+  });
+
+  test("a long-press opens Send/Stop; Stop stops and keeps the draft", async () => {
+    const { onSend, onStop, textarea } = setup();
+    await fireEvent.input(textarea, { target: { value: "Ow iya" } });
+    await hold(screen.getByTestId("composer-send"));
+    const menu = screen.getByRole("menu");
+    expect(screen.getByRole("menuitem", { name: "Send" })).toBeTruthy();
+    expect(menu.textContent).toContain("Stop");
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Stop" }));
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("Ow iya");
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  test("a long-press does not send by itself", async () => {
+    const { onSend, textarea } = setup();
+    await fireEvent.input(textarea, { target: { value: "Ow iya" } });
+    await hold(screen.getByTestId("composer-send"));
+    expect(onSend).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Send" }));
+    expect(onSend).toHaveBeenCalledWith({ text: "Ow iya", files: [] });
+  });
+
+  test("the menu opens from the keyboard and Escape closes it", async () => {
+    const { textarea } = setup();
+    await fireEvent.input(textarea, { target: { value: "Ow iya" } });
+    await fireEvent.keyDown(screen.getByTestId("composer-send"), { key: "ArrowUp" });
+    expect(screen.getByRole("menu")).toBeTruthy();
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  test("idle stays a plain Send with no menu", async () => {
+    const onSend = vi.fn();
+    render(Composer, { props: { onSend, onStop: vi.fn() } });
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "hi" } });
+    const btn = screen.getByRole("button", { name: "Send" });
+    expect(btn.getAttribute("aria-haspopup")).toBeNull();
+    await hold(btn);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(onSend).toHaveBeenCalledOnce();
   });
 });

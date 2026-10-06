@@ -3,13 +3,14 @@
   import { attachThreadScroll, type ThreadScroll } from "../threadStick.js";
   import { railRefreshTargets, type RefreshableRailTab } from "../railRefresh.js";
   import { get } from "svelte/store";
-  import { Effect } from "effect";
+  import { Effect, Either } from "effect";
   import { WickClientLayer, listAgentProfiles } from "@wick-fe/common-api";
   import { toastError, toastOk, toastWarn } from "@wick-fe/common-stores";
   import { ConfirmDialog, Composer } from "@wick-fe/common-ui";
   import { NOTIFY_KEY } from "../notify-pref.js";
 
   import { createThreadStore } from "../stores/thread.js";
+  import { remoteProgress } from "../remoteAgent.js";
   import type { ThreadMeta, LifecycleState } from "../stores/thread.js";
   import { connectSession } from "../stores/sse.js";
   import type { SSEStatus } from "../types/agents.js";
@@ -19,17 +20,20 @@
   import { currentApproval, showApproval, hideApproval, isExpiredApprovalError } from "../stores/approvals.js";
   import { notify } from "../notify.js";
   import { push } from "../router.js";
+  import { composerPlaceholder, hiddenTabNote, providerLocked, type AgentMode, type RailTab } from "../agentMode.js";
   import { bareToolName } from "../todoGroups.js";
   import { readScmWidth, writeScmWidth, clampScmWidth, RAIL_GUTTER_PX } from "../scmWidth.js";
   import { isValidFileName } from "../fileName.js";
 
-  import { getConversation, getSessionMeta, deleteSession, getTurnTrace, getTurnEvent, cancelRun } from "../api/sessions.js";
+  import { getConversation, getSessionMeta, deleteSession, getTurnTrace, getTurnEvent, getTurnBlob, cancelRun, sendPostback, decideApprovalCard } from "../api/sessions.js";
+  import { lockCard } from "../actionCard.js";
+  import { APIError } from "@wick-fe/common-api";
   import { getProviderOptions, getProviderOptionModels, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
   import { getAsks, answerAsk } from "../api/asks.js";
   import { getTodos, type TodoList } from "../api/todos.js";
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
   import { sendMessage } from "../api/messages.js";
-  import { listFiles, searchTree, searchMentionPaths, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
+  import { listFiles, searchTree, searchMentionPaths, readFile, saveFile, createFile, deleteFile, downloadURL, makeTraceFiles } from "../api/files.js";
   import { listComposerCommands, type ComposerApiCommand } from "../api/composer.js";
   import {
     getComposerUsage, normalizeComposerUsage, refreshComposerUsage, normalizeUsageRefresh,
@@ -44,11 +48,12 @@
     liveSubAgents,
     getMessages,
     bumpHops,
+    getTeamTasks,
   } from "../api/subagents.js";
   import { isSubAgentWorking } from "../lifecycleCls.js";
   import SubAgentPanel from "./SubAgentPanel.svelte";
   import SubAgentModal from "./SubAgentModal.svelte";
-  import type { AgentMessageItem, IncidentSummary, SubAgentItem } from "../types/agents.js";
+  import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
   import {
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
     duplicateWorkspace, renameWorkspace, removeWorkspace,
@@ -81,7 +86,7 @@
   import ConversationHeader from "./ConversationHeader.svelte";
   import ConversationThread from "./ConversationThread.svelte";
   import { bareSlashCommand } from "../slashCommand.js";
-  import JsonTree from "./JsonTree.svelte";
+  import { JsonTree } from "@wick-fe/common-ui";
   import { FileBrowser } from "@wick-fe/common-ui";
   import FileViewerModal from "./FileViewerModal.svelte";
   import SwitchModal from "./SwitchModal.svelte";
@@ -90,7 +95,13 @@
   import ContextPopover from "./ContextPopover.svelte";
   import { fetchSessionContext, type SessionContext } from "../api/context.js";
   import { getSessionOverrides, setSessionOverride } from "../api/overrides.js";
-  import type { ConfigField } from "@wick-fe/common-ui";
+  import type { ConfigField, ComposerMentionAgent } from "@wick-fe/common-ui";
+  import { AgentAvatar } from "@wick-fe/common-avatar";
+  import { cancelRemoteQueued, getSessionOptions, listAgentRoster, recheckRemote, runApi, type SessionOptions } from "../api/team.js";
+  import SessionFieldChips from "./SessionFieldChips.svelte";
+  import { recheckToast } from "../remoteRecheck.js";
+  import { teamMentionAgents, type TeamPeer } from "../teamMention.js";
+  import { navigate as navigateAgents } from "../agentsRouter.js";
   import { setFileContext, setWidgetPolicy } from "../richRender.js";
   import ProcessPanel from "./ProcessPanel.svelte";
   import WorkspacePanel from "./WorkspacePanel.svelte";
@@ -112,9 +123,20 @@
   type Props = {
     base: string;
     sessionId: string;
+    /* Set when the Agents app hosts this view (/team). Unset = the normal
+       /sessions page, whose behaviour this must not change. */
+    agentMode?: AgentMode;
+    /* Host-owned rail button (Team header): each increment toggles the
+       rail, reopening the last tab or else the first one shown. */
+    railToggle?: number;
+    /* Told whenever the rail opens or closes, so the host button can
+       show its pressed state. */
+    onRailChange?: (open: boolean) => void;
   };
 
-  let { base, sessionId }: Props = $props();
+  let { base, sessionId, agentMode, railToggle = 0, onRailChange }: Props = $props();
+  // Trace chips stat the files a tool call named; cached per session.
+  const traceFiles = $derived(makeTraceFiles(base, sessionId));
 
   /* ── thread store ──────────────────────────────────────────────── */
   const thread = createThreadStore();
@@ -124,9 +146,38 @@
   let agentLifecycle = $state<LifecycleState>({ state: "", pid: 0, substate: "", at: 0 });
   let threadMeta = $state<ThreadMeta>({});
 
+  let cards = $state<Record<string, import("../types/agents.js").CardState>>({});
   const unsubTurns = thread.turns.subscribe((v) => { turns = v; });
+  const unsubCards = thread.cards.subscribe((v) => { cards = v; });
   const unsubLive = thread.live.subscribe((v) => { live = v; });
   const unsubTyping = thread.typing.subscribe((v) => { typing = v; });
+  /* Report turn start/end to an agent-mode host, edges only. Starts at
+     false so mounting an idle chat reports nothing. */
+  let turnActive = false;
+  $effect(() => {
+    const active = typing.active;
+    if (active === turnActive) return;
+    turnActive = active;
+    untrack(() => agentMode?.onTurnChange?.(active));
+  });
+  /* And the tool it is on, on every change: thinking ↔ tool. */
+  let toolSent: string | undefined;
+  $effect(() => {
+    const t = typing.active ? typing.toolName || undefined : undefined;
+    if (t === toolSent) return;
+    toolSent = t;
+    untrack(() => agentMode?.onActivity?.(t));
+  });
+  /* A remote agent's progress label ("lagi pakai code read…") for the
+     thinking bubble, and the host's header told of every change. */
+  const progressLabel = $derived(agentMode?.remoteProgress && typing.active ? remoteProgress(live) : undefined);
+  let progressSent: string | undefined;
+  $effect(() => {
+    const p = progressLabel;
+    if (p === progressSent) return;
+    progressSent = p;
+    untrack(() => agentMode?.onProgress?.(p));
+  });
   const unsubLifecycle = thread.lifecycle.subscribe((v) => { agentLifecycle = v; });
   /* When the running turn started, for the context panel's live line. A
      turn can go minutes without saying anything, and every other figure
@@ -202,8 +253,12 @@
   let sseStatus = $state<SSEStatus>("connecting");
 
   /* ── vertical rail tabs ────────────────────────────────────────── */
-  type RailTab = "files" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents" | "ticket" | "notes" | "todos";
   let railTab = $state<RailTab | null>(null);
+  // Auto-open paths (todos, ?rail=subagents) must not reveal a tab the
+  // agent's features hide.
+  $effect(() => {
+    if (railTab && agentMode?.hideTabs?.includes(railTab)) railTab = null;
+  });
 
   /* ── thread scroll ref ─────────────────────────────────────────── */
   let threadEl: HTMLElement | undefined = $state();
@@ -232,6 +287,7 @@
      backend (whole tree, ranked, fresh per keystroke); `/` lists commands from
      GET /api/composer/commands (built-in actions + skills). */
   function searchMentionFiles(query: string): Promise<string[]> {
+    if (agentMode?.chatOnly) return Promise.resolve([]);
     return run(searchMentionPaths(base, sessionId, query).pipe(Effect.provide(WickClientLayer)))
       .catch(() => [] as string[]);
   }
@@ -272,6 +328,27 @@
      server answers from its shared paced cache, so opening this costs no
      upstream request; an unsupported provider type comes back with
      supported=false and the popover prints why. */
+  /* A plugin remote agent's session fields (e.g. repository and branch),
+     shown read-only above the composer: the values the chat started with,
+     or the plugin's defaults for a chat that has not sent yet. */
+  let sessionFields = $state<SessionOptions | null>(null);
+  $effect(() => {
+    const agentId = agentMode?.sessionFieldsAgentId;
+    const sid = sessionId;
+    sessionFields = null;
+    if (!agentId) return;
+    let live = true;
+    runApi(getSessionOptions(base, agentId, sid))
+      .then((o) => {
+        if (live) sessionFields = o;
+      })
+      .catch(() => {
+        // Nothing to show when the plugin cannot be asked.
+      });
+    return () => {
+      live = false;
+    };
+  });
   let usagePopoverOpen = $state(false);
   let usageData = $state<ComposerUsage | null>(null);
   let usageLoading = $state(false);
@@ -563,6 +640,25 @@
     showCapabilities: capsPrefs.show,
     capabilityMode: capsPrefs.mode,
   });
+  /* Agent mode: the provider chip follows the agent's switch setting.
+     On, the picker works but another provider is refused once the chat
+     has turns; off, the chip only explains where to change it. */
+  let providerNotice = $state<"started" | "locked" | null>(null);
+  const agentProviderSelect = $derived({
+    ...providerSelect,
+    onChange: (v: string) => {
+      if (providerLocked(turns.length > 0, activeProvider, v)) providerNotice = "started";
+      else void handleProviderChange(v);
+    },
+  });
+  const effectiveProvider = $derived(
+    (activeProvider ? activeProvider : "wick default") + (activeModelID ? ` / ${activeModelID}` : ""),
+  );
+  const agentProviderChip = $derived({
+    value: activeProvider ? normKey(activeProvider) : "",
+    title: effectiveProvider,
+    onClick: () => (providerNotice = "locked"),
+  });
   const projectSelect = $derived({
     options: [
       { label: "— no project —", value: "" },
@@ -580,7 +676,9 @@
   let processes = $state<ProcessInfo[]>([]);
   // note carries the reason the dialog was opened from a running tool card,
   // so the confirm can explain why a "cancel" turned into "stop the agent".
-  let confirmKill = $state<{ sid: string; queued: boolean; note?: string } | null>(null);
+  // subAgents: busy sub-agents the composer's Stop will interrupt too.
+  // quick: a composer Stop — confirms with a small "Stopped" toast.
+  let confirmKill = $state<{ sid: string; queued: boolean; note?: string; subAgents?: number; quick?: boolean } | null>(null);
   // Guard against overlapping /processes requests: a burst of SSE `lifecycle`
   // events would otherwise stack into a pile of pending fetches. Skip while
   // one is already in flight.
@@ -783,6 +881,8 @@
   }
 
   function handleTabChange(view: ActiveView) {
+    // No header in agent mode means no way back from another view.
+    if (agentMode?.hideHeader && view !== "conversation") return;
     activeView = view;
     if (view === "approvals") loadApprovalsTab();
   }
@@ -822,6 +922,7 @@
   }
 
   function loadFiles() {
+    if (agentMode?.chatOnly) return;
     filesLoading = true;
     filesLoadError = "";
     run(listFiles(base, sessionId).pipe(Effect.provide(WickClientLayer)))
@@ -1014,6 +1115,7 @@
   }
 
   function loadProcesses() {
+    if (agentMode?.chatOnly) return;
     // In-flight guard: if a fetch is already running, don't fire a second one
     // — but remember that a refresh was asked for, so we run once more when
     // the current one lands. Without the re-arm, a lifecycle event arriving
@@ -1057,7 +1159,17 @@
     }, 200);
   }
 
+  /* Team (A2A) tasks this chat sent: only an agent's chat can send any. */
+  let teamTasks = $state<TeamTaskItem[]>([]);
+  function loadTeamTasks() {
+    if (!agentMode?.agent) return;
+    run(getTeamTasks(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((t) => { teamTasks = t; })
+      .catch(() => {});
+  }
+
   function loadSubAgents() {
+    if (agentMode?.chatOnly) return;
     // Same in-flight guard + re-arm as loadProcesses: a delegation burst
     // fires many lifecycle events, and a refresh requested mid-flight must
     // not be dropped or the panel settles on a stale state.
@@ -1068,6 +1180,7 @@
     subAgentsInFlight = true;
     run(getSubAgentPanel(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { subAgents = res.subAgents; incident = res.incident; })
+      .then(() => loadTeamTasks())
       .catch((e: unknown) => toastError(`Sub-agents: ${e instanceof Error ? e.message : String(e)}`))
       .finally(() => {
         subAgentsInFlight = false;
@@ -1113,21 +1226,48 @@
       .catch(() => {});
   }
 
-  // Live instances first, then roles. Mentioning a running agent talks to
-  // the one that already has context; mentioning a role starts a new one,
-  // so the cheaper, better-informed target is offered first.
+  /* Team agents the `@` menu offers in an agent's chat: the owner's roster
+     minus the agent itself and the disabled ones. Read once per agent; a
+     plain /sessions chat has no agentMode.agent and never asks. */
+  let teamPeers = $state<TeamPeer[]>([]);
+  $effect(() => {
+    const selfId = agentMode?.agent?.id;
+    if (!selfId) { teamPeers = []; return; }
+    let stale = false;
+    runApi(listAgentRoster(base))
+      .then((res) => { if (!stale) teamPeers = res.agents ?? []; })
+      // Silent like loadAgentRoles: the menu still lists the rest.
+      .catch(() => {});
+    return () => { stale = true; };
+  });
+
+  const teamAgentsByHandle = $derived(
+    Object.fromEntries(teamPeers.map((p) => [p.handle, { name: p.name || p.handle, kind: p.avatar?.kind, shape: p.avatar?.shape, color: p.avatar?.color, expression: p.avatar?.expression }])),
+  );
+  function openTeamAgent(handle: string) {
+    navigateAgents({ handle, session: null, panel: null });
+  }
+
+  // An agent whose Sub-agents access is off gets no Sub-agents section —
+  // the same switch that hides the rail tab.
+  const subAgentsAllowed = $derived(!(agentMode?.hideTabs ?? []).includes("subagents"));
+
+  // Team first, then live instances, then roles. Mentioning a running agent
+  // talks to the one that already has context; mentioning a role starts a
+  // new one, so the cheaper, better-informed target is offered first.
   const mentionableAgents = $derived.by(() => {
-    const out: { handle: string; label: string; hint?: string }[] = [];
-    const seen = new Set<string>();
+    const out: ComposerMentionAgent[] = teamMentionAgents(teamPeers, agentMode?.agent?.id ?? "");
+    if (!subAgentsAllowed) return out;
+    const seen = new Set<string>(out.map((a) => a.handle));
     for (const s of subAgents) {
       if (!s.handle || seen.has(s.handle)) continue;
       seen.add(s.handle);
-      out.push({ handle: s.handle, label: s.handle, hint: `${s.profile_key} · running here` });
+      out.push({ handle: s.handle, label: s.handle, hint: `${s.profile_key} · running here`, group: "subagent" });
     }
     for (const r of agentRoles) {
       if (seen.has(r.key)) continue;
       seen.add(r.key);
-      out.push({ handle: r.key, label: r.key, hint: r.description || r.name });
+      out.push({ handle: r.key, label: r.key, hint: r.description || r.name, group: "subagent" });
     }
     return out;
   });
@@ -1159,21 +1299,19 @@
     return !!name && DELEGATION_TOOLS.has(bareToolName(name));
   }
 
-  /* While a sub-agent is live, poll its row.
-
-     Everything else in this panel rides the leader's SSE stream, but a
-     sub-agent publishes its lifecycle on the CHILD's session id, which
-     this stream is not subscribed to. Between the delegation call and the
-     leader's end-of-turn the leader emits nothing at all — which is
-     exactly the stretch where a running sub-agent's spinner and turn
-     count need to move. Polling stops the moment none are live, so an
-     idle conversation issues no requests. */
-  const SUB_AGENT_POLL_MS = 3000;
+  /* A sub-agent publishes its lifecycle on the CHILD's session id, which
+     this stream is not subscribed to — so the server re-addresses a small
+     `sub_agent` signal {child_session_id, state} to this conversation
+     whenever a child starts, stops or finishes a turn (stream_subagent.go),
+     and the panel refetches on it. Polling is only the fallback while that
+     stream is down and a sub-agent is live: slow, and stopped the moment
+     the stream is back or none are live. */
+  const SUB_AGENT_POLL_MS = 60_000;
   let subAgentPollTimer: ReturnType<typeof setInterval> | null = null;
 
   $effect(() => {
-    const anyLive = liveSubAgents(subAgents).length > 0;
-    if (!anyLive) {
+    const needPoll = liveSubAgents(subAgents).length > 0 && sseStatus !== "connected";
+    if (!needPoll) {
       if (subAgentPollTimer !== null) {
         clearInterval(subAgentPollTimer);
         subAgentPollTimer = null;
@@ -1236,12 +1374,14 @@
   }
 
   function loadWorkspace() {
+    if (agentMode?.chatOnly) return;
     run(listWorkspace(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { wsInstances = res.instances; wsBases = res.bases; wsDeleted = res.deleted; })
       .catch((e: unknown) => toastError(`Workspace: ${e instanceof Error ? e.message : String(e)}`));
   }
 
   function loadSchedules() {
+    if (agentMode?.chatOnly) return;
     run(listSchedules(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { schedules = res; })
       .catch((e: unknown) => toastError(`Schedules: ${e instanceof Error ? e.message : String(e)}`));
@@ -1253,6 +1393,7 @@
      server) just leaves the tab hidden. */
   let notesInfo = $state<NotesResponse | null>(null);
   function loadTicket() {
+    if (agentMode?.chatOnly) return;
     run(listNotes(base, { sessionId }).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { notesInfo = res; })
       .catch(() => { notesInfo = null; });
@@ -1277,6 +1418,7 @@
   let todosAutoOpened = $state(false);
 
   function loadTodos() {
+    if (agentMode?.chatOnly) return;
     todosLoading = true;
     run(getTodos(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
@@ -1593,6 +1735,9 @@
   const HISTORY_PAGE = 20;
   let hasMoreHistory = $state(false);
   let loadingOlder = $state(false);
+  /* The first history read is still out: the thread shows a loading state
+     instead of the agent's "no messages yet" card. */
+  let historyLoaded = $state(false);
 
   /* Refetch the persisted conversation so a just-completed turn picks up
      server-derived artifacts — the live SSE turn is built client-side and
@@ -1607,13 +1752,35 @@
         // oldest loaded turn is the window's first turn (or nothing loaded).
         const oldestLoaded = turns[0]?.turn_id;
         thread.setHistory(res.turns);
+        thread.cards.set(res.cards ?? {});
         if (!oldestLoaded || oldestLoaded === res.turns[0]?.turn_id) {
           hasMoreHistory = res.hasMore;
         }
       })
       .catch((e: unknown) => {
         if (showError) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
-      });
+      })
+      .finally(() => { historyLoaded = true; });
+  }
+
+  /* "Check again" on a remote turn. A reply the server kept in place of
+     the timed-out turn says so in a toast, and the thread reloads to show
+     it where the timeout was. */
+  /* Cancel a message still queued behind the remote's running turn; the
+     thread reloads to show it as cancelled. */
+  async function remoteQueueCancel(queueId: string) {
+    await runApi(cancelRemoteQueued(base, agentMode!.recheckAgentId!, sessionId, queueId));
+    void loadConversation();
+  }
+
+  async function remoteRecheck() {
+    const r = await runApi(recheckRemote(base, agentMode!.recheckAgentId!, sessionId));
+    const msg = recheckToast(r);
+    if (msg) {
+      toastOk(msg);
+      void loadConversation();
+    }
+    return r;
   }
 
   /* Pull one older page and keep the viewport anchored on the turn the
@@ -1648,7 +1815,12 @@
     sseStream = stream;
     closeSSE = () => { sseStream = null; stream.close(); };
 
-    stream.status.subscribe((s) => { sseStatus = s; });
+    stream.status.subscribe((s) => {
+      // Back after a drop: sub_agent signals sent meanwhile are gone, so
+      // re-read the rows once.
+      if (s === "connected" && sseStatus === "error") scheduleSubAgentReload();
+      sseStatus = s;
+    });
 
     stream.onEvent((ev) => {
       thread.handleEvent(ev);
@@ -1680,6 +1852,14 @@
             approvalsTabPending = approvalsTabPending.filter((p) => p.id !== payload.id);
           }
         } catch (_) { /* skip */ }
+      } else if (ev.type === "remote_queue") {
+        // A message to a busy remote agent was queued, sent, forwarded or
+        // cancelled; the mark is a stored turn, so reload to show it.
+        void loadConversation();
+      } else if (ev.type === "delivery") {
+        // A reply's trip to Slack settled (sending → sent / failed). The
+        // status is stamped on the turn server-side, so reload to show it.
+        void loadConversation();
       } else if (ev.type === "done" || ev.type === "error") {
         void loadConversation();
         // A sub-agent's own lifecycle events are published on the CHILD's
@@ -1704,6 +1884,9 @@
         // there, so without its own event the panel would sit on a stale
         // list until something unrelated triggered a fetch.
         scheduleTodoReload();
+      } else if (ev.type === "sub_agent") {
+        // A sub-agent started, stopped or finished a turn.
+        scheduleSubAgentReload();
       } else if (ev.type === "lifecycle") {
         scheduleProcessReload();
         scheduleSubAgentReload();
@@ -1759,10 +1942,38 @@
     };
   }
 
+  /* The composer's Stop/Cancel. No confirm: it is there to cut off an
+     agent that is wandering, and a dialog in the way defeats that — the
+     chat history survives a stop and the next message resumes it. Busy
+     sub-agents are the exception: stopping them too is a bigger call, so
+     that one goes through the dialog. */
+  const composerQueued = $derived(
+    agentLifecycle.state === "queued" ||
+      liveProcesses.some((p) => p.session_id === sessionId && p.lifecycle === "queued"),
+  );
+  const composerRunning = $derived(
+    !composerQueued &&
+      (typing.active || live !== null || agentLifecycle.state === "working" || agentLifecycle.state === "spawning"),
+  );
+  function handleStopFromComposer() {
+    if (composerQueued) {
+      confirmKill = { sid: sessionId, queued: true, quick: true };
+      doKill();
+      return;
+    }
+    if (busySubAgentCount > 0) {
+      confirmKill = { sid: sessionId, queued: false, subAgents: busySubAgentCount, quick: true };
+      return;
+    }
+    confirmKill = { sid: sessionId, queued: false, quick: true };
+    doKill();
+  }
+
   function doKill() {
     const target = confirmKill;
     confirmKill = null;
     if (!target) return;
+    if (target.subAgents) stopAllSubAgents();
     const action = target.queued
       ? dequeueProcess(base, target.sid)
       : killProcess(base, target.sid);
@@ -1777,6 +1988,7 @@
         if (target.sid === sessionId && !target.queued) {
           thread.handleKilledLocally();
         }
+        if (target.quick) toastOk(target.queued ? "Cancelled" : "Stopped");
         return loadProcesses();
       })
       .catch((e: unknown) => toastError(`Kill: ${e instanceof Error ? e.message : String(e)}`));
@@ -1785,10 +1997,54 @@
   async function handleDelete() {
     try {
       await run(deleteSession(base, sessionId).pipe(Effect.provide(WickClientLayer)));
-      push("/");
+      // push("/") is the /sessions list — outside the Agents app.
+      if (agentMode) agentMode.onDeleted?.();
+      else push("/");
     } catch (e: unknown) {
       toastError(`Delete: ${e instanceof Error ? e.message : String(e)}`);
     }
+  }
+
+  /* ── actioncard postback ──────────────────────────────────────── */
+  /* A click on an agent's actioncard. The server records it as a user turn
+     and pushes a `postback` event that locks the card in every tab; a 409
+     means another click or a final version got there first, so the card
+     state is refreshed instead of shouting. */
+  async function handleCardAction(cardId: string, value: string, label: string) {
+    const res = await Effect.runPromise(
+      Effect.either(sendPostback(base, sessionId, { card_id: cardId, value }).pipe(Effect.provide(WickClientLayer))),
+    );
+    if (Either.isRight(res)) {
+      thread.cards.update((c) => lockCard(c, res.right.postback ?? { card_id: cardId, value, label }));
+      return;
+    }
+    const err = res.left;
+    if (err instanceof APIError && err.status === 409) {
+      toastWarn("That card was already answered — refreshed.");
+      void loadConversation();
+      return;
+    }
+    toastError(`Card: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  /* An approval_request card's button. Same gate as the modal: a 410 means
+     it was already decided (here, in the modal or another tab) or expired. */
+  async function handleApprovalCard(approvalId: string, decision: "accept" | "accept_for_session" | "decline") {
+    const res = await Effect.runPromise(
+      Effect.either(decideApprovalCard(base, sessionId, approvalId, { decision }).pipe(Effect.provide(WickClientLayer))),
+    );
+    if (Either.isRight(res)) {
+      hideApproval({ id: approvalId });
+      approvalsTabPending = approvalsTabPending.filter((p) => p.id !== approvalId);
+      return;
+    }
+    const err = res.left;
+    if (err instanceof APIError && err.status === 410) {
+      toastWarn("That approval is no longer pending.");
+      void loadConversation();
+      return;
+    }
+    toastError(`Approval: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   /* ── ask / approval handlers ──────────────────────────────────── */
@@ -1923,6 +2179,29 @@
     todosAutoOpened = false;
   }
 
+  // The host's rail button. The count it starts at is not a press: the
+  // view is re-mounted per conversation with the host's running count.
+  let railTogglesSeen = untrack(() => railToggle);
+  let railLastTab: RailTab | null = null;
+  $effect(() => {
+    if (railTab !== null) railLastTab = railTab;
+  });
+  $effect(() => {
+    const n = railToggle;
+    if (n === railTogglesSeen) return;
+    railTogglesSeen = n;
+    untrack(() => {
+      if (railTab !== null) { railTab = null; return; }
+      const shown = railTabs.map((t) => t.id);
+      const next = railLastTab && shown.includes(railLastTab) ? railLastTab : shown[0];
+      if (next) toggleRail(next);
+    });
+  });
+  $effect(() => {
+    const open = railTab !== null;
+    untrack(() => onRailChange?.(open));
+  });
+
   // When a panel opens (via a `/` command or a tab click), move focus into it so
   // it's immediately keyboard-navigable and Esc feels natural.
   $effect(() => {
@@ -2044,6 +2323,7 @@
     window.removeEventListener("online", handleResync);
     closeSSE?.();
     unsubTurns();
+    unsubCards();
     unsubLive();
     unsubTyping();
     unsubLifecycle();
@@ -2138,14 +2418,20 @@
       (notesInfo.ticket_enabled !== false || notesInfo.ticket != null),
   );
 
+  /* The Team app's rail footer: says the missing tabs were withheld from
+     the agent, so their absence does not read as a fault. */
+  const railHiddenNote = $derived(agentMode ? (agentMode.railNote ?? hiddenTabNote(agentMode.hideTabs)) : "");
+
   const railTabs = $derived(
     railTabsAll.filter(
       (t) =>
+        // An agent whose feature is off loses the tab outright.
+        !(agentMode?.hideTabs ?? []).includes(t.id) &&
         (t.id !== "browser" || hasBrowserInstance) &&
         // Hidden until there is something to show, then it appears on its
         // own — the badge promotes it into the strip from there.
         (t.id !== "todos" || todosActive !== null || todosHistory.length > 0) &&
-        (t.id !== "subagents" || subAgents.length > 0) &&
+        (t.id !== "subagents" || subAgents.length > 0 || teamTasks.length > 0) &&
         // Notes need nothing but a reachable scope — and no Ticket tab to
         // have absorbed them.
         (t.id !== "notes" || (notesInfo !== null && !ticketTabShown)) &&
@@ -2312,7 +2598,7 @@
   // Same for Sub-agents: without this the panel is orphaned when the last
   // sub-agent row goes away.
   $effect(() => {
-    if (railTab === "subagents" && subAgents.length === 0) railTab = null;
+    if (railTab === "subagents" && subAgents.length === 0 && teamTasks.length === 0) railTab = null;
   });
 
   const sideOpen = $derived(railTab !== null);
@@ -2373,13 +2659,18 @@
   }
 </script>
 
+{#snippet mentionAvatar(a: { kind?: string; shape?: string; color?: string; expression?: string })}
+  <AgentAvatar kind={a.kind} shape={a.shape} expression={a.expression} color={a.color} size={18} />
+{/snippet}
+
 <!-- Full-height flex row: main area + vertical rail -->
 <div class="flex h-full min-w-0 overflow-hidden">
 
   <!-- Centre column: header + thread + ask + composer -->
   <div class="relative flex flex-col flex-1 min-w-0" data-session-id={sessionId}>
 
-    <!-- Zone 1: header bar -->
+    <!-- Zone 1: header bar (the Agents app draws its own) -->
+    {#if !agentMode?.hideHeader}
     <ConversationHeader
       title={threadMeta.title || title}
       {agentLabel}
@@ -2393,6 +2684,7 @@
       onDelete={handleDelete}
       onTabChange={handleTabChange}
     />
+    {/if}
 
     <!-- Zone 2: main content area — switches by activeView -->
     {#if activeView === "conversation"}
@@ -2402,7 +2694,7 @@
         bind:this={threadEl}
         data-chat-panel
       >
-        <div class="page-col px-6 pt-14 pb-6 md:pt-6">
+        <div class="page-col px-6 {agentMode?.hideHeader ? 'pt-4' : 'pt-14'} pb-6 md:pt-6">
           {#if loadingOlder}
             <div class="flex items-center justify-center gap-2 py-3 text-[11px] text-black-600 dark:text-black-700">
               <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
@@ -2417,14 +2709,16 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} compacting={compactInFlight} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} />
+          <ConversationThread {turns} {live} {typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} />
         </div>
       </div>
 
       <!-- Zone 3: ask inline. Its top edge fades the thread text scrolling
-           under it, the way the composer edge does on claude.ai. -->
+           under it, the way the composer edge does on claude.ai. bottom-full
+           (not -top-6) because the shared app.css has no -top-6; without it the
+           fade fell back to top:auto and covered the ask card's title row. -->
       <div class="relative shrink-0 px-4 md:px-6 bg-white-200 dark:bg-navy-800">
-        <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 -top-6 h-6 bg-gradient-to-t from-white-200 to-transparent dark:from-navy-800"></div>
+        <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 bottom-full h-6 bg-gradient-to-t from-white-200 to-transparent dark:from-navy-800"></div>
         <div class="page-col">
           <AskUserModal
             request={$currentAsk}
@@ -2450,7 +2744,7 @@
             <kbd class="rounded border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1 text-[10px] font-mono text-black-600 dark:text-black-700">Ctrl+↓</kbd>
           </button>
         {/if}
-        <div class="page-col relative pb-6">
+        <div class="page-col relative pb-3 md:pb-6">
           <!-- /project picker floats above the composer. /provider now opens
                the composer's own provider drill (see composerRef), so no
                separate provider modal. -->
@@ -2499,15 +2793,20 @@
             usageRecheckWait={usageRecheckWait}
             onOpenUsage={openUsageFromContext}
           />
+          {#if sessionFields && sessionFields.fields.length > 0}
+            <div class="mb-2"><SessionFieldChips fields={sessionFields.fields} values={sessionFields.values} locked /></div>
+          {/if}
           <Composer
             bind:this={composerRef}
             onSend={handleSend}
-            placeholder="Ask anything…   / commands · @ files"
+            placeholder={agentMode?.agent ? composerPlaceholder(agentMode.agent.name) : "Ask anything…   / commands · @ files"}
             notifyKey={NOTIFY_KEY}
-            provider={providerSelect}
-            project={projectSelect}
+            provider={!agentMode?.hidePickers ? providerSelect : agentMode.providerSwitch ? agentProviderSelect : undefined}
+            providerChip={agentMode?.hidePickers && !agentMode.providerSwitch ? agentProviderChip : undefined}
+            project={agentMode?.hidePickers ? undefined : projectSelect}
             onSearchFiles={searchMentionFiles}
             mentionAgents={mentionableAgents}
+            {mentionAvatar}
             commands={composerCommands}
             contextMeter={meterUsed > 0
               ? {
@@ -2521,6 +2820,10 @@
                   onClick: openContextPopover,
                 }
               : undefined}
+            caption={agentMode?.agent?.caption}
+            running={composerRunning}
+            queued={composerQueued}
+            onStop={handleStopFromComposer}
           />
         </div>
       </div>
@@ -2749,6 +3052,9 @@
           messages={agentMessages}
           {hopsLeft}
           onBumpHops={bumpAgentHops}
+          {teamTasks}
+          teamAgents={teamAgentsByHandle}
+          onOpenAgent={agentMode?.agent ? openTeamAgent : undefined}
         />
       {:else if railTab === "workspace"}
         <WorkspacePanel
@@ -2832,6 +3138,9 @@
         />
       {:else if railTab === "browser"}
         <BrowserPanel onError={(m) => toastError(m)} />
+      {/if}
+      {#if railHiddenNote}
+        <p class="shrink-0 border-t border-white-300 dark:border-navy-600 px-4 py-2.5 text-[11px] text-black-600 dark:text-black-700">{railHiddenNote}</p>
       {/if}
     </div>
 
@@ -2942,6 +3251,9 @@
               messages={agentMessages}
               {hopsLeft}
               onBumpHops={bumpAgentHops}
+              {teamTasks}
+              teamAgents={teamAgentsByHandle}
+              onOpenAgent={agentMode?.agent ? openTeamAgent : undefined}
             />
           {:else if railTab === "workspace"}
             <WorkspacePanel
@@ -3027,6 +3339,9 @@
             <BrowserPanel onError={(m) => toastError(m)} />
           {/if}
         </div>
+        {#if railHiddenNote}
+          <p class="shrink-0 border-t border-white-300 dark:border-navy-600 px-4 py-2.5 text-[11px] text-black-600 dark:text-black-700">{railHiddenNote}</p>
+        {/if}
       </div>
     </div>
   {/if}
@@ -3037,7 +3352,7 @@
        corner is clipped per-child instead (first/last:rounded-l-xl). -->
   <div
     bind:this={railEl}
-    class="fixed top-1/2 right-0 z-20 -translate-y-1/2 flex flex-col rounded-l-xl border border-r-0 border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md"
+    class="fixed top-1/2 right-0 z-20 -translate-y-1/2 {railOrdered.length === 0 ? 'hidden' : 'flex'} flex-col rounded-l-xl border border-r-0 border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md"
   >
     {#each railFit.shown as tab, i}
       <button
@@ -3195,12 +3510,31 @@
 {/if}
 
 <ConfirmDialog
+  open={providerNotice !== null}
+  title={providerNotice === "started" ? "Provider is fixed for this chat" : "Provider is set by the agent"}
+  body={providerNotice === "started"
+    ? "Provider can't be changed once a conversation has started. Start a new chat to use a different one."
+    : `This agent always uses ${effectiveProvider}. Change it in agent Settings.`}
+  confirmLabel={providerNotice === "started" ? "New chat" : "Open Settings"}
+  cancelLabel="Close"
+  onConfirm={() => {
+    const n = providerNotice;
+    providerNotice = null;
+    if (n === "started") agentMode?.onNewChat?.();
+    else agentMode?.onOpenSettings?.();
+  }}
+  onCancel={() => (providerNotice = null)}
+/>
+
+<ConfirmDialog
   open={confirmKill !== null}
-  title={confirmKill?.queued ? "Cancel queued agent?" : "Stop this agent?"}
+  title={confirmKill?.queued ? "Cancel queued agent?" : confirmKill?.subAgents ? "Stop this agent and its sub-agents?" : "Stop this agent?"}
   body={confirmKill?.queued
     ? "The queued spawn will be dropped."
-    : (confirmKill?.note ? confirmKill.note + " The running agent process will be terminated." : "The running agent process will be terminated.")}
-  confirmLabel={confirmKill?.queued ? "Cancel spawn" : "Stop agent"}
+    : confirmKill?.subAgents
+      ? `${confirmKill.subAgents} ${confirmKill.subAgents === 1 ? "sub-agent is" : "sub-agents are"} still working and will be stopped too. The chat history is kept.`
+      : (confirmKill?.note ? confirmKill.note + " The running agent process will be terminated." : "The running agent process will be terminated.")}
+  confirmLabel={confirmKill?.queued ? "Cancel spawn" : confirmKill?.subAgents ? "Stop all" : "Stop agent"}
   destructive={true}
   onConfirm={doKill}
   onCancel={() => { confirmKill = null; }}

@@ -150,6 +150,37 @@ func TestSCMCompareEndpoints(t *testing.T) {
 		t.Fatalf("added file sides = %q / %q, want empty original", sides.Original, sides.Modified)
 	}
 
+	// The working tree as head: the right side is the file on disk.
+	if err := os.WriteFile(filepath.Join(repo, "app.txt"), []byte("one\ntwo\nthree\nwip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w = get("/api/sessions/SC1/git/ref-compare?repo=myrepo&base=main&head=:worktree&path=app.txt&three_dot=1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("ref-compare worktree: %d %s", w.Code, w.Body)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &sides); err != nil {
+		t.Fatal(err)
+	}
+	if sides.Original != "one\ntwo\n" || sides.Modified != "one\ntwo\nthree\nwip\n" {
+		t.Fatalf("worktree sides = %q / %q", sides.Original, sides.Modified)
+	}
+	w = get("/api/sessions/SC1/git/compare-refs?repo=myrepo&base=main&head=:worktree&three_dot=1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("compare-refs worktree: %d %s", w.Code, w.Body)
+	}
+	// Refused refs never reach git: options, ranges, working tree as base.
+	for _, q := range []string{
+		"base=-p&head=side", "base=main&head=--output%3Dx", "base=main..side&head=side",
+		"base=:worktree&head=side", "base=nope&head=side",
+	} {
+		if w = get("/api/sessions/SC1/git/ref-compare?repo=myrepo&path=app.txt&" + q); w.Code != http.StatusBadRequest {
+			t.Fatalf("ref-compare %s: expected 400, got %d %s", q, w.Code, w.Body)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "app.txt"), []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	// 3) restore: put app.txt back to main's content on the side branch.
 	w = post("/api/sessions/SC1/git/restore", `{"repo":"myrepo","ref":"main","paths":["app.txt"]}`)
 	if w.Code != http.StatusOK {

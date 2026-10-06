@@ -7,6 +7,7 @@ import "katex/dist/katex.min.css";
 import "./richRender.css";
 import { mount } from "svelte";
 import { attachToolbar } from "./blockToolbar.js";
+import { setTraceHighlighter } from "@wick-fe/common-ui";
 import { renderMarkdown, esc } from "./markdown.js";
 import HtmlArtifact from "./components/HtmlArtifact.svelte";
 import type { WidgetPolicy } from "./types/agents.js";
@@ -758,7 +759,7 @@ export function artifactHeightReporter(id: string, clip = true): string {
     if(${clip ? "true" : "false"})de.style.overflow="hidden";
     window.addEventListener("message",function(e){
       var d=e.data;
-      if(d&&d.type==="wick-artifact-overflow"&&d.id===${JSON.stringify(id)})de.style.overflow=d.on?"auto":"hidden";
+      if(d&&d.type==="wick-artifact-overflow"&&d.id===${JSON.stringify(id)}){var o=d.on?"auto":"hidden"; if(de.style.overflow!==o)de.style.overflow=o;}
     });
     function h(){
       var b=document.body, max=de.scrollHeight;
@@ -1197,3 +1198,10 @@ export function renderLive(node: HTMLElement, text: string) {
     destroy() { clearTimeout(timer); },
   };
 }
+
+// Trace blocks (common-ui TraceBody) highlight with the same lazy hljs —
+// only for a language hljs knows, so an unknown lang stays plain text.
+setTraceHighlighter(async (code, lang) => {
+  const hljs = await loadHljs();
+  return hljs.getLanguage(lang) ? hljs.highlight(code, { language: lang }).value : null;
+});

@@ -190,6 +190,40 @@ type Meta struct {
 	// back-pointer the ticket does not confirm is treated as stale and
 	// ignored — see notes.Resolve.
 	TicketID string `json:"ticket_id,omitempty"`
+	// AgentID names the Agents-app agent (entity.AgentPersona) this
+	// session talks to. The MCP layer reads it to narrow connector access
+	// to that agent's checklist; a sub-agent session carries none and
+	// inherits its parent's through ParentSessionID (see
+	// team.AgentOfSession). Absent = an ordinary session, unscoped.
+	AgentID string `json:"agent_id,omitempty"`
+	// AgentMain marks the agent's one main conversation — the chat the
+	// Agents app opens when the agent is picked. Other sessions with the
+	// same AgentID are side conversations started with "Chat baru".
+	AgentMain bool `json:"agent_main,omitempty"`
+	// AgentGroup makes the session a group chat of the owner's Team
+	// agents. It never spawns a provider itself: each member answers in
+	// its own backing session (GroupSessionID) with its own access, and
+	// the replies are copied into this thread. nil = not a group.
+	AgentGroup *AgentGroup `json:"agent_group,omitempty"`
+	// GroupSessionID marks a member's backing session: the group chat it
+	// answers for. Hidden from the agent's own chat list.
+	GroupSessionID string `json:"group_session_id,omitempty"`
+}
+
+// AgentGroup is a group chat's settings (Meta.AgentGroup).
+type AgentGroup struct {
+	Name string `json:"name"`
+	// Members are agent ids of the owner, in the order the group lists
+	// them; the first is the "first" default responder.
+	Members []string `json:"members"`
+	// DefaultResponder answers a message with no @: "captain" (the
+	// Captain when a member, else the first member) or "first".
+	DefaultResponder string `json:"default_responder"`
+	// MaxHopsOverride lowers the agent-to-agent turn cap below the
+	// smallest of the members'; 0 = none. It can never raise it.
+	MaxHopsOverride int `json:"max_hops_override,omitempty"`
+	// LastReadAt is when the owner last opened the group.
+	LastReadAt *time.Time `json:"last_read_at,omitempty"`
 }
 
 // ChannelRef is where a session's replies belong: a chat channel and the
@@ -367,7 +401,19 @@ type CreateOptions struct {
 	// ParentSessionID marks this session as a delegated sub-agent's
 	// isolated context. See Meta.ParentSessionID.
 	ParentSessionID string
+	// AgentID and AgentMain bind the session to an Agents-app agent. See
+	// Meta.AgentID.
+	AgentID   string
+	AgentMain bool
 }
+
+// ProjectAgent, when set, names the Team agent that owns a project ("" =
+// none). Create stamps it on every new top-level session of that project
+// that names no agent itself, so a channel thread, a schedule fire or a
+// workflow run in a project converted into an agent is that agent's
+// session — one rule at the one place sessions are made, instead of one
+// per creator. Wired at boot by the Team service.
+var ProjectAgent func(projectID string) string
 
 // Create materializes sessions/<id>/: meta.json, agents.json (empty
 // array), agent.md snapshot. No filesystem work touches the project
@@ -406,6 +452,11 @@ func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session
 		TokenName:  opt.TokenName,
 
 		ParentSessionID: opt.ParentSessionID,
+		AgentID:         opt.AgentID,
+		AgentMain:       opt.AgentMain,
+	}
+	if meta.AgentID == "" && meta.ParentSessionID == "" && meta.ProjectID != "" && ProjectAgent != nil {
+		meta.AgentID = ProjectAgent(meta.ProjectID)
 	}
 	// The creator is the first participant. Written at create rather than
 	// backfilled on the next message so the very first turn already reads

@@ -52,6 +52,11 @@ type Tool struct {
 	// max-w-container padding), and the tool owns its own internal
 	// navigation. All other tools keep the standard constrained layout.
 	FullScreen bool `json:"-"`
+	// Replaces lists keys of tools this one takes over — typically the
+	// built-in a plugin was extracted from. On boot wick moves the old
+	// key's config rows, tags, visibility and bookmarks onto this key once
+	// (see internal/plugins/replace) and stops registering the old tool.
+	Replaces []string `json:"-"`
 }
 
 // DefaultTag is the spec used by Tool.DefaultTags to seed tags on startup.

@@ -33,6 +33,10 @@ The same agent is reachable from Slack, Telegram, and the web UI. Each thread, c
 
 The web UI is always on. Slack and Telegram need a bot token and access-control config under the Channels page, where you also set the default project new sessions land in.
 
+## Team agents: whose access
+
+An agent from the Team page inherits its OWNER's connector access, narrowed by its checklist — the checklist only offers what the owner sees in `wick_list`, and saving anything outside it is refused. Its "run as" setting picks the identity: `caller` (default) runs a turn as the person who sent it, falling back to the owner for schedules, bots and workflows; `owner` always runs as the owner, so anyone who can message the agent uses the owner's access within the checklist.
+
 ## The pool
 
 A pool caps how many agent subprocesses run at once and FIFO-queues the rest. Idle sessions are killed and later resumed transparently, so a long-lived conversation does not hold a process hostage.

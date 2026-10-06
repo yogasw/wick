@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, ConfirmDialog, KebabMenu, Modal, ProgressBar, TextInput } from "@wick-fe/common-ui";
+  import { Button, ConfirmDialog, KebabMenu, Modal, TextInput } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import { push } from "$lib/router.js";
   import {
@@ -20,6 +20,8 @@
     testInstanceAuth,
   } from "$lib/api.js";
   import type { PluginProgress } from "$lib/api.js";
+  import PluginUpdateProgress from "$lib/components/plugins/PluginUpdateProgress.svelte";
+  import { pluginPhaseLabel } from "$lib/components/plugins/updateProgress.js";
   import { startConnectorOAuth, type OAuthConnect } from "./connectorOAuth.js";
   import { startInstanceOAuth } from "./custom/mcpInstanceOAuth.js";
   import type { ConnectorList, ConnectorRow, ConnectorAccount, PluginEntry } from "$lib/types.js";
@@ -421,21 +423,9 @@
     }
   }
 
-  /* Human label for the current update phase, shown next to the bar. */
-  const phaseLabel = $derived.by(() => {
-    switch (updateProgress?.phase) {
-      case "downloading":
-        return updateProgress.pct >= 0 ? `Downloading… ${updateProgress.pct}%` : "Downloading…";
-      case "verifying":
-        return "Verifying…";
-      case "replacing":
-        return "Replacing…";
-      case "done":
-        return "Done";
-      default:
-        return "Updating…";
-    }
-  });
+
+  /* Human label for the current update phase, shown in the kebab item. */
+  const phaseLabel = $derived(pluginPhaseLabel(updateProgress));
 
   async function confirmDoUninstall() {
     confirmUninstall = false;
@@ -629,9 +619,7 @@
           {/if}
           <p class="mt-1 text-xs text-black-700 dark:text-black-600">{data.op_count} operation(s) · {rows.length} row(s)</p>
           {#if updateProgress}
-            {@const indeterminate = updateProgress.phase === "downloading" && updateProgress.pct < 0}
-            {@const pct = updateProgress.phase === "downloading" && updateProgress.pct >= 0 ? updateProgress.pct : updateProgress.phase === "done" ? 100 : updateProgress.phase === "downloading" ? 0 : 100}
-            <ProgressBar class="mt-2 max-w-xs" pct={indeterminate ? -1 : pct} label={phaseLabel} />
+            <PluginUpdateProgress class="mt-2 max-w-xs" progress={updateProgress} />
           {/if}
         </div>
       </div>

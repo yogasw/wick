@@ -1,6 +1,7 @@
 <script lang="ts">
   import { apiGetWickInteractions, apiGetWickInteractionCurl, apiGetWickLiveCurl, apiCancelWickModelCall, type WickInteraction, type WickCurlForms } from "$lib/api";
   import { toastError, toastOk } from "@wick-fe/common-stores";
+  import { TraceBody } from "@wick-fe/common-ui";
   import CurlBuilderModal from "./CurlBuilderModal.svelte";
 
   // Session log for the built-in wick provider: every model call's
@@ -379,8 +380,11 @@
                     <div class="font-mono text-[11px]">
                       <span class="text-green-600 dark:text-green-400">{roleLabel(m.role)}:</span>
                       {#if m.tool_call}<span class="text-cau-400"> [tool_call {m.tool_call}]</span>{/if}
-                      {#if m.tool_resp}<span class="text-prog-400"> [tool_result]</span> <span class="text-black-900 dark:text-white-100 whitespace-pre-wrap">{m.tool_resp}</span>{/if}
+                      {#if m.tool_resp}<span class="text-prog-400"> [tool_result]</span>{/if}
                       {#if m.text}<span class="text-black-900 dark:text-white-100 whitespace-pre-wrap"> {m.text}</span>{/if}
+                      {#if m.tool_resp}
+                        <div class="mt-1 rounded border border-white-300 dark:border-navy-600 font-sans"><TraceBody raw={m.tool_resp} maxHeight={160} /></div>
+                      {/if}
                     </div>
                   {/each}
                 </div>
@@ -389,7 +393,7 @@
               {#if it.response}
                 <div>
                   <div class="mb-1 font-medium text-black-800 dark:text-black-600">Response</div>
-                  <pre class="max-h-56 overflow-auto whitespace-pre-wrap rounded bg-white-100 dark:bg-navy-700 p-2 font-mono text-[11px] text-black-900 dark:text-white-100">{it.response}</pre>
+                  <div class="rounded bg-white-100 dark:bg-navy-700"><TraceBody raw={it.response} maxHeight={224} /></div>
                 </div>
               {/if}
 

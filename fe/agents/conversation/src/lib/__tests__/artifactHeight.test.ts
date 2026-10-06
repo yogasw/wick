@@ -4,6 +4,7 @@ import {
   MAX_HEIGHT,
   inlineCap,
   fitHeight,
+  SCROLL_HYSTERESIS,
   anchorShift,
   artifactKey,
   rememberHeight,
@@ -28,6 +29,25 @@ describe("inlineCap", () => {
 });
 
 describe("fitHeight", () => {
+  // A scrollbar narrows the document; content whose height follows its width
+  // then drops just under the cap, the scrollbar goes, and it is over again.
+  test("a scrolling document stays scrolling until it is clearly under the cap", () => {
+    expect(fitHeight(790, 1000, true)).toEqual({ height: 800, scroll: true });
+    expect(fitHeight(800 - SCROLL_HYSTERESIS, 1000, true)).toEqual({ height: 800 - SCROLL_HYSTERESIS, scroll: false });
+    // not scrolling yet: the same reading just fits
+    expect(fitHeight(790, 1000, false)).toEqual({ height: 790, scroll: false });
+  });
+  test("the scrollbar-width flip settles instead of alternating", () => {
+    // 810 wide, 795 once the scrollbar takes its width
+    let scrolling = false;
+    const seen: boolean[] = [];
+    for (let i = 0; i < 6; i++) {
+      const fit = fitHeight(scrolling ? 795 : 810, 1000, scrolling);
+      scrolling = fit.scroll;
+      seen.push(scrolling);
+    }
+    expect(seen).toEqual([true, true, true, true, true, true]);
+  });
   test("content that fits keeps its own height, no inner scroll", () => {
     expect(fitHeight(600.2, 1000)).toEqual({ height: 601, scroll: false });
     expect(fitHeight(800, 1000)).toEqual({ height: 800, scroll: false });

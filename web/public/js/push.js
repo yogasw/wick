@@ -218,6 +218,36 @@
     }, 3000);
   }
 
+  // TEST_PUSH_DELAY gives the user time to close the window before the
+  // test lands, so they see the OS notification and not just the page.
+  // The server holds the delay: a closed window runs no JS.
+  var TEST_PUSH_DELAY = 5;
+
+  // sendTestPush asks the server for a delayed test push: to every device
+  // of the user when endpoint is empty, else to that one device (the
+  // server refuses a device that is not the caller's). One toast on the
+  // 202; the button is only held long enough to stop a double click. A
+  // failed send (an expired subscription answers 410 at the push service)
+  // says so and points at Refresh device instead of claiming success.
+  async function sendTestPush(btn, endpoint) {
+    if (btn) btn.disabled = true;
+    try {
+      var res = await fetch('/api/push/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: endpoint || '', delay_seconds: TEST_PUSH_DELAY }),
+      });
+      if (!res.ok) {
+        var msg = (await res.text().catch(function () { return ''; })).trim();
+        showToast('Test notification failed' + (msg ? ': ' + msg : '') + '. Try Refresh device, then send again.', 'bad');
+        return;
+      }
+      showToast('Test notification will be sent in ' + TEST_PUSH_DELAY + ' seconds', 'ok');
+    } finally {
+      if (btn) window.setTimeout(function () { btn.disabled = false; }, 1500);
+    }
+  }
+
   // Lifecycle chime — a pre-rendered two-tone WAV (E5 → A5) played
   // through an HTMLAudioElement. Deliberately NOT WebAudio: on macOS,
   // `new AudioContext()` blocks the main thread synchronously while
@@ -454,6 +484,15 @@
     });
   }
 
+  // rowRadius rounds the outer corners of the first/last device row, which
+  // the list's overflow-hidden used to clip for us.
+  function rowRadius(i, n) {
+    var r = [];
+    if (i === 0) r.push('border-top-left-radius:0.5rem;border-top-right-radius:0.5rem');
+    if (i === n - 1) r.push('border-bottom-left-radius:0.5rem;border-bottom-right-radius:0.5rem');
+    return r.length ? ' style="' + r.join(';') + '"' : '';
+  }
+
   function renderDeviceList(devices, currentEndpoint) {
     var list = document.getElementById('push-device-list');
     if (!list) return;
@@ -461,11 +500,14 @@
       list.innerHTML = '<div class="flex flex-col gap-2 bg-white-200 dark:bg-navy-800 px-4 py-5 text-sm text-black-800 dark:text-black-600"><span class="font-medium text-black-900 dark:text-white-100">No notification devices yet.</span><span class="text-xs text-black-700 dark:text-black-600">Enable notifications to add this browser.</span></div>';
       return;
     }
-    list.innerHTML = devices.map(function (d) {
+    // The ⋮ menu drops out of its row; the template's overflow-hidden (kept
+    // for the rounded corners) would clip it on the last device.
+    list.classList.remove('overflow-hidden');
+    list.innerHTML = devices.map(function (d, i) {
       var isCurrent = d.endpoint === currentEndpoint;
       var label = escapeHTML(d.deviceLabel || 'Browser device');
       var seen = d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString() : 'Never';
-      return '<div class="flex flex-col gap-3 border-b border-white-300 bg-white-100 px-4 py-4 last:border-b-0 dark:border-navy-600 dark:bg-navy-700 sm:flex-row sm:items-center sm:justify-between">' +
+      return '<div class="flex flex-col gap-3 border-b border-white-300 bg-white-100 px-4 py-4 last:border-b-0 dark:border-navy-600 dark:bg-navy-700 sm:flex-row sm:items-center sm:justify-between"' + rowRadius(i, devices.length) + '>' +
         '<div class="min-w-0">' +
         '<div class="flex flex-wrap items-center gap-2"><span class="text-sm font-medium text-black-900 dark:text-white-100">' + label + '</span>' +
         (isCurrent ? '<span class="rounded-full bg-pos-100 px-2 py-0.5 text-xs font-medium text-pos-400">This browser</span>' : '') +
@@ -473,7 +515,14 @@
         '<div class="mt-1 truncate font-mono text-xs text-black-700 dark:text-black-600">' + escapeHTML(shortEndpoint(d.endpoint)) + '</div>' +
         '<div class="mt-1 text-xs text-black-700 dark:text-black-600">Last seen ' + escapeHTML(seen) + '</div>' +
         '</div>' +
-        '<button type="button" data-push-remove="' + escapeHTML(d.endpoint) + '" data-current="' + (isCurrent ? '1' : '0') + '" class="inline-flex items-center justify-center rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm font-medium text-neg-400 transition-colors hover:bg-neg-100 dark:border-navy-600 dark:bg-navy-800">Remove</button>' +
+        // One ⋮ per row: a test for just this device, and Remove. A native
+        // <details> opens and closes without any wiring of its own.
+        '<details class="relative">' +
+        '<summary aria-label="Device actions" title="Device actions" class="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-lg border border-white-400 bg-white-100 text-lg leading-none text-black-800 transition-colors hover:bg-white-200 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600 dark:hover:bg-navy-700">⋮</summary>' +
+        '<div class="absolute right-0 z-10 mt-1 flex w-56 flex-col rounded-lg border border-white-300 bg-white-100 py-1 shadow-md dark:border-navy-600 dark:bg-navy-800">' +
+        '<button type="button" data-push-test-device="' + escapeHTML(d.endpoint) + '" class="px-3 py-2 text-left text-sm text-black-900 hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-700">Send test to this device</button>' +
+        '<button type="button" data-push-remove="' + escapeHTML(d.endpoint) + '" data-current="' + (isCurrent ? '1' : '0') + '" class="px-3 py-2 text-left text-sm text-neg-400 hover:bg-neg-100">Remove</button>' +
+        '</div></details>' +
         '</div>';
     }).join('');
   }
@@ -514,7 +563,7 @@
     var actions = document.getElementById('push-device-actions');
     if (actions) {
       actions.innerHTML = '<button type="button" id="push-enable-btn" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 transition-colors hover:bg-green-600">' + (sub ? 'Refresh device' : 'Enable notifications') + '</button>' +
-        '<button type="button" id="push-test-btn" class="rounded-lg border border-white-400 bg-white-100 px-4 py-2 text-sm font-medium text-black-800 transition-colors hover:border-green-400 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">Send test</button>';
+        '<button type="button" id="push-test-btn" class="rounded-lg border border-white-400 bg-white-100 px-4 py-2 text-sm font-medium text-black-800 transition-colors hover:border-green-400 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600" title="Send a test to every device in 5 seconds">Send test</button>';
     }
   }
 
@@ -754,6 +803,7 @@
     var bell = e.target.closest('#push-bell-btn');
     var enable = e.target.closest('#push-enable-btn');
     var test = e.target.closest('#push-test-btn');
+    var testDevice = e.target.closest('[data-push-test-device]');
     var remove = e.target.closest('[data-push-remove]');
     var copyID = e.target.closest('#push-copy-id-btn');
     var queueBell = e.target.closest('[data-queue-notify]');
@@ -877,16 +927,10 @@
         await refreshProfile();
         await hydrateBell();
       }
-      if (test) {
-        test.disabled = true;
-        var sub = await currentSubscription();
-        await fetch('/api/push/test', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ endpoint: sub ? sub.endpoint : '' }),
-        });
-        test.disabled = false;
-        showToast('Test notification sent.', 'ok');
+      if (test || testDevice) {
+        var menuOpen = testDevice && testDevice.closest('details');
+        if (menuOpen) menuOpen.open = false;
+        await sendTestPush(test || testDevice, testDevice ? testDevice.getAttribute('data-push-test-device') : '');
       }
       if (remove) {
         remove.disabled = true;

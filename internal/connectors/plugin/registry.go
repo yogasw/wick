@@ -97,6 +97,17 @@ func DefaultRegistry() *Catalog {
 	}
 }
 
+// URL is the plugins.json this catalog reads (shown as the official source).
+func (c *Catalog) URL() string { return c.url }
+
+// FetchedAt is when the catalog was last fetched or revalidated; zero before
+// the first List.
+func (c *Catalog) FetchedAt() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.fetchedAt
+}
+
 // List returns every installable connector from the catalog JSON. Served from
 // cache while the TTL is fresh; otherwise a conditional GET (ETag) reuses the
 // cache on a 304.

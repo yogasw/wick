@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -19,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -26,11 +28,14 @@ import (
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
 
+	"github.com/yogasw/wick/internal/agents/actioncard"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/pkg/slackmd"
 )
 
 const (
@@ -241,6 +246,9 @@ type Channel struct {
 	sendFn      agentchannels.SendFunc
 	ownerFn     func(ctx context.Context, sessionID, userID string)
 	ownerUserID string // wick user who owns this channel row; empty = App Owner
+	// deliveryFn records whether a turn's reply reached its Slack thread.
+	// nil = not recorded (tests, installs without the agents UI).
+	deliveryFn DeliveryFunc
 
 	// identitySink persists the bot identity (id, display name, team) the
 	// moment auth.test resolves it, so the next boot can label this
@@ -265,6 +273,26 @@ type Channel struct {
 	// and the turn.threadTS field.
 	sessionPrefix string
 
+	// dmMainFn, when set, names the session a DM from a wick user continues
+	// (a Team agent's main chat); dmMain remembers which sessions those are
+	// so their turn is let go once answered. See agent_dm.go.
+	dmMainFn DMMainFn
+	dmMain   sync.Map
+
+	// personas is session key → Persona of the Instant agent answering it
+	// (zero Persona = wick itself); customizeDenied is set once the token
+	// proved to lack chat:write.customize. See instant.go.
+	personas        sync.Map
+	customizeDenied atomic.Bool
+
+	// eventsSeen is event subscription name → last receipt, for the
+	// health matrix's "never received since boot" warning.
+	eventsSeen sync.Map
+	// promptsFn feeds assistant_thread_started (assistant_thread.go).
+	promptsFn PromptsFn
+	// matrixAPIURL points the matrix's auth.test at a stub in tests.
+	matrixAPIURL string
+
 	cfgMu          sync.Mutex
 	cfg            agentconfig.SlackChannelConfig
 	pubURL         string
@@ -276,6 +304,17 @@ type Channel struct {
 	teamDomain     string           // Workspace subdomain extracted from resp.URL
 	connectorToken ConnectorTokenFn // optional; nil = no user-token DM support
 	wickUserIDFn   WickUserIDFn     // optional; resolves Slack user ID → wick user ID
+
+	// botTurns counts recent bot-triggered turns per session (allowBotTurn).
+	botTurnsMu sync.Mutex
+	botTurns   map[string][]time.Time
+
+	// userGroups caches usergroups.list (with members) for userGroupsTTL so
+	// every mention does not ask Slack again (resolveUserGroups).
+	userGroupsMu sync.Mutex
+	userGroups   []slackgo.UserGroup
+	userGroupsAt time.Time
+
 	// users resolves a Slack sender's EMAIL to a wick user, and creates one
 	// when auto-register is on. Email is the only field both sides agree on,
 	// so it is the join key; wickUserIDFn above only covers senders who
@@ -285,6 +324,9 @@ type Channel struct {
 
 	mu    sync.Mutex
 	turns map[string]*turn
+	// liveLocks serialises, per session key, the live-message flush against
+	// the Done reconcile (see liveLock). Guarded by mu; created lazily.
+	liveLocks map[string]*sync.Mutex
 
 	// autoReply is the set of namespaced session keys whose thread has the
 	// 🤖 switch on its parent message. While a key is present, channel
@@ -333,13 +375,19 @@ type Channel struct {
 	runMu     sync.Mutex
 	runCancel context.CancelFunc
 	runWg     sync.WaitGroup
+	runGen    uint64 // bumped per run, so a stale watchdog cannot restart a newer run
+
+	// reloadMu serializes Reload: a config save and a health-check
+	// Reconnect landing together each stopped and started the instance,
+	// and the loser could leave it with no live socket at all.
+	reloadMu sync.Mutex
 
 	// socketState tracks the current Socket Mode connection lifecycle so
 	// the integration test panel can report "subscribed / not subscribed"
 	// without re-initiating a connection. Empty when not started or when
 	// running in HTTP mode. Updated by handleSocketEvent.
 	socketMu    sync.RWMutex
-	socketState string // "", "connecting", "connected", "error", "disconnected"
+	socketState string // "", "starting", "connecting", "connected", "error", "disconnected"
 	socketAt    time.Time
 
 	// unboundWarned holds the sessions already reported as having nowhere to
@@ -619,6 +667,7 @@ func (s *Channel) HTTPHandlers() map[string]http.Handler {
 	return map[string]http.Handler{
 		"POST /integrations/slack/events": s.HTTPHandler(),
 		"POST /integrations/slack/send":   s.sendHandler(),
+		"GET " + avatarPath + "{file}":    avatarHandler(),
 	}
 }
 
@@ -627,7 +676,7 @@ func (s *Channel) HTTPHandlers() map[string]http.Handler {
 // can render as a proper @mention ("Sent using <@UBOT123>").
 func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string) {
 	api := slackgo.New(cfg.BotToken, slackgo.OptionAppLevelToken(cfg.AppToken))
-	socket := socketmode.New(api)
+	socket := newSocketClient(api)
 
 	s.cfgMu.Lock()
 	cachedFor := s.identityToken
@@ -648,6 +697,8 @@ func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string)
 			botUserName = resolveBotDisplayName(api, botUserID, resp.User)
 		}
 	}
+
+	slackremote.NoteWickID(botUserID)
 
 	s.cfgMu.Lock()
 	s.cfg = cfg
@@ -762,9 +813,54 @@ func (s *Channel) IsConfigured() bool {
 	return cfg.AppToken != ""
 }
 
+// socketStartTimeout is how long a socket run may go without even reporting
+// "connecting" before the watchdog restarts the instance. A var for tests.
+var socketStartTimeout = 60 * time.Second
+
 // Start begins listening for Slack events. Blocks until ctx is cancelled
 // or Stop/Reload is called.
 func (s *Channel) Start(ctx context.Context) error {
+	runCtx, gen, done := s.beginRun(ctx)
+	defer done()
+	return s.serve(ctx, runCtx, gen)
+}
+
+// beginRun registers a run — its cancel func and its place in runWg — before
+// any goroutine starts, so a Stop or Reload issued right after always sees
+// (and waits for) the run it is replacing.
+func (s *Channel) beginRun(ctx context.Context) (context.Context, uint64, func()) {
+	runCtx, runCancel := context.WithCancel(ctx)
+	s.runMu.Lock()
+	s.runCancel = runCancel
+	s.runGen++
+	gen := s.runGen
+	s.runWg.Add(1)
+	s.runMu.Unlock()
+	return runCtx, gen, func() {
+		runCancel()
+		s.runWg.Done()
+	}
+}
+
+func (s *Channel) currentRun() uint64 {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	return s.runGen
+}
+
+// logBot names the instance in lifecycle logs: one process hosts a Slack
+// instance per owner and per agent, and without it a socket that never
+// connected could not be told apart from its neighbours.
+func (s *Channel) logBot() string {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	if s.botUserName != "" {
+		return s.botUserName + " (" + s.botUserID + ")"
+	}
+	return s.botUserID
+}
+
+func (s *Channel) serve(ctx, runCtx context.Context, gen uint64) error {
 	s.cfgMu.Lock()
 	cfg := s.cfg
 	socket := s.socket
@@ -774,22 +870,11 @@ func (s *Channel) Start(ctx context.Context) error {
 		return fmt.Errorf("slack: bot token is required")
 	}
 
-	runCtx, runCancel := context.WithCancel(ctx)
-	s.runMu.Lock()
-	s.runCancel = runCancel
-	s.runMu.Unlock()
-
-	s.runWg.Add(1)
-	defer func() {
-		s.runWg.Done()
-		runCancel()
-	}()
-
 	if cfg.Mode == "http" {
 		if cfg.SigningSecret == "" {
 			return fmt.Errorf("slack: signing secret is required for http mode")
 		}
-		log.Info().Str("channel", "slack").Str("mode", "http").
+		log.Info().Str("channel", "slack").Str("bot", s.logBot()).Str("mode", "http").
 			Msg("started — receiving events on POST /integrations/slack/events")
 		<-runCtx.Done()
 		return nil
@@ -799,25 +884,122 @@ func (s *Channel) Start(ctx context.Context) error {
 		return fmt.Errorf("slack: app token (xapp-...) is required for socket mode")
 	}
 
-	log.Info().Str("channel", "slack").Str("mode", "socket").Msg("starting")
+	s.setSocketState("starting")
+	log.Info().Str("channel", "slack").Str("bot", s.logBot()).Str("mode", "socket").Msg("starting")
 
-	go func() {
-		if err := socket.RunContext(runCtx); err != nil && runCtx.Err() == nil {
-			log.Error().Str("channel", "slack").Err(err).Msg("socket run stopped")
+	go s.watchStart(runCtx, gen)
+
+	// slack-go reconnects on its own after a dropped connection, but gives
+	// up for good on a fatal one (invalid_auth, token_revoked, a 404 from
+	// apps.connections.open). Without this loop the bot then stays offline
+	// until its settings are saved again; with it, a fresh client retries
+	// with backoff, so the bot comes back once the cause is fixed.
+	retry := socketRetryMin
+	for {
+		started := time.Now()
+		err := s.runSocket(ctx, runCtx, socket)
+		if runCtx.Err() != nil {
+			return nil
 		}
-	}()
+		state := "disconnected"
+		if isFatalSocketErr(err) {
+			state = "error"
+		}
+		s.setSocketState(state)
+		if time.Since(started) > socketRetryMax {
+			retry = socketRetryMin
+		}
+		log.Error().Str("channel", "slack").Str("bot", s.logBot()).Err(err).Dur("retry_in", retry).
+			Msg("socket run stopped, reconnecting")
 
+		t := time.NewTimer(retry)
+		select {
+		case <-runCtx.Done():
+			t.Stop()
+			return nil
+		case <-t.C:
+		}
+		retry = min(retry*2, socketRetryMax)
+
+		s.cfgMu.Lock()
+		socket = newSocketClient(s.api)
+		s.socket = socket
+		s.cfgMu.Unlock()
+	}
+}
+
+// runSocket runs one socket client until it stops for good, handling its
+// events meanwhile. Events still buffered when it stops are handled too,
+// so a request Slack already delivered is not dropped.
+func (s *Channel) runSocket(ctx, runCtx context.Context, socket *socketmode.Client) error {
+	done := make(chan error, 1)
+	go func() { done <- socketRunner(runCtx, socket) }()
 	for {
 		select {
 		case <-runCtx.Done():
 			return nil
+		case err := <-done:
+			for {
+				select {
+				case evt := <-socket.Events:
+					s.handleSocketEvent(ctx, evt)
+				default:
+					return err
+				}
+			}
 		case evt, ok := <-socket.Events:
 			if !ok {
-				return nil
+				return <-done
 			}
 			s.handleSocketEvent(ctx, evt)
 		}
 	}
+}
+
+// socketRetryMin / socketRetryMax bound the wait before a stopped socket is
+// replaced; the wait doubles per failure and resets after a run that lasted.
+// Vars for tests, as are socketRunner and newSocketClient.
+var (
+	socketRetryMin  = 5 * time.Second
+	socketRetryMax  = 5 * time.Minute
+	socketRunner    = func(ctx context.Context, c *socketmode.Client) error { return c.RunContext(ctx) }
+	newSocketClient = func(api *slackgo.Client) *socketmode.Client { return socketmode.New(api) }
+)
+
+// isFatalSocketErr reports a credential problem: retrying still helps once
+// the token is fixed, but the status should say error, not just offline.
+func isFatalSocketErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch err.Error() {
+	case "invalid_auth", "account_inactive", "not_authed", "token_revoked":
+		return true
+	}
+	var code slackgo.StatusCodeError
+	return errors.As(err, &code) && code.Code == http.StatusNotFound
+}
+
+// watchStart restarts the instance when its socket run never got as far as
+// "connecting": the bot then sits silently offline — no events, no reactions
+// — until somebody happens to save its settings again.
+func (s *Channel) watchStart(runCtx context.Context, gen uint64) {
+	t := time.NewTimer(socketStartTimeout)
+	defer t.Stop()
+	select {
+	case <-runCtx.Done():
+		return
+	case <-t.C:
+	}
+	if state, _ := s.SocketState(); state != "starting" || s.currentRun() != gen {
+		return
+	}
+	log.Warn().Str("channel", "slack").Str("bot", s.logBot()).Dur("after", socketStartTimeout).
+		Msg("socket never started connecting, restarting")
+	s.cfgMu.Lock()
+	cfg, pubURL := s.cfg, s.pubURL
+	s.cfgMu.Unlock()
+	go s.Reload(context.Background(), cfg, pubURL)
 }
 
 // Stop signals the current Start() to exit gracefully.
@@ -1084,7 +1266,7 @@ func (s *Channel) Status() []agentchannels.StatusField {
 				Value: fmt.Sprintf("connected (%s ago)", time.Since(at).Round(time.Second)),
 				OK:    true,
 			})
-		case "connecting":
+		case "starting", "connecting":
 			out = append(out, agentchannels.StatusField{Label: "Subscribe", Value: "connecting…", Warn: true})
 		case "error", "disconnected":
 			out = append(out, agentchannels.StatusField{Label: "Subscribe", Value: state, Warn: true})
@@ -1138,7 +1320,7 @@ func (s *Channel) Reconnect(ctx context.Context) {
 		return
 	}
 	state, _ := s.SocketState()
-	if state == "connecting" || state == "connected" {
+	if state == "starting" || state == "connecting" || state == "connected" {
 		return
 	}
 	go s.Reload(ctx, cfg, pubURL)
@@ -1147,35 +1329,59 @@ func (s *Channel) Reconnect(ctx context.Context) {
 // Reload stops the current connection, applies new credentials, and
 // restarts if the new config is valid.
 func (s *Channel) Reload(ctx context.Context, cfg agentconfig.SlackChannelConfig, pubURL string) {
+	// The restarted run outlives the call: a settings save passes its HTTP
+	// request's context, which ends with the response and took the socket
+	// (and its watchdog) down with it — the bot then sat on "connecting…"
+	// for good. Stop / StopAll still end it.
+	ctx = context.WithoutCancel(ctx)
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
 	s.Stop()
 	s.runWg.Wait()
 
 	s.applyConfig(cfg, pubURL)
 
 	if !s.IsConfigured() {
-		log.Info().Str("channel", "slack").Msg("reload: not configured, staying stopped")
+		log.Info().Str("channel", "slack").Str("bot", s.logBot()).Msg("reload: not configured, staying stopped")
 		return
 	}
 
-	log.Info().Str("channel", "slack").Msg("reload: restarting with new config")
+	log.Info().Str("channel", "slack").Str("bot", s.logBot()).Msg("reload: restarting with new config")
+	// Registered before the goroutine, so the next Reload (which waits on
+	// reloadMu) stops this run rather than the one before it.
+	runCtx, gen, done := s.beginRun(ctx)
 	go func() {
-		if err := s.Start(ctx); err != nil {
-			log.Error().Str("channel", "slack").Err(err).Msg("slack channel stopped after reload")
+		defer done()
+		defer agentchannels.RecoverPanic("slack", "reload")
+		if err := s.serve(ctx, runCtx, gen); err != nil {
+			log.Error().Str("channel", "slack").Str("bot", s.logBot()).Err(err).Msg("slack channel stopped after reload")
 		}
 	}()
 }
 
+// ack answers a socket request on the client currently in use; serve swaps
+// the client when it reconnects, so it is read under cfgMu.
+func (s *Channel) ack(evt socketmode.Event) {
+	s.cfgMu.Lock()
+	socket := s.socket
+	s.cfgMu.Unlock()
+	if socket != nil && evt.Request != nil {
+		socket.Ack(*evt.Request)
+	}
+}
+
 func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
+	defer agentchannels.RecoverPanic("slack", "socket event")
 	switch evt.Type {
 	case socketmode.EventTypeEventsAPI:
-		s.socket.Ack(*evt.Request)
+		s.ack(evt)
 		apiEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
 		if !ok {
 			return
 		}
 		s.handleEventsAPI(ctx, apiEvent)
 	case socketmode.EventTypeInteractive:
-		s.socket.Ack(*evt.Request)
+		s.ack(evt)
 		cb, ok := evt.Data.(slackgo.InteractionCallback)
 		if !ok {
 			return
@@ -1188,21 +1394,30 @@ func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
 		// slack.respond_url action.
 		cmd, ok := evt.Data.(slackgo.SlashCommand)
 		if !ok {
-			s.socket.Ack(*evt.Request)
+			s.ack(evt)
 			return
 		}
-		s.socket.Ack(*evt.Request)
+		s.ack(evt)
 		go s.handleSlashCommand(ctx, cmd)
 	case socketmode.EventTypeConnecting:
 		s.setSocketState("connecting")
-		log.Debug().Str("channel", "slack").Msg("connecting")
+		log.Debug().Str("channel", "slack").Str("bot", s.logBot()).Msg("connecting")
 	case socketmode.EventTypeConnected:
 		s.setSocketState("connected")
-		log.Info().Str("channel", "slack").Msg("connected")
+		log.Info().Str("channel", "slack").Str("bot", s.logBot()).Msg("connected")
 		go s.refreshBotUserID(ctx)
 	case socketmode.EventTypeConnectionError:
 		s.setSocketState("error")
-		log.Warn().Str("channel", "slack").Msg("connection error, will retry")
+		log.Warn().Str("channel", "slack").Str("bot", s.logBot()).Msg("connection error, will retry")
+
+	case socketmode.EventTypeDisconnect:
+		// Slack asked us to reconnect (it rotates connections); the client
+		// opens a new one right away.
+		s.setSocketState("connecting")
+		log.Info().Str("channel", "slack").Str("bot", s.logBot()).Msg("disconnect requested, reconnecting")
+	case socketmode.EventTypeInvalidAuth:
+		s.setSocketState("error")
+		log.Warn().Str("channel", "slack").Str("bot", s.logBot()).Msg("invalid auth")
 	}
 }
 
@@ -1210,6 +1425,7 @@ func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
 // The Slack channel itself has no agent-session role for slash
 // commands — they exist purely to be workflow-driven.
 func (s *Channel) handleSlashCommand(ctx context.Context, cmd slackgo.SlashCommand) {
+	defer agentchannels.RecoverPanic("slack", "slash command")
 	s.emitWorkflow(ctx, "command", map[string]any{
 		"user":         cmd.UserID,
 		"command":      cmd.Command,
@@ -1222,11 +1438,40 @@ func (s *Channel) handleSlashCommand(ctx context.Context, cmd slackgo.SlashComma
 }
 
 func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsAPIEvent) {
+	defer agentchannels.RecoverPanic("slack", "events api")
 	switch outer.Type {
 	case slackevents.CallbackEvent:
+		chType := ""
+		// remoteOwned: a Slack remote agent's reply (or late reply) in its
+		// turn's thread. It belongs to that turn, never to an agent here
+		// as a new message.
+		remoteOwned := false
+		if m, ok := outer.InnerEvent.Data.(*slackevents.MessageEvent); ok {
+			chType = m.ChannelType
+			remoteOwned = routeToRemoteTurns(m)
+		}
+		s.observeEvent(observedEventName(outer.InnerEvent.Type, chType))
 		switch ev := outer.InnerEvent.Data.(type) {
 		case *slackevents.AppMentionEvent:
+			// Another app mentioning the agent: handleMessage decides via
+			// BotsMode whether it may run (default: ignored). Bot mentions
+			// never reach the app_mention workflow surface, as before.
 			if ev.BotID != "" {
+				if slackremote.Shared.Owns(slackremote.Message{
+					Channel: ev.Channel, TS: ev.TimeStamp, ThreadTS: ev.ThreadTimeStamp, User: ev.User, BotID: ev.BotID,
+				}) {
+					return
+				}
+				s.handleMessage(ctx, &slackevents.MessageEvent{
+					Type:            ev.Type,
+					User:            ev.User,
+					BotID:           ev.BotID,
+					Text:            stripBotMention(ev.Text),
+					TimeStamp:       ev.TimeStamp,
+					ThreadTimeStamp: ev.ThreadTimeStamp,
+					Channel:         ev.Channel,
+					ChannelType:     "channel",
+				}, ev.Files)
 				return
 			}
 			cleanText := stripBotMention(ev.Text)
@@ -1288,6 +1533,12 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				if ev.ThreadTimeStamp == "" || ev.ThreadTimeStamp == ev.TimeStamp {
 					s.emitWorkflow(ctx, "thread_started", botPayload)
 				}
+				// A DM from a whitelisted bot reaches the agent here. In a
+				// channel only the app_mention path dispatches a bot, and
+				// the 🤖 auto-reply switch never does (bot loop guard).
+				if ev.ChannelType == "im" || ev.ChannelType == "mpim" {
+					s.handleMessage(ctx, ev, nil)
+				}
 				return
 			}
 			// SubType "file_share" carries attachments with no real text —
@@ -1329,6 +1580,9 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 			// auto-reply thread that MessageEvent would otherwise pass the gate
 			// below and dispatch the SAME message a second time — so skip any
 			// channel message that mentions the bot; AppMentionEvent owns it.
+			if remoteOwned {
+				return
+			}
 			if ev.ChannelType != "im" && ev.ChannelType != "mpim" {
 				if s.mentionsBot(ev.Text) {
 					return
@@ -1350,9 +1604,13 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				"user": ev.User,
 				"tab":  ev.Tab,
 			})
+		case *slackevents.AssistantThreadStartedEvent:
+			s.handleAssistantThreadStarted(ctx, ev)
 		case *slackevents.ReactionAddedEvent:
+			slackremote.Shared.DispatchReaction(ev.Item.Channel, ev.Item.Timestamp, ev.User, ev.Reaction, true)
 			s.handleReactionAdded(ctx, ev)
 		case *slackevents.ReactionRemovedEvent:
+			slackremote.Shared.DispatchReaction(ev.Item.Channel, ev.Item.Timestamp, ev.User, ev.Reaction, false)
 			s.handleReactionRemoved(ev)
 		}
 	}
@@ -1815,6 +2073,35 @@ func (s *Channel) HTTPHandler() http.Handler {
 	})
 }
 
+// routeToRemoteTurns hands a message event to the turns of Slack remote
+// agents waiting in that thread — the shared listener of plan 6.2c, so a
+// remote agent opens no connection of its own. True when the message is
+// such a remote's own, in a thread its turns use: the caller then leaves
+// it alone.
+func routeToRemoteTurns(ev *slackevents.MessageEvent) bool {
+	var edited *slackremote.Message
+	if ev.Message != nil {
+		edited = &slackremote.Message{
+			TS: ev.Message.Timestamp, ThreadTS: ev.Message.ThreadTimestamp,
+			User: ev.Message.User, BotID: ev.Message.BotID, Text: ev.Message.Text,
+		}
+	}
+	if ev.SubType == "message_deleted" && ev.PreviousMessage != nil {
+		edited = &slackremote.Message{
+			TS: ev.DeletedTimeStamp, ThreadTS: ev.PreviousMessage.ThreadTimestamp,
+			User: ev.PreviousMessage.User, BotID: ev.PreviousMessage.BotID,
+		}
+	}
+	m, ok := slackremote.FromEvent(ev.Channel, ev.SubType, ev.TimeStamp, ev.ThreadTimeStamp, ev.User, ev.BotID, ev.Text, edited)
+	if !ok {
+		return false
+	}
+	if slackremote.Shared.Waiting() > 0 {
+		slackremote.Shared.Dispatch(m)
+	}
+	return slackremote.Shared.Owns(m)
+}
+
 // verifySlackSignature validates the HMAC-SHA256 signature Slack attaches
 // to every webhook delivery.
 func verifySlackSignature(h http.Header, body []byte, signingSecret string) error {
@@ -1850,6 +2137,10 @@ func (s *Channel) snapshot() agentconfig.SlackChannelConfig {
 	return c
 }
 
+// notReadyReply is what a sender sees when the instance has no pool
+// dispatch wired yet.
+const notReadyReply = "Agent is not ready, try again in a moment."
+
 func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEvent, files []slackgo.File) {
 	threadTS := ev.ThreadTimeStamp
 	if threadTS == "" {
@@ -1866,11 +2157,19 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		Msg("incoming message")
 
 	cfg := s.snapshot()
-	groupIDs, err := s.resolveUserGroups(ev.User)
-	if err != nil {
-		log.Warn().Str("channel", "slack").Str("user", ev.User).Err(err).Msg("resolve groups failed; falling back to empty")
-	}
-	if ok, reason := s.allowedCfg(cfg, ev.User, groupIDs, ev.Channel); !ok {
+	fromBot := isFromBot(ev)
+	if fromBot {
+		// Bots are refused silently: no 🚫 and no DM, so two apps can never
+		// argue with each other through access-denied notices.
+		if ok, reason := s.allowedBotCfg(cfg, ev, ev.Channel); !ok {
+			log.Debug().Str("channel", "slack").Str("user", ev.User).Str("bot_id", ev.BotID).
+				Str("slack_channel", ev.Channel).Str("reason", reason).Msg("bot message ignored")
+			return
+		}
+		if !s.allowBotTurn(s.sessionKey(threadTS), time.Now()) {
+			return
+		}
+	} else if ok, reason, groupIDs := s.allowedSender(cfg, ev.User, ev.Channel); !ok {
 		log.Warn().Str("channel", "slack").
 			Str("user", ev.User).
 			Str("slack_channel", ev.Channel).
@@ -1893,14 +2192,18 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	// reach — so a sender we cannot map has to be refused BEFORE a spawn,
 	// not after. Running the turn anyway would execute it under the channel
 	// owner's access, which is exactly the confusion this prevents.
-	if msg := s.checkSenderIdentity(ev.User); msg != "" {
-		log.Warn().Str("channel", "slack").
-			Str("user", ev.User).
-			Str("slack_channel", ev.Channel).
-			Msg("identity unresolved, refusing message")
-		s.setReaction(reactionBlocked, ev.Channel, ev.TimeStamp, "")
-		s.postReply(ev.Channel, threadTS, msg)
-		return
+	// A whitelisted bot has no wick account behind it, so it is not
+	// mapped: its turns run as the channel owner (see callerUserID below).
+	if !fromBot {
+		if msg := s.checkSenderIdentity(ev.User); msg != "" {
+			log.Warn().Str("channel", "slack").
+				Str("user", ev.User).
+				Str("slack_channel", ev.Channel).
+				Msg("identity unresolved, refusing message")
+			s.setReaction(reactionBlocked, ev.Channel, ev.TimeStamp, "")
+			s.postReply(ev.Channel, threadTS, msg)
+			return
+		}
 	}
 
 	meta := agentchannels.ParseMeta(ev.Text)
@@ -1909,10 +2212,33 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		return
 	}
 
+	// An instance that was never handed the pool dispatch has nowhere to
+	// send the turn. Say so in the thread instead of dereferencing nil —
+	// a panic here would take the whole daemon down with this one bot.
+	if s.sendFn == nil {
+		log.Error().Str("channel", "slack").Str("slack_channel", ev.Channel).
+			Msg("slack channel not wired to the agent pool; dropping message")
+		s.setReaction(reactionError, ev.Channel, ev.TimeStamp, "")
+		s.postReply(ev.Channel, threadTS, notReadyReply)
+		return
+	}
+
 	// Namespace the session by instance so two bots (possibly in different
 	// workspaces) never collide on an equal threadTS. The bare threadTS is
 	// kept on the turn for Slack API calls.
 	sessionID := s.sessionKey(threadTS)
+	dmMain := false
+	if id := s.dmMainSession(ev); id != "" {
+		sessionID, dmMain = id, true
+	}
+
+	// An Instant agent riding this bot answers when the channel is bound to
+	// it, the mention names it, or it already owns the thread.
+	var persona Persona
+	routedText := ev.Text
+	if !dmMain {
+		persona, routedText = s.routePersona(ev.Channel, sessionID, ev.Text, s.sessionOnDisk(sessionID))
+	}
 
 	s.mu.Lock()
 	old := s.turns[sessionID]
@@ -1928,7 +2254,11 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	}
 	s.turns[sessionID] = t
 	s.mu.Unlock()
-	s.persistThreadBinding(sessionID, ev.Channel, threadTS)
+	// A main chat is shared with the web app; binding it to this thread
+	// would send the web's answers here too.
+	if !dmMain {
+		s.persistThreadBinding(sessionID, ev.Channel, threadTS)
+	}
 
 	// Set the status (with our loading_messages) BEFORE spawning the agent —
 	// Slack's guidance is to set status immediately when a message arrives,
@@ -1968,7 +2298,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		s.setReaction(reactionQueued, chID, msgTS, "")
 	})
 
-	userText := normalizeUserText(ev.Text)
+	userText := normalizeUserText(routedText)
 	// Who spoke — essential in multi-user threads and for matching the sender
 	// to a connector (bot vs the user's SSO-connected account) when replying.
 	// Travels on the send context rather than inside userText: the pool turns
@@ -1976,6 +2306,12 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	// structured fields, so the message the user typed stays untouched in
 	// storage and in the web UI.
 	sender := s.resolveSender(ev.User)
+	// The link back to this very message, so the web UI can jump to the
+	// Slack thread it came from. Fetched once here and stored with the turn
+	// rather than on every render; no link when Slack will not give one.
+	if sender != nil {
+		sender.Permalink = s.messagePermalink(ev.Channel, ev.TimeStamp)
+	}
 	// Append an attachment manifest so the agent knows the user posted files
 	// (images, PDFs, …) and has a permalink to fetch each one — the bytes
 	// themselves aren't downloaded here. Empty when the message had no files.
@@ -1996,7 +2332,13 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	// once an owner exists, so the repeat is idempotent and it also backfills
 	// threads created before per-user identity shipped.
 	callerUserID := ""
-	if wickUserID, ok := s.resolveSessionOwner(ev.User); ok {
+	// A bot is never resolved (that could auto-register it as a wick user):
+	// it falls through to the channel owner, or is refused when there is none.
+	wickUserID, resolved := "", false
+	if !fromBot {
+		wickUserID, resolved = s.resolveSessionOwner(ev.User)
+	}
+	if resolved {
 		callerUserID = wickUserID
 	} else if s.ownerUserID != "" {
 		callerUserID = s.ownerUserID
@@ -2019,11 +2361,14 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	if s.ownerFn != nil {
 		s.ownerFn(context.Background(), sessionID, callerUserID)
 	}
+	// The Instant agent's project carries the turn, so the session is born
+	// as that agent's (and is found again by it — sticky per thread).
+	baseCtx := agentchannels.WithProjectOverride(s.sendCtxAs(context.Background(), callerUserID), persona.ProjectID)
 	isNewSession := !s.sessionOnDisk(sessionID)
 	if isNewSession {
 		ctxText := s.buildSessionContext(ev, threadTS)
 		if ctxText != "" {
-			if err := s.sendFn(s.sendCtxAs(context.Background(), callerUserID), sessionID, "main", "slack", "system", ctxText); err != nil {
+			if err := s.sendFn(baseCtx, sessionID, "main", "slack", "system", ctxText); err != nil {
 				log.Warn().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("inject session context failed")
 			}
 		}
@@ -2032,7 +2377,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		}
 	}
 
-	userCtx := agentchannels.WithSender(s.sendCtxAs(context.Background(), callerUserID), sender)
+	userCtx := agentchannels.WithSender(baseCtx, sender)
 	if err := s.sendFn(userCtx, sessionID, "main", "slack", "user", userText); err != nil {
 		log.Error().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("pool send failed")
 		s.cancelQueueTimer(sessionID, ev.Channel, ev.TimeStamp)
@@ -2349,6 +2694,10 @@ func stripSilentMarker(text string) string {
 // continuation replies at Done. No-op when the buffer is unchanged since the
 // last flush, empty, or the turn is gone.
 func (s *Channel) flushLiveMessage(sessionKey string) {
+	lk := s.liveLock(sessionKey)
+	lk.Lock()
+	defer lk.Unlock()
+
 	s.mu.Lock()
 	t := s.turns[sessionKey]
 	if t == nil {
@@ -2367,10 +2716,7 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 	}
 	// While streaming, only the first chunk is shown in the live message;
 	// any overflow lands as continuation replies during the Done reconcile.
-	shown := body
-	if len(shown) > maxSlackChunk {
-		shown = chunkText(body, maxSlackChunk)[0]
-	}
+	shown := replyChunks(body)[0]
 
 	s.cfgMu.Lock()
 	api := s.api
@@ -2382,11 +2728,7 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 	if liveTS == "" {
 		var newTS string
 		s.withBackoff(func() error {
-			_, ts, err := api.PostMessage(
-				channelID,
-				slackgo.MsgOptionText(shown, false),
-				slackgo.MsgOptionTS(threadTS),
-			)
+			ts, err := s.postThread(api, channelID, threadTS, replyMsgOptions(shown, false)...)
 			if err == nil {
 				newTS = ts
 			}
@@ -2407,7 +2749,7 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 	s.withBackoff(func() error {
 		_, _, _, err := api.UpdateMessage(
 			channelID, liveTS,
-			slackgo.MsgOptionText(shown, false),
+			replyMsgOptions(shown, slackmd.NeedsBlock(lastSent))...,
 		)
 		return err
 	})
@@ -2416,6 +2758,25 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 		cur.lastSent = shown
 	}
 	s.mu.Unlock()
+}
+
+// liveLock returns the session's live-reply lock. flushLiveMessage holds it
+// across its post, and the Done reconcile takes it before reading liveTS:
+// without it a flush still waiting on chat.postMessage when the turn ends
+// leaves liveTS empty, so finalizeReply posts the reply a second time and the
+// thread shows it twice, a fraction of a second apart.
+func (s *Channel) liveLock(sessionKey string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.liveLocks == nil {
+		s.liveLocks = make(map[string]*sync.Mutex)
+	}
+	lk := s.liveLocks[sessionKey]
+	if lk == nil {
+		lk = &sync.Mutex{}
+		s.liveLocks[sessionKey] = lk
+	}
+	return lk
 }
 
 // cancelQueueTimer stops the pending queue-reaction timer for the named
@@ -2456,6 +2817,13 @@ func (s *Channel) NotifyState(sessionKey, state, text string) {
 	// Restore the thread from the session's stored binding when this process
 	// has no turn for it, or the reply is dropped without a trace.
 	s.ensureTurn(sessionKey)
+	// Wait out a live flush still in flight so its message ts is recorded
+	// before the reconcile below decides between updating it and posting.
+	if state == "done" {
+		lk := s.liveLock(sessionKey)
+		lk.Lock()
+		defer lk.Unlock()
+	}
 	s.mu.Lock()
 	t := s.turns[sessionKey]
 	var channelID, threadTS, msgTS, liveTS, lastSent string
@@ -2519,6 +2887,12 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	// continuation chunks) works from the same clean text, and so the
 	// text == lastSent comparison matches what flushLiveMessage actually sent.
 	text = stripSilentMarker(text)
+	// Action cards go out as Block Kit messages after the text; the text
+	// keeps a one-line pointer where each fence was.
+	text, cards := actioncard.Split(text, cardPointer)
+	if len(cards) > 0 {
+		defer s.postCards(channelID, threadTS, sessionKey, cards)
+	}
 	defer func() {
 		s.mu.Lock()
 		if cur := s.turns[sessionKey]; cur != nil {
@@ -2529,8 +2903,29 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	}()
 
 	plan := reconcilePlan(text, liveTS, lastSent)
+	if text == "" {
+		return
+	}
+	// Record the outcome for the web UI. Posting itself is unchanged: the
+	// same calls, retries and give-ups as before, only their result is kept.
+	turnID := s.reportDelivery(sessionKey, "", store.Delivery{Status: store.DeliverySending})
+	var firstTS string
+	var failed error
+	note := func(ts string, err error) {
+		if firstTS == "" {
+			firstTS = ts
+		}
+		if err != nil && failed == nil {
+			failed = err
+		}
+	}
+	defer func() { s.finishDelivery(sessionKey, turnID, channelID, firstTS, failed) }()
+
 	if plan.postFresh {
-		s.postChunked(channelID, threadTS, text)
+		// postChunked, with each chunk's result kept.
+		for _, chunk := range replyChunks(text) {
+			note(s.postReplyTS(channelID, threadTS, chunk))
+		}
 		return
 	}
 
@@ -2538,20 +2933,23 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	api := s.api
 	s.cfgMu.Unlock()
 	if api == nil {
+		note("", errSlackNotConnected)
 		return
 	}
 
+	// The live message already carries the reply's opening.
+	firstTS = liveTS
 	if plan.update {
-		s.withBackoff(func() error {
+		note("", s.withBackoffErr(func() error {
 			_, _, _, err := api.UpdateMessage(
 				channelID, liveTS,
-				slackgo.MsgOptionText(plan.first, false),
+				replyMsgOptions(plan.first, slackmd.NeedsBlock(lastSent))...,
 			)
 			return err
-		})
+		}))
 	}
 	for _, chunk := range plan.continuations {
-		s.postReply(channelID, threadTS, chunk)
+		note(s.postReplyTS(channelID, threadTS, chunk))
 	}
 }
 
@@ -2579,7 +2977,7 @@ func reconcilePlan(text, liveTS, lastSent string) replyPlan {
 	if liveTS == "" {
 		return replyPlan{postFresh: true}
 	}
-	chunks := chunkText(text, maxSlackChunk)
+	chunks := replyChunks(text)
 	return replyPlan{
 		update:        chunks[0] != lastSent,
 		first:         chunks[0],
@@ -2631,6 +3029,15 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 	if ev.SubAgent != "" {
 		s.setStatusLabel(sessionKey, subAgentStatusLabel(ev))
 		return
+	}
+	if ev.Type == event.Done || ev.Type == event.Error {
+		// Keep a main chat's turn while sub-agents still work in the
+		// background: their result wakes the leader in a turn nobody typed
+		// here, and its answer belongs in this DM. The Done of a turn with
+		// nothing left in the background releases it.
+		if _, ok := s.dmMain.Load(sessionKey); ok && !s.hasBackgroundAgents(sessionKey) {
+			defer s.releaseDMTurn(sessionKey)
+		}
 	}
 	// Same reason as NotifyState: without a turn every case below is a no-op,
 	// so a turn this process did not receive would stream into nothing.
@@ -2701,7 +3108,16 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		t.buf.Reset()
 		t.hasStarted = false
 		t.running = false
+		channelID, threadTS := t.channelID, t.threadTS
 		s.mu.Unlock()
+		// Bind again now that the session surely exists: a thread whose
+		// only message created the session was never bound, so the next
+		// turn it did not type (a sub-agent's result waking the leader)
+		// found no thread once this instance lost its turn. A main chat
+		// stays unbound on purpose, see handleMessage.
+		if _, dm := s.dmMain.Load(sessionKey); !dm {
+			s.persistThreadBinding(sessionKey, channelID, threadTS)
+		}
 
 		state := "done"
 		if hasError {
@@ -2778,11 +3194,7 @@ func (s *Channel) postSystemNotice(sessionKey, text string) {
 			slackgo.MarkdownType, text, false, false)),
 	}
 	s.withBackoff(func() error {
-		_, _, err := api.PostMessage(
-			channelID,
-			slackgo.MsgOptionBlocks(blocks...),
-			slackgo.MsgOptionTS(threadTS),
-		)
+		_, err := s.postThread(api, channelID, threadTS, slackgo.MsgOptionBlocks(blocks...))
 		return err
 	})
 }
@@ -3194,6 +3606,7 @@ func (s *Channel) OnApprovalResolved(sessionID, requestID, decision string) {
 }
 
 func (s *Channel) handleInteraction(ctx context.Context, cb slackgo.InteractionCallback) {
+	defer agentchannels.RecoverPanic("slack", "interaction")
 	// Workflow surface first — emit a typed event for every interaction
 	// type so workflows can route by callback_id / action_id without
 	// caring about the gate-approval channel-side hijack below.
@@ -3203,6 +3616,10 @@ func (s *Channel) handleInteraction(ctx context.Context, cb slackgo.InteractionC
 		return
 	}
 	action := cb.ActionCallback.BlockActions[0]
+	if action.BlockID == cardBlockID {
+		s.handleCardClick(ctx, cb, action)
+		return
+	}
 	if action.BlockID != "gate_approval" {
 		return
 	}
@@ -3257,6 +3674,11 @@ func (s *Channel) handleInteraction(ctx context.Context, cb slackgo.InteractionC
 //   - admins: workspace admins / owners (via users.info).
 //   - custom: GateApproverUsers list OR a user group in GateApproverGroups.
 func (s *Channel) approverAllowed(cfg agentconfig.SlackChannelConfig, userID string) bool {
+	// Gates are human-only: a bot let in through BotsMode may trigger a
+	// turn but never approves one, and neither does this instance's bot.
+	if s.isBotUser(userID) || pickerHas(cfg.AllowedBots, userID) {
+		return false
+	}
 	switch cfg.GateApprovers {
 	case "trigger_users", "":
 		groupIDs, _ := s.resolveUserGroups(userID)
@@ -3274,7 +3696,7 @@ func (s *Channel) approverAllowed(cfg agentconfig.SlackChannelConfig, userID str
 			log.Debug().Str("channel", "slack").Err(err).Msg("users.info failed during approver check")
 			return false
 		}
-		return info.IsAdmin || info.IsOwner || info.IsPrimaryOwner
+		return !info.IsBot && (info.IsAdmin || info.IsOwner || info.IsPrimaryOwner)
 	case "custom":
 		if pickerHas(cfg.GateApproverUsers, userID) {
 			return true
@@ -3309,7 +3731,7 @@ func (s *Channel) setReaction(newReaction, channelID, msgTS, oldReaction string)
 }
 
 func (s *Channel) postChunked(channelID, threadTS, text string) {
-	chunks := chunkText(text, maxSlackChunk)
+	chunks := replyChunks(text)
 	for _, chunk := range chunks {
 		s.postReply(channelID, threadTS, chunk)
 	}
@@ -3510,15 +3932,22 @@ func subAgentStatusLabel(ev event.AgentEvent) string {
 }
 
 func (s *Channel) withBackoff(fn func() error) {
+	_ = s.withBackoffErr(fn)
+}
+
+// withBackoffErr is withBackoff that also hands back how the call ended: nil
+// once it succeeded, else the last error. Retries are unchanged.
+func (s *Channel) withBackoffErr(fn func() error) error {
 	const maxRetries = 5
+	var err error
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		err := fn()
+		err = fn()
 		if err == nil {
-			return
+			return nil
 		}
 		if !isRateLimit(err) {
 			log.Warn().Str("channel", "slack").Err(err).Msg("slack api call failed")
-			return
+			return err
 		}
 		wait := time.Duration(math.Pow(2, float64(attempt))) * time.Second
 		if wait > 32*time.Second {
@@ -3528,6 +3957,7 @@ func (s *Channel) withBackoff(fn func() error) {
 		time.Sleep(wait)
 	}
 	log.Error().Str("channel", "slack").Msg("slack api call failed after max retries")
+	return err
 }
 
 func isRateLimit(err error) bool {
@@ -3591,6 +4021,17 @@ func (s *Channel) allowedCfg(cfg agentconfig.SlackChannelConfig, userID string, 
 		return false, "channels"
 	}
 	return true, ""
+}
+
+// allowedSender resolves the sender's user groups and runs allowedCfg. The
+// groups are returned for logging.
+func (s *Channel) allowedSender(cfg agentconfig.SlackChannelConfig, userID, channelID string) (bool, string, []string) {
+	groupIDs, err := s.resolveUserGroups(userID)
+	if err != nil {
+		log.Warn().Str("channel", "slack").Str("user", userID).Err(err).Msg("resolve groups failed; falling back to empty")
+	}
+	ok, reason := s.allowedCfg(cfg, userID, groupIDs, channelID)
+	return ok, reason, groupIDs
 }
 
 // notifyAccessDenied DMs the user who was blocked, explaining why, so the
@@ -3664,11 +4105,16 @@ func pickerHas(jsonList, id string) bool {
 	return false
 }
 
+// userGroupsTTL is how long a user group membership snapshot is reused. A
+// person added to a group in Slack passes the groups whitelist once it runs
+// out — no restart needed.
+const userGroupsTTL = time.Minute
+
+// resolveUserGroups returns the IDs of the user groups userID belongs to,
+// read from usergroups.list (needs usergroups:read) and cached for
+// userGroupsTTL.
 func (s *Channel) resolveUserGroups(userID string) ([]string, error) {
-	s.cfgMu.Lock()
-	api := s.api
-	s.cfgMu.Unlock()
-	groups, err := api.GetUserGroups(slackgo.GetUserGroupsOptionIncludeUsers(true))
+	groups, err := s.userGroupMembers()
 	if err != nil {
 		return nil, err
 	}
@@ -3682,6 +4128,28 @@ func (s *Channel) resolveUserGroups(userID string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// userGroupMembers is usergroups.list with members, served from the cache
+// while it is younger than userGroupsTTL.
+func (s *Channel) userGroupMembers() ([]slackgo.UserGroup, error) {
+	s.userGroupsMu.Lock()
+	defer s.userGroupsMu.Unlock()
+	if !s.userGroupsAt.IsZero() && time.Since(s.userGroupsAt) < userGroupsTTL {
+		return s.userGroups, nil
+	}
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return nil, errors.New("slack client not ready")
+	}
+	groups, err := api.GetUserGroups(slackgo.GetUserGroupsOptionIncludeUsers(true))
+	if err != nil {
+		return nil, err
+	}
+	s.userGroups, s.userGroupsAt = groups, time.Now()
+	return groups, nil
 }
 
 func (s *Channel) handleMetaCmd(_ context.Context, meta agentchannels.MetaResult, channelID, threadTS string) {

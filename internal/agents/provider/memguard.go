@@ -61,6 +61,23 @@ func (g *MemGuard) sliceLimits() memscope.SliceLimits {
 	}
 }
 
+// SyncSlice rewrites agents.slice's unit (or raw cgroup) with this
+// guard's limits now, instead of at the next spawn. The resource guard
+// writes the live cgroup when a limit changes; without this the unit
+// file kept the old value and the next daemon-reload put it back.
+func (g *MemGuard) SyncSlice() error {
+	if g == nil || g.Mode != config.MemGuardEnforce {
+		return nil
+	}
+	switch memscopeBackend() {
+	case memscope.BackendCgroupFS:
+		return memscope.EnsureCgroupSlice(g.sliceLimits())
+	case memscope.BackendNone:
+		return nil
+	}
+	return memscope.EnsureSlice(g.sliceLimits())
+}
+
 // memscopeBackend is a seam so tests can drive every branch without a
 // systemd user session or a real cgroup mount. Production always points
 // at memscope.DetectBackend, which ranks systemd-run above raw cgroupfs

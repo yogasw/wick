@@ -83,6 +83,21 @@ export default withMermaid(defineConfig({
         ],
       },
       {
+        text: 'Plugins',
+        items: [
+          { text: 'Overview', link: '/plugins/overview' },
+          { text: 'Connector plugin', link: '/plugins/authoring-connector' },
+          { text: 'Tool plugin', link: '/plugins/authoring-tool' },
+          { text: 'Job plugin', link: '/plugins/authoring-job' },
+          { text: 'Service plugin', link: '/plugins/authoring-service' },
+          { text: 'Index format', link: '/plugins/index-format' },
+          { text: 'Sources', link: '/plugins/sources' },
+          { text: 'Release', link: '/plugins/release' },
+          { text: 'Security', link: '/plugins/security' },
+          { text: 'A2A repeater walkthrough', link: '/plugins/service-a2a' },
+        ],
+      },
+      {
         text: 'LLM & Auth',
         items: [
           { text: 'MCP for LLMs', link: '/guide/mcp' },
@@ -140,6 +155,17 @@ export default withMermaid(defineConfig({
           { text: 'Pool & Sessions', link: '/guide/agents/pool' },
           { text: 'Memory Guard', link: '/guide/agents/memory-guard' },
           { text: 'Sub-agents', link: '/guide/agents/sub-agents' },
+          {
+            text: 'Team',
+            collapsed: false,
+            items: [
+              { text: 'Overview', link: '/guide/agents/team/' },
+              { text: 'Access & sharing', link: '/guide/agents/team/access-sharing' },
+              { text: 'Mentions & remote agents', link: '/guide/agents/team/mentions-remote' },
+              { text: 'Connections', link: '/guide/agents/team/connections' },
+              { text: 'Scheduled', link: '/guide/agents/team/scheduled' },
+            ],
+          },
           { text: 'Source Control', link: '/guide/agents/source-control' },
           { text: 'AI Router', link: '/guide/agents/airouter' },
           { text: 'Command Gate', link: '/guide/command-gate' },

@@ -18,6 +18,7 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastError } from "@wick-fe/common-stores";
+  import { layer } from "@wick-fe/common-ui";
   import {
     Composer,
     budgetText,
@@ -30,10 +31,11 @@
 
   import { createThreadStore } from "../stores/thread.js";
   import { connectSession } from "../stores/sse.js";
-  import { getConversation, getTurnTrace, getTurnEvent } from "../api/sessions.js";
+  import { getConversation, getTurnTrace, getTurnEvent, getTurnBlob } from "../api/sessions.js";
   import { getSubAgents, interruptSubAgent } from "../api/subagents.js";
   import { fetchSessionContext, type SessionContext } from "../api/context.js";
   import { sendMessage } from "../api/messages.js";
+  import { makeTraceFiles } from "../api/files.js";
   import ConversationThread from "./ConversationThread.svelte";
   import { timeAgo, exactTime, shortDuration, parseEventTime } from "../timeFormat.js";
   import { now } from "../stores/now.js";
@@ -165,6 +167,15 @@
     return run(getTurnEvent(base, currentSessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)));
   }
 
+  // A binary the child's trace stored (a Read of a screenshot). Without this
+  // the image chip in a sub-agent trace stayed disabled even though the blob
+  // was on disk.
+  const traceFiles = $derived(makeTraceFiles(base, currentSessionId));
+
+  function loadTraceBlob(turnId: string, ref: string): Promise<Blob> {
+    return getTurnBlob(base, currentSessionId, turnId, ref);
+  }
+
   /* ── this crumb's own sub-agents ───────────────────────────────── */
   let children = $state<SubAgentItem[]>([]);
 
@@ -266,12 +277,6 @@
     if (index < stack.length - 1) stack = stack.slice(0, index + 1);
   }
 
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      back();
-    }
-  }
 
   /* ── actions ────────────────────────────────────────────────────── */
   function stop() {
@@ -319,7 +324,6 @@
   );
 </script>
 
-<svelte:window on:keydown={onKeydown} />
 
 {#if current}
   <div
@@ -335,8 +339,9 @@
       aria-modal="true"
       aria-label={`Sub-agent ${current.profile_key}`}
       tabindex="-1"
+      use:layer={{ onEscape: back }}
       onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
+      onkeydown={(e) => { if (e.key !== "Escape") e.stopPropagation(); }}
     >
       <!-- header: breadcrumb + status + actions -->
       <div class="flex items-center gap-2 border-b border-white-300 dark:border-navy-600 px-4 py-3">
@@ -389,13 +394,6 @@
           >· {stampText}</span>
         {/if}
 
-        {#if live_}
-          <button
-            type="button"
-            onclick={stop}
-            class="shrink-0 rounded px-2 py-1 text-[10px] font-medium bg-neg-100 text-neg-400 transition-colors hover:bg-neg-200"
-          >Stop</button>
-        {/if}
         <button
           type="button"
           onclick={onClose}
@@ -494,15 +492,22 @@
             {typing}
             {loadTrace}
             {loadTraceEvent}
+            {loadTraceBlob}
+            {traceFiles}
             onOpenSubAgent={openDelegation}
           />
         {/if}
       </div>
 
       <div class="border-t border-white-300 dark:border-navy-600 p-3">
+        <!-- Stop lives in the composer's action slot, exactly as it does
+             for the main agent: Stop on an empty box, Send with a draft,
+             hold Send for the choice. -->
         <Composer
           onSend={send}
           disabled={sending}
+          running={live_}
+          onStop={stop}
           minRows={1}
           placeholder={live_ ? "Send a message to this sub-agent…" : "Ask this sub-agent a follow-up…"}
         />

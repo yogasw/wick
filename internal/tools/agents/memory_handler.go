@@ -11,6 +11,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/provider/memscope"
 	"github.com/yogasw/wick/internal/agents/provider/memscope/wrapper"
+	"github.com/yogasw/wick/internal/agents/resourceguard"
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/pkg/memreport"
 	"github.com/yogasw/wick/internal/pkg/sysmem"
@@ -151,6 +152,23 @@ type memoryReport struct {
 	// wick: when the box is slow, the cause is often not an agent, and a
 	// dashboard that can only see its own processes cannot say so.
 	Top topProcesses `json:"top"`
+
+	// Guard is the Resource Guard's recent actions, newest last, and the
+	// knobs it is running with — so "why did my build die" has an answer
+	// on the page rather than only in the daemon log.
+	Guard resourceGuardReport `json:"guard"`
+}
+
+type resourceGuardReport struct {
+	Action  string `json:"action"`
+	SafePct int    `json:"safe_pct"`
+	// CPUQuotaPct is percent of the whole machine, 0 = uncapped.
+	CPUQuotaPct int                   `json:"cpu_quota_pct"`
+	IntervalMS  int                   `json:"interval_ms"`
+	HorizonSec  int                   `json:"exhaust_horizon_sec"`
+	CPUPSIMax   int                   `json:"cpu_psi_max"`
+	HoldSpawns  bool                  `json:"hold_spawns"`
+	Events      []resourceguard.Event `json:"events"`
 }
 
 // memoryCurrentLimits echoes what is configured now, so the UI can show
@@ -174,6 +192,13 @@ var resourceHistory *memreport.History
 // SetResourceHistory installs the buffer the API reads from. Called once
 // from server startup, alongside the sampler that fills it.
 func SetResourceHistory(h *memreport.History) { resourceHistory = h }
+
+// resourceGuard is the fast watchdog, installed at boot. nil = not wired
+// (a test binary); the report then shows no guard events.
+var resourceGuard *resourceguard.Guard
+
+// SetResourceGuard installs the watchdog the Resources page reports on.
+func SetResourceGuard(g *resourceguard.Guard) { resourceGuard = g }
 
 // topRates diffs consecutive machine-wide snapshots so the top-process
 // table can rank by RATE rather than lifetime totals — otherwise the
@@ -458,6 +483,17 @@ func buildMemoryReport() memoryReport {
 			}
 			rep.Agents = append(rep.Agents, row)
 		}
+	}
+
+	rep.Guard = resourceGuardReport{
+		Action:      memGuardConfig("resource_guard_action", resourceguard.ActionKill),
+		SafePct:     memGuardInt("resource_guard_safe_pct"),
+		CPUQuotaPct: agentconfig.CPUQuotaMachinePct(memGuardConfig("agents_cpu_quota_pct", ""), runtime.NumCPU()),
+		IntervalMS:  memGuardInt("resource_guard_interval_ms"),
+		HorizonSec:  memGuardInt("resource_guard_exhaust_horizon_sec"),
+		CPUPSIMax:   memGuardInt("resource_guard_cpu_psi_max"),
+		HoldSpawns:  resourceGuard.HoldSpawns(),
+		Events:      resourceGuard.History(),
 	}
 
 	if okT {

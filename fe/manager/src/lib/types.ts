@@ -577,6 +577,8 @@ export interface PluginEntry {
 export interface PluginsList {
   installed: PluginEntry[];
   available: PluginEntry[];
+  /* Every catalog entry, installed or not; available is the not-installed subset. */
+  catalog?: PluginEntry[];
   registry_error?: string;
   /* Whether the viewer may install / update / enable / disable / remove.
      Non-admins still receive the full list; the action buttons render

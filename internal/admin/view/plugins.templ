@@ -1,0 +1,30 @@
+package view
+
+import "github.com/yogasw/wick/internal/entity"
+
+// PluginsSPAVM hosts the manager SPA's plugins view in the admin chrome.
+// AssetURL + Base come from manager.SPAMount(): the same bundle /manager
+// serves, with its router still rooted at /manager so API calls resolve.
+type PluginsSPAVM struct {
+	AssetURL string
+	Base     string
+}
+
+// PluginsPage is a thin shell: data-embed="plugins" tells the manager entry
+// to mount only the plugins view (no manager navbar or breadcrumbs).
+templ PluginsPage(vm PluginsSPAVM, user *entity.User) {
+	@AdminLayout("Admin · Plugins", "plugins", user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			if vm.AssetURL == "" {
+				<div class="text-sm text-neg-400">
+					Manager bundle not built yet. Run
+					<code class="font-mono">npm --workspace=@wick-fe/manager run build</code>
+					in <code class="font-mono">fe/</code> and refresh.
+				</div>
+			} else {
+				<div id="app" data-base={ vm.Base } data-embed="plugins"></div>
+				<script type="module" src={ vm.AssetURL }></script>
+			}
+		</main>
+	}
+}

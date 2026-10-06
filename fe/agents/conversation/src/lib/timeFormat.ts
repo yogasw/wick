@@ -56,6 +56,24 @@ export function timeAgo(raw?: string, nowMs: number = Date.now()): string {
   return d === "just now" || d === "" ? d : `${d} ago`;
 }
 
+const MONTHS_ID = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** Messaging-app stamp for the Agents roster: "12:34" today, "Kemarin"
+    yesterday, "3 Okt" earlier this year, "03/10/2025" before that. Local
+    time, "" when unparseable. */
+export function rosterTime(raw?: string | null, nowMs: number = Date.now()): string {
+  const ms = parseEventTime(raw ?? undefined);
+  if (ms === undefined) return "";
+  const d = new Date(ms);
+  const now = new Date(nowMs);
+  const days = Math.round((startOfDay(now).getTime() - startOfDay(d).getTime()) / 86_400_000);
+  if (days <= 0) return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  if (days === 1) return "Kemarin";
+  if (d.getFullYear() === now.getFullYear()) return `${d.getDate()} ${MONTHS_ID[d.getMonth()]}`;
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
+
 /** Full local timestamp for a `title` tooltip — the exact moment behind
     a rounded "4m ago". Empty when unparseable, so the caller can leave
     the attribute off rather than render an empty tooltip. */

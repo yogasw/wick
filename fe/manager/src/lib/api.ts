@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPostSSE } from "@wick-fe/common-api";
+import { apiDelete, apiGet, apiPost, apiPostSSE } from "@wick-fe/common-api";
 import type {
   ConnectorDef,
   ConnectorList,
@@ -547,6 +547,239 @@ export async function setPluginEnabled(key: string, enabled: boolean): Promise<{
   const verb = enabled ? "enable" : "disable";
   return apiPost<{ ok: boolean }>(`/manager/api/plugins/${encodeURIComponent(key)}/${verb}`);
 }
-export async function removePlugin(key: string): Promise<{ ok: boolean }> {
-  return apiPost<{ ok: boolean }>(`/manager/api/plugins/${encodeURIComponent(key)}/remove`);
+/* Uninstalls a plugin of any kind; kind picks one when a connector and a
+   tool share a key. Its config stays for a reinstall. */
+export async function removePlugin(key: string, kind?: string): Promise<{ ok: boolean }> {
+  const q = kind ? `?kind=${encodeURIComponent(kind)}` : "";
+  return apiPost<{ ok: boolean }>(`/manager/api/plugins/${encodeURIComponent(key)}/remove${q}`);
+}
+
+/* Installed plugins across every kind, with where each came from
+   (plugins_installed_api.go). Every URL is token-free: source_url is the
+   GitHub repo page or the index URL without userinfo/query; private sources
+   only get their release page as download_url. */
+export type PluginOrigin = "official" | "source" | "url-zip" | "upload" | "local";
+export interface InstalledPlugin {
+  key: string;
+  name: string;
+  kind: "connector" | "tool" | "job" | "service";
+  version: string;
+  enabled: boolean;
+  detail_path: string;
+  origin: PluginOrigin;
+  source_id?: string;
+  source_name?: string;
+  source_url?: string;
+  last_check_at?: string;
+  latest_version?: string;
+  update_available: boolean;
+  download_url?: string;
+  last_health_at?: string;
+  last_health_ok: boolean;
+  last_health_detail?: string;
+}
+export interface OfficialCatalog {
+  url: string;
+  plugins: number;
+  last_check_at?: string;
+  error?: string;
+}
+export function listInstalledPlugins(): Promise<{ plugins: InstalledPlugin[]; official: OfficialCatalog; is_admin: boolean }> {
+  return apiGet("/manager/api/plugins/installed");
+}
+
+/* ── Service plugins (always-on, /x/{key}) ── */
+
+export type ServiceRoute = { prefix: string; auth: "public" | "token" | "wick-session" };
+export type ServiceStatus = {
+  state: "stopped" | "starting" | "running" | "backoff" | "sleeping";
+  restarts: number;
+  started_at?: string;
+  next_start?: string;
+  last_error?: string;
+  /* Auto-off: when it last went to sleep, last request/turn, last wake time. */
+  slept_at?: string;
+  last_active?: string;
+  last_wake_ms?: number;
+};
+export type ServiceAutoOffMode = "default" | "on" | "off";
+/* What the plugin declares (supported/reason/default idle), what the admin
+   set (mode/idle), and the effective result (enabled, forced = overridden). */
+export type ServiceAutoOff = {
+  supported: boolean;
+  reason?: string;
+  default_idle_seconds: number;
+  mode: ServiceAutoOffMode;
+  idle_seconds: number;
+  enabled: boolean;
+  forced: boolean;
+};
+export type ServiceToken = { id: string; name: string; hint: string; created_at: string; last_used?: string };
+export type ServicePlugin = {
+  key: string;
+  name: string;
+  description?: string;
+  version: string;
+  path: string;
+  status: ServiceStatus;
+  routes: ServiceRoute[];
+  capabilities?: string[];
+  callback_scopes?: string[];
+  callback_revoked: boolean;
+  auto_off?: ServiceAutoOff;
+  /* Manifest config rows; a secret's value is never sent (has_value only). */
+  configs?: ServiceConfigField[];
+  tokens?: ServiceToken[];
+  logs?: string[];
+};
+export type ServiceConfigField = {
+  key: string;
+  value: string;
+  type?: string;
+  options?: string;
+  description?: string;
+  is_secret: boolean;
+  has_value: boolean;
+  required: boolean;
+};
+export type ServiceTokenSecret = { token: ServiceToken; secret: string };
+
+const serviceBase = (key: string) => `/manager/api/service-plugins/${encodeURIComponent(key)}`;
+
+/* Admin-only; non-admins get an error and simply see no service section. */
+export function listServicePlugins(): Promise<ServicePlugin[]> {
+  return apiGet<ServicePlugin[]>("/manager/api/service-plugins");
+}
+
+export function getServicePlugin(key: string): Promise<ServicePlugin> {
+  return apiGet<ServicePlugin>(serviceBase(key));
+}
+
+export function serviceAction(key: string, action: "start" | "stop" | "restart" | "callback-revoke" | "callback-allow"): Promise<ServicePlugin> {
+  return apiPost<ServicePlugin>(`${serviceBase(key)}/${action}`);
+}
+
+/* Saves config values (an empty secret keeps the stored one); wick pushes
+   them to the running plugin, restarting it when it cannot take a push. */
+export function setServiceConfig(key: string, values: Record<string, string>): Promise<ServicePlugin> {
+  return apiPost<ServicePlugin>(`${serviceBase(key)}/config`, { values });
+}
+
+/* Admin override of auto-off; forcing "on" while the plugin says it cannot
+   auto-off needs confirm. idleSeconds 0 = the plugin's default. */
+export function setServiceAutoOff(key: string, mode: ServiceAutoOffMode, idleSeconds: number, confirm = false): Promise<ServicePlugin> {
+  return apiPost<ServicePlugin>(`${serviceBase(key)}/auto-off`, { mode, idle_seconds: idleSeconds, confirm });
+}
+
+export function generateServiceToken(key: string, name: string): Promise<ServiceTokenSecret> {
+  return apiPost<ServiceTokenSecret>(`${serviceBase(key)}/tokens`, { name });
+}
+
+export function rotateServiceToken(key: string, id: string): Promise<ServiceTokenSecret> {
+  return apiPost<ServiceTokenSecret>(`${serviceBase(key)}/tokens/${encodeURIComponent(id)}/rotate`);
+}
+
+export function revokeServiceToken(key: string, id: string): Promise<void> {
+  return apiDelete<void>(`${serviceBase(key)}/tokens/${encodeURIComponent(id)}`);
+}
+
+/* ── Plugin sources (Admin → Plugins). Backed by internal/manager/plugin_sources_api.go.
+   Reading is open to any logged-in user; every action is admin-only. The PAT is
+   write-only: responses only carry has_pat. ── */
+
+export type PluginSource = {
+  id: string;
+  name: string;
+  type: "url" | "github";
+  url?: string;
+  repo?: string;
+  private: boolean;
+  has_pat: boolean;
+  pub_key?: string;
+  key_filter?: string;
+  allow_prerelease: boolean;
+  auto_update: boolean;
+  poll_minutes: number;
+  enabled: boolean;
+  last_check_at?: string;
+  last_status?: string;
+  last_error?: string;
+  plugins: number;
+};
+export type PluginSourceInput = {
+  name?: string;
+  type: "url" | "github";
+  url?: string;
+  repo?: string;
+  private?: boolean;
+  pat?: string;
+  pub_key?: string;
+  key_filter?: string;
+  allow_prerelease?: boolean;
+  auto_update?: boolean;
+  poll_minutes?: number;
+};
+export type SourceStep = { n: number; name: string; status: "ok" | "fail" | "skip"; message: string };
+export type AvailablePlugin = {
+  source_id: string;
+  source_name: string;
+  key: string;
+  kind: string;
+  name: string;
+  description?: string;
+  version: string;
+  installed_version?: string;
+  arch_ok: boolean;
+  os_arch: string[];
+};
+export type PluginSourceStatus = {
+  key: string;
+  kind: string;
+  source_id?: string;
+  source_name?: string;
+  installed_version?: string;
+  available_version?: string;
+  is_admin: boolean;
+};
+
+const sourcesBase = "/manager/api/plugin-sources";
+
+export function listPluginSources(): Promise<{ sources: PluginSource[]; is_admin: boolean }> {
+  return apiGet(sourcesBase);
+}
+export function savePluginSource(input: PluginSourceInput, id?: string): Promise<PluginSource> {
+  return apiPost(id ? `${sourcesBase}/${encodeURIComponent(id)}` : sourcesBase, input);
+}
+export function deletePluginSource(id: string): Promise<{ ok: boolean }> {
+  return apiDelete(`${sourcesBase}/${encodeURIComponent(id)}`);
+}
+export function testPluginSource(id: string): Promise<{ steps: SourceStep[] }> {
+  return apiPost(`${sourcesBase}/${encodeURIComponent(id)}/test`);
+}
+// Test an unsaved source from the Add form; nothing is stored. id tests an
+// edit so a stored PAT is used when the field is left empty.
+export function testPluginSourceInput(input: PluginSourceInput, id?: string): Promise<{ steps: SourceStep[] }> {
+  return apiPost(`${sourcesBase}/test${id ? `?id=${encodeURIComponent(id)}` : ""}`, input);
+}
+export function checkPluginSource(id: string): Promise<{ updates?: string[] | null }> {
+  return apiPost(`${sourcesBase}/${encodeURIComponent(id)}/check`);
+}
+export function installFromSource(id: string, key: string): Promise<{ ok: boolean; version: string }> {
+  return apiPost(`${sourcesBase}/${encodeURIComponent(id)}/install`, { key });
+}
+export function listAvailablePlugins(): Promise<{ available: AvailablePlugin[]; is_admin: boolean }> {
+  return apiGet("/manager/api/plugin-available");
+}
+export function getPluginSourceStatus(key: string): Promise<PluginSourceStatus> {
+  return apiGet(`/manager/api/plugins/${encodeURIComponent(key)}/source`);
+}
+
+/* Multipart upload: the shared JSON client cannot send FormData. */
+export async function uploadPluginZip(file: File): Promise<{ key: string; kind: string; version: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/manager/api/plugins/upload", { method: "POST", body: form, credentials: "same-origin" });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `upload failed (${res.status})`);
+  return body;
 }

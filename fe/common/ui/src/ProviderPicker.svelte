@@ -251,6 +251,19 @@
     void ensureModels(opt.value);
   });
 
+  // Move the popup to <body>: a transformed ancestor (the agents app's
+  // centred modal uses translate(-50%,-50%)) becomes the containing block of
+  // a fixed child, so the menu was offset into the dialog and clipped by its
+  // overflow-hidden — the trigger looked dead.
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      },
+    };
+  }
+
   function reset() { typeDrill = ""; modelDrill = null; drillStack = []; modelSearch = ""; }
   function close() { open = false; reset(); }
   // Back out one level: from a live set's expansion to the model list, then
@@ -335,10 +348,12 @@
   {#if open && pos}
     <!-- Fixed, not absolute: an absolute popup is clipped by any
          overflow-auto ancestor (a Modal body, a scrolling settings pane) and
-         makes that ancestor scroll instead of painting over it. z above the
-         Modal's own layer so it is never covered by the dialog it sits in. -->
+         makes that ancestor scroll instead of painting over it. Portaled to
+         <body> so a transformed ancestor cannot re-anchor it either. z above
+         the Modal's own layer so it is never covered by the dialog it sits in. -->
     <div
       bind:this={menuEl}
+      use:portal
       style="position:fixed; top:{pos.top}px; left:{pos.left}px; width:{pos.width}px; max-height:{MAX_H}px; z-index:9999;"
       class="flex flex-col overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-xl"
     >

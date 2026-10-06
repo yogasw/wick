@@ -3,7 +3,9 @@
  * Purpose:    SharedWorker — multiplexes EVERY subscribed session onto ONE
  *             /stream/multi EventSource and fans events to subscribed
  *             MessagePorts by session_id; also owns the single lifecycle
- *             (/stream/sessions) stream. Fetches /stream/snapshot per session
+ *             (/stream/sessions) stream — session lifecycle for the sidebar
+ *             and turn `activity` for the Team roster, plus a `ticket` signal
+ *             for open boards and an `agent_changed` signal for the roster. Fetches /stream/snapshot per session
  *             on late-join/reconnect so nothing is missed. Self-heals with
  *             backoff once the browser's own reconnect gives up.
  * Caller:     Instantiated via `new SharedWorker(new URL(...), { type: "module" })`
@@ -44,6 +46,11 @@ let lifecycleSource: EventSource | null = null;
 let lifecycleBase = "";
 let lifecycleRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let lifecycleRetryAttempts = 0;
+/* Last `activity` per conversation (what its turn is doing), for a port that
+   joins while the stream is already open: the server replays it only to a
+   NEW connection. Idle ones are dropped, so this holds live turns only, and
+   a reopen clears it because the server replays afresh. */
+const lastActivity = new Map<string, unknown>();
 
 function broadcast(sessionID: string, msg: unknown): void {
   const set = ports[sessionID];
@@ -192,11 +199,47 @@ function connectLifecycle(base: string): void {
   lifecycleBase = base;
   const es = new EventSource(`${base}/stream/sessions`, { withCredentials: true });
   lifecycleSource = es;
+  lastActivity.clear();
 
   es.addEventListener("session", (ev: MessageEvent) => {
     let parsed: unknown;
     try { parsed = JSON.parse(ev.data as string); } catch (_) { return; }
     broadcastLifecycle({ type: "session", event: parsed });
+  });
+
+  es.addEventListener("activity", (ev: MessageEvent) => {
+    let parsed: { session_id?: string; work?: string; needs_attention?: boolean };
+    try { parsed = JSON.parse(ev.data as string); } catch (_) { return; }
+    if (!parsed || !parsed.session_id) return;
+    if (parsed.work || parsed.needs_attention) lastActivity.set(parsed.session_id, parsed);
+    else lastActivity.delete(parsed.session_id);
+    broadcastLifecycle({ type: "activity", event: parsed });
+  });
+
+  /* A ticket was written: a bare {project_id, ticket_id} signal, already
+     filtered by project access server-side. Not cached — an open board
+     refetches on reconnect anyway. */
+  es.addEventListener("ticket", (ev: MessageEvent) => {
+    let parsed: { project_id?: string };
+    try { parsed = JSON.parse(ev.data as string); } catch (_) { return; }
+    if (!parsed || !parsed.project_id) return;
+    broadcastLifecycle({ type: "ticket", event: parsed });
+  });
+
+  /* A Team agent (or group) the user sees was created, edited, shared,
+     unshared or deleted: a bare {agent_id} / {group_id} signal, already
+     filtered by roster access server-side. Not cached — the roster
+     refetches on reconnect anyway. */
+  es.addEventListener("agent_changed", (ev: MessageEvent) => {
+    let parsed: { agent_id?: string; group_id?: string };
+    try { parsed = JSON.parse(ev.data as string); } catch (_) { return; }
+    if (!parsed || (!parsed.agent_id && !parsed.group_id)) return;
+    broadcastLifecycle({ type: "agent_changed", event: parsed });
+  });
+
+  /* Something in the pool moved: a bare signal the Overview refetches on. */
+  es.addEventListener("pool", () => {
+    broadcastLifecycle({ type: "pool" });
   });
 
   es.onopen = () => {
@@ -217,6 +260,7 @@ function stopLifecycle(): void {
     lifecycleSource.close();
     lifecycleSource = null;
   }
+  lastActivity.clear();
 }
 
 /* ── port wiring ──────────────────────────────────────────────────── */
@@ -272,6 +316,7 @@ function stopLifecycle(): void {
           type: "lifecycle-status",
           status: lifecycleSource.readyState === EventSource.OPEN ? "connected" : "connecting",
         });
+        lastActivity.forEach((ev) => port.postMessage({ type: "activity", event: ev }));
         return;
       }
       connectLifecycle(base);

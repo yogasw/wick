@@ -100,7 +100,7 @@
 
   function statusBadgeCls(status: string): string {
     return status === "ready"
-      ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"
+      ? "bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300"
       : "bg-cau-100 text-cau-700 dark:bg-cau-900 dark:text-cau-300";
   }
 

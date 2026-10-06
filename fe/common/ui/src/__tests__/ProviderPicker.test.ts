@@ -152,3 +152,22 @@ describe("ProviderPicker live sets", () => {
     expect(screen.getByRole("button", { name: /gemini-3-pro/ })).toBeTruthy();
   });
 });
+
+describe("ProviderPicker inside a transformed container", () => {
+  // A transformed ancestor (the agents app's centred modal) is the containing
+  // block of a fixed child, so an un-portaled menu landed inside the dialog
+  // and was clipped by its overflow-hidden: the trigger looked dead.
+  test("portals the open menu to <body>", async () => {
+    const host = document.createElement("div");
+    host.style.transform = "translate(-50%, -50%)";
+    host.style.overflow = "hidden";
+    document.body.appendChild(host);
+    render(ProviderPicker, { target: host, props: { options: [WICK], value: "", onChange: vi.fn() } });
+
+    await fireEvent.click(screen.getByRole("button", { name: /select provider/i }));
+    const row = screen.getByRole("button", { name: /wick\/x/i });
+    expect(host.contains(row)).toBe(false);
+    expect(document.body.contains(row)).toBe(true);
+    host.remove();
+  });
+});

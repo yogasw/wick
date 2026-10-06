@@ -115,18 +115,31 @@ func writeModelNotFound(w http.ResponseWriter, requested string) {
 
 // handleModels serves GET /v1/models. Requires the same Bearer auth as
 // chat / responses so the catalogue isn't world-readable.
+//
+// The caller's Team agents with their REST connection on are listed as
+// "agent:<handle>" — those answer even while the plain channel is off,
+// so the provider list is then left out rather than the request refused.
 func (c *Channel) handleModels(w http.ResponseWriter, r *http.Request) {
-	if status, msg := c.checkReady(); status != 0 {
+	if status, msg := c.checkWired(); status != 0 {
 		writeError(w, status, msg)
 		return
 	}
-	if _, status, msg := c.authBearer(r); status != 0 {
+	cl, status, msg := c.authBearer(r)
+	if status != 0 {
 		writeError(w, status, msg)
+		return
+	}
+	agents := agentModels(r.Context(), cl.UserID)
+	data := []modelObject{}
+	if c.IsConfigured() {
+		data = append(data, availableModels()...)
+	} else if len(agents) == 0 {
+		writeError(w, http.StatusServiceUnavailable, "rest channel disabled")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(modelsListResponse{
 		Object: "list",
-		Data:   availableModels(),
+		Data:   append(data, agents...),
 	})
 }

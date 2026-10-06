@@ -442,7 +442,8 @@ func gitCompareRefs(c *tool.Ctx) {
 //
 // three_dot=1 reads the left side at the merge base instead of at base's
 // tip, so the diff shown matches the file list gitCompareRefs produced
-// for the same toggle.
+// for the same toggle. head may be scm.WorktreeRef / scm.StagedRef, in
+// which case the right side is the file on disk / in the index.
 func gitRefCompare(c *tool.Ctx) {
 	cwd, ok := sessionCwd(c)
 	if !ok {
@@ -461,11 +462,27 @@ func gitRefCompare(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "path required"})
 		return
 	}
+	if scm.IsWorkingSide(base) {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "base: the working tree can only be the head side"})
+		return
+	}
+	for _, ref := range []string{base, head} {
+		if err := scm.ValidateCompareRef(c.Context(), dir, ref); err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	// A working-tree head stands on HEAD for the merge base, the same
+	// way gitCompareRefs computed the file list.
+	tip := head
+	if scm.IsWorkingSide(head) {
+		tip = "HEAD"
+	}
 	left := base
 	if boolQuery(c, "three_dot") {
 		// Unrelated histories have no merge base; fall back to base's
 		// tip so the diff still renders instead of erroring out.
-		if mb, err := scm.MergeBase(c.Context(), dir, base, head); err == nil && mb != "" {
+		if mb, err := scm.MergeBase(c.Context(), dir, base, tip); err == nil && mb != "" {
 			left = mb
 		}
 	}
@@ -481,7 +498,12 @@ func gitRefCompare(c *tool.Ctx) {
 		gitErr(c, err)
 		return
 	}
-	modified, err := scm.FileAtRef(c.Context(), dir, head, path)
+	var modified string
+	if scm.IsWorkingSide(head) {
+		modified, err = scm.WorkingFile(c.Context(), dir, head, path)
+	} else {
+		modified, err = scm.FileAtRef(c.Context(), dir, head, path)
+	}
 	if err != nil {
 		gitErr(c, err)
 		return

@@ -142,6 +142,9 @@ type SpawnOptions struct {
 	// Populated by the factory from Instance.ExtraArgs so UI-configured
 	// extra flags are forwarded on every spawn without restarting wick.
 	ExtraArgs []string
+	// SkipSkills names shipped skills left out of the built-in catalog
+	// (a Team agent's disabled skills).
+	SkipSkills []string
 
 	// Instance is the resolved per-instance config the factory looked
 	// up before this spawn. Spawners read Instance.Hooks to decide

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"testing"
 
 	"github.com/yogasw/wick/internal/appname"
 )
@@ -163,6 +164,9 @@ func builtinMirrorDirs() []string {
 // Errors from a mirror are collected rather than returned: a missing or
 // read-only provider dir must not stop wick's own dir from being repaired.
 func SyncBuiltin() (Result, error) {
+	if err := guardTestWrite(append([]string{BuiltinDir()}, builtinMirrorDirs()...)); err != nil {
+		return Result{}, err
+	}
 	res, err := syncBuiltinTo(BuiltinDir())
 	if err != nil {
 		return res, err
@@ -376,3 +380,36 @@ skill directories. Providers read them by trusting this directory directly.
 Edit the source in the wick repo at ` + "`internal/agents/skillsync/builtin/`" + `
 and rebuild.
 `
+
+// guardTestWrite refuses a SyncBuiltin that would write outside the temp dir
+// while running under `go test`. ReadDirs extracts lazily, so any test that
+// reaches a skill read path without isolating HOME would otherwise mirror the
+// shipped skills into the developer's real ~/.claude/skills and ~/.codex/skills.
+// Outside tests it is a no-op.
+func guardTestWrite(dirs []string) error {
+	if !testing.Testing() {
+		return nil
+	}
+	tmp, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		tmp = os.TempDir()
+	}
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		if !underDir(d, os.TempDir()) && !underDir(d, tmp) {
+			return fmt.Errorf("skillsync: refusing to write builtin skills to %s during go test (isolate HOME in TestMain)", d)
+		}
+	}
+	return nil
+}
+
+// underDir reports whether p is root or lives below it.
+func underDir(p, root string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(p))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}

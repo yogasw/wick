@@ -79,6 +79,13 @@ type Pool struct {
 	spawningKeys map[string]struct{}  // sessions mid-spawn: slot reserved, not yet in active
 	queue        []queueEntry
 	buffers      map[string]*Buffer // per-session buffer, lazily created
+	// leases are slots held by work that is not a session subprocess
+	// (one-shot LLM helpers, see lease.go). Lazily created; guarded by mu.
+	leases map[string]leaseEntry
+	// pendingBindings holds thread bindings set before their session was
+	// on disk (a channel binds on the message that creates the session);
+	// ensureSession writes them once the meta exists. key = session id.
+	pendingBindings sync.Map
 	// crashes tracks recent unexplained deaths per agent so a restart
 	// budget can be enforced. Lazily created; see crashrecovery.go.
 	crashes map[string]*crashState
@@ -120,6 +127,11 @@ type PoolConfig struct {
 	// PROCESSES; this counts BYTES, and a free slot says nothing about
 	// whether the machine can host what would fill it.
 	MinFreeMemoryLoader func() int
+
+	// SpawnHold reports whether the resource guard wants new agents held
+	// back because memory is FALLING toward the floor — the trend a static
+	// MinFreeMemoryLoader floor cannot see. nil = no trend gate.
+	SpawnHold func() bool
 	// CallerUserID resolves the wick user behind a Send from its context.
 	// The pool stays decoupled from the auth packages: the server injects
 	// this. nil (or empty result) = no resolved caller, which disables
@@ -175,6 +187,12 @@ type PoolConfig struct {
 	// for the common single-user session. Turn it on for shared sessions
 	// where per-user attribution matters more than continuity.
 	RespawnOnCallerChange bool
+
+	// IdentityFixed reports whether a session's spawn identity is the same
+	// whoever triggers the turn (a Team agent running as its owner). Such a
+	// session is never recycled on caller grounds: the respawn would mint
+	// the very identity the running process already holds. nil = none is.
+	IdentityFixed func(ctx context.Context, sessionID string) bool
 
 	// PreemptIdle, when true, lets a queued send kick out the longest-idle
 	// active subprocess (Lifecycle == Idle) so the new session doesn't have
@@ -309,6 +327,10 @@ type BuildResult struct {
 	// rather than leaving it valid until its TTL. Empty when the spawn used
 	// the shared internal token, which is per-boot and must NOT be revoked.
 	MCPToken string
+	// RunAsUserID is the wick user that per-session credential was minted
+	// for. Empty when no per-user credential was minted (shared token, or a
+	// provider with no MCP surface).
+	RunAsUserID string
 }
 
 // SpawnStartMeta is the post-Start snapshot the pool feeds back to
@@ -410,6 +432,12 @@ type runEntry struct {
 	// Empty = spawned with no resolved caller (cron, system job, legacy
 	// session); such a run is never recycled on caller grounds.
 	callerUserID string
+	// runAsUserID is who this process is shown as belonging to: the identity
+	// its credential was minted for, else the caller, else the session
+	// owner. Unlike callerUserID it is set when no human woke the spawn (a
+	// delegation result, a schedule fire) — the minter still picked a person
+	// then. Display only; respawn decisions stay on callerUserID.
+	runAsUserID string
 	// mcpToken is the per-session MCP credential handed to this spawn, kept
 	// so it can be revoked the moment the subprocess dies instead of idling
 	// until its TTL. Empty for spawns using the shared internal token, which
@@ -500,11 +528,20 @@ func (p *Pool) reconcileLoop() {
 			p.mu.Lock()
 			closed := p.closed
 			empty := len(p.active) == 0
+			queued := len(p.queue) > 0
 			p.mu.Unlock()
-			if closed || empty {
+			if closed {
 				continue
 			}
-			p.ReconcileDead()
+			if !empty {
+				p.ReconcileDead()
+			}
+			// A spawn held back for memory has no slot release to wake
+			// it — memory recovering is not an event. Re-offer the queue
+			// here so it starts once the machine has room again.
+			if queued {
+				p.tryGrantQueue()
+			}
 		}
 	}
 }
@@ -623,9 +660,19 @@ func (p *Pool) SetThreadBinding(sessionID string, b agentchannels.ThreadBinding)
 	}
 	sess, err := session.Load(p.cfg.Layout, sessionID)
 	if err != nil {
+		// The first message of a thread binds before Send creates the
+		// session. Dropping it left the thread unbound for good, so a
+		// later turn that thread never typed — a sub-agent's result
+		// waking the leader — had nowhere to go. Hold it until the
+		// session exists.
+		if !storage.PathExists(p.cfg.Layout.SessionMeta(sessionID)) {
+			p.pendingBindings.Store(sessionID, b)
+			return
+		}
 		log.Warn().Str("session", sessionID).Err(err).Msg("pool: set thread binding — session load failed")
 		return
 	}
+	p.pendingBindings.Delete(sessionID)
 	cur := sess.Meta.ChannelRef
 	if cur != nil && cur.Channel == b.Channel && cur.ChatID == b.ChatID &&
 		cur.ThreadID == b.ThreadID && cur.Instance == b.Instance {
@@ -689,6 +736,19 @@ func (p *Pool) resolveAgentName(sessionID, agentName string) string {
 	return sess.Agents[0].Name
 }
 
+// runAsIdentity picks whose spawn this is for display: the identity the
+// credential was minted for, then the message's caller, then the session
+// owner. All three empty — an ownerless session no human woke — stays empty;
+// there is nobody to name.
+func runAsIdentity(minted, caller, owner string) string {
+	for _, id := range []string{minted, caller, owner} {
+		if id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
 // callerChanged reports whether this message comes from a different user
 // than the one the running subprocess was spawned for.
 //
@@ -724,6 +784,12 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	var sender *store.Sender
 	if role == "user" && p.cfg.SenderFrom != nil {
 		sender = p.cfg.SenderFrom(ctx)
+	}
+	// An actioncard click is marked by the postback endpoint on ctx, never
+	// inferred from the text.
+	var postback *store.Postback
+	if role == "user" {
+		postback = store.PostbackFrom(ctx)
 	}
 	// Read once per send so the live and buffered paths below agree even if
 	// the operator changes the setting mid-flight.
@@ -766,7 +832,8 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	//
 	// Only when explicitly enabled, and only for role "user": a system or
 	// sub-agent message is not a human taking over the conversation.
-	if alive && p.cfg.RespawnOnCallerChange && role == "user" && p.callerChanged(ctx, entry) {
+	if alive && p.cfg.RespawnOnCallerChange && role == "user" && p.callerChanged(ctx, entry) &&
+		(p.cfg.IdentityFixed == nil || !p.cfg.IdentityFixed(ctx, sessionID)) {
 		log.Ctx(ctx).Info().
 			Str("component", "pool").
 			Str("session", sessionID).
@@ -805,7 +872,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			Msg("pool.send: routing to live subprocess")
 		// Active agent — append to conversation log + send straight.
 		if entry.store != nil {
-			_ = entry.store.AppendUserTurnWithSender(role, source, text, atts, sender)
+			_ = entry.store.AppendUserTurnWithPostback(role, source, text, atts, sender, postback)
 			turnPersisted = true
 		}
 		if role == "user" {
@@ -878,7 +945,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// shows the messages — they previously only lived in PendingInput.
 	// We build a transient Store because no entry.store exists yet.
 	if !turnPersisted {
-		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts, sender)
+		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts, sender, postback)
 	}
 	if role == "user" && !userMsgNotified {
 		p.notifyUserMessage(sessionID, agentName, source, text, sender)
@@ -954,13 +1021,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 // (subprocess not yet alive) used to skip this, which made messages
 // disappear from the UI after a page refresh — they only lived in
 // meta.PendingInput, which the conversation view doesn't read.
-func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string, atts []store.Attachment, sender *store.Sender) {
+func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string, atts []store.Attachment, sender *store.Sender, postback *store.Postback) {
 	sto := store.New(store.Options{
 		Layout:    p.cfg.Layout,
 		SessionID: sessionID,
 		AgentName: agentName,
 	})
-	_ = sto.AppendUserTurnWithSender(role, source, text, atts, sender)
+	_ = sto.AppendUserTurnWithPostback(role, source, text, atts, sender, postback)
 }
 
 // preemptIdleSlot picks the longest-idle active entry (Lifecycle == Idle,
@@ -1215,6 +1282,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		// identity is fixed in the argv) and so the credential dies with the
 		// process instead of idling until its TTL.
 		callerUserID: callerUserID,
+		runAsUserID:  runAsIdentity(br.RunAsUserID, callerUserID, sess.Meta.UserID),
 		mcpToken:     br.MCPToken,
 	}
 	// Spawn-local logger derived from the same ctx — consumers in the
@@ -1781,6 +1849,9 @@ func (p *Pool) ensureSession(ctx context.Context, sessionID, source, projectID s
 		}
 		return nil // race: other caller created it, that's fine
 	}
+	if v, ok := p.pendingBindings.LoadAndDelete(sessionID); ok {
+		p.SetThreadBinding(sessionID, v.(agentchannels.ThreadBinding))
+	}
 	if p.cfg.OnSessionCreated != nil {
 		p.cfg.OnSessionCreated(sess)
 	}
@@ -2204,7 +2275,7 @@ func (p *Pool) ActiveSnapshot() []ActiveEntry {
 			ProviderType: e.provType,
 			ProviderName: e.provName,
 			CWD:          e.cwd,
-			CallerUserID: e.callerUserID,
+			CallerUserID: e.runAsUserID,
 		}
 		if e.state != nil {
 			entry.Lifecycle = e.state.Lifecycle().String()
@@ -2242,8 +2313,9 @@ type ActiveEntry struct {
 	// fixed for the life of the process. Not the session owner: on a shared
 	// session the two differ, and the spawn's reach follows this one.
 	//
-	// Empty for a spawn with no human behind it (a schedule fire, a cron
-	// job, a session predating ownership tracking).
+	// A spawn no human woke (a delegation result, a schedule fire) still
+	// carries the owner its credential was minted for. Empty only when the
+	// session has no owner either.
 	CallerUserID   string
 	PID            int
 	Queued         int  // messages waiting after the current turn (RespawnQueue)
@@ -2263,6 +2335,27 @@ type ActiveEntry struct {
 // the agent is not currently active — returns nil in that case.
 // The normal onAgentExit hook still fires, releasing the slot and
 // draining the queue.
+// CancelQueued drops a message queued behind sessionID's running remote
+// turn (id from its remote_queue line) before it is sent; false when none
+// of the session's agents holds it.
+func (p *Pool) CancelQueued(sessionID, id string) bool {
+	p.mu.Lock()
+	prefix := sessionID + "::"
+	var entries []*runEntry
+	for k, e := range p.active {
+		if strings.HasPrefix(k, prefix) {
+			entries = append(entries, e)
+		}
+	}
+	p.mu.Unlock()
+	for _, e := range entries {
+		if e.agent != nil && e.agent.CancelQueued(id) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Pool) Kill(sessionID, agentName string) error {
 	return p.KillBy(sessionID, agentName, "", "")
 }

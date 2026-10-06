@@ -5,6 +5,7 @@ package omp
 import (
 	"strconv"
 
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -18,6 +19,7 @@ func signalGroup(pid int, force bool) {
 		args = append([]string{"/F"}, args...)
 	}
 	c := safeexec.Command("taskkill", args...)
+	c.Env = envscrub.ScrubOSEnv()
 	hideConsole(c)
 	_ = c.Run()
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { FileContent } from "../types/agents.js";
   import { renderMarkdown } from "../markdown.js";
-  import { CodeEditor, extOf } from "@wick-fe/common-ui";
+  import { CodeEditor, extOf, layer } from "@wick-fe/common-ui";
   import HtmlArtifact from "./HtmlArtifact.svelte";
 
   const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"];
@@ -28,17 +28,9 @@
     if (file) { editContent = file.content ?? ""; htmlPreview = false; }
   });
 
-  $effect(() => {
-    if (!file) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
+  // Escape and focus go through the shared layer stack (use:layer below):
+  // a window listener here ran AFTER the side panel's, so one Escape closed
+  // the file and the panel it was opened from together.
 
   async function handleSave() {
     saveStatus = "saving";
@@ -65,7 +57,7 @@
     data-file-viewer-backdrop
     role="presentation"
     onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-    <div class="w-full max-w-5xl h-[85vh] rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-2xl flex flex-col overflow-hidden">
+    <div use:layer={{ onEscape: onClose }} role="dialog" aria-modal="true" aria-label={file.path} class="w-full max-w-5xl h-[85vh] rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-2xl flex flex-col overflow-hidden">
       <!-- Header -->
       <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-white-300 dark:border-navy-600 shrink-0">
         <div class="min-w-0 flex-1">

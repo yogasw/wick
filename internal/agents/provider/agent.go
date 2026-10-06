@@ -254,6 +254,8 @@ type Options struct {
 	// ExtraArgs is appended after the spawner's own ExtraArgs on every
 	// spawn. Populated by the factory from Instance.ExtraArgs.
 	ExtraArgs []string
+	// SkipSkills is forwarded to SpawnOptions.SkipSkills.
+	SkipSkills []string
 	// SessionDir is the per-session storage dir, forwarded into every
 	// SpawnOptions so providers write session-scoped files (codex's
 	// soul.md) there instead of the shared project workspace.
@@ -410,6 +412,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		ResumeID:         a.resumeID,
 		ExtraEnv:         a.cfg.ExtraEnv,
 		ExtraArgs:        a.cfg.ExtraArgs,
+		SkipSkills:       a.cfg.SkipSkills,
 		Instance:         a.cfg.Instance,
 		GateBinary:       a.cfg.GateBinary,
 		Preset:           a.cfg.Preset,
@@ -644,6 +647,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 		ResumeID:         resumeID,
 		ExtraEnv:         a.cfg.ExtraEnv,
 		ExtraArgs:        a.cfg.ExtraArgs,
+		SkipSkills:       a.cfg.SkipSkills,
 		Instance:         a.cfg.Instance,
 		GateBinary:       a.cfg.GateBinary,
 		Preset:           a.cfg.Preset,
@@ -948,6 +952,21 @@ func (a *Agent) TransportEnded() bool {
 	a.mu.Unlock()
 	te, ok := proc.(interface{ TurnEnded() bool })
 	return ok && te.TurnEnded()
+}
+
+// QueueCanceler is a process that holds messages queued behind its
+// running turn and can drop one before it is sent (a remote agent).
+type QueueCanceler interface {
+	CancelQueued(id string) bool
+}
+
+// CancelQueued drops the queued message id before it is sent; false when
+// the process holds no such message.
+func (a *Agent) CancelQueued(id string) bool {
+	a.mu.Lock()
+	qc, ok := a.proc.(QueueCanceler)
+	a.mu.Unlock()
+	return ok && qc.CancelQueued(id)
 }
 
 // QueuedCount returns how many messages are waiting to run after the

@@ -69,7 +69,7 @@ func (s *Service) RecheckBackground(ctx context.Context, parentSessionID string)
 		if !d.Detached || !isLive(d.Status) {
 			continue
 		}
-		if d.Status == entity.DelegationRunning && s.AgentAlive != nil && !s.AgentAlive(d.ChildSessionID, d.ChildAgent) {
+		if d.Status == entity.DelegationRunning && s.AgentAlive != nil && !s.childAlive(d.ChildSessionID, d.ChildAgent) {
 			continue
 		}
 		out = append(out, Survivor{Handle: d.Handle, ProfileKey: d.ProfileKey, AgentName: d.ChildAgent})

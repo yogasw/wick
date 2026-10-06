@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"golang.org/x/oauth2"
@@ -356,6 +357,13 @@ func (h *Handler) updatePreferences(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.SetHomeView(r.Context(), user.ID, r.FormValue("home_view")); err != nil {
 		http.Error(w, "failed to save preferences", http.StatusInternalServerError)
 		return
+	}
+	if v := r.FormValue("ui_scale"); v != "" {
+		pct, _ := strconv.Atoi(v)
+		if err := h.svc.SetUIScale(r.Context(), user.ID, pct); err != nil {
+			http.Error(w, "failed to save preferences", http.StatusInternalServerError)
+			return
+		}
 	}
 	// Clearing a "don't ask again" lives on the same form, so a remembered
 	// answer stays reversible from the place it is displayed.

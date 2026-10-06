@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { apiGetE, apiPostE, APIError } from "@wick-fe/common-api";
-import type { AgentMessageItem, IncidentSummary, SubAgentItem } from "../types/agents.js";
+import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
 
 // liveSubAgents keeps only the sub-agents that are still working. Finished
 // ones must NOT raise the rail badge — otherwise the badge sticks at "3"
@@ -13,6 +13,13 @@ export const getSubAgents = (base: string, id: string) =>
   apiGetE<{ subagents: SubAgentItem[] }>(
     `${base}/api/sessions/${encodeURIComponent(id)}/subagents`,
   ).pipe(Effect.map((r) => r?.subagents ?? []));
+
+// getTeamTasks lists the Team (A2A) tasks this session sent, for the
+// panel's Team section. Empty outside a Team agent's chat.
+export const getTeamTasks = (base: string, id: string) =>
+  apiGetE<{ tasks: TeamTaskItem[] | null }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks`,
+  ).pipe(Effect.map((r) => r?.tasks ?? []));
 
 // getSubAgentPanel fetches the rail's whole payload: the agent rows plus
 // the investigation header, when this conversation has one. Separate from

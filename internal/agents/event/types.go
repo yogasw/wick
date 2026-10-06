@@ -63,6 +63,17 @@ const (
 	// verbatim line. Non-fatal; never ends the turn. Pure control frames
 	// (started/ping/snapshots) stay Unknown and are skipped.
 	Trace
+	// TextReplace swaps the whole reply streamed so far this turn for
+	// .Text: a remote agent edited a message it had already sent.
+	// Consumers that only append may ignore it and keep the old text.
+	TextReplace
+	// RemoteQueue reports where a message sent to a busy remote agent
+	// stands: queued behind the running turn, sent, cancelled, or
+	// forwarded into the running turn. .Queue carries it. Not end-of-turn.
+	RemoteQueue
+	// RemoteLink carries the remote's own page for the running turn
+	// (.Text = URL), where it can be followed or stopped. Not end-of-turn.
+	RemoteLink
 )
 
 // String makes log lines readable. Not used for serialization.
@@ -88,6 +99,12 @@ func (t EventType) String() string {
 		return "compaction"
 	case Trace:
 		return "trace"
+	case TextReplace:
+		return "text_replace"
+	case RemoteQueue:
+		return "remote_queue"
+	case RemoteLink:
+		return "remote_link"
 	default:
 		return "unknown"
 	}
@@ -109,6 +126,18 @@ type AgentEvent struct {
 	SessionID string // SessionStart: CLI session ID (or first event for Claude)
 	ErrorMsg  string // Error: short reason
 	Raw       string // verbatim source line
+	// RemoteNote labels how a remote agent's turn ended (Done only):
+	// "ended without marker", "follow-up", "late reply".
+	RemoteNote string
+
+	// ExitCode is the process exit status of a ToolResult, set only when
+	// the provider reports one (codex shell calls).
+	ExitCode *int
+
+	// Display is how a ToolUse input or ToolResult body should render —
+	// see display.go. Set by the parser on the FULL payload; nil for every
+	// other event type.
+	Display *Display
 
 	// SubAgent names the sub-agent an event was RELAYED from, and is set
 	// only on that relay — never by a parser. A leader's own events leave
@@ -130,6 +159,9 @@ type AgentEvent struct {
 	// Compaction is set only on Compaction events.
 	Compaction *CompactionInfo
 
+	// Queue is set only on RemoteQueue events.
+	Queue *QueueInfo
+
 	// ContextUsed is how full the window was for the request THIS frame
 	// came out of — a mid-turn reading, set on whatever event the frame
 	// produced rather than on a type of its own.
@@ -149,6 +181,14 @@ type AgentEvent struct {
 	// leave this zero, and zero means "this frame said nothing about the
 	// window", never "the window is empty".
 	ContextUsed int
+}
+
+// QueueInfo is one remote_queue line: message ID's State (queued, sent,
+// cancelled, forwarded) and its Text.
+type QueueInfo struct {
+	ID    string
+	State string
+	Text  string
 }
 
 // CompactionInfo is one compaction boundary as the CLI reported it.

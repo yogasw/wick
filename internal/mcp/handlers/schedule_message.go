@@ -9,6 +9,7 @@ import (
 	"time"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/schedule"
 	"github.com/yogasw/wick/internal/agents/session"
@@ -227,7 +228,7 @@ func scheduleList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 			rsp.ToolError(w, req.ID, "load session: "+err.Error(), scheduleToolName)
 			return
 		}
-		if !canManageSession(user, sess.Meta.UserID) {
+		if !canManageSession(user, sess.Meta.UserID) || team.CheckAgentSession(r.Context(), layout, sessionID) != nil {
 			rsp.ToolError(w, req.ID, fmt.Sprintf("session not found: %s", sessionID), scheduleToolName)
 			return
 		}
@@ -238,7 +239,7 @@ func scheduleList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 	projectID := strings.TrimSpace(argString(args, "project_id"))
 	if projectID != "" {
 		p, err := project.Load(layout, projectID)
-		if err != nil || !project.CanAccess(p.Meta, scheduleProjectAccess(r, user)) {
+		if err != nil || !project.CanAccess(p.Meta, scheduleProjectAccess(r, user)) || scheduleAgentProject(r, layout, projectID) != nil {
 			rsp.ToolError(w, req.ID, fmt.Sprintf("project not found: %s", projectID), scheduleToolName)
 			return
 		}
@@ -248,13 +249,17 @@ func scheduleList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 	targetSessionID := strings.TrimSpace(argString(args, "target_session_id"))
 	if targetSessionID != "" && targetSessionID != sessionID {
 		sess, err := session.Load(layout, targetSessionID)
-		if err != nil || !canManageSession(user, sess.Meta.UserID) {
+		if err != nil || !canManageSession(user, sess.Meta.UserID) || team.CheckAgentSession(r.Context(), layout, targetSessionID) != nil {
 			rsp.ToolError(w, req.ID, fmt.Sprintf("session not found: %s", targetSessionID), scheduleToolName)
 			return
 		}
 	}
 
 	ownerID, allOwners := scheduleScope(user)
+	if owner, ok := team.AgentOwner(r.Context()); ok {
+		// An agent lists its owner's schedules only, never everyone's.
+		ownerID, allOwners = owner, false
+	}
 	statuses, paused := scheduleListStatuses(args)
 	q := schedule.ListQuery{
 		OwnerUserID: ownerID,
@@ -652,7 +657,7 @@ func scheduleAuthorizeTarget(r *http.Request, layout agentconfig.Layout, target 
 		if err != nil {
 			return "", fmt.Errorf("load session: %w", err)
 		}
-		if !canManageSession(user, sess.Meta.UserID) {
+		if !canManageSession(user, sess.Meta.UserID) || team.CheckAgentSession(r.Context(), layout, target.SessionID) != nil {
 			// Match the title tools: don't leak that the session exists.
 			return "", fmt.Errorf("session not found: %s", target.SessionID)
 		}
@@ -663,7 +668,7 @@ func scheduleAuthorizeTarget(r *http.Request, layout agentconfig.Layout, target 
 	if err != nil {
 		return "", fmt.Errorf("project not found: %s", target.ProjectID)
 	}
-	if !project.CanAccess(meta.Meta, scheduleProjectAccess(r, user)) {
+	if !project.CanAccess(meta.Meta, scheduleProjectAccess(r, user)) || scheduleAgentProject(r, layout, target.ProjectID) != nil {
 		return "", fmt.Errorf("project not found: %s", target.ProjectID)
 	}
 	owner := meta.Meta.OwnerUserID
@@ -679,7 +684,16 @@ func scheduleAuthorizeTarget(r *http.Request, layout agentconfig.Layout, target 
 // project), so a teammate who can open the project can also pause the job
 // running in it. Session-scoped rows keep the stricter owner/admin rule.
 func scheduleCanManage(r *http.Request, layout agentconfig.Layout, m entity.ScheduledMessage, user *entity.User) bool {
-	if canManageSession(user, m.OwnerUserID) {
+	if !scheduleAgentMayManage(r, layout, m) {
+		return false
+	}
+	if owner, ok := team.AgentOwner(r.Context()); ok {
+		// No admin / see-all bypass for an agent: its owner's rows, or a
+		// project row the owner reaches as a plain member.
+		if owner != "" && m.OwnerUserID == owner {
+			return true
+		}
+	} else if canManageSession(user, m.OwnerUserID) {
 		return true
 	}
 	if !m.IsProjectScoped() || m.ProjectID == "" {
@@ -692,10 +706,46 @@ func scheduleCanManage(r *http.Request, layout agentconfig.Layout, m entity.Sche
 	return project.CanAccess(p.Meta, scheduleProjectAccess(r, user))
 }
 
+// scheduleAgentMayManage applies the Team data scope to a schedule acted on
+// by id: an ordinary agent manages only rows that deliver into its own
+// sessions or were created from them, or that live in its own project.
+func scheduleAgentMayManage(r *http.Request, layout agentconfig.Layout, m entity.ScheduledMessage) bool {
+	if team.CheckAgentProject(r.Context(), m.ProjectID) == nil {
+		return true // a person or the Captain: the owner rules decide
+	}
+	for _, sid := range []string{m.SessionID, m.SourceSessionID} {
+		if sid != "" && team.CheckAgentSession(r.Context(), layout, sid) == nil {
+			return true
+		}
+	}
+	return m.ProjectID != "" && scheduleAgentProject(r, layout, m.ProjectID) == nil
+}
+
+// scheduleAgentProject keeps an ordinary agent's schedules inside its own
+// project (the calling session's); the Captain and people are unaffected.
+func scheduleAgentProject(r *http.Request, layout agentconfig.Layout, projectID string) error {
+	if sid := SessionIDFrom(r.Context()); sid != "" {
+		if sess, err := session.Load(layout, sid); err == nil && sess.Meta.ProjectID == projectID {
+			return nil
+		}
+	}
+	return team.CheckAgentProject(r.Context(), projectID)
+}
+
 // scheduleProjectAccess builds the project-visibility identity for the
 // calling principal. A nil user (stdio / tests) is treated as admin, matching
 // scheduleScope's unscoped behavior on those transports.
 func scheduleProjectAccess(r *http.Request, user *entity.User) project.Access {
+	// An agent never borrows its owner's admin / see-all bypass, and is
+	// judged as its owner whatever login identity carries the call — also
+	// when no user rides on the request, which must not read as admin.
+	if owner, ok := team.AgentOwner(r.Context()); ok {
+		acc := project.Access{UserID: owner}
+		if user != nil && user.ID == owner {
+			acc.TagIDs = login.GetUserTagIDs(r.Context())
+		}
+		return acc
+	}
 	if user == nil {
 		return project.Access{IsAdmin: true}
 	}

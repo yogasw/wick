@@ -20,6 +20,7 @@ import (
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/metrics"
 	"github.com/yogasw/wick/internal/pkg/adminscope"
+	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -195,6 +196,22 @@ type Service struct {
 // trivial.
 type tagSeeder interface {
 	EnsureToolDefaultTags(ctx context.Context, toolPath string, defaults []tool.DefaultTag) error
+}
+
+// tagSwapper is the optional half of a tagSeeder that re-tags rows seeded
+// before their connector's DefaultTags changed.
+type tagSwapper interface {
+	SwapToolTag(ctx context.Context, toolPath, from string, to tool.DefaultTag) error
+}
+
+// retiredTags lists, per connector key, a tag an older build seeded that
+// DefaultTags has since replaced. EnsureToolDefaultTags never touches a
+// row that already has links, so without this the old tag would stick.
+var retiredTags = map[string]struct {
+	from string
+	to   tool.DefaultTag
+}{
+	"notifications": {from: tags.Communication.Name, to: tags.Platform},
 }
 
 // SetTags wires the tags service used to attach Meta.DefaultTags onto
@@ -573,6 +590,13 @@ func (s *Service) seedModuleRows(ctx context.Context, m connector.Module) error 
 			if err := s.tags.EnsureToolDefaultTags(ctx, path, m.Meta.DefaultTags); err != nil {
 				return fmt.Errorf("ensure tags for %q: %w", row.ID, err)
 			}
+			if r, ok := retiredTags[m.Meta.Key]; ok {
+				if sw, ok := s.tags.(tagSwapper); ok {
+					if err := sw.SwapToolTag(ctx, path, r.from, r.to); err != nil {
+						return fmt.Errorf("swap tag for %q: %w", row.ID, err)
+					}
+				}
+			}
 		}
 	}
 	return nil
@@ -722,6 +746,15 @@ func (s *Service) List(ctx context.Context) ([]entity.Connector, error) {
 // an admin-created custom connector ended up present in /admin/connectors
 // and absent from wick_list. See ownershipReaches for when this applies.
 func (s *Service) ListVisibleTo(ctx context.Context, userID string, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
+	rows, err := s.listVisibleTo(ctx, userID, userTagIDs, isAdmin)
+	if err != nil {
+		return nil, err
+	}
+	// An agent session sees only its checklist, whatever its owner reaches.
+	return filterRowsByScope(ctx, rows), nil
+}
+
+func (s *Service) listVisibleTo(ctx context.Context, userID string, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
 	if s.adminBypass(isAdmin) {
 		rows, err := s.repo.List(ctx)
 		if err != nil {
@@ -844,6 +877,18 @@ func (s *Service) FilterBotSlot(rows []entity.Connector) []entity.Connector {
 // Must agree with ListVisibleTo, ownership included: a row the caller can
 // see but not dispatch is a listing that lies.
 func (s *Service) IsVisibleTo(ctx context.Context, connectorID, userID string, userTagIDs []string, isAdmin bool) (bool, error) {
+	if scope := AgentScopeFrom(ctx); scope != nil && !scope.AllowConnector(connectorID) {
+		return false, nil
+	}
+	if fs, ok := AgentScopeFrom(ctx).(AgentFeatureScope); ok {
+		row, err := s.repo.Get(ctx, connectorID)
+		if err != nil {
+			return false, err
+		}
+		if !fs.AllowKey(row.Key) {
+			return false, nil
+		}
+	}
 	if s.adminBypass(isAdmin) {
 		c, err := s.repo.Get(ctx, connectorID)
 		if err != nil {
@@ -1326,6 +1371,7 @@ func (s *Service) ListAccountsVisibleTo(ctx context.Context, row entity.Connecto
 	if err != nil {
 		return nil, err
 	}
+	accs = filterAccountsByScope(ctx, row.ID, accs)
 	// Skip the tag lookup entirely when the answer cannot depend on it.
 	if caller.Privileged || row.AllowOthersSeeAccounts {
 		return accs, nil
@@ -1437,6 +1483,12 @@ func (s *Service) OperationStates(ctx context.Context, connectorID, key string) 
 	if err != nil {
 		return nil, err
 	}
+	return s.liveOpStates(ctx, connectorID, key, full), nil
+}
+
+// liveOpStates collapses full states into the enabled map the MCP catalog
+// reads (see OperationStates).
+func (s *Service) liveOpStates(ctx context.Context, connectorID, key string, full map[string]OpState) map[string]bool {
 	out := make(map[string]bool, len(full))
 	for k, st := range full {
 		// SystemDisabled is advisory — admin override via Enabled takes precedence.
@@ -1446,7 +1498,18 @@ func (s *Service) OperationStates(ctx context.Context, connectorID, key string) 
 		// where Enabled is untouched.
 		out[k] = st.Enabled && !st.ConfigOnly
 	}
-	return out, nil
+	// An agent's checklist can switch ops off for the catalog the LLM
+	// reads; Execute re-checks the same rule at dispatch.
+	if scope := AgentScopeFrom(ctx); scope != nil {
+		if mod, ok := s.Module(key); ok {
+			for _, op := range mod.AllOps() {
+				if out[op.Key] && !scope.AllowOp(connectorID, op.Key, op.Destructive) {
+					out[op.Key] = false
+				}
+			}
+		}
+	}
+	return out
 }
 
 // OpState bundles the effective state of one operation on one connector
@@ -1481,6 +1544,12 @@ func (s *Service) OperationStatesFull(ctx context.Context, connectorID, key stri
 	if err != nil {
 		return nil, err
 	}
+	return foldOpStates(mod, rows), nil
+}
+
+// foldOpStates folds a connector's stored toggle rows over its module's
+// ops (see OperationStatesFull).
+func foldOpStates(mod connector.Module, rows []entity.ConnectorOperation) map[string]OpState {
 	stored := make(map[string]entity.ConnectorOperation, len(rows))
 	for _, r := range rows {
 		stored[r.OperationKey] = r
@@ -1497,7 +1566,7 @@ func (s *Service) OperationStatesFull(ctx context.Context, connectorID, key stri
 		}
 		out[op.Key] = st
 	}
-	return out, nil
+	return out
 }
 
 // HealthCheckResult bundles the outcome of a health-check run for one
@@ -1714,6 +1783,22 @@ type ExecuteResult struct {
 	LatencyMs    int
 }
 
+// baseAllowsOp reports whether scope permits op on any row of the base
+// connector key a session-workspace instance clones. Grants name rows,
+// not keys, so the instance inherits the widest grant among them.
+func (s *Service) baseAllowsOp(ctx context.Context, scope AgentScope, key string, op *connector.Operation) (bool, error) {
+	rows, err := s.repo.ListByKey(ctx, key)
+	if err != nil {
+		return false, fmt.Errorf("resolve base connector: %w", err)
+	}
+	for _, r := range rows {
+		if scope.AllowConnector(r.ID) && scope.AllowOp(r.ID, op.Key, op.Destructive) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Execute runs one operation against one connector row, logging a
 // ConnectorRun with the request, response, latency, and IP/UA.
 //
@@ -1812,6 +1897,42 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 				return nil, fmt.Errorf("account %q is not accessible: it belongs to another user and this connector keeps connected accounts private", p.AccountID)
 			}
 			acct = acc
+		}
+	}
+
+	// An agent feature switched off takes every instance of its connector
+	// type with it, session instances included.
+	if !KeyAllowed(ctx, c.Key) {
+		return nil, fmt.Errorf("connector %q is switched off for this agent", c.Key)
+	}
+
+	// Agent checklist: the instance, the identity it runs as, and the op
+	// must all be on it. A session-workspace instance is no checklist
+	// entry of its own; it runs with what the checklist grants the base
+	// connector it clones, so a session instance is no way around a
+	// "read only" grant.
+	if scope := AgentScopeFrom(ctx); scope != nil && virtual {
+		ok, err := s.baseAllowsOp(ctx, scope, c.Key, op)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("operation %q is not allowed for this agent on a %q session instance", op.Key, c.Key)
+		}
+	}
+	if scope := AgentScopeFrom(ctx); scope != nil && !virtual {
+		if !scope.AllowConnector(c.ID) {
+			return nil, fmt.Errorf("connector %q is not in this agent's access list", c.ID)
+		}
+		accountID := ""
+		if acct != nil {
+			accountID = acct.ID
+		}
+		if !scope.AllowAccount(c.ID, accountID) {
+			return nil, fmt.Errorf("this agent may not run connector %q as that account", c.ID)
+		}
+		if !scope.AllowOp(c.ID, op.Key, op.Destructive) {
+			return nil, fmt.Errorf("operation %q is not allowed for this agent", op.Key)
 		}
 	}
 

@@ -23,6 +23,7 @@
   import KanbanBoard from "./KanbanBoard.svelte";
   import { mergeRail, keepPushedOff } from "../railPaging.js";
   import TicketDetail from "./TicketDetail.svelte";
+  import { connectSessionsStream } from "../stores/sessionsStream.js";
   import OwnerTabs from "./OwnerTabs.svelte";
   import ProjectMenu from "./ProjectMenu.svelte";
 
@@ -342,12 +343,14 @@
      at open. "Updated 5h ago" stayed 5h ago for the rest of the day, and the
      column order with it, because the order IS the timestamp.
 
-     So it polls. Only while the tab is actually being looked at: a
-     background tab that keeps asking is wasted work on the server and, on
-     this box, wasted CPU somebody else needs. Returning to the tab refetches
-     at once rather than waiting out the remainder of an interval — coming
-     back is exactly when the board is most likely to be stale. */
-  const BOARD_POLL_MS = 30_000;
+     So it listens: every ticket write sends a `ticket` signal on the shared
+     /stream/sessions connection (stream_ticket.go, filtered to projects the
+     caller may open), and a signal for this project refetches. A hidden
+     tab only marks itself stale and refetches on return. Polling is the
+     fallback while that stream is down, and a reconnect refetches once —
+     signals sent during the gap are gone. Card ages ("5h ago") tick on
+     their own clock (TicketCard), so time alone needs no fetch. */
+  const BOARD_POLL_MS = 60_000;
 
   /* A drag pauses it. The board applies a move optimistically and confirms
      it with a PATCH; a poll landing in that gap would hand back the
@@ -368,19 +371,49 @@
 
   $effect(() => {
     if (!filterLoaded) return;
+    const pid = project.id;
+    let streamUp = false;
+    let dropped = false;
+    let stale = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const due = () => {
-      if (dragging) return;
-      if (typeof document !== "undefined" && document.hidden) return;
+      if (dragging || (typeof document !== "undefined" && document.hidden)) {
+        stale = true;
+        return;
+      }
+      stale = false;
       reloadBoard();
     };
-    const id = setInterval(due, BOARD_POLL_MS);
-    const onVisible = () => { if (!document.hidden) due(); };
+    /* A burst (a sync touching many tickets) costs one fetch. */
+    const soon = () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(() => { timer = null; due(); }, 300);
+    };
+    const leave = connectSessionsStream(base, {
+      onTicket: (t) => { if (t.project_id === pid) soon(); },
+      onStatus: (st) => {
+        streamUp = st === "connected";
+        if (!streamUp) dropped = true;
+        else if (dropped) { dropped = false; soon(); }
+      },
+    });
+    const id = setInterval(() => { if (!streamUp) due(); }, BOARD_POLL_MS);
+    const onVisible = () => { if (!document.hidden && (stale || !streamUp)) due(); };
     document.addEventListener("visibilitychange", onVisible);
+    /* A drop ends a drag; a signal that arrived mid-drag is applied now. */
+    const onDragEnd = () => { if (stale) soon(); };
+    window.addEventListener("dragend", onDragEnd);
+    window.addEventListener("drop", onDragEnd);
     return () => {
+      leave();
+      if (timer !== null) clearTimeout(timer);
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("dragend", onDragEnd);
+      window.removeEventListener("drop", onDragEnd);
     };
   });
+
 
   /* ── a ticket that just lost its last chat ──
      A ticket with no sessions tracks nothing, so removal is offered. The
