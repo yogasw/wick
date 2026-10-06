@@ -196,8 +196,8 @@ func checkSignature(a Asset, sum string, pinned []string) error {
 // Private GitHub assets go through the API endpoint with the PAT.
 func (c *Client) downloadZip(ctx context.Context, src *entity.PluginSource, a Asset, dst string, pf connplugin.ProgressFunc) (string, error) {
 	u, accept := a.URL, ""
-	if src != nil && src.Type == TypeGitHub && src.Private && a.apiURL != "" {
-		u, accept = a.apiURL, "application/octet-stream"
+	if src != nil && src.Type == TypeGitHub && src.Private && a.APIURL != "" {
+		u, accept = a.APIURL, "application/octet-stream"
 	}
 	if pf != nil {
 		pf(connplugin.Progress{Phase: connplugin.PhaseDownloading, Pct: 0})

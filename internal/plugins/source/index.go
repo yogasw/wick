@@ -26,9 +26,10 @@ type Asset struct {
 	URL       string `json:"url"`
 	ZipSHA256 string `json:"zip_sha256,omitempty"`
 	Signature string `json:"signature,omitempty"`
-	// apiURL is the GitHub asset API endpoint, set for private repos where
-	// browser_download_url does not work.
-	apiURL string
+	// APIURL is the GitHub asset API endpoint, set for private repos where
+	// browser_download_url does not work. Serialized so it survives the
+	// IndexJSON cache round-trip between Check and InstallFromSource.
+	APIURL string `json:"api_url,omitempty"`
 }
 
 func (a *Asset) UnmarshalJSON(b []byte) error {

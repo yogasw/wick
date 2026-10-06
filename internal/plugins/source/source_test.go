@@ -375,6 +375,43 @@ func TestHealthCheckSixSteps(t *testing.T) {
 	})
 }
 
+// TestManagerGitHubPrivateInstallAfterCheck goes through the Manager: Check
+// caches the index as IndexJSON and InstallFromSource re-reads it, so the
+// asset API URL must survive that JSON round-trip or the private download
+// falls back to browser_download_url (404).
+func TestManagerGitHubPrivateInstallAfterCheck(t *testing.T) {
+	f := newFakeGitHub(t, true, "ghp_test", rel{key: "alpha", kind: "service", ver: "1.0.0"})
+	c := f.client()
+	c.Decrypt = func(p string) (string, error) { return strings.TrimPrefix(p, "wick_cenc_"), nil }
+	m := &Manager{DB: newDB(t), Client: c, Install: tmpRoot(t),
+		Encrypt: func(p string) (string, error) { return "wick_cenc_" + p, nil }}
+	s, err := m.Save("", SourceInput{Type: TypeGitHub, Repo: "acme/plugins", Private: true, PAT: "ghp_test"}, "admin@x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Check(context.Background(), s.ID); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := m.Get(s.ID)
+	es := Entries(stored)
+	if len(es) != 1 || !strings.HasPrefix(es[0].Assets[HostOSArch()].APIURL, f.api.URL+"/repos/acme/plugins/releases/assets/") {
+		t.Fatalf("asset API URL lost in the cached index: %+v", es)
+	}
+	before := f.assetCalls
+	if _, err := m.InstallFromSource(context.Background(), s.ID, "alpha", "admin@x", nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.assetCalls != before+1 {
+		t.Fatalf("zip not downloaded through the asset API: calls %d -> %d", before, f.assetCalls)
+	}
+	if _, err := os.Stat(filepath.Join(m.Install.Root("service"), "alpha", "alpha")); err != nil {
+		t.Fatalf("service binary missing: %v", err)
+	}
+	if f.dlAuthSeen {
+		t.Fatal("PAT leaked to a non-API host")
+	}
+}
+
 func newDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -403,7 +440,7 @@ func TestManagerURLSourceCheckAndUpdate(t *testing.T) {
 
 	var hooks []string
 	m := &Manager{DB: newDB(t), Client: &Client{HTTP: http.DefaultClient}, Install: tmpRoot(t),
-		Encrypt: func(p string) (string, error) { return "wick_cenc_" + p, nil },
+		Encrypt:     func(p string) (string, error) { return "wick_cenc_" + p, nil },
 		OnInstalled: func(_ context.Context, kind, key string) { hooks = append(hooks, kind+":"+key) }}
 	s, err := m.Save("", SourceInput{Type: TypeURL, URL: srv.URL + "/plugins.json"}, "admin@x")
 	if err != nil {
