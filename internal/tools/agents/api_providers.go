@@ -76,11 +76,7 @@ func idleCompactDTO(ins provider.Instance) *IdleCompactDTO {
 	}
 	var match []string
 	if pol.Scope != provider.IdleCompactScopeAll {
-		for _, line := range strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == ',' }) {
-			if line = strings.TrimSpace(line); line != "" {
-				match = append(match, line)
-			}
-		}
+		match = provider.IdleCompactMatchLines(raw)
 	}
 	return &IdleCompactDTO{Minutes: int(pol.Idle / time.Minute), Trigger: pol.Trigger, Threshold: pol.Threshold, Scope: pol.Scope, Match: match}
 }

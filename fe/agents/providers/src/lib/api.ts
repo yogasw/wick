@@ -1637,3 +1637,52 @@ export function isOpencodeHostedModel(id: string): boolean {
   const p = id.split("/")[0];
   return p === "opencode" || p === "opencode-go";
 }
+
+export interface IdleCompactProbe {
+  session_id: string;
+  title: string;
+  project: string;
+  /* rule is the 1-based pattern line that matched, 0 for none. */
+  rule: number;
+  rule_text?: string;
+  in_scope: boolean;
+  enabled: boolean;
+  session_provider?: string;
+  same_provider: boolean;
+  context_used: number;
+  context_window: number;
+  over_threshold: boolean;
+}
+
+/* apiIdleCompactProbe asks whether a session (link or id) would be
+   compacted by this instance under the given, possibly unsaved, scope
+   and patterns. */
+export async function apiIdleCompactProbe(
+  base: string,
+  type: string,
+  name: string,
+  session: string,
+  scope: string,
+  match: string,
+): Promise<IdleCompactProbe> {
+  const resp = await fetch(
+    `${base}/providers/idle-compact-probe/${encodeURIComponent(type)}/${encodeURIComponent(name)}`,
+    {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+      body: new URLSearchParams({ session, scope, match }).toString(),
+    },
+  );
+  const text = await resp.text().catch(() => "");
+  if (!resp.ok) {
+    let msg = text || `HTTP ${resp.status}`;
+    try {
+      msg = (JSON.parse(text) as { error?: string }).error || msg;
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(resp.status, msg);
+  }
+  return JSON.parse(text) as IdleCompactProbe;
+}

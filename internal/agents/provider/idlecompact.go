@@ -217,17 +217,34 @@ func (p IdleCompactPolicy) Skips(id, title, projectName string) bool {
 	if p.Scope == IdleCompactScopeAll {
 		return false
 	}
-	matched := false
-	for _, sp := range p.Match {
-		if sp.Match(id, title, projectName) {
-			matched = true
-			break
-		}
-	}
+	matched := p.MatchedRule(id, title, projectName) >= 0
 	if p.Scope == IdleCompactScopeAllow {
 		return !matched
 	}
 	return matched
+}
+
+// MatchedRule returns the index of the first pattern line that matches the
+// session, -1 when none does.
+func (p IdleCompactPolicy) MatchedRule(id, title, projectName string) int {
+	for i, sp := range p.Match {
+		if sp.Match(id, title, projectName) {
+			return i
+		}
+	}
+	return -1
+}
+
+// IdleCompactMatchLines splits an idle_compact_match value into its
+// non-empty pattern lines, in the order ParseSessionPatterns reads them.
+func IdleCompactMatchLines(raw string) []string {
+	var out []string
+	for _, line := range strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == ',' }) {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // IdleCompactPolicyOf resolves ins's idle-compact settings.
