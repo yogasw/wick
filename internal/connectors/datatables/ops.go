@@ -26,6 +26,10 @@ type DataTableACL interface {
 
 var dataTableACL DataTableACL
 
+// internalAgentUserID mirrors mcp.InternalAgentUserID (not imported here to
+// keep this package free of the mcp dependency).
+const internalAgentUserID = "wick-agent-internal"
+
 // SetDataTableACL wires the per-caller data-table gate. Called once at boot.
 func SetDataTableACL(a DataTableACL) { dataTableACL = a }
 
@@ -79,6 +83,11 @@ func (h *handlers) datatableCreate(c *connector.Ctx) (any, error) {
 		Slug:    c.Input("slug"),
 		Mode:    c.Input("mode"),
 		Columns: cols,
+	}
+	// Stamp the real caller as owner (Owner column + direct-owner fallback);
+	// the shared internal agent principal is not a person, so it stays ownerless.
+	if uid := c.CallerUserID(); uid != "" && uid != internalAgentUserID {
+		in.UserID = uid
 	}
 	if pk := strings.TrimSpace(c.Input("primary_key")); pk != "" {
 		parts := strings.Split(pk, ",")
