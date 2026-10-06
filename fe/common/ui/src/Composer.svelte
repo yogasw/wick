@@ -72,6 +72,10 @@
     queued?: boolean;
     /** Stop the running turn / cancel the queued spawn. Omit → no button. */
     onStop?: () => void;
+    /** Extra controls drawn in the toolbar after the bell and project chip,
+        for a caller-specific setting (a remote agent's repository and
+        branch). The caller owns its own popover. */
+    toolbarExtra?: Snippet;
   };
 
   /** ContextMeter is the composer's view of the model's context window.
@@ -108,6 +112,7 @@
     running = false,
     queued = false,
     onStop,
+    toolbarExtra,
   }: Props = $props();
 
   let text = $state("");
@@ -1608,6 +1613,8 @@
         <svg viewBox="0 0 16 16" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4a1 1 0 011-1h3l1.5 1.5H13a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke-linejoin="round"/></svg>
       </button>
     {/if}
+
+    {#if toolbarExtra}{@render toolbarExtra()}{/if}
 
     <!-- right: context ring + provider chip (Claude-style) + send -->
     <div class="ml-auto flex items-center gap-2 min-w-0">

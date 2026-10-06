@@ -14,7 +14,7 @@
         fields' answers (empty = the plugin's defaults). */
     onSend: (msg: DraftMessage, options: Record<string, string>) => Promise<void>;
     /** Loads the new-session fields a plugin remote agent declares; unset
-        or empty = none (no chips). */
+        or empty = none (no toolbar button). */
     loadFields?: () => Promise<SessionField[]>;
   };
   let { agent, onSend, loadFields }: Props = $props();
@@ -34,7 +34,7 @@
         if (live) fields = f ?? [];
       })
       .catch(() => {
-        // No chips when the plugin cannot be asked; the defaults still apply.
+        // No button when the plugin cannot be asked; the defaults still apply.
       });
     return () => {
       live = false;
@@ -52,6 +52,10 @@
   }
 </script>
 
+{#snippet sessionFields()}
+  <SessionFieldChips {fields} values={options} onChange={(v) => (options = v)} />
+{/snippet}
+
 <div class="mx-auto flex h-full w-full max-w-2xl flex-col items-center justify-center px-6" data-draft-chat>
   <div class="mb-6 flex flex-col items-center text-center">
     {#if agent.avatar}
@@ -61,9 +65,6 @@
     <p class="mt-1 text-sm text-black-800 dark:text-black-600">Draft — the chat is created when you send the first message.</p>
   </div>
   <div class="w-full">
-    {#if fields.length > 0}
-      <div class="mb-2"><SessionFieldChips {fields} values={options} onChange={(v) => (options = v)} /></div>
-    {/if}
-    <Composer onSend={send} disabled={sending} placeholder={`Message @${agent.handle}…`} />
+    <Composer onSend={send} disabled={sending} placeholder={`Message @${agent.handle}…`} toolbarExtra={fields.length > 0 ? sessionFields : undefined} />
   </div>
 </div>
