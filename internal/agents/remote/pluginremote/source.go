@@ -67,9 +67,20 @@ type Source struct {
 	fields   bool
 }
 
+// pluginCeiling bounds a plugin turn that keeps showing life. A plugin
+// remote can work far past Max; while it still sends text or a working
+// status the turn goes on, so its answer is not cut off and lost at Max.
+const pluginCeiling = 2 * time.Hour
+
+// pluginBusyFresh is how long a plugin's working status counts without a
+// repeat: a plugin that polls its remote says it again every poll, one
+// that hung stops saying it and its turn ends at Max.
+const pluginBusyFresh = 5 * time.Minute
+
 // NewSource wraps plugin key.
 func NewSource(key string, t Transport) *Source {
-	return &Source{Key: key, transport: t, limits: remote.Limits{Max: 10 * time.Minute}}
+	return &Source{Key: key, transport: t, limits: remote.Limits{
+		Max: 10 * time.Minute, Ceiling: pluginCeiling, BusyFresh: pluginBusyFresh}}
 }
 
 func (s *Source) Kind() string                { return AdapterKind }
