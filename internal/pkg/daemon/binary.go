@@ -29,7 +29,7 @@ const wickModulePath = "github.com/yogasw/wick"
 // `wick build` bakes in) to answer every question we care about statically.
 type BinaryInfo struct {
 	Path        string
-	MainModule  string // main module path, e.g. "qiscus-support-tools"
+	MainModule  string // main module path, e.g. "abc-support-tools"
 	AppName     string // -X ...BuildAppName (empty for a plain `go build`)
 	AppVersion  string // -X ...BuildAppVersion ("dev" when not injected)
 	BuildTime   string // -X ...BuildTime

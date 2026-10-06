@@ -10,7 +10,7 @@ import (
 
 // MaxTagline is the longest tagline, in characters: a label that sits
 // beside a name, not a sentence. Room for a short role phrase such as
-// "spesialis product qiscus dan Support"; the persona column is
+// "product specialist and support"; the persona column is
 // varchar(64), so it must stay at or under that.
 const MaxTagline = 50
 

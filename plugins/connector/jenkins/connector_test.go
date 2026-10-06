@@ -65,7 +65,7 @@ func TestGetConfigBuildsURLFromName(t *testing.T) {
     <scm>
       <userRemoteConfigs>
         <hudson.plugins.git.UserRemoteConfig>
-          <url>git@bitbucket.org:qiscus/payment-service.git</url>
+          <url>git@bitbucket.org:abc/payment-service.git</url>
         </hudson.plugins.git.UserRemoteConfig>
       </userRemoteConfigs>
     </scm>
@@ -101,7 +101,7 @@ func TestGetConfigBuildsURLFromName(t *testing.T) {
 	if result.PipelineType != "scm" {
 		t.Fatalf("pipeline_type = %q", result.PipelineType)
 	}
-	if len(result.RepositoryURLs) != 1 || result.RepositoryURLs[0] != "git@bitbucket.org:qiscus/payment-service.git" {
+	if len(result.RepositoryURLs) != 1 || result.RepositoryURLs[0] != "git@bitbucket.org:abc/payment-service.git" {
 		t.Fatalf("repository_urls = %#v", result.RepositoryURLs)
 	}
 	if result.ScriptPath != "deploy/Jenkinsfile" {
