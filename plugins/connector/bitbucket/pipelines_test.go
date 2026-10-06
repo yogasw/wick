@@ -1,0 +1,71 @@
+package main
+
+import (
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/yogasw/wick/pkg/conntest"
+)
+
+func TestValidateRunPipeline_Body(t *testing.T) {
+	c := prCommentCtx(map[string]string{
+		"repo_slug": "repo", "branch": "main", "pattern": "deploy",
+		"variables": "ENV=prod\nTAG=v1",
+	})
+	p, body, err := validateRunPipeline(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.Method != http.MethodPost || !strings.HasSuffix(p.URL, "/pipelines/") {
+		t.Fatalf("request = %s %s", p.Method, p.URL)
+	}
+	target := body["target"].(map[string]any)
+	if target["ref_name"] != "main" || target["selector"].(map[string]any)["pattern"] != "deploy" {
+		t.Fatalf("target = %v", target)
+	}
+	if len(body["variables"].([]map[string]any)) != 2 {
+		t.Fatalf("variables = %v", body["variables"])
+	}
+}
+
+func TestValidateRunPipeline_RequiresBranch(t *testing.T) {
+	c := prCommentCtx(map[string]string{"repo_slug": "repo"})
+	if _, _, err := validateRunPipeline(c); err == nil {
+		t.Fatal("expected error when branch is missing")
+	}
+}
+
+func TestScopeCovers(t *testing.T) {
+	g := map[string]bool{"write:pullrequest:bitbucket": true, "read:repository:bitbucket": true}
+	if !scopeCovers(g, "pullrequest", false) || !scopeCovers(g, "pullrequest", true) {
+		t.Fatal("write should imply read and write")
+	}
+	if scopeCovers(g, "repository", true) || scopeCovers(g, "pipeline", false) {
+		t.Fatal("unexpected coverage")
+	}
+}
+
+func TestHealthCheck_FromScopeHeader(t *testing.T) {
+	srv := conntest.Server(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-OAuth-Scopes", "read:repository:bitbucket, write:pullrequest:bitbucket")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	c := conntest.Ctx(t, map[string]string{
+		"base_url": srv.URL, "email": "a@b.c", "api_token": "t", "default_workspace": "ws",
+	}, map[string]string{})
+	got, err := HealthCheck(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := map[string]bool{}
+	for _, h := range got {
+		m[h.Key] = h.OK
+	}
+	if !m["get_repository"] || !m["merge_pull_request"] {
+		t.Fatalf("expected allowed ops, got %v", m)
+	}
+	if m["create_branch"] || m["run_pipeline"] {
+		t.Fatalf("expected denied ops, got %v", m)
+	}
+}
