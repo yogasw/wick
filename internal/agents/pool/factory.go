@@ -486,7 +486,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			if gateOn {
 				specPath = gate.AgentSpecPath(gateAppName(activeGate), lim.AgentID)
 			}
-			args, hookBin := teamLimitArgs(lim, gateBin, gateOn, specPath)
+			args, hookBin := teamLimitArgs(lim, gateBin, gateOn, bypassPerms, specPath)
 			if specPath != "" && lim.BashAllowed {
 				if err := gate.WriteAgentSpec(specPath, gate.AgentSpec{
 					AgentID: lim.AgentID, Rules: lim.BashRules, DefaultScope: lim.DefaultScope,
@@ -494,10 +494,15 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 					// No spec, no Bash: the hook would block every command
 					// anyway, so say so at spawn instead.
 					log.Warn().Err(err).Str("session", opt.SessionID).Msg("agents.spawn: agent gate spec write failed — Bash off")
-					args, hookBin = teamLimitArgs(lim, gateBin, false, "")
+					args, hookBin = teamLimitArgs(lim, gateBin, false, false, "")
 				}
 			}
-			if !gateOn && lim.BashAllowed {
+			// The Team switches decide which tools exist in every mode.
+			// With approvals on, Bash is further held to the agent's rules
+			// by the gate. With approvals off (bypass) nobody can be asked,
+			// so Bash on runs freely like the other tools; Bash is off only
+			// when the gate should run but cannot be installed.
+			if !gateOn && !bypassPerms && lim.BashAllowed {
 				log.Warn().Str("session", opt.SessionID).Msg("agents.spawn: gate hook inactive — Bash off for this Team agent")
 			}
 			extraArgs = append(slices.Clone(extraArgs), args...)
@@ -849,9 +854,10 @@ type TeamLimits struct {
 	// DisallowedTools is the claude --disallowedTools list for the
 	// switches that are off (Bash included when it is off).
 	DisallowedTools []string
-	// BashAllowed is the Bash switch. It only holds while the gate hook
-	// is installed: without it Bash would run every command unasked, so
-	// the spawn turns it off instead.
+	// BashAllowed is the Bash switch. With the gate on it only holds
+	// while the gate hook is installed: without it Bash would run every
+	// command unasked, so the spawn turns it off instead. With the gate
+	// off (bypass) every command already runs unasked, so it holds as is.
 	BashAllowed bool
 	// BashRules run without asking; anything else goes to the approval
 	// prompt. Empty = every command asks.
@@ -867,14 +873,18 @@ type TeamLimits struct {
 var bashTools = []string{"Bash", "BashOutput", "KillShell"}
 
 // teamLimitArgs is the extra claude argv and hook command for lim. With
-// gateOn the hook runs the gate against the agent's spec at specPath;
-// without it Bash is disallowed outright.
-func teamLimitArgs(lim TeamLimits, gateBin string, gateOn bool, specPath string) (args []string, hookBin string) {
+// gateOn the hook runs the gate against the agent's spec at specPath.
+// With bypass (gate off) Bash runs unguarded like every other tool;
+// otherwise, without the hook, Bash is disallowed outright.
+func teamLimitArgs(lim TeamLimits, gateBin string, gateOn, bypass bool, specPath string) (args []string, hookBin string) {
 	deny := slices.Clone(lim.DisallowedTools)
 	hookBin = gateBin
-	if lim.BashAllowed && gateOn {
+	switch {
+	case lim.BashAllowed && gateOn:
 		hookBin = gate.HookCommand(gateBin, specPath)
-	} else {
+	case lim.BashAllowed && bypass:
+		// Gate off: Bash stays allowed, no hook to install.
+	default:
 		for _, t := range bashTools {
 			if !slices.Contains(deny, t) {
 				deny = append(deny, t)

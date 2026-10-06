@@ -26,6 +26,11 @@ describe("native tools", () => {
     expect(bashNote(true, [])).toMatch(/asks you first/);
     expect(bashNote(false, [])).toMatch(/off/);
   });
+  it("says every command runs while approvals are off", () => {
+    expect(bashNote(true, [])).toMatch(/approvals off, every command runs/);
+    expect(bashNote(true, [{ pattern: "git status", scope: "" }])).toMatch(/approvals off, every command runs/);
+    expect(bashNote(false, [])).not.toMatch(/approvals off/);
+  });
 });
 
 describe("skills", () => {

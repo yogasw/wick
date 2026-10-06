@@ -353,6 +353,19 @@ func TestActivityExtendsMax(t *testing.T) {
 	}
 }
 
+// With BusyFresh a working status said once and never repeated does not
+// hold the turn to Ceiling: a remote that hung ends soon after Max.
+func TestStaleWorkingStatusEndsBeforeCeiling(t *testing.T) {
+	f := &fake{listen: []ListenMode{ListenPush}, limits: Limits{Max: 80 * time.Millisecond, Ceiling: 10 * time.Second, Idle: 50 * time.Millisecond, BusyFresh: 100 * time.Millisecond}, push: make(chan Event, 1)}
+	f.push <- Event{Kind: EventStatus, Status: StatusWorking, Detail: "reading"}
+	start := time.Now()
+	_, l := run(t, f)
+	// pushGrace (2s) is paid on any ended turn; Ceiling is 10s.
+	if !l.IsError || time.Since(start) > 5*time.Second {
+		t.Fatalf("line=%+v after %s", l, time.Since(start))
+	}
+}
+
 // A remote that stays silent still times out at Max.
 func TestSilentStillTimesOutAtMax(t *testing.T) {
 	f := &fake{listen: []ListenMode{ListenPush}, limits: Limits{Max: 80 * time.Millisecond, Ceiling: 3 * time.Second}, push: make(chan Event, 1)}

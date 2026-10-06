@@ -121,6 +121,18 @@ func TestImplementsRemoteInterfaces(t *testing.T) {
 	_ = remote.Spawner{Source: src}
 }
 
+// TestLimitsLetBusyPluginRunPastMax pins the ceiling: a plugin that keeps
+// reporting work is not cut off at Max, where its answer would be lost.
+func TestLimitsLetBusyPluginRunPastMax(t *testing.T) {
+	lim := NewSource("echo", nil).Limits()
+	if lim.Ceiling <= lim.Max {
+		t.Fatalf("Ceiling = %v, want above Max %v", lim.Ceiling, lim.Max)
+	}
+	if lim.BusyFresh <= 0 || lim.BusyFresh >= lim.Max {
+		t.Fatalf("BusyFresh = %v, want a hung plugin to end at Max %v", lim.BusyFresh, lim.Max)
+	}
+}
+
 // injectBot is botSource whose remote also takes a message mid-turn.
 type injectBot struct {
 	botSource

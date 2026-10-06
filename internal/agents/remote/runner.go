@@ -622,9 +622,13 @@ func (p *process) turn(text string) {
 			}
 		case <-maxT.C:
 			elapsed := now().Sub(start)
-			if left := ceiling - elapsed; left > 0 && (t.busy || now().Sub(t.last) < win) {
+			busy := t.busy && (lim.BusyFresh <= 0 || now().Sub(t.last) < lim.BusyFresh)
+			if left := ceiling - elapsed; left > 0 && (busy || now().Sub(t.last) < win) {
 				if left > win {
 					left = win
+				}
+				if lim.BusyFresh > 0 && left > lim.BusyFresh {
+					left = lim.BusyFresh
 				}
 				maxT.Reset(left)
 				extended = true

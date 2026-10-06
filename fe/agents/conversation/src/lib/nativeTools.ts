@@ -61,6 +61,9 @@ export function enforcementNote(enforced: boolean | undefined, provider: string)
 /** bashNote explains what Bash does with the rules as they stand. */
 export function bashNote(bashOn: boolean, rules: BashRule[]): string {
   if (!bashOn) return "Bash is off: the agent cannot run commands.";
-  if (rules.length === 0) return "No commands listed: every command asks you first.";
-  return "Listed commands run without asking; any other command asks you first.";
+  // With approvals off (gate off / bypass) nobody can be asked: Bash on then
+  // runs every command, and these rules wait for approvals to come back.
+  const off = " With approvals off, every command runs.";
+  if (rules.length === 0) return "No commands listed: every command asks you first." + off;
+  return "Listed commands run without asking; any other command asks you first." + off;
 }

@@ -55,6 +55,11 @@ type Limits struct {
 	// Ceiling > Max lets Max move on while the remote still shows life
 	// (new text, an edit, a working status), up to Ceiling in all.
 	Ceiling time.Duration
+	// BusyFresh > 0 trusts a standing working status to move Max on only
+	// while the remote said something within that long, so a remote that
+	// hung after saying "working" ends at Max instead of at Ceiling. 0
+	// trusts the status until it changes.
+	BusyFresh time.Duration
 	// Grace > 0 keeps listening that long after a turn ended, for a
 	// message or an edit the remote sends late (a Reopener only).
 	Grace time.Duration
