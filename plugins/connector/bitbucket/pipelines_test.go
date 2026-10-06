@@ -46,7 +46,7 @@ func TestScopeCovers(t *testing.T) {
 	}
 }
 
-func TestHealthCheck_FromScopeHeader(t *testing.T) {
+func TestPermissionStatus_RendersChecklist(t *testing.T) {
 	srv := conntest.Server(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-OAuth-Scopes", "read:repository:bitbucket, write:pullrequest:bitbucket")
 		_, _ = w.Write([]byte(`{}`))
@@ -54,18 +54,22 @@ func TestHealthCheck_FromScopeHeader(t *testing.T) {
 	c := conntest.Ctx(t, map[string]string{
 		"base_url": srv.URL, "email": "a@b.c", "api_token": "t", "default_workspace": "ws",
 	}, map[string]string{})
-	got, err := HealthCheck(c)
+	got, err := permissionStatus(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := map[string]bool{}
-	for _, h := range got {
-		m[h.Key] = h.OK
+	h, _ := got.(map[string]any)["html"].(string)
+	for _, want := range []string{"get_repository", "merge_pull_request", "run_pipeline", "❌", "✅", "allowed"} {
+		if !strings.Contains(h, want) {
+			t.Fatalf("html missing %q: %s", want, h)
+		}
 	}
-	if !m["get_repository"] || !m["merge_pull_request"] {
-		t.Fatalf("expected allowed ops, got %v", m)
-	}
-	if m["create_branch"] || m["run_pipeline"] {
-		t.Fatalf("expected denied ops, got %v", m)
+}
+
+func TestPermissionStatus_NeedsWorkspace(t *testing.T) {
+	c := conntest.Ctx(t, map[string]string{"base_url": "http://x", "email": "a", "api_token": "t"}, map[string]string{})
+	got, _ := permissionStatus(c)
+	if !strings.Contains(got.(map[string]any)["html"].(string), "default_workspace") {
+		t.Fatal("expected workspace hint")
 	}
 }

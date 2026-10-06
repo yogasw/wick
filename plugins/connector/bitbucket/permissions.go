@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"sort"
@@ -59,30 +60,6 @@ type PermissionReport struct {
 	Probes    []probe        `json:"probes"`
 	Ops       []opPermission `json:"ops"`
 	Summary   string         `json:"summary"`
-}
-
-func checkPermissions(c *connector.Ctx) (any, error) {
-	return evaluatePermissions(c, strings.TrimSpace(c.Input("repo_slug")))
-}
-
-// HealthCheck backs the admin UI's "Check Permissions" button: ops the token
-// can run get a check, ops it cannot get a cross with the reason. Unknown ops
-// are left out so wick leaves their state untouched.
-func HealthCheck(c *connector.Ctx) ([]connector.OpHealth, error) {
-	rep, err := evaluatePermissions(c, "")
-	if err != nil {
-		return []connector.OpHealth{{Key: "auth", OK: false, Reason: err.Error()}}, nil
-	}
-	out := make([]connector.OpHealth, 0, len(rep.Ops))
-	for _, o := range rep.Ops {
-		switch o.Mark {
-		case "✅":
-			out = append(out, connector.OpHealth{Key: o.Op, OK: true})
-		case "❌":
-			out = append(out, connector.OpHealth{Key: o.Op, OK: false, Reason: o.Reason + " (needs " + o.Needs + ")"})
-		}
-	}
-	return out, nil
 }
 
 func evaluatePermissions(c *connector.Ctx, repo string) (*PermissionReport, error) {
@@ -204,4 +181,58 @@ func scopeCovers(granted map[string]bool, family string, write bool) bool {
 		return s("write") || s("admin")
 	}
 	return s("read") || s("write") || s("admin")
+}
+
+// permissionStatus renders the checklist widget shown on the connector config
+// page (same html-field mechanism as the Loki connection status).
+func permissionStatus(c *connector.Ctx) (any, error) {
+	if strings.TrimSpace(c.Cfg("default_workspace")) == "" {
+		return map[string]any{"html": permCard(false, "Isi default_workspace dulu untuk mengecek permission.", nil)}, nil
+	}
+	rep, err := evaluatePermissions(c, "")
+	if err != nil {
+		return map[string]any{"html": permCard(false, html.EscapeString(err.Error()), nil)}, nil
+	}
+	allowed, denied := 0, 0
+	for _, o := range rep.Ops {
+		switch o.Mark {
+		case "✅":
+			allowed++
+		case "❌":
+			denied++
+		}
+	}
+	head := fmt.Sprintf("%d allowed · %d denied", allowed, denied)
+	return map[string]any{"html": permCard(denied == 0, head, rep.Ops)}, nil
+}
+
+func permCard(ok bool, head string, ops []opPermission) string {
+	ring, text, dot := "border-neg-300 bg-neg-100 dark:bg-navy-800", "text-neg-400", "bg-neg-400"
+	if ok {
+		ring, text, dot = "border-pos-300 bg-pos-100 dark:bg-navy-800", "text-pos-400", "bg-pos-400"
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="rounded-lg border ` + ring + ` px-4 py-2.5">`)
+	b.WriteString(`<div class="flex items-center gap-2"><span class="h-2 w-2 rounded-full ` + dot + `"></span>`)
+	b.WriteString(`<span class="text-xs font-medium ` + text + `">` + head + `</span></div>`)
+	if len(ops) > 0 {
+		b.WriteString(`<ul class="mt-2 grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">`)
+		for _, o := range ops {
+			mark, cls := "❔", ""
+			switch o.Mark {
+			case "✅":
+				mark, cls = "✅", "text-pos-400"
+			case "❌":
+				mark, cls = "❌", "text-neg-400"
+			}
+			b.WriteString(`<li class="text-xs ` + cls + `" title="` + html.EscapeString(o.Reason) + `">` + mark + ` <span class="font-mono">` + html.EscapeString(o.Op) + `</span>`)
+			if o.Mark == "❌" {
+				b.WriteString(` <span class="opacity-70">(` + html.EscapeString(o.Needs) + `)</span>`)
+			}
+			b.WriteString(`</li>`)
+		}
+		b.WriteString(`</ul>`)
+	}
+	b.WriteString(`</div>`)
+	return b.String()
 }

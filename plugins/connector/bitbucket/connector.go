@@ -18,10 +18,9 @@ func Module() connector.Module {
 	m := Meta()
 	m.DefaultTags = []entity.DefaultTag{tags.Connector, tags.Development}
 	return connector.Module{
-		Meta:        m,
-		Configs:     entity.StructToConfigs(Configs{}),
-		Operations:  Operations(),
-		HealthCheck: HealthCheck,
+		Meta:       m,
+		Configs:    entity.StructToConfigs(Configs{}),
+		Operations: Operations(),
 	}
 }
 
@@ -32,8 +31,17 @@ type Configs struct {
 	Email            string `wick:"email;secret;required;desc=Atlassian account email used with the API token for Basic Auth."`
 	APIToken         string `wick:"secret;required;desc=Bitbucket Cloud API token. Needs read repository scopes for read ops and write repository scopes for write ops."`
 	DefaultWorkspace string `wick:"desc=Optional default Bitbucket workspace slug used when an operation omits workspace."`
+	// PermissionStatus is a read-only widget: the per-operation allowed/denied
+	// checklist probed live from the token. Not a stored value — the html op renders it.
+	PermissionStatus string `wick:"html=permission_status;desc=Live checklist of which operations this token can run. Fill the credentials and default_workspace first."`
 	DefaultPagelen   int    `wick:"default=20;desc=Default Bitbucket page length for list/search operations."`
 	MaxPagelen       int    `wick:"default=100;desc=Maximum page length allowed by this connector."`
+}
+
+// PermissionStatusInput: the manager's html widget always passes the current
+// field value as "browser"; it is unused here.
+type PermissionStatusInput struct {
+	Browser string `wick:"desc=Unused."`
 }
 
 type SearchRepositoriesInput struct {
@@ -117,11 +125,6 @@ type CreatePullRequestCommentInput struct {
 	InlineFrom    int    `wick:"key=inline_from;number;desc=Optional. Line number in the OLD (pre-diff) version, use instead of inline_to to comment on a removed/old line. Needs inline_path."`
 }
 
-type CheckPermissionsInput struct {
-	Workspace string `wick:"desc=Bitbucket workspace slug. If empty, uses default_workspace config."`
-	RepoSlug  string `wick:"desc=Optional repository slug. When set, pull request and pipeline access is probed too."`
-}
-
 type RunPipelineInput struct {
 	Workspace string `wick:"desc=Bitbucket workspace slug. If empty, uses default_workspace config."`
 	RepoSlug  string `wick:"required;desc=Repository slug."`
@@ -164,14 +167,14 @@ func Meta() connector.Meta {
 func Operations() []connector.Category {
 	return []connector.Category{
 		connector.Cat(
-			"Access",
-			"Check what the configured token can and cannot do.",
-			connector.Op(
-				"check_permissions",
-				"Check Permissions",
-				"Show a checklist of which connector operations this token can run (✅ allowed, ❌ denied, ❔ unknown). Reads the token scopes from the API and probes read endpoints; write operations are never executed.",
-				CheckPermissionsInput{},
-				checkPermissions,
+			"Maintenance",
+			"Backs the manager's config widget (permission status); not meant for agent use.",
+			connector.OpConfigOnly(
+				"permission_status",
+				"Permission Status",
+				"Render the allowed/denied checklist of operations for the configured token. Read-only; used by the manager UI's permission-status widget.",
+				PermissionStatusInput{},
+				permissionStatus,
 				wickdocs.Docs{},
 			),
 		),
