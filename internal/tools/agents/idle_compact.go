@@ -38,15 +38,26 @@ type idleCandidate struct {
 	Project    string
 	ProjectID  string
 	LastActive time.Time
-	// Busy is true while a turn is running.
+	// SubAgent is true for a sub-agent's own session: it reports back and
+	// is done, so compacting it only costs a turn.
+	SubAgent bool
+	// Busy is true while a turn is running (spawning or working); Idle is
+	// true while the CLI sits alive after a turn that ended normally.
+	// Neither: no process, or it was killed.
 	Busy bool
+	Idle bool
 }
 
+// settleFor bounds how long a just-compacted session is held while its
+// compact turn runs.
+const settleFor = 10 * time.Minute
+
 // providerIdleCompactor sends /compact to sessions whose provider instance
-// asks for it. Each session is weighed once per idle stretch: the
-// LastActive it was looked at for is remembered, and only new activity
-// arms it again. That also keeps the usage ledger off disk for sessions
-// already decided.
+// asks for it. Only a session seen going from a turn into idle while this
+// process watches is armed: one that was stopped mid-turn, or that went
+// quiet before wick started, is left alone, so a restart never sweeps
+// through old conversations. An armed session is weighed once, when it
+// has sat idle long enough.
 type providerIdleCompactor struct {
 	// Sessions lists the sessions to consider.
 	Sessions func() []idleCandidate
@@ -60,11 +71,14 @@ type providerIdleCompactor struct {
 	Now func() time.Time
 
 	mu sync.Mutex
-	// seen maps a session to the LastActive it was last decided for;
-	// settle holds a just-compacted session until its post-compact
-	// LastActive has been seen once.
-	seen   map[string]time.Time
-	settle map[string]bool
+	// last is the LastActive each session was last seen with; wasBusy
+	// marks a turn seen running; armed marks a turn seen ending normally;
+	// settle holds a just-compacted session (with when) until its compact
+	// turn is over.
+	last    map[string]time.Time
+	wasBusy map[string]bool
+	armed   map[string]bool
+	settle  map[string]time.Time
 }
 
 // Tick runs one pass and returns the sessions it compacted.
@@ -75,42 +89,51 @@ func (c *providerIdleCompactor) Tick(ctx context.Context) []string {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.seen == nil {
-		c.seen, c.settle = map[string]time.Time{}, map[string]bool{}
+	if c.last == nil {
+		c.last, c.wasBusy, c.armed, c.settle = map[string]time.Time{}, map[string]bool{}, map[string]bool{}, map[string]time.Time{}
 	}
 	var out []string
 	for _, s := range c.Sessions() {
-		if len(out) >= providerIdleCompactPerTick {
-			break
-		}
-		if s.SessionID == "" || s.Busy || s.LastActive.IsZero() {
+		id := s.SessionID
+		if id == "" || s.SubAgent {
 			continue
 		}
-		if c.settle[s.SessionID] {
-			// The compact turn itself moved LastActive; that is not
-			// the user coming back.
-			c.seen[s.SessionID] = s.LastActive
-			delete(c.settle, s.SessionID)
+		prev, known := c.last[id]
+		c.last[id] = s.LastActive
+		if at, ok := c.settle[id]; ok {
+			// The compact turn itself is not the user coming back.
+			if !s.Busy && (s.LastActive.After(at) || now.Sub(at) > settleFor) {
+				delete(c.settle, id)
+			}
 			continue
 		}
-		if at, ok := c.seen[s.SessionID]; ok && !s.LastActive.After(at) {
+		switch {
+		case s.Busy:
+			c.wasBusy[id] = true
+			continue
+		case s.Idle && (c.wasBusy[id] || (known && s.LastActive.After(prev))):
+			// A turn ended normally: armed for this idle stretch.
+			c.armed[id] = true
+			delete(c.wasBusy, id)
+		case !s.Idle && c.wasBusy[id]:
+			// The turn ended without going idle: stopped or killed.
+			delete(c.wasBusy, id)
+		}
+		if !c.armed[id] || len(out) >= providerIdleCompactPerTick {
 			continue
 		}
 		idle := now.Sub(s.LastActive)
-		if idle > providerIdleCompactLookback {
+		if s.LastActive.IsZero() || idle > providerIdleCompactLookback {
+			delete(c.armed, id)
 			continue
 		}
-		key, used, window, ok := c.Usage(s.SessionID)
+		key, used, window, ok := c.Usage(id)
 		if !ok || key == "" {
 			continue
 		}
 		pol := c.Policy(key)
-		if !pol.Enabled {
-			continue
-		}
-		if pol.Skips(provider.SessionRef{ID: s.SessionID, Title: s.Title, Project: s.Project, ProjectID: s.ProjectID}) {
-			// Excluded for good: weigh it again only on new activity.
-			c.seen[s.SessionID] = s.LastActive
+		if !pol.Enabled || pol.Skips(provider.SessionRef{ID: id, Title: s.Title, Project: s.Project, ProjectID: s.ProjectID}) {
+			delete(c.armed, id)
 			continue
 		}
 		if idle < pol.Idle {
@@ -118,16 +141,15 @@ func (c *providerIdleCompactor) Tick(ctx context.Context) []string {
 			continue
 		}
 		// Decided for this stretch, whichever way it goes.
-		c.seen[s.SessionID] = s.LastActive
+		delete(c.armed, id)
 		if !pol.Due(used, window, idle) {
 			continue
 		}
-		if err := c.Compact(ctx, s.SessionID); err != nil {
-			delete(c.seen, s.SessionID)
+		if err := c.Compact(ctx, id); err != nil {
 			continue
 		}
-		c.settle[s.SessionID] = true
-		out = append(out, s.SessionID)
+		c.settle[id] = now
+		out = append(out, id)
 	}
 	return out
 }
@@ -179,7 +201,9 @@ func startProviderIdleCompactor() {
 						Project:    names[pid],
 						ProjectID:  pid,
 						LastActive: s.Meta.LastActive,
-						Busy:       lc != "" && lc != "idle",
+						SubAgent:   s.Meta.ParentSessionID != "",
+						Busy:       lc == "spawning" || lc == "working",
+						Idle:       lc == "idle",
 					})
 				}
 				return out

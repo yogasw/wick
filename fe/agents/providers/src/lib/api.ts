@@ -1643,6 +1643,8 @@ export interface IdleCompactProbe {
   title: string;
   project: string;
   project_id: string;
+  /* sub_agent: a sub-agent's session, never compacted. */
+  sub_agent?: boolean;
   /* rule is the 1-based pattern line that matched, 0 for none. */
   rule: number;
   rule_text?: string;

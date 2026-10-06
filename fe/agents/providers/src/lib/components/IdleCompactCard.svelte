@@ -89,6 +89,7 @@
     }
   }
   function ruleLabel(p: IdleCompactProbe, scope: string): string {
+    if (p.sub_agent) return "This is a sub-agent's session. Those are never compacted.";
     if (scope === "all") return "Scope is all, every session counts.";
     if (p.rule === 0) return scope === "whitelist" ? "No rule matched." : "No skip rule matched.";
     return `Rule ${p.rule} matched: ${p.rule_text ?? ""}`;

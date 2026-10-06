@@ -23,7 +23,9 @@ type idleCompactProbeResult struct {
 	Rule     int    `json:"rule"`
 	RuleText string `json:"rule_text,omitempty"`
 	// InScope is true when the scope leaves the session to be compacted.
-	InScope bool `json:"in_scope"`
+	// A sub-agent's session never is (SubAgent).
+	InScope  bool `json:"in_scope"`
+	SubAgent bool `json:"sub_agent"`
 	// Enabled is the instance's saved on/off switch.
 	Enabled bool `json:"enabled"`
 	// SessionProvider is the instance the session's context runs on; the
@@ -96,7 +98,8 @@ func probeIdleCompact(c *tool.Ctx) {
 			}
 		}
 	}
-	res.InScope = !pol.Skips(ref)
+	res.SubAgent = sess.Meta.ParentSessionID != ""
+	res.InScope = !res.SubAgent && !pol.Skips(ref)
 
 	if su, err := store.LoadSessionUsage(globalLayout, sid); err == nil {
 		key := activeContextProvider(su.Providers)
