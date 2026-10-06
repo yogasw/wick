@@ -3031,7 +3031,11 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		return
 	}
 	if ev.Type == event.Done || ev.Type == event.Error {
-		if _, ok := s.dmMain.Load(sessionKey); ok {
+		// Keep a main chat's turn while sub-agents still work in the
+		// background: their result wakes the leader in a turn nobody typed
+		// here, and its answer belongs in this DM. The Done of a turn with
+		// nothing left in the background releases it.
+		if _, ok := s.dmMain.Load(sessionKey); ok && !s.hasBackgroundAgents(sessionKey) {
 			defer s.releaseDMTurn(sessionKey)
 		}
 	}
@@ -3104,7 +3108,16 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		t.buf.Reset()
 		t.hasStarted = false
 		t.running = false
+		channelID, threadTS := t.channelID, t.threadTS
 		s.mu.Unlock()
+		// Bind again now that the session surely exists: a thread whose
+		// only message created the session was never bound, so the next
+		// turn it did not type (a sub-agent's result waking the leader)
+		// found no thread once this instance lost its turn. A main chat
+		// stays unbound on purpose, see handleMessage.
+		if _, dm := s.dmMain.Load(sessionKey); !dm {
+			s.persistThreadBinding(sessionKey, channelID, threadTS)
+		}
 
 		state := "done"
 		if hasError {

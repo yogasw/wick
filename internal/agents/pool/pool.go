@@ -82,6 +82,10 @@ type Pool struct {
 	// leases are slots held by work that is not a session subprocess
 	// (one-shot LLM helpers, see lease.go). Lazily created; guarded by mu.
 	leases map[string]leaseEntry
+	// pendingBindings holds thread bindings set before their session was
+	// on disk (a channel binds on the message that creates the session);
+	// ensureSession writes them once the meta exists. key = session id.
+	pendingBindings sync.Map
 	// crashes tracks recent unexplained deaths per agent so a restart
 	// budget can be enforced. Lazily created; see crashrecovery.go.
 	crashes map[string]*crashState
@@ -656,9 +660,19 @@ func (p *Pool) SetThreadBinding(sessionID string, b agentchannels.ThreadBinding)
 	}
 	sess, err := session.Load(p.cfg.Layout, sessionID)
 	if err != nil {
+		// The first message of a thread binds before Send creates the
+		// session. Dropping it left the thread unbound for good, so a
+		// later turn that thread never typed — a sub-agent's result
+		// waking the leader — had nowhere to go. Hold it until the
+		// session exists.
+		if !storage.PathExists(p.cfg.Layout.SessionMeta(sessionID)) {
+			p.pendingBindings.Store(sessionID, b)
+			return
+		}
 		log.Warn().Str("session", sessionID).Err(err).Msg("pool: set thread binding — session load failed")
 		return
 	}
+	p.pendingBindings.Delete(sessionID)
 	cur := sess.Meta.ChannelRef
 	if cur != nil && cur.Channel == b.Channel && cur.ChatID == b.ChatID &&
 		cur.ThreadID == b.ThreadID && cur.Instance == b.Instance {
@@ -1834,6 +1848,9 @@ func (p *Pool) ensureSession(ctx context.Context, sessionID, source, projectID s
 			return cerr
 		}
 		return nil // race: other caller created it, that's fine
+	}
+	if v, ok := p.pendingBindings.LoadAndDelete(sessionID); ok {
+		p.SetThreadBinding(sessionID, v.(agentchannels.ThreadBinding))
 	}
 	if p.cfg.OnSessionCreated != nil {
 		p.cfg.OnSessionCreated(sess)
