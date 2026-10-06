@@ -47,7 +47,7 @@ type IdleCompactConfig struct {
 	IdleCompactTrigger   string `wick:"key=idle_compact_trigger;dropdown=percent|tokens;desc=What the threshold counts.\npercent — percentage of the model's context window in use.\ntokens — thousands of tokens in use (k), whatever the window size."`
 	IdleCompactThreshold int    `wick:"key=idle_compact_threshold;desc=Compact only when the context is at least this much: a percentage (e.g. 40) or k tokens (e.g. 100 = 100k). Empty or 0 = 40% / 100k."`
 	IdleCompactScope     string `wick:"key=idle_compact_scope;dropdown=skip|whitelist|all;desc=Which sessions are compacted.\nskip — every session except those the list below matches (empty list = id:rest- and id:wf_adhoc_, one-way REST calls and one-off workflow runs).\nwhitelist — only sessions the list matches.\nall — every session, the list is ignored."`
-	IdleCompactMatch     string `wick:"key=idle_compact_match;textarea;desc=Session patterns, one per line, for the scope above. A line can mix methods: plain text = contains (case-insensitive), /pattern/ = regular expression. Prefix project:, title: or id: to check only that field (project: is the project NAME, so one list works for everyone sharing this instance); without a prefix the line is checked against all three."`
+	IdleCompactMatch     string `wick:"key=idle_compact_match;textarea;desc=Session patterns, one per line, for the scope above. A line can mix methods: plain text = contains (case-insensitive), /pattern/ = regular expression. Prefix project:, title: or id: to check only that field (project: is the project NAME, so one list works for everyone sharing this instance). Without a prefix the line is checked against all three. Join conditions with & to require all of them and put ! in front of one to negate it, e.g. project:ygsw & !title:abc."`
 }
 
 // IdleCompactPolicy is an instance's idle-compact settings with the
@@ -63,71 +63,150 @@ type IdleCompactPolicy struct {
 	Match []SessionPattern
 }
 
-// SessionPattern is one idle_compact_match line: a case-insensitive
-// substring, or a regular expression when written as /re/, checked against
-// one session field (Field) or all of them (Field "").
+// SessionPattern is one idle_compact_match line: one or more conditions
+// joined with &, all of which must hold. A line without & is a single
+// condition, so existing lists keep their meaning.
 type SessionPattern struct {
+	Conds []SessionCond
+}
+
+// SessionCond is one condition of a line: a case-insensitive substring, or
+// a regular expression when written as /re/, checked against one session
+// field (Field) or all of them (Field ""). Neg (a leading !) inverts it.
+type SessionCond struct {
 	Field string
 	Text  string
 	Re    *regexp.Regexp
+	Neg   bool
 }
 
-// sessionPatternFields are the prefixes a line may name.
+// sessionPatternFields are the prefixes a condition may name.
 var sessionPatternFields = []string{"project", "title", "id"}
 
-// Match reports whether the pattern matches a session's fields.
+// Match reports whether every condition of the line holds for a session.
 func (p SessionPattern) Match(id, title, projectName string) bool {
-	switch p.Field {
-	case "id":
-		return p.match(id)
-	case "title":
-		return p.match(title)
-	case "project":
-		return p.match(projectName)
+	for _, c := range p.Conds {
+		if c.Match(id, title, projectName) == c.Neg {
+			return false
+		}
 	}
-	return p.match(id) || p.match(title) || p.match(projectName)
+	return len(p.Conds) > 0
 }
 
-func (p SessionPattern) match(s string) bool {
+// Match reports whether the condition's text or expression is found,
+// before Neg is applied.
+func (c SessionCond) Match(id, title, projectName string) bool {
+	switch c.Field {
+	case "id":
+		return c.match(id)
+	case "title":
+		return c.match(title)
+	case "project":
+		return c.match(projectName)
+	}
+	return c.match(id) || c.match(title) || c.match(projectName)
+}
+
+func (c SessionCond) match(s string) bool {
 	if s == "" {
 		return false
 	}
-	if p.Re != nil {
-		return p.Re.MatchString(s)
+	if c.Re != nil {
+		return c.Re.MatchString(s)
 	}
-	return strings.Contains(strings.ToLower(s), p.Text)
+	return strings.Contains(strings.ToLower(s), c.Text)
+}
+
+// splitConds splits a line on & that sit outside a /regular expression/.
+func splitConds(line string) []string {
+	var out []string
+	inRe, start := false, 0
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case '/':
+			// A / opens an expression only at the start of a condition
+			// (after optional !, field: and spaces); inside one it closes it.
+			if inRe {
+				inRe = false
+			} else if strings.TrimLeft(strings.TrimSpace(condBody(line[start:i])), "!") == "" {
+				inRe = true
+			}
+		case '&':
+			if !inRe {
+				out = append(out, line[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(out, line[start:])
+}
+
+// condBody strips a leading field: prefix (after an optional !).
+func condBody(s string) string {
+	t := strings.TrimSpace(s)
+	neg := strings.HasPrefix(t, "!")
+	t = strings.TrimSpace(strings.TrimPrefix(t, "!"))
+	for _, f := range sessionPatternFields {
+		if rest, ok := strings.CutPrefix(strings.ToLower(t), f+":"); ok {
+			t = t[len(t)-len(rest):]
+			break
+		}
+	}
+	if neg {
+		return "!" + t
+	}
+	return t
+}
+
+// parseCond reads one condition: [!][project:|title:|id:]text-or-/re/.
+func parseCond(s string) (SessionCond, bool, error) {
+	var c SessionCond
+	s = strings.TrimSpace(s)
+	if rest, ok := strings.CutPrefix(s, "!"); ok {
+		c.Neg = true
+		s = strings.TrimSpace(rest)
+	}
+	for _, f := range sessionPatternFields {
+		if rest, ok := strings.CutPrefix(strings.ToLower(s), f+":"); ok {
+			c.Field = f
+			s = strings.TrimSpace(s[len(s)-len(rest):])
+			break
+		}
+	}
+	if s == "" {
+		return c, false, nil
+	}
+	if len(s) > 2 && strings.HasPrefix(s, "/") && strings.HasSuffix(s, "/") {
+		re, err := regexp.Compile(s[1 : len(s)-1])
+		if err != nil {
+			return c, false, fmt.Errorf("idle compact match: bad regular expression %s: %v", s, err)
+		}
+		c.Re = re
+	} else {
+		c.Text = strings.ToLower(s)
+	}
+	return c, true, nil
 }
 
 // ParseSessionPatterns reads idle_compact_match: one pattern per line (or
-// comma), each optionally prefixed with project:, title: or id:.
+// comma); a pattern is conditions joined with &, each optionally negated
+// with ! and prefixed with project:, title: or id:.
 func ParseSessionPatterns(raw string) ([]SessionPattern, error) {
 	var out []SessionPattern
 	for _, line := range strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == ',' }) {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
 		var sp SessionPattern
-		for _, f := range sessionPatternFields {
-			if rest, ok := strings.CutPrefix(strings.ToLower(line), f+":"); ok {
-				sp.Field = f
-				line = strings.TrimSpace(line[len(line)-len(rest):])
-				break
-			}
-		}
-		if line == "" {
-			continue
-		}
-		if len(line) > 2 && strings.HasPrefix(line, "/") && strings.HasSuffix(line, "/") {
-			re, err := regexp.Compile(line[1 : len(line)-1])
+		for _, part := range splitConds(line) {
+			c, ok, err := parseCond(part)
 			if err != nil {
-				return nil, fmt.Errorf("idle compact match: bad regular expression %s: %v", line, err)
+				return nil, err
 			}
-			sp.Re = re
-		} else {
-			sp.Text = strings.ToLower(line)
+			if ok {
+				sp.Conds = append(sp.Conds, c)
+			}
 		}
-		out = append(out, sp)
+		if len(sp.Conds) > 0 {
+			out = append(out, sp)
+		}
 	}
 	return out, nil
 }
