@@ -102,3 +102,30 @@ func TestIdleCompactConfigKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitCondsEscapesInsideRegex(t *testing.T) {
+	cases := map[string][]string{
+		`/a&b/ & !beta`:      {`/a&b/ `, ` !beta`},
+		`title:/a\/b&c/ & x`: {`title:/a\/b&c/ `, ` x`},
+		`/a\&b/&y`:           {`/a\&b/`, `y`},
+		`a\b & c`:            {`a\b `, ` c`},
+	}
+	for in, want := range cases {
+		got := splitConds(in)
+		if len(got) != len(want) {
+			t.Fatalf("splitConds(%q) = %q, want %q", in, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("splitConds(%q) = %q, want %q", in, got, want)
+			}
+		}
+	}
+	pats, err := ParseSessionPatterns(`title:/deploy\/prod/ & !beta`)
+	if err != nil || len(pats) != 1 {
+		t.Fatalf("patterns = %+v, err = %v", pats, err)
+	}
+	if !pats[0].Match(SessionRef{Title: "deploy/prod run"}) || pats[0].Match(SessionRef{Title: "deploy/prod beta"}) {
+		t.Fatal("escaped slash rule matched wrong sessions")
+	}
+}

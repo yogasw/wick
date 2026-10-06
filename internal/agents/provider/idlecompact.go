@@ -136,6 +136,12 @@ func splitConds(line string) []string {
 	inRe, start := false, 0
 	for i := 0; i < len(line); i++ {
 		switch line[i] {
+		case '\\':
+			// An escaped character inside an expression (\/ or \&) never
+			// closes it or splits the line.
+			if inRe {
+				i++
+			}
 		case '/':
 			// A / opens an expression only at the start of a condition
 			// (after optional !, field: and spaces); inside one it closes it.

@@ -2659,6 +2659,10 @@
   }
 </script>
 
+{#snippet lockedSessionFields()}
+  {#if sessionFields}<SessionFieldChips fields={sessionFields.fields} values={sessionFields.values} locked />{/if}
+{/snippet}
+
 {#snippet mentionAvatar(a: { kind?: string; shape?: string; color?: string; expression?: string })}
   <AgentAvatar kind={a.kind} shape={a.shape} expression={a.expression} color={a.color} size={18} />
 {/snippet}
@@ -2793,9 +2797,6 @@
             usageRecheckWait={usageRecheckWait}
             onOpenUsage={openUsageFromContext}
           />
-          {#if sessionFields && sessionFields.fields.length > 0}
-            <div class="mb-2"><SessionFieldChips fields={sessionFields.fields} values={sessionFields.values} locked /></div>
-          {/if}
           <Composer
             bind:this={composerRef}
             onSend={handleSend}
@@ -2824,6 +2825,7 @@
             running={composerRunning}
             queued={composerQueued}
             onStop={handleStopFromComposer}
+            toolbarExtra={sessionFields && sessionFields.fields.length > 0 ? lockedSessionFields : undefined}
           />
         </div>
       </div>
