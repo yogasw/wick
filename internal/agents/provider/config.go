@@ -143,9 +143,9 @@ func SeedInstanceConfig(ins Instance) []pkgentity.Config {
 		}
 		rows = append(rows, pkgentity.StructToConfigs(IdleCompactConfig{
 			IdleCompact:          ins.IdleCompact,
-			IdleCompactMinutes:   ins.IdleCompactMinutes,
+			IdleCompactSeconds:   IdleCompactSecondsOf(ins),
 			IdleCompactTrigger:   trigger,
-			IdleCompactThreshold: ins.IdleCompactThreshold,
+			IdleCompactThreshold: FormatIdleCompactThreshold(trigger, ins.IdleCompactThreshold),
 			IdleCompactScope:     ins.IdleCompactScope,
 			IdleCompactMatch:     ins.IdleCompactMatch,
 		})...)
@@ -211,13 +211,14 @@ func ApplyInstanceConfigKey(ins *Instance, key, value string) {
 		ins.AuthFrom = strings.TrimSpace(value)
 	case "idle_compact":
 		ins.IdleCompact = value == "true" || value == "on"
-	case "idle_compact_minutes":
+	case "idle_compact_seconds":
 		n, _ := strconv.Atoi(strings.TrimSpace(value))
-		ins.IdleCompactMinutes = n
+		// Seconds replaces the older minutes setting once saved.
+		ins.IdleCompactSeconds, ins.IdleCompactMinutes = n, 0
 	case "idle_compact_trigger":
 		ins.IdleCompactTrigger = strings.TrimSpace(value)
 	case "idle_compact_threshold":
-		n, _ := strconv.Atoi(strings.TrimSpace(value))
+		n, _ := ParseIdleCompactThreshold(value)
 		ins.IdleCompactThreshold = n
 	case "idle_compact_scope":
 		ins.IdleCompactScope = value

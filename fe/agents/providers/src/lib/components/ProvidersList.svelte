@@ -119,6 +119,17 @@
   // A new omp/opencode instance gets a free name suggested (`omp`, `omp_2`,
   // …) so adding a second account is one click; other types keep an
   // empty name to type.
+  /* idleLabel shows an idle-compact wait: 90s, 30m, 1m30s. */
+  function idleLabel(sec: number): string {
+    if (sec < 60) return `${sec}s`;
+    return sec % 60 === 0 ? `${sec / 60}m` : `${Math.floor(sec / 60)}m${sec % 60}s`;
+  }
+
+  /* tokensLabel shows a token threshold: 100k, or the plain count. */
+  function tokensLabel(n: number): string {
+    return n % 1000 === 0 ? `${n / 1000}k` : `${n}`;
+  }
+
   function onTypeChange(): void {
     formAirouterModels = {};
     formStoreOverride = false;
@@ -765,9 +776,9 @@
                       {@const ic = p.Instance.IdleCompact}
                       <span
                         data-testid="card-idle-compact"
-                        title={`Compact when idle: after ${ic.Minutes} min idle, once the context is at least ${ic.Trigger === "tokens" ? `${ic.Threshold}k tokens` : `${ic.Threshold}%`}${ic.Scope === "all" ? ", every session" : ic.Scope === "whitelist" ? `, only sessions matching: ${ic.Match.join(", ")}` : `, except sessions matching: ${ic.Match.join(", ")}`}`}
+                        title={`Compact when idle: after ${idleLabel(ic.Seconds)} idle, once the context is at least ${ic.Trigger === "tokens" ? `${tokensLabel(ic.Threshold)} tokens` : `${ic.Threshold}%`}${ic.Scope === "all" ? ", every session" : ic.Scope === "whitelist" ? `, only sessions matching: ${ic.Match.join(", ")}` : `, except sessions matching: ${ic.Match.join(", ")}`}`}
                         class="whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300"
-                      >auto-compact {ic.Minutes}m · {ic.Trigger === "tokens" ? `${ic.Threshold}k` : `${ic.Threshold}%`}{ic.Scope === "whitelist" ? " · whitelist" : ic.Scope === "skip" ? ` · skip ${ic.Match.length}` : " · all"}</span>
+                      >auto-compact {idleLabel(ic.Seconds)} · {ic.Trigger === "tokens" ? tokensLabel(ic.Threshold) : `${ic.Threshold}%`}{ic.Scope === "whitelist" ? " · whitelist" : ic.Scope === "skip" ? ` · skip ${ic.Match.length}` : " · all"}</span>
                     {/if}
                     {#if ACCOUNT_ISOLATED.has(p.Instance.Type)}
                       {@render accountHintIcon(`card-${p.Instance.Type}-${p.Instance.Name}`, p.Instance.Type, "one-account-badge", "left")}

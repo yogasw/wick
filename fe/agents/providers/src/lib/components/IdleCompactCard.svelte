@@ -18,9 +18,9 @@
   let { base, type, name, fields, onSaved }: Props = $props();
 
   const LABELS: Record<string, string> = {
-    idle_compact_minutes: "Idle before compact (minutes)",
+    idle_compact_seconds: "Idle before compact (seconds)",
     idle_compact_trigger: "Compact trigger",
-    idle_compact_threshold: "Compact threshold (% or k tokens)",
+    idle_compact_threshold: "Compact threshold (% or tokens)",
     idle_compact_scope: "Which sessions",
     idle_compact_match: "Session patterns for the scope",
   };
@@ -44,6 +44,7 @@
   let textMode = $state(false);
   const FIELD_OPTS: { v: RuleField; label: string }[] = [
     { v: "project", label: "project name" },
+    { v: "project_id", label: "project id" },
     { v: "title", label: "title" },
     { v: "id", label: "session id" },
     { v: "", label: "any of them" },
@@ -112,11 +113,29 @@
     }
   }
 
+  /* Number fields read with a thousands dot as they are typed (100.000)
+     and are saved without it. */
+  const GROUPED = new Set(["idle_compact_seconds", "idle_compact_threshold"]);
+  function ungroup(v: string): string {
+    return v.replace(/[.,\s]/g, "");
+  }
+  function group(v: string): string {
+    const m = /^(\d+)(%?)$/.exec(ungroup(v));
+    return m ? m[1].replace(/\B(?=(\d{3})+(?!\d))/g, ".") + m[2] : v;
+  }
+  $effect(() => {
+    for (const k of GROUPED) {
+      const v = values[k];
+      if (v && group(v) !== v) values[k] = group(v);
+    }
+  });
+
   async function saveDetails() {
     saving = true;
     try {
       for (const f of details) {
-        await apiSaveConfigKey(base, type, name, f.Key, values[f.Key] ?? "");
+        const v = values[f.Key] ?? "";
+        await apiSaveConfigKey(base, type, name, f.Key, GROUPED.has(f.Key) ? ungroup(v) : v);
       }
       toastOk("Idle compact saved");
       onSaved?.();
@@ -240,7 +259,8 @@
               ></textarea>
             {:else}
               <input
-                type={f.Type === "number" ? "number" : "text"}
+                type={f.Type === "number" && !GROUPED.has(f.Key) ? "number" : "text"}
+                inputmode={GROUPED.has(f.Key) ? "numeric" : undefined}
                 aria-label={f.Key}
                 bind:value={values[f.Key]}
                 class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
@@ -278,7 +298,7 @@
           <p class="font-semibold {probe.in_scope ? 'text-green-700 dark:text-green-300' : 'text-black-900 dark:text-white-100'}">
             {probe.in_scope ? "Will be compacted when idle" : "Left alone, never compacted"}
           </p>
-          <p class="text-black-700 dark:text-black-600">{probe.title || "(no title)"} · project {probe.project || "(none)"} · <span class="font-mono">{probe.session_id}</span></p>
+          <p class="text-black-700 dark:text-black-600">{probe.title || "(no title)"} · project {probe.project || "(none)"}{probe.project_id ? ` (${probe.project_id})` : ""} · <span class="font-mono">{probe.session_id}</span></p>
           <p class="text-black-700 dark:text-black-600">{ruleLabel(probe, values["idle_compact_scope"] || "skip")}</p>
           {#if probe.in_scope && !probe.enabled}
             <p class="text-amber-600">Compact when idle is off for this instance, so nothing happens until it is turned on.</p>

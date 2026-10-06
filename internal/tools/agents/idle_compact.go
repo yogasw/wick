@@ -14,9 +14,10 @@ import (
 // Provider idle-compact: every instance can ask for its sessions to be
 // compacted once they sit idle with a full context (provider.IdleCompactConfig).
 const (
-	// providerIdleCompactInterval is how often sessions are checked. The
-	// idle threshold is whole minutes, so a minute of lag is invisible.
-	providerIdleCompactInterval = time.Minute
+	// providerIdleCompactInterval is how often sessions are checked: the
+	// idle setting is in seconds, so a session is compacted at most this
+	// long after it is due.
+	providerIdleCompactInterval = 15 * time.Second
 	// providerIdleCompactLookback bounds which sessions are looked at: a
 	// conversation last used before this is history, and waking it up
 	// (spawning a CLI just to summarise it) would cost more than it saves.
@@ -32,8 +33,10 @@ const (
 type idleCandidate struct {
 	SessionID string
 	Title     string
-	// Project is the session's project name, "" when it has none.
+	// Project is the session's project name, ProjectID its id; both ""
+	// when it has none.
 	Project    string
+	ProjectID  string
 	LastActive time.Time
 	// Busy is true while a turn is running.
 	Busy bool
@@ -105,7 +108,7 @@ func (c *providerIdleCompactor) Tick(ctx context.Context) []string {
 		if !pol.Enabled {
 			continue
 		}
-		if pol.Skips(s.SessionID, s.Title, s.Project) {
+		if pol.Skips(provider.SessionRef{ID: s.SessionID, Title: s.Title, Project: s.Project, ProjectID: s.ProjectID}) {
 			// Excluded for good: weigh it again only on new activity.
 			c.seen[s.SessionID] = s.LastActive
 			continue
@@ -174,6 +177,7 @@ func startProviderIdleCompactor() {
 						SessionID:  id,
 						Title:      s.Meta.Label,
 						Project:    names[pid],
+						ProjectID:  pid,
 						LastActive: s.Meta.LastActive,
 						Busy:       lc != "" && lc != "idle",
 					})

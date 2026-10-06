@@ -26,7 +26,7 @@ interface WireProviderInstance {
   disabled: boolean;
   max_concurrent: number;
   send_mode: string;
-  idle_compact?: { minutes: number; trigger: string; threshold: number; scope?: string; match?: string[] } | null;
+  idle_compact?: { seconds: number; trigger: string; threshold: number; scope?: string; match?: string[] } | null;
 }
 
 interface WireProviderCap {
@@ -281,7 +281,7 @@ function mapInstance(w: WireProviderInstance): ProviderInstanceDTO {
     MaxConcurrent: w.max_concurrent ?? 0,
     SendMode: w.send_mode ?? "",
     IdleCompact: w.idle_compact
-      ? { Minutes: w.idle_compact.minutes ?? 0, Trigger: w.idle_compact.trigger ?? "", Threshold: w.idle_compact.threshold ?? 0, Scope: w.idle_compact.scope ?? "skip", Match: w.idle_compact.match ?? [] }
+      ? { Seconds: w.idle_compact.seconds ?? 0, Trigger: w.idle_compact.trigger ?? "", Threshold: w.idle_compact.threshold ?? 0, Scope: w.idle_compact.scope ?? "skip", Match: w.idle_compact.match ?? [] }
       : null,
   };
 }
@@ -1642,6 +1642,7 @@ export interface IdleCompactProbe {
   session_id: string;
   title: string;
   project: string;
+  project_id: string;
   /* rule is the 1-based pattern line that matched, 0 for none. */
   rule: number;
   rule_text?: string;

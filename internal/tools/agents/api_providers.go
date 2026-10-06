@@ -56,9 +56,10 @@ type ProviderInstanceDTO struct {
 
 // IdleCompactDTO is an enabled idle-compact policy with defaults filled in.
 type IdleCompactDTO struct {
-	Minutes   int    `json:"minutes"`
-	Trigger   string `json:"trigger"`
-	Threshold int    `json:"threshold"`
+	Seconds int    `json:"seconds"`
+	Trigger string `json:"trigger"`
+	// Threshold is a percentage or a token count, by Trigger.
+	Threshold int `json:"threshold"`
 	// Scope is skip, whitelist or all; Match its pattern lines.
 	Scope string   `json:"scope"`
 	Match []string `json:"match,omitempty"`
@@ -78,7 +79,7 @@ func idleCompactDTO(ins provider.Instance) *IdleCompactDTO {
 	if pol.Scope != provider.IdleCompactScopeAll {
 		match = provider.IdleCompactMatchLines(raw)
 	}
-	return &IdleCompactDTO{Minutes: int(pol.Idle / time.Minute), Trigger: pol.Trigger, Threshold: pol.Threshold, Scope: pol.Scope, Match: match}
+	return &IdleCompactDTO{Seconds: int(pol.Idle / time.Second), Trigger: pol.Trigger, Threshold: pol.Threshold, Scope: pol.Scope, Match: match}
 }
 
 // ProviderStatusDTO is one provider card's data: instance config + live status.

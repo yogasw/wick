@@ -4,7 +4,7 @@
    [!][project:|title:|id:]text, where text is a substring or /regex/.
    Mirrors ParseSessionPatterns in internal/agents/provider/idlecompact.go. */
 
-export type RuleField = "" | "project" | "title" | "id";
+export type RuleField = "" | "project_id" | "project" | "title" | "id";
 
 export interface RuleCond {
   neg: boolean;
@@ -17,7 +17,7 @@ export interface Rule {
   conds: RuleCond[];
 }
 
-const FIELDS: RuleField[] = ["project", "title", "id"];
+const FIELDS: RuleField[] = ["project_id", "project", "title", "id"];
 
 function stripField(s: string): { field: RuleField; rest: string } {
   const lower = s.toLowerCase();

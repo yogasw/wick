@@ -17,6 +17,7 @@ type idleCompactProbeResult struct {
 	SessionID string `json:"session_id"`
 	Title     string `json:"title"`
 	Project   string `json:"project"`
+	ProjectID string `json:"project_id"`
 	// Rule is the 1-based pattern line that matched, 0 for none; RuleText
 	// is that line.
 	Rule     int    `json:"rule"`
@@ -74,12 +75,13 @@ func probeIdleCompact(c *tool.Ctx) {
 	draft.IdleCompactScope, draft.IdleCompactMatch = scope, raw
 	pol := provider.IdleCompactPolicyOf(draft)
 
-	res := idleCompactProbeResult{SessionID: sid, Title: sess.Meta.Label, Enabled: pol.Enabled}
-	if pid := sess.Meta.ProjectID; pid != "" {
-		if p, err := project.Load(globalLayout, pid); err == nil {
+	res := idleCompactProbeResult{SessionID: sid, Title: sess.Meta.Label, ProjectID: sess.Meta.ProjectID, Enabled: pol.Enabled}
+	if res.ProjectID != "" {
+		if p, err := project.Load(globalLayout, res.ProjectID); err == nil {
 			res.Project = p.Meta.Name
 		}
 	}
+	ref := provider.SessionRef{ID: sid, Title: res.Title, Project: res.Project, ProjectID: res.ProjectID}
 	// Match line by line so the reported number is the line the user sees.
 	if pol.Scope != provider.IdleCompactScopeAll {
 		lines := provider.IdleCompactMatchLines(raw)
@@ -88,13 +90,13 @@ func probeIdleCompact(c *tool.Ctx) {
 		}
 		for i, line := range lines {
 			ps, _ := provider.ParseSessionPatterns(line)
-			if len(ps) == 1 && ps[0].Match(sid, res.Title, res.Project) {
+			if len(ps) == 1 && ps[0].Match(ref) {
 				res.Rule, res.RuleText = i+1, line
 				break
 			}
 		}
 	}
-	res.InScope = !pol.Skips(sid, res.Title, res.Project)
+	res.InScope = !pol.Skips(ref)
 
 	if su, err := store.LoadSessionUsage(globalLayout, sid); err == nil {
 		key := activeContextProvider(su.Providers)

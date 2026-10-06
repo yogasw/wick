@@ -108,9 +108,11 @@ type Instance struct {
 	AutoRetryModel bool
 
 	// IdleCompact* (every type): send /compact to a session that has sat
-	// idle past IdleCompactMinutes with its context past the threshold.
+	// idle past IdleCompactSeconds with its context past the threshold.
+	// IdleCompactMinutes is the older setting, used while seconds is 0.
 	// See idlecompact.go.
 	IdleCompact          bool
+	IdleCompactSeconds   int
 	IdleCompactMinutes   int
 	IdleCompactTrigger   string
 	IdleCompactThreshold int
@@ -1076,6 +1078,7 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 			ins.RunPerTurn, ins.ServerIdleMinutes, ins.LoadExternalSkills = raw.RunPerTurn, raw.ServerIdleMinutes, raw.LoadExternalSkills
 			ins.AutoRetryModel = raw.AutoRetryModel
 			ins.IdleCompact, ins.IdleCompactMinutes = raw.IdleCompact, raw.IdleCompactMinutes
+			ins.IdleCompactSeconds = raw.IdleCompactSeconds
 			ins.IdleCompactTrigger, ins.IdleCompactThreshold = raw.IdleCompactTrigger, raw.IdleCompactThreshold
 			ins.IdleCompactScope = raw.IdleCompactScope
 			ins.IdleCompactMatch = raw.IdleCompactMatch
@@ -1165,6 +1168,7 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 	raw.RunPerTurn, raw.ServerIdleMinutes, raw.LoadExternalSkills = ins.RunPerTurn, ins.ServerIdleMinutes, ins.LoadExternalSkills
 	raw.AutoRetryModel = ins.AutoRetryModel
 	raw.IdleCompact, raw.IdleCompactMinutes = ins.IdleCompact, ins.IdleCompactMinutes
+	raw.IdleCompactSeconds = ins.IdleCompactSeconds
 	raw.IdleCompactTrigger, raw.IdleCompactThreshold = ins.IdleCompactTrigger, ins.IdleCompactThreshold
 	raw.IdleCompactScope = ins.IdleCompactScope
 	raw.IdleCompactMatch = ins.IdleCompactMatch
