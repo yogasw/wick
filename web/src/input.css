@@ -194,7 +194,7 @@
     -webkit-text-size-adjust: 100%;
     /* Default interface size; a signed-in user's choice (Profile ›
        Display preferences) overrides it with an inline style on <html>. */
-    font-size: 90%;
+    font-size: 100%;
   }
 
   html {

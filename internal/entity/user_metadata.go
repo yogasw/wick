@@ -17,7 +17,7 @@ type UserMetadata struct {
 	HomeView string `json:"home_view,omitempty"`
 
 	// UIScale is the interface size: the root font-size in percent, 80 to
-	// 100 in steps of 5. 0 means the default (UIScaleDefault). Read it
+	// 150 in steps of 5. 0 means the default (UIScaleDefault). Read it
 	// through UIScaleOrDefault.
 	UIScale int `json:"ui_scale,omitempty"`
 
@@ -157,12 +157,12 @@ const (
 // Interface size bounds, in percent of the browser's root font-size.
 const (
 	UIScaleMin     = 80
-	UIScaleMax     = 100
+	UIScaleMax     = 150
 	UIScaleStep    = 5
-	UIScaleDefault = 90
+	UIScaleDefault = 100
 )
 
-// ValidUIScale returns v when it is a size the slider offers (80..100,
+// ValidUIScale returns v when it is a size the slider offers (80..150,
 // a multiple of 5), else UIScaleDefault.
 func ValidUIScale(v int) int {
 	if v < UIScaleMin || v > UIScaleMax || v%UIScaleStep != 0 {
