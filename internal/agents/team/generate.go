@@ -131,7 +131,7 @@ Rules:
 - avatar_shape: one of circle, squircle, triangle, diamond. avatar_color: a #rrggbb color that fits.
 - connectors: keys from AVAILABLE CONNECTORS that the agent would likely need (empty when none fit). Never invent a key.
 - write_connectors: the keys from connectors the agent must change things through (send, post, create, update, delete). A connector it only reads or searches stays out. Empty when it only reads.
-- mention_from: which of the owner's other agents may hand this agent work. "all" (default — any teammate may pull it in), "captain" (only the Captain coordinates it), "list" (only the agents in mention_allow), "off" (it works only for the person). When THIS AGENT IS THE CAPTAIN, use "all".
+- mention_from: which of the owner's other agents may hand this agent work. "all" (default — any teammate may pull it in), "captain" (only the Captain coordinates it), "list" (only the agents in mention_allow), "off" (it works only for the person). For the Captain (flagged below) use "all".
 - mention_allow: handles from AVAILABLE AGENTS, only when mention_from is "list". Never invent a handle.
 `
 
