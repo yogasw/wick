@@ -27,9 +27,11 @@ import (
 //	                the rest are kept as they are
 //
 // Fields may also carry name, tagline, description, system_prompt (the
-// current values) and connectors (comma-separated keys the owner has, so
-// suggestions name real ones). The answer is always the full shape; the
-// caller picks the fields it asked for.
+// current values), connectors (comma-separated keys the owner has, so
+// suggestions name real ones), agents (the owner's other agents, one
+// "handle: what it does" per line, so mention suggestions name real ones)
+// and captain ("true" when the agent being made is the Captain). The
+// answer is always the full shape; the caller picks the fields it asked for.
 const PersonaKind = "agent-persona"
 
 // personaTargets are the accepted Fields["target"] values.
@@ -55,6 +57,24 @@ var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 // maxSuggestedConnectors caps the connector suggestions of one draft.
 const maxSuggestedConnectors = 6
 
+// maxSuggestedMentions caps the mention_allow handles of one draft.
+const maxSuggestedMentions = 20
+
+// strList reads a JSON array of strings: trimmed, deduplicated, empty
+// entries dropped, at most max.
+func strList(v any, max int) []string {
+	out := []string{}
+	arr, _ := v.([]any)
+	for _, x := range arr {
+		k, _ := x.(string)
+		k = strings.TrimSpace(k)
+		if k != "" && !slices.Contains(out, k) && len(out) < max {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // PersonaDraft is the result of a PersonaKind job.
 type PersonaDraft struct {
 	Name         string `json:"name"`
@@ -64,22 +84,38 @@ type PersonaDraft struct {
 	SystemPrompt string `json:"system_prompt"`
 	AvatarShape  string `json:"avatar_shape,omitempty"`
 	AvatarColor  string `json:"avatar_color,omitempty"`
-	// Connectors are suggestions only — keys the wizard offers on the
-	// Access step. Nothing is granted from them.
+	// Connectors are the keys the agent likely needs; the wizard pre-fills
+	// its Access step with them (read-only unless also in WriteConnectors),
+	// and the owner reviews them there before Create.
 	Connectors []string `json:"connectors"`
+	// WriteConnectors is the subset of Connectors the agent must change
+	// things through (post, create, update), not only read.
+	WriteConnectors []string `json:"write_connectors"`
+	// MentionFrom is the suggested Mention policy (teamlink.Mention*):
+	// which of the owner's agents may hand this one a turn.
+	MentionFrom string `json:"mention_from,omitempty"`
+	// MentionAllow are handles from the owner's agents, for "list".
+	MentionAllow []string `json:"mention_allow"`
 }
+
+// mentionPolicies are the MentionFrom values a draft may suggest; they
+// mirror teamlink.Mention* (team does not import teamlink).
+var mentionPolicies = []string{"all", "captain", "list", "off"}
 
 var personaSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
-		"name":          map[string]any{"type": "string"},
-		"handle":        map[string]any{"type": "string"},
-		"tagline":       map[string]any{"type": "string"},
-		"description":   map[string]any{"type": "string"},
-		"system_prompt": map[string]any{"type": "string"},
-		"avatar_shape":  map[string]any{"type": "string", "enum": AvatarShapes},
-		"avatar_color":  map[string]any{"type": "string"},
-		"connectors":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		"name":             map[string]any{"type": "string"},
+		"handle":           map[string]any{"type": "string"},
+		"tagline":          map[string]any{"type": "string"},
+		"description":      map[string]any{"type": "string"},
+		"system_prompt":    map[string]any{"type": "string"},
+		"avatar_shape":     map[string]any{"type": "string", "enum": AvatarShapes},
+		"avatar_color":     map[string]any{"type": "string"},
+		"connectors":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		"write_connectors": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		"mention_from":     map[string]any{"type": "string", "enum": mentionPolicies},
+		"mention_allow":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 	},
 	"required": []string{"name", "handle", "tagline", "description", "system_prompt"},
 }
@@ -94,6 +130,9 @@ Rules:
 - description: one sentence on what it is for.
 - avatar_shape: one of circle, squircle, triangle, diamond. avatar_color: a #rrggbb color that fits.
 - connectors: keys from AVAILABLE CONNECTORS that the agent would likely need (empty when none fit). Never invent a key.
+- write_connectors: the keys from connectors the agent must change things through (send, post, create, update, delete). A connector it only reads or searches stays out. Empty when it only reads.
+- mention_from: which of the owner's other agents may hand this agent work. "all" (default — any teammate may pull it in), "captain" (only the Captain coordinates it), "list" (only the agents in mention_allow), "off" (it works only for the person). When THIS AGENT IS THE CAPTAIN, use "all".
+- mention_allow: handles from AVAILABLE AGENTS, only when mention_from is "list". Never invent a handle.
 `
 
 // PersonaKindSpec is the aigen.Kind for PersonaKind.
@@ -172,6 +211,14 @@ func personaPrompt(in aigen.Input) string {
 	} else {
 		b.WriteString("\nAVAILABLE CONNECTORS: (none — leave connectors empty)\n")
 	}
+	if a := strings.TrimSpace(in.Fields["agents"]); a != "" {
+		fmt.Fprintf(&b, "\nAVAILABLE AGENTS:\n%s\n", a)
+	} else {
+		b.WriteString("\nAVAILABLE AGENTS: (none yet — use mention_from \"all\", leave mention_allow empty)\n")
+	}
+	if strings.TrimSpace(in.Fields["captain"]) == "true" {
+		b.WriteString("\nTHIS AGENT IS THE CAPTAIN: it leads the team, hands work to the other agents and answers the person.\n")
+	}
 	if t := strings.TrimSpace(in.Text); t != "" {
 		label := "USER BRIEF"
 		if personaTarget(in) == "improve" {
@@ -204,6 +251,9 @@ func PersonaFromResult(res wfprovider.StructuredResult) (PersonaDraft, error) {
 		Description:  str("description"),
 		SystemPrompt: str("system_prompt"),
 		Connectors:   []string{},
+		// Write keys and allow handles are always lists, never null.
+		WriteConnectors: []string{},
+		MentionAllow:    []string{},
 	}
 	if d.SystemPrompt == "" && d.Description == "" && d.Tagline == "" {
 		return PersonaDraft{}, errors.New("generate returned an empty persona — try a more specific brief")
@@ -218,12 +268,21 @@ func PersonaFromResult(res wfprovider.StructuredResult) (PersonaDraft, error) {
 	if c := str("avatar_color"); hexColor.MatchString(c) {
 		d.AvatarColor = strings.ToLower(c)
 	}
-	if arr, ok := res.Parsed["connectors"].([]any); ok {
-		for _, v := range arr {
-			k, _ := v.(string)
-			k = strings.TrimSpace(k)
-			if k != "" && !slices.Contains(d.Connectors, k) && len(d.Connectors) < maxSuggestedConnectors {
-				d.Connectors = append(d.Connectors, k)
+	d.Connectors = strList(res.Parsed["connectors"], maxSuggestedConnectors)
+	// Write is a subset of the suggestions; a key only in write_connectors
+	// was not suggested and is dropped.
+	for _, k := range strList(res.Parsed["write_connectors"], maxSuggestedConnectors) {
+		if slices.Contains(d.Connectors, k) {
+			d.WriteConnectors = append(d.WriteConnectors, k)
+		}
+	}
+	if m := strings.ToLower(str("mention_from")); slices.Contains(mentionPolicies, m) {
+		d.MentionFrom = m
+	}
+	if d.MentionFrom == "list" {
+		for _, h := range strList(res.Parsed["mention_allow"], maxSuggestedMentions) {
+			if h = slugHandle(h); h != "" && !slices.Contains(d.MentionAllow, h) {
+				d.MentionAllow = append(d.MentionAllow, h)
 			}
 		}
 	}

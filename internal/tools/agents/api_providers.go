@@ -49,6 +49,40 @@ type ProviderInstanceDTO struct {
 	Disabled      bool   `json:"disabled"`
 	MaxConcurrent int    `json:"max_concurrent"`
 	SendMode      string `json:"send_mode"`
+	// IdleCompact is the instance's compact-when-idle policy, nil when it
+	// is off, so the list can show it without opening the detail page.
+	IdleCompact *IdleCompactDTO `json:"idle_compact,omitempty"`
+}
+
+// IdleCompactDTO is an enabled idle-compact policy with defaults filled in.
+type IdleCompactDTO struct {
+	Minutes   int    `json:"minutes"`
+	Trigger   string `json:"trigger"`
+	Threshold int    `json:"threshold"`
+	// Scope is skip, whitelist or all; Match its pattern lines.
+	Scope string   `json:"scope"`
+	Match []string `json:"match,omitempty"`
+}
+
+// idleCompactDTO projects ins's idle-compact policy, nil when it is off.
+func idleCompactDTO(ins provider.Instance) *IdleCompactDTO {
+	pol := provider.IdleCompactPolicyOf(ins)
+	if !pol.Enabled {
+		return nil
+	}
+	raw := ins.IdleCompactMatch
+	if pol.Scope == provider.IdleCompactScopeSkip && strings.TrimSpace(raw) == "" {
+		raw = provider.DefaultIdleCompactSkip
+	}
+	var match []string
+	if pol.Scope != provider.IdleCompactScopeAll {
+		for _, line := range strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == ',' }) {
+			if line = strings.TrimSpace(line); line != "" {
+				match = append(match, line)
+			}
+		}
+	}
+	return &IdleCompactDTO{Minutes: int(pol.Idle / time.Minute), Trigger: pol.Trigger, Threshold: pol.Threshold, Scope: pol.Scope, Match: match}
 }
 
 // ProviderStatusDTO is one provider card's data: instance config + live status.
@@ -450,6 +484,7 @@ func providerStatusDTO(st provider.Status, caps map[string]view.ProviderCapVM) P
 			Disabled:      st.Instance.Disabled,
 			MaxConcurrent: st.Instance.MaxConcurrent,
 			SendMode:      st.Instance.SendMode,
+			IdleCompact:   idleCompactDTO(st.Instance),
 		},
 		Path:        st.Path,
 		PathFound:   st.PathFound,
@@ -712,6 +747,7 @@ func apiProviderDetail(c *tool.Ctx) {
 			Disabled:      st.Instance.Disabled,
 			MaxConcurrent: st.Instance.MaxConcurrent,
 			SendMode:      st.Instance.SendMode,
+			IdleCompact:   idleCompactDTO(st.Instance),
 		},
 		Path:          st.Path,
 		PathFound:     st.PathFound,

@@ -19,7 +19,7 @@
   import SlackRemoteWizard from "./lib/components/team/SlackRemoteWizard.svelte";
   import PluginRemoteWizard from "./lib/components/team/PluginRemoteWizard.svelte";
   import RemoteQuestionCard from "./lib/components/team/RemoteQuestionCard.svelte";
-  import { isA2ARemote, isRemoteAgent, isSlackRemote, remoteBadge, remoteChatMode, remoteSubtitle, remoteWaitLabel } from "./lib/remoteAgent.js";
+  import { isA2ARemote, isPluginRemote, isRemoteAgent, isSlackRemote, remoteBadge, remoteChatMode, remoteSubtitle, remoteWaitLabel } from "./lib/remoteAgent.js";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
   import DraftChat from "./lib/components/DraftChat.svelte";
   import { startDraftChat, type DraftMessage } from "./lib/agentChats.js";
@@ -30,7 +30,7 @@
   import { connectorCaption, hiddenTabsFor } from "./lib/agentMode.js";
   import { nativeToolsOf } from "./lib/nativeTools.js";
   import { rosterTime } from "./lib/timeFormat.js";
-  import { listAgents, openAgentChat, createAgent, updateAgent, markAgentRead, runApi, isWorking, type AgentItem } from "./lib/api/team.js";
+  import { listAgents, openAgentChat, createAgent, updateAgent, makeCaptain, markAgentRead, runApi, isWorking, getSessionOptions, putSessionOptions, type AgentItem } from "./lib/api/team.js";
   import { listGroups, getTeamSettings, type GroupItem } from "./lib/api/team.js";
   import GroupView from "./lib/components/GroupView.svelte";
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
@@ -184,11 +184,18 @@
   );
 
   const captain = $derived(agents.find((a) => a.id === captainId) ?? agents.find((a) => a.is_captain));
+  /* No Captain, no Team: the roster and chats stay hidden behind the
+     empty-Team page until one exists. Two ways to get here — the Captain
+     was deleted (then the user's own Wick agents are offered for the role)
+     or every agent is shared/remote (none can lead, so it is the new-user
+     page). */
+  const noCaptain = $derived(loaded && !loadError && !captain);
+  const captainCandidates = $derived(noCaptain ? agents.filter((a) => !a.kind && !isSharedAgent(a)) : []);
 
   /* Agents and groups in one list, newest activity first. The mobile
      drawer's pins (shown only while not searching) leave the list there. */
   const entries = $derived(rosterEntries(agents, groups, query));
-  const pins = $derived(query.trim() ? [] : mobilePins(agents));
+  const pins = $derived(query.trim() || noCaptain ? [] : mobilePins(agents));
   const pinIds = $derived(new Set(pins.map((a) => a.id)));
 
   const selected = $derived(
@@ -310,7 +317,7 @@
     const at = `${route.handle}|${route.session ?? ""}`;
     if (draftFor && (selected?.id !== draftFor || at !== draftAt)) untrack(() => (draftFor = null));
   });
-  async function sendDraft(msg: DraftMessage) {
+  async function sendDraft(msg: DraftMessage, options: Record<string, string> = {}) {
     const a = selected;
     if (!a) return;
     try {
@@ -318,6 +325,7 @@
         msg,
         () => runApi(openAgentChat(base, a.id, true)),
         (id, m) => runApi(sendMessage(base, id, m)),
+        isPluginRemote(a) ? (id) => runApi(putSessionOptions(base, a.id, id, options)) : undefined,
       );
       draftFor = null;
       go({ session: r.sessionId, panel: null });
@@ -351,6 +359,19 @@
     if (next.is_captain) captainId = next.id;
     // A renamed handle moves the page with it, or the next refresh 404s.
     if (prevHandle && next.handle !== prevHandle) go({ handle: next.handle }, true);
+  }
+
+  /* Empty-Team page: hand the Captain role to one of the user's own
+     agents (after the old Captain was deleted). */
+  async function claimCaptain(c: { id: string }) {
+    try {
+      const r = await runApi(makeCaptain(base, c.id));
+      onSaved(r.agent);
+      toastOk(`🧭 @${r.agent.handle} is now your Team's Captain`);
+      navigate({ handle: r.agent.handle, session: null, panel: null }, { replace: true });
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   function onDeleted(id: string) {
@@ -454,6 +475,7 @@
     hideTabs: sharedMode?.hideTabs ?? remoteMode?.hideTabs ?? hiddenTabsFor(selected?.features, selected ? nativeToolsOf(selected.allowed_native_tools) : null),
     ...(sharedMode ? { railNote: sharedMode.railNote, chatOnly: true } : remoteMode ? { railNote: remoteMode.railNote } : {}),
     ...(selected && !sharedMode && isSlackRemote(selected) ? { recheckAgentId: selected.id } : {}),
+    ...(selected && !sharedMode && isPluginRemote(selected) ? { sessionFieldsAgentId: selected.id } : {}),
     hideHeader: true,
     hidePickers: true,
     onDeleted: () => go({ session: null }),
@@ -574,9 +596,10 @@
         {/if}
       {:else if loadError}
         <p class="px-3 py-4 text-sm text-neg-400">{loadError}</p>
-      {:else if agents.length === 0}
-        <!-- Empty Team: a short hint over ghost rows; the main pane has
-             the full explanation and buttons (TeamEmptyState). -->
+      {:else if noCaptain}
+        <!-- Empty Team (or one without a Captain): a short hint over ghost
+             rows; the main pane has the full explanation and buttons
+             (TeamEmptyState). -->
         <div class="px-1.5 pt-1" data-testid="roster-empty">
           <p class="mb-2 rounded-xl border border-dashed border-white-300 px-3 py-2.5 text-xs text-black-800 dark:border-navy-600 dark:text-black-600">
             <b class="text-black-900 dark:text-white-100">No agents yet</b><br />Your first agent becomes your <b class="text-black-900 dark:text-white-100">Captain</b>.
@@ -594,7 +617,7 @@
       {:else if entries.length === 0}
         <p class="px-3 py-4 text-sm text-black-800 dark:text-black-600">No matches.</p>
       {/if}
-      {#each entries as e (e.kind + e.id)}
+      {#each noCaptain ? [] : entries as e (e.kind + e.id)}
         {#if e.kind === "agent"}
           {@const a = e.agent}
           {@const active = !route.group && selected?.id === a.id}
@@ -688,7 +711,7 @@
       >
         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
       </button>
-      {#if selected}
+      {#if selected && !noCaptain}
         <AgentAvatar kind={selected.avatar?.kind} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={isWorking(selected.status)} tool={headerStatus?.work === "tool"} toolName={headerStatus?.work === "tool" ? selected.current_action : ""} toolError={selected.tool_error} remote={headerStatus?.work === "waiting"} events={selected.avatar?.events} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
         <div class="min-w-0 flex-1">
           <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">
@@ -743,7 +766,7 @@
         <div class="flex-1"></div>
       {/if}
     </header>
-    {#if selected && chatSessionId && remoteMode && isA2ARemote(selected) && draftFor !== selected.id}
+    {#if !noCaptain && selected && chatSessionId && remoteMode && isA2ARemote(selected) && draftFor !== selected.id}
       <RemoteQuestionCard
         {base}
         agentId={selected.id}
@@ -754,8 +777,14 @@
       />
     {/if}
     <div class="min-h-0 flex-1">
-      {#if selected && draftFor === selected.id}
-        <DraftChat agent={selected} onSend={sendDraft} />
+      {#if noCaptain}
+        <TeamEmptyState onCreate={newAgent} onRemote={newRemoteAgent} candidates={captainCandidates} onMakeCaptain={claimCaptain} />
+      {:else if selected && draftFor === selected.id}
+        <DraftChat
+          agent={selected}
+          onSend={sendDraft}
+          loadFields={isPluginRemote(selected) ? ((id: string) => () => runApi(getSessionOptions(base, id)).then((o) => o.fields))(selected.id) : undefined}
+        />
       {:else if selected && chatSessionId}
         {#key chatSessionId}
           <DetailView {base} sessionId={chatSessionId} {agentMode} {railToggle} onRailChange={(open) => (railOpen = open)} />
@@ -767,8 +796,6 @@
             <span class="h-9 rounded-2xl bg-white-300 dark:bg-navy-600 {b.me ? 'self-end' : ''}" style="width:{b.w}%"></span>
           {/each}
         </div>
-      {:else if loaded && !loadError && agents.length === 0}
-        <TeamEmptyState onCreate={newAgent} onRemote={newRemoteAgent} />
       {/if}
     </div>
   </section>

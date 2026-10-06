@@ -1,8 +1,11 @@
 <script lang="ts">
   /* + Agent › Remote agent › Plugin: an agent served by a service plugin
-     that declares remote_source. One step: pick the plugin, name it. */
+     that declares remote_source. One step: pick the plugin, name it, and
+     fill the per-agent config the plugin declares (remote_configs). */
   import { onMount } from "svelte";
   import RemoteSourcePicker from "./RemoteSourcePicker.svelte";
+  import PluginRemoteConfigFields from "./PluginRemoteConfigFields.svelte";
+  import { missingPluginConfig, pluginConfigBody } from "../../remoteAgent.js";
   import { createPluginRemote, listPluginSources, runApi, type AgentItem, type PluginSource } from "../../api/team.js";
   import { HANDLE_RE } from "../../agentForm.js";
 
@@ -23,6 +26,7 @@
   let handle = $state("");
   let error = $state("");
   let saving = $state(false);
+  let config = $state<Record<string, string>>({});
 
   onMount(async () => {
     try {
@@ -42,8 +46,11 @@
     return "";
   });
 
+  const configFields = $derived(sources?.find((s) => s.key === pluginKey)?.remote_configs ?? []);
+  const missing = $derived(missingPluginConfig(configFields, config));
+
   async function submit() {
-    if (!pluginKey || handleWhy || saving) return;
+    if (!pluginKey || handleWhy || missing.length || saving) return;
     saving = true;
     error = "";
     try {
@@ -51,6 +58,7 @@
         plugin_key: pluginKey,
         ...(name.trim() ? { name: name.trim() } : {}),
         ...(handle.trim() ? { handle: handle.trim() } : {}),
+        ...(configFields.length ? { config: pluginConfigBody(configFields, config) } : {}),
       }));
       onCreated(a);
     } catch (e) {
@@ -109,7 +117,7 @@
             class="flex w-full items-start gap-3 rounded-xl border px-3 py-2 text-left text-sm {pluginKey === s.key
               ? 'border-green-500'
               : 'border-white-300 hover:bg-white-200 dark:border-navy-600 dark:hover:bg-navy-600'}"
-            onclick={() => (pluginKey = s.key)}
+            onclick={() => { if (pluginKey !== s.key) config = {}; pluginKey = s.key; }}
           >
             <span class="flex-1">
               <span class="block font-medium text-black-900 dark:text-white-100">{s.name || s.key} <span class="font-mono text-[11px] text-black-800 dark:text-black-600">v{s.version}</span></span>
@@ -132,10 +140,13 @@
       {#if handleWhy}<p class="mt-1 text-xs text-red-500">{handleWhy}</p>{/if}
     </div>
   </div>
+  {#key pluginKey}
+    <PluginRemoteConfigFields fields={configFields} bind:values={config} idPrefix="prw-cfg" />
+  {/key}
   <p class="text-xs text-black-800 dark:text-black-600">Turns go to the plugin process on this host; it decides where they travel next.</p>
   {#if error}<p class="text-sm text-red-500" role="alert">{error}</p>{/if}
 </div>
 
 <div class="flex items-center justify-end gap-2 px-6 py-4">
-  <button type="button" class={primary} disabled={!pluginKey || !!handleWhy || saving} onclick={submit}>{saving ? "Creating…" : "Create agent"}</button>
+  <button type="button" class={primary} disabled={!pluginKey || !!handleWhy || missing.length > 0 || saving} onclick={submit}>{saving ? "Creating…" : "Create agent"}</button>
 </div>

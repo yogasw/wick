@@ -14,7 +14,7 @@ A plugin is a Go `package main` that wraps ONE module value and calls the kind's
 | Operations an agent or workflow calls (an API wrapper) | **connector** | spawned on demand, idle-killed |
 | A page in wick, under `/tools/{key}`, for signed-in users | **tool** | spawned on first request, idle-killed |
 | Something that runs on a schedule and returns a markdown result | **job** | spawned per run, killed when `Run` returns |
-| An always-on HTTP server: webhooks, a public API, SSE, a remote agent | **service** | always on, restarted on crash |
+| An always-on HTTP server: webhooks, a public API, SSE, a remote agent | **service** | always on, restarted on crash; may sleep while idle when it declares `AutoOff` (see wick-plugin-service) |
 
 Pick the lightest kind that fits. A service is the only kind that keeps in-memory state between requests and the only one reachable without a wick login.
 

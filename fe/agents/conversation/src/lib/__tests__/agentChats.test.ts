@@ -46,4 +46,21 @@ describe("startDraftChat", () => {
     const r = await startDraftChat({ text: "hi", files: [] }, async () => ({ session_id: "s2" }), () => Promise.reject(new Error("busy")));
     expect(r).toEqual({ sessionId: "s2", error: "busy" });
   });
+  it("saves the session fields before the first message", async () => {
+    const calls: string[] = [];
+    const r = await startDraftChat(
+      { text: "hi", files: [] },
+      async () => ({ session_id: "s3" }),
+      async (id) => calls.push("send " + id),
+      async (id) => calls.push("prepare " + id),
+    );
+    expect(r).toEqual({ sessionId: "s3" });
+    expect(calls).toEqual(["prepare s3", "send s3"]);
+  });
+  it("does not send when saving the session fields fails", async () => {
+    const send = vi.fn(async () => {});
+    const r = await startDraftChat({ text: "hi", files: [] }, async () => ({ session_id: "s4" }), send, () => Promise.reject(new Error("unknown field")));
+    expect(r).toEqual({ sessionId: "s4", error: "unknown field" });
+    expect(send).not.toHaveBeenCalled();
+  });
 });

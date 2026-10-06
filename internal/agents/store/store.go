@@ -254,6 +254,15 @@ const (
 // appears to have holes.
 const KindCompaction = "compaction"
 
+// KindRemoteQueue: where a message sent to a busy remote agent stands
+// (extras: queue_id, state = queued | sent | cancelled | forwarded). The
+// turns of one queue_id fold into one row in the UI.
+const KindRemoteQueue = "remote_queue"
+
+// KindRemoteLink: the remote's own page for the running turn (extras: url),
+// e.g. a Jules session, where a turn wick cannot stop can be stopped.
+const KindRemoteLink = "remote_link"
+
 // TurnTraceIndex is the lightweight index written to thinking/<turn_id>.json.
 // Events below the inline threshold have their Text embedded here.
 // Events at or above the threshold have Text omitted and Large=true —
@@ -679,6 +688,24 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		}
 		return false, nil
 
+	case event.RemoteQueue:
+		// Not flushed: the running reply is still one answer, and the mark
+		// belongs to the user message above it, not after the reply.
+		if ev.Queue != nil {
+			if err := s.appendRemoteQueueTurn(ev.Queue); err != nil {
+				return false, err
+			}
+		}
+		return false, nil
+
+	case event.RemoteLink:
+		if ev.Text != "" {
+			if err := s.appendRemoteLinkTurn(ev.Text); err != nil {
+				return false, err
+			}
+		}
+		return false, nil
+
 	case event.Compaction:
 		// Flush whatever text the turn had produced first, so the marker
 		// lands after it rather than jumping ahead of the reply it
@@ -979,6 +1006,49 @@ func (s *Store) appendErrorTurn(msg string) error {
 		s.setTimedOut("")
 	}
 	return nil
+}
+
+// appendRemoteQueueTurn records where a message to a busy remote agent
+// stands as a structured system turn (KindRemoteQueue).
+func (s *Store) appendRemoteQueueTurn(q *event.QueueInfo) error {
+	now := s.now().UTC()
+	turn := ConversationTurn{
+		TurnID:    fmt.Sprintf("%d", now.UnixNano()),
+		Timestamp: now,
+		Role:      "system",
+		Agent:     s.agentName,
+		Provider:  s.provider,
+		Kind:      KindRemoteQueue,
+		Text:      q.Text,
+		Extras:    map[string]string{"queue_id": q.ID, "state": q.State},
+	}
+	return storage.AppendJSONL(
+		s.layout.SessionConversation(s.sessionID),
+		"wick-conv-v1",
+		s.sessionID,
+		turn,
+	)
+}
+
+// appendRemoteLinkTurn records the remote's page for the running turn
+// (KindRemoteLink).
+func (s *Store) appendRemoteLinkTurn(url string) error {
+	now := s.now().UTC()
+	turn := ConversationTurn{
+		TurnID:    fmt.Sprintf("%d", now.UnixNano()),
+		Timestamp: now,
+		Role:      "system",
+		Agent:     s.agentName,
+		Provider:  s.provider,
+		Kind:      KindRemoteLink,
+		Extras:    map[string]string{"url": url},
+	}
+	return storage.AppendJSONL(
+		s.layout.SessionConversation(s.sessionID),
+		"wick-conv-v1",
+		s.sessionID,
+		turn,
+	)
 }
 
 // appendCompactionTurn records a compaction boundary as a structured

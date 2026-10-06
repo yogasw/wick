@@ -130,7 +130,9 @@ func newManager(d Descriptor) *Manager {
 		},
 	}
 
-	logger.Info().Int("pref_port", d.PrefPort).Str("prefix", m.prefix).Msg("airouter: manager configured")
+	// No log here: newManager runs from the routers' init() via Register, so
+	// any line would print on every CLI command that imports this package.
+	// Init (server boot) logs the configured managers instead.
 	return m
 }
 

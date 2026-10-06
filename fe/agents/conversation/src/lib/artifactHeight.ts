@@ -29,12 +29,26 @@ export function inlineCap(viewport: number): number {
   return Math.min(MAX_HEIGHT, Math.max(DEFAULT_HEIGHT, Math.floor(viewport * VIEWPORT_RATIO)));
 }
 
+// How far below the cap a scrolling document must shrink before it stops
+// scrolling. Turning the frame's scrollbar on narrows the document, and
+// content whose height follows its width (a chart, an image, anything with an
+// aspect ratio) then gets SHORTER — back under the cap, so the scrollbar goes,
+// the content widens and is over the cap again. With the cap sitting in that
+// band (a chat height that happens to land there, e.g. a composer grown to a
+// few lines) the frame flipped every frame and visibly blinked. A margin wider
+// than a scrollbar breaks the loop.
+export const SCROLL_HYSTERESIS = 40;
+
 /** Height to give the iframe for a reported document height, and whether the
-    document overflows it (so the frame must scroll internally). */
-export function fitHeight(reported: number, viewport: number): { height: number; scroll: boolean } {
+    document overflows it (so the frame must scroll internally). `scrolling`
+    is whether it scrolls now: a scrolling document stays scrolling at the cap
+    until it is SCROLL_HYSTERESIS px under it. */
+export function fitHeight(reported: number, viewport: number, scrolling = false): { height: number; scroll: boolean } {
   const cap = inlineCap(viewport);
   const h = Math.ceil(reported);
-  return h > cap ? { height: cap, scroll: true } : { height: h, scroll: false };
+  if (h > cap) return { height: cap, scroll: true };
+  if (scrolling && h > cap - SCROLL_HYSTERESIS) return { height: cap, scroll: true };
+  return { height: h, scroll: false };
 }
 
 /** How far the chat scroller must move so a resize of an artifact that sits

@@ -46,9 +46,14 @@ const props = (tab: SettingsTab) => ({
 describe("AgentSettings › Slack remote", () => {
   beforeEach(() => { update.mockClear(); get.mockClear(); test_.mockClear(); });
 
-  test("tabs are Remote · Mention · Avatar · Advanced; Persona, Access, Tools and Captain open Remote", async () => {
-    render(AgentSettings, props("persona"));
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Remote", "Mention", "Avatar", "Advanced", "Sharing"]);
+  // A remote agent has its own Persona tab now, so "persona" opens it;
+  // the Slack target is on the Remote tab.
+  test("tabs are Remote · Persona · Mention · Avatar · Advanced, and Persona opens Persona", async () => {
+    const first = render(AgentSettings, props("persona"));
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Remote", "Persona", "Mention", "Avatar", "Advanced", "Sharing"]);
+    expect(screen.getByRole("tab", { name: "Persona" }).getAttribute("aria-selected")).toBe("true");
+    first.unmount();
+    render(AgentSettings, props("remote"));
     expect(screen.getByRole("tab", { name: "Remote" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByTestId("slack-remote-settings")).toBeTruthy();
     expect(screen.getByTestId("slack-remote-warning").textContent).toContain("posted to #ops");

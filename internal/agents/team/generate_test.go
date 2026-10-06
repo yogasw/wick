@@ -106,3 +106,45 @@ func TestPersonaImprove(t *testing.T) {
 		t.Error("unknown field or brief label leaked into the prompt")
 	}
 }
+
+func TestPersonaFromResultAccessAndMentions(t *testing.T) {
+	d, err := PersonaFromResult(wfprovider.StructuredResult{OK: true, Parsed: map[string]any{
+		"name": "Notifier", "system_prompt": "x",
+		"connectors":       []any{"slack", "loki"},
+		"write_connectors": []any{"slack", "github"},
+		"mention_from":     "LIST",
+		"mention_allow":    []any{"@Log-Hunter", "log-hunter", ""},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// write is a subset of the suggestions: github was never suggested
+	if len(d.WriteConnectors) != 1 || d.WriteConnectors[0] != "slack" {
+		t.Errorf("write %v", d.WriteConnectors)
+	}
+	if d.MentionFrom != "list" || len(d.MentionAllow) != 1 || d.MentionAllow[0] != "log-hunter" {
+		t.Errorf("mention %q %v", d.MentionFrom, d.MentionAllow)
+	}
+
+	// an allow list only means something with "list"; an unknown policy is dropped
+	d, _ = PersonaFromResult(wfprovider.StructuredResult{OK: true, Parsed: map[string]any{
+		"name": "x", "system_prompt": "x", "mention_from": "everyone", "mention_allow": []any{"a"},
+	}})
+	if d.MentionFrom != "" || len(d.MentionAllow) != 0 || d.WriteConnectors == nil {
+		t.Errorf("got %q %v %v", d.MentionFrom, d.MentionAllow, d.WriteConnectors)
+	}
+}
+
+func TestPersonaPromptNamesAgentsAndCaptain(t *testing.T) {
+	p := personaPrompt(aigen.Input{Text: "lead the team", Fields: map[string]string{
+		"agents": "log-hunter: reads logs", "captain": "true",
+	}})
+	for _, want := range []string{"AVAILABLE AGENTS:\nlog-hunter: reads logs", "THIS AGENT IS THE CAPTAIN", "write_connectors", "mention_from"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt lacks %q", want)
+		}
+	}
+	if p := personaPrompt(aigen.Input{Text: "x"}); !strings.Contains(p, "AVAILABLE AGENTS: (none yet") || strings.Contains(p, "THIS AGENT IS THE CAPTAIN") {
+		t.Errorf("no-agents prompt:\n%s", p)
+	}
+}

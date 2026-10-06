@@ -3037,8 +3037,8 @@ func NewServer() *Server {
 	}
 	pluginsHandler.RegisterRoutes(r, authMidd)
 
-	// Service plugins (plugins/services/<key>) are always-on: supervised
-	// with restart backoff and served at /x/{key}/* with per-route auth
+	// Service plugins (plugins/services/<key>) are supervised with restart
+	// backoff (and auto-off sleep when it applies) and served at /x/{key}/* with per-route auth
 	// (public / admin-issued token / wick session). Admin API under
 	// /manager/api/service-plugins; plugin callbacks under /x/-/api/.
 	servicePlugins := serviceplugin.NewHost(serviceplugin.NewTokens(filepath.Join(connplugin.RootDir(), "service-tokens.json")), "")
@@ -3058,6 +3058,37 @@ func NewServer() *Server {
 	r.Handle("/x/", servicePlugins)
 	serviceplugin.SetDefault(servicePlugins)
 	servicePlugins.Start()
+	// Uninstall stops what is running before the files go: the service
+	// process, the tool runner, and drops a job / tool from its registry so
+	// it is no longer scheduled or listed.
+	pluginsHandler.SetUninstall(func(ctx context.Context, kind, key string) {
+		switch kind {
+		case wickplugin.KindService:
+			servicePlugins.Remove(key)
+		case wickplugin.KindTool:
+			toolPlugins.Remove(key)
+			tools.Unregister(key)
+		case wickplugin.KindJob:
+			jobs.Unregister(key)
+		}
+	}, func(key string) bool {
+		for _, m := range connectors.All() {
+			if m.Meta.Key == key {
+				return true
+			}
+		}
+		for _, m := range tools.All() {
+			if m.Meta.Key == key {
+				return true
+			}
+		}
+		for _, m := range jobs.All() {
+			if m.Meta.Key == key {
+				return true
+			}
+		}
+		return false
+	})
 
 	// Plugin sources (url / GitHub releases): Admin → Plugins → Sources,
 	// Available, Add (upload / link / GitHub). Installs land in the kind
@@ -3089,9 +3120,11 @@ func NewServer() *Server {
 				return false, "not loaded (reload wick)"
 			}
 			st := svc.Sup.Status()
-			return st.State == "running", st.State
+			// sleeping = stopped by auto-off; the next request wakes it.
+			return st.State == serviceplugin.StateRunning || st.State == serviceplugin.StateSleeping, st.State
 		}),
 	}
+	servicePlugins.Audit = func(actor, key, detail string) { pluginSources.Record(actor, "service_auto_off", key, detail) }
 	pluginSourcesHandler.RegisterRoutes(r, authMidd)
 	pluginsHandler.SetSources(pluginSourcesHandler)
 	go pluginSources.Run(context.Background(), time.Minute)

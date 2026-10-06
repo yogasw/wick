@@ -18,8 +18,8 @@ import (
 	"github.com/spf13/cobra"
 
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
-	"github.com/yogasw/wick/pkg/safeexec"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // pluginBuildTargets is the canonical OS/arch matrix `wick plugin build --all`
@@ -530,13 +530,18 @@ func readPluginVersion(kind, name string) string {
 }
 
 // zipPluginFiles writes a zip at dst containing the given arcname->srcpath
-// entries, in deterministic name order.
+// entries, in deterministic name order. The zip is a release artifact, so it
+// is 0644 whatever the umask; entries are 0755 when the source is executable
+// (the plugin binary) and 0644 otherwise (plugin.json, cosign sidecars).
 func zipPluginFiles(dst string, files map[string]string) error {
-	f, err := os.Create(dst)
+	f, err := os.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	if err := f.Chmod(0o644); err != nil {
+		return err
+	}
 	zw := zip.NewWriter(f)
 	names := make([]string, 0, len(files))
 	for n := range files {
@@ -557,6 +562,11 @@ func zipPluginFiles(dst string, files map[string]string) error {
 		}
 		hdr.Name = arc
 		hdr.Method = zip.Deflate
+		if info.Mode()&0o111 != 0 {
+			hdr.SetMode(0o755)
+		} else {
+			hdr.SetMode(0o644)
+		}
 		w, err := zw.CreateHeader(hdr)
 		if err != nil {
 			zw.Close()

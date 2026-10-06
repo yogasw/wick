@@ -66,6 +66,19 @@ type Reopener interface {
 	Reopen(h Handle)
 }
 
+// Injector is a Source whose remote takes a message while a turn still
+// runs. Inject is called for a message that arrives while h's turn is
+// running: the remote gets it at once and its answer flows on h's stream,
+// in the same turn. ErrInjectUnsupported (or any error) makes the runner
+// queue the message as the next turn instead, as for a source without it.
+type Injector interface {
+	Inject(ctx context.Context, h Handle, turn Turn) error
+}
+
+// ErrInjectUnsupported is returned by Inject when this remote cannot take
+// a message mid-turn after all (e.g. a plugin that does not declare it).
+var ErrInjectUnsupported = errors.New("remote: inject not supported")
+
 // Description is what Describe shows before an agent is added.
 type Description struct {
 	Name    string `json:"name"`

@@ -101,6 +101,17 @@ func (s *StateStore) SetOrigin(key, origin string) error {
 	return s.db.Model(&entity.PluginState{}).Where("key = ?", key).Update("origin", origin).Error
 }
 
+// ClearInstalled forgets the installed and available versions of key after
+// an uninstall, so Check updates stops reporting it. The row itself stays
+// (enable flag, origin, source link) and a reinstall records a version again.
+func (s *StateStore) ClearInstalled(key string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Model(&entity.PluginState{}).Where("key = ?", key).
+		Updates(map[string]any{"installed_version": "", "available_version": ""}).Error
+}
+
 // Get returns the overlay row for key; ok=false when there is none.
 func (s *StateStore) Get(key string) (entity.PluginState, bool) {
 	var st entity.PluginState

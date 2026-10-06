@@ -38,7 +38,8 @@
   import RemoteAgentPanel from "./team/RemoteAgentPanel.svelte";
   import AgentSharingTab from "./AgentSharingTab.svelte";
   import SlackRemotePanel from "./team/SlackRemotePanel.svelte";
-  import { isRemoteAgent, isSlackRemote, remoteSettingsTab, remoteSettingsTabs } from "../remoteAgent.js";
+  import PluginRemotePanel from "./team/PluginRemotePanel.svelte";
+  import { isRemoteAgent, isSlackRemote, remoteSettingsTab, remoteSettingsTabs, PLUGIN_REMOTE_KIND } from "../remoteAgent.js";
 
   type Props = {
     base: string;
@@ -844,6 +845,8 @@
   {:else if view === "advanced" && slack}
     <SlackRemotePanel {base} {agent} section="advanced" onChanged={(r) => onSaved({ ...saved, slack_remote: r })} />
     {@render dangerZone()}
+  {:else if view === "remote" && agent.kind === PLUGIN_REMOTE_KIND}
+    <PluginRemotePanel {base} {agent} />
   {:else if view === "remote"}
     <RemoteAgentPanel {base} {agent} section="remote" onChanged={(r) => onSaved({ ...saved, remote: r })} />
   {:else if view === "advanced" && remote}

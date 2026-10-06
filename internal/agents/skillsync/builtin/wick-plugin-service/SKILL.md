@@ -1,6 +1,6 @@
 ---
 name: wick-plugin-service
-description: Use when building, changing, testing or debugging a wick SERVICE plugin — the always-on plugin wick supervises and serves at /x/{key}/* (webhook receivers, public or token APIs, pages for signed-in users, A2A / Team remote agents). Covers the pkg/service Module (Meta, Routes, Configs, CallbackScopes, Register, RemoteSource), route auth (public / token / wick-session) and longest-prefix matching, the headers wick strips and injects (X-Wick-Base, X-Wick-User-*), Env and live config, the callback token and /x/-/api/, access tokens, the supervisor lifecycle and backoff, the admin page, the Team remote agent source, a2aservice, testing with service.Handler, and pitfalls. For the other plugin kinds and packaging use wick-plugin-authoring; for installing and operating plugins use wick-plugins.
+description: Use when building, changing, testing or debugging a wick SERVICE plugin — the always-on plugin wick supervises and serves at /x/{key}/* (webhook receivers, public or token APIs, pages for signed-in users, A2A / Team remote agents). Covers the pkg/service Module (Meta, Routes, Configs, CallbackScopes, Register, RemoteSource), route auth (public / token / wick-session) and longest-prefix matching, the headers wick strips and injects (X-Wick-Base, X-Wick-User-*), Env and live config, the callback token and /x/-/api/, access tokens, the supervisor lifecycle, backoff and auto-off (sleep while idle, wake on the next request), the admin page, the Team remote agent source, a2aservice, testing with service.Handler, and pitfalls. For the other plugin kinds and packaging use wick-plugin-authoring; for installing and operating plugins use wick-plugins.
 ---
 
 # Service plugins — always-on at `/x/{key}/*`
@@ -15,7 +15,8 @@ description: Use when building, changing, testing or debugging a wick SERVICE pl
 A service plugin is a plain `http.Handler` in its own process. wick:
 
 1. starts it at boot (and after a reload) and keeps it running — a crash is
-   restarted with backoff (`internal/services/plugin/supervisor.go`);
+   restarted with backoff (`internal/services/plugin/supervisor.go`); with
+   auto-off it may sleep while idle and wake on the next request;
 2. reverse-proxies `/x/{key}/*` to it over a unix socket, deciding auth **per
    route** from the manifest (`host.go` `ServeHTTP`);
 3. pushes its config over the gRPC control service (`Configure`) after every
@@ -176,16 +177,65 @@ rotated or revoked, `last_used` tracked.
   manifests without a `service` section, and anything failing `VerifyManifest`.
 - `Host.Start` starts every supervisor once; `Shutdown` stops all in parallel
   before a reload hands over, so no plugin outlives its wick.
-- States: `stopped`, `starting`, `running`, `backoff`.
+- States: `stopped`, `starting`, `running`, `backoff`, `sleeping`.
 - Restart backoff: `BackoffMin = 1s`, doubled per failure up to
   `BackoffMax = 30s`; reset to 1 s when the process stayed up ≥ 1 minute.
 - Stop: SIGTERM, `StopGrace = 5s`, then kill; the socket is removed.
 - Socket: `svc-<key>-<n>.sock` in the plugin run dir.
 - Log: stderr kept as the last `LogLines = 200` lines, plus `[wick]` lines
   (running, process exited, restarting in …, config updated).
+- Auto-off: see below. A sleep is not a crash — no backoff, no restart count.
 - Installing or updating a service (upload, link or source) loads it from its
   new manifest and starts it at once — no wick reload (`Host.Install`, called
   from `OnInstalled` in `server.go`). The old process is stopped first.
+
+## Auto off (sleep while idle)
+
+Declared by the plugin, decided by the admin:
+
+```go
+AutoOff: service.AutoOff{Supported: true, DefaultIdle: 15 * time.Minute}
+// or, when it cannot:
+AutoOff: service.AutoOff{Reason: "polls the upstream job queue every minute"}
+```
+
+- The zero value never auto-offs. It reaches wick as `auto_off` in the
+  manifest (`supported`, `reason`, `default_idle_seconds`).
+- **Supported = true** when nothing has to run without a request coming in
+  (no background worker, poller, scheduler or outbound listener) and state
+  worth keeping is persisted (files in the data dir, ids in wick). Webhooks are
+  *not* a reason to say no: the webhook request wakes the service.
+- **Supported = false + `Reason`** when work runs in the background; the admin
+  sees the reason on the service page.
+- Idle = no request in flight to `/x/{key}/*` or the remote RPC
+  (`/_wick/remote/*`: send, events, inject, cancel, describe…) and nothing
+  touched it for the idle limit. A remote turn's events stream stays open for
+  the whole turn (waiting on replies included), so a running turn keeps the
+  service awake. Every path goes through `Supervisor.Transport()`, which wraps
+  the round tripper to count requests until the response body is closed.
+- Sleep: the supervisor stops the process like an admin stop (SIGTERM, then
+  kill) and sets state `sleeping` (`Status.SleptAt`). The next request on any
+  path wakes it and waits for the boot (`WakeTimeout = 30s`, then 503);
+  requests arriving meanwhile share that one boot. `Status.LastWakeMS` keeps
+  how long the last wake took (shown as "last wake took ~Xs").
+- A cold start takes a few seconds. A webhook sender with a very tight timeout
+  (e.g. Slack interactivity / `trigger_id`, ~3 s) can time out on a wake —
+  such a plugin may still say Supported, but mention the risk in its README,
+  or the admin turns auto-off off.
+- Admin override per service (`POST /{key}/auto-off`
+  `{"mode":"default|on|off","idle_seconds":N,"confirm":bool}`, stored in
+  `service-tokens.json`): `default` follows the plugin, `off` forces
+  always-on, `on` forces auto-off — against a plugin that says it cannot this
+  needs `confirm: true` (409 otherwise) and the page shows a red warning with
+  the plugin's reason. Idle limit: 60 s – 7 days, 0 = the plugin's default.
+  Every change is written to the plugin audit log (`service_auto_off`, actor,
+  old → new).
+- A service stopped by the admin is never woken by a request (503 as before);
+  the admin's Start wakes a sleeping one.
+- Page: badge "Auto-off: on (plugin default, idle 15m)" / "on (forced, …)" /
+  "off (forced)" / "off (plugin default)", a Default / On / Off control with
+  the idle limit, a Sleeping banner (asleep since, last active); the Installed
+  plugins list marks a sleeping service with a Sleeping badge.
 
 ## RemoteSource (Team remote agent)
 
@@ -221,12 +271,13 @@ at `POST /`, streaming chunks from `reply(ctx, contextID, text, chunks)`.
 
 `RegisterAdmin` under `/manager/api/service-plugins` (admin only):
 `GET` (list), `GET /{key}` (full view: configs, tokens, logs), `POST /{key}/config`,
+`POST /{key}/auto-off` (see Auto off),
 `POST /{key}/{start|stop|restart|callback-revoke|callback-allow}`,
 `POST /{key}/tokens` (`{"name"}` → `{token, secret}`),
 `POST /{key}/tokens/{id}/rotate`, `DELETE /{key}/tokens/{id}`.
 
 UI: *Service plugins* section on the manager Connectors page → `/services/{key}`
-(`ServiceDetail.svelte`): status + Stop/Start/Restart, Configuration, Routes,
+(`ServiceDetail.svelte`): status + Stop/Start/Restart, Auto-off, Configuration, Routes,
 Access tokens, Callback to wick, Log.
 
 ## Testing

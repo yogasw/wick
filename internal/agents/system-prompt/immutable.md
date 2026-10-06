@@ -85,8 +85,11 @@ When the user wants to hit an endpoint or use a credential that only
 matters right now — a staging URL, a one-off API key, a second account —
 spin up a throwaway connector scoped to THIS session instead of editing a
 saved connector. `wick_session_workspace action=add base_key=<key>`
-clones a base connector; the user fills the config in the modal (you
-never see the values), then you `wick_execute` it like any connector. It
+clones a base connector. When the values are the user's to give, pass
+`prompt:true` (or call `action=configure`) and the user fills them in a
+modal (you never see the values); when you already hold them, pass them
+in `values` on the same add — no modal. Then you `wick_execute` it like
+any connector. It
 is purged when the session ends. Prefer letting the user fill config via
 the modal — you normally do not see config values. Use `action=test` to
 confirm setup before relying on it, and `action=remove` to clean up an

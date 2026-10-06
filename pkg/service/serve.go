@@ -26,8 +26,21 @@ func Manifest(mod Module) wickplugin.ServiceModule {
 		Configs:        mod.Configs,
 		CallbackScopes: mod.CallbackScopes,
 	}
+	if a := mod.AutoOff; a.Supported || a.Reason != "" || a.DefaultIdle > 0 {
+		sm.AutoOff = &wickplugin.ServiceAutoOff{Supported: a.Supported, Reason: a.Reason, DefaultIdleSeconds: int(a.DefaultIdle / time.Second)}
+	}
 	if mod.RemoteSource != nil {
 		sm.Capabilities = append(sm.Capabilities, wickplugin.CapRemoteSource)
+		if _, ok := mod.RemoteSource.(RemoteInjector); ok {
+			sm.Capabilities = append(sm.Capabilities, wickplugin.CapRemoteInject)
+		}
+		if _, ok := mod.RemoteSource.(RemoteCanceler); ok {
+			sm.Capabilities = append(sm.Capabilities, wickplugin.CapRemoteCancel)
+		}
+		if _, ok := mod.RemoteSource.(RemoteSessionFielder); ok {
+			sm.Capabilities = append(sm.Capabilities, wickplugin.CapRemoteSessionFields)
+		}
+		sm.RemoteConfigs = mod.RemoteConfigs
 	}
 	return sm
 }
@@ -94,10 +107,65 @@ func mountRemote(mux *http.ServeMux, src RemoteSource) {
 		src.Done(body.Handle)
 		w.WriteHeader(http.StatusNoContent)
 	})
+	inj, canInject := src.(RemoteInjector)
+	mux.HandleFunc("POST "+wickplugin.RemotePathInject, func(w http.ResponseWriter, r *http.Request) {
+		if !canInject {
+			http.Error(w, "inject not supported", http.StatusNotImplemented)
+			return
+		}
+		var body wickplugin.RemoteInject
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Handle == "" {
+			http.Error(w, "bad inject", http.StatusBadRequest)
+			return
+		}
+		if err := inj.Inject(r.Context(), body.Handle, body.Text); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	canc, canCancel := src.(RemoteCanceler)
+	mux.HandleFunc("POST "+wickplugin.RemotePathCancel, func(w http.ResponseWriter, r *http.Request) {
+		if !canCancel {
+			http.Error(w, "cancel not supported", http.StatusNotImplemented)
+			return
+		}
+		var body struct {
+			Handle string `json:"handle"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Handle == "" {
+			http.Error(w, "bad cancel", http.StatusBadRequest)
+			return
+		}
+		if err := canc.Cancel(r.Context(), body.Handle); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	sf, hasFields := src.(RemoteSessionFielder)
+	mux.HandleFunc("POST "+wickplugin.RemotePathSessionFields, func(w http.ResponseWriter, r *http.Request) {
+		var body wickplugin.RemoteSessionFieldsRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		fields := []SessionField{}
+		if hasFields {
+			fields = append(fields, sf.SessionFields(body.Config)...)
+		}
+		writeJSON(w, map[string]any{"fields": fields})
+	})
 	mux.HandleFunc("GET "+wickplugin.RemotePathDescribe, func(w http.ResponseWriter, _ *http.Request) {
-		out := map[string]string{}
+		out := map[string]any{}
 		if d, ok := src.(Describer); ok {
 			out["name"], out["detail"] = d.Describe()
+		}
+		if canInject {
+			out["inject"] = true
+		}
+		if canCancel {
+			out["cancel"] = true
+		}
+		if hasFields {
+			out["session_fields"] = true
 		}
 		writeJSON(w, out)
 	})

@@ -17,6 +17,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/yogasw/wick/pkg/entity"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
@@ -45,6 +46,11 @@ type Module struct {
 	Meta    Meta
 	Routes  []Route
 	Configs []entity.Config
+	// RemoteConfigs are per-agent fields of a RemoteSource (e.g.
+	// entity.StructToConfigs(RemoteConfig{})): filled per remote agent in
+	// the wizard and handed to Send as RemoteTurn.Config. The plugin decides
+	// the fallback when one is empty, usually to its own Configs.
+	RemoteConfigs []entity.Config
 	// CallbackScopes are the wick REST scopes the plugin's callback token
 	// may use (see Env.Callback).
 	CallbackScopes []string
@@ -53,6 +59,30 @@ type Module struct {
 	// RemoteSource, when set, makes the plugin selectable as a Team remote
 	// agent source ("Plugin" in the Remote agent wizard).
 	RemoteSource RemoteSource
+	// AutoOff declares whether wick may stop the service while it is idle
+	// and wake it on the next request. The zero value never auto-offs.
+	AutoOff AutoOff
+}
+
+// AutoOff is a service's own say on being stopped while idle. wick counts
+// a service idle when no request to /x/{key}/* or the remote RPC is in
+// flight and no remote turn is open; after the idle limit it stops the
+// process (state "sleeping") and starts it again on the next request, which
+// waits for the boot. It is only the default: the wick admin can force
+// auto-off on or off per service.
+//
+// Set Supported only when nothing has to run without a request coming in:
+// no background worker, poller, scheduler or outbound listener, and any
+// state worth keeping is persisted (files, wick). Webhooks are fine, a
+// webhook request wakes the service — but a sender with a very tight
+// timeout (a few seconds) may time out during a cold start.
+type AutoOff struct {
+	Supported bool
+	// Reason tells the admin why the service cannot auto-off, e.g. "polls
+	// the job queue in the background". Shown when Supported is false.
+	Reason string
+	// DefaultIdle is the idle limit; 0 = 15 minutes.
+	DefaultIdle time.Duration
 }
 
 // RemoteTurn, RemoteEvent and RemoteSendResult are the wire types of the
@@ -61,6 +91,7 @@ type (
 	RemoteTurn       = wickplugin.RemoteTurn
 	RemoteEvent      = wickplugin.RemoteEvent
 	RemoteSendResult = wickplugin.RemoteSendResult
+	SessionField     = wickplugin.SessionField
 )
 
 // RemoteSource is what a service plugin implements to act as a Team remote
@@ -70,6 +101,32 @@ type RemoteSource interface {
 	Send(ctx context.Context, turn RemoteTurn) (RemoteSendResult, error)
 	Receive(ctx context.Context, handle string) (<-chan RemoteEvent, error)
 	Done(handle string)
+}
+
+// RemoteInjector is optionally implemented by a RemoteSource whose remote
+// takes a message while a turn still runs: Inject hands text to handle's
+// turn, and the answer flows on that turn's Receive stream. Without it wick
+// queues the message as the next turn.
+type RemoteInjector interface {
+	Inject(ctx context.Context, handle, text string) error
+}
+
+// RemoteCanceler is optionally implemented by a RemoteSource whose remote
+// can stop a running turn on its own side: Cancel is called when the turn is
+// stopped in wick. Without it a stop only ends wick's listening; the remote
+// may keep working.
+type RemoteCanceler interface {
+	Cancel(ctx context.Context, handle string) error
+}
+
+// RemoteSessionFielder is optionally implemented by a RemoteSource whose
+// new sessions take values before the first message (e.g. a repository and
+// a branch). SessionFields gets the agent's RemoteConfigs values (agentCfg)
+// so defaults can fall back from the agent's config to the plugin's own
+// Configs. The answers arrive on the first RemoteTurn.Options; report the
+// values really used on RemoteSendResult.Options.
+type RemoteSessionFielder interface {
+	SessionFields(agentCfg map[string]string) []SessionField
 }
 
 // Describer optionally names the remote agent in the wizard.

@@ -44,6 +44,9 @@ type Host struct {
 	// Config overrides the values pushed to the plugin after spawn (tests);
 	// nil reads them from Configs.
 	Config func(key string) map[string]string
+	// Audit records an admin change of a service setting (actor, service
+	// key, what changed); nil = log only.
+	Audit func(actor, key, detail string)
 
 	sockDir  string
 	spawn    spawnFn
@@ -132,6 +135,20 @@ func (h *Host) Install(dir, key string, enabled func(string) bool, record func(k
 	return false
 }
 
+// Remove stops service key and forgets it, ahead of an uninstall deleting
+// its files. Reports whether it was loaded.
+func (h *Host) Remove(key string) bool {
+	s, ok := h.Get(key)
+	if !ok {
+		return false
+	}
+	s.Sup.Stop()
+	h.mu.Lock()
+	delete(h.services, key)
+	h.mu.Unlock()
+	return true
+}
+
 // loadFound validates one scanned plugin and registers it (not started).
 func (h *Host) loadFound(f connplugin.Found, enabled func(string) bool, record func(key, kind, version string) error) *Service {
 	if err := wickplugin.ValidateKey(f.Key); err != nil {
@@ -163,6 +180,7 @@ func (h *Host) Add(key, version string, sm wickplugin.ServiceModule, binary stri
 	sup := newSupervisor(key, binary, h.sockDir, h.spawn)
 	sup.env = func() []string { return h.processEnv(key, sm.CallbackScopes) }
 	sup.cfg = func() map[string]string { return h.configValues(key) }
+	sup.autoOff = h.autoOffFunc(key)
 	if h.Configs != nil && len(sm.Configs) > 0 {
 		if err := h.Configs.EnsureOwned(context.Background(), ConfigOwner(key), sm.Configs...); err != nil {
 			log.Warn().Str("service", key).Err(err).Msg("service plugin: config seed failed")

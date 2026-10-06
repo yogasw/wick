@@ -44,6 +44,19 @@ type PluginsHandler struct {
 	// the configs cache for the new key afterwards (configs.EnsureOwned).
 	replacer *pluginreplace.Migrator
 	refresh  func(ctx context.Context, owner string, rows ...pkgentity.Config) error
+	// unload stops a plugin before its files go: a service's supervised
+	// process, a job's schedule, a tool's runner. nil = nothing to stop.
+	unload func(ctx context.Context, kind, key string)
+	// builtin reports whether key is a built-in (non-plugin) module, which
+	// Uninstall refuses instead of answering "not installed".
+	builtin func(key string) bool
+}
+
+// SetUninstall wires what Uninstall needs beyond deleting files: unload
+// stops the running plugin first, builtin guards built-in keys.
+func (h *PluginsHandler) SetUninstall(unload func(ctx context.Context, kind, key string), builtin func(key string) bool) *PluginsHandler {
+	h.unload, h.builtin = unload, builtin
+	return h
 }
 
 // SetReplaceRefresh wires the configs-cache refresh the replace endpoint
@@ -130,6 +143,10 @@ type pluginEntry struct {
 type pluginsListResponse struct {
 	Installed []pluginEntry `json:"installed"`
 	Available []pluginEntry `json:"available"`
+	// Catalog is every catalog entry, installed or not (Installed set on the
+	// ones already on disk) — the Marketplace lists the whole catalog, while
+	// Available keeps meaning "not installed yet" for the connector pages.
+	Catalog []pluginEntry `json:"catalog"`
 	// RegistryError is set (and Available empty) when the marketplace fetch
 	// failed — the SPA shows installed plugins regardless and surfaces this.
 	RegistryError string `json:"registry_error,omitempty"`
@@ -147,6 +164,7 @@ func (h *PluginsHandler) apiList(w http.ResponseWriter, r *http.Request) {
 	resp := pluginsListResponse{
 		Installed: []pluginEntry{},
 		Available: []pluginEntry{},
+		Catalog:   []pluginEntry{},
 		IsAdmin:   user != nil && user.IsAdmin(),
 	}
 
@@ -206,11 +224,8 @@ func (h *PluginsHandler) apiList(w http.ResponseWriter, r *http.Request) {
 		resp.Installed = append(resp.Installed, entry)
 	}
 
-	// Available: catalog entries not already installed.
+	// Catalog: every entry; Available: the ones not already installed.
 	for _, a := range avail {
-		if installedKeys[a.Key] {
-			continue
-		}
 		osArch := make([]string, 0, len(a.Assets))
 		for oa := range a.Assets {
 			osArch = append(osArch, oa)
@@ -219,17 +234,21 @@ func (h *PluginsHandler) apiList(w http.ResponseWriter, r *http.Request) {
 		// Same connectorCategory() built-ins use — Available.DefaultTags is
 		// the identical []entity.DefaultTag (= tool.DefaultTag) type.
 		cat, _, _ := connectorCategory(a.DefaultTags, false)
-		resp.Available = append(resp.Available, pluginEntry{
+		entry := pluginEntry{
 			Key:         a.Key,
 			Name:        a.Name,
 			Description: a.Description,
 			Version:     a.Version,
-			Installed:   false,
+			Installed:   installedKeys[a.Key],
 			ArchOK:      a.AssetFor(host) != "",
 			Host:        host,
 			OSArch:      osArch,
 			Category:    cat,
-		})
+		}
+		resp.Catalog = append(resp.Catalog, entry)
+		if !entry.Installed {
+			resp.Available = append(resp.Available, entry)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -372,28 +391,53 @@ func (h *PluginsHandler) setEnabled(w http.ResponseWriter, r *http.Request, enab
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key": key, "enabled": enabled})
 }
 
+// apiRemove uninstalls plugin {key} of any kind. The kind folders are
+// scanned like the Installed list does; ?kind= picks one when a connector and
+// a tool share a key. The running plugin is unloaded first (a service is
+// stopped before its files go), then the folder is deleted, the recorded
+// version is cleared and connectors reconcile. Config rows are kept, so a
+// reinstall picks them up again.
 func (h *PluginsHandler) apiRemove(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if key == "" {
 		http.Error(w, "key required", http.StatusBadRequest)
 		return
 	}
-	found, err := connplugin.Scan(h.dir)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	for _, f := range found {
-		if f.Key == key {
+	want := r.URL.Query().Get("kind")
+	for _, kind := range wickplugin.Kinds {
+		if want != "" && wickplugin.NormalizeKind(want) != kind {
+			continue
+		}
+		dir := connplugin.KindDir(kind)
+		if kind == wickplugin.KindConnector {
+			dir = h.dir
+		}
+		found, err := connplugin.ScanKind(dir, kind)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, f := range found {
+			if f.Key != key {
+				continue
+			}
+			if h.unload != nil {
+				h.unload(r.Context(), kind, key)
+			}
 			if err := os.RemoveAll(filepath.Dir(f.BinaryPath)); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			// Reconcile so the connector drops out of the lists now.
+			_ = h.store.ClearInstalled(key)
+			// Reconcile so a connector drops out of the lists now.
 			h.reload(r.Context())
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": key})
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": key, "kind": kind})
 			return
 		}
+	}
+	if h.builtin != nil && h.builtin(key) {
+		http.Error(w, "built-in, not a plugin: it cannot be uninstalled", http.StatusConflict)
+		return
 	}
 	http.Error(w, "plugin not installed", http.StatusNotFound)
 }

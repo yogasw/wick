@@ -254,6 +254,11 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 		redirect("/manager/jobs/"+r.PathValue("key"))(w, r)
 	}))
 
+	// Plugins: sources, install/upload, updates, enable/disable for every
+	// plugin kind. The page hosts the manager SPA's plugins view; its JSON
+	// API stays at /manager/api/plugins (admin-gated per action there).
+	mux.Handle("GET /admin/plugins", admin(h.pluginsPage))
+
 	// Job actions
 	mux.Handle("POST /admin/jobs/{path}/disabled", admin(h.setJobDisabled))
 	mux.Handle("POST /admin/jobs/{path}/tags", admin(h.setJobTags))

@@ -26,6 +26,7 @@
   import ManagedBinaryPanel from "$lib/components/ManagedBinaryPanel.svelte";
   import TerminalPanel from "$lib/components/TerminalPanel.svelte";
   import LiveModelsPanel from "$lib/components/LiveModelsPanel.svelte";
+  import IdleCompactCard from "$lib/components/IdleCompactCard.svelte";
 
 
   type Props = {
@@ -238,8 +239,14 @@
   // list only shows when model selection is enabled (mirrors the backend
   // config-tag `visible_when=model_select:true`). The toggle's live value
   // comes from fieldValues so it reacts without a reload.
+  const isIdleCompactField = (f: ConfigFieldDTO) => f.Key === "idle_compact" || f.Key.startsWith("idle_compact_");
+  let idleCompactFields = $derived(data ? data.ConfigFields.filter(isIdleCompactField) : []);
+
   function fieldVisible(f: ConfigFieldDTO): boolean {
     if (f.Key === "models") return fieldValues["model_select"] === "true";
+    // Idle compact lives in its own card (IdleCompactCard), editable by
+    // managers as well as admins.
+    if (isIdleCompactField(f)) return false;
     return true;
   }
 
@@ -265,7 +272,7 @@
     auto_retry_model: "auto-retry-model-toggle",
   };
 
-  let simpleFields = $derived(data ? data.ConfigFields.filter((f) => isSimpleField(f) && !isModelField(f)) : []);
+  let simpleFields = $derived(data ? data.ConfigFields.filter((f) => isSimpleField(f) && !isModelField(f) && fieldVisible(f)) : []);
   let valueListFields = $derived(data ? data.ConfigFields.filter((f) => isValueListEditor(f) && !isModelField(f) && fieldVisible(f)) : []);
   // `models` is a 2-column (id|desc) kvlist, so it matches isKeyValueEditor
   // too — exclude it here as well or the Model selection card's list renders
@@ -844,6 +851,10 @@
          inert, and the API refuses the write in any case. The Connection
          panel above stays live, because reconnecting is a manage grant,
          not an edit. -->
+    {#if idleCompactFields.length > 0 && (!readOnly || data?.CanManage)}
+      <IdleCompactCard {base} {type} {name} fields={idleCompactFields} onSaved={() => load(true)} />
+    {/if}
+
     {#if readOnly}
       <!-- Manager view: what they came for is the Connection panel above.
            The configuration is shown as a plain summary — no inputs, no
@@ -879,7 +890,7 @@
           <span class="text-black-900 dark:text-white-100">{data.Instance.Disabled ? "disabled" : "enabled"}</span>
         </div>
         <p class="pt-2 text-[11px] text-black-700 dark:text-black-600">
-          Editing a provider's configuration is admin-only. You can reconnect this account and re-check its usage above.
+          Editing a provider's configuration is admin-only. You can reconnect this account, re-check its usage and tune compact when idle above.
         </p>
       </div>
     {:else}

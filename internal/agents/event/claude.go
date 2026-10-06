@@ -87,6 +87,13 @@ type claudeRaw struct {
 	// Detail is a system remote_status line's label: what the remote
 	// says it is doing ("reading the code…").
 	Detail string `json:"detail,omitempty"`
+	// QueueID / QueueState are a system remote_queue line's message and
+	// where it stands (its text is in Text).
+	QueueID    string `json:"queue_id,omitempty"`
+	QueueState string `json:"queue_state,omitempty"`
+	Text       string `json:"text,omitempty"`
+	// LinkURL is a system remote_link line's URL.
+	LinkURL string `json:"url,omitempty"`
 
 	// `assistant` and `user` wrap content blocks under .message.content
 	Message *claudeMessage `json:"message,omitempty"`
@@ -368,6 +375,12 @@ func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 		}
 		// Its progress label shows as the turn's thinking — what the
 		// remote is doing, never part of the reply.
+		if raw.Subtype == "remote_queue" && raw.QueueID != "" {
+			return AgentEvent{Type: RemoteQueue, Queue: &QueueInfo{ID: raw.QueueID, State: raw.QueueState, Text: raw.Text}, Raw: trimmed}, nil
+		}
+		if raw.Subtype == "remote_link" && raw.LinkURL != "" {
+			return AgentEvent{Type: RemoteLink, Text: raw.LinkURL, Raw: trimmed}, nil
+		}
 		if raw.Subtype == "remote_status" && raw.Detail != "" {
 			return AgentEvent{Type: Thinking, Text: raw.Detail + "\n", Raw: trimmed}, nil
 		}

@@ -343,12 +343,14 @@ func saveProviderConfigKey(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireProviderAdmin(c) {
-		return
-	}
 	t := provider.Type(c.PathValue("type"))
 	name := c.PathValue("name")
 	key := c.PathValue("key")
+	// Idle compact is housekeeping on the account, not its configuration:
+	// whoever may reconnect the instance may also tune it.
+	if !(provider.IsIdleCompactKey(key) && canManageProvider(c, t, name)) && !requireProviderAdmin(c) {
+		return
+	}
 	ins, err := provider.Find(t, name)
 	if err != nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})

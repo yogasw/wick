@@ -51,9 +51,14 @@ const props = (tab: SettingsTab) => ({
 describe("AgentSettings › A2A remote", () => {
   beforeEach(() => { update.mockClear(); refresh.mockClear(); get.mockClear(); });
 
-  test("tabs are Remote A2A · Mention · Avatar · Advanced, and Persona opens Remote A2A", async () => {
-    render(AgentSettings, props("persona"));
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Remote A2A", "Mention", "Avatar", "Advanced", "Sharing"]);
+  // A remote agent has its own Persona tab now, so "persona" opens it;
+  // the remote details are on the Remote A2A tab.
+  test("tabs are Remote A2A · Persona · Mention · Avatar · Advanced, and Persona opens Persona", async () => {
+    const first = render(AgentSettings, props("persona"));
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Remote A2A", "Persona", "Mention", "Avatar", "Advanced", "Sharing"]);
+    expect(screen.getByRole("tab", { name: "Persona" }).getAttribute("aria-selected")).toBe("true");
+    first.unmount();
+    render(AgentSettings, props("remote"));
     expect(screen.getByRole("tab", { name: "Remote A2A" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByTestId("remote-card").textContent).toContain("v1.4.0");
     expect(screen.getByTestId("remote-url").textContent).toBe(info.card_url);

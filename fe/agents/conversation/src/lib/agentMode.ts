@@ -30,6 +30,9 @@ export type AgentMode = {
   /** A Slack remote agent's id: its timed-out or unmarked turns get a
       "Cek ulang" button that reads the Slack thread again. */
   recheckAgentId?: string;
+  /** A plugin remote agent's id: DetailView shows the session fields its
+      chat started with (e.g. repository and branch) read-only. */
+  sessionFieldsAgentId?: string;
   /** Called instead of DetailView's own push("/") after the session is
       deleted: in the Agents app that path is the /sessions list, i.e. it
       would throw the user out of the app. */

@@ -2318,6 +2318,27 @@ type ActiveEntry struct {
 // the agent is not currently active — returns nil in that case.
 // The normal onAgentExit hook still fires, releasing the slot and
 // draining the queue.
+// CancelQueued drops a message queued behind sessionID's running remote
+// turn (id from its remote_queue line) before it is sent; false when none
+// of the session's agents holds it.
+func (p *Pool) CancelQueued(sessionID, id string) bool {
+	p.mu.Lock()
+	prefix := sessionID + "::"
+	var entries []*runEntry
+	for k, e := range p.active {
+		if strings.HasPrefix(k, prefix) {
+			entries = append(entries, e)
+		}
+	}
+	p.mu.Unlock()
+	for _, e := range entries {
+		if e.agent != nil && e.agent.CancelQueued(id) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Pool) Kill(sessionID, agentName string) error {
 	return p.KillBy(sessionID, agentName, "", "")
 }

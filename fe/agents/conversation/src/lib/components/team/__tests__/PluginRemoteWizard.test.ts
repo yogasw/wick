@@ -46,4 +46,49 @@ describe("PluginRemoteWizard", () => {
     await fireEvent.click(screen.getByTestId("remote-source-a2a"));
     expect(p.onType).toHaveBeenCalledWith("remote");
   });
+
+  test("renders the plugin's remote_configs; an empty required field blocks Create", async () => {
+    sources = [{
+      key: "jules", name: "Jules", version: "0.2.0", state: "running",
+      remote_configs: [
+        { key: "api_key", value: "", is_secret: true, has_value: false, required: false, description: "Agent key." },
+        { key: "region", value: "", is_secret: false, has_value: false, required: true },
+      ],
+    }];
+    const p = props();
+    render(PluginRemoteWizard, p);
+    await waitFor(() => expect(screen.getByTestId("plugin-config-region")).toBeTruthy());
+    const key = screen.getByLabelText(/api_key/) as HTMLInputElement;
+    expect(key.type).toBe("password");
+    expect(screen.getByTestId("plugin-config-api_key").textContent).toContain("optional");
+    expect(screen.getByTestId("plugin-config-api_key").textContent).toContain("Agent key.");
+    expect(screen.getByTestId("plugin-config-region").textContent).toContain("*");
+    const btn = screen.getByRole("button", { name: "Create agent" }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    await fireEvent.input(key, { target: { value: "k-1" } });
+    await fireEvent.input(screen.getByLabelText(/region/), { target: { value: "asia" } });
+    expect(btn.disabled).toBe(false);
+    await fireEvent.click(btn);
+    await waitFor(() => expect(p.onCreated).toHaveBeenCalled());
+    expect(create).toHaveBeenCalledWith("/tools/agents", { plugin_key: "jules", config: { api_key: "k-1", region: "asia" } });
+  });
+
+  test("only optional fields (Jules): Create works with nothing filled", async () => {
+    sources = [{
+      key: "jules", name: "Jules", version: "0.2.0", state: "running",
+      remote_configs: [
+        { key: "api_key", value: "", is_secret: true, has_value: false, required: false },
+        { key: "source", value: "", is_secret: false, has_value: false, required: false },
+      ],
+    }];
+    const p = props();
+    render(PluginRemoteWizard, p);
+    await waitFor(() => expect(screen.getByTestId("plugin-config-source")).toBeTruthy());
+    expect(screen.getAllByTestId("plugin-config-optional")).toHaveLength(2);
+    const btn = screen.getByRole("button", { name: "Create agent" }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    await fireEvent.click(btn);
+    await waitFor(() => expect(p.onCreated).toHaveBeenCalled());
+    expect(create).toHaveBeenCalledWith("/tools/agents", { plugin_key: "jules", config: { source: "" } });
+  });
 });

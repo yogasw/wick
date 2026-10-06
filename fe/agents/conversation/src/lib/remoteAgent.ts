@@ -75,6 +75,11 @@ export function isA2ARemote(a: Pick<AgentItem, "kind"> | null | undefined): bool
   return a?.kind === REMOTE_KIND;
 }
 
+/** A plugin remote agent (a service plugin's remote_source). */
+export function isPluginRemote(a: Pick<AgentItem, "kind"> | null | undefined): boolean {
+  return a?.kind === PLUGIN_REMOTE_KIND;
+}
+
 export function isSlackRemote(a: Pick<AgentItem, "kind"> | null | undefined): boolean {
   return a?.kind === SLACK_REMOTE_KIND;
 }
@@ -231,4 +236,27 @@ export function remoteSubtitle(a: Pick<AgentItem, "remote" | "kind" | "slack_rem
   const r = a.remote;
   if (!r) return "A2A remote";
   return ["A2A remote", r.card?.version ? `v${r.card.version}` : "", r.host].filter(Boolean).join(" · ");
+}
+
+/** The required plugin config fields still empty (a stored secret counts as
+    filled); Create / Save wait until there are none. */
+export function missingPluginConfig(
+  fields: { key: string; required: boolean; has_value: boolean; is_secret: boolean }[] | undefined,
+  values: Record<string, string>,
+): string[] {
+  return (fields ?? [])
+    .filter((f) => f.required && !(values[f.key] ?? "").trim() && !(f.is_secret && f.has_value))
+    .map((f) => f.key);
+}
+
+/** The body of a plugin config save: every field, secrets only when typed
+    (blank keeps the stored one). */
+export function pluginConfigBody(fields: { key: string; is_secret: boolean }[] | undefined, values: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of fields ?? []) {
+    const v = (values[f.key] ?? "").trim();
+    if (f.is_secret && !v) continue;
+    out[f.key] = v;
+  }
+  return out;
 }

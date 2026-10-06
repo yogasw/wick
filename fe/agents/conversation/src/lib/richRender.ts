@@ -759,7 +759,7 @@ export function artifactHeightReporter(id: string, clip = true): string {
     if(${clip ? "true" : "false"})de.style.overflow="hidden";
     window.addEventListener("message",function(e){
       var d=e.data;
-      if(d&&d.type==="wick-artifact-overflow"&&d.id===${JSON.stringify(id)})de.style.overflow=d.on?"auto":"hidden";
+      if(d&&d.type==="wick-artifact-overflow"&&d.id===${JSON.stringify(id)}){var o=d.on?"auto":"hidden"; if(de.style.overflow!==o)de.style.overflow=o;}
     });
     function h(){
       var b=document.body, max=de.scrollHeight;

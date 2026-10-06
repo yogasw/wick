@@ -42,6 +42,9 @@ const (
 	// or assistant status went away). Not shown; it lets the idle window
 	// run again.
 	StatusIdle = "idle"
+	// StatusForwarded: a message sent while the turn ran was handed to
+	// the remote (Injector); the runner emits it, never a source.
+	StatusForwarded = "forwarded"
 )
 
 // Event is one thing a remote did during a turn, the same shape for every

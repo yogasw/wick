@@ -136,6 +136,20 @@ func SeedInstanceConfig(ins Instance) []pkgentity.Config {
 	if ins.Type == TypeOpencode {
 		rows = append(rows, pkgentity.StructToConfigs(ExternalSkillsConfig{LoadExternalSkills: ins.LoadExternalSkills})...)
 	}
+	if CanCompact(ins.Type) {
+		trigger := ins.IdleCompactTrigger
+		if trigger == "" {
+			trigger = IdleCompactPercent
+		}
+		rows = append(rows, pkgentity.StructToConfigs(IdleCompactConfig{
+			IdleCompact:          ins.IdleCompact,
+			IdleCompactMinutes:   ins.IdleCompactMinutes,
+			IdleCompactTrigger:   trigger,
+			IdleCompactThreshold: ins.IdleCompactThreshold,
+			IdleCompactScope:     ins.IdleCompactScope,
+			IdleCompactMatch:     ins.IdleCompactMatch,
+		})...)
+	}
 	// CLI model picker — claude/codex/gemini only (wick uses WickModels).
 	if ins.Type != TypeWick {
 		rows = append(rows, pkgentity.StructToConfigs(CLIModelConfig{
@@ -195,6 +209,20 @@ func ApplyInstanceConfigKey(ins *Instance, key, value string) {
 		ins.AutoRetryModel = value == "true" || value == "on"
 	case "auth_from":
 		ins.AuthFrom = strings.TrimSpace(value)
+	case "idle_compact":
+		ins.IdleCompact = value == "true" || value == "on"
+	case "idle_compact_minutes":
+		n, _ := strconv.Atoi(strings.TrimSpace(value))
+		ins.IdleCompactMinutes = n
+	case "idle_compact_trigger":
+		ins.IdleCompactTrigger = strings.TrimSpace(value)
+	case "idle_compact_threshold":
+		n, _ := strconv.Atoi(strings.TrimSpace(value))
+		ins.IdleCompactThreshold = n
+	case "idle_compact_scope":
+		ins.IdleCompactScope = value
+	case "idle_compact_match":
+		ins.IdleCompactMatch = value
 	}
 }
 
@@ -207,6 +235,9 @@ func ensureOpencodeConfig(ins *Instance) *OpencodeConfig {
 
 // ValidateInstanceConfigKey rejects a value before it is saved; "" = fine.
 func ValidateInstanceConfigKey(key, value string) error {
+	if strings.HasPrefix(key, "idle_compact") {
+		return validateIdleCompactKey(key, value)
+	}
 	switch key {
 	case "extra_mcp_servers":
 		_, err := ParseExtraMCP(value)

@@ -324,6 +324,9 @@ type Channel struct {
 
 	mu    sync.Mutex
 	turns map[string]*turn
+	// liveLocks serialises, per session key, the live-message flush against
+	// the Done reconcile (see liveLock). Guarded by mu; created lazily.
+	liveLocks map[string]*sync.Mutex
 
 	// autoReply is the set of namespaced session keys whose thread has the
 	// 🤖 switch on its parent message. While a key is present, channel
@@ -2691,6 +2694,10 @@ func stripSilentMarker(text string) string {
 // continuation replies at Done. No-op when the buffer is unchanged since the
 // last flush, empty, or the turn is gone.
 func (s *Channel) flushLiveMessage(sessionKey string) {
+	lk := s.liveLock(sessionKey)
+	lk.Lock()
+	defer lk.Unlock()
+
 	s.mu.Lock()
 	t := s.turns[sessionKey]
 	if t == nil {
@@ -2753,6 +2760,25 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 	s.mu.Unlock()
 }
 
+// liveLock returns the session's live-reply lock. flushLiveMessage holds it
+// across its post, and the Done reconcile takes it before reading liveTS:
+// without it a flush still waiting on chat.postMessage when the turn ends
+// leaves liveTS empty, so finalizeReply posts the reply a second time and the
+// thread shows it twice, a fraction of a second apart.
+func (s *Channel) liveLock(sessionKey string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.liveLocks == nil {
+		s.liveLocks = make(map[string]*sync.Mutex)
+	}
+	lk := s.liveLocks[sessionKey]
+	if lk == nil {
+		lk = &sync.Mutex{}
+		s.liveLocks[sessionKey] = lk
+	}
+	return lk
+}
+
 // cancelQueueTimer stops the pending queue-reaction timer for the named
 // turn. sessionID is the namespaced session key (turns map key); channelID
 // and msgTS are native Slack identifiers for the reaction removal. If the
@@ -2791,6 +2817,13 @@ func (s *Channel) NotifyState(sessionKey, state, text string) {
 	// Restore the thread from the session's stored binding when this process
 	// has no turn for it, or the reply is dropped without a trace.
 	s.ensureTurn(sessionKey)
+	// Wait out a live flush still in flight so its message ts is recorded
+	// before the reconcile below decides between updating it and posting.
+	if state == "done" {
+		lk := s.liveLock(sessionKey)
+		lk.Lock()
+		defer lk.Unlock()
+	}
 	s.mu.Lock()
 	t := s.turns[sessionKey]
 	var channelID, threadTS, msgTS, liveTS, lastSent string

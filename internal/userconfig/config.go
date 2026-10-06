@@ -272,6 +272,17 @@ type ProviderInstance struct {
 	// on the next usable model instead of failing it. Off by default.
 	AutoRetryModel bool `json:"auto_retry_model,omitempty"`
 
+	// IdleCompact* run /compact on a session idle past the minutes whose
+	// context is past the threshold (percent of the window, or k tokens).
+	IdleCompact          bool   `json:"idle_compact,omitempty"`
+	IdleCompactMinutes   int    `json:"idle_compact_minutes,omitempty"`
+	IdleCompactTrigger   string `json:"idle_compact_trigger,omitempty"`
+	IdleCompactThreshold int    `json:"idle_compact_threshold,omitempty"`
+	// IdleCompactScope is skip, whitelist or all; IdleCompactMatch is
+	// the session pattern list it applies.
+	IdleCompactScope string `json:"idle_compact_scope,omitempty"`
+	IdleCompactMatch string `json:"idle_compact_match,omitempty"`
+
 	// AuthFrom (omp/opencode) names another instance of the same type whose
 	// login this one uses; empty = its own login. See provider/authshare.go.
 	AuthFrom string `json:"auth_from,omitempty"`

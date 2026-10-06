@@ -70,6 +70,23 @@ describe("HtmlArtifact", () => {
     expect(sent.at(-1)).toEqual({ type: "wick-artifact-overflow", id, on: false });
   });
 
+  test("the overflow answer is only sent when it changes", async () => {
+    vi.stubGlobal("innerHeight", 1000);
+    const { container } = render(HtmlArtifact, { props: { src: "<p>hi</p>", name: "x.html" } });
+    const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+    const sent: unknown[] = [];
+    vi.spyOn(iframe.contentWindow as Window, "postMessage").mockImplementation(((m: unknown) => { sent.push(m); }) as typeof window.postMessage);
+    const id = idFromIframe(iframe);
+    postHeight(id, 4000);
+    await waitFor(() => expect(iframe.style.height).toBe("800px"));
+    postHeight(id, 4100);
+    // narrowed by its own scrollbar, just under the cap: still scrolling
+    postHeight(id, 790);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(iframe.style.height).toBe("800px");
+    expect(sent.filter((m) => (m as { type?: string }).type === "wick-artifact-overflow")).toHaveLength(1);
+  });
+
   test("a window resize re-fits the frame to the new cap", async () => {
     vi.stubGlobal("innerHeight", 1000);
     const { container } = render(HtmlArtifact, { props: { src: "<p>hi</p>", name: "x.html" } });

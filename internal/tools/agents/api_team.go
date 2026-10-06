@@ -1097,7 +1097,12 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 		Avatar:               team.EncodeAvatar(av),
 		IsCaptain:            !hasCaptain,
 	}
-	if !applyToolSettings(c, p, req) {
+	// The wizard's Mentions section: who may hand the new agent a turn.
+	// A refusal here drops the project made for it, like the checks above.
+	if !applyToolSettings(c, p, req) || !applyMentionSettings(c, p, req) {
+		if !existing {
+			discardTeamAgentProject(c, pid)
+		}
 		return
 	}
 	if err := globalTeam.Create(c.Context(), p); err != nil {

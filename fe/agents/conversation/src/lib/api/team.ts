@@ -404,6 +404,11 @@ export type RemoteRecheck = {
 export const recheckRemote = (base: string, id: string, sessionId: string) =>
   apiPostE<RemoteRecheck>(`${base}/api/team/agents/${enc(id)}/remote/recheck?session_id=${enc(sessionId)}`, {});
 
+/** cancelRemoteQueued drops a message still queued behind a remote agent's
+    running turn, so it is never sent. */
+export const cancelRemoteQueued = (base: string, id: string, sessionId: string, queueId: string) =>
+  apiPostE<{ cancelled: boolean }>(`${base}/api/team/agents/${enc(id)}/remote/queue/${enc(queueId)}/cancel?session_id=${enc(sessionId)}`, {});
+
 
 /** Sent fields overwrite, the rest stay. */
 export const updateSlackRemote = (base: string, id: string, body: Partial<SlackRemoteConfig>) =>
@@ -757,11 +762,63 @@ export const listShareUsers = (base: string) =>
 
 /* ── Plugin remote agents (service plugins with remote_source) ── */
 
-export type PluginSource = { key: string; name: string; description?: string; version: string; state: string };
+/** One per-agent config field a plugin declares (RemoteConfigs). A secret's
+    value is never sent back: "" or the mask, with has_value telling it is set. */
+export type PluginRemoteField = {
+  key: string;
+  value: string;
+  type?: string;
+  options?: string;
+  description?: string;
+  is_secret: boolean;
+  has_value: boolean;
+  required: boolean;
+};
+export type PluginSource = {
+  key: string;
+  name: string;
+  description?: string;
+  version: string;
+  state: string;
+  remote_configs?: PluginRemoteField[];
+};
+export type PluginRemoteInfo = { plugin_key: string; configs: PluginRemoteField[] };
 
-export type PluginRemoteCreate = { plugin_key: string; name?: string; handle?: string; tagline?: string };
+export type PluginRemoteCreate = {
+  plugin_key: string;
+  name?: string;
+  handle?: string;
+  tagline?: string;
+  config?: Record<string, string>;
+};
 
 export const listPluginSources = (base: string) => apiGetE<PluginSource[]>(`${base}/api/team/plugin-sources`);
 
 export const createPluginRemote = (base: string, body: PluginRemoteCreate) =>
   apiPostE<AgentItem>(`${base}/api/team/plugin-remote`, body);
+
+export const getPluginRemote = (base: string, id: string) =>
+  apiGetE<PluginRemoteInfo>(`${base}/api/team/agents/${enc(id)}/plugin-remote`);
+
+/** An empty or masked secret keeps the stored one. */
+export const updatePluginRemote = (base: string, id: string, config: Record<string, string>) =>
+  apiPatchE<PluginRemoteInfo>(`${base}/api/team/agents/${enc(id)}/plugin-remote`, { config });
+
+/** SessionField is a value a plugin remote agent's new chat takes before
+    its first message (e.g. a repository and a branch). The plugin declares
+    them; wick only renders them. */
+export type SessionField = { key: string; label: string; placeholder?: string; default?: string; required?: boolean };
+
+/** The session's answers, and whether they are locked because the remote
+    session already exists. Without a session_id: a draft's fields only. */
+export type SessionOptions = { fields: SessionField[]; values: Record<string, string>; locked: boolean };
+
+export const getSessionOptions = (base: string, id: string, sessionId?: string) =>
+  apiGetE<SessionOptions>(
+    `${base}/api/team/agents/${enc(id)}/plugin-remote/session-options${sessionId ? `?session_id=${enc(sessionId)}` : ""}`,
+  );
+
+/** Empty values mean the field's default. Refused (409) once the remote
+    session exists. */
+export const putSessionOptions = (base: string, id: string, sessionId: string, options: Record<string, string>) =>
+  apiPutE<SessionOptions>(`${base}/api/team/agents/${enc(id)}/plugin-remote/session-options?session_id=${enc(sessionId)}`, { options });

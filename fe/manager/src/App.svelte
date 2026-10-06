@@ -15,7 +15,6 @@
   import ToolDetail from "$lib/components/tools/ToolDetail.svelte";
   import ServiceDetail from "$lib/components/services/ServiceDetail.svelte";
   import AuditLog from "$lib/components/audit/AuditLog.svelte";
-  import PluginsAdmin from "$lib/components/plugins/PluginsAdmin.svelte";
   import { breadcrumbNames } from "$lib/stores/breadcrumb.js";
   import type { BreadcrumbItem } from "@wick-fe/common-ui";
 
@@ -37,6 +36,11 @@
   let mcpNewRoute = $derived(currentRoute === "/custom/mcp");
   let auditRoute = $derived(currentRoute === "/audit");
   let pluginsRoute = $derived(currentRoute === "/plugins");
+  /* The Plugins page lives at /admin/plugins now (admin scope). An in-SPA
+     push("/plugins") leaves the SPA for it; the server redirects page loads. */
+  $effect(() => {
+    if (pluginsRoute) window.location.replace("/admin/plugins" + window.location.search);
+  });
   let mcpEditParams = $derived(match("/custom/mcp/:serverID/edit", currentRoute));
   let editParams = $derived(match("/custom/:defID/edit", currentRoute));
   let jobParams = $derived(match("/jobs/:key", currentRoute));
@@ -126,7 +130,7 @@
     {#if auditRoute}
       <AuditLog />
     {:else if pluginsRoute}
-      <PluginsAdmin />
+      <div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">Opening Admin → Plugins…</div>
     {:else if jobParams}
       <JobDetail jobKey={jobParams.key} />
     {:else if toolParams}

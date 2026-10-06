@@ -1,15 +1,17 @@
 <script lang="ts">
   /* Admin view of one service plugin: supervisor status with Stop / Start /
-     Restart, the manifest config (secrets write-only; saved values are pushed
+     Restart, auto-off (the plugin's default, the admin's Default / On / Off
+     override and the idle limit; a sleeping service wakes on the next
+     request), the manifest config (secrets write-only; saved values are pushed
      to the running plugin), the routes and who may reach them, access tokens (Generate /
      Rotate / Revoke — the secret is shown once), the callback token switch,
      and the last log lines (refreshed every 3 s). */
   import PluginUpdateMenu from "$lib/components/plugins/PluginUpdateMenu.svelte";
-  import { Button, TextInput } from "@wick-fe/common-ui";
+  import { Button, TextInput, ConfirmDialog } from "@wick-fe/common-ui";
   import { toastError } from "@wick-fe/common-stores";
   import {
-    getServicePlugin, serviceAction, setServiceConfig, generateServiceToken, rotateServiceToken, revokeServiceToken,
-    type ServicePlugin, type ServiceConfigField,
+    getServicePlugin, serviceAction, setServiceConfig, setServiceAutoOff, generateServiceToken, rotateServiceToken, revokeServiceToken,
+    type ServicePlugin, type ServiceConfigField, type ServiceAutoOffMode,
   } from "$lib/api.js";
   import type { ConfigField } from "$lib/types.js";
   import FieldWidget from "$lib/components/fields/FieldWidget.svelte";
@@ -43,6 +45,58 @@
       data = await setServiceConfig(serviceKey, draft);
       draft = {};
       formKey++; // remount the inputs so secrets clear back to "stored"
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : String(e));
+    } finally {
+      busy = "";
+    }
+  }
+
+  /* Auto-off edits in progress (null = not editing; the refresh shows the
+     saved values meanwhile). */
+  let aoMode = $state<ServiceAutoOffMode | null>(null);
+  let aoIdle = $state<string | null>(null);
+  let aoConfirm = $state(false);
+  const autoOffModes: { value: ServiceAutoOffMode; label: string }[] = [
+    { value: "default", label: "Default" },
+    { value: "on", label: "On" },
+    { value: "off", label: "Off" },
+  ];
+  let ao = $derived(data?.auto_off);
+  let aoModeShown = $derived(aoMode ?? ao?.mode ?? "default");
+  let aoIdleShown = $derived(aoIdle ?? String(Math.round((ao?.idle_seconds ?? 900) / 60)));
+  let aoDirty = $derived(aoMode !== null || aoIdle !== null);
+  /* Forcing auto-off on against the plugin's word. */
+  let aoRisky = $derived(aoModeShown === "on" && !ao?.supported);
+
+  const fmtIdle = (sec: number): string =>
+    sec % 3600 === 0 ? `${sec / 3600}h` : sec % 60 === 0 ? `${sec / 60}m` : `${sec}s`;
+  const autoOffBadge = (a: NonNullable<typeof ao>): string => {
+    if (a.mode === "on") return `Auto-off: on (forced, idle ${fmtIdle(a.idle_seconds)})`;
+    if (a.mode === "off") return "Auto-off: off (forced)";
+    return a.enabled ? `Auto-off: on (plugin default, idle ${fmtIdle(a.idle_seconds)})` : "Auto-off: off (plugin default)";
+  };
+  const hasTime = (s?: string) => !!s && !s.startsWith("0001-");
+
+  async function saveAutoOff(confirm = false): Promise<void> {
+    if (!ao) return;
+    const minutes = Number(aoIdleShown);
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 10080) {
+      toastError("Idle limit must be between 1 and 10080 minutes.");
+      return;
+    }
+    if (aoRisky && !confirm) {
+      aoConfirm = true;
+      return;
+    }
+    aoConfirm = false;
+    busy = "auto-off";
+    try {
+      // The plugin's own limit is sent as 0 so it keeps following the plugin.
+      const secs = Math.round(minutes * 60);
+      data = await setServiceAutoOff(serviceKey, aoModeShown, secs === ao.default_idle_seconds ? 0 : secs, confirm);
+      aoMode = null;
+      aoIdle = null;
     } catch (e) {
       toastError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -116,12 +170,13 @@
     running: "bg-pos-100 text-pos-400",
     starting: "bg-prog-100 text-prog-400",
     backoff: "bg-neg-100 text-neg-400",
+    sleeping: "bg-prog-100 text-prog-400",
     stopped: "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600",
   };
   const authLabel: Record<string, string> = { public: "Public", token: "Token", "wick-session": "Wick login" };
   const fmt = (s?: string) => (s ? new Date(s).toLocaleString() : "—");
 
-  let running = $derived(data?.status.state === "running" || data?.status.state === "starting");
+  let running = $derived(data?.status.state === "running" || data?.status.state === "starting" || data?.status.state === "sleeping");
 
   $effect(() => {
     if (data) setBreadcrumbNames({ service: data.name || data.key });
@@ -152,6 +207,9 @@
             <PluginUpdateMenu pluginKey={serviceKey} />
             <span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">plugin v{data.version}</span>
             <span class="rounded-full px-2 py-0.5 text-[10px] font-medium {stateClasses[data.status.state]}" data-testid="service-state">{data.status.state}</span>
+            {#if data.auto_off}
+              <span class="rounded-full px-2 py-0.5 text-[10px] font-medium {data.auto_off.enabled ? 'bg-pos-100 text-pos-400' : 'bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600'}" data-testid="auto-off-badge">{autoOffBadge(data.auto_off)}</span>
+            {/if}
           </div>
           {#if data.description}
             <p class="mt-0.5 text-sm text-black-800 dark:text-black-600">{data.description}</p>
@@ -184,6 +242,59 @@
       </div>
     </section>
 
+    {#if data.status.state === "sleeping"}
+      <div class="rounded-xl border border-prog-300 bg-prog-100 px-4 py-3 text-sm" role="status" data-testid="sleeping-banner">
+        <p class="font-medium text-prog-400">Sleeping — wakes on the next request</p>
+        <p class="mt-0.5 text-xs text-black-800 dark:text-black-700">
+          Asleep since {fmt(data.status.slept_at)}{#if hasTime(data.status.last_active)} · last active {fmt(data.status.last_active)}{/if}{#if data.status.last_wake_ms} · last wake took ~{(data.status.last_wake_ms / 1000).toFixed(1)}s{/if}
+        </p>
+      </div>
+    {/if}
+
+    {#if ao}
+      <section data-testid="service-auto-off">
+        <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Auto-off</h2>
+        <p class="mt-1 text-sm text-black-800 dark:text-black-600">Stops the service after it has been idle (no request in flight, no remote turn open) and starts it again on the next request, which waits for the boot.</p>
+        <div class="mt-3 space-y-3 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4 text-sm">
+          {#if ao.supported}
+            <p class="text-black-900 dark:text-white-100" data-testid="auto-off-plugin">The plugin supports auto-off (default idle {fmtIdle(ao.default_idle_seconds)}).</p>
+          {:else}
+            <div data-testid="auto-off-plugin">
+              <p class="text-black-900 dark:text-white-100">This service cannot auto-off</p>
+              <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">{ao.reason || "The plugin does not declare auto-off support."}</p>
+            </div>
+          {/if}
+          <div class="flex flex-wrap items-center gap-3">
+            <div class="inline-flex overflow-hidden rounded-lg border border-white-300 dark:border-navy-600" role="radiogroup" aria-label="Auto-off mode">
+              {#each autoOffModes as m (m.value)}
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={aoModeShown === m.value}
+                  disabled={!!busy}
+                  class="px-3 py-1.5 text-xs font-medium {aoModeShown === m.value ? 'bg-green-200 dark:bg-green-800 text-green-700 dark:text-green-300' : 'text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600'}"
+                  onclick={() => (aoMode = m.value)}
+                >{m.label}</button>
+              {/each}
+            </div>
+            <label class="flex items-center gap-2 text-xs text-black-800 dark:text-black-600">
+              Idle limit
+              <span class="w-20"><TextInput value={aoIdleShown} onChange={(v) => (aoIdle = v)} ariaLabel="Idle limit in minutes" /></span>
+              minutes
+            </label>
+            <Button size="sm" disabled={!aoDirty || !!busy} onclick={() => saveAutoOff()}>{busy === "auto-off" ? "Saving…" : "Save auto-off"}</Button>
+            {#if aoDirty}<Button size="sm" variant="secondary" disabled={!!busy} onclick={() => { aoMode = null; aoIdle = null; }}>Discard</Button>{/if}
+          </div>
+          <p class="text-xs text-black-700 dark:text-black-600">Default follows the plugin; On and Off override it.</p>
+          {#if aoRisky}
+            <div class="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-3 py-2 text-xs text-red-700 dark:text-red-400" role="alert" data-testid="auto-off-warning">
+              The plugin says it cannot auto-off: {ao.reason || "no reason given"}. Forcing it may stop background work that no request will wake up.
+            </div>
+          {/if}
+        </div>
+      </section>
+    {/if}
+
     {#if data.configs?.length}
       <section data-testid="service-config">
         <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Configuration</h2>
@@ -193,7 +304,7 @@
             {#each data.configs as c (c.key)}
               <div class="grid grid-cols-1 gap-2 border-b border-white-300 dark:border-navy-600 px-4 py-3 sm:grid-cols-3 sm:items-center">
                 <div>
-                  <p class="font-mono text-sm text-black-900 dark:text-white-100">{c.key}{#if c.required}<span class="text-neg-400"> *</span>{/if}</p>
+                  <p class="font-mono text-sm text-black-900 dark:text-white-100">{c.key}{#if c.required}<span class="text-neg-400"> *</span>{:else}<span class="ml-1.5 font-sans text-[10px] text-black-700 dark:text-black-600" data-testid="config-optional">optional</span>{/if}</p>
                   {#if c.description}<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">{c.description}</p>{/if}
                 </div>
                 <div class="sm:col-span-2">
@@ -280,3 +391,13 @@
     </section>
   </div>
 {/if}
+
+<ConfirmDialog
+  open={aoConfirm}
+  title="Force auto-off on?"
+  body={`The plugin says it cannot auto-off: ${ao?.reason || "no reason given"}. Forcing it may stop background work that no request will wake up.`}
+  confirmLabel="Force on"
+  destructive
+  onConfirm={() => saveAutoOff(true)}
+  onCancel={() => (aoConfirm = false)}
+/>

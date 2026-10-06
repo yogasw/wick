@@ -124,11 +124,16 @@ type process struct {
 	once   sync.Once
 	src    Source
 	dir    string
-	// next is a message that arrived during a grace window (graceAfter),
-	// to send next; inputDone: msgs closed meanwhile. Loop-only.
-	next      string
+	// queue holds the messages that arrived while a turn ran (or during
+	// its grace window), oldest first: each is sent as a turn of its own
+	// once the running one ends, unless it is cancelled first (CancelQueued).
+	// inputDone: msgs closed meanwhile (loop-only).
+	qmu       sync.Mutex
+	queue     []queuedMsg
 	inputDone bool
-	id        string
+	// cur is the running turn's handle, for Kill to stop it on the remote.
+	cur atomic.Pointer[Handle]
+	id  string
 	// answered: the current turn already gave its result, so the heartbeat
 	// goes quiet — a heartbeat is a stdout line, and any line after the
 	// result turns the agent back to "working" in the UI. listening: a turn
@@ -157,10 +162,91 @@ func (p *process) Wait() error {
 }
 
 func (p *process) Kill() error {
+	// A turn still running is stopped on the remote too, where the source
+	// can (Source.Cancel); best-effort, it must not hold Kill up.
+	if h := p.cur.Load(); h != nil && !p.answered.Load() {
+		src, h := p.src, *h
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), cancelTimeout)
+			defer cancel()
+			if err := src.Cancel(ctx, h); err != nil {
+				log.Warn().Err(err).Str("remote", src.Kind()).Msg("remote: cancel on stop")
+			}
+		}()
+	}
 	p.cancel()
 	p.closeMsgs()
 	p.closePipe()
 	return nil
+}
+
+// cancelTimeout bounds the Cancel a Kill sends to the remote.
+var cancelTimeout = 5 * time.Second
+
+// queuedMsg is one message waiting behind the running turn. shown: a
+// queued line went out for it, so its sending or cancelling is told too.
+type queuedMsg struct {
+	id    string
+	text  string
+	shown bool
+}
+
+// Queue states of a remote_queue line.
+const (
+	QueueQueued    = "queued"
+	QueueSent      = "sent"
+	QueueCancelled = "cancelled"
+	QueueForwarded = "forwarded"
+)
+
+// enqueue keeps text to send after the running turn; show tells the chat
+// it waits (a remote_queue "queued" line it can cancel).
+func (p *process) enqueue(text string, show bool) {
+	q := queuedMsg{id: uuid.NewString(), text: text, shown: show}
+	p.qmu.Lock()
+	p.queue = append(p.queue, q)
+	p.qmu.Unlock()
+	if show {
+		p.emitQueue(q.id, QueueQueued, text)
+	}
+}
+
+// dequeue takes the oldest waiting message; ok false when none waits.
+func (p *process) dequeue() (string, bool) {
+	p.qmu.Lock()
+	if len(p.queue) == 0 {
+		p.qmu.Unlock()
+		return "", false
+	}
+	q := p.queue[0]
+	p.queue = p.queue[1:]
+	p.qmu.Unlock()
+	if q.shown {
+		p.emitQueue(q.id, QueueSent, q.text)
+	}
+	return q.text, true
+}
+
+// CancelQueued drops the waiting message id before it is sent; false when
+// no message waits under that id (already sent, or never queued).
+func (p *process) CancelQueued(id string) bool {
+	p.qmu.Lock()
+	for i, q := range p.queue {
+		if q.id == id {
+			p.queue = append(p.queue[:i:i], p.queue[i+1:]...)
+			p.qmu.Unlock()
+			p.emitQueue(id, QueueCancelled, q.text)
+			return true
+		}
+	}
+	p.qmu.Unlock()
+	return false
+}
+
+// emitQueue reports a message's place in line: queued behind the running
+// turn, sent, cancelled, or forwarded into the running turn.
+func (p *process) emitQueue(id, state, text string) {
+	p.emit(map[string]any{"type": "system", "subtype": "remote_queue", "queue_id": id, "queue_state": state, "text": text})
 }
 
 func (p *process) closePipe() { p.once.Do(func() { _ = p.w.Close() }) }
@@ -296,12 +382,13 @@ func (p *process) loop(opt provider.SpawnOptions) {
 			next = text
 		}
 		cur := next
-		p.next, next = "", ""
+		next = ""
 		p.turn(cur)
 		if p.inputDone {
+			// Input closed: what still waits was never going to be read.
 			return
 		}
-		next = p.next
+		next, _ = p.dequeue()
 	}
 }
 
@@ -373,6 +460,8 @@ func (p *process) turn(text string) {
 		return
 	}
 	defer func() { src.End(h) }()
+	p.cur.Store(&h)
+	defer p.cur.Store(nil)
 
 	var push <-chan Event
 	if ps, ok := src.(Pusher); ok && listens(src, ListenPush) {
@@ -435,8 +524,41 @@ func (p *process) turn(text string) {
 		idleC = tk.C
 	}
 
+	// A message that arrives meanwhile goes to the running turn when the
+	// source can inject it; otherwise it is queued, marked as such in the
+	// chat (and cancellable there), and sent as the next turn.
+	msgsC := p.msgs
+	inj, canInject := src.(Injector)
+
 	for {
 		select {
+		case text, ok := <-msgsC:
+			if !ok {
+				p.inputDone = true
+				msgsC = nil
+				continue
+			}
+			if !canInject {
+				p.enqueue(text, true)
+				continue
+			}
+			if err := inj.Inject(ctx, h, Turn{Text: text, SessionDir: p.dir, SessionID: p.id}); err != nil {
+				if !errors.Is(err, ErrInjectUnsupported) {
+					log.Debug().Err(err).Str("remote", src.Kind()).Msg("remote: inject")
+				}
+				// Sent as the next turn, and so is every later message: an
+				// inject that failed once is not tried again this turn.
+				p.enqueue(text, true)
+				canInject = false
+				continue
+			}
+			// The remote took it: the turn goes on, and that is life like
+			// new text — idle and Max start over.
+			p.emitStatus(StatusForwarded, "")
+			p.emitQueue(uuid.NewString(), QueueForwarded, text)
+			t.last = now()
+			step = 0
+			resetPull(steps[0])
 		case ev, ok := <-push:
 			if !ok {
 				push = nil
@@ -566,8 +688,7 @@ var followUpQuiet = 3 * time.Second
 // as a follow-up reply of its own (note: NoteFollowUp, or NoteLate after
 // a timeout), the added part or the whole edited reply. Pushed messages
 // are then still taken for lateListen, without reading the thread. A new
-// message to send ends the window at once; it is kept in p.next for the
-// loop.
+// message to send ends the window at once; it is queued for the loop.
 func (p *process) graceAfter(h Handle, push <-chan Event, puller Puller, canPull bool, final string, lim Limits, note string) {
 	rs, ok := p.src.(Reopener)
 	if lim.Grace <= 0 || !ok {
@@ -620,7 +741,8 @@ func (p *process) graceAfter(h Handle, push <-chan Event, puller Puller, canPull
 			if !ok {
 				p.inputDone = true
 			} else {
-				p.next = text
+				// Sent right away: the window ends, nothing to mark.
+				p.enqueue(text, false)
 			}
 			return
 		case ev, ok := <-push:
@@ -687,7 +809,9 @@ type turnOut struct {
 	ok bool
 	// status is the last status shown.
 	status string
-	last   time.Time
+	// link is the remote's page for this turn, once shown.
+	link string
+	last time.Time
 	// full is the latest whole reply from an EventText that did not grow
 	// what was shown (an edit that rewrote it), used as the final result.
 	full string
@@ -722,6 +846,12 @@ func (t *turnOut) handle(ev Event) bool {
 		if ev.Status != StatusIdle && ev.Status+"\x00"+ev.Detail != t.status {
 			t.status = ev.Status + "\x00" + ev.Detail
 			t.p.emitStatus(ev.Status, ev.Detail)
+		}
+		// The remote's own page for the turn (a Jules session): shown once,
+		// so a turn wick cannot stop on the remote can be stopped there.
+		if ev.URL != "" && ev.URL != t.link {
+			t.link = ev.URL
+			t.p.emit(map[string]any{"type": "system", "subtype": "remote_link", "url": ev.URL})
 		}
 	case EventAttachment:
 		t.sawText = true

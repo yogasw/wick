@@ -27,6 +27,17 @@ export interface ProviderInstanceDTO {
   Disabled: boolean;
   MaxConcurrent: number;
   SendMode: string;
+  /* IdleCompact is the enabled compact-when-idle policy; null when off. */
+  IdleCompact?: IdleCompactDTO | null;
+}
+
+export interface IdleCompactDTO {
+  Minutes: number;
+  Trigger: string;
+  Threshold: number;
+  /* Scope is skip, whitelist or all; Match is its pattern lines. */
+  Scope: string;
+  Match: string[];
 }
 
 export interface ProviderStatusDTO {

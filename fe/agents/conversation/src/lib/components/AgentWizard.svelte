@@ -4,9 +4,14 @@
        fields below (queued aigen job), then avatar, name, tagline, handle,
        description, system prompt, and the project behind it under
        "Advanced" (default: a new one made from these fields).
-     2 Access — the same connector checklist as Settings › Access, starting
-       empty (off until added). A new agent runs as the caller with
-       include-new off; both are changed later in Settings › Access.
+     2 Access & mentions — the same connector checklist as Settings ›
+       Access, starting empty (off until added) — or "Same as me" for the
+       Captain — and who in the Team may hand the agent work, with the
+       agents it can hand work to. A new agent runs as the caller with
+       include-new off; all of it is changed later in Settings.
+     ✨ Generate fills every step it can from the brief: persona, the
+       connectors it needs (read, or write where it must change things)
+       and its mention policy, so Next → Next → Create is enough.
      3 Model — provider and model (or sub model) through the same picker
        as Project Settings, picked by hand: Create stays off until both are
        chosen. Changed later in Settings › Advanced.
@@ -17,9 +22,10 @@
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { accessPayload, type AccessMode } from "../accessList.js";
   import { getProjectOptions, getProviderOptions, getProviderOptionModels } from "../api/options.js";
-  import { createAgent, getProjectPersona, listAgentConnectors, runApi, type AgentItem, type AgentConnector, type ConnectorGrant } from "../api/team.js";
+  import { createAgent, getProjectPersona, listAgentConnectors, listAgents, runApi, type AgentItem, type AgentConnector, type ConnectorGrant, type MentionFrom } from "../api/team.js";
   import { HANDLE_RE, splitPick, slugHandle, uniqueHandle, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject, TAGLINE_MAX } from "../agentForm.js";
-  import { PERSONA_KIND, personaInput, suggestedConnectors, type PersonaDraft } from "../personaGen.js";
+  import { PERSONA_KIND, personaInput, suggestedConnectors, draftGrants, draftMentionAllow, acceptsNewAgent, type PersonaDraft } from "../personaGen.js";
+  import { MENTION_FROM_OPTIONS } from "../mentionSettings.js";
   import { setOverride } from "../accessTiers.js";
   import { convertGrants, convertSummary } from "../convertProject.js";
   import { CAPTAIN_STARTER, CAPTAIN_FACTS } from "../captainSettings.js";
@@ -41,7 +47,7 @@
   };
   let { base, taken, convertProject, onClose, onCreated, onType, firstAgent = false }: Props = $props();
 
-  const STEPS = ["Persona", "Access", "Model"];
+  const STEPS = ["Persona", "Access & mentions", "Model"];
   let step = $state(1);
 
   let brief = $state("");
@@ -82,7 +88,16 @@
   // at Write plus new ones, run as the caller, the global system prompt.
   // The user can narrow it on the Access step.
   let includeNew = $state(false);
-  let accessMode = $state<AccessMode>("choose");
+  // The Captain starts with the owner's own access ("Same as me"): it
+  // runs the Team, and a Captain that cannot see what the owner sees
+  // cannot hand work out sensibly. Everyone else starts from nothing.
+  let accessMode = $state<AccessMode>(firstAgent && !convertProject ? "owner" : "choose");
+  // The owner's other agents (own, not shared in): the Mentions checklist.
+  let teammates = $state<AgentItem[]>([]);
+  let mentionFrom = $state<MentionFrom>("all");
+  let mentionAllow = $state<string[]>([]);
+  // ✨ Generate filled Access/Mentions: say so on that step.
+  let fromDraft = $state(false);
   let useGlobalPrompt = $state(true);
   // On by default: the agent's project stays in Agents → Projects as well.
   let showInProjects = $state(true);
@@ -120,6 +135,9 @@
         .then(async (r) => { if (r.ok) convertInfo = (await r.json()) as ConvertPreview; })
         .catch(() => {});
     }
+    runApi(listAgents(base))
+      .then((r) => { teammates = (r.agents ?? []).filter((a) => a.role !== "viewer"); })
+      .catch(() => {});
     runApi(listAgentConnectors(base))
       .then((c) => {
         catalog = c ?? [];
@@ -191,7 +209,21 @@
       avatarTouched = true;
     }
     suggested = d.connectors ?? [];
+    // Access and mentions from the same brief, so the next steps are
+    // already set; each stays editable before Create.
+    const before = grants.length;
+    grants = draftGrants(d, catalog, grants);
+    if (grants.length > before && !(firstAgent && !convertProject)) accessMode = "choose";
+    if (d.mention_from) {
+      mentionFrom = d.mention_from;
+      mentionAllow = d.mention_from === "list" ? draftMentionAllow(d.mention_allow, teammates) : [];
+    }
+    fromDraft = grants.length > before || !!d.mention_from;
   }
+  // What the Access step shows as the access in effect.
+  const grantedCount = $derived(grants.filter((g) => g.level !== "off").length);
+  const writeCount = $derived(grants.filter((g) => g.level === "all").length);
+  const isCaptain = $derived(firstAgent && !convertProject);
   const suggestions = $derived(suggestedConnectors(suggested, catalog, grants.map((g) => g.connector_id)));
 
   /* "Use Captain starter persona": an optional example the owner edits;
@@ -232,6 +264,8 @@
           ...(convertProject && projectId === convertProject ? { convert: true } : {}),
           ...accessPayload(accessMode, $state.snapshot(grants) as ConnectorGrant[], includeNew),
           run_as: "caller",
+          mention_from: mentionFrom,
+          ...(mentionFrom === "list" ? { mention_allow: [...mentionAllow] } : {}),
           ...(convertProject && projectId === convertProject ? { use_global_prompt: useGlobalPrompt } : {}),
           // Only the agent's own project (new or converted) can be hidden.
           ...(!projectId || projectId === convertProject ? { show_in_projects: showInProjects } : {}),
@@ -334,13 +368,14 @@
     <div class="rounded-xl border border-white-300 p-3 dark:border-navy-600">
       <label class={label} for="aw-brief">What should this agent do?</label>
       <textarea id="aw-brief" class="{input} min-h-16" rows="2" bind:value={brief} placeholder="e.g. Review pull requests critically and point out risky changes"></textarea>
+      <p class="mt-1 text-xs text-black-800 dark:text-black-600">✨ Generate also sets its connector access and who can mention it — check them on the next step.</p>
       <div class="mt-2">
         <AIGenerateButton
           kind={PERSONA_KIND}
           autoUse
           testid="aw-generate"
           validate={() => (brief.trim() ? "" : "Describe what the agent should do first.")}
-          input={() => personaInput("all", brief, {}, catalog)}
+          input={() => personaInput("all", brief, {}, catalog, { agents: teammates, captain: isCaptain })}
           onUse={(d: PersonaDraft) => useDraft(d)}
         />
       </div>
@@ -459,9 +494,28 @@
         <input type="checkbox" class="mt-1" bind:checked={useGlobalPrompt} />
         <span>Use the global system prompt<br /><span class="text-xs text-black-800 dark:text-black-600">On by default: the project's chats already run with it. Turn off to run on the persona alone.</span></span>
       </label>
-    {:else}
-    <p class="text-sm text-black-800 dark:text-black-600">Connectors are off until you add them. Platform tools are on for every agent; System tools are for the Captain.</p>
     {/if}
+    {#if fromDraft}
+      <p class="rounded-xl border border-green-500/40 bg-green-500/10 px-3 py-2 text-xs text-black-900 dark:text-white-100" data-testid="aw-from-draft">
+        ✨ Set from your description — connector access and mentions below. Check them, then Next.
+      </p>
+    {/if}
+    <!-- Access and mentions decide what the agent can actually do, so each
+         gets its own headed card with the setting in effect spelled out,
+         rather than a line of grey text above a long list. -->
+    <section class="space-y-3 rounded-xl border-2 border-green-500/60 p-3" data-testid="aw-access-card">
+      <div>
+        <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">🔐 Connector access</h3>
+        <p class="mt-0.5 text-xs text-black-800 dark:text-black-600" data-testid="aw-access-summary">
+          {#if accessMode === "owner"}
+            <b class="text-black-900 dark:text-white-100">Same as you</b> — every connector you have, write included{isCaptain ? " (the Captain's default)" : ""}.
+          {:else if grantedCount === 0}
+            <b class="text-black-900 dark:text-white-100">No connectors yet</b> — add the ones it needs below. Platform tools are on for every agent; System tools are for the Captain.
+          {:else}
+            <b class="text-black-900 dark:text-white-100">{grantedCount} connector{grantedCount === 1 ? "" : "s"}</b>, {writeCount} with write.
+          {/if}
+        </p>
+      </div>
     {#if suggestions.length > 0}
       <div class="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-green-500 px-3 py-2 text-xs text-black-800 dark:text-black-600" data-testid="aw-suggested">
         <span class="font-medium">✨ Suggested:</span>
@@ -486,6 +540,67 @@
       showRunAs={false}
       showIncludeNew={!!convertProject}
     />
+    </section>
+    <section class="space-y-3 rounded-xl border-2 border-green-500/60 p-3" data-testid="aw-mention-card">
+      <div>
+        <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">💬 Mentions</h3>
+        <p class="mt-0.5 text-xs text-black-800 dark:text-black-600">Who in your Team can hand @{handle || "this agent"} work with an @mention. You can always mention it yourself.</p>
+      </div>
+      <div class="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Who can mention this agent" data-testid="aw-mention-from">
+        {#each MENTION_FROM_OPTIONS as o (o.value)}
+          <label class="flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 {mentionFrom === o.value ? 'border-green-500 bg-green-50 dark:bg-navy-700' : 'border-white-300 dark:border-navy-600'}">
+            <input type="radio" name="aw-mention-from" class="mt-1" value={o.value} checked={mentionFrom === o.value}
+              onchange={() => { mentionFrom = o.value; if (o.value === "list" && mentionAllow.length === 0) mentionAllow = teammates.map((a) => a.id); }} />
+            <span>
+              <span class="block text-sm font-medium text-black-900 dark:text-white-100">{o.label}</span>
+              <span class="block text-xs text-black-800 dark:text-black-600">{o.hint}</span>
+            </span>
+          </label>
+        {/each}
+      </div>
+      {#if teammates.length > 0}
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div data-testid="aw-mention-in">
+            <p class={label}>Can mention @{handle || "it"}</p>
+            {#each teammates as a (a.id)}
+              {@const on = mentionFrom === "all" || (mentionFrom === "captain" && a.is_captain) || (mentionFrom === "list" && mentionAllow.includes(a.id))}
+              <label class="flex items-center gap-2 py-0.5 text-sm text-black-900 dark:text-white-100">
+                <input
+                  type="checkbox"
+                  checked={on}
+                  disabled={mentionFrom !== "list"}
+                  title={mentionFrom === "list" ? "" : "Pick \"Only agents I pick\" to choose one by one"}
+                  onchange={(e) => {
+                    const v = (e.currentTarget as HTMLInputElement).checked;
+                    mentionAllow = v ? [...mentionAllow, a.id] : mentionAllow.filter((id) => id !== a.id);
+                  }}
+                />
+                <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={18} />
+                <span class="truncate">{a.name}</span>
+                {#if a.is_captain}<span class="text-[10px]">🧭</span>{/if}
+              </label>
+            {/each}
+          </div>
+          <div data-testid="aw-mention-out">
+            <p class={label}>@{handle || "It"} can hand work to</p>
+            {#each teammates as a (a.id)}
+              {@const ok = acceptsNewAgent(a, isCaptain)}
+              <p class="flex items-center gap-2 py-0.5 text-sm {ok ? 'text-black-900 dark:text-white-100' : 'text-black-700 line-through dark:text-black-700'}"
+                title={ok ? "" : "Set on that agent's Mention tab"}>
+                <span class="w-3 text-center text-xs">{ok ? "✓" : "–"}</span>
+                <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={18} />
+                <span class="truncate">{a.name}</span>
+              </p>
+            {/each}
+            <p class="mt-1 text-[11px] text-black-800 dark:text-black-600">Each agent decides on its own Mention tab.</p>
+          </div>
+        </div>
+      {:else}
+        <p class="text-xs text-black-800 dark:text-black-600" data-testid="aw-mention-none">
+          {isCaptain ? "No other agents yet. As Captain it can hand work to every agent you add, unless that agent turns mentions off." : "No other agents yet."}
+        </p>
+      {/if}
+    </section>
   {:else}
     <!-- Step 3: the same picker as Project Settings (provider → model / sub
          model). No default is filled in: the user picks one on purpose. -->

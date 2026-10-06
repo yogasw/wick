@@ -250,3 +250,26 @@ func apiTeamRemoteRecheck(c *tool.Ctx) {
 	}
 	c.JSON(http.StatusOK, out)
 }
+
+// apiTeamRemoteQueueCancel drops a message still queued behind a remote
+// agent's running turn, so it is never sent.
+func apiTeamRemoteQueueCancel(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	p, ok := loadOwnTeamAgent(c)
+	if !ok {
+		return
+	}
+	sid := c.Query("session_id")
+	s, found := globalMgr.Registry().Session(sid)
+	if sid == "" || !found || s.Meta.AgentID != p.ID {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	if !globalPool.CancelQueued(sid, c.PathValue("queue_id")) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "message is no longer queued"})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]bool{"cancelled": true})
+}

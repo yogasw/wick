@@ -491,7 +491,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"Normally you NEVER see config values: you create a blank instance and the USER fills it in a modal (secrets are encrypted server-side); " +
 				"only the key names ever come back to you. Actions: " +
 				"'list' shows this session's instances (id, status, missing keys) and available_bases (connectors you may add). " +
-				"'add' creates a blank instance from a base_key; by default it pops a fill modal for the user right away. " +
+				"'add' creates an instance from a base_key. Pass values to fill it in the same call when you already hold them; pass prompt:true to have the user fill it in a modal instead. It opens no modal otherwise. " +
 				"'duplicate' copies an existing session instance (config and all) into a new one. " +
 				"'configure' reopens the fill modal so the user edits an instance's config; blocks until submit, like ask_user. Needs a UI transport — not available from Slack/channel automations. " +
 				"'set_config' writes config values directly WITHOUT a modal, for UI-less transports (Slack) and automations. Pass values as a map; for secret fields pass an enc token (wick_cenc_/wick_enc_) so the plaintext never passes through you — only master-encrypt a raw secret if you truly have no token. " +
@@ -520,7 +520,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"values": map[string]any{
 						"type":        "object",
-						"description": "action=set_config: map of config key → value to write. Unknown keys are rejected; empty values are skipped (leave as-is). For secret fields pass a wick_cenc_/wick_enc_ token; a raw plaintext secret is master-encrypted server-side.",
+						"description": "action=set_config, or action=add to fill the new instance in the same call: map of config key → value to write. Unknown keys are rejected; empty values are skipped (leave as-is). For secret fields pass a wick_cenc_/wick_enc_ token; a raw plaintext secret is master-encrypted server-side.",
 					},
 					"label": map[string]any{
 						"type":        "string",
@@ -528,7 +528,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"prompt": map[string]any{
 						"type":        "boolean",
-						"description": "action=add: open the fill modal immediately (default true). Set false to create blank and let the user fill it later in the Config tab.",
+						"description": "action=add: open the fill modal so the user supplies the config (default false). It blocks until they answer, so only ask when the values are the user's to give, never when you are about to write them with values/set_config.",
 					},
 					"keys": map[string]any{
 						"type":        "array",

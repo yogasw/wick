@@ -23,4 +23,19 @@ describe("TeamEmptyState", () => {
     await fireEvent.click(screen.getByTestId("team-empty-remote"));
     expect(onRemote).toHaveBeenCalledOnce();
   });
+
+  test("with no candidates it is the new-user page", () => {
+    render(TeamEmptyState, { props: { onCreate: vi.fn(), onRemote: vi.fn(), candidates: [] } });
+    expect(screen.getByRole("heading", { name: "Build your Team" })).toBeDefined();
+    expect(screen.queryByTestId("team-empty-candidates")).toBeNull();
+  });
+
+  test("after the Captain is gone it offers the user's own agents", async () => {
+    const onMakeCaptain = vi.fn();
+    const c = { id: "a1", name: "Helper", handle: "helper" };
+    render(TeamEmptyState, { props: { onCreate: vi.fn(), onRemote: vi.fn(), candidates: [c], onMakeCaptain } });
+    expect(screen.getByRole("heading", { name: "Your Team needs a Captain" })).toBeDefined();
+    await fireEvent.click(screen.getByRole("button", { name: /Helper/ }));
+    expect(onMakeCaptain).toHaveBeenCalledWith(c);
+  });
 });

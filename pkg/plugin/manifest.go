@@ -3,6 +3,7 @@ package plugin
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -40,6 +41,36 @@ type Manifest struct {
 	// Service carries the routes, auth modes, capabilities, and callback
 	// scopes for kind=service.
 	Service *ServiceModule `json:"service,omitempty"`
+}
+
+// manifestJSON is Manifest without its methods, so MarshalJSON and
+// UnmarshalJSON can reuse the default encoding without recursing.
+type manifestJSON Manifest
+
+// MarshalJSON leaves the legacy "module" block out of a kind=service
+// manifest: its identity and configs live in "service", and the module there
+// only ever carried a mirrored meta with null configs. Other kinds keep it.
+func (m Manifest) MarshalJSON() ([]byte, error) {
+	if m.Kind != KindService || m.Service == nil {
+		return json.Marshal(manifestJSON(m))
+	}
+	return json.Marshal(struct {
+		manifestJSON
+		Module *connector.Module `json:"module,omitempty"`
+	}{manifestJSON: manifestJSON(m)})
+}
+
+// UnmarshalJSON reads both shapes. A service manifest without "module" gets
+// Module.Meta mirrored from Service.Meta so key-based install/scan code stays
+// kind-agnostic; an older one that still carries the block loads unchanged.
+func (m *Manifest) UnmarshalJSON(b []byte) error {
+	if err := json.Unmarshal(b, (*manifestJSON)(m)); err != nil {
+		return err
+	}
+	if m.Kind == KindService && m.Service != nil && m.Module.Meta.Key == "" {
+		m.Module.Meta = serviceConnectorMeta(m.Service.Meta)
+	}
+	return nil
 }
 
 // ManifestSchemaVersion is the current envelope format version.

@@ -1,7 +1,8 @@
 // Package plugin is the host side of service plugins: a kind=service binary
 // under plugins/services/<key>/ is kept running by a Supervisor (spawned at
-// boot, restarted with backoff after a crash) and reverse-proxied at
-// /x/{key}/* with auth decided per manifest route.
+// boot, restarted with backoff after a crash, put to sleep after an idle
+// limit when auto-off applies and woken by the next request) and
+// reverse-proxied at /x/{key}/* with auth decided per manifest route.
 package plugin
 
 import (
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -38,10 +40,20 @@ var (
 	// stopWait bounds how long Stop waits for the supervise loop to unwind
 	// (a spawn still in its handshake).
 	stopWait = 15 * time.Second
+	// idleCheckEvery is how often a running auto-off service is checked
+	// for idleness.
+	idleCheckEvery = 15 * time.Second
+	// WakeTimeout bounds how long a request waits for a sleeping service to
+	// boot before it fails.
+	WakeTimeout = 30 * time.Second
 )
 
 // ErrNotRunning is returned for a request while the service is down.
 var ErrNotRunning = errors.New("service plugin not running")
+
+// ErrWakeTimeout is returned when a sleeping service did not boot within
+// WakeTimeout.
+var ErrWakeTimeout = errors.New("service plugin did not wake up in time")
 
 // RingLog keeps the last n lines written to it.
 type RingLog struct {
@@ -150,6 +162,9 @@ const (
 	StateStarting = "starting"
 	StateRunning  = "running"
 	StateBackoff  = "backoff" // crashed; waiting to restart
+	// StateSleeping: stopped by auto-off after the idle limit; the next
+	// request starts it again. Not a crash, so no backoff.
+	StateSleeping = "sleeping"
 )
 
 // Status is what the admin page shows.
@@ -159,6 +174,13 @@ type Status struct {
 	StartedAt time.Time `json:"started_at,omitempty"`
 	NextStart time.Time `json:"next_start,omitempty"`
 	LastError string    `json:"last_error,omitempty"`
+	// SleptAt is when auto-off last put the service to sleep.
+	SleptAt time.Time `json:"slept_at,omitempty"`
+	// LastActive is when a request or remote turn last touched it.
+	LastActive time.Time `json:"last_active,omitempty"`
+	// LastWakeMS is how long the last wake took, from the request that
+	// woke it until the process was ready.
+	LastWakeMS int64 `json:"last_wake_ms,omitempty"`
 }
 
 // Supervisor keeps one service plugin process running: spawn, push config,
@@ -169,8 +191,15 @@ type Supervisor struct {
 	// env is called before every spawn (callback token, base URL).
 	env func() []string
 	// cfg returns the service's config, pushed after every spawn.
-	cfg  func() map[string]string
-	Logs *RingLog
+	cfg func() map[string]string
+	// autoOff reports whether the service may sleep and its idle limit
+	// (nil = never).
+	autoOff func() (bool, time.Duration)
+	Logs    *RingLog
+
+	// active counts requests in flight through Transport (a remote turn's
+	// event stream stays open for the whole turn).
+	active atomic.Int64
 
 	mu      sync.Mutex
 	status  Status
@@ -181,6 +210,14 @@ type Supervisor struct {
 	wakeNow chan struct{}
 	// done is closed when the supervise loop has returned.
 	done chan struct{}
+	// lastActive is when a request last started or ended.
+	lastActive time.Time
+	// waking is set by the request that wakes a sleeping service; woken is
+	// closed once that boot has finished (ok or not), so every request
+	// that arrived meanwhile waits for the same boot.
+	waking    bool
+	wakeStart time.Time
+	woken     chan struct{}
 }
 
 func newSupervisor(key, binary, sockDir string, spawn spawnFn) *Supervisor {
@@ -192,24 +229,117 @@ func newSupervisor(key, binary, sockDir string, spawn spawnFn) *Supervisor {
 func (s *Supervisor) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.status
+	st := s.status
+	st.LastActive = s.lastActive
+	return st
 }
 
-// Transport returns the round tripper of the running process.
+// Transport returns the round tripper of the running process. A sleeping
+// service is woken and the call waits (up to WakeTimeout) for it to boot;
+// concurrent callers share that one boot. A service stopped by the admin
+// or crashed is not woken.
 func (s *Supervisor) Transport() (http.RoundTripper, error) {
+	deadline := time.Now().Add(WakeTimeout)
+	for {
+		s.mu.Lock()
+		switch {
+		case s.status.State == StateRunning && s.rt != nil:
+			s.lastActive = time.Now()
+			rt := &activityTransport{rt: s.rt, s: s}
+			s.mu.Unlock()
+			return rt, nil
+		case s.status.State == StateSleeping || (s.status.State == StateStarting && s.waking):
+			if !s.waking {
+				s.waking, s.wakeStart = true, time.Now()
+				s.Logs.Printf("waking up on request")
+				select {
+				case s.wakeNow <- struct{}{}:
+				default:
+				}
+			}
+			if s.woken == nil {
+				s.woken = make(chan struct{})
+			}
+			woken := s.woken
+			s.mu.Unlock()
+			t := time.NewTimer(time.Until(deadline))
+			select {
+			case <-woken:
+				t.Stop()
+			case <-t.C:
+				return nil, ErrWakeTimeout
+			}
+		default:
+			s.mu.Unlock()
+			return nil, ErrNotRunning
+		}
+	}
+}
+
+// finishWake releases the requests waiting on a wake once its boot ended.
+func (s *Supervisor) finishWake() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.status.State != StateRunning || s.rt == nil {
-		return nil, ErrNotRunning
+	if s.waking && s.status.State == StateRunning {
+		s.status.LastWakeMS = time.Since(s.wakeStart).Milliseconds()
+		s.Logs.Printf("woke up in %s", time.Since(s.wakeStart).Round(time.Millisecond))
 	}
-	return s.rt, nil
+	s.waking = false
+	if s.woken != nil {
+		close(s.woken)
+		s.woken = nil
+	}
 }
 
-// Start begins supervising (no-op when already started).
+func (s *Supervisor) touch(delta int64) {
+	s.active.Add(delta)
+	s.mu.Lock()
+	s.lastActive = time.Now()
+	s.mu.Unlock()
+}
+
+// activityTransport counts a request as active until its response body is
+// closed, so a long stream (SSE, a remote turn) keeps the service awake.
+type activityTransport struct {
+	rt http.RoundTripper
+	s  *Supervisor
+}
+
+func (a *activityTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	a.s.touch(1)
+	resp, err := a.rt.RoundTrip(r)
+	if err != nil {
+		a.s.touch(-1)
+		return nil, err
+	}
+	resp.Body = &activityBody{ReadCloser: resp.Body, done: sync.OnceFunc(func() { a.s.touch(-1) })}
+	return resp, nil
+}
+
+type activityBody struct {
+	io.ReadCloser
+	done func()
+}
+
+func (b *activityBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.done()
+	return err
+}
+
+// Start begins supervising (no-op when already started; wakes a sleeping
+// service).
 func (s *Supervisor) Start() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cancel != nil {
+		if s.status.State == StateSleeping {
+			s.Logs.Printf("woken by admin")
+			select {
+			case s.wakeNow <- struct{}{}:
+			default:
+			}
+		}
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -232,6 +362,11 @@ func (s *Supervisor) Stop() {
 	s.cancel, s.kill, s.rt, s.conn, s.done = nil, nil, nil, nil, nil
 	s.status.State = StateStopped
 	s.status.NextStart = time.Time{}
+	s.waking = false
+	if s.woken != nil {
+		close(s.woken)
+		s.woken = nil
+	}
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -284,16 +419,25 @@ func (s *Supervisor) loop(ctx context.Context, wake chan struct{}) {
 	for {
 		started := time.Now()
 		exited, err := s.runOnce(ctx)
+		s.finishWake()
 		if ctx.Err() != nil {
 			return
 		}
 		if err != nil {
 			s.Logs.Printf("start failed: %v", err)
 		} else {
-			select {
-			case <-exited:
-			case <-ctx.Done():
+			slept, done := s.watch(ctx, exited)
+			if done {
 				return
+			}
+			if slept {
+				select {
+				case <-wake:
+				case <-ctx.Done():
+					return
+				}
+				backoff = BackoffMin
+				continue
 			}
 			s.Logs.Printf("process exited")
 		}
@@ -331,6 +475,63 @@ func (s *Supervisor) loop(ctx context.Context, wake chan struct{}) {
 	}
 }
 
+// watch waits for the running process to exit, putting it to sleep when
+// auto-off applies and it has been idle for the limit. slept reports a
+// sleep (not a crash); done that the supervisor was stopped.
+func (s *Supervisor) watch(ctx context.Context, exited <-chan struct{}) (slept, done bool) {
+	t := time.NewTicker(idleCheckEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-exited:
+			return false, false
+		case <-ctx.Done():
+			return false, true
+		case <-t.C:
+			if !s.trySleep() {
+				continue
+			}
+			select {
+			case <-exited:
+			case <-ctx.Done():
+				return false, true
+			}
+			return true, false
+		}
+	}
+}
+
+// trySleep stops the process gracefully (as an admin stop does) when the
+// service may auto-off and nothing has touched it for the idle limit.
+func (s *Supervisor) trySleep() bool {
+	if s.autoOff == nil {
+		return false
+	}
+	on, idle := s.autoOff()
+	if !on || idle <= 0 || s.active.Load() > 0 {
+		return false
+	}
+	s.mu.Lock()
+	if s.status.State != StateRunning || s.active.Load() > 0 || time.Since(s.lastActive) < idle {
+		s.mu.Unlock()
+		return false
+	}
+	select { // a stale wake must not undo this sleep
+	case <-s.wakeNow:
+	default:
+	}
+	kill := s.kill
+	s.rt, s.kill, s.conn = nil, nil, nil
+	s.status.State = StateSleeping
+	s.status.SleptAt = time.Now()
+	s.mu.Unlock()
+	s.Logs.Printf("idle for %s; sleeping until the next request", idle)
+	if kill != nil {
+		kill()
+	}
+	return true
+}
+
 func (s *Supervisor) runOnce(ctx context.Context) (<-chan struct{}, error) {
 	s.mu.Lock()
 	s.status.State = StateStarting
@@ -364,6 +565,7 @@ func (s *Supervisor) runOnce(ctx context.Context) (<-chan struct{}, error) {
 	s.kill, s.rt, s.conn = killAll, unixTransport(socket), conn
 	s.status.State = StateRunning
 	s.status.StartedAt = time.Now()
+	s.lastActive = s.status.StartedAt
 	s.status.NextStart = time.Time{}
 	s.Logs.Printf("running")
 	return exited, nil

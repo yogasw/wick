@@ -35,9 +35,15 @@ type fakeProcs struct {
 	spawns  []time.Time
 	envs    [][]string
 	crashes []chan struct{}
+	// delay slows each spawn down (a boot that takes a while).
+	delay time.Duration
 }
 
 func (f *fakeProcs) spawn(_, socket string, env []string, stderr io.Writer) (func(), wickplugin.ToolConn, <-chan struct{}, error) {
+	f.mu.Lock()
+	delay := f.delay
+	f.mu.Unlock()
+	time.Sleep(delay)
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		return nil, nil, nil, err

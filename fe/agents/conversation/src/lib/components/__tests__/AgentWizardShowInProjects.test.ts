@@ -78,7 +78,7 @@ describe("AgentWizard › step 3 Model", () => {
 
   test("three steps; the picker starts empty and Create stays off until a model is picked", async () => {
     render(AgentWizard, { props: props() });
-    for (const s of ["Persona", "Access", "Model"]) expect(screen.getByText(s)).toBeDefined();
+    for (const s of ["Persona", "Access & mentions", "Model"]) expect(screen.getByText(s)).toBeDefined();
     await fireEvent.input(screen.getByLabelText("Name"), { target: { value: "Log Hunter" } });
     await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
     // Step 2 no longer creates.

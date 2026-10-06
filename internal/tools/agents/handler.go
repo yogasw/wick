@@ -98,7 +98,12 @@ func SetManager(m *registry.Manager) {
 }
 
 // SetPool wires in the agent subprocess pool.
-func SetPool(p *pool.Pool) { globalPool = p }
+func SetPool(p *pool.Pool) {
+	globalPool = p
+	if p != nil {
+		startProviderIdleCompactor()
+	}
+}
 
 // SetBroadcaster wires in the SSE event broadcaster.
 func SetBroadcaster(b *Broadcaster) { globalBcast = b }
@@ -407,9 +412,14 @@ func Register(r tool.Router) {
 	r.POST("/api/team/slack-remote", apiTeamSlackRemoteCreate)
 	r.GET("/api/team/plugin-sources", apiTeamPluginSources)
 	r.POST("/api/team/plugin-remote", apiTeamPluginRemoteCreate)
+	r.GET("/api/team/agents/{id}/plugin-remote", apiTeamPluginRemoteGet)
+	r.PATCH("/api/team/agents/{id}/plugin-remote", apiTeamPluginRemoteUpdate)
+	r.GET("/api/team/agents/{id}/plugin-remote/session-options", apiTeamPluginSessionOptionsGet)
+	r.PUT("/api/team/agents/{id}/plugin-remote/session-options", apiTeamPluginSessionOptionsPut)
 	r.GET("/api/team/agents/{id}/slack-remote", apiTeamSlackRemoteGet)
 	r.PATCH("/api/team/agents/{id}/slack-remote", apiTeamSlackRemoteUpdate)
 	r.POST("/api/team/agents/{id}/remote/recheck", apiTeamRemoteRecheck)
+	r.POST("/api/team/agents/{id}/remote/queue/{queue_id}/cancel", apiTeamRemoteQueueCancel)
 	r.POST("/api/team/agents/{id}/slack-remote/recheck", apiTeamRemoteRecheck) // older clients
 	r.GET("/api/team/agents/{id}/scheduled", apiTeamAgentScheduledList)
 	r.POST("/api/team/agents/{id}/scheduled", apiTeamAgentScheduledCreate)

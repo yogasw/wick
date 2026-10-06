@@ -37,6 +37,9 @@ type tokenFile struct {
 	// CallbackRevoked lists services whose callback token was revoked; they
 	// spawn without WICK_PLUGIN_TOKEN until an admin enables it again.
 	CallbackRevoked map[string]bool `json:"callback_revoked"`
+	// AutoOff holds the admin's auto-off override per service (absent =
+	// follow the plugin).
+	AutoOff map[string]AutoOffSetting `json:"auto_off,omitempty"`
 }
 
 // Tokens holds the access tokens (persisted, hashed) and the live callback
@@ -209,6 +212,30 @@ func (t *Tokens) CallbackRevoked(key string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.f.CallbackRevoked[key]
+}
+
+// AutoOffSetting returns the admin's auto-off setting of key (zero = follow
+// the plugin with its idle limit).
+func (t *Tokens) AutoOffSetting(key string) AutoOffSetting {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.f.AutoOff[key]
+}
+
+// SetAutoOffSetting stores key's auto-off setting; the zero value is
+// dropped (back to the plugin default).
+func (t *Tokens) SetAutoOffSetting(key string, v AutoOffSetting) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if v == (AutoOffSetting{}) {
+		delete(t.f.AutoOff, key)
+	} else {
+		if t.f.AutoOff == nil {
+			t.f.AutoOff = map[string]AutoOffSetting{}
+		}
+		t.f.AutoOff[key] = v
+	}
+	return t.save()
 }
 
 // LookupCallback resolves a callback bearer to its plugin and scopes.

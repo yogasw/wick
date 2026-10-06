@@ -37,9 +37,13 @@ export async function startDraftChat(
   msg: DraftMessage,
   open: () => Promise<{ session_id: string }>,
   send: (sessionId: string, msg: DraftMessage) => Promise<unknown>,
+  prepare?: (sessionId: string) => Promise<unknown>,
 ): Promise<{ sessionId: string; error?: string }> {
   const { session_id } = await open();
   try {
+    // e.g. the session fields a plugin remote agent's first turn uses: a
+    // failure keeps the message unsent so it never runs with other values.
+    if (prepare) await prepare(session_id);
     await send(session_id, msg);
     return { sessionId: session_id };
   } catch (e) {

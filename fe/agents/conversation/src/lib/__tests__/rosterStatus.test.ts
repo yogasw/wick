@@ -133,10 +133,12 @@ describe("no quick poll", () => {
   it("AgentsApp has no 2s interval and no /agents/live read", () => {
     const src = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
     const intervals = [...src.matchAll(/setInterval\([\s\S]*?,\s*(\w+)\s*\)/g)].map((m) => m[1]);
-    expect(intervals).toContain("30000");
-    expect(intervals.filter((ms) => ms !== "30000" && ms !== "1000")).toEqual([]);
+    // The roster refreshes on agent_changed over the sessions stream (no 30s
+    // poll since d979f8fc); the only timer left is the 1s wait clock.
+    expect(intervals.filter((ms) => ms !== "1000")).toEqual([]);
     expect(src).toMatch(/setInterval\(\(\) => \(waitNow = Date\.now\(\)\), 1000\)/);
     expect(src).not.toMatch(/agents\/live|listAgentsLive|createLivePoll/);
-    expect(src).toMatch(/connectSessionsStream\(/);
+    // The stream itself lives in rosterLive.ts since d979f8fc.
+    expect(src).toMatch(/liveRoster\(/);
   });
 });

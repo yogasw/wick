@@ -14,6 +14,7 @@
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import type { AgentIdentity } from "../agentMode.js";
   import { foldSystemEvents } from "../systemEvents.js";
+  import { withRemoteLinks } from "../remoteQueue.js";
   import { foldReplaced } from "../remoteRecheck.js";
   import { speakerVia } from "../teamMention.js";
 
@@ -56,9 +57,10 @@
     onApprovalDecide?: (approvalId: string, decision: import("../interactiveCards.js").ApprovalDecisionChoice) => void;
     /** "Cek ulang" of a Slack remote turn (see ThreadMessage). */
     onRemoteRecheck?: () => Promise<import("../api/team.js").RemoteRecheck>;
+    onRemoteQueueCancel?: (queueId: string) => Promise<void>;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -119,7 +121,7 @@
 
      Deliberately narrow. A user message in between means the agent was
      answering something new, and both turns stay. */
-  const shownTurns = $derived(
+  const shownTurns = $derived(withRemoteLinks(
     foldSystemEvents(
       foldReplaced(turns).filter((t, i, all) => {
         if (!t.interrupted || t.role !== "assistant") return true;
@@ -127,7 +129,7 @@
         return !next || next.role !== "assistant";
       }),
     ),
-  );
+  ));
 
   const isEmpty = $derived(shownTurns.length === 0 && !live && !typing.active);
 
@@ -245,7 +247,7 @@
         <span class="rounded-md bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm">{label}</span>
       </div>
     {/if}
-    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} />
+    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} />
   {/each}
 
   {#if live && turns.length === 0}

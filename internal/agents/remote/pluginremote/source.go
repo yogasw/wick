@@ -16,12 +16,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
 
 	"github.com/yogasw/wick/internal/agents/remote"
+	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/entity"
+	wickentity "github.com/yogasw/wick/pkg/entity"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
@@ -46,9 +49,22 @@ type Transport func(key string) (http.RoundTripper, error)
 
 // Source is one agent's plugin adapter.
 type Source struct {
-	Key       string
+	Key string
+	// AgentID and Config ride on every turn: the remote agent and its
+	// per-agent config in plaintext. Set them before the first Send.
+	AgentID   string
+	Config    map[string]string
 	transport Transport
 	limits    remote.Limits
+
+	// injMu guards inject and cancel: whether the plugin's describe said
+	// "inject": true / "cancel": true, asked once (a failed ask is asked
+	// again).
+	injMu    sync.Mutex
+	injKnown bool
+	inject   bool
+	cancel   bool
+	fields   bool
 }
 
 // NewSource wraps plugin key.
@@ -90,6 +106,10 @@ func (s *Source) do(ctx context.Context, method, path string, body any) (*http.R
 
 type state struct {
 	ContextID string `json:"context_id"`
+	// Options are the session's SessionField values: the user's answers
+	// until the remote session exists, then the values the plugin reports
+	// it used (falling back to the answers sent).
+	Options map[string]string `json:"options,omitempty"`
 }
 
 func statePath(dir string) string { return filepath.Join(dir, "plugin-remote.json") }
@@ -102,6 +122,44 @@ func loadState(dir string) state {
 		}
 	}
 	return st
+}
+
+func saveState(dir string, st state) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	b, _ := json.Marshal(st)
+	return os.WriteFile(statePath(dir), b, 0o600)
+}
+
+// ErrSessionStarted is returned by SaveSessionOptions once the remote
+// session exists: its values can no longer change (start a new chat).
+var ErrSessionStarted = errors.New("the remote session has started; start a new chat to change these values")
+
+// SessionOptions returns the session's SessionField values and whether
+// they are locked because the remote session already exists.
+func SessionOptions(dir string) (opts map[string]string, locked bool) {
+	st := loadState(dir)
+	return st.Options, st.ContextID != ""
+}
+
+// SaveSessionOptions keeps opts (empty values dropped) as the answers the
+// session's first turn sends, until the remote session exists.
+func SaveSessionOptions(dir string, opts map[string]string) error {
+	if dir == "" {
+		return errors.New("no session directory")
+	}
+	st := loadState(dir)
+	if st.ContextID != "" {
+		return ErrSessionStarted
+	}
+	st.Options = map[string]string{}
+	for k, v := range opts {
+		if v = strings.TrimSpace(v); v != "" {
+			st.Options[k] = v
+		}
+	}
+	return saveState(dir, st)
 }
 
 // ResumeID names the session by the plugin's conversation id.
@@ -117,7 +175,8 @@ func (s *Source) ResumeID(dir string) string {
 func (s *Source) Send(ctx context.Context, turn remote.Turn) (remote.Handle, error) {
 	st := loadState(turn.SessionDir)
 	resp, err := s.do(ctx, http.MethodPost, wickplugin.RemotePathSend,
-		wickplugin.RemoteTurn{Text: turn.Text, SessionID: turn.SessionID, ContextID: st.ContextID})
+		wickplugin.RemoteTurn{Text: store.StripSenderLines(turn.Text), SessionID: turn.SessionID, ContextID: st.ContextID,
+			AgentID: s.AgentID, Config: s.Config, Options: st.Options})
 	if err != nil {
 		return remote.Handle{}, err
 	}
@@ -127,8 +186,13 @@ func (s *Source) Send(ctx context.Context, turn remote.Turn) (remote.Handle, err
 		return remote.Handle{}, errors.New("plugin " + s.Key + ": send returned no handle")
 	}
 	if res.ContextID != "" && res.ContextID != st.ContextID && turn.SessionDir != "" {
-		b, _ := json.Marshal(state{ContextID: res.ContextID})
-		_ = os.WriteFile(statePath(turn.SessionDir), b, 0o600)
+		// The values the remote session was created with lock here; the
+		// plugin's report wins over the answers sent (defaults resolved).
+		if len(res.Options) > 0 {
+			st.Options = res.Options
+		}
+		st.ContextID = res.ContextID
+		_ = saveState(turn.SessionDir, st)
 	}
 	return remote.Handle{ID: res.Handle}, nil
 }
@@ -167,23 +231,30 @@ func (s *Source) Receive(ctx context.Context, h remote.Handle) (<-chan remote.Ev
 	return ch, nil
 }
 
-// Cancel ends h on the plugin side (Done is the only stop it has).
+// Cancel stops h's turn on the remote's side (Stop in wick), when the
+// plugin's describe says "cancel": true; otherwise there is nothing to
+// call and the remote may keep working.
 func (s *Source) Cancel(ctx context.Context, h remote.Handle) error {
-	resp, err := s.do(ctx, http.MethodPost, wickplugin.RemotePathDone, map[string]string{"handle": h.ID})
+	if !s.caps(ctx).cancel {
+		return nil
+	}
+	resp, err := s.do(ctx, http.MethodPost, wickplugin.RemotePathCancel, map[string]string{"handle": h.ID})
 	if err == nil {
 		resp.Body.Close()
 	}
 	return err
 }
 
-// End releases h.
+// End releases h on the plugin side.
 func (s *Source) End(h remote.Handle) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = s.Cancel(ctx, h)
+	resp, err := s.do(ctx, http.MethodPost, wickplugin.RemotePathDone, map[string]string{"handle": h.ID})
+	if err == nil {
+		resp.Body.Close()
+	}
 }
 
-// Describe asks the plugin for its name.
 func (s *Source) Describe(ctx context.Context) (remote.Description, error) {
 	d := remote.Description{Kind: AdapterKind, Target: s.Key, Name: s.Key}
 	resp, err := s.do(ctx, http.MethodGet, wickplugin.RemotePathDescribe, nil)
@@ -191,13 +262,82 @@ func (s *Source) Describe(ctx context.Context) (remote.Description, error) {
 		return d, err
 	}
 	defer resp.Body.Close()
-	var out struct{ Name, Detail string }
+	var out struct {
+		Name, Detail  string
+		Inject        bool
+		Cancel        bool
+		SessionFields bool `json:"session_fields"`
+	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)
+	s.injMu.Lock()
+	s.injKnown, s.inject, s.cancel, s.fields = true, out.Inject, out.Cancel, out.SessionFields
+	s.injMu.Unlock()
 	if out.Name != "" {
 		d.Name = out.Name
 	}
 	d.Detail = out.Detail
 	return d, nil
+}
+
+// capsOf is what the plugin's describe declares beyond the base RPC.
+type capsOf struct{ inject, cancel, fields bool }
+
+// caps asks describe once what the plugin takes beyond the base RPC; a
+// plugin that does not declare inject / cancel never gets those paths.
+func (s *Source) caps(ctx context.Context) capsOf {
+	s.injMu.Lock()
+	defer s.injMu.Unlock()
+	if s.injKnown {
+		return capsOf{s.inject, s.cancel, s.fields}
+	}
+	resp, err := s.do(ctx, http.MethodGet, wickplugin.RemotePathDescribe, nil)
+	if err != nil {
+		return capsOf{}
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Inject        bool `json:"inject"`
+		Cancel        bool `json:"cancel"`
+		SessionFields bool `json:"session_fields"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	s.injKnown, s.inject, s.cancel, s.fields = true, out.Inject, out.Cancel, out.SessionFields
+	return capsOf{s.inject, s.cancel, s.fields}
+}
+
+// SessionFields asks the plugin which values a new session of this agent
+// takes (defaults resolved from the agent's Config); nil when the plugin
+// declares none.
+func (s *Source) SessionFields(ctx context.Context) ([]wickplugin.SessionField, error) {
+	if !s.caps(ctx).fields {
+		return nil, nil
+	}
+	resp, err := s.do(ctx, http.MethodPost, wickplugin.RemotePathSessionFields,
+		wickplugin.RemoteSessionFieldsRequest{AgentID: s.AgentID, Config: s.Config})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Fields []wickplugin.SessionField `json:"fields"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Fields, nil
+}
+
+func (s *Source) Inject(ctx context.Context, h remote.Handle, turn remote.Turn) error {
+	if !s.caps(ctx).inject {
+		return remote.ErrInjectUnsupported
+	}
+	resp, err := s.do(ctx, http.MethodPost, wickplugin.RemotePathInject,
+		wickplugin.RemoteInject{Handle: h.ID, Text: store.StripSenderLines(turn.Text)})
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
 }
 
 // Test pings Describe.
@@ -219,6 +359,54 @@ type Config struct {
 	// Usage is UsageByMention once the agent's mention policy decides who
 	// may reach it; "" for a row saved before, which took no agent's turn.
 	Usage string `json:"usage,omitempty"`
+	// Values are the agent's RemoteConfigs answers by key. A secret's value
+	// is stored encrypted (wick_cenc_); see SealValues / OpenValues.
+	Values map[string]string `json:"values,omitempty"`
+}
+
+// Codec encrypts secret values at rest — the configs codec connector
+// secrets use.
+type Codec interface {
+	EncryptSecret(plain string) (string, error)
+	DecryptSecret(token string) (string, error)
+}
+
+// SealValues encrypts the values of the secret keys of decl.
+func SealValues(codec Codec, decl []wickentity.Config, values map[string]string) (map[string]string, error) {
+	out := make(map[string]string, len(values))
+	for k, v := range values {
+		out[k] = v
+	}
+	if codec == nil {
+		return out, nil
+	}
+	for _, d := range decl {
+		if v := out[d.Key]; d.IsSecret && v != "" {
+			sealed, err := codec.EncryptSecret(v)
+			if err != nil {
+				return nil, fmt.Errorf("encrypt %s: %w", d.Key, err)
+			}
+			out[d.Key] = sealed
+		}
+	}
+	return out, nil
+}
+
+// OpenValues decrypts stored values for the plugin; a token that is not
+// encrypted passes through.
+func OpenValues(codec Codec, values map[string]string) (map[string]string, error) {
+	out := make(map[string]string, len(values))
+	for k, v := range values {
+		if codec != nil && v != "" {
+			plain, err := codec.DecryptSecret(v)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt %s: %w", k, err)
+			}
+			v = plain
+		}
+		out[k] = v
+	}
+	return out, nil
 }
 
 // UsageByMention marks a plugin remote agent whose mention policy decides

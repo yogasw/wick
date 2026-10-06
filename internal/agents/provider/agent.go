@@ -954,6 +954,21 @@ func (a *Agent) TransportEnded() bool {
 	return ok && te.TurnEnded()
 }
 
+// QueueCanceler is a process that holds messages queued behind its
+// running turn and can drop one before it is sent (a remote agent).
+type QueueCanceler interface {
+	CancelQueued(id string) bool
+}
+
+// CancelQueued drops the queued message id before it is sent; false when
+// the process holds no such message.
+func (a *Agent) CancelQueued(id string) bool {
+	a.mu.Lock()
+	qc, ok := a.proc.(QueueCanceler)
+	a.mu.Unlock()
+	return ok && qc.CancelQueued(id)
+}
+
 // QueuedCount returns how many messages are waiting to run after the
 // current turn (RespawnQueue providers). 0 for append-mode agents.
 // Surfaced in the Process panel so the operator sees the backlog.

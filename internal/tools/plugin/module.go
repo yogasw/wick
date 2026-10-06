@@ -58,6 +58,18 @@ func (p *Pool) add(key, version string, r *Runner) {
 	p.versions[key] = version
 }
 
+// Remove stops the process of tool plugin key and drops it from the pool,
+// ahead of an uninstall deleting its files.
+func (p *Pool) Remove(key string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if r, ok := p.runners[key]; ok {
+		r.Stop()
+	}
+	delete(p.runners, key)
+	delete(p.versions, key)
+}
+
 // Version returns the installed version of tool plugin key; ok is false for
 // a built-in tool.
 func (p *Pool) Version(key string) (string, bool) {

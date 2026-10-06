@@ -12,6 +12,7 @@
   import { teamSender } from "../teamMention.js";
   import { isSystemEventKind } from "../systemEvents.js";
   import SystemEventChip from "./system/SystemEventChip.svelte";
+  import RemoteQueueChip from "./RemoteQueueChip.svelte";
   import InputRequestCard from "./system/InputRequestCard.svelte";
   import ActionCard from "./system/ActionCard.svelte";
   import ApprovalRequestCard from "./system/ApprovalRequestCard.svelte";
@@ -56,8 +57,10 @@
     /** Reads a Slack remote turn's thread again ("Cek ulang"); unset = no
         button. Offered on a timeout and on a turn closed without marker. */
     onRemoteRecheck?: () => Promise<RecheckResult>;
+    /** Cancels a message queued behind a busy remote agent. */
+    onRemoteQueueCancel?: (queueId: string) => Promise<void>;
   };
-  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck }: Props = $props();
+  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -432,6 +435,11 @@
           </svg>
           <span class="whitespace-pre-wrap break-words min-w-0">{interruptedLabel}</span>
         </div>
+        {#if turn.extras?.remote_link}
+          <!-- Stop only ended wick's listening: the remote has no cancel,
+               so its own page is where the work is stopped. -->
+          <a href={turn.extras.remote_link} target="_blank" rel="noopener noreferrer" class="text-[11px] text-amber-700 dark:text-amber-300 underline hover:no-underline break-all">Stop it on the remote: {turn.extras.remote_link}</a>
+        {/if}
       {:else if turn.kind === "compaction"}
         <!-- Where older turns were folded into a summary. Rendered as a
              divider rather than a notice because that is what it is: the
@@ -456,6 +464,8 @@
           </span>
           <div class="h-px flex-1 bg-white-300 dark:bg-navy-600"></div>
         </div>
+      {:else if turn.kind === "remote_queue"}
+        <RemoteQueueChip {turn} agentName={agent?.name ?? ""} onCancel={onRemoteQueueCancel} />
       {:else if turn.kind === "approval_request"}
         <ApprovalRequestCard {turn} onDecide={onApprovalDecide} />
       {:else if turn.kind === "input_request"}

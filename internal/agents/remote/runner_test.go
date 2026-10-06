@@ -19,6 +19,10 @@ type line struct {
 	Result     string `json:"result"`
 	RemoteNote string `json:"remote_note"`
 	Status     string `json:"status"`
+	QueueID    string `json:"queue_id"`
+	QueueState string `json:"queue_state"`
+	Text       string `json:"text"`
+	URL        string `json:"url"`
 	Message    struct {
 		Content []struct {
 			Text string `json:"text"`
@@ -449,5 +453,311 @@ func TestNoHeartbeatAfterResultButStillBusy(t *testing.T) {
 			t.Fatal("still busy after the grace window")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// turnFake opens a push channel per Send and records what was sent.
+type turnFake struct {
+	mu    sync.Mutex
+	sends chan string
+	push  []chan Event
+}
+
+func newTurnFake() *turnFake { return &turnFake{sends: make(chan string, 4)} }
+
+func (f *turnFake) Kind() string                                  { return "fake" }
+func (f *turnFake) Label() string                                 { return "fake" }
+func (f *turnFake) Listen() []ListenMode                          { return []ListenMode{ListenPush} }
+func (f *turnFake) Limits() Limits                                { return Limits{Max: 5 * time.Second} }
+func (f *turnFake) Cancel(context.Context, Handle) error          { return nil }
+func (f *turnFake) End(Handle)                                    {}
+func (f *turnFake) Describe(context.Context) (Description, error) { return Description{}, nil }
+func (f *turnFake) Test(context.Context) TestResult               { return TestResult{OK: true} }
+
+func (f *turnFake) Send(_ context.Context, t Turn) (Handle, error) {
+	f.mu.Lock()
+	f.push = append(f.push, make(chan Event, 8))
+	f.mu.Unlock()
+	f.sends <- t.Text
+	return Handle{ID: t.Text}, nil
+}
+
+func (f *turnFake) Receive(_ context.Context, h Handle) (<-chan Event, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.push[len(f.push)-1], nil
+}
+
+func (f *turnFake) reply(i int, text string) {
+	f.mu.Lock()
+	ch := f.push[i]
+	f.mu.Unlock()
+	ch <- Event{Kind: EventText, Text: text}
+	ch <- Event{Kind: EventDone}
+}
+
+// injFake is a turnFake whose remote takes a message mid-turn.
+type injFake struct {
+	*turnFake
+	err     error
+	injects chan string
+}
+
+func (f *injFake) Inject(_ context.Context, h Handle, t Turn) error {
+	f.injects <- h.ID + "|" + t.Text
+	return f.err
+}
+
+func recv(t *testing.T, ch <-chan string, what string) string {
+	t.Helper()
+	select {
+	case s := <-ch:
+		return s
+	case <-time.After(3 * time.Second):
+		t.Fatalf("no %s", what)
+		return ""
+	}
+}
+
+// midTurn starts src with "hi", sends "more" while that turn runs, and
+// returns the process and its stream lines.
+func midTurn(t *testing.T, src Source, sends chan string) (provider.Process, <-chan line) {
+	t.Helper()
+	p, err := Spawner{Source: src}.Spawn(context.Background(), provider.SpawnOptions{InitialMessage: "hi", SessionDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Kill() })
+	lines := make(chan line, 32)
+	go func() {
+		sc := bufio.NewScanner(p.Stdout())
+		for sc.Scan() {
+			var l line
+			if json.Unmarshal(sc.Bytes(), &l) == nil {
+				lines <- l
+			}
+		}
+		close(lines)
+	}()
+	if got := recv(t, sends, "first send"); got != "hi" {
+		t.Fatalf("first send = %q", got)
+	}
+	if _, err := p.Stdin().Write([]byte(`{"type":"user","message":{"content":"more"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	return p, lines
+}
+
+// result waits for the next result line; forwarded reports whether a
+// forwarded status came before it.
+func result(t *testing.T, lines <-chan line) (l line, forwarded bool) {
+	t.Helper()
+	for {
+		select {
+		case l, ok := <-lines:
+			if !ok {
+				t.Fatal("stream ended without a result")
+			}
+			if l.Subtype == "remote_status" && l.Status == StatusForwarded {
+				forwarded = true
+			}
+			if l.Type == "result" {
+				return l, forwarded
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("no result")
+		}
+	}
+}
+
+func TestMidTurnMessageInjected(t *testing.T) {
+	f := &injFake{turnFake: newTurnFake(), injects: make(chan string, 4)}
+	_, lines := midTurn(t, f, f.sends)
+	if got := recv(t, f.injects, "inject"); got != "hi|more" {
+		t.Fatalf("inject = %q", got)
+	}
+	f.reply(0, "both answered")
+	l, forwarded := result(t, lines)
+	if l.IsError || l.Result != "both answered" || !forwarded {
+		t.Fatalf("result=%+v forwarded=%v", l, forwarded)
+	}
+	select {
+	case s := <-f.sends:
+		t.Fatalf("injected message was also sent as a turn: %q", s)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestMidTurnInjectErrorQueuesNextTurn(t *testing.T) {
+	f := &injFake{turnFake: newTurnFake(), injects: make(chan string, 4), err: ErrInjectUnsupported}
+	_, lines := midTurn(t, f, f.sends)
+	recv(t, f.injects, "inject")
+	f.reply(0, "first")
+	if l, forwarded := result(t, lines); l.Result != "first" || forwarded {
+		t.Fatalf("result=%+v forwarded=%v", l, forwarded)
+	}
+	if got := recv(t, f.sends, "second send"); got != "more" {
+		t.Fatalf("second send = %q", got)
+	}
+	f.reply(1, "second")
+	if l, _ := result(t, lines); l.Result != "second" {
+		t.Fatalf("second result=%+v", l)
+	}
+}
+
+func TestMidTurnWithoutInjectorWaits(t *testing.T) {
+	f := newTurnFake()
+	_, lines := midTurn(t, f, f.sends)
+	select {
+	case s := <-f.sends:
+		t.Fatalf("sent %q while the first turn ran", s)
+	case <-time.After(100 * time.Millisecond):
+	}
+	f.reply(0, "first")
+	if l, forwarded := result(t, lines); l.Result != "first" || forwarded {
+		t.Fatalf("result=%+v forwarded=%v", l, forwarded)
+	}
+	if got := recv(t, f.sends, "second send"); got != "more" {
+		t.Fatalf("second send = %q", got)
+	}
+}
+
+// queueLine waits for the remote_queue line of text in state.
+func queueLine(t *testing.T, lines <-chan line, text, state string) line {
+	t.Helper()
+	for {
+		select {
+		case l, ok := <-lines:
+			if !ok {
+				t.Fatalf("stream ended before %s %q", state, text)
+			}
+			if l.Subtype == "remote_queue" && l.Text == text && l.QueueState == state {
+				return l
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("no %s line for %q", state, text)
+		}
+	}
+}
+
+func TestQueuedMessageCancelledIsNeverSent(t *testing.T) {
+	f := newTurnFake()
+	p, lines := midTurn(t, f, f.sends)
+	more := queueLine(t, lines, "more", QueueQueued)
+	if more.QueueID == "" {
+		t.Fatal("queued line has no id")
+	}
+	if _, err := p.Stdin().Write([]byte(`{"type":"user","message":{"content":"third"}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	queueLine(t, lines, "third", QueueQueued)
+	qc, ok := p.(interface{ CancelQueued(string) bool })
+	if !ok {
+		t.Fatal("remote process does not cancel queued messages")
+	}
+	if !qc.CancelQueued(more.QueueID) {
+		t.Fatal("CancelQueued = false for a queued message")
+	}
+	if qc.CancelQueued(more.QueueID) {
+		t.Fatal("CancelQueued twice = true")
+	}
+	queueLine(t, lines, "more", QueueCancelled)
+	f.reply(0, "first")
+	if got := recv(t, f.sends, "next send"); got != "third" {
+		t.Fatalf("next send = %q, want the message left in the queue", got)
+	}
+	queueLine(t, lines, "third", QueueSent)
+}
+
+// cancelFake is a turnFake that records the turns stopped on the remote.
+type cancelFake struct {
+	*turnFake
+	cancels chan string
+}
+
+func (f *cancelFake) Cancel(_ context.Context, h Handle) error {
+	f.cancels <- h.ID
+	return nil
+}
+
+// spawnRead spawns a remote process and reads its stdout into lines.
+func spawnRead(t *testing.T, src Source) (provider.Process, <-chan line) {
+	t.Helper()
+	p, err := Spawner{Source: src}.Spawn(context.Background(), provider.SpawnOptions{InitialMessage: "hi", SessionDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Kill() })
+	lines := make(chan line, 32)
+	go func() {
+		sc := bufio.NewScanner(p.Stdout())
+		for sc.Scan() {
+			var l line
+			if json.Unmarshal(sc.Bytes(), &l) == nil {
+				lines <- l
+			}
+		}
+		close(lines)
+	}()
+	return p, lines
+}
+
+// waitLine waits for the first line ok accepts.
+func waitLine(t *testing.T, lines <-chan line, what string, ok func(line) bool) line {
+	t.Helper()
+	for {
+		select {
+		case l, open := <-lines:
+			if !open {
+				t.Fatalf("stream ended before %s", what)
+			}
+			if ok(l) {
+				return l
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("no %s", what)
+		}
+	}
+}
+
+func TestKillCancelsRunningTurnOnRemote(t *testing.T) {
+	f := &cancelFake{turnFake: newTurnFake(), cancels: make(chan string, 2)}
+	p, lines := spawnRead(t, f)
+	recv(t, f.sends, "send")
+	// A status line out means the turn is listening, its handle known.
+	f.mu.Lock()
+	ch := f.push[0]
+	f.mu.Unlock()
+	ch <- Event{Kind: EventStatus, Status: StatusWorking, Detail: "busy"}
+	waitLine(t, lines, "status", func(l line) bool { return l.Subtype == "remote_status" })
+	_ = p.Kill()
+	if got := recv(t, f.cancels, "cancel"); got != "hi" {
+		t.Fatalf("cancelled handle = %q", got)
+	}
+}
+
+func TestTurnLinkShownOnce(t *testing.T) {
+	f := newTurnFake()
+	_, lines := spawnRead(t, f)
+	recv(t, f.sends, "send")
+	f.mu.Lock()
+	ch := f.push[0]
+	f.mu.Unlock()
+	ch <- Event{Kind: EventStatus, Status: StatusWorking, Detail: "s1", URL: "https://example.com/s1"}
+	ch <- Event{Kind: EventStatus, Status: StatusThinking, URL: "https://example.com/s1"}
+	ch <- Event{Kind: EventText, Text: "ok"}
+	ch <- Event{Kind: EventDone}
+	links := 0
+	waitLine(t, lines, "result", func(l line) bool {
+		if l.Subtype == "remote_link" {
+			links++
+			if l.URL != "https://example.com/s1" {
+				t.Errorf("link = %q", l.URL)
+			}
+		}
+		return l.Type == "result"
+	})
+	if links != 1 {
+		t.Fatalf("remote_link lines = %d, want 1", links)
 	}
 }

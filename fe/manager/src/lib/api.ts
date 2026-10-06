@@ -547,8 +547,11 @@ export async function setPluginEnabled(key: string, enabled: boolean): Promise<{
   const verb = enabled ? "enable" : "disable";
   return apiPost<{ ok: boolean }>(`/manager/api/plugins/${encodeURIComponent(key)}/${verb}`);
 }
-export async function removePlugin(key: string): Promise<{ ok: boolean }> {
-  return apiPost<{ ok: boolean }>(`/manager/api/plugins/${encodeURIComponent(key)}/remove`);
+/* Uninstalls a plugin of any kind; kind picks one when a connector and a
+   tool share a key. Its config stays for a reinstall. */
+export async function removePlugin(key: string, kind?: string): Promise<{ ok: boolean }> {
+  const q = kind ? `?kind=${encodeURIComponent(kind)}` : "";
+  return apiPost<{ ok: boolean }>(`/manager/api/plugins/${encodeURIComponent(key)}/remove${q}`);
 }
 
 /* Installed plugins across every kind, with where each came from
@@ -588,7 +591,29 @@ export function listInstalledPlugins(): Promise<{ plugins: InstalledPlugin[]; of
 /* ── Service plugins (always-on, /x/{key}) ── */
 
 export type ServiceRoute = { prefix: string; auth: "public" | "token" | "wick-session" };
-export type ServiceStatus = { state: "stopped" | "starting" | "running" | "backoff"; restarts: number; started_at?: string; next_start?: string; last_error?: string };
+export type ServiceStatus = {
+  state: "stopped" | "starting" | "running" | "backoff" | "sleeping";
+  restarts: number;
+  started_at?: string;
+  next_start?: string;
+  last_error?: string;
+  /* Auto-off: when it last went to sleep, last request/turn, last wake time. */
+  slept_at?: string;
+  last_active?: string;
+  last_wake_ms?: number;
+};
+export type ServiceAutoOffMode = "default" | "on" | "off";
+/* What the plugin declares (supported/reason/default idle), what the admin
+   set (mode/idle), and the effective result (enabled, forced = overridden). */
+export type ServiceAutoOff = {
+  supported: boolean;
+  reason?: string;
+  default_idle_seconds: number;
+  mode: ServiceAutoOffMode;
+  idle_seconds: number;
+  enabled: boolean;
+  forced: boolean;
+};
 export type ServiceToken = { id: string; name: string; hint: string; created_at: string; last_used?: string };
 export type ServicePlugin = {
   key: string;
@@ -601,6 +626,7 @@ export type ServicePlugin = {
   capabilities?: string[];
   callback_scopes?: string[];
   callback_revoked: boolean;
+  auto_off?: ServiceAutoOff;
   /* Manifest config rows; a secret's value is never sent (has_value only). */
   configs?: ServiceConfigField[];
   tokens?: ServiceToken[];
@@ -637,6 +663,12 @@ export function serviceAction(key: string, action: "start" | "stop" | "restart" 
    them to the running plugin, restarting it when it cannot take a push. */
 export function setServiceConfig(key: string, values: Record<string, string>): Promise<ServicePlugin> {
   return apiPost<ServicePlugin>(`${serviceBase(key)}/config`, { values });
+}
+
+/* Admin override of auto-off; forcing "on" while the plugin says it cannot
+   auto-off needs confirm. idleSeconds 0 = the plugin's default. */
+export function setServiceAutoOff(key: string, mode: ServiceAutoOffMode, idleSeconds: number, confirm = false): Promise<ServicePlugin> {
+  return apiPost<ServicePlugin>(`${serviceBase(key)}/auto-off`, { mode, idle_seconds: idleSeconds, confirm });
 }
 
 export function generateServiceToken(key: string, name: string): Promise<ServiceTokenSecret> {

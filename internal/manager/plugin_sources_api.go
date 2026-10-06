@@ -224,7 +224,13 @@ func (h *PluginSourcesHandler) apiAvailable(w http.ResponseWriter, r *http.Reque
 	list, _ := h.Sources.List()
 	installed := installedVersions()
 	out := []availableView{}
+	// Installed plugins stay listed (installed_version set) so the
+	// Marketplace can offer Update / Uninstall; a disabled source offers
+	// nothing.
 	for _, s := range list {
+		if !s.Enabled {
+			continue
+		}
 		for _, e := range source.Entries(&s) {
 			v := availableView{SourceID: s.ID, SourceName: s.Name, Key: e.Key, Kind: wickplugin.NormalizeKind(e.Kind),
 				Name: e.Name, Description: e.Description, Version: e.Version, InstalledVersion: installed[e.Key], OSArch: []string{}}

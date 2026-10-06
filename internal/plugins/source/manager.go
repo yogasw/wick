@@ -275,8 +275,7 @@ func (m *Manager) Check(ctx context.Context, id string) (CheckResult, error) {
 			avail = e.Version
 			out.Updates = append(out.Updates, e.Key)
 		}
-		m.DB.Model(&entity.PluginState{}).Where("key = ? AND (source_id = '' OR source_id IS NULL OR source_id = ?)", e.Key, s.ID).
-			Updates(map[string]any{"source_id": s.ID, "available_version": avail})
+		m.claimInstalled(s, e.Key, cur, avail)
 		if avail != "" && s.AutoUpdate {
 			if _, err := m.InstallFromSource(ctx, s.ID, e.Key, "auto-update", nil); err == nil {
 				out.AutoUpdated = append(out.AutoUpdated, e.Key)
@@ -286,6 +285,31 @@ func (m *Manager) Check(ctx context.Context, id string) (CheckResult, error) {
 		}
 	}
 	return out, nil
+}
+
+// claimInstalled points installed plugin key (cur = kind, version) at source
+// s and records avail. A plugin copied into the plugins folder by hand has no
+// plugin_states row, so a bare UPDATE matched nothing and it stayed
+// local/unknown forever — the row is created here, enabled (as the loader
+// treats a missing row). An existing row keeps its enabled flag and origin
+// (origin is only filled when empty); a row owned by another source is left
+// alone.
+func (m *Manager) claimInstalled(s *entity.PluginSource, key string, cur [2]string, avail string) {
+	var st entity.PluginState
+	err := m.DB.Where("key = ?", key).First(&st).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		m.DB.Create(&entity.PluginState{Key: key, Enabled: true, Kind: cur[0], SourceID: s.ID,
+			Origin: m.originOf(s.ID), InstalledVersion: cur[1], AvailableVersion: avail})
+		return
+	}
+	if err != nil || (st.SourceID != "" && st.SourceID != s.ID) {
+		return
+	}
+	upd := map[string]any{"source_id": s.ID, "available_version": avail}
+	if st.Origin == "" {
+		upd["origin"] = m.originOf(s.ID)
+	}
+	m.DB.Model(&entity.PluginState{}).Where("key = ?", key).Updates(upd)
 }
 
 // InstallFromSource installs (or updates) key from source id, records its
@@ -373,6 +397,12 @@ func (m *Manager) Audit(limit int) ([]entity.PluginAudit, error) {
 	var out []entity.PluginAudit
 	err := m.DB.Order("id desc").Limit(limit).Find(&out).Error
 	return out, err
+}
+
+// Record writes one audit row for an admin change made outside a source
+// (e.g. a service plugin's auto-off setting).
+func (m *Manager) Record(actor, action, key, detail string) {
+	m.audit(entity.PluginAudit{Actor: actor, Action: action, Key: key, Detail: detail})
 }
 
 func (m *Manager) audit(a entity.PluginAudit) {

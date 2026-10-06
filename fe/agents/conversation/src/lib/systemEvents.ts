@@ -93,6 +93,7 @@ const FOLD_KEY: Record<string, string> = {
   mention_handoff: "task_id",
   input_request: "ask_id",
   approval_request: "approval_id",
+  remote_queue: "queue_id",
 };
 
 /** foldSystemEvents folds the system turns that share a fold key into one

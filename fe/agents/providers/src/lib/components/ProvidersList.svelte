@@ -761,6 +761,14 @@
                   <p data-testid="card-name" title={`${p.Instance.Type}/${p.Instance.Name}`} class="min-w-0 line-clamp-2 break-all text-base font-semibold text-black-900 dark:text-white-100">{p.Instance.Type}/{p.Instance.Name}</p>
                   <div class="shrink-0 mt-0.5 flex items-center gap-1.5">
                     <span data-testid="card-cap" class={`whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium ${p.Cap.Used > 0 ? "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300" : "bg-white-300 dark:bg-navy-600 text-black-600 dark:text-black-500"}`}>{capLabel(p.Cap)}</span>
+                    {#if p.Instance.IdleCompact}
+                      {@const ic = p.Instance.IdleCompact}
+                      <span
+                        data-testid="card-idle-compact"
+                        title={`Compact when idle: after ${ic.Minutes} min idle, once the context is at least ${ic.Trigger === "tokens" ? `${ic.Threshold}k tokens` : `${ic.Threshold}%`}${ic.Scope === "all" ? ", every session" : ic.Scope === "whitelist" ? `, only sessions matching: ${ic.Match.join(", ")}` : `, except sessions matching: ${ic.Match.join(", ")}`}`}
+                        class="whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300"
+                      >auto-compact {ic.Minutes}m · {ic.Trigger === "tokens" ? `${ic.Threshold}k` : `${ic.Threshold}%`}{ic.Scope === "whitelist" ? " · whitelist" : ic.Scope === "skip" ? ` · skip ${ic.Match.length}` : " · all"}</span>
+                    {/if}
                     {#if ACCOUNT_ISOLATED.has(p.Instance.Type)}
                       {@render accountHintIcon(`card-${p.Instance.Type}-${p.Instance.Name}`, p.Instance.Type, "one-account-badge", "left")}
                     {/if}

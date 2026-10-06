@@ -1,12 +1,22 @@
 <script lang="ts">
-  /* The Team app with no agent yet (draft-team-empty-state): what a Team
+  /* The Team app with no Captain yet (draft-team-empty-state): what a Team
      is, the three things to know about the Captain role, and the two ways
-     in. Nothing is created until the owner goes through the wizard. */
+     in. Nothing is created until the owner goes through the wizard.
+     Also shown when the Captain is gone: the roster stays hidden until
+     there is one again. candidates are the user's own Wick agents that can
+     take the role; shared and remote agents never can, so someone with
+     only those sees exactly the new-user page. */
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import { REMOTE_NOT_CAPTAIN } from "../captainSettings.js";
 
-  type Props = { onCreate: () => void; onRemote: () => void };
-  let { onCreate, onRemote }: Props = $props();
+  type Candidate = { id: string; name: string; handle: string };
+  type Props = {
+    onCreate: () => void;
+    onRemote: () => void;
+    candidates?: Candidate[];
+    onMakeCaptain?: (c: Candidate) => void;
+  };
+  let { onCreate, onRemote, candidates = [], onMakeCaptain }: Props = $props();
 
   const STEPS = [
     { title: "Your first agent becomes the Captain", body: "Give it any name and its own persona — the Captain is a role, not a name." },
@@ -26,7 +36,7 @@
       </span>
       <span class="empty-seat empty-seat-late mb-4 flex h-12 w-12 items-center justify-center rounded-full border-2 border-dashed border-white-300 dark:border-navy-600">+</span>
     </div>
-    <h1 class="text-2xl font-semibold text-black-900 dark:text-white-100">Build your Team</h1>
+    <h1 class="text-2xl font-semibold text-black-900 dark:text-white-100">{candidates.length ? "Your Team needs a Captain" : "Build your Team"}</h1>
     <p class="mx-auto mt-2 max-w-md text-sm text-black-800 dark:text-black-600">
       A Team is a set of agents you can chat with, @mention in Slack, and hand work between. Start with one — add specialists later.
     </p>
@@ -45,6 +55,14 @@
       <button type="button" class="rounded-xl bg-green-500 px-4 py-2 text-sm font-semibold text-white-100 hover:bg-green-600" data-testid="team-empty-create" onclick={onCreate}>✨ Create your first agent</button>
       <button type="button" class="rounded-xl border border-white-300 bg-white-100 px-4 py-2 text-sm text-black-900 hover:bg-white-200 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100 dark:hover:bg-navy-600" data-testid="team-empty-remote" onclick={onRemote}>🔗 Connect a remote agent</button>
     </div>
+    {#if candidates.length && onMakeCaptain}
+      <div class="mt-4 flex flex-wrap items-center justify-center gap-2 text-sm text-black-800 dark:text-black-600" data-testid="team-empty-candidates">
+        <span>Or pick one of your agents as Captain:</span>
+        {#each candidates as c (c.id)}
+          <button type="button" class="rounded-xl border border-white-300 bg-white-100 px-3 py-1.5 text-sm text-black-900 hover:bg-white-200 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100 dark:hover:bg-navy-600" onclick={() => onMakeCaptain(c)}>🧭 {c.name} <span class="text-black-700 dark:text-black-600">@{c.handle}</span></button>
+        {/each}
+      </div>
+    {/if}
     <p class="mt-3 text-xs text-black-800 dark:text-black-600">{REMOTE_NOT_CAPTAIN}</p>
   </div>
 </div>

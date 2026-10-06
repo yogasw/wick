@@ -97,7 +97,8 @@
   import { getSessionOverrides, setSessionOverride } from "../api/overrides.js";
   import type { ConfigField, ComposerMentionAgent } from "@wick-fe/common-ui";
   import { AgentAvatar } from "@wick-fe/common-avatar";
-  import { listAgentRoster, recheckRemote, runApi } from "../api/team.js";
+  import { cancelRemoteQueued, getSessionOptions, listAgentRoster, recheckRemote, runApi, type SessionOptions } from "../api/team.js";
+  import SessionFieldChips from "./SessionFieldChips.svelte";
   import { recheckToast } from "../remoteRecheck.js";
   import { teamMentionAgents, type TeamPeer } from "../teamMention.js";
   import { navigate as navigateAgents } from "../agentsRouter.js";
@@ -327,6 +328,27 @@
      server answers from its shared paced cache, so opening this costs no
      upstream request; an unsupported provider type comes back with
      supported=false and the popover prints why. */
+  /* A plugin remote agent's session fields (e.g. repository and branch),
+     shown read-only above the composer: the values the chat started with,
+     or the plugin's defaults for a chat that has not sent yet. */
+  let sessionFields = $state<SessionOptions | null>(null);
+  $effect(() => {
+    const agentId = agentMode?.sessionFieldsAgentId;
+    const sid = sessionId;
+    sessionFields = null;
+    if (!agentId) return;
+    let live = true;
+    runApi(getSessionOptions(base, agentId, sid))
+      .then((o) => {
+        if (live) sessionFields = o;
+      })
+      .catch(() => {
+        // Nothing to show when the plugin cannot be asked.
+      });
+    return () => {
+      live = false;
+    };
+  });
   let usagePopoverOpen = $state(false);
   let usageData = $state<ComposerUsage | null>(null);
   let usageLoading = $state(false);
@@ -1744,6 +1766,13 @@
   /* "Check again" on a remote turn. A reply the server kept in place of
      the timed-out turn says so in a toast, and the thread reloads to show
      it where the timeout was. */
+  /* Cancel a message still queued behind the remote's running turn; the
+     thread reloads to show it as cancelled. */
+  async function remoteQueueCancel(queueId: string) {
+    await runApi(cancelRemoteQueued(base, agentMode!.recheckAgentId!, sessionId, queueId));
+    void loadConversation();
+  }
+
   async function remoteRecheck() {
     const r = await runApi(recheckRemote(base, agentMode!.recheckAgentId!, sessionId));
     const msg = recheckToast(r);
@@ -1823,6 +1852,10 @@
             approvalsTabPending = approvalsTabPending.filter((p) => p.id !== payload.id);
           }
         } catch (_) { /* skip */ }
+      } else if (ev.type === "remote_queue") {
+        // A message to a busy remote agent was queued, sent, forwarded or
+        // cancelled; the mark is a stored turn, so reload to show it.
+        void loadConversation();
       } else if (ev.type === "delivery") {
         // A reply's trip to Slack settled (sending → sent / failed). The
         // status is stamped on the turn server-side, so reload to show it.
@@ -2676,7 +2709,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} />
+          <ConversationThread {turns} {live} {typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} />
         </div>
       </div>
 
@@ -2760,6 +2793,9 @@
             usageRecheckWait={usageRecheckWait}
             onOpenUsage={openUsageFromContext}
           />
+          {#if sessionFields && sessionFields.fields.length > 0}
+            <div class="mb-2"><SessionFieldChips fields={sessionFields.fields} values={sessionFields.values} locked /></div>
+          {/if}
           <Composer
             bind:this={composerRef}
             onSend={handleSend}
