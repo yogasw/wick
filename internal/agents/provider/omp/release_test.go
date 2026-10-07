@@ -8,12 +8,13 @@ import (
 
 func TestOMPAssetSelection(t *testing.T) {
 	cases := map[managedbin.Host]string{
-		{OS: "linux", Arch: "x64", AVX2: true}:   "omp-linux-x64",
-		{OS: "linux", Arch: "x64"}:               "omp-linux-x64",
-		{OS: "linux", Arch: "arm64"}:             "omp-linux-arm64",
-		{OS: "linux", Arch: "x64", Musl: true}:   "omp-linux-musl-x64",
-		{OS: "linux", Arch: "arm64", Musl: true}: "omp-linux-musl-arm64",
-		{OS: "darwin", Arch: "arm64"}:            "omp-darwin-arm64",
+		{OS: "linux", Arch: "x64", AVX2: true}:     "omp-linux-x64",
+		{OS: "linux", Arch: "x64"}:                 "omp-linux-x64",
+		{OS: "linux", Arch: "arm64"}:               "omp-linux-arm64",
+		{OS: "linux", Arch: "x64", Musl: true}:     "omp-linux-musl-x64",
+		{OS: "linux", Arch: "arm64", Musl: true}:   "omp-linux-musl-arm64",
+		{OS: "darwin", Arch: "arm64"}:              "omp-darwin-arm64",
+		{OS: "linux", Arch: "arm64", Termux: true}: "omp-linux-arm64", // patched to glibc-runner at install
 	}
 	for h, want := range cases {
 		got, err := assetName(h)

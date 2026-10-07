@@ -16,11 +16,17 @@ import (
 // (omp.sh/install, opencode.ai/install): x64/arm64, musl when
 // /etc/alpine-release exists or `ldd --version` mentions musl, AVX2 from
 // /proc/cpuinfo on linux-x64.
+//
+// Termux is linux on bionic: neither /lib/ld-linux-* nor /lib/ld-musl-*
+// exists, so no published build runs as downloaded. It keeps the glibc
+// pick and the install patches the interpreter to Termux's glibc-runner
+// (see prepareBinary).
 type Host struct {
-	OS   string `json:"os"`   // "linux" | "darwin" | "windows"
-	Arch string `json:"arch"` // "x64" | "arm64" | raw GOARCH otherwise
-	Musl bool   `json:"musl"`
-	AVX2 bool   `json:"avx2"`
+	OS     string `json:"os"`   // "linux" | "darwin" | "windows"
+	Arch   string `json:"arch"` // "x64" | "arm64" | raw GOARCH otherwise
+	Musl   bool   `json:"musl"`
+	AVX2   bool   `json:"avx2"`
+	Termux bool   `json:"termux,omitempty"`
 }
 
 // Label is the one-line host description shown in the UI:
@@ -28,7 +34,9 @@ type Host struct {
 func (h Host) Label() string {
 	parts := []string{h.OS + "-" + h.Arch}
 	if h.OS == "linux" {
-		if h.Musl {
+		if h.Termux {
+			parts = append(parts, "termux")
+		} else if h.Musl {
 			parts = append(parts, "musl")
 		} else {
 			parts = append(parts, "glibc")
@@ -48,7 +56,12 @@ func (h Host) Label() string {
 func DetectHost() Host {
 	h := Host{OS: runtime.GOOS, Arch: normArch(runtime.GOARCH)}
 	if h.OS == "linux" {
-		h.Musl = detectMusl()
+		// Termux has no musl loader either; glibc is the one glibc-runner
+		// can provide, so musl detection is skipped there.
+		h.Termux = isTermux(os.Getenv, pathExists)
+		if !h.Termux {
+			h.Musl = detectMusl()
+		}
 		if h.Arch == "x64" {
 			if b, err := os.ReadFile("/proc/cpuinfo"); err == nil {
 				h.AVX2 = cpuinfoHasAVX2(b)
@@ -56,6 +69,19 @@ func DetectHost() Host {
 		}
 	}
 	return h
+}
+
+// isTermux mirrors env.IsTermux, plus $PREFIX for a relocated install.
+func isTermux(getenv func(string) string, exists func(string) bool) bool {
+	if getenv("TERMUX_VERSION") != "" || strings.Contains(getenv("PREFIX"), "/com.termux/") {
+		return true
+	}
+	return exists("/data/data/com.termux/files/usr")
+}
+
+func pathExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 func normArch(goarch string) string {
