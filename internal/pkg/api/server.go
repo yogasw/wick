@@ -2215,6 +2215,8 @@ func NewServer() *Server {
 		},
 		OnBackgroundChange: func(parentSessionID string, active []delegation.Survivor) {
 			channelReg.DispatchBackgroundAgents(parentSessionID, channelSurvivors(active))
+			// And the Team roster, whose card shows the same set.
+			agentstool.TeamSubagentsChanged(parentSessionID)
 		},
 		// Messaging: make an exited sub-agent addressable again, and say
 		// so when it can only come back without its memory.

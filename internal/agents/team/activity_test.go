@@ -109,7 +109,7 @@ func TestAttentionPreviews(t *testing.T) {
 
 func TestTailPreview(t *testing.T) {
 	dir := t.TempDir()
-	if got := TailPreview(filepath.Join(dir, "missing.jsonl")); got != "" {
+	if got, _ := TailPreview(filepath.Join(dir, "missing.jsonl")); got != "" {
 		t.Errorf("missing file = %q", got)
 	}
 	p := filepath.Join(dir, "conversation.jsonl")
@@ -123,8 +123,42 @@ func TestTailPreview(t *testing.T) {
 	if err := os.WriteFile(p, []byte(b.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := TailPreview(p); got != "Sudah dicek, aman." {
-		t.Errorf("TailPreview = %q", got)
+	if got, silent := TailPreview(p); got != "Sudah dicek, aman." || silent {
+		t.Errorf("TailPreview = %q, %v", got, silent)
+	}
+
+	// A [silent] reply previews without its marker, flagged; a bare marker
+	// has nothing to show and falls back to the turn before it.
+	for _, tc := range []struct {
+		tail, want string
+		silent     bool
+	}{
+		{`{"role":"assistant","text":"\n [Silent] run 3/5: **200 OK**"}`, "run 3/5: 200 OK", true},
+		{`{"role":"assistant","text":"[silent]"}`, "Sudah dicek, aman.", false},
+		{`{"role":"user","text":"[silent] typed by a person"}`, "[silent] typed by a person", false},
+	} {
+		if err := os.WriteFile(p, []byte(b.String()+tc.tail+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, silent := TailPreview(p); got != tc.want || silent != tc.silent {
+			t.Errorf("TailPreview(%s) = %q, %v; want %q, %v", tc.tail, got, silent, tc.want, tc.silent)
+		}
+	}
+}
+
+func TestSplitSilent(t *testing.T) {
+	for in, want := range map[string]struct {
+		text   string
+		silent bool
+	}{
+		"[silent] nothing new":  {"nothing new", true},
+		"  \n[SILENT]\nrun 2/5": {"run 2/5", true},
+		"done. [silent]":        {"done. [silent]", false},
+		"**[silent]** x":        {"**[silent]** x", false},
+	} {
+		if got, silent := SplitSilent(in); got != want.text || silent != want.silent {
+			t.Errorf("SplitSilent(%q) = %q, %v", in, got, silent)
+		}
 	}
 }
 

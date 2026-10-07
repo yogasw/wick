@@ -9,9 +9,10 @@ import { isRemoteAgent, remoteWaitTarget } from "./remoteAgent.js";
    header reads the same answer, so the two never disagree. */
 
 /** What a turn is doing: idle (no turn), thinking (a turn with no tool in
-    flight), tool (waiting on a tool_use's result) or waiting (a remote
-    agent: wick waits for the other side). */
-export type WorkState = "idle" | "thinking" | "tool" | "waiting";
+    flight), tool (waiting on a tool_use's result), waiting (a remote
+    agent: wick waits for the other side) or subagent (no turn of its own,
+    but background sub-agents it delegated to are still working). */
+export type WorkState = "idle" | "thinking" | "tool" | "waiting" | "subagent";
 
 export type RosterStatus = {
   /** Red dot on the avatar: something new since the chat was last open. */
@@ -20,15 +21,22 @@ export type RosterStatus = {
   attention: boolean;
   work: WorkState;
   /** Preview line while a turn runs: "thinking…", the tool's label
-      ("running Bash…") or what a remote waits on. null = not working,
-      show the normal preview. */
+      ("running Bash…"), what a remote waits on, or "🤖 <handle> bekerja…"
+      while only its sub-agents work. null = not working, show the normal
+      preview. */
   typing: string | null;
   /** Hover tip on the avatar. */
   tip: string;
 };
 
 type Row = Pick<AgentItem, "id" | "status" | "disabled"> &
-  Partial<Pick<AgentItem, "unread" | "needs_attention" | "current_action" | "kind" | "handle" | "slack_remote">>;
+  Partial<Pick<AgentItem, "unread" | "needs_attention" | "current_action" | "kind" | "handle" | "slack_remote" | "subagents_working">>;
+
+/** subagentLabel is the working line for background sub-agents: the one
+    handle, or how many when there are more. */
+export function subagentLabel(handles: string[]): string {
+  return handles.length === 1 ? `🤖 ${handles[0]} bekerja…` : `🤖 ${handles.length} sub-agent bekerja…`;
+}
 
 /** rosterStatus reads one row. activeId is the agent whose chat is on
     screen: what it says is being read as it arrives, so it never shows
@@ -36,9 +44,19 @@ type Row = Pick<AgentItem, "id" | "status" | "disabled"> &
 export function rosterStatus(a: Row, opts: { activeId?: string; hatching?: boolean } = {}): RosterStatus {
   const working = isWorking(a.status) && !a.disabled;
   const action = (a.current_action ?? "").trim();
-  const work: WorkState = !working ? "idle" : isRemoteAgent(a) ? "waiting" : action ? "tool" : "thinking";
+  // The agent's own turn outranks its sub-agents' work.
+  const subs = a.disabled ? [] : (a.subagents_working ?? []).filter((h) => h.trim() !== "");
+  const work: WorkState = working ? (isRemoteAgent(a) ? "waiting" : action ? "tool" : "thinking") : subs.length > 0 ? "subagent" : "idle";
   const typing =
-    work === "idle" ? null : work === "waiting" ? `${remoteWaitTarget({ handle: a.handle ?? "", slack_remote: a.slack_remote })}…` : work === "tool" ? toolActivityLabel(action) : THINKING_LABEL;
+    work === "idle"
+      ? null
+      : work === "waiting"
+        ? `${remoteWaitTarget({ handle: a.handle ?? "", slack_remote: a.slack_remote })}…`
+        : work === "tool"
+          ? toolActivityLabel(action)
+          : work === "subagent"
+            ? subagentLabel(subs)
+            : THINKING_LABEL;
   const unread = !!a.unread && !a.disabled && a.id !== opts.activeId;
   const attention = !!a.needs_attention && !a.disabled;
   let tip: string;
@@ -66,7 +84,8 @@ export function withTurn<T extends Pick<AgentItem, "id" | "status"> & Partial<Pi
 
 /** withActivity folds one /stream/sessions `activity` event into the
     roster: the agent whose main chat it is reads working (with the tool,
-    its failure and whether it waits on a person) or idle. finished = a row
+    its failure and whether it waits on a person) or idle. subagents_working
+    rides along untouched: a turn ending does not end its sub-agents. finished = a row
     went from working to idle, time for a full read (preview, unread). An
     event for no agent on the roster, or one that changes nothing, returns
     the same list so the roster does not re-render. */

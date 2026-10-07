@@ -77,6 +77,29 @@ func (s *Service) RecheckBackground(ctx context.Context, parentSessionID string)
 	return out, nil
 }
 
+// LiveBackgroundByParent maps every parent session to the handles of its
+// background sub-agents still queued or running, in start order — the
+// RecheckBackground picture for all parents at once, from one query. Running
+// rows whose process is gone are dropped (an in-memory pool lookup per row);
+// queued rows are kept.
+func (s *Service) LiveBackgroundByParent(ctx context.Context) (map[string][]string, error) {
+	rows, err := s.Repo.ListLiveDetached(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for _, d := range rows {
+		if d.ParentSessionID == "" || !isLive(d.Status) {
+			continue
+		}
+		if d.Status == entity.DelegationRunning && s.AgentAlive != nil && !s.childAlive(d.ChildSessionID, d.ChildAgent) {
+			continue
+		}
+		out[d.ParentSessionID] = append(out[d.ParentSessionID], d.Handle)
+	}
+	return out, nil
+}
+
 func isLive(status string) bool {
 	return status == entity.DelegationQueued || status == entity.DelegationRunning
 }

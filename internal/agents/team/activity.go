@@ -168,18 +168,34 @@ var (
 	mdLinePrefix = regexp.MustCompile(`(?m)^\s*(#{1,6}\s+|>\s?|[-*+]\s+|\d+\.\s+)`)
 )
 
+// silentMarker opens a reply the agent kept out of every channel; it
+// mirrors channels.SilentMarker, which this package cannot import.
+const silentMarker = "[silent]"
+
+// SplitSilent reports whether s opens with the [silent] marker (case
+// ignored, leading whitespace tolerated) and returns s without it.
+func SplitSilent(s string) (string, bool) {
+	t := strings.TrimLeft(s, " \t\r\n")
+	if !strings.HasPrefix(strings.ToLower(t), silentMarker) {
+		return s, false
+	}
+	return strings.TrimSpace(t[len(silentMarker):]), true
+}
+
 // TailPreview returns the preview of the newest user or assistant turn
 // in a conversation.jsonl, reading only its last previewTailBytes. ""
-// when the file is missing or the tail holds no turn with text.
-func TailPreview(path string) string {
+// when the file is missing or the tail holds no turn with text. silent
+// is true when that turn is a [silent] reply; the marker is stripped,
+// and a bare marker with nothing after it is skipped like an empty turn.
+func TailPreview(path string) (text string, silent bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
-		return ""
+		return "", false
 	}
 	off := st.Size() - previewTailBytes
 	if off < 0 {
@@ -187,7 +203,7 @@ func TailPreview(path string) string {
 	}
 	buf := make([]byte, st.Size()-off)
 	if _, err := f.ReadAt(buf, off); err != nil && err != io.EOF {
-		return ""
+		return "", false
 	}
 	lines := bytes.Split(buf, []byte{'\n'})
 	// A cut tail starts mid-line; that fragment never parses, so it is
@@ -200,11 +216,15 @@ func TailPreview(path string) string {
 		if t.Role != "user" && t.Role != "assistant" {
 			continue
 		}
-		if p := PreviewText(t.Text); p != "" {
-			return p
+		body, silent := t.Text, false
+		if t.Role == "assistant" {
+			body, silent = SplitSilent(body)
+		}
+		if p := PreviewText(body); p != "" {
+			return p, silent
 		}
 	}
-	return ""
+	return "", false
 }
 
 // SourceTeam is the Source of a user turn wick posted on a teammate's
@@ -223,8 +243,9 @@ const UndeliveredAfter = time.Minute
 // mention, a schedule), but a reply to a teammate only when it reached
 // no one — its task failed, was canceled, or never closed within
 // UndeliveredAfter. A delivered one is the asker's to report, so it is
-// read here. settled is false while an answer still waits on its task:
-// the count may change with no new line in the file.
+// read here. A [silent] reply is never unread. settled is false while
+// an answer still waits on its task: the count may change with no new
+// line in the file.
 func UnreadCount(path string, lastRead *time.Time, now time.Time) (n int, settled bool) {
 	buf := readTail(path, unreadTailBytes)
 	var (
@@ -265,7 +286,8 @@ func UnreadCount(path string, lastRead *time.Time, now time.Time) (n int, settle
 				resolve(strings.Contains(state, "completed"))
 			}
 		case t.Role == "assistant" || t.Role == "system" && t.IsError:
-			if !fresh {
+			// A [silent] reply raises no notification; it is no unread either.
+			if _, silent := SplitSilent(t.Text); !fresh || t.Role == "assistant" && silent {
 				continue
 			}
 			if asked {

@@ -294,12 +294,14 @@ func sharedTeamAgentItem(p entity.AgentPersona, sh entity.AgentShare, viewer str
 func fillChatState(it *TeamAgentItem, userID, agentID string, lastRead *time.Time, live teamLive) {
 	it.MainSessionID, it.LastActive, it.Unread, it.UnreadCount = "", nil, false, 0
 	it.Status, it.CurrentAction = string(session.StatusIdle), ""
-	it.AttentionPreview, it.NeedsAttention, it.LastPreview = "", false, ""
+	it.AttentionPreview, it.NeedsAttention, it.LastPreview, it.LastSilent = "", false, "", false
+	it.SubagentsWorking = nil
 	s, ok := mainSessionOf(userID, agentID)
 	if !ok {
 		return
 	}
 	it.MainSessionID = s.ID
+	it.SubagentsWorking = live.subagentsOf(s.ID)
 	it.LastActive = timePtr(s.Meta.LastActive)
 	// Meta.Status stays "running" for as long as the process is warm,
 	// turn or no turn; the pool lifecycle is what says a turn is on.
@@ -319,7 +321,7 @@ func fillChatState(it *TeamAgentItem, userID, agentID string, lastRead *time.Tim
 		it.NeedsAttention = true
 		it.LastPreview = it.AttentionPreview
 	} else {
-		it.LastPreview = lastPreview(s.ID)
+		it.LastPreview, it.LastSilent = lastPreview(s.ID)
 	}
 }
 

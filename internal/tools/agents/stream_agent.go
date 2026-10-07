@@ -127,6 +127,23 @@ func TrackTeamAgentChange(ctx context.Context, agentID string) func() {
 	return agentChangeHook(ctx, agentID)
 }
 
+// TeamSubagentsChanged signals the roster of the agent whose main chat is
+// parentSessionID that its background sub-agents started or ended, so the
+// card's "sub-agent working" state follows them without a poll: the agent's
+// own turn is long over by then and no activity event would say so. Any
+// other session is ignored.
+func TeamSubagentsChanged(parentSessionID string) {
+	if globalMgr == nil || parentSessionID == "" {
+		return
+	}
+	s, ok := globalMgr.Registry().Session(parentSessionID)
+	if !ok || !s.Meta.AgentMain || s.Meta.AgentID == "" || s.Meta.GroupSessionID != "" {
+		return
+	}
+	agentID := s.Meta.AgentID
+	publishAgentSignal(globalBcast, agentSignal{AgentID: agentID}, agentAudience(context.Background(), agentID))
+}
+
 // publishGroupChanged signals the group's owner — the only person whose
 // roster lists it (apiTeamGroupList).
 func publishGroupChanged(groupID, ownerID string) {

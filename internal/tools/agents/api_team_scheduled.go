@@ -518,7 +518,7 @@ func startTeamJobs() {
 				if !ok {
 					return team.MainChat{}, false
 				}
-				lc := teamLiveNow().lifecycles[s.ID]
+				lc := teamTurnsNow().lifecycles[s.ID]
 				busy := lc != "" && lc != "idle"
 				return team.MainChat{SessionID: s.ID, LastActive: s.Meta.LastActive, Busy: busy}, true
 			},

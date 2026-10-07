@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone } from "../rosterList.js";
+import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass } from "../rosterList.js";
 import type { AgentItem, GroupItem } from "../api/team.js";
 
 const agent = (id: string, last: string | null, over: Partial<AgentItem> = {}) =>
@@ -89,4 +89,22 @@ test("rowTone: unread is bold with an accent time, read stays plain", () => {
   expect(off.name).not.toContain("font-bold");
   expect(off.preview).toContain("text-black-800");
   expect(off.time).toBe("text-black-700");
+});
+
+describe("silentPreview", () => {
+  test("the server flag dims the preview; the text is already clean", () => {
+    expect(silentPreview("run 3/5: 200 OK", true)).toEqual({ text: "run 3/5: 200 OK", silent: true });
+    expect(silentPreview("Sudah dicek, aman.", false)).toEqual({ text: "Sudah dicek, aman.", silent: false });
+    expect(silentPreview("Sudah dicek, aman.")).toEqual({ text: "Sudah dicek, aman.", silent: false });
+  });
+  test("a raw marker never shows, whatever the flag says", () => {
+    expect(silentPreview("  [SILENT] nothing new")).toEqual({ text: "nothing new", silent: true });
+    expect(silentPreview("[silent]", false)).toEqual({ text: "", silent: true });
+  });
+  test("a marker mid-text is not a silent reply", () => {
+    expect(silentPreview("done. [silent]")).toEqual({ text: "done. [silent]", silent: false });
+  });
+  test("silent previews render dimmed and italic", () => {
+    expect(silentPreviewClass).toContain("italic");
+  });
 });

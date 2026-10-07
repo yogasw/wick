@@ -111,7 +111,10 @@ type TeamAgentItem struct {
 	MainSessionID string          `json:"main_session_id"`
 	LastActive    *time.Time      `json:"last_active"`
 	LastPreview   string          `json:"last_preview"`
-	Status        string          `json:"status"`
+	// LastSilent is true when LastPreview is a [silent] reply, shown
+	// dimmed; the marker itself is stripped.
+	LastSilent bool   `json:"last_silent,omitempty"`
+	Status     string `json:"status"`
 	// Unread is true when the main session moved after the owner last
 	// opened the chat (POST /api/team/agents/{id}/read).
 	Unread bool `json:"unread"`
@@ -132,6 +135,11 @@ type TeamAgentItem struct {
 	// AttentionPreview is the short line of what NeedsAttention waits on
 	// ("Butuh input: …", "Bash — butuh approval"); also LastPreview then.
 	AttentionPreview string `json:"attention_preview,omitempty"`
+	// SubagentsWorking holds the handles of the background sub-agents the
+	// main session delegated to that are still queued or running, so the
+	// card can show work carrying on after the agent's own turn ended.
+	// Status is left alone: it stays the agent's own turn state.
+	SubagentsWorking []string `json:"subagents_working,omitempty"`
 	// SharedWith counts everything else on the same project — other
 	// agents of any owner and non-agent web/channel conversations — so
 	// the editor can warn that a persona edit changes them too.
@@ -522,14 +530,30 @@ func timePtr(t time.Time) *time.Time {
 // teamLive is the in-memory turn state of every session, read once per
 // response so a roster of N agents costs one pool snapshot rather than N.
 type teamLive struct {
-	actions    map[string]string // session id → CurrentAction
-	failed     map[string]bool   // session id → team.ToolFailed
-	lifecycles map[string]string // session id → pool lifecycle
-	approvals  map[string]string // session id → tool of a pending approval
+	actions    map[string]string   // session id → CurrentAction
+	failed     map[string]bool     // session id → team.ToolFailed
+	lifecycles map[string]string   // session id → pool lifecycle
+	approvals  map[string]string   // session id → tool of a pending approval
+	subagents  map[string][]string // parent session id → live background sub-agent handles
 }
 
 func teamLiveNow() teamLive {
-	l := teamLive{actions: map[string]string{}, failed: map[string]bool{}, lifecycles: map[string]string{}, approvals: map[string]string{}}
+	l := teamTurnsNow()
+	// One query for every live background delegation, not one per agent.
+	if globalDelegation != nil && globalDelegation.Repo != nil {
+		if subs, err := globalDelegation.LiveBackgroundByParent(context.Background()); err != nil {
+			log.Warn().Err(err).Msg("team: live sub-agents")
+		} else {
+			l.subagents = subs
+		}
+	}
+	return l
+}
+
+// teamTurnsNow is teamLiveNow without the sub-agent query: the in-memory
+// pool and approval state only, for a caller that just needs a lifecycle.
+func teamTurnsNow() teamLive {
+	l := teamLive{actions: map[string]string{}, failed: map[string]bool{}, lifecycles: map[string]string{}, approvals: map[string]string{}, subagents: map[string][]string{}}
 	if globalPool != nil {
 		for _, e := range globalPool.ActiveSnapshot() {
 			l.lifecycles[e.SessionID] = e.Lifecycle
@@ -549,6 +573,15 @@ func teamLiveNow() teamLive {
 		}
 	}
 	return l
+}
+
+// subagentsOf returns the handles of sessionID's background sub-agents
+// still working, or nil when there are none.
+func (l teamLive) subagentsOf(sessionID string) []string {
+	if len(l.subagents[sessionID]) == 0 {
+		return nil
+	}
+	return slices.Clone(l.subagents[sessionID])
 }
 
 // attention returns the roster preview of what sessionID waits on a
@@ -575,9 +608,10 @@ var teamPreviewCache = struct {
 }{m: map[string]teamPreviewEntry{}}
 
 type teamPreviewEntry struct {
-	size int64
-	mod  time.Time
-	text string
+	size   int64
+	mod    time.Time
+	text   string
+	silent bool
 }
 
 // teamUnreadCache keeps the last unread count per conversation file and
@@ -621,24 +655,25 @@ func unreadCount(sessionID string, lastRead *time.Time) int {
 	return n
 }
 
-// lastPreview returns the one-line preview of sessionID's newest message.
-func lastPreview(sessionID string) string {
+// lastPreview returns the one-line preview of sessionID's newest message
+// and whether it is a [silent] reply (see team.TailPreview).
+func lastPreview(sessionID string) (string, bool) {
 	path := globalLayout.SessionConversation(sessionID)
 	st, err := os.Stat(path)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	teamPreviewCache.Lock()
 	e, ok := teamPreviewCache.m[path]
 	teamPreviewCache.Unlock()
 	if ok && e.size == st.Size() && e.mod.Equal(st.ModTime()) {
-		return e.text
+		return e.text, e.silent
 	}
-	text := team.TailPreview(path)
+	text, silent := team.TailPreview(path)
 	teamPreviewCache.Lock()
-	teamPreviewCache.m[path] = teamPreviewEntry{size: st.Size(), mod: st.ModTime(), text: text}
+	teamPreviewCache.m[path] = teamPreviewEntry{size: st.Size(), mod: st.ModTime(), text: text, silent: silent}
 	teamPreviewCache.Unlock()
-	return text
+	return text, silent
 }
 
 // teamProjectUsers counts, per project, who else a persona edit reaches:
