@@ -202,7 +202,7 @@ func TestTermuxGlibcWithoutRunnerKeepsPartial(t *testing.T) {
 	gh.scripts["v1.2.3"] = string(fakeELF("/lib/ld-linux-aarch64.so.1"))
 	m, root := newTestManager(t, gh)
 	m.Host = func() Host { return Host{OS: "linux", Arch: "x64", AVX2: true, Termux: true} }
-	m.prep.resolve = func(string) (string, error) { return "", os.ErrNotExist }
+	m.prep.prefix = func() string { return filepath.Join(t.TempDir(), "usr") } // no glibc-runner
 	_, err := m.Install(context.Background(), "fake", "v1.2.3")
 	if !errors.Is(err, ErrMissingInterpreter) || !strings.Contains(err.Error(), "glibc-runner") {
 		t.Fatalf("got %v", err)
