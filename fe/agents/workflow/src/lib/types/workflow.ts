@@ -95,6 +95,10 @@ export type Node = {
 
   // classify + agent
   provider?: string;
+  // agent — model id pinned on the provider instance (empty = instance
+  // default). The picker's "type/name::model" value is split into
+  // provider (instance name) + model on save.
+  model?: string;
   preset?: string;
   prompt?: string;
   prompt_file?: string;

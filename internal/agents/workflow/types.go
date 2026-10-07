@@ -184,6 +184,11 @@ type Node struct {
 	Prompt   string `json:"prompt,omitempty"`
 	Session  string `json:"session,omitempty"`
 
+	// agent — model id pinned on the node's provider instance (empty =
+	// the instance default). Stored apart from Provider: the editor's
+	// "type/name::model" picker value is split on save.
+	Model string `json:"model,omitempty"`
+
 	// agent override — copy resolved sessionID from another node in
 	// this run. Must reference an upstream agent or session_init node.
 	SessionFrom string `json:"session_from,omitempty"`

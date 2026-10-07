@@ -455,7 +455,7 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 	knownKeys := map[string]struct{}{
 		"label": {}, "description": {}, "prompt": {},
 		"timeout_sec": {}, "on_failure": {}, "fallback": {}, "provider": {},
-		"preset": {}, "session": {}, "output_cases": {}, "expr": {},
+		"model": {}, "preset": {}, "session": {}, "output_cases": {}, "expr": {},
 		"url": {}, "method": {}, "channel": {}, "op": {}, "module": {},
 		"row_id": {}, "args": {}, "command": {},
 		"expression": {}, "engine": {}, "result": {},
@@ -496,6 +496,9 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 	}
 	if v, ok := patch["provider"].(string); ok {
 		n.Provider = v
+	}
+	if v, ok := patch["model"].(string); ok {
+		n.Model = v
 	}
 	if v, ok := patch["preset"].(string); ok {
 		n.Preset = v

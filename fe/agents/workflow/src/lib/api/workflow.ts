@@ -163,7 +163,9 @@ export type CatalogResponse = {
   trigger_types: { type: string; label: string; description: string }[];
   channels: ChannelDescriptor[];
   connectors: ConnectorDescriptor[];
-  providers: { name: string; is_default: boolean }[];
+  // Only the instances the caller may choose (provider access tags);
+  // `type` + `name` form the "type/name" key the provider picker uses.
+  providers: { name: string; type?: string; is_default: boolean }[];
   // Base URL for webhook triggers: "<origin>/hooks". Empty when PublicURL
   // is not configured in Settings → Agents; the UI falls back to a
   // relative path display in that case.
