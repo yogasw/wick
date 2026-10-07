@@ -3,7 +3,7 @@
     "key": "bitbucket",
     "name": "Bitbucket",
     "description": "Search repositories, inspect commits and pull requests, and create branch/commit/PR changes in Bitbucket Cloud.",
-    "version": "0.2.1",
+    "version": "0.2.7",
     "default_tags": [
       {
         "Name": "Connector",
@@ -23,8 +23,38 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.2.1/bitbucket-0.2.1-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.2.1/bitbucket-0.2.1-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.2.7/bitbucket-0.2.7-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.2.7/bitbucket-0.2.7-linux-arm64.zip"
+    }
+  },
+  {
+    "key": "example_a2a_repeater",
+    "name": "A2A repeater (echo bot)",
+    "description": "Puts a bot API behind A2A; this example's bot echoes.",
+    "version": "0.1.0",
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/example_a2a_repeater/v0.1.0/example_a2a_repeater-0.1.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/example_a2a_repeater/v0.1.0/example_a2a_repeater-0.1.0-linux-arm64.zip"
+    }
+  },
+  {
+    "key": "example_counter",
+    "name": "Counter (plugin)",
+    "description": "Count characters, words, and lines — served by a tool plugin.",
+    "version": "0.1.0",
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/example_counter/v0.1.0/example_counter-0.1.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/example_counter/v0.1.0/example_counter-0.1.0-linux-arm64.zip"
+    }
+  },
+  {
+    "key": "example_heartbeat",
+    "name": "Example Heartbeat",
+    "description": "Example job plugin: logs progress and returns a heartbeat.",
+    "version": "0.1.0",
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/example_heartbeat/v0.1.0/example_heartbeat-0.1.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/example_heartbeat/v0.1.0/example_heartbeat-0.1.0-linux-arm64.zip"
     }
   },
   {
@@ -140,6 +170,34 @@
     }
   },
   {
+    "key": "jenkins",
+    "name": "Jenkins",
+    "description": "List Jenkins jobs and read job config.xml to discover SCM repository URLs and inline Groovy pipeline scripts.",
+    "version": "0.2.1",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "Development",
+        "Description": "Source hosts and developer platforms.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 52
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/jenkins/v0.2.1/jenkins-0.2.1-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/jenkins/v0.2.1/jenkins-0.2.1-linux-arm64.zip"
+    }
+  },
+  {
     "key": "loki",
     "name": "Loki",
     "description": "Query logs and discover labels in a Grafana Loki instance via LogQL.",
@@ -199,7 +257,7 @@
     "key": "notion_unofficial",
     "name": "Notion (Unofficial)",
     "description": "Read and edit Notion pages and databases via the private web API using a token_v2 cookie. Fetch returns rich markdown; write ops append content and edit or delete individual blocks in place (list_blocks → update_block/delete_block) without rewriting the whole page.",
-    "version": "0.5.1",
+    "version": "0.5.4",
     "default_tags": [
       {
         "Name": "Connector",
@@ -219,8 +277,8 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.5.1/notion_unofficial-0.5.1-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.5.1/notion_unofficial-0.5.1-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.5.4/notion_unofficial-0.5.4-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.5.4/notion_unofficial-0.5.4-linux-arm64.zip"
     }
   },
   {
