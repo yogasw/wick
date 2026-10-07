@@ -594,6 +594,9 @@
                     <span class="flex-shrink-0" title={p.kind} aria-label={p.kind}>{kindIcon[p.kind]}</span>
                     <button class="truncate font-medium text-black-900 hover:underline dark:text-white-100" onclick={() => openDetail(p)}>{p.name || p.key}</button>
                     <span class="hidden truncate font-mono text-xs text-black-700 dark:text-black-600 sm:inline">{p.key}</span>
+                    {#if p.external_url}
+                      <span class="flex-shrink-0 rounded-full border border-white-300 px-1.5 py-px text-[10px] font-medium text-black-700 dark:border-navy-600 dark:text-black-600" data-testid="link-badge" title={`Link to ${p.external_url}`}>↗ link</span>
+                    {/if}
                   </div>
                   {#if progress[rowID(p)]}
                     <PluginUpdateProgress class="mt-1 max-w-xs" progress={progress[rowID(p)]} />

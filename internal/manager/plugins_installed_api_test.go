@@ -159,3 +159,49 @@ func TestResolveOriginNeverGuesses(t *testing.T) {
 		}
 	}
 }
+
+// TestPluginsInstalledSharedKeyKinds: a connector and a link tool share the
+// key "loki". The connector's official origin and catalog update must not
+// leak onto the tool, and the tool exposes its external link.
+func TestPluginsInstalledSharedKeyKinds(t *testing.T) {
+	sh := newSourcesHandler(t)
+	db := sh.Sources.DB
+	cat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"key": "loki", "version": "0.3.1"}})
+	}))
+	defer cat.Close()
+	t.Setenv("WICK_PLUGIN_CATALOG", cat.URL+"/plugins.json")
+	h := NewPluginsHandler(db)
+	h.sources = sh
+
+	writePlugin(t, wickplugin.KindConnector, "loki", "0.3.0")
+	writePlugin(t, wickplugin.KindTool, "loki", "0.1.0")
+	toolJSON := filepath.Join(connplugin.KindDir(wickplugin.KindTool), "loki", "plugin.json")
+	m := map[string]any{"schema_version": 1, "kind": "tool", "version": "0.1.0", "entry": "bin",
+		"module": map[string]any{"meta": map[string]any{"key": "loki", "name": "Loki"}},
+		"tool":   map[string]any{"meta": map[string]any{"key": "loki", "name": "Loki", "external_url": "https://loki.example.test/"}}}
+	b, _ := json.Marshal(m)
+	if err := os.WriteFile(toolJSON, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&entity.PluginState{Key: "loki", Kind: "connector", Enabled: true, Origin: connplugin.OriginOfficial}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.apiInstalled(rec, httptest.NewRequest(http.MethodGet, "/manager/api/plugins/installed", nil))
+	var resp installedListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]installedPlugin{}
+	for _, p := range resp.Plugins {
+		got[p.Kind] = p
+	}
+	if c := got["connector"]; c.Origin != "official" || !c.UpdateAvailable || c.ExternalURL != "" {
+		t.Errorf("connector: %+v", c)
+	}
+	if tl := got["tool"]; tl.Origin != "local" || tl.UpdateAvailable || tl.LatestVersion != "" || tl.ExternalURL != "https://loki.example.test/" {
+		t.Errorf("tool: %+v", tl)
+	}
+}
