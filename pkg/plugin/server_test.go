@@ -155,3 +155,48 @@ func TestExecuteStreamSurfacesOpError(t *testing.T) {
 		t.Fatalf("unknown op should yield one Chunk{Error}, got %+v", st.chunks)
 	}
 }
+
+func maskModule() connector.Module {
+	return connector.Module{
+		Meta: connector.Meta{Key: "demo", Name: "Demo"},
+		Operations: []connector.Category{{Title: "Main", Ops: []connector.Operation{{
+			Key: "say", Name: "Say",
+			Execute: func(c *connector.Ctx) (any, error) {
+				v := c.Mask("top-secret", []string{"top-secret"})
+				w := c.MaskIgnoreCase("Keyword", []string{"keyword"})
+				return map[string]string{"v": v, "w": w}, nil
+			},
+		}}}},
+	}
+}
+
+// The plugin holds no encryption key: c.Mask must leave the data as it is and
+// report the values so the host can mask them before the result leaves wick.
+func TestExecuteReportsMaskValues(t *testing.T) {
+	srv := NewServer(maskModule())
+	resp, err := srv.Execute(context.Background(), &pb.ExecuteRequest{Operation: "say"})
+	if err != nil || resp.Error != nil {
+		t.Fatalf("execute: %v %v", err, resp.Error)
+	}
+	if string(resp.ResultJson) != `{"v":"top-secret","w":"Keyword"}` {
+		t.Fatalf("result changed in the plugin: %s", resp.ResultJson)
+	}
+	if len(resp.Mask) != 1 || resp.Mask[0] != "top-secret" {
+		t.Fatalf("mask = %v", resp.Mask)
+	}
+	if len(resp.MaskIgnoreCase) != 1 || resp.MaskIgnoreCase[0] != "keyword" {
+		t.Fatalf("mask_ignore_case = %v", resp.MaskIgnoreCase)
+	}
+}
+
+func TestExecuteStreamReportsMaskValuesOnEof(t *testing.T) {
+	srv := NewServer(maskModule()).(*grpcServer)
+	st := &fakeChunkStream{}
+	if err := srv.ExecuteStream(&pb.ExecuteRequest{Operation: "say"}, st); err != nil {
+		t.Fatal(err)
+	}
+	last := st.chunks[len(st.chunks)-1]
+	if !last.Eof || len(last.Mask) != 1 || len(last.MaskIgnoreCase) != 1 {
+		t.Fatalf("Eof chunk must carry the mask values: %+v", last)
+	}
+}
