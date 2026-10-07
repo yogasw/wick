@@ -566,6 +566,7 @@ export interface InstalledPlugin {
   version: string;
   enabled: boolean;
   detail_path: string;
+  external_url?: string; // link-only tool: opens this URL in a new tab
   origin: PluginOrigin;
   source_id?: string;
   source_name?: string;

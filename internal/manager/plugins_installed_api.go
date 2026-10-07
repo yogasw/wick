@@ -33,7 +33,8 @@ type installedPlugin struct {
 	Version          string     `json:"version"`
 	Enabled          bool       `json:"enabled"`
 	DetailPath       string     `json:"detail_path"`
-	Origin           string     `json:"origin"` // official | source | url-zip | upload | local
+	ExternalURL      string     `json:"external_url,omitempty"` // link-only tool: opens this URL instead of a wick page
+	Origin           string     `json:"origin"`                 // official | source | url-zip | upload | local
 	SourceID         string     `json:"source_id,omitempty"`
 	SourceName       string     `json:"source_name,omitempty"`
 	SourceURL        string     `json:"source_url,omitempty"`
@@ -117,7 +118,16 @@ func (h *PluginsHandler) apiInstalled(w http.ResponseWriter, r *http.Request) {
 				Enabled:    true,
 				DetailPath: detailPathPrefix[kind] + f.Key,
 			}
+			if kind == wickplugin.KindTool && f.Manifest.Tool != nil {
+				p.ExternalURL = f.Manifest.Tool.Meta.ExternalURL
+			}
+			// State and catalog rows are keyed by plugin key, but a connector
+			// and a tool may share one. A row recorded for another kind says
+			// nothing about this plugin, so it must not lend its origin.
 			st, hasState := states[f.Key]
+			if hasState && stateKind(st) != kind {
+				st, hasState = entity.PluginState{}, false
+			}
 			if hasState {
 				p.Enabled = st.Enabled
 				p.LastHealthAt, p.LastHealthOK, p.LastHealthDetail = st.LastHealthAt, st.LastHealthOK, st.LastHealthDetail
@@ -130,7 +140,8 @@ func (h *PluginsHandler) apiInstalled(w http.ResponseWriter, r *http.Request) {
 					fillFromSource(&p, s, st, host)
 				}
 			case originOfficial:
-				if a, ok := catalog[f.Key]; ok {
+				// The official catalog only carries connectors.
+				if a, ok := catalog[f.Key]; ok && kind == wickplugin.KindConnector {
 					p.LatestVersion = a.Version
 					p.UpdateAvailable = connplugin.VersionNewer(a.Version, p.Version)
 					p.DownloadURL = safeURL(a.AssetFor(host))
@@ -144,6 +155,15 @@ func (h *PluginsHandler) apiInstalled(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(resp.Plugins, func(i, j int) bool { return resp.Plugins[i].Key < resp.Plugins[j].Key })
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// stateKind is the kind a state row was recorded for; old rows predate the
+// column and read back as connector.
+func stateKind(st entity.PluginState) string {
+	if st.Kind == "" {
+		return wickplugin.KindConnector
+	}
+	return st.Kind
 }
 
 // resolveOrigin maps the recorded state to a display origin. A linked
