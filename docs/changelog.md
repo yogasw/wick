@@ -10,6 +10,16 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.15.0](https://github.com/yogasw/wick/compare/v1.14.0...v1.15.0) — Maintenance
+
+_Released on 2026-10-07_
+
+### Changed
+*   Synchronized internal `go.mod.tmpl` and documentation files for v1.14.0.
+
+---
+
+
 ## [v1.14.0](https://github.com/yogasw/wick/compare/v1.13.0...v1.14.0) — Team & Plugins
 
 _Released on 2026-10-07_
