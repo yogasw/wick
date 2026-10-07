@@ -29,6 +29,26 @@ func TestValidateRunPipeline_Body(t *testing.T) {
 	}
 }
 
+func TestValidateRunPipeline_SelectorType(t *testing.T) {
+	for in, want := range map[string]string{"": "custom", "branches": "branches", "pull-requests": "pull-requests"} {
+		c := prCommentCtx(map[string]string{
+			"repo_slug": "repo", "branch": "b", "pattern": "staging", "selector_type": in,
+		})
+		_, body, err := validateRunPipeline(c)
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		sel := body["target"].(map[string]any)["selector"].(map[string]any)
+		if sel["type"] != want || sel["pattern"] != "staging" {
+			t.Fatalf("%q: selector = %v", in, sel)
+		}
+	}
+	c := prCommentCtx(map[string]string{"repo_slug": "repo", "branch": "b", "pattern": "x", "selector_type": "bogus"})
+	if _, _, err := validateRunPipeline(c); err == nil {
+		t.Fatal("expected error for unknown selector_type")
+	}
+}
+
 func TestValidateRunPipeline_RequiresBranch(t *testing.T) {
 	c := prCommentCtx(map[string]string{"repo_slug": "repo"})
 	if _, _, err := validateRunPipeline(c); err == nil {
