@@ -457,6 +457,20 @@ func parsePipelineVariables(raw string) ([]map[string]any, error) {
 	return out, nil
 }
 
+// pipelineSelectorType maps the selector_type input to the selector type
+// Bitbucket expects. Empty keeps the original behaviour (custom).
+func pipelineSelectorType(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "custom":
+		return "custom", nil
+	case "branches", "branch":
+		return "branches", nil
+	case "pull-requests", "pull-request", "pr":
+		return "pull-requests", nil
+	}
+	return "", errors.New("selector_type must be custom, branches or pull-requests")
+}
+
 func validateRunPipeline(c *connector.Ctx) (requestParams, map[string]any, error) {
 	workspace, repo, err := workspaceAndRepo(c)
 	if err != nil {
@@ -480,7 +494,11 @@ func validateRunPipeline(c *connector.Ctx) (requestParams, map[string]any, error
 		"ref_name": branch,
 	}
 	if pattern := strings.TrimSpace(c.Input("pattern")); pattern != "" {
-		target["selector"] = map[string]any{"type": "custom", "pattern": pattern}
+		selType, err := pipelineSelectorType(c.Input("selector_type"))
+		if err != nil {
+			return requestParams{}, nil, err
+		}
+		target["selector"] = map[string]any{"type": selType, "pattern": pattern}
 	}
 	body := map[string]any{"target": target}
 	if len(vars) > 0 {
