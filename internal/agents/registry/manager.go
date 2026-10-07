@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/preset"
@@ -118,18 +119,56 @@ func (m *Manager) UpdateProject(_ context.Context, id string, meta project.Meta)
 	return p, nil
 }
 
-// DeleteProject removes the project metadata folder and unscopes
-// dependent sessions (sets their ProjectID to ""). The project folder
-// contents (managed `files/`) are deleted only for managed projects;
-// custom paths are left untouched because wick never owned them.
-func (m *Manager) DeleteProject(_ context.Context, id string) error {
-	for sid, s := range m.reg.Sessions() {
-		if s.Meta.ProjectID != id {
-			continue
+// ProjectSessionIDs lists every session that goes with the project: the
+// ones scoped to it plus, transitively, the sub-agent sessions under them.
+// A sub-agent's session points at its parent through ParentSessionID, so
+// following that link catches one that was left unscoped. Sorted, so a
+// caller that counts or logs it sees a stable order.
+func (m *Manager) ProjectSessionIDs(id string) []string {
+	all := m.reg.Sessions()
+	in := map[string]bool{}
+	for sid, s := range all {
+		if s.Meta.ProjectID == id {
+			in[sid] = true
 		}
-		s.Meta.ProjectID = ""
-		_ = session.SaveMeta(m.reg.layout, sid, s.Meta)
-		m.reg.upsertSession(s)
+	}
+	// Grow until no session's parent is newly in the set; the depth of a
+	// delegation chain is small, so the rescans stay cheap.
+	for grew := true; grew; {
+		grew = false
+		for sid, s := range all {
+			if !in[sid] && s.Meta.ParentSessionID != "" && in[s.Meta.ParentSessionID] {
+				in[sid] = true
+				grew = true
+			}
+		}
+	}
+	out := make([]string, 0, len(in))
+	for sid := range in {
+		out = append(out, sid)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// DeleteProject removes the project with every session in
+// ProjectSessionIDs, then its metadata folder. The managed `files/` folder
+// lives inside that folder and goes with it; a custom path is left
+// untouched because wick never owned it. A protected project is refused
+// before anything is removed. Stopping live agents and cancelling
+// schedules is the caller's job — this package knows neither.
+func (m *Manager) DeleteProject(ctx context.Context, id string) error {
+	p, err := project.Load(m.reg.layout, id)
+	if err != nil {
+		return err
+	}
+	if project.IsProtected(p.Meta) {
+		return fmt.Errorf("project %q is protected and cannot be deleted", id)
+	}
+	for _, sid := range m.ProjectSessionIDs(id) {
+		if err := m.DeleteSession(ctx, sid); err != nil {
+			return fmt.Errorf("delete session %s: %w", sid, err)
+		}
 	}
 	if err := project.Delete(m.reg.layout, id); err != nil {
 		return err

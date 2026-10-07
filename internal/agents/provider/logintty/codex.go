@@ -1,14 +1,33 @@
 package logintty
 
-// codex per-type login TTY support. Only the account probe (connect
-// status display) is implemented today; the TTY login command for
-// `codex login` lands here when codex reconnect is enabled.
+// codex per-type login TTY support: the login argv and the credential
+// -file account probe.
 
 import (
 	"os"
 	"path/filepath"
 	"time"
 )
+
+// codexLoginCommand builds the codex argv for a wick-hosted login.
+//
+// --device-auth, not the default flow, because the default one binds a
+// callback on localhost:1455 and waits for the browser to hit it. On the
+// wick host nobody is sitting at that browser, so the flow never
+// completes. Device auth instead prints a link plus a one-time code and
+// polls OpenAI for the result, which is exactly the shape the login TTY
+// can relay: the parser lifts the link out of the stream, and the code
+// is read off the live terminal.
+//
+// The instance's ExtraArgs are NOT forwarded. Unlike claude, where
+// /login is a prompt to the same REPL the flags configure, `codex login`
+// is a subcommand with its own flag set (-c, --enable/--disable,
+// --with-api-key, --with-access-token, --device-auth). A REPL flag such
+// as --model or --sandbox is rejected by the arg parser, and the spawn
+// would die before printing anything for the user to act on.
+func codexLoginCommand() []string {
+	return []string{"login", "--device-auth"}
+}
 
 // codexConfigDir honours the instance's CODEX_HOME, falling back to
 // ~/.codex.

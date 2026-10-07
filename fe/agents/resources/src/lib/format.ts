@@ -1,3 +1,4 @@
+import { clock24 } from "@wick-fe/common-ui";
 // Formatting helpers shared by the page and its chart.
 //
 // Kept apart from the components so the number rendering — the part an
@@ -39,9 +40,7 @@ export function humanDuration(sec: number): string {
 }
 
 export function clockTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return clock24(iso);
 }
 
 // middleTruncate shortens a long command by removing its MIDDLE, keeping
@@ -69,4 +68,76 @@ export function middleTruncate(s: string, max = 90): string {
 export function pctOf(part: number, whole: number): number {
   if (!Number.isFinite(whole) || whole <= 0) return 0;
   return Math.min(100, (part / whole) * 100);
+}
+
+// machineShare labels a limit in MB as a share of this machine's RAM, so
+// "1800 MB" reads as what it means on THIS box ("23% of RAM") — the
+// same number is generous on 8 GB and reckless on 2 GB. Empty when the
+// limit is unset or the machine size is unknown.
+export function machineShare(mb: number, totalBytes: number): string {
+  if (!Number.isFinite(mb) || mb <= 0 || !Number.isFinite(totalBytes) || totalBytes <= 0) return "";
+  const pct = (mb * 1024 * 1024 * 100) / totalBytes;
+  return `${pct < 1 ? "<1" : Math.round(pct)}% of RAM`;
+}
+
+// guardKindLabel names a Resource Guard action for the history list.
+export function guardKindLabel(kind: string): string {
+  switch (kind) {
+    case "kill_child":
+      return "Stopped process";
+    case "stop_child":
+      return "Paused process";
+    case "cont_child":
+      return "Resumed process";
+    case "freeze":
+      return "Paused agent";
+    case "thaw":
+      return "Resumed agent";
+    case "kill_scope":
+      return "Stopped agent";
+    case "throttle":
+      return "Capped CPU";
+    case "restore":
+      return "CPU restored";
+    case "near_hang":
+      return "Near hang";
+    case "resolved":
+      return "Back to safe";
+    case "outside_busy":
+      return "Busy outside wick";
+    default:
+      return kind;
+  }
+}
+
+// cpuShare turns a CPU reading in top's per-core units (100 = one core
+// busy, so 200 on a two-core box) into a share of the WHOLE machine,
+// 0..100: 100 means every core is busy. The per-core scale made a full
+// two-core box read 200%, which is hard to judge at a glance. Unknown
+// cores leave the reading as it is rather than inventing a denominator.
+export function cpuShare(pct: number, cores: number): number {
+  if (!Number.isFinite(pct) || pct <= 0) return 0;
+  if (!Number.isFinite(cores) || cores <= 0) return pct;
+  return Math.min(100, pct / cores);
+}
+
+// coresLabel names the machine's CPU ceiling: "CPU · 2 cores".
+export function coresLabel(cores: number): string {
+  if (!Number.isFinite(cores) || cores <= 0) return "CPU";
+  return `CPU · ${cores} ${cores === 1 ? "core" : "cores"}`;
+}
+
+// humanCores reads a per-core CPU figure as cores in use, "≈ 1.5 cores",
+// for a tooltip beside the machine share. Empty when idle.
+export function humanCores(pct: number): string {
+  if (!Number.isFinite(pct) || pct <= 0) return "";
+  const n = pct / 100;
+  return `≈ ${n.toFixed(1)} ${n.toFixed(1) === "1.0" ? "core" : "cores"}`;
+}
+
+// quotaShare words the agent CPU quota, already a share of the whole
+// machine (0 = uncapped).
+export function quotaShare(pct: number): string {
+  if (!Number.isFinite(pct) || pct <= 0) return "uncapped";
+  return `${Math.min(100, Math.round(pct))}% of machine`;
 }

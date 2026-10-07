@@ -1,5 +1,6 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
+import { tick } from "svelte";
 import SubAgentPanel from "../SubAgentPanel.svelte";
 import type { SubAgentItem } from "../../types/agents.js";
 
@@ -288,9 +289,81 @@ describe("SubAgentPanel", () => {
     const p = props({ subAgents: [subAgent({ status: "running" })] });
     render(SubAgentPanel, { props: p });
 
+    await fireEvent.pointerEnter(screen.getByRole("button", { name: /open sub-agent/i }));
+    await fireEvent.click(screen.getByRole("button", { name: /^stop$/i }));
     await fireEvent.click(screen.getByRole("button", { name: /^stop$/i }));
     expect(p.onInterrupt).toHaveBeenCalledWith("d1");
     expect(p.onSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("SubAgentPanel — Stop kept out of the way", () => {
+  test("a live row shows no Stop until it is hovered", async () => {
+    render(SubAgentPanel, { props: props({ subAgents: [subAgent({ status: "running" })] }) });
+    expect(screen.queryByRole("button", { name: /^stop$/i })).toBeNull();
+    const row = screen.getByRole("button", { name: /open sub-agent/i });
+    await fireEvent.pointerEnter(row);
+    expect(screen.getByRole("button", { name: /^stop$/i })).toBeTruthy();
+    await fireEvent.pointerLeave(row);
+    expect(screen.queryByRole("button", { name: /^stop$/i })).toBeNull();
+  });
+
+  test("a long-press reveals Stop without opening the row, then asks first", async () => {
+    const p = props({ subAgents: [subAgent({ status: "running", handle: "log-investigator" })] });
+    render(SubAgentPanel, { props: p });
+    const row = screen.getByRole("button", { name: /open sub-agent/i });
+    vi.useFakeTimers();
+    try {
+      await fireEvent.pointerDown(row, { button: 0, pointerType: "touch" });
+      vi.advanceTimersByTime(500);
+      await tick();
+      await fireEvent.pointerUp(row, { button: 0, pointerType: "touch" });
+      await fireEvent.click(row);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(p.onSelect).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole("button", { name: /^stop$/i }));
+    expect(screen.getByText("Stop log-investigator?")).toBeTruthy();
+    expect(p.onInterrupt).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole("button", { name: /^stop$/i }));
+    expect(p.onInterrupt).toHaveBeenCalledWith("d1");
+  });
+
+  test("a short tap still opens the row", async () => {
+    const p = props({ subAgents: [subAgent({ status: "running" })] });
+    render(SubAgentPanel, { props: p });
+    const row = screen.getByRole("button", { name: /open sub-agent/i });
+    await fireEvent.pointerDown(row, { button: 0 });
+    await fireEvent.pointerUp(row, { button: 0 });
+    await fireEvent.click(row);
+    expect(p.onSelect).toHaveBeenCalledOnce();
+  });
+
+  test("⋯ → Stop all counts only running rows and asks first", async () => {
+    const p = props({
+      subAgents: [
+        subAgent({ delegation_id: "d1", child_session_id: "c1", status: "running" }),
+        subAgent({ delegation_id: "d2", child_session_id: "c2", status: "queued" }),
+        subAgent({ delegation_id: "d3", child_session_id: "c3", status: "done" }),
+      ],
+    });
+    render(SubAgentPanel, { props: p });
+    await fireEvent.click(screen.getByRole("button", { name: "Sub-agent actions" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Stop all (2 running)" }));
+    expect(p.onInterruptAll).not.toHaveBeenCalled();
+    expect(screen.getByText(/Stop 2 running sub-agents\?/)).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: /^stop all$/i }));
+    expect(p.onInterruptAll).toHaveBeenCalledOnce();
+    expect(p.onInterrupt).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  test("Stop all is disabled when nothing is running", async () => {
+    render(SubAgentPanel, { props: props({ subAgents: [subAgent({ status: "done" })] }) });
+    await fireEvent.click(screen.getByRole("button", { name: "Sub-agent actions" }));
+    const item = screen.getByRole("menuitem", { name: "Stop all (0 running)" }) as HTMLButtonElement;
+    expect(item.disabled).toBe(true);
   });
 });
 
@@ -369,5 +442,43 @@ describe("SubAgentPanel — continuing a finished sub-agent", () => {
   test("hides Continue when no handler is supplied", () => {
     render(SubAgentPanel, { props: props() });
     expect(screen.queryByRole("button", { name: /continue/i })).toBeNull();
+  });
+});
+
+describe("SubAgentPanel - Team and continued rows", () => {
+  test("Team tasks get their own section with target, state, turns and a chat link", async () => {
+    const onOpenAgent = vi.fn();
+    render(SubAgentPanel, {
+      props: props({
+        teamTasks: [{
+          task_id: "t1", context_id: "c1", to_agent_id: "a2", to_handle: "anton", to_name: "Anton",
+          title: "check the 401s", state: "working", turns: 2, max_turns: 4,
+          started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        }],
+        onOpenAgent,
+      }),
+    });
+    const sec = screen.getByTestId("team-tasks");
+    expect(sec.textContent).toContain("Anton");
+    expect(sec.textContent).toContain("@anton");
+    expect(sec.textContent).toContain("working");
+    expect(sec.textContent).toContain("turn 2/4");
+    await fireEvent.click(screen.getByText("Open chat"));
+    expect(onOpenAgent).toHaveBeenCalledWith("anton");
+  });
+
+  test("a continued row shows its first task, a Resumed badge and per-leg turns", () => {
+    render(SubAgentPanel, {
+      props: props({
+        subAgents: [subAgent({
+          label: "Your previous run ended in an error. Your earlier work is st",
+          title: "Find the flaky test",
+          resumes: 1, turns_used: 51, max_turns: 101, leg_base_turns: 40,
+        })],
+      }),
+    });
+    expect(screen.getByText("Find the flaky test")).toBeTruthy();
+    expect(screen.getByTestId("resumed-badge").textContent).toContain("Resumed ×1");
+    expect(screen.getByText(/11 turns this leg · 51 total/)).toBeTruthy();
   });
 });

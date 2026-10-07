@@ -37,7 +37,7 @@ func (p *Pool) Capacity() Capacity {
 }
 
 func (p *Pool) capacityLocked() Capacity {
-	used := len(p.active) + len(p.spawningKeys)
+	used := len(p.active) + len(p.spawningKeys) + len(p.leases)
 	max := p.cfg.MaxConcurrent
 	if max <= 0 {
 		// Unlimited global: -1 remaining sentinel so providers see endless
@@ -111,6 +111,11 @@ func (p *Pool) providerUsedLocked(pType, pName string) int {
 	}
 	for k := range p.spawningKeys {
 		if e, ok := p.active[k]; ok && e.provType == pType && e.provName == pName {
+			used++
+		}
+	}
+	for _, l := range p.leases {
+		if l.provType == pType && l.provName == pName {
 			used++
 		}
 	}

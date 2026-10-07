@@ -123,10 +123,10 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Category {
 			"Delete the full workflow folder and unregister all scheduled triggers.",
 			idInput{}, h.deleteWorkflow, wickdocs.Docs{}),
 		connector.Op("workflow_add_node", "Add Node",
-			"Add a node to the workflow graph via declarative patch. Validates type + schema. Returns updated workflow.",
+			"Add a node to the workflow graph via declarative patch. Validates type + schema. Returns updated workflow. ALWAYS fill description (markdown: what the node is for + a \"Why:\" line saying why) — a node without one is unfinished and workflow_validate warns about it. To group a path, add a node of type sticky_note (fields content (markdown title + summary), color yellow|green|blue|purple|red|gray, width, height, texts [{id,content,x,y,width,color,size}] = small sticky cards on the note (content stays the board title) with x/y/width relative 0..1 to the note, color = same presets, size sm|md|lg) behind the block; it never executes and takes no edges. After the edit, tidy the canvas (workflow_auto_layout / workflow_move_nodes).",
 			addNodeInput{}, h.addNode, wickdocs.Docs{}),
 		connector.Op("workflow_update_node", "Update Node",
-			"Merge-patch one node's fields. Use to update prompt, config, on_failure, etc.",
+			"Merge-patch one node's fields. Use to update description, prompt, code, expression, config, on_failure, etc.; for sticky_note: content, color, width, height, texts (replaces the whole list; x/y/width relative 0..1, color, size sm|md|lg). ALWAYS keep description (what for + \"Why:\") filled — when you change what the node does, update its Why line too. After the edit, tidy the canvas (workflow_auto_layout / workflow_move_nodes).",
 			updateNodeInput{}, h.updateNode, wickdocs.Docs{}),
 		connector.OpDestructive("workflow_delete_node", "Delete Node",
 			"Remove a node and all edges that reference it.",
@@ -143,8 +143,11 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Category {
 		connector.Op("workflow_move_nodes", "Move Nodes (Batch)",
 			"Move multiple nodes in one call. Pass moves as a JSON array of {node_id, x, y}. More efficient than calling workflow_move_node N times and avoids partial-update races.",
 			moveNodesInput{}, h.moveNodes, wickdocs.Docs{}),
+		connector.Op("workflow_apply", "Apply Edits (Batch)",
+			"Run many graph edits in ONE draft mutation and get a compact reply instead of the whole workflow. Prefer this over chains of add_node / update_node / connect / move_nodes. ops is a JSON array run in order (later steps see earlier ones, so add a node and connect it in the same call): {op:add_node,node:{...}} | {op:update_node,node_id,patch:{...}} | {op:connect,from,to,case?} | {op:disconnect,from,to} | {op:move,moves:[{node_id,x,y}]} | {op:set_triggers,triggers:[...]}. All-or-nothing: if any step fails nothing is saved and the error names the step (ops[i]). delete_node is refused — deleting is destructive, use workflow_delete_node. Give add_node an id so later steps can reference it; an id-less node gets a minted one, returned under minted [{op_index,label,id}] (op_index = position in ops). Edits land in the draft; publish with workflow_publish.",
+			applyInput{}, h.apply, wickdocs.Docs{}),
 		connector.Op("workflow_auto_layout", "Auto Layout Canvas",
-			"Compute DAG-aware positions for all nodes and apply them in one mutation. Uses Kahn's BFS rank assignment: roots at the left, children to the right, triggers above their entry node. Pass node_ids to restrict re-layout to a subset — positions of nodes outside the list are kept.",
+			"Compute lane positions for all nodes and apply them in one mutation. One column (lane) per trigger, top→bottom by DAG rank (Kahn's BFS), trigger at the top of its lane above its entry node; nodes reachable from several triggers stay in the first trigger's lane; parallel branches spread right inside the lane; wide gaps between lanes so paths never cross. sticky_note nodes are NOT moved — re-wrap them around their block with workflow_move_nodes afterwards. Pass node_ids to restrict re-layout to a subset — positions of nodes outside the list are kept. Run after every graph edit, then check workflow_canvas_view.",
 			autoLayoutInput{}, h.autoLayout, wickdocs.Docs{}),
 		connector.Op("workflow_canvas_view", "View Canvas Layout",
 			"Return a human-readable table + ASCII sketch of the current canvas. Shows each node's ID (short), label, type, X, Y, and outgoing edges. Useful from MCP to understand the current layout before moving or auto-laying nodes.",
@@ -350,6 +353,11 @@ type moveNodeInput struct {
 type moveNodesInput struct {
 	ID    string `wick:"required;desc=Workflow ID."`
 	Moves string `wick:"required;textarea;desc=JSON array of moves: [{\"node_id\":\"abc\",\"x\":280,\"y\":160}, ...]. All nodes moved in one draft mutation."`
+}
+
+type applyInput struct {
+	ID  string `wick:"required;desc=Workflow ID."`
+	Ops string `wick:"required;textarea;desc=JSON array of edit steps, run in order and saved once: [{\"op\":\"add_node\",\"node\":{...}}, {\"op\":\"connect\",\"from\":\"a\",\"to\":\"b\"}, {\"op\":\"move\",\"moves\":[{\"node_id\":\"a\",\"x\":200,\"y\":290}]}, ...]."`
 }
 
 type autoLayoutInput struct {

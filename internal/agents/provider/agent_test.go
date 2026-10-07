@@ -335,3 +335,42 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
 	}
 	t.Fatal("waitFor: condition never satisfied")
 }
+
+// A truncated stdout line mid-turn (a 256KB+ tool result cut short is the
+// usual cause) must reach consumers as a Warning, never an Error: every
+// consumer ends the turn on Error, which closed a still-working
+// delegation "(no output)" and released its queue slot early.
+func TestAgentUnparsableLineIsWarningNotError(t *testing.T) {
+	spawner := &fakeSpawner{
+		Lines: [][]string{{
+			`{"type":"system","subtype":"init","session_id":"abc-123"}`,
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"work`,
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"real answer"}]}}`,
+			`{"type":"result","subtype":"success","is_error":false,"result":"real answer"}`,
+		}},
+	}
+	collected := collectingHook{}
+	a := New(Options{
+		Workspace:     t.TempDir(),
+		IdleTimeout:   500 * time.Millisecond,
+		ParserFactory: func() event.Parser { return event.NewClaudeParser() },
+		Spawner:       spawner,
+		State:         state.New(nil),
+		OnEvent:       collected.add,
+	})
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, func() bool { return !a.Running() }, time.Second)
+
+	got := collected.types()
+	want := []event.EventType{event.SessionStart, event.Warning, event.TextDelta, event.Done}
+	if len(got) < len(want) {
+		t.Fatalf("events: got %v, want prefix %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Fatalf("event[%d]: got %v want %v (all: %v)", i, got[i], w, got)
+		}
+	}
+}

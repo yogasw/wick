@@ -35,6 +35,28 @@ describe("buildTree", () => {
     expect(allFilePaths(tree[0])).toEqual(["vendored/"]);
   });
 
+  test("keeps a shared parent folder when every change lives under it", () => {
+    // Staged changes under internal/agents/{event,pool,provider} used to show
+    // "event", "pool", "provider" at the top: the root collapsed the common
+    // prefix and buildTree dropped it.
+    const tree = buildTree([
+      mk("internal/agents/event/a.go"),
+      mk("internal/agents/pool/b.go"),
+      mk("internal/agents/provider/c.go"),
+    ]);
+    expect(tree).toHaveLength(1);
+    expect(tree[0].name).toBe("internal/agents");
+    expect(tree[0].path).toBe("internal/agents");
+    expect(tree[0].children?.map((n) => n.name)).toEqual(["event", "pool", "provider"]);
+  });
+
+  test("a lone nested file keeps its folder chain instead of floating at the root", () => {
+    const tree = buildTree([mk("pkg/a/b/deep.ts")]);
+    expect(tree).toHaveLength(1);
+    expect(tree[0]).toMatchObject({ name: "pkg/a/b", isDir: true });
+    expect(tree[0].children?.map((n) => n.name)).toEqual(["deep.ts"]);
+  });
+
   test("collapses a single-child directory chain into one node", () => {
     const tree = buildTree([mk("pkg/a/b/deep.ts"), mk("other.txt")]);
     const dir = tree.find((n) => n.isDir);

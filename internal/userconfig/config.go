@@ -90,6 +90,10 @@ type ProviderStatus struct {
 	VersionErr string `json:"version_err,omitempty"`
 	ScannedAt  string `json:"scanned_at,omitempty"`
 	VersionAt  string `json:"version_at,omitempty"`
+	// Fingerprint identifies the binary the version was read from
+	// (resolved path, size, mtime). The version is re-probed only when it
+	// changes — the binary was updated — or on an explicit Rescan.
+	Fingerprint string `json:"fingerprint,omitempty"`
 
 	// Hooks captures the runtime capability check per hook event name.
 	// Keys are provider-agnostic event names ("PreToolUse",
@@ -125,6 +129,13 @@ type ProvidersConfig struct {
 	Claude []ProviderInstance `json:"claude,omitempty"`
 	Codex  []ProviderInstance `json:"codex,omitempty"`
 	Gemini []ProviderInstance `json:"gemini,omitempty"`
+	// OMP / Opencode: one entry per account (omp profile / opencode data dir).
+	OMP      []ProviderInstance `json:"omp,omitempty"`
+	Opencode []ProviderInstance `json:"opencode,omitempty"`
+
+	// ManagedBinaries configures the CLI binaries wick downloads and
+	// keeps itself (<data dir>/providers/bin). nil = defaults.
+	ManagedBinaries *ManagedBinariesConfig `json:"managed_binaries,omitempty"`
 
 	// Wick is the built-in in-process provider. Single-instance by
 	// design: the list never holds more than the one "wick" entry —
@@ -219,6 +230,64 @@ type ProviderInstance struct {
 	// "workspace-write", or "danger-full-access". Empty = danger-full-access.
 	// Only meaningful for codex instances; ignored by claude/gemini.
 	SandboxMode string `json:"sandbox_mode,omitempty"`
+
+	// OMPProfile is the `omp --profile` this instance owns. Written once
+	// when the instance is first saved and never re-derived, so a rename
+	// keeps the logged-in account. Only meaningful for omp instances.
+	OMPProfile string `json:"omp_profile,omitempty"`
+
+	// OpencodeDataDir is the XDG data home an opencode instance runs
+	// under (opencode keeps auth.json in <dir>/opencode). Pinned like
+	// OMPProfile. Only meaningful for opencode instances.
+	OpencodeDataDir string `json:"opencode_data_dir,omitempty"`
+
+	// ExtraMCPServers is the omp/opencode "extra MCP servers" setting: a
+	// JSON mcpServers object merged next to wick's own server on every
+	// spawn. Secrets are ${VAR} references into Env, never plaintext.
+	ExtraMCPServers string `json:"extra_mcp_servers,omitempty"`
+
+	// OpencodeModel is the provider/model an opencode instance always runs
+	// (sent as --model). OpencodeAllowHosted permits the "opencode/…"
+	// hosted models (opencode Zen); nil (never set) = on, so every model the
+	// CLI lists is offered until the operator turns it off.
+	OpencodeModel       string `json:"opencode_model,omitempty"`
+	OpencodeAllowHosted *bool  `json:"opencode_allow_hosted,omitempty"`
+
+	// LiveModels makes an omp/opencode instance offer the models its CLI
+	// lists (`omp models` / `opencode models`) instead of the curated
+	// Models, narrowed by LiveModelFilter (modelfilter grammar). LiveModelDefault
+	// pins the default among them; empty or gone = the first match.
+	// nil (never set) = on; an explicit false is kept.
+	LiveModels       *bool  `json:"live_models,omitempty"`
+	LiveModelFilter  string `json:"live_model_filter,omitempty"`
+	LiveModelDefault string `json:"live_model_default,omitempty"`
+
+	// Server mode (opencode; omp later): RunPerTurn opts out of the shared
+	// CLI server, ServerIdleMinutes is its idle-kill window (0 = the pool idle timeout),
+	// LoadExternalSkills lets the CLI scan ~/.claude/skills & co.
+	RunPerTurn         bool `json:"run_per_turn,omitempty"`
+	ServerIdleMinutes  int  `json:"server_idle_minutes,omitempty"`
+	LoadExternalSkills bool `json:"load_external_skills,omitempty"`
+	// AutoRetryModel (omp/opencode) re-runs a turn the account was refused
+	// on the next usable model instead of failing it. Off by default.
+	AutoRetryModel bool `json:"auto_retry_model,omitempty"`
+
+	// IdleCompact* run /compact on a session idle past the seconds whose
+	// context is past the threshold (percent of the window, or tokens).
+	// IdleCompactMinutes is the older setting, read while seconds is unset.
+	IdleCompact          bool   `json:"idle_compact,omitempty"`
+	IdleCompactSeconds   int    `json:"idle_compact_seconds,omitempty"`
+	IdleCompactMinutes   int    `json:"idle_compact_minutes,omitempty"`
+	IdleCompactTrigger   string `json:"idle_compact_trigger,omitempty"`
+	IdleCompactThreshold int    `json:"idle_compact_threshold,omitempty"`
+	// IdleCompactScope is skip, whitelist or all; IdleCompactMatch is
+	// the session pattern list it applies.
+	IdleCompactScope string `json:"idle_compact_scope,omitempty"`
+	IdleCompactMatch string `json:"idle_compact_match,omitempty"`
+
+	// AuthFrom (omp/opencode) names another instance of the same type whose
+	// login this one uses; empty = its own login. See provider/authshare.go.
+	AuthFrom string `json:"auth_from,omitempty"`
 
 	// MaxConcurrent caps how many parallel spawns this instance may
 	// have running at once. 0 = unlimited (follows the global pool cap).
@@ -680,4 +749,57 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return out.Close()
+}
+
+// ManagedBinariesConfig is providers.managed_binaries:
+//
+//	{"keep_versions": 2, "omp": {"enabled": true}, "opencode": {"enabled": false}}
+//
+// Per-type keys sit next to keep_versions, so a new managed type needs no
+// schema change. A type with no entry uses its default (enabled).
+type ManagedBinariesConfig struct {
+	// KeepVersions is how many non-current versions retention keeps.
+	// 0 = default (2); use a negative value for "keep none".
+	KeepVersions int
+	// Types holds the per-type settings, keyed by provider type.
+	Types map[string]ManagedBinaryType
+}
+
+// ManagedBinaryType is providers.managed_binaries.<type>.
+type ManagedBinaryType struct {
+	// Enabled nil = default (true for types wick can manage).
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+func (c ManagedBinariesConfig) MarshalJSON() ([]byte, error) {
+	m := map[string]any{}
+	if c.KeepVersions != 0 {
+		m["keep_versions"] = c.KeepVersions
+	}
+	for k, v := range c.Types {
+		m[k] = v
+	}
+	return json.Marshal(m)
+}
+
+func (c *ManagedBinariesConfig) UnmarshalJSON(b []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	c.Types = map[string]ManagedBinaryType{}
+	for k, v := range raw {
+		if k == "keep_versions" {
+			if err := json.Unmarshal(v, &c.KeepVersions); err != nil {
+				return err
+			}
+			continue
+		}
+		var t ManagedBinaryType
+		if err := json.Unmarshal(v, &t); err != nil {
+			return err
+		}
+		c.Types[k] = t
+	}
+	return nil
 }

@@ -93,6 +93,9 @@ type ProviderUsage struct {
 	// when the CLI does not report a limit (codex does not).
 	ContextUsed   int `json:"context_used,omitempty"`
 	ContextWindow int `json:"context_window,omitempty"`
+	// AutoCompact is the provider's own auto-compact state as last
+	// reported (omp get_state, opencode config); nil when never said.
+	AutoCompact *bool `json:"auto_compact,omitempty"`
 
 	FirstAt time.Time    `json:"first_at"`
 	LastAt  time.Time    `json:"last_at"`
@@ -183,6 +186,9 @@ func (s *Store) recordUsage(u *event.TokenUsage, at time.Time) error {
 	if u.Window > 0 {
 		p.ContextWindow = u.Window
 	}
+	if u.AutoCompact != nil {
+		p.AutoCompact = u.AutoCompact
+	}
 	// A turn whose level could not be read (codex with no rollout to
 	// consult) carries the last known one into the series. Plotting the
 	// zero instead would draw a cliff to nothing and back — a fall that
@@ -233,6 +239,34 @@ const levelWriteInterval = 2 * time.Second
 //
 // Best-effort like the rest of this file — a ledger write must never
 // fail the turn that produced it.
+// recordLevelPoint appends a level-only point to the series (and sets the
+// level): a turn ended without its own usage. No turn counted, no flows.
+func (s *Store) recordLevelPoint(used int, at time.Time) error {
+	path := s.layout.SessionUsage(s.sessionID)
+	su, err := loadUsageFile(path)
+	if err != nil {
+		return err
+	}
+	su.SessionID = s.sessionID
+	key := s.provider
+	if key == "" {
+		key = "unknown"
+	}
+	p := su.Providers[key]
+	if p == nil {
+		p = &ProviderUsage{FirstAt: at}
+		su.Providers[key] = p
+	}
+	p.ContextUsed = used
+	p.LastAt = at
+	p.Series = append(p.Series, UsagePoint{At: at, ContextUsed: used})
+	if n := len(p.Series); n > UsageSeriesMax {
+		p.Series = append(p.Series[:0], p.Series[n-UsageSeriesMax:]...)
+	}
+	su.UpdatedAt = at
+	return storage.WriteJSON(path, su)
+}
+
 func (s *Store) recordContextLevel(used int, at time.Time) error {
 	if used <= 0 {
 		return nil

@@ -13,7 +13,7 @@ Spec: [design.md](design.md).
 ## Global Constraints
 
 - Semua teks UI dan semua `desc=` pada tag `wick:"..."` ditulis **bahasa Inggris**.
-- Tidak ada nama "qiscus" di contoh/placeholder — pakai nama generik.
+- Tidak ada nama perusahaan/klien di contoh/placeholder — pakai nama generik.
 - Logging pakai pola zerolog: `l := log.With().Str("component", "x").Logger()`, bukan `log.Debug()` langsung.
 - Jangan pernah mengedit file `_templ.go`; ubah `.templ` lalu regenerate. (Task di plan ini tidak menyentuh templ.)
 - `{@const}` di Svelte hanya sah tepat di bawah `{#if}` / `{#each}` — bukan di dalam `<div>` / `<button>`. Kalau butuh nilai turunan di dalam elemen, hoist jadi `$derived` di `<script>`.

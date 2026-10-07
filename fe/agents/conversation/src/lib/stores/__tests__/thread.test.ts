@@ -1,6 +1,8 @@
 import { describe, test, expect, beforeEach } from "vitest";
 import { get } from "svelte/store";
 import { createThreadStore } from "../thread.js";
+import { foldSystemEvents } from "../../systemEvents.js";
+import { teamSender } from "../../teamMention.js";
 import type { ConversationTurn, AgentEvent } from "../../types/agents.js";
 
 function makeTurn(overrides: Partial<ConversationTurn> = {}): ConversationTurn {
@@ -81,6 +83,50 @@ describe("createThreadStore", () => {
     store.setHistory([makeTurn({ turn_id: "p1", role: "user", text: "line one\r\nline two" })]);
     const ids = get(store.turns).map((t) => t.turn_id);
     expect(ids).toEqual(["p1"]);
+  });
+
+  test("setHistory keeps an @mention message in place after the refetch", () => {
+    // The six turns one "@luna …" round leaves on disk, in order. The stored
+    // user turn carries the "[routed]" note the echo below never had, so the
+    // echo used to survive as pending and land BELOW the replies.
+    const sender = { id: "u1", name: "Owner", channel: "ui", wick_user_id: "u1" };
+    const handoff = (turn_id: string, state: string) =>
+      makeTurn({
+        turn_id,
+        role: "system",
+        kind: "mention_handoff",
+        text: `@captain → @luna · ${state}`,
+        extras: { from: "captain", to: "luna", state, task_id: "task-1" },
+      });
+    const persisted = [
+      makeTurn({
+        turn_id: "turn-2",
+        role: "user",
+        source: "ui",
+        sender,
+        text: "@luna kamu lagi apa\n\n[routed] wick is dispatching @luna for the message above.",
+      }),
+      handoff("h1", "TASK_STATE_WORKING"),
+      handoff("h2", "TASK_STATE_COMPLETED"),
+      makeTurn({
+        turn_id: "turn-5",
+        role: "user",
+        source: "subagent",
+        sender,
+        text: "Reply from Luna (@luna) [task task-1, completed]:\n\nHalo Captain!",
+      }),
+      makeTurn({ turn_id: "a1", role: "assistant", text: "Pesan buat @luna sudah dikirim" }),
+      makeTurn({ turn_id: "a2", role: "assistant", text: "Luna sudah balas" }),
+    ];
+    store.appendUserTurn("@luna kamu lagi apa");
+    store.setHistory(persisted);
+
+    const shown = foldSystemEvents(get(store.turns));
+    expect(shown.map((t) => t.turn_id)).toEqual(["turn-2", "h1", "turn-5", "a1", "a2"]);
+    expect(shown[1].extras?.state).toBe("TASK_STATE_COMPLETED");
+    // The handed-back reply reads as Luna's, not as the owner's bubble.
+    expect(teamSender(shown[2].source, shown[2].text)).toEqual({ name: "Luna", handle: "luna", body: "Halo Captain!" });
+    expect(teamSender(shown[0].source, shown[0].text)).toBeNull();
   });
 
   test("setHistory grafts a dropped local turn's trace onto a trace-less persisted twin", () => {
@@ -239,6 +285,63 @@ describe("createThreadStore", () => {
     expect(get(store.live)).not.toBeNull();
   });
 
+  /* Claude streams thinking as fragments; the store folds them into one event
+     and a reload renders that. Live must render the same thing. */
+  test("consecutive thinking fragments fold into one block", () => {
+    for (const d of ["Mas", "ih bocor:", " da", "emon baru (0.1", ".374, pid 1666"]) {
+      store.handleEvent(ev("thinking", { data: d }));
+    }
+    const live = get(store.live)!;
+    expect(live.blocks).toHaveLength(1);
+    expect(live.blocks[0]).toEqual({ kind: "thinking", text: "Masih bocor: daemon baru (0.1.374, pid 1666" });
+  });
+
+  test("a tool call between fragments starts a new thinking block", () => {
+    store.handleEvent(ev("thinking", { data: "before " }));
+    store.handleEvent(ev("thinking", { data: "tool" }));
+    store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "bash", tool_input: "{}" }));
+    store.handleEvent(ev("tool_result", { tool_use_id: "u1", data: "ok" }));
+    store.handleEvent(ev("thinking", { data: "after " }));
+    store.handleEvent(ev("thinking", { data: "tool" }));
+    const kinds = get(store.live)!.blocks.map((b) => (b.kind === "thinking" ? `thinking:${b.text}` : b.kind));
+    expect(kinds).toEqual(["thinking:before tool", "tool", "thinking:after tool"]);
+  });
+
+  test("text streamed between fragments closes the thinking block, like the store's text flush", () => {
+    store.handleEvent(ev("thinking", { data: "first" }));
+    store.handleEvent(ev("text_delta", { data: "visible answer" }));
+    store.handleEvent(ev("thinking", { data: "second" }));
+    const blocks = get(store.live)!.blocks;
+    expect(blocks).toEqual([
+      { kind: "thinking", text: "first" },
+      { kind: "thinking", text: "second" },
+    ]);
+  });
+
+  test("whitespace-only text between fragments does not split the block", () => {
+    store.handleEvent(ev("thinking", { data: "one" }));
+    store.handleEvent(ev("text_delta", { data: "\n" }));
+    store.handleEvent(ev("thinking", { data: " two" }));
+    expect(get(store.live)!.blocks).toEqual([{ kind: "thinking", text: "one two" }]);
+  });
+
+  test("a finished live turn carries one thinking event per folded block", () => {
+    for (const d of ["a", "b", "c"]) store.handleEvent(ev("thinking", { data: d }));
+    store.handleEvent(ev("text_delta", { data: "answer" }));
+    store.handleEvent(ev("done"));
+    const turns = get(store.turns);
+    const last = turns[turns.length - 1];
+    expect(last.events.filter((e) => e.type === "thinking")).toEqual([{ type: "thinking", text: "abc" }]);
+  });
+
+  test("a new turn does not fold into the previous turn's thinking", () => {
+    store.handleEvent(ev("thinking", { data: "old" }));
+    store.handleEvent(ev("text_delta", { data: "long answer text" }));
+    store.handleEvent(ev("done"));
+    store.handleEvent(ev("thinking", { data: "new" }));
+    expect(get(store.live)!.blocks).toEqual([{ kind: "thinking", text: "new" }]);
+  });
+
   /* ── tool_use ───────────────────────────────────────────────────── */
 
   test("tool_use pushes a tool block to live", () => {
@@ -395,6 +498,37 @@ describe("createThreadStore", () => {
     expect(get(store.typing).active).toBe(false);
   });
 
+  test("a turn's indicator stays up through a realistic event run", () => {
+    const seen: boolean[] = [];
+    const labels = new Set<string>();
+    const unsub = store.typing.subscribe((v) => {
+      seen.push(v.active);
+      if (v.active) labels.add(v.substate ?? "");
+    });
+    store.handleEvent(ev("session_start"));
+    store.handleEvent(ev("lifecycle", { lifecycle: "working", data: "claude/engineer" }));
+    store.handleEvent(ev("thinking", { data: "Let me look" }));
+    store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "shell", tool_input: "{}", at: 1 }));
+    // An idle edge that lands before the turn's done event.
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle", data: "claude/engineer" }));
+    store.handleEvent(ev("tool_result", { tool_use_id: "u1", data: "ok" }));
+    store.handleEvent(ev("lifecycle", { lifecycle: "working", data: "claude" }));
+    store.handleEvent(ev("thinking", { data: "Now answer" }));
+    store.handleEvent(ev("text_delta", { data: "Done." }));
+    const beforeEnd = [...seen];
+    store.handleEvent(ev("done"));
+    unsub();
+    expect(beforeEnd.slice(beforeEnd.indexOf(true))).not.toContain(false);
+    expect([...labels].some((l) => l.includes("claude"))).toBe(false);
+    expect(get(store.typing).active).toBe(false);
+  });
+
+  test("lifecycle idle with no live turn still clears typing", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "working", data: "" }));
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle" }));
+    expect(get(store.typing).active).toBe(false);
+  });
+
   test("lifecycle killed sets typing inactive", () => {
     store.handleEvent(ev("session_start"));
     store.handleEvent(ev("lifecycle", { lifecycle: "killed" }));
@@ -435,9 +569,12 @@ describe("createThreadStore", () => {
     expect(get(store.typing).toolName).toBeUndefined();
   });
 
-  test("lifecycle idle clears typing.toolName", () => {
+  test("lifecycle idle mid-turn keeps the indicator; done clears it", () => {
     store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "shell", tool_input: "{}", at: 1 }));
     store.handleEvent(ev("lifecycle", { lifecycle: "idle" }));
+    expect(get(store.typing)).toMatchObject({ active: true, toolName: "shell" });
+    store.handleEvent(ev("done"));
+    expect(get(store.typing).active).toBe(false);
     expect(get(store.typing).toolName).toBeUndefined();
   });
 
@@ -771,5 +908,46 @@ describe("createThreadStore — live context level", () => {
     s.handleEvent({ type: "unknown", context_used: 12_000 });
     s.handleEvent({ type: "unknown", context_used: 0 });
     expect(get(s.contextUsed)).toBe(12_000);
+  });
+});
+
+describe("thread store — system_event", () => {
+  const ev = (type: string, turn: object) => ({ type, data: JSON.stringify(turn) }) as AgentEvent;
+  const handoff = { turn_id: "9", role: "system", kind: "mention_handoff", text: "@captain → @anton · working", extras: { task_id: "t1", to: "anton", state: "working" } };
+
+  test("a live system_event appends the server's turn under its own turn_id", () => {
+    const s = createThreadStore();
+    s.handleEvent(ev("system_event", handoff));
+    const ts = get(s.turns);
+    expect(ts).toHaveLength(1);
+    expect(ts[0]).toMatchObject({ turn_id: "9", role: "system", kind: "mention_handoff", extras: { task_id: "t1" } });
+  });
+
+  test("the legacy mention_handoff twin and a replay do not draw it twice", () => {
+    const s = createThreadStore();
+    s.handleEvent(ev("system_event", handoff));
+    s.handleEvent(ev("mention_handoff", handoff));
+    s.handleEvent(ev("system_event", handoff));
+    expect(get(s.turns)).toHaveLength(1);
+  });
+
+  test("a non-system payload is ignored", () => {
+    const s = createThreadStore();
+    s.handleEvent(ev("system_event", { turn_id: "1", role: "assistant", kind: "x", text: "nope" }));
+    expect(get(s.turns)).toHaveLength(0);
+  });
+});
+
+describe("thread store — postback", () => {
+  test("a postback event locks its card and draws one chip turn", () => {
+    const s = createThreadStore();
+    s.cards.set({ "cap-1": { turn_id: "t1" } });
+    const ev = { type: "postback", data: JSON.stringify({ postback: { card_id: "cap-1", value: "approve", label: "Approve" }, text: "[postback card=cap-1 value=approve] Approve" }) } as AgentEvent;
+    s.handleEvent(ev);
+    s.handleEvent(ev);
+    expect(get(s.cards)["cap-1"]).toMatchObject({ locked: true, postback: { value: "approve" } });
+    const ts = get(s.turns);
+    expect(ts).toHaveLength(1);
+    expect(ts[0]).toMatchObject({ role: "user", postback: { label: "Approve" } });
   });
 });

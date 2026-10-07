@@ -34,6 +34,10 @@
     "gemini": [
       { "id": "gemini-2.5-pro", "desc": "Most capable Gemini for complex, multi-step work", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" },
       { "id": "gemini-2.5-flash", "desc": "Fast and cost-efficient for everyday tasks", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" }
+    ],
+    "omp": [
+      { "id": "openai-codex/gpt-5.5", "desc": "ChatGPT subscription (openai-codex) default model", "enabled": true, "updated_at": "2026-09-29T00:00:00Z" },
+      { "id": "anthropic/claude-opus-5-5", "desc": "Claude subscription (anthropic) default model", "enabled": true, "updated_at": "2026-09-29T00:00:00Z" }
     ]
   }
 }

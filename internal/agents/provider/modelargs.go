@@ -45,6 +45,13 @@ func ModelArgs(opt SpawnOptions, existingArgs []string) []string {
 	// Dropping the flag lets the CLI use its own default, which is what "this
 	// pin does not apply to me" should mean. Refusing to spawn would strand
 	// the session on a value the user cannot see.
+	//
+	// A grouped pin ("<path>@<model>") of a type that registered ModelSets
+	// (omp/opencode: provider → [account] → model) is resolved through the
+	// registry first: that is a real CLI model behind a picker path.
+	if p, ok := ResolvePin(opt.Instance, opt.ModelID); ok {
+		return []string{"--model", p.Model}
+	}
 	if isForeignModelPin(opt.ModelID) {
 		return nil
 	}

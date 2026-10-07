@@ -26,6 +26,7 @@ interface WireProviderInstance {
   disabled: boolean;
   max_concurrent: number;
   send_mode: string;
+  idle_compact?: { seconds: number; trigger: string; threshold: number; scope?: string; match?: string[] } | null;
 }
 
 interface WireProviderCap {
@@ -47,6 +48,7 @@ interface WireProviderStatus {
   instance: WireProviderInstance;
   path: string;
   path_found: boolean;
+  source?: string;
   version: string;
   version_err?: string;
   probing: boolean;
@@ -188,6 +190,7 @@ interface WireProviderDetailResponse {
   instance: WireProviderInstance;
   path: string;
   path_found: boolean;
+  source?: string;
   version: string;
   version_err?: string;
   probing: boolean;
@@ -277,6 +280,9 @@ function mapInstance(w: WireProviderInstance): ProviderInstanceDTO {
     Disabled: w.disabled ?? false,
     MaxConcurrent: w.max_concurrent ?? 0,
     SendMode: w.send_mode ?? "",
+    IdleCompact: w.idle_compact
+      ? { Seconds: w.idle_compact.seconds ?? 0, Trigger: w.idle_compact.trigger ?? "", Threshold: w.idle_compact.threshold ?? 0, Scope: w.idle_compact.scope ?? "skip", Match: w.idle_compact.match ?? [] }
+      : null,
   };
 }
 
@@ -377,6 +383,7 @@ function mapProviderStatus(w: WireProviderStatus): ProviderStatusDTO {
     Instance: mapInstance(w.instance),
     Path: w.path ?? "",
     PathFound: w.path_found ?? false,
+    Source: w.source ?? "",
     Version: w.version ?? "",
     VersionErr: w.version_err ?? "",
     Probing: w.probing ?? false,
@@ -498,10 +505,20 @@ export async function apiCreateProvider(fields: {
   airouter_models?: Record<string, string>;
   airouter_api_key?: string;
   airouter_raw_config?: string;
+  omp_profile?: string;
+  opencode_data_dir?: string;
 }): Promise<void> {
   const form = new URLSearchParams();
   form.set("type", fields.type);
   form.set("name", fields.name);
+  // Account-store override (omp/opencode). Empty = server default, pinned
+  // on first save.
+  if (fields.omp_profile) {
+    form.set("omp_profile", fields.omp_profile);
+  }
+  if (fields.opencode_data_dir) {
+    form.set("opencode_data_dir", fields.opencode_data_dir);
+  }
   if (fields.binary) {
     form.set("binary", fields.binary);
   }
@@ -580,6 +597,7 @@ export function normalizeProviderDetail(r: WireProviderDetailResponse): Provider
     Instance: mapInstance(r.instance),
     Path: r.path ?? "",
     PathFound: r.path_found ?? false,
+    Source: r.source ?? "",
     Version: r.version ?? "",
     VersionErr: r.version_err ?? "",
     Probing: r.probing ?? false,
@@ -1494,6 +1512,7 @@ interface WireProviderConnection {
   type: string;
   name: string;
   connected?: boolean;
+  account_unknown?: boolean;
   email?: string;
   plan?: string;
   org?: string;
@@ -1515,6 +1534,7 @@ export function normalizeConnections(
     type: c.type ?? "",
     name: c.name ?? "",
     connected: c.connected ?? false,
+    accountUnknown: c.account_unknown ?? false,
     email: c.email ?? "",
     plan: c.plan ?? "",
     org: c.org ?? "",
@@ -1543,4 +1563,129 @@ export async function apiGetConnections(): Promise<ProviderConnection[]> {
     getBase() + "/api/providers/connections",
   );
   return normalizeConnections(r);
+}
+
+/* ── omp/opencode live CLI model list ─────────────────────────────────── */
+
+export interface CLIModel {
+  id: string;
+  desc?: string;
+  /** Listed by the CLI, but this account was refused it (model_not_found). */
+  unavailable?: boolean;
+  /** Recorded refusal reason, when the CLI gave one. */
+  reason?: string;
+  /** The model a turn with no pin runs (server's effective default). */
+  default?: boolean;
+}
+
+/** GET /api/providers/{type}/{name}/cli-models — the CLI's own model list,
+    cached server-side ~10 min (refresh=true re-runs the CLI), refusals
+    marked: the raw list an unsaved filter is previewed over. The effective
+    list comes from apiGetEffectiveLiveModels (the composer picker's own
+    endpoint). `error` = a failed refresh over a stale list. */
+export interface CLIModelsResponse {
+  models: CLIModel[];
+  hostedAllowed: boolean;
+  /** "" when nothing is known yet (no harvest, no Refresh). */
+  fetchedAt: string;
+  /** "files" / "server" (read without the CLI) or "cli" (a Refresh). */
+  source?: string;
+  error?: string;
+}
+
+export async function apiGetCLIModels(base: string, type: string, name: string, refresh = false): Promise<CLIModelsResponse> {
+  const r = await get<{ models?: CLIModel[]; hosted_allowed?: boolean; fetched_at?: string; source?: string; error?: string }>(
+    `${base}/api/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}/cli-models${refresh ? "?refresh=1" : ""}`,
+  );
+  return {
+    models: r.models ?? [],
+    hostedAllowed: r.hosted_allowed ?? true,
+    fetchedAt: r.fetched_at ?? "",
+    source: r.source,
+    error: r.error,
+  };
+}
+
+/** GET /providers/options/{type}/{name}/models?all=1 — the instance's
+    EFFECTIVE live list through the composer picker's own pipeline
+    (ModelSets: saved filter, chosen Default first, refusals marked
+    "unavailable", the default a spawn runs flagged), every level
+    flattened. The same endpoint the wick provider page reads its live
+    sets from, so the page and the picker cannot disagree. */
+export async function apiGetEffectiveLiveModels(base: string, type: string, name: string): Promise<CLIModel[]> {
+  const r = await get<{ models?: { id?: string; desc?: string; default?: boolean; unavailable?: boolean }[] | null }>(
+    `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models?all=1`,
+  );
+  return (r?.models ?? [])
+    .filter((m) => !!m.id)
+    .map((m) => ({ id: m.id!, desc: m.unavailable ? undefined : m.desc, reason: m.unavailable ? m.desc : undefined, unavailable: m.unavailable, default: m.default }));
+}
+
+/** POST …/cli-models/recheck — forget one refusal so the next turn tries
+    the model again (a second refusal records it again). */
+export async function apiRecheckCLIModel(base: string, type: string, name: string, model: string): Promise<boolean> {
+  const r = await post<{ cleared?: boolean }>(
+    `${base}/api/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}/cli-models/recheck`,
+    { model },
+  );
+  return !!r.cleared;
+}
+
+/** Hosted opencode models (opencode/…, opencode-go/…) — mirrors
+    provider.IsOpencodeHostedModel. */
+export function isOpencodeHostedModel(id: string): boolean {
+  const p = id.split("/")[0];
+  return p === "opencode" || p === "opencode-go";
+}
+
+export interface IdleCompactProbe {
+  session_id: string;
+  title: string;
+  project: string;
+  project_id: string;
+  /* sub_agent: a sub-agent's session, never compacted. */
+  sub_agent?: boolean;
+  /* rule is the 1-based pattern line that matched, 0 for none. */
+  rule: number;
+  rule_text?: string;
+  in_scope: boolean;
+  enabled: boolean;
+  session_provider?: string;
+  same_provider: boolean;
+  context_used: number;
+  context_window: number;
+  over_threshold: boolean;
+}
+
+/* apiIdleCompactProbe asks whether a session (link or id) would be
+   compacted by this instance under the given, possibly unsaved, scope
+   and patterns. */
+export async function apiIdleCompactProbe(
+  base: string,
+  type: string,
+  name: string,
+  session: string,
+  scope: string,
+  match: string,
+): Promise<IdleCompactProbe> {
+  const resp = await fetch(
+    `${base}/providers/idle-compact-probe/${encodeURIComponent(type)}/${encodeURIComponent(name)}`,
+    {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+      body: new URLSearchParams({ session, scope, match }).toString(),
+    },
+  );
+  const text = await resp.text().catch(() => "");
+  if (!resp.ok) {
+    let msg = text || `HTTP ${resp.status}`;
+    try {
+      msg = (JSON.parse(text) as { error?: string }).error || msg;
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(resp.status, msg);
+  }
+  return JSON.parse(text) as IdleCompactProbe;
 }

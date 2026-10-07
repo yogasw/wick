@@ -1,0 +1,30 @@
+{
+ "additionalUpdatedPointers": [
+  {
+   "id": "3e41f07f-4ae0-81eb-938d-e5dca911b4ad",
+   "spaceId": "827e9fd8-c1e6-4684-b62d-274773e6cb75",
+   "table": "block"
+  }
+ ],
+ "args": {
+  "primitiveOp": {
+   "args": [
+    [
+     "To Verify"
+    ]
+   ],
+   "command": "set"
+  }
+ },
+ "blockPropertyValueExpectedVersions": {},
+ "command": "updateBlockPropertyValue",
+ "path": [
+  "properties",
+  "{L~P"
+ ],
+ "pointer": {
+  "id": "3e41f07f-4ae0-81eb-938d-e5dca911b4ad",
+  "spaceId": "827e9fd8-c1e6-4684-b62d-274773e6cb75",
+  "table": "block"
+ }
+}

@@ -22,7 +22,7 @@ import (
 // these agents actually use" before anything is turned on.
 
 // agentBinaries are the process names worth reporting as roots.
-var agentBinaries = []string{"claude", "codex", "gemini", "node", "python3"}
+var agentBinaries = []string{"claude", "codex", "gemini", "omp", "opencode", "node", "python3"}
 
 func memoryCmd() *cobra.Command {
 	c := &cobra.Command{

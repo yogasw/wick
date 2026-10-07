@@ -40,8 +40,11 @@
     connectorId: string;
     canConfigure: boolean;
     account?: AccountMode | null;
+    /* Replaces the generic empty-state line — e.g. a per-user (SSO) MCP
+       instance whose ops sync only once the first account connects. */
+    emptyNote?: string;
   };
-  let { operations, categories = [], connectorKey, connectorId, canConfigure, account = null }: Props = $props();
+  let { operations, categories = [], connectorKey, connectorId, canConfigure, account = null, emptyNote = "" }: Props = $props();
 
   let ops = $state<ConnectorOp[]>([]);
   let busy = $state<Record<string, boolean>>({});
@@ -305,7 +308,7 @@
 <section class="mt-8">
   {#if ops.length === 0}
     <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Operations</h2>
-    <p class="mt-1 text-sm text-black-700 dark:text-black-600">This connector exposes no operations.</p>
+    <p class="mt-1 text-sm text-black-700 dark:text-black-600">{emptyNote || "This connector exposes no operations."}</p>
   {:else}
     <!-- Global header: title, total count, search, bulk -->
     <div class="flex flex-wrap items-center gap-2">

@@ -126,7 +126,11 @@ func (r *Runner) RunAllWithCoverage(ctx context.Context, id string) ([]Result, C
 
 	// Build the set of all non-trigger nodes in the graph.
 	allNodes := map[string]bool{}
+	// Sticky notes never run, so they never count against coverage.
 	for _, n := range w.Graph.Nodes {
+		if n.Type.IsAnnotation() {
+			continue
+		}
 		allNodes[n.ID] = true
 	}
 

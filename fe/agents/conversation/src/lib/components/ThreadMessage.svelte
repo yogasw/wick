@@ -1,4 +1,6 @@
 <script lang="ts">
+  import TraceNote from "./TraceNote.svelte";
+  import type { TraceFiles } from "../api/files.js";
   import type { ConversationTurn, ThreadBlock, TurnEvent, TurnEventPayload } from "../types/agents.js";
   import { renderMarkdown, linkifyText } from "../markdown.js";
   import { turnTime, parseEventTime } from "../timeFormat.js";
@@ -7,10 +9,25 @@
   import { avatarTone } from "../senderTone.js";
   import { isViewer } from "../viewer.js";
   import { bareSlashCommand } from "../slashCommand.js";
+  import { teamSender } from "../teamMention.js";
+  import { isSystemEventKind } from "../systemEvents.js";
+  import SystemEventChip from "./system/SystemEventChip.svelte";
+  import RemoteQueueChip from "./RemoteQueueChip.svelte";
+  import InputRequestCard from "./system/InputRequestCard.svelte";
+  import ActionCard from "./system/ActionCard.svelte";
+  import ApprovalRequestCard from "./system/ApprovalRequestCard.svelte";
+  import type { ApprovalDecisionChoice } from "../interactiveCards.js";
+  import { splitActionCards, cardMode } from "../actionCard.js";
+  import type { CardState } from "../types/agents.js";
+  import { AgentAvatar } from "@wick-fe/common-avatar";
   import ToolCard from "./ToolCard.svelte";
   import TodoCard from "./TodoCard.svelte";
   import ArtifactGallery from "./ArtifactGallery.svelte";
   import MediaLightbox from "./MediaLightbox.svelte";
+  import RemoteRecheck from "./RemoteRecheck.svelte";
+  import type { RemoteRecheck as RecheckResult } from "../api/team.js";
+  import { isRemoteTimeout, isLateReply, lateLabel, NOTE_NO_MARKER } from "../remoteRecheck.js";
+  import { jumpLink, deliveryView } from "../slackDelivery.js";
 
   type Props = {
     turn: ConversationTurn;
@@ -19,8 +36,54 @@
     // with large:true carries no text) — wired to
     // GET /sessions/{id}/turns/{turn_id}/events/{event_id}.
     loadTraceEvent?: (turnId: string, eventId: string) => Promise<TurnEventPayload>;
+    // Fetches a stored trace binary (blob_ref) when its chip is clicked.
+    loadTraceBlob?: (turnId: string, ref: string) => Promise<Blob>;
+    traceFiles?: TraceFiles;
+    /** Team agents by handle, for a teammate's avatar on its messages. */
+    teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }>;
+    /** Opens a Team agent's chat; unset (outside the Team app) the
+        handoff row's target is plain text. */
+    onOpenAgent?: (handle: string) => void;
+    /** The agent this chat belongs to — names a speaker missing from teamAgents. */
+    agent?: { handle?: string; name: string; kind?: string; shape?: string; color?: string; expression?: string };
+    /** Handle of the teammate a via-mention turn answered ("" = none). */
+    via?: string;
+    /** Server-computed actioncard state for the whole thread. */
+    cards?: Record<string, CardState>;
+    /** Posts an actioncard click back; unset = buttons stay inert. */
+    onCardAction?: (cardId: string, value: string, label: string) => void;
+    /** Settles an approval_request card through the gate. */
+    onApprovalDecide?: (approvalId: string, decision: ApprovalDecisionChoice) => void;
+    /** Reads a Slack remote turn's thread again ("Cek ulang"); unset = no
+        button. Offered on a timeout and on a turn closed without marker. */
+    onRemoteRecheck?: () => Promise<RecheckResult>;
+    /** Cancels a message queued behind a busy remote agent. */
+    onRemoteQueueCancel?: (queueId: string) => Promise<void>;
   };
-  let { turn, loadTrace, loadTraceEvent }: Props = $props();
+  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel }: Props = $props();
+
+  /* Who spoke an assistant turn, from the server's turn.speaker — never
+     guessed from the text. A turn answering a teammate's mention is nested
+     under a "via @x" label so it reads as part of that exchange. */
+  const speaker = $derived(turn.role === "assistant" ? turn.speaker : undefined);
+  const speakerAgent = $derived(
+    speaker ? (teamAgents[speaker.handle] ?? (agent && agent.handle === speaker.handle ? agent : undefined)) : undefined,
+  );
+  const viaMention = $derived(speaker?.via === "mention");
+
+  /* Only an agent's reply can hold a live actioncard; the server's `cards`
+     state decides whether a fence IS one (see cardMode). */
+
+  /* A teammate's message (source "team", framed "Message from Name
+     (@handle):") reads as from that agent — its avatar and name on the
+     chip, the frame dropped from the bubble — not as the person typing. */
+  const teamFrom = $derived(isUserTurn(turn) ? teamSender(turn.source, turn.text ?? "") : null);
+  const teamFromAgent = $derived(teamFrom ? teamAgents[teamFrom.handle] : undefined);
+  const isSystemEvent = $derived(turn.role === "system" && isSystemEventKind(turn.kind));
+  const teamNames = $derived(Object.fromEntries(Object.entries(teamAgents).map(([h, a]) => [h, a.name])));
+  function isUserTurn(t: ConversationTurn) {
+    return t.role === "user";
+  }
 
   const isUser = $derived(turn.role === "user");
   const isSystem = $derived(turn.role === "system");
@@ -33,8 +96,17 @@
   const isSilentReply = $derived(
     !isUser && !isSystem && /^\s*\[silent\]/i.test(turn.text ?? ""),
   );
+  /* The marker also leaks when the agent puts it on a LATER line — a preamble,
+     then a closing paragraph opened with [silent]. That turn is never
+     suppressed (the flag above only reads the opening), but the plumbing still
+     must not be shown, so line-opening markers are stripped too. One
+     mid-sentence is the agent talking about the marker and is left alone. */
   const displayText = $derived(
-    isSilentReply ? (turn.text ?? "").replace(/^\s*\[silent\]\s*/i, "") : (turn.text ?? ""),
+    isUser || isSystem
+      ? (turn.text ?? "")
+      : (turn.text ?? "")
+          .replace(/^\s*\[silent\]\s*/i, "")
+          .replace(/^[ \t]*\[silent\][ \t]*/gim, ""),
   );
 
   /* "Interrupted — response was cut off" answers what happened and not the
@@ -69,8 +141,9 @@
     const raw = turn.text ?? "";
     if (!isUser) return { text: raw, note: "" };
     const at = raw.lastIndexOf("\n\n[routed]");
-    if (at < 0) return { text: raw, note: "" };
-    return { text: raw.slice(0, at), note: raw.slice(at + 2) };
+    const body = (t: string) => (teamFrom ? (teamSender(turn.source, t)?.body ?? t) : t);
+    if (at < 0) return { text: body(raw), note: "" };
+    return { text: body(raw.slice(0, at)), note: raw.slice(at + 2) };
   });
   const routedHandles = $derived(routed.note.match(/@[a-z0-9-]+/g) ?? []);
 
@@ -95,7 +168,7 @@
      The name comes from the structured `sender` field, never from the message
      text, so nobody can put someone else's name on their own message. */
   const sourceBadge = $derived.by(() => {
-    if (!isUser) return null;
+    if (!isUser || teamFrom) return null;
     const src = (turn.source ?? "").trim().toLowerCase();
     if (src === "schedule") return { label: "Scheduled", icon: "clock" };
 
@@ -144,6 +217,12 @@
      renders). Reads `ts` (RFC3339 from history) first, falls back to
      `timestamp` (epoch ms on client-built live turns). */
   const stamp = $derived(turnTime(turn));
+
+  /* Back to the Slack thread a message came from, and proof an agent reply
+     made it there. Both are recorded by the server when the message passed
+     through Slack; older turns simply have neither. */
+  const sourceJump = $derived(isUser ? jumpLink(turn.sender?.permalink) : "");
+  const delivery = $derived(turn.role === "assistant" ? deliveryView(turn.delivery) : null);
 
   const safeEvents = $derived(turn.events ?? []);
   const safeAttachments = $derived(turn.attachments ?? []);
@@ -263,6 +342,8 @@
           resultSize: res?.size,
           resultEventId: res?.event_id,
           isError: res?.is_error,
+          inputDisplay: ev.display,
+          resultDisplay: res?.display,
           startedAt: parseEventTime(ev.at),
           endedAt: parseEventTime(res?.end_at ?? res?.at),
         });
@@ -283,6 +364,7 @@
           resultSize: ev.size,
           resultEventId: ev.event_id,
           isError: ev.is_error,
+          resultDisplay: ev.display,
           endedAt: parseEventTime(ev.end_at ?? ev.at),
         });
       } else if (ev.type === "raw") {
@@ -333,6 +415,9 @@
     traceEvents = null;
     await toggleTrace();
   }
+  const cardSegments = $derived(
+    turn.role === "assistant" ? splitActionCards(displayText) : [{ kind: "md" as const, text: displayText }],
+  );
 </script>
 
 {#if isSystem}
@@ -350,6 +435,11 @@
           </svg>
           <span class="whitespace-pre-wrap break-words min-w-0">{interruptedLabel}</span>
         </div>
+        {#if turn.extras?.remote_link}
+          <!-- Stop only ended wick's listening: the remote has no cancel,
+               so its own page is where the work is stopped. -->
+          <a href={turn.extras.remote_link} target="_blank" rel="noopener noreferrer" class="text-[11px] text-amber-700 dark:text-amber-300 underline hover:no-underline break-all">Stop it on the remote: {turn.extras.remote_link}</a>
+        {/if}
       {:else if turn.kind === "compaction"}
         <!-- Where older turns were folded into a summary. Rendered as a
              divider rather than a notice because that is what it is: the
@@ -374,6 +464,17 @@
           </span>
           <div class="h-px flex-1 bg-white-300 dark:bg-navy-600"></div>
         </div>
+      {:else if turn.kind === "remote_queue"}
+        <RemoteQueueChip {turn} agentName={agent?.name ?? ""} onCancel={onRemoteQueueCancel} />
+      {:else if turn.kind === "approval_request"}
+        <ApprovalRequestCard {turn} onDecide={onApprovalDecide} />
+      {:else if turn.kind === "input_request"}
+        <InputRequestCard {turn} />
+      {:else if isSystemEvent}
+        <!-- A server-recorded event (agent created, access changed, a Team
+             handoff, a refused mention, …): one chip, drawn from the
+             systemEvents registry. A handoff's target opens its own chat. -->
+        <SystemEventChip {turn} names={teamNames} {onOpenAgent} />
       {:else if turn.is_error}
         <div class="inline-flex items-start gap-1.5 rounded-2xl border border-neg-400/40 bg-neg-400/10 px-3 py-1 text-xs text-neg-400 max-w-full">
           <svg viewBox="0 0 12 12" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -383,6 +484,9 @@
           </svg>
           <span class="whitespace-pre-wrap break-words min-w-0">{turn.text}</span>
         </div>
+        {#if onRemoteRecheck && isRemoteTimeout(turn)}
+          <RemoteRecheck onRecheck={onRemoteRecheck} />
+        {/if}
       {:else}
         <div class="inline-flex items-start gap-1.5 rounded-2xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 text-xs text-black-700 dark:text-black-600 max-w-full">
           <svg viewBox="0 0 12 12" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -406,11 +510,22 @@
       {/if}
     </div>
   </div>
+{:else if isUser && turn.postback}
+  <!-- A click on an actioncard button, recorded by the server: a small chip
+       on the user's side, not a typed message. -->
+  <div class="flex justify-end">
+    <span data-testid="postback-chip" title={turn.text} class="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:text-green-300">✓ {turn.postback.label || turn.postback.value}</span>
+  </div>
 {:else if isUser}
-  <div class="flex min-w-0 max-w-full justify-end gap-2 group">
-    <div class="flex flex-col items-end gap-1 max-w-[80%] min-w-0">
+  <!-- Only the bubble the user just sent (optimistic local turn) slides in;
+       history and refreshes render still. -->
+  <!-- A teammate agent's message sits on the LEFT, where replies live: the
+       right-hand side means "a person typed this", and an agent writing into
+       the thread is not that. -->
+  <div class={"flex min-w-0 max-w-full gap-2 group " + (teamFrom ? "justify-start" : "justify-end")} class:wick-enter-up={turn.turn_id?.startsWith("local-user-")}>
+    <div class={"flex flex-col gap-1 max-w-[80%] min-w-0 " + (teamFrom ? "items-start" : "items-end")}>
       {#if safeAttachments.length > 0}
-        <div class="flex flex-wrap justify-end gap-1.5 max-w-full">
+        <div class={"flex flex-wrap gap-1.5 max-w-full " + (teamFrom ? "justify-start" : "justify-end")}>
           {#each safeAttachments as attachment}
             {#if attachment.mime?.startsWith("image/")}
               <button
@@ -443,7 +558,20 @@
         <!-- chip + bubble are one tight unit: the source chip sits flush on
              top of the bubble, tinted to match, so it reads as part of the
              message rather than a floating label. -->
-        <div class="flex flex-col items-end gap-0.5 min-w-0 max-w-full">
+        <div class={"flex flex-col gap-0.5 min-w-0 max-w-full " + (teamFrom ? "items-start" : "items-end")}>
+          {#if teamFrom}
+            <span
+              data-testid="team-sender-chip"
+              title={`${teamFrom.name} (@${teamFrom.handle}) · Team agent`}
+              class="inline-flex items-center gap-1.5 pl-1 ml-0.5 text-[11px] leading-4 text-black-800 dark:text-black-600"
+            >
+              <AgentAvatar kind={teamFromAgent?.kind} shape={teamFromAgent?.shape} expression={teamFromAgent?.expression} color={teamFromAgent?.color} size={20} />
+              <span class="min-w-0 truncate"
+                ><span class="font-medium text-black-900 dark:text-white-100">{teamFromAgent?.name || teamFrom.name}</span
+                ><span class="opacity-70">{" · @" + teamFrom.handle}</span></span
+              >
+            </span>
+          {/if}
           {#if sourceBadge}
             <span
               data-testid="sender-chip"
@@ -490,12 +618,37 @@
                      read "Name · Channel" as a single label. -->
                 <span class="min-w-0 truncate"
                   ><span class="font-medium text-black-900 dark:text-white-100">{sourceBadge.who}</span
-                  >{#if sourceBadge.channelName}<span class="opacity-70">{" · " + sourceBadge.channelName}</span>{/if}</span
+                  >{#if sourceBadge.channelName && sourceJump}<span class="opacity-70">{" · "}</span><a
+                      data-testid="jump-to-thread"
+                      href={sourceJump}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Open this message's thread in Slack"
+                      class="inline-flex items-center gap-0.5 rounded opacity-70 hover:underline hover:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500"
+                      >{sourceBadge.channelName}<svg viewBox="0 0 16 16" class="h-2.5 w-2.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7 9" stroke-linecap="round" stroke-linejoin="round"></path></svg></a
+                    >{:else if sourceBadge.channelName}<span class="opacity-70">{" · " + sourceBadge.channelName}</span>{/if}</span
                 >
               {:else}
                 <span class="truncate">{sourceBadge.label}</span>
               {/if}
             </span>
+          {/if}
+          {#if sourceJump && !(sourceBadge?.who && sourceBadge.channelName)}
+            <!-- No "Name · Slack" label to hang the link on: a bare icon, so
+                 the jump never costs a line of its own. -->
+            <a
+              data-testid="jump-to-thread"
+              href={sourceJump}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open this message's thread in Slack"
+              aria-label="Open this message's thread in Slack"
+              class="inline-flex shrink-0 items-center rounded p-1 -m-1 text-black-500 hover:text-green-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-black-600 dark:hover:text-green-400"
+            >
+              <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7 9" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+            </a>
           {/if}
           {#if command}
             <!-- A command, not a line of chat: monospace on a quiet surface
@@ -517,8 +670,9 @@
                neutral surface instead, so the two are distinguishable at a
                glance rather than only by reading the name above them. -->
           <div
-            class={"min-w-0 max-w-full overflow-hidden rounded-2xl rounded-tr-sm px-4 py-2.5 text-base whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed shadow-sm " +
-              (fromSomeoneElse
+            class={"min-w-0 max-w-full overflow-hidden rounded-2xl px-4 py-2.5 text-base whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed shadow-sm " +
+              (teamFrom ? "rounded-tl-sm " : "rounded-tr-sm ") +
+              (fromSomeoneElse || teamFrom
                 ? "bg-white-200 dark:bg-navy-700 text-black-900 dark:text-white-100 ring-1 ring-white-400 dark:ring-navy-600"
                 : "bg-green-500 text-white-100")}
           >
@@ -545,8 +699,17 @@
     </div>
   </div>
 {:else}
-  <div class="flex justify-start group">
+  <div class={"flex justify-start group" + (viaMention ? " ml-3 pl-3 border-l-2 border-white-300 dark:border-navy-600" : "")} data-via={viaMention ? "mention" : undefined}>
     <div class="flex flex-col gap-1.5 w-full max-w-full min-w-0">
+      {#if speaker}
+        <span data-testid="speaker-chip" class="inline-flex items-center gap-1.5 self-start text-[11px] leading-4 text-black-800 dark:text-black-600">
+          <AgentAvatar kind={speakerAgent?.kind} shape={speakerAgent?.shape} expression={speakerAgent?.expression} color={speakerAgent?.color} size={20} />
+          <span class="min-w-0 truncate"
+            ><span class="font-medium text-black-900 dark:text-white-100">{speakerAgent?.name || "@" + speaker.handle}</span
+            >{#if viaMention}<span class="opacity-70">{via ? " · via @" + via : " · via mention"}</span>{/if}</span
+          >
+        </span>
+      {/if}
       {#if showTraceToggle}
         <div class="flex flex-col gap-1">
           {#if mergedTodoItems.length > 0 || todoGoal}
@@ -587,17 +750,8 @@
           {#if traceOpen}
             <div class="flex flex-col gap-1 mt-0.5" data-trace-blocks>
               {#each nonTodoBlocks as block}
-                {#if block.kind === "thinking"}
-                  <div data-thinking-block class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700 whitespace-pre-wrap break-words">
-                    {block.text}
-                  </div>
-                {:else if block.kind === "text"}
-                  <!-- Narration segment streamed before a tool call — same card
-                       as thinking but upright and a step darker, so "what the
-                       agent said" reads apart from "what it thought". -->
-                  <div data-text-block class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 text-black-800 dark:text-black-500 whitespace-pre-wrap break-words">
-                    {block.text}
-                  </div>
+                {#if block.kind === "thinking" || block.kind === "text"}
+                  <TraceNote kind={block.kind} text={block.text} />
                 {:else if block.kind === "raw"}
                   <details class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs">
                     <summary class="cursor-pointer px-3 py-2 text-black-600 dark:text-black-700 select-none">Raw event</summary>
@@ -610,6 +764,10 @@
                     loadEventPayload={loadTraceEvent && !isSyntheticId
                       ? (eventId) => loadTraceEvent!(turn.turn_id, eventId)
                       : undefined}
+                    loadBlob={loadTraceBlob && !isSyntheticId
+                      ? (ref) => loadTraceBlob!(turn.turn_id, ref)
+                      : undefined}
+                    {traceFiles}
                   />
                 {/if}
               {/each}
@@ -619,6 +777,9 @@
       {/if}
 
       {#if turn.text}
+        {#if isLateReply(turn)}
+          <span class="self-start inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] leading-none text-amber-700 dark:text-amber-300" data-testid="late-reply-label">{lateLabel(turn)}</span>
+        {/if}
         {#if stamp || isSilentReply}
           <span class="self-start inline-flex items-center gap-0.5 text-[10px] leading-none text-black-500 dark:text-black-600">
             {#if isSilentReply}
@@ -638,7 +799,18 @@
              line-height for comfortable long-form reading. A [silent] reply is
              the same plain text, marked by the muted-bell chip above. -->
         <div use:enrich={displayText} onwick-imagecard-open={onImageCardOpen} class="wick-prose px-0.5 text-black-900 dark:text-white-100 break-words">
-          {@html renderMarkdown(displayText)}
+          {#each cardSegments as seg}
+            {#if seg.kind === "card" && cardMode(seg.card.id, turn.turn_id, cards) !== "none"}
+              <ActionCard
+                card={seg.card}
+                mode={cardMode(seg.card.id, turn.turn_id, cards)}
+                clicked={cards[seg.card.id]?.postback}
+                onAction={onCardAction}
+              />
+            {:else}
+              {@html renderMarkdown(seg.kind === "card" ? seg.raw : seg.text)}
+            {/if}
+          {/each}
           {#if turn.interrupted}
             <div class="mt-2 flex items-center gap-1.5 border-t border-white-300 dark:border-navy-600 pt-2">
               <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-amber-500" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -651,6 +823,57 @@
             <p class="mt-2 text-xs text-black-600 dark:text-black-700 italic border-t border-white-300 dark:border-navy-600 pt-2">Output truncated — see raw.jsonl for full content.</p>
           {/if}
         </div>
+      {/if}
+
+      {#if delivery}
+        <!-- Did the reply really reach Slack? Sent links to the posted message;
+             failed says Slack's reason, so a silent drop is never mistaken for
+             a delivered answer. -->
+        <span
+          data-testid="delivery-status"
+          data-state={delivery.state}
+          class={"self-start inline-flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] leading-4 " +
+            (delivery.state === "failed"
+              ? "text-red-600 dark:text-red-400"
+              : "text-black-500 dark:text-black-600")}
+        >
+          {#if delivery.state === "sent"}
+            <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M3 8.5 6.5 12 13 4.5" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          {:else if delivery.state === "failed"}
+            <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <path d="M8 2L1.5 13.5h13L8 2z" stroke-linejoin="round"></path>
+              <path d="M8 6v4M8 11.5v.5" stroke-linecap="round"></path>
+            </svg>
+          {:else}
+            <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 animate-spin motion-reduce:animate-none" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M8 2a6 6 0 1 1-6 6" stroke-linecap="round"></path>
+            </svg>
+          {/if}
+          {#if delivery.link}
+            <!-- The status itself is the link: "Sent to Slack ↗". -->
+            <a
+              data-testid="delivery-jump"
+              href={delivery.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open the reply's thread in Slack"
+              class="inline-flex items-center gap-0.5 break-words rounded hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500"
+            >
+              {delivery.label}
+              <svg viewBox="0 0 16 16" class="h-2.5 w-2.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7 9" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+            </a>
+          {:else}
+            <span class="break-words">{delivery.label}</span>
+          {/if}
+        </span>
+      {/if}
+
+      {#if onRemoteRecheck && turn.role === "assistant" && turn.remote_note === NOTE_NO_MARKER}
+        <RemoteRecheck onRecheck={onRemoteRecheck} shown={turn.text} />
       {/if}
 
       {#if safeArtifacts.length > 0}
@@ -673,3 +896,17 @@
 {/if}
 
 <MediaLightbox items={lightbox?.items ?? null} index={lightbox?.index ?? 0} onClose={closeLightbox} />
+
+<style>
+  /* transform + opacity only: no layout work, so the bottom pin is unaffected. */
+  .wick-enter-up {
+    animation: wick-enter-up 180ms ease-out both;
+  }
+  @keyframes wick-enter-up {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .wick-enter-up { animation: none; }
+  }
+</style>

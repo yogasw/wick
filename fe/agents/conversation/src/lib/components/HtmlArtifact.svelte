@@ -3,9 +3,12 @@
        - file artifacts in the gallery (pass `url` — content is fetched), and
        - inline HTML the model emitted in the message body (pass `src`).
      It renders a borderless, auto-height iframe (no inner scrollbar — it grows
-     to its content via the height reporter) with a floating ⋮ menu carrying
+     to its content via the height reporter, up to about the visible chat
+     height; past that it scrolls internally — see artifactHeight.ts) with a
+     floating ⋮ menu carrying
      Full screen / Show code / Download. Self-contained fullscreen so it works
      the same whether mounted in the Svelte tree or via mount() from richRender. */
+  import { tick } from "svelte";
   import { KebabMenu } from "@wick-fe/common-ui";
   import {
     buildAutoHeightSrcdoc,
@@ -15,6 +18,14 @@
     onWidgetPolicyChange,
   } from "../richRender.js";
   import { safeReadPath } from "../artifactPath.js";
+  import {
+    DEFAULT_HEIGHT,
+    anchorShift,
+    artifactKey,
+    fitHeight,
+    recallHeight,
+    rememberHeight,
+  } from "../artifactHeight.js";
 
   type Props = {
     /** inline source (message-body HTML). Mutually exclusive with url. */
@@ -36,7 +47,20 @@
   let raw = $state<string | null>(src ?? null);
   let srcdoc = $state("");
   let loadErr = $state("");
-  let height = $state(320);
+  // A remount of the same artifact (live turn → final turn, a re-render)
+  // starts at the height the previous mount settled on, so the thread does
+  // not collapse under the reader and grow back.
+  // One key for read AND write: the url, or a hash of the source currently
+  // shown (raw starts as src and follows a streaming host).
+  const memoKey = () => artifactKey(url, raw);
+  const rememberedHeight = recallHeight(memoKey());
+  let height = $state(rememberedHeight ?? DEFAULT_HEIGHT);
+  // Last height the document reported, so a resize of the chat can re-fit it.
+  let reportedHeight = 0;
+  // Whether the frame scrolls internally now (fitHeight's hysteresis), and
+  // the overflow answer the current document was last sent (null = none yet).
+  let scrolling = false;
+  let postedOverflow: boolean | null = null;
   let showCode = $state(false);
   let fullscreen = $state(false);
   // Bumped on every reload so the iframe remounts even when the refetched
@@ -48,8 +72,6 @@
   // screen each request is served exactly once (by its own host).
   let frameEl = $state<HTMLIFrameElement | null>(null);
   let fsFrameEl = $state<HTMLIFrameElement | null>(null);
-
-  const MAX_HEIGHT = 2400;
 
   // The sandbox attribute and the CSP inside the srcdoc must always come from
   // the same policy, so both are derived from this one piece of state. It
@@ -198,6 +220,59 @@
     }
   }
 
+  function applyHeight(reported: number) {
+    const scroller = frameEl?.closest<HTMLElement>("[data-chat-panel]") ?? null;
+    reportedHeight = reported;
+    // A chat panel that measures 0 is hidden or detached (another view is
+    // showing): fitting to that would shrink the preview to the minimum, so
+    // keep the current height until it measures again.
+    if (scroller && scroller.clientHeight === 0) return;
+    const fit = fitHeight(reported, scroller ? scroller.clientHeight : window.innerHeight, scrolling);
+    const next = fit.height;
+    scrolling = fit.scroll;
+    // Tell the document whether to show its own scrollbar (only when it is
+    // taller than the cap). Only on a change: the document re-measures on
+    // every message it acts on, so re-sending the same answer each report
+    // kept a frame near the cap busy. A freshly loaded document starts
+    // hidden, so its load resets postedOverflow.
+    if (fit.scroll !== postedOverflow) {
+      try {
+        frameEl?.contentWindow?.postMessage({ type: "wick-artifact-overflow", id, on: fit.scroll }, "*");
+        postedOverflow = fit.scroll;
+      } catch { /* frame gone */ }
+    }
+    rememberHeight(memoKey(), next);
+    if (next === height) return;
+    // Keep the reader's place when this preview resizes while it sits above
+    // the visible part of the thread (the panel has scroll anchoring off).
+    // Not while the thread is pinned to the bottom: the pin follows the
+    // resize itself, and two writers in one frame make the panel jump.
+    const shift = scroller && frameEl && !scroller.hasAttribute("data-stick-bottom")
+      ? anchorShift(height, next, frameEl.getBoundingClientRect().bottom, scroller.getBoundingClientRect().top)
+      : 0;
+    height = next;
+    if (shift) void tick().then(() => { scroller!.scrollTop += shift; });
+  }
+
+  // The cap follows the chat panel's height (window resize, a rail opening,
+  // the composer growing), so re-fit when the panel itself resizes; window
+  // resize is the fallback outside the chat. applyHeight compensates scrollTop
+  // when this preview sits above the visible part, so a changing cap does not
+  // move the reader either.
+  $effect(() => {
+    const frame = frameEl;
+    if (!frame) return;
+    const refit = () => { if (reportedHeight > 0) applyHeight(reportedHeight); };
+    const scroller = frame.closest<HTMLElement>("[data-chat-panel]");
+    if (scroller && typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(refit);
+      ro.observe(scroller);
+      return () => ro.disconnect();
+    }
+    window.addEventListener("resize", refit);
+    return () => window.removeEventListener("resize", refit);
+  });
+
   $effect(() => {
     ensureLoaded();
     function onMsg(e: MessageEvent) {
@@ -206,7 +281,7 @@
         | null;
       if (!d) return;
       if (d.type === "wick-artifact-height" && d.id === id && d.height) {
-        height = Math.min(MAX_HEIGHT, Math.ceil(d.height));
+        applyHeight(d.height);
         return;
       }
       // Only answer requests coming from THIS component's own iframe(s), so
@@ -315,14 +390,17 @@
         {srcdoc}
         {sandbox}
         referrerpolicy="no-referrer"
-        scrolling="no"
         title={name}
+        onload={() => { postedOverflow = null; if (scrolling && reportedHeight > 0) applyHeight(reportedHeight); }}
         class="block w-full"
-        style="height:{height}px;border:0;overflow:hidden;background:transparent"
+        style="height:{height}px;border:0;background:transparent"
       ></iframe>
     {/key}
   {:else}
-    <div class="px-4 py-3 text-xs text-black-600 dark:text-black-700">loading preview…</div>
+    <div
+      class="px-4 py-3 text-xs text-black-600 dark:text-black-700"
+      style={rememberedHeight ? `min-height:${height}px` : undefined}
+    >loading preview…</div>
   {/if}
 </div>
 
@@ -338,7 +416,7 @@
     </div>
     <iframe
       bind:this={fsFrameEl}
-      srcdoc={raw !== null ? buildAutoHeightSrcdoc(raw, `${id}-fs`) : ""}
+      srcdoc={raw !== null ? buildAutoHeightSrcdoc(raw, `${id}-fs`, undefined, false) : ""}
       {sandbox}
       referrerpolicy="no-referrer"
       title={name}

@@ -358,6 +358,25 @@ func run() int {
 	})
 
 	spec, err := gate.LoadSpec(app)
+	// A Team agent's spawn names its own spec: its Bash rules replace the
+	// shared whitelist (see gate.AgentSpec).
+	agentSpecPath := gate.SpecArg(os.Args[1:])
+	var agentSpec *gate.AgentSpec
+	if err == nil && agentSpecPath != "" {
+		as, aerr := gate.LoadAgentSpec(agentSpecPath)
+		if aerr != nil {
+			gate.LogDaily(app, "error", "load agent spec", map[string]any{
+				"request_id": requestID,
+				"error":      aerr.Error(),
+			})
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			emitBlock("agent gate spec unreadable: " + aerr.Error())
+			return 0
+		}
+		agentSpec = &as
+		spec.Rules = as.Rules
+		spec.DefaultScope = as.DefaultScope
+	}
 	if err != nil {
 		gate.LogDaily(app, "error", "load spec", map[string]any{
 			"request_id": requestID,
@@ -397,6 +416,11 @@ func run() int {
 	}
 	cwd := in.CWD
 	claudeSID := in.SessionID
+	if agentSpec != nil && agentSpec.NoBash {
+		logTerminalEntry(requestID, tool, cmd, cwd, "blocked", "agent_no_bash", "")
+		emitBlock("Bash is switched off for this agent")
+		return 0
+	}
 
 	// Whitelist match — fastest happy path.
 	matcher := gate.NewMatcher(spec.Rules, spec.DefaultScope)
@@ -434,6 +458,13 @@ func run() int {
 	})
 	logStage(requestID, "socket_dial", tool, cmd, cwd, "", socketPath)
 	decision, reason, err := requestApprovalWithLog(socketPath, tool, cmd, cwd, claudeSID, key, requestID)
+	if err != nil && agentSpec != nil {
+		// A Team agent's command never runs unasked: with no daemon to
+		// ask, it is blocked instead of the fail-open below.
+		logTerminalEntry(requestID, tool, cmd, cwd, "blocked", "no_socket", err.Error())
+		emitBlock("approval unavailable: " + err.Error())
+		return 0
+	}
 	if err != nil {
 		// Fail-open: when the daemon socket is unavailable the wick
 		// server isn't running (or this isn't a wick session).

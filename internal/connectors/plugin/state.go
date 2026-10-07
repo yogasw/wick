@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/yogasw/wick/internal/entity"
+	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
 // StateStore reads and writes the plugin enable/disable overlay.
@@ -53,4 +54,72 @@ func (s *StateStore) List() (map[string]bool, error) {
 		out[r.Key] = r.Enabled
 	}
 	return out, nil
+}
+
+// All returns every overlay row (origin, source, health, versions).
+func (s *StateStore) All() ([]entity.PluginState, error) {
+	var rows []entity.PluginState
+	if s == nil || s.db == nil {
+		return rows, nil
+	}
+	err := s.db.Find(&rows).Error
+	return rows, err
+}
+
+// Record upserts the kind + installed version for key without touching the
+// enable flag (a new row starts enabled).
+func (s *StateStore) Record(key, kind, version string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Model(&entity.PluginState{}).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"kind", "installed_version", "updated_at"}),
+	}).Create(map[string]interface{}{
+		"key":               key,
+		"enabled":           true,
+		"kind":              wickplugin.NormalizeKind(kind),
+		"installed_version": version,
+		"updated_at":        time.Now(),
+	}).Error
+}
+
+// Plugin origins recorded in PluginState.Origin. "" means not recorded.
+const (
+	OriginOfficial = "official"
+	OriginSource   = "source"
+	OriginURLZip   = "url-zip"
+	OriginUpload   = "upload"
+)
+
+// SetOrigin records how key was installed. Call after Record so the row
+// exists.
+func (s *StateStore) SetOrigin(key, origin string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Model(&entity.PluginState{}).Where("key = ?", key).Update("origin", origin).Error
+}
+
+// ClearInstalled forgets the installed and available versions of key after
+// an uninstall, so Check updates stops reporting it. The row itself stays
+// (enable flag, origin, source link) and a reinstall records a version again.
+func (s *StateStore) ClearInstalled(key string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Model(&entity.PluginState{}).Where("key = ?", key).
+		Updates(map[string]any{"installed_version": "", "available_version": ""}).Error
+}
+
+// Get returns the overlay row for key; ok=false when there is none.
+func (s *StateStore) Get(key string) (entity.PluginState, bool) {
+	var st entity.PluginState
+	if s == nil || s.db == nil {
+		return st, false
+	}
+	if err := s.db.Where("key = ?", key).First(&st).Error; err != nil {
+		return st, false
+	}
+	return st, true
 }

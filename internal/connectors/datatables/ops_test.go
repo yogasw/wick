@@ -180,3 +180,56 @@ func TestMCP_DataTableErrors(t *testing.T) {
 		t.Fatal("missing columns should error")
 	}
 }
+
+// recordingACL captures RegisterOwner calls; CanAccess always allows.
+type recordingACL struct{ owners map[string]string }
+
+func (a *recordingACL) CanAccess(context.Context, string, string) bool { return true }
+func (a *recordingACL) RegisterOwner(_ context.Context, userID, slug string) {
+	a.owners[slug] = userID
+}
+
+// datatable_create stamps the real caller as the table owner (created_by →
+// Owner column + direct-owner fallback). The shared internal agent principal
+// and an anonymous caller are not people, so their tables stay ownerless.
+func TestMCP_DataTableCreateOwner(t *testing.T) {
+	acl := &recordingACL{owners: map[string]string{}}
+	prev := dataTableACL
+	SetDataTableACL(acl)
+	t.Cleanup(func() { SetDataTableACL(prev) })
+
+	cases := []struct {
+		name, slug, caller, wantOwner string
+	}{
+		{"real user", "owned", "user-123", "user-123"},
+		{"internal agent principal", "internal", internalAgentUserID, ""},
+		{"no caller", "anon", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newSelfTestHandlers()
+			c := connector.NewCtx(context.Background(), "self-test", nil, map[string]string{
+				"slug":    tc.slug,
+				"columns": "status:string",
+			}, nil, nil, nil)
+			c.SetCallerUserID(tc.caller)
+			if _, err := h.datatableCreate(c); err != nil {
+				t.Fatalf("datatable_create: %v", err)
+			}
+			sc, err := h.ops.DataTables.LoadSchema(tc.slug)
+			if err != nil {
+				t.Fatalf("load schema: %v", err)
+			}
+			if sc.UserID != tc.wantOwner {
+				t.Fatalf("Schema.UserID = %q, want %q", sc.UserID, tc.wantOwner)
+			}
+			// The owner tag still follows the caller id; the ACL itself
+			// drops the internal principal (see api.dataTableACL).
+			if got, called := acl.owners[tc.slug]; tc.caller == "" && called {
+				t.Fatalf("RegisterOwner called for anonymous caller (got %q)", got)
+			} else if tc.caller != "" && got != tc.caller {
+				t.Fatalf("RegisterOwner user = %q, want %q", got, tc.caller)
+			}
+		})
+	}
+}

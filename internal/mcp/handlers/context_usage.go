@@ -121,6 +121,11 @@ func WickContext(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 			active = name
 			out["provider"], out["model"] = name, p.Model
 			out["used"], out["window"], out["pct"] = p.ContextUsed, p.ContextWindow, row.Pct
+			if p.AutoCompact != nil {
+				out["auto_compact"] = *p.AutoCompact
+			} else {
+				delete(out, "auto_compact")
+			}
 			if trend := trendOfSeries(p.Series); len(trend) > 0 {
 				out["trend"] = trend
 			}
@@ -331,7 +336,8 @@ func WickCompact(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		"status":     "queued",
 		"provider":   ptype,
 		"note": "/compact was delivered as a message. A running turn finishes first; " +
-			"an idle session is woken to do it. The result appears in that session's transcript.",
+			"an idle session is woken to do it. The result appears in that session's " +
+			"transcript, and — for a session bound to a chat thread — as a notice in that thread.",
 	}
 	if agentName != "" {
 		out["agent_name"] = agentName

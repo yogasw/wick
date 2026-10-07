@@ -1,12 +1,16 @@
 package agents
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	agentsconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/notes"
 	"github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/registry"
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -136,5 +140,47 @@ func TestIsTrueishOnlyAcceptsAnActualYes(t *testing.T) {
 		if isTrueish(no) {
 			t.Errorf("isTrueish(%q) = true, want false", no)
 		}
+	}
+}
+
+/*
+The rail asks "does this project run tickets?" through the notes payload.
+
+	A session that is not on a ticket resolves to its own scope, which carries
+	no project — so the answer has to come from the session itself. Without
+	that, the field went missing, the rail read the gap as an older server,
+	and a project with tickets switched OFF still showed a Ticket tab.
+*/
+func TestNotesProjectIDFallsBackToTheSessionsProject(t *testing.T) {
+	layout := agentsconfig.NewLayout(t.TempDir())
+	if err := layout.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := project.Create(layout, project.CreateOptions{ID: "p1", Name: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Create(context.Background(), layout, session.CreateOptions{
+		ID: "s1", ProjectID: "p1", Origin: session.OriginUI,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reg := registry.New(layout)
+	if err := reg.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	prev := globalMgr
+	globalMgr = registry.NewManager(reg)
+	t.Cleanup(func() { globalMgr = prev })
+
+	if got := notesProjectID(notes.Scope{SessionID: "s1"}); got != "p1" {
+		t.Fatalf("project for a ticket-less session = %q, want p1", got)
+	}
+	// A ticket scope already names its project and must be left alone.
+	if got := notesProjectID(notes.Scope{ProjectID: "p2", TicketID: "T-1"}); got != "p2" {
+		t.Fatalf("project for a ticket scope = %q, want p2", got)
+	}
+	// A session nobody has heard of names no project rather than guessing.
+	if got := notesProjectID(notes.Scope{SessionID: "gone"}); got != "" {
+		t.Fatalf("project for an unknown session = %q, want empty", got)
 	}
 }

@@ -3,9 +3,13 @@
   import type { Node } from "$lib/types/workflow";
   type Props = { node: Node; selected?: boolean; running?: boolean; errored?: boolean; onselect?: () => void };
   let { node, selected, running, errored, onselect }: Props = $props();
+  // A branch routes by the `case:` label on its outgoing edges (any number of
+  // them, e.g. allow/default). BaseNode paints one labelled output port per
+  // case, so the body only shows the expression.
 </script>
 
 <BaseNode
+  description={node.description ?? ""}
   id={node.id}
   type={node.type}
   label={node.label}
@@ -15,13 +19,8 @@
   {onselect}
   headBg="#f43f5e"
   icon="⌥"
-  outputs={2}
 >
   {#snippet body()}
-    <div class="font-mono text-[11px] text-black-700 dark:text-white-100-300 line-clamp-2">{node.expr ?? "—"}</div>
-    <div class="mt-1 flex gap-1 text-[10px]">
-      <span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">true</span>
-      <span class="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">false</span>
-    </div>
+    <div class="font-mono text-[11px] text-black-700 dark:text-slate-300 line-clamp-2">{node.expr ?? "—"}</div>
   {/snippet}
 </BaseNode>

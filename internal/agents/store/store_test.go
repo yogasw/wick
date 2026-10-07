@@ -1009,3 +1009,20 @@ func TestApplyCompactionSyncsTheMeter(t *testing.T) {
 		t.Fatalf("series should record the cliff: %+v", p.Series)
 	}
 }
+
+// The provider's auto-compact state is a level: the last report replaces
+// the one before, and a turn that did not say keeps it.
+func TestUsageLedgerKeepsAutoCompact(t *testing.T) {
+	st, layout := newStoreWithProvider(t, "omp/pro")
+	off := false
+	st.Apply(event.AgentEvent{Type: event.Done, Usage: &event.TokenUsage{Input: 1, AutoCompact: &off}})
+	st.Apply(event.AgentEvent{Type: event.Done, Usage: &event.TokenUsage{Input: 1}})
+	su, _ := LoadSessionUsage(layout, st.sessionID)
+	for _, p := range su.Providers {
+		if p.AutoCompact == nil || *p.AutoCompact {
+			t.Fatalf("AutoCompact %v, want false kept", p.AutoCompact)
+		}
+		return
+	}
+	t.Fatal("no provider row")
+}

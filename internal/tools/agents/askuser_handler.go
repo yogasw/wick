@@ -52,6 +52,14 @@ func answerAsk(c *tool.Ctx) {
 			ans.Values = map[string]string{}
 		}
 	}
+	// The id must be pending in THIS session: the route's access check
+	// covers {id}, so an ask from someone else's session is not found.
+	if !askPendingIn(globalAskUsers, c.PathValue("id"), req.ID) {
+		c.JSON(http.StatusGone, map[string]string{
+			"error": "ask id no longer pending (timed out or already resolved)",
+		})
+		return
+	}
 	if !globalAskUsers.Resolve(req.ID, ans) {
 		c.JSON(http.StatusGone, map[string]string{
 			"error": "ask id no longer pending (timed out or already resolved)",
@@ -73,4 +81,14 @@ func asksSnapshot(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{
 		"pending": globalAskUsers.PendingFor(sid),
 	})
+}
+
+// askPendingIn reports whether askID is waiting in sessionID.
+func askPendingIn(m *askuser.Manager, sessionID, askID string) bool {
+	for _, p := range m.PendingFor(sessionID) {
+		if p.ID == askID {
+			return true
+		}
+	}
+	return false
 }

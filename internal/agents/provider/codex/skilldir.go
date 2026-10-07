@@ -26,9 +26,20 @@ var homeDir = os.UserHomeDir
 // $CODEX_HOME relocates codex's whole config tree, skills included, so a
 // machine that sets it keeps its skills somewhere other than ~/.codex. The
 // hardcoded fallback covers the common case where it is unset.
-func codexSkillsDir(home string) string {
-	if cfg := os.Getenv("CODEX_HOME"); cfg != "" {
-		return filepath.Join(cfg, "skills")
+//
+// codexHome is the spawn's OWN CODEX_HOME, lifted from the instance env —
+// not wick's. They differ whenever a provider instance carries
+// CODEX_HOME in its Env, which is how one host runs several codex
+// accounts side by side. Reading the process env here would trust
+// whichever home wick itself was started with and --add-dir the wrong
+// account's skills, so the instance value wins and the process env is
+// only the fallback for instances that set nothing.
+func codexSkillsDir(home, codexHome string) string {
+	if codexHome == "" {
+		codexHome = os.Getenv("CODEX_HOME")
+	}
+	if codexHome != "" {
+		return filepath.Join(codexHome, "skills")
 	}
 	if home == "" {
 		return ""
@@ -45,9 +56,9 @@ func codexSkillsDir(home string) string {
 // skillsync/builtin.go) — the system prompt points at them by absolute path, so
 // without the trust here the agent would be told to read files it is not
 // allowed to open.
-func skillAddDirArgs(home string, exists func(string) bool) []string {
+func skillAddDirArgs(home, codexHome string, exists func(string) bool) []string {
 	var args []string
-	for _, dir := range []string{codexSkillsDir(home), skillsync.BuiltinDir()} {
+	for _, dir := range []string{codexSkillsDir(home, codexHome), skillsync.BuiltinDir()} {
 		if dir == "" || !exists(dir) {
 			continue
 		}

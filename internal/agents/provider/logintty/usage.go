@@ -80,6 +80,57 @@ type UsageWindow struct {
 	// them out of the last turn's journal), so a reading can be hours
 	// old and has to say so.
 	ObservedAt time.Time `json:"observed_at,omitempty"`
+	// Account tags the window with the account it belongs to when one
+	// probe reads several (omp's credential pool, opencode's account
+	// folders): the PoolAccount ID. "" for single-account types.
+	Account string `json:"account,omitempty"`
+	// Error marks a placeholder (Key "") for an account whose reading
+	// failed inside a multi-account probe, so one expired login does not
+	// fail the whole instance. Headline skips it.
+	Error string `json:"error,omitempty"`
+}
+
+// Headline is the instance-level view of a multi-account reading: the
+// first window per key in pool order (so the first account wins), with
+// per-account error placeholders dropped. Single-account readings pass
+// through unchanged.
+func Headline(ws []UsageWindow) []UsageWindow {
+	tagged := false
+	for _, w := range ws {
+		if w.Account != "" || w.Key == "" {
+			tagged = true
+			break
+		}
+	}
+	if !tagged {
+		return ws
+	}
+	var out []UsageWindow
+	seen := map[string]bool{}
+	for _, w := range ws {
+		if w.Key == "" || seen[w.Key] {
+			continue
+		}
+		seen[w.Key] = true
+		w.Account = ""
+		out = append(out, w)
+	}
+	return out
+}
+
+// AccountWindows are the windows of one account of a tagged reading.
+func AccountWindows(ws []UsageWindow, account string) (windows []UsageWindow, errMsg string) {
+	for _, w := range ws {
+		if w.Account != account {
+			continue
+		}
+		if w.Key == "" {
+			errMsg = w.Error
+			continue
+		}
+		windows = append(windows, w)
+	}
+	return windows, errMsg
 }
 
 // SupportsUsage reports whether this provider type has a usage API wick
@@ -87,7 +138,11 @@ type UsageWindow struct {
 // types that would only answer ErrUsageUnsupported — no cache entry, no
 // pacing slot, no goroutine for a verdict that is a build constant.
 func SupportsUsage(t provider.Type) bool {
-	return t == provider.TypeClaude || t == provider.TypeCodex
+	switch t {
+	case provider.TypeClaude, provider.TypeCodex, provider.TypeOMP, provider.TypeOpencode:
+		return true
+	}
+	return false
 }
 
 // ReadUsage fetches the current rate-limit utilization for one
@@ -102,6 +157,14 @@ func ReadUsage(t provider.Type, env []string) ([]UsageWindow, error) {
 		// rollout, so this is a file read that cannot fail upstream or
 		// be rate-limited. See codex_usage.go.
 		return readCodexUsage(env)
+	case provider.TypeOMP:
+		// A network probe run by omp itself (`omp usage --json`); the
+		// caller's per-account cache + pace gate bounds how often.
+		return readOMPUsage(env)
+	case provider.TypeOpencode:
+		// opencode has no usage command; its ChatGPT logins are read
+		// from the same endpoint omp and codex use. See opencode_usage.go.
+		return readOpencodeUsage(env)
 	default:
 		return nil, ErrUsageUnsupported
 	}
@@ -119,6 +182,10 @@ func CredentialsChangedAt(t provider.Type, env []string) time.Time {
 	switch t {
 	case provider.TypeClaude:
 		return claudeCredentialsChangedAt(env)
+	case provider.TypeOMP:
+		return ompCredentialsChangedAt(env)
+	case provider.TypeOpencode:
+		return opencodeCredentialsChangedAt(env)
 	default:
 		return time.Time{}
 	}

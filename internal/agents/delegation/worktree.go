@@ -3,8 +3,10 @@ package delegation
 import (
 	"context"
 	"fmt"
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -60,7 +62,7 @@ func (g *GitWorktrees) PrepareWorktree(ctx context.Context, projectID, childSess
 	// checkout without creating a branch that would then need reaping,
 	// and without moving the parent's HEAD.
 	branch := "wick-sub/" + childSessionID
-	cmd := safeexec.CommandContext(ctx, "git", "-C", base, "worktree", "add", "--detach", "-b", branch, dir)
+	cmd := gitCmd(ctx, "-C", base, "worktree", "add", "--detach", "-b", branch, dir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// A worktree that cannot be created is not fatal to the task —
 		// report it and let the caller fall back.
@@ -78,12 +80,12 @@ func (g *GitWorktrees) ReleaseWorktree(ctx context.Context, path string) error {
 	if path == "" {
 		return nil
 	}
-	cmd := safeexec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--show-toplevel")
+	cmd := gitCmd(ctx, "-C", path, "rev-parse", "--show-toplevel")
 	if err := cmd.Run(); err != nil {
 		// Not a live worktree any more; just drop the directory.
 		return os.RemoveAll(path)
 	}
-	if out, err := safeexec.CommandContext(ctx, "git", "-C", path, "worktree", "remove", "--force", path).CombinedOutput(); err != nil {
+	if out, err := gitCmd(ctx, "-C", path, "worktree", "remove", "--force", path).CombinedOutput(); err != nil {
 		log.Debug().Str("path", path).Str("out", string(out)).Msg("delegation: worktree remove failed; removing directory")
 		return os.RemoveAll(path)
 	}
@@ -92,7 +94,16 @@ func (g *GitWorktrees) ReleaseWorktree(ctx context.Context, path string) error {
 
 // isGitRepo reports whether dir sits inside a git work tree.
 func isGitRepo(ctx context.Context, dir string) bool {
-	cmd := safeexec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--is-inside-work-tree")
+	cmd := gitCmd(ctx, "-C", dir, "rev-parse", "--is-inside-work-tree")
 	out, err := cmd.Output()
 	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+// gitCmd builds a git command without the daemon's DATABASE_URL.
+// `worktree add` runs the checked-out repository's post-checkout hook, which
+// is code the agent's repo controls.
+func gitCmd(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := safeexec.CommandContext(ctx, "git", args...)
+	cmd.Env = envscrub.ScrubOSEnv()
+	return cmd
 }

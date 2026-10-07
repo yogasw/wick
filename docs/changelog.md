@@ -10,6 +10,134 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v2.0.0](https://github.com/yogasw/wick/compare/v1.13.0...v2.0.0) — Team & Plugins
+
+_Released on 2026-10-07_
+
+### Team
+
+#### Added
+- **Persistent Agents**: New dedicated workspace `/tools/agents/team` for persistent agents, featuring personas, access checklists, Captain roles, @mentions, group chats, sharing, Scheduled tasks, remote agent connections (A2A, Slack, plugin), and various Connections (Slack, Telegram, A2A, REST).
+- **Scheduled Agents**: A new Scheduled drawer lists all schedules firing into an agent, showing run times, destinations, and status. It includes controls to pause/resume, run now, edit, or delete. New schedules can be created directly from the main chat; Slack and Telegram chats can now be destinations.
+- **A2A Remote Agents**: Agents can join a Team over A2A, with settings for card URL, auth, timeout, response cap, and usage. Remote agent chats run on the remote system, streaming events back to Wick. Remote agents can be @mentioned and appear in the roster.
+- **Slack Remote Agents**: Agents can live in Slack and be reached via DM, channel, or fixed thread, posting as the connector bot or the creator's OAuth account. Slack remote agents are badged in the roster and the composer indicates "via Slack".
+- **Instant Slack Agents**: Team agents can now route messages through a shared Slack app instance, binding to channels or responding to prefixes. Replies in these threads carry the agent's username and icon.
+- **REST Connection**: Team agents can be invoked via an OpenAI-compatible chat completions endpoint (`"model": "agent:<handle>"`), with per-agent connection toggles and model IDs.
+- **Telegram Connection**: Team agents can own Telegram bots, with secure token storage and integration into the agent's project.
+- **Agent Sharing**: Owners or admins can share agents with other Wick users by ID or tags, granting chat-only "viewer" access. Shared agents appear in the recipient's roster with a "Shared" marker and limited interaction.
+- **Captain Role**: The first Wick agent created by a user becomes the Captain. This role can be transferred to another Wick agent, carrying "Manage other agents" privileges. The Captain is pinned to the top of the roster.
+- **Idle Animations**: Live blob avatars now fidget subtly when idle, with an opt-out toggle in Team settings.
+- **Improved Composer**: The chat composer now includes a Stop button (replacing Send while a turn runs), or Cancel if a spawn is queued. It also offers a combined Send/Stop menu on hold, allowing queuing new messages while a turn is active.
+- **Agent Access Modes**: A new "Same as me" access mode for Team agents grants access to every connector the owner has, with write operations. The access editor also features "Granted" and "Available" sections with bulk actions.
+- **Resource Guard**: Enhanced Resource Guard monitors host CPU and memory, intelligently stopping agent work when the host nears a hang (e.g., above 90% CPU pressure, 80% memory used). CPU quota is now a percentage of the entire machine's cores.
+- **New Chat Experience**: New chats open as empty drafts and are created on the first message sent. Existing chats can be marked as the main chat.
+- **Avatar Reactions**: Agent avatars now visually react to their activity (thinking, running a tool, waiting, failed tool, etc.), with per-agent override settings.
+- **Live Agent State**: Roster and chat headers show real-time agent activity (thinking, running Bash, waiting for reply) powered by a session stream, replacing polling.
+- **Team Agent Project Visibility**: Team agents' projects can now be listed under Agents > Projects using a `wick:team-visible` tag.
+- **Persona Improvement Panel**: Persona settings now feature a single "Improve with AI" panel that takes instructions and applies changes to selected fields.
+- **Composer Toolbar Chips**: Repository and branch are shown as compact chips in the composer toolbar.
+- **Trace File Status**: The sub-agent trace now shows the status of files used in tool calls (same, changed, deleted, cannot be checked).
+- **Slack Bot Triggering**: Agents can now be triggered by selected Slack bots in DMs or channels, with safeguards against loops and rate limits.
+- **One Sidebar Header**: A unified sidebar header with a Team/Agents switch, and the account menu moved to the foot, replaces separate sidebar structures.
+- **Idle Compact Rules**: Session idle compaction can now be configured with flexible rules (AND/OR, regex, negation) based on project, title, or ID, with a built-in tester. Idle compact also applies only after a turn ends.
+- **Slack Markdown Blocks**: Agent replies containing markdown tables, headings, bold text, links, nested lists, or code fences are now sent as Slack Block Kit markdown blocks for better rendering.
+
+#### Improved
+- **Slack Remote Target Search**: Search for DM users/bots or channels by name when adding a Slack remote agent, instead of just typing an ID. This search functionality is also available for the mention target.
+- **"Open Team when I open Agents"**: This setting is now off by default and opt-in.
+- **Composer Mentions**: A second `@` on the same line now correctly starts a new mention.
+- **Agent Taglines**: Max tagline length increased from 32 to 50 characters.
+- **Connections Drawer**: Connections are now displayed as icon tabs with connected/warning ticks.
+- **Remote Agent Waiting Status**: Remote agents now show "Waiting for @x's reply" instead of "typing" when idle, with hints for Slack's @mention setting.
+- **Slack Token Origins**: Custom Slack app wizard now clearly names Slack settings pages for bot, app-level tokens, and signing secrets.
+- **CPU Reporting**: Host CPU usage is now consistently reported as a percentage of all cores (0-100%), with core count details.
+- **Sidebar UX**: Sidebars are now resizable and remember their width per space.
+- **Clock Format**: All clock times in charts and events now use 24-hour format.
+- **Resource Guard Queue Explanation**: The queue card clearly explains why sessions are held (Resource Guard, full pool, memory floor, provider limits).
+- **Slack Remote Reliability**: Improved handling of Slack remote agent replies, including streaming partial replies, ending turns on clear signals (markers, reactions), handling late messages within a grace window, and correctly persisting thread bindings across restarts.
+- **Agent Environment Scrubbing**: Provider helpers and probe processes now inherit a scrubbed daemon environment.
+- **Access List UI**: Improved styling and consistent wording in Team access lists.
+- **Settings Autosave**: Settings now debounce changes into a single PATCH, show "Saving..." / "Still saving...", and "Couldn't save · Retry" messages.
+- **Slack Rate Limits**: Pickers now cache Slack listings locally, share in-flight requests, and handle 429 Retry-After responses to prevent rate limiting.
+- **Slack Remote Thread Binding**: Slack remote agents now correctly bind to the new channel's thread when the target changes, preventing timeouts and failed retries.
+- **Sub-agent Image Chips**: Image chips in sub-agent traces now correctly open.
+
+#### Fixed
+- **Slack Instant Agent Setup**: A new Slack app now starts with an empty whitelist instead of open to the workspace if the owner's Slack user ID cannot be resolved.
+- **Agent Stability**: Fixed panics in channel goroutines (Slack, Telegram) that could take down the daemon. Registry now correctly wires the pool dispatch at boot for runtime-added channels.
+- **Shared Agent Rail Access**: Recipient's chat with a shared agent now correctly returns 403 for rail endpoints, preventing access to the owner's project files, processes, etc. The rail tabs are hidden.
+- **Captain Migration**: Fixed a bug where Reschedule wiped a new interval when a patch carried an empty cron.
+- **Agent @mention History**: Corrected an issue where "[routed]" notes appended to stored @mention messages caused deduping issues after reload.
+- **Authentication**: `Back to my account` now consistently returns to the admin after impersonation, respecting TLS proxy configurations.
+- **Tag Descriptions**: Semicolons are no longer misinterpreted in tag descriptions, ensuring full text display.
+- **Team Bash Gate**: Bash tool no longer drops from allowed tools when the approval gate is off. Stale "working" statuses no longer extend a turn beyond its limits.
+- **Sidebar Visibility**: The sidebar resize handle is now correctly visible on desktop.
+- **Idle Compact Logic**: `idle_compact_seconds` replaces `_minutes`. Conditions now correctly parse escaped characters (`\/`, `\&`).
+- **Slack Workflow Bots**: Workflow Builder bots are now clearly marked in Slack pickers and lists.
+- **Socket Mode Reconnection**: Slack Socket Mode bots now attempt to reconnect after fatal client errors, ensuring they don't stay offline indefinitely.
+
+### Plugin Platform
+
+#### Added
+- **Job Plugins**: New `Job` gRPC service enables job plugins to run as regular jobs, streaming progress and bounded by timeout. Includes a template and example.
+- **Tool Plugins**: New `Tool` control service and SDK for tool plugins, serving HTTP over a Unix socket. Plugins can mount routes, middlewares, statics, webhooks, and push configuration. Tools served by plugins now show a "plugin" badge on home cards.
+- **Service Plugins**: New `Service` plugin SDK with per-route authentication, callback tokens, and `remote_source` RPC for direct remote agent integration. Service plugins are supervised, restarting after crashes, and their routes are reverse-proxied at `/x/{key}`. Includes a template and A2A repeater example.
+- **Plugin Sources**: Plugins can be installed from URL, GitHub releases (including private repos with PATs), or local zip uploads. Sources feature health checks, version detection, auto-update flags, and audit trails.
+- **Admin Plugin Management**: A new admin UI (`/manager/plugins`) to list, add, test, install, update, and manage plugin sources and installed plugins across all kinds.
+- **CLI Plugin Management**: CLI commands `plugin add|list|remove|check`, `plugin index`, and `plugin sign` for managing plugin sources, creating v2 `plugins.json` indexes, and signing zips.
+- **Built-in Plugin Authoring Skills**: New `wick-plugin-authoring` and `wick-plugin-service` skills provide guidance for building different kinds of plugins.
+- **Plugin Replacement**: A plugin can declare `Replaces: ["old-key"]` to take over a built-in job or tool, migrating its existing configuration, schedules, tags, and history.
+- **Bitbucket Pipelines Connector**: New connector plugin with `run_pipeline`, `get_pipeline`, `list_pipelines`, and `check_permissions` operations. Includes a permission status checklist on the config page.
+- **Jenkins Connector**: New connector plugin for Jenkins, offering job browsing, `build_job`, and `get_build`.
+
+#### Improved
+- **Kind-Agnostic Plugin Layout**: Plugins now organize by kind (`connectors`, `jobs`, `tools`, `services`) under a shared root, with shared client setup.
+- **Service Plugin Configuration**: Manifest config rows are seeded into the config store, masked for secrets, and live-pushed to running processes, restarting if rejected.
+- **Plugin Keys**: Plugin keys can now contain hyphens (`-`).
+- **Installed Plugin Visibility**: The Plugins page now shows installed plugins with their origin (catalog, source, upload, unknown), update status, and update buttons. Link-type tools show an "external_url" badge.
+- **Plugin Installation Flow**: Installing a service plugin no longer requires a Wick reload; it's loaded and started immediately. `plugin install` now correctly routes all plugin kinds.
+
+#### Fixed
+- **gRPC Configuration for Tool Plugins**: Fixed `ServeTool` to correctly set `ServeConfig.GRPCServer`, preventing handshake failures.
+- **Plugin Process Shutdown**: Service and job plugin processes are now gracefully stopped on daemon shutdown or reload, including a grace period before SIGKILL.
+- **Tool Plugin Configuration Hashing**: Fixed race condition when pushing configuration to tool plugins.
+- **Plugin Key Duplicates**: Fixed an issue where a connector and a tool sharing a key would cause duplicate errors in the Plugins page.
+- **Plugin Origin Conflicts**: Fixed an issue where a tool plugin could incorrectly borrow the origin status of a connector with the same key.
+- **Plugin Table Layout**: Fixed plugin table layout for better readability and added a Type column.
+- **Masked Values in Plugins**: Connector plugins now correctly mask sensitive values passed to `c.Mask` and return them for host-side masking.
+- **Job Plugin Timeout**: Correctly reports job plugin timeouts when gRPC deadlines are hit.
+- **GitHub Asset URLs**: Fixed issue where private GitHub asset API URLs were lost in the cached plugin index.
+
+### SCM
+
+#### Added
+- **Compare Enhancements**: The "Compare branches…" feature is now "Compare…" and allows comparing any branch, tag, commit, working tree, or staged changes. It includes quick ranges (e.g., default branch → HEAD) and a search box for filtering changed files.
+
+### Workflows
+
+#### Improved
+- **Provider and Model Selection**: Workflow nodes can now pick provider and model per node, scoped by the workflow owner's provider access tags.
+- **Visual Layout**: Node cards show permanent input strips and output chips, with hover tooltips for descriptions. Cards widen per port, and auto-layout intelligently places children under their output port, packing lanes to prevent overlaps.
+
+#### Fixed
+- **Branch Node Labels**: Branch nodes now derive output and pills from distinct edge cases, showing real case labels on edges.
+- **Deduplication**: Cross-bot delivery deduplication now runs after the instance filter, preventing triggers pinned to specific instances from being dropped.
+- **Ownership**: Workflow owner (creator) is now correctly preserved on save and publish.
+
+### General Improvements
+
+#### Improved
+- **Interface Size**: Default interface size is 100%, with a slider allowing up to 150%.
+- **Sub-agent Status**: Sub-agents now maintain their run status during daemon reloads.
+- **Login Stats**: Fixed reading login stats on SQLite.
+
+#### Fixed
+- **Provider Picker Menu**: Provider picker menus now portal to the body, fixing clipping issues in transformed modals.
+- **Data Table Ownership**: Caller is now recorded as the owner on table creation.
+
+---
+
+
 ## [v1.13.0](https://github.com/yogasw/wick/compare/v1.12.0...v1.13.0) — UI, MCP & Tickets
 
 _Released on 2026-09-22_

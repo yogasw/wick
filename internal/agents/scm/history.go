@@ -173,7 +173,13 @@ func History(ctx context.Context, dir string, opts LogOptions) ([]LogEntry, erro
 		// showing an error: the panel stays usable and the picker, which
 		// reloads its list from the same response, drops the dead names.
 		log.Debug().Str("dir", dir).Strs("missing", missing).Msg("scm history: all selected refs are gone, falling back to auto")
-		refs = resolveAuto(ctx, dir, []string{RefsAuto})
+		refs, _ = dropMissingRefs(ctx, dir, resolveAuto(ctx, dir, []string{RefsAuto}))
+		if len(refs) == 0 {
+			// Not even HEAD resolves: a freshly `git init`-ed repo whose
+			// branch has no commits yet. That is an empty history, not an
+			// error — git log would answer "ambiguous argument 'HEAD'".
+			return []LogEntry{}, nil
+		}
 	} else if len(missing) > 0 {
 		log.Debug().Str("dir", dir).Strs("missing", missing).Msg("scm history: skipping refs the repo no longer has")
 	}

@@ -30,9 +30,13 @@
     // the Fixed/Expression toggle (e.g. the trigger match form).
     modes?: Record<string, string>;
     onModeChange?: (key: string, mode: Mode) => void;
+    // Instance key of the channel this form belongs to. Passed to picker
+    // rows so their search only offers what THAT bot can reach.
+    instance?: string;
   };
 
-  let { schema, values, onChange, onClear, modes, onModeChange }: Props = $props();
+  let { schema, values, onChange, onClear, modes, onModeChange, instance = "" }: Props =
+    $props();
 
   // Engine default for an absent arg_modes key is "expression" (template
   // renders). The editor convention is fixed-by-default, so we treat a
@@ -61,6 +65,17 @@
     return (f.Options ?? "").split("|").filter(Boolean);
   }
 
+  // Picker values round-trip through YAML, so what comes BACK from the
+  // backend is a real list (`channel_id: [{id, name}]`), not the JSON
+  // string PickerField emitted. Reading it as a string dropped every
+  // saved chip on reload — the value was there, the form just refused
+  // to see it. Normalise both shapes to the string PickerField parses.
+  function pickerValue(v: unknown): string {
+    if (typeof v === "string") return v;
+    if (Array.isArray(v)) return JSON.stringify(v);
+    return "";
+  }
+
   function kindFor(t: string | undefined): "text" | "textarea" | "number" | "select" | "checkbox" {
     switch (t) {
       case "dropdown":
@@ -87,11 +102,12 @@
         <PickerField
           label={f.Key}
           source={f.Options ?? ""}
-          value={typeof v === "string" ? v : ""}
+          value={pickerValue(v)}
           onChange={(nv) => onChange(f.Key, nv)}
           helper={f.Description}
           required={f.Required}
           placeholder={`Search ${f.Options ?? "items"}…`}
+          {instance}
         />
       {:else}
         <Field

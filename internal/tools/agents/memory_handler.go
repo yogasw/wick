@@ -11,6 +11,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/provider/memscope"
 	"github.com/yogasw/wick/internal/agents/provider/memscope/wrapper"
+	"github.com/yogasw/wick/internal/agents/resourceguard"
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/pkg/memreport"
 	"github.com/yogasw/wick/internal/pkg/sysmem"
@@ -76,6 +77,10 @@ type memoryAgentRow struct {
 	// capped. The aggregate above says how much the agent uses; this says
 	// which process to look at.
 	Processes []processRow `json:"processes,omitempty"`
+	// User is the account this agent runs as — see topProcessRow.User.
+	// The two views read the same map, so the dashboard and the explorer
+	// can never name different people for one pid.
+	User string `json:"user,omitempty"`
 }
 
 // processRow is one process inside an agent's tree.
@@ -147,6 +152,23 @@ type memoryReport struct {
 	// wick: when the box is slow, the cause is often not an agent, and a
 	// dashboard that can only see its own processes cannot say so.
 	Top topProcesses `json:"top"`
+
+	// Guard is the Resource Guard's recent actions, newest last, and the
+	// knobs it is running with — so "why did my build die" has an answer
+	// on the page rather than only in the daemon log.
+	Guard resourceGuardReport `json:"guard"`
+}
+
+type resourceGuardReport struct {
+	Action  string `json:"action"`
+	SafePct int    `json:"safe_pct"`
+	// CPUQuotaPct is percent of the whole machine, 0 = uncapped.
+	CPUQuotaPct int                   `json:"cpu_quota_pct"`
+	IntervalMS  int                   `json:"interval_ms"`
+	HorizonSec  int                   `json:"exhaust_horizon_sec"`
+	CPUPSIMax   int                   `json:"cpu_psi_max"`
+	HoldSpawns  bool                  `json:"hold_spawns"`
+	Events      []resourceguard.Event `json:"events"`
 }
 
 // memoryCurrentLimits echoes what is configured now, so the UI can show
@@ -159,7 +181,7 @@ type memoryCurrentLimits struct {
 }
 
 // agentProcessNames are the process names reported as tree roots.
-var agentProcessNames = []string{"claude", "codex", "gemini"}
+var agentProcessNames = []string{"claude", "codex", "gemini", "omp", "opencode"}
 
 // resourceHistory is the process-wide sample buffer, installed at boot by
 // SetResourceHistory. nil = history was never started (a test binary, or
@@ -170,6 +192,13 @@ var resourceHistory *memreport.History
 // SetResourceHistory installs the buffer the API reads from. Called once
 // from server startup, alongside the sampler that fills it.
 func SetResourceHistory(h *memreport.History) { resourceHistory = h }
+
+// resourceGuard is the fast watchdog, installed at boot. nil = not wired
+// (a test binary); the report then shows no guard events.
+var resourceGuard *resourceguard.Guard
+
+// SetResourceGuard installs the watchdog the Resources page reports on.
+func SetResourceGuard(g *resourceguard.Guard) { resourceGuard = g }
 
 // topRates diffs consecutive machine-wide snapshots so the top-process
 // table can rank by RATE rather than lifetime totals — otherwise the
@@ -211,6 +240,48 @@ type topProcessRow struct {
 	// group; the summary tables always group, so "chrome.exe × 26" is one
 	// row rather than 26 competing for the top five.
 	Count int `json:"count"`
+	// User is the wick account this process was spawned FOR — the identity
+	// its MCP credential was minted for, not the OS user (which is the same
+	// account for everything on the box and therefore says nothing).
+	// Empty for anything wick did not start, which on a real machine is
+	// most of the list.
+	User string `json:"user,omitempty"`
+}
+
+// spawnOwners maps every pid in a wick agent's process tree to the display
+// name of the account that spawn runs as.
+//
+// Two lookups, and neither is optional. The pool is the ONLY place pid ->
+// caller exists — a /proc scan knows pids and cgroups and nothing about who
+// asked for them — and the user table is the only place an id becomes a name.
+// A raw UUID in a column headed "user" is not an answer to "who spawned
+// this", so an id that cannot be resolved is left out rather than printed.
+//
+// Children inherit from the root: the MCP servers, shells and browsers below
+// an agent were started by it and belong to the same person. See
+// memreport.Owners.
+func spawnOwners(procs []memreport.Proc) map[int]string {
+	if globalPool == nil || len(procs) == 0 {
+		return nil
+	}
+	roots := map[int]string{}
+	for _, e := range globalPool.ActiveSnapshot() {
+		if e.PID != 0 && e.CallerUserID != "" {
+			roots[e.PID] = e.CallerUserID
+		}
+	}
+	if len(roots) == 0 {
+		return nil
+	}
+	names := channelOwnerNames()
+	byPID := memreport.Owners(procs, roots)
+	out := make(map[int]string, len(byPID))
+	for pid, uid := range byPID {
+		if n := names[uid]; n != "" {
+			out[pid] = n
+		}
+	}
+	return out
 }
 
 // topProcesses is the machine-wide view, ranked three ways because the
@@ -229,12 +300,13 @@ type topProcesses struct {
 	ByIO      []topProcessRow `json:"by_io"`
 }
 
-func toTopRows(in []memreport.ProcRate) []topProcessRow {
+func toTopRows(in []memreport.ProcRate, owners map[int]string) []topProcessRow {
 	out := make([]topProcessRow, 0, len(in))
 	for _, p := range in {
 		out = append(out, topProcessRow{
 			PID: p.PID, Name: p.Name, Cmdline: p.Cmdline, RSSBytes: p.RSSBytes,
 			CPUPct: p.CPUPct, IOReadBps: p.IOReadBps, IOWriteBps: p.IOWriteBps,
+			User: owners[p.PID],
 		})
 	}
 	return out
@@ -380,6 +452,7 @@ func buildMemoryReport() memoryReport {
 			}
 		}
 		rep.Top = buildTopProcesses(procs)
+		spawnOwnerNames := spawnOwners(procs)
 		for _, r := range memreport.Roots(procs, agentProcessNames) {
 			t := memreport.SumSubtreeAll(procs, r.PID)
 			row := memoryAgentRow{
@@ -397,6 +470,7 @@ func buildMemoryReport() memoryReport {
 			if p, ok := peaks[r.Name]; ok {
 				row.PeakBytes, row.PeakCPUPct = p.RSSBytes, p.CPUPct
 			}
+			row.User = spawnOwnerNames[r.PID]
 			row.Isolated = isolatedPIDs[r.PID]
 			row.FromWick = fromWickPIDs[r.PID]
 			if o, ok := owners[r.PID]; ok {
@@ -409,6 +483,17 @@ func buildMemoryReport() memoryReport {
 			}
 			rep.Agents = append(rep.Agents, row)
 		}
+	}
+
+	rep.Guard = resourceGuardReport{
+		Action:      memGuardConfig("resource_guard_action", resourceguard.ActionKill),
+		SafePct:     memGuardInt("resource_guard_safe_pct"),
+		CPUQuotaPct: agentconfig.CPUQuotaMachinePct(memGuardConfig("agents_cpu_quota_pct", ""), runtime.NumCPU()),
+		IntervalMS:  memGuardInt("resource_guard_interval_ms"),
+		HorizonSec:  memGuardInt("resource_guard_exhaust_horizon_sec"),
+		CPUPSIMax:   memGuardInt("resource_guard_cpu_psi_max"),
+		HoldSpawns:  resourceGuard.HoldSpawns(),
+		Events:      resourceGuard.History(),
 	}
 
 	if okT {

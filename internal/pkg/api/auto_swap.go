@@ -74,7 +74,17 @@ func (s *Server) watchBinarySwap(ctx context.Context, runningVersion, runningBui
 		// during the wait shows the reason rather than an unexplained pause.
 		upgrade.SetAutoSwap(sw.status(p, ok, busy, fire))
 		if !fire {
-			if ok && len(busy) > 0 {
+			if ok && p.Blocked != "" {
+				if sw.shouldWarnBlocked(p) {
+					// want is the version that WOULD be accepted. The panel
+					// shows it; without it here, an operator holding only the
+					// log can see that something was refused but not what
+					// would satisfy it.
+					logger.Warn().Str("path", p.Path).Str("to", p.Version).Str("reason", p.Blocked).
+						Str("want", p.Want).
+						Msg("auto-swap: a binary is installed that will NOT be applied")
+				}
+			} else if ok && len(busy) > 0 {
 				logger.Debug().Strs("blocking", busy).Strs("running", upgrade.Busy()).Str("to", p.Version).
 					Msg("auto-swap: a new binary is installed, waiting for work that cannot be resumed")
 			}
@@ -121,6 +131,13 @@ type autoSwapper struct {
 	seen   daemon.Pending
 	failed daemon.Pending
 
+	// loggedBlocked is the blocked file this watcher has already warned
+	// about. The warning is worth saying once per file and no more: the
+	// binary sits there unchanged, so repeating it every 15 seconds fills
+	// the log with one fact and buries everything else. Keyed by the file
+	// rather than a bool, so a NEW blocked build is announced again.
+	loggedBlocked daemon.Pending
+
 	// Cache of the last inspection, keyed by the cheap file identity. Parsing
 	// a binary's build info means opening and seeking an 88 MB file; doing
 	// that every 15 seconds forever, on a file that changes once a month, is
@@ -160,6 +177,12 @@ func (a *autoSwapper) shouldSwap(p daemon.Pending, pending bool, busy []string) 
 		a.seen = daemon.Pending{} // nothing waiting; forget what we saw
 		return false
 	}
+	if p.Blocked != "" {
+		// A build the preflight would refuse. Letting the unattended path
+		// apply what the CLI blocks is how a versionless binary put this host
+		// in a re-exec loop (see daemon.blockReason).
+		return false
+	}
 	if a.failed.Path != "" && samePendingFile(p, a.failed) {
 		return false // already tried this exact file and it did not take over
 	}
@@ -182,6 +205,8 @@ func (a *autoSwapper) status(p daemon.Pending, pending bool, busy []string, fire
 	switch {
 	case !pending:
 		return upgrade.AutoSwap{}
+	case p.Blocked != "":
+		return upgrade.AutoSwap{State: "blocked", To: p.Version, Note: p.Blocked, Want: p.Want}
 	case a.failed.Path != "" && samePendingFile(p, a.failed):
 		// Tried, did not take over, will not be retried — the banner says so
 		// via last_handover; here it is simply not counting down.
@@ -193,6 +218,19 @@ func (a *autoSwapper) status(p daemon.Pending, pending bool, busy []string, fire
 	default:
 		return upgrade.AutoSwap{State: "settling", To: p.Version, NextCheckIn: int(autoSwapInterval / time.Second)}
 	}
+}
+
+// shouldWarnBlocked answers whether this blocked build is news, and records
+// it as said. Once per FILE, not once per tick: the binary sits there
+// unchanged, so a warning every 15 seconds would repeat one fact until it
+// buried everything else in the log — while a genuinely new blocked build
+// still has to be announced.
+func (a *autoSwapper) shouldWarnBlocked(p daemon.Pending) bool {
+	if samePendingFile(p, a.loggedBlocked) {
+		return false
+	}
+	a.loggedBlocked = p
+	return true
 }
 
 // samePendingFile compares identity, not just path: a rebuild of the same

@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { ConfirmDialog } from "@wick-fe/common-ui";
+  import { ConfirmDialog, Modal, ProviderIcon, Select } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import AIRouterConfig from "$lib/components/AIRouterConfig.svelte";
   import RecentSpawns from "$lib/components/RecentSpawns.svelte";
+  import ManagedBinaryPanel from "$lib/components/ManagedBinaryPanel.svelte";
+  import { apiManagedList, isRunning, jobShort, type ManagedBinary } from "$lib/managedbin.js";
   import { UsageReport } from "@wick-fe/common-ui";
   import {
     apiGetProviders,
@@ -26,6 +28,15 @@
   import UsageCacheChip from "$lib/components/UsageCacheChip.svelte";
   import { apiLoginTTYUsageRefresh } from "$lib/logintty.js";
   import { pickWindows, connectionKey, resetHint, fmtSecsShort } from "$lib/usagerings.js";
+  import {
+    ACCOUNT_ISOLATED,
+    accountHint,
+    typeOption,
+    suggestName,
+    sourceLabel,
+    accountStorePreview,
+    validOMPProfile,
+  } from "$lib/accounts.js";
 
   const HOOK_EVENT = "PreToolUse";
 
@@ -47,8 +58,37 @@
   // its own endpoint after the list paints: the account read is local but
   // the usage probe is a remote call, and the cards must not wait on it.
   let connections = $state<Record<string, ProviderConnection>>({});
+  // false until the first connections request settles: a card without a
+  // connection row then means "not checked yet", not "logged out".
+  let connectionsLoaded = $state(false);
+  // Types whose binary wick can install/update itself (omp, opencode),
+  // with their status — the cards only INDICATE it (version, update
+  // available, a running download); every action lives on Detail. Read
+  // from the server's release cache, so this never waits on GitHub.
+  let managedByType = $state<Record<string, ManagedBinary>>({});
+  const managedTypes = $derived(Object.keys(managedByType));
+  let managedTimer: ReturnType<typeof setTimeout> | null = null;
+  async function loadManagedTypes(): Promise<void> {
+    try {
+      const out: Record<string, ManagedBinary> = {};
+      for (const t of (await apiManagedList(base)).types) if (t.enabled) out[t.type] = t;
+      managedByType = out;
+    } catch {
+      managedByType = {};
+    }
+    // Follow a running download so the card's progress stays live.
+    if (managedTimer) clearTimeout(managedTimer);
+    // The await above can outlive the component; do not re-arm after it.
+    if (managedDestroyed) return;
+    if (Object.values(managedByType).some((m) => isRunning(m.job))) managedTimer = setTimeout(() => void loadManagedTypes(), 2000);
+  }
+  let managedDestroyed = false;
+  $effect(() => () => { managedDestroyed = true; if (managedTimer) clearTimeout(managedTimer); });
   let confirmDelete = $state<ProviderStatusDTO | null>(null);
   let busy = $state<Record<string, boolean>>({});
+  // Which account-hint popover is open (keyed per card, "add" for the
+  // form). A tap toggles it — title alone never shows on touch screens.
+  let hintOpen = $state<string | null>(null);
   let mcpOpen = $state(false);
   let addOpen = $state(false);
 
@@ -62,6 +102,43 @@
   let formAirouterModels = $state<Record<string, string>>({});
   let formAirouterKey = $state("");
   let formAirouterRawConfig = $state("");
+  // omp/opencode account store: shown read-only, editable only after the
+  // operator explicitly asks to override it.
+  // omp/opencode: "managed" (default) or "manual" binary path.
+  let formBinarySource = $state("managed");
+  let formStoreOverride = $state(false);
+  let formStoreValue = $state("");
+  const formIsolated = $derived(ACCOUNT_ISOLATED.has(formType));
+  const formStoreError = $derived.by(() => {
+    if (!formIsolated || !formStoreOverride || formStoreValue.trim() === "") return "";
+    if (formType === "omp" && !validOMPProfile(formStoreValue.trim())) return "Lowercase letters, digits, '.', '_' or '-' (max 64)";
+    if (formType === "opencode" && !formStoreValue.trim().startsWith("/")) return "Must be an absolute path";
+    return "";
+  });
+
+  // A new omp/opencode instance gets a free name suggested (`omp`, `omp_2`,
+  // …) so adding a second account is one click; other types keep an
+  // empty name to type.
+  /* idleLabel shows an idle-compact wait: 90s, 30m, 1m30s. */
+  function idleLabel(sec: number): string {
+    if (sec < 60) return `${sec}s`;
+    return sec % 60 === 0 ? `${sec / 60}m` : `${Math.floor(sec / 60)}m${sec % 60}s`;
+  }
+
+  /* tokensLabel shows a token threshold: 100k, or the plain count. */
+  function tokensLabel(n: number): string {
+    return n % 1000 === 0 ? `${n / 1000}k` : `${n}`;
+  }
+
+  function onTypeChange(): void {
+    formAirouterModels = {};
+    formStoreOverride = false;
+    formStoreValue = "";
+    if (ACCOUNT_ISOLATED.has(formType)) {
+      const taken = (data?.Providers ?? []).filter((p) => p.Instance.Type === formType).map((p) => p.Instance.Name);
+      formName = suggestName(formType, taken);
+    }
+  }
 
   // The AI router picker in the create form offers the built-in routers.
   // A fresh instance has no detail payload to source them from, so list the
@@ -117,6 +194,7 @@
       data = await apiGetProviders();
       void loadWick();
       void loadConnections();
+      void loadManagedTypes();
     } catch (e) {
       if (!silent) {
         error = e instanceof Error ? e.message : "Failed to load providers";
@@ -160,6 +238,8 @@
       connections = next;
     } catch {
       connections = {};
+    } finally {
+      connectionsLoaded = true;
     }
   }
 
@@ -363,20 +443,26 @@
     formAirouterModels = {};
     formAirouterKey = "";
     formAirouterRawConfig = "";
+    formStoreOverride = false;
+    formStoreValue = "";
+    formBinarySource = "managed";
     addOpen = true;
   }
 
   async function doCreate(e: SubmitEvent): Promise<void> {
     e.preventDefault();
-    if (!formType || !formName.trim() || formNameError) {
+    if (!formType || !formName.trim() || formNameError || formStoreError) {
       return;
     }
+    const createdType = formType;
+    const createdName = formName.trim();
+    const storeOverride = formIsolated && formStoreOverride ? formStoreValue.trim() : "";
     setBusy("create", true);
     try {
       await apiCreateProvider({
         type: formType,
         name: formName.trim(),
-        binary: formBinary.trim(),
+        binary: formIsolated && formBinarySource === "managed" ? "" : formBinary.trim(),
         extra_args: formExtraArgs.trim(),
         env: formEnv,
         use_airouter: formUseAirouter && airouterSupported,
@@ -384,10 +470,18 @@
         airouter_models: formAirouterModels,
         airouter_api_key: formAirouterKey,
         airouter_raw_config: formAirouterRawConfig,
+        omp_profile: createdType === "omp" ? storeOverride : "",
+        opencode_data_dir: createdType === "opencode" ? storeOverride : "",
       });
-      toastOk(`Created ${formName.trim()}`);
+      toastOk(`Created ${createdName}`);
       addOpen = false;
       await load(true);
+      // One instance = one account: the next step is always to log that
+      // account in, so go straight to the detail page's Connection panel
+      // (it opens with the login picker expanded).
+      if (ACCOUNT_ISOLATED.has(createdType)) {
+        onNavigate(createdType, createdName);
+      }
     } catch (err) {
       toastError(err instanceof Error ? err.message : "Create failed");
     } finally {
@@ -487,6 +581,38 @@
   {/if}
 {/snippet}
 
+<!-- Info icon (circled "i") beside an account-isolated type: what one instance holds.
+     Hover shows the title; a tap toggles a small popover (touch screens
+     never show a title). `align` is the edge the popover hangs from, so it
+     opens into the card instead of past its edge. -->
+{#snippet accountHintIcon(key: string, type: string, testid: string, align: "left" | "right")}
+  {@const hint = accountHint(type)}
+  <span class="relative inline-flex shrink-0">
+    <button
+      type="button"
+      data-testid={testid}
+      title={hint}
+      aria-label={hint}
+      aria-expanded={hintOpen === key}
+      class="inline-flex h-4 w-4 items-center justify-center rounded-full text-black-600 dark:text-black-700 hover:text-black-800 dark:hover:text-black-500"
+      onclick={(e) => {
+        e.stopPropagation();
+        hintOpen = hintOpen === key ? null : key;
+      }}
+      onblur={() => { if (hintOpen === key) hintOpen = null; }}
+    >
+      <svg data-icon="info" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true" class="h-4 w-4">
+        <circle cx="8" cy="8" r="6.3" />
+        <path d="M8 7.3v3.6" />
+        <circle cx="8" cy="5" r="0.35" fill="currentColor" />
+      </svg>
+    </button>
+    {#if hintOpen === key}
+      <span role="tooltip" data-testid={`${testid}-popover`} class="absolute {align === 'left' ? 'left-0' : 'right-0'} top-full z-20 mt-1 w-56 max-w-[calc(100vw-3rem)] rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2.5 py-1.5 text-[11px] font-normal text-black-800 dark:text-black-600 shadow-lg">{hint}</span>
+    {/if}
+  </span>
+{/snippet}
+
 <div class="space-y-6">
   <div class="flex items-center justify-between gap-3 flex-wrap">
     <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Providers</h1>
@@ -581,9 +707,9 @@
           {#if isWick(p)}
             {@const ready = (wickInfo?.count ?? 0) > 0}
             <div class="rounded-xl border border-green-500 bg-white-100 dark:bg-navy-700 p-5 shadow-sm space-y-2 flex flex-col">
-              <div class="flex items-center justify-between gap-2">
-                <p class="text-base font-semibold text-black-900 dark:text-white-100">Wick</p>
-                <span class="rounded-full bg-green-100 dark:bg-green-900 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-300">Built-in</span>
+              <div class="flex items-start justify-between gap-3">
+                <div class="flex min-w-0 flex-1 items-center gap-2"><ProviderIcon value="wick" class="w-5 h-5 shrink-0" /><p class="min-w-0 line-clamp-2 break-all text-base font-semibold text-black-900 dark:text-white-100">Wick</p></div>
+                <span class="shrink-0 whitespace-nowrap rounded-full bg-green-100 dark:bg-green-900 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-300">Built-in</span>
               </div>
               <p class="text-xs text-black-700 dark:text-black-600">Runs inside wick — no CLI, no PATH setup.</p>
               <div class="flex items-center justify-between text-xs">
@@ -633,13 +759,48 @@
           {@const hc = p.Hooks[HOOK_EVENT]}
           {@const intent = p.HookEnabled[HOOK_EVENT] === true}
           {@const conn = connections[connectionKey(p.Instance.Type, p.Instance.Name)]}
+          {@const mbin = !p.Instance.Binary ? managedByType[p.Instance.Type] : undefined}
           <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm space-y-3">
+            <!-- The actions keep the top-right corner at every width. The
+                 cap + info icon ride right after the name (never wrapping
+                 themselves); a long name clamps to two lines beside them
+                 instead of pushing them, or the buttons, away. -->
             <div class="flex items-start justify-between gap-3">
-              <div>
-                <div class="flex items-center gap-2">
-                  <p class="text-base font-semibold text-black-900 dark:text-white-100">{p.Instance.Type}/{p.Instance.Name}</p>
-                  <span class={`rounded px-1.5 py-0.5 text-xs font-medium ${p.Cap.Used > 0 ? "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300" : "bg-white-300 dark:bg-navy-600 text-black-600 dark:text-black-500"}`}>{capLabel(p.Cap)}</span>
+              <div class="min-w-0 flex-1">
+                <div class="flex items-start gap-2 min-w-0">
+                  <ProviderIcon value={p.Instance.Type} class="w-5 h-5 shrink-0 mt-0.5" />
+                  <p data-testid="card-name" title={`${p.Instance.Type}/${p.Instance.Name}`} class="min-w-0 line-clamp-2 break-all text-base font-semibold text-black-900 dark:text-white-100">{p.Instance.Type}/{p.Instance.Name}</p>
+                  <div class="shrink-0 mt-0.5 flex items-center gap-1.5">
+                    <span data-testid="card-cap" class={`whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium ${p.Cap.Used > 0 ? "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300" : "bg-white-300 dark:bg-navy-600 text-black-600 dark:text-black-500"}`}>{capLabel(p.Cap)}</span>
+                    {#if p.Instance.IdleCompact}
+                      {@const ic = p.Instance.IdleCompact}
+                      <span
+                        data-testid="card-idle-compact"
+                        title={`Compact when idle: after ${idleLabel(ic.Seconds)} idle, once the context is at least ${ic.Trigger === "tokens" ? `${tokensLabel(ic.Threshold)} tokens` : `${ic.Threshold}%`}${ic.Scope === "all" ? ", every session" : ic.Scope === "whitelist" ? `, only sessions matching: ${ic.Match.join(", ")}` : `, except sessions matching: ${ic.Match.join(", ")}`}`}
+                        class="whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300"
+                      >auto-compact {idleLabel(ic.Seconds)} · {ic.Trigger === "tokens" ? tokensLabel(ic.Threshold) : `${ic.Threshold}%`}{ic.Scope === "whitelist" ? " · whitelist" : ic.Scope === "skip" ? ` · skip ${ic.Match.length}` : " · all"}</span>
+                    {/if}
+                    {#if ACCOUNT_ISOLATED.has(p.Instance.Type)}
+                      {@render accountHintIcon(`card-${p.Instance.Type}-${p.Instance.Name}`, p.Instance.Type, "one-account-badge", "left")}
+                    {/if}
+                  </div>
                 </div>
+                {#if ACCOUNT_ISOLATED.has(p.Instance.Type)}
+                  <!-- Several omp/opencode instances differ only by account,
+                       so the account is part of the card's identity. -->
+                  {#if !connectionsLoaded || conn?.accountUnknown}
+                    <!-- Login state comes from a separate request; until it
+                         lands the account is unknown, not logged out. -->
+                    <p data-testid="card-account-loading" class="text-xs mt-0.5 inline-flex items-center gap-1 text-black-700 dark:text-black-600">
+                      <svg class="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25" /><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" /></svg>
+                      checking login…
+                    </p>
+                  {:else}
+                    <p data-testid="card-account" class="text-xs mt-0.5 font-mono truncate {conn?.connected ? 'text-black-800 dark:text-black-600' : 'text-neg-400'}">
+                      {conn?.connected ? (conn.email || conn.plan || "logged in") : "not logged in — open Detail to log in"}
+                    </p>
+                  {/if}
+                {/if}
                 {#if p.Instance.Disabled}
                   <p class="text-xs text-amber-600 dark:text-amber-400 mt-0.5">disabled</p>
                 {:else if !p.PathFound}
@@ -650,7 +811,7 @@
                   <p class="text-xs text-green-600 dark:text-green-400 mt-0.5">{p.Version}</p>
                 {/if}
               </div>
-              <div class="flex items-center gap-2">
+              <div class="flex shrink-0 items-center gap-2">
                 <!-- Rescan re-probes the binary on the HOST and rewrites
                      the cached status, so it is admin-only like the rest
                      of the configuration surface. Hidden rather than
@@ -672,16 +833,50 @@
             </div>
             <dl class="text-xs space-y-1">
               <div class="flex gap-2">
-                <dt class="w-20 text-black-700 dark:text-black-600">resolved</dt>
+                <dt class="w-20 shrink-0 text-black-700 dark:text-black-600">resolved</dt>
                 {#if p.Path}
-                  <dd class="font-mono text-black-900 dark:text-white-100 break-all">{p.Path}</dd>
+                  <dd class="font-mono text-black-900 dark:text-white-100 break-all">
+                    {p.Path}
+                    {#if sourceLabel(p.Source)}
+                      <span data-testid="card-binary-source" class="ml-1 rounded bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 font-sans text-[11px] font-medium text-black-800 dark:text-black-600">{sourceLabel(p.Source)}</span>
+                    {/if}
+                  </dd>
+                {:else if ACCOUNT_ISOLATED.has(p.Instance.Type) && !mbin}
+                  <dd data-testid="card-binary-missing" class="text-neg-400">binary not installed — open Detail to download it, or set a path</dd>
                 {:else}
                   <dd class="text-black-600 dark:text-black-700">—</dd>
                 {/if}
               </div>
+              {#if mbin}
+                <div class="flex gap-2">
+                  <dt class="w-20 shrink-0 text-black-700 dark:text-black-600">binary</dt>
+                  <dd>
+                    <button
+                      type="button"
+                      data-testid="card-managed-binary"
+                      data-state={mbin.current ? "installed" : "missing"}
+                      title="Manage versions on Detail"
+                      onclick={() => onNavigate(p.Instance.Type, p.Instance.Name)}
+                      class="inline-flex flex-wrap items-center gap-1.5 text-left hover:underline"
+                    >
+                      {#if mbin.current}
+                        <span class="font-mono text-black-900 dark:text-white-100">v{mbin.current}</span>
+                        <span class="text-black-700 dark:text-black-600">managed by wick</span>
+                      {:else}
+                        <span class="text-neg-400">binary not installed — open Detail to download it</span>
+                      {/if}
+                      {#if isRunning(mbin.job) && mbin.job}
+                        <span data-testid="card-managed-job" class="text-black-800 dark:text-black-600">{jobShort(mbin.job)}</span>
+                      {:else if mbin.updateAvailable}
+                        <span data-testid="card-managed-update" class="rounded bg-cau-100 dark:bg-cau-400/20 px-1.5 py-0.5 text-[11px] font-medium text-cau-400">update available {mbin.latest}</span>
+                      {/if}
+                    </button>
+                  </dd>
+                </div>
+              {/if}
               {#if p.VersionErr}
                 <div class="flex gap-2">
-                  <dt class="w-20 text-black-700 dark:text-black-600">error</dt>
+                  <dt class="w-20 shrink-0 text-black-700 dark:text-black-600">error</dt>
                   <dd class="font-mono text-red-600 dark:text-red-400 break-all">{p.VersionErr}</dd>
                 </div>
               {/if}
@@ -689,10 +884,15 @@
             <!-- Account + usage: which login this instance runs as, and how
                  much of its rate-limit windows is spent. Two nested arcs
                  (inner 5-hour, outer 7-day) keep it to one glance; the
-                 numbers are spelled out beside them. Absent until the
-                 connections request resolves, and for provider types that
-                 keep no credentials on disk. -->
-            {#if conn}
+                 numbers are spelled out beside them. Until the connections
+                 request resolves, every non-wick card shows a "checking"
+                 row instead of letting the block pop in. -->
+            {#if !connectionsLoaded && p.Instance.Type !== "wick"}
+              <div data-testid="conn-loading" class="pt-3 border-t border-white-300 dark:border-navy-600 flex items-center gap-2 text-xs text-black-700 dark:text-black-600">
+                <svg class="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25" /><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" /></svg>
+                Checking login &amp; usage…
+              </div>
+            {:else if conn}
               {@const rings = pickWindows(conn.windows)}
               {@const ckey = connectionKey(p.Instance.Type, p.Instance.Name)}
               {@const busy = conn.usageChecking || rechecking[ckey] === true}
@@ -702,7 +902,9 @@
                 {/if}
                 <div class="min-w-0 flex-1 space-y-0.5">
                   <div class="flex items-center gap-2 flex-wrap">
-                    {#if conn.connected}
+                    {#if conn.accountUnknown}
+                      <span data-testid="conn-checking" class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-500">Checking login…</span>
+                    {:else if conn.connected}
                       <span class="rounded bg-pos-100 dark:bg-pos-400/20 px-2 py-0.5 text-xs font-medium text-pos-400">Connected</span>
                     {:else}
                       <span class="rounded bg-neg-100 dark:bg-neg-400/20 px-2 py-0.5 text-xs font-medium text-neg-400">Not connected</span>
@@ -1001,19 +1203,47 @@
   {/if}
 </div>
 
-{#if addOpen}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-    <div class="w-full max-w-lg rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-xl mx-4">
-      <h2 class="mb-4 text-base font-semibold text-black-900 dark:text-white-100">New Provider Instance</h2>
-      <form onsubmit={doCreate} class="space-y-4">
+<!-- Shared Modal: the body scrolls inside a 90vh cap and the footer stays
+     pinned, so Create is reachable however tall the form grows (the managed
+     binary panel alone adds a card). -->
+<Modal open={addOpen} title="New Provider Instance" size="lg" closeOnBackdrop={false} onClose={() => { addOpen = false; }}>
+      <form id="add-provider-form" onsubmit={doCreate} class="space-y-4">
         <div>
           <label for="add-provider-type" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Type <span class="text-red-500">*</span></label>
-          <select id="add-provider-type" bind:value={formType} onchange={() => { formAirouterModels = {}; }} required class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100">
-            {#each data?.SupportedKeys ?? [] as k (k)}
-              <option value={k}>{k}</option>
-            {/each}
-          </select>
+          <Select
+            id="add-provider-type"
+            name="type"
+            value={formType}
+            options={(data?.SupportedKeys ?? []).map(typeOption)}
+            onChange={(v) => { formType = v; onTypeChange(); }}
+          />
         </div>
+        {#if formIsolated}
+          <div data-testid="add-account-store" class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-2 space-y-2">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-medium text-black-800 dark:text-black-600">{formType === "omp" ? "omp profile" : "Data dir"}</span>
+              {@render accountHintIcon("add", formType, "add-account-hint", "right")}
+            </div>
+            {#if formStoreOverride}
+              <input
+                type="text"
+                bind:value={formStoreValue}
+                placeholder={formType === "omp" ? "wick-work" : "/abs/path/to/data"}
+                class="w-full rounded-lg border bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 {formStoreError ? 'border-red-400 dark:border-red-600' : 'border-white-400 dark:border-navy-600'}"
+              />
+              {#if formStoreError}<p class="text-[11px] text-red-600 dark:text-red-400">{formStoreError}</p>{/if}
+            {:else}
+              <p class="font-mono text-xs text-black-900 dark:text-white-100 truncate">{accountStorePreview(formType, formName.trim())}</p>
+            {/if}
+            <p class="text-[11px] text-black-700 dark:text-black-600">
+              Pinned when created — renaming the instance keeps this account.
+              <button type="button" class="text-link-400 hover:underline" onclick={() => { formStoreOverride = !formStoreOverride; }}>{formStoreOverride ? "Use default" : "Override"}</button>
+            </p>
+            {#if formType === "opencode"}
+              <p class="text-[11px] text-black-700 dark:text-black-600">Claude Pro/Max subscriptions are not supported by opencode.</p>
+            {/if}
+          </div>
+        {/if}
         <div>
           <label for="add-provider-name" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Name <span class="text-red-500">*</span></label>
           <input
@@ -1031,10 +1261,29 @@
             <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Letters, digits and '_' only. Spaces auto-convert to '_'.</p>
           {/if}
         </div>
-        <div>
-          <label for="add-provider-binary" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Binary path (optional)</label>
-          <input id="add-provider-binary" type="text" bind:value={formBinary} placeholder="leave empty to use PATH lookup" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100" />
-        </div>
+        {#if formIsolated && managedTypes.includes(formType)}
+          <div class="space-y-2" data-testid="add-binary-source">
+            <label for="add-binary-source" class="block text-xs font-medium text-black-800 dark:text-black-600">Binary</label>
+            <Select
+              id="add-binary-source"
+              value={formBinarySource}
+              options={[
+                { label: "Managed by wick", value: "managed", description: "wick downloads, verifies and updates it from GitHub" },
+                { label: "Manual path", value: "manual", description: "Advanced: point at a binary you installed yourself" },
+              ]}
+              onChange={(v) => { formBinarySource = v; }}
+            />
+            {#if formBinarySource === "managed"}
+              <ManagedBinaryPanel {base} type={formType} compact />
+            {/if}
+          </div>
+        {/if}
+        {#if !formIsolated || !managedTypes.includes(formType) || formBinarySource === "manual"}
+          <div>
+            <label for="add-provider-binary" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Binary path (optional)</label>
+            <input id="add-provider-binary" type="text" bind:value={formBinary} placeholder="leave empty to use PATH lookup" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100" />
+          </div>
+        {/if}
         <div>
           <label for="add-provider-args" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Extra args (space separated)</label>
           <input id="add-provider-args" type="text" bind:value={formExtraArgs} class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100" />
@@ -1054,19 +1303,19 @@
           bind:rawConfig={formAirouterRawConfig}
           routers={airouterRouters}
         />
-        <div class="flex justify-end gap-3 pt-2">
-          <button type="button" onclick={() => { addOpen = false; }} class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">Cancel</button>
-          <button type="submit" disabled={busy["create"] || !!formNameError} class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:opacity-50">{busy["create"] ? "Creating…" : "Create"}</button>
-        </div>
       </form>
-    </div>
-  </div>
-{/if}
+  {#snippet footer()}
+    <button type="button" onclick={() => { addOpen = false; }} class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">Cancel</button>
+    <button type="submit" form="add-provider-form" disabled={busy["create"] || !!formNameError || !!formStoreError} class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:opacity-50">{busy["create"] ? "Creating…" : "Create"}</button>
+  {/snippet}
+</Modal>
 
 <ConfirmDialog
   open={confirmDelete !== null}
   title={`Delete ${confirmDelete?.Instance.Name ?? ""}?`}
-  body="This will remove the provider instance. Built-in providers cannot be deleted."
+  body={confirmDelete && ACCOUNT_ISOLATED.has(confirmDelete.Instance.Type)
+    ? "This removes the provider instance only. Its login stays on disk (omp profile under ~/.omp/profiles, or the opencode data dir under <wick data>/providers/opencode) — delete that folder yourself if you no longer need the account. Built-in providers cannot be deleted."
+    : "This will remove the provider instance. Built-in providers cannot be deleted."}
   confirmLabel="Delete"
   destructive={true}
   onConfirm={() => { if (confirmDelete) { doDelete(confirmDelete); } }}

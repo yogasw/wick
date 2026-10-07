@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/a-h/templ"
 )
@@ -49,6 +50,80 @@ type Ctx struct {
 	// cfg resolves runtime-editable config values. nil when no module
 	// declared Specs — in that case Cfg/Missing return zero values.
 	cfg ConfigReader
+}
+
+// User is the signed-in person behind a tool request — the slice of
+// wick's user record a tool has any business seeing. Never a password
+// hash, never the whole row.
+type User struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Email   string `json:"email"`
+	IsAdmin bool   `json:"is_admin"`
+	// Tags are the names of the access tags granted to this user — the
+	// same tags an admin manages at /admin/tags. A tool uses them to
+	// answer "may this person change things", which wick's own
+	// visibility check cannot express: that check is per-tool, and a
+	// tool that everyone may READ often still has writes worth gating.
+	Tags []string `json:"tags,omitempty"`
+}
+
+// HasTag reports whether the user carries a tag, matched
+// case-insensitively so a config saying "support" finds a tag named
+// "Support". An admin is not given a free pass here — a tool that wants
+// one should say so itself.
+func (u User) HasTag(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	for _, t := range u.Tags {
+		if strings.EqualFold(strings.TrimSpace(t), name) {
+			return true
+		}
+	}
+	return false
+}
+
+// UserResolver reads the signed-in user off a request.
+//
+// It is installed by wick at boot rather than threaded through NewCtx,
+// for two reasons: NewCtx is public API that downstream code already
+// calls, and the session layer lives in internal/ where pkg/tool cannot
+// import it. With no resolver installed Ctx.User reports nobody — the
+// right answer for a binary with no session layer wired, and never a
+// panic on a path a tool may reach during tests.
+type UserResolver func(r *http.Request) (User, bool)
+
+var userResolver UserResolver
+
+// SetUserResolver installs the resolver. Called once during boot; calling
+// it again replaces the previous one.
+func SetUserResolver(fn UserResolver) { userResolver = fn }
+
+// TokenResolver authenticates a wick Personal Access Token into the user
+// that owns it. Installed by wick at boot, for the same reasons as
+// UserResolver: the token store lives in internal/.
+//
+// This is what lets a tool's machine surface accept a credential a person
+// can create for themselves and paste into any HTTP client, without that
+// tool inventing its own token scheme — and without losing WHO is calling,
+// which a shared secret always does.
+type TokenResolver func(ctx context.Context, token string) (User, bool)
+
+var tokenResolver TokenResolver
+
+// SetTokenResolver installs the PAT resolver.
+func SetTokenResolver(fn TokenResolver) { tokenResolver = fn }
+
+// ResolveToken authenticates a wick Personal Access Token. ok is false for
+// an unknown, revoked, or expired token, and whenever no resolver is
+// installed — so a missing session layer denies rather than admits.
+func ResolveToken(ctx context.Context, token string) (User, bool) {
+	if tokenResolver == nil || token == "" {
+		return User{}, false
+	}
+	return tokenResolver(ctx, token)
 }
 
 // NewCtx is used by wick when mounting handlers. Modules never call it
@@ -103,6 +178,21 @@ func (c *Ctx) Context() context.Context { return c.R.Context() }
 // use it to read display metadata (Name, Icon) or ExternalURL without
 // threading anything through closures.
 func (c *Ctx) Meta() Tool { return c.meta }
+
+// User returns the signed-in user behind this request. ok is false when
+// the route was reached without a session — a public tool viewed by a
+// logged-out visitor, or a binary with no session layer.
+//
+// Use it to answer "what is MINE" without asking the person to identify
+// themselves in a form they can get wrong. Do not use it for access
+// control: wick has already applied the tool's visibility and tag rules
+// before the handler runs.
+func (c *Ctx) User() (User, bool) {
+	if userResolver == nil || c.R == nil {
+		return User{}, false
+	}
+	return userResolver(c.R)
+}
 
 // Base returns the absolute mount path for this tool ("/tools/{Key}").
 // Use it for form actions, script src, and redirect targets so HTML

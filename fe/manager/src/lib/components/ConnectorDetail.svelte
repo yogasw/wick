@@ -478,6 +478,9 @@
       account={inAccountMode
         ? { id: accountId, state: accountStateByKey, inherited: accountInheritedByKey, onset: setAccountState }
         : null}
+      emptyNote={data.enable_sso && data.oauth && (data.accounts ?? []).length === 0
+        ? "Waiting for the first account to connect — operations sync then."
+        : ""}
     />
   </div>
 {/if}

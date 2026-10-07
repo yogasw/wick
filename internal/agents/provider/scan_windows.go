@@ -55,7 +55,7 @@ func scanKnownLocations(t Type) (string, bool) {
 			filepath.Join(localAppData, "Programs", "claude", "claude.exe"),
 			filepath.Join(programFiles, "Claude", "claude.exe"),
 		)
-	case TypeCodex, TypeGemini:
+	case TypeCodex, TypeGemini, TypeOMP, TypeOpencode:
 		candidates = append(candidates,
 			filepath.Join(home, ".local", "bin", name+".exe"),
 		)

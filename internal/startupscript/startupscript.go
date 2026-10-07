@@ -34,8 +34,9 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/yogasw/wick/pkg/safeexec"
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/internal/userconfig"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // Run spawns the script in a fresh shell, waits for context cancel,
@@ -72,6 +73,7 @@ func Run(ctx context.Context, appName, script string) error {
 	// our process-group kill, not exec's per-PID kill which would leave
 	// `ngrok &` orphans behind.
 	cmd := safeexec.Command(shell, args...)
+	cmd.Env = envscrub.ScrubOSEnv()
 	cmd.Stdin = strings.NewReader(script)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile

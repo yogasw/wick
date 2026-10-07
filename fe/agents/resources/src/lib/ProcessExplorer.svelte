@@ -5,7 +5,7 @@
   import { fetchProcessesE, killProcessE } from "$lib/api.js";
   import CommandLine from "$lib/CommandLine.svelte";
   import RowMenu from "$lib/RowMenu.svelte";
-  import { humanBytes, humanBps, humanPct } from "$lib/format.js";
+  import { humanBytes, humanBps, humanPct, cpuShare, humanCores } from "$lib/format.js";
   import type { ProcessListResponse } from "$lib/types.js";
 
   interface Props {
@@ -18,7 +18,7 @@
   // 180 MB rows do not.
   let data = $state<ProcessListResponse | null>(null);
   let query = $state("");
-  let sort = $state<"mem" | "cpu" | "io">("mem");
+  let sort = $state<"mem" | "cpu" | "io" | "user">("mem");
   let page = $state(1);
   let loading = $state(false);
   let error = $state("");
@@ -65,7 +65,7 @@
     debounce = setTimeout(() => void load(), 250);
   }
 
-  function setSort(s: "mem" | "cpu" | "io"): void {
+  function setSort(s: "mem" | "cpu" | "io" | "user"): void {
     sort = s;
     page = 1;
     void load();
@@ -114,7 +114,7 @@
     };
   });
 
-  const sortLabel: Record<string, string> = { mem: "Memory", cpu: "CPU", io: "Disk" };
+  const sortLabel: Record<string, string> = { mem: "Memory", cpu: "CPU", io: "Disk", user: "User" };
 
   // A command earns its line only when it says something the name does
   // not. "chrome.exe" under a row already labelled chrome.exe is pure
@@ -201,7 +201,7 @@
         class="w-44 rounded-lg border border-white-300 bg-white-100 px-2.5 py-1 text-xs text-black-900 placeholder:text-black-600 focus:border-blue-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
       />
       <div class="flex overflow-hidden rounded-lg border border-white-300 dark:border-navy-600">
-        {#each ["mem", "cpu", "io"] as const as s (s)}
+        {#each ["mem", "cpu", "io", "user"] as const as s (s)}
           <button
             type="button"
             class="px-2.5 py-1 text-xs transition-colors {sort === s
@@ -233,15 +233,19 @@
              expanded rows line up with the group row above them. Without
              this each table sizes its own columns and the numbers stagger. -->
         <colgroup>
-          <col style="width: 34%" />
           <col style="width: 28%" />
-          <col style="width: 15%" />
-          <col style="width: 15%" />
+          <col style="width: 14%" />
+          <col style="width: 24%" />
+          <col style="width: 13%" />
+          <col style="width: 13%" />
           <col style="width: 8%" />
         </colgroup>
         <thead>
           <tr class="border-b border-white-300 text-left text-xs uppercase tracking-wide text-black-700 dark:border-navy-600 dark:text-black-600">
             <th class="px-5 py-2 font-medium">Name</th>
+            <!-- Next to the name on purpose: "claude x 3" is only half an
+                 answer until you know whose three. -->
+            <th class="px-5 py-2 font-medium">User</th>
             <th class="px-5 py-2 font-medium">
               Memory
               {#if (data?.machine_mem_bytes ?? 0) > 0}
@@ -255,12 +259,11 @@
             </th>
             <th class="px-5 py-2 font-medium">
               CPU
-              {#if (data?.cpu_cores ?? 0) > 1}
-                <!-- Percent of ONE core, so a busy browser legitimately
-                     reads 444% here. Without the ceiling stated, that
-                     looks like a bug. -->
+              {#if (data?.cpu_cores ?? 0) > 0}
+                <!-- A share of ALL cores, like the charts above: 100% is
+                     the whole machine busy. -->
                 <span class="font-normal normal-case text-black-600 dark:text-black-700">
-                  of {data!.cpu_cores * 100}%
+                  of {data!.cpu_cores} {data!.cpu_cores === 1 ? "core" : "cores"}
                 </span>
               {/if}
             </th>
@@ -314,6 +317,26 @@
                   </div>
                 {/if}
               </td>
+              <!-- Who this belongs to. A group is several processes and
+                   may be several people, so it names the first and counts
+                   the rest rather than picking one and implying the row is
+                   all theirs. Everything wick did not start reads "—":
+                   attributing a system daemon to a person would be worse
+                   than saying nothing. -->
+              <td
+                data-testid="process-user"
+                class="max-w-0 truncate px-5 py-2 text-xs text-black-700 dark:text-black-600"
+                title={(g.users ?? []).join(", ")}
+              >
+                {#if (g.users ?? []).length === 0}
+                  <span class="text-black-600 dark:text-black-700">—</span>
+                {:else}
+                  <span class="text-black-900 dark:text-white-100">{g.users![0]}</span>
+                  {#if g.users!.length > 1}
+                    <span class="ml-1">+{g.users!.length - 1}</span>
+                  {/if}
+                {/if}
+              </td>
               <!-- Bytes and share are one measurement, not two: the
                    percentage is that same number against the machine
                    total. Two columns cost width and made the eye travel
@@ -336,8 +359,8 @@
                   {/if}
                 </div>
               </td>
-              <td class="px-5 py-2 tabular-nums text-black-900 dark:text-white-100">
-                {humanPct(g.cpu_pct)}
+              <td class="px-5 py-2 tabular-nums text-black-900 dark:text-white-100" title={humanCores(g.cpu_pct)}>
+                {humanPct(cpuShare(g.cpu_pct, data?.cpu_cores ?? 0))}
               </td>
               <td class="px-5 py-2 text-xs tabular-nums text-black-700 dark:text-black-600">
                 {humanBps(g.io_read_bps + g.io_write_bps)}
@@ -388,6 +411,9 @@
                       <CommandLine cmd={mcmd} />
                     {/if}
                   </td>
+                  <td class="max-w-0 truncate px-5 py-1 text-black-700 dark:text-black-600" title={m.user ?? ""}>
+                    {m.user ?? "—"}
+                  </td>
                   <td class="px-5 py-1">
                     <!-- Same bytes-plus-share shape as the group row above,
                          so a member can be compared with its parent without
@@ -401,8 +427,8 @@
                       </span>
                     </div>
                   </td>
-                  <td class="px-5 py-1 tabular-nums text-black-700 dark:text-black-600">
-                    {humanPct(m.cpu_pct)}
+                  <td class="px-5 py-1 tabular-nums text-black-700 dark:text-black-600" title={humanCores(m.cpu_pct)}>
+                    {humanPct(cpuShare(m.cpu_pct, data?.cpu_cores ?? 0))}
                   </td>
                   <td class="px-5 py-1 tabular-nums text-black-700 dark:text-black-600">
                     {humanBps(m.io_read_bps + m.io_write_bps)}
@@ -419,7 +445,7 @@
               {/each}
               {#if g.count > g.members.length}
                 <tr class="border-b border-white-300 bg-white-200/50 dark:border-navy-600 dark:bg-navy-800/40">
-                  <td colspan="5" class="py-1 pl-11 pr-5 text-xs text-black-700 dark:text-black-600">
+                  <td colspan="6" class="py-1 pl-11 pr-5 text-xs text-black-700 dark:text-black-600">
                     Showing the {g.members.length} largest of {g.count}.
                   </td>
                 </tr>

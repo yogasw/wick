@@ -119,62 +119,17 @@ type connectorDetail struct {
 // instance each see the connector plus their OWN account, not the whole pool.
 func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, user *entity.User) {
 	callerID, isAdmin := callerIdentity(user)
-	rows, err := svc.ListVisibleTo(r.Context(), callerID, tagIDs, isAdmin)
+	// The filtering lives in VisibleCatalog so the agent checklist offers
+	// exactly what this listing shows.
+	catalog, err := svc.VisibleCatalog(r.Context(), callerID, tagIDs, isAdmin)
 	if err != nil {
 		rsp.ToolError(w, req.ID, "list connectors: "+err.Error(), "")
 		return
 	}
-	summaries := make([]connectorSummary, 0, len(rows))
+	summaries := make([]connectorSummary, 0, len(catalog))
 	totalTools := 0
-	for _, row := range rows {
-		if row.Key == wickManagerKey {
-			continue // surfaced as top-level wick_manager_* tools, not via meta-tools
-		}
-		mod, ok := svc.Module(row.Key)
-		if !ok {
-			continue
-		}
-		// Type-level off-switch: a disabled connector type is hidden from the
-		// LLM entirely (the manager UI still shows it with a Disabled badge).
-		if !svc.TypeEnabled(row.Key) {
-			continue
-		}
-		states, err := svc.OperationStates(r.Context(), row.ID, row.Key)
-		if err != nil {
-			continue
-		}
-		count := 0
-		for _, op := range mod.AllOps() {
-			if states[op.Key] {
-				count++
-			}
-		}
-		// Live-catalog modules (custom MCP) at zero ops may simply not
-		// have synced yet — run the lazy refresh (throttled) and
-		// recount before deciding to hide the connector. Without this,
-		// an unsynced connector would never surface: invisible here
-		// means no wick_get, and no wick_get means no refresh.
-		if count == 0 && mod.Meta.LiveCatalog {
-			svc.CatalogRefresh(r.Context(), row.Key, row.ID)
-			if fresh, ok2 := svc.Module(row.Key); ok2 {
-				mod = fresh
-				if states, err = svc.OperationStates(r.Context(), row.ID, row.Key); err != nil {
-					continue
-				}
-				for _, op := range mod.AllOps() {
-					if states[op.Key] {
-						count++
-					}
-				}
-			}
-		}
-		if count == 0 {
-			continue
-		}
-		status := svc.Status(row)
-		if status == "needs_setup" {
-			continue
-		}
+	for _, e := range catalog {
+		row, mod, count := e.Row, e.Module, len(e.Ops)
 		totalTools += count
 		// Always add the connector entry itself.
 		summaries = append(summaries, connectorSummary{
@@ -183,30 +138,21 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 			Description:  mod.Meta.Description,
 			OperatorNote: strings.TrimSpace(row.Description),
 			TotalTools:   count,
-			Status:       status,
+			Status:       e.Status,
 			Kind:         "connector",
 		})
 		// For OAuth connectors, also add one entry per connected account.
-		if mod.OAuth != nil {
-			caller := connectors.AccountAccess{
-				UserID:     callerID,
-				TagIDs:     tagIDs,
-				Privileged: connectors.OwnsConnector(row, callerID) || (isAdmin && svc.AdminSeesAllConnectors()),
-			}
-			if accs, err2 := svc.ListAccountsVisibleTo(r.Context(), row, caller); err2 == nil {
-				for _, acc := range accs {
-					summaries = append(summaries, connectorSummary{
-						ID:        row.ID + "/" + acc.ID,
-						Connector: row.Label + " – @" + acc.DisplayName,
-						Description: mod.Meta.Description +
-							" (running as @" + acc.DisplayName + ")",
-						TotalTools: count,
-						Status:     status,
-						Kind:       "account",
-						ParentID:   row.ID,
-					})
-				}
-			}
+		for _, acc := range e.Accounts {
+			summaries = append(summaries, connectorSummary{
+				ID:        row.ID + "/" + acc.ID,
+				Connector: row.Label + " – @" + acc.DisplayName,
+				Description: mod.Meta.Description +
+					" (running as @" + acc.DisplayName + ")",
+				TotalTools: count,
+				Status:     e.Status,
+				Kind:       "account",
+				ParentID:   row.ID,
+			})
 		}
 	}
 	// Session-workspace instances: ephemeral connectors scoped to the

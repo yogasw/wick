@@ -53,13 +53,16 @@ export function buildTree(changes: FileChange[]): TreeNode[] {
     }
     cur.files.push({ name: segs[segs.length - 1], change: ch, dirEntry });
   }
-  return finalize(root).children ?? [];
+  return finalize(root, true).children ?? [];
 }
 
 // finalize converts a RawDir into TreeNodes, collapsing single-child dir
-// chains and sorting (dirs first, then alpha).
-function finalize(dir: RawDir): TreeNode {
-  const childDirs = [...dir.dirs.values()].map(finalize);
+// chains and sorting (dirs first, then alpha). The root is never collapsed:
+// it is the list itself, not a row. Collapsing it folded a shared prefix
+// ("internal/agents") into a node buildTree then threw away, leaving
+// "event", "pool", "provider" at the top with no sign of where they live.
+function finalize(dir: RawDir, isRoot = false): TreeNode {
+  const childDirs = [...dir.dirs.values()].map((d) => finalize(d));
   const childFiles: TreeNode[] = dir.files.map((f) => ({
     name: f.name,
     path: f.change.path.replace(/\/+$/, ""),
@@ -80,7 +83,7 @@ function finalize(dir: RawDir): TreeNode {
 
   // Collapse: a dir with exactly one child dir and no files becomes
   // "parent/child" (VSCode compact folders).
-  if (node.children!.length === 1 && node.children![0].isDir && childFiles.length === 0) {
+  if (!isRoot && node.children!.length === 1 && node.children![0].isDir && childFiles.length === 0) {
     const only = node.children![0];
     return {
       name: node.name ? node.name + "/" + only.name : only.name,

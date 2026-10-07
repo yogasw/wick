@@ -184,3 +184,25 @@ describe("McpServerForm — edit mode", () => {
     expect(screen.getAllByRole("button", { name: "Include" }).length).toBe(2);
   });
 });
+
+describe("McpServerForm — oauth per-user (SSO) mode", () => {
+  it("enables Save without a Test once 'Users connect their own account' is checked", async () => {
+    vi.mocked(api.saveMcpServer).mockResolvedValue({ redirect: "" } as never);
+    render(McpServerForm);
+    await screen.findByText("Register MCP server");
+    await fireEvent.click(screen.getByLabelText("OAuth (login on the server)"));
+    const save = screen.getByRole("button", { name: "Save & create →" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    const box = document.querySelector("[data-cc-oauth-per-user]") as HTMLInputElement;
+    expect(box).toBeTruthy();
+    await fireEvent.click(box);
+    expect(save.disabled).toBe(false);
+    expect(document.querySelector("[data-cc-peruser-tools-note]")?.textContent).toMatch(/Waiting for the first account to connect/);
+    expect(document.querySelector("[data-cc-peruser-test-note]")).toBeTruthy();
+    await fireEvent.click(save);
+    expect(api.saveMcpServer).toHaveBeenCalledTimes(1);
+    const [sent, tested] = vi.mocked(api.saveMcpServer).mock.calls[0];
+    expect(sent.oauth_per_user).toBe(true);
+    expect(tested).toBe(false);
+  });
+});

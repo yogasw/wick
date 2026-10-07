@@ -11,15 +11,19 @@ import (
 // Account is the credential-file snapshot for one provider instance:
 // who is logged in and on what plan. Zero value = not connected.
 type Account struct {
-	Connected bool   `json:"connected"`
-	Email     string `json:"email,omitempty"`
-	Plan      string `json:"plan,omitempty"`
-	Org       string `json:"org,omitempty"`
+	Connected bool `json:"connected"`
+	// Unknown is true when the login could not be read at all (the CLI
+	// probe failed or timed out), so Connected=false says nothing: the
+	// UI shows "checking" instead of a red "not logged in".
+	Unknown bool   `json:"unknown,omitempty"`
+	Email   string `json:"email,omitempty"`
+	Plan    string `json:"plan,omitempty"`
+	Org     string `json:"org,omitempty"`
 	// AuthMethod is the user-facing credential kind ("Claude AI",
 	// "ChatGPT", "API key", "Google") — the CLI usage screen's "Auth
 	// method" row.
 	AuthMethod string    `json:"auth_method,omitempty"`
-	ExpiresAt  time.Time `json:"expires_at,omitempty"` // zero = unknown / not applicable
+	ExpiresAt  time.Time `json:"expires_at,omitzero"` // zero = unknown / not applicable
 }
 
 // envValue returns the value of key in a KEY=VALUE env list, or "".

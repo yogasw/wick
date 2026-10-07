@@ -91,6 +91,22 @@ func (r *repo) LinkToolTag(ctx context.Context, toolPath, tagID string) error {
 		FirstOrCreate(&link).Error
 }
 
+// UnlinkToolTag removes one tool_tag row; a missing row is not an error.
+func (r *repo) UnlinkToolTag(ctx context.Context, toolPath, tagID string) error {
+	return r.db.WithContext(ctx).
+		Where("tool_path = ? AND tag_id = ?", toolPath, tagID).
+		Delete(&entity.ToolTag{}).Error
+}
+
+// ToolHasTag reports whether toolPath is linked to tagID.
+func (r *repo) ToolHasTag(ctx context.Context, toolPath, tagID string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&entity.ToolTag{}).
+		Where("tool_path = ? AND tag_id = ?", toolPath, tagID).
+		Count(&count).Error
+	return count > 0, err
+}
+
 // DeleteTag hard-deletes a tag row plus all ToolTag and UserTag rows that
 // reference it. Used for owner tag cleanup when a connector instance is deleted.
 func (r *repo) DeleteTag(ctx context.Context, tagID string) error {

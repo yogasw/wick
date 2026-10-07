@@ -1,10 +1,29 @@
 package airouter
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"testing"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
+
+// Register runs from the routers' init(), so it must stay silent: anything it
+// logs lands on every CLI command (`wick version`, `wick plugin build`, …).
+func TestRegisterDoesNotLog(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Logger
+	log.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { log.Logger = prev })
+
+	Register(Descriptor{ID: "zzz-quiet", DisplayName: "Quiet", PrefPort: 31003})
+
+	if buf.Len() != 0 {
+		t.Fatalf("Register logged during init: %s", buf.String())
+	}
+}
 
 func TestRegistryRegisterGetListSorted(t *testing.T) {
 	Register(Descriptor{ID: "zzz-b", DisplayName: "B", PrefPort: 31000})

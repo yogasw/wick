@@ -268,3 +268,27 @@ describe("ConnectorDetail", () => {
     expect(screen.getByText(/every user with tag access sees and can run as all of them/)).toBeTruthy();
   });
 });
+
+describe("ConnectorDetail — per-user (SSO) oauth MCP instance", () => {
+  it("shows the SSO policy toggles, Connect account, and the waiting-for-first-account notice", async () => {
+    vi.mocked(api.getConnectorRow).mockResolvedValue(
+      makeData({
+        key: "helpdesk",
+        oauth: { display_name: "Helpdesk", start_url: "/manager/connectors/helpdesk/oauth/start?connector_id=row-a" },
+        enable_sso: true,
+        allow_others_connect_sso: true,
+        multi_account: true,
+        is_admin: true,
+        can_manage_policy: true,
+        operations: [],
+        accounts: [],
+      }),
+    );
+    render(ConnectorDetail, { connectorKey: "helpdesk", connectorId: "row-a" });
+    await screen.findByText("row-a");
+    expect(screen.getByText("Waiting for the first account to connect — operations sync then.")).toBeTruthy();
+    expect(screen.queryByText("This connector exposes no operations.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Connect account" })).toBeTruthy();
+    expect(screen.getAllByText(/Enable SSO/).length).toBeGreaterThan(0);
+  });
+});

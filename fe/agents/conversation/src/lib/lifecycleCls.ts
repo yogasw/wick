@@ -140,3 +140,13 @@ export function isSubAgentWorking(status: string, lifecycle: string): boolean {
 export function isSubAgentLive(status: string): boolean {
   return status === "queued" || status === "running";
 }
+
+/* The badge a chat row on the ticket board carries. The server sends the
+   status the sidebar orders by, so a row pinned to the top by a working
+   sub-agent says why instead of looking idle. */
+export function sessionRowBadge(lifecycle?: string): string {
+  if (lifecycle === "working" || lifecycle === "spawning") return "live";
+  if (lifecycle === "subagent") return "sub-agent";
+  if (lifecycle === "queued") return "queued";
+  return "";
+}

@@ -3,7 +3,6 @@ package agents
 import (
 	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -126,10 +126,14 @@ type ticketBoardResponse struct {
 	Untracked []ticketSessionRow `json:"untracked"`
 	// UntrackedTotal is how many exist, however few were sent, so the rail
 	// can say "25 of 142" instead of implying it has them all.
-	UntrackedTotal int                    `json:"untracked_total"`
-	Statuses       []project.TicketStatus `json:"statuses"`
-	Users          map[string]string      `json:"users,omitempty"`
-	Me             string                 `json:"me,omitempty"`
+	UntrackedTotal int `json:"untracked_total"`
+	// UntrackedNext is the cursor for the page after these rows
+	// (?untracked_after=), empty when nothing follows them. Opaque: the
+	// client hands it back as-is and never builds one.
+	UntrackedNext string                 `json:"untracked_next,omitempty"`
+	Statuses      []project.TicketStatus `json:"statuses"`
+	Users         map[string]string      `json:"users,omitempty"`
+	Me            string                 `json:"me,omitempty"`
 }
 
 // cardFields picks what a card carries: the schema's show_on_card subset
@@ -217,29 +221,25 @@ func userNames(c *tool.Ctx, ids map[string]bool) map[string]string {
 func sessionRow(
 	sid string,
 	live map[string]session.Session,
-	lc map[string]string,
+	lc map[string]view.SessionLifecycleVM,
 	ids map[string]bool,
 ) ticketSessionRow {
-	row := ticketSessionRow{ID: sid, Label: loadFirstUserMessage(globalLayout, sid, 60), Lifecycle: lc[sid]}
+	row := ticketSessionRow{ID: sid, Label: loadFirstUserMessage(globalLayout, sid, 60), Lifecycle: lc[sid].Lifecycle}
 	if s, ok := live[sid]; ok {
+		// The status the ORDER uses, so a row pinned to the top because its
+		// sub-agent is working also says so, as the sidebar's dot does.
+		row.Lifecycle = view.SidebarRowStatus(s, lc[sid])
 		row.Status = string(s.Meta.Status)
-		row.LastActive = s.Meta.LastActive.Format(time.RFC3339)
+		// The same clock the sidebar prints, so a chat reads "2m" in both
+		// places rather than "2m" there and "1h" here mid-turn.
+		if ms := view.SidebarLastActiveMs(s, lc[sid]); ms > 0 {
+			row.LastActive = time.UnixMilli(ms).UTC().Format(time.RFC3339)
+		}
 		if ids != nil {
 			ids[s.Meta.UserID] = true
 		}
 	}
 	return row
-}
-
-func lifecycleBySession() map[string]string {
-	out := map[string]string{}
-	if globalPool == nil {
-		return out
-	}
-	for _, e := range globalPool.ActiveSnapshot() {
-		out[e.SessionID] = e.Lifecycle
-	}
-	return out
 }
 
 /* ── board + ticket CRUD ─────────────────────────────────────────────────── */
@@ -269,7 +269,7 @@ func apiProjectTickets(c *tool.Ctx) {
 	}
 	now := time.Now()
 	ids := map[string]bool{}
-	lc := lifecycleBySession()
+	lc := sidebarLifecycles()
 	live := globalMgr.Registry().Sessions()
 	ticketed := map[string]bool{}
 
@@ -284,6 +284,10 @@ func apiProjectTickets(c *tool.Ctx) {
 	//   ?assignee=ID|me  only this person's tickets; absent/empty = everyone
 	//   ?untracked=1     ask for the untracked list at all (default: no)
 	//   ?untracked_limit=N
+	//   ?untracked_after=C    the rail's next page: rows strictly after the
+	//                    row cursor C points at (a previous response's
+	//                    untracked_next). The poll asks for the first page
+	//                    only; older pages are fetched once, on scroll.
 	//   ?untracked_owner=me   only the caller's loose chats; absent = everyone's.
 	//                    Applied to the COUNT too, so the rail's number and its
 	//                    rows always describe the same set.
@@ -300,6 +304,18 @@ func apiProjectTickets(c *tool.Ctx) {
 	// opt-out spelling.
 	wantUntracked := isTrueish(c.Query("untracked"))
 	untrackedLimit := queryInt(c, "untracked_limit", defaultUntrackedLimit, 1, maxUntrackedLimit)
+	// A cursor, not an offset — see railKey for why a row count skips chats.
+	// Unlike the clamped ints above, a bad one is refused: paging from a
+	// guessed place would silently draw the wrong rows.
+	var untrackedAfter *railKey
+	if raw := strings.TrimSpace(c.Query("untracked_after")); raw != "" {
+		k, err := decodeRailCursor(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		untrackedAfter = &k
+	}
 	// "me" resolves against the caller here, same as ?assignee=me. An
 	// untracked chat has no ticket, so ownership is the only "mine" there is.
 	untrackedOwner := ""
@@ -345,7 +361,9 @@ func apiProjectTickets(c *tool.Ctx) {
 			continue
 		}
 		count, _ := notes.Counts(globalLayout, notes.Scope{ProjectID: id, TicketID: t.ID})
-		shown := t.Sessions
+		// Same order as the sidebar before the cap, so the rows a card DOES
+		// show are the chats in use, not the first ones ever attached.
+		shown := orderSidebarIDs(t.Sessions, live, lc)
 		if rowsPerCard < len(shown) {
 			shown = shown[:rowsPerCard]
 		}
@@ -381,39 +399,21 @@ func apiProjectTickets(c *tool.Ctx) {
 	// Counted in full but sent in part: the header needs the total ("142
 	// untracked") while the rail only draws the first page.
 	// The COUNT is always computed and the rows never are unless asked: the
-	// number is a walk over sessions already in memory, while a row reads
-	// the session's first message off disk. That split is what lets the
+	// number is one walk over sessions already in memory, and only the
+	// requested page is ever ordered and built. That split is what lets the
 	// board offer "Untracked (89)" as something to switch on without having
 	// paid to draw it.
 	untracked := []ticketSessionRow{}
-	// Id and session travel together: sorting two parallel slices by one of
-	// them desynchronises the pair on the first swap.
-	type looseSession struct {
-		id   string
-		last time.Time
-	}
-	loose := make([]looseSession, 0, 32)
-	for sid, s := range live {
-		if s.Meta.ProjectID != id || s.Meta.ParentSessionID != "" || ticketed[sid] {
-			continue
-		}
-		if untrackedOwner != "" && s.Meta.UserID != untrackedOwner {
-			continue
-		}
-		loose = append(loose, looseSession{id: sid, last: s.Meta.LastActive})
-	}
-	untrackedTotal := len(loose)
-	if wantUntracked {
-		// Newest first, so the page that IS sent is the useful one.
-		sort.Slice(loose, func(i, j int) bool {
-			return loose[i].last.After(loose[j].last)
-		})
-		if untrackedLimit < len(loose) {
-			loose = loose[:untrackedLimit]
-		}
-		for _, ls := range loose {
-			untracked = append(untracked, sessionRow(ls.id, live, lc, ids))
-		}
+	page, untrackedNext, untrackedTotal := pageLooseSessions(
+		globalMgr.Registry().SessionIDs(), live, lc,
+		func(sid string, s session.Session) bool {
+			return s.Meta.ProjectID == id && s.Meta.ParentSessionID == "" && !ticketed[sid] &&
+				(untrackedOwner == "" || s.Meta.UserID == untrackedOwner)
+		},
+		untrackedAfter, untrackedLimit, wantUntracked,
+	)
+	for _, sid := range page {
+		untracked = append(untracked, sessionRow(sid, live, lc, ids))
 	}
 
 	resp := ticketBoardResponse{
@@ -423,6 +423,7 @@ func apiProjectTickets(c *tool.Ctx) {
 		Tickets:        cards,
 		Untracked:      untracked,
 		UntrackedTotal: untrackedTotal,
+		UntrackedNext:  untrackedNext,
 		// Board columns come from the project: a team names its own stages.
 		Statuses: cfg.StatusList(),
 	}
@@ -551,35 +552,20 @@ func apiTicketDetail(c *tool.Ctx) {
 	}
 	resp.Statuses = resp.Config.StatusList()
 
-	lc := lifecycleBySession()
+	lc := sidebarLifecycles()
 	live := globalMgr.Registry().Sessions()
 	ids := map[string]bool{}
 	for _, a := range tk.AssigneeList() {
 		ids[a] = true
 	}
+	// MOST RECENTLY ACTIVE FIRST, by the sidebar's rule. tk.Sessions is
+	// attach order, so the chat someone was just in sat wherever it
+	// happened to be added — a ticket with a long history buried it. Rows
+	// with no live session carry no timestamp and sink to the bottom.
 	resp.Sessions = make([]ticketSessionRow, 0, len(tk.Sessions))
-	for _, sid := range tk.Sessions {
+	for _, sid := range orderSidebarIDs(tk.Sessions, live, lc) {
 		resp.Sessions = append(resp.Sessions, sessionRow(sid, live, lc, ids))
 	}
-	// MOST RECENTLY ACTIVE FIRST. tk.Sessions is attach order, so the chat
-	// someone was just in sat wherever it happened to be added — a ticket
-	// with a long history buried it. Each row prints its own last-active
-	// time, so the order has to follow that clock. Rows with no live
-	// session carry no timestamp; they sink to the bottom rather than
-	// jumping the queue on an empty string.
-	sort.SliceStable(resp.Sessions, func(i, j int) bool {
-		a, b := resp.Sessions[i].LastActive, resp.Sessions[j].LastActive
-		if a == b {
-			return false
-		}
-		if a == "" {
-			return false
-		}
-		if b == "" {
-			return true
-		}
-		return a > b // RFC3339 is lexicographically ordered
-	})
 
 	// The UI view includes hidden notes (rendered blurred); only the MCP
 	// surface filters them out.
@@ -676,11 +662,14 @@ func apiTicketUpdate(c *tool.Ctx) {
 			tk.Fields[k] = v
 		}
 	}
-	if err := saveWithRequestedTime(tk, callerActor(c), req.UpdatedAt); err != nil {
+	saved, err := saveWithRequestedTime(tk, callerActor(c), req.UpdatedAt)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, tk)
+	// The SAVED ticket, so the card that just moved shows the time it moved
+	// and the board re-sorts on it without waiting for a reload.
+	c.JSON(http.StatusOK, saved)
 }
 
 // saveWithRequestedTime applies the PATCH's updated_at choice.
@@ -693,16 +682,19 @@ func apiTicketUpdate(c *tool.Ctx) {
 // a mirror that mis-formats its timestamps would otherwise stamp every
 // ticket with the sync's clock and nobody would notice until the board's
 // order stopped meaning anything.
-func saveWithRequestedTime(tk ticket.Ticket, actor ticket.Actor, want string) error {
+// It returns the SAVED ticket, not the one handed in: the save stamps
+// updated_at, and answering with the caller's copy told the board a time that
+// was already wrong.
+func saveWithRequestedTime(tk ticket.Ticket, actor ticket.Actor, want string) (ticket.Ticket, error) {
 	switch v := strings.TrimSpace(want); v {
 	case "":
-		return ticket.SaveAs(globalLayout, tk, actor)
+		return ticket.SaveAsAt(globalLayout, tk, actor, time.Time{})
 	case "keep":
 		return ticket.SaveAsKeeping(globalLayout, tk, actor)
 	default:
 		at, err := time.Parse(time.RFC3339, v)
 		if err != nil {
-			return fmt.Errorf("updated_at must be RFC3339 or \"keep\": %w", err)
+			return ticket.Ticket{}, fmt.Errorf("updated_at must be RFC3339 or \"keep\": %w", err)
 		}
 		return ticket.SaveAsAt(globalLayout, tk, actor, at)
 	}
@@ -928,6 +920,11 @@ func notesScopeFromQuery(c *tool.Ctx) (notes.Scope, bool) {
 	if !ok || !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants) {
 		return notes.Scope{}, false
 	}
+	// A shared agent's chat lives in the owner's project; its notes are
+	// the owner's, whoever else might reach the project.
+	if _, shared := sharedChatAgent(c.Context(), sess); shared {
+		return notes.Scope{}, false
+	}
 	sc, err := notes.Resolve(globalLayout, sid)
 	if err != nil {
 		return notes.Scope{}, false
@@ -935,7 +932,70 @@ func notesScopeFromQuery(c *tool.Ctx) (notes.Scope, bool) {
 	return sc, true
 }
 
+// notesProjectID names the project a notes scope belongs to.
+//
+// A session that is NOT on a ticket resolves to its own scope, which carries
+// no project id — but the session still belongs to one, and the rail needs
+// that project to know whether tickets run here at all. Reading it off the
+// scope alone left the field missing on every ticket-less session, and the
+// rail reads a missing field as "older server, show the tab" — so a project
+// with tickets switched off still got a Ticket tab and lost its Notes one.
+func notesProjectID(sc notes.Scope) string {
+	if sc.ProjectID != "" {
+		return sc.ProjectID
+	}
+	if sc.SessionID == "" {
+		return ""
+	}
+	if sess, ok := globalMgr.Registry().Session(sc.SessionID); ok {
+		return sess.Meta.ProjectID
+	}
+	return ""
+}
+
 // apiNotesList handles GET /api/notes?ticket_id=…|session_id=…
+// noteTicketSummary is the ticket as the conversation rail shows it: what it
+// asks (body) and the values of the project's fields beside it. Fields is
+// never nil, so the rail can read a value without first asking whether the
+// map exists. Keys the project does not define (a mirror's bookkeeping, such
+// as a linked page id) travel too — the rail shows only defined fields, and
+// the ticket's own page already exposes the full set.
+func noteTicketSummary(tk ticket.Ticket) map[string]any {
+	fields := tk.Fields
+	if fields == nil {
+		fields = map[string]string{}
+	}
+	return map[string]any{
+		"id":     tk.ID,
+		"title":  tk.Title,
+		"status": tk.Status,
+		"body":   tk.Body,
+		"fields": fields,
+	}
+}
+
+// ticketPanelButton is a custom button as the rail needs it: enough to draw
+// and click it, nothing it could leak.
+type ticketPanelButton struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// ticketPanelButtons keeps the buttons placed on a TICKET — a ticket-list
+// button acts on a board filter the rail does not have — and drops any that
+// cannot be clicked (no id yet, or no label to show). Never nil, so the rail
+// reads an empty list rather than null.
+func ticketPanelButtons(all []project.TicketButton) []ticketPanelButton {
+	out := []ticketPanelButton{}
+	for _, b := range all {
+		if !b.On(project.ButtonOnTicket) || b.ID == "" || strings.TrimSpace(b.Label) == "" {
+			continue
+		}
+		out = append(out, ticketPanelButton{ID: b.ID, Label: strings.TrimSpace(b.Label)})
+	}
+	return out
+}
+
 func apiNotesList(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -963,7 +1023,7 @@ func apiNotesList(c *tool.Ctx) {
 	// never turned on produces one nobody will ever look at. Sent
 	// unconditionally — a missing field means an older server, and the rail
 	// falls back to showing the tab rather than hiding it on a guess.
-	if p, pok := globalMgr.Registry().Project(sc.ProjectID); pok {
+	if p, pok := globalMgr.Registry().Project(notesProjectID(sc)); pok {
 		out["ticket_enabled"] = p.Meta.Ticket.Enabled
 	}
 	// When the scope resolved to a ticket, name it: the conversation rail
@@ -975,14 +1035,20 @@ func apiNotesList(c *tool.Ctx) {
 			// ticket ASKED FOR above the running record of what was found,
 			// and reading notes without the request they answer is half a
 			// conversation.
-			out["ticket"] = map[string]string{
-				"id": tk.ID, "title": tk.Title, "status": tk.Status, "body": tk.Body,
-			}
+			out["ticket"] = noteTicketSummary(tk)
 			// The rail's status select offers the project's own columns, so
 			// a board that renamed its stages does not present the built-in
-			// four as if they were valid.
+			// four as if they were valid. The field definitions travel the
+			// same way: the rail shows and edits the project's own fields,
+			// and a value is only meaningful next to its label and type.
 			if p, pok := globalMgr.Registry().Project(sc.ProjectID); pok {
 				out["statuses"] = p.Meta.Ticket.StatusList()
+				out["ticket_fields"] = p.Meta.Ticket.Fields
+				// The ticket's custom buttons ("Sync from Notion"), so the rail
+				// can offer them where the ticket is being worked on. Id and
+				// label only: the click goes through /actions/{buttonID}, which
+				// looks the URL up server-side, so the rail never needs it.
+				out["ticket_buttons"] = ticketPanelButtons(p.Meta.Ticket.Integrations.Buttons)
 			}
 		}
 	}
@@ -1263,6 +1329,33 @@ func apiRailPrefsSave(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// apiSidebarWidthSave handles PUT /api/me/sidebar {"space":"team|agents","width":N}.
+// width 0 resets to the default.
+func apiSidebarWidthSave(c *tool.Ctx) {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "login required"})
+		return
+	}
+	var body struct {
+		Space string `json:"space"`
+		Width int    `json:"width"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	if globalAuth == nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": "auth service unavailable"})
+		return
+	}
+	if err := globalAuth.SetSidebarWidth(c.Context(), u.ID, body.Space, body.Width); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"status": "ok", "width": entity.ClampSidebarWidth(body.Width)})
+}
+
 // apiTicketFilterGet handles GET /api/me/ticket-filters/{projectID}.
 func apiTicketFilterGet(c *tool.Ctx) {
 	u := login.GetUser(c.Context())
@@ -1294,4 +1387,74 @@ func apiTicketFilterSave(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// pageLooseSessions picks one page of the untracked rail — the rows
+// strictly after `after` (nil = from the top), in the sidebar's order
+// (running first, then newest by the pool's clock or the saved one) —
+// without sorting every chat the project ever had.
+//
+// orderedIDs is the registry's list, already sorted by saved LastActive.
+// Only a session the pool knows about (or one queued) can rank anywhere
+// other than where that list puts it, and those are a handful — so they
+// are gathered whole, while the rest are taken in list order, skipping any
+// at or before the cursor, and the walk stops collecting once it holds
+// `limit` of them: anything later is older than every one already held and
+// can never reach the page. It keeps collecting while the age still TIES
+// the last one held, since the id decides those and the registry's order
+// among equal ages is not the id's. The merge is then a sort of ~page-size
+// items, not of thousands.
+//
+// next is the cursor of the page's last row, set only when more rows
+// follow it, so "no cursor" is the rail's "that was all". total counts every
+// matching chat either way, because the header shows "25/142" whether or
+// not the rows were asked for.
+func pageLooseSessions(
+	orderedIDs []string,
+	sessions map[string]session.Session,
+	lc map[string]view.SessionLifecycleVM,
+	keep func(sid string, s session.Session) bool,
+	after *railKey,
+	limit int,
+	wantRows bool,
+) (page []string, next string, total int) {
+	hot := make([]string, 0, 8)
+	cold := make([]string, 0, limit)
+	var coldLast int64
+	remaining := 0 // rows after the cursor, held or not
+	for _, sid := range orderedIDs {
+		s, ok := sessions[sid]
+		if !ok || !keep(sid, s) {
+			continue
+		}
+		total++
+		if !wantRows {
+			continue
+		}
+		k := sidebarKey(sid, s, lc[sid])
+		if after != nil && !after.before(k) {
+			continue
+		}
+		remaining++
+		if _, live := lc[sid]; live || k.running {
+			hot = append(hot, sid)
+			continue
+		}
+		if len(cold) < limit || k.at == coldLast {
+			cold = append(cold, sid)
+			coldLast = k.at
+		}
+	}
+	if !wantRows || remaining == 0 {
+		return nil, "", total
+	}
+	merged := orderSidebarIDs(append(hot, cold...), sessions, lc)
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	if remaining > len(merged) {
+		last := merged[len(merged)-1]
+		next = sidebarKey(last, sessions[last], lc[last]).encode()
+	}
+	return merged, next, total
 }

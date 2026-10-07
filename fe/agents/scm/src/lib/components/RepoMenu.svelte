@@ -17,8 +17,10 @@
         button instead of two. Omit to leave the entry out. */
     viewMode?: "tree" | "list";
     onToggleViewMode?: () => void;
+    /** Open the branch compare overlay. Omit to leave the entry out. */
+    onCompare?: () => void;
   };
-  let { direction = "down", viewMode, onToggleViewMode }: Props = $props();
+  let { direction = "down", viewMode, onToggleViewMode, onCompare }: Props = $props();
 
   let open = $state(false);
   let busy = $state(false);
@@ -76,6 +78,14 @@
       class={"absolute right-0 z-20 w-52 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-1 shadow-lg " +
         (direction === "up" ? "bottom-full mb-1" : "top-full mt-1")}
     >
+      <!-- Compare sits above Fetch, in its own group: it is the one entry
+           here that opens a whole surface rather than running a command,
+           and it is how branch compare is reached at all — it is not a tab,
+           because two ref lists plus a file list do not fit the dock. -->
+      {#if onCompare}
+        <button type="button" class={item} onclick={() => { open = false; onCompare(); }}>Compare…</button>
+        <div class="my-1 border-t border-white-300 dark:border-navy-600"></div>
+      {/if}
       <!-- No Pull/Push here: their buttons are two inches to the left, and
            an overflow that repeats the thing it overflows from is just a
            longer way to click the same button. -->

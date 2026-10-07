@@ -21,15 +21,25 @@ type scriptedStream struct {
 	// hold, when set, keeps the channel open after the script so the
 	// runner can be observed mid-run instead of falling through to EOF.
 	hold bool
+	// gate, when set, holds the script back until it is closed, so a
+	// test can line up more work before the run reacts to its events.
+	gate chan struct{}
 }
 
 func (s *scriptedStream) SubscribeSession(string) (<-chan StreamEvent, func()) {
 	ch := make(chan StreamEvent, len(s.events)+1)
-	for _, e := range s.events {
-		ch <- e
+	play := func() {
+		for _, e := range s.events {
+			ch <- e
+		}
+		if !s.hold {
+			close(ch)
+		}
 	}
-	if !s.hold {
-		close(ch)
+	if s.gate == nil {
+		play()
+	} else {
+		go func() { <-s.gate; play() }()
 	}
 	return ch, func() {}
 }
@@ -268,6 +278,31 @@ func TestRunSurfacesErrorEventAsFailedStatus(t *testing.T) {
 	}
 	if res.Status != entity.DelegationFailed {
 		t.Fatalf("status = %q, want %q", res.Status, entity.DelegationFailed)
+	}
+}
+
+// A line the provider parser could not read arrives as a Warning while the
+// child keeps working. Treating it as the end of the run closed delegations
+// "(no output)" minutes before the child finished, lost the real answer and
+// released the conversation's queue slot early.
+func TestRunKeepsRunningThroughWarning(t *testing.T) {
+	stream := &scriptedStream{events: []StreamEvent{
+		{Type: event.TextDelta, Text: "checking. "},
+		{Type: event.Warning, Text: "claude parse: unexpected end of JSON input"},
+		{Type: event.TextDelta, Text: "real answer"},
+		{Type: event.Done},
+	}}
+	s, _, _ := runService(t, stream, &fakeRunner{})
+
+	res, err := s.Run(context.Background(), baseReq())
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != entity.DelegationDone {
+		t.Fatalf("status = %q, want %q (note %q)", res.Status, entity.DelegationDone, res.Note)
+	}
+	if !strings.Contains(res.Result, "real answer") {
+		t.Fatalf("result = %q, want the output that came after the warning", res.Result)
 	}
 }
 

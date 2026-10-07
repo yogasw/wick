@@ -36,6 +36,9 @@ func AgentsMoreItems(vm AgentsLayoutVM, user *entity.User) []AgentsNavItem {
 		show        bool
 	}
 	candidates := []candidate{
+		// Workflows sat in the main nav; it moved here so the top rows are
+		// the everyday ones (New session · Overview · Team · Connectors).
+		{"/workflows", "Workflows", true},
 		{"/scheduled", "Scheduled", signedIn},
 		// Admin-only to match its API, which is admin-gated: the page
 		// reports machine-wide process usage.

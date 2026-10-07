@@ -144,6 +144,7 @@ func (m *Middleware) Session(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), contextKeyUser, user)
 		ctx = context.WithValue(ctx, contextKeyUserTagIDs, tagIDs)
 		ctx = ui.WithTheme(ctx, ui.EffectiveTheme(user.Metadata.Theme))
+		ctx = ui.WithUIScale(ctx, user.Metadata.UIScaleOrDefault())
 		// Surface an active "view as" session so every page can warn about it.
 		// An admin who forgets they switched misreads every permission and
 		// every empty list they see, so the banner is not optional decoration.

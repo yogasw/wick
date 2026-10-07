@@ -113,3 +113,29 @@ func TestHumanBytes(t *testing.T) {
 		}
 	}
 }
+
+// Only omp / opencode one-shot runs exit non-zero because of an Error they
+// already streamed. Any other respawn CLI's exit stays an error, so a real
+// crash or an OOM kill after an Error is still classified.
+func TestExitFollowsTurnErrorOnlyForOMPAndOpencode(t *testing.T) {
+	for _, tc := range []struct {
+		typ     Type
+		mode    SendMode
+		errored bool
+		want    bool
+	}{
+		{TypeOMP, SendSpawnEach, true, true},
+		{TypeOpencode, SendRespawnQueue, true, true},
+		{TypeOpencode, SendRespawnQueue, false, false},
+		{TypeCodex, SendRespawnQueue, true, false},
+		{TypeClaude, SendSpawnEach, true, false},
+	} {
+		cfg := Options{SendMode: tc.mode, Instance: &Instance{Type: tc.typ}}
+		if got := exitFollowsTurnError(cfg, tc.errored); got != tc.want {
+			t.Errorf("%s/%v errored=%v = %v, want %v", tc.typ, tc.mode, tc.errored, got, tc.want)
+		}
+	}
+	if exitFollowsTurnError(Options{SendMode: SendSpawnEach}, true) {
+		t.Error("no instance must not be demoted")
+	}
+}

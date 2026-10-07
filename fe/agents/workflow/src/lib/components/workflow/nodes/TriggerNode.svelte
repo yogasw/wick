@@ -36,6 +36,7 @@
 </script>
 
 <BaseNode
+  description={trigger.description ?? ""}
   id={trigger.id ?? `trigger-${trigger.type}`}
   type={"end" /* dummy — overridden by headLabel + headBg */}
   label={trigger.label ?? trigger.type}

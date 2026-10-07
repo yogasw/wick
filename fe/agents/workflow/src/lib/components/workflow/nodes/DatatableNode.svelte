@@ -6,7 +6,6 @@
   type Props = { node: Node; selected?: boolean; running?: boolean; errored?: boolean; onselect?: () => void };
   let { node, selected, running, errored, onselect }: Props = $props();
   const op = $derived(node.type.replace("datatable_", ""));
-  const isBranchy = $derived(node.type === "datatable_get" || node.type === "datatable_exists");
   // Sub-label mirrors the legacy editor's one-line op summary.
   const sub = $derived.by(() => {
     switch (node.type) {
@@ -23,6 +22,7 @@
 </script>
 
 <BaseNode
+  description={node.description ?? ""}
   id={node.id}
   type={node.type}
   label={node.label}
@@ -32,21 +32,9 @@
   {onselect}
   headBg="#0ea5e9"
   icon="▤"
-  outputs={isBranchy ? 2 : 1}
 >
   {#snippet body()}
     <div class="text-[11px] text-black-700 dark:text-black-600 truncate">{sub}</div>
     {#if node.module}<div class="text-[10px] text-black-700 dark:text-black-600 truncate">{node.module}</div>{/if}
-    {#if isBranchy}
-      <div class="mt-1 flex gap-1 text-[10px]">
-        {#if node.type === "datatable_exists"}
-          <span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">true</span>
-          <span class="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">false</span>
-        {:else}
-          <span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">found</span>
-          <span class="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">not_found</span>
-        {/if}
-      </div>
-    {/if}
   {/snippet}
 </BaseNode>

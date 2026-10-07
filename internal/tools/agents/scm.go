@@ -28,6 +28,8 @@ func registerSCM(r tool.Router) {
 	r.GET("/api/sessions/{id}/git/branches", gitBranches)
 	r.GET("/api/sessions/{id}/git/blob", gitBlob)
 	r.GET("/api/sessions/{id}/git/compare", gitCompare)
+	r.GET("/api/sessions/{id}/git/compare-refs", gitCompareRefs)
+	r.GET("/api/sessions/{id}/git/ref-compare", gitRefCompare)
 	r.GET("/api/sessions/{id}/git/log", gitLog)
 	r.GET("/api/sessions/{id}/git/refs", gitHistoryRefs)
 	r.GET("/api/sessions/{id}/git/commit", gitCommitInfo)
@@ -41,6 +43,9 @@ func registerSCM(r tool.Router) {
 	r.POST("/api/sessions/{id}/git/branch/create", gitBranchCreate)
 	r.POST("/api/sessions/{id}/git/branch/rename", gitBranchRename)
 	r.POST("/api/sessions/{id}/git/branch/delete", gitBranchDelete)
+	r.POST("/api/sessions/{id}/git/restore", gitRestore)
+	r.POST("/api/sessions/{id}/git/revert", gitRevert)
+	r.POST("/api/sessions/{id}/git/reset", gitReset)
 	r.POST("/api/sessions/{id}/git/push", gitPush)
 	r.POST("/api/sessions/{id}/git/pull", gitPull)
 	r.POST("/api/sessions/{id}/git/fetch", gitFetch)
@@ -386,6 +391,118 @@ func gitCompare(c *tool.Ctx) {
 		if err == nil {
 			modified, err = scm.ReadFile(dir, path)
 		}
+	}
+	if err != nil {
+		gitErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"original": original, "modified": modified, "path": path})
+}
+
+// boolQuery reads a query flag the way the rest of this file spells it:
+// present as "1" or "true" means on, anything else (including absent)
+// means off.
+func boolQuery(c *tool.Ctx, name string) bool {
+	v := c.Query(name)
+	return v == "1" || v == "true"
+}
+
+// gitCompareRefs lists what differs between two refs — the Compare tab's
+// file list, its ± totals and its ahead/behind header in one request.
+//
+// three_dot=1 asks the merge-base question ("what does head add?"),
+// which is what a reviewer means by comparing two branches; without it
+// the two trees are diffed directly.
+func gitCompareRefs(c *tool.Ctx) {
+	cwd, ok := sessionCwd(c)
+	if !ok {
+		return
+	}
+	dir, ok := repoDir(c, cwd)
+	if !ok {
+		return
+	}
+	base, head := c.Query("base"), c.Query("head")
+	if base == "" || head == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "base and head required"})
+		return
+	}
+	res, err := scm.CompareRefs(c.Context(), dir, base, head, boolQuery(c, "three_dot"))
+	if err != nil {
+		gitErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+// gitRefCompare returns the two raw sides of one file across two refs,
+// for the same Monaco diff editor the working-tree changes use. A file
+// absent on one side comes back as an empty string rather than an error
+// — that is an add or a delete, not a failure.
+//
+// three_dot=1 reads the left side at the merge base instead of at base's
+// tip, so the diff shown matches the file list gitCompareRefs produced
+// for the same toggle. head may be scm.WorktreeRef / scm.StagedRef, in
+// which case the right side is the file on disk / in the index.
+func gitRefCompare(c *tool.Ctx) {
+	cwd, ok := sessionCwd(c)
+	if !ok {
+		return
+	}
+	dir, ok := repoDir(c, cwd)
+	if !ok {
+		return
+	}
+	base, head, path := c.Query("base"), c.Query("head"), c.Query("path")
+	if base == "" || head == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "base and head required"})
+		return
+	}
+	if path == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "path required"})
+		return
+	}
+	if scm.IsWorkingSide(base) {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "base: the working tree can only be the head side"})
+		return
+	}
+	for _, ref := range []string{base, head} {
+		if err := scm.ValidateCompareRef(c.Context(), dir, ref); err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	// A working-tree head stands on HEAD for the merge base, the same
+	// way gitCompareRefs computed the file list.
+	tip := head
+	if scm.IsWorkingSide(head) {
+		tip = "HEAD"
+	}
+	left := base
+	if boolQuery(c, "three_dot") {
+		// Unrelated histories have no merge base; fall back to base's
+		// tip so the diff still renders instead of erroring out.
+		if mb, err := scm.MergeBase(c.Context(), dir, base, tip); err == nil && mb != "" {
+			left = mb
+		}
+	}
+	// The rename source, when the caller knows it: without it the left
+	// side of a renamed file reads as empty and the diff looks like a
+	// wholesale add.
+	origPath := c.Query("orig_path")
+	if origPath == "" {
+		origPath = path
+	}
+	original, err := scm.FileAtRef(c.Context(), dir, left, origPath)
+	if err != nil {
+		gitErr(c, err)
+		return
+	}
+	var modified string
+	if scm.IsWorkingSide(head) {
+		modified, err = scm.WorkingFile(c.Context(), dir, head, path)
+	} else {
+		modified, err = scm.FileAtRef(c.Context(), dir, head, path)
 	}
 	if err != nil {
 		gitErr(c, err)
@@ -770,6 +887,94 @@ func gitBranchDelete(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"status": "deleted", "branch": req.Branch})
+}
+
+// ── Rollback endpoints ──────────────────────────────────────────────
+//
+// All three are DESTRUCTIVE in some mode and the FE must confirm with
+// the user first, naming the exact git effect — the same contract
+// gitDiscard already works under.
+
+type restoreReq struct {
+	Repo  string   `json:"repo"`
+	Ref   string   `json:"ref"`
+	Paths []string `json:"paths"`
+}
+
+// gitRestore puts single files back to their content at another ref.
+// It is the per-file rollback the Compare tab offers next to each entry.
+func gitRestore(c *tool.Ctx) {
+	var req restoreReq
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	dir, ok := resolveBodyRepo(c, req.Repo)
+	if !ok {
+		return
+	}
+	if err := scm.RestorePaths(c.Context(), dir, req.Ref, req.Paths); err != nil {
+		gitErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"status": "restored", "ref": req.Ref, "paths": req.Paths})
+}
+
+type revertReq struct {
+	Repo     string `json:"repo"`
+	SHA      string `json:"sha"`
+	NoCommit bool   `json:"no_commit"`
+}
+
+// gitRevert applies the inverse of a commit. A conflict comes back as a
+// 400 carrying git's own message, which names the files in the way —
+// the working tree is left exactly as git left it, mid-revert, because
+// cleaning up after it would throw away the resolution in progress.
+func gitRevert(c *tool.Ctx) {
+	var req revertReq
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	dir, ok := resolveBodyRepo(c, req.Repo)
+	if !ok {
+		return
+	}
+	out, err := scm.RevertCommit(c.Context(), dir, req.SHA, req.NoCommit)
+	if err != nil {
+		gitErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"status": "reverted", "sha": req.SHA, "output": out})
+}
+
+type resetReq struct {
+	Repo string `json:"repo"`
+	Ref  string `json:"ref"`
+	Mode string `json:"mode"` // soft | mixed | hard
+}
+
+// gitReset moves the current branch to another ref. mode=hard discards
+// uncommitted work outright, so the panel marks it destructive.
+func gitReset(c *tool.Ctx) {
+	var req resetReq
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	dir, ok := resolveBodyRepo(c, req.Repo)
+	if !ok {
+		return
+	}
+	if err := scm.ResetTo(c.Context(), dir, req.Ref, req.Mode); err != nil {
+		gitErr(c, err)
+		return
+	}
+	mode := req.Mode
+	if mode == "" {
+		mode = "mixed"
+	}
+	c.JSON(http.StatusOK, map[string]any{"status": "reset", "ref": req.Ref, "mode": mode})
 }
 
 // gitPush and gitPull run through a Git CLI connector when one is

@@ -33,6 +33,8 @@ import (
 //
 // Concurrency: not safe for concurrent use. One parser per subprocess.
 type CodexParser struct {
+	// tools pairs calls with results for Display (see display.go).
+	tools          toolCalls
 	sessionEmitted bool
 	// agentMsgText tracks the most recent text snapshot per item.id for
 	// agent_message items so item.updated emits only the appended tail
@@ -220,8 +222,10 @@ type codexMCPResult struct {
 }
 
 type codexMCPContent struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Data     string `json:"data,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
 }
 
 // Parse decodes one codex --json line into an AgentEvent.
@@ -240,7 +244,66 @@ func (p *CodexParser) Parse(line string) (AgentEvent, error) {
 	if err == nil && ev.Type != Done && ev.ContextUsed == 0 {
 		ev.ContextUsed = p.liveLevel()
 	}
+	if err == nil {
+		if ev.Type == ToolResult && ev.ExitCode == nil {
+			// A non-zero exit inside the envelope is a failed command, the
+			// same as command_execution reports it.
+			if ev.ExitCode = codexOutputExit(ev.Text); ev.ExitCode != nil && *ev.ExitCode != 0 {
+				ev.IsError = true
+			}
+		}
+		if ev.Type == ToolResult {
+			if out, ok := codexUnwrapOutput(ev.Text); ok {
+				// Classify the output, not the envelope; Text stays raw.
+				orig := ev.Text
+				ev.Text = out
+				p.tools.decorate(&ev)
+				ev.Text = orig
+				ev.Display.OriginalBytes = len(orig)
+				return ev, err
+			}
+		}
+		p.tools.decorate(&ev)
+	}
 	return ev, err
+}
+
+// codexEnvelope is the shape codex wraps some function_call_output in:
+// {"output":"<stdout>","metadata":{"exit_code":0,"duration_seconds":0.1}}.
+type codexEnvelope struct {
+	Output   *string `json:"output"`
+	Metadata *struct {
+		ExitCode *int `json:"exit_code"`
+	} `json:"metadata"`
+}
+
+func parseCodexEnvelope(text string) (codexEnvelope, bool) {
+	var env codexEnvelope
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "{") || !strings.Contains(t, `"output"`) {
+		return env, false
+	}
+	if json.Unmarshal([]byte(t), &env) != nil || env.Output == nil || env.Metadata == nil {
+		return env, false
+	}
+	return env, true
+}
+
+// codexUnwrapOutput returns the output inside a codex envelope.
+func codexUnwrapOutput(text string) (string, bool) {
+	env, ok := parseCodexEnvelope(text)
+	if !ok {
+		return "", false
+	}
+	return *env.Output, true
+}
+
+// codexOutputExit returns the envelope's exit code, nil when absent.
+func codexOutputExit(text string) *int {
+	if env, ok := parseCodexEnvelope(text); ok {
+		return env.Metadata.ExitCode
+	}
+	return nil
 }
 
 func (p *CodexParser) parse(line string) (AgentEvent, error) {
@@ -346,12 +409,22 @@ func (p *CodexParser) parse(line string) (AgentEvent, error) {
 			text := ""
 			if item.Result != nil {
 				var parts []string
+				binary := false
 				for _, c := range item.Result.Content {
 					if c.Type == "text" && c.Text != "" {
 						parts = append(parts, c.Text)
+					} else if c.Data != "" {
+						binary = true
 					}
 				}
 				text = strings.Join(parts, "\n")
+				if binary {
+					// Image/audio blocks used to be dropped here; keep the
+					// whole block array so Classify can surface them.
+					if b, err := json.Marshal(item.Result.Content); err == nil {
+						text = string(b)
+					}
+				}
 			}
 			return AgentEvent{
 				Type:      ToolResult,
@@ -368,6 +441,7 @@ func (p *CodexParser) parse(line string) (AgentEvent, error) {
 				Text:      item.AggregatedOutput,
 				ToolUseID: item.ID,
 				IsError:   isErr,
+				ExitCode:  item.ExitCode,
 				Raw:       trimmed,
 			}, nil
 		case "web_search":

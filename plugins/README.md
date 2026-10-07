@@ -21,8 +21,9 @@ plugins/
 │       ├── main.go        #   package main → wickplugin.Serve(mod)
 │       ├── connector.go   #   the connector.Module (Meta + Operations + Configs)
 │       └── VERSION        #   source of truth for this plugin's version
-├── tool/                  # (later) kind=tool — same build flow
-└── job/                   # (later) kind=job — same build flow
+├── tool/                  # kind=tool — toolplugin.ServeTool; _template + example_counter
+├── job/                   # kind=job — wickplugin.ServeJob; _template + example_heartbeat
+└── service/               # kind=service — service.ServeService; _template + example_a2a_repeater
 ```
 
 `_template` is a complete, working connector (HTTP GET + DELETE against a
@@ -59,14 +60,63 @@ wick plugin build --all-plugins
 # only connectors whose folder changed since a ref (used by CI)
 wick plugin build --changed --since origin/main
 
-# other kinds (later): pick the source folder with --kind
-wick plugin build --kind tool mytool
+# job plugins: pick the source folder with --kind
+wick plugin build --kind job example_heartbeat
 ```
 
 Each build produces `bin/<name>-<version>-<goos>-<goarch>.zip` containing the
 binary plus a `plugin.json` generated **from the binary** (`--dump-manifest`),
 so the manifest can never drift from the code. Pass `--sign-key <path>` to sign
 each manifest (ed25519; `cmd/plugin-keygen` in the wick repo mints a key).
+
+### Job plugins
+
+`job/<name>/` calls `wickplugin.ServeJob(job.Module{...})` instead of `Serve`.
+The host installs it under `plugins/jobs/<key>/` and registers it like a
+built-in job: it shows on the Jobs page, runs on its cron and from Run now, and
+each run spawns the binary, calls `Run` once, then kills the process. Lines
+logged with `job.Logf(ctx, ...)` and the returned markdown land in the run
+history. A run is bounded by `WICK_JOB_PLUGIN_TIMEOUT` (default 30m). Start from
+`job/_template/`.
+
+### Tool plugins
+
+`tool/<name>/` calls `toolplugin.ServeTool(tool.Module{...})` — the same
+`tool.Module` (meta, `Configs`, `Register(r tool.Router)`) a built-in tool
+uses, so moving a tool out of the binary only changes its `main.go`. The host
+installs it under `plugins/tools/<key>/`, lists it on the home grid with a
+"plugin" badge, and reverse-proxies `/tools/<key>/*` to the plugin's HTTP
+server on a unix socket:
+
+- `c.HTML(...)` pages come back as fragments and wick wraps them in its
+  layout; `c.JSON` and HTMX requests pass through as-is.
+- `c.User()` and `c.Cfg(...)` work as usual: the host injects the signed-in
+  user as `X-Wick-User-*` headers (client-sent ones are dropped) and pushes
+  config at spawn and whenever it changes.
+- Only routes declared on `r.WebhookGroup(...)` answer without a login, and
+  only the exact ones the manifest lists.
+- The process starts on the first request (held up to 10 s, then 503), and
+  stops after `WICK_TOOL_PLUGIN_IDLE` (default 10m) without traffic — never
+  while a request or stream is open. `toolplugin.ServeTool(mod,
+  toolplugin.KeepWarm())` keeps it running for webhooks that must answer
+  fast.
+
+Start from `tool/_template/`; `tool/example_counter/` shows a page, a JSON
+endpoint, and a webhook.
+
+### Service plugins
+
+`service/<name>/` calls `service.ServeService(service.Module{...})`: an
+always-on HTTP server exposed at `/x/<key>/*`, restarted with backoff
+(1s→30s) when it dies. Each `Route` picks its auth — `service.Public`,
+`service.Token` (Bearer token generated on the plugin's admin page) or
+`service.Session` (signed-in wick user). `env.Callback()` gives a scoped
+`WICK_PLUGIN_TOKEN` + `WICK_BASE_URL` for calling wick back, and
+`Module.RemoteSource` makes the plugin a Team remote-agent source. Start from
+`service/_template/`; `service/example_a2a_repeater/` is a full A2A adapter.
+
+Full docs: `docs/plugins/` (overview, authoring per kind, index format,
+sources, release, security).
 
 ## Installing (consumption side)
 
@@ -87,10 +137,11 @@ reloader polls the plugins dir) — no restart needed.
 
 ## Releasing
 
-Push to `main`; the CI workflow (`.github/workflows/release.yml`) builds **only
-the connectors whose folder changed** (one zip per os/arch) and attaches them to
-a GitHub Release tagged `<name>/v<version>`. It does NOT rebuild everything on
-every push.
+See [RELEASE.md](./RELEASE.md). Every release `<name>/v<version>` carries the
+zips plus a per-release `plugins.json` (`wick plugin index`: relative urls,
+`zip_sha256`, optional signature), so a wick GitHub source can install from it
+directly. Plugins kept in a separate repo use the reusable workflow
+`yogasw/wick/.github/workflows/plugin-release.yml@master`.
 
 ## Marketplace catalog (`plugins.json`)
 

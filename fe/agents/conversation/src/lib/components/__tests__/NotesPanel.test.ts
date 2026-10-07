@@ -49,6 +49,12 @@ const note = (over: Partial<Note> = {}): Note => ({
   ...over,
 });
 
+/* The composer is folded by default, so every test that writes a note opens
+   it first — the same click a person makes. */
+async function openComposer() {
+  await fireEvent.click(screen.getByTestId("note-compose-open"));
+}
+
 function renderPanel(notes: Note[]) {
   return render(NotesPanel, {
     props: {
@@ -123,6 +129,7 @@ describe("NotesPanel", () => {
 
   test("adding a note POSTs body, checkable, and audience", async () => {
     renderPanel([]);
+    await openComposer();
     await fireEvent.input(screen.getByLabelText("New note"), {
       target: { value: "found it in the queue config" },
     });
@@ -133,9 +140,58 @@ describe("NotesPanel", () => {
     expect(post?.body).toMatchObject({ body: "found it in the queue config", audience: "both" });
   });
 
-  test("the add button stays disabled for an empty draft", () => {
+  test("the add button stays disabled for an empty draft", async () => {
     renderPanel([]);
+    await openComposer();
     expect((screen.getByText("Add note") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  /* ── the composer is folded until asked for ── */
+
+  // A textarea, a hint, a checkbox, a select and a button is most of a
+  // panel's height spent on something nobody is doing most of the time. The
+  // list is what the panel is for; writing is one click away.
+  test("the composer is folded until its button is clicked", async () => {
+    renderPanel([note()]);
+    expect(screen.queryByLabelText("New note")).toBeNull();
+    await openComposer();
+    expect(screen.getByLabelText("New note")).toBeTruthy();
+  });
+
+  test("the composer folds itself away again after a note is added", async () => {
+    renderPanel([]);
+    await openComposer();
+    await fireEvent.input(screen.getByLabelText("New note"), { target: { value: "found it" } });
+    await fireEvent.click(screen.getByText("Add note"));
+    await vi.waitFor(() => expect(screen.queryByLabelText("New note")).toBeNull());
+  });
+
+  test("cancel closes the composer and drops the draft", async () => {
+    renderPanel([]);
+    await openComposer();
+    await fireEvent.input(screen.getByLabelText("New note"), { target: { value: "half a thought" } });
+    await fireEvent.click(screen.getByText("Cancel"));
+    expect(screen.queryByLabelText("New note")).toBeNull();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    await openComposer();
+    expect((screen.getByLabelText("New note") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  /* ── a long note is folded, not the whole panel ── */
+
+  test("a long note is clamped and expands on Show more", async () => {
+    const long = "line\n".repeat(30);
+    renderPanel([note({ body: long })]);
+    const body = screen.getByTestId("note-body-n1");
+    expect(body.className).toContain("max-h-40");
+    await fireEvent.click(screen.getByTestId("note-expand-n1"));
+    expect(screen.getByTestId("note-body-n1").className).not.toContain("max-h-40");
+  });
+
+  test("a short note gets no Show more", () => {
+    renderPanel([note({ body: "one line" })]);
+    expect(screen.queryByTestId("note-expand-n1")).toBeNull();
+    expect(screen.getByTestId("note-body-n1").className).not.toContain("max-h-40");
   });
 
   // Deleting takes three deliberate steps — open the menu, pick Delete,
@@ -202,8 +258,9 @@ describe("NotesPanel", () => {
     expect(el.querySelector("img")).toBeNull();
   });
 
-  test("the composer says notes are markdown", () => {
+  test("the composer says notes are markdown", async () => {
     renderPanel([]);
+    await openComposer();
     expect(screen.getByText(/Markdown/)).toBeTruthy();
   });
 
@@ -211,6 +268,7 @@ describe("NotesPanel", () => {
   // something whose useful entries are multi-line.
   test("ctrl+enter adds a note and plain enter does not", async () => {
     renderPanel([]);
+    await openComposer();
     const box = screen.getByLabelText("New note");
     await fireEvent.input(box, { target: { value: "found it" } });
     await fireEvent.keyDown(box, { key: "Enter" });

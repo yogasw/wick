@@ -146,8 +146,8 @@ func TestStartRefusesUnsupportedType(t *testing.T) {
 	if _, err := m.Start(provider.Instance{Type: provider.TypeWick, Name: "wick"}, ""); err == nil {
 		t.Fatal("wick must be refused")
 	}
-	if _, err := m.Start(provider.Instance{Type: provider.TypeCodex, Name: "x"}, "codex"); err == nil {
-		t.Fatal("codex not wired yet, must be refused")
+	if _, err := m.Start(provider.Instance{Type: provider.TypeGemini, Name: "x"}, "gemini"); err == nil {
+		t.Fatal("gemini not wired yet, must be refused")
 	}
 }
 

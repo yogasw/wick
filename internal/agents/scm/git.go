@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -48,6 +49,7 @@ func (e *GitError) Unwrap() error { return e.Err }
 // captured into a GitError on failure.
 func run(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := safeexec.CommandContext(ctx, "git", args...)
+	cmd.Env = envscrub.ScrubOSEnv()
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

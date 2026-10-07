@@ -235,7 +235,7 @@
     switch (status) {
       case "pending":
       case "active":
-        return "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300";
+        return "bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300";
       case "done":
         return "bg-white-300 text-black-700 dark:bg-navy-700 dark:text-white-200";
       case "failed":
@@ -491,7 +491,7 @@
             <!-- A project job listed here was created from this conversation
                  but does NOT deliver into it, so say where it goes. -->
             <span
-              class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"
+              class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300"
               data-testid="row-scope"
             >
               {s.session_mode === "template" ? s.session_template || "named session" : "new session each run"}

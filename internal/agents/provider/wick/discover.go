@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/yogasw/wick/internal/agents/provider/modelfilter"
 )
 
 // DiscoveredModel is one model id offered by a vendor's list API,
@@ -25,33 +27,14 @@ type DiscoveredModel struct {
 }
 
 // MatchFilter reports whether a model matches a discovery-filter query. The
-// grammar mirrors the UI's: space-separated terms; a bare term must be
-// contained (case-insensitive) in the id or label, a `-`/`!` prefix excludes.
-// An empty/blank query matches everything. Shared by the FE filter box and the
-// server-side expansion of a live model set, so both agree.
+// grammar lives in modelfilter (space-separated AND terms, case-insensitive
+// substring over id + label, `a|b` = either, `-`/`!` prefix excludes) and is
+// shared with the omp/opencode live CLI model lists and the FE filter box, so
+// all of them agree. An empty/blank query matches everything.
 func MatchFilter(m DiscoveredModel, query string) bool {
 	// An empty filter matches everything: a live set with no narrowing query
 	// stands in for the vendor's ENTIRE model list (the filter is optional).
-	if strings.TrimSpace(query) == "" {
-		return true
-	}
-	hay := strings.ToLower(m.ID + " " + m.Label)
-	for _, raw := range strings.Fields(query) {
-		t := strings.ToLower(raw)
-		if t == "-" || t == "!" {
-			continue
-		}
-		exclude := strings.HasPrefix(t, "-") || strings.HasPrefix(t, "!")
-		needle := t
-		if exclude {
-			needle = t[1:]
-		}
-		hit := strings.Contains(hay, needle)
-		if exclude == hit {
-			return false
-		}
-	}
-	return true
+	return modelfilter.Match(m.ID+" "+m.Label, query)
 }
 
 // FilterModels returns the subset of models matching query (see MatchFilter).

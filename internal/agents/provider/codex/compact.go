@@ -17,6 +17,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/event"
 	provider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/procgroup"
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -83,7 +84,7 @@ func (s Spawner) spawnCompact(ctx context.Context, opt provider.SpawnOptions, bi
 	execBin, execArgs := termuxProotWrap(realBin, realArgs)
 	cmd := safeexec.CommandContext(ctx, execBin, execArgs...)
 	cmd.Dir = opt.Workspace
-	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
+	cmd.Env = append(envscrub.ScrubOSEnv(), opt.ExtraEnv...)
 	cmd.Env = append(cmd.Env, routerEnv...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

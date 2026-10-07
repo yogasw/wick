@@ -1,15 +1,19 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Button } from "@wick-fe/common-ui";
+  import { Button, Select } from "@wick-fe/common-ui";
   import { toastError } from "@wick-fe/common-stores";
   import {
     apiLoginTTYStatus,
     apiLoginTTYUsage,
     apiLoginTTYStart,
     apiLoginTTYUsageRefresh,
+    defaultLoginChoice,
     usageLabel,
     fmtResetsIn,
     prettyPlan,
+    validTime,
+    apiLoginTTYLogout,
+    apiSetAPIKey,
     type LoginTTYStatus,
     type LoginTTYSession,
     type UsageResult,
@@ -17,10 +21,11 @@
   } from "$lib/logintty.js";
   import LoginTerminalModal from "$lib/components/LoginTerminalModal.svelte";
   import UsageCacheChip from "$lib/components/UsageCacheChip.svelte";
+  import AccountList from "$lib/components/AccountList.svelte";
   import { fmtSecsShort } from "$lib/usagerings.js";
 
-  type Props = { base: string; type: string; name: string };
-  let { base, type, name }: Props = $props();
+  type Props = { base: string; type: string; name: string; defaultExpanded?: boolean };
+  let { base, type, name, defaultExpanded = false }: Props = $props();
 
   let status = $state<LoginTTYStatus | null>(null);
   let usage = $state<UsageResult | null>(null);
@@ -30,15 +35,37 @@
   let showTerminal = $state(false);
   /* Collapsed by default — the header row is the summary; details
      (account rows + usage) render only when expanded. */
-  let expanded = $state(false);
+  let expanded = $state(defaultExpanded);
+  /* omp/opencode: which OAuth provider the next login targets. */
+  let loginChoice = $state("");
+  let choice = $derived((status?.loginChoices ?? []).find((c) => c.id === loginChoice) ?? null);
+  /* API-key login: provider picked + the key being typed (never echoed). */
+  let apiKeyProvider = $state("");
+  let apiKeyValue = $state("");
+  let apiKeyBusy = $state(false);
+  let apiKeyChoice = $derived((status?.apiKeys ?? []).find((k) => k.id === apiKeyProvider) ?? null);
+  let loggingOut = $state("");
 
   let connected = $derived(status?.account.connected ?? false);
+  /* Shared login: the owner instance; login controls live there. */
+  let sharedFrom = $derived(status?.authFrom ?? "");
   /* Reconnect shows while collapsed ONLY when a login is actually
      needed; expanded always offers it (deliberate re-login). */
   let showReconnect = $derived.by(() => {
     if (!status?.supported) return false;
+    if (status.authFrom) return false;
     if (status.session?.state === "running") return false;
-    return expanded || !connected;
+    return expanded || (!connected && !status.account.unknown);
+  });
+
+  // An unreadable login ("unknown") is retried on its own, so "Checking
+  // login…" settles without the user reloading the page.
+  let unknownRetry: ReturnType<typeof setTimeout> | null = null;
+  // refresh() awaits before re-arming; after unmount it must not.
+  let destroyed = false;
+  onMount(() => () => {
+    destroyed = true;
+    if (unknownRetry !== null) clearTimeout(unknownRetry);
   });
 
   async function refresh() {
@@ -47,6 +74,8 @@
     } catch {
       status = null;
     }
+    if (unknownRetry !== null) clearTimeout(unknownRetry);
+    unknownRetry = status?.account.unknown && !destroyed ? setTimeout(() => void refresh(), 5000) : null;
     try {
       usage = await apiLoginTTYUsage(base, type, name);
     } catch {
@@ -80,12 +109,23 @@
   onMount(async () => {
     await refresh();
     loading = false;
+    loginChoice = defaultLoginChoice(status?.loginChoices ?? []);
+    // A fresh omp/opencode instance needs a provider picked before Login,
+    // so open the details (where the picker lives) instead of hiding it.
+    if (status && (status.loginChoices ?? []).length > 0 && !status.account.connected && !status.account.unknown) {
+      expanded = true;
+    }
   });
 
-  async function reconnect() {
+  // Also bound directly as an onclick handler, so the argument may be the
+  // click event: only a string names an opencode account folder.
+  async function reconnect(accountArg?: unknown) {
+    const account = typeof accountArg === "string" ? accountArg : "";
     starting = true;
     try {
-      const s = await apiLoginTTYStart(base, type, name);
+      const s = account
+        ? await apiLoginTTYStart(base, type, name, loginChoice, account)
+        : await apiLoginTTYStart(base, type, name, loginChoice);
       if (s) {
         session = s;
         showTerminal = true;
@@ -114,10 +154,42 @@
   }
 
   function fmtExpiry(iso: string): string {
-    if (!iso) return "";
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return "";
-    return d.toLocaleString();
+    if (!validTime(iso)) return "";
+    return new Date(iso).toLocaleString();
+  }
+
+  async function logoutProvider(prov: string, accountId = "") {
+    const n = (status?.accounts ?? []).filter((a) => a.provider === prov).length;
+    // opencode row ids are "<folder>/<provider>"; the folder picks which
+    // account's auth.json the logout runs against.
+    const folder = accountId ? accountId.split("/")[0] : "";
+    const msg = type === "omp"
+      ? `Log out of ${prov}? omp removes ALL ${n} stored account(s) of this provider from the profile — it has no single-account logout outside its TUI.`
+      : `Remove the ${prov} credential of account ${folder || "main"} (opencode auth logout)?`;
+    if (!confirm(msg)) return;
+    loggingOut = accountId || prov;
+    try {
+      await apiLoginTTYLogout(base, type, name, prov, folder);
+      await refresh();
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Logout failed");
+    } finally {
+      loggingOut = "";
+    }
+  }
+
+  async function saveAPIKey(remove = false) {
+    if (!apiKeyProvider) return;
+    apiKeyBusy = true;
+    try {
+      await apiSetAPIKey(base, type, name, apiKeyProvider, remove ? "" : apiKeyValue);
+      apiKeyValue = "";
+      await refresh();
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Failed to save API key");
+    } finally {
+      apiKeyBusy = false;
+    }
   }
 
   function barColor(pct: number): string {
@@ -131,11 +203,14 @@
   let accountRows = $derived.by(() => {
     if (!status) return [] as { label: string; value: string }[];
     const a = status.account;
+    // omp/opencode set authMethod to the pool provider id (openai-codex,
+    // anthropic…); the other types are single-provider, so the type is it.
+    const provider = type === "omp" || type === "opencode" ? a.authMethod : type;
     return [
       { label: "Auth method", value: a.authMethod },
       { label: "Email", value: a.email },
       { label: "Organization", value: a.org },
-      { label: "Plan", value: prettyPlan(a.plan) },
+      { label: "Plan", value: prettyPlan(a.plan, provider) },
     ].filter((r) => r.value !== "");
   });
 </script>
@@ -194,7 +269,9 @@
     {#if loading}
       <span class="text-xs text-black-700 dark:text-black-600">Checking…</span>
     {:else if status}
-      {#if connected}
+      {#if status.account.unknown}
+        <span data-testid="panel-checking" class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-semibold text-black-700 dark:text-black-500">Checking login…</span>
+      {:else if connected}
         <span class="rounded bg-pos-100 dark:bg-pos-400/20 px-2 py-0.5 text-xs font-semibold text-pos-400">Connected</span>
         {#if status.account.email}
           <span class="hidden sm:inline min-w-0 truncate font-mono text-xs text-black-800 dark:text-black-600">{status.account.email}</span>
@@ -228,21 +305,132 @@
            The connect badge lives in the summary row, not repeated here. -->
       <div class="space-y-2">
         <p class="text-[11px] font-semibold tracking-wide text-black-700 dark:text-black-600">ACCOUNT</p>
+        {#if sharedFrom}
+          <p data-testid="panel-shared-login" class="rounded-lg bg-white-200 dark:bg-navy-800 px-3 py-2 text-[11px] text-black-900 dark:text-white-100 break-words">
+            Uses the login of <a href={`${base}/${type}/${encodeURIComponent(sharedFrom)}`} data-testid="panel-shared-login-owner" class="font-mono text-link-400 hover:underline">{sharedFrom}</a> — log in, log out and add accounts there.
+          </p>
+          {#if type === "opencode"}
+            <p data-testid="panel-shared-login-race" class="rounded-lg border border-cau-400 bg-cau-100 dark:bg-cau-400/20 px-3 py-2 text-[11px] text-black-900 dark:text-white-100">Instances sharing a ChatGPT login can occasionally hit a token-refresh race when turns run on both at once; the turn that loses fails and can be retried.</p>
+          {/if}
+        {/if}
         {#each accountRows as row (row.label)}
           <div class="flex items-baseline justify-between gap-4 text-xs">
             <span class="shrink-0 text-black-800 dark:text-black-600">{row.label}</span>
             <span class="min-w-0 truncate text-right font-medium text-black-900 dark:text-white-100">{row.value}</span>
           </div>
         {/each}
-        {#if status.account.connected && status.account.expiresAt}
+        {#if status.account.connected && validTime(status.account.expiresAt)}
           <p class="text-[11px] text-black-700 dark:text-black-600">Token expires {fmtExpiry(status.account.expiresAt)}</p>
+        {/if}
+        {#if status.accountStore}
+          <div class="flex items-baseline justify-between gap-4 text-xs">
+            <span class="shrink-0 text-black-800 dark:text-black-600">Account store</span>
+            <span data-testid="panel-account-store" class="min-w-0 truncate text-right font-mono text-black-900 dark:text-white-100">{status.accountStore}</span>
+          </div>
+          {#if type === "omp"}
+            <p data-testid="panel-multi-account-note" class="text-[11px] text-black-700 dark:text-black-600">One instance can hold several accounts: omp rotates to the next one automatically when an account hits its usage limit. Separate instances still work if you want accounts kept apart.</p>
+          {:else}
+            <p data-testid="panel-multi-provider-note" class="text-[11px] text-black-700 dark:text-black-600">One instance can hold many providers, one login each. For two accounts of the same provider, use "Second account of a provider" (or a separate instance).</p>
+          {/if}
         {/if}
         {#if !status.supported}
           <p class="text-[11px] text-black-700 dark:text-black-600">Reconnect via terminal is not available for this provider type yet.</p>
         {/if}
       </div>
 
+      {#if sharedFrom}
+        <!-- A sharer's accounts are the owner's; managed on the owner. -->
+      {:else}
+      {#if (status.accounts ?? []).length > 0}
+        <AccountList
+          accounts={status.accounts ?? []}
+          removeLabel={type === "omp" ? "Log out provider" : "Remove"}
+          removing={loggingOut}
+          canAdd={status.supported && status.session?.state !== "running"}
+          adding={starting}
+          onAdd={() => void reconnect()}
+          onRemove={(prov, id) => void logoutProvider(prov, id)}
+          perAccount={type === "opencode"}
+        >
+          {#snippet note()}
+            {#if type === "omp"}
+              "Add another account" runs the login below again into this same profile. omp has no single-account removal outside its own TUI, so logout here is per provider.
+            {:else}
+              One instance can hold many providers (one login each). "Add another account" logs in to another provider — pick it below, or use an API key. "Second account of a provider" logs in to a new data folder of this instance; the model picker then offers Auto (wick rotates on usage limits) or that account.
+            {/if}
+          {/snippet}
+        </AccountList>
+        {#if type === "opencode" && status.supported && status.session?.state !== "running"}
+          <button
+            type="button"
+            data-testid="panel-add-account-folder"
+            disabled={starting}
+            onclick={() => void reconnect("new")}
+            class="self-start rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs text-black-900 dark:text-white-100 hover:border-green-500 disabled:opacity-50"
+          >Second account of a provider</button>
+        {/if}
+      {/if}
+
+      {#if status.supported && (status.loginChoices ?? []).length > 0}
+        <div class="space-y-2" data-testid="panel-login-choice">
+          <label for="login-choice-{type}-{name}" class="block text-[11px] font-semibold tracking-wide text-black-700 dark:text-black-600">LOG IN WITH</label>
+          <Select
+            id="login-choice-{type}-{name}"
+            value={loginChoice}
+            searchable
+            options={status.loginChoices.map((c) => ({ label: c.label, value: c.id, ...(c.warning ? { badge: "policy" } : c.beta ? { badge: "beta" } : {}) }))}
+            onChange={(v) => { loginChoice = v; }}
+          />
+          {#if choice?.warning}
+            <p data-testid="panel-login-warning" class="rounded-lg border border-cau-400 bg-cau-100 dark:bg-cau-400/20 px-3 py-2 text-[11px] text-black-900 dark:text-white-100">{choice.warning}</p>
+          {/if}
+          {#if status.loginNote}
+            <p class="text-[11px] text-black-700 dark:text-black-600">{status.loginNote}</p>
+          {/if}
+          <p class="text-[11px] text-black-700 dark:text-black-600">Browser flows redirect to localhost, which this host never receives: when the page fails to load, copy its full URL from the address bar and paste it into the login terminal.</p>
+        </div>
+      {/if}
+
+      {#if (status.apiKeys ?? []).length > 0}
+        <div class="space-y-2" data-testid="panel-api-key">
+          <label for="api-key-provider-{type}-{name}" class="block text-[11px] font-semibold tracking-wide text-black-700 dark:text-black-600">OR USE AN API KEY</label>
+          <Select
+            id="api-key-provider-{type}-{name}"
+            value={apiKeyProvider}
+            searchable
+            placeholder="Pick a provider…"
+            options={(status.apiKeys ?? []).map((k) => ({ label: k.label, value: k.id, description: k.env, ...(k.set ? { badge: "key set" } : {}) }))}
+            onChange={(v) => { apiKeyProvider = v; apiKeyValue = ""; }}
+          />
+          {#if apiKeyChoice}
+            <div class="flex items-center gap-2">
+              <input
+                type="password"
+                autocomplete="off"
+                data-testid="panel-api-key-input"
+                placeholder={apiKeyChoice.set ? "Key set — paste a new one to replace" : `Paste ${apiKeyChoice.env}`}
+                bind:value={apiKeyValue}
+                class="min-w-0 flex-1 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 font-mono text-xs text-black-900 dark:text-white-100"
+              />
+              <Button variant="primary" testid="panel-api-key-save" disabled={apiKeyBusy || apiKeyValue.trim() === ""} onclick={() => void saveAPIKey()}>Save</Button>
+              {#if apiKeyChoice.set}
+                <Button variant="secondary" testid="panel-api-key-remove" disabled={apiKeyBusy} onclick={() => void saveAPIKey(true)}>Remove</Button>
+              {/if}
+            </div>
+            <p class="text-[11px] text-black-700 dark:text-black-600">Saved as the instance env var <span class="font-mono">{apiKeyChoice.env}</span> (masked like every other secret env); live models refresh after saving.</p>
+          {/if}
+          {#if (status.apiKeys ?? []).some((k) => k.set)}
+            <p data-testid="panel-api-keys-set" class="text-[11px] text-black-700 dark:text-black-600">Keys set: {(status.apiKeys ?? []).filter((k) => k.set).map((k) => k.label).join(", ")}</p>
+          {/if}
+        </div>
+      {/if}
+
       <!-- USAGE — one block per window: name + %, bar, resets-in -->
+      {/if}
+
+      {#if usage && !usage.supported && type === "opencode"}
+        <p class="text-[11px] text-black-700 dark:text-black-600">Usage not available — opencode has no usage command.</p>
+      {/if}
       {#if usage?.supported}
         {#if usage.windows.length > 0}
           <div class="space-y-3 pt-1">

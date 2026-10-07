@@ -1,8 +1,11 @@
 <script lang="ts">
   import { ToastHost, ConfirmDialog } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
-  import { fetchOverview, killSession, dequeueSession } from "$lib/api.js";
-  import type { QueuedEntry, ActiveEntry, OverviewStats } from "$lib/types.js";
+  import { fetchOverview, fetchTeam, killSession, dequeueSession } from "$lib/api.js";
+  import { explainQueue, waitText } from "$lib/queue.js";
+  import { followOverview } from "$lib/liveOverview.js";
+  import type { QueuedEntry, ActiveEntry, OverviewStats, TeamResponse } from "$lib/types.js";
+  import { AgentAvatar } from "@wick-fe/common-avatar";
 
   const base: string = (document.getElementById("app")?.dataset.base ?? "").replace(/\/$/, "");
 
@@ -11,6 +14,22 @@
   let stats = $state<OverviewStats>({ active: 0, pool_max: 0, queue_len: 0 });
   let queueSearch = $state("");
   let selected = $state<Set<string>>(new Set());
+
+  /* Team card. Loaded once: the roster changes in the Team app, not here.
+     null = still loading or failed — the card then shows only its button. */
+  let team = $state<TeamResponse | null>(null);
+  const TEAM_PEEK = 5;
+  const teamCaptain = $derived(
+    team ? (team.agents.find((a) => a.id === team?.captain_id) ?? team.agents.find((a) => a.is_captain)) : undefined,
+  );
+
+  $effect(() => {
+    fetchTeam(base)
+      .then((r) => (team = r))
+      .catch(() => {
+        /* silent — the card still links to the Team app */
+      });
+  });
 
   let confirmOpen = $state(false);
   let confirmTitle = $state("");
@@ -22,8 +41,10 @@
   }
 
   function fmtWait(ms: number): string {
-    return `waiting ${Math.floor(ms / 1000)}s`;
+    return `waiting ${waitText(ms)}`;
   }
+
+  const queueExplain = $derived(explainQueue(stats.queue_reason, stats.active, stats.pool_max));
 
   const filteredQueue = $derived(
     queueSearch.trim() === ""
@@ -121,28 +142,40 @@
     }
   }
 
+  /* A queued row's wait ages on a local clock between fetches — the data is
+     refetched only when the pool signals a change. */
+  let fetchedAt = $state(Date.now());
+  let clock = $state(Date.now());
+  $effect(() => {
+    const t = setInterval(() => (clock = Date.now()), 1000);
+    return () => clearInterval(t);
+  });
+
+  /* Refreshed by the pool signal on the shared stream, not a 3 s poll
+     (liveOverview.ts). */
   $effect(() => {
     let alive = true;
 
-    async function poll(): Promise<void> {
+    async function load(): Promise<void> {
       try {
         const r = await fetchOverview(base);
         if (!alive) return;
         queued = r.queued;
+        fetchedAt = Date.now();
         activeSessions = r.active;
         stats = r.stats;
       } catch {
-        /* silent — stale data is acceptable during polling */
+        /* silent — stale data is acceptable until the next signal */
       }
     }
 
-    void poll();
-    const timer = setInterval(() => void poll(), 3000);
+    const stop = followOverview(base, () => void load());
     return () => {
       alive = false;
-      clearInterval(timer);
+      stop();
     };
   });
+
 </script>
 
 <div class="min-h-screen p-6 space-y-6">
@@ -175,33 +208,79 @@
     </div>
   </div>
 
+  <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+    <div class="flex items-start justify-between gap-4 border-b border-white-300 dark:border-navy-600 px-5 py-3">
+      <div class="min-w-0">
+        <h2 class="flex items-center gap-2 text-sm font-semibold text-black-900 dark:text-white-100">
+          Team
+          <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold leading-none tracking-wide bg-green-500 text-white-100">NEW</span>
+        </h2>
+        <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Agents with their own persona, avatar and access. Opens as a full-screen app.</p>
+      </div>
+      <a
+        href={`${base}/team`}
+        class="shrink-0 rounded-lg bg-green-500 px-3 py-2 text-xs font-medium text-white-100 hover:bg-green-600 transition-colors"
+      >Open Team →</a>
+    </div>
+    {#if team && team.agents.length > 0}
+      <div class="flex flex-wrap items-center gap-x-6 gap-y-3 px-5 py-4">
+        <div class="flex items-center gap-4">
+          {#each team.agents.slice(0, TEAM_PEEK) as a (a.id)}
+            <a href={`${base}/team/${a.handle}`} class="flex w-14 flex-col items-center gap-1 hover:opacity-80" title={a.tagline ? `@${a.handle} · ${a.tagline}` : `@${a.handle}`}>
+              <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={36} asleep={a.disabled} still />
+              <span class="w-full truncate text-center text-[11px] text-black-700 dark:text-black-600">{a.name}</span>
+              {#if a.tagline}<span class="w-full truncate text-center text-[10px] text-black-600 dark:text-black-700">{a.tagline}</span>{/if}
+            </a>
+          {/each}
+          {#if team.agents.length > TEAM_PEEK}
+            <span class="text-xs text-black-700 dark:text-black-600">+{team.agents.length - TEAM_PEEK}</span>
+          {/if}
+        </div>
+        <div class="ml-auto text-right text-xs text-black-700 dark:text-black-600">
+          <p class="text-2xl font-bold text-black-900 dark:text-white-100">{team.agents.length}</p>
+          <p>agent{#if teamCaptain} · <span class="font-semibold text-green-600 dark:text-green-400">★ Captain</span> {teamCaptain.name}{#if teamCaptain.tagline}, {teamCaptain.tagline}{/if}{/if}</p>
+        </div>
+      </div>
+    {/if}
+  </div>
+
   {#if queued.length > 0}
-    <div class="rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 shadow-sm overflow-visible">
-      <div class="border-b border-amber-300 dark:border-amber-700 px-5 py-3">
-        <div class="flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <h2 class="text-sm font-semibold text-amber-800 dark:text-amber-300">Queue</h2>
-            <p class="text-xs text-amber-700 dark:text-amber-400 mt-0.5">Sessions waiting for a slot. Kill to release — killed entries won't execute.</p>
+    <!-- Neutral card: waiting is a state, not an error. Red is kept for the
+         Kill actions only. The headline says WHY sessions wait, read from
+         the pool / Resource Guard state the server reports. -->
+    <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-visible" data-testid="queue-card">
+      <div class="border-b border-white-300 dark:border-navy-600 px-5 py-3">
+        <div class="flex items-start justify-between gap-3 flex-wrap">
+          <div class="min-w-0">
+            <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Queue <span class="ml-1 rounded-full bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 text-[11px] font-medium text-black-800 dark:text-black-600">{queued.length}</span></h2>
+            <div class="mt-2 flex items-start gap-2 rounded-lg bg-white-200 dark:bg-navy-800 px-3 py-2" data-testid="queue-reason">
+              <svg viewBox="0 0 16 16" class="mt-0.5 h-4 w-4 shrink-0 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M8 4.5V8l2.5 1.5" stroke-linecap="round"></path></svg>
+              <div class="min-w-0 text-xs">
+                <p class="font-medium text-black-900 dark:text-white-100">{queueExplain.title}{#if queueExplain.since}<span class="font-normal text-black-700 dark:text-black-600">{" · "}{queueExplain.since}</span>{/if}</p>
+                <p class="mt-0.5 text-black-700 dark:text-black-600">{queueExplain.detail} {queueExplain.next}</p>
+              </div>
+            </div>
           </div>
-          <button
-            type="button"
-            disabled={selected.size === 0}
-            onclick={killSelected}
-            class="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-red-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >Kill selected ({selected.size})</button>
+          {#if selected.size > 0}
+            <button
+              type="button"
+              onclick={killSelected}
+              class="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-red-700 transition-colors"
+            >Kill selected ({selected.size})</button>
+          {/if}
         </div>
         <div class="mt-3 flex items-center gap-3">
-          <label class="flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300 cursor-pointer shrink-0">
+          <label class="flex items-center gap-2 text-xs text-black-800 dark:text-black-600 cursor-pointer shrink-0">
             <input
               type="checkbox"
               checked={allChecked}
               onchange={toggleAll}
-              class="h-3.5 w-3.5 accent-red-600 rounded cursor-pointer"
+              class="h-3.5 w-3.5 rounded cursor-pointer"
             />
             Select all
           </label>
           <div class="relative flex-1 min-w-0">
-            <svg viewBox="0 0 16 16" class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-amber-600 dark:text-amber-500 pointer-events-none" fill="none" stroke="currentColor" stroke-width="1.5">
+            <svg viewBox="0 0 16 16" class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-black-600 dark:text-black-700 pointer-events-none" fill="none" stroke="currentColor" stroke-width="1.5">
               <circle cx="6.5" cy="6.5" r="4.5"></circle>
               <path d="M10.5 10.5l3 3" stroke-linecap="round"></path>
             </svg>
@@ -209,19 +288,19 @@
               type="text"
               bind:value={queueSearch}
               placeholder="Filter queue by chat, project, or id..."
-              class="w-full rounded-md border border-amber-300 dark:border-amber-700 bg-white-100 dark:bg-navy-800 pl-8 pr-3 py-1.5 text-xs text-black-900 dark:text-white-100 placeholder-amber-600/70 dark:placeholder-amber-500/60 focus:border-amber-500 focus:outline-none"
+              class="w-full rounded-md border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 pl-8 pr-3 py-1.5 text-xs text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:outline-none"
             />
           </div>
         </div>
       </div>
-      <ul class="divide-y divide-amber-200 dark:divide-amber-800 text-sm">
+      <ul class="divide-y divide-white-300 dark:divide-navy-600 text-sm">
         {#each filteredQueue as q (q.session_id)}
           <li class="group flex items-center gap-3 px-5 py-2.5">
             <input
               type="checkbox"
               checked={selected.has(q.session_id)}
               onchange={() => toggleOne(q.session_id)}
-              class="h-3.5 w-3.5 accent-red-600 rounded cursor-pointer shrink-0"
+              class="h-3.5 w-3.5 rounded cursor-pointer shrink-0"
             />
             <a href={`${base}/sessions/${q.session_id}`} class="min-w-0 flex-1 hover:underline">
               {#if q.label}
@@ -229,20 +308,22 @@
               {:else}
                 <span class="block truncate font-mono text-xs text-black-900 dark:text-white-100">{shortID(q.session_id)}</span>
               {/if}
-              <span class="block text-[11px] text-amber-700 dark:text-amber-400">
-                {#if q.project}{q.project} · {/if}{fmtWait(q.waiting_ms)}
+              <span class="block text-[11px] text-black-700 dark:text-black-600">
+                {#if q.project}{q.project}{" · "}{/if}{fmtWait(q.waiting_ms + Math.max(0, clock - fetchedAt))}
               </span>
             </a>
             <button
               type="button"
               onclick={() => confirmDequeue(q.session_id)}
-              class="shrink-0 rounded-md border border-red-300 dark:border-red-800 px-2 py-0.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+              title="Kill this queue entry"
+              aria-label="Kill queue entry"
+              class="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-black-600 dark:text-black-700 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
             >Kill</button>
           </li>
         {/each}
       </ul>
       {#if filteredQueue.length === 0}
-        <p class="px-5 py-4 text-center text-xs text-amber-700 dark:text-amber-400">No queued sessions match your filter.</p>
+        <p class="px-5 py-4 text-center text-xs text-black-700 dark:text-black-600">No queued sessions match your filter.</p>
       {/if}
     </div>
   {/if}

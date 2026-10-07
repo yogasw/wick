@@ -8,6 +8,7 @@ vi.mock("../../router.js", () => ({
 
 import ProjectLanding from "../ProjectLanding.svelte";
 
+
 const PROJECT: ProjectOption = { id: "proj-42", name: "Acme API", path: "/managed/path", managed: true, pinned: false };
 
 const PROVIDER: ProviderOption = { type: "anthropic", name: "Claude Sonnet", version: "claude-sonnet-4" };
@@ -37,39 +38,59 @@ describe("ProjectLanding — presentational rendering", () => {
     onSelectSession: vi.fn(),
   };
 
-  test("renders project name in the top bar", () => {
+  test("the project name still reaches the page, via the composer's context line", () => {
     render(ProjectLanding, { props: baseProps });
-    // The name shows in the top bar and again in the composer's context
-    // line, so any-of is the right assertion.
     expect(screen.getAllByText("Acme API").length).toBeGreaterThan(0);
   });
 
-  test("renders chat count derived from sessions length", () => {
-    render(ProjectLanding, { props: baseProps });
-    expect(screen.getByText(/3 chats/)).toBeDefined();
-  });
+  /* The project's identity bar is gone — a back-link, the name, the chat
+     count and two buttons, none of which a person looking at their own board
+     needed spelled out, all of it costing a row of height. What survived are
+     the ACTIONS, folded into one "⋯" that rides in the toolbar. */
+  async function openProjectMenu() {
+    await fireEvent.click(screen.getByTestId("project-menu"));
+  }
 
-  test("shows 'managed' when project.managed is true", () => {
+  test("chat count and managed/custom live in the menu, not a bar of their own", async () => {
     render(ProjectLanding, { props: baseProps });
+    expect(screen.queryByText(/3 chats/)).toBeNull();
+    await openProjectMenu();
     expect(screen.getByText(/3 chats · managed/)).toBeDefined();
   });
 
-  test("shows 'custom' when project.managed is false", () => {
+  test("shows 'custom' when project.managed is false", async () => {
     const customProject = { ...PROJECT, managed: false };
     render(ProjectLanding, { props: { ...baseProps, project: customProject } });
+    await openProjectMenu();
     expect(screen.getByText(/3 chats · custom/)).toBeDefined();
   });
 
-  test("renders a Pin as default button", () => {
-    render(ProjectLanding, { props: baseProps });
-    // The button label is compact ("Pin"); the full wording is its tooltip.
-    expect(screen.getByTitle(/pin as default/i)).toBeDefined();
+  test("the menu pins the project", async () => {
+    const onPin = vi.fn();
+    render(ProjectLanding, { props: { ...baseProps, onPin } });
+    await openProjectMenu();
+    await fireEvent.click(screen.getByTestId("project-menu-pin"));
+    expect(onPin).toHaveBeenCalled();
   });
 
-  test("renders a Settings link pointing to the project settings page", () => {
+  test("the menu links to the project settings page", async () => {
     const { container } = render(ProjectLanding, { props: baseProps });
-    const link = container.querySelector(`a[href='/tools/agents/projects/proj-42']`);
-    expect(link).not.toBeNull();
+    expect(container.querySelector(`a[href='/tools/agents/projects/proj-42']`)).toBeNull();
+    await openProjectMenu();
+    expect(container.querySelector(`a[href='/tools/agents/projects/proj-42']`)).not.toBeNull();
+  });
+
+  test("the menu's last item opens the shared delete dialog", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ id: "proj-42", name: "Acme API", chats: 3, protected: false }), { status: 200 })),
+    );
+    render(ProjectLanding, { props: baseProps });
+    await openProjectMenu();
+    await fireEvent.click(screen.getByTestId("project-menu-delete"));
+    expect(await screen.findByText("Delete project Acme API?")).toBeDefined();
+    expect(screen.getByLabelText("Project name")).toBeDefined();
+    vi.unstubAllGlobals();
   });
 
   test("renders a session list item for each session", () => {
@@ -79,8 +100,9 @@ describe("ProjectLanding — presentational rendering", () => {
     expect(screen.getByText("Chat s3")).toBeDefined();
   });
 
-  test("shows 0 chats when sessions array is empty", () => {
+  test("shows 0 chats when sessions array is empty", async () => {
     render(ProjectLanding, { props: { ...baseProps, sessions: [] } });
+    await openProjectMenu();
     expect(screen.getByText(/0 chats/)).toBeDefined();
   });
 
@@ -94,10 +116,15 @@ describe("ProjectLanding — presentational rendering", () => {
     expect(screen.getByRole("button", { name: /^add$/i })).toBeDefined();
   });
 
-  test("renders an 'All chats' back-link pointing to base/sessions", () => {
+  // Leaving is one of the menu's actions rather than a permanent link: it is
+  // the rarest of the three, and a menu is a fine place for "get me out".
+  test("the menu holds the 'All chats' way back", async () => {
     render(ProjectLanding, { props: baseProps });
-    const link = screen.getByRole("link", { name: /all chats/i });
-    expect(link).toBeDefined();
+    expect(screen.queryByRole("link", { name: /all chats/i })).toBeNull();
+    await openProjectMenu();
+    // Inside a menu the anchor is a menuitem, which is what a screen reader
+    // announces — so that is what the test asks for.
+    const link = screen.getByRole("menuitem", { name: /all chats/i });
     expect(link.getAttribute("href")).toBe("/tools/agents/sessions");
   });
 });

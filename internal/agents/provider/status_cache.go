@@ -2,6 +2,9 @@ package provider
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -160,8 +163,9 @@ func LoadCached(ctx context.Context) ([]Status, error) {
 			continue
 		}
 		out[i] = statusFromPersisted(ins, ps)
-		versionAt, _ := time.Parse(time.RFC3339Nano, ps.VersionAt)
-		if auto && now.Sub(versionAt) > VersionRefreshInterval {
+		// Re-probe only when the binary changed (fingerprint), never on
+		// age alone: an omp/opencode probe is a full bun process.
+		if auto && probeNeedsRefresh(ins, ps, now) {
 			go backgroundRescan(ins.Type, ins.Name)
 		}
 	}
@@ -187,14 +191,24 @@ func backgroundRescan(t Type, name string) {
 
 func persistFromStatus(t Type, name string, st Status) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	fp := ""
+	if st.PathFound {
+		fp = BinaryFingerprint(st.Path)
+	}
+	// A different binary may list different models: drop the cached list
+	// (the next read harvests again; nothing is spawned for it).
+	if prev, ok := loadAll()[cacheKey(t, name)]; ok && prev.Fingerprint != "" && prev.Fingerprint != fp {
+		InvalidateCLIModels(st.Instance)
+	}
 	saveOne(t, name, userconfig.ProviderStatus{
-		Path:       st.Path,
-		PathFound:  st.PathFound,
-		Version:    st.Version,
-		VersionErr: st.VersionErr,
-		ScannedAt:  now,
-		VersionAt:  now,
-		Hooks:      hooksToPersisted(st.Hooks),
+		Path:        st.Path,
+		PathFound:   st.PathFound,
+		Version:     st.Version,
+		VersionErr:  st.VersionErr,
+		ScannedAt:   now,
+		VersionAt:   now,
+		Fingerprint: fp,
+		Hooks:       hooksToPersisted(st.Hooks),
 	})
 }
 
@@ -285,4 +299,99 @@ func RescanAll(ctx context.Context) []Status {
 	wg.Wait()
 	log.Info().Int("count", len(out)).Msg("agents.rescan: all")
 	return out
+}
+
+// RescanStale is the boot-time prime: like RescanAll, but an instance
+// whose persisted probe is still fresh — a version probed within
+// VersionRefreshInterval, of the binary that still resolves at the same
+// path and was not replaced since — is served from the cache instead of
+// re-spawning its CLI. Every boot re-probing every instance in parallel
+// started one full bun process per omp/opencode instance at once.
+func RescanStale(ctx context.Context) []Status {
+	all, err := Load()
+	if err != nil {
+		return nil
+	}
+	persisted := loadAll()
+	out := make([]Status, len(all))
+	var wg sync.WaitGroup
+	skipped := 0
+	for i := range all {
+		ins := all[i]
+		if ps, ok := persisted[cacheKey(ins.Type, ins.Name)]; ok && probeStillFresh(ins, ps, time.Now()) {
+			st := statusFromPersisted(ins, ps)
+			probeCacheMu.Lock()
+			probeCache[probeCacheKey(ins.Type, ins.Name)] = probeCacheEntry{status: st, at: time.Now()}
+			probeCacheMu.Unlock()
+			out[i] = st
+			skipped++
+			continue
+		}
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			st := Probe(ctx, all[i])
+			persistFromStatus(all[i].Type, all[i].Name, st)
+			probeCacheMu.Lock()
+			probeCache[probeCacheKey(all[i].Type, all[i].Name)] = probeCacheEntry{status: st, at: time.Now()}
+			probeCacheMu.Unlock()
+			out[i] = st
+		}()
+	}
+	wg.Wait()
+	log.Info().Int("count", len(out)).Int("from_cache", skipped).Msg("agents.rescan: boot")
+	return out
+}
+
+// probeStillFresh: the persisted probe still describes the binary that
+// resolves now (see probeNeedsRefresh), with a version read from it.
+func probeStillFresh(ins Instance, ps userconfig.ProviderStatus, now time.Time) bool {
+	if !ps.PathFound || ps.Version == "" || ps.VersionErr != "" || ins.Type.InProcess() {
+		return false
+	}
+	return !probeNeedsRefresh(ins, ps, now)
+}
+
+// probeNeedsRefresh reports whether the persisted probe no longer
+// describes the binary: it resolves elsewhere now, or its fingerprint
+// (resolved path, size, mtime) changed — the binary was updated. An entry
+// written before fingerprints falls back to the old rule (older than
+// VersionRefreshInterval, or the file modified after the probe). Age
+// alone never re-probes a fingerprinted entry, and neither does a failed
+// probe of an unchanged binary: that waits for an explicit Rescan.
+func probeNeedsRefresh(ins Instance, ps userconfig.ProviderStatus, now time.Time) bool {
+	if ins.Type.InProcess() {
+		return false
+	}
+	path, source := ResolveBinarySource(ins)
+	if source == BinSourceMiss {
+		return ps.PathFound // it vanished
+	}
+	if path != ps.Path || !ps.PathFound {
+		return true
+	}
+	if ps.Fingerprint != "" {
+		return BinaryFingerprint(path) != ps.Fingerprint
+	}
+	at, err := time.Parse(time.RFC3339Nano, ps.VersionAt)
+	if err != nil || now.Sub(at) >= VersionRefreshInterval {
+		return true
+	}
+	fi, err := os.Stat(path)
+	return err != nil || fi.ModTime().After(at)
+}
+
+// BinaryFingerprint identifies a binary file: its resolved path (symlinks
+// followed), size and mtime. "" when it cannot be read.
+func BinaryFingerprint(path string) string {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return ""
+	}
+	fi, err := os.Stat(real)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%s|%d|%d", real, fi.Size(), fi.ModTime().UnixNano())
 }

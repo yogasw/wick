@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -39,6 +40,25 @@ type LoginTTYStatusResponse struct {
 	DefaultTTLS int                 `json:"default_ttl_s"`
 	ExtendS     int                 `json:"extend_s"`
 	MaxTTLS     int                 `json:"max_ttl_s"`
+	// LoginChoices is the picker shown before Login for types whose login
+	// needs a provider choice (omp, opencode). Empty = no picker.
+	LoginChoices []logintty.LoginChoice `json:"login_choices,omitempty"`
+	// LoginNote is a caveat shown beside the picker (opencode: Claude
+	// subscriptions unsupported).
+	LoginNote string `json:"login_note,omitempty"`
+	// AccountStore names where this instance's single account lives (omp
+	// profile / opencode data dir), so the card can show it.
+	AccountStore string `json:"account_store,omitempty"`
+	// Accounts is the instance's credential pool (omp: several accounts
+	// per profile, rotated on usage limits). Empty for other types.
+	Accounts []logintty.PoolAccount `json:"accounts,omitempty"`
+	// APIKeys are the API-key login choices (omp/opencode), each marked
+	// set when the instance Env already carries its var.
+	APIKeys []logintty.APIKeyProvider `json:"api_keys,omitempty"`
+	// AuthFrom is the instance whose login this one uses (omp/opencode
+	// shared login); account and usage above are that owner's, and the
+	// card hides login / logout / add-account.
+	AuthFrom string `json:"auth_from,omitempty"`
 }
 
 func loginTTYSessionDTO(s *logintty.Session) *LoginTTYSessionDTO {
@@ -56,6 +76,25 @@ func loginTTYSessionDTO(s *logintty.Session) *LoginTTYSessionDTO {
 
 // findLoginInstance resolves the {type}/{name} path pair to an
 // instance, writing the 404 itself on miss.
+// authOwnerName is the owner of ins's shared login, "" when it has its own.
+func authOwnerName(ins provider.Instance) string {
+	if o, ok := provider.AuthOwner(ins); ok {
+		return o.Name
+	}
+	return ""
+}
+
+// refuseSharer answers 409 for a login write on an instance that uses
+// another's login: it is done on the owner.
+func refuseSharer(c *tool.Ctx, ins provider.Instance) bool {
+	owner := authOwnerName(ins)
+	if owner == "" {
+		return false
+	}
+	c.JSON(http.StatusConflict, map[string]string{"error": fmt.Sprintf("%s uses the login of %s — log in or out there", ins.Name, owner)})
+	return true
+}
+
 func findLoginInstance(c *tool.Ctx) (provider.Instance, bool) {
 	t := provider.Type(c.PathValue("type"))
 	name := c.PathValue("name")
@@ -83,13 +122,41 @@ func apiProviderLoginTTYStatus(c *tool.Ctx) {
 	}
 	_, supported := logintty.LoginCommand(ins.Type, nil)
 	c.JSON(http.StatusOK, LoginTTYStatusResponse{
-		Supported:   supported,
-		Account:     logintty.ReadAccount(ins.Type, ins.Env),
-		Session:     loginTTYSessionDTO(loginTTY.Get(ins.Type, ins.Name)),
-		DefaultTTLS: int(logintty.DefaultTTL.Seconds()),
-		ExtendS:     int(logintty.ExtendStep.Seconds()),
-		MaxTTLS:     int(logintty.MaxTTL.Seconds()),
+		Supported:    supported,
+		Account:      logintty.ReadAccount(ins.Type, provider.AccountEnv(ins)),
+		Session:      loginTTYSessionDTO(loginTTY.Get(ins.Type, ins.Name)),
+		DefaultTTLS:  int(logintty.DefaultTTL.Seconds()),
+		ExtendS:      int(logintty.ExtendStep.Seconds()),
+		MaxTTLS:      int(logintty.MaxTTL.Seconds()),
+		LoginChoices: logintty.LoginChoices(ins),
+		LoginNote:    logintty.LoginNote(ins.Type),
+		AccountStore: accountStoreLabel(ins),
+		Accounts:     statusAccounts(ins),
+		APIKeys:      logintty.APIKeyProviders(ins),
+		AuthFrom:     authOwnerName(ins),
 	})
+}
+
+// statusAccounts is the instance's account list for the Connection card.
+// omp rows carry their windows from the pool listing itself; opencode
+// rows get theirs from the shared usage cache (never blocking, never a
+// new request for an account already read).
+func statusAccounts(ins provider.Instance) []logintty.PoolAccount {
+	env := provider.AccountEnv(ins)
+	accts := logintty.ListAccounts(ins.Type, env)
+	if ins.Type != provider.TypeOpencode || len(accts) == 0 {
+		return accts
+	}
+	v := usageProbes.get(logintty.UsageIdentity(ins.Type, env), func() ([]logintty.UsageWindow, error) {
+		return logintty.ReadUsage(ins.Type, env)
+	}, logintty.CredentialsChangedAt(ins.Type, env))
+	if !v.Known || v.Err != nil {
+		return accts
+	}
+	for i := range accts {
+		accts[i].Usage, _ = logintty.AccountWindows(v.Windows, accts[i].ID)
+	}
+	return accts
 }
 
 // apiProviderLoginTTYUsage reports current rate-limit utilization for
@@ -119,9 +186,9 @@ func apiProviderLoginTTYUsage(c *tool.Ctx) {
 	ctx, cancel := context.WithTimeout(c.Context(), connectionsUsageTimeout)
 	defer cancel()
 
-	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, ins.Env), func() ([]logintty.UsageWindow, error) {
-		return logintty.ReadUsage(ins.Type, ins.Env)
-	}, logintty.CredentialsChangedAt(ins.Type, ins.Env))
+	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
+		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
+	}, logintty.CredentialsChangedAt(ins.Type, provider.AccountEnv(ins)))
 	body := map[string]any{"supported": true, "windows": []logintty.UsageWindow{}, "checking": v.Checking}
 	// Same provenance the list carries: this panel is looking at a
 	// SHARED, cached reading, so it says how old it is.
@@ -149,7 +216,7 @@ func apiProviderLoginTTYUsage(c *tool.Ctx) {
 		c.JSON(http.StatusOK, body)
 	default:
 		if v.Windows != nil {
-			body["windows"] = v.Windows
+			body["windows"] = logintty.Headline(v.Windows)
 		}
 		c.JSON(http.StatusOK, body)
 	}
@@ -183,8 +250,8 @@ func apiProviderLoginTTYUsageRefresh(c *tool.Ctx) {
 		c.JSON(http.StatusOK, map[string]any{"supported": false, "accepted": false})
 		return
 	}
-	accepted, wait := usageProbes.forceRefresh(logintty.UsageIdentity(ins.Type, ins.Env), func() ([]logintty.UsageWindow, error) {
-		return logintty.ReadUsage(ins.Type, ins.Env)
+	accepted, wait := usageProbes.forceRefresh(logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
+		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
 	})
 	body := map[string]any{"supported": true, "accepted": accepted, "checking": accepted}
 	if !accepted {
@@ -203,7 +270,7 @@ func apiProviderLoginTTYStart(c *tool.Ctx) {
 	if !ok {
 		return
 	}
-	if !requireProviderManage(c, ins.Type, ins.Name) {
+	if !requireProviderManage(c, ins.Type, ins.Name) || refuseSharer(c, ins) {
 		return
 	}
 	bin, found := provider.ResolveBinary(ins)
@@ -211,7 +278,24 @@ func apiProviderLoginTTYStart(c *tool.Ctx) {
 		c.JSON(http.StatusConflict, map[string]string{"error": "binary not found: " + bin})
 		return
 	}
-	s, err := loginTTY.Start(ins, bin)
+	// opencode keeps one credential per provider per data folder, so a
+	// second account of a provider logs in to its own folder:
+	// ?account=new creates <data dir>/accounts/aN, ?account=aN re-logs one.
+	if acct := strings.TrimSpace(c.Query("account")); acct != "" && ins.Type == provider.TypeOpencode {
+		var aerr error
+		if acct == "new" {
+			_, ins, aerr = provider.NewOpencodeAccount(ins)
+		} else {
+			ins, aerr = provider.WithOpencodeAccount(ins, acct)
+		}
+		if aerr != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": aerr.Error()})
+			return
+		}
+	}
+	// omp/opencode: which OAuth provider to log in to, picked in the UI.
+	// Validated against an allowlist inside logintty; never raw argv.
+	s, err := loginTTY.StartWith(ins, bin, strings.TrimSpace(c.Query("login_provider")))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -410,4 +494,110 @@ func headerHasToken(h http.Header, key, token string) bool {
 		}
 	}
 	return false
+}
+
+// accountStoreLabel is the omp profile or opencode data dir of ins, "" for
+// types whose account is not pinned by wick.
+func accountStoreLabel(ins provider.Instance) string {
+	switch ins.Type {
+	case provider.TypeOMP:
+		return "profile " + provider.OMPProfile(ins)
+	case provider.TypeOpencode:
+		if d, err := provider.OpencodeDataDir(ins); err == nil {
+			return d
+		}
+	}
+	return ""
+}
+
+// apiProviderCLIModels asks an omp/opencode instance's CLI for the models
+// its logged-in account can use (`omp models --json` / `opencode models`),
+// for the Model selection card (live list preview + Refresh). Read-only:
+// the live filter/default are saved as ordinary config keys.
+func apiProviderCLIModels(c *tool.Ctx) {
+	if notReady(c) || !requireApprovedUser(c) {
+		return
+	}
+	ins, ok := findLoginInstance(c)
+	if !ok {
+		return
+	}
+	if !requireProviderManage(c, ins.Type, ins.Name) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Context(), 60*time.Second)
+	defer cancel()
+	// Served from the per-instance cache (~10 min); ?refresh=1 re-execs.
+	// Refresh does NOT forget refusals: `omp models` lists the provider's
+	// catalog, not what this account may run, so a fresh list says nothing
+	// about a model_not_found. A refusal goes when the model next works
+	// (MarkModelWorked) or the operator re-checks it (…/cli-models/recheck).
+	refresh := c.Query("refresh") == "1"
+	seeds, fetchedAt, err := provider.CachedCLIModels(ctx, ins, refresh)
+	if err != nil && len(seeds) == 0 {
+		c.JSON(http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	type model struct {
+		ID          string `json:"id"`
+		Desc        string `json:"desc,omitempty"`
+		Unavailable bool   `json:"unavailable,omitempty"`
+		Reason      string `json:"reason,omitempty"`
+		Default     bool   `json:"default,omitempty"`
+	}
+	toDTO := func(ms []provider.LiveModel) []model {
+		out := make([]model, 0, len(ms))
+		for _, s := range ms {
+			out = append(out, model{ID: s.ID, Desc: s.Desc, Unavailable: s.Unavailable, Reason: s.Reason, Default: s.Default})
+		}
+		return out
+	}
+	// models = everything the CLI lists, refusals marked: the raw list the
+	// FE previews an unsaved filter over. The EFFECTIVE list (saved filter,
+	// chosen Default, refusals, the default a spawn runs) is not served
+	// here: the page reads it from the composer picker's own endpoint,
+	// GET /providers/options/{type}/{name}/models?all=1, as the wick
+	// provider page does for its live sets. hosted_allowed tells the FE
+	// whether opencode/… entries count.
+	resp := map[string]any{
+		"models":         toDTO(provider.MarkLiveModels(ins, seeds)),
+		"hosted_allowed": ins.Type != provider.TypeOpencode || provider.OpencodeHostedAllowed(ins),
+		"fetched_at":     fetchedAt.UTC().Format(time.RFC3339),
+	}
+	if fetchedAt.IsZero() {
+		resp["fetched_at"] = "" // nothing known yet: the UI says "click Refresh"
+	}
+	if _, src := provider.CLIModelsInfo(ins); src != "" {
+		resp["source"] = src
+	}
+	if err != nil {
+		// Refresh failed; the last good list is still served.
+		resp["error"] = err.Error()
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// apiProviderCLIModelRecheck is the operator's explicit re-check of one
+// refused model: the refusal is forgotten, so the next turn on it tries
+// again (a second model_not_found records it again). Body {"model": id}.
+func apiProviderCLIModelRecheck(c *tool.Ctx) {
+	if notReady(c) || !requireApprovedUser(c) {
+		return
+	}
+	ins, ok := findLoginInstance(c)
+	if !ok {
+		return
+	}
+	if !requireProviderManage(c, ins.Type, ins.Name) {
+		return
+	}
+	var body struct {
+		Model string `json:"model"`
+	}
+	if err := c.BindJSON(&body); err != nil || strings.TrimSpace(body.Model) == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "model is required"})
+		return
+	}
+	cleared := provider.ClearModelRefusal(ins, strings.TrimSpace(body.Model))
+	c.JSON(http.StatusOK, map[string]any{"cleared": cleared})
 }

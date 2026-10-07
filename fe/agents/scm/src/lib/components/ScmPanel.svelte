@@ -13,6 +13,9 @@
   import BranchBar from "$lib/components/BranchBar.svelte";
   import DiffModal from "$lib/components/DiffModal.svelte";
   import HistoryView from "$lib/components/HistoryView.svelte";
+  import FilesTab from "$lib/components/FilesTab.svelte";
+  import CompareModal from "$lib/components/CompareModal.svelte";
+  import type { ComparePair } from "$lib/compare-picker";
   import MonacoView from "$lib/components/MonacoView.svelte";
   import * as api from "$lib/api/scm";
   import { get } from "svelte/store";
@@ -33,13 +36,45 @@
   }: Props = $props();
 
   const VIEW_MODE_KEY = "wick.scm.viewMode";
+  // Which tab the panel opens on. Remembered globally (not per repo): it is
+  // a habit — "I work in Files" — and re-picking it on every repo switch
+  // would be the same annoyance the graph's ref memory was written to avoid.
+  const VIEW_TAB_KEY = "wick.scm.tab";
+
+  // Branch compare is deliberately NOT here: it needs two ref lists and a
+  // long file list at once, which no 320px dock can hold. It opens from the
+  // repo menu as a full-viewport overlay instead.
+  type TabView = "changes" | "history" | "files";
+  const TABS: { id: TabView; label: string }[] = [
+    { id: "changes", label: "Changes" },
+    { id: "history", label: "History" },
+    { id: "files", label: "Files" },
+  ];
+  function readTab(): TabView {
+    try {
+      const v = localStorage.getItem(VIEW_TAB_KEY);
+      if (TABS.some((t) => t.id === v)) return v as TabView;
+    } catch { /* ignore */ }
+    return "changes";
+  }
 
   let busy = $state(false);
   let noSession = $state(false);
   // compare holds the file to diff. commitSha set → diff a past commit;
   // otherwise staged picks the HEAD↔index vs index↔working sides.
   let compare = $state<{ file: FileChange; staged: boolean; commitSha?: string } | null>(null);
-  let view = $state<"changes" | "history">("changes");
+  let view = $state<TabView>(readTab());
+  // Branch compare overlay. Not a tab and not per-layout: it covers the
+  // viewport from either one, so one flag serves both.
+  let comparing = $state(false);
+  // The pair the graph asked for; unset when the overlay comes from the
+  // repo menu, which reopens the last pair instead.
+  let compareInit = $state<(ComparePair & { pickHead?: boolean }) | undefined>(undefined);
+
+  function openCompareWith(p: ComparePair & { pickHead?: boolean }) {
+    compareInit = p;
+    comparing = true;
+  }
   let viewMode = $state<"tree" | "list">(
     (typeof localStorage !== "undefined" && (localStorage.getItem(VIEW_MODE_KEY) as "tree" | "list")) || "tree",
   );
@@ -94,6 +129,10 @@
     if (first) compare = { file: first, staged: first.staged ?? false };
   });
 
+  function setView(v: TabView) {
+    view = v;
+    try { localStorage.setItem(VIEW_TAB_KEY, v); } catch { /* ignore */ }
+  }
   function setViewMode(m: "tree" | "list") {
     viewMode = m;
     try { localStorage.setItem(VIEW_MODE_KEY, m); } catch { /* ignore */ }
@@ -178,6 +217,21 @@
   }
 </script>
 
+<!-- One tab strip, rendered in both layouts: the dock and the full pane
+     showed different sets of views, so a tab opened in one vanished when the
+     panel was widened. -->
+{#snippet tabStrip()}
+  <div class="flex shrink-0 border-b border-white-300 dark:border-navy-600 text-[11px]">
+    {#each TABS as t (t.id)}
+      <button
+        type="button"
+        onclick={() => setView(t.id)}
+        class={"flex-1 px-2 py-2 font-medium transition-colors " + (view === t.id ? "text-green-600 dark:text-green-400 border-b-2 border-green-500" : "text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800")}
+      >{t.label}</button>
+    {/each}
+  </div>
+{/snippet}
+
 {#if mode === "sidebar"}
   <!-- Compact vertical dock: header → repo picker → commit → changes → branch -->
   <div class="flex h-full w-full flex-col bg-white-100 dark:bg-navy-700">
@@ -193,6 +247,7 @@
         <RepoMenu
           {viewMode}
           onToggleViewMode={() => setViewMode(viewMode === "tree" ? "list" : "tree")}
+          onCompare={() => { compareInit = undefined; comparing = true; }}
         />
         <!-- Pin only makes sense for the desktop push dock; on mobile the
              panel is a full-screen overlay, so hide the pin below lg. -->
@@ -228,19 +283,7 @@
     {/if}
 
     {#if $activeRepo}
-      <!-- Changes | History tabs -->
-      <div class="flex border-b border-white-300 dark:border-navy-600 text-xs">
-        <button
-          type="button"
-          onclick={() => (view = "changes")}
-          class={"flex-1 px-3 py-2 font-medium transition-colors " + (view === "changes" ? "text-green-600 dark:text-green-400 border-b-2 border-green-500" : "text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800")}
-        >Changes</button>
-        <button
-          type="button"
-          onclick={() => (view = "history")}
-          class={"flex-1 px-3 py-2 font-medium transition-colors " + (view === "history" ? "text-green-600 dark:text-green-400 border-b-2 border-green-500" : "text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800")}
-        >History</button>
-      </div>
+      {@render tabStrip()}
 
       {#if view === "changes"}
         <CommitBox stagedCount={staged.length} {busy} onCommit={(m) => withBusy(() => commit(m)).then(() => true)} />
@@ -264,8 +307,10 @@
             />
           {/if}
         </div>
+      {:else if view === "history"}
+        <HistoryView onOpenCommitFile={openCommitFile} onShowChanges={() => setView("changes")} onCompare={openCompareWith} />
       {:else}
-        <HistoryView onOpenCommitFile={openCommitFile} onShowChanges={() => (view = "changes")} />
+        <FilesTab mode="sidebar" />
       {/if}
 
       {#if $branch}
@@ -279,174 +324,199 @@
     <p class="text-center text-xs text-black-700 dark:text-black-600">Open this panel from a session page.</p>
   </div>
 {:else}
-  <!-- Full mode: slim file list + diff editor as primary surface -->
-  <div class="flex h-full w-full overflow-hidden">
+  <!-- Full mode: repo header → tab strip → (left column + editor) -->
+  <div class="flex h-full w-full flex-col overflow-hidden">
 
-    <!-- Left: file list (220px) -->
-    <aside class="flex w-[220px] shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
-
-      <!-- Header -->
-      <div class="flex items-center justify-between gap-1 px-3 py-2 border-b border-white-300 dark:border-navy-600">
-        <div class="flex items-center gap-1.5 min-w-0">
-          <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 text-green-500" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="4" r="1.5"/><circle cx="4" cy="12" r="1.5"/><circle cx="12" cy="5" r="1.5"/><path d="M4 5.5v5M5.5 4H9a2 2 0 012 2v0" stroke-linecap="round"/></svg>
-          {#if $repos.length > 1}
-            <select
-              value={$activeRepo}
-              onchange={(e) => selectRepo((e.target as HTMLSelectElement).value)}
-              class="min-w-0 flex-1 truncate bg-transparent text-[11px] font-medium text-black-900 dark:text-white-100 focus:outline-none cursor-pointer"
-            >
-              {#each $repos as r}<option value={r.rel}>{r.rel}</option>{/each}
-            </select>
-          {:else}
-            <span class="truncate text-[11px] font-semibold text-black-900 dark:text-white-100">
-              {$activeRepo || "Source Control"}
-            </span>
-          {/if}
-        </div>
+    <!-- Header. It used to sit inside the 220px column, which left the
+         full pane with no room for a tab strip and no repo picker at all
+         on the views that are not Changes — and the Files tree roots at
+         whatever that picker says. -->
+    <div class="flex items-center justify-between gap-1 px-3 py-2 border-b border-white-300 dark:border-navy-600">
+      <div class="flex items-center gap-1.5 min-w-0">
+        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 text-green-500" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="4" r="1.5"/><circle cx="4" cy="12" r="1.5"/><circle cx="12" cy="5" r="1.5"/><path d="M4 5.5v5M5.5 4H9a2 2 0 012 2v0" stroke-linecap="round"/></svg>
+        {#if $repos.length > 1}
+          <select
+            value={$activeRepo}
+            onchange={(e) => selectRepo((e.target as HTMLSelectElement).value)}
+            class="min-w-0 flex-1 truncate bg-transparent text-[11px] font-medium text-black-900 dark:text-white-100 focus:outline-none cursor-pointer"
+          >
+            {#each $repos as r}<option value={r.rel}>{r.rel}</option>{/each}
+          </select>
+        {:else}
+          <span class="truncate text-[11px] font-semibold text-black-900 dark:text-white-100">
+            {$activeRepo || "Source Control"}
+          </span>
+        {/if}
+      </div>
+      <div class="flex shrink-0 items-center gap-0.5">
         <button type="button" onclick={() => loadRepos()} title="Refresh" class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">
           <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 8a6 6 0 0110.5-4M14 8a6 6 0 01-10.5 4M11 2v3h3M5 14v-3H2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
+        <!-- The same repo menu the dock header carries. It used to live only
+             there, which left branch compare — and Fetch — unreachable once
+             the panel was widened. -->
+        <RepoMenu onCompare={() => { compareInit = undefined; comparing = true; }} />
       </div>
+    </div>
 
-      <!-- File list -->
-      <div class="flex-1 overflow-y-auto py-1">
-        {#if $loading && allFiles.length === 0}
-          <p class="px-3 py-3 text-[11px] text-black-600">Loading…</p>
-        {:else if allFiles.length === 0}
-          <p class="px-3 py-3 text-[11px] text-black-600">No changes.</p>
-        {:else}
-          {#if staged.length > 0}
-            <div class="px-2 pb-0.5 pt-2">
-              <span class="text-[9px] font-semibold uppercase tracking-wider text-black-600">Staged ({staged.length})</span>
-            </div>
-            {#each staged as c (c.path)}
-              {@const active = compare?.file.path === c.path && compare?.staged === true}
-              <button
-                type="button"
-                onclick={() => openCompare(c.path, true)}
-                class={"group flex w-full items-center gap-1.5 px-2 py-1 text-left transition-colors " + (active ? "bg-white-300 dark:bg-navy-600" : "hover:bg-white-200 dark:hover:bg-navy-800")}
-              >
-                <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-black-800 dark:text-black-500">{c.path.split("/").pop()}</span>
-                <span class="shrink-0 font-mono text-[9px] text-amber-600 dark:text-amber-400">{c.index}</span>
-              </button>
-            {/each}
-          {/if}
-          {#if unstaged.length > 0}
-            <div class="px-2 pb-0.5 pt-2">
-              <span class="text-[9px] font-semibold uppercase tracking-wider text-black-600">Changes ({unstaged.length})</span>
-            </div>
-            {#each unstaged as c (c.path)}
-              {@const active = compare?.file.path === c.path && compare?.staged === false}
-              <button
-                type="button"
-                onclick={() => openCompare(c.path, false)}
-                class={"group flex w-full items-center gap-1.5 px-2 py-1 text-left transition-colors " + (active ? "bg-white-300 dark:bg-navy-600" : "hover:bg-white-200 dark:hover:bg-navy-800")}
-              >
-                <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-black-800 dark:text-black-500">{c.path.split("/").pop()}</span>
-                <span class="shrink-0 font-mono text-[9px] text-green-600 dark:text-green-400">{c.work_tree}</span>
-              </button>
-            {/each}
-          {/if}
-        {/if}
-      </div>
+    {@render tabStrip()}
 
-      <!-- Commit box + branch -->
-      {#if $activeRepo}
-        <div class="border-t border-white-300 dark:border-navy-600">
-          <CommitBox stagedCount={staged.length} {busy} onCommit={(m) => withBusy(() => commit(m)).then(() => true)} />
-        </div>
-      {/if}
-      {#if $branch}<BranchBar branch={$branch} {busy} />{/if}
-    </aside>
-
-    <!-- Right: diff editor -->
-    <main class="flex min-w-0 flex-1 flex-col overflow-hidden bg-white-200 dark:bg-navy-800">
-      {#if compare && !compare.commitSha}
-        <!-- Working-tree diff with action buttons -->
-        <div class="flex h-full flex-col">
-          <div class="flex items-center gap-2 border-b border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5">
-            <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-black-900 dark:text-white-100">{compare.file.path}</span>
-            <!-- Save — appears only when user edits in the diff editor -->
-            {#if inlineDirtyBuffer !== null}
-              <button type="button" onclick={saveInline} disabled={busy} class="rounded bg-green-500 px-2 py-0.5 text-[11px] font-medium text-white-100 hover:bg-green-600 disabled:opacity-50">Save</button>
-              <button type="button" onclick={() => (inlineDirtyBuffer = null)} class="rounded border border-white-300 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-500 hover:bg-white-200 dark:hover:bg-navy-800">Revert edit</button>
-            {/if}
-            <!-- Discard (rollback) -->
-            <button
-              type="button"
-              title="Discard changes"
-              onclick={() => askDiscard([compare!.file.path], compare!.file.untracked ? [compare!.file.path] : [])}
-              class="inline-flex items-center gap-1 rounded border border-white-300 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-500 hover:border-red-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
-            >
-              <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 8a6 6 0 0110.5-4M11 2v3H8M14 8a6 6 0 01-10.5 4M5 14v-3h3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              Discard
-            </button>
-            <!-- Stage / Unstage -->
-            {#if compare.staged}
-              <button
-                type="button"
-                onclick={() => withBusy(() => unstagePaths([compare!.file.path]))}
-                disabled={busy}
-                class="inline-flex items-center gap-1 rounded border border-white-300 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-500 hover:border-amber-400 hover:text-amber-600 dark:hover:text-amber-400 transition-colors disabled:opacity-50"
-              >
-                <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M3 8h10" stroke-linecap="round"/></svg>
-                Unstage
-              </button>
-            {:else}
-              <button
-                type="button"
-                onclick={() => withBusy(() => stagePaths([compare!.file.path]))}
-                disabled={busy}
-                class="inline-flex items-center gap-1 rounded border border-white-300 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-500 hover:border-green-500 hover:text-green-600 dark:hover:text-green-400 transition-colors disabled:opacity-50"
-              >
-                <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 3v10M3 8h10" stroke-linecap="round"/></svg>
-                Stage
-              </button>
-            {/if}
-            <!-- Side-by-side toggle -->
-            <button
-              type="button"
-              title={diffSideBySide ? "Inline diff" : "Side-by-side diff"}
-              onclick={() => (diffSideBySide = !diffSideBySide)}
-              class={"inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] transition-colors " + (diffSideBySide ? "border-green-400 text-green-600 dark:text-green-400" : "border-white-300 dark:border-navy-600 text-black-600 hover:bg-white-200 dark:hover:bg-navy-800")}
-            >
-              <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v12M2 4h4M2 8h4M2 12h4M10 4h4M10 8h4M10 12h4" stroke-linecap="round"/></svg>
-            </button>
-          </div>
-          <div class="min-h-0 flex-1">
-            {#if inlineData}
-              <MonacoView
-                mode="diff"
-                original={inlineData.original}
-                modified={inlineDirtyBuffer ?? inlineData.modified}
-                language={inlineLang}
-                sideBySide={diffSideBySide}
-                onDirty={(v) => (inlineDirtyBuffer = v)}
-              />
-            {:else}
-              <div class="flex h-full items-center justify-center text-xs text-black-600">Loading…</div>
-            {/if}
-          </div>
-        </div>
-      {:else if compare && compare.commitSha}
-        <!-- Commit history diff — read-only, no action buttons -->
-        <div class="flex h-full flex-col">
-          <div class="flex items-center gap-2 border-b border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5">
-            <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-black-900 dark:text-white-100">{compare.file.path}</span>
-            <span class="shrink-0 font-mono text-[10px] text-black-600">at {compare.commitSha}</span>
-            <button type="button" onclick={() => (compare = null)} class="inline-flex h-6 w-6 items-center justify-center rounded text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">
-              <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"/></svg>
-            </button>
-          </div>
-          <div class="min-h-0 flex-1">
-            <MonacoView mode="diff" original={inlineData?.original ?? ""} modified={inlineData?.modified ?? ""} language={inlineLang} />
-          </div>
-        </div>
+    <div class="flex min-h-0 flex-1 overflow-hidden">
+      {#if view === "files"}
+        <FilesTab mode="full" />
       {:else}
-        <div class="flex h-full items-center justify-center text-xs text-black-600">No changes.</div>
+        <!-- Left: the changes list, or the graph. History needs more than
+             the 220px a filename column wants, so the column widens. -->
+        <aside class={"flex shrink-0 flex-col overflow-hidden border-r border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 " + (view === "history" ? "w-[420px]" : "w-[220px]")}>
+          {#if view === "changes"}
+            <!-- File list -->
+            <div class="flex-1 overflow-y-auto py-1">
+              {#if $loading && allFiles.length === 0}
+                <p class="px-3 py-3 text-[11px] text-black-600">Loading…</p>
+              {:else if allFiles.length === 0}
+                <p class="px-3 py-3 text-[11px] text-black-600">No changes.</p>
+              {:else}
+                {#if staged.length > 0}
+                  <div class="px-2 pb-0.5 pt-2">
+                    <span class="text-[9px] font-semibold uppercase tracking-wider text-black-600">Staged ({staged.length})</span>
+                  </div>
+                  {#each staged as c (c.path)}
+                    {@const active = compare?.file.path === c.path && compare?.staged === true}
+                    <button
+                      type="button"
+                      onclick={() => openCompare(c.path, true)}
+                      class={"group flex w-full items-center gap-1.5 px-2 py-1 text-left transition-colors " + (active ? "bg-white-300 dark:bg-navy-600" : "hover:bg-white-200 dark:hover:bg-navy-800")}
+                    >
+                      <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-black-800 dark:text-black-500">{c.path.split("/").pop()}</span>
+                      <span class="shrink-0 font-mono text-[9px] text-amber-600 dark:text-amber-400">{c.index}</span>
+                    </button>
+                  {/each}
+                {/if}
+                {#if unstaged.length > 0}
+                  <div class="px-2 pb-0.5 pt-2">
+                    <span class="text-[9px] font-semibold uppercase tracking-wider text-black-600">Changes ({unstaged.length})</span>
+                  </div>
+                  {#each unstaged as c (c.path)}
+                    {@const active = compare?.file.path === c.path && compare?.staged === false}
+                    <button
+                      type="button"
+                      onclick={() => openCompare(c.path, false)}
+                      class={"group flex w-full items-center gap-1.5 px-2 py-1 text-left transition-colors " + (active ? "bg-white-300 dark:bg-navy-600" : "hover:bg-white-200 dark:hover:bg-navy-800")}
+                    >
+                      <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-black-800 dark:text-black-500">{c.path.split("/").pop()}</span>
+                      <span class="shrink-0 font-mono text-[9px] text-green-600 dark:text-green-400">{c.work_tree}</span>
+                    </button>
+                  {/each}
+                {/if}
+              {/if}
+            </div>
+
+            <!-- Commit box + branch -->
+            {#if $activeRepo}
+              <div class="border-t border-white-300 dark:border-navy-600">
+                <CommitBox stagedCount={staged.length} {busy} onCommit={(m) => withBusy(() => commit(m)).then(() => true)} />
+              </div>
+            {/if}
+          {:else}
+            <HistoryView onOpenCommitFile={openCommitFile} onShowChanges={() => setView("changes")} onCompare={openCompareWith} />
+          {/if}
+          {#if $branch}<BranchBar branch={$branch} {busy} />{/if}
+        </aside>
+
+        <!-- Right: diff editor -->
+        <main class="flex min-w-0 flex-1 flex-col overflow-hidden bg-white-200 dark:bg-navy-800">
+          {#if compare && !compare.commitSha}
+            <!-- Working-tree diff with action buttons -->
+            <div class="flex h-full flex-col">
+              <div class="flex items-center gap-2 border-b border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5">
+                <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-black-900 dark:text-white-100">{compare.file.path}</span>
+                <!-- Save — appears only when user edits in the diff editor -->
+                {#if inlineDirtyBuffer !== null}
+                  <button type="button" onclick={saveInline} disabled={busy} class="rounded bg-green-500 px-2 py-0.5 text-[11px] font-medium text-white-100 hover:bg-green-600 disabled:opacity-50">Save</button>
+                  <button type="button" onclick={() => (inlineDirtyBuffer = null)} class="rounded border border-white-300 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-500 hover:bg-white-200 dark:hover:bg-navy-800">Revert edit</button>
+                {/if}
+                <!-- Discard (rollback) -->
+                <button
+                  type="button"
+                  title="Discard changes"
+                  onclick={() => askDiscard([compare!.file.path], compare!.file.untracked ? [compare!.file.path] : [])}
+                  class="inline-flex items-center gap-1 rounded border border-white-300 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-500 hover:border-red-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+                >
+                  <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 8a6 6 0 0110.5-4M11 2v3H8M14 8a6 6 0 01-10.5 4M5 14v-3h3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  Discard
+                </button>
+                <!-- Stage / Unstage -->
+                {#if compare.staged}
+                  <button
+                    type="button"
+                    onclick={() => withBusy(() => unstagePaths([compare!.file.path]))}
+                    disabled={busy}
+                    class="inline-flex items-center gap-1 rounded border border-white-300 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-500 hover:border-amber-400 hover:text-amber-600 dark:hover:text-amber-400 transition-colors disabled:opacity-50"
+                  >
+                    <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M3 8h10" stroke-linecap="round"/></svg>
+                    Unstage
+                  </button>
+                {:else}
+                  <button
+                    type="button"
+                    onclick={() => withBusy(() => stagePaths([compare!.file.path]))}
+                    disabled={busy}
+                    class="inline-flex items-center gap-1 rounded border border-white-300 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-500 hover:border-green-500 hover:text-green-600 dark:hover:text-green-400 transition-colors disabled:opacity-50"
+                  >
+                    <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 3v10M3 8h10" stroke-linecap="round"/></svg>
+                    Stage
+                  </button>
+                {/if}
+                <!-- Side-by-side toggle -->
+                <button
+                  type="button"
+                  title={diffSideBySide ? "Inline diff" : "Side-by-side diff"}
+                  onclick={() => (diffSideBySide = !diffSideBySide)}
+                  class={"inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] transition-colors " + (diffSideBySide ? "border-green-400 text-green-600 dark:text-green-400" : "border-white-300 dark:border-navy-600 text-black-600 hover:bg-white-200 dark:hover:bg-navy-800")}
+                >
+                  <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v12M2 4h4M2 8h4M2 12h4M10 4h4M10 8h4M10 12h4" stroke-linecap="round"/></svg>
+                </button>
+              </div>
+              <div class="min-h-0 flex-1">
+                {#if inlineData}
+                  <MonacoView
+                    mode="diff"
+                    original={inlineData.original}
+                    modified={inlineDirtyBuffer ?? inlineData.modified}
+                    language={inlineLang}
+                    sideBySide={diffSideBySide}
+                    onDirty={(v) => (inlineDirtyBuffer = v)}
+                  />
+                {:else}
+                  <div class="flex h-full items-center justify-center text-xs text-black-600">Loading…</div>
+                {/if}
+              </div>
+            </div>
+          {:else if compare && compare.commitSha}
+            <!-- Commit history diff — read-only, no action buttons -->
+            <div class="flex h-full flex-col">
+              <div class="flex items-center gap-2 border-b border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5">
+                <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-black-900 dark:text-white-100">{compare.file.path}</span>
+                <span class="shrink-0 font-mono text-[10px] text-black-600">at {compare.commitSha}</span>
+                <button type="button" onclick={() => (compare = null)} class="inline-flex h-6 w-6 items-center justify-center rounded text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">
+                  <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"/></svg>
+                </button>
+              </div>
+              <div class="min-h-0 flex-1">
+                <MonacoView mode="diff" original={inlineData?.original ?? ""} modified={inlineData?.modified ?? ""} language={inlineLang} />
+              </div>
+            </div>
+          {:else}
+            <div class="flex h-full items-center justify-center text-xs text-black-600">No changes.</div>
+          {/if}
+        </main>
       {/if}
-    </main>
+    </div>
   </div>
+{/if}
+
+{#if comparing}
+  <CompareModal initial={compareInit} onClose={() => { comparing = false; compareInit = undefined; }} />
 {/if}
 
 {#if mode === "sidebar" && compare}

@@ -18,13 +18,24 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastError } from "@wick-fe/common-stores";
-  import { Composer } from "@wick-fe/common-ui";
+  import { layer } from "@wick-fe/common-ui";
+  import {
+    Composer,
+    budgetText,
+    contextBarClass,
+    contextMeter,
+    contextTextClass,
+    compactTokens,
+    tokenBudgetText,
+  } from "@wick-fe/common-ui";
 
   import { createThreadStore } from "../stores/thread.js";
   import { connectSession } from "../stores/sse.js";
-  import { getConversation, getTurnTrace, getTurnEvent } from "../api/sessions.js";
+  import { getConversation, getTurnTrace, getTurnEvent, getTurnBlob } from "../api/sessions.js";
   import { getSubAgents, interruptSubAgent } from "../api/subagents.js";
+  import { fetchSessionContext, type SessionContext } from "../api/context.js";
   import { sendMessage } from "../api/messages.js";
+  import { makeTraceFiles } from "../api/files.js";
   import ConversationThread from "./ConversationThread.svelte";
   import { timeAgo, exactTime, shortDuration, parseEventTime } from "../timeFormat.js";
   import { now } from "../stores/now.js";
@@ -156,6 +167,15 @@
     return run(getTurnEvent(base, currentSessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)));
   }
 
+  // A binary the child's trace stored (a Read of a screenshot). Without this
+  // the image chip in a sub-agent trace stayed disabled even though the blob
+  // was on disk.
+  const traceFiles = $derived(makeTraceFiles(base, currentSessionId));
+
+  function loadTraceBlob(turnId: string, ref: string): Promise<Blob> {
+    return getTurnBlob(base, currentSessionId, turnId, ref);
+  }
+
   /* ── this crumb's own sub-agents ───────────────────────────────── */
   let children = $state<SubAgentItem[]>([]);
 
@@ -188,6 +208,56 @@
       .catch(() => { /* the transcript is still readable without a fresh badge */ });
   }
 
+  /* ── what it runs on, and what that has cost ──────────────────────
+     Read-only, all of it. A sub-agent's provider and model are fixed at
+     spawn from its role definition, so a picker here would offer a choice
+     that does not exist — it would change nothing, or change the wrong
+     session. The strip is a caption on the run, not a control over it.
+
+     The reading comes from the child's OWN session context endpoint: a
+     sub-agent is a real session with a real ledger, so it answers the same
+     /context call the composer's ring uses. */
+  let ctx = $state<SessionContext | null>(null);
+
+  function loadContext() {
+    const sid = currentSessionId;
+    if (!sid) return;
+    fetchSessionContext(base, sid)
+      .then((res) => { if (sid === currentSessionId) ctx = res; })
+      // No toast: the transcript is the reason the modal is open, and a
+      // missing caption must not interrupt reading it.
+      .catch(() => { if (sid === currentSessionId) ctx = null; });
+  }
+
+  $effect(() => {
+    void currentSessionId;
+    ctx = null;
+    loadContext();
+  });
+
+  /* The provider is written as one string because that is what it is —
+     "claude/enginer" names the instance, and splitting it into two
+     labelled fields would imply they can be set apart from each other. */
+  const providerLabel = $derived(ctx?.provider ?? "");
+  const modelLabel = $derived(ctx?.model ?? "");
+
+  /* Which of the three readings this is — a window with a percentage, a
+     level with no denominator, or nothing read yet. The decision is
+     shared with the Context window panel so the two cannot disagree. */
+  const meter = $derived(contextMeter(ctx));
+
+  const tokensLabel = $derived(
+    current ? tokenBudgetText(current.tokens_used ?? 0, current.max_tokens ?? 0) : "",
+  );
+  /* Input/output only when there is something to split — a run whose
+     provider reported nothing has no breakdown to show. */
+  const ioLabel = $derived.by(() => {
+    const inTok = current?.input_tokens ?? 0;
+    const outTok = current?.output_tokens ?? 0;
+    if (inTok <= 0 && outTok <= 0) return "";
+    return `${compactTokens(inTok)} in · ${compactTokens(outTok)} out`;
+  });
+
   /* ── navigation ─────────────────────────────────────────────────── */
   function push(next: SubAgentItem) {
     stack = [...stack, next];
@@ -207,12 +277,6 @@
     if (index < stack.length - 1) stack = stack.slice(0, index + 1);
   }
 
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      back();
-    }
-  }
 
   /* ── actions ────────────────────────────────────────────────────── */
   function stop() {
@@ -256,15 +320,10 @@
     return d === "just now" ? "just started" : `running ${d}`;
   });
   const turnsLabel = $derived(
-    current
-      ? current.max_turns > 0
-        ? `${current.turns_used}/${current.max_turns} turns`
-        : `${current.turns_used} turns`
-      : "",
+    current ? budgetText(current.turns_used, current.max_turns, "turns") : "",
   );
 </script>
 
-<svelte:window on:keydown={onKeydown} />
 
 {#if current}
   <div
@@ -280,8 +339,9 @@
       aria-modal="true"
       aria-label={`Sub-agent ${current.profile_key}`}
       tabindex="-1"
+      use:layer={{ onEscape: back }}
       onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
+      onkeydown={(e) => { if (e.key !== "Escape") e.stopPropagation(); }}
     >
       <!-- header: breadcrumb + status + actions -->
       <div class="flex items-center gap-2 border-b border-white-300 dark:border-navy-600 px-4 py-3">
@@ -334,13 +394,6 @@
           >· {stampText}</span>
         {/if}
 
-        {#if live_}
-          <button
-            type="button"
-            onclick={stop}
-            class="shrink-0 rounded px-2 py-1 text-[10px] font-medium bg-neg-100 text-neg-400 transition-colors hover:bg-neg-200"
-          >Stop</button>
-        {/if}
         <button
           type="button"
           onclick={onClose}
@@ -357,6 +410,59 @@
       <p class="border-b border-white-300 dark:border-navy-600 px-4 py-2 text-[11px] text-black-800 dark:text-black-600">
         {current.label}
       </p>
+
+      <!-- what it runs on, and what that has cost: a caption, never a
+           control. Provider and model are decided at spawn from the role,
+           so there is nothing here to change. -->
+      <div
+        data-testid="subagent-meter"
+        class="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-white-300 px-4 py-2 text-[10px] text-black-700 dark:border-navy-600 dark:text-black-600"
+      >
+        <span class="flex min-w-0 items-center gap-1">
+          <span>Runs on</span>
+          {#if providerLabel}
+            <span
+              class="truncate font-medium text-black-900 dark:text-white-100"
+              title="Set when this sub-agent was spawned, from its role — it can't be changed from here."
+              >{providerLabel}</span
+            >
+            {#if modelLabel}
+              <span class="truncate" title={modelLabel}>· {modelLabel}</span>
+            {/if}
+          {:else}
+            <span data-testid="subagent-provider-unknown" title="No turn has run on this sub-agent yet, so no provider has answered for it."
+              >not reported yet</span
+            >
+          {/if}
+        </span>
+
+        <span class="flex min-w-0 items-center gap-2" title={meter.note || undefined}>
+          <span>Context</span>
+          {#if meter.kind === "ring"}
+            <span
+              data-testid="subagent-context-bar"
+              class="h-1 w-16 shrink-0 overflow-hidden rounded-full bg-white-400 dark:bg-navy-600"
+            >
+              <span class={"block h-full rounded-full " + contextBarClass(meter.tone)} style={`width:${meter.pct}%`}
+              ></span>
+            </span>
+          {/if}
+          <span class={"truncate font-medium " + contextTextClass(meter.tone)}>{meter.text}</span>
+        </span>
+
+        <span class="flex min-w-0 items-center gap-1">
+          <span>Tokens</span>
+          <span class="truncate font-medium text-black-900 dark:text-white-100">{tokensLabel}</span>
+          {#if ioLabel}
+            <span class="truncate">({ioLabel})</span>
+          {/if}
+        </span>
+
+        <span class="flex items-center gap-1">
+          <span>Turns</span>
+          <span class="font-medium text-black-900 dark:text-white-100">{turnsLabel}</span>
+        </span>
+      </div>
 
       <!-- its own sub-agents, one level down -->
       {#if children.length > 0}
@@ -386,15 +492,22 @@
             {typing}
             {loadTrace}
             {loadTraceEvent}
+            {loadTraceBlob}
+            {traceFiles}
             onOpenSubAgent={openDelegation}
           />
         {/if}
       </div>
 
       <div class="border-t border-white-300 dark:border-navy-600 p-3">
+        <!-- Stop lives in the composer's action slot, exactly as it does
+             for the main agent: Stop on an empty box, Send with a draft,
+             hold Send for the choice. -->
         <Composer
           onSend={send}
           disabled={sending}
+          running={live_}
+          onStop={stop}
           minRows={1}
           placeholder={live_ ? "Send a message to this sub-agent…" : "Ask this sub-agent a follow-up…"}
         />

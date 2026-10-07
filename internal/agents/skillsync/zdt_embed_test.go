@@ -27,6 +27,15 @@ func TestZeroDowntimeUpgradeSkillIsShipped(t *testing.T) {
 		// operator needs; losing it from the skill leaves them on the
 		// manual recipe with no preflight.
 		"reload --binary",
+		// A connector plugin is the other half of "shipping wick", and
+		// the half that needs no reload at all. Without the build
+		// recipe an agent reinvents it from the shell and rediscovers
+		// the go.work trap every time, so pin both the command and the
+		// two environment settings that make it work.
+		"wick plugin build --kind connector",
+		"plugin install",
+		"GOWORK=off",
+		"go mod edit -replace github.com/yogasw/wick=..",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("SKILL.md missing %q", want)

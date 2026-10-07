@@ -456,3 +456,87 @@ describe("KanbanBoard", () => {
     expect(call!.body).toEqual({ assignee: "", statuses: [" none"] });
   });
 });
+
+/* Search over what is on the board.
+
+   Deliberately local and deliberately visible: a board that has quietly
+   dropped two thirds of its cards has to say what did it, and in which
+   words — otherwise an empty column reads as "nothing here". */
+describe("KanbanBoard — search", () => {
+  const type = async (text: string) => {
+    await fireEvent.input(screen.getByTestId("board-search"), { target: { value: text } });
+  };
+
+  test("a title match keeps the card and drops the others", async () => {
+    renderBoard();
+    await type("webhook");
+    expect(screen.getByTestId("ticket-card-T-4F2A")).toBeTruthy();
+    expect(screen.queryByTestId("ticket-card-T-99ZZ")).toBeNull();
+  });
+
+  test("an assignee's name matches too", async () => {
+    renderBoard();
+    await type("other person");
+    expect(screen.getByTestId("ticket-card-T-99ZZ")).toBeTruthy();
+    expect(screen.queryByTestId("ticket-card-T-4F2A")).toBeNull();
+  });
+
+  test("the ticket id matches", async () => {
+    renderBoard();
+    await type("99zz");
+    expect(screen.getByTestId("ticket-card-T-99ZZ")).toBeTruthy();
+  });
+
+  test("the query shows as a chip with how many it matched", async () => {
+    renderBoard();
+    await type("webhook");
+    const chip = screen.getByTestId("board-search-chip");
+    expect(chip.textContent).toContain("webhook");
+    expect(chip.textContent).toContain("1");
+  });
+
+  test("clicking the chip clears the search and brings the board back", async () => {
+    renderBoard();
+    await type("webhook");
+    await fireEvent.click(screen.getByTestId("board-search-chip"));
+    expect(screen.getByTestId("ticket-card-T-99ZZ")).toBeTruthy();
+    expect(screen.queryByTestId("board-search-chip")).toBeNull();
+  });
+
+  // A local search must not become a saved view: it is a moment, not a
+  // filter you want to find still applied tomorrow.
+  test("searching never touches the saved filter", async () => {
+    const { onFilter } = renderBoard();
+    await type("webhook");
+    expect(onFilter).not.toHaveBeenCalled();
+  });
+
+  test("the matched text is marked up on the card", async () => {
+    renderBoard();
+    await type("webhook");
+    const title = screen.getByTestId("ticket-title-T-4F2A");
+    const hit = title.querySelector("span.bg-cau-100");
+    expect(hit?.textContent).toBe("webhook");
+  });
+
+  test("an empty column under a search says so instead of inviting a drag", async () => {
+    renderBoard();
+    await type("webhook");
+    expect(screen.queryByText("No tickets — drag one here")).toBeNull();
+    expect(screen.getAllByText("No match here").length).toBeGreaterThan(0);
+  });
+});
+
+
+/* "More to load" is the server's cursor, not drawn-vs-total: a drawn row that
+   has since left the set would make a count stop the rail a page early. */
+describe("KanbanBoard untracked paging", () => {
+  test("the rail offers more while the server sends a cursor", () => {
+    const { unmount } = renderWithRail({ board: { ...board, untracked_next: "c1" } });
+    const withCursor = screen.queryAllByTestId("scroll-sentinel").length;
+    unmount();
+    // 1 of 42 drawn, but no cursor: the server said that was all.
+    renderWithRail();
+    expect(screen.queryAllByTestId("scroll-sentinel").length).toBe(withCursor - 1);
+  });
+});

@@ -76,7 +76,7 @@ saved per user in `entity.UserMetadata`.
 ## Global Constraints
 
 - Fixed status set v1: `open`, `in_progress`, `waiting`, `done`.
-- UI copy English. No "qiscus" in samples/placeholders.
+- UI copy English. No company or client names in samples/placeholders.
 - Ticket disabled ⇒ zero behavior change (nil Ticket, no sweeper work, no toggle).
 - No DB migration: session/project meta are JSON files; `UserMetadata` is jsonb — additive fields only.
 - Zerolog: `l := log.With().Str("component", "ticketsweep").Logger()`.

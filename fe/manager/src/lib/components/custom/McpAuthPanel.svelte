@@ -138,9 +138,26 @@
         />
       </div>
     </div>
+    <label class="mt-3 flex items-start gap-2 text-xs text-black-800 dark:text-black-600">
+      <input
+        type="checkbox"
+        class="mt-0.5 flex-shrink-0"
+        data-cc-oauth-per-user
+        checked={!!form.oauth_per_user}
+        onchange={(e) => { form.oauth_per_user = (e.target as HTMLInputElement).checked; onChange(); }}
+      />
+      <span class="min-w-0">
+        <span class="font-medium text-black-900 dark:text-white-100">Users connect their own account (SSO)</span>
+        <span class="block text-[11px] text-black-700 dark:text-black-600">Save without signing in. Each wick user connects their own account to this one instance (Enable SSO + Allow others to connect via SSO turn on). Leave off to connect one shared account to the instance.</span>
+      </span>
+    </label>
     {#if oauthConnected}
       <div class="mt-3 rounded-lg border border-pos-400 bg-pos-100 px-3 py-2" data-cc-oauth-status>
-        <p class="text-[11px] text-black-800"><span class="font-semibold text-pos-400">✓ Signed in.</span> Saving attaches this account to the connector's first instance.</p>
+        {#if form.oauth_per_user}
+          <p class="text-[11px] text-black-800"><span class="font-semibold text-pos-400">✓ Signed in.</span> Saving keeps this login as your own connected account.</p>
+        {:else}
+          <p class="text-[11px] text-black-800"><span class="font-semibold text-pos-400">✓ Signed in.</span> Saving attaches this account to the connector's first instance.</p>
+        {/if}
       </div>
     {/if}
   </div>

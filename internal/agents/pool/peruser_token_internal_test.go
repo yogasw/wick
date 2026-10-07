@@ -14,14 +14,14 @@ import "testing"
 func TestMCPTokenFor_PerSessionWithFallback(t *testing.T) {
 	f := &ClaudeFactory{
 		MCPToken: "internal-boot-secret",
-		SessionMCPToken: func(sessionID, _ string) (string, bool) {
+		SessionMCPToken: func(sessionID, _ string) (string, string, bool) {
 			switch sessionID {
 			case "sess-a":
-				return "wick_sub_userA", true
+				return "wick_sub_userA", "userA", true
 			case "sess-b":
-				return "wick_sub_userB", true
+				return "wick_sub_userB", "userB", true
 			}
-			return "", false // no owner: legacy row, cron, system job
+			return "", "", false // no owner: legacy row, cron, system job
 		},
 	}
 
@@ -54,7 +54,7 @@ func TestMCPTokenFor_NoMinterKeepsOldBehaviour(t *testing.T) {
 
 	// A minter that claims success but yields an empty token must not blank
 	// the credential — that would silently drop MCP for that spawn.
-	f.SessionMCPToken = func(string, string) (string, bool) { return "", true }
+	f.SessionMCPToken = func(string, string) (string, string, bool) { return "", "", true }
 	if got := f.mcpTokenFor("sess-a", ""); got != "internal-boot-secret" {
 		t.Fatalf("empty-token mint = %q, want internal fallback", got)
 	}

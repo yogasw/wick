@@ -123,7 +123,68 @@ Three variants, three sizes.
 
 ## 3. Select dropdown
 
-Same styling as text input, plus the custom arrow.
+**Svelte (fe/**): always use `Select` from `@wick-fe/common-ui` — never a
+native `<select>`.** The OS draws a native popup: it ignores the theme
+(blue highlight), can grow wider than its field and paint over the panel
+next to it, and has no room for a second line. `Select` is a button
+trigger + a listbox popover wick draws itself.
+
+```svelte
+<script lang="ts">
+  import { Select } from "@wick-fe/common-ui";
+  let type = $state("omp");
+</script>
+
+<label for="provider-type" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Type</label>
+<Select
+  id="provider-type"
+  name="type"
+  value={type}
+  onChange={(v) => (type = v)}
+  options={[
+    { label: "oh-my-pi (omp)", value: "omp", description: "Login ChatGPT atau Claude · 1 profile per instance" },
+    { label: "Gemini CLI", value: "gemini", description: "Google gemini CLI", badge: "experimental" },
+    { label: "Legacy", value: "legacy", disabled: true },
+  ]}
+/>
+```
+
+| Prop | Meaning |
+|---|---|
+| `value`, `onChange(v)` | controlled value (string) |
+| `options` | `string` or `{ label, value, description?, badge?, disabled? }` |
+| `placeholder` | first entry with value `""`, shown muted in the trigger |
+| `size` | `"md"` (default, `px-3 py-2 text-sm`) · `"sm"` (`px-2 py-1 text-xs`) |
+| `variant` | `"boxed"` (bordered field, default) · `"minimal"` (toolbar text + chevron) |
+| `id` | id of the trigger — point `<label for>` at it |
+| `name` | adds a hidden input so native form posts carry the value |
+| `searchable` | filter box on top; defaults on when there are more than 8 options |
+| `ariaLabel` | accessible name when no `<label for>` exists |
+| `disabled`, `class` | as usual (`class` sizes the wrapper, e.g. `w-48`) |
+
+Rules the component already enforces — keep them if you ever touch it:
+
+- Popover is portalled to `<body>` and `fixed`, positioned from the
+  trigger rect: never clipped by `overflow`, width = trigger width (min
+  12rem, max viewport − 16px), flips up when below is short, max-height
+  18rem with scroll, follows scroll/resize.
+- Row: label `font-medium`, description `text-xs` muted wrapping to 2
+  lines, badge chip on the right, green check on the selected row. Active
+  row `bg-white-200 dark:bg-navy-600` — theme tokens, never OS blue.
+- Keyboard: ↓ / Enter / Space open; ↑↓ move (disabled rows skipped),
+  Home/End, Enter selects, Esc closes and refocuses the trigger, Tab
+  closes, type-ahead jumps by label. Outside click closes.
+- ARIA: trigger `aria-haspopup="listbox"` + `aria-expanded`; list
+  `role="listbox"`, rows `role="option"` + `aria-selected`,
+  `aria-activedescendant` tracks the active row.
+
+Tests drive it through the DOM, not `fireEvent.change`: click
+`[data-testid="wick-select-trigger"]`, then click
+`[role="option"][data-value="<v>"]` under `document.body`.
+
+**templ (server-rendered pages)** keep the native field below — the
+`.select-arrow` class is defined in `web/src/input.css` and adds a
+chevron SVG as background image.
 
 ```go
 <label class="block">
@@ -142,9 +203,6 @@ Same styling as text input, plus the custom arrow.
     </select>
 </label>
 ```
-
-The `.select-arrow` class is defined in `web/src/input.css` and adds a
-chevron SVG as background image.
 
 ---
 

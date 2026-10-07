@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { sendModeNote } from "../sendmode";
+  import CollapsibleSection from "$lib/components/CollapsibleSection.svelte";
   import { onMount } from "svelte";
-  import { ConfirmDialog, KvList, Breadcrumb, Modal, Select, Button, TextInput, type BreadcrumbItem } from "@wick-fe/common-ui";
+  import { ConfirmDialog, KvList, Breadcrumb, Modal, Select, Button, TextInput, ProviderIcon, type BreadcrumbItem } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     apiGetProviderDetail,
@@ -21,6 +23,10 @@
   import RecentSpawns from "$lib/components/RecentSpawns.svelte";
   import { UsageReport } from "@wick-fe/common-ui";
   import ReconnectPanel from "$lib/components/ReconnectPanel.svelte";
+  import ManagedBinaryPanel from "$lib/components/ManagedBinaryPanel.svelte";
+  import TerminalPanel from "$lib/components/TerminalPanel.svelte";
+  import LiveModelsPanel from "$lib/components/LiveModelsPanel.svelte";
+  import IdleCompactCard from "$lib/components/IdleCompactCard.svelte";
 
 
   type Props = {
@@ -74,21 +80,25 @@
   });
   let busy = $state<Record<string, boolean>>({});
 
-  /* Heavy sections (Configuration, env/extra_args editors, Recent
-     Sessions) are collapsed by default — the header row is the summary
-     and clicking it toggles the body. */
-  let secOpen = $state<Record<string, boolean>>({});
-  function toggleSec(k: string) {
-    secOpen[k] = !(secOpen[k] ?? false);
-  }
-  function secKeydown(k: string) {
-    return (e: KeyboardEvent) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        toggleSec(k);
-      }
-    };
-  }
+  /* Every settings section is a CollapsibleSection: closed by default,
+     summary in its header, open state remembered per browser. */
+  let liveCount = $state<number | null>(null);
+  // Types whose binary wick downloads and switches itself.
+  let managedType = $derived(type === "omp" || type === "opencode");
+  let configSummary = $derived.by(() => {
+    const parts: string[] = [];
+    const v = (k: string) => fieldValues[k] ?? "";
+    if (simpleFields.some((f) => f.Key === "server_mode")) parts.push(`Server mode: ${v("server_mode") === "true" ? "on" : "off"}`);
+    if (v("opencode_model").trim()) parts.push(`Model: ${v("opencode_model").trim()}`);
+    parts.push(`${simpleFields.length} fields`);
+    return parts.join(" · ");
+  });
+  let modelSummary = $derived.by(() => {
+    if (liveMode) return liveCount === null ? "Live models from CLI" : `Live models: ${liveCount}`;
+    if (fieldValues["model_select"] !== "true") return "Picker off";
+    return `${(editorRows["models"] ?? []).length} models`;
+  });
+
 
   let fieldValues = $state<Record<string, string>>({});
   let secretTouched = $state<Record<string, boolean>>({});
@@ -229,18 +239,40 @@
   // list only shows when model selection is enabled (mirrors the backend
   // config-tag `visible_when=model_select:true`). The toggle's live value
   // comes from fieldValues so it reacts without a reload.
+  const isIdleCompactField = (f: ConfigFieldDTO) => f.Key === "idle_compact" || f.Key.startsWith("idle_compact_");
+  let idleCompactFields = $derived(data ? data.ConfigFields.filter(isIdleCompactField) : []);
+
   function fieldVisible(f: ConfigFieldDTO): boolean {
     if (f.Key === "models") return fieldValues["model_select"] === "true";
+    // Idle compact lives in its own card (IdleCompactCard), editable by
+    // managers as well as admins.
+    if (isIdleCompactField(f)) return false;
     return true;
   }
 
   // model_select + models render together in their own "Model selection"
   // card, so exclude them from the generic Configuration / value-list
   // sections (else they'd appear twice).
-  const MODEL_KEYS = new Set(["model_select", "models"]);
+  // live_models / live_model_filter / live_model_default (omp/opencode's
+  // "live from CLI" list) render in the same card.
+  const MODEL_KEYS = new Set(["model_select", "models", "live_models", "live_model_filter", "live_model_default"]);
   const isModelField = (f: ConfigFieldDTO) => MODEL_KEYS.has(f.Key);
+  // Shared-CLI-server settings (opencode today, omp next): generic keys, so
+  // one label + test id per key covers every provider that has them.
+  const FIELD_LABELS: Record<string, string> = {
+    server_mode: "Server mode",
+    server_idle_minutes: "Server idle (minutes)",
+    load_external_skills: "Load Claude/Codex skills",
+    auto_retry_model: "Auto-retry with the next model on access error",
+    auth_from: "Use login of",
+  };
+  const SWITCH_TESTIDS: Record<string, string> = {
+    server_mode: "server-mode-toggle",
+    load_external_skills: "load-skills-toggle",
+    auto_retry_model: "auto-retry-model-toggle",
+  };
 
-  let simpleFields = $derived(data ? data.ConfigFields.filter((f) => isSimpleField(f) && !isModelField(f)) : []);
+  let simpleFields = $derived(data ? data.ConfigFields.filter((f) => isSimpleField(f) && !isModelField(f) && fieldVisible(f)) : []);
   let valueListFields = $derived(data ? data.ConfigFields.filter((f) => isValueListEditor(f) && !isModelField(f) && fieldVisible(f)) : []);
   // `models` is a 2-column (id|desc) kvlist, so it matches isKeyValueEditor
   // too — exclude it here as well or the Model selection card's list renders
@@ -250,6 +282,14 @@
   // The two model-picker fields, for the dedicated card.
   const modelSelectField = $derived(data?.ConfigFields.find((f) => f.Key === "model_select"));
   const modelsField = $derived(data?.ConfigFields.find((f) => f.Key === "models"));
+  // Present only for omp/opencode: the CLI can list its own models.
+  const liveModelsField = $derived(data?.ConfigFields.find((f) => f.Key === "live_models"));
+  const liveMode = $derived(!!liveModelsField && fieldValues["live_models"] === "true");
+
+  function saveModelKey(key: string, value: string) {
+    fieldValues[key] = value;
+    void apiSaveConfigKey(base, type, name, key, value).then(() => load(true)).catch((e) => toastError(e instanceof Error ? e.message : String(e)));
+  }
   // Per-type seed models (from the backend), shown as the effective default
   // and offered as a one-click starting point when the list is empty.
   const defaultModels = $derived(data?.DefaultModels ?? []);
@@ -692,6 +732,7 @@
   <Breadcrumb items={crumbs} />
   <div class="flex items-center justify-between gap-3 flex-wrap">
     <div class="flex items-center gap-2 flex-wrap">
+      <ProviderIcon value={type} class="w-6 h-6 shrink-0" />
       {#if readOnly}
         <span class="text-lg font-semibold text-black-900 dark:text-white-100">{type}/{name}</span>
       {:else}
@@ -765,26 +806,44 @@
   {:else if error}
     <div class="rounded-xl border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">{error}</div>
   {:else if data}
-    <!-- Binary info -->
-    <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 space-y-1 text-xs">
-      <div class="flex gap-2">
-        <span class="w-20 shrink-0 text-black-700 dark:text-black-600">resolved</span>
-        {#if data.Path}
-          <span class="font-mono text-black-900 dark:text-white-100 break-all">{data.Path}</span>
-        {:else}
-          <span class="text-black-600 dark:text-black-700">—</span>
-        {/if}
-      </div>
-      {#if data.VersionErr}
-        <div class="flex gap-2">
-          <span class="w-20 shrink-0 text-black-700 dark:text-black-600">error</span>
-          <span class="font-mono text-red-600 dark:text-red-400 break-all">{data.VersionErr}</span>
-        </div>
-      {/if}
+    <!-- Connection first and open: it is what a Detail visit is for. -->
+    <div data-testid="detail-connection-first">
+      <ReconnectPanel {base} {type} {name} defaultExpanded={true} />
     </div>
 
-    <!-- Connection: account status + usage + reconnect via login TTY -->
-    <ReconnectPanel {base} {type} {name} />
+    <!-- Binary: one section for every type. The header carries only the
+         version (and "managed by wick" for omp/opencode) — the long path
+         lives in the body, where it can wrap. Managed types add their
+         platform, active/latest and download/switch controls below. -->
+    <CollapsibleSection title="Binary" storageKey="detail.binary" testid="section-binary" bodyClass="p-5 space-y-4 text-xs">
+      {#snippet summary()}<span class="inline-flex items-center gap-1.5">{#if data?.VersionErr}<span class="text-red-600 dark:text-red-400">error</span>{:else if data?.Version}<span data-testid="binary-version-pill" class="rounded bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 font-mono text-[11px] font-medium text-black-800 dark:text-black-600">v{data.Version.replace(/^v/, "")}</span>{:else if !data?.Path}<span>not found</span>{/if}{#if managedType}<span class="rounded bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 text-[11px] font-medium text-black-800 dark:text-black-600">managed by wick</span>{/if}</span>{/snippet}
+      <dl data-testid="binary-info" class="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-1.5">
+        <dt class="text-black-700 dark:text-black-600">Resolved path</dt>
+        <dd class="min-w-0">
+          {#if data.Path}
+            <span class="font-mono text-black-900 dark:text-white-100 break-all">{data.Path}</span>
+          {:else}
+            <span class="text-black-600 dark:text-black-700">—</span>
+          {/if}
+        </dd>
+        <dt class="text-black-700 dark:text-black-600">Version</dt>
+        <dd class="min-w-0 font-mono text-black-900 dark:text-white-100">{data.Version || "—"}</dd>
+        {#if data.VersionErr}
+          <dt class="text-black-700 dark:text-black-600">Error</dt>
+          <dd class="min-w-0 font-mono text-red-600 dark:text-red-400 break-all">{data.VersionErr}</dd>
+        {/if}
+      </dl>
+      {#if managedType}
+        <ManagedBinaryPanel {base} {type} embedded />
+      {/if}
+    </CollapsibleSection>
+
+    {#if managedType}
+      <!-- A terminal is a shell on the host: admin-only, like editing. -->
+      {#if !readOnly}
+        <TerminalPanel {base} {type} {name} />
+      {/if}
+    {/if}
 
     <!-- Everything below edits the instance. A non-admin still SEES it —
          that is the point of sharing a provider: you can check how it is
@@ -792,6 +851,10 @@
          inert, and the API refuses the write in any case. The Connection
          panel above stays live, because reconnecting is a manage grant,
          not an edit. -->
+    {#if idleCompactFields.length > 0 && (!readOnly || data?.CanManage)}
+      <IdleCompactCard {base} {type} {name} fields={idleCompactFields} onSaved={() => load(true)} />
+    {/if}
+
     {#if readOnly}
       <!-- Manager view: what they came for is the Connection panel above.
            The configuration is shown as a plain summary — no inputs, no
@@ -827,7 +890,7 @@
           <span class="text-black-900 dark:text-white-100">{data.Instance.Disabled ? "disabled" : "enabled"}</span>
         </div>
         <p class="pt-2 text-[11px] text-black-700 dark:text-black-600">
-          Editing a provider's configuration is admin-only. You can reconnect this account and re-check its usage above.
+          Editing a provider's configuration is admin-only. You can reconnect this account, re-check its usage and tune compact when idle above.
         </p>
       </div>
     {:else}
@@ -841,26 +904,15 @@
     <!-- Configuration (simple fields, 2-column grid). Collapsed by
          default; the header is the toggle. -->
     {#if simpleFields.length > 0}
-      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-        <div
-          role="button"
-          tabindex="0"
-          aria-expanded={secOpen["config"] ?? false}
-          onclick={() => toggleSec("config")}
-          onkeydown={secKeydown("config")}
-          class="flex items-center gap-3 px-5 py-3 cursor-pointer select-none bg-white-200 dark:bg-navy-800 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors {secOpen['config'] ? 'border-b border-white-300 dark:border-navy-600' : ''}"
-        >
-          <svg class="h-3.5 w-3.5 shrink-0 text-black-600 transition-transform {secOpen['config'] ? 'rotate-90' : ''}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-          <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Configuration</h3>
-          <span class="text-[11px] text-black-700 dark:text-black-600">{simpleFields.length} fields</span>
-        </div>
-        {#if secOpen["config"]}
+      <CollapsibleSection title="Configuration" storageKey="detail.config" bodyClass="" testid="section-config">
+        {#snippet summary()}{configSummary}{/snippet}
         <div class="p-5">
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
             {#each simpleFields as f (f.Key)}
               <div>
                 <div class="flex items-center gap-2 mb-1.5">
                   <span class="font-mono text-xs font-semibold text-black-900 dark:text-white-100">{f.Key}</span>
+                  {#if FIELD_LABELS[f.Key]}<span data-testid={`field-label-${f.Key}`} class="text-xs text-black-700 dark:text-black-600">{FIELD_LABELS[f.Key]}</span>{/if}
                   {#if f.Required && f.Value === ""}
                     <span class="rounded bg-red-100 dark:bg-red-900 px-1.5 py-0.5 text-[10px] font-semibold text-red-700 dark:text-red-300">missing</span>
                   {:else if f.Required}
@@ -870,15 +922,22 @@
                     <span class="rounded-full bg-green-100 dark:bg-green-900 px-1.5 py-0.5 text-[10px] font-semibold text-green-700 dark:text-green-300">stored</span>
                   {/if}
                 </div>
-                {#if (f.Type === "dropdown" || f.Type === "select") && f.Options}
-                  <select
-                    bind:value={fieldValues[f.Key]}
-                    class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors cursor-pointer"
-                  >
-                    {#each f.Options.split(f.Type === "dropdown" ? "|" : ",").map((o) => o.trim()).filter(Boolean) as opt (opt)}
-                      <option value={opt}>{opt}</option>
-                    {/each}
-                  </select>
+                {#if f.Key === "auth_from"}
+                  <!-- Owners it may take the login from (same type, not
+                       sharing themselves); "" = its own login. -->
+                  <Select
+                    ariaLabel={f.Key}
+                    value={fieldValues[f.Key] ?? ""}
+                    options={[{ label: "Its own login", value: "" }, ...(f.Options ?? "").split("|").map((o) => o.trim()).filter(Boolean).map((o) => ({ label: o, value: o }))]}
+                    onChange={(v) => { fieldValues[f.Key] = v; }}
+                  />
+                {:else if (f.Type === "dropdown" || f.Type === "select") && f.Options}
+                  <Select
+                    ariaLabel={f.Key}
+                    value={fieldValues[f.Key] ?? ""}
+                    options={f.Options.split(f.Type === "dropdown" ? "|" : ",").map((o) => o.trim()).filter(Boolean)}
+                    onChange={(v) => { fieldValues[f.Key] = v; }}
+                  />
                 {:else if f.IsSecret}
                   <input
                     type="password"
@@ -888,6 +947,14 @@
                     oninput={() => onSecretInput(f.Key)}
                     class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
                   />
+                {:else if f.Type === "textarea"}
+                  <textarea
+                    aria-label={f.Key}
+                    bind:value={fieldValues[f.Key]}
+                    rows="6"
+                    spellcheck="false"
+                    class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-xs font-mono text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+                  ></textarea>
                 {:else if f.Type === "number"}
                   <input
                     type="number"
@@ -901,6 +968,7 @@
                     type="button"
                     role="switch"
                     aria-label={f.Key}
+                    data-testid={SWITCH_TESTIDS[f.Key] ?? `config-switch-${f.Key}`}
                     aria-checked={fieldValues[f.Key] === "true"}
                     onclick={() => (fieldValues[f.Key] = fieldValues[f.Key] === "true" ? "false" : "true")}
                     class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors {fieldValues[f.Key] === 'true' ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
@@ -917,6 +985,26 @@
                 {#if f.Description}
                   <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600 leading-relaxed whitespace-pre-line">{f.Description}</p>
                 {/if}
+                {#if f.Key === "opencode_allow_hosted" && fieldValues[f.Key] === "true"}
+                  <p data-testid="opencode-hosted-warning" class="mt-1.5 rounded-lg border border-cau-400 bg-cau-100 dark:bg-cau-400/20 px-3 py-2 text-[11px] text-black-900 dark:text-white-100">
+                    Hosted opencode models are ON: every prompt, file and tool output of sessions on this instance is sent to opencode's servers.
+                  </p>
+                {/if}
+                {#if f.Key === "auth_from" && type === "opencode" && (fieldValues[f.Key] ?? "") !== ""}
+                  <p data-testid="auth-from-race-warning" class="mt-1.5 rounded-lg border border-cau-400 bg-cau-100 dark:bg-cau-400/20 px-3 py-2 text-[11px] text-black-900 dark:text-white-100">
+                    opencode has no lock on a shared auth.json: concurrent turns on instances sharing a ChatGPT login may occasionally hit a token-refresh race.
+                  </p>
+                {/if}
+                {#if f.Key === "server_mode" && fieldValues[f.Key] !== "true"}
+                  <p data-testid="run-per-turn-note" class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">Server mode is off: every turn starts its own {type === "omp" ? "omp -p" : "opencode run"} process (slower, more memory per turn; messages sent mid-turn queue for the next turn).</p>
+                {/if}
+                {#if f.Key === "send_mode"}
+                  {@const note = sendModeNote(type, fieldValues[f.Key] ?? "", fieldValues["server_mode"] === "true")}
+                  <p data-testid="send-mode-support" data-level={note.level} class="mt-1.5 rounded-lg px-3 py-2 text-[11px] {note.level === 'changed' ? 'border border-cau-400 bg-cau-100 dark:bg-cau-400/20 text-black-900 dark:text-white-100' : 'bg-white-200 dark:bg-navy-700 text-black-800 dark:text-white-300'}">{note.text}</p>
+                {/if}
+                {#if f.Key === "opencode_model" && !(fieldValues[f.Key] ?? "").trim()}
+                  <p data-testid="opencode-model-missing" class="mt-1.5 text-[11px] text-neg-400">No model set — spawns on this instance are refused until you pick one (or a session pins one).</p>
+                {/if}
               </div>
             {/each}
           </div>
@@ -928,16 +1016,15 @@
             class="rounded-lg bg-green-600 hover:bg-green-700 px-4 py-1.5 text-xs font-medium text-white-100 disabled:opacity-50"
           >{saving ? "Saving…" : "Save All"}</button>
         </div>
-        {/if}
-      </div>
+      </CollapsibleSection>
     {/if}
 
     <!-- Model selection — toggle + curated model list in one card. Only for
          CLI providers (the fields are absent for wick). -->
     {#if modelSelectField}
-      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-          <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Model selection</h3>
+      <CollapsibleSection title="Model selection" storageKey="detail.models" bodyClass="">
+        {#snippet summary()}{modelSummary}{/snippet}
+        <div class="px-5 pt-4">
           <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
             Let sessions pick a model for this instance. When on, the composer shows a picker of the models below and passes the choice to the CLI via <code class="font-mono">--model</code>.
           </p>
@@ -960,9 +1047,39 @@
             </span>
           </label>
 
+          <!-- omp/opencode: the list is either what the CLI lists (live,
+               filtered) or hand-curated. The live default also drives the
+               spawn's --model when a session picked none. -->
+          {#if liveModelsField}
+            <div class="inline-flex rounded-lg border border-white-400 dark:border-navy-600 p-0.5" role="radiogroup" aria-label="Model list source" data-testid="model-source-toggle">
+              {#each [{ v: "true", l: "Live from CLI" }, { v: "false", l: "Manual" }] as o (o.v)}
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={(fieldValues["live_models"] === "true") === (o.v === "true")}
+                  data-testid={`model-source-${o.v === "true" ? "live" : "manual"}`}
+                  onclick={() => saveModelKey("live_models", o.v)}
+                  class="rounded-md px-3 py-1 text-xs font-medium transition-colors {(fieldValues['live_models'] === 'true') === (o.v === 'true') ? 'bg-green-600 text-white-100' : 'text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800'}"
+                >{o.l}</button>
+              {/each}
+            </div>
+          {/if}
+          {#if liveMode}
+            <LiveModelsPanel
+              {base}
+              {type}
+              {name}
+              filter={fieldValues["live_model_filter"] ?? ""}
+              pin={fieldValues["live_model_default"] ?? ""}
+              onSaveFilter={(v) => saveModelKey("live_model_filter", v)}
+              onSavePin={(v) => saveModelKey("live_model_default", v)}
+              onCount={(n) => { liveCount = n; }}
+            />
+          {/if}
+
           <!-- The models list is part of the same control, not a second
                section: one heading, one description, no `models` key label. -->
-          {#if fieldValues["model_select"] === "true" && modelsField}
+          {#if !liveMode && fieldValues["model_select"] === "true" && modelsField}
             {@const f = modelsField}
             {@const empty = (editorRows[f.Key] ?? []).length === 0}
             <div>
@@ -993,14 +1110,12 @@
             </div>
           {/if}
         </div>
-      </div>
+      </CollapsibleSection>
     {/if}
 
     {#if airouterSupported}
-      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-          <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">AI Router</h3>
-        </div>
+      <CollapsibleSection title="AI Router" storageKey="detail.airouter" bodyClass="">
+        {#snippet summary()}{airUse ? "on" : "off"}{/snippet}
         <div class="p-5">
           <AIRouterConfig
             {base}
@@ -1023,7 +1138,7 @@
             class="rounded-lg bg-green-600 hover:bg-green-700 px-4 py-1.5 text-xs font-medium text-white-100 disabled:opacity-50"
           >{airSaving ? "Saving…" : "Save AI Router"}</button>
         </div>
-      </div>
+      </CollapsibleSection>
     {/if}
 
     <!-- Group separator. The page is one long stack of cards, and
@@ -1042,34 +1157,22 @@
     {#each valueListFields as f (f.Key)}
       {@const entries = catalogFor(f)}
       {@const secKey = "vl:" + f.Key}
-      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-        <div
-          role="button"
-          tabindex="0"
-          aria-expanded={secOpen[secKey] ?? false}
-          onclick={() => toggleSec(secKey)}
-          onkeydown={secKeydown(secKey)}
-          class="px-5 py-3 cursor-pointer select-none bg-white-200 dark:bg-navy-800 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors {secOpen[secKey] ? 'border-b border-white-300 dark:border-navy-600' : ''}"
-        >
-          <div class="flex items-center justify-between gap-2 flex-wrap">
-            <div class="flex items-center gap-3">
-              <svg class="h-3.5 w-3.5 shrink-0 text-black-600 transition-transform {secOpen[secKey] ? 'rotate-90' : ''}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-              <span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">{f.Key}</span>
-              <span class="text-[11px] text-black-700 dark:text-black-600">{(editorRows[f.Key] ?? []).length} rows</span>
-            </div>
-            {#if entries.length > 0 && secOpen[secKey]}
+      <CollapsibleSection title={f.Key} storageKey={"detail." + secKey} bodyClass="">
+        {#snippet summary()}{(editorRows[f.Key] ?? []).length} rows{/snippet}
+        {#if entries.length > 0 || f.Description}
+        <div class="px-5 pt-4 space-y-2">
+          {#if f.Description}
+            <p class="text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{f.Description}</p>
+          {/if}
+            {#if entries.length > 0}
               <button
                 type="button"
-                onclick={(e) => { e.stopPropagation(); openPicker(f); }}
+                onclick={(e) => { openPicker(f); }}
                 class="rounded-lg border border-green-400 dark:border-green-700 bg-green-50 dark:bg-green-900 px-3 py-1 text-xs font-medium text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-800 transition-colors"
               >+ Add from catalog</button>
             {/if}
-          </div>
-          {#if f.Description && secOpen[secKey]}
-            <p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{f.Description}</p>
-          {/if}
         </div>
-        {#if secOpen[secKey]}
+        {/if}
         <div class="p-5">
           <KvList
             columns={kvCols(f)}
@@ -1081,8 +1184,7 @@
             emptyText="No rows yet — click + Add Row to start"
           />
         </div>
-        {/if}
-      </div>
+      </CollapsibleSection>
     {/each}
 
     <!-- Key-value editors (multi-column kvlist, e.g. env). Collapsed by
@@ -1091,34 +1193,22 @@
       {@const cols = kvCols(f)}
       {@const entries = catalogFor(f)}
       {@const secKey = "kv:" + f.Key}
-      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-        <div
-          role="button"
-          tabindex="0"
-          aria-expanded={secOpen[secKey] ?? false}
-          onclick={() => toggleSec(secKey)}
-          onkeydown={secKeydown(secKey)}
-          class="px-5 py-3 cursor-pointer select-none bg-white-200 dark:bg-navy-800 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors {secOpen[secKey] ? 'border-b border-white-300 dark:border-navy-600' : ''}"
-        >
-          <div class="flex items-center justify-between gap-2 flex-wrap">
-            <div class="flex items-center gap-2">
-              <svg class="h-3.5 w-3.5 shrink-0 text-black-600 transition-transform {secOpen[secKey] ? 'rotate-90' : ''}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-              <span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">{f.Key}</span>
-              <span class="text-[11px] text-black-700 dark:text-black-600 font-normal">{(editorRows[f.Key] ?? []).length} rows</span>
-            </div>
-            {#if entries.length > 0 && secOpen[secKey]}
+      <CollapsibleSection title={f.Key} storageKey={"detail." + secKey} bodyClass="">
+        {#snippet summary()}{(editorRows[f.Key] ?? []).length} rows{/snippet}
+        {#if entries.length > 0 || f.Description}
+        <div class="px-5 pt-4 space-y-2">
+          {#if f.Description}
+            <p class="text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{f.Description}</p>
+          {/if}
+            {#if entries.length > 0}
               <button
                 type="button"
-                onclick={(e) => { e.stopPropagation(); openPicker(f); }}
+                onclick={(e) => { openPicker(f); }}
                 class="rounded-lg border border-green-400 dark:border-green-700 bg-green-50 dark:bg-green-900 px-3 py-1 text-xs font-medium text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-800 transition-colors"
               >+ Add from catalog</button>
             {/if}
-          </div>
-          {#if f.Description && secOpen[secKey]}
-            <p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{f.Description}</p>
-          {/if}
         </div>
-        {#if secOpen[secKey]}
+        {/if}
         <div class="p-5">
           <KvList
             columns={cols}
@@ -1156,16 +1246,13 @@
             {/snippet}
           </KvList>
         </div>
-        {/if}
-      </div>
+      </CollapsibleSection>
     {/each}
 
     <!-- Hooks -->
     {#if hookEvents.length > 0}
-      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600">
-          <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Hooks</h2>
-        </div>
+      <CollapsibleSection title="Hooks" storageKey="detail.hooks" bodyClass="">
+        {#snippet summary()}{hookEvents.filter((e) => data?.HookEnabled[e]).length}/{hookEvents.length} enabled{/snippet}
         <div class="divide-y divide-white-300 dark:divide-navy-600">
           {#each hookEvents as event (event)}
             {@const cap = data.Hooks[event]}
@@ -1218,7 +1305,7 @@
             </div>
           {/each}
         </div>
-      </div>
+      </CollapsibleSection>
     {/if}
 
     <div class="flex items-center gap-3 pt-2">
@@ -1229,12 +1316,17 @@
     <!-- Token ledger for THIS provider — same component as the list
          page, scoped by the provider prop. What it cost, and which
          sessions spent it (paginated; the list is unbounded). -->
-    <UsageReport {base} provider={`${type}/${name}`} />
+    <!-- Closed by default like every other section; its body (and so the
+         usage fetch) only mounts once opened. -->
+    <CollapsibleSection title="Token Usage" storageKey="detail.activity" testid="section-activity" bodyClass="">
+      {#snippet summary()}{type}/{name}{/snippet}
+      <UsageReport {base} provider={`${type}/${name}`} title="" flush />
+    </CollapsibleSection>
 
     <!-- Command Gate -->
-    <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm p-5 space-y-3">
+    <CollapsibleSection title="Command Gate" storageKey="detail.gate">
+      {#snippet summary()}{data.Gate?.Enabled ? "enabled" : "disabled"}{/snippet}
       <div class="flex items-center justify-between">
-        <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Command Gate</h2>
         <button
           onclick={doProbeGate}
           disabled={busy["probe-gate"]}
@@ -1271,15 +1363,12 @@
           </div>
         {/if}
       </div>
-    </div>
+    </CollapsibleSection>
 
     <!-- Active processes -->
     {#if data.ActivePIDs.length > 0}
-      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Active Processes</h2>
-          <span class="rounded bg-blue-100 dark:bg-blue-900 px-2 py-0.5 text-xs font-medium text-blue-700 dark:text-blue-300">{data.ActivePIDs.length}</span>
-        </div>
+      <CollapsibleSection title="Active Processes" storageKey="detail.processes" bodyClass="">
+        {#snippet summary()}{data.ActivePIDs.length} running{/snippet}
         <table class="w-full text-xs">
           <thead>
             <tr class="border-b border-white-300 dark:border-navy-600 text-black-700 dark:text-black-600">
@@ -1298,7 +1387,7 @@
             {/each}
           </tbody>
         </table>
-      </div>
+      </CollapsibleSection>
     {/if}
 
     <!-- Recent spawns — shared component (search + pagination + inline detail) -->

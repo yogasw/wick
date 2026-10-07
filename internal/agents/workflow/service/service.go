@@ -367,6 +367,18 @@ func (s *FileService) LoadDraft(id string) (workflow.Workflow, error) {
 	return s.Load(id)
 }
 
+// SaveDraftAs saves a draft on behalf of editorID — the person pressing
+// save, who may not be the owner. Services that tell the two apart (DB and
+// file) get the editor separately; any other falls back to SaveDraft.
+func SaveDraftAs(svc Service, id string, w workflow.Workflow, editorID string) error {
+	if s, ok := svc.(interface {
+		SaveDraftAs(id string, w workflow.Workflow, editorID string) error
+	}); ok {
+		return s.SaveDraftAs(id, w, editorID)
+	}
+	return svc.SaveDraft(id, w)
+}
+
 // isLocked reports whether `w._canvas.locked` is truthy.
 func isLocked(w workflow.Workflow) bool {
 	locked, _ := w.Canvas["locked"].(bool)
@@ -379,6 +391,13 @@ func isLocked(w workflow.Workflow) bool {
 // body is also locked — that catches every mutation except an
 // explicit unlock (writing `_canvas.locked = false`).
 func (s *FileService) SaveDraft(id string, w workflow.Workflow) error {
+	return s.SaveDraftAs(id, w, "")
+}
+
+// SaveDraftAs is SaveDraft with the editor named apart from the owner.
+// File mode has no pinned-session gate, so the editor only matters as the
+// owner of a workflow that has none yet; an existing owner is kept.
+func (s *FileService) SaveDraftAs(id string, w workflow.Workflow, editorID string) error {
 	if err := parse.ValidateID(id); err != nil {
 		return err
 	}
@@ -396,6 +415,7 @@ func (s *FileService) SaveDraft(id string, w workflow.Workflow) error {
 			w.CreatedAt = time.Now().UTC()
 		}
 	}
+	w.CreatedBy = s.keepOwner(id, w.CreatedBy, editorID)
 	data, err := parse.Marshal(w)
 	if err != nil {
 		return err
@@ -438,9 +458,9 @@ func (s *FileService) Publish(id, actorID string) (workflow.Workflow, error) {
 		return workflow.Workflow{}, fmt.Errorf("cannot publish — fix validation errors:\n%s", r.Error())
 	}
 	w.Version++
-	if actorID != "" {
-		w.CreatedBy = actorID
-	}
+	// Publishing is not a change of ownership: actorID only fills an
+	// owner that is still empty. Same rule as the DB-backed Publish.
+	w.CreatedBy = s.keepOwner(id, w.CreatedBy, actorID)
 	out, err := parse.Marshal(w)
 	if err != nil {
 		return workflow.Workflow{}, err
@@ -452,6 +472,22 @@ func (s *FileService) Publish(id, actorID string) (workflow.Workflow, error) {
 		return w, err
 	}
 	return w, nil
+}
+
+// keepOwner picks the owner to write for a file-mode save or publish. With
+// no row to hold it, the owner is whatever the published copy names, else
+// the draft's, else the incoming body's; the actor only fills a blank.
+func (s *FileService) keepOwner(id, incoming, actorID string) string {
+	if prev, err := s.Load(id); err == nil && prev.CreatedBy != "" {
+		return prev.CreatedBy
+	}
+	if prev, err := s.LoadDraft(id); err == nil && prev.CreatedBy != "" {
+		return prev.CreatedBy
+	}
+	if incoming != "" {
+		return incoming
+	}
+	return actorID
 }
 
 // DiscardDraft removes the draft file. No-op if no draft.

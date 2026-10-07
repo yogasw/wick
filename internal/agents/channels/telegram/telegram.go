@@ -16,6 +16,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/rs/zerolog/log"
 
+	"github.com/yogasw/wick/internal/agents/actioncard"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
@@ -415,6 +416,7 @@ func (t *Channel) Reload(ctx context.Context, cfg agentconfig.TelegramChannelCon
 
 	log.Info().Str("channel", "telegram").Str("bot", bot.Self.UserName).Msg("reload: restarting with new config")
 	go func() {
+		defer agentchannels.RecoverPanic("telegram", "reload")
 		if err := t.Start(ctx); err != nil {
 			log.Error().Str("channel", "telegram").Err(err).Msg("telegram channel stopped after reload")
 		}
@@ -422,6 +424,7 @@ func (t *Channel) Reload(ctx context.Context, cfg agentconfig.TelegramChannelCon
 }
 
 func (t *Channel) handleUpdate(ctx context.Context, update tgbotapi.Update) {
+	defer agentchannels.RecoverPanic("telegram", "update")
 	switch {
 	case update.CallbackQuery != nil:
 		t.handleCallback(ctx, update.CallbackQuery)
@@ -459,6 +462,15 @@ func (t *Channel) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		log.Info().Str("channel", "telegram").Int64("chat_id", chatID).
 			Msg("sender identity refused")
 		t.postMessage(chatID, reply)
+		return
+	}
+
+	// No pool dispatch wired: tell the sender rather than calling a nil
+	// func, which would panic and take the whole daemon down.
+	if sendFn == nil {
+		log.Error().Str("channel", "telegram").Int64("chat_id", chatID).
+			Msg("telegram channel not wired to the agent pool; dropping message")
+		t.postMessage(chatID, "Agent is not ready, try again in a moment.")
 		return
 	}
 
@@ -510,6 +522,16 @@ func (t *Channel) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	// UI without touching the message text itself.
 	userCtx := agentchannels.WithCallerUserID(ctx, callerUserID)
 	userCtx = agentchannels.WithSender(userCtx, senderFor(msg, callerUserID))
+	if fn := agentchannels.CardNumberPostback; fn != nil {
+		if label, ok, err := fn(userCtx, sessionID, "telegram", msg.Text); ok {
+			if err != nil {
+				t.postMessage(chatID, "Could not send your choice: "+err.Error())
+			} else {
+				log.Debug().Str("channel", "telegram").Str("session", sessionID).Str("choice", label).Msg("numbered reply sent as postback")
+			}
+			return
+		}
+	}
 	if err := sendFn(userCtx, sessionID, agentName, "telegram", "user", msg.Text); err != nil {
 		log.Error().Str("channel", "telegram").Str("session", sessionID).Err(err).Msg("pool send failed")
 		t.postMessage(chatID, "Agent error: could not queue message. Check the dashboard for details.")
@@ -672,7 +694,7 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 	switch ev.Type {
 	case event.TextDelta:
 		t.mu.Lock()
-		tn := t.turns[sessionID]
+		tn := t.turnLocked(sessionID)
 		if tn != nil {
 			tn.buf.WriteString(ev.Text)
 		}
@@ -694,6 +716,9 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 			t.postMessage(chatID, "Agent error: "+ev.ErrorMsg)
 			return
 		}
+		// No buttons here: a card becomes a numbered list, and a bare
+		// number reply is mapped back to the button (handleMessage).
+		text, _ = actioncard.Split(text, actioncard.PlainText)
 		if text != "" {
 			t.postChunked(chatID, text)
 		}
@@ -710,7 +735,53 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 			msg = ev.Text
 		}
 		t.postMessage(tn.chatID, "Agent error: "+msg)
+
+	default:
+		// Events that are ABOUT the session rather than part of the reply
+		// (a compaction boundary today). The web UI renders them as their
+		// own row; a chat has no such row, so unless the channel posts the
+		// line the event is invisible here — a /compact asked for from
+		// Telegram would simply never report back.
+		text, ok := agentchannels.SystemNoticeText(ev)
+		if !ok {
+			return
+		}
+		t.mu.Lock()
+		tn := t.turns[sessionID]
+		t.mu.Unlock()
+		if tn == nil {
+			return
+		}
+		t.postMessage(tn.chatID, text)
 	}
+}
+
+// turnLocked is the reply sink of sessionID. A turn opened by a message
+// from Telegram is already there; a turn nobody typed — a schedule firing
+// into one of this bot's chats, maybe after a restart emptied the map —
+// gets one from the chat id the session id carries. Caller holds t.mu.
+func (t *Channel) turnLocked(sessionID string) *turn {
+	if tn := t.turns[sessionID]; tn != nil {
+		return tn
+	}
+	chatID, ok := ChatIDOf(t.sessionPrefix, sessionID)
+	if !ok {
+		return nil
+	}
+	tn := &turn{chatID: chatID}
+	t.turns[sessionID] = tn
+	return tn
+}
+
+// ChatIDOf is the Telegram chat behind sessionID, for an instance whose
+// sessions are prefix+"tg-<chat id>". false = not one of its chats.
+func ChatIDOf(prefix, sessionID string) (int64, bool) {
+	rest, ok := strings.CutPrefix(sessionID, prefix+"tg-")
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(rest, 10, 64)
+	return id, err == nil
 }
 
 func (t *Channel) postMessage(chatID int64, text string) {

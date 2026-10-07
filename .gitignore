@@ -110,3 +110,4 @@ vite.config.ts.timestamp-*
 
 # CodeGraph index — per-machine, rebuilt by `codegraph init`.
 .codegraph/
+.env*

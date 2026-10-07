@@ -14,6 +14,8 @@ import (
 
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	"github.com/yogasw/wick/internal/login"
+	pluginreplace "github.com/yogasw/wick/internal/plugins/replace"
+	pkgentity "github.com/yogasw/wick/pkg/entity"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
@@ -35,6 +37,39 @@ type PluginsHandler struct {
 	registry *connplugin.Catalog
 	dir      string
 	reloader reconciler // nil when plugins are disabled; reload() is a no-op then
+	// sources updates plugins that were installed from a plugin source
+	// (url / GitHub) from that source instead of the connector catalog.
+	sources *PluginSourcesHandler
+	// replacer re-runs the replaces migration on demand; refresh reloads
+	// the configs cache for the new key afterwards (configs.EnsureOwned).
+	replacer *pluginreplace.Migrator
+	refresh  func(ctx context.Context, owner string, rows ...pkgentity.Config) error
+	// unload stops a plugin before its files go: a service's supervised
+	// process, a job's schedule, a tool's runner. nil = nothing to stop.
+	unload func(ctx context.Context, kind, key string)
+	// builtin reports whether key is a built-in (non-plugin) module, which
+	// Uninstall refuses instead of answering "not installed".
+	builtin func(key string) bool
+}
+
+// SetUninstall wires what Uninstall needs beyond deleting files: unload
+// stops the running plugin first, builtin guards built-in keys.
+func (h *PluginsHandler) SetUninstall(unload func(ctx context.Context, kind, key string), builtin func(key string) bool) *PluginsHandler {
+	h.unload, h.builtin = unload, builtin
+	return h
+}
+
+// SetReplaceRefresh wires the configs-cache refresh the replace endpoint
+// calls after an apply, so copied values are live without a restart.
+func (h *PluginsHandler) SetReplaceRefresh(fn func(ctx context.Context, owner string, rows ...pkgentity.Config) error) *PluginsHandler {
+	h.refresh = fn
+	return h
+}
+
+// SetSources routes updates of source-installed plugins to their source.
+func (h *PluginsHandler) SetSources(s *PluginSourcesHandler) *PluginsHandler {
+	h.sources = s
+	return h
 }
 
 // NewPluginsHandler builds the marketplace handler. db backs the enable/disable
@@ -44,6 +79,7 @@ func NewPluginsHandler(db *gorm.DB) *PluginsHandler {
 		store:    connplugin.NewStateStore(db),
 		registry: connplugin.DefaultRegistry(),
 		dir:      connplugin.DefaultDir(),
+		replacer: pluginreplace.New(db),
 	}
 }
 
@@ -74,11 +110,14 @@ func (h *PluginsHandler) RegisterRoutes(mux *http.ServeMux, authMidd *login.Midd
 		return authMidd.RequireAdmin(next)
 	}
 	mux.Handle("GET /manager/api/plugins", auth(h.apiList))
+	mux.Handle("GET /manager/api/plugins/installed", auth(h.apiInstalled))
 	mux.Handle("POST /manager/api/plugins/install", admin(h.apiInstall))
 	mux.Handle("POST /manager/api/plugins/{key}/update", admin(h.apiUpdate))
 	mux.Handle("POST /manager/api/plugins/{key}/enable", admin(h.apiEnable))
 	mux.Handle("POST /manager/api/plugins/{key}/disable", admin(h.apiDisable))
 	mux.Handle("POST /manager/api/plugins/{key}/remove", admin(h.apiRemove))
+	mux.Handle("GET /manager/api/plugins/{key}/replace", admin(h.apiReplacePlan))
+	mux.Handle("POST /manager/api/plugins/{key}/replace", admin(h.apiReplaceApply))
 }
 
 // pluginEntry is the JSON shape the SPA renders. installed=false entries come
@@ -104,6 +143,10 @@ type pluginEntry struct {
 type pluginsListResponse struct {
 	Installed []pluginEntry `json:"installed"`
 	Available []pluginEntry `json:"available"`
+	// Catalog is every catalog entry, installed or not (Installed set on the
+	// ones already on disk) — the Marketplace lists the whole catalog, while
+	// Available keeps meaning "not installed yet" for the connector pages.
+	Catalog []pluginEntry `json:"catalog"`
 	// RegistryError is set (and Available empty) when the marketplace fetch
 	// failed — the SPA shows installed plugins regardless and surfaces this.
 	RegistryError string `json:"registry_error,omitempty"`
@@ -121,6 +164,7 @@ func (h *PluginsHandler) apiList(w http.ResponseWriter, r *http.Request) {
 	resp := pluginsListResponse{
 		Installed: []pluginEntry{},
 		Available: []pluginEntry{},
+		Catalog:   []pluginEntry{},
 		IsAdmin:   user != nil && user.IsAdmin(),
 	}
 
@@ -180,11 +224,8 @@ func (h *PluginsHandler) apiList(w http.ResponseWriter, r *http.Request) {
 		resp.Installed = append(resp.Installed, entry)
 	}
 
-	// Available: catalog entries not already installed.
+	// Catalog: every entry; Available: the ones not already installed.
 	for _, a := range avail {
-		if installedKeys[a.Key] {
-			continue
-		}
 		osArch := make([]string, 0, len(a.Assets))
 		for oa := range a.Assets {
 			osArch = append(osArch, oa)
@@ -193,17 +234,21 @@ func (h *PluginsHandler) apiList(w http.ResponseWriter, r *http.Request) {
 		// Same connectorCategory() built-ins use — Available.DefaultTags is
 		// the identical []entity.DefaultTag (= tool.DefaultTag) type.
 		cat, _, _ := connectorCategory(a.DefaultTags, false)
-		resp.Available = append(resp.Available, pluginEntry{
+		entry := pluginEntry{
 			Key:         a.Key,
 			Name:        a.Name,
 			Description: a.Description,
 			Version:     a.Version,
-			Installed:   false,
+			Installed:   installedKeys[a.Key],
 			ArchOK:      a.AssetFor(host) != "",
 			Host:        host,
 			OSArch:      osArch,
 			Category:    cat,
-		})
+		}
+		resp.Catalog = append(resp.Catalog, entry)
+		if !entry.Installed {
+			resp.Available = append(resp.Available, entry)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -220,14 +265,14 @@ func (h *PluginsHandler) apiInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	_, url, err := h.registry.Resolve(ctx, req.Name, "")
+	avail, url, err := h.registry.Resolve(ctx, req.Name, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	// Register it into the connectors service now so it appears in the
 	// connector list / manager / admin immediately, not after the poll tick.
-	h.installOrUpdate(w, r, key(req.Name), url, map[string]any{"ok": true, "installed": req.Name})
+	h.installOrUpdate(w, r, key(req.Name), url, avail.Version, map[string]any{"ok": true, "installed": req.Name})
 }
 
 // apiUpdate re-downloads the latest catalog version for an already-installed
@@ -245,13 +290,16 @@ func (h *PluginsHandler) apiUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "key required", http.StatusBadRequest)
 		return
 	}
+	if h.sources.updateFromSource(w, r, k) {
+		return
+	}
 	ctx := r.Context()
 	avail, url, err := h.registry.Resolve(ctx, k, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	h.installOrUpdate(w, r, k, url, map[string]any{"ok": true, "updated": k, "version": avail.Version})
+	h.installOrUpdate(w, r, k, url, avail.Version, map[string]any{"ok": true, "updated": k, "version": avail.Version})
 }
 
 // key normalizes a marketplace name to a plugin key for progress labelling.
@@ -264,13 +312,14 @@ func key(name string) string { return name }
 // (`data: {phase,pct}` frames, then a terminal `data: {ok|error}`); otherwise it
 // blocks and returns the plain JSON `done` payload (backward-compatible with the
 // CLI and any non-SSE caller).
-func (h *PluginsHandler) installOrUpdate(w http.ResponseWriter, r *http.Request, k, url string, done map[string]any) {
+func (h *PluginsHandler) installOrUpdate(w http.ResponseWriter, r *http.Request, k, url, version string, done map[string]any) {
 	ctx := r.Context()
 	if !wantsSSE(r) {
 		if err := connplugin.InstallFromURL(ctx, url, h.dir); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		h.recordOfficial(k, version)
 		h.reload(ctx)
 		writeJSON(w, http.StatusOK, done)
 		return
@@ -304,8 +353,17 @@ func (h *PluginsHandler) installOrUpdate(w http.ResponseWriter, r *http.Request,
 		send(map[string]any{"phase": "error", "error": err.Error()})
 		return
 	}
+	h.recordOfficial(k, version)
 	h.reload(ctx)
 	send(done)
+}
+
+// recordOfficial marks k as installed from the official wick catalog (the
+// only thing installOrUpdate installs from), so Admin → Plugins can show
+// its origin. The catalog only carries connectors.
+func (h *PluginsHandler) recordOfficial(k, version string) {
+	_ = h.store.Record(k, wickplugin.KindConnector, version)
+	_ = h.store.SetOrigin(k, connplugin.OriginOfficial)
 }
 
 // wantsSSE reports whether the caller opted into a Server-Sent Events response.
@@ -333,28 +391,95 @@ func (h *PluginsHandler) setEnabled(w http.ResponseWriter, r *http.Request, enab
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key": key, "enabled": enabled})
 }
 
+// apiRemove uninstalls plugin {key} of any kind. The kind folders are
+// scanned like the Installed list does; ?kind= picks one when a connector and
+// a tool share a key. The running plugin is unloaded first (a service is
+// stopped before its files go), then the folder is deleted, the recorded
+// version is cleared and connectors reconcile. Config rows are kept, so a
+// reinstall picks them up again.
 func (h *PluginsHandler) apiRemove(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if key == "" {
 		http.Error(w, "key required", http.StatusBadRequest)
 		return
 	}
-	found, err := connplugin.Scan(h.dir)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	for _, f := range found {
-		if f.Key == key {
+	want := r.URL.Query().Get("kind")
+	for _, kind := range wickplugin.Kinds {
+		if want != "" && wickplugin.NormalizeKind(want) != kind {
+			continue
+		}
+		dir := connplugin.KindDir(kind)
+		if kind == wickplugin.KindConnector {
+			dir = h.dir
+		}
+		found, err := connplugin.ScanKind(dir, kind)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, f := range found {
+			if f.Key != key {
+				continue
+			}
+			if h.unload != nil {
+				h.unload(r.Context(), kind, key)
+			}
 			if err := os.RemoveAll(filepath.Dir(f.BinaryPath)); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			// Reconcile so the connector drops out of the lists now.
+			_ = h.store.ClearInstalled(key)
+			// Reconcile so a connector drops out of the lists now.
 			h.reload(r.Context())
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": key})
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": key, "kind": kind})
 			return
 		}
 	}
+	if h.builtin != nil && h.builtin(key) {
+		http.Error(w, "built-in, not a plugin: it cannot be uninstalled", http.StatusConflict)
+		return
+	}
 	http.Error(w, "plugin not installed", http.StatusNotFound)
+}
+
+// apiReplacePlan is the dry run of the replaces migration for plugin {key}:
+// per old key, which config fields would move (secrets as "set"/"empty"),
+// the job settings and the access merge. Nothing is written.
+func (h *PluginsHandler) apiReplacePlan(w http.ResponseWriter, r *http.Request) {
+	h.replace(w, r, false)
+}
+
+// apiReplaceApply re-runs the migration. A pair migrated before is skipped
+// unless ?force=1; manual values on the plugin are never overwritten.
+func (h *PluginsHandler) apiReplaceApply(w http.ResponseWriter, r *http.Request) {
+	h.replace(w, r, true)
+}
+
+func (h *PluginsHandler) replace(w http.ResponseWriter, r *http.Request, apply bool) {
+	key := r.PathValue("key")
+	pairs := pluginreplace.Lookup(key)
+	if len(pairs) == 0 {
+		http.Error(w, "plugin "+key+" replaces nothing (or is not loaded)", http.StatusNotFound)
+		return
+	}
+	force := r.URL.Query().Get("force") == "1" || r.URL.Query().Get("force") == "true"
+	reports := make([]pluginreplace.Report, 0, len(pairs))
+	for _, p := range pairs {
+		var rep pluginreplace.Report
+		var err error
+		if apply {
+			rep, err = h.replacer.Apply(r.Context(), p, actor(r), force)
+			if err == nil && !rep.AlreadyDone && h.refresh != nil {
+				err = h.refresh(r.Context(), p.New, p.Configs...)
+			}
+		} else {
+			rep, err = h.replacer.Plan(r.Context(), p)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		reports = append(reports, rep)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"key": key, "applied": apply, "reports": reports})
 }

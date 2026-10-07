@@ -57,6 +57,10 @@ export type SessionContext = {
   /** One sentence explaining a false can_compact, written by the
    *  server so the UI keeps no second copy of the reason. */
   compact_note?: string;
+  /** Whether the active provider compacts by itself once the window
+   *  fills, as it last reported (omp get_state, opencode config).
+   *  Absent when the provider never said. */
+  auto_compact?: boolean;
 };
 
 export async function fetchSessionContext(

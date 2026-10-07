@@ -56,6 +56,13 @@ vi.mock("../../api/subagents.js", () => ({
   }),
 }));
 
+// The modal's caption asks the child session for its own context
+// reading. Stubbed to nothing here so these tests stay about the
+// transcript — SubAgentModal.meter.test.ts is what covers the caption.
+vi.mock("../../api/context.js", () => ({
+  fetchSessionContext: vi.fn(() => Promise.reject(new Error("context: 404"))),
+}));
+
 vi.mock("../../api/messages.js", () => ({
   sendMessage: vi.fn((_base: string, id: string, payload: { text: string }) => {
     calls.sent.push({ id, text: payload.text });
@@ -192,7 +199,8 @@ describe("SubAgentModal", () => {
   });
 
   // Stopping is offered only while there is something to stop; a Stop button
-  // on a finished sub-agent would be a click that does nothing.
+  // on a finished sub-agent would be a click that does nothing. It lives in
+  // the composer, as it does for the main agent — never in the header.
   test("Stop shows only while the sub-agent is live, and interrupts its delegation", async () => {
     replies.set("conversation:root--sub-9f2c81ab40de", { turns: [] });
 
@@ -203,7 +211,46 @@ describe("SubAgentModal", () => {
     render(SubAgentModal, {
       props: { ...props(), row: subAgent({ status: "running" }) },
     });
-    await fireEvent.click(await screen.findByRole("button", { name: /^stop$/i }));
+    const stop = await screen.findByRole("button", { name: /^stop$/i });
+    expect(stop.getAttribute("data-testid")).toBe("composer-stop");
+    expect(screen.getAllByRole("button", { name: /stop/i })).toHaveLength(1);
+    await fireEvent.click(stop);
     expect(calls.stopped).toEqual(["d1"]);
+  });
+
+  test("running with a draft: Send, and holding it offers Stop", async () => {
+    replies.set("conversation:root--sub-9f2c81ab40de", { turns: [] });
+    render(SubAgentModal, {
+      props: { ...props(), row: subAgent({ status: "running" }) },
+    });
+    await fireEvent.input(await screen.findByRole("textbox"), { target: { value: "Ow iya" } });
+    expect(screen.queryByTestId("composer-stop")).toBeNull();
+    await fireEvent.keyDown(screen.getByTestId("composer-send"), { key: "ArrowUp" });
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Stop" }));
+    expect(calls.stopped).toEqual(["d1"]);
+    expect(calls.sent).toEqual([]);
+  });
+});
+
+// Escape used to die on the dialog's own stopPropagation, so the modal could
+// not be closed from the keyboard at all. It is a layer now (layers.ts).
+describe("SubAgentModal — Escape", () => {
+  test("Escape closes the modal, also from the follow-up composer", async () => {
+    replies.set("conversation:root--sub-9f2c81ab40de", { turns: [turn("done")] });
+    const p = props();
+    render(SubAgentModal, { props: p });
+    const box = await screen.findByPlaceholderText(/follow-up/i);
+    box.focus();
+    await fireEvent.keyDown(box, { key: "Escape" });
+    expect(p.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("Escape with nothing focused closes it too", async () => {
+    replies.set("conversation:root--sub-9f2c81ab40de", { turns: [turn("done")] });
+    const p = props();
+    render(SubAgentModal, { props: p });
+    await screen.findByPlaceholderText(/follow-up/i);
+    await fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    expect(p.onClose).toHaveBeenCalledTimes(1);
   });
 });

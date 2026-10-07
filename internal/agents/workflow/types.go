@@ -42,7 +42,16 @@ const (
 	NodeDataTableCount  NodeType = "datatable_count"
 	NodeSessionInit     NodeType = "session_init"
 	NodeWebhookRespond  NodeType = "webhook_respond"
+	NodeStickyNote      NodeType = "sticky_note"
 )
+
+// IsAnnotation reports whether nodes of this type are canvas-only
+// annotations (sticky_note). They never execute, take no edges, and
+// are skipped by reachability, cycle and test-coverage checks.
+func (t NodeType) IsAnnotation() bool { return t == NodeStickyNote }
+
+// Sticky note colour presets. Empty Color renders as yellow.
+var StickyNoteColors = []string{"yellow", "green", "blue", "purple", "red", "gray"}
 
 // IsDataTableNode reports whether t is one of the datatable_* variants.
 func (t NodeType) IsDataTableNode() bool {
@@ -175,6 +184,11 @@ type Node struct {
 	Prompt   string `json:"prompt,omitempty"`
 	Session  string `json:"session,omitempty"`
 
+	// agent — model id pinned on the node's provider instance (empty =
+	// the instance default). Stored apart from Provider: the editor's
+	// "type/name::model" picker value is split on save.
+	Model string `json:"model,omitempty"`
+
 	// agent override — copy resolved sessionID from another node in
 	// this run. Must reference an upstream agent or session_init node.
 	SessionFrom string `json:"session_from,omitempty"`
@@ -282,7 +296,36 @@ type Node struct {
 	RespondStatus  int               `json:"respond_status,omitempty"`
 	RespondBody    string            `json:"respond_body,omitempty"`
 	RespondHeaders map[string]string `json:"respond_headers,omitempty"`
+
+	// sticky_note — markdown annotation drawn behind a block of nodes.
+	// Position lives in _canvas.positions like any node; Width/Height
+	// 0 = canvas default size, Color "" = yellow.
+	Content string `json:"content,omitempty"`
+	Color   string `json:"color,omitempty"`
+	Width   int    `json:"width,omitempty"`
+	Height  int    `json:"height,omitempty"`
+	// The note is a board: Content is its title (plain markdown, top
+	// left) and Texts are small sticky cards placed freely on it.
+	Texts []StickyText `json:"texts,omitempty"`
 }
+
+// StickyText is one small sticky card on a sticky_note board. X/Y are
+// the top-left corner and Width the card width (0 = 0.4), all relative
+// 0..1 to the board's size, so cards follow the board when it is
+// resized. Color is a StickyNoteColors preset ("" = yellow); Size is a
+// StickyTextSizes font size ("" = md).
+type StickyText struct {
+	ID      string  `json:"id"`
+	Content string  `json:"content"`
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
+	Width   float64 `json:"width,omitempty"`
+	Color   string  `json:"color,omitempty"`
+	Size    string  `json:"size,omitempty"`
+}
+
+// Sticky card font sizes. Empty Size renders as md.
+var StickyTextSizes = []string{"sm", "md", "lg"}
 
 // OnFailure values.
 const (
@@ -395,6 +438,9 @@ type Trigger struct {
 	ID        string      `json:"id,omitempty"`
 	Type      TriggerType `json:"type"`
 	EntryNode string      `json:"entry_node,omitempty"`
+	// Description is the markdown "what for + why" shown on the trigger
+	// card. Optional for the engine; workflow_validate warns when empty.
+	Description string `json:"description,omitempty"`
 
 	// cron
 	Schedule string `json:"schedule,omitempty"`

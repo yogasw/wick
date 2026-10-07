@@ -5,7 +5,7 @@ import "github.com/yogasw/wick/internal/pkg/spa"
 templ Layout(title string) {
 	{{ theme := ThemeByID(ThemeFromContext(ctx)) }}
 	<!DOCTYPE html>
-	<html lang="en" class={ htmlThemeClasses(theme) }>
+	<html lang="en" class={ htmlThemeClasses(theme) } { htmlScaleAttrs(ctx)... }>
 		<head>
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"/>
@@ -141,11 +141,30 @@ templ impersonationBanner(info ImpersonationInfo) {
 			<span class="font-medium">
 				Viewing as { info.ActingAs } — actions you take are recorded as this user.
 			</span>
-			<form action="/admin/impersonate/stop" method="POST" class="shrink-0">
-				<button type="submit" class="inline-flex items-center justify-center rounded-lg border border-cau-400 bg-white-100 px-3 py-2 text-xs font-medium text-cau-400 transition-colors hover:bg-white-200 dark:bg-navy-700">
-					Back to my account
+			<div class="flex shrink-0 items-center gap-2">
+				<form action="/admin/impersonate/stop" method="POST">
+					<button type="submit" class="inline-flex items-center justify-center rounded-lg border border-cau-400 bg-white-100 px-3 py-2 text-xs font-medium text-cau-400 transition-colors hover:bg-white-200 dark:bg-navy-700">
+						Back to my account
+					</button>
+				</form>
+				<!-- Hiding it is not dismissing it. The state this warns about
+				     outlives the page, so the warning cannot simply be closed —
+				     but the thing it must not take with it is the way OUT. That
+				     now lives in the account menu (a caution dot on the avatar,
+				     "Viewing as …" + "Back to my account" inside), which is
+				     chrome that is always on screen and can't be collapsed. -->
+				<button
+					type="button"
+					data-chrome-banner-hide
+					title="Collapse this bar — 'Back to my account' stays in your account menu"
+					aria-label="Collapse the viewing-as bar"
+					class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-cau-400/40 text-cau-400 transition-colors hover:bg-white-200 dark:hover:bg-navy-700"
+				>
+					<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+						<path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path>
+					</svg>
 				</button>
-			</form>
+			</div>
 		</div>
 		<!-- The banner sits ABOVE every page in normal flow, so a page sized to
 		     the whole viewport (the agents shell is 100svh) ends up one banner
@@ -159,12 +178,44 @@ templ impersonationBanner(info ImpersonationInfo) {
 			(function () {
 				var el = document.querySelector('[data-chrome-banner]');
 				if (!el) return;
-				var publish = function () {
-					document.documentElement.style.setProperty('--wick-chrome-top', el.offsetHeight + 'px');
+				var hide = document.querySelector('[data-chrome-banner-hide]');
+				var KEY = 'wick.impersonation-banner.collapsed';
+				var publish = function (collapsed) {
+					// Collapsed contributes no height: a full-height shell
+					// subtracting a hidden banner loses its bottom edge.
+					var h = collapsed ? 0 : el.offsetHeight;
+					document.documentElement.style.setProperty('--wick-chrome-top', h + 'px');
 				};
-				publish();
-				if (window.ResizeObserver) new ResizeObserver(publish).observe(el);
-				else window.addEventListener('resize', publish);
+				// The banner is server-rendered on every page, so the choice
+				// has to be remembered here or it comes back on every click.
+				//
+				// Hiding is done with `display`, NOT the `hidden` property:
+				// Tailwind's preflight writes [hidden] inside :where(), which
+				// has zero specificity, so the element's own `flex`/`fixed`
+				// utility wins and `el.hidden = true` changes nothing visible.
+				// The bar stayed on screen while this code believed it was
+				// gone — and then published a 0px chrome height for a banner
+				// that was still taking up room, which is what pushed every
+				// full-height shell (sidebar footer, composer) off the bottom
+				// of the screen while viewing as someone else.
+				var collapsedNow = false;
+				var apply = function (collapsed) {
+					collapsedNow = collapsed;
+					el.style.display = collapsed ? 'none' : '';
+					publish(collapsed);
+				};
+				var stored = false;
+				try { stored = window.localStorage.getItem(KEY) === '1'; } catch (e) {}
+				apply(stored);
+				if (hide) hide.addEventListener('click', function () {
+					try { window.localStorage.setItem(KEY, '1'); } catch (e) {}
+					apply(true);
+				});
+				// Re-measure on resize/wrap, but never let the observer
+				// republish a height for a bar the user collapsed.
+				var remeasure = function () { publish(collapsedNow); };
+				if (window.ResizeObserver) new ResizeObserver(remeasure).observe(el);
+				else window.addEventListener('resize', remeasure);
 			})();
 		</script>
 	}

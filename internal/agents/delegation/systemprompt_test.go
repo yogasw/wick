@@ -37,7 +37,7 @@ func TestRoleSystemPromptReachesChildSession(t *testing.T) {
 		Key: "reviewer", Provider: "claude",
 		SystemPrompt: "You review code and return findings ranked by severity.",
 	}
-	if err := applyRolePrompt(layout, childID, profile); err != nil {
+	if err := applyRolePrompt(layout, childID, profile, 0, 0); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 
@@ -63,7 +63,7 @@ func TestEmptyRolePromptLeavesAddonUntouched(t *testing.T) {
 		t.Fatalf("seed addon: %v", err)
 	}
 
-	if err := applyRolePrompt(layout, childID, &entity.AgentProfile{Key: "bare", Provider: "claude"}); err != nil {
+	if err := applyRolePrompt(layout, childID, &entity.AgentProfile{Key: "bare", Provider: "claude"}, 0, 0); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 

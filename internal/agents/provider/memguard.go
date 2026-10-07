@@ -2,6 +2,8 @@ package provider
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 
 	"github.com/rs/zerolog"
@@ -59,6 +61,23 @@ func (g *MemGuard) sliceLimits() memscope.SliceLimits {
 	}
 }
 
+// SyncSlice rewrites agents.slice's unit (or raw cgroup) with this
+// guard's limits now, instead of at the next spawn. The resource guard
+// writes the live cgroup when a limit changes; without this the unit
+// file kept the old value and the next daemon-reload put it back.
+func (g *MemGuard) SyncSlice() error {
+	if g == nil || g.Mode != config.MemGuardEnforce {
+		return nil
+	}
+	switch memscopeBackend() {
+	case memscope.BackendCgroupFS:
+		return memscope.EnsureCgroupSlice(g.sliceLimits())
+	case memscope.BackendNone:
+		return nil
+	}
+	return memscope.EnsureSlice(g.sliceLimits())
+}
+
 // memscopeBackend is a seam so tests can drive every branch without a
 // systemd user session or a real cgroup mount. Production always points
 // at memscope.DetectBackend, which ranks systemd-run above raw cgroupfs
@@ -110,11 +129,27 @@ func (g *MemGuard) wraps() bool {
 	return memscopeBackend() != memscope.BackendNone
 }
 
+// wrapsManaged covers the gap OnPath-only leaves for wick-managed
+// binaries: the PATH shim sits in front of a name looked up on PATH, but a
+// managed binary is spawned by absolute path under <data dir>/providers/bin
+// and would bypass it. So when the guard is on and applies on the path,
+// wick wraps managed binaries itself.
+func (g *MemGuard) wrapsManaged(bin string) bool {
+	if g == nil || g.Mode == config.MemGuardOff || g.Mode == "" || !g.Scopes.OnPath {
+		return false
+	}
+	root := ManagedBinRoot()
+	if root == "" || !strings.HasPrefix(filepath.Clean(bin), filepath.Clean(root)+string(filepath.Separator)) {
+		return false
+	}
+	return memscopeBackend() != memscope.BackendNone
+}
+
 // Wrap returns the binary, argv, and scope unit name to use for a spawn.
 // An empty unit name means the spawn was not wrapped, and the caller must
 // exec exactly what it passed in.
 func (g *MemGuard) Wrap(bin string, args []string, providerName string, seq int) (string, []string, string) {
-	if !g.wraps() {
+	if !g.wraps() && !g.wrapsManaged(bin) {
 		return bin, args, ""
 	}
 	l := log.With().Str("component", "memguard").Logger()

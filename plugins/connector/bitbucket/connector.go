@@ -31,8 +31,17 @@ type Configs struct {
 	Email            string `wick:"email;secret;required;desc=Atlassian account email used with the API token for Basic Auth."`
 	APIToken         string `wick:"secret;required;desc=Bitbucket Cloud API token. Needs read repository scopes for read ops and write repository scopes for write ops."`
 	DefaultWorkspace string `wick:"desc=Optional default Bitbucket workspace slug used when an operation omits workspace."`
+	// PermissionStatus is a read-only widget: the per-operation allowed/denied
+	// checklist probed live from the token. Not a stored value — the html op renders it.
+	PermissionStatus string `wick:"html=permission_status;desc=Live checklist of which operations this token can run. Fill the credentials and default_workspace first."`
 	DefaultPagelen   int    `wick:"default=20;desc=Default Bitbucket page length for list/search operations."`
 	MaxPagelen       int    `wick:"default=100;desc=Maximum page length allowed by this connector."`
+}
+
+// PermissionStatusInput: the manager's html widget always passes the current
+// field value as "browser"; it is unused here.
+type PermissionStatusInput struct {
+	Browser string `wick:"desc=Unused."`
 }
 
 type SearchRepositoriesInput struct {
@@ -116,6 +125,28 @@ type CreatePullRequestCommentInput struct {
 	InlineFrom    int    `wick:"key=inline_from;number;desc=Optional. Line number in the OLD (pre-diff) version, use instead of inline_to to comment on a removed/old line. Needs inline_path."`
 }
 
+type RunPipelineInput struct {
+	Workspace    string `wick:"desc=Bitbucket workspace slug. If empty, uses default_workspace config."`
+	RepoSlug     string `wick:"required;desc=Repository slug."`
+	Branch       string `wick:"required;desc=Branch to run the pipeline on. Example: main"`
+	Pattern      string `wick:"desc=Optional pipeline name to run. With selector_type custom (default) it is a name from the custom: section of bitbucket-pipelines.yml, with branches it is the branch pattern (e.g. staging), with pull-requests it is the PR pattern (e.g. **). Empty runs the default pipeline for the branch."`
+	SelectorType string `wick:"key=selector_type;dropdown=custom|branches|pull-requests;desc=Which section of bitbucket-pipelines.yml pattern refers to. Default custom."`
+	Variables    string `wick:"textarea;desc=Optional pipeline variables. A JSON object or one KEY=VALUE per line."`
+}
+
+type GetPipelineInput struct {
+	Workspace    string `wick:"desc=Bitbucket workspace slug. If empty, uses default_workspace config."`
+	RepoSlug     string `wick:"required;desc=Repository slug."`
+	PipelineUUID string `wick:"required;desc=Pipeline UUID or build number from run_pipeline or list_pipelines."`
+}
+
+type ListPipelinesInput struct {
+	Workspace string `wick:"desc=Bitbucket workspace slug. If empty, uses default_workspace config."`
+	RepoSlug  string `wick:"required;desc=Repository slug."`
+	Pagelen   int    `wick:"desc=Page size. Defaults to connector default_pagelen."`
+	Page      int    `wick:"desc=Page number. Default 1."`
+}
+
 type MergePullRequestInput struct {
 	Workspace         string `wick:"desc=Bitbucket workspace slug. If empty, uses default_workspace config."`
 	RepoSlug          string `wick:"required;desc=Repository slug."`
@@ -136,6 +167,18 @@ func Meta() connector.Meta {
 
 func Operations() []connector.Category {
 	return []connector.Category{
+		connector.Cat(
+			"Maintenance",
+			"Backs the manager's config widget (permission status); not meant for agent use.",
+			connector.OpConfigOnly(
+				"permission_status",
+				"Permission Status",
+				"Render the allowed/denied checklist of operations for the configured token. Read-only; used by the manager UI's permission-status widget.",
+				PermissionStatusInput{},
+				permissionStatus,
+				wickdocs.Docs{},
+			),
+		),
 		connector.Cat(
 			"Repositories",
 			"Search and inspect Bitbucket repositories and branches.",
@@ -268,6 +311,34 @@ func Operations() []connector.Category {
 				wickdocs.Docs{},
 			),
 		),
+		connector.Cat(
+			"Pipelines",
+			"Trigger and inspect Bitbucket Pipelines builds.",
+			connector.OpDestructive(
+				"run_pipeline",
+				"Run Pipeline",
+				"Trigger a Bitbucket Pipelines build on a branch, optionally a custom pipeline by name and with variables. Returns the pipeline (uuid, build_number, state). Starts a real build.",
+				RunPipelineInput{},
+				runPipeline,
+				wickdocs.Docs{},
+			),
+			connector.Op(
+				"get_pipeline",
+				"Get Pipeline",
+				"Fetch one pipeline's state and result by UUID or build number.",
+				GetPipelineInput{},
+				getPipeline,
+				wickdocs.Docs{},
+			),
+			connector.Op(
+				"list_pipelines",
+				"List Pipelines",
+				"List recent pipelines of a repository, newest first.",
+				ListPipelinesInput{},
+				listPipelines,
+				wickdocs.Docs{},
+			),
+		),
 	}
 }
 
@@ -389,4 +460,28 @@ func mergePullRequest(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return sendJSON(c, p, body)
+}
+
+func runPipeline(c *connector.Ctx) (any, error) {
+	p, body, err := validateRunPipeline(c)
+	if err != nil {
+		return nil, err
+	}
+	return sendJSON(c, p, body)
+}
+
+func getPipeline(c *connector.Ctx) (any, error) {
+	p, err := validateGetPipeline(c)
+	if err != nil {
+		return nil, err
+	}
+	return fetchJSON(c, p)
+}
+
+func listPipelines(c *connector.Ctx) (any, error) {
+	p, err := validateListPipelines(c)
+	if err != nil {
+		return nil, err
+	}
+	return fetchJSON(c, p)
 }

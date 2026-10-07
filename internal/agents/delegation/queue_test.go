@@ -2,6 +2,8 @@ package delegation
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -445,5 +447,131 @@ func TestSetBlockedIgnoresTerminalRows(t *testing.T) {
 	}
 	if row.Blocked {
 		t.Fatal("terminal row was marked blocked")
+	}
+}
+
+// The room's single slot is held by the delegation ROW being running, so
+// the queue only serialises as long as that row does not finish before its
+// child does. A Warning (an unparsable provider line) mid-run must keep the
+// slot; a fatal Error must release it. Before slice G the parse path sent
+// Error, which is how six queued delegations ended up running at once in
+// one tree while their "finished" predecessors were still working.
+func TestQueueHoldsThroughWarningAndReleasesOnError(t *testing.T) {
+	cases := []struct {
+		name    string
+		ev      StreamEvent
+		release bool
+	}{
+		{"warning holds the slot", StreamEvent{Type: event.Warning, Text: "claude parse: unexpected end of JSON input"}, false},
+		{"fatal error releases it", StreamEvent{Type: event.Error, Text: "model overloaded"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// gated: a fatal Error must not end the first run before the
+			// second is queued behind it, or there is nothing to release.
+			gate := make(chan struct{})
+			stream := &scriptedStream{events: []StreamEvent{
+				{Type: event.TextDelta, Text: "working"}, tc.ev,
+			}, hold: true, gate: gate}
+			s, r := serialService(t, stream)
+			ctx := context.Background()
+
+			req := baseReq()
+			req.Mode = ModeAsync
+			req.DeliverySink = SinkNone
+			first, err := s.Run(ctx, req)
+			if err != nil || first.Status != entity.DelegationRunning {
+				t.Fatalf("first run: status %v err %v", first, err)
+			}
+			req2 := baseReq()
+			req2.Mode = ModeAsync
+			req2.DeliverySink = SinkNone
+			req2.RootID = first.DelegationID
+			req2.Depth = 1
+			second, err := s.Run(ctx, req2)
+			if err != nil || second.Status != entity.DelegationQueued {
+				t.Fatalf("second run: status %v err %v", second, err)
+			}
+			close(gate)
+
+			if tc.release {
+				waitFor(t, 10*time.Second, func() bool {
+					row, err := r.Get(ctx, second.DelegationID)
+					return err == nil && row.Status != entity.DelegationQueued
+				})
+				return
+			}
+			// Give the runner time to consume the warning, then the room
+			// must still be busy with the first and holding the second.
+			time.Sleep(300 * time.Millisecond)
+			if row, _ := r.Get(ctx, first.DelegationID); row == nil || row.Status != entity.DelegationRunning {
+				t.Fatalf("first row = %+v, want still running through the warning", row)
+			}
+			if row, _ := r.Get(ctx, second.DelegationID); row == nil || row.Status != entity.DelegationQueued {
+				t.Fatalf("second row = %+v, want still queued", row)
+			}
+		})
+	}
+}
+
+// Every terminal delegation pokes the dispatcher on its own goroutine, so
+// two can read the same queue head. Only one may claim it.
+func TestMarkRunningClaimsOnce(t *testing.T) {
+	r := testRepo(t)
+	seedDelegation(t, r, "q1", "root-1", entity.DelegationQueued, 0)
+	ctx := context.Background()
+	if err := r.MarkRunning(ctx, "q1"); err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	if err := r.MarkRunning(ctx, "q1"); !errors.Is(err, errNotQueued) {
+		t.Fatalf("second claim = %v, want errNotQueued", err)
+	}
+}
+
+// Run's own claim: a dispatcher that took the queued row between Create
+// and Run's MarkRunning owns it; Run must yield rather than execute too.
+func TestClaimForRunYieldsToADispatcherThatWon(t *testing.T) {
+	r := testRepo(t)
+	s := &Service{Repo: r}
+	ctx := context.Background()
+	row := seedDelegation(t, r, "q1", "root-1", entity.DelegationQueued, 0)
+	if res, ok := s.claimForRun(ctx, row); !ok || res != nil {
+		t.Fatalf("uncontended claim = (%+v, %v), want (nil, true)", res, ok)
+	}
+
+	row2 := seedDelegation(t, r, "q2", "root-1", entity.DelegationQueued, 0)
+	if err := r.MarkRunning(ctx, "q2"); err != nil { // the dispatcher wins
+		t.Fatal(err)
+	}
+	res, ok := s.claimForRun(ctx, row2)
+	if ok {
+		t.Fatal("lost claim reported as won: the delegation would run twice")
+	}
+	if res == nil || res.Status != entity.DelegationRunning || res.DelegationID != "q2" {
+		t.Fatalf("result = %+v, want running q2", res)
+	}
+
+	// The lost-claim result echoes the row's real mode, and never names an
+	// empty delivery sink.
+	row3 := seedDelegation(t, r, "q3", "root-1", entity.DelegationQueued, 0)
+	row3.Mode, row3.DeliverySink = ModeSync, ""
+	if err := r.MarkRunning(ctx, "q3"); err != nil {
+		t.Fatal(err)
+	}
+	res, _ = s.claimForRun(ctx, row3)
+	if res == nil || res.Mode != ModeForeground {
+		t.Fatalf("foreground lost claim mode = %+v, want %q", res, ModeForeground)
+	}
+	if strings.Contains(res.Note, "delivered via .") || !strings.Contains(res.Note, "wick_agent_collect") {
+		t.Fatalf("note = %q", res.Note)
+	}
+	row4 := seedDelegation(t, r, "q4", "root-1", entity.DelegationQueued, 0)
+	row4.Mode, row4.DeliverySink = ModeAsync, SinkSession
+	if err := r.MarkRunning(ctx, "q4"); err != nil {
+		t.Fatal(err)
+	}
+	res, _ = s.claimForRun(ctx, row4)
+	if res == nil || res.Mode != ModeBackground || !strings.Contains(res.Note, "delivered via session") {
+		t.Fatalf("background lost claim = %+v", res)
 	}
 }

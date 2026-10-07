@@ -19,12 +19,25 @@ func TestLoginCommandClaudeAppendsSlashLoginAfterExtraArgs(t *testing.T) {
 	}
 }
 
-func TestLoginCommandCodexGeminiNotWiredYet(t *testing.T) {
-	// codex/gemini reconnect lands later in codex.go / gemini.go; until
-	// then Start must refuse them cleanly.
-	if _, ok := LoginCommand(provider.TypeCodex, nil); ok {
-		t.Fatal("codex tty login not wired yet")
+// TestLoginCommandCodexUsesDeviceAuthWithoutExtraArgs: the default codex
+// login waits on a localhost callback nobody can reach on the wick host,
+// so the login TTY must ask for the device-code flow instead. ExtraArgs
+// are dropped on purpose — `codex login` is a subcommand that rejects the
+// REPL's flags, and a rejected argv dies before printing the link.
+func TestLoginCommandCodexUsesDeviceAuthWithoutExtraArgs(t *testing.T) {
+	args, ok := LoginCommand(provider.TypeCodex, []string{"--model", "gpt-5", "--sandbox", "read-only"})
+	if !ok {
+		t.Fatal("codex must support tty login")
 	}
+	want := []string{"login", "--device-auth"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+}
+
+func TestLoginCommandGeminiNotWiredYet(t *testing.T) {
+	// gemini reconnect lands later in gemini.go; until then Start must
+	// refuse it cleanly.
 	if _, ok := LoginCommand(provider.TypeGemini, nil); ok {
 		t.Fatal("gemini tty login not wired yet")
 	}
@@ -56,7 +69,9 @@ func TestLoginEnvClaudeSuppressesBrowserAutoOpen(t *testing.T) {
 			t.Fatalf("LoginEnv(claude) = %v, missing %s marker", env, key)
 		}
 	}
+	// codex needs no such spoofing: --device-auth never tries to open a
+	// browser or bind a callback, it just prints the link and the code.
 	if got := LoginEnv(provider.TypeCodex); len(got) != 0 {
-		t.Fatalf("LoginEnv(codex) = %v, want empty until wired", got)
+		t.Fatalf("LoginEnv(codex) = %v, want empty", got)
 	}
 }

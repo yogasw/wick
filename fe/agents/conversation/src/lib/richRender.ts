@@ -7,6 +7,7 @@ import "katex/dist/katex.min.css";
 import "./richRender.css";
 import { mount } from "svelte";
 import { attachToolbar } from "./blockToolbar.js";
+import { setTraceHighlighter } from "@wick-fe/common-ui";
 import { renderMarkdown, esc } from "./markdown.js";
 import HtmlArtifact from "./components/HtmlArtifact.svelte";
 import type { WidgetPolicy } from "./types/agents.js";
@@ -722,7 +723,7 @@ export function buildArtifactSrcdoc(html: string, policy?: WidgetPolicy): string
   // The file bridge MUST go in <head>, before any body script: an artifact's
   // own <script> runs synchronously top-to-bottom, so if it calls
   // window.wickReadFile it has to already exist by then.
-  const head = meta + artifactThemeStyle() + artifactFileBridge() + artifactDataTableBridge();
+  const head = meta + artifactThemeStyle() + artifactScrollGuard() + artifactFileBridge() + artifactDataTableBridge();
   const htmlClass = isDark() ? ' class="dark"' : "";
   if (/<head[\s>]/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => `${m}${head}`);
   if (/<html[\s>]/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => `${m}<head>${head}</head>`);
@@ -734,14 +735,32 @@ export function buildArtifactSrcdoc(html: string, policy?: WidgetPolicy): string
    The host iframe listens for {type:"wick-artifact-height"} and grows to fit,
    so the inline preview has no inner scrollbar — it reads as one with the
    chat. id correlates the message to the right iframe when several are shown. */
-export function artifactHeightReporter(id: string): string {
+export function artifactHeightReporter(id: string, clip = true): string {
   // Measuring scrollHeight alone breaks when the doc sizes to the viewport
   // (body{min-height:100vh} / flex-centering): inside the iframe 100vh ===
   // the iframe's CURRENT height, so scrollHeight just echoes whatever we set
   // and the content stays clipped. The body's children keep their natural
   // size though, so the farthest child's bottom edge gives the real height.
+  //
+  // The children trick does not help when a child is ITSELF sized in vh
+  // (height:calc(100vh - 92px), a canvas at (100vh - 250px)/2): every time
+  // the parent grows the frame to our report, that child grows with it and
+  // the next reading is taller again — a ratchet up to the parent's cap. So
+  // right after the frame's own height changes (the parent applying our last
+  // report), a TALLER reading is treated as that echo and not sent; shrinking
+  // is always reported, and growth from real changes (mutations, images)
+  // outside that short window still goes through.
   return `<script>(function(){
-    var de=document.documentElement;
+    var de=document.documentElement, last=0, vh=window.innerHeight, echoUntil=0, retry=0;
+    // The inline frame never shows its own scrollbar unless the host says the
+    // document is taller than its cap (wick-artifact-overflow). Done here, on
+    // the document, rather than with the iframe's scrolling attribute: that
+    // attribute is not reliably re-applied when it changes on a live frame.
+    if(${clip ? "true" : "false"})de.style.overflow="hidden";
+    window.addEventListener("message",function(e){
+      var d=e.data;
+      if(d&&d.type==="wick-artifact-overflow"&&d.id===${JSON.stringify(id)}){var o=d.on?"auto":"hidden"; if(de.style.overflow!==o)de.style.overflow=o;}
+    });
     function h(){
       var b=document.body, max=de.scrollHeight;
       if(b){
@@ -751,12 +770,77 @@ export function artifactHeightReporter(id: string): string {
       }
       return Math.ceil(max)||0;
     }
-    function send(){var hh=h(); if(hh>0){try{parent.postMessage({type:"wick-artifact-height",id:${JSON.stringify(id)},height:hh},"*");}catch(e){}}}
+    function send(){
+      var now=Date.now(), cur=window.innerHeight;
+      if(cur!==vh){vh=cur; echoUntil=now+250;}
+      var hh=h(); if(!(hh>0))return;
+      // A dropped echo is re-measured once the window closes, so growth that
+      // happened to land inside it (an image, a late font) is not lost. The
+      // host caps the frame at the chat height, so this settles there.
+      if(last>0 && hh>last && now<echoUntil){
+        if(!retry)retry=setTimeout(function(){retry=0;send();},Math.max(0,echoUntil-now)+20);
+        return;
+      }
+      last=hh;
+      try{parent.postMessage({type:"wick-artifact-height",id:${JSON.stringify(id)},height:hh},"*");}catch(e){}
+    }
     window.addEventListener("load",send);
     window.addEventListener("resize",send);
     if(window.ResizeObserver){try{new ResizeObserver(send).observe(de); if(document.body){new ResizeObserver(send).observe(document.body);}}catch(e){}}
     if(window.MutationObserver){try{new MutationObserver(send).observe(de,{subtree:true,childList:true,attributes:true});}catch(e){}}
     setTimeout(send,50);setTimeout(send,300);setTimeout(send,1000);
+  })();<\/script>`;
+}
+
+/* Scroll guard injected into every artifact iframe, in <head> so it is in
+   place before the artifact's own scripts run. Browsers can carry
+   scrollIntoView() — and the scroll that focus() does — out of an iframe into
+   the page that embeds it, so a widget calling
+   el.scrollIntoView({block:"nearest"}) could drag the whole chat thread to
+   wherever that element sits. These overrides do the same scrolling, but only
+   on scroll containers INSIDE the artifact's own document; the chat scroller
+   is never touched. focus() keeps working, it just scrolls the same way. */
+export function artifactScrollGuard(): string {
+  return `<script>(function(){
+    var EP=Element.prototype, HP=HTMLElement.prototype;
+    function isRoot(c){return c===document.scrollingElement||c===document.documentElement||c===document.body;}
+    // Next box up, crossing slots and shadow roots: an element inside a web
+    // component still scrolls the light-DOM containers around its host.
+    function up(n){return n.assignedSlot||n.parentElement||(n.parentNode&&n.parentNode.host)||null;}
+    function scrollable(p){
+      if(isRoot(p))return true;
+      var s=getComputedStyle(p);
+      return /(auto|scroll|overlay)/.test(s.overflowY+" "+s.overflowX) && (p.scrollHeight>p.clientHeight||p.scrollWidth>p.clientWidth);
+    }
+    function delta(mode,s,e,cs,ce){
+      if(mode==="start")return s-cs;
+      if(mode==="end")return e-ce;
+      if(mode==="center")return (s+e)/2-(cs+ce)/2;
+      if(s<cs&&e>ce)return 0;
+      if(s<cs)return s-cs;
+      if(e>ce)return e-ce;
+      return 0;
+    }
+    EP.scrollIntoView=function(arg){
+      var o=arg===false?{block:"end"}:(arg&&typeof arg==="object")?arg:{block:"start"};
+      var block=o.block||"start", inline=o.inline||"nearest", behavior=o.behavior||"auto";
+      var rootDone=false;
+      for(var p=up(this);p&&!rootDone;p=up(p)){
+        if(!scrollable(p))continue;
+        var r=this.getBoundingClientRect(), root=isRoot(p);
+        var c=root?{top:0,left:0,bottom:window.innerHeight,right:window.innerWidth}:p.getBoundingClientRect();
+        var dy=delta(block,r.top,r.bottom,c.top,c.bottom), dx=delta(inline,r.left,r.right,c.left,c.right);
+        if(root){rootDone=true; if(dx||dy)window.scrollBy({top:dy,left:dx,behavior:behavior});}
+        else if(dx||dy){p.scrollBy({top:dy,left:dx,behavior:behavior});}
+      }
+    };
+    var focus=HP.focus;
+    HP.focus=function(opts){
+      var o={}; if(opts)for(var k in opts)o[k]=opts[k];
+      var wantScroll=!o.preventScroll; o.preventScroll=true;
+      focus.call(this,o);
+      if(wantScroll)this.scrollIntoView({block:"nearest"});
+    };
   })();<\/script>`;
 }
 
@@ -835,9 +919,11 @@ export function artifactDataTableBridge(): string {
    unlike the bridge, the artifact never calls it — it just needs to run after
    the body is laid out. Used by the inline gallery preview that auto-grows to
    content and can pull session files over the postMessage bridge. */
-export function buildAutoHeightSrcdoc(html: string, id: string, policy?: WidgetPolicy): string {
+// clip=false for frames that size themselves (the Full screen overlay): the
+// document keeps its own scrollbar there.
+export function buildAutoHeightSrcdoc(html: string, id: string, policy?: WidgetPolicy, clip = true): string {
   const doc = buildArtifactSrcdoc(html, policy);
-  const reporter = artifactHeightReporter(id);
+  const reporter = artifactHeightReporter(id, clip);
   if (/<\/body>/i.test(doc)) return doc.replace(/<\/body>/i, `${reporter}</body>`);
   return doc + reporter;
 }
@@ -1112,3 +1198,10 @@ export function renderLive(node: HTMLElement, text: string) {
     destroy() { clearTimeout(timer); },
   };
 }
+
+// Trace blocks (common-ui TraceBody) highlight with the same lazy hljs —
+// only for a language hljs knows, so an unknown lang stays plain text.
+setTraceHighlighter(async (code, lang) => {
+  const hljs = await loadHljs();
+  return hljs.getLanguage(lang) ? hljs.highlight(code, { language: lang }).value : null;
+});

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { ConfirmDialog, Breadcrumb, Modal, Select, Button, KebabMenu, CapabilityChips, CapabilityModal, type BreadcrumbItem } from "@wick-fe/common-ui";
+  import { ConfirmDialog, Breadcrumb, ProviderIcon, Modal, Select, Button, KebabMenu, CapabilityChips, CapabilityModal, matchModelFilter, type BreadcrumbItem } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     apiGetWickConfig,
@@ -300,38 +300,19 @@
   // The effective set of models to add: everything currently selected.
   let selectedModels = $derived.by(() => discovered.filter((m) => isSelected(m.id)));
 
-  // Search grammar (intentionally tiny): space-separated terms; a term is
-  // "include" by default, or "exclude" when prefixed with `-` or `!`. A model
-  // matches when it contains every include term AND no exclude term. Matching
-  // is over both the id and the human label.
-  type Term = { text: string; exclude: boolean };
-  let searchTerms = $derived.by<Term[]>(() =>
-    modelSearch
-      .toLowerCase()
-      .split(/\s+/)
-      .map((t) => t.trim())
-      .filter((t) => t !== "" && t !== "-" && t !== "!")
-      .map((t) =>
-        t.startsWith("-") || t.startsWith("!")
-          ? { text: t.slice(1), exclude: true }
-          : { text: t, exclude: false },
-      ),
-  );
-
+  // Search grammar: the shared one (@wick-fe/common-ui matchModelFilter,
+  // mirrored server-side by wick.MatchFilter) — AND terms, `a|b` either,
+  // `-`/`!` excludes — over both the id and the human label.
+  let hasSearch = $derived(modelSearch.trim() !== "");
   function matchesTerms(m: WickDiscoverModel): boolean {
-    const hay = `${m.id} ${m.label}`.toLowerCase();
-    for (const t of searchTerms) {
-      const hit = hay.includes(t.text);
-      if (t.exclude ? hit : !hit) return false;
-    }
-    return true;
+    return matchModelFilter(`${m.id} ${m.label}`, modelSearch);
   }
 
   // Capability detail modal: which discovered model's full breakdown is open.
   let capsModalFor = $state<WickDiscoverModel | null>(null);
 
   let filteredModels = $derived.by(() => {
-    if (searchTerms.length === 0) return discovered;
+    if (!hasSearch) return discovered;
     return discovered.filter(matchesTerms);
   });
 
@@ -822,6 +803,7 @@
 <div class="space-y-4">
   <Breadcrumb items={crumbs} />
   <div class="flex items-center gap-2 flex-wrap">
+    <ProviderIcon value="wick" class="w-6 h-6 shrink-0" />
     <span class="text-lg font-semibold text-black-900 dark:text-white-100">wick</span>
     <span class="rounded-full bg-green-100 dark:bg-green-900 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-300">Built-in</span>
     <span class="rounded-full border border-white-400 dark:border-navy-500 px-2 py-0.5 text-xs font-medium text-black-800 dark:text-black-600">Single instance — no duplicate / rename</span>
@@ -1252,7 +1234,7 @@
                 {#if selectedIDs.size > 0}
                   <button type="button" onclick={clearOverrides} class="text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">Clear</button>
                 {/if}
-                <button type="button" onclick={selectAllFiltered} disabled={filteredModels.length === 0} class="font-medium text-green-600 dark:text-green-400 hover:underline disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed">Select all{searchTerms.length > 0 ? " matching" : ""}</button>
+                <button type="button" onclick={selectAllFiltered} disabled={filteredModels.length === 0} class="font-medium text-green-600 dark:text-green-400 hover:underline disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed">Select all{hasSearch ? " matching" : ""}</button>
               {:else if excludedIDs.size > 0 || forcedIDs.size > 0}
                 <button type="button" onclick={clearOverrides} class="text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">Reset overrides</button>
               {/if}
@@ -1268,7 +1250,7 @@
           {:else}
             Pick one model to fill the Model ID above, or switch to Multiple to add several at once.
           {/if}
-          Filter grammar: <code class="rounded bg-white-200 dark:bg-navy-700 px-1">term</code> contains, <code class="rounded bg-white-200 dark:bg-navy-700 px-1">-term</code> / <code class="rounded bg-white-200 dark:bg-navy-700 px-1">!term</code> excludes.
+          Filter grammar: <code class="rounded bg-white-200 dark:bg-navy-700 px-1">term</code> contains (all terms must match), <code class="rounded bg-white-200 dark:bg-navy-700 px-1">a|b</code> either, <code class="rounded bg-white-200 dark:bg-navy-700 px-1">-term</code> / <code class="rounded bg-white-200 dark:bg-navy-700 px-1">!term</code> excludes — e.g. <code class="rounded bg-white-200 dark:bg-navy-700 px-1">claude|gpt !mini</code>.
         </p>
 
         <div class="relative mt-2">
@@ -1278,7 +1260,7 @@
             type="text"
             bind:this={searchEl}
             bind:value={modelSearch}
-            placeholder="Filter models — space-separated, prefix -term or !term to exclude…"
+            placeholder="Filter models — e.g. claude|gpt !mini"
             class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 pl-10 pr-3 py-2 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
           />
         </div>

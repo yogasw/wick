@@ -75,6 +75,9 @@ type Ctx struct {
 	// from the execute params (empty for internal/system calls). Read via
 	// CallerUserID() by connectors that scope data per owner.
 	callerUserID string
+	// accountID is the ConnectorAccount the framework resolved for this
+	// call (explicit @accountId on the tool id), "" when none.
+	accountID string
 	// sessionID is the agent session this call was made within, stamped
 	// by the framework from ExecuteParams. Read via SessionID() by ops
 	// that act ON the calling session rather than on an external API —
@@ -337,6 +340,16 @@ func (c *Ctx) SetCallerUserID(userID string) { c.callerUserID = userID }
 // CallerUserID returns the user id set by SetCallerUserID, or "" when the call
 // has no associated user (internal/system context).
 func (c *Ctx) CallerUserID() string { return c.callerUserID }
+
+// SetAccountID stamps the connected account the framework resolved for this
+// call. Connectors that manage their own token lifecycle per account (the
+// OAuth MCP proxy refreshes and persists per account) need the id, not just
+// the injected user_token.
+func (c *Ctx) SetAccountID(accountID string) { c.accountID = accountID }
+
+// AccountID returns the account set by SetAccountID, or "" when the call
+// named no account.
+func (c *Ctx) AccountID() string { return c.accountID }
 
 // SetUserNameResolver wires the lookup from a wick user id to a display
 // name. Framework-only.

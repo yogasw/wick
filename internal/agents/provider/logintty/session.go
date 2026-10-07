@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 )
 
 // TTL policy for login sessions: start at DefaultTTL, each extend adds
@@ -128,7 +128,14 @@ func newSessionID() string {
 // Start launches (or returns the already-running) login session for
 // one instance. bin is the resolved binary path.
 func (m *Manager) Start(ins provider.Instance, bin string) (*Session, error) {
-	args, ok := LoginCommand(ins.Type, ins.ExtraArgs)
+	return m.StartWith(ins, bin, "")
+}
+
+// StartWith is Start with the login choice the user picked in the UI
+// (see LoginCommandFor). The login runs under provider.AccountEnv, so it
+// writes to the same account store the spawner reads.
+func (m *Manager) StartWith(ins provider.Instance, bin, choice string) (*Session, error) {
+	args, ok := LoginCommandFor(ins, choice)
 	if !ok {
 		return nil, fmt.Errorf("tty login is not supported for provider type %q yet", ins.Type)
 	}
@@ -140,7 +147,14 @@ func (m *Manager) Start(ins provider.Instance, bin string) (*Session, error) {
 		return existing, nil
 	}
 
-	env := append(append(os.Environ(), ins.Env...), LoginEnv(ins.Type)...)
+	if ins.Type == provider.TypeOpencode {
+		// The data dir must exist before opencode writes auth.json into it.
+		if _, err := provider.OpencodeEnv(ins); err != nil {
+			return nil, err
+		}
+	}
+	accountEnv := provider.AccountEnv(ins)
+	env := append(append(envscrub.ScrubOSEnv(), accountEnv...), LoginEnv(ins.Type)...)
 	run, err := m.spawn(bin, args, env, defaultCols, defaultRows)
 	if err != nil {
 		return nil, fmt.Errorf("spawn login tty: %w", err)
@@ -152,7 +166,7 @@ func (m *Manager) Start(ins provider.Instance, bin string) (*Session, error) {
 		Name:      ins.Name,
 		Bin:       bin,
 		Args:      args,
-		env:       append([]string{}, ins.Env...),
+		env:       append([]string{}, accountEnv...),
 		countdown: NewCountdown(DefaultTTL, MaxTTL, m.now),
 		run:       run,
 		parser:    LinkParser{Cols: defaultCols},

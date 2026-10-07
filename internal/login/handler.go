@@ -14,7 +14,9 @@ import (
 	"github.com/yogasw/wick/internal/sso"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"golang.org/x/oauth2"
@@ -73,10 +75,10 @@ type appConfig interface {
 }
 
 type Handler struct {
-	svc      *Service
-	midd     *Middleware
-	sso      *sso.Service
-	cfg      appConfig
+	svc  *Service
+	midd *Middleware
+	sso  *sso.Service
+	cfg  appConfig
 }
 
 // NewHandler wires the login routes. The handler reads SSO config from
@@ -303,11 +305,51 @@ func (h *Handler) updateTheme(w http.ResponseWriter, r *http.Request) {
 		Secure:   h.secureCookie(),
 		SameSite: http.SameSiteLaxMode,
 	})
-	redirect := r.FormValue("redirect")
-	if redirect == "" || !strings.HasPrefix(redirect, "/") {
-		redirect = "/"
+	http.Redirect(w, r, themeRedirect(r), http.StatusSeeOther)
+}
+
+// themeRedirect decides where switching the theme lands you. The picker
+// sits in the navbar of EVERY page, so "/" is almost never the page you
+// were on — flipping to dark while reading a tool or a session used to
+// throw the page away and drop you back at home. The form may say where
+// it came from; when it does not, the Referer does, and it is the same
+// request the browser already sends for a same-origin form post.
+//
+// Both sources are treated as untrusted input: only a same-origin path
+// is accepted, and "//host" is rejected as well as an absolute URL —
+// otherwise the theme form would be an open redirect.
+func themeRedirect(r *http.Request) string {
+	if p := safeLocalPath(r.FormValue("redirect")); p != "" {
+		return p
 	}
-	http.Redirect(w, r, redirect, http.StatusSeeOther)
+	ref, err := url.Parse(r.Referer())
+	if err != nil || ref.Host != r.Host {
+		return "/"
+	}
+	target := ref.EscapedPath()
+	if ref.RawQuery != "" {
+		target += "?" + ref.RawQuery
+	}
+	if p := safeLocalPath(target); p != "" {
+		return p
+	}
+	return "/"
+}
+
+// safeLocalPath returns v when it is a path on this site, else "".
+func safeLocalPath(v string) string {
+	if !strings.HasPrefix(v, "/") || strings.HasPrefix(v, "//") {
+		return ""
+	}
+	// A backslash is read as a slash by some browsers, so "/\evil.com"
+	// would leave the site despite starting with one slash.
+	if strings.Contains(v, "\\") {
+		return ""
+	}
+	if v == "/theme" || strings.HasPrefix(v, "/theme?") {
+		return "/" // never bounce back into the POST-only endpoint
+	}
+	return v
 }
 
 func (h *Handler) updatePreferences(w http.ResponseWriter, r *http.Request) {
@@ -315,6 +357,13 @@ func (h *Handler) updatePreferences(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.SetHomeView(r.Context(), user.ID, r.FormValue("home_view")); err != nil {
 		http.Error(w, "failed to save preferences", http.StatusInternalServerError)
 		return
+	}
+	if v := r.FormValue("ui_scale"); v != "" {
+		pct, _ := strconv.Atoi(v)
+		if err := h.svc.SetUIScale(r.Context(), user.ID, pct); err != nil {
+			http.Error(w, "failed to save preferences", http.StatusInternalServerError)
+			return
+		}
 	}
 	// Clearing a "don't ask again" lives on the same form, so a remembered
 	// answer stays reversible from the place it is displayed.

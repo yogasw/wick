@@ -419,7 +419,8 @@ func Save(layout config.Layout, tk Ticket) error {
 // moved the ticket. Save stays as the unattributed form because most
 // internal callers genuinely have nobody to name.
 func SaveAs(layout config.Layout, tk Ticket, actor Actor) error {
-	return SaveAsAt(layout, tk, actor, time.Time{})
+	_, err := SaveAsAt(layout, tk, actor, time.Time{})
+	return err
 }
 
 // SaveAsAt is SaveAs with the timestamp chosen by the caller. A zero at
@@ -430,14 +431,18 @@ func SaveAs(layout config.Layout, tk Ticket, actor Actor) error {
 // happened to run. Without it a sync makes every ticket it touches read
 // "just now", the board sorts by when the sync ran rather than by when the
 // work moved, and "updated 3 days ago" stops being a fact about the work.
-func SaveAsAt(layout config.Layout, tk Ticket, actor Actor, at time.Time) error {
+// It RETURNS what it stored. The timestamps are set on this function's own
+// copy, so a caller that answers an HTTP request with the value it passed in
+// answers with the OLD updated_at — which is how a dragged card kept saying
+// "5h ago" until the page was reloaded, while the ticket on disk had moved.
+func SaveAsAt(layout config.Layout, tk Ticket, actor Actor, at time.Time) (Ticket, error) {
 	if at.IsZero() {
 		at = time.Now()
 	}
 	tk.UpdatedAt = at.UTC()
 	tk.TouchedAt = time.Now().UTC()
 	tk.AutoResolvedAt = carryAutoResolved(layout, tk)
-	return saveEmitting(layout, tk, actor)
+	return tk, saveEmitting(layout, tk, actor)
 }
 
 // carryAutoResolved keeps the sweeper's mark only while the status it set
@@ -458,10 +463,12 @@ func carryAutoResolved(layout config.Layout, tk Ticket) time.Time {
 // events its diff implies — for a write that is pure bookkeeping (a sync
 // stamping "I checked this"), where moving the timestamp would be a lie
 // about the work.
-func SaveAsKeeping(layout config.Layout, tk Ticket, actor Actor) error {
+// Also returns what it stored, for the same reason as SaveAsAt — here the
+// displayed timestamp is deliberately unchanged, but TouchedAt is not.
+func SaveAsKeeping(layout config.Layout, tk Ticket, actor Actor) (Ticket, error) {
 	tk.TouchedAt = time.Now().UTC()
 	tk.AutoResolvedAt = carryAutoResolved(layout, tk)
-	return saveEmitting(layout, tk, actor)
+	return tk, saveEmitting(layout, tk, actor)
 }
 
 // saveEmitting writes tk and fires the events its diff implies.

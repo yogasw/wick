@@ -3,7 +3,7 @@
 
 import { get } from "svelte/store";
 import * as api from "$lib/api/scm";
-import type { FileChange } from "$lib/api/scm";
+import type { FileChange, CompareFile, CompareResult } from "$lib/api/scm";
 import { toastOk, toastError } from "@wick-fe/common-stores";
 import {
   sessionID,
@@ -237,6 +237,97 @@ export async function loadCommitCompare(sha: string, path: string): Promise<Comp
   const r = await api.getCommitDiff(sid(), repo(), sha, path);
   return { original: r.original, modified: r.modified };
 }
+
+// ---------------------------------------------------------------------------
+// Branch compare + rollback. Same repo/session resolution as everything else
+// here, so the compare overlay never has to know which repo is selected.
+
+// compareRefs answers the whole header at once: the changed files, their ±
+// counts and how far apart the two refs are. null means the request failed
+// and the user already saw why.
+export async function compareRefs(
+  base: string,
+  head: string,
+  threeDot: boolean,
+): Promise<CompareResult | null> {
+  try {
+    return await api.compareRefs(sid(), repo(), base, head, threeDot);
+  } catch (e) {
+    toastError("Compare failed", String(e));
+    return null;
+  }
+}
+
+// loadRefCompare fetches the two raw sides of one compared file. orig_path
+// and three_dot are passed through because both change which left side git
+// reads — without them the diff contradicts the list it was opened from.
+export async function loadRefCompare(
+  base: string,
+  head: string,
+  f: CompareFile,
+  threeDot: boolean,
+): Promise<CompareData> {
+  const r = await api.refCompare(sid(), repo(), base, head, f.path, threeDot, f.orig_path ?? "");
+  return { original: r.original, modified: r.modified };
+}
+
+// restoreFromRef takes paths back to how they look at ref. Destructive to
+// whatever is in the working tree for those paths — callers confirm first.
+export async function restoreFromRef(ref: string, paths: string[]): Promise<boolean> {
+  try {
+    await api.restorePaths(sid(), repo(), ref, paths);
+    toastOk("Restored", `${paths.length === 1 ? paths[0] : `${paths.length} files`} from ${ref}`);
+    await loadStatus();
+    return true;
+  } catch (e) {
+    toastError("Restore failed", String(e));
+    return false;
+  }
+}
+
+// revertCommit applies a commit's inverse. On conflict git stops half way
+// and leaves the tree mid-revert: say so, because the next thing the user
+// does depends on knowing the repo is in that state. Nothing here aborts
+// it — that would throw away a resolution already in progress.
+export async function revertCommit(sha: string): Promise<boolean> {
+  try {
+    await api.revertCommit(sid(), repo(), sha);
+    toastOk("Reverted", sha);
+    await loadStatus();
+    return true;
+  } catch (e) {
+    const msg = String(e);
+    if (/conflict/i.test(msg)) {
+      toastError(
+        "Revert conflicted",
+        `${msg} — the repo is left mid-revert. Resolve the files and commit, or run git revert --abort.`,
+      );
+    } else {
+      toastError("Revert failed", msg);
+    }
+    await loadStatus();
+    return false;
+  }
+}
+
+// resetCurrentTo moves the checked-out branch to ref. hard throws away
+// uncommitted work, so callers mark that one destructive in the confirm.
+export async function resetCurrentTo(
+  ref: string,
+  mode: "soft" | "mixed" | "hard",
+): Promise<boolean> {
+  try {
+    await api.resetTo(sid(), repo(), ref, mode);
+    toastOk("Branch reset", `${mode} → ${ref}`);
+    await loadStatus();
+    return true;
+  } catch (e) {
+    toastError("Reset failed", String(e));
+    return false;
+  }
+}
+
+export type { CompareFile, CompareResult };
 
 export function langFor(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";

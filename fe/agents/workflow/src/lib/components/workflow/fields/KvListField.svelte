@@ -44,7 +44,7 @@
   );
 
   const keyInputClass =
-    "rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1";
+    "rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1";
 
   function setValue(k: string, v: string) {
     const next = { ...(entries ?? {}) };

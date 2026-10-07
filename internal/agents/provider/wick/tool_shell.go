@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/proctree"
 	"github.com/yogasw/wick/pkg/safeexec"
 	"google.golang.org/genai"
@@ -203,6 +204,7 @@ func runShellForeground(ctx context.Context, workspace, cmdline string, timeout 
 	// still handed over byte-for-byte.
 	execBin, execArgs, scopeUnit := wrapToolCmd(bin, []string{"-c", cmdline}, memLimitMB, nextToolSeq())
 	cmd := safeexec.Command(execBin, execArgs...)
+	cmd.Env = envscrub.ScrubOSEnv()
 	if workspace != "" {
 		cmd.Dir = workspace
 	}

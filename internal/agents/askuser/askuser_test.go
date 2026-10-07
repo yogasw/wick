@@ -1,6 +1,7 @@
 package askuser
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -163,5 +164,40 @@ func TestOnResolved_Fires(t *testing.T) {
 	defer mu.Unlock()
 	if len(resolved) != 1 || resolved[0] != "S1/"+req.ID {
 		t.Errorf("onResolved: %+v", resolved)
+	}
+}
+
+func TestAsk_OnSettledSeesOutcome(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	mgr := NewManager(Options{
+		OnRequest: func(AskRequest) {},
+		OnSettled: func(req AskRequest, ans Answer, outcome string) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, req.Question+":"+outcome+":"+ans.Value)
+		},
+	})
+	go func() {
+		for {
+			if p := mgr.PendingFor("s1"); len(p) == 1 {
+				mgr.Resolve(p[0].ID, Answer{Value: "yes"})
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	if _, err := mgr.Ask(Question{SessionID: "s1", Question: "q1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = mgr.Ask(Question{SessionID: "s1", Question: "q2", Timeout: 5 * time.Millisecond}, nil)
+	done := make(chan struct{})
+	close(done)
+	_, _ = mgr.Ask(Question{SessionID: "s1", Question: "q3", Timeout: time.Second}, done)
+	mu.Lock()
+	defer mu.Unlock()
+	want := "q1:answered:yes|q2:timeout:|q3:cancelled:"
+	if s := strings.Join(got, "|"); s != want {
+		t.Fatalf("settled = %q, want %q", s, want)
 	}
 }

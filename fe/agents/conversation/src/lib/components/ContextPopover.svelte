@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { clock24 } from "@wick-fe/common-ui";
   /* The Context window panel — what `/context` opens, and what the ring
      in the composer opens when clicked.
 
@@ -13,7 +14,10 @@
      the fill level (how full the window is NOW, replaced each turn) and
      the spend (what the session has burned in total, which only grows).
      They are labelled and grouped separately for that reason. */
+  import { contextTone } from "@wick-fe/common-ui";
+
   import type { SessionContext, SessionContextProvider } from "../api/context.js";
+  import type { ComposerUsage } from "../api/usage.js";
 
   /* What the turn on screen is doing right now. Everything else in this
      panel is written when a turn FINISHES — which is exactly the moment
@@ -54,9 +58,46 @@
         double-fired — compacting twice in a row is pure waste. */
     compacting: boolean;
     onClose: () => void;
+    /** The provider account's quota, from the same cached reading /usage
+        shows. The window above is how full THIS conversation is; this is
+        how much of the account is left — the two answer different
+        questions, so the line is small and links to the full panel. */
+    usage?: ComposerUsage | null;
+    /** Ask the usage cache for a fresh reading (it may decline). */
+    onUsageRefresh?: () => void;
+    usageRefreshing?: boolean;
+    /** Seconds the server said to wait when it declined the last click. */
+    usageRecheckWait?: number;
+    /** Close this panel and open /usage for the per-account detail. */
+    onOpenUsage?: () => void;
   };
 
-  let { open, data, live = null, loading, error, onRefresh, onCompact, compacting, onClose }: Props = $props();
+  let {
+    open, data, live = null, loading, error, onRefresh, onCompact, compacting, onClose,
+    usage = null, onUsageRefresh, usageRefreshing = false, usageRecheckWait = 0, onOpenUsage,
+  }: Props = $props();
+
+  /* The windows the usage line summarises: the account this session runs
+     on when the instance holds several, else the instance headline. */
+  const usageWindows = $derived.by(() => {
+    if (!usage?.supported) return [];
+    const cur = usage.accounts.find((a) => a.current);
+    return cur ? cur.windows : usage.windows;
+  });
+  const usageLabel = (key: string) =>
+    key === "five_hour" ? "5h" : key === "seven_day" ? "7d" : key.replace(/^seven_day_/, "7d ");
+  const usageTone = (pct: number) =>
+    pct >= 90 ? "text-red-600 dark:text-red-400" : pct >= 70 ? "text-amber-600 dark:text-amber-400" : "text-black-900 dark:text-white-100";
+  const usageReset = $derived.by(() => {
+    let best = Infinity;
+    for (const w of usageWindows) {
+      const t = Date.parse(w.resetsAt);
+      if (Number.isFinite(t) && t > Date.now() && t < best) best = t;
+    }
+    if (best === Infinity) return "";
+    const s = Math.round((best - Date.now()) / 1000);
+    return s < 3600 ? `${Math.max(1, Math.round(s / 60))}m` : s < 86400 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`;
+  });
 
   /* A clock that ticks while a turn is running and the panel is open.
 
@@ -160,7 +201,10 @@
       ? Math.max(0, Math.min(100, (usedNow / (data?.window ?? 1)) * 100))
       : Math.max(0, Math.min(100, data?.pct ?? 0)),
   );
-  const tone = $derived(pct >= 90 ? "red" : pct >= 75 ? "amber" : "green");
+  /* Thresholds live in @wick-fe/common-ui, shared with the sub-agent
+     inspector: two panels that disagreed about what "nearly full" means
+     would be two different warnings about one number. */
+  const tone = $derived(contextTone(pct));
   const barClass = $derived(
     tone === "red" ? "bg-red-500" : tone === "amber" ? "bg-amber-500" : "bg-green-500",
   );
@@ -279,7 +323,7 @@
     if (!iso) return "";
     const t = Date.parse(iso);
     return Number.isFinite(t)
-      ? new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      ? clock24(t)
       : "";
   });
 </script>
@@ -338,6 +382,56 @@
           class="shrink-0 font-mono text-xs text-black-900 tabular-nums dark:text-white-100"
           title="How long this turn has been running"
         >{clock(elapsedMs)}</span>
+      </div>
+    {/if}
+
+    {#if usage && onOpenUsage}
+      <!-- Account quota, one line. Details jumps to /usage (per account). -->
+      <div
+        data-testid="context-usage"
+        class="flex items-center gap-2 border-b border-white-300 px-4 py-1.5 text-[11px] tabular-nums dark:border-navy-600"
+      >
+        <span class="shrink-0 text-black-700 dark:text-black-600">Usage</span>
+        <span class="min-w-0 flex-1 truncate">
+          {#if !usage.supported}
+            <span class="text-black-600 dark:text-black-700">not reported by this provider</span>
+          {:else if usage.pending || usage.checking}
+            <span class="text-black-600 dark:text-black-700">checking…</span>
+          {:else if usage.error && usageWindows.length === 0}
+            <span class="text-black-600 dark:text-black-700">unavailable</span>
+          {:else if usageWindows.length === 0}
+            <span class="text-black-600 dark:text-black-700">no reading yet</span>
+          {:else}
+            {#each usageWindows as w, i (w.key)}
+              {@const pct = Math.min(100, Math.max(0, Math.round(w.utilization)))}
+              {#if i > 0}<span class="text-black-600 dark:text-black-700"> · </span>{/if}
+              <span class="text-black-700 dark:text-black-600">{usageLabel(w.key)}</span>
+              <span class="font-medium {usageTone(pct)}">{pct}%</span>
+            {/each}
+            {#if usageReset}<span class="text-black-600 dark:text-black-700"> · reset {usageReset}</span>{/if}
+            {#if usage.accounts.length > 1}<span class="text-black-600 dark:text-black-700"> · {usage.accounts.length} accounts</span>{/if}
+          {/if}
+        </span>
+        {#if usageRecheckWait > 0}
+          <span data-testid="context-usage-wait" class="shrink-0 text-[10px] text-black-600 dark:text-black-700" title="A probe now would land inside a cooldown, so it was not sent">wait {usageRecheckWait}s</span>
+        {/if}
+        {#if usage.supported && onUsageRefresh}
+          <button
+            type="button"
+            data-testid="context-usage-refresh"
+            aria-label="Re-check usage"
+            title="Re-check usage"
+            class="shrink-0 rounded px-1 text-black-700 hover:bg-white-200 disabled:opacity-50 dark:text-black-600 dark:hover:bg-navy-800"
+            disabled={usageRefreshing || usage.checking}
+            onclick={onUsageRefresh}
+          ><span class={usageRefreshing || usage.checking ? "inline-block animate-spin" : ""}>↻</span></button>
+        {/if}
+        <button
+          type="button"
+          data-testid="context-usage-open"
+          class="shrink-0 rounded px-1.5 py-0.5 font-medium text-link-400 hover:bg-white-200 dark:hover:bg-navy-800"
+          onclick={onOpenUsage}
+        >Details →</button>
       </div>
     {/if}
 
@@ -631,9 +725,20 @@
                passes 80% of the budget. What is manual is THIS button —
                wick never fires it for you, so pressing it is how you pick
                the moment instead of being surprised by it. -->
-          <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600 text-center">
-            wick never presses this for you — but the provider compacts on its own once the window
-            fills.
+          <!-- auto_compact is what the provider itself reported (omp
+               get_state, opencode config); absent = it never said, so the
+               general sentence stays. -->
+          <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600 text-center" data-testid="auto-compact-note">
+            {#if data.auto_compact === true}
+              wick never presses this for you — auto-compact is on at {data.provider || "the provider"}, so
+              it compacts on its own once the window fills.
+            {:else if data.auto_compact === false}
+              Auto-compact is off at {data.provider || "the provider"} — nothing compacts unless you press
+              this.
+            {:else}
+              wick never presses this for you — but the provider compacts on its own once the window
+              fills.
+            {/if}
           </p>
         {/if}
       </div>

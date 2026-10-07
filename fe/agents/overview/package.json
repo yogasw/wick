@@ -12,6 +12,8 @@
     "test:unit": "vitest run"
   },
   "dependencies": {
+    "@wick-fe/common-avatar": "*",
+    "@wick-fe/common-sse-worker": "*",
     "@wick-fe/common-stores": "*",
     "@wick-fe/common-ui": "*"
   }

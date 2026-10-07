@@ -34,9 +34,15 @@ type ModelEntry struct {
 // Models when non-empty (each entry's own description, or the catalog's when
 // the operator left it blank), otherwise the per-type catalog seed. Returns
 // nil when the picker shouldn't be shown (ModelSelect off, or no seed).
+// An omp/opencode instance in live mode offers its CLI's own list instead
+// (cached, filtered, default first — climodels_live.go); a cold cache yields
+// nil this once while the list is fetched in the background.
 func (i Instance) EffectiveModels() []ModelSeed {
 	if !i.ModelSelect {
 		return nil
+	}
+	if LiveModelsEnabled(i) {
+		return LiveDefaultFirst(FilterLiveModels(i, PeekCLIModels(i)), i.LiveModelDefault)
 	}
 	if len(i.Models) > 0 {
 		out := make([]ModelSeed, 0, len(i.Models))

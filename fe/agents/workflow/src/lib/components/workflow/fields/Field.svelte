@@ -83,7 +83,7 @@
     if (hasError) {
       return "border-rose-500";
     }
-    return "border-slate-200 dark:border-navy-600";
+    return "border-white-400 dark:border-navy-600";
   }
 
   function isObjOption(o: SelectOption): o is { label: string; value: string } {
@@ -95,7 +95,7 @@
      so the toggle reads identically across the form. -->
 {#snippet modePill()}
   <div
-    class="inline-flex rounded border border-slate-300 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide"
+    class="inline-flex rounded border border-white-400 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide"
     class:opacity-50={lockedMode}
     title={lockedMode ? "Mode locked by this field's config — cannot change" : undefined}
   >

@@ -456,6 +456,39 @@ func TestSetTriggers_ReplacesTriggers(t *testing.T) {
 	}
 }
 
+// Triggers sent without an ID (the MCP path builds them by hand) must come
+// back with unique ones — the canvas keys cards, positions and trigger edges
+// by ID, and duplicates make the editor refuse to render the graph.
+func TestSetTriggers_MintsUniqueIDs(t *testing.T) {
+	svc := newStub("wf")
+	c := newCanvas(svc)
+
+	got, err := c.SetTriggers("wf", []workflow.Trigger{
+		{Type: workflow.TriggerCron, Schedule: "55 6 * * 1-5", EntryNode: "start"},
+		{Type: workflow.TriggerCron, Schedule: "55 14 * * 1-5", EntryNode: "start"},
+		{Type: workflow.TriggerCron, Schedule: "55 22 * * 1-5", EntryNode: "start"},
+		{ID: "trigger-cron-2", Type: workflow.TriggerManual, EntryNode: "start"},
+	})
+	if err != nil {
+		t.Fatalf("SetTriggers error: %v", err)
+	}
+	seen := map[string]bool{}
+	for i, tr := range got.Triggers {
+		if tr.ID == "" {
+			t.Fatalf("trigger %d still has an empty ID", i)
+		}
+		if seen[tr.ID] {
+			t.Fatalf("duplicate trigger ID %q", tr.ID)
+		}
+		seen[tr.ID] = true
+	}
+	// An explicitly-set ID is never rewritten, even when a minted one
+	// would have wanted the same name.
+	if got.Triggers[3].ID != "trigger-cron-2" {
+		t.Errorf("explicit ID overwritten: got %q", got.Triggers[3].ID)
+	}
+}
+
 func TestSetTriggers_PersistsInService(t *testing.T) {
 	svc := newStub("wf")
 	c := newCanvas(svc)
@@ -766,5 +799,44 @@ func TestAutoLayout_SameDepthSameY(t *testing.T) {
 	// Different horizontal position within the row.
 	if r1["x"].(int) == r2["x"].(int) {
 		t.Errorf("same-depth nodes should differ in X: r1=%v r2=%v", r1, r2)
+	}
+}
+
+// Triggers must never share an X: the cards are ~230px wide, so two of
+// them at the same spot look like one and hide the edge underneath.
+func TestAutoLayout_TriggerRowDoesNotOverlap(t *testing.T) {
+	svc := newStub("wf")
+	c := newCanvas(svc)
+
+	if _, err := c.SetTriggers("wf", []workflow.Trigger{
+		{ID: "t-cron-1", Type: workflow.TriggerCron, Schedule: "55 6 * * *", EntryNode: "n1"},
+		{ID: "t-cron-2", Type: workflow.TriggerCron, Schedule: "55 14 * * *", EntryNode: "n1"},
+		{ID: "t-cron-3", Type: workflow.TriggerCron, Schedule: "55 22 * * *", EntryNode: "n1"},
+		{ID: "t-manual", Type: workflow.TriggerManual, EntryNode: "n1"},
+		{ID: "t-chan", Type: workflow.TriggerChannel, ChannelName: "slack", Event: "block_action", EntryNode: "n2"},
+	}); err != nil {
+		t.Fatalf("SetTriggers error: %v", err)
+	}
+
+	got, err := c.AutoLayout("wf", nil)
+	if err != nil {
+		t.Fatalf("AutoLayout error: %v", err)
+	}
+	positions, _ := got.Canvas["positions"].(map[string]any)
+	if positions == nil {
+		t.Fatal("no positions written")
+	}
+
+	seenX := map[int]string{}
+	for _, id := range []string{"t-cron-1", "t-cron-2", "t-cron-3", "t-manual", "t-chan"} {
+		p, ok := positions[id].(map[string]any)
+		if !ok {
+			t.Fatalf("trigger %s has no position", id)
+		}
+		x, _ := p["x"].(int)
+		if prev, clash := seenX[x]; clash {
+			t.Fatalf("triggers %s and %s both placed at x=%d", prev, id, x)
+		}
+		seenX[x] = id
 	}
 }

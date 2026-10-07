@@ -2,6 +2,7 @@ package systemprompt
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -75,7 +76,10 @@ func TestImmutableSplicesEverySection(t *testing.T) {
 			}
 			// First non-blank line is the section heading; assert it
 			// plus the last non-blank line so both ends made it in.
-			lines := nonBlankLines(body)
+			// Gate marker lines are stripped at assembly, so they are no anchor.
+			lines := slices.DeleteFunc(nonBlankLines(body), func(l string) bool {
+				return strings.HasPrefix(l, "<!-- gate:") || strings.HasPrefix(l, "<!-- /gate:")
+			})
 			for _, anchor := range []string{lines[0], lines[len(lines)-1]} {
 				if !strings.Contains(p, anchor) {
 					t.Errorf("%s: section %q missing line %q", c.name, s.name, anchor)

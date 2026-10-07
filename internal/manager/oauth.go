@@ -110,6 +110,28 @@ func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// oauth MCP connectors (custom): the flow is the MCP PKCE login with
+	// the server row's discovered client, and the callback saves the
+	// caller's ConnectorAccount — same SSO gates as above.
+	if srv, isMCP := h.customMCPOAuthServer(r.Context(), key); isMCP {
+		caller := login.GetUser(r.Context())
+		if caller == nil {
+			http.Error(w, "log in to connect an account", http.StatusUnauthorized)
+			return
+		}
+		name := caller.Name
+		if name == "" {
+			name = caller.Email
+		}
+		authURL, err := h.custom.StartOAuthAccountLogin(srv, h.customOAuthRedirectURI(r), row.ID, caller.ID, name)
+		if err != nil {
+			oauthPopupDone(w, key, "", err.Error())
+			return
+		}
+		http.Redirect(w, r, authURL, http.StatusFound)
+		return
+	}
+
 	cfgs := h.connectors.LoadConfigs(*row)
 	clientID := strings.TrimSpace(cfgs["client_id"])
 	if clientID == "" {

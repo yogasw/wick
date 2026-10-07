@@ -1,13 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/svelte";
+import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 import ProvidersList from "../ProvidersList.svelte";
 import { expectCardRhythm } from "./cardRhythm.js";
 import * as api from "$lib/api.js";
 import * as tty from "$lib/logintty.js";
+import * as mb from "$lib/managedbin.js";
 import type { ProvidersListResponse, ProviderConnection } from "$lib/types.js";
 
 vi.mock("$lib/api.js");
 vi.mock("$lib/logintty.js");
+vi.mock("$lib/managedbin.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("$lib/managedbin.js")>()),
+  apiManagedList: vi.fn(async () => ({ types: [], isAdmin: true })),
+}));
 vi.mock("@wick-fe/common-stores", () => ({
   toastOk: vi.fn(),
   toastError: vi.fn(),
@@ -267,6 +272,7 @@ describe("ProvidersList connection badges", () => {
       type: "claude",
       name: "claude",
       connected: true,
+      accountUnknown: false,
       email: "dev@abc.com",
       plan: "max",
       org: "",
@@ -466,5 +472,156 @@ describe("ProvidersList - card rhythm", () => {
     const { container } = render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
     await screen.findByText("claude/claude");
     expectCardRhythm(container);
+  });
+});
+
+describe("ProvidersList managed binary indicator", () => {
+  function withOmp(): ProvidersListResponse {
+    const d = makeData();
+    d.Providers.push({
+      ...d.Providers[0],
+      Instance: { ...d.Providers[0].Instance, Type: "omp", Name: "omp", Binary: "" },
+      Path: "/data/providers/bin/omp/versions/18.4.3/omp",
+    });
+    return d;
+  }
+  const omp = (over: Record<string, unknown> = {}) =>
+    mb.normalizeManaged({ type: "omp", enabled: true, current: "18.4.3", latest: { tag: "v18.4.4", version: "18.4.4" }, update_available: true, ...over });
+
+  it("shows the active version + update badge, no action buttons; click opens Detail", async () => {
+    vi.mocked(api.apiGetProviders).mockResolvedValue(withOmp());
+    vi.mocked(mb.apiManagedList).mockResolvedValue({ types: [omp()], isAdmin: true });
+    const onNavigate = vi.fn();
+    render(ProvidersList, { props: { base: "", onNavigate } });
+    const ind = await screen.findByTestId("card-managed-binary");
+    expect(ind.dataset.state).toBe("installed");
+    expect(ind.textContent).toContain("v18.4.3");
+    expect(screen.getByTestId("card-managed-update").textContent).toBe("update available v18.4.4");
+    expect(screen.queryByTestId("managed-binary-panel")).toBeNull();
+    await fireEvent.click(ind);
+    expect(onNavigate).toHaveBeenCalledWith("omp", "omp");
+  });
+
+  it("not installed / running download", async () => {
+    vi.mocked(api.apiGetProviders).mockResolvedValue(withOmp());
+    vi.mocked(mb.apiManagedList).mockResolvedValue({
+      types: [omp({ current: "", update_available: false, job: { phase: "download", done: 45, total: 100, tag: "v18.4.4", version: "18.4.4" } })],
+      isAdmin: true,
+    });
+    render(ProvidersList, { props: { base: "", onNavigate: vi.fn() } });
+    const ind = await screen.findByTestId("card-managed-binary");
+    expect(ind.dataset.state).toBe("missing");
+    expect(screen.getByTestId("card-managed-job").textContent).toBe("Downloading v18.4.4… 45%");
+    expect(screen.queryByTestId("card-managed-update")).toBeNull();
+  });
+});
+
+describe("ProvidersList card header on narrow screens", () => {
+  function withIsolated(): ProvidersListResponse {
+    const d = makeData();
+    for (const type of ["omp", "opencode"]) {
+      d.Providers.push({
+        ...d.Providers[0],
+        Instance: { ...d.Providers[0].Instance, Type: type, Name: "a-rather-long-instance-name", Binary: "" },
+        Cap: { Used: 0, Max: 20, Unlimited: false },
+      });
+    }
+    return d;
+  }
+
+  it("clamps the name to two wrapped lines with the full name in title, with the cap on one line beside it", async () => {
+    vi.mocked(api.apiGetProviders).mockResolvedValue(withIsolated());
+    render(ProvidersList, { props: { base: "", onNavigate: vi.fn() } });
+    await screen.findByText("omp/a-rather-long-instance-name");
+    const name = screen.getAllByTestId("card-name").find((n) => n.textContent === "omp/a-rather-long-instance-name")!;
+    expect(name.className).toContain("line-clamp-2");
+    expect(name.className).toContain("break-all");
+    expect(name.className).toContain("min-w-0");
+    expect(name.getAttribute("title")).toBe("omp/a-rather-long-instance-name");
+    const titleCol = name.parentElement!.parentElement!;
+    expect(titleCol.className).toContain("min-w-0");
+    expect(titleCol.className).toContain("flex-1");
+    // The actions never wrap under the title: the header row does not wrap
+    // and the button group does not shrink.
+    const header = titleCol.parentElement!;
+    expect(header.className).not.toContain("flex-wrap");
+    expect((titleCol.nextElementSibling as HTMLElement).className).toContain("shrink-0");
+    // Cap + info icon ride right after the name, in a group that never
+    // shrinks, so a long name clamps beside them instead of pushing them.
+    const cap = titleCol.querySelector('[data-testid="card-cap"]')!;
+    const group = cap.parentElement!;
+    expect(group.contains(titleCol.querySelector('[data-testid="one-account-badge"]'))).toBe(true);
+    expect(group.contains(name)).toBe(false);
+    expect(group.parentElement).toBe(name.parentElement);
+    expect(group.className).toContain("shrink-0");
+    for (const cap of screen.getAllByTestId("card-cap")) {
+      expect(cap.className).toContain("whitespace-nowrap");
+    }
+  });
+
+  it("shows a login & usage placeholder on every credentialed card until the connections land", async () => {
+    let resolve!: (v: Awaited<ReturnType<typeof api.apiGetConnections>>) => void;
+    vi.mocked(api.apiGetConnections).mockReturnValue(new Promise((r) => (resolve = r)));
+    render(ProvidersList, { props: { base: "", onNavigate: vi.fn() } });
+    await screen.findAllByTestId("card-name");
+    expect(screen.getAllByTestId("conn-loading").length).toBeGreaterThan(0);
+    resolve([]);
+    await waitFor(() => expect(screen.queryAllByTestId("conn-loading").length).toBe(0));
+  });
+
+  it("says 'checking login' until the connections land, and while the login is unreadable", async () => {
+    vi.mocked(api.apiGetProviders).mockResolvedValue(withIsolated());
+    let resolve!: (v: Awaited<ReturnType<typeof api.apiGetConnections>>) => void;
+    vi.mocked(api.apiGetConnections).mockReturnValue(new Promise((r) => (resolve = r)));
+    render(ProvidersList, { props: { base: "", onNavigate: vi.fn() } });
+    await screen.findByText("omp/a-rather-long-instance-name");
+    expect(screen.getAllByTestId("card-account-loading").length).toBe(2);
+    expect(screen.queryByText(/not logged in/)).toBeNull();
+    resolve([
+      { type: "omp", name: "a-rather-long-instance-name", connected: false, accountUnknown: true, email: "", plan: "", org: "", authMethod: "", usageSupported: true, usageErr: "", usagePending: true, usageChecking: false, usageFetchedAt: "", usageAgeS: 0, usageNextS: 0, windows: [] },
+    ]);
+    // omp could not be read → still checking; opencode has no row → logged out.
+    await waitFor(() => expect(screen.getAllByTestId("card-account-loading").length).toBe(1));
+    expect(screen.getByTestId("conn-checking")).toBeTruthy();
+    expect(screen.getByText(/not logged in/)).toBeTruthy();
+  });
+
+  it("replaces the one-account text badge with an info icon that explains the type", async () => {
+    vi.mocked(api.apiGetProviders).mockResolvedValue(withIsolated());
+    render(ProvidersList, { props: { base: "", onNavigate: vi.fn() } });
+    await screen.findByText("omp/a-rather-long-instance-name");
+    const [omp, opencode] = screen.getAllByTestId("one-account-badge");
+    expect(omp.querySelector('svg[data-icon="info"] circle')).not.toBeNull();
+    expect(omp.getAttribute("title")).toBe("One instance = one omp profile. It can hold several accounts; omp rotates between them.");
+    expect(omp.getAttribute("aria-label")).toBe(omp.getAttribute("title"));
+    expect(opencode.getAttribute("title")).toBe("One instance = one data folder. Add a second account of a provider as an extra account folder.");
+    expect(screen.queryByText("1 instance = 1 account")).toBeNull();
+
+    // A tap opens the popover (touch screens never show a title) and a second tap closes it.
+    await fireEvent.click(omp);
+    expect(screen.getByTestId("one-account-badge-popover").textContent).toContain("omp rotates between them");
+    expect(omp.getAttribute("aria-expanded")).toBe("true");
+    await fireEvent.click(omp);
+    expect(screen.queryByTestId("one-account-badge-popover")).toBeNull();
+  });
+});
+
+describe("ProvidersList unmount", () => {
+  it("does not keep following a download after unmount", async () => {
+    let resolve!: (v: { types: mb.ManagedBinary[]; isAdmin: boolean }) => void;
+    vi.mocked(mb.apiManagedList).mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+    const { unmount } = render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await waitFor(() => expect(mb.apiManagedList).toHaveBeenCalled());
+    unmount();
+    const spy = vi.spyOn(globalThis, "setTimeout");
+    const running = mb.normalizeManaged({
+      type: "omp", enabled: true,
+      job: { id: "j", type: "omp", tag: "v1", version: "1", activate: false, phase: "download" },
+    } as Parameters<typeof mb.normalizeManaged>[0]);
+    resolve({ types: [running], isAdmin: true });
+    await new Promise((r) => queueMicrotask(() => r(undefined)));
+    await Promise.resolve();
+    expect(spy.mock.calls.filter((c) => c[1] === 2000)).toHaveLength(0);
+    spy.mockRestore();
   });
 });

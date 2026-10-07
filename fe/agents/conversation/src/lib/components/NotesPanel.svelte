@@ -56,6 +56,16 @@
      misread icon is what this second step exists to prevent. */
   let menuId = $state<string | null>(null);
   let confirmId = $state<string | null>(null);
+  /* The composer is FOLDED until asked for. It used to sit open above the
+     list — a textarea, a hint line, a checkbox, an audience select and a
+     button — which is most of a panel's height spent on something nobody is
+     doing most of the time, and pushed the notes themselves off screen.
+     Writing one is a click away; reading them is the default. */
+  let composing = $state(false);
+  /* Long notes are clamped to a few lines with their own "Show more". A
+     single pasted log turns the list into a scroll, and the list is an index
+     first — you find the note, then you open it. */
+  let expanded = $state<Record<string, boolean>>({});
 
   const run = <T,>(e: Effect.Effect<T, unknown, never>) => Effect.runPromise(e as never);
 
@@ -104,6 +114,10 @@
         items = [n, ...items];
         draft = "";
         draftCheckable = false;
+        // Folds itself away again: the note just written is the thing to
+        // look at, and leaving an empty form open re-creates the pile-up
+        // this button exists to stop.
+        composing = false;
         onChanged?.();
       })
       .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to add note"))
@@ -173,6 +187,26 @@
     confirmId = null;
   }
 
+  /* Whether a note is long enough to be worth folding. Measured on the SOURCE
+     rather than the rendered height: a heuristic that is occasionally
+     generous beats a layout read on every note in the list, and being wrong
+     costs a "Show more" nobody needed. */
+  const CLAMP_CHARS = 420;
+  const CLAMP_LINES = 8;
+  function clampable(body: string): boolean {
+    return body.length > CLAMP_CHARS || body.split("\n").length > CLAMP_LINES;
+  }
+  function toggleExpand(id: string) {
+    expanded = { ...expanded, [id]: !expanded[id] };
+  }
+
+  /* Opening the composer should put the cursor in it — the click already
+     said what was wanted, and a second click into the box is the kind of
+     friction that stops notes being written. */
+  function focusOnMount(el: HTMLTextAreaElement) {
+    el.focus();
+  }
+
   // Notes store a USER ID so a rename shows up on old notes. Two sentinels are
   // not ids and must not be looked up:
   //   "unknown" — no human behind the call (cron, system job, legacy session)
@@ -187,11 +221,26 @@
 </script>
 
 <div class="flex flex-col gap-3">
-  <!-- Compose. Kept at the top so writing a note is the first thing
-       available, not something to scroll past a long list for. -->
+  <!-- Compose, behind one button. The form stays at the TOP — writing a note
+       should not mean scrolling past the list — but folded, because the
+       panel's job most of the time is showing what is already written. -->
+  {#if !composing}
+    <button
+      type="button"
+      data-testid="note-compose-open"
+      onclick={() => { composing = true; }}
+      class="flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-white-400 px-3 py-2 text-xs font-medium text-black-700 transition-colors hover:border-green-500 hover:text-green-600 dark:border-navy-600 dark:text-black-600 dark:hover:text-green-400"
+    >
+      <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <path d="M8 3.5v9M3.5 8h9" stroke-linecap="round"></path>
+      </svg>
+      Write a note
+    </button>
+  {:else}
   <div class="rounded-lg border border-white-300 bg-white-100 p-3 dark:border-navy-600 dark:bg-navy-700">
     <textarea
       bind:value={draft}
+      use:focusOnMount
       onkeydown={composeKeys}
       rows="3"
       placeholder="What should the next session know?"
@@ -225,12 +274,18 @@
       </select>
       <button
         type="button"
+        onclick={() => { composing = false; draft = ""; draftCheckable = false; }}
+        class="ml-auto rounded-lg px-2 py-1.5 text-xs text-black-700 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-800"
+      >Cancel</button>
+      <button
+        type="button"
         onclick={add}
         disabled={busy || draft.trim() === ""}
-        class="ml-auto rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white-100 transition-colors hover:bg-green-700 disabled:opacity-40"
+        class="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white-100 transition-colors hover:bg-green-700 disabled:opacity-40"
       >Add note</button>
     </div>
   </div>
+  {/if}
 
   {#if !loaded}
     <p class="py-4 text-center text-xs text-black-700 dark:text-black-600">Loading…</p>
@@ -298,15 +353,38 @@
                 </div>
               {:else}
                 <!-- Hidden notes are blurred until hovered: still here, but
-                     clearly out of the agent's reach. -->
-                <div
-                  data-testid={"note-body-" + n.id}
-                  class={[
-                    "wick-note-md break-words text-black-900 transition dark:text-white-100",
-                    n.done ? "line-through opacity-60" : "",
-                    n.hidden ? "blur-[3px] hover:blur-none" : "",
-                  ].join(" ")}
-                >{@html renderMarkdown(n.body)}</div>
+                     clearly out of the agent's reach. A long one is folded to
+                     a few lines with its own toggle, so one pasted log does
+                     not become the whole panel. -->
+                <div class="relative">
+                  <div
+                    data-testid={"note-body-" + n.id}
+                    class={[
+                      "wick-note-md break-words text-black-900 transition dark:text-white-100",
+                      n.done ? "line-through opacity-60" : "",
+                      n.hidden ? "blur-[3px] hover:blur-none" : "",
+                      clampable(n.body) && !expanded[n.id] ? "max-h-40 overflow-hidden" : "",
+                    ].join(" ")}
+                  >{@html renderMarkdown(n.body)}</div>
+                  {#if clampable(n.body) && !expanded[n.id]}
+                    <!-- Fades into the card's own background rather than a
+                         hard cut, which reads as the note simply ending. -->
+                    <div
+                      aria-hidden="true"
+                      class="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t {n.hidden
+                        ? 'from-white-200 dark:from-navy-800'
+                        : 'from-white-100 dark:from-navy-700'} to-transparent"
+                    ></div>
+                  {/if}
+                </div>
+                {#if clampable(n.body)}
+                  <button
+                    type="button"
+                    data-testid={"note-expand-" + n.id}
+                    onclick={() => toggleExpand(n.id)}
+                    class="mt-1 text-[11px] font-medium text-green-600 hover:underline dark:text-green-400"
+                  >{expanded[n.id] ? "Show less" : "Show more"}</button>
+                {/if}
               {/if}
 
               <!-- Audience, author and time describe a note that exists; an

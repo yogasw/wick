@@ -79,11 +79,22 @@ type Pool struct {
 	spawningKeys map[string]struct{}  // sessions mid-spawn: slot reserved, not yet in active
 	queue        []queueEntry
 	buffers      map[string]*Buffer // per-session buffer, lazily created
+	// leases are slots held by work that is not a session subprocess
+	// (one-shot LLM helpers, see lease.go). Lazily created; guarded by mu.
+	leases map[string]leaseEntry
+	// pendingBindings holds thread bindings set before their session was
+	// on disk (a channel binds on the message that creates the session);
+	// ensureSession writes them once the meta exists. key = session id.
+	pendingBindings sync.Map
 	// crashes tracks recent unexplained deaths per agent so a restart
 	// budget can be enforced. Lazily created; see crashrecovery.go.
 	crashes map[string]*crashState
-	closed  bool
-	stopCh  chan struct{} // closed by Stop to unwind background loops
+	// ghostWarned remembers which active entries HandoverBlockers already
+	// logged (and reaped) as ghosts, so a drain polling every few hundred
+	// milliseconds says it once per entry. Lazily created; guarded by mu.
+	ghostWarned map[string]bool
+	closed      bool
+	stopCh      chan struct{} // closed by Stop to unwind background loops
 
 	// wg tracks tryGrantQueue background spawns + onAgentExit work so
 	// Stop can wait for all post-exit disk writes (markStatus, queue
@@ -116,6 +127,11 @@ type PoolConfig struct {
 	// PROCESSES; this counts BYTES, and a free slot says nothing about
 	// whether the machine can host what would fill it.
 	MinFreeMemoryLoader func() int
+
+	// SpawnHold reports whether the resource guard wants new agents held
+	// back because memory is FALLING toward the floor — the trend a static
+	// MinFreeMemoryLoader floor cannot see. nil = no trend gate.
+	SpawnHold func() bool
 	// CallerUserID resolves the wick user behind a Send from its context.
 	// The pool stays decoupled from the auth packages: the server injects
 	// this. nil (or empty result) = no resolved caller, which disables
@@ -171,6 +187,12 @@ type PoolConfig struct {
 	// for the common single-user session. Turn it on for shared sessions
 	// where per-user attribution matters more than continuity.
 	RespawnOnCallerChange bool
+
+	// IdentityFixed reports whether a session's spawn identity is the same
+	// whoever triggers the turn (a Team agent running as its owner). Such a
+	// session is never recycled on caller grounds: the respawn would mint
+	// the very identity the running process already holds. nil = none is.
+	IdentityFixed func(ctx context.Context, sessionID string) bool
 
 	// PreemptIdle, when true, lets a queued send kick out the longest-idle
 	// active subprocess (Lifecycle == Idle) so the new session doesn't have
@@ -305,6 +327,10 @@ type BuildResult struct {
 	// rather than leaving it valid until its TTL. Empty when the spawn used
 	// the shared internal token, which is per-boot and must NOT be revoked.
 	MCPToken string
+	// RunAsUserID is the wick user that per-session credential was minted
+	// for. Empty when no per-user credential was minted (shared token, or a
+	// provider with no MCP surface).
+	RunAsUserID string
 }
 
 // SpawnStartMeta is the post-Start snapshot the pool feeds back to
@@ -406,6 +432,12 @@ type runEntry struct {
 	// Empty = spawned with no resolved caller (cron, system job, legacy
 	// session); such a run is never recycled on caller grounds.
 	callerUserID string
+	// runAsUserID is who this process is shown as belonging to: the identity
+	// its credential was minted for, else the caller, else the session
+	// owner. Unlike callerUserID it is set when no human woke the spawn (a
+	// delegation result, a schedule fire) — the minter still picked a person
+	// then. Display only; respawn decisions stay on callerUserID.
+	runAsUserID string
 	// mcpToken is the per-session MCP credential handed to this spawn, kept
 	// so it can be revoked the moment the subprocess dies instead of idling
 	// until its TTL. Empty for spawns using the shared internal token, which
@@ -496,11 +528,20 @@ func (p *Pool) reconcileLoop() {
 			p.mu.Lock()
 			closed := p.closed
 			empty := len(p.active) == 0
+			queued := len(p.queue) > 0
 			p.mu.Unlock()
-			if closed || empty {
+			if closed {
 				continue
 			}
-			p.ReconcileDead()
+			if !empty {
+				p.ReconcileDead()
+			}
+			// A spawn held back for memory has no slot release to wake
+			// it — memory recovering is not an event. Re-offer the queue
+			// here so it starts once the machine has room again.
+			if queued {
+				p.tryGrantQueue()
+			}
 		}
 	}
 }
@@ -619,9 +660,19 @@ func (p *Pool) SetThreadBinding(sessionID string, b agentchannels.ThreadBinding)
 	}
 	sess, err := session.Load(p.cfg.Layout, sessionID)
 	if err != nil {
+		// The first message of a thread binds before Send creates the
+		// session. Dropping it left the thread unbound for good, so a
+		// later turn that thread never typed — a sub-agent's result
+		// waking the leader — had nowhere to go. Hold it until the
+		// session exists.
+		if !storage.PathExists(p.cfg.Layout.SessionMeta(sessionID)) {
+			p.pendingBindings.Store(sessionID, b)
+			return
+		}
 		log.Warn().Str("session", sessionID).Err(err).Msg("pool: set thread binding — session load failed")
 		return
 	}
+	p.pendingBindings.Delete(sessionID)
 	cur := sess.Meta.ChannelRef
 	if cur != nil && cur.Channel == b.Channel && cur.ChatID == b.ChatID &&
 		cur.ThreadID == b.ThreadID && cur.Instance == b.Instance {
@@ -685,6 +736,19 @@ func (p *Pool) resolveAgentName(sessionID, agentName string) string {
 	return sess.Agents[0].Name
 }
 
+// runAsIdentity picks whose spawn this is for display: the identity the
+// credential was minted for, then the message's caller, then the session
+// owner. All three empty — an ownerless session no human woke — stays empty;
+// there is nobody to name.
+func runAsIdentity(minted, caller, owner string) string {
+	for _, id := range []string{minted, caller, owner} {
+		if id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
 // callerChanged reports whether this message comes from a different user
 // than the one the running subprocess was spawned for.
 //
@@ -720,6 +784,12 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	var sender *store.Sender
 	if role == "user" && p.cfg.SenderFrom != nil {
 		sender = p.cfg.SenderFrom(ctx)
+	}
+	// An actioncard click is marked by the postback endpoint on ctx, never
+	// inferred from the text.
+	var postback *store.Postback
+	if role == "user" {
+		postback = store.PostbackFrom(ctx)
 	}
 	// Read once per send so the live and buffered paths below agree even if
 	// the operator changes the setting mid-flight.
@@ -762,7 +832,8 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	//
 	// Only when explicitly enabled, and only for role "user": a system or
 	// sub-agent message is not a human taking over the conversation.
-	if alive && p.cfg.RespawnOnCallerChange && role == "user" && p.callerChanged(ctx, entry) {
+	if alive && p.cfg.RespawnOnCallerChange && role == "user" && p.callerChanged(ctx, entry) &&
+		(p.cfg.IdentityFixed == nil || !p.cfg.IdentityFixed(ctx, sessionID)) {
 		log.Ctx(ctx).Info().
 			Str("component", "pool").
 			Str("session", sessionID).
@@ -801,7 +872,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			Msg("pool.send: routing to live subprocess")
 		// Active agent — append to conversation log + send straight.
 		if entry.store != nil {
-			_ = entry.store.AppendUserTurnWithSender(role, source, text, atts, sender)
+			_ = entry.store.AppendUserTurnWithPostback(role, source, text, atts, sender, postback)
 			turnPersisted = true
 		}
 		if role == "user" {
@@ -874,7 +945,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// shows the messages — they previously only lived in PendingInput.
 	// We build a transient Store because no entry.store exists yet.
 	if !turnPersisted {
-		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts, sender)
+		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts, sender, postback)
 	}
 	if role == "user" && !userMsgNotified {
 		p.notifyUserMessage(sessionID, agentName, source, text, sender)
@@ -915,6 +986,11 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	if p.slotFreeLocked(pType, pName) {
 		p.spawningKeys[key] = struct{}{}
 		p.mu.Unlock()
+		// Admitted: idle warm omp/opencode servers that will not serve
+		// this spawn give their memory back first (before the free-RAM
+		// check, which they would otherwise fail). Only here — a send that
+		// is queued or joins a spawn in flight starts nothing.
+		yieldIdleServers(sessionID, pType, pName)
 		err := p.spawn(ctx, sessionID, agentName, source)
 		p.mu.Lock()
 		delete(p.spawningKeys, key)
@@ -945,13 +1021,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 // (subprocess not yet alive) used to skip this, which made messages
 // disappear from the UI after a page refresh — they only lived in
 // meta.PendingInput, which the conversation view doesn't read.
-func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string, atts []store.Attachment, sender *store.Sender) {
+func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string, atts []store.Attachment, sender *store.Sender, postback *store.Postback) {
 	sto := store.New(store.Options{
 		Layout:    p.cfg.Layout,
 		SessionID: sessionID,
 		AgentName: agentName,
 	})
-	_ = sto.AppendUserTurnWithSender(role, source, text, atts, sender)
+	_ = sto.AppendUserTurnWithPostback(role, source, text, atts, sender, postback)
 }
 
 // preemptIdleSlot picks the longest-idle active entry (Lifecycle == Idle,
@@ -1206,6 +1282,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		// identity is fixed in the argv) and so the credential dies with the
 		// process instead of idling until its TTL.
 		callerUserID: callerUserID,
+		runAsUserID:  runAsIdentity(br.RunAsUserID, callerUserID, sess.Meta.UserID),
 		mcpToken:     br.MCPToken,
 	}
 	// Spawn-local logger derived from the same ctx — consumers in the
@@ -1278,50 +1355,13 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		l.Error().
 			Err(err).
 			Msg("pool.spawn: Start failed")
-		// A failed start leaves the state machine at Spawning and the session
-		// marked Running. Tear down the same way a normal exit does so the UI
-		// doesn't sit stuck on "spawning": flip to Killed (broadcasts the
-		// lifecycle), revert status, release the slot, and let the queue move
-		// on. Surface the failure as a system error turn (persisted + live) so
-		// it reads inline instead of only as a request-level error.
-		label := pType
-		if pName != "" && pName != pType {
-			label = pName + " " + pType
-		}
-		if label == "" {
-			label = agentName
-		}
-		msg := "Failed to start " + label + ": " + err.Error()
-		if sto != nil {
-			if perr := sto.AppendErrorTurn(msg); perr != nil {
-				l.Warn().Err(perr).Msg("pool.spawn: persist spawn-error turn failed")
-			}
-		}
-		p.mu.Lock()
-		if st != nil {
-			st.MarkKilled()
-		}
-		p.mu.Unlock()
-		_ = p.markStatus(sessionID, session.StatusIdle)
-		p.releaseSlot(key)
-		if p.cfg.OnSpawnError != nil {
-			p.cfg.OnSpawnError(SpawnErrorEvent{
-				SessionID:    sessionID,
-				AgentName:    agentName,
-				Ctx:          ctx,
-				Message:      msg,
-				Err:          err,
-				ProviderType: pType,
-				ProviderName: pName,
-			})
-		}
-		p.tryGrantQueue()
 		// Return nil: the failure is now surfaced in-band (persisted system
 		// error turn + broadcast Error/Done, and channels get it via the event
 		// dispatch) exactly like a runtime error. Bubbling it as a Send error
 		// too would make /send return 500 and pop a toast — a double report the
 		// caller should not see. The Send "succeeds"; the session is already
 		// back to idle.
+		p.failSpawn(ctx, key, sessionID, agentName, pType, pName, st, sto, err)
 		return nil
 	}
 	l.Debug().
@@ -1364,10 +1404,60 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		// User turns were already persisted to conversation.jsonl by
 		// persistBufferedTurn on each Send; combined is just the CLI input.
 		if err := a.Send(combined); err != nil {
-			return err
+			// Respawn-per-turn providers (codex, opencode, omp) defer the
+			// real spawn to this first Send, so a refused spawn — binary
+			// missing, no model — lands here, not at Start. Same teardown
+			// and inline report as a failed Start; without it the session
+			// sat "running" with no process and the error only reached the
+			// HTTP caller, which the new-session composer swallowed.
+			l.Error().Err(err).Msg("pool.spawn: first send failed")
+			p.failSpawn(ctx, key, sessionID, agentName, pType, pName, st, sto, err)
+			return nil
 		}
 	}
 	return nil
+}
+
+// failSpawn tears down a spawn that never produced a working process and
+// reports why, inline. A failed start leaves the state machine at Spawning
+// and the session marked Running: flip to Killed (broadcasts the
+// lifecycle), revert status, release the slot, and let the queue move on.
+// The failure becomes a system error turn (persisted + live via
+// OnSpawnError) so it reads in the conversation instead of only as a
+// request-level error.
+func (p *Pool) failSpawn(ctx context.Context, key, sessionID, agentName, pType, pName string, st *state.Machine, sto *store.Store, err error) {
+	label := pType
+	if pName != "" && pName != pType {
+		label = pName + " " + pType
+	}
+	if label == "" {
+		label = agentName
+	}
+	msg := "Failed to start " + label + ": " + err.Error()
+	if sto != nil {
+		if perr := sto.AppendErrorTurn(msg); perr != nil {
+			log.Ctx(ctx).Warn().Err(perr).Str("session", sessionID).Msg("pool.spawn: persist spawn-error turn failed")
+		}
+	}
+	p.mu.Lock()
+	if st != nil {
+		st.MarkKilled()
+	}
+	p.mu.Unlock()
+	_ = p.markStatus(sessionID, session.StatusIdle)
+	p.releaseSlot(key)
+	if p.cfg.OnSpawnError != nil {
+		p.cfg.OnSpawnError(SpawnErrorEvent{
+			SessionID:    sessionID,
+			AgentName:    agentName,
+			Ctx:          ctx,
+			Message:      msg,
+			Err:          err,
+			ProviderType: pType,
+			ProviderName: pName,
+		})
+	}
+	p.tryGrantQueue()
 }
 
 // onAgentExit is the hook the factory wires for us. The pool marks
@@ -1565,10 +1655,11 @@ func (p *Pool) tryGrantQueue() {
 	// (global + per-provider). A head-of-line entry blocked by its
 	// provider cap shouldn't starve a different provider behind it.
 	idx := -1
+	var qType, qName string
 	for i, q := range p.queue {
 		pType, pName := p.providerForSession(q.sessionID, q.agentName)
 		if p.slotFreeLocked(pType, pName) {
-			idx = i
+			idx, qType, qName = i, pType, pName
 			break
 		}
 	}
@@ -1585,6 +1676,9 @@ func (p *Pool) tryGrantQueue() {
 	// Background spawn — don't block whoever fired the exit hook.
 	go func() {
 		defer p.wg.Done()
+		// The entry actually granted: idle warm servers that will not
+		// serve it go first (as on the direct Send path).
+		yieldIdleServers(q.sessionID, qType, qName)
 		_ = p.spawn(context.Background(), q.sessionID, q.agentName, "queue")
 		p.mu.Lock()
 		delete(p.spawningKeys, key)
@@ -1642,6 +1736,13 @@ func (p *Pool) SetThinkingTokens(sessionID, agentName, v string) error {
 // entry does not exist — create it first (SetMaxTurns does).
 func (p *Pool) SetAgentProvider(sessionID, agentName, providerKey string) error {
 	return session.SetAgentProvider(p.cfg.Layout, sessionID, agentName, providerKey)
+}
+
+// SetModelID pins a model id on the session's agent entry (creating it if
+// missing) so the next spawn runs that model. Empty = unset (the
+// provider's own default). Used by a workflow agent node with a model.
+func (p *Pool) SetModelID(sessionID, agentName, modelID string) error {
+	return session.SetModelID(p.cfg.Layout, sessionID, agentName, modelID)
 }
 
 // EnsureSession is the public wrapper for ensureSession. Workflow's
@@ -1755,6 +1856,9 @@ func (p *Pool) ensureSession(ctx context.Context, sessionID, source, projectID s
 		}
 		return nil // race: other caller created it, that's fine
 	}
+	if v, ok := p.pendingBindings.LoadAndDelete(sessionID); ok {
+		p.SetThreadBinding(sessionID, v.(agentchannels.ThreadBinding))
+	}
 	if p.cfg.OnSessionCreated != nil {
 		p.cfg.OnSessionCreated(sess)
 	}
@@ -1833,7 +1937,17 @@ func (p *Pool) markStatus(sessionID string, status session.Status) error {
 	}
 	sess.Meta.Status = status
 	sess.Meta.LastActive = time.Now().UTC()
-	return session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta)
+	if err := session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta); err != nil {
+		return err
+	}
+	// Refresh the registry so its cached LastActive follows the disk. The
+	// sidebar ages a session from that cache once the process leaves the
+	// pool; without this it snapped back to the stale age (e.g. "4h") the
+	// moment a turn ended. Every caller has already released p.mu.
+	if p.cfg.OnSessionMeta != nil {
+		p.cfg.OnSessionMeta(sessionID)
+	}
+	return nil
 }
 
 // Stop tears down all active agents and waits for trailing
@@ -1883,6 +1997,12 @@ func (p *Pool) Drain(ctx context.Context) int {
 //     lifecycle is driven by normalised agent events, so this holds for every
 //     provider — claude, codex, anything added later — without this code
 //     knowing which one is running.
+//     Except a ghost: a lifecycle stuck at spawning/working with no process
+//     left behind it (see ghostTurn). Such an entry can never finish, so
+//     waiting on it held a drain open forever — the old process never
+//     exited and the successor never got the intake baton. It is logged
+//     once, its dead process reaped through the normal exit path, and the
+//     handover proceeds. Real work is still waited for however long it runs.
 //   - Nothing else. The gap AFTER a turn ends — where a tool result, a queued
 //     message or a sub-agent reply usually lands — is covered once, globally,
 //     by the drain's settle window (upgrade.DrainQuiet), so it does not need
@@ -1895,20 +2015,157 @@ func (p *Pool) Drain(ctx context.Context) int {
 // on it meant waiting on the idle TTL, and the only way out was a deadline
 // that also cut live turns.
 func (p *Pool) HandoverBlockers() []string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	// Snapshot under p.mu, probe outside it. The probes go into the agent
+	// (its own lock, which Start/respawn hold across a whole Spawn) and the
+	// OS, so doing them under p.mu would stall the pool behind a slow spawn
+	// — and a panic in any of them would leave p.mu held for good.
+	type candidate struct {
+		key string
+		e   *runEntry
+		lc  state.Lifecycle
+		age time.Duration
+	}
+	var cands []candidate
+	func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		for k, e := range p.active {
+			if e == nil || e.state == nil {
+				continue
+			}
+			lc := e.state.Lifecycle()
+			if lc != state.LifecycleSpawning && lc != state.LifecycleWorking {
+				continue
+			}
+			cands = append(cands, candidate{k, e, lc, time.Since(e.state.LastActive())})
+		}
+	}()
+
+	type ghost struct {
+		candidate
+		pid int
+	}
 	var out []string
-	for _, e := range p.active {
-		if e == nil || e.state == nil {
+	var ghosts []ghost
+	for _, c := range cands {
+		pid, attached := turnProcess(c.e)
+		if !ghostTurn(c.lc, pid, attached, transportEnded(c.e), c.age, processAlive) {
+			out = append(out, c.e.sessID)
 			continue
 		}
-		switch e.state.Lifecycle() {
-		case state.LifecycleSpawning, state.LifecycleWorking:
-			out = append(out, e.sessID)
+		ghosts = append(ghosts, ghost{c, pid})
+	}
+
+	var reap []ghost
+	func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.ghostWarned == nil {
+			p.ghostWarned = make(map[string]bool)
 		}
+		for _, g := range ghosts {
+			if p.ghostWarned[g.key] {
+				continue
+			}
+			p.ghostWarned[g.key] = true
+			log.Warn().Str("session", g.e.sessID).Str("agent", g.e.agentNm).
+				Str("lifecycle", g.lc.String()).Int("pid", g.pid).
+				Dur("since_last_active", g.age.Round(time.Second)).
+				Msg("pool.handover: turn has no live process behind it — not holding the handover for it")
+			// Only a pid we watched die is reaped. A turn with nothing
+			// attached may still be inside Start (which holds the agent lock
+			// across Spawn), and stopping it there races the spawn — skipping
+			// it is enough for the drain; the UI keeps it until the exit path
+			// runs.
+			if g.pid > 0 && g.e.agent != nil {
+				reap = append(reap, g)
+			}
+		}
+		for k := range p.ghostWarned {
+			if _, ok := p.active[k]; !ok {
+				delete(p.ghostWarned, k)
+			}
+		}
+	}()
+	// Stop blocks up to the terminate grace and fires the exit hook, which
+	// takes p.mu — so never under the lock, and never on the drain's
+	// polling goroutine. The same path ReconcileDead uses for idle zombies.
+	// The pid is read again first: a respawn may have attached a new process
+	// since the probe, and that one is alive and must be left alone.
+	for _, g := range reap {
+		go func(g ghost) {
+			if pid, _ := turnProcess(g.e); pid != g.pid || processAlive(pid) {
+				return
+			}
+			_ = g.e.agent.Stop()
+		}(g)
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ghostSpawnGrace is how long a spawning turn may go without any process
+// attached before the handover stops waiting for it. The spawner is still
+// resolving binaries / starting a server in that window, so a young one is
+// real work; one this old with nothing behind it never got a process.
+const ghostSpawnGrace = 2 * time.Minute
+
+// ghostDeadGrace is how long a dead pid must have gone without an event
+// before its turn counts as a ghost. A respawn swaps the agent's process
+// only once the new one is spawned, so for that moment the entry still
+// reports the previous, exited pid while its new turn is already starting.
+// A fresh event means exactly that; only a quiet one is left behind.
+const ghostDeadGrace = 30 * time.Second
+
+// turnProcess and processAlive are the handover's liveness probes, as
+// variables so tests can stand in for real subprocesses.
+//
+// turnProcess returns the entry's OS pid and whether any spawn is attached.
+// An entry with no agent (only tests build those) reports attached with no
+// pid — "cannot tell" — so it keeps counting.
+var (
+	turnProcess = func(e *runEntry) (pid int, attached bool) {
+		if e.agent == nil {
+			return 0, true
+		}
+		return e.agent.ProcessState()
+	}
+	// transportEnded reports a pid-less transport that has already said its
+	// turn is over (opencode: the remote turn's done channel is closed).
+	transportEnded = func(e *runEntry) bool {
+		return e.agent != nil && e.agent.TransportEnded()
+	}
+	processAlive = processctl.ProcessAlive
+)
+
+// ghostTurn decides whether a spawning/working entry is a ghost: a
+// lifecycle that says a turn is running with no process left that could
+// ever finish it (a reader goroutine stuck on a pipe some orphan still
+// holds, a missed exit). Pure, so the rules are testable without spawning.
+//
+//   - pid > 0 → ghost iff that process is gone AND no event arrived for
+//     ghostDeadGrace (a respawn reports the old pid for a moment).
+//     processctl.ProcessAlive treats EPERM as alive, so a pid we can't
+//     signal still counts.
+//   - attached with pid 0 → how opencode (shared server), omp RPC and the
+//     in-process wick provider look while a turn is genuinely running;
+//     there is no per-turn process to probe. A ghost only when the
+//     transport itself says the turn ended (opencode: its remote turn's
+//     done channel closed) — silence alone is not proof, a long tool call
+//     is silent too, and real work is waited for however long it runs.
+//   - nothing attached → ghost only once it is older than ghostSpawnGrace
+//     since its last event, so a spawn still in progress is waited for.
+func ghostTurn(lc state.Lifecycle, pid int, attached, ended bool, age time.Duration, alive func(int) bool) bool {
+	if lc != state.LifecycleSpawning && lc != state.LifecycleWorking {
+		return false
+	}
+	if pid > 0 {
+		return age >= ghostDeadGrace && !alive(pid)
+	}
+	if attached {
+		return ended
+	}
+	return age >= ghostSpawnGrace
 }
 
 // HandoverBlockerCount is HandoverBlockers as the count the drain tracker
@@ -2025,6 +2282,7 @@ func (p *Pool) ActiveSnapshot() []ActiveEntry {
 			ProviderType: e.provType,
 			ProviderName: e.provName,
 			CWD:          e.cwd,
+			CallerUserID: e.runAsUserID,
 		}
 		if e.state != nil {
 			entry.Lifecycle = e.state.Lifecycle().String()
@@ -2052,11 +2310,20 @@ func (p *Pool) IdleTimeout() time.Duration { return p.cfg.IdleTimeout }
 // pool can read them; older callers that only check SessionID + AgentName
 // keep working.
 type ActiveEntry struct {
-	SessionID      string
-	AgentName      string
-	ProviderType   string // resolved provider type (claude / codex / gemini)
-	ProviderName   string // instance name within that type
-	CWD            string // resolved workspace path, used by RouteByCWD
+	SessionID    string
+	AgentName    string
+	ProviderType string // resolved provider type (claude / codex / gemini)
+	ProviderName string // instance name within that type
+	CWD          string // resolved workspace path, used by RouteByCWD
+	// CallerUserID is the wick user this subprocess actually runs AS — the
+	// identity its MCP credential was minted for, baked into the argv and
+	// fixed for the life of the process. Not the session owner: on a shared
+	// session the two differ, and the spawn's reach follows this one.
+	//
+	// A spawn no human woke (a delegation result, a schedule fire) still
+	// carries the owner its credential was minted for. Empty only when the
+	// session has no owner either.
+	CallerUserID   string
 	PID            int
 	Queued         int  // messages waiting after the current turn (RespawnQueue)
 	Respawns       bool // one process per turn (codex): a dead PID between turns is normal, not a zombie
@@ -2075,6 +2342,27 @@ type ActiveEntry struct {
 // the agent is not currently active — returns nil in that case.
 // The normal onAgentExit hook still fires, releasing the slot and
 // draining the queue.
+// CancelQueued drops a message queued behind sessionID's running remote
+// turn (id from its remote_queue line) before it is sent; false when none
+// of the session's agents holds it.
+func (p *Pool) CancelQueued(sessionID, id string) bool {
+	p.mu.Lock()
+	prefix := sessionID + "::"
+	var entries []*runEntry
+	for k, e := range p.active {
+		if strings.HasPrefix(k, prefix) {
+			entries = append(entries, e)
+		}
+	}
+	p.mu.Unlock()
+	for _, e := range entries {
+		if e.agent != nil && e.agent.CancelQueued(id) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Pool) Kill(sessionID, agentName string) error {
 	return p.KillBy(sessionID, agentName, "", "")
 }
@@ -2293,7 +2581,9 @@ func (p *Pool) DequeueSession(sessionID string) int {
 // claude (append mode) keeps the 1-agent-1-process model: every exit is
 // the agent dying, so all reasons release.
 func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) {
-	if reason == provider.ExitError {
+	// ExitClean too: omp RPC / opencode report a missing resume as the
+	// turn's own error and exit clean, so the flag, not stderr, says so.
+	if reason == provider.ExitError || reason == provider.ExitClean {
 		p.healStaleResume(sessionID, agentName)
 	}
 	if reason == provider.ExitClean || reason == provider.ExitRespawn {
@@ -2417,6 +2707,12 @@ func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.Exit
 // AND dispatches to the originating channel. Without it a Slack thread whose
 // agent just gave up would show nothing at all.
 func (p *Pool) haltNotify(sessionID, agentName, msg string) {
+	p.noticeNotify(sessionID, agentName, msg, errCrashLoopHalted)
+}
+
+// noticeNotify is haltNotify's delivery for any notice: persisted as a
+// buffered system turn, and published inline + to the channel.
+func (p *Pool) noticeNotify(sessionID, agentName, msg string, cause error) {
 	if err := p.Send(context.Background(), sessionID, agentName, "recover-halt", "system", msg); err != nil {
 		log.Warn().Err(err).
 			Str("component", "pool").
@@ -2431,7 +2727,7 @@ func (p *Pool) haltNotify(sessionID, agentName, msg string) {
 		AgentName: agentName,
 		Ctx:       context.Background(),
 		Message:   msg,
-		Err:       errCrashLoopHalted,
+		Err:       cause,
 	})
 }
 
@@ -2460,11 +2756,15 @@ func (p *Pool) healStaleResume(sessionID, agentName string) {
 	if !ok || entry.agent == nil {
 		return
 	}
-	if entry.agent.SpawnResumeID() == "" {
-		return // fresh spawn — nothing stale to clear
-	}
-	if !provider.IsResumeNotFound(entry.agent.StderrTail()) {
-		return
+	// A turn that already reported the missing conversation in-band, or
+	// a --resume spawn that died saying so on stderr.
+	if !entry.agent.TakeResumeLost() {
+		if entry.agent.SpawnResumeID() == "" {
+			return // fresh spawn — nothing stale to clear
+		}
+		if !provider.IsResumeNotFound(entry.agent.StderrTail()) {
+			return
+		}
 	}
 	if err := session.SetCLISessionID(p.cfg.Layout, sessionID, agentName, ""); err != nil {
 		log.Warn().Str("session", sessionID).Str("agent", agentName).Err(err).
@@ -2473,7 +2773,16 @@ func (p *Pool) healStaleResume(sessionID, agentName string) {
 	}
 	log.Info().Str("session", sessionID).Str("agent", agentName).
 		Msg("pool: cleared stale CLI resume id (No conversation found) — next spawn starts fresh")
+	// Never a silent drop: the user reads that the conversation restarts.
+	// Off the exit path: the entry is still being torn down here.
+	go p.noticeNotify(sessionID, agentName, ResumeDroppedNotice, errResumeDropped)
 }
+
+// ResumeDroppedNotice is what the user reads when healStaleResume drops a
+// resume id the provider could no longer find.
+const ResumeDroppedNotice = "The provider could not find this session's earlier conversation, so the next message starts a fresh one. Earlier turns stay in this session's history, but the agent won't remember them."
+
+var errResumeDropped = errors.New("resume id not found by the provider; cleared")
 
 // sessionHasCLISession reports whether any agent already captured a CLI
 // session id (i.e. a resumable conversation exists for this session).
@@ -2570,4 +2879,17 @@ func (p *Pool) recordCompactUnsupported(ctx context.Context, sessionID, agentNam
 	// rule, so nobody is left watching a command that appears to have
 	// gone nowhere.
 	p.notifyUserMessage(sessionID, agentName, source, text, sender)
+}
+
+// yieldIdleServers stops idle warm provider servers (omp RPC / auth broker,
+// opencode serve) that the spawn for sessionID on pType/pName will not
+// use, so their memory goes to it. The session's own servers and, for
+// omp/opencode, those of the instance it runs on are kept; a server with a
+// turn running or queued is never stopped (provider.YieldIdleServers).
+var yieldIdleServers = func(sessionID, pType, pName string) {
+	instance := ""
+	if pType == string(provider.TypeOMP) || pType == string(provider.TypeOpencode) {
+		instance = pName
+	}
+	provider.YieldIdleServers(sessionID, instance)
 }

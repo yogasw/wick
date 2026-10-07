@@ -5,7 +5,8 @@
   // initial port has zero JS-lib dependency. When we wire Drawflow back,
   // it mounts inside this component and the layout/positions feed into
   // its API rather than absolute `<div style>`.
-  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, setEdgeCase, paletteOpen, paletteAddRequest, detailNodeID, detailTriggerID, runStatusByNode, validationReport, triggerRunStatus, lastFiredTriggerID, pinnedTriggerID, loadPinnedTrigger, savePinnedTrigger, triggerEventByID, setLockedField, searchOpen } from "$lib/stores/editor";
+  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, setEdgeCase, paletteOpen, paletteAddRequest, detailNodeID, detailTriggerID, runStatusByNode, validationReport, triggerRunStatus, lastFiredTriggerID, pinnedTriggerID, loadPinnedTrigger, savePinnedTrigger, triggerEventByID, setLockedField, searchOpen, STICKY_NOTE_W, STICKY_NOTE_H } from "$lib/stores/editor";
+  import StickyNote from "./StickyNote.svelte";
   import { toastError } from "@wick-fe/common-stores";
   import { get } from "svelte/store";
 
@@ -89,6 +90,7 @@
   import TriggerNode from "./nodes/TriggerNode.svelte";
   import { ConfirmDialog } from "@wick-fe/common-ui";
   import SearchOverlay from "./SearchOverlay.svelte";
+  import { cardWidth, nodeOutPorts, portCenterX, inputPorts, edgeInKey, triggerInKey, fallbackInKey, hasErrorOutput, ERROR_KEY } from "./ports";
   import type { NodeType, Edge } from "$lib/types/workflow";
 
   let canvasEl: HTMLDivElement | undefined = $state();
@@ -147,9 +149,9 @@
   $effect(() => {
     const wf = $draftWorkflow;
     if (!wf || fitted || !canvasEl) return;
-    const positions: { x: number; y: number }[] = [];
+    const positions: { x: number; y: number; w?: number }[] = [];
     for (const n of wf.graph?.nodes ?? []) {
-      positions.push({ x: n._canvas?.x ?? 0, y: n._canvas?.y ?? 0 });
+      positions.push({ x: n._canvas?.x ?? 0, y: n._canvas?.y ?? 0, w: nodeW(n) });
     }
     const positionsMap = ((wf as any)._canvas?.positions ?? {}) as Record<string, { x?: number; y?: number }>;
     for (const t of wf.triggers ?? []) {
@@ -159,7 +161,7 @@
     if (positions.length === 0) return;
     const minX = Math.min(...positions.map((p) => p.x));
     const minY = Math.min(...positions.map((p) => p.y));
-    const maxX = Math.max(...positions.map((p) => p.x)) + 220; // include node width
+    const maxX = Math.max(...positions.map((p) => p.x + (p.w ?? NODE_W))); // include node width
     const maxY = Math.max(...positions.map((p) => p.y)) + 90;  // include node height
     const margin = 60;
     const rect = canvasEl.getBoundingClientRect();
@@ -378,6 +380,14 @@
   // behaviour the user asked for.
   const SNAP_THRESHOLD = 8;
   const NODE_W = 220;
+  // A node with several outputs or inputs is wider than NODE_W
+  // (cardWidth in ./ports.ts); everything that measures a node card goes
+  // through here.
+  function nodeW(n: { id: string } | undefined): number {
+    if (!n) return NODE_W;
+    const wf = $draftWorkflow;
+    return cardWidth(nodeOutPorts(n as any, wf?.graph?.edges ?? []).length, inputPorts(n as any, wf).length);
+  }
   const NODE_H = 90;
   let snapGuides = $state<{ x?: number; y?: number }>({});
 
@@ -388,10 +398,10 @@
     if (!wf) return [];
     const out: { id: string; cx: number; cy: number }[] = [];
     for (const n of wf.graph?.nodes ?? []) {
-      if (n.id === excludeID) continue;
+      if (n.id === excludeID || n.type === "sticky_note") continue;
       const x = n._canvas?.x ?? 0;
       const y = n._canvas?.y ?? 0;
-      out.push({ id: n.id, cx: x + NODE_W / 2, cy: y + NODE_H / 2 });
+      out.push({ id: n.id, cx: x + nodeW(n) / 2, cy: y + NODE_H / 2 });
     }
     const positions = ((wf as any)._canvas?.positions ?? {}) as Record<string, { x: number; y: number }>;
     for (const t of wf.triggers ?? []) {
@@ -412,7 +422,7 @@
   let hoveredEdge = $state<string | null>(null);
   const activeEdge = $derived(
     hoveredEdge ??
-    (ctxMenu?.target.kind === "edge" ? `${ctxMenu.target.from}:${ctxMenu.target.to}` :
+    (ctxMenu?.target.kind === "edge" ? `${ctxMenu.target.from}:${ctxMenu.target.to}:${ctxMenu.target.caseKey ?? ""}` :
      ctxMenu?.target.kind === "trigger-edge" ? `trigger:${ctxMenu.target.triggerID}` : null)
   );
 
@@ -421,6 +431,9 @@
     fromKind: "node" | "trigger" | "node-input";
     startX: number;
     startY: number;
+    // Set when the drag started on a labelled output port: the new edge
+    // takes this case without prompting.
+    caseLabel?: string;
   } | null>(null);
   let connectCursor = $state<{ x: number; y: number } | null>(null);
 
@@ -490,7 +503,7 @@
     closeCtxMenu();
   }
 
-  function startConnect(e: PointerEvent, fromID: string, fromKind: "node" | "trigger" | "node-input") {
+  function startConnect(e: PointerEvent, fromID: string, fromKind: "node" | "trigger" | "node-input", caseLabel?: string) {
     if (locked) {
       showLockedHint(e);
       return; // canvas frozen — no new edges
@@ -508,7 +521,10 @@
     const startY = fromKind === "node-input"
       ? pos.y
       : cardBottomY(fromID, pos.y, fromKind === "trigger" ? 90 : 110);
-    connecting = { fromID, fromKind, startX: pos.x + NODE_W / 2, startY };
+    const port = caseLabel !== undefined ? portAnchor(fromID, caseLabel) : null;
+    connecting = port
+      ? { fromID, fromKind, startX: port.x, startY: port.y, caseLabel }
+      : { fromID, fromKind, startX: pos.x + (fromKind === "trigger" ? NODE_W : nodeW($draftWorkflow?.graph?.nodes?.find((n) => n.id === fromID))) / 2, startY };
     connectCursor = {
       x: (e.clientX - rect.left - pan.x) / zoom,
       y: (e.clientY - rect.top - pan.y) / zoom,
@@ -549,12 +565,15 @@
     let bestID: string | null = null;
     let bestDist = HIT_RADIUS;
     for (const n of wf.graph.nodes) {
-      if (n.id === connecting.fromID) continue;
-      const x = (n._canvas?.x ?? 0) + NODE_W / 2;
-      const y = n._canvas?.y ?? 0;
-      const dx = connectCursor.x - x;
-      const dy = connectCursor.y - y;
-      const d = Math.hypot(dx, dy);
+      if (n.id === connecting.fromID || n.type === "sticky_note") continue;
+      const nx = n._canvas?.x ?? 0;
+      const ny = n._canvas?.y ?? 0;
+      // Dropping anywhere on the card counts; otherwise measure to the
+      // top-centre input like before.
+      const onCard =
+        connectCursor.x >= nx && connectCursor.x <= nx + nodeW(n) &&
+        connectCursor.y >= ny && connectCursor.y <= ny + (cardHeights[n.id] || NODE_H);
+      const d = onCard ? 0 : Math.hypot(connectCursor.x - (nx + nodeW(n) / 2), connectCursor.y - ny);
       if (d < bestDist) {
         bestDist = d;
         bestID = n.id;
@@ -572,22 +591,42 @@
           );
           return current;
         });
+      } else if (connecting.fromKind === "node" && connecting.caseLabel === ERROR_KEY) {
+        // Error port → node: the failure path is node.fallback, not an edge.
+        const from = connecting.fromID;
+        const target = bestID;
+        draftWorkflow.update((current) => {
+          if (!current) return current;
+          current.graph.nodes = current.graph.nodes.map((n) =>
+            n.id === from ? { ...n, on_failure: "fallback", fallback: target } : n,
+          );
+          return current;
+        });
       } else {
         // node-input → reverse direction (drop becomes the source).
         const from = connecting.fromKind === "node-input" ? bestID : connecting.fromID;
         const to = connecting.fromKind === "node-input" ? connecting.fromID : bestID;
         const srcType = get(draftWorkflow)?.graph?.nodes?.find((n) => n.id === from)?.type;
-        let caseLabel = "";
-        if (srcType === "branch" || srcType === "classify") {
+        let caseLabel = connecting.fromKind === "node" ? (connecting.caseLabel ?? "") : "";
+        if (!caseLabel && (srcType === "branch" || srcType === "classify")) {
           caseLabel = (window.prompt(`Case label for this ${srcType} edge (e.g. yes, default). Empty = unconditional:`, "") ?? "").trim();
         }
         draftWorkflow.update((current) => {
           if (!current) return current;
-          const dup = (current.graph.edges ?? []).some((edge) => edge.from === from && edge.to === to);
+          const dup = (current.graph.edges ?? []).some(
+            (edge) => edge.from === from && edge.to === to && (edge.case ?? "") === caseLabel,
+          );
           if (!dup) {
             const edge: Edge = caseLabel ? { from, to, case: caseLabel } : { from, to };
             current.graph.edges = [...(current.graph.edges ?? []), edge];
           }
+          // A merge waits on the ids in `inputs`; wiring a new source in
+          // means waiting on it too.
+          current.graph.nodes = current.graph.nodes.map((n) =>
+            n.id === to && n.type === "merge" && !(n.inputs ?? []).includes(from)
+              ? { ...n, inputs: [...(n.inputs ?? []), from] }
+              : n,
+          );
           return current;
         });
       }
@@ -796,7 +835,7 @@
     const next = new Set<string>();
     const positions = ((wf as any)._canvas?.positions ?? {}) as Record<string, { x?: number; y?: number }>;
     for (const n of wf.graph?.nodes ?? []) {
-      const cx = (n._canvas?.x ?? 0) + NODE_W / 2;
+      const cx = (n._canvas?.x ?? 0) + nodeW(n) / 2;
       const cy = (n._canvas?.y ?? 0) + 50;
       if (cx >= minX && cx <= maxX && cy >= minY && cy <= maxY) next.add(n.id);
     }
@@ -1091,7 +1130,52 @@
     }
   }
 
+  // Sticky notes are `sticky_note` nodes drawn in the back layer. A new
+  // note lands centred in the current viewport, selected so the colour
+  // toolbar is right there.
+  const DEFAULT_NOTE_TEXT = "## Note\nDouble-click to edit. Supports **markdown**.";
+  function addStickyNote() {
+    if (locked) {
+      showLockedHintCenter();
+      return;
+    }
+    let x = 80, y = 80;
+    if (canvasEl) {
+      const rect = canvasEl.getBoundingClientRect();
+      x = Math.round((rect.width / 2 - pan.x) / zoom - STICKY_NOTE_W / 2);
+      y = Math.round((rect.height / 2 - pan.y) / zoom - STICKY_NOTE_H / 2);
+    }
+    addNode({ id: "", type: "sticky_note", content: DEFAULT_NOTE_TEXT, color: "yellow", _canvas: { x, y } });
+    const nodes = get(draftWorkflow)?.graph?.nodes ?? [];
+    const added = nodes[nodes.length - 1];
+    if (added?.type !== "sticky_note") return;
+    selectedNodeIDs.set(new Set());
+    selectedNodeID.set(added.id);
+  }
+  function showLockedHintCenter() {
+    if (!canvasEl) return;
+    const rect = canvasEl.getBoundingClientRect();
+    showLockedHint({ clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 });
+  }
+  function selectNote(id: string) {
+    selectedNodeIDs.set(new Set());
+    selectedNodeID.set(id);
+  }
+
+  function isTypingTarget(): boolean {
+    const el = document.activeElement as HTMLElement | null;
+    const tag = (el?.tagName ?? "").toLowerCase();
+    return tag === "input" || tag === "textarea" || tag === "select" || !!el?.isContentEditable;
+  }
+
   function onkeydown(e: KeyboardEvent) {
+    // Shift+S — add a sticky note (n8n shortcut).
+    if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "S" || e.key === "s")) {
+      if (isTypingTarget() || $searchOpen) return;
+      e.preventDefault();
+      addStickyNote();
+      return;
+    }
     if ((e.key === "Delete" || e.key === "Backspace") && $selectedNodeID) {
       const tag = (document.activeElement?.tagName ?? "").toLowerCase();
       if (tag === "input" || tag === "textarea") return;
@@ -1115,39 +1199,84 @@
 
   // Edge endpoints — used by both edgePath() and the mid-dot helper
   // so the dot lands exactly on the curve regardless of node offset.
-  function nodeEdgePoints(fromID: string, toID: string): { ax: number; ay: number; bx: number; by: number } | null {
+  // portAnchor is the canvas point of a node's labelled output port
+  // (case, "" = success, ERROR_KEY = error), or null when the node has
+  // no such port (single-output nodes keep the bottom-centre port).
+  function portAnchor(nodeID: string, key: string | undefined): { x: number; y: number } | null {
     const wf = $draftWorkflow;
-    if (!wf?.graph?.nodes) return null;
-    const from = wf.graph.nodes.find((n) => n.id === fromID);
-    const to = wf.graph.nodes.find((n) => n.id === toID);
-    if (!from || !to) return null;
+    const n = wf?.graph?.nodes?.find((nn) => nn.id === nodeID);
+    if (!n || key === undefined) return null;
+    const ports = nodeOutPorts(n, wf?.graph?.edges ?? []);
+    const i = ports.findIndex((p) => p.key === key);
+    if (i < 0) return null;
     return {
-      ax: (from._canvas?.x ?? 0) + NODE_W / 2,
-      ay: cardBottomY(from.id, from._canvas?.y ?? 0, 110),
-      bx: (to._canvas?.x ?? 0) + NODE_W / 2,
-      by: to._canvas?.y ?? 0,
+      x: portCenterX(n._canvas?.x ?? 0, nodeW(n), ports.length, i),
+      y: cardBottomY(n.id, n._canvas?.y ?? 0, 110),
     };
   }
-  function triggerEdgePoints(triggerID: string, entryNodeID: string): { ax: number; ay: number; bx: number; by: number } | null {
+
+  // inAnchor is where a source lands on `nodeID`: its own column on the
+  // top edge once the node has several sources, else the top centre.
+  function inAnchor(nodeID: string, key: string): { x: number; y: number } | null {
+    const wf = $draftWorkflow;
+    const n = wf?.graph?.nodes?.find((nn) => nn.id === nodeID);
+    if (!n) return null;
+    const x = n._canvas?.x ?? 0;
+    const y = n._canvas?.y ?? 0;
+    const i = inputPorts(n, wf).findIndex((p) => p.key === key);
+    if (i < 0) return { x: x + nodeW(n) / 2, y };
+    return { x: portCenterX(x, nodeW(n), inputPorts(n, wf).length, i), y };
+  }
+
+  function nodeEdgePoints(fromID: string, toID: string, caseLabel?: string): EdgePoints | null {
+    const wf = $draftWorkflow;
+    const from = wf?.graph?.nodes?.find((n) => n.id === fromID);
+    const end = inAnchor(toID, edgeInKey(fromID, caseLabel));
+    if (!from || !end) return null;
+    const port = portAnchor(fromID, caseLabel ?? "");
+    const start = port
+      ? { ax: port.x, ay: port.y, fromPort: true }
+      : { ax: (from._canvas?.x ?? 0) + nodeW(from) / 2, ay: cardBottomY(from.id, from._canvas?.y ?? 0, 110) };
+    return { ...start, bx: end.x, by: end.y };
+  }
+
+  // The failure path of an on_failure=fallback node: error port → the
+  // fallback node.
+  function fallbackEdgePoints(fromID: string, toID: string): EdgePoints | null {
+    const port = portAnchor(fromID, ERROR_KEY);
+    const end = inAnchor(toID, fallbackInKey(fromID));
+    if (!port || !end) return null;
+    return { ax: port.x, ay: port.y, fromPort: true, bx: end.x, by: end.y };
+  }
+
+  function triggerEdgePoints(triggerID: string, entryNodeID: string): EdgePoints | null {
     const wf = $draftWorkflow;
     if (!wf?.graph?.nodes) return null;
     const positions = ((wf as any)._canvas?.positions ?? {}) as Record<string, { x?: number; y?: number }>;
-    const from = positions[triggerID];
-    const to = wf.graph.nodes.find((n) => n.id === entryNodeID);
-    if (!from || !to) return null;
+    // Same fallback the trigger CARD uses below. A trigger with no stored
+    // position still renders at (60,60), so returning null here drew the
+    // card with no edge until the user dragged it — which is what wrote
+    // the position that made the line appear.
+    const from = positions[triggerID] ?? { x: 60, y: 60 };
+    const end = inAnchor(entryNodeID, triggerInKey(triggerID));
+    if (!end) return null;
     return {
       ax: (from.x ?? 0) + NODE_W / 2,
       ay: cardBottomY(triggerID, from.y ?? 0, 90),
-      bx: (to._canvas?.x ?? 0) + NODE_W / 2,
-      by: to._canvas?.y ?? 0,
+      bx: end.x,
+      by: end.y,
     };
   }
   // Single smooth cubic. Control points pulled vertically away from
-  // each endpoint by half the y-gap so the curve enters/exits each
-  // node perpendicular to its port. No mid vertex, so the path has
-  // no kink — the yellow indicator is painted as a separate
+  // each endpoint by half the gap so the curve leaves the bottom port and
+  // enters the top port perpendicular to the card. No mid vertex, so the
+  // path has no kink — the yellow indicator is painted as a separate
   // `<circle>` at the computed midpoint instead.
-  function bezier(p: { ax: number; ay: number; bx: number; by: number }): string {
+  // fromPort = the edge starts at a labelled output port, which already
+  // names its case (so no mid-edge case label).
+  type EdgePoints = { ax: number; ay: number; bx: number; by: number; fromPort?: boolean };
+
+  function bezier(p: EdgePoints): string {
     // Control-point vertical offset scales with BOTH x- and y-gap so
     // the curve opens up smoothly when the source/target sit far
     // apart on the x-axis (otherwise the line bends sharply through
@@ -1156,7 +1285,7 @@
     const dy = Math.max(40, Math.max(dx, Math.abs(p.by - p.ay)) / 2);
     return `M ${p.ax} ${p.ay} C ${p.ax} ${p.ay + dy}, ${p.bx} ${p.by - dy}, ${p.bx} ${p.by}`;
   }
-  function midPoint(p: { ax: number; ay: number; bx: number; by: number }): { x: number; y: number } {
+  function midPoint(p: EdgePoints): { x: number; y: number } {
     // Cubic with control points (ax, ay+dy) + (bx, by-dy) — at t=0.5
     // the point is exactly the midpoint between (ax,ay) and (bx,by)
     // along x AND along y. Cheap closed form.
@@ -1168,7 +1297,7 @@
   }
 
   function edgePath(e: Edge): string | null {
-    const p = nodeEdgePoints(e.from, e.to);
+    const p = nodeEdgePoints(e.from, e.to, e.case);
     return p ? bezier(p) : null;
   }
 </script>
@@ -1206,6 +1335,7 @@
   class:cursor-grab={spaceHeld && !panDrag}
   class:cursor-grabbing={panDrag || touchPan}
   class:wf-canvas-locked={locked && !spaceHeld && !panDrag}
+  class:wf-connecting={!!connecting}
   style="touch-action: {$searchOpen ? 'auto' : 'none'};"
   ondragover={(e) => e.preventDefault()}
   ondrop={ondrop}
@@ -1219,6 +1349,19 @@
     style="transform: translate({pan.x}px,{pan.y}px) scale({zoom}); transform-origin: 0 0;"
   >
     {#if $draftWorkflow?.graph}
+      <!-- Sticky notes FIRST so they paint under the edge SVG and the
+           node cards — a note frames a block of steps, never covers it. -->
+      {#each ($draftWorkflow.graph.nodes ?? []).filter((n) => n.type === "sticky_note") as note (note.id)}
+        <StickyNote
+          {note}
+          {zoom}
+          {locked}
+          selected={$selectedNodeIDs.has(note.id) || $selectedNodeID === note.id}
+          onselect={() => selectNote(note.id)}
+          onpatch={(patch) => updateNode(note.id, patch)}
+          ondelete={() => removeNode(note.id)}
+        />
+      {/each}
       <svg
         class="absolute inset-0 pointer-events-none overflow-visible"
         style="width:1px;height:1px;left:0;top:0;"
@@ -1270,15 +1413,19 @@
                 onmouseleave={() => hoveredEdge = null}
                 oncontextmenu={(e) => openCtxMenu(e, { kind: "trigger-edge", triggerID: trig.id! })}
               />
-              <circle cx={mid.x} cy={mid.y} r="4" fill="#facc15" />
+              <circle
+                cx={mid.x} cy={mid.y} r="4" fill="#facc15"
+                opacity={activeEdge === trigEdgeKey ? 1 : 0}
+                style="pointer-events: none; transition: opacity 0.12s"
+              />
             {/if}
           {/if}
         {/each}
         {#each $draftWorkflow.graph.edges ?? [] as e}
-          {@const pts = nodeEdgePoints(e.from, e.to)}
+          {@const pts = nodeEdgePoints(e.from, e.to, e.case)}
           {#if pts}
             {@const mid = midPoint(pts)}
-            {@const edgeKey = `${e.from}:${e.to}`}
+            {@const edgeKey = `${e.from}:${e.to}:${e.case ?? ""}`}
             <path d={bezier(pts)} fill="none" stroke-width="2" marker-end="url(#wf-arrowhead)"
               stroke={activeEdge === edgeKey ? "#34d399" : "currentColor"}
               class={activeEdge === edgeKey ? "" : "text-black-700 dark:text-black-600"}
@@ -1296,24 +1443,58 @@
               onmouseleave={() => hoveredEdge = null}
               oncontextmenu={(ev) => openCtxMenu(ev, { kind: "edge", from: e.from, to: e.to, caseKey: e.case })}
             />
-            <circle cx={mid.x} cy={mid.y} r="4" fill="#facc15" />
-            {#if e.case}
-              <text class="text-[10px] fill-slate-500">
-                <textPath href={`#edge-${e.from}-${e.to}-${e.case}`}>{e.case}</textPath>
-              </text>
+            <circle
+              cx={mid.x} cy={mid.y} r="4" fill="#facc15"
+              opacity={activeEdge === edgeKey ? 1 : 0}
+              style="pointer-events: none; transition: opacity 0.12s"
+            />
+            {#if e.case && !pts.fromPort}
+              <!-- Case label at the edge midpoint — only for an edge with no
+                   labelled port to start from (its port already names it). The old <textPath> pointed at an
+                   `#edge-…` id no path carried, so the label never rendered. -->
+              <g style="pointer-events: none">
+                <rect
+                  x={mid.x - (e.case.length * 3 + 6)} y={mid.y - 8}
+                  width={e.case.length * 6 + 12} height="16" rx="8"
+                  class="fill-white-100 dark:fill-navy-600 stroke-slate-400" stroke-width="1"
+                />
+                <text x={mid.x} y={mid.y + 3.5} text-anchor="middle" class="text-[10px] fill-slate-600 dark:fill-slate-200">{e.case}</text>
+              </g>
             {/if}
+          {/if}
+        {/each}
+        <!-- Failure paths (on_failure: fallback): error port → fallback
+             node, dashed rose so they never read as a normal flow. They
+             live on the node, not in graph.edges; edit them in the node
+             detail (On failure) or by dragging from the error port. -->
+        {#each ($draftWorkflow.graph.nodes ?? []).filter((n) => hasErrorOutput(n) && n.fallback) as n (n.id)}
+          {@const pts = fallbackEdgePoints(n.id, n.fallback ?? "")}
+          {#if pts}
+            <path d={bezier(pts)} fill="none" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#wf-arrowhead)"
+              class="text-rose-500 dark:text-rose-400" stroke="currentColor" data-testid="fallback-edge"
+            />
           {/if}
         {/each}
       </svg>
 
-      {#each $draftWorkflow.graph.nodes ?? [] as node (node.id)}
+      {#each ($draftWorkflow.graph.nodes ?? []).filter((n) => n.type !== "sticky_note") as node (node.id)}
         {@const Comp = componentFor(node.type)}
         {@const status = $runStatusByNode[node.id]}
         {@const issue = nodeIssue(node)}
         <div
-          class="absolute"
+          class="absolute group hover:z-20"
           style="left: {node._canvas?.x ?? 0}px; top: {node._canvas?.y ?? 0}px;"
-          onpointerdown={(e) => onnodepointerdown(e, node.id)}
+          onpointerdown={(e) => {
+            // A labelled output port (painted by BaseNode) starts a drag
+            // already tagged with its case.
+            const port = (e.target as Element).closest?.("[data-out-port]");
+            if (port) {
+              const key = port.getAttribute("data-out-kind") === "error" ? ERROR_KEY : (port.getAttribute("data-out-port") ?? "");
+              startConnect(e, node.id, "node", key);
+              return;
+            }
+            onnodepointerdown(e, node.id);
+          }}
           ondblclick={() => detailNodeID.set(node.id)}
           oncontextmenu={(e) => openCtxMenu(e, { kind: "node", id: node.id })}
           role="presentation"
@@ -1345,16 +1526,19 @@
           <!-- Output port — drag from here to another node's body to
                create an edge. Transparent overlay sits on BaseNode's
                bottom-centre white circle. -->
-          <button
-            class="absolute left-1/2 -translate-x-1/2 -bottom-[10px] wf-port h-5 w-5 rounded-full cursor-crosshair opacity-0 hover:opacity-100 transition-opacity"
-            onpointerdown={(e) => startConnect(e, node.id, "node")}
-            title="Drag to connect (output)"
-            aria-label="Connect output"
-            style="background:rgba(250,204,21,0.4)"
-          ></button>
+          {#if nodeOutPorts(node, $draftWorkflow.graph.edges ?? []).length === 0}
+            <button
+              class="absolute left-1/2 -translate-x-1/2 -bottom-[10px] wf-port h-5 w-5 rounded-full cursor-crosshair opacity-0 hover:opacity-100 transition-opacity"
+              onpointerdown={(e) => startConnect(e, node.id, "node")}
+              title="Drag to connect (output)"
+              aria-label="Connect output"
+              style="background:rgba(250,204,21,0.4)"
+            ></button>
+          {/if}
           <!-- Input port hit-target. Drag from here = REVERSE connect
                (creates an edge from the dropped node TO this one).
                Matches legacy editor where both directions worked. -->
+          {#if inputPorts(node, $draftWorkflow).length === 0}
           <button
             class="absolute left-1/2 -translate-x-1/2 -top-[10px] wf-port h-5 w-5 rounded-full cursor-crosshair opacity-0 hover:opacity-100 transition-opacity"
             onpointerdown={(e) => startConnect(e, node.id, "node-input")}
@@ -1362,6 +1546,7 @@
             aria-label="Connect input"
             style="background:rgba(250,204,21,0.4)"
           ></button>
+          {/if}
           {#if status === "running"}
             <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-amber-500 text-white-100 text-[10px] flex items-center justify-center shadow animate-pulse" title="Running…">⟳</div>
           {:else if status === "success"}
@@ -1425,12 +1610,17 @@
            `workflow._canvas.positions` map but keyed by trigger.id; the
            hydrate pass in `loadWorkflow` doesn't copy these onto the
            trigger object, so look them up inline. -->
-      {#each $draftWorkflow.triggers ?? [] as trig (trig.id ?? trig.type)}
+      <!-- Key on the index as a fallback: legacy workflows (and triggers
+           written straight over MCP before ids were minted server-side)
+           can carry an empty id, and keying several of those by type alone
+           throws each_key_duplicate — which kills the whole canvas render,
+           not just the trigger cards. -->
+      {#each $draftWorkflow.triggers ?? [] as trig, trigIdx (trig.id || `${trig.type ?? "trigger"}-${trigIdx}`)}
         {@const pos = ($draftWorkflow as any)._canvas?.positions?.[trig.id ?? ""] ?? { x: 60, y: 60 }}
         {@const trigStatus = trig.id ? $triggerRunStatus[trig.id] : undefined}
         {@const trigIssue = triggerIssue(trig.id)}
         <div
-          class="absolute"
+          class="absolute group"
           style="left: {pos.x}px; top: {pos.y}px;"
           onpointerdown={(e) => ontriggerpointerdown(e, trig.id ?? "")}
           ondblclick={() => trig.id && detailTriggerID.set(trig.id)}
@@ -1518,6 +1708,14 @@
       aria-label="Search workflow"
     >
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+    </button>
+    <button
+      class="h-9 w-9 rounded-full bg-white-100 dark:bg-navy-600/80 border border-white-400 dark:border-navy-500 hover:bg-white-200 dark:hover:bg-navy-600 text-black-800 dark:text-white-100 shadow-sm flex items-center justify-center"
+      onclick={addStickyNote}
+      title="Add sticky note (Shift+S)"
+      aria-label="Add sticky note"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9.5L21 14.5V5a2 2 0 0 0-2-2z"/><path d="M15 21v-5a1 1 0 0 1 1-1h5"/></svg>
     </button>
   </div>
 
@@ -1775,6 +1973,17 @@
     .wf-port {
       opacity: 0.45;
     }
+    /* Same reasoning for the painted nubs in BaseNode: no hover means
+       no group-hover, so pin them visible instead of leaving the card
+       looking like it has nowhere to connect from. */
+    :global(.wf-port-nub) {
+      opacity: 1 !important;
+    }
+  }
+  /* While an edge is being dragged, reveal every nub so the operator can
+     see which cards are connectable without hunting for them. */
+  .wf-connecting :global(.wf-port-nub) {
+    opacity: 1;
   }
   :global(.dark) .wf-canvas-bg {
     background-color: #131c2f;

@@ -401,6 +401,28 @@ func TestSweeperLeavesALiveAgentAlone(t *testing.T) {
 	}
 }
 
+// A process draining after a handover sees an empty pool: every sub-agent
+// spawned since lives in the successor. Its sweep must stand down, or it
+// closes the successor's running delegations "(no output)" — which it did,
+// three minutes into a sub-agent that was mid go test.
+func TestSweeperStandsDownWhileDraining(t *testing.T) {
+	s, r, _ := newService(t)
+	s.AgentAlive = func(string, string) bool { return false } // not in THIS pool
+	row := seedRunning(t, r, "a1")
+	ageRow(t, r, row.ID)
+
+	prev := isDraining
+	isDraining = func() bool { return true }
+	t.Cleanup(func() { isDraining = prev })
+
+	(&DelegationSweeper{Svc: s, Every: time.Minute}).Pass(context.Background())
+
+	got, _ := r.Get(context.Background(), "a1")
+	if got.Status != entity.DelegationRunning {
+		t.Fatalf("status = %q, want running — a draining process must not finish the successor's sub-agents", got.Status)
+	}
+}
+
 // A wiring that cannot answer "is this agent alive" must not guess. With
 // no prober the sweep is skipped entirely rather than assuming the worst.
 func TestSweeperSkipsWithoutALivenessProbe(t *testing.T) {

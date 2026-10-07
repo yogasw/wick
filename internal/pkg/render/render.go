@@ -22,6 +22,11 @@ import (
 // <h1>/description block. Missing-config state is pulled from the
 // *tool.Ctx via c.Missing() — no config service threading required.
 //
+// Requests that arrive inside a frame (see ui.DetectEmbedded) render
+// the body alone — no Navbar, no ToolHeader, no setup banner — so the
+// page drops cleanly into another tool's iframe. Full-screen tools are
+// exempt: their own chrome is the tool.
+//
 // Handlers that return JSON, file downloads, or redirects should
 // write to the ResponseWriter directly and not call the returned
 // RenderFunc.
@@ -30,6 +35,24 @@ func NewToolRenderer(hasConfigs bool) tool.RenderFunc {
 		user := login.GetUser(c.R.Context())
 		isAdmin := user != nil && user.IsAdmin()
 		meta := c.Meta()
+
+		// Inside an <iframe> the shared chrome is duplicate furniture: the
+		// host page already has a navbar and a title, so a second set
+		// reads as an app nested in an app. Strip it and let the body
+		// fill the frame. Full-screen tools fall through to the branch
+		// below — they own their chrome and embed mode leaves it alone.
+		if ui.EmbeddedFromContext(c.R.Context()) && !meta.FullScreen {
+			inner := templ.ComponentFunc(func(ctx context.Context, out io.Writer) error {
+				if _, err := io.WriteString(out, ui.EmbedStyle); err != nil {
+					return err
+				}
+				return body.Render(ctx, out)
+			})
+			c.W.Header().Set("Content-Type", "text/html; charset=utf-8")
+			ctx := templ.WithChildren(c.R.Context(), inner)
+			_ = ui.Layout(meta.Name).Render(ctx, c.W)
+			return
+		}
 
 		if meta.FullScreen {
 			// Full-screen tools own their layout — no Navbar, no

@@ -179,6 +179,18 @@ func (s *Service) SetHomeView(ctx context.Context, userID, view string) error {
 	return s.repo.SetMetadata(ctx, userID, meta)
 }
 
+// SetUIScale saves the user's interface size; an invalid value stores the
+// default.
+func (s *Service) SetUIScale(ctx context.Context, userID string, pct int) error {
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	meta := u.Metadata
+	meta.UIScale = entity.ValidUIScale(pct)
+	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
 // SetTicketFilter saves the user's ticket-board filter for one project.
 // A zero-value filter removes the entry so the metadata bag doesn't
 // accumulate empty objects for every project ever visited.
@@ -214,6 +226,26 @@ func (s *Service) SetRailPrefs(ctx context.Context, userID string, p entity.Rail
 	}
 	meta := u.Metadata
 	meta.Rail = p
+	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
+// SetSidebarWidth saves how wide the user dragged the "team" or "agents"
+// sidebar. width 0 resets it to the page default; others are clamped.
+func (s *Service) SetSidebarWidth(ctx context.Context, userID, space string, width int) error {
+	if space != "team" && space != "agents" {
+		return errors.New(`space must be "team" or "agents"`)
+	}
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	meta := u.Metadata
+	w := entity.ClampSidebarWidth(width)
+	if space == "team" {
+		meta.Sidebar.Team = w
+	} else {
+		meta.Sidebar.Agents = w
+	}
 	return s.repo.SetMetadata(ctx, userID, meta)
 }
 

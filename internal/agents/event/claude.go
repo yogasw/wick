@@ -31,6 +31,10 @@ import (
 //
 // Concurrency: not safe for concurrent use. One parser per subprocess.
 type ClaudeParser struct {
+	// tools pairs tool_use with tool_result so a result is classified
+	// with its call's context (see display.go).
+	tools toolCalls
+
 	// sessionID is captured from the first `system subtype=init` event.
 	// Claude tags every event with `session_id`, but we only emit
 	// SessionStart once per process lifetime.
@@ -76,6 +80,20 @@ type claudeRaw struct {
 	SessionID string `json:"session_id,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`
 	Result    string `json:"result,omitempty"`
+	// ReplaceText is the whole reply of a system remote_replace line.
+	ReplaceText string `json:"replace_text,omitempty"`
+	// RemoteNote is a remote agent's result line's note (how it ended).
+	RemoteNote string `json:"remote_note,omitempty"`
+	// Detail is a system remote_status line's label: what the remote
+	// says it is doing ("reading the code…").
+	Detail string `json:"detail,omitempty"`
+	// QueueID / QueueState are a system remote_queue line's message and
+	// where it stands (its text is in Text).
+	QueueID    string `json:"queue_id,omitempty"`
+	QueueState string `json:"queue_state,omitempty"`
+	Text       string `json:"text,omitempty"`
+	// LinkURL is a system remote_link line's URL.
+	LinkURL string `json:"url,omitempty"`
 
 	// `assistant` and `user` wrap content blocks under .message.content
 	Message *claudeMessage `json:"message,omitempty"`
@@ -224,18 +242,31 @@ type claudeMessage struct {
 	Usage *claudeUsage `json:"usage,omitempty"`
 }
 
-// UnmarshalJSON tolerates .content being a plain STRING instead of an
-// array of blocks.
+// UnmarshalJSON tolerates two string-shaped frames that would otherwise
+// fail the whole line: .message itself being a plain STRING, and
+// .message.content being a plain STRING instead of an array of blocks.
 //
-// Claude sends the string form for the summary it injects after a
-// compaction ("This session is being continued from…") and for the
-// <local-command-stdout> echo of a local slash command. Without this,
+// Claude sends the content string form for the summary it injects after
+// a compaction ("This session is being continued from…") and for the
+// <local-command-stdout> echo of a local slash command. It sends the
+// whole .message as a string on some error/notice frames. Without this,
 // json.Unmarshal fails on those lines, and a parse failure is turned
 // into an Error event upstream — so a routine compaction would end the
 // turn and post a "cannot unmarshal string" line into the user's
-// conversation. Neither frame is something wick surfaces; they just
-// have to decode without exploding.
+// conversation. None of these frames is something wick surfaces; they
+// just have to decode without exploding.
 func (m *claudeMessage) UnmarshalJSON(b []byte) error {
+	// .message as a bare string — keep the text, drop nothing else.
+	if t := bytes.TrimSpace(b); len(t) > 0 && t[0] == '"' {
+		var text string
+		if err := json.Unmarshal(t, &text); err != nil {
+			return err
+		}
+		if text != "" {
+			m.Content = []claudeContentBlock{{Type: "text", Text: text}}
+		}
+		return nil
+	}
 	var probe struct {
 		Content json.RawMessage `json:"content"`
 		Usage   *claudeUsage    `json:"usage"`
@@ -289,7 +320,18 @@ type claudeContentBlock struct {
 // surface the tool via subsequent calls? No — claude emits one block
 // type per assistant frame in practice; if both ever co-occur, the
 // raw line is preserved so downstream consumers can re-parse.
+//
+// Every tool event leaves with a Display: claude's tool_result content is
+// a JSON string literal or a content-block array, which Classify unwraps.
 func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
+	ev, err := p.parse(line)
+	if err == nil {
+		p.tools.decorate(&ev)
+	}
+	return ev, err
+}
+
+func (p *ClaudeParser) parse(line string) (AgentEvent, error) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return AgentEvent{}, nil
@@ -326,6 +368,22 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 		// system subtypes (`hook_started`, `hook_response`,
 		// `compaction`, ...) are noise from claude's lifecycle hooks
 		// and don't map to anything user-visible.
+		// A remote agent's runner rewrites the reply it streamed when the
+		// remote edited a message already passed on.
+		if raw.Subtype == "remote_replace" {
+			return AgentEvent{Type: TextReplace, Text: raw.ReplaceText, Raw: trimmed}, nil
+		}
+		// Its progress label shows as the turn's thinking — what the
+		// remote is doing, never part of the reply.
+		if raw.Subtype == "remote_queue" && raw.QueueID != "" {
+			return AgentEvent{Type: RemoteQueue, Queue: &QueueInfo{ID: raw.QueueID, State: raw.QueueState, Text: raw.Text}, Raw: trimmed}, nil
+		}
+		if raw.Subtype == "remote_link" && raw.LinkURL != "" {
+			return AgentEvent{Type: RemoteLink, Text: raw.LinkURL, Raw: trimmed}, nil
+		}
+		if raw.Subtype == "remote_status" && raw.Detail != "" {
+			return AgentEvent{Type: Thinking, Text: raw.Detail + "\n", Raw: trimmed}, nil
+		}
 		if raw.Subtype == "init" && raw.SessionID != "" {
 			if !p.sessionEmitted {
 				p.sessionID = raw.SessionID
@@ -515,10 +573,11 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 		// would report a stale window if that turn reports none.
 		p.lastLevel = 0
 		return AgentEvent{
-			Type:      Done,
-			SessionID: p.sessionID,
-			Raw:       trimmed,
-			Usage:     u,
+			Type:       Done,
+			SessionID:  p.sessionID,
+			Raw:        trimmed,
+			Usage:      u,
+			RemoteNote: raw.RemoteNote,
 		}, nil
 	}
 

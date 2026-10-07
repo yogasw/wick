@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	gotemplate "text/template"
 
@@ -171,6 +172,13 @@ func Validate(w workflow.Workflow) *Result {
 	}
 	for i, tr := range w.Triggers {
 		validateTrigger(r, fmt.Sprintf("triggers[%d]", i), tr, w.ID)
+		if strings.TrimSpace(tr.Description) == "" {
+			name := tr.Label
+			if name == "" {
+				name = string(tr.Type)
+			}
+			r.Warnings = append(r.Warnings, Error{Path: fmt.Sprintf("triggers[%d].description", i), Message: fmt.Sprintf("trigger %q (%s) has no description — add markdown: what it is for + why", tr.ID, name)})
+		}
 		if tr.Type == workflow.TriggerWebhook && tr.RespondMode == workflow.RespondModeRespondNode {
 			if !triggerReachesRespondNode(w.Graph, tr.EntryNode) {
 				r.Warnings = append(r.Warnings, Error{
@@ -227,6 +235,21 @@ func Validate(w workflow.Workflow) *Result {
 		seen[n.ID] = i
 		nodesByID[n.ID] = n
 		validateNodeBody(r, path, n)
+		// A sticky note's content is its description.
+		desc := n.Description
+		if n.Type.IsAnnotation() {
+			desc = n.Content
+			for _, t := range n.Texts {
+				desc += t.Content
+			}
+		}
+		if strings.TrimSpace(desc) == "" {
+			field := ".description"
+			if n.Type.IsAnnotation() {
+				field = ".content"
+			}
+			r.Warnings = append(r.Warnings, Error{Path: path + field, Message: fmt.Sprintf("node %q (%s) has no description — add markdown: what it is for + why", n.ID, key)})
+		}
 	}
 
 	// A dangling entry reference (typically a scaffolded "start"/"end"
@@ -238,8 +261,11 @@ func Validate(w workflow.Workflow) *Result {
 	// ignored by the engine so we drop the warning here too.
 	for i, tr := range w.Triggers {
 		if tr.EntryNode != "" {
-			if _, ok := nodesByID[tr.EntryNode]; !ok {
+			en, ok := nodesByID[tr.EntryNode]
+			if !ok {
 				r.Warnings = append(r.Warnings, Error{Path: fmt.Sprintf("triggers[%d].entry_node", i), Message: fmt.Sprintf("references unknown node %q (ignored)", tr.EntryNode)})
+			} else if en.Type.IsAnnotation() {
+				r.Errors = append(r.Errors, Error{Path: fmt.Sprintf("triggers[%d].entry_node", i), Message: fmt.Sprintf("%q is a sticky_note — notes are canvas annotations and cannot be an entry node", tr.EntryNode)})
 			}
 		}
 	}
@@ -261,6 +287,10 @@ func Validate(w workflow.Workflow) *Result {
 			r.Errors = append(r.Errors, Error{Path: path + ".to", Message: fmt.Sprintf("unknown node %q", e.To)})
 		}
 		if !fromOk || !toOk {
+			continue
+		}
+		if to := nodesByID[e.To]; from.Type.IsAnnotation() || to.Type.IsAnnotation() {
+			r.Errors = append(r.Errors, Error{Path: path, Message: fmt.Sprintf("edge %s→%s touches a sticky_note — notes are canvas annotations and take no edges", e.From, e.To)})
 			continue
 		}
 		if e.Case != "" && !from.Type.IsBranchSource() {
@@ -337,8 +367,8 @@ func Validate(w workflow.Workflow) *Result {
 		}
 	}
 	reachable := BfsReachable(w.Graph, roots)
-	for nid := range nodesByID {
-		if !reachable[nid] {
+	for nid, n := range nodesByID {
+		if !reachable[nid] && !n.Type.IsAnnotation() {
 			r.Warnings = append(r.Warnings, Error{Path: "graph.nodes", Message: fmt.Sprintf("node %q is unreachable from entry", nid)})
 		}
 	}
@@ -584,6 +614,14 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 		}
 	case workflow.NodeEnd, workflow.NodePython:
 		// no required fields
+	case workflow.NodeStickyNote:
+		if n.Color != "" && !slices.Contains(workflow.StickyNoteColors, n.Color) {
+			r.Errors = append(r.Errors, Error{Path: path + ".color", Message: fmt.Sprintf("%q is not a sticky note color (%s)", n.Color, strings.Join(workflow.StickyNoteColors, ", "))})
+		}
+		if n.Width < 0 || n.Height < 0 {
+			r.Errors = append(r.Errors, Error{Path: path, Message: "width/height must be >= 0"})
+		}
+		validateStickyTexts(r, path, n.Texts)
 	case workflow.NodeWebhookRespond:
 		// no required fields — respond_status/body/headers all optional
 	case workflow.NodeSessionInit:
@@ -802,4 +840,33 @@ func triggerReachesRespondNode(g workflow.Graph, entryNodeID string) bool {
 		}
 	}
 	return false
+}
+
+// validateStickyTexts warns (never blocks) on sticky_note cards placed
+// outside the board, sharing an id, or with an unknown color/size — the
+// canvas clamps / falls back to the default on the next edit.
+func validateStickyTexts(r *Result, path string, texts []workflow.StickyText) {
+	ids := map[string]bool{}
+	for i, t := range texts {
+		tp := fmt.Sprintf("%s.texts[%d]", path, i)
+		switch {
+		case t.ID == "":
+			r.Warnings = append(r.Warnings, Error{Path: tp + ".id", Message: "sticky text has no id"})
+		case ids[t.ID]:
+			r.Warnings = append(r.Warnings, Error{Path: tp + ".id", Message: fmt.Sprintf("duplicate sticky text id %q", t.ID)})
+		}
+		ids[t.ID] = true
+		if t.X < 0 || t.X > 1 || t.Y < 0 || t.Y > 1 {
+			r.Warnings = append(r.Warnings, Error{Path: tp, Message: "x/y are relative to the note and must be within 0..1"})
+		}
+		if t.Width < 0 || t.Width > 1 {
+			r.Warnings = append(r.Warnings, Error{Path: tp + ".width", Message: "width is relative to the note and must be within 0..1 (0 = default)"})
+		}
+		if t.Color != "" && !slices.Contains(workflow.StickyNoteColors, t.Color) {
+			r.Warnings = append(r.Warnings, Error{Path: tp + ".color", Message: fmt.Sprintf("%q is not a sticky note color (%s); rendered as yellow", t.Color, strings.Join(workflow.StickyNoteColors, ", "))})
+		}
+		if t.Size != "" && !slices.Contains(workflow.StickyTextSizes, t.Size) {
+			r.Warnings = append(r.Warnings, Error{Path: tp + ".size", Message: fmt.Sprintf("%q is not a sticky text size (%s); rendered as md", t.Size, strings.Join(workflow.StickyTextSizes, ", "))})
+		}
+	}
 }

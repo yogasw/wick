@@ -16,3 +16,25 @@ package event
 type Parser interface {
 	Parse(line string) (AgentEvent, error)
 }
+
+// MultiParser is implemented by parsers whose CLI can pack more than one
+// wick event into a single line — opencode reports a tool only once it has
+// finished, so one `tool_use` line is both the call and its result.
+// Consumers go through ParseLine, which handles both kinds.
+type MultiParser interface {
+	Parser
+	ParseAll(line string) ([]AgentEvent, error)
+}
+
+// ParseLine runs p over one line and returns every event it produced, in
+// order. A plain Parser always yields exactly one event (possibly Unknown).
+func ParseLine(p Parser, line string) ([]AgentEvent, error) {
+	if mp, ok := p.(MultiParser); ok {
+		return mp.ParseAll(line)
+	}
+	ev, err := p.Parse(line)
+	if err != nil {
+		return nil, err
+	}
+	return []AgentEvent{ev}, nil
+}

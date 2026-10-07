@@ -27,7 +27,7 @@
      free to read — and possibly hours old. Those windows carry their
      own observation time and are dated per window, because "last check
      just now" describes when WE looked, not when codex last knew. */
-  import type { ComposerUsage } from "../api/usage.js";
+  import type { ComposerUsage, ComposerUsageAccount, ComposerUsageWindow } from "../api/usage.js";
 
   type Props = {
     open: boolean;
@@ -45,6 +45,44 @@
   let { open, data, loading, error, onRecheck, rechecking, recheckWait, onClose }: Props = $props();
 
   let el: HTMLDivElement | undefined = $state();
+
+  /* Multi-account instances (omp's pool, opencode's account folders):
+     Summary is one line per account so every account's remaining quota
+     is visible at once; Detail is the full bars per account. Both read
+     the same cached probe — switching costs nothing. */
+  let view = $state<"summary" | "detail">("summary");
+  const accounts = $derived<ComposerUsageAccount[]>(
+    [...(data?.accounts ?? [])].sort((a, b) => Number(b.current) - Number(a.current)),
+  );
+
+  function shortLabel(key: string): string {
+    if (key === "five_hour") return "5h";
+    if (key === "seven_day") return "7d";
+    if (key === "seven_day_opus") return "7d Opus";
+    if (key === "seven_day_fable") return "7d Fable";
+    return key;
+  }
+
+  function textTone(pct: number): string {
+    if (pct >= 90) return "text-red-600 dark:text-red-400";
+    if (pct >= 70) return "text-amber-600 dark:text-amber-400";
+    return "text-black-900 dark:text-white-100";
+  }
+
+  /* The soonest reset among an account's windows that are nearly spent —
+     the one moment that matters when an account is the bottleneck. */
+  function nextReset(ws: ComposerUsageWindow[]): string {
+    let best = Infinity;
+    for (const w of ws) {
+      const t = Date.parse(w.resetsAt);
+      if (Number.isFinite(t) && t > Date.now() && t < best) best = t;
+    }
+    return best === Infinity ? "" : shortDuration((best - Date.now()) / 1000);
+  }
+
+  function accountName(a: ComposerUsageAccount): string {
+    return a.email || a.label || a.id;
+  }
 
   $effect(() => {
     if (!open) return;
@@ -110,6 +148,127 @@
   }
 </script>
 
+{#snippet windowBars(ws: ComposerUsageWindow[])}
+  <div class="space-y-2">
+    {#each ws as w (w.key)}
+      {@const pct = Math.min(100, Math.max(0, Math.round(w.utilization)))}
+      {@const reset = resetsIn(w.resetsAt)}
+      {@const observed = observedAgo(w.observedAt)}
+      <div class="space-y-1">
+        <div class="flex items-baseline justify-between gap-4 text-[11px]">
+          <span class="text-black-900 dark:text-white-100">{windowLabel(w.key)}</span>
+          <span class="font-medium text-black-900 dark:text-white-100">{pct}%</span>
+        </div>
+        <div class="h-1.5 w-full rounded-full bg-white-300 dark:bg-navy-600 overflow-hidden">
+          <div class={`h-full rounded-full ${barColor(pct)}`} style={`width: ${pct}%`}></div>
+        </div>
+        {#if reset || observed}
+          <p class="text-[10px] text-black-600 dark:text-black-700">
+            {#if reset}Resets in {reset}{/if}{#if reset && observed} ·
+            {/if}{#if observed}<span data-testid="observed-at">as of {observed}</span>{/if}
+          </p>
+        {/if}
+      </div>
+    {/each}
+  </div>
+{/snippet}
+
+{#snippet accountBadges(a: ComposerUsageAccount)}
+  {#if a.current}
+    <span data-testid="usage-account-current" class="shrink-0 rounded bg-link-400/15 px-1.5 py-0.5 text-[10px] font-semibold text-link-400">this session</span>
+  {/if}
+  {#if a.status === "disabled"}
+    <span class="shrink-0 rounded bg-neg-100 dark:bg-neg-400/20 px-1.5 py-0.5 text-[10px] font-semibold text-neg-400">disabled</span>
+  {/if}
+  {#if a.plan}
+    <span class="shrink-0 rounded bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 text-[10px] text-black-800 dark:text-black-600">{a.plan}</span>
+  {/if}
+{/snippet}
+
+{#snippet accountsBlock()}
+  <div class="space-y-2" data-testid="usage-accounts">
+    <div class="flex items-center justify-between gap-2">
+      <p class="text-[11px] font-semibold tracking-wide text-black-700 dark:text-black-600">ACCOUNTS ({accounts.length})</p>
+      <div class="inline-flex rounded-md border border-white-300 dark:border-navy-600 overflow-hidden text-[10px]">
+        {#each [["summary", "Summary"], ["detail", "Detail"]] as [v, label] (v)}
+          <button
+            type="button"
+            data-testid="usage-view-{v}"
+            class="px-2 py-0.5 {view === v ? 'bg-white-300 dark:bg-navy-600 font-semibold text-black-900 dark:text-white-100' : 'text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700'}"
+            onclick={() => (view = v as "summary" | "detail")}
+          >{label}</button>
+        {/each}
+      </div>
+    </div>
+    {#if data?.rotation}
+      <p data-testid="usage-rotation" class="text-[10px] text-black-600 dark:text-black-700">
+        This session is on Auto — {data.rotation === "omp" ? "omp picks the account and rotates when one hits its limit" : "wick moves to the next account when one hits its limit"}.
+      </p>
+    {/if}
+    {#if data?.pending || data?.checking}
+      <p class="text-xs text-black-700 dark:text-black-600">Checking usage…</p>
+    {:else if data?.error}
+      <p class="font-mono text-[11px] text-black-700 dark:text-black-600">usage unavailable: {data.error}</p>
+    {/if}
+    {#if view === "summary"}
+      <div class="rounded-lg border border-white-300 dark:border-navy-600 divide-y divide-white-300 dark:divide-navy-600">
+        {#each accounts as a (a.id)}
+          {@const reset = nextReset(a.windows)}
+          <div data-testid="usage-account-row" class="px-2.5 py-1.5 text-[11px] {a.current ? 'bg-link-400/10' : ''}">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span class="min-w-0 truncate text-black-900 dark:text-white-100" title={accountName(a)}>{accountName(a)}</span>
+              <span class="shrink-0 font-mono text-[10px] text-black-600 dark:text-black-700">{a.provider}</span>
+              <span class="ml-auto"></span>
+              {@render accountBadges(a)}
+            </div>
+            <div class="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 tabular-nums">
+              {#if a.error}
+                <span class="text-black-700 dark:text-black-600">{a.error}</span>
+              {:else if a.noUsage}
+                <span class="text-black-600 dark:text-black-700">no usage reported</span>
+              {:else if a.windows.length === 0}
+                <span class="text-black-600 dark:text-black-700">{data?.pending || data?.checking ? "…" : "no reading yet"}</span>
+              {:else}
+                {#each a.windows as w (w.key)}
+                  {@const pct = Math.min(100, Math.max(0, Math.round(w.utilization)))}
+                  <span class="inline-flex items-center gap-1">
+                    <span class="text-black-700 dark:text-black-600">{shortLabel(w.key)}</span>
+                    <span class="inline-block h-1 w-8 rounded-full bg-white-300 dark:bg-navy-600 overflow-hidden"><span class={`block h-full ${barColor(pct)}`} style={`width: ${pct}%`}></span></span>
+                    <span class="font-medium {textTone(pct)}">{pct}%</span>
+                  </span>
+                {/each}
+                {#if reset}<span class="text-[10px] text-black-600 dark:text-black-700">reset {reset}</span>{/if}
+              {/if}
+            </div>
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <div class="space-y-3">
+        {#each accounts as a (a.id)}
+          <div data-testid="usage-account-detail" class="rounded-lg border px-2.5 py-2 space-y-2 {a.current ? 'border-link-400/60' : 'border-white-300 dark:border-navy-600'}">
+            <div class="flex items-center gap-1.5 min-w-0 text-[11px]">
+              <span class="min-w-0 truncate font-medium text-black-900 dark:text-white-100">{accountName(a)}</span>
+              <span class="shrink-0 font-mono text-[10px] text-black-600 dark:text-black-700">{a.provider}</span>
+              <span class="ml-auto"></span>
+              {@render accountBadges(a)}
+            </div>
+            {#if a.error}
+              <p class="font-mono text-[11px] text-black-700 dark:text-black-600">usage unavailable: {a.error}</p>
+            {:else if a.noUsage}
+              <p class="text-[11px] text-black-600 dark:text-black-700">This login's provider does not report usage limits.</p>
+            {:else if a.windows.length === 0}
+              <p class="text-[11px] text-black-600 dark:text-black-700">No usage windows reported.</p>
+            {:else}
+              {@render windowBars(a.windows)}
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
 {#if open}
   <div
     bind:this={el}
@@ -135,7 +294,7 @@
             type="button"
             data-testid="usage-recheck"
             class="rounded px-1.5 py-0.5 text-[11px] text-link-400 hover:bg-white-300 dark:hover:bg-navy-600 disabled:opacity-50"
-            disabled={rechecking || data.checking || data.nextS > 0}
+            disabled={rechecking || data.checking}
             title="Check this account's usage now"
             onclick={onRecheck}
           >{rechecking || data.checking ? "Checking…" : "Re-check"}</button>
@@ -149,6 +308,9 @@
       {:else if error}
         <p class="text-xs text-black-700 dark:text-black-600">{error}</p>
       {:else if data}
+        {#if accounts.length > 0}
+          {@render accountsBlock()}
+        {:else}
         {#if data.account?.email}
           <div class="space-y-1 text-[11px]">
             <p class="font-semibold tracking-wide text-black-700 dark:text-black-600">ACCOUNT</p>
@@ -209,6 +371,7 @@
               </div>
             {/each}
           </div>
+        {/if}
         {/if}
 
         {#if data.ageS >= 0 && data.fetchedAt}

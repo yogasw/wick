@@ -1,0 +1,274 @@
+[
+ {
+  "name": "markdown escaped json string (claude)",
+  "tool": "Agent",
+  "input": "\"# P1 Laporan\\n\\n- **satu**: ok\\n- dua\\n\\n| a | b |\\n|---|---|\\n| 1 | 2 |\\n\"",
+  "kind": "markdown"
+ },
+ {
+  "name": "markdown content-block array",
+  "tool": "Task",
+  "input": "[{\"type\": \"text\", \"text\": \"# P1 Laporan\\n\\n- **satu**: ok\\n- dua\\n\\n| a | b |\\n|---|---|\\n| 1 | 2 |\\n\"}]",
+  "kind": "markdown"
+ },
+ {
+  "name": "plain text",
+  "tool": "",
+  "input": "hello world",
+  "kind": "text"
+ },
+ {
+  "name": "bare list stays text",
+  "tool": "",
+  "input": "- a\n- b",
+  "kind": "text"
+ },
+ {
+  "name": "json object",
+  "tool": "mcp__wick__wick_list",
+  "input": "{\"connectors\":[{\"key\":\"slack\"}]}",
+  "kind": "json"
+ },
+ {
+  "name": "json array",
+  "tool": "",
+  "input": "[1,2,3]",
+  "kind": "json"
+ },
+ {
+  "name": "invalid json is text",
+  "tool": "",
+  "input": "{not json",
+  "kind": "text"
+ },
+ {
+  "name": "unified diff",
+  "tool": "",
+  "input": "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1 +1 @@\n-a\n+b\n",
+  "kind": "diff"
+ },
+ {
+  "name": "failed bash stays terminal",
+  "tool": "Bash",
+  "is_error": true,
+  "input": "permission denied",
+  "kind": "terminal"
+ },
+ {
+  "name": "error flag",
+  "tool": "WebFetch",
+  "is_error": true,
+  "input": "403 Forbidden",
+  "kind": "error"
+ },
+ {
+  "name": "tool_use_error tag",
+  "tool": "Read",
+  "input": "<tool_use_error>File does not exist.</tool_use_error>",
+  "kind": "error"
+ },
+ {
+  "name": "bash result is terminal",
+  "tool": "Bash",
+  "input": "total 0\n-rw-r--r-- a.go",
+  "kind": "terminal"
+ },
+ {
+  "name": "codex exec_command result is terminal",
+  "tool": "exec_command",
+  "input": "ok",
+  "kind": "terminal"
+ },
+ {
+  "name": "grep result list",
+  "tool": "Grep",
+  "input": "a.go\nb.go",
+  "kind": "search"
+ },
+ {
+  "name": "png content block (claude)",
+  "tool": "Read",
+  "input": "[{\"type\": \"image\", \"source\": {\"type\": \"base64\", \"media_type\": \"image/png\", \"data\": \"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==\"}}]",
+  "kind": "image",
+  "mime": "image/png"
+ },
+ {
+  "name": "png content block (mcp)",
+  "tool": "mcp__playwright__browser_take_screenshot",
+  "input": "[{\"type\": \"text\", \"text\": \"Took screenshot\"}, {\"type\": \"image\", \"data\": \"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==\", \"mimeType\": \"image/png\"}]",
+  "kind": "text",
+  "parts": [
+   "image"
+  ]
+ },
+ {
+  "name": "png data url",
+  "tool": "",
+  "input": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "kind": "image",
+  "mime": "image/png"
+ },
+ {
+  "name": "bare png base64 by magic",
+  "tool": "",
+  "input": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "kind": "image",
+  "mime": "image/png"
+ },
+ {
+  "name": "bare jpeg base64 by magic",
+  "tool": "",
+  "input": "/9j/4AAQSkZJRgABAQAAAQABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "kind": "image",
+  "mime": "image/jpeg"
+ },
+ {
+  "name": "bare pdf base64 by magic",
+  "tool": "",
+  "input": "JVBERi0xLjQKMSAwIG9iaiA8PCAvVHlwZSAvQ2F0YWxvZyA+PiBlbmRvYmoKdHJhaWxlciA8PCAvUm9vdCAxIDAgUiA+PgolJUVPRgo=",
+  "kind": "pdf",
+  "mime": "application/pdf"
+ },
+ {
+  "name": "base64-looking text without magic stays text",
+  "tool": "",
+  "input": "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0NTY3ODk=",
+  "kind": "text"
+ },
+ {
+  "name": "call: claude Bash",
+  "tool": "Bash",
+  "call": true,
+  "input": "{\"command\":\"git status\",\"description\":\"Show status\",\"timeout\":60000}",
+  "kind": "command",
+  "command": "git status",
+  "summary": "Show status"
+ },
+ {
+  "name": "call: codex shell string",
+  "tool": "Shell",
+  "call": true,
+  "input": "/bin/bash -lc 'go test ./...'",
+  "kind": "command",
+  "command": "go test ./..."
+ },
+ {
+  "name": "call: codex exec_command",
+  "tool": "exec_command",
+  "call": true,
+  "input": "{\"cmd\":\"ls -la\",\"workdir\":\"/repo\"}",
+  "kind": "command",
+  "command": "ls -la",
+  "cwd": "/repo"
+ },
+ {
+  "name": "call: local_shell argv",
+  "tool": "local_shell",
+  "call": true,
+  "input": "{\"command\":[\"bash\",\"-lc\",\"echo hi\"]}",
+  "kind": "command",
+  "command": "echo hi"
+ },
+ {
+  "name": "call: Read",
+  "tool": "Read",
+  "call": true,
+  "input": "{\"file_path\":\"/repo/main.go\"}",
+  "kind": "file",
+  "path": "/repo/main.go",
+  "lang": "go"
+ },
+ {
+  "name": "call: opencode read",
+  "tool": "read",
+  "call": true,
+  "input": "{\"filePath\":\"/repo/a.py\"}",
+  "kind": "file",
+  "path": "/repo/a.py",
+  "lang": "python"
+ },
+ {
+  "name": "call: Write",
+  "tool": "Write",
+  "call": true,
+  "input": "{\"file_path\":\"/repo/x.ts\",\"content\":\"export {}\"}",
+  "kind": "file",
+  "path": "/repo/x.ts",
+  "lang": "typescript"
+ },
+ {
+  "name": "call: Edit",
+  "tool": "Edit",
+  "call": true,
+  "input": "{\"file_path\":\"/repo/x.go\",\"old_string\":\"a\",\"new_string\":\"b\"}",
+  "kind": "diff",
+  "path": "/repo/x.go"
+ },
+ {
+  "name": "call: apply_patch",
+  "tool": "apply_patch",
+  "call": true,
+  "input": "{\"input\":\"*** Begin Patch\\n*** Update File: src/app.go\\n@@\\n-a\\n+b\\n*** End Patch\"}",
+  "kind": "diff",
+  "path": "src/app.go"
+ },
+ {
+  "name": "call: Grep",
+  "tool": "Grep",
+  "call": true,
+  "input": "{\"pattern\":\"TODO\",\"path\":\"internal\"}",
+  "kind": "search",
+  "pattern": "TODO",
+  "path": "internal"
+ },
+ {
+  "name": "call: Glob",
+  "tool": "Glob",
+  "call": true,
+  "input": "{\"pattern\":\"**/*.go\"}",
+  "kind": "search",
+  "pattern": "**/*.go"
+ },
+ {
+  "name": "call: WebSearch",
+  "tool": "WebSearch",
+  "call": true,
+  "input": "{\"query\":\"golang utf8\"}",
+  "kind": "search",
+  "pattern": "golang utf8"
+ },
+ {
+  "name": "call: claude mcp",
+  "tool": "mcp__notion__search",
+  "call": true,
+  "input": "{\"query\":\"x\"}",
+  "kind": "mcp",
+  "connector": "notion",
+  "op": "search"
+ },
+ {
+  "name": "call: codex mcp",
+  "tool": "github.get_issue",
+  "call": true,
+  "input": "{\"n\":1}",
+  "kind": "mcp",
+  "connector": "github",
+  "op": "get_issue"
+ },
+ {
+  "name": "call: wick_execute",
+  "tool": "mcp__wick__wick_execute",
+  "call": true,
+  "input": "{\"tool_id\":\"conn:slack/send_message\",\"params\":{\"text\":\"hi\"}}",
+  "kind": "mcp",
+  "connector": "slack",
+  "op": "send_message"
+ },
+ {
+  "name": "call: generic tool args",
+  "tool": "TodoWrite",
+  "call": true,
+  "input": "{\"todos\":[]}",
+  "kind": "json"
+ }
+]

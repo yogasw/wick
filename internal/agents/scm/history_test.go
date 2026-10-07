@@ -303,3 +303,27 @@ func TestHistoryDeletedRef(t *testing.T) {
 		t.Fatalf("surviving ref was not walked: %+v", mixed)
 	}
 }
+
+// TestHistoryUnbornBranch: a repo that was `git init`-ed but has no commit
+// yet has no HEAD to walk. The panel must show an empty graph, not the raw
+// "ambiguous argument 'HEAD'" failure from git log.
+func TestHistoryUnbornBranch(t *testing.T) {
+	skipNoGit(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	mustGit(t, dir, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, dir, "add", ".")
+
+	for _, refs := range [][]string{nil, {RefsAll}, {"main"}} {
+		entries, err := History(ctx, dir, LogOptions{Limit: 20, Refs: refs})
+		if err != nil {
+			t.Fatalf("refs %v: unborn branch should be an empty history, got %v", refs, err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("refs %v: expected no commits, got %+v", refs, entries)
+		}
+	}
+}

@@ -1,0 +1,8 @@
+{"type":"step_start","timestamp":1,"sessionID":"ses_abc","part":{"type":"step-start"}}
+{"type":"reasoning","timestamp":2,"sessionID":"ses_abc","part":{"type":"reasoning","text":"think"}}
+{"type":"tool_use","timestamp":3,"sessionID":"ses_abc","part":{"type":"tool","callID":"c1","tool":"bash","state":{"status":"completed","input":{"command":"ls"},"output":"a.go"}}}
+{"type":"tool_use","timestamp":4,"sessionID":"ses_abc","part":{"type":"tool","callID":"c2","tool":"read","state":{"status":"error","input":{"path":"x"},"error":"ENOENT"}}}
+{"type":"step_finish","timestamp":5,"sessionID":"ses_abc","part":{"type":"step-finish","reason":"tool-calls","tokens":{"input":100,"output":10,"reasoning":2,"cache":{"read":50,"write":5}},"cost":0.01}}
+{"type":"step_start","timestamp":6,"sessionID":"ses_abc","part":{"type":"step-start"}}
+{"type":"text","timestamp":7,"sessionID":"ses_abc","part":{"type":"text","text":"Hello"}}
+{"type":"step_finish","timestamp":8,"sessionID":"ses_abc","part":{"type":"step-finish","reason":"stop","tokens":{"input":20,"output":5,"reasoning":0,"cache":{"read":160,"write":0}},"cost":0.02}}

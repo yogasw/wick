@@ -39,7 +39,7 @@ func (d Deps) svc() *delegation.Service {
 }
 
 var (
-	errUnavailable     = errors.New("sub-agent delegation is not configured on this server")
+	errUnavailable      = errors.New("sub-agent delegation is not configured on this server")
 	errNotAuthenticated = errors.New("not authenticated")
 	errNoSession        = errors.New("cannot resolve the calling session — sub-agent operations are only available to a running agent session")
 )
@@ -176,6 +176,52 @@ func (d Deps) treePosition(ctx context.Context, sessionID string) (rootID, handl
 		}
 	}
 	return "", "", errNoTree
+}
+
+// addressedTree is treePosition for an op that names a recipient: the
+// tree that recipient lives in.
+//
+// A sub-agent addresses its own tree, so nothing changes for it. A leader
+// is different: each top-level delegate starts its OWN tree, so a leader
+// owns many, and treePosition's "first tree is enough" picks only the most
+// recent one. A message to an agent started earlier in the conversation —
+// still running, still listed by list_agents — then came back "not part of
+// this conversation". The leader's recipient is found among its own direct
+// children instead, and its tree is the one the message goes to.
+func (d Deps) addressedTree(ctx context.Context, sessionID, handle string) (rootID, from string, err error) {
+	root, from, err := d.treePosition(ctx, sessionID)
+	if err != nil || from != entity.LeaderHandle {
+		return root, from, err
+	}
+	rows, err := d.svc().Repo.ListByParent(ctx, sessionID)
+	if err != nil {
+		return "", "", err
+	}
+	if t := leaderChild(rows, handle); t != nil && t.RootID != "" {
+		return t.RootID, from, nil
+	}
+	return root, from, nil
+}
+
+// leaderChild picks the leader's sub-agent answering to handle. Handles
+// are unique within a tree, not across a leader's trees, so the same role
+// delegated twice yields two rows with one handle: the one still working
+// wins, else the newest (rows arrive newest first).
+func leaderChild(rows []entity.AgentDelegation, handle string) *entity.AgentDelegation {
+	var newest *entity.AgentDelegation
+	for i := range rows {
+		r := &rows[i]
+		if r.Handle != handle {
+			continue
+		}
+		if !entity.IsTerminalDelegationStatus(r.Status) {
+			return r
+		}
+		if newest == nil {
+			newest = r
+		}
+	}
+	return newest
 }
 
 // callerMayDelegate reports whether the calling session is allowed to

@@ -102,6 +102,71 @@ The collapsed row only offers **Reconnect** when the account isn't currently con
 
 The binary is resolved the same way as any other spawn (see [Binary resolution chain](#binary-resolution-chain)); Reconnect fails immediately with an error if none is found instead of trying to spawn one.
 
+#### Per-type login flow
+
+The two wired types reach the same place by different routes, because their CLIs do:
+
+| | `claude` | `codex` |
+|---|---|---|
+| argv | instance ExtraArgs + `/login` | `login --device-auth` — ExtraArgs dropped |
+| What you get | an OAuth link | a link (`auth.openai.com/codex/device`) **plus a one-time code**, valid 15 minutes |
+| What you do | open the link, paste the returned code into the modal's **authorization code** field | open the link, type the code shown in the terminal into the page |
+| Browser suppression | needed — `LoginEnv` spoofs `$BROWSER` + SSH markers so the CLI prints the link instead of opening a tab on the wick host | not needed — device auth never opens a browser or binds a callback |
+
+Why codex uses device auth: its default login binds a callback on `localhost:1455` and waits for the browser to hit it. On a wick host nobody is sitting at that browser, so the flow never completes. The device-code flow polls OpenAI instead, which survives the user being somewhere else entirely.
+
+Why codex drops ExtraArgs: `/login` is a prompt to the same claude REPL those flags configure, but `codex login` is a **subcommand** with its own flag set (`-c`, `--enable`/`--disable`, `--with-api-key`, `--device-auth`). Passing it a REPL flag like `--model` makes the arg parser reject the whole argv, and the spawn would die before printing anything to act on.
+
+The one-time code is shown in the live terminal, not lifted into its own row like the link — the modal's terminal is fully rendered underneath, so it is readable there.
+
+The instance's `Env` is passed into the login spawn, so an instance carrying `CODEX_HOME=/home/you/.codex_work` writes its credentials into **that** home. This is how one host holds several codex accounts at once: one instance per home, each logged in separately, each reporting its own account and usage.
+
+#### Creating the home
+
+wick reads a per-instance home but does not create one. [`scripts/new-provider-home.sh`](https://github.com/yogasw/wick/blob/master/scripts/new-provider-home.sh) does, for `claude` and `codex` alike — run it with no arguments and press enter through the defaults, or `./scripts/new-provider-home.sh -y codex work`.
+
+It symlinks what should be shared and copies what must not be, and the split differs per provider for one reason worth knowing before overriding it:
+
+| | `claude` | `codex` |
+|---|---|---|
+| env var | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` |
+| symlinked | `skills`, `plugins`, `projects`, `sessions`, `session-env` | `skills`, `plugins`, `rules` |
+| copied | `settings.json` | `config.toml` |
+| never shared | `.credentials.json` | `auth.json`, **`sessions`** |
+
+`sessions` is shared for claude and not for codex because of where each one's usage numbers come from. claude's are fetched over HTTP against the credential, so a shared history costs nothing. codex has no usage endpoint — wick reads the rate-limit windows out of `$CODEX_HOME/sessions/**/rollout-*.jsonl`, and the context ledger and `/compact` read the same files. Share that directory and every instance reports whichever account happened to run last.
+
+`gemini` is refused by the script: `geminiConfigDir()` takes no env override, so two gemini instances share `~/.gemini` whatever you do to the filesystem.
+
+#### omp and opencode: one instance = one account
+
+`omp` (oh-my-pi) and `opencode` need no script: wick owns their account store and pins it per instance ([`accounts.go`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/accounts.go)).
+
+| | `omp` | `opencode` |
+|---|---|---|
+| Account store | omp profile `--profile <p>` → `~/.omp/profiles/<p>/agent` | data dir, passed as `XDG_DATA_HOME` → `<dir>/opencode/auth.json` |
+| Default | `wick-<instance name>` (folded into omp's `^[a-z0-9][a-z0-9._-]{0,63}$`) | `<wick data>/providers/opencode/<instance name>`, created `0700` on first use |
+| Saved as | `omp_profile` | `opencode_data_dir` |
+| Override | Add form → **Override** (must be a valid profile name) | Add form → **Override** (absolute path) |
+
+The value is written into the instance config on its **first save** and never re-derived, so renaming an instance keeps its login. Spawn, login, account status, usage and the model list all resolve the store through the same helper (`provider.AccountEnv`), and any `OMP_PROFILE` / `PI_PROFILE` / `XDG_DATA_HOME` in the instance Env is dropped so it cannot split them.
+
+Log in **once per instance**. omp would accept a second login into the same profile and rotate between the accounts itself; wick's rule is one account per instance, so add another instance for another account.
+
+Login flows:
+
+| | `omp` | `opencode` |
+|---|---|---|
+| argv | `--profile <p> login <provider>` | `auth login -p <provider> [-m <method>]` |
+| Picker | `openai-codex-device` (default, device code), `openai-codex` (browser), `anthropic` (browser, with a policy warning) | ChatGPT Plus/Pro device code (default, `-p openai -m "ChatGPT Pro/Plus (headless)"`), or pick another provider in the terminal |
+| Headless callback | browser flows redirect to `localhost:1455` / `localhost:54545`, which the wick host never receives: copy the failed page's full URL from the address bar and paste it at omp's "Paste the authorization code (or full redirect URL)" prompt | the device-code method needs no callback |
+| Account status | `omp usage --json` (cached 2 min) — email + provider | `auth.json` read directly (read-only); opencode stores no email, so the card shows provider + auth method |
+| Usage | `omp usage --json`, mapped to the same 5-hour / 7-day rings as codex, through the shared usage cache and pace gate | not available — opencode has no usage command |
+
+Claude Pro/Max subscriptions are not offered for opencode (opencode does not support them); for omp, `anthropic` works but carries a warning that Anthropic's terms may not allow a subscription outside its own apps.
+
+Deleting an omp/opencode instance does **not** delete its login folder. The confirm dialog names where it lives; remove it by hand if the account is no longer needed.
+
 ### Session TTL
 
 | | |
@@ -117,15 +182,19 @@ The binary is resolved the same way as any other spawn (see [Binary resolution c
 
 | Provider | Account status | Reconnect (TTY login) |
 |---|---|---|
-| `claude` | ✓ | ✓ |
-| `codex` | ✓ | not yet — "Reconnect via terminal is not available for this provider type yet" |
-| `gemini` | ✓ | not yet — same as codex |
+| `claude` | ✓ | ✓ — OAuth link, paste the code back |
+| `codex` | ✓ | ✓ — device code (`codex login --device-auth`) |
+| `gemini` | ✓ | not yet — "Reconnect via terminal is not available for this provider type yet" |
+| `omp` | ✓ (via `omp usage --json`) | ✓ — provider picker; device code or paste-redirect |
+| `opencode` | ✓ (via `auth.json`) | ✓ — device code for ChatGPT, or pick in the terminal |
 | `wick` | — | No Connection panel at all — `wick` authenticates per-model with API keys, not a CLI login. |
 
 Backing endpoints:
 
 - `GET /api/providers/{type}/{name}/logintty` — connect status: `supported`, `account`, the live `session` (if any), and the TTL constants.
-- `GET /api/providers/{type}/{name}/logintty/usage` — usage windows for the connected account (`claude` only; `supported:false` for the rest).
+- `GET /api/providers/{type}/{name}/logintty/usage` — usage windows for the connected account (`claude`, `codex`, `omp`; `supported:false` for the rest).
+- `POST .../logintty/start?login_provider=<id>` — omp/opencode take the picker choice here; it is checked against an allowlist and never reaches argv unvalidated. The status response carries `login_choices`, `login_note` and `account_store` for the picker.
+- `GET /api/providers/{type}/{name}/cli-models` — live model list from `omp models --json` / `opencode models`, for omp/opencode only. Read-only.
 - `POST .../logintty/start`, `.../extend`, `.../kill` — session lifecycle. `extend` and `kill` return `409` once there's nothing to act on.
 - `GET .../logintty/ws` — the websocket stream powering the terminal modal (PTY output, detected link/success/failure, TTL countdown, post-exit account snapshot).
 
@@ -193,9 +262,80 @@ Both the UI probe and the spawn site walk the same chain. First hit wins:
 | Step | What it checks | Source |
 |---|---|---|
 | 1. **registry** | `Instance.Binary` set in the UI form. Used as-is, no PATH lookup. | [provider.go:62](https://github.com/yogasw/wick/blob/master/internal/agents/provider/provider.go#L62) (`Bin()`) |
+| 1b. **managed** | omp/opencode only: the wick-managed `current` version (see [Managed binaries](#managed-binaries)). Skipped when the type is disabled or nothing is installed. | [managed.go](https://github.com/yogasw/wick/blob/master/internal/agents/provider/managed.go) |
 | 2. **path** | `exec.LookPath(<type>)` against `%PATH%` + `PATHEXT` (Windows). | |
 | 3. **scan** | Known install locations the installer drops but doesn't always wire into PATH. | [scan_unix.go](https://github.com/yogasw/wick/blob/master/internal/agents/provider/scan_unix.go), [scan_windows.go](https://github.com/yogasw/wick/blob/master/internal/agents/provider/scan_windows.go) |
 | 4. **miss** | All three failed. Probe reports `PathFound=false`; spawn falls back to bare type name and fails at `Start()`. | |
+
+## Managed binaries
+
+For `omp` and `opencode`, wick can download, verify and keep the CLI itself — no `curl | sh`, nothing written to PATH, nothing touched that was installed by hand. It lives in [`internal/agents/provider/managedbin`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/managedbin).
+
+```
+<wick data dir>/providers/bin/<type>/
+  versions/<ver>/<binary>   one folder per installed version
+  current                   active version (text file, written atomically)
+  state.json                sha256 + asset + host + install time per version, last job
+```
+
+An instance without a Binary path runs `current`; a Binary path always wins (manual mode). Spawn resolves the path per turn, so a switch applies to the **next** turn while a running process keeps the file it started from.
+
+### Install / update
+
+**Add the omp/opencode instance first. The list only flags the state (binary missing / update available); Download from GitHub, Pick a version → Install, Update, rollback and remove live in the instance Detail under Binary.** Nothing downloads unless an admin clicks; the page only flags "update available" (the newest-release answer is cached for an hour, **Check for update** refreshes it). The job runs in the background (the UI polls: download %, verify, running `--version`, switching) and a `reload` waits for it.
+
+The order is fixed:
+
+1. Download to `versions/<ver>.partial` — https to `github.com` / `api.github.com` / `*.githubusercontent.com` only (every redirect is checked), 600 MB cap, URL built from the repo, never from input.
+2. sha256 must equal the asset `digest` in the GitHub API; omp is also checked against the release's `SHA256SUMS.txt`. A mismatch deletes the file — it is **never executed**.
+3. Only then `<bin> --version` runs: 15 s timeout, empty env (no `DATABASE_URL`, tokens or real `HOME`; `HOME`/`TMPDIR`/`XDG_*` point at a scratch dir), cwd = scratch dir, inside the agent memory scope when the memory guard is on.
+4. The parsed version must equal the tag (`v18.4.3` ↔ `omp/18.4.3`, `v1.18.33` ↔ `1.18.33`), else delete.
+5. Rename to `versions/<ver>`, then move `current`.
+
+Installing a version that is already on disk does not download: it re-verifies the sha256 and switches (or is a no-op when it is already active).
+
+### Rollback, removal, retention
+
+- **Use this version** makes an installed version current instantly. The file's sha256 is recomputed and must match `state.json`; a binary changed after install is refused.
+- **Remove** is disabled for the active version and for any version a running process still uses. wick counts those from `/proc/<pid>/exe`, and the card says "2 sessions still on v18.4.2".
+- Retention keeps `current` + `keep_versions` older versions (default 2); older ones go once no process uses them.
+- **Re-check --version** makes wick run the active binary itself and shows the line it read.
+
+Host detection mirrors the official installers and is shown on the card, e.g. `linux-x64 · glibc · AVX2`: `x64`/`arm64`, musl when `/etc/alpine-release` exists or `ldd --version` says musl, AVX2 from `/proc/cpuinfo` (opencode picks the `-baseline` build without it). A host with no matching asset gets a clear error, not a guess. opencode's `opencode-desktop-*` assets are never used.
+
+Config (`providers` in the user config):
+
+```json
+"managed_binaries": { "keep_versions": 2, "omp": { "enabled": true }, "opencode": { "enabled": false } }
+```
+
+A type with no entry is enabled. Disabling a type makes its instances fall back to PATH.
+
+### Adding a provider to the registry
+
+One file in that provider's package plus a register call — the install/update/rollback flow, API and UI stay untouched:
+
+```go
+// internal/agents/provider/<type>/release.go
+func init() { managedbin.Register("<type>", releaseSource{}) }
+
+type releaseSource struct{}
+
+func (releaseSource) Binary() string { return "<binary file name>" }
+func (releaseSource) Repo() string   { return "<owner>/<repo>" }                      // GitHub releases
+func (releaseSource) PickAsset(h managedbin.Host, as []managedbin.Asset) (managedbin.Asset, error) { … } // by h.OS/h.Arch/h.Musl/h.AVX2
+func (releaseSource) Unpack(downloaded, dest string) error { … }                      // rename, or extract the member
+func (releaseSource) CrossCheck(ctx context.Context, f managedbin.Fetcher, rel managedbin.Release, a managedbin.Asset, sum string) error { return nil } // extra checksum file, if any
+func (releaseSource) Contract() managedbin.VersionContract {                         // also used by the status probe
+	return managedbin.VersionContract{Args: []string{"--version"}, Parse: managedbin.FirstSemver}
+}
+```
+
+The release's assets must carry a GitHub `digest` (all assets uploaded since mid-2025 do); wick refuses to install without one. Types that are only probed, not managed (claude/codex/gemini), register just a `VersionContract` via `managedbin.RegisterContract`, so the status probe reads every type's version the same way.
+
+Endpoints (`/tools/agents/api/managed-binaries…`): `GET` list, `GET {type}/releases`, `POST {type}/check`, `POST {type}/install[?tag=]`, `POST {type}/activate?version=`, `POST {type}/remove?version=`, `POST {type}/verify`. Every POST is admin-only.
+
+Integration test: `WICK_E2E_PROVIDER_BIN=1 go test ./internal/agents/provider/managedbin -run E2E -v` downloads the real previous + latest omp and opencode into a temp dir (or `WICK_E2E_PROVIDER_BIN_DIR`), verifies, runs `--version`, then checks a same-version update is a no-op and that rollback needs no download.
 
 ### Why scan exists
 
@@ -389,7 +529,7 @@ Quick cheatsheet for what each provider supports — useful when picking a defau
 | Tool gate hook | ✓ via PreToolUse hook | — | — |
 | MCP servers | ✓ | ✓ via TOML config | ✓ |
 | Account status (Connection panel) | ✓ | ✓ | ✓ |
-| Reconnect via login TTY | ✓ | not yet | not yet |
+| Reconnect via login TTY | ✓ | ✓ (device code) | not yet |
 
 ## API reference
 
@@ -523,4 +663,4 @@ The skills that ship inside the wick binary get the same catalog treatment for `
 - [AI Router](./airouter) — routing provider spawns through an embedded AI router (9router / OmniRoute).
 - [Command Gate](../command-gate) — gate sidecar lives next to the main binary, separate from providers.
 - [Skills Manager](./skills-manager) — shared skill directories, sync, and the file browser UI.
-- [Web Terminal](../webtty) — general-purpose shell terminal, still the way to run `codex login` / `gemini` login until they get their own Reconnect flow.
+- [Web Terminal](../webtty) — general-purpose shell terminal, still the way to run `gemini` login until it gets its own Reconnect flow.
