@@ -157,6 +157,27 @@ func SenderLine(s *Sender, level string) string {
 	return b.String()
 }
 
+// StripSenderLines removes every whole `[from: …]` line from text — the
+// inverse of PrependSenderLine for a recipient that is not a model. A remote
+// agent (a service plugin such as Jules) reads the text as its prompt, where
+// the line is noise: it lands in task titles and in the conversation the
+// remote shows its own users. Buffered messages are joined before they are
+// sent, so the line can appear at the start of any line, not only the first.
+func StripSenderLines(text string) string {
+	if !strings.Contains(text, "[from: ") {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	kept := lines[:0]
+	for _, l := range lines {
+		if strings.HasPrefix(l, "[from: ") && strings.HasSuffix(strings.TrimRight(l, "\r"), "]") {
+			continue
+		}
+		kept = append(kept, l)
+	}
+	return strings.Join(kept, "\n")
+}
+
 // quoteSenderField renders one field of the sender line. Ordinary values pass
 // through bare so the common line stays short and readable; anything that
 // could terminate the line early or fake a second one is Go-quoted, which

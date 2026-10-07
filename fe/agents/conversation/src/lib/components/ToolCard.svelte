@@ -1,6 +1,9 @@
 <script lang="ts">
   import type { ThreadBlock, TurnEventPayload } from "../types/agents.js";
   import { subAgentStatusCls, subAgentStatusLabel } from "../lifecycleCls.js";
+  import { TraceBody, isBinaryKind, type TraceDisplay, type TraceMedia } from "@wick-fe/common-ui";
+  import type { TraceFiles } from "../api/files.js";
+  import MediaLightbox from "./MediaLightbox.svelte";
 
   type ToolBlock = Extract<ThreadBlock, { kind: "tool" }>;
 
@@ -26,8 +29,35 @@
     // Fetches a large (spilled) result payload by its trace event id when the
     // user expands the result — keeps the big blob out of the index load.
     loadEventPayload?: (eventId: string) => Promise<TurnEventPayload>;
+    // Fetches a stored binary (Display.blob_ref) when its chip is clicked.
+    loadBlob?: (ref: string) => Promise<Blob>;
+    // Stats / fetches the file a call named (Read file_path) when the trace
+    // kept no bytes for it, and tells the chip if it is gone or changed.
+    traceFiles?: TraceFiles;
   };
-  let { block, onCancel, onStopTurn, onDismiss, interrupted = false, onOpenSubAgent, loadEventPayload }: Props = $props();
+  let { block, onCancel, onStopTurn, onDismiss, interrupted = false, onOpenSubAgent, loadEventPayload, loadBlob, traceFiles }: Props = $props();
+
+  // A clicked image/pdf chip opens in the same viewer chat media uses.
+  let media = $state<TraceMedia | null>(null);
+  const traceCtx = $derived({
+    loadBlob,
+    onOpenMedia: (m: TraceMedia) => { media = m; },
+    sourcePath: callPath(block.inputDisplay, block.toolInput),
+    calledAt: block.endedAt ?? block.startedAt,
+    statPath: traceFiles?.stat,
+    loadPath: traceFiles?.load,
+  });
+
+  function callPath(d: TraceDisplay | undefined, input: string): string | undefined {
+    if (d?.path) return d.path;
+    try {
+      const o = JSON.parse(input) as Record<string, unknown>;
+      const p = o.file_path ?? o.notebook_path ?? o.path;
+      return typeof p === "string" && p ? p : undefined;
+    } catch {
+      return undefined;
+    }
+  }
 
   let cancelling = $state(false);
 
@@ -74,6 +104,7 @@
   // never rides along with the trace index.
   let loadedResult = $state<string | null>(null);
   let loadedTruncated = $state(false);
+  let loadedResultDisplay = $state<TraceDisplay | undefined>(undefined);
   let resultLoading = $state(false);
   let resultLoadError = $state(false);
 
@@ -90,6 +121,7 @@
       const p = await loadEventPayload(block.resultEventId);
       loadedResult = p.text ?? "";
       loadedTruncated = p.truncated === true;
+      loadedResultDisplay = p.display;
     } catch {
       resultLoadError = true;
     } finally {
@@ -107,6 +139,7 @@
   // event_id. Without this, a 12 KB command reads as "no input".
   let loadedInput = $state<string | null>(null);
   let loadedInputTruncated = $state(false);
+  let loadedInputDisplay = $state<TraceDisplay | undefined>(undefined);
   let inputLoading = $state(false);
   let inputLoadError = $state(false);
 
@@ -123,6 +156,7 @@
       const p = await loadEventPayload(block.toolInputEventId);
       loadedInput = p.tool_input ?? "";
       loadedInputTruncated = p.truncated === true;
+      loadedInputDisplay = p.display;
     } catch {
       inputLoadError = true;
     } finally {
@@ -175,10 +209,16 @@
     return new Date(ms).toTimeString().slice(0, 8);
   }
 
-  const prettyInput = $derived(
-    displayInput
-      ? (() => { try { return JSON.stringify(JSON.parse(displayInput), null, 2); } catch { return displayInput; } })()
-      : ""
+  // The payload's display carries the body a Large index row lacks.
+  const inputDisplay = $derived(loadedInputDisplay ?? block.inputDisplay);
+  const resultDisplay = $derived(loadedResultDisplay ?? block.resultDisplay);
+  // Collapsed result line: a binary reads as its chip text, never base64.
+  const resultPreview = $derived(
+    resultDisplay && isBinaryKind(resultDisplay.kind)
+      ? [resultDisplay.name, resultDisplay.summary].filter(Boolean).join(" · ")
+      : displayResult !== undefined
+        ? displayResult.slice(0, 80).replace(/\n/g, " ") + (displayResult.length > 80 ? "…" : "")
+        : "",
   );
 
   // ── sub-agent delegation summary ────────────────────────────────
@@ -221,9 +261,9 @@
     if (!displayInput) return "";
     try {
       const d = (JSON.parse(displayInput) as { description?: unknown }).description;
-      return typeof d === "string" ? d.trim() : "";
+      return typeof d === "string" ? d.trim() : (inputDisplay?.summary ?? "");
     } catch {
-      return "";
+      return inputDisplay?.summary ?? "";
     }
   });
 
@@ -337,11 +377,8 @@
           <span>failed to load input</span>
           <button type="button" onclick={() => void fetchLargeInput()} class="underline hover:no-underline">retry</button>
         </div>
-      {:else if prettyInput}
-        {#if loadedInputTruncated}
-          <p class="px-3 pt-2 text-[10px] italic text-amber-600 dark:text-amber-400">content truncated by the trace size cap</p>
-        {/if}
-        <pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">{prettyInput}</pre>
+      {:else if displayInput}
+        <TraceBody display={inputDisplay} raw={displayInput} toolName={block.toolName} call truncated={loadedInputTruncated} ctx={traceCtx} />
       {:else if block.toolInputLarge}
         <!-- No fetcher wired (e.g. a synthetic turn) — the input exists,
              it just can't be pulled from here. Never claim "no input". -->
@@ -368,7 +405,7 @@
         </svg>
         <span class="text-[10px] uppercase tracking-wide shrink-0">{block.isError ? "error" : "result"}</span>
         {#if displayResult !== undefined}
-          <span class="ml-2 truncate font-mono opacity-60">{displayResult.slice(0, 80).replace(/\n/g, " ")}{displayResult.length > 80 ? "…" : ""}</span>
+          <span class="ml-2 truncate font-mono opacity-60">{resultPreview}</span>
         {:else}
           <!-- Spilled payload not fetched yet — show its size so the reader
                knows the result exists and what expanding will pull. -->
@@ -396,10 +433,16 @@
               <button type="button" onclick={() => void fetchLargeResult()} class="underline hover:no-underline">retry</button>
             </div>
           {:else if displayResult !== undefined}
-            {#if loadedTruncated}
-              <p class="px-3 pt-2 text-[10px] italic text-amber-600 dark:text-amber-400">content truncated by the trace size cap</p>
-            {/if}
-            <pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">{displayResult}</pre>
+            <TraceBody
+              display={resultDisplay}
+              raw={displayResult}
+              toolName={block.toolName}
+              isError={block.isError}
+              callDisplay={inputDisplay}
+              callInput={displayInput}
+              truncated={loadedTruncated}
+              ctx={traceCtx}
+            />
           {:else}
             <!-- No fetcher wired (e.g. a synthetic turn) — nothing to show. -->
             <p class="px-3 py-2 italic text-black-500 dark:text-black-600">payload not loaded</p>
@@ -409,3 +452,10 @@
     </div>
   {/if}
 </div>
+
+{#if media}
+  <MediaLightbox
+    items={[{ url: media.url, name: media.name, kind: media.kind, note: media.note }]}
+    onClose={() => { media = null; }}
+  />
+{/if}

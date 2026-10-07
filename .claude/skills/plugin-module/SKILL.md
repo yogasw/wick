@@ -10,6 +10,7 @@ paths:
   - "pkg/plugin/**"
   - "internal/connectors/plugin/**"
   - "internal/manager/plugins_api.go"
+  - "internal/plugins/replace/**"
   - "app/plugin_cmd.go"
   - ".github/workflows/release-plugins.yml"
   - ".vscode/tasks.json"
@@ -230,6 +231,39 @@ plugin pipeline is reached ONLY via `repository_dispatch`, so the two never run 
 same time on one PR. `release-plugins.yml` uses its own concurrency group
 (`wick-release-plugins`, cancel-in-progress: true) so a re-dispatched run supersedes
 the in-flight one.
+
+## Replacing a built-in: `Replaces`
+
+A tool/job plugin extracted from a built-in gets a new key (`-` is illegal in
+plugin keys, so `notion-ticket-sync` → `notion_ticket_sync`). Declare the old key
+so wick treats the plugin as the **same item**, not a new empty one:
+
+```go
+// job plugin — pkg/job.Meta
+job.Meta{Key: "notion_ticket_sync", Replaces: []string{"notion-ticket-sync"}}
+// tool plugin — pkg/tool.Tool (copied into ToolMeta.Replaces)
+tool.Tool{Key: "text_counter", Replaces: []string{"text-counter"}}
+```
+
+`--dump-manifest` carries it (`job.meta.Replaces`, `tool.meta.replaces`), so it
+needs no plugin.json hand edit. Host side (`internal/plugins/replace`):
+
+- `Prepare` (web + worker boot, after all registrations, before validation and
+  the configs/jobs bootstrap) unregisters the old key and marks it replaced;
+  `manager.Service.SetHidden(replace.IsReplaced)` drops the old job row from
+  every listing and from the scheduler.
+- `ApplyAll` (web boot only) migrates once per pair, marker row
+  `plugin_replacements(old_key,new_key)` + `plugin_audits` action `replace.migrate`:
+  config fields the new module declares (stored value copied as-is — secrets stay
+  ciphertext; filled only when the new value is empty or a non-secret still at its
+  declared default; secret-flag mismatch skipped), job schedule/enabled/max_runs/
+  max_timeout_min while the new row is pristine, tags/visibility/bookmarks of
+  `/jobs|/tools/<old>` merged in. The old job row is disabled on every boot. Run
+  history stays on the old row (the report counts it); old rows are never deleted.
+- Admin: `GET /manager/api/plugins/{key}/replace` = dry run (secrets `set`/`empty`),
+  `POST` = apply (`?force=1` re-runs a migrated pair; manual values still win).
+
+Connector plugins don't support `Replaces` yet (connector data is per-instance rows).
 
 ## Constraints / gotchas
 

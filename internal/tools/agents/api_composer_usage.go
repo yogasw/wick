@@ -65,6 +65,35 @@ type ComposerUsageResponse struct {
 
 	// CanManage tells the popover whether to offer Re-check.
 	CanManage bool `json:"can_manage"`
+
+	// Accounts is one row per account of a multi-account instance (omp's
+	// credential pool, opencode's account folders), each with its own
+	// windows out of the SAME cached probe — never a request per row.
+	// Empty for single-account types, where Account + Windows say it all.
+	Accounts []composerUsageAccountRow `json:"accounts,omitempty"`
+	// Rotation names who picks the account when the session is on Auto:
+	// "omp" (omp rotates natively) or "wick" (wick moves to the next
+	// opencode folder on a quota error). "" when the session is pinned.
+	Rotation string `json:"rotation,omitempty"`
+}
+
+// composerUsageAccountRow is one account in the /usage summary.
+type composerUsageAccountRow struct {
+	ID       string           `json:"id"`
+	Label    string           `json:"label"`
+	Provider string           `json:"provider"`
+	Email    string           `json:"email,omitempty"`
+	Plan     string           `json:"plan,omitempty"`
+	Status   string           `json:"status"`
+	Windows  []usageWindowDTO `json:"windows,omitempty"`
+	// Err is this account's own failed reading (expired login, 429).
+	Err string `json:"error,omitempty"`
+	// NoUsage: the provider of this login reports no usage at all (an
+	// API key, Copilot) — not a failure, nothing to show.
+	NoUsage bool `json:"no_usage,omitempty"`
+	// Current marks the account this session runs on: the pinned one,
+	// or the provider's only account. Auto over several marks none.
+	Current bool `json:"current,omitempty"`
 }
 
 // apiComposerUsage handles GET /api/composer/usage?provider=<type>/<name>.
@@ -92,7 +121,7 @@ func apiComposerUsage(c *tool.Ctx) {
 		Provider:  string(ins.Type) + "/" + ins.Name,
 		CanManage: canManageProvider(c, ins.Type, ins.Name),
 	}
-	acc := logintty.ReadAccount(ins.Type, ins.Env)
+	acc := logintty.ReadAccount(ins.Type, provider.AccountEnv(ins))
 	res.Account = &composerUsageAccount{
 		Connected:  acc.Connected,
 		Email:      acc.Email,
@@ -113,9 +142,9 @@ func apiComposerUsage(c *tool.Ctx) {
 
 	ctx, cancel := context.WithTimeout(c.Context(), connectionsUsageTimeout)
 	defer cancel()
-	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, ins.Env), func() ([]logintty.UsageWindow, error) {
-		return logintty.ReadUsage(ins.Type, ins.Env)
-	}, logintty.CredentialsChangedAt(ins.Type, ins.Env))
+	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
+		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
+	}, logintty.CredentialsChangedAt(ins.Type, provider.AccountEnv(ins)))
 
 	now := time.Now()
 	res.Checking = v.Checking
@@ -136,7 +165,94 @@ func apiComposerUsage(c *tool.Ctx) {
 	default:
 		res.Windows = usageWindowDTOs(v.Windows)
 	}
+	res.Accounts, res.Rotation = composerUsageAccounts(ins, strings.TrimSpace(c.Query("model")), v)
 	c.JSON(http.StatusOK, res)
+}
+
+// composerUsageAccounts builds the per-account rows of a multi-account
+// instance from the cached reading v; pin is the session's model pin,
+// which says which account the session runs on. nil for single-account
+// types, and for an instance holding one account (the headline already
+// is that account).
+func composerUsageAccounts(ins provider.Instance, pin string, v usageView) ([]composerUsageAccountRow, string) {
+	if ins.Type != provider.TypeOMP && ins.Type != provider.TypeOpencode {
+		return nil, ""
+	}
+	pool := logintty.ListAccounts(ins.Type, provider.AccountEnv(ins))
+	if len(pool) <= 1 {
+		return nil, ""
+	}
+	cur := sessionAccount(ins, pin)
+	perProv := map[string]int{}
+	for _, a := range pool {
+		if a.Status != "disabled" {
+			perProv[a.Provider]++
+		}
+	}
+	rows := make([]composerUsageAccountRow, 0, len(pool))
+	anyCurrent := false
+	for _, a := range pool {
+		r := composerUsageAccountRow{ID: a.ID, Label: a.Label, Provider: a.Provider, Email: a.Email, Plan: a.Plan, Status: a.Status}
+		if v.Known && v.Err == nil {
+			ws, errMsg := logintty.AccountWindows(v.Windows, a.ID)
+			r.Windows, r.Err = usageWindowDTOs(ws), errMsg
+		}
+		if ins.Type == provider.TypeOpencode && a.Status != "disabled" && !logintty.AccountHasUsage(ins.Type, a) {
+			r.NoUsage = true
+		}
+		switch {
+		case a.Status == "disabled":
+		case cur.id != "" && a.ID == cur.id:
+			r.Current = true
+		case cur.id == "" && cur.prov != "" && a.Provider == cur.prov && perProv[a.Provider] == 1:
+			r.Current = true
+		}
+		anyCurrent = anyCurrent || r.Current
+		rows = append(rows, r)
+	}
+	rotation := ""
+	if !anyCurrent {
+		if ins.Type == provider.TypeOMP {
+			rotation = "omp"
+		} else {
+			rotation = "wick"
+		}
+	}
+	return rows, rotation
+}
+
+type sessionAcct struct{ prov, id string }
+
+// sessionAccount resolves the account row a pin runs on. omp: the pinned
+// pool index ("openai-codex#2"); Auto leaves id "" (omp picks). opencode:
+// the folder the next spawn would use (pinned, or Auto's rotation pick),
+// which is what the session is on as far as wick can know.
+func sessionAccount(ins provider.Instance, pin string) sessionAcct {
+	if pin == "" {
+		return sessionAcct{}
+	}
+	if ins.Type == provider.TypeOpencode {
+		prov, acct := provider.OpencodeSpawnAccount(ins, pin)
+		if prov == "" {
+			return sessionAcct{}
+		}
+		if acct == "" {
+			acct = provider.OpencodeMainAccount
+		}
+		return sessionAcct{prov: prov, id: acct + "/" + prov}
+	}
+	p, ok := provider.ResolvePin(&ins, pin)
+	if !ok {
+		if i := strings.IndexByte(pin, '/'); i > 0 {
+			return sessionAcct{prov: pin[:i]}
+		}
+		return sessionAcct{}
+	}
+	out := sessionAcct{prov: p.Provider}
+	if p.Account != "" && p.Account != provider.AutoAccount {
+		out.id = p.Provider + "#" + p.Account
+	}
+	return out
 }
 
 // splitProviderKey parses "type/name", and accepts a bare "type" for the
@@ -194,8 +310,8 @@ func apiComposerUsageRefresh(c *tool.Ctx) {
 		c.JSON(http.StatusOK, ComposerUsageRefreshResponse{Supported: false})
 		return
 	}
-	accepted, wait := usageProbes.forceRefresh(logintty.UsageIdentity(ins.Type, ins.Env), func() ([]logintty.UsageWindow, error) {
-		return logintty.ReadUsage(ins.Type, ins.Env)
+	accepted, wait := usageProbes.forceRefresh(logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
+		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
 	})
 	res := ComposerUsageRefreshResponse{Supported: true, Accepted: accepted, Checking: accepted}
 	if !accepted {

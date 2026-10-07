@@ -392,6 +392,9 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 	if globalChannels == nil || globalDB == nil {
 		return
 	}
+	// Callers pass the save request's context; the instance it starts or
+	// reloads must outlive that request (StopAll / RemoveKeyed stop it).
+	ctx = context.WithoutCancel(ctx)
 	store := agentchannels.NewDBStore(globalDB)
 	store.Configs = globalConfigs
 	iKey := channelType + ":" + userID
@@ -404,6 +407,7 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 	sessPrefix := channelsetup.SessionPrefix(channelType, userID)
 	startInstance := func(ch agentchannels.Channel) {
 		go func() {
+			defer agentchannels.RecoverPanic(channelType, iKey)
 			if err := ch.Start(ctx); err != nil {
 				log.Warn().Str("instance", iKey).Err(err).Msg("agents: channel instance stopped")
 			}

@@ -5,6 +5,9 @@
      <select> was (project defaults, settings). Value is "type/name" or
      "type/name::modelID". */
   import type { ComposerModelOption, ComposerSelectOption } from "./composer-types.js";
+  import { matchModelFilter } from "./modelFilter.js";
+  import { decodePin, encodePath, encodePin } from "./model-path.js";
+  import { modelListMeta, describeModelListMeta, type ModelListMeta } from "./model-list-meta.js";
 
   type Props = {
     options: ComposerSelectOption[];
@@ -21,7 +24,7 @@
         set's leaves at all. */
     loadModels?: (
       optionValue: string,
-      opts?: { entry?: string },
+      opts?: { entry?: string; refresh?: boolean },
     ) => Promise<ComposerModelOption[]>;
   };
   let { options, value, onChange, placeholder = "Select provider", id, loadModels }: Props = $props();
@@ -73,26 +76,20 @@
   // the user is still looking at.
   let modelCache = $state<Record<string, ComposerModelOption[]>>({});
   let loadingModels = $state(false);
-  // The live set currently expanded (level 4), or null at level 3.
-  let setDrill = $state<ComposerModelOption | null>(null);
+  // The drill STACK under the instance: each entry is a live row the user
+  // opened (wick: a live set; omp/opencode: provider, then account). Empty at
+  // the instance's own level. Its ids are the picker path, any depth.
+  let drillStack = $state<ComposerModelOption[]>([]);
+  const drillPath = $derived(drillStack.map((m) => m.id));
 
   function cacheKey(optionValue: string, entry?: string): string {
     return entry ? `${optionValue}::${entry}` : optionValue;
   }
 
-  // Filter the drilled instance's models by the search box. Same tiny grammar
-  // as elsewhere: contains by default, `-`/`!` prefix excludes.
+  // Filter the drilled instance's models by the search box — the shared
+  // grammar (modelFilter.ts): AND terms, `a|b` either, `-`/`!` excludes.
   function modelMatches(m: { id: string; label: string }, q: string): boolean {
-    const hay = `${m.id} ${m.label}`.toLowerCase();
-    for (const raw of q.toLowerCase().split(/\s+/)) {
-      const t = raw.trim();
-      if (t === "" || t === "-" || t === "!") continue;
-      const exclude = t.startsWith("-") || t.startsWith("!");
-      const needle = exclude ? t.slice(1) : t;
-      const hit = hay.includes(needle);
-      if (exclude ? hit : !hit) return false;
-    }
-    return true;
+    return matchModelFilter(`${m.id} ${m.label}`, q);
   }
   // The list to render: a live set's expansion when one is open (level 4),
   // else the drilled option's models — loaded ones preferred over the static
@@ -100,8 +97,8 @@
   const drillModels = $derived.by(() => {
     const d = modelDrill;
     if (!d) return [];
-    const all = setDrill
-      ? (modelCache[cacheKey(d.value, setDrill.id)] ?? [])
+    const all = drillStack.length
+      ? (modelCache[cacheKey(d.value, encodePath(drillPath))] ?? [])
       : (modelCache[cacheKey(d.value)] ?? d.models ?? []);
     const q = modelSearch.trim();
     return q ? all.filter((m) => modelMatches(m, q)) : all;
@@ -115,7 +112,7 @@
     // Read the level state so this re-runs on every drill.
     void modelDrill;
     void typeDrill;
-    void setDrill;
+    void drillStack.length;
     void drillModels.length;
     if (menuEl) place();
   });
@@ -123,14 +120,19 @@
   // Fetch a level's models unless they are already cached. Errors are
   // swallowed: the static list (or an empty one) is a usable fallback, and a
   // provider whose vendor is unreachable must not break the whole form.
-  async function ensureModels(optionValue: string, entry?: string) {
+  async function ensureModels(optionValue: string, entry?: string, refresh = false) {
     if (!loadModels) return;
     const key = cacheKey(optionValue, entry);
-    if (modelCache[key]) return;
+    if (modelCache[key] && !refresh) return;
     loadingModels = true;
     try {
-      const loaded = await loadModels(optionValue, entry ? { entry } : undefined);
-      if (loaded && loaded.length > 0) modelCache = { ...modelCache, [key]: loaded };
+      const opts = entry || refresh ? { ...(entry ? { entry } : {}), ...(refresh ? { refresh: true } : {}) } : undefined;
+      const loaded = await loadModels(optionValue, opts);
+      const meta = modelListMeta(loaded);
+      if (meta) modelMeta = { ...modelMeta, [key]: meta };
+      // A Refresh replaces the level even when it came back empty: keeping
+      // the old rows would show them under the new "updated" stamp.
+      if (loaded && (loaded.length > 0 || refresh)) modelCache = { ...modelCache, [key]: loaded };
     } catch {
       // keep whatever static models the option already carries
     } finally {
@@ -138,22 +140,31 @@
     }
   }
 
+  // "Last updated" of each loaded level (omp/opencode live lists), and the
+  // level shown now. Refresh re-asks the server to run the CLI once.
+  let modelMeta = $state<Record<string, ModelListMeta>>({});
+  const drillMeta = $derived.by(() => {
+    const d = modelDrill;
+    if (!d) return undefined;
+    return modelMeta[drillStack.length ? cacheKey(d.value, encodePath(drillPath)) : cacheKey(d.value)];
+  });
+  function refreshDrill() {
+    const d = modelDrill;
+    if (!d) return;
+    void ensureModels(d.value, drillStack.length ? encodePath(drillPath) : undefined, true);
+  }
+
   function isLiveSet(m: ComposerModelOption): boolean {
     return !!m.live;
   }
 
-  // Open a live-set row, or collapse it when it is already open.
-  function toggleSetDrill(m: ComposerModelOption) {
+  // Open a live row one level deeper (pushes onto the drill stack).
+  function pushDrill(m: ComposerModelOption) {
     const d = modelDrill;
     if (!d) return;
-    if (setDrill?.id === m.id) {
-      setDrill = null;
-      modelSearch = "";
-      return;
-    }
-    setDrill = m;
+    drillStack = [...drillStack, m];
     modelSearch = "";
-    void ensureModels(d.value, m.id);
+    void ensureModels(d.value, encodePath(drillStack.map((x) => x.id)));
   }
 
   // Focus the search box the moment we drill into a model list (only shown
@@ -203,8 +214,21 @@
     const opt = options.find((o) => o.value === key);
     if (!opt) return value || placeholder;
     if (!modelID) return opt.label;
-    const at = modelID.indexOf("@");
-    if (at >= 0) return `${opt.label} · ${modelID.slice(at + 1)}`;
+    const pin = decodePin(modelID);
+    if (pin.grouped) {
+      // One segment (a wick live set): the set's own name is noise, show
+      // the model. Deeper paths name every level ("Codex · akun A · gpt-5"),
+      // resolved from the loaded levels when the picker has seen them.
+      if (pin.path.length <= 1) return `${opt.label} · ${pin.model}`;
+      const parts = [opt.label];
+      for (let i = 0; i < pin.path.length; i++) {
+        const level = modelCache[cacheKey(opt.value, i ? encodePath(pin.path.slice(0, i)) : undefined)];
+        parts.push(level?.find((x) => x.id === pin.path[i])?.label || pin.path[i]);
+      }
+      const leaf = modelCache[cacheKey(opt.value, encodePath(pin.path))]?.find((x) => x.id === pin.model);
+      parts.push(leaf?.label || pin.model);
+      return parts.join(" · ");
+    }
     const m = opt.models?.find((x) => x.id === modelID);
     // A loaded list can name an id the static options do not carry: the
     // provider list collapses a single-model instance to no models at all, so
@@ -227,20 +251,33 @@
     void ensureModels(opt.value);
   });
 
-  function reset() { typeDrill = ""; modelDrill = null; setDrill = null; modelSearch = ""; }
+  // Move the popup to <body>: a transformed ancestor (the agents app's
+  // centred modal uses translate(-50%,-50%)) becomes the containing block of
+  // a fixed child, so the menu was offset into the dialog and clipped by its
+  // overflow-hidden — the trigger looked dead.
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      },
+    };
+  }
+
+  function reset() { typeDrill = ""; modelDrill = null; drillStack = []; modelSearch = ""; }
   function close() { open = false; reset(); }
   // Back out one level: from a live set's expansion to the model list, then
   // from the model list to the instances. Clearing the filter each time, so a
   // stale query cannot hide the level you just returned to.
   function backFromModels() {
-    if (setDrill) { setDrill = null; modelSearch = ""; return; }
+    if (drillStack.length) { drillStack = drillStack.slice(0, -1); modelSearch = ""; return; }
     modelDrill = null;
     modelSearch = "";
   }
 
   function drillModel(o: ComposerSelectOption) {
     modelSearch = "";
-    setDrill = null;
+    drillStack = [];
     modelDrill = o;
     void ensureModels(o.value);
   }
@@ -262,7 +299,7 @@
   // the entry supplies the key/kind/base, the vendor id the concrete model. A
   // plain model is its own id.
   function pickModel(o: ComposerSelectOption, modelID: string) {
-    const packed = setDrill ? `${setDrill.id}@${modelID}` : modelID;
+    const packed = drillStack.length ? encodePin(drillPath, modelID) : modelID;
     onChange(`${o.value}::${packed}`);
     close();
   }
@@ -311,10 +348,12 @@
   {#if open && pos}
     <!-- Fixed, not absolute: an absolute popup is clipped by any
          overflow-auto ancestor (a Modal body, a scrolling settings pane) and
-         makes that ancestor scroll instead of painting over it. z above the
-         Modal's own layer so it is never covered by the dialog it sits in. -->
+         makes that ancestor scroll instead of painting over it. Portaled to
+         <body> so a transformed ancestor cannot re-anchor it either. z above
+         the Modal's own layer so it is never covered by the dialog it sits in. -->
     <div
       bind:this={menuEl}
+      use:portal
       style="position:fixed; top:{pos.top}px; left:{pos.left}px; width:{pos.width}px; max-height:{MAX_H}px; z-index:9999;"
       class="flex flex-col overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-xl"
     >
@@ -322,7 +361,7 @@
         {@const d = modelDrill}
         <button type="button" onclick={backFromModels} class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700">
           <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          {setDrill ? `${d.label} · ${setDrill.label}` : d.label}
+          {[d.label, ...drillStack.map((x) => x.label)].join(" · ")}
         </button>
         <div class="border-t border-white-300 dark:border-navy-600"></div>
         <!-- Filter box: worth showing once the list is long enough to scan. -->
@@ -345,18 +384,20 @@
             <!-- A live-set row is not selectable: it names a SET, so it opens
                  one level deeper instead of committing. Inside a set, rows are
                  vendor models and pack as "<entryID>@<vendorModelID>". -->
-            {@const live = !setDrill && isLiveSet(m)}
-            {@const pinned = `${d.value}::${setDrill ? `${setDrill.id}@${m.id}` : m.id}`}
+            {@const live = isLiveSet(m)}
+            {@const pinned = `${d.value}::${drillStack.length ? encodePin(drillPath, m.id) : m.id}`}
             {@const isSel = !live && (value === pinned || (value === d.value && m.default))}
             <button
               type="button"
-              onclick={() => { if (live) toggleSetDrill(m); else pickModel(d, m.id); }}
-              class="flex w-full items-start justify-between gap-3 px-3 py-1.5 text-left {isSel ? 'bg-green-500/10' : 'hover:bg-white-200 dark:hover:bg-navy-700'} text-black-900 dark:text-white-100"
+              disabled={!live && !!m.unavailable}
+              onclick={() => { if (live) pushDrill(m); else if (!m.unavailable) pickModel(d, m.id); }}
+              class="flex w-full items-start justify-between gap-3 px-3 py-1.5 text-left {isSel ? 'bg-green-500/10' : 'hover:bg-white-200 dark:hover:bg-navy-700'} {m.unavailable && !live ? 'opacity-50 cursor-not-allowed' : ''} text-black-900 dark:text-white-100"
             >
               <span class="flex flex-col min-w-0">
                 <span class="flex items-center gap-2 text-sm">
                   <span class="truncate">{m.label}</span>
-                  {#if live}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">live set</span>
+                  {#if live}{#if rawType(d.value) === "wick"}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">live set</span>{/if}
+                  {:else if m.unavailable}<span class="shrink-0 rounded-full bg-black-500/10 px-1.5 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">unavailable</span>
                   {:else if m.default}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">default</span>{/if}
                 </span>
                 {#if m.desc}<span class="text-[11px] text-black-700 dark:text-black-600 leading-snug">{m.desc}</span>{/if}
@@ -374,7 +415,7 @@
             <!-- Escape hatch: an instance whose loader yields nothing would
                  otherwise be unselectable — the drill is forced whenever a
                  loader is wired, and there is no model row to commit through. -->
-            {#if !loadingModels && !modelSearch && !setDrill}
+            {#if !loadingModels && !modelSearch && drillStack.length === 0}
               <button
                 type="button"
                 onclick={() => { onChange(d.value); close(); }}
@@ -383,6 +424,14 @@
             {/if}
           {/each}
         </div>
+        {#if drillMeta}
+          <div class="flex items-center justify-between gap-2 border-t border-white-300 dark:border-navy-600 px-3 py-1.5 text-[11px] text-black-700 dark:text-black-600" data-testid="picker-models-updated">
+            <span>{describeModelListMeta(drillMeta)}</span>
+            {#if drillMeta.canRefresh}
+              <button type="button" disabled={loadingModels} onclick={refreshDrill} class="text-green-600 dark:text-green-400 hover:underline disabled:opacity-50" data-testid="picker-models-refresh">{loadingModels ? "Refreshing…" : "Refresh"}</button>
+            {/if}
+          </div>
+        {/if}
       {:else if typeDrill}
         {@const group = groups.find((g) => g.type === typeDrill)}
         <button type="button" onclick={() => (typeDrill = "")} class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700">

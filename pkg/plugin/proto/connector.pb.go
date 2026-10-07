@@ -149,13 +149,19 @@ func (x *ExecuteRequest) GetSessionId() string {
 	return ""
 }
 
+// mask / mask_ignore_case carry the values the operation passed to c.Mask /
+// c.MaskIgnoreCase. The plugin has no encryption key, so it returns them in
+// the clear and the host turns them into wick_enc_ tokens before the result
+// leaves wick.
 type ExecuteResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ResultJson    []byte                 `protobuf:"bytes,1,opt,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"`
-	Error         *Error                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
-	Meta          map[string]string      `protobuf:"bytes,3,rep,name=meta,proto3" json:"meta,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ResultJson     []byte                 `protobuf:"bytes,1,opt,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"`
+	Error          *Error                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	Meta           map[string]string      `protobuf:"bytes,3,rep,name=meta,proto3" json:"meta,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Mask           []string               `protobuf:"bytes,4,rep,name=mask,proto3" json:"mask,omitempty"`
+	MaskIgnoreCase []string               `protobuf:"bytes,5,rep,name=mask_ignore_case,json=maskIgnoreCase,proto3" json:"mask_ignore_case,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ExecuteResponse) Reset() {
@@ -209,16 +215,33 @@ func (x *ExecuteResponse) GetMeta() map[string]string {
 	return nil
 }
 
+func (x *ExecuteResponse) GetMask() []string {
+	if x != nil {
+		return x.Mask
+	}
+	return nil
+}
+
+func (x *ExecuteResponse) GetMaskIgnoreCase() []string {
+	if x != nil {
+		return x.MaskIgnoreCase
+	}
+	return nil
+}
+
 type Chunk struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
-	Eof           bool                   `protobuf:"varint,2,opt,name=eof,proto3" json:"eof,omitempty"`
-	Error         *Error                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
-	Progress      int32                  `protobuf:"varint,4,opt,name=progress,proto3" json:"progress,omitempty"`
-	Total         int32                  `protobuf:"varint,5,opt,name=total,proto3" json:"total,omitempty"`
-	Message       string                 `protobuf:"bytes,6,opt,name=message,proto3" json:"message,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Data     []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	Eof      bool                   `protobuf:"varint,2,opt,name=eof,proto3" json:"eof,omitempty"`
+	Error    *Error                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	Progress int32                  `protobuf:"varint,4,opt,name=progress,proto3" json:"progress,omitempty"`
+	Total    int32                  `protobuf:"varint,5,opt,name=total,proto3" json:"total,omitempty"`
+	Message  string                 `protobuf:"bytes,6,opt,name=message,proto3" json:"message,omitempty"`
+	// Set on the Eof chunk only; same meaning as on ExecuteResponse.
+	Mask           []string `protobuf:"bytes,7,rep,name=mask,proto3" json:"mask,omitempty"`
+	MaskIgnoreCase []string `protobuf:"bytes,8,rep,name=mask_ignore_case,json=maskIgnoreCase,proto3" json:"mask_ignore_case,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Chunk) Reset() {
@@ -291,6 +314,20 @@ func (x *Chunk) GetMessage() string {
 		return x.Message
 	}
 	return ""
+}
+
+func (x *Chunk) GetMask() []string {
+	if x != nil {
+		return x.Mask
+	}
+	return nil
+}
+
+func (x *Chunk) GetMaskIgnoreCase() []string {
+	if x != nil {
+		return x.MaskIgnoreCase
+	}
+	return nil
 }
 
 type OpHealth struct {
@@ -740,22 +777,26 @@ const file_connector_proto_rawDesc = "" +
 	"\n" +
 	"CredsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xdd\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9b\x02\n" +
 	"\x0fExecuteResponse\x12\x1f\n" +
 	"\vresult_json\x18\x01 \x01(\fR\n" +
 	"resultJson\x12.\n" +
 	"\x05error\x18\x02 \x01(\v2\x18.wick.connector.v1.ErrorR\x05error\x12@\n" +
-	"\x04meta\x18\x03 \x03(\v2,.wick.connector.v1.ExecuteResponse.MetaEntryR\x04meta\x1a7\n" +
+	"\x04meta\x18\x03 \x03(\v2,.wick.connector.v1.ExecuteResponse.MetaEntryR\x04meta\x12\x12\n" +
+	"\x04mask\x18\x04 \x03(\tR\x04mask\x12(\n" +
+	"\x10mask_ignore_case\x18\x05 \x03(\tR\x0emaskIgnoreCase\x1a7\n" +
 	"\tMetaEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa9\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe7\x01\n" +
 	"\x05Chunk\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\x12\x10\n" +
 	"\x03eof\x18\x02 \x01(\bR\x03eof\x12.\n" +
 	"\x05error\x18\x03 \x01(\v2\x18.wick.connector.v1.ErrorR\x05error\x12\x1a\n" +
 	"\bprogress\x18\x04 \x01(\x05R\bprogress\x12\x14\n" +
 	"\x05total\x18\x05 \x01(\x05R\x05total\x12\x18\n" +
-	"\amessage\x18\x06 \x01(\tR\amessage\"D\n" +
+	"\amessage\x18\x06 \x01(\tR\amessage\x12\x12\n" +
+	"\x04mask\x18\a \x03(\tR\x04mask\x12(\n" +
+	"\x10mask_ignore_case\x18\b \x03(\tR\x0emaskIgnoreCase\"D\n" +
 	"\bOpHealth\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x0e\n" +
 	"\x02ok\x18\x02 \x01(\bR\x02ok\x12\x16\n" +

@@ -252,11 +252,68 @@ func (s *Store) Cancel(ctx context.Context, id string) error {
 	return nil
 }
 
+// CountTargeting counts the live schedules CancelTargeting would cancel,
+// for a dialog that names what is connected to a project.
+func (s *Store) CountTargeting(ctx context.Context, projectID string, sessionIDs []string) (int64, error) {
+	cond, args := targetingCond(projectID, sessionIDs)
+	if cond == "" {
+		return 0, nil
+	}
+	var n int64
+	err := s.db.WithContext(ctx).Model(&entity.ScheduledMessage{}).
+		Where("status IN ?", liveStatuses).
+		Where(cond, args...).
+		Count(&n).Error
+	return n, err
+}
+
+// targetingCond is the WHERE of "fires into the project or one of the
+// sessions"; "" when both are empty.
+func targetingCond(projectID string, sessionIDs []string) (string, []any) {
+	cond, args := "", []any{}
+	if projectID != "" {
+		cond = "project_id = ?"
+		args = append(args, projectID)
+	}
+	if len(sessionIDs) > 0 {
+		if cond != "" {
+			cond += " OR "
+		}
+		cond += "session_id IN ?"
+		args = append(args, sessionIDs)
+	}
+	return cond, args
+}
+
+// CancelTargeting cancels every live schedule that would fire into the
+// project or into one of the given sessions — what a project delete must
+// do so nothing fires into a conversation that no longer exists. A row that
+// was only REQUESTED from one of those sessions (SourceSessionID) but
+// targets elsewhere is left alone: its target is still there. Returns how
+// many rows were cancelled.
+func (s *Store) CancelTargeting(ctx context.Context, projectID string, sessionIDs []string) (int64, error) {
+	cond, args := targetingCond(projectID, sessionIDs)
+	if cond == "" {
+		return 0, nil
+	}
+	res := s.db.WithContext(ctx).Model(&entity.ScheduledMessage{}).
+		Where("status IN ?", liveStatuses).
+		Where(cond, args...).
+		Updates(map[string]any{
+			"status":     entity.ScheduledStatusCancelled,
+			"run_at":     gorm.Expr("COALESCE(last_run_at, run_at)"),
+			"updated_at": time.Now(),
+		})
+	return res.RowsAffected, res.Error
+}
+
 // SetPaused pauses or resumes a recurring schedule. On resume the caller
 // supplies the recomputed next run_at (the runner/handler figures out the
 // next fire from now). Only recurring, non-terminal rows can be toggled.
 func (s *Store) SetPaused(ctx context.Context, id string, paused bool, nextRunAt time.Time) error {
-	updates := map[string]any{"paused": paused, "updated_at": time.Now()}
+	// A pause or resume by hand is the user's call from now on: the row
+	// no longer follows its agent's disable/enable.
+	updates := map[string]any{"paused": paused, "held_by_agent": false, "updated_at": time.Now()}
 	if !paused {
 		updates["run_at"] = nextRunAt
 	}
@@ -280,13 +337,21 @@ func (s *Store) Reschedule(ctx context.Context, id string, patch SchedulePatch) 
 	if !patch.RunAt.IsZero() {
 		updates["run_at"] = patch.RunAt
 	}
+	// Interval and cron are mutually exclusive: setting one clears the
+	// other. A patch may carry both with one empty (a parsed spec does), so
+	// only a non-empty value clears its sibling — else the empty one would
+	// wipe the value just set.
 	if patch.IntervalMs != nil {
 		updates["interval_ms"] = *patch.IntervalMs
-		updates["cron"] = "" // interval and cron are mutually exclusive
+		if *patch.IntervalMs > 0 {
+			updates["cron"] = ""
+		}
 	}
 	if patch.Cron != nil {
 		updates["cron"] = *patch.Cron
-		updates["interval_ms"] = int64(0)
+		if *patch.Cron != "" {
+			updates["interval_ms"] = int64(0)
+		}
 	}
 	if patch.Message != nil {
 		updates["message"] = *patch.Message

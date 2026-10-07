@@ -17,10 +17,17 @@ import (
 // bannerEntry is non-nil when the job still has Required configs
 // empty; the ScopedSetupBanner nudges the admin to finish setup before
 // runs can succeed.
+//
+// Inside an <iframe> (ui.EmbeddedFromContext) the navbar and the setup
+// banner are dropped so the job's own title strip and Run Now button
+// sit flush in the frame — those stay, they are the page.
 templ JobPage(j *entity.Job, runs []entity.JobRun, user *entity.User, errMsg string, bannerEntry *ui.MissingEntry) {
+	{{ embedded := ui.EmbeddedFromContext(ctx) }}
 	@ui.Layout(j.Name) {
-		@ui.Navbar(user)
-		@ui.ScopedSetupBanner(bannerEntry, user != nil && user.IsAdmin())
+		if !embedded {
+			@ui.Navbar(user)
+			@ui.ScopedSetupBanner(bannerEntry, user != nil && user.IsAdmin())
+		}
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
 				<div class="flex items-center gap-3">

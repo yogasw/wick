@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { apiGetE, apiDeleteE, apiPostE } from "@wick-fe/common-api";
-import type { SessionListItem, SessionMeta, ConversationTurn, TurnEvent, TurnEventPayload } from "../types/agents.js";
+import type { SessionListItem, SessionMeta, ConversationTurn, TurnEvent, TurnEventPayload, CardState, CardPostback } from "../types/agents.js";
 
 /** owner: "me" = only the caller's sessions (plus, under ticket mode,
     sessions on tickets assigned to them); omitted = everyone's. The server
@@ -25,6 +25,7 @@ export const listSessions = (
       sessions: r.sessions ?? [],
       total: r.total ?? (r.sessions ?? []).length,
       hasMore: r.has_more === true,
+      cards: r.cards ?? {},
     })),
   );
 };
@@ -39,7 +40,7 @@ export const getConversation = (
   if (opts?.before) params.set("before", opts.before);
   const qs = params.toString();
   const url = `${base}/api/sessions/${id}/conversation${qs ? `?${qs}` : ""}`;
-  return apiGetE<{ turns: ConversationTurn[]; has_more?: boolean }>(url).pipe(
+  return apiGetE<{ turns: ConversationTurn[]; has_more?: boolean; cards?: Record<string, CardState> }>(url).pipe(
     Effect.map((r) => ({
       turns: (r.turns ?? []).map((t) => ({
         ...t,
@@ -83,3 +84,27 @@ export const getTurnTrace = (base: string, id: string, turnId: string) =>
 // thinking/<turn_id>/<event_id>.json behind this endpoint.
 export const getTurnEvent = (base: string, id: string, turnId: string, eventId: string) =>
   apiGetE<TurnEventPayload>(`${base}/sessions/${id}/turns/${turnId}/events/${eventId}`);
+
+// getTurnBlob fetches a binary a trace event stored as a blob (an image a
+// tool returned) — only when its chip is clicked. Plain fetch: the body is
+// bytes, not JSON. The server answers 404 for a session the caller cannot
+// see, so a failure here reads as "failed to load", never as data.
+export async function getTurnBlob(base: string, id: string, turnId: string, ref: string): Promise<Blob> {
+  const res = await fetch(`${base}/sessions/${id}/turns/${turnId}/blobs/${encodeURIComponent(ref)}`, { credentials: "same-origin" });
+  if (!res.ok) throw new Error(`blob ${ref}: ${res.status}`);
+  return res.blob();
+}
+
+// sendPostback records an actioncard click: the server checks the value is
+// one of the card's buttons and that the card is not locked (409 if it is).
+export const sendPostback = (base: string, id: string, body: { card_id: string; value: string }) =>
+  apiPostE<{ status: string; postback: CardPostback; text: string }>(`${base}/api/sessions/${id}/postback`, body);
+
+// decideApprovalCard settles a server-made approval_request card through the
+// same gate the approval modal uses (410 = no longer pending here).
+export const decideApprovalCard = (
+  base: string,
+  id: string,
+  approvalId: string,
+  body: { decision: "accept" | "accept_for_session" | "decline"; reason?: string },
+) => apiPostE<{ status: string; decision: string }>(`${base}/api/sessions/${id}/approvals/${encodeURIComponent(approvalId)}`, body);

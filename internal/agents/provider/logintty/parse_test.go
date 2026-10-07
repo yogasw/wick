@@ -169,3 +169,72 @@ func TestLinkParserDetectsLoginSuccess(t *testing.T) {
 		t.Fatalf("no success event in %v", evs)
 	}
 }
+
+// TestParseCodexDeviceAuthTranscript feeds the literal output of
+// `codex login --device-auth` (codex-cli 0.149.1, captured from a PTY,
+// ANSI colours and CRLFs intact) and asserts the parser lifts the
+// device link out of it. The one-time code below is from an expired
+// probe run — it is shown in the terminal, not parsed, so nothing
+// depends on its shape.
+func TestParseCodexDeviceAuthTranscript(t *testing.T) {
+	raw := "\r\nWelcome to Codex [v\x1b[90m0.149.1\x1b[0m]\r\n" +
+		"\x1b[90mOpenAI's command-line coding agent\x1b[0m\r\n\r\n" +
+		"Follow these steps to sign in with ChatGPT using device code authorization:\r\n\r\n" +
+		"1. Open this link in your browser and sign in to your account\r\n" +
+		"   \x1b[94mhttps://auth.openai.com/codex/device\x1b[0m\r\n\r\n" +
+		"2. Enter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\r\n" +
+		"   \x1b[94m28UQ-DKOHX\x1b[0m\r\n\r\n"
+
+	var p LinkParser
+	var link string
+	for _, ev := range p.Feed([]byte(raw)) {
+		if ev.Type == EventLink {
+			link = ev.Value
+		}
+	}
+	if link != "https://auth.openai.com/codex/device" {
+		t.Fatalf("link = %q, want the codex device URL", link)
+	}
+}
+
+// TestParseCodexDeviceAuthFailure: the device flow reports a rejected or
+// expired grant as "device auth failed with status <code>" — without the
+// needle the modal would sit on a stale link with no verdict.
+func TestParseCodexDeviceAuthFailure(t *testing.T) {
+	var p LinkParser
+	var got string
+	for _, ev := range p.Feed([]byte("device auth failed with status 400\r\n")) {
+		if ev.Type == EventFailure {
+			got = ev.Value
+		}
+	}
+	if got != "device auth failed with status 400" {
+		t.Fatalf("failure = %q, want the codex device-auth line", got)
+	}
+}
+
+// TestParseCodexLoginSuccess: codex prints "Successfully logged in." on
+// the happy path, already covered by the shared needles — pin it so a
+// needle edit cannot silently drop codex's confirmation.
+func TestParseCodexLoginSuccess(t *testing.T) {
+	var p LinkParser
+	ok := false
+	for _, ev := range p.Feed([]byte("Successfully logged in.\r\n")) {
+		if ev.Type == EventSuccess {
+			ok = true
+		}
+	}
+	if !ok {
+		t.Fatal("codex success line not recognized")
+	}
+}
+
+func TestLinkParserStopsAtTUIBoxBorder(t *testing.T) {
+	// opencode's `auth login` draws its prompt in a box; the border sits
+	// right after the URL with no space in between.
+	p := &LinkParser{}
+	links := linksOf(p.Feed([]byte("\u2502  Create an api key at https://opencode.ai/auth\u2502\r\n")))
+	if len(links) != 1 || links[0] != "https://opencode.ai/auth" {
+		t.Fatalf("links = %q", links)
+	}
+}

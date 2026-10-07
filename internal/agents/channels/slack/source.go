@@ -78,3 +78,22 @@ func (s *ConfigSource) Reload(ctx context.Context) error {
 	s.ch.Reload(ctx, cfg, pubURL)
 	return nil
 }
+
+// NewConfigSourceForAgent hot-reloads a Team agent's own Slack instance
+// from its connection row.
+func NewConfigSourceForAgent(store agentchannels.SlackConfigStore, ch *Channel, agentID string) *ConfigSource {
+	type perAgentLoader interface {
+		LoadSlackForAgent(string) (agentconfig.SlackChannelConfig, string, error)
+	}
+	loader, ok := store.(perAgentLoader)
+	if !ok {
+		return NewConfigSource(store, ch)
+	}
+	return &ConfigSource{store: store, ch: ch, loadFn: func() (agentconfig.SlackChannelConfig, string) {
+		cfg, pubURL, err := loader.LoadSlackForAgent(agentID)
+		if err != nil {
+			return agentconfig.SlackChannelConfig{}, ""
+		}
+		return cfg, pubURL
+	}}
+}

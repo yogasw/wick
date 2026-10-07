@@ -146,7 +146,7 @@
     {:else}
       <span class="text-sm font-semibold">Add node</span>
     {/if}
-    <button class="text-black-700 dark:text-black-500 hover:text-black-800 dark:text-white-100" onclick={close} aria-label="Close">✕</button>
+    <button class="text-black-700 dark:text-black-500 hover:text-black-800 dark:hover:text-white-100" onclick={close} aria-label="Close">✕</button>
   </header>
 
   <div class="px-3 py-2 border-b border-white-300 dark:border-navy-600">
@@ -169,7 +169,7 @@
           {#if item.kind === "drill"}
             <!-- Nested drill (e.g. connector → instance → ops). -->
             <button
-              class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
+              class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 focus-visible:outline-none focus-visible:bg-white-300 dark:focus-visible:bg-navy-600 focus-visible:ring-1 focus-visible:ring-emerald-500 transition-colors"
               onclick={() => enterDrill(item)}
             >
               <span class="min-w-0 flex flex-col">
@@ -191,7 +191,7 @@
               draggable="true"
               ondragstart={(e) => ondragstart(e, item)}
               onclick={() => tapAdd(item)}
-              class="w-full flex flex-col items-start gap-0.5 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 cursor-grab transition-colors"
+              class="w-full flex flex-col items-start gap-0.5 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 focus-visible:outline-none focus-visible:bg-white-300 dark:focus-visible:bg-navy-600 focus-visible:ring-1 focus-visible:ring-emerald-500 cursor-grab transition-colors"
               title={item.description}
             >
               <div class="w-full flex items-center justify-between gap-2">
@@ -219,7 +219,7 @@
           {#each group.items as item}
             {#if item.kind === "drill"}
               <button
-                class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:bg-navy-600 transition-colors"
+                class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 focus-visible:outline-none focus-visible:bg-white-300 dark:focus-visible:bg-navy-600 focus-visible:ring-1 focus-visible:ring-emerald-500 transition-colors"
                 onclick={() => enterDrill(item)}
               >
                 <span class="min-w-0 flex flex-col">
@@ -241,7 +241,7 @@
                 draggable="true"
                 ondragstart={(e) => ondragstart(e, item)}
                 onclick={() => tapAdd(item)}
-                class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:bg-navy-600 cursor-grab transition-colors"
+                class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 focus-visible:outline-none focus-visible:bg-white-300 dark:focus-visible:bg-navy-600 focus-visible:ring-1 focus-visible:ring-emerald-500 cursor-grab transition-colors"
                 title={item.description}
               >
                 <span class="text-sm font-medium truncate">{item.label}</span>

@@ -386,13 +386,11 @@ func (r *Router) DispatchWithDone(ctx context.Context, evt workflow.Event) []<-c
 //     multiple matching triggers still enqueues once.
 //  3. For each candidate, run the cheap router-side checks that need
 //     the raw trigger (webhook path/method, error source, target),
-//     then dedup the event, then enqueue.
+//     then collapse repeat deliveries of one physical event for THAT
+//     trigger (firstDelivery), then dedup the event, then enqueue.
 //
 // Returns the number of workflows that accepted the event.
 func (r *Router) Dispatch(ctx context.Context, evt workflow.Event) int {
-	if !r.firstDelivery(evt) {
-		return 0
-	}
 	r.mu.RLock()
 	// Key = "wfID:triggerIdx" so a workflow with multiple triggers of the
 	// same type (e.g. two webhook triggers) each get a candidate slot.
@@ -424,8 +422,16 @@ func (r *Router) Dispatch(ctx context.Context, evt workflow.Event) int {
 	r.mu.RUnlock()
 
 	matched := 0
-	for _, c := range candidates {
+	for ck, c := range candidates {
 		if !triggerPassesRouterChecks(c.wfID, c.tr, evt) {
+			continue
+		}
+		// After the router checks, not before: a trigger pinned to one
+		// instance must see the delivery from ITS bot. Collapsing first
+		// let another bot's copy claim the event, get rejected by the
+		// instance filter, and the pinned bot's copy was then dropped as
+		// a duplicate — the trigger never fired.
+		if !r.firstDelivery(fmt.Sprintf("%s#%d", c.wfID, ck.idx), evt) {
 			continue
 		}
 		if !r.passesDedup(c.wfID, evt) {
@@ -859,8 +865,9 @@ func PathMatches(tmpl, got string) bool {
 	return true
 }
 
-// sourceDedup collapses repeat deliveries of ONE physical upstream event.
-// Process-wide and always on — distinct from the per-trigger Dedup, which
+// sourceDedup collapses repeat deliveries of ONE physical upstream event
+// for one trigger (see firstDelivery). Process-wide and always on —
+// distinct from the per-trigger Dedup, which
 // is an opt-in (DedupTTLSec) "don't re-run for this event id" rule.
 //
 // 5 minutes covers both cases this exists for: N channel instances
@@ -868,8 +875,9 @@ func PathMatches(tmpl, got string) bool {
 // webhook retry minutes later.
 var sourceDedup = NewDedup(4096, 5*time.Minute)
 
-// firstDelivery reports whether this is the first time the router has
-// seen a given physical event, and records it.
+// firstDelivery reports whether this is the first time the trigger
+// identified by scope ("wfID#triggerIdx") has accepted a given physical
+// event, and records it.
 //
 // One process runs one channel instance PER OWNING USER (e.g. several
 // Slack bots), and a channel message is delivered to EVERY app that is a
@@ -878,18 +886,24 @@ var sourceDedup = NewDedup(4096, 5*time.Minute)
 // workflow once per bot that happens to sit in the channel is wrong: the
 // user performed one action.
 //
+// Scoped per trigger rather than per event: the caller asks only once a
+// trigger has passed its router checks, so a delivery one trigger rejects
+// (another bot's copy, for a trigger pinned to one instance) does not
+// use up the event for it.
+//
 // Events with no event_key (cron, manual, webhook, channels that don't
 // set one) are always let through — this must never become an accidental
 // filter on event classes that have no duplicate problem.
-func (r *Router) firstDelivery(evt workflow.Event) bool {
+func (r *Router) firstDelivery(scope string, evt workflow.Event) bool {
 	key, _ := evt.Payload["event_key"].(string)
 	if key == "" {
 		return true
 	}
-	full := evt.Type + "|" + evt.Channel + "|" + evt.Subtype + "|" + key
+	full := scope + "|" + evt.Type + "|" + evt.Channel + "|" + evt.Subtype + "|" + key
 	if sourceDedup.Seen(full) {
-		log.Debug().Str("component", "wf").Str("wf_event", evt.Subtype).
-			Str("channel", evt.Channel).Str("event_key", key).
+		log.Debug().Str("component", "wf").Str("wf_scope", scope).
+			Str("wf_event", evt.Subtype).Str("channel", evt.Channel).
+			Str("event_key", key).
 			Msg("dispatch: duplicate delivery of one event — skipped")
 		return false
 	}

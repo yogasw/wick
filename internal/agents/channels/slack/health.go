@@ -125,7 +125,7 @@ func (s *Channel) probeTransport(cfg agentconfig.SlackChannelConfig) agentchanne
 			OK:     true,
 			Detail: fmt.Sprintf("subscribed (connected %s ago)", age),
 		}
-	case "connecting":
+	case "starting", "connecting":
 		return agentchannels.HealthCheck{
 			Name:   "socket.subscribe",
 			OK:     false,

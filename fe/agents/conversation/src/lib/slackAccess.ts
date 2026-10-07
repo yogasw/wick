@@ -1,0 +1,140 @@
+import { apiGetE, apiPatchE } from "@wick-fe/common-api";
+
+/* Connections › Slack › settings groups (api_team_slack_access.go): the
+   Access Control, Agent Behaviour, Reaction Auto-Reply and Approval Gates
+   groups of the Channels page, rendered from the same config tags and saved
+   one key at a time on the agent's own Slack connection. */
+export type SlackSettingField = {
+  key: string;
+  value: string;
+  type: string;
+  options?: string;
+  desc?: string;
+  group: string;
+  group_desc?: string;
+  visible_when?: string;
+  /** Shown but never saved from Team (Connection, Routing); note says why. */
+  readonly?: boolean;
+  note?: string;
+};
+/** owner_slack_* is the agent owner's Slack account, found by email only. */
+export type AgentSlackSettings = { fields: SlackSettingField[]; owner_slack_id?: string; owner_slack_name?: string; owner_slack_handle?: string };
+export type PickerItem = { id: string; name: string };
+
+const enc = encodeURIComponent;
+export const getAgentSlackSettings = (base: string, id: string) =>
+  apiGetE<AgentSlackSettings>(`${base}/api/team/agents/${enc(id)}/slack/settings`);
+export const setAgentSlackSetting = (base: string, id: string, key: string, value: string) =>
+  apiPatchE<AgentSlackSettings>(`${base}/api/team/agents/${enc(id)}/slack/settings`, { key, value });
+export const lookupAgentSlack = (base: string, id: string, source: string, q: string) =>
+  apiGetE<{ items: PickerItem[] }>(`${base}/api/team/agents/${enc(id)}/slack/lookup?source=${enc(source)}&q=${enc(q)}`);
+
+/** Groups in first-seen order, each with its description. */
+export function settingGroups(fields: SlackSettingField[]): { title: string; desc: string; fields: SlackSettingField[] }[] {
+  const out: { title: string; desc: string; fields: SlackSettingField[] }[] = [];
+  for (const f of fields) {
+    let g = out.find((x) => x.title === f.group);
+    if (!g) out.push((g = { title: f.group, desc: f.group_desc ?? "", fields: [] }));
+    g.fields.push(f);
+  }
+  return out;
+}
+
+/** Picker values are a JSON list of {id,name}; anything else reads as empty. */
+export function pickerItems(raw: string | undefined): PickerItem[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x) => x && typeof x.id === "string").map((x) => ({ id: x.id, name: x.name || x.id })) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** visible_when "field:a|b" against the current values. */
+export function isVisible(f: SlackSettingField, values: Record<string, string>): boolean {
+  if (!f.visible_when) return true;
+  const [k, want] = f.visible_when.split(":");
+  return (want ?? "").split("|").includes(values[k] ?? "");
+}
+
+/** Friendlier labels for the access dropdowns; other options show as-is. */
+export const OPTION_LABEL: Record<string, Record<string, string>> = {
+  users_mode: { all: "Everyone", whitelist: "Specific people" },
+  groups_mode: { all: "Any group", whitelist: "Specific groups" },
+  channels_mode: { all: "Every channel the bot is in", whitelist: "Specific channels" },
+  bots_mode: { none: "Ignore bots", whitelist: "Specific bots", all: "Any bot" },
+};
+
+export type PeopleChoice = "all" | "me" | "custom";
+
+/** Which of the three "People" choices the stored values amount to. */
+export function peopleChoice(values: Record<string, string>, ownerID?: string): PeopleChoice {
+  const users = values.users_mode === "whitelist";
+  const groups = values.groups_mode === "whitelist";
+  if (!users && !groups) return "all";
+  const ids = pickerItems(values.allowed_users).map((i) => i.id);
+  if (users && !groups && ownerID && ids.length === 1 && ids[0] === ownerID) return "me";
+  return "custom";
+}
+
+/** The values a People choice writes, in save order. */
+export function peopleValues(choice: PeopleChoice, values: Record<string, string>, owner?: PickerItem): [string, string][] {
+  switch (choice) {
+    case "all":
+      return [["users_mode", "all"], ["groups_mode", "all"]];
+    case "me":
+      return owner ? [["allowed_users", JSON.stringify([owner])], ["users_mode", "whitelist"], ["groups_mode", "all"]] : [];
+    default:
+      return values.users_mode === "whitelist" || values.groups_mode === "whitelist" ? [] : [["users_mode", "whitelist"]];
+  }
+}
+
+/** Open = nobody is filtered: every person in the workspace may use it. */
+export const isOpenToWorkspace = (values: Record<string, string>) => peopleChoice(values) === "all";
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+/** Header line of the Slack card, people · bots · channels, e.g.
+    "Access: only Yoga · 1 group · 1 bot · 2 channels" or
+    "Access: 1 user · 1 group · 1 bot · all channels". */
+export function accessSummary(values: Record<string, string>, ownerID?: string, ownerName?: string): string {
+  const parts: string[] = [];
+  const choice = peopleChoice(values, ownerID);
+  if (choice === "all") parts.push("everyone");
+  else if (choice === "me") parts.push(`only ${ownerName || "you"}`);
+  else {
+    const users = values.users_mode === "whitelist" ? pickerItems(values.allowed_users) : [];
+    const groups = values.groups_mode === "whitelist" ? pickerItems(values.allowed_groups).length : 0;
+    if (users.length + groups === 0) parts.push("nobody yet");
+    else {
+      if (users.length === 1 && ownerID && users[0].id === ownerID) parts.push(`only ${ownerName || "you"}`);
+      else if (users.length) parts.push(plural(users.length, "user"));
+      if (groups) parts.push(plural(groups, "group"));
+    }
+  }
+  if (values.bots_mode === "all") parts.push("any bot");
+  else if (values.bots_mode === "whitelist") parts.push(plural(pickerItems(values.allowed_bots).length, "bot"));
+  parts.push(values.channels_mode === "whitelist" ? plural(pickerItems(values.allowed_channels).length, "channel") : "all channels");
+  return "Access: " + parts.join(" · ");
+}
+
+/** Lists kept under "Specific people & groups" while Everyone / Only me is
+    chosen, e.g. ["Groups: 1 chosen"], so they don't look lost. Only me's
+    own entry in allowed_users is not counted. */
+export function hiddenPeople(values: Record<string, string>, choice: PeopleChoice, ownerID?: string): string[] {
+  if (choice === "custom") return [];
+  const out: string[] = [];
+  const users = pickerItems(values.allowed_users).filter((u) => !(choice === "me" && u.id === ownerID)).length;
+  const groups = pickerItems(values.allowed_groups).length;
+  if (users) out.push(`Users: ${users} chosen`);
+  if (groups) out.push(`Groups: ${groups} chosen`);
+  return out;
+}
+
+/** Which Access Control sub-section a key belongs to. */
+export function accessDimension(key: string): "people" | "bots" | "channels" {
+  if (key.includes("bots")) return "bots";
+  if (key.includes("channels")) return "channels";
+  return "people";
+}

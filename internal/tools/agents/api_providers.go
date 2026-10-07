@@ -49,13 +49,47 @@ type ProviderInstanceDTO struct {
 	Disabled      bool   `json:"disabled"`
 	MaxConcurrent int    `json:"max_concurrent"`
 	SendMode      string `json:"send_mode"`
+	// IdleCompact is the instance's compact-when-idle policy, nil when it
+	// is off, so the list can show it without opening the detail page.
+	IdleCompact *IdleCompactDTO `json:"idle_compact,omitempty"`
+}
+
+// IdleCompactDTO is an enabled idle-compact policy with defaults filled in.
+type IdleCompactDTO struct {
+	Seconds int    `json:"seconds"`
+	Trigger string `json:"trigger"`
+	// Threshold is a percentage or a token count, by Trigger.
+	Threshold int `json:"threshold"`
+	// Scope is skip, whitelist or all; Match its pattern lines.
+	Scope string   `json:"scope"`
+	Match []string `json:"match,omitempty"`
+}
+
+// idleCompactDTO projects ins's idle-compact policy, nil when it is off.
+func idleCompactDTO(ins provider.Instance) *IdleCompactDTO {
+	pol := provider.IdleCompactPolicyOf(ins)
+	if !pol.Enabled {
+		return nil
+	}
+	raw := ins.IdleCompactMatch
+	if pol.Scope == provider.IdleCompactScopeSkip && strings.TrimSpace(raw) == "" {
+		raw = provider.DefaultIdleCompactSkip
+	}
+	var match []string
+	if pol.Scope != provider.IdleCompactScopeAll {
+		match = provider.IdleCompactMatchLines(raw)
+	}
+	return &IdleCompactDTO{Seconds: int(pol.Idle / time.Second), Trigger: pol.Trigger, Threshold: pol.Threshold, Scope: pol.Scope, Match: match}
 }
 
 // ProviderStatusDTO is one provider card's data: instance config + live status.
 type ProviderStatusDTO struct {
-	Instance    ProviderInstanceDTO          `json:"instance"`
-	Path        string                       `json:"path"`
-	PathFound   bool                         `json:"path_found"`
+	Instance  ProviderInstanceDTO `json:"instance"`
+	Path      string              `json:"path"`
+	PathFound bool                `json:"path_found"`
+	// Source is where Path came from: "managed" (wick-managed version),
+	// "registry" (manual Binary path), "path", "scan", "miss".
+	Source      string                       `json:"source,omitempty"`
 	Version     string                       `json:"version"`
 	VersionErr  string                       `json:"version_err,omitempty"`
 	Probing     bool                         `json:"probing"`
@@ -318,19 +352,20 @@ type ProviderDetailResponse struct {
 	// the admin who owns the credential and not for a viewer.
 	SecretsHidden bool                         `json:"secrets_hidden,omitempty"`
 	Instance      ProviderInstanceDTO          `json:"instance"`
-	Path         string                       `json:"path"`
-	PathFound    bool                         `json:"path_found"`
-	Version      string                       `json:"version"`
-	VersionErr   string                       `json:"version_err,omitempty"`
-	Probing      bool                         `json:"probing"`
-	Hooks        map[string]HookCapabilityDTO `json:"hooks"`
-	HookEnabled  map[string]bool              `json:"hook_enabled"`
-	Gate         GateStatusDTO                `json:"gate"`
-	GlobalMax    int                          `json:"global_max"`
-	ActiveCount  int                          `json:"active_count"`
-	ActivePIDs   []LiveProcessDTO             `json:"active_pids"`
-	ConfigFields []ConfigFieldDTO             `json:"config_fields"`
-	AIRouter     AIRouterDetailDTO            `json:"airouter"`
+	Path          string                       `json:"path"`
+	PathFound     bool                         `json:"path_found"`
+	Source        string                       `json:"source,omitempty"`
+	Version       string                       `json:"version"`
+	VersionErr    string                       `json:"version_err,omitempty"`
+	Probing       bool                         `json:"probing"`
+	Hooks         map[string]HookCapabilityDTO `json:"hooks"`
+	HookEnabled   map[string]bool              `json:"hook_enabled"`
+	Gate          GateStatusDTO                `json:"gate"`
+	GlobalMax     int                          `json:"global_max"`
+	ActiveCount   int                          `json:"active_count"`
+	ActivePIDs    []LiveProcessDTO             `json:"active_pids"`
+	ConfigFields  []ConfigFieldDTO             `json:"config_fields"`
+	AIRouter      AIRouterDetailDTO            `json:"airouter"`
 	// DefaultModels are the per-type catalog seed models (id + description),
 	// shown in the model-selection card so the operator sees what's used when
 	// the curated list is empty, and can Load them as an editable starting
@@ -446,9 +481,11 @@ func providerStatusDTO(st provider.Status, caps map[string]view.ProviderCapVM) P
 			Disabled:      st.Instance.Disabled,
 			MaxConcurrent: st.Instance.MaxConcurrent,
 			SendMode:      st.Instance.SendMode,
+			IdleCompact:   idleCompactDTO(st.Instance),
 		},
 		Path:        st.Path,
 		PathFound:   st.PathFound,
+		Source:      st.Source,
 		Version:     st.Version,
 		VersionErr:  st.VersionErr,
 		Probing:     st.Probing,
@@ -581,6 +618,12 @@ func apiProvidersList(c *tool.Ctx) {
 
 	if globalSpawnLog != nil {
 		_ = globalSpawnLog.Prune(provider.MaxSpawnLogs)
+		// A spawn whose wick died with it never got an exit written, so it
+		// reads as running and the Stop button has nothing to signal. Close
+		// those out here too, not only at boot: the row a person is staring
+		// at should stop lying on the next refresh rather than on the next
+		// restart.
+		_, _ = globalSpawnLog.ReconcileOrphans(nil)
 	}
 
 	caps := providerCapacities()
@@ -701,9 +744,11 @@ func apiProviderDetail(c *tool.Ctx) {
 			Disabled:      st.Instance.Disabled,
 			MaxConcurrent: st.Instance.MaxConcurrent,
 			SendMode:      st.Instance.SendMode,
+			IdleCompact:   idleCompactDTO(st.Instance),
 		},
 		Path:          st.Path,
 		PathFound:     st.PathFound,
+		Source:        st.Source,
 		Version:       st.Version,
 		VersionErr:    st.VersionErr,
 		Probing:       st.Probing,

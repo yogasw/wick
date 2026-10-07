@@ -35,6 +35,16 @@ type processGroupRow struct {
 	// cannot: 2.1 GB means one thing on a 4 GB box and another on 64.
 	PctOfMachineMem float64 `json:"pct_of_machine_mem"`
 
+	// Users are the distinct wick accounts whose spawns make up this
+	// group, display names, sorted. Empty for a group wick did not start
+	// (every process on the box is listed here, not just agents).
+	//
+	// A list rather than one name because the rows are grouped by
+	// executable: "claude x 3" is routinely three different people, and
+	// collapsing that to the first one would put somebody's name on
+	// somebody else's memory.
+	Users []string `json:"users,omitempty"`
+
 	// Members are the individual processes, heaviest first, so the UI can
 	// expand a group without a second request.
 	Members []topProcessRow `json:"members"`
@@ -101,6 +111,7 @@ func processesHandler(c *tool.Ctx) {
 	topRatesMu.Unlock()
 
 	machineMem, _ := sysmem.Total()
+	owners := spawnOwners(procs)
 	groups := memreport.GroupBy(rateList, machineMem)
 
 	// Search before ranking, so a filtered view is ranked among its own
@@ -109,7 +120,7 @@ func processesHandler(c *tool.Ctx) {
 		needle := strings.ToLower(q)
 		filtered := groups[:0:0]
 		for _, g := range groups {
-			if groupMatches(g, needle) {
+			if groupMatches(g, needle, owners) {
 				filtered = append(filtered, g)
 			}
 		}
@@ -117,17 +128,24 @@ func processesHandler(c *tool.Ctx) {
 	}
 
 	key := memreport.GroupByMem
+	byUser := false
 	switch c.Query("sort") {
 	case "cpu":
 		key = memreport.GroupByCPU
 	case "io":
 		key = memreport.GroupByIO
+	case "user":
+		byUser = true
 	}
 	// 0 = no cap: the explorer pages through everything rather than
 	// showing a top-N, which is the whole difference from the dashboard.
 	// Sorting without the zero-tail drop, because a search for an idle
 	// process should still find it.
-	sortGroups(groups, key)
+	if byUser {
+		sortGroupsByUser(groups, owners)
+	} else {
+		sortGroups(groups, key)
+	}
 
 	perPage := defaultPerPage
 	if n, err := strconv.Atoi(c.Query("per_page")); err == nil && n > 0 {
@@ -162,7 +180,7 @@ func processesHandler(c *tool.Ctx) {
 		Pages:           pages,
 		MachineMemBytes: machineMem,
 		CPUCores:        runtime.NumCPU(),
-		Groups:          toGroupRows(groups[start:end]),
+		Groups:          toGroupRows(groups[start:end], owners),
 		SelfPID:         os.Getpid(),
 	})
 }
@@ -177,7 +195,7 @@ func processesHandler(c *tool.Ctx) {
 //
 // needle must already be lower-cased by the caller, so the comparison is
 // not redone per member.
-func groupMatches(g memreport.ProcGroup, needle string) bool {
+func groupMatches(g memreport.ProcGroup, needle string, owners map[int]string) bool {
 	if strings.Contains(strings.ToLower(g.Name), needle) {
 		return true
 	}
@@ -185,8 +203,61 @@ func groupMatches(g memreport.ProcGroup, needle string) bool {
 		if m.Cmdline != "" && strings.Contains(strings.ToLower(m.Cmdline), needle) {
 			return true
 		}
+		// Typing a person's name is the fastest way to "what is MINE
+		// doing" — the reason the column exists at all.
+		if u := owners[m.PID]; u != "" && strings.Contains(strings.ToLower(u), needle) {
+			return true
+		}
 	}
 	return false
+}
+
+// sortGroupsByUser ranks by owner name, A-Z, with unattributed groups last
+// and memory breaking ties inside one person's rows.
+//
+// Unattributed last rather than first because sorting by user is asking
+// "who is running what", and the processes nobody here started are the
+// least interesting answer to that — they are also the majority of the
+// list on any real machine.
+func sortGroupsByUser(groups []memreport.ProcGroup, owners map[int]string) {
+	primary := make(map[string]string, len(groups))
+	for _, g := range groups {
+		if us := groupUsers(g, owners); len(us) > 0 {
+			primary[g.Name] = us[0]
+		}
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		a, b := primary[groups[i].Name], primary[groups[j].Name]
+		if (a == "") != (b == "") {
+			return a != "" // named before unnamed
+		}
+		if a != b {
+			return a < b
+		}
+		if groups[i].RSSBytes != groups[j].RSSBytes {
+			return groups[i].RSSBytes > groups[j].RSSBytes
+		}
+		return groups[i].Name < groups[j].Name
+	})
+}
+
+// groupUsers is the distinct owners of a group's processes, sorted.
+func groupUsers(g memreport.ProcGroup, owners map[int]string) []string {
+	if len(owners) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range g.Members {
+		u := owners[m.PID]
+		if u == "" || seen[u] {
+			continue
+		}
+		seen[u] = true
+		out = append(out, u)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // sortGroups ranks in place, ties on name so paging is stable — a row
@@ -201,7 +272,7 @@ func sortGroups(groups []memreport.ProcGroup, key func(memreport.ProcGroup) floa
 	})
 }
 
-func toGroupRows(in []memreport.ProcGroup) []processGroupRow {
+func toGroupRows(in []memreport.ProcGroup, owners map[int]string) []processGroupRow {
 	out := make([]processGroupRow, 0, len(in))
 	for _, g := range in {
 		row := processGroupRow{
@@ -212,10 +283,11 @@ func toGroupRows(in []memreport.ProcGroup) []processGroupRow {
 			IOReadBps:       g.IOReadBps,
 			IOWriteBps:      g.IOWriteBps,
 			PctOfMachineMem: g.PctOfMachineMem,
+			Users:           groupUsers(g, owners),
 		}
 		// Cap the expandable members: a browser with 40 renderers would
 		// otherwise carry 40 rows per group across the whole page.
-		row.Members = toTopRows(capMembers(g.Members, maxProcessRows))
+		row.Members = toTopRows(capMembers(g.Members, maxProcessRows), owners)
 		out = append(out, row)
 	}
 	return out

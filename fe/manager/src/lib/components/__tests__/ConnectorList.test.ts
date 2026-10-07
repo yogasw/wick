@@ -666,3 +666,53 @@ describe("ConnectorList custom MCP connector", () => {
     await waitFor(() => expect(api.resyncMcpTools).toHaveBeenCalledWith("n8n_new", "row-a"));
   });
 });
+
+describe("ConnectorList per-user (SSO) MCP instances", () => {
+  function perUserRow(over: Record<string, unknown> = {}) {
+    return {
+      id: "row-a",
+      label: "Helpdesk",
+      disabled: false,
+      status: "ready",
+      rate_limit_rpm: 0,
+      tags: [],
+      enable_sso: true,
+      multi_account: true,
+      oauth: { display_name: "Helpdesk", start_url: "/manager/connectors/helpdesk/oauth/start?connector_id=row-a" },
+      accounts: [],
+      mcp_auth: { connected: false, account: "", start_url: "", per_user: true, account_count: 2, mine_connected: false, connect_mine_url: "/manager/connectors/helpdesk/oauth/start?connector_id=row-a" },
+      ...over,
+    };
+  }
+
+  it("shows the neutral account count and a Connect my account button, never Not connected", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ custom: true, mcp: true, rows: [perUserRow()] }));
+    render(ConnectorList, { connectorKey: "helpdesk" });
+    await screen.findByText("Helpdesk");
+    expect(screen.getByText(/Per-user login · 2 accounts/)).toBeTruthy();
+    // Styled like the instance Connect button (primary), not bare text.
+    expect(screen.getByRole("button", { name: "Connect my account" }).className).toContain("bg-green-500");
+    expect(screen.queryByText("Not connected")).toBeNull();
+    expect(screen.queryByText(/Auth failed/)).toBeNull();
+  });
+
+  it("shows You: connected instead of the button once the viewer connected", async () => {
+    const row = perUserRow({
+      mcp_auth: { connected: true, account: "me", start_url: "", per_user: true, account_count: 1, mine_connected: true, connect_mine_url: "" },
+    });
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ custom: true, mcp: true, rows: [row] }));
+    render(ConnectorList, { connectorKey: "helpdesk" });
+    await screen.findByText("Helpdesk");
+    expect(screen.getByText(/Per-user login · 1 account$/)).toBeTruthy();
+    expect(screen.getByText("You: connected")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Connect my account" })).toBeNull();
+  });
+
+  it("Connect my account runs the SSO popup against the instance start_url", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ custom: true, mcp: true, rows: [perUserRow()] }));
+    vi.mocked(oauth.startConnectorOAuth).mockReturnValue({ promise: new Promise(() => {}), cancel: vi.fn() } as never);
+    render(ConnectorList, { connectorKey: "helpdesk" });
+    await fireEvent.click(await screen.findByRole("button", { name: "Connect my account" }));
+    expect(oauth.startConnectorOAuth).toHaveBeenCalledWith("/manager/connectors/helpdesk/oauth/start?connector_id=row-a");
+  });
+});

@@ -112,7 +112,7 @@ func (r *Repo) LoadWorkflow(id string) (wf.Workflow, error) {
 	if body == "" {
 		return wf.Workflow{}, errors.New("workflow has no body")
 	}
-	return parse.Parse(id, []byte(body))
+	return parseOwned(row, body)
 }
 
 // LoadDraft returns the parsed draft when one exists, otherwise the
@@ -129,12 +129,35 @@ func (r *Repo) LoadDraft(id string) (wf.Workflow, error) {
 	if body == "" {
 		return wf.Workflow{}, errors.New("workflow has no body")
 	}
-	return parse.Parse(id, []byte(body))
+	return parseOwned(row, body)
+}
+
+// parseOwned parses a stored body and reports the row's created_by as its
+// owner. The column is the source of truth: the copy serialised into the
+// body used to be restamped with whoever last saved the canvas, so bodies
+// written before that was fixed may still name an editor. Reading the
+// column here makes those drifted rows come out right without a migration.
+// An empty column (legacy rows, importer) falls back to the body.
+func parseOwned(row entity.Workflow, body string) (wf.Workflow, error) {
+	w, err := parse.Parse(row.ID, []byte(body))
+	if err != nil {
+		return w, err
+	}
+	if row.CreatedBy != "" {
+		w.CreatedBy = row.CreatedBy
+	}
+	return w, nil
 }
 
 // SaveDraft persists the workflow as the active draft and appends a
 // new draft snapshot to workflow_versions. Returns the snapshot id so
 // the caller can surface "saved as v42" in the UI.
+//
+// createdBy is the EDITOR doing the save: it is who the pinned-session
+// check judges and who the snapshot credits. It never changes the owner —
+// the row's created_by is kept, and written into the body too so the two
+// cannot drift. Only a row with no owner yet takes one, from the body or
+// else the editor. Handing a workflow on is SetOwner's job alone.
 //
 // Side effect: enforces DraftRetention by deleting the oldest excess
 // draft rows for this workflow. Published rows are never pruned.
@@ -142,13 +165,9 @@ func (r *Repo) SaveDraft(id string, w wf.Workflow, createdBy, message string) (u
 	if err := r.checkPinnedSessions(w, createdBy); err != nil {
 		return 0, err
 	}
-	body, err := parse.Marshal(w)
-	if err != nil {
-		return 0, err
-	}
 	now := time.Now()
 	var version uint
-	err = r.db.Transaction(func(tx *gorm.DB) error {
+	err := r.db.Transaction(func(tx *gorm.DB) error {
 		// Update only the draft-relevant columns so BodyPublished is
 		// preserved across edits. Insert when the row doesn't exist
 		// yet (covers paths that skip Create — e.g. importer + tests).
@@ -158,6 +177,17 @@ func (r *Repo) SaveDraft(id string, w wf.Workflow, createdBy, message string) (u
 				return err
 			}
 			existing = entity.Workflow{ID: id, CreatedAt: now}
+		}
+		if existing.CreatedBy == "" {
+			existing.CreatedBy = w.CreatedBy
+		}
+		if existing.CreatedBy == "" {
+			existing.CreatedBy = createdBy
+		}
+		w.CreatedBy = existing.CreatedBy
+		body, err := parse.Marshal(w)
+		if err != nil {
+			return err
 		}
 		existing.Name = w.Name
 		existing.Enabled = w.Enabled
@@ -221,6 +251,11 @@ func (r *Repo) Publish(id, createdBy, message string) (uint, error) {
 		body := row.BodyDraft
 		if w, perr := parse.Parse(id, []byte(row.BodyDraft)); perr == nil {
 			w.Version = newVersion
+			// A draft saved before owners were kept may still name the
+			// editor; the published copy takes the row's owner instead.
+			if row.CreatedBy != "" {
+				w.CreatedBy = row.CreatedBy
+			}
 			if b, merr := parse.Marshal(w); merr == nil {
 				body = string(b)
 			}

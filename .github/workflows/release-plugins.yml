@@ -44,7 +44,7 @@ on:
         required: false
         default: all
       kind:
-        description: 'connector | tool | job (ignored when name is "all")'
+        description: 'connector | tool | job | service (ignored when name is "all")'
         required: false
         default: connector
       force:
@@ -109,7 +109,7 @@ jobs:
           # include already-released plugins so their assets get re-built.
           add_plugins() {
             tags=$(git ls-remote --tags origin)
-            for kind in connector tool job; do
+            for kind in connector tool job service; do
               [ -d "$kind" ] || continue
               for d in "$kind"/*/; do
                 n=$(basename "$d")
@@ -342,6 +342,10 @@ jobs:
           else
             wick plugin build --kind "${{ matrix.kind }}" "${{ matrix.name }}" --target "$TARGETS"
           fi
+          # Per-release plugins.json (relative urls + zip_sha256) — same step as
+          # the reusable plugin-release.yml, so a GitHub source pointed at this
+          # repo resolves the release without the catalog.
+          wick plugin index --dir bin --key "${{ matrix.name }}" --out bin/plugins.json
 
       # On the normal path this CREATES the "<name>/v<ver>" release. On a forced
       # re-release the tag already exists, so softprops UPDATES that release
@@ -353,7 +357,9 @@ jobs:
         with:
           tag_name: ${{ matrix.name }}/v${{ steps.ver.outputs.v }}
           name: ${{ matrix.name }} v${{ steps.ver.outputs.v }}
-          files: plugins/bin/${{ matrix.name }}-*.zip
+          files: |
+            plugins/bin/${{ matrix.name }}-*.zip
+            plugins/bin/plugins.json
           fail_on_unmatched_files: true
           # Plugins share this repo's Releases with the core wick binary. Without
           # this, the most recent release (often a plugin) steals the "Latest"
@@ -367,7 +373,7 @@ jobs:
 
   update-catalog:
     name: Regenerate plugins.json
-    needs: build
+    needs: [detect, build]
     if: needs.detect.outputs.any == 'true'
     runs-on: ubuntu-latest
     steps:

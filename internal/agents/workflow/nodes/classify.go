@@ -109,6 +109,11 @@ func (e *ClassifyExecutor) Execute(ctx context.Context, n workflow.Node, rc *wor
 	if err != nil {
 		return workflow.NodeOutput{}, err
 	}
+	// classify always runs the registry-resolved instance (one-shot call,
+	// no pool session), so the default it falls back to is checked too.
+	if err := e.Providers.CheckAccess(ctx, workflowOwner(rc), prov); err != nil {
+		return workflow.NodeOutput{}, err
+	}
 	prompt := n.Prompt
 	systemPrompt := classifySystemPrompt(n.OutputCases, false)
 	maxRetry := n.RetryOnMismatch

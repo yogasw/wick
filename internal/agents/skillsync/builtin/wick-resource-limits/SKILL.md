@@ -1,6 +1,6 @@
 ---
 name: wick-resource-limits
-description: Use when the user asks about agent memory or CPU limits, an agent being killed or OOM, the Resources page, usage history, disk space, why a spawn is queued, or how to cap what an agent may consume. Covers the three guard modes and what each actually does, which platform enforces what, how to read the four separate measurements, and the rules for suggesting limits safely.
+description: Use when the user asks about agent memory or CPU limits, an agent or build being killed, paused or OOM, the Resource Guard watchdog, the Resources page, usage history, disk space, why a spawn is queued, or how to cap what an agent may consume. Covers the three guard modes and what each actually does, which platform enforces what, how to read the four separate measurements, and the rules for suggesting limits safely.
 ---
 
 # Agent resource limits
@@ -11,6 +11,8 @@ Two things follow from that, and they explain most questions about this subsyste
 
 - **Enforcement needs cgroups, so it is Linux-only.** Measurement, reporting, and crash recovery work everywhere.
 - **A killed agent is killed by the kernel.** Wick's job is to report it accurately, not to prevent it after the fact.
+
+The one exception is the **Resource Guard** watchdog (Linux): a 1-second loop over the whole host that stops agent work when CPU or memory nears a hang, before the kernel acts at the cliff edge — on a small host without swap the kernel may never act and the machine just freezes. See "The fast watchdog" below.
 
 ## The three modes
 
@@ -51,7 +53,7 @@ A container without systemd still enforces memory: there is a raw-cgroupfs path.
 
 ## The config knobs
 
-Under **Memory Guard** and **Usage History** in the agents config:
+Under **Resource Guard** (formerly labelled Memory Guard — the keys did not change) and **Usage History** in the agents config:
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -63,9 +65,14 @@ Under **Memory Guard** and **Usage History** in the agents config:
 | `min_free_memory_mb` | derived | queue a spawn when free RAM is below this; `0` = off |
 | `protect_wick_from_oom` | `true` | make agents die before wick itself (enforce only) |
 | `agents_cpu_weight` | `50` | relative CPU share vs the rest of the machine |
-| `agents_cpu_quota_pct` | `0` (off) | hard CPU cap |
+| `agents_cpu_quota_pct` | `0` (off) | hard CPU cap, % of ONE core (140 on 2 cores = 70% of the machine) |
 | `agents_tasks_max` | `512` | process-count cap — the fork-bomb guard |
 | `agents_io_weight` | `0` (off) | relative block-IO share |
+| `resource_guard_interval_ms` | `1000` | watchdog sampling interval |
+| `resource_guard_exhaust_horizon_sec` | `20` | act when free memory is projected to run out within this |
+| `resource_guard_safe_pct` | `80` | stop acting once host CPU and memory are both below this |
+| `resource_guard_cpu_psi_max` | `60` | CPU pressure (some avg10, %) that, with a fully busy CPU, means near a hang |
+| `resource_guard_action` | `kill` | `off` / `log` / `pause` / `kill` — how far the watchdog may go in enforce |
 | `resource_history_enabled` | `true` | record usage samples |
 | `resource_sample_interval_sec` | `15` | seconds between samples |
 | `resource_retention_minutes` | `360` | how long samples are kept |
@@ -73,9 +80,43 @@ Under **Memory Guard** and **Usage History** in the agents config:
 
 Defaults for the derived values come from the machine's own size, so they are sane without tuning.
 
+CPU weight, CPU quota and tasks max **apply live**: change them in the UI and the watchdog writes them onto the running agents.slice within a second (and into the slice unit, so a reload keeps them). No restart and no new spawn needed — but only in `enforce` mode.
+
 `agents_tasks_max` deserves a mention because it catches something no memory knob can: thousands of tiny processes cripple the scheduler while staying comfortably under every memory ceiling.
 
 A per-instance `MemoryMaxMB` overrides the global per-agent value when set. Note it does **not** take the smaller of the two — a memory ceiling is per-process, not a share of a pool, so an explicit per-instance value wins outright.
+
+## The fast watchdog (Resource Guard)
+
+A core wick feature, not a script: it covers **every agent wick spawns** — sessions, sub-agents, Team agents, workflow agent nodes — and everything they start, including `systemd-run --user` units (`run-*`), which land in app.slice outside every agents.slice limit. It never acts on the agent CLI itself (claude, codex, …) or on wick.
+
+One rule: **when the host nears a hang, stop agent child processes one at a time until host CPU AND memory are both under the safe line** (`resource_guard_safe_pct`, default 80%). Measured on the whole host, not just agents.slice — a build that escaped the slice still fills the machine.
+
+**Near a hang** means any of:
+- memory ≥ 90% used, under `min_free_memory_mb`, or projected (regression over the last 10 s) to run out within `resource_guard_exhaust_horizon_sec` while above the safe line, or memory pressure "full" > 20%;
+- CPU ≥ 95% busy (from `/proc/stat` deltas, not load average) **and** tasks queueing (CPU pressure some avg10 > `resource_guard_cpu_psi_max`, default 60, or runnable tasks > 2× cores) for 10 s. Busy with nothing queueing is a build using idle CPU and is left alone;
+- wick's own 1-second loop running a second late — acted on at once.
+
+**What it does**, every ~2 s until safe: memory high → kill the agent child with the most resident memory; otherwise → the child that used the most CPU since the last sample (not `ps %cpu`, which averages over the process's life). Children are build tools, test runners, browsers and scripts. Only when none is left does it stop the heaviest agent — its conversation is kept and resumes on the next message. For CPU it first caps agents.slice at 100% briefly; the configured quota is restored after 30 s calm.
+
+**Modes.** `memory_guard_mode = enforce` → acts (default action `kill`); `measure` → records what it *would* stop and stops nothing; `off` → no watchdog. `resource_guard_action = pause` pauses/freezes instead of killing (resumed after 30 s calm); `log` records only.
+
+Every action is written as a system line into the history of the session whose agent was affected (e.g. "wick stopped `node vitest` (1.2 GB) to keep the host alive (CPU 97%, memory 91%)"), and listed under **Resource Guard** on the Resources page with the safe line and the CPU quota as a share of the machine.
+
+**Spawn gate.** While the host is near a hang or memory is heading there, new agents are queued (not refused); the queue is re-offered every few seconds and starts once the host recovers.
+
+**Sub-agent queue.** `sub_agents_max_parallel` is per *conversation*: every delegate, mention and `continue` from one conversation shares the same slots; extra work is queued in order.
+
+**Config check.** `agents_total_memory_mb` is refused when it plus wick's reserve plus `min_free_memory_mb` exceeds the machine's RAM — such a ceiling never binds.
+
+**Builds you start yourself** should stay inside the agent limits: `systemd-run --user --collect --slice=agents.slice -p MemoryMax=1800M …`. Without `--slice=agents.slice` the unit lands in app.slice, where only the watchdog sees it.
+
+### Small hosts (2 vCPU, ≤ 4–8 GB)
+
+- `memory_guard_mode = enforce`, `resource_guard_action = kill`.
+- `agents_cpu_quota_pct = 140` — leaves wick and the OS more than half a core under full load.
+- `sub_agents_max_parallel = 1` — one sub-agent at a time; heavy builds (vite, vitest, go test) one at a time too.
+- Keep the derived memory values: they are computed from the RAM the machine reports at runtime, so they follow a RAM upgrade without editing.
 
 ## Reading the Resources page
 

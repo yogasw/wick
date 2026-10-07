@@ -71,3 +71,26 @@ func (s *FileStore) IndexAppend(id string, entry IndexEntry) error {
 func (s *FileStore) IndexList(id string, page, pageSize int) ([]IndexEntry, bool, error) {
 	return s.indexStore(id).Page(page, pageSize)
 }
+
+// IndexAll returns every summary row, newest first. Used by the
+// retention pass, which needs the whole history rather than one page.
+func (s *FileStore) IndexAll(id string) ([]IndexEntry, error) {
+	const pageSize = 1000
+	var out []IndexEntry
+	for page := 1; ; page++ {
+		rows, more, err := s.indexStore(id).Page(page, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+		if !more {
+			return out, nil
+		}
+	}
+}
+
+// IndexRemove drops every row pred matches. Shards left empty are
+// deleted, so the index never keeps a file of ghosts.
+func (s *FileStore) IndexRemove(id string, pred func(IndexEntry) bool) (int, error) {
+	return s.indexStore(id).Remove(pred)
+}

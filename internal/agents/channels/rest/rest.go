@@ -329,7 +329,9 @@ type chatChoice struct {
 }
 
 func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
-	if status, msg := c.checkReady(); status != 0 {
+	// A Team agent's REST connection is its own gate, so only the wiring
+	// is checked before the body says which model is asked for.
+	if status, msg := c.checkWired(); status != 0 {
 		writeError(w, status, msg)
 		return
 	}
@@ -350,6 +352,14 @@ func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 	if len(req.Messages) == 0 {
 		writeError(w, http.StatusBadRequest, "messages is required")
+		return
+	}
+	if IsAgentModel(req.Model) {
+		c.serveAgentChat(w, r, req, cl)
+		return
+	}
+	if status, msg := c.checkReady(); status != 0 {
+		writeError(w, status, msg)
 		return
 	}
 	if !IsModelAllowed(req.Model) {
@@ -513,6 +523,18 @@ func (c *Channel) checkReady() (int, string) {
 	if !c.IsConfigured() {
 		return http.StatusServiceUnavailable, "rest channel disabled"
 	}
+	if c.sendFn == nil {
+		return http.StatusServiceUnavailable, "rest channel not wired"
+	}
+	if c.auth == nil {
+		return http.StatusUnauthorized, "no authenticator configured"
+	}
+	return 0, ""
+}
+
+// checkWired is checkReady without the channel's enable switch: what an
+// agent model needs, whose own connection decides.
+func (c *Channel) checkWired() (int, string) {
 	if c.sendFn == nil {
 		return http.StatusServiceUnavailable, "rest channel not wired"
 	}

@@ -15,6 +15,23 @@ export type ComposerUsageWindow = {
   observedAt?: string;
 };
 
+/* One account of a multi-account instance (omp's credential pool,
+   opencode's account folders), with its own windows out of the same
+   cached probe. `current` marks the account this session runs on. */
+export type ComposerUsageAccount = {
+  id: string;
+  label: string;
+  provider: string;
+  email: string;
+  plan: string;
+  status: string; // active | disabled
+  windows: ComposerUsageWindow[];
+  error: string;
+  /* The login's provider reports no usage (API key, Copilot) — not a failure. */
+  noUsage: boolean;
+  current: boolean;
+};
+
 export type ComposerUsage = {
   provider: string;
   /* supported=false means wick cannot read limits for this provider
@@ -41,7 +58,13 @@ export type ComposerUsage = {
   /* canManage gates the Re-check button — forcing a probe is a manage
      grant, reading the cached number is not. */
   canManage: boolean;
+  /* Empty for single-account instances. */
+  accounts: ComposerUsageAccount[];
+  /* Who picks the account on Auto: "omp" | "wick"; "" when pinned. */
+  rotation: string;
 };
+
+type WireWindow = { key?: string; utilization?: number; resets_at?: string; observed_at?: string };
 
 type WireComposerUsage = {
   provider?: string;
@@ -59,7 +82,21 @@ type WireComposerUsage = {
   age_s?: number;
   next_s?: number;
   can_manage?: boolean;
+  accounts?: {
+    id?: string; label?: string; provider?: string; email?: string; plan?: string;
+    status?: string; windows?: WireWindow[] | null; error?: string; no_usage?: boolean; current?: boolean;
+  }[] | null;
+  rotation?: string;
 };
+
+function normalizeWindows(ws: WireWindow[] | null | undefined): ComposerUsageWindow[] {
+  return (ws ?? []).map((x) => ({
+    key: x.key ?? "",
+    utilization: x.utilization ?? 0,
+    resetsAt: x.resets_at ?? "",
+    observedAt: x.observed_at ?? "",
+  }));
+}
 
 export function normalizeComposerUsage(w: WireComposerUsage): ComposerUsage {
   return {
@@ -76,12 +113,7 @@ export function normalizeComposerUsage(w: WireComposerUsage): ComposerUsage {
           expiresAt: w.account.expires_at ?? "",
         }
       : null,
-    windows: (w.windows ?? []).map((x) => ({
-      key: x.key ?? "",
-      utilization: x.utilization ?? 0,
-      resetsAt: x.resets_at ?? "",
-      observedAt: x.observed_at ?? "",
-    })),
+    windows: normalizeWindows(w.windows),
     error: w.error ?? "",
     pending: w.pending ?? false,
     checking: w.checking ?? false,
@@ -89,6 +121,19 @@ export function normalizeComposerUsage(w: WireComposerUsage): ComposerUsage {
     ageS: w.age_s ?? 0,
     nextS: w.next_s ?? 0,
     canManage: w.can_manage ?? false,
+    accounts: (w.accounts ?? []).map((a) => ({
+      id: a.id ?? "",
+      label: a.label ?? "",
+      provider: a.provider ?? "",
+      email: a.email ?? "",
+      plan: a.plan ?? "",
+      status: a.status ?? "active",
+      windows: normalizeWindows(a.windows),
+      error: a.error ?? "",
+      noUsage: a.no_usage ?? false,
+      current: a.current ?? false,
+    })),
+    rotation: w.rotation ?? "",
   };
 }
 
@@ -116,5 +161,9 @@ export function normalizeUsageRefresh(w: {
   };
 }
 
-export const getComposerUsage = (base: string, provider: string) =>
-  apiGetE<WireComposerUsage>(`${base}/api/composer/usage?provider=${encodeURIComponent(provider)}`);
+/* model is the session's model pin; the server uses it only to mark which
+   account row this session runs on. */
+export const getComposerUsage = (base: string, provider: string, model = "") =>
+  apiGetE<WireComposerUsage>(
+    `${base}/api/composer/usage?provider=${encodeURIComponent(provider)}${model ? `&model=${encodeURIComponent(model)}` : ""}`,
+  );

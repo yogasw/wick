@@ -16,13 +16,16 @@
     saveTicketPrefs,
     type EmptiedTicket,
   } from "../api/tickets.js";
-  import type { TicketBoard, TicketFilter } from "../types/agents.js";
+  import type { TicketBoard, TicketFilter, TicketSessionRow } from "../types/agents.js";
   import { Composer } from "@wick-fe/common-ui";
   import { NOTIFY_KEY } from "../notify-pref.js";
   import SessionList from "./SessionList.svelte";
   import KanbanBoard from "./KanbanBoard.svelte";
+  import { mergeRail, keepPushedOff } from "../railPaging.js";
   import TicketDetail from "./TicketDetail.svelte";
+  import { connectSessionsStream } from "../stores/sessionsStream.js";
   import OwnerTabs from "./OwnerTabs.svelte";
+  import ProjectMenu from "./ProjectMenu.svelte";
 
   type Props = {
     base: string;
@@ -94,7 +97,7 @@
   // Live model loader — same contract as the conversation composer: split the
   // "type/name" value and fetch that instance's current vendor models, falling
   // back (composer-side) to the static list on error.
-  function loadProviderModels(optionValue: string, opts?: { entry?: string }) {
+  function loadProviderModels(optionValue: string, opts?: { entry?: string; refresh?: boolean }) {
     const slash = optionValue.indexOf("/");
     const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
     const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);
@@ -168,9 +171,23 @@
      every visit to a project board starts back at "yours" — widening to
      everyone's loose chats is a per-look choice, not a standing one. */
   let untrackedOwner = $state<"me" | "all">("me");
-  /* One page of the rail; scrolling its end raises the limit (the server
-     caps at 200), and the raised limit re-keys the board request below. */
-  let untrackedLimit = $state(25);
+  /* The poll asks for the rail's FIRST page only. Older pages are fetched
+     once each, on scroll, and kept here — so a rail scrolled back through a
+     few hundred chats does not re-send all of them every 30 seconds. */
+  const UNTRACKED_PAGE = 25;
+  const UNTRACKED_MORE_PAGE = 50;
+  let untrackedMore = $state<TicketSessionRow[]>([]);
+  /* Where the kept pages end: the cursor the last of them came back with,
+     "" when nothing follows. Meaningless while untrackedMore is empty — the
+     first page's own untracked_next continues the rail then. */
+  let untrackedMoreNext = $state("");
+  let loadingMoreUntracked = false;
+  /* The request the current board answered, so a poll can tell "the same
+     list moved" from "a different list". */
+  let boardKeyLoaded = "";
+  /* Chats this page just put on a ticket. They leave the rail for the rest
+     of the request even if a page loaded earlier still carries them. */
+  let trackedHere = $state(new Set<string>());
 
   /* The filter IS the request: statuses, assignee and the untracked rail all
      decide what the server builds, so a switched-off column costs nothing to
@@ -191,7 +208,7 @@
       statuses,
       assignee: ticketFilter.assignee || undefined,
       untracked: ticketFilter.show_untracked === true,
-      untrackedLimit,
+      untrackedLimit: UNTRACKED_PAGE,
       /* Your own loose chats by default — "all" is an explicit choice, and
          the count follows the scope so the rail's number and its rows always
          describe the same set. */
@@ -219,6 +236,11 @@
   $effect(() => {
     if (!filterLoaded) return;
     boardRequestKey; // the sole dependency: re-fetch when the request changes
+    // A different request (scope, filter, project) is a different list:
+    // the pages loaded under the old one no longer continue it.
+    untrackedMore = [];
+    untrackedMoreNext = "";
+    trackedHere = new Set();
     reloadBoard();
   });
 
@@ -250,13 +272,148 @@
     return () => window.removeEventListener("popstate", onPop);
   });
 
+  /* Next page of the untracked rail, appended — see railPaging.ts for why
+     it is asked for by cursor and not by the drawn row count. */
+  function loadMoreUntracked() {
+    if (loadingMoreUntracked || !boardView?.untracked_next) return;
+    loadingMoreUntracked = true;
+    const key = boardRequestKey;
+    const after = boardView.untracked_next;
+    Effect.runPromise(
+      getProjectTickets(base, project.id, {
+        rows: 0,
+        statuses: [], // rows only — no cards
+        untracked: true,
+        untrackedLimit: UNTRACKED_MORE_PAGE,
+        untrackedAfter: after,
+        untrackedOwner,
+      }).pipe(Effect.provide(WickClientLayer)),
+    )
+      .then((b) => {
+        if (key !== boardRequestKey) return; // the request changed meanwhile
+        const have = new Set([...(board?.untracked ?? []), ...untrackedMore].map((r) => r.id));
+        untrackedMore = [...untrackedMore, ...b.untracked.filter((r) => !have.has(r.id))];
+        untrackedMoreNext = b.untracked_next ?? "";
+      })
+      .catch(() => { /* the sentinel offers it again on the next scroll */ })
+      .finally(() => { loadingMoreUntracked = false; });
+  }
+
+  /* The board as drawn: the polled first page, then the pages loaded on
+     scroll, minus any row the fresh first page now holds itself. Once pages
+     are kept, the rail continues from where THEY end. */
+  const boardView = $derived.by(() => {
+    if (!board || untrackedMore.length === 0) return board;
+    return {
+      ...board,
+      untracked: mergeRail(board.untracked, untrackedMore, trackedHere),
+      untracked_next: untrackedMoreNext || undefined,
+    };
+  });
+
+  /* A chat the board just attached or turned into a ticket: off the rail. */
+  function sessionTracked(id: string) {
+    trackedHere = new Set(trackedHere).add(id);
+    untrackedMore = untrackedMore.filter((r) => r.id !== id);
+  }
+
   function reloadBoard() {
+    const key = boardRequestKey;
     Effect.runPromise(
       getProjectTickets(base, project.id, boardOptions).pipe(Effect.provide(WickClientLayer)),
     )
-      .then((b) => { board = b; })
+      .then((b) => {
+        if (key !== boardRequestKey) return; // superseded by a newer request
+        // Same list, moved: a chat pushed off page one stays on the rail.
+        if (board && boardKeyLoaded === key) {
+          untrackedMore = keepPushedOff(board.untracked, b.untracked, untrackedMore, trackedHere, UNTRACKED_PAGE);
+          if (untrackedMore.length === 0) untrackedMoreNext = "";
+        }
+        board = b;
+        boardKeyLoaded = key;
+      })
       .catch(() => { /* keep the previous board on a transient failure */ });
   }
+
+  /* ── keeping the board honest about time ──
+
+     A ticket does not only change from this page. A sync writes one, an
+     agent moves one, somebody else drags one — and until now the board only
+     re-fetched when the FILTER changed, so it sat on whatever it was handed
+     at open. "Updated 5h ago" stayed 5h ago for the rest of the day, and the
+     column order with it, because the order IS the timestamp.
+
+     So it listens: every ticket write sends a `ticket` signal on the shared
+     /stream/sessions connection (stream_ticket.go, filtered to projects the
+     caller may open), and a signal for this project refetches. A hidden
+     tab only marks itself stale and refetches on return. Polling is the
+     fallback while that stream is down, and a reconnect refetches once —
+     signals sent during the gap are gone. Card ages ("5h ago") tick on
+     their own clock (TicketCard), so time alone needs no fetch. */
+  const BOARD_POLL_MS = 60_000;
+
+  /* A drag pauses it. The board applies a move optimistically and confirms
+     it with a PATCH; a poll landing in that gap would hand back the
+     pre-move board and the card would visibly jump home and back. */
+  let dragging = $state(false);
+  $effect(() => {
+    const on = () => { dragging = true; };
+    const off = () => { dragging = false; };
+    window.addEventListener("dragstart", on);
+    window.addEventListener("dragend", off);
+    window.addEventListener("drop", off);
+    return () => {
+      window.removeEventListener("dragstart", on);
+      window.removeEventListener("dragend", off);
+      window.removeEventListener("drop", off);
+    };
+  });
+
+  $effect(() => {
+    if (!filterLoaded) return;
+    const pid = project.id;
+    let streamUp = false;
+    let dropped = false;
+    let stale = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const due = () => {
+      if (dragging || (typeof document !== "undefined" && document.hidden)) {
+        stale = true;
+        return;
+      }
+      stale = false;
+      reloadBoard();
+    };
+    /* A burst (a sync touching many tickets) costs one fetch. */
+    const soon = () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(() => { timer = null; due(); }, 300);
+    };
+    const leave = connectSessionsStream(base, {
+      onTicket: (t) => { if (t.project_id === pid) soon(); },
+      onStatus: (st) => {
+        streamUp = st === "connected";
+        if (!streamUp) dropped = true;
+        else if (dropped) { dropped = false; soon(); }
+      },
+    });
+    const id = setInterval(() => { if (!streamUp) due(); }, BOARD_POLL_MS);
+    const onVisible = () => { if (!document.hidden && (stale || !streamUp)) due(); };
+    document.addEventListener("visibilitychange", onVisible);
+    /* A drop ends a drag; a signal that arrived mid-drag is applied now. */
+    const onDragEnd = () => { if (stale) soon(); };
+    window.addEventListener("dragend", onDragEnd);
+    window.addEventListener("drop", onDragEnd);
+    return () => {
+      leave();
+      if (timer !== null) clearTimeout(timer);
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("dragend", onDragEnd);
+      window.removeEventListener("drop", onDragEnd);
+    };
+  });
+
 
   /* ── a ticket that just lost its last chat ──
      A ticket with no sessions tracks nothing, so removal is offered. The
@@ -389,59 +546,7 @@
      width — they are work surfaces, like any ticketing tool. The back link,
      header, and composer stay a centered column no matter the view, so
      typing a message never happens in a viewport-wide input. -->
-<div class="flex flex-col h-full p-6 mx-auto w-full gap-6">
-  <!-- One slim top bar for every view: breadcrumb identity on the left, the
-       project's two actions on the right. The old hero header (icon, path,
-       big title) said the same things with far more chrome; the path and
-       chat count now live in the name's tooltip and a muted suffix. -->
-  <div class="mx-auto flex w-full max-w-7xl flex-wrap items-center gap-x-2 gap-y-1 text-xs text-black-700 dark:text-black-600">
-    <a
-      href={`${base}/sessions`}
-      class="inline-flex items-center gap-1 transition-colors hover:text-green-600 dark:hover:text-green-400"
-    >
-      <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-        <path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path>
-      </svg>
-      All chats
-    </a>
-    <span aria-hidden="true">/</span>
-    <span
-      class="max-w-[240px] truncate text-sm font-semibold text-black-900 dark:text-white-100"
-      title={project.path || project.name}
-    >{project.name}</span>
-    {#if ticketEnabled && openTicketId}
-      <span aria-hidden="true">/</span>
-      <span class="min-w-0 truncate font-mono" title={openTicketId}>{openTicketId}</span>
-    {:else}
-      <span class="text-black-600 dark:text-black-700">{chatCount} chats · {project.managed ? "managed" : "custom"}</span>
-    {/if}
-
-    <span class="ml-auto flex items-center gap-2">
-      <button
-        type="button"
-        onclick={onPin}
-        aria-pressed={project.pinned}
-        title={project.pinned ? "Pinned as default" : "Pin as default"}
-        class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors {project.pinned
-          ? 'border-green-500 bg-green-500 text-white-100 hover:bg-green-600'
-          : 'border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-black-800 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-600'}"
-      >
-        <span class="text-[11px] leading-none {project.pinned ? '' : 'grayscale'}">📌</span>
-        {project.pinned ? "Pinned" : "Pin"}
-      </button>
-      <a
-        href={`${base}/projects/${project.id}`}
-        class="inline-flex items-center gap-1.5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2.5 py-1 text-[11px] font-medium text-black-800 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-600 transition-colors"
-      >
-        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5">
-          <circle cx="8" cy="8" r="6"></circle>
-          <path d="M8 5v3l2 2" stroke-linecap="round" stroke-linejoin="round"></path>
-        </svg>
-        Settings
-      </a>
-    </span>
-  </div>
-
+<div class="flex flex-col h-full p-6 mx-auto w-full gap-4">
   <!-- Session list / ticket board. The List|Card toggle appears only when
        this project has ticket mode enabled; the choice is saved per user.
        Width follows the job: the plain list stays the composer's column, the
@@ -476,15 +581,25 @@
               : "text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600")}
           >Card</button>
         </div>
-        {#if viewMode === "list"}
-          <OwnerTabs value={ownerTab} onChange={onOwnerTab} />
-        {/if}
+        <div class="ml-auto flex items-center gap-2">
+          {#if viewMode === "list"}
+            <OwnerTabs value={ownerTab} onChange={onOwnerTab} />
+          {/if}
+          <ProjectMenu {base} {project} {chatCount} {onPin} />
+        </div>
       </div>
     {:else if !ticketEnabled && !openTicketId}
       <!-- No board here, but the same scope choice: your chats first, the
            whole project's on request. -->
-      <div class="flex items-center justify-end">
+      <div class="flex items-center justify-end gap-2">
         <OwnerTabs value={ownerTab} onChange={onOwnerTab} />
+        <ProjectMenu {base} {project} {chatCount} {onPin} />
+      </div>
+    {:else if ticketEnabled && openTicketId}
+      <!-- A ticket's page has its own Back; only the project's actions need
+           somewhere to live. -->
+      <div class="flex items-center justify-end">
+        <ProjectMenu {base} {project} {chatCount} {onPin} />
       </div>
     {/if}
 
@@ -500,15 +615,16 @@
           onNewSession={newSessionInTicket}
         />
       </div>
-    {:else if ticketEnabled && viewMode === "card" && board}
+    {:else if ticketEnabled && viewMode === "card" && boardView}
       <KanbanBoard
         {base}
         projectId={project.id}
-        {board}
+        board={boardView}
         filter={ticketFilter}
         {untrackedOwner}
-        onUntrackedOwner={(v) => { untrackedOwner = v; untrackedLimit = 25; }}
-        onUntrackedMore={() => { untrackedLimit = Math.min(200, untrackedLimit + 25); }}
+        onUntrackedOwner={(v) => { untrackedOwner = v; }}
+        onUntrackedMore={loadMoreUntracked}
+        onSessionTracked={sessionTracked}
         onFilter={applyFilter}
         onOpen={(id) => { gotoTicket(id); }}
         onOpenSession={onSelectSession}

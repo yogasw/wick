@@ -242,6 +242,7 @@ func (r *Runner) deliver(ctx context.Context, l zerologLogger, m entity.Schedule
 		_ = r.store.MarkFailed(ctx, m.ID, err.Error())
 		return
 	}
+	notifyFired(ctx, m, target)
 
 	// A manual run (run_now) is an EXTRA fire, not the next scheduled one: it
 	// puts the real next fire back exactly where it was, so testing a
@@ -290,6 +291,29 @@ func (r *Runner) deliver(ctx context.Context, l zerologLogger, m entity.Schedule
 		return
 	}
 	l.Info().Str("id", m.ID).Str("session", target).Msg("delivered")
+}
+
+// FiredHook is told about every successful delivery: the row as claimed
+// and the session the message landed in. Used to record a visible
+// "scheduled ran" event in that chat. Runs synchronously after the send,
+// so it must be cheap.
+type FiredHook func(ctx context.Context, m entity.ScheduledMessage, sessionID string)
+
+var firedHook atomic.Pointer[FiredHook]
+
+// SetFiredHook installs (or, with nil, removes) the process-wide FiredHook.
+func SetFiredHook(fn FiredHook) {
+	if fn == nil {
+		firedHook.Store(nil)
+		return
+	}
+	firedHook.Store(&fn)
+}
+
+func notifyFired(ctx context.Context, m entity.ScheduledMessage, sessionID string) {
+	if fn := firedHook.Load(); fn != nil {
+		(*fn)(ctx, m, sessionID)
+	}
 }
 
 // zerologLogger is a local alias so the tick/deliver signatures read

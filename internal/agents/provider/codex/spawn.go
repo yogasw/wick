@@ -26,6 +26,7 @@ import (
 	provider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/procgroup"
 	"github.com/yogasw/wick/internal/agents/skillsync"
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -108,7 +109,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// loader never sees them; this block is what makes them reachable, and the
 	// --add-dir below is what makes the paths it names readable.
 	soulPath := ""
-	soul := skillsync.AppendBuiltinCatalog(opt.Preset)
+	soul := skillsync.AppendBuiltinCatalog(opt.Preset, opt.SkipSkills...)
 	if soul != "" {
 		soulDir := opt.SessionDir
 		if soulDir == "" {
@@ -160,9 +161,12 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// skillsync copies skills here but the sandbox hides them without this.
 	// A home-dir lookup failure is not fatal: wick's own dir may still resolve
 	// via $WICK_DATA_DIR, and skillAddDirArgs skips whichever dir it cannot place.
+	// The dir is resolved against THIS spawn's CODEX_HOME (opt.ExtraEnv carries
+	// the instance's Env), so an instance pointed at its own codex home trusts
+	// that home's skills instead of wick's.
 	{
 		home, _ := homeDir()
-		args = append(args, skillAddDirArgs(home, dirExists)...)
+		args = append(args, skillAddDirArgs(home, codexHomeFromEnv(opt.ExtraEnv), dirExists)...)
 	}
 	// When gate is active for this instance, do NOT set
 	// --ask-for-approval to a bypass value — codex's approval flag
@@ -227,7 +231,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 
 	cmd := safeexec.CommandContext(ctx, execBin, execArgs...)
 	cmd.Dir = opt.Workspace
-	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
+	cmd.Env = append(envscrub.ScrubOSEnv(), opt.ExtraEnv...)
 	cmd.Env = append(cmd.Env, routerContrib.Env...)
 	// The MCP bearer, named by the -c override above. Per-spawn, so two users'
 	// processes never see each other's credential.

@@ -51,8 +51,8 @@ func TestUserNameRejectsTheIdAsAName(t *testing.T) {
 	if got := b.userName(id); got != "" {
 		t.Fatalf("userName = %q, want empty", got)
 	}
-	b = &Builder{UserName: func(string) string { return "ratih@qiscus.com" }}
-	if got := b.userName(id); got != "ratih@qiscus.com" {
+	b = &Builder{UserName: func(string) string { return "user@example.com" }}
+	if got := b.userName(id); got != "user@example.com" {
 		t.Fatalf("userName = %q, want the email fallback", got)
 	}
 	// No resolver at all is normal (no database wired): the row shows

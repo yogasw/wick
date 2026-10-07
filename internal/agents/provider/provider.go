@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/yogasw/wick/internal/agents/provider/managedbin"
 	"github.com/yogasw/wick/internal/userconfig"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
@@ -39,6 +41,12 @@ const (
 	TypeClaude Type = "claude"
 	TypeCodex  Type = "codex"
 	TypeGemini Type = "gemini"
+	// TypeOMP is oh-my-pi (`omp`). One instance = one `--profile`, so
+	// each instance holds exactly one account. See accounts.go.
+	TypeOMP Type = "omp"
+	// TypeOpencode is sst's opencode (`opencode`). One instance = one data
+	// dir (XDG_DATA_HOME), which is where opencode keeps auth.json.
+	TypeOpencode Type = "opencode"
 	// TypeWick is the built-in in-process provider (adk-go engine, no
 	// external CLI). Single-instance: exactly one "wick/wick" — model
 	// multiplicity lives in Instance.WickModels. See
@@ -49,7 +57,7 @@ const (
 // SupportedTypes returns all CLI types the agents module knows how to
 // spawn. Order is the UI display order.
 func SupportedTypes() []Type {
-	return []Type{TypeClaude, TypeCodex, TypeGemini, TypeWick}
+	return []Type{TypeClaude, TypeCodex, TypeGemini, TypeOMP, TypeOpencode, TypeWick}
 }
 
 // InProcess reports whether this provider type runs inside the wick
@@ -76,6 +84,46 @@ type Instance struct {
 	// modelseed.go + the cli-provider-model-picker plan. Ignored by wick.
 	ModelSelect bool
 	Models      []ModelEntry
+
+	// LiveModels (omp/opencode only): offer the CLI's own model list,
+	// cached ~10 min and narrowed by LiveModelFilter, in place of Models.
+	// LiveModelDefault pins the default; empty/absent = first match. See
+	// climodels_live.go.
+	LiveModels       bool
+	LiveModelFilter  string
+	LiveModelDefault string
+
+	// Server mode (opencode today; omp later): turns run on one shared
+	// CLI server per instance instead of one process per turn. RunPerTurn
+	// is the opt-out (zero value = server mode ON). ServerIdleMinutes is
+	// the idle-kill window, <= 0 = the provider default — never "off".
+	// LoadExternalSkills lets the CLI scan the host's Claude/Codex skill
+	// dirs (~/.claude/skills, ~/.agents); off by default.
+	RunPerTurn         bool
+	ServerIdleMinutes  int
+	LoadExternalSkills bool
+	// AutoRetryModel (omp/opencode): a turn refused its model before the
+	// agent produced anything runs again on the next usable model (see
+	// modelretry.go). Off = the turn just fails, as before.
+	AutoRetryModel bool
+
+	// IdleCompact* (every type): send /compact to a session that has sat
+	// idle past IdleCompactSeconds with its context past the threshold.
+	// IdleCompactMinutes is the older setting, used while seconds is 0.
+	// See idlecompact.go.
+	IdleCompact          bool
+	IdleCompactSeconds   int
+	IdleCompactMinutes   int
+	IdleCompactTrigger   string
+	IdleCompactThreshold int
+	IdleCompactScope     string
+	IdleCompactMatch     string
+
+	// AuthFrom (omp/opencode only) is the name of another instance of the
+	// same type that owns the login this one uses; empty = its own login.
+	// Profile, config, soul and sessions stay this instance's own. See
+	// authshare.go.
+	AuthFrom string
 
 	// Hooks holds the user's enable/disable intent per hook event
 	// (PreToolUse, SessionStart, …). Spawners read this on every
@@ -106,6 +154,16 @@ type Instance struct {
 
 	// CodexConfig holds codex-specific spawn options. nil for non-codex instances.
 	CodexConfig *CodexConfig
+
+	// OMPConfig / OpencodeConfig pin the account store of an omp /
+	// opencode instance. nil for other types. Always non-nil after Load
+	// for those two types, with the value resolved (see accounts.go).
+	OMPConfig      *OMPConfig
+	OpencodeConfig *OpencodeConfig
+
+	// ExtraMCPServers (omp/opencode) is the raw "extra MCP servers" JSON,
+	// validated by ParseExtraMCP. See extramcp.go.
+	ExtraMCPServers string
 
 	// UseAIRouter routes this instance's CLI through an embedded AI router
 	// proxy (9router / OmniRoute / …) instead of the provider's own
@@ -270,6 +328,9 @@ func ResolveBin(ins Instance) (string, error) {
 	if ins.Binary != "" {
 		return safeexec.ResolveBin(ins.Binary)
 	}
+	if p, ok := managedPath(ins); ok {
+		return p, nil
+	}
 	name := string(ins.Type)
 	if p, err := safeexec.LookPath(name); err == nil {
 		return p, nil
@@ -295,6 +356,12 @@ type Status struct {
 	PathFound  bool
 	Version    string // first line of `<bin> --version`
 	VersionErr string // error message when version probe failed
+	// SemVer is Version read through the type's version contract
+	// ("omp/18.4.3" → "18.4.3"); "" when the output did not parse.
+	SemVer string
+	// Source is where Path came from: BinSourceOverride / Managed / Path /
+	// Scan / Miss.
+	Source string
 
 	Hooks map[string]HookCapability
 
@@ -515,6 +582,15 @@ func Save(ins Instance) error {
 		return err
 	}
 	list := pickList(&cfg.Providers, ins.Type)
+	prevAuthFrom := ""
+	for _, raw := range *list {
+		if raw.Name == ins.Name {
+			prevAuthFrom = raw.AuthFrom
+		}
+	}
+	if err := applyAuthFromChange(mergeWithDefaults(cfg.Providers), ins, prevAuthFrom); err != nil {
+		return err
+	}
 	updated := false
 	for i := range *list {
 		if (*list)[i].Name == ins.Name {
@@ -595,6 +671,12 @@ func Rename(t Type, oldName, newName string) error {
 	for i := range *list {
 		if (*list)[i].Name == oldName {
 			(*list)[i].Name = newName
+			// Instances using its login follow the new name.
+			for j := range *list {
+				if (*list)[j].AuthFrom == oldName {
+					(*list)[j].AuthFrom = newName
+				}
+			}
 			if err := userconfig.Save(AppName(), cfg); err != nil {
 				return err
 			}
@@ -607,7 +689,14 @@ func Rename(t Type, oldName, newName string) error {
 	// Not persisted yet — auto-seeded default (Name == type) only lives
 	// in memory. Materialize it under the new name so the rename sticks.
 	if oldName == string(t) {
-		*list = append(*list, userconfig.ProviderInstance{Name: newName})
+		seeded := userconfig.ProviderInstance{Name: newName}
+		// Keep the account the seeded default was already using.
+		if t.accountIsolated() {
+			ins := Instance{Type: t, Name: oldName}
+			applyAccountConfig(&ins, "", "")
+			seeded.OMPProfile, seeded.OpencodeDataDir = accountConfigToUser(ins)
+		}
+		*list = append(*list, seeded)
 		if err := userconfig.Save(AppName(), cfg); err != nil {
 			return err
 		}
@@ -680,6 +769,11 @@ func Delete(t Type, name string) error {
 		return err
 	}
 	list := pickList(&cfg.Providers, t)
+	for _, raw := range *list {
+		if raw.AuthFrom == name {
+			return fmt.Errorf("instance %s/%s uses the login of %s — clear its \"Use login of\" first", t, raw.Name, name)
+		}
+	}
 	for i := range *list {
 		if (*list)[i].Name == name {
 			*list = append((*list)[:i], (*list)[i+1:]...)
@@ -702,19 +796,31 @@ func Delete(t Type, name string) error {
 // path is non-empty even for a missing override so the UI can show
 // what wick would have run.
 func ResolveBinary(ins Instance) (path string, found bool) {
+	p, src := ResolveBinarySource(ins)
+	return p, src != BinSourceMiss && !(src == BinSourceOverride && !overrideFound(ins))
+}
+
+// ResolveBinarySource is ResolveBinary plus where the path came from
+// (BinSource*): override → managed current → PATH → known locations.
+func ResolveBinarySource(ins Instance) (path, source string) {
 	if ins.Binary != "" {
-		if _, err := safeexec.LookPath(ins.Binary); err == nil {
-			return ins.Binary, true
-		}
-		return ins.Binary, false
+		return ins.Binary, BinSourceOverride
+	}
+	if p, ok := managedPath(ins); ok {
+		return p, BinSourceManaged
 	}
 	if p, err := safeexec.LookPath(string(ins.Type)); err == nil {
-		return p, true
+		return p, BinSourcePath
 	}
 	if p, ok := scanKnownLocations(ins.Type); ok {
-		return p, true
+		return p, BinSourceScan
 	}
-	return "", false
+	return "", BinSourceMiss
+}
+
+func overrideFound(ins Instance) bool {
+	_, err := safeexec.LookPath(ins.Binary)
+	return err == nil
 }
 
 // Probe resolves the binary path and runs `--version` for one
@@ -733,30 +839,17 @@ func Probe(ctx context.Context, ins Instance) Status {
 		st.Version = "built-in"
 		return st
 	}
-	source := ""
-	if ins.Binary != "" {
-		st.Path = ins.Binary
-		source = "registry"
-		if _, err := safeexec.LookPath(ins.Binary); err == nil {
-			st.PathFound = true
-		}
-	} else {
-		path, err := safeexec.LookPath(string(ins.Type))
-		if err == nil {
-			st.Path = path
-			st.PathFound = true
-			source = "path"
-		} else if p, ok := scanKnownLocations(ins.Type); ok {
-			// PATH miss is normal when CLI is installed via npm/curl
-			// installer that drops binary outside PATH (e.g. claude in
-			// ~/.local/bin on Windows). Fall back to per-OS install
-			// locations so users don't need to edit PATH manually.
-			st.Path = p
-			st.PathFound = true
-			source = "scan"
-		} else {
-			source = "miss"
-		}
+	// Override → managed current → PATH → per-OS install locations (a
+	// PATH miss is normal for npm/curl installers that drop the binary
+	// outside PATH). Same order spawn uses.
+	path, source := ResolveBinarySource(ins)
+	st.Path, st.Source = path, source
+	switch source {
+	case BinSourceOverride:
+		st.PathFound = overrideFound(ins)
+	case BinSourceMiss:
+	default:
+		st.PathFound = true
 	}
 	log.Debug().
 		Str("type", string(ins.Type)).
@@ -771,7 +864,34 @@ func Probe(ctx context.Context, ins Instance) Status {
 	if ins.Disabled {
 		return st
 	}
-	cmd := safeexec.CommandContext(ctx, st.Path, "--version")
+	// The type's version contract (registered by its package) says which
+	// argv to run and how to read it — the same one the managed installer
+	// verifies downloads with.
+	args := []string{"--version"}
+	contract, hasContract := managedbin.ContractFor(string(ins.Type))
+	if hasContract && len(contract.Args) > 0 {
+		args = contract.Args
+	}
+	// An omp/opencode probe is a full bun process (~300 MB): one at a
+	// time across all instances, on the same slot model listings take
+	// (a boot or "Rescan all" probes every instance at once otherwise).
+	// claude/codex/gemini probes are light and stay parallel.
+	if heavyProbe(ins.Type) {
+		free, err := AcquireHelperSlot(ctx)
+		defer free()
+		if err != nil {
+			st.VersionErr = err.Error()
+			return st
+		}
+	}
+	// Inside the memory guard like an agent spawn ("<type>-version"
+	// scope, the instance's own limit).
+	cmd, release := HelperCommand(ctx, &ins, HelperLabel(ins.Type, "version"), st.Path, args...)
+	defer release()
+	if ins.Type == TypeOpencode {
+		// Never let a probe trigger opencode's self-update (cli/upgrade.ts).
+		cmd.Env = append(os.Environ(), "OPENCODE_DISABLE_AUTOUPDATE=true")
+	}
 	hideConsole(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -785,6 +905,11 @@ func Probe(ctx context.Context, ins Instance) Status {
 		return st
 	}
 	st.Version = firstLine(strings.TrimSpace(string(out)))
+	if hasContract && contract.Parse != nil {
+		if v, ok := contract.Parse(string(out)); ok {
+			st.SemVer = v
+		}
+	}
 	log.Debug().
 		Str("type", string(ins.Type)).
 		Str("name", ins.Name).
@@ -795,6 +920,10 @@ func Probe(ctx context.Context, ins Instance) Status {
 
 // ProbeAll runs Probe on every configured instance in parallel,
 // honouring ctx as the total timeout (per-probe is bounded by ctx).
+// heavyProbe reports a type whose --version probe boots a full runtime
+// (bun): omp and opencode.
+func heavyProbe(t Type) bool { return t == TypeOMP || t == TypeOpencode }
+
 func ProbeAll(ctx context.Context) ([]Status, error) {
 	all, err := Load()
 	if err != nil {
@@ -849,6 +978,7 @@ func ProbeAllCached(ctx context.Context) ([]Status, error) {
 	if err != nil {
 		return nil, err
 	}
+	persisted := loadAll()
 	out := make([]Status, len(all))
 	var wg sync.WaitGroup
 	now := time.Now()
@@ -860,6 +990,16 @@ func ProbeAllCached(ctx context.Context) ([]Status, error) {
 		probeCacheMu.RUnlock()
 		if ok && now.Sub(entry.at) < probeCacheTTL {
 			out[i] = entry.status
+			continue
+		}
+		// The persisted probe of an unchanged binary answers without a
+		// spawn (fingerprint; see probeStillFresh).
+		if ps, ok := persisted[cacheKey(all[i].Type, all[i].Name)]; ok && probeStillFresh(all[i], ps, now) {
+			st := statusFromPersisted(all[i], ps)
+			probeCacheMu.Lock()
+			probeCache[key] = probeCacheEntry{status: st, at: now}
+			probeCacheMu.Unlock()
+			out[i] = st
 			continue
 		}
 		wg.Add(1)
@@ -895,7 +1035,15 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 	for _, t := range SupportedTypes() {
 		list := readList(c, t)
 		if len(list) == 0 {
-			out = append(out, Instance{Type: t, Name: string(t)})
+			// omp/opencode are opt-in CLIs: only offer the default row
+			// when the binary is actually installed, so a host without
+			// them does not grow two broken cards.
+			if t.accountIsolated() && !binaryOnPath(string(t)) {
+				continue
+			}
+			ins := Instance{Type: t, Name: string(t)}
+			applyAccountConfig(&ins, "", "")
+			out = append(out, ins)
 			continue
 		}
 		for _, raw := range list {
@@ -924,6 +1072,24 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 					SandboxMode: CodexSandboxMode(raw.SandboxMode),
 				}
 			}
+			applyAccountConfig(&ins, raw.OMPProfile, raw.OpencodeDataDir)
+			ins.ExtraMCPServers = raw.ExtraMCPServers
+			ins.LiveModels, ins.LiveModelFilter, ins.LiveModelDefault = boolOr(raw.LiveModels, true), raw.LiveModelFilter, raw.LiveModelDefault
+			ins.RunPerTurn, ins.ServerIdleMinutes, ins.LoadExternalSkills = raw.RunPerTurn, raw.ServerIdleMinutes, raw.LoadExternalSkills
+			ins.AutoRetryModel = raw.AutoRetryModel
+			ins.IdleCompact, ins.IdleCompactMinutes = raw.IdleCompact, raw.IdleCompactMinutes
+			ins.IdleCompactSeconds = raw.IdleCompactSeconds
+			ins.IdleCompactTrigger, ins.IdleCompactThreshold = raw.IdleCompactTrigger, raw.IdleCompactThreshold
+			ins.IdleCompactScope = raw.IdleCompactScope
+			ins.IdleCompactMatch = raw.IdleCompactMatch
+			ins.AuthFrom = raw.AuthFrom
+			if t == TypeOpencode && ins.OpencodeConfig == nil {
+				ins.OpencodeConfig = &OpencodeConfig{}
+			}
+			if ins.OpencodeConfig != nil {
+				ins.OpencodeConfig.Model = raw.OpencodeModel
+				ins.OpencodeConfig.AllowHosted = boolOr(raw.OpencodeAllowHosted, true)
+			}
 			if t == TypeWick {
 				ins.WickModels = wickModelsFromUser(raw.WickModels)
 				ins.WickConfig = wickConfigFromUser(raw.WickConfig)
@@ -942,6 +1108,10 @@ func readList(c userconfig.ProvidersConfig, t Type) []userconfig.ProviderInstanc
 		return c.Codex
 	case TypeGemini:
 		return c.Gemini
+	case TypeOMP:
+		return c.OMP
+	case TypeOpencode:
+		return c.Opencode
 	case TypeWick:
 		return c.Wick
 	}
@@ -956,6 +1126,10 @@ func pickList(c *userconfig.ProvidersConfig, t Type) *[]userconfig.ProviderInsta
 		return &c.Codex
 	case TypeGemini:
 		return &c.Gemini
+	case TypeOMP:
+		return &c.OMP
+	case TypeOpencode:
+		return &c.Opencode
 	case TypeWick:
 		return &c.Wick
 	}
@@ -984,6 +1158,24 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 	}
 	if ins.CodexConfig != nil {
 		raw.SandboxMode = string(ins.CodexConfig.SandboxMode)
+	}
+	// Persist the RESOLVED account store, never the empty "use default":
+	// the default derives from the name, and a rename must not move the
+	// instance onto a different (logged-out) account.
+	raw.OMPProfile, raw.OpencodeDataDir = accountConfigToUser(ins)
+	raw.ExtraMCPServers = ins.ExtraMCPServers
+	raw.LiveModels, raw.LiveModelFilter, raw.LiveModelDefault = boolPtr(ins.LiveModels), ins.LiveModelFilter, ins.LiveModelDefault
+	raw.RunPerTurn, raw.ServerIdleMinutes, raw.LoadExternalSkills = ins.RunPerTurn, ins.ServerIdleMinutes, ins.LoadExternalSkills
+	raw.AutoRetryModel = ins.AutoRetryModel
+	raw.IdleCompact, raw.IdleCompactMinutes = ins.IdleCompact, ins.IdleCompactMinutes
+	raw.IdleCompactSeconds = ins.IdleCompactSeconds
+	raw.IdleCompactTrigger, raw.IdleCompactThreshold = ins.IdleCompactTrigger, ins.IdleCompactThreshold
+	raw.IdleCompactScope = ins.IdleCompactScope
+	raw.IdleCompactMatch = ins.IdleCompactMatch
+	raw.AuthFrom = ins.AuthFrom
+	if ins.OpencodeConfig != nil {
+		raw.OpencodeModel = ins.OpencodeConfig.Model
+		raw.OpencodeAllowHosted = boolPtr(ins.OpencodeConfig.AllowHosted)
 	}
 	if ins.Type == TypeWick {
 		raw.WickModels = wickModelsToUser(ins.WickModels)
@@ -1219,3 +1411,15 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+// boolOr reads an optional stored flag: nil (never set) is def.
+func boolOr(p *bool, def bool) bool {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+
+// boolPtr stores a flag explicitly, so an operator's "off" survives a
+// default that is "on".
+func boolPtr(b bool) *bool { return &b }

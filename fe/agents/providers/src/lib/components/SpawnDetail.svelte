@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { clock24 } from "@wick-fe/common-ui";
   import { onMount } from "svelte";
   import { Breadcrumb, CodeEditor, type BreadcrumbItem } from "@wick-fe/common-ui";
   import { toastError } from "@wick-fe/common-stores";
@@ -39,7 +40,7 @@
   let rawJSON = $derived(data ? JSON.stringify(data.Events, null, 2) : "");
 
   function fmtTime(iso: string): string {
-    return iso ? new Date(iso).toLocaleTimeString() : "";
+    return iso ? clock24(iso, true) : "";
   }
   function fmtDuration(ms: number): string {
     if (ms <= 0) return "";
@@ -395,7 +396,7 @@
           {#each data.Events as ev}
             <li class="px-5 py-3">
               <div class="flex items-center gap-3">
-                <span class="font-mono text-xs text-black-700 dark:text-black-600">{new Date(ev.At).toLocaleTimeString()}</span>
+                <span class="font-mono text-xs text-black-700 dark:text-black-600">{clock24(ev.At, true)}</span>
                 <span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-900 dark:text-white-100">{ev.Type}</span>
                 {#if ev.ExitReason}<span class="text-xs {ev.ExitReason === 'error' || ev.ExitReason === 'unclean' ? 'text-error-400 font-medium' : 'text-black-800 dark:text-black-600'}">{ev.ExitReason}</span>{/if}
                 {#if ev.ExitCode !== 0}<span class="text-xs text-error-400">exit {ev.ExitCode}</span>{/if}

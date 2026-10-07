@@ -191,3 +191,26 @@ func TestIsBareSlashCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestStripSenderLines(t *testing.T) {
+	cases := map[string]string{
+		"hai":                             "hai",
+		"[from: Yoga Setiawan]\nhai":      "hai",
+		"[from: A]\nsatu\n[from: B]\ndua": "satu\ndua",
+		"tulis [from: X] di tengah\nok":   "tulis [from: X] di tengah\nok",
+		"[from: \"a]b\" (U1)]\r\nhalo":    "halo",
+		"[from: Yoga Setiawan]\n":         "",
+	}
+	for in, want := range cases {
+		if got := StripSenderLines(in); got != want {
+			t.Errorf("StripSenderLines(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Round trip with the line wick itself writes.
+	s := &Sender{Name: "Yoga", ID: "U1", Handle: "yoga", Channel: "slack"}
+	for _, lvl := range []string{SenderName, SenderNameID, SenderFull} {
+		if got := StripSenderLines(PrependSenderLine("tugas", s, lvl)); got != "tugas" {
+			t.Errorf("level %s: got %q", lvl, got)
+		}
+	}
+}

@@ -163,7 +163,9 @@ export type CatalogResponse = {
   trigger_types: { type: string; label: string; description: string }[];
   channels: ChannelDescriptor[];
   connectors: ConnectorDescriptor[];
-  providers: { name: string; is_default: boolean }[];
+  // Only the instances the caller may choose (provider access tags);
+  // `type` + `name` form the "type/name" key the provider picker uses.
+  providers: { name: string; type?: string; is_default: boolean }[];
   // Base URL for webhook triggers: "<origin>/hooks". Empty when PublicURL
   // is not configured in Settings → Agents; the UI falls back to a
   // relative path display in that case.
@@ -448,13 +450,19 @@ export const workflowAPI = {
   // event match schemas / config forms. Module is the channel name
   // (e.g. "slack"), source is the registry key the channel's
   // LookupProvider understands. Returns `[{id, name}, ...]`.
+  // `instance` pins the search to the bot the trigger/node already
+  // selected (trigger.channel_instance) — otherwise the dropdown lists
+  // every bot's channels and picking a foreign one yields a trigger
+  // that can never fire.
   lookup: (
     module: string,
     source: string,
     q: string,
+    instance = "",
   ): Promise<{ id: string; name: string }[]> =>
     apiGet(
-      `${BASE}/workflows/api/lookup?module=${encodeURIComponent(module)}&source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`,
+      `${BASE}/workflows/api/lookup?module=${encodeURIComponent(module)}&source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}` +
+        (instance ? `&instance=${encodeURIComponent(instance)}` : ""),
     ),
 
   // Data table directory — workspace-level. Used by the datatable

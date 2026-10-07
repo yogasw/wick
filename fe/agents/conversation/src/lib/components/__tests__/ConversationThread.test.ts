@@ -24,6 +24,16 @@ const TURN_B = makeTurn("t-2", "assistant", "Hello from assistant");
 const TURN_C = makeTurn("t-3", "user", "Another message");
 
 describe("ConversationThread", () => {
+  test("while history loads it shows a loading state, not the agent's empty card", () => {
+    const agent = { id: "a1", handle: "captain", name: "Captain", description: "Lead agent" };
+    const { rerender } = render(ConversationThread, { props: { turns: [], live: null, typing: { active: false }, loading: true, agent } });
+    expect(screen.getByTestId("thread-loading").textContent).toContain("Loading messages");
+    expect(screen.queryByText("Lead agent")).toBeNull();
+    rerender({ turns: [], live: null, typing: { active: false }, loading: false, agent });
+    expect(screen.queryByTestId("thread-loading")).toBeNull();
+    expect(screen.getByText("Lead agent")).toBeDefined();
+  });
+
   test("renders all historical turns", () => {
     render(ConversationThread, {
       props: {
@@ -220,5 +230,62 @@ describe("ConversationThread - compaction in flight", () => {
       props: { turns: [TURN_A], live: null, typing, compacting: true },
     });
     expect(container.innerHTML).toContain("amber");
+  });
+});
+
+describe("ConversationThread working indicator", () => {
+  test("stays mounted through a brief drop and hides only after the turn ends", async () => {
+    vi.useFakeTimers();
+    try {
+      const props = (typing: TypingState) => ({ turns: [], live: null, typing, loading: false });
+      const { rerender } = render(ConversationThread, { props: props({ active: true, substate: "thinking" }) });
+      const first = screen.getByTestId("typing-label");
+      expect(first.textContent).toBe("thinking…");
+      // A drop between two events, then the turn goes on.
+      await rerender(props({ active: false }));
+      await vi.advanceTimersByTimeAsync(200);
+      expect(screen.getByTestId("typing-label")).toBe(first);
+      await rerender(props({ active: true, toolName: "shell" }));
+      expect(screen.getByTestId("typing-label")).toBe(first);
+      expect(first.textContent).toBe("running command…");
+      // The real end: gone once the hide delay passed.
+      await rerender(props({ active: false }));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(screen.queryByTestId("typing-label")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("ConversationThread remote progress label", () => {
+  test("replaces thinking… while set; a tool label still wins", async () => {
+    const props = (typing: TypingState, progressLabel?: string) => ({ turns: [], live: null, typing, loading: false, progressLabel });
+    const { rerender } = render(ConversationThread, { props: props({ active: true, substate: "thinking" }, "lagi pakai code read…") });
+    expect(screen.getByTestId("typing-label").textContent).toBe("lagi pakai code read…");
+    await rerender(props({ active: true, toolName: "shell" }, "lagi pakai code read…"));
+    expect(screen.getByTestId("typing-label").textContent).toBe("running command…");
+    await rerender(props({ active: true, substate: "thinking" }));
+    expect(screen.getByTestId("typing-label").textContent).toBe("thinking…");
+  });
+});
+
+describe("ConversationThread working indicator placement", () => {
+  test("sits above the turn's trace and stays while the live turn runs", async () => {
+    vi.useFakeTimers();
+    try {
+      const live = { text: "", blocks: [{ kind: "tool", tool_use_id: "u1", name: "shell", input: "{}", status: "running" }] } as unknown as LiveTurn;
+      const props = (typing: TypingState) => ({ turns: [], live, typing, loading: false });
+      const { rerender, container } = render(ConversationThread, { props: props({ active: true, substate: "thinking" }) });
+      const label = screen.getByTestId("typing-label");
+      const toggle = container.querySelector("[data-live-trace-toggle]")!;
+      expect(label.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      // Typing drops with no text yet: the live turn is still running.
+      await rerender(props({ active: false }));
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(screen.getByTestId("typing-label")).toBe(label);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

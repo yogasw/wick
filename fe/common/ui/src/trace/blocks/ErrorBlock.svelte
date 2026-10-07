@@ -1,0 +1,7 @@
+<script lang="ts">
+  import type { TraceContext, TraceDisplay } from "../types.js";
+  type Props = { display: TraceDisplay; ctx?: TraceContext };
+  let { display }: Props = $props();
+</script>
+
+<pre data-trace-kind="error" class="px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-red-600 dark:text-red-400">{display.body ?? ""}</pre>

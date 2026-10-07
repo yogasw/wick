@@ -1,3 +1,4 @@
+import { withModelListMeta, optionModelsWithMeta } from "@wick-fe/common-ui";
 import { Effect } from "effect";
 import { apiGetE } from "@wick-fe/common-api";
 import type { ModelCaps } from "@wick-fe/common-ui";
@@ -45,7 +46,7 @@ export type ProjectOption = {
 export const getProviderOptions = (base: string) =>
   apiGetE<(ProviderOption & { uses_airouter?: boolean })[] | null>(`${base}/providers/options`).pipe(
     Effect.map((r) =>
-      (r ?? []).map((p) => ({ ...p, usesAIRouter: p.usesAIRouter ?? p.uses_airouter ?? false })),
+      (r ?? []).map((p) => ({ ...p, usesAIRouter: p.usesAIRouter ?? p.uses_airouter ?? false, models: optionModelsWithMeta(p) })),
     ),
   );
 
@@ -62,12 +63,15 @@ export const getProviderOptionModels = (
   base: string,
   type: string,
   name: string,
-  opts?: { entry?: string },
+  opts?: { entry?: string; refresh?: boolean },
 ) => {
-  const q = opts?.entry ? `?entry=${encodeURIComponent(opts.entry)}` : "";
-  return apiGetE<{ models?: ProviderModelOption[] | null }>(
-    `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${q}`,
-  ).pipe(Effect.map((r) => r.models ?? []));
+  const q = new URLSearchParams();
+  if (opts?.entry) q.set("entry", opts.entry);
+  if (opts?.refresh) q.set("refresh", "1"); // the picker's Refresh (omp/opencode CLI, once)
+  const qs = q.toString() ? `?${q.toString()}` : "";
+  return apiGetE<{ models?: ProviderModelOption[] | null; fetched_at?: string; source?: string; can_refresh?: boolean }>(
+    `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${qs}`,
+  ).pipe(Effect.map((r) => withModelListMeta(r.models ?? [], r)));
 };
 
 export const getPresetOptions = (base: string) =>

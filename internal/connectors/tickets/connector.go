@@ -99,6 +99,22 @@ func Operations(layout agentconfig.Layout) []connector.Category {
 			"Return one ticket in full, including its session list. "+
 				"Omit ticket_id to get the ticket the calling session belongs to — the usual way to answer \"what am I working on?\".",
 			getInput{}, h.get, wickdocs.Docs{}),
+		connector.Op("ticket_conversations", "List Conversations",
+			"List the conversations (sessions) attached to a ticket, most recently active first: id, title, who owns it, "+
+				"how many messages it holds and when it was last spoken in. "+
+				"This is the index — read one with ticket_conversation_read. "+
+				"Use it to catch up on what an earlier session already tried before repeating it. "+
+				"Omit ticket_id to use the calling session's ticket.",
+			conversationsInput{}, h.conversations, wickdocs.Docs{}),
+		connector.Op("ticket_conversation_read", "Read Conversation",
+			"Read the messages of ONE conversation on a ticket, a page at a time. "+
+				"By default you get the last 20 messages as final answers only (detail=final) — what was said, "+
+				"not how it was worked out — because a long conversation would otherwise arrive whole. "+
+				"Pass detail=trace for each assistant turn's tool calls and thinking as well (much larger). "+
+				"Page with offset: the response returns total, has_more and next_offset, so pass next_offset back "+
+				"to walk further; order=newest (default) walks backwards from the end, order=oldest forwards from the start. "+
+				"session_id comes from ticket_conversations and may be omitted when the ticket holds exactly one.",
+			conversationReadInput{}, h.conversationRead, wickdocs.Docs{}),
 		connector.Op("ticket_create", "Create Ticket",
 			"Create a ticket in a project. Status defaults to open. "+
 				"Pass attach_current_session=true to attach the calling session to it, which is how an ad-hoc chat becomes tracked work.",

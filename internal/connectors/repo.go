@@ -417,13 +417,30 @@ func (r *Repo) UpsertAccount(ctx context.Context, acc *entity.ConnectorAccount, 
 		if err == nil {
 			// Update token + display name on existing row.
 			return r.db.WithContext(ctx).Model(&existing).Updates(map[string]any{
-				"access_token": acc.AccessToken,
-				"display_name": acc.DisplayName,
-				"updated_at":   acc.UpdatedAt,
+				"access_token":  acc.AccessToken,
+				"refresh_token": acc.RefreshToken,
+				"expires_at":    acc.ExpiresAt,
+				"display_name":  acc.DisplayName,
+				"updated_at":    acc.UpdatedAt,
 			}).Error
 		}
 	}
 	return r.db.WithContext(ctx).Create(acc).Error
+}
+
+// UpdateAccountTokens rewrites one account's token set after a refresh.
+// refresh "" keeps the stored refresh token (servers may omit it).
+func (r *Repo) UpdateAccountTokens(ctx context.Context, accountID, access, refresh string, expiresAt *time.Time) error {
+	updates := map[string]any{
+		"access_token": access,
+		"expires_at":   expiresAt,
+		"updated_at":   time.Now(),
+	}
+	if refresh != "" {
+		updates["refresh_token"] = refresh
+	}
+	return r.db.WithContext(ctx).Model(&entity.ConnectorAccount{}).
+		Where("id = ?", accountID).Updates(updates).Error
 }
 
 // DeleteAccount removes one connected account by ID.
@@ -469,6 +486,24 @@ func (r *Repo) ListOperations(ctx context.Context, connectorID string) ([]entity
 	var out []entity.ConnectorOperation
 	err := r.db.WithContext(ctx).Where("connector_id = ?", connectorID).Find(&out).Error
 	return out, err
+}
+
+// ListOperationsFor is ListOperations for MANY connectors in one query,
+// keyed by connector id. The agent catalog reads every instance the caller
+// reaches, and one round trip per row made it seconds on a remote database.
+func (r *Repo) ListOperationsFor(ctx context.Context, connectorIDs []string) (map[string][]entity.ConnectorOperation, error) {
+	out := map[string][]entity.ConnectorOperation{}
+	if len(connectorIDs) == 0 {
+		return out, nil
+	}
+	var rows []entity.ConnectorOperation
+	if err := r.db.WithContext(ctx).Where("connector_id IN ?", connectorIDs).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, op := range rows {
+		out[op.ConnectorID] = append(out[op.ConnectorID], op)
+	}
+	return out, nil
 }
 
 // SetOperation upserts the toggle for a single (connector, op) pair.

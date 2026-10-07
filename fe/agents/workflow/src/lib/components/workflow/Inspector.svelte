@@ -31,6 +31,12 @@
           <span>Provider</span>
           <input class="rounded border px-2 py-1" value={n.provider ?? ""} oninput={(e) => patch("provider", (e.target as HTMLInputElement).value)} />
         </label>
+        {#if n.type === "agent"}
+          <label class="flex flex-col gap-1">
+            <span>Model</span>
+            <input class="rounded border px-2 py-1" placeholder="(provider default)" value={n.model ?? ""} oninput={(e) => patch("model", (e.target as HTMLInputElement).value)} />
+          </label>
+        {/if}
         <label class="flex flex-col gap-1">
           <span>Preset</span>
           <input class="rounded border px-2 py-1" value={n.preset ?? ""} oninput={(e) => patch("preset", (e.target as HTMLInputElement).value)} />

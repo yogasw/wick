@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/oauth"
 	"strings"
 	"time"
 
@@ -80,9 +81,12 @@ type LoginStat struct {
 // into an empty map on purpose: the analytics page is still worth rendering
 // without the login column, and half a page beats an error page.
 func (r *repo) LoginStats(ctx context.Context) map[string]LoginStat {
+	// Last is scanned as a string: SQLite hands an aggregate like
+	// MAX(created_at) back as text (the driver only parses real columns),
+	// so a time.Time target fails the whole scan there.
 	type row struct {
 		UserID string
-		Last   time.Time
+		Last   string
 		Count  int
 		Live   int
 	}
@@ -97,7 +101,8 @@ func (r *repo) LoginStats(ctx context.Context) map[string]LoginStat {
 	}
 	out := make(map[string]LoginStat, len(rows))
 	for _, x := range rows {
-		out[x.UserID] = LoginStat{Last: x.Last, Count: x.Count, Live: x.Live}
+		last, _ := oauth.ParseAggregateTime(x.Last)
+		out[x.UserID] = LoginStat{Last: last, Count: x.Count, Live: x.Live}
 	}
 	return out
 }

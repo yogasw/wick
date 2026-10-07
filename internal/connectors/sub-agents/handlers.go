@@ -923,13 +923,13 @@ func (h *handlers) message(c *connector.Ctx) (any, error) {
 	if _, err := h.deps.resolveCaller(c.Context(), c.SessionID(), true); err != nil {
 		return nil, err
 	}
-	root, from, err := h.deps.treePosition(c.Context(), c.SessionID())
-	if err != nil {
-		return nil, err
-	}
 	to := strings.TrimPrefix(strings.TrimSpace(c.Input("to")), "@")
 	if to == "" {
 		return nil, errors.New("to is required — call list_agents for the handles")
+	}
+	root, from, err := h.deps.addressedTree(c.Context(), c.SessionID(), to)
+	if err != nil {
+		return nil, err
 	}
 	body := strings.TrimSpace(c.Input("body"))
 	if body == "" {
@@ -985,13 +985,13 @@ func (h *handlers) stop(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	root, _, err := h.deps.treePosition(c.Context(), c.SessionID())
-	if err != nil {
-		return nil, err
-	}
 	handle := strings.TrimPrefix(strings.TrimSpace(c.Input("handle")), "@")
 	if handle == "" {
 		return nil, errors.New("handle is required")
+	}
+	root, _, err := h.deps.addressedTree(c.Context(), c.SessionID(), handle)
+	if err != nil {
+		return nil, err
 	}
 	target, err := h.deps.svc().Repo.FindByHandle(c.Context(), root, handle)
 	if err != nil {

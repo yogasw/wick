@@ -60,7 +60,8 @@ func (h *Handler) AgentToolDescriptorsAs(ctx context.Context, id AgentIdentity) 
 	tools := handlers.MetaToolDescriptors()
 	tools = append(tools, handlers.WickManagerToolDescriptors(ctx, h.connectors, tagIDs, user.IsAdmin())...)
 	tools = append(tools, handlers.SubAgentsToolDescriptors(ctx, h.connectors, tagIDs, user.IsAdmin())...)
-	return tools
+	tools = append(tools, handlers.TeamToolDescriptors(ctx, h.connectors, tagIDs, user.IsAdmin())...)
+	return featureAllowedTools(ctx, tools)
 }
 
 // CallAgentTool dispatches one tool call in-process and returns the tool
@@ -80,6 +81,8 @@ func (h *Handler) CallAgentToolAs(ctx context.Context, name string, args map[str
 	ctx = login.WithUser(ctx, user, tagIDs)
 
 	ctx = handlers.WithSessionID(ctx, sessionID)
+	// Same narrowing the HTTP transport applies in serveWithSession.
+	ctx = withAgentScope(ctx, sessionID)
 
 	r, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/mcp", nil)
 

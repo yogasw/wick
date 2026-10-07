@@ -8,8 +8,11 @@
 package canvas
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"sort"
 	"strings"
 
@@ -31,109 +34,35 @@ func New(svc service.Service) *Canvas {
 // AddNode appends a node to the workflow.
 func (c *Canvas) AddNode(id string, n workflow.Node) (workflow.Workflow, error) {
 	return c.mutate(id, func(w *workflow.Workflow) error {
-		if err := parse.ValidateNodeID(n.ID); err != nil {
-			return err
-		}
-		for _, existing := range w.Graph.Nodes {
-			if existing.ID == n.ID {
-				return fmt.Errorf("node %q already exists", n.ID)
-			}
-		}
-		w.Graph.Nodes = append(w.Graph.Nodes, n)
-		return nil
+		return addNode(w, n)
 	})
 }
 
 // UpdateNode merges a patch into an existing node.
 func (c *Canvas) UpdateNode(id, nodeID string, patch map[string]any) (workflow.Workflow, error) {
 	return c.mutate(id, func(w *workflow.Workflow) error {
-		idx := -1
-		for i, n := range w.Graph.Nodes {
-			if n.ID == nodeID {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			return fmt.Errorf("node %q not found", nodeID)
-		}
-		if err := applyNodePatch(&w.Graph.Nodes[idx], patch); err != nil {
-			return err
-		}
-		return nil
+		return updateNode(w, nodeID, patch)
 	})
 }
 
 // DeleteNode removes a node and every edge touching it.
 func (c *Canvas) DeleteNode(id, nodeID string) (workflow.Workflow, error) {
 	return c.mutate(id, func(w *workflow.Workflow) error {
-		if w.Graph.Entry == nodeID {
-			return fmt.Errorf("cannot delete entry node %q — reassign graph.entry to another node first", nodeID)
-		}
-		idx := -1
-		for i, n := range w.Graph.Nodes {
-			if n.ID == nodeID {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			return fmt.Errorf("node %q not found", nodeID)
-		}
-		w.Graph.Nodes = append(w.Graph.Nodes[:idx], w.Graph.Nodes[idx+1:]...)
-		kept := w.Graph.Edges[:0]
-		for _, e := range w.Graph.Edges {
-			if e.From == nodeID || e.To == nodeID {
-				continue
-			}
-			kept = append(kept, e)
-		}
-		w.Graph.Edges = kept
-		return nil
+		return deleteNode(w, nodeID)
 	})
 }
 
 // Connect adds an edge.
 func (c *Canvas) Connect(id, fromID, toID, caseLabel string) (workflow.Workflow, error) {
 	return c.mutate(id, func(w *workflow.Workflow) error {
-		nodes := indexNodes(w.Graph)
-		from, ok := nodes[fromID]
-		if !ok {
-			return fmt.Errorf("from node %q not found", fromID)
-		}
-		if _, ok := nodes[toID]; !ok {
-			return fmt.Errorf("to node %q not found", toID)
-		}
-		if caseLabel != "" && !from.Type.IsBranchSource() {
-			return errors.New("case only valid on edges from classify/branch source")
-		}
-		for _, e := range w.Graph.Edges {
-			if e.From == fromID && e.To == toID && e.Case == caseLabel {
-				return fmt.Errorf("edge %s→%s (case=%q) already exists", fromID, toID, caseLabel)
-			}
-		}
-		w.Graph.Edges = append(w.Graph.Edges, workflow.Edge{From: fromID, To: toID, Case: caseLabel})
-		return nil
+		return connect(w, fromID, toID, caseLabel)
 	})
 }
 
 // Disconnect removes an edge.
 func (c *Canvas) Disconnect(id, fromID, toID string) (workflow.Workflow, error) {
 	return c.mutate(id, func(w *workflow.Workflow) error {
-		kept := w.Graph.Edges[:0]
-		removed := false
-		for _, e := range w.Graph.Edges {
-			if e.From == fromID && e.To == toID && !removed {
-				removed = true
-				continue
-			}
-			kept = append(kept, e)
-		}
-		if !removed {
-			return fmt.Errorf("edge %s→%s not found", fromID, toID)
-		}
-		w.Graph.Edges = kept
-		return nil
+		return disconnect(w, fromID, toID)
 	})
 }
 
@@ -167,31 +96,21 @@ func (c *Canvas) MoveNodes(id string, moves []NodeMove) (workflow.Workflow, erro
 		return workflow.Workflow{}, errors.New("moves: at least one entry required")
 	}
 	return c.mutate(id, func(w *workflow.Workflow) error {
-		if w.Canvas == nil {
-			w.Canvas = map[string]any{}
-		}
-		positions, _ := w.Canvas["positions"].(map[string]any)
-		if positions == nil {
-			positions = map[string]any{}
-		}
-		for _, mv := range moves {
-			if mv.NodeID == "" {
-				return errors.New("move: node_id is required")
-			}
-			positions[mv.NodeID] = map[string]any{"x": mv.X, "y": mv.Y}
-		}
-		w.Canvas["positions"] = positions
-		return nil
+		return moveNodes(w, moves)
 	})
 }
 
 // layout constants used by AutoLayout.
-// Top-down layout: Y = depth level, X = horizontal spread within level.
+// Top-down lane layout: each trigger owns a column (lane), Y = depth
+// level, X = parallel branches spread rightwards inside the lane.
 const (
-	layoutXGap    = 260 // horizontal gap between nodes in the same level
+	layoutXGap    = 260 // column step for default-width cards (layoutCardW + layoutMinGap)
 	layoutYGap    = 220 // vertical gap between depth levels
-	layoutXOrigin = 420 // center X around which each level is spread
-	layoutYOrigin = 60  // Y for depth 0 (triggers / root nodes)
+	layoutLaneGap = 200 // extra empty space between two lanes
+	layoutXOrigin = 160 // X of the first lane's left edge
+	layoutYOrigin = 60  // Y for the trigger row
+	layoutCardW   = 220 // default card width; must match CARD_W in the FE ports.ts
+	layoutMinGap  = 40  // narrowest gap between two cards in one row
 )
 
 // AutoLayout computes DAG-aware positions and applies them in one draft
@@ -216,36 +135,60 @@ func (c *Canvas) AutoLayout(id string, nodeIDs []string) (workflow.Workflow, err
 	})
 }
 
-// computeLayout returns top-down DAG positions.
+// computeLayout returns top-down lane positions.
 //
 // Layout model:
 //
-//	triggers                → Y = layoutYOrigin (60)
+//	triggers                → Y = layoutYOrigin (60), top of their lane
 //	graph depth 0 (roots)   → Y = layoutYOrigin + layoutYGap (280)
-//	graph depth 1           → Y = layoutYOrigin + 2*layoutYGap (500)
 //	graph depth N           → Y = layoutYOrigin + (N+1)*layoutYGap
 //
-// Triggers are placed DIRECTLY ABOVE their entry node (same X).
-// This guarantees no trigger-to-entry edge ever crosses another edge.
-// Multiple triggers on the same entry node are spread symmetrically.
+// Lanes: walking the triggers in declared order, each trigger claims
+// every node reachable from its entry that no earlier trigger claimed.
+// So a node only one trigger reaches sits in that trigger's lane, and a
+// node shared by several triggers sits in the FIRST trigger's lane.
+// Triggers on the same entry share one lane. Nodes no trigger reaches
+// (orphan roots, cycles) get lanes of their own after the trigger lanes.
+// Lanes sit side by side left→right with layoutLaneGap between them, so
+// two triggers' paths never stack on or cross each other.
 //
-// Within each depth level graph nodes are spread horizontally and
-// centred around layoutXOrigin, sorted by ID for determinism.
+// Inside a lane every child sits under the output port its edge leaves
+// from (a case port, the error port, or the parent's centre), so a
+// branch reads straight down from the label that picks it; siblings
+// sharing one plain output fan out evenly beneath it. Cards are as wide
+// as the editor draws them (cardWidth), so a node with many ports never
+// overlaps its neighbour. A node's fallback path counts as an edge here.
+//
+// sticky_note nodes are never moved: they are annotations the author
+// placed around a block by hand, and guessing their new box from the
+// block's new layout is worse than leaving them for the author/AI to
+// re-wrap with workflow_move_nodes.
 //
 // When restrict is non-empty only those node IDs are repositioned and
 // trigger placement is skipped.
 func computeLayout(w *workflow.Workflow, restrict []string) map[string]map[string]any {
 	layoutAll := len(restrict) == 0
 
+	annotation := make(map[string]bool)
+	for _, n := range w.Graph.Nodes {
+		if n.Type.IsAnnotation() {
+			annotation[n.ID] = true
+		}
+	}
+
 	// --- Build scope: graph nodes only (triggers placed separately) ---
 	scope := make(map[string]bool)
 	if layoutAll {
 		for _, n := range w.Graph.Nodes {
-			scope[n.ID] = true
+			if !annotation[n.ID] {
+				scope[n.ID] = true
+			}
 		}
 	} else {
 		for _, id := range restrict {
-			scope[id] = true
+			if !annotation[id] {
+				scope[id] = true
+			}
 		}
 	}
 
@@ -256,27 +199,33 @@ func computeLayout(w *workflow.Workflow, restrict []string) map[string]map[strin
 		children[id] = nil
 		inbound[id] = 0
 	}
-	for _, e := range w.Graph.Edges {
+	for _, e := range layoutEdges(w) {
 		if scope[e.From] && scope[e.To] {
 			children[e.From] = append(children[e.From], e.To)
 			inbound[e.To]++
 		}
 	}
+	for id := range children {
+		sort.Strings(children[id])
+	}
+	roots := make([]string, 0, len(scope))
+	for id := range scope {
+		if inbound[id] == 0 {
+			roots = append(roots, id)
+		}
+	}
+	sort.Strings(roots)
 
 	// --- Kahn's BFS: depth = rows below the trigger row --------------
-	// Initialise all depths to 0 so roots appear in byDepth map.
 	depth := make(map[string]int, len(scope))
 	for id := range scope {
 		depth[id] = 0
 	}
-	ready := make([]string, 0, len(scope))
-	for id := range scope {
-		if inbound[id] == 0 {
-			ready = append(ready, id)
-		}
+	pending := make(map[string]int, len(inbound))
+	for id, n := range inbound {
+		pending[id] = n
 	}
-	sort.Strings(ready)
-
+	ready := append([]string(nil), roots...)
 	visited := make(map[string]bool, len(scope))
 	maxDepth := 0
 	for len(ready) > 0 {
@@ -286,98 +235,417 @@ func computeLayout(w *workflow.Workflow, restrict []string) map[string]map[strin
 			continue
 		}
 		visited[cur] = true
-		ch := append([]string(nil), children[cur]...)
-		sort.Strings(ch)
-		for _, child := range ch {
+		for _, child := range children[cur] {
 			if d := depth[cur] + 1; d > depth[child] {
 				depth[child] = d
 				if d > maxDepth {
 					maxDepth = d
 				}
 			}
-			inbound[child]--
-			if inbound[child] == 0 {
+			pending[child]--
+			if pending[child] == 0 {
 				ready = append(ready, child)
 				sort.Strings(ready)
 			}
 		}
 	}
 	// Unreachable nodes (cycles) land after the deepest reachable row.
+	cyclic := make([]string, 0)
 	for id := range scope {
 		if !visited[id] {
-			maxDepth++
-			depth[id] = maxDepth
+			cyclic = append(cyclic, id)
 		}
 	}
-
-	// --- Group by depth, sort within level for determinism -----------
-	byDepth := make(map[int][]string, maxDepth+1)
-	for id, d := range depth {
-		byDepth[d] = append(byDepth[d], id)
-	}
-	for d := range byDepth {
-		sort.Strings(byDepth[d])
+	sort.Strings(cyclic)
+	for _, id := range cyclic {
+		maxDepth++
+		depth[id] = maxDepth
 	}
 
-	// --- Assign graph node positions ---------------------------------
-	// depth 0 → Y = layoutYOrigin + layoutYGap  (280 default)
-	// depth N → Y = layoutYOrigin + (N+1)*layoutYGap
-	out := make(map[string]map[string]any, len(scope))
-	for d := 0; d <= maxDepth; d++ {
-		ids := byDepth[d]
-		if len(ids) == 0 {
+	// --- Assign lanes -------------------------------------------------
+	// lane[id] = index into lanes. claim walks every node reachable from
+	// seed that has no lane yet and gives it lane l.
+	lane := make(map[string]int, len(scope))
+	laneCount := 0
+	claim := func(seed string, l int) bool {
+		if !scope[seed] {
+			return false
+		}
+		if _, taken := lane[seed]; taken {
+			return false
+		}
+		stack := []string{seed}
+		for len(stack) > 0 {
+			cur := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if _, taken := lane[cur]; taken {
+				continue
+			}
+			lane[cur] = l
+			stack = append(stack, children[cur]...)
+		}
+		return true
+	}
+
+	trigs := withTriggerIDs(w.Triggers)
+	entryOf := func(t workflow.Trigger) string {
+		if t.EntryNode != "" {
+			return t.EntryNode
+		}
+		return w.Graph.Entry
+	}
+	trigLane := make(map[string]int, len(trigs))
+	for _, t := range trigs {
+		entry := entryOf(t)
+		if l, ok := lane[entry]; ok {
+			trigLane[t.ID] = l // entry already claimed: share that lane
 			continue
 		}
-		y := layoutYOrigin + (d+1)*layoutYGap
-		totalW := (len(ids) - 1) * layoutXGap
-		startX := layoutXOrigin - totalW/2
-		for i, id := range ids {
-			out[id] = map[string]any{
-				"x": startX + i*layoutXGap,
-				"y": y,
-			}
+		if claim(entry, laneCount) {
+			trigLane[t.ID] = laneCount
+			laneCount++
+			continue
+		}
+		trigLane[t.ID] = -1 // entry missing / out of scope
+	}
+	for _, id := range append(roots, cyclic...) {
+		if claim(id, laneCount) {
+			laneCount++
 		}
 	}
 
-	// --- Place triggers directly above their entry nodes -------------
-	// Each trigger shares the X of its entry node (straight edge, no
-	// crossing). Multiple triggers on the same entry are spread
-	// symmetrically around that X.
-	if layoutAll {
-		byEntry := make(map[string][]workflow.Trigger)
-		for _, t := range w.Triggers {
-			if t.ID != "" {
-				byEntry[t.EntryNode] = append(byEntry[t.EntryNode], t)
+	// --- Rows per lane ------------------------------------------------
+	rows := make(map[int]map[int][]string, laneCount) // lane → depth → ids
+	for id, l := range lane {
+		if rows[l] == nil {
+			rows[l] = map[int][]string{}
+		}
+		rows[l][depth[id]] = append(rows[l][depth[id]], id)
+	}
+	trigsInLane := make(map[int][]string, laneCount)
+	orphanTrigs := make([]string, 0)
+	for _, t := range trigs {
+		if l := trigLane[t.ID]; l >= 0 {
+			trigsInLane[l] = append(trigsInLane[l], t.ID)
+		} else {
+			orphanTrigs = append(orphanTrigs, t.ID)
+		}
+	}
+
+	// --- Place each lane in its own coordinates, then shift it right of
+	// the previous one. Rows go top-down so a parent is placed before its
+	// children.
+	widths := cardWidths(w)
+	widthOf := func(id string) int {
+		if v, ok := widths[id]; ok {
+			return v
+		}
+		return layoutCardW
+	}
+	ports := make(map[string][]string, len(scope))
+	for _, n := range w.Graph.Nodes {
+		if scope[n.ID] {
+			ports[n.ID] = outPortKeys(n, w.Graph.Edges)
+		}
+	}
+	parents := make(map[string][]workflow.Edge, len(scope))
+	for _, e := range layoutEdges(w) {
+		if scope[e.From] && scope[e.To] && lane[e.From] == lane[e.To] && depth[e.From] < depth[e.To] {
+			parents[e.To] = append(parents[e.To], e)
+		}
+	}
+
+	out := make(map[string]map[string]any, len(scope)+len(trigs))
+	x := layoutXOrigin
+	for l := 0; l < laneCount; l++ {
+		left := map[string]int{}
+		depths := make([]int, 0, len(rows[l]))
+		for d := range rows[l] {
+			depths = append(depths, d)
+		}
+		sort.Ints(depths)
+		for _, d := range depths {
+			ids := rows[l][d]
+			want := map[string]float64{}
+			for _, id := range ids {
+				want[id] = 0
+				ps := parents[id]
+				if len(ps) == 0 {
+					continue
+				}
+				sum := 0.0
+				for _, e := range ps {
+					sum += anchorX(e, left[e.From], widthOf(e.From), ports[e.From], children[e.From])
+				}
+				want[id] = sum / float64(len(ps))
+			}
+			sort.SliceStable(ids, func(i, j int) bool {
+				if want[ids[i]] != want[ids[j]] {
+					return want[ids[i]] < want[ids[j]]
+				}
+				return ids[i] < ids[j]
+			})
+			// Pack left to right: each card as close to where it wants
+			// to be as the card before it allows.
+			prevRight := math.MinInt / 2
+			for i, id := range ids {
+				wd := widthOf(id)
+				pos := int(math.Round(want[id])) - wd/2
+				if len(parents[id]) == 0 {
+					pos = 0
+					if i > 0 {
+						pos = prevRight + layoutMinGap
+					}
+				}
+				if i > 0 && pos < prevRight+layoutMinGap {
+					pos = prevRight + layoutMinGap
+				}
+				left[id] = pos
+				prevRight = pos + wd
 			}
 		}
-		for entryID, trigs := range byEntry {
-			sort.Slice(trigs, func(i, j int) bool { return trigs[i].ID < trigs[j].ID })
-			entryX := layoutXOrigin
-			if pos, ok := out[entryID]; ok {
-				if x, ok := pos["x"].(int); ok {
-					entryX = x
+		// Triggers line up above their entry, side by side.
+		trigLeft := map[string]int{}
+		if layoutAll {
+			for i, id := range trigsInLane[l] {
+				base := 0
+				for _, t := range trigs {
+					if t.ID == id {
+						if v, ok := left[entryOf(t)]; ok {
+							base = v
+						}
+					}
 				}
+				trigLeft[id] = base + i*layoutXGap
 			}
-			// Spread: centred on entryX, gap = layoutXGap between triggers.
-			totalW := (len(trigs) - 1) * layoutXGap
-			startX := entryX - totalW/2
-			for i, t := range trigs {
-				out[t.ID] = map[string]any{
-					"x": startX + i*layoutXGap,
-					"y": layoutYOrigin,
-				}
+		}
+		minX, maxX := math.MaxInt, math.MinInt
+		for id, v := range left {
+			minX = min(minX, v)
+			maxX = max(maxX, v+widthOf(id))
+		}
+		for _, v := range trigLeft {
+			minX = min(minX, v)
+			maxX = max(maxX, v+layoutCardW)
+		}
+		if minX == math.MaxInt {
+			minX, maxX = 0, layoutCardW
+		}
+		for d, ids := range rows[l] {
+			y := layoutYOrigin + (d+1)*layoutYGap
+			for _, id := range ids {
+				out[id] = map[string]any{"x": x + left[id] - minX, "y": y}
 			}
+		}
+		for id, v := range trigLeft {
+			out[id] = map[string]any{"x": x + v - minX, "y": layoutYOrigin}
+		}
+		x += maxX - minX + layoutMinGap + layoutLaneGap
+	}
+
+	// Lay out EVERY trigger, including any that still lack an id
+	// (workflows written before SetTriggers started minting them).
+	// Skipping those left their cards stacked at the canvas origin with
+	// no edge to their entry node. A trigger whose entry is missing gets
+	// a trailing column of its own so it never overlaps a lane.
+	if layoutAll {
+		for i, id := range orphanTrigs {
+			out[id] = map[string]any{"x": x + i*layoutXGap, "y": layoutYOrigin}
 		}
 	}
 	return out
 }
 
+// errorPortKey marks the on_failure=fallback path in layout edges; the
+// FE calls it ERROR_KEY. It can never collide with a real case.
+const errorPortKey = "\x00error"
+
+// layoutEdges is every connection the canvas draws: graph edges plus each
+// node's fallback path (stored on the node, not as an edge).
+func layoutEdges(w *workflow.Workflow) []workflow.Edge {
+	out := append([]workflow.Edge(nil), w.Graph.Edges...)
+	for _, n := range w.Graph.Nodes {
+		if n.OnFailure == "fallback" && n.Fallback != "" && n.Fallback != n.ID {
+			out = append(out, workflow.Edge{From: n.ID, To: n.Fallback, Case: errorPortKey})
+		}
+	}
+	return out
+}
+
+// anchorX is where a child of edge e should centre: under the parent's
+// output port for that edge, or — for a parent with one plain output —
+// spread evenly under its centre with its siblings.
+func anchorX(e workflow.Edge, parentLeft, parentW int, ports, siblings []string) float64 {
+	if len(ports) > 0 {
+		for i, p := range ports {
+			if p == e.Case {
+				return float64(parentLeft) + (float64(i)+0.5)*float64(parentW)/float64(len(ports))
+			}
+		}
+	}
+	centre := float64(parentLeft) + float64(parentW)/2
+	if len(siblings) <= 1 {
+		return centre
+	}
+	k := sort.SearchStrings(siblings, e.To)
+	return centre + (float64(k)-float64(len(siblings)-1)/2)*layoutXGap
+}
+
+// --- Card geometry, mirrored from the editor (fe/.../workflow/ports.ts) ---
+
+var fixedPorts = map[workflow.NodeType][]string{
+	workflow.NodeDataTableGet:    {"found", "not_found"},
+	workflow.NodeDataTableExists: {"true", "false"},
+}
+
+// outPortKeys lists the labelled outputs the editor paints, left to
+// right: the cases (fallback case last), or "" for a plain success
+// output, then errorPortKey when failures route to a fallback node.
+// nil = one unlabelled output.
+func outPortKeys(n workflow.Node, edges []workflow.Edge) []string {
+	var cases []string
+	if n.Type.IsBranchSource() {
+		add := func(c string) {
+			c = strings.TrimSpace(c)
+			if c != "" && !slices.Contains(cases, c) {
+				cases = append(cases, c)
+			}
+		}
+		fixed := fixedPorts[n.Type]
+		switch {
+		case fixed != nil:
+			for _, c := range fixed {
+				add(c)
+			}
+		case n.Type == workflow.NodeSwitch:
+			for _, c := range n.Cases {
+				add(c.Case)
+			}
+		default:
+			for _, c := range n.OutputCases {
+				add(c)
+			}
+		}
+		fallback := ""
+		if fixed == nil {
+			fallback = "default"
+			if n.Type == workflow.NodeSwitch && n.DefaultCase != "" {
+				fallback = n.DefaultCase
+			}
+		}
+		for _, e := range edges {
+			if e.From == n.ID && e.Case != fallback {
+				add(e.Case)
+			}
+		}
+		if fallback != "" {
+			cases = slices.DeleteFunc(cases, func(c string) bool { return c == fallback })
+			cases = append(cases, fallback)
+		}
+	}
+	if n.OnFailure != "fallback" {
+		return cases
+	}
+	if len(cases) == 0 {
+		cases = []string{""}
+	}
+	return append(cases, errorPortKey)
+}
+
+// inPortCount is how many labelled inputs the editor paints: one per
+// source once there is more than one, else 0.
+func inPortCount(w *workflow.Workflow, n workflow.Node) int {
+	seen := map[string]bool{}
+	from := map[string]bool{}
+	for _, t := range w.Triggers {
+		entry := t.EntryNode
+		if entry == "" {
+			entry = w.Graph.Entry
+		}
+		if entry == n.ID {
+			seen["t:"+t.ID+":"+string(t.Type)] = true
+		}
+	}
+	for _, e := range layoutEdges(w) {
+		if e.To == n.ID {
+			seen["e:"+e.From+":"+e.Case] = true
+			from[e.From] = true
+		}
+	}
+	if n.Type == workflow.NodeMerge {
+		for _, id := range n.Inputs {
+			if !from[id] {
+				seen["m:"+id] = true
+			}
+		}
+	}
+	if len(seen) > 1 {
+		return len(seen)
+	}
+	return 0
+}
+
+// cardWidths is each node card's rendered width: 220px, widened to 90px
+// per port column while a side has at most 6 ports (cardWidth in ports.ts).
+func cardWidths(w *workflow.Workflow) map[string]int {
+	const colMin, flatMax = 90, 6
+	out := make(map[string]int, len(w.Graph.Nodes))
+	for _, n := range w.Graph.Nodes {
+		cols := 0
+		if o := len(outPortKeys(n, w.Graph.Edges)); o <= flatMax {
+			cols = o
+		}
+		if i := inPortCount(w, n); i <= flatMax && i > cols {
+			cols = i
+		}
+		out[n.ID] = max(layoutCardW, cols*colMin)
+	}
+	return out
+}
+
 // SetTriggers replaces the trigger list.
+//
+// Triggers that arrive without an ID get one minted here. An ID is not
+// cosmetic: the canvas keys its trigger cards, positions, run status and
+// trigger→entry_node edges by it, so a list of id-less triggers collapses
+// into duplicate keys and the editor refuses to render the graph at all.
+// Callers that build triggers by hand (MCP `workflow_set_triggers`) would
+// otherwise leave the workflow runnable but uneditable.
 func (c *Canvas) SetTriggers(id string, triggers []workflow.Trigger) (workflow.Workflow, error) {
 	return c.mutate(id, func(w *workflow.Workflow) error {
-		w.Triggers = triggers
+		w.Triggers = withTriggerIDs(triggers)
 		return nil
 	})
+}
+
+// withTriggerIDs fills in a stable, unique ID for every trigger that lacks
+// one, leaving explicitly-set IDs untouched. Shape matches the UI's own
+// scaffold: trigger-<type>, then trigger-<type>-2, -3, ... on collision.
+func withTriggerIDs(triggers []workflow.Trigger) []workflow.Trigger {
+	seen := map[string]bool{}
+	for _, t := range triggers {
+		if t.ID != "" {
+			seen[t.ID] = true
+		}
+	}
+	out := make([]workflow.Trigger, len(triggers))
+	copy(out, triggers)
+	for i := range out {
+		if out[i].ID != "" {
+			continue
+		}
+		typ := string(out[i].Type)
+		if typ == "" {
+			typ = "manual"
+		}
+		candidate := "trigger-" + typ
+		for n := 2; seen[candidate]; n++ {
+			candidate = fmt.Sprintf("trigger-%s-%d", typ, n)
+		}
+		seen[candidate] = true
+		out[i].ID = candidate
+	}
+	return out
 }
 
 // Toggle flips enabled.
@@ -420,11 +688,13 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 	knownKeys := map[string]struct{}{
 		"label": {}, "description": {}, "prompt": {},
 		"timeout_sec": {}, "on_failure": {}, "fallback": {}, "provider": {},
-		"preset": {}, "session": {}, "output_cases": {}, "expr": {},
+		"model": {}, "preset": {}, "session": {}, "output_cases": {}, "expr": {},
 		"url": {}, "method": {}, "channel": {}, "op": {}, "module": {},
 		"row_id": {}, "args": {}, "command": {},
 		"expression": {}, "engine": {}, "result": {},
 		"max_turns": {}, "skills": {}, "tools": {},
+		// go_script body + sticky_note fields.
+		"code": {}, "content": {}, "color": {}, "width": {}, "height": {}, "texts": {},
 	}
 	var unknown []string
 	for k := range patch {
@@ -459,6 +729,9 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 	}
 	if v, ok := patch["provider"].(string); ok {
 		n.Provider = v
+	}
+	if v, ok := patch["model"].(string); ok {
+		n.Model = v
 	}
 	if v, ok := patch["preset"].(string); ok {
 		n.Preset = v
@@ -505,6 +778,40 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 	if v, ok := patch["result"].(string); ok {
 		n.Result = v
 	}
+	if v, ok := patch["code"].(string); ok {
+		n.Code = v
+	}
+	if v, ok := patch["content"].(string); ok {
+		n.Content = v
+	}
+	if v, ok := patch["color"].(string); ok {
+		n.Color = v
+	}
+	switch v := patch["width"].(type) {
+	case int:
+		n.Width = v
+	case float64:
+		n.Width = int(v)
+	}
+	switch v := patch["height"].(type) {
+	case int:
+		n.Height = v
+	case float64:
+		n.Height = int(v)
+	}
+	if v, ok := patch["texts"]; ok {
+		// Round-trip through JSON: the patch arrives as []any of maps
+		// from MCP, or already typed from Go callers.
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Errorf("texts: %w", err)
+		}
+		var texts []workflow.StickyText
+		if err := json.Unmarshal(raw, &texts); err != nil {
+			return fmt.Errorf("texts: want [{id,content,x,y,width,color,size}]: %w", err)
+		}
+		n.Texts = texts
+	}
 	switch v := patch["max_turns"].(type) {
 	case int:
 		n.MaxTurns = v
@@ -541,5 +848,117 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 		}
 		n.Command = out
 	}
+	return nil
+}
+
+func addNode(w *workflow.Workflow, n workflow.Node) error {
+	if err := parse.ValidateNodeID(n.ID); err != nil {
+		return err
+	}
+	for _, existing := range w.Graph.Nodes {
+		if existing.ID == n.ID {
+			return fmt.Errorf("node %q already exists", n.ID)
+		}
+	}
+	w.Graph.Nodes = append(w.Graph.Nodes, n)
+	return nil
+}
+
+func updateNode(w *workflow.Workflow, nodeID string, patch map[string]any) error {
+	idx := -1
+	for i, n := range w.Graph.Nodes {
+		if n.ID == nodeID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("node %q not found", nodeID)
+	}
+	if err := applyNodePatch(&w.Graph.Nodes[idx], patch); err != nil {
+		return err
+	}
+	return nil
+}
+
+func deleteNode(w *workflow.Workflow, nodeID string) error {
+	if w.Graph.Entry == nodeID {
+		return fmt.Errorf("cannot delete entry node %q — reassign graph.entry to another node first", nodeID)
+	}
+	idx := -1
+	for i, n := range w.Graph.Nodes {
+		if n.ID == nodeID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("node %q not found", nodeID)
+	}
+	w.Graph.Nodes = append(w.Graph.Nodes[:idx], w.Graph.Nodes[idx+1:]...)
+	kept := w.Graph.Edges[:0]
+	for _, e := range w.Graph.Edges {
+		if e.From == nodeID || e.To == nodeID {
+			continue
+		}
+		kept = append(kept, e)
+	}
+	w.Graph.Edges = kept
+	return nil
+}
+
+func connect(w *workflow.Workflow, fromID, toID, caseLabel string) error {
+	nodes := indexNodes(w.Graph)
+	from, ok := nodes[fromID]
+	if !ok {
+		return fmt.Errorf("from node %q not found", fromID)
+	}
+	if _, ok := nodes[toID]; !ok {
+		return fmt.Errorf("to node %q not found", toID)
+	}
+	if caseLabel != "" && !from.Type.IsBranchSource() {
+		return errors.New("case only valid on edges from classify/branch source")
+	}
+	for _, e := range w.Graph.Edges {
+		if e.From == fromID && e.To == toID && e.Case == caseLabel {
+			return fmt.Errorf("edge %s→%s (case=%q) already exists", fromID, toID, caseLabel)
+		}
+	}
+	w.Graph.Edges = append(w.Graph.Edges, workflow.Edge{From: fromID, To: toID, Case: caseLabel})
+	return nil
+}
+
+func disconnect(w *workflow.Workflow, fromID, toID string) error {
+	kept := w.Graph.Edges[:0]
+	removed := false
+	for _, e := range w.Graph.Edges {
+		if e.From == fromID && e.To == toID && !removed {
+			removed = true
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if !removed {
+		return fmt.Errorf("edge %s→%s not found", fromID, toID)
+	}
+	w.Graph.Edges = kept
+	return nil
+}
+
+func moveNodes(w *workflow.Workflow, moves []NodeMove) error {
+	if w.Canvas == nil {
+		w.Canvas = map[string]any{}
+	}
+	positions, _ := w.Canvas["positions"].(map[string]any)
+	if positions == nil {
+		positions = map[string]any{}
+	}
+	for _, mv := range moves {
+		if mv.NodeID == "" {
+			return errors.New("move: node_id is required")
+		}
+		positions[mv.NodeID] = map[string]any{"x": mv.X, "y": mv.Y}
+	}
+	w.Canvas["positions"] = positions
 	return nil
 }

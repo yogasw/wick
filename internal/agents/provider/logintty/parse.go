@@ -34,7 +34,11 @@ var (
 	csiRe = regexp.MustCompile(`\x1b\[([0-9;?]*)[ -/]*([@-~])`)
 	oscRe = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
 	escRe = regexp.MustCompile(`\x1b[@-_]`)
-	urlRe = regexp.MustCompile(`https://[^\s"'<>\x60\x1b]+`)
+	// URL characters only (RFC 3986 unreserved + reserved + %). A negated
+	// class used to swallow TUI box borders glued to the URL — opencode's
+	// login prints "https://opencode.ai/auth│" and the link opened broken.
+	// Login URLs are ASCII (non-ASCII arrives percent-encoded).
+	urlRe = regexp.MustCompile(`https://[A-Za-z0-9\-._~:/?#\[\]@!$&()*+,;=%]+`)
 
 	successNeedles = []string{
 		"logged in as",
@@ -50,6 +54,9 @@ var (
 		"invalid code",
 		"oauth error",
 		"unable to authenticate",
+		// codex's device-code flow: the poll to OpenAI came back
+		// non-2xx (expired code, denied grant, backend error).
+		"device auth failed",
 	}
 )
 

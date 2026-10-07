@@ -155,6 +155,10 @@ type ResourceAdminRow struct {
 	// TagNames feeds the search blob so a row is findable by the tag it
 	// carries, not only by name or id.
 	TagNames []string
+	// Locked, when set, is why this row can never be shared (the Captain, a
+	// remote set to "Only me"). The row is listed so an admin sees it exists,
+	// but it shows no access badge and no tag picker.
+	Locked string
 }
 
 // ConnectionRow is the view model for one (user, OAuth client) grant

@@ -117,6 +117,18 @@ describe("prettyPlan", () => {
     expect(prettyPlan("")).toBe("");
     expect(prettyPlan("plus")).toBe("plus");
   });
+
+  it("brands the plan by the account's provider", () => {
+    expect(prettyPlan("pro", "claude")).toBe("Claude pro");
+    expect(prettyPlan("max", "anthropic")).toBe("Claude max");
+    expect(prettyPlan("free", "openai-codex")).toBe("ChatGPT free");
+    expect(prettyPlan("team", "openai")).toBe("ChatGPT team");
+    expect(prettyPlan("pro", "codex")).toBe("ChatGPT pro");
+    expect(prettyPlan("free", "github-copilot")).toBe("free");
+    expect(prettyPlan("api-key", "openai-codex")).toBe("API key");
+    expect(prettyPlan("", "openai")).toBe("");
+    expect(prettyPlan("plus", "openai-codex")).toBe("plus");
+  });
 });
 
 describe("applyFrame", () => {

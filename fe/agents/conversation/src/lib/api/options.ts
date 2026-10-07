@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { apiGetE, apiPostE } from "@wick-fe/common-api";
+import { withModelListMeta, optionModelsWithMeta } from "@wick-fe/common-ui";
 import type { ProviderOption, ProviderModelOption, ProjectOption } from "../types/agents.js";
 
 export const getProviderOptions = (base: string) =>
@@ -8,7 +9,7 @@ export const getProviderOptions = (base: string) =>
       (r ?? []).map((p) => ({
         ...p,
         usesAIRouter: p.usesAIRouter ?? p.uses_airouter ?? false,
-        models: p.models ?? undefined,
+        models: optionModelsWithMeta(p),
       })),
     ),
   );
@@ -23,15 +24,40 @@ export const getProviderOptionModels = (
   base: string,
   type: string,
   name: string,
-  opts?: { entry?: string },
+  opts?: { entry?: string; refresh?: boolean },
 ) => {
   // `entry` expands ONE live model set by its id (the 4th picker level); the
   // vendor filter stays server-side. Without it the endpoint returns the
-  // instance's top-level model choices.
-  const q = opts?.entry ? `?entry=${encodeURIComponent(opts.entry)}` : "";
-  return apiGetE<{ models?: ProviderModelOption[] | null }>(
-    `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${q}`,
-  ).pipe(Effect.map((r) => r.models ?? []));
+  // instance's top-level model choices. `refresh` is the picker's Refresh
+  // (omp/opencode: runs the CLI once). The server's "last updated" stamp
+  // rides on the returned array (withModelListMeta).
+  return apiGetE<ModelsResponse>(
+    `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${modelsQuery(opts)}`,
+  ).pipe(Effect.map((r) => withModelListMeta(r.models ?? [], r)));
+};
+
+type ModelsResponse = {
+  models?: ProviderModelOption[] | null;
+  fetched_at?: string;
+  source?: string;
+  can_refresh?: boolean;
+};
+
+const modelsQuery = (opts?: { entry?: string; refresh?: boolean }) => {
+  const q = new URLSearchParams();
+  if (opts?.entry) q.set("entry", opts.entry);
+  if (opts?.refresh) q.set("refresh", "1");
+  const s = q.toString();
+  return s ? `?${s}` : "";
+};
+
+const projectOptionsQuery = (opts?: { hideTeam?: boolean; include?: string[] }) => {
+  const q = new URLSearchParams();
+  if (opts?.hideTeam) q.set("hide_team", "1");
+  const inc = (opts?.include ?? []).filter(Boolean);
+  if (inc.length) q.set("include", inc.join(","));
+  const s = q.toString();
+  return s ? `?${s}` : "";
 };
 
 // getPresetOptions lists the configured presets ([{name}]) so the project
@@ -42,14 +68,16 @@ export const getPresetOptions = (base: string) =>
     Effect.map((r) => (r ?? []).map((p) => p.name)),
   );
 
-export const getProjectOptions = (base: string) =>
+/** opts.hideTeam leaves out the Team app's agent projects; opts.include
+    names ids that come back regardless (an agent's own project). */
+export const getProjectOptions = (base: string, opts?: { hideTeam?: boolean; include?: string[] }) =>
   apiGetE<
     (ProjectOption & {
       default_provider?: string;
       default_model?: string;
       ticket_enabled?: boolean;
     })[] | null
-  >(`${base}/projects/options`).pipe(
+  >(`${base}/projects/options${projectOptionsQuery(opts)}`).pipe(
     Effect.map((r) =>
       (r ?? []).map((p) => ({
         ...p,
@@ -98,5 +126,7 @@ export async function createSessionInProject(
   if (preset) fd.append("preset", preset);
   const res = await fetch(`${base}/`, { method: "POST", body: fd, credentials: "same-origin" });
   if (res.ok || res.redirected) return res.url;
-  throw new Error(`create session failed: ${res.status}`);
+  // The server answers a refused start with a plain-text reason; show it.
+  const body = (await res.text().catch(() => "")).trim();
+  throw new Error(body || `create session failed: ${res.status}`);
 }

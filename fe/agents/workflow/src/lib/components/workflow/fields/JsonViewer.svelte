@@ -126,7 +126,7 @@
   }
 </script>
 
-<pre class="font-mono text-[11px] text-slate-800 dark:text-white-100 whitespace-pre-wrap leading-snug">{#each tokens as t}{#if t.kind === "text"}{t.text}{:else}<span
+<pre class="font-mono text-[11px] text-black-800 dark:text-white-100 whitespace-pre-wrap leading-snug">{#each tokens as t}{#if t.kind === "text"}{t.text}{:else}<span
         class={"rounded px-0.5 cursor-grab " + (t.cls ?? "")}
         class:hover:bg-emerald-100={draggable}
         class:hover:bg-emerald-900={draggable}

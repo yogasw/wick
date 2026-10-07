@@ -286,6 +286,74 @@ func (h *handlers) moveNodes(c *connector.Ctx) (any, error) {
 	return h.ops.MoveNodes(c.Input("id"), moves)
 }
 
+// apply runs a whole edit batch and answers with counts and warnings only.
+// Echoing the full workflow (as the single-step ops do) is what made a
+// ten-step edit cost ten copies of it; the caller already knows what it
+// sent, and workflow_canvas_view / workflow_get are there when it needs more.
+func (h *handlers) apply(c *connector.Ctx) (any, error) {
+	var ops []wfcanvas.EditOp
+	if err := parseJSON(c.Input("ops"), &ops); err != nil {
+		return nil, fmt.Errorf("ops: %w", err)
+	}
+	minted, err := prepareApplyOps(ops)
+	if err != nil {
+		return nil, err
+	}
+	w, err := h.ops.Apply(c.Input("id"), ops)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{
+		"ok":       true,
+		"applied":  len(ops),
+		"nodes":    len(w.Graph.Nodes),
+		"edges":    len(w.Graph.Edges),
+		"triggers": len(w.Triggers),
+		"draft":    true,
+	}
+	if len(minted) > 0 {
+		out["minted"] = minted
+	}
+	if vr := h.ops.ValidateRich(c.Input("id")); len(vr.Warnings) > 0 {
+		msgs := make([]string, 0, len(vr.Warnings))
+		for _, warn := range vr.Warnings {
+			msgs = append(msgs, warn.Path+": "+warn.Message)
+		}
+		out["warnings"] = msgs
+	}
+	return out, nil
+}
+
+// mintedID tells the caller which id an id-less add_node step received;
+// without it the new node could not be referenced by any later call.
+type mintedID struct {
+	OpIndex int    `json:"op_index"` // position of the add_node step in the ops array
+	Label   string `json:"label,omitempty"`
+	ID      string `json:"id"`
+}
+
+// prepareApplyOps checks a batch before it reaches the canvas and mints ids
+// for id-less add_node steps, the same contract as workflow_add_node.
+//
+// delete_node is refused here: workflow_delete_node is a destructive op an
+// admin can leave switched off, and a non-destructive batch op that could
+// delete anyway would make that gate meaningless.
+func prepareApplyOps(ops []wfcanvas.EditOp) ([]mintedID, error) {
+	var minted []mintedID
+	for i := range ops {
+		switch ops[i].Op {
+		case "delete_node":
+			return nil, fmt.Errorf("ops[%d] delete_node: not allowed in a batch — deleting is destructive, use workflow_delete_node", i)
+		case "add_node":
+			if n := ops[i].Node; n != nil && n.ID == "" {
+				n.ID = uuid.NewString()
+				minted = append(minted, mintedID{OpIndex: i, Label: n.Label, ID: n.ID})
+			}
+		}
+	}
+	return minted, nil
+}
+
 func (h *handlers) autoLayout(c *connector.Ctx) (any, error) {
 	var nodeIDs []string
 	if s := strings.TrimSpace(c.Input("node_ids")); s != "" {

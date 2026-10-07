@@ -5,6 +5,16 @@ import * as api from "$lib/api.js";
 import * as router from "$lib/router.js";
 import type { HistoryResult, HistoryRun } from "$lib/types.js";
 
+/* pickOption drives the themed <Select> (common-ui): open its trigger,
+   click the option carrying `value`. The listbox is portalled to body. */
+async function pickOption(trigger: HTMLElement, value: string): Promise<void> {
+  await fireEvent.click(trigger);
+  const opt = document.body.querySelector<HTMLElement>(`[role="option"][data-value="${value}"]`);
+  if (!opt) throw new Error(`no option ${value}`);
+  await fireEvent.click(opt);
+}
+
+
 vi.mock("$lib/api.js");
 vi.mock("$lib/router.js", () => ({ push: vi.fn() }));
 
@@ -82,8 +92,8 @@ describe("ConnectorHistory", () => {
     await screen.findByText("Run history");
     vi.mocked(api.getConnectorHistory).mockClear();
     /* Filter selects render in order: op, source, status, user. */
-    const sourceSelect = screen.getAllByRole("combobox")[1];
-    await fireEvent.change(sourceSelect, { target: { value: "mcp" } });
+    const sourceSelect = screen.getAllByTestId("wick-select-trigger")[1];
+    await pickOption(sourceSelect, "mcp");
     expect(api.getConnectorHistory).toHaveBeenCalledWith(
       "slack",
       "row-a",
@@ -204,8 +214,8 @@ describe("ConnectorHistory credential filter", () => {
     vi.mocked(api.getConnectorHistory).mockResolvedValue(makeResult());
     render(ConnectorHistory, { connectorKey: "slack", connectorId: "row-a" });
     await screen.findByText("send");
-    const selects = screen.getAllByRole("combobox");
-    await fireEvent.change(selects[selects.length - 1], { target: { value: "default" } });
+    const selects = screen.getAllByTestId("wick-select-trigger");
+    await pickOption(selects[selects.length - 1], "default");
     expect(api.getConnectorHistory).toHaveBeenLastCalledWith(
       "slack",
       "row-a",

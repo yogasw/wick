@@ -1,3 +1,4 @@
+import { withModelListMeta } from "@wick-fe/common-ui";
 import type { ProjectSettingsData, UpdateProjectRequest } from "./types.js";
 
 class ApiError extends Error {
@@ -51,17 +52,20 @@ export interface ProviderModelOption {
 export async function getProviderOptionModels(
   type: string,
   name: string,
-  opts?: { entry?: string },
+  opts?: { entry?: string; refresh?: boolean },
 ): Promise<ProviderModelOptionResolved[]> {
   const base = getBase();
-  const q = opts?.entry ? `?entry=${encodeURIComponent(opts.entry)}` : "";
+  const params = new URLSearchParams();
+  if (opts?.entry) params.set("entry", opts.entry);
+  if (opts?.refresh) params.set("refresh", "1"); // the picker's Refresh (omp/opencode CLI, once)
+  const q = params.toString() ? `?${params.toString()}` : "";
   const path = `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${q}`;
   try {
-    const r = await get<{ models?: ProviderModelOption[] | null }>(path);
+    const r = await get<{ models?: ProviderModelOption[] | null; fetched_at?: string; source?: string; can_refresh?: boolean }>(path);
     // `default` is omitted by the server for non-default models, but the
     // pickers that consume this list require the flag to be present — fill
     // it here so one shape satisfies both.
-    return (r.models ?? []).map((m) => ({ ...m, default: m.default === true }));
+    return withModelListMeta((r.models ?? []).map((m) => ({ ...m, default: m.default === true })), r);
   } catch {
     return [];
   }

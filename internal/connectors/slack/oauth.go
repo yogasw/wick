@@ -96,3 +96,8 @@ func SlackOAuthMeta() *connector.OAuthMeta {
 		},
 	}
 }
+
+// UserOAuthScopeList is userOAuthScopes as a slice, for the manifest a
+// Team agent's Slack app is created from: the same app then also serves
+// the personal "send as me" connector.
+func UserOAuthScopeList() []string { return strings.Split(userOAuthScopes(), ",") }

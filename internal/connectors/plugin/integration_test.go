@@ -190,7 +190,7 @@ func TestPluginStreamLargeResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteStream over subprocess: %v", err)
 	}
-	if !strings.Contains(string(out), big) {
+	if !strings.Contains(string(out.JSON), big) {
 		t.Fatal("streamed result missing the large payload")
 	}
 }

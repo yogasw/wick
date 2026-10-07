@@ -50,7 +50,7 @@ templ AccessBadge(s AccessSummary) {
 	} else {
 		<button
 			type="button"
-			class={ "access-badge inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors " + accessBadgeClass(s) }
+			class={ "access-badge inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors " + accessBadgeClass(s) }
 			data-access-path={ s.Path }
 			title={ accessBadgeTitle(s) }
 		>

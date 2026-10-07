@@ -562,7 +562,7 @@ func (s *ssoSigner) seed() (ed25519.PrivateKey, error) {
 	stored := s.keys.GetOwned(ssoKeyOwner, ssoKeyName)
 	if stored != "" {
 		plain := stored
-		if strings.HasPrefix(stored, "wick_enc_") {
+		if isSecretToken(stored) {
 			dec, err := s.keys.DecryptSecret(stored)
 			if err != nil {
 				return nil, fmt.Errorf("decrypt sso signing key: %w", err)
@@ -580,8 +580,9 @@ func (s *ssoSigner) seed() (ed25519.PrivateKey, error) {
 		return nil, err
 	}
 	val := base64.StdEncoding.EncodeToString(raw)
-	// Pre-encrypt to a wick_enc_ token — the secret layer recognizes
-	// it and stores it verbatim instead of re-encrypting.
+	// Pre-encrypt (the configs service yields a wick_cenc_ token) — the
+	// secret layer recognizes it and stores it verbatim instead of
+	// re-encrypting, so the read above must accept either prefix.
 	if enc, err := s.keys.EncryptSecret(val); err == nil {
 		val = enc
 	}

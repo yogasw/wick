@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 )
 
 // StaleClaimSweeper returns board tasks held by vanished workers to the
@@ -122,9 +123,22 @@ func (d *DelegationSweeper) Start(ctx context.Context) {
 	}()
 }
 
+// isDraining is upgrade.Draining, a var so a test can flip it without
+// touching the process-wide flag.
+var isDraining = upgrade.Draining
+
 // Pass runs one sweep. Exported so a test can drive it without waiting on
 // a ticker.
 func (d *DelegationSweeper) Pass(ctx context.Context) {
+	// A draining process has handed its socket to the successor, and every
+	// new agent is spawned there. Each step below reads THIS process's pool
+	// (AgentAlive, the queue's spawn), so here it judges the successor's
+	// live sub-agents as gone — observed closing a running delegation
+	// "(no output)" three minutes in — and would start queued work in a
+	// process that is about to exit. The successor runs its own sweep.
+	if isDraining() {
+		return
+	}
 	if n, err := d.Svc.Repo.ClearStaleBlocked(ctx); err != nil {
 		log.Warn().Err(err).Msg("delegation: stale-blocked sweep failed")
 	} else if n > 0 {
@@ -212,7 +226,7 @@ func (s *Service) closeAbandonedRuns(ctx context.Context) {
 	}
 	for i := range running {
 		row := &running[i]
-		if row.ChildSessionID == "" || s.AgentAlive(row.ChildSessionID, row.ChildAgent) {
+		if row.ChildSessionID == "" || s.childAlive(row.ChildSessionID, row.ChildAgent) {
 			continue
 		}
 		// A recent progress note also means alive.
@@ -257,7 +271,32 @@ func (s *Service) closeAbandonedRuns(ctx context.Context) {
 		}
 		s.deliver(ctx, fresh, fresh.DeliverySink, s.doneResult(ctx, fresh, fresh.TurnsUsed, fresh.TokensUsed, out))
 		s.pokeSlot(fresh.RootID)
+		s.backgroundEnded(ctx, fresh)
 	}
+}
+
+// childAlive is AgentAlive widened to a draining predecessor.
+//
+// During a reload the old process keeps running the sub-agents it spawned
+// while the new one takes over the socket — and the sweep. Both read the
+// same delegation rows, but each sees only its own pool, so without the
+// predecessor's drain record the new process judged every child of the old
+// one dead and closed its run "(no output)" while it was still working.
+func (s *Service) childAlive(childSessionID, agentName string) bool {
+	if s.AgentAlive != nil && s.AgentAlive(childSessionID, agentName) {
+		return true
+	}
+	return upgrade.PredecessorHolds(s.DrainDir, childSessionID)
+}
+
+// childBusy reports whether a child still has a turn in flight — here, or in
+// a draining predecessor. Unlike childAlive it ignores an idle process kept
+// warm between legs, which a continuation reuses rather than races.
+func (s *Service) childBusy(childSessionID, agentName string) bool {
+	if s.AgentBusy != nil && s.AgentBusy(childSessionID, agentName) {
+		return true
+	}
+	return upgrade.PredecessorHolds(s.DrainDir, childSessionID)
 }
 
 // expireOverrunningInvestigations stops investigations that have run past

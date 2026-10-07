@@ -4,8 +4,8 @@ import "testing"
 
 // mintFor records what identity each spawn asked a credential for, so a test
 // can assert whose access the process would have carried.
-func mintFor(seen *[]string) func(sessionID, callerUserID string) (string, bool) {
-	return func(sessionID, callerUserID string) (string, bool) {
+func mintFor(seen *[]string) func(sessionID, callerUserID string) (string, string, bool) {
+	return func(sessionID, callerUserID string) (string, string, bool) {
 		// Stand-in for the real wiring: caller first, session owner when no
 		// human triggered the spawn.
 		identity := callerUserID
@@ -13,7 +13,7 @@ func mintFor(seen *[]string) func(sessionID, callerUserID string) (string, bool)
 			identity = "owner-of-" + sessionID
 		}
 		*seen = append(*seen, identity)
-		return "token-for-" + identity, true
+		return "token-for-" + identity, identity, true
 	}
 }
 

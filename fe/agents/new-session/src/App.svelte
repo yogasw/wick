@@ -152,7 +152,7 @@
   // conversation composer. `optionValue` is a "type/name" key; ask the server
   // for that instance's current vendor models (and level-4 live-set expansion
   // via opts.entry). Without this wired, live-set rows showed "No extra models".
-  function loadProviderModels(optionValue: string, opts?: { entry?: string }) {
+  function loadProviderModels(optionValue: string, opts?: { entry?: string; refresh?: boolean }) {
     const slash = optionValue.indexOf("/");
     const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
     const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);

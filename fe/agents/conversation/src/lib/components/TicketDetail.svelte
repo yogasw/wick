@@ -10,6 +10,7 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { timeAgo } from "../timeFormat.js";
+  import { now } from "../stores/now.js";
   import { renderMarkdown } from "../markdown.js";
   import NotesPanel from "./NotesPanel.svelte";
   import AssigneePicker from "./AssigneePicker.svelte";
@@ -359,7 +360,7 @@
                 <span class="mt-0.5 flex items-center gap-2 text-[11px] text-black-700 dark:text-black-600">
                   <span class="font-mono">#{s.id.slice(0, 8)}</span>
                   {#if s.lifecycle}<span class="rounded bg-pos-100 px-1.5 py-0.5 text-pos-400">{s.lifecycle}</span>{/if}
-                  {#if s.last_active}<span>{timeAgo(s.last_active)}</span>{/if}
+                  {#if s.last_active}<span>{timeAgo(s.last_active, $now)}</span>{/if}
                 </span>
               </button>
               <button
@@ -500,7 +501,7 @@
         {/if}
 
         <p class="mt-4 text-[11px] leading-relaxed text-black-600 dark:text-black-700">
-          updated {timeAgo(t.updated_at)}<br />created {timeAgo(t.created_at)}
+          updated {timeAgo(t.updated_at, $now)}<br />created {timeAgo(t.created_at, $now)}
         </p>
       </div>
     </aside>

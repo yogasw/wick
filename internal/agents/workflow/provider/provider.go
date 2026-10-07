@@ -92,6 +92,46 @@ type Registry struct {
 	mu        sync.RWMutex
 	providers map[string]Provider
 	defaultID string
+	access    AccessFn
+}
+
+// AccessFn reports whether the workflow owner (ownerUserID, "" when the
+// workflow has none) may run on the provider instance typ/name. A non-nil
+// error is the refusal the node fails with. Injected at setup by the
+// package that owns the access-tag rules (tools/agents), which this
+// package cannot import without a cycle.
+type AccessFn func(ctx context.Context, ownerUserID, typ, name string) error
+
+// SetAccessCheck installs the owner access gate. nil disables it (tests,
+// headless boots): every provider stays runnable, as before the gate.
+func (r *Registry) SetAccessCheck(fn AccessFn) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.access = fn
+}
+
+// CheckAccess runs the installed access gate for p on behalf of the
+// workflow owner. nil when no gate is installed.
+func (r *Registry) CheckAccess(ctx context.Context, ownerUserID string, p Provider) error {
+	r.mu.RLock()
+	fn := r.access
+	r.mu.RUnlock()
+	if fn == nil || p == nil {
+		return nil
+	}
+	return fn(ctx, ownerUserID, TypeOf(p), p.Name())
+}
+
+// TypeOf reports the runtime type ("claude" / "codex" / …) of a provider
+// that knows it (see the setup package's cliProvider), else its name —
+// the same fallback the pool reads a bare provider key with.
+func TypeOf(p Provider) string {
+	if t, ok := p.(interface{ ProviderType() string }); ok {
+		if typ := t.ProviderType(); typ != "" {
+			return typ
+		}
+	}
+	return p.Name()
 }
 
 // NewRegistry builds an empty registry.
@@ -155,6 +195,7 @@ func (r *Registry) Describe() []Info {
 	for _, p := range r.providers {
 		out = append(out, Info{
 			Name:         p.Name(),
+			Type:         TypeOf(p),
 			Capabilities: p.Capabilities(),
 			IsDefault:    p.Name() == r.defaultID,
 		})
@@ -164,7 +205,10 @@ func (r *Registry) Describe() []Info {
 
 // Info is one introspection row.
 type Info struct {
-	Name         string       `json:"name"`
+	Name string `json:"name"`
+	// Type is the runtime type; with Name it forms the "type/name" key the
+	// access tags and the provider pickers use.
+	Type         string       `json:"type,omitempty"`
 	Capabilities Capabilities `json:"capabilities"`
 	IsDefault    bool         `json:"is_default,omitempty"`
 }

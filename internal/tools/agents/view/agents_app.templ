@@ -1,0 +1,128 @@
+package view
+
+import (
+	"strconv"
+
+	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/pkg/ui"
+)
+
+// AgentsAppVM feeds the full-screen Team app (/team; "Agents app" in code). It hosts the same
+// conversation bundle as the session pages, switched into its agents mode
+// by data-mode, so a chat with an agent is the ordinary conversation view
+// and not a second implementation of it.
+type AgentsAppVM struct {
+	Base          string
+	AssetURL      string
+	ScmAsset      string
+	IdleTimeoutMs int
+	RailPrefs     string
+	ViewerID      string
+	ViewerName    string
+	// Theme feeds the account menu's Light/Dark switch, which posts to the
+	// existing /theme endpoint: the mode on screen and the user's paired
+	// light and dark theme ids. Empty for a signed-out viewer.
+	ThemeMode  string
+	ThemeLight string
+	ThemeDark  string
+}
+
+// AgentsApp renders the Agents app shell. Deliberately WITHOUT
+// AgentsLayout: the app has its own roster sidebar, and the wick sidebar
+// beside it would be two navigation columns for one screen. The page
+// chrome (head, CSS, theme) still comes from the app-wide renderer, so
+// light/dark and fonts match every other page.
+templ AgentsApp(vm AgentsAppVM) {
+	@sidebarResize("team", sidebarWidth(login.GetUser(ctx), "team"))
+	@tooltipStyles()
+	@scrollbarStyles()
+	<style>
+		html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+		[data-agents-app] { height: calc(var(--wick-vvh, 100svh) - var(--wick-chrome-top, 0px)); }
+		/* Team and Agents are two pages; a cross-document view transition
+		   keeps the sidebar (same width and header in both) in place and
+		   fades only what changes, so the switch does not feel like a page
+		   load. Browsers without it just navigate. */
+		@view-transition { navigation: auto; }
+		[data-space-sidebar] { view-transition-name: wick-space-sidebar; }
+		[data-space-switch] { view-transition-name: wick-space-switch; }
+		[data-space-account] { view-transition-name: wick-space-account; }
+		/* the selected half of the switch slides across, like a pill */
+		[data-space-active] { view-transition-name: wick-space-pill; }
+		::view-transition-group(*) { animation-duration: 220ms; animation-timing-function: cubic-bezier(.2, 0, 0, 1); }
+		/* Thin green bar on top from the switch click until the other page
+		   paints; pageshow clears it when the page comes back from bfcache. */
+		html.wick-space-loading::before {
+			content: ""; position: fixed; top: 0; left: 0; z-index: 9999; height: 2px; background: #22c55e;
+			animation: wick-space-load 1.4s cubic-bezier(.2, 0, 0, 1) forwards;
+		}
+		@keyframes wick-space-load { from { width: 0 } to { width: 85% } }
+		/* The account menu rises in instead of popping. */
+		[data-account-panel], [data-account-menu] { animation: wick-menu-in 140ms ease-out; }
+		@keyframes wick-menu-in { from { opacity: 0; transform: translateY(6px) } }
+	</style>
+	<script>
+		addEventListener("pageshow", function () { document.documentElement.classList.remove("wick-space-loading"); });
+	</script>
+	// The shell is sized to what is actually visible. 100svh does not shrink
+	// for the on-screen keyboard on every mobile browser (Edge on Android
+	// leaves a gap twice the composer padding under it), so --wick-vvh
+	// tracks visualViewport.height and the composer sits right on the
+	// keyboard. The page itself never scrolls; a keyboard that nudges it
+	// (offsetTop > 0) is scrolled back. Pinch-zoom shrinks the visual
+	// viewport too, so the var is dropped while zoomed and 100svh applies.
+	<script>
+		(function () {
+			var vv = window.visualViewport;
+			if (!vv) return;
+			var root = document.documentElement;
+			function fit() {
+				if (vv.scale > 1.01) {
+					root.style.removeProperty("--wick-vvh");
+					return;
+				}
+				root.style.setProperty("--wick-vvh", Math.round(vv.height) + "px");
+				if (vv.offsetTop > 0 || window.scrollY > 0) window.scrollTo(0, 0);
+			}
+			vv.addEventListener("resize", fit);
+			vv.addEventListener("scroll", fit);
+			fit();
+		})();
+	</script>
+	// The page chrome titles every page after the tool ("Agents"); this one
+	// is the Team app, so swap the leading name and keep the app suffix.
+	<script>document.title = document.title.replace(/^[^|]*\|/, "Team |");</script>
+	<div class="flex w-full bg-white-200 dark:bg-navy-800" data-agents-app>
+		if vm.AssetURL == "" {
+			<div class="p-8 text-sm text-rose-600 dark:text-rose-400">
+				Conversation bundle not built yet. Run
+				<code class="font-mono">npm --workspace=@wick-fe/agents-conversation run build</code>
+				in <code class="font-mono">fe/</code> and refresh.
+			</div>
+		} else {
+			<div
+				id="app"
+				data-mode="agents"
+				data-base={ vm.Base }
+				data-scm-asset={ vm.ScmAsset }
+				data-idle-timeout-ms={ strconv.Itoa(vm.IdleTimeoutMs) }
+				data-rail-prefs={ vm.RailPrefs }
+				data-viewer-id={ vm.ViewerID }
+				data-viewer-name={ vm.ViewerName }
+				data-viewer-email={ viewerEmail(login.GetUser(ctx)) }
+				data-viewer-avatar={ viewerAvatar(login.GetUser(ctx)) }
+				data-viewer-admin?={ login.GetUser(ctx) != nil && login.GetUser(ctx).IsAdmin() }
+				data-viewing-as={ ui.ImpersonationFromContext(ctx).ActingAs }
+				data-app-version={ ui.VersionInfoFromContext(ctx).AppVersion }
+				data-wick-version={ ui.VersionInfoFromContext(ctx).WickVersion }
+				data-theme-mode={ vm.ThemeMode }
+				data-theme-light={ vm.ThemeLight }
+				data-theme-dark={ vm.ThemeDark }
+				class="h-full w-full"
+			></div>
+			<script type="module" src={ vm.AssetURL }></script>
+		}
+	</div>
+	@ui.Dialog()
+	<script src="/public/js/dialog.js"></script>
+}

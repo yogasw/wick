@@ -3,7 +3,7 @@
 wick plugins talk to the host over **gRPC**, driven by HashiCorp's
 [go-plugin](https://github.com/hashicorp/go-plugin) handshake. The contract is
 language-agnostic: any language with a gRPC server and the go-plugin handshake
-can be a wick connector. Go is the easiest (the `wickplugin.Serve` SDK does
+can be a wick plugin. Go is the easiest (the `wickplugin.Serve` SDK does
 everything), but nothing in the wire protocol is Go-specific.
 
 ## TODO for a non-Go plugin
@@ -138,3 +138,33 @@ This path works, but it's more effort than Go (where `wickplugin.Serve(Module())
 is the whole binary). Reach for it when a connector genuinely needs a non-Go
 ecosystem (an existing Python/Rust SDK for the target API). For everything else,
 copy `connector/_template`.
+
+## Tool and service plugins: HTTP on a unix socket
+
+Tools and services are the easiest kinds to write in another language, because
+their traffic is **plain HTTP**, not gRPC:
+
+- The host sets `WICK_PLUGIN_SOCKET` to a unix socket path. Listen on it with
+  any HTTP server (file mode `0600`) and answer requests as usual — the host
+  reverse-proxies `/tools/<key>/*` (tool) or `/x/<key>/*` (service) to it.
+- The go-plugin handshake + gRPC `Health` above are still needed so the host
+  knows the process is ready; `Configure(config)` delivers the config at spawn
+  and on change.
+- Trust the `X-Wick-User-Id`, `X-Wick-User-Role`, `X-Wick-User-Tags` and
+  `X-Wick-Base` headers: the host strips client-sent `X-Wick-*` and the socket
+  is only reachable by the wick user.
+- Services also get `WICK_BASE_URL` + `WICK_PLUGIN_TOKEN` in the environment
+  for calling wick back.
+- SSE / streaming works: write and flush, the proxy flushes per write.
+
+## Job plugins: gRPC `Job`
+
+A job implements `service Job { Schema, Run(stream Chunk), Health }` from
+`pkg/plugin/proto/job.proto`: `Run` receives the config and trigger
+(`cron` / `manual` / `run_now`), streams progress chunks into the run history
+and ends with the result string or an error. The host kills the process right
+after `Run` returns.
+
+For all kinds, `plugin.json` must carry the matching `kind`
+(`connector|tool|job|service`) and the zip must be named
+`<key>-<version>-<os>-<arch>.zip` (no `-` in the key).

@@ -32,6 +32,9 @@ export type BoardOptions = {
   untracked?: boolean;
   /** One page of the untracked rail. */
   untrackedLimit?: number;
+  /** The rail's next page: rows after this cursor (a previous response's
+      `untracked_next`). Omitted = the first page. */
+  untrackedAfter?: string;
   /** Untracked scope: "me" = only the caller's loose chats (count included),
       "all"/omitted = everyone's. */
   untrackedOwner?: string;
@@ -46,6 +49,7 @@ export const getProjectTickets = (base: string, projectId: string, opt: BoardOpt
   if (opt.assignee) q.set("assignee", opt.assignee);
   if (opt.untracked) q.set("untracked", "1");
   if (opt.untrackedLimit !== undefined) q.set("untracked_limit", String(opt.untrackedLimit));
+  if (opt.untrackedAfter) q.set("untracked_after", opt.untrackedAfter);
   if (opt.untrackedOwner === "me") q.set("untracked_owner", "me");
   const qs = q.toString();
   return apiGetE<TicketBoard>(

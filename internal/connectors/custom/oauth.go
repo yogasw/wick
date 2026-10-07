@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 )
 
@@ -63,6 +65,11 @@ const (
 	cfgOAuthAccess  = "oauth_access_token"
 	cfgOAuthRefresh = "oauth_refresh_token"
 	cfgOAuthExpiry  = "oauth_expires_at"
+	// cfgOAuthPerUser ("1") marks an instance as per-user (SSO): calls
+	// run as each caller's own ConnectorAccount. Only the per-user
+	// save/connect path sets it — Enable SSO alone never diverts a legacy
+	// instance away from its own stored token.
+	cfgOAuthPerUser = "oauth_per_user"
 )
 
 // oauthLogin is one in-flight browser login, created by StartOAuthLogin
@@ -82,8 +89,15 @@ type oauthLogin struct {
 	// redirecting would strand the popup on a page nobody is looking at.
 	// The redirect URI is fixed (it must match what the AS registered), so
 	// this rides the session instead of a query parameter.
-	Popup   bool
-	Expires time.Time
+	Popup bool
+	// AccountUserID, when set, makes this a per-user (SSO) connect: the
+	// tokens land in a ConnectorAccount owned by this wick user on
+	// InstanceID instead of the instance's own config rows.
+	// AccountFallbackName labels the account when the AS yields no
+	// identity (plain OAuth, no userinfo / id_token).
+	AccountUserID       string
+	AccountFallbackName string
+	Expires             time.Time
 }
 
 const oauthLoginTTL = 10 * time.Minute
@@ -334,9 +348,23 @@ func (s *Service) registerClient(ctx context.Context, regEndpoint, redirectURI s
 // existing instance row ("" for the register-form flow, where the
 // tokens ride the login session until save).
 func (s *Service) StartOAuthLogin(ctx context.Context, f *ServerForm, redirectURI, instanceID string) (authURL, loginID string, err error) {
-	meta, regEndpoint, err := s.discoverOAuth(ctx, f.URL)
+	meta, err := s.discoverOAuthClient(ctx, f, redirectURI)
 	if err != nil {
 		return "", "", err
+	}
+
+	// The edit-form "Test now" login always runs in a popup.
+	return s.newLogin(*f, *meta, redirectURI, instanceID, true)
+}
+
+// discoverOAuthClient resolves the full client material for a form:
+// RFC 9728 → RFC 8414 discovery, the form's client overrides, and RFC
+// 7591 dynamic registration when no client_id was given. No user login
+// is involved — the register form's per-user save calls it directly.
+func (s *Service) discoverOAuthClient(ctx context.Context, f *ServerForm, redirectURI string) (*oauthClientMeta, error) {
+	meta, regEndpoint, err := s.discoverOAuth(ctx, f.URL)
+	if err != nil {
+		return nil, err
 	}
 	meta.ClientID = strings.TrimSpace(f.OAuth.ClientID)
 	meta.ClientSecret = strings.TrimSpace(f.OAuth.ClientSecret)
@@ -348,17 +376,15 @@ func (s *Service) StartOAuthLogin(ctx context.Context, f *ServerForm, redirectUR
 	}
 	if meta.ClientID == "" {
 		if regEndpoint == "" {
-			return "", "", fmt.Errorf("the authorization server offers no dynamic registration — fill in a client ID")
+			return nil, fmt.Errorf("the authorization server offers no dynamic registration — fill in a client ID")
 		}
 		id, secret, err := s.registerClient(ctx, regEndpoint, redirectURI)
 		if err != nil {
-			return "", "", err
+			return nil, err
 		}
 		meta.ClientID, meta.ClientSecret = id, secret
 	}
-
-	// The edit-form "Test now" login always runs in a popup.
-	return s.newLogin(*f, *meta, redirectURI, instanceID, true)
+	return meta, nil
 }
 
 // StartOAuthLoginForServer begins a browser login against a stored
@@ -381,6 +407,30 @@ func (s *Service) startOAuthLoginForServer(srv *entity.CustomConnectorMCPServer,
 		return "", "", fmt.Errorf("server has no OAuth client material — edit the server and run Test once")
 	}
 	return s.newLogin(ServerForm{URL: srv.URL, AuthScheme: "oauth"}, meta, redirectURI, instanceID, popup)
+}
+
+// StartOAuthAccountLogin begins the per-user (SSO) connect: the same
+// PKCE popup login against the server's stored client material, but the
+// callback saves a ConnectorAccount for wickUserID on instanceID instead
+// of writing the instance's own token rows. fallbackName labels the
+// account when the AS exposes no identity.
+func (s *Service) StartOAuthAccountLogin(srv *entity.CustomConnectorMCPServer, redirectURI, instanceID, wickUserID, fallbackName string) (authURL string, err error) {
+	meta := parseOAuthMeta(srv.AuthExtra)
+	if meta.AuthEndpoint == "" || meta.TokenEndpoint == "" || meta.ClientID == "" {
+		return "", fmt.Errorf("server has no OAuth client material — edit the server and save it again")
+	}
+	if wickUserID == "" {
+		return "", fmt.Errorf("connecting an account requires a logged-in user")
+	}
+	authURL, loginID, err := s.newLogin(ServerForm{URL: srv.URL, AuthScheme: "oauth"}, meta, redirectURI, instanceID, true)
+	if err != nil {
+		return "", err
+	}
+	if login, ok := s.logins.get(loginID); ok {
+		login.AccountUserID = wickUserID
+		login.AccountFallbackName = fallbackName
+	}
+	return authURL, nil
 }
 
 // newLogin creates the in-flight session and assembles the PKCE
@@ -430,6 +480,10 @@ type OAuthLoginResult struct {
 	// Popup echoes how the login was opened. An instance-bound login from a
 	// popup must end by closing the window, not by redirecting.
 	Popup bool
+	// AsAccount marks a per-user (SSO) connect: the tokens were saved as
+	// the caller's ConnectorAccount, labelled Account.
+	AsAccount bool
+	Account   string
 }
 
 // CompleteOAuthLogin exchanges the callback code (PKCE) and stashes the
@@ -457,6 +511,20 @@ func (s *Service) CompleteOAuthLogin(ctx context.Context, state, code, redirectU
 	login.Tokens = tokens
 	login.Account = s.resolveAccountLabel(ctx, &login.Meta, tokens)
 	res := &OAuthLoginResult{LoginID: login.ID, InstanceID: login.InstanceID, Popup: login.Popup}
+	if login.InstanceID != "" && login.AccountUserID != "" {
+		label := login.Account
+		if label == "" {
+			label = login.AccountFallbackName
+		}
+		if err := s.saveAccountTokens(ctx, login.InstanceID, login.AccountUserID, label, tokens); err != nil {
+			return nil, err
+		}
+		res.AsAccount, res.Account = true, label
+		if row, err := s.conns.Get(ctx, login.InstanceID); err == nil {
+			res.Key = row.Key
+		}
+		return res, nil
+	}
 	if login.InstanceID != "" {
 		if err := s.persistInstanceTokens(ctx, login.InstanceID, tokens, login.Account); err != nil {
 			return nil, err
@@ -478,7 +546,7 @@ func (s *Service) tokenRequest(ctx context.Context, meta *oauthClientMeta, form 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if meta.ClientSecret != "" {
 		secret := meta.ClientSecret
-		if strings.HasPrefix(secret, "wick_enc_") && s.keys != nil {
+		if isSecretToken(secret) && s.keys != nil {
 			if dec, err := s.keys.DecryptSecret(secret); err == nil {
 				secret = dec
 			}
@@ -560,7 +628,7 @@ func (s *Service) OAuthLoginStatus(loginID string) string {
 func (s *Service) oauthAuthExtra(ctx context.Context, f *ServerForm, existingID string) (string, error) {
 	if login, ok := s.logins.get(f.OAuthLoginID); ok {
 		meta := login.Meta
-		if meta.ClientSecret != "" && !strings.HasPrefix(meta.ClientSecret, "wick_enc_") && s.keys != nil {
+		if meta.ClientSecret != "" && !isSecretToken(meta.ClientSecret) && s.keys != nil {
 			if enc, err := s.keys.EncryptSecret(meta.ClientSecret); err == nil {
 				meta.ClientSecret = enc
 			}
@@ -575,6 +643,20 @@ func (s *Service) oauthAuthExtra(ctx context.Context, f *ServerForm, existingID 
 		if m := parseOAuthMeta(existing.AuthExtra); m.TokenEndpoint != "" {
 			return existing.AuthExtra, nil
 		}
+	}
+	if f.OAuthPerUser {
+		// Per-user (SSO) mode saves without anyone logging in: discovery
+		// and dynamic registration run here, server-side.
+		meta, err := s.discoverOAuthClient(ctx, f, f.OAuthRedirectURI)
+		if err != nil {
+			return "", err
+		}
+		if meta.ClientSecret != "" && !isSecretToken(meta.ClientSecret) && s.keys != nil {
+			if enc, err := s.keys.EncryptSecret(meta.ClientSecret); err == nil {
+				meta.ClientSecret = enc
+			}
+		}
+		return mustJSON(meta), nil
 	}
 	return "", fmt.Errorf("sign in on Test connection before saving an oauth server")
 }
@@ -610,6 +692,7 @@ func oauthInstanceConfigs() []DefField {
 		{Key: cfgOAuthAccess, Secret: true, Widget: "secret", Hidden: true, Desc: "OAuth access token (managed automatically)."},
 		{Key: cfgOAuthRefresh, Secret: true, Widget: "secret", Hidden: true, Desc: "OAuth refresh token (managed automatically)."},
 		{Key: cfgOAuthExpiry, Hidden: true, Desc: "Access token expiry (RFC3339, managed automatically)."},
+		{Key: cfgOAuthPerUser, Hidden: true, Desc: "Per-user (SSO) mode marker (managed automatically)."},
 	}
 }
 
@@ -644,6 +727,210 @@ func (s *Service) persistInstanceTokens(ctx context.Context, instanceID string, 
 		}
 	}
 	return nil
+}
+
+// ── per-user (SSO) account storage ───────────────────────────────────
+
+// markPerUser sets the instance's per-user (SSO) marker.
+func (s *Service) markPerUser(ctx context.Context, instanceID string) error {
+	if s.keys == nil {
+		return nil
+	}
+	owner := "connector:" + instanceID
+	if s.keys.GetOwned(owner, cfgOAuthPerUser) == "1" {
+		return nil
+	}
+	if err := s.keys.EnsureOwned(ctx, owner, FieldsToConfigs(oauthInstanceConfigs())...); err != nil {
+		return fmt.Errorf("register oauth config rows: %w", err)
+	}
+	if err := s.keys.SetOwned(ctx, owner, cfgOAuthPerUser, "1"); err != nil {
+		return fmt.Errorf("mark per-user instance: %w", err)
+	}
+	return nil
+}
+
+// InstancePerUser reports whether an oauth MCP instance runs in per-user
+// (SSO) mode: Enable SSO on AND the per-user marker set. A legacy
+// per-instance-token row with Enable SSO flipped on keeps its own token.
+func (s *Service) InstancePerUser(row entity.Connector) bool {
+	return row.EnableSSO && s.keys != nil && s.keys.GetOwned("connector:"+row.ID, cfgOAuthPerUser) == "1"
+}
+
+// saveAccountTokens lands one login's tokens as wickUserID's
+// ConnectorAccount on instanceID. The refresh token is encrypted at
+// rest; the access token is stored like every other connector account's.
+// Connecting marks the instance per-user and forces MultiAccount on first:
+// with it off the upsert replaces every other user's account.
+func (s *Service) saveAccountTokens(ctx context.Context, instanceID, wickUserID, label string, t *oauthTokens) error {
+	if label == "" {
+		label = wickUserID
+	}
+	row, err := s.conns.Get(ctx, instanceID)
+	if err != nil {
+		return err
+	}
+	if err := s.markPerUser(ctx, instanceID); err != nil {
+		return err
+	}
+	if !row.MultiAccount {
+		if err := s.conns.SetAccessPolicy(ctx, row.ID, connectors.AccessPolicy{
+			AllowOthersConfigure:   row.AllowOthersConfigure,
+			AllowOthersConnectSSO:  row.AllowOthersConnectSSO,
+			EnableSSO:              row.EnableSSO,
+			MultiAccount:           true,
+			AllowOthersSeeAccounts: row.AllowOthersSeeAccounts,
+		}); err != nil {
+			return fmt.Errorf("enable multi-account: %w", err)
+		}
+	}
+	refresh, err := s.encryptRefresh(t.RefreshToken)
+	if err != nil {
+		return err
+	}
+	var exp *time.Time
+	if !t.ExpiresAt.IsZero() {
+		e := t.ExpiresAt
+		exp = &e
+	}
+	if err := s.conns.SaveAccountTokens(ctx, instanceID, wickUserID, label, label, t.AccessToken, refresh, exp); err != nil {
+		return fmt.Errorf("save account: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) encryptRefresh(v string) (string, error) {
+	if v == "" || isSecretToken(v) || s.keys == nil {
+		return v, nil
+	}
+	enc, err := s.keys.EncryptSecret(v)
+	if err != nil {
+		return "", fmt.Errorf("encrypt refresh token: %w", err)
+	}
+	return enc, nil
+}
+
+// isSecretToken reports whether v is already an encrypted token. The
+// configs service encrypts at rest with the wick_cenc_ master prefix, so
+// both prefixes must count — gating on wick_enc_ alone sends the raw
+// ciphertext to the authorization server.
+func isSecretToken(v string) bool {
+	return enc.IsToken(v) || enc.IsMasterToken(v)
+}
+
+// accountAccessToken returns a live access token for one connected
+// account, refreshing through the server's client when expired and
+// persisting the fresh set back onto that same account.
+func (s *Service) accountAccessToken(ctx context.Context, meta *oauthClientMeta, acc *entity.ConnectorAccount) (string, error) {
+	if acc.ExpiresAt == nil || time.Now().Before(acc.ExpiresAt.Add(-30*time.Second)) {
+		return acc.AccessToken, nil
+	}
+	refresh := acc.RefreshToken
+	if refresh == "" {
+		return acc.AccessToken, nil // expired with no refresh path — let the call 401
+	}
+	if isSecretToken(refresh) && s.keys != nil {
+		dec, err := s.keys.DecryptSecret(refresh)
+		if err != nil {
+			return "", fmt.Errorf("decrypt refresh token: %w", err)
+		}
+		refresh = dec
+	}
+	fresh, err := s.refreshTokens(ctx, meta, refresh)
+	if err != nil {
+		return "", fmt.Errorf("refresh oauth token for @%s: %w", acc.DisplayName, err)
+	}
+	storedRefresh := ""
+	if fresh.RefreshToken != refresh {
+		if storedRefresh, err = s.encryptRefresh(fresh.RefreshToken); err != nil {
+			return "", err
+		}
+	}
+	var exp *time.Time
+	if !fresh.ExpiresAt.IsZero() {
+		e := fresh.ExpiresAt
+		exp = &e
+	}
+	if err := s.conns.UpdateAccountTokens(ctx, acc.ID, fresh.AccessToken, storedRefresh, exp); err != nil {
+		return "", fmt.Errorf("persist refreshed token: %w", err)
+	}
+	acc.AccessToken, acc.ExpiresAt = fresh.AccessToken, exp
+	return fresh.AccessToken, nil
+}
+
+// ErrNoOAuthAccount is returned when an SSO-mode MCP instance is called
+// by someone who has not connected their own account yet.
+var ErrNoOAuthAccount = fmt.Errorf("no connected account")
+
+// ErrOAuthAccountGone is returned when a call names an account (@accountId)
+// that is no longer connected to the instance.
+var ErrOAuthAccountGone = fmt.Errorf("account not connected to this instance")
+
+// ErrOAuthAccountNotYours is returned when a call names (@accountId)
+// another user's account on an instance that keeps accounts private.
+var ErrOAuthAccountNotYours = fmt.Errorf("account belongs to another user")
+
+// callerAccount resolves the account an SSO-mode call runs as.
+//
+// callerUserID is the session owner (connectors.Service.Execute stamps it
+// over the MCP principal, which for owner-less spawns is a synthetic
+// admin), so ownership is checked here too rather than trusting the
+// framework's AccountVisibleTo gate alone: that gate runs against the MCP
+// principal and passes every account for an admin one. An explicit
+// @accountId may name the caller's own account, an ownerless legacy row,
+// or any account when the instance shares them (AllowOthersSeeAccounts).
+// Without an explicit account the call runs as the caller's own account
+// and never falls back to someone else's.
+func (s *Service) callerAccount(ctx context.Context, inst entity.Connector, accountID, callerUserID string) (*entity.ConnectorAccount, error) {
+	accs, err := s.conns.ListAccounts(ctx, inst.ID)
+	if err != nil {
+		return nil, err
+	}
+	if accountID != "" {
+		for i := range accs {
+			if accs[i].ID != accountID {
+				continue
+			}
+			owner := accs[i].WickUserID
+			if owner == "" || inst.AllowOthersSeeAccounts || (callerUserID != "" && owner == callerUserID) {
+				return &accs[i], nil
+			}
+			return nil, ErrOAuthAccountNotYours
+		}
+		return nil, ErrOAuthAccountGone
+	}
+	var best *entity.ConnectorAccount
+	for i := range accs {
+		if callerUserID == "" || accs[i].WickUserID != callerUserID {
+			continue
+		}
+		if best == nil || accs[i].UpdatedAt.After(best.UpdatedAt) {
+			best = &accs[i]
+		}
+	}
+	if best == nil {
+		return nil, ErrNoOAuthAccount
+	}
+	return best, nil
+}
+
+// syncAccount picks the account whose token authenticates an SSO-mode
+// instance's tools/list: the caller's own when connected, else the most
+// recently refreshed account on the row. nil when nobody connected yet.
+func syncAccount(accs []entity.ConnectorAccount, callerUserID string) *entity.ConnectorAccount {
+	var mine, latest *entity.ConnectorAccount
+	for i := range accs {
+		a := &accs[i]
+		if callerUserID != "" && a.WickUserID == callerUserID && (mine == nil || a.UpdatedAt.After(mine.UpdatedAt)) {
+			mine = a
+		}
+		if latest == nil || a.UpdatedAt.After(latest.UpdatedAt) {
+			latest = a
+		}
+	}
+	if mine != nil {
+		return mine
+	}
+	return latest
 }
 
 // resolveAccountLabel turns a fresh token set into a human identity for

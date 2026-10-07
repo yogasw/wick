@@ -2,6 +2,7 @@ package view
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
@@ -21,6 +22,9 @@ type AgentsLayoutVM struct {
 	// chips. Keyed by project id; ProjectList is the display order.
 	Projects    map[string]project.Project
 	ProjectList []string
+	// SharedOwners maps a project the viewer reaches but does not own to
+	// its owner's name, for the sidebar's hover-only shared icon. Absent = theirs.
+	SharedOwners map[string]string
 	// SidebarOwner is the sidebar session list's scope: "me" (default)
 	// shows only the caller's sessions, "all" everything they may see.
 	// The two hrefs re-render the CURRENT page with ?sb= set — the toggle
@@ -71,12 +75,14 @@ func (vm AgentsLayoutVM) ProjectName(id string) string {
 
 // NewSessionHref is the "New session" nav target. When the sidebar is
 // scoped to a project, it carries `?project=<id>` so the compose form
-// auto-selects that project (mockup ②).
+// auto-selects that project (mockup ②). Unscoped it carries ?view=classic:
+// the bare landing is what "Open Team when I open Agents" sends to Team,
+// and a click on New session from inside Agents must stay in Agents.
 func (vm AgentsLayoutVM) NewSessionHref() string {
 	if vm.ScopedProjectID != "" {
 		return vm.Base + "/?project=" + vm.ScopedProjectID
 	}
-	return vm.Base + "/"
+	return vm.Base + "/?view=classic"
 }
 
 // ProjectIcon returns the emoji icon for a project id (📁 fallback).
@@ -102,6 +108,11 @@ type ProviderChoiceVM struct {
 	// other provider type: the composer picker only descends to a 3rd
 	// "model" level when there's more than one enabled entry here.
 	Models []ModelChoiceVM
+	// ModelsAt / ModelsSource stamp an omp/opencode live list (zero when
+	// Models is the curated one): the picker shows "Updated … · files"
+	// from the first paint.
+	ModelsAt     time.Time
+	ModelsSource string
 }
 
 // ModelChoiceVM is one selectable model under a wick provider instance.
@@ -196,4 +207,3 @@ type GateStatusVM struct {
 	// PermissionMode == "bypass".
 	BypassLocked bool
 }
-

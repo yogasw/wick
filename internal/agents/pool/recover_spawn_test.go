@@ -275,14 +275,25 @@ func TestGiveUpAnnouncesOnceWithoutSpawning(t *testing.T) {
 	}
 	settle(t, sp, 700*time.Millisecond, 20*time.Second)
 
-	mu.Lock()
-	defer mu.Unlock()
-	var halts []string
-	for _, m := range announced {
-		if contains(m, "NOT restarted") {
-			halts = append(halts, m)
+	collectHalts := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		var out []string
+		for _, m := range announced {
+			if contains(m, "NOT restarted") {
+				out = append(out, m)
+			}
 		}
+		return out
 	}
+	// The announcement is delivered asynchronously; under -race on a
+	// loaded box it can land after the spawn count settles. Wait for the
+	// first one, then hold a little longer so a duplicate would show.
+	for deadline := time.Now().Add(10 * time.Second); len(collectHalts()) == 0 && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(300 * time.Millisecond)
+	halts := collectHalts()
 	if len(halts) != 1 {
 		t.Fatalf("halt announced %d times, want exactly 1: %v", len(halts), halts)
 	}

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/yogasw/wick/internal/appname"
+	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
 // appDataDir is the per-app data directory wick keeps its DB, config, and
@@ -24,6 +25,25 @@ func appDataDir() string {
 	return appname.DataDir()
 }
 
+// RootDir is the plugins root holding one folder per kind:
+// <appDataDir>/plugins, overridable with WICK_PLUGINS_ROOT.
+func RootDir() string {
+	if d := os.Getenv("WICK_PLUGINS_ROOT"); d != "" {
+		return d
+	}
+	return filepath.Join(appDataDir(), "plugins")
+}
+
+// KindDir is where plugins of one kind are installed: RootDir()/<kind>s
+// (connectors, jobs, tools, services). The connector dir keeps its
+// WICK_PLUGINS_DIR override via DefaultDir.
+func KindDir(kind string) string {
+	if wickplugin.NormalizeKind(kind) == wickplugin.KindConnector {
+		return DefaultDir()
+	}
+	return filepath.Join(RootDir(), wickplugin.KindFolder(kind))
+}
+
 // DefaultDir is the runtime location wick scans for installed connector
 // plugins: <appDataDir>/plugins/connectors, overridable with WICK_PLUGINS_DIR.
 // It matches the layout `make plugins` writes to.
@@ -31,7 +51,7 @@ func DefaultDir() string {
 	if d := os.Getenv("WICK_PLUGINS_DIR"); d != "" {
 		return d
 	}
-	return filepath.Join(appDataDir(), "plugins", "connectors")
+	return filepath.Join(RootDir(), wickplugin.KindFolder(wickplugin.KindConnector))
 }
 
 // RunDir is where wick pins plugin Unix sockets: <appDataDir>/run, overridable

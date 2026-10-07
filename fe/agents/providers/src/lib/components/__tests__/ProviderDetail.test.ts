@@ -3,9 +3,14 @@ import { render, screen, fireEvent } from "@testing-library/svelte";
 import ProviderDetail from "../ProviderDetail.svelte";
 import { cardStacksMissingRhythm, expectCardRhythm } from "./cardRhythm.js";
 import * as api from "$lib/api.js";
+import * as mb from "$lib/managedbin.js";
 import type { ProviderDetailResponse } from "$lib/types.js";
 
 vi.mock("$lib/api.js");
+vi.mock("$lib/managedbin.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("$lib/managedbin.js")>()),
+  apiManagedList: vi.fn(),
+}));
 vi.mock("@wick-fe/common-stores", () => ({
   toastOk: vi.fn(),
   toastError: vi.fn(),
@@ -47,7 +52,14 @@ function makeDetail(): ProviderDetailResponse {
 
 const defaultProps = { base: "", type: "claude", name: "default", onBack: vi.fn(), onOpenSession: vi.fn() };
 
+/* Collapsible sections remember their state per browser; start every
+   test clean, with the CollapsibleSection cards open so the content tests
+   below can reach their controls (default-closed is tested on its own). */
+const OPEN_SECTIONS = ["binary", "models", "airouter", "hooks", "gate", "processes"];
+
 beforeEach(() => {
+  localStorage.clear();
+  for (const k of OPEN_SECTIONS) localStorage.setItem(`wick.providers.section.detail.${k}`, "1");
   vi.mocked(api.apiGetProviderDetail).mockResolvedValue(makeDetail());
   // ProviderDetail embeds <RecentSpawns>, which fetches on mount.
   vi.mocked(api.apiGetSessions).mockResolvedValue({ Sessions: [], Page: 1, HasNext: false, Total: 0 });
@@ -72,12 +84,15 @@ describe("ProviderDetail - rendering", () => {
 
   it("renders version badge when path found", async () => {
     render(ProviderDetail, { props: defaultProps });
-    expect(await screen.findByText("1.2.3")).toBeTruthy();
+    // Heading badge + the open Binary section's Version row.
+    expect((await screen.findAllByText("1.2.3")).length).toBe(2);
   });
 
   it("renders resolved path in binary info", async () => {
     render(ProviderDetail, { props: defaultProps });
-    expect(await screen.findByText("/usr/bin/claude")).toBeTruthy();
+    // Body only: the header carries the version pill, not the long path.
+    expect((await screen.findAllByText("/usr/bin/claude")).length).toBe(1);
+    expect(screen.getByTestId("binary-version-pill").textContent).toBe("v1.2.3");
   });
 
   it("collapses Configuration / extra_args / env by default", async () => {
@@ -102,8 +117,10 @@ describe("ProviderDetail - rendering", () => {
     render(ProviderDetail, { props: defaultProps });
     await fireEvent.click(await screen.findByText("Configuration"));
     await screen.findByText("send_mode");
-    const selects = document.querySelectorAll("select");
+    // Themed <Select> (common-ui), not a native <select>.
+    const selects = screen.getAllByTestId("wick-select-trigger");
     expect(selects.length).toBeGreaterThan(0);
+    expect(document.querySelectorAll("select").length).toBe(0);
   });
 
   it("renders hooks section", async () => {
@@ -445,5 +462,176 @@ describe("ProviderDetail - card rhythm", () => {
     expect(cardStacksMissingRhythm(el)).toHaveLength(1);
     el.setAttribute("class", "space-y-4");
     expect(cardStacksMissingRhythm(el)).toHaveLength(0);
+  });
+});
+
+describe("ProviderDetail - opencode MCP + hosted model settings", () => {
+  it("renders extra MCP as a textarea and warns about hosted models / a missing model", async () => {
+    const d = makeDetail();
+    d.Instance = { ...d.Instance, Type: "opencode", Name: "oc" };
+    d.ConfigFields = [
+      { Key: "extra_mcp_servers", Value: "{}", Type: "textarea", Options: "", IsSecret: false, Description: "Extra MCP", Required: false },
+      { Key: "opencode_model", Value: "", Type: "text", Options: "", IsSecret: false, Description: "model", Required: false },
+      { Key: "opencode_allow_hosted", Value: "true", Type: "dropdown", Options: "false|true", IsSecret: false, Description: "hosted", Required: false },
+    ];
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(d);
+    render(ProviderDetail, { props: { ...defaultProps, type: "opencode", name: "oc" } });
+    await fireEvent.click(await screen.findByText("Configuration"));
+    expect((await screen.findByLabelText("extra_mcp_servers")).tagName).toBe("TEXTAREA");
+    expect(screen.getByTestId("opencode-hosted-warning").textContent).toContain("opencode's servers");
+    expect(screen.getByTestId("opencode-model-missing")).toBeTruthy();
+  });
+});
+
+describe("ProviderDetail - omp/opencode live model list", () => {
+  function liveDetail(live: boolean) {
+    const d = makeDetail();
+    d.Instance = { ...d.Instance, Type: "opencode", Name: "oc" };
+    d.ConfigFields = [
+      { Key: "live_models", Value: live ? "true" : "false", Type: "bool", Options: "", IsSecret: false, Description: "live", Required: false },
+      { Key: "live_model_filter", Value: "gpt", Type: "text", Options: "", IsSecret: false, Description: "filter", Required: false },
+      { Key: "live_model_default", Value: "", Type: "text", Options: "", IsSecret: false, Description: "default", Required: false },
+      { Key: "model_select", Value: "true", Type: "bool", Options: "", IsSecret: false, Description: "", Required: false },
+      { Key: "models", Value: "[]", Type: "kvlist", Options: "id|desc", IsSecret: false, Description: "", Required: false },
+    ];
+    return d;
+  }
+
+  it("live mode shows the CLI list panel instead of the manual list; toggle saves live_models", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(liveDetail(true));
+    vi.mocked(api.apiGetCLIModels).mockResolvedValue({ models: [{ id: "openai/gpt-5.5" }, { id: "google/gemini-3" }], hostedAllowed: false, fetchedAt: "" });
+    render(ProviderDetail, { props: { ...defaultProps, type: "opencode", name: "oc" } });
+    expect(await screen.findByTestId("live-models-panel")).toBeTruthy();
+    expect(screen.queryByText("+ Add model")).toBeNull();
+    // live keys never leak into the generic Configuration rows
+    expect(screen.queryByLabelText("live_model_filter")).toBeNull();
+    await fireEvent.click(screen.getByTestId("model-source-manual"));
+    expect(api.apiSaveConfigKey).toHaveBeenCalledWith("", "opencode", "oc", "live_models", "false");
+  });
+
+  it("manual mode keeps the curated list", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(liveDetail(false));
+    render(ProviderDetail, { props: { ...defaultProps, type: "opencode", name: "oc" } });
+    expect(await screen.findByTestId("model-source-toggle")).toBeTruthy();
+    expect(screen.queryByTestId("live-models-panel")).toBeNull();
+    expect(screen.getByText("+ Add model")).toBeTruthy();
+  });
+});
+
+describe("ProviderDetail - server mode + Load Claude/Codex skills toggles", () => {
+  it("renders both as switches; server mode off shows the run-per-turn note", async () => {
+    const d = makeDetail();
+    d.Instance = { ...d.Instance, Type: "opencode", Name: "oc" };
+    d.ConfigFields = [
+      { Key: "server_mode", Value: "true", Type: "bool", Options: "", IsSecret: false, Description: "server", Required: false },
+      { Key: "load_external_skills", Value: "false", Type: "bool", Options: "", IsSecret: false, Description: "skills", Required: false },
+    ];
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(d);
+    render(ProviderDetail, { props: { ...defaultProps, type: "opencode", name: "oc" } });
+    // Closed by default, but the header already says what is inside.
+    expect((await screen.findByTestId("section-config")).getAttribute("data-open")).toBe("0");
+    expect(screen.getByText(/Server mode: on · 2 fields/)).toBeTruthy();
+    await fireEvent.click(await screen.findByText("Configuration"));
+    const server = await screen.findByTestId("server-mode-toggle");
+    expect(server.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByTestId("load-skills-toggle").getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByTestId("field-label-load_external_skills").textContent).toBe("Load Claude/Codex skills");
+    expect(screen.queryByTestId("run-per-turn-note")).toBeNull();
+    await fireEvent.click(server);
+    expect(server.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByTestId("run-per-turn-note")).toBeTruthy();
+  });
+
+  it("renders auto_retry_model as a labelled switch, off by default", async () => {
+    const d = makeDetail();
+    d.Instance = { ...d.Instance, Type: "omp", Name: "o" };
+    d.ConfigFields = [
+      { Key: "auto_retry_model", Value: "false", Type: "bool", Options: "", IsSecret: false, Description: "retry", Required: false },
+    ];
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(d);
+    render(ProviderDetail, { props: { ...defaultProps, type: "omp", name: "o" } });
+    await fireEvent.click(await screen.findByText("Configuration"));
+    const sw = await screen.findByTestId("auto-retry-model-toggle");
+    expect(sw.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByTestId("field-label-auto_retry_model").textContent).toBe("Auto-retry with the next model on access error");
+  });
+});
+
+describe("ProviderDetail - layout", () => {
+  it("puts Connection first and keeps the other sections collapsed by default", async () => {
+    localStorage.clear();
+    const { container } = render(ProviderDetail, { props: defaultProps });
+    const first = await screen.findByTestId("detail-connection-first");
+    const binaryHeader = await screen.findByText("Binary");
+    // Connection precedes the Binary card in document order.
+    expect(first.compareDocumentPosition(binaryHeader) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText("Probe Gate")).toBeNull();
+    const open = [...container.querySelectorAll("[data-open]")].map((el) => el.getAttribute("data-open"));
+    expect(open.length).toBeGreaterThan(0);
+    expect(open.every((v) => v === "0")).toBe(true);
+  });
+
+  it("remembers an opened section in localStorage", async () => {
+    localStorage.clear();
+    render(ProviderDetail, { props: defaultProps });
+    await fireEvent.click(await screen.findByText("Command Gate"));
+    expect(localStorage.getItem("wick.providers.section.detail.gate")).toBe("1");
+    expect(await screen.findByText("Probe Gate")).toBeTruthy();
+  });
+});
+
+describe("ProviderDetail - Binary section", () => {
+  it("non-managed type: one Binary section, path + version rows, no managed rows", async () => {
+    render(ProviderDetail, { props: defaultProps });
+    const sec = await screen.findByTestId("section-binary");
+    expect(sec.textContent).toContain("Resolved path");
+    expect(sec.textContent).toContain("/usr/bin/claude");
+    expect(sec.textContent).not.toContain("managed by wick");
+    expect(screen.queryByTestId("managed-binary-panel")).toBeNull();
+  });
+
+  it("managed type: ONE Binary section holds the managed info; header = version + managed pill", async () => {
+    localStorage.removeItem("wick.providers.section.detail.binary");
+    const d = makeDetail();
+    d.Instance = { ...d.Instance, Type: "opencode", Name: "oc" };
+    d.Path = "/home/x/.support-tools/providers/bin/opencode/versions/1.18.33/opencode";
+    d.Version = "1.18.33";
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(d);
+    vi.mocked(mb.apiManagedList).mockResolvedValue({
+      isAdmin: true,
+      types: [mb.normalizeManaged({ type: "opencode", enabled: true, host_label: "linux-x64 · glibc · AVX2", current: "1.18.33", current_path: d.Path, latest: { tag: "v1.18.33", version: "1.18.33" } })],
+    });
+    render(ProviderDetail, { props: { ...defaultProps, type: "opencode", name: "oc" } });
+    const sec = await screen.findByTestId("section-binary");
+    // collapsed by default: header summary only, no long path
+    expect(sec.getAttribute("data-open")).toBe("0");
+    expect(sec.textContent).toContain("v1.18.33");
+    expect(sec.textContent).toContain("managed by wick");
+    expect(sec.textContent).not.toContain("/opencode/versions/");
+    expect(screen.queryByText("Binary · opencode")).toBeNull();
+    expect(screen.getAllByText("Binary")).toHaveLength(1);
+
+    await fireEvent.click(screen.getByText("Binary"));
+    const panel = await screen.findByTestId("managed-binary-panel");
+    expect(sec.contains(panel)).toBe(true);
+    expect((await screen.findByTestId("managed-current")).textContent).toBe("v1.18.33");
+    expect(screen.getByTestId("managed-host").textContent).toBe("linux-x64 · glibc · AVX2");
+    expect(sec.textContent).toContain(d.Path);
+    expect(localStorage.getItem("wick.providers.section.detail.binary")).toBe("1");
+  });
+});
+
+describe("ProviderDetail - Activity", () => {
+  it("Token Usage is collapsed by default and mounts the report only when opened", async () => {
+    render(ProviderDetail, { props: defaultProps });
+    const sec = await screen.findByTestId("section-activity");
+    expect(sec.getAttribute("data-open")).toBe("0");
+    expect(sec.textContent).toContain("Token Usage");
+    expect(sec.textContent).toContain("claude/default");
+    expect(screen.queryByText("Refresh")).toBeNull();
+    await fireEvent.click(screen.getByText("Token Usage"));
+    expect(sec.getAttribute("data-open")).toBe("1");
+    expect(await screen.findByText("Refresh")).toBeTruthy();
+    expect(localStorage.getItem("wick.providers.section.detail.activity")).toBe("1");
   });
 });

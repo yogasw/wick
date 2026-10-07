@@ -39,6 +39,10 @@ type Service struct {
 	runners map[string]job.RunFunc // key -> run func
 	running map[string]runHandle   // key -> in-flight run owned by this process
 	cfg     cfgReader              // for injecting job.Ctx; may be nil in tests
+	// hidden reports job keys taken over by a plugin (job.Meta.Replaces):
+	// their rows stay in the table for history but are never listed or
+	// scheduled. nil = nothing hidden.
+	hidden func(key string) bool
 }
 
 func NewService(r *repo) *Service {
@@ -156,12 +160,32 @@ func (s *Service) Bootstrap(ctx context.Context, mods []job.Module) error {
 	return nil
 }
 
+// SetHidden installs the predicate for job keys replaced by another job
+// (see internal/plugins/replace). Their rows drop out of ListJobs and
+// ListEnabledJobs, so the scheduler never runs them next to the new job.
+func (s *Service) SetHidden(fn func(key string) bool) {
+	s.hidden = fn
+}
+
+func (s *Service) visible(js []entity.Job, err error) ([]entity.Job, error) {
+	if err != nil || s.hidden == nil {
+		return js, err
+	}
+	out := js[:0]
+	for _, j := range js {
+		if !s.hidden(j.Key) {
+			out = append(out, j)
+		}
+	}
+	return out, nil
+}
+
 func (s *Service) ListJobs(ctx context.Context) ([]entity.Job, error) {
-	return s.repo.ListJobs(ctx)
+	return s.visible(s.repo.ListJobs(ctx))
 }
 
 func (s *Service) ListEnabledJobs(ctx context.Context) ([]entity.Job, error) {
-	return s.repo.ListEnabledJobs(ctx)
+	return s.visible(s.repo.ListEnabledJobs(ctx))
 }
 
 func (s *Service) GetJob(ctx context.Context, key string) (*entity.Job, error) {

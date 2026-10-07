@@ -976,3 +976,20 @@ func TestNewestFirstTrimsAndNamesTheCreator(t *testing.T) {
 		t.Errorf("creator = %q, want the name a human recognises", named[2].User)
 	}
 }
+
+// MAX(created_at) comes back from SQLite as text, not a time. LoginStats
+// used to scan it straight into a time.Time, which failed the whole query
+// and left every person without a last-sign-in, count or live session.
+func TestLoginStatsReadsAggregateLastOnSQLite(t *testing.T) {
+	h, _ := seedAnalytics(t)
+	got, ok := h.repo.LoginStats(context.Background())["u-yoga"]
+	if !ok {
+		t.Fatal("no login stats for u-yoga: the aggregate scan failed")
+	}
+	if got.Count != 2 || got.Live != 2 {
+		t.Errorf("count/live = %d/%d, want 2/2", got.Count, got.Live)
+	}
+	if want := time.Now().UTC().Add(-2 * time.Hour); got.Last.Sub(want).Abs() > time.Minute {
+		t.Errorf("last = %v, want the newer sign-in around %v", got.Last, want)
+	}
+}

@@ -6,6 +6,7 @@
      Polling: after Run returns a run_id, poll runs/{runID} every 1.5s and
      stop on success/error or on unmount — the interval is cleared in both
      paths so no timer leaks. */
+  import PluginUpdateMenu from "$lib/components/plugins/PluginUpdateMenu.svelte";
   import { onDestroy } from "svelte";
   import { Button, TextInput, NumberInput } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
@@ -181,6 +182,7 @@
         <div>
           <div class="flex items-center gap-2">
             <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">{data.name}</h1>
+            <PluginUpdateMenu pluginKey={jobKey} />
             <span class="rounded-full px-2 py-0.5 text-[10px] font-medium {enabled ? statusClasses[data.last_status] ?? statusClasses.success : 'bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600'}">{enabled ? data.last_status : "disabled"}</span>
           </div>
           {#if data.description}

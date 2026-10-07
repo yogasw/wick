@@ -120,6 +120,7 @@ type Manager struct {
 	defaultTimeout time.Duration
 	onRequest      func(AskRequest)
 	onResolved     func(sessionID, requestID string)
+	onSettled      func(req AskRequest, ans Answer, outcome string)
 
 	mu      sync.Mutex
 	pending map[string]*pending // requestID → pending
@@ -130,6 +131,11 @@ type Options struct {
 	DefaultTimeout time.Duration
 	OnRequest      func(AskRequest)
 	OnResolved     func(sessionID, requestID string)
+	// OnSettled, when set, hears how every ask ended — with the answer
+	// when there was one. outcome is OutcomeAnswered, OutcomeTimeout or
+	// OutcomeCancelled. Unlike OnResolved it sees the request and answer,
+	// so the thread can keep the question and what was chosen.
+	OnSettled func(req AskRequest, ans Answer, outcome string)
 }
 
 // NewManager constructs an empty manager.
@@ -142,6 +148,7 @@ func NewManager(opt Options) *Manager {
 		defaultTimeout: t,
 		onRequest:      opt.OnRequest,
 		onResolved:     opt.OnResolved,
+		onSettled:      opt.OnSettled,
 		pending:        make(map[string]*pending),
 	}
 }
@@ -198,11 +205,28 @@ func (m *Manager) Ask(q Question, done <-chan struct{}) (Answer, error) {
 
 	select {
 	case ans := <-ch:
+		m.settled(req, ans, OutcomeAnswered)
 		return ans, nil
 	case <-timer.C:
+		m.settled(req, Answer{}, OutcomeTimeout)
 		return Answer{}, fmt.Errorf("askuser: user did not respond within %s", timeout)
 	case <-done:
+		m.settled(req, Answer{}, OutcomeCancelled)
 		return Answer{}, errors.New("askuser: cancelled by caller")
+	}
+}
+
+// Ask outcomes passed to Options.OnSettled.
+const (
+	OutcomeAnswered  = "answered"
+	OutcomeTimeout   = "timeout"
+	OutcomeCancelled = "cancelled"
+)
+
+// settled reports how an ask ended to OnSettled.
+func (m *Manager) settled(req AskRequest, ans Answer, outcome string) {
+	if m.onSettled != nil {
+		m.onSettled(req, ans, outcome)
 	}
 }
 

@@ -8,13 +8,75 @@
   import GraphRail from "$lib/components/GraphRail.svelte";
   import RefPicker from "$lib/components/RefPicker.svelte";
   import { toastError } from "@wick-fe/common-stores";
+  import { ConfirmDialog } from "@wick-fe/common-ui";
+  import { revertCommit } from "$lib/git-actions";
+  import { WORKTREE, rangePair, type ComparePair } from "$lib/compare-picker";
 
   type Props = {
     onOpenCommitFile: (sha: string, file: FileChange) => void;
     /** Jump to the Changes tab — what the working-changes row is for. */
     onShowChanges?: () => void;
+    /** Open the Compare overlay on a pair picked from the graph. */
+    onCompare?: (p: ComparePair & { pickHead?: boolean }) => void;
   };
-  let { onOpenCommitFile, onShowChanges }: Props = $props();
+  let { onOpenCommitFile, onShowChanges, onCompare }: Props = $props();
+
+  // Range compare: shift-click one commit, then another, and the overlay
+  // opens on everything between them, both ends included. The anchor stays
+  // until cleared so the other end can be re-picked.
+  let rangeAnchor = $state<{ sha: string; index: number } | null>(null);
+  let rangeEnd = $state<{ sha: string; index: number } | null>(null);
+  const inRange = (i: number) =>
+    !!rangeAnchor &&
+    (rangeEnd
+      ? i >= Math.min(rangeAnchor.index, rangeEnd.index) && i <= Math.max(rangeAnchor.index, rangeEnd.index)
+      : i === rangeAnchor.index);
+
+  function rowClick(e: MouseEvent, sha: string, index: number) {
+    if (e.shiftKey && onCompare) {
+      // Shift-click is a selection gesture here; keep the browser from
+      // also selecting the text between the two clicks.
+      e.preventDefault();
+      if (!rangeAnchor || rangeEnd) {
+        rangeAnchor = { sha, index };
+        rangeEnd = null;
+      } else {
+        rangeEnd = { sha, index };
+      }
+      return;
+    }
+    void toggle(sha);
+  }
+
+  function clearRange() {
+    rangeAnchor = null;
+    rangeEnd = null;
+  }
+
+  function compareRange() {
+    if (!rangeAnchor || !onCompare) return;
+    onCompare(rangePair(rangeAnchor, rangeEnd ?? rangeAnchor));
+  }
+
+  // The right-click menu on a commit row: the compare entries, at the
+  // pointer. One menu for the whole list.
+  let rowMenu = $state<{ sha: string; index: number; x: number; y: number } | null>(null);
+
+  function openRowMenu(e: MouseEvent, sha: string, index: number) {
+    if (!onCompare) return;
+    e.preventDefault();
+    rowMenu = {
+      sha,
+      index,
+      x: Math.min(e.clientX, window.innerWidth - 232),
+      y: Math.min(e.clientY, window.innerHeight - 160),
+    };
+  }
+
+  function menuCompare(p: ComparePair & { pickHead?: boolean }) {
+    rowMenu = null;
+    onCompare?.(p);
+  }
 
   let commits = $state<LogEntry[]>([]);
   // email -> avatar URL, only for authors who are wick users WITH a picture.
@@ -314,6 +376,27 @@
     }
   }
 
+  // Revert is the one action a commit row can take on the repository, so
+  // it asks first — and it says what git does, because "revert" means
+  // something else in most other tools (undo my edit) than it does here
+  // (a new commit that undoes an old one).
+  let revertAsk = $state<{ sha: string; subject: string } | null>(null);
+  let reverting = $state(false);
+
+  async function doRevert() {
+    const r = revertAsk;
+    revertAsk = null;
+    if (!r) return;
+    reverting = true;
+    try {
+      await revertCommit(r.sha);
+      // The revert lands a commit; the list on screen no longer has it.
+      await load();
+    } finally {
+      reverting = false;
+    }
+  }
+
   function statusColor(s: string): string {
     if (s === "A") return "text-green-600 dark:text-green-400";
     if (s === "D") return "text-cau-600 dark:text-cau-400";
@@ -465,6 +548,26 @@
   <!-- overflow-x-hidden: a row whose badges outgrow the panel must clip, not
        turn the list into a sideways-scrolling strip — scrolling right hides
        the rail and the sha, the two things you navigate by. -->
+  {#if rangeAnchor}
+    <!-- The range being picked by shift-click, and what to do with it. -->
+    <div class="flex shrink-0 items-center gap-2 border-b border-white-300 dark:border-navy-600 bg-green-400/10 px-2 py-1 text-[10px] text-black-800 dark:text-black-500">
+      {#if rangeEnd}
+        <span class="min-w-0 flex-1 truncate">{Math.abs(rangeAnchor.index - rangeEnd.index) + 1} commits selected</span>
+      {:else}
+        <span class="min-w-0 flex-1 truncate">Shift-click another commit to pick a range — or compare this one alone</span>
+      {/if}
+      <button
+        type="button"
+        onclick={compareRange}
+        class="shrink-0 rounded border border-green-400 px-1.5 py-0.5 text-green-600 dark:text-green-400 hover:bg-green-400/10"
+      >Compare</button>
+      <button
+        type="button"
+        onclick={clearRange}
+        class="shrink-0 rounded px-1.5 py-0.5 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800"
+      >Clear</button>
+    </div>
+  {/if}
   <div class="flex-1 overflow-y-auto overflow-x-hidden" onscroll={onListScroll}>
     {#if loading}
       <p class="p-4 text-xs text-black-700 dark:text-black-600">Loading history…</p>
@@ -475,6 +578,7 @@
         <div
           id={`commit-${c.sha}`}
           class={"border-b border-white-300 dark:border-navy-600 last:border-0 " +
+            (inRange(i) ? "bg-green-400/10 " : "") +
             (searching && filterMode && !isMatch(i) ? "hidden " : "") +
             (searching && !filterMode && !isMatch(i) ? "opacity-40 " : "")}
         >
@@ -484,7 +588,8 @@
             <GraphRail row={rows[i]} {lanes} />
             <button
               type="button"
-              onclick={() => toggle(c.sha)}
+              onclick={(e) => rowClick(e, c.sha, i)}
+              oncontextmenu={(e) => openRowMenu(e, c.sha, i)}
               onmouseenter={(e) => hoverIn(e, c.sha)}
               onmouseleave={hoverOut}
               onfocus={(e) => hoverIn(e as unknown as MouseEvent, c.sha)}
@@ -565,12 +670,33 @@
                 {#if detail.body}
                   <p class="mb-1.5 whitespace-pre-wrap text-[11px] text-black-800 dark:text-black-600">{detail.body}</p>
                 {/if}
-                <p class="mb-1 flex flex-wrap items-center gap-2 text-[10px] text-black-700 dark:text-black-600">
+                <div class="mb-1 flex flex-wrap items-center gap-2 text-[10px] text-black-700 dark:text-black-600">
                   <span>{detailTotals.files} file{detailTotals.files === 1 ? "" : "s"} changed</span>
                   <span class="text-green-600 dark:text-green-400">+{detailTotals.a}</span>
                   <span class="text-cau-600 dark:text-cau-400">−{detailTotals.d}</span>
-                  {#if detail.email}<span class="truncate">{detail.email}</span>{/if}
-                </p>
+                  {#if detail.email}<span class="min-w-0 truncate">{detail.email}</span>{/if}
+                  {#if onCompare}
+                    <button
+                      type="button"
+                      onclick={() => onCompare({ base: c.sha, head: "HEAD", threeDot: false })}
+                      title="Everything from this commit (exclusive) to HEAD"
+                      class="ml-auto shrink-0 rounded border border-white-300 dark:border-navy-600 px-1.5 py-0.5 text-[10px] text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-700 transition-colors"
+                    >Compare with HEAD</button>
+                    <button
+                      type="button"
+                      onclick={() => onCompare({ base: c.sha, head: "HEAD", threeDot: false, pickHead: true })}
+                      title="Pick what to compare this commit with"
+                      class="shrink-0 rounded border border-white-300 dark:border-navy-600 px-1.5 py-0.5 text-[10px] text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-700 transition-colors"
+                    >Compare from here to…</button>
+                  {/if}
+                  <button
+                    type="button"
+                    onclick={() => (revertAsk = { sha: c.sha, subject: c.subject })}
+                    disabled={reverting}
+                    title="Commit the inverse of this change"
+                    class={(onCompare ? "" : "ml-auto ") + "shrink-0 rounded border border-white-300 dark:border-navy-600 px-1.5 py-0.5 text-[10px] text-black-700 dark:text-black-600 hover:border-red-400 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50 transition-colors"}
+                  >Revert commit</button>
+                </div>
                 {#if detail.files.length === 0}
                   <p class="text-[11px] text-black-700 dark:text-black-600">No file changes.</p>
                 {:else}
@@ -669,3 +795,33 @@
     </div>
   {/if}
 </div>
+
+{#if rowMenu}
+  {@const m = rowMenu}
+  <button type="button" class="fixed inset-0 z-40 cursor-default" aria-label="Close" onclick={() => (rowMenu = null)} oncontextmenu={(e) => { e.preventDefault(); rowMenu = null; }}></button>
+  <div
+    role="menu"
+    class="fixed z-50 w-56 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-1 shadow-lg"
+    style={`left:${m.x}px;top:${m.y}px`}
+  >
+    <button type="button" role="menuitem" class="block w-full rounded px-2 py-1 text-left text-xs text-black-800 hover:bg-white-200 dark:text-black-500 dark:hover:bg-navy-800" onclick={() => menuCompare({ base: m.sha, head: "HEAD", threeDot: false })}>Compare with HEAD</button>
+    <button type="button" role="menuitem" class="block w-full rounded px-2 py-1 text-left text-xs text-black-800 hover:bg-white-200 dark:text-black-500 dark:hover:bg-navy-800" onclick={() => menuCompare({ base: m.sha, head: WORKTREE, threeDot: false })}>Compare with working tree</button>
+    <button type="button" role="menuitem" class="block w-full rounded px-2 py-1 text-left text-xs text-black-800 hover:bg-white-200 dark:text-black-500 dark:hover:bg-navy-800" onclick={() => menuCompare({ base: m.sha, head: "HEAD", threeDot: false, pickHead: true })}>Compare from here to…</button>
+    <button type="button" role="menuitem" class="block w-full rounded px-2 py-1 text-left text-xs text-black-800 hover:bg-white-200 dark:text-black-500 dark:hover:bg-navy-800" onclick={() => menuCompare(rangePair({ sha: m.sha, index: m.index }, { sha: m.sha, index: m.index }))}>Show this commit's changes</button>
+    <div class="my-1 border-t border-white-300 dark:border-navy-600"></div>
+    <button type="button" role="menuitem" class="block w-full rounded px-2 py-1 text-left text-xs text-black-800 hover:bg-white-200 dark:text-black-500 dark:hover:bg-navy-800" onclick={() => { const r = { sha: m.sha, index: m.index }; if (rangeAnchor && !rangeEnd) rangeEnd = r; else { rangeAnchor = r; rangeEnd = null; } rowMenu = null; }}>{rangeAnchor && !rangeEnd ? "End range here" : "Start range here"}</button>
+  </div>
+{/if}
+
+<ConfirmDialog
+  open={!!revertAsk}
+  title="Revert this commit?"
+  body={revertAsk
+    ? `git revert ${revertAsk.sha} — "${revertAsk.subject}". This writes a NEW commit undoing that change; nothing is rewritten. If it conflicts, git stops and leaves the repo mid-revert for you to resolve.`
+    : ""}
+  confirmLabel="Revert"
+  cancelLabel="Cancel"
+  destructive={true}
+  onConfirm={doRevert}
+  onCancel={() => (revertAsk = null)}
+/>

@@ -89,6 +89,7 @@ internal/**/dist/*/assets/
 ci-timing.txt
 node_modules/
 index-*
+!docs/plugins/index-format.md
 vite.config.ts.timestamp-*
 
 # connector plugin runtime artifacts (built binaries + generated manifests)
@@ -110,3 +111,4 @@ vite.config.ts.timestamp-*
 
 # CodeGraph index — per-machine, rebuilt by `codegraph init`.
 .codegraph/
+.env*

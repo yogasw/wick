@@ -76,9 +76,16 @@ templ resourceAdminRow(row ResourceAdminRow, baseURL string, tagsJSON string, ow
 			}
 		</td>
 		<td class="px-4 py-3 align-top">
-			@AccessBadge(row.Access)
+			if row.Locked != "" {
+				<span class="inline-flex items-center whitespace-nowrap rounded-full border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] font-medium text-black-800 dark:text-black-600" title={ row.Locked }>Not shareable</span>
+			} else {
+				@AccessBadge(row.Access)
+			}
 		</td>
 		<td class="px-4 py-3 align-top">
+			if row.Locked != "" {
+				<p class="text-xs italic text-black-700 dark:text-black-600">{ row.Locked }</p>
+			} else {
 			<form action={ templ.SafeURL(baseURL + "/" + row.ID + "/tags") } method="POST" class="flex items-start gap-2">
 				<div
 					class="tag-picker w-full md:w-64"
@@ -90,6 +97,7 @@ templ resourceAdminRow(row ResourceAdminRow, baseURL string, tagsJSON string, ow
 				<input type="hidden" name="tags_submitted" value="1"/>
 				<button type="submit" class="mt-1 text-xs font-medium text-green-600 hover:underline">Save</button>
 			</form>
+			}
 		</td>
 	</tr>
 }

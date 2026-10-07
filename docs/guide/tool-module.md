@@ -67,6 +67,11 @@ app.RegisterToolNoConfig(
 | `DefaultVisibility` | `entity.VisibilityPublic` or `entity.VisibilityPrivate` |
 | `DefaultTags` | Slice of `tool.DefaultTag` from `tags/defaults.go` |
 | `ExternalURL` | If set, card opens this URL in a new tab |
+| `FullScreen` | Tool owns its whole layout: no navbar, no tool header, edge-to-edge body |
+
+Tool pages drop their chrome automatically when rendered inside an `<iframe>` — see
+[Embedding in an iframe](/guide/embedding). `FullScreen` tools are exempt, since they
+draw their own.
 
 ## Register Function
 

@@ -37,6 +37,17 @@ func TestHasLiveTurnFalseAfterError(t *testing.T) {
 	}
 }
 
+// A Warning (a stdout line the parser could not read, the child still
+// working) must not end the turn: Error does, and a truncated line used to
+// drop the banner while the agent worked on for minutes.
+func TestHasLiveTurnSurvivesWarning(t *testing.T) {
+	c := &Channel{turns: map[string]*turn{"slack-123": {running: true}}}
+	c.OnAgentEvent("slack-123", event.AgentEvent{Type: event.Warning, ErrorMsg: "claude parse: unexpected end of JSON input"})
+	if !c.HasLiveTurn("slack-123") {
+		t.Fatal("turn must stay live through a Warning")
+	}
+}
+
 // ── [silent] marker stripping ────────────────────────────────────────────
 // The marker is plumbing and must never be shown. The web UI already strips it
 // for the conversation view; Slack has to match rather than invent its own rule.
@@ -48,9 +59,18 @@ func TestStripSilentMarker(t *testing.T) {
 		{"  [silent]   padded", "padded"},
 		{"\n[silent] leading newline", "leading newline"},
 		{"no marker here", "no marker here"},
-		// Only a LEADING marker is plumbing. One mid-text is the agent talking
-		// about the marker, and rewriting that would corrupt the message.
+		// A marker that OPENS A LATER LINE is the shape that actually leaks:
+		// the agent writes a preamble, runs its tools, then starts its closing
+		// paragraph with the marker — so the turn is never suppressed and the
+		// leading-only strip misses it. The paragraph break must survive.
+		{"Now the Go tests:\n\n[silent] build 0.1.334 jalan.", "Now the Go tests:\n\nbuild 0.1.334 jalan."},
+		{"one\n[silent] two\n[SILENT] three", "one\ntwo\nthree"},
+		{"head\n  [silent]  indented", "head\nindented"},
+		// Still only a marker that OPENS text or a line. One mid-sentence is the
+		// agent talking about the marker, and rewriting that would corrupt the
+		// message.
 		{"see the [silent] marker docs", "see the [silent] marker docs"},
+		{"line one\nsee the [silent] marker docs", "line one\nsee the [silent] marker docs"},
 		{"", ""},
 	}
 	for _, tc := range cases {

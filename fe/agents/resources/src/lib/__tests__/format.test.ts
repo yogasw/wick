@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { humanBytes, humanBps, humanPct, humanDuration, pctOf, middleTruncate } from "../format.js";
+import { humanBytes, humanBps, humanPct, humanDuration, pctOf, middleTruncate, machineShare, guardKindLabel, quotaShare, cpuShare, coresLabel, humanCores } from "../format.js";
 
 // These render the numbers an operator reads a limit decision off, so the
 // boundaries matter more than the happy path.
@@ -99,5 +99,58 @@ describe("middleTruncate", () => {
       const got = middleTruncate("x".repeat(n), 50);
       expect(got.length).toBeLessThanOrEqual(50);
     }
+  });
+});
+
+describe("machineShare", () => {
+  it("reads a limit as a share of this machine", () => {
+    expect(machineShare(1024, 8 * 1024 ** 3)).toBe("13% of RAM");
+    expect(machineShare(10, 8 * 1024 ** 3)).toBe("<1% of RAM");
+  });
+  it("is empty when the limit or the machine size is unknown", () => {
+    expect(machineShare(0, 8 * 1024 ** 3)).toBe("");
+    expect(machineShare(512, 0)).toBe("");
+  });
+});
+
+describe("guardKindLabel", () => {
+  it("names the guard actions and passes unknown kinds through", () => {
+    expect(guardKindLabel("kill_child")).toBe("Stopped process");
+    expect(guardKindLabel("throttle")).toBe("Capped CPU");
+    expect(guardKindLabel("outside_busy")).toBe("Busy outside wick");
+    expect(guardKindLabel("mystery")).toBe("mystery");
+  });
+});
+
+describe("quotaShare", () => {
+  it("words a machine share", () => {
+    expect(quotaShare(70)).toBe("70% of machine");
+    expect(quotaShare(0)).toBe("uncapped");
+  });
+});
+
+describe("cpuShare / coresLabel / humanCores", () => {
+  it("reads per-core CPU as a share of all cores", () => {
+    expect(cpuShare(200, 2)).toBe(100);
+    expect(cpuShare(148, 2)).toBe(74);
+    expect(cpuShare(37, 1)).toBe(37);
+  });
+  it("never passes 100% and treats idle or junk as 0", () => {
+    expect(cpuShare(260, 2)).toBe(100);
+    expect(cpuShare(0, 2)).toBe(0);
+    expect(cpuShare(NaN, 2)).toBe(0);
+  });
+  it("leaves the reading alone when the core count is unknown", () => {
+    expect(cpuShare(148, 0)).toBe(148);
+  });
+  it("names the core count", () => {
+    expect(coresLabel(2)).toBe("CPU · 2 cores");
+    expect(coresLabel(1)).toBe("CPU · 1 core");
+    expect(coresLabel(0)).toBe("CPU");
+  });
+  it("reads per-core CPU as cores in use", () => {
+    expect(humanCores(150)).toBe("≈ 1.5 cores");
+    expect(humanCores(100)).toBe("≈ 1.0 core");
+    expect(humanCores(0)).toBe("");
   });
 });

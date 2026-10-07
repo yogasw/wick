@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/preset"
@@ -96,7 +98,12 @@ func SetManager(m *registry.Manager) {
 }
 
 // SetPool wires in the agent subprocess pool.
-func SetPool(p *pool.Pool) { globalPool = p }
+func SetPool(p *pool.Pool) {
+	globalPool = p
+	if p != nil {
+		startProviderIdleCompactor()
+	}
+}
 
 // SetBroadcaster wires in the SSE event broadcaster.
 func SetBroadcaster(b *Broadcaster) { globalBcast = b }
@@ -240,6 +247,8 @@ func Register(r tool.Router) {
 	r.Use("/api/sessions/{id}", sessionAccessMW)
 	r.Use("/projects/{id}", projectAccessMW)
 	r.Use("/api/projects/{id}", projectAccessMW)
+	// A shared agent's chat is chat only: its rail is the owner's project.
+	registerSharedChatRailGuard(r)
 
 	r.GET("/", newSessionCompose)
 	r.POST("/", startNewSession)
@@ -265,6 +274,7 @@ func Register(r tool.Router) {
 	r.GET("/sessions/{id}/uploads/{name}", sessionUploadServe)
 	r.GET("/sessions/{id}/turns/{turn_id}", sessionTurnTrace)
 	r.GET("/sessions/{id}/turns/{turn_id}/events/{event_id}", sessionTurnEvent)
+	r.GET("/sessions/{id}/turns/{turn_id}/blobs/{blob_ref}", sessionTurnBlob)
 
 	r.GET("/sessions/{id}/files", sessionContextList)
 	r.GET("/sessions/{id}/files/search", sessionContextSearch)
@@ -273,6 +283,7 @@ func Register(r tool.Router) {
 	r.GET("/sessions/{id}/files/read", sessionContextRead)
 	r.GET("/sessions/{id}/files/download", sessionContextDownload)
 	r.GET("/sessions/{id}/files/raw", sessionContextRaw)
+	r.GET("/sessions/{id}/files/stat", sessionContextStat)
 	r.POST("/sessions/{id}/files/save", sessionContextSave)
 	r.POST("/sessions/{id}/files/create", sessionContextCreate)
 	r.DELETE("/sessions/{id}/files", sessionContextDelete)
@@ -288,6 +299,11 @@ func Register(r tool.Router) {
 	// JSON API — Sub-agents rail panel. Registered alongside the other
 	// /api/sessions routes so sessionAccessMW covers them too.
 	r.GET("/api/sessions/{id}/subagents", sessionSubAgents)
+	r.GET("/api/sessions/{id}/team-tasks", sessionTeamTasks)
+	// Interactive messages: an actioncard click, and a decision on an
+	// approval_request card.
+	r.POST("/api/sessions/{id}/postback", sessionPostback)
+	r.POST("/api/sessions/{id}/approvals/{approvalID}", sessionApprovalDecision)
 	r.POST("/api/sessions/{id}/subagents/interrupt-all", interruptAllSubAgents)
 	// Agent-to-agent thread + the human-only hop refill.
 	r.GET("/api/sessions/{id}/messages", sessionMessages)
@@ -338,6 +354,92 @@ func Register(r tool.Router) {
 	r.GET("/api/agent-profiles", apiAgentProfileList)
 	r.POST("/api/agent-profiles", apiAgentProfileSave)
 	r.DELETE("/api/agent-profiles/{id}", apiAgentProfileDelete)
+
+	// JSON API — Agents app (/team). Every route is scoped to the caller's
+	// own agents; see api_team.go.
+	r.GET("/api/team/agents", apiTeamAgentList)
+	r.POST("/api/team/agents", apiTeamAgentCreate)
+	r.GET("/api/team/agents/connectors", apiTeamAgentConnectors)
+	r.GET("/api/team/agents/{id}", apiTeamAgentGet)
+	r.PATCH("/api/team/agents/{id}", apiTeamAgentUpdate)
+	r.DELETE("/api/team/agents/{id}", apiTeamAgentDelete)
+	r.POST("/api/team/agents/{id}/captain", apiTeamAgentMakeCaptain)
+	r.POST("/api/team/agents/{id}/chat", apiTeamAgentChat)
+	r.GET("/api/team/agents/{id}/sessions", apiTeamAgentSessions)
+	r.POST("/api/team/agents/{id}/read", apiTeamAgentRead)
+	r.POST("/api/team/agents/{id}/main", apiTeamAgentSetMain)
+	r.GET("/api/team/agents/{id}/shares", apiTeamAgentShares)
+	r.POST("/api/team/agents/{id}/shares", apiTeamAgentShareAdd)
+	r.DELETE("/api/team/agents/{id}/shares/{uid}", apiTeamAgentShareRemove)
+	r.GET("/api/team/share-users", apiTeamShareUsers)
+	r.GET("/api/team/agents/{id}/access-history", apiTeamAgentAccessHistory)
+	r.GET("/api/team/agents/{id}/skills", apiTeamAgentSkills)
+	r.GET("/api/team/agents/{id}/slack/manifest", apiTeamAgentSlackManifest)
+	r.GET("/api/team/agents/{id}/slack", apiTeamAgentSlackGet)
+	r.PUT("/api/team/agents/{id}/slack", apiTeamAgentSlackConnect)
+	r.PATCH("/api/team/agents/{id}/slack", apiTeamAgentSlackOptions)
+	r.DELETE("/api/team/agents/{id}/slack", apiTeamAgentSlackDisconnect)
+	r.GET("/api/team/agents/{id}/slack/health", apiTeamAgentSlackHealth)
+	r.GET("/api/team/agents/{id}/slack/settings", apiTeamAgentSlackSettingsGet)
+	r.PATCH("/api/team/agents/{id}/slack/settings", apiTeamAgentSlackSettingsPatch)
+	r.GET("/api/team/agents/{id}/slack/lookup", apiTeamAgentSlackLookup)
+	r.GET("/api/team/slack/instant/apps", apiTeamSlackInstantApps)
+	r.GET("/api/team/agents/{id}/slack/instant", apiTeamAgentSlackInstantGet)
+	r.PUT("/api/team/agents/{id}/slack/instant", apiTeamAgentSlackInstantPut)
+	r.DELETE("/api/team/agents/{id}/slack/instant", apiTeamAgentSlackInstantDelete)
+	r.POST("/api/team/agents/{id}/slack/instant/rotate-avatar", apiTeamAgentSlackInstantRotate)
+	r.GET("/api/team/agents/{id}/a2a", apiTeamAgentA2AGet)
+	r.PUT("/api/team/agents/{id}/a2a", apiTeamAgentA2APut)
+	r.POST("/api/team/agents/{id}/a2a/rotate", apiTeamAgentA2ARotate)
+	r.POST("/api/team/agents/{id}/a2a/revoke", apiTeamAgentA2ARevoke)
+	r.POST("/api/team/agents/{id}/a2a/test", apiTeamAgentA2ATest)
+	r.GET("/api/team/agents/{id}/rest", apiTeamAgentRESTGet)
+	r.PUT("/api/team/agents/{id}/rest", apiTeamAgentRESTPut)
+	r.POST("/api/team/agents/{id}/rest/test", apiTeamAgentRESTTest)
+	r.GET("/api/team/agents/{id}/telegram", apiTeamAgentTelegramGet)
+	r.PUT("/api/team/agents/{id}/telegram", apiTeamAgentTelegramConnect)
+	r.DELETE("/api/team/agents/{id}/telegram", apiTeamAgentTelegramDisconnect)
+	r.POST("/api/team/agents/{id}/telegram/test", apiTeamAgentTelegramTest)
+	r.POST("/api/team/a2a-remote/resolve", apiTeamRemoteResolve)
+	r.POST("/api/team/a2a-remote/test", apiTeamRemoteTest)
+	r.POST("/api/team/a2a-remote", apiTeamRemoteCreate)
+	r.GET("/api/team/agents/{id}/a2a-remote", apiTeamRemoteGet)
+	r.PATCH("/api/team/agents/{id}/a2a-remote", apiTeamRemoteUpdate)
+	r.POST("/api/team/agents/{id}/a2a-remote/refresh-card", apiTeamRemoteRefresh)
+	r.POST("/api/team/slack-remote/test", apiTeamSlackRemoteTest)
+	r.GET("/api/team/slack-remote/identities", apiTeamSlackRemoteIdentities)
+	r.GET("/api/team/slack-remote/directory", apiTeamSlackRemoteDirectory)
+	r.POST("/api/team/slack-remote", apiTeamSlackRemoteCreate)
+	r.GET("/api/team/plugin-sources", apiTeamPluginSources)
+	r.POST("/api/team/plugin-remote", apiTeamPluginRemoteCreate)
+	r.GET("/api/team/agents/{id}/plugin-remote", apiTeamPluginRemoteGet)
+	r.PATCH("/api/team/agents/{id}/plugin-remote", apiTeamPluginRemoteUpdate)
+	r.GET("/api/team/agents/{id}/plugin-remote/session-options", apiTeamPluginSessionOptionsGet)
+	r.PUT("/api/team/agents/{id}/plugin-remote/session-options", apiTeamPluginSessionOptionsPut)
+	r.GET("/api/team/agents/{id}/slack-remote", apiTeamSlackRemoteGet)
+	r.PATCH("/api/team/agents/{id}/slack-remote", apiTeamSlackRemoteUpdate)
+	r.POST("/api/team/agents/{id}/remote/recheck", apiTeamRemoteRecheck)
+	r.POST("/api/team/agents/{id}/remote/queue/{queue_id}/cancel", apiTeamRemoteQueueCancel)
+	r.POST("/api/team/agents/{id}/slack-remote/recheck", apiTeamRemoteRecheck) // older clients
+	r.GET("/api/team/agents/{id}/scheduled", apiTeamAgentScheduledList)
+	r.POST("/api/team/agents/{id}/scheduled", apiTeamAgentScheduledCreate)
+	r.PATCH("/api/team/agents/{id}/scheduled/{sid}", apiTeamAgentScheduledMutate("edit"))
+	r.DELETE("/api/team/agents/{id}/scheduled/{sid}", apiTeamAgentScheduledDelete)
+	r.POST("/api/team/agents/{id}/scheduled/{sid}/pause", apiTeamAgentScheduledMutate("pause"))
+	r.POST("/api/team/agents/{id}/scheduled/{sid}/resume", apiTeamAgentScheduledMutate("resume"))
+	r.POST("/api/team/agents/{id}/scheduled/{sid}/run", apiTeamAgentScheduledMutate("run_now"))
+	r.GET("/api/team/agents/{id}/scheduled/{sid}/runs", apiTeamAgentScheduledRuns)
+	r.GET("/api/team/agents/{id}/session", apiTeamAgentSessionGet)
+	r.PATCH("/api/team/agents/{id}/session", apiTeamAgentSessionSave)
+	r.POST("/api/team/agents/{id}/compact", apiTeamAgentCompact)
+	r.GET("/api/team/groups", apiTeamGroupList)
+	r.POST("/api/team/groups", apiTeamGroupCreate)
+	r.PATCH("/api/team/groups/{id}", apiTeamGroupUpdate)
+	r.DELETE("/api/team/groups/{id}", apiTeamGroupDelete)
+	r.POST("/api/team/groups/{id}/read", apiTeamGroupRead)
+	// The caller's own Team settings (Team instructions, landing choice).
+	r.GET("/api/team/settings", apiTeamSettingsGet)
+	r.PUT("/api/team/settings", apiTeamSettingsSave)
 
 	r.GET("/api/presets", apiPresetList)
 	r.GET("/api/presets/{name}", apiPresetDetail)
@@ -402,12 +504,23 @@ func Register(r tool.Router) {
 	r.GET("/api/me/rail", apiRailPrefsGet)
 	r.PUT("/api/me/rail", apiRailPrefsSave)
 
+	// Dragged sidebar width, per space (team / agents), saved on the account.
+	r.PUT("/api/me/sidebar", apiSidebarWidthSave)
+
 	// Standing answers to ticket prompts ("don't ask again").
 	r.GET("/api/me/ticket-prefs", apiTicketPrefsGet)
 	r.PUT("/api/me/ticket-prefs", apiTicketPrefsSave)
 
 	// JSON API — providers SPA endpoints (mirrors templ providers handlers).
 	r.GET("/api/providers", apiProvidersList)
+	r.GET("/api/managed-binaries", apiManagedBinariesList)
+	r.GET("/api/managed-binaries/{type}/releases", apiManagedBinaryReleases)
+	r.POST("/api/managed-binaries/{type}/check", apiManagedBinaryCheck)
+	r.POST("/api/managed-binaries/{type}/install", apiManagedBinaryInstall)
+	r.POST("/api/managed-binaries/{type}/download", apiManagedBinaryDownload)
+	r.POST("/api/managed-binaries/{type}/activate", apiManagedBinaryActivate)
+	r.POST("/api/managed-binaries/{type}/remove", apiManagedBinaryRemove)
+	r.POST("/api/managed-binaries/{type}/verify", apiManagedBinaryVerify)
 	r.GET("/api/providers/storage", apiProvidersStorage)
 	// Token ledger: fleet-wide report, and one provider's slice of it.
 	r.GET("/api/providers/usage", apiUsageReport)
@@ -422,11 +535,22 @@ func Register(r tool.Router) {
 	r.GET("/api/providers/{type}/{name}/usage", apiProviderUsage)
 	r.GET("/api/providers/{type}/{name}/logintty", apiProviderLoginTTYStatus)
 	r.GET("/api/providers/{type}/{name}/logintty/usage", apiProviderLoginTTYUsage)
+	r.GET("/api/providers/{type}/{name}/cli-models", apiProviderCLIModels)
+	r.POST("/api/providers/{type}/{name}/cli-models/recheck", apiProviderCLIModelRecheck)
 	r.POST("/api/providers/{type}/{name}/logintty/usage/refresh", apiProviderLoginTTYUsageRefresh)
 	r.POST("/api/providers/{type}/{name}/logintty/start", apiProviderLoginTTYStart)
 	r.POST("/api/providers/{type}/{name}/logintty/extend", apiProviderLoginTTYExtend)
 	r.POST("/api/providers/{type}/{name}/logintty/kill", apiProviderLoginTTYKill)
+	r.POST("/api/providers/{type}/{name}/logintty/logout", apiProviderLoginTTYLogout)
+	r.POST("/api/providers/{type}/{name}/logintty/apikey", apiProviderAPIKeySet)
 	r.GET("/api/providers/{type}/{name}/logintty/ws", apiProviderLoginTTYWS)
+
+	// Web terminal (gotty): one allowlisted command under the instance
+	// env, 127.0.0.1 only, reached through wick's proxy. Admin-only.
+	r.GET("/api/providers/{type}/{name}/terminal", apiProviderTerminalStatus)
+	r.POST("/api/providers/{type}/{name}/terminal", apiProviderTerminalStart)
+	r.POST("/api/providers/{type}/{name}/terminal/{id}/close", apiProviderTerminalClose)
+	r.GET("/api/providers/{type}/{name}/terminal/{id}/{path...}", apiProviderTerminalProxy)
 
 	// Git source control (session cwd, multi-repo).
 	registerSCM(r)
@@ -486,9 +610,14 @@ func Register(r tool.Router) {
 	r.POST("/projects", createProject)
 	r.POST("/projects/{id}", updateProject)
 	r.POST("/projects/{id}/pin", toggleProjectPin)
+	r.GET("/projects/{id}/delete-preview", projectDeletePreviewJSON)
 	r.DELETE("/projects/{id}", deleteProject)
 
 	r.GET("/agent-profiles", agentProfilesPage)
+	// Agents app: one shell for every client route under /team, which the
+	// SPA's own router resolves (roster, /team/<handle>, ?panel=…).
+	r.GET("/team", agentsAppPage)
+	r.GET("/team/{rest...}", agentsAppPage)
 	r.GET("/presets", presetsPage)
 	r.GET("/presets/{name}", presetDetail)
 	r.POST("/presets", createPreset)
@@ -511,6 +640,7 @@ func Register(r tool.Router) {
 	r.POST("/providers/detail/{type}/{name}/save", saveProviderDetail)
 	r.POST("/providers/detail/{type}/{name}/airouter", saveProviderAIRouter)
 	r.POST("/providers/detail/{type}/{name}/{key}", saveProviderConfigKey)
+	r.POST("/providers/idle-compact-probe/{type}/{name}", probeIdleCompact)
 	r.GET("/providers/airouter/slots/{type}", providerAIRouterSlots)
 	r.GET("/providers/{type}/{name}", providerDetailPage)
 	r.POST("/providers", saveProviderInstance)
@@ -977,27 +1107,12 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 	if sidebarOwner == "me" {
 		ids = ownedSessionIDs(c, ids, allSessions, scopedProjectID)
 	}
+	lc := sidebarLifecycles()
+	// Running first, then last use — and only then the cap, so a busy
+	// session never falls off the list for being touched eleventh.
+	ids = orderSidebarIDs(ids, allSessions, lc)
 	if len(ids) > sidebarCap {
 		ids = ids[:sidebarCap]
-	}
-	lc := make(map[string]view.SessionLifecycleVM)
-	liveBySession := make(map[string]string)
-	for _, e := range globalPool.ActiveSnapshot() {
-		entry := view.SessionLifecycleVM{Lifecycle: e.Lifecycle, PID: e.PID}
-		if !e.LastActive.IsZero() {
-			entry.LastActiveMs = e.LastActive.UnixMilli()
-		}
-		lc[e.SessionID] = entry
-		liveBySession[e.SessionID] = e.Lifecycle
-	}
-	// Sub-agents run under their own session ids, which have no sidebar row
-	// of their own, so their liveness is folded into the conversation that
-	// owns them. Without this a row goes dark as soon as the leader idles,
-	// even while its children are still working.
-	for root, sub := range rollUpSubAgentWork(liveBySession, sessionParentOf) {
-		entry := lc[root]
-		entry.SubAgent = sub
-		lc[root] = entry
 	}
 	// Read labels concurrently — buffered channel = no goroutine leak.
 	type result struct{ id, label string }
@@ -1028,6 +1143,7 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		}
 		allProjects = filteredMap
 	}
+	allProjectIDs = withoutAgentProjects(allProjectIDs, allProjects, scopedProjectID)
 	return view.AgentsLayoutVM{
 		Base:                c.Base(),
 		ActivePage:          activePage,
@@ -1044,10 +1160,60 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		SidebarOwnerAllHref: sidebarOwnerHref(c, "all"),
 		ScopedProjectID:     scopedProjectID,
 		PinnedProjectID:     pinnedProjectID(c),
+		SharedOwners:        sharedProjectOwners(c, allProjects, allProjectIDs),
 		ShellAssetURL:       spaAssetURL("shell"),
 		AirouterVisible:     AirouterVisible(c.Context()),
 		ProvidersVisible:    HasManageableProvider(c),
 	}
+}
+
+// sharedProjectOwners maps each of ids that has an owner other than the
+// caller to that owner's display name ("another user" when it cannot be
+// resolved). A project without an owner (protected/legacy) is nobody's
+// and never shows as shared.
+func sharedProjectOwners(c *tool.Ctx, projects map[string]project.Project, ids []string) map[string]string {
+	me := actorID(c)
+	owners := map[string]string{}
+	need := map[string]bool{}
+	for _, id := range ids {
+		if p, ok := projects[id]; ok && p.Meta.OwnerUserID != "" && p.Meta.OwnerUserID != me {
+			owners[id] = p.Meta.OwnerUserID
+			need[p.Meta.OwnerUserID] = true
+		}
+	}
+	if len(owners) == 0 {
+		return nil
+	}
+	names := userNames(c, need)
+	for id, uid := range owners {
+		if n := names[uid]; n != "" {
+			owners[id] = n
+		} else {
+			owners[id] = "another user"
+		}
+	}
+	return owners
+}
+
+func isShared(owners map[string]string, id string) bool {
+	_, ok := owners[id]
+	return ok
+}
+
+// withoutAgentProjects drops the Team app's agent projects from the
+// sidebar's Projects list, unless one was set to show there too
+// (project.VisibleTag). They stay in the projects map, so a session in
+// one still shows its project name, and the one being viewed (reached by
+// URL or from the agent) is kept so the open page has its row.
+func withoutAgentProjects(ids []string, projects map[string]project.Project, keep string) []string {
+	out := make([]string, 0, len(ids))
+	for _, pid := range ids {
+		if p, ok := projects[pid]; ok && !project.ShowsInProjects(p.Meta) && pid != keep {
+			continue
+		}
+		out = append(out, pid)
+	}
+	return out
 }
 
 // projectChoices builds the picker rows for the compose form / move menu
@@ -1119,6 +1285,11 @@ func ownsSession(c *tool.Ctx, sess session.Session) bool {
 	}
 	if u.IsAdmin() && adminSeeAll() {
 		return true
+	}
+	// A shared agent's chat is its recipient's alone: the agent's owner
+	// reaches its project but not this conversation.
+	if p, ok := sharedChatAgent(c.Context(), sess); ok {
+		return sharedChatAllowed(c.Context(), u.ID, sess, p)
 	}
 	// Owner or any other person who has spoken in it: a Slack thread is
 	// shared work, so replying into one must not leave it unopenable.
@@ -1239,6 +1410,13 @@ func ensurePersonalProjectForUser(c *tool.Ctx) {
 // back with a non-empty message.
 func newSessionCompose(c *tool.Ctx) {
 	if notReady(c) {
+		return
+	}
+	// "Open Team when I open Agents" (Team settings): the bare landing
+	// becomes the Team app. Checked before the pinned-project redirect,
+	// which would otherwise add a query and hide the landing from it.
+	if teamLandingRedirect(c) {
+		c.Redirect(c.Base()+"/team", http.StatusFound)
 		return
 	}
 	ensurePersonalProjectForUser(c)
@@ -1436,26 +1614,18 @@ func startNewSession(c *tool.Ctx) {
 	c.Redirect(c.Base()+"/sessions/"+id, http.StatusSeeOther)
 }
 
-// renderCompose re-renders the new-session SPA shell after a failed
-// startNewSession submit. The SPA owns compose state client-side, so
-// message/errMsg are accepted for call-site compatibility only.
-func renderCompose(c *tool.Ctx, _, _ string) {
-	scoped := c.Query("project")
-	if scoped != "" {
-		if _, ok := globalMgr.Registry().Project(scoped); !ok {
-			scoped = ""
-		}
+// renderCompose reports a failed startNewSession submit. The composer posts
+// with fetch and navigates to res.url on any 2xx, so re-rendering the
+// new-session shell here (what this used to do) read as success: the page
+// reloaded to an empty "New session" and the error was gone. A plain-text
+// 422 instead lands in the composer's catch, which toasts the body
+// (fe/agents/new-session createSession). The composer keeps its own text,
+// so message is unused.
+func renderCompose(c *tool.Ctx, _, errMsg string) {
+	if errMsg == "" {
+		errMsg = "Failed to create session."
 	}
-	if scoped == "" {
-		scoped = pinnedProjectID(c)
-	}
-	layout := sidebarVMScoped(c, "new", "", scoped)
-	layout.FullBleed = true
-	c.HTML(view.NewSessionSPA(view.NewSessionSPAVM{
-		Layout:   layout,
-		Base:     c.Base(),
-		AssetURL: spaAssetURL("new-session"),
-	}))
+	c.Error(http.StatusUnprocessableEntity, errMsg)
 }
 
 // ── Overview ──────────────────────────────────────────────────────────
@@ -1538,6 +1708,31 @@ func sessionsPage(c *tool.Ctx) {
 		RailPrefs:     railPrefsJSON(c),
 		ViewerID:      viewerID(c),
 	}))
+}
+
+// agentsAppPage hosts the full-screen Agents app.
+func agentsAppPage(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	vm := view.AgentsAppVM{
+		Base:          c.Base(),
+		AssetURL:      spaAssetURL("conversation"),
+		ScmAsset:      spaAssetURL("scm"),
+		IdleTimeoutMs: idleTimeoutMs(),
+		RailPrefs:     railPrefsJSON(c),
+		ViewerID:      viewerID(c),
+		ViewerName:    viewerName(c),
+	}
+	if u := login.GetUser(c.Context()); u != nil {
+		vm.ThemeMode = "light"
+		if ui.ThemeByID(ui.EffectiveTheme(u.Metadata.Theme)).IsDark {
+			vm.ThemeMode = "dark"
+		}
+		vm.ThemeLight = ui.EffectiveLightTheme(u.Metadata.LightTheme)
+		vm.ThemeDark = ui.EffectiveDarkTheme(u.Metadata.DarkTheme)
+	}
+	c.HTML(view.AgentsApp(vm))
 }
 
 // railPrefsJSON is the caller's saved rail layout, inlined into the SPA shell
@@ -1740,6 +1935,18 @@ func viewerID(c *tool.Ctx) string {
 	return ""
 }
 
+// viewerName is the logged-in user's display name, falling back to the
+// email when no name is set. The Agents roster shows it in its footer.
+func viewerName(c *tool.Ctx) string {
+	if u := login.GetUser(c.Context()); u != nil {
+		if u.Name != "" {
+			return u.Name
+		}
+		return u.Email
+	}
+	return ""
+}
+
 // withComposerSender stamps the logged-in user onto a detached send context
 // as the message's sender.
 //
@@ -1817,6 +2024,11 @@ func sendMessage(c *tool.Ctx) {
 	}
 	if req.Text == "" && len(atts) == 0 {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "text or file required"})
+		return
+	}
+	// A group chat never spawns: its members answer in their own sessions.
+	if sess, ok := globalMgr.Registry().Session(id); ok && sess.Meta.AgentGroup != nil {
+		sendGroupMessage(c, sess, req.Text)
 		return
 	}
 
@@ -2186,9 +2398,39 @@ func killAgent(c *tool.Ctx) {
 	// every sub-agent it spawned: nothing is waiting on their results
 	// any more, but the processes keep running and spending tokens.
 	cascadeInterruptChildren(c, id)
+	// Ask the pool first, but only it knows the agents IT started. A binary
+	// swap leaves the previous wick running the turns it had in flight while
+	// the new one serves this request, and KillBy over an empty map returns
+	// success — the button reported "killed" while the process carried on.
+	// So decide before killing whether this pool has anything at all, and
+	// fall back to the pids the spawn log recorded when it does not.
+	owned := poolHasSession(id)
+	// Remember what the pool claims is running BEFORE the stop, so we can
+	// check afterwards that it really went away. An adopted entry has no
+	// exec handle behind it and Stop cannot signal through one it never
+	// held.
+	pids := sessionPIDs(id)
 	if err := globalPool.KillBy(id, agentName, "user", stoppedByNote(c)); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("kill agent %s/%s: %s", id, agentName, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !owned {
+		if killed := killOrphanSpawns(id); len(killed) > 0 {
+			log.Ctx(c.Context()).Info().
+				Ints("pids", killed).
+				Str("session", id).
+				Msg("kill agent: ended orphaned spawns this pool did not own")
+			c.JSON(http.StatusOK, map[string]any{"status": "killed", "orphans": killed})
+			return
+		}
+	}
+	if survivors := enforceStop(pids); len(survivors) > 0 {
+		log.Ctx(c.Context()).Warn().
+			Ints("pids", survivors).
+			Str("session", id).
+			Msg("kill agent: agent.Stop left the process running — signalled it directly")
+		c.JSON(http.StatusOK, map[string]any{"status": "killed", "forced": survivors})
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "killed"})
@@ -2272,6 +2514,52 @@ func sessionTurnEvent(c *tool.Ctx) {
 		return
 	}
 	c.W.Header().Set("Content-Type", "application/json")
+	_, _ = c.W.Write(data)
+}
+
+// traceBlobRefRe matches what the store names a blob: the event id, or
+// "<event_id>-p<n>" for one part of a mixed result. turnIDRe is the
+// nanosecond turn id. Both keep the path a single plain segment.
+var (
+	traceBlobRefRe = regexp.MustCompile(`^e\d+(-p\d+)?$`)
+	traceTurnIDRe  = regexp.MustCompile(`^[0-9A-Za-z_-]+$`)
+)
+
+// sessionTurnBlob serves the binary payload of one trace event (an image,
+// pdf, audio or video a tool returned), stored whole at
+// thinking/<turn_id>/<blob_ref>.bin — Display.BlobRef names it. Same
+// ownership rule as the trace itself: 404 for a session the caller cannot
+// see. The type comes from the bytes' magic, and the response is
+// sandboxed so a hostile payload cannot run as a page on this origin.
+func sessionTurnBlob(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no blob"})
+		return
+	}
+	turnID, ref := c.PathValue("turn_id"), c.PathValue("blob_ref")
+	if !traceTurnIDRe.MatchString(turnID) || !traceBlobRefRe.MatchString(ref) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no blob"})
+		return
+	}
+	data, err := os.ReadFile(globalLayout.SessionThinkingBlob(id, turnID, ref))
+	if errors.Is(err, os.ErrNotExist) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no blob"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	h := c.W.Header()
+	h.Set("Content-Type", event.SniffMime(data))
+	h.Set("Content-Length", strconv.Itoa(len(data)))
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	h.Set("Cache-Control", "private, max-age=86400")
 	_, _ = c.W.Write(data)
 }
 
@@ -2413,6 +2701,10 @@ func projectOptionsJSON(c *tool.Ctx) {
 		// can still be shown; it is flagged so the UI never presents it as
 		// something this person may pick.
 		NoAccess bool `json:"no_access,omitempty"`
+		// Shared marks a project someone else owns that the caller sees
+		// through a tag or sharing; OwnerName names that owner.
+		Shared    bool   `json:"shared,omitempty"`
+		OwnerName string `json:"owner_name,omitempty"`
 	}
 	access := callerProjectAccess(c)
 	// include=<id,...> names projects that must come back even when the
@@ -2428,12 +2720,23 @@ func projectOptionsJSON(c *tool.Ctx) {
 			}
 		}
 	}
+	// hide_team=1 drops the Team app's agent projects (the agent wizard
+	// and Settings pickers); the agent's own project comes back via include.
+	hideTeam := c.Query("hide_team") == "1"
 	pinned := pinnedProjectID(c)
 	projects := globalMgr.Registry().Projects()
+	ids := make([]string, 0, len(projects))
+	for id := range projects {
+		ids = append(ids, id)
+	}
+	shared := sharedProjectOwners(c, projects, ids)
 	opts := make([]option, 0, len(projects))
 	for id, p := range projects {
 		_, wanted := forced[id]
 		if !access.allowProject(id) && !wanted {
+			continue
+		}
+		if hideTeam && !wanted && project.IsAgentProject(p.Meta) {
 			continue
 		}
 		managed := p.Meta.CustomPath == ""
@@ -2452,6 +2755,8 @@ func projectOptionsJSON(c *tool.Ctx) {
 			DefaultModel:    p.Meta.Defaults.Model,
 			DefaultPreset:   p.Meta.Defaults.Preset,
 			TicketEnabled:   p.Meta.Ticket.Enabled,
+			Shared:          isShared(shared, id),
+			OwnerName:       shared[id],
 		})
 	}
 	c.JSON(http.StatusOK, opts)
@@ -2483,6 +2788,10 @@ func providerOptionsJSON(c *tool.Ctx) {
 		// non-wick rows clean. ShowCaps is a pointer so "false" round-trips.
 		ShowCaps *bool  `json:"show_capabilities,omitempty"`
 		CapsMode string `json:"capability_display_mode,omitempty"`
+		// The live list's stamp, same meaning as on the drill-in endpoint.
+		FetchedAt  string `json:"models_fetched_at,omitempty"`
+		Source     string `json:"models_source,omitempty"`
+		CanRefresh bool   `json:"models_can_refresh,omitempty"`
 	}
 	// Access-tag filtered: this endpoint feeds every provider picker in
 	// the product, so one filter here covers the composer, the project
@@ -2495,6 +2804,10 @@ func providerOptionsJSON(c *tool.Ctx) {
 			models = append(models, model{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc, Live: m.Live, Caps: m.Caps})
 		}
 		o := option{Type: p.Type, Name: p.Name, Version: p.Version, UsesAIRouter: p.UsesAIRouter, Models: models}
+		if !p.ModelsAt.IsZero() {
+			o.FetchedAt, o.Source = p.ModelsAt.UTC().Format(time.RFC3339), p.ModelsSource
+			o.CanRefresh = canManageProvider(c, provider.Type(p.Type), p.Name)
+		}
 		if p.Type == string(provider.TypeWick) {
 			show, mode := wickCapabilityPrefs()
 			o.ShowCaps = &show
@@ -2529,6 +2842,8 @@ func providerOptionModelsJSON(c *tool.Ctx) {
 		Desc    string          `json:"desc,omitempty"`
 		Live    bool            `json:"live,omitempty"`
 		Caps    json.RawMessage `json:"caps,omitempty"`
+		// Unavailable: listed, but this account was refused the model.
+		Unavailable bool `json:"unavailable,omitempty"`
 	}
 	typ := provider.Type(strings.TrimSpace(c.PathValue("type")))
 	name := strings.TrimSpace(c.PathValue("name"))
@@ -2546,14 +2861,100 @@ func providerOptionModelsJSON(c *tool.Ctx) {
 		return out
 	}
 
-	// Level 4: expand a single live set by its entry id (filter stays server-side).
+	fromChoices := func(ms []provider.ModelChoice) []modelDTO {
+		out := make([]modelDTO, 0, len(ms))
+		for _, m := range ms {
+			out = append(out, modelDTO{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc, Live: m.Live, Caps: m.Caps, Unavailable: m.Unavailable})
+		}
+		return out
+	}
+
+	// Grouped levels come from the type's registered ModelSets (wick: live
+	// set → vendor model; omp/opencode: provider → [account] → model).
+	// `?entry=` is an escaped path ("openai-codex/2") of any depth; the
+	// response shape is the same at every level. Errors are non-fatal: an
+	// empty level, the picker shows its empty state.
 	entry := strings.TrimSpace(c.Query("entry"))
-	if entry != "" && ins.Type == provider.TypeWick {
-		c.JSON(http.StatusOK, map[string]any{"models": toDTO(expandLiveWickSet(c.Context(), ins, entry, ""))})
+	sets, grouped := provider.ModelSetsFor(ins.Type)
+	// `?refresh=1`: the picker's Refresh — the one path that runs the CLI
+	// for an omp/opencode list (guarded, serialized, killed after; see
+	// provider.CachedCLIModels). Provider managers only.
+	if grouped && provider.LiveModelsEnabled(ins) && c.Query("refresh") == "1" {
+		if !requireProviderManage(c, ins.Type, ins.Name) {
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.Context(), 90*time.Second)
+		_, _, _ = provider.CachedCLIModels(ctx, ins, true)
+		cancel()
+	}
+	// "last updated" for the picker / provider page (zero when nothing is
+	// cached yet: the UI says "click Refresh").
+	stamp := map[string]any{}
+	if grouped && provider.LiveModelsEnabled(ins) && canManageProvider(c, ins.Type, ins.Name) {
+		stamp["can_refresh"] = true
+	}
+	if provider.LiveModelsEnabled(ins) {
+		if at, src := provider.CLIModelsInfo(ins); !at.IsZero() {
+			stamp["fetched_at"], stamp["source"] = at.UTC().Format(time.RFC3339), src
+		}
+	}
+	withStamp := func(m map[string]any) map[string]any {
+		for k, v := range stamp {
+			m[k] = v
+		}
+		return m
+	}
+	if grouped && c.Query("all") == "1" {
+		// `?all=1`: every model row of every level, flattened in picker
+		// order — the provider page's live list reads the picker's own
+		// pipeline (filter, chosen Default, refusals) instead of a second
+		// one. Accounts collapse onto Auto (provider.FlattenModelSets).
+		ctx, cancel := context.WithTimeout(c.Context(), 45*time.Second)
+		defer cancel()
+		rows, err := provider.FlattenModelSets(ctx, sets, ins)
+		resp := map[string]any{"models": fromChoices(rows)}
+		if err != nil {
+			resp["error"] = err.Error()
+		}
+		// Stamp read after the walk: a cold list was filled by it.
+		if at, src := provider.CLIModelsInfo(ins); !at.IsZero() {
+			stamp["fetched_at"], stamp["source"] = at.UTC().Format(time.RFC3339), src
+		}
+		c.JSON(http.StatusOK, withStamp(resp))
 		return
+	}
+	if grouped && entry != "" {
+		ctx, cancel := context.WithTimeout(c.Context(), 45*time.Second)
+		defer cancel()
+		rows, err := sets.Expand(ctx, ins, provider.DecodePath(entry))
+		if err != nil {
+			log.Ctx(c.Context()).Debug().Err(err).Str("entry", entry).Msg("model set expand failed")
+		}
+		c.JSON(http.StatusOK, withStamp(map[string]any{"models": fromChoices(rows)}))
+		return
+	}
+	if grouped && ins.Type != provider.TypeWick {
+		ctx, cancel := context.WithTimeout(c.Context(), 45*time.Second)
+		defer cancel()
+		if rows, err := sets.Sets(ctx, ins); err == nil && len(rows) > 0 {
+			if at, src := provider.CLIModelsInfo(ins); !at.IsZero() {
+				stamp["fetched_at"], stamp["source"] = at.UTC().Format(time.RFC3339), src
+			}
+			c.JSON(http.StatusOK, withStamp(map[string]any{"models": fromChoices(rows)}))
+			return
+		}
+		// No grouping for this instance (live models off, not logged in):
+		// the flat list below still applies.
 	}
 
 	// Level 3: the instance's model choices (live sets stay as expandable rows).
+	// A cold omp/opencode live list is filled first from the CLI's files or
+	// a running server — never by starting the CLI (that is Refresh only).
+	if provider.LiveModelsEnabled(ins) && ins.ModelSelect {
+		ctx, cancel := context.WithTimeout(c.Context(), 20*time.Second)
+		_, _, _ = provider.CachedCLIModels(ctx, ins, false)
+		cancel()
+	}
 	out := toDTO(modelChoicesFor(ins))
 	if out == nil {
 		out = []modelDTO{}
@@ -2694,10 +3095,10 @@ func deleteProject(c *tool.Ctx) {
 		return
 	}
 	if project.IsProtected(p.Meta) {
-		c.JSON(http.StatusForbidden, map[string]string{"error": "this project is protected and cannot be deleted"})
+		c.JSON(http.StatusForbidden, map[string]string{"error": errProtectedProject.Error()})
 		return
 	}
-	if err := globalMgr.DeleteProject(c.Context(), id); err != nil {
+	if err := purgeProject(c.Context(), p, "user"); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("delete project %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

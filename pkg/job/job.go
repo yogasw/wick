@@ -33,6 +33,12 @@ type Meta struct {
 	// Admin-managed jobs leave this false — admins enable from the
 	// /manager/jobs UI.
 	AutoEnable bool
+	// Replaces lists keys of jobs this one takes over — typically the
+	// built-in a plugin was extracted from. On boot wick moves the old
+	// key's config, schedule, enabled flag and access onto this key once
+	// (see internal/plugins/replace), then hides the old job and never
+	// schedules it again.
+	Replaces []string
 }
 
 // RunFunc is the job-side run signature. It executes the job and

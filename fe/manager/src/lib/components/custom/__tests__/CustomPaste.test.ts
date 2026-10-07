@@ -89,3 +89,51 @@ describe("CustomPaste", () => {
     expect(router.push).not.toHaveBeenCalled();
   });
 });
+
+describe("CustomPaste AI tab", () => {
+  it("queues a connector-parse job and opens review with its draft", async () => {
+    vi.mocked(api.getCustomMeta).mockResolvedValue({ ai_providers: ["claude"], categories: [] });
+    const draft = { key: "items", name: "Items", ops: [] };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "/api/ai-gen") {
+        return new Response(JSON.stringify({ id: "gen_1", kind: "connector-parse", status: "queued", position: 1 }), { status: 202 });
+      }
+      return new Response(JSON.stringify({ id: "gen_1", kind: "connector-parse", status: "done", result: draft }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      render(CustomPaste);
+      await fireEvent.click(await screen.findByRole("button", { name: "✨ AI parser" }));
+      await fireEvent.input(screen.getByLabelText("Paste box"), { target: { value: "fetch('https://x')" } });
+      await fireEvent.click(screen.getByRole("button", { name: "Parse →" }));
+      await vi.waitFor(() => expect(screen.getByRole("status").textContent).toContain("Queued · #1"));
+      await vi.waitFor(() => expect(router.push).toHaveBeenCalledWith("/custom/review"), { timeout: 3000 });
+      const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(JSON.parse(String(init.body))).toEqual({
+        kind: "connector-parse",
+        input: { text: "fetch('https://x')", provider: "claude" },
+      });
+      expect(api.parseCustomPaste).not.toHaveBeenCalled();
+      expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY) ?? "{}").key).toBe("items");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("puts a failed AI job in the error box", async () => {
+    vi.mocked(api.getCustomMeta).mockResolvedValue({ ai_providers: ["claude"], categories: [] });
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ error: "paste is larger than 8 KB — trim it down to a single endpoint" }), { status: 422 })));
+    try {
+      render(CustomPaste);
+      await fireEvent.click(await screen.findByRole("button", { name: "✨ AI parser" }));
+      await fireEvent.input(screen.getByLabelText("Paste box"), { target: { value: "x" } });
+      await fireEvent.click(screen.getByRole("button", { name: "Parse →" }));
+      expect(await screen.findByText(/larger than 8 KB/)).toBeTruthy();
+      expect(screen.getByText(/Common causes:/)).toBeTruthy();
+      expect(router.push).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

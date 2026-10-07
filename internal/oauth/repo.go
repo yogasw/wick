@@ -197,7 +197,7 @@ const lastUsedJoin = `LEFT JOIN (
 // Implementation notes: SQLite returns MIN/MAX of TIMESTAMP columns
 // as raw strings (the driver only auto-parses real columns, not
 // aggregate expressions), so we scan those into strings and parse
-// them in Go. parseAggregateTime accepts both SQLite's "YYYY-MM-DD
+// them in Go. ParseAggregateTime accepts both SQLite's "YYYY-MM-DD
 // HH:MM:SS[.fff]" and Postgres's RFC3339 — the same code works on
 // either backend without runtime feature detection.
 func (r *Repo) ListGrantsByUser(ctx context.Context, userID string) ([]Grant, error) {
@@ -227,10 +227,10 @@ func (r *Repo) ListGrantsByUser(ctx context.Context, userID string) ([]Grant, er
 	}
 	out := make([]Grant, len(rows))
 	for i, x := range rows {
-		grantedAt, _ := parseAggregateTime(x.GrantedAt)
+		grantedAt, _ := ParseAggregateTime(x.GrantedAt)
 		var lastUsed *time.Time
 		if x.LastUsedAt != nil {
-			if t, ok := parseAggregateTime(*x.LastUsedAt); ok {
+			if t, ok := ParseAggregateTime(*x.LastUsedAt); ok {
 				lastUsed = &t
 			}
 		}
@@ -245,11 +245,11 @@ func (r *Repo) ListGrantsByUser(ctx context.Context, userID string) ([]Grant, er
 	return out, nil
 }
 
-// parseAggregateTime tries the layouts SQLite and Postgres use when
+// ParseAggregateTime tries the layouts SQLite and Postgres use when
 // returning aggregate timestamp expressions. Returns the zero time
 // + false when none match — the caller treats that as "unknown" and
 // renders accordingly.
-func parseAggregateTime(s string) (time.Time, bool) {
+func ParseAggregateTime(s string) (time.Time, bool) {
 	if s == "" {
 		return time.Time{}, false
 	}
@@ -323,10 +323,10 @@ func (r *Repo) ListAllGrants(ctx context.Context) ([]AdminGrant, error) {
 	}
 	out := make([]AdminGrant, len(rows))
 	for i, x := range rows {
-		grantedAt, _ := parseAggregateTime(x.GrantedAt)
+		grantedAt, _ := ParseAggregateTime(x.GrantedAt)
 		var lastUsed *time.Time
 		if x.LastUsedAt != nil {
-			if t, ok := parseAggregateTime(*x.LastUsedAt); ok {
+			if t, ok := ParseAggregateTime(*x.LastUsedAt); ok {
 				lastUsed = &t
 			}
 		}

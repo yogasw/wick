@@ -89,11 +89,14 @@ type Broadcaster struct {
 	// stream — so without a replay the reloaded page waited for the next
 	// filesystem change and showed no counter at all until then.
 	lastGit map[string]string
+	// parentOf resolves a session's direct parent for the sub_agent signal
+	// (see subAgentSignal). Defaults to the registry; tests inject one.
+	parentOf func(string) (string, bool)
 }
 
 // NewBroadcaster returns a ready Broadcaster.
 func NewBroadcaster() *Broadcaster {
-	return &Broadcaster{subs: make(map[string][]chan Event), lastGit: make(map[string]string)}
+	return &Broadcaster{subs: make(map[string][]chan Event), lastGit: make(map[string]string), parentOf: sessionParentOf}
 }
 
 // Subscribe registers a listener for a specific session (or "" for all).
@@ -444,20 +447,34 @@ func (b *Broadcaster) PublishSystemTurn(sessionID, agentName, text string, steps
 }
 
 func (b *Broadcaster) fanout(sessionID string, payload Event) {
+	// Resolved before taking the lock: it reads the session registry.
+	parentID, signal, hasSignal := b.subAgentSignal(sessionID, payload)
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	for _, key := range []string{sessionID, ""} {
-		for _, ch := range b.subs[key] {
-			select {
-			case ch <- payload:
-			default:
-				log.Warn().
-					Str("session_id", payload.SessionID).
-					Str("agent", payload.AgentName).
-					Str("event_type", payload.Type).
-					Int("buffer", subBuffer).
-					Msg("sse: subscriber buffer full, dropping event")
-			}
+	if hasSignal {
+		b.sendTo(parentID, signal)
+	}
+	b.sendTo("", payload)
+	// A global-only publish (sessionID "") must not reach the global
+	// subscribers twice.
+	if sessionID != "" {
+		b.sendTo(sessionID, payload)
+	}
+}
+
+// sendTo delivers payload to the subscribers of one key without blocking.
+// The caller holds b.mu.
+func (b *Broadcaster) sendTo(key string, payload Event) {
+	for _, ch := range b.subs[key] {
+		select {
+		case ch <- payload:
+		default:
+			log.Warn().
+				Str("session_id", payload.SessionID).
+				Str("agent", payload.AgentName).
+				Str("event_type", payload.Type).
+				Int("buffer", subBuffer).
+				Msg("sse: subscriber buffer full, dropping event")
 		}
 	}
 }

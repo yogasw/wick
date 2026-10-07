@@ -113,6 +113,11 @@ type ChildSpec struct {
 	TagIDs []string
 	// MaxTurns is the resolved per-child cap, already clamped.
 	MaxTurns int
+	// TurnsUsed is what the row has ALREADY spent when this spawn starts.
+	// Zero for a fresh delegation; non-zero for a continuation, whose cap
+	// is absolute — so the child must be told how much of it is left
+	// rather than the cap alone.
+	TurnsUsed int
 	// MaxTokens is the resolved per-child token cap. 0 = uncapped at the
 	// delegation level.
 	MaxTokens int
@@ -191,6 +196,20 @@ type Service struct {
 	// must never guess an agent is dead: finishing a delegation that is
 	// actually still working would throw away the run.
 	AgentAlive func(childSessionID, agentName string) bool
+	// AgentBusy reports whether a child has a turn IN FLIGHT in this
+	// process's pool — spawning or working, not merely an idle process kept
+	// warm between legs. Read by Continue, which must not start a second
+	// driver on a session whose previous turn is still running.
+	//
+	// nil = only the predecessor's drain record is consulted.
+	AgentBusy func(childSessionID, agentName string) bool
+	// DrainDir is where a draining predecessor publishes the sessions it is
+	// still running (upgrade.PublishDrainState). The delegation table is
+	// shared by both generations during a handover, so a child spawned by
+	// the old process is alive even though this pool has never seen it.
+	//
+	// "" = only this process's pool is consulted.
+	DrainDir string
 	// Resumable reports whether a child's provider transcript can still be
 	// picked up — i.e. whether the next spawn will carry --resume rather
 	// than start blank. Read by Continue so a leader is told when its
@@ -199,6 +218,8 @@ type Service struct {
 	// nil = assume resumable. A wiring that cannot answer must not make
 	// every continuation announce a memory loss it has no evidence for.
 	Resumable func(childSessionID, agentName string) bool
+	// TeamRouter, when set, takes the @mentions that name a Team agent.
+	TeamRouter TeamRouter
 	// AskTimeout bounds a blocking ask. 0 = defaultAskTimeout.
 	AskTimeout time.Duration
 	// InboxCap bounds undelivered messages per handle. 0 = defaultInboxCap.
@@ -233,6 +254,18 @@ type Service struct {
 	// list rather than a delta lets the consumer keep one message and edit it.
 	// nil = nobody is showing such a notice.
 	OnDetachedChange func(parentSessionID string, survivors []Survivor)
+	// OnBackgroundStart is called once when a background (async) delegation
+	// is accepted — running or queued — so a channel can tell its human that
+	// work was fired off before the leader's turn ends and the thread goes
+	// quiet. Foreground delegations never trigger it: the leader's own turn
+	// is still live and already shows the work. nil = nobody listens.
+	OnBackgroundStart func(parentSessionID string, start BackgroundStart)
+	// OnBackgroundChange is called with the CURRENT set of background
+	// sub-agents still queued or running under a parent session (see
+	// ActiveBackground) each time one is accepted or ends. Whole list, not a
+	// delta, so a consumer can keep one banner and repaint it. nil = nobody
+	// listens.
+	OnBackgroundChange func(parentSessionID string, active []Survivor)
 
 	// mu guards inflight and slotWaiters.
 	mu sync.Mutex
@@ -240,8 +273,11 @@ type Service struct {
 	// unblock a Run that is waiting on its child.
 	inflight map[string]context.CancelFunc
 	// slotWaiters maps root id → callers parked in waitForSlot. Woken by
-	// pokeSlot when a delegation in that tree reaches a terminal status.
+	// pokeSlot when any delegation reaches a terminal status.
 	slotWaiters map[string][]chan struct{}
+	// slotMu serialises "is a slot free → claim it" so two callers can
+	// never both see the last slot free (see claimSlot).
+	slotMu sync.Mutex
 }
 
 // Request is one wick_delegate call.
@@ -292,9 +328,23 @@ type Result struct {
 	Profile      string `json:"profile"`
 	Status       string `json:"status"`
 	TurnsUsed    int    `json:"turns_used"`
-	TokensUsed   int    `json:"tokens_used,omitempty"`
-	Result       string `json:"result"`
-	Note         string `json:"note,omitempty"`
+	// MaxTurns is the cap this delegation ran under. Emitted alongside
+	// TurnsUsed so a caller reading "12 turns used" can tell an agent that
+	// finished early from one the harness cut off — the two are the same
+	// number without it.
+	MaxTurns   int    `json:"max_turns,omitempty"`
+	TokensUsed int    `json:"tokens_used,omitempty"`
+	Result     string `json:"result"`
+	Note       string `json:"note,omitempty"`
+	// Partial marks a result that is NOT a finished answer: the run ended
+	// on a cap or a stop, and the text is as far as the sub-agent got.
+	//
+	// A typed flag rather than prose only, because acting on it is a
+	// decision (continue, re-plan, ship anyway) and the status enum that
+	// carries the same information is a string the caller has to know the
+	// members of. With DelegationID and MaxTurns beside it, a leader has
+	// everything a continuation needs without reassembling context.
+	Partial bool `json:"partial,omitempty"`
 	// Mode echoes how this ran, in the spoken names: "background" or
 	// "foreground" (ModeLabel). For a background run it is the signal that
 	// Result is intentionally empty and the answer arrives later.
@@ -456,6 +506,7 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 		ChildSessionID:  childSessionID,
 		ChildAgent:      agentName,
 		Task:            req.Task,
+		Title:           req.Task,
 		Depth:           depth,
 		Mode:            mode,
 		DeliverySink:    sink,
@@ -514,12 +565,18 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 	}
 
 	// Wait our turn. The room runs one sub-agent at a time by default.
-	if !s.hasSlot(ctx, rootID) {
+	// The check and the claim are one step (claimSlot), and the head of
+	// the conversation's queue goes first: a new call does not jump work
+	// that was already waiting.
+	claimed, cerr := s.claimSlot(ctx, rootID, id)
+	if !claimed && cerr == nil {
 		if mode == ModeAsync {
 			pos, _ := s.Repo.QueuePosition(ctx, rootID, id)
+			s.announceBackground(context.WithoutCancel(ctx), row, true)
 			return queuedResult(row, pos), nil
 		}
-		if werr := s.waitForSlot(ctx, rootID, id); werr != nil {
+		cerr = s.waitForSlot(ctx, rootID, id)
+		if cerr != nil && !errors.Is(cerr, errNotQueued) {
 			s.finish(ctx, row, entity.DelegationQueued, entity.DelegationInterrupted,
 				"", "the caller went away while this was queued", 0)
 			return &Result{
@@ -529,13 +586,59 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 			}, nil
 		}
 	}
-
-	if err := s.Repo.MarkRunning(ctx, id); err != nil {
-		log.Warn().Err(err).Str("delegation", id).Msg("delegation: mark running failed")
+	if errors.Is(cerr, errNotQueued) {
+		return s.lostClaimResult(ctx, row), nil
 	}
 	row.Status = entity.DelegationRunning
+	if mode == ModeAsync {
+		s.announceBackground(context.WithoutCancel(ctx), row, false)
+	}
 
 	return s.execute(ctx, row, profile, effTags)
+}
+
+// claimForRun is Run's MarkRunning. The row was created queued, so a
+// dispatcher poked by a sibling finish (or an interrupt) can take it
+// between Create and here; the status guard is the claim, and losing it
+// means this call must not execute too. ok=false returns what the row is
+// now instead. A storage error other than a lost claim is logged and Run
+// carries on, as before.
+func (s *Service) claimForRun(ctx context.Context, row *entity.AgentDelegation) (*Result, bool) {
+	err := s.Repo.MarkRunning(ctx, row.ID)
+	if err == nil {
+		return nil, true
+	}
+	if !errors.Is(err, errNotQueued) {
+		log.Warn().Err(err).Str("delegation", row.ID).Msg("delegation: mark running failed")
+		return nil, true
+	}
+	return s.lostClaimResult(ctx, row), false
+}
+
+// lostClaimResult is what a caller gets when the queue started its row
+// first: no answer in this reply, and where the answer will go instead.
+func (s *Service) lostClaimResult(ctx context.Context, row *entity.AgentDelegation) *Result {
+	status := entity.DelegationRunning
+	if cur, gerr := s.Repo.Get(ctx, row.ID); gerr == nil && cur != nil {
+		status = cur.Status
+	}
+	// The queue took the row, so this call returns without an answer
+	// whatever mode was asked for. Say where the result goes only when it
+	// really goes somewhere; otherwise point at collect.
+	note := "Already started by the queue. The result is NOT in this reply — "
+	if sink := row.DeliverySink; sink != "" && sink != SinkNone {
+		note += "it will be delivered via " + sink + ". (wick_agent_collect with this delegation_id retrieves it manually if it never arrives.)"
+	} else {
+		note += "retrieve it with wick_agent_collect and this delegation_id once it finishes."
+	}
+	if status != entity.DelegationRunning {
+		note = "Left the queue before it started (" + status + ")."
+	}
+	return &Result{
+		DelegationID: row.ID, Profile: row.ProfileKey, Status: status,
+		Mode: ModeLabel(row.Mode), Note: note,
+		WorkspaceNote: row.WorkspaceNote, TurnsNote: row.TurnsNote,
+	}
 }
 
 // execute spawns and drives a delegation whose row already exists, is
@@ -634,6 +737,7 @@ func (s *Service) execute(
 		MCPToken:      token,
 		TagIDs:        effTags,
 		MaxTurns:      row.MaxTurns,
+		TurnsUsed:     row.TurnsUsed,
 		MaxTokens:     row.MaxTokens,
 		WorkspacePath: workspacePath,
 	}
@@ -778,6 +882,11 @@ func (s *Service) await(
 		text     strings.Builder
 		usageIn  = row.InputTokens
 		usageOut = row.OutputTokens
+		// turnsWarned keeps the low-budget warning to ONE note per
+		// delegation. Warning on every turn past the threshold spends the
+		// leader's own budget re-reading the same fact, and a repeated
+		// alert is an ignored alert.
+		turnsWarned bool
 	)
 	tokens := func() int { return usageIn + usageOut }
 
@@ -849,6 +958,9 @@ func (s *Service) await(
 			turns = billedTurns()
 			_ = s.Runner.KillAgent(spec.SessionID, spec.AgentName)
 			ok, _ := s.Repo.FinishGuarded(ctx, row.ID, entity.DelegationRunning, entity.DelegationInterrupted, out, "", turns)
+			if ok {
+				s.backgroundEnded(ctx, row)
+			}
 			status := entity.DelegationInterrupted
 			if !ok {
 				// A completion won the race; report what actually landed.
@@ -906,6 +1018,18 @@ func (s *Service) await(
 				turns++
 				_ = s.Repo.UpdateTurns(ctx, row.ID, turns)
 
+				// Early warning, once per delegation. The cap is enforced
+				// silently and lands as a kill mid-action, so the only
+				// moment a leader can still do something about it is
+				// BEFORE the last turn is spent. Supervised rows only:
+				// this rides the supervision channel, and a leader that
+				// asked for no reporting must not be woken by it.
+				if !turnsWarned && row.Supervised {
+					if threshold := turnWarnThreshold(spec.MaxTurns); threshold > 0 && turns >= threshold {
+						turnsWarned = s.warnTurnBudget(ctx, row, turns, spec.MaxTurns)
+					}
+				}
+
 				// Token cap: a spend ceiling bounds what turn counting
 				// cannot — one turn that reads a huge file can cost more
 				// than ten small ones. Only enforceable when the provider
@@ -919,6 +1043,7 @@ func (s *Service) await(
 					return &Result{
 						DelegationID: row.ID, Profile: row.ProfileKey,
 						Status: entity.DelegationStoppedBudget, TurnsUsed: turns,
+						MaxTurns: spec.MaxTurns, Partial: true,
 						TokensUsed: tokens(), Result: out,
 						Note:     TokenBudgetNote(tokens(), spec.MaxTokens),
 						Envelope: FallbackEnvelope(out),
@@ -939,7 +1064,8 @@ func (s *Service) await(
 					return &Result{
 						DelegationID: row.ID, Profile: row.ProfileKey,
 						Status: entity.DelegationStoppedMaxTurns, TurnsUsed: turns, Result: out,
-						Note:     fmt.Sprintf("Stopped at max_turns=%d. The result above is partial.", spec.MaxTurns),
+						MaxTurns: spec.MaxTurns, Partial: true,
+						Note:     MaxTurnsNote(row.ID, turns, spec.MaxTurns),
 						Envelope: FallbackEnvelope(out),
 					}, nil
 				}
@@ -1136,6 +1262,7 @@ func (s *Service) finish(ctx context.Context, row *entity.AgentDelegation, expec
 	if !ok {
 		log.Debug().Str("delegation", row.ID).Str("status", status).
 			Msg("delegation: finish skipped, row already terminal")
+		s.keepLateResult(ctx, row, status, result, turns)
 		return
 	}
 	// A slot just freed. Poking here rather than on a timer is what keeps
@@ -1148,6 +1275,9 @@ func (s *Service) finish(ctx context.Context, row *entity.AgentDelegation, expec
 	// sub-agent is still going.
 	if row.Detached && row.ParentSessionID != "" {
 		s.reportSurvivors(context.WithoutCancel(ctx), row.ParentSessionID)
+		// Same trigger for the background banner: one fewer is running, and
+		// the last one ending is what lets the banner clear.
+		s.reportBackground(context.WithoutCancel(ctx), row.ParentSessionID)
 	}
 }
 
@@ -1329,3 +1459,27 @@ func (s *Service) spawnRosterBlock(ctx context.Context, row *entity.AgentDelegat
 
 // ErrNoService is returned by wiring when delegation is not configured.
 var ErrNoService = errors.New("delegation service not configured")
+
+// keepLateResult saves the answer of a run that finished after its row had
+// already been closed with nothing in it.
+//
+// The sweep closes a run it believes abandoned with whatever partial text it
+// can find — often none. If the sub-agent was in fact alive (in a draining
+// predecessor the sweep could not see, say) and then finishes properly, its
+// answer arrives at a row that is already done, and dropping it there is how
+// a whole report vanished. Only an EMPTY result is filled in: a row closed
+// with real text, or by a human, keeps what it says.
+func (s *Service) keepLateResult(ctx context.Context, row *entity.AgentDelegation, status, result string, turns int) {
+	if status != entity.DelegationDone || strings.TrimSpace(result) == "" {
+		return
+	}
+	n, err := s.Repo.FillEmptyResult(context.WithoutCancel(ctx), row.ID, result, turns)
+	if err != nil {
+		log.Warn().Err(err).Str("delegation", row.ID).Msg("delegation: late result not saved")
+		return
+	}
+	if n {
+		log.Info().Str("delegation", row.ID).
+			Msg("delegation: run finished after its row was closed empty; kept its result")
+	}
+}

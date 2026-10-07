@@ -6,6 +6,8 @@ import { get, post, ApiError } from "./api.js";
 
 export type LoginAccount = {
   connected: boolean;
+  /* unknown: the login could not be read this time — not a logout. */
+  unknown?: boolean;
   email: string;
   plan: string;
   org: string;
@@ -27,7 +29,63 @@ export type LoginTTYStatus = {
   defaultTtlS: number;
   extendS: number;
   maxTtlS: number;
+  /* Picker shown before Login for omp/opencode (which OAuth provider to
+     log in to). Empty = no picker. */
+  loginChoices: LoginChoice[];
+  /* Caveat beside the picker (opencode: Claude subscriptions unsupported). */
+  loginNote: string;
+  /* Where this instance's single account lives: omp profile / opencode
+     data dir. Empty for types wick does not pin. */
+  accountStore: string;
+  /* omp credential pool: every account in the profile (omp rotates
+     between them on usage limits). Empty for other types. */
+  accounts: PoolAccount[];
+  /* API-key login choices (omp/opencode); set = the instance Env already
+     carries that provider's key var. */
+  apiKeys: APIKeyChoice[];
+  /* Instance whose login this one uses (omp/opencode shared login); ""
+     = its own. Account and usage are then the owner's. */
+  authFrom?: string;
 };
+
+export type LoginChoice = {
+  id: string;
+  label: string;
+  warning: string;
+  default: boolean;
+  beta?: boolean;
+};
+
+/* One account = one login to one provider (Instance → Account → Model). */
+export type PoolAccount = {
+  id: string;
+  label: string;
+  provider: string;
+  email: string;
+  plan: string;
+  org: string;
+  kind: string;
+  status: string; // active | disabled
+  disabledCause: string;
+  disabledAt: string;
+  usage?: UsageWindow[];
+};
+
+export type APIKeyChoice = { id: string; label: string; env: string; set: boolean };
+
+/* validTime drops Go's zero time ("0001-01-01T00:00:00Z") and anything
+   unparsable, so no "expires 1/1/1" ever renders. */
+export function validTime(iso: string): boolean {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  return !isNaN(t) && new Date(iso).getUTCFullYear() > 1970;
+}
+
+/* defaultLoginChoice is the picker's initial value: the entry the server
+   flags as default, else the first, else "". */
+export function defaultLoginChoice(choices: LoginChoice[]): string {
+  return (choices.find((c) => c.default) ?? choices[0])?.id ?? "";
+}
 
 export type UsageWindow = {
   key: string;
@@ -65,6 +123,7 @@ export type LoginTTYFrame = {
 
 interface WireLoginAccount {
   connected?: boolean;
+  unknown?: boolean;
   email?: string;
   plan?: string;
   org?: string;
@@ -86,6 +145,16 @@ interface WireLoginStatus {
   default_ttl_s?: number;
   extend_s?: number;
   max_ttl_s?: number;
+  login_choices?: { id?: string; label?: string; warning?: string; default?: boolean; beta?: boolean }[] | null;
+  login_note?: string;
+  account_store?: string;
+  accounts?: Array<{
+    id?: string; label?: string; provider?: string; email?: string; plan?: string; org?: string; kind?: string;
+    status?: string; disabled_cause?: string; disabled_at?: string;
+    usage?: Array<{ key?: string; utilization?: number; resets_at?: string }> | null;
+  }> | null;
+  api_keys?: Array<{ id?: string; label?: string; env?: string; set?: boolean }> | null;
+  auth_from?: string;
 }
 
 interface WireUsage {
@@ -102,6 +171,7 @@ interface WireUsage {
 export function mapLoginAccount(w: WireLoginAccount | null | undefined): LoginAccount {
   return {
     connected: w?.connected ?? false,
+    unknown: w?.unknown ?? false,
     email: w?.email ?? "",
     plan: w?.plan ?? "",
     org: w?.org ?? "",
@@ -128,7 +198,44 @@ export function normalizeLoginStatus(w: WireLoginStatus): LoginTTYStatus {
     defaultTtlS: w.default_ttl_s ?? 300,
     extendS: w.extend_s ?? 300,
     maxTtlS: w.max_ttl_s ?? 1800,
+    loginChoices: (w.login_choices ?? []).map((c) => ({
+      id: c.id ?? "",
+      label: c.label ?? c.id ?? "",
+      warning: c.warning ?? "",
+      default: c.default ?? false,
+      beta: c.beta ?? false,
+    })),
+    loginNote: w.login_note ?? "",
+    accountStore: w.account_store ?? "",
+    accounts: (w.accounts ?? []).map((a) => ({
+      id: a.id ?? a.provider ?? "",
+      label: a.label || a.email || a.provider || "",
+      provider: a.provider ?? "",
+      email: a.email ?? "",
+      plan: a.plan ?? "",
+      org: a.org ?? "",
+      kind: a.kind ?? "",
+      status: a.status ?? "active",
+      disabledCause: a.disabled_cause ?? "",
+      disabledAt: a.disabled_at ?? "",
+      usage: (a.usage ?? []).map((x) => ({ key: x.key ?? "", utilization: x.utilization ?? 0, resetsAt: x.resets_at ?? "" })),
+    })),
+    apiKeys: (w.api_keys ?? []).map((k) => ({ id: k.id ?? "", label: k.label ?? k.id ?? "", env: k.env ?? "", set: k.set ?? false })),
+    authFrom: w.auth_from ?? "",
   };
+}
+
+/* apiLoginTTYLogout removes every stored credential of one provider from
+   the instance's store (omp has no per-account logout outside its TUI). */
+export async function apiLoginTTYLogout(base: string, type: string, name: string, loginProvider: string, account = ""): Promise<void> {
+  const acct = account ? `&account=${encodeURIComponent(account)}` : "";
+  await post(`${ttyPath(base, type, name)}/logout?login_provider=${encodeURIComponent(loginProvider)}${acct}`);
+}
+
+/* apiSetAPIKey stores (or, with key "", removes) a provider API key as the
+   instance env var the CLI reads. The key travels in the body only. */
+export async function apiSetAPIKey(base: string, type: string, name: string, providerID: string, key: string): Promise<void> {
+  await post(`${ttyPath(base, type, name)}/apikey`, { provider: providerID, key });
 }
 
 export function normalizeUsage(w: WireUsage): UsageResult {
@@ -184,8 +291,22 @@ export async function apiLoginTTYUsageRefresh(
   return { accepted: r?.accepted ?? false, checking: r?.checking ?? false, waitS: r?.wait_s ?? 0 };
 }
 
-export async function apiLoginTTYStart(base: string, type: string, name: string): Promise<LoginTTYSession | null> {
-  const r = await post<{ session?: WireLoginSession }>(`${ttyPath(base, type, name)}/start`);
+export async function apiLoginTTYStart(
+  base: string,
+  type: string,
+  name: string,
+  loginProvider = "",
+  account = "",
+): Promise<LoginTTYSession | null> {
+  // omp/opencode: the OAuth provider picked in the panel. The server checks
+  // it against its own allowlist; it never reaches argv unvalidated.
+  // opencode `account`: "new" logs in to a fresh data folder (a second
+  // account of a provider it already has), "aN" re-logs that folder.
+  const params = new URLSearchParams();
+  if (loginProvider) params.set("login_provider", loginProvider);
+  if (account) params.set("account", account);
+  const q = params.size ? `?${params.toString()}` : "";
+  const r = await post<{ session?: WireLoginSession }>(`${ttyPath(base, type, name)}/start${q}`);
   return mapSession(r?.session);
 }
 
@@ -301,8 +422,10 @@ export function fmtResetsIn(resetsAt: string, nowMs: number): string {
 }
 
 /* prettyPlan renders the raw subscription type the way the CLI shows
-   it ("Claude team", "Claude max"); non-claude plans pass through. */
-export function prettyPlan(plan: string): string {
+   it ("Claude team", "ChatGPT free"). The brand follows the account's
+   provider: "" / claude / anthropic* → Claude, openai* / codex* →
+   ChatGPT; any other provider shows the raw plan. */
+export function prettyPlan(plan: string, provider = ""): string {
   switch (plan) {
     case "":
       return "";
@@ -312,8 +435,12 @@ export function prettyPlan(plan: string): string {
     case "pro":
     case "max":
     case "team":
-    case "enterprise":
-      return `Claude ${plan}`;
+    case "enterprise": {
+      const p = provider.toLowerCase();
+      if (p === "" || p === "claude" || p.startsWith("anthropic")) return `Claude ${plan}`;
+      if (p.startsWith("openai") || p.startsWith("codex")) return `ChatGPT ${plan}`;
+      return plan;
+    }
     default:
       return plan;
   }

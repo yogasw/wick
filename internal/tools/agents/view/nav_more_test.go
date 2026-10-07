@@ -29,7 +29,7 @@ func TestAgentsMoreItemsMarksTheActivePage(t *testing.T) {
 // A page outside the group leaves every row inactive: nothing is
 // promoted, and "More" renders as the single closed row it used to be.
 func TestAgentsMoreItemsPromotesNothingForAnOutsidePage(t *testing.T) {
-	items := AgentsMoreItems(AgentsLayoutVM{Base: "/b", ActivePage: "workflows"}, admin())
+	items := AgentsMoreItems(AgentsLayoutVM{Base: "/b", ActivePage: "connectors"}, admin())
 	for _, it := range items {
 		if it.Active {
 			t.Fatalf("%s marked active for a page outside the group", it.Label)
@@ -76,5 +76,17 @@ func TestAgentsMoreItemsUsesTheBase(t *testing.T) {
 		if len(it.Href) < len("/tools/agents/") || it.Href[:len("/tools/agents/")] != "/tools/agents/" {
 			t.Fatalf("href = %q, want it under the base", it.Href)
 		}
+	}
+}
+
+// Workflows lives in More, first, and its page lifts it out of the group
+// like any other row.
+func TestAgentsMoreItemsHoldsWorkflows(t *testing.T) {
+	items := AgentsMoreItems(AgentsLayoutVM{Base: "/tools/agents", ActivePage: "workflows"}, member())
+	if len(items) == 0 || items[0].Label != "Workflows" || !items[0].Active {
+		t.Fatalf("first item = %+v, want active Workflows", items)
+	}
+	if items[0].Href != "/tools/agents/workflows" {
+		t.Fatalf("href = %q", items[0].Href)
 	}
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { ConfirmDialog, Breadcrumb, type BreadcrumbItem } from "@wick-fe/common-ui";
+  import { ConfirmDialog, Breadcrumb, Select, type BreadcrumbItem } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     apiGetStorage,
@@ -205,6 +205,16 @@
   onMount(() => {
     load();
   });
+
+  // Retention choices for a stored file, in days (0 = keep forever).
+  const RETENTION_OPTIONS = [
+    { label: "Forever", value: "0" },
+    { label: "1 day", value: "1" },
+    { label: "7 days", value: "7" },
+    { label: "14 days", value: "14" },
+    { label: "30 days", value: "30" },
+    { label: "90 days", value: "90" },
+  ];
 </script>
 
 <div class="space-y-6">
@@ -286,17 +296,15 @@
 
   <!-- filters -->
   <div class="flex items-center gap-3 flex-wrap">
-    <select
-      bind:value={filterProvider}
-      class="rounded border border-white-400 dark:border-navy-600 bg-white-50 dark:bg-navy-800 px-3 py-1.5 text-xs text-black-800 dark:text-black-600 focus:outline-none focus:ring-1 focus:ring-green-500"
-    >
-      <option value="">All providers</option>
-      {#if data}
-        {#each data.provider_types as pt}
-          <option value={pt}>{pt}</option>
-        {/each}
-      {/if}
-    </select>
+    <Select
+      class="w-48"
+      size="sm"
+      ariaLabel="Filter by provider"
+      value={filterProvider}
+      placeholder="All providers"
+      options={data?.provider_types ?? []}
+      onChange={(v) => { filterProvider = v; }}
+    />
     <input
       type="text"
       bind:value={filterInstance}
@@ -395,22 +403,15 @@
                   <td class="px-3 py-2 text-right text-black-700 dark:text-black-600 whitespace-nowrap">{formatSize(file.size)}</td>
                   <td class="px-3 py-2 text-black-700 dark:text-black-600 whitespace-nowrap">{formatDate(file.synced_at)}</td>
                   <td class="px-3 py-2">
-                    <select
+                    <Select
+                      class="w-28"
+                      size="sm"
+                      ariaLabel="Retention"
                       disabled={busy[retKey]}
-                      value={file.retention_days}
-                      onchange={(e) => {
-                        const v = parseInt((e.currentTarget as HTMLSelectElement).value, 10);
-                        doRetention(file, v);
-                      }}
-                      class="rounded border border-white-400 dark:border-navy-600 bg-white-50 dark:bg-navy-800 px-2 py-0.5 text-xs text-black-800 dark:text-black-600 focus:outline-none focus:ring-1 focus:ring-green-500 disabled:opacity-50"
-                    >
-                      <option value={0}>Forever</option>
-                      <option value={1}>1 day</option>
-                      <option value={7}>7 days</option>
-                      <option value={14}>14 days</option>
-                      <option value={30}>30 days</option>
-                      <option value={90}>90 days</option>
-                    </select>
+                      value={String(file.retention_days)}
+                      options={RETENTION_OPTIONS}
+                      onChange={(v) => doRetention(file, parseInt(v, 10))}
+                    />
                   </td>
                   <td class="px-3 py-2">
                     <div class="flex items-center justify-end gap-2">

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/yogasw/wick/internal/processctl"
@@ -30,6 +32,15 @@ type DrainState struct {
 	PID         int       `json:"pid"`
 	Since       time.Time `json:"since"`
 	Outstanding []string  `json:"outstanding"`
+	// Sessions lists the sessions with an agent turn still in flight here.
+	//
+	// The delegation table is shared by both generations, so the successor's
+	// sweep has to know which sub-agents are alive in a process whose pool it
+	// cannot see — otherwise it reads them as exited and closes their runs
+	// with an empty result. Outstanding carries the same ids inside prose;
+	// this is the list a reader can rely on without parsing it. Absent on a
+	// record written by an older binary.
+	Sessions []string `json:"sessions,omitempty"`
 	// UpdatedAt lets a reader ignore a record left behind by a process that
 	// died without cleaning up.
 	UpdatedAt time.Time `json:"updated_at"`
@@ -38,17 +49,17 @@ type DrainState struct {
 func drainStatePath(dir string) string { return filepath.Join(dir, drainStateFile) }
 
 // PublishDrainState writes what this process is still waiting for.
-func PublishDrainState(dir string, pid int, since time.Time, outstanding []string) {
-	PublishDrainStateAt(dir, pid, since, outstanding, time.Now())
+func PublishDrainState(dir string, pid int, since time.Time, outstanding []string, sessions ...string) {
+	PublishDrainStateAt(dir, pid, since, outstanding, time.Now(), sessions...)
 }
 
 // PublishDrainStateAt is PublishDrainState with an explicit timestamp, so a
 // test can write a record that is already stale.
-func PublishDrainStateAt(dir string, pid int, since time.Time, outstanding []string, at time.Time) {
+func PublishDrainStateAt(dir string, pid int, since time.Time, outstanding []string, at time.Time, sessions ...string) {
 	if dir == "" {
 		return
 	}
-	b, err := json.Marshal(DrainState{PID: pid, Since: since, Outstanding: outstanding, UpdatedAt: at})
+	b, err := json.Marshal(DrainState{PID: pid, Since: since, Outstanding: outstanding, Sessions: sessions, UpdatedAt: at})
 	if err != nil {
 		return
 	}
@@ -90,4 +101,41 @@ func ReadDrainState(dir string) (DrainState, bool) {
 		return DrainState{}, false
 	}
 	return st, true
+}
+
+// HoldsSession reports whether the draining process may still be running an
+// agent turn for sessionID.
+//
+// Errs towards yes. The caller is deciding whether to close a run as
+// abandoned, and closing a live one throws its work away, while leaving a
+// dead one open costs a sweep or two until the record goes stale. So a record
+// from an older binary, which has no Sessions list, counts any session it
+// names — and, when it reports agent turns without naming this one, still
+// counts it: the ids there may be shortened, and "cannot tell" is not "gone".
+func (st DrainState) HoldsSession(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	if len(st.Sessions) > 0 {
+		return slices.Contains(st.Sessions, sessionID)
+	}
+	for _, w := range st.Outstanding {
+		if strings.Contains(w, sessionID) || strings.HasPrefix(w, "agent turns") {
+			return true
+		}
+	}
+	return false
+}
+
+// PredecessorHolds reports whether a still-living, still-draining previous
+// process is running sessionID's turn.
+//
+// A process never answers for itself here: its own pool is the authority on
+// its own agents, and the record it publishes is for the OTHER generation.
+func PredecessorHolds(dir, sessionID string) bool {
+	st, ok := ReadDrainState(dir)
+	if !ok || st.PID == os.Getpid() {
+		return false
+	}
+	return st.HoldsSession(sessionID)
 }

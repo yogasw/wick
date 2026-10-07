@@ -483,6 +483,7 @@ func (h *Handler) customMCPServerSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	body.Form.OAuthRedirectURI = h.customOAuthRedirectURI(r)
 	_, key, instanceID, err := h.custom.SaveServer(r.Context(), &body.Form, body.TestedOK, body.ID, userID(user))
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
@@ -572,6 +573,19 @@ func (h *Handler) customMCPOAuthCallback(w http.ResponseWriter, r *http.Request)
 	res, err := h.custom.CompleteOAuthLogin(r.Context(), q.Get("state"), q.Get("code"), h.customOAuthRedirectURI(r))
 	if err != nil {
 		customOAuthPopupHTML(w, "", err.Error())
+		return
+	}
+	if res.AsAccount {
+		// Per-user (SSO) connect: the account landed; re-sync the shared
+		// op list under it (the first connect is what populates it) and
+		// end like the built-in account connect so the instance page's
+		// Accounts card refreshes.
+		if defID, ok := h.custom.DefIDForKey(res.Key); ok {
+			if err := h.custom.ReloadFor(r.Context(), defID, res.InstanceID); err != nil {
+				log.Warn().Err(err).Str("key", res.Key).Msg("re-sync after oauth account connect")
+			}
+		}
+		oauthPopupDone(w, res.Key, res.Account, "")
 		return
 	}
 	if res.InstanceID != "" {

@@ -78,13 +78,16 @@ type usageWindowDTO struct {
 // same {type, name} pair the providers list uses so the SPA can join it
 // onto the cards it already rendered.
 type providerConnectionDTO struct {
-	Type       string `json:"type"`
-	Name       string `json:"name"`
-	Connected  bool   `json:"connected"`
-	Email      string `json:"email,omitempty"`
-	Plan       string `json:"plan,omitempty"`
-	Org        string `json:"org,omitempty"`
-	AuthMethod string `json:"auth_method,omitempty"`
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	Connected bool   `json:"connected"`
+	// AccountUnknown: the login could not be read this time (see
+	// logintty.Account.Unknown) — not the same as logged out.
+	AccountUnknown bool   `json:"account_unknown,omitempty"`
+	Email          string `json:"email,omitempty"`
+	Plan           string `json:"plan,omitempty"`
+	Org            string `json:"org,omitempty"`
+	AuthMethod     string `json:"auth_method,omitempty"`
 	// UsageSupported is false for provider types with no usage API
 	// (codex/gemini today) — a different state from a failed fetch.
 	UsageSupported bool `json:"usage_supported"`
@@ -137,6 +140,9 @@ func collectConnections(ctx context.Context, instances []provider.Instance, p co
 	probeEnv := map[string][]string{}
 	probeType := map[string]provider.Type{}
 	for _, ins := range instances {
+		// The account store for omp/opencode lives in the instance config,
+		// not its Env; AccountEnv makes it visible to every probe below.
+		ins.Env = provider.AccountEnv(ins)
 		if p.configDir(ins.Type, ins.Env) == "" {
 			continue // no on-disk credentials (wick) — nothing to report
 		}
@@ -182,13 +188,14 @@ func collectConnections(ctx context.Context, instances []provider.Instance, p co
 	for _, s := range slots {
 		acc := p.account(s.ins.Type, s.ins.Env)
 		dto := providerConnectionDTO{
-			Type:       string(s.ins.Type),
-			Name:       s.ins.Name,
-			Connected:  acc.Connected,
-			Email:      acc.Email,
-			Plan:       acc.Plan,
-			Org:        acc.Org,
-			AuthMethod: acc.AuthMethod,
+			Type:           string(s.ins.Type),
+			Name:           s.ins.Name,
+			Connected:      acc.Connected,
+			AccountUnknown: acc.Unknown,
+			Email:          acc.Email,
+			Plan:           acc.Plan,
+			Org:            acc.Org,
+			AuthMethod:     acc.AuthMethod,
 		}
 		if s.key == "" {
 			// Type has no usage API — not a failure, just nothing to show.
@@ -231,6 +238,10 @@ func applyUsageProvenance(dto *providerConnectionDTO, v usageView, now time.Time
 }
 
 func usageWindowDTOs(windows []logintty.UsageWindow) []usageWindowDTO {
+	// Multi-account readings (omp pool, opencode folders) collapse to the
+	// instance's headline here; per-account views pass one account's
+	// windows, which Headline leaves as they are.
+	windows = logintty.Headline(windows)
 	if len(windows) == 0 {
 		return nil
 	}

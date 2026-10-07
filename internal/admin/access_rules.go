@@ -34,6 +34,9 @@ type accessRule struct {
 const (
 	knobConnectors = "admin_see_all_connectors"
 	knobSessions   = "admin_see_all_sessions"
+	// knobNever: no admin bypass. A tag share hands the agent to the
+	// people who carry the tag and nobody else, admins included.
+	knobNever = "never"
 )
 
 // The tool_path namespaces, named so a rule can be looked up without
@@ -61,6 +64,10 @@ var accessRules = map[string]accessRule{
 	// authenticated user; the owner is unioned in by the caller.
 	"projects":    {OwnerScoped: true, FilterTagsGrant: true, AdminKnob: knobSessions, Reader: "login.CanAccessSharedResource"},
 	"data-tables": {OwnerScoped: true, FilterTagsGrant: true, AdminKnob: knobSessions, Reader: "login.CanAccessSharedResource"},
+
+	// A Team agent tagged with a filter tag is shared with whoever carries
+	// that tag directly; the owner keeps it whatever the tags say.
+	"team-agents": {OwnerScoped: true, FilterTagsGrant: true, AdminKnob: knobNever, Reader: "team.Store.SharedWith (tagSharedIDs)"},
 
 	// Owner tag ONLY. Neither reader ever looks at the filter tags these
 	// admin pages write, so a tag added there grants nothing — see

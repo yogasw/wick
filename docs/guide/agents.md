@@ -386,6 +386,7 @@ Each check reports `✓` / `✗` / `!`. Exit `0` when required checks pass, `1` 
 - [**Providers**](./agents/providers) — multi-instance config, binary resolution chain, status cache.
 - [**Channels**](./agents/channels) — Slack, Telegram, web UI; access control; meta-commands.
 - [**Scheduled Messages**](./agents/scheduled-messages) — one-shot / recurring message injection, agent- or human-initiated.
+- [**Team**](./agents/team/) — persistent agents with persona, access checklist, Captain, @mentions, remote agents and Connections.
 - [**Pool & Sessions**](./agents/pool) — slot allocation, idle-kill, resume, message buffer.
 - [**Source Control**](./agents/source-control) — git SCM panel on the session detail page.
 - [**AI Router**](./agents/airouter) — embedded LLM router/proxy dashboards (9router, OmniRoute); switch between them, install and manage via Settings tab.

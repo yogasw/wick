@@ -1,6 +1,8 @@
 package agents
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/yogasw/wick/internal/agents/provider"
@@ -95,7 +97,13 @@ func providerPerm(approved, isAdmin, accessTag, manageTag bool) (canAccess, canM
 // With no auth service wired (tests, minimal boots) only admins pass:
 // an unwired ACL must fail closed.
 func canAccessProvider(c *tool.Ctx, t provider.Type, name string) bool {
-	u := login.GetUser(c.Context())
+	return userCanAccessProvider(c.Context(), login.GetUser(c.Context()), t, name)
+}
+
+// userCanAccessProvider is canAccessProvider for a given user rather than
+// the request's caller — a workflow run asks it about the workflow's
+// owner, who is not whoever happens to be signed in.
+func userCanAccessProvider(ctx context.Context, u *entity.User, t provider.Type, name string) bool {
 	if u == nil {
 		return false
 	}
@@ -103,12 +111,52 @@ func canAccessProvider(c *tool.Ctx, t provider.Type, name string) bool {
 		access, _ := providerPerm(u.Approved, true, false, false)
 		return access
 	}
+	access, _ := providerPerm(u.Approved, false, providerAccessTagAllows(ctx, u, t, name), false)
+	return access
+}
+
+// providerAccessTagAllows asks the tag store whether u passes the
+// instance's ACCESS tags (untagged = yes). With no auth service wired it
+// says no — an unwired ACL fails closed. A var so tests can stand in for
+// the tag store.
+var providerAccessTagAllows = func(ctx context.Context, u *entity.User, t provider.Type, name string) bool {
 	if globalAuth == nil {
 		return false
 	}
-	access, _ := providerPerm(u.Approved, false,
-		globalAuth.CanAccessTool(c.Context(), u, providerAccessPath(t, name), entity.VisibilityPrivate), false)
-	return access
+	return globalAuth.CanAccessTool(ctx, u, providerAccessPath(t, name), entity.VisibilityPrivate)
+}
+
+// lookupWorkflowOwner resolves a workflow owner id to the account. A var
+// for the same reason as providerAccessTagAllows.
+var lookupWorkflowOwner = func(ctx context.Context, id string) (*entity.User, error) {
+	if globalAuth == nil {
+		return nil, fmt.Errorf("auth service not wired")
+	}
+	return globalAuth.GetUserByID(ctx, id)
+}
+
+// workflowProviderAccess is the workflow registry's owner gate (see
+// wfprovider.AccessFn): may the workflow's owner run on typ/name?
+//
+// An owner-less workflow is let through. That is the rule the workflow
+// already lives by for its workspace — nothing refuses the run, the
+// editor warns that it runs as wick's internal principal — and refusing
+// here would break every unattributed (MCP/system-created) workflow on
+// upgrade. An owner id naming no account fails closed: there is nobody
+// left whose access the run could borrow.
+func workflowProviderAccess(ctx context.Context, ownerUserID, typ, name string) error {
+	if ownerUserID == "" {
+		return nil
+	}
+	key := typ + "/" + name
+	u, err := lookupWorkflowOwner(ctx, ownerUserID)
+	if err != nil || u == nil {
+		return fmt.Errorf("owner has no access to provider %s: workflow owner %s no longer exists", key, ownerUserID)
+	}
+	if !userCanAccessProvider(ctx, u, provider.Type(typ), name) {
+		return fmt.Errorf("owner has no access to provider %s (provider access tags)", key)
+	}
+	return nil
 }
 
 // canManageProvider reports whether the caller may reconnect this

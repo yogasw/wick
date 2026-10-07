@@ -17,6 +17,7 @@
 
   import { detailNodeID, draftWorkflow, removeNode, updateNode, renameNodeLabel, isValidLabel, LABEL_FORMAT_HINT, stepResultsByNode, runStatusByNode, triggerEventByID, type StepResult } from "$lib/stores/editor";
   import JsonViewer from "./fields/JsonViewer.svelte";
+  import MarkdownField from "./MarkdownField.svelte";
   import { resolveNodeInput, EVENT_SOURCE } from "./nodeInput";
   import { inferSchema } from "./fields/jsonSchema";
   import { catalog } from "$lib/stores/catalog";
@@ -27,9 +28,13 @@
   import KvListField from "./fields/KvListField.svelte";
   import Field from "./fields/Field.svelte";
   import ChannelPicker from "./fields/ChannelPicker.svelte";
+  import WorkflowProviderPicker from "./fields/WorkflowProviderPicker.svelte";
   import SchemaForm from "./fields/SchemaForm.svelte";
   import { CodeEditor } from "@wick-fe/common-ui";
   import DatatableForm from "./nodes/DatatableForm.svelte";
+  import OutputsPanel from "./OutputsPanel.svelte";
+  import InputsPanel from "./InputsPanel.svelte";
+  import { isCaseRouted, incomingPorts } from "./ports";
 
   // Catalog-derived helpers for the channel / connector forms below.
   // Drive every dropdown + arg row off the registry so adding a new
@@ -41,6 +46,15 @@
 
   const currentChannelOp = $derived.by(() => {
     return currentChannelOps.find((o) => o.id === node?.op);
+  });
+  // Bot the Channel row is showing — node.channel_instance when the node
+  // pinned one, else the first instance of that channel type, which is
+  // what ChannelPicker displays as selected. Picker lookups follow it so
+  // they only offer channels that bot can actually reach.
+  const effectiveChannelInstance = $derived.by(() => {
+    if (node?.channel_instance) return node.channel_instance;
+    if (!node || node.type !== "channel") return "";
+    return $catalog?.channels?.find((c) => c.name === node.channel)?.instance_key ?? "";
   });
   const currentConnectorOps = $derived.by(() => {
     if (!node || node.type !== "connector") return [];
@@ -526,22 +540,22 @@
   >
     <div
       class="absolute inset-2 lg:left-4 lg:right-4 lg:top-8 lg:bottom-8
-             rounded-lg overflow-hidden bg-white-100 dark:bg-[#0f172a]
-             text-slate-900 dark:text-white-100 shadow-2xl flex flex-col"
+             rounded-lg overflow-hidden bg-white-100 dark:bg-navy-800
+             text-black-900 dark:text-white-100 shadow-2xl flex flex-col"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
     >
       <!-- Header. -->
-      <header class="flex items-center gap-3 px-5 py-3 border-b border-slate-200 dark:border-navy-600">
+      <header class="flex items-center gap-3 px-5 py-3 border-b border-white-400 dark:border-navy-600">
         <span class="h-2 w-2 rounded-full bg-amber-400"></span>
         <span class="text-sm font-semibold truncate">{node.label || node.id}</span>
         <span class="text-xs text-black-700 dark:text-black-600 shrink-0">{node.type}</span>
         <div class="flex-1"></div>
-        <button class="text-black-700 dark:text-black-500 hover:text-black-800 dark:text-white-100 text-xl leading-none shrink-0" onclick={close} aria-label="Close">✕</button>
+        <button class="text-black-700 dark:text-black-500 hover:text-black-800 dark:hover:text-white-100 text-xl leading-none shrink-0" onclick={close} aria-label="Close">✕</button>
       </header>
 
       <!-- Mobile pane switcher — hidden on lg where all 3 columns show. -->
-      <div class="lg:hidden flex border-b border-slate-200 dark:border-navy-600 text-xs font-medium shrink-0">
+      <div class="lg:hidden flex border-b border-white-400 dark:border-navy-600 text-xs font-medium shrink-0">
         {#each [["input", "Input"], ["editor", "Editor"], ["output", "Output"]] as pane}
           <button
             type="button"
@@ -572,7 +586,7 @@
               <!-- Multiple sources: trigger event + upstream nodes. The
                    user picks which to inspect / drag from. -->
               <select
-                class="w-full mb-2 rounded border border-slate-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-xs"
+                class="w-full mb-2 rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-xs"
                 bind:value={selectedInputSource}
               >
                 {#each inputSources as src}
@@ -581,7 +595,7 @@
               </select>
             {:else if inputSources.length === 1 && inputSources[0].id !== EVENT_SOURCE}
               <select
-                class="w-full mb-2 rounded border border-slate-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-xs"
+                class="w-full mb-2 rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-xs"
                 bind:value={selectedInputSource}
               >
                 {#each inputSources as src}
@@ -595,7 +609,7 @@
             {/if}
 
             {#if inputResolved.data !== null}
-              <div class="inline-flex rounded border border-slate-300 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide self-start mb-2">
+              <div class="inline-flex rounded border border-white-400 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide self-start mb-2">
                 {#each ["json", "schema"] as v}
                   <button
                     type="button"
@@ -607,7 +621,7 @@
                   >{v}</button>
                 {/each}
               </div>
-              <div class="flex-1 overflow-auto rounded bg-slate-50 dark:bg-navy-800/40 p-2">
+              <div class="flex-1 overflow-auto rounded bg-white-200 dark:bg-navy-800/40 p-2">
                 {#if inputView === "json"}
                   <JsonViewer value={inputResolved.data} prefix={inputResolved.prefix} draggable={true} />
                 {:else}
@@ -638,7 +652,7 @@
 
         <!-- MIDDLE: parameters. -->
         <section class="flex flex-1 lg:flex min-h-0 flex-col overflow-y-auto" class:hidden={mobilePane !== "editor"}>
-          <nav class="flex items-center border-b border-slate-200 dark:border-navy-600 px-4 text-sm">
+          <nav class="flex items-center border-b border-white-400 dark:border-navy-600 px-4 text-sm">
             {#each ["params", "settings"] as t}
               <button
                 class="px-3 py-2 capitalize border-b-2 transition-colors"
@@ -672,11 +686,12 @@
               {@const labelErr = labelTaken || labelBadFormat}
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Label</span>
+                <!-- dark: prefix must live in the class string — a
+                     `class:` directive applies the bare class in both
+                     themes, painting a dark border in light mode. -->
                 <input
-                  class="rounded border bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
-                  class:border-rose-500={labelErr}
-                  class:border-white-400={!labelErr}
-                  class:border-navy-600={!labelErr}
+                  class="rounded border bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm
+                         {labelErr ? 'border-rose-500' : 'border-white-400 dark:border-navy-600'}"
                   value={node.label ?? ""}
                   onfocus={(e) => (labelBeforeEdit = (e.target as HTMLInputElement).value)}
                   oninput={(e) => patch("label", (e.target as HTMLInputElement).value)}
@@ -697,23 +712,28 @@
                   </span>
                 {/if}
               </label>
-              <label class="flex flex-col gap-1">
-                <span class="text-xs font-medium">Description</span>
-                <textarea
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-sm"
-                  rows="2"
-                  placeholder="Notes for collaborators (optional)"
+              {#if node.type === "sticky_note"}
+                <MarkdownField
+                  label="Content"
+                  required
+                  placeholder="## Block title&#10;What this group of nodes does + why."
+                  value={node.content ?? ""}
+                  oncommit={(v) => patch("content", v)}
+                />
+              {:else}
+                <MarkdownField
+                  required
                   value={node.description ?? ""}
-                  oninput={(e) => patch("description", (e.target as HTMLTextAreaElement).value)}
-                ></textarea>
-              </label>
+                  oncommit={(v) => patch("description", v)}
+                />
+              {/if}
 
               <!-- ── http ───────────────────────────────────────── -->
               {#if node.type === "http"}
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Method</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.method ?? "GET"}
                     onchange={(e) => patch("method", (e.target as HTMLSelectElement).value)}
                   >
@@ -773,7 +793,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Parse response</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.parse_response ?? "json"}
                     onchange={(e) => patch("parse_response", (e.target as HTMLSelectElement).value)}
                   >
@@ -828,7 +848,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Parse output</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.parse_output ?? "raw"}
                     onchange={(e) => patch("parse_output", (e.target as HTMLSelectElement).value)}
                   >
@@ -840,7 +860,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Timeout</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="30s"
                     value={node.timeout ?? ""}
                     oninput={(e) => patch("timeout", (e.target as HTMLInputElement).value)}
@@ -867,35 +887,23 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Prompt file</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="prompts/my-prompt.md"
                     value={node.prompt_file ?? ""}
                     oninput={(e) => patch("prompt_file", (e.target as HTMLInputElement).value)}
                   />
                 </label>
-                <Field
-                  kind="select"
-                  label="Provider"
-                  value={node.provider ?? ""}
-                  onChange={(v) => patch("provider", v)}
-                  options={[
-                    { label: "(default)", value: "" },
-                    ...(($catalog?.providers ?? []).map((p) => ({
-                      label: p.is_default ? `${p.name} · default` : p.name,
-                      value: p.name,
-                    }))),
-                  ]}
-                  helper="Override the workflow-level default. Empty = use engine default."
+                <WorkflowProviderPicker
+                  provider={node.provider}
+                  model={node.model}
+                  withModels
+                  helper="Override the workflow-level default. Empty = use engine default. The workflow owner must have access to the provider."
+                  onChange={(prov, model) => node && updateNode(node.id, { provider: prov || undefined, model: model || undefined })}
                 />
-                {#if ($catalog?.providers ?? []).length === 0}
-                  <div class="text-[11px] text-amber-600 dark:text-amber-400 -mt-1">
-                    No providers registered yet — set one up in the Providers settings page.
-                  </div>
-                {/if}
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Skills (one per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="3"
                     placeholder="skill_a&#10;skill_b"
                     value={(node.skills ?? []).join("\n")}
@@ -909,7 +917,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Tools (one per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="3"
                     placeholder="tool_a&#10;tool_b"
                     value={(node.tools ?? []).join("\n")}
@@ -924,7 +932,7 @@
                   <span class="text-xs font-medium">Max turns</span>
                   <input
                     type="number"
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     placeholder="0 = unlimited"
                     value={node.max_turns ?? 0}
                     oninput={(e) => patch("max_turns", Number((e.target as HTMLInputElement).value) || 0)}
@@ -933,7 +941,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Thinking</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.thinking ?? "on"}
                     onchange={(e) => patch("thinking", (e.target as HTMLSelectElement).value)}
                   >
@@ -946,7 +954,7 @@
                     <span class="text-xs font-medium">Max thinking tokens</span>
                     <input
                       type="number"
-                      class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                      class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                       placeholder="0 = unlimited (provider default)"
                       value={node.max_thinking_tokens ?? 0}
                       oninput={(e) => patch("max_thinking_tokens", Number((e.target as HTMLInputElement).value) || 0)}
@@ -956,7 +964,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Session override</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.session ?? ""}
                     onchange={(e) => patch("session", (e.target as HTMLSelectElement).value)}
                   >
@@ -967,7 +975,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Reuse session from node</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="(node id of an upstream agent/session_init)"
                     value={node.session_from ?? ""}
                     oninput={(e) => patch("session_from", (e.target as HTMLInputElement).value)}
@@ -977,51 +985,6 @@
 
               <!-- ── classify ───────────────────────────────────── -->
               {#if node.type === "classify"}
-                <label class="flex flex-col gap-1">
-                  <span class="text-xs font-medium">Output cases (one per line)</span>
-                  <textarea
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
-                    rows="4"
-                    placeholder="positive&#10;negative&#10;neutral"
-                    value={(node.output_cases ?? []).join("\n")}
-                    oninput={(e) =>
-                      patch(
-                        "output_cases",
-                        (e.target as HTMLTextAreaElement).value.split(/\r?\n/).filter(Boolean),
-                      )}
-                  ></textarea>
-                </label>
-                {#if (node.output_cases ?? []).length > 0}
-                  <!-- Case coverage — show each declared case + the
-                       edge it routes to (if any). Mirrors v1's
-                       editor_inspector.templ "Cases (branches)"
-                       panel so the operator catches unrouted cases
-                       before they fail at runtime. -->
-                  <div class="rounded border border-slate-200 dark:border-navy-600 p-2 space-y-1">
-                    <div class="text-[11px] font-medium text-black-700 dark:text-black-600">
-                      Branch routing
-                    </div>
-                    {#each node.output_cases ?? [] as caseLabel}
-                      {@const routedEdges = ($draftWorkflow?.graph?.edges ?? []).filter((e) => e.from === node!.id && e.case === caseLabel)}
-                      <div class="flex items-center gap-2 text-[12px]">
-                        <span class="font-mono px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 min-w-[80px]">{caseLabel}</span>
-                        {#if routedEdges.length === 0}
-                          <span class="text-rose-600 dark:text-rose-400 text-[11px] italic">unrouted — no outgoing edge with this case</span>
-                        {:else}
-                          <span class="text-black-700 dark:text-black-500">→</span>
-                          {#each routedEdges as edge}
-                            <button
-                              type="button"
-                              class="font-mono text-emerald-600 dark:text-emerald-400 hover:underline"
-                              onclick={() => detailNodeID.set(edge.to)}
-                              title="Open downstream node"
-                            >{edge.to}</button>
-                          {/each}
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
                 <ArgField
                   {workflowId}
                   {nodeLabels}
@@ -1035,29 +998,15 @@
                   onValueChange={(v) => patch("input", v)}
                   onModeChange={(m) => patchMode("input", m)}
                 />
-                <Field
-                  kind="select"
-                  label="Provider"
-                  value={node.provider ?? ""}
-                  onChange={(v) => patch("provider", v)}
-                  options={[
-                    { label: "(default)", value: "" },
-                    ...(($catalog?.providers ?? []).map((p) => ({
-                      label: p.is_default ? `${p.name} · default` : p.name,
-                      value: p.name,
-                    }))),
-                  ]}
-                  helper="Override the workflow-level default. Empty = use engine default."
+                <WorkflowProviderPicker
+                  provider={node.provider}
+                  helper="Override the workflow-level default. Empty = use engine default. Classify runs the instance's default model."
+                  onChange={(prov) => node && updateNode(node.id, { provider: prov || undefined, model: undefined })}
                 />
-                {#if ($catalog?.providers ?? []).length === 0}
-                  <div class="text-[11px] text-amber-600 dark:text-amber-400 -mt-1">
-                    No providers registered yet — set one up in the Providers settings page.
-                  </div>
-                {/if}
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Prompt file</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="prompts/classify.md"
                     value={node.prompt_file ?? ""}
                     oninput={(e) => patch("prompt_file", (e.target as HTMLInputElement).value)}
@@ -1076,7 +1025,7 @@
                   <span class="text-xs font-medium">Retry on mismatch</span>
                   <input
                     type="number"
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     placeholder="0"
                     value={node.retry_on_mismatch ?? 0}
                     oninput={(e) => patch("retry_on_mismatch", Number((e.target as HTMLInputElement).value) || 0)}
@@ -1115,11 +1064,10 @@
                   </div>
                   {#each node.cases ?? [] as rule, i (i)}
                     <div
-                      class="rounded border p-2 space-y-2 transition-colors"
-                      class:border-white-400={switchDragOver !== i}
-                      class:border-navy-600={switchDragOver !== i}
-                      class:border-emerald-400={switchDragOver === i}
-                      class:border-emerald-500={switchDragOver === i}
+                      class="rounded border p-2 space-y-2 transition-colors
+                             {switchDragOver === i
+                               ? 'border-emerald-500 dark:border-emerald-400'
+                               : 'border-white-400 dark:border-navy-600'}"
                       class:opacity-50={switchDragFrom === i}
                       draggable="true"
                       ondragstart={(e) => onSwitchDragStart(i, e)}
@@ -1139,7 +1087,7 @@
                       <label class="flex flex-col gap-1">
                         <span class="text-[11px] text-black-700 dark:text-black-600">When</span>
                         <input
-                          class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px]"
+                          class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px]"
                           placeholder={'{{ eq .Node.x.case "yes" }}'}
                           value={rule.when}
                           oninput={(e) => {
@@ -1151,7 +1099,7 @@
                       </label>
                       <div class="flex items-center gap-2">
                         <input
-                          class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+                          class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                           placeholder="case-label"
                           value={rule.case}
                           oninput={(e) => {
@@ -1175,7 +1123,7 @@
                   <label class="flex flex-col gap-1">
                     <span class="text-xs font-medium">Default case</span>
                     <input
-                      class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                      class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                       placeholder="fallback-label"
                       value={node.default_case ?? ""}
                       oninput={(e) => patch("default_case", (e.target as HTMLInputElement).value)}
@@ -1190,7 +1138,7 @@
                 <div class="space-y-1">
                   <div class="flex items-center justify-between gap-2">
                     <span class="text-xs font-medium">Code</span>
-                    <div class="inline-flex rounded border border-slate-300 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide">
+                    <div class="inline-flex rounded border border-white-400 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide">
                       {#each ["fixed", "expression"] as m}
                         <button
                           type="button"
@@ -1222,7 +1170,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Engine</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.engine ?? "gotemplate"}
                     onchange={(e) => patch("engine", (e.target as HTMLSelectElement).value)}
                   >
@@ -1263,7 +1211,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Database</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="DSN ref configured in workspace"
                     value={node.database ?? ""}
                     oninput={(e) => patch("database", (e.target as HTMLInputElement).value)}
@@ -1286,7 +1234,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">SQL args (one per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="3"
                     placeholder={"{{.Event.Payload.user_id}}"}
                     value={(node.sql_args ?? []).join("\n")}
@@ -1323,7 +1271,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Sharing mode</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={sessionMode}
                     onchange={(e) => {
                       const m = (e.target as HTMLSelectElement).value;
@@ -1365,7 +1313,7 @@
                     </div>
                     <button
                       type="button"
-                      class="h-9 px-3 rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-xs hover:bg-slate-50 dark:hover:bg-white-300 dark:bg-navy-600"
+                      class="h-9 px-3 rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-xs hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600"
                       title="Generate a fresh UUID"
                       onclick={() => patch("session_id", crypto?.randomUUID?.() ?? "")}
                     >regen</button>
@@ -1374,7 +1322,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Workspace override (optional)</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.workspace ?? ""}
                     onchange={(e) => patch("workspace", (e.target as HTMLSelectElement).value)}
                   >
@@ -1388,7 +1336,7 @@
                       class={"rounded border px-2 py-1 text-xs " +
                         (workspaceWarning.tone === "warn"
                           ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
-                          : "border-slate-200 bg-slate-50 text-slate-600 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600")}
+                          : "border-white-400 bg-white-200 text-black-700 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600")}
                     >{workspaceWarning.text}</span>
                   {/if}
                 </label>
@@ -1402,7 +1350,7 @@
                     type="number"
                     min="100"
                     max="599"
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     value={(node as any).respond_status ?? 200}
                     oninput={(e) => patch("respond_status" as any, Number((e.target as HTMLInputElement).value) || 200)}
                     placeholder="200"
@@ -1443,7 +1391,7 @@
                 {#if node.channel && node.op}
                   <!-- Locked channel + op — set by the palette drill
                        drop. Same rationale as the connector lock above. -->
-                  <div class="rounded border border-slate-200 dark:border-navy-600 px-3 py-2 bg-slate-50 dark:bg-navy-700/40">
+                  <div class="rounded border border-white-400 dark:border-navy-600 px-3 py-2 bg-white-200 dark:bg-navy-700/40">
                     <div class="flex items-center justify-between gap-2">
                       <div class="flex flex-col">
                         <span class="text-[10px] uppercase tracking-wider text-black-700 dark:text-black-600">Action</span>
@@ -1504,11 +1452,12 @@
                   <!-- Schema-driven args — fields, types, picker
                        sources, visible_when predicates all come from
                        the Go ActionDescriptor.InputType wick tags. -->
-                  <div class="rounded border border-slate-200 dark:border-navy-600 p-2">
+                  <div class="rounded border border-white-400 dark:border-navy-600 p-2">
                     <SchemaForm
                       schema={currentChannelOp.args_schema}
                       values={(node.args ?? {}) as Record<string, unknown>}
                       modes={node.arg_modes}
+                      instance={effectiveChannelInstance}
                       onChange={(k, v) => patchArgs("args", { ...(node.args ?? {}), [k]: v })}
                       onModeChange={(k, m) => patchMode(k, m)}
                       onClear={(k) => {
@@ -1542,7 +1491,7 @@
                        drop. Changing them would invalidate the args
                        schema; if the user wants a different op they
                        delete the node and drop a new one. -->
-                  <div class="rounded border border-slate-200 dark:border-navy-600 px-3 py-2 bg-slate-50 dark:bg-navy-700/40">
+                  <div class="rounded border border-white-400 dark:border-navy-600 px-3 py-2 bg-white-200 dark:bg-navy-700/40">
                     <div class="flex items-center justify-between gap-2">
                       <div class="flex flex-col">
                         <span class="text-[10px] uppercase tracking-wider text-black-700 dark:text-black-600">Action</span>
@@ -1607,7 +1556,7 @@
                   {/if}
                 {/if}
                 {#if currentConnectorOp?.args_schema && currentConnectorOp.args_schema.length > 0}
-                  <div class="rounded border border-slate-200 dark:border-navy-600 p-2">
+                  <div class="rounded border border-white-400 dark:border-navy-600 p-2">
                     <SchemaForm
                       schema={currentConnectorOp.args_schema}
                       values={(node.args ?? {}) as Record<string, unknown>}
@@ -1640,7 +1589,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Branches (one node id per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="5"
                     placeholder="step_a&#10;step_b&#10;step_c"
                     value={(node.branches ?? []).join("\n")}
@@ -1658,7 +1607,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Inputs (one node id per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="4"
                     placeholder="step_a&#10;step_b"
                     value={(node.inputs ?? []).join("\n")}
@@ -1672,7 +1621,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Strategy</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.strategy ?? "all"}
                     onchange={(e) => patch("strategy", (e.target as HTMLSelectElement).value)}
                   >
@@ -1685,6 +1634,14 @@
               <!-- ── datatable_* (table + per-op builders) ──────── -->
               {#if node.type?.startsWith?.("datatable_")}
                 <DatatableForm {node} {workflowId} {nodeLabels} {nodeOutputs} />
+              {/if}
+
+              <!-- ── Outputs (case-routed nodes) ─────────────────── -->
+              {#if incomingPorts(node, $draftWorkflow).length > 1 || node.type === "merge"}
+                <InputsPanel {node} />
+              {/if}
+              {#if isCaseRouted(node.type)}
+                <OutputsPanel {node} onCasesChange={(next) => patch("output_cases", next)} />
               {/if}
 
               <!-- ── Output refs available ──────────────────────── -->
@@ -1708,7 +1665,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Mock input (JSON)</span>
                 <textarea
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                  class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                   rows="6"
                   placeholder={'{ "text": "hello" }'}
                   value={(node as unknown as { mock_input?: string }).mock_input ?? ""}
@@ -1726,7 +1683,7 @@
                 <span class="text-xs font-medium">Timeout (sec)</span>
                 <input
                   type="number"
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                  class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                   placeholder="0"
                   value={node.timeout_sec ?? 0}
                   oninput={(e) => patch("timeout_sec", Number((e.target as HTMLInputElement).value) || 0)}
@@ -1735,7 +1692,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">On failure</span>
                 <select
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                  class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                   value={node.on_failure ?? "halt"}
                   onchange={(e) => patch("on_failure", (e.target as HTMLSelectElement).value)}
                 >
@@ -1747,7 +1704,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Fallback node</span>
                 <input
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                  class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                   placeholder="(node id used when on_failure = fallback)"
                   value={node.fallback ?? ""}
                   oninput={(e) => patch("fallback", (e.target as HTMLInputElement).value)}
@@ -1757,7 +1714,7 @@
                 <span class="text-xs font-medium">Retry — max attempts</span>
                 <input
                   type="number"
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                  class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                   placeholder="0"
                   value={node.retry?.max ?? 0}
                   oninput={(e) =>
@@ -1770,7 +1727,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Retry — backoff</span>
                 <input
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                  class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                   placeholder="exponential / 500ms / 2s"
                   value={node.retry?.backoff ?? ""}
                   oninput={(e) =>
@@ -1818,7 +1775,7 @@
               </div>
             {/if}
             {#if lastRun.output}
-              <div class="inline-flex rounded border border-slate-300 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide self-start mb-2">
+              <div class="inline-flex rounded border border-white-400 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide self-start mb-2">
                 {#each ["json", "schema"] as v}
                   <button
                     type="button"
@@ -1830,7 +1787,7 @@
                   >{v}</button>
                 {/each}
               </div>
-              <div class="flex-1 overflow-auto rounded bg-slate-50 dark:bg-navy-800/40 p-2">
+              <div class="flex-1 overflow-auto rounded bg-white-200 dark:bg-navy-800/40 p-2">
                 {#if outputView === "json"}
                   <JsonViewer value={lastRun.output} prefix={`.Node.${node.label || node.id}`} draggable={true} />
                 {:else}

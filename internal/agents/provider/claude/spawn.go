@@ -35,6 +35,7 @@ import (
 	provider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/procgroup"
 	"github.com/yogasw/wick/internal/agents/skillsync"
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -197,7 +198,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// loader never sees them. Naming them here is what makes them reachable;
 	// skillAddDirArgs above is what makes the paths readable.
 	args = append(args, systemPromptArgs(opt.SessionDir, opt.Workspace,
-		skillsync.AppendBuiltinCatalog(opt.Preset))...)
+		skillsync.AppendBuiltinCatalog(opt.Preset, opt.SkipSkills...))...)
 	// One id per conversation, chosen by wick rather than claude: the
 	// first spawn NAMES the session with --session-id (the wick session
 	// id), later spawns RESUME that same name. Otherwise claude mints its
@@ -226,7 +227,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 
 	cmd := safeexec.CommandContext(ctx, execBin, execArgs...)
 	cmd.Dir = opt.Workspace
-	cmd.Env = append(spawnEnv(os.Environ(), opt), routerContrib.Env...)
+	cmd.Env = append(spawnEnv(envscrub.ScrubOSEnv(), opt), routerContrib.Env...)
 	hideConsole(cmd)
 	// Own process group: teardown must reach the descendants this CLI
 	// spawns (MCP servers, tool subprocesses), not just the leader.

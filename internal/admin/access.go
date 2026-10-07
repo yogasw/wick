@@ -41,6 +41,7 @@ var accessKinds = map[string]string{
 	"skills":             "Skills",
 	"data-tables":        "Data Tables",
 	"providers":          "Providers",
+	"team-agents":        "Team agents",
 }
 
 // accessKindsOne is the SINGULAR of each label, for prose: the modal says
@@ -56,6 +57,7 @@ var accessKindsOne = map[string]string{
 	"skills":             "skill",
 	"data-tables":        "data table",
 	"providers":          "provider",
+	"team-agents":        "Team agent",
 }
 
 // accessKindOneOf is accessKindOf in the singular, for a sentence.
@@ -569,6 +571,8 @@ func (h *Handler) resourceOwnerID(path string) string {
 		if p, found := h.projects.Projects()[id]; found {
 			return p.Meta.OwnerUserID
 		}
+	case "team-agents":
+		return h.teamAgentOwner(id)
 	case "workflows":
 		if h.workflows == nil {
 			return ""

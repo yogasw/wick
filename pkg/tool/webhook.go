@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // DefaultMaxBodyBytes caps how much of a webhook request body wick will
@@ -164,6 +165,22 @@ func (c *WebhookCtx) Meta() Tool { return c.meta }
 
 // Base returns the absolute mount path for this tool ("/tools/{Key}").
 func (c *WebhookCtx) Base() string { return c.meta.Path }
+
+// TokenUser authenticates the request's Authorization: Bearer header as a
+// wick Personal Access Token and returns its owner.
+//
+// A webhook route carries no session, so this is how a machine surface can
+// know WHO is calling instead of only THAT the call is allowed: the caller
+// creates a token under their own account and sends it like any bearer.
+// ok is false when the header is absent, the token is not a wick PAT, or
+// it has been revoked.
+func (c *WebhookCtx) TokenUser() (User, bool) {
+	h := c.R.Header.Get("Authorization")
+	if len(h) < 7 || !strings.EqualFold(h[:7], "Bearer ") {
+		return User{}, false
+	}
+	return ResolveToken(c.R.Context(), strings.TrimSpace(h[7:]))
+}
 
 // Cfg returns the current value of a config row declared by this tool,
 // scoped to the active instance's Key. Returns "" when the key is not

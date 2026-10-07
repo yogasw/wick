@@ -4,9 +4,11 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -27,6 +29,8 @@ import (
 	_ "github.com/yogasw/wick/internal/agents/provider/claude"
 	_ "github.com/yogasw/wick/internal/agents/provider/codex"
 	_ "github.com/yogasw/wick/internal/agents/provider/gemini"
+	_ "github.com/yogasw/wick/internal/agents/provider/omp"
+	_ "github.com/yogasw/wick/internal/agents/provider/opencode"
 	// wick is imported (named) in handler.go for SetSecretDecryptor;
 	// that import also runs its init() catalog/capability registration.
 
@@ -276,6 +280,35 @@ func saveProviderDetail(c *tool.Ctx) {
 	ins.Env = splitLines(c.Form("env"))
 	ins.Disabled = c.Form("disabled") == "on"
 	ins.MaxConcurrent = parseIntForm(c.Form("max_concurrent"))
+	if msg := applyAccountForm(&ins, c); msg != "" {
+		c.Error(http.StatusBadRequest, msg)
+		return
+	}
+	// omp/opencode: extra MCP servers + opencode model/hosting. Validated
+	// here so a bad JSON (or a plaintext secret) never reaches the file.
+	if t == provider.TypeOMP || t == provider.TypeOpencode {
+		keys := []string{"extra_mcp_servers"}
+		if t == provider.TypeOpencode {
+			keys = append(keys, "opencode_model", "opencode_allow_hosted", "load_external_skills")
+		}
+		if provider.SupportsServerMode(t) {
+			keys = append(keys, "server_mode", "server_idle_minutes")
+		}
+		if provider.SupportsAutoRetryModel(t) {
+			keys = append(keys, "auto_retry_model")
+		}
+		keys = append(keys, "auth_from")
+		for _, k := range keys {
+			if _, present := c.R.Form[k]; !present {
+				continue
+			}
+			if err := provider.ValidateInstanceConfigKey(k, c.Form(k)); err != nil {
+				c.Error(http.StatusBadRequest, err.Error())
+				return
+			}
+			provider.ApplyInstanceConfigKey(&ins, k, c.Form(k))
+		}
+	}
 	if t == provider.TypeCodex {
 		if ins.CodexConfig == nil {
 			ins.CodexConfig = &provider.CodexConfig{}
@@ -310,15 +343,21 @@ func saveProviderConfigKey(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireProviderAdmin(c) {
-		return
-	}
 	t := provider.Type(c.PathValue("type"))
 	name := c.PathValue("name")
 	key := c.PathValue("key")
+	// Idle compact is housekeeping on the account, not its configuration:
+	// whoever may reconnect the instance may also tune it.
+	if !(provider.IsIdleCompactKey(key) && canManageProvider(c, t, name)) && !requireProviderAdmin(c) {
+		return
+	}
 	ins, err := provider.Find(t, name)
 	if err != nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
+		return
+	}
+	if err := provider.ValidateInstanceConfigKey(key, c.Form("value")); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	provider.ApplyInstanceConfigKey(&ins, key, c.Form("value"))
@@ -446,7 +485,24 @@ func saveProviderInstance(c *tool.Ctx) {
 			SandboxMode: provider.CodexSandboxMode(strings.TrimSpace(c.Form("sandbox_mode"))),
 		}
 	}
+	if msg := applyAccountForm(&ins, c); msg != "" {
+		c.Error(http.StatusBadRequest, msg)
+		return
+	}
 	applyAIRouterForm(&ins, c)
+	// A new omp/opencode instance offers every model its CLI lists; the
+	// operator narrows or turns that off in Detail afterwards.
+	if t == provider.TypeOMP || t == provider.TypeOpencode {
+		if _, err := provider.Find(t, name); err != nil {
+			ins.LiveModels = true
+			if t == provider.TypeOpencode {
+				if ins.OpencodeConfig == nil {
+					ins.OpencodeConfig = &provider.OpencodeConfig{}
+				}
+				ins.OpencodeConfig.AllowHosted = true
+			}
+		}
+	}
 	if mode := strings.TrimSpace(c.Form("storage_mode")); mode != "" {
 		ins.Storage = &provider.StorageConfig{
 			Mode:            mode,
@@ -1529,10 +1585,13 @@ func liveProcessesVM() []view.LiveProcessVM {
 // THIS caller may choose.
 //
 // This is where the access tags actually bite: the project defaults
-// dropdown, the new-session composer, the channel and workflow provider
-// fields and the agent-profile picker all read their options from here
-// (one endpoint, several SPAs), so tagging an instance removes it from
-// every one of those lists at once. Untagged instances stay offered to
+// dropdown, the new-session composer, the channel provider field and the
+// agent-profile picker all read their options from here (one endpoint,
+// several SPAs), so tagging an instance removes it from every one of
+// those lists at once. The workflow editor's provider list comes from the
+// workflow catalog instead, which applies the same rule through
+// workflowProviderChoices (and the run itself re-checks the OWNER via
+// workflowProviderAccess). Untagged instances stay offered to
 // everyone, which is the default every install starts with.
 //
 // It is NOT the Providers menu — that one is manage-only.
@@ -1555,16 +1614,91 @@ func providerChoicesCached(ctx context.Context) []view.ProviderChoiceVM {
 		if st.Instance.Disabled {
 			continue
 		}
-		out = append(out, view.ProviderChoiceVM{
+		vm := view.ProviderChoiceVM{
 			Type:         string(st.Instance.Type),
 			Name:         st.Instance.Name,
 			Version:      st.Version,
 			UsesAIRouter: st.Instance.UseAIRouter,
 			Models:       modelChoicesForList(st.Instance),
-		})
+		}
+		if rows, at, src := liveModelChoices(ctx, st.Instance); rows != nil {
+			vm.Models, vm.ModelsAt, vm.ModelsSource = rows, at, src
+		}
+		out = append(out, vm)
 	}
 	return out
 }
+
+// liveModelChoices is an omp/opencode instance's grouped first level (the
+// rows the drill-in endpoint returns: provider → account → model), so the
+// picker opens on its final shape instead of a flat list swapped a moment
+// later. It only ever returns rows built earlier: building them can read
+// omp's account pool (`omp usage`, up to 45s on a cold cache), and this
+// feeds every provider list. A miss starts that build in the background —
+// the next list has it — and returns nil (the flat list stays).
+func liveModelChoices(_ context.Context, ins provider.Instance) ([]view.ModelChoiceVM, time.Time, string) {
+	if !provider.LiveModelsEnabled(ins) || !ins.ModelSelect {
+		return nil, time.Time{}, ""
+	}
+	sets, grouped := provider.ModelSetsFor(ins.Type)
+	at, src := provider.CLIModelsInfo(ins)
+	if !grouped || at.IsZero() {
+		return nil, time.Time{}, ""
+	}
+	key := string(ins.Type) + "/" + ins.Name
+	liveRowsMu.Lock()
+	e, ok := liveRowsCache[key]
+	stale := !ok || !e.listAt.Equal(at) || time.Since(e.builtAt) > liveRowsTTL
+	building := liveRowsBuilding[key]
+	if stale && !building {
+		liveRowsBuilding[key] = true
+	}
+	liveRowsMu.Unlock()
+	if stale && !building {
+		go buildLiveRows(sets, ins, key, at)
+	}
+	// Rows built from an older list (a Refresh since) would show models that
+	// may be gone under the new list's stamp: the flat list, which is the
+	// new one, until the rebuild lands. Past the TTL alone the list is the
+	// same, so the rows still describe it.
+	if !ok || len(e.rows) <= 1 || !e.listAt.Equal(at) {
+		return nil, time.Time{}, ""
+	}
+	return e.rows, at, src
+}
+
+// buildLiveRows computes ins's first level for liveModelChoices.
+func buildLiveRows(sets provider.ModelSets, ins provider.Instance, key string, listAt time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	rows, err := sets.Sets(ctx, ins)
+	liveRowsMu.Lock()
+	defer liveRowsMu.Unlock()
+	delete(liveRowsBuilding, key)
+	if err != nil {
+		return
+	}
+	out := make([]view.ModelChoiceVM, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, view.ModelChoiceVM{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc, Live: m.Live, Caps: m.Caps})
+	}
+	liveRowsCache[key] = liveRowsEntry{rows: out, listAt: listAt, builtAt: time.Now()}
+}
+
+type liveRowsEntry struct {
+	rows    []view.ModelChoiceVM
+	listAt  time.Time // the cached list they were built from
+	builtAt time.Time
+}
+
+var (
+	liveRowsMu       sync.Mutex
+	liveRowsCache    = map[string]liveRowsEntry{}
+	liveRowsBuilding = map[string]bool{}
+)
+
+// liveRowsTTL bounds how long the account part (labels, counts) is reused.
+const liveRowsTTL = 5 * time.Minute
 
 // modelChoicesForList is the top-level provider-list variant: it collapses a
 // single-model instance to nil so the picker shows no needless drill arrow
@@ -1659,4 +1793,33 @@ func filenameOf(p string) string {
 		return p[i+1:]
 	}
 	return p
+}
+
+// applyAccountForm reads the optional account-store override for omp
+// (`omp_profile`) and opencode (`opencode_data_dir`). Absent/empty = keep
+// what the instance has (or the default for a new one) — the store is
+// pinned at first save and must not silently follow a rename. Returns a
+// user-facing error message, "" when fine.
+func applyAccountForm(ins *provider.Instance, c *tool.Ctx) string {
+	switch ins.Type {
+	case provider.TypeOMP:
+		if p := strings.TrimSpace(c.Form("omp_profile")); p != "" {
+			if !provider.ValidOMPProfile(p) {
+				return "omp profile must match ^[a-z0-9][a-z0-9._-]{0,63}$"
+			}
+			ins.OMPConfig = &provider.OMPConfig{Profile: p}
+		}
+	case provider.TypeOpencode:
+		if d := strings.TrimSpace(c.Form("opencode_data_dir")); d != "" {
+			if !filepath.IsAbs(d) {
+				return "opencode data dir must be an absolute path"
+			}
+			// Only the data dir: Model / AllowHosted stay as saved.
+			if ins.OpencodeConfig == nil {
+				ins.OpencodeConfig = &provider.OpencodeConfig{}
+			}
+			ins.OpencodeConfig.DataDir = d
+		}
+	}
+	return ""
 }

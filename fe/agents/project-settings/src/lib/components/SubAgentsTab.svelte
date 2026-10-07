@@ -31,7 +31,7 @@
 
   // Same lazy loader the project's provider picker uses, so a role can be
   // pinned to a wick live-set leaf here too rather than only to an instance.
-  function loadProviderModels(optionValue: string, opts?: { entry?: string }) {
+  function loadProviderModels(optionValue: string, opts?: { entry?: string; refresh?: boolean }) {
     const slash = optionValue.indexOf("/");
     const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
     const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);

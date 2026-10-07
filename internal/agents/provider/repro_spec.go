@@ -84,6 +84,23 @@ var reproSpecs = map[Type]ReproSpec{
 		HeadlessPrompt:    PromptStdinStreamJSON,
 		InteractivePrompt: PromptPositional,
 	},
+	// omp/spawn.go: print mode + json stream; --profile stays (it selects
+	// the account an interactive repro must run under too).
+	TypeOMP: {
+		HeadlessFlags:      []string{"-p", "--print", "--no-title", "--yolo"},
+		HeadlessValueFlags: []string{"--mode", "--append-system-prompt"},
+		ResumeValueFlags:   []string{"--resume"},
+		InteractivePrompt:  PromptPositional,
+	},
+	// opencode/spawn.go: `run --format json`; interactive = the TUI, which
+	// takes the session via --session as well.
+	TypeOpencode: {
+		HeadlessFlags:      []string{"--thinking", "--auto"},
+		HeadlessValueFlags: []string{"--format"},
+		HeadlessSubcmds:    []string{"run"},
+		ResumeValueFlags:   []string{"--session", "-s"},
+		InteractivePrompt:  PromptPositional,
+	},
 }
 
 // ReproSpecFor returns the reproduce spec for a provider type. An unknown type

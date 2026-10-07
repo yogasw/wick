@@ -2,6 +2,7 @@
   /* Per-tool config editor, ported from tool_detail.templ. No schedule, no
      runs — just the reusable ConfigsForm scoped to the tool key, with a
      tool-scoped save injected (POSTs /manager/api/tools/{key}/configs/…). */
+  import PluginUpdateMenu from "$lib/components/plugins/PluginUpdateMenu.svelte";
   import { toastError } from "@wick-fe/common-stores";
   import { getTool, setToolConfig } from "$lib/api.js";
   import type { ToolDetail } from "$lib/types.js";
@@ -85,6 +86,7 @@
       <div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">{data.icon}</div>
       <div>
         <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">{data.name}</h1>
+            <PluginUpdateMenu pluginKey={toolKey} />
         {#if data.description}
           <p class="mt-0.5 text-sm text-black-800 dark:text-black-600">{data.description}</p>
         {/if}

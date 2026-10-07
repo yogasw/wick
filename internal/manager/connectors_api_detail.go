@@ -71,6 +71,19 @@ type connectorMCPAuthJSON struct {
 	// TestURL runs the per-instance auth probe. Empty when the caller may
 	// not configure the row (same gate as StartURL).
 	TestURL string `json:"test_url"`
+	// PerUser is true when the instance runs in per-user (SSO) mode: it
+	// holds no credential of its own, each wick user connects their own
+	// ConnectorAccount. The list then shows "Per-user login · N accounts"
+	// and the viewer's own state instead of the red not-connected state.
+	PerUser bool `json:"per_user"`
+	// AccountCount is how many connected accounts the viewer may see
+	// (admins/owners: all). Only set when PerUser.
+	AccountCount int `json:"account_count"`
+	// MineConnected is true when the viewer connected their own account.
+	MineConnected bool `json:"mine_connected"`
+	// ConnectMineURL is the "Connect my account" popup target (the SSO
+	// start route). Empty when the viewer may not connect.
+	ConnectMineURL string `json:"connect_mine_url"`
 }
 
 // connectorListJSON is the shape served at GET /manager/api/connectors/{key}:
@@ -459,7 +472,11 @@ func (h *Handler) rowAccountsJSON(ctx context.Context, row entity.Connector, use
 func (h *Handler) rowOAuthJSON(mod connector.Module, row entity.Connector, user *entity.User) *connectorOAuthJSON {
 	out := &connectorOAuthJSON{DisplayName: mod.OAuth.DisplayName}
 	if row.EnableSSO && h.canConnectSSO(user, &row) {
-		if strings.TrimSpace(h.connectors.LoadConfigs(row)["client_id"]) != "" {
+		// oauth MCP connectors keep their client material on the server
+		// row (discovery / dynamic registration), not in a client_id config.
+		if _, isMCP := h.customMCPOAuthServer(context.Background(), mod.Meta.Key); isMCP {
+			out.StartURL = "/manager/connectors/" + mod.Meta.Key + "/oauth/start?connector_id=" + row.ID
+		} else if strings.TrimSpace(h.connectors.LoadConfigs(row)["client_id"]) != "" {
 			out.StartURL = "/manager/connectors/" + mod.Meta.Key + "/oauth/start?connector_id=" + row.ID
 		}
 	}
@@ -493,6 +510,9 @@ func (h *Handler) rowMCPAuthJSON(ctx context.Context, key string, row entity.Con
 	srv, err := h.custom.Store().GetServer(ctx, serverID)
 	if err != nil || srv == nil || srv.AuthScheme != "oauth" {
 		return nil
+	}
+	if h.custom.InstancePerUser(row) {
+		return h.rowMCPPerUserJSON(ctx, key, row, user)
 	}
 	cfgs := h.connectors.LoadConfigs(row)
 	out := &connectorMCPAuthJSON{
@@ -835,4 +855,59 @@ func (h *Handler) loadConfigurableRow(r *http.Request, user *entity.User) (*enti
 // renders multi-line descriptions identically.
 func descJSON(s string) string {
 	return strings.ReplaceAll(s, `\n`, "\n")
+}
+
+// rowMCPPerUserJSON is rowMCPAuthJSON for a per-user (SSO) instance. The
+// instance itself holds no credential, so it is never "not connected":
+// the state is how many accounts the viewer may see plus whether the
+// viewer connected their own.
+func (h *Handler) rowMCPPerUserJSON(ctx context.Context, key string, row entity.Connector, user *entity.User) *connectorMCPAuthJSON {
+	out := &connectorMCPAuthJSON{PerUser: true}
+	var uid string
+	var isAdmin bool
+	if user != nil {
+		uid, isAdmin = user.ID, user.IsAdmin()
+	}
+	caller := h.connectors.AccountAccessFor(row, uid, isAdmin, h.userFilterTagIDs(ctx, user))
+	if accs, err := h.connectors.ListAccountsVisibleTo(ctx, row, caller); err == nil {
+		out.AccountCount = len(accs)
+		for _, a := range accs {
+			if uid != "" && a.WickUserID == uid {
+				out.MineConnected = true
+				if out.Account == "" {
+					out.Account = a.DisplayName
+				}
+			}
+		}
+	}
+	out.Connected = out.MineConnected
+	if h.canConnectSSO(user, &row) {
+		out.ConnectMineURL = "/manager/connectors/" + key + "/oauth/start?connector_id=" + row.ID
+	}
+	return out
+}
+
+// customMCPOAuthServer returns the MCP server row when key is a custom
+// MCP connector whose server uses the oauth scheme.
+func (h *Handler) customMCPOAuthServer(ctx context.Context, key string) (*entity.CustomConnectorMCPServer, bool) {
+	if h.custom == nil {
+		return nil, false
+	}
+	defID, ok := h.custom.DefIDForKey(key)
+	if !ok {
+		return nil, false
+	}
+	def, err := h.custom.Store().GetDef(ctx, defID)
+	if err != nil || def == nil {
+		return nil, false
+	}
+	serverID := customconn.ServerIDForDef(def)
+	if serverID == "" {
+		return nil, false
+	}
+	srv, err := h.custom.Store().GetServer(ctx, serverID)
+	if err != nil || srv == nil || srv.AuthScheme != "oauth" {
+		return nil, false
+	}
+	return srv, true
 }

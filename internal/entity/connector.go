@@ -243,6 +243,12 @@ type ConnectorAccount struct {
 	ExternalUserID string    `gorm:"type:varchar(255);index"`
 	DisplayName    string    `gorm:"type:varchar(255);not null"`
 	AccessToken    string    `gorm:"type:text;not null"`
+	// RefreshToken and ExpiresAt are only written by flows that refresh —
+	// today the OAuth MCP per-user connect (custom connectors). Built-in
+	// OAuth connectors leave them empty. RefreshToken is stored encrypted
+	// (wick_enc_) when an encryption key is configured.
+	RefreshToken string     `gorm:"type:text;default:''"`
+	ExpiresAt    *time.Time
 	// DisabledOps is the LEGACY per-account opt-out: a JSON array of
 	// operation keys disabled for this account. Superseded by OpOverrides
 	// and read only when that is empty, so existing rows keep working

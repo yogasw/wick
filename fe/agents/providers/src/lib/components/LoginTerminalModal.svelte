@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { clock24 } from "@wick-fe/common-ui";
   import { onDestroy } from "svelte";
   import { Modal, Button, TextInput } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
@@ -225,7 +226,7 @@
   }
 
   function fmtAt(at: number): string {
-    return new Date(at).toLocaleTimeString();
+    return clock24(at, true);
   }
 </script>
 

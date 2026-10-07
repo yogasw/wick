@@ -70,12 +70,12 @@ func TestInspectBinaryRejectsNonBinary(t *testing.T) {
 
 func TestCompareBinaries(t *testing.T) {
 	running := BinaryInfo{
-		Path: "/usr/bin/support-tools", MainModule: "qiscus-support-tools",
+		Path: "/usr/bin/support-tools", MainModule: "abc-support-tools",
 		AppName: "support-tools", AppVersion: "0.1.112", BuildTime: "2026-09-10T14:00:00Z",
 		WickVersion: "v1.8.1", GOOS: "linux", GOARCH: "amd64",
 	}
 	ok := BinaryInfo{
-		Path: "bin/new", MainModule: "qiscus-support-tools",
+		Path: "bin/new", MainModule: "abc-support-tools",
 		AppName: "support-tools", AppVersion: "0.1.113", BuildTime: "2026-09-11T00:42:34Z",
 		WickVersion: "v1.9.0", GOOS: "linux", GOARCH: "amd64",
 	}
@@ -126,7 +126,7 @@ func TestCompareBinaries(t *testing.T) {
 // inventing identity mismatches out of the zero value.
 func TestCompareBinariesUnknownRunning(t *testing.T) {
 	candidate := BinaryInfo{
-		MainModule: "qiscus-support-tools", AppName: "support-tools",
+		MainModule: "abc-support-tools", AppName: "support-tools",
 		AppVersion: "0.1.113", WickVersion: "v1.9.0", GOOS: "linux", GOARCH: "amd64",
 	}
 	if got := Worst(CompareBinaries(candidate, BinaryInfo{}, "linux", "amd64")); got != SevInfo {

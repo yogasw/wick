@@ -348,6 +348,32 @@ type DetachedNoticeReceiver interface {
 	OnDetachedSurvivors(sessionID string, survivors []DetachedSurvivor)
 }
 
+// BackgroundWorkReceiver is told about a session's background (async)
+// sub-agents, so a channel whose thread would otherwise go quiet once the
+// leader's turn ends can show that work is still going.
+//
+// OnBackgroundStart fires once per background delegation as it is accepted
+// (queued = waiting for a slot). OnBackgroundAgents carries the full current
+// set still queued or running each time it changes — the same rows the web
+// UI's sub-agent rail spins on — and an empty list means nothing is left.
+// Agents reuse DetachedSurvivor: same two names, same reason to keep the
+// channel layer free of the delegation package.
+type BackgroundWorkReceiver interface {
+	OnBackgroundStart(sessionID string, agent DetachedSurvivor, task string, queued bool)
+	OnBackgroundAgents(sessionID string, active []DetachedSurvivor)
+}
+
+// BackgroundRecheckFn re-reads the background sub-agents still live under
+// sessionID, dropping any whose process has gone. A channel calls it when its
+// banner has seen no progress for a while, so a child that died without
+// closing its row cannot hold the banner forever. ok=false = could not tell.
+type BackgroundRecheckFn func(ctx context.Context, sessionID string) (active []DetachedSurvivor, ok bool)
+
+// BackgroundRecheckSetter receives the re-check probe.
+type BackgroundRecheckSetter interface {
+	SetBackgroundRecheck(BackgroundRecheckFn)
+}
+
 // ApprovalReceiver is fanned-out for gate approval lifecycle.
 type ApprovalReceiver interface {
 	OnApprovalRequest(sessionID string, req gate.ApprovalRequest)

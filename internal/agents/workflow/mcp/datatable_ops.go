@@ -65,6 +65,10 @@ type DataTableCreateInput struct {
 	PrimaryKey []string            `json:"primary_key,omitempty"`
 	Columns    []datatable.Column  `json:"columns"`
 	Access     *datatable.Access   `json:"access,omitempty"`
+	// UserID is the creating wick user; stored as the table owner (created_by)
+	// so the Owner column and the direct-owner access fallback work. Empty =
+	// ownerless (system).
+	UserID string `json:"-"`
 }
 
 // DataTableCreate registers a new table.
@@ -77,6 +81,7 @@ func (m *Ops) DataTableCreate(in DataTableCreateInput) error {
 		Mode:       in.Mode,
 		PrimaryKey: in.PrimaryKey,
 		Columns:    in.Columns,
+		UserID:     in.UserID,
 	}
 	if in.Access != nil {
 		sc.Access = *in.Access

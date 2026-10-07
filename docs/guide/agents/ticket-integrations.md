@@ -101,6 +101,9 @@ GET /projects/{projectID}/tickets
 | `untracked` | `0` | `1` also returns sessions with no ticket. |
 | `untracked_limit` | — | Caps that list. |
 | `untracked_owner` | everyone | `me` limits the untracked list (and its count) to sessions the caller owns. |
+| `untracked_after` | — | Next page of the untracked list: the `untracked_next` cursor from the previous response. Opaque; a malformed value is a `400`. |
+
+The untracked list comes in the sidebar's order (running first, then most recently used, then id). When more rows follow, the response carries `untracked_next`, a cursor to pass as `untracked_after` for the next page; it is absent on the last page. `untracked_total` counts every match regardless of paging.
 
 ```bash
 curl -s "$WICK_API/projects/$PROJECT/tickets?rows=0" \

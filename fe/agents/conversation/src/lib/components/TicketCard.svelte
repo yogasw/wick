@@ -1,6 +1,10 @@
 <script lang="ts">
   import type { TicketCard, TicketField, TicketSessionRow } from "../types/agents.js";
   import { timeAgo } from "../timeFormat.js";
+  import { sessionRowBadge } from "../lifecycleCls.js";
+  /* The clock, so a card's "5h ago" ages on its own instead of freezing at
+     whatever it said when the board was drawn. */
+  import { now } from "../stores/now.js";
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { getTicket } from "../api/tickets.js";
@@ -23,6 +27,10 @@
        target then, so dragging a ticket between columns does not make
        every other card glow as if it could receive it. */
     sessionDragging?: boolean;
+    /* The board's live search text, lower-cased. Marked up where it matched
+       so a card in a filtered board says WHY it survived — otherwise a hit
+       on an assignee's name looks like a hit on a title nobody can see. */
+    highlight?: string;
   };
 
   let {
@@ -36,7 +44,29 @@
     onSessionDrop,
     onOpenSession,
     sessionDragging = false,
+    highlight = "",
   }: Props = $props();
+
+  /* Split a string into plain and matched runs. Returned as data rather than
+     rendered HTML: a ticket title is user text, and building markup out of it
+     is how an innocent field becomes an injection. */
+  function marks(text: string): { text: string; hit: boolean }[] {
+    const q = highlight.trim().toLowerCase();
+    if (q === "" || text === "") return [{ text, hit: false }];
+    const hay = text.toLowerCase();
+    const out: { text: string; hit: boolean }[] = [];
+    let at = 0;
+    for (;;) {
+      const i = hay.indexOf(q, at);
+      if (i < 0) break;
+      if (i > at) out.push({ text: text.slice(at, i), hit: false });
+      out.push({ text: text.slice(i, i + q.length), hit: true });
+      at = i + q.length;
+    }
+    if (out.length === 0) return [{ text, hit: false }];
+    if (at < text.length) out.push({ text: text.slice(at), hit: false });
+    return out;
+  }
 
   let dropHover = $state(false);
 
@@ -134,15 +164,20 @@
       title={ticket.id}
       class="min-w-0 truncate rounded bg-white-200 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-black-800 dark:bg-navy-800 dark:text-black-600"
     >
-      {ticket.id}
+      {#each marks(ticket.id) as part}<span
+          class={part.hit ? "rounded-sm bg-cau-100 text-cau-400" : ""}>{part.text}</span>{/each}
     </span>
     {#if ticket.stale}
       <span class="shrink-0 rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-medium text-neg-400">stale</span>
     {/if}
   </div>
 
-  <p class="mt-1.5 line-clamp-2 break-words text-sm font-medium text-black-900 dark:text-white-100">
-    {ticket.title || "Untitled ticket"}
+  <p
+    data-testid={"ticket-title-" + ticket.id}
+    class="mt-1.5 line-clamp-2 break-words text-sm font-medium text-black-900 dark:text-white-100"
+  >
+    {#each marks(ticket.title || "Untitled ticket") as part}<span
+        class={part.hit ? "rounded-sm bg-cau-100 text-cau-400" : ""}>{part.text}</span>{/each}
   </p>
 
   {#if fieldEntries.length > 0}
@@ -167,7 +202,8 @@
         <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-green-500 text-[9px] font-semibold text-white-100">
           {initial(assigneeName)}
         </span>
-        <span class="max-w-[88px] truncate">{assigneeName}</span>
+        <span class="max-w-[88px] truncate">{#each marks(assigneeName) as part}<span
+            class={part.hit ? "rounded-sm bg-cau-100 text-cau-400" : ""}>{part.text}</span>{/each}</span>
         {#if extraNames.length > 0}
           <span
             data-testid="assignee-extra"
@@ -178,7 +214,7 @@
     {:else}
       <span>unassigned</span>
     {/if}
-    <span class="ml-auto shrink-0">{timeAgo(ticket.updated_at)}</span>
+    <span class="ml-auto shrink-0">{timeAgo(ticket.updated_at, $now)}</span>
   </div>
 
   <!-- The ticket's sessions, listed rather than counted: a row is the drag
@@ -203,8 +239,8 @@
               <path d="M6 4h.01M6 8h.01M6 12h.01M10 4h.01M10 8h.01M10 12h.01" stroke-linecap="round"></path>
             </svg>
             <span class="min-w-0 flex-1 truncate text-black-800 dark:text-black-600">{s.label || s.id}</span>
-            {#if s.lifecycle === "working"}
-              <span class="shrink-0 rounded bg-pos-100 px-1 text-[9px] font-medium text-pos-400">live</span>
+            {#if sessionRowBadge(s.lifecycle)}
+              <span class="shrink-0 rounded bg-pos-100 px-1 text-[9px] font-medium text-pos-400">{sessionRowBadge(s.lifecycle)}</span>
             {/if}
           </div>
         </li>

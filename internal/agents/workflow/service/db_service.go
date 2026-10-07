@@ -139,13 +139,18 @@ func (s *DBService) Update(id string, w workflow.Workflow) error {
 	if err := parse.ValidateID(id); err != nil {
 		return err
 	}
-	if _, err := s.repo.Get(id); err != nil {
+	row, err := s.repo.Get(id)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("%w: %s", ErrNotFound, id)
 		}
 		return err
 	}
 	w.ID = id
+	// The owner is the row's, not whatever the caller's copy says.
+	if row.CreatedBy != "" {
+		w.CreatedBy = row.CreatedBy
+	}
 	body, err := parse.Marshal(w)
 	if err != nil {
 		return err
@@ -297,7 +302,17 @@ func (s *DBService) HasDraft(id string) bool {
 // workflow_versions; retention is enforced by Repo.SaveDraft. Rejects
 // writes when the persisted draft is locked unless the incoming body
 // also flips `_canvas.locked = false` (explicit unlock).
+//
+// The editor is taken to be w.CreatedBy; callers that know who is
+// actually saving use SaveDraftAs.
 func (s *DBService) SaveDraft(id string, w workflow.Workflow) error {
+	return s.SaveDraftAs(id, w, w.CreatedBy)
+}
+
+// SaveDraftAs is SaveDraft with the editor named apart from the owner.
+// The editor is who the pinned-session check judges and who the snapshot
+// credits; the owner stays the row's created_by (see Repo.SaveDraft).
+func (s *DBService) SaveDraftAs(id string, w workflow.Workflow, editorID string) error {
 	if err := parse.ValidateID(id); err != nil {
 		return err
 	}
@@ -318,7 +333,10 @@ func (s *DBService) SaveDraft(id string, w workflow.Workflow) error {
 			w.CreatedAt = time.Now().UTC()
 		}
 	}
-	_, err := s.repo.SaveDraft(id, w, w.CreatedBy, "")
+	if editorID == "" {
+		editorID = w.CreatedBy
+	}
+	_, err := s.repo.SaveDraft(id, w, editorID, "")
 	return err
 }
 

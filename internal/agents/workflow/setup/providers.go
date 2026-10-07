@@ -11,6 +11,7 @@ import (
 	agentprovider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -89,8 +90,17 @@ func (p *cliProvider) StructuredCall(ctx context.Context, req provider.Structure
 	if len(p.ins.ExtraArgs) > 0 {
 		args = append(p.ins.ExtraArgs, args...)
 	}
+	extraEnv, oneShot, err := oneShotArgs(p.ins, prompt)
+	if err != nil {
+		return provider.StructuredResult{OK: false, Error: err.Error()}, nil
+	}
+	if oneShot != nil {
+		args = oneShot
+	}
 	start := time.Now()
-	out, err := safeexec.CommandContext(cctx, bin, args...).Output()
+	cmd := safeexec.CommandContext(cctx, bin, args...)
+	cmd.Env = append(envscrub.ScrubOSEnv(), extraEnv...)
+	out, err := cmd.Output()
 	usage := provider.Usage{LatencyMs: time.Since(start).Milliseconds()}
 	if err != nil {
 		return provider.StructuredResult{Raw: string(out), OK: false, Error: err.Error(), Usage: usage}, nil
@@ -135,8 +145,17 @@ func (p *cliProvider) AgentCall(ctx context.Context, req provider.AgentRequest) 
 	}
 	args := append([]string(nil), p.ins.ExtraArgs...)
 	args = append(args, "--print", req.Prompt)
+	extraEnv, oneShot, err := oneShotArgs(p.ins, req.Prompt)
+	if err != nil {
+		return provider.AgentResult{}, fmt.Errorf("%s: %w", p.ins.Name, err)
+	}
+	if oneShot != nil {
+		args = oneShot
+	}
 	start := time.Now()
-	out, err := safeexec.CommandContext(ctx, bin, args...).Output()
+	cmd := safeexec.CommandContext(ctx, bin, args...)
+	cmd.Env = append(envscrub.ScrubOSEnv(), extraEnv...)
+	out, err := cmd.Output()
 	usage := provider.Usage{LatencyMs: time.Since(start).Milliseconds()}
 	if err != nil {
 		return provider.AgentResult{Text: string(out), Usage: usage}, fmt.Errorf("%s: %w", p.ins.Name, err)
@@ -184,4 +203,54 @@ func tryParseJSONObject(s string) (map[string]any, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// oneShotArgs is the plain-text one-shot argv for CLIs whose headless
+// surface is not claude's `--print` (nil args = use the claude shape).
+// The account store is pinned the same way the chat spawner pins it, so a
+// workflow node runs under the instance's own login. `--` ends flag
+// parsing in both CLIs, so a prompt starting with "-" stays a prompt.
+func oneShotArgs(ins agentprovider.Instance, prompt string) (env, args []string, err error) {
+	switch ins.Type {
+	case agentprovider.TypeOMP:
+		args = agentprovider.OMPProfileArgs(ins)
+		args = append(args, "-p", "--no-title", "--yolo")
+		args = append(args, ins.ExtraArgs...)
+		return nil, append(args, "--", prompt), nil
+	case agentprovider.TypeOpencode:
+		env, err = agentprovider.OpencodeEnv(ins)
+		if err != nil {
+			return nil, nil, err
+		}
+		env = append(env, "OPENCODE_CONFIG=", "OPENCODE_CONFIG_DIR=", "OPENCODE_AUTO_SHARE=false",
+			`OPENCODE_CONFIG_CONTENT={"permission":"allow","share":"disabled"}`)
+		args = append([]string{"run", "--auto"}, ins.ExtraArgs...)
+		// Same rule as the chat spawner: never let opencode pick its hosted
+		// default. An explicit instance model (or --model in its args) is
+		// required, and opencode/… hosted models need the opt-in.
+		if !hasModelArg(ins.ExtraArgs) {
+			m := ""
+			if ins.OpencodeConfig != nil {
+				m = strings.TrimSpace(ins.OpencodeConfig.Model)
+			}
+			if m == "" {
+				return nil, nil, fmt.Errorf("opencode instance %s: set opencode_model (provider/model) — refusing to use opencode's hosted default", ins.Name)
+			}
+			if strings.HasPrefix(m, "opencode/") && !ins.OpencodeConfig.AllowHosted {
+				return nil, nil, fmt.Errorf("opencode instance %s: %s is opencode's hosted service; enable opencode_allow_hosted to use it", ins.Name, m)
+			}
+			args = append(args, "--model", m)
+		}
+		return env, append(args, "--", prompt), nil
+	}
+	return nil, nil, nil
+}
+
+func hasModelArg(args []string) bool {
+	for _, a := range args {
+		if a == "--model" || a == "-m" || strings.HasPrefix(a, "--model=") {
+			return true
+		}
+	}
+	return false
 }

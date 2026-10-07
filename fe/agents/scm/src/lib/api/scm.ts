@@ -281,3 +281,93 @@ export const getCommitDiff = (id: string, repo: string, sha: string, path: strin
   apiGet<{ original: string; modified: string; path: string }>(
     `${s(id)}/commit-diff?repo=${q(repo)}&sha=${q(sha)}&path=${q(path)}`,
   );
+
+// One file that differs between two refs. additions/deletions = -1 on
+// both means git counted it as binary.
+export type CompareFile = {
+  path: string;
+  /** Rename/copy source — the left side reads empty without it. */
+  orig_path?: string;
+  status: string;
+  additions: number;
+  deletions: number;
+};
+
+export type CompareResult = {
+  base: string;
+  head: string;
+  /** Empty when the two refs share no history. */
+  merge_base?: string;
+  ahead: number;
+  behind: number;
+  files: CompareFile[];
+  /** The commits base..head brings in, newest first (capped server-side).
+   *  For a working-tree head these are the commits up to HEAD. */
+  commits?: RangeCommit[];
+  commits_truncated?: boolean;
+};
+
+export type RangeCommit = {
+  sha: string;
+  subject: string;
+  author: string;
+  rel_date: string;
+  iso_date: string;
+};
+
+// base/head are a branch, tag or sha; head may also be ":worktree" (staged
+// + unstaged) or ":staged" (the index only).
+// threeDot asks the merge-base question ("what does head add?"), which is
+// what a reviewer means by comparing two branches — and what JetBrains
+// does by default. Without it the two trees are diffed directly.
+export const compareRefs = (
+  id: string,
+  repo: string,
+  base: string,
+  head: string,
+  threeDot: boolean,
+) =>
+  apiGet<CompareResult>(
+    `${s(id)}/compare-refs?repo=${q(repo)}&base=${q(base)}&head=${q(head)}&three_dot=${threeDot ? "1" : "0"}`,
+  );
+
+// Both raw sides of one file across two refs. A side that does not exist
+// at its ref comes back as "" — that is an add or a delete, not an error.
+// origPath must carry the rename source, and threeDot must match the one
+// the file list was built with, or the diff disagrees with the list.
+export const refCompare = (
+  id: string,
+  repo: string,
+  base: string,
+  head: string,
+  path: string,
+  threeDot: boolean,
+  origPath = "",
+) =>
+  apiGet<{ original: string; modified: string; path: string }>(
+    `${s(id)}/ref-compare?repo=${q(repo)}&base=${q(base)}&head=${q(head)}&path=${q(path)}` +
+      `&three_dot=${threeDot ? "1" : "0"}` +
+      (origPath ? `&orig_path=${q(origPath)}` : ""),
+  );
+
+// Rollback: take these paths back to how they look at ref. The restored
+// files land staged, the way `git checkout <ref> -- <path>` leaves them.
+export const restorePaths = (id: string, repo: string, ref: string, paths: string[]) =>
+  apiPost<{ status: string; ref: string; paths: string[] }>(`${s(id)}/restore`, {
+    repo,
+    ref,
+    paths,
+  });
+
+// Apply the inverse of a commit. A conflict fails with git's own message
+// and leaves the tree mid-revert — nothing here aborts it.
+export const revertCommit = (id: string, repo: string, sha: string, noCommit = false) =>
+  apiPost<{ status: string; sha: string; output: string }>(`${s(id)}/revert`, {
+    repo,
+    sha,
+    no_commit: noCommit,
+  });
+
+// Move the current branch to ref. mode hard discards uncommitted work.
+export const resetTo = (id: string, repo: string, ref: string, mode: "soft" | "mixed" | "hard") =>
+  apiPost<{ status: string; ref: string; mode: string }>(`${s(id)}/reset`, { repo, ref, mode });

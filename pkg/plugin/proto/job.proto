@@ -1,0 +1,21 @@
+syntax = "proto3";
+package wick.job.v1;
+option go_package = "github.com/yogasw/wick/pkg/plugin/proto;proto";
+
+import "connector.proto";
+
+// Job is the service a job plugin serves. The host spawns the plugin when the
+// job fires (cron / manual / run now), calls Run once, and kills the process
+// as soon as the stream ends.
+//
+// Run reuses the connector messages:
+//   ExecuteRequest.operation = trigger ("cron", "manual", "run_now")
+//   ExecuteRequest.creds     = the job's resolved config (key -> value)
+//   Chunk.message            = one progress/log line (streamed to run history)
+//   Chunk.data + eof         = the final markdown result
+//   Chunk.error + eof        = the run failed
+service Job {
+  rpc Schema (wick.connector.v1.SchemaRequest)  returns (wick.connector.v1.SchemaResponse);
+  rpc Run    (wick.connector.v1.ExecuteRequest) returns (stream wick.connector.v1.Chunk);
+  rpc Health (wick.connector.v1.HealthRequest)  returns (wick.connector.v1.HealthResponse);
+}

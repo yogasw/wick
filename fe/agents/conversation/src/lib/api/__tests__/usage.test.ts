@@ -2,6 +2,19 @@ import { describe, it, expect } from "vitest";
 import { normalizeComposerUsage, normalizeUsageRefresh } from "../usage.js";
 
 describe("normalizeComposerUsage", () => {
+  it("maps per-account rows and the rotation owner", () => {
+    const got = normalizeComposerUsage({
+      rotation: "wick",
+      accounts: [{ id: "a2/openai", label: "Account a2", provider: "openai", no_usage: false, current: true,
+        windows: [{ key: "five_hour", utilization: 7, resets_at: "2026-10-01T00:00:00Z" }] }, { id: "main/openrouter", no_usage: true }],
+    });
+    expect(got.rotation).toBe("wick");
+    expect(got.accounts[0]).toMatchObject({ id: "a2/openai", current: true, status: "active", email: "", error: "" });
+    expect(got.accounts[0].windows[0]).toEqual({ key: "five_hour", utilization: 7, resetsAt: "2026-10-01T00:00:00Z", observedAt: "" });
+    expect(got.accounts[1]).toMatchObject({ noUsage: true, windows: [] });
+    expect(normalizeComposerUsage({}).accounts).toEqual([]);
+  });
+
   it("maps a supported provider's windows and cache provenance", () => {
     const got = normalizeComposerUsage({
       provider: "claude/enginer",

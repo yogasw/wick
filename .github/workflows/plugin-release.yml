@@ -1,0 +1,193 @@
+name: Plugin release (reusable)
+
+# Reusable release pipeline for a plugins repo OUTSIDE wick. A private repo
+# that holds many plugins only needs:
+#
+#   on:
+#     push:
+#       branches: [main]
+#     workflow_dispatch:
+#   jobs:
+#     release:
+#       uses: yogasw/wick/.github/workflows/plugin-release.yml@master
+#       secrets: inherit
+#
+# Layout expected in the caller repo (one Go module, go.mod at the repo root
+# or above working-directory):
+#
+#   <working-directory>/<kind>/<key>/{main.go, VERSION}   kind = connector|tool|job|service
+#
+# For every plugin whose "<key>/v<VERSION>" tag does not exist yet, the
+# pipeline builds one zip per target with `wick plugin build`, writes a
+# per-release plugins.json with `wick plugin index` (relative urls,
+# zip_sha256, signature when PLUGIN_SIGNING_KEY is set) and publishes a
+# GitHub release tagged "<key>/v<version>" carrying the zips + plugins.json.
+# That is exactly what a wick GitHub source (Admin → Plugins → Sources)
+# reads, public or private.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Folder holding the <kind>/<key>/ plugin folders
+        type: string
+        default: plugins
+      targets:
+        description: Comma-separated <os>/<arch> list, or "all"
+        type: string
+        default: linux/amd64,linux/arm64
+      plugins:
+        description: 'Only these plugins ("<kind>/<key>,..."); empty = every plugin with an unreleased VERSION'
+        type: string
+        default: ""
+      force:
+        description: Re-release even when the <key>/v<version> tag exists (replaces the assets)
+        type: boolean
+        default: false
+      wick-ref:
+        description: yogasw/wick ref the wick CLI is built from
+        type: string
+        default: master
+      go-private:
+        description: GOPRIVATE pattern for private module dependencies (e.g. github.com/your-org/*)
+        type: string
+        default: ""
+    secrets:
+      PLUGIN_SIGNING_KEY:
+        description: base64 ed25519 private key; signs manifests and zip_sha256 when set
+        required: false
+      GO_PRIVATE_TOKEN:
+        description: token with read access to the GOPRIVATE modules
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  detect:
+    name: Detect plugins to release
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+      any: ${{ steps.set.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: set
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          ONLY: ${{ inputs.plugins }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          tags=$(git ls-remote --tags origin)
+          entries='[]'
+          for kind in connector tool job service; do
+            [ -d "$kind" ] || continue
+            for d in "$kind"/*/; do
+              n=$(basename "$d")
+              case "$n" in _*) continue ;; esac
+              [ -f "$kind/$n/main.go" ] && [ -f "$kind/$n/VERSION" ] || continue
+              if [ -n "$ONLY" ] && ! echo ",$ONLY," | grep -q ",$kind/$n,"; then
+                continue
+              fi
+              v=$(tr -d '[:space:]' < "$kind/$n/VERSION")
+              if [ "$FORCE" != "true" ] && echo "$tags" | grep -q "refs/tags/$n/v$v\$"; then
+                echo "skip $kind/$n v$v — already released"
+                continue
+              fi
+              entries=$(echo "$entries" | jq -c --arg k "$kind" --arg n "$n" --arg v "$v" '. + [{kind:$k,name:$n,version:$v}]')
+            done
+          done
+          echo "matrix={\"include\":$entries}" >> "$GITHUB_OUTPUT"
+          if [ "$(echo "$entries" | jq 'length')" -gt 0 ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Releasing: $entries"
+
+  build:
+    name: Release ${{ matrix.kind }}/${{ matrix.name }}
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The wick dev CLI is built from source at wick-ref, so the caller never
+      # pins a wick release just to get `plugin build` / `plugin index`.
+      - uses: actions/checkout@v4
+        with:
+          repository: yogasw/wick
+          ref: ${{ inputs.wick-ref }}
+          path: .wick-src
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .wick-src/go.mod
+          cache: false
+
+      - name: Build wick CLI
+        working-directory: .wick-src
+        run: |
+          set -euo pipefail
+          templ_ver=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          go install github.com/a-h/templ/cmd/templ@${templ_ver}
+          templ generate ./...
+          go build -o "$RUNNER_TEMP/wick" .
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Private module access
+        if: inputs.go-private != ''
+        env:
+          GO_PRIVATE_TOKEN: ${{ secrets.GO_PRIVATE_TOKEN }}
+        run: |
+          echo "GOPRIVATE=${{ inputs.go-private }}" >> "$GITHUB_ENV"
+          if [ -n "$GO_PRIVATE_TOKEN" ]; then
+            git config --global url."https://x-access-token:${GO_PRIVATE_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+
+      - name: Signing key
+        env:
+          KEY: ${{ secrets.PLUGIN_SIGNING_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            umask 077
+            printf '%s' "$KEY" > "$RUNNER_TEMP/plugin-signing.key"
+            echo "SIGN_KEY=$RUNNER_TEMP/plugin-signing.key" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build zips + plugins.json
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          TARGETS: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+          sign=()
+          [ -n "${SIGN_KEY:-}" ] && sign=(--sign-key "$SIGN_KEY")
+          if [ "$TARGETS" = "all" ]; then
+            wick plugin build --kind "${{ matrix.kind }}" "${{ matrix.name }}" --all "${sign[@]}"
+          else
+            wick plugin build --kind "${{ matrix.kind }}" "${{ matrix.name }}" --target "$TARGETS" "${sign[@]}"
+          fi
+          wick plugin index --dir bin --key "${{ matrix.name }}" --out bin/plugins.json "${sign[@]}"
+          cat bin/plugins.json
+
+      - name: Release
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
+        with:
+          tag_name: ${{ matrix.name }}/v${{ matrix.version }}
+          name: ${{ matrix.name }} v${{ matrix.version }}
+          files: |
+            ${{ inputs.working-directory }}/bin/${{ matrix.name }}-*.zip
+            ${{ inputs.working-directory }}/bin/plugins.json
+          fail_on_unmatched_files: true
+          make_latest: "false"
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/plugin-signing.key"

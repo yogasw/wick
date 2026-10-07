@@ -67,6 +67,9 @@
         own drill-downs fetches once and hands the result here, instead
         of the card asking for the same thing a second time. */
     report?: UsageReport | null;
+    /** Drop the card chrome (border, radius, shadow) when a host card
+        already frames the panel, e.g. a collapsible section. */
+    flush?: boolean;
   };
   let {
     base,
@@ -81,6 +84,7 @@
     channels,
     instances,
     report: reportProp,
+    flush = false,
   }: Props = $props();
   /** Fed from outside: render what the page already has. */
   const fed = $derived(reportProp !== undefined);
@@ -234,12 +238,14 @@
 </script>
 
 <div
-  class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden"
+  class={flush
+    ? "bg-white-100 dark:bg-navy-700"
+    : "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden"}
 >
   <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 space-y-2">
     <div class="flex items-center justify-between gap-3">
       <div class="flex items-baseline gap-2 min-w-0">
-        <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">{title}</h2>
+        {#if title}<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">{title}</h2>{/if}
         {#if provider}
           <span class="text-xs text-black-700 dark:text-black-600 truncate">
             {provider} · {exact(sessions.length)} session{sessions.length === 1 ? "" : "s"}

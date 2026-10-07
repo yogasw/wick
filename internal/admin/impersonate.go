@@ -2,6 +2,7 @@ package admin
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -63,7 +64,7 @@ func (h *Handler) startImpersonation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	secure := r.TLS != nil
+	secure := h.secureCookie(r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     impersonateCookie,
 		Value:    admin.ID,
@@ -106,16 +107,16 @@ func (h *Handler) stopImpersonation(w http.ResponseWriter, r *http.Request) {
 		// The stored id must STILL be an admin. If that account was demoted or
 		// deleted mid-session, restoring it would re-grant privileges that were
 		// deliberately taken away — so drop the session entirely instead.
-		clearImpersonateCookie(w, r)
+		clearImpersonateCookie(w, r, h.secureCookie(r))
 		h.midd.ClearSessionCookie(w)
 		http.Redirect(w, r, "/auth/login", http.StatusFound)
 		return
 	}
 
 	current := login.GetUser(r.Context())
-	clearImpersonateCookie(w, r)
+	clearImpersonateCookie(w, r, h.secureCookie(r))
 	h.midd.SetSessionCookie(w, adminUser.ID,
-		h.auth.GetUserFilterTagIDs(r.Context(), adminUser.ID), r.TLS != nil)
+		h.auth.GetUserFilterTagIDs(r.Context(), adminUser.ID), h.secureCookie(r))
 
 	log.Warn().
 		Str("admin_id", adminUser.ID).
@@ -129,14 +130,27 @@ func (h *Handler) stopImpersonation(w http.ResponseWriter, r *http.Request) {
 // for real debugging, short enough that a forgotten switch expires.
 const impersonateTTLSeconds = 2 * 60 * 60
 
-func clearImpersonateCookie(w http.ResponseWriter, r *http.Request) {
+// secureCookie decides the Secure flag the same way sign-in does (an https
+// app URL), plus a direct TLS connection. Deciding it from r.TLS alone wrote
+// the switched sessions without Secure behind a TLS-terminating proxy, while
+// sign-in had written the admin's with it — two cookies of one name that a
+// browser keeps apart by their attributes, so "Back to my account" could hand
+// the browser a session it did not send back.
+func (h *Handler) secureCookie(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return h.configs != nil && strings.HasPrefix(h.configs.AppURL(), "https")
+}
+
+func clearImpersonateCookie(w http.ResponseWriter, r *http.Request, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     impersonateCookie,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	})
 }

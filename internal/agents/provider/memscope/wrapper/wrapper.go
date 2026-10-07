@@ -183,7 +183,7 @@ func posixJoin(dir, name string) string {
 // (node, python3) are deliberately absent: they are what an agent starts,
 // not what starts an agent, and shimming them would intercept unrelated
 // programs across the whole machine.
-var Providers = []string{"claude", "codex", "gemini"}
+var Providers = []string{"claude", "codex", "gemini", "omp", "opencode"}
 
 // LinkDir is the directory a lookup by name finds first. Not
 // configurable: a shim installed somewhere PATH does not reach is a shim

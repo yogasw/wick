@@ -338,6 +338,15 @@ func TestUnknownAuthScheme(t *testing.T) {
 type fakeKeyStore struct {
 	mu   sync.Mutex
 	vals map[string]string
+	// prefix of the tokens EncryptSecret mints; "" = wick_enc_.
+	prefix string
+}
+
+func (f *fakeKeyStore) tokenPrefix() string {
+	if f.prefix == "" {
+		return "wick_enc_"
+	}
+	return f.prefix
 }
 
 func (f *fakeKeyStore) GetOwned(owner, key string) string {
@@ -357,9 +366,31 @@ func (f *fakeKeyStore) EnsureOwned(ctx context.Context, owner string, rows ...en
 	return nil
 }
 
-func (f *fakeKeyStore) EncryptSecret(plain string) (string, error) { return "wick_enc_" + plain, nil }
+func (f *fakeKeyStore) EncryptSecret(plain string) (string, error) {
+	return f.tokenPrefix() + plain, nil
+}
 func (f *fakeKeyStore) DecryptSecret(token string) (string, error) {
-	return strings.TrimPrefix(token, "wick_enc_"), nil
+	return strings.TrimPrefix(token, f.tokenPrefix()), nil
+}
+
+// Production's configs service encrypts to wick_cenc_; a restart (fresh
+// signer, same store) must read the stored seed back, not call it corrupt.
+func TestSSOSignerReadsBackAMasterTokenSeed(t *testing.T) {
+	store := &fakeKeyStore{vals: map[string]string{}, prefix: "wick_cenc_"}
+	first, err := (&ssoSigner{keys: store}).seed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := store.GetOwned(ssoKeyOwner, ssoKeyName); !strings.HasPrefix(v, "wick_cenc_") {
+		t.Fatalf("stored seed %q is not a master token", v)
+	}
+	again, err := (&ssoSigner{keys: store}).seed()
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if !first.Equal(again) {
+		t.Fatal("restart rotated the signing key")
+	}
 }
 
 func TestSSOSchemeMintsVerifiableJWT(t *testing.T) {

@@ -16,11 +16,13 @@ import (
 	"github.com/rs/zerolog/log"
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	"github.com/yogasw/wick/internal/agents/provider"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfchannel "github.com/yogasw/wick/internal/agents/workflow/channel"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
+	wfprovider "github.com/yogasw/wick/internal/agents/workflow/provider"
 	"github.com/yogasw/wick/internal/agents/workflow/setup"
 	wftest "github.com/yogasw/wick/internal/agents/workflow/wftest"
 	"github.com/yogasw/wick/internal/entity"
@@ -93,6 +95,9 @@ var globalWorkflowMgr *setup.Manager
 // no file→DB importer runs here.
 func SetWorkflowManager(m *setup.Manager) {
 	globalWorkflowMgr = m
+	if m != nil && m.Providers != nil {
+		m.Providers.SetAccessCheck(workflowProviderAccess)
+	}
 }
 
 func notReadyWorkflow(c *tool.Ctx) bool {
@@ -565,10 +570,14 @@ func workflowRegistryAPI(c *tool.Ctx) {
 			"ops":    ops,
 		})
 	}
+	// Narrowed to the instances the caller may choose — the same access
+	// tags every other provider picker obeys. type rides along so the
+	// editor can match each row to /providers/options and its models.
 	providers := []map[string]any{}
-	for _, info := range globalWorkflowMgr.MCP.ProvidersList() {
+	for _, info := range workflowProviderChoices(c, globalWorkflowMgr.MCP.ProvidersList()) {
 		providers = append(providers, map[string]any{
 			"name":       info.Name,
+			"type":       info.Type,
 			"is_default": info.IsDefault,
 		})
 	}
@@ -605,6 +614,14 @@ func workflowRegistryAPI(c *tool.Ctx) {
 	})
 }
 
+// workflowProviderChoices filters the workflow registry rows down to the
+// ones the caller may pick. Admins see all; untagged instances stay open.
+func workflowProviderChoices(c *tool.Ctx, rows []wfprovider.Info) []wfprovider.Info {
+	return visibleProviders(c, rows, func(i wfprovider.Info) (provider.Type, string) {
+		return provider.Type(i.Type), i.Name
+	})
+}
+
 // workflowLookupAPI serves the trigger inspector + connector args
 // picker widgets. URL: GET /workflows/api/lookup?module=…&source=…&q=…
 func workflowLookupAPI(c *tool.Ctx) {
@@ -614,6 +631,11 @@ func workflowLookupAPI(c *tool.Ctx) {
 	module := c.Query("module")
 	source := c.Query("source")
 	query := c.Query("q")
+	// instance pins the lookup to ONE registered bot — the instance key
+	// the trigger/node already selected in its Channel dropdown. Without
+	// it the dropdown offers channels only some other bot can reach, and
+	// picking one yields a trigger that never fires.
+	instance := c.Query("instance")
 	if module == "" || source == "" {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "module and source required"})
 		return
@@ -635,6 +657,21 @@ func workflowLookupAPI(c *tool.Ctx) {
 		}
 		if _, ok := ch.(agentchannels.LookupProvider); ok {
 			providers = append(providers, ch)
+		}
+	}
+	// A pinned instance narrows the fan-out to that one bot. An unknown
+	// key falls back to the fan-out rather than an empty dropdown: the
+	// instance may have been removed since the workflow was saved, and a
+	// picker that shows nothing is worse than one that shows too much.
+	if instance != "" {
+		scoped := []agentchannels.Channel{}
+		for _, ch := range providers {
+			if globalChannels.InstanceKeyOf(ch) == instance {
+				scoped = append(scoped, ch)
+			}
+		}
+		if len(scoped) > 0 {
+			providers = scoped
 		}
 	}
 	if len(providers) == 0 {

@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/yogasw/wick/internal/pkg/slackmd"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
@@ -1180,12 +1181,7 @@ func sendMessage(c *connector.Ctx) (any, error) {
 			outBlocks = arr
 		}
 	} else if text != "" {
-		outBlocks = []any{
-			map[string]any{
-				"type": "section",
-				"text": map[string]any{"type": "mrkdwn", "text": text},
-			},
-		}
+		outBlocks = []any{textBlock(body, text)}
 	}
 	outBlocks = append(outBlocks, signedFooterBlock(c))
 	body["blocks"] = outBlocks
@@ -1203,6 +1199,21 @@ func sendMessage(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return shapePostResult(raw), nil
+}
+
+// textBlock wraps text-only input in the block that renders it. Markdown that
+// mrkdwn cannot render (pipe tables, headings, **bold**, …) goes in a Slack
+// `markdown` block, and the top-level text becomes a short plain fallback
+// for notifications. Anything else keeps the mrkdwn section as before.
+func textBlock(body map[string]any, text string) map[string]any {
+	if slackmd.NeedsBlock(text) && len(text) <= slackmd.MaxBlockChars {
+		body["text"] = slackmd.Fallback(text)
+		return map[string]any{"type": "markdown", "text": text}
+	}
+	return map[string]any{
+		"type": "section",
+		"text": map[string]any{"type": "mrkdwn", "text": text},
+	}
 }
 
 func sendEphemeral(c *connector.Ctx) (any, error) {
@@ -1275,12 +1286,7 @@ func updateMessage(c *connector.Ctx) (any, error) {
 			outBlocks = arr
 		}
 	} else if text != "" {
-		outBlocks = []any{
-			map[string]any{
-				"type": "section",
-				"text": map[string]any{"type": "mrkdwn", "text": text},
-			},
-		}
+		outBlocks = []any{textBlock(body, text)}
 	}
 	outBlocks = append(outBlocks, signedFooterBlock(c))
 	body["blocks"] = outBlocks

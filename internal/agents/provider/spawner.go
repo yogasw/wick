@@ -19,6 +19,7 @@ package provider
 import (
 	"context"
 	"io"
+	"time"
 )
 
 // Process is a started subprocess: stdout reader, stdin writer, and a
@@ -56,6 +57,15 @@ type Process interface {
 	// key). Secret-looking values are masked. Logged at spawn-start so the
 	// operator can verify routing/auth from the Backends UI. May be nil.
 	Env() []string
+}
+
+// BusyReporter is an optional interface a Process may implement when its
+// turn runs on a server wick can ask (opencode serve, omp RPC) rather than
+// in a child whose silence is all wick sees. The idle timer asks before
+// killing: a turn the server still reports as working is left alone.
+// Absence means "cannot say", i.e. the timer decides on silence alone.
+type BusyReporter interface {
+	Busy() bool
 }
 
 // ScopedProcess is an optional interface a Process may implement to
@@ -132,6 +142,9 @@ type SpawnOptions struct {
 	// Populated by the factory from Instance.ExtraArgs so UI-configured
 	// extra flags are forwarded on every spawn without restarting wick.
 	ExtraArgs []string
+	// SkipSkills names shipped skills left out of the built-in catalog
+	// (a Team agent's disabled skills).
+	SkipSkills []string
 
 	// Instance is the resolved per-instance config the factory looked
 	// up before this spawn. Spawners read Instance.Hooks to decide
@@ -168,6 +181,12 @@ type SpawnOptions struct {
 	// back anonymous and a shared thread loses track of who said what.
 	// Providers that resume via the CLI's own transcript ignore this.
 	SenderVisibility string
+
+	// IdleTimeout is the pool's idle-kill window (Settings → General,
+	// IdleTimeoutSec). Server-mode providers (omp RPC, opencode serve) use
+	// it as their server idle window unless the instance sets its own, so
+	// a server sits idle no longer than a claude/codex process. 0 = unset.
+	IdleTimeout time.Duration
 
 	// MaxTurns caps agentic turns for this spawn (--max-turns on claude).
 	// 0 = no cap. Threaded from the agent node's max_turns.

@@ -1,6 +1,6 @@
 ---
 name: wick-zero-downtime-upgrade
-description: Use when deploying or replacing the wick binary on a running host — "how do I ship this build", `reload --binary`, a refused candidate ("refusing to install this binary", sha256 mismatch, "--yes was not given", "cannot replace … as this user") — or when an update caused downtime: a 502/503 during deploy, killed agent turns, an interrupted workflow run, two wick processes at once, "upgrade failed: parent hasn't exited", or a reload that did nothing. Covers reload vs restart, installing the new binary safely, the systemd unit a handover needs, who decides the successor is ready to switch (wick's own boot gate — not an outside probe, and not tableflip), what the drain does and does not wait for, how to keep a running agent turn from being interrupted, how an agent deploys the binary it is itself running inside (detached script + `wick_cli_token`, never polling from the turn), and how to prove there was no downtime.
+description: Use when deploying or replacing the wick binary on a running host — "how do I ship this build", `reload --binary`, a refused candidate ("refusing to install this binary", sha256 mismatch, "--yes was not given", "cannot replace … as this user") — or when an update caused downtime: a 502/503 during deploy, killed agent turns, an interrupted workflow run, two wick processes at once, "upgrade failed: parent hasn't exited", or a reload that did nothing. Covers reload vs restart, installing the new binary safely, the systemd unit a handover needs, who decides the successor is ready to switch (wick's own boot gate — not an outside probe, and not tableflip), what the drain does and does not wait for, how to keep a running agent turn from being interrupted, how an agent deploys the binary it is itself running inside (detached script + `wick_cli_token`, never polling from the turn), and how to prove there was no downtime. Also covers rebuilding a CONNECTOR PLUGIN — a separate gRPC binary that needs no reload at all: `wick plugin build` + `<app> plugin install`, the VERSION bump, the go.work/GOWORK/replace/GOFLAGS traps, and why a plugin self-build is the one deploy an agent can finish inside its own turn.
 ---
 
 # Upgrading wick without downtime
@@ -276,6 +276,41 @@ So the normal deploy is: install the binary (`reload --binary` does it in one st
 The page detects the swap by **pid**, polling that endpoint: a zero-downtime handover never drops a connection, so there is nothing to detect by going down and coming back. Nothing needs reloading by hand — the poll runs whether or not anything is waiting.
 
 A compact version of the same thing sits in the **admin layout**, so it shows on every `/admin` page: hidden while nothing is waiting, appearing on its own within ~10s when a build lands, and disappearing once the swap completes. A handover that was *attempted and failed* is called out there too (`last_handover.ok=false`), because the failure mode is otherwise invisible — the old process simply keeps serving, which looks exactly like nobody having tried.
+
+## Rebuilding a connector plugin (no reload at all)
+
+A connector plugin is a **separate binary** wick runs over gRPC, so replacing one is not an upgrade of wick and none of the above applies: no handover, no drain, no `reload`, no restart, nothing to prove about downtime. Installed plugins live at `~/.<app>/plugins/connectors/<key>/` as `{binary, plugin.json}`, and `<app> plugin list` prints key, version, arch and enabled state.
+
+The split between the two CLIs is deliberate: `wick plugin build` is the *production* side (run from the plugins monorepo), and `<app> plugin install|list|enable|disable|remove` is the *consumption* side, because only the app binary knows its own plugin directory and hot-reload poller.
+
+### The cycle
+
+1. **Bump `plugins/connector/<key>/VERSION`.** Same reason wick's own version is bumped: two different builds wearing one number make `plugin list`, the update card and any rollback lie. The release workflow also *skips* a plugin whose `<key>/v<version>` tag already exists, so an un-bumped plugin silently never ships.
+2. **Build**, from the `plugins/` directory of the checkout:
+   ```bash
+   cd <checkout>/plugins
+   go mod edit -replace github.com/yogasw/wick=..     # trap 2
+   GOWORK=off GOFLAGS= wick plugin build --kind connector <key> --target linux/amd64
+   git checkout -- go.mod go.sum                      # the replace is build-only
+   ```
+   Output: `plugins/bin/<key>-<version>-linux-amd64.zip`, with `plugin.json` generated from the binary itself so the manifest cannot drift from the code.
+3. **Install:** `<app> plugin install ./bin/<key>-<version>-linux-amd64.zip` (a built `{binary, plugin.json}` directory, a registry name, or a URL also work). The swap is an atomic rename and a hot-reload poller picks it up within seconds — **the daemon does not restart, nothing hands over, running agent turns are untouched.**
+4. **Verify by version, not by vibe:** `<app> plugin list | grep <key>` must show the new number, then exercise one real op through the connector. A plugin that installed but did not reload still answers with the old code.
+
+### Four traps, every one of them a wasted hour
+
+1. **`-mod may only be set to readonly or vendor when in workspace mode, but it is set to "mod"`** — the repo root's `go.work` puts `plugins/` in workspace mode and the build passes `-mod=mod`. Hence `GOWORK=off`.
+2. **`GOWORK=off` alone then fails differently** — without the workspace, the plugins module resolves `github.com/yogasw/wick` from the module proxy (an old published tag) and the build dies on symbols that exist only in this checkout: `unknown field RequireAIDescription`, `undefined: connector.OpConfigOnly`. That is a stale *dependency*, not broken code. The temporary `replace` to `..` is the fix, and the two are only correct together.
+3. **`GOFLAGS` is inherited.** A shell that ran the unit gate carries `-mod=readonly`, which defeats the replace. Clear it explicitly: `GOFLAGS=`.
+4. **`go test` needs the replace too, not just the build.** Running the package's tests without it fails *identically to trap 2*, which reads like broken test code and is not. The plugins module is also not covered by a `./...` run from the repo root, so `cd plugins && go test ./connector/<key>/` is the only gate that package ever gets — run it before building.
+
+### Self-build from inside an agent turn
+
+This is the one deploy an agent can finish **inside its own turn**, and the reason is the whole difference from the core binary: nothing hands over, so there is no swap waiting on the turn and no turn waiting on the swap. Write the patch, test the package, bump, build, install, then call one real op through the connector — the new code answers in the same conversation that wrote it. No GitHub, no release tag, no PR, no `reload`.
+
+The core binary is the opposite case and keeps its own rule: install and stop, let the watcher apply it (see [Deploying from inside an agent turn](#deploying-from-inside-an-agent-turn)).
+
+Local install covers one host. Shipping it to everyone is a PR into the `release` branch touching `plugins/connector/<key>/**`: `release-plugins.yml` builds every os/arch, publishes tag `<key>/v<version>` and updates `plugins/plugins.json`. Core and plugin pipelines are path-split, so a plugin-only PR never rebuilds wick.
 
 ## Proving there was no downtime
 

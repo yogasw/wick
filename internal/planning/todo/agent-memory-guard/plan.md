@@ -95,7 +95,7 @@ Each step reverses by setting the mode back to `off`.
 ## Global Constraints
 
 - All user-facing UI text and every `desc=` in `wick:"..."` tags in **English**.
-- No "qiscus" in examples/placeholders — generic names (abc.com, example.com).
+- No company or client names in examples/placeholders — generic names (abc.com, example.com).
 - zerolog: `l := log.With().Str("component", "x").Logger()`, then `l.Debug()...`. Never `log.Debug()` directly.
 - Never edit `_templ.go` — edit `.templ` and regenerate.
 - Linux-only mechanisms ship as `_linux.go` + `_other.go` no-op pairs. **Windows must compile and pass tests** — it is the development platform.

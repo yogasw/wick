@@ -544,7 +544,7 @@ func TestSaveAsAtAndKeeping(t *testing.T) {
 
 	notionEdit := time.Date(2026, 9, 12, 8, 30, 0, 0, time.UTC)
 	tk.Title = "mirrored, renamed in Notion"
-	if err := SaveAsAt(layout, tk, Actor{}, notionEdit); err != nil {
+	if _, err := SaveAsAt(layout, tk, Actor{}, notionEdit); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Load(layout, "p1", tk.ID)
@@ -558,7 +558,7 @@ func TestSaveAsAtAndKeeping(t *testing.T) {
 	// A bookkeeping write ("I checked this, nothing had changed") must not
 	// move the clock at all.
 	got.Fields = map[string]string{"notion_last_checked": "2026-09-15T11:00:00Z"}
-	if err := SaveAsKeeping(layout, got, Actor{}); err != nil {
+	if _, err := SaveAsKeeping(layout, got, Actor{}); err != nil {
 		t.Fatal(err)
 	}
 	after, err := Load(layout, "p1", tk.ID)
@@ -575,11 +575,63 @@ func TestSaveAsAtAndKeeping(t *testing.T) {
 	// And the zero value still means now, so every interactive edit is
 	// unaffected.
 	before := time.Now().Add(-time.Second)
-	if err := SaveAsAt(layout, after, Actor{}, time.Time{}); err != nil {
+	if _, err := SaveAsAt(layout, after, Actor{}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	now, _ := Load(layout, "p1", tk.ID)
 	if now.UpdatedAt.Before(before) {
 		t.Fatalf("zero time should stamp now, got %s", now.UpdatedAt)
+	}
+}
+
+// The save RETURNS what it stored. Without this the HTTP layer answers a
+// PATCH with the ticket it was handed — old updated_at and all — and a card
+// dragged to another column keeps showing the time it had before the move
+// until somebody reloads the page.
+func TestSaveAsAtReturnsTheStoredTimestamp(t *testing.T) {
+	layout := newLayout(t)
+	tk, err := Create(layout, CreateOptions{ProjectID: "p1", Title: "Fix retries"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := tk.UpdatedAt
+
+	tk.Status = "in_progress"
+	saved, err := SaveAsAt(layout, tk, Actor{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.UpdatedAt.After(before) {
+		t.Fatalf("returned updated_at = %v, want later than %v", saved.UpdatedAt, before)
+	}
+	onDisk, err := Load(layout, "p1", tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.UpdatedAt.Equal(onDisk.UpdatedAt) {
+		t.Fatalf("returned %v but stored %v — the caller would report a time nobody has",
+			saved.UpdatedAt, onDisk.UpdatedAt)
+	}
+}
+
+// "keep" leaves the displayed time alone on purpose (a bookkeeping write),
+// and the returned value has to say the same thing the disk does.
+func TestSaveAsKeepingReturnsTheUnchangedTimestamp(t *testing.T) {
+	layout := newLayout(t)
+	tk, err := Create(layout, CreateOptions{ProjectID: "p1", Title: "Fix retries"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := tk.UpdatedAt
+
+	saved, err := SaveAsKeeping(layout, tk, Actor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.UpdatedAt.Equal(want) {
+		t.Fatalf("keep changed updated_at: %v -> %v", want, saved.UpdatedAt)
+	}
+	if saved.TouchedAt.IsZero() {
+		t.Fatal("keep should still record that wick touched the ticket")
 	}
 }

@@ -227,12 +227,25 @@ get one knob each on the shared slice, `enforce`-mode only.
 | Knob | Default | What it does |
 |---|---|---|
 | `AgentsCPUWeight` | `50` | A **bias, not a cap**. Under contention agents yield to wick; when idle they use everything. Prevents "wick feels hung" on a small box — the failure that *looks* like a crash but is starvation. |
-| `AgentsCPUQuotaPct` | `0` (off) | A hard cap on combined agent CPU. **Deliberately off**: a cap slows legitimate heavy work even on an idle machine, causing timeouts and retries that add load. The weight gives the same protection under contention without punishing idle-time work. |
+| `AgentsCPUQuotaPct` | `80` (% of the whole machine) | A hard cap on combined agent CPU, given as a share of the **whole machine** (0–100) so the operator never needs the core count — wick multiplies it by the cores for systemd `CPUQuota` (80 → 160% on 2 cores, 640% on 8). Empty = 80, 0 = no cap. A stored value above 100 is a legacy percent-of-one-core and is divided by the cores (140 on 2 cores → 70). Keeps CPU for wick and the OS whatever the machine. |
 | `AgentsTasksMax` | `512` | The fork-bomb guard. Thousands of tiny processes cripple the scheduler while staying under every memory ceiling — **no memory knob catches this**. |
 | `AgentsIOWeight` | `0` (off) | Same shape as CPUWeight, for block IO. Off because IO starvation has not been an observed incident; the knob exists so enabling it is a config change, not a code change. |
 
 All four live on the slice, not per-scope: contention is a machine-level
 phenomenon.
+
+### Load from outside wick
+
+The fast watchdog (`internal/agents/resourceguard`) only acts when the load
+is wick's. Before stopping, pausing or throttling anything it compares the
+agents' share — CPU from `cpu.stat usage_usec` of agents.slice plus the
+detached `run-*` units (exited processes still count), memory as the larger
+of each scope's cgroup memory and its processes' RSS — against what the host
+uses. Under 30% for every near-hang reason means the load is outside wick (a
+build in someone's SSH session): agents keep running, spawns are held only
+when memory really is running out, and one `outside_busy` event names the
+busiest outside process (`<user>/<comm> X% CPU`) on the Resources page. An
+unmeasurable CPU share keeps the old behaviour.
 
 ## Config surface
 

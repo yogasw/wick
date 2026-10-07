@@ -78,7 +78,7 @@ func ProviderAccountQuota(ctx context.Context, key string) (AccountQuota, bool) 
 	}
 	out := AccountQuota{Provider: string(ins.Type) + "/" + ins.Name}
 
-	acc := logintty.ReadAccount(ins.Type, ins.Env)
+	acc := logintty.ReadAccount(ins.Type, provider.AccountEnv(ins))
 	out.Connected, out.Plan, out.Org = acc.Connected, acc.Plan, acc.Org
 	out.AuthMethod, out.ExpiresAt = acc.AuthMethod, acc.ExpiresAt
 
@@ -90,9 +90,9 @@ func ProviderAccountQuota(ctx context.Context, key string) (AccountQuota, bool) 
 
 	ctx, cancel := context.WithTimeout(ctx, connectionsUsageTimeout)
 	defer cancel()
-	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, ins.Env), func() ([]logintty.UsageWindow, error) {
-		return logintty.ReadUsage(ins.Type, ins.Env)
-	}, logintty.CredentialsChangedAt(ins.Type, ins.Env))
+	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
+		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
+	}, logintty.CredentialsChangedAt(ins.Type, provider.AccountEnv(ins)))
 
 	out.Checking, out.FetchedAt, out.NextAt = v.Checking, v.FetchedAt, v.NextAt
 	switch {
@@ -101,7 +101,7 @@ func ProviderAccountQuota(ctx context.Context, key string) (AccountQuota, bool) 
 	case !v.Known:
 		out.Pending = true
 	default:
-		for _, w := range v.Windows {
+		for _, w := range logintty.Headline(v.Windows) {
 			out.Windows = append(out.Windows, AccountQuotaWindow{
 				Key: w.Key, Utilization: w.Utilization,
 				ResetsAt: w.ResetsAt, ObservedAt: w.ObservedAt,

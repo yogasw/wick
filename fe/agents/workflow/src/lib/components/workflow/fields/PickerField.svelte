@@ -14,11 +14,16 @@
   type Props = {
     label: string;
     source: string;          // e.g. "slack.channels"
-    value: string;           // JSON `[{id,name},...]` (or empty)
+    // JSON `[{id,name},…]`, or the parsed list itself — a saved value
+    // comes back from YAML as a real array.
+    value: string | unknown[];
     onChange: (v: string) => void;
     helper?: string;
     placeholder?: string;
     required?: boolean;
+    // Instance key of the channel the surrounding form already picked
+    // ("slack:<user-id>"). Scopes the search to THAT bot's channels.
+    instance?: string;
   };
 
   let {
@@ -29,6 +34,7 @@
     helper,
     placeholder = "Search…",
     required = false,
+    instance = "",
   }: Props = $props();
 
   // First segment of "slack.channels" → module "slack". Lookup
@@ -37,10 +43,10 @@
 
   // Parse the stored JSON into chips. Tolerant — empty string is a
   // valid clean state, malformed strings fall back to [].
-  function parseChips(v: string): Chip[] {
+  function parseChips(v: string | unknown[]): Chip[] {
     if (!v) return [];
     try {
-      const arr = JSON.parse(v);
+      const arr = typeof v === "string" ? JSON.parse(v) : v;
       if (!Array.isArray(arr)) return [];
       return arr.filter(
         (r): r is Chip => r && typeof r.id === "string" && typeof r.name === "string",
@@ -82,13 +88,14 @@
 
   $effect(() => {
     const q = query;
+    const inst = instance;
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(async () => {
       if (!module || !source) return;
       const myToken = ++token;
       loading = true;
       try {
-        const res = await workflowAPI.lookup(module, source, q);
+        const res = await workflowAPI.lookup(module, source, q, inst);
         if (myToken !== token) return; // stale
         results = res ?? [];
       } catch (e) {
@@ -132,7 +139,7 @@
   <!-- Search input + dropdown. -->
   <div class="relative">
     <input
-      class="w-full rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-sm"
+      class="w-full rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-sm"
       type="search"
       {placeholder}
       bind:value={query}
@@ -140,15 +147,23 @@
       onblur={() => setTimeout(() => (open = false), 150)}
     />
     {#if open && (loading || visibleResults.length > 0)}
-      <div class="absolute left-0 right-0 top-full mt-1 z-30 max-h-60 overflow-y-auto rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg">
+      <div class="absolute left-0 right-0 top-full mt-1 z-30 max-h-60 overflow-y-auto rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg">
         {#if loading}
           <div class="px-3 py-2 text-[11px] italic text-black-700 dark:text-black-600">Searching…</div>
         {/if}
         {#each visibleResults as r (r.id)}
+          <!-- Selection runs on pointerdown, not click: the input's blur
+               fires first and used to close the dropdown (150 ms timer)
+               out from under a slow click, so the row never received it.
+               preventDefault keeps focus on the input for the next pick. -->
           <button
             type="button"
-            class="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-left hover:bg-slate-50 dark:hover:bg-white-300 dark:bg-navy-600"
-            onclick={() => addChip(r)}
+            class="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-left hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600"
+            onpointerdown={(e) => {
+              e.preventDefault();
+              addChip(r);
+            }}
+            onclick={(e) => e.preventDefault()}
           >
             <span class="text-sm">{r.name}</span>
             <span class="font-mono text-[10px] text-black-700 dark:text-black-600">{r.id}</span>
