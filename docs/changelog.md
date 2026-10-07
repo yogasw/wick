@@ -6,14 +6,6 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
-
----
-
-## [v2.0.0](https://github.com/yogasw/wick/compare/v1.13.0...v2.0.0) — Team & Plugins
-
-_Released on 2026-10-07_
-
 ### Team
 
 #### Added
