@@ -129,7 +129,7 @@ type RunPipelineInput struct {
 	Workspace    string `wick:"desc=Bitbucket workspace slug. If empty, uses default_workspace config."`
 	RepoSlug     string `wick:"required;desc=Repository slug."`
 	Branch       string `wick:"required;desc=Branch to run the pipeline on. Example: main"`
-	Pattern      string `wick:"desc=Optional pipeline name to run. With selector_type custom (default) it is a name from the custom: section of bitbucket-pipelines.yml; with branches it is the branch pattern (e.g. staging); with pull-requests it is the PR pattern (e.g. **). Empty runs the default pipeline for the branch."`
+	Pattern      string `wick:"desc=Optional pipeline name to run. With selector_type custom (default) it is a name from the custom: section of bitbucket-pipelines.yml, with branches it is the branch pattern (e.g. staging), with pull-requests it is the PR pattern (e.g. **). Empty runs the default pipeline for the branch."`
 	SelectorType string `wick:"key=selector_type;dropdown=custom|branches|pull-requests;desc=Which section of bitbucket-pipelines.yml pattern refers to. Default custom."`
 	Variables    string `wick:"textarea;desc=Optional pipeline variables. A JSON object or one KEY=VALUE per line."`
 }
