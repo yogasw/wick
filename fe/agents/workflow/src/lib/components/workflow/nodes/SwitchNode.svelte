@@ -17,7 +17,6 @@
   {onselect}
   headBg="#f43f5e"
   icon="⇆"
-  outputs={Math.max(1, rules.length)}
 >
   {#snippet body()}
     {#if rules.length === 0}

@@ -571,14 +571,15 @@
 
     <div class="overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
       {#if installedPage.rows.length}
-        <table class="w-full text-sm">
+        <table class="w-full table-fixed text-sm">
           <thead class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-left text-[11px] uppercase tracking-wide text-black-700 dark:text-black-600">
             <tr>
               {#if isAdmin}<th class="w-8 px-3 py-2"><input type="checkbox" aria-label="Select page" checked={allOnPage} onchange={togglePage} /></th>{/if}
               <th class="px-3 py-2 font-medium">Plugin</th>
-              <th class="hidden px-3 py-2 font-medium sm:table-cell">Version</th>
-              <th class="hidden px-3 py-2 font-medium md:table-cell">Origin</th>
-              <th class="px-3 py-2 font-medium">Status</th>
+              <th class="hidden w-28 px-3 py-2 font-medium md:table-cell">Type</th>
+              <th class="hidden w-44 px-3 py-2 font-medium sm:table-cell">Version</th>
+              <th class="w-36 px-3 py-2 font-medium">Status</th>
+              <th class="hidden w-28 px-3 py-2 font-medium md:table-cell">Origin</th>
               <th class="w-10 px-2 py-2"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
@@ -598,6 +599,7 @@
                     <PluginUpdateProgress class="mt-1 max-w-xs" progress={progress[rowID(p)]} />
                   {/if}
                 </td>
+                <td class="hidden whitespace-nowrap px-3 py-2 text-xs capitalize text-black-800 dark:text-black-600 md:table-cell" data-testid="kind-cell">{p.kind}</td>
                 <td class="hidden whitespace-nowrap px-3 py-2 font-mono text-xs sm:table-cell">
                   <span class="text-black-800 dark:text-black-600">v{p.version}</span>
                   {#if p.update_available}
@@ -605,9 +607,6 @@
                   {:else if !hasUpdateSource(p)}
                     <span class="text-black-600" title="No update source">·</span>
                   {/if}
-                </td>
-                <td class="hidden px-3 py-2 md:table-cell">
-                  <span class="whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-medium {originClass[p.origin]}" data-testid="origin-badge" title={hasUpdateSource(p) ? `last check ${fmt(p.last_check_at)}` : "No update source"}>{originLabel(p)}</span>
                 </td>
                 <td class="whitespace-nowrap px-3 py-2">
                   {#if hasError(p)}
@@ -621,6 +620,9 @@
                     <span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">Disabled</span>
                   {/if}
                   {#if busy === `update:${rowID(p)}`}<span class="ml-1 text-[10px] text-black-700">{pluginPhaseLabel(progress[rowID(p)])}</span>{/if}
+                </td>
+                <td class="hidden px-3 py-2 md:table-cell">
+                  <span class="whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-medium {originClass[p.origin]}" data-testid="origin-badge" title={hasUpdateSource(p) ? `last check ${fmt(p.last_check_at)}` : "No update source"}>{originLabel(p)}</span>
                 </td>
                 <td class="px-2 py-1 text-right">
                   <KebabMenu size="sm" width={200} ariaLabel={`Actions for ${p.key}`} items={rowMenu(p)} />

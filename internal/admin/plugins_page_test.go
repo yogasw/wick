@@ -28,17 +28,45 @@ func getAs(mux *http.ServeMux, path string, u *entity.User) *httptest.ResponseRe
 	return rec
 }
 
+// withPluginsBundle pins what manager.SPAMount reports, so the page does
+// not depend on whether the FE bundle was built where the test runs.
+func withPluginsBundle(t *testing.T, assetURL string) {
+	t.Helper()
+	prev := pluginsSPAMount
+	pluginsSPAMount = func() (string, string) { return assetURL, "/manager" }
+	t.Cleanup(func() { pluginsSPAMount = prev })
+}
+
 func TestAdminPluginsPageForAdmin(t *testing.T) {
+	withPluginsBundle(t, "/manager/_app/assets/index-test.js")
 	admin := &entity.User{ID: "a1", Name: "Admin", Role: entity.RoleAdmin, Approved: true}
 	rec := getAs(pluginsMux(), "/admin/plugins", admin)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`data-embed="plugins"`, `href="/admin/plugins"`, "Admin · Plugins"} {
+	for _, want := range []string{`data-embed="plugins"`, `src="/manager/_app/assets/index-test.js"`, `href="/admin/plugins"`, "Admin · Plugins"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q", want)
 		}
+	}
+}
+
+// Without a built bundle the page still renders in the admin chrome and
+// says how to build it, instead of mounting a script that 404s.
+func TestAdminPluginsPageWithoutBundle(t *testing.T) {
+	withPluginsBundle(t, "")
+	admin := &entity.User{ID: "a1", Name: "Admin", Role: entity.RoleAdmin, Approved: true}
+	rec := getAs(pluginsMux(), "/admin/plugins", admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Manager bundle not built yet") || !strings.Contains(body, "Admin · Plugins") {
+		t.Errorf("body missing the not-built notice or the admin chrome")
+	}
+	if strings.Contains(body, `data-embed="plugins"`) {
+		t.Errorf("body mounts the SPA without a bundle")
 	}
 }
 

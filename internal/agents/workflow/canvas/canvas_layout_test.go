@@ -109,3 +109,48 @@ func TestComputeLayout_TriggersOnSameEntryShareLane(t *testing.T) {
 		t.Fatalf("lane B (x=%d) not right of the widened lane A trigger row (x=%d)", xb, xa2)
 	}
 }
+
+// A switch fans its cases out under the matching port, the error path
+// lands under the error port, and the widened switch card never overlaps
+// the cards next to it.
+func TestComputeLayout_ChildrenUnderTheirPort(t *testing.T) {
+	end := func(id string) workflow.Node { return workflow.Node{ID: id, Type: workflow.NodeEnd} }
+	w := &workflow.Workflow{
+		Triggers: []workflow.Trigger{{ID: "t", Type: workflow.TriggerManual, EntryNode: "sw"}},
+		Graph: workflow.Graph{
+			Entry: "sw",
+			Nodes: []workflow.Node{
+				{ID: "sw", Type: workflow.NodeSwitch, OnFailure: "fallback", Fallback: "oops",
+					Cases: []workflow.SwitchCase{{When: "x", Case: "approved"}, {When: "y", Case: "rejected"}}},
+				end("ok"), end("no"), end("other"), end("oops"),
+			},
+			Edges: []workflow.Edge{
+				{From: "sw", To: "ok", Case: "approved"},
+				{From: "sw", To: "no", Case: "rejected"},
+				{From: "sw", To: "other", Case: "default"},
+			},
+		},
+	}
+	widths := cardWidths(w)
+	if widths["sw"] != 360 { // approved, rejected, default, error
+		t.Fatalf("switch width = %d, want 360", widths["sw"])
+	}
+	out := computeLayout(w, nil)
+	sx, _ := posXY(t, out, "sw")
+	order := []string{"ok", "no", "other", "oops"}
+	prevRight := -1 << 31
+	for i, id := range order {
+		x, _ := posXY(t, out, id)
+		if x < prevRight+layoutMinGap {
+			t.Fatalf("%s at x=%d overlaps the card before it (right=%d)", id, x, prevRight)
+		}
+		prevRight = x + widths[id]
+		port := sx + (2*i+1)*360/8
+		if c := x + widths[id]/2; i == 0 && c != port {
+			t.Fatalf("%s centred at %d, want under its port at %d", id, c, port)
+		}
+	}
+	if _, y := posXY(t, out, "oops"); y != layoutYOrigin+2*layoutYGap {
+		t.Fatalf("fallback target not one row under its source (y=%d)", y)
+	}
+}

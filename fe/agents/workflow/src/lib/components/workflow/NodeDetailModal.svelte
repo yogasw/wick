@@ -32,6 +32,9 @@
   import SchemaForm from "./fields/SchemaForm.svelte";
   import { CodeEditor } from "@wick-fe/common-ui";
   import DatatableForm from "./nodes/DatatableForm.svelte";
+  import OutputsPanel from "./OutputsPanel.svelte";
+  import InputsPanel from "./InputsPanel.svelte";
+  import { isCaseRouted, incomingPorts } from "./ports";
 
   // Catalog-derived helpers for the channel / connector forms below.
   // Drive every dropdown + arg row off the registry so adding a new
@@ -982,51 +985,6 @@
 
               <!-- ── classify ───────────────────────────────────── -->
               {#if node.type === "classify"}
-                <label class="flex flex-col gap-1">
-                  <span class="text-xs font-medium">Output cases (one per line)</span>
-                  <textarea
-                    class="rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
-                    rows="4"
-                    placeholder="positive&#10;negative&#10;neutral"
-                    value={(node.output_cases ?? []).join("\n")}
-                    oninput={(e) =>
-                      patch(
-                        "output_cases",
-                        (e.target as HTMLTextAreaElement).value.split(/\r?\n/).filter(Boolean),
-                      )}
-                  ></textarea>
-                </label>
-                {#if (node.output_cases ?? []).length > 0}
-                  <!-- Case coverage — show each declared case + the
-                       edge it routes to (if any). Mirrors v1's
-                       editor_inspector.templ "Cases (branches)"
-                       panel so the operator catches unrouted cases
-                       before they fail at runtime. -->
-                  <div class="rounded border border-white-400 dark:border-navy-600 p-2 space-y-1">
-                    <div class="text-[11px] font-medium text-black-700 dark:text-black-600">
-                      Branch routing
-                    </div>
-                    {#each node.output_cases ?? [] as caseLabel}
-                      {@const routedEdges = ($draftWorkflow?.graph?.edges ?? []).filter((e) => e.from === node!.id && e.case === caseLabel)}
-                      <div class="flex items-center gap-2 text-[12px]">
-                        <span class="font-mono px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 min-w-[80px]">{caseLabel}</span>
-                        {#if routedEdges.length === 0}
-                          <span class="text-rose-600 dark:text-rose-400 text-[11px] italic">unrouted — no outgoing edge with this case</span>
-                        {:else}
-                          <span class="text-black-700 dark:text-black-500">→</span>
-                          {#each routedEdges as edge}
-                            <button
-                              type="button"
-                              class="font-mono text-emerald-600 dark:text-emerald-400 hover:underline"
-                              onclick={() => detailNodeID.set(edge.to)}
-                              title="Open downstream node"
-                            >{edge.to}</button>
-                          {/each}
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
                 <ArgField
                   {workflowId}
                   {nodeLabels}
@@ -1676,6 +1634,14 @@
               <!-- ── datatable_* (table + per-op builders) ──────── -->
               {#if node.type?.startsWith?.("datatable_")}
                 <DatatableForm {node} {workflowId} {nodeLabels} {nodeOutputs} />
+              {/if}
+
+              <!-- ── Outputs (case-routed nodes) ─────────────────── -->
+              {#if incomingPorts(node, $draftWorkflow).length > 1 || node.type === "merge"}
+                <InputsPanel {node} />
+              {/if}
+              {#if isCaseRouted(node.type)}
+                <OutputsPanel {node} onCasesChange={(next) => patch("output_cases", next)} />
               {/if}
 
               <!-- ── Output refs available ──────────────────────── -->

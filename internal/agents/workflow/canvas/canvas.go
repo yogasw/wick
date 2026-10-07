@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"sort"
 	"strings"
 
@@ -102,11 +104,13 @@ func (c *Canvas) MoveNodes(id string, moves []NodeMove) (workflow.Workflow, erro
 // Top-down lane layout: each trigger owns a column (lane), Y = depth
 // level, X = parallel branches spread rightwards inside the lane.
 const (
-	layoutXGap    = 260 // horizontal gap between nodes in the same row of a lane
+	layoutXGap    = 260 // column step for default-width cards (layoutCardW + layoutMinGap)
 	layoutYGap    = 220 // vertical gap between depth levels
 	layoutLaneGap = 200 // extra empty space between two lanes
 	layoutXOrigin = 160 // X of the first lane's left edge
 	layoutYOrigin = 60  // Y for the trigger row
+	layoutCardW   = 220 // default card width; must match CARD_W in the FE ports.ts
+	layoutMinGap  = 40  // narrowest gap between two cards in one row
 )
 
 // AutoLayout computes DAG-aware positions and applies them in one draft
@@ -148,8 +152,12 @@ func (c *Canvas) AutoLayout(id string, nodeIDs []string) (workflow.Workflow, err
 // Lanes sit side by side left→right with layoutLaneGap between them, so
 // two triggers' paths never stack on or cross each other.
 //
-// Inside a lane, a depth row with several nodes (parallel branches)
-// spreads rightwards from the lane's left edge, sorted by ID.
+// Inside a lane every child sits under the output port its edge leaves
+// from (a case port, the error port, or the parent's centre), so a
+// branch reads straight down from the label that picks it; siblings
+// sharing one plain output fan out evenly beneath it. Cards are as wide
+// as the editor draws them (cardWidth), so a node with many ports never
+// overlaps its neighbour. A node's fallback path counts as an edge here.
 //
 // sticky_note nodes are never moved: they are annotations the author
 // placed around a block by hand, and guessing their new box from the
@@ -191,7 +199,7 @@ func computeLayout(w *workflow.Workflow, restrict []string) map[string]map[strin
 		children[id] = nil
 		inbound[id] = 0
 	}
-	for _, e := range w.Graph.Edges {
+	for _, e := range layoutEdges(w) {
 		if scope[e.From] && scope[e.To] {
 			children[e.From] = append(children[e.From], e.To)
 			inbound[e.To]++
@@ -306,7 +314,7 @@ func computeLayout(w *workflow.Workflow, restrict []string) map[string]map[strin
 		}
 	}
 
-	// --- Lane widths: widest row (or trigger row) decides --------------
+	// --- Rows per lane ------------------------------------------------
 	rows := make(map[int]map[int][]string, laneCount) // lane → depth → ids
 	for id, l := range lane {
 		if rows[l] == nil {
@@ -323,49 +331,274 @@ func computeLayout(w *workflow.Workflow, restrict []string) map[string]map[strin
 			orphanTrigs = append(orphanTrigs, t.ID)
 		}
 	}
-	laneX := make([]int, laneCount)
+
+	// --- Place each lane in its own coordinates, then shift it right of
+	// the previous one. Rows go top-down so a parent is placed before its
+	// children.
+	widths := cardWidths(w)
+	widthOf := func(id string) int {
+		if v, ok := widths[id]; ok {
+			return v
+		}
+		return layoutCardW
+	}
+	ports := make(map[string][]string, len(scope))
+	for _, n := range w.Graph.Nodes {
+		if scope[n.ID] {
+			ports[n.ID] = outPortKeys(n, w.Graph.Edges)
+		}
+	}
+	parents := make(map[string][]workflow.Edge, len(scope))
+	for _, e := range layoutEdges(w) {
+		if scope[e.From] && scope[e.To] && lane[e.From] == lane[e.To] && depth[e.From] < depth[e.To] {
+			parents[e.To] = append(parents[e.To], e)
+		}
+	}
+
+	out := make(map[string]map[string]any, len(scope)+len(trigs))
 	x := layoutXOrigin
 	for l := 0; l < laneCount; l++ {
-		laneX[l] = x
-		cols := 1
-		if layoutAll && len(trigsInLane[l]) > cols {
-			cols = len(trigsInLane[l])
-		}
+		left := map[string]int{}
+		depths := make([]int, 0, len(rows[l]))
 		for d := range rows[l] {
-			sort.Strings(rows[l][d])
-			if len(rows[l][d]) > cols {
-				cols = len(rows[l][d])
+			depths = append(depths, d)
+		}
+		sort.Ints(depths)
+		for _, d := range depths {
+			ids := rows[l][d]
+			want := map[string]float64{}
+			for _, id := range ids {
+				want[id] = 0
+				ps := parents[id]
+				if len(ps) == 0 {
+					continue
+				}
+				sum := 0.0
+				for _, e := range ps {
+					sum += anchorX(e, left[e.From], widthOf(e.From), ports[e.From], children[e.From])
+				}
+				want[id] = sum / float64(len(ps))
+			}
+			sort.SliceStable(ids, func(i, j int) bool {
+				if want[ids[i]] != want[ids[j]] {
+					return want[ids[i]] < want[ids[j]]
+				}
+				return ids[i] < ids[j]
+			})
+			// Pack left to right: each card as close to where it wants
+			// to be as the card before it allows.
+			prevRight := math.MinInt / 2
+			for i, id := range ids {
+				wd := widthOf(id)
+				pos := int(math.Round(want[id])) - wd/2
+				if len(parents[id]) == 0 {
+					pos = 0
+					if i > 0 {
+						pos = prevRight + layoutMinGap
+					}
+				}
+				if i > 0 && pos < prevRight+layoutMinGap {
+					pos = prevRight + layoutMinGap
+				}
+				left[id] = pos
+				prevRight = pos + wd
 			}
 		}
-		x += cols*layoutXGap + layoutLaneGap
-	}
-
-	// --- Assign graph node positions ---------------------------------
-	out := make(map[string]map[string]any, len(scope)+len(trigs))
-	for l := 0; l < laneCount; l++ {
+		// Triggers line up above their entry, side by side.
+		trigLeft := map[string]int{}
+		if layoutAll {
+			for i, id := range trigsInLane[l] {
+				base := 0
+				for _, t := range trigs {
+					if t.ID == id {
+						if v, ok := left[entryOf(t)]; ok {
+							base = v
+						}
+					}
+				}
+				trigLeft[id] = base + i*layoutXGap
+			}
+		}
+		minX, maxX := math.MaxInt, math.MinInt
+		for id, v := range left {
+			minX = min(minX, v)
+			maxX = max(maxX, v+widthOf(id))
+		}
+		for _, v := range trigLeft {
+			minX = min(minX, v)
+			maxX = max(maxX, v+layoutCardW)
+		}
+		if minX == math.MaxInt {
+			minX, maxX = 0, layoutCardW
+		}
 		for d, ids := range rows[l] {
 			y := layoutYOrigin + (d+1)*layoutYGap
-			for i, id := range ids {
-				out[id] = map[string]any{"x": laneX[l] + i*layoutXGap, "y": y}
+			for _, id := range ids {
+				out[id] = map[string]any{"x": x + left[id] - minX, "y": y}
 			}
 		}
+		for id, v := range trigLeft {
+			out[id] = map[string]any{"x": x + v - minX, "y": layoutYOrigin}
+		}
+		x += maxX - minX + layoutMinGap + layoutLaneGap
 	}
 
-	// --- Triggers: top row of their lane ------------------------------
 	// Lay out EVERY trigger, including any that still lack an id
 	// (workflows written before SetTriggers started minting them).
 	// Skipping those left their cards stacked at the canvas origin with
 	// no edge to their entry node. A trigger whose entry is missing gets
 	// a trailing column of its own so it never overlaps a lane.
 	if layoutAll {
-		for l := 0; l < laneCount; l++ {
-			for i, id := range trigsInLane[l] {
-				out[id] = map[string]any{"x": laneX[l] + i*layoutXGap, "y": layoutYOrigin}
-			}
-		}
 		for i, id := range orphanTrigs {
 			out[id] = map[string]any{"x": x + i*layoutXGap, "y": layoutYOrigin}
 		}
+	}
+	return out
+}
+
+// errorPortKey marks the on_failure=fallback path in layout edges; the
+// FE calls it ERROR_KEY. It can never collide with a real case.
+const errorPortKey = "\x00error"
+
+// layoutEdges is every connection the canvas draws: graph edges plus each
+// node's fallback path (stored on the node, not as an edge).
+func layoutEdges(w *workflow.Workflow) []workflow.Edge {
+	out := append([]workflow.Edge(nil), w.Graph.Edges...)
+	for _, n := range w.Graph.Nodes {
+		if n.OnFailure == "fallback" && n.Fallback != "" && n.Fallback != n.ID {
+			out = append(out, workflow.Edge{From: n.ID, To: n.Fallback, Case: errorPortKey})
+		}
+	}
+	return out
+}
+
+// anchorX is where a child of edge e should centre: under the parent's
+// output port for that edge, or — for a parent with one plain output —
+// spread evenly under its centre with its siblings.
+func anchorX(e workflow.Edge, parentLeft, parentW int, ports, siblings []string) float64 {
+	if len(ports) > 0 {
+		for i, p := range ports {
+			if p == e.Case {
+				return float64(parentLeft) + (float64(i)+0.5)*float64(parentW)/float64(len(ports))
+			}
+		}
+	}
+	centre := float64(parentLeft) + float64(parentW)/2
+	if len(siblings) <= 1 {
+		return centre
+	}
+	k := sort.SearchStrings(siblings, e.To)
+	return centre + (float64(k)-float64(len(siblings)-1)/2)*layoutXGap
+}
+
+// --- Card geometry, mirrored from the editor (fe/.../workflow/ports.ts) ---
+
+var fixedPorts = map[workflow.NodeType][]string{
+	workflow.NodeDataTableGet:    {"found", "not_found"},
+	workflow.NodeDataTableExists: {"true", "false"},
+}
+
+// outPortKeys lists the labelled outputs the editor paints, left to
+// right: the cases (fallback case last), or "" for a plain success
+// output, then errorPortKey when failures route to a fallback node.
+// nil = one unlabelled output.
+func outPortKeys(n workflow.Node, edges []workflow.Edge) []string {
+	var cases []string
+	if n.Type.IsBranchSource() {
+		add := func(c string) {
+			c = strings.TrimSpace(c)
+			if c != "" && !slices.Contains(cases, c) {
+				cases = append(cases, c)
+			}
+		}
+		fixed := fixedPorts[n.Type]
+		switch {
+		case fixed != nil:
+			for _, c := range fixed {
+				add(c)
+			}
+		case n.Type == workflow.NodeSwitch:
+			for _, c := range n.Cases {
+				add(c.Case)
+			}
+		default:
+			for _, c := range n.OutputCases {
+				add(c)
+			}
+		}
+		fallback := ""
+		if fixed == nil {
+			fallback = "default"
+			if n.Type == workflow.NodeSwitch && n.DefaultCase != "" {
+				fallback = n.DefaultCase
+			}
+		}
+		for _, e := range edges {
+			if e.From == n.ID && e.Case != fallback {
+				add(e.Case)
+			}
+		}
+		if fallback != "" {
+			cases = slices.DeleteFunc(cases, func(c string) bool { return c == fallback })
+			cases = append(cases, fallback)
+		}
+	}
+	if n.OnFailure != "fallback" {
+		return cases
+	}
+	if len(cases) == 0 {
+		cases = []string{""}
+	}
+	return append(cases, errorPortKey)
+}
+
+// inPortCount is how many labelled inputs the editor paints: one per
+// source once there is more than one, else 0.
+func inPortCount(w *workflow.Workflow, n workflow.Node) int {
+	seen := map[string]bool{}
+	from := map[string]bool{}
+	for _, t := range w.Triggers {
+		entry := t.EntryNode
+		if entry == "" {
+			entry = w.Graph.Entry
+		}
+		if entry == n.ID {
+			seen["t:"+t.ID+":"+string(t.Type)] = true
+		}
+	}
+	for _, e := range layoutEdges(w) {
+		if e.To == n.ID {
+			seen["e:"+e.From+":"+e.Case] = true
+			from[e.From] = true
+		}
+	}
+	if n.Type == workflow.NodeMerge {
+		for _, id := range n.Inputs {
+			if !from[id] {
+				seen["m:"+id] = true
+			}
+		}
+	}
+	if len(seen) > 1 {
+		return len(seen)
+	}
+	return 0
+}
+
+// cardWidths is each node card's rendered width: 220px, widened to 90px
+// per port column while a side has at most 6 ports (cardWidth in ports.ts).
+func cardWidths(w *workflow.Workflow) map[string]int {
+	const colMin, flatMax = 90, 6
+	out := make(map[string]int, len(w.Graph.Nodes))
+	for _, n := range w.Graph.Nodes {
+		cols := 0
+		if o := len(outPortKeys(n, w.Graph.Edges)); o <= flatMax {
+			cols = o
+		}
+		if i := inPortCount(w, n); i <= flatMax && i > cols {
+			cols = i
+		}
+		out[n.ID] = max(layoutCardW, cols*colMin)
 	}
 	return out
 }
