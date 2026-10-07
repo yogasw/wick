@@ -56,3 +56,19 @@ func TestSetTeamAgentTags(t *testing.T) {
 	require.Equal(t, "u-1", h.resourceOwnerID(teamAgentPrefix+"a-1"))
 	require.False(t, h.adminBypassFor(teamAgentPrefix+"a-1"), "a tag share is not an admin pass")
 }
+
+func TestTeamAgentsPageListsCaptainLocked(t *testing.T) {
+	h, _, _ := newAdminConnectorsHandler(t)
+	h.teamAgents = fakeTeamAgents{
+		{ID: "a-1", Handle: "ops", OwnerUserID: "u-1"},
+		{ID: "cap-1", Handle: "captain", OwnerUserID: "u-1", Block: "The Captain runs your Team and cannot be shared."},
+	}
+	rec := httptest.NewRecorder()
+	h.teamAgentsAdminPage(rec, httptest.NewRequest(http.MethodGet, "/admin/team-agents", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, "resource-cap-1", "the Captain is listed")
+	require.Contains(t, body, "Not shareable")
+	require.NotContains(t, body, "/admin/team-agents/cap-1/tags", "no tag form for the Captain")
+	require.Contains(t, body, "/admin/team-agents/a-1/tags")
+}

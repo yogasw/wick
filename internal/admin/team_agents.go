@@ -16,7 +16,7 @@ const teamAgentPrefix = "/team-agents/"
 
 // TeamAgent is one Team agent as /admin/team-agents lists it. Block is
 // non-empty when the agent can never be shared (the Captain, a remote set
-// to "Only me"); its tags are then refused.
+// to "Only me"); the page lists it locked and its tags are refused.
 type TeamAgent struct {
 	ID, Name, Handle, OwnerUserID, Block string
 	Disabled                             bool
@@ -53,12 +53,10 @@ func (h *Handler) teamAgentsAdminPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	agents := all[:0:0]
-	for _, a := range all {
-		if a.Block == "" {
-			agents = append(agents, a)
-		}
-	}
+	// Agents that can never be shared (each owner's Captain) stay in the
+	// list, locked: not every owner has made one, so the row tells an admin
+	// who is actually using Team. They carry no tags.
+	agents := all
 	allTags, _, tagsOK := h.tagPageData(w, r, nil)
 	if !tagsOK {
 		return
@@ -93,6 +91,7 @@ func (h *Handler) teamAgentsAdminPage(w http.ResponseWriter, r *http.Request) {
 			CreatedBy: a.OwnerUserID,
 			TagIDs:    perms[i].TagIDs,
 			Path:      paths[i],
+			Locked:    a.Block,
 		}
 	}
 	// No owner picker: see the doc comment above.
