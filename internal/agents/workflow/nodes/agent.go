@@ -21,7 +21,7 @@ import (
 type agentSchema struct {
 	Prompt            string `wick:"required;textarea;key=prompt;desc=Inline prompt rendered as a Go template (with .Event / .Node / .Trigger context)."`
 	Provider          string `wick:"key=provider;desc=Provider instance name (empty = default). Must be one the workflow owner may access (provider access tags)."`
-	Model             string `wick:"key=model;desc=Model id pinned for this node (empty = the provider's default). Only applied together with provider, and ignored on the non-pool (codex/gemini one-shot) path."`
+	Model             string `wick:"key=model;desc=Model id pinned for this node (empty = the provider's default). Only applied together with provider, ignored on the non-pool (codex/gemini one-shot) path."`
 	Skills            string `wick:"key=skills;desc=YAML list of skill names to expose"`
 	Tools             string `wick:"key=tools;desc=YAML list of tool names to allowlist"`
 	MaxTurns          int    `wick:"key=max_turns;desc=Max agent turns. 0 = unlimited (provider default)."`
