@@ -14,7 +14,7 @@ func init() {
 				Description: "API key for direct Anthropic API auth (stored masked)."},
 			{Key: "ANTHROPIC_AUTH_TOKEN", Kind: provider.CatalogString, Placeholder: "token",
 				Description: "Auth token for Claude.ai login (stored masked)."},
-			{Key: "ANTHROPIC_MODEL", Kind: provider.CatalogString, Placeholder: "claude-opus-4-8",
+			{Key: "ANTHROPIC_MODEL", Kind: provider.CatalogString, Placeholder: "claude-opus-5-5",
 				Description: "Default model ID for this instance."},
 
 			// Model & thinking
@@ -72,7 +72,7 @@ func init() {
 				Description: "OpenTelemetry metrics exporter."},
 		},
 		Args: []provider.CatalogEntry{
-			{Key: "--model", Kind: provider.CatalogString, Placeholder: "claude-opus-4-8",
+			{Key: "--model", Kind: provider.CatalogString, Placeholder: "claude-opus-5-5",
 				Description: "Model to run with for every spawn."},
 			{Key: "--permission-mode", Kind: provider.CatalogEnum, Options: []string{"default", "acceptEdits", "plan", "bypassPermissions"},
 				Description: "Permission mode passed to every spawn."},

@@ -72,11 +72,11 @@ func TestSeedModels_EmbeddedBaseline(t *testing.T) {
 	if s := SeedModels(TypeClaude); len(s) == 0 || s[0].Desc == "" {
 		t.Errorf("claude seed should carry desc, got %+v", s)
 	}
-	// Codex seeds the gpt-5 line. Asserted by prefix, not by position: the
-	// list grows at the front as newer tiers ship, and pinning index 0 to one
-	// id makes every catalog refresh a test edit.
-	if s := SeedModels(TypeCodex); len(s) == 0 || !strings.HasPrefix(s[0].ID, "gpt-5") {
-		t.Errorf("codex first seed should be on the gpt-5 line, got %+v", s)
+	// Codex seeds the gpt line. Asserted by family prefix, not by version or
+	// position: the list grows at the front as newer generations ship, and
+	// pinning index 0 to one id makes every catalog refresh a test edit.
+	if s := SeedModels(TypeCodex); len(s) == 0 || !strings.HasPrefix(s[0].ID, "gpt-") {
+		t.Errorf("codex first seed should be on the gpt line, got %+v", s)
 	}
 }
 

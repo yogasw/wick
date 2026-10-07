@@ -263,7 +263,7 @@ wick plugin build --kind service my_service --target linux/amd64   # or --all
 This writes `bin/my_service-<version>-linux-amd64.zip` with the binary and a
 `plugin.json` generated from the binary. Build for the OS and architecture
 wick runs on. Signing and releasing are covered in
-[Building and releasing](./building.md).
+[Releasing plugins](./release.md).
 
 Install the zip in one of two ways:
 

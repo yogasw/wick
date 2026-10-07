@@ -20,7 +20,7 @@ func init() {
 				Description: "GCP project ID (required for Code Assist / Vertex AI)."},
 
 			// Model & API config
-			{Key: "GEMINI_MODEL", Kind: provider.CatalogString, Placeholder: "gemini-3-flash-preview",
+			{Key: "GEMINI_MODEL", Kind: provider.CatalogString, Placeholder: "gemini-3.8-flash",
 				Description: "Default Gemini model for this instance."},
 			{Key: "GOOGLE_GENAI_USE_VERTEXAI", Kind: provider.CatalogBool, Options: []string{"true", "false"},
 				Description: "Route requests through Vertex AI instead of the Gemini API."},
@@ -66,7 +66,7 @@ func init() {
 				Description: "GCP project ID for telemetry."},
 		},
 		Args: []provider.CatalogEntry{
-			{Key: "--model", Kind: provider.CatalogString, Placeholder: "gemini-3-flash-preview",
+			{Key: "--model", Kind: provider.CatalogString, Placeholder: "gemini-3.8-flash",
 				Description: "Model to run with for every spawn."},
 			{Key: "--approval-mode", Kind: provider.CatalogEnum, Options: []string{"default", "auto_edit", "plan", "yolo"},
 				Description: "Approval mode for actions."},
