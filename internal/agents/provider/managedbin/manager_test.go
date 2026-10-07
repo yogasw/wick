@@ -179,13 +179,43 @@ func TestShaMismatchIsNeverExecuted(t *testing.T) {
 func TestVersionMismatchRejected(t *testing.T) {
 	gh := newFakeGitHub(t)
 	gh.scripts["v1.2.3"] = script(filepath.Join(t.TempDir(), "ran"), "fakecli 9.9.9")
-	m, _ := newTestManager(t, gh)
+	m, root := newTestManager(t, gh)
 	_, err := m.Install(context.Background(), "fake", "v1.2.3")
 	if err == nil || !strings.Contains(err.Error(), "expected v1.2.3") {
 		t.Fatalf("got %v", err)
 	}
 	if _, _, ok := m.CurrentPath("fake"); ok {
 		t.Fatal("current moved")
+	}
+	// a failed probe is kept for inspection, with the reason
+	log, err := os.ReadFile(filepath.Join(root, "fake", "versions", "1.2.3.partial", "probe.log"))
+	if err != nil || !strings.Contains(string(log), "fakecli 9.9.9") {
+		t.Fatalf("probe.log %q %v", log, err)
+	}
+	if st, _ := m.Status("fake"); len(st.Installed) != 0 {
+		t.Fatalf("kept .partial listed as installed: %+v", st.Installed)
+	}
+}
+
+func TestTermuxGlibcWithoutRunnerKeepsPartial(t *testing.T) {
+	gh := newFakeGitHub(t)
+	gh.scripts["v1.2.3"] = string(fakeELF("/lib/ld-linux-aarch64.so.1"))
+	m, root := newTestManager(t, gh)
+	m.Host = func() Host { return Host{OS: "linux", Arch: "x64", AVX2: true, Termux: true} }
+	m.prep.resolve = func(string) (string, error) { return "", os.ErrNotExist }
+	_, err := m.Install(context.Background(), "fake", "v1.2.3")
+	if !errors.Is(err, ErrMissingInterpreter) || !strings.Contains(err.Error(), "glibc-runner") {
+		t.Fatalf("got %v", err)
+	}
+	if _, _, ok := m.CurrentPath("fake"); ok {
+		t.Fatal("current moved")
+	}
+	partial := filepath.Join(root, "fake", "versions", "1.2.3.partial")
+	if _, err := os.Stat(filepath.Join(partial, "fakecli")); err != nil {
+		t.Fatalf("binary not kept: %v", err)
+	}
+	if log, _ := os.ReadFile(filepath.Join(partial, "probe.log")); !strings.Contains(string(log), "ld-linux-aarch64") {
+		t.Fatalf("probe.log %q", log)
 	}
 }
 
