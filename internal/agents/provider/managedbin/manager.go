@@ -35,6 +35,7 @@ type Manager struct {
 	Enabled func(typ string) bool
 
 	client *client
+	prep   hostPrep
 
 	mu      sync.Mutex
 	jobs    map[string]*JobInfo
@@ -56,6 +57,7 @@ func New() *Manager {
 		Host:         DetectHost,
 		InUse:        scanInUse,
 		client:       newClient(),
+		prep:         defaultHostPrep,
 		jobs:         map[string]*JobInfo{},
 		typeMus:      map[string]*sync.Mutex{},
 		snaps:        map[string]LatestSnapshot{},
@@ -432,6 +434,10 @@ func (m *Manager) install(ctx context.Context, typ, tag string, j *JobInfo) erro
 		cleanup()
 		return err
 	}
+	if err := m.prep.prepareBinary(ctx, h, bin); err != nil {
+		keepForInspection(partial, "prepare: "+err.Error())
+		return fmt.Errorf("%s (%s): %w — kept in %s", src.Binary(), h.Label(), err, partial)
+	}
 	binSum, err := fileSHA256(bin)
 	if err != nil {
 		cleanup()
@@ -440,14 +446,17 @@ func (m *Manager) install(ctx context.Context, typ, tag string, j *JobInfo) erro
 
 	// 3 + 4. sandboxed --version, must equal the tag
 	m.setJob(j, func(j *JobInfo) { j.Phase = PhaseProbe })
+	// A failed probe keeps .partial (+ probe.log) for inspection; it is
+	// never activated and the next install of this version replaces it.
 	out, parsed, err := m.runVersion(ctx, typ, bin)
 	if err != nil {
-		cleanup()
-		return fmt.Errorf("%s --version: %w", src.Binary(), err)
+		err = m.prep.explainExecError(h, bin, err)
+		keepForInspection(partial, "--version: "+err.Error()+"\n"+out)
+		return fmt.Errorf("%s --version: %w — kept in %s", src.Binary(), err, partial)
 	}
 	if !MatchesTag(rel.Tag, parsed) {
-		cleanup()
-		return fmt.Errorf("%s --version reported %q, expected %s — deleted", src.Binary(), parsed, rel.Tag)
+		keepForInspection(partial, "--version: "+out)
+		return fmt.Errorf("%s --version reported %q, expected %s — not installed, kept in %s", src.Binary(), parsed, rel.Tag, partial)
 	}
 
 	// 5. publish, then (maybe) switch
@@ -478,6 +487,11 @@ func (m *Manager) install(ctx context.Context, typ, tag string, j *JobInfo) erro
 	m.setJob(j, func(j *JobInfo) { j.Message = "installed " + out })
 	m.pruneLocked(typ)
 	return nil
+}
+
+// keepForInspection records why a .partial was left behind.
+func keepForInspection(partial, msg string) {
+	_ = os.WriteFile(filepath.Join(partial, "probe.log"), []byte(time.Now().UTC().Format(time.RFC3339)+" "+msg+"\n"), 0o600)
 }
 
 // scopeBusEnv is what the memory-scope wrapper (systemd-run --user --scope)

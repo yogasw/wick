@@ -19,6 +19,7 @@ func TestOpencodeAssetSelection(t *testing.T) {
 		{OS: "linux", Arch: "arm64"}:                       "opencode-linux-arm64.tar.gz",
 		{OS: "linux", Arch: "arm64", Musl: true}:           "opencode-linux-arm64-musl.tar.gz",
 		{OS: "darwin", Arch: "arm64"}:                      "opencode-darwin-arm64.zip",
+		{OS: "linux", Arch: "arm64", Termux: true}:         "opencode-linux-arm64.tar.gz", // patched to glibc-runner at install
 	}
 	for h, want := range cases {
 		got, err := assetName(h)
