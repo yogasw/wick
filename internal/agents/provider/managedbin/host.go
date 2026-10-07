@@ -19,8 +19,8 @@ import (
 //
 // Termux is linux on bionic: neither /lib/ld-linux-* nor /lib/ld-musl-*
 // exists, so no published build runs as downloaded. It keeps the glibc
-// pick and the install patches the interpreter to Termux's glibc-runner
-// (see prepareBinary).
+// pick and the install points the interpreter at Termux's glibc-runner
+// loader, in place (see prepareBinary).
 type Host struct {
 	OS     string `json:"os"`   // "linux" | "darwin" | "windows"
 	Arch   string `json:"arch"` // "x64" | "arm64" | raw GOARCH otherwise

@@ -14,7 +14,7 @@ func TestOMPAssetSelection(t *testing.T) {
 		{OS: "linux", Arch: "x64", Musl: true}:     "omp-linux-musl-x64",
 		{OS: "linux", Arch: "arm64", Musl: true}:   "omp-linux-musl-arm64",
 		{OS: "darwin", Arch: "arm64"}:              "omp-darwin-arm64",
-		{OS: "linux", Arch: "arm64", Termux: true}: "omp-linux-arm64", // patched to glibc-runner at install
+		{OS: "linux", Arch: "arm64", Termux: true}: "omp-linux-arm64", // PT_INTERP rewritten to glibc-runner's loader at install
 	}
 	for h, want := range cases {
 		got, err := assetName(h)
