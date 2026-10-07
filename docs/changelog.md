@@ -6,6 +6,24 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v1.15.0](https://github.com/yogasw/wick/compare/v1.14.0...v1.15.0) — Maintenance
+
+_Released on 2026-10-07_
+
+### Changed
+*   Synchronized internal `go.mod.tmpl` and documentation files for v1.14.0.
+
+---
+
+
+## [v1.14.0](https://github.com/yogasw/wick/compare/v1.13.0...v1.14.0) — Team & Plugins
+
+_Released on 2026-10-07_
+
 ### Team
 
 #### Added
@@ -122,12 +140,15 @@ All notable changes to Wick are documented here.
 - **Interface Size**: Default interface size is 100%, with a slider allowing up to 150%.
 - **Sub-agent Status**: Sub-agents now maintain their run status during daemon reloads.
 - **Login Stats**: Fixed reading login stats on SQLite.
+- **Provider Model Catalog**: Updated provider model catalog, including new Claude (`claude-fable-5-1`, `claude-opus-5-5`, `claude-sonnet-5-5`), Codex (`gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`), and Gemini (`gemini-3.8-flash`, `gemini-3.1-pro-preview`, `gemini-3.7-flash`, `gemini-3.1-flash-lite`) models, along with deprecations and removals of older or unreleased models.
 
 #### Fixed
 - **Provider Picker Menu**: Provider picker menus now portal to the body, fixing clipping issues in transformed modals.
 - **Data Table Ownership**: Caller is now recorded as the owner on table creation.
+- **Documentation Links**: Fixed dead links and CI issues in documentation, including VitePress deploy docs.
 
 ---
+
 
 
 ## [v1.13.0](https://github.com/yogasw/wick/compare/v1.12.0...v1.13.0) — UI, MCP & Tickets
