@@ -16,6 +16,11 @@ export type EditableSchedule = {
   message: string;
   run_count: number;
   created_by?: string;
+  /* Identity the fires run with. See the note in the conversation SPA's
+     Schedule type: created_by is the HOW, this is the AS WHOM. */
+  run_as_user_id?: string;
+  effective_run_as?: string;
+  effective_run_as_name?: string;
   paused?: boolean;
   interval_ms?: number;
   cron?: string;

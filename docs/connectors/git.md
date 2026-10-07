@@ -143,6 +143,16 @@ Two different languages appear in one row. This is the most common source of mis
 
 Protected-branch matching is case-insensitive on purpose: git branch names are case-sensitive on Linux but not on Windows or macOS checkouts, and treating `Master` as unprotected would be a trivial bypass.
 
+### Reading a protected branch
+
+`protected_branches` gates the operations that **author** changes on a matching branch: `add`, `branch_create`, `clone`, `commit`, `merge`, `raw`, `rebase`, `reset`, `stash`, `stash_drop`, `tag`, `tag_delete`, and `push`.
+
+**`pull` and `checkout` are exempt.** Switching to `master`, or bringing your local `master` up to date with its remote, changes nothing anyone else can see — while the `commit` and `push` that *would* are still refused. Gating them made a protected branch impossible to sync at all: you could not update `master` before branching off it, which is the ordinary first step of every piece of work.
+
+Reads (`status`, `log`, `diff`, `show`, `branch_list`, `remote_list`, `ls_remote`, `policy_show`, and `stash` with `action=list`) were never gated.
+
+Call `policy_show` for the repository to see the current split — its `gates` map names the rule behind every operation, and its `protected_branches.applies_to` line spells out the exemption.
+
 `message_pattern` follows the same empty-inherits / `"-"`-clears rule as `branch_pattern` — a per-repo row can require Conventional Commits while another requires a ticket ID, since the global fallback cannot express both.
 
 ## Policy Cookbook
@@ -312,7 +322,7 @@ Nothing in this category changes repository state, so branch and force rules do 
 | Op | Input | Policy gates |
 |---|---|---|
 | `branch_create` | `repo_path`\*, `name`\*, `from_ref`, `checkout` | `name` must match `branch_name_pattern` and must not be protected. |
-| `checkout` | `repo_path`\*, `ref`\*, `create` | `ref` must not be protected. With `create`, the branch pattern also applies. |
+| `checkout` | `repo_path`\*, `ref`\*, `create` | **Exempt from `protected_branches`** — switching to a branch changes nothing anyone else sees. With `create`, the branch pattern still applies. |
 | `add` | `repo_path`\*, `paths`\* | Current branch must not be protected. |
 | `commit` | `repo_path`\*, `message`\*, `all`, `dry_run` | Current branch must not be protected. `message` must match `commit_message_pattern` when one is set. |
 | `stash` | `repo_path`\*, `action`\* (`push` \| `pop` \| `list`), `message` | Gated **per action**: `push`/`pop` require the current branch to not be protected; `list` is a read and is never refused. Dropping is **not** here — see `stash_drop`. |
@@ -323,7 +333,7 @@ Nothing in this category changes repository state, so branch and force rules do 
 | Op | Input | Policy gates |
 |---|---|---|
 | `fetch` | `repo_path`\*, `remote`, `prune` | Current branch must not be protected. |
-| `pull` | `repo_path`\*, `remote`, `branch`, `rebase` | Current branch must not be protected. |
+| `pull` | `repo_path`\*, `remote`, `branch`, `rebase` | **Exempt from `protected_branches`** — see [Reading a protected branch](#reading-a-protected-branch). Omit `branch` and it pulls the current one. |
 
 ### Destructive — off by default per instance
 
@@ -364,6 +374,33 @@ Every operation returns the same envelope:
 ```
 
 A non-zero git exit is reported in `exit_code` / `stderr`, not raised as an error — the agent needs stderr to react. `remote` appears only on network operations. Reporting the effective URL every time means a push landing on the wrong host is visible immediately instead of being a mystery.
+
+A `recovered` field appears when the connector had to repair something before the command could run — today only a stale index lock. See below.
+
+### Stale `index.lock` recovery
+
+`git` takes `.git/index.lock` for the duration of any command that writes the index. A process killed mid-operation — an agent that hit its memory limit, a restarted daemon, a machine that lost power — leaves that file behind, and **every** later git command in that repository fails with:
+
+```
+fatal: Unable to create '/path/.git/index.lock': File exists.
+```
+
+Until recently the only cure was a human deleting the file by hand, which is a poor answer for a connector an agent drives unattended.
+
+The connector now clears it and retries **once**, but only when both of these hold:
+
+| Condition | Why it must be true |
+|---|---|
+| The lock is older than **10 minutes** | A lock seconds old probably belongs to a git command running right now. |
+| **No process holds it** | Checked by scanning `/proc/*/fd` for an open handle. If that check cannot answer — a platform without `/proc`, permissions — the lock is treated as **held** and left alone. |
+
+Deleting a live lock corrupts an index, so every uncertainty resolves toward leaving it. When the retry runs, the result carries what was removed:
+
+```json
+{ "ok": true, "recovered": "removed a stale .git/index.lock (age 47m)", "...": "..." }
+```
+
+The retry keeps the caller's context rather than starting a fresh one: a second git run that outlived the request asking for it would be worse than not retrying. If that context has already expired, the first result stands and `recovered` says the retry was skipped and why — so an exhausted deadline never masquerades as git's own answer.
 
 ## Safety model
 

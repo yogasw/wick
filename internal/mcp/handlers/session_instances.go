@@ -52,9 +52,10 @@ func SessionInstanceForID(layout agentconfig.Layout, sessionID, connectorID stri
 // "ready" when every required (non-hidden) base config field is satisfied,
 // "needs_setup" otherwise. A field counts as satisfied when the instance
 // config carries a value OR the base spec ships a non-empty default — the
-// runtime falls back to that default (see entity.MapToStruct), and the
-// Config-tab form already renders it, so a freshly-added instance whose
-// required fields all default must read as ready without a redundant save.
+// runtime falls back to that default (built-ins via entity.MapToStruct,
+// custom connectors via custom.ctxMaps), and the Config-tab form already
+// renders it, so a freshly-added instance whose required fields all default
+// must read as ready without a redundant save.
 func sessionInstanceStatus(mod connector.Module, cfg map[string]string) string {
 	return sessionConfigStatus(mod.Configs, cfg)
 }
@@ -79,7 +80,7 @@ func sessionConfigStatus(specs []entity.Config, cfg map[string]string) string {
 // instance has the per-instance toggle on. Deduped by connector key.
 // Surfaced in wick_list so the agent knows the option exists.
 func sessionConfigBases(r *http.Request, svc *connectors.Service, tagIDs []string, isAdmin bool) []sessionBaseHint {
-	rows, err := svc.ListVisibleTo(r.Context(), tagIDs, isAdmin)
+	rows, err := svc.ListVisibleTo(r.Context(), callerIDFromCtx(r.Context()), tagIDs, isAdmin)
 	if err != nil {
 		return nil
 	}

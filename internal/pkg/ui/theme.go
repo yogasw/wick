@@ -1,6 +1,11 @@
 package ui
 
-import "context"
+import (
+	"context"
+	"fmt"
+
+	"github.com/a-h/templ"
+)
 
 // Theme represents a selectable UI theme. The ClassName is the CSS
 // class applied to <html> that drives the color palette overrides in
@@ -120,6 +125,29 @@ type themeCtxKey struct{}
 // script.
 func WithTheme(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, themeCtxKey{}, id)
+}
+
+type uiScaleCtxKey struct{}
+
+// WithUIScale stores the signed-in user's interface size (percent) in
+// ctx. Unset (guests) leaves <html> to the stylesheet's default.
+func WithUIScale(ctx context.Context, pct int) context.Context {
+	return context.WithValue(ctx, uiScaleCtxKey{}, pct)
+}
+
+// UIScaleFromContext reads the size set via WithUIScale; 0 when unset.
+func UIScaleFromContext(ctx context.Context) int {
+	v, _ := ctx.Value(uiScaleCtxKey{}).(int)
+	return v
+}
+
+// htmlScaleAttrs is the style attribute <html> carries for the user's
+// interface size; nothing for a guest, who gets the CSS default.
+func htmlScaleAttrs(ctx context.Context) templ.Attributes {
+	if pct := UIScaleFromContext(ctx); pct > 0 {
+		return templ.Attributes{"style": fmt.Sprintf("font-size: %d%%", pct)}
+	}
+	return templ.Attributes{}
 }
 
 // ThemeFromContext reads the theme id previously set via WithTheme.

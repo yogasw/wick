@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"google.golang.org/genai"
+
+	"github.com/yogasw/wick/internal/agents/store"
 )
 
 // ── C1: tool result ingestion cap + spill ───────────────────────────
@@ -123,7 +125,7 @@ func TestLoadHistory_SidecarSkipsCoveredTurns(t *testing.T) {
 	// Summary covers the first 2 turns.
 	writeCompactionState(dir, compactionState{Summary: "summary of old-1 and old-2", CoveredThrough: 2})
 
-	got := loadHistory(dir, 0)
+	got := loadHistory(dir, 0, store.SenderName)
 
 	// Expect: [summary note] + recent-3 + recent-4 = 3 contents.
 	if len(got) != 3 {
@@ -153,7 +155,7 @@ func TestLoadHistory_NoSidecarReplaysAll(t *testing.T) {
 {"role":"assistant","text":"two"}
 `
 	_ = os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(conv), 0o644)
-	got := loadHistory(dir, 0)
+	got := loadHistory(dir, 0, store.SenderName)
 	if len(got) != 2 {
 		t.Fatalf("want 2 contents, got %d", len(got))
 	}

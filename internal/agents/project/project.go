@@ -331,6 +331,43 @@ func Delete(layout config.Layout, id string) error {
 // change).
 const PersonalTag = "personal"
 
+// AgentTag marks a project the Team app made to hold an agent's persona
+// (Captain included). Such a project is left out of the sidebar's Projects
+// list; it stays reachable by URL and from the agent. A project an agent
+// was pointed at by the user carries no tag and keeps showing.
+//
+// Namespaced so a user's own "agent" label never hides their project.
+// Project tags are not validated, so the ':' is safe.
+const AgentTag = "wick:team"
+
+// IsAgentProject reports whether meta carries AgentTag.
+func IsAgentProject(meta Meta) bool { return slices.Contains(meta.Tags, AgentTag) }
+
+// VisibleTag keeps an agent project (one carrying AgentTag) in the
+// sidebar's Projects list as well. A tag rather than a meta field, so
+// projects written before it decode to "hidden", as they always were.
+const VisibleTag = "wick:team-visible"
+
+// ShowsInProjects reports whether meta is listed in the sidebar's Projects:
+// every ordinary project, and an agent project only with VisibleTag.
+func ShowsInProjects(meta Meta) bool {
+	return !IsAgentProject(meta) || slices.Contains(meta.Tags, VisibleTag)
+}
+
+// SetShowInProjects adds or drops VisibleTag. Returns whether meta changed.
+func SetShowInProjects(meta *Meta, on bool) bool {
+	has := slices.Contains(meta.Tags, VisibleTag)
+	switch {
+	case on && !has:
+		meta.Tags = append(slices.Clone(meta.Tags), VisibleTag)
+	case !on && has:
+		meta.Tags = slices.DeleteFunc(slices.Clone(meta.Tags), func(t string) bool { return t == VisibleTag })
+	default:
+		return false
+	}
+	return true
+}
+
 // IsProtected reports whether meta names a project that cannot be
 // deleted: the built-in "default" project (matched by name), or a
 // personal project (one carrying PersonalTag — the auto-created per-user

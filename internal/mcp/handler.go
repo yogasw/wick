@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -57,6 +58,11 @@ type Handler struct {
 	// nil in stdio mode and tests.
 	pool   *agentpool.Pool
 	layout agentconfig.Layout
+	// accountQuota reads the provider ACCOUNT's remaining quota for
+	// wick_usage — the 5-hour / weekly limits, not the token ledger. The
+	// probe cache behind it lives in the agents tool, so the server
+	// supplies the reader. nil in stdio mode and tests.
+	accountQuota handlers.AccountQuotaFn
 	// refreshSession reloads one session into the in-memory registry
 	// after a handler mutates its meta on disk (wick_set_title). nil in
 	// stdio mode and tests — the disk write still lands; only the live
@@ -99,6 +105,14 @@ func (h *Handler) WithAskUserPolicy(fn func(sessionID string) (bool, string)) *H
 func (h *Handler) WithPool(p *agentpool.Pool, layout agentconfig.Layout) *Handler {
 	h.pool = p
 	h.layout = layout
+	return h
+}
+
+// WithAccountQuota wires the provider account quota reader — what
+// wick_usage reports beside the token ledger. Optional: without it the
+// tool omits the account section rather than guessing at one.
+func (h *Handler) WithAccountQuota(fn handlers.AccountQuotaFn) *Handler {
+	h.accountQuota = fn
 	return h
 }
 
@@ -315,8 +329,21 @@ func (h *Handler) handleToolsList(w http.ResponseWriter, r *http.Request, req rp
 		tagIDs := login.GetUserTagIDs(r.Context())
 		tools = append(tools, handlers.WickManagerToolDescriptors(r.Context(), h.connectors, tagIDs, user.IsAdmin())...)
 		tools = append(tools, handlers.SubAgentsToolDescriptors(r.Context(), h.connectors, tagIDs, user.IsAdmin())...)
+		tools = append(tools, handlers.TeamToolDescriptors(r.Context(), h.connectors, tagIDs, user.IsAdmin())...)
 	}
-	writeRPCResult(w, req.ID, handlers.ToolListResult{Tools: tools})
+	writeRPCResult(w, req.ID, handlers.ToolListResult{Tools: featureAllowedTools(r.Context(), tools)})
+}
+
+// featureAllowedTools drops the tools an agent's switched-off features
+// cover. Without an agent scope on ctx it returns tools unchanged.
+func featureAllowedTools(ctx context.Context, tools []handlers.ToolDescriptor) []handlers.ToolDescriptor {
+	out := tools[:0:0]
+	for _, t := range tools {
+		if connectors.ToolAllowed(ctx, t.Name) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // ── tools/call ───────────────────────────────────────────────────────
@@ -354,14 +381,31 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 	h.dispatchTool(w, r, hreq, rsp, p.Name, p.Arguments, user, tagIDs)
 }
 
+// sessionSender exposes the pool's message delivery to wick_compact, or
+// nil when no pool runs in this process (stdio, tests) — the tool then
+// reports itself unavailable instead of silently doing nothing.
+func (h *Handler) sessionSender() handlers.SessionSender {
+	if h.pool == nil {
+		return nil
+	}
+	return h.pool.Send
+}
+
 // dispatchTool routes one tool call to its handler. Extracted from
 // handleToolsCall so the in-process agent path (CallAgentTool, used by
 // the built-in wick provider) shares the exact same routing + handlers
 // as the HTTP MCP transport — one dispatch, no drift.
 func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq handlers.RPCRequest, rsp handlers.Responder, name string, args map[string]any, user *entity.User, tagIDs []string) {
+	// An agent's switched-off feature takes its tools away at dispatch
+	// too, not only from tools/list: a client may call a name it was
+	// never shown.
+	if !connectors.ToolAllowed(r.Context(), name) {
+		rsp.ToolError(w, hreq.ID, "tool "+name+" is switched off for this agent", name)
+		return
+	}
 	switch name {
 	case "wick_list":
-		handlers.WickList(w, r, hreq, rsp, h.connectors, h.layout, args, tagIDs, user.IsAdmin())
+		handlers.WickList(w, r, hreq, rsp, h.connectors, h.layout, args, tagIDs, user)
 	case "wick_search":
 		handlers.WickSearch(w, r, hreq, rsp, h.connectors, h.layout, args, tagIDs, user.IsAdmin())
 	case "wick_get":
@@ -392,9 +436,19 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 		handlers.WickSessionInfo(w, r, hreq, rsp, h.layout, args)
 	case "wick_set_title":
 		handlers.WickSetTitle(w, r, hreq, rsp, h.layout, h.refreshSession, args)
-	// Tickets and notes are connectors (internal/connectors/tickets,
-	// internal/connectors/notes), not meta-tools: a connector is taggable
-	// and auditable per user, which a hard-coded tool is not.
+	// Tickets, notes and the source-repo selection are connectors
+	// (internal/connectors/{tickets,notes,source}), not meta-tools: a
+	// connector is taggable and auditable per user, which a hard-coded
+	// tool is not, and each op keeps its own name and schema instead of
+	// being an action string on one overloaded tool.
+	case "wick_context":
+		handlers.WickContext(w, r, hreq, rsp, h.layout, args)
+	case "wick_usage":
+		handlers.WickUsage(w, r, hreq, rsp, h.layout, h.accountQuota, args)
+	case "wick_compact":
+		handlers.WickCompact(w, r, hreq, rsp, h.layout, h.sessionSender(), args)
+	case "wick_cli_token":
+		handlers.WickCLIToken(w, r, hreq, rsp, h.layout, args)
 	case "wick_schedule_message":
 		handlers.WickScheduleMessage(w, r, hreq, rsp, h.schedule, h.layout, args, user)
 	default:
@@ -403,6 +457,8 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 			handlers.WickManagerExecute(w, r, hreq, rsp, h.connectors, name, args, user, tagIDs)
 		case strings.HasPrefix(name, handlers.SubAgentsPrefix):
 			handlers.SubAgentsExecute(w, r, hreq, rsp, h.connectors, h.layout, name, args, user, tagIDs)
+		case strings.HasPrefix(name, handlers.TeamPrefix):
+			handlers.TeamExecute(w, r, hreq, rsp, h.connectors, h.layout, name, args, user, tagIDs)
 		default:
 			rsp.WriteError(w, hreq.ID, errInvalidParams, "unknown tool: "+name, nil)
 		}

@@ -2,6 +2,7 @@ package view
 
 import (
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/ui"
 )
 
 // ConnectionsAdminStats summarises OAuth grant activity for the
@@ -74,11 +75,11 @@ templ connectionRowFragment(row ConnectionRow) {
 			<p class="font-mono text-xs text-black-700 dark:text-black-600">{ row.ClientID }</p>
 		</td>
 		<td class="px-4 py-3 align-top text-xs text-black-800 dark:text-black-600">
-			{ row.GrantedAt.Format("2006-01-02 15:04") }
+			@ui.LocalTime(row.GrantedAt, ui.TimeFormatISO)
 		</td>
 		<td class="px-4 py-3 align-top text-xs text-black-800 dark:text-black-600">
 			if row.LastUsedAt != nil {
-				{ row.LastUsedAt.Format("2006-01-02 15:04") }
+				@ui.LocalTime(*row.LastUsedAt, ui.TimeFormatISO)
 			} else {
 				<span class="text-black-700 dark:text-black-600">never</span>
 			}

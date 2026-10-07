@@ -23,12 +23,14 @@ func registerEventThreadStarted(reg *integration.Registry) {
 		MatchSchema: entity.StructToConfigs(SlackMessageMatch{}),
 		Docs: wickdocs.Docs{
 			OutputShape: map[string]string{
-				"payload.text":       "Raw message text that opened the thread.",
-				"payload.user":       "Slack user ID (U…) of the thread starter.",
-				"payload.channel_id": "Channel ID (C…) or DM ID (D…). Check payload.is_dm for the boolean.",
-				"payload.thread":     "Thread root ts — always equal to payload.ts here (this message IS the thread root).",
-				"payload.ts":         "Message timestamp / Slack message ID. Pass to reply_thread as the thread to answer in.",
-				"payload.is_dm":      "True when channel_id starts with D (direct message).",
+				"payload.text":        "Raw message text that opened the thread.",
+				"payload.user":        "Slack user ID (U…) of the thread starter.",
+				"payload.channel_id":  "Channel ID (C…) or DM ID (D…). Check payload.is_dm for the boolean.",
+				"payload.thread":      "Thread root ts — always equal to payload.ts here (this message IS the thread root).",
+				"payload.ts":          "Message timestamp / Slack message ID. Pass to reply_thread as the thread to answer in.",
+				"payload.is_dm":       "True when channel_id starts with D (direct message).",
+				"payload.bot_user_id": "Slack user ID of the wick bot that RECEIVED this event. One process runs one bot per owning user, so this is how a workflow tells them apart.",
+				"payload.bot_name":    "Handle of the bot that received this event ('' until auth.test lands).",
 			},
 			Quirks: []string{
 				"Fires ONLY for thread roots. A reply to an existing thread fires slack.message but NOT this event.",

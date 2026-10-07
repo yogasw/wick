@@ -13,6 +13,7 @@
   import McpServerForm from "$lib/components/custom/McpServerForm.svelte";
   import JobDetail from "$lib/components/jobs/JobDetail.svelte";
   import ToolDetail from "$lib/components/tools/ToolDetail.svelte";
+  import ServiceDetail from "$lib/components/services/ServiceDetail.svelte";
   import AuditLog from "$lib/components/audit/AuditLog.svelte";
   import { breadcrumbNames } from "$lib/stores/breadcrumb.js";
   import type { BreadcrumbItem } from "@wick-fe/common-ui";
@@ -34,16 +35,24 @@
   let reviewRoute = $derived(currentRoute === "/custom/review");
   let mcpNewRoute = $derived(currentRoute === "/custom/mcp");
   let auditRoute = $derived(currentRoute === "/audit");
+  let pluginsRoute = $derived(currentRoute === "/plugins");
+  /* The Plugins page lives at /admin/plugins now (admin scope). An in-SPA
+     push("/plugins") leaves the SPA for it; the server redirects page loads. */
+  $effect(() => {
+    if (pluginsRoute) window.location.replace("/admin/plugins" + window.location.search);
+  });
   let mcpEditParams = $derived(match("/custom/mcp/:serverID/edit", currentRoute));
   let editParams = $derived(match("/custom/:defID/edit", currentRoute));
   let jobParams = $derived(match("/jobs/:key", currentRoute));
   let toolParams = $derived(match("/tools/:key", currentRoute));
+  let serviceParams = $derived(match("/services/:key", currentRoute));
+  let accountParams = $derived(match("/connectors/:key/:id/accounts/:accountID", currentRoute));
   let testParams = $derived(match("/connectors/:key/:id/test", currentRoute));
   let historyParams = $derived(match("/connectors/:key/:id/history", currentRoute));
   let detailParams = $derived(match("/connectors/:key/:id", currentRoute));
   let listParams = $derived(match("/connectors/:key", currentRoute));
 
-  let rowCrumb = $derived(testParams ?? historyParams ?? detailParams);
+  let rowCrumb = $derived(accountParams ?? testParams ?? historyParams ?? detailParams);
   let customCrumb = $derived.by(() => {
     if (pasteRoute) return "From paste";
     if (manualRoute) return "Manual builder";
@@ -61,12 +70,16 @@
   let rowName = $derived(names.row ?? rowCrumb?.id ?? "");
   let jobName = $derived(names.job ?? jobParams?.key ?? "");
   let toolName = $derived(names.tool ?? toolParams?.key ?? "");
+  let serviceName = $derived(names.service ?? serviceParams?.key ?? "");
 
   const home: BreadcrumbItem = { label: "Connectors", onClick: () => push("/") };
 
   let items = $derived.by<BreadcrumbItem[]>(() => {
     if (auditRoute) {
       return [{ label: "Audit Log" }];
+    }
+    if (pluginsRoute) {
+      return [{ label: "Plugins" }];
     }
     if (jobParams) {
       return [
@@ -79,6 +92,9 @@
         { label: "Tools" },
         { label: toolName, onClick: () => push(`/tools/${encodeURIComponent(toolParams.key)}`), truncate: true },
       ];
+    }
+    if (serviceParams) {
+      return [{ label: "Services" }, { label: serviceName, truncate: true }];
     }
     if (customCrumb) {
       return [home, { label: customCrumb }];
@@ -113,10 +129,14 @@
   {#key currentRoute}
     {#if auditRoute}
       <AuditLog />
+    {:else if pluginsRoute}
+      <div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">Opening Admin → Plugins…</div>
     {:else if jobParams}
       <JobDetail jobKey={jobParams.key} />
     {:else if toolParams}
       <ToolDetail toolKey={toolParams.key} />
+    {:else if serviceParams}
+      <ServiceDetail serviceKey={serviceParams.key} />
     {:else if pasteRoute}
       <CustomPaste />
     {:else if manualRoute}
@@ -129,6 +149,15 @@
       <McpServerForm serverId={mcpEditParams.serverID} />
     {:else if editParams}
       <CustomReview defID={editParams.defID} />
+    {:else if accountParams}
+      <!-- The SAME detail page, narrowed to one account: instance
+           configuration hides, Operations switches to the account's
+           inherit/override view. A separate page drifted from this one. -->
+      <ConnectorDetail
+        connectorKey={accountParams.key}
+        connectorId={accountParams.id}
+        accountId={accountParams.accountID}
+      />
     {:else if testParams}
       <ConnectorTest connectorKey={testParams.key} connectorId={testParams.id} />
     {:else if historyParams}

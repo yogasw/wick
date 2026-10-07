@@ -10,6 +10,14 @@ Quick lookup for terms used across wick docs. Listed in rough order from broades
 
 **Connector** — a wick module designed for LLM consumption via MCP. Lives at `connectors/<name>/`. Carries one shared `Configs` struct and N typed `Operations`. Admin manages rows at `/manager/connectors/{key}`. See [Connector Module](./connector-module).
 
+## Team
+
+**Team** — the full-screen app at `/tools/agents/team` for persistent agents, each with its own persona, `@handle`, chat and access checklist. See [Team](./agents/team/).
+
+**Captain** — the main Team agent (`@captain`), created for you; it manages the other agents through the Team agents connector and proposes access changes for you to approve. Cannot be shared.
+
+**Remote agent** — a Team agent that runs elsewhere (A2A, Slack or a service plugin) and is reached from the roster. See [Mentions & remote agents](./agents/team/mentions-remote).
+
 ## Connectors
 
 **Module** (in connector context) — the Go package under `connectors/<name>/`. Carries `Meta()`, a `Configs` struct, per-op `Input` structs, and `Operations()`.

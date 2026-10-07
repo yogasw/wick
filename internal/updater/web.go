@@ -267,3 +267,19 @@ func (c *Coordinator) MarkApplying() {
 		s.Phase = PhaseApplying
 	})
 }
+
+// MarkApplyFailed reports an apply that came back instead of handing over.
+// The success path never returns — the process is replaced, or a successor
+// takes the socket — so a return IS the failure, and without publishing it
+// the page sits on its spinner forever while the old build keeps serving.
+// The staged binary is still on disk, so the button comes back too.
+func (c *Coordinator) MarkApplyFailed(msg string) {
+	c.set(func(s *Status) {
+		s.Phase = PhaseError
+		s.Error = msg
+		if c.upd != nil {
+			s.HasStaged = c.upd.HasStaged()
+			s.StagedVersion = c.upd.StagedVersion()
+		}
+	})
+}

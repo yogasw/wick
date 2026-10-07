@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"errors"
 	"os"
 	"syscall"
 
@@ -23,4 +24,11 @@ func signalProcess(pid int, sig syscall.Signal) error {
 		return err
 	}
 	return p.Kill()
+}
+
+// reloadSignal is unavailable on Windows: there are no POSIX signals, and
+// descriptor passing (which a graceful handoff needs) does not exist either.
+// Callers fall back to restart.
+func reloadSignal(int) error {
+	return errors.New("graceful reload is not supported on Windows — use restart")
 }

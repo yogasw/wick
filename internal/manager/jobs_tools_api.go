@@ -3,6 +3,7 @@ package manager
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
@@ -36,6 +37,20 @@ type toolDetailJSON struct {
 	Icon         string            `json:"icon"`
 	CanConfigure bool              `json:"can_configure"`
 	Fields       []configFieldJSON `json:"fields"`
+	// Webhooks lists the tool's unauthenticated endpoints, if any. These
+	// answer without a login, so an operator needs to see them here rather
+	// than having to read the module source to learn what is exposed.
+	Webhooks []webhookRouteJSON `json:"webhooks,omitempty"`
+}
+
+// webhookRouteJSON is one row of the "Webhook endpoints" panel on a tool's
+// settings page.
+type webhookRouteJSON struct {
+	Method string `json:"method"`
+	Path   string `json:"path"`
+	// URL is Path prefixed with the configured app URL, ready to paste into
+	// a sender's configuration. Empty when no app URL is configured.
+	URL string `json:"url,omitempty"`
 }
 
 // ownedConfigFields projects a config owner's rows into the SPA field
@@ -157,6 +172,17 @@ func (h *Handler) apiRunJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "started", "run_id": runID})
 }
 
+// apiCancelJob serves POST /manager/api/jobs/{key}/cancel, the JSON twin of
+// cancelJob. Stops the running job (and repairs a stale "running" row).
+func (h *Handler) apiCancelJob(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if err := h.svc.CancelJob(r.Context(), key); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
 // apiJobRun serves GET /manager/api/jobs/{key}/runs/{runID}, the JSON twin
 // of getRun used by the SPA run poller. Status drives the poll loop;
 // result carries the run output (markdown) on completion.
@@ -203,6 +229,7 @@ func (h *Handler) apiToolDetail(w http.ResponseWriter, r *http.Request) {
 		Icon:         t.Icon,
 		CanConfigure: user != nil && user.IsAdmin(),
 		Fields:       ownedConfigFields(rows),
+		Webhooks:     h.webhookRoutesFor(t.Key),
 	})
 }
 
@@ -245,4 +272,23 @@ func jobMaxTimeoutMin(j *entity.Job) int {
 		return 30
 	}
 	return j.MaxTimeoutMin
+}
+
+// webhookRoutesFor projects the webhook routes declared by one tool into
+// the SPA shape, absolutising each path against the configured app URL so
+// the operator can copy a complete endpoint into the sending system.
+func (h *Handler) webhookRoutesFor(key string) []webhookRouteJSON {
+	base := strings.TrimRight(h.configs.AppURL(), "/")
+	out := make([]webhookRouteJSON, 0, len(h.webhooks))
+	for _, wr := range h.webhooks {
+		if wr.ToolKey != key {
+			continue
+		}
+		row := webhookRouteJSON{Method: wr.Method, Path: wr.Path}
+		if base != "" {
+			row.URL = base + wr.Path
+		}
+		out = append(out, row)
+	}
+	return out
 }

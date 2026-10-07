@@ -29,10 +29,17 @@ type CollectResult struct {
 	Profile      string `json:"profile"`
 	Status       string `json:"status"`
 	TurnsUsed    int    `json:"turns_used"`
-	TokensUsed   int    `json:"tokens_used,omitempty"`
-	Result       string `json:"result"`
-	Note         string `json:"note,omitempty"`
-	UserSteered  bool   `json:"user_steered,omitempty"`
+	// MaxTurns is the cap this delegation ran under, so a partial result
+	// can be read as "10 of 10 turns spent" rather than a bare count.
+	MaxTurns    int    `json:"max_turns,omitempty"`
+	TokensUsed  int    `json:"tokens_used,omitempty"`
+	Result      string `json:"result"`
+	Note        string `json:"note,omitempty"`
+	UserSteered bool   `json:"user_steered,omitempty"`
+	// Partial marks a terminal result that is NOT a finished answer — the
+	// run ended on a cap or a stop. Same contract as Result.Partial on the
+	// synchronous path, so a leader reads both shapes the same way.
+	Partial bool `json:"partial,omitempty"`
 	// Pending marks a delegation that has not finished yet: Result is
 	// empty and the leader should carry on rather than wait here.
 	Pending bool `json:"pending,omitempty"`
@@ -125,6 +132,7 @@ func (s *Service) Collect(ctx context.Context, delegationID, actorID string, isA
 		Profile:      d.ProfileKey,
 		Status:       d.Status,
 		TurnsUsed:    d.TurnsUsed,
+		MaxTurns:     d.MaxTurns,
 		TokensUsed:   d.TokensUsed,
 		UserSteered:  d.UserSteered,
 	}
@@ -143,6 +151,7 @@ func (s *Service) Collect(ctx context.Context, delegationID, actorID string, isA
 	}
 
 	out.Result = d.Result
+	out.Partial = isPartialStatus(d.Status)
 	out.Note = collectNote(d)
 	out.Envelope = EnvelopeOf(d)
 
@@ -178,12 +187,13 @@ func (s *Service) CollectPending(ctx context.Context, parentSessionID string) ([
 	for _, d := range rows {
 		item := CollectResult{
 			DelegationID: d.ID, Profile: d.ProfileKey, Status: d.Status,
-			TurnsUsed: d.TurnsUsed, TokensUsed: d.TokensUsed,
+			TurnsUsed: d.TurnsUsed, MaxTurns: d.MaxTurns, TokensUsed: d.TokensUsed,
 			UserSteered: d.UserSteered,
 		}
 		if entity.IsTerminalDelegationStatus(d.Status) {
 			row := d
 			item.Result = d.Result
+			item.Partial = isPartialStatus(d.Status)
 			item.Note = collectNote(&row)
 			item.Envelope = EnvelopeOf(&row)
 		} else {
@@ -212,6 +222,21 @@ func (s *Service) progressOf(d *entity.AgentDelegation) string {
 	return strings.TrimSpace(s.Runner.PartialText(d.ChildSessionID, d.ChildAgent))
 }
 
+// isPartialStatus reports whether a terminal status means "as far as it
+// got" rather than "this is the answer".
+//
+// Interrupted and failed are in deliberately: all four hand back text
+// that is not a finished answer, and a leader that only checks for
+// stopped_max_turns treats the other three as complete.
+func isPartialStatus(status string) bool {
+	switch status {
+	case entity.DelegationStoppedMaxTurns, entity.DelegationStoppedBudget,
+		entity.DelegationInterrupted, entity.DelegationFailed:
+		return true
+	}
+	return false
+}
+
 // collectNote explains a non-clean terminal status to the leader, reusing
 // the same wording the synchronous path uses so a result reads the same
 // either way.
@@ -220,7 +245,7 @@ func collectNote(d *entity.AgentDelegation) string {
 	case entity.DelegationInterrupted:
 		return interruptNote
 	case entity.DelegationStoppedMaxTurns:
-		return "Stopped at its turn limit. The result above is partial."
+		return MaxTurnsNote(d.ID, d.TurnsUsed, d.MaxTurns)
 	case entity.DelegationStoppedBudget:
 		return "Stopped on budget. The result above is partial."
 	case entity.DelegationFailed:

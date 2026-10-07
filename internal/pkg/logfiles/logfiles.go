@@ -118,6 +118,9 @@ func Setup(appName string, retentionDays int) (Set, func(), error) {
 	}
 
 	origOut, origErr := os.Stdout, os.Stderr
+	// Remember the real stdio so a forked successor can inherit IT rather
+	// than our log pipes. See WithOriginalStdio.
+	realStdout, realStderr = origOut, origErr
 
 	var wg sync.WaitGroup
 	var pipeWriters []*os.File
@@ -161,12 +164,57 @@ func Setup(appName string, retentionDays int) (Set, func(), error) {
 		for _, w := range pipeWriters {
 			w.Close()
 		}
-		wg.Wait()
+		// Bounded wait, NOT wg.Wait().
+		//
+		// Each copier reads until its pipe hits EOF, which needs every writer
+		// of that pipe closed. During a graceful upgrade the successor process
+		// inherits this process's stdout/stderr — it holds the write ends
+		// open for its whole life — so an unbounded wait here never returns:
+		// the old process hangs after a clean drain, and because tableflip
+		// refuses to upgrade while a parent is still alive, the NEXT upgrade
+		// is refused too. Losing a couple of trailing log lines is the right
+		// trade against a daemon that cannot be replaced.
+		drained := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(drained)
+		}()
+		select {
+		case <-drained:
+		case <-time.After(2 * time.Second):
+		}
 		fApp.Close()
 		fSrv.Close()
 		fWrk.Close()
 		fMCP.Close()
 	}, nil
+}
+
+// realStdout / realStderr are the process's stdio as it was handed to us,
+// before Setup redirected os.Stdout / os.Stderr into the log pipes.
+var realStdout, realStderr *os.File
+
+// WithOriginalStdio runs fn with os.Stdout / os.Stderr temporarily restored to
+// the process's real stdio.
+//
+// This exists for forking a successor during a graceful upgrade. The fork
+// hands the child os.Stdout / os.Stderr as they are at that moment, and after
+// Setup those are OUR log pipes — read by goroutines that die with this
+// process. The child would inherit fd 1 and 2 pointing at pipes nobody reads,
+// and Go makes SIGPIPE on fd 1/2 fatal: the successor was dying seconds after
+// a perfectly clean handoff. It also meant the child's early output was
+// copied into the parent's log file, so every boot line appeared twice.
+//
+// The swap is brief and only affects direct writers to os.Stdout/os.Stderr
+// during the fork; the loggers write to their files either way.
+func WithOriginalStdio(fn func() error) error {
+	if realStdout == nil || realStderr == nil {
+		return fn()
+	}
+	so, se := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = realStdout, realStderr
+	defer func() { os.Stdout, os.Stderr = so, se }()
+	return fn()
 }
 
 // pruneOldLogs removes <prefix>-YYYY-MM-DD.log files older than retentionDays.

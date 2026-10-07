@@ -31,6 +31,11 @@ func memoryAdmits(minFreeMB int, availBytes uint64, availKnown bool) bool {
 // memoryAdmitsNow answers for the live machine, logging a refusal so a
 // queued spawn is never a silent mystery.
 func (p *Pool) memoryAdmitsNow() bool {
+	if p.cfg.SpawnHold != nil && p.cfg.SpawnHold() {
+		log.Info().Str("component", "pool").
+			Msg("spawn queued: free memory is falling fast toward the floor")
+		return false
+	}
 	if p.cfg.MinFreeMemoryLoader == nil {
 		return true
 	}

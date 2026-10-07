@@ -10,24 +10,35 @@ import (
 	"runtime"
 )
 
+// IsTermux reports whether the process is running inside Termux. Checking the
+// well-known prefix as a fallback covers service processes where
+// TERMUX_VERSION was not preserved.
+func IsTermux() bool {
+	if os.Getenv("TERMUX_VERSION") != "" {
+		return true
+	}
+	_, err := os.Stat("/data/data/com.termux/files/usr")
+	return err == nil
+}
+
 // HasGUI returns true if the current process is running in an
 // environment where a system tray (or any GUI) can reasonably be
 // shown.
 //
 // Detection layers (defensive — any one signal of "headless" wins):
 //
-//	1. TERMUX_VERSION env       — Termux sets this; never a GUI.
-//	2. GOOS == "android"        — Go for Android Termux build.
-//	3. Linux without DISPLAY    — no X server, no Wayland session.
-//	4. macOS over SSH           — remote session, no Aqua UI.
-//	5. Anything unknown         — default to headless to avoid
-//	                              hanging on a missing display.
+//  1. TERMUX_VERSION env       — Termux sets this; never a GUI.
+//  2. GOOS == "android"        — Go for Android Termux build.
+//  3. Linux without DISPLAY    — no X server, no Wayland session.
+//  4. macOS over SSH           — remote session, no Aqua UI.
+//  5. Anything unknown         — default to headless to avoid
+//     hanging on a missing display.
 //
 // Windows + macOS desktop sessions are assumed to have a GUI.
 // Headless-build users still rely on the `headless` build tag to
 // strip systemtray symbols; this helper is the runtime companion.
 func HasGUI() bool {
-	if os.Getenv("TERMUX_VERSION") != "" {
+	if IsTermux() {
 		return false
 	}
 	switch runtime.GOOS {

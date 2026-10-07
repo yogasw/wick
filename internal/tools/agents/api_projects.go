@@ -164,7 +164,7 @@ type ProjectPinnedSession struct {
 // project defaults dropdown, sourced from the same cached status the
 // new-session composer uses so both selectors agree on what's healthy.
 func projectProviderList(c *tool.Ctx) []ProviderListItem {
-	ps := providerChoicesCached(c.Context())
+	ps := providerChoicesFor(c)
 	out := make([]ProviderListItem, 0, len(ps))
 	for _, p := range ps {
 		var models []ProviderModelItem
@@ -231,7 +231,7 @@ func apiProjectDetail(c *tool.Ctx) {
 		Pinned:          []ProjectPinnedSession{},
 		Widget:          p.Meta.Widget,
 		WidgetInherited: globalWidgetPolicy(),
-		Ticket:          p.Meta.Ticket,
+		Ticket:          redactTicketConfig(p.Meta.Ticket),
 	}
 
 	// Chats, not sessions: a sub-agent runs in its leader's project but is

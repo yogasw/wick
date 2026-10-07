@@ -1,0 +1,4 @@
+{"type": "tool_execution_start", "toolCallId": "r1", "toolName": "read", "args": {"path": "shot.png"}}
+{"type": "tool_execution_end", "toolCallId": "r1", "toolName": "read", "result": {"content": [{"type": "text", "text": "Read image file [image/png]"}, {"type": "image", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "mimeType": "image/png"}]}, "isError": false}
+{"type": "tool_execution_start", "toolCallId": "r2", "toolName": "edit", "args": {"path": "a.go", "oldText": "a", "newText": "b"}}
+{"type": "tool_execution_end", "toolCallId": "r2", "toolName": "edit", "result": {"content": [{"type": "text", "text": "Error: oldText not found"}]}, "isError": true}

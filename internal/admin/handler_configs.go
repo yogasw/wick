@@ -5,6 +5,7 @@ import (
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/sso"
 	"net/http"
+	"os"
 
 	"github.com/rs/zerolog/log"
 )
@@ -12,7 +13,15 @@ import (
 // ── Configs hub ──────────────────────────────────────────────
 
 func (h *Handler) configsHubPage(w http.ResponseWriter, r *http.Request) {
-	view.ConfigsHubPage(login.GetUser(r.Context())).Render(r.Context(), w)
+	view.ConfigsHubPage(login.GetUser(r.Context()), isTermuxHost()).Render(r.Context(), w)
+}
+
+func isTermuxHost() bool {
+	if os.Getenv("PREFIX") == "" {
+		return false
+	}
+	_, err := os.Stat("/data/data/com.termux/files/usr")
+	return err == nil
 }
 
 // ── SSO ──────────────────────────────────────────────────────

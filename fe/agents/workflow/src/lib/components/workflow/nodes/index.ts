@@ -46,6 +46,11 @@ export const nodeRegistry: Record<NodeType, Component> = {
   datatable_upsert: DatatableNode,
   datatable_delete: DatatableNode,
   datatable_count: DatatableNode,
+  // Rendered by StickyNote.svelte in the canvas back layer, never via
+  // this registry; EndNode only satisfies the Record type.
+  sticky_note: EndNode,
+  // No dedicated card yet; componentFor already fell back to EndNode.
+  webhook_respond: EndNode,
 };
 
 export function componentFor(t: NodeType): Component {

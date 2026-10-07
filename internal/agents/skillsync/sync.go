@@ -93,8 +93,18 @@ func OwnLabel() string { return appname.Resolve() }
 // the label just never matched — which hid every skill from the `/` composer
 // menu and from workflow skill listings.
 func DirLabelForProvider(providerType string) string {
-	if providerType == "wick" {
+	switch providerType {
+	case "wick":
 		return OwnLabel()
+	case "omp":
+		// omp's native user-level skill root is ~/.agents/skills (on by
+		// default; foreign ~/.claude/skills needs enabledProviders) —
+		// oh-my-pi docs/skills.md.
+		return "agents"
+	case "opencode":
+		// opencode loads ~/.claude/skills (and ~/.agents/skills) natively —
+		// opencode docs skills.mdx.
+		return "claude"
 	}
 	return providerType
 }

@@ -5,7 +5,6 @@ package setup
 
 import (
 	"context"
-	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/pool"
@@ -16,6 +15,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/cost"
 	"gorm.io/gorm"
 
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/workflow/datatable"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/guard"
@@ -32,8 +32,8 @@ import (
 // Manager bundles every wired piece so server.go can hand one struct
 // to consumers (UI handlers, MCP transport, jobs).
 type Manager struct {
-	Layout     config.Layout
-	Service    service.Service
+	Layout  config.Layout
+	Service service.Service
 	// Repo is the DB-backed workflow repository. Nil when no DB is
 	// wired (test paths) — every consumer that touches it must
 	// nil-check first. Populated by WithDB.
@@ -42,16 +42,20 @@ type Manager struct {
 	Engine     *engine.Engine
 	Router     *trigger.Router
 	Cron       *trigger.CronScheduler
-	ScheduleAt *trigger.ScheduleAtScheduler
-	Canvas     *canvas.Canvas
+	// DeferCron holds cron trigger firing back at Start, leaving it to an
+	// explicit StartCron. The daemon sets it so cron only begins once this
+	// process owns intake (see internal/pkg/upgrade.IntakeBaton).
+	DeferCron   bool
+	ScheduleAt  *trigger.ScheduleAtScheduler
+	Canvas      *canvas.Canvas
 	Channels    *channel.Registry
 	Integration *integration.Registry
 	Connectors  *connector.Registry
-	Providers  *provider.Registry
-	DataTables datatable.Service
-	Guard      *guard.Guard
-	Cost       *cost.Tracker
-	MCP        *mcp.Ops
+	Providers   *provider.Registry
+	DataTables  datatable.Service
+	Guard       *guard.Guard
+	Cost        *cost.Tracker
+	MCP         *mcp.Ops
 
 	// AgentPool + AgentSubscribe route the `agent` + `session_init`
 	// node types through the shared agent pool. Nil = engine still
@@ -59,6 +63,10 @@ type Manager struct {
 	// queue/sidebar/session-reuse benefits. See workflow/pool.md.
 	AgentPool      *pool.Pool
 	AgentSubscribe nodes.AgentSubscribeFn
+
+	// retentionOpts is set by StartRunRetention and read by
+	// StartRunSweep, which starts later — once intake is ours.
+	retentionOpts func() CleanupOptions
 }
 
 // New constructs every dependency wired to a single Layout. Channels,
@@ -94,6 +102,7 @@ func New(layout config.Layout) *Manager {
 	eng.Register(workflow.NodeSwitch, nodes.NewSwitchExecutor())
 	eng.Register(workflow.NodeTransform, nodes.NewTransformExecutor())
 	eng.Register(workflow.NodeEnd, nodes.NewEndExecutor())
+	eng.Register(workflow.NodeStickyNote, nodes.NewStickyNoteExecutor())
 	eng.Register(workflow.NodeClassify, nodes.NewClassifyExecutor(provReg))
 	eng.Register(workflow.NodeAgent, nodes.NewAgentExecutor(provReg, nil, nil))
 	eng.Register(workflow.NodeSessionInit, nodes.NewSessionInitExecutor(nil))
@@ -149,7 +158,7 @@ func (m *Manager) WithDB(db *gorm.DB) *Manager {
 	if db == nil {
 		return m
 	}
-	repo := repository.New(db)
+	repo := repository.New(db).WithSessionAccess(m.canPinSession)
 	m.Repo = repo
 	dbsvc := service.NewDB(m.Layout, repo)
 	m.Service = dbsvc
@@ -247,10 +256,21 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := Bootstrap(ctx, m.Service, m.Router, m.Cron, m.ScheduleAt); err != nil {
 		return err
 	}
-	if m.Cron != nil {
+	if m.Cron != nil && !m.DeferCron {
 		m.Cron.Start(ctx)
 	}
 	return nil
+}
+
+// StartCron starts the cron trigger scheduler on its own. Paired with
+// DeferCron so the daemon can bootstrap the workflow subsystem at boot but
+// hold cron firing until this process actually owns intake — during a
+// graceful upgrade the predecessor keeps firing until it has drained, and two
+// schedulers would run every cron workflow twice.
+func (m *Manager) StartCron(ctx context.Context) {
+	if m.Cron != nil {
+		m.Cron.Start(ctx)
+	}
 }
 
 // Stop drains the router workers cleanly.
@@ -335,55 +355,27 @@ func ToggleAndReload(ctx context.Context, svc service.Service, router *trigger.R
 	return HotReload(ctx, svc, router, cron, schedAt, id)
 }
 
-// CleanupOptions tunes the daily run-retention pass.
-type CleanupOptions struct {
-	SuccessTTL time.Duration
-	FailedTTL  time.Duration
-	KeepMax    int
-	Now        func() time.Time
-}
-
-// CleanupRuns walks runs/ and removes old ones per policy.
-func CleanupRuns(layout config.Layout, opts CleanupOptions) (removed int, err error) {
-	if opts.Now == nil {
-		opts.Now = time.Now
+// canPinSession answers whether a workflow author may point a node at an
+// existing session. Every agent turn in a session runs with that SESSION's
+// identity, so pinning one is borrowing whoever owns it — the same act a
+// schedule has always had to pass canManageSession for.
+//
+// Deliberately narrow: owner, or somebody who has already spoken in it, or a
+// session nobody owns (nothing to protect, and the common case of pinning an
+// id wick has not created yet). Project sharing and the admin see-all knob are
+// NOT consulted here, so this can only ever refuse more than the session page
+// would — and a refusal lands on the person typing the id, where it can be
+// fixed, rather than on a run at 3am.
+func (m *Manager) canPinSession(userID, sessionID string) bool {
+	if userID == "" || sessionID == "" {
+		return true
 	}
-	if opts.SuccessTTL == 0 {
-		opts.SuccessTTL = 30 * 24 * time.Hour
-	}
-	if opts.FailedTTL == 0 {
-		opts.FailedTTL = 90 * 24 * time.Hour
-	}
-	svc := service.New(layout)
-	store := state.New(layout)
-	ids, err := svc.List()
+	sess, err := session.Load(m.Layout, sessionID)
 	if err != nil {
-		return 0, err
+		return true // not created yet: this workflow will make it, and own it
 	}
-	for _, id := range ids {
-		runs, err := store.ListRuns(id)
-		if err != nil {
-			continue
-		}
-		for i, rid := range runs {
-			if opts.KeepMax > 0 && i < opts.KeepMax {
-				continue
-			}
-			st, err := store.Load(id, rid)
-			if err != nil {
-				continue
-			}
-			ttl := opts.SuccessTTL
-			if st.Status == workflow.StatusFailed {
-				ttl = opts.FailedTTL
-			}
-			if st.EndedAt != nil && opts.Now().Sub(*st.EndedAt) > ttl {
-				dir := layout.WorkflowRunDir(id, rid)
-				if err := removeAll(dir); err == nil {
-					removed++
-				}
-			}
-		}
+	if sess.Meta.UserID == "" || sess.Meta.UserID == userID {
+		return true
 	}
-	return removed, nil
+	return sess.Meta.IsParticipant(userID)
 }

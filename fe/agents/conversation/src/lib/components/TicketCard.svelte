@@ -1,8 +1,16 @@
 <script lang="ts">
-  import type { TicketCard, TicketField } from "../types/agents.js";
+  import type { TicketCard, TicketField, TicketSessionRow } from "../types/agents.js";
   import { timeAgo } from "../timeFormat.js";
+  import { sessionRowBadge } from "../lifecycleCls.js";
+  /* The clock, so a card's "5h ago" ages on its own instead of freezing at
+     whatever it said when the board was drawn. */
+  import { now } from "../stores/now.js";
+  import { Effect } from "effect";
+  import { WickClientLayer } from "@wick-fe/common-api";
+  import { getTicket } from "../api/tickets.js";
 
   type Props = {
+    base: string;
     ticket: TicketCard;
     /* Project schema, so fields render with their labels, not raw keys. */
     schema?: TicketField[];
@@ -19,9 +27,14 @@
        target then, so dragging a ticket between columns does not make
        every other card glow as if it could receive it. */
     sessionDragging?: boolean;
+    /* The board's live search text, lower-cased. Marked up where it matched
+       so a card in a filtered board says WHY it survived — otherwise a hit
+       on an assignee's name looks like a hit on a title nobody can see. */
+    highlight?: string;
   };
 
   let {
+    base,
     ticket,
     schema,
     users,
@@ -31,28 +44,83 @@
     onSessionDrop,
     onOpenSession,
     sessionDragging = false,
+    highlight = "",
   }: Props = $props();
+
+  /* Split a string into plain and matched runs. Returned as data rather than
+     rendered HTML: a ticket title is user text, and building markup out of it
+     is how an innocent field becomes an injection. */
+  function marks(text: string): { text: string; hit: boolean }[] {
+    const q = highlight.trim().toLowerCase();
+    if (q === "" || text === "") return [{ text, hit: false }];
+    const hay = text.toLowerCase();
+    const out: { text: string; hit: boolean }[] = [];
+    let at = 0;
+    for (;;) {
+      const i = hay.indexOf(q, at);
+      if (i < 0) break;
+      if (i > at) out.push({ text: text.slice(at, i), hit: false });
+      out.push({ text: text.slice(i, i + q.length), hit: true });
+      at = i + q.length;
+    }
+    if (out.length === 0) return [{ text, hit: false }];
+    if (at < text.length) out.push({ text: text.slice(at), hit: false });
+    return out;
+  }
 
   let dropHover = $state(false);
 
+  const assigneeIds = $derived(
+    ticket.assignees?.length ? ticket.assignees : ticket.assignee ? [ticket.assignee] : [],
+  );
   const assigneeName = $derived(
-    ticket.assignee ? (users?.[ticket.assignee] ?? ticket.assignee) : "",
+    assigneeIds.length > 0 ? (users?.[assigneeIds[0]] ?? assigneeIds[0]) : "",
+  );
+  /* A card has room for one name. The rest are a "+2" — seeing that work is
+     shared matters on the board; seeing exactly who is what the ticket's own
+     page is for. The names ride along in the tooltip. */
+  const extraNames = $derived(
+    assigneeIds.slice(1).map((id) => users?.[id] ?? id),
   );
 
+  /* A card shows only schema fields marked show_on_card, in schema order so
+     cards in one column line up. The server already filters to the same set;
+     doing it here too means an unmarked field can never leak onto a card.
+     Everything else — unmarked fields, values written outside the schema via
+     the REST surface — lives on the ticket's own page. */
   const fieldEntries = $derived.by(() => {
     const f = ticket.fields ?? {};
     const out: { label: string; value: string }[] = [];
-    // Schema order first so cards in one column line up.
     for (const def of schema ?? []) {
-      if (f[def.key]) out.push({ label: def.label || def.key, value: f[def.key] });
-    }
-    for (const [k, v] of Object.entries(f)) {
-      if (!(schema ?? []).some((d) => d.key === k) && v) out.push({ label: k, value: v });
+      if (def.show_on_card && f[def.key]) {
+        out.push({ label: def.label || def.key, value: f[def.key] });
+      }
     }
     return out;
   });
 
-  const sessionRows = $derived(ticket.session_rows ?? []);
+  /* The board payload carries one page of rows per card (the cap that keeps
+     a big project cheap to poll). Scrolling the card's OWN row area to its
+     end lazily fetches the ticket's full session list once; the rows scroll
+     inside the card, never stretching the column. */
+  let expanded = $state<TicketSessionRow[] | null>(null);
+  let loadingMore = $state(false);
+  $effect(() => {
+    // A board reload hands us a fresh ticket — drop the stale expansion.
+    ticket.session_rows;
+    expanded = null;
+  });
+  const sessionRows = $derived(expanded ?? ticket.session_rows ?? []);
+  const moreSessions = $derived(expanded === null && ticket.sessions > sessionRows.length);
+
+  function loadAllSessions() {
+    if (loadingMore) return;
+    loadingMore = true;
+    Effect.runPromise(getTicket(base, ticket.id).pipe(Effect.provide(WickClientLayer)))
+      .then((d) => { expanded = d.sessions; })
+      .catch(() => { /* the +page link on the ticket still shows them */ })
+      .finally(() => { loadingMore = false; });
+  }
 
   function initial(name: string): string {
     return name.trim().charAt(0).toUpperCase() || "?";
@@ -88,24 +156,37 @@
       : "border-white-300 hover:border-green-500 dark:border-navy-600 dark:hover:border-green-500",
   ].join(" ")}
 >
-  <!-- The ticket code leads: it is what gets quoted in chat and standups. -->
-  <div class="flex items-center gap-2">
-    <span class="rounded bg-white-200 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-black-800 dark:bg-navy-800 dark:text-black-600">
-      {ticket.id}
+  <!-- The ticket code leads: it is what gets quoted in chat and standups.
+       An adopted external id can be 32+ characters, so it truncates rather
+       than pushing past the card's edge — the full code is on the page. -->
+  <div class="flex min-w-0 items-center gap-2">
+    <span
+      title={ticket.id}
+      class="min-w-0 truncate rounded bg-white-200 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-black-800 dark:bg-navy-800 dark:text-black-600"
+    >
+      {#each marks(ticket.id) as part}<span
+          class={part.hit ? "rounded-sm bg-cau-100 text-cau-400" : ""}>{part.text}</span>{/each}
     </span>
     {#if ticket.stale}
-      <span class="rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-medium text-neg-400">stale</span>
+      <span class="shrink-0 rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-medium text-neg-400">stale</span>
     {/if}
   </div>
 
-  <p class="mt-1.5 line-clamp-2 text-sm font-medium text-black-900 dark:text-white-100">
-    {ticket.title || "Untitled ticket"}
+  <p
+    data-testid={"ticket-title-" + ticket.id}
+    class="mt-1.5 line-clamp-2 break-words text-sm font-medium text-black-900 dark:text-white-100"
+  >
+    {#each marks(ticket.title || "Untitled ticket") as part}<span
+        class={part.hit ? "rounded-sm bg-cau-100 text-cau-400" : ""}>{part.text}</span>{/each}
   </p>
 
   {#if fieldEntries.length > 0}
     <div class="mt-2 flex flex-wrap gap-1">
       {#each fieldEntries as f (f.label)}
-        <span class="rounded bg-white-200 px-1.5 py-0.5 text-[10px] text-black-800 dark:bg-navy-800 dark:text-black-600">
+        <span
+          title={f.label + ": " + f.value}
+          class="max-w-full truncate rounded bg-white-200 px-1.5 py-0.5 text-[10px] text-black-800 dark:bg-navy-800 dark:text-black-600"
+        >
           {f.label}: {f.value}
         </span>
       {/each}
@@ -114,23 +195,33 @@
 
   <div class="mt-2 flex items-center gap-2 text-[11px] text-black-700 dark:text-black-600">
     {#if assigneeName}
-      <span class="inline-flex min-w-0 items-center gap-1" title={assigneeName}>
+      <span
+        class="inline-flex min-w-0 items-center gap-1"
+        title={[assigneeName, ...extraNames].join(", ")}
+      >
         <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-green-500 text-[9px] font-semibold text-white-100">
           {initial(assigneeName)}
         </span>
-        <span class="max-w-[88px] truncate">{assigneeName}</span>
+        <span class="max-w-[88px] truncate">{#each marks(assigneeName) as part}<span
+            class={part.hit ? "rounded-sm bg-cau-100 text-cau-400" : ""}>{part.text}</span>{/each}</span>
+        {#if extraNames.length > 0}
+          <span
+            data-testid="assignee-extra"
+            class="shrink-0 rounded-full bg-white-200 px-1 text-[10px] font-medium text-black-800 dark:bg-navy-800 dark:text-black-600"
+          >+{extraNames.length}</span>
+        {/if}
       </span>
     {:else}
       <span>unassigned</span>
     {/if}
-    <span class="ml-auto shrink-0">{timeAgo(ticket.updated_at)}</span>
+    <span class="ml-auto shrink-0">{timeAgo(ticket.updated_at, $now)}</span>
   </div>
 
   <!-- The ticket's sessions, listed rather than counted: a row is the drag
        handle for moving that conversation to another ticket, which a number
        could never be. -->
   {#if sessionRows.length > 0}
-    <ul class="mt-2 flex flex-col gap-1 border-t border-white-300 pt-2 dark:border-navy-600">
+    <ul class="mt-2 flex max-h-40 flex-col gap-1 overflow-y-auto border-t border-white-300 pt-2 dark:border-navy-600">
       {#each sessionRows as s (s.id)}
         <li>
           <div
@@ -148,22 +239,27 @@
               <path d="M6 4h.01M6 8h.01M6 12h.01M10 4h.01M10 8h.01M10 12h.01" stroke-linecap="round"></path>
             </svg>
             <span class="min-w-0 flex-1 truncate text-black-800 dark:text-black-600">{s.label || s.id}</span>
-            {#if s.lifecycle === "working"}
-              <span class="shrink-0 rounded bg-pos-100 px-1 text-[9px] font-medium text-pos-400">live</span>
+            {#if sessionRowBadge(s.lifecycle)}
+              <span class="shrink-0 rounded bg-pos-100 px-1 text-[9px] font-medium text-pos-400">{sessionRowBadge(s.lifecycle)}</span>
             {/if}
           </div>
         </li>
       {/each}
       <!-- The card carries a page of rows, not all of them: a ticket with
-           twenty sessions must not stretch the column. The rest are on the
-           ticket's own page. -->
-      {#if ticket.sessions > sessionRows.length}
+           twenty sessions must not stretch the column. "+N more" pulls the
+           REST of the rows into the card (which then scrolls within its
+           max height) — in place, no navigation. Not a scroll-sentinel on
+           purpose: a card short enough to fit shows its end immediately,
+           and auto-fetching every visible card would undo the payload cap
+           the board polls on. -->
+      {#if moreSessions || loadingMore}
         <li>
           <button
             type="button"
-            onclick={(e) => { e.stopPropagation(); onOpen(ticket.id); }}
-            class="w-full rounded px-1.5 py-0.5 text-left text-[10px] text-black-700 transition-colors hover:text-green-600 dark:text-black-600 dark:hover:text-green-400"
-          >+{ticket.sessions - sessionRows.length} more session{ticket.sessions - sessionRows.length === 1 ? "" : "s"}</button>
+            disabled={loadingMore}
+            onclick={(e) => { e.stopPropagation(); loadAllSessions(); }}
+            class="w-full rounded px-1.5 py-0.5 text-left text-[10px] text-black-700 transition-colors hover:text-green-600 disabled:opacity-60 dark:text-black-600 dark:hover:text-green-400"
+          >{loadingMore ? "Loading…" : `+${ticket.sessions - sessionRows.length} more session${ticket.sessions - sessionRows.length === 1 ? "" : "s"}`}</button>
         </li>
       {/if}
     </ul>

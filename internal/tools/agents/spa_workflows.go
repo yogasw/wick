@@ -17,6 +17,7 @@ import (
 	wfengine "github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
+	wfservice "github.com/yogasw/wick/internal/agents/workflow/service"
 	"github.com/yogasw/wick/internal/agents/workflow/setup"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/login"
@@ -82,6 +83,7 @@ func registerSPAWorkflows(r tool.Router) {
 	r.POST("/api/workflows/lock/{id}", spaWorkflowLock)
 	r.POST("/api/workflows/run/{id}", spaWorkflowRunNow)
 	r.GET("/api/workflows/runs/{id}", spaWorkflowRuns)
+	r.POST("/api/workflows/runs/{id}/delete-all", spaWorkflowRunsDeleteAll)
 	r.POST("/api/workflows/runs/{id}/{runID}/delete", spaWorkflowRunDelete)
 	r.POST("/api/workflows/runs/{id}/{runID}/rerun", spaWorkflowRerun)
 	r.POST("/api/workflows/exec-node/{id}", spaExecNode)
@@ -130,17 +132,18 @@ func spaWorkflowCreate(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "name is required"})
 		return
 	}
+	// The owner is stamped by Create, so it lands on the workflow row and
+	// the first draft together. Patching it in afterwards left the row's
+	// created_by empty, and publish no longer backfills it — ownership is
+	// the creator's, decided once, here.
 	w, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{
-		Name:     body.Name,
-		Template: body.Template,
+		Name:      body.Name,
+		Template:  body.Template,
+		CreatedBy: actorID(c),
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
-	}
-	if a := actorID(c); a != "" {
-		w.CreatedBy = a
-		_ = globalWorkflowMgr.Service.SaveDraft(w.ID, w)
 	}
 	if globalTagsSvc != nil {
 		_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), w.ID, actorID(c))
@@ -172,7 +175,7 @@ func spaWorkflowImport(c *tool.Ctx) {
 	}
 	w.ID = ""
 	w.CreatedAt = time.Time{}
-	created, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{Name: w.Name})
+	created, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{Name: w.Name, CreatedBy: actorID(c)})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -202,8 +205,9 @@ func spaWorkflowDuplicate(c *tool.Ctx) {
 		return
 	}
 	w, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{
-		Name:     src.Name + " copy",
-		Template: "empty",
+		Name:      src.Name + " copy",
+		Template:  "empty",
+		CreatedBy: actorID(c),
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -230,6 +234,33 @@ func spaWorkflowDuplicate(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"id": w.ID, "name": w.Name})
 }
 
+// workflowsVisibleTo narrows the list to what a non-admin may see.
+//
+// Ownership of a workflow is recorded in TWO places and they drift apart:
+// the created_by stamp on the row — which is what /admin/workflows displays
+// as Owner and what the owner picker writes — and the "owner:<id>" tag,
+// which is what this filter used to read and nothing else. A workflow from
+// before the tag existed therefore showed its owner on the admin page while
+// that person opened an empty list, and re-picking them in the picker
+// changed nothing because the stamp already matched.
+//
+// Either fact counts as ownership now. Both are written server-side from the
+// acting user and a transfer rewrites the stamp, so neither hands reach to
+// somebody who should not have it — where they disagree, the disagreement is
+// the bug, not a grant.
+func workflowsVisibleTo(summaries []mcp.Summary, userID string, owns func(id string) bool) []mcp.Summary {
+	if userID == "" {
+		return nil
+	}
+	filtered := summaries[:0]
+	for _, s := range summaries {
+		if s.CreatedBy == userID || owns(s.ID) {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered
+}
+
 func spaWorkflowList(c *tool.Ctx) {
 	if notReadyWorkflow(c) {
 		return
@@ -242,14 +273,11 @@ func spaWorkflowList(c *tool.Ctx) {
 	user := login.GetUser(c.Context())
 	if user != nil && !user.IsAdmin() {
 		if globalTagsSvc != nil {
-			filtered := summaries[:0]
-			for _, s := range summaries {
-				owns, _ := globalTagsSvc.UserOwnsResource(c.Context(), user.ID, s.ID)
-				if owns {
-					filtered = append(filtered, s)
-				}
+			owns := func(id string) bool {
+				ok, _ := globalTagsSvc.UserOwnsResource(c.Context(), user.ID, id)
+				return ok
 			}
-			summaries = filtered
+			summaries = workflowsVisibleTo(summaries, user.ID, owns)
 		} else {
 			filtered := summaries[:0]
 			for _, s := range summaries {
@@ -345,10 +373,11 @@ func spaWorkflowSave(c *tool.Ctx) {
 			return
 		}
 	}
-	if a := actorID(c); a != "" {
-		w.CreatedBy = a
-	}
-	if err := globalWorkflowMgr.Service.SaveDraft(id, w); err != nil {
+	// The saver is passed as the editor, not stamped as owner: saving the
+	// canvas used to write the actor into created_by, so whoever saved
+	// last ended up owning the workflow. The owner stays the creator; the
+	// editor is who the pinned-session check judges.
+	if err := wfservice.SaveDraftAs(globalWorkflowMgr.Service, id, w, actorID(c)); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -708,6 +737,28 @@ func spaWorkflowRunDelete(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"ok": true})
+}
+
+// spaWorkflowRunsDeleteAll clears a workflow's entire run history.
+// POST /api/workflows/runs/{id}/delete-all -> {ok, deleted}
+//
+// Ignores the list filters on purpose: the Executions panel confirms
+// against the total, and "delete everything except the rows I happen to
+// be filtering on" is a footgun, not a feature.
+func spaWorkflowRunsDeleteAll(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	deleted, err := globalWorkflowMgr.StateStore.DeleteAll(id)
+	if err != nil {
+		// Report the partial count alongside the error — the caller
+		// refreshes either way, and "0 of 900 gone" reads very
+		// differently from "899 of 900 gone".
+		c.JSON(http.StatusInternalServerError, map[string]any{"error": err.Error(), "deleted": deleted})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true, "deleted": deleted})
 }
 
 // parseDateInput accepts "yyyy-mm-dd" (FE date input) or full RFC3339.

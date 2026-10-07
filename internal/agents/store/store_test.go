@@ -118,6 +118,70 @@ func TestAppendUserTurnWithAttachments(t *testing.T) {
 	}
 }
 
+func TestAppendUserTurnWithSenderRoundTrips(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	sender := &Sender{
+		ID:         "U0104",
+		Name:       "Yoga Setiawan",
+		Handle:     "yoga",
+		Channel:    "slack",
+		WickUserID: "wick-uuid-1",
+	}
+	if err := st.AppendUserTurnWithSender("user", "slack", "cek error 401", nil, sender); err != nil {
+		t.Fatal(err)
+	}
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 turn, got %d", len(lines))
+	}
+	got := lines[0]
+	if got.Sender == nil {
+		t.Fatal("sender not persisted")
+	}
+	if *got.Sender != *sender {
+		t.Errorf("sender = %+v, want %+v", *got.Sender, *sender)
+	}
+	// The stored text is what the person typed. The `[wick-sender …]` line
+	// the pool prepends goes to the subprocess only — if it leaked in here,
+	// the web UI would render it as part of the message.
+	if got.Text != "cek error 401" {
+		t.Errorf("text = %q, want the original message with no sender line", got.Text)
+	}
+}
+
+// Turns with nobody behind them (scheduled runs, system messages) and turns
+// written before this field existed must read back cleanly, with no
+// "sender": null noise for tooling that parses conversation.jsonl.
+func TestAppendUserTurnNilSenderOmitted(t *testing.T) {
+	st, layout := newStore(t, "", false)
+	if err := st.AppendUserTurnWithSender("user", "schedule", "nightly run", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := readFirstRaw(t, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, "\"sender\"") {
+		t.Errorf("expected no sender key on disk, got: %s", raw)
+	}
+	if lines := readConvLines(t, layout); len(lines) != 1 || lines[0].Sender != nil {
+		t.Errorf("expected a turn with no sender, got %+v", lines)
+	}
+}
+
+// AppendUserTurn and AppendUserTurnWithAttachments predate senders; they must
+// keep working and simply record no sender.
+func TestAppendUserTurnLegacyHelpersLeaveSenderNil(t *testing.T) {
+	st, layout := newStore(t, "", false)
+	if err := st.AppendUserTurn("user", "ui", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 || lines[0].Sender != nil {
+		t.Errorf("expected no sender, got %+v", lines)
+	}
+}
+
 func TestAppendUserTurnEmptyAttachmentsOmitted(t *testing.T) {
 	// Verify the JSON-on-disk does NOT include an "attachments": null
 	// noise field when no files are attached — existing tooling reading
@@ -265,7 +329,6 @@ func TestRecordRawAppendsRawJSONL(t *testing.T) {
 	}
 }
 
-
 func TestApplyThinkingBufferedInEvents(t *testing.T) {
 	st, layout := newStore(t, "backend", false)
 	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "let me think"})
@@ -329,6 +392,142 @@ func TestApplyThinkingRunsSplitByToolUse(t *testing.T) {
 	}
 	if evs[3].Type != "thinking" || evs[3].Text != "second thought" {
 		t.Fatalf("evs[3]: %+v", evs[3])
+	}
+}
+
+// TestApplyTextSegmentRecordedBeforeTool verifies narration text streamed
+// BEFORE a tool call is recorded into the trace as a "text" event so it keeps
+// its position between tool cards, while the conversation turn still carries
+// the full concatenated reply. Trailing text (after the last tool) is the
+// visible reply bubble and must NOT be duplicated into the trace.
+func TestApplyTextSegmentRecordedBeforeTool(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "checking config "})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "first…"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.ToolResult, Text: "ok", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "config fine."})
+	st.Apply(event.AgentEvent{Type: event.Done})
+
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 {
+		t.Fatalf("turns: %d", len(lines))
+	}
+	if lines[0].Text != "checking config first…config fine." {
+		t.Fatalf("turn text = %q", lines[0].Text)
+	}
+	evs := readTraceEvents(t, layout, lines[0])
+	if len(evs) != 3 {
+		t.Fatalf("events: %d, want 3 (text, tool_use, tool_result): %+v", len(evs), evs)
+	}
+	if evs[0].Type != "text" || evs[0].Text != "checking config first…" {
+		t.Fatalf("evs[0]: %+v", evs[0])
+	}
+	if evs[1].Type != "tool_use" || evs[2].Type != "tool_result" {
+		t.Fatalf("evs[1:]: %+v", evs[1:])
+	}
+}
+
+// TestApplyTextSegmentBeforeThinking verifies a text run is also flushed when
+// a thinking event follows it, so think→text→think ordering survives in the
+// trace instead of the two thinking runs coalescing across the text.
+func TestApplyTextSegmentBeforeThinking(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "plan"})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "status update"})
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "more"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+
+	lines := readConvLines(t, layout)
+	evs := readTraceEvents(t, layout, lines[0])
+	if len(evs) != 4 {
+		t.Fatalf("events: %d, want 4 (thinking, text, thinking, tool_use): %+v", len(evs), evs)
+	}
+	if evs[0].Type != "thinking" || evs[0].Text != "plan" {
+		t.Fatalf("evs[0]: %+v", evs[0])
+	}
+	if evs[1].Type != "text" || evs[1].Text != "status update" {
+		t.Fatalf("evs[1]: %+v", evs[1])
+	}
+	if evs[2].Type != "thinking" || evs[2].Text != "more" {
+		t.Fatalf("evs[2]: %+v", evs[2])
+	}
+}
+
+// TestApplyWhitespaceTextSegmentSkipped verifies pure-whitespace text between
+// tool calls (models often emit "\n\n" separators) does not create an empty
+// text card in the trace.
+func TestApplyWhitespaceTextSegmentSkipped(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "\n\n"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t2"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+
+	lines := readConvLines(t, layout)
+	evs := readTraceEvents(t, layout, lines[0])
+	for _, ev := range evs {
+		if ev.Type == "text" {
+			t.Fatalf("whitespace-only segment recorded: %+v", ev)
+		}
+	}
+}
+
+// TestTextSegmentOffsetResetBetweenTurns guards the segment cursor: turn 2's
+// first tool call must not re-emit (or mis-slice) text that belonged to turn 1.
+func TestTextSegmentOffsetResetBetweenTurns(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	// turn 1 — interim text + tool
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "long first turn narration"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+	// turn 2 — short text + tool
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "hi"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t2"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+
+	lines := readConvLines(t, layout)
+	if len(lines) != 2 {
+		t.Fatalf("turns: %d", len(lines))
+	}
+	evs := readTraceEvents(t, layout, lines[1])
+	if len(evs) != 2 {
+		t.Fatalf("turn2 events: %d, want 2: %+v", len(evs), evs)
+	}
+	if evs[0].Type != "text" || evs[0].Text != "hi" {
+		t.Fatalf("turn2 evs[0]: %+v", evs[0])
+	}
+}
+
+// TestRecoverInflightSegmentsText verifies crash recovery rebuilds the same
+// interleaving a live turn would have had: text_delta runs between tool
+// entries in inflight.jsonl become "text" trace events, and the recovered
+// turn body still carries the full concatenation.
+func TestRecoverInflightSegmentsText(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "working on it"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: " done half"})
+	// No Done — the process "died" here; recover from inflight.jsonl.
+	recovered, err := RecoverInflight(layout, "S1", "backend", "claude/x", nil)
+	if err != nil || !recovered {
+		t.Fatalf("recover: %v %v", recovered, err)
+	}
+	lines := readConvLines(t, layout)
+	last := lines[len(lines)-1]
+	if last.Text != "working on it done half" {
+		t.Fatalf("recovered text = %q", last.Text)
+	}
+	evs := readTraceEvents(t, layout, last)
+	if len(evs) != 2 {
+		t.Fatalf("events: %d, want 2 (text, tool_use): %+v", len(evs), evs)
+	}
+	if evs[0].Type != "text" || evs[0].Text != "working on it" {
+		t.Fatalf("evs[0]: %+v", evs[0])
+	}
+	if evs[1].Type != "tool_use" {
+		t.Fatalf("evs[1]: %+v", evs[1])
 	}
 }
 
@@ -550,4 +749,280 @@ func TestSessionStartMatchingProviderStillPersists(t *testing.T) {
 	if a.ProviderSessions["claude"] != "id-42" {
 		t.Errorf("ProviderSessions[claude] = %q, want id-42", a.ProviderSessions["claude"])
 	}
+}
+
+// TestFlushCarriesInterruptCause: "interrupted" on its own leaves the reader
+// guessing between a person clicking Stop, the agent stopping a child, and
+// wick going down — and only the last of those means the work can be picked
+// up again. Whoever is about to stop it says so first, and the turn keeps it.
+func TestFlushCarriesInterruptCause(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "half an ans"})
+	st.SetInterruptCause("user", "Yoga stopped this agent from the conversation view")
+	// A vaguer claim must not overwrite the specific one that got there first.
+	st.SetInterruptCauseIfUnset("wick", "wick was handing over")
+	if err := st.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 {
+		t.Fatalf("turns: %d", len(lines))
+	}
+	if lines[0].InterruptedBy != "user" || !strings.Contains(lines[0].InterruptedNote, "Yoga") {
+		t.Fatalf("cause not carried: by=%q note=%q", lines[0].InterruptedBy, lines[0].InterruptedNote)
+	}
+
+	// The cause belongs to THAT turn: the next interrupted turn must not
+	// inherit it and blame someone who was not involved.
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "another half"})
+	if err := st.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	lines = readConvLines(t, layout)
+	if len(lines) != 2 {
+		t.Fatalf("turns: %d", len(lines))
+	}
+	if lines[1].InterruptedBy != "" || lines[1].InterruptedNote != "" {
+		t.Fatalf("stale cause leaked into the next turn: %+v", lines[1])
+	}
+}
+
+// A turn that ends normally is not interrupted, so it must carry no cause
+// even when something set one and never used it.
+func TestDoneIgnoresInterruptCause(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.SetInterruptCause("user", "someone hovered over Stop and thought better of it")
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "complete answer"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 {
+		t.Fatalf("turns: %d", len(lines))
+	}
+	if lines[0].Interrupted || lines[0].InterruptedBy != "" {
+		t.Fatalf("clean turn wears an interrupt cause: %+v", lines[0])
+	}
+}
+
+// TestFlushRecordsStopWithNothingBuffered: the stop that leaves no half-
+// written sentence used to leave no trace at all — the process died and the
+// transcript read as if nobody had touched it. Now the stop IS the record.
+func TestFlushRecordsStopWithNothingBuffered(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.SetInterruptCause("user", "Yoga Setiawan stopped this agent from the conversation view")
+	if err := st.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 {
+		t.Fatalf("turns: %d — a stop with nothing buffered must still be recorded", len(lines))
+	}
+	got := lines[0]
+	if got.Role != "system" || got.Kind != "interrupted" {
+		t.Fatalf("want a system/interrupted line, got role=%q kind=%q", got.Role, got.Kind)
+	}
+	if got.InterruptedBy != "user" || !strings.Contains(got.Text, "Yoga Setiawan") {
+		t.Fatalf("stop line does not name who did it: %+v", got)
+	}
+}
+
+// The other half of that: a teardown nobody claimed — an idle reap between
+// turns — interrupts nothing, and must not litter the transcript.
+func TestFlushSilentWhenNothingBufferedAndNoCause(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	if err := st.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if lines := readConvLines(t, layout); len(lines) != 0 {
+		t.Fatalf("an unclaimed empty flush wrote %d turn(s): %+v", len(lines), lines)
+	}
+}
+
+// newStoreWithProvider is newStore plus a provider snapshot, which the
+// usage ledger keys its buckets by.
+func newStoreWithProvider(t *testing.T, provider string) (*Store, config.Layout) {
+	t.Helper()
+	st, layout := newStore(t, "backend", false)
+	st.provider = provider
+	return st, layout
+}
+
+// TestUsageLedgerRecordsPerProvider: the ledger is keyed by provider so a
+// session that switches mid-conversation keeps the two bills apart —
+// blending claude tokens with codex tokens produces a number nobody can
+// act on, since the prices and windows differ.
+func TestUsageLedgerRecordsPerProvider(t *testing.T) {
+	st, layout := newStoreWithProvider(t, "claude/opus")
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "hi"})
+	st.Apply(event.AgentEvent{Type: event.Done, Usage: &event.TokenUsage{
+		Input: 10, CacheRead: 194475, CacheWrite: 16409, Output: 501,
+		ContextUsed: 210886, Window: 1000000, Model: "claude-opus-5", CostUSD: 0.27,
+	}})
+
+	su, err := LoadSessionUsage(layout, st.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := su.Providers[st.provider]
+	if p == nil {
+		t.Fatalf("no bucket for provider %q: %+v", st.provider, su.Providers)
+	}
+	if p.Turns != 1 || p.Output != 501 || p.CacheRead != 194475 {
+		t.Fatalf("flows: %+v", p.UsageTotals)
+	}
+	if p.ContextUsed != 210886 || p.ContextWindow != 1000000 {
+		t.Fatalf("level: used=%d window=%d", p.ContextUsed, p.ContextWindow)
+	}
+	if su.Totals.Output != 501 || su.Turns != 1 {
+		t.Fatalf("session totals: %+v turns=%d", su.Totals, su.Turns)
+	}
+	if len(p.Series) != 1 || p.Series[0].ContextUsed != 210886 {
+		t.Fatalf("series: %+v", p.Series)
+	}
+}
+
+// TestUsageLedgerAddsFlowsReplacesLevel: two turns must SUM the token
+// flows but keep only the latest context level. Summing the level would
+// report a window fuller than any model ever saw.
+func TestUsageLedgerAddsFlowsReplacesLevel(t *testing.T) {
+	st, layout := newStoreWithProvider(t, "codex/gpt")
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "a"})
+	st.Apply(event.AgentEvent{Type: event.Done, Usage: &event.TokenUsage{
+		Input: 100, Output: 10, ContextUsed: 5000, CostUSD: 0.01,
+	}})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "b"})
+	st.Apply(event.AgentEvent{Type: event.Done, Usage: &event.TokenUsage{
+		Input: 50, Output: 5, ContextUsed: 5200, CostUSD: 0.02,
+	}})
+
+	su, _ := LoadSessionUsage(layout, st.sessionID)
+	p := su.Providers[st.provider]
+	if p == nil {
+		t.Fatalf("no bucket for %q: %+v", st.provider, su.Providers)
+	}
+	if p.Input != 150 || p.Output != 15 {
+		t.Fatalf("flows should add: %+v", p.UsageTotals)
+	}
+	if p.ContextUsed != 5200 {
+		t.Fatalf("level should be the latest, got %d", p.ContextUsed)
+	}
+	if p.CostUSD < 0.029 || p.CostUSD > 0.031 {
+		t.Fatalf("cost should add: %v", p.CostUSD)
+	}
+	if len(p.Series) != 2 {
+		t.Fatalf("series should keep both turns: %+v", p.Series)
+	}
+}
+
+// TestUsageLedgerSkipsTurnsWithoutUsage: a provider that reports nothing
+// must leave no bucket at all, rather than a row of zeroes that reads as
+// "this turn was free".
+func TestUsageLedgerSkipsTurnsWithoutUsage(t *testing.T) {
+	st, layout := newStoreWithProvider(t, "claude/opus")
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "a"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+
+	su, _ := LoadSessionUsage(layout, st.sessionID)
+	if len(su.Providers) != 0 || su.Turns != 0 {
+		t.Fatalf("want an empty ledger, got %+v", su)
+	}
+}
+
+// TestApplyCompactionWritesMarkerTurn: a compaction must leave a visible
+// record. The turn above it is flushed first so the marker lands after
+// the reply it followed, and the turn does NOT end — the CLI keeps going
+// in the same session.
+func TestApplyCompactionWritesMarkerTurn(t *testing.T) {
+	st, layout := newStoreWithProvider(t, "claude/opus")
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "before"})
+	ended, err := st.Apply(event.AgentEvent{
+		Type: event.Compaction,
+		Compaction: &event.CompactionInfo{
+			Trigger: "manual", PreTokens: 31261, PostTokens: 4051,
+			DroppedTokens: 27210, DurationMS: 13226,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ended {
+		t.Fatal("compaction must not end the turn")
+	}
+
+	lines := readConvLines(t, layout)
+	if len(lines) != 2 {
+		t.Fatalf("want the flushed reply + the marker, got %d: %+v", len(lines), lines)
+	}
+	if lines[0].Text != "before" {
+		t.Fatalf("the reply should be flushed first: %+v", lines[0])
+	}
+	m := lines[1]
+	if m.Role != "system" || m.Kind != KindCompaction {
+		t.Fatalf("marker: role=%q kind=%q", m.Role, m.Kind)
+	}
+	if m.Extras["trigger"] != "manual" || m.Extras["pre_tokens"] != "31261" || m.Extras["post_tokens"] != "4051" {
+		t.Fatalf("extras should carry the numbers as data: %+v", m.Extras)
+	}
+	// The text is the plain-channel fallback, so it has to read on its own.
+	if m.Text != "Context compacted (manual) — 31.3k → 4.1k tokens" {
+		t.Fatalf("fallback text: %q", m.Text)
+	}
+}
+
+// TestApplyCompactionWithoutInfoIsIgnored: a malformed frame must not
+// write a marker with zeroes, which would read as "compacted to nothing".
+func TestApplyCompactionWithoutInfoIsIgnored(t *testing.T) {
+	st, layout := newStoreWithProvider(t, "claude/opus")
+	st.Apply(event.AgentEvent{Type: event.Compaction})
+	if lines := readConvLines(t, layout); len(lines) != 0 {
+		t.Fatalf("want no turns, got %+v", lines)
+	}
+}
+
+// TestApplyCompactionSyncsTheMeter: the recorded context level must drop
+// with the compaction, not on the next turn. Otherwise the ring shows
+// the pre-compaction number right beside a marker saying it shrank.
+func TestApplyCompactionSyncsTheMeter(t *testing.T) {
+	st, layout := newStoreWithProvider(t, "claude/opus")
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "a"})
+	st.Apply(event.AgentEvent{Type: event.Done, Usage: &event.TokenUsage{
+		Input: 10, Output: 5, ContextUsed: 94_400, Window: 1_000_000,
+	}})
+	st.Apply(event.AgentEvent{Type: event.Compaction, Compaction: &event.CompactionInfo{
+		Trigger: "manual", PreTokens: 94_400, PostTokens: 6_800,
+	}})
+
+	su, _ := LoadSessionUsage(layout, st.sessionID)
+	p := su.Providers[st.provider]
+	if p.ContextUsed != 6_800 {
+		t.Fatalf("level should follow the compaction, got %d", p.ContextUsed)
+	}
+	// The window is a property of the model, not of the history — it must
+	// survive a compaction untouched.
+	if p.ContextWindow != 1_000_000 {
+		t.Fatalf("window should be unchanged, got %d", p.ContextWindow)
+	}
+	// Spend is not refunded by compaction.
+	if p.Output != 5 || p.Input != 10 {
+		t.Fatalf("flows should be untouched: %+v", p.UsageTotals)
+	}
+	if len(p.Series) != 2 || p.Series[1].ContextUsed != 6_800 {
+		t.Fatalf("series should record the cliff: %+v", p.Series)
+	}
+}
+
+// The provider's auto-compact state is a level: the last report replaces
+// the one before, and a turn that did not say keeps it.
+func TestUsageLedgerKeepsAutoCompact(t *testing.T) {
+	st, layout := newStoreWithProvider(t, "omp/pro")
+	off := false
+	st.Apply(event.AgentEvent{Type: event.Done, Usage: &event.TokenUsage{Input: 1, AutoCompact: &off}})
+	st.Apply(event.AgentEvent{Type: event.Done, Usage: &event.TokenUsage{Input: 1}})
+	su, _ := LoadSessionUsage(layout, st.sessionID)
+	for _, p := range su.Providers {
+		if p.AutoCompact == nil || *p.AutoCompact {
+			t.Fatalf("AutoCompact %v, want false kept", p.AutoCompact)
+		}
+		return
+	}
+	t.Fatal("no provider row")
 }

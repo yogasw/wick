@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { layer } from "@wick-fe/common-ui";
   import type { DetailContent } from "../stores/detail.js";
 
   // Generic detail overlay: shows the full body of a `detail` chip (or any
@@ -21,13 +21,6 @@
     }
   }
 
-  onMount(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
 </script>
 
 {#if content}
@@ -40,12 +33,13 @@
   >
     <div
       class="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-2xl"
+      use:layer={{ onEscape: onClose }}
       role="dialog"
       aria-modal="true"
       aria-label={content.title}
       tabindex="-1"
       onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
+      onkeydown={(e) => { if (e.key !== "Escape") e.stopPropagation(); }}
     >
       <div class="flex items-center gap-3 border-b border-white-300 dark:border-navy-600 px-5 py-3">
         <h3 class="min-w-0 flex-1 truncate text-sm font-semibold text-black-900 dark:text-white-100">

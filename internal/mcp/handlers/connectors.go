@@ -13,6 +13,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/connector"
 )
 
@@ -111,63 +112,24 @@ type connectorDetail struct {
 	Tools []toolDetail `json:"tools"`
 }
 
-func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, isAdmin bool) {
-	rows, err := svc.ListVisibleTo(r.Context(), tagIDs, isAdmin)
+// WickList renders the connector catalogue for one caller: every instance
+// their tags reach, plus — for OAuth instances — the connected accounts they
+// may run as. Accounts are per-user by default (see
+// connectors.AccountVisibleTo), so two people listing the same multi-account
+// instance each see the connector plus their OWN account, not the whole pool.
+func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, user *entity.User) {
+	callerID, isAdmin := callerIdentity(user)
+	// The filtering lives in VisibleCatalog so the agent checklist offers
+	// exactly what this listing shows.
+	catalog, err := svc.VisibleCatalog(r.Context(), callerID, tagIDs, isAdmin)
 	if err != nil {
 		rsp.ToolError(w, req.ID, "list connectors: "+err.Error(), "")
 		return
 	}
-	summaries := make([]connectorSummary, 0, len(rows))
+	summaries := make([]connectorSummary, 0, len(catalog))
 	totalTools := 0
-	for _, row := range rows {
-		if row.Key == wickManagerKey {
-			continue // surfaced as top-level wick_manager_* tools, not via meta-tools
-		}
-		mod, ok := svc.Module(row.Key)
-		if !ok {
-			continue
-		}
-		// Type-level off-switch: a disabled connector type is hidden from the
-		// LLM entirely (the manager UI still shows it with a Disabled badge).
-		if !svc.TypeEnabled(row.Key) {
-			continue
-		}
-		states, err := svc.OperationStates(r.Context(), row.ID, row.Key)
-		if err != nil {
-			continue
-		}
-		count := 0
-		for _, op := range mod.AllOps() {
-			if states[op.Key] {
-				count++
-			}
-		}
-		// Live-catalog modules (custom MCP) at zero ops may simply not
-		// have synced yet — run the lazy refresh (throttled) and
-		// recount before deciding to hide the connector. Without this,
-		// an unsynced connector would never surface: invisible here
-		// means no wick_get, and no wick_get means no refresh.
-		if count == 0 && mod.Meta.LiveCatalog {
-			svc.CatalogRefresh(r.Context(), row.Key, row.ID)
-			if fresh, ok2 := svc.Module(row.Key); ok2 {
-				mod = fresh
-				if states, err = svc.OperationStates(r.Context(), row.ID, row.Key); err != nil {
-					continue
-				}
-				for _, op := range mod.AllOps() {
-					if states[op.Key] {
-						count++
-					}
-				}
-			}
-		}
-		if count == 0 {
-			continue
-		}
-		status := svc.Status(row)
-		if status == "needs_setup" {
-			continue
-		}
+	for _, e := range catalog {
+		row, mod, count := e.Row, e.Module, len(e.Ops)
 		totalTools += count
 		// Always add the connector entry itself.
 		summaries = append(summaries, connectorSummary{
@@ -176,33 +138,29 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 			Description:  mod.Meta.Description,
 			OperatorNote: strings.TrimSpace(row.Description),
 			TotalTools:   count,
-			Status:       status,
+			Status:       e.Status,
 			Kind:         "connector",
 		})
 		// For OAuth connectors, also add one entry per connected account.
-		if mod.OAuth != nil {
-			if accs, err2 := svc.ListAccounts(r.Context(), row.ID); err2 == nil {
-				for _, acc := range accs {
-					summaries = append(summaries, connectorSummary{
-						ID:        row.ID + "/" + acc.ID,
-						Connector: row.Label + " – @" + acc.DisplayName,
-						Description: mod.Meta.Description +
-							" (running as @" + acc.DisplayName + ")",
-						TotalTools: count,
-						Status:     status,
-						Kind:       "account",
-						ParentID:   row.ID,
-					})
-				}
-			}
+		for _, acc := range e.Accounts {
+			summaries = append(summaries, connectorSummary{
+				ID:        row.ID + "/" + acc.ID,
+				Connector: row.Label + " – @" + acc.DisplayName,
+				Description: mod.Meta.Description +
+					" (running as @" + acc.DisplayName + ")",
+				TotalTools: count,
+				Status:     e.Status,
+				Kind:       "account",
+				ParentID:   row.ID,
+			})
 		}
 	}
 	// Session-workspace instances: ephemeral connectors scoped to the
 	// caller's session, listed only when a session_id is passed. They
 	// appear like brand-new connectors but live and die with the session.
 	var sessionBases []sessionBaseHint
-	if sid, _ := args["session_id"].(string); strings.TrimSpace(sid) != "" {
-		sessSummaries, sessTools := sessionInstanceSummaries(svc, layout, strings.TrimSpace(sid))
+	if sid := CallSession(r, args); sid != "" {
+		sessSummaries, sessTools := sessionInstanceSummaries(svc, layout, sid)
 		summaries = append(summaries, sessSummaries...)
 		totalTools += sessTools
 		// Connectors that COULD be cloned per-session — surfaced so the
@@ -218,6 +176,31 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 	})
 }
 
+// callerIdentity unpacks the two things the listing gates on — who is asking
+// and whether they are an admin — tolerating a nil user (test transports).
+func callerIdentity(user *entity.User) (userID string, isAdmin bool) {
+	if user == nil {
+		return "", false
+	}
+	return user.ID, user.IsAdmin()
+}
+
+// callerIDFromCtx reads the authenticated caller the auth middleware stamped
+// on the request, for the handlers and helpers that are handed tagIDs +
+// isAdmin but no user value. Visibility needs the id as well now that a row's
+// creator reaches it by ownership, and the tagIDs those callers pass are
+// derived from this same principal — so taking the id from the context is the
+// same answer without threading a parameter through every helper.
+//
+// Empty when unauthenticated, which ownership treats as "no owner match"
+// rather than "matches every ownerless row".
+func callerIDFromCtx(ctx context.Context) string {
+	if u := login.GetUser(ctx); u != nil {
+		return u.ID
+	}
+	return ""
+}
+
 func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, isAdmin bool) {
 	query, _ := args["query"].(string)
 	query = strings.TrimSpace(query)
@@ -225,7 +208,7 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 		rsp.ToolError(w, req.ID, "query is required", "")
 		return
 	}
-	rows, err := svc.ListVisibleTo(r.Context(), tagIDs, isAdmin)
+	rows, err := svc.ListVisibleTo(r.Context(), callerIDFromCtx(r.Context()), tagIDs, isAdmin)
 	if err != nil {
 		rsp.ToolError(w, req.ID, "search: "+err.Error(), "")
 		return
@@ -290,8 +273,8 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 	// Session-workspace instances: matched only when a session_id is
 	// passed, same as wick_list. Without this, searching for a connector
 	// the user spun up for this session returns nothing.
-	if sid, _ := args["session_id"].(string); strings.TrimSpace(sid) != "" {
-		sg, st := sessionInstanceSearch(svc, layout, strings.TrimSpace(sid), needle)
+	if sid := CallSession(r, args); sid != "" {
+		sg, st := sessionInstanceSearch(svc, layout, sid, needle)
 		groups = append(groups, sg...)
 		total += st
 	}
@@ -313,7 +296,7 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 	selector := firstNonEmpty(args, "selector", "category", "op_key")
 	// Session-workspace instance: resolve from the session file and render
 	// the base module's category list / op list / op schema, no DB row involved.
-	if target, ok, err := SessionInstanceFor(layout, args, connectorID); err != nil {
+	if target, ok, err := SessionInstanceForID(layout, CallSession(r, args), connectorID); err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), connectorID)
 		return
 	} else if ok {
@@ -329,7 +312,7 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 		rsp.ToolJSON(w, req.ID, detail)
 		return
 	}
-	allowed, err := svc.IsVisibleTo(r.Context(), connectorID, tagIDs, isAdmin)
+	allowed, err := svc.IsVisibleTo(r.Context(), connectorID, callerIDFromCtx(r.Context()), tagIDs, isAdmin)
 	if err != nil || !allowed {
 		rsp.ToolError(w, req.ID, "connector not found or not accessible", connectorID)
 		return
@@ -580,7 +563,8 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 }
 
 // callSessionID reads the optional top-level session_id used by single-call
-// mode for session-workspace (sw_) connectors.
+// mode for session-workspace (sw_) connectors. executeOne re-applies the
+// header on top of it, so this stays argument-only.
 func callSessionID(args map[string]any) string {
 	s, _ := args["session_id"].(string)
 	return strings.TrimSpace(s)
@@ -593,9 +577,9 @@ func callSessionID(args map[string]any) string {
 // connector's response body when present.
 // ResolveCallSession picks the session a connector call belongs to.
 //
-// The per-spawn X-Wick-Session-Id header WINS over any session_id the
+// The session resolved from the CALL ITSELF wins over any session_id the
 // model supplied; the argument is only a fallback for transports that
-// set no header.
+// carry no session (stdio, a PAT script).
 //
 // The precedence is an authorization decision, not a convenience. The
 // runtime sets the header and the model cannot forge it, while a
@@ -604,6 +588,41 @@ func callSessionID(args map[string]any) string {
 // session's tree, inherits its identity for tag purposes, and resolves
 // roles in its project scope — so trusting the argument would let a
 // caller name someone else's conversation and operate in it.
+// SessionHeader is the WIRE format for the session a call belongs to.
+// Handlers read SessionOf(r) instead — the header is one of its two
+// inputs, and the weaker one (see session_context.go).
+const SessionHeader = "X-Wick-Session-Id"
+
+// ResolveSessionPreferArg is the other precedence, for tools that MANAGE a
+// session rather than act inside one — reading its context, retitling it,
+// compacting it. There an explicit session_id is a deliberate target (an
+// admin acting on another conversation, already gated by canManageSession),
+// so the argument wins and the call's own session only fills the gap.
+//
+// Keep connector execution on ResolveCallSession: a connector op resolves
+// session-scoped credentials and delegation trees, so a model naming the
+// wrong session there is a misroute, not a choice.
+func ResolveSessionPreferArg(header, argSessionID string) string {
+	if a := strings.TrimSpace(argSessionID); a != "" {
+		return a
+	}
+	return strings.TrimSpace(header)
+}
+
+// CallSession is ResolveCallSession applied to a live request: the
+// session the call itself carries wins, the model's session_id fills the
+// gap. Use it everywhere a call needs to know which session it is running
+// in — every provider now resolves one (the credential names it), so a
+// handler that still reads args["session_id"] alone is silently
+// provider-specific.
+func CallSession(r *http.Request, args map[string]any) string {
+	arg, _ := args["session_id"].(string)
+	if r == nil {
+		return strings.TrimSpace(arg)
+	}
+	return ResolveCallSession(SessionOf(r), arg)
+}
+
 func ResolveCallSession(header, argSessionID string) string {
 	if h := strings.TrimSpace(header); h != "" {
 		return h
@@ -620,6 +639,13 @@ func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service
 	if err != nil {
 		return "", err
 	}
+	// Resolve the session FIRST: the instance lookup below is scoped by it,
+	// so doing this afterwards left the lookup reading the raw argument.
+	// Single calls happened to work (the streaming transport resolves before
+	// it gets here) while a BATCH entry without session_id failed with
+	// "session_id is required to use the session connector" — the one shape
+	// where the caller has no way to know it was supposed to pass one.
+	sessionID = ResolveCallSession(SessionOf(r), sessionID)
 	// Session-workspace instance: run against the ephemeral instance's own
 	// config (no DB row, no tag visibility — the session itself is the
 	// authorization scope).
@@ -628,12 +654,11 @@ func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service
 		return "", err
 	}
 	if !isSession {
-		allowed, verr := svc.IsVisibleTo(ctx, connectorID, tagIDs, user.IsAdmin())
+		allowed, verr := svc.IsVisibleTo(ctx, connectorID, callerIDFromCtx(ctx), tagIDs, user.IsAdmin())
 		if verr != nil || !allowed {
 			return "", errors.New("tool_id not found or not accessible")
 		}
 	}
-	sessionID = ResolveCallSession(r.Header.Get("X-Wick-Session-Id"), sessionID)
 	input := StringifyArgs(rawParams)
 	res, execErr := svc.Execute(ctx, connectors.ExecuteParams{
 		ConnectorID:     connectorID,
@@ -643,6 +668,7 @@ func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service
 		Source:          entity.ConnectorRunSourceMCP,
 		UserID:          user.ID,
 		IsAdmin:         user.IsAdmin(),
+		TagIDs:          tagIDs,
 		IPAddress:       ClientIP(r),
 		UserAgent:       r.Header.Get("User-Agent"),
 		AccountID:       accountID,

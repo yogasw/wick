@@ -59,7 +59,7 @@ func TestClientExecuteMapsArgsAndCreds(t *testing.T) {
 		t.Fatalf("request not mapped: %+v", fc.lastReq)
 	}
 	var got map[string]string
-	if err := json.Unmarshal(out, &got); err != nil {
+	if err := json.Unmarshal(out.JSON, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if got["ok"] != "yes" {
@@ -81,15 +81,18 @@ func TestClientExecuteStreamReassembles(t *testing.T) {
 	stream := &fakeStreamClient{chunks: []*pb.Chunk{
 		{Data: []byte(big[:1000])},
 		{Data: []byte(big[1000:])},
-		{Eof: true},
+		{Eof: true, Mask: []string{"a"}, MaskIgnoreCase: []string{"b"}},
 	}}
 	c := &grpcClient{inner: &fakeConnClient{stream: stream}}
 	out, err := c.ExecuteStream(context.Background(), ExecCall{Operation: "say"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(out) != big {
-		t.Fatalf("reassembled %d bytes, want %d", len(out), len(big))
+	if string(out.JSON) != big {
+		t.Fatalf("reassembled %d bytes, want %d", len(out.JSON), len(big))
+	}
+	if len(out.Mask) != 1 || out.Mask[0] != "a" || len(out.MaskIgnoreCase) != 1 || out.MaskIgnoreCase[0] != "b" {
+		t.Fatalf("mask values from the Eof chunk not returned: %+v %+v", out.Mask, out.MaskIgnoreCase)
 	}
 }
 

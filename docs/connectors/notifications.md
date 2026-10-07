@@ -4,7 +4,7 @@ outline: deep
 
 # Notifications
 
-`notifications` exposes wick's **in-process browser push service** as a fixed connector. Any logged-in user can subscribe a browser via the Account page; this connector lets the LLM (or any other connector consumer) send a notification to a specific subscribed user by PN ID.
+`notifications` exposes wick's **in-process browser push service** as a fixed connector. Any logged-in user can subscribe a browser via the Account page; this connector lets the LLM (or any other connector consumer) notify **the caller** (`send_to_me`, no addressing at all) or **somebody else** by PN ID (`send_to_push_id`, admin only).
 
 | | |
 |---|---|
@@ -15,8 +15,12 @@ outline: deep
 | **Fixed** | ✅ — single row, auto-seeded by `Service.Bootstrap` |
 | **Default tags** | `tags.Connector`, `tags.Communication` |
 
-::: warning Sending requires admin
-The single operation guards on `requireAdmin` (calling user must have admin role). The connector is intentionally minimal: no self-send, no user listing, no device inspection. The LLM is meant to send a notification when explicitly directed, not to discover or enumerate users.
+::: warning Notifying somebody ELSE requires admin
+`send_to_push_id` guards on `requireAdmin` (calling user must have admin role), because addressing another person means resolving a PN ID against the user table.
+
+`send_to_me` does not, and does not need to: the only reachable recipient is the person already on the other end of the call. It reads no user table, resolves no id, and cannot be pointed at anybody else — so the admin gate would buy nothing and would only stop an agent telling its own user that a long job had finished.
+
+The connector stays minimal in the way that matters: no user listing, no user search, no device inspection. The LLM is meant to send a notification when explicitly directed, not to discover or enumerate users.
 :::
 
 ## Configs
@@ -25,9 +29,26 @@ Intentionally empty (`type Configs struct{}`). The connector talks to the in-pro
 
 ## Operations
 
+### `send_to_me` — Send Notification To Me
+
+Notify the person this call is running for. No id, no lookup, nothing to ask them for — wick already knows who the caller is from the credential the call arrived on, and which conversation it came from.
+
+This exists because the alternative was a detour: to have wick notify you, you first opened Account → Notifications, copied your own PN ID, and pasted it back so wick could address you with information it already had.
+
+| Input | Required | Notes |
+|---|---|---|
+| `title` | optional | Notification title. Defaults to `"Wick notification"`. |
+| `body` | optional | Notification body. Browsers may truncate long text. |
+| `link` | optional | Where the click lands: `conversation` (default), `home`, or `custom`. |
+| `url` | optional | Relative app URL, used when `link=custom`. |
+
+`link=conversation` sends you to `/tools/agents/sessions/{id}` for the session the call came from — **the same place the composer's bell sends you** when a session goes idle, so a notification raised by an agent and one raised by wick itself land in the same page. With no calling conversation (a REST call, a scheduled run) it falls back to `url` if one was given and to `/` otherwise, rather than refusing the send over its click target.
+
+Returns `{ ok, sent, link, url, recipient? }`. **`sent: 0` is not a failure** — it means the account has no subscribed browser or device yet, and the response says so in a `note`. A call with no user behind it (a system or scheduled run) is refused with a message pointing at `send_to_push_id`.
+
 ### `send_to_push_id` — Send Notification To PN ID
 
-Send a browser notification to every active device subscribed under one opaque PN ID.
+Send a browser notification to every active device subscribed under one opaque PN ID — that is, to **somebody else**. For yourself, `send_to_me` needs no id at all.
 
 | Input | Required | Notes |
 |---|---|---|

@@ -12,8 +12,8 @@ func TestExitOOM_IsDistinct(t *testing.T) {
 	if ExitOOM == ExitError || ExitOOM == ExitClean {
 		t.Fatal("ExitOOM collides with an existing reason")
 	}
-	if got := exitReasonName(ExitOOM); got != "oom" {
-		t.Fatalf("exitReasonName(ExitOOM) = %q, want %q", got, "oom")
+	if got := ExitReasonName(ExitOOM); got != "oom" {
+		t.Fatalf("ExitReasonName(ExitOOM) = %q, want %q", got, "oom")
 	}
 	if got := exitReasonDetail(ExitOOM); got == "" || got == "unknown" {
 		t.Fatalf("exitReasonDetail(ExitOOM) = %q, want a real sentence", got)
@@ -111,5 +111,31 @@ func TestHumanBytes(t *testing.T) {
 		if got := humanBytes(c.in); got != c.want {
 			t.Fatalf("humanBytes(%d) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// Only omp / opencode one-shot runs exit non-zero because of an Error they
+// already streamed. Any other respawn CLI's exit stays an error, so a real
+// crash or an OOM kill after an Error is still classified.
+func TestExitFollowsTurnErrorOnlyForOMPAndOpencode(t *testing.T) {
+	for _, tc := range []struct {
+		typ     Type
+		mode    SendMode
+		errored bool
+		want    bool
+	}{
+		{TypeOMP, SendSpawnEach, true, true},
+		{TypeOpencode, SendRespawnQueue, true, true},
+		{TypeOpencode, SendRespawnQueue, false, false},
+		{TypeCodex, SendRespawnQueue, true, false},
+		{TypeClaude, SendSpawnEach, true, false},
+	} {
+		cfg := Options{SendMode: tc.mode, Instance: &Instance{Type: tc.typ}}
+		if got := exitFollowsTurnError(cfg, tc.errored); got != tc.want {
+			t.Errorf("%s/%v errored=%v = %v, want %v", tc.typ, tc.mode, tc.errored, got, tc.want)
+		}
+	}
+	if exitFollowsTurnError(Options{SendMode: SendSpawnEach}, true) {
+		t.Error("no instance must not be demoted")
 	}
 }

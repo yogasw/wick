@@ -9,16 +9,19 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/rs/zerolog/log"
 
+	"github.com/yogasw/wick/internal/agents/actioncard"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/agents/store"
 )
 
 // pendingApproval tracks an in-flight gate approval message for one session.
@@ -60,6 +63,17 @@ type Channel struct {
 
 	ownerUserID string // wick user who owns this channel row; empty = App Owner
 
+	// users maps a Telegram sender to a wick account so the turn runs with
+	// that person's own connector access rather than the channel owner's.
+	// nil = identity mapping disabled, which falls back to the owner — the
+	// behaviour every install had before this existed.
+	users agentchannels.UserResolver
+
+	// ownerFn records the resolved wick user as the session's owner, so a
+	// session started from Telegram is owned by the person who started it
+	// rather than by whoever the pool would otherwise fall back to.
+	ownerFn func(ctx context.Context, sessionID, userID string)
+
 	// sessionPrefix namespaces this instance's session keys so multiple
 	// Telegram bots (per-user owners, different bot tokens) never collide on
 	// a shared chat id. Set by the setup composer to the registry instance
@@ -69,6 +83,70 @@ type Channel struct {
 
 	runCancel context.CancelFunc
 	runWg     sync.WaitGroup
+
+	// Cached bot identity (see agentchannels.IdentityCache). Telegram
+	// resolves it via getMe when the API client is built; caching it on the
+	// channel row means a picker can say WHICH bot this instance is even
+	// before it connects — and never has to ask twice. Guarded by mu.
+	botUserID    string
+	botUserName  string
+	identitySink func(botUserID, botName, workspace string)
+}
+
+// BotUserName satisfies agentchannels.BotNamer — the @handle pickers
+// label this instance with.
+func (t *Channel) BotUserName() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.botUserName
+}
+
+// BotIdentity satisfies agentchannels.IdentityCache.
+func (t *Channel) BotIdentity() (string, string, string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.botUserID, t.botUserName, ""
+}
+
+// SeedIdentity hydrates the identity from the channel row before getMe
+// has answered. Never overwrites a live value.
+func (t *Channel) SeedIdentity(botUserID, botName, _ string) {
+	t.mu.Lock()
+	if t.botUserID == "" {
+		t.botUserID = botUserID
+	}
+	if t.botUserName == "" {
+		t.botUserName = botName
+	}
+	t.mu.Unlock()
+}
+
+// SetIdentitySink registers the persistence callback (see IdentityCache).
+func (t *Channel) SetIdentitySink(fn func(botUserID, botName, workspace string)) {
+	t.mu.Lock()
+	t.identitySink = fn
+	t.mu.Unlock()
+}
+
+// rememberBot records the identity getMe returned and pushes it to the
+// cache. Called wherever a bot API client is (re)built.
+func (t *Channel) rememberBot(bot *tgbotapi.BotAPI) {
+	if bot == nil {
+		return
+	}
+	id := strconv.FormatInt(bot.Self.ID, 10)
+	name := bot.Self.UserName
+	if name != "" {
+		name = "@" + name
+	}
+	t.mu.Lock()
+	t.botUserID = id
+	t.botUserName = name
+	sink := t.identitySink
+	t.mu.Unlock()
+	if sink != nil {
+		sink(id, name, "")
+	}
 }
 
 // New constructs a Telegram Channel from cfg alone. SendFunc and other
@@ -85,6 +163,7 @@ func New(cfg agentconfig.TelegramChannelConfig) *Channel {
 	if cfg.BotToken != "" {
 		if bot, err := tgbotapi.NewBotAPI(cfg.BotToken); err == nil {
 			tc.bot = bot
+			tc.rememberBot(bot)
 		} else {
 			log.Warn().Err(err).Msg("telegram: invalid bot token, starting in dormant mode")
 		}
@@ -149,6 +228,22 @@ func (t *Channel) SetSessionChecker(c agentchannels.SessionChecker) {
 	t.sessions = c
 }
 
+// SetOwnerFn wires a function that stamps a wick user ID on a session.
+func (t *Channel) SetOwnerFn(fn func(ctx context.Context, sessionID, userID string)) {
+	t.mu.Lock()
+	t.ownerFn = fn
+	t.mu.Unlock()
+}
+
+// SetUserResolver wires the sender → wick account mapping. Optional: leaving
+// it unset keeps the legacy behaviour where every message runs as the channel
+// owner.
+func (t *Channel) SetUserResolver(u agentchannels.UserResolver) {
+	t.mu.Lock()
+	t.users = u
+	t.mu.Unlock()
+}
+
 // SetSessionStartHook satisfies channels.SessionStartHookSetter.
 func (t *Channel) SetSessionStartHook(fn agentchannels.SessionStartHook) {
 	t.onSessionStart = fn
@@ -207,6 +302,40 @@ func (t *Channel) buildSessionContext(msg *tgbotapi.Message, sessionID string) s
 	}
 	lines = append(lines, "Session: "+sessionID)
 	return strings.Join(lines, "\n")
+}
+
+// senderFor builds the identity carried with an inbound turn from the
+// message's From field. No API call and no cache: Telegram puts the sender
+// in the update itself, which is also why it cannot be spoofed by message
+// content — a user writing "I am someone else" changes the body, never the
+// envelope this reads.
+//
+// Returns nil for a message with no From (channel posts), leaving the turn
+// unattributed rather than inventing a sender.
+//
+// wickUserID is the wick account the turn runs as. Telegram has no way to map
+// a sender to a wick account — there is no email on the message and no OAuth
+// connect flow like Slack's — so every message on a channel runs as that
+// channel's owner, and that is what gets recorded.
+//
+// It matters beyond bookkeeping: the dashboard decides whose bubble is whose
+// by comparing this field against the reader. Leaving it empty makes every
+// Telegram message, including the reader's own, render as somebody else's.
+func senderFor(msg *tgbotapi.Message, wickUserID string) *store.Sender {
+	if msg == nil || msg.From == nil {
+		return nil
+	}
+	name := strings.TrimSpace(msg.From.FirstName + " " + msg.From.LastName)
+	if name == "" {
+		name = msg.From.UserName
+	}
+	return &store.Sender{
+		ID:         strconv.FormatInt(msg.From.ID, 10),
+		Name:       name,
+		Handle:     msg.From.UserName,
+		Channel:    "telegram",
+		WickUserID: wickUserID,
+	}
 }
 
 // Start begins long polling. Blocks until ctx is cancelled or Stop is called.
@@ -283,9 +412,11 @@ func (t *Channel) Reload(ctx context.Context, cfg agentconfig.TelegramChannelCon
 	t.cfg = cfg
 	t.bot = bot
 	t.mu.Unlock()
+	t.rememberBot(bot)
 
 	log.Info().Str("channel", "telegram").Str("bot", bot.Self.UserName).Msg("reload: restarting with new config")
 	go func() {
+		defer agentchannels.RecoverPanic("telegram", "reload")
 		if err := t.Start(ctx); err != nil {
 			log.Error().Str("channel", "telegram").Err(err).Msg("telegram channel stopped after reload")
 		}
@@ -293,6 +424,7 @@ func (t *Channel) Reload(ctx context.Context, cfg agentconfig.TelegramChannelCon
 }
 
 func (t *Channel) handleUpdate(ctx context.Context, update tgbotapi.Update) {
+	defer agentchannels.RecoverPanic("telegram", "update")
 	switch {
 	case update.CallbackQuery != nil:
 		t.handleCallback(ctx, update.CallbackQuery)
@@ -316,6 +448,29 @@ func (t *Channel) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 
 	if !t.isChatAllowed(chatID, allowed) {
 		log.Debug().Str("channel", "telegram").Int64("chat_id", chatID).Msg("access denied")
+		return
+	}
+
+	// Identity gate, BEFORE anything spawns. A sender with no wick account,
+	// one still pending approval, or one without access to Agents is told what
+	// to do about it rather than silently running as the channel owner —
+	// which would be a way around the same gate the dashboard applies.
+	//
+	// Runs after the chat allowlist so an unlisted chat is still ignored in
+	// silence: replying there would tell a stranger the bot exists.
+	if reply := t.checkSenderIdentity(msg); reply != "" {
+		log.Info().Str("channel", "telegram").Int64("chat_id", chatID).
+			Msg("sender identity refused")
+		t.postMessage(chatID, reply)
+		return
+	}
+
+	// No pool dispatch wired: tell the sender rather than calling a nil
+	// func, which would panic and take the whole daemon down.
+	if sendFn == nil {
+		log.Error().Str("channel", "telegram").Int64("chat_id", chatID).
+			Msg("telegram channel not wired to the agent pool; dropping message")
+		t.postMessage(chatID, "Agent is not ready, try again in a moment.")
 		return
 	}
 
@@ -344,7 +499,40 @@ func (t *Channel) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		}
 	}
 
-	if err := sendFn(ctx, sessionID, agentName, "telegram", "user", msg.Text); err != nil {
+	// The wick account this turn acts as: the sender's own when identity
+	// mapping resolved one, else the channel owner (identity not wired, or a
+	// message with no resolvable sender). Resolved before the send, because
+	// the send is what triggers a spawn and a spawn bakes the MCP credential
+	// into the subprocess argv — stamping afterwards would let the first turn
+	// of a new chat run as the wrong principal.
+	//
+	// ownerUserID is read without the lock: it is set once at construction.
+	callerUserID := t.ownerUserID
+	if resolved, ok := t.resolveSessionOwner(msg); ok {
+		callerUserID = resolved
+	}
+	t.mu.Lock()
+	ownerFn := t.ownerFn
+	t.mu.Unlock()
+	if ownerFn != nil && callerUserID != "" {
+		ownerFn(ctx, sessionID, callerUserID)
+	}
+
+	// Who sent it rides the context, so the pool can tell the agent and the
+	// UI without touching the message text itself.
+	userCtx := agentchannels.WithCallerUserID(ctx, callerUserID)
+	userCtx = agentchannels.WithSender(userCtx, senderFor(msg, callerUserID))
+	if fn := agentchannels.CardNumberPostback; fn != nil {
+		if label, ok, err := fn(userCtx, sessionID, "telegram", msg.Text); ok {
+			if err != nil {
+				t.postMessage(chatID, "Could not send your choice: "+err.Error())
+			} else {
+				log.Debug().Str("channel", "telegram").Str("session", sessionID).Str("choice", label).Msg("numbered reply sent as postback")
+			}
+			return
+		}
+	}
+	if err := sendFn(userCtx, sessionID, agentName, "telegram", "user", msg.Text); err != nil {
 		log.Error().Str("channel", "telegram").Str("session", sessionID).Err(err).Msg("pool send failed")
 		t.postMessage(chatID, "Agent error: could not queue message. Check the dashboard for details.")
 	}
@@ -506,7 +694,7 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 	switch ev.Type {
 	case event.TextDelta:
 		t.mu.Lock()
-		tn := t.turns[sessionID]
+		tn := t.turnLocked(sessionID)
 		if tn != nil {
 			tn.buf.WriteString(ev.Text)
 		}
@@ -528,6 +716,9 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 			t.postMessage(chatID, "Agent error: "+ev.ErrorMsg)
 			return
 		}
+		// No buttons here: a card becomes a numbered list, and a bare
+		// number reply is mapped back to the button (handleMessage).
+		text, _ = actioncard.Split(text, actioncard.PlainText)
 		if text != "" {
 			t.postChunked(chatID, text)
 		}
@@ -544,7 +735,53 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 			msg = ev.Text
 		}
 		t.postMessage(tn.chatID, "Agent error: "+msg)
+
+	default:
+		// Events that are ABOUT the session rather than part of the reply
+		// (a compaction boundary today). The web UI renders them as their
+		// own row; a chat has no such row, so unless the channel posts the
+		// line the event is invisible here — a /compact asked for from
+		// Telegram would simply never report back.
+		text, ok := agentchannels.SystemNoticeText(ev)
+		if !ok {
+			return
+		}
+		t.mu.Lock()
+		tn := t.turns[sessionID]
+		t.mu.Unlock()
+		if tn == nil {
+			return
+		}
+		t.postMessage(tn.chatID, text)
 	}
+}
+
+// turnLocked is the reply sink of sessionID. A turn opened by a message
+// from Telegram is already there; a turn nobody typed — a schedule firing
+// into one of this bot's chats, maybe after a restart emptied the map —
+// gets one from the chat id the session id carries. Caller holds t.mu.
+func (t *Channel) turnLocked(sessionID string) *turn {
+	if tn := t.turns[sessionID]; tn != nil {
+		return tn
+	}
+	chatID, ok := ChatIDOf(t.sessionPrefix, sessionID)
+	if !ok {
+		return nil
+	}
+	tn := &turn{chatID: chatID}
+	t.turns[sessionID] = tn
+	return tn
+}
+
+// ChatIDOf is the Telegram chat behind sessionID, for an instance whose
+// sessions are prefix+"tg-<chat id>". false = not one of its chats.
+func ChatIDOf(prefix, sessionID string) (int64, bool) {
+	rest, ok := strings.CutPrefix(sessionID, prefix+"tg-")
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(rest, 10, 64)
+	return id, err == nil
 }
 
 func (t *Channel) postMessage(chatID int64, text string) {

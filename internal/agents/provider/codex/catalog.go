@@ -30,7 +30,7 @@ func init() {
 		},
 		Args: []provider.CatalogEntry{
 			// Native flags
-			{Key: "--model", Kind: provider.CatalogString, Placeholder: "gpt-5.5",
+			{Key: "--model", Kind: provider.CatalogString, Placeholder: "gpt-6-astra",
 				Description: "Override the configured model."},
 			{Key: "--sandbox", Kind: provider.CatalogEnum, Options: []string{"read-only", "workspace-write", "danger-full-access"},
 				Description: "Sandbox policy for shell commands."},

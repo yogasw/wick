@@ -20,7 +20,17 @@ message ExecuteRequest {
   string request_id = 4;
   string session_id = 5;
 }
-message ExecuteResponse { bytes result_json = 1; Error error = 2; map<string,string> meta = 3; }
+// mask / mask_ignore_case carry the values the operation passed to c.Mask /
+// c.MaskIgnoreCase. The plugin has no encryption key, so it returns them in
+// the clear and the host turns them into wick_enc_ tokens before the result
+// leaves wick.
+message ExecuteResponse {
+  bytes result_json = 1;
+  Error error = 2;
+  map<string,string> meta = 3;
+  repeated string mask = 4;
+  repeated string mask_ignore_case = 5;
+}
 message Chunk {
   bytes  data = 1;
   bool   eof = 2;
@@ -28,6 +38,9 @@ message Chunk {
   int32  progress = 4;
   int32  total = 5;
   string message = 6;
+  // Set on the Eof chunk only; same meaning as on ExecuteResponse.
+  repeated string mask = 7;
+  repeated string mask_ignore_case = 8;
 }
 
 message OpHealth { string key = 1; bool ok = 2; string reason = 3; }

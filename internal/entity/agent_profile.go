@@ -28,7 +28,7 @@ type AgentProfile struct {
 	Description string `gorm:"type:text;not null;default:''" json:"description"`
 	Icon        string `gorm:"type:varchar(32);not null;default:''" json:"icon"`
 
-	// Provider is the agent runtime ("claude" | "codex" | "gemini").
+	// Provider is the agent runtime ("claude" | "codex" | "gemini" | "omp" | "opencode").
 	// Resolved through the existing pool factory — a sub-agent is a
 	// normal provider spawn, not a new runtime.
 	Provider string `gorm:"type:varchar(64);not null" json:"provider"`

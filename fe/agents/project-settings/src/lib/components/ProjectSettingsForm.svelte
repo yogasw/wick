@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { ConfirmDialog, ProviderPicker, buildProviderOptions } from "@wick-fe/common-ui";
+  import { DeleteProjectDialog, ProviderPicker, buildProviderOptions } from "@wick-fe/common-ui";
   import { toastError } from "@wick-fe/common-stores";
   import {
     getProjectSettings,
     updateProject,
     createProject,
-    deleteProject,
     unpinSession,
     getProviderOptionModels,
     saveTicketConfig,
@@ -75,7 +74,7 @@
   // Lazy model loader for the picker's 3rd/4th levels. wick's live sets are
   // resolved against the vendor on demand — a build-time list would go stale
   // and could not offer the leaf models a project needs to pin.
-  function loadProviderModels(optionValue: string, opts?: { entry?: string }) {
+  function loadProviderModels(optionValue: string, opts?: { entry?: string; refresh?: boolean }) {
     const slash = optionValue.indexOf("/");
     const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
     const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);
@@ -124,8 +123,13 @@
 
   /* Bound to text inputs — waits for a pause in typing. */
   const edit = () => autosave.schedule();
-  /* Bound to selects, toggles, radios, and blur — saves at once. */
+  /* Bound to blur — saves at once, but only if an edit is pending, so
+     tabbing through an untouched form stays silent. */
   const commit = () => autosave.flush();
+  /* Bound to selects, pickers, toggles, radios — the event itself is the
+     edit, so this saves unconditionally. flush() would skip it: nothing
+     marked the form dirty beforehand. */
+  const change = () => autosave.commit();
 
   async function load() {
     loading = true;
@@ -230,14 +234,9 @@
     }
   }
 
-  async function handleDelete() {
+  function handleDeleted() {
     showDeleteConfirm = false;
-    try {
-      await deleteProject(projectID);
-      window.location.href = `${base}/sessions`;
-    } catch (err) {
-      toastError("Delete failed", err instanceof Error ? err.message : String(err));
-    }
+    window.location.href = `${base}/sessions`;
   }
 
   async function handleUnpin(sessionID: string) {
@@ -257,8 +256,6 @@
     return `${base}/sessions`;
   }
 
-  /* Snippets are compiled outside the `{:else if data}` block, so the
-     narrowing there does not reach them — these read the flags instead. */
   const canDelete = $derived(data !== null && !data.is_new && !data.is_protected);
 
   /* Folded sections state their current setting in the subtitle, so the
@@ -282,6 +279,12 @@
     );
     const rules = (ticketCfg.auto_create ?? []).length;
     parts.push(rules === 0 ? "no auto-create" : `${rules} auto-create rule(s)`);
+    // Integrations are worth surfacing in the collapsed header: an endpoint
+    // receiving events, or an open API, is not something to discover by
+    // expanding a sub-section.
+    const hooks = (ticketCfg.integrations?.webhooks ?? []).filter((w) => w.enabled).length;
+    if (hooks > 0) parts.push(`${hooks} webhook(s)`);
+    if (ticketCfg.integrations?.api_enabled === true) parts.push("REST API on");
     return `On — ${parts.join(" · ")}.`;
   });
 
@@ -289,6 +292,49 @@
     widget.override === true
       ? `This project overrides the global policy — ${widget.mode ?? "secure"} mode.`
       : "Following the global policy.",
+  );
+
+  /* ── search ───────────────────────────────────────────────────────────
+     Every section is folded, so the page answers "where is that setting?"
+     through this box rather than through scrolling. Each section carries the
+     words someone would actually type — its own label plus the terms used
+     inside it, which stay findable even while the section is closed and its
+     fields are not in the DOM. A hit is shown held-open. */
+  let query = $state("");
+  const q = $derived(query.trim().toLowerCase());
+  const searching = $derived(q !== "");
+
+  const hit = (...terms: (string | undefined)[]) =>
+    q === "" || terms.filter(Boolean).join(" ").toLowerCase().includes(q);
+
+  const showProject = $derived(
+    hit("project name icon description rename chats", name, description),
+  );
+  const showFolder = $derived(
+    hit("folder managed custom path working directory cwd workspace where sessions run", customPath),
+  );
+  const showDefaults = $derived(
+    hit("defaults provider model preset system prompt addon new sessions", preset),
+  );
+  const showTicket = $derived(
+    hit(
+      "ticket system tickets statuses columns custom fields follow up auto resolve auto create rules webhooks integrations rest api",
+      ticketSummary,
+    ),
+  );
+  const showWidget = $derived(
+    hit(
+      "widget permissions csp policy iframe frame-src img-src media-src connect-src script-src popups allowlist sandbox secure unsecure",
+      widgetSummary,
+    ),
+  );
+  const showPinned = $derived(hit("pinned sessions pin chats"));
+  const showAdvanced = $derived(hit("advanced raw project meta json folder change semantics danger zone delete remove project"));
+
+  const matchCount = $derived(
+    [showProject, showFolder, showDefaults, showTicket, showWidget, showPinned, showAdvanced].filter(
+      Boolean,
+    ).length,
   );
 
   const folderModeClass = (active: boolean) =>
@@ -300,13 +346,11 @@
   $effect(() => () => autosave.dispose());
 </script>
 
-<ConfirmDialog
+<DeleteProjectDialog
   open={showDeleteConfirm}
-  title="Delete project?"
-  body="All sessions in this project will be moved to the default project. This cannot be undone."
-  confirmLabel="Delete"
-  destructive={true}
-  onConfirm={handleDelete}
+  {base}
+  {projectID}
+  onDeleted={handleDeleted}
   onCancel={() => { showDeleteConfirm = false; }}
 />
 
@@ -315,25 +359,48 @@
 {:else if error}
   <div class="rounded-xl border border-neg-400/40 bg-neg-100 px-4 py-3 text-sm text-neg-400">{error}</div>
 {:else if data}
+  {#if !data.is_new}
+    <div class="mb-4">
+      <div class="relative">
+        <svg
+          class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black-700 dark:text-black-600"
+          viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"
+        >
+          <circle cx="9" cy="9" r="5.5"></circle>
+          <path d="M13.5 13.5L17 17" stroke-linecap="round"></path>
+        </svg>
+        <input
+          type="search"
+          bind:value={query}
+          placeholder="Search settings — provider, ticket, folder, widget…"
+          aria-label="Search settings"
+          class="w-full rounded-lg border border-white-400 bg-white-100 py-2 pl-9 pr-20 text-sm text-black-900 outline-none transition-colors focus:border-green-500 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100"
+        />
+        {#if searching}
+          <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-black-700 dark:text-black-600">
+            {matchCount} match{matchCount === 1 ? "" : "es"}
+          </span>
+        {/if}
+      </div>
+      {#if searching && matchCount === 0}
+        <p class="mt-3 text-sm text-black-700 dark:text-black-600">No setting matches that search.</p>
+      {/if}
+    </div>
+  {/if}
+
   <form onsubmit={handleCreate} class="flex flex-col gap-4">
     <!-- Identity. An icon + name pair reads as the page's subject, so it
          sits in its own card above the settings rather than inside them. -->
+    {#if showProject}
     <SettingsSection
       title="Project"
       subtitle={data.is_new
         ? "Name it and pick where its sessions run."
         : `${data.chat_count} chats · created ${data.created_at} · ${data.managed ? "managed" : "custom"} folder`}
+      collapsible={!data.is_new}
+      open={data.is_new}
+      forceOpen={searching}
     >
-      {#snippet action()}
-        {#if canDelete}
-          <button
-            type="button"
-            onclick={() => { showDeleteConfirm = true; }}
-            class="rounded-lg border border-neg-400/40 px-3 py-1.5 text-xs font-medium text-neg-400 transition-colors hover:bg-neg-100"
-          >Delete project</button>
-        {/if}
-      {/snippet}
-
       <div class="flex items-center gap-4">
         <input
           type="text"
@@ -371,24 +438,29 @@
         />
       </div>
     </SettingsSection>
+    {/if}
 
     <!-- Folder: two mutually exclusive modes, so a segmented control rather
          than radios — it shows the active choice without reading labels. -->
+    {#if showFolder}
     <SettingsSection
       title="Folder"
       subtitle="Where agent subprocesses run. Changing it shifts the cwd at the next spawn; a running subprocess is unaffected until it restarts."
+      collapsible={!data.is_new}
+      open={data.is_new}
+      forceOpen={searching}
     >
       <div class="flex gap-1 rounded-xl bg-white-200 p-1 dark:bg-navy-800">
         <button
           type="button"
           aria-pressed={folderMode === "managed"}
-          onclick={() => { folderMode = "managed"; commit(); }}
+          onclick={() => { folderMode = "managed"; change(); }}
           class={folderModeClass(folderMode === "managed")}
         >Managed</button>
         <button
           type="button"
           aria-pressed={folderMode === "custom"}
-          onclick={() => { folderMode = "custom"; commit(); }}
+          onclick={() => { folderMode = "custom"; change(); }}
           class={folderModeClass(folderMode === "custom")}
         >Custom path</button>
       </div>
@@ -417,7 +489,7 @@
                 class="hidden"
                 onchange={(e) => {
                   const f = (e.currentTarget as HTMLInputElement).files?.[0];
-                  if (f) { customPath = f.name; commit(); }
+                  if (f) { customPath = f.name; change(); }
                 }}
               />
             </label>
@@ -429,10 +501,15 @@
         </div>
       {/if}
     </SettingsSection>
+    {/if}
 
+    {#if showDefaults}
     <SettingsSection
       title="Defaults"
       subtitle="Where new sessions in this project start. Sub-agents inherit the provider and model."
+      collapsible={!data.is_new}
+      open={data.is_new}
+      forceOpen={searching}
     >
       <div class="flex flex-col gap-4">
         <div>
@@ -441,7 +518,7 @@
             id="ps-provider"
             options={providerOptions}
             value={pickerValue}
-            onChange={(v) => { pickerValue = v; commit(); }}
+            onChange={(v) => { pickerValue = v; change(); }}
             loadModels={loadProviderModels}
             placeholder="Select provider"
           />
@@ -451,7 +528,7 @@
           <select
             id="ps-preset"
             bind:value={preset}
-            onchange={commit}
+            onchange={change}
             class="w-full rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm text-black-900 outline-none transition-colors focus:border-green-500 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
           >
             {#each data.preset_list as p (p)}
@@ -473,26 +550,36 @@
         </div>
       </div>
     </SettingsSection>
+    {/if}
 
     {#if !data.is_new}
       <!-- Both of these are long editors that most visits do not touch, so
            they stay folded with their current state in the subtitle. -->
-      <div onchange={commit} role="none">
+      {#if showTicket}
+      <div onchange={change} role="none">
         <SettingsSection
           title="Ticket system"
           subtitle={ticketSummary}
           collapsible
-          open={ticketCfg.enabled === true}
+          forceOpen={searching}
         >
-          <TicketSystemEditor cfg={ticketCfg} onChange={(c) => { ticketCfg = c; edit(); }} />
+          <TicketSystemEditor
+            {projectID}
+            {base}
+            cfg={ticketCfg}
+            onChange={(c) => { ticketCfg = c; edit(); }}
+          />
         </SettingsSection>
       </div>
+      {/if}
 
-      <div onchange={commit} role="none">
+      {#if showWidget}
+      <div onchange={change} role="none">
         <SettingsSection
           title="Widget permissions"
           subtitle={widgetSummary}
           collapsible
+          forceOpen={searching}
         >
           <p class="mb-3 text-xs leading-relaxed text-black-700 dark:text-black-600">
             Widget HTML is written by the agent, so it runs sealed off by default. Pick a mode —
@@ -506,10 +593,16 @@
           />
         </SettingsSection>
       </div>
+      {/if}
 
+      {#if showPinned}
       <SettingsSection
         title="Pinned sessions"
-        subtitle="Chats kept at the top of this project. Pin one from a chat's menu."
+        subtitle={data.pinned.length === 0
+          ? "Nothing pinned yet. Pin a chat from its menu."
+          : `${data.pinned.length} pinned chat${data.pinned.length === 1 ? "" : "s"}.`}
+        collapsible
+        forceOpen={searching}
       >
         {#if data.pinned.length === 0}
           <p class="text-xs text-black-700 dark:text-black-600">Nothing pinned yet.</p>
@@ -533,13 +626,16 @@
           </ul>
         {/if}
       </SettingsSection>
+      {/if}
 
+      {#if showAdvanced}
       <!-- Collapsed by default: worth having when something looks wrong,
            not worth the vertical space the rest of the time. -->
       <SettingsSection
         title="Advanced"
         subtitle="Raw project meta and folder-change semantics."
         collapsible
+        forceOpen={searching}
       >
         <h3 class="mb-2 text-xs font-semibold text-black-800 dark:text-black-600">Project meta</h3>
         <pre class="overflow-x-auto rounded-lg border border-white-300 bg-white-200 p-3 text-xs text-black-800 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">{data.meta_json}</pre>
@@ -549,7 +645,43 @@
           <li>Custom → managed: a new managed folder is created; the custom path is left untouched.</li>
           <li>Live sessions: the cwd shifts at the next spawn; a running subprocess is unaffected until it restarts.</li>
         </ul>
+        {#if !data.is_new && !data.is_protected}
+          <div class="mt-5 rounded-lg border border-white-300 p-3 dark:border-navy-600" data-testid="make-agent">
+            <h3 class="text-xs font-semibold text-black-900 dark:text-white-100">Make this an agent</h3>
+            <p class="mt-1 text-xs leading-relaxed text-black-700 dark:text-black-600">
+              Turn this project into a Team agent with its name, description and system prompt. Its chats and files
+              stay; it shows in Team and, unless you turn that off, in the Projects list too. Only the project's owner can do this.
+            </p>
+            <a
+              href={`${base}/team?panel=new&project=${encodeURIComponent(projectID)}`}
+              class="mt-3 inline-block rounded-lg border border-white-400 px-3 py-1.5 text-xs font-medium text-black-800 transition-colors hover:bg-white-200 dark:border-navy-600 dark:text-black-600 dark:hover:bg-navy-800"
+            >Make this an agent…</a>
+          </div>
+        {/if}
+        {#if !data.is_new}
+          <!-- Danger zone sits last inside Advanced: findable (search
+               "delete" opens it) without a red button on every visit. -->
+          <div class="mt-5 rounded-lg border border-neg-400/40 bg-neg-400/10 p-3" data-testid="danger-zone">
+            <h3 class="text-xs font-semibold text-neg-400">Danger zone</h3>
+            {#if canDelete}
+              <p class="mt-1 text-xs leading-relaxed text-black-700 dark:text-black-600">
+                Deleting removes this project's {data.chat_count} chats, the agents' memory for it and
+                {data.managed ? "its managed files folder" : "its settings — the custom folder stays on disk"}.
+                This cannot be undone.
+              </p>
+            {:else}
+              <p class="mt-1 text-xs leading-relaxed text-black-700 dark:text-black-600">This project can't be deleted (default/personal).</p>
+            {/if}
+            <button
+              type="button"
+              disabled={!canDelete}
+              onclick={() => { showDeleteConfirm = true; }}
+              class="mt-3 rounded-lg border border-neg-400/40 px-3 py-1.5 text-xs font-medium text-neg-400 transition-colors hover:bg-neg-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >Delete project…</button>
+          </div>
+        {/if}
       </SettingsSection>
+      {/if}
     {/if}
 
     <!-- A project that does not exist yet cannot be auto-saved: there is no

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/yogasw/wick/internal/agents/capability"
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -107,6 +108,7 @@ func (prober) SendSentinel(ctx context.Context, workspace, sentinelPath string) 
 		prompt,
 	)
 	cmd.Dir = workspace
+	cmd.Env = envscrub.ScrubOSEnv()
 	out, runErr := cmd.CombinedOutput()
 	if runErr != nil {
 		// Codex exits non-zero when the shell tool is denied — that's

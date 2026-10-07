@@ -179,3 +179,63 @@ export function reorderTo(order: string[], id: string, to: number): string[] {
   next.splice(j, 0, id);
   return next;
 }
+
+/** The share of the window height the strip may occupy before tabs start
+    folding away on their own.
+ *
+ * The rail is centred on the right edge, so a strip taller than the window
+ * loses its ends off the top and bottom — and those ends are buttons. Eight
+ * tabs already reach that on a laptop and a phone gets there sooner. Leaving
+ * a fifth of the height clear keeps the whole strip on screen with room to
+ * breathe, and what does not fit goes where the other folded tabs already
+ * are: behind "More". */
+export const RAIL_FILL = 0.8;
+
+/** Height to assume for a tab that has never been rendered, in px.
+
+    Only used before the first measurement lands; a rendered tab reports its
+    own height and that is what is used from then on. */
+export const RAIL_TAB_FALLBACK_H = 52;
+
+/** Trims the strip to what the window can actually hold.
+
+    `splitRail` decides what the user WANTS in the strip; this decides what
+    fits. They are separate on purpose — folding here is a display override
+    like badge promotion is, so nothing is written to the saved layout and
+    the tabs come back the moment the window is tall enough again.
+
+    Tabs are kept from the top down and the first one that does not fit ends
+    the strip, so the arrangement is never scrambled to squeeze one more in.
+    The active tab is reserved first: its panel is open, and a tab that
+    vanished into "More" leaves nothing to click to close it. At least one
+    tab always stays, since a strip of nothing but "More" reads as broken.
+
+    `height(id)` is the measured height of that tab, sticky across folds —
+    measuring only what is currently shown would make a dropped tab's height
+    unknown again, and the fit would oscillate. */
+export function fitStrip<T extends { id: string }>(
+  ordered: T[],
+  split: { shown: T[]; overflow: T[] },
+  height: (id: string) => number,
+  budget: number,
+  activeId?: string | null,
+): { shown: T[]; overflow: T[] } {
+  if (!(budget > 0) || split.shown.length === 0) return split;
+  const keep = new Set<string>();
+  let used = 0;
+  const reserve = (id: string) => {
+    keep.add(id);
+    used += height(id);
+  };
+  if (activeId && split.shown.some((t) => t.id === activeId)) reserve(activeId);
+  for (const t of split.shown) {
+    if (keep.has(t.id)) continue;
+    if (keep.size > 0 && used + height(t.id) > budget) break;
+    reserve(t.id);
+  }
+  if (keep.size === split.shown.length) return split;
+  return {
+    shown: split.shown.filter((t) => keep.has(t.id)),
+    overflow: ordered.filter((t) => !keep.has(t.id)),
+  };
+}

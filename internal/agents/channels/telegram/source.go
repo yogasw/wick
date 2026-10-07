@@ -44,6 +44,25 @@ func NewConfigSourceKeyed(store agentchannels.TelegramConfigStore, ch *Channel, 
 	return NewConfigSource(store, ch)
 }
 
+// NewConfigSourceForAgent hot-reloads a Team agent's own Telegram bot from
+// its agent_channels row.
+func NewConfigSourceForAgent(store agentchannels.TelegramConfigStore, ch *Channel, agentID string) *ConfigSource {
+	type agentLoader interface {
+		LoadTelegramForAgent(string) (agentconfig.TelegramChannelConfig, error)
+	}
+	loader, ok := store.(agentLoader)
+	if !ok {
+		return NewConfigSource(store, ch)
+	}
+	return &ConfigSource{store: store, ch: ch, loadFn: func() agentconfig.TelegramChannelConfig {
+		cfg, err := loader.LoadTelegramForAgent(agentID)
+		if err != nil {
+			return agentconfig.TelegramChannelConfig{}
+		}
+		return cfg
+	}}
+}
+
 func (s *ConfigSource) load() agentconfig.TelegramChannelConfig {
 	if s.loadFn != nil {
 		return s.loadFn()

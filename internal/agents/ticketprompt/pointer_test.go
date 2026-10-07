@@ -67,7 +67,7 @@ func TestPointerNamesTicketAndCountsNotes(t *testing.T) {
 	}
 
 	got := Pointer(l, "s1")
-	for _, want := range []string{tk.ID, "Payment webhook failing", "2 note(s)", "1 of them unchecked", "notes_list"} {
+	for _, want := range []string{tk.ID, "Payment webhook failing", "2 note(s)", "1 of them unchecked", "notes_list", "ticket_get", "check your skills"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("pointer missing %q in:\n%s", want, got)
 		}
@@ -75,6 +75,47 @@ func TestPointerNamesTicketAndCountsNotes(t *testing.T) {
 	// The whole point: bodies stay out of the prompt.
 	if strings.Contains(got, "root cause is the retry loop") {
 		t.Fatalf("pointer leaked a note body into the prompt:\n%s", got)
+	}
+}
+
+// The ticket's description rides in the pointer, excerpted: it is what makes
+// "what is this chat about?" answerable without a tool call. A long body is
+// cut with a breadcrumb to ticket_get rather than inlined whole.
+func TestPointerCarriesBodyExcerpt(t *testing.T) {
+	l := setup(t)
+	mkSession(t, l, "s1", "p1")
+	long := strings.Repeat("repro step. ", 100) // way past bodyExcerptLen
+	tk, err := ticket.Create(l, ticket.CreateOptions{ProjectID: "p1", Title: "with body", Body: long})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ticket.AttachSession(l, "p1", tk.ID, "s1"); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Pointer(l, "s1")
+	if !strings.Contains(got, "repro step.") {
+		t.Fatalf("pointer missing the body excerpt:\n%s", got)
+	}
+	if strings.Contains(got, long) {
+		t.Fatal("pointer inlined the whole body instead of an excerpt")
+	}
+	if !strings.Contains(got, "truncated — ticket_get") {
+		t.Fatalf("truncated body should point at ticket_get:\n%s", got)
+	}
+
+	// A short body arrives whole, with no truncation breadcrumb.
+	tk2, err := ticket.Create(l, ticket.CreateOptions{ProjectID: "p1", Title: "short", Body: "just fix the 401"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mkSession(t, l, "s2", "p1")
+	if err := ticket.AttachSession(l, "p1", tk2.ID, "s2"); err != nil {
+		t.Fatal(err)
+	}
+	got2 := Pointer(l, "s2")
+	if !strings.Contains(got2, "just fix the 401") || strings.Contains(got2, "truncated") {
+		t.Fatalf("short body should be inlined whole:\n%s", got2)
 	}
 }
 

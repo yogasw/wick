@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -119,36 +120,127 @@ type Ticket struct {
 	ID        string `json:"id"`
 	ProjectID string `json:"project_id"`
 	Title     string `json:"title"`
-	Status    string `json:"status"`
-	Assignee  string `json:"assignee,omitempty"` // wick user ID
+	// Body is the ticket's description, markdown. The title says what the
+	// work is; this is where the detail lives (repro steps, links, context).
+	Body   string `json:"body,omitempty"`
+	Status string `json:"status"`
+	// Assignee is the FIRST of Assignees, kept as its own field because it
+	// is what every board filter, webhook payload and connector answer has
+	// meant by "assignee" since before a ticket could have two. Never set
+	// it directly — SetAssignees keeps the two in step, and Load/Save
+	// normalise anything that arrives out of step.
+	Assignee string `json:"assignee,omitempty"` // wick user ID
+	// Assignees is the list of record: work lands on a pair as often as on
+	// a person, and a single field forced that to be written in the title.
+	// A ticket saved before this field existed has only Assignee, which
+	// Load folds into a one-element list.
+	Assignees []string `json:"assignees,omitempty"` // wick user IDs
 	// Fields holds values keyed by project.TicketField.Key.
 	Fields map[string]string `json:"fields,omitempty"`
 	// Sessions is the list of record for which sessions belong here.
 	Sessions  []string  `json:"sessions,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
-	// UpdatedAt tracks the last TICKET edit — not chat activity. The
-	// stale-followup and auto-resolve timers run from it.
+	// UpdatedAt tracks the last TICKET edit — not chat activity. It is what
+	// the board shows and sorts on, and a MIRROR may set it to the source
+	// system's own edit time (see SaveAsAt), so it can legitimately be
+	// months in the past on a ticket wick learned about a second ago.
 	UpdatedAt time.Time `json:"updated_at"`
+	// TouchedAt is when WICK last wrote this ticket, whatever timestamp the
+	// writer asked to display. The idle timers run from this rather than
+	// from UpdatedAt, because "nobody has touched this in two days" has to
+	// mean two days of OUR silence.
+	//
+	// Without the split, importing a ticket last edited in June closed it
+	// on arrival: the auto-resolve sweeper read the mirrored date, decided
+	// it had been idle for months, and marked it done — 130 tickets in one
+	// run on this install. Zero on a ticket written before this field
+	// existed, and the timers fall back to UpdatedAt there.
+	TouchedAt time.Time `json:"touched_at,omitempty"`
 	// LastFollowupAt guards the sweeper against re-sending a followup on
 	// every tick; the next one waits another full window.
 	LastFollowupAt time.Time `json:"last_followup_at,omitempty"`
+	// AutoResolvedAt marks a ticket CLOSED BY THE SWEEPER rather than by a
+	// person. It exists so a mirror can tell the two apart: pushing a
+	// machine-made "done" into the system of record is how one bad idle
+	// timer became 13 Notion pages marked Done that nobody had finished.
+	//
+	// Cleared whenever the status moves again, so a ticket reopened by
+	// hand carries no trace of having been swept.
+	AutoResolvedAt time.Time `json:"auto_resolved_at,omitempty"`
 }
 
 // CreateOptions describes a new ticket.
 type CreateOptions struct {
 	ProjectID string
-	Title     string
-	Status    string // defaults to open
+	// ID adopts an external identifier instead of generating one. It exists
+	// so a ticket mirroring a Notion page can BE that page — no mapping to
+	// store, and creating from the same page twice collides instead of
+	// silently opening a second ticket. Empty means "generate one", which
+	// is what every internal caller wants. See NormalizeID for the shape.
+	ID     string
+	Title  string
+	Body   string // markdown description, optional
+	Status string // defaults to open
+	// Assignee names one person; Assignees names several. Both are
+	// accepted so a caller with one id does not have to build a slice —
+	// they are merged, in order, with duplicates dropped.
 	Assignee  string
+	Assignees []string
 	Fields    map[string]string
 	// Sessions optionally seeds the session list (used when a ticket is
 	// created from an existing conversation).
 	Sessions []string
+	// Actor is who is creating this, for the outbound webhook envelope.
+	// Zero value reports as "system", which is right for internal writes
+	// (auto-create, the sweeper) and wrong for nothing.
+	Actor Actor
 }
 
 // idAlphabet excludes I, O, 0, and 1 — a ticket code gets read aloud and
 // retyped, and those four are where that goes wrong.
 const idAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+// customIDRe is the charset a caller-supplied id must fit. A ticket id
+// becomes a directory name, so this is the same traversal-safe family
+// session ids use, with a length cap because the id also has to render on
+// a board card. Leading dots and ".." are refused separately.
+var customIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// uuidRe matches a uuid once its dashes are stripped.
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// generatedIDRe matches the shape newID mints. A caller may not claim one:
+// the generator has to stay free to mint any code without checking whether
+// somebody reserved it by hand.
+var generatedIDRe = regexp.MustCompile(`^T-[` + idAlphabet + `]{4}$`)
+
+// NormalizeID canonicalises a caller-supplied ticket id.
+//
+// Any id in the safe charset is kept verbatim — "TIK-2026-001" stays what
+// the caller typed, because an id adopted from another system is only
+// useful if it survives the trip unchanged.
+//
+// The one exception is a uuid, which is folded to dashless lowercase.
+// Notion hands the same page id out in two shapes (dashless 32-hex in a
+// page URL, dashed uuid from its API) and they must not become two
+// tickets: collapsing both to one form is what makes "create from this
+// page" idempotent no matter which shape the caller copied.
+func NormalizeID(id string) (string, error) {
+	s := strings.TrimSpace(id)
+	if s == "" {
+		return "", fmt.Errorf("ticket id is empty")
+	}
+	if strings.HasPrefix(s, ".") || strings.Contains(s, "..") || !customIDRe.MatchString(s) {
+		return "", fmt.Errorf("invalid ticket id %q (allowed: [A-Za-z0-9._-], up to 64 characters)", id)
+	}
+	if generatedIDRe.MatchString(s) {
+		return "", fmt.Errorf("ticket id %q is reserved for generated codes", id)
+	}
+	if h := strings.ToLower(strings.ReplaceAll(s, "-", "")); uuidRe.MatchString(h) {
+		return h, nil
+	}
+	return s, nil
+}
 
 // newID returns a short code like "T-4F2A".
 func newID() (string, error) {
@@ -192,6 +284,44 @@ func Create(layout config.Layout, opt CreateOptions) (Ticket, error) {
 	}
 
 	now := time.Now().UTC()
+	write := func(id string) (Ticket, error) {
+		tk := Ticket{
+			ID:        id,
+			ProjectID: opt.ProjectID,
+			Title:     title,
+			Body:      strings.TrimSpace(opt.Body),
+			Status:    status,
+			Fields:    opt.Fields,
+			Sessions:  opt.Sessions,
+			CreatedAt: now,
+			UpdatedAt: now,
+			TouchedAt: now,
+		}
+		tk.SetAssignees(append([]string{opt.Assignee}, opt.Assignees...))
+		if err := os.MkdirAll(layout.TicketDir(opt.ProjectID, id), 0o755); err != nil {
+			return Ticket{}, err
+		}
+		if err := storage.WriteJSON(layout.TicketFile(opt.ProjectID, id), &tk); err != nil {
+			return Ticket{}, err
+		}
+		emit(Event{Event: EventCreated, Ticket: tk, Actor: opt.Actor.orSystem()})
+		return tk, nil
+	}
+
+	// A caller-supplied id is a claim on one specific slot, so a taken slot
+	// is an error rather than something to retry past: the point of adopting
+	// an external id is that creating twice from the same source is caught.
+	if raw := strings.TrimSpace(opt.ID); raw != "" {
+		id, err := NormalizeID(raw)
+		if err != nil {
+			return Ticket{}, err
+		}
+		if Exists(layout, opt.ProjectID, id) {
+			return Ticket{}, fmt.Errorf("ticket %q already exists", id)
+		}
+		return write(id)
+	}
+
 	for attempt := 0; attempt < 8; attempt++ {
 		id, err := newID()
 		if err != nil {
@@ -200,24 +330,7 @@ func Create(layout config.Layout, opt CreateOptions) (Ticket, error) {
 		if storage.PathExists(layout.TicketFile(opt.ProjectID, id)) {
 			continue
 		}
-		tk := Ticket{
-			ID:        id,
-			ProjectID: opt.ProjectID,
-			Title:     title,
-			Status:    status,
-			Assignee:  strings.TrimSpace(opt.Assignee),
-			Fields:    opt.Fields,
-			Sessions:  opt.Sessions,
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-		if err := os.MkdirAll(layout.TicketDir(opt.ProjectID, id), 0o755); err != nil {
-			return Ticket{}, err
-		}
-		if err := storage.WriteJSON(layout.TicketFile(opt.ProjectID, id), &tk); err != nil {
-			return Ticket{}, err
-		}
-		return tk, nil
+		return write(id)
 	}
 	return Ticket{}, fmt.Errorf("could not allocate a free ticket id after 8 attempts")
 }
@@ -231,15 +344,153 @@ func Load(layout config.Layout, projectID, ticketID string) (Ticket, error) {
 	if err := storage.ReadJSON(layout.TicketFile(projectID, ticketID), &tk); err != nil {
 		return Ticket{}, err
 	}
+	tk.normaliseAssignees()
 	return tk, nil
+}
+
+// normaliseAssignees makes the two assignee fields agree, whichever one the
+// caller filled in.
+//
+// A ticket written before Assignees existed has only Assignee, and one
+// written by a caller that only knows the list has only Assignees. Both
+// shapes arrive here, and everything downstream — the board filter, the
+// webhook payload, the connector answer — reads whichever field suits it.
+// Normalising at the two doors (read and write) is what keeps them from
+// ever disagreeing in between.
+func (t *Ticket) normaliseAssignees() {
+	if len(t.Assignees) == 0 {
+		t.SetAssignees([]string{t.Assignee})
+		return
+	}
+	t.SetAssignees(t.Assignees)
+}
+
+// SetAssignees replaces the assignee list, trimming blanks and duplicates
+// and re-pointing Assignee at the first of them. Order is the caller's: the
+// first name is the one a card has room for.
+func (t *Ticket) SetAssignees(ids []string) {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		t.Assignees, t.Assignee = nil, ""
+		return
+	}
+	t.Assignees, t.Assignee = out, out[0]
+}
+
+// AssigneeList returns everyone the ticket is on, tolerating a value that
+// never went through Load (a literal in a test, a decoded payload).
+func (t Ticket) AssigneeList() []string {
+	if len(t.Assignees) > 0 {
+		return t.Assignees
+	}
+	if s := strings.TrimSpace(t.Assignee); s != "" {
+		return []string{s}
+	}
+	return nil
+}
+
+// HasAssignee reports whether id is one of the people this ticket is on.
+func (t Ticket) HasAssignee(id string) bool {
+	for _, a := range t.AssigneeList() {
+		if a == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Save rewrites a ticket and bumps UpdatedAt, which is what the stale and
 // auto-resolve timers key on. Callers that must NOT move those timers
 // (the sweeper stamping LastFollowupAt) use SaveKeepingTimestamp.
 func Save(layout config.Layout, tk Ticket) error {
-	tk.UpdatedAt = time.Now().UTC()
-	return SaveKeepingTimestamp(layout, tk)
+	return SaveAs(layout, tk, Actor{})
+}
+
+// SaveAs is Save with the actor named, so the outbound event can say who
+// moved the ticket. Save stays as the unattributed form because most
+// internal callers genuinely have nobody to name.
+func SaveAs(layout config.Layout, tk Ticket, actor Actor) error {
+	_, err := SaveAsAt(layout, tk, actor, time.Time{})
+	return err
+}
+
+// SaveAsAt is SaveAs with the timestamp chosen by the caller. A zero at
+// means now, which is what every interactive edit wants.
+//
+// A non-zero one is for a mirror: a ticket imported from another system
+// should carry THAT system's edit time, not the moment the importer
+// happened to run. Without it a sync makes every ticket it touches read
+// "just now", the board sorts by when the sync ran rather than by when the
+// work moved, and "updated 3 days ago" stops being a fact about the work.
+// It RETURNS what it stored. The timestamps are set on this function's own
+// copy, so a caller that answers an HTTP request with the value it passed in
+// answers with the OLD updated_at — which is how a dragged card kept saying
+// "5h ago" until the page was reloaded, while the ticket on disk had moved.
+func SaveAsAt(layout config.Layout, tk Ticket, actor Actor, at time.Time) (Ticket, error) {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	tk.UpdatedAt = at.UTC()
+	tk.TouchedAt = time.Now().UTC()
+	tk.AutoResolvedAt = carryAutoResolved(layout, tk)
+	return tk, saveEmitting(layout, tk, actor)
+}
+
+// carryAutoResolved keeps the sweeper's mark only while the status it set
+// is still the status: the moment anybody moves the ticket, the fact that
+// it was once swept stops being true of where it is now.
+func carryAutoResolved(layout config.Layout, tk Ticket) time.Time {
+	before, err := Load(layout, tk.ProjectID, tk.ID)
+	if err != nil || before.AutoResolvedAt.IsZero() {
+		return time.Time{}
+	}
+	if before.Status != tk.Status {
+		return time.Time{}
+	}
+	return before.AutoResolvedAt
+}
+
+// SaveAsKeeping writes tk with its existing UpdatedAt and still emits the
+// events its diff implies — for a write that is pure bookkeeping (a sync
+// stamping "I checked this"), where moving the timestamp would be a lie
+// about the work.
+// Also returns what it stored, for the same reason as SaveAsAt — here the
+// displayed timestamp is deliberately unchanged, but TouchedAt is not.
+func SaveAsKeeping(layout config.Layout, tk Ticket, actor Actor) (Ticket, error) {
+	tk.TouchedAt = time.Now().UTC()
+	tk.AutoResolvedAt = carryAutoResolved(layout, tk)
+	return tk, saveEmitting(layout, tk, actor)
+}
+
+// saveEmitting writes tk and fires the events its diff implies.
+//
+// The pre-image is read before the write so the envelope can carry a real
+// before/after. A ticket that cannot be read (first write, corrupt file) is
+// simply saved without a diff rather than failing: losing an event is a far
+// better outcome than losing the edit.
+func saveEmitting(layout config.Layout, tk Ticket, actor Actor) error {
+	before, err := Load(layout, tk.ProjectID, tk.ID)
+	hadBefore := err == nil
+	if werr := SaveKeepingTimestamp(layout, tk); werr != nil {
+		return werr
+	}
+	if !hadBefore {
+		return nil
+	}
+	changes := diff(before, tk)
+	for _, name := range EventsFor(changes) {
+		emit(Event{Event: name, Ticket: tk, Changes: changes, Actor: actor.orSystem()})
+	}
+	return nil
 }
 
 // SaveKeepingTimestamp persists a ticket exactly as given, leaving
@@ -251,6 +502,7 @@ func SaveKeepingTimestamp(layout config.Layout, tk Ticket) error {
 	if !storage.PathExists(layout.TicketDir(tk.ProjectID, tk.ID)) {
 		return fmt.Errorf("ticket %q not found", tk.ID)
 	}
+	tk.normaliseAssignees()
 	return storage.WriteJSON(layout.TicketFile(tk.ProjectID, tk.ID), &tk)
 }
 
@@ -326,6 +578,7 @@ func AttachSession(layout config.Layout, projectID, ticketID, sessionID string) 
 	if err := SaveKeepingTimestamp(layout, tk); err != nil {
 		return err
 	}
+	emit(Event{Event: EventSessionAttached, Ticket: tk, Session: sessionID, Actor: Actor{}.orSystem()})
 	return moveNotes(layout, sessionID, from, ticketID)
 }
 
@@ -336,6 +589,9 @@ func DetachSession(layout config.Layout, projectID, ticketID, sessionID string) 
 	changed, err := detachAndReport(layout, projectID, ticketID, sessionID)
 	if err != nil || !changed {
 		return err
+	}
+	if tk, lerr := Load(layout, projectID, ticketID); lerr == nil {
+		emit(Event{Event: EventSessionDetached, Ticket: tk, Session: sessionID, Actor: Actor{}.orSystem()})
 	}
 	// Notes go back to the session, not into the void: the ticket keeps
 	// what other sessions wrote, this session keeps what it wrote.
@@ -399,7 +655,16 @@ func Delete(layout config.Layout, projectID, ticketID string) error {
 	if !Exists(layout, projectID, ticketID) {
 		return fmt.Errorf("ticket %q not found", ticketID)
 	}
-	return os.RemoveAll(layout.TicketDir(projectID, ticketID))
+	// Read before removing: the event carries the ticket that was deleted,
+	// which is the only copy a receiver will ever get of it.
+	tk, lerr := Load(layout, projectID, ticketID)
+	if err := os.RemoveAll(layout.TicketDir(projectID, ticketID)); err != nil {
+		return err
+	}
+	if lerr == nil {
+		emit(Event{Event: EventDeleted, Ticket: tk, Actor: Actor{}.orSystem()})
+	}
+	return nil
 }
 
 // OrphanedStatuses returns the status keys that would be left holding

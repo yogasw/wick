@@ -74,3 +74,59 @@ func TestCodexControlFramesSkipped(t *testing.T) {
 		}
 	}
 }
+
+// TestCodexTurnUsage pins the shape captured from a live codex 0.129 run.
+// The trap it guards: codex's input_tokens ALREADY includes the cached
+// part, unlike Anthropic's disjoint trio. Adding them would count the
+// cache twice and inflate every codex bill in the ledger.
+func TestCodexTurnUsage(t *testing.T) {
+	line := `{"type":"turn.completed","usage":{"input_tokens":20250,` +
+		`"cached_input_tokens":11264,"cache_write_input_tokens":0,` +
+		`"output_tokens":5,"reasoning_output_tokens":0}}`
+	ev, err := NewCodexParser().Parse(line)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if ev.Type != Done {
+		t.Fatalf("want Done, got %v", ev.Type)
+	}
+	if ev.Usage == nil {
+		t.Fatal("want usage, got nil")
+	}
+	// NOT the context level: input_tokens is the turn's SUM over every
+	// request it made (see codex_rollout.go), so with no rollout to read
+	// the level stays unknown rather than being inflated by the tool
+	// calls. Proven on 0.149.1: 92,842 reported, 18,874 actually held.
+	if ev.Usage.ContextUsed != 0 {
+		t.Fatalf("context level: want 0 (unknown without a rollout), got %d", ev.Usage.ContextUsed)
+	}
+	if ev.Usage.Input != 20250-11264 {
+		t.Fatalf("fresh input: want %d, got %d", 20250-11264, ev.Usage.Input)
+	}
+	if ev.Usage.CacheRead != 11264 || ev.Usage.Output != 5 {
+		t.Fatalf("usage: %+v", ev.Usage)
+	}
+	// Codex's STREAM reports no model id and no window — better empty
+	// than guessed. (The window does exist in its rollout; a parser
+	// without one, like this bare NewCodexParser, never sees it.)
+	if ev.Usage.Window != 0 || ev.Usage.Model != "" {
+		t.Fatalf("want no window/model, got %+v", ev.Usage)
+	}
+}
+
+// TestCodexTurnUsageAbsent: older codex builds send `"usage":{}` or omit
+// it; that must yield no reading rather than a zero-cost turn.
+func TestCodexTurnUsageAbsent(t *testing.T) {
+	for _, line := range []string{
+		`{"type":"turn.completed"}`,
+		`{"type":"turn.completed","usage":{}}`,
+	} {
+		ev, err := NewCodexParser().Parse(line)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if ev.Usage != nil {
+			t.Fatalf("want nil usage for %s, got %+v", line, ev.Usage)
+		}
+	}
+}

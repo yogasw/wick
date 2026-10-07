@@ -56,6 +56,11 @@ func (t *testRouter) PATCH(p string, h tool.HandlerFunc) {
 // Use is a no-op here: this test router only mounts registerSPA, which
 // declares no middleware. Present so testRouter still satisfies tool.Router.
 func (t *testRouter) Use(prefix string, mw tool.Middleware) {}
+
+// WebhookGroup is a no-op here: registerSPA declares no webhook routes.
+// Present so testRouter still satisfies tool.Router.
+func (t *testRouter) WebhookGroup(prefix string) tool.WebhookRouter { return discardHooks{} }
+
 func (t *testRouter) HandleRaw(prefix string, fn func(cfg tool.ConfigReader) http.Handler) {
 	// Mirror the real toolRouter — mount the handler as-is, no
 	// StripPrefix. The caller is expected to strip its own mount path

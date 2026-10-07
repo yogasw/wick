@@ -12,9 +12,11 @@ import (
 // stubConn is a no-op GRPCConn for pool/lease tests.
 type stubConn struct{}
 
-func (stubConn) Execute(_ context.Context, _ wickplugin.ExecCall) ([]byte, error) { return nil, nil }
-func (stubConn) ExecuteStream(_ context.Context, _ wickplugin.ExecCall) ([]byte, error) {
-	return nil, nil
+func (stubConn) Execute(_ context.Context, _ wickplugin.ExecCall) (wickplugin.ExecResult, error) {
+	return wickplugin.ExecResult{}, nil
+}
+func (stubConn) ExecuteStream(_ context.Context, _ wickplugin.ExecCall) (wickplugin.ExecResult, error) {
+	return wickplugin.ExecResult{}, nil
 }
 func (stubConn) Schema(context.Context) ([]byte, error) { return nil, nil }
 func (stubConn) ResolveIdentity(context.Context, string) (string, string, error) {

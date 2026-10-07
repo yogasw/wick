@@ -3,6 +3,7 @@ package plugin
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -17,7 +18,7 @@ import (
 // module marshals with its func fields excluded (json:"-"), so the envelope
 // is fully round-trippable.
 type Manifest struct {
-	SchemaVersion int    `json:"schema_version"`
+	SchemaVersion int `json:"schema_version"`
 	// Kind is the plugin kind: "connector" (default), "tool", or "job". The
 	// platform routes installed plugins by kind into the matching registry;
 	// all kinds share the same gRPC service (Execute(op,args)→result is generic
@@ -31,28 +32,77 @@ type Manifest struct {
 	SHA256       string           `json:"sha256"`
 	Signature    string           `json:"signature"`
 	Module       connector.Module `json:"module"`
+	// Job carries the job meta + configs for kind=job (Module.Meta mirrors its
+	// key/name so key-based install/scan code stays kind-agnostic).
+	Job *JobModule `json:"job,omitempty"`
+	// Tool carries the tool meta, configs, webhook routes, and keep_warm for
+	// kind=tool (Module.Meta mirrors key/name the same way as for jobs).
+	Tool *ToolModule `json:"tool,omitempty"`
+	// Service carries the routes, auth modes, capabilities, and callback
+	// scopes for kind=service.
+	Service *ServiceModule `json:"service,omitempty"`
+}
+
+// manifestJSON is Manifest without its methods, so MarshalJSON and
+// UnmarshalJSON can reuse the default encoding without recursing.
+type manifestJSON Manifest
+
+// MarshalJSON leaves the legacy "module" block out of a kind=service
+// manifest: its identity and configs live in "service", and the module there
+// only ever carried a mirrored meta with null configs. Other kinds keep it.
+func (m Manifest) MarshalJSON() ([]byte, error) {
+	if m.Kind != KindService || m.Service == nil {
+		return json.Marshal(manifestJSON(m))
+	}
+	return json.Marshal(struct {
+		manifestJSON
+		Module *connector.Module `json:"module,omitempty"`
+	}{manifestJSON: manifestJSON(m)})
+}
+
+// UnmarshalJSON reads both shapes. A service manifest without "module" gets
+// Module.Meta mirrored from Service.Meta so key-based install/scan code stays
+// kind-agnostic; an older one that still carries the block loads unchanged.
+func (m *Manifest) UnmarshalJSON(b []byte) error {
+	if err := json.Unmarshal(b, (*manifestJSON)(m)); err != nil {
+		return err
+	}
+	if m.Kind == KindService && m.Service != nil && m.Module.Meta.Key == "" {
+		m.Module.Meta = serviceConnectorMeta(m.Service.Meta)
+	}
+	return nil
 }
 
 // ManifestSchemaVersion is the current envelope format version.
 const ManifestSchemaVersion = 1
 
-// Plugin kinds. connector is the default and the only kind with a host-side
-// execution adapter today; tool/job are accepted by the manifest + build
-// tooling so the layout and CLI are forward-compatible (§18).
+// Plugin kinds. connector and job have host-side adapters; tool/service are
+// accepted by the manifest + build tooling so the layout and CLI are
+// forward-compatible.
 const (
 	KindConnector = "connector"
 	KindTool      = "tool"
 	KindJob       = "job"
+	KindService   = "service"
 )
+
+// Kinds lists every plugin kind in display order.
+var Kinds = []string{KindConnector, KindTool, KindJob, KindService}
 
 // NormalizeKind returns a valid kind, defaulting empty/unknown to connector.
 func NormalizeKind(k string) string {
 	switch k {
-	case KindTool, KindJob:
+	case KindTool, KindJob, KindService:
 		return k
 	default:
 		return KindConnector
 	}
+}
+
+// KindFolder is the per-kind install folder under the plugins root
+// (plugins/connectors, plugins/jobs, plugins/tools, plugins/services).
+func KindFolder(kind string) string {
+	return NormalizeKind(kind) + "s"
 }
 
 // ValidateKey enforces that a plugin's Meta.Key is a safe slug. Key is the one
@@ -69,14 +119,19 @@ func ValidateKey(key string) error {
 	if len(key) > 64 {
 		return fmt.Errorf("plugin key %q too long (max 64)", key)
 	}
-	// No '-': the release asset name is "<key>-<version>-<goos>-<goarch>.zip" and
-	// the catalog parses it by splitting on '-', so a '-' in the key would make
-	// the os/arch split ambiguous. Use '_' for multi-word keys (google_workspace).
+	// '-' is allowed (a built-in moved to a plugin keeps its old key, e.g.
+	// "convert-text-alt", so its DB rows still match), but not at either end.
+	// The release asset name "<key>-<version>-<goos>-<goarch>.zip" stays
+	// parseable because the version is found by its semver shape, not by
+	// position — see parseZipName in internal/plugins/source.
 	for _, r := range key {
-		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_'
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-'
 		if !ok {
-			return fmt.Errorf("plugin key %q invalid: use lowercase letters, digits, or '_' only (no '-', spaces, slashes, or dots — '-' would break the zip-name split)", key)
+			return fmt.Errorf("plugin key %q invalid: use lowercase letters, digits, '_' or '-' only (no spaces, slashes, or dots)", key)
 		}
+	}
+	if key[0] == '-' || key[len(key)-1] == '-' {
+		return fmt.Errorf("plugin key %q invalid: must not start or end with '-'", key)
 	}
 	return nil
 }

@@ -29,6 +29,11 @@ func TestMemoryGuardConfigKeys_MatchLoaders(t *testing.T) {
 		"agents_cpu_quota_pct",
 		"agents_tasks_max",
 		"agents_io_weight",
+		"resource_guard_interval_ms",
+		"resource_guard_exhaust_horizon_sec",
+		"resource_guard_cpu_psi_max",
+		"resource_guard_action",
+		"resource_guard_safe_pct",
 	} {
 		if !got[want] {
 			t.Fatalf("key %q not derived by StructToConfigs — the loader reading it gets an empty value", want)
@@ -161,5 +166,44 @@ func TestDeriveMemoryDefaults_ZeroConcurrency(t *testing.T) {
 	if got.AgentMaxMB != got.AgentsTotalMB {
 		t.Fatalf("zero concurrency should behave as 1: per-agent %d vs budget %d",
 			got.AgentMaxMB, got.AgentsTotalMB)
+	}
+}
+
+// A combined ceiling the machine cannot hold never binds — the host runs
+// out first. Unknown RAM or no ceiling accepts.
+func TestValidateMemoryBudget(t *testing.T) {
+	if err := ValidateMemoryBudget(3000, 500, 7600); err != nil {
+		t.Fatalf("fits: %v", err)
+	}
+	if err := ValidateMemoryBudget(3400, 500, 3600); err == nil {
+		t.Fatal("3400 + reserve + 500 on 3600 MB accepted")
+	}
+	if err := ValidateMemoryBudget(0, 500, 3600); err != nil {
+		t.Fatalf("no ceiling refused: %v", err)
+	}
+	if err := ValidateMemoryBudget(99999, 0, 0); err != nil {
+		t.Fatalf("unknown RAM refused: %v", err)
+	}
+}
+
+func TestCPUQuotaMachinePct(t *testing.T) {
+	cases := []struct {
+		raw   string
+		cores int
+		want  int
+	}{
+		{"", 2, 80}, {"junk", 8, 80}, {"0", 2, 0}, {"-5", 2, 0}, {"70", 2, 70}, {"100", 1, 100},
+		{"140", 2, 70}, {"150", 1, 100}, {"400", 8, 50},
+	}
+	for _, c := range cases {
+		if got := CPUQuotaMachinePct(c.raw, c.cores); got != c.want {
+			t.Errorf("CPUQuotaMachinePct(%q, %d) = %d, want %d", c.raw, c.cores, got, c.want)
+		}
+	}
+	// The default of 80% of the machine as systemd CPUQuota.
+	for cores, want := range map[int]int{1: 80, 2: 160, 8: 640} {
+		if got := CPUQuotaCorePct(CPUQuotaMachinePct("", cores), cores); got != want {
+			t.Errorf("default on %d cores = %d, want %d", cores, got, want)
+		}
 	}
 }

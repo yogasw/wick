@@ -96,7 +96,7 @@ Both are implemented in [`slack/slack.go`](https://github.com/yogasw/wick/blob/m
 
 Slack threads = wick sessions. The first message in a thread auto-creates a session keyed by `thread_ts`. Replies to the same thread reuse it. New top-level message in a channel = new thread = new session.
 
-### Sender identity
+### Session ownership mapping
 
 A Slack thread becomes a session **owned by the wick user behind the sender** — the same identity they would get by opening that session in the web UI. This matters beyond attribution: the session owner decides which MCP credential the spawned agent carries, so it is what scopes the connectors the agent can reach.
 
@@ -118,6 +118,21 @@ Requires the `users:read.email` scope on the Slack app. Without it `users.info` 
 The check runs **before** the agent spawns. Refusing afterwards would already have run a turn under the wrong identity, which is the thing this prevents.
 
 The owner is stamped on the session **before** the first `sendFn` call, not after. A spawn mints its MCP credential from the session's owner at the moment it starts, so stamping later would race the first spawn of a new thread: if the spawn won that race, it fell back to the shared internal token — a synthetic admin with no tag filter — and kept that identity in its process argv for the life of the thread. Fixing the owner on disk afterwards couldn't undo it. This is also why a channel dispatch carries its resolved caller through `context.Context` (`WithCallerUserID`/`CallerUserID`) instead of leaving it to be read off disk later: the pool needs it at dispatch time to decide whether a running subprocess can be reused, since reusing a process spawned for a different sender would keep serving that sender's credential.
+
+### Sender identity
+
+Every channel (Slack, Telegram, REST, and the web composer) resolves who sent a message from its own transport envelope — never from the message text, which is why the identity can't be forged by writing "I am someone else" — and carries it as a structured `sender` field on the turn, alongside `text`. The stored text is exactly what the person typed; nothing is prepended to it on disk.
+
+What the agent receives is a separate, deliberately smaller thing: a single leading `[from: Name]` line prepended only to the model's copy of the message, controlled by **Agents settings → Session Identity → `sender_visibility`**:
+
+| Level | Line the agent sees | Default |
+|---|---|---|
+| `off` | nothing — the agent cannot tell participants apart | |
+| `name` | `[from: Real Name]` | ✅ |
+| `name_id` | `[from: Real Name (U0123ABC)]` — adds the platform user ID, for agents that need to @-mention or DM a specific person | |
+| `full` | `[from: Real Name (U0123ABC) @handle via slack]` — adds the handle and channel too | |
+
+This governs the model's copy only. The **dashboard always shows the full sender regardless of this setting** — a person reading a shared thread needs to tell participants apart whatever the model is told. In the web UI, a user turn from someone other than the person reading gets a name/channel chip, a colour-stable avatar initial, and a neutral bubble instead of the "you" green.
 
 #### Permission is the same as the dashboard
 
@@ -203,7 +218,7 @@ Rather than waiting until the full response is ready, wick posts an empty placeh
 
 ### Chunked reply
 
-Slack hard-limits messages to 4000 chars. Wick chunks at **3800** to leave 200 chars headroom for continuation markers ([slack.go:32](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go#L32)). Each chunk is a separate threaded reply.
+Slack hard-limits messages to 4000 chars. Wick chunks at **3800** ([slack.go:32](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go#L32)). Each chunk is a separate threaded reply, posted plain with no continuation marker.
 
 ### Approval prompt cleanup
 
@@ -246,9 +261,13 @@ The `picker` widget is a generic typeahead bound to a channel-specific lookup so
 |---|---|---|
 | `slack.users` | [`assistant.search.context`](https://api.slack.com/methods/assistant.search.context) (messages → de-dupe by author) | `users.list` |
 | `slack.usergroups` | `usergroups.list` | — |
-| `slack.channels` | `assistant.search.context` (channels → parse permalink for ID) | `conversations.list` |
+| `slack.channels` | [`users.conversations`](https://api.slack.com/methods/users.conversations) (channels the bot is a MEMBER of) | — |
 
-The picker stores the chips as JSON `[{id,name},...]`, identical in shape to the kvlist widget, so the same access-control parser reads either. Lookups are cached 60s per `(source, query)` to avoid hammering Slack's rate limits while the operator types.
+`slack.channels` deliberately does **not** use `conversations.list` or `assistant.search.context`: both return every channel in the workspace, including the ones the bot was never invited to. Picking one of those yields a trigger that can never fire and a send that fails with `not_in_channel`, so the source is scoped to actual membership.
+
+The picker stores the chips as JSON `[{id,name},...]`, identical in shape to the kvlist widget, so the same access-control parser reads either. Lookups are cached 60s per `(instance, source, query)` — the instance is part of the key because each per-user bot has its own token and its own memberships.
+
+In the **workflow editor** the lookup fans out over every registered Slack instance and merges the results de-duped by ID; when more than one bot is connected each entry is suffixed with the bot that can reach it (`#support — @ygsw-bot`). A bot whose call fails (missing scope, not yet authed) is skipped rather than blanking the dropdown. The channel **config** page stays scoped to the signed-in user's own bot.
 
 ### Integration health check
 
@@ -264,7 +283,7 @@ Probes:
 - `conversations.list` (scopes: `channels:read`, `groups:read`)
 - `chat.postMessage` _(dry-run against an invalid channel ID — distinguishes `missing_scope` from `channel_not_found`)_
 - `reactions.add` _(dry-run against an invalid timestamp)_
-- `assistant.search.context` (scope: `assistant:write` — optional, falls back to list APIs)
+- `assistant.search.context` (scope: `assistant:write` — optional, used by the `slack.users` picker only)
 
 When all probes pass the panel shows a single "✓ All checks passed" line.
 
@@ -286,7 +305,7 @@ A ready-made Slack app manifest is shipped at [`docs/slack-app-manifest.json`](h
 
 Each inbound user turn is enriched before it reaches the agent:
 
-**Sender label.** Every message is prefixed with a resolved display label of the form `Real Name (@handle, UXXXXXXXX): <text>`. This is resolved once per user ID via `users.info` and cached for the session. The label is useful in multi-user threads where the agent needs to know who spoke, and for routing replies to the correct per-user connector when multiple users have connected their own Slack OAuth accounts. If the `users.info` lookup fails, the raw user ID is used as a fallback so the prefix is never missing.
+**Sender identity.** Resolved once per user ID via `users.info` (name, handle) and cached for the session, then carried as the structured `sender` field described in [Sender identity](#sender-identity) above — not prepended into the message text. If the `users.info` lookup fails, the turn still carries the bare user ID so the agent can tell speakers apart even when it can't name them.
 
 **File / attachment metadata.** When a user posts a message with attached files (images, PDFs, documents, `file_share` events), the attachment manifest is appended to the user turn:
 
@@ -312,6 +331,27 @@ Each entry carries the file title or name, pretty type (e.g. "PDF", "PNG"), huma
 3. Optional: list allowed chat IDs in `AllowedIDs` (kvlist). Empty = open to all chats the bot is added to.
 
 The token is validated at config-save time. Invalid token → channel stays in **dormant mode** (no listener, no error log spam) and re-validates on the next save ([telegram.go:99-117](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L99)).
+
+### Sender identity mapping
+
+Telegram maps senders to wick accounts the same way [Slack does](#sender-identity) — same `channel_auto_register` switch, same approval gate, same `ResolveWickUser` resolution order — with one difference: the Telegram Bot API reports **no email at any scope**. There is no field to join on.
+
+Instead, the sender's numeric Telegram ID becomes a reserved-domain stand-in email, e.g. `8812@telegram.local` — a lookup key only, never a real address, never shown to the sender, and never delivered to. An admin can later merge that placeholder account into the person's real one in **Admin → Users**; the channel-identity link is keyed on the numeric ID, not the synthetic address, so the merge doesn't break it.
+
+| Sender | Result |
+|---|---|
+| Known, approved wick account with Agents access | Session owned by that user; agent runs with their connector access |
+| Known account **pending approval** | Refused — told to wait for an admin to approve them |
+| Known, approved account **without Agents access** | Refused — told to ask an admin for the grant |
+| Unknown sender, auto-register **off** | Refused — told to ask an admin for an invite (or to enable auto-register) |
+| Unknown sender, auto-register **on** | Account created (unapproved, never admin, no password), then refused as pending approval |
+| Bot sender | Refused — there is no person to map to a wick account |
+
+::: warning Behaviour change for existing Telegram installs
+Before this, every Telegram message ran as the channel owner, with no identity check at all. From this version, identity mapping is always wired in: an unknown, pending, or unapproved sender gets a reply telling them what to do **instead of silently running as the channel owner**. If your bot is used by people who don't (and shouldn't) have wick accounts, either keep `channel_auto_register` off so unknown senders are refused with an "ask an admin" message, or restrict who can reach the bot via `AllowedIDs`.
+:::
+
+The identity check runs **before** the agent spawns, same reasoning as Slack: refusing after a spawn would already have run a turn under the wrong identity.
 
 ### Session binding
 
@@ -501,11 +541,19 @@ Not supported. `"stream": true` returns `400` immediately — clients should lea
 
 Gate prompts are **auto-blocked** ([`rest.go OnApprovalRequest`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/rest/rest.go)). REST clients cannot deliver an interactive decision, so any approval request resolves to `block` and the resulting error surfaces as a `403`. Use the web UI to approve sensitive commands.
 
+### Background mode
+
+Add `"background": true` (or `metadata.background: "true"` for SDKs that only expose the standard OpenAI `metadata` map) to either endpoint to return immediately with `"status": "queued"` instead of waiting for the agent:
+
+```json
+{ "id": "wick-…", "object": "chat.completion", "status": "queued", "choices": [...] }
+```
+
+The message is queued on the session exactly like a chat message — the reply is not returned in that response, it lands in the session history. Pair `background` with `conversation` and read the result back with a normal follow-up request on the same conversation; without `conversation` the request is fire-and-forget and the reply is unreachable. Useful behind aggressive HTTP timeouts (proxies, serverless gateways) where the caller can't wait out a long-running turn.
+
 ### Concurrency
 
-Two safeguards:
-
-1. **Per-session REST lock**: a second request on the same `conversation` while the first is still in flight gets `409 session busy`. Prevents two REST clients racing the same wick session.
+1. **Per-session turn queue**: concurrent requests on the same `conversation` no longer conflict — a request that arrives while an earlier one is still in flight queues FIFO behind it, same as chat channel messages, and each request gets the reply to its own message (never mixed up, even if an earlier caller gave up and disconnected).
 2. **Pool queue**: dispatch always goes through `sendFn → pool.Send`, which FIFO-queues when slots are full and preempts idle slots when configured. REST has no direct spawn path. See [Pool & Sessions](./pool).
 
 ### Configured response shape (chat completions)

@@ -39,10 +39,14 @@ func canManageSession(caller *entity.User, ownerID string) bool {
 // Returns title (current Label), title_custom (true = already explicitly
 // set by a human or the agent), origin, status, and project_id.
 func WickSessionInfo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, layout agentconfig.Layout, args map[string]any) {
+	// An explicit id still wins — an admin may read another conversation,
+	// and canManageSession below is what decides whether they may. The
+	// call's own session (header, or the bearer's grant) fills the gap so
+	// the common case needs no argument at all.
 	sessionID, _ := args["session_id"].(string)
-	sessionID = strings.TrimSpace(sessionID)
+	sessionID = ResolveSessionPreferArg(SessionOf(r), sessionID)
 	if sessionID == "" {
-		rsp.ToolError(w, req.ID, "session_id is required", "wick_session_info")
+		rsp.ToolError(w, req.ID, "session_id is required (no session on the call)", "wick_session_info")
 		return
 	}
 	sess, err := session.Load(layout, sessionID)
@@ -78,9 +82,9 @@ func WickSessionInfo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp
 // registry so the live dashboard reflects the new title immediately.
 func WickSetTitle(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, layout agentconfig.Layout, refreshSession func(id string) error, args map[string]any) {
 	sessionID, _ := args["session_id"].(string)
-	sessionID = strings.TrimSpace(sessionID)
+	sessionID = ResolveSessionPreferArg(SessionOf(r), sessionID)
 	if sessionID == "" {
-		rsp.ToolError(w, req.ID, "session_id is required", "wick_set_title")
+		rsp.ToolError(w, req.ID, "session_id is required (no session on the call)", "wick_set_title")
 		return
 	}
 	title, _ := args["title"].(string)

@@ -6,10 +6,11 @@
      Polling: after Run returns a run_id, poll runs/{runID} every 1.5s and
      stop on success/error or on unmount — the interval is cleared in both
      paths so no timer leaks. */
+  import PluginUpdateMenu from "$lib/components/plugins/PluginUpdateMenu.svelte";
   import { onDestroy } from "svelte";
   import { Button, TextInput, NumberInput } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
-  import { getJob, updateJobSettings, setJobConfig, runJob, getJobRun } from "$lib/api.js";
+  import { getJob, updateJobSettings, setJobConfig, runJob, cancelJob, getJobRun } from "$lib/api.js";
   import type { JobDetail } from "$lib/types.js";
   import ConfigsForm from "../fields/ConfigsForm.svelte";
   import { renderMarkdownSafe } from "./markdown.js";
@@ -31,6 +32,7 @@
   let savingSettings = $state(false);
 
   let running = $state(false);
+  let cancelling = $state(false);
   let runStatus = $state("");
   let runOutput = $state("");
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -119,10 +121,31 @@
     }
   }
 
+  /* Cancel works on a genuinely running job AND on a stale row (DB says
+     running, nothing actually is) — the server repairs the row either way,
+     so the button doubles as the operator's unstick action. */
+  async function cancel(): Promise<void> {
+    if (cancelling) return;
+    cancelling = true;
+    try {
+      await cancelJob(jobKey);
+      clearPoll();
+      running = false;
+      if (runStatus === "running") runStatus = "cancelled";
+      toastOk("Job cancelled");
+      load(true);
+    } catch (e) {
+      toastError("Cancel failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      cancelling = false;
+    }
+  }
+
   const statusClasses: Record<string, string> = {
     running: "bg-prog-100 text-prog-400",
     success: "bg-pos-100 text-pos-400",
     error: "bg-neg-100 text-neg-400",
+    cancelled: "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600",
   };
 
   $effect(() => {
@@ -159,6 +182,7 @@
         <div>
           <div class="flex items-center gap-2">
             <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">{data.name}</h1>
+            <PluginUpdateMenu pluginKey={jobKey} />
             <span class="rounded-full px-2 py-0.5 text-[10px] font-medium {enabled ? statusClasses[data.last_status] ?? statusClasses.success : 'bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600'}">{enabled ? data.last_status : "disabled"}</span>
           </div>
           {#if data.description}
@@ -166,7 +190,12 @@
           {/if}
         </div>
       </div>
-      <Button size="md" disabled={running} onclick={run}>{running ? "Running…" : "Run Now"}</Button>
+      <div class="flex items-center gap-2">
+        {#if running || data.last_status === "running"}
+          <Button size="md" variant="danger" disabled={cancelling} onclick={cancel}>{cancelling ? "Cancelling…" : "Cancel"}</Button>
+        {/if}
+        <Button size="md" disabled={running} onclick={run}>{running ? "Running…" : "Run Now"}</Button>
+      </div>
     </div>
 
     {#if runStatus}

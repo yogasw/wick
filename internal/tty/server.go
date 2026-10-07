@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -126,6 +127,8 @@ func (s *Server) start() error {
 		Msg("tty: spawning gotty")
 
 	cmd := safeexec.Command(bin, args...)
+	// gotty hands this environment to every shell it opens in the browser.
+	cmd.Env = envscrub.ScrubOSEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 

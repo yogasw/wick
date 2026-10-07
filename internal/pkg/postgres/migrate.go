@@ -149,65 +149,24 @@ func migrate(db *gorm.DB) {
 		}
 	}
 
-	err := db.AutoMigrate(
-		&entity.User{},
-		&entity.Session{},
-		&entity.ToolPermission{},
-		&entity.Tag{},
-		&entity.ToolTag{},
-		&entity.UserTag{},
-		&entity.Bookmark{},
-		&entity.Config{},
-		&entity.SSOProvider{},
-		&entity.Job{},
-		&entity.JobRun{},
-		&entity.Connector{},
-		&entity.ConnectorOperation{},
-		&entity.ConnectorRun{},
-		&entity.ConnectorAccount{},
-		&entity.CustomConnector{},
-		&entity.CustomConnectorMCPServer{},
-		&entity.PersonalAccessToken{},
-		&entity.PushSubscription{},
-		&entity.UserChannelIdentity{},
-		&entity.OAuthClient{},
-		&entity.OAuthAuthorizationCode{},
-		&entity.OAuthToken{},
-		&entity.AgentChannel{},
-		&entity.ProviderStorage{},
-		&entity.ProviderStorageSource{},
-		&entity.DataTable{},
-		&entity.DataTableRow{},
-		// Workflow storage migration — see
-		// internal/planning/archive/workflow/svelte-migration.md. Tables added in
-		// parallel with the existing file-based store; the importer in
-		// internal/agents/workflow/repository (future phase) hydrates
-		// the rows from disk on boot before any handler reads them.
-		&entity.Workflow{},
-		&entity.WorkflowVersion{},
-		&entity.WorkflowTestCase{},
-		&entity.Skill{},
-		&entity.PluginState{},
-		&entity.ConnectorState{},
-		&entity.ScheduledMessage{},
-		// Multi-agent sub-agent delegation — see
-		// internal/planning/todo/multi-agent/design.md. Profiles are the
-		// reusable role definitions; delegations are the per-call audit +
-		// control records the governor and the rail UI both read.
-		&entity.AgentProfile{},
-		&entity.AgentDelegation{},
-		&entity.AgentSquad{},
-		&entity.AgentBoard{},
-		&entity.AgentTask{},
-		&entity.AgentMessage{},
-		// Incident state: what a delegation tree has established, and the
-		// quoted evidence behind it. Created lazily, so most trees never
-		// write a row here.
-		&entity.AgentIncident{},
-		&entity.AgentEvidence{},
-	)
-	if err != nil {
-		log.Fatal().Msgf("failed to run migration: %s", err.Error())
+	// Skip the AutoMigrate pass — and only that pass — when the stored
+	// fingerprint says this exact model shape already ran to completion.
+	// The idempotent repairs below (index drops/creates, seedOwner) stay on
+	// the hot path: they are a handful of queries, and idx_storage_tree
+	// documents that it must re-run every boot to self-install once
+	// duplicates are cleared.
+	fp := modelFingerprint(db, migratedModels)
+	if fp != "" && fp == storedFingerprint(db) {
+		log.Debug().Str("component", "migrate").Msg("schema up to date, AutoMigrate skipped")
+	} else {
+		if err := db.AutoMigrate(migratedModels...); err != nil {
+			log.Fatal().Msgf("failed to run migration: %s", err.Error())
+		}
+		// Record only AFTER the pass completed: a crash mid-migration must
+		// leave the old fingerprint (or none) so the next boot retries.
+		if fp != "" {
+			storeFingerprint(db, fp)
+		}
 	}
 
 	// Must run AFTER AutoMigrate: the composite (project_id, key) index has

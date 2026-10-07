@@ -26,12 +26,12 @@ import (
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
-	converttext "github.com/yogasw/wick/internal/tools/convert-text"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
-	providerstorage "github.com/yogasw/wick/internal/tools/provider-storage"
-	"github.com/yogasw/wick/internal/tools/webtty"
+	converttext "github.com/yogasw/wick/internal/tools/convert-text"
 	"github.com/yogasw/wick/internal/tools/encfields"
 	"github.com/yogasw/wick/internal/tools/external"
+	providerstorage "github.com/yogasw/wick/internal/tools/provider-storage"
+	"github.com/yogasw/wick/internal/tools/webtty"
 
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -182,4 +182,18 @@ func registerOnce(m tool.Module) {
 // All returns every registered tool instance in registration order.
 func All() []tool.Module {
 	return extra
+}
+
+// Unregister drops the tool registered under key, if any. Used when a
+// plugin declares it replaces that key (tool.Tool.Replaces): the plugin
+// wins and the old tool gets no routes, card or config rows. Reports
+// whether a tool was removed.
+func Unregister(key string) bool {
+	for i, m := range extra {
+		if m.Meta.Key == key {
+			extra = append(extra[:i:i], extra[i+1:]...)
+			return true
+		}
+	}
+	return false
 }

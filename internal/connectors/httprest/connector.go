@@ -37,7 +37,7 @@ type GetInput struct {
 // PostInput is the argument schema for the POST operation.
 type PostInput struct {
 	Path        string `wick:"required;desc=Path relative to BaseURL. Example: /users"`
-	Body        string `wick:"textarea;desc=Request body. JSON is sent as application/json; plain text as text/plain."`
+	Body        string `wick:"textarea;desc=Request body. JSON is sent as application/json, plain text as text/plain."`
 	ContentType string `wick:"desc=Content-Type header override. Default: application/json"`
 }
 

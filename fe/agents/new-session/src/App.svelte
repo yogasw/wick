@@ -3,7 +3,7 @@
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastError } from "@wick-fe/common-stores";
   import { ToastHost, Composer } from "@wick-fe/common-ui";
-  import { getProviderOptions, getProviderOptionModels, getPresetOptions, getProjectOptions, createSession, searchProjectFiles, listComposerCommands } from "$lib/api/options.js";
+  import { getProviderOptions, getProviderOptionModels, getPresetOptions, getProjectOptions, createSession, searchProjectMentionPaths, listComposerCommands } from "$lib/api/options.js";
   import type { ProviderOption, PresetOption, ProjectOption } from "$lib/api/options.js";
 
   const appEl = document.getElementById("app");
@@ -42,7 +42,7 @@
 
   function searchMentionFiles(query: string): Promise<string[]> {
     if (!selectedProject) return Promise.resolve([]); // no project → no files to browse
-    return Effect.runPromise(searchProjectFiles(base, selectedProject, query).pipe(Effect.provide(WickClientLayer)))
+    return Effect.runPromise(searchProjectMentionPaths(base, selectedProject, query).pipe(Effect.provide(WickClientLayer)))
       .catch(() => [] as string[]);
   }
 
@@ -152,7 +152,7 @@
   // conversation composer. `optionValue` is a "type/name" key; ask the server
   // for that instance's current vendor models (and level-4 live-set expansion
   // via opts.entry). Without this wired, live-set rows showed "No extra models".
-  function loadProviderModels(optionValue: string, opts?: { entry?: string }) {
+  function loadProviderModels(optionValue: string, opts?: { entry?: string; refresh?: boolean }) {
     const slash = optionValue.indexOf("/");
     const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
     const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);

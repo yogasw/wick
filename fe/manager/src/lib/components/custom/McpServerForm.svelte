@@ -146,8 +146,13 @@
     }
   }
 
+  /* Per-user (SSO) oauth: nobody's login is the instance credential, so
+     Test is optional — the server-side save runs discovery + registration. */
+  const perUser = $derived(form.auth_scheme === "oauth" && !!form.oauth_per_user);
+  const canSave = $derived(testedOK || perUser);
+
   async function save() {
-    if (!testedOK || saving) return;
+    if (!canSave || saving) return;
     saving = true;
     error = "";
     try {
@@ -209,7 +214,7 @@
               <Button variant="secondary" onclick={toggleDisabled}>{disabled ? "Enable" : "Disable"}</Button>
               <Button variant="danger" onclick={() => (confirmDelete = true)}>Delete</Button>
             {/if}
-            <Button variant="primary" size="lg" disabled={!testedOK || saving} onclick={save}>
+            <Button variant="primary" size="lg" disabled={!canSave || saving} onclick={save}>
               {#if saving}Saving…{:else if editMode}Save changes{:else}Save &amp; create →{/if}
             </Button>
           </div>
@@ -288,7 +293,11 @@
           <div class="flex items-center justify-between gap-4">
             <div>
               <p class="text-sm font-semibold text-black-900 dark:text-white-100">Test connection</p>
-              <p class="text-xs text-black-800 dark:text-black-600">Fires initialize + tools/list with the current values. Save unlocks after one success.</p>
+              {#if perUser}
+                <p class="text-xs text-black-800 dark:text-black-600" data-cc-peruser-test-note>Optional in per-user mode — signs you in to preview the tools. That login becomes your own account, not the instance's.</p>
+              {:else}
+                <p class="text-xs text-black-800 dark:text-black-600">Fires initialize + tools/list with the current values. Save unlocks after one success.</p>
+              {/if}
             </div>
             <Button variant="primary" disabled={testing} onclick={runTest}>
               {testing ? "Testing…" : "▶ Test now"}
@@ -317,6 +326,9 @@
             Read-only list of what this server currently exposes — nothing here is stored. Wick re-reads it on every
             sync, so new server-side tools appear on their own. Use Exclude to hide one.
           </p>
+          {#if perUser && tools.length === 0}
+            <p class="mt-2 text-xs text-black-800 dark:text-black-600" data-cc-peruser-tools-note>Waiting for the first account to connect — operations sync then.</p>
+          {/if}
           <div class="mt-3">
             <McpToolExcludeList {tools} excluded={form.excluded} onChange={(ex) => { form.excluded = ex; }} />
           </div>

@@ -1,6 +1,6 @@
 # Job Module
 
-Jobs live in `jobs/<name>/` and mount at `/jobs/{key}` — shows schedule, run history, and a Run Now button. The module only needs a top-level `Run` func.
+Jobs live in `jobs/<name>/` and mount at `/jobs/{key}` — shows schedule, run history, and Run Now / Cancel buttons. The module only needs a top-level `Run` func.
 
 ::: info See also
 For an example of a System-tagged job (auto-enabled, code-managed), see [Connector Runs Purge](./connector-runs-purge) — it's the built-in retention worker for connector audit logs.
@@ -88,6 +88,20 @@ func Run(ctx context.Context) (string, error) {
 
 - **Returned string** → stored as the run result summary (shown in history)
 - **Non-nil error** → marks the run as failed
+
+## Cancelling a run
+
+A running job (`/jobs/{key}` on the operator page, or the job detail view in the manager SPA) shows a **Cancel** button while `last_status` is `running`. Cancel:
+
+- cancels the run's context — a `Run` func that checks `ctx` stops promptly;
+- marks the open run row **`cancelled`** (a distinct badge from Success/Error);
+- flips the job back to idle so the next scheduled or manual run isn't blocked.
+
+Cancel also doubles as an unstick action: if a run crashed between finishing and updating status, leaving the job stuck showing `running` with nothing actually in flight, hitting Cancel (or Run Now) repairs the stale row instead of requiring manual DB surgery. The same repair runs automatically on a sweep every worker tick and at bootstrap, including for disabled jobs.
+
+Disabling a running job (from job settings) cancels its run the same way — a disabled job never keeps executing in the background.
+
+A `Run` func that ignores `ctx` keeps running until `MaxTimeoutMin` regardless — Cancel stops the job from *appearing* to run and unblocks future triggers immediately, but the goroutine itself only stops early if it respects context cancellation.
 
 ## Runtime Config
 

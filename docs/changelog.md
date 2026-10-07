@@ -6,9 +6,741 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Team
+
+#### Added
+- **Persistent Agents**: New dedicated workspace `/tools/agents/team` for persistent agents, featuring personas, access checklists, Captain roles, @mentions, group chats, sharing, Scheduled tasks, remote agent connections (A2A, Slack, plugin), and various Connections (Slack, Telegram, A2A, REST).
+- **Scheduled Agents**: A new Scheduled drawer lists all schedules firing into an agent, showing run times, destinations, and status. It includes controls to pause/resume, run now, edit, or delete. New schedules can be created directly from the main chat; Slack and Telegram chats can now be destinations.
+- **A2A Remote Agents**: Agents can join a Team over A2A, with settings for card URL, auth, timeout, response cap, and usage. Remote agent chats run on the remote system, streaming events back to Wick. Remote agents can be @mentioned and appear in the roster.
+- **Slack Remote Agents**: Agents can live in Slack and be reached via DM, channel, or fixed thread, posting as the connector bot or the creator's OAuth account. Slack remote agents are badged in the roster and the composer indicates "via Slack".
+- **Instant Slack Agents**: Team agents can now route messages through a shared Slack app instance, binding to channels or responding to prefixes. Replies in these threads carry the agent's username and icon.
+- **REST Connection**: Team agents can be invoked via an OpenAI-compatible chat completions endpoint (`"model": "agent:<handle>"`), with per-agent connection toggles and model IDs.
+- **Telegram Connection**: Team agents can own Telegram bots, with secure token storage and integration into the agent's project.
+- **Agent Sharing**: Owners or admins can share agents with other Wick users by ID or tags, granting chat-only "viewer" access. Shared agents appear in the recipient's roster with a "Shared" marker and limited interaction.
+- **Captain Role**: The first Wick agent created by a user becomes the Captain. This role can be transferred to another Wick agent, carrying "Manage other agents" privileges. The Captain is pinned to the top of the roster.
+- **Idle Animations**: Live blob avatars now fidget subtly when idle, with an opt-out toggle in Team settings.
+- **Improved Composer**: The chat composer now includes a Stop button (replacing Send while a turn runs), or Cancel if a spawn is queued. It also offers a combined Send/Stop menu on hold, allowing queuing new messages while a turn is active.
+- **Agent Access Modes**: A new "Same as me" access mode for Team agents grants access to every connector the owner has, with write operations. The access editor also features "Granted" and "Available" sections with bulk actions.
+- **Resource Guard**: Enhanced Resource Guard monitors host CPU and memory, intelligently stopping agent work when the host nears a hang (e.g., above 90% CPU pressure, 80% memory used). CPU quota is now a percentage of the entire machine's cores.
+- **New Chat Experience**: New chats open as empty drafts and are created on the first message sent. Existing chats can be marked as the main chat.
+- **Avatar Reactions**: Agent avatars now visually react to their activity (thinking, running a tool, waiting, failed tool, etc.), with per-agent override settings.
+- **Live Agent State**: Roster and chat headers show real-time agent activity (thinking, running Bash, waiting for reply) powered by a session stream, replacing polling.
+- **Team Agent Project Visibility**: Team agents' projects can now be listed under Agents > Projects using a `wick:team-visible` tag.
+- **Persona Improvement Panel**: Persona settings now feature a single "Improve with AI" panel that takes instructions and applies changes to selected fields.
+- **Composer Toolbar Chips**: Repository and branch are shown as compact chips in the composer toolbar.
+- **Trace File Status**: The sub-agent trace now shows the status of files used in tool calls (same, changed, deleted, cannot be checked).
+- **Slack Bot Triggering**: Agents can now be triggered by selected Slack bots in DMs or channels, with safeguards against loops and rate limits.
+- **One Sidebar Header**: A unified sidebar header with a Team/Agents switch, and the account menu moved to the foot, replaces separate sidebar structures.
+- **Idle Compact Rules**: Session idle compaction can now be configured with flexible rules (AND/OR, regex, negation) based on project, title, or ID, with a built-in tester. Idle compact also applies only after a turn ends.
+- **Slack Markdown Blocks**: Agent replies containing markdown tables, headings, bold text, links, nested lists, or code fences are now sent as Slack Block Kit markdown blocks for better rendering.
+
+#### Improved
+- **Slack Remote Target Search**: Search for DM users/bots or channels by name when adding a Slack remote agent, instead of just typing an ID. This search functionality is also available for the mention target.
+- **"Open Team when I open Agents"**: This setting is now off by default and opt-in.
+- **Composer Mentions**: A second `@` on the same line now correctly starts a new mention.
+- **Agent Taglines**: Max tagline length increased from 32 to 50 characters.
+- **Connections Drawer**: Connections are now displayed as icon tabs with connected/warning ticks.
+- **Remote Agent Waiting Status**: Remote agents now show "Waiting for @x's reply" instead of "typing" when idle, with hints for Slack's @mention setting.
+- **Slack Token Origins**: Custom Slack app wizard now clearly names Slack settings pages for bot, app-level tokens, and signing secrets.
+- **CPU Reporting**: Host CPU usage is now consistently reported as a percentage of all cores (0-100%), with core count details.
+- **Sidebar UX**: Sidebars are now resizable and remember their width per space.
+- **Clock Format**: All clock times in charts and events now use 24-hour format.
+- **Resource Guard Queue Explanation**: The queue card clearly explains why sessions are held (Resource Guard, full pool, memory floor, provider limits).
+- **Slack Remote Reliability**: Improved handling of Slack remote agent replies, including streaming partial replies, ending turns on clear signals (markers, reactions), handling late messages within a grace window, and correctly persisting thread bindings across restarts.
+- **Agent Environment Scrubbing**: Provider helpers and probe processes now inherit a scrubbed daemon environment.
+- **Access List UI**: Improved styling and consistent wording in Team access lists.
+- **Settings Autosave**: Settings now debounce changes into a single PATCH, show "Saving..." / "Still saving...", and "Couldn't save · Retry" messages.
+- **Slack Rate Limits**: Pickers now cache Slack listings locally, share in-flight requests, and handle 429 Retry-After responses to prevent rate limiting.
+- **Slack Remote Thread Binding**: Slack remote agents now correctly bind to the new channel's thread when the target changes, preventing timeouts and failed retries.
+- **Sub-agent Image Chips**: Image chips in sub-agent traces now correctly open.
+
+#### Fixed
+- **Slack Instant Agent Setup**: A new Slack app now starts with an empty whitelist instead of open to the workspace if the owner's Slack user ID cannot be resolved.
+- **Agent Stability**: Fixed panics in channel goroutines (Slack, Telegram) that could take down the daemon. Registry now correctly wires the pool dispatch at boot for runtime-added channels.
+- **Shared Agent Rail Access**: Recipient's chat with a shared agent now correctly returns 403 for rail endpoints, preventing access to the owner's project files, processes, etc. The rail tabs are hidden.
+- **Captain Migration**: Fixed a bug where Reschedule wiped a new interval when a patch carried an empty cron.
+- **Agent @mention History**: Corrected an issue where "[routed]" notes appended to stored @mention messages caused deduping issues after reload.
+- **Authentication**: `Back to my account` now consistently returns to the admin after impersonation, respecting TLS proxy configurations.
+- **Tag Descriptions**: Semicolons are no longer misinterpreted in tag descriptions, ensuring full text display.
+- **Team Bash Gate**: Bash tool no longer drops from allowed tools when the approval gate is off. Stale "working" statuses no longer extend a turn beyond its limits.
+- **Sidebar Visibility**: The sidebar resize handle is now correctly visible on desktop.
+- **Idle Compact Logic**: `idle_compact_seconds` replaces `_minutes`. Conditions now correctly parse escaped characters (`\/`, `\&`).
+- **Slack Workflow Bots**: Workflow Builder bots are now clearly marked in Slack pickers and lists.
+- **Socket Mode Reconnection**: Slack Socket Mode bots now attempt to reconnect after fatal client errors, ensuring they don't stay offline indefinitely.
+
+### Plugin Platform
+
+#### Added
+- **Job Plugins**: New `Job` gRPC service enables job plugins to run as regular jobs, streaming progress and bounded by timeout. Includes a template and example.
+- **Tool Plugins**: New `Tool` control service and SDK for tool plugins, serving HTTP over a Unix socket. Plugins can mount routes, middlewares, statics, webhooks, and push configuration. Tools served by plugins now show a "plugin" badge on home cards.
+- **Service Plugins**: New `Service` plugin SDK with per-route authentication, callback tokens, and `remote_source` RPC for direct remote agent integration. Service plugins are supervised, restarting after crashes, and their routes are reverse-proxied at `/x/{key}`. Includes a template and A2A repeater example.
+- **Plugin Sources**: Plugins can be installed from URL, GitHub releases (including private repos with PATs), or local zip uploads. Sources feature health checks, version detection, auto-update flags, and audit trails.
+- **Admin Plugin Management**: A new admin UI (`/manager/plugins`) to list, add, test, install, update, and manage plugin sources and installed plugins across all kinds.
+- **CLI Plugin Management**: CLI commands `plugin add|list|remove|check`, `plugin index`, and `plugin sign` for managing plugin sources, creating v2 `plugins.json` indexes, and signing zips.
+- **Built-in Plugin Authoring Skills**: New `wick-plugin-authoring` and `wick-plugin-service` skills provide guidance for building different kinds of plugins.
+- **Plugin Replacement**: A plugin can declare `Replaces: ["old-key"]` to take over a built-in job or tool, migrating its existing configuration, schedules, tags, and history.
+- **Bitbucket Pipelines Connector**: New connector plugin with `run_pipeline`, `get_pipeline`, `list_pipelines`, and `check_permissions` operations. Includes a permission status checklist on the config page.
+- **Jenkins Connector**: New connector plugin for Jenkins, offering job browsing, `build_job`, and `get_build`.
+
+#### Improved
+- **Kind-Agnostic Plugin Layout**: Plugins now organize by kind (`connectors`, `jobs`, `tools`, `services`) under a shared root, with shared client setup.
+- **Service Plugin Configuration**: Manifest config rows are seeded into the config store, masked for secrets, and live-pushed to running processes, restarting if rejected.
+- **Plugin Keys**: Plugin keys can now contain hyphens (`-`).
+- **Installed Plugin Visibility**: The Plugins page now shows installed plugins with their origin (catalog, source, upload, unknown), update status, and update buttons. Link-type tools show an "external_url" badge.
+- **Plugin Installation Flow**: Installing a service plugin no longer requires a Wick reload; it's loaded and started immediately. `plugin install` now correctly routes all plugin kinds.
+
+#### Fixed
+- **gRPC Configuration for Tool Plugins**: Fixed `ServeTool` to correctly set `ServeConfig.GRPCServer`, preventing handshake failures.
+- **Plugin Process Shutdown**: Service and job plugin processes are now gracefully stopped on daemon shutdown or reload, including a grace period before SIGKILL.
+- **Tool Plugin Configuration Hashing**: Fixed race condition when pushing configuration to tool plugins.
+- **Plugin Key Duplicates**: Fixed an issue where a connector and a tool sharing a key would cause duplicate errors in the Plugins page.
+- **Plugin Origin Conflicts**: Fixed an issue where a tool plugin could incorrectly borrow the origin status of a connector with the same key.
+- **Plugin Table Layout**: Fixed plugin table layout for better readability and added a Type column.
+- **Masked Values in Plugins**: Connector plugins now correctly mask sensitive values passed to `c.Mask` and return them for host-side masking.
+- **Job Plugin Timeout**: Correctly reports job plugin timeouts when gRPC deadlines are hit.
+- **GitHub Asset URLs**: Fixed issue where private GitHub asset API URLs were lost in the cached plugin index.
+
+### SCM
+
+#### Added
+- **Compare Enhancements**: The "Compare branches…" feature is now "Compare…" and allows comparing any branch, tag, commit, working tree, or staged changes. It includes quick ranges (e.g., default branch → HEAD) and a search box for filtering changed files.
+
+### Workflows
+
+#### Improved
+- **Provider and Model Selection**: Workflow nodes can now pick provider and model per node, scoped by the workflow owner's provider access tags.
+- **Visual Layout**: Node cards show permanent input strips and output chips, with hover tooltips for descriptions. Cards widen per port, and auto-layout intelligently places children under their output port, packing lanes to prevent overlaps.
+
+#### Fixed
+- **Branch Node Labels**: Branch nodes now derive output and pills from distinct edge cases, showing real case labels on edges.
+- **Deduplication**: Cross-bot delivery deduplication now runs after the instance filter, preventing triggers pinned to specific instances from being dropped.
+- **Ownership**: Workflow owner (creator) is now correctly preserved on save and publish.
+
+### General Improvements
+
+#### Improved
+- **Interface Size**: Default interface size is 100%, with a slider allowing up to 150%.
+- **Sub-agent Status**: Sub-agents now maintain their run status during daemon reloads.
+- **Login Stats**: Fixed reading login stats on SQLite.
+
+#### Fixed
+- **Provider Picker Menu**: Provider picker menus now portal to the body, fixing clipping issues in transformed modals.
+- **Data Table Ownership**: Caller is now recorded as the owner on table creation.
 
 ---
+
+
+## [v1.13.0](https://github.com/yogasw/wick/compare/v1.12.0...v1.13.0) — UI, MCP & Tickets
+
+_Released on 2026-09-22_
+
+### Added
+- **Assignees**: Tickets now support multiple assignees, with the `assignee` field retaining the first entry for compatibility with existing systems.
+- **Usage**: Per-model usage totals are now recorded and displayed for more granular billing insights.
+
+### Fixed
+- **sw.js**: Aborted network requests are now hedged with a second request to prevent silent failures on slow connections, especially on mobile devices.
+- **Analytics Stream**: A frozen "Reading conversations" UI caused by silent sockets now correctly retries and shows a readable error message instead of freezing.
+- **Impersonation Banner**: Full-viewport shells (e.g., agent shells) now dynamically subtract the banner's height, preventing content like the composer or inbox list from being pushed off-screen.
+- **Workflow Ownership**: The workflow list now correctly filters by either the owner tag or the `created_by` field, and re-picking an owner will repair a missing tag.
+- **Width Issues**: UI components (chips, headers, navbar, branch names) that previously caused horizontal scrolling on smaller screens (phones, boards) now truncate or give way.
+- **Context Sparkline**: The spend behind a hovered point on the context sparkline now correctly displays a value instead of always showing "total 0".
+- **Context Panel Resizing**: The context panel no longer resizes under the cursor when hovering over the sparkline; it now reserves both lines for the readout to maintain a stable layout.
+- **Context Meter on Page Load**: The context meter now correctly fetches and displays data immediately on page load, fixing a regression where it only appeared after an agent's activity.
+- **Ticket Creation with Empty Assignees**: Creating a ticket with an explicitly empty assignees list now correctly assigns nobody instead of automatically assigning the creator.
+- **Login-TTY Exit Test**: The exit test for login-tty sessions now subscribes to events before the exit occurs, resolving a race condition that could cause failures on loaded runners.
+- **Skills Test Cleanup**: A skills test no longer counts leftover skills from sibling tests by correctly clearing the cache and data directory, preventing false failures.
+
+### Improved
+- **Analytics Build**: Postgres account queries are now run concurrently with file walks, significantly speeding up the analytics build page load time.
+- **MCP Scoped Tokens**: Agent credentials are now signed with the app session secret and embedded directly within the token. This eliminates the 105-second 401 window that previously occurred during graceful handovers. Token TTL is reduced to 2 hours, and revocation is handled in-memory.
+- **`test(mcp)`**: Updated test code to use the built-in `min` function (available in Go 1.21+), improving clarity and avoiding shadowing the predeclared identifier.
+- **Assignees Picker**: The assignee picker now displays names instead of UUIDs, and the "take it" action now adds to the existing assignees list rather than replacing colleagues already assigned.
+- **Context Panel (Live)**: The context panel now displays live status, current step count, and a moving clock during an active turn, rather than only showing figures after completion.
+- **Todo Card in Trace**: The todo card in a trace now correctly updates to reflect the latest plan rewrite, showing only the most recent list of items.
+- **Ticket Tab Visibility**: The ticket tab is now hidden when a project has tickets switched off, preventing the display of an empty and potentially broken-looking board.
+- **Notes & Description Accessibility**: Notes are now readable directly from the ticket panel, and the ticket's description is readable from the notes panel.
+- **Context Panel Refresh**: The refresh button for the context panel no longer strobes or reloads per frame; it now reloads only on actual lifecycle transitions, and background refreshes occur silently without affecting the button state.
+- **Context Panel Readout**: The idle state of the context panel readout now displays information about the newest turn (its level, cost, and session spend), ensuring both display lines are always filled.
+
+### Removed
+- `PLAN_CODEX_COMPACTION.md`: A planning document related to Codex compaction has been deleted.
+
+---
+
+
+## [v1.12.0](https://github.com/yogasw/wick/compare/v1.11.1...v1.12.0) — MCP & Agents
+
+_Released on 2026-09-21_
+
+### Added
+
+*   **Agent Session Resolution from Credential**: Agent tool calls now resolve the session ID from the MCP grant credential instead of relying on the `X-Wick-Session-Id` header. This change makes `session_id` optional for most session-scoped tools, simplifies agent prompts, and ensures correct session context for sub-agents.
+*   **Agent Context Tools**:
+    *   Sub-agents now correctly apply role-based tag narrowing to their grants.
+    *   Introduced `wick_context` and `wick_usage` tools, allowing agents to monitor their own context window fullness and token spend.
+    *   The `wick_compact` tool now queues compaction requests, providing a clear "queued" response.
+*   **Enhanced Usage Reporting**:
+    *   The token ledger and usage reports now support multiple ranges (Today, 7d, 30d, 90d, All Time), counted in calendar days in the server's timezone.
+    *   "Used in" rows in reports now provide detailed conversation, owner, project, spend, and last run information.
+    *   The `wick_usage` tool now provides comprehensive account details, including plan, organization, authentication method, rate-limit windows, and reset times, and reports failed probes as errors rather than empty accounts.
+*   **Detailed Context Sparkline**:
+    *   The context sparkline now includes hoverable details showing turn, level, share of window, and timestamp.
+    *   Hovered points also display the token difference from the previous turn and the cumulative session spend, with cumulative figures accurately calculated backward from the provider's total.
+*   **Centralized Analytics Filtering**: The Token Usage card in analytics now respects the main page's date, channel, and instance filters, removing redundant range controls. The analytics page now defaults to "Today" for faster loading and immediate current usage insights.
+
+### Fixed
+
+*   **Documentation Link**: Corrected a broken documentation handover link.
+*   **Codex `/compact` on Resume**: Resolved an issue where Codex `/compact` commands were not being sent on thread resume in newer Codex versions, preventing UI compaction. Requests now send immediately upon resume, and `thread.started` is published to prevent Wick timeouts.
+*   **MCP Session Resolution for Tools**: Ensured `wick_execute` in batch mode and `wick_schedule_message` correctly default to the calling session, making `session_id` optional for these tools.
+*   **Front-End UI Issues**:
+    *   Regenerated the CSS bundle to fix UI layout issues, such as the context panel grid.
+    *   Added a dismiss button for the commit hover card on touch interfaces.
+    *   Ensured consistent spacing between cards on provider pages.
+*   **Security & Validation Improvements**: Improved `session_id` validation to explicitly report non-string inputs. Enhanced handoff tests to verify identity and tag grants. Removed instance filtering from the providers mount where it was not supported.
+*   **Provider Crash-Recovery Loop**: Prevented an infinite crash-recovery loop for failing provider processes (e.g., due to invalid configuration). Halt notifications are now sent once via a buffered system turn without restarting the process and are directed to the user with actionable advice on how to resume work.
+*   **Admin UI Tag Picker**: Corrected an administrative UI issue where long tag names would overflow the tag picker, obscuring and preventing interaction with "Save" and settings buttons. Tags now truncate correctly within the picker.
+
+---
+
+
+## [v1.11.1](https://github.com/yogasw/wick/compare/v1.11.0...v1.11.1) — Termux & Codex
+
+_Released on 2026-09-19_
+
+### Fixed
+*   Documentation build errors caused by an unescaped `<name>` placeholder in the changelog.
+*   DNS resolution within Termux plugins.
+*   Scoped native plugin networking to Termux environments.
+*   Limited netboot functionality to Termux.
+*   Enabled running Termux plugins without requiring `proot`.
+
+### Added
+*   A custom DNS option for Termux.
+
+### Improved
+*   Codex compaction: The `/compact` capability is now fully implemented and correctly handled by the Codex provider, with comprehensive test coverage for various compaction scenarios and provider types.
+*   Internal test coverage for compaction RPCs, including handling of app-server errors, incomplete streams, and oversized resume lines.
+*   Updated internal comments and documentation to accurately reflect Codex's new compaction capabilities.
+
+---
+
+
+## [v1.11.0](https://github.com/yogasw/wick/compare/v1.10.0...v1.11.0) — Access & Automation
+
+_Released on 2026-09-19_
+
+### Added
+
+*   **Custom buttons for the ticket LIST**: A new button placement, *In the ticket list*, draws in the board toolbar beside the Assignee filter. Clicking it calls `POST /api/projects/{id}/board-actions/{buttonID}` and delivers a `ticket.board_action` event carrying the list context: resolved assignee, selected columns, honest match count, and matching cards with full field maps (capped at 500 rows, with `truncated` when exceeded). Use it for actions on a set of tickets, such as "pull everything assigned to me from the tracker."
+*   **A button click reports what the receiver said**: Both ticket-page and list button events now surface the receiver's short answer (`message`) alongside the HTTP status, allowing clickers to see responses like "started, 42 tickets" for jobs that outlive a single 10-second delivery attempt.
+*   **A result panel for list buttons, not a toast**: Board actions now render the receiver's full JSON reply (status, message, `progress` bar, and `counts` chips) as a small floating card in the bottom-right corner. It closes itself 8 seconds after a run ends (failures remain visible). A receiver's `html` is folded behind a Details toggle and rendered in a sandboxed frame. While a job is running, Wick polls the `poll_url` provided by the receiver (via `POST /api/projects/{id}/board-actions/{buttonID}/poll`, restricted to the button's own origin) and **re-reads the board every time the counters move**, enabling live card updates. Ticket-page buttons also re-read their ticket after a successful click.
+*   **Button events carry the person's email**: `actor.email` and, for list buttons, `board.assignee_email` are now included in button events. This allows receivers to recognize users in their own systems using a shared identifier, reducing reliance on manually maintained ID tables.
+*   **CLI channel — long work reports back**: Agents can now mint a short-lived, session-bound `wick_cli_token` and provide it to external jobs (e.g., builds, deploys, migrations). The job can then report its status using `support-tools agent send --text "…"` to wake the session. The token is bound to the session that minted it, expires by default in 30 minutes (max 2 hours), lives in memory, and only reaches `/api/cli/send` and `/api/cli/whoami`. Exit codes distinguish expired tokens (3), unreachable daemons (4), and refusals (5). A new [CLI channel](/guide/agents/cli-channel) guide and `wick-cli-channel` skill are included.
+*   **The idle timers read `touched_at`, not `updated_at`**: A new `touched_at` timestamp records when Wick last wrote a ticket, preventing auto-resolve sweepers from closing imported tickets based on mirrored `updated_at` values. Follow-up and auto-resolve windows now measure from `touched_at`; older tickets fall back to `updated_at`.
+*   **`GET /projects/{id}/tickets?fields=all`**: The `/projects/{id}/tickets` endpoint now supports a `?fields=all` parameter to return the full field map for a ticket, addressing cases where syncs' join keys were not included by the default `show_on_card` filter.
+*   **`updated_at` can come from the system being mirrored**: `PATCH /tickets/{id}` now accepts an RFC3339 `updated_at` timestamp (the source system's own edit time) or `"keep"` for bookkeeping writes that should not alter the clock. This prevents syncs from stamping `now` on every touched ticket, preserving natural board sorting.
+*   **Admin: Re-stamp owner of connector, project, or schedule**: An admin-only owner picker is added to the connectors, projects, and schedules surfaces, allowing transfer of ownership and associated `owner:{id}` tags. Clearing an owner makes the resource admin-only.
+*   **Tickets: Sweeper-closed tickets are marked with `AutoResolvedAt`**: Tickets closed by the auto-resolve sweeper are now marked with `AutoResolvedAt`. This field is cleared if the status is manually changed, ensuring downstream mirrors can distinguish between automated and human actions.
+*   **Login: Sign-in audit logs**: Every successful sign-in (password or SSO) now records an audit row in the `sessions` table. These rows are best-effort, self-pruning after 90 days, and do not affect session authentication. The "Last login" display on the admin page now reports the oldest record or "no record" if none exist.
+*   **People Panel: Recent conversations**: A person's panel now displays their newest five conversations, including the provider, project, and time since last activity. This provides quick insight into a user's recent work.
+*   **Progress reporting for scripts via Todo list**: Todo checklist items can now carry a `progress {done,total,label}` bar and a `detail {format, body}` payload (text, markdown, JSON, HTML, XML). The `support-tools agent todo` command patches a single item (creating it if it doesn't exist) via the CLI channel, publishing `todo` SSE events without waking the session. `stop` marks running items as stopped, and `clear_history` clears the panel.
+*   **Providers: Reproduce card carries the prompt Wick sent**: The Reproduce card in the spawn log now includes a Prompt axis (None, Wick, or Custom) to replicate the exact message sent to the provider, which was previously only available via subprocess stdin. Delivery is declared per provider in `ReproSpec`.
+*   **Usage: Token ledger for providers**: All three providers (Claude, Codex, Wick engine) now report token usage into a `usage.json` ledger per session, rewritten per turn. This enables aggregate cost analysis per project or person, with a 15-second cached roll-up.
+
+### Fixed
+
+*   **Connectors: OAuth account ownership**: Connecting an OAuth account no longer implicitly grants ownership of the connector row. Ownership is now determined by the row's creator, and `canSeeAllAccounts` uses `connectors.OwnsConnector` for accurate access checks, preventing unintended visibility of other accounts. Existing stale grants may need manual revocation.
+*   **Admin: Filtering for connected accounts**: Filtering connected accounts in the admin panel now correctly pulls the parent instance and its children into view, preventing orphaned account rows.
+*   **Admin: Admin role in reach calculations**: The reach badge now correctly includes admins who bypass tag restrictions, and the modal details clearly state the specific admin bypass rule (e.g., "admin (see-all connectors on)").
+*   **Admin: Untagged visibility rules**: The reach badge now applies surface-specific rules for untagged resources. Untagged projects/data tables are private to their owner, and workflow/skill filter tags are noted as currently ignored, preventing false "Public" labels.
+*   **Admin: Robustness of access data loading**: Critical fix prevents failed access reads from being swallowed and cached as empty sets, which previously led to misleading "Restricted 0" counts across admin pages. Failed loads now result in an "Unknown" state (`-`).
+*   **Admin: Schedule 'run-as' user validation**: `setScheduleRunAs` now rejects unknown or unapproved user IDs, ensuring schedules borrow access from a valid principal.
+*   **Ownership: Failed owner-tag writes**: Errors from `CreateResourceOwnerTag` are now logged at a warn level instead of being silently discarded, helping debug cases where a resource is missing from its author's list.
+*   **Workflow: Claude provider routing**: Claude provider instances are now correctly routed through the agent pool based on runtime type (not name), resolving `ENOENT` errors and ensuring MCP tools and instance environments are available.
+*   **Source Control: Commit graph commit body parsing**: Commit bodies are now correctly parsed using `SplitN` to prevent truncation when the body contains the field separator byte.
+*   **Source Control: Branch classification**: The classification of local vs. remote branches (e.g., `feature/login`) now correctly uses the ref list from `for-each-ref`, not just the presence of a slash.
+*   **Source Control: Bounded rev-list walks**: Membership walks for `local`/`pushed`/`trunk` in the commit graph are now capped to prevent `git` from walking millions of commits for small on-screen windows.
+*   **MCP: Object parameter schema recognition**: `mapInputSchema` now correctly recognizes object parameters declared via `anyOf`/`oneOf`/`allOf` or implicitly by `properties`/`items` without an explicit `"type": "object"`, ensuring the raw-JSON textarea widget is correctly offered.
+*   **Source Control: Ref picker panel positioning**: The commit graph's ref picker panel is now positioned relative to its button, clamped to the viewport, and flips above when needed, preventing it from extending off-screen when the toolbar wraps.
+*   **Source Control: Commit graph toolbar wrapping**: The commit graph toolbar is now `flex-nowrap`, truncating long branch names with an ellipsis to maintain a single line and consistent layout.
+*   **Tickets: List button empty filter handling**: An empty status filter (all chips off) for a list button now correctly sends a sentinel value, preventing unintended actions on the entire board.
+*   **Tickets: Composer flashing**: The composer's auto-resize no longer causes the textarea to collapse and re-expand on every keystroke, eliminating scroll position jumps in sticky composers.
+*   **Tickets: Sweeper fixture backdating**: Sweeper fixtures now backdate `TouchedAt` instead of `UpdatedAt` to accurately simulate idle mirrored tickets.
+*   **CLI Channel: Middleware wiring**: The CLI channel middleware is now correctly wired into the `/api` chain, making its endpoints reachable and enabling proper error responses.
+*   **CLI Channel: Advertised address**: The `wick_cli_token` mint response now advertises the application's actual configured `app_url` instead of `http://127.0.0.1:9424`, which could be blocked by proxies.
+*   **CLI Channel: Host allowlist adherence**: The CLI channel now respects the host allowlist, with no bypass. The mint response explicitly names the `send` and `whoami` endpoints.
+*   **CLI Channel: Local-only requests**: The CLI channel now refuses requests from non-local addresses, including proxied requests with forwarding headers, enhancing security for leaked tokens. The advertised address for tokens is now loopback-only.
+*   **Software Update: Deleted branch handling**: If a branch selected in the Source panel is deleted, the history panel no longer crashes. Unresolvable refs are dropped before the `git log` walk, and the picker prunes dead names.
+*   **Analytics: Chart colors**: Chart paths in the People & usage page now use inline colors, ensuring they render correctly instead of defaulting to solid black.
+*   **Analytics: Git watcher keying**: The git watcher is now keyed by directory instead of session, ensuring only one full repository walk runs per pass across all sessions for a given project, significantly reducing daemon CPU load.
+*   **Connectors: Run-as and Execute consistency**: The connector Run-as dropdown and Execute now use a single `Service.AccountAccessFor` decision logic, ensuring consistency between what is offered and what is permitted.
+*   **UI: Menu closing behavior**: Native `<details>` menus (e.g., avatar menu, sidebar 'More', row action menus, admin nav) now close on outside pointerdown events and Escape key presses.
+*   **Source Control: Staging file collisions**: Index-writing `git` commands (e.g., `git stage`) now use a per-repo mutex (`runIndex`) to prevent collisions with Wick's own `git status` watcher, avoiding "Another git process seems to be running" errors.
+*   **Tickets: Multipart message newlines**: Multi-line messages sent with attachments no longer appear duplicated in the composer due to CRLF conversion by form encoding, which previously caused reconciliation issues.
+*   **FE Unit Tests: Conversation stub accuracy**: The `conversation` unit test's `runPromise` stub for sub-agents now correctly defaults properties to empty, preventing unhandled errors in derived busy-counts.
+*   **FE Unit Tests: Scheduled test update**: The `scheduled` unit test now aligns with the component's removal of "created by user" text.
+*   **FE Unit Tests: Agent profiles workspace tests**: Unit tests have been added for the `agent-profiles` workspace, covering empty state, new profile creation, read-only viewer behavior, and role display.
+*   **Slack Connector: Correct user scopes**: The Slack connector's OAuth consent list is now derived from `opScopes`, ensuring it requests necessary scopes like `channels:history` and allowing instance-level narrowing or app manifest reading.
+*   **Connectors: Creator visibility on MCP**: A connector's creator can now see and dispatch it from the MCP surface via `ListVisibleTo` and `IsVisibleTo`, ensuring consistency with admin panel visibility.
+*   **Connectors: Owner tag on creation**: New connector rows (including custom connectors) now always seed the `owner:{rowID}` grant for non-admin creators, preventing rows from becoming orphaned if `admin_see_all_connectors` is disabled.
+*   **Manager: Account view operations layout**: The account view for connectors now correctly preserves the grouped Operations layout, including category cards, the Sections sidebar, and per-card refine search.
+*   **Pool: Bare slash commands**: Bare slash commands (e.g., `/compact`) no longer have `PrependSenderLine` prepended, ensuring they are correctly interpreted by the CLI as commands rather than prose.
+*   **Usage: Token meter accuracy for providers**: The token meter for all providers now correctly reports the context window's *level* (current size) rather than the *sum* of tokens, preventing inflated percentages. For Codex, this now accurately reflects `last_token_usage` and `model_context_window` from the journal.
+*   **Usage: `/compact` command for Codex**: The `/compact` command for Codex is now correctly gated by `provider.CanCompact`, preventing false success reports where the underlying model does not support compaction or fails to compact.
+
+### Improved
+
+*   **Admin: Access visibility for tag-gated rows**: The admin panel now displays a "reach badge" (e.g., "Public 29", "Restricted 6", "Restricted 0", "Anyone ∞") for tag-gated rows (Tools, Jobs, Connectors, Accounts, Projects, Workflows, Skills, Data Tables, Providers). Clicking a badge lists the people with access. A mirror view is added to the Tags page. Admin pages also gain a search box for names, IDs, and tag names.
+*   **Admin: Batched and cached access data loading**: Connector page account reach counting is now batched into a single query for improved performance. User and tag data (approved users, admins, filter tags, tag holders) are loaded once, cached in the repo, and invalidated on relevant writes, significantly speeding up subsequent admin tab interactions.
+*   **Skills: `wick-silent-replies` for shared work threads**: The `wick-silent-replies` skill now includes a carve-out for shared work artifact threads (e.g., triage cards, incident threads), advising that process-related chatter should remain silent even when directly asked, as operators read it in the web session.
+*   **Source Control: Commit graph readability**: The commit graph is significantly enhanced with exceptional refs drawn as icon chips (capped at two), working changes displayed at the top, a detailed hover card (author, date, message, file/line counts), a search box with GitLens-style qualifiers and filter/highlight toggles, and author avatars. Repository actions are now accessible via a menu.
+*   **Source Control: Commit graph paging**: The commit graph now supports paging via a `Skip` cursor and `has_more` in the response. The panel fetches the next page proactively, showing "Loading more…" or "End of history".
+*   **Source Control: Adaptive Git watcher pacing**: The Source panel's git watcher now paces itself by the duration of the last scan (waiting 4x its duration, capped at 15s) rather than a fixed debounce. This reduces daemon CPU CPU usage on continuously written session directories.
+*   **CLI Channel: Restart resilience**: `agent send` now retries an unreachable or booting daemon for 90 seconds with backoff, ensuring reports are not lost during application restarts or deploys.
+*   **CLI Channel: Address verification at mint time**: Token minting now probes candidate addresses (public URL, local machine ports) to verify reachability and returns the confirmed address. This prevents jobs from receiving tokens for unreachable report endpoints.
+*   **CLI Channel: Token candidate order**: The address candidate order for CLI tokens now prioritizes loopback addresses (`127.0.0.1`, `localhost`) before the configured public URL, as scripts typically run on the local host. Loopback addresses still require an allowlist entry.
+*   **CLI Channel: Tokens survive handover**: CLI tokens now travel with process handovers (similar to MCP credentials) by being signed with the app's session secret. This ensures that reports from jobs spanning a Wick deploy successfully reach the successor process.
+*   **Software Update: Graceful handover UI**: The Software Update UI now accurately reflects graceful handovers (downtime-free updates) instead of falsely stating "restart." It publishes `handing_over` phases for live banner updates and reports failed swaps. The navbar version dynamically updates and offers a reload once a new build is serving.
+*   **Analytics: Enhanced People & usage page**: The People & usage page now provides project names (with ID in tooltip), records caller identity (including PAT details) for REST sessions, and displays a daily activity curve (sign-ins or conversations, filterable by person and channel). Loading progress is streamed.
+*   **Analytics: Page-wide filtering**: The filter (date range and channel) on the People & usage page now applies to all displayed numbers and charts, ensuring consistency across metrics like providers and models per user.
+*   **Analytics: Session facts cache**: A new facts cache, keyed by mtime+size, improves performance for the analytics page by avoiding repeated re-reads of session files, especially for wide date ranges.
+*   **UI: Navbar version update during handover**: The navbar version text now dynamically updates to reflect the serving version after a graceful handover and shows "Reloading" during the brief boot-up phase, offering a manual reload when a new version is detected.
+*   **Slack Connector: Per-account operations and history**: Slack operations can now differ per connected account with `inherit`/`on`/`off` overrides. The OAuth callback now signals the opener and closes. History records which credential a call was made with, allowing filtering by account. The person who created an instance can now access it from the Manager.
+
+### Changed
+
+*   **MCP: CLI token in tool inventory**: The `wick_cli_token` is now explicitly counted in the MCP tool inventory.
+*   **Recent Sessions: Exit reason labels**: The "idle" label for normally reaped sessions in the Recent Sessions list is now "ended," with the raw exit reason in the tooltip. OOM, stopped, and error reasons retain their specific labels.
+*   **Context Tab: Renamed to "Files"**: The "Context" rail tab, which displays the session's file tree, has been renamed to "Files" (across tab IDs, preferences, and component names) to avoid confusion with model context windows.
+
+---
+
+
+## [v1.10.0](https://github.com/yogasw/wick/compare/v1.9.0...v1.10.0) — Platform Enhancements
+
+_Released on 2026-09-13_
+
+### Changed
+
+*   **The drain waits for the work instead of running a clock against it**: A handover now completes on a condition — every registered subsystem at zero, and still at zero for the settle window (`WICK_DRAIN_QUIET`, default `15s`) — rather than on two deadlines that killed what they were supposed to protect. An agent turn or workflow run that takes hours is waited for, for hours, and the process exits the moment the last of it settles.
+    *   `WICK_DRAIN_TIMEOUT` remains as an optional hard cap and is now unset by default.
+    *   `WICK_DRAIN_AGENT_GRACE` is gone (a host that still sets it gets a warning).
+    *   The pool now reports turns that are actually producing rather than live subprocesses, so an idle-but-alive spawn no longer holds a handover open.
+    *   Requests being handled are waited for too (the HTTP shutdown lost its 30s cap); SSE and websocket streams are excluded and dropped last.
+    *   Readiness lost its 2-minute ceiling as well: a successor reports ready only once its own boot gate lifts.
+    *   The auto-swap no longer waits for agent turns to be idle; only unresumable work gates the trigger.
+    *   A per-spawn MCP credential is no longer revoked the instant the subprocess exits; revocation now waits 90 seconds.
+*   **Admin Visibility split**: The `admin_see_all` setting has been split into `admin_see_all_sessions` (for sessions, projects, data tables, scheduled messages) and `admin_see_all_connectors` (for connector instances and accounts), allowing more granular control. `admin_see_all_sessions` is off by default, `admin_see_all_connectors` is on by default.
+*   **AI Provider Usage Probes**: Only the first probe for an account is now automatic; subsequent readings are replaced only by a human pressing Re-check. Exponential backoff for retries has been removed. The UI clarifies when a re-check is available, rather than promising an automatic refresh.
+*   **Scheduled Task Identity**: Scheduled fires now run under the identity of their owner. `Meta.UserID` is stamped before the send, ensuring per-user MCP credentials are minted.
+*   **Agent Turn Identity**: The MCP credential for a spawn is now keyed by the caller's `UserID` (if available), falling back to the session owner only when no human triggered the spawn, and to the internal principal if neither is known. `RespawnOnCallerChange` now effectively recycles processes under the new user's identity.
+*   **Workflow Session Ownership**: Workflow nodes and the web composer now stamp the workflow's author as the session owner when creating new sessions.
+*   **SCM Nested Repos**: The SCM panel now lists nested repositories as their own entries, showing their path, branch, and change count, and allows switching to them to view their files. Untracked folders (not nested repos) now show their individual files when staged.
+*   **OAuth `last_used_at` Reporting**: OAuth grant `last_used_at` now considers all token rows (including expired and revoked) and is updated when a refresh token is redeemed, providing a more accurate usage history. Timestamps are now displayed in the reader's local timezone.
+
+### Added
+
+*   **Force swap with work shown**: The `/admin/advanced/software-update` page now renders a live “Running now” list (agent turns, workflow runs, cron jobs, in-flight requests) from a new `GET /admin/advanced/software-update/serving` endpoint. A "Force swap" control allows immediate handover instead of waiting. The page also detects a completed handover by comparing the serving process ID.
+*   **Binary auto-application watcher**: The daemon now watches its own executable file and hands over automatically once the file differs from the running image, has stopped changing, and nothing is in flight. A file that fails to take over is not retried.
+*   **MCP credentials survive handover**: Scoped per-spawn tokens are passed to the successor process, ensuring agents finishing their turns in the outgoing process keep their Wick tools instead of getting `401`.
+*   **`reload --binary` command**: A new `reload --binary <path>` command automates the zero-downtime upgrade sequence by statically checking binary identity, grading findings, performing a safe write-to-sibling + rename swap, verifying the successor, and rolling back on failure. It provides confirmation prompts and updates documentation.
+*   **Persistent Todo Tool**:
+    *   A todo checklist is now saved to `<SessionDir>/todos.json`, with a history of previous lists (capped at 20).
+    *   A new "Todo" tab in the rail shows the active list, promotes open items with a badge, and opens the rail on a new list (if nothing else is open). Updates stream via SSE.
+    *   Unfinished todo lists are carried into the next agent spawn prompt as a reminder.
+    *   The panel is renamed from "Checklist" to "Todo" and closes automatically when a list finishes (if it opened itself).
+*   **`ticket_search` tool**: A new tool for searching tickets by ID, title, description, and field values (case-insensitive), sorting title matches first.
+*   **Connector Accounts & OAuth**: Introduction of per-account visibility for connectors across the system, including entity, repository, service, admin pages, manager API, MCP connector handlers, and frontend views.
+*   **Provider Access Control**: Provider instances can now be shared by tags: `ACCESS` grants view-only (usage, re-check, reconnect for own accounts), while `MANAGE` grants access to the Providers menu and account management. The manager view is streamlined to show only relevant connection details and a read-only summary.
+*   **Composer `/usage` Command**: A `/usage` command in the composer displays a read-only popover showing the current session's provider account, rate-limit windows, and reading age. It can be manually refreshed.
+*   **Admin `run_as_user_id` for schedules**: Admins can now explicitly set a `run_as_user_id` for scheduled tasks from both MCP and the dashboard. This is admin-only and fails if the user is removed.
+*   **New `/admin/schedule` page**: A dedicated page to monitor scheduled tasks, showing owner, `run_as_user_id`, and effective run-as identity, with filtering, searching, and pagination.
+
+### Improved
+
+*   **Upgrade Visibility**: A draining predecessor now writes its outstanding work beside the pid file every 3 seconds, which the successor reads and displays on the `Software Update` page and banner, providing clarity on why a handover is pending.
+*   **AI Provider Usage UI**: The UI now includes provenance for usage readings (age, next probe, checking state, wait after failure) and a Re-check button. The `/usage` popover polls briefly to update itself while a probe is in flight.
+*   **Resource Monitoring UI**: Machine memory and disk usage in resource cards now display as donut gauges with percentages, alongside absolute values.
+*   **Sidebar Navigation**: The active page within the collapsed "More" group is now promoted to a top-level navigation row, preventing the highlighted item from disappearing when the group closes.
+*   **Settings Page UI/UX**:
+    *   All cards in Agents settings and Project settings now start closed.
+    *   A search box filters cards by config key, group title, and description (Project settings include common search terms).
+    *   The Project settings header is more compact, and the back link uses browser history by default.
+    *   Page column widths are standardized across the application.
+*   **Scheduled/Workflow UI Identity**: The session panel and shared detail modal now explicitly report "runs as `<name>`" for schedules, with an amber "no identity" chip when none is attached. Admin overrides are clearly marked.
+*   **SCM User Experience**:
+    *   The "Discard" button for untracked nested repositories is replaced with an "Ignore" option, which adds an entry to `.git/info/exclude`.
+    *   `git clean -fd` operations now correctly report errors for untracked repos it could not remove.
+*   **Swap Banner Consistency**: The admin banner describing software updates now aligns its messages with the actual handover state, suppressing contradictory or misleading information during active operations.
+
+### Fixed
+
+*   **Slack Scheduled Reply Delivery**: A bug where scheduled Slack replies were never delivered and left no trace if the session had no binding has been fixed. The system now warns once per session when a reply has nowhere to go and records the binding when auto-reply is armed.
+*   **`reload --binary` User Interaction**: Fixed `--yes` prompt logic for scripts (EOF now means no) and suppressed default flag dumps when refusing a binary.
+*   **Conversation Scroll Blinking**: Scrolling up in the chat panel by less than 80px no longer causes the panel to snap back to the bottom. The re-pin threshold is now correctly set to <=4px.
+*   **Conversation Browser Scroll Anchoring**: Disabled browser's automatic `overflow-anchor: auto` in the chat panel to prevent visible content jumps during live streams.
+*   **Admin Tag Background Save**: Corrected the background tag saver to use `application/x-www-form-urlencoded` and ensured all tag handlers correctly parse both URL-encoded and multipart forms, preventing accidental tag deletion. Forms without a `tags_submitted` marker are now refused.
+*   **Provider Manager Page Access**: Corrected provider display for managers to show a summary page instead of an inert admin form, avoiding console errors from admin-only API calls. Removed enable/disable, delete, rename buttons from the manager page.
+*   **Workflow Node Session Pinning**: Workflows can no longer pin a session ID that the workflow author cannot reach or manage. This is enforced at save-time.
+*   **Scheduler Database Lookup**: The fire-time run-as check now uses the runner tick's context and is bounded to 5 seconds, preventing indefinite hangs on unreachable databases.
+*   **`reload --binary` Blocking Behavior**: `reload --binary` no longer blocks by default; the old process serves during boot. The `--wait` flag restores blocking behavior. It also aborts its wait early if the daemon refuses to start the successor.
+*   **Failed Reload Rollback**: A failed `reload` no longer attempts to roll back over a newer binary installed by another process in the meantime; it refuses if the file is not the one it put there.
+*   **Same-Version Upgrade Refusal**: `reload --binary` now *fatally* refuses to hand over to a binary that carries the exact same version number as the one currently serving, preventing confusion and issues with rollbacks.
+*   **Stale Usage 401s**: The usage card now retries a failed probe once if the underlying credential file has a newer modification time than the failed attempt, preventing display of stale 401 errors.
+*   **Lint Failures**: Fixed two pre-existing lint failures related to `TestWickTagDescriptionsAreNotSplitByProse` (semicolon in description) and `TestNoDirectOSExec` (`os/exec` direct usage).
+
+---
+
+
+## [v1.9.0](https://github.com/yogasw/wick/compare/v1.8.1...v1.9.0) — Graceful Upgrades & Workflows
+
+_Released on 2026-09-10_
+
+### Added
+
+*   **Zero-downtime binary replacement (`<app> reload`)**: A `restart` closed the listening port and killed in-flight work. `reload` starts a successor, hands it the listening socket, and keeps serving until the successor is ready. The old process then drains and exits. Work that cannot be resumed (workflow runs mid-node, cron jobs mid-write) waits for `WICK_DRAIN_TIMEOUT` (default 20m), while resumable agent turns wait for `WICK_DRAIN_AGENT_GRACE` (default 45s). An intake baton ensures only one process accepts new work. Opt-in with `WICK_GRACEFUL_UPGRADE=1`; full support on Linux/macOS/BSD, with Windows and the tray falling back to stop/start. Background subsystems declare work with `upgrade.Register` / `upgrade.RegisterResumable`.
+*   **Slack: run an agent inside a thread from a workflow (`slack.send_to_session`)**: This action injects a task into the agent session bound to a Slack thread, making the turn an ordinary pool turn with status banners, tool activity streaming, and replies in the thread. `slack.send_message` also gains `auto_reply` to arm the thread's 🤖 switch. Bot messages now reach the workflow surface as `message` / `thread_started` with `is_bot`, `bot_id`, and `bot_username`, guarded against self-posts.
+*   **Self-update now uses the handover too**: Applying a staged update now performs a socket handover when graceful upgrade is armed, replacing the binary and forking a successor while the current process keeps serving and drains. The tray keeps the classic swap + re-exec.
+*   **Built-in skill: upgrading without downtime**: Ships in the binary, documenting `reload` vs `restart`, systemd lines needed for handover, binary renaming, drain wait times, registering background subsystems, proving zero downtime, and recognising failure modes.
+*   **Workflow: clear a workflow's run history from a menu**: Adds a bulk action to clear all runs from a workflow's history, accessible via a 3-dot menu. `state.FileStore.DeleteAll(id)` is used for deletion, ignoring panel filters. The `KebabMenu` gains a `size="sm"` option.
+*   **Providers: show when each usage window resets on the card**: Provider cards now display reset information (e.g., "5h 35% resets-1h") with a glyph and a tooltip for weekly and daily usage windows.
+*   **Built-in skill: HTML widget troubleshooting (`wick-html-widget`)**: Documents HTML artifact preview rules, including the one-file rule, CSP directives, widget permissions presets, the `wickReadFile` and `wickDataTable` bridges, and console message signatures.
+*   **SCM: scroll the selected repository into view and mark it**: The repository list now scrolls the selected row into view when opened, selection changes, or search filters rebuild rows. The selected row also gains a check icon and accent left border.
+*   **Sessions: own a channel thread from its first message, and share it with everyone in it**: `ensureSession` now stamps the caller as owner at creation. Session meta gains `participants` (all speakers), which drives visibility in "Yours", access to unscoped sessions, and a shared-thread icon.
+*   **Channels: name every channel instance and let a workflow pin one**: `Registry.Describe` now returns one row per instance with its key, owner, and bot name. The editor renders this as a two-line row, with the caller's instance first. Channel nodes and triggers gained `channel_instance` to pin an action to a specific bot, and identity is cached on the instance's `agent_channels` row.
+*   **Source: tell the agent which repository it is working in**: The "This session" block now carries `active_repo`, and a Source connector exposes the same selection through `source_active` (to re-read), `source_list` (to show all repos), and `source_select` (to switch).
+*   **Source: follow the repository being edited, and say so**: The git watcher now maps changed files to their owning repository and makes that the session's active repo, ignoring writes inside `.git`. The prompt and MCP instructions state `active_repo` is a spawn-time snapshot. The Source rail icon pulses with the repo name when the active repo moves.
+*   **SCM: give the Source panel a credential**: Push and Pull actions in the Source panel now borrow credentials from the Git CLI connector. The first network operation prompts for a credential, which is remembered per session, per user.
+
+### Improved
+
+*   **Registry: session-view rebuild 40% cheaper**: Optimised the registry's session-view rebuild process by using `maps.Clone` and sorting order keys (`LastActive`) instead of IDs. This reduced rebuild time from 5.9ms to 3.5ms per request for 5,000 sessions.
+
+### Fixed
+
+*   **Source panel missed changes deeper than one directory**: The `fsnotify` watcher now watches the active repository's tree in full (skipping `.git` and build/cache noise), capped at 4000 directories, addressing issues where changes in nested directories were not noticed. Each repo's `.git` is also watched.
+*   **Source rail badge showed no counter until a file changed**: The last `git_status` per session is now cached and replayed on every page load, ensuring the badge displays a counter immediately.
+*   **Assistant message duplicated on every page reload**: The stream snapshot's disk fallback now emits one cumulative `text_snapshot` instead of replaying assistant text as `text_delta` (append), preventing duplication.
+*   **A reply typed in the web UI never reached its Slack thread**: The session → (channel, thread) mapping is now persisted on the session (`meta.channel_ref`), allowing replies to be delivered even after a restart or from sessions created by workflows.
+*   **`plugin.Reloader.Stop` panicked on overlapping shutdown paths**: The stop channel is now idempotent, preventing double-closure panics.
+*   **Workflow subsystem was never stopped on shutdown**: `wfsetup.Manager.Stop` now has a caller, ensuring running workflows are properly stopped during shutdown.
+*   **Slack: route events from every bot instance**: The workflow event sink is now attached to all Slack instances, not just the first, ensuring all bots receive and route events correctly.
+*   **Slack: collapse repeat deliveries of one physical event**: Slack payloads now carry a bot-independent `event_key` (channel/ts), and the router drops keys it has already seen, preventing duplicate workflow runs from multiple bots in a channel or Slack webhook retries.
+*   **Slack: action nodes resolve instance per run from trigger's bot_user_id**: Workflows triggered by a specific bot now reply as that bot, preventing `not_in_channel` errors.
+*   **Slack: `slack.channels` picker offers only channels the bot is a member of**: The picker now uses `users.conversations` instead of `conversations.list`, showing only reachable channels and preventing selection of un-joinable ones.
+*   **Slack: `text_contains` trigger now means case-insensitive substring**: The `text_contains` filter in Slack message triggers now correctly performs a case-insensitive substring match.
+*   **Slack: editor picker no longer lists an already-selected entry twice**: Editor pickers for Slack channels now de-duplicate entries, and saved chips for values set by others are rendered under a "Current" label.
+*   **UI: fail the build on missing generated assets (explicit `go:embed`)**: Generated build outputs (css/app.css, lib/wick-markdown.js) are now explicitly named in `go:embed`, causing a compile-time error if they are missing instead of silently shipping 404s.
+*   **UI: one clashing skill name emptied the whole `/` command menu**: The `/` command menu now uses a unique `key` for list identity (e.g., `skill:<folder>`) and de-dupes by invokable name, preventing a single name clash from emptying the entire menu.
+*   **UI: Chrome warned that `apple-mobile-web-app-capable` is deprecated**: Added the standard `mobile-web-app-capable` meta tag while retaining the prefixed version for iOS Safari.
+*   **SCM: count the selected repository in the Source badge, not the session**: The Source rail badge now reflects the changes in the currently selected repository, falling back to the session total when none is selected.
+*   **Files: file panel explorer-shaped search and sort**: The file panel's filter is now scoped to the level being viewed, with a "Subfolders" toggle for recursive search. Ordering now follows standard file manager rules (folders first, Name/Recent/Type), and the search box includes a clear button.
+*   **Files: file panel header counts the folder you are in, not everything loaded**: The file panel header now accurately counts the entries in the current folder, rather than a cumulative count of all loaded entries as folders are expanded.
+*   **SCM: make the selected repository one answer, per session**: The active repository selection now lives on the session (`meta.scm_repo`) and is included in the `git_status` snapshot, ensuring consistency across the panel, badge, and server.
+*   **SCM: name the active repository on the collapsed Repositories header**: The collapsed repository list header now displays the active repo's name and branch, providing context without needing to expand the list.
+*   **SCM: give the collapsed repository name the room it needs**: The active repo's name on the collapsed header now sits right after the count, taking up the remaining row space, improving readability.
+*   **Git connector: policy refusal arrived as normal reply, not transport error**: `gitConnectorOutput` now reads policy verdicts (`ok:false, verdict "deny"`) first, preventing false "Pulled" messages.
+*   **Git connector: `pull` and `checkout` now exempt from protected branch policy**: These non-mutating operations are no longer gated by protected branch policies.
+*   **Git connector: stale `.git/index.lock` blocked commands; now retries after clearing old/unheld locks**: The `Run` command now retries once after clearing stale `.git/index.lock` files that are both old (>10m) and unheld.
+*   **Git connector: `pull` with no branch now falls back to current branch**: The `pull` operation now correctly defaults to the current branch when none is specified.
+*   **Git connector: `discard` on repo with no commits now uses `git rm --cached`**: The `discard` command now correctly handles repos with no commits by unstaging with `git rm --cached`.
+*   **Agents: load the file panel one level at a time (recursive listing cut off)**: The Context panel now loads directory contents one level at a time via `GET /files?path=`, applying the 5000-entry cap per directory rather than globally, ensuring all top-level repos are visible. Server-side search for "Subfolders" mode is also implemented.
+*   **Agents: the `@`-mention index cap increased from 20000 to 200000 files**: The `@`-mention index now supports a significantly larger number of files, preventing silent omissions in large sessions.
+*   **Agents: refresh on SSE heartbeat now strictly sequential, not parallel**: File panel refresh requests triggered by SSE heartbeats are now sequential, resolving intermittent "Transport error" issues from parallel requests.
+*   **Agents: `pull` op description updated to reflect exemption from protected branch**: The description for the `pull` operation in the git connector documentation has been corrected.
+*   **Agents: `policyshow` test for `checkout` exemption fixed**: A test verifying `checkout` exemption from protected branch policies has been corrected.
+*   **Upgrade: log-pipe cleanup waited unbounded for EOF**: The log-pipe cleanup no longer waits unbounded for EOF from inherited pipes, preventing the old process from hanging after a drain.
+*   **Upgrade: successor inherited parent's log pipes, causing SIGPIPE**: Successor processes now fork with real stdio, preventing SIGPIPE errors when the parent exits and stopping child boot output from being copied to the parent's log.
+*   **SCM: repository list no longer drags itself back to the selection on re-render**: Auto-scroll in the repository list now fires only when the reason for selection changes, and stands down for 5 seconds after manual scrolling. A pill appears to guide users back to the selection if it's out of view.
+*   **Agents: a scroll away from the bottom now wins the race against an arriving turn**: Upward scrolling in the chat panel now immediately releases the "stick to bottom" pin, preventing the thread from jumping back down when a new turn arrives mid-gesture.
+*   **Tests: unbreak the suite on a real host (provider/claude, provider/codex tests)**: Test hygiene fixes, including ensuring `CLAUDE_CONFIG_DIR` independence, gating `codex` integration tests behind `WICK_CODEX_E2E=1`, and fixing a race in `upgrade TestTrackerWaitsUntilZero` with an atomic counter.
+*   **Memscope: shim unit name carries nanosecond stamp for uniqueness**: The memscope shim's unit name now includes a nanosecond timestamp, preventing clashes when `exec` replaces the shell in place.
+*   **Git connector: `reset` and `branch_create` with checkout fixed for git 2.43 compatibility**: Addressed compatibility issues with Git 2.43 by ensuring `ValidateCommitish` refuses leading `-` and using plain documented forms for `reset` and `branch_create` arguments.
+*   **Memscope: quote what the shim interpolates to prevent script injection**: The shim now safely quotes interpolated values like `RealBin` and slice arguments using `sh()`, and `Provider.Name` through `shimSafeName`, preventing shell script injection from hostile names or paths with spaces.
+*   **Web: carry embedded build outputs (`app.css`, `wick-markdown.js`) in git to allow compilation without a frontend toolchain**: `public/css/app.css` and `public/lib/wick-markdown.js` are now committed to git, allowing `go build` and `go test` to succeed on fresh checkouts without requiring a frontend build toolchain.
+
+---
+
+
+## [v1.8.1](https://github.com/yogasw/wick/compare/v1.8.0...v1.8.1) — Providers & Fixes
+
+_Released on 2026-09-08_
+
+### Fixed
+
+*   **Slack: continuation chunks posted plain**: Overflow chunks of a long reply were previously prefixed with an `_(cont.)_` marker; they are now posted as plain follow-up messages with no prefix.
+*   **Custom connectors: session instances now honor config field defaults**: An operation whose URL template referenced a config field with a declared default (e.g., `base_url`) previously failed with `rendered URL "..." is not http(s)` on fresh session-workspace instances. This occurred because custom connectors read config directly from the instance map without applying defaults. Custom connectors now fall back to the field's declared default when no value is stored (applied in `ctxMaps`), matching built-in connector behavior which uses `entity.MapToStruct` for default substitution. This resolves issues where instances appeared "ready" but operations failed until config fields were manually reset, even if they matched their defaults.
+*   **Websocket upgrade behind Nginx for login TTY**: Fixed an issue where the login TTY websocket failed to connect behind Nginx. Proxies forwarding the client's `Upgrade: websocket` header often rewrote the `Connection` header to `keep-alive`. The `gorilla` websocket `Upgrade()` function required the `upgrade` token in the `Connection` header, leading to a 400 error. The fix restores the `upgrade` token before processing the handshake, enabling the terminal to stream correctly.
+
+### Added
+*   **Providers: connection badges on the list page**: Each provider instance card now displays its connection state (`Connected` / `Not connected`), associated account email, and two nested usage rings. The inner ring represents a rolling 5-hour window, and the outer ring a rolling 7-day window, with both percentages spelled out. This allows distinguishing instances of the same type without needing to open each one's detail page. Provider types without a usage API (e.g., `codex`, `gemini`) show only the badge and email. This feature is backed by a new `GET /api/providers/connections` endpoint that efficiently returns account and usage data for all instances in a single request. Usage is probed once per distinct credential directory and results are cached for 60 seconds. The endpoint is deliberately separate from `GET /api/providers` to ensure the list page loads quickly, with badges filling in asynchronously. See [Providers ▶ Connection badges](/guide/agents/providers#connection-badges).
+
+---
+
+
+## [v1.8.0](https://github.com/yogasw/wick/compare/v1.7.3...v1.8.0) — Providers & Fixes
+
+_Released on 2026-09-07_
+
+### Added
+
+*   **Providers: Reconnect via login TTY**: The provider detail page's Connection panel can now run `claude`'s interactive `/login` inside a wick-owned terminal, streamed live to the browser (xterm.js over a websocket) — no separate Web Terminal / SSH session needed. The OAuth login link is parsed out and offered as Copy/Open, an authorization-code field types codes into the CLI, and success/failure are detected and timestamped. The session is TTL-bound: 5 minutes by default, +5 minute extends, 30 minute hard cap, auto-killed on expiry. The panel also shows the connected account (email/org/plan) and `claude`'s usage windows, read from the instance's own credential files (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`-aware). `codex`/`gemini` show account status only for now; `wick` is unaffected. See [Providers ▶ Reconnect (login TTY)](/guide/agents/providers#reconnect-login-tty).
+
+### Improved
+
+*   **Providers: detail page sections collapsed by default**: Configuration, Extra Args, Env, and Recent Sessions on the provider detail page now start collapsed behind a clickable summary header; Recent Sessions defers its request until first expanded instead of loading on every page visit.
+
+### Fixed
+
+*   **Slack: no more duplicated/truncated replies on mid-turn follow-ups**: Sending a follow-up message while the agent was still streaming a reply superseded the in-flight turn but dropped its pointer to the live Slack message, causing `finalizeReply` to post a brand-new message and strand the streamed one mid-word. The live message pointer now carries over to the new turn, so the reply is edited in place instead of duplicated.
+*   **Slack: long replies no longer split mid-link or mid-code-block**: Chunking a long reply could previously cut inside a `<url|label>` link or a ` ``` ` fenced code block, leaking raw URLs or breaking formatting across both halves. Chunk boundaries now skip over these spans and prefer a blank line, then a newline, then a space before falling back to a hard cut.
+*   **Windows: no more DNS resolver override**: `/etc/resolv.conf` never exists on Windows, so wick's network bootstrap always read that as "no nameserver configured" and replaced Go's resolver with a direct-UDP fallback to public DNS (1.1.1.1 / 8.8.8.8) on every Windows install. Networks that block outbound UDP port 53 to public resolvers (common behind corporate firewalls/VPNs) then failed every outbound call. Wick now skips this step entirely on Windows, where the stdlib resolver already talks to the OS DNS APIs directly.
+
+---
+
+
+## [v1.7.3](https://github.com/yogasw/wick/compare/v1.7.2...v1.7.3) — Plugins & Autosave
+
+_Released on 2026-09-04_
+
+### Added
+
+*   **Autosave commit method**: Added a new method to immediately save without a prior schedule.
+*   **Project Settings Form**: Updated event handlers to use the new autosave commit method for selects and toggles.
+*   **Provider Picker**: Enabled selection of instances even with an empty model list through a default model button.
+
+### Improved
+
+*   **Plugin release pipeline**:
+    *   **Separate target knob + rebuild-all**: Plugin builds now read the `BUILD_TARGETS_PLUGINS` Actions variable (falling back to `BUILD_TARGETS`, then the shared default), allowing plugins to ship a wider OS/architecture set than the Wick binary.
+    *   The manual `release-plugins.yml` run no longer requires a plugin name; an empty value or `all` rebuilds every plugin.
+    *   A new `force` option allows re-releasing already-tagged versions by replacing/extending the zips on their existing releases (e.g., to backfill a newly added architecture).
+
+---
+
+
+## [v1.7.2](https://github.com/yogasw/wick/compare/v1.7.1...v1.7.2) — Channels & Files
+
+_Released on 2026-09-04_
+
+### Added
+
+*   **REST channel background mode**: `POST /chat/completions` and `POST /responses` now accept `"background": true` (or `metadata.background: "true"`) to return immediately with `"status": "queued"` instead of waiting for the agent to complete. The reply lands in the session history; pair with `conversation` and read it back with a follow-up request. See [Channels ▶ REST](/guide/agents/channels#background-mode).
+
+### Improved
+
+*   **REST channel: concurrent requests on one conversation now queue instead of erroring**: A second request on the same `conversation` while an earlier one is still in flight used to return `409 session busy`. It now queues FIFO behind the in-flight turn, like a chat channel message, and each request gets the reply to its own message — even if an earlier request was cancelled client-side. See [Channels ▶ REST](/guide/agents/channels#concurrency).
+*   **Slack channel `upload_file` now supports binary files and is more robust**:
+    *   The `upload_file` action in the Slack channel now correctly handles `application/x-www-form-urlencoded` for `files.getUploadURLExternal`, resolving a previous issue where no uploads worked.
+    *   Added support for uploading binary content via `path` (reading from disk) and `content_base64` (inline bytes) inputs. The `path` input is confined to Wick's agents directory with symlink resolution and containment checks for security.
+    *   Addressed a Time-of-Check to Time-of-Use (TOCTOU) vulnerability in file uploads by ensuring path validation and file reading occur through a single, secure handle, preventing symlink race conditions.
+    *   Fixed a bug where a semicolon `;` in the `desc=` prose within Wick struct-tags silently truncated schema descriptions, affecting 61 tags. A test has been added to prevent future regressions.
+    *   The `content` input source for uploads is now explicitly named, and the `InputSample` uses `<agents-dir>` instead of a hardcoded path.
+    *   Documentation for the semicolon rule in config-tags skill has been updated.
+
+---
+
+
+## [v1.7.1](https://github.com/yogasw/wick/compare/v1.7.0...v1.7.1) — Trace UI
+
+_Released on 2026-09-02_
+
+### Fixed
+
+*   **Trace tool cards no longer spin forever on large results**: A tool result large enough to be spilled to a sidecar file was previously rendered as perpetually running because the frontend inferred completion from inline text, which was absent. Completion is now correctly inferred from the existence of the result event. The spilled payload is fetched lazily when the result is expanded; collapsed cards display their size (e.g., '16.8 KB — click to load') to avoid including large data in the trace index. Payloads capped by `traceEventMaxBytes` include a truncation note. This fix covers DetailView and SubAgentModal. Live-built blocks fall back to text presence, and old traces remain unaffected.
+*   **Lazy-load spilled tool_use input**: Fixed an issue where `tool_use` cards with large, spilled inputs incorrectly displayed 'no input'. The tool input is now lazy-loaded upon expansion, with collapsed headers showing an 'input N KB — click to load' hint. The 'no input' message only renders when there is genuinely no input. This also includes a fix for the `loadTraceEvent` test helper type.
+*   **Retain spilled-input todo cards**: `todo` calls whose input was spilled were previously removed from the flat trace and merged checklist. Such cards are now retained in the flat trace as generic cards, displaying 'input N KB — click to load'.
+
+---
+
+
+## [v1.7.0](https://github.com/yogasw/wick/compare/v1.6.0...v1.7.0) — Trace Improvements
+
+_Released on 2026-09-02_
+
+### Improved
+
+*   **Turn trace shows narration and why a tool ran**: Expanding **show trace** on an assistant turn now interleaves the narration text the model streamed between tool calls, positioned where it actually occurred, instead of showing bare tool cards with no context. Tool cards also surface the call's `description` field next to the tool name (an MCP `mcp__<server>__` prefix is stripped from the display, full name on hover), with duration/time moved to the right of the header. See [AI Agents ▶ Turn trace](/guide/agents#turn-trace).
+
+### Fixed
+
+*   **Job runs cancelled by user now correctly show as 'cancelled'**: Resolved a race condition where deliberately canceled job runs would sometimes incorrectly show an 'error' status instead of 'cancelled'. The system now consistently records the run as cancelled when a user stops it.
+
+---
+
+
+## [v1.6.0](https://github.com/yogasw/wick/compare/v1.5.0...v1.6.0) — Job, Session, Migrate
+
+_Released on 2026-08-28_
+
+### Improved
+
+*   **Faster restarts on Postgres**: Startup now skips the full `AutoMigrate` catalog scan when the schema hasn't changed since the last boot. It checks a fingerprint stored in a new single-row `wick_schema_state` table instead, dramatically reducing startup time. A full migration is automatically triggered if the fingerprint is missing or doesn't match. No configuration changes are required.
+
+### Added
+
+*   **Jobs can be cancelled mid-run**: A **Cancel** button is now available on a running job's page and in the manager SPA's job detail view. This action cancels the run's context, marks the run as `cancelled` (a new status distinct from `Success`/`Error`), and returns the job to an idle state. The **Cancel** button also serves as an unstick action for jobs stuck showing `running` without any actual activity (e.g., after a crash). Stuck jobs are now automatically swept on every worker tick and at bootstrap, including disabled jobs. Disabling a running job will also cancel it.
+*   **Your sessions / All sessions tabs**: The Sessions page and sidebar now default to displaying your own chats, along with chats on tickets assigned to you when in ticket mode. A new tab allows widening the view to include everyone's sessions. Both lists now support scroll-to-load for more items, replacing the old paging mechanism. The sidebar's former per-project session-count pill has been replaced with a Yours/All toggle, which is cookie-persisted and resets to 'Yours' upon a project switch. The ticket board's Untracked rail also gains the same Yours/All split (filtered by `?untracked_owner=me` on `GET /api/projects/{id}/tickets`), plus scroll-to-load paging. The ticket board itself is now viewport-locked, with each column scrolling independently under pinned headers. The `GET /api/sessions` endpoint has been enhanced with `?owner=me` and `?offset=` parameters, and its response now includes `total` and `has_more` fields.
+
+### Changed
+
+*   **Ticketed sessions default to their ticket**: For sessions attached to a ticket, the system prompt now directs the agent to treat that ticket as the conversation's primary subject. Agents are prompted to first read the ticket and its notes, then follow a matching skill, before resorting to ad-hoc exploration across sessions.
+
+### Fixed
+
+*   **Cancelled runs reliably show as cancelled**: A race condition could sometimes cause runs stopped via the **Cancel** button, a job disable, or a shutdown to finalize with an `error` status instead of `cancelled`. This has been resolved; cancellation is now reliably finalized as `cancelled` in all such cases. Runs that end due to a timeout will continue to finalize as `error`.
+
+---
+
+
+## [v1.5.0](https://github.com/yogasw/wick/compare/v1.4.3...v1.5.0) — Tickets
+
+_Released on 2026-08-26_
+
+ 
+ ### Added
+ *   Tickets now feature a markdown body (description), supporting entity creation/PATCH, MCP operations (truncated in list, full in get), `ticket.updated` diff tracking, and a 600-character excerpt injected into the session system prompt.
+ *   Introduced a `show_on_card` flag for schema fields, allowing specific fields to be displayed on board cards.
+ *   Custom action buttons under Integrations, configurable with a label and URL, rendered on every ticket page. A click POSTs the ticket as a `ticket.action` event via the webhook dispatcher, including SSRF guard, retry, and synchronous outcome reporting.
+ *   Documentation for ticket body, card fields, and custom buttons.
+ 
+ ### Improved
+ *   Board UI revamped with fixed-width, horizontally scrollable columns that center when they fit, status-dot headers, and a full-width card view.
+ *   Ticket page UI revamped with a two-pane layout (work column + properties rail), a markdown description editor, sessions capped at 5 with a "show more" option, notes displayed as a comment thread, a trash-icon delete option, a breadcrumb top bar, a floating bottom-centre composer, and `?ticket=` URL synchronization for back/forward browser navigation.
+ 
+ ### Fixed
+ *   Webhook secrets are now redacted from board and detail configuration responses.
+ 
+ ### Dev
+ *   The development environment now serves `/public` from disk under `WICK_DEV_REPO_ROOT`, allowing Tailwind rebuilds to apply without recompiling the server.
+
+---
+
+
+## [v1.5.0](https://github.com/yogasw/wick/compare/v1.4.3...v1.5.0) — Ticket Descriptions, Card Fields, Custom Buttons
+
+_Released on 2026-08-26_
+
+### Added
+
+*   **Tickets gain a markdown description**: A ticket now carries a `body` alongside its title — editable on the ticket page and rendered as markdown. `POST /api/projects/{id}/tickets` and `PATCH /api/tickets/{ticketID}` accept `body` (an explicit `""` on `PATCH` clears it; omitting it leaves it unchanged), and the `ticket_create` / `ticket_update` MCP ops on the [Tickets connector](/connectors/tickets) accept it the same way. `ticket_get` returns it in full; `ticket_list` truncates it to 280 characters so a board listing doesn't pay for long descriptions per row. A 600-character excerpt also rides in the session's system prompt so an agent knows what a ticket is about without a tool call. See [Ticket Integrations](/guide/agents/ticket-integrations#create-a-ticket).
+*   **Per-field control over what shows on the board card**: Ticket schema fields gain a **Card** checkbox (Project settings → Ticket system → Custom fields), off by default. Only fields marked **Card** appear on the kanban card; the full set — plus any value written outside the schema — stays on the ticket's own page. See [Projects → Per-project settings](/guide/agents/projects#per-project-settings).
+*   **Custom ticket buttons**: A project can add its own buttons (label + URL) under **Project settings → Ticket system → Integrations → Custom buttons**. Each appears on every ticket's page; clicking one POSTs the full ticket as a `ticket.action` event to that button's URL through the same delivery machinery as ticket webhooks (SSRF guard, retries), and the click reports back the delivery outcome. `ticket.action` is not subscribable from a regular webhook — it only reaches the button's own URL. See [Ticket Integrations → Custom buttons](/guide/agents/ticket-integrations#custom-buttons).
+*   **Ticket board and detail page revamp**: Kanban columns are now fixed-width in a single horizontally scrollable row. A ticket's page is reorganized into a main column (title, description, sessions capped at 5 with "show more", notes) plus a properties rail, with delete moved to a trash icon and the open ticket reflected in the URL (`?ticket=<id>`) so back/forward and sharing a link both work.
+
+### Security
+
+*   **Webhook secrets no longer leak through board/detail responses**: `GET /api/projects/{id}/tickets` and the ticket detail API previously returned a project's ticket integration config, including webhook secrets, to any board viewer. Both now redact secrets before the response leaves the server.
+
+---
+
+## [v1.4.3](https://github.com/yogasw/wick/compare/v1.4.2...v1.4.3) — Conversation Pagination
+
+_Released on 2026-08-26_
+
+### Added
+
+*   **Agent conversation history loads incrementally**: The agent conversation page now opens with only the latest 20 turns instead of the full transcript, and loads older turns automatically as you scroll to the top (scroll position stays anchored), with a "Load older messages" fallback button. `GET /api/sessions/{id}/conversation` gains `?limit=N` and `&before=<turn_id>` query params plus a `has_more` field in the response; calling it with no params still returns the full history, so existing integrations are unaffected. Traces remain lazy-loaded per turn as before.
+
+---
+
+
+## [v1.4.2](https://github.com/yogasw/wick/compare/v1.4.1...v1.4.2) — Enhancements
+
+_Released on 2026-08-25_
+
+### Added
+
+*   **Source Control repo list scrolls instead of overflowing**: The Source Control panel's **Repositories** section now caps its expanded list at roughly 5 rows with vertical scroll, and shows a **Search repositories** filter (matches name or path) once there are more than 5 repos. Previously every repo rendered inline and pushed the rest of the panel down. See [Source Control ▶ Multi-repo support](/guide/agents/source-control#multi-repo-support).
+*   **Tickets can adopt an external id**: `POST /api/projects/{projectID}/tickets` and the `ticket_create` MCP op now accept an optional `id`, so a ticket mirroring a record elsewhere can carry that record's identity instead of a minted `T-XXXX` code — the source system addresses the ticket by the id it already holds, with no mapping to store. An id must fit `[A-Za-z0-9._-]` within 64 characters and is kept verbatim; `..`, path separators, leading dots, and the reserved `T-XXXX` form are refused before it is ever used as a directory name. A uuid is folded to its dashless lowercase form, so the two shapes Notion hands out for one page cannot become two tickets, and a second create from the same page is refused rather than duplicated. Lookup by an adopted id stays a direct file read — nothing scans the board. Omitting `id` is unchanged. See [Ticket Integrations ▶ Adopting an external id](/guide/agents/ticket-integrations#adopting-an-external-id).
+
+---
+
+
+## [v1.4.1](https://github.com/yogasw/wick/compare/v1.4.0...v1.4.1) — Web UI
+
+_Released on 2026-08-25_
+
+### Fixed
+
+*   Resolved an issue causing a "first-click hang" on macOS (especially with Bluetooth headsets) when navigating pages. This was due to `new AudioContext()` synchronously blocking the main thread while waking the audio output device. The two-tone chime is now played using a pre-rendered WAV via `HTMLAudioElement`, which initializes asynchronously, eliminating UI jank while maintaining the same notes, envelope, and gesture-gated autoplay unlock.
+
+---
+
+
+## [v1.4.1](https://github.com/yogasw/wick/compare/v1.4.0...v1.4.1) — Chime Hang Fix
+
+_Released on 2026-08-25_
+
+### Fixed
+
+*   **First click after navigation could freeze for several seconds**: The lifecycle notification chime primed a `AudioContext` on the page's first click/keydown/touchstart, and constructing one blocks the main thread while the OS wakes the audio output — multi-second hangs were observed on macOS with Bluetooth output. The chime is now a pre-rendered WAV played through an `HTMLAudioElement` instead, removing the blocking construction. Same sound, same autoplay-unlock gesture gating — no other behavior change.
+
+---
+
+## [v1.4.0](https://github.com/yogasw/wick/compare/v1.3.0...v1.4.0) — Agents
+
+_Released on 2026-08-25_
+
+### Fixed
+
+*   **Crash-recovery notices now actually restart the agent**: The recovery notice sent after an unexpected agent death (crash or OOM kill) was delivered as a system turn, which the pool deliberately buffers without spawning. This meant the agent was never brought back and the notice sat unread until the next human message. Recovery turns now spawn on their own, restoring both automatic crash respawn and immediate OOM notification.
+*   **Memory kills by the host are no longer blamed on the agent's limit**: An agent killed by the global OOM killer (machine out of memory) was previously reported as having exceeded its own memory limit — even when its measured peak was below it — and was never retried.
+    *   The cgroup's `oom` and `oom_kill` counters are now read separately. Only a kill triggered by the agent's own ceiling is classified as an OOM (and is not retried).
+    *   A kill from outside the agent's individual limit (either due to the combined agent limit, detected via the `agents` slice's own counter, or the machine running out of memory) now correctly stays a retryable error whose message names the actual cause.
+    *   Recovery notices now carry the exit's actual reason sentence (including the memory cause and measured figures) instead of a generic "unexpected exit," so a restarted agent knows to change its approach rather than repeat the allocation that got it killed. The OOM notice also now tells the agent to relay operator advice to the user and keep the smaller-approach remedy for itself.
+    *   Documentation for the memory-guard page and the `wick-resource-limits` skill has been updated to distinguish between own-limit OOM, combined-limit OOM, and host OOM, and clarify their retry behaviors.
+*   **OOM kills labeled correctly in Recent Spawns**: A memory kill was previously logged with `exit_reason: "unknown"` instead of `oom` in the spawn log. This has been corrected.
+
+---
+
+
+## [v1.3.0](https://github.com/yogasw/wick/compare/v1.2.0...v1.3.0) — Agents, Tickets, Tools
+
+_Released on 2026-08-25_
+
+### Added
+
+*   **Tool webhook endpoints**: Tool modules can now open an unauthenticated, JSON-only subtree under their own mount via `r.WebhookGroup(prefix)`, allowing external systems to deliver callbacks without a session cookie. Handlers receive a `*tool.WebhookCtx` and are responsible for their own authentication. Declared endpoints are listed on the tool's manager settings page with copy-ready URLs.
+*   **Ticket integrations**: A project's ticket board can now be wired to external systems from **Ticket system → Integrations**.
+    *   Outbound **webhooks** POST a signed (`X-Wick-Signature`, HMAC-SHA256) JSON event on ticket create/update/status change/assign/delete/session attach/detach/note-add and on the sweeper's followup/auto-resolve actions. Webhooks include 3 retries over ~30s, a per-endpoint delivery log, and an SSRF guard refusing private/loopback/link-local addresses.
+    *   A new **REST API toggle** enables Personal Access Token authentication against existing ticket REST endpoints for that project, allowing outside systems to create and move tickets without a browser session.
+    See [Ticket Integrations](/guide/agents/ticket-integrations).
+*   **Jump to ticket from a chat**: The conversation header's view menu now offers a direct jump to a chat's associated ticket (or to the board, if not on one). This option is only shown on projects with ticket mode enabled.
+*   **Sender identity**: Slack, Telegram, REST, and the web composer now resolve message senders from their transport envelope, carrying it as a structured `sender` field on the turn, separate from the message text.
+    *   A new **`agents.sender_visibility`** setting (Agents → Session Identity; `off` / `name` default / `name_id` / `full`) controls how much of this identity is repeated into the model's copy of each message via a `[from: Name]` line; the dashboard always shows the full sender regardless.
+    *   The conversation UI displays a name/channel chip and colour-stable avatar initial for messages from someone other than the reader, using a neutral bubble instead of the "you" green.
+    See [Channels ▶ Sender identity](/guide/agents/channels#sender-identity).
+*   **Telegram identity mapping**: Telegram now maps senders to wick accounts similarly to Slack, using the same `channel_auto_register` switch and approval gate. As the Telegram Bot API does not report email, the sender's numeric ID becomes a reserved-domain stand-in (e.g., `8812@telegram.local`) for lookup.
+    *   **Behaviour change:** An unknown, pending, or unapproved Telegram sender now receives a reply naming the missing step instead of silently running as the channel owner.
+    See [Channels ▶ Telegram ▶ Sender identity mapping](/guide/agents/channels#sender-identity-mapping).
+*   **Silent replies built-in skill**: A new built-in skill (`wick-silent-replies`) teaches agents when and how to use the `[silent]` reply marker, including specific prefix rules and scenarios where silent replies are appropriate or not.
+*   **Wick-docs built-in skill**: A new built-in skill (`wick-docs`) provides agents with an evergreen pointer to relevant documentation, including a machine index of docs pages, the changelog, GitHub releases, and the running build version. The catalog block injected into provider prompts has also been raised to 8KB to accommodate a growing skill library.
+
+### Fixed
+
+*   **Custom MCP-proxy connectors**: Object and array arguments are now forwarded to the upstream MCP server in their original JSON type instead of being stringified, resolving "expected object, received string" errors when such parameters were used with text/textarea widgets.
+*   **Notes panel ordering**: Notes are now ordered by last activity (edited or created, whichever is newer) instead of creation time, ensuring the panel order reflects the displayed timestamps.
+*   **Ticket sessions and chat scoping**:
+    *   A ticket's session list is now ordered by last activity, newest first.
+    *   Selecting a ticket on the board now scopes the next chat to that ticket. The project-landing composer names the selected ticket in its placeholder and footer, with an option to start a chat without a ticket.
+    *   Auto-create rules are now validated when saved from the ticket-config API, rejecting uncompilable regular expressions immediately.
+    *   The ticket name in the composer placeholder is now clipped at 32 characters to prevent long titles from pushing UI elements off-screen.
+    *   The project options now explicitly carry `ticket_enabled` for client-side UI logic.
+*   **Agent pool race condition**: Resolved a `WaitGroup` misuse race where `wg.Add` could conflict with `wg.Wait` during agent exit, ensuring proper synchronization.
+*   **Sender identity feature fixes**:
+    *   The web composer now correctly stores sender information for dashboard messages, which previously had no sender.
+    *   The wick provider now re-applies the `[from: …]` line on replay for resumed or compacted threads, ensuring sender identity is preserved.
+    *   Telegram messages no longer render as being from "somebody else" due to missing `WickUserID`.
+*   **Tool webhook robustness**:
+    *   Webhook body reads are now capped at 1 MiB (`DefaultMaxBodyBytes`). Over-cap bodies will error rather than truncate, preventing signature verification failures from misreporting "bad signature."
+    *   Corrected `CfgBool` documentation and parsing behavior: "yes"/"on" values are now correctly identified as `false` by `strconv.ParseBool`, consistent with widget storage.
+    *   JSON encoding failures for webhook responses are now logged instead of being silently discarded.
+
+---
+
 
 ## [v1.2.0](https://github.com/yogasw/wick/compare/v1.1.0...v1.2.0) — Agents, UI, Connectors
 

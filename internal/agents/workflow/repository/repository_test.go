@@ -110,8 +110,14 @@ func TestSaveDraftThenPublish(t *testing.T) {
 }
 
 // TestPublishBumpsVersionAndRecordsPublisher verifies publish increments
-// the workflows.version, records the acting publisher on both the row and
-// the published snapshot, and syncs the version into the published body.
+// the workflows.version, records the acting publisher on the published
+// snapshot, and syncs the version into the published body.
+//
+// It also pins what publish must NOT do: move ownership. created_by names
+// who the workflow belongs to, stamped once at create; it used to be
+// re-stamped here, so reviewing somebody's workflow and pressing Publish
+// quietly took it off them. "Who published this version" lives on the
+// snapshot instead.
 func TestPublishBumpsVersionAndRecordsPublisher(t *testing.T) {
 	r := New(openMem(t))
 	if err := r.Create("gamma", "Gamma", "creator-uuid"); err != nil {
@@ -134,8 +140,8 @@ func TestPublishBumpsVersionAndRecordsPublisher(t *testing.T) {
 	if row.Version != 4 {
 		t.Errorf("version should increment to 4 on publish, got %d", row.Version)
 	}
-	if row.CreatedBy != "publisher-uuid" {
-		t.Errorf("workflows.created_by should be the publisher, got %q", row.CreatedBy)
+	if row.CreatedBy != "creator-uuid" {
+		t.Errorf("workflows.created_by should stay the creator, got %q", row.CreatedBy)
 	}
 	if !strings.Contains(row.BodyPublished, `"version": 4`) {
 		t.Errorf("published body version should sync to 4: %s", row.BodyPublished)

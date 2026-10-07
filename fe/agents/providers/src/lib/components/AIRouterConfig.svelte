@@ -1,6 +1,6 @@
 <script lang="ts">
   import { toastError, toastOk } from "@wick-fe/common-stores";
-  import { Modal } from "@wick-fe/common-ui";
+  import { Modal, Select } from "@wick-fe/common-ui";
   import {
     apiAIRouterStatus,
     apiAIRouterStart,
@@ -276,15 +276,12 @@
       {#if routers.length > 0}
         <div>
           <label for="airouter-provider" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Router</label>
-          <select
+          <Select
             id="airouter-provider"
-            bind:value={provider}
-            class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100"
-          >
-            {#each routers as r (r.ID)}
-              <option value={r.ID}>{r.Name}</option>
-            {/each}
-          </select>
+            value={provider}
+            options={routers.map((r) => ({ label: r.Name, value: r.ID }))}
+            onChange={(v) => { provider = v; }}
+          />
         </div>
       {/if}
 

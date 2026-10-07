@@ -89,9 +89,16 @@ type AgentDelegation struct {
 	ChildSessionID string `gorm:"type:varchar(128);not null;index" json:"child_session_id"`
 	ChildAgent     string `gorm:"type:varchar(128);not null;default:''" json:"child_agent"`
 
-	Task  string `gorm:"type:text;not null;default:''" json:"task"`
-	Depth int    `gorm:"not null;default:0" json:"depth"`
-	Mode  string `gorm:"type:varchar(16);not null;default:'sync'" json:"mode"`
+	Task string `gorm:"type:text;not null;default:''" json:"task"`
+	// Title is the first leg's task, kept when a continue reframes Task,
+	// so the panel can still say what the sub-agent was asked to do.
+	Title string `gorm:"type:text;not null;default:''" json:"title"`
+	// Resumes counts continues; LegBaseTurns is TurnsUsed when the current
+	// leg started, so a leg's own turns are TurnsUsed - LegBaseTurns.
+	Resumes      int    `gorm:"not null;default:0" json:"resumes"`
+	LegBaseTurns int    `gorm:"not null;default:0" json:"leg_base_turns"`
+	Depth        int    `gorm:"not null;default:0" json:"depth"`
+	Mode         string `gorm:"type:varchar(16);not null;default:'sync'" json:"mode"`
 	// AncestorKeys is the JSON-encoded profile-key chain from root to
 	// parent. The cycle guard rejects a delegation whose profile already
 	// appears here, which is what stops A→B→A from looping forever.

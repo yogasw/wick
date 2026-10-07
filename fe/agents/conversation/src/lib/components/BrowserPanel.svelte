@@ -922,7 +922,7 @@
       >Full</button>
     </div>
 
-    <span class={"rounded-full px-2 py-0.5 text-[10px] font-medium " + (connected ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300" : "bg-white-300 text-black-600 dark:bg-navy-700 dark:text-black-600")}>
+    <span class={"rounded-full px-2 py-0.5 text-[10px] font-medium " + (connected ? "bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300" : "bg-white-300 text-black-600 dark:bg-navy-700 dark:text-black-600")}>
       {statusText || "idle"}
     </span>
 

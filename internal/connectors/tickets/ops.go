@@ -3,6 +3,7 @@ package tickets
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/notes"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/pkg/connector"
 )
@@ -19,6 +21,9 @@ import (
 // an agent working inside a session never has to be told where it is.
 func resolveProject(layout agentconfig.Layout, c *connector.Ctx, explicit string) (string, error) {
 	if p := strings.TrimSpace(explicit); p != "" {
+		if err := team.CheckProjectTarget(c.Context(), layout, c.CallerUserID(), c.SessionID(), p); err != nil {
+			return "", err
+		}
 		return p, nil
 	}
 	sid := c.SessionID()
@@ -57,8 +62,11 @@ func resolveTicket(layout agentconfig.Layout, c *connector.Ctx, projectID, expli
 }
 
 // resolveSession returns the session id to attach/detach.
-func resolveSession(c *connector.Ctx, explicit string) (string, error) {
+func resolveSession(layout agentconfig.Layout, c *connector.Ctx, explicit string) (string, error) {
 	if s := strings.TrimSpace(explicit); s != "" {
+		if err := team.CheckSessionTarget(c.Context(), layout, c.CallerUserID(), c.SessionID(), s); err != nil {
+			return "", err
+		}
 		return s, nil
 	}
 	if sid := c.SessionID(); sid != "" {
@@ -92,13 +100,21 @@ type ticketView struct {
 	// filters on. AssigneeName is the readable half, resolved per call — a
 	// uuid alone told the model who owned a ticket only in the sense that two
 	// tickets had different owners.
-	Assignee     string            `json:"assignee,omitempty"`
-	AssigneeName string            `json:"assignee_name,omitempty"`
-	Fields       map[string]string `json:"fields,omitempty"`
-	Sessions     []string          `json:"sessions,omitempty"`
-	Notes        int               `json:"notes"`
-	OpenTasks    int               `json:"open_tasks"`
-	UpdatedAt    string            `json:"updated_at"`
+	Assignee     string `json:"assignee,omitempty"`
+	AssigneeName string `json:"assignee_name,omitempty"`
+	// Assignees is everyone on it, ids and names in the same order. A
+	// ticket can be shared, and reporting only the first would have the
+	// model tell someone their colleague is not on their own ticket.
+	Assignees     []string `json:"assignees,omitempty"`
+	AssigneeNames []string `json:"assignee_names,omitempty"`
+	// Body is the markdown description. Truncated in list responses — a
+	// board listing must not cost a long body per row; ticket_get has it all.
+	Body      string            `json:"body,omitempty"`
+	Fields    map[string]string `json:"fields,omitempty"`
+	Sessions  []string          `json:"sessions,omitempty"`
+	Notes     int               `json:"notes"`
+	OpenTasks int               `json:"open_tasks"`
+	UpdatedAt string            `json:"updated_at"`
 }
 
 func (h *handlers) view(c *connector.Ctx, tk ticket.Ticket) ticketView {
@@ -106,6 +122,8 @@ func (h *handlers) view(c *connector.Ctx, tk ticket.Ticket) ticketView {
 	return ticketView{
 		ID: tk.ID, ProjectID: tk.ProjectID, Title: tk.Title, Status: tk.Status,
 		Assignee: tk.Assignee, AssigneeName: c.UserName(tk.Assignee),
+		Assignees: tk.AssigneeList(), AssigneeNames: assigneeNames(c, tk),
+		Body:   tk.Body,
 		Fields: tk.Fields, Sessions: tk.Sessions,
 		Notes: count.Visible, OpenTasks: count.OpenTasks,
 		UpdatedAt: tk.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
@@ -154,7 +172,14 @@ func (h *handlers) listFiltered(c *connector.Ctx, assignee string) (any, error) 
 		if filter != "" && tk.Status != filter {
 			continue
 		}
-		out = append(out, h.view(c, tk))
+		v := h.view(c, tk)
+		// A list row carries a taste of the body, not the whole thing — a
+		// board of long descriptions would cost more than the answer is
+		// worth. ticket_get returns it in full.
+		if len(v.Body) > 280 {
+			v.Body = v.Body[:280] + "…"
+		}
+		out = append(out, v)
 	}
 
 	res := map[string]any{
@@ -173,6 +198,148 @@ func (h *handlers) listFiltered(c *connector.Ctx, assignee string) (any, error) 
 		res["status_filter"] = filter
 	}
 	return res, nil
+}
+
+// search answers the question a filter cannot: "where is the ticket about X".
+//
+// It reads the project's tickets and matches the query against the id, title,
+// body and field VALUES. Matching the body matters more than it looks — a
+// ticket's title is written in the first minute, when the least is known,
+// while the detail that makes it findable later ends up in the description.
+//
+// Each hit says where it matched. Without that, a ticket whose body mentions
+// "webhook" in passing looks exactly like one whose title is about webhooks,
+// and the model has no way to rank them.
+func (h *handlers) search(c *connector.Ctx) (any, error) {
+	q := strings.ToLower(strings.TrimSpace(c.Input("query")))
+	if q == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	projectID, err := resolveProject(h.layout, c, c.Input("project_id"))
+	if err != nil {
+		return nil, err
+	}
+	assignee, err := resolveAssigneeFilter(c)
+	if err != nil {
+		return nil, err
+	}
+	all, err := ticket.List(h.layout, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list tickets: %w", err)
+	}
+	cfg, err := h.ticketConfig(projectID)
+	if err != nil {
+		return nil, err
+	}
+	status := strings.TrimSpace(c.Input("status"))
+	if status != "" && !ticket.ValidStatus(cfg, status) {
+		return nil, fmt.Errorf("invalid status %q (want %s)", status, strings.Join(cfg.StatusKeys(), ", "))
+	}
+	limit := c.InputInt("limit")
+	if limit <= 0 {
+		limit = 20
+	}
+
+	type hit struct {
+		ticketView
+		MatchedIn []string `json:"matched_in"`
+	}
+	out := make([]hit, 0, limit)
+	scanned := 0
+	for _, tk := range all {
+		if !matchesAssignee(tk, assignee) {
+			continue
+		}
+		if status != "" && tk.Status != status {
+			continue
+		}
+		scanned++
+		where := matchedIn(tk, q)
+		if len(where) == 0 {
+			continue
+		}
+		if len(out) >= limit {
+			// Keep counting so the caller learns the result was cut, rather
+			// than believing it saw everything.
+			continue
+		}
+		v := h.view(c, tk)
+		if len(v.Body) > 280 {
+			v.Body = v.Body[:280] + "…"
+		}
+		out = append(out, hit{ticketView: v, MatchedIn: where})
+	}
+	// Title hits first: a ticket named after the thing you searched for is
+	// almost always the one you meant, and it must not sit below three that
+	// merely mention it.
+	sort.SliceStable(out, func(i, j int) bool {
+		return matchRank(out[i].MatchedIn) < matchRank(out[j].MatchedIn)
+	})
+
+	res := map[string]any{
+		"project_id": projectID,
+		"query":      strings.TrimSpace(c.Input("query")),
+		"tickets":    out,
+		"total":      len(out),
+		"scanned":    scanned,
+	}
+	if assignee != "" {
+		res["assignee_filter"] = assignee
+	}
+	if status != "" {
+		res["status_filter"] = status
+	}
+	return res, nil
+}
+
+// matchedIn reports which parts of a ticket contain the query, in the order
+// they are worth trusting.
+func matchedIn(tk ticket.Ticket, q string) []string {
+	var where []string
+	if strings.Contains(strings.ToLower(tk.Title), q) {
+		where = append(where, "title")
+	}
+	if strings.Contains(strings.ToLower(tk.Body), q) {
+		where = append(where, "body")
+	}
+	if strings.Contains(strings.ToLower(tk.ID), q) {
+		where = append(where, "id")
+	}
+	for k, v := range tk.Fields {
+		if strings.Contains(strings.ToLower(v), q) {
+			where = append(where, "field:"+k)
+		}
+	}
+	// Field order from a map is random; sorting keeps a response stable
+	// across identical calls.
+	if len(where) > 1 {
+		sort.SliceStable(where, func(i, j int) bool { return fieldRank(where[i]) < fieldRank(where[j]) })
+	}
+	return where
+}
+
+func fieldRank(s string) int {
+	switch {
+	case s == "title":
+		return 0
+	case s == "body":
+		return 1
+	case s == "id":
+		return 2
+	default:
+		return 3
+	}
+}
+
+// matchRank ranks a hit by its strongest match.
+func matchRank(where []string) int {
+	best := 9
+	for _, w := range where {
+		if r := fieldRank(w); r < best {
+			best = r
+		}
+	}
+	return best
 }
 
 func (h *handlers) get(c *connector.Ctx) (any, error) {
@@ -206,16 +373,31 @@ func (h *handlers) create(c *connector.Ctx) (any, error) {
 	}
 	// An agent creating a ticket does so on somebody's behalf, so the ticket
 	// lands with that person rather than unassigned. The agent can still
-	// pass an explicit assignee (including nobody, via a space).
+	// pass an explicit assignee (including nobody, via an empty value).
+	//
+	// Both signals are needed, and neither alone is enough. RawInputValue
+	// sees an explicitly-empty `assignees` — a caller saying "nobody",
+	// which is what an empty value means on update — but it is populated
+	// ONLY on the MCP path (see connector.Ctx.rawInput); everywhere else
+	// it reports every key absent. The string value works on every path
+	// but cannot tell "" from unsent. So: a non-empty list means somebody
+	// was named, and an explicitly present one means the question was
+	// answered, either way the caller is not added on top.
 	assignee := strings.TrimSpace(c.Input("assignee"))
-	if _, given := c.RawInputValue("assignee"); !given {
+	_, assigneeGiven := c.RawInputValue("assignee")
+	_, assigneesGiven := c.RawInputValue("assignees")
+	namedAssignees := assigneesGiven || strings.TrimSpace(c.Input("assignees")) != ""
+	if !assigneeGiven && !namedAssignees {
 		assignee = c.CallerUserID()
 	}
 	tk, err := ticket.Create(h.layout, ticket.CreateOptions{
 		ProjectID: projectID,
+		ID:        strings.TrimSpace(c.Input("id")),
 		Title:     c.Input("title"),
+		Body:      c.Input("body"),
 		Status:    strings.TrimSpace(c.Input("status")),
 		Assignee:  assignee,
+		Assignees: splitIDs(c.Input("assignees")),
 		Fields:    fields,
 		Sessions:  seed,
 	})
@@ -250,11 +432,24 @@ func (h *handlers) update(c *connector.Ctx) (any, error) {
 	if t := strings.TrimSpace(c.Input("title")); t != "" {
 		tk.Title = t
 	}
-	// Assignee is cleared by an explicitly-present empty value, which is
-	// how "unassign" is expressed without a separate op.
-	if raw, ok := c.RawInputValue("assignee"); ok {
+	// Body is cleared by an explicitly-present empty value — same contract
+	// as assignee, because "remove the description" is a real edit.
+	if raw, ok := c.RawInputValue("body"); ok {
 		if s, isStr := raw.(string); isStr {
-			tk.Assignee = strings.TrimSpace(s)
+			tk.Body = strings.TrimSpace(s)
+		}
+	}
+	// Assignee is cleared by an explicitly-present empty value, which is
+	// how "unassign" is expressed without a separate op. Assignees replaces
+	// the whole list and wins when both are sent, being the more specific
+	// statement of the same thing.
+	if raw, ok := c.RawInputValue("assignees"); ok {
+		if s, isStr := raw.(string); isStr {
+			tk.SetAssignees(splitIDs(s))
+		}
+	} else if raw, ok := c.RawInputValue("assignee"); ok {
+		if s, isStr := raw.(string); isStr {
+			tk.SetAssignees([]string{s})
 		}
 	}
 	fields, err := parseFields(c.Input("fields"))
@@ -288,7 +483,7 @@ func (h *handlers) attach(c *connector.Ctx) (any, error) {
 	if ticketID == "" {
 		return nil, fmt.Errorf("ticket_id is required")
 	}
-	sid, err := resolveSession(c, c.Input("session_id"))
+	sid, err := resolveSession(h.layout, c, c.Input("session_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +507,7 @@ func (h *handlers) detach(c *connector.Ctx) (any, error) {
 	if ticketID == "" {
 		return nil, fmt.Errorf("ticket_id is required")
 	}
-	sid, err := resolveSession(c, c.Input("session_id"))
+	sid, err := resolveSession(h.layout, c, c.Input("session_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -527,10 +722,24 @@ func matchesAssignee(tk ticket.Ticket, filter string) bool {
 	case "":
 		return true
 	case unassignedFilter:
-		return strings.TrimSpace(tk.Assignee) == ""
+		return len(tk.AssigneeList()) == 0
 	default:
-		return tk.Assignee == filter
+		// Anyone on the ticket matches: shared work belongs to both queues.
+		return tk.HasAssignee(filter)
 	}
+}
+
+// assigneeNames resolves every assignee to a display name, in list order.
+func assigneeNames(c *connector.Ctx, tk ticket.Ticket) []string {
+	list := tk.AssigneeList()
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(list))
+	for _, id := range list {
+		out = append(out, c.UserName(id))
+	}
+	return out
 }
 
 // mine lists the caller's own tickets.
@@ -632,4 +841,21 @@ func (h *handlers) untracked(c *connector.Ctx) (any, error) {
 		res["scope"] = "caller"
 	}
 	return res, nil
+}
+
+// splitIDs reads a comma-separated list of user ids. The connector surface is
+// strings all the way down — a model types a list far more reliably than it
+// builds a JSON array — so the parsing happens here rather than in the schema.
+func splitIDs(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

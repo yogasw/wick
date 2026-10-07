@@ -19,12 +19,14 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
+	wickenv "github.com/yogasw/wick/internal/pkg/env"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -50,6 +52,11 @@ var (
 // Setup installs the DNS + CA fallbacks once. Idempotent and safe to call
 // from any entry point; no-op when the host is already usable.
 func Setup() {
+	// Desktop/server operating systems already provide resolv.conf and a CA
+	// store. Keep this compatibility layer completely out of their startup.
+	if !wickenv.IsTermux() {
+		return
+	}
 	setupOnce.Do(func() {
 		setupCount++
 		setupDNS()
@@ -62,8 +69,20 @@ func Setup() {
 // the Termux case). A configured loopback nameserver such as
 // systemd-resolved's 127.0.0.53 is a working resolver and is left alone.
 func setupDNS() {
+	// /etc/resolv.conf is a unix concept: on Windows it never exists,
+	// while the stdlib resolver uses the OS DNS APIs and works without
+	// it. Installing the public-UDP fallback there breaks every
+	// outbound call on networks that block UDP 53 to public resolvers.
+	if runtime.GOOS == "windows" {
+		return
+	}
 	content, _ := os.ReadFile(resolvConfPath)
-	if hasConfiguredNameserver(string(content)) {
+	configured := hasConfiguredNameserver(string(content))
+	// Android may expose a loopback-only resolver in /etc/resolv.conf even
+	// though no DNS daemon is listening there. In Termux prefer the explicit
+	// plugin resolver unless the file contains a directly reachable server.
+	termuxLoopbackOnly := os.Getenv("PREFIX") != "" && configured && len(usableNameservers(string(content))) == 0
+	if configured && !termuxLoopbackOnly {
 		return
 	}
 	servers := chooseNameservers(os.Getenv("WICK_DNS_SERVERS"), prefixResolvNameservers(), androidNameservers())

@@ -8,6 +8,7 @@ import (
 	"github.com/slack-go/slack/slackevents"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/store"
 )
 
 func TestFormatAttachmentsEmpty(t *testing.T) {
@@ -49,21 +50,51 @@ func TestFormatAttachmentsFallbacks(t *testing.T) {
 	}
 }
 
-func TestFormatSenderLabel(t *testing.T) {
-	tests := []struct {
-		name, userID, handle, real, want string
-	}{
-		{"full", "U1", "yoga", "Yoga Setiawan", "Yoga Setiawan (@yoga, U1)"},
-		{"handle only", "U1", "yoga", "", "@yoga (U1)"},
-		{"real only", "U1", "", "Yoga Setiawan", "Yoga Setiawan (U1)"},
-		{"id only", "U1", "", "", "U1"},
+// newSenderTestChannel builds a Channel with the sender cache initialised and
+// NO Slack API client, so resolveSender exercises its offline path without
+// making a real users.info call (New() builds a client even from a blank
+// config, which turns these into slow, network-dependent tests).
+func newSenderTestChannel() *Channel {
+	return &Channel{userDisplayCache: make(map[string]*store.Sender)}
+}
+
+// An empty user ID has nobody to attribute the turn to, so the sender is
+// nil rather than a Sender with a blank ID — the pool reads nil as "no
+// human behind this message" and skips the prefix entirely.
+func TestResolveSenderEmptyUserID(t *testing.T) {
+	s := newSenderTestChannel()
+	if got := s.resolveSender(""); got != nil {
+		t.Errorf("empty user ID: got %+v, want nil", got)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := formatSenderLabel(tc.userID, tc.handle, tc.real); got != tc.want {
-				t.Errorf("got %q, want %q", got, tc.want)
-			}
-		})
+}
+
+// With no Slack API wired, users.info cannot run — but the turn must still
+// be attributed, because knowing two messages came from different people
+// matters even when neither can be named.
+func TestResolveSenderWithoutAPI(t *testing.T) {
+	s := newSenderTestChannel()
+	got := s.resolveSender("U1")
+	if got == nil {
+		t.Fatal("got nil, want a sender carrying the user ID")
+	}
+	if got.ID != "U1" {
+		t.Errorf("ID = %q, want U1", got.ID)
+	}
+	if got.Channel != "slack" {
+		t.Errorf("Channel = %q, want slack", got.Channel)
+	}
+}
+
+// resolveSender hands out copies. A caller that renames its sender must not
+// rename the person for every later turn in the workspace.
+func TestResolveSenderReturnsCopy(t *testing.T) {
+	s := newSenderTestChannel()
+	first := s.resolveSender("U1")
+	first.Name = "mutated by the caller"
+
+	second := s.resolveSender("U1")
+	if second.Name == "mutated by the caller" {
+		t.Error("mutating a returned sender leaked into the cache")
 	}
 }
 
@@ -120,6 +151,82 @@ func TestChunkTextBreaksOnNewline(t *testing.T) {
 	}
 	if strings.Contains(chunks[0], "b") {
 		t.Error("first chunk should not contain 'b' content after newline break")
+	}
+}
+
+// A Slack link `<url|label>` crossing the boundary must move to the next chunk
+// whole — a cut inside it breaks the link AND leaks raw URL soup into the
+// thread (the Loki-link incident).
+func TestChunkTextNeverSplitsSlackLink(t *testing.T) {
+	link := "<https://loki.example/explore?" + strings.Repeat("x", 350) + "|Cika offline 17:00 WIB>"
+	in := strings.Repeat("a", 3650) + " " + link
+	chunks := chunkText(in, 3800)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if strings.Contains(chunks[0], "<https") {
+		t.Errorf("link start leaked into first chunk: ...%q", chunks[0][len(chunks[0])-40:])
+	}
+	if chunks[1] != link {
+		t.Errorf("second chunk must be the intact link, got %q", chunks[1][:40])
+	}
+}
+
+// A blank line is the author's own paragraph break — the best cut point.
+// It must win even when it sits further back than a plain newline would.
+func TestChunkTextPrefersBlankLine(t *testing.T) {
+	in := strings.Repeat("a", 3000) + "\n\n" + strings.Repeat("b", 1500)
+	chunks := chunkText(in, 3800)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if chunks[0] != strings.Repeat("a", 3000) {
+		t.Errorf("first chunk must end at the blank line, got len %d", len(chunks[0]))
+	}
+}
+
+// No newline anywhere → fall back to a space so no word is cut in half.
+func TestChunkTextFallsBackToSpace(t *testing.T) {
+	in := strings.TrimRight(strings.Repeat("abcdef ", 700), " ") // 4899 chars, no newline
+	chunks := chunkText(in, 3800)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if !strings.HasSuffix(chunks[0], "abcdef") {
+		t.Errorf("first chunk ends mid-word: ...%q", chunks[0][len(chunks[0])-10:])
+	}
+	if !strings.HasPrefix(chunks[1], "abcdef") {
+		t.Errorf("second chunk starts mid-word: %q...", chunks[1][:10])
+	}
+}
+
+// A fenced code block crossing the boundary must not be cut — a split fence
+// renders as broken formatting in BOTH chunks.
+func TestChunkTextNeverSplitsCodeFence(t *testing.T) {
+	fence := "```\n" + strings.Repeat("code line\n", 35) + "```"
+	in := strings.Repeat("a", 3600) + "\n" + fence
+	chunks := chunkText(in, 3800)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if strings.Contains(chunks[0], "```") {
+		t.Error("fence leaked into first chunk")
+	}
+	if chunks[1] != fence {
+		t.Errorf("second chunk must be the intact fence, got %q...", chunks[1][:20])
+	}
+}
+
+// An unbreakable token longer than max still hard-cuts — never loop forever,
+// never drop content.
+func TestChunkTextOversizedLinkStillHardCuts(t *testing.T) {
+	in := "<https://example.com/" + strings.Repeat("y", 9000) + ">"
+	chunks := chunkText(in, 3800)
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 chunks, got %d", len(chunks))
+	}
+	if joined := strings.Join(chunks, ""); joined != in {
+		t.Error("hard-cut chunks must reassemble losslessly")
 	}
 }
 

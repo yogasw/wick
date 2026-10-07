@@ -69,7 +69,7 @@ func TestMemGuard_NilIsInert(t *testing.T) {
 		t.Fatalf("nil guard altered the spawn: bin=%q argv=%v unit=%q", bin, argv, unit)
 	}
 	g.BiasChild(123) // must not panic
-	if _, _, ok := g.ClassifyExit("some-unit", 512); ok {
+	if _, _, ok := g.ClassifyExit("some-unit", 512, 0); ok {
 		t.Fatal("nil guard classified an OOM")
 	}
 }
@@ -170,11 +170,72 @@ func TestMemGuard_EnforceCarriesSliceLimits(t *testing.T) {
 func TestMemGuard_ClassifyExitWithoutEvidence(t *testing.T) {
 	g := &MemGuard{Mode: config.MemGuardEnforce, Scopes: config.GuardScopes{OnSpawn: true}, AgentLimitMB: 1024}
 
-	if _, _, ok := g.ClassifyExit("", 1024); ok {
+	if _, _, ok := g.ClassifyExit("", 1024, 0); ok {
 		t.Fatal("classified an OOM with no scope to read")
 	}
-	if _, _, ok := g.ClassifyExit("claude-agent-does-not-exist", 1024); ok {
+	if _, _, ok := g.ClassifyExit("claude-agent-does-not-exist", 1024, 0); ok {
 		t.Fatal("classified an OOM from a scope that does not exist")
+	}
+}
+
+// classifyStats must tell a limit kill from a global one. oom_kill counts
+// kills by ANY OOM killer, so a host that ran out of memory used to be
+// reported as "over its limit" even when the measured peak was under it —
+// and, worse, was never retried, though the agent did nothing wrong.
+func TestClassifyStats_SeparatesHostFromLimitOOM(t *testing.T) {
+	// Limit kill: the cgroup raised its own OOM condition. Not retryable.
+	r, d, ok := classifyStats(memscope.Stats{Known: true, OOMKills: 1, OOMEvents: 2, PeakBytes: 2 << 30}, 1024, 0)
+	if !ok || r != ExitOOM {
+		t.Fatalf("limit kill: reason=%v ok=%v, want ExitOOM true", r, ok)
+	}
+	if d == "" {
+		t.Fatal("limit kill: empty detail")
+	}
+
+	// Global kill: killed by the host OOM killer without hitting its own
+	// ceiling. Stays ExitError (retryable) with a detail naming the host.
+	r, d, ok = classifyStats(memscope.Stats{Known: true, OOMKills: 1, OOMEvents: 0, PeakBytes: 1 << 30}, 1285, 0)
+	if !ok || r != ExitError {
+		t.Fatalf("global kill: reason=%v ok=%v, want ExitError true", r, ok)
+	}
+	if d == "" || !strings.Contains(d, "machine") {
+		t.Fatalf("global kill: detail must name the machine, got %q", d)
+	}
+	if strings.Contains(d, "over its") {
+		t.Fatalf("global kill: detail claims the limit was exceeded: %q", d)
+	}
+
+	// No kill at all: no verdict, regardless of the oom counter.
+	if _, _, ok := classifyStats(memscope.Stats{Known: true, OOMEvents: 1}, 1024, 0); ok {
+		t.Fatal("classified an OOM with zero kills")
+	}
+	if _, _, ok := classifyStats(memscope.Stats{}, 1024, 0); ok {
+		t.Fatal("classified an OOM from unknown stats")
+	}
+}
+
+// A kill by the aggregate slice ceiling (agents_total_memory_mb) leaves
+// the scope's own oom at 0 — locally identical to a host OOM. The slice's
+// oom counter, snapshotted at spawn and diffed at exit, is the
+// discriminator. Still retryable (contention, not this agent's ceiling),
+// but the detail must name the shared limit, not the machine.
+func TestClassifyStats_AggregateSliceKill(t *testing.T) {
+	r, d, ok := classifyStats(memscope.Stats{Known: true, OOMKills: 1, OOMEvents: 0, PeakBytes: 1 << 30}, 1024, 2)
+	if !ok || r != ExitError {
+		t.Fatalf("aggregate kill: reason=%v ok=%v, want ExitError true", r, ok)
+	}
+	if !strings.Contains(d, "combined") {
+		t.Fatalf("aggregate kill: detail must name the combined limit, got %q", d)
+	}
+	if strings.Contains(d, "machine ran out") {
+		t.Fatalf("aggregate kill: detail blames the machine: %q", d)
+	}
+
+	// Own-limit kill wins over a concurrent slice event: the scope's own
+	// oom counter is the more specific evidence.
+	r, _, ok = classifyStats(memscope.Stats{Known: true, OOMKills: 1, OOMEvents: 1}, 1024, 2)
+	if !ok || r != ExitOOM {
+		t.Fatalf("own limit with slice event: reason=%v ok=%v, want ExitOOM true", r, ok)
 	}
 }
 

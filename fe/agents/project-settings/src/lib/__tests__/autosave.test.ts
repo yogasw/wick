@@ -35,6 +35,27 @@ describe("createAutosave", () => {
     expect(save).toHaveBeenCalledTimes(1);
   });
 
+  // commit() is for controls whose event means the value DID change (select,
+  // picker, toggle): it must save even though no schedule() preceded it.
+  // This is the "provider picker never saved" regression.
+  test("commit saves without a prior schedule", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const a = createAutosave({ save, debounceMs: 800 });
+
+    a.commit();
+    await vi.runAllTimersAsync();
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  test("commit while suspended does not save", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const a = createAutosave({ save, debounceMs: 800, suspended: true });
+
+    a.commit();
+    await vi.runAllTimersAsync();
+    expect(save).not.toHaveBeenCalled();
+  });
+
   // flush() means "commit the pending edit now", not "save unconditionally":
   // tabbing through an untouched form must not write anything.
   test("flush with nothing pending does not save", async () => {

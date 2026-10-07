@@ -57,7 +57,9 @@ func (d poolDeliverer) DeliverToSession(ctx context.Context, parentSessionID, ag
 	// person at the keyboard, and labelling it as though it did tells the
 	// leader its operator said something they never said — and hides from
 	// the reader that a sub-agent came back at all.
-	return d.pool.Send(ctx, parentSessionID, agentName, sourceSubAgent, "user", text)
+	// WithoutCancel: same as SendToChild — the leader woken here must
+	// outlive whatever call carried the result.
+	return d.pool.Send(context.WithoutCancel(ctx), parentSessionID, agentName, sourceSubAgent, "user", text)
 }
 
 // sourceSubAgent marks a turn wick posted on a sub-agent's behalf. The
@@ -77,7 +79,11 @@ func (s poolSteerer) SendToChild(ctx context.Context, childSessionID, agentName,
 	if s.pool == nil {
 		return nil
 	}
-	return s.pool.Send(ctx, childSessionID, agentName, string(session.OriginUI), "user", message)
+	// WithoutCancel: ctx is the connector call's (message / take-over),
+	// cancelled the moment it answers "sent". A child spawned for this
+	// message starts its agent with this ctx, and a cancelled one ends the
+	// turn it was woken for before the prompt goes out.
+	return s.pool.Send(context.WithoutCancel(ctx), childSessionID, agentName, string(session.OriginUI), "user", message)
 }
 
 // poolWaker makes a sub-agent readable-to again after its process has

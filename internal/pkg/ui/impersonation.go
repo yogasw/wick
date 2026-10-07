@@ -35,3 +35,14 @@ func ImpersonationFromContext(ctx context.Context) ImpersonationInfo {
 	}
 	return ImpersonationInfo{}
 }
+
+// impersonationHint is the avatar's tooltip while viewing as someone else.
+//
+// Empty when nothing is active so the attribute renders as title="" and no
+// tooltip appears — cheaper than branching the avatar markup in two.
+func impersonationHint(info ImpersonationInfo) string {
+	if !info.Active {
+		return ""
+	}
+	return "Viewing as " + info.ActingAs + " — open this menu to go back to your account"
+}

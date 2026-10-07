@@ -2,6 +2,7 @@ package view
 
 import (
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/ui"
 )
 
 // AccessTokensStats summarises the PAT footprint for the admin
@@ -72,11 +73,11 @@ templ accessTokenRowFragment(row AccessTokenRow) {
 			<p class="font-mono text-xs text-black-700 dark:text-black-600">{ row.Token.Masked() }</p>
 		</td>
 		<td class="px-4 py-3 align-top text-xs text-black-800 dark:text-black-600">
-			{ row.Token.CreatedAt.Format("2006-01-02 15:04") }
+			@ui.LocalTime(row.Token.CreatedAt, ui.TimeFormatISO)
 		</td>
 		<td class="px-4 py-3 align-top text-xs text-black-800 dark:text-black-600">
 			if row.Token.LastUsedAt != nil {
-				{ row.Token.LastUsedAt.Format("2006-01-02 15:04") }
+				@ui.LocalTime(*row.Token.LastUsedAt, ui.TimeFormatISO)
 			} else {
 				<span class="text-black-700 dark:text-black-600">never</span>
 			}

@@ -42,7 +42,12 @@ beforeEach(() => {
 const board: TicketBoard = {
   config: {
     enabled: true,
-    fields: [{ key: "priority", label: "Priority", type: "select", options: ["low", "high"] }],
+    // Card chips are opt-in per field: priority is marked, severity is not
+    // and must never appear on a card.
+    fields: [
+      { key: "priority", label: "Priority", type: "select", options: ["low", "high"], show_on_card: true },
+      { key: "severity", label: "Severity", type: "text" },
+    ],
   },
   statuses: [
     { key: "open", label: "Open" },
@@ -102,6 +107,9 @@ function renderBoard(overrides: Record<string, unknown> = {}) {
       projectId: "p1",
       board,
       filter: {},
+      untrackedOwner: "me" as const,
+      onUntrackedOwner: vi.fn(),
+      onUntrackedMore: vi.fn(),
       onFilter,
       onOpen,
       onOpenSession,
@@ -139,6 +147,22 @@ describe("KanbanBoard", () => {
     expect(screen.getByText("T-4F2A")).toBeTruthy();
     expect(screen.getByText("Priority: high")).toBeTruthy();
     expect(screen.getByText("stale")).toBeTruthy();
+  });
+
+  // Chips are opt-in per field (show_on_card); a ticket value whose field is
+  // not marked must stay off the card — it lives on the ticket's own page.
+  test("hides field values not marked show_on_card", () => {
+    renderBoard({
+      board: {
+        ...board,
+        tickets: [
+          { ...board.tickets[0], fields: { priority: "high", severity: "sev1" } },
+          ...board.tickets.slice(1),
+        ],
+      },
+    });
+    expect(screen.getByText("Priority: high")).toBeTruthy();
+    expect(screen.queryByText("Severity: sev1")).toBeNull();
   });
 
   // A card standing for a ticket has to show its sessions, because a row is
@@ -382,5 +406,137 @@ describe("KanbanBoard", () => {
     expect(screen.getByLabelText("New ticket title")).toBeTruthy();
     await fireEvent.click(screen.getByText("Cancel"));
     expect(screen.queryByLabelText("New ticket title")).toBeNull();
+  });
+
+  /* A custom button placed in the list acts on the LIST — so the click has
+     to carry the toolbar's own filter, and only the list-placed buttons may
+     appear here: a ticket-page button has no ticket up here to act on. */
+  const withButtons = {
+    ...board,
+    config: {
+      ...board.config,
+      integrations: {
+        buttons: [
+          { id: "btn_list", label: "Sync from Notion", url: "https://abc.com/b", placement: "board" as const },
+          { id: "btn_ticket", label: "Sync this ticket", url: "https://abc.com/t", placement: "ticket" as const },
+          { id: "btn_legacy", label: "Older button", url: "https://abc.com/l" },
+        ],
+      },
+    },
+  };
+
+  test("only list-placed buttons render in the toolbar", () => {
+    renderBoard({ board: withButtons });
+    expect(screen.getByText("Sync from Notion")).toBeTruthy();
+    expect(screen.queryByText("Sync this ticket")).toBeNull();
+    // Absent placement means the ticket page, so a button saved before
+    // placements existed must not move up here.
+    expect(screen.queryByText("Older button")).toBeNull();
+  });
+
+  test("clicking one posts the toolbar's filter to the board-action endpoint", async () => {
+    renderBoard({ board: withButtons, filter: { assignee: "me", statuses: ["open"] } });
+    await fireEvent.click(screen.getByText("Sync from Notion"));
+
+    const call = calls.find((c) => c.url.includes("/board-actions/"));
+    expect(call).toBeTruthy();
+    expect(call!.method).toBe("POST");
+    expect(call!.url).toContain("/api/projects/p1/board-actions/btn_list");
+    expect(call!.body).toEqual({ assignee: "me", statuses: ["open"] });
+  });
+
+  test("every chip off sends the empty-selection sentinel, not the whole board", async () => {
+    // " none" is how the board spells "no columns selected"; an empty list
+    // means "all of them" on the wire, which would act on tickets the
+    // clicker cannot even see.
+    renderBoard({ board: withButtons, filter: { statuses: [" none"] } });
+    await fireEvent.click(screen.getByText("Sync from Notion"));
+
+    const call = calls.find((c) => c.url.includes("/board-actions/"));
+    expect(call!.body).toEqual({ assignee: "", statuses: [" none"] });
+  });
+});
+
+/* Search over what is on the board.
+
+   Deliberately local and deliberately visible: a board that has quietly
+   dropped two thirds of its cards has to say what did it, and in which
+   words — otherwise an empty column reads as "nothing here". */
+describe("KanbanBoard — search", () => {
+  const type = async (text: string) => {
+    await fireEvent.input(screen.getByTestId("board-search"), { target: { value: text } });
+  };
+
+  test("a title match keeps the card and drops the others", async () => {
+    renderBoard();
+    await type("webhook");
+    expect(screen.getByTestId("ticket-card-T-4F2A")).toBeTruthy();
+    expect(screen.queryByTestId("ticket-card-T-99ZZ")).toBeNull();
+  });
+
+  test("an assignee's name matches too", async () => {
+    renderBoard();
+    await type("other person");
+    expect(screen.getByTestId("ticket-card-T-99ZZ")).toBeTruthy();
+    expect(screen.queryByTestId("ticket-card-T-4F2A")).toBeNull();
+  });
+
+  test("the ticket id matches", async () => {
+    renderBoard();
+    await type("99zz");
+    expect(screen.getByTestId("ticket-card-T-99ZZ")).toBeTruthy();
+  });
+
+  test("the query shows as a chip with how many it matched", async () => {
+    renderBoard();
+    await type("webhook");
+    const chip = screen.getByTestId("board-search-chip");
+    expect(chip.textContent).toContain("webhook");
+    expect(chip.textContent).toContain("1");
+  });
+
+  test("clicking the chip clears the search and brings the board back", async () => {
+    renderBoard();
+    await type("webhook");
+    await fireEvent.click(screen.getByTestId("board-search-chip"));
+    expect(screen.getByTestId("ticket-card-T-99ZZ")).toBeTruthy();
+    expect(screen.queryByTestId("board-search-chip")).toBeNull();
+  });
+
+  // A local search must not become a saved view: it is a moment, not a
+  // filter you want to find still applied tomorrow.
+  test("searching never touches the saved filter", async () => {
+    const { onFilter } = renderBoard();
+    await type("webhook");
+    expect(onFilter).not.toHaveBeenCalled();
+  });
+
+  test("the matched text is marked up on the card", async () => {
+    renderBoard();
+    await type("webhook");
+    const title = screen.getByTestId("ticket-title-T-4F2A");
+    const hit = title.querySelector("span.bg-cau-100");
+    expect(hit?.textContent).toBe("webhook");
+  });
+
+  test("an empty column under a search says so instead of inviting a drag", async () => {
+    renderBoard();
+    await type("webhook");
+    expect(screen.queryByText("No tickets — drag one here")).toBeNull();
+    expect(screen.getAllByText("No match here").length).toBeGreaterThan(0);
+  });
+});
+
+
+/* "More to load" is the server's cursor, not drawn-vs-total: a drawn row that
+   has since left the set would make a count stop the rail a page early. */
+describe("KanbanBoard untracked paging", () => {
+  test("the rail offers more while the server sends a cursor", () => {
+    const { unmount } = renderWithRail({ board: { ...board, untracked_next: "c1" } });
+    const withCursor = screen.queryAllByTestId("scroll-sentinel").length;
+    unmount();
+    // 1 of 42 drawn, but no cursor: the server said that was all.
+    renderWithRail();
+    expect(screen.queryAllByTestId("scroll-sentinel").length).toBe(withCursor - 1);
   });
 });

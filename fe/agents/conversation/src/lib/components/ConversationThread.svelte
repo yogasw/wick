@@ -1,64 +1,105 @@
 <script lang="ts">
+  import TraceNote from "./TraceNote.svelte";
   import { onMount } from "svelte";
-  import type { ConversationTurn, LiveTurn, TypingState, TurnEvent } from "../types/agents.js";
+  import type { ConversationTurn, LiveTurn, TypingState, TurnEvent, TurnEventPayload } from "../types/agents.js";
+  import type { TraceFiles } from "../api/files.js";
   import { renderLive } from "../richRender.js";
-  import { mergeTodoItemsWithSteps, stripTodoBlocks, latestTodoGoal, bareToolName } from "../todoGroups.js";
+  import { mergeTodoItemsWithSteps, stripTodoBlocks, latestTodoGoal } from "../todoGroups.js";
+  import { activityLabel, THINKING_LABEL } from "../activityLabel.js";
   import type { ThreadBlock } from "../types/agents.js";
   import ThreadMessage from "./ThreadMessage.svelte";
   import ToolCard from "./ToolCard.svelte";
   import TodoCard from "./TodoCard.svelte";
   import { turnDay, turnDayKey, activeDayLabel } from "../timeFormat.js";
+  import { AgentAvatar } from "@wick-fe/common-avatar";
+  import type { AgentIdentity } from "../agentMode.js";
+  import { foldSystemEvents } from "../systemEvents.js";
+  import { withRemoteLinks } from "../remoteQueue.js";
+  import { foldReplaced } from "../remoteRecheck.js";
+  import { speakerVia } from "../teamMention.js";
 
   type Props = {
     turns: ConversationTurn[];
     live: LiveTurn | null;
     typing: TypingState;
     loadTrace?: (turnId: string) => Promise<TurnEvent[]>;
+    // Fetches one large (spilled) trace event's payload on demand.
+    loadTraceEvent?: (turnId: string, eventId: string) => Promise<TurnEventPayload>;
+    loadTraceBlob?: (turnId: string, ref: string) => Promise<Blob>;
+    // Session file access for trace chips whose bytes were not kept.
+    traceFiles?: TraceFiles;
     onOpenPath?: (path: string) => void;
     // Cancel an in-flight connector run behind a running tool call.
     onCancelRun?: (runId: string) => void;
+    /** Stop the agent process — the only way to end a tool running inside the
+        provider CLI, which wick cannot cancel on its own. */
+    onStopTurn?: () => void;
     // Dismiss a stuck tool card (no runId to cancel) from the view.
     onDismissTool?: (toolUseId: string) => void;
     // Reveals a wick_delegate call's sub-agent in the rail panel.
     onOpenSubAgent?: (delegationId: string) => void;
+    /** A /compact is in flight. The provider reports it as an ordinary
+        turn, so without this the thread would say "thinking…" while the
+        conversation is being rewritten underneath the reader. */
+    compacting?: boolean;
+    /** What a remote agent says it is doing; replaces "thinking…". */
+    progressLabel?: string;
+    /** Set in the Team app: the empty thread introduces the agent and its
+        avatar stands in for the typing spinner. */
+    agent?: AgentIdentity;
+    /** Team agents by handle and the opener for their chats; see ThreadMessage. */
+    teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }>;
+    /** History has not arrived yet: a loading state, not "no messages". */
+    loading?: boolean;
+    onOpenAgent?: (handle: string) => void;
+    cards?: Record<string, import("../types/agents.js").CardState>;
+    onCardAction?: (cardId: string, value: string, label: string) => void;
+    onApprovalDecide?: (approvalId: string, decision: import("../interactiveCards.js").ApprovalDecisionChoice) => void;
+    /** "Cek ulang" of a Slack remote turn (see ThreadMessage). */
+    onRemoteRecheck?: () => Promise<import("../api/team.js").RemoteRecheck>;
+    onRemoteQueueCancel?: (queueId: string) => Promise<void>;
   };
 
-  let { turns, live, typing, loadTrace, onOpenPath, onCancelRun, onDismissTool, onOpenSubAgent }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
-  const TOOL_LABELS: Record<string, string> = {
-    write_file: "writing file…",
-    read_file: "reading file…",
-    edit_file: "editing file…",
-    shell: "running command…",
-    todo: "updating task list…",
-    ask_user: "waiting for your input…",
-    wick_list: "listing…",
-    wick_search: "searching…",
-    wick_schedule_message: "scheduling message…",
-    wick_delegate: "delegating to a sub-agent…",
-    wick_agents: "checking available sub-agents…",
-  };
+  /* What the agent is doing right now, in one place so the inline todo
+     card and the floating bubble never disagree. Compaction outranks the
+     substate: "thinking…" is technically true during a /compact, but it
+     tells the reader nothing about the thing that is actually happening
+     to their conversation. */
+  const activityText = $derived(
+    !typing.active
+      ? undefined
+      : compacting
+        ? "compacting the conversation…"
+        : (!typing.toolName && progressLabel) || activityLabel(typing.substate, typing.toolName),
+  );
 
-  function typingLabel(substate?: string, toolName?: string): string {
-    // Match on the bare name so MCP-namespaced calls (mcp__wick__todo)
-    // get their friendly label instead of "running mcp__wick__todo…".
-    if (toolName) {
-      const bare = bareToolName(toolName);
-      return TOOL_LABELS[bare] ?? `running ${bare}…`;
+  /* The working bubble stays up through a turn: typing can drop for an
+     instant between events (an idle edge before done, a turn that ends and
+     wakes again on a sub-agent's result), and unmounting it on each drop
+     bounces the whole thread. Showing is immediate, hiding waits
+     TYPING_HIDE_MS and is cancelled if typing comes back; the label keeps
+     its last value meanwhile. */
+  const TYPING_HIDE_MS = 450;
+  let typingShown = $state(false);
+  let typingLabelShown = $state<string | undefined>(undefined);
+  let typingHideTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const active = typing.active;
+    const label = activityText;
+    if (active) {
+      if (typingHideTimer) { clearTimeout(typingHideTimer); typingHideTimer = undefined; }
+      typingShown = true;
+      typingLabelShown = label;
+      return;
     }
-    if (!substate || substate === "thinking" || substate === "idle") return "thinking…";
-    if (substate === "spawning") return "spawning…";
-    // "running_tool" is the backend's generic lifecycle substate for "a tool
-    // is executing" (agents/state.State.String()) — it's not a tool name.
-    // It normally arrives together with a tool_use event that fills in
-    // toolName above; this is only the fallback for a race where the
-    // lifecycle ping lands before that event, so it must not render as
-    // "running running_tool…".
-    if (substate === "running_tool") return "running a tool…";
-    return `running ${substate}…`;
-  }
+    if (!typingShown || typingHideTimer) return;
+    typingHideTimer = setTimeout(() => { typingShown = false; typingHideTimer = undefined; }, TYPING_HIDE_MS);
+  });
+  $effect(() => () => { if (typingHideTimer) clearTimeout(typingHideTimer); });
 
   let liveTraceOpen = $state(false);
   let floatLabel = $state("");
@@ -66,13 +107,41 @@
   let scrollParent: HTMLElement | null = null;
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const isEmpty = $derived(turns.length === 0 && !live && !typing.active);
+  /* An interrupted answer that the agent then finished is ONE answer.
+     When a turn is cut off — a process replaced, a spawn reaped, somebody
+     pressing stop — wick records what had been delivered, and the resumed
+     turn writes the answer again. Both are real records, and the reader saw
+     the same thought twice: once truncated, once complete.
+
+     Identical prefixes are already trimmed server-side, but a resume often
+     REWORDS its opening, and then nothing matches. So the rule here is about
+     shape, not words: an interrupted assistant turn whose very next turn is
+     also the assistant — with nothing from the user in between — was
+     superseded by it. The later turn IS the answer; the stub is dropped.
+
+     Deliberately narrow. A user message in between means the agent was
+     answering something new, and both turns stay. */
+  const shownTurns = $derived(withRemoteLinks(
+    foldSystemEvents(
+      foldReplaced(turns).filter((t, i, all) => {
+        if (!t.interrupted || t.role !== "assistant") return true;
+        const next = all[i + 1];
+        return !next || next.role !== "assistant";
+      }),
+    ),
+  ));
+
+  const isEmpty = $derived(shownTurns.length === 0 && !live && !typing.active);
 
   // Same merge as ThreadMessage's persisted-turn trace: a long-running
   // live turn calling todo repeatedly shows one checklist with current
   // progress instead of a stacked card per call.
   const liveMergedTodoItems = $derived(mergeTodoItemsWithSteps(live?.blocks ?? []));
   const liveNonTodoBlocks = $derived(stripTodoBlocks(live?.blocks ?? []));
+  /* The working indicator is on from a turn's start to its end: while
+     typing is up (hide debounced) or the live turn has not been committed.
+     A todo card carries the activity instead when there is one. */
+  const indicatorOn = $derived((typingShown || live !== null) && liveMergedTodoItems.length === 0);
   const liveTodoGoal = $derived(latestTodoGoal(live?.blocks ?? []));
 
   function findScrollParent(el: HTMLElement | null): HTMLElement | null {
@@ -141,22 +210,44 @@
       <span class="rounded-md bg-white-200/95 dark:bg-navy-800/95 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm backdrop-blur-sm transition-opacity duration-300 {floatVisible ? 'opacity-100' : 'opacity-0'}">{floatLabel}</span>
     {/if}
   </div>
-  {#if isEmpty}
+  {#if isEmpty && loading}
+    <!-- The avatar fills the wait with random fidgets (restless). -->
+    <div class="flex flex-col items-center justify-center py-16 text-center gap-3" data-testid="thread-loading" aria-busy="true">
+      {#if agent}
+        <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={72} live restless />
+        <p class="text-lg font-semibold text-black-900 dark:text-white-100">{agent.name}</p>
+      {/if}
+      <p class="text-sm text-black-700 dark:text-black-600">Loading messages…</p>
+    </div>
+  {:else if isEmpty && agent}
+    <div class="flex flex-col items-center justify-center py-16 text-center gap-3">
+      <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={72} live />
+      <div class="flex flex-col gap-1">
+        <p class="text-lg font-semibold text-black-900 dark:text-white-100">{agent.name}</p>
+        {#if agent.tagline}
+          <p class="text-sm font-medium text-black-700 dark:text-black-600" data-testid="agent-tagline">{agent.tagline}</p>
+        {/if}
+        {#if agent.description}
+          <p class="max-w-md text-sm text-black-700 dark:text-black-600">{agent.description}</p>
+        {/if}
+      </div>
+    </div>
+  {:else if isEmpty}
     <div class="flex flex-col items-center justify-center py-16 text-center gap-1">
       <p class="text-sm font-medium text-black-700 dark:text-black-600">No messages yet</p>
       <p class="text-xs text-black-600 dark:text-black-700">Send a message to start.</p>
     </div>
   {/if}
-  {#each turns as turn, i (turn.turn_id ? turn.turn_id + "-" + i : "turn-" + i)}
+  {#each shownTurns as turn, i (turn.turn_id ? turn.turn_id + "-" + i : "turn-" + i)}
     {@const label = turnDay(turn)}
     {@const dayKey = turnDayKey(turn)}
-    {@const prevKey = i === 0 ? "" : turnDayKey(turns[i - 1])}
+    {@const prevKey = i === 0 ? "" : turnDayKey(shownTurns[i - 1])}
     {#if label && dayKey !== prevKey}
       <div data-day-sep data-day-label={label} class="flex justify-center py-1.5">
         <span class="rounded-md bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm">{label}</span>
       </div>
     {/if}
-    <ThreadMessage {turn} {loadTrace} />
+    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} />
   {/each}
 
   {#if live && turns.length === 0}
@@ -165,9 +256,51 @@
     </div>
   {/if}
 
-  {#if live}
+  {#if live || indicatorOn}
     <div class="flex justify-start">
       <div class="flex flex-col gap-1.5 max-w-[92%] min-w-0">
+        {#if indicatorOn}
+          <!-- Top of the turn, right under the person's message: content
+               grows below it, so it never moves, and it stays from the
+               turn's start to its end — only its label changes. With a todo
+               card the activity shows inside the card instead. -->
+        <div class="flex justify-start items-end">
+          <!-- Amber while compacting: the same bubble in the same place would
+               read as a normal wait, and this one is not — turns are being
+               replaced by a summary while it spins. -->
+          <div
+            class={"rounded-2xl rounded-tl-sm border px-4 py-2.5 " +
+              (compacting
+                ? "border-amber-500/40 bg-amber-500/10"
+                : "border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800")}
+          >
+            <div
+              class={"flex items-center gap-2 text-xs " +
+                (compacting
+                  ? "text-amber-700 dark:text-amber-300"
+                  : "text-black-600 dark:text-black-700")}
+            >
+              <!-- The agent's own avatar, in its working pose (orbit while
+                   a tool runs), is the typing indicator in the Team app. A compaction keeps the amber
+                   spinner: that wait is not the agent answering. -->
+              {#if agent && !compacting}
+                <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={20} live working={true} tool={!!typing.toolName} toolName={typing.toolName} events={agent.avatarEvents} />
+              {:else}
+              <svg
+                class={"h-3 w-3 shrink-0 animate-spin " + (compacting ? "text-amber-500" : "text-green-500")}
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+              >
+                <path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path>
+              </svg>
+              {/if}
+              <span class="min-w-0 truncate italic" data-testid="typing-label" title={typingLabelShown}>{typingLabelShown ?? THINKING_LABEL}</span>
+            </div>
+          </div>
+        </div>
+        {/if}
         {#if liveMergedTodoItems.length > 0 || liveTodoGoal}
           <!-- Always shown regardless of liveTraceOpen — the todo card is
                task PROGRESS, not raw trace detail, so collapsing the trace
@@ -178,10 +311,10 @@
           <TodoCard
             items={liveMergedTodoItems}
             goal={liveTodoGoal}
-            currentActivity={typing.active ? typingLabel(typing.substate, typing.toolName) : undefined}
+            currentActivity={activityText}
           />
         {/if}
-        {#if live.blocks.length > 0}
+        {#if live && live.blocks.length > 0}
           <button
             type="button"
             data-live-trace-toggle
@@ -203,37 +336,19 @@
             <div class="flex flex-col gap-1">
               {#each liveNonTodoBlocks as block, bi (bi)}
                 {#if block.kind === "tool"}
-                  <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} onCancel={onCancelRun} onDismiss={onDismissTool} {onOpenSubAgent} />
-                {:else if block.kind === "thinking"}
-                  <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700">
-                    {(block as Extract<ThreadBlock, { kind: "thinking" }>).text}
-                  </div>
+                  <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} onCancel={onCancelRun} {onStopTurn} onDismiss={onDismissTool} {onOpenSubAgent} {traceFiles} />
+                {:else if block.kind === "thinking" || block.kind === "text"}
+                  <TraceNote kind={block.kind} text={(block as Extract<ThreadBlock, { kind: "thinking" | "text" }>).text} />
                 {/if}
               {/each}
             </div>
           {/if}
         {/if}
-        {#if live.text}
+        {#if live?.text}
           <!-- renderLive owns innerHTML (no {@html}) so streaming tokens don't
                wipe already-rendered diagrams — prevents text↔image flicker. -->
           <div use:renderLive={live.text} class="rounded-2xl rounded-tl-sm bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm"></div>
         {/if}
-      </div>
-    </div>
-  {/if}
-
-  {#if typing.active && liveMergedTodoItems.length === 0}
-    <!-- Floating "what's running" bubble is now redundant WHEN a todo card
-         exists (its activity shows inline instead) — only render this
-         fallback when there's no todo card to attach it to. -->
-    <div class="flex justify-start items-end">
-      <div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-2.5">
-        <div class="flex items-center gap-2 text-xs text-black-600 dark:text-black-700">
-          <svg class="h-3 w-3 shrink-0 animate-spin text-green-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path>
-          </svg>
-          <span class="italic">{typingLabel(typing.substate, typing.toolName)}</span>
-        </div>
       </div>
     </div>
   {/if}

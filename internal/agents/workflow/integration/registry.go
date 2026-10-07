@@ -73,14 +73,14 @@ type MatchFunc func(spec map[string]any, payload map[string]any) bool
 // in the inspector → stored under Trigger.Match → router applies them
 // at dispatch time.
 type EventDescriptor struct {
-	Channel     string          // "slack" | "telegram" | …
-	Event       string          // "message" | "block_action" | …
-	Name        string          // UI label: "Slack: New message"
-	Description string          // one-liner shown in palette
-	PayloadType any             // zero-value sample for schema gen
-	MatchSchema []entity.Config // filter form schema (per event)
-	Match       MatchFunc       // optional custom matcher; nil = key-equality
-	wickdocs.Docs               // opt-in self-documentation for MCP workflow_node_detail
+	Channel       string          // "slack" | "telegram" | …
+	Event         string          // "message" | "block_action" | …
+	Name          string          // UI label: "Slack: New message"
+	Description   string          // one-liner shown in palette
+	PayloadType   any             // zero-value sample for schema gen
+	MatchSchema   []entity.Config // filter form schema (per event)
+	Match         MatchFunc       // optional custom matcher; nil = key-equality
+	wickdocs.Docs                 // opt-in self-documentation for MCP workflow_node_detail
 }
 
 // Key returns the canonical "<channel>.<event>" identifier the workflow
@@ -93,15 +93,15 @@ func (e EventDescriptor) Key() string { return e.Channel + "." + e.Event }
 // gen, generic map-based Execute so the engine doesn't need per-type
 // reflection.
 type ActionDescriptor struct {
-	Channel     string      // "slack" | "telegram" | …
-	Action      string      // "send_message" | "open_modal" | …
-	Name        string      // UI label: "Slack: Send message"
-	Description string      // one-liner shown in palette
-	InputType   any         // zero-value sample for input schema
-	OutputType  any         // zero-value sample for output schema
-	Destructive bool        // shown with the destructive badge in UI
-	Execute     ExecuteFunc // handler — receives args, returns output
-	wickdocs.Docs           // opt-in self-documentation for MCP workflow_node_detail
+	Channel       string      // "slack" | "telegram" | …
+	Action        string      // "send_message" | "open_modal" | …
+	Name          string      // UI label: "Slack: Send message"
+	Description   string      // one-liner shown in palette
+	InputType     any         // zero-value sample for input schema
+	OutputType    any         // zero-value sample for output schema
+	Destructive   bool        // shown with the destructive badge in UI
+	Execute       ExecuteFunc // handler — receives args, returns output
+	wickdocs.Docs             // opt-in self-documentation for MCP workflow_node_detail
 }
 
 // Key returns the canonical "<channel>.<action>" identifier.
@@ -237,4 +237,55 @@ func (r *Registry) Channels() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ── Trigger context ──────────────────────────────────────────────────
+//
+// An action's Execute closure receives only (ctx, args) — deliberately,
+// so descriptors stay decoupled from the engine. But a multi-instance
+// channel needs one more thing: WHICH instance saw the event that
+// started this run. Slack, for example, runs one bot per owning user;
+// replying as a different bot than the one that was talked to either
+// posts under the wrong identity or fails outright with not_in_channel.
+//
+// The channel node executor stashes the firing trigger's payload here so
+// a descriptor can resolve its own instance without the engine knowing
+// anything about instances.
+
+type triggerPayloadKey struct{}
+
+// WithTriggerPayload returns ctx carrying the run's trigger payload.
+// A nil payload is stored as-is; readers treat it the same as absent.
+func WithTriggerPayload(ctx context.Context, payload map[string]any) context.Context {
+	return context.WithValue(ctx, triggerPayloadKey{}, payload)
+}
+
+// TriggerPayload returns the run's trigger payload, or nil when the run
+// has none (manual / cron / an executor that didn't set it).
+func TriggerPayload(ctx context.Context) map[string]any {
+	p, _ := ctx.Value(triggerPayloadKey{}).(map[string]any)
+	return p
+}
+
+type channelInstanceKey struct{}
+
+// WithChannelInstance returns ctx carrying the instance a node pinned its
+// action to ("slack:<user-id>"). Set by the channel executor from the
+// node's channel_instance field; empty string is stored as absent.
+//
+// This is what makes a picker with several same-type instances honest: a
+// run without it falls back to "whichever bot saw the event, else the
+// first registered", which is a coin flip for a cron or manual run.
+func WithChannelInstance(ctx context.Context, instanceKey string) context.Context {
+	if instanceKey == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, channelInstanceKey{}, instanceKey)
+}
+
+// ChannelInstance returns the instance key the running node pinned, or ""
+// when it pinned none.
+func ChannelInstance(ctx context.Context) string {
+	k, _ := ctx.Value(channelInstanceKey{}).(string)
+	return k
 }

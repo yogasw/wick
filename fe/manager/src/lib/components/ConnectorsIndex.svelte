@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button } from "@wick-fe/common-ui";
-  import { listConnectors, listPlugins, installPlugin } from "$lib/api.js";
+  import { listConnectors, listPlugins, installPlugin, listServicePlugins, type ServicePlugin } from "$lib/api.js";
   import { push } from "$lib/router.js";
   import type { ConnectorDef, PluginEntry } from "$lib/types.js";
 
@@ -130,6 +130,24 @@
     // break the connector list. Loaded separately so a slow/blocked catalog
     // doesn't gate the page.
     loadAvailable();
+    loadServices();
+  }
+
+  // Always-on service plugins (/x/{key}); each links to its admin page.
+  // Best-effort and admin-only: on any error the section just stays hidden.
+  let services = $state<ServicePlugin[]>([]);
+  async function loadServices() {
+    try {
+      services = (await listServicePlugins()) ?? [];
+    } catch {
+      services = [];
+    }
+  }
+
+  function openService(e: MouseEvent, key: string) {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+    push(`/services/${encodeURIComponent(key)}`);
   }
 
   let available = $state<PluginEntry[]>([]);
@@ -501,6 +519,36 @@
           {/if}
         </section>
       {/if}
+    {/if}
+
+    {#if services.length > 0}
+      <section data-testid="service-plugins" class="mt-4 rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm">
+        <header class="mb-4">
+          <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Service plugins</h2>
+          <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Always-on plugins served under /x/&#123;key&#125; — status, configuration, tokens and logs.</p>
+        </header>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {#each services as svc (svc.key)}
+            <a
+              href={`${appBase}/services/${encodeURIComponent(svc.key)}`}
+              onclick={(e) => openService(e, svc.key)}
+              class="flex items-start gap-3 rounded-xl border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4 shadow-md transition-all duration-150 hover:-translate-y-px hover:border-green-400 hover:shadow-lg"
+            >
+              <span class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">⚙</span>
+              <span class="min-w-0 flex-1">
+                <span class="flex items-center gap-2">
+                  <span class="truncate text-sm font-semibold text-black-900 dark:text-white-100">{svc.name || svc.key}</span>
+                  <span class="flex-shrink-0 rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-800 dark:text-black-600">{svc.status.state}</span>
+                </span>
+                {#if svc.description}
+                  <span class="mt-1 block line-clamp-2 text-xs leading-relaxed text-black-700 dark:text-black-600">{svc.description}</span>
+                {/if}
+                <span class="mt-2 block font-mono text-xs text-black-700 dark:text-black-600">{svc.path}</span>
+              </span>
+            </a>
+          {/each}
+        </div>
+      </section>
     {/if}
 
     <!-- Available plugins render inside the category grid above, mixed with

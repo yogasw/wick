@@ -1,0 +1,7 @@
+{"type": "thread.started", "thread_id": "th1"}
+{"type": "item.started", "item": {"id": "i1", "type": "command_execution", "command": "/bin/bash -lc 'go test ./...'", "status": "in_progress"}}
+{"type": "item.completed", "item": {"id": "i1", "type": "command_execution", "command": "/bin/bash -lc 'go test ./...'", "aggregated_output": "FAIL x\n", "exit_code": 1, "status": "failed"}}
+{"type": "item.started", "item": {"id": "i2", "type": "function_call", "name": "shell", "call_id": "c2", "arguments": {"command": ["bash", "-lc", "cat README.md"]}}}
+{"type": "item.completed", "item": {"id": "i2b", "type": "function_call_output", "call_id": "c2", "output": "{\"output\": \"# P1 Laporan\\n\\n- **satu**: ok\\n- dua\\n\\n| a | b |\\n|---|---|\\n| 1 | 2 |\\n\", \"metadata\": {\"exit_code\": 0, \"duration_seconds\": 0.1}}"}}
+{"type": "item.started", "item": {"id": "i3", "type": "mcp_tool_call", "server": "playwright", "tool": "browser_take_screenshot", "arguments": {}}}
+{"type": "item.completed", "item": {"id": "i3", "type": "mcp_tool_call", "server": "playwright", "tool": "browser_take_screenshot", "result": {"content": [{"type": "text", "text": "Took screenshot"}, {"type": "image", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "mimeType": "image/png"}]}}}

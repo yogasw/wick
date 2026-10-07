@@ -1,0 +1,242 @@
+package agents
+
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+	"github.com/rs/zerolog"
+)
+
+// The Source panel renders only from the git_status event, and that event is
+// published from filesystem notifications. fsnotify is not recursive, so a
+// directory nobody watched produces no event and the panel silently stays
+// stale — which is what "wick doesn't see my changes, I have to reload"
+// actually was. This test pins the depth.
+func TestAddWatchesCoversDeepDirsOfActiveRepo(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "wick")
+	deep := filepath.Join(repo, "internal", "pkg", "api", "handlers")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Noise that must NOT be watched (it would eat the budget).
+	if err := os.MkdirAll(filepath.Join(repo, "node_modules", "left-pad"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Skipf("no watcher available: %v", err)
+	}
+	defer w.Close()
+
+	l := zerolog.Nop()
+	addWatches(w, root, "wick", &l)
+	got := w.WatchList()
+
+	for _, want := range []string{
+		root,
+		repo,
+		filepath.Join(repo, ".git"),
+		filepath.Join(repo, "internal"),
+		filepath.Join(repo, "internal", "pkg"),
+		filepath.Join(repo, "internal", "pkg", "api"),
+		deep,
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("directory not watched: %s\nwatching: %v", want, got)
+		}
+	}
+	if slices.Contains(got, filepath.Join(repo, "node_modules")) {
+		t.Errorf("node_modules should be skipped, watching: %v", got)
+	}
+}
+
+// The budget exists because inotify watches are a per-user kernel resource
+// and a session cwd can hold dozens of clones. Exhausting it must stop the
+// walk, not keep calling Add for every remaining directory.
+func TestWatchBudgetStopsAdding(t *testing.T) {
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Skipf("no watcher available: %v", err)
+	}
+	defer w.Close()
+
+	dir := t.TempDir()
+	b := &watchBudget{max: 1}
+	if room := b.add(w, dir); room {
+		t.Fatalf("budget of 1 should report no room after the first add")
+	}
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b.add(w, sub)
+	if slices.Contains(w.WatchList(), sub) {
+		t.Errorf("add past the budget should be a no-op, watching: %v", w.WatchList())
+	}
+	if b.used != 1 {
+		t.Errorf("used = %d, want 1", b.used)
+	}
+}
+
+// The Source rail badge is rendered ONLY from git_status events — there is no
+// REST fallback for it. The SharedWorker keeps one stream alive across page
+// loads, so a reloaded page never re-opens the stream and instead asks for a
+// snapshot; if that snapshot omits git_status, the badge shows nothing until
+// the next filesystem change. This pins the replay.
+func TestSnapshotEventsReplaysGitStatus(t *testing.T) {
+	prevBcast, prevPool := globalBcast, globalPool
+	t.Cleanup(func() { globalBcast, globalPool = prevBcast, prevPool })
+
+	globalBcast = NewBroadcaster()
+	globalPool = nil // no live agent: git status must still be replayed
+
+	const sid = "slack-owner-123.456"
+	if evs := snapshotEvents(sid); len(evs) != 0 {
+		t.Fatalf("expected no events before any publish, got %d", len(evs))
+	}
+
+	globalBcast.PublishGitStatusJSON(sid, `{"repos":[{"rel":"wick","changed":35}],"active":"wick"}`)
+	evs := snapshotEvents(sid)
+	if len(evs) != 1 || evs[0].Type != "git_status" {
+		t.Fatalf("git_status not replayed, got %#v", evs)
+	}
+	if evs[0].Data != `{"repos":[{"rel":"wick","changed":35}],"active":"wick"}` {
+		t.Errorf("payload altered: %s", evs[0].Data)
+	}
+
+	// The cache is dropped when the last watcher goes away, so it stays
+	// bounded by live sessions rather than every session ever seen.
+	globalBcast.ForgetGitStatus(sid)
+	if evs := snapshotEvents(sid); len(evs) != 0 {
+		t.Errorf("cache should be empty after ForgetGitStatus, got %#v", evs)
+	}
+}
+
+// The watcher's pace has to come from what a recompute COSTS, not from a
+// fixed number: the same 400ms debounce that is fine over one small repo is
+// what let a 61-repo session dir pin a 2-core host while a build wrote
+// files continuously.
+func TestGitWatchCooldownScalesWithCost(t *testing.T) {
+	// Nothing measured yet (first pass): no cooldown, so the badge is
+	// correct as fast as the debounce allows.
+	if got := gitWatchCooldown(0); got != 0 {
+		t.Errorf("cooldown(0) = %v, want none", got)
+	}
+
+	// A cheap tree stays effectively unthrottled — its cooldown lands below
+	// the debounce, so latency is unchanged.
+	if got := gitWatchCooldown(20 * time.Millisecond); got >= gitWatchDebounce {
+		t.Errorf("cooldown(20ms) = %v, want below the %v debounce", got, gitWatchDebounce)
+	}
+
+	// An expensive one backs itself off: 4x the cost means the walk can
+	// occupy at most ~1/5 of the time, whatever the directory holds.
+	if got := gitWatchCooldown(1500 * time.Millisecond); got != 6*time.Second {
+		t.Errorf("cooldown(1.5s) = %v, want 6s (4x)", got)
+	}
+
+	// And it is capped, so a pathological pass cannot silence the panel for
+	// minutes.
+	if got := gitWatchCooldown(time.Minute); got != gitWatchMaxInterval {
+		t.Errorf("cooldown(1m) = %v, want the %v ceiling", got, gitWatchMaxInterval)
+	}
+}
+
+// ── one watcher per directory, not per session ────────────────────────
+
+// Sessions of one project share a working directory. Keying the watcher
+// by session ran a full walk of that directory PER SESSION — 61 repos and
+// ~9800 directories each, at roughly 1.4 cores a pass. The per-watcher
+// duty-cycle cap was working; it just capped each copy, so three open
+// sessions cost three times the work and the daemon sat at 185% CPU while
+// a build wrote into the tree.
+func TestOneWatcherPerDirectory(t *testing.T) {
+	m := &gitWatchManager{
+		entries: make(map[string]*gitWatchEntry),
+		homes:   make(map[string]string),
+	}
+	cwd := t.TempDir()
+
+	// Attach three sessions to the same directory WITHOUT starting a real
+	// watcher: the entry bookkeeping is what this pins.
+	for _, id := range []string{"s1", "s2", "s3"} {
+		m.mu.Lock()
+		e, ok := m.entries[cwd]
+		if !ok {
+			e = &gitWatchEntry{sessions: map[string]int{}}
+			m.entries[cwd] = e
+		}
+		m.homes[id] = cwd
+		e.mu.Lock()
+		e.sessions[id]++
+		e.mu.Unlock()
+		m.mu.Unlock()
+	}
+
+	if len(m.entries) != 1 {
+		t.Fatalf("%d watchers for one directory, want exactly 1", len(m.entries))
+	}
+	if got := len(m.entries[cwd].attached()); got != 3 {
+		t.Errorf("%d sessions attached, want 3", got)
+	}
+
+	// The watcher survives until its LAST subscriber leaves, otherwise one
+	// person closing a tab would blind everyone else in the project.
+	m.release("s1")
+	if len(m.entries) != 1 {
+		t.Fatalf("the watcher stopped while two sessions were still attached")
+	}
+	m.release("s2")
+	if len(m.entries) != 1 {
+		t.Fatalf("the watcher stopped while a session was still attached")
+	}
+	m.release("s3")
+	if len(m.entries) != 0 {
+		t.Errorf("the watcher outlived its last subscriber: %v", m.entries)
+	}
+	if len(m.homes) != 0 {
+		t.Errorf("session→cwd map leaked: %v", m.homes)
+	}
+}
+
+// Two tabs of one session are two references, not two watchers — and
+// closing one must not detach the session.
+func TestSecondTabIsAReferenceNotAWatcher(t *testing.T) {
+	m := &gitWatchManager{
+		entries: make(map[string]*gitWatchEntry),
+		homes:   make(map[string]string),
+	}
+	cwd := t.TempDir()
+	e := &gitWatchEntry{sessions: map[string]int{"s1": 2}}
+	m.entries[cwd] = e
+	m.homes["s1"] = cwd
+
+	m.release("s1")
+	if len(m.entries) != 1 || len(e.attached()) != 1 {
+		t.Fatalf("closing one tab detached the session: entries=%d attached=%v", len(m.entries), e.attached())
+	}
+	m.release("s1")
+	if len(m.entries) != 0 {
+		t.Errorf("the last tab left the watcher running")
+	}
+}
+
+// Releasing something never acquired must be a no-op rather than a panic:
+// it happens whenever a subscriber disconnects after a restart.
+func TestReleaseUnknownSessionIsHarmless(t *testing.T) {
+	m := &gitWatchManager{
+		entries: make(map[string]*gitWatchEntry),
+		homes:   make(map[string]string),
+	}
+	m.release("never-seen")
+	m.release("")
+}

@@ -1,7 +1,7 @@
 // wick service worker — minimal, enables PWA installability and a small
 // static cache. Kept conservative on purpose: navigations always go to the
 // network so we never serve a stale Cloudflare Access login page from cache.
-const CACHE = 'wick-static-v7';
+const CACHE = 'wick-static-v8';
 const ASSETS = [
   '/public/img/icon.svg',
   '/public/img/icon-192.png',
@@ -38,6 +38,48 @@ self.addEventListener('activate', (event) => {
 // in the background so the NEXT load is fresh.
 const staticAssetRe = /\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js|mjs|woff2?|ttf|eot)$/i;
 
+// How long a request may stay silent before we suspect the socket rather than
+// the server, and send a second one alongside it.
+const HEDGE_AFTER_MS = 8000;
+
+// fetchNetwork gets a GET from the network, surviving a socket that has gone
+// quiet without saying so.
+//
+// The hazard it exists for: a keep-alive connection the browser still believes
+// is live but the other end has dropped. A fetch on that socket neither
+// resolves nor rejects — it hangs, and with it the page.
+//
+// The obvious guard, aborting after N seconds, cures the hang and causes a
+// worse one: on a slow mobile link N seconds is a SPEED, not a fault, and an
+// abort there ends the request for good (nothing on this path is cached, so
+// there is nothing to fall back to). The page then cannot be opened however
+// many times it is reloaded, because every reload restarts the same timer.
+// A desktop on a good line never reaches it, which is exactly why the failure
+// looks like "works on my machine".
+//
+// So the timer does not end anything. After HEDGE_AFTER_MS of silence a SECOND
+// request goes out on a fresh connection and both stay in the race: a dead
+// socket loses to the new one, a merely slow link wins with the answer it was
+// already bringing. Only when both fail is there no answer to give.
+//
+// Returns the Response, or null when the network truly refused.
+async function fetchNetwork(req) {
+  const ctrl = new AbortController();
+  const first = fetch(req, { signal: ctrl.signal });
+
+  const quiet = new Promise((resolve) => setTimeout(() => resolve('quiet'), HEDGE_AFTER_MS));
+  const early = await Promise.race([first.then(() => 'answered', () => 'failed'), quiet]);
+  if (early === 'answered') return first;
+
+  const tag = (p, name) => p.then((res) => ({ name: name, res: res }));
+  const won = await Promise.any([tag(first, 'first'), tag(fetch(req), 'hedge')]).catch(() => null);
+  if (!won) return null;
+  // The stalled socket has lost the race and has no reader — let it go. Only
+  // ever the loser: aborting the winner would cut its body mid-stream.
+  if (won.name === 'hedge') ctrl.abort();
+  return won.res;
+}
+
 // Routing:
 //   - static assets → stale-while-revalidate (instant from cache + background
 //     refresh, so a new deploy surfaces on the next load — no hard refresh)
@@ -56,10 +98,10 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   // Server-Sent Events / EventSource streams must NEVER go through the SW. The
-  // network-first path below wraps every fetch in an 8s AbortController (to
-  // rescue navigations stuck on a dead keep-alive socket); on a long-lived
-  // stream that timer fires mid-stream and aborts it every 8s, so the client
-  // sees ERR_FAILED and reconnects in a loop — the "logs keep dying" symptom on
+  // network-first path below treats 8s of silence as a stalled socket worth a
+  // second request; an idle SSE stream is silent by design, so it would be
+  // hedged — and the earlier version of that rule ABORTED instead, so the
+  // client saw ERR_FAILED and reconnected in a loop — the "logs keep dying" on
   // /reqstream, /logstream, and any SSE endpoint reached by a page-level
   // EventSource (the conversation /stream survives only because it runs in a
   // SharedWorker the page SW can't intercept). EventSource always sends
@@ -98,27 +140,21 @@ self.addEventListener('fetch', (event) => {
     // the background to refresh the cache for next time. A failed background
     // fetch is swallowed so an offline reload still serves the cached copy.
     //
-    // The background fetch is given a hard timeout. Without it, a stalled
-    // connection (dead keep-alive socket, a momentarily busy server) leaves
-    // fetch() hanging forever; on a COLD cache there is nothing to fall back
-    // to, so respondWith() never settles and the asset sticks at "pending"
-    // indefinitely — the random first-load hangs. AbortController bounds it so
-    // a stall fails fast and we serve cache (or surface a real error) instead.
+    // The background fetch goes through fetchNetwork, so a socket that has
+    // gone quiet costs a hedged second request rather than the asset: a cold
+    // miss that gave up would render the page with no CSS and no JS.
     event.respondWith(
       caches.match(req).then((cached) => {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 8000);
-        const fetching = fetch(req, { signal: ctrl.signal }).then((res) => {
-          clearTimeout(timer);
+        const fetching = fetchNetwork(req).then((res) => {
           if (res && res.ok) {
             const copy = res.clone();
             caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
           }
-          return res;
-        }).catch(() => {
-          clearTimeout(timer);
-          return cached;
-        });
+          // respondWith() rejects on undefined, which on a cold miss would
+          // break the asset harder than the failure did — never resolve to
+          // nothing.
+          return res || cached || Response.error();
+        }).catch(() => cached || Response.error());
         // On a cache HIT we answer instantly with `cached`, but the background
         // refresh must be kept alive past respondWith() — extend the event's
         // lifetime so Chrome doesn't tear the fetch down (or leave it dangling)
@@ -130,27 +166,14 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Network-first for navigations and dynamic responses.
-  //
-  // The fetch is bounded by a timeout. A `go run` server reuses HTTP
-  // keep-alive sockets; when Go closes an idle connection that Chrome still
-  // believes is live, the next request on that dead socket stalls at the TCP
-  // layer for tens of seconds with NO error — fetch neither resolves nor
-  // rejects, so .catch never fires and the navigation hangs at "pending"
-  // forever. That is the "server's been up for ages, then suddenly stuck"
-  // case. AbortController converts the stall into a rejection so we fall back
-  // to cache (or surface a real error) instead of hanging indefinitely.
+  // Network-first for navigations and dynamic responses. fetchNetwork handles
+  // the stalled-socket case (see its comment); cache is the offline fallback,
+  // and an error is only produced when the network gave nothing at all.
   event.respondWith((async () => {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 8000);
-    try {
-      return await fetch(req, { signal: ctrl.signal });
-    } catch (_) {
-      const cached = await caches.match(req);
-      return cached || Response.error();
-    } finally {
-      clearTimeout(timer);
-    }
+    const res = await fetchNetwork(req);
+    if (res) return res;
+    const cached = await caches.match(req);
+    return cached || Response.error();
   })());
 });
 

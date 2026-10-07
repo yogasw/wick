@@ -24,3 +24,8 @@ func signalProcess(pid int, sig syscall.Signal) error {
 	}
 	return p.Signal(sig)
 }
+
+// reloadSignal asks a running daemon to hand over to a new binary. SIGHUP is
+// the conventional "reload" signal, and it is what the upgrade watcher inside
+// the daemon listens for.
+func reloadSignal(pid int) error { return signalProcess(pid, syscall.SIGHUP) }

@@ -19,7 +19,8 @@ func cfg(followupSec, resolveSec int64) project.TicketConfig {
 }
 
 func tk(status string, updatedAgo, followupAgo time.Duration, now time.Time) Ticket {
-	t := Ticket{ID: "T-TEST", ProjectID: "p1", Status: status, UpdatedAt: now.Add(-updatedAgo)}
+	t := Ticket{ID: "T-TEST", ProjectID: "p1", Status: status,
+		UpdatedAt: now.Add(-updatedAgo), TouchedAt: now.Add(-updatedAgo)}
 	if followupAgo > 0 {
 		t.LastFollowupAt = now.Add(-followupAgo)
 	}
@@ -77,7 +78,8 @@ func TestFollowupMessage(t *testing.T) {
 	item := Ticket{
 		ID: "T-4F2A", ProjectID: "p1", Title: "Payment webhook down",
 		Status: StatusInProgress, Assignee: "user-9",
-		Fields: map[string]string{"priority": "high"}, UpdatedAt: now.Add(-2 * time.Hour),
+		Fields: map[string]string{"priority": "high"},
+		UpdatedAt: now.Add(-2 * time.Hour), TouchedAt: now.Add(-2 * time.Hour),
 	}
 	msg := FollowupMessage(item, cfg(3600, 0))
 	for _, want := range []string{"T-4F2A", "Payment webhook down", "in_progress", "priority", "high", "check the ticket"} {
@@ -111,7 +113,12 @@ func TestSweepOnce(t *testing.T) {
 		if cerr != nil {
 			t.Fatal(cerr)
 		}
+		// Both clocks: the timers measure TouchedAt (wick-side silence) and
+		// the fixture is simulating exactly that. Backdating only UpdatedAt
+		// would now describe a MIRRORED ticket — old on its face, written a
+		// moment ago — which is precisely the case that must NOT fire.
 		item.UpdatedAt = now.Add(-updatedAgo)
+		item.TouchedAt = now.Add(-updatedAgo)
 		if serr := SaveKeepingTimestamp(l, item); serr != nil {
 			t.Fatal(serr)
 		}
@@ -171,6 +178,7 @@ func TestSweepSkipsProjectsWithTicketModeOff(t *testing.T) {
 	}
 	item, _ := Create(l, CreateOptions{ProjectID: "p1", Title: "x", Sessions: []string{"s1"}})
 	item.UpdatedAt = now.Add(-100 * time.Hour)
+	item.TouchedAt = now.Add(-100 * time.Hour)
 	if err := SaveKeepingTimestamp(l, item); err != nil {
 		t.Fatal(err)
 	}
@@ -187,5 +195,92 @@ func TestSweepSkipsProjectsWithTicketModeOff(t *testing.T) {
 	}
 	if got, _ := Load(l, "p1", item.ID); got.Status != StatusOpen {
 		t.Fatalf("ticket auto-resolved in a ticket-mode-off project: %+v", got)
+	}
+}
+
+// A mirrored ticket wears the source system's edit date, which can be
+// months old on a ticket wick learned about a second ago. Running the idle
+// timers on that closed 130 imported tickets on arrival — the sweeper has
+// to measure OUR silence, not the other system's.
+func TestIdleTimersUseTouchedAtNotTheMirroredDate(t *testing.T) {
+	cfg := project.TicketConfig{Enabled: true, AutoResolveAfterSec: 3600, FollowupAfterSec: 3600}
+	now := time.Now().UTC()
+
+	imported := Ticket{
+		Status:    "pending",
+		UpdatedAt: now.Add(-90 * 24 * time.Hour), // the Notion page's own date
+		TouchedAt: now,                           // wick wrote it just now
+	}
+	if NeedsAutoResolve(cfg, imported, now) {
+		t.Error("a ticket wick just imported must not auto-resolve on arrival")
+	}
+	if NeedsFollowup(cfg, imported, now) {
+		t.Error("a ticket wick just imported is not stale")
+	}
+
+	// And it still closes once WICK has been quiet for the window.
+	stale := Ticket{Status: "pending", UpdatedAt: now.Add(-90 * 24 * time.Hour), TouchedAt: now.Add(-2 * time.Hour)}
+	if !NeedsAutoResolve(cfg, stale, now) {
+		t.Error("two hours of wick-side silence should auto-resolve on a one-hour window")
+	}
+
+	// A ticket written before TouchedAt existed falls back to UpdatedAt, so
+	// an old board keeps working instead of looking brand new forever.
+	old := Ticket{Status: "pending", UpdatedAt: now.Add(-2 * time.Hour)}
+	if !NeedsAutoResolve(cfg, old, now) {
+		t.Error("without TouchedAt the sweeper should fall back to UpdatedAt")
+	}
+}
+
+// A mirror has to be able to tell "the team finished this" from "wick gave
+// up waiting". Without the mark, one bad idle timer wrote Done onto twelve
+// Notion pages nobody had finished.
+func TestAutoResolveMarksTheTicketAndAHumanMoveClearsIt(t *testing.T) {
+	l := newLayout(t)
+	now := time.Now().UTC()
+
+	item, cerr := Create(l, CreateOptions{ProjectID: "p1", Title: "imported", Status: StatusOpen})
+	if cerr != nil {
+		t.Fatal(cerr)
+	}
+	item.UpdatedAt = now.Add(-100 * time.Hour)
+	item.TouchedAt = now.Add(-100 * time.Hour)
+	if err := SaveKeepingTimestamp(l, item); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := project.Load(l, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Meta.Ticket = cfg(0, 3600) // auto-resolve after an hour, no followup
+	if err := project.SaveMeta(l, "p1", p.Meta); err != nil {
+		t.Fatal(err)
+	}
+	sweepOnce(context.Background(), Deps{
+		Layout:       l,
+		ListProjects: func() ([]project.Project, error) { return []project.Project{p}, nil },
+	}, now)
+
+	closed, err := Load(l, "p1", item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.Status != "done" {
+		t.Fatalf("status = %q, want the sweeper to have closed it", closed.Status)
+	}
+	if closed.AutoResolvedAt.IsZero() {
+		t.Fatal("a swept ticket must say so — a mirror reads this to refuse pushing it")
+	}
+
+	// Somebody reopens it: the mark describes where the ticket WAS, so it
+	// must not survive the move.
+	closed.Status = "open"
+	if err := SaveAs(l, closed, Actor{Type: ActorUser, ID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	reopened, _ := Load(l, "p1", item.ID)
+	if !reopened.AutoResolvedAt.IsZero() {
+		t.Error("moving the ticket should clear the auto-resolve mark")
 	}
 }

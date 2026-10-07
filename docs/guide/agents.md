@@ -39,7 +39,7 @@ After boot, head to `/tools/agents`.
 | Page | What you do |
 |---|---|
 | **Overview** | Pool stats (active / max / queue), running list, recent sessions. |
-| **Sessions** | List, open, delete sessions. Detail tabs: Conversation (assistant bubbles render Mermaid diagrams and SVG graphics progressively during streaming; AI bubbles show an always-visible `HH:mm` stamp, user bubbles show it on hover; static date separators between day groups with a floating day pill that appears while scrolling; double-click any diagram to open a fullscreen zoom/pan lightbox — scroll/trackpad to pan, Ctrl/Cmd+scroll or pinch to zoom, switchable backdrop; syntax-highlighted code, KaTeX math, and [artifact galleries](#artifacts)), Commands (gate audit), Approvals, Raw (collapsible JSON tree of all turns + per-turn tool/thinking traces fetched on demand). A right-rail **Browser** tab (only shown once an enabled [`playwright_browser`](/connectors/playwright_browser) instance exists) opens a [live browser panel](/connectors/playwright_browser#live-browser-panel) — watch or drive a live session directly. Composer at the bottom posts a new message. |
+| **Sessions** | **Your sessions / All sessions** tabs (default Your — your own chats, plus, under ticket mode, chats on tickets assigned to you), each scrolling to load more. List, open, delete sessions. Detail tabs: Conversation (assistant bubbles render Mermaid diagrams and SVG graphics progressively during streaming; AI bubbles show an always-visible `HH:mm` stamp, user bubbles show it on hover; static date separators between day groups with a floating day pill that appears while scrolling; double-click any diagram to open a fullscreen zoom/pan lightbox — scroll/trackpad to pan, Ctrl/Cmd+scroll or pinch to zoom, switchable backdrop; syntax-highlighted code, KaTeX math, and [artifact galleries](#artifacts)), Commands (gate audit), Approvals, Raw (collapsible JSON tree of all turns + per-turn tool/thinking traces fetched on demand). A right-rail **Browser** tab (only shown once an enabled [`playwright_browser`](/connectors/playwright_browser) instance exists) opens a [live browser panel](/connectors/playwright_browser#live-browser-panel) — watch or drive a live session directly. Composer at the bottom posts a new message. |
 | **Projects** | Create / delete projects. New = empty managed folder unless pointed at a custom path. |
 | **Presets** | Edit reusable agent instructions. Each preset is one `agent.md` file. The built-in `default` preset is the fallback when a session has no project (or the project has no `DefaultPreset`); it cannot be deleted, only edited. |
 | **Providers** | Per-instance status cards: binary path, version, env vars, extra args, "Rescan" button. Add custom instances when you need two PATs for the same CLI. |
@@ -114,6 +114,7 @@ Source: [`config.GeneralConfig`](https://github.com/yogasw/wick/blob/master/inte
 | `PreemptIdle` | `true` | When the pool is full and a new session is queued, kill the longest-idle active subprocess to free its slot instead of waiting out the idle TTL. Killed sessions resume via `--resume` on their next message. A 1 s background loop keeps retrying preemption while the queue is non-empty so a session that goes idle after a queued send still releases its slot promptly. |
 | `SystemPrompt` | _(embedded baseline)_ | Global interaction rules appended to every preset's `agent.md` on spawn. Adds to the preset — never replaces it. Edit and reset the default from `/tools/agents/settings`; the shipped baseline is [`internal/agents/system-prompt/default.md`](https://github.com/yogasw/wick/blob/master/internal/agents/system-prompt/default.md). |
 | `AirouterEnabled` | `true` | Master switch for the embedded AI routers. Off = every dashboard, `/airouter/<id>/v1` proxy, auto-start, and all controls are disabled. Per-router auto-start / external-API toggles live on the AI Router page. Access visibility is managed separately under **Admin → Tools**. |
+| `SenderVisibility` (group **Session Identity**) | `name` | How much of the sender's identity is written into each message the agent receives — `off` (nothing), `name` (display name only), `name_id` (adds the platform user ID, for @-mentioning/DMing a specific person), or `full` (adds channel + handle too). Governs only the model's copy of the message; the dashboard always shows the full sender regardless. See [Channels ▶ Sender identity](./agents/channels#sender-identity). |
 
 ### Widget group - HTML artifact CSP
 
@@ -166,6 +167,16 @@ Files produced in a single turn are shown as a **grid** (up to 4 items) or a **c
 | Markdown (`.md`) | File card with a fullscreen markdown viewer + download. |
 | Text / code | File card with a fullscreen text viewer + download. |
 | Any other type | Downloadable file chip (icon + filename). |
+
+## Turn trace
+
+Every assistant bubble in the Conversation tab has a **show trace ›** toggle that expands the turn's tool calls in order:
+
+- **Narration** — text the model streamed between tool calls (e.g. "checking the config first…") renders as its own block positioned between the tool cards it separates, so you can follow *why* the next tool ran. This is separate from the turn's final reply text, which still renders as the normal message bubble.
+- **Tool cards** — each shows the bare tool name (an MCP `mcp__<server>__` prefix is stripped from the display, full name on hover) plus, when the tool call included a `description` field, a short "why it ran" note next to the name. Duration and start time sit on the right of the card header.
+- **Thinking** blocks (when the provider streams them) render italicized, above/between the narration and tool cards in the same order they occurred.
+
+This trace is recorded incrementally as the turn streams — including on crash recovery — so it's available immediately on reload, not just for turns that finished cleanly.
 
 Detection rules: Write and Edit calls on any file type qualify as artifacts. Read calls qualify only for non-text files (e.g. a PNG the agent generated and then read back). Text files the agent only read — not wrote — are not shown as artifacts.
 
@@ -284,14 +295,23 @@ The panel is the single place to inspect what the agent has actually written, wi
 
 | Action | How |
 |---|---|
-| **Browse** | Folder tree, click a directory to expand. Filter box does substring match on the full relative path. |
+| **Browse** | Folder tree, **loaded one level at a time**. Opening the panel fetches the cwd's own children; clicking a folder fetches that folder's, and an opened folder shows its contents as `12 folders · 43 files` (or `empty`) beside its name. Sort by name / recent / type — folders always first. |
 | **Read** | Click a file → opens a modal with preview tab. Markdown gets sanitized HTML (via `marked` + `DOMPurify`), HTML renders in a sandboxed iframe (`sandbox="allow-scripts"`, no same-origin), images / PDFs render inline, plain text shows in a `<pre>`. Binary files and files over 2 MiB show a "download instead" affordance. |
 | **Edit** | Switch to the Edit tab — Ace editor mounts with syntax mode picked from the file extension (JS, Go, MD, HTML, CSS, JSON, YAML, Python, etc). Save writes back to disk. |
 | **Download** | Per-row download icon or modal header button. Filename in `Content-Disposition` is stripped of CR/LF/quote/backslash to defend against header injection. |
 | **Create** | `+ file` and `+ folder` icons in the panel header, plus a "new file here" icon on hover of each folder row. |
-| **Delete** | Per-row trash icon. Folders recurse. The session `cwd` itself is refused. |
+| **Search** | Filter box, two modes. Default matches names **at the level you are looking at**, like a file manager's filter. The **Subfolders** toggle sends the query to the server instead, which walks the whole tree and returns **folders as well as files**, opening the branch down to each hit. |
+| **Delete** | Per-row trash icon. Folders recurse. The session `cwd` itself is refused. The row collapses in place and its neighbours slide up — the tree is not re-fetched, so nothing you had open closes and the scroll position stays put. |
 
-Heavy build artifact directories (`node_modules`, `.git`, `.venv`, `__pycache__`, `dist`, `build`, `target`, `.cache`, `.next`) are pruned from the walk and the listing caps at 5000 entries so the panel stays responsive on large projects.
+Heavy build artifact directories (`node_modules`, `.git`, `.venv`, `__pycache__`, `dist`, `build`, `target`, `.cache`, `.next`) are pruned from every walk.
+
+::: tip Why one level at a time
+The panel used to fetch the entire tree depth-first and cut the result off at 5000 entries. That is fine for a session holding one repository and quietly wrong for one holding many: the budget is spent in alphabetical order, so the first few repos consume it and every later top-level entry is never sent at all.
+
+A session with 55 clones showed 98 of its 410 top-level entries — the walk died inside `chatnshop/vendor`, and a folder as ordinary as `wick` looked like it had never been cloned, with nothing in the UI to say otherwise.
+
+Loading a level at a time removes the shared budget entirely. The 5000 cap still exists but now applies to a **single directory**, which no real folder reaches, and depth costs one extra request instead of everyone else's visibility.
+:::
 
 ### Sandbox
 
@@ -366,6 +386,7 @@ Each check reports `✓` / `✗` / `!`. Exit `0` when required checks pass, `1` 
 - [**Providers**](./agents/providers) — multi-instance config, binary resolution chain, status cache.
 - [**Channels**](./agents/channels) — Slack, Telegram, web UI; access control; meta-commands.
 - [**Scheduled Messages**](./agents/scheduled-messages) — one-shot / recurring message injection, agent- or human-initiated.
+- [**Team**](./agents/team/) — persistent agents with persona, access checklist, Captain, @mentions, remote agents and Connections.
 - [**Pool & Sessions**](./agents/pool) — slot allocation, idle-kill, resume, message buffer.
 - [**Source Control**](./agents/source-control) — git SCM panel on the session detail page.
 - [**AI Router**](./agents/airouter) — embedded LLM router/proxy dashboards (9router, OmniRoute); switch between them, install and manage via Settings tab.

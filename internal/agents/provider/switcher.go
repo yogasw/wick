@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -69,9 +70,10 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 		wantType, wantName = tag[:i], tag[i+1:]
 	}
 	found := false
+	var toIns Instance
 	for _, ins := range instances {
 		if string(ins.Type) == wantType && ins.Name == wantName && !ins.Disabled {
-			found = true
+			found, toIns = true, ins
 			break
 		}
 	}
@@ -105,6 +107,9 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 	// sameScope reports whether the switch stays inside one provider type,
 	// where the transcript store is shared and the conversation carries over.
 	sameScope := false
+	// carry is the target type's answer for a same-type switch: whether
+	// (and how) the conversation reaches the target instance.
+	var carry HistoryCarry
 	fromKey := "" // provider active before this switch — recorded in the turn extras
 	for i, a := range loaded.Agents {
 		if a.Name == agentName {
@@ -142,6 +147,15 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 			// read the other's store. Never blanked on a same-scope miss —
 			// an empty CLISessionID drops --resume from the next spawn and
 			// abandons a conversation still on disk.
+			if resumeID != "" && sameScope {
+				carry = carriesOver(instanceFor(instances, fromKey), toIns, resumeID)
+				if carry.Reason != "" {
+					// Say so, and start clean: a resume the target cannot
+					// find only buys a failed turn.
+					resumeID, targetHasHistory = "", false
+					loaded.Agents[i].CLISessionID = ""
+				}
+			}
 			if resumeID != "" {
 				loaded.Agents[i].CLISessionID = resumeID
 			} else if !sameScope {
@@ -190,13 +204,7 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 	// transcript store, same resume id) but not across types. Say which of
 	// the three cases this switch is, so the user knows what the next turn
 	// will remember.
-	contextNote := "Note: " + tag + " won't see earlier turns from other providers in this session — each provider keeps its own context."
-	switch {
-	case sameScope && targetHasHistory:
-		contextNote = "Note: continuing the same conversation — " + tag + " resumes this session's transcript."
-	case targetHasHistory:
-		contextNote = "Note: resuming " + tag + "'s own earlier turns; it still won't see turns from other providers."
-	}
+	contextNote := switchNote(tag, carry, sameScope, targetHasHistory)
 
 	steps := []string{
 		"Saved provider to agents.json",
@@ -317,4 +325,82 @@ func pruneTrailingSwitchTurns(convPath, sessionID string) {
 	for _, t := range turns[:keep] {
 		_ = storage.AppendJSONL(convPath, "wick-conv-v1", sessionID, t)
 	}
+}
+
+// switchNote says what the next turn on tag will remember: the same
+// conversation (same type, history reachable — shared, or copied over at
+// the next spawn), a fresh start with the reason (same type, history
+// unreachable), the target's own earlier turns, or nothing from other
+// providers.
+func switchNote(tag string, carry HistoryCarry, sameScope, targetHasHistory bool) string {
+	switch {
+	case carry.Reason != "":
+		return "Note: starting fresh on " + tag + " — " + carry.Reason + ". It won't see this session's earlier turns."
+	case sameScope && targetHasHistory && carry.Copied:
+		return "Note: continuing the same conversation — this session's history is copied into " + tag + " before its next turn."
+	case sameScope && targetHasHistory:
+		return "Note: continuing the same conversation — " + tag + " resumes this session's transcript."
+	case targetHasHistory:
+		return "Note: resuming " + tag + "'s own earlier turns; it still won't see turns from other providers."
+	}
+	return "Note: " + tag + " won't see earlier turns from other providers in this session — each provider keeps its own context."
+}
+
+// instanceFor finds the instance a "type/name" key names (zero if none).
+func instanceFor(instances []Instance, key string) Instance {
+	for _, ins := range instances {
+		if string(ins.Type)+"/"+ins.Name == key {
+			return ins
+		}
+	}
+	typ, name, _ := strings.Cut(key, "/")
+	return Instance{Type: Type(typ), Name: name}
+}
+
+// HistoryCarry is a type's answer to "can a conversation another instance
+// of mine wrote be resumed on this one".
+type HistoryCarry struct {
+	// Reason, when set, is why it cannot (the switch then starts fresh).
+	Reason string
+	// Copied: it can, but only once the next spawn copies the history
+	// over (the note says so).
+	Copied bool
+}
+
+// HistoryCarrier answers HistoryCarry for one provider type. Types whose
+// instances keep separate stores (omp per profile, opencode per data
+// folder) register one from their own package (RegisterHistoryCarrier in
+// init); a type without one shares a single store, so its history always
+// carries (claude, codex).
+type HistoryCarrier func(from, to Instance, resumeID string) HistoryCarry
+
+var (
+	historyCarriersMu sync.RWMutex
+	historyCarriers   = map[Type]HistoryCarrier{}
+)
+
+// RegisterHistoryCarrier installs t's carrier; nil removes it (tests).
+func RegisterHistoryCarrier(t Type, c HistoryCarrier) {
+	historyCarriersMu.Lock()
+	defer historyCarriersMu.Unlock()
+	if c == nil {
+		delete(historyCarriers, t)
+		return
+	}
+	historyCarriers[t] = c
+}
+
+// carriesOver is the registered carrier's answer for a same-type switch
+// from → to; the same instance, or a type with no carrier, always carries.
+func carriesOver(from, to Instance, resumeID string) HistoryCarry {
+	if from.Name == to.Name {
+		return HistoryCarry{}
+	}
+	historyCarriersMu.RLock()
+	c := historyCarriers[to.Type]
+	historyCarriersMu.RUnlock()
+	if c == nil {
+		return HistoryCarry{}
+	}
+	return c(from, to, resumeID)
 }

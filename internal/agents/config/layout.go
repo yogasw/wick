@@ -55,6 +55,7 @@ func (l Layout) WorkflowRunState(id, runID string) string {
 func (l Layout) WorkflowRunEvents(id, runID string) string {
 	return filepath.Join(l.WorkflowRunDir(id, runID), "events.jsonl")
 }
+
 // WorkflowIndexDir holds the sharded run-summary index files
 // (YYYY-MM-DD-NN.jsonl, max 100 lines each) — sibling to runs/.
 // Lets the Runs panel paginate cheaply without scanning every
@@ -244,6 +245,17 @@ func (l Layout) SessionWorkspace(id string) string {
 // or the server crashed mid-stream; replay these for the operator".
 // Provider-agnostic — claude, codex, gemini, future CLIs all write
 // the same shape via store.Apply.
+// SessionUsage is the session's token ledger — one file, rewritten per
+// turn, keyed by provider. See store/usage.go for why it is not a field
+// on every message.
+func (l Layout) SessionUsage(id string) string { return filepath.Join(l.SessionDir(id), "usage.json") }
+
+// SessionDeliveries records, per assistant turn, whether its reply reached
+// the channel it was posted to (Slack today). See store/delivery.go.
+func (l Layout) SessionDeliveries(id string) string {
+	return filepath.Join(l.SessionDir(id), "deliveries.json")
+}
+
 func (l Layout) SessionInflight(id string) string {
 	return filepath.Join(l.SessionDir(id), "inflight.jsonl")
 }
@@ -269,6 +281,13 @@ func (l Layout) SessionThinking(sessionID, turnID string) string {
 // thinking/<turn_id>/<event_id>.json
 func (l Layout) SessionThinkingEvent(sessionID, turnID, eventID string) string {
 	return filepath.Join(l.SessionThinkingTurnDir(sessionID, turnID), eventID+".json")
+}
+
+// SessionThinkingBlob returns the binary payload file of one trace event
+// (an image/pdf/… a tool returned): thinking/<turn_id>/<blob_ref>.bin.
+// blobRef is the event id, or "<event_id>-p<n>" for the n-th part.
+func (l Layout) SessionThinkingBlob(sessionID, turnID, blobRef string) string {
+	return filepath.Join(l.SessionThinkingTurnDir(sessionID, turnID), blobRef+".bin")
 }
 
 // EnsureLayout creates the three top-level folders if they don't exist.

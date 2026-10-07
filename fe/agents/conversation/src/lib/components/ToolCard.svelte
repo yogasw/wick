@@ -1,16 +1,23 @@
 <script lang="ts">
-  import type { ThreadBlock } from "../types/agents.js";
+  import type { ThreadBlock, TurnEventPayload } from "../types/agents.js";
   import { subAgentStatusCls, subAgentStatusLabel } from "../lifecycleCls.js";
+  import { TraceBody, isBinaryKind, type TraceDisplay, type TraceMedia } from "@wick-fe/common-ui";
+  import type { TraceFiles } from "../api/files.js";
+  import MediaLightbox from "./MediaLightbox.svelte";
 
   type ToolBlock = Extract<ThreadBlock, { kind: "tool" }>;
 
   // onCancel aborts the underlying connector run (per-operation — the agent turn
-  // keeps going and receives a "cancelled" result). onDismiss just removes a
-  // stuck card from the view without touching the backend (used for orphan runs
-  // from before this feature, which carry no runId to cancel).
+  // keeps going and receives a "cancelled" result). onStopTurn is the only lever
+  // that exists for a tool running INSIDE the provider CLI (Bash, Read, Edit…):
+  // wick never sees those as runs it can abort, so the choice is to stop the
+  // agent process or to let the tool finish. onDismiss just removes a stuck card
+  // from the view without touching the backend (orphan runs from before this
+  // feature, which carry no runId and are no longer running anywhere).
   type Props = {
     block: ToolBlock;
     onCancel?: (runId: string) => void;
+    onStopTurn?: () => void;
     onDismiss?: (toolUseId: string) => void;
     // Set when this card belongs to an interrupted/cut-off turn (history path).
     // Such a tool call has no result but is NOT live — show "interrupted", not a
@@ -19,8 +26,38 @@
     // Opens the Sub-agents rail panel on this delegation's child. Only
     // meaningful for wick_delegate cards; omitted elsewhere.
     onOpenSubAgent?: (delegationId: string) => void;
+    // Fetches a large (spilled) result payload by its trace event id when the
+    // user expands the result — keeps the big blob out of the index load.
+    loadEventPayload?: (eventId: string) => Promise<TurnEventPayload>;
+    // Fetches a stored binary (Display.blob_ref) when its chip is clicked.
+    loadBlob?: (ref: string) => Promise<Blob>;
+    // Stats / fetches the file a call named (Read file_path) when the trace
+    // kept no bytes for it, and tells the chip if it is gone or changed.
+    traceFiles?: TraceFiles;
   };
-  let { block, onCancel, onDismiss, interrupted = false, onOpenSubAgent }: Props = $props();
+  let { block, onCancel, onStopTurn, onDismiss, interrupted = false, onOpenSubAgent, loadEventPayload, loadBlob, traceFiles }: Props = $props();
+
+  // A clicked image/pdf chip opens in the same viewer chat media uses.
+  let media = $state<TraceMedia | null>(null);
+  const traceCtx = $derived({
+    loadBlob,
+    onOpenMedia: (m: TraceMedia) => { media = m; },
+    sourcePath: callPath(block.inputDisplay, block.toolInput),
+    calledAt: block.endedAt ?? block.startedAt,
+    statPath: traceFiles?.stat,
+    loadPath: traceFiles?.load,
+  });
+
+  function callPath(d: TraceDisplay | undefined, input: string): string | undefined {
+    if (d?.path) return d.path;
+    try {
+      const o = JSON.parse(input) as Record<string, unknown>;
+      const p = o.file_path ?? o.notebook_path ?? o.path;
+      return typeof p === "string" && p ? p : undefined;
+    } catch {
+      return undefined;
+    }
+  }
 
   let cancelling = $state(false);
 
@@ -30,10 +67,17 @@
     if (block.runId && onCancel) {
       cancelling = true;
       onCancel(block.runId);
+    } else if (onStopTurn) {
+      // No runId: the tool is running inside the provider CLI, so there is
+      // nothing for wick to abort on its own. Dismissing the card here was
+      // worse than useless — it looked like a cancel, hid the evidence, and
+      // left the process running until someone killed the conversation.
+      // Offer the action that actually stops it; the caller confirms.
+      onStopTurn();
     } else if (onDismiss) {
-      // No runId — an orphan/stale card (e.g. from before per-run cancel existed,
-      // or a run whose finish event was lost). Nothing to abort server-side; just
-      // clear it from the view.
+      // Neither: an orphan/stale card (e.g. from before per-run cancel
+      // existed, or a run whose finish event was lost). Nothing is running
+      // any more — just clear it from the view.
       onDismiss(block.toolUseId);
     }
   }
@@ -47,12 +91,99 @@
   // during the 10m shell window the user hit. A tool call on an interrupted
   // turn is NOT running — its result never came because the turn was cut off,
   // so it must read "interrupted", never an eternal spinner.
-  const running = $derived(block.result === undefined && !!block.startedAt && !interrupted);
-  const wasInterrupted = $derived(block.result === undefined && interrupted);
+  //
+  // "Finished" means the result EVENT exists, not that result text is present:
+  // a large (spilled) result has hasResult:true with no inline text until it
+  // is fetched on demand. Live-built blocks don't carry hasResult — there,
+  // text presence stays the signal.
+  const hasResult = $derived(block.hasResult ?? block.result !== undefined);
+  const running = $derived(!hasResult && !!block.startedAt && !interrupted);
+  const wasInterrupted = $derived(!hasResult && interrupted);
+
+  // Large (spilled) result payload, fetched on first expand so the big blob
+  // never rides along with the trace index.
+  let loadedResult = $state<string | null>(null);
+  let loadedTruncated = $state(false);
+  let loadedResultDisplay = $state<TraceDisplay | undefined>(undefined);
+  let resultLoading = $state(false);
+  let resultLoadError = $state(false);
+
+  const displayResult = $derived(block.result ?? loadedResult ?? undefined);
+  const sizeLabel = $derived(
+    block.resultSize ? `${(block.resultSize / 1024).toFixed(1)} KB` : ""
+  );
+
+  async function fetchLargeResult(): Promise<void> {
+    if (resultLoading || loadedResult !== null || !loadEventPayload || !block.resultEventId) return;
+    resultLoading = true;
+    resultLoadError = false;
+    try {
+      const p = await loadEventPayload(block.resultEventId);
+      loadedResult = p.text ?? "";
+      loadedTruncated = p.truncated === true;
+      loadedResultDisplay = p.display;
+    } catch {
+      resultLoadError = true;
+    } finally {
+      resultLoading = false;
+    }
+  }
+
+  function toggleResult(): void {
+    resultCollapsed = !resultCollapsed;
+    if (!resultCollapsed && block.resultLarge && block.result === undefined) void fetchLargeResult();
+  }
+
+  // Big ARGUMENTS spill exactly like big results (payload = text +
+  // tool_input in the store) — same sidecar, keyed by the tool_use's own
+  // event_id. Without this, a 12 KB command reads as "no input".
+  let loadedInput = $state<string | null>(null);
+  let loadedInputTruncated = $state(false);
+  let loadedInputDisplay = $state<TraceDisplay | undefined>(undefined);
+  let inputLoading = $state(false);
+  let inputLoadError = $state(false);
+
+  const displayInput = $derived(block.toolInput || loadedInput || "");
+  const inputSizeLabel = $derived(
+    block.toolInputSize ? `${(block.toolInputSize / 1024).toFixed(1)} KB` : ""
+  );
+
+  async function fetchLargeInput(): Promise<void> {
+    if (inputLoading || loadedInput !== null || !loadEventPayload || !block.toolInputEventId) return;
+    inputLoading = true;
+    inputLoadError = false;
+    try {
+      const p = await loadEventPayload(block.toolInputEventId);
+      loadedInput = p.tool_input ?? "";
+      loadedInputTruncated = p.truncated === true;
+      loadedInputDisplay = p.display;
+    } catch {
+      inputLoadError = true;
+    } finally {
+      inputLoading = false;
+    }
+  }
+
+  function toggleInput(): void {
+    inputCollapsed = !inputCollapsed;
+    if (!inputCollapsed && block.toolInputLarge && !block.toolInput) void fetchLargeInput();
+  }
 
   // The ✕ is shown on any running tool. It cancels the op when a runId is known
   // (a live run), otherwise it just dismisses the stuck card from the UI.
-  const canCancel = $derived(running && (!!onCancel || !!onDismiss));
+  const canCancel = $derived(running && (!!onCancel || !!onStopTurn || !!onDismiss));
+
+  // What the ✕ will actually do, said before it is clicked. A connector run
+  // is cancelled on its own; anything else can only be stopped by stopping
+  // the agent, and a button that does not say so is how somebody ends up
+  // clicking it four times.
+  const cancelTitle = $derived(
+    block.runId && onCancel
+      ? "Cancel this operation"
+      : onStopTurn
+        ? "Stop the agent — this tool runs inside the CLI, so it cannot be cancelled on its own"
+        : "Dismiss this card",
+  );
 
   // now ticks once a second ONLY while something on the page is running, so
   // the running timer updates without a permanent interval.
@@ -78,10 +209,16 @@
     return new Date(ms).toTimeString().slice(0, 8);
   }
 
-  const prettyInput = $derived(
-    block.toolInput
-      ? (() => { try { return JSON.stringify(JSON.parse(block.toolInput), null, 2); } catch { return block.toolInput; } })()
-      : ""
+  // The payload's display carries the body a Large index row lacks.
+  const inputDisplay = $derived(loadedInputDisplay ?? block.inputDisplay);
+  const resultDisplay = $derived(loadedResultDisplay ?? block.resultDisplay);
+  // Collapsed result line: a binary reads as its chip text, never base64.
+  const resultPreview = $derived(
+    resultDisplay && isBinaryKind(resultDisplay.kind)
+      ? [resultDisplay.name, resultDisplay.summary].filter(Boolean).join(" · ")
+      : displayResult !== undefined
+        ? displayResult.slice(0, 80).replace(/\n/g, " ") + (displayResult.length > 80 ? "…" : "")
+        : "",
   );
 
   // ── sub-agent delegation summary ────────────────────────────────
@@ -96,13 +233,14 @@
     if (!isDelegate) return null;
     let profile = "";
     try {
-      profile = JSON.parse(block.toolInput || "{}")?.profile ?? "";
+      profile = JSON.parse(displayInput || "{}")?.profile ?? "";
     } catch { /* malformed input — fall back to the result payload */ }
     let status = "";
     let text = "";
     let delegationId = "";
     try {
-      const r = JSON.parse(block.result || "{}");
+      // displayResult so a spilled delegate result fills in once fetched.
+      const r = JSON.parse(displayResult || "{}");
       status = r?.status ?? "";
       text = r?.result ?? "";
       delegationId = r?.delegation_id ?? "";
@@ -116,6 +254,31 @@
     (delegateInfo?.text ?? "").split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? "",
   );
 
+  // Tools like Bash/Agent carry a human-readable `description` in their
+  // input ("List files with sizes and count") — surface it in the header
+  // so the collapsed card says WHY the tool ran, not just which tool.
+  const inputDescription = $derived.by(() => {
+    if (!displayInput) return "";
+    try {
+      const d = (JSON.parse(displayInput) as { description?: unknown }).description;
+      return typeof d === "string" ? d.trim() : (inputDisplay?.summary ?? "");
+    } catch {
+      return inputDisplay?.summary ?? "";
+    }
+  });
+
+  // Spilled, not-yet-fetched input gets a size hint in the description slot
+  // so the collapsed header says what expanding will pull instead of nothing.
+  const inputPlaceholder = $derived(
+    block.toolInputLarge && !displayInput
+      ? `input ${inputSizeLabel}${inputSizeLabel ? " — " : ""}click to load`
+      : ""
+  );
+
+  // MCP-namespaced names (mcp__wick__wick_set_title) read as noise in the
+  // header — show the bare tool name; the full name stays in the tooltip.
+  const displayName = $derived(block.toolName.replace(/^mcp__.+?__/, ""));
+
   const duration = $derived(fmtDuration(block.startedAt, block.endedAt));
   const startLabel = $derived(fmtTime(block.startedAt));
   // Live elapsed while running (now − startedAt), formatted the same way.
@@ -127,19 +290,19 @@
 <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs">
   <button
     type="button"
-    onclick={() => (inputCollapsed = !inputCollapsed)}
+    onclick={toggleInput}
     class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
   >
     <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5">
       <path d="M2 4h4v8H2zM10 4h4v8h-4z" stroke-linejoin="round"></path>
       <path d="M6 8h4" stroke-linecap="round"></path>
     </svg>
-    <span class="font-mono font-medium text-black-900 dark:text-white-100">{block.toolName}</span>
-    {#if startLabel}
-      <span class="font-mono text-[10px] text-black-500 dark:text-black-600">{startLabel}</span>
-    {/if}
-    {#if duration}
-      <span class="font-mono text-[10px] text-black-500 dark:text-black-600">· {duration}</span>
+    <span class="font-mono font-medium text-black-900 dark:text-white-100 shrink-0" title={block.toolName}>{displayName}</span>
+    <!-- "Why it ran" hugs the name; flex-1 also works as the spacer that
+         pushes the metadata cluster right when there's no description. -->
+    <span data-tool-description class="flex-1 min-w-0 truncate text-black-700 dark:text-black-600 {inputDescription ? '' : 'italic opacity-70'}">{inputDescription || inputPlaceholder}</span>
+    {#if duration || startLabel}
+      <span class="font-mono text-[10px] text-black-500 dark:text-black-600 shrink-0">{duration}{duration && startLabel ? " · " : ""}{startLabel}</span>
     {/if}
     {#if running}
       <span class="ml-auto flex items-center gap-1.5 text-[10px] font-medium text-green-600 dark:text-green-400 shrink-0">
@@ -152,8 +315,8 @@
         <span
           role="button"
           tabindex="0"
-          title={block.runId ? "Cancel this operation (the agent keeps going)" : "Dismiss this stuck card"}
-          aria-label={block.runId ? "Cancel this operation" : "Dismiss this stuck card"}
+          title={cancelTitle}
+          aria-label={cancelTitle}
           aria-disabled={cancelling}
           onclick={cancel}
           onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") cancel(e); }}
@@ -207,18 +370,29 @@
 
   {#if !inputCollapsed}
     <div class="border-t border-white-300 dark:border-navy-600">
-      {#if prettyInput}
-        <pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">{prettyInput}</pre>
+      {#if inputLoading}
+        <p class="px-3 py-2 italic text-black-500 dark:text-black-600">loading…</p>
+      {:else if inputLoadError}
+        <div class="flex items-center gap-2 px-3 py-2 text-red-600 dark:text-red-400">
+          <span>failed to load input</span>
+          <button type="button" onclick={() => void fetchLargeInput()} class="underline hover:no-underline">retry</button>
+        </div>
+      {:else if displayInput}
+        <TraceBody display={inputDisplay} raw={displayInput} toolName={block.toolName} call truncated={loadedInputTruncated} ctx={traceCtx} />
+      {:else if block.toolInputLarge}
+        <!-- No fetcher wired (e.g. a synthetic turn) — the input exists,
+             it just can't be pulled from here. Never claim "no input". -->
+        <p class="px-3 py-2 italic text-black-500 dark:text-black-600">{inputSizeLabel}{inputSizeLabel ? " — " : ""}payload not loaded</p>
       {:else}
         <p class="px-3 py-2 text-black-500 dark:text-black-600 italic">no input</p>
       {/if}
     </div>
   {/if}
-  {#if block.result !== undefined}
+  {#if hasResult}
     <div class="border-t border-white-300 dark:border-navy-600">
       <button
         type="button"
-        onclick={() => (resultCollapsed = !resultCollapsed)}
+        onclick={toggleResult}
         class={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors ${block.isError ? "text-red-600 dark:text-red-400" : "text-black-600 dark:text-black-700"}`}
       >
         <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -230,7 +404,13 @@
           {/if}
         </svg>
         <span class="text-[10px] uppercase tracking-wide shrink-0">{block.isError ? "error" : "result"}</span>
-        <span class="ml-2 truncate font-mono opacity-60">{block.result.slice(0, 80).replace(/\n/g, " ")}{block.result.length > 80 ? "…" : ""}</span>
+        {#if displayResult !== undefined}
+          <span class="ml-2 truncate font-mono opacity-60">{resultPreview}</span>
+        {:else}
+          <!-- Spilled payload not fetched yet — show its size so the reader
+               knows the result exists and what expanding will pull. -->
+          <span class="ml-2 truncate opacity-60">{sizeLabel}{sizeLabel ? " — " : ""}click to load</span>
+        {/if}
         <svg
           data-chevron
           viewBox="0 0 16 16"
@@ -245,9 +425,37 @@
       </button>
       {#if !resultCollapsed}
         <div class="border-t border-white-300 dark:border-navy-600">
-          <pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">{block.result}</pre>
+          {#if resultLoading}
+            <p class="px-3 py-2 italic text-black-500 dark:text-black-600">loading…</p>
+          {:else if resultLoadError}
+            <div class="flex items-center gap-2 px-3 py-2 text-red-600 dark:text-red-400">
+              <span>failed to load result</span>
+              <button type="button" onclick={() => void fetchLargeResult()} class="underline hover:no-underline">retry</button>
+            </div>
+          {:else if displayResult !== undefined}
+            <TraceBody
+              display={resultDisplay}
+              raw={displayResult}
+              toolName={block.toolName}
+              isError={block.isError}
+              callDisplay={inputDisplay}
+              callInput={displayInput}
+              truncated={loadedTruncated}
+              ctx={traceCtx}
+            />
+          {:else}
+            <!-- No fetcher wired (e.g. a synthetic turn) — nothing to show. -->
+            <p class="px-3 py-2 italic text-black-500 dark:text-black-600">payload not loaded</p>
+          {/if}
         </div>
       {/if}
     </div>
   {/if}
 </div>
+
+{#if media}
+  <MediaLightbox
+    items={[{ url: media.url, name: media.name, kind: media.kind, note: media.note }]}
+    onClose={() => { media = null; }}
+  />
+{/if}

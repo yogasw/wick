@@ -1,5 +1,10 @@
 package project
 
+import (
+	"slices"
+	"strings"
+)
+
 // TicketField is one custom field in a project's ticket schema. Values
 // live per session in session.Meta.Ticket.Fields keyed by Key.
 type TicketField struct {
@@ -8,6 +13,10 @@ type TicketField struct {
 	Type     string   `json:"type"`  // "text" | "select"
 	Options  []string `json:"options,omitempty"`
 	Required bool     `json:"required,omitempty"`
+	// ShowOnCard puts this field's value on the board card. Off by default:
+	// a card is a glance, and every chip on it is one more thing between the
+	// eye and the title. The full set is always on the ticket's own page.
+	ShowOnCard bool `json:"show_on_card,omitempty"`
 }
 
 // TicketStatus is one column on a project's board.
@@ -58,6 +67,98 @@ type TicketConfig struct {
 	// starts as. Rules are tried in order and the FIRST match wins, so a
 	// narrow exception belongs above the broad rule it carves out of.
 	AutoCreate []AutoCreateRule `json:"auto_create,omitempty"`
+
+	// Integrations wires the board to the outside world — outbound webhooks,
+	// the token-authed REST surface, and the custom ticket buttons. Zero
+	// value = all off.
+	Integrations TicketIntegrations `json:"integrations,omitempty"`
+}
+
+// Button placements — WHERE a custom button is drawn, and therefore what
+// clicking it is about.
+//
+// A ticket button acts on the one ticket whose page it sits on; a board
+// button acts on the LIST the toolbar is filtering, and so carries the
+// filter (who, which columns) instead of a single ticket. Two different
+// questions, so they are two different events — see ticket.EventAction and
+// ticket.EventBoardAction.
+//
+// The empty string means ButtonOnTicket: every button saved before this
+// field existed was a ticket-page button, and an upgrade must not move them
+// onto the board.
+const (
+	ButtonOnTicket = "ticket"
+	ButtonOnBoard  = "board"
+)
+
+// TicketButton is one custom action, rendered either on a ticket's page or
+// in the ticket list's toolbar (see Placement).
+//
+// Clicking it POSTs an event envelope (the actor, this button's id, and
+// either the full ticket or the list's filter) to URL and reports the
+// response to the clicker. One label, one URL — anything smarter belongs in
+// the receiver.
+type TicketButton struct {
+	// ID is stable across edits, minted on first save. It travels in the
+	// event so a receiver serving several buttons can tell them apart.
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	URL   string `json:"url"`
+	// Placement is ButtonOnTicket (default) or ButtonOnBoard.
+	Placement string `json:"placement,omitempty"`
+}
+
+// On reports whether this button belongs at placement, treating an empty
+// Placement as ButtonOnTicket.
+func (b TicketButton) On(placement string) bool {
+	own := b.Placement
+	if own == "" {
+		own = ButtonOnTicket
+	}
+	return own == placement
+}
+
+// ButtonByID finds one of the project's ticket buttons.
+func (c TicketConfig) ButtonByID(id string) (TicketButton, bool) {
+	for _, b := range c.Integrations.Buttons {
+		if b.ID == id && strings.TrimSpace(b.URL) != "" {
+			return b, true
+		}
+	}
+	return TicketButton{}, false
+}
+
+// ButtonsOn returns the project's buttons for one placement, in config
+// order — what a page renders.
+func (c TicketConfig) ButtonsOn(placement string) []TicketButton {
+	var out []TicketButton
+	for _, b := range c.Integrations.Buttons {
+		if strings.TrimSpace(b.URL) != "" && b.On(placement) {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// CardFields filters a ticket's field values down to what the board card
+// draws: schema fields explicitly marked show_on_card, in no particular
+// order (the client orders by schema). Values written outside the schema —
+// the REST surface accepts any key — stay stored and stay on the ticket's
+// page, but never reach a card: the board is a glance, not a record.
+func (c TicketConfig) CardFields(values map[string]string) map[string]string {
+	var out map[string]string
+	for _, f := range c.Fields {
+		if !f.ShowOnCard {
+			continue
+		}
+		if v, ok := values[f.Key]; ok && v != "" {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[f.Key] = v
+		}
+	}
+	return out
 }
 
 // Channel kinds an AutoCreateRule can be narrowed to. A DM is somebody's
@@ -192,4 +293,77 @@ func DefaultTicketFields() []TicketField {
 		{Key: "type", Label: "Type", Type: "select", Options: []string{"bug", "incident", "task", "question"}},
 		{Key: "priority", Label: "Priority", Type: "select", Options: []string{"low", "normal", "high", "urgent"}},
 	}
+}
+
+// TicketIntegrations wires a project's board to the outside world: outbound
+// webhooks that fire when a ticket changes, and a token-authed REST surface
+// so another system can create and move tickets.
+//
+// The zero value means both are off, so every meta.json written before this
+// field existed decodes to "no integrations" and nothing starts talking to
+// the network because of an upgrade.
+type TicketIntegrations struct {
+	// APIEnabled opens the ticket REST endpoints to Personal Access Token
+	// auth for this project. Off by default: the board is reachable from
+	// the browser either way, and a project should have to opt in before a
+	// bearer token can move its work.
+	APIEnabled bool `json:"api_enabled,omitempty"`
+	// Webhooks are the endpoints notified when this project's tickets
+	// change. Order is display order only.
+	Webhooks []TicketWebhook `json:"webhooks,omitempty"`
+	// Buttons are custom actions on a ticket's page ("Sync to Notion") or
+	// in the ticket list's toolbar ("Pull my tickets from Notion"), by
+	// their Placement. Clicking one POSTs to that button's URL — see
+	// TicketButton.
+	Buttons []TicketButton `json:"buttons,omitempty"`
+}
+
+// TicketWebhook is one outbound endpoint.
+type TicketWebhook struct {
+	// ID is stable across edits so a delivery log can be kept per webhook
+	// even as its URL or name is reworded.
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+	URL  string `json:"url"`
+	// Secret keys the HMAC-SHA256 signature sent as X-Wick-Signature. Empty
+	// means unsigned — allowed (a receiver on a private network may not
+	// need it) but the UI nudges against it.
+	//
+	// Never rendered back to a client: the API redacts it on read, and a
+	// blank value on save means "keep the stored one" rather than "clear
+	// it", so editing a webhook's URL cannot silently unsign it.
+	Secret string `json:"secret,omitempty"`
+	// Events filters which events reach this endpoint. Empty means all of
+	// them, which is the least surprising default for a fresh webhook.
+	Events []string `json:"events,omitempty"`
+	// Headers are extra request headers, for receivers that need a static
+	// API key or a routing hint alongside the signature.
+	Headers map[string]string `json:"headers,omitempty"`
+	// Enabled parks an endpoint without losing how it was configured.
+	Enabled bool `json:"enabled"`
+}
+
+// WantsEvent reports whether this webhook should receive event name.
+func (w TicketWebhook) WantsEvent(name string) bool {
+	if !w.Enabled {
+		return false
+	}
+	if len(w.Events) == 0 {
+		return true // no filter = everything
+	}
+	return slices.Contains(w.Events, name)
+}
+
+// ActiveWebhooks returns the enabled webhooks that want event name.
+func (c TicketConfig) ActiveWebhooks(event string) []TicketWebhook {
+	var out []TicketWebhook
+	for _, w := range c.Integrations.Webhooks {
+		if strings.TrimSpace(w.URL) == "" {
+			continue // half-written row in the editor
+		}
+		if w.WantsEvent(event) {
+			out = append(out, w)
+		}
+	}
+	return out
 }

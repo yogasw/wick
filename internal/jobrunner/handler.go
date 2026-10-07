@@ -45,6 +45,7 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 	}
 	mux.Handle("GET /jobs/{key}", auth(h.jobPage))
 	mux.Handle("POST /jobs/{key}/run", auth(h.runJob))
+	mux.Handle("POST /jobs/{key}/cancel", auth(h.cancelJob))
 }
 
 func (h *Handler) jobPage(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +79,26 @@ func (h *Handler) runJob(w http.ResponseWriter, r *http.Request) {
 	if wantsJSON(r) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+		return
+	}
+	http.Redirect(w, r, "/jobs/"+key, http.StatusFound)
+}
+
+func (h *Handler) cancelJob(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if err := h.svc.CancelJob(r.Context(), key); err != nil {
+		if wantsJSON(r) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		h.renderWithError(w, r, key, err.Error())
+		return
+	}
+	if wantsJSON(r) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "cancelled"})
 		return
 	}
 	http.Redirect(w, r, "/jobs/"+key, http.StatusFound)

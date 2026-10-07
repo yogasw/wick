@@ -64,7 +64,7 @@ func TestVisionEndToEnd(t *testing.T) {
 	assertHasPath(t, "currentUserContent", cur, imgPath)
 
 	// 2) loadHistory (replay path) must also carry the image on the user turn.
-	hist := loadHistory(sessionDir, 0)
+	hist := loadHistory(sessionDir, 0, store.SenderName)
 	var userTurn *genai.Content
 	for _, c := range hist {
 		if c != nil && c.Role == genai.RoleUser {

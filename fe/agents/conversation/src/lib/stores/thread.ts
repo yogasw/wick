@@ -14,11 +14,17 @@ import type { Writable } from "svelte/store";
 import type {
   AgentEvent,
   Attachment,
+  CardPostback,
+  CardState,
   ConversationTurn,
   LiveTurn,
+  Sender,
   ThreadBlock,
   TypingState,
 } from "../types/agents.js";
+
+/** Provider types a lifecycle edge may name in its data. */
+const PROVIDER_TYPES = new Set(["claude", "codex", "gemini", "opencode", "omp", "wick", "slack-remote", "a2a-remote", "plugin-remote"]);
 
 export interface ThreadMeta {
   title?: string;
@@ -35,9 +41,41 @@ export interface ThreadStore {
   turns: Writable<ConversationTurn[]>;
   live: Writable<LiveTurn | null>;
   typing: Writable<TypingState>;
+  /* The newest context-window reading, in tokens; 0 until one arrives.
+
+     The ledger behind the context panel is written when a turn ENDS,
+     which is the moment the number stops being interesting — a turn that
+     runs for minutes leaves the meter frozen on the previous turn for as
+     long as anyone is watching it. Providers that report the level per
+     request (claude does, on every `assistant` frame) send it along with
+     whatever event that frame produced, and this is where it lands.
+
+     It cannot drift from the figure the turn finally records: that one
+     is the last frame's reading, which is the last value seen here. */
+  contextUsed: Writable<number>;
+  /* When the turn currently running started, in epoch ms; 0 when nothing
+     is running.
+
+     A turn can go quiet for minutes — a long tool call, a model that is
+     still thinking — and the panel next to the composer had nothing to
+     say about it until the turn finished and the ledger moved. This is
+     the one fact that makes it live, and it comes from the wick event
+     stream rather than from any CLI, so it means the same thing on
+     claude, codex and wick's own provider.
+
+     Taken from the event's own clock where there is one, so a page
+     reloaded mid-turn shows how long the turn has really been going
+     rather than restarting the count at zero. */
+  turnStartedAt: Writable<number>;
   lifecycle: Writable<LifecycleState>;
   meta: Writable<ThreadMeta>;
+  /* actioncard state per card id, as the conversation endpoint computes it
+     over the whole thread; a live postback locks its card here too. */
+  cards: Writable<Record<string, CardState>>;
   setHistory(turns: ConversationTurn[]): void;
+  /* Insert an older history page (infinite scroll up) before the turns
+     already loaded, dropping any turn whose id is already present. */
+  prependHistory(older: ConversationTurn[]): void;
   appendUserTurn(text: string, attachments?: Attachment[]): void;
   handleEvent(ev: AgentEvent): void;
   /* Remove a stuck tool card from the live turn (a run with no runId to
@@ -59,10 +97,27 @@ export function createThreadStore(): ThreadStore {
   const turns = writable<ConversationTurn[]>([]);
   const live = writable<LiveTurn | null>(null);
   const typing = writable<TypingState>({ active: false });
+  const contextUsed = writable<number>(0);
+  const turnStartedAt = writable<number>(0);
   const lifecycle = writable<LifecycleState>({ state: "", pid: 0, substate: "", at: 0 });
+
+  /* Start the clock, once per turn. `at` is the event's own timestamp
+     when it carries one — on a reload mid-turn that is when the work
+     actually began, which is the whole point of showing it. Later events
+     in the same turn leave it alone: a substate change is not a new
+     turn, and resetting there would report "2s" on a turn five minutes
+     old. */
+  function startClock(at?: number): void {
+    turnStartedAt.update((t) => (t > 0 ? t : at && at > 0 ? at : Date.now()));
+  }
+  function stopClock(): void {
+    turnStartedAt.set(0);
+  }
   const meta = writable<ThreadMeta>({});
+  const cards = writable<Record<string, CardState>>({});
 
   function markWorking(): void {
+    startClock();
     lifecycle.update((l) =>
       l.state === "killed" || l.state === "working" ? l : { ...l, state: "working" }
     );
@@ -76,6 +131,11 @@ export function createThreadStore(): ThreadStore {
     }
     return current;
   }
+
+  /* Length of live.text when the last thinking fragment was folded in. Text
+     that streams after it closes the thinking block, the same way the store
+     closes one when it flushes a text segment (store.go flushTextSegmentLocked). */
+  let thinkingTextMark = 0;
 
   function finalize() {
     const current = get(live);
@@ -101,7 +161,8 @@ export function createThreadStore(): ThreadStore {
                 text: b.result,
               };
             }
-            return { type: "thinking", text: b.text };
+            // thinking / text / raw block kinds match their event type names.
+            return { type: b.kind, text: b.text };
           }),
         attachments: [],
       };
@@ -109,23 +170,49 @@ export function createThreadStore(): ThreadStore {
     }
     live.set(null);
     typing.set({ active: false });
+    stopClock();
+  }
+
+  /* The pool's lifecycle edge carries the PROVIDER in data ("claude",
+     "claude/engineer"), a snapshot carries the real substate ("thinking",
+     "running_tool"). A provider is not something the agent is doing:
+     taken as a substate it renders "running claude/engineer…" and swaps
+     the label back and forth through a turn. */
+  function lifecycleSubstate(data: string | undefined, prev: string | undefined): string {
+    const d = data ?? "";
+    if (d.includes("/") || PROVIDER_TYPES.has(d)) return prev ?? "";
+    return d;
   }
 
   function handleEvent(ev: AgentEvent): void {
+    /* Before the switch: the frame carrying the newest level is often one
+       the switch ignores — a suppressed duplicate of text that already
+       streamed arrives as `unknown`. */
+    if (typeof ev.context_used === "number" && ev.context_used > 0) {
+      contextUsed.set(ev.context_used);
+    }
     switch (ev.type) {
       case "session_start": {
         typing.set({ active: true });
+        startClock(ev.at);
         break;
       }
 
       case "lifecycle": {
         const lc = ev.lifecycle ?? "";
-        if (lc === "idle" || lc === "killed") {
+        if (lc === "killed" || (lc === "idle" && get(live) === null)) {
           typing.update((t) => ({ ...t, active: false, toolName: undefined }));
+          stopClock();
+        } else if (lc === "idle") {
+          // An idle edge while the turn is still streaming: its done event
+          // (which finalizes and clears typing) is on its way. Clearing here
+          // would drop the indicator for a moment and bounce the thread.
         } else if (lc === "spawning") {
           typing.set({ active: true, substate: "spawning" });
+          startClock(ev.at);
         } else if (lc === "working") {
-          typing.update((t) => ({ active: true, substate: ev.data ?? "", toolName: t.toolName }));
+          typing.update((t) => ({ active: true, substate: lifecycleSubstate(ev.data, t.substate), toolName: t.toolName }));
+          startClock(ev.at);
         }
         const lcState = (lc === "spawning" || lc === "working" || lc === "idle" || lc === "killed")
           ? lc as LifecycleState["state"]
@@ -162,9 +249,22 @@ export function createThreadStore(): ThreadStore {
         break;
       }
 
+      // Claude streams thinking as thinking_delta fragments ("Mas", "ih bocor:",
+      // " da", …), one event each. The store folds consecutive fragments into a
+      // single thinking event (store.go, case event.Thinking), and that folded
+      // form is what a reload renders — so fold them here too, or a live turn
+      // shows one bubble per fragment and only looks right after a reload.
       case "thinking": {
         const lt = ensureLive();
-        lt.blocks = [...lt.blocks, { kind: "thinking", text: ev.data ?? "" }];
+        const chunk = ev.data ?? "";
+        const last = lt.blocks[lt.blocks.length - 1];
+        const textSince = lt.text.slice(thinkingTextMark);
+        if (last && last.kind === "thinking" && textSince.trim() === "") {
+          lt.blocks = [...lt.blocks.slice(0, -1), { kind: "thinking", text: last.text + chunk }];
+        } else {
+          lt.blocks = [...lt.blocks, { kind: "thinking", text: chunk }];
+        }
+        thinkingTextMark = lt.text.length;
         live.set(lt);
         markWorking();
         break;
@@ -278,10 +378,18 @@ export function createThreadStore(): ThreadStore {
         // filters "ui" out) — those render optimistically via appendUserTurn.
         let text = "";
         let source = "";
+        // Who sent it, when the channel resolved one. Carried on the event so
+        // the live turn shows the same sender chip a reloaded one does.
+        let sender: Sender | undefined;
         try {
-          const d = JSON.parse(ev.data ?? "{}") as { text?: string; source?: string };
+          const d = JSON.parse(ev.data ?? "{}") as {
+            text?: string;
+            source?: string;
+            sender?: Sender;
+          };
           text = d.text ?? "";
           source = d.source ?? "";
+          sender = d.sender;
         } catch (_) {}
         if (text.trim()) {
           const userTurn: ConversationTurn = {
@@ -291,6 +399,7 @@ export function createThreadStore(): ThreadStore {
             provider: "",
             text,
             source,
+            sender,
             timestamp: Date.now(),
             truncated: false,
             interrupted: false,
@@ -300,6 +409,77 @@ export function createThreadStore(): ThreadStore {
           };
           turns.update((ts) => [...ts, userTurn]);
         }
+        break;
+      }
+
+      case "system_event": {
+        // A turn the server recorded on its own — agent_created,
+        // access_changed, mention_handoff, hop_limit, input_request, … — pushed
+        // live as the same turn it wrote to the transcript. Kept under its real
+        // turn_id so a replayed event (stream resubscribe) and the reload that
+        // follows recognise it instead of drawing it twice. Turns that share a
+        // fold key (task_id, ask_id, approval_id) are folded when rendered.
+        // The legacy `mention_handoff` event carries the same turn and is
+        // deliberately ignored now (falls to default).
+        try {
+          const d = JSON.parse(ev.data ?? "{}") as Partial<ConversationTurn> & { ts?: string };
+          if (d.role === "system" && d.kind) {
+            const id = d.turn_id ? String(d.turn_id) : `sysev-${Date.now()}`;
+            const turn: ConversationTurn = {
+              turn_id: id,
+              role: "system",
+              agent: d.agent ?? "",
+              provider: "",
+              text: d.text ?? "",
+              kind: d.kind,
+              extras: d.extras ?? {},
+              ts: d.ts,
+              timestamp: Date.now(),
+              truncated: false,
+              interrupted: false,
+              has_trace: false,
+              events: [],
+              attachments: [],
+            };
+            turns.update((ts) => (ts.some((t) => t.turn_id === id) ? ts : [...ts, turn]));
+          }
+        } catch (_) {}
+        break;
+      }
+
+      case "postback": {
+        // An actioncard click the server accepted (from this tab or another).
+        // Its user turn is not echoed as user_message, so draw the chip and
+        // lock the card here; the reload swaps in the persisted twin.
+        try {
+          const d = JSON.parse(ev.data ?? "{}") as { postback?: CardPostback; text?: string };
+          const pb = d.postback;
+          if (pb?.card_id) {
+            cards.update((c) => {
+              const st = c[pb.card_id];
+              return st ? { ...c, [pb.card_id]: { ...st, locked: true, postback: pb } } : c;
+            });
+            const text = d.text ?? "";
+            turns.update((ts) =>
+              ts.some((t) => t.role === "user" && t.postback && t.text === text)
+                ? ts
+                : [...ts, {
+                    turn_id: `postback-${Date.now()}`,
+                    role: "user",
+                    agent: "",
+                    provider: "",
+                    text,
+                    postback: pb,
+                    timestamp: Date.now(),
+                    truncated: false,
+                    interrupted: false,
+                    has_trace: false,
+                    events: [],
+                    attachments: [],
+                  }],
+            );
+          }
+        } catch (_) {}
         break;
       }
 
@@ -416,8 +596,11 @@ export function createThreadStore(): ThreadStore {
     turns,
     live,
     typing,
+    contextUsed,
+    turnStartedAt,
     lifecycle,
     meta,
+    cards,
     // dismissToolBlock removes a stuck tool card from the live turn (a run with
     // no runId to cancel — an orphan from before per-run cancel, or one whose
     // finish event was lost). Purely a view cleanup; the backend is untouched.
@@ -450,29 +633,69 @@ export function createThreadStore(): ThreadStore {
           t.turn_id.startsWith("live-") ||
           t.turn_id.startsWith("error-") ||
           t.turn_id.startsWith("warning-") ||
-          t.turn_id.startsWith("local-user-");
+          t.turn_id.startsWith("local-user-") ||
+          t.turn_id.startsWith("postback-");
+
+        // Newlines are normalised out of the key. A message sent WITH a file
+        // goes as multipart, and form encoding rewrites every newline to
+        // CRLF — so the persisted copy of a multi-line message differed from
+        // the one this store echoed, its twin was never recognised, and the
+        // message sat on screen twice until a reload. The server no longer
+        // stores it that way; this stops the match depending on that.
+        //
+        // The "[routed] …" note goes too. When a message @mentions an agent
+        // the server appends that note to the copy it stores, while the echo
+        // here holds only what was typed — so the twin was never found, the
+        // echo survived as pending, and after the refetch the message sat at
+        // the BOTTOM of the thread, below the handoff and the replies it
+        // started. The bubble hides the note anyway (ThreadMessage).
+        const keyOf = (t: ConversationTurn) => {
+          let text = (t.text ?? "").replace(/\r\n/g, "\n");
+          if (t.role === "user") {
+            const at = text.lastIndexOf("\n\n[routed]");
+            if (at >= 0) text = text.slice(0, at);
+          }
+          return `${t.role} ${text.trim()}`;
+        };
 
         const localByKey = new Map<string, ConversationTurn>();
         for (const t of cur) {
           if (!isLocal(t)) continue;
-          const key = `${t.role} ${t.text}`;
+          const key = keyOf(t);
           if (!localByKey.has(key)) localByKey.set(key, t);
         }
 
         const merged = newTurns.map((t) => {
           if (t.events && t.events.length > 0) return t;
-          const twin = localByKey.get(`${t.role} ${t.text}`);
+          const twin = localByKey.get(keyOf(t));
           if (twin && twin.events && twin.events.length > 0) {
             return { ...t, events: twin.events, has_trace: true };
           }
           return t;
         });
 
-        const persistedKeys = new Set(newTurns.map((t) => `${t.role} ${t.text}`));
-        const pendingLocal = cur.filter(
-          (t) => isLocal(t) && !persistedKeys.has(`${t.role} ${t.text}`),
-        );
-        return [...merged, ...pendingLocal];
+        const persistedKeys = new Set(newTurns.map(keyOf));
+        const pendingLocal = cur.filter((t) => isLocal(t) && !persistedKeys.has(keyOf(t)));
+        // Pagination: `newTurns` may be only the LATEST window (limit=N), while
+        // `cur` still holds older pages scrolled in via prependHistory. Keep
+        // everything in `cur` that precedes the window's first turn; a full
+        // (unpaginated) reload matches at index 0, so nothing is kept and the
+        // old replace-all semantics hold.
+        const firstId = newTurns[0]?.turn_id;
+        const winStart = firstId ? cur.findIndex((t) => t.turn_id === firstId) : -1;
+        const olderPrefix = winStart > 0 ? cur.slice(0, winStart) : [];
+
+        return [...olderPrefix, ...merged, ...pendingLocal];
+      });
+    },
+    prependHistory(older) {
+      if (older.length === 0) return;
+      turns.update((cur) => {
+        // Turns persisted before turn_id existed have no id — they can't be
+        // deduped, so always keep them (pages are disjoint ranges anyway).
+        const have = new Set(cur.map((t) => t.turn_id).filter(Boolean));
+        const fresh = older.filter((t) => !t.turn_id || !have.has(t.turn_id));
+        return fresh.length > 0 ? [...fresh, ...cur] : cur;
       });
     },
     appendUserTurn,
@@ -480,6 +703,7 @@ export function createThreadStore(): ThreadStore {
     handleKilledLocally() {
       finalize();
       typing.set({ active: false });
+      stopClock();
       lifecycle.update((l) => (l.state === "killed" ? l : { ...l, state: "killed" }));
     },
   };

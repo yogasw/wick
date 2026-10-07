@@ -9,6 +9,15 @@ export type Schedule = {
   session_id: string;
   session_label?: string;
   created_by: string;
+  /* Identity. owner_user_id is whose schedule it is; run_as_user_id is an
+     admin override; effective_run_as is what the runner will actually use,
+     and effective_run_as_name its display name. Empty effective_run_as means
+     the fire is attached to NOBODY and falls back to wick's internal
+     principal, which carries no access tags — worth saying out loud. */
+  owner_user_id?: string;
+  run_as_user_id?: string;
+  effective_run_as?: string;
+  effective_run_as_name?: string;
   kind: string; // once | recurring
   run_at: string;
   status: string; // pending | active | done | cancelled | failed

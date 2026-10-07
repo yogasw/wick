@@ -25,6 +25,11 @@ type ConversationVM struct {
 	InitialSession string
 	IdleTimeoutMs  int
 	RailPrefs      string
+	// ViewerID is the wick user reading this page. The SPA compares it
+	// against each turn's sender to decide whose message is whose: a turn
+	// this person sent needs no name, and one from anybody else does — which
+	// is the whole point in a session several people write into.
+	ViewerID string
 }
 
 // Conversation renders the conversation SPA shell inside the agents chrome.
@@ -46,6 +51,7 @@ templ Conversation(vm ConversationVM) {
 				data-initial-session={ vm.InitialSession }
 				data-idle-timeout-ms={ strconv.Itoa(vm.IdleTimeoutMs) }
 				data-rail-prefs={ vm.RailPrefs }
+				data-viewer-id={ vm.ViewerID }
 				class="h-full"
 			></div>
 			<script type="module" src={ vm.AssetURL }></script>

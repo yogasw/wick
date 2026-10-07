@@ -325,13 +325,13 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 
 	// Session-workspace instance: run against the ephemeral instance's
 	// own config; the session is the authorization scope, no DB row.
-	sessionTarget, isSession, err := handlers.SessionInstanceFor(h.layout, args, connectorID)
+	sessionTarget, isSession, err := handlers.SessionInstanceForID(h.layout, handlers.CallSession(r, args), connectorID)
 	if err != nil {
 		sseWriteToolError(sess, req, err.Error(), toolID)
 		return
 	}
 	if !isSession {
-		allowed, err := h.connectors.IsVisibleTo(r.Context(), connectorID, tagIDs, user.IsAdmin())
+		allowed, err := h.connectors.IsVisibleTo(r.Context(), connectorID, user.ID, tagIDs, user.IsAdmin())
 		if err != nil || !allowed {
 			sseWriteToolError(sess, req, "tool_id not found or not accessible", toolID)
 			return
@@ -368,18 +368,17 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 	}
 	resCh := make(chan execOut, 1)
 	go func() {
-		sid, _ := args["session_id"].(string)
-		sid = strings.TrimSpace(sid)
-		if sid == "" {
-			// Fall back to the per-spawn session header (see executeOneCtx).
-			sid = strings.TrimSpace(r.Header.Get("X-Wick-Session-Id"))
-		}
+		// Same precedence as executeOneCtx: the per-spawn header wins,
+		// the argument is the fallback.
+		sid := handlers.CallSession(r, args)
 		res, err := h.connectors.Execute(execCtx, connectors.ExecuteParams{
 			ConnectorID:     connectorID,
 			OperationKey:    opKey,
 			Input:           input,
 			Source:          entity.ConnectorRunSourceMCP,
 			UserID:          user.ID,
+			IsAdmin:         user.IsAdmin(),
+			TagIDs:          tagIDs,
 			IPAddress:       handlers.ClientIP(r),
 			UserAgent:       r.Header.Get("User-Agent"),
 			Progress:        reporter,

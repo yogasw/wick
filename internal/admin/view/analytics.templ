@@ -1,0 +1,29 @@
+package view
+
+import "github.com/yogasw/wick/internal/entity"
+
+// AnalyticsSPAVM is the thin shell's data: where the module's bundle lives,
+// and which API it reads. Everything else is the module's business.
+type AnalyticsSPAVM struct {
+	AssetURL string
+	DataURL  string
+}
+
+// AnalyticsPage hosts the user-analytics Svelte module inside the admin
+// chrome. The page itself is a shell on purpose — the module is built and
+// versioned on its own, so the table can grow (filters, ranges, a chart)
+// without this file changing again.
+templ AnalyticsPage(vm AnalyticsSPAVM, user *entity.User) {
+	@AdminLayout("Admin · People & usage", "analytics", user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<div id="wick-analytics" data-endpoint={ vm.DataURL }></div>
+			<noscript>
+				<p class="text-sm text-black-800 dark:text-black-600">
+					This page renders in the browser. With JavaScript off, read the same numbers from
+					<a class="text-green-600 hover:underline" href={ templ.SafeURL(vm.DataURL) }>{ vm.DataURL }</a>.
+				</p>
+			</noscript>
+			<script type="module" src={ vm.AssetURL }></script>
+		</main>
+	}
+}

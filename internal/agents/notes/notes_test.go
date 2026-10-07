@@ -1,6 +1,8 @@
 package notes
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -257,5 +259,96 @@ func TestCountsForPointer(t *testing.T) {
 	c, _ = Counts(l, sc)
 	if c.OpenTasks != 0 {
 		t.Fatalf("OpenTasks after check = %d, want 0", c.OpenTasks)
+	}
+}
+
+// TestListOrdersByLastActivity: the panel labels every note with its
+// updated time, so the order must follow that same clock. Sorting on
+// CreatedAt put an edited note — the one whose footer reads "4h ago" —
+// below notes it now post-dates, so the list contradicted the timestamps
+// printed beside it.
+func TestListOrdersByLastActivity(t *testing.T) {
+	base := t.TempDir()
+	layout := config.NewLayout(base)
+	sc := Scope{ProjectID: "p1", TicketID: "T-1"}
+	dir, err := sc.Dir(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rows := []struct{ id, created, updated string }{
+		// Created first, edited most recently: the panel shows this as the
+		// newest activity, so it must lead.
+		{"edited", "2026-08-24T04:39:48Z", "2026-08-24T08:58:57Z"},
+		// Created later, never edited.
+		{"fresh", "2026-08-24T06:00:00Z", "2026-08-24T06:00:00Z"},
+		{"oldest", "2026-08-23T01:00:00Z", "2026-08-23T01:00:00Z"},
+	}
+	for _, r := range rows {
+		b := `{"id":"` + r.id + `","body":"x","audience":"both","created_at":"` + r.created + `","updated_at":"` + r.updated + `"}`
+		if err := os.WriteFile(filepath.Join(dir, r.id+".json"), []byte(b), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := List(layout, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"edited", "fresh", "oldest"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d notes, want %d", len(got), len(want))
+	}
+	for i, id := range want {
+		if got[i].ID != id {
+			t.Errorf("pos %d = %s, want %s", i, got[i].ID, id)
+		}
+	}
+	// Whatever the key, the rendered order must never show an older time
+	// above a newer one.
+	for i := 1; i < len(got); i++ {
+		prev, cur := got[i-1].lastActivity(), got[i].lastActivity()
+		if prev.Before(cur) {
+			t.Errorf("pos %d shows an older time than pos %d", i-1, i)
+		}
+	}
+}
+
+// TestListForAgentReadsForwards: the agent's view is the reverse — a
+// running record reads oldest-first — and must stay that way now that the
+// panel keys off last activity.
+func TestListForAgentReadsForwards(t *testing.T) {
+	base := t.TempDir()
+	layout := config.NewLayout(base)
+	sc := Scope{ProjectID: "p1", TicketID: "T-2"}
+	dir, err := sc.Dir(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rows := []struct{ id, created, updated string }{
+		{"edited", "2026-08-24T04:39:48Z", "2026-08-24T08:58:57Z"},
+		{"fresh", "2026-08-24T06:00:00Z", "2026-08-24T06:00:00Z"},
+	}
+	for _, r := range rows {
+		b := `{"id":"` + r.id + `","body":"x","audience":"both","created_at":"` + r.created + `","updated_at":"` + r.updated + `"}`
+		if err := os.WriteFile(filepath.Join(dir, r.id+".json"), []byte(b), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := ListForAgent(layout, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"fresh", "edited"}
+	for i, id := range want {
+		if got[i].ID != id {
+			t.Errorf("pos %d = %s, want %s (oldest activity first)", i, got[i].ID, id)
+		}
 	}
 }

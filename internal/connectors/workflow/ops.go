@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,6 +15,19 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/wftest"
 	"github.com/yogasw/wick/pkg/connector"
 )
+
+// WorkflowOwnership records the human a workflow belongs to, so a workflow
+// an agent creates on someone's behalf is reachable by that person instead
+// of only by admins. Implemented by the API layer over the owner:<id> tag;
+// nil when unwired (tests, file-store installs), which just skips the step.
+type WorkflowOwnership interface {
+	RegisterOwner(ctx context.Context, userID, workflowID string)
+}
+
+var workflowOwnership WorkflowOwnership
+
+// SetWorkflowOwnership wires the owner recorder. Called once at boot.
+func SetWorkflowOwnership(o WorkflowOwnership) { workflowOwnership = o }
 
 // ── Tier 1: introspection ──────────────────────────────────────────────
 
@@ -155,13 +169,21 @@ func (h *handlers) checkName(c *connector.Ctx) (any, error) {
 // ── Tier 2: write ──────────────────────────────────────────────────────
 
 func (h *handlers) create(c *connector.Ctx) (any, error) {
+	caller := strings.TrimSpace(c.CallerUserID())
 	in := wfmcp.CreateInput{
-		Name:     c.Input("name"),
-		Template: c.Input("template"),
+		Name:      c.Input("name"),
+		Template:  c.Input("template"),
+		CreatedBy: caller,
 	}
 	w, err := h.ops.Create(in)
 	if err != nil {
 		return nil, err
+	}
+	// The human behind the session owns what the agent just made for them.
+	// Skipped for an ownerless/system caller, which leaves the workflow
+	// admin-only rather than owned by a synthetic account.
+	if caller != "" && workflowOwnership != nil {
+		workflowOwnership.RegisterOwner(c.Context(), caller, w.ID)
 	}
 	// Auto-publish + enable on create — user explicitly opted in by
 	// calling create. Apply top-down canvas so the editor renders the
@@ -264,6 +286,74 @@ func (h *handlers) moveNodes(c *connector.Ctx) (any, error) {
 	return h.ops.MoveNodes(c.Input("id"), moves)
 }
 
+// apply runs a whole edit batch and answers with counts and warnings only.
+// Echoing the full workflow (as the single-step ops do) is what made a
+// ten-step edit cost ten copies of it; the caller already knows what it
+// sent, and workflow_canvas_view / workflow_get are there when it needs more.
+func (h *handlers) apply(c *connector.Ctx) (any, error) {
+	var ops []wfcanvas.EditOp
+	if err := parseJSON(c.Input("ops"), &ops); err != nil {
+		return nil, fmt.Errorf("ops: %w", err)
+	}
+	minted, err := prepareApplyOps(ops)
+	if err != nil {
+		return nil, err
+	}
+	w, err := h.ops.Apply(c.Input("id"), ops)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{
+		"ok":       true,
+		"applied":  len(ops),
+		"nodes":    len(w.Graph.Nodes),
+		"edges":    len(w.Graph.Edges),
+		"triggers": len(w.Triggers),
+		"draft":    true,
+	}
+	if len(minted) > 0 {
+		out["minted"] = minted
+	}
+	if vr := h.ops.ValidateRich(c.Input("id")); len(vr.Warnings) > 0 {
+		msgs := make([]string, 0, len(vr.Warnings))
+		for _, warn := range vr.Warnings {
+			msgs = append(msgs, warn.Path+": "+warn.Message)
+		}
+		out["warnings"] = msgs
+	}
+	return out, nil
+}
+
+// mintedID tells the caller which id an id-less add_node step received;
+// without it the new node could not be referenced by any later call.
+type mintedID struct {
+	OpIndex int    `json:"op_index"` // position of the add_node step in the ops array
+	Label   string `json:"label,omitempty"`
+	ID      string `json:"id"`
+}
+
+// prepareApplyOps checks a batch before it reaches the canvas and mints ids
+// for id-less add_node steps, the same contract as workflow_add_node.
+//
+// delete_node is refused here: workflow_delete_node is a destructive op an
+// admin can leave switched off, and a non-destructive batch op that could
+// delete anyway would make that gate meaningless.
+func prepareApplyOps(ops []wfcanvas.EditOp) ([]mintedID, error) {
+	var minted []mintedID
+	for i := range ops {
+		switch ops[i].Op {
+		case "delete_node":
+			return nil, fmt.Errorf("ops[%d] delete_node: not allowed in a batch — deleting is destructive, use workflow_delete_node", i)
+		case "add_node":
+			if n := ops[i].Node; n != nil && n.ID == "" {
+				n.ID = uuid.NewString()
+				minted = append(minted, mintedID{OpIndex: i, Label: n.Label, ID: n.ID})
+			}
+		}
+	}
+	return minted, nil
+}
+
 func (h *handlers) autoLayout(c *connector.Ctx) (any, error) {
 	var nodeIDs []string
 	if s := strings.TrimSpace(c.Input("node_ids")); s != "" {
@@ -294,7 +384,8 @@ func (h *handlers) toggle(c *connector.Ctx) (any, error) {
 func (h *handlers) publish(c *connector.Ctx) (any, error) {
 	id := c.Input("id")
 	enable := c.Input("enable") != "false" // default true
-	w, err := h.ops.Service.Publish(id, "")
+	// Attribute the publish to the caller so version history names a human.
+	w, err := h.ops.Service.Publish(id, strings.TrimSpace(c.CallerUserID()))
 	if err != nil {
 		return nil, err
 	}

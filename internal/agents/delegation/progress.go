@@ -106,6 +106,49 @@ func (s *Service) ReportProgress(ctx context.Context, childSessionID string, rep
 	}, nil
 }
 
+// warnTurnBudget tells a supervised delegation's leader that its
+// sub-agent is close to its turn cap, on the same channel the sub-agent's
+// own progress notes use.
+//
+// The leader is the only party that can act on this: the sub-agent cannot
+// give itself more turns, but its supervisor can tell it to wrap up now,
+// or plan the continuation before the partial result lands. Sent from
+// here rather than left to the sub-agent because an agent that could
+// reliably notice it was running low would not have needed the budget
+// block in the first place.
+//
+// Reports whether the warning is settled — delivered, or undeliverable
+// for a reason retrying cannot fix. A transient delivery failure returns
+// false so the next turn tries once more; the caller keeps the flag that
+// stops this from firing on every turn.
+func (s *Service) warnTurnBudget(ctx context.Context, row *entity.AgentDelegation, turnsUsed, maxTurns int) bool {
+	if s == nil || row == nil || s.Deliver == nil || row.ParentSessionID == "" {
+		return true
+	}
+	// Re-read for the freshest position: the snapshot this run started
+	// with predates every note filed since, and the number alone does not
+	// tell a leader whether to intervene.
+	lastReport := row.LastReport
+	if s.Repo != nil {
+		if fresh, err := s.Repo.Get(context.WithoutCancel(ctx), row.ID); err == nil && fresh != nil {
+			lastReport = fresh.LastReport
+		}
+	}
+	name := row.Handle
+	if name == "" {
+		name = row.ProfileKey
+	}
+	text := formatTurnWarning(name, turnsUsed, maxTurns, lastReport)
+	if err := s.Deliver.DeliverToSession(ctx, row.ParentSessionID, row.ParentAgent, text); err != nil {
+		log.Warn().Err(err).Str("delegation", row.ID).
+			Msg("delegation: turn-budget warning could not be delivered to the supervising agent")
+		return false
+	}
+	log.Debug().Str("delegation", row.ID).Int("turns_used", turnsUsed).Int("max_turns", maxTurns).
+		Msg("delegation: warned the supervising agent that its sub-agent is running low on turns")
+	return true
+}
+
 // ErrNotASubAgent reports a progress call from a conversation that is not
 // a delegation.
 var ErrNotASubAgent = errors.New("only a sub-agent can report progress")

@@ -14,6 +14,7 @@
  */
 
 import { statusDotClass, effectiveStatus, applyEvent, type DotState } from "./statusDot.js";
+import { applyRowStatus, createResorter, refreshAges } from "./sidebarRows.js";
 
 function resolveBase(): string {
   const el = document.querySelector<HTMLElement>("[data-base]");
@@ -125,12 +126,16 @@ function wireLiveStatus(): void {
   // sub-agent's marker — the exact moment that marker is the only thing
   // left worth showing.
   const rows = new Map<string, DotState>();
+  const list = document.querySelector<HTMLElement>("[data-sidebar-sessions]");
+  const resorter = list ? createResorter(list) : null;
   const paint = (ev: { session_id?: string; lifecycle?: string; sub_agent?: string }) => {
     if (!ev.session_id) {
       return;
     }
-    const next = applyEvent(rows.get(ev.session_id), ev);
+    const prev = rows.get(ev.session_id);
+    const next = applyEvent(prev, ev);
     rows.set(ev.session_id, next);
+    const status = effectiveStatus(next);
     const dot = document.querySelector<HTMLElement>(
       `[data-session-dot="${CSS.escape(ev.session_id)}"]`,
     );
@@ -138,7 +143,18 @@ function wireLiveStatus(): void {
     // Nothing to do — the row will render with the right state whenever
     // it does appear.
     if (dot) {
-      dot.className = statusDotClass(effectiveStatus(next));
+      dot.className = statusDotClass(status);
+    }
+    const row = document.querySelector<HTMLElement>(
+      `[data-session-row="${CSS.escape(ev.session_id)}"]`,
+    );
+    if (row) {
+      // Before the first event the server's paint is the previous state,
+      // so a row rendered running that is now idle still counts as used.
+      const prevStatus = prev ? effectiveStatus(prev) : row.dataset["running"] === "true" ? "working" : undefined;
+      if (applyRowStatus(row, prevStatus, status, Date.now())) {
+        resorter?.request();
+      }
     }
   };
 
@@ -194,8 +210,19 @@ function wireLiveStatus(): void {
   window.addEventListener("pagehide", () => es.close());
 }
 
+/* Keep the rows' "last update" ages current without a reload. 30s is
+   finer than the coarsest label change that matters ("now" → "1m"). */
+function wireAgeTicker(): void {
+  const list = document.querySelector<HTMLElement>("[data-sidebar-sessions]");
+  if (!list) {
+    return;
+  }
+  setInterval(() => refreshAges(list, Date.now()), 30_000);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   wirePin();
   wireDragToMove();
   wireLiveStatus();
+  wireAgeTicker();
 });

@@ -139,13 +139,18 @@ func (s *DBService) Update(id string, w workflow.Workflow) error {
 	if err := parse.ValidateID(id); err != nil {
 		return err
 	}
-	if _, err := s.repo.Get(id); err != nil {
+	row, err := s.repo.Get(id)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("%w: %s", ErrNotFound, id)
 		}
 		return err
 	}
 	w.ID = id
+	// The owner is the row's, not whatever the caller's copy says.
+	if row.CreatedBy != "" {
+		w.CreatedBy = row.CreatedBy
+	}
 	body, err := parse.Marshal(w)
 	if err != nil {
 		return err
@@ -176,20 +181,89 @@ func (s *DBService) Delete(id string) error {
 	return nil
 }
 
-// Toggle flips the Enabled flag on the published copy and clones the
-// change into the draft (when a draft exists) so the SPA editor's
-// header chip stays in sync with the live router.
+// Toggle flips the Enabled flag.
+//
+// `enabled` lives in two places that must agree: the workflows row (what
+// the router, the listing and the SPA read) and the flag inside the stored
+// body (what Load parses). So the PUBLISHED body is rewritten with the new
+// flag, and a draft — if one exists — gets the same flag mirrored in so the
+// editor's header chip matches the router.
+//
+// The published body is rebuilt from the published copy, never from the
+// draft. It used to be taken from the draft, which turned "enable this
+// workflow" into a silent publish of every unreviewed edit in the editor.
 func (s *DBService) Toggle(id string, enabled bool) error {
-	w, err := s.LoadDraft(id)
+	pub, err := s.Load(id)
+	if err != nil {
+		// No published body yet (created, never published): the draft is
+		// all there is, so it stands in as the body to carry the flag.
+		if pub, err = s.LoadDraft(id); err != nil {
+			return err
+		}
+	}
+	pub.Enabled = enabled
+	body, err := parse.Marshal(pub)
 	if err != nil {
 		return err
 	}
-	w.Enabled = enabled
-	body, err := parse.Marshal(w)
+	if err := s.repo.SetEnabled(id, enabled, body); err != nil {
+		return err
+	}
+	if !s.HasDraft(id) {
+		return nil
+	}
+	draft, err := s.LoadDraft(id)
 	if err != nil {
 		return err
 	}
-	return s.repo.SetEnabled(id, enabled, body)
+	if draft.Enabled == enabled {
+		return nil
+	}
+	draft.Enabled = enabled
+	// Identical bodies are deduped by the repo, so toggling back and forth
+	// does not pile up draft snapshots.
+	_, err = s.repo.SaveDraft(id, draft, draft.CreatedBy, "")
+	return err
+}
+
+// SetOwner re-stamps the workflow's owner. Admin-only at the HTTP layer:
+// ownership carries reach, so handing it on is not the owner's to do.
+//
+// Writes the row, the published body and — when one exists — the draft, for
+// the same reason Toggle does: created_by is stored in both the column and
+// the body, and a publish later would otherwise resurrect the old owner out
+// of a stale draft.
+func (s *DBService) SetOwner(id, userID string) error {
+	if err := parse.ValidateID(id); err != nil {
+		return err
+	}
+	pub, err := s.Load(id)
+	if err != nil {
+		if pub, err = s.LoadDraft(id); err != nil {
+			return err
+		}
+	}
+	pub.CreatedBy = userID
+	body, err := parse.Marshal(pub)
+	if err != nil {
+		return err
+	}
+	if err := s.repo.SetOwner(id, userID, body); err != nil {
+		return err
+	}
+	if !s.HasDraft(id) {
+		return nil
+	}
+	draft, err := s.LoadDraft(id)
+	if err != nil {
+		return err
+	}
+	if draft.CreatedBy == userID {
+		return nil
+	}
+	draft.CreatedBy = userID
+	_, err = s.repo.SaveDraft(id, draft, userID, "")
+	return err
 }
 
 // ── Draft lifecycle ─────────────────────────────────────────────────
@@ -228,7 +302,17 @@ func (s *DBService) HasDraft(id string) bool {
 // workflow_versions; retention is enforced by Repo.SaveDraft. Rejects
 // writes when the persisted draft is locked unless the incoming body
 // also flips `_canvas.locked = false` (explicit unlock).
+//
+// The editor is taken to be w.CreatedBy; callers that know who is
+// actually saving use SaveDraftAs.
 func (s *DBService) SaveDraft(id string, w workflow.Workflow) error {
+	return s.SaveDraftAs(id, w, w.CreatedBy)
+}
+
+// SaveDraftAs is SaveDraft with the editor named apart from the owner.
+// The editor is who the pinned-session check judges and who the snapshot
+// credits; the owner stays the row's created_by (see Repo.SaveDraft).
+func (s *DBService) SaveDraftAs(id string, w workflow.Workflow, editorID string) error {
 	if err := parse.ValidateID(id); err != nil {
 		return err
 	}
@@ -249,7 +333,10 @@ func (s *DBService) SaveDraft(id string, w workflow.Workflow) error {
 			w.CreatedAt = time.Now().UTC()
 		}
 	}
-	_, err := s.repo.SaveDraft(id, w, w.CreatedBy, "")
+	if editorID == "" {
+		editorID = w.CreatedBy
+	}
+	_, err := s.repo.SaveDraft(id, w, editorID, "")
 	return err
 }
 
@@ -286,9 +373,8 @@ func (s *DBService) Publish(id, actorID string) (workflow.Workflow, error) {
 		return workflow.Workflow{}, err
 	}
 	draft.Version++
-	if actorID != "" {
-		draft.CreatedBy = actorID
-	}
+	// Ownership stays with the creator — see repo.Publish. actorID is the
+	// publisher, recorded on the snapshot, not a new owner.
 	return draft, nil
 }
 

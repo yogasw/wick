@@ -6,6 +6,8 @@ Every exported field in a `Config` / `Configs` struct that carries a `wick:"..."
 
 Tags are semicolon-separated. A `key=value` pair sets a named attribute; a bare key is a boolean flag.
 
+> **Never put a `;` inside `desc=` prose.** The separator is applied before anything looks at which key it is, so a semicolon in the description text ends the description there — the rest of your sentence silently disappears from the admin UI and from the connector schema the model reads. Nothing errors, and the tag still looks fine in the source. Worse, if the leftover fragment happens to read like an option (`checkbox=true/false`, `date="YYYY-MM-DD"`) it is parsed as that option and switches on a widget you never asked for. Use a comma instead. `TestWickTagDescriptionsAreNotSplitByProse` in `pkg/entity` fails the build on a new one, naming the file, the line, and the text that would be dropped.
+
 ```go
 type Config struct {
     // text input + description

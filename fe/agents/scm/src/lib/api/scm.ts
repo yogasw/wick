@@ -19,6 +19,12 @@ export type RepoSummary = {
 export type GitStatusSnapshot = {
   repos: RepoSummary[];
   statuses: Record<string, StatusResult>;
+  // Which repo the session works in, resolved server-side from session
+  // meta — the same answer the agent's system prompt and the Source
+  // connector give. active_explicit=false means nobody picked one and
+  // this is just the first repo found.
+  active: string;
+  active_explicit: boolean;
   total_changed: number;
 };
 
@@ -30,6 +36,12 @@ export type FileChange = {
   staged: boolean;
   unstaged: boolean;
   untracked: boolean;
+  // The entry stands for a whole folder (a nested repo git will not look
+  // inside), not a single file.
+  dir?: boolean;
+  // Filled in client-side when that folder is a repo wick already knows:
+  // what this repo cannot say about it, the snapshot can.
+  nested?: { rel: string; branch: string; changed: number };
 };
 
 export type BranchInfo = {
@@ -51,23 +63,56 @@ export type BranchList = {
   remotes: string[];
 };
 
+// How far a commit has travelled. The graph's whole job is telling these
+// apart: work that only exists on this machine reads very differently from
+// work that has landed on the trunk.
+export type CommitState = "local" | "pushed" | "trunk";
+
 export type LogEntry = {
   sha: string;
   subject: string;
   author: string;
   rel_date: string;
   iso_date: string;
+  /** Short shas this commit descends from — the graph draws lanes from these. */
+  parents?: string[];
+  /** Branch/tag names pointing at this commit, e.g. "master", "origin/master". */
+  refs?: string[];
+  state?: CommitState;
+  /** Author email as git recorded it; the key into the avatars map. */
+  author_email?: string;
+};
+
+// One selectable reference in the graph picker.
+export type HistoryRef = {
+  name: string;
+  sha: string;
+  remote: boolean;
+  current: boolean;
+  trunk: boolean;
+};
+
+export type HistoryRefsResponse = {
+  refs: HistoryRef[];
+  /** The ref "trunk" state is measured against; "" when the repo has none. */
+  trunk: string;
 };
 
 export type CommitFile = {
   path: string;
   status: string;
+  /** Lines git counted for this file. -1 on both means binary. */
+  additions?: number;
+  deletions?: number;
 };
 
 export type CommitDetail = {
   sha: string;
   subject: string;
   author: string;
+  /** Who to ask about it, and what they wrote under the subject line. */
+  email?: string;
+  body?: string;
   iso_date: string;
   files: CommitFile[];
 };
@@ -76,6 +121,22 @@ const s = (id: string) => `${BASE}/api/sessions/${encodeURIComponent(id)}/git`;
 const q = (v: string) => encodeURIComponent(v);
 
 export const getRepos = (id: string) => apiGet<GitStatusSnapshot>(`${s(id)}/repos`);
+
+// Which repo this session is working in. Server-side (session meta) and
+// not browser-local, because the agent reads the same selection — it is
+// what its system prompt names and what wick_scm reports.
+export type ActiveRepo = {
+  rel: string;
+  name: string;
+  dir: string;
+  explicit: boolean;
+  total: number;
+};
+
+export const getActiveRepo = (id: string) => apiGet<ActiveRepo>(`${s(id)}/active`);
+
+export const setActiveRepo = (id: string, repo: string) =>
+  apiPost<ActiveRepo>(`${s(id)}/active`, { repo });
 
 export const getStatus = (id: string, repo: string) =>
   apiGet<StatusResult>(`${s(id)}/status?repo=${q(repo)}`);
@@ -103,6 +164,9 @@ export const unstage = (id: string, repo: string, paths: string[]) =>
 // paths are untracked so the server picks clean vs restore.
 export const discard = (id: string, repo: string, paths: string[], untracked: string[]) =>
   apiPost(`${s(id)}/discard`, { repo, paths, untracked });
+// Hide paths from git (writes .git/info/exclude) without touching disk.
+export const exclude = (id: string, repo: string, paths: string[]) =>
+  apiPost(`${s(id)}/exclude`, { repo, paths });
 
 export const commit = (id: string, repo: string, message: string) =>
   apiPost<{ sha: string }>(`${s(id)}/commit`, { repo, message });
@@ -110,14 +174,69 @@ export const commit = (id: string, repo: string, message: string) =>
 export const switchBranch = (id: string, repo: string, branch: string) =>
   apiPost(`${s(id)}/branch/switch`, { repo, branch });
 
-export const createBranch = (id: string, repo: string, branch: string, checkout: boolean) =>
-  apiPost(`${s(id)}/branch/create`, { repo, branch, checkout });
+// from: start point (branch, tag, sha). Empty = HEAD.
+export const createBranch = (
+  id: string,
+  repo: string,
+  branch: string,
+  checkout: boolean,
+  from = "",
+) => apiPost(`${s(id)}/branch/create`, { repo, branch, checkout, from });
 
-export const push = (id: string, repo: string) =>
-  apiPost<{ output: string }>(`${s(id)}/push`, { repo });
+export const renameBranch = (id: string, repo: string, branch: string, newName: string) =>
+  apiPost(`${s(id)}/branch/rename`, { repo, branch, new_name: newName });
 
-export const pull = (id: string, repo: string) =>
-  apiPost<{ output: string }>(`${s(id)}/pull`, { repo });
+// force mirrors `git branch -D`: git refuses an unmerged branch without it,
+// and a squash-merged branch trips that same refusal.
+export const deleteBranch = (id: string, repo: string, branch: string, force: boolean) =>
+  apiPost(`${s(id)}/branch/delete`, { repo, branch, force });
+
+// push/pull run through a Git CLI connector when one is chosen for the
+// repo — that is where the credentials and the branch policy live.
+// connector_id is only sent by the picker, on the first push in a repo;
+// after that the session remembers it.
+export const push = (id: string, repo: string, connectorID?: string) =>
+  apiPost<{ output: string; connector_id?: string }>(`${s(id)}/push`, {
+    repo,
+    connector_id: connectorID ?? "",
+  });
+
+// fetch updates remote-tracking refs and prunes dead ones. Same credential
+// path as push/pull; changes nothing locally.
+export const fetchRemote = (id: string, repo: string, connectorID?: string) =>
+  apiPost<{ output: string; connector_id?: string }>(`${s(id)}/fetch`, {
+    repo,
+    connector_id: connectorID ?? "",
+  });
+
+export const pull = (id: string, repo: string, connectorID?: string) =>
+  apiPost<{ output: string; connector_id?: string }>(`${s(id)}/pull`, {
+    repo,
+    connector_id: connectorID ?? "",
+  });
+
+export type GitConnector = {
+  id: string;
+  label: string;
+  author?: string;
+  /** The connector whose label names the remote's host — a guess, since
+      the connector stores a credential, not a host. */
+  suggested?: boolean;
+};
+
+export type GitConnectorsResponse = {
+  repo: string;
+  remote_url?: string;
+  remote_host?: string;
+  selected?: string;
+  candidates: GitConnector[];
+};
+
+export const getGitConnectors = (id: string, repo: string) =>
+  apiGet<GitConnectorsResponse>(`${s(id)}/connectors?repo=${q(repo)}`);
+
+export const setGitConnector = (id: string, repo: string, connectorID: string) =>
+  apiPost<{ ok: boolean }>(`${s(id)}/connectors`, { repo, connector_id: connectorID });
 
 export const saveFile = (id: string, repo: string, path: string, content: string) =>
   apiPost(`${s(id)}/file`, { repo, path, content });
@@ -142,8 +261,18 @@ export const getCompare = (
     `${s(id)}/compare?repo=${q(repo)}&path=${q(path)}&staged=${staged ? "1" : "0"}&untracked=${untracked ? "1" : "0"}`,
   );
 
-export const getLog = (id: string, repo: string, limit = 50) =>
-  apiGet<{ commits: LogEntry[] }>(`${s(id)}/log?repo=${q(repo)}&limit=${limit}`);
+// refs picks which history to walk: "auto" (current branch + upstream),
+// "all", or explicit ref names — the same three the picker offers.
+// avatars maps author email -> picture URL, and only contains emails that
+// belong to a wick account WITH an avatar. Missing = draw nothing.
+export const getLog = (id: string, repo: string, limit = 50, refs: string[] = [], skip = 0) =>
+  apiGet<{ commits: LogEntry[]; avatars?: Record<string, string>; has_more?: boolean }>(
+    `${s(id)}/log?repo=${q(repo)}&limit=${limit}&skip=${skip}` +
+      (refs.length ? `&refs=${q(refs.join(","))}` : ""),
+  );
+
+export const getHistoryRefs = (id: string, repo: string) =>
+  apiGet<HistoryRefsResponse>(`${s(id)}/refs?repo=${q(repo)}`);
 
 export const getCommit = (id: string, repo: string, sha: string) =>
   apiGet<CommitDetail>(`${s(id)}/commit?repo=${q(repo)}&sha=${q(sha)}`);
@@ -152,3 +281,93 @@ export const getCommitDiff = (id: string, repo: string, sha: string, path: strin
   apiGet<{ original: string; modified: string; path: string }>(
     `${s(id)}/commit-diff?repo=${q(repo)}&sha=${q(sha)}&path=${q(path)}`,
   );
+
+// One file that differs between two refs. additions/deletions = -1 on
+// both means git counted it as binary.
+export type CompareFile = {
+  path: string;
+  /** Rename/copy source — the left side reads empty without it. */
+  orig_path?: string;
+  status: string;
+  additions: number;
+  deletions: number;
+};
+
+export type CompareResult = {
+  base: string;
+  head: string;
+  /** Empty when the two refs share no history. */
+  merge_base?: string;
+  ahead: number;
+  behind: number;
+  files: CompareFile[];
+  /** The commits base..head brings in, newest first (capped server-side).
+   *  For a working-tree head these are the commits up to HEAD. */
+  commits?: RangeCommit[];
+  commits_truncated?: boolean;
+};
+
+export type RangeCommit = {
+  sha: string;
+  subject: string;
+  author: string;
+  rel_date: string;
+  iso_date: string;
+};
+
+// base/head are a branch, tag or sha; head may also be ":worktree" (staged
+// + unstaged) or ":staged" (the index only).
+// threeDot asks the merge-base question ("what does head add?"), which is
+// what a reviewer means by comparing two branches — and what JetBrains
+// does by default. Without it the two trees are diffed directly.
+export const compareRefs = (
+  id: string,
+  repo: string,
+  base: string,
+  head: string,
+  threeDot: boolean,
+) =>
+  apiGet<CompareResult>(
+    `${s(id)}/compare-refs?repo=${q(repo)}&base=${q(base)}&head=${q(head)}&three_dot=${threeDot ? "1" : "0"}`,
+  );
+
+// Both raw sides of one file across two refs. A side that does not exist
+// at its ref comes back as "" — that is an add or a delete, not an error.
+// origPath must carry the rename source, and threeDot must match the one
+// the file list was built with, or the diff disagrees with the list.
+export const refCompare = (
+  id: string,
+  repo: string,
+  base: string,
+  head: string,
+  path: string,
+  threeDot: boolean,
+  origPath = "",
+) =>
+  apiGet<{ original: string; modified: string; path: string }>(
+    `${s(id)}/ref-compare?repo=${q(repo)}&base=${q(base)}&head=${q(head)}&path=${q(path)}` +
+      `&three_dot=${threeDot ? "1" : "0"}` +
+      (origPath ? `&orig_path=${q(origPath)}` : ""),
+  );
+
+// Rollback: take these paths back to how they look at ref. The restored
+// files land staged, the way `git checkout <ref> -- <path>` leaves them.
+export const restorePaths = (id: string, repo: string, ref: string, paths: string[]) =>
+  apiPost<{ status: string; ref: string; paths: string[] }>(`${s(id)}/restore`, {
+    repo,
+    ref,
+    paths,
+  });
+
+// Apply the inverse of a commit. A conflict fails with git's own message
+// and leaves the tree mid-revert — nothing here aborts it.
+export const revertCommit = (id: string, repo: string, sha: string, noCommit = false) =>
+  apiPost<{ status: string; sha: string; output: string }>(`${s(id)}/revert`, {
+    repo,
+    sha,
+    no_commit: noCommit,
+  });
+
+// Move the current branch to ref. mode hard discards uncommitted work.
+export const resetTo = (id: string, repo: string, ref: string, mode: "soft" | "mixed" | "hard") =>
+  apiPost<{ status: string; ref: string; mode: string }>(`${s(id)}/reset`, { repo, ref, mode });

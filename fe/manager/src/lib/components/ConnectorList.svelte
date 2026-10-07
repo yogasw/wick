@@ -20,6 +20,8 @@
     testInstanceAuth,
   } from "$lib/api.js";
   import type { PluginProgress } from "$lib/api.js";
+  import PluginUpdateProgress from "$lib/components/plugins/PluginUpdateProgress.svelte";
+  import { pluginPhaseLabel } from "$lib/components/plugins/updateProgress.js";
   import { startConnectorOAuth, type OAuthConnect } from "./connectorOAuth.js";
   import { startInstanceOAuth } from "./custom/mcpInstanceOAuth.js";
   import type { ConnectorList, ConnectorRow, ConnectorAccount, PluginEntry } from "$lib/types.js";
@@ -73,7 +75,13 @@
   }
 
   /* Per-row kebab (⋮) menu items. History/Disable/Duplicate/Delete —
-     Duplicate + Delete only when the connector isn't fixed. */
+     Duplicate + Delete only when the connector isn't fixed.
+
+     Disable + Delete configure the instance, so they only show to a caller
+     who may configure this row — the server refuses them otherwise, and a
+     view-only viewer of a shared row has no business switching it off for
+     everyone. History stays (read-only) and Duplicate stays (it copies the
+     row into a new instance the copier owns, which seeing it is enough for). */
   function rowMenuItems(row: ConnectorRow) {
     const items: { label: string; onclick: () => void; danger?: boolean; disabled?: boolean }[] = [];
     /* MCP instances authenticate individually, so connecting is a row action.
@@ -94,10 +102,10 @@
         disabled: testingId !== "",
       });
     }
-    items.push(
-      { label: "History", onclick: () => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}/history`) },
-      { label: row.disabled ? "Enable" : "Disable", onclick: () => toggleDisabled(row) },
-    );
+    items.push({ label: "History", onclick: () => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}/history`) });
+    if (row.can_configure !== false) {
+      items.push({ label: row.disabled ? "Enable" : "Disable", onclick: () => toggleDisabled(row) });
+    }
     /* MCP rows can re-probe under their own account — a server may expose a
        different tool set per connected identity. */
     if (data?.mcp) {
@@ -109,7 +117,9 @@
     }
     if (!data?.fixed) {
       items.push({ label: "Duplicate", onclick: () => duplicateRow(row), disabled: busy });
-      items.push({ label: "Delete", onclick: () => (confirmRow = row), danger: true });
+      if (row.can_configure !== false) {
+        items.push({ label: "Delete", onclick: () => (confirmRow = row), danger: true });
+      }
     }
     return items;
   }
@@ -147,6 +157,22 @@
         connectingId = "";
         oauthHandle = null;
       });
+  }
+
+  /* Per-account actions, same pair the detail page offers: re-consent without
+     destroying the grant first, or disconnect. Disconnect used to be a bare
+     red link on the row — one stray click from deleting a token, and no
+     affordance at all for the thing people actually wanted, which is why they
+     disconnected just to re-connect. */
+  function accountMenuItems(row: ConnectorRow, acc: ConnectorAccount) {
+    return [
+      {
+        label: connectingId === row.id ? "Re-connecting…" : "Re-connect",
+        onclick: () => connect(row),
+        disabled: !canConnect(row) || connectingId !== "",
+      },
+      { label: "Disconnect", onclick: () => (confirmAcc = { row, acc }), danger: true },
+    ];
   }
 
   /* Per-instance MCP login. Distinct from the generic connector OAuth above:
@@ -397,21 +423,9 @@
     }
   }
 
-  /* Human label for the current update phase, shown next to the bar. */
-  const phaseLabel = $derived.by(() => {
-    switch (updateProgress?.phase) {
-      case "downloading":
-        return updateProgress.pct >= 0 ? `Downloading… ${updateProgress.pct}%` : "Downloading…";
-      case "verifying":
-        return "Verifying…";
-      case "replacing":
-        return "Replacing…";
-      case "done":
-        return "Done";
-      default:
-        return "Updating…";
-    }
-  });
+
+  /* Human label for the current update phase, shown in the kebab item. */
+  const phaseLabel = $derived(pluginPhaseLabel(updateProgress));
 
   async function confirmDoUninstall() {
     confirmUninstall = false;
@@ -572,7 +586,11 @@
         <Button size="sm" disabled={reloadBusy} onclick={reloadDef}>{reloadBusy ? "Reloading…" : "Reload"}</Button>
       </div>
     {/if}
-    <div class="flex items-start gap-4">
+    <!-- Stacked on a phone. Side by side, the action group's three
+         nowrap buttons need more room than a 360px screen has, and the
+         header pushed the whole page into a horizontal scroll — with the
+         buttons themselves the part off the edge. -->
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
 
       <!-- LEFT: icon + name + description -->
       <div class="flex min-w-0 flex-1 items-start gap-3">
@@ -601,24 +619,11 @@
           {/if}
           <p class="mt-1 text-xs text-black-700 dark:text-black-600">{data.op_count} operation(s) · {rows.length} row(s)</p>
           {#if updateProgress}
-            {@const indeterminate = updateProgress.phase === "downloading" && updateProgress.pct < 0}
-            {@const pct = updateProgress.phase === "downloading" && updateProgress.pct >= 0 ? updateProgress.pct : updateProgress.phase === "done" ? 100 : updateProgress.phase === "downloading" ? 0 : 100}
-            <div class="mt-2 max-w-xs">
-              <div class="flex items-center justify-between text-[11px] font-medium text-black-800 dark:text-black-600">
-                <span>{phaseLabel}</span>
-              </div>
-              <div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-white-300 dark:bg-navy-600">
-                {#if indeterminate}
-                  <div class="h-full w-1/3 animate-pulse rounded-full bg-green-500"></div>
-                {:else}
-                  <div class="h-full rounded-full bg-green-500 transition-all duration-200" style={`width:${pct}%`}></div>
-                {/if}
-              </div>
-            </div>
+            <PluginUpdateProgress class="mt-2 max-w-xs" progress={updateProgress} />
           {/if}
         </div>
       </div>
-      <div class="flex flex-shrink-0 items-center gap-2 pt-1">
+      <div class="flex flex-wrap items-center gap-2 sm:flex-shrink-0 sm:pt-1">
         {#if data.mcp}
           <button
             type="button"
@@ -690,7 +695,27 @@
                     {/each}
                   {/if}
                   <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {chip.cls}">{chip.label}</span>
-                  {#if canConnect(row)}
+                  {#if row.mcp_auth?.per_user}
+                    <!-- Per-user (SSO) MCP instance: it holds no credential of
+                         its own, so it is never "not connected". Neutral count
+                         of the accounts the viewer may see, then the viewer's
+                         own state. -->
+                    <span class="inline-flex items-center rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600" data-per-user-chip>
+                      Per-user login · {row.mcp_auth.account_count ?? 0} {(row.mcp_auth.account_count ?? 0) === 1 ? "account" : "accounts"}
+                    </span>
+                    {#if row.mcp_auth.mine_connected}
+                      <span class="inline-flex items-center gap-1 rounded-md border border-green-600/40 bg-green-900/20 px-2 py-0.5 text-[11px] font-medium text-green-500" data-mine-connected>
+                        <svg class="h-3 w-3 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="m20 6-11 11-5-5"/></svg>
+                        You: connected
+                      </span>
+                    {:else if canConnect(row)}
+                      <!-- Same look as the instance Connect button: secondary
+                           reads as bare text on the dark theme. -->
+                      <Button variant="primary" size="sm" disabled={connectingId === row.id} onclick={() => connect(row)}>
+                        {connectingId === row.id ? "Connecting…" : "Connect my account"}
+                      </Button>
+                    {/if}
+                  {:else if canConnect(row)}
                     <Button variant="primary" size="sm" disabled={connectingId === row.id} onclick={() => connect(row)}>
                       {connectingId === row.id ? "Connecting…" : connectLabel(row)}
                     </Button>
@@ -701,7 +726,9 @@
                   <!-- Auth state is per instance. Broken auth wins over the
                        account chip: a reassuring identity next to a dead
                        token is worse than no chip at all. -->
-                  {#if row.mcp_auth && authBroken(row)}
+                  {#if row.mcp_auth?.per_user}
+                    <!-- chips rendered above -->
+                  {:else if row.mcp_auth && authBroken(row)}
                     <span
                       class="inline-flex min-w-0 max-w-[16rem] items-center gap-1 rounded-md border border-neg-400 bg-neg-100 px-2 py-0.5 text-[11px] font-medium text-neg-400"
                       title={authBrokenReason(row)}
@@ -731,17 +758,30 @@
               {#if (row.accounts ?? []).length}
                 <div class="pointer-events-auto relative z-10 border-t border-white-300 dark:border-navy-600">
                   {#each row.accounts ?? [] as acc (acc.id)}
-                    <div class="flex items-center justify-between gap-3 px-4 py-2.5">
-                      <span class="flex min-w-0 items-center gap-2 text-sm text-black-800 dark:text-black-600">
+                    <!-- Whole sub-row opens the account, same overlay pattern as
+                         the instance card above: a z-0 button under
+                         pointer-events-none content, with the controls lifted
+                         back out on z-10. Hunting for the one word that
+                         happened to be a link is not a target. -->
+                    <div class="relative flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-white-200 dark:hover:bg-navy-800">
+                      <button
+                        type="button"
+                        class="absolute inset-0 z-0"
+                        aria-label={`Open @${acc.display_name}`}
+                        onclick={() => push(`/connectors/${connectorKey}/${row.id}/accounts/${encodeURIComponent(acc.id)}`)}
+                      ></button>
+                      <span class="pointer-events-none relative flex min-w-0 items-center gap-2 text-sm text-black-800 dark:text-black-600">
                         <svg class="h-3.5 w-3.5 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                         <span class="truncate font-medium">@{acc.display_name}</span>
                       </span>
                       {#if acc.can_manage}
-                        <button
-                          type="button"
-                          class="flex-shrink-0 text-xs font-medium text-neg-400 hover:underline"
-                          onclick={() => (confirmAcc = { row, acc })}
-                        >Disconnect</button>
+                        <div class="pointer-events-auto relative z-10 flex-shrink-0">
+                          <KebabMenu
+                            ariaLabel={`Actions for @${acc.display_name}`}
+                            size="sm"
+                            items={accountMenuItems(row, acc)}
+                          />
+                        </div>
                       {/if}
                     </div>
                   {/each}

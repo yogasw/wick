@@ -10,6 +10,8 @@ import (
 	_ "github.com/yogasw/wick/internal/agents/provider/claude"
 	_ "github.com/yogasw/wick/internal/agents/provider/codex"
 	_ "github.com/yogasw/wick/internal/agents/provider/gemini"
+	_ "github.com/yogasw/wick/internal/agents/provider/omp"
+	_ "github.com/yogasw/wick/internal/agents/provider/opencode"
 	_ "github.com/yogasw/wick/internal/agents/provider/wick"
 )
 

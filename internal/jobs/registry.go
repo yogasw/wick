@@ -87,3 +87,17 @@ func RegisterLabSamples() {
 func All() []job.Module {
 	return extra
 }
+
+// Unregister drops the job registered under key, if any. Used when a
+// plugin declares it replaces that key (job.Meta.Replaces): the plugin
+// wins and the old job is neither bootstrapped nor scheduled. Reports
+// whether a job was removed.
+func Unregister(key string) bool {
+	for i, m := range extra {
+		if m.Meta.Key == key {
+			extra = append(extra[:i:i], extra[i+1:]...)
+			return true
+		}
+	}
+	return false
+}

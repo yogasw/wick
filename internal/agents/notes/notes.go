@@ -111,6 +111,17 @@ func (s Scope) Dir(layout config.Layout) (string, error) {
 	}
 }
 
+// lastActivity is the time the panel shows for a note: when it was last
+// touched, falling back to creation for a note never edited (and to the
+// zero time only if neither was recorded). The panel's order keys off
+// this so the list agrees with the timestamps it prints.
+func (n Note) lastActivity() time.Time {
+	if n.UpdatedAt.After(n.CreatedAt) {
+		return n.UpdatedAt
+	}
+	return n.CreatedAt
+}
+
 // AddOptions describes a new note.
 type AddOptions struct {
 	Body      string
@@ -206,13 +217,19 @@ func List(layout config.Layout, sc Scope) ([]Note, error) {
 	// ticket wants is what just happened — on a long-running ticket the
 	// useful note was at the bottom of a scroll. The agent's view below
 	// re-sorts, because a running log reads forwards.
+	//
+	// The key is LAST ACTIVITY (UpdatedAt), not CreatedAt: the panel labels
+	// every note with its updated time, so ordering by creation put an
+	// edited note — the one whose footer reads "4h ago" — below notes it now
+	// post-dates, and the list contradicted the timestamps beside it.
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+		ai, aj := out[i].lastActivity(), out[j].lastActivity()
+		if ai.Equal(aj) {
 			// Ids break the tie so the order is stable rather than however
 			// ReadDir happened to return two notes written in the same tick.
 			return out[i].ID > out[j].ID
 		}
-		return out[i].CreatedAt.After(out[j].CreatedAt)
+		return ai.After(aj)
 	})
 	return out, nil
 }

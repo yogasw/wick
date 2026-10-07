@@ -6,7 +6,6 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
-	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
@@ -26,7 +25,7 @@ type SendEphemeralOutput struct {
 	TS string `json:"ts"`
 }
 
-func registerActionSendEphemeral(reg *integration.Registry, ch *slack.Channel) {
+func registerActionSendEphemeral(reg *integration.Registry, pick ChannelPicker) {
 	reg.RegisterAction(integration.ActionDescriptor{
 		Channel:     Channel,
 		Action:      "send_ephemeral",
@@ -45,11 +44,15 @@ func registerActionSendEphemeral(reg *integration.Registry, ch *slack.Channel) {
 				"Once posted, can't be edited via update_message — use respond_url with replace_original instead.",
 				"Either text or blocks must be non-empty.",
 			},
-			PairWith: []string{"channel:slack.respond_url", "channel:slack.send_message"},
+			PairWith:     []string{"channel:slack.respond_url", "channel:slack.send_message"},
 			InputSample:  `{"channel":"C12345","user":"U02ABCDEF","text":"Working on it — I'll DM you when ready."}`,
 			OutputSample: `{"ts":"1700001234.005600"}`,
 		},
 		Execute: func(ctx context.Context, args map[string]any) (any, error) {
+			ch := pick(ctx)
+			if ch == nil {
+				return nil, fmt.Errorf("slack channel not configured")
+			}
 			api := ch.API()
 			if api == nil {
 				return nil, fmt.Errorf("slack channel not configured")

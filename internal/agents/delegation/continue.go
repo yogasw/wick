@@ -91,6 +91,19 @@ func (s *Service) Continue(ctx context.Context, req ContinueRequest) (*Result, e
 			ErrNotContinuable, row.Handle, row.Status)
 	}
 
+	// Closed, but its last turn is still running. A row can read terminal
+	// while the process carries on — the sweep closed it from a process
+	// that could not see the child (a reload in progress, the child still
+	// finishing in the old one). Continuing now would start a second
+	// process in the same session, two writers on one tree, and the first
+	// one's answer would land on a row that has moved on.
+	if row.ChildSessionID != "" && s.childBusy(row.ChildSessionID, row.ChildAgent) {
+		return nil, fmt.Errorf("%w: @%s's row is closed (%s) but its previous turn is still running "+
+			"(possibly in the previous wick process, still finishing after a reload). "+
+			"Wait for it to finish, then continue — or use message to reach it",
+			ErrNotContinuable, row.Handle, row.Status)
+	}
+
 	profile, err := s.Repo.GetProfileScoped(ctx, row.ProjectID, row.ProfileKey)
 	if err != nil {
 		return nil, fmt.Errorf("the %q role this delegation ran as is no longer available: %w", row.ProfileKey, err)
@@ -108,7 +121,14 @@ func (s *Service) Continue(ctx context.Context, req ContinueRequest) (*Result, e
 	resumable := s.childIsResumable(row)
 	priorStatus := row.Status
 
+	if row.Title == "" {
+		// A row from before Title existed: its Task is still the first
+		// leg's unless an earlier continue already reframed it.
+		row.Title = row.Task
+	}
 	row.Task = continuationTask(req.Task, priorStatus, resumable)
+	row.Resumes++
+	row.LegBaseTurns = row.TurnsUsed
 	// The caller's original `context` argument belongs to the first leg.
 	// Replaying it here would re-deliver background the sub-agent has
 	// already read and acted on.
@@ -123,13 +143,44 @@ func (s *Service) Continue(ctx context.Context, req ContinueRequest) (*Result, e
 	// the same delegation cannot both drive the session. The loser is told
 	// what happened rather than handed a generic failure — it lost by a
 	// hair, and its instruction may still be worth sending as a message.
-	won, err := s.Repo.ReopenForContinue(ctx, row)
+	//
+	// A continuation is a sub-agent starting work like any other, so it
+	// takes a slot like any other: reopened straight to running only when
+	// the conversation has one free and nothing is waiting ahead of it,
+	// queued otherwise. Reopening straight to running is how a continue
+	// slipped past sub_agents_max_parallel.
+	won, queued, err := s.reopenForContinue(ctx, row)
 	if err != nil {
 		return nil, fmt.Errorf("reopen delegation: %w", err)
 	}
 	if !won {
 		return nil, fmt.Errorf("%w: @%s was continued by someone else a moment ago and is running again. "+
 			"Use message to reach it", ErrNotContinuable, row.Handle)
+	}
+	if queued {
+		if row.Mode == ModeAsync {
+			pos, _ := s.Repo.QueuePosition(ctx, row.RootID, row.ID)
+			row.Status = entity.DelegationQueued
+			res := queuedResult(row, pos)
+			res.Continued = true
+			res.Resumed = resumable
+			if !resumable {
+				res.Note = joinNotes(res.Note, continuationLostNote)
+			}
+			return res, nil
+		}
+		if werr := s.waitForSlot(ctx, row.RootID, row.ID); werr != nil {
+			if errors.Is(werr, errNotQueued) {
+				return s.lostClaimResult(ctx, row), nil
+			}
+			s.finish(ctx, row, entity.DelegationQueued, entity.DelegationInterrupted,
+				"", "the caller went away while this continuation was queued", 0)
+			return &Result{
+				DelegationID: row.ID, Profile: row.ProfileKey,
+				Status: entity.DelegationInterrupted, Mode: ModeForeground, Continued: true,
+				Note: "Cancelled before it started — the caller went away while this was queued.",
+			}, nil
+		}
 	}
 	row.Status = entity.DelegationRunning
 
@@ -267,4 +318,19 @@ func clampInt(n, lo, hi int) int {
 		return hi
 	}
 	return n
+}
+
+// reopenForContinue reopens a finished row as running when the
+// conversation has a free slot and an empty queue, as queued otherwise.
+// Under slotMu, so the check and the reopen are one step.
+func (s *Service) reopenForContinue(ctx context.Context, row *entity.AgentDelegation) (won, queued bool, err error) {
+	s.slotMu.Lock()
+	defer s.slotMu.Unlock()
+	status := entity.DelegationRunning
+	head, herr := s.Repo.OldestQueued(ctx, row.RootID)
+	if herr != nil || head != nil || !s.hasSlot(ctx, row.RootID) {
+		status = entity.DelegationQueued
+	}
+	won, err = s.Repo.ReopenForContinue(ctx, row, status)
+	return won, status == entity.DelegationQueued, err
 }

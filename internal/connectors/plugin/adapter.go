@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -35,7 +36,7 @@ func newExecuteClosure(connKey, opKey string, getConn ConnGetter) connector.Exec
 			return nil, fmt.Errorf("plugin %q unavailable: %w", connKey, err)
 		}
 		defer lease.Release()
-		raw, err := lease.Conn.ExecuteStream(c.Context(), wickplugin.ExecCall{
+		res, err := lease.Conn.ExecuteStream(c.Context(), wickplugin.ExecCall{
 			Operation: opKey,
 			Input:     c.Inputs(),
 			Creds:     c.Configs(),
@@ -43,6 +44,58 @@ func newExecuteClosure(connKey, opKey string, getConn ConnGetter) connector.Exec
 		if err != nil {
 			return nil, err
 		}
-		return json.RawMessage(raw), nil
+		return json.RawMessage(maskPluginResult(c, res)), nil
+	}
+}
+
+// maskPluginResult applies the c.Mask / c.MaskIgnoreCase calls the plugin
+// made. The plugin cannot encrypt (it holds no key), so it only reports the
+// values; masking them here through the host Ctx turns them into wick_enc_
+// tokens and registers them for the post-execute sweep, the same as for an
+// in-process connector. Strings are masked after decoding so a value that
+// JSON escapes (quotes, backslashes, non-ASCII) still matches.
+func maskPluginResult(c *connector.Ctx, res wickplugin.ExecResult) []byte {
+	if len(res.Mask) == 0 && len(res.MaskIgnoreCase) == 0 {
+		return res.JSON
+	}
+	maskStr := func(s string) string {
+		if len(res.Mask) > 0 {
+			s = c.Mask(s, res.Mask)
+		}
+		if len(res.MaskIgnoreCase) > 0 {
+			s = c.MaskIgnoreCase(s, res.MaskIgnoreCase)
+		}
+		return s
+	}
+	dec := json.NewDecoder(bytes.NewReader(res.JSON))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return []byte(maskStr(string(res.JSON)))
+	}
+	out, err := json.Marshal(maskJSONValue(v, maskStr))
+	if err != nil {
+		return []byte(maskStr(string(res.JSON)))
+	}
+	return out
+}
+
+func maskJSONValue(v any, maskStr func(string) string) any {
+	switch t := v.(type) {
+	case string:
+		return maskStr(t)
+	case []any:
+		for i := range t {
+			t[i] = maskJSONValue(t[i], maskStr)
+		}
+		return t
+	case map[string]any:
+		masked := make(map[string]any, len(t))
+		for k, val := range t {
+			masked[maskStr(k)] = maskJSONValue(val, maskStr)
+		}
+		return masked
+	default:
+		return v
 	}
 }

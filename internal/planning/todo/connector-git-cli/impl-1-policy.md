@@ -16,7 +16,7 @@
 - Op keys: `a-z0-9_` only. No hyphens, no spaces.
 - Package is `package main` (plugin binary), not a library package.
 - All user-facing config text (`desc=`, group titles, widget copy) in **English**.
-- Sample values in docs/godoc use generic names (`abc.com`, `example.com`, `org/repo`) — never "qiscus".
+- Sample values in docs/godoc use generic names (`abc.com`, `example.com`, `org/repo`) — never a real company or client name.
 - Never write `Date.now()`-style nondeterminism into tests; table tests only.
 - `regexp` = Go RE2. No lookahead/backreference — reject patterns that fail `regexp.Compile`.
 - Empty policy column = **inherit**. `"-"` = **clear inherited value**. Never "allow anything".

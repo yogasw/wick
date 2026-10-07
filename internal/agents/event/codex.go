@@ -3,6 +3,7 @@ package event
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -32,16 +33,80 @@ import (
 //
 // Concurrency: not safe for concurrent use. One parser per subprocess.
 type CodexParser struct {
+	// tools pairs calls with results for Display (see display.go).
+	tools          toolCalls
 	sessionEmitted bool
 	// agentMsgText tracks the most recent text snapshot per item.id for
 	// agent_message items so item.updated emits only the appended tail
 	// (delta semantics) instead of re-sending the whole string.
 	agentMsgText map[string]string
+	// threadID is codex's own conversation id, learned from
+	// thread.started. It names the rollout file the context level is
+	// read from at the end of each turn — see codex_rollout.go.
+	threadID string
+	// codexHome is the CODEX_HOME this spawn runs with, empty when the
+	// default applies. Only used to find that rollout.
+	codexHome string
+	// level resolves the true context level for a finished turn.
+	// Injected so tests never touch the filesystem.
+	level func(home, threadID string, sum int) (codexRolloutReading, bool)
+	// newest resolves the level codex has written MOST RECENTLY, without
+	// waiting for the turn to end. Same journal, no retry pause: mid-turn
+	// there is nothing to match against and nothing to wait for. Injected
+	// for the same reason as level.
+	newest func(home, threadID string) (codexRolloutReading, bool)
+	// lastLive throttles those reads. Codex writes one entry per request,
+	// so re-reading the journal on every frame of a busy turn would be a
+	// megabyte of IO for a number that moves a handful of times.
+	lastLive time.Time
+	// now is the clock the throttle reads, swapped in tests.
+	now func() time.Time
+}
+
+// codexLiveInterval is the floor between two rollout reads. The meter is
+// worth keeping current; it is not worth a file read per streamed token.
+const codexLiveInterval = 3 * time.Second
+
+// liveLevel is the newest level codex has recorded for this thread, or 0
+// when there is nothing to read, the throttle has not elapsed, or the
+// thread is not known yet.
+//
+// Zero always means "no reading", never "empty window" — the caller
+// leaves the meter where it was rather than drawing a drop that did not
+// happen.
+func (p *CodexParser) liveLevel() int {
+	if p.threadID == "" || p.newest == nil {
+		return 0
+	}
+	now := time.Now
+	if p.now != nil {
+		now = p.now
+	}
+	at := now()
+	if !p.lastLive.IsZero() && at.Sub(p.lastLive) < codexLiveInterval {
+		return 0
+	}
+	p.lastLive = at
+	r, ok := p.newest(p.codexHome, p.threadID)
+	if !ok {
+		return 0
+	}
+	return r.Level
 }
 
 // NewCodexParser returns a fresh parser ready to consume codex --json lines.
-func NewCodexParser() *CodexParser {
-	return &CodexParser{agentMsgText: map[string]string{}}
+func NewCodexParser() *CodexParser { return NewCodexParserIn("") }
+
+// NewCodexParserIn is NewCodexParser for a spawn with its own
+// CODEX_HOME. The parser needs it because codex's usable context
+// numbers live in that directory, not in the stream (codex_rollout.go).
+func NewCodexParserIn(codexHome string) *CodexParser {
+	return &CodexParser{
+		agentMsgText: map[string]string{},
+		codexHome:    codexHome,
+		level:        codexRolloutLevel,
+		newest:       codexRolloutNewest,
+	}
 }
 
 type codexRaw struct {
@@ -53,6 +118,64 @@ type codexRaw struct {
 	// message is nested (`{"type":"turn.failed","error":{"message":"..."}}`)
 	// rather than at top level like a plain `{"type":"error","message":...}`.
 	Error *codexError `json:"error,omitempty"`
+	// Usage lands on turn.completed with the turn's token accounting.
+	Usage      *codexUsage     `json:"usage,omitempty"`
+	Compaction *CompactionInfo `json:"compaction,omitempty"`
+}
+
+// codexUsage is the shape codex 0.129 emits on turn.completed, captured
+// from a live run:
+//
+//	{"input_tokens":20250,"cached_input_tokens":11264,
+//	 "cache_write_input_tokens":0,"output_tokens":5,
+//	 "reasoning_output_tokens":0}
+//
+// Note InputTokens is the TOTAL input, cached part included — unlike
+// Anthropic, where the three input numbers are disjoint. So the fresh
+// (uncached) share is InputTokens - CachedInputTokens; adding the cached
+// figure on top would count the cache twice.
+//
+// It is NOT the context level. This block is a per-TURN sum: codex adds
+// up every model request the turn made, so a turn with five tool calls
+// reports roughly five times the window that was actually in use
+// (measured: 92,842 reported against a real level of 18,874). The level
+// is read from codex's rollout instead — see codex_rollout.go.
+type codexUsage struct {
+	InputTokens       int `json:"input_tokens"`
+	CachedInputTokens int `json:"cached_input_tokens"`
+	CacheWriteTokens  int `json:"cache_write_input_tokens"`
+	OutputTokens      int `json:"output_tokens"`
+	// ReasoningOutputTokens is a SUBSET of OutputTokens, not an extra —
+	// kept only so the split is visible; never added to the total.
+	ReasoningOutputTokens int `json:"reasoning_output_tokens"`
+}
+
+// tokenUsage normalizes the codex numbers into the cross-CLI shape.
+// Codex reports no model id and no window size, so those stay empty
+// rather than being inferred from the configured model — what wick
+// requested and what the vendor actually billed are not always the same.
+func (u *codexUsage) tokenUsage() *TokenUsage {
+	if u == nil {
+		return nil
+	}
+	if u.InputTokens == 0 && u.OutputTokens == 0 {
+		return nil
+	}
+	fresh := u.InputTokens - u.CachedInputTokens
+	if fresh < 0 {
+		fresh = 0
+	}
+	// ContextUsed and Window stay empty here: the flow numbers above are
+	// what this turn spent and are correct as they stand, but codex's
+	// stream says nothing truthful about the LEVEL. CodexParser fills
+	// both in from the rollout when it can, and leaves them at zero when
+	// it cannot — see codex_rollout.go.
+	return &TokenUsage{
+		Input:      fresh,
+		CacheRead:  u.CachedInputTokens,
+		CacheWrite: u.CacheWriteTokens,
+		Output:     u.OutputTokens,
+	}
 }
 
 type codexError struct {
@@ -60,9 +183,9 @@ type codexError struct {
 }
 
 type codexItem struct {
-	ID     string `json:"id,omitempty"`
-	Type   string `json:"type"`
-	Text   string `json:"text,omitempty"`
+	ID   string `json:"id,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
 	// function_call fields
 	Name   string `json:"name,omitempty"`
 	CallID string `json:"call_id,omitempty"`
@@ -99,13 +222,91 @@ type codexMCPResult struct {
 }
 
 type codexMCPContent struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Data     string `json:"data,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
 }
 
 // Parse decodes one codex --json line into an AgentEvent.
 // Blank/whitespace lines return (Unknown, nil).
+// Parse normalises one codex line, and stamps the mid-turn context level
+// onto whatever it produced.
+//
+// The stamp happens HERE rather than inside the switch because codex's
+// stream carries no usage at all until turn.completed: there is no one
+// frame that knows the level, so the reading is fetched beside the
+// stream (throttled) and any frame will do as a carrier. A turn that is
+// still running is exactly when this matters — turn.completed already
+// carries the real thing, so it is left alone.
 func (p *CodexParser) Parse(line string) (AgentEvent, error) {
+	ev, err := p.parse(line)
+	if err == nil && ev.Type != Done && ev.ContextUsed == 0 {
+		ev.ContextUsed = p.liveLevel()
+	}
+	if err == nil {
+		if ev.Type == ToolResult && ev.ExitCode == nil {
+			// A non-zero exit inside the envelope is a failed command, the
+			// same as command_execution reports it.
+			if ev.ExitCode = codexOutputExit(ev.Text); ev.ExitCode != nil && *ev.ExitCode != 0 {
+				ev.IsError = true
+			}
+		}
+		if ev.Type == ToolResult {
+			if out, ok := codexUnwrapOutput(ev.Text); ok {
+				// Classify the output, not the envelope; Text stays raw.
+				orig := ev.Text
+				ev.Text = out
+				p.tools.decorate(&ev)
+				ev.Text = orig
+				ev.Display.OriginalBytes = len(orig)
+				return ev, err
+			}
+		}
+		p.tools.decorate(&ev)
+	}
+	return ev, err
+}
+
+// codexEnvelope is the shape codex wraps some function_call_output in:
+// {"output":"<stdout>","metadata":{"exit_code":0,"duration_seconds":0.1}}.
+type codexEnvelope struct {
+	Output   *string `json:"output"`
+	Metadata *struct {
+		ExitCode *int `json:"exit_code"`
+	} `json:"metadata"`
+}
+
+func parseCodexEnvelope(text string) (codexEnvelope, bool) {
+	var env codexEnvelope
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "{") || !strings.Contains(t, `"output"`) {
+		return env, false
+	}
+	if json.Unmarshal([]byte(t), &env) != nil || env.Output == nil || env.Metadata == nil {
+		return env, false
+	}
+	return env, true
+}
+
+// codexUnwrapOutput returns the output inside a codex envelope.
+func codexUnwrapOutput(text string) (string, bool) {
+	env, ok := parseCodexEnvelope(text)
+	if !ok {
+		return "", false
+	}
+	return *env.Output, true
+}
+
+// codexOutputExit returns the envelope's exit code, nil when absent.
+func codexOutputExit(text string) *int {
+	if env, ok := parseCodexEnvelope(text); ok {
+		return env.Metadata.ExitCode
+	}
+	return nil
+}
+
+func (p *CodexParser) parse(line string) (AgentEvent, error) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return AgentEvent{}, nil
@@ -129,8 +330,15 @@ func (p *CodexParser) Parse(line string) (AgentEvent, error) {
 	log.Debug().Str("type", raw.Type).Str("thread_id", raw.ThreadID).Msg("codex.parse: decoded")
 
 	switch raw.Type {
+	case "wick.compaction":
+		return AgentEvent{Type: Compaction, Raw: trimmed, Compaction: raw.Compaction}, nil
 	case "thread.started":
 		log.Debug().Str("thread_id", raw.ThreadID).Bool("already_emitted", p.sessionEmitted).Msg("codex.parse: thread.started")
+		if raw.ThreadID != "" {
+			// Remember it even on a resumed spawn that already emitted:
+			// the rollout lookup needs the id, not the novelty.
+			p.threadID = raw.ThreadID
+		}
 		if !p.sessionEmitted && raw.ThreadID != "" {
 			p.sessionEmitted = true
 			return AgentEvent{
@@ -201,12 +409,22 @@ func (p *CodexParser) Parse(line string) (AgentEvent, error) {
 			text := ""
 			if item.Result != nil {
 				var parts []string
+				binary := false
 				for _, c := range item.Result.Content {
 					if c.Type == "text" && c.Text != "" {
 						parts = append(parts, c.Text)
+					} else if c.Data != "" {
+						binary = true
 					}
 				}
 				text = strings.Join(parts, "\n")
+				if binary {
+					// Image/audio blocks used to be dropped here; keep the
+					// whole block array so Classify can surface them.
+					if b, err := json.Marshal(item.Result.Content); err == nil {
+						text = string(b)
+					}
+				}
 			}
 			return AgentEvent{
 				Type:      ToolResult,
@@ -223,6 +441,7 @@ func (p *CodexParser) Parse(line string) (AgentEvent, error) {
 				Text:      item.AggregatedOutput,
 				ToolUseID: item.ID,
 				IsError:   isErr,
+				ExitCode:  item.ExitCode,
 				Raw:       trimmed,
 			}, nil
 		case "web_search":
@@ -317,7 +536,7 @@ func (p *CodexParser) Parse(line string) (AgentEvent, error) {
 
 	case "turn.completed":
 		log.Debug().Msg("codex.parse: turn.completed")
-		return AgentEvent{Type: Done, Raw: trimmed}, nil
+		return AgentEvent{Type: Done, Raw: trimmed, Usage: p.turnUsage(raw.Usage)}, nil
 
 	case "error":
 		log.Debug().Str("message", raw.Message).Msg("codex.parse: error event")
@@ -353,6 +572,28 @@ func (p *CodexParser) Parse(line string) (AgentEvent, error) {
 	}
 	log.Debug().Str("type", raw.Type).Msg("codex.parse: unrecognized type → trace")
 	return AgentEvent{Type: Trace, Text: trimmed, Raw: trimmed}, nil
+}
+
+// turnUsage is the turn's accounting with the context level filled in
+// from codex's rollout.
+//
+// The flow numbers come straight from the stream; the level does not
+// exist there (codex_rollout.go explains why) and is looked up by thread
+// id. A lookup that fails leaves the level at zero — the meter then
+// shows the previous reading rather than a number five times too big.
+func (p *CodexParser) turnUsage(u *codexUsage) *TokenUsage {
+	out := u.tokenUsage()
+	if out == nil || p.level == nil || p.threadID == "" {
+		return out
+	}
+	r, ok := p.level(p.codexHome, p.threadID, u.InputTokens)
+	if !ok {
+		log.Debug().Str("thread_id", p.threadID).Msg("codex.parse: no rollout reading — context level unknown this turn")
+		return out
+	}
+	out.ContextUsed = r.Level
+	out.Window = r.Window
+	return out
 }
 
 // codexControlFrames are the known housekeeping frame types that carry no

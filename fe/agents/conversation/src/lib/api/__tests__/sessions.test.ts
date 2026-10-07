@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { Effect, Layer } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "@effect/platform";
-import { listSessions, getConversation, getSessionMeta, getTurnTrace } from "../sessions.js";
+import { listSessions, getConversation, getSessionMeta, getTurnTrace, getTurnEvent } from "../sessions.js";
 import type { SessionListItem, ConversationTurn, SessionMeta } from "../../types/agents.js";
 
 const mockLayer = (status: number, body: unknown) =>
@@ -101,6 +101,54 @@ describe("getConversation", () => {
       ),
     );
     expect(result.turns).toHaveLength(0);
+  });
+
+  test("maps has_more (absent → false)", async () => {
+    const withMore = await Effect.runPromise(
+      getConversation("/tools/agents", "sess-1").pipe(
+        Effect.provide(mockLayer(200, { turns: [TURN], has_more: true })),
+      ),
+    );
+    expect(withMore.hasMore).toBe(true);
+
+    const without = await Effect.runPromise(
+      getConversation("/tools/agents", "sess-1").pipe(
+        Effect.provide(mockLayer(200, { turns: [TURN] })),
+      ),
+    );
+    expect(without.hasMore).toBe(false);
+  });
+
+  test("passes limit and before as query params, omits them when unset", async () => {
+    const urls: string[] = [];
+    const captureLayer = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((req) => {
+        urls.push(req.url);
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(JSON.stringify({ turns: [] }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+        );
+      }),
+    );
+
+    await Effect.runPromise(
+      getConversation("/tools/agents", "sess-1", { limit: 20, before: "t9" }).pipe(
+        Effect.provide(captureLayer),
+      ),
+    );
+    await Effect.runPromise(
+      getConversation("/tools/agents", "sess-1").pipe(Effect.provide(captureLayer)),
+    );
+
+    expect(urls[0]).toContain("limit=20");
+    expect(urls[0]).toContain("before=t9");
+    expect(urls[1]).not.toContain("?");
   });
 });
 
@@ -212,6 +260,65 @@ describe("listSessions — project scoping", () => {
   });
 });
 
+describe("listSessions — owner scope + paging", () => {
+  const capture = () => {
+    let capturedReq: HttpClientRequest.HttpClientRequest | null = null;
+    const layer = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((req) => {
+        capturedReq = req;
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(JSON.stringify({ sessions: [], total: 638, has_more: true }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+        );
+      }),
+    );
+    return { layer, url: () => (capturedReq as unknown as HttpClientRequest.HttpClientRequest).url };
+  };
+
+  test("owner=me and offset ride the query string", async () => {
+    const c = capture();
+    await Effect.runPromise(
+      listSessions("/tools/agents", "proj1", "me", 100).pipe(Effect.provide(c.layer)),
+    );
+    expect(c.url()).toContain("owner=me");
+    expect(c.url()).toContain("offset=100");
+  });
+
+  test('"all" sends no owner param (the server default)', async () => {
+    const c = capture();
+    await Effect.runPromise(
+      listSessions("/tools/agents", "proj1", "all").pipe(Effect.provide(c.layer)),
+    );
+    expect(c.url()).not.toContain("owner=");
+    expect(c.url()).not.toContain("offset=");
+  });
+
+  test("surfaces the server's total and has_more", async () => {
+    const c = capture();
+    const result = await Effect.runPromise(
+      listSessions("/tools/agents", undefined, "me").pipe(Effect.provide(c.layer)),
+    );
+    expect(result.total).toBe(638);
+    expect(result.hasMore).toBe(true);
+  });
+
+  test("falls back to sessions.length when total is absent (older server)", async () => {
+    const result = await Effect.runPromise(
+      listSessions("/tools/agents").pipe(
+        Effect.provide(mockLayer(200, { sessions: [SESSION] })),
+      ),
+    );
+    expect(result.total).toBe(1);
+    expect(result.hasMore).toBe(false);
+  });
+});
+
 describe("getTurnTrace", () => {
   test("normalizes array response to TurnEvent[]", async () => {
     const events = [
@@ -277,5 +384,44 @@ describe("getTurnTrace", () => {
 
     const r = capturedReq as unknown as HttpClientRequest.HttpClientRequest;
     expect(r.url).toContain("/tools/agents/sessions/sess-99/turns/turn-42");
+  });
+});
+
+describe("getTurnEvent", () => {
+  test("returns the spilled event payload", async () => {
+    const payload = { event_id: "e1", type: "tool_result", text: "big spilled text" };
+    const result = await Effect.runPromise(
+      getTurnEvent("/tools/agents", "sess-1", "turn-1", "e1").pipe(
+        Effect.provide(mockLayer(200, payload)),
+      ),
+    );
+    expect(result.event_id).toBe("e1");
+    expect(result.text).toBe("big spilled text");
+  });
+
+  test("requests the correct per-event URL", async () => {
+    let capturedReq: HttpClientRequest.HttpClientRequest | null = null;
+    const captureLayer = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((req) => {
+        capturedReq = req;
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(JSON.stringify({ event_id: "e7", type: "tool_result" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+        );
+      }),
+    );
+
+    await Effect.runPromise(
+      getTurnEvent("/tools/agents", "sess-99", "turn-42", "e7").pipe(Effect.provide(captureLayer)),
+    );
+
+    const r = capturedReq as unknown as HttpClientRequest.HttpClientRequest;
+    expect(r.url).toContain("/tools/agents/sessions/sess-99/turns/turn-42/events/e7");
   });
 });

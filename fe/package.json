@@ -4,6 +4,7 @@
   "version": "0.0.1",
   "type": "module",
   "workspaces": [
+    "admin/*",
     "agents/*",
     "common/*",
     "manager"

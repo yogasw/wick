@@ -75,6 +75,22 @@ export interface TicketField {
   type: "text" | "select";
   options?: string[];
   required?: boolean;
+  /** Show this field's value on the board card. Off by default — the full
+      set is always on the ticket's own page. */
+  show_on_card?: boolean;
+}
+
+/** One custom action button. Clicking it POSTs to `url`: a ticket.action
+    event carrying that ticket (placement "ticket", e.g. "Sync to Notion"),
+    or a ticket.board_action event carrying the list's filter and matches
+    (placement "board", e.g. "Pull my tickets from Notion"). */
+export interface TicketButton {
+  id?: string; // minted server-side on first save
+  label: string;
+  url: string;
+  /** Where the button is drawn. Absent = "ticket", so buttons saved before
+      placements existed stay on the ticket page they were made for. */
+  placement?: "ticket" | "board";
 }
 
 /** One column on the project's board. `key` is what tickets store and what
@@ -112,7 +128,46 @@ export interface TicketConfig {
   auto_create?: AutoCreateRule[];
   /** Board columns, in order. Empty means the built-in set. */
   statuses?: TicketStatus[];
+  integrations?: TicketIntegrations;
 }
+
+/** Outbound webhooks + the token-authed REST surface. */
+export interface TicketIntegrations {
+  /** Lets a Personal Access Token call this project's ticket endpoints. */
+  api_enabled?: boolean;
+  webhooks?: TicketWebhook[];
+  /** Custom action buttons rendered on every ticket's page. */
+  buttons?: TicketButton[];
+}
+
+/** One outbound endpoint. */
+export interface TicketWebhook {
+  /** Stable across edits, so the delivery log survives a URL change. */
+  id: string;
+  name?: string;
+  url: string;
+  /** Never the real value on read: `__stored__` means "signed, key hidden",
+      empty means unsigned. Sending `__stored__` back keeps the stored key. */
+  secret?: string;
+  /** Empty means every event. */
+  events?: string[];
+  headers?: Record<string, string>;
+  enabled: boolean;
+}
+
+/** One recorded delivery attempt, for the settings page. */
+export interface TicketDelivery {
+  webhook_id: string;
+  event: string;
+  at: string;
+  status?: number;
+  error?: string;
+  attempts: number;
+  ok: boolean;
+}
+
+/** Sentinel standing in for a stored webhook secret. */
+export const SECRET_REDACTED = "__stored__";
 
 export interface UpdateProjectRequest {
   name: string;

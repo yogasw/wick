@@ -108,6 +108,11 @@ type Engine struct {
 	// broker second.
 	OnEvent func(id, runID string, ev workflow.RunEvent)
 
+	// AfterRun fires (in its own goroutine) once a run has finished and
+	// its index row is written. The run-retention pass hooks it to prune
+	// that workflow's history. Nil = no-op.
+	AfterRun func(id string)
+
 	// bus + busInitOnce back the multi-subscriber broker. Lazy: nil
 	// until the first Subscribe call, then non-nil for life. See
 	// broker.go.
@@ -400,6 +405,9 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 		e.emit(ctx, w.ID, runID, workflow.RunEvent{Event: workflow.EventWorkflowFailed, Data: map[string]any{"error": err.Error()}})
 	} else {
 		e.emit(ctx, w.ID, runID, workflow.RunEvent{Event: workflow.EventWorkflowCompleted})
+	}
+	if e.AfterRun != nil {
+		go e.AfterRun(w.ID)
 	}
 	return st, err
 }

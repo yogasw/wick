@@ -72,8 +72,10 @@ func (s *Service) assembleModule(ctx context.Context, def *entity.CustomConnecto
 	// oauth-scheme MCP defs carry the per-instance account fields so
 	// "+ New row" seeds them and the Connect flow's SetOwned writes are
 	// accepted. Hidden — managed by the flow, not typed by hand.
+	oauthScheme := false
 	if srvRow := s.serverRowForDef(ctx, def); srvRow != nil && srvRow.AuthScheme == "oauth" {
 		cfgFields = append(cfgFields, oauthInstanceConfigs()...)
+		oauthScheme = true
 	}
 
 	// Build each category's ops in order — grouping is explicit in the
@@ -120,7 +122,18 @@ func (s *Service) assembleModule(ctx context.Context, def *entity.CustomConnecto
 		healthCheck = healthCheckFor(probe, opKeys, meta.HealthExpect)
 	}
 
+	// oauth MCP defs expose an OAuthMeta so they ride the built-in SSO
+	// machinery: the Access policy card's SSO toggles, per-user
+	// ConnectorAccounts, "kind: account" wick_list entries and @accountId
+	// tool ids. The flow itself is the MCP PKCE login (manager oauthStart
+	// branches to it), so no endpoints live here.
+	var oauthMeta *connector.OAuthMeta
+	if oauthScheme {
+		oauthMeta = &connector.OAuthMeta{DisplayName: def.Name}
+	}
+
 	return connector.Module{
+		OAuth: oauthMeta,
 		Meta: connector.Meta{
 			Key:         def.Key,
 			Name:        def.Name,
@@ -266,10 +279,28 @@ func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector
 				ordered = append(ordered, r)
 			}
 		}
+		var callerID string
+		if u := login.GetUser(parent); u != nil {
+			callerID = u.ID
+		}
 		for _, r := range ordered {
 			// Accounts are per instance — only enabled rows lend their
 			// token to the catalog probe.
 			if r.Disabled {
+				continue
+			}
+			if s.InstancePerUser(r) {
+				// Per-user (SSO) instance: it holds no credential of its
+				// own, so the one shared op list syncs under a connected
+				// account — the caller's, else the most recently
+				// refreshed. Never a tokenless tools/list.
+				accs, _ := s.conns.ListAccounts(ctx, r.ID)
+				if acc := syncAccount(accs, callerID); acc != nil {
+					if tok, err := s.accountAccessToken(ctx, &meta, acc); err == nil && tok != "" {
+						srv.AccessToken = tok
+						break
+					}
+				}
 				continue
 			}
 			if tok, err := s.instanceAccessToken(ctx, &meta, r.ID); err == nil && tok != "" {
@@ -454,7 +485,7 @@ func parseExcluded(raw string) map[string]bool {
 // take effect after an explicit Reload swaps the module (the design's
 // no-hot-reload rule).
 func (s *Service) executeFunc(cfgFields []DefField, op DefOp) connector.ExecuteFunc {
-	cfgKeys := fieldKeys(cfgFields)
+	cfg := append([]DefField(nil), cfgFields...)
 	inKeys := fieldKeys(op.Inputs)
 	if op.MCPSource != nil {
 		src := *op.MCPSource
@@ -465,7 +496,7 @@ func (s *Service) executeFunc(cfgFields []DefField, op DefOp) connector.ExecuteF
 	}
 	req := *op.Request
 	return func(c *connector.Ctx) (any, error) {
-		return executeHTTP(c, req, cfgKeys, inKeys)
+		return executeHTTP(c, req, cfg, inKeys)
 	}
 }
 
@@ -478,11 +509,20 @@ func fieldKeys(fields []DefField) []string {
 }
 
 // ctxMaps materializes the {.cfg, .in} template namespaces from the
-// framework-resolved (already decrypted) Ctx reads.
-func ctxMaps(c *connector.Ctx, cfgKeys, inKeys []string) (cfg, in map[string]string) {
-	cfg = make(map[string]string, len(cfgKeys))
-	for _, k := range cfgKeys {
-		cfg[k] = c.Cfg(k)
+// framework-resolved (already decrypted) Ctx reads. A config key with no
+// stored value falls back to the field's declared default — the same
+// semantics entity.MapToStruct gives built-in connectors, and what the
+// session-instance "ready" status check assumes (a required field counts
+// as satisfied when its default is non-empty). Session instances start
+// blank, so without this fallback a defaulted base_url renders empty.
+func ctxMaps(c *connector.Ctx, cfgFields []DefField, inKeys []string) (cfg, in map[string]string) {
+	cfg = make(map[string]string, len(cfgFields))
+	for _, f := range cfgFields {
+		v := c.Cfg(f.Key)
+		if v == "" {
+			v = f.Default
+		}
+		cfg[f.Key] = v
 	}
 	in = make(map[string]string, len(inKeys))
 	for _, k := range inKeys {
@@ -495,8 +535,8 @@ func ctxMaps(c *connector.Ctx, cfgKeys, inKeys []string) (cfg, in map[string]str
 // the shared client. Responses pass through as decoded JSON (or raw
 // text when the upstream is not JSON); non-2xx statuses surface as
 // errors carrying a body snippet for the history panel.
-func executeHTTP(c *connector.Ctx, recipe OpRequest, cfgKeys, inKeys []string) (any, error) {
-	cfg, in := ctxMaps(c, cfgKeys, inKeys)
+func executeHTTP(c *connector.Ctx, recipe OpRequest, cfgFields []DefField, inKeys []string) (any, error) {
+	cfg, in := ctxMaps(c, cfgFields, inKeys)
 
 	rurl, err := renderTemplate("url", recipe.URLTemplate, cfg, in)
 	if err != nil {
@@ -577,9 +617,33 @@ func (s *Service) executeMCP(c *connector.Ctx, src MCPSource, inputs []DefField)
 		}
 	}
 	if row.AuthScheme == "oauth" {
+		meta := parseOAuthMeta(row.AuthExtra)
+		if inst, err := s.conns.Get(c.Context(), c.InstanceID()); err == nil && s.InstancePerUser(*inst) {
+			// Per-user (SSO) instance: run as an explicit @accountId the
+			// session owner may use, else the owner's own connected
+			// account — never a fallback to someone else's.
+			acc, err := s.callerAccount(c.Context(), *inst, c.AccountID(), c.CallerUserID())
+			if err != nil {
+				switch err {
+				case ErrNoOAuthAccount:
+					return nil, fmt.Errorf("you have not connected your own %s account yet — open /manager/connectors/%s/%s and click Connect to link it, then retry", inst.Label, inst.Key, inst.ID)
+				case ErrOAuthAccountNotYours:
+					return nil, fmt.Errorf("account %q belongs to another user and %s keeps connected accounts private — connect your own at /manager/connectors/%s/%s", c.AccountID(), inst.Label, inst.Key, inst.ID)
+				case ErrOAuthAccountGone:
+					return nil, fmt.Errorf("account %q is no longer connected to %s — pick another account or connect your own at /manager/connectors/%s/%s", c.AccountID(), inst.Label, inst.Key, inst.ID)
+				}
+				return nil, err
+			}
+			tok, err := s.accountAccessToken(c.Context(), &meta, acc)
+			if err != nil {
+				return nil, err
+			}
+			srv.AccessToken = tok
+			client := s.mcp(c.HTTP)
+			return client.Call(c.Context(), srv, src.ToolName, coerceArgs(inputs, c), claims)
+		}
 		// Per-instance account: the calling instance's own token, with
 		// transparent refresh through the server's OAuth client.
-		meta := parseOAuthMeta(row.AuthExtra)
 		tok, err := s.instanceAccessToken(c.Context(), &meta, c.InstanceID())
 		if err != nil {
 			return nil, err
@@ -615,18 +679,20 @@ func coerceArgs(fields []DefField, c *connector.Ctx) map[string]any {
 		if name == "" {
 			name = f.Key
 		}
-		// Prefer the caller's original JSON type for scalars the string
+		// Prefer the caller's original JSON type for values the string
 		// round-trip would otherwise flatten. A server may advertise a
-		// boolean/number parameter as "string" in its inputSchema (so the
-		// field lands on the text widget below) yet validate the tools/call
-		// against the real boolean/number type — relaying the stringified
-		// form then fails the server's own validation. When the caller
-		// actually sent a bool or number, forward it unchanged. Strings and
-		// objects deliberately fall through to the widget logic so wick_enc_
-		// decryption and textarea JSON parsing still run.
+		// boolean/number/object parameter in a shape wick's widget grammar
+		// cannot express (it has no object type, so such a field lands on a
+		// text or textarea widget) yet validate the tools/call against the
+		// real type — relaying the stringified form then fails the server's
+		// own validation ("expected object, received string"). When the
+		// caller actually sent a non-string JSON value, forward it unchanged:
+		// the widget is a UI hint, not the authority on type. Strings still
+		// fall through to the widget logic so wick_enc_ decryption and
+		// textarea JSON parsing keep running.
 		if rv, ok := c.RawInputValue(f.Key); ok {
 			switch rv.(type) {
-			case bool, float64, json.Number:
+			case bool, float64, json.Number, map[string]any, []any:
 				out[name] = rv
 				continue
 			}

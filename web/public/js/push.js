@@ -218,76 +218,139 @@
     }, 3000);
   }
 
-  // chimeCtx is a singleton AudioContext used by playLifecycleChime.
-  // We can't construct it lazily inside the chime call: macOS Safari
-  // and Chrome gate AudioContext start on a user gesture (autoplay
-  // policy), and a service-worker postMessage callback doesn't count
-  // as a gesture. So we create it once on the first real click /
-  // keydown / touchstart anywhere on the page and keep it warm —
-  // every subsequent lifecycle chime then plays without re-priming.
-  var chimeCtx = null;
+  // TEST_PUSH_DELAY gives the user time to close the window before the
+  // test lands, so they see the OS notification and not just the page.
+  // The server holds the delay: a closed window runs no JS.
+  var TEST_PUSH_DELAY = 5;
+
+  // sendTestPush asks the server for a delayed test push: to every device
+  // of the user when endpoint is empty, else to that one device (the
+  // server refuses a device that is not the caller's). One toast on the
+  // 202; the button is only held long enough to stop a double click. A
+  // failed send (an expired subscription answers 410 at the push service)
+  // says so and points at Refresh device instead of claiming success.
+  async function sendTestPush(btn, endpoint) {
+    if (btn) btn.disabled = true;
+    try {
+      var res = await fetch('/api/push/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: endpoint || '', delay_seconds: TEST_PUSH_DELAY }),
+      });
+      if (!res.ok) {
+        var msg = (await res.text().catch(function () { return ''; })).trim();
+        showToast('Test notification failed' + (msg ? ': ' + msg : '') + '. Try Refresh device, then send again.', 'bad');
+        return;
+      }
+      showToast('Test notification will be sent in ' + TEST_PUSH_DELAY + ' seconds', 'ok');
+    } finally {
+      if (btn) window.setTimeout(function () { btn.disabled = false; }, 1500);
+    }
+  }
+
+  // Lifecycle chime — a pre-rendered two-tone WAV (E5 → A5) played
+  // through an HTMLAudioElement. Deliberately NOT WebAudio: on macOS,
+  // `new AudioContext()` blocks the main thread synchronously while
+  // CoreAudio wakes the output device — multiple seconds on Bluetooth
+  // headsets — and the previous implementation ran that inside the
+  // page's first click, freezing the UI on every navigation. A media
+  // element initializes its output path asynchronously, so neither
+  // priming nor playback can jank the main thread.
+  //
+  // Autoplay policy still applies: Safari only lets play() succeed on
+  // an element that was already played from a user gesture, so the
+  // first real click / keydown / touchstart "unlocks" the element with
+  // an immediate play()+pause(). That blip is inaudible — the sample's
+  // attack envelope starts near zero.
+  var chimeAudio = null;
   var chimePrimed = false;
 
-  function primeChimeContext() {
-    if (chimePrimed) return;
-    var Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
+  // buildChimeAudio synthesizes the ping as 16-bit mono PCM (~12k
+  // samples, sub-millisecond of CPU) and wraps it in a WAV blob URL.
+  function buildChimeAudio() {
     try {
-      chimeCtx = new Ctx();
+      var rate = 24000;
+      var notes = [
+        { freq: 659.25, start: 0,    dur: 0.18 },
+        { freq: 880.00, start: 0.18, dur: 0.26 },
+      ];
+      var total = Math.ceil(rate * 0.5);
+      var pcm = new Float32Array(total);
+      notes.forEach(function (n) {
+        var s0 = Math.floor(n.start * rate);
+        var count = Math.floor(n.dur * rate);
+        var attack = 0.02;
+        for (var i = 0; i < count && s0 + i < total; i++) {
+          var t = i / rate;
+          // Same shape as the old exponentialRampToValueAtTime pair:
+          // near-silence → 0.32 over the attack, then decay back down.
+          var gain = t < attack
+            ? 0.0001 * Math.pow(0.32 / 0.0001, t / attack)
+            : 0.32 * Math.pow(0.0001 / 0.32, (t - attack) / (n.dur - attack));
+          pcm[s0 + i] += Math.sin(2 * Math.PI * n.freq * t) * gain;
+        }
+      });
+      var buf = new ArrayBuffer(44 + total * 2);
+      var v = new DataView(buf);
+      var writeStr = function (off, s) {
+        for (var i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i));
+      };
+      writeStr(0, 'RIFF'); v.setUint32(4, 36 + total * 2, true); writeStr(8, 'WAVE');
+      writeStr(12, 'fmt '); v.setUint32(16, 16, true);
+      v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+      v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+      v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+      writeStr(36, 'data'); v.setUint32(40, total * 2, true);
+      for (var i = 0; i < total; i++) {
+        var s = Math.max(-1, Math.min(1, pcm[i]));
+        v.setInt16(44 + i * 2, s * 0x7fff, true);
+      }
+      var url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+      var audio = new Audio(url);
+      audio.preload = 'auto';
+      return audio;
     } catch (_) {
-      return;
+      return null;
     }
-    // resume() must be called from a user gesture on Safari and some
-    // Chrome versions; the listeners that call primeChimeContext are
-    // attached to user events below.
-    if (chimeCtx && chimeCtx.state === 'suspended' && chimeCtx.resume) {
-      try { chimeCtx.resume(); } catch (_) {}
-    }
+  }
+
+  function primeChime() {
+    if (chimePrimed) return;
     chimePrimed = true;
+    chimeAudio = buildChimeAudio();
+    if (!chimeAudio) return;
+    // Unlock inside the gesture: start playback and stop it right
+    // away. The rejected play promise (AbortError) is expected.
+    try {
+      var p = chimeAudio.play();
+      chimeAudio.pause();
+      chimeAudio.currentTime = 0;
+      if (p && p.catch) p.catch(function () {});
+    } catch (_) {}
   }
 
   // Prime on the first user gesture, whatever it is. Capture-phase
   // listeners so we run before any handler that might preventDefault.
   // { once: true } detaches them after firing.
   ['click', 'keydown', 'touchstart'].forEach(function (ev) {
-    document.addEventListener(ev, primeChimeContext, { capture: true, once: true, passive: true });
+    document.addEventListener(ev, primeChime, { capture: true, once: true, passive: true });
   });
 
-  // playLifecycleChime emits a short two-tone ping via WebAudio when
-  // the in-app lifecycle card surfaces. OS notification is silent in
-  // the wick-open path (silent: true in sw.js so the OS surface stays
-  // out of the way), so the page is responsible for the audible cue
-  // — otherwise the user has no chance of noticing the card if they
-  // were looking at a different window or another tab.
+  // playLifecycleChime plays the ping when the in-app lifecycle card
+  // surfaces. OS notification is silent in the wick-open path
+  // (silent: true in sw.js so the OS surface stays out of the way),
+  // so the page is responsible for the audible cue — otherwise the
+  // user has no chance of noticing the card if they were looking at a
+  // different window or another tab.
   //
   // No-op until the user has interacted with the page once (primes
-  // chimeCtx via the listeners above). Best-effort throughout.
+  // chimeAudio via the listeners above). Best-effort throughout.
   function playLifecycleChime() {
-    if (!chimeCtx) return;
+    if (!chimeAudio) return;
     try {
-      // Re-attempt resume in case the context was suspended again
-      // (some browsers auto-suspend after long idle). Fire-and-forget.
-      if (chimeCtx.state === 'suspended' && chimeCtx.resume) {
-        chimeCtx.resume().catch(function () {});
-      }
-      var t = chimeCtx.currentTime;
-      // Two short notes — E5 → A5 — at moderate volume so it carries
-      // even on a backgrounded tab without sounding like an alert.
-      [
-        { freq: 659.25, start: 0,    dur: 0.18 },
-        { freq: 880.00, start: 0.18, dur: 0.26 },
-      ].forEach(function (n) {
-        var osc = chimeCtx.createOscillator();
-        var gain = chimeCtx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(n.freq, t + n.start);
-        gain.gain.setValueAtTime(0.0001, t + n.start);
-        gain.gain.exponentialRampToValueAtTime(0.32, t + n.start + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, t + n.start + n.dur);
-        osc.connect(gain).connect(chimeCtx.destination);
-        osc.start(t + n.start);
-        osc.stop(t + n.start + n.dur + 0.02);
-      });
+      chimeAudio.currentTime = 0;
+      var p = chimeAudio.play();
+      if (p && p.catch) p.catch(function () {});
     } catch (_) {}
   }
 
@@ -421,6 +484,15 @@
     });
   }
 
+  // rowRadius rounds the outer corners of the first/last device row, which
+  // the list's overflow-hidden used to clip for us.
+  function rowRadius(i, n) {
+    var r = [];
+    if (i === 0) r.push('border-top-left-radius:0.5rem;border-top-right-radius:0.5rem');
+    if (i === n - 1) r.push('border-bottom-left-radius:0.5rem;border-bottom-right-radius:0.5rem');
+    return r.length ? ' style="' + r.join(';') + '"' : '';
+  }
+
   function renderDeviceList(devices, currentEndpoint) {
     var list = document.getElementById('push-device-list');
     if (!list) return;
@@ -428,11 +500,14 @@
       list.innerHTML = '<div class="flex flex-col gap-2 bg-white-200 dark:bg-navy-800 px-4 py-5 text-sm text-black-800 dark:text-black-600"><span class="font-medium text-black-900 dark:text-white-100">No notification devices yet.</span><span class="text-xs text-black-700 dark:text-black-600">Enable notifications to add this browser.</span></div>';
       return;
     }
-    list.innerHTML = devices.map(function (d) {
+    // The ⋮ menu drops out of its row; the template's overflow-hidden (kept
+    // for the rounded corners) would clip it on the last device.
+    list.classList.remove('overflow-hidden');
+    list.innerHTML = devices.map(function (d, i) {
       var isCurrent = d.endpoint === currentEndpoint;
       var label = escapeHTML(d.deviceLabel || 'Browser device');
       var seen = d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString() : 'Never';
-      return '<div class="flex flex-col gap-3 border-b border-white-300 bg-white-100 px-4 py-4 last:border-b-0 dark:border-navy-600 dark:bg-navy-700 sm:flex-row sm:items-center sm:justify-between">' +
+      return '<div class="flex flex-col gap-3 border-b border-white-300 bg-white-100 px-4 py-4 last:border-b-0 dark:border-navy-600 dark:bg-navy-700 sm:flex-row sm:items-center sm:justify-between"' + rowRadius(i, devices.length) + '>' +
         '<div class="min-w-0">' +
         '<div class="flex flex-wrap items-center gap-2"><span class="text-sm font-medium text-black-900 dark:text-white-100">' + label + '</span>' +
         (isCurrent ? '<span class="rounded-full bg-pos-100 px-2 py-0.5 text-xs font-medium text-pos-400">This browser</span>' : '') +
@@ -440,7 +515,14 @@
         '<div class="mt-1 truncate font-mono text-xs text-black-700 dark:text-black-600">' + escapeHTML(shortEndpoint(d.endpoint)) + '</div>' +
         '<div class="mt-1 text-xs text-black-700 dark:text-black-600">Last seen ' + escapeHTML(seen) + '</div>' +
         '</div>' +
-        '<button type="button" data-push-remove="' + escapeHTML(d.endpoint) + '" data-current="' + (isCurrent ? '1' : '0') + '" class="inline-flex items-center justify-center rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm font-medium text-neg-400 transition-colors hover:bg-neg-100 dark:border-navy-600 dark:bg-navy-800">Remove</button>' +
+        // One ⋮ per row: a test for just this device, and Remove. A native
+        // <details> opens and closes without any wiring of its own.
+        '<details class="relative">' +
+        '<summary aria-label="Device actions" title="Device actions" class="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-lg border border-white-400 bg-white-100 text-lg leading-none text-black-800 transition-colors hover:bg-white-200 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600 dark:hover:bg-navy-700">⋮</summary>' +
+        '<div class="absolute right-0 z-10 mt-1 flex w-56 flex-col rounded-lg border border-white-300 bg-white-100 py-1 shadow-md dark:border-navy-600 dark:bg-navy-800">' +
+        '<button type="button" data-push-test-device="' + escapeHTML(d.endpoint) + '" class="px-3 py-2 text-left text-sm text-black-900 hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-700">Send test to this device</button>' +
+        '<button type="button" data-push-remove="' + escapeHTML(d.endpoint) + '" data-current="' + (isCurrent ? '1' : '0') + '" class="px-3 py-2 text-left text-sm text-neg-400 hover:bg-neg-100">Remove</button>' +
+        '</div></details>' +
         '</div>';
     }).join('');
   }
@@ -481,7 +563,7 @@
     var actions = document.getElementById('push-device-actions');
     if (actions) {
       actions.innerHTML = '<button type="button" id="push-enable-btn" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 transition-colors hover:bg-green-600">' + (sub ? 'Refresh device' : 'Enable notifications') + '</button>' +
-        '<button type="button" id="push-test-btn" class="rounded-lg border border-white-400 bg-white-100 px-4 py-2 text-sm font-medium text-black-800 transition-colors hover:border-green-400 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">Send test</button>';
+        '<button type="button" id="push-test-btn" class="rounded-lg border border-white-400 bg-white-100 px-4 py-2 text-sm font-medium text-black-800 transition-colors hover:border-green-400 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600" title="Send a test to every device in 5 seconds">Send test</button>';
     }
   }
 
@@ -721,6 +803,7 @@
     var bell = e.target.closest('#push-bell-btn');
     var enable = e.target.closest('#push-enable-btn');
     var test = e.target.closest('#push-test-btn');
+    var testDevice = e.target.closest('[data-push-test-device]');
     var remove = e.target.closest('[data-push-remove]');
     var copyID = e.target.closest('#push-copy-id-btn');
     var queueBell = e.target.closest('[data-queue-notify]');
@@ -844,16 +927,10 @@
         await refreshProfile();
         await hydrateBell();
       }
-      if (test) {
-        test.disabled = true;
-        var sub = await currentSubscription();
-        await fetch('/api/push/test', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ endpoint: sub ? sub.endpoint : '' }),
-        });
-        test.disabled = false;
-        showToast('Test notification sent.', 'ok');
+      if (test || testDevice) {
+        var menuOpen = testDevice && testDevice.closest('details');
+        if (menuOpen) menuOpen.open = false;
+        await sendTestPush(test || testDevice, testDevice ? testDevice.getAttribute('data-push-test-device') : '');
       }
       if (remove) {
         remove.disabled = true;

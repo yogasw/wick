@@ -28,6 +28,11 @@ type Handler struct {
 	tags       *tags.Service
 	users      *login.Service
 	tools      []tool.Tool
+	// webhooks are the unauthenticated endpoints declared by tools via
+	// Router.WebhookGroup, injected at boot by server.go. Surfaced on each
+	// tool's settings page so an operator can see what answers without a
+	// login without having to read the module source.
+	webhooks []tool.WebhookRoute
 	// custom is the custom-connector service (nil until SetCustomConnectors
 	// runs at boot). Owns the /manager/connectors/custom/* builder flows.
 	custom *customconn.Service
@@ -77,6 +82,14 @@ func NewHandler(svc *Service, configsSvc *configs.Service, connectorsSvc *connec
 	}
 }
 
+// WithWebhookRoutes records the webhook endpoints tools declared at boot.
+// Called once from server.go after the tool router has collected them;
+// returns h so it can be chained onto NewHandler.
+func (h *Handler) WithWebhookRoutes(routes []tool.WebhookRoute) *Handler {
+	h.webhooks = routes
+	return h
+}
+
 // Register wires /manager/* to mux. All pages require auth; admin-only
 // actions (edits, regenerate, run) add RequireAdmin on top.
 func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
@@ -106,6 +119,9 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 	// need a stricter auth gate (per-job access / admin) than base auth.
 	mux.Handle("GET /manager", auth(http.HandlerFunc(h.serveSPAShell)))
 	mux.Handle("GET /manager/{path...}", auth(http.HandlerFunc(h.serveSPAShell)))
+	// The Plugins page moved under /admin (it is admin scope); old
+	// bookmarks land there with their query string intact.
+	registerPluginsRedirect(mux, auth)
 
 	// Jobs — view/run gated by per-job access; admin mutations gate by RequireAdmin only
 	// (admins must be able to manage disabled jobs, so settings routes skip RequireJobAccess).
@@ -122,6 +138,7 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 	// behaviour on the /manager/api surface so the SPA stays consistent.
 	mux.Handle("GET /manager/api/jobs/{key}", authJob(h.apiJobDetail))
 	mux.Handle("POST /manager/api/jobs/{key}/run", authJob(h.apiRunJob))
+	mux.Handle("POST /manager/api/jobs/{key}/cancel", authJob(h.apiCancelJob))
 	mux.Handle("GET /manager/api/jobs/{key}/runs/{runID}", authJob(h.apiJobRun))
 	mux.Handle("POST /manager/api/jobs/{key}/settings", adminOnly(h.apiUpdateJobSettings))
 	mux.Handle("POST /manager/api/jobs/{key}/configs/{configKey}", adminOnly(h.apiSetJobConfig))

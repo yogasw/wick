@@ -7,6 +7,7 @@
 </script>
 
 <BaseNode
+  description={node.description ?? ""}
   id={node.id}
   type={node.type}
   label={node.label}

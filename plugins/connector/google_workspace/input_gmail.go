@@ -39,5 +39,5 @@ type GmailReplyInput struct {
 type GmailModifyLabelsInput struct {
 	MessageID    string `wick:"required;desc=Gmail message ID to modify."`
 	AddLabels    string `wick:"desc=Label IDs to add, comma-separated. System labels: UNREAD, STARRED, IMPORTANT, INBOX, SPAM, TRASH."`
-	RemoveLabels string `wick:"desc=Label IDs to remove, comma-separated. Remove UNREAD to mark read; remove INBOX to archive."`
+	RemoveLabels string `wick:"desc=Label IDs to remove, comma-separated. Remove UNREAD to mark read, remove INBOX to archive."`
 }

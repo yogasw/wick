@@ -25,7 +25,26 @@ export type NodeType =
   | "datatable_delete"
   | "datatable_count"
   | "session_init"
-  | "webhook_respond";
+  | "webhook_respond"
+  // Canvas-only markdown annotation. Never executed, takes no edges.
+  | "sticky_note";
+
+export type StickyNoteColor = "yellow" | "green" | "blue" | "purple" | "red" | "gray";
+
+export type StickyTextSize = "sm" | "md" | "lg";
+
+// One small sticky card on a sticky_note board: top-left corner (x, y)
+// and card width, all relative 0..1 to the board so cards follow a
+// resize. Color "" = yellow, size "" = md.
+export type StickyText = {
+  id: string;
+  content: string;
+  x: number;
+  y: number;
+  width?: number;
+  color?: StickyNoteColor;
+  size?: StickyTextSize;
+};
 
 export type TriggerType =
   | "cron"
@@ -76,6 +95,10 @@ export type Node = {
 
   // classify + agent
   provider?: string;
+  // agent — model id pinned on the provider instance (empty = instance
+  // default). The picker's "type/name::model" value is split into
+  // provider (instance name) + model on save.
+  model?: string;
   preset?: string;
   prompt?: string;
   prompt_file?: string;
@@ -104,6 +127,9 @@ export type Node = {
 
   // channel + connector
   channel?: string;
+  // Pins the action to ONE registered instance of that channel
+  // ("slack:<user-id>") — which bot it runs as when several are wired.
+  channel_instance?: string;
   op?: string;
   args?: Record<string, unknown>;
   arg_modes?: Record<string, string>;
@@ -179,6 +205,15 @@ export type Node = {
   // output yet. Not consumed by the engine — purely a UX scratchpad.
   mock_input?: string;
 
+  // sticky_note — markdown body + look. Width/height 0/absent = default.
+  content?: string;
+  color?: StickyNoteColor;
+  width?: number;
+  height?: number;
+  // The note is a board: content is its title, texts are small sticky
+  // cards placed on it (x/y/width relative 0..1 to the board).
+  texts?: StickyText[];
+
   // canvas position (engine ignores; canvas persists)
   _canvas?: { x?: number; y?: number };
 };
@@ -203,6 +238,8 @@ export type Trigger = {
   id?: string;
   type: TriggerType;
   entry_node?: string;
+  // Markdown "what for + why" shown on the trigger card.
+  description?: string;
 
   // cron
   schedule?: string;
@@ -210,6 +247,8 @@ export type Trigger = {
 
   // channel
   channel?: string;
+  // Restricts the trigger to events from ONE registered instance.
+  channel_instance?: string;
   event?: string;
   target?: string;
   match?: Record<string, unknown>;

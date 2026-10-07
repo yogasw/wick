@@ -28,6 +28,9 @@ const (
 	TargetAgent
 	// TargetRole: a spawnable profile key. Delegate to it.
 	TargetRole
+	// TargetTeam: another Team agent of the author's owner. Routed over
+	// the Team link (see TeamRouter), never through this tree.
+	TargetTeam
 )
 
 // Target is one resolved mention.

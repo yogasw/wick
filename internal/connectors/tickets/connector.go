@@ -87,10 +87,34 @@ func Operations(layout agentconfig.Layout) []connector.Category {
 				"ticket_create(attach_current_session=true) or ticket_attach_session. "+
 				"Pass mine=true to see only the caller's own sessions.",
 			untrackedInput{}, h.untracked, wickdocs.Docs{}),
+		connector.Op("ticket_search", "Search Tickets",
+			"Find tickets by TEXT. ticket_list answers \"what is open\" and \"what is mine\"; this answers "+
+				"\"where is the one about the webhook\" — the question you cannot filter your way to. "+
+				"Matches the id, the title, the description and the project-defined field values, "+
+				"case-insensitively, and says which of them matched so a hit in a field nobody asked about "+
+				"is not mistaken for a hit in the title. Combine with status or assignee to narrow; "+
+				"omit project_id to search the calling session's project.",
+			searchInput{}, h.search, wickdocs.Docs{}),
 		connector.Op("ticket_get", "Get Ticket",
 			"Return one ticket in full, including its session list. "+
 				"Omit ticket_id to get the ticket the calling session belongs to — the usual way to answer \"what am I working on?\".",
 			getInput{}, h.get, wickdocs.Docs{}),
+		connector.Op("ticket_conversations", "List Conversations",
+			"List the conversations (sessions) attached to a ticket, most recently active first: id, title, who owns it, "+
+				"how many messages it holds and when it was last spoken in. "+
+				"This is the index — read one with ticket_conversation_read. "+
+				"Use it to catch up on what an earlier session already tried before repeating it. "+
+				"Omit ticket_id to use the calling session's ticket.",
+			conversationsInput{}, h.conversations, wickdocs.Docs{}),
+		connector.Op("ticket_conversation_read", "Read Conversation",
+			"Read the messages of ONE conversation on a ticket, a page at a time. "+
+				"By default you get the last 20 messages as final answers only (detail=final) — what was said, "+
+				"not how it was worked out — because a long conversation would otherwise arrive whole. "+
+				"Pass detail=trace for each assistant turn's tool calls and thinking as well (much larger). "+
+				"Page with offset: the response returns total, has_more and next_offset, so pass next_offset back "+
+				"to walk further; order=newest (default) walks backwards from the end, order=oldest forwards from the start. "+
+				"session_id comes from ticket_conversations and may be omitted when the ticket holds exactly one.",
+			conversationReadInput{}, h.conversationRead, wickdocs.Docs{}),
 		connector.Op("ticket_create", "Create Ticket",
 			"Create a ticket in a project. Status defaults to open. "+
 				"Pass attach_current_session=true to attach the calling session to it, which is how an ad-hoc chat becomes tracked work.",
@@ -136,7 +160,7 @@ type listInput struct {
 	Mine bool `wick:"desc=Only tickets assigned to the caller. Use this for \"my tickets\" — the user is resolved from the credential, so no id is needed."`
 	// Assignee is for looking at a NAMED person's queue, which is a different
 	// question from "mine" and needs an explicit id.
-	Assignee string `wick:"desc=Only tickets assigned to this wick user id. Leave empty for everyone; prefer mine=true for the caller's own tickets. Pass 'unassigned' for tickets with nobody on them."`
+	Assignee string `wick:"desc=Only tickets this wick user id is on — a shared ticket matches every one of its assignees. Leave empty for everyone, prefer mine=true for the caller's own tickets. Pass 'unassigned' for tickets with nobody on them."`
 }
 
 type mineInput struct {
@@ -160,9 +184,12 @@ type getInput struct {
 
 type createInput struct {
 	Title     string `wick:"required;desc=Short description of the work. Example: Payment webhook returns 401"`
+	Body      string `wick:"textarea;desc=Optional markdown description — repro steps, links, context. The title says what, this says why and how."`
 	ProjectID string `wick:"desc=Project to create the ticket in. Defaults to the calling session's project."`
+	ID        string `wick:"desc=Optional external id to adopt instead of a generated one, so a ticket mirroring a record elsewhere carries that record's id: [A-Za-z0-9._-] up to 64 chars, kept verbatim. A uuid is folded to dashless lowercase, so both shapes of a Notion page id land on one ticket and a second create from it is refused."`
 	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=Initial status. Defaults to open."`
 	Assignee  string `wick:"desc=Optional wick user id to assign it to."`
+	Assignees string `wick:"desc=Several wick user ids, comma-separated, when the work is shared. Use this OR assignee. The first id is the one a board card shows."`
 	Fields    string `wick:"textarea;desc=Optional project-defined field values as JSON. Example: {\"priority\":\"high\",\"type\":\"incident\"}"`
 	// Named "attach_current_session" rather than a bare boolean so the
 	// agent cannot attach a session it did not mean to.
@@ -173,9 +200,20 @@ type updateInput struct {
 	TicketID  string `wick:"desc=Ticket id to update. Defaults to the ticket the calling session belongs to."`
 	ProjectID string `wick:"desc=Project the ticket belongs to. Defaults to the calling session's project."`
 	Title     string `wick:"desc=New title. Omit to leave unchanged."`
+	Body      string `wick:"textarea;desc=New markdown description. Omit to leave unchanged, pass an empty string to clear it."`
 	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=New status. Omit to leave unchanged."`
 	Assignee  string `wick:"desc=New assignee (wick user id). Pass an empty string to unassign."`
+	Assignees string `wick:"desc=The new full list of assignees, comma-separated — it REPLACES whoever is on the ticket rather than adding to them, so include the people already there. Pass an empty string to unassign everyone. Wins over assignee when both are sent."`
 	Fields    string `wick:"textarea;desc=Field values to merge as JSON. An empty string value clears that field."`
+}
+
+type searchInput struct {
+	Query     string `wick:"required;desc=Text to look for in the id, title, description and field values. Case-insensitive. Example: webhook 401"`
+	ProjectID string `wick:"desc=Project to search. Defaults to the calling session's project."`
+	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=Optional status filter."`
+	Mine      bool   `wick:"desc=Only tickets assigned to the caller. The user is resolved from the credential, so no id is needed."`
+	Assignee  string `wick:"desc=Only tickets assigned to this wick user id. Pass 'unassigned' for tickets with nobody on them."`
+	Limit     int    `wick:"desc=Maximum hits to return. Defaults to 20."`
 }
 
 type settingsGetInput struct {
@@ -192,7 +230,7 @@ type settingsSetInput struct {
 	AutoResolveAfterDays string `wick:"desc=Close a ticket untouched this long, in days. 0 turns it off. Omit to leave unchanged."`
 	FollowupPrompt       string `wick:"textarea;desc=Instruction sent to the agent when a ticket goes stale. Omit to leave unchanged."`
 	AutoCreate           string `wick:"textarea;desc=JSON array of auto-create rules. Pass [] to remove them all. Omit to leave unchanged."`
-	Statuses             string `wick:"textarea;desc=JSON array of board statuses, in column order: [{\"key\":\"triage\",\"label\":\"Triage\"},{\"key\":\"shipped\",\"label\":\"Shipped\",\"terminal\":true}]. Keys are lowercase a-z0-9_ and are what tickets store; labels are display only. EXACTLY ONE must have terminal:true — that is the stage auto-resolve moves finished work to. Pass [] to return to the built-in set. Omit to leave unchanged."`
+	Statuses             string `wick:"textarea;desc=JSON array of board statuses, in column order: [{\"key\":\"triage\",\"label\":\"Triage\"},{\"key\":\"shipped\",\"label\":\"Shipped\",\"terminal\":true}]. Keys are lowercase a-z0-9_ and are what tickets store, labels are display only. EXACTLY ONE must have terminal:true — that is the stage auto-resolve moves finished work to. Pass [] to return to the built-in set. Omit to leave unchanged."`
 }
 
 type attachInput struct {

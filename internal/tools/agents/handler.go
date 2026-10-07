@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +23,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/preset"
@@ -35,12 +38,15 @@ import (
 	"github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/storage"
+	"github.com/yogasw/wick/internal/agents/store"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
 	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
+	"github.com/yogasw/wick/internal/pkg/adminscope"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/tags"
@@ -92,7 +98,12 @@ func SetManager(m *registry.Manager) {
 }
 
 // SetPool wires in the agent subprocess pool.
-func SetPool(p *pool.Pool) { globalPool = p }
+func SetPool(p *pool.Pool) {
+	globalPool = p
+	if p != nil {
+		startProviderIdleCompactor()
+	}
+}
 
 // SetBroadcaster wires in the SSE event broadcaster.
 func SetBroadcaster(b *Broadcaster) { globalBcast = b }
@@ -226,6 +237,7 @@ func Register(r tool.Router) {
 	registerSPAWorkflows(r)
 	registerSPAWorkflowHistory(r)
 	registerSPAPanels(r)
+	registerSPAWorkflowRunIdentity(r)
 	registerSPAPalette(r)
 
 	// Access gates for every per-resource subtree. Registered once here so
@@ -235,6 +247,8 @@ func Register(r tool.Router) {
 	r.Use("/api/sessions/{id}", sessionAccessMW)
 	r.Use("/projects/{id}", projectAccessMW)
 	r.Use("/api/projects/{id}", projectAccessMW)
+	// A shared agent's chat is chat only: its rail is the owner's project.
+	registerSharedChatRailGuard(r)
 
 	r.GET("/", newSessionCompose)
 	r.POST("/", startNewSession)
@@ -260,13 +274,16 @@ func Register(r tool.Router) {
 	r.GET("/sessions/{id}/uploads/{name}", sessionUploadServe)
 	r.GET("/sessions/{id}/turns/{turn_id}", sessionTurnTrace)
 	r.GET("/sessions/{id}/turns/{turn_id}/events/{event_id}", sessionTurnEvent)
+	r.GET("/sessions/{id}/turns/{turn_id}/blobs/{blob_ref}", sessionTurnBlob)
 
 	r.GET("/sessions/{id}/files", sessionContextList)
 	r.GET("/sessions/{id}/files/search", sessionContextSearch)
+	r.GET("/sessions/{id}/files/mentions", sessionContextMentions)
 	r.GET("/sessions/{id}/processes", sessionProcesses)
 	r.GET("/sessions/{id}/files/read", sessionContextRead)
 	r.GET("/sessions/{id}/files/download", sessionContextDownload)
 	r.GET("/sessions/{id}/files/raw", sessionContextRaw)
+	r.GET("/sessions/{id}/files/stat", sessionContextStat)
 	r.POST("/sessions/{id}/files/save", sessionContextSave)
 	r.POST("/sessions/{id}/files/create", sessionContextCreate)
 	r.DELETE("/sessions/{id}/files", sessionContextDelete)
@@ -282,9 +299,19 @@ func Register(r tool.Router) {
 	// JSON API — Sub-agents rail panel. Registered alongside the other
 	// /api/sessions routes so sessionAccessMW covers them too.
 	r.GET("/api/sessions/{id}/subagents", sessionSubAgents)
+	r.GET("/api/sessions/{id}/team-tasks", sessionTeamTasks)
+	// Interactive messages: an actioncard click, and a decision on an
+	// approval_request card.
+	r.POST("/api/sessions/{id}/postback", sessionPostback)
+	r.POST("/api/sessions/{id}/approvals/{approvalID}", sessionApprovalDecision)
 	r.POST("/api/sessions/{id}/subagents/interrupt-all", interruptAllSubAgents)
 	// Agent-to-agent thread + the human-only hop refill.
 	r.GET("/api/sessions/{id}/messages", sessionMessages)
+	// The session's checklists — the live one and the ones before it. The
+	// trace carries the same calls, but not which list is current.
+	r.GET("/api/sessions/{id}/todos", apiSessionTodos)
+	// Context meter for the composer ring + its panel.
+	r.GET("/api/sessions/{id}/context", apiSessionContext)
 	r.POST("/api/sessions/{id}/hops/reset", resetSessionHops)
 	r.POST("/api/delegations/{delegationID}/interrupt", interruptSubAgent)
 	r.POST("/api/delegations/{delegationID}/continue", continueSubAgent)
@@ -310,6 +337,10 @@ func Register(r tool.Router) {
 
 	// JSON API — composer `/` command menu (built-in actions + skills).
 	r.GET("/api/composer/commands", apiComposerCommands)
+	// `/usage` — this session's provider account, read from the same
+	// paced cache the Providers page uses (see api_composer_usage.go).
+	r.GET("/api/composer/usage", apiComposerUsage)
+	r.POST("/api/composer/usage/refresh", apiComposerUsageRefresh)
 
 	// JSON API — skills SPA endpoints (mirrors templ skills handlers).
 	r.GET("/api/skills", apiSkillsList)
@@ -324,12 +355,98 @@ func Register(r tool.Router) {
 	r.POST("/api/agent-profiles", apiAgentProfileSave)
 	r.DELETE("/api/agent-profiles/{id}", apiAgentProfileDelete)
 
+	// JSON API — Agents app (/team). Every route is scoped to the caller's
+	// own agents; see api_team.go.
+	r.GET("/api/team/agents", apiTeamAgentList)
+	r.POST("/api/team/agents", apiTeamAgentCreate)
+	r.GET("/api/team/agents/connectors", apiTeamAgentConnectors)
+	r.GET("/api/team/agents/{id}", apiTeamAgentGet)
+	r.PATCH("/api/team/agents/{id}", apiTeamAgentUpdate)
+	r.DELETE("/api/team/agents/{id}", apiTeamAgentDelete)
+	r.POST("/api/team/agents/{id}/captain", apiTeamAgentMakeCaptain)
+	r.POST("/api/team/agents/{id}/chat", apiTeamAgentChat)
+	r.GET("/api/team/agents/{id}/sessions", apiTeamAgentSessions)
+	r.POST("/api/team/agents/{id}/read", apiTeamAgentRead)
+	r.POST("/api/team/agents/{id}/main", apiTeamAgentSetMain)
+	r.GET("/api/team/agents/{id}/shares", apiTeamAgentShares)
+	r.POST("/api/team/agents/{id}/shares", apiTeamAgentShareAdd)
+	r.DELETE("/api/team/agents/{id}/shares/{uid}", apiTeamAgentShareRemove)
+	r.GET("/api/team/share-users", apiTeamShareUsers)
+	r.GET("/api/team/agents/{id}/access-history", apiTeamAgentAccessHistory)
+	r.GET("/api/team/agents/{id}/skills", apiTeamAgentSkills)
+	r.GET("/api/team/agents/{id}/slack/manifest", apiTeamAgentSlackManifest)
+	r.GET("/api/team/agents/{id}/slack", apiTeamAgentSlackGet)
+	r.PUT("/api/team/agents/{id}/slack", apiTeamAgentSlackConnect)
+	r.PATCH("/api/team/agents/{id}/slack", apiTeamAgentSlackOptions)
+	r.DELETE("/api/team/agents/{id}/slack", apiTeamAgentSlackDisconnect)
+	r.GET("/api/team/agents/{id}/slack/health", apiTeamAgentSlackHealth)
+	r.GET("/api/team/agents/{id}/slack/settings", apiTeamAgentSlackSettingsGet)
+	r.PATCH("/api/team/agents/{id}/slack/settings", apiTeamAgentSlackSettingsPatch)
+	r.GET("/api/team/agents/{id}/slack/lookup", apiTeamAgentSlackLookup)
+	r.GET("/api/team/slack/instant/apps", apiTeamSlackInstantApps)
+	r.GET("/api/team/agents/{id}/slack/instant", apiTeamAgentSlackInstantGet)
+	r.PUT("/api/team/agents/{id}/slack/instant", apiTeamAgentSlackInstantPut)
+	r.DELETE("/api/team/agents/{id}/slack/instant", apiTeamAgentSlackInstantDelete)
+	r.POST("/api/team/agents/{id}/slack/instant/rotate-avatar", apiTeamAgentSlackInstantRotate)
+	r.GET("/api/team/agents/{id}/a2a", apiTeamAgentA2AGet)
+	r.PUT("/api/team/agents/{id}/a2a", apiTeamAgentA2APut)
+	r.POST("/api/team/agents/{id}/a2a/rotate", apiTeamAgentA2ARotate)
+	r.POST("/api/team/agents/{id}/a2a/revoke", apiTeamAgentA2ARevoke)
+	r.POST("/api/team/agents/{id}/a2a/test", apiTeamAgentA2ATest)
+	r.GET("/api/team/agents/{id}/rest", apiTeamAgentRESTGet)
+	r.PUT("/api/team/agents/{id}/rest", apiTeamAgentRESTPut)
+	r.POST("/api/team/agents/{id}/rest/test", apiTeamAgentRESTTest)
+	r.GET("/api/team/agents/{id}/telegram", apiTeamAgentTelegramGet)
+	r.PUT("/api/team/agents/{id}/telegram", apiTeamAgentTelegramConnect)
+	r.DELETE("/api/team/agents/{id}/telegram", apiTeamAgentTelegramDisconnect)
+	r.POST("/api/team/agents/{id}/telegram/test", apiTeamAgentTelegramTest)
+	r.POST("/api/team/a2a-remote/resolve", apiTeamRemoteResolve)
+	r.POST("/api/team/a2a-remote/test", apiTeamRemoteTest)
+	r.POST("/api/team/a2a-remote", apiTeamRemoteCreate)
+	r.GET("/api/team/agents/{id}/a2a-remote", apiTeamRemoteGet)
+	r.PATCH("/api/team/agents/{id}/a2a-remote", apiTeamRemoteUpdate)
+	r.POST("/api/team/agents/{id}/a2a-remote/refresh-card", apiTeamRemoteRefresh)
+	r.POST("/api/team/slack-remote/test", apiTeamSlackRemoteTest)
+	r.GET("/api/team/slack-remote/identities", apiTeamSlackRemoteIdentities)
+	r.GET("/api/team/slack-remote/directory", apiTeamSlackRemoteDirectory)
+	r.POST("/api/team/slack-remote", apiTeamSlackRemoteCreate)
+	r.GET("/api/team/plugin-sources", apiTeamPluginSources)
+	r.POST("/api/team/plugin-remote", apiTeamPluginRemoteCreate)
+	r.GET("/api/team/agents/{id}/plugin-remote", apiTeamPluginRemoteGet)
+	r.PATCH("/api/team/agents/{id}/plugin-remote", apiTeamPluginRemoteUpdate)
+	r.GET("/api/team/agents/{id}/plugin-remote/session-options", apiTeamPluginSessionOptionsGet)
+	r.PUT("/api/team/agents/{id}/plugin-remote/session-options", apiTeamPluginSessionOptionsPut)
+	r.GET("/api/team/agents/{id}/slack-remote", apiTeamSlackRemoteGet)
+	r.PATCH("/api/team/agents/{id}/slack-remote", apiTeamSlackRemoteUpdate)
+	r.POST("/api/team/agents/{id}/remote/recheck", apiTeamRemoteRecheck)
+	r.POST("/api/team/agents/{id}/remote/queue/{queue_id}/cancel", apiTeamRemoteQueueCancel)
+	r.POST("/api/team/agents/{id}/slack-remote/recheck", apiTeamRemoteRecheck) // older clients
+	r.GET("/api/team/agents/{id}/scheduled", apiTeamAgentScheduledList)
+	r.POST("/api/team/agents/{id}/scheduled", apiTeamAgentScheduledCreate)
+	r.PATCH("/api/team/agents/{id}/scheduled/{sid}", apiTeamAgentScheduledMutate("edit"))
+	r.DELETE("/api/team/agents/{id}/scheduled/{sid}", apiTeamAgentScheduledDelete)
+	r.POST("/api/team/agents/{id}/scheduled/{sid}/pause", apiTeamAgentScheduledMutate("pause"))
+	r.POST("/api/team/agents/{id}/scheduled/{sid}/resume", apiTeamAgentScheduledMutate("resume"))
+	r.POST("/api/team/agents/{id}/scheduled/{sid}/run", apiTeamAgentScheduledMutate("run_now"))
+	r.GET("/api/team/agents/{id}/scheduled/{sid}/runs", apiTeamAgentScheduledRuns)
+	r.GET("/api/team/agents/{id}/session", apiTeamAgentSessionGet)
+	r.PATCH("/api/team/agents/{id}/session", apiTeamAgentSessionSave)
+	r.POST("/api/team/agents/{id}/compact", apiTeamAgentCompact)
+	r.GET("/api/team/groups", apiTeamGroupList)
+	r.POST("/api/team/groups", apiTeamGroupCreate)
+	r.PATCH("/api/team/groups/{id}", apiTeamGroupUpdate)
+	r.DELETE("/api/team/groups/{id}", apiTeamGroupDelete)
+	r.POST("/api/team/groups/{id}/read", apiTeamGroupRead)
+	// The caller's own Team settings (Team instructions, landing choice).
+	r.GET("/api/team/settings", apiTeamSettingsGet)
+	r.PUT("/api/team/settings", apiTeamSettingsSave)
+
 	r.GET("/api/presets", apiPresetList)
 	r.GET("/api/presets/{name}", apiPresetDetail)
 
 	// JSON API — project-settings SPA endpoints.
 	r.GET("/api/projects/{id}", apiProjectDetail)
-	r.GET("/api/projects/{id}/files/search", projectFileSearch)
+	r.GET("/api/projects/{id}/files/mentions", projectFileMentions)
 	r.POST("/api/projects/{id}", apiProjectUpdate)
 
 	// JSON API — tickets. A ticket is its own entity holding many
@@ -338,6 +455,8 @@ func Register(r tool.Router) {
 	// those handlers resolve the owning project through the caller's
 	// visible projects, which enforces access on the way.
 	r.GET("/api/projects/{id}/tickets", apiProjectTickets)
+	// Who a ticket may be put on, by name — the assignee picker's options.
+	r.GET("/api/projects/{id}/assignees", apiProjectAssignees)
 	r.POST("/api/projects/{id}/tickets", apiTicketCreate)
 	r.PUT("/api/projects/{id}/ticket-config", apiProjectTicketConfig)
 	r.GET("/api/tickets/{ticketID}", apiTicketDetail)
@@ -345,6 +464,30 @@ func Register(r tool.Router) {
 	r.DELETE("/api/tickets/{ticketID}", apiTicketDelete)
 	r.PUT("/api/tickets/{ticketID}/sessions/{sid}", apiTicketAttachSession)
 	r.DELETE("/api/tickets/{ticketID}/sessions/{sid}", apiTicketDetachSession)
+	// A custom ticket button was clicked — POST the ticket to that button's
+	// URL and report the outcome to the clicker.
+	r.POST("/api/tickets/{ticketID}/actions/{buttonID}", apiTicketAction)
+	// The same, one level up: a custom button in the ticket LIST's toolbar.
+	// It POSTs the list's filter (and the tickets it selects) rather than a
+	// single ticket, so it hangs off the project, not a ticket id.
+	r.POST("/api/projects/{id}/board-actions/{buttonID}", apiBoardAction)
+	// …and a way to follow the run it started, for a receiver that answered
+	// immediately and kept working. Only its OWN origin may be polled.
+	r.POST("/api/projects/{id}/board-actions/{buttonID}/poll", apiBoardActionPoll)
+
+	// The CLI channel: a shell speaking into the session that minted its
+	// token. No session id in any of these paths — the token IS the
+	// session, so there is nothing to substitute. See api_cli.go.
+	r.POST("/api/cli/send", apiCLISend)
+	r.POST("/api/cli/todo", apiCLITodo)
+	r.GET("/api/cli/whoami", apiCLIWhoami)
+
+	// JSON API — ticket integrations. The event catalogue is served from the
+	// code so the settings UI and the docs cannot drift from what actually
+	// fires; the webhook rows themselves are saved through ticket-config.
+	r.GET("/api/ticket-events", apiTicketEvents)
+	r.GET("/api/projects/{id}/ticket-webhooks/{webhookID}/deliveries", apiTicketWebhookDeliveries)
+	r.POST("/api/projects/{id}/ticket-webhooks/{webhookID}/test", apiTicketWebhookTest)
 
 	// JSON API — notes. Scoped by ?ticket_id= or ?session_id=; a session
 	// that belongs to a ticket resolves to the ticket's notes.
@@ -361,14 +504,53 @@ func Register(r tool.Router) {
 	r.GET("/api/me/rail", apiRailPrefsGet)
 	r.PUT("/api/me/rail", apiRailPrefsSave)
 
+	// Dragged sidebar width, per space (team / agents), saved on the account.
+	r.PUT("/api/me/sidebar", apiSidebarWidthSave)
+
 	// Standing answers to ticket prompts ("don't ask again").
 	r.GET("/api/me/ticket-prefs", apiTicketPrefsGet)
 	r.PUT("/api/me/ticket-prefs", apiTicketPrefsSave)
 
 	// JSON API — providers SPA endpoints (mirrors templ providers handlers).
 	r.GET("/api/providers", apiProvidersList)
+	r.GET("/api/managed-binaries", apiManagedBinariesList)
+	r.GET("/api/managed-binaries/{type}/releases", apiManagedBinaryReleases)
+	r.POST("/api/managed-binaries/{type}/check", apiManagedBinaryCheck)
+	r.POST("/api/managed-binaries/{type}/install", apiManagedBinaryInstall)
+	r.POST("/api/managed-binaries/{type}/download", apiManagedBinaryDownload)
+	r.POST("/api/managed-binaries/{type}/activate", apiManagedBinaryActivate)
+	r.POST("/api/managed-binaries/{type}/remove", apiManagedBinaryRemove)
+	r.POST("/api/managed-binaries/{type}/verify", apiManagedBinaryVerify)
 	r.GET("/api/providers/storage", apiProvidersStorage)
+	// Token ledger: fleet-wide report, and one provider's slice of it.
+	r.GET("/api/providers/usage", apiUsageReport)
+	// Account + usage for every instance in one request, so the list can
+	// badge each card. Registered before the {type} pattern so the
+	// literal path wins.
+	r.GET("/api/providers/connections", apiProviderConnections)
 	r.GET("/api/providers/{type}/{name}", apiProviderDetail)
+
+	// Reconnect (login TTY): run the CLI's interactive login inside a
+	// wick PTY, streamed to the browser terminal over ws. TTL-bound.
+	r.GET("/api/providers/{type}/{name}/usage", apiProviderUsage)
+	r.GET("/api/providers/{type}/{name}/logintty", apiProviderLoginTTYStatus)
+	r.GET("/api/providers/{type}/{name}/logintty/usage", apiProviderLoginTTYUsage)
+	r.GET("/api/providers/{type}/{name}/cli-models", apiProviderCLIModels)
+	r.POST("/api/providers/{type}/{name}/cli-models/recheck", apiProviderCLIModelRecheck)
+	r.POST("/api/providers/{type}/{name}/logintty/usage/refresh", apiProviderLoginTTYUsageRefresh)
+	r.POST("/api/providers/{type}/{name}/logintty/start", apiProviderLoginTTYStart)
+	r.POST("/api/providers/{type}/{name}/logintty/extend", apiProviderLoginTTYExtend)
+	r.POST("/api/providers/{type}/{name}/logintty/kill", apiProviderLoginTTYKill)
+	r.POST("/api/providers/{type}/{name}/logintty/logout", apiProviderLoginTTYLogout)
+	r.POST("/api/providers/{type}/{name}/logintty/apikey", apiProviderAPIKeySet)
+	r.GET("/api/providers/{type}/{name}/logintty/ws", apiProviderLoginTTYWS)
+
+	// Web terminal (gotty): one allowlisted command under the instance
+	// env, 127.0.0.1 only, reached through wick's proxy. Admin-only.
+	r.GET("/api/providers/{type}/{name}/terminal", apiProviderTerminalStatus)
+	r.POST("/api/providers/{type}/{name}/terminal", apiProviderTerminalStart)
+	r.POST("/api/providers/{type}/{name}/terminal/{id}/close", apiProviderTerminalClose)
+	r.GET("/api/providers/{type}/{name}/terminal/{id}/{path...}", apiProviderTerminalProxy)
 
 	// Git source control (session cwd, multi-repo).
 	registerSCM(r)
@@ -407,6 +589,8 @@ func Register(r tool.Router) {
 	// Global cross-session scheduler monitor (the "Scheduled" sidebar page).
 	r.GET("/scheduled", scheduledPage)
 	r.GET("/scheduled/all", schedulesAllUI)
+	// Admin-only: who a schedule may be pointed at ("Run as" picker).
+	r.GET("/scheduled/run-as-users", scheduleRunAsUsersUI)
 	r.POST("/scheduled/{sid}/cancel", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "cancel") })
 	r.POST("/scheduled/{sid}/pause", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "pause") })
 	r.POST("/scheduled/{sid}/resume", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "resume") })
@@ -426,9 +610,14 @@ func Register(r tool.Router) {
 	r.POST("/projects", createProject)
 	r.POST("/projects/{id}", updateProject)
 	r.POST("/projects/{id}/pin", toggleProjectPin)
+	r.GET("/projects/{id}/delete-preview", projectDeletePreviewJSON)
 	r.DELETE("/projects/{id}", deleteProject)
 
 	r.GET("/agent-profiles", agentProfilesPage)
+	// Agents app: one shell for every client route under /team, which the
+	// SPA's own router resolves (roster, /team/<handle>, ?panel=…).
+	r.GET("/team", agentsAppPage)
+	r.GET("/team/{rest...}", agentsAppPage)
 	r.GET("/presets", presetsPage)
 	r.GET("/presets/{name}", presetDetail)
 	r.POST("/presets", createPreset)
@@ -451,6 +640,7 @@ func Register(r tool.Router) {
 	r.POST("/providers/detail/{type}/{name}/save", saveProviderDetail)
 	r.POST("/providers/detail/{type}/{name}/airouter", saveProviderAIRouter)
 	r.POST("/providers/detail/{type}/{name}/{key}", saveProviderConfigKey)
+	r.POST("/providers/idle-compact-probe/{type}/{name}", probeIdleCompact)
 	r.GET("/providers/airouter/slots/{type}", providerAIRouterSlots)
 	r.GET("/providers/{type}/{name}", providerDetailPage)
 	r.POST("/providers", saveProviderInstance)
@@ -481,6 +671,7 @@ func Register(r tool.Router) {
 	r.GET("/providers/spawns/{file}/reveal", providerSpawnReveal)
 	r.GET("/api/providers/spawns", apiSpawnsList)
 	r.GET("/api/providers/spawns/{file}", apiSpawnDetail)
+	r.POST("/api/providers/spawns/{file}/repro", apiSpawnRepro)
 	r.GET("/api/providers/sessions", apiSessionsList)
 	r.GET("/api/providers/sessions/{id}", apiSessionSpawns)
 	// Session detail + log viewer are sub-views of the providers SPA; the
@@ -670,15 +861,29 @@ func (a projectAccess) allowProject(projectID string) bool {
 // sessions (no ProjectID) aren't covered by any project tag, so a non-admin
 // may only see their OWN unscoped sessions — ownerless ones (UserID == "")
 // are admin-only, never shown to other users.
-func (a projectAccess) allowSession(projectID, userID string) bool {
+//
+// participants widens "own" to everyone who has spoken in the session, so a
+// Slack thread stays openable by every person in it and not just whoever
+// happened to send its first message. Callers pass session.Meta.Participants
+// raw — nil on sessions predating the field, where userID alone is the
+// answer — so this check stays allocation-free over a long session list.
+func (a projectAccess) allowSession(projectID, userID string, participants []string) bool {
 	if a.seeAll {
 		return true
 	}
 	if projectID == "" {
-		// Unscoped session: visible only to its own creator. Ownerless
+		// Unscoped session: visible only to the people in it. Ownerless
 		// unscoped sessions (UserID == "") are hidden from everyone while
 		// AdminSeeAll is off — no one is scoped to "see all".
-		return userID != "" && userID == a.userID
+		if userID != "" && userID == a.userID {
+			return true
+		}
+		for _, id := range participants {
+			if id != "" && id == a.userID {
+				return true
+			}
+		}
+		return false
 	}
 	_, ok := a.projects[projectID]
 	return ok
@@ -700,55 +905,62 @@ func (a projectAccess) allowDataTable(slug, ownerUserID string) bool {
 	return ownerUserID != "" && ownerUserID == a.userID
 }
 
-// adminSeeAll reports whether the AdminSeeAll knob is on. When true, admins
-// regain the legacy unrestricted view of every project and session. Default
-// (and on missing config) is false: admins are scoped like regular users.
+// adminSeeAll reports whether the admin_see_all_sessions knob is on. When
+// true, admins regain the legacy unrestricted view of every project and
+// session. Default (and on missing config) is false: admins are scoped like
+// regular users. Connectors are a separate knob — see
+// adminscope.AdminSeeAllConnectors.
 func adminSeeAll() bool {
 	if globalConfigs == nil {
 		return false
 	}
-	return globalConfigs.GetOwned("agents", "admin_see_all") == "true"
+	return adminscope.AdminSeeAllSessions(globalConfigs)
 }
 
-// callerProjectAccess resolves the caller's project visibility once per
-// request with a single bulk query, instead of an N+1 UserOwnsResource per
-// project/session. Unauthenticated and admin/owner callers see everything.
-func callerProjectAccess(c *tool.Ctx) projectAccess {
-	u := login.GetUser(c.Context())
-	// No user in context = internal / MCP caller: unrestricted.
-	if u == nil {
-		return projectAccess{seeAll: true}
-	}
-	// Admins see everything only when AdminSeeAll is on (legacy behaviour).
-	// With it off (default) an admin is scoped like a regular user, falling
-	// through to the tag-based path below — keeps the admin's own session
-	// list and conversation history clean and private.
-	if u.IsAdmin() && adminSeeAll() {
-		return projectAccess{seeAll: true}
+// grantCacheTTL bounds how stale a user's DB-derived grants may be.
+// callerProjectAccess runs on every dashboard request, and the tag +
+// shared-resource resolution behind it costs 1 + O(projects + data tables)
+// DB queries — a user who lives in the dashboard pays that on every click.
+// Only the DB-backed grants ride the cache; ownership is re-read from the
+// in-memory registry on every call, so a project you just created appears
+// immediately. The cost of the cache is that a granted or revoked tag takes
+// at most this long to show.
+const grantCacheTTL = 15 * time.Second
+
+type grantCacheEntry struct {
+	set    map[string]struct{}
+	expiry time.Time
+}
+
+// grantCache holds each user's cached DB-derived grant set, keyed by user
+// id. Entries are replaced whole, never mutated — readers share them.
+var grantCache sync.Map
+
+// cachedGrantSet resolves the DB-backed part of the caller's access — tag
+// grants, tag-shared projects, tag-shared data tables — through a short
+// per-user cache. The returned map is SHARED: callers must copy before
+// adding to it.
+func cachedGrantSet(c *tool.Ctx, u *entity.User) map[string]struct{} {
+	if e, ok := grantCache.Load(u.ID); ok {
+		if ent := e.(grantCacheEntry); time.Now().Before(ent.expiry) {
+			return ent.set
+		}
 	}
 	set := make(map[string]struct{})
 	if globalTagsSvc != nil {
-		var err error
-		set, err = globalTagsSvc.AccessibleResourceIDs(c.Context(), u.ID)
+		got, err := globalTagsSvc.AccessibleResourceIDs(c.Context(), u.ID)
 		if err != nil {
 			log.Ctx(c.Context()).Warn().Err(err).Msg("resolve accessible projects")
-			set = map[string]struct{}{}
+		} else {
+			set = got
 		}
 	}
-	// Union tag grants with project ownership. Some legacy projects can predate
-	// owner tags (or lose their tag rows), but their metadata still records the
-	// creator — a scoped admin/user must keep access to projects they own even
-	// when AdminSeeAll is off.
-	//
-	// Ownerless projects (OwnerUserID == "") are NOT a public escape hatch: they
-	// are admin-only by default. A non-admin reaches one only via an explicit tag
-	// grant (already unioned in from AccessibleResourceIDs above), never just
-	// because it lacks an owner. Without this guard every authenticated user
-	// could see (and open) every ownerless project + its sessions in Recent.
 	isAdmin := u.IsAdmin()
 	for pid, p := range globalMgr.Registry().Projects() {
+		// Owned / ownerless-for-admin projects need no DB lookup here — the
+		// caller unions ownership in fresh. Skipping them keeps the cache
+		// fill to the projects that actually need a tag check.
 		if p.Meta.OwnerUserID == u.ID || (p.Meta.OwnerUserID == "" && isAdmin) {
-			set[pid] = struct{}{}
 			continue
 		}
 		// Tag-filter grant: an admin shares a project on /admin/projects, which
@@ -756,9 +968,7 @@ func callerProjectAccess(c *tool.Ctx) projectAccess {
 		// the project's filter tags is admitted — the same tag-share mechanism
 		// tools use, but via CanAccessSharedResource, NOT CanAccessTool: an
 		// untagged project stays private to its owner instead of leaking to
-		// every authenticated user (owner/admin are handled just above).
-		// Without this a tag-shared project never entered `set`, so the sidebar,
-		// projectAccessMW, and ownsSession all denied it even when the tag matched.
+		// every authenticated user.
 		if globalAuth != nil &&
 			globalAuth.CanAccessSharedResource(c.Context(), u, "/projects/"+pid) {
 			set[pid] = struct{}{}
@@ -780,7 +990,102 @@ func callerProjectAccess(c *tool.Ctx) projectAccess {
 			}
 		}
 	}
+	// Cache only when the backing services exist: with them unwired (tests,
+	// minimal boots) the build above is free, and caching would let one
+	// test world leak grants into the next.
+	if globalTagsSvc != nil || globalAuth != nil {
+		grantCache.Store(u.ID, grantCacheEntry{set: set, expiry: time.Now().Add(grantCacheTTL)})
+	}
+	return set
+}
+
+// callerProjectAccess resolves the caller's project visibility once per
+// request: DB-derived grants through a short per-user cache, ownership
+// fresh from the in-memory registry. Unauthenticated and admin/owner
+// callers see everything.
+func callerProjectAccess(c *tool.Ctx) projectAccess {
+	u := login.GetUser(c.Context())
+	// No user in context = internal / MCP caller: unrestricted.
+	if u == nil {
+		return projectAccess{seeAll: true}
+	}
+	return projectAccessForUser(c, u)
+}
+
+// projectAccessForUser resolves which projects a SPECIFIC user reaches.
+//
+// Split out of callerProjectAccess because the workflow editor asks it about
+// somebody else: a workflow's runs borrow its owner's identity, so "will this
+// actually work?" is a question about the OWNER's access, not the viewer's.
+// A nil user reaches nothing — unlike the caller path, where nil means an
+// internal call with no human to scope to.
+func projectAccessForUser(c *tool.Ctx, u *entity.User) projectAccess {
+	if u == nil {
+		return projectAccess{}
+	}
+	// Admins see everything only when AdminSeeAll is on (legacy behaviour).
+	// With it off (default) an admin is scoped like a regular user, falling
+	// through to the tag-based path below — keeps the admin's own session
+	// list and conversation history clean and private.
+	if u.IsAdmin() && adminSeeAll() {
+		return projectAccess{seeAll: true}
+	}
+	grants := cachedGrantSet(c, u)
+	// Copied before the ownership union below: the cached map is shared
+	// across requests and must never be written to.
+	set := make(map[string]struct{}, len(grants)+8)
+	for k := range grants {
+		set[k] = struct{}{}
+	}
+	// Union tag grants with project ownership, re-read fresh every call. Some
+	// legacy projects can predate owner tags (or lose their tag rows), but
+	// their metadata still records the creator — a scoped admin/user must
+	// keep access to projects they own even when AdminSeeAll is off.
+	//
+	// Ownerless projects (OwnerUserID == "") are NOT a public escape hatch:
+	// they are admin-only by default. A non-admin reaches one only via an
+	// explicit tag grant (already unioned in from the cached set above),
+	// never just because it lacks an owner. Without this guard every
+	// authenticated user could see (and open) every ownerless project + its
+	// sessions in Recent.
+	isAdmin := u.IsAdmin()
+	for pid, p := range globalMgr.Registry().Projects() {
+		if p.Meta.OwnerUserID == u.ID || (p.Meta.OwnerUserID == "" && isAdmin) {
+			set[pid] = struct{}{}
+		}
+	}
 	return projectAccess{userID: u.ID, projects: set}
+}
+
+// sidebarOwnerScope resolves the sidebar's Your/All choice. The ?sb= query
+// wins and is persisted to a cookie so the choice survives navigation; the
+// cookie carries it between pages; the default is "me" — the sidebar is
+// your recent work unless you deliberately widen it.
+func sidebarOwnerScope(c *tool.Ctx) string {
+	const cookieName = "wick_sidebar_owner"
+	switch v := strings.TrimSpace(c.Query("sb")); v {
+	case "me", "all":
+		http.SetCookie(c.W, &http.Cookie{
+			Name: cookieName, Value: v, Path: "/",
+			MaxAge: 365 * 24 * 3600, SameSite: http.SameSiteLaxMode,
+		})
+		return v
+	}
+	if ck, err := c.R.Cookie(cookieName); err == nil && ck.Value == "all" {
+		return "all"
+	}
+	return "me"
+}
+
+// sidebarOwnerHref rebuilds the CURRENT page URL with ?sb= set — the toggle
+// is a plain link, so it works on every page the sidebar renders on without
+// any script.
+func sidebarOwnerHref(c *tool.Ctx, v string) string {
+	u := *c.R.URL
+	q := u.Query()
+	q.Set("sb", v)
+	u.RawQuery = q.Encode()
+	return u.RequestURI()
 }
 
 // sidebarVMScoped builds the sidebar VM, optionally scoped to a project.
@@ -790,40 +1095,24 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 	const sidebarCap = 10
 	access := callerProjectAccess(c)
 	allSessions := globalMgr.Registry().Sessions()
-	// Per-project session counts across ALL sessions (sidebar pills).
-	// Sub-agents are excluded: the pill counts conversations, and a leader
-	// that fanned out to eight roles has not started eight chats.
-	counts := make(map[string]int, len(allSessions))
-	for _, s := range allSessions {
-		if s.Meta.ProjectID != "" && s.Meta.ParentSessionID == "" {
-			counts[s.Meta.ProjectID]++
-		}
-	}
 	// Same filter the JSON list uses, so the templ sidebar and /api/sessions
 	// never disagree about what a conversation is — sub-agent sessions are
 	// dropped here too, since they belong to their parent's rail panel.
 	ids := accessibleSessionIDs(globalMgr.Registry().SessionIDs(), allSessions, access, scopedProjectID)
+	// The sidebar defaults to YOUR recent work (plus ticket-assigned
+	// sessions under ticket mode); the Yours/All toggle widens it to
+	// everything you may see. Same helper the JSON list uses, so the two
+	// never disagree about what "yours" means.
+	sidebarOwner := sidebarOwnerScope(c)
+	if sidebarOwner == "me" {
+		ids = ownedSessionIDs(c, ids, allSessions, scopedProjectID)
+	}
+	lc := sidebarLifecycles()
+	// Running first, then last use — and only then the cap, so a busy
+	// session never falls off the list for being touched eleventh.
+	ids = orderSidebarIDs(ids, allSessions, lc)
 	if len(ids) > sidebarCap {
 		ids = ids[:sidebarCap]
-	}
-	lc := make(map[string]view.SessionLifecycleVM)
-	liveBySession := make(map[string]string)
-	for _, e := range globalPool.ActiveSnapshot() {
-		entry := view.SessionLifecycleVM{Lifecycle: e.Lifecycle, PID: e.PID}
-		if !e.LastActive.IsZero() {
-			entry.LastActiveMs = e.LastActive.UnixMilli()
-		}
-		lc[e.SessionID] = entry
-		liveBySession[e.SessionID] = e.Lifecycle
-	}
-	// Sub-agents run under their own session ids, which have no sidebar row
-	// of their own, so their liveness is folded into the conversation that
-	// owns them. Without this a row goes dark as soon as the leader idles,
-	// even while its children are still working.
-	for root, sub := range rollUpSubAgentWork(liveBySession, sessionParentOf) {
-		entry := lc[root]
-		entry.SubAgent = sub
-		lc[root] = entry
 	}
 	// Read labels concurrently — buffered channel = no goroutine leak.
 	type result struct{ id, label string }
@@ -854,23 +1143,77 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		}
 		allProjects = filteredMap
 	}
+	allProjectIDs = withoutAgentProjects(allProjectIDs, allProjects, scopedProjectID)
 	return view.AgentsLayoutVM{
-		Base:             c.Base(),
-		ActivePage:       activePage,
-		SidebarIDs:       ids,
-		SidebarSessions:  globalMgr.Registry().Sessions(),
-		SidebarLifecycle: lc,
-		SidebarLabels:    labels,
-		ActiveSessionID:  activeSessionID,
-		IdleTimeoutMs:    globalPool.IdleTimeout().Milliseconds(),
-		Projects:         allProjects,
-		ProjectList:      allProjectIDs,
-		ProjectCounts:    counts,
-		ScopedProjectID:  scopedProjectID,
-		PinnedProjectID:  pinnedProjectID(c),
-		ShellAssetURL:    spaAssetURL("shell"),
-		AirouterVisible:  AirouterVisible(c.Context()),
+		Base:                c.Base(),
+		ActivePage:          activePage,
+		SidebarIDs:          ids,
+		SidebarSessions:     globalMgr.Registry().Sessions(),
+		SidebarLifecycle:    lc,
+		SidebarLabels:       labels,
+		ActiveSessionID:     activeSessionID,
+		IdleTimeoutMs:       globalPool.IdleTimeout().Milliseconds(),
+		Projects:            allProjects,
+		ProjectList:         allProjectIDs,
+		SidebarOwner:        sidebarOwner,
+		SidebarOwnerMeHref:  sidebarOwnerHref(c, "me"),
+		SidebarOwnerAllHref: sidebarOwnerHref(c, "all"),
+		ScopedProjectID:     scopedProjectID,
+		PinnedProjectID:     pinnedProjectID(c),
+		SharedOwners:        sharedProjectOwners(c, allProjects, allProjectIDs),
+		ShellAssetURL:       spaAssetURL("shell"),
+		AirouterVisible:     AirouterVisible(c.Context()),
+		ProvidersVisible:    HasManageableProvider(c),
 	}
+}
+
+// sharedProjectOwners maps each of ids that has an owner other than the
+// caller to that owner's display name ("another user" when it cannot be
+// resolved). A project without an owner (protected/legacy) is nobody's
+// and never shows as shared.
+func sharedProjectOwners(c *tool.Ctx, projects map[string]project.Project, ids []string) map[string]string {
+	me := actorID(c)
+	owners := map[string]string{}
+	need := map[string]bool{}
+	for _, id := range ids {
+		if p, ok := projects[id]; ok && p.Meta.OwnerUserID != "" && p.Meta.OwnerUserID != me {
+			owners[id] = p.Meta.OwnerUserID
+			need[p.Meta.OwnerUserID] = true
+		}
+	}
+	if len(owners) == 0 {
+		return nil
+	}
+	names := userNames(c, need)
+	for id, uid := range owners {
+		if n := names[uid]; n != "" {
+			owners[id] = n
+		} else {
+			owners[id] = "another user"
+		}
+	}
+	return owners
+}
+
+func isShared(owners map[string]string, id string) bool {
+	_, ok := owners[id]
+	return ok
+}
+
+// withoutAgentProjects drops the Team app's agent projects from the
+// sidebar's Projects list, unless one was set to show there too
+// (project.VisibleTag). They stay in the projects map, so a session in
+// one still shows its project name, and the one being viewed (reached by
+// URL or from the agent) is kept so the open page has its row.
+func withoutAgentProjects(ids []string, projects map[string]project.Project, keep string) []string {
+	out := make([]string, 0, len(ids))
+	for _, pid := range ids {
+		if p, ok := projects[pid]; ok && !project.ShowsInProjects(p.Meta) && pid != keep {
+			continue
+		}
+		out = append(out, pid)
+	}
+	return out
 }
 
 // projectChoices builds the picker rows for the compose form / move menu
@@ -883,7 +1226,7 @@ func createSessionQuick(c *tool.Ctx) {
 	}
 	prov := "claude"
 	// Use first healthy provider if available
-	if ps := providerChoicesCached(c.Context()); len(ps) > 0 {
+	if ps := providerChoicesFor(c); len(ps) > 0 {
 		prov = ps[0].Type
 	}
 	id := uuid.New().String()
@@ -943,13 +1286,20 @@ func ownsSession(c *tool.Ctx, sess session.Session) bool {
 	if u.IsAdmin() && adminSeeAll() {
 		return true
 	}
-	if sess.Meta.UserID != "" && sess.Meta.UserID == u.ID {
+	// A shared agent's chat is its recipient's alone: the agent's owner
+	// reaches its project but not this conversation.
+	if p, ok := sharedChatAgent(c.Context(), sess); ok {
+		return sharedChatAllowed(c.Context(), u.ID, sess, p)
+	}
+	// Owner or any other person who has spoken in it: a Slack thread is
+	// shared work, so replying into one must not leave it unopenable.
+	if sess.Meta.IsParticipant(u.ID) {
 		return true
 	}
 	// Project-scoped sessions are reachable by anyone with access to the
 	// project (tag grant, ownership, or ownerless/system project) — same rule
 	// the sidebar uses, keeping list visibility and detail access consistent.
-	return callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID)
+	return callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants)
 }
 
 // sessionAccessMW gates every route under /sessions/{id} and /api/sessions/{id}:
@@ -987,8 +1337,32 @@ func projectAccessMW(next tool.HandlerFunc) tool.HandlerFunc {
 			next(c)
 			return
 		}
-		if _, ok := globalMgr.Registry().Project(id); !ok || !callerProjectAccess(c).allowProject(id) {
-			c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
+		// Honest errors: "does not exist" and "you may not see it" are
+		// different problems with different fixes, so they answer with
+		// different statuses AND get logged — a caller debugging an
+		// integration must not have to guess which one they hit.
+		uid := ""
+		if u := login.GetUser(c.Context()); u != nil {
+			uid = u.ID
+		}
+		deny := func(status int, msg, reason string) {
+			ev := log.Ctx(c.Context()).Debug()
+			if bearerToken(c.R) != "" {
+				// A bearer caller is a machine integration someone is
+				// actively debugging — warn, not debug.
+				ev = log.Ctx(c.Context()).Warn()
+			}
+			ev.Str("project", id).Str("user", uid).Str("reason", reason).
+				Msg("project access denied")
+			c.JSON(status, map[string]string{"error": msg})
+		}
+		if _, known := globalMgr.Registry().Project(id); !known {
+			deny(http.StatusNotFound, "project not found", "project not in registry")
+			return
+		}
+		if !callerProjectAccess(c).allowProject(id) {
+			deny(http.StatusForbidden, "you don't have access to this project",
+				"caller lacks access (not owner, no tag grant, adminSeeAll off)")
 			return
 		}
 		next(c)
@@ -1036,6 +1410,13 @@ func ensurePersonalProjectForUser(c *tool.Ctx) {
 // back with a non-empty message.
 func newSessionCompose(c *tool.Ctx) {
 	if notReady(c) {
+		return
+	}
+	// "Open Team when I open Agents" (Team settings): the bare landing
+	// becomes the Team app. Checked before the pinned-project redirect,
+	// which would otherwise add a query and hide the landing from it.
+	if teamLandingRedirect(c) {
+		c.Redirect(c.Base()+"/team", http.StatusFound)
 		return
 	}
 	ensurePersonalProjectForUser(c)
@@ -1114,7 +1495,7 @@ func resolveSessionTarget(c *tool.Ctx, formValue, formModel, projectID string) (
 	}
 	// Neither level named a provider, so no level named a model either: an
 	// instance picked here is one nobody chose a model on.
-	if ps := providerChoicesCached(c.Context()); len(ps) > 0 {
+	if ps := providerChoicesFor(c); len(ps) > 0 {
 		return normalizeProviderKey(ps[0].Type + "/" + ps[0].Name), ""
 	}
 	return normalizeProviderKey("claude"), ""
@@ -1162,7 +1543,7 @@ func startNewSession(c *tool.Ctx) {
 			return
 		}
 	}
-	text := strings.TrimSpace(c.Form("message"))
+	text := trimFormText(c.Form("message"))
 	hasFiles := c.R.MultipartForm != nil && len(c.R.MultipartForm.File["files"]) > 0
 	if text == "" && !hasFiles {
 		renderCompose(c, "", "Type a message or attach a file to start the session.")
@@ -1224,7 +1605,7 @@ func startNewSession(c *tool.Ctx) {
 		return
 	}
 	// Detach from HTTP ctx (see sendMessage note) — keep request_id for logs.
-	bgCtx := log.Ctx(c.Context()).WithContext(context.Background())
+	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()), id)
 	if err := globalPool.SendWithAttachments(bgCtx, id, "main", "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose send: %s", err.Error())
 		renderCompose(c, text, err.Error())
@@ -1233,26 +1614,18 @@ func startNewSession(c *tool.Ctx) {
 	c.Redirect(c.Base()+"/sessions/"+id, http.StatusSeeOther)
 }
 
-// renderCompose re-renders the new-session SPA shell after a failed
-// startNewSession submit. The SPA owns compose state client-side, so
-// message/errMsg are accepted for call-site compatibility only.
-func renderCompose(c *tool.Ctx, _, _ string) {
-	scoped := c.Query("project")
-	if scoped != "" {
-		if _, ok := globalMgr.Registry().Project(scoped); !ok {
-			scoped = ""
-		}
+// renderCompose reports a failed startNewSession submit. The composer posts
+// with fetch and navigates to res.url on any 2xx, so re-rendering the
+// new-session shell here (what this used to do) read as success: the page
+// reloaded to an empty "New session" and the error was gone. A plain-text
+// 422 instead lands in the composer's catch, which toasts the body
+// (fe/agents/new-session createSession). The composer keeps its own text,
+// so message is unused.
+func renderCompose(c *tool.Ctx, _, errMsg string) {
+	if errMsg == "" {
+		errMsg = "Failed to create session."
 	}
-	if scoped == "" {
-		scoped = pinnedProjectID(c)
-	}
-	layout := sidebarVMScoped(c, "new", "", scoped)
-	layout.FullBleed = true
-	c.HTML(view.NewSessionSPA(view.NewSessionSPAVM{
-		Layout:   layout,
-		Base:     c.Base(),
-		AssetURL: spaAssetURL("new-session"),
-	}))
+	c.Error(http.StatusUnprocessableEntity, errMsg)
 }
 
 // ── Overview ──────────────────────────────────────────────────────────
@@ -1319,14 +1692,47 @@ func sessionsPage(c *tool.Ctx) {
 			scoped = ""
 		}
 	}
+	layout := sidebarVMScoped(c, "sessions", "", scoped)
+	// FullBleed: the SPA owns its height (#app is h-full) so each panel —
+	// session list, board columns, untracked rail, chat thread — scrolls
+	// inside itself instead of the page scrolling as one. The default
+	// wrapper div has no height, which collapsed that chain into a single
+	// global scroll.
+	layout.FullBleed = true
 	c.HTML(view.Conversation(view.ConversationVM{
-		Layout:        sidebarVMScoped(c, "sessions", "", scoped),
+		Layout:        layout,
 		Base:          c.Base(),
 		AssetURL:      spaAssetURL("conversation"),
 		ScmAsset:      spaAssetURL("scm"),
 		IdleTimeoutMs: idleTimeoutMs(),
 		RailPrefs:     railPrefsJSON(c),
+		ViewerID:      viewerID(c),
 	}))
+}
+
+// agentsAppPage hosts the full-screen Agents app.
+func agentsAppPage(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	vm := view.AgentsAppVM{
+		Base:          c.Base(),
+		AssetURL:      spaAssetURL("conversation"),
+		ScmAsset:      spaAssetURL("scm"),
+		IdleTimeoutMs: idleTimeoutMs(),
+		RailPrefs:     railPrefsJSON(c),
+		ViewerID:      viewerID(c),
+		ViewerName:    viewerName(c),
+	}
+	if u := login.GetUser(c.Context()); u != nil {
+		vm.ThemeMode = "light"
+		if ui.ThemeByID(ui.EffectiveTheme(u.Metadata.Theme)).IsDark {
+			vm.ThemeMode = "dark"
+		}
+		vm.ThemeLight = ui.EffectiveLightTheme(u.Metadata.LightTheme)
+		vm.ThemeDark = ui.EffectiveDarkTheme(u.Metadata.DarkTheme)
+	}
+	c.HTML(view.AgentsApp(vm))
 }
 
 // railPrefsJSON is the caller's saved rail layout, inlined into the SPA shell
@@ -1402,14 +1808,20 @@ func sessionDetail(c *tool.Ctx) {
 		c.Redirect(c.Base()+"/sessions/"+parent+"?rail=subagents&sub="+id, http.StatusSeeOther)
 		return
 	}
+	layout := sidebarVMScoped(c, "sessions", id, sess.Meta.ProjectID)
+	// FullBleed for the same reason as sessionsPage — and it must match:
+	// the SPA client-routes between list and detail without a reload, so
+	// the two shells have to agree on who owns the scroll.
+	layout.FullBleed = true
 	c.HTML(view.Conversation(view.ConversationVM{
-		Layout:         sidebarVMScoped(c, "sessions", id, sess.Meta.ProjectID),
+		Layout:         layout,
 		Base:           c.Base(),
 		AssetURL:       spaAssetURL("conversation"),
 		ScmAsset:       spaAssetURL("scm"),
 		InitialSession: id,
 		IdleTimeoutMs:  idleTimeoutMs(),
 		RailPrefs:      railPrefsJSON(c),
+		ViewerID:       viewerID(c),
 	}))
 }
 
@@ -1503,13 +1915,82 @@ func moveSessionToProject(c *tool.Ctx) {
 		agentName = sess.Agents[0].Name
 	}
 	if agentName != "" {
-		_ = globalPool.Kill(id, agentName)
+		_ = globalPool.KillBy(id, agentName, "wick",
+			"the session was moved to another project, so its process was restarted in the new folder")
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "moved", "project_id": req.ProjectID})
 }
 
 type sendReq struct {
 	Text string `json:"text"`
+}
+
+// viewerID is the wick user reading the page, inlined into the SPA shell so
+// the conversation can tell this person's own messages from everyone else's
+// on the first paint. Empty when there is no login session.
+func viewerID(c *tool.Ctx) string {
+	if u := login.GetUser(c.Context()); u != nil {
+		return u.ID
+	}
+	return ""
+}
+
+// viewerName is the logged-in user's display name, falling back to the
+// email when no name is set. The Agents roster shows it in its footer.
+func viewerName(c *tool.Ctx) string {
+	if u := login.GetUser(c.Context()); u != nil {
+		if u.Name != "" {
+			return u.Name
+		}
+		return u.Email
+	}
+	return ""
+}
+
+// withComposerSender stamps the logged-in user onto a detached send context
+// as the message's sender.
+//
+// A composer send cannot just let the pool read the login session, because
+// the send context is deliberately built from context.Background(): the pool
+// spawns with exec.CommandContext, so inheriting the request context would
+// SIGKILL the subprocess the moment the HTTP response returns. That detach
+// drops the login session with everything else, which is why the sender has
+// to be copied across explicitly here — the same thing a channel does with
+// its own resolved sender.
+//
+// Without this a dashboard message is stored with no sender at all, so a
+// thread mixing web and Slack turns can attribute the Slack ones and not its
+// own — and the web turns come back anonymous on replay.
+// withComposerSender attaches the signed-in human to a detached context so
+// the pool can attribute the turn, and — since it is already the one place
+// the web path resolves that person — records them on the session too.
+//
+// The ownership write is deliberately here rather than in each handler: both
+// composer paths funnel through this helper, so one call covers them without
+// a second mechanism to keep in step.
+//
+// EnsureSessionOwner is first-writer-wins, so this can only fill a session
+// that has nobody attached; it never moves an existing owner. What it does
+// for an already-owned session is add the sender to Participants, which is
+// what keeps a shared conversation openable by the people actually in it.
+func withComposerSender(c *tool.Ctx, bg context.Context, sessionID string) context.Context {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		return bg
+	}
+	if globalPool != nil && sessionID != "" {
+		globalPool.EnsureSessionOwner(bg, sessionID, u.ID)
+	}
+	name := u.Name
+	if name == "" {
+		name = u.Email
+	}
+	return agentchannels.WithSender(bg, &store.Sender{
+		ID:         u.ID,
+		Name:       name,
+		Channel:    "ui",
+		WickUserID: u.ID,
+	})
 }
 
 func sendMessage(c *tool.Ctx) {
@@ -1527,7 +2008,7 @@ func sendMessage(c *tool.Ctx) {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": "parse form: " + err.Error()})
 			return
 		}
-		req.Text = strings.TrimSpace(c.Form("text"))
+		req.Text = trimFormText(c.Form("text"))
 		saved, err := saveUploadsFromMultipart(c, id, c.Base())
 		if err != nil {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -1543,6 +2024,11 @@ func sendMessage(c *tool.Ctx) {
 	}
 	if req.Text == "" && len(atts) == 0 {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "text or file required"})
+		return
+	}
+	// A group chat never spawns: its members answer in their own sessions.
+	if sess, ok := globalMgr.Registry().Session(id); ok && sess.Meta.AgentGroup != nil {
+		sendGroupMessage(c, sess, req.Text)
 		return
 	}
 
@@ -1604,7 +2090,7 @@ func sendMessage(c *tool.Ctx) {
 	// Detach from HTTP ctx — pool.spawn calls exec.CommandContext, so
 	// inheriting c.Context() would SIGKILL claude.exe the moment the
 	// response returns. Copy request_id over so logs still correlate.
-	bgCtx := log.Ctx(c.Context()).WithContext(context.Background())
+	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()), id)
 	// The person's words are never rewritten, but the leader is told, in
 	// the same message and before it reads them, which mentions wick is
 	// dispatching itself. Routing runs detached below, so without this
@@ -1630,6 +2116,19 @@ func sendMessage(c *tool.Ctx) {
 	// straight to someone else.
 	routeHumanMentions(bgCtx, sess, id, req.Text)
 	c.JSON(http.StatusOK, map[string]string{"status": "queued"})
+}
+
+// trimFormText reads a multipart text field the way the person typed it.
+//
+// HTML form encoding normalises every newline in a textarea to CRLF, so a
+// message sent WITH an attachment (multipart) arrives with "\r\n" while the
+// same message sent without one (JSON) arrives with "\n". That difference is
+// invisible in the bubble and breaks anything that compares the two: the web
+// composer renders its own message optimistically and reconciles it with the
+// persisted copy by text, so a multi-line message with a file attached was
+// drawn twice until the page was reloaded.
+func trimFormText(v string) string {
+	return strings.TrimSpace(strings.ReplaceAll(v, "\r\n", "\n"))
 }
 
 func dequeueAgent(c *tool.Ctx) {
@@ -1869,6 +2368,17 @@ func sessionProcesses(c *tool.Ctx) {
 	c.JSON(http.StatusOK, out)
 }
 
+// stoppedByNote names the person behind a Stop, for the interrupted turn to
+// carry. A session can be open to several people (a Slack thread is shared
+// work), so "someone stopped it" is not enough — the next reader wants to
+// know whether it was them, a colleague, or nobody at all.
+func stoppedByNote(c *tool.Ctx) string {
+	if u := login.GetUser(c.Context()); u != nil && strings.TrimSpace(u.Name) != "" {
+		return strings.TrimSpace(u.Name) + " stopped this agent from the conversation view"
+	}
+	return "someone stopped this agent from the conversation view"
+}
+
 func killAgent(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -1888,9 +2398,39 @@ func killAgent(c *tool.Ctx) {
 	// every sub-agent it spawned: nothing is waiting on their results
 	// any more, but the processes keep running and spending tokens.
 	cascadeInterruptChildren(c, id)
-	if err := globalPool.Kill(id, agentName); err != nil {
+	// Ask the pool first, but only it knows the agents IT started. A binary
+	// swap leaves the previous wick running the turns it had in flight while
+	// the new one serves this request, and KillBy over an empty map returns
+	// success — the button reported "killed" while the process carried on.
+	// So decide before killing whether this pool has anything at all, and
+	// fall back to the pids the spawn log recorded when it does not.
+	owned := poolHasSession(id)
+	// Remember what the pool claims is running BEFORE the stop, so we can
+	// check afterwards that it really went away. An adopted entry has no
+	// exec handle behind it and Stop cannot signal through one it never
+	// held.
+	pids := sessionPIDs(id)
+	if err := globalPool.KillBy(id, agentName, "user", stoppedByNote(c)); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("kill agent %s/%s: %s", id, agentName, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !owned {
+		if killed := killOrphanSpawns(id); len(killed) > 0 {
+			log.Ctx(c.Context()).Info().
+				Ints("pids", killed).
+				Str("session", id).
+				Msg("kill agent: ended orphaned spawns this pool did not own")
+			c.JSON(http.StatusOK, map[string]any{"status": "killed", "orphans": killed})
+			return
+		}
+	}
+	if survivors := enforceStop(pids); len(survivors) > 0 {
+		log.Ctx(c.Context()).Warn().
+			Ints("pids", survivors).
+			Str("session", id).
+			Msg("kill agent: agent.Stop left the process running — signalled it directly")
+		c.JSON(http.StatusOK, map[string]any{"status": "killed", "forced": survivors})
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "killed"})
@@ -1974,6 +2514,52 @@ func sessionTurnEvent(c *tool.Ctx) {
 		return
 	}
 	c.W.Header().Set("Content-Type", "application/json")
+	_, _ = c.W.Write(data)
+}
+
+// traceBlobRefRe matches what the store names a blob: the event id, or
+// "<event_id>-p<n>" for one part of a mixed result. turnIDRe is the
+// nanosecond turn id. Both keep the path a single plain segment.
+var (
+	traceBlobRefRe = regexp.MustCompile(`^e\d+(-p\d+)?$`)
+	traceTurnIDRe  = regexp.MustCompile(`^[0-9A-Za-z_-]+$`)
+)
+
+// sessionTurnBlob serves the binary payload of one trace event (an image,
+// pdf, audio or video a tool returned), stored whole at
+// thinking/<turn_id>/<blob_ref>.bin — Display.BlobRef names it. Same
+// ownership rule as the trace itself: 404 for a session the caller cannot
+// see. The type comes from the bytes' magic, and the response is
+// sandboxed so a hostile payload cannot run as a page on this origin.
+func sessionTurnBlob(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no blob"})
+		return
+	}
+	turnID, ref := c.PathValue("turn_id"), c.PathValue("blob_ref")
+	if !traceTurnIDRe.MatchString(turnID) || !traceBlobRefRe.MatchString(ref) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no blob"})
+		return
+	}
+	data, err := os.ReadFile(globalLayout.SessionThinkingBlob(id, turnID, ref))
+	if errors.Is(err, os.ErrNotExist) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no blob"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	h := c.W.Header()
+	h.Set("Content-Type", event.SniffMime(data))
+	h.Set("Content-Length", strconv.Itoa(len(data)))
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	h.Set("Cache-Control", "private, max-age=86400")
 	_, _ = c.W.Write(data)
 }
 
@@ -2106,13 +2692,51 @@ func projectOptionsJSON(c *tool.Ctx) {
 		// one instance's registry and is meaningless beside another.
 		DefaultModel  string `json:"default_model"`
 		DefaultPreset string `json:"default_preset"`
+		// TicketEnabled lets the UI offer ticket affordances (the board jump
+		// in a chat's menu) only where a board exists. Without it the client
+		// would have to fetch each project's ticket config to find out.
+		TicketEnabled bool `json:"ticket_enabled"`
+		// NoAccess marks a project returned only because the caller asked
+		// for it by id (see `include`). It is visible so a saved selection
+		// can still be shown; it is flagged so the UI never presents it as
+		// something this person may pick.
+		NoAccess bool `json:"no_access,omitempty"`
+		// Shared marks a project someone else owns that the caller sees
+		// through a tag or sharing; OwnerName names that owner.
+		Shared    bool   `json:"shared,omitempty"`
+		OwnerName string `json:"owner_name,omitempty"`
 	}
 	access := callerProjectAccess(c)
+	// include=<id,...> names projects that must come back even when the
+	// caller cannot reach them. A workflow's saved workspace is the case:
+	// dropping it from the options left the picker showing "(use run
+	// workspace)" for a workflow that is in fact pinned to a project — one
+	// person's saved choice silently misread by the next.
+	forced := map[string]struct{}{}
+	if v := strings.TrimSpace(c.Query("include")); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				forced[part] = struct{}{}
+			}
+		}
+	}
+	// hide_team=1 drops the Team app's agent projects (the agent wizard
+	// and Settings pickers); the agent's own project comes back via include.
+	hideTeam := c.Query("hide_team") == "1"
 	pinned := pinnedProjectID(c)
 	projects := globalMgr.Registry().Projects()
+	ids := make([]string, 0, len(projects))
+	for id := range projects {
+		ids = append(ids, id)
+	}
+	shared := sharedProjectOwners(c, projects, ids)
 	opts := make([]option, 0, len(projects))
 	for id, p := range projects {
-		if !access.allowProject(id) {
+		_, wanted := forced[id]
+		if !access.allowProject(id) && !wanted {
+			continue
+		}
+		if hideTeam && !wanted && project.IsAgentProject(p.Meta) {
 			continue
 		}
 		managed := p.Meta.CustomPath == ""
@@ -2124,11 +2748,15 @@ func projectOptionsJSON(c *tool.Ctx) {
 			ID:              id,
 			Name:            p.Meta.Name,
 			Path:            path,
+			NoAccess:        !access.allowProject(id),
 			Managed:         managed,
 			Pinned:          id == pinned,
 			DefaultProvider: p.Meta.Defaults.Provider,
 			DefaultModel:    p.Meta.Defaults.Model,
 			DefaultPreset:   p.Meta.Defaults.Preset,
+			TicketEnabled:   p.Meta.Ticket.Enabled,
+			Shared:          isShared(shared, id),
+			OwnerName:       shared[id],
 		})
 	}
 	c.JSON(http.StatusOK, opts)
@@ -2160,8 +2788,15 @@ func providerOptionsJSON(c *tool.Ctx) {
 		// non-wick rows clean. ShowCaps is a pointer so "false" round-trips.
 		ShowCaps *bool  `json:"show_capabilities,omitempty"`
 		CapsMode string `json:"capability_display_mode,omitempty"`
+		// The live list's stamp, same meaning as on the drill-in endpoint.
+		FetchedAt  string `json:"models_fetched_at,omitempty"`
+		Source     string `json:"models_source,omitempty"`
+		CanRefresh bool   `json:"models_can_refresh,omitempty"`
 	}
-	ps := providerChoicesCached(c.Context())
+	// Access-tag filtered: this endpoint feeds every provider picker in
+	// the product, so one filter here covers the composer, the project
+	// defaults, channels, workflow nodes and agent profiles.
+	ps := providerChoicesFor(c)
 	opts := make([]option, 0, len(ps))
 	for _, p := range ps {
 		var models []model
@@ -2169,6 +2804,10 @@ func providerOptionsJSON(c *tool.Ctx) {
 			models = append(models, model{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc, Live: m.Live, Caps: m.Caps})
 		}
 		o := option{Type: p.Type, Name: p.Name, Version: p.Version, UsesAIRouter: p.UsesAIRouter, Models: models}
+		if !p.ModelsAt.IsZero() {
+			o.FetchedAt, o.Source = p.ModelsAt.UTC().Format(time.RFC3339), p.ModelsSource
+			o.CanRefresh = canManageProvider(c, provider.Type(p.Type), p.Name)
+		}
 		if p.Type == string(provider.TypeWick) {
 			show, mode := wickCapabilityPrefs()
 			o.ShowCaps = &show
@@ -2203,6 +2842,8 @@ func providerOptionModelsJSON(c *tool.Ctx) {
 		Desc    string          `json:"desc,omitempty"`
 		Live    bool            `json:"live,omitempty"`
 		Caps    json.RawMessage `json:"caps,omitempty"`
+		// Unavailable: listed, but this account was refused the model.
+		Unavailable bool `json:"unavailable,omitempty"`
 	}
 	typ := provider.Type(strings.TrimSpace(c.PathValue("type")))
 	name := strings.TrimSpace(c.PathValue("name"))
@@ -2220,14 +2861,100 @@ func providerOptionModelsJSON(c *tool.Ctx) {
 		return out
 	}
 
-	// Level 4: expand a single live set by its entry id (filter stays server-side).
+	fromChoices := func(ms []provider.ModelChoice) []modelDTO {
+		out := make([]modelDTO, 0, len(ms))
+		for _, m := range ms {
+			out = append(out, modelDTO{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc, Live: m.Live, Caps: m.Caps, Unavailable: m.Unavailable})
+		}
+		return out
+	}
+
+	// Grouped levels come from the type's registered ModelSets (wick: live
+	// set → vendor model; omp/opencode: provider → [account] → model).
+	// `?entry=` is an escaped path ("openai-codex/2") of any depth; the
+	// response shape is the same at every level. Errors are non-fatal: an
+	// empty level, the picker shows its empty state.
 	entry := strings.TrimSpace(c.Query("entry"))
-	if entry != "" && ins.Type == provider.TypeWick {
-		c.JSON(http.StatusOK, map[string]any{"models": toDTO(expandLiveWickSet(c.Context(), ins, entry, ""))})
+	sets, grouped := provider.ModelSetsFor(ins.Type)
+	// `?refresh=1`: the picker's Refresh — the one path that runs the CLI
+	// for an omp/opencode list (guarded, serialized, killed after; see
+	// provider.CachedCLIModels). Provider managers only.
+	if grouped && provider.LiveModelsEnabled(ins) && c.Query("refresh") == "1" {
+		if !requireProviderManage(c, ins.Type, ins.Name) {
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.Context(), 90*time.Second)
+		_, _, _ = provider.CachedCLIModels(ctx, ins, true)
+		cancel()
+	}
+	// "last updated" for the picker / provider page (zero when nothing is
+	// cached yet: the UI says "click Refresh").
+	stamp := map[string]any{}
+	if grouped && provider.LiveModelsEnabled(ins) && canManageProvider(c, ins.Type, ins.Name) {
+		stamp["can_refresh"] = true
+	}
+	if provider.LiveModelsEnabled(ins) {
+		if at, src := provider.CLIModelsInfo(ins); !at.IsZero() {
+			stamp["fetched_at"], stamp["source"] = at.UTC().Format(time.RFC3339), src
+		}
+	}
+	withStamp := func(m map[string]any) map[string]any {
+		for k, v := range stamp {
+			m[k] = v
+		}
+		return m
+	}
+	if grouped && c.Query("all") == "1" {
+		// `?all=1`: every model row of every level, flattened in picker
+		// order — the provider page's live list reads the picker's own
+		// pipeline (filter, chosen Default, refusals) instead of a second
+		// one. Accounts collapse onto Auto (provider.FlattenModelSets).
+		ctx, cancel := context.WithTimeout(c.Context(), 45*time.Second)
+		defer cancel()
+		rows, err := provider.FlattenModelSets(ctx, sets, ins)
+		resp := map[string]any{"models": fromChoices(rows)}
+		if err != nil {
+			resp["error"] = err.Error()
+		}
+		// Stamp read after the walk: a cold list was filled by it.
+		if at, src := provider.CLIModelsInfo(ins); !at.IsZero() {
+			stamp["fetched_at"], stamp["source"] = at.UTC().Format(time.RFC3339), src
+		}
+		c.JSON(http.StatusOK, withStamp(resp))
 		return
+	}
+	if grouped && entry != "" {
+		ctx, cancel := context.WithTimeout(c.Context(), 45*time.Second)
+		defer cancel()
+		rows, err := sets.Expand(ctx, ins, provider.DecodePath(entry))
+		if err != nil {
+			log.Ctx(c.Context()).Debug().Err(err).Str("entry", entry).Msg("model set expand failed")
+		}
+		c.JSON(http.StatusOK, withStamp(map[string]any{"models": fromChoices(rows)}))
+		return
+	}
+	if grouped && ins.Type != provider.TypeWick {
+		ctx, cancel := context.WithTimeout(c.Context(), 45*time.Second)
+		defer cancel()
+		if rows, err := sets.Sets(ctx, ins); err == nil && len(rows) > 0 {
+			if at, src := provider.CLIModelsInfo(ins); !at.IsZero() {
+				stamp["fetched_at"], stamp["source"] = at.UTC().Format(time.RFC3339), src
+			}
+			c.JSON(http.StatusOK, withStamp(map[string]any{"models": fromChoices(rows)}))
+			return
+		}
+		// No grouping for this instance (live models off, not logged in):
+		// the flat list below still applies.
 	}
 
 	// Level 3: the instance's model choices (live sets stay as expandable rows).
+	// A cold omp/opencode live list is filled first from the CLI's files or
+	// a running server — never by starting the CLI (that is Refresh only).
+	if provider.LiveModelsEnabled(ins) && ins.ModelSelect {
+		ctx, cancel := context.WithTimeout(c.Context(), 20*time.Second)
+		_, _, _ = provider.CachedCLIModels(ctx, ins, false)
+		cancel()
+	}
 	out := toDTO(modelChoicesFor(ins))
 	if out == nil {
 		out = []modelDTO{}
@@ -2368,10 +3095,10 @@ func deleteProject(c *tool.Ctx) {
 		return
 	}
 	if project.IsProtected(p.Meta) {
-		c.JSON(http.StatusForbidden, map[string]string{"error": "this project is protected and cannot be deleted"})
+		c.JSON(http.StatusForbidden, map[string]string{"error": errProtectedProject.Error()})
 		return
 	}
-	if err := globalMgr.DeleteProject(c.Context(), id); err != nil {
+	if err := purgeProject(c.Context(), p, "user"); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("delete project %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -2730,6 +3457,23 @@ func streamMultiSSE(c *tool.Ctx) {
 func snapshotEvents(sessionID string) []Event {
 	var out []Event
 	matched := false
+	// git_status first: it is session STATE, not turn history, so it must be
+	// replayed whether or not an agent is live. The SharedWorker calls this
+	// on every page load (the stream itself is not re-opened), and the Source
+	// rail badge has no REST fallback — without this a reload showed no
+	// counter until the next filesystem event.
+	if globalBcast != nil {
+		if payload, ok := globalBcast.LastGitStatus(sessionID); ok {
+			out = append(out, Event{
+				SessionID: sessionID,
+				Type:      "git_status",
+				Data:      payload,
+			})
+		}
+	}
+	if globalPool == nil {
+		return out
+	}
 	for _, e := range globalPool.ActiveSnapshot() {
 		if e.SessionID != sessionID {
 			continue
@@ -2812,14 +3556,25 @@ func snapshotEvents(sessionID string) []Event {
 	if err != nil || len(entries) == 0 {
 		return out
 	}
+	// Assistant text is accumulated into ONE cumulative text_snapshot, never
+	// replayed as a series of text_delta.
+	//
+	// text_delta means "append". This path runs on every snapshot request —
+	// and the SharedWorker asks for a snapshot on every page load, not only
+	// after a real gap — so replaying deltas appended the same text again on
+	// each ask: the bubble showed the message twice, three times, once per
+	// reload. The pool path above already learned this; the disk fallback had
+	// not, and it is the path taken whenever the process serving the page is
+	// not the one running the agent.
+	var textSoFar strings.Builder
 	for _, e := range entries {
 		ev := Event{
 			SessionID: sessionID,
 		}
 		switch e.Type {
 		case "text_delta":
-			ev.Type = "text_delta"
-			ev.Data = e.Text
+			textSoFar.WriteString(e.Text)
+			continue
 		case "thinking":
 			ev.Type = "thinking"
 			ev.Data = e.Text
@@ -2847,6 +3602,13 @@ func snapshotEvents(sessionID string) []Event {
 		}
 		out = append(out, ev)
 	}
+	if t := textSoFar.String(); t != "" {
+		out = append(out, Event{
+			SessionID: sessionID,
+			Type:      "text_snapshot",
+			Data:      t,
+		})
+	}
 	return out
 }
 
@@ -2855,10 +3617,8 @@ func snapshotEvents(sessionID string) []Event {
 // (even when the EventSource is already open) so the UI can replay trace
 // cards without waiting for the next real event.
 func streamSnapshot(c *tool.Ctx) {
-	if globalPool == nil {
-		c.JSON(http.StatusOK, []Event{})
-		return
-	}
+	// No early return on a nil pool: the snapshot also carries git_status,
+	// which is session state and has nothing to do with a live agent.
 	sessionID := c.Query("session")
 	if sessionID == "" {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "session required"})

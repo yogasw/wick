@@ -23,11 +23,20 @@ type ExecCall struct {
 	SessionID string
 }
 
+// ExecResult is what one plugin operation returns: the result JSON plus the
+// values the operation passed to c.Mask / c.MaskIgnoreCase. The plugin has no
+// encryption key, so those values arrive in the clear and the host masks them.
+type ExecResult struct {
+	JSON           []byte
+	Mask           []string
+	MaskIgnoreCase []string
+}
+
 // GRPCConn is the host-facing surface of a connector plugin client. The
 // manager hands this to the adapter closure; *grpcClient implements it.
 type GRPCConn interface {
-	Execute(ctx context.Context, call ExecCall) ([]byte, error)
-	ExecuteStream(ctx context.Context, call ExecCall) ([]byte, error)
+	Execute(ctx context.Context, call ExecCall) (ExecResult, error)
+	ExecuteStream(ctx context.Context, call ExecCall) (ExecResult, error)
 	Schema(ctx context.Context) ([]byte, error)
 	ResolveIdentity(ctx context.Context, accessToken string) (userID, displayName string, err error)
 }
@@ -39,10 +48,10 @@ type grpcClient struct {
 }
 
 // Execute runs one operation in the plugin and returns the raw result JSON.
-func (c *grpcClient) Execute(ctx context.Context, call ExecCall) ([]byte, error) {
+func (c *grpcClient) Execute(ctx context.Context, call ExecCall) (ExecResult, error) {
 	args, err := json.Marshal(call.Input)
 	if err != nil {
-		return nil, fmt.Errorf("marshal input: %w", err)
+		return ExecResult{}, fmt.Errorf("marshal input: %w", err)
 	}
 	resp, err := c.inner.Execute(ctx, &pb.ExecuteRequest{
 		Operation: call.Operation,
@@ -52,20 +61,20 @@ func (c *grpcClient) Execute(ctx context.Context, call ExecCall) ([]byte, error)
 		SessionId: call.SessionID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("plugin transport: %w", err)
+		return ExecResult{}, fmt.Errorf("plugin transport: %w", err)
 	}
 	if resp.Error != nil {
-		return nil, fmt.Errorf("%w: [%s] %s", ErrPluginOp, resp.Error.Code, resp.Error.Message)
+		return ExecResult{}, fmt.Errorf("%w: [%s] %s", ErrPluginOp, resp.Error.Code, resp.Error.Message)
 	}
-	return resp.ResultJson, nil
+	return ExecResult{JSON: resp.ResultJson, Mask: resp.Mask, MaskIgnoreCase: resp.MaskIgnoreCase}, nil
 }
 
 // ExecuteStream runs one operation and reassembles the streamed result. It
 // removes the default gRPC message ceiling for large results.
-func (c *grpcClient) ExecuteStream(ctx context.Context, call ExecCall) ([]byte, error) {
+func (c *grpcClient) ExecuteStream(ctx context.Context, call ExecCall) (ExecResult, error) {
 	args, err := json.Marshal(call.Input)
 	if err != nil {
-		return nil, fmt.Errorf("marshal input: %w", err)
+		return ExecResult{}, fmt.Errorf("marshal input: %w", err)
 	}
 	stream, err := c.inner.ExecuteStream(ctx, &pb.ExecuteRequest{
 		Operation: call.Operation,
@@ -75,22 +84,22 @@ func (c *grpcClient) ExecuteStream(ctx context.Context, call ExecCall) ([]byte, 
 		SessionId: call.SessionID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("plugin transport: %w", err)
+		return ExecResult{}, fmt.Errorf("plugin transport: %w", err)
 	}
 	var out []byte
 	for {
 		chunk, err := stream.Recv()
 		if err != nil {
-			return nil, fmt.Errorf("plugin transport: %w", err)
+			return ExecResult{}, fmt.Errorf("plugin transport: %w", err)
 		}
 		if chunk.Error != nil {
-			return nil, fmt.Errorf("%w: [%s] %s", ErrPluginOp, chunk.Error.Code, chunk.Error.Message)
+			return ExecResult{}, fmt.Errorf("%w: [%s] %s", ErrPluginOp, chunk.Error.Code, chunk.Error.Message)
 		}
 		if len(chunk.Data) > 0 {
 			out = append(out, chunk.Data...)
 		}
 		if chunk.Eof {
-			return out, nil
+			return ExecResult{JSON: out, Mask: chunk.Mask, MaskIgnoreCase: chunk.MaskIgnoreCase}, nil
 		}
 	}
 }

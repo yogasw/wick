@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/yogasw/wick/internal/agents/capability"
+	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -111,6 +112,7 @@ func (prober) SendSentinel(ctx context.Context, workspace, sentinelPath string) 
 	prompt := fmt.Sprintf(`Run the shell command: touch "%s"`, sentinelPath)
 	cmd := safeexec.CommandContext(ctx, bin, "-p", prompt)
 	cmd.Dir = workspace
+	cmd.Env = envscrub.ScrubOSEnv()
 	out, runErr := cmd.CombinedOutput()
 	if runErr != nil {
 		return fmt.Errorf("gemini probe (denial may be expected): %v\n%s", runErr, truncate(out, 500))

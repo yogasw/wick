@@ -6,6 +6,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/project"
+	"time"
 )
 
 func newLayout(t *testing.T) config.Layout {
@@ -42,6 +43,34 @@ func TestCreateAndLoad(t *testing.T) {
 	}
 	if got.Title != "Payment webhook failing" || got.ProjectID != "p1" {
 		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+}
+
+func TestCreateStoresBodyAndDiffReportsIt(t *testing.T) {
+	l := newLayout(t)
+	tk, err := Create(l, CreateOptions{ProjectID: "p1", Title: "with body", Body: "  ## Repro\nsteps here  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.Body != "## Repro\nsteps here" {
+		t.Fatalf("body not trimmed/stored: %q", tk.Body)
+	}
+	got, err := Load(l, "p1", tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Body != tk.Body {
+		t.Fatalf("body round-trip mismatch: %q", got.Body)
+	}
+
+	after := got
+	after.Body = "rewritten"
+	changes := diff(got, after)
+	if c, ok := changes["body"]; !ok || c.From != "## Repro\nsteps here" || c.To != "rewritten" {
+		t.Fatalf("diff missed the body change: %+v", changes)
+	}
+	if evs := EventsFor(changes); len(evs) != 1 || evs[0] != EventUpdated {
+		t.Fatalf("body-only change should fire ticket.updated alone, got %v", evs)
 	}
 }
 
@@ -382,5 +411,227 @@ func TestCreateUsesTheProjectsOwnStatuses(t *testing.T) {
 	}
 	if _, err := Create(l, CreateOptions{ProjectID: "p1", Title: "z", Status: StatusOpen}); err == nil {
 		t.Fatal("a status this board does not have must be refused")
+	}
+}
+
+func TestCreateAdoptsExternalID(t *testing.T) {
+	l := newLayout(t)
+	// The dashed form the Notion API returns.
+	tk, err := Create(l, CreateOptions{
+		ProjectID: "p1",
+		ID:        "1f2e3d4c-5b6a-7988-9a0b-1c2d3e4f5a6b",
+		Title:     "Mirror of a Notion page",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "1f2e3d4c5b6a79889a0b1c2d3e4f5a6b"
+	if tk.ID != want {
+		t.Fatalf("id = %q, want the dashless form %q", tk.ID, want)
+	}
+	if _, lerr := Load(l, "p1", want); lerr != nil {
+		t.Fatalf("ticket not readable under its adopted id: %v", lerr)
+	}
+}
+
+func TestCreateKeepsANonUUIDIDVerbatim(t *testing.T) {
+	l := newLayout(t)
+	// An id adopted from a system that does not use uuids is only useful if
+	// it survives the trip unchanged.
+	tk, err := Create(l, CreateOptions{ProjectID: "p1", ID: "TIK-2026-001", Title: "from a helpdesk"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.ID != "TIK-2026-001" {
+		t.Fatalf("id = %q, want it kept verbatim", tk.ID)
+	}
+	if !Exists(l, "p1", "TIK-2026-001") {
+		t.Fatal("adopted id should resolve by direct path lookup")
+	}
+}
+
+func TestCreateRejectsAdoptedIDTwice(t *testing.T) {
+	l := newLayout(t)
+	const dashless = "1f2e3d4c5b6a79889a0b1c2d3e4f5a6b"
+	if _, err := Create(l, CreateOptions{ProjectID: "p1", ID: dashless, Title: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	// Same page, copied in the other shape and in upper case. It must not
+	// open a second ticket — that is the whole reason the id is adopted.
+	_, err := Create(l, CreateOptions{
+		ProjectID: "p1",
+		ID:        "1F2E3D4C-5B6A-7988-9A0B-1C2D3E4F5A6B",
+		Title:     "second",
+	})
+	if err == nil {
+		t.Fatal("re-creating from the same page id should be refused")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("error = %v, want it to name the collision", err)
+	}
+}
+
+// An adopted id becomes a directory name, so anything that could escape the
+// project's tickets directory — or hide inside it — must be refused before
+// os.MkdirAll ever sees it.
+func TestCreateRejectsUnusableIDs(t *testing.T) {
+	l := newLayout(t)
+	for _, id := range []string{
+		"..",
+		"../escape",
+		"a/b",
+		"a\\b",
+		".hidden",
+		"has space",
+		"emoji-\U0001F600",
+		strings.Repeat("a", 65),
+		"T-4F2A", // reserved: the generator must stay free to mint it
+	} {
+		if _, err := Create(l, CreateOptions{ProjectID: "p1", ID: id, Title: "x"}); err == nil {
+			t.Fatalf("id %q should be refused", id)
+		}
+	}
+}
+
+// The point of adopting an id is that a lookup is a direct path read: no
+// listing of the tickets directory, no reading of every ticket file.
+func TestAdoptedIDResolvesWithoutScanning(t *testing.T) {
+	l := newLayout(t)
+	const id = "1f2e3d4c5b6a79889a0b1c2d3e4f5a6b"
+	for i := 0; i < 5; i++ {
+		if _, err := Create(l, CreateOptions{ProjectID: "p1", Title: "noise"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Create(l, CreateOptions{ProjectID: "p1", ID: id, Title: "the one"}); err != nil {
+		t.Fatal(err)
+	}
+	// Load addresses the file directly; if it ever started scanning, the
+	// noise tickets above would be read too.
+	tk, err := Load(l, "p1", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.Title != "the one" {
+		t.Fatalf("title = %q, want the directly addressed ticket", tk.Title)
+	}
+	if Exists(l, "p1", "1f2e3d4c-5b6a-7988-9a0b-1c2d3e4f5a6b") {
+		t.Fatal("the dashed form must not resolve — ids are stored normalised")
+	}
+}
+
+func TestCreateWithoutIDStillGenerates(t *testing.T) {
+	l := newLayout(t)
+	tk, err := Create(l, CreateOptions{ProjectID: "p1", Title: "no id given"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(tk.ID, "T-") || len(tk.ID) != 6 {
+		t.Fatalf("id %q, want the generated T- form to be untouched", tk.ID)
+	}
+}
+
+// A mirrored ticket has to carry the SOURCE system's edit time. Stamping
+// "now" makes a sync over a hundred pages look like a hundred tickets all
+// changed at once, and the board — which sorts on this field — ends up
+// ordered by when the sync ran.
+func TestSaveAsAtAndKeeping(t *testing.T) {
+	layout := newLayout(t)
+	tk, err := Create(layout, CreateOptions{ProjectID: "p1", Title: "mirrored"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	notionEdit := time.Date(2026, 9, 12, 8, 30, 0, 0, time.UTC)
+	tk.Title = "mirrored, renamed in Notion"
+	if _, err := SaveAsAt(layout, tk, Actor{}, notionEdit); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(layout, "p1", tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.UpdatedAt.Equal(notionEdit) {
+		t.Fatalf("updated_at = %s, want the source's edit time %s", got.UpdatedAt, notionEdit)
+	}
+
+	// A bookkeeping write ("I checked this, nothing had changed") must not
+	// move the clock at all.
+	got.Fields = map[string]string{"notion_last_checked": "2026-09-15T11:00:00Z"}
+	if _, err := SaveAsKeeping(layout, got, Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := Load(layout, "p1", tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.UpdatedAt.Equal(notionEdit) {
+		t.Fatalf("a bookkeeping write moved updated_at to %s", after.UpdatedAt)
+	}
+	if after.Fields["notion_last_checked"] == "" {
+		t.Error("the bookkeeping field itself was not written")
+	}
+
+	// And the zero value still means now, so every interactive edit is
+	// unaffected.
+	before := time.Now().Add(-time.Second)
+	if _, err := SaveAsAt(layout, after, Actor{}, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	now, _ := Load(layout, "p1", tk.ID)
+	if now.UpdatedAt.Before(before) {
+		t.Fatalf("zero time should stamp now, got %s", now.UpdatedAt)
+	}
+}
+
+// The save RETURNS what it stored. Without this the HTTP layer answers a
+// PATCH with the ticket it was handed — old updated_at and all — and a card
+// dragged to another column keeps showing the time it had before the move
+// until somebody reloads the page.
+func TestSaveAsAtReturnsTheStoredTimestamp(t *testing.T) {
+	layout := newLayout(t)
+	tk, err := Create(layout, CreateOptions{ProjectID: "p1", Title: "Fix retries"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := tk.UpdatedAt
+
+	tk.Status = "in_progress"
+	saved, err := SaveAsAt(layout, tk, Actor{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.UpdatedAt.After(before) {
+		t.Fatalf("returned updated_at = %v, want later than %v", saved.UpdatedAt, before)
+	}
+	onDisk, err := Load(layout, "p1", tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.UpdatedAt.Equal(onDisk.UpdatedAt) {
+		t.Fatalf("returned %v but stored %v — the caller would report a time nobody has",
+			saved.UpdatedAt, onDisk.UpdatedAt)
+	}
+}
+
+// "keep" leaves the displayed time alone on purpose (a bookkeeping write),
+// and the returned value has to say the same thing the disk does.
+func TestSaveAsKeepingReturnsTheUnchangedTimestamp(t *testing.T) {
+	layout := newLayout(t)
+	tk, err := Create(layout, CreateOptions{ProjectID: "p1", Title: "Fix retries"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := tk.UpdatedAt
+
+	saved, err := SaveAsKeeping(layout, tk, Actor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.UpdatedAt.Equal(want) {
+		t.Fatalf("keep changed updated_at: %v -> %v", want, saved.UpdatedAt)
+	}
+	if saved.TouchedAt.IsZero() {
+		t.Fatal("keep should still record that wick touched the ticket")
 	}
 }

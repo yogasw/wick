@@ -125,6 +125,141 @@ Stale PID files (process no longer alive) are silently cleaned up so the next `s
 ./bin/myapp restart --localhost        # shortcut for --host 127.0.0.1
 ```
 
+### `<app> reload`
+
+Replace the binary **without downtime**. The running daemon starts a successor, hands it the
+listening socket, and only then drains its own work and exits — the port is never closed, so
+nothing in front of wick (nginx, a load balancer, a browser) sees a refused connection, and
+no in-flight workflow run or cron job is cut off.
+
+This is the difference that matters against `restart`: `restart` stops first, so the port is
+closed for the successor's whole boot — tens of seconds once a registry restore, a database and
+connectors are involved — and everything in flight is killed.
+
+```bash
+# check the candidate, install it, hand over, verify — one command
+./bin/myapp reload --binary ./bin/myapp     # --sudo when the target directory is root-owned
+```
+
+It checks the candidate, installs it, signals the handover and returns — about a
+second, not a minute and a half:
+
+```
+installed /usr/bin/myapp (previous kept at /usr/bin/myapp.prev)
+handover started: pid 319449 is booting the successor (0.1.155 -> 0.1.156)
+not waiting for it; the old process keeps serving until the new one is ready
+```
+
+It does not block, because there is nothing to block for: the old process
+answers every request for the whole boot. A refusal IS caught before it
+returns — the daemon records one within milliseconds — and that path rolls the
+binary back. Add `--wait` when a script wants the confirmation instead:
+
+```
+handover done: pid 618434 -> 668241, 0.1.113 -> 0.1.114
+```
+
+| Flag | |
+|---|---|
+| `--binary <path>` | install this build at the daemon's exec path, then hand over to it |
+| `--sha256 <sum>` | verify the file's checksum before anything else reads or copies it |
+| `--yes` / `-y` | skip the confirmation prompt — **required** when stdin is not a terminal |
+| `--force` | proceed despite a blocking finding; never overrides OS/arch or a non-wick binary |
+| `--sudo` | run the file swap through `sudo`, for a root-owned target directory |
+| `--wait` | block until the successor is serving, and roll back if it never gets there. Off by default — the old process serves throughout the boot, so waiting blocks the caller and helps nobody |
+| `--wait-drain` | also wait for the previous process to finish its work and exit (implies `--wait`) |
+| `--timeout <dur>` | how long to wait for the successor to take over (default `5m`) |
+
+**The candidate is checked before the file is touched.** Identity comes from its embedded build
+info, never from running it — executing an unknown binary is self-defeating when the whole
+question is whether it is what you think it is:
+
+- **FATAL, no override** — built for another OS or architecture, or nothing in its module graph
+  depends on wick. A wrong-architecture binary in place is a crash-loop the service manager
+  retries forever. Also the SAME version as the running binary: a different build wearing the
+  same number makes the update card, `version` and any rollback lie about what is serving —
+  bump the version instead.
+- **BLOCK, `--force` to proceed** — a different main module, a different `BuildAppName` (that app
+  has its own data dir, unit and paths), or a version older than the one running.
+- **WARN** — a wick resolved through a local `replace`
+  tree instead of a released tag.
+
+If the successor does not take over within `--timeout`, the previous binary is restored and the
+command exits non-zero. Nothing is down while that happens — the old process only steps aside
+once a successor reports ready.
+
+**By hand**, which is what the command does for you and the fallback on a host whose binary
+predates the flag:
+
+```bash
+cp ./bin/myapp /usr/local/bin/myapp.new && chmod +x /usr/local/bin/myapp.new
+mv -f /usr/local/bin/myapp.new /usr/local/bin/myapp   # atomic rename
+./bin/myapp reload
+```
+
+The rename is not a detail: copying **onto** a running binary fails with `ETXTBSY`
+("Text file busy"), while a rename swaps the directory entry and lets the running process keep
+its old inode until it exits.
+
+Install it at the path the successor will *exec*: the handover re-execs `os.Args[0]` resolved
+through `PATH`, not the inode currently running — that one is gone as soon as the file is
+replaced. If the unit says `ExecStart=/usr/local/bin/myapp all`, that file is the one that must
+hold the new bytes; anywhere else gives a reload that reports success and brings the old version
+back. `--binary` resolves that path from the running process instead of assuming it.
+
+Requires the daemon to run with `WICK_GRACEFUL_UPGRADE=1`; without it the signal is logged and
+ignored, and you should use `restart`. Supported on Linux, macOS and BSD, as a plain daemon or
+under a service manager. On **Windows** — and when wick runs inside the tray's in-process
+supervisor — a socket cannot be handed to another process, so `reload` reports that and you fall
+back to `restart`.
+
+`reload` routes itself: an installed systemd unit gets `systemctl --user reload`, a unit without
+`ExecReload` is signalled by its MainPID, and a PID-file daemon is signalled directly.
+`kill -HUP <pid>` does the same thing.
+
+**What the drain waits for**, because interrupting them costs different things:
+
+| Work | Waited for | Why |
+|---|---|---|
+| Agent turns, workflow runs, cron jobs, connector calls, plugin requests, delegations, scheduled deliveries | until every subsystem is at zero and has stayed there for `WICK_DRAIN_QUIET` (default `15s`) | Interrupting them loses work, or cuts a reply off mid-sentence |
+
+There is no default deadline, on purpose: a ceiling on a drain does not stop work, it kills it.
+Whatever is running is waited for however long it takes, and the process exits the moment the
+last of it settles. An idle agent subprocess holds nothing and never blocks the handover.
+`WICK_DRAIN_TIMEOUT` adds an optional hard cap for an unattended deploy that must finish inside a
+known time, and is unset by default. It is read at process start, so changing it needs a
+`restart` rather than a `reload` — a successor inherits its parent's environment.
+
+Every 15 seconds a drain logs what is still outstanding, by name, so a long wait reads as
+"finishing a run" instead of a hang. The same list is on the System page
+(`/admin/advanced/software-update`) as **Running now**, next to a **Force swap** control for an
+operator who has read it and decided not to wait — the only thing on a default configuration that
+interrupts running work.
+
+In-flight HTTP requests are waited for like any other work. Streams (SSE, hijacked websockets)
+are excluded — they do not end while a client is watching — and are dropped at the very end,
+after everything else has settled.
+
+**Self-update takes the same path.** With graceful upgrade armed, applying an update from the
+admin UI swaps the binary and then hands over exactly like `reload` — no separate step, and no
+window where the port is closed. Without it, the update re-execs in place as before.
+
+::: tip Proving it
+Claiming zero downtime from the server's own logs proves nothing. Probe from outside, through
+whatever sits in front of wick, and count the failures:
+
+```bash
+while true; do
+  printf '%s %s\n' "$(date -Is)" "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://wick.example.com/health)"
+  sleep 0.5
+done | tee probe.log
+
+grep -v ' 200$' probe.log     # anything here is real downtime
+```
+
+Then check that `MainPID` changed while the unit never left `active`.
+:::
+
 ### `<app> status`
 
 Report whether the daemon is alive, its PID, approximate uptime (PID file mtime), and the log / PID file paths. `--log N` tails the last N bytes of the daemon log — the **newest** `daemon-YYYY-MM-DD.log` in `logs/`, so a daemon that's been running since a previous day still tails correctly instead of showing an empty today-file.

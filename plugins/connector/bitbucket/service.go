@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -415,4 +416,125 @@ func defaultString(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// parsePipelineVariables accepts a JSON object or KEY=VALUE lines.
+func parsePipelineVariables(raw string) ([]map[string]any, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	pairs := map[string]string{}
+	var order []string
+	if strings.HasPrefix(raw, "{") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			return nil, fmt.Errorf("variables is not valid JSON: %w", err)
+		}
+		for k, v := range m {
+			pairs[k] = fmt.Sprint(v)
+			order = append(order, k)
+		}
+	} else {
+		for _, line := range strings.Split(raw, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			k, v, ok := strings.Cut(line, "=")
+			k = strings.TrimSpace(k)
+			if !ok || k == "" {
+				return nil, fmt.Errorf("variables line %q must be KEY=VALUE", line)
+			}
+			pairs[k] = v
+			order = append(order, k)
+		}
+	}
+	out := make([]map[string]any, 0, len(order))
+	for _, k := range order {
+		out = append(out, map[string]any{"key": k, "value": pairs[k]})
+	}
+	return out, nil
+}
+
+// pipelineSelectorType maps the selector_type input to the selector type
+// Bitbucket expects. Empty keeps the original behaviour (custom).
+func pipelineSelectorType(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "custom":
+		return "custom", nil
+	case "branches", "branch":
+		return "branches", nil
+	case "pull-requests", "pull-request", "pr":
+		return "pull-requests", nil
+	}
+	return "", errors.New("selector_type must be custom, branches or pull-requests")
+}
+
+func validateRunPipeline(c *connector.Ctx) (requestParams, map[string]any, error) {
+	workspace, repo, err := workspaceAndRepo(c)
+	if err != nil {
+		return requestParams{}, nil, err
+	}
+	branch := strings.TrimSpace(c.Input("branch"))
+	if branch == "" {
+		return requestParams{}, nil, errors.New("branch is required")
+	}
+	vars, err := parsePipelineVariables(c.Input("variables"))
+	if err != nil {
+		return requestParams{}, nil, err
+	}
+	u, err := resourceURL(c, "repositories", workspace, repo, "pipelines")
+	if err != nil {
+		return requestParams{}, nil, err
+	}
+	target := map[string]any{
+		"type":     "pipeline_ref_target",
+		"ref_type": "branch",
+		"ref_name": branch,
+	}
+	if pattern := strings.TrimSpace(c.Input("pattern")); pattern != "" {
+		selType, err := pipelineSelectorType(c.Input("selector_type"))
+		if err != nil {
+			return requestParams{}, nil, err
+		}
+		target["selector"] = map[string]any{"type": selType, "pattern": pattern}
+	}
+	body := map[string]any{"target": target}
+	if len(vars) > 0 {
+		body["variables"] = vars
+	}
+	// Bitbucket expects a trailing slash on the pipelines collection.
+	return requestParams{Method: http.MethodPost, URL: u + "/"}, body, nil
+}
+
+func validateGetPipeline(c *connector.Ctx) (requestParams, error) {
+	workspace, repo, err := workspaceAndRepo(c)
+	if err != nil {
+		return requestParams{}, err
+	}
+	id := strings.TrimSpace(c.Input("pipeline_uuid"))
+	if id == "" {
+		return requestParams{}, errors.New("pipeline_uuid is required")
+	}
+	u, err := resourceURL(c, "repositories", workspace, repo, "pipelines", id)
+	if err != nil {
+		return requestParams{}, err
+	}
+	return requestParams{Method: http.MethodGet, URL: u}, nil
+}
+
+func validateListPipelines(c *connector.Ctx) (requestParams, error) {
+	workspace, repo, err := workspaceAndRepo(c)
+	if err != nil {
+		return requestParams{}, err
+	}
+	u, err := resourceURL(c, "repositories", workspace, repo, "pipelines")
+	if err != nil {
+		return requestParams{}, err
+	}
+	q := make(url.Values)
+	q.Set("sort", "-created_on")
+	addPage(q, c, c.InputInt("pagelen"), c.InputInt("page"))
+	return requestParams{Method: http.MethodGet, URL: withQuery(u+"/", q)}, nil
 }

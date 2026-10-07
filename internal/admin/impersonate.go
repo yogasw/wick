@@ -2,6 +2,7 @@ package admin
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -22,9 +23,14 @@ import (
 // Guard rails, because this hands one account another's access:
 //
 //   - Admin-only, enforced by the route wrapper.
-//   - Refuses to impersonate another admin or the owner. Otherwise the weakest
-//     admin account becomes a path to every other admin, and revoking one
-//     admin would not actually contain them.
+//   - Refuses your own account: switching into yourself is a no-op that only
+//     strands the return cookie.
+//   - Refuses an unapproved account, which cannot do anything to look at.
+//   - Admin targets ARE allowed, so support can reproduce what another admin
+//     sees. That is a deliberate widening of an earlier rule that blocked
+//     them: it means one admin account reaches every other admin's access,
+//     including the owner's, so removing an admin's privileges no longer
+//     contains them. The audit log is what carries the weight now.
 //   - Both directions are logged with both ids, so the audit trail says who
 //     acted as whom rather than showing the target acting alone.
 
@@ -51,13 +57,6 @@ func (h *Handler) startImpersonation(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "user not found", http.StatusNotFound)
 		return
 	}
-	// An admin must not be able to become another admin: that would turn any
-	// single admin account into a route to every other one, and make removing
-	// an admin's own privileges pointless.
-	if target.IsAdmin() {
-		http.Error(w, "cannot impersonate another admin", http.StatusForbidden)
-		return
-	}
 	if !target.Approved {
 		// An unapproved account cannot do anything anyway; switching into one
 		// would just look broken.
@@ -65,7 +64,7 @@ func (h *Handler) startImpersonation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	secure := r.TLS != nil
+	secure := h.secureCookie(r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     impersonateCookie,
 		Value:    admin.ID,
@@ -82,6 +81,11 @@ func (h *Handler) startImpersonation(w http.ResponseWriter, r *http.Request) {
 		Str("admin_email", admin.Email).
 		Str("target_id", target.ID).
 		Str("target_email", target.Email).
+		// Admin→admin is the case with no privilege ceiling left above it,
+		// so it is called out by name: an auditor grepping for it should not
+		// have to re-derive who was an admin at the time.
+		Bool("target_is_admin", target.IsAdmin()).
+		Bool("target_is_owner", target.IsOwner).
 		Msg("admin: impersonation started")
 
 	http.Redirect(w, r, "/", http.StatusFound)
@@ -103,16 +107,16 @@ func (h *Handler) stopImpersonation(w http.ResponseWriter, r *http.Request) {
 		// The stored id must STILL be an admin. If that account was demoted or
 		// deleted mid-session, restoring it would re-grant privileges that were
 		// deliberately taken away — so drop the session entirely instead.
-		clearImpersonateCookie(w, r)
+		clearImpersonateCookie(w, r, h.secureCookie(r))
 		h.midd.ClearSessionCookie(w)
 		http.Redirect(w, r, "/auth/login", http.StatusFound)
 		return
 	}
 
 	current := login.GetUser(r.Context())
-	clearImpersonateCookie(w, r)
+	clearImpersonateCookie(w, r, h.secureCookie(r))
 	h.midd.SetSessionCookie(w, adminUser.ID,
-		h.auth.GetUserFilterTagIDs(r.Context(), adminUser.ID), r.TLS != nil)
+		h.auth.GetUserFilterTagIDs(r.Context(), adminUser.ID), h.secureCookie(r))
 
 	log.Warn().
 		Str("admin_id", adminUser.ID).
@@ -126,14 +130,27 @@ func (h *Handler) stopImpersonation(w http.ResponseWriter, r *http.Request) {
 // for real debugging, short enough that a forgotten switch expires.
 const impersonateTTLSeconds = 2 * 60 * 60
 
-func clearImpersonateCookie(w http.ResponseWriter, r *http.Request) {
+// secureCookie decides the Secure flag the same way sign-in does (an https
+// app URL), plus a direct TLS connection. Deciding it from r.TLS alone wrote
+// the switched sessions without Secure behind a TLS-terminating proxy, while
+// sign-in had written the admin's with it — two cookies of one name that a
+// browser keeps apart by their attributes, so "Back to my account" could hand
+// the browser a session it did not send back.
+func (h *Handler) secureCookie(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return h.configs != nil && strings.HasPrefix(h.configs.AppURL(), "https")
+}
+
+func clearImpersonateCookie(w http.ResponseWriter, r *http.Request, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     impersonateCookie,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	})
 }

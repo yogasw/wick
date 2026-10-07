@@ -231,9 +231,22 @@ func privateError(status int, body []byte) error {
 	var env struct {
 		Name    string `json:"name"`
 		Message string `json:"message"`
+		// The private API puts the USEFUL text here. `message` is a generic
+		// "Something went wrong. (400)" for every validation failure, which hides
+		// what was actually wrong — on 2026-09-28 it hid
+		// "Block property value updates must use high-level property operations."
+		// for four hours of debugging. Always prefer debugMessage when present.
+		DebugMessage string `json:"debugMessage"`
 	}
-	if json.Unmarshal(body, &env) == nil && env.Message != "" {
-		return fmt.Errorf("notion %d: %s", status, env.Message)
+	if json.Unmarshal(body, &env) == nil {
+		switch {
+		case env.DebugMessage != "" && env.Message != "":
+			return fmt.Errorf("notion %d: %s (%s)", status, env.DebugMessage, env.Message)
+		case env.DebugMessage != "":
+			return fmt.Errorf("notion %d: %s", status, env.DebugMessage)
+		case env.Message != "":
+			return fmt.Errorf("notion %d: %s", status, env.Message)
+		}
 	}
 	if msg := strings.TrimSpace(string(body)); msg != "" {
 		return fmt.Errorf("notion %d: %s", status, shorten(msg, 300))

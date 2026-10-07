@@ -30,6 +30,10 @@ export interface ConnectorRow {
   /* Owner-only: row visible to its owner + admins until an admin adds a
      sharing tag. Drives the 🔒 Private chip vs the Everyone fallback. */
   private?: boolean;
+  /* True when the caller may configure this row (admin, owner tag, or the
+     row's allow-others-configure). Hides the row menu's configuring actions
+     from a view-only viewer. */
+  can_configure?: boolean;
   /* OAuth/SSO surface — present only for OAuth connector types. oauth.start_url
      is non-empty only when the caller may connect (SSO on + policy + client_id
      set), which drives whether the per-row Connect button renders. */
@@ -53,6 +57,13 @@ export interface ConnectorMCPAuth {
   expired?: boolean;
   /* Per-instance auth probe endpoint; empty when the caller can't configure. */
   test_url?: string;
+  /* Per-user (SSO) instance: holds no credential itself, each user connects
+     their own account. account_count = accounts the viewer may see;
+     mine_connected = the viewer connected theirs. */
+  per_user?: boolean;
+  account_count?: number;
+  mine_connected?: boolean;
+  connect_mine_url?: string;
 }
 
 export interface InstanceAuthTestResult {
@@ -161,6 +172,7 @@ export interface ConnectorDetail {
   multi_account: boolean;
   allow_others_connect_sso: boolean;
   allow_others_configure: boolean;
+  allow_others_see_accounts: boolean;
   session_config_capable: boolean;
   session_config_allowed: boolean;
 }
@@ -219,6 +231,8 @@ export interface HistoryRun {
   status: string;
   user_id: string;
   user_name: string;
+  account_id: string;
+  account_name: string;
   error_msg: string;
   latency_ms: number;
   http_status: number;
@@ -227,6 +241,37 @@ export interface HistoryRun {
   request_json: string;
   response_json: string;
   started_at: string;
+}
+
+/* One operation as it applies to one connected account. Four fields rather
+   than a boolean because "off" has three causes an operator must tell apart:
+   the instance says off and this account follows, the account itself says
+   off, or the health check locked it. */
+export interface AccountOp {
+  key: string;
+  name: string;
+  description: string;
+  destructive: boolean;
+  /* What applies right now. */
+  enabled: boolean;
+  /* How that was decided. */
+  state: "inherit" | "on" | "off";
+  /* What the instance says — the value clearing the override falls back to. */
+  inherited: boolean;
+  system_disabled: boolean;
+  system_disabled_reason: string;
+}
+
+export interface AccountDetail {
+  connector_key: string;
+  connector_name: string;
+  row_id: string;
+  row_label: string;
+  account_id: string;
+  display_name: string;
+  can_manage: boolean;
+  reconnect_url: string;
+  ops: AccountOp[] | null;
 }
 
 export interface HistoryOpOption {
@@ -239,6 +284,13 @@ export interface HistoryUserOption {
   name: string;
 }
 
+/* One entry in the Credential filter: a connected account, or the "default"
+   sentinel for the row's own configured credentials. */
+export interface HistoryCredentialOption {
+  id: string;
+  name: string;
+}
+
 export interface HistoryResult {
   key: string;
   name: string;
@@ -247,6 +299,7 @@ export interface HistoryResult {
   runs: HistoryRun[] | null;
   ops: HistoryOpOption[] | null;
   users: HistoryUserOption[] | null;
+  credentials: HistoryCredentialOption[] | null;
   page: number;
   total_pages: number;
   total: number;
@@ -258,6 +311,8 @@ export interface HistoryFilter {
   source: string;
   status: string;
   user: string;
+  /* A connected account id, or "default" for the row's own credentials. */
+  credential: string;
   page: number;
 }
 
@@ -367,6 +422,9 @@ export interface McpServerForm {
   oauth: McpOAuthExtra;
   excluded: string[];
   oauth_login_id: string;
+  /* oauth scheme: "Users connect their own account (SSO)" — save needs no
+     Test, and the first instance turns Enable SSO on. */
+  oauth_per_user?: boolean;
 }
 
 export interface McpTool {
@@ -443,6 +501,18 @@ export interface ToolDetail {
   icon: string;
   can_configure: boolean;
   fields: ConfigField[] | null;
+  /** Endpoints this tool serves without authentication, declared via
+   *  Router.WebhookGroup. Absent when the tool declares none. */
+  webhooks?: WebhookRoute[];
+}
+
+/** One unauthenticated endpoint on a tool. Surfaced so an operator can see
+ *  what answers without a login without reading the module source. */
+export interface WebhookRoute {
+  method: string;
+  path: string;
+  /** Absolute URL, ready to paste into a sender. Empty when no app URL is configured. */
+  url?: string;
 }
 
 export interface AuditRun {
@@ -507,6 +577,8 @@ export interface PluginEntry {
 export interface PluginsList {
   installed: PluginEntry[];
   available: PluginEntry[];
+  /* Every catalog entry, installed or not; available is the not-installed subset. */
+  catalog?: PluginEntry[];
   registry_error?: string;
   /* Whether the viewer may install / update / enable / disable / remove.
      Non-admins still receive the full list; the action buttons render

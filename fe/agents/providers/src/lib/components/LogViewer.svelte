@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { clock24 } from "@wick-fe/common-ui";
   import { onMount, tick } from "svelte";
   import { Breadcrumb, type BreadcrumbItem } from "@wick-fe/common-ui";
   import { toastError } from "@wick-fe/common-stores";
@@ -27,7 +28,7 @@
   ]);
 
   function fmtTime(iso: string): string {
-    return iso ? new Date(iso).toLocaleTimeString() : "";
+    return iso ? clock24(iso, true) : "";
   }
   let windowLabel = $derived(
     from ? `${fmtTime(from)}${to ? ` → ${fmtTime(to)}` : " → running"}` : "",

@@ -12,6 +12,7 @@ package repository
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -37,9 +38,49 @@ const DraftRetention = 50
 // pointer-receiver so callers can swap a fake in tests.
 type Repo struct {
 	db *gorm.DB
+	// SessionAccess reports whether a user may point a workflow at an
+	// existing session. Wired by the server; nil disables the check, which
+	// is what tests and the CLI want — there is no signed-in human there to
+	// judge, and refusing every pinned session would break them.
+	SessionAccess func(userID, sessionID string) bool
 }
 
 func New(db *gorm.DB) *Repo { return &Repo{db: db} }
+
+// WithSessionAccess installs the gate that stops a workflow from borrowing a
+// session it has no business in.
+//
+// A node may pin an explicit session id, and every agent turn in that session
+// runs with the SESSION's identity — so without this, anyone who could edit a
+// workflow could point it at an admin's session and have their nodes served
+// with the admin's connectors. Schedules have had this gate since they were
+// written (scheduleAuthorizeTarget → canManageSession); workflows never did.
+//
+// Enforced at SAVE rather than at run: the failure then lands on the person
+// typing the id, instead of surfacing at 3am as a run that quietly did more
+// than it should.
+func (r *Repo) WithSessionAccess(fn func(userID, sessionID string) bool) *Repo {
+	r.SessionAccess = fn
+	return r
+}
+
+// checkPinnedSessions refuses a draft that pins sessions its author may not
+// reach. Nodes that let wick choose the id (the run-scoped, per-workflow and
+// ad-hoc presets) are untouched — nobody else's session can be named that way.
+func (r *Repo) checkPinnedSessions(w wf.Workflow, createdBy string) error {
+	if r.SessionAccess == nil || createdBy == "" {
+		return nil
+	}
+	for _, n := range w.Graph.Nodes {
+		if n.SessionID == "" {
+			continue
+		}
+		if !r.SessionAccess(createdBy, n.SessionID) {
+			return fmt.Errorf("node %q pins session %q, which you do not have access to", n.ID, n.SessionID)
+		}
+	}
+	return nil
+}
 
 // List returns every workflow ordered by updated-at desc — newest
 // edits first. Used by the SPA workflow list.
@@ -71,7 +112,7 @@ func (r *Repo) LoadWorkflow(id string) (wf.Workflow, error) {
 	if body == "" {
 		return wf.Workflow{}, errors.New("workflow has no body")
 	}
-	return parse.Parse(id, []byte(body))
+	return parseOwned(row, body)
 }
 
 // LoadDraft returns the parsed draft when one exists, otherwise the
@@ -88,23 +129,45 @@ func (r *Repo) LoadDraft(id string) (wf.Workflow, error) {
 	if body == "" {
 		return wf.Workflow{}, errors.New("workflow has no body")
 	}
-	return parse.Parse(id, []byte(body))
+	return parseOwned(row, body)
+}
+
+// parseOwned parses a stored body and reports the row's created_by as its
+// owner. The column is the source of truth: the copy serialised into the
+// body used to be restamped with whoever last saved the canvas, so bodies
+// written before that was fixed may still name an editor. Reading the
+// column here makes those drifted rows come out right without a migration.
+// An empty column (legacy rows, importer) falls back to the body.
+func parseOwned(row entity.Workflow, body string) (wf.Workflow, error) {
+	w, err := parse.Parse(row.ID, []byte(body))
+	if err != nil {
+		return w, err
+	}
+	if row.CreatedBy != "" {
+		w.CreatedBy = row.CreatedBy
+	}
+	return w, nil
 }
 
 // SaveDraft persists the workflow as the active draft and appends a
 // new draft snapshot to workflow_versions. Returns the snapshot id so
 // the caller can surface "saved as v42" in the UI.
 //
+// createdBy is the EDITOR doing the save: it is who the pinned-session
+// check judges and who the snapshot credits. It never changes the owner —
+// the row's created_by is kept, and written into the body too so the two
+// cannot drift. Only a row with no owner yet takes one, from the body or
+// else the editor. Handing a workflow on is SetOwner's job alone.
+//
 // Side effect: enforces DraftRetention by deleting the oldest excess
 // draft rows for this workflow. Published rows are never pruned.
 func (r *Repo) SaveDraft(id string, w wf.Workflow, createdBy, message string) (uint, error) {
-	body, err := parse.Marshal(w)
-	if err != nil {
+	if err := r.checkPinnedSessions(w, createdBy); err != nil {
 		return 0, err
 	}
 	now := time.Now()
 	var version uint
-	err = r.db.Transaction(func(tx *gorm.DB) error {
+	err := r.db.Transaction(func(tx *gorm.DB) error {
 		// Update only the draft-relevant columns so BodyPublished is
 		// preserved across edits. Insert when the row doesn't exist
 		// yet (covers paths that skip Create — e.g. importer + tests).
@@ -114,6 +177,17 @@ func (r *Repo) SaveDraft(id string, w wf.Workflow, createdBy, message string) (u
 				return err
 			}
 			existing = entity.Workflow{ID: id, CreatedAt: now}
+		}
+		if existing.CreatedBy == "" {
+			existing.CreatedBy = w.CreatedBy
+		}
+		if existing.CreatedBy == "" {
+			existing.CreatedBy = createdBy
+		}
+		w.CreatedBy = existing.CreatedBy
+		body, err := parse.Marshal(w)
+		if err != nil {
+			return err
 		}
 		existing.Name = w.Name
 		existing.Enabled = w.Enabled
@@ -177,6 +251,11 @@ func (r *Repo) Publish(id, createdBy, message string) (uint, error) {
 		body := row.BodyDraft
 		if w, perr := parse.Parse(id, []byte(row.BodyDraft)); perr == nil {
 			w.Version = newVersion
+			// A draft saved before owners were kept may still name the
+			// editor; the published copy takes the row's owner instead.
+			if row.CreatedBy != "" {
+				w.CreatedBy = row.CreatedBy
+			}
 			if b, merr := parse.Marshal(w); merr == nil {
 				body = string(b)
 			}
@@ -185,9 +264,13 @@ func (r *Repo) Publish(id, createdBy, message string) (uint, error) {
 		row.BodyDraft = ""
 		row.HasDraft = false
 		row.Version = newVersion
-		if createdBy != "" {
-			row.CreatedBy = createdBy
-		}
+		// CreatedBy is deliberately NOT touched: it names who the workflow
+		// belongs to, stamped once at create. Publishing is an act, not a
+		// change of ownership — restamping it here handed the workflow to
+		// whoever last pressed Publish, which is how a workflow built for
+		// one person ended up owned by the admin who reviewed it. The
+		// publisher is recorded on the version snapshot below, which is
+		// where "who did this" belongs.
 		row.UpdatedAt = now
 		if err := tx.Save(&row).Error; err != nil {
 			return err
@@ -258,6 +341,23 @@ func (r *Repo) SetPublished(id, name string, enabled bool, version int, body []b
 func (r *Repo) SetEnabled(id string, enabled bool, body []byte) error {
 	updates := map[string]any{
 		"enabled":    enabled,
+		"updated_at": time.Now(),
+	}
+	if len(body) > 0 {
+		updates["body_published"] = string(body)
+	}
+	return r.db.Model(&entity.Workflow{}).
+		Where("id = ?", id).
+		Updates(updates).Error
+}
+
+// SetOwner re-stamps who the workflow belongs to. The body is rewritten
+// alongside the column because created_by is serialised into it, and Load
+// reads the body — leaving the two disagreeing would show one owner on the
+// admin page and another everywhere else.
+func (r *Repo) SetOwner(id, createdBy string, body []byte) error {
+	updates := map[string]any{
+		"created_by": createdBy,
 		"updated_at": time.Now(),
 	}
 	if len(body) > 0 {
