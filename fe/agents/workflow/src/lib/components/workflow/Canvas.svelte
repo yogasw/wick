@@ -1370,9 +1370,16 @@
               style="pointer-events: none; transition: opacity 0.12s"
             />
             {#if e.case}
-              <text class="text-[10px] fill-slate-500">
-                <textPath href={`#edge-${e.from}-${e.to}-${e.case}`}>{e.case}</textPath>
-              </text>
+              <!-- Case label at the edge midpoint. The old <textPath> pointed at an
+                   `#edge-…` id no path carried, so the label never rendered. -->
+              <g style="pointer-events: none">
+                <rect
+                  x={mid.x - (e.case.length * 3 + 6)} y={mid.y - 8}
+                  width={e.case.length * 6 + 12} height="16" rx="8"
+                  class="fill-white-100 dark:fill-navy-600 stroke-slate-400" stroke-width="1"
+                />
+                <text x={mid.x} y={mid.y + 3.5} text-anchor="middle" class="text-[10px] fill-slate-600 dark:fill-slate-200">{e.case}</text>
+              </g>
             {/if}
           {/if}
         {/each}
