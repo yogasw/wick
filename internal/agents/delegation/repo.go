@@ -227,6 +227,20 @@ func (r *Repo) ListByParent(ctx context.Context, parentSessionID string) ([]enti
 	return out, err
 }
 
+// ListLiveDetached returns every queued or running background delegation
+// across all trees, oldest first. The Team roster reads it once per response
+// to mark which agents still have sub-agents working; the live set is small
+// (max_parallel per tree), so one query beats one per agent.
+func (r *Repo) ListLiveDetached(ctx context.Context) ([]entity.AgentDelegation, error) {
+	var out []entity.AgentDelegation
+	err := r.db.WithContext(ctx).
+		Where("detached = ? AND status IN ?", true,
+			[]string{entity.DelegationQueued, entity.DelegationRunning}).
+		Order("started_at asc").
+		Find(&out).Error
+	return out, err
+}
+
 // ListByRoot returns every delegation in one tree, at any depth.
 func (r *Repo) ListByRoot(ctx context.Context, rootID string) ([]entity.AgentDelegation, error) {
 	var out []entity.AgentDelegation

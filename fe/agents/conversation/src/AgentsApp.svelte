@@ -41,7 +41,7 @@
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
   import TeamAddMenu from "./lib/components/TeamAddMenu.svelte";
-  import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone } from "./lib/rosterList.js";
+  import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass } from "./lib/rosterList.js";
   import TeamSettings from "./lib/components/TeamSettings.svelte";
   import { RETURN_KEY, agentsHomeHref } from "./lib/teamReturn.js";
 
@@ -504,13 +504,23 @@
       : undefined,
   });
 
-  function rowPreview(a: AgentItem): string {
-    if (a.disabled) return "Disabled";
+  function rowPreview(a: AgentItem): { text: string; silent: boolean } {
+    if (a.disabled) return { text: "Disabled", silent: false };
+    if (a.attention_preview) return { text: a.attention_preview, silent: false };
+    // A [silent] reply previews dimmed, never with its raw marker.
+    const last = silentPreview(a.last_preview || "", a.last_silent);
+    if (last.text) return last;
     // A shared agent the user has not chatted with yet says whose it is.
-    return a.attention_preview || a.last_preview || (isSharedAgent(a) ? sharedLabel(a) : "") || a.description || "No chats yet";
+    return { text: (isSharedAgent(a) ? sharedLabel(a) : "") || a.description || "No chats yet", silent: false };
   }
 
+  const mutedBell = "M8.7 3.7A6 6 0 0 1 18 8.5c0 3 .5 4.4 1.3 5.6M17 17H4c1.5-1.5 3-3 3-8.5";
+
 </script>
+
+{#snippet silentBell()}
+  <svg data-testid="roster-silent" viewBox="0 0 24 24" class="mr-1 inline h-3 w-3 shrink-0 align-[-2px]" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Silent reply"><path d={mutedBell}></path><path d="M10.3 21a2 2 0 0 0 3.4 0"></path><line x1="2" y1="2" x2="22" y2="22"></line></svg>
+{/snippet}
 
 <svelte:window onkeydown={onKey} />
 
@@ -623,6 +633,7 @@
           {@const active = !route.group && selected?.id === a.id}
           {@const st = rosterStatus(a, { activeId: selected?.id, hatching: hatching.includes(a.id) })}
           {@const tone = rowTone(st.unread)}
+          {@const pv = rowPreview(a)}
           <button
             type="button"
             class="roster-row relative mb-0.5 w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left {pinIds.has(a.id) ? 'hidden lg:flex' : 'flex'} {active
@@ -634,7 +645,12 @@
           >
             <!-- live like the header's: the same agent in the same state
                  moves the same way in both. Rows scrolled away pause. -->
-            <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={isWorking(a.status)} tool={st.work === "tool"} toolName={st.work === "tool" ? a.current_action : ""} toolError={a.tool_error} remote={st.work === "waiting"} events={a.avatar?.events} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
+            <!-- Sub-agents still working after its own turn: the orbit, plus
+                 a 🤖 so it reads apart from the agent's own tool call. -->
+            <span class="relative flex shrink-0">
+              <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={isWorking(a.status) || st.work === "subagent"} tool={st.work === "tool" || st.work === "subagent"} toolName={st.work === "tool" ? a.current_action : ""} toolError={a.tool_error} remote={st.work === "waiting"} events={a.avatar?.events} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
+              {#if st.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -right-1 text-[11px] leading-none" aria-hidden="true" data-testid="roster-subagent">🤖</span>{/if}
+            </span>
             <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{st.tip}</span>
             <span class="min-w-0 flex-1">
               <span class="flex items-baseline gap-2">
@@ -644,8 +660,8 @@
                 <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(a.last_active)}</span>
               </span>
               <span class="roster-line2 mt-0.5 flex items-center gap-1.5">
-                <span class="min-w-0 flex-1 truncate text-xs {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : tone.preview}">
-                  {#if st.typing !== null}<span data-testid="roster-working" data-work={st.work}>{st.typing}</span>{:else}{rowPreview(a)}{/if}
+                <span class="min-w-0 flex-1 truncate text-xs {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : pv.silent ? silentPreviewClass : tone.preview}">
+                  {#if st.typing !== null}<span data-testid="roster-working" data-work={st.work}>{st.typing}</span>{:else}{#if pv.silent}{@render silentBell()}{/if}{pv.text}{/if}
                 </span>
                 {#if st.unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" class:roster-badge-dot={!unreadLabel(a.unread_count)} aria-label="{a.unread_count || 'new'} unread" data-testid="roster-unread">{unreadLabel(a.unread_count)}</span>{/if}
               </span>
@@ -655,6 +671,7 @@
           {@const g = e.group}
           {@const unread = g.unread && activeGroupId !== g.id}
           {@const tone = rowTone(!!unread)}
+          {@const gp = silentPreview(g.last_preview || "", g.last_silent)}
           <button
             type="button"
             class="roster-row relative mb-0.5 flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left {activeGroupId === g.id ? 'bg-white-300 dark:bg-navy-600' : 'hover:bg-white-300 dark:hover:bg-navy-600'}"
@@ -669,7 +686,7 @@
                 <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(g.last_active)}</span>
               </span>
               <span class="roster-line2 mt-0.5 flex items-center gap-1.5">
-                <span class="min-w-0 flex-1 truncate text-xs {tone.preview}">{g.last_preview || `${g.members.length} agents`}</span>
+                <span class="min-w-0 flex-1 truncate text-xs {gp.silent && gp.text ? silentPreviewClass : tone.preview}">{#if gp.silent && gp.text}{@render silentBell()}{/if}{gp.text || `${g.members.length} agents`}</span>
                 {#if unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" class:roster-badge-dot={!unreadLabel(g.unread_count)} aria-label="{g.unread_count || 'new'} unread">{unreadLabel(g.unread_count)}</span>{/if}
               </span>
             </span>
@@ -712,7 +729,10 @@
         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
       </button>
       {#if selected && !noCaptain}
-        <AgentAvatar kind={selected.avatar?.kind} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={isWorking(selected.status)} tool={headerStatus?.work === "tool"} toolName={headerStatus?.work === "tool" ? selected.current_action : ""} toolError={selected.tool_error} remote={headerStatus?.work === "waiting"} events={selected.avatar?.events} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
+        <span class="relative flex shrink-0">
+          <AgentAvatar kind={selected.avatar?.kind} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={isWorking(selected.status) || headerStatus?.work === "subagent"} tool={headerStatus?.work === "tool" || headerStatus?.work === "subagent"} toolName={headerStatus?.work === "tool" ? selected.current_action : ""} toolError={selected.tool_error} remote={headerStatus?.work === "waiting"} events={selected.avatar?.events} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
+          {#if headerStatus?.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -right-1 text-[11px] leading-none" aria-hidden="true" data-testid="header-subagent">🤖</span>{/if}
+        </span>
         <div class="min-w-0 flex-1">
           <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">
             {selected.name}{#if selected.tagline}<span class="font-normal text-black-700 dark:text-black-600">&nbsp;·&nbsp;{selected.tagline}</span>{/if}
@@ -720,7 +740,7 @@
           <div class="truncate text-xs text-black-800 dark:text-black-600">
             {#if remoteWaiting}
               <span class="font-medium text-green-600 dark:text-green-400" data-testid="header-waiting">{remoteWaitLabel(selected, waitStart === null ? 0 : (waitNow - waitStart) / 1000, progressLabel)}</span>
-            {:else if isWorking(selected.status)}
+            {:else if isWorking(selected.status) || headerStatus?.work === "subagent"}
               <span class="font-medium text-green-600 dark:text-green-400" data-testid="header-typing" data-work={headerStatus?.work}>{(headerStatus?.typing ?? "thinking…").replace(/…$/, "")}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
             {:else if selected.disabled}
               disabled
@@ -773,7 +793,7 @@
         sessionId={chatSessionId}
         handle={selected.handle}
         turn={`${selected.status}|${selected.last_active ?? ""}`}
-        question={route.session ? "" : selected.last_preview}
+        question={route.session || selected.last_silent ? "" : selected.last_preview}
       />
     {/if}
     <div class="min-h-0 flex-1">

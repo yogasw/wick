@@ -82,7 +82,9 @@ type TeamGroupItem struct {
 	MaxHops        int        `json:"max_hops"`
 	LastActive     *time.Time `json:"last_active"`
 	LastPreview    string     `json:"last_preview"`
-	Unread         bool       `json:"unread"`
+	// LastSilent: LastPreview is a [silent] reply, marker stripped.
+	LastSilent bool `json:"last_silent,omitempty"`
+	Unread     bool `json:"unread"`
 }
 
 type teamGroupWriteReq struct {
@@ -164,8 +166,13 @@ func groupItem(ctx context.Context, sess session.Session, byID map[string]teamli
 	}
 	if turns, err := loadConversation(globalLayout, sess.ID); err == nil {
 		for i := len(turns) - 1; i >= 0; i-- {
-			if t := turns[i]; t.Role != "system" && strings.TrimSpace(t.Text) != "" {
-				it.LastPreview = firstLineOf(t.Text, 120)
+			t := turns[i]
+			body, silent := t.Text, false
+			if t.Role == "assistant" {
+				body, silent = team.SplitSilent(body)
+			}
+			if t.Role != "system" && strings.TrimSpace(body) != "" {
+				it.LastPreview, it.LastSilent = firstLineOf(body, 120), silent
 				if t.Speaker != nil {
 					it.LastPreview = "@" + t.Speaker.Handle + ": " + it.LastPreview
 				}
@@ -179,7 +186,8 @@ func groupItem(ctx context.Context, sess session.Session, byID map[string]teamli
 			if g.LastReadAt != nil && !t.Timestamp.After(*g.LastReadAt) {
 				break
 			}
-			if t.Role == "assistant" {
+			// A [silent] reply raises no notification, so it is no unread.
+			if _, silent := team.SplitSilent(t.Text); t.Role == "assistant" && !silent {
 				it.Unread = true
 				break
 			}

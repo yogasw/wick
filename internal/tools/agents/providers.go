@@ -1585,10 +1585,13 @@ func liveProcessesVM() []view.LiveProcessVM {
 // THIS caller may choose.
 //
 // This is where the access tags actually bite: the project defaults
-// dropdown, the new-session composer, the channel and workflow provider
-// fields and the agent-profile picker all read their options from here
-// (one endpoint, several SPAs), so tagging an instance removes it from
-// every one of those lists at once. Untagged instances stay offered to
+// dropdown, the new-session composer, the channel provider field and the
+// agent-profile picker all read their options from here (one endpoint,
+// several SPAs), so tagging an instance removes it from every one of
+// those lists at once. The workflow editor's provider list comes from the
+// workflow catalog instead, which applies the same rule through
+// workflowProviderChoices (and the run itself re-checks the OWNER via
+// workflowProviderAccess). Untagged instances stay offered to
 // everyone, which is the default every install starts with.
 //
 // It is NOT the Providers menu — that one is manage-only.

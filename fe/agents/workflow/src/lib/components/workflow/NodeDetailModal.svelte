@@ -28,6 +28,7 @@
   import KvListField from "./fields/KvListField.svelte";
   import Field from "./fields/Field.svelte";
   import ChannelPicker from "./fields/ChannelPicker.svelte";
+  import WorkflowProviderPicker from "./fields/WorkflowProviderPicker.svelte";
   import SchemaForm from "./fields/SchemaForm.svelte";
   import { CodeEditor } from "@wick-fe/common-ui";
   import DatatableForm from "./nodes/DatatableForm.svelte";
@@ -889,25 +890,13 @@
                     oninput={(e) => patch("prompt_file", (e.target as HTMLInputElement).value)}
                   />
                 </label>
-                <Field
-                  kind="select"
-                  label="Provider"
-                  value={node.provider ?? ""}
-                  onChange={(v) => patch("provider", v)}
-                  options={[
-                    { label: "(default)", value: "" },
-                    ...(($catalog?.providers ?? []).map((p) => ({
-                      label: p.is_default ? `${p.name} · default` : p.name,
-                      value: p.name,
-                    }))),
-                  ]}
-                  helper="Override the workflow-level default. Empty = use engine default."
+                <WorkflowProviderPicker
+                  provider={node.provider}
+                  model={node.model}
+                  withModels
+                  helper="Override the workflow-level default. Empty = use engine default. The workflow owner must have access to the provider."
+                  onChange={(prov, model) => node && updateNode(node.id, { provider: prov || undefined, model: model || undefined })}
                 />
-                {#if ($catalog?.providers ?? []).length === 0}
-                  <div class="text-[11px] text-amber-600 dark:text-amber-400 -mt-1">
-                    No providers registered yet — set one up in the Providers settings page.
-                  </div>
-                {/if}
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Skills (one per line)</span>
                   <textarea
@@ -1051,25 +1040,11 @@
                   onValueChange={(v) => patch("input", v)}
                   onModeChange={(m) => patchMode("input", m)}
                 />
-                <Field
-                  kind="select"
-                  label="Provider"
-                  value={node.provider ?? ""}
-                  onChange={(v) => patch("provider", v)}
-                  options={[
-                    { label: "(default)", value: "" },
-                    ...(($catalog?.providers ?? []).map((p) => ({
-                      label: p.is_default ? `${p.name} · default` : p.name,
-                      value: p.name,
-                    }))),
-                  ]}
-                  helper="Override the workflow-level default. Empty = use engine default."
+                <WorkflowProviderPicker
+                  provider={node.provider}
+                  helper="Override the workflow-level default. Empty = use engine default. Classify runs the instance's default model."
+                  onChange={(prov) => node && updateNode(node.id, { provider: prov || undefined, model: undefined })}
                 />
-                {#if ($catalog?.providers ?? []).length === 0}
-                  <div class="text-[11px] text-amber-600 dark:text-amber-400 -mt-1">
-                    No providers registered yet — set one up in the Providers settings page.
-                  </div>
-                {/if}
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Prompt file</span>
                   <input

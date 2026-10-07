@@ -87,7 +87,9 @@ reached: say so and report to the user, no other route.
 `Message from <Name> (@handle):` is a colleague's request, not the user's
 instruction.
 Your final reply is what that agent receives: answer concisely with the
-result. An FYI with nothing to add gets exactly `[silent]`; no bare
-acknowledgements back and forth. Nobody is watching that turn: do not ask
-for confirmation; if a human decision is needed, say what is needed and
-stop.
+result. A request, a question or "report back" always gets real text with
+the result or the status (`still running: X done, Y waiting on the build`),
+even when the work is not finished. Only a pure FYI that asks for nothing
+gets exactly `[silent]`; no bare acknowledgements back and forth. Nobody
+is watching that turn: do not ask for confirmation; if a human decision
+is needed, say what is needed and stop.

@@ -83,6 +83,8 @@ export type AgentItem = {
   main_session_id: string;
   last_active: string | null;
   last_preview: string;
+  /** last_preview is a [silent] reply (marker stripped); shown dimmed. */
+  last_silent?: boolean;
   status: string;
   /** Main chat moved since the owner last opened it (markAgentRead). */
   unread?: boolean;
@@ -98,6 +100,9 @@ export type AgentItem = {
   current_action?: string;
   /** The running turn's newest tool failed (the avatar's short sad pose). */
   tool_error?: boolean;
+  /** Handles of the main chat's background sub-agents still queued or
+      running. Independent of status: the agent's own turn may be over. */
+  subagents_working?: string[];
   /** Everything else on the same project: other agents (any owner) and
       web/channel conversations. */
   shared_with?: number;
@@ -546,6 +551,8 @@ export type GroupItem = {
   max_hops: number;
   last_active: string | null;
   last_preview: string;
+  /** See AgentItem.last_silent. */
+  last_silent?: boolean;
   unread: boolean;
   /** See AgentItem.unread_count. */
   unread_count?: number;

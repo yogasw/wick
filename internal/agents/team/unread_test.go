@@ -52,6 +52,7 @@ func TestUnreadCount(t *testing.T) {
 		settled bool
 	}{
 		"person asked":         {[]store.ConversationTurn{person, reply(1)}, &before, at(5), 1, true},
+		"silent reply":         {[]store.ConversationTurn{person, reply(1), {Timestamp: at(2), Role: "assistant", Text: "  [SILENT] run 3/5: ok"}}, &before, at(5), 1, true},
 		"read already":         {[]store.ConversationTurn{person, reply(1)}, ptr(at(2)), at(5), 0, true},
 		"never opened":         {[]store.ConversationTurn{person, reply(1), person, reply(3)}, nil, at(5), 2, true},
 		"teammate, delivered":  {[]store.ConversationTurn{handoff(0, "t1", "TASK_STATE_WORKING"), asked(0), reply(1), handoff(1, "t1", "TASK_STATE_COMPLETED")}, &before, at(5), 0, true},

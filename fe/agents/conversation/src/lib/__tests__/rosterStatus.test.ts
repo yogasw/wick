@@ -142,3 +142,50 @@ describe("no quick poll", () => {
     expect(src).toMatch(/liveRoster\(/);
   });
 });
+
+describe("sub-agents working after the agent's own turn", () => {
+  it("one background sub-agent: working, named, with the 🤖 cue", () => {
+    const s = rosterStatus(row({ subagents_working: ["wick-fixer"] }));
+    expect(s.work).toBe("subagent");
+    expect(s.typing).toBe("🤖 wick-fixer bekerja…");
+    expect(s.tip).toBe("🤖 wick-fixer bekerja…");
+  });
+
+  it("more than one is counted", () => {
+    expect(rosterStatus(row({ subagents_working: ["a", "b"] })).typing).toBe("🤖 2 sub-agent bekerja…");
+  });
+
+  it("the agent's own turn outranks its sub-agents", () => {
+    const thinking = rosterStatus(row({ status: "running", subagents_working: ["wick-fixer"] }));
+    expect(thinking.work).toBe("thinking");
+    const tool = rosterStatus(row({ status: "running", current_action: "Bash", subagents_working: ["wick-fixer"] }));
+    expect(tool.work).toBe("tool");
+  });
+
+  it("attention and hatching beat it, it beats unread, disabled shows nothing", () => {
+    expect(rosterStatus(row({ needs_attention: true, subagents_working: ["x"] })).tip).toBe("needs your attention");
+    expect(rosterStatus(row({ subagents_working: ["x"] }), { hatching: true }).tip).toBe("just hatched");
+    const unread = rosterStatus(row({ unread: true, subagents_working: ["x"] }));
+    expect(unread.tip).toBe("🤖 x bekerja…");
+    expect(unread.unread).toBe(true);
+    const off = rosterStatus(row({ disabled: true, subagents_working: ["x"] }));
+    expect(off.work).toBe("idle");
+    expect(off.typing).toBeNull();
+  });
+
+  it("an empty list reads idle", () => {
+    expect(rosterStatus(row({ subagents_working: [] })).work).toBe("idle");
+  });
+
+  it("a turn ending on the stream keeps the sub-agents, so the card stays working", () => {
+    const agents = [{ id: "a1", status: "running", disabled: false, main_session_id: "s1", current_action: "", subagents_working: ["wick-fixer"] }];
+    const ev: SessionActivity = { session_id: "s1", work: "", action: "" };
+    const next = withActivity(agents, ev);
+    expect(next.finished).toBe(true);
+    expect(next.agents[0].subagents_working).toEqual(["wick-fixer"]);
+    expect(rosterStatus(next.agents[0]).work).toBe("subagent");
+    const ended = withTurn(agents, "a1", false);
+    expect(ended[0].subagents_working).toEqual(["wick-fixer"]);
+    expect(rosterStatus(ended[0]).work).toBe("subagent");
+  });
+});

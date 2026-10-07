@@ -195,3 +195,40 @@ func TestRecheckBackgroundDropsDeadChildren(t *testing.T) {
 		t.Fatalf("recheck = %+v, want alive and waiting only", got)
 	}
 }
+
+// The roster's one-query picture: background rows only, grouped by parent in
+// start order, dead running rows dropped, queued rows kept.
+func TestLiveBackgroundByParent(t *testing.T) {
+	r := testRepo(t)
+	s := &Service{Repo: r, AgentAlive: func(child, agent string) bool { return child != "child-dead" }}
+	ctx := context.Background()
+	base := time.Date(2026, 10, 7, 10, 0, 0, 0, time.UTC)
+	mk := func(id, parent, status, child string, detached bool, at int) {
+		d := seedDelegation(t, r, id, "root-"+parent, status, 0)
+		d.ParentSessionID, d.Detached, d.Handle, d.ChildSessionID = parent, detached, id, child
+		d.StartedAt = base.Add(time.Duration(at) * time.Minute)
+		if err := r.SaveDelegationForTest(ctx, d); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+	}
+	mk("b-second", "p1", entity.DelegationQueued, "c2", true, 2)
+	mk("a-first", "p1", entity.DelegationRunning, "c1", true, 1)
+	mk("fg", "p1", entity.DelegationRunning, "c3", false, 3)
+	mk("dead", "p1", entity.DelegationRunning, "child-dead", true, 4)
+	mk("done", "p1", entity.DelegationDone, "c5", true, 5)
+	mk("other", "p2", entity.DelegationRunning, "c6", true, 6)
+
+	got, err := s.LiveBackgroundByParent(ctx)
+	if err != nil {
+		t.Fatalf("live: %v", err)
+	}
+	if p1 := strings.Join(got["p1"], ","); p1 != "a-first,b-second" {
+		t.Fatalf("p1 = %q, want a-first,b-second", p1)
+	}
+	if p2 := strings.Join(got["p2"], ","); p2 != "other" {
+		t.Fatalf("p2 = %q, want other", p2)
+	}
+	if len(got) != 2 {
+		t.Fatalf("parents = %v, want p1 and p2 only", got)
+	}
+}

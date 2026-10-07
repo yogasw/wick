@@ -1738,6 +1738,13 @@ func (p *Pool) SetAgentProvider(sessionID, agentName, providerKey string) error 
 	return session.SetAgentProvider(p.cfg.Layout, sessionID, agentName, providerKey)
 }
 
+// SetModelID pins a model id on the session's agent entry (creating it if
+// missing) so the next spawn runs that model. Empty = unset (the
+// provider's own default). Used by a workflow agent node with a model.
+func (p *Pool) SetModelID(sessionID, agentName, modelID string) error {
+	return session.SetModelID(p.cfg.Layout, sessionID, agentName, modelID)
+}
+
 // EnsureSession is the public wrapper for ensureSession. Workflow's
 // session_init executor calls this to materialize the registry entry +
 // sidebar row up-front, before any agent node actually dispatches a

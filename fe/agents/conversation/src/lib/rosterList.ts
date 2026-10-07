@@ -82,3 +82,15 @@ export function rowTone(unread: boolean): { name: string; preview: string; time:
         time: "text-black-700",
       };
 }
+
+/** A roster preview split from its [silent] marker. silent comes from the
+    server's last_silent flag; a marker still in the text (an older server)
+    counts too, and is stripped either way so it never shows raw. */
+export function silentPreview(text: string, flag?: boolean): { text: string; silent: boolean } {
+  const m = /^\s*\[silent\]\s*/i.exec(text);
+  return m ? { text: text.slice(m[0].length), silent: true } : { text, silent: !!flag };
+}
+
+/** Classes of a silent preview: dimmed and italic, like the muted-bell
+    reply in the thread. */
+export const silentPreviewClass = "italic text-black-600 dark:text-black-700";

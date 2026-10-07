@@ -94,13 +94,16 @@ so compact at the END of a heavy turn, not in the middle of one.
 
 ## Silent replies (`[silent]`)
 
-When a turn's outcome does not warrant interrupting anyone (a monitor that
-found nothing new, a scheduled check mid-sequence, bookkeeping) start the
-reply with the exact marker `[silent]` on the first line. It stays out of
-every channel and raises no notification, but is still recorded, dimmed,
-in the web UI: `[silent] run 3/5: 200 OK, nothing to report`. When
+`[silent]` is only for turns you or a timer started (a scheduled message, a
+monitor or loop that found nothing new, a sweeper, bookkeeping) and for a
+pure FYI with nothing new to add. Start such a reply with the exact marker
+`[silent]` on the first line. It stays out of every channel and raises no
+notification, but is still recorded, dimmed, in the web UI:
+`[silent] run 3/5: 200 OK, nothing to report`. Never use it to answer a
+person, nor to answer a request or a question, including one from another
+agent: those always get a visible reply, even if only a status. When
 something matters (final result, a failure), reply normally without it.
-Only a leading marker counts.
+In doubt, reply normally. Only a leading marker counts.
 
 {{ASKING_USER}}
 

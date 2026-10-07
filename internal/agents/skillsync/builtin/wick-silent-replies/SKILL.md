@@ -41,7 +41,9 @@ before the marker defeats it. No preamble, no bold, no backticks — plain
 - a scheduled run is mid-sequence, not the final one
 - ticket bookkeeping with nothing to decide — the sweeper's follow-up prompt
   asks for exactly this
-- an intermediate step of work you were told to just do
+- an intermediate step of work you were told to just do, when nobody asked
+  for a report of it
+- a pure FYI from another agent that asks for nothing
 
 Keep the text after the marker informative: `[silent] run 3/5: 200 OK` is a
 useful trace, `[silent] ok` is not.
@@ -55,9 +57,13 @@ useful trace, `[silent] ok` is not.
 - **the user asked a direct question** — a person waiting on you always gets a
   visible answer, even a short one, in the channel they asked from. There is
   no thread where this stops being true (next section)
+- **another agent sent a request or a question** — a teammate asking for work,
+  an answer, or "report back" is waiting just like a person. Reply with the
+  result, or the status if it is not done yet (`still running: X done, Y
+  waiting on the build`); `[silent]` there hands it an empty answer
 
-When in doubt on a user-initiated turn, reply normally. Silence is for turns
-you or a timer started.
+Never go silent on a turn a person started. When in doubt, reply normally.
+Silence is for turns you or a timer started, and for FYIs that ask nothing.
 
 ## Shared work threads: still answer what you were asked
 
