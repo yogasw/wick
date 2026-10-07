@@ -10,6 +10,16 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.15.2](https://github.com/yogasw/wick/compare/v1.15.1...v1.15.2) — Termux
+
+_Released on 2026-10-07_
+
+### Fixed
+*   **Termux Managed Binaries:** Addressed an issue where `patchelf` would relayout ELF files and increase their size on Termux, breaking Bun executables that read their payload at fixed offsets. The `prepareBinary` step now rewrites the `PT_INTERP` string in place (found from the program header's `p_offset`/`p_filesz`), NUL-padded to the same size, with a short symlink that points to the `glibc-runner`'s loader. This preserves the file size and all other bytes. If the symlink cannot be created or the path does not fit, the binary moves to `<bin>.real` behind a launcher script that executes it through the loader.
+
+---
+
+
 ## [v1.15.1](https://github.com/yogasw/wick/compare/v1.15.0...v1.15.1) — Termux Support
 
 _Released on 2026-10-07_
