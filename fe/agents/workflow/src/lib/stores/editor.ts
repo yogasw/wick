@@ -684,6 +684,34 @@ export function setEdgeCase(from: string, to: string, prevCase: string | undefin
   });
 }
 
+// renameNodeCase moves every edge of `nodeID` tagged `prev` to `next`
+// (an output port rename). Pure helper below is unit-tested.
+export function applyCaseRename(edges: Edge[], nodeID: string, prev: string, next: string): Edge[] {
+  return edges.map((e) => (e.from === nodeID && e.case === prev ? { ...e, case: next } : e));
+}
+
+export function renameNodeCase(nodeID: string, prev: string, next: string) {
+  if (lockGuard("renaming an output")) return;
+  draftWorkflow.update((wf) => {
+    if (!wf) return wf;
+    ensureGraph(wf);
+    wf.graph.edges = applyCaseRename(wf.graph.edges, nodeID, prev, next);
+    return wf;
+  });
+}
+
+// removeNodeCase drops every edge of `nodeID` tagged `caseLabel` (an
+// output port delete takes its connections with it, as in n8n).
+export function removeNodeCase(nodeID: string, caseLabel: string) {
+  if (lockGuard("removing an output")) return;
+  draftWorkflow.update((wf) => {
+    if (!wf) return wf;
+    ensureGraph(wf);
+    wf.graph.edges = wf.graph.edges.filter((e) => !(e.from === nodeID && e.case === caseLabel));
+    return wf;
+  });
+}
+
 // saveDraft writes the current draft to the backend, refreshes the
 // validation report, and updates saveStatus.
 //
