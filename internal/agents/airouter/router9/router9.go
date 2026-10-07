@@ -58,8 +58,8 @@ func (hook) Slots(t provider.Type) []provider.RouterSlot {
 	switch t {
 	case provider.TypeClaude:
 		return []provider.RouterSlot{
-			{Key: "opus", Label: "Claude Opus", Placeholder: "cc/claude-opus-4-6"},
-			{Key: "sonnet", Label: "Claude Sonnet", Placeholder: "cc/claude-sonnet-4-6"},
+			{Key: "opus", Label: "Claude Opus", Placeholder: "cc/claude-opus-5-5"},
+			{Key: "sonnet", Label: "Claude Sonnet", Placeholder: "cc/claude-sonnet-5-5"},
 			{Key: "haiku", Label: "Claude Haiku", Placeholder: "cc/claude-haiku-4-5"},
 		}
 	case provider.TypeCodex:

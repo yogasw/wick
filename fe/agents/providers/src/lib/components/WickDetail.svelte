@@ -61,8 +61,8 @@
   };
   const KIND_DEFAULTS: Record<string, KindDefault> = {
     google:     { baseURL: "https://generativelanguage.googleapis.com", format: "gemini",             formatLabel: "Gemini generateContent", keyExample: "AIza…",   modelExample: "gemini-flash-latest" },
-    openai:     { baseURL: "https://api.openai.com/v1",                  format: "openai_chat",        formatLabel: "OpenAI Chat Completions", keyExample: "sk-…",    modelExample: "gpt-5.2" },
-    anthropic:  { baseURL: "https://api.anthropic.com/v1",               format: "anthropic_messages", formatLabel: "Anthropic Messages",      keyExample: "sk-ant-…", modelExample: "claude-sonnet-4-5" },
+    openai:     { baseURL: "https://api.openai.com/v1",                  format: "openai_chat",        formatLabel: "OpenAI Chat Completions", keyExample: "sk-…",    modelExample: "gpt-5.5" },
+    anthropic:  { baseURL: "https://api.anthropic.com/v1",               format: "anthropic_messages", formatLabel: "Anthropic Messages",      keyExample: "sk-ant-…", modelExample: "claude-sonnet-5-5" },
     openrouter: { baseURL: "https://openrouter.ai/api/v1",               format: "openai_chat",        formatLabel: "OpenAI Chat Completions", keyExample: "sk-or-…", modelExample: "qwen/qwen3-coder" },
     other:      { baseURL: "",                                           format: "openai_chat",        formatLabel: "OpenAI Chat Completions", keyExample: "your API key", modelExample: "provider/model-id" },
   };

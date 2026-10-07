@@ -16,7 +16,7 @@ func init() {
 				Description: "Skip the self-update check."},
 		},
 		Args: []provider.CatalogEntry{
-			{Key: "--model", Kind: provider.CatalogString, Placeholder: "openai/gpt-5.2",
+			{Key: "--model", Kind: provider.CatalogString, Placeholder: "openai/gpt-6-astra",
 				Description: "provider/model for every spawn."},
 			{Key: "--agent", Kind: provider.CatalogString, Placeholder: "build",
 				Description: "opencode agent to run."},

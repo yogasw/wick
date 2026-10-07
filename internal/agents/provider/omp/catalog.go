@@ -20,7 +20,7 @@ func init() {
 				Description: "Config root relative to $HOME (default .omp)."},
 		},
 		Args: []provider.CatalogEntry{
-			{Key: "--model", Kind: provider.CatalogString, Placeholder: "openai-codex/gpt-5.2",
+			{Key: "--model", Kind: provider.CatalogString, Placeholder: "openai-codex/gpt-6-astra",
 				Description: "Model or role for every spawn."},
 			{Key: "--thinking", Kind: provider.CatalogEnum,
 				Options:     []string{"off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"},
