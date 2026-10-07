@@ -211,10 +211,12 @@ func (c *Client) releaseEntry(ctx context.Context, src *entity.PluginSource, key
 		}
 	}
 	// Map every asset back to its release asset so private repos download
-	// through the API endpoint.
+	// through the API endpoint. An api_url written in plugins.json itself is
+	// never trusted: only a matching release asset sets it.
 	for oa, a := range e.Assets {
+		a.APIURL = ""
 		if ga, ok := byName[path.Base(mustPath(a.URL))]; ok {
-			a.apiURL = ga.URL
+			a.APIURL = ga.URL
 			if a.URL == "" {
 				a.URL = ga.DownloadURL
 			}

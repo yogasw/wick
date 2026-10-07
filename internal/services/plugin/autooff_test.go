@@ -172,9 +172,15 @@ func TestAutoOffAdminStopIsNotWoken(t *testing.T) {
 	if f.count() != 1 || s.Sup.Status().State != StateStopped {
 		t.Fatalf("stopped service was woken: spawns %d, %+v", f.count(), s.Sup.Status())
 	}
-	// The admin's start wakes it as usual.
+	// The admin's start wakes it as usual. Running is transient here (the
+	// idle limit is 30ms, so it may already be asleep again by the next
+	// poll), so wait for the fresh boot itself rather than the state.
+	booted := s.Sup.Status().StartedAt
 	s.Sup.Start()
-	waitFor(t, "running", func() bool { return s.Sup.Status().State == StateRunning })
+	waitFor(t, "a new boot", func() bool { return s.Sup.Status().StartedAt.After(booted) })
+	if f.count() != 2 {
+		t.Fatalf("admin start spawns = %d, want 2", f.count())
+	}
 }
 
 func TestAutoOffAdminSettingAudited(t *testing.T) {
