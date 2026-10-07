@@ -10,6 +10,20 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.15.1](https://github.com/yogasw/wick/compare/v1.15.0...v1.15.1) — Termux Support
+
+_Released on 2026-10-07_
+
+### Fixed
+*   **Managed Binaries on Termux**: Fixed an issue where `glibc` provider builds failed to run natively on Termux environments. Previously, Linux assets dynamically linked against `/lib/ld-linux-*` or `/lib/ld-musl-*` loaders, which are absent on Termux, would cause `fork/exec ...: no such file or directory` errors.
+    *   The system now detects Termux environments (via `TERMUX_VERSION`, `$PREFIX`, or `/data/data/com.termux`) and correctly handles `glibc` assets.
+    *   After unpacking, `glibc` binaries are patched in-place using `glibc-runner` (`grun -c`) to adjust the interpreter and rpath, enabling direct execution for version probes and normal spawns. This approach maintains compatibility with executables like Bun that read their payload via `/proc/self/exe`.
+    *   If `glibc-runner` is not available or if `musl` builds are attempted on Termux, the installation now fails with informative messages detailing the missing loader and providing `pkg` commands for remediation.
+    *   Failed `prepare/probe` operations no longer delete the `<ver>.partial` directory but preserve it along with `probe.log` for inspection, ensuring incomplete installations are not activated.
+
+---
+
+
 ## [v1.15.0](https://github.com/yogasw/wick/compare/v1.14.0...v1.15.0) — Maintenance
 
 _Released on 2026-10-07_
