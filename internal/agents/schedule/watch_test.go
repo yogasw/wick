@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 func TestValidateSteps(t *testing.T) {
@@ -212,7 +212,7 @@ func TestExecuteWatch_PipelineThreePaths(t *testing.T) {
 			return body, nil
 		}
 	}
-	if _, err := exec.LookPath("jq"); err != nil {
+	if _, err := safeexec.LookPath("jq"); err != nil {
 		t.Skip("jq not installed")
 	}
 
