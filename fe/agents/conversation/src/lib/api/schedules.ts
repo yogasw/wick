@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { apiGetE, apiPostE, apiDeleteE } from "@wick-fe/common-api";
-import type { Schedule } from "../types/agents.js";
+import type { Schedule, WatchDryRun } from "../types/agents.js";
 
 export const listSchedules = (base: string, sessionId: string) =>
   apiGetE<{ schedules: Schedule[] }>(
@@ -19,6 +19,14 @@ export type ScheduleCreate = {
   projectId?: string;
   sessionMode?: "existing" | "new" | "template";
   sessionTemplate?: string;
+  /* type "watch": steps poll every `every` (default 10s) until one matches
+     or `timeout` (default 24h, "off" = none, no max) passes; message is the
+     notification. onMatch "continue" keeps it running and notifies on every
+     new match. */
+  type?: "message" | "watch";
+  steps?: unknown[];
+  timeout?: string;
+  onMatch?: "stop" | "continue";
 };
 
 export const createSchedule = (base: string, sessionId: string, c: ScheduleCreate) =>
@@ -31,7 +39,16 @@ export const createSchedule = (base: string, sessionId: string, c: ScheduleCreat
     project_id: c.projectId ?? "",
     session_mode: c.sessionMode ?? "",
     session_template: c.sessionTemplate ?? "",
+    ...(c.type === "watch" ? { type: "watch", steps: c.steps ?? [], timeout: c.timeout ?? "", on_match: c.onMatch ?? "stop" } : {}),
   });
+
+/* One dry run of unsaved watch steps, as the caller, against this session.
+   Nothing is stored or delivered. */
+export const testWatchSteps = (base: string, sessionId: string, steps: unknown[]) =>
+  apiPostE<{ run: WatchDryRun }>(
+    `${base}/sessions/${encodeURIComponent(sessionId)}/schedules/watch-test`,
+    { steps },
+  ).pipe(Effect.map((r) => r.run));
 
 export const cancelSchedule = (base: string, sessionId: string, id: string) =>
   apiDeleteE<{ id: string; status: string }>(

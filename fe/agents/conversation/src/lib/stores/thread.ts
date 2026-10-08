@@ -26,6 +26,18 @@ import type {
 /** Provider types a lifecycle edge may name in its data. */
 const PROVIDER_TYPES = new Set(["claude", "codex", "gemini", "opencode", "omp", "wick", "slack-remote", "a2a-remote", "plugin-remote"]);
 
+/** How long a turn may stay open after the server said idle/killed before
+    the store closes it itself. The `done` that normally closes it can be
+    lost (a stream reconnect, a binary reload), and a snapshot can replay a
+    stale partial turn after the idle edge — either way nothing else would
+    ever clear "thinking…". Exported so the view can re-read history after. */
+export const TURN_SETTLE_MS = 4000;
+
+/** Events that belong to a running turn and light the typing indicator.
+    session_start is one: the CLI's own start-up frame, which a stopped
+    process can still flush after its killed edge. */
+const TURN_CONTENT = new Set(["session_start", "text_delta", "text_snapshot", "thinking", "tool_use", "tool_result"]);
+
 export interface ThreadMeta {
   title?: string;
 }
@@ -116,7 +128,33 @@ export function createThreadStore(): ThreadStore {
   const meta = writable<ThreadMeta>({});
   const cards = writable<Record<string, CardState>>({});
 
+  /* The last lifecycle edge the SERVER sent. lifecycle.state cannot stand in
+     for it: markWorking flips it to "working" on any content event, which is
+     exactly what a stale replay after an idle edge looks like. */
+  let serverEdge: LifecycleState["state"] = "";
+  let settleTimer: ReturnType<typeof setTimeout> | undefined;
+  function cancelSettle(): void {
+    if (settleTimer) { clearTimeout(settleTimer); settleTimer = undefined; }
+  }
+  /* Close the turn TURN_SETTLE_MS after the last sign of it, unless a new
+     turn starts (spawning/working/session_start) in between. Re-armed on
+     every content event so only a quiet stream gets closed. */
+  function armSettle(): void {
+    cancelSettle();
+    settleTimer = setTimeout(() => {
+      settleTimer = undefined;
+      if (serverEdge !== "idle" && serverEdge !== "killed") return;
+      if (get(live) === null && !get(typing).active) return;
+      finalize();
+      const edge = serverEdge;
+      lifecycle.update((l) => (l.state === edge ? l : { ...l, state: edge }));
+    }, TURN_SETTLE_MS);
+  }
+
   function markWorking(): void {
+    // Content after the server said the turn ended: a replayed leftover or
+    // a lost `done`. Show it, but do not let it hold the turn open.
+    if (serverEdge === "idle" || serverEdge === "killed") armSettle();
     startClock();
     lifecycle.update((l) =>
       l.state === "killed" || l.state === "working" ? l : { ...l, state: "working" }
@@ -191,8 +229,19 @@ export function createThreadStore(): ThreadStore {
     if (typeof ev.context_used === "number" && ev.context_used > 0) {
       contextUsed.set(ev.context_used);
     }
+    /* Idle/killed is final until the server says spawning/working again.
+       Turn content arriving after it with no turn open here is a leftover
+       (a replay, a late frame of a stopped or synthetic-done turn): it must
+       not relight "thinking…" or the Stop button. Content for a turn still
+       open (idle edge raced ahead of its done) goes through; armSettle in
+       markWorking closes that one. */
+    if ((serverEdge === "idle" || serverEdge === "killed") && get(live) === null && TURN_CONTENT.has(ev.type)) {
+      return;
+    }
     switch (ev.type) {
       case "session_start": {
+        serverEdge = "working";
+        cancelSettle();
         typing.set({ active: true });
         startClock(ev.at);
         break;
@@ -200,17 +249,30 @@ export function createThreadStore(): ThreadStore {
 
       case "lifecycle": {
         const lc = ev.lifecycle ?? "";
-        if (lc === "killed" || (lc === "idle" && get(live) === null)) {
+        if (lc === "spawning" || lc === "working" || lc === "idle" || lc === "killed") {
+          serverEdge = lc;
+        }
+        if (lc === "killed") {
+          // The process is gone: no `done` can follow. Commit what streamed
+          // and drop the live turn too — clearing typing alone left the
+          // bubble ("thinking…") and Stop up for as long as live was set.
+          cancelSettle();
+          finalize();
+        } else if (lc === "idle" && get(live) === null) {
           typing.update((t) => ({ ...t, active: false, toolName: undefined }));
           stopClock();
         } else if (lc === "idle") {
           // An idle edge while the turn is still streaming: its done event
           // (which finalizes and clears typing) is on its way. Clearing here
-          // would drop the indicator for a moment and bounce the thread.
+          // would drop the indicator for a moment and bounce the thread —
+          // but that done can be lost, so close the turn if it never comes.
+          armSettle();
         } else if (lc === "spawning") {
+          cancelSettle();
           typing.set({ active: true, substate: "spawning" });
           startClock(ev.at);
         } else if (lc === "working") {
+          cancelSettle();
           typing.update((t) => ({ active: true, substate: lifecycleSubstate(ev.data, t.substate), toolName: t.toolName }));
           startClock(ev.at);
         }
@@ -701,6 +763,9 @@ export function createThreadStore(): ThreadStore {
     appendUserTurn,
     handleEvent,
     handleKilledLocally() {
+      // Final like a server killed edge: a late frame must not relight it.
+      serverEdge = "killed";
+      cancelSettle();
       finalize();
       typing.set({ active: false });
       stopClock();

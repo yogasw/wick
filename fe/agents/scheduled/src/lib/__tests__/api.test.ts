@@ -31,6 +31,7 @@ const S: Schedule = {
   message: "cek loki",
   run_count: 2,
   interval_ms: 300000,
+  session_mode: "existing",
 };
 
 describe("listAll", () => {

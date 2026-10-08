@@ -1,6 +1,8 @@
 package agents
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -84,27 +86,49 @@ type scheduleVM struct {
 	// EffectiveRunAsName is that user's display name, resolved server-side so
 	// the UI never has to render a bare uuid.
 	EffectiveRunAsName string `json:"effective_run_as_name,omitempty"`
+
+	// Type is "message" or "watch". The rest is watch-only: its steps, the
+	// result of the latest run and the error streak — live from the runner's
+	// memory when it holds the watch (the row is only checkpointed).
+	Type              string          `json:"type"`
+	Steps             []schedule.Step `json:"steps,omitempty"`
+	StepCount         int             `json:"step_count,omitempty"`
+	LastResult        string          `json:"last_result,omitempty"`
+	ConsecutiveErrors int             `json:"consecutive_errors,omitempty"`
+	Running           bool            `json:"running,omitempty"`
+	StepsRev          int             `json:"steps_rev,omitempty"`
+	// OnMatch is stop | continue; Notified counts a continue watch's match
+	// notices; NoTimeout marks a watch without a time limit (ends_at unset).
+	OnMatch   string `json:"on_match,omitempty"`
+	Notified  int    `json:"notified,omitempty"`
+	NoTimeout bool   `json:"no_timeout,omitempty"`
+	// CanEdit: the caller may edit, test and read this watch (owner/admin).
+	CanEdit bool `json:"can_edit"`
 }
 
 func scheduleToVM(m entity.ScheduledMessage) scheduleVM {
+	schedule.OverlayLive(&m)
 	vm := scheduleVM{
-		ID:              m.ID,
-		SessionID:       m.SessionID,
-		CreatedBy:       m.CreatedBy,
-		Kind:            m.Kind,
-		Status:          m.EffectiveStatus(),
-		Message:         m.Message,
-		RunCount:        m.RunCount,
-		LastError:       m.LastError,
-		SessionMode:     m.Mode(),
-		ProjectID:       m.ProjectID,
-		SessionTemplate: m.SessionTemplate,
-		LastSessionID:   m.LastSessionID,
-		SourceSessionID: m.SourceSessionID,
-		ManualRuns:      m.ManualRuns,
-		OwnerUserID:     m.OwnerUserID,
-		RunAsUserID:     m.RunAsUserID,
-		EffectiveRunAs:  m.EffectiveRunAsUser(),
+		Type:              m.EffectiveType(),
+		LastResult:        m.LastResult,
+		ConsecutiveErrors: m.ConsecutiveErrors,
+		ID:                m.ID,
+		SessionID:         m.SessionID,
+		CreatedBy:         m.CreatedBy,
+		Kind:              m.Kind,
+		Status:            m.EffectiveStatus(),
+		Message:           m.Message,
+		RunCount:          m.RunCount,
+		LastError:         m.LastError,
+		SessionMode:       m.Mode(),
+		ProjectID:         m.ProjectID,
+		SessionTemplate:   m.SessionTemplate,
+		LastSessionID:     m.LastSessionID,
+		SourceSessionID:   m.SourceSessionID,
+		ManualRuns:        m.ManualRuns,
+		OwnerUserID:       m.OwnerUserID,
+		RunAsUserID:       m.RunAsUserID,
+		EffectiveRunAs:    m.EffectiveRunAsUser(),
 	}
 	if vm.EffectiveRunAs != "" {
 		vm.EffectiveRunAsName = channelOwnerLabel(channelOwnerNames(), vm.EffectiveRunAs)
@@ -136,7 +160,109 @@ func scheduleToVM(m entity.ScheduledMessage) scheduleVM {
 	if m.LastRunAt != nil {
 		vm.LastRunAt = m.LastRunAt.UTC().Format(time.RFC3339)
 	}
+	if m.IsWatch() {
+		vm.Steps, _ = schedule.ParseSteps(m.Steps)
+		vm.StepCount = len(vm.Steps)
+		vm.StepsRev = m.StepsRev
+		vm.OnMatch = schedule.WatchOnMatch(m)
+		if vm.OnMatch == schedule.OnMatchContinue {
+			vm.Notified = schedule.WatchNotified(m)
+		}
+		vm.NoTimeout = m.EndsAt == nil && m.Kind == entity.ScheduledKindRecurring
+		if lv, ok := schedule.LiveWatch(m.ID); ok {
+			vm.Running = lv.Running
+		}
+	}
 	return vm
+}
+
+// watchOwnerOK enforces that only a watch's owner (or an admin) may change
+// it or read its run history: a watch runs bash and connector calls AS its
+// owner, so being able to see the session is not enough. Writes the 403.
+func watchOwnerOK(c *tool.Ctx, m entity.ScheduledMessage) bool {
+	if !m.IsWatch() || callerIsAdmin(c) || (m.OwnerUserID != "" && callerUserID(c) == m.OwnerUserID) {
+		return true
+	}
+	c.Error(http.StatusForbidden, "only the watch's owner or an admin can do this")
+	return false
+}
+
+// scheduleOwnerOK is watchOwnerOK for every type — run history and tests
+// hand back what ran as the owner, whatever the schedule is. Writes the 403.
+func scheduleOwnerOK(c *tool.Ctx, m entity.ScheduledMessage) bool {
+	if callerIsAdmin(c) || (m.OwnerUserID != "" && callerUserID(c) == m.OwnerUserID) {
+		return true
+	}
+	c.Error(http.StatusForbidden, "only the schedule's owner or an admin can do this")
+	return false
+}
+
+// scheduleWatchRunsUI lists a schedule's run history (newest first, max 50):
+// the history files, else — for a schedule older than them — the
+// conversation reconstruction.
+// Same access as acting on the row in the global monitor, plus owner/admin.
+func scheduleWatchRunsUI(c *tool.Ctx) {
+	m, ok := scheduleWatchForRuns(c)
+	if !ok {
+		return
+	}
+	runs, err := schedule.ListRuns(globalLayout, *m, 0, strings.TrimSpace(c.R.URL.Query().Get("result")))
+	if err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	if runs == nil {
+		runs = []schedule.RunSummary{}
+	}
+	c.JSON(http.StatusOK, map[string]any{"runs": runs})
+}
+
+// scheduleWatchRunUI returns one run with every step's (redacted) output.
+func scheduleWatchRunUI(c *tool.Ctx) {
+	m, ok := scheduleWatchForRuns(c)
+	if !ok {
+		return
+	}
+	rec, err := schedule.GetWatchRun(globalLayout, *m, c.PathValue("rid"))
+	if err != nil {
+		c.Error(http.StatusNotFound, "run not found")
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"run": rec})
+}
+
+func scheduleWatchForRuns(c *tool.Ctx) (*entity.ScheduledMessage, bool) {
+	if globalSchedule == nil || globalMgr == nil {
+		c.Error(http.StatusServiceUnavailable, "scheduling not ready")
+		return nil, false
+	}
+	m, err := globalSchedule.Get(c.Context(), c.PathValue("sid"))
+	if err != nil {
+		c.Error(http.StatusNotFound, "schedule not found")
+		return nil, false
+	}
+	if _, ok := scheduleMonitorVM(*m, globalMgr.Registry().Sessions(), callerProjectAccess(c)); !ok {
+		c.Error(http.StatusNotFound, "schedule not found")
+		return nil, false
+	}
+	if !scheduleOwnerOK(c, *m) {
+		return nil, false
+	}
+	return m, true
+}
+
+// scheduleWatchOnly is scheduleWatchForRuns for the endpoints that only make
+// sense for a watch (test, steps): a message schedule is refused.
+func scheduleWatchOnly(c *tool.Ctx) (*entity.ScheduledMessage, bool) {
+	m, ok := scheduleWatchForRuns(c)
+	if !ok {
+		return nil, false
+	}
+	if !m.IsWatch() {
+		c.Error(http.StatusBadRequest, "only a type=watch schedule has steps to test or edit")
+		return nil, false
+	}
+	return m, true
 }
 
 // scheduleBelongsToSession reports whether a schedule is one this session's
@@ -227,10 +353,25 @@ func sessionSchedulesCreateUI(c *tool.Ctx) {
 		ProjectID       string `json:"project_id"`
 		SessionMode     string `json:"session_mode"`
 		SessionTemplate string `json:"session_template"`
+		// Type "watch" makes a poller instead of a message: steps run every
+		// `every` (default 10s) until one matches or `timeout` (default 24h, "off" = none)
+		// passes; message is the notification delivered on a match.
+		Type    string          `json:"type"`
+		Steps   json.RawMessage `json:"steps"`
+		Timeout string          `json:"timeout"`
+		OnMatch string          `json:"on_match"`
 	}
 	if err := c.BindJSON(&body); err != nil {
 		c.Error(http.StatusBadRequest, "invalid JSON")
 		return
+	}
+	isWatch := strings.EqualFold(strings.TrimSpace(body.Type), entity.ScheduledTypeWatch)
+	if !isWatch && strings.TrimSpace(body.Type) != "" && !strings.EqualFold(strings.TrimSpace(body.Type), entity.ScheduledTypeMessage) {
+		c.Error(http.StatusBadRequest, fmt.Sprintf("type must be message or watch, got %q", body.Type))
+		return
+	}
+	if isWatch && strings.TrimSpace(body.RunAt+body.Every+body.Cron) == "" {
+		body.Every = schedule.MinWatchInterval.String()
 	}
 	message := strings.TrimSpace(body.Message)
 	if message == "" {
@@ -256,6 +397,12 @@ func sessionSchedulesCreateUI(c *tool.Ctx) {
 		Mode:      body.SessionMode,
 		Template:  body.SessionTemplate,
 	})
+	if isWatch && target.Mode != entity.ScheduledSessionExisting {
+		// The panel's watch reports into this session; a project-scoped watch
+		// is made through the MCP tool.
+		c.Error(http.StatusBadRequest, "a watch created here targets this session; project_id/session_mode are not supported for type=watch")
+		return
+	}
 	if target.Mode != entity.ScheduledSessionExisting {
 		// A project-scoped row runs work inside that project, so require the
 		// caller to actually have access to it.
@@ -269,19 +416,48 @@ func sessionSchedulesCreateUI(c *tool.Ctx) {
 		c.Error(http.StatusBadRequest, err.Error())
 		return
 	}
+	if !isWatch && len(body.Steps) > 0 && string(body.Steps) != "null" {
+		c.Error(http.StatusBadRequest, "steps are only for type=watch")
+		return
+	}
 
 	row := &entity.ScheduledMessage{
 		SessionID:       target.SessionID,
 		ProjectID:       target.ProjectID,
 		SessionMode:     target.Mode,
 		SessionTemplate: target.Template,
-		OwnerUserID:     sess.Meta.UserID,
+		OwnerUserID:     schedule.WatchOwner(isWatch, callerUserID(c), sess.Meta.UserID),
 		CreatedBy:       entity.ScheduledByUser,
 		SourceSessionID: sid,
 		AgentName:       strings.TrimSpace(body.AgentName),
 		Message:         message,
 		RunAt:           spec.FirstRunAt,
 		MaxRuns:         body.MaxRuns,
+	}
+	if isWatch {
+		// The same checks as the MCP create (schedule.PrepareWatch): steps,
+		// interval floor, time limit, per-user cap, Bash gate — run as the
+		// caller, who becomes the owner.
+		steps, err := scheduleBodySteps(body.Steps)
+		if err != nil {
+			c.Error(http.StatusBadRequest, err.Error())
+			return
+		}
+		enc, until, err := globalSchedule.PrepareWatch(c.Context(), schedule.WatchCreate{
+			Steps:          steps,
+			Spec:           spec,
+			Timeout:        body.Timeout,
+			OnMatch:        body.OnMatch,
+			OwnerUserID:    row.OwnerUserID,
+			CreatorUserID:  callerUserID(c),
+			CreatorIsAdmin: callerIsAdmin(c),
+			SessionIDs:     []string{sid},
+		}, time.Now())
+		if err != nil {
+			c.Error(http.StatusBadRequest, err.Error())
+			return
+		}
+		row.Type, row.Steps, row.EndsAt = entity.ScheduledTypeWatch, enc, until
 	}
 	if spec.Recurring {
 		row.Kind = entity.ScheduledKindRecurring
@@ -296,6 +472,53 @@ func sessionSchedulesCreateUI(c *tool.Ctx) {
 	c.JSON(http.StatusOK, scheduleToVM(*m))
 }
 
+// scheduleBodySteps reads steps sent as a JSON array or as a string holding
+// one, like the MCP tool accepts.
+func scheduleBodySteps(raw json.RawMessage) ([]schedule.Step, error) {
+	var v any
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, fmt.Errorf("steps: invalid JSON")
+		}
+	}
+	return schedule.StepsFromArg(v)
+}
+
+// sessionSchedulesWatchTestUI is the panel's "Test first": one dry run of
+// steps that are not saved yet, as the caller, against this session. The
+// shared path (schedule.DryRunWatch → TestWatch) validates, applies the Bash
+// gate with the caller as creator and runs one test at a time. Nothing is
+// stored or delivered.
+func sessionSchedulesWatchTestUI(c *tool.Ctx) {
+	sid := c.PathValue("id")
+	sess, ok := scheduleResolveSession(c, sid)
+	if !ok {
+		return
+	}
+	var body struct {
+		Steps json.RawMessage `json:"steps"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.Error(http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	steps, err := scheduleBodySteps(body.Steps)
+	if err != nil {
+		c.Error(http.StatusBadRequest, err.Error())
+		return
+	}
+	rec, err := schedule.DryRunWatch(c.Context(), steps, sid, schedule.WatchOwner(true, callerUserID(c), sess.Meta.UserID), callerUserID(c))
+	if errors.Is(err, schedule.ErrTestBusy) {
+		c.Error(http.StatusTooManyRequests, err.Error())
+		return
+	}
+	if err != nil {
+		c.Error(http.StatusBadRequest, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"run": rec})
+}
+
 // sessionSchedulesMutateUI handles pause / resume / reschedule on one
 // schedule of this session. action is fixed by the route wrapper.
 func sessionSchedulesMutateUI(c *tool.Ctx, action string) {
@@ -308,6 +531,9 @@ func sessionSchedulesMutateUI(c *tool.Ctx, action string) {
 	m, err := globalSchedule.Get(c.Context(), scheduleID)
 	if err != nil || !scheduleBelongsToSession(*m, sid, sess.Meta.ProjectID) {
 		c.Error(http.StatusNotFound, "schedule not found")
+		return
+	}
+	if !watchOwnerOK(c, *m) {
 		return
 	}
 
@@ -325,7 +551,18 @@ func sessionSchedulesMutateUI(c *tool.Ctx, action string) {
 		}
 		var next time.Time
 		if next, err = schedule.NextFrom(*m, time.Now()); err == nil {
-			err = globalSchedule.SetPaused(c.Context(), scheduleID, false, next)
+			if m.IsWatch() && (m.Status == entity.ScheduledStatusFailed || m.Status == entity.ScheduledStatusDone) {
+				// Live again: counts against the cap, with a fresh time limit.
+				if !callerIsAdmin(c) {
+					if err = globalSchedule.CheckWatchCap(c.Context(), m.OwnerUserID); err != nil {
+						c.Error(http.StatusConflict, "resume: "+err.Error())
+						return
+					}
+				}
+				err = globalSchedule.Reactivate(c.Context(), scheduleID, next, schedule.WatchResumeEndsAt(*m, time.Now()))
+			} else {
+				err = globalSchedule.SetPaused(c.Context(), scheduleID, false, next)
+			}
 		}
 	case "reschedule":
 		var patch schedule.SchedulePatch
@@ -360,7 +597,17 @@ func sessionSchedulesMutateUI(c *tool.Ctx, action string) {
 // scheduleParsePatchUI builds a store patch from the reschedule request body.
 // Timing, message, cap, and (for project-scoped rows) the target can all be
 // edited; scope itself cannot change — see scheduleTargetPatchUI.
+// scheduleParsePatchUI is scheduleParsePatchUIRaw plus the watch interval
+// floor: a watch rescheduled from a UI keeps every ≥ schedule.MinWatchInterval.
 func scheduleParsePatchUI(m entity.ScheduledMessage, c *tool.Ctx, sessionID string, now time.Time) (schedule.SchedulePatch, error) {
+	patch, err := scheduleParsePatchUIRaw(m, c, sessionID, now)
+	if err == nil && m.IsWatch() && patch.IntervalMs != nil && *patch.IntervalMs > 0 {
+		err = schedule.ValidateWatchTiming(true, *patch.IntervalMs)
+	}
+	return patch, err
+}
+
+func scheduleParsePatchUIRaw(m entity.ScheduledMessage, c *tool.Ctx, sessionID string, now time.Time) (schedule.SchedulePatch, error) {
 	var body struct {
 		RunAt   string `json:"run_at"`
 		Every   string `json:"every"`
@@ -522,6 +769,9 @@ func sessionSchedulesCancelUI(c *tool.Ctx) {
 		c.Error(http.StatusNotFound, "schedule not found")
 		return
 	}
+	if !watchOwnerOK(c, *m) {
+		return
+	}
 	if err := globalSchedule.Cancel(c.Context(), scheduleID); err != nil {
 		if err == schedule.ErrNotFound {
 			c.Error(http.StatusNotFound, "schedule not found or not pending")
@@ -612,6 +862,8 @@ func schedulesAllUI(c *tool.Ctx) {
 		if !ok {
 			continue
 		}
+		// Who may edit/test/read a watch: its owner or an admin.
+		vm.CanEdit = !m.IsWatch() || callerIsAdmin(c) || (m.OwnerUserID != "" && callerUserID(c) == m.OwnerUserID)
 		out = append(out, vm)
 	}
 	c.JSON(http.StatusOK, map[string]any{"schedules": out})
@@ -672,8 +924,19 @@ func scheduleByIDMutateUI(c *tool.Ctx, action string) {
 		c.Error(http.StatusNotFound, "schedule not found")
 		return
 	}
+	if !watchOwnerOK(c, *m) {
+		return
+	}
 
 	switch action {
+	case "delete":
+		// Remove the row and its run history; there is no fresh row to return.
+		if err = globalSchedule.Delete(c.Context(), scheduleID); err != nil {
+			c.Error(http.StatusBadRequest, "delete: "+err.Error())
+			return
+		}
+		c.JSON(http.StatusOK, map[string]any{"deleted": scheduleID})
+		return
 	case "cancel":
 		err = globalSchedule.Cancel(c.Context(), scheduleID)
 	case "pause":
@@ -689,7 +952,18 @@ func scheduleByIDMutateUI(c *tool.Ctx, action string) {
 		}
 		var next time.Time
 		if next, err = schedule.NextFrom(*m, time.Now()); err == nil {
-			err = globalSchedule.SetPaused(c.Context(), scheduleID, false, next)
+			if m.IsWatch() && (m.Status == entity.ScheduledStatusFailed || m.Status == entity.ScheduledStatusDone) {
+				// Live again: counts against the cap, with a fresh time limit.
+				if !callerIsAdmin(c) {
+					if err = globalSchedule.CheckWatchCap(c.Context(), m.OwnerUserID); err != nil {
+						c.Error(http.StatusConflict, "resume: "+err.Error())
+						return
+					}
+				}
+				err = globalSchedule.Reactivate(c.Context(), scheduleID, next, schedule.WatchResumeEndsAt(*m, time.Now()))
+			} else {
+				err = globalSchedule.SetPaused(c.Context(), scheduleID, false, next)
+			}
 		}
 	case "reschedule":
 		var patch schedule.SchedulePatch
@@ -725,4 +999,97 @@ func firstNonEmptyStr(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// scheduleWatchTestUI is the page's "Test now": one dry run of the watch —
+// optionally with unsaved steps from the editor — returning the full record.
+// Nothing is delivered and the schedule does not change.
+func scheduleWatchTestUI(c *tool.Ctx) {
+	m, ok := scheduleWatchOnly(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Steps json.RawMessage `json:"steps"`
+	}
+	_ = c.BindJSON(&body)
+	var override []schedule.Step
+	if len(body.Steps) > 0 && string(body.Steps) != "null" {
+		// Unsaved steps run as the watch's run-as user: only that user or
+		// an admin may choose them.
+		if runAs := m.EffectiveRunAsUser(); !callerIsAdmin(c) && (runAs == "" || callerUserID(c) != runAs) {
+			c.Error(http.StatusForbidden, "only the watch's run-as user or an admin can test unsaved steps")
+			return
+		}
+		steps, err := scheduleUISteps(c, *m, body.Steps)
+		if err != nil {
+			c.Error(http.StatusBadRequest, err.Error())
+			return
+		}
+		override = steps
+	}
+	rec, err := schedule.TestWatch(c.Context(), *m, override)
+	if errors.Is(err, schedule.ErrTestBusy) {
+		c.Error(http.StatusTooManyRequests, err.Error())
+		return
+	}
+	if err != nil {
+		c.Error(http.StatusBadRequest, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"run": rec})
+}
+
+// scheduleWatchStepsUI saves the steps editor: validated like an MCP update
+// (shape, limits, Bash permission of the watch's agent), owner/admin only.
+func scheduleWatchStepsUI(c *tool.Ctx) {
+	m, ok := scheduleWatchOnly(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Steps   json.RawMessage `json:"steps"`
+		OnMatch *string         `json:"on_match"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.Error(http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	// on_match rides inside the stored steps: keep it unless the body
+	// changes it.
+	onMatch := schedule.WatchOnMatch(*m)
+	var err error
+	if body.OnMatch != nil {
+		onMatch, err = schedule.NormalizeOnMatch(*body.OnMatch)
+	}
+	var steps []schedule.Step
+	if err == nil {
+		steps, err = scheduleUISteps(c, *m, body.Steps)
+	}
+	if err == nil {
+		var enc string
+		if enc, err = schedule.EncodeWatch(steps, onMatch); err == nil {
+			err = globalSchedule.SetSteps(c.Context(), m.ID, enc)
+		}
+	}
+	if err != nil {
+		c.Error(http.StatusBadRequest, err.Error())
+		return
+	}
+	fresh, _ := globalSchedule.Get(c.Context(), m.ID)
+	c.JSON(http.StatusOK, scheduleToVM(*fresh))
+}
+
+func scheduleUISteps(c *tool.Ctx, m entity.ScheduledMessage, raw json.RawMessage) ([]schedule.Step, error) {
+	steps, err := schedule.ParseSteps(string(raw))
+	if err != nil {
+		return nil, err
+	}
+	if err := schedule.ValidateSteps(steps); err != nil {
+		return nil, err
+	}
+	if err := schedule.CheckBashAllowed(c.Context(), steps, []string{m.SessionID, m.SourceSessionID}, m.ProjectID, callerUserID(c)); err != nil {
+		return nil, err
+	}
+	return steps, nil
 }

@@ -1,7 +1,8 @@
 <script lang="ts">
   import { ScheduleEditModal, scheduleCadence as cadence } from "@wick-fe/common-ui";
   import type { SchedulePatchInput } from "@wick-fe/common-ui";
-  import type { Schedule } from "../types/agents.js";
+  import type { Schedule, WatchDryRun } from "../types/agents.js";
+  import { parseWatchSteps, WATCH_STEPS_EXAMPLE } from "../watchSteps.js";
 
   type CreateArgs = {
     message: string;
@@ -12,6 +13,10 @@
     projectId?: string;
     sessionMode?: "existing" | "new" | "template";
     sessionTemplate?: string;
+    type?: "message" | "watch";
+    steps?: unknown[];
+    timeout?: string;
+    onMatch?: "stop" | "continue";
   };
 
   type ProjectOption = { id: string; name: string };
@@ -34,6 +39,11 @@
        scope: scheduling a job from a conversation almost always means "in the
        project I'm already working in". */
     currentProjectId?: string;
+    /* "Test first" for the Watch tab: one dry run of the unsaved steps. Omit
+       to hide the button. Rejects with the server's error. */
+    onTestWatch?: (steps: unknown[]) => Promise<WatchDryRun>;
+    /* The global Scheduled page; a watch row links to its detail there. */
+    scheduledHref?: string;
   };
 
   let {
@@ -46,6 +56,8 @@
     onRunNow,
     projects = [],
     currentProjectId = "",
+    onTestWatch,
+    scheduledHref = "",
   }: Props = $props();
 
   /* Modal state lives here, keyed by id and re-resolved from `schedules`, so a
@@ -90,7 +102,7 @@
   const INPUT_CLASS =
     "w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none";
 
-  type Mode = "once" | "repeat";
+  type Mode = "once" | "repeat" | "watch";
   let mode = $state<Mode>("once");
 
   /* one-shot presets + custom */
@@ -117,6 +129,45 @@
   let repeatCustom = $state("");
   let repeatCron = $state("");
   let maxRuns = $state("");
+
+  /* Watch: a poller without the LLM — steps run every `watchEvery` until one
+     matches (one notification) or `watchTimeout` passes. It always reports
+     into this session, so the "Runs in" choice is hidden for it. */
+  let watchEvery = $state("10s");
+  /* Time limit: presets, Off (runs until match/cancel) or a custom duration. */
+  const WATCH_TIMEOUT_PRESETS = [
+    { label: "1 jam", value: "1h" },
+    { label: "6 jam", value: "6h" },
+    { label: "24 jam (default)", value: "24h" },
+    { label: "Off — tanpa batas", value: "off" },
+    { label: "custom…", value: "custom" },
+  ];
+  let watchTimeoutPreset = $state("24h");
+  let watchTimeoutCustom = $state("");
+  const watchTimeout = $derived(watchTimeoutPreset === "custom" ? watchTimeoutCustom.trim() : watchTimeoutPreset);
+  let watchOnMatch = $state<"stop" | "continue">("stop");
+  let watchStepsText = $state(WATCH_STEPS_EXAMPLE);
+  let testing = $state(false);
+  let testResult = $state<WatchDryRun | null>(null);
+  const watchParse = $derived(parseWatchSteps(watchStepsText));
+
+  async function testWatch() {
+    if (!onTestWatch || testing) return;
+    if ("error" in watchParse) {
+      formError = watchParse.error;
+      return;
+    }
+    testing = true;
+    formError = "";
+    testResult = null;
+    try {
+      testResult = await onTestWatch(watchParse.steps);
+    } catch (e: unknown) {
+      formError = e instanceof Error ? e.message : String(e);
+    } finally {
+      testing = false;
+    }
+  }
 
   let message = $state("");
   let submitting = $state(false);
@@ -182,6 +233,13 @@
 
   function buildArgs(): CreateArgs | null {
     const msg = message.trim();
+    if (mode === "watch") {
+      if ("error" in watchParse) return null;
+      const every = watchEvery.trim();
+      if (!every) return null;
+      if (!watchTimeout) return null;
+      return { message: msg, type: "watch", every, timeout: watchTimeout, onMatch: watchOnMatch, steps: watchParse.steps };
+    }
     const max = maxRuns.trim() ? Number(maxRuns.trim()) : undefined;
     const tgt = targetArgs();
     if (!tgt) return null;
@@ -206,7 +264,9 @@
     if (!args) {
       // Distinguish the two ways the form can be incomplete, so the message
       // points at the field that's actually missing.
-      formError = targetArgs()
+      formError = mode === "watch" && "error" in watchParse
+        ? watchParse.error
+        : mode === "watch" || targetArgs()
         ? "Fill in the timing."
         : target === "template" && targetProject
           ? "Enter a session name pattern."
@@ -223,6 +283,7 @@
         repeatCustom = "";
         repeatCron = "";
         maxRuns = "";
+        testResult = null;
       }
     } catch (e: unknown) {
       formError = e instanceof Error ? e.message : String(e);
@@ -243,6 +304,12 @@
       default: /* cancelled */
         return "bg-white-300 text-black-600 dark:bg-navy-700 dark:text-black-600";
     }
+  }
+
+  function watchResultCls(r: string): string {
+    if (r === "matched") return "bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300";
+    if (r === "error") return "bg-neg-100 text-neg-400 dark:bg-neg-400/20 dark:text-neg-300";
+    return "bg-white-300 text-black-700 dark:bg-navy-700 dark:text-white-200";
   }
 
   function fmtWhen(iso: string): string {
@@ -295,6 +362,12 @@
         onclick={() => (mode = "repeat")}
         data-testid="mode-repeat"
       >Repeat</button>
+      <button
+        type="button"
+        class={"px-3 py-1.5 transition-colors " + (mode === "watch" ? "bg-green-500 text-white-100" : "bg-white-100 dark:bg-navy-800 text-black-700 dark:text-white-200")}
+        onclick={() => { mode = "watch"; target = "existing"; }}
+        data-testid="mode-watch"
+      >Watch</button>
     </div>
 
     {#if mode === "once"}
@@ -310,6 +383,85 @@
           placeholder="90m, 2h, 1d — or 2026-07-09T12:40:00Z"
           data-testid="once-custom"
         />
+      {/if}
+    {:else if mode === "watch"}
+      <p class="text-[11px] text-black-700 dark:text-black-600">
+        Polls without the AI: steps run on each tick until one matches, then this session gets one
+        message. Runs as you, into this session.
+      </p>
+      <div class="flex gap-2">
+        <label class="flex-1 space-y-0.5">
+          <span class="block text-[11px] font-medium text-black-800 dark:text-black-600">Every (min 10s)</span>
+          <input class={INPUT_CLASS} bind:value={watchEvery} placeholder="10s, 30s, 1m" data-testid="watch-every" />
+        </label>
+        <label class="flex-1 space-y-0.5">
+          <span class="block text-[11px] font-medium text-black-800 dark:text-black-600">Batas waktu</span>
+          <select class={INPUT_CLASS} bind:value={watchTimeoutPreset} data-testid="watch-timeout">
+            {#each WATCH_TIMEOUT_PRESETS as p (p.value)}
+              <option value={p.value}>{p.label}</option>
+            {/each}
+          </select>
+        </label>
+      </div>
+      {#if watchTimeoutPreset === "custom"}
+        <input
+          class={INPUT_CLASS}
+          bind:value={watchTimeoutCustom}
+          placeholder="30m, 12h, 48h, 7d"
+          data-testid="watch-timeout-custom"
+        />
+      {/if}
+      <div class="space-y-0.5" role="radiogroup" aria-label="Saat match" data-testid="watch-on-match">
+        <label class="flex items-center gap-1.5 text-[11px] text-black-800 dark:text-black-600">
+          <input type="radio" name="watch-on-match" value="stop" bind:group={watchOnMatch} />
+          Berhenti setelah match
+        </label>
+        <label class="flex items-center gap-1.5 text-[11px] text-black-800 dark:text-black-600">
+          <input type="radio" name="watch-on-match" value="continue" bind:group={watchOnMatch} />
+          Terus jalan, kabari kalau ada yang baru
+        </label>
+        {#if watchOnMatch === "continue"}
+          <p class="text-[11px] text-black-700 dark:text-black-600">
+            Notif hanya saat <code>extract</code> step check terakhir berubah — extract penanda data baru saja (id,
+            build, branch), bukan durasi atau waktu.
+          </p>
+        {/if}
+      </div>
+      <label class="block space-y-0.5">
+        <span class="block text-[11px] font-medium text-black-800 dark:text-black-600">Steps (JSON, 1-8 · kind connector | check | bash)</span>
+        <textarea
+          class={INPUT_CLASS + " font-mono text-[11px]"}
+          rows="9"
+          spellcheck="false"
+          bind:value={watchStepsText}
+          data-testid="watch-steps"
+        ></textarea>
+      </label>
+      {#if "error" in watchParse}
+        <p class="text-[11px] text-neg-400" data-testid="watch-steps-error">{watchParse.error}</p>
+      {/if}
+      {#if onTestWatch}
+        <button
+          type="button"
+          class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-white-200 disabled:opacity-50"
+          disabled={testing || "error" in watchParse}
+          onclick={testWatch}
+          data-testid="watch-test"
+        >{testing ? "Testing…" : "Test first"}</button>
+      {/if}
+      {#if testResult}
+        <div class="rounded-lg border border-white-300 dark:border-navy-600 p-2 space-y-1" data-testid="watch-test-result">
+          <p class="text-[11px]">
+            <span class={"rounded-full px-2 py-0.5 text-[10px] font-medium " + watchResultCls(testResult.result)}>{testResult.result}</span>
+            {#if testResult.reason}<span class="ml-1 text-black-800 dark:text-white-200">{testResult.reason}</span>{/if}
+          </p>
+          {#each testResult.steps ?? [] as st, i (i)}
+            <p class="text-[11px] text-black-700 dark:text-black-600">
+              {st.ok ? "✓" : "✗"} {st.name} <span class="opacity-70">({st.kind}{st.decision ? " · " + st.decision : ""})</span>{#if st.error} — <span class="text-neg-400">{st.error}</span>{/if}
+            </p>
+          {/each}
+          {#if testResult.error}<p class="text-[11px] text-neg-400">{testResult.error}</p>{/if}
+        </div>
       {/if}
     {:else}
       <select class={INPUT_CLASS} bind:value={repeatEvery} data-testid="repeat-when">
@@ -341,7 +493,7 @@
       />
     {/if}
 
-    {#if projects.length > 0}
+    {#if projects.length > 0 && mode !== "watch"}
       <!-- Target: this conversation, or a standalone job in a project -->
       <div class="space-y-1.5 pt-1">
         <span class="block text-[11px] font-medium text-black-800 dark:text-black-600">Runs in</span>
@@ -395,7 +547,9 @@
       class={INPUT_CLASS}
       rows="3"
       bind:value={message}
-      placeholder={target === "existing"
+      placeholder={mode === "watch"
+        ? "Notification delivered into this session when the watch finishes…"
+        : target === "existing"
         ? "Message to deliver into this session when it fires…"
         : "Message to start each run with…"}
       data-testid="sched-message"
@@ -459,6 +613,12 @@
           data-testid={onReschedule ? "row-open" : undefined}
         >
         <div class="flex items-center gap-2 flex-wrap">
+          {#if s.type === "watch"}
+            <span
+              class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300"
+              data-testid="row-watch"
+            >👁 Watch</span>
+          {/if}
           {#if s.kind === "recurring"}
             <span class="text-xs font-medium text-black-900 dark:text-white-100">{cadence(s)}</span>
           {:else}
@@ -510,10 +670,34 @@
           </p>
         {/if}
 
+        {#if s.type === "watch" && (s.on_match === "continue" || s.no_timeout)}
+          <p class="flex flex-wrap gap-1 text-[10px]" data-testid="row-watch-badges">
+            {#if s.on_match === "continue"}
+              <span class="rounded-full bg-green-100 px-1.5 py-0.5 font-medium text-green-700 dark:bg-green-900/40 dark:text-green-300">terus jalan · {s.notified ?? 0} notif</span>
+            {/if}
+            {#if s.no_timeout}
+              <span class="rounded-full bg-white-300 px-1.5 py-0.5 font-medium text-black-600 dark:bg-navy-700 dark:text-black-600">tanpa batas</span>
+            {/if}
+          </p>
+        {/if}
+
+        {#if s.type === "watch" && s.last_result}
+          <p class="text-[11px] text-black-700 dark:text-black-600" data-testid="row-watch-result">
+            last result <span class={"rounded-full px-1.5 py-0.5 text-[10px] font-medium " + watchResultCls(s.last_result)}>{s.last_result}</span>
+          </p>
+        {/if}
+
         {#if s.last_error}
           <p class="text-[11px] text-neg-400">{s.last_error}</p>
         {/if}
         </svelte:element>
+        {#if s.type === "watch" && scheduledHref}
+          <a
+            class="inline-block text-[11px] font-medium text-green-600 dark:text-green-400 hover:underline"
+            href={scheduledHref + "?open=" + encodeURIComponent(s.id)}
+            data-testid="row-watch-detail"
+          >Steps &amp; runs →</a>
+        {/if}
 
         <!-- Actions -->
         {#if rowIsLive(s)}

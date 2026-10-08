@@ -132,6 +132,10 @@ const (
 	// connector here, the app is using it to do the user's work, and the
 	// history should say which.
 	ConnectorRunSourceApp ConnectorRunSource = "app"
+	// ConnectorRunSourceSchedule marks runs a watch schedule made on its
+	// own tick, as the schedule's run-as user — nobody was at the keyboard,
+	// and the history should say so.
+	ConnectorRunSourceSchedule ConnectorRunSource = "schedule"
 )
 
 // ConnectorRunStatus describes the outcome of a ConnectorRun.
@@ -191,10 +195,10 @@ type ConnectorRun struct {
 	// String columns are text, not varchar(n): in Postgres text and varchar
 	// share storage/perf, so a length cap is pure constraint — and the caps
 	// here kept biting (e.g. ConnectorID held "sw_"+uuid = 39 > varchar(36)).
-	ID           string             `gorm:"type:text;primaryKey"`
-	ConnectorID  string             `gorm:"type:text;not null;index:idx_run_connector_started,priority:1"`
-	OperationKey string             `gorm:"type:text;not null"`
-	UserID       string             `gorm:"type:text;index:idx_run_user_started,priority:1"`
+	ID           string `gorm:"type:text;primaryKey"`
+	ConnectorID  string `gorm:"type:text;not null;index:idx_run_connector_started,priority:1"`
+	OperationKey string `gorm:"type:text;not null"`
+	UserID       string `gorm:"type:text;index:idx_run_user_started,priority:1"`
 	// SessionID is the agent/live-session this op ran under (empty for direct
 	// PAT calls with no session). Persisted so a session_close can find and abort
 	// every in-flight run bound to the session, and so a stale-run reaper /
@@ -206,7 +210,7 @@ type ConnectorRun struct {
 	// UserID: a person can drive several connected accounts, and an agent
 	// or MCP client has no UserID at all while still choosing one. Indexed
 	// for the History page's Credential filter.
-	AccountID string `gorm:"type:text;index:idx_run_account"`
+	AccountID    string             `gorm:"type:text;index:idx_run_account"`
 	Source       ConnectorRunSource `gorm:"type:text;not null"`
 	RequestJSON  string             `gorm:"type:text"`
 	ResponseJSON string             `gorm:"type:text"`
@@ -237,17 +241,17 @@ type ConnectorRun struct {
 // (e.g. Slack U01ABCDEF, Google sub claim) — used for token lookup by the
 // channel layer when routing inbound messages to sessions.
 type ConnectorAccount struct {
-	ID             string    `gorm:"type:varchar(36);primaryKey"`
-	ConnectorID    string    `gorm:"type:varchar(36);not null;index"`
-	WickUserID     string    `gorm:"type:varchar(36);index"`
-	ExternalUserID string    `gorm:"type:varchar(255);index"`
-	DisplayName    string    `gorm:"type:varchar(255);not null"`
-	AccessToken    string    `gorm:"type:text;not null"`
+	ID             string `gorm:"type:varchar(36);primaryKey"`
+	ConnectorID    string `gorm:"type:varchar(36);not null;index"`
+	WickUserID     string `gorm:"type:varchar(36);index"`
+	ExternalUserID string `gorm:"type:varchar(255);index"`
+	DisplayName    string `gorm:"type:varchar(255);not null"`
+	AccessToken    string `gorm:"type:text;not null"`
 	// RefreshToken and ExpiresAt are only written by flows that refresh —
 	// today the OAuth MCP per-user connect (custom connectors). Built-in
 	// OAuth connectors leave them empty. RefreshToken is stored encrypted
 	// (wick_enc_) when an encryption key is configured.
-	RefreshToken string     `gorm:"type:text;default:''"`
+	RefreshToken string `gorm:"type:text;default:''"`
 	ExpiresAt    *time.Time
 	// DisabledOps is the LEGACY per-account opt-out: a JSON array of
 	// operation keys disabled for this account. Superseded by OpOverrides
@@ -262,7 +266,7 @@ type ConnectorAccount struct {
 	// "on anyway" once the instance itself turned the operation off.
 	//
 	// Example: {"send_message":false,"get_channel_history":true}
-	OpOverrides string    `gorm:"type:text;default:''"`
+	OpOverrides string `gorm:"type:text;default:''"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

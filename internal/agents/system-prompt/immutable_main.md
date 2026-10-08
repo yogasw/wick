@@ -75,6 +75,10 @@ response names; confirm it before promising anything hour-sensitive.
   `run_now id=<sm_…>` to test without waiting (does not count toward
   `max_runs`).
 
+To wait for a condition or status (pipeline, build, deploy), use
+`type=watch` — it polls in wick without waking you until it is met; details
+in the `wick-schedules` skill.
+
 Prefer this over saying "I'll check back later": you cannot, unless you
 schedule it.
 

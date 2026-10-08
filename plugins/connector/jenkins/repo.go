@@ -71,31 +71,46 @@ func fetchConfig(c *connector.Ctx, p getConfigParams) (*ConfigResult, error) {
 	return &result, nil
 }
 
-// fetchCrumb returns the CSRF crumb header name and value. Jenkins without
-// CSRF protection (or with API-token auth) answers 404; that is not an error.
-func fetchCrumb(c *connector.Ctx, base string) (string, string) {
+// jenkinsCrumb is a CSRF crumb plus the session cookies it was issued with.
+// Jenkins binds a crumb to the web session that requested it, so a POST that
+// sends the header without the same session cookie is rejected with
+// "403 No valid crumb was included in the request".
+type jenkinsCrumb struct {
+	Field   string
+	Value   string
+	Cookies []*http.Cookie
+}
+
+// fetchCrumb returns the CSRF crumb for base. Jenkins without CSRF
+// protection answers 404; that yields a zero crumb, not an error. Any other
+// failure is returned so a later 403 on the POST can say why.
+func fetchCrumb(c *connector.Ctx, base string) (jenkinsCrumb, error) {
 	req, err := http.NewRequestWithContext(c.Context(), http.MethodGet, base+"/crumbIssuer/api/json", nil)
 	if err != nil {
-		return "", ""
+		return jenkinsCrumb{}, err
 	}
 	applyAuth(c, req)
+	req.Header.Set("Accept", "application/json")
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return "", ""
+		return jenkinsCrumb{}, err
 	}
 	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound {
+		return jenkinsCrumb{}, nil
+	}
 	if resp.StatusCode != http.StatusOK {
-		return "", ""
+		return jenkinsCrumb{}, jenkinsError(resp.StatusCode, raw)
 	}
 	var crumb struct {
 		Field string `json:"crumbRequestField"`
 		Value string `json:"crumb"`
 	}
-	raw, _ := io.ReadAll(resp.Body)
-	if json.Unmarshal(raw, &crumb) != nil {
-		return "", ""
+	if err := json.Unmarshal(raw, &crumb); err != nil {
+		return jenkinsCrumb{}, fmt.Errorf("decode crumb: %w", err)
 	}
-	return crumb.Field, crumb.Value
+	return jenkinsCrumb{Field: crumb.Field, Value: crumb.Value, Cookies: resp.Cookies()}, nil
 }
 
 func triggerBuild(c *connector.Ctx, p buildJobParams) (*BuildResult, error) {
@@ -111,8 +126,12 @@ func triggerBuild(c *connector.Ctx, p buildJobParams) (*BuildResult, error) {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	if field, value := fetchCrumb(c, strings.TrimRight(strings.TrimSpace(c.Cfg("base_url")), "/")); field != "" {
-		req.Header.Set(field, value)
+	crumb, crumbErr := fetchCrumb(c, strings.TrimRight(strings.TrimSpace(c.Cfg("base_url")), "/"))
+	if crumb.Field != "" {
+		req.Header.Set(crumb.Field, crumb.Value)
+		for _, ck := range crumb.Cookies {
+			req.AddCookie(&http.Cookie{Name: ck.Name, Value: ck.Value})
+		}
 	}
 
 	resp, err := c.HTTP.Do(req)
@@ -123,6 +142,9 @@ func triggerBuild(c *connector.Ctx, p buildJobParams) (*BuildResult, error) {
 
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if crumbErr != nil {
+			return nil, fmt.Errorf("%w (crumb request failed: %v)", jenkinsError(resp.StatusCode, raw), crumbErr)
+		}
 		return nil, jenkinsError(resp.StatusCode, raw)
 	}
 	return &BuildResult{Name: p.Name, Triggered: true, QueueURL: resp.Header.Get("Location")}, nil

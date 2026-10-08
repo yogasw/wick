@@ -237,3 +237,32 @@ func (s *Service) LimitsFor(ctx context.Context, sessionID string) (Limits, bool
 	}
 	return LimitsOf(*p, dir), true
 }
+
+// BashAllowed reports whether a Bash script may run on behalf of a session
+// (or a project's agent): the same switch that decides whether the agent's
+// sessions get the Bash tool. A session or project no Team agent owns is an
+// ordinary one, which has Bash. A session whose agent chain is broken gets
+// nothing, matching ScopeForSession.
+func (s *Service) BashAllowed(ctx context.Context, sessionID, projectID string) bool {
+	if s == nil {
+		return true
+	}
+	agentID := ""
+	if sessionID != "" {
+		id, err := AgentOfSession(s.layout, sessionID)
+		if err != nil {
+			return false
+		}
+		agentID = id
+	} else if projectID != "" {
+		agentID = s.AgentOfProject(ctx, projectID)
+	}
+	if agentID == "" {
+		return true
+	}
+	p, err := s.Get(ctx, agentID)
+	if err != nil {
+		return false
+	}
+	return slices.Contains(DecodeNativeTools(p.AllowedNativeTools), "Bash")
+}

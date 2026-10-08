@@ -9,7 +9,7 @@
   import { ConfirmDialog, Composer } from "@wick-fe/common-ui";
   import { NOTIFY_KEY } from "../notify-pref.js";
 
-  import { createThreadStore } from "../stores/thread.js";
+  import { createThreadStore, TURN_SETTLE_MS } from "../stores/thread.js";
   import { remoteProgress } from "../remoteAgent.js";
   import type { ThreadMeta, LifecycleState } from "../stores/thread.js";
   import { connectSession } from "../stores/sse.js";
@@ -58,7 +58,7 @@
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
     duplicateWorkspace, renameWorkspace, removeWorkspace,
   } from "../api/workspace.js";
-  import { listSchedules, createSchedule, cancelSchedule, pauseSchedule, resumeSchedule, rescheduleSchedule, runScheduleNow } from "../api/schedules.js";
+  import { listSchedules, createSchedule, cancelSchedule, pauseSchedule, resumeSchedule, rescheduleSchedule, runScheduleNow, testWatchSteps } from "../api/schedules.js";
   import { listNotes } from "../api/tickets.js";
   import type { NotesResponse } from "../types/agents.js";
   import TicketPanel from "./TicketPanel.svelte";
@@ -1809,6 +1809,20 @@
       .finally(() => { loadingOlder = false; });
   }
 
+  /* History re-read for a turn that ended without its `done` (see the
+     lifecycle branch below). A `done`/`error` cancels it: that path reloads. */
+  let settleReloadTimer: ReturnType<typeof setTimeout> | null = null;
+  function cancelSettleReload() {
+    if (settleReloadTimer !== null) { clearTimeout(settleReloadTimer); settleReloadTimer = null; }
+  }
+  function scheduleSettleReload() {
+    cancelSettleReload();
+    settleReloadTimer = setTimeout(() => {
+      settleReloadTimer = null;
+      void loadConversation();
+    }, TURN_SETTLE_MS + 300);
+  }
+
   /* ── SSE fan-out ──────────────────────────────────────────────── */
   function startSSE() {
     const stream = connectSession(base, sessionId);
@@ -1861,6 +1875,7 @@
         // status is stamped on the turn server-side, so reload to show it.
         void loadConversation();
       } else if (ev.type === "done" || ev.type === "error") {
+        cancelSettleReload();
         void loadConversation();
         // A sub-agent's own lifecycle events are published on the CHILD's
         // session id, which this stream is not subscribed to. The leader's
@@ -1888,6 +1903,13 @@
         // A sub-agent started, stopped or finished a turn.
         scheduleSubAgentReload();
       } else if (ev.type === "lifecycle") {
+        // The turn ended server-side. If its `done` never shows up, the
+        // store closes the turn itself after TURN_SETTLE_MS; re-read history
+        // then so the reply it committed is swapped for the persisted one.
+        // A kill commits at once; an idle edge only matters while a turn is
+        // still open here (the usual done-then-idle order leaves none).
+        if (ev.lifecycle === "killed" || (ev.lifecycle === "idle" && (live !== null || typing.active))) scheduleSettleReload();
+        else if (ev.lifecycle === "spawning" || ev.lifecycle === "working") cancelSettleReload();
         scheduleProcessReload();
         scheduleSubAgentReload();
         scheduleFileReload();
@@ -2315,6 +2337,7 @@
   }
 
   onDestroy(() => {
+    cancelSettleReload();
     scmCleanup?.();
     if (scmPulseTimer !== null) clearTimeout(scmPulseTimer);
     if (fileReloadTimer !== null) clearTimeout(fileReloadTimer);
@@ -3117,10 +3140,16 @@
               .then(loadSchedules)
               .catch((e: unknown) => toastError(`Run now: ${e instanceof Error ? e.message : String(e)}`));
           }}
+          scheduledHref={`${base}/scheduled`}
+          onTestWatch={(steps) => run(testWatchSteps(base, sessionId, steps).pipe(Effect.provide(WickClientLayer)))}
           onCreate={(args) =>
             run(createSchedule(base, sessionId, args).pipe(Effect.provide(WickClientLayer)))
               .then(() => { loadSchedules(); return true; })
-              .catch((e: unknown) => { toastError(`Schedule: ${e instanceof Error ? e.message : String(e)}`); return false; })
+              .catch((e: unknown) => {
+                // A watch's validation error belongs next to the steps it names.
+                if (args.type === "watch") throw e;
+                toastError(`Schedule: ${e instanceof Error ? e.message : String(e)}`); return false;
+              })
           }
           onCancel={(id) => {
             run(cancelSchedule(base, sessionId, id).pipe(Effect.provide(WickClientLayer)))
@@ -3316,10 +3345,16 @@
                   .then(loadSchedules)
                   .catch((e: unknown) => toastError(`Run now: ${e instanceof Error ? e.message : String(e)}`));
               }}
+              scheduledHref={`${base}/scheduled`}
+              onTestWatch={(steps) => run(testWatchSteps(base, sessionId, steps).pipe(Effect.provide(WickClientLayer)))}
               onCreate={(args) =>
                 run(createSchedule(base, sessionId, args).pipe(Effect.provide(WickClientLayer)))
                   .then(() => { loadSchedules(); return true; })
-                  .catch((e: unknown) => { toastError(`Schedule: ${e instanceof Error ? e.message : String(e)}`); return false; })
+                  .catch((e: unknown) => {
+                    // A watch's validation error belongs next to the steps it names.
+                    if (args.type === "watch") throw e;
+                    toastError(`Schedule: ${e instanceof Error ? e.message : String(e)}`); return false;
+                  })
               }
               onCancel={(id) => {
                 run(cancelSchedule(base, sessionId, id).pipe(Effect.provide(WickClientLayer)))

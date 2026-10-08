@@ -554,6 +554,26 @@ export type Schedule = {
   manual_runs?: number;
   /* Zone a cron expression is matched in (the server's); cron rows only. */
   cron_timezone?: string;
+  /* "message" (default) or "watch" — a poller that notifies once on match.
+     last_result is the watch's latest run: matched | pending | error. */
+  type?: "message" | "watch";
+  step_count?: number;
+  last_result?: string;
+  /* Watch: "stop" (default) or "continue" (keeps running, notifies on new
+     data); notified counts continue notices; no_timeout = no time limit. */
+  on_match?: "stop" | "continue";
+  notified?: number;
+  no_timeout?: boolean;
+};
+
+/* The panel's "Test first" result: one dry run of unsaved watch steps. Only
+   the fields the panel shows; the full record is on the Scheduled page. */
+export type WatchDryRun = {
+  result: string;
+  reason?: string;
+  error?: string;
+  duration_ms?: number;
+  steps?: { name: string; kind: string; ok: boolean; decision?: string; error?: string; output?: string }[];
 };
 
 export type ProviderModelOption = {

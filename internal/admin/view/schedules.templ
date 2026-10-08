@@ -12,6 +12,10 @@ import (
 // including when they are empty, which is the state worth noticing.
 type ScheduleAdminRow struct {
 	ID          string
+	// Type is message | watch; LastResult is a watch's latest run result
+	// (matched | pending | error), empty for messages.
+	Type        string
+	LastResult  string
 	Message     string
 	Kind        string
 	Status      string
@@ -226,6 +230,11 @@ templ scheduleAdminRow(row ScheduleAdminRow, users []ScheduleUserOption) {
 				<span>{ scheduleCadenceLabel(row) }</span>
 				<span>·</span>
 				<span>{ row.Status }</span>
+				<span>·</span>
+				<span>{ row.Type }</span>
+				if row.LastResult != "" {
+					<span>· last { row.LastResult }</span>
+				}
 			</div>
 		</td>
 		<td class="px-4 py-2 truncate text-black-800 dark:text-black-600" title={ row.ProjectName }>
@@ -350,6 +359,10 @@ templ scheduleDetailModal(row ScheduleAdminRow, users []ScheduleUserOption) {
 			<dl style="display:grid;grid-template-columns:9rem 1fr;gap:.5rem 1rem" class="mt-4 text-sm">
 				@scheduleDetailField("ID", row.ID)
 				@scheduleDetailField("Status", row.Status)
+				@scheduleDetailField("Type", row.Type)
+				if row.Type == "watch" {
+					@scheduleDetailField("Last result", row.LastResult)
+				}
 				@scheduleDetailField("Cadence", scheduleCadenceLabel(row))
 				@scheduleDetailField("Next run", row.NextRunAt)
 				@scheduleDetailField("Target", scheduleScopeLabel(row))

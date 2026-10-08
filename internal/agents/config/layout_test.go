@@ -94,3 +94,16 @@ func TestSessionFilesFollowTheNesting(t *testing.T) {
 		}
 	}
 }
+
+func TestLayout_ScheduleDirs(t *testing.T) {
+	l := NewLayout("/base")
+	if got := l.SchedulesDir(); got != filepath.Join("/base", "schedules") {
+		t.Fatalf("SchedulesDir = %q", got)
+	}
+	if got := l.ScheduleDir("sm_1"); got != filepath.Join("/base", "schedules", "sm_1") {
+		t.Fatalf("ScheduleDir = %q", got)
+	}
+	if got := l.ScheduleRunsDir("sm_1"); got != filepath.Join("/base", "schedules", "sm_1", "runs") {
+		t.Fatalf("ScheduleRunsDir = %q", got)
+	}
+}

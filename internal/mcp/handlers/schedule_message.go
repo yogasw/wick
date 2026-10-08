@@ -9,10 +9,10 @@ import (
 	"time"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
-	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/schedule"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 )
@@ -81,12 +81,20 @@ func WickScheduleMessage(
 		scheduleMutate(w, r, req, rsp, store, layout, args, user, "pause")
 	case "resume":
 		scheduleMutate(w, r, req, rsp, store, layout, args, user, "resume")
-	case "reschedule":
+	case "reschedule", "update":
+		// update is the watch-flavoured name for the same edit (steps, timing,
+		// message); both validate and permission-check identically.
 		scheduleMutate(w, r, req, rsp, store, layout, args, user, "reschedule")
+	case "test":
+		scheduleWatchTest(w, r, req, rsp, store, layout, args, user)
 	case "run_now":
 		scheduleMutate(w, r, req, rsp, store, layout, args, user, "run_now")
+	case "delete":
+		scheduleDelete(w, r, req, rsp, store, layout, args, user)
+	case "runs", "run":
+		scheduleWatchRuns(w, r, req, rsp, store, layout, args, user, action)
 	default:
-		rsp.ToolError(w, req.ID, "action must be one of: create, list, cancel, pause, resume, reschedule, run_now", scheduleToolName)
+		rsp.ToolError(w, req.ID, "action must be one of: create, list, cancel, delete, pause, resume, reschedule, update, run_now, test, runs, run", scheduleToolName)
 	}
 }
 
@@ -101,9 +109,20 @@ func scheduleCreate(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp 
 		return
 	}
 	// Timing: run_at (one-shot) OR every (interval) OR cron (recurring).
-	spec, err := schedule.ParseWhen(argString(args, "run_at"), argString(args, "every"), argString(args, "cron"), time.Now())
+	every := argString(args, "every")
+	isWatch := strings.EqualFold(strings.TrimSpace(argString(args, "type")), entity.ScheduledTypeWatch)
+	if isWatch && strings.TrimSpace(every+argString(args, "cron")+argString(args, "run_at")) == "" {
+		// A watch is one call: no timing given means "check every 10s".
+		every = schedule.MinWatchInterval.String()
+	}
+	spec, err := schedule.ParseWhen(argString(args, "run_at"), every, argString(args, "cron"), time.Now())
 	if err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), scheduleToolName)
+		return
+	}
+	schedType, steps, terr := scheduleTypeArgs(args, spec)
+	if terr != nil {
+		rsp.ToolError(w, req.ID, terr.Error(), scheduleToolName)
 		return
 	}
 
@@ -153,6 +172,32 @@ func scheduleCreate(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp 
 		rsp.ToolError(w, req.ID, rerr.Error(), scheduleToolName)
 		return
 	}
+	ownerUserID = scheduleRowOwner(schedType, ownerUserID, user)
+	// A watch runs code on a timer, so it goes through the checks every
+	// create surface shares (schedule.PrepareWatch): the per-user cap on live
+	// watches (admins uncapped), Bash for the calling session's agent AND the
+	// target's, and the time limit — default 24h for every, none for cron
+	// or run_at, "off" for none, no upper bound.
+	stepsJSON := ""
+	var endsAt *time.Time
+	if schedType == entity.ScheduledTypeWatch {
+		enc, until, werr := store.PrepareWatch(r.Context(), schedule.WatchCreate{
+			Steps:          steps,
+			Spec:           spec,
+			Timeout:        argString(args, "timeout"),
+			OnMatch:        argString(args, "on_match"),
+			OwnerUserID:    ownerUserID,
+			CreatorUserID:  scheduleUserID(user),
+			CreatorIsAdmin: user != nil && user.IsAdmin(),
+			SessionIDs:     []string{SessionOf(r), target.SessionID},
+			ProjectID:      target.ProjectID,
+		}, time.Now())
+		if werr != nil {
+			rsp.ToolError(w, req.ID, werr.Error(), scheduleToolName)
+			return
+		}
+		stepsJSON, endsAt = enc, until
+	}
 
 	row := &entity.ScheduledMessage{
 		SessionID:       target.SessionID,
@@ -167,6 +212,9 @@ func scheduleCreate(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp 
 		Message:         message,
 		RunAt:           spec.FirstRunAt,
 		MaxRuns:         argInt(args, "max_runs"),
+		Type:            schedType,
+		Steps:           stepsJSON,
+		EndsAt:          endsAt,
 	}
 	if spec.Recurring {
 		row.Kind = entity.ScheduledKindRecurring
@@ -185,6 +233,9 @@ func scheduleCreate(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp 
 }
 
 func scheduleCreateNote(m entity.ScheduledMessage) string {
+	if m.IsWatch() {
+		return scheduleWatchCreateNote(m)
+	}
 	where := "into the session"
 	switch m.Mode() {
 	case entity.ScheduledSessionNew:
@@ -262,10 +313,10 @@ func scheduleList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 	}
 	statuses, paused := scheduleListStatuses(args)
 	q := schedule.ListQuery{
-		OwnerUserID: ownerID,
-		Scope:       scope,
-		ProjectID:   projectID,
-		AllOwners:   allOwners,
+		OwnerUserID:     ownerID,
+		Scope:           scope,
+		ProjectID:       projectID,
+		AllOwners:       allOwners,
 		Statuses:        statuses,
 		Paused:          paused,
 		TargetSessionID: targetSessionID,
@@ -385,6 +436,10 @@ func scheduleMutate(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp 
 		rsp.ToolError(w, req.ID, "schedule not found: "+id, scheduleToolName)
 		return
 	}
+	if !ScheduleWatchOwner(*m, user) {
+		rsp.ToolError(w, req.ID, "only the watch's owner or an admin can "+action+" it", scheduleToolName)
+		return
+	}
 
 	switch action {
 	case "cancel":
@@ -402,12 +457,35 @@ func scheduleMutate(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp 
 		}
 		var next time.Time
 		if next, err = schedule.NextFrom(*m, time.Now()); err == nil {
-			err = store.SetPaused(r.Context(), id, false, next)
+			// A failed or finished WATCH comes back to life on resume, with
+			// a fresh error streak and time limit — the fix-then-resume
+			// loop. It becomes live again, so it counts against the cap.
+			if m.IsWatch() && (m.Status == entity.ScheduledStatusFailed || m.Status == entity.ScheduledStatusDone) {
+				if user == nil || !user.IsAdmin() {
+					if err = store.CheckWatchCap(r.Context(), m.OwnerUserID); err != nil {
+						rsp.ToolError(w, req.ID, "resume: "+err.Error(), scheduleToolName)
+						return
+					}
+				}
+				err = store.Reactivate(r.Context(), id, next, schedule.WatchResumeEndsAt(*m, time.Now()))
+			} else {
+				err = store.SetPaused(r.Context(), id, false, next)
+			}
 		}
 	case "reschedule":
 		var patch schedule.SchedulePatch
 		if patch, err = scheduleParsePatch(r, layout, user, *m, args, time.Now()); err == nil {
+			err = scheduleWatchPatchCheck(*m, patch)
+		}
+		var newSteps string
+		if err == nil && m.IsWatch() && (args["steps"] != nil || args["on_match"] != nil) {
+			newSteps, err = scheduleRescheduleSteps(r, *m, args, user)
+		}
+		if err == nil {
 			err = store.Reschedule(r.Context(), id, patch)
+		}
+		if err == nil && newSteps != "" {
+			err = store.SetSteps(r.Context(), id, newSteps)
 		}
 	case "run_now":
 		// Make it due and poke the runner, so the fire lands in seconds
@@ -768,16 +846,19 @@ func scheduleSourceSession(args map[string]any, target schedule.TargetSpec) stri
 }
 
 func scheduleVM(m entity.ScheduledMessage) map[string]any {
+	// A live watch's counters live in the runner between checkpoints.
+	schedule.OverlayLive(&m)
 	vm := map[string]any{
+		"type":       m.EffectiveType(),
 		"id":         m.ID,
 		"session_id": m.SessionID,
 		"created_by": m.CreatedBy,
 		"kind":       m.Kind,
 		// EffectiveStatus folds `paused` in, so a caller reading only status
 		// never sees "active" for something that will not fire.
-		"status":     m.EffectiveStatus(),
-		"message":    m.Message,
-		"run_count":  m.RunCount,
+		"status":    m.EffectiveStatus(),
+		"message":   m.Message,
+		"run_count": m.RunCount,
 	}
 	// next_run_at is present only when there IS a next fire. A finished or
 	// mid-claim row has none — publishing its stored run_at would hand back
@@ -855,7 +936,120 @@ func scheduleVM(m entity.ScheduledMessage) map[string]any {
 	if m.LastError != "" {
 		vm["last_error"] = m.LastError
 	}
+	if m.IsWatch() {
+		steps, _ := schedule.ParseSteps(m.Steps)
+		vm["step_count"] = len(steps)
+		vm["steps"] = steps
+		vm["on_match"] = schedule.WatchOnMatch(m)
+		if m.WatchNotified > 0 {
+			vm["notified"] = m.WatchNotified
+		}
+		if m.EndsAt == nil {
+			vm["timeout"] = "off"
+		}
+		if m.LastResult != "" {
+			vm["last_result"] = m.LastResult
+		}
+		if m.ConsecutiveErrors > 0 {
+			vm["consecutive_errors"] = m.ConsecutiveErrors
+		}
+	}
 	return vm
+}
+
+// scheduleTypeArgs reads type + steps for a create. A message schedule takes
+// no steps; a watch needs valid steps, and a recurring one an interval of at
+// least schedule.MinWatchInterval (run_at = one run).
+func scheduleTypeArgs(args map[string]any, spec schedule.Spec) (string, []schedule.Step, error) {
+	typ := strings.ToLower(strings.TrimSpace(argString(args, "type")))
+	switch typ {
+	case "", entity.ScheduledTypeMessage:
+		if args["steps"] != nil {
+			return "", nil, errors.New("steps are only for type=watch")
+		}
+		return entity.ScheduledTypeMessage, nil, nil
+	case entity.ScheduledTypeWatch:
+		steps, err := schedule.StepsFromArg(args["steps"])
+		if err != nil {
+			return "", nil, err
+		}
+		if err := schedule.ValidateSteps(steps); err != nil {
+			return "", nil, err
+		}
+		if err := schedule.ValidateWatchTiming(spec.Recurring, spec.IntervalMs); err != nil {
+			return "", nil, err
+		}
+		return entity.ScheduledTypeWatch, steps, nil
+	default:
+		return "", nil, fmt.Errorf("type must be message or watch, got %q", typ)
+	}
+}
+
+// scheduleWatchPatchCheck keeps a rescheduled watch above the interval floor.
+func scheduleWatchPatchCheck(m entity.ScheduledMessage, patch schedule.SchedulePatch) error {
+	if !m.IsWatch() || patch.IntervalMs == nil || *patch.IntervalMs == 0 {
+		return nil
+	}
+	return schedule.ValidateWatchTiming(true, *patch.IntervalMs)
+}
+
+// scheduleRescheduleSteps validates replacement steps for a watch, including
+// the Bash check against the caller and the schedule's own target.
+func scheduleRescheduleSteps(r *http.Request, m entity.ScheduledMessage, args map[string]any, user *entity.User) (string, error) {
+	steps, onMatch, err := schedule.ParseWatch(m.Steps)
+	if err != nil {
+		return "", err
+	}
+	if args["on_match"] != nil {
+		if onMatch, err = schedule.NormalizeOnMatch(argString(args, "on_match")); err != nil {
+			return "", err
+		}
+	}
+	if args["steps"] != nil {
+		if steps, err = schedule.StepsFromArg(args["steps"]); err != nil {
+			return "", err
+		}
+	}
+	if err := schedule.ValidateSteps(steps); err != nil {
+		return "", err
+	}
+	if err := schedule.CheckBashAllowed(r.Context(), steps, []string{SessionOf(r), m.SessionID, m.SourceSessionID}, m.ProjectID, scheduleUserID(user)); err != nil {
+		return "", err
+	}
+	return schedule.EncodeWatch(steps, onMatch)
+}
+
+// scheduleWatchRuns answers action=runs (the run history, newest first —
+// files first, else the reconstruction for schedules older than them) and
+// action=run (one run with every step's output). Any type, owner or admin
+// only: a run record carries what the steps returned.
+func scheduleWatchRuns(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, store *schedule.Store, layout agentconfig.Layout, args map[string]any, user *entity.User, action string) {
+	id := strings.TrimSpace(argString(args, "id"))
+	if id == "" {
+		rsp.ToolError(w, req.ID, "id is required (the watch schedule)", scheduleToolName)
+		return
+	}
+	m, err := store.Get(r.Context(), id)
+	if err != nil || !scheduleCanManage(r, layout, *m, user) || !ScheduleOwnerOrAdmin(*m, user) {
+		rsp.ToolError(w, req.ID, "schedule not found: "+id, scheduleToolName)
+		return
+	}
+	if action == "run" {
+		rec, rerr := schedule.GetWatchRun(layout, *m, strings.TrimSpace(argString(args, "run_id")))
+		if rerr != nil {
+			rsp.ToolError(w, req.ID, "run not found (pass run_id from action=runs)", scheduleToolName)
+			return
+		}
+		writeScheduleResult(w, req, rsp, map[string]any{"run": rec})
+		return
+	}
+	result := strings.ToLower(strings.TrimSpace(argString(args, "result")))
+	runs, lerr := schedule.ListRuns(layout, *m, argInt(args, "limit"), result)
+	if lerr != nil {
+		rsp.ToolError(w, req.ID, "list runs: "+lerr.Error(), scheduleToolName)
+		return
+	}
+	writeScheduleResult(w, req, rsp, map[string]any{"schedule": scheduleVM(*m), "runs": runs})
 }
 
 func writeScheduleResult(w http.ResponseWriter, req RPCRequest, rsp Responder, out map[string]any) {
@@ -863,4 +1057,161 @@ func writeScheduleResult(w http.ResponseWriter, req RPCRequest, rsp Responder, o
 	rsp.WriteResult(w, req.ID, ToolCallResult{
 		Content: []ToolContent{{Type: "text", Text: string(b)}},
 	})
+}
+
+// ScheduleWatchOwner reports whether user may change or read the history of
+// m: anyone who can manage a message schedule may manage it, but a WATCH runs
+// code (bash) and connector calls as its owner, so only that owner — or an
+// admin — may edit, run, cancel or read it.
+func ScheduleWatchOwner(m entity.ScheduledMessage, user *entity.User) bool {
+	if !m.IsWatch() {
+		return true
+	}
+	if user == nil {
+		return false
+	}
+	return user.IsAdmin() || (m.OwnerUserID != "" && user.ID == m.OwnerUserID)
+}
+
+// ScheduleOwnerOrAdmin is ScheduleWatchOwner for every type: the gate on
+// reading run history and on test, which hand back what ran as the owner.
+func ScheduleOwnerOrAdmin(m entity.ScheduledMessage, user *entity.User) bool {
+	if user == nil {
+		return false
+	}
+	return user.IsAdmin() || (m.OwnerUserID != "" && user.ID == m.OwnerUserID)
+}
+
+// ScheduleMayOverrideSteps reports whether user may test m with unsaved
+// steps: those run as m's run-as identity, so only that very user or an
+// admin may choose what runs.
+func ScheduleMayOverrideSteps(m entity.ScheduledMessage, user *entity.User) bool {
+	if user == nil {
+		return false
+	}
+	return user.IsAdmin() || (m.EffectiveRunAsUser() != "" && user.ID == m.EffectiveRunAsUser())
+}
+
+// scheduleRowOwner is the OwnerUserID of a new row. A watch runs code and
+// connector calls as its owner, so it belongs to whoever creates it — never
+// to the owner of the project or session it reports into (scopeOwner). Only
+// an admin's explicit run_as (kept in RunAsUserID) runs it as somebody else.
+// A message schedule keeps the scope's owner.
+func scheduleRowOwner(schedType, scopeOwner string, user *entity.User) string {
+	return schedule.WatchOwner(schedType == entity.ScheduledTypeWatch, scheduleUserID(user), scopeOwner)
+}
+
+func scheduleUserID(user *entity.User) string {
+	if user == nil {
+		return ""
+	}
+	return user.ID
+}
+
+// scheduleWatchTest answers action=test: run the watch's steps — or the
+// steps passed in, which are validated and permission-checked like an edit
+// but never stored — once, now, and return the full run record. A dry run:
+// nothing is delivered and the schedule's status and counters do not move.
+func scheduleWatchTest(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, store *schedule.Store, layout agentconfig.Layout, args map[string]any, user *entity.User) {
+	id := strings.TrimSpace(argString(args, "id"))
+	m, err := store.Get(r.Context(), id)
+	if id == "" || err != nil || !scheduleCanManage(r, layout, *m, user) {
+		rsp.ToolError(w, req.ID, "schedule not found: "+id, scheduleToolName)
+		return
+	}
+	if !m.IsWatch() {
+		rsp.ToolError(w, req.ID, "only a type=watch schedule can be tested — use run_now for a message schedule", scheduleToolName)
+		return
+	}
+	if !ScheduleOwnerOrAdmin(*m, user) {
+		rsp.ToolError(w, req.ID, "only the watch's owner or an admin can test it", scheduleToolName)
+		return
+	}
+	var override []schedule.Step
+	if args["steps"] != nil {
+		if !ScheduleMayOverrideSteps(*m, user) {
+			rsp.ToolError(w, req.ID, "test: only the watch's run-as user or an admin can test unsaved steps", scheduleToolName)
+			return
+		}
+		if override, err = schedule.StepsFromArg(args["steps"]); err == nil {
+			err = schedule.ValidateSteps(override)
+		}
+		if err == nil {
+			err = schedule.CheckBashAllowed(r.Context(), override, []string{SessionOf(r), m.SessionID, m.SourceSessionID}, m.ProjectID, scheduleUserID(user))
+		}
+		if err != nil {
+			rsp.ToolError(w, req.ID, "test: "+err.Error(), scheduleToolName)
+			return
+		}
+	}
+	rec, err := schedule.TestWatch(r.Context(), *m, override)
+	if err != nil {
+		rsp.ToolError(w, req.ID, "test: "+err.Error(), scheduleToolName)
+		return
+	}
+	writeScheduleResult(w, req, rsp, map[string]any{
+		"run":  rec,
+		"note": "Dry run: nothing was delivered and the schedule is unchanged. Recorded in the history as manual + dry_run.",
+	})
+}
+
+// scheduleWatchCreateNote tells the creator of a watch everything it needs
+// next, in one place: what will run, when, until when, and how to test it,
+// read its runs, and remove it.
+func scheduleWatchCreateNote(m entity.ScheduledMessage) string {
+	steps, _ := schedule.ParseSteps(m.Steps)
+	parts := make([]string, 0, len(steps))
+	for i, st := range steps {
+		parts = append(parts, fmt.Sprintf("%d. %s", i+1, st.Label(i)))
+	}
+	next := "now"
+	if n := m.NextRunAt(); n != nil {
+		next = n.UTC().Format(time.RFC3339)
+	}
+	until := "no timeout"
+	if m.EndsAt != nil {
+		until = m.EndsAt.UTC().Format(time.RFC3339)
+	}
+	every := "per cron " + m.Cron
+	if m.IntervalMs > 0 {
+		every = "every " + (time.Duration(m.IntervalMs) * time.Millisecond).String()
+	}
+	stop := "if it never matches it stops at " + until + " with ONE timeout notice"
+	if m.EndsAt == nil {
+		stop = "no time limit — it runs until it matches, fails or is cancelled"
+	}
+	wake := "It wakes you once, when the last step matches. "
+	switch {
+	case m.Kind == entity.ScheduledKindOnce:
+		every, stop = "nothing more", "it runs ONCE and you get the result whatever it is"
+		wake = ""
+	case schedule.WatchOnMatch(m) == schedule.OnMatchContinue:
+		wake = "on_match=continue: it wakes you on every NEW match (dedup on the extract) and keeps running — action=cancel id=" + m.ID + " stops it. "
+	}
+	return fmt.Sprintf("Watch created: %[1]s. Steps: %[2]s. First check %[3]s, then %[4]s; %[5]s. "+
+		wake+
+		"Next: action=test id=%[1]s (dry run now — reason per step) · action=runs id=%[1]s [result=error] (history) · "+
+		"action=update id=%[1]s steps=[…] (fix) · action=delete id=%[1]s (remove, history included).",
+		m.ID, strings.Join(parts, "; "), next, every, stop)
+}
+
+// scheduleDelete answers action=delete: remove the schedule row and its run
+// history outright (cancel keeps the row as history). Same access as any
+// edit; a watch only by its owner or an admin.
+func scheduleDelete(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, store *schedule.Store, layout agentconfig.Layout, args map[string]any, user *entity.User) {
+	id := strings.TrimSpace(argString(args, "id"))
+	m, err := store.Get(r.Context(), id)
+	if id == "" || err != nil || !scheduleCanManage(r, layout, *m, user) {
+		rsp.ToolError(w, req.ID, "schedule not found: "+id, scheduleToolName)
+		return
+	}
+	if !ScheduleWatchOwner(*m, user) {
+		rsp.ToolError(w, req.ID, "only the watch's owner or an admin can delete it", scheduleToolName)
+		return
+	}
+	if err := store.Delete(r.Context(), id); err != nil {
+		rsp.ToolError(w, req.ID, "delete: "+err.Error(), scheduleToolName)
+		return
+	}
+	writeScheduleResult(w, req, rsp, map[string]any{"deleted": id, "note": "Schedule and its run history are gone."})
 }

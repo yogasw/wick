@@ -3,7 +3,7 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastError, toastOk } from "@wick-fe/common-stores";
-  import { ToastHost, ScheduleEditModal } from "@wick-fe/common-ui";
+  import { ToastHost, ScheduleEditModal, ConfirmDialog } from "@wick-fe/common-ui";
   import type { ProjectOption, ReschedulePatch, Schedule } from "./lib/api.js";
   import {
     listAll,
@@ -14,8 +14,11 @@
     runNowById,
     listProjects,
     isProjectScoped,
+    scheduleType,
+    deleteById,
   } from "./lib/api.js";
   import ScheduleRow from "./lib/ScheduleRow.svelte";
+  import WatchDetail from "./lib/WatchDetail.svelte";
 
   // `|| ` (not `??`): the dev index.html hard-codes data-base="", which is
   // non-nullish, so `??` would keep the empty string and break API routing
@@ -76,7 +79,19 @@
     return true;
   }
 
-  const filtered = $derived(schedules.filter((s) => matchesFilter(s) && matchesScope(s)));
+  /* Type: a Message wakes the agent every fire; a Watch polls without it. */
+  type TypeFilter = "all" | "message" | "watch";
+  let typeFilter = $state<TypeFilter>("all");
+  const TYPES: { id: TypeFilter; label: string }[] = [
+    { id: "all", label: "All" },
+    { id: "message", label: "Message" },
+    { id: "watch", label: "Watch" },
+  ];
+  const matchesType = (s: Schedule) => typeFilter === "all" || scheduleType(s) === typeFilter;
+
+  const filtered = $derived(
+    schedules.filter((s) => matchesFilter(s) && matchesScope(s) && matchesType(s)),
+  );
 
   /* Grouping is scope-aware: a session-scoped row groups under its target
      session, a project-scoped row under its project — it has no fixed
@@ -155,8 +170,11 @@
 
   /* The modal is owned here, not per-row: one instance, and the open row is
      re-resolved from `schedules` by id so the 15s refresh doesn't leave the
-     modal showing a stale copy (or reset the form by remounting). */
-  let openID = $state("");
+     modal showing a stale copy (or reset the form by remounting).
+     ?open=<id> pre-opens one row — the session panel links here. */
+  let openID = $state(
+    typeof location !== "undefined" ? (new URLSearchParams(location.search).get("open") ?? "") : "",
+  );
   let saving = $state(false);
   const openRow = $derived(schedules.find((s) => s.id === openID));
 
@@ -182,6 +200,21 @@
       .catch((e: unknown) => toastError(`Run now: ${e instanceof Error ? e.message : String(e)}`));
   }
 
+  /* Delete asks once, then removes the row and its run history. */
+  let deleting = $state<Schedule | null>(null);
+  function confirmDelete() {
+    const row = deleting;
+    deleting = null;
+    if (!row) return;
+    run(deleteById(base, row.id).pipe(Effect.provide(WickClientLayer)))
+      .then(() => {
+        if (openID === row.id) openID = "";
+        toastOk("Watch deleted.");
+        load();
+      })
+      .catch((e: unknown) => toastError(`Delete: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
   let timer: ReturnType<typeof setInterval> | undefined;
   onMount(() => {
     load();
@@ -204,7 +237,26 @@
 
 <ToastHost />
 
-{#if openRow}
+<ConfirmDialog
+  open={deleting !== null}
+  title="Delete this watch?"
+  body="The watch stops and its run history is removed. This cannot be undone."
+  confirmLabel="Delete"
+  destructive={true}
+  onConfirm={confirmDelete}
+  onCancel={() => (deleting = null)}
+/>
+
+{#if openRow && scheduleType(openRow) === "watch"}
+  <WatchDetail
+    s={openRow}
+    {base}
+    onClose={() => (openID = "")}
+    onChanged={load}
+    onResume={(id) => act(resumeById, id, "Resume")}
+    onDelete={(row) => (deleting = row)}
+  />
+{:else if openRow}
   <ScheduleEditModal
     open={true}
     schedule={openRow}
@@ -265,8 +317,22 @@
           >{f.label}</button>
         {/each}
       </div>
+      <div class="mb-2 ml-auto inline-flex rounded-lg border border-white-400 dark:border-navy-600 p-0.5" role="group" aria-label="Type">
+        {#each TYPES as ty (ty.id)}
+          <button
+            type="button"
+            class={"rounded-md px-2.5 py-1 text-xs font-medium transition-colors " +
+              (typeFilter === ty.id
+                ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"
+                : "text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-200")}
+            aria-pressed={typeFilter === ty.id}
+            onclick={() => (typeFilter = ty.id)}
+            data-testid={"type-" + ty.id}
+          >{ty.label}</button>
+        {/each}
+      </div>
       <select
-        class="mb-2 ml-auto rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-white-200"
+        class="mb-2 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-white-200"
         bind:value={scope}
         aria-label="Scope"
         data-testid="scope-filter"
@@ -344,6 +410,7 @@
                     onPause={(id) => act(pauseById, id, "Pause")}
                     onResume={(id) => act(resumeById, id, "Resume")}
                     onRunNow={runNow}
+                    onDelete={(row) => (deleting = row)}
                     onOpen={(row) => (openID = row.id)}
                   />
                 </div>

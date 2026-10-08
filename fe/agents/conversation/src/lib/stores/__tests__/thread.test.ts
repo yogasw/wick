@@ -1,6 +1,6 @@
-import { describe, test, expect, beforeEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { get } from "svelte/store";
-import { createThreadStore } from "../thread.js";
+import { createThreadStore, TURN_SETTLE_MS } from "../thread.js";
 import { foldSystemEvents } from "../../systemEvents.js";
 import { teamSender } from "../../teamMention.js";
 import type { ConversationTurn, AgentEvent } from "../../types/agents.js";
@@ -798,10 +798,20 @@ describe("createThreadStore", () => {
 
   /* ── lifecycle nudge from content stream ────────────────────────── */
 
-  test("text_delta nudges lifecycle state to working when state is idle", () => {
+  test("text_delta nudges lifecycle state to working when state is idle and a turn is open", () => {
+    // A turn still open here (live set) when the idle edge raced ahead of its done.
+    store.handleEvent(ev("lifecycle", { lifecycle: "working", pid: 1, at: 5 }));
+    store.handleEvent(ev("text_delta", { data: "start" }));
     store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 10 }));
     store.handleEvent(ev("text_delta", { data: "hello" }));
     expect(get(store.lifecycle).state).toBe("working");
+  });
+
+  test("text_delta after idle with no turn open is ignored", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 10 }));
+    store.handleEvent(ev("text_delta", { data: "hello" }));
+    expect(get(store.lifecycle).state).toBe("idle");
+    expect(get(store.live)).toBeNull();
   });
 
   test("text_delta nudges lifecycle state to working when state is empty string", () => {
@@ -822,6 +832,9 @@ describe("createThreadStore", () => {
   });
 
   test("text_delta nudge preserves pid, substate, at on lifecycle", () => {
+    // A turn still open here (live set) when the idle edge raced ahead of its done.
+    store.handleEvent(ev("lifecycle", { lifecycle: "working", pid: 1, at: 5 }));
+    store.handleEvent(ev("text_delta", { data: "start" }));
     store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 42, data: "sub", at: 999 }));
     store.handleEvent(ev("text_delta", { data: "hello" }));
     const lc = get(store.lifecycle);
@@ -831,10 +844,20 @@ describe("createThreadStore", () => {
     expect(lc.at).toBe(999);
   });
 
-  test("thinking nudges lifecycle state to working when state is idle", () => {
+  test("thinking nudges lifecycle state to working when state is idle and a turn is open", () => {
+    // A turn still open here (live set) when the idle edge raced ahead of its done.
+    store.handleEvent(ev("lifecycle", { lifecycle: "working", pid: 1, at: 5 }));
+    store.handleEvent(ev("text_delta", { data: "start" }));
     store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 10 }));
     store.handleEvent(ev("thinking", { data: "reasoning" }));
     expect(get(store.lifecycle).state).toBe("working");
+  });
+
+  test("thinking after idle with no turn open does not relight the turn", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 10 }));
+    store.handleEvent(ev("thinking", { data: "reasoning" }));
+    expect(get(store.lifecycle).state).toBe("idle");
+    expect(get(store.typing).active).toBe(false);
   });
 
   test("thinking nudges lifecycle state to working when spawning", () => {
@@ -843,10 +866,20 @@ describe("createThreadStore", () => {
     expect(get(store.lifecycle).state).toBe("working");
   });
 
-  test("tool_use nudges lifecycle state to working when state is idle", () => {
+  test("tool_use nudges lifecycle state to working when state is idle and a turn is open", () => {
+    // A turn still open here (live set) when the idle edge raced ahead of its done.
+    store.handleEvent(ev("lifecycle", { lifecycle: "working", pid: 1, at: 5 }));
+    store.handleEvent(ev("text_delta", { data: "start" }));
     store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 10 }));
     store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "bash", tool_input: "{}", at: 1 }));
     expect(get(store.lifecycle).state).toBe("working");
+  });
+
+  test("tool_use after idle with no turn open does not relight the turn", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 10 }));
+    store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "bash", tool_input: "{}", at: 1 }));
+    expect(get(store.lifecycle).state).toBe("idle");
+    expect(get(store.typing).active).toBe(false);
   });
 
   test("tool_use nudges lifecycle state to working when spawning", () => {
@@ -855,10 +888,20 @@ describe("createThreadStore", () => {
     expect(get(store.lifecycle).state).toBe("working");
   });
 
-  test("tool_result nudges lifecycle state to working when state is idle", () => {
+  test("tool_result nudges lifecycle state to working when state is idle and a turn is open", () => {
+    // A turn still open here (live set) when the idle edge raced ahead of its done.
+    store.handleEvent(ev("lifecycle", { lifecycle: "working", pid: 1, at: 5 }));
+    store.handleEvent(ev("text_delta", { data: "start" }));
     store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 10 }));
     store.handleEvent(ev("tool_result", { tool_use_id: "u1", data: "ok", is_error: false, at: 2 }));
     expect(get(store.lifecycle).state).toBe("working");
+  });
+
+  test("tool_result after idle with no turn open does not relight the turn", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 10 }));
+    store.handleEvent(ev("tool_result", { tool_use_id: "u1", data: "ok", is_error: false, at: 2 }));
+    expect(get(store.lifecycle).state).toBe("idle");
+    expect(get(store.typing).active).toBe(false);
   });
 
   test("tool_result does NOT change lifecycle state when killed", () => {
@@ -872,6 +915,51 @@ describe("createThreadStore", () => {
     expect(get(store.lifecycle).state).toBe("working");
     store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 20 }));
     expect(get(store.lifecycle).state).toBe("idle");
+  });
+  /* ── turn settle after idle/killed ──────────────────────────────── */
+
+  describe("turn settle", () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    test("killed with a live turn drops the live turn", () => {
+      store.handleEvent(ev("lifecycle", { lifecycle: "working", pid: 1, at: 1 }));
+      store.handleEvent(ev("text_delta", { data: "half" }));
+      expect(get(store.live)).not.toBeNull();
+      store.handleEvent(ev("lifecycle", { lifecycle: "killed", pid: 1, at: 2 }));
+      expect(get(store.live)).toBeNull();
+      expect(get(store.typing).active).toBe(false);
+    });
+
+    test("idle with a live turn and no done is finalized after TURN_SETTLE_MS", () => {
+      store.handleEvent(ev("lifecycle", { lifecycle: "working", pid: 1, at: 1 }));
+      store.handleEvent(ev("text_delta", { data: "half" }));
+      store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 2 }));
+      vi.advanceTimersByTime(TURN_SETTLE_MS - 1);
+      expect(get(store.live)).not.toBeNull();
+      vi.advanceTimersByTime(1);
+      expect(get(store.live)).toBeNull();
+      expect(get(store.lifecycle).state).toBe("idle");
+    });
+
+    test("working after idle cancels the settle", () => {
+      store.handleEvent(ev("lifecycle", { lifecycle: "working", pid: 1, at: 1 }));
+      store.handleEvent(ev("text_delta", { data: "half" }));
+      store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 2 }));
+      store.handleEvent(ev("lifecycle", { lifecycle: "working", pid: 1, at: 3 }));
+      vi.advanceTimersByTime(TURN_SETTLE_MS * 2);
+      expect(get(store.live)).not.toBeNull();
+      expect(get(store.lifecycle).state).toBe("working");
+    });
+
+    test("a snapshot replayed after idle is ignored", () => {
+      store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 1 }));
+      store.handleEvent(ev("text_snapshot", { data: "stale partial" }));
+      store.handleEvent(ev("thinking", { data: "stale" }));
+      expect(get(store.live)).toBeNull();
+      expect(get(store.typing).active).toBe(false);
+      expect(get(store.lifecycle).state).toBe("idle");
+    });
   });
 });
 
@@ -950,4 +1038,5 @@ describe("thread store — postback", () => {
     expect(ts).toHaveLength(1);
     expect(ts[0]).toMatchObject({ role: "user", postback: { label: "Approve" } });
   });
+
 });

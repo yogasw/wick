@@ -835,14 +835,93 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"Each row reports next_run_at (the next fire, absent once terminal); run_at is sent only for one-shots, where it is the same thing. " +
 				"Delivery is polled every 30s, so a fire lands anywhere from ~0 to ~30s after its nominal time (whatever the distance to the next tick is) — never promise second-level precision. run_now pokes the poller, so a manual fire lands within a second or two. " +
 				"Pausing/resuming does not shift a schedule either: a resumed schedule lands on the slot it would have hit anyway. " +
-				"You can only touch schedules for a session you own or a project you can access (admins: anything).",
+				"You can only touch schedules for a session you own or a project you can access (admins: anything). " +
+				"TWO TYPES. type=message (default) delivers the message as a turn on EVERY fire — each fire costs an LLM turn. " +
+				"type=watch WAITS FOR A CONDITION with no LLM: wick runs `steps` every 10s (default) and wakes you ONCE — when it finishes (success, fail or error) — then the watch is done. " +
+				"on_match=continue instead KEEPS RUNNING after a match and wakes you only when the match is NEW (dedup on the last check step's extract, else on the output) — use it to be told about new data (a new build, a new ticket); stop it with action=cancel. " +
+				"run_at on a watch runs it ONCE at that time and tells you the result whatever it is (matched / not yet / error), then it is done. " +
+				"Use a watch — never a message with every=30s — to wait for a pipeline, build, deploy or status. Keep it to a few steps; branching, loops or many sources belong in a wick workflow. " +
+				"CREATE A WATCH IN ONE CALL: action=create type=watch message=<what to do once it matches> steps=[…] (defaults: every=10s, match=all, on_match=stop, timeout 24h for every / off for cron, no maximum, timeout=\"off\" runs until match/cancel; names auto). " +
+				"STEP SCHEMA: {kind:connector, tool_id:\"conn:<connector_id>/<op>[@<account_id>]\", params:{…}} — same as wick_execute (get the op schema with wick_get first); " +
+				"{kind:check, rules:[{path, op, value}], fail_rules:[…], match:all|any, extract:{name:path}} — tests the previous step's JSON, no code; " +
+				"{kind:bash, script, timeout_sec≤120} — bash -c in the project folder, input on stdin and $PREV, needs Bash allowed for your agent. " +
+				"Any step may add on_ok:\"next\"(default)|\"done\" and on_fail:\"done\"|\"pending\" (see ERRORS). " +
+				"CONTRACT — EVERY step, at any position, ends one of 3 ways: OK → next step (on the last step, or with on_ok=done: finish, outcome success, you get that step's output); " +
+				"PENDING → stop this tick, retry next tick, no LLM; FAIL → see ERRORS. " +
+				"Per kind: connector ok = success, fail = error/timeout; bash exit 0 = ok, exit 1 = pending (always), other exit/timeout = fail; " +
+				"check rules met = ok, not met = pending, any fail_rule met = fail (outcome fail — later steps do not run). " +
+				"ERRORS (connector error/timeout, bash exit other than 0/1) on an every/cron watch are retried next tick and logged as result=error; after 5 in a row you get ONE notice (per error text) and the watch keeps running — set on_fail=\"done\" on a step to finish the watch as failed on its first error instead. " +
+				"fail_rules met = explicit fail: one notice with stopped_at, reason and output, the watch is done (outcome fail), in stop and continue mode alike. " +
+				"Timeout without finishing → one notice with outcome=timeout (continue mode: a short closing notice with how many notices were sent). " +
+				"CHECK OPS: equals, not_equals, in, not_in (value = array), contains, not_contains, regex, exists, not_exists, gt, lt; path is a dot path (steps.0.name indexes arrays); a missing path never matches. " +
+				"EXAMPLE Bitbucket pipeline → docker image (IN_PROGRESS = pending, polling without LLM; FAILED = you get the reason; COMPLETED = you get the image): " +
+				"{\"action\":\"create\",\"type\":\"watch\",\"message\":\"Pipeline done — deploy the image, or report why it failed\",\"steps\":[" +
+				"{\"name\":\"pipeline\",\"kind\":\"connector\",\"tool_id\":\"conn:<bitbucket_id>/get_pipeline\",\"params\":{\"workspace\":\"<ws>\",\"repo_slug\":\"<repo>\",\"pipeline_uuid\":\"{<uuid>}\"}}," +
+				"{\"name\":\"selesai?\",\"kind\":\"check\",\"rules\":[{\"path\":\"state.name\",\"op\":\"equals\",\"value\":\"COMPLETED\"}],\"fail_rules\":[{\"path\":\"state.result.name\",\"op\":\"in\",\"value\":[\"FAILED\",\"ERROR\",\"STOPPED\"]}]}," +
+				"{\"name\":\"image\",\"kind\":\"bash\",\"script\":\"echo \\\"registry/app:$(jq -r .build_number)\\\"\"}]}. " +
+				"EXAMPLE notify as soon as a release tag exists (check with on_ok=done): steps=[{\"kind\":\"connector\",\"tool_id\":\"conn:<github_id>/get_latest_release\",\"params\":{…},\"on_fail\":\"pending\"}," +
+				"{\"name\":\"tag ada?\",\"kind\":\"check\",\"on_ok\":\"done\",\"rules\":[{\"path\":\"tag_name\",\"op\":\"regex\",\"value\":\"^v1\\\\.4\"}]}]. " +
+				"The create response names the id, steps, next check and timeout. " +
+				"DIAGNOSE & FIX: action=runs id [result=error] → each run: run id, time, type, result, outcome, duration, stopped_at {index,name,kind,exit_code,decision: ok→done|pending|fail→done|fail→pending}, one-line reason " +
+				"(\"step 2 'check 2': state.name = IN_PROGRESS (menunggu COMPLETED)\", \"step 1 'bash 1': exit 2 — jq: error\", \"step 1 'connector 1': error 404 not found\"); " +
+				"action=run id run_id → every step: params (redacted), exit code, stdout/stderr ≤16KB, check verdicts {path,op,want,got,ok}, error, duration. " +
+				"action=test id [steps=[…] unsaved] runs ONCE now, delivers nothing, changes nothing, returns the record. action=update id steps=[…] saves a fix (steps_rev +1). " +
+				"action=resume revives a failed/done watch. action=delete id removes it with its history (action=cancel only stops it). " +
+				"Only a watch's owner (or an admin) can change, test, read or delete it; limits: 10 live watches per user, 8 steps, 16KB script, 32 rules. Results are redacted and fenced as untrusted data. " +
+				"Message schedules keep a run history too (action=runs).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"action": map[string]any{
 						"type":        "string",
-						"enum":        []string{"create", "list", "cancel", "pause", "resume", "reschedule", "run_now"},
-						"description": "create | list | cancel | pause | resume | reschedule | run_now.",
+						"enum":        []string{"create", "list", "cancel", "delete", "pause", "resume", "reschedule", "update", "run_now", "test", "runs", "run"},
+						"description": "create | list | cancel (stop, keep history) | delete (remove row + history) | pause | resume (also revives a failed/done watch) | reschedule | update (= reschedule; replace a watch's steps) | run_now | test (watch dry run) | runs | run.",
+					},
+					"type": map[string]any{
+						"type":        "string",
+						"enum":        []string{"message", "watch"},
+						"description": "action=create: 'message' (default) delivers the message on every fire; 'watch' runs steps every fire with no LLM and delivers once when the last step matches (on_match=continue: on every NEW match). Watch takes every (≥10s, default 10s), cron, or run_at (one run, result always delivered).",
+					},
+					"on_match": map[string]any{
+						"type":        "string",
+						"enum":        []string{"stop", "continue"},
+						"description": "type=watch (create, or update/reschedule): what a match does. 'stop' (default) notifies once and finishes. 'continue' notifies and keeps running, notifying again only when the match is new — the dedup key is the extract of the last check step that has one (else the output), so extract ONLY what marks new data (e.g. {build: build_number, branch: target.ref_name}), never durations or timestamps. Ends on timeout, cancel or fail_rules.",
+					},
+					"steps": map[string]any{
+						"type": "array",
+						"description": "type=watch (create, or reschedule to replace them): ordered steps, 1-8. kind=check: {\"kind\":\"check\",\"match\":\"all\",\"rules\":[{\"path\":\"state.name\",\"op\":\"equals\",\"value\":\"COMPLETED\"}],\"fail_rules\":[...],\"extract\":{\"state\":\"state.name\"}} (never first — it reads the previous step's JSON). " +
+							"{\"name\":\"get pipeline\",\"kind\":\"connector\",\"tool_id\":\"conn:<connector_id>/<op>[@<account_id>]\",\"params\":{...}} — same tool_id/params as wick_execute (fetch the op schema first). " +
+							"{\"name\":\"check\",\"kind\":\"bash\",\"script\":\"jq -e '.state.name==\\\"COMPLETED\\\"' >/dev/null && echo \\\"$PREV\\\" || exit 1\",\"timeout_sec\":30} — exit 0 matched, 1 pending, else error. kind=go is not supported.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"name":        map[string]any{"type": "string"},
+								"kind":        map[string]any{"type": "string", "enum": []string{"connector", "bash", "check"}},
+								"match":       map[string]any{"type": "string", "enum": []string{"all", "any"}},
+								"rules":       map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
+								"fail_rules":  map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
+								"extract":     map[string]any{"type": "object"},
+								"tool_id":     map[string]any{"type": "string"},
+								"params":      map[string]any{"type": "object"},
+								"script":      map[string]any{"type": "string"},
+								"timeout_sec": map[string]any{"type": "integer"},
+								"on_ok":       map[string]any{"type": "string", "enum": []string{"next", "done"}},
+								"on_fail":     map[string]any{"type": "string", "enum": []string{"done", "pending"}, "description": "On an error: every/cron watches retry by default (pending); \"done\" set here finishes the watch as failed on the first error. A check step's fail_rules always finish it unless this is \"pending\"."},
+							},
+							"required": []string{"kind"},
+						},
+					},
+					"result": map[string]any{
+						"type":        "string",
+						"description": "action=runs: only runs with this result — error, pending, matched (watch) or delivered, failed (message). result=error is the place to start when a watch fails.",
+					},
+					"timeout": map[string]any{
+						"type":        "string",
+						"description": "type=watch: stop after this long (one timeout notice). Default 24h with every, off with cron (and run_at); \"off\" (or 0/none) = no limit — runs until match, fail or cancel. No maximum, e.g. 30m, 6h, 48h, 7d.",
+					},
+					"run_id": map[string]any{
+						"type":        "string",
+						"description": "action=run: the run id from action=runs.",
 					},
 					"status": map[string]any{
 						"type":        "string",
@@ -876,7 +955,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"run_at": map[string]any{
 						"type":        "string",
-						"description": "One-shot timing. RFC3339 (2026-07-09T12:40:00Z) or a relative duration, with or without the '+' (e.g. 30s, +90m, 2h, +1d). Seconds/minutes/hours/days all work. Must be in the future. Omit when using every/cron.",
+						"description": "One-shot timing. RFC3339 (2026-07-09T12:40:00Z) or a relative duration, with or without the '+' (e.g. 30s, +90m, 2h, +1d). Seconds/minutes/hours/days all work. Must be in the future. Omit when using every/cron. Works for type=watch too: the steps run once then and the result is always delivered.",
 					},
 					"every": map[string]any{
 						"type":        "string",
@@ -904,7 +983,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"id": map[string]any{
 						"type":        "string",
-						"description": "action=cancel/pause/resume/reschedule: the schedule id (sm_...).",
+						"description": "action=cancel/pause/resume/reschedule/run_now/runs/run: the schedule id (sm_...).",
 					},
 				},
 				"required": []string{"action"},

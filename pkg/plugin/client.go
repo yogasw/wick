@@ -21,6 +21,10 @@ type ExecCall struct {
 	Creds     map[string]string
 	RequestID string
 	SessionID string
+	// InstanceID / CallerUserID mirror the host Ctx so the plugin-side Ctx
+	// answers c.InstanceID() and c.CallerUserID() the same way.
+	InstanceID   string
+	CallerUserID string
 }
 
 // ExecResult is what one plugin operation returns: the result JSON plus the
@@ -54,11 +58,13 @@ func (c *grpcClient) Execute(ctx context.Context, call ExecCall) (ExecResult, er
 		return ExecResult{}, fmt.Errorf("marshal input: %w", err)
 	}
 	resp, err := c.inner.Execute(ctx, &pb.ExecuteRequest{
-		Operation: call.Operation,
-		ArgsJson:  args,
-		Creds:     call.Creds,
-		RequestId: call.RequestID,
-		SessionId: call.SessionID,
+		Operation:    call.Operation,
+		ArgsJson:     args,
+		Creds:        call.Creds,
+		RequestId:    call.RequestID,
+		SessionId:    call.SessionID,
+		InstanceId:   call.InstanceID,
+		CallerUserId: call.CallerUserID,
 	})
 	if err != nil {
 		return ExecResult{}, fmt.Errorf("plugin transport: %w", err)
@@ -77,11 +83,13 @@ func (c *grpcClient) ExecuteStream(ctx context.Context, call ExecCall) (ExecResu
 		return ExecResult{}, fmt.Errorf("marshal input: %w", err)
 	}
 	stream, err := c.inner.ExecuteStream(ctx, &pb.ExecuteRequest{
-		Operation: call.Operation,
-		ArgsJson:  args,
-		Creds:     call.Creds,
-		RequestId: call.RequestID,
-		SessionId: call.SessionID,
+		Operation:    call.Operation,
+		ArgsJson:     args,
+		Creds:        call.Creds,
+		RequestId:    call.RequestID,
+		SessionId:    call.SessionID,
+		InstanceId:   call.InstanceID,
+		CallerUserId: call.CallerUserID,
 	})
 	if err != nil {
 		return ExecResult{}, fmt.Errorf("plugin transport: %w", err)

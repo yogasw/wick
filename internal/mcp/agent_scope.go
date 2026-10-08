@@ -39,3 +39,10 @@ func withAgentScope(ctx context.Context, sessionID string) context.Context {
 	}
 	return connectors.WithAgentScope(ctx, (*p)(ctx, sessionID))
 }
+
+// WithAgentScope is withAgentScope for callers outside this package — a
+// watch schedule's connector step, which must be narrowed by the same agent
+// checklist as the session it fires into.
+func WithAgentScope(ctx context.Context, sessionID string) context.Context {
+	return withAgentScope(ctx, sessionID)
+}

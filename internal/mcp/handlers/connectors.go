@@ -691,6 +691,59 @@ func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service
 	return res.ResponseJSON, nil
 }
 
+// ExecuteAs runs one connector op for a caller that has no HTTP request — a
+// watch schedule's connector step. It takes the same route as wick_execute:
+// session-workspace instance resolution, the instance visibility check for
+// the user, then connectors.Service.Execute (per-op gate, agent scope when
+// ctx carries one, account ownership, audit). Nothing here widens access:
+// the user must be the schedule's real run-as identity, with its own tags.
+func ExecuteAs(ctx context.Context, svc *connectors.Service, layout agentconfig.Layout, toolID string, rawParams map[string]any, sessionID string, user *entity.User, tagIDs []string, source entity.ConnectorRunSource) (string, error) {
+	if svc == nil || user == nil {
+		return "", errors.New("connector execution unavailable: no run-as user")
+	}
+	connectorID, opKey, accountID, err := ParseToolIDFull(toolID)
+	if err != nil {
+		return "", err
+	}
+	// Stamp the principal the way the auth middleware does, so ownership
+	// checks that read it from ctx (callerIDFromCtx) see the same user.
+	ctx = login.WithUser(ctx, user, tagIDs)
+	sessionTarget, isSession, err := SessionInstanceForID(layout, sessionID, connectorID)
+	if err != nil {
+		return "", err
+	}
+	if !isSession {
+		allowed, verr := svc.IsVisibleTo(ctx, connectorID, user.ID, tagIDs, user.IsAdmin())
+		if verr != nil || !allowed {
+			return "", errors.New("tool_id not found or not accessible")
+		}
+	}
+	res, execErr := svc.Execute(ctx, connectors.ExecuteParams{
+		ConnectorID:     connectorID,
+		OperationKey:    opKey,
+		Input:           StringifyArgs(rawParams),
+		RawInput:        rawParams,
+		Source:          source,
+		UserID:          user.ID,
+		IsAdmin:         user.IsAdmin(),
+		TagIDs:          tagIDs,
+		AccountID:       accountID,
+		SessionInstance: sessionTarget,
+		SessionID:       sessionID,
+	})
+	if execErr != nil {
+		body := execErr.Error()
+		if res != nil && res.ErrorMessage != "" {
+			body = res.ErrorMessage
+		}
+		if res != nil && res.ResponseJSON != "" {
+			body = res.ResponseJSON
+		}
+		return "", errors.New(body)
+	}
+	return res.ResponseJSON, nil
+}
+
 // wickExecuteBatch runs many calls in parallel, each with its own optional
 // deadline, and returns a per-call result array. A failed or timed-out call
 // never stops the others — the response is always partial-tolerant.

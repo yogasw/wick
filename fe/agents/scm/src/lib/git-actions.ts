@@ -18,13 +18,29 @@ import {
 const sid = () => get(sessionID);
 const repo = () => get(activeRepo);
 
+// gitErrorText trims git's own multi-line explanation off a server error so
+// the toast carries the one line that says what happened.
+function gitErrorText(e: unknown): string {
+  const s = e instanceof Error ? e.message : String(e);
+  const cuts = [s.indexOf(": git "), s.indexOf(": fatal:")].filter((i) => i > 0);
+  return cuts.length ? s.slice(0, Math.min(...cuts)) : s.split("\n")[0];
+}
+
 export async function stagePaths(paths: string[]): Promise<void> {
-  await api.stage(sid(), repo(), paths);
+  try {
+    await api.stage(sid(), repo(), paths);
+  } catch (e) {
+    toastError("Stage failed", gitErrorText(e));
+  }
   await loadStatus();
 }
 
 export async function unstagePaths(paths: string[]): Promise<void> {
-  await api.unstage(sid(), repo(), paths);
+  try {
+    await api.unstage(sid(), repo(), paths);
+  } catch (e) {
+    toastError("Unstage failed", gitErrorText(e));
+  }
   await loadStatus();
 }
 

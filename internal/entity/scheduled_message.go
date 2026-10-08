@@ -145,6 +145,29 @@ type ScheduledMessage struct {
 	Attempts int `gorm:"default:0"`
 	// LastError holds the most recent delivery failure reason.
 	LastError string `gorm:"type:text"`
+
+	// Type is "message" (deliver Message as a turn on every fire — the
+	// original behavior, and the default for legacy rows) or "watch" (run
+	// Steps on every fire without waking an LLM, and deliver ONE message
+	// only once the last step reports a match). See schedule/watch.go.
+	Type string `gorm:"type:varchar(16);not null;default:'message'"`
+	// Steps is the JSON array of watch steps (schedule.Step). Empty for a
+	// "message" schedule.
+	Steps string `gorm:"type:text"`
+	// LastResult is the outcome of the most recent watch run: matched |
+	// pending | error. Empty until the first run, and on message rows.
+	LastResult string `gorm:"type:varchar(16)"`
+	// ConsecutiveErrors is the error streak of an every/cron watch, which
+	// rides errors out and tells the session after a few in a row.
+	ConsecutiveErrors int `gorm:"default:0"`
+	// StepsRev counts edits to Steps (1 = as created). Every watch run records
+	// the revision it ran, so history shows which steps produced which result.
+	StepsRev int `gorm:"default:0"`
+	// OnMatch / WatchNotified are derived for display, never stored: on_match
+	// lives inside Steps and the notice count in the watch's state file.
+	OnMatch       string `gorm:"-"`
+	WatchNotified int    `gorm:"-"`
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -159,8 +182,8 @@ const (
 // stable across builds.
 const (
 	ScheduledStatusPending   = "pending" // one-shot, not yet fired
-	ScheduledStatusActive    = "active"   // recurring, live
-	ScheduledStatusDone      = "done"     // finished (one-shot fired, or recurring hit its stop condition)
+	ScheduledStatusActive    = "active"  // recurring, live
+	ScheduledStatusDone      = "done"    // finished (one-shot fired, or recurring hit its stop condition)
 	ScheduledStatusCancelled = "cancelled"
 	ScheduledStatusFailed    = "failed"
 	// ScheduledStatusPaused is a REPORTED status only, never stored: a paused
@@ -168,6 +191,19 @@ const (
 	// paused=true beside it. Derived by EffectiveStatus so callers have a
 	// status value to read and to filter on.
 	ScheduledStatusPaused = "paused"
+)
+
+// Schedule types. An empty value (legacy rows) reads as "message".
+const (
+	ScheduledTypeMessage = "message"
+	ScheduledTypeWatch   = "watch"
+)
+
+// Watch run results, stored in LastResult.
+const (
+	WatchResultMatched = "matched"
+	WatchResultPending = "pending"
+	WatchResultError   = "error"
 )
 
 // ScheduledCreatedBy values.
@@ -190,6 +226,18 @@ const (
 	// time and reuses that session when it already exists.
 	ScheduledSessionTemplate = "template"
 )
+
+// IsWatch reports whether this schedule polls steps instead of delivering a
+// message on every fire.
+func (s *ScheduledMessage) IsWatch() bool { return s.Type == ScheduledTypeWatch }
+
+// EffectiveType normalizes the empty value legacy rows carry to "message".
+func (s *ScheduledMessage) EffectiveType() string {
+	if s.Type == "" {
+		return ScheduledTypeMessage
+	}
+	return s.Type
+}
 
 // IsRecurring reports whether this schedule repeats.
 func (s *ScheduledMessage) IsRecurring() bool { return s.Kind == ScheduledKindRecurring }
@@ -300,6 +348,12 @@ func (s *ScheduledMessage) BeforeCreate(tx *gorm.DB) error {
 	if s.Kind == "" {
 		s.Kind = ScheduledKindOnce
 	}
+	if s.Type == "" {
+		s.Type = ScheduledTypeMessage
+	}
+	if s.Type == ScheduledTypeWatch && s.StepsRev == 0 {
+		s.StepsRev = 1
+	}
 	if s.SessionMode == "" {
 		s.SessionMode = ScheduledSessionExisting
 	}
@@ -321,4 +375,14 @@ func (s *ScheduledMessage) BeforeCreate(tx *gorm.DB) error {
 		s.Status = s.LiveStatus()
 	}
 	return nil
+}
+
+// ScheduleLease is a named, expiring lock row. The schedule runner holds
+// "watch-runner" while it schedules watches in memory, so two wick
+// processes sharing a database (a reload handover, a second instance) never
+// both run the same watch. Renewed every ~30s, not per tick.
+type ScheduleLease struct {
+	Name      string    `gorm:"type:varchar(64);primaryKey"`
+	Holder    string    `gorm:"type:varchar(64);not null"`
+	ExpiresAt time.Time `gorm:"not null"`
 }

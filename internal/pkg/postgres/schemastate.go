@@ -85,6 +85,7 @@ var migratedModels = []any{
 	&entity.PluginReplacement{},
 	&entity.ConnectorState{},
 	&entity.ScheduledMessage{},
+	&entity.ScheduleLease{},
 	// Multi-agent sub-agent delegation — see
 	// internal/planning/todo/multi-agent/design.md. Profiles are the
 	// reusable role definitions; delegations are the per-call audit +
