@@ -580,6 +580,7 @@ func Register(r tool.Router) {
 	// into this session. Owner/admin gated; the runner delivers them.
 	r.GET("/sessions/{id}/schedules", sessionSchedulesListUI)
 	r.POST("/sessions/{id}/schedules", sessionSchedulesCreateUI)
+	r.POST("/sessions/{id}/schedules/watch-test", sessionSchedulesWatchTestUI)
 	r.DELETE("/sessions/{id}/schedules/{sid}", sessionSchedulesCancelUI)
 	r.POST("/sessions/{id}/schedules/{sid}/pause", func(c *tool.Ctx) { sessionSchedulesMutateUI(c, "pause") })
 	r.POST("/sessions/{id}/schedules/{sid}/resume", func(c *tool.Ctx) { sessionSchedulesMutateUI(c, "resume") })
@@ -596,6 +597,12 @@ func Register(r tool.Router) {
 	r.POST("/scheduled/{sid}/resume", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "resume") })
 	r.POST("/scheduled/{sid}/reschedule", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "reschedule") })
 	r.POST("/scheduled/{sid}/run-now", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "run_now") })
+	// Run history of any schedule (files under <agents>/schedules/<id>/runs/).
+	r.GET("/scheduled/{sid}/runs", scheduleWatchRunsUI)
+	r.GET("/scheduled/{sid}/runs/{rid}", scheduleWatchRunUI)
+	r.POST("/scheduled/{sid}/test", scheduleWatchTestUI)
+	r.POST("/scheduled/{sid}/delete", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "delete") })
+	r.POST("/scheduled/{sid}/steps", scheduleWatchStepsUI)
 
 	// No standalone /projects list page — the sidebar Projects section is
 	// the canonical project nav. "+ New" → /projects/new (create page),
@@ -3566,6 +3573,7 @@ func snapshotEvents(sessionID string) []Event {
 	// reload. The pool path above already learned this; the disk fallback had
 	// not, and it is the path taken whenever the process serving the page is
 	// not the one running the agent.
+	replayFrom := len(out)
 	var textSoFar strings.Builder
 	for _, e := range entries {
 		ev := Event{
@@ -3607,6 +3615,16 @@ func snapshotEvents(sessionID string) []Event {
 			SessionID: sessionID,
 			Type:      "text_snapshot",
 			Data:      t,
+		})
+	}
+	// No pool entry means no process: close the replayed turn with the
+	// "killed" pill promised above. Without it the FE took the replay for a
+	// running turn and showed "thinking…" with no edge left to clear it.
+	if len(out) > replayFrom {
+		out = append(out, Event{
+			SessionID: sessionID,
+			Type:      "lifecycle",
+			Lifecycle: "killed",
 		})
 	}
 	return out

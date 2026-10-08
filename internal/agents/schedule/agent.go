@@ -85,6 +85,9 @@ func (s *Store) ReleaseTargeting(ctx context.Context, projectID string, sessionI
 // Delete removes a schedule row outright — the drawer's Delete, as opposed
 // to Cancel, which keeps a terminal row as history.
 func (s *Store) Delete(ctx context.Context, id string) error {
+	// Read first: a watch's run history lives outside the row and goes too.
+	var m entity.ScheduledMessage
+	_ = s.db.WithContext(ctx).First(&m, "id = ?", id).Error
 	res := s.db.WithContext(ctx).Where("id = ?", id).Delete(&entity.ScheduledMessage{})
 	if res.Error != nil {
 		return res.Error
@@ -92,7 +95,17 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if res.RowsAffected == 0 {
 		return ErrNotFound
 	}
+	s.removeRuns(m)
+	changed()
 	return nil
+}
+
+// removeRuns deletes a watch's run history, when the store knows where data
+// lives.
+func (s *Store) removeRuns(m entity.ScheduledMessage) {
+	if s.layout.BaseDir != "" {
+		RemoveWatchRuns(s.layout, m)
+	}
 }
 
 // DeleteTargeting removes every schedule (any status) aimed at the project
@@ -102,6 +115,13 @@ func (s *Store) DeleteTargeting(ctx context.Context, projectID string, sessionID
 	if cond == "" {
 		return 0, nil
 	}
+	var watches []entity.ScheduledMessage
+	_ = s.db.WithContext(ctx).Select("id", "type").Where(cond, args...).Find(&watches).Error
 	res := s.db.WithContext(ctx).Where(cond, args...).Delete(&entity.ScheduledMessage{})
+	if res.Error == nil {
+		for _, m := range watches {
+			s.removeRuns(m)
+		}
+	}
 	return res.RowsAffected, res.Error
 }

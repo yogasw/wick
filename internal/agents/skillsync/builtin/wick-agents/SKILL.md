@@ -45,9 +45,9 @@ What this means practically: a queued session is not stuck, it is waiting. Check
 
 ## Scheduled messages
 
-A message can be injected into a session later — one-shot or recurring — without involving the workflow engine. Either the agent schedules it over MCP, or a human does from the UI. The Scheduled page is a cross-session monitor with inline pause / resume / cancel.
+`wick_schedule_message` puts work on the clock without the workflow engine — the agent schedules it over MCP, or a human does from the UI; the Scheduled page is a cross-session monitor (Message/Watch badge, pause / resume / cancel / run now, a watch's run history).
 
-Reach for this when the need is "say this again later in this same conversation". Reach for a workflow when the need is a multi-step pipeline.
+Two types: `message` wakes the agent on every fire ("check back later", "every Monday write the report"); `watch` polls a condition in wick with connector / check / bash steps and wakes the agent once when it is met (pipeline, build, deploy, status). Details, rules and copy-ready examples: the `wick-schedules` skill. Reach for a workflow when the need is a multi-step pipeline.
 
 ## Where the pages are
 

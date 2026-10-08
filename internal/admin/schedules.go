@@ -118,9 +118,12 @@ func (h *Handler) schedulesAdminPage(w http.ResponseWriter, r *http.Request) {
 	names := h.userLabels(ctx)
 	all := make([]adminview.ScheduleAdminRow, 0, len(rows))
 	for _, m := range rows {
+		schedule.OverlayLive(&m) // a watch's latest result lives in the runner
 		row := adminview.ScheduleAdminRow{
 			ID:          m.ID,
 			Message:     m.Message,
+			Type:        m.EffectiveType(),
+			LastResult:  m.LastResult,
 			Kind:        m.Kind,
 			Status:      m.EffectiveStatus(),
 			Cron:        m.Cron,
