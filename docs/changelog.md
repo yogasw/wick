@@ -10,6 +10,24 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.15.3](https://github.com/yogasw/wick/compare/v1.15.2...v1.15.3) — Watch Schedules
+
+_Released on 2026-10-08_
+
+### Added
+-   **Watch Schedules:** Introduced a new `schedule type=watch` that polls connector, bash, and check steps without waking the agent. These schedules run 1-8 steps on `every`/`cron`/`run_at` without an LLM, only waking the session on a match, repeated error, or timeout. Features include `on_match stop/continue` with `extract-hash` deduplication, re-checking Bash steps on every run, sandboxed Bash steps, and redacted output. This feature is exposed via MCP, the Schedule panel, and the Scheduled monitor, and documented in the `wick-schedules` skill.
+
+### Fixed
+-   **Agents:** Resolved an issue where grouped model pins (e.g., `<path>@<model>`) for CLI providers like OMP and OpenCode were incorrectly dropped, causing sessions to fall back to default models. Pins are now correctly kept for providers that register model sets.
+-   **Jenkins Connector:** Fixed `build_job` failing with "403 No valid crumb was included in the request" by ensuring the Jenkins CSRF crumb's session cookie (`JSESSIONID`) is sent along with the crumb header when triggering a build. The Jenkins plugin version is bumped to 0.2.2.
+-   **Connector Plugins:** Corrected an issue where connector plugins received an empty instance ID and caller user ID in their context. The instance ID and caller user ID are now properly passed to connector plugins via `ExecuteRequest` and used in `NewCtx` and `SetCallerUserID`, ensuring per-instance state management works correctly. This change is backwards compatible.
+-   **Watch Schedules:** Ensured that `watch` schedule bash runner spawn sites use `safeexec` and have their environment scrubbed, preventing direct `os/exec` calls and addressing environment security concerns.
+-   **Scheduler:** The scheduler now correctly stops firing during an upgrade drain, preventing unnecessary operations during system maintenance.
+-   **UI/UX:** Addressed issues where a stuck "thinking…" state after a killed turn remained open; it is now properly closed. Failed stage/unstage operations in the Source panel now display a toast notification, providing clearer feedback to the user.
+
+---
+
+
 ## [v1.15.2](https://github.com/yogasw/wick/compare/v1.15.1...v1.15.2) — Termux
 
 _Released on 2026-10-07_
