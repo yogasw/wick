@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/channels/telegram"
+	"github.com/yogasw/wick/internal/agents/schedule"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/tool"
@@ -163,19 +164,19 @@ func apiTeamAgentScheduledRuns(c *tool.Ctx) {
 	if !ok {
 		return
 	}
+	// History files first (every fire since they exist); a schedule older
+	// than that is reconstructed from its sessions' conversations.
 	var runs []scheduleRunVM
-	seen := map[string]bool{}
-	for _, sid := range []string{m.SessionID, m.LastSessionID} {
-		if sid == "" || seen[sid] {
-			continue
+	if files, ferr := schedule.ListWatchRuns(globalLayout, *m, scheduleRunsLimit); ferr == nil && len(files) > 0 {
+		for _, r := range files {
+			runs = append(runs, scheduleRunVM{At: r.StartedAt, SessionID: r.SessionID, Status: runStatusOf(r.Result), Error: r.Error})
 		}
-		seen[sid] = true
-		turns, err := loadConversation(globalLayout, sid)
-		if err != nil {
+	} else {
+		var err error
+		if runs, err = conversationScheduleRuns(*m); err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		runs = append(runs, scheduleRunsIn(turns, m.ID, sid)...)
 	}
 	slices.SortFunc(runs, func(a, b scheduleRunVM) int { return b.At.Compare(a.At) })
 	if len(runs) > scheduleRunsLimit {
@@ -242,3 +243,59 @@ func editAgentSchedule(c *tool.Ctx, p entity.AgentPersona, m *entity.ScheduledMe
 	}
 	return globalSchedule.Reschedule(c.Context(), m.ID, patch)
 }
+
+// conversationScheduleRuns reconstructs a schedule's runs from the
+// conversations of the sessions it fired into — the history of schedules
+// that ran before run files existed. Unsorted.
+func conversationScheduleRuns(m entity.ScheduledMessage) ([]scheduleRunVM, error) {
+	var runs []scheduleRunVM
+	seen := map[string]bool{}
+	for _, sid := range []string{m.SessionID, m.LastSessionID} {
+		if sid == "" || seen[sid] {
+			continue
+		}
+		seen[sid] = true
+		turns, err := loadConversation(globalLayout, sid)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, scheduleRunsIn(turns, m.ID, sid)...)
+	}
+	return runs, nil
+}
+
+// runStatusOf maps a run file's result onto the drawer's ok/failed/running.
+func runStatusOf(result string) string {
+	switch result {
+	case schedule.RunResultDelivered, entity.WatchResultMatched:
+		return "ok"
+	case schedule.RunResultFailed, entity.WatchResultError:
+		return "failed"
+	default:
+		return result
+	}
+}
+
+// legacyScheduleRuns is the schedule package's fallback reader: the
+// conversation reconstruction, as run summaries, newest first.
+func legacyScheduleRuns(m entity.ScheduledMessage) []schedule.RunSummary {
+	if globalLayout.BaseDir == "" {
+		return nil
+	}
+	runs, err := conversationScheduleRuns(m)
+	if err != nil {
+		return nil
+	}
+	slices.SortFunc(runs, func(a, b scheduleRunVM) int { return b.At.Compare(a.At) })
+	out := make([]schedule.RunSummary, 0, len(runs))
+	for _, r := range runs {
+		res := schedule.RunResultDelivered
+		if r.Status == "failed" {
+			res = schedule.RunResultFailed
+		}
+		out = append(out, schedule.RunSummary{Type: entity.ScheduledTypeMessage, StartedAt: r.At, Result: res, SessionID: r.SessionID, Error: r.Error})
+	}
+	return out
+}
+
+func init() { schedule.SetLegacyRunReader(legacyScheduleRuns) }

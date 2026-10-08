@@ -252,6 +252,9 @@ func agentScheduleOf(c *tool.Ctx, p entity.AgentPersona) (*entity.ScheduledMessa
 	if err == nil {
 		pid, sids := agentScheduleScope(p)
 		if (pid != "" && m.ProjectID == pid) || (m.SessionID != "" && slices.Contains(sids, m.SessionID)) {
+			if !watchOwnerOK(c, *m) {
+				return nil, false
+			}
 			return m, true
 		}
 	}

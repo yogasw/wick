@@ -43,6 +43,17 @@ func (l Layout) WorkflowFile(id string) string {
 func (l Layout) WorkflowDraftFile(id string) string {
 	return filepath.Join(l.WorkflowDir(id), "workflow.draft.json")
 }
+
+// SchedulesDir holds per-schedule data (`schedules/<id>/`), beside
+// workflows/: today the run history of every schedule, watch and message.
+func (l Layout) SchedulesDir() string { return filepath.Join(l.BaseDir, "schedules") }
+
+// ScheduleDir is the folder for one schedule (`schedules/<id>/`).
+func (l Layout) ScheduleDir(id string) string { return filepath.Join(l.SchedulesDir(), id) }
+
+// ScheduleRunsDir holds one JSON file per run (`schedules/<id>/runs/`).
+func (l Layout) ScheduleRunsDir(id string) string { return filepath.Join(l.ScheduleDir(id), "runs") }
+
 func (l Layout) WorkflowRunsDir(id string) string {
 	return filepath.Join(l.WorkflowDir(id), "runs")
 }

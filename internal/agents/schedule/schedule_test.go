@@ -21,7 +21,7 @@ func newTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&entity.ScheduledMessage{}); err != nil {
+	if err := db.AutoMigrate(&entity.ScheduledMessage{}, &entity.ScheduleLease{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return NewStore(db)

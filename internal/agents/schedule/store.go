@@ -12,10 +12,13 @@ package schedule
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/entity"
 )
 
@@ -31,15 +34,29 @@ var ErrNotFound = errors.New("scheduled message not found")
 // Store is the DB persistence for scheduled messages.
 type Store struct {
 	db *gorm.DB
+	// layout locates watch run history, so a delete can take it along.
+	// Zero (tests, stdio) leaves the files alone.
+	layout agentconfig.Layout
 }
 
 func NewStore(db *gorm.DB) *Store { return &Store{db: db} }
+
+// SetLayout tells the store where agent data lives, so deleting a watch also
+// removes its run history.
+func (s *Store) SetLayout(layout agentconfig.Layout) *Store {
+	s.layout = layout
+	return s
+}
+
+// Layout is the layout set by SetLayout.
+func (s *Store) Layout() agentconfig.Layout { return s.layout }
 
 // Create persists a new pending schedule and returns the stored row.
 func (s *Store) Create(ctx context.Context, m *entity.ScheduledMessage) (*entity.ScheduledMessage, error) {
 	if err := s.db.WithContext(ctx).Create(m).Error; err != nil {
 		return nil, err
 	}
+	changed()
 	return m, nil
 }
 
@@ -249,6 +266,7 @@ func (s *Store) Cancel(ctx context.Context, id string) error {
 	if res.RowsAffected == 0 {
 		return ErrNotFound
 	}
+	changed()
 	return nil
 }
 
@@ -304,6 +322,7 @@ func (s *Store) CancelTargeting(ctx context.Context, projectID string, sessionID
 			"run_at":     gorm.Expr("COALESCE(last_run_at, run_at)"),
 			"updated_at": time.Now(),
 		})
+	changed()
 	return res.RowsAffected, res.Error
 }
 
@@ -326,6 +345,7 @@ func (s *Store) SetPaused(ctx context.Context, id string, paused bool, nextRunAt
 	if res.RowsAffected == 0 {
 		return ErrNotFound
 	}
+	changed()
 	return nil
 }
 
@@ -392,6 +412,7 @@ func (s *Store) Reschedule(ctx context.Context, id string, patch SchedulePatch) 
 	if res.RowsAffected == 0 {
 		return ErrNotFound
 	}
+	changed()
 	return nil
 }
 
@@ -466,6 +487,7 @@ func (s *Store) RunNow(ctx context.Context, id string) error {
 	if res.RowsAffected == 0 {
 		return ErrNotFound
 	}
+	changed()
 	return nil
 }
 
@@ -479,10 +501,19 @@ func (s *Store) RunNow(ctx context.Context, id string) error {
 //
 // Returned rows carry the pre-claim values plus RunCount already incremented,
 // so the runner can compute the next fire with advance(row, firedAt, row.RunCount).
+//
+// ClaimDue takes message schedules only. Watches never go through a claim:
+// they are scheduled in memory by the runner (watch_runner.go) under a DB
+// lease, so a pending tick costs no query at all.
 func (s *Store) ClaimDue(ctx context.Context, now time.Time, limit int) ([]entity.ScheduledMessage, error) {
+	return s.claimDue(ctx, now, limit, "type <> ?", entity.ScheduledTypeWatch)
+}
+
+func (s *Store) claimDue(ctx context.Context, now time.Time, limit int, typeCond string, typeArg any) ([]entity.ScheduledMessage, error) {
 	var candidates []entity.ScheduledMessage
 	err := s.db.WithContext(ctx).
 		Where("status IN ? AND paused = ? AND run_at <= ?", liveStatuses, false, now).
+		Where(typeCond, typeArg).
 		Order("run_at ASC").Limit(limit).Find(&candidates).Error
 	if err != nil {
 		return nil, err
@@ -594,4 +625,208 @@ func (s *Store) MarkFailed(ctx context.Context, id, reason string) error {
 			"run_at":     gorm.Expr("COALESCE(last_run_at, run_at)"),
 			"updated_at": time.Now(),
 		}).Error
+}
+
+// WatchOutcome is the state a watch run leaves its row in. The runner keeps
+// the live counters in memory and writes them here only when something worth
+// persisting happened (see watch_runner.go).
+type WatchOutcome struct {
+	Result            string
+	ConsecutiveErrors int
+	LastError         string
+	RunCount          int
+	ManualRuns        int
+	LastRunAt         *time.Time
+	// Status, when set, ends the schedule (done / failed). Empty keeps it
+	// live with run_at = Next.
+	Status        string
+	Next          time.Time
+	LastSessionID string
+	// At is the updated_at stamped on the row, so the runner can tell its
+	// own write from somebody else's edit on the next refresh.
+	At time.Time
+}
+
+// SaveWatchOutcome writes a watch's state after a run. It also clears a
+// finished manual run (manual_fire / pending_run_at).
+func (s *Store) SaveWatchOutcome(ctx context.Context, id, kind string, o WatchOutcome) error {
+	updates := map[string]any{
+		"updated_at":         o.At,
+		"attempts":           0,
+		"last_result":        o.Result,
+		"consecutive_errors": o.ConsecutiveErrors,
+		"last_error":         o.LastError,
+		"run_count":          o.RunCount,
+		"manual_runs":        o.ManualRuns,
+		"manual_fire":        false,
+		"pending_run_at":     nil,
+	}
+	if o.LastRunAt != nil {
+		updates["last_run_at"] = *o.LastRunAt
+	}
+	if o.LastSessionID != "" {
+		updates["last_session_id"] = o.LastSessionID
+	}
+	switch {
+	case o.Status != "":
+		updates["status"] = o.Status
+		updates["run_at"] = gorm.Expr("COALESCE(last_run_at, run_at)")
+	case o.Next.IsZero():
+		updates["status"] = entity.ScheduledStatusDone
+		updates["run_at"] = gorm.Expr("COALESCE(last_run_at, run_at)")
+	default:
+		live := entity.ScheduledStatusPending
+		if kind == entity.ScheduledKindRecurring {
+			live = entity.ScheduledStatusActive
+		}
+		updates["status"] = live
+		updates["run_at"] = o.Next
+	}
+	res := s.db.WithContext(ctx).Model(&entity.ScheduledMessage{}).
+		Where("id = ? AND status IN ?", id, liveStatuses).Updates(updates)
+	if res.Error == nil && res.RowsAffected == 0 {
+		return ErrNotFound // cancelled/finished meanwhile; never resurrect it
+	}
+	return res.Error
+}
+
+// FlushWatchProgress persists a live watch's counters without touching its
+// result — the runner's periodic (≤ 1/min) checkpoint for pending runs.
+func (s *Store) FlushWatchProgress(ctx context.Context, id string, runCount int, lastRunAt *time.Time, next, at time.Time) error {
+	updates := map[string]any{"run_count": runCount, "updated_at": at}
+	if lastRunAt != nil {
+		updates["last_run_at"] = *lastRunAt
+	}
+	if !next.IsZero() {
+		updates["run_at"] = next
+	}
+	return s.db.WithContext(ctx).Model(&entity.ScheduledMessage{}).
+		Where("id = ? AND status IN ? AND manual_fire = ?", id, liveStatuses, false).Updates(updates).Error
+}
+
+// LoadLiveWatches is the runner's one query per refresh: every live watch.
+func (s *Store) LoadLiveWatches(ctx context.Context) ([]entity.ScheduledMessage, error) {
+	var out []entity.ScheduledMessage
+	err := s.db.WithContext(ctx).
+		Where("type = ? AND status IN ?", entity.ScheduledTypeWatch, liveStatuses).
+		Find(&out).Error
+	return out, err
+}
+
+// CountLiveWatches counts an owner's live watches, for the per-user cap.
+func (s *Store) CountLiveWatches(ctx context.Context, ownerUserID string) (int64, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Model(&entity.ScheduledMessage{}).
+		Where("type = ? AND status IN ? AND owner_user_id = ?", entity.ScheduledTypeWatch, liveStatuses, ownerUserID).
+		Count(&n).Error
+	return n, err
+}
+
+// CheckWatchCap refuses one more live watch for ownerUserID once they hold
+// MaxLiveWatchesPerUser. Fail-closed: a count that cannot be read refuses
+// too. Admins are not capped (the caller decides).
+func (s *Store) CheckWatchCap(ctx context.Context, ownerUserID string) error {
+	n, err := s.CountLiveWatches(ctx, ownerUserID)
+	if err != nil {
+		return fmt.Errorf("watch limit could not be checked (%v) — try again", err)
+	}
+	if n >= MaxLiveWatchesPerUser {
+		return fmt.Errorf("watch limit reached: %d live watches per user — cancel one first", MaxLiveWatchesPerUser)
+	}
+	return nil
+}
+
+// AcquireLease takes or renews the named lease for holder until now+ttl.
+// It succeeds when the lease is free, expired, or already holder's — so only
+// one wick process (across a reload handover, or two instances on one DB)
+// runs the watches at a time.
+func (s *Store) AcquireLease(ctx context.Context, name, holder string, ttl time.Duration) (bool, error) {
+	now := time.Now()
+	res := s.db.WithContext(ctx).Model(&entity.ScheduleLease{}).
+		Where("name = ? AND (holder = ? OR expires_at < ?)", name, holder, now).
+		Updates(map[string]any{"holder": holder, "expires_at": now.Add(ttl)})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	if res.RowsAffected == 1 {
+		return true, nil
+	}
+	res = s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).
+		Create(&entity.ScheduleLease{Name: name, Holder: holder, ExpiresAt: now.Add(ttl)})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// ReleaseLease lets the lease go at once (shutdown), so the next process does
+// not wait out the TTL.
+func (s *Store) ReleaseLease(ctx context.Context, name, holder string) error {
+	return s.db.WithContext(ctx).Model(&entity.ScheduleLease{}).
+		Where("name = ? AND holder = ?", name, holder).
+		Update("expires_at", time.Now().Add(-time.Second)).Error
+}
+
+// SetSteps replaces a live watch's steps.
+func (s *Store) SetSteps(ctx context.Context, id, steps string) error {
+	res := s.db.WithContext(ctx).Model(&entity.ScheduledMessage{}).
+		Where("id = ? AND type = ? AND status IN ?", id, entity.ScheduledTypeWatch, liveStatuses).
+		Updates(map[string]any{"steps": steps, "steps_rev": gorm.Expr("steps_rev + 1"), "updated_at": time.Now()})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	changed()
+	return nil
+}
+
+// changed tells the in-process runner a schedule was edited, so a watch it
+// holds in memory picks up a pause / cancel / reschedule / run-now now
+// instead of at the next refresh. A no-op without a running runner.
+func changed() { WakeRunner() }
+
+// ScheduleIDsToKeep is the history sweep's one query: every live schedule,
+// plus finished ones touched since cutoff. A schedules/<id>/ folder whose id
+// is not in the set is an orphan or long finished, and is removed.
+func (s *Store) ScheduleIDsToKeep(ctx context.Context, cutoff time.Time) (map[string]bool, error) {
+	var ids []string
+	if err := s.db.WithContext(ctx).Model(&entity.ScheduledMessage{}).
+		Where("status IN ? OR updated_at >= ?", liveStatuses, cutoff).
+		Pluck("id", &ids).Error; err != nil {
+		return nil, err
+	}
+	keep := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		keep[id] = true
+	}
+	return keep, nil
+}
+
+// Reactivate brings a finished (done) or failed watch back to life: active,
+// unpaused, a fresh error streak and run count, first run at next and a new
+// time limit endsAt (see WatchResumeEndsAt). Message
+// schedules are not reactivated — their done is final.
+func (s *Store) Reactivate(ctx context.Context, id string, next time.Time, endsAt *time.Time) error {
+	var ends any // nil endsAt → NULL: no time limit
+	if endsAt != nil {
+		ends = *endsAt
+	}
+	res := s.db.WithContext(ctx).Model(&entity.ScheduledMessage{}).
+		Where("id = ? AND type = ? AND kind = ? AND status IN ?", id, entity.ScheduledTypeWatch, entity.ScheduledKindRecurring,
+			[]string{entity.ScheduledStatusDone, entity.ScheduledStatusFailed}).
+		Updates(map[string]any{
+			"status": entity.ScheduledStatusActive, "paused": false, "held_by_agent": false,
+			"consecutive_errors": 0, "last_error": "", "last_result": "", "run_count": 0,
+			"manual_fire": false, "pending_run_at": nil, "run_at": next, "ends_at": ends, "updated_at": time.Now(),
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	changed()
+	return nil
 }
