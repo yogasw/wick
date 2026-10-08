@@ -37,9 +37,11 @@ func newExecuteClosure(connKey, opKey string, getConn ConnGetter) connector.Exec
 		}
 		defer lease.Release()
 		res, err := lease.Conn.ExecuteStream(c.Context(), wickplugin.ExecCall{
-			Operation: opKey,
-			Input:     c.Inputs(),
-			Creds:     c.Configs(),
+			Operation:    opKey,
+			Input:        c.Inputs(),
+			Creds:        c.Configs(),
+			InstanceID:   c.InstanceID(),
+			CallerUserID: c.CallerUserID(),
 		})
 		if err != nil {
 			return nil, err
