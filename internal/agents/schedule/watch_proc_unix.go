@@ -8,6 +8,9 @@ import (
 	"os/exec"
 	"strconv"
 	"syscall"
+
+	"github.com/yogasw/wick/internal/pkg/envscrub"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // Resource limits of a bash step, set before the script starts (prlimit
@@ -27,7 +30,7 @@ const (
 // prlimitBin is prlimit's path, "" when the host has none (then a bash
 // ulimit preamble sets the same limits).
 var prlimitBin = func() string {
-	p, _ := exec.LookPath("prlimit")
+	p, _ := safeexec.LookPath("prlimit")
 	return p
 }()
 
@@ -48,14 +51,18 @@ func limitedBash(ctx context.Context, script string, timeoutSec int) *exec.Cmd {
 			args = append(args, "--nproc="+nproc)
 		}
 		args = append(args, "--", "bash", "-c", script)
-		return exec.CommandContext(ctx, prlimitBin, args...)
+		cmd := safeexec.CommandContext(ctx, prlimitBin, args...)
+		cmd.Env = envscrub.ScrubOSEnv()
+		return cmd
 	}
 	// ulimit -v and -f take KiB; the script runs as $1 of an exec'd bash.
 	pre := "ulimit -v " + strconv.Itoa(stepMaxAddressSpace/1024) + " -t " + cpu + " -f " + strconv.Itoa(stepMaxFileSize/1024)
 	if nproc != "" {
 		pre += " -u " + nproc
 	}
-	return exec.CommandContext(ctx, "bash", "-c", pre+` || exit 126; exec bash -c "$1"`, "wick-watch", script)
+	cmd := safeexec.CommandContext(ctx, "bash", "-c", pre+` || exit 126; exec bash -c "$1"`, "wick-watch", script)
+	cmd.Env = envscrub.ScrubOSEnv()
+	return cmd
 }
 
 // uidProcCount counts the processes (threads included, as RLIMIT_NPROC
