@@ -173,7 +173,7 @@
     "key": "jenkins",
     "name": "Jenkins",
     "description": "List Jenkins jobs and read job config.xml to discover SCM repository URLs and inline Groovy pipeline scripts.",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "default_tags": [
       {
         "Name": "Connector",
@@ -193,8 +193,8 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/jenkins/v0.2.1/jenkins-0.2.1-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/jenkins/v0.2.1/jenkins-0.2.1-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/jenkins/v0.2.2/jenkins-0.2.2-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/jenkins/v0.2.2/jenkins-0.2.2-linux-arm64.zip"
     }
   },
   {
