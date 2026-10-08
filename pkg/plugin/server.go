@@ -66,7 +66,10 @@ func (s *grpcServer) runOp(ctx context.Context, req *pb.ExecuteRequest) ([]byte,
 			return nil, masks, &pb.Error{Code: "bad_args", Message: err.Error()}
 		}
 	}
-	cctx := connector.NewCtx(ctx, "", req.Creds, input, nil, nil, masks)
+	cctx := connector.NewCtx(ctx, req.GetInstanceId(), req.Creds, input, nil, nil, masks)
+	if uid := req.GetCallerUserId(); uid != "" {
+		cctx.SetCallerUserID(uid)
+	}
 	value, execErr := op.Execute(cctx)
 	if execErr != nil {
 		return nil, masks, &pb.Error{Code: "exec_error", Message: execErr.Error()}
