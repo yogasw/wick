@@ -142,3 +142,45 @@ func TestBuildJobParams(t *testing.T) {
 		t.Fatalf("url = %s", p.URL)
 	}
 }
+
+func TestBuildJobSendsCrumbWithItsSessionCookie(t *testing.T) {
+	var built bool
+	srv := conntest.Server(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/crumbIssuer/api/json":
+			http.SetCookie(w, &http.Cookie{Name: "JSESSIONID.abc", Value: "sess-1", Path: "/"})
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"crumbRequestField": "Jenkins-Crumb", "crumb": "c-1"})
+		case "/job/IT-demo/build":
+			if r.Method != http.MethodPost {
+				t.Fatalf("method = %s, want POST", r.Method)
+			}
+			if got := r.Header.Get("Jenkins-Crumb"); got != "c-1" {
+				t.Fatalf("crumb header = %q, want c-1", got)
+			}
+			ck, err := r.Cookie("JSESSIONID.abc")
+			if err != nil || ck.Value != "sess-1" {
+				t.Fatalf("session cookie = %v, %v; want sess-1", ck, err)
+			}
+			built = true
+			w.Header().Set("Location", "http://jenkins.example/queue/item/7/")
+			w.WriteHeader(http.StatusCreated)
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	})
+	c := conntest.Ctx(t, map[string]string{
+		"base_url": srv.URL,
+		"username": "jenkins-user",
+		"password": "jenkins-pass",
+	}, map[string]string{"name": "IT-demo"})
+
+	got, err := buildJob(c)
+	if err != nil {
+		t.Fatalf("buildJob error: %v", err)
+	}
+	res := got.(*BuildResult)
+	if !built || !res.Triggered || !strings.HasSuffix(res.QueueURL, "/queue/item/7/") {
+		t.Fatalf("result = %+v, built = %v", res, built)
+	}
+}
