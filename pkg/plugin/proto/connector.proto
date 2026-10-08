@@ -19,6 +19,10 @@ message ExecuteRequest {
   map<string,string> creds = 3;
   string request_id = 4;
   string session_id = 5;
+  // instance_id / caller_user_id let the plugin's connector.Ctx report the
+  // same InstanceID() and CallerUserID() the host sees. Empty from older hosts.
+  string instance_id = 6;
+  string caller_user_id = 7;
 }
 // mask / mask_ignore_case carry the values the operation passed to c.Mask /
 // c.MaskIgnoreCase. The plugin has no encryption key, so it returns them in

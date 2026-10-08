@@ -351,3 +351,94 @@ describe("SchedulePanel", () => {
     expect(onRunNow).toHaveBeenCalledWith("sm_2");
   });
 });
+
+describe("SchedulePanel — Watch tab", () => {
+  const WATCH: Schedule = {
+    ...RECUR,
+    id: "sm_w",
+    type: "watch",
+    message: "pipeline done",
+    interval_ms: 10000,
+    last_result: "pending",
+    step_count: 2,
+  };
+
+  test("creates a watch with the pre-filled steps, defaults and no project target", async () => {
+    const c = cbs();
+    render(SchedulePanel, { props: { schedules: [], projects: [{ id: "p1", name: "P1" }], ...c } });
+    await fireEvent.click(screen.getByTestId("mode-watch"));
+    expect(screen.queryByTestId("target-new")).toBeNull();
+    expect((screen.getByTestId("watch-every") as HTMLInputElement).value).toBe("10s");
+    expect((screen.getByTestId("watch-timeout") as HTMLSelectElement).value).toBe("24h");
+    await fireEvent.input(screen.getByTestId("sched-message"), { target: { value: "pipeline done" } });
+    await fireEvent.click(screen.getByText("Schedule"));
+    expect(c.onCreate).toHaveBeenCalledTimes(1);
+    const args = c.onCreate.mock.calls[0][0];
+    expect(args.type).toBe("watch");
+    expect(args.every).toBe("10s");
+    expect(args.timeout).toBe("24h");
+    expect(args.onMatch).toBe("stop");
+    expect(args.projectId).toBeUndefined();
+    expect(args.steps.map((s: { kind: string }) => s.kind)).toEqual(["connector", "check"]);
+  });
+
+  test("timeout preset Off / custom and on_match continue reach the create call", async () => {
+    const c = cbs();
+    render(SchedulePanel, { props: { schedules: [], ...c } });
+    await fireEvent.click(screen.getByTestId("mode-watch"));
+    await fireEvent.input(screen.getByTestId("sched-message"), { target: { value: "new tickets" } });
+    await fireEvent.change(screen.getByTestId("watch-timeout"), { target: { value: "off" } });
+    await fireEvent.click(screen.getByDisplayValue("continue"));
+    await fireEvent.click(screen.getByText("Schedule"));
+    const args = c.onCreate.mock.calls[0][0];
+    expect(args.timeout).toBe("off");
+    expect(args.onMatch).toBe("continue");
+  });
+
+  test("a custom timeout has no upper bound", async () => {
+    const c = cbs();
+    render(SchedulePanel, { props: { schedules: [], ...c } });
+    await fireEvent.click(screen.getByTestId("mode-watch"));
+    await fireEvent.input(screen.getByTestId("sched-message"), { target: { value: "m" } });
+    await fireEvent.change(screen.getByTestId("watch-timeout"), { target: { value: "custom" } });
+    await fireEvent.input(screen.getByTestId("watch-timeout-custom"), { target: { value: "48h" } });
+    await fireEvent.click(screen.getByText("Schedule"));
+    expect(c.onCreate.mock.calls[0][0].timeout).toBe("48h");
+  });
+
+  test("invalid JSON blocks submit; the server's error shows as-is", async () => {
+    const c = cbs();
+    render(SchedulePanel, { props: { schedules: [], ...c } });
+    await fireEvent.click(screen.getByTestId("mode-watch"));
+    await fireEvent.input(screen.getByTestId("sched-message"), { target: { value: "m" } });
+    await fireEvent.input(screen.getByTestId("watch-steps"), { target: { value: "[{" } });
+    expect(screen.getByTestId("watch-steps-error").textContent).toMatch(/invalid JSON/);
+    await fireEvent.click(screen.getByText("Schedule"));
+    expect(c.onCreate).not.toHaveBeenCalled();
+
+    await fireEvent.input(screen.getByTestId("watch-steps"), { target: { value: '[{"kind":"connector","tool_id":"x"}]' } });
+    c.onCreate.mockRejectedValueOnce(new Error('steps[0].tool_id: "x" must look like conn:<connector_id>/<op>'));
+    await fireEvent.click(screen.getByText("Schedule"));
+    await vi.waitFor(() => expect(screen.getByTestId("sched-error").textContent).toContain("steps[0].tool_id"));
+  });
+
+  test("Test first runs the unsaved steps and shows the result", async () => {
+    const onTestWatch = vi.fn().mockResolvedValue({
+      result: "pending",
+      reason: "state.name is IN_PROGRESS",
+      steps: [{ name: "pipeline", kind: "connector", ok: true, decision: "ok→next" }],
+    });
+    render(SchedulePanel, { props: { schedules: [], onTestWatch, ...cbs() } });
+    await fireEvent.click(screen.getByTestId("mode-watch"));
+    await fireEvent.click(screen.getByTestId("watch-test"));
+    expect(onTestWatch).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(screen.getByTestId("watch-test-result").textContent).toContain("IN_PROGRESS"));
+  });
+
+  test("a watch row has the badge, last result and a detail link", () => {
+    render(SchedulePanel, { props: { schedules: [WATCH, RECUR], scheduledHref: "/tools/agents/scheduled", ...cbs() } });
+    expect(screen.getAllByTestId("row-watch")).toHaveLength(1);
+    expect(screen.getByTestId("row-watch-result").textContent).toContain("pending");
+    expect(screen.getByTestId("row-watch-detail").getAttribute("href")).toBe("/tools/agents/scheduled?open=sm_w");
+  });
+});

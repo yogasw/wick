@@ -74,12 +74,16 @@ func (x *Error) GetMessage() string {
 }
 
 type ExecuteRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Operation     string                 `protobuf:"bytes,1,opt,name=operation,proto3" json:"operation,omitempty"`
-	ArgsJson      []byte                 `protobuf:"bytes,2,opt,name=args_json,json=argsJson,proto3" json:"args_json,omitempty"`
-	Creds         map[string]string      `protobuf:"bytes,3,rep,name=creds,proto3" json:"creds,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	RequestId     string                 `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	SessionId     string                 `protobuf:"bytes,5,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Operation string                 `protobuf:"bytes,1,opt,name=operation,proto3" json:"operation,omitempty"`
+	ArgsJson  []byte                 `protobuf:"bytes,2,opt,name=args_json,json=argsJson,proto3" json:"args_json,omitempty"`
+	Creds     map[string]string      `protobuf:"bytes,3,rep,name=creds,proto3" json:"creds,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	RequestId string                 `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	SessionId string                 `protobuf:"bytes,5,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// instance_id / caller_user_id let the plugin's connector.Ctx report the
+	// same InstanceID() and CallerUserID() the host sees. Empty from older hosts.
+	InstanceId    string `protobuf:"bytes,6,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	CallerUserId  string `protobuf:"bytes,7,opt,name=caller_user_id,json=callerUserId,proto3" json:"caller_user_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -145,6 +149,20 @@ func (x *ExecuteRequest) GetRequestId() string {
 func (x *ExecuteRequest) GetSessionId() string {
 	if x != nil {
 		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ExecuteRequest) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+func (x *ExecuteRequest) GetCallerUserId() string {
+	if x != nil {
+		return x.CallerUserId
 	}
 	return ""
 }
@@ -765,7 +783,7 @@ const file_connector_proto_rawDesc = "" +
 	"\x0fconnector.proto\x12\x11wick.connector.v1\"5\n" +
 	"\x05Error\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\x87\x02\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xce\x02\n" +
 	"\x0eExecuteRequest\x12\x1c\n" +
 	"\toperation\x18\x01 \x01(\tR\toperation\x12\x1b\n" +
 	"\targs_json\x18\x02 \x01(\fR\bargsJson\x12B\n" +
@@ -773,7 +791,10 @@ const file_connector_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x04 \x01(\tR\trequestId\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x05 \x01(\tR\tsessionId\x1a8\n" +
+	"session_id\x18\x05 \x01(\tR\tsessionId\x12\x1f\n" +
+	"\vinstance_id\x18\x06 \x01(\tR\n" +
+	"instanceId\x12$\n" +
+	"\x0ecaller_user_id\x18\a \x01(\tR\fcallerUserId\x1a8\n" +
 	"\n" +
 	"CredsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +

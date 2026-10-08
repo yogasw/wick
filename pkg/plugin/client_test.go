@@ -7,7 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/entity"
 	pb "github.com/yogasw/wick/pkg/plugin/proto"
+	"github.com/yogasw/wick/pkg/wickdocs"
 	"google.golang.org/grpc"
 )
 
@@ -103,5 +106,82 @@ func TestClientExecuteStreamSurfacesError(t *testing.T) {
 	c := &grpcClient{inner: &fakeConnClient{stream: stream}}
 	if _, err := c.ExecuteStream(context.Background(), ExecCall{Operation: "say"}); err == nil {
 		t.Fatal("Chunk.Error must surface as an error")
+	}
+}
+
+// bridgeConnClient forwards Execute straight to an in-process server, so a
+// test covers the full host ExecCall → ExecuteRequest → plugin Ctx path.
+type bridgeConnClient struct {
+	pb.ConnectorClient
+	srv     pb.ConnectorServer
+	lastReq *pb.ExecuteRequest
+}
+
+func (b *bridgeConnClient) Execute(ctx context.Context, in *pb.ExecuteRequest, _ ...grpc.CallOption) (*pb.ExecuteResponse, error) {
+	return b.srv.Execute(ctx, in)
+}
+
+func (b *bridgeConnClient) ExecuteStream(_ context.Context, in *pb.ExecuteRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[pb.Chunk], error) {
+	b.lastReq = in
+	return &fakeStreamClient{chunks: []*pb.Chunk{{Data: []byte(`{}`), Eof: true}}}, nil
+}
+
+func identityModule() connector.Module {
+	who := func(c *connector.Ctx) (any, error) {
+		return map[string]string{"instance": c.InstanceID(), "caller": c.CallerUserID()}, nil
+	}
+	return connector.Module{
+		Meta:    connector.Meta{Key: "who", Name: "Who"},
+		Configs: entity.StructToConfigs(struct{}{}),
+		Operations: []connector.Category{
+			connector.Cat("Main", "",
+				connector.Op("who", "Who", "reports instance and caller",
+					struct{}{}, who, wickdocs.Docs{})),
+		},
+	}
+}
+
+func TestClientExecuteCarriesInstanceAndCallerToOp(t *testing.T) {
+	cl := &grpcClient{inner: &bridgeConnClient{srv: NewServer(identityModule())}}
+	out, err := cl.Execute(context.Background(), ExecCall{
+		Operation:    "who",
+		InstanceID:   "inst-1",
+		CallerUserID: "user-9",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(out.JSON, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["instance"] != "inst-1" || got["caller"] != "user-9" {
+		t.Fatalf("op saw instance=%q caller=%q", got["instance"], got["caller"])
+	}
+}
+
+func TestClientExecuteWithoutInstanceLeavesCtxEmpty(t *testing.T) {
+	cl := &grpcClient{inner: &bridgeConnClient{srv: NewServer(identityModule())}}
+	out, err := cl.Execute(context.Background(), ExecCall{Operation: "who"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out.JSON) != `{"caller":"","instance":""}` {
+		t.Fatalf("unexpected result %s", out.JSON)
+	}
+}
+
+func TestClientExecuteStreamSendsInstanceAndCaller(t *testing.T) {
+	bc := &bridgeConnClient{}
+	cl := &grpcClient{inner: bc}
+	if _, err := cl.ExecuteStream(context.Background(), ExecCall{
+		Operation:    "who",
+		InstanceID:   "inst-1",
+		CallerUserID: "user-9",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if bc.lastReq.GetInstanceId() != "inst-1" || bc.lastReq.GetCallerUserId() != "user-9" {
+		t.Fatalf("request not mapped: %+v", bc.lastReq)
 	}
 }

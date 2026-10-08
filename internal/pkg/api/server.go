@@ -1264,6 +1264,26 @@ func NewServer() *Server {
 		return teamSvc.AgentOfProject(context.Background(), projectID)
 	}
 	mcp.SetAgentScopeResolver(teamSvc.ScopeForSession)
+	// Watch schedules with bash steps follow the agent's Bash switch AND the
+	// gate: a watch has no approval prompt, so Bash held to rules, a
+	// whitelist or approvals (gate on) is not enough — only an agent that
+	// runs Bash unasked (gate off / bypass), or an admin creator, may store
+	// and run bash steps. Checked when steps are stored, tested and per run.
+	schedule.SetBashPolicy(func(ctx context.Context, sessionID, projectID string) schedule.BashAccess {
+		if !teamSvc.BashAllowed(ctx, sessionID, projectID) {
+			return schedule.BashOff
+		}
+		if agentsFactory.PermissionModeLoader != nil && agentsFactory.PermissionModeLoader() == "bypass" {
+			return schedule.BashFree
+		}
+		return schedule.BashRestricted
+	})
+	schedule.SetBashAdminCheck(func(ctx context.Context, userID string) bool {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		u, err := authSvc.GetUserByID(ctx, userID)
+		return err == nil && u != nil && u.Approved && u.IsAdmin()
+	})
 	agentstool.SetTeam(teamSvc)
 	agentstool.SetChannelRegistry(channelReg)
 	agentstool.SetSyncManager(syncMgr)
@@ -2090,7 +2110,7 @@ func NewServer() *Server {
 	// Bearer auth in front, connector dispatch behind. PAT and
 	// OAuth-issued tokens both flow through the same middleware —
 	// dispatch by prefix.
-	scheduleStore := schedule.NewStore(db)
+	scheduleStore := schedule.NewStore(db).SetLayout(agentsLayout)
 
 	// ── Sub-agent delegation ─────────────────────────────────────
 	// Sub-agents authenticate to the loopback MCP server with SCOPED
@@ -3222,7 +3242,24 @@ func NewServer() *Server {
 		u, err := authSvc.GetUserByID(ctx, userID)
 		return err == nil && u != nil && u.Approved
 	}
-	return &Server{runAsUsable: runAsUsable, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens}
+	// Watch connector steps run as the schedule's run-as user, through the
+	// wick_execute path (instance visibility, per-op gate, account
+	// ownership, audit), narrowed by the agent scope of the session the
+	// watch fires into — exactly what that session could call itself.
+	scheduleConnExec := schedule.NewConnectorExecutor(
+		func(ctx context.Context, userID string) (*entity.User, []string, error) {
+			u, err := authSvc.GetUserByID(ctx, userID)
+			if err != nil || u == nil {
+				return nil, nil, err
+			}
+			return u, authSvc.GetUserFilterTagIDs(ctx, userID), nil
+		},
+		func(ctx context.Context, toolID string, params map[string]any, sessionID string, u *entity.User, tagIDs []string) (string, error) {
+			ctx = mcp.WithAgentScope(ctx, sessionID)
+			return mcphandlers.ExecuteAs(ctx, connectorsSvc, agentsLayout, toolID, params, sessionID, u, tagIDs, entity.ConnectorRunSourceSchedule)
+		},
+	)
+	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens}
 }
 
 type Server struct {
@@ -3252,6 +3289,8 @@ type Server struct {
 	// disabled account stops its jobs instead of silently handing them to the
 	// internal principal.
 	runAsUsable func(ctx context.Context, userID string) bool
+	// scheduleConnExec runs watch schedules' connector steps.
+	scheduleConnExec schedule.ConnectorExecutor
 	// scheduleStore backs wick_schedule_message; Run starts the runner that
 	// polls it and delivers due messages through agentsPool. nil-safe: the
 	// runner is only started when both store and pool are present.
@@ -3754,6 +3793,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 			// that came due while wick was down.
 			go schedule.NewRunner(s.scheduleStore, s.agentsPool, s.agentsLayout).
 				WithRunAsCheck(s.runAsUsable).
+				WithConnectorExecutor(s.scheduleConnExec).
 				Run(ctx)
 		}
 		close(s.intakeReady)

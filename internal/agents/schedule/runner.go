@@ -2,7 +2,7 @@ package schedule
 
 import (
 	"context"
-	"github.com/yogasw/wick/internal/pkg/upgrade"
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -12,6 +12,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 )
 
 // Sender delivers one message into a session, and materializes that session
@@ -72,10 +73,22 @@ type Runner struct {
 	// nil disables the check (stdio, tests), which is safe there: without a
 	// server there is no MCP credential to mint in the first place.
 	runAsUsable func(ctx context.Context, userID string) bool
+	// connExec runs a watch's connector steps; nil fails them (stdio,
+	// tests that don't need one).
+	connExec ConnectorExecutor
+	// watchSem bounds how many watch runs execute at once. A watch run can
+	// take up to a couple of minutes (a slow script), so they run off the
+	// tick loop — this keeps a burst of them from piling onto the host.
+	watchSem chan struct{}
+	// testSem bounds dry runs (test) to one at a time, apart from watchSem:
+	// tests never take a slot a live watch is waiting for.
+	testSem chan struct{}
+	// watches is the in-memory watch scheduler state (watch_runner.go).
+	watches *watchSet
 }
 
 func NewRunner(store *Store, sender Sender, layout agentconfig.Layout) *Runner {
-	r := &Runner{store: store, sender: sender, layout: layout, wake: make(chan struct{}, 1)}
+	r := &Runner{store: store, sender: sender, layout: layout, wake: make(chan struct{}, 1), watchSem: make(chan struct{}, watchConcurrency), testSem: make(chan struct{}, 1), watches: newWatchSet()}
 	// A due row is claimed in the DB before delivery, so a delivery abandoned
 	// mid-flight is LOST rather than retried. That makes it worth draining.
 	upgrade.Register("scheduled messages", r.ActiveCount)
@@ -135,8 +148,16 @@ func (r *Runner) Run(ctx context.Context) {
 	defer func() { running = nil }()
 
 	r.tick(ctx, l)
+	r.refreshWatches(ctx, l)
+	r.tickWatch(ctx, l)
+	defer r.stopWatches(l)
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()
+	// Watches get their own, finer tick: their floor is 10s, which a 30s
+	// poll would turn into 30s. A watch tick is memory only — the DB is read
+	// on the refresh, which rides the 30s ticker.
+	wt := time.NewTicker(watchPollInterval)
+	defer wt.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -144,10 +165,15 @@ func (r *Runner) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			r.tick(ctx, l)
+			r.refreshWatches(ctx, l)
+		case <-wt.C:
+			r.tickWatch(ctx, l)
 		case <-r.wake:
-			// A manual run made something due right now; don't make the
+			// Something was edited or made due right now; don't make the
 			// caller wait out the remaining poll interval.
 			r.tick(ctx, l)
+			r.refreshWatches(ctx, l)
+			r.tickWatch(ctx, l)
 		}
 	}
 }
@@ -156,6 +182,13 @@ func (r *Runner) Run(ctx context.Context) {
 // clock; the store's atomic claim guarantees each row fires at most once
 // even across overlapping ticks or a second wick instance.
 func (r *Runner) tick(ctx context.Context, l zerologLogger) {
+	// A process handing over to a successor fires nothing new: every fire
+	// starts a turn the drain then has to wait for, so a short recurring
+	// schedule would keep it from ever settling. The rows stay due and the
+	// successor claims them once it holds the intake baton.
+	if upgrade.Draining() {
+		return
+	}
 	now := time.Now()
 	due, err := r.store.ClaimDue(ctx, now, claimBatch)
 	if err != nil {
@@ -186,63 +219,18 @@ func (r *Runner) tick(ctx context.Context, l zerologLogger) {
 // session reaping, which is the whole point of the mode.
 func (r *Runner) deliver(ctx context.Context, l zerologLogger, m entity.ScheduledMessage) {
 	firedAt := time.Now()
-
-	target, mint, err := ResolveTarget(m, firedAt)
-	if err != nil {
-		l.Warn().Str("id", m.ID).Str("mode", m.Mode()).Err(err).Msg("resolve target failed")
-		_ = r.store.MarkFailed(ctx, m.ID, "resolve target: "+err.Error())
+	target, serr := r.sendToTarget(ctx, l, m, m.Message)
+	// Every fire leaves a run record, delivered or not — the history the
+	// Scheduled page and wick_schedule_message action=runs read.
+	if dir := WatchRunsDir(r.layout, m); dir != "" {
+		rec := messageRunRecord(m, firedAt, target, serr)
+		if werr := writeRun(dir, &rec); werr != nil {
+			l.Warn().Str("id", m.ID).Err(werr).Msg("write run history failed")
+		}
+	}
+	if serr != nil {
 		return
 	}
-
-	projectID := m.ProjectID
-	if mint {
-		// Idempotent: creates the session when absent, reuses it when the
-		// rendered/generated id already exists.
-		if err := r.sender.EnsureSession(ctx, target, deliverySource, m.ProjectID); err != nil {
-			l.Warn().Str("id", m.ID).Str("session", target).Err(err).Msg("ensure target session failed")
-			_ = r.store.MarkFailed(ctx, m.ID, "ensure session "+target+": "+err.Error())
-			return
-		}
-	} else {
-		sess, lerr := session.Load(r.layout, target)
-		if lerr != nil {
-			l.Warn().Str("id", m.ID).Str("session", target).Err(lerr).Msg("target session not found")
-			_ = r.store.MarkFailed(ctx, m.ID, "target session not found: "+lerr.Error())
-			return
-		}
-		projectID = sess.Meta.ProjectID
-	}
-
-	// Attach the identity BEFORE sending, because the send is what spawns the
-	// agent and the spawn mints its MCP credential from the session's owner.
-	// Stamping afterwards would be a turn too late: that run would already be
-	// executing as the synthetic internal principal.
-	//
-	// EnsureSessionOwner is first-writer-wins, so a schedule pointed at a
-	// session somebody else already owns does not take it over — that run
-	// stays on the session owner's identity rather than the schedule's.
-	// A run-as user who has since been removed or un-approved must STOP the
-	// fire, not quietly downgrade it. Falling through would hand the run to
-	// the synthetic internal principal — an admin-role identity carrying no
-	// access tags — so a revoked account would turn into "runs as something
-	// else entirely", silently, on a timer. Better a failed row somebody can
-	// see than a job that keeps running under an identity nobody chose.
-	if runAs := m.EffectiveRunAsUser(); runAs != "" {
-		if r.runAsUsable != nil && !r.runAsUsable(ctx, runAs) {
-			l.Warn().Str("id", m.ID).Str("run_as", runAs).
-				Msg("run-as user is gone or not approved; refusing to fire")
-			_ = r.store.MarkFailed(ctx, m.ID, "run-as user "+runAs+" is missing or not approved")
-			return
-		}
-		r.sender.EnsureSessionOwner(ctx, target, runAs)
-	}
-
-	if err := r.sender.SendWithProject(ctx, target, m.AgentName, deliverySource, "user", m.Message, projectID); err != nil {
-		l.Warn().Str("id", m.ID).Str("session", target).Err(err).Msg("deliver failed")
-		_ = r.store.MarkFailed(ctx, m.ID, err.Error())
-		return
-	}
-	notifyFired(ctx, m, target)
 
 	// A manual run (run_now) is an EXTRA fire, not the next scheduled one: it
 	// puts the real next fire back exactly where it was, so testing a
@@ -291,6 +279,75 @@ func (r *Runner) deliver(ctx context.Context, l zerologLogger, m entity.Schedule
 		return
 	}
 	l.Info().Str("id", m.ID).Str("session", target).Msg("delivered")
+}
+
+// sendToTarget resolves m's target session and injects text into it — the
+// delivery half of a fire, shared by a message schedule (every fire) and a
+// watch (only its match / failure notice). Any failure marks the row failed
+// and is returned, so the run history can say why.
+func (r *Runner) sendToTarget(ctx context.Context, l zerologLogger, m entity.ScheduledMessage, text string) (string, error) {
+	target, mint, err := ResolveTarget(m, time.Now())
+	if err != nil {
+		l.Warn().Str("id", m.ID).Str("mode", m.Mode()).Err(err).Msg("resolve target failed")
+		failMsg := "resolve target: " + err.Error()
+		_ = r.store.MarkFailed(ctx, m.ID, failMsg)
+		return "", errors.New(failMsg)
+	}
+
+	projectID := m.ProjectID
+	if mint {
+		// Idempotent: creates the session when absent, reuses it when the
+		// rendered/generated id already exists.
+		if err := r.sender.EnsureSession(ctx, target, deliverySource, m.ProjectID); err != nil {
+			l.Warn().Str("id", m.ID).Str("session", target).Err(err).Msg("ensure target session failed")
+			failMsg := "ensure session " + target + ": " + err.Error()
+			_ = r.store.MarkFailed(ctx, m.ID, failMsg)
+			return "", errors.New(failMsg)
+		}
+	} else {
+		sess, lerr := session.Load(r.layout, target)
+		if lerr != nil {
+			l.Warn().Str("id", m.ID).Str("session", target).Err(lerr).Msg("target session not found")
+			failMsg := "target session not found: " + lerr.Error()
+			_ = r.store.MarkFailed(ctx, m.ID, failMsg)
+			return "", errors.New(failMsg)
+		}
+		projectID = sess.Meta.ProjectID
+	}
+
+	// Attach the identity BEFORE sending, because the send is what spawns the
+	// agent and the spawn mints its MCP credential from the session's owner.
+	// Stamping afterwards would be a turn too late: that run would already be
+	// executing as the synthetic internal principal.
+	//
+	// EnsureSessionOwner is first-writer-wins, so a schedule pointed at a
+	// session somebody else already owns does not take it over — that run
+	// stays on the session owner's identity rather than the schedule's.
+	// A run-as user who has since been removed or un-approved must STOP the
+	// fire, not quietly downgrade it. Falling through would hand the run to
+	// the synthetic internal principal — an admin-role identity carrying no
+	// access tags — so a revoked account would turn into "runs as something
+	// else entirely", silently, on a timer. Better a failed row somebody can
+	// see than a job that keeps running under an identity nobody chose.
+	if runAs := m.EffectiveRunAsUser(); runAs != "" {
+		if r.runAsUsable != nil && !r.runAsUsable(ctx, runAs) {
+			l.Warn().Str("id", m.ID).Str("run_as", runAs).
+				Msg("run-as user is gone or not approved; refusing to fire")
+			failMsg := "run-as user " + runAs + " is missing or not approved"
+			_ = r.store.MarkFailed(ctx, m.ID, failMsg)
+			return "", errors.New(failMsg)
+		}
+		r.sender.EnsureSessionOwner(ctx, target, runAs)
+	}
+
+	if err := r.sender.SendWithProject(ctx, target, m.AgentName, deliverySource, "user", text, projectID); err != nil {
+		l.Warn().Str("id", m.ID).Str("session", target).Err(err).Msg("deliver failed")
+		failMsg := err.Error()
+		_ = r.store.MarkFailed(ctx, m.ID, failMsg)
+		return "", errors.New(failMsg)
+	}
+	notifyFired(ctx, m, target)
+	return target, nil
 }
 
 // FiredHook is told about every successful delivery: the row as claimed

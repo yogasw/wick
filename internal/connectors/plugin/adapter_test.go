@@ -140,3 +140,21 @@ func TestAdapterLeavesResultAloneWithoutMaskValues(t *testing.T) {
 		t.Fatalf("unexpected result %s", out)
 	}
 }
+
+func TestAdapterForwardsInstanceAndCaller(t *testing.T) {
+	fc := &fakeConn{}
+	getConn := func(key string) (*Lease, error) { return &Lease{Conn: fc}, nil }
+	var mod connector.Module
+	if err := json.Unmarshal(manifestJSON(t), &mod); err != nil {
+		t.Fatal(err)
+	}
+	op := BuildModule(mod, getConn).AllOps()[0]
+	cctx := connector.NewCtx(context.Background(), "inst-1", nil, map[string]string{"text": "hi"}, nil, nil, recMasker{})
+	cctx.SetCallerUserID("user-9")
+	if _, err := op.Execute(cctx); err != nil {
+		t.Fatal(err)
+	}
+	if fc.lastCall.InstanceID != "inst-1" || fc.lastCall.CallerUserID != "user-9" {
+		t.Fatalf("closure did not forward identity: %+v", fc.lastCall)
+	}
+}

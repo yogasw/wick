@@ -1214,8 +1214,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 			// child that inherited its parent's wick pin before being
 			// repointed. Dropped rather than carried, so the target resolves
 			// its own default instead of failing to spawn.
-			if modelID != "" && !strings.HasPrefix(a.Provider, "wick") &&
-				(strings.ContainsRune(modelID, '@') || strings.HasPrefix(modelID, "m_")) {
+			if dropForeignModelPin(a.Provider, modelID) {
 				log.Warn().
 					Str("session", sessionID).
 					Str("provider", a.Provider).
@@ -2892,4 +2891,25 @@ var yieldIdleServers = func(sessionID, pType, pName string) {
 		instance = pName
 	}
 	provider.YieldIdleServers(sessionID, instance)
+}
+
+// dropForeignModelPin reports whether a session's model pin is a wick
+// registry id that the agent's provider cannot use, so the spawn must not
+// carry it. Only wick's own provider reads those ids. A provider with a
+// grouped picker (omp, opencode) pins "<path>@<model>" itself; that shape is
+// kept and provider.ModelArgs resolves it, or drops it when it is not a real
+// model of that provider.
+func dropForeignModelPin(providerRef, modelID string) bool {
+	if modelID == "" || strings.HasPrefix(providerRef, "wick") {
+		return false
+	}
+	if !strings.ContainsRune(modelID, '@') && !strings.HasPrefix(modelID, "m_") {
+		return false
+	}
+	typ, _, _ := strings.Cut(providerRef, "/")
+	if _, ok := provider.ModelSetsFor(provider.Type(typ)); ok {
+		_, _, grouped := provider.DecodePin(modelID)
+		return !grouped
+	}
+	return true
 }
