@@ -30,6 +30,7 @@ var opNeeds = []struct {
 	{"get_pull_request", "pullrequest", false},
 	{"list_pull_request_commits", "pullrequest", false},
 	{"create_pull_request", "pullrequest", true},
+	{"add_pull_request_reviewers", "pullrequest", true},
 	{"create_pull_request_comment", "pullrequest", true},
 	{"approve_pull_request", "pullrequest", true},
 	{"request_changes_pull_request", "pullrequest", true},

@@ -4,6 +4,9 @@
 package main
 
 import (
+	"errors"
+	"net/http"
+
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/wickdocs"
@@ -113,6 +116,14 @@ type CreatePullRequestInput struct {
 	SourceBranch      string `wick:"required;desc=Source branch name."`
 	DestinationBranch string `wick:"required;desc=Destination branch name. Example: main"`
 	CloseSourceBranch bool   `wick:"default=false;desc=Close source branch after merge."`
+	Reviewers         string `wick:"desc=Optional reviewers, comma-separated Bitbucket account_id (e.g. 5efc131e3404690bae882041) or {uuid}. The PR author cannot be a reviewer."`
+}
+
+type AddPullRequestReviewersInput struct {
+	Workspace     string `wick:"desc=Bitbucket workspace slug. If empty, uses default_workspace config."`
+	RepoSlug      string `wick:"required;desc=Repository slug."`
+	PullRequestID int    `wick:"required;desc=Pull request ID."`
+	Reviewers     string `wick:"required;desc=Reviewers to add, comma-separated Bitbucket account_id (e.g. 5efc131e3404690bae882041) or {uuid}. Existing reviewers are kept. The PR author cannot be a reviewer."`
 }
 
 type CreatePullRequestCommentInput struct {
@@ -279,6 +290,14 @@ func Operations() []connector.Category {
 				wickdocs.Docs{},
 			),
 			connector.OpDestructive(
+				"add_pull_request_reviewers",
+				"Add Pull Request Reviewers",
+				"Add reviewers to an existing pull request by account_id or {uuid}. Reviewers already on the PR are kept; nobody is removed. Returns the updated pull request.",
+				AddPullRequestReviewersInput{},
+				addPullRequestReviewers,
+				wickdocs.Docs{},
+			),
+			connector.OpDestructive(
 				"create_pull_request_comment",
 				"Create Pull Request Comment",
 				"Post a comment to a pull request — top-level, or inline on a file via inline_path plus inline_to (new-side line) or inline_from (old-side line). Mutates the PR discussion.",
@@ -428,6 +447,33 @@ func createPullRequest(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return sendJSON(c, p, body)
+}
+
+// addPullRequestReviewers reads the PR first because Bitbucket's update
+// replaces the reviewer list: sending only the new names would drop everyone
+// already on it.
+func addPullRequestReviewers(c *connector.Ctx) (any, error) {
+	add, err := parseReviewers(c.Input("reviewers"))
+	if err != nil {
+		return nil, err
+	}
+	if len(add) == 0 {
+		return nil, errors.New("reviewers is required")
+	}
+	get, err := validatePullRequest(c, "pullrequest")
+	if err != nil {
+		return nil, err
+	}
+	current, err := fetchJSON(c, get)
+	if err != nil {
+		return nil, err
+	}
+	pr, _ := current.(map[string]any)
+	body := map[string]any{
+		"title":     pr["title"],
+		"reviewers": mergeReviewers(pr["reviewers"], add),
+	}
+	return sendJSON(c, requestParams{Method: http.MethodPut, URL: get.URL}, body)
 }
 
 func createPullRequestComment(c *connector.Ctx) (any, error) {

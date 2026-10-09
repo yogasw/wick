@@ -560,7 +560,12 @@ export function createThreadStore(): ThreadStore {
         }
         const runId = d.run_id ?? "";
         if (!runId) break;
-        const lt = ensureLive();
+        // Never open a live turn here: a run with no turn in flight (a watch
+        // or schedule polling a connector under this session) has no tool
+        // card to decorate, and ensureLive() would light "thinking…" + Stop
+        // for a session that is idle.
+        const lt = get(live);
+        if (lt === null) break;
         if (d.running) {
           // Bind to the last running tool block that doesn't have a run id yet.
           for (let i = lt.blocks.length - 1; i >= 0; i--) {
