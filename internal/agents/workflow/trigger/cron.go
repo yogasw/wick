@@ -66,7 +66,10 @@ func (c *CronScheduler) Stop() {
 func (c *CronScheduler) Sync(id string, w workflow.Workflow) {
 	entries := []cronEntry{}
 	for _, tr := range w.Triggers {
-		if tr.Type != workflow.TriggerCron {
+		// A disabled workflow keeps no schedule. RunNow skips the Enabled
+		// check on purpose (the UI Run button), so the cron has to honour
+		// it here or a disabled workflow keeps firing forever.
+		if !w.Enabled || tr.Type != workflow.TriggerCron {
 			continue
 		}
 		if tr.Schedule == "" {

@@ -111,7 +111,7 @@
     { label: "in 1 hour", value: "1h" },
     { label: "in 5 hours", value: "5h" },
     { label: "tomorrow", value: "1d" },
-    { label: "custom…", value: "custom" },
+    { label: "Custom…", value: "custom" },
   ];
   let onceWhen = $state("1h");
   let onceCustom = $state("");
@@ -136,11 +136,11 @@
   let watchEvery = $state("10s");
   /* Time limit: presets, Off (runs until match/cancel) or a custom duration. */
   const WATCH_TIMEOUT_PRESETS = [
-    { label: "1 jam", value: "1h" },
-    { label: "6 jam", value: "6h" },
-    { label: "24 jam (default)", value: "24h" },
-    { label: "Off — tanpa batas", value: "off" },
-    { label: "custom…", value: "custom" },
+    { label: "1 hour", value: "1h" },
+    { label: "6 hours", value: "6h" },
+    { label: "24 hours (default)", value: "24h" },
+    { label: "Off — no limit", value: "off" },
+    { label: "Custom…", value: "custom" },
   ];
   let watchTimeoutPreset = $state("24h");
   let watchTimeoutCustom = $state("");
@@ -395,7 +395,7 @@
           <input class={INPUT_CLASS} bind:value={watchEvery} placeholder="10s, 30s, 1m" data-testid="watch-every" />
         </label>
         <label class="flex-1 space-y-0.5">
-          <span class="block text-[11px] font-medium text-black-800 dark:text-black-600">Batas waktu</span>
+          <span class="block text-[11px] font-medium text-black-800 dark:text-black-600">Time limit</span>
           <select class={INPUT_CLASS} bind:value={watchTimeoutPreset} data-testid="watch-timeout">
             {#each WATCH_TIMEOUT_PRESETS as p (p.value)}
               <option value={p.value}>{p.label}</option>
@@ -411,19 +411,19 @@
           data-testid="watch-timeout-custom"
         />
       {/if}
-      <div class="space-y-0.5" role="radiogroup" aria-label="Saat match" data-testid="watch-on-match">
+      <div class="space-y-0.5" role="radiogroup" aria-label="On match" data-testid="watch-on-match">
         <label class="flex items-center gap-1.5 text-[11px] text-black-800 dark:text-black-600">
           <input type="radio" name="watch-on-match" value="stop" bind:group={watchOnMatch} />
-          Berhenti setelah match
+          Stop after match
         </label>
         <label class="flex items-center gap-1.5 text-[11px] text-black-800 dark:text-black-600">
           <input type="radio" name="watch-on-match" value="continue" bind:group={watchOnMatch} />
-          Terus jalan, kabari kalau ada yang baru
+          Keep running, notify when something new appears
         </label>
         {#if watchOnMatch === "continue"}
           <p class="text-[11px] text-black-700 dark:text-black-600">
-            Notif hanya saat <code>extract</code> step check terakhir berubah — extract penanda data baru saja (id,
-            build, branch), bukan durasi atau waktu.
+            You are notified only when the <code>extract</code> of the last check step changes. Extract a marker of
+            new data (an id, build or branch), not a duration or a timestamp.
           </p>
         {/if}
       </div>
@@ -676,7 +676,7 @@
               <span class="rounded-full bg-green-100 px-1.5 py-0.5 font-medium text-green-700 dark:bg-green-900/40 dark:text-green-300">terus jalan · {s.notified ?? 0} notif</span>
             {/if}
             {#if s.no_timeout}
-              <span class="rounded-full bg-white-300 px-1.5 py-0.5 font-medium text-black-600 dark:bg-navy-700 dark:text-black-600">tanpa batas</span>
+              <span class="rounded-full bg-white-300 px-1.5 py-0.5 font-medium text-black-600 dark:bg-navy-700 dark:text-black-600">no limit</span>
             {/if}
           </p>
         {/if}

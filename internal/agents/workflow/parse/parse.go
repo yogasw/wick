@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	gotemplate "text/template"
 
@@ -372,6 +373,7 @@ func Validate(w workflow.Workflow) *Result {
 			r.Warnings = append(r.Warnings, Error{Path: "graph.nodes", Message: fmt.Sprintf("node %q is unreachable from entry", nid)})
 		}
 	}
+	validateSessionInitUse(r, w.Graph, nodesByID)
 
 	return r
 }
@@ -840,6 +842,91 @@ func triggerReachesRespondNode(g workflow.Graph, entryNodeID string) bool {
 		}
 	}
 	return false
+}
+
+// validateSessionInitUse warns when a session_init node creates a session that
+// no agent node downstream of it will use. session_init writes the session to
+// disk as soon as it runs, so each such run leaves an empty session behind.
+//
+// Two shapes cause it:
+//   - no agent node is reachable from the session_init at all;
+//   - a reachable agent node has `session: "new"`, which always mints its own
+//     session and so ignores the one session_init prepared.
+//
+// Both warnings name the node, say what happens, and give the fix, so the
+// message reads the same to a person on the canvas and to an LLM editing the
+// workflow over MCP. The warning lands on the session_init and on each
+// offending agent node so the canvas badges both.
+func validateSessionInitUse(r *Result, g workflow.Graph, nodesByID map[string]workflow.Node) {
+	label := func(n workflow.Node) string {
+		if n.Label != "" {
+			return n.Label
+		}
+		return n.ID
+	}
+	for _, init := range g.Nodes {
+		if init.Type != workflow.NodeSessionInit {
+			continue
+		}
+		downstream := BfsReachable(g, map[string]bool{init.ID: true})
+		var agents []workflow.Node
+		for id := range downstream {
+			if n, ok := nodesByID[id]; ok && id != init.ID && n.Type == workflow.NodeAgent {
+				agents = append(agents, n)
+			}
+		}
+		sort.Slice(agents, func(i, j int) bool { return agents[i].ID < agents[j].ID })
+
+		// An agent shares init's session when it inherits the run session
+		// (session empty) or names init through session_from. "new" mints a
+		// fresh session, and session_from another node reads that node's.
+		var users, skipping []workflow.Node
+		for _, a := range agents {
+			own := a.SessionFrom == "" && a.Session == workflow.SessionNew
+			other := a.SessionFrom != "" && a.SessionFrom != init.ID
+			if own || other {
+				skipping = append(skipping, a)
+				why := `has session "new", so it opens its own session`
+				fix := fmt.Sprintf("Clear this node's session so it uses session_init's, or set session_from to %q.", init.ID)
+				if other {
+					why = fmt.Sprintf("reads its session from %q, not from session_init", a.SessionFrom)
+					fix = fmt.Sprintf("Set session_from to %q, or clear it, if it should share session_init's session.", init.ID)
+				}
+				r.Warnings = append(r.Warnings, Error{Path: fmt.Sprintf("graph.nodes[%s].session", a.ID), Message: fmt.Sprintf(
+					"agent %q %s and ignores the one session_init %q already created (left empty if nothing else uses it). %s",
+					label(a), why, label(init), fix)})
+				continue
+			}
+			users = append(users, a)
+		}
+
+		initPath := fmt.Sprintf("graph.nodes[%s].session", init.ID)
+		switch {
+		case len(agents) == 0:
+			r.Warnings = append(r.Warnings, Error{Path: initPath, Message: fmt.Sprintf(
+				"session_init %q creates a session on every run but no agent node comes after it, so that session is never used and is left empty. Remove this node, or connect an agent node after it.",
+				label(init))})
+		case len(users) == 0:
+			names := make([]string, len(skipping))
+			for i, n := range skipping {
+				names[i] = fmt.Sprintf("%q", label(n))
+			}
+			r.Warnings = append(r.Warnings, Error{Path: initPath, Message: fmt.Sprintf(
+				"session_init %q creates a session on every run, but none of the agents after it (%s) use it, so the session is left empty. Make an agent use it (clear its session, or set session_from to %q), or remove this node.",
+				label(init), strings.Join(names, ", "), init.ID)})
+		}
+
+		// An agent that shares init's session cannot choose its own project: the
+		// session already exists with the project session_init gave it, and the
+		// pool only backfills a project onto a session that has none.
+		for _, a := range users {
+			if a.Workspace != "" && a.Workspace != init.Workspace {
+				r.Warnings = append(r.Warnings, Error{Path: fmt.Sprintf("graph.nodes[%s].workspace", a.ID), Message: fmt.Sprintf(
+					"agent %q sets workspace %q but uses the session from session_init %q, whose project is already fixed, so this workspace is ignored. Set the project on session_init, or give this agent its own session (session \"new\").",
+					label(a), a.Workspace, label(init))})
+			}
+		}
+	}
 }
 
 // validateStickyTexts warns (never blocks) on sticky_note cards placed

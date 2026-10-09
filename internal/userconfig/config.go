@@ -47,7 +47,7 @@ type Config struct {
 	Port int `json:"port,omitempty"`
 
 	// LogRetentionDays controls how many days of per-day log files are
-	// kept. 0 = use built-in default (7). Set in config.json to override.
+	// kept. 0 = use built-in default (1). Set in config.json to override.
 	LogRetentionDays int `json:"log_retention_days,omitempty"`
 
 	// DatabasePath overrides the SQLite DB location. Empty = auto-detect.

@@ -21,6 +21,7 @@
 package logfiles
 
 import (
+	"bytes"
 	"io"
 	stdlog "log"
 	"os"
@@ -38,8 +39,72 @@ import (
 const (
 	logSuffix            = ".log"
 	dateLayout           = "2006-01-02"
-	defaultRetentionDays = 7
+	defaultRetentionDays = 1
+
+	// pruneInterval is how often the background pass re-applies the
+	// retention window. Setup used to prune only at boot, so a daemon that
+	// stays up for weeks never deleted anything.
+	pruneInterval = time.Hour
+
+	// maxUndatedBytes caps a log file that carries no date in its name
+	// (daemon-stderr.log is opened by the supervisor, not by us, so it can
+	// never roll). Past the cap the file is cut down to keepUndatedBytes.
+	maxUndatedBytes  int64 = 50 << 20
+	keepUndatedBytes int64 = 5 << 20
 )
+
+// dailyFile is an io.WriteCloser for <prefix>-YYYY-MM-DD.log that follows
+// the local date: the first write after midnight closes yesterday's file and
+// opens today's. Setup opened the file once at boot, so a long-lived daemon
+// kept appending to the day it started — one ever-growing file the retention
+// pass could not remove because its date was never old enough.
+type dailyFile struct {
+	mu     sync.Mutex
+	dir    string
+	prefix string
+	date   string
+	f      *os.File
+}
+
+func newDailyFile(dir, prefix string) (*dailyFile, error) {
+	d := &dailyFile{dir: dir, prefix: prefix}
+	if err := d.open(time.Now().Format(dateLayout)); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+func (d *dailyFile) open(date string) error {
+	f, err := os.OpenFile(
+		filepath.Join(d.dir, d.prefix+"-"+date+logSuffix),
+		os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	if err != nil {
+		return err
+	}
+	if d.f != nil {
+		d.f.Close()
+	}
+	d.f, d.date = f, date
+	return nil
+}
+
+func (d *dailyFile) Write(p []byte) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if today := time.Now().Format(dateLayout); today != d.date {
+		// A failed roll keeps writing to the old file rather than dropping
+		// the line.
+		_ = d.open(today)
+	}
+	return d.f.Write(p)
+}
+
+func (d *dailyFile) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.f.Close()
+}
 
 // Set bundles the per-component loggers produced by Setup. Callers
 // wire each logger into the relevant subsystem (server / worker / mcp)
@@ -72,7 +137,7 @@ func (w *bestEffortWriter) Write(p []byte) (int, error) {
 // funnel fmt.Printf and panic traces into app.log, points the global
 // zerolog log.Logger and stdlib log at the App logger, and returns a
 // cleanup func that flushes the pipe goroutines then closes all files.
-// retentionDays <= 0 falls back to the default (7 days).
+// retentionDays <= 0 falls back to the default (1 day).
 func Setup(appName string, retentionDays int) (Set, func(), error) {
 	dir, err := userconfig.Dir(appName)
 	if err != nil {
@@ -86,13 +151,11 @@ func Setup(appName string, retentionDays int) (Set, func(), error) {
 		retentionDays = defaultRetentionDays
 	}
 	pruneOldLogs(dir, retentionDays)
+	capUndatedLogs(dir, maxUndatedBytes, keepUndatedBytes)
+	stopPrune := startPruner(dir, retentionDays)
 
-	date := time.Now().Format(dateLayout)
-	openLog := func(prefix string) (*os.File, error) {
-		return os.OpenFile(
-			filepath.Join(dir, prefix+"-"+date+logSuffix),
-			os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644,
-		)
+	openLog := func(prefix string) (*dailyFile, error) {
+		return newDailyFile(dir, prefix)
 	}
 	fApp, err := openLog("app")
 	if err != nil {
@@ -158,9 +221,11 @@ func Setup(appName string, retentionDays int) (Set, func(), error) {
 	}
 
 	log.Logger = ls.App
+	zerolog.SetGlobalLevel(globalLevel())
 	stdlog.SetOutput(mwApp)
 
 	return ls, func() {
+		stopPrune()
 		for _, w := range pipeWriters {
 			w.Close()
 		}
@@ -215,6 +280,98 @@ func WithOriginalStdio(fn func() error) error {
 	os.Stdout, os.Stderr = realStdout, realStderr
 	defer func() { os.Stdout, os.Stderr = so, se }()
 	return fn()
+}
+
+// globalLevel returns the zerolog level for the process: LOG_LEVEL when set
+// to a level zerolog knows, otherwise info. Debug used to be on by default,
+// which wrote one line per streamed token of every agent session — gigabytes
+// a day into daemon-stderr.log.
+func globalLevel() zerolog.Level {
+	if v := strings.TrimSpace(os.Getenv("LOG_LEVEL")); v != "" {
+		if lvl, err := zerolog.ParseLevel(strings.ToLower(v)); err == nil {
+			return lvl
+		}
+	}
+	return zerolog.InfoLevel
+}
+
+// startPruner re-applies retention and the undated-file cap every
+// pruneInterval until the returned stop func is called.
+func startPruner(dir string, retentionDays int) (stop func()) {
+	done := make(chan struct{})
+	var once sync.Once
+	go func() {
+		t := time.NewTicker(pruneInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				pruneOldLogs(dir, retentionDays)
+				capUndatedLogs(dir, maxUndatedBytes, keepUndatedBytes)
+			}
+		}
+	}()
+	return func() { once.Do(func() { close(done) }) }
+}
+
+// capUndatedLogs trims every *.log in dir whose name carries no
+// YYYY-MM-DD date and that grew past max, keeping only its last keep bytes.
+// The supervisor holds such a file open with O_APPEND, so truncating in
+// place frees the space without a restart and the writer carries on at the
+// new end.
+func capUndatedLogs(dir string, max, keep int64) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, logSuffix) || hasLogDate(name) {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		info, err := os.Stat(path)
+		if err != nil || info.Size() <= max {
+			continue
+		}
+		trimToTail(path, keep)
+	}
+}
+
+func hasLogDate(name string) bool {
+	parts := strings.Split(strings.TrimSuffix(name, logSuffix), "-")
+	if len(parts) < 3 {
+		return false
+	}
+	_, err := time.Parse(dateLayout, strings.Join(parts[len(parts)-3:], "-"))
+	return err == nil
+}
+
+// trimToTail rewrites path to hold only its last keep bytes.
+func trimToTail(path string, keep int64) {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.Size() <= keep {
+		return
+	}
+	tail := make([]byte, keep)
+	if _, err := f.ReadAt(tail, info.Size()-keep); err != nil {
+		return
+	}
+	// Drop the partial first line so the file still starts on a record.
+	if i := bytes.IndexByte(tail, '\n'); i >= 0 && i+1 < len(tail) {
+		tail = tail[i+1:]
+	}
+	if err := f.Truncate(0); err != nil {
+		return
+	}
+	_, _ = f.WriteAt(tail, 0)
 }
 
 // pruneOldLogs removes <prefix>-YYYY-MM-DD.log files older than retentionDays.

@@ -218,3 +218,26 @@ func itoaShort(i int) string {
 	}
 	return "n"
 }
+
+// A node that names a `key` must update the matching row, not insert a new
+// one on every run (the thread monitor's tick wrote a fresh row each time).
+func TestDT_UpsertByKeyUpdatesInPlace(t *testing.T) {
+	ex, svc := newDTExec(t)
+	node := func(status string) workflow.Node {
+		return workflow.Node{
+			ID: "up", Type: workflow.NodeDataTableUpsert, Table: "events",
+			Key:       map[string]any{"key": "digest"},
+			RowValues: map[string]any{"key": "digest", "status": status, "priority": 1},
+		}
+	}
+	if out := runDT(t, ex, node("open"), nil); out.Fields["action"] != "insert" {
+		t.Fatalf("first run should insert, got %v", out.Fields["action"])
+	}
+	if out := runDT(t, ex, node("done"), nil); out.Fields["action"] != "update" {
+		t.Fatalf("second run should update, got %v", out.Fields["action"])
+	}
+	n, err := svc.Count("events", map[string]any{"key": "digest"})
+	if err != nil || n != 1 {
+		t.Fatalf("want exactly 1 row for the key, got %d (err %v)", n, err)
+	}
+}

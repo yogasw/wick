@@ -355,6 +355,17 @@ func ToggleAndReload(ctx context.Context, svc service.Service, router *trigger.R
 	return HotReload(ctx, svc, router, cron, schedAt, id)
 }
 
+// WithProjectAccess installs the project gate on the DB-backed repository: a
+// draft is refused when an agent / session_init node names a project its
+// author cannot access. Call after WithDB; a no-op while the file store is
+// still in place (tests).
+func (m *Manager) WithProjectAccess(fn func(userID, projectID string) bool) *Manager {
+	if m.Repo != nil {
+		m.Repo.WithProjectAccess(fn)
+	}
+	return m
+}
+
 // canPinSession answers whether a workflow author may point a node at an
 // existing session. Every agent turn in a session runs with that SESSION's
 // identity, so pinning one is borrowing whoever owns it — the same act a

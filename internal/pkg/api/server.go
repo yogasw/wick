@@ -1408,6 +1408,28 @@ func NewServer() *Server {
 	// this call, workflow body + draft + history + tests live in SQL;
 	// only state.json + env.json + runs/<id>/ stay on disk.
 	wfMgr.WithDB(db)
+	// A workflow node (agent / session_init) may bind its session to a project.
+	// Judge the author by the same visibility rule the project pickers use, so a
+	// workflow cannot run inside a project its editor cannot see. An unknown
+	// project id is let through here: it fails visibly when the run creates the
+	// session, and a stale id must not make a draft impossible to save.
+	wfMgr.WithProjectAccess(func(userID, projectID string) bool {
+		p, err := agentproject.Load(agentsLayout, projectID)
+		if err != nil {
+			return true
+		}
+		var u entity.User
+		if err := db.Where("id = ?", userID).First(&u).Error; err != nil {
+			return false
+		}
+		var tags []entity.UserTag
+		db.Where("user_id = ?", userID).Find(&tags)
+		acc := agentproject.Access{UserID: userID, IsAdmin: u.IsAdmin() || u.CanSeeAllSessions()}
+		for _, t := range tags {
+			acc.TagIDs = append(acc.TagIDs, t.TagID)
+		}
+		return agentproject.CanAccess(p.Meta, acc)
+	})
 	// Cron waits for the intake baton (started from Run); the rest of the
 	// workflow subsystem — router workers, webhook index, channel triggers —
 	// boots now so the UI and MCP are complete either way.

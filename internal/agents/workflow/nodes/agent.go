@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/workflow"
@@ -28,6 +29,7 @@ type agentSchema struct {
 	Thinking          string `wick:"key=thinking;dropdown=on|off;default=on;desc=Extended thinking. on = enabled (set a token budget below), off disables it to cut latency (claude only)."`
 	MaxThinkingTokens int    `wick:"key=max_thinking_tokens;number;visible_when=thinking:on;desc=Thinking token budget when on. 0 = unlimited (provider default), set >=1024 to cap. Claude only."`
 	Session           string `wick:"key=session;desc=new=fresh session per run, empty=inherit run session"`
+	Workspace         string `wick:"key=workspace;desc=Project (workspace id) this agent's session runs in. Applies only when the agent creates its own session: session = new, or no session_init before it. When it inherits a session_init's session the project is already fixed there and this is ignored, so set it on session_init instead."`
 	TimeoutSec        int    `wick:"key=timeout_sec;number;desc=Hard timeout in seconds. The node fails with a clear error if the agent does not finish in time (e.g. connector/MCP tools never connect). 0 = inherit the run's max duration."`
 	RequireStatus     bool   `wick:"key=require_status;desc=When true the agent must end with a JSON object {\"status\":\"done|blocked|needs_input\",\"summary\":\"...\"}, any non-done status (or missing JSON) fails the node so a blocked or question-only run is not marked success."`
 }
@@ -397,6 +399,16 @@ func resolveAgentSessionID(n workflow.Node, rc *workflow.RunContext) (string, er
 		return id, nil
 	}
 	if n.Session == workflow.SessionNew {
+		// A session_init upstream already prepared a session for this run;
+		// "new" bypasses it and leaves that one empty. Say so in the log.
+		if rc.DefaultAgentSessionID != "" {
+			log.Warn().
+				Str("component", "wf").
+				Str("wf_id", rc.Workflow.ID).
+				Str("node", n.ID).
+				Str("unused_session", rc.DefaultAgentSessionID).
+				Msg("agent node has session \"new\" so it ignores the session session_init created; that session stays empty — clear the agent's session or set session_from")
+		}
 		return "wf_adhoc_" + uuid.NewString(), nil
 	}
 	if rc.DefaultAgentSessionID != "" {

@@ -163,13 +163,13 @@
       <span>{s.step_count ?? 0} step{(s.step_count ?? 0) === 1 ? "" : "s"}</span>
       {#if s.on_match === "continue"}
         <span class="rounded-full bg-green-100 px-1.5 py-px text-[10px] font-medium text-green-700 dark:bg-green-900 dark:text-green-300" data-testid="watch-on-match">
-          terus jalan · {s.notified ?? 0} notif
+          keeps running · {s.notified ?? 0} notified
         </span>
       {:else}
-        <span data-testid="watch-on-match">· berhenti setelah match</span>
+        <span data-testid="watch-on-match">· stops after match</span>
       {/if}
       {#if s.no_timeout}
-        <span class="rounded-full bg-white-300 px-1.5 py-px text-[10px] font-medium text-black-600 dark:bg-navy-700 dark:text-black-600" data-testid="watch-no-timeout">tanpa batas</span>
+        <span class="rounded-full bg-white-300 px-1.5 py-px text-[10px] font-medium text-black-600 dark:bg-navy-700 dark:text-black-600" data-testid="watch-no-timeout">no limit</span>
       {/if}
       {#if s.last_run_at}<span>· last run {ago(s.last_run_at)}</span>{/if}
     </p>

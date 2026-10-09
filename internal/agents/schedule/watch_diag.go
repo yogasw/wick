@@ -102,5 +102,5 @@ func clip(s string) string {
 
 // runsHint is the pointer every failure notice ends with.
 func runsHint(id string) string {
-	return "lihat detail: wick_schedule_message action=runs id=" + id + " result=error · action=run id=" + id + " run_id=<id> (output per step)"
+	return "see details: wick_schedule_message action=runs id=" + id + " result=error · action=run id=" + id + " run_id=<id> (output of each step)"
 }

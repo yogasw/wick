@@ -51,7 +51,7 @@ func (s *ScheduleAtScheduler) Sync(id string, w workflow.Workflow) {
 	// Build the new set of desired timers.
 	wanted := map[string]workflow.Trigger{}
 	for _, tr := range w.Triggers {
-		if tr.Type != workflow.TriggerScheduleAt {
+		if !w.Enabled || tr.Type != workflow.TriggerScheduleAt {
 			continue
 		}
 		if tr.At.IsZero() || !tr.At.After(time.Now()) {
