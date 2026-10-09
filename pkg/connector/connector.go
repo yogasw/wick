@@ -252,6 +252,13 @@ type OpHealth struct {
 // project the granted permissions against each operation's requirements.
 type HealthCheckFunc func(c *Ctx) ([]OpHealth, error)
 
+// ConfigValidateFunc rejects a config value the connector can tell is
+// wrong from its shape alone (e.g. a Slack user token pasted into the bot
+// token field). It sees the value as submitted, and only values that
+// differ from the stored one, so a bad value already saved never blocks
+// editing another field. A non-nil error aborts the whole save.
+type ConfigValidateFunc func(key, value string) error
+
 // OAuthMeta describes how a connector participates in the OAuth 2.0 flow.
 // The generic manager handler uses AuthorizeURL and Scopes to build the
 // consent redirect; GetUserIdentity is called after the token exchange to
@@ -321,6 +328,9 @@ type Module struct {
 	// of group calls AllOps().
 	Operations  []Category
 	HealthCheck HealthCheckFunc `json:"-"`
+	// ValidateConfig is optional. When non-nil, every instance config
+	// write (create, edit, OAuth, the manager MCP tool) runs it first.
+	ValidateConfig ConfigValidateFunc `json:"-"`
 	// OAuth is non-nil when this connector supports user OAuth.
 	OAuth *OAuthMeta
 	// AllowSessionConfig lets this connector be cloned into a per-session

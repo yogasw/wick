@@ -2601,7 +2601,23 @@ func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReaso
 			return
 		}
 	}
+	// An idle kill of a process that was sent messages and never wrote a
+	// line after them: the turn never started. The spawn already drained
+	// them from the buffer, so without this they died with the process —
+	// the person saw no reply and no event, and the next spawn ran without
+	// them. Put them back BEFORE the slot is released, so whichever spawn
+	// comes next (a new message, a sub-agent result) delivers them.
+	var unanswered []string
+	if reason == provider.ExitIdle {
+		unanswered = p.rebufferUnanswered(sessionID, agentName)
+	}
 	p.onAgentExit(sessionID, agentName)
+	if len(unanswered) > 0 {
+		// After onAgentExit, so the notice buffers instead of being written
+		// into the dead process. It does not spawn: a CLI that just sat
+		// silent for the whole idle window would most likely do it again.
+		p.noticeNotify(sessionID, agentName, unansweredNotice(len(unanswered)), errUnansweredRequeued)
+	}
 	// After the slot is released, decide whether this death deserves a
 	// restart and tell the agent what happened. Ordered after
 	// onAgentExit so the restart competes for a free slot like any other
@@ -2729,6 +2745,60 @@ func (p *Pool) noticeNotify(sessionID, agentName, msg string, cause error) {
 		Err:       cause,
 	})
 }
+
+// rebufferUnanswered moves the messages an idle-killed process took and
+// never answered back into the session buffer, in order. Returns them.
+func (p *Pool) rebufferUnanswered(sessionID, agentName string) []string {
+	p.mu.Lock()
+	entry, ok := p.active[sessionKey(sessionID, agentName)]
+	p.mu.Unlock()
+	if !ok || entry.agent == nil {
+		return nil
+	}
+	msgs := entry.agent.TakeUnanswered()
+	if len(msgs) == 0 {
+		return nil
+	}
+	buf, err := p.bufferFor(sessionID)
+	if err != nil {
+		log.Warn().Err(err).
+			Str("component", "pool").
+			Str("session", sessionID).
+			Msg("pool.exit: could not re-buffer unanswered messages")
+		return nil
+	}
+	for _, m := range msgs {
+		if err := buf.Append(m); err != nil {
+			log.Warn().Err(err).
+				Str("component", "pool").
+				Str("session", sessionID).
+				Msg("pool.exit: could not re-buffer an unanswered message")
+		}
+	}
+	log.Warn().
+		Str("component", "pool").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Int("messages", len(msgs)).
+		Msg("pool.exit: idle-killed before answering; messages kept for the next spawn")
+	return msgs
+}
+
+// unansweredNotice is the inline line for messages handed back to the
+// buffer after an idle kill. Shown to the person and read by the agent on
+// its next spawn.
+func unansweredNotice(n int) string {
+	what := "Your last message was"
+	if n > 1 {
+		what = fmt.Sprintf("Your last %d messages were", n)
+	}
+	return what + " not answered: the agent produced no output before the idle timeout and was stopped. " +
+		"They are kept and will be delivered together with the next message (or sub-agent result) that wakes the agent."
+}
+
+// errUnansweredRequeued names the condition for SpawnErrorEvent consumers'
+// logs. Nothing branches on it.
+var errUnansweredRequeued = errors.New("agent idle-killed before answering; messages re-queued")
 
 // errCrashLoopHalted names the condition for the logs of whoever consumes
 // SpawnErrorEvent. Nothing branches on it.

@@ -118,14 +118,14 @@ type ProjectSettingsResponse struct {
 	// Ticket is this project's ticket-mode configuration, edited in the
 	// settings SPA's "Ticket system" section and saved via the separate
 	// PUT /api/projects/{id}/ticket-config endpoint.
-	Ticket    project.TicketConfig `json:"ticket"`
-	ChatCount int                  `json:"chat_count"`
-	CreatedAt string               `json:"created_at"`
-	PresetList      []string                  `json:"preset_list"`
-	ProviderList    []ProviderListItem        `json:"provider_list"`
-	Pinned          []ProjectPinnedSession    `json:"pinned"`
-	MetaJSON        string                    `json:"meta_json"`
-	Action          string                    `json:"action"`
+	Ticket       project.TicketConfig   `json:"ticket"`
+	ChatCount    int                    `json:"chat_count"`
+	CreatedAt    string                 `json:"created_at"`
+	PresetList   []string               `json:"preset_list"`
+	ProviderList []ProviderListItem     `json:"provider_list"`
+	Pinned       []ProjectPinnedSession `json:"pinned"`
+	MetaJSON     string                 `json:"meta_json"`
+	Action       string                 `json:"action"`
 }
 
 // ProviderListItem is one selectable provider instance for the project
@@ -305,6 +305,10 @@ func apiProjectUpdate(c *tool.Ctx) {
 	meta.Description = req.Description
 	if v := req.Preset; v != "" {
 		meta.Defaults.Preset = v
+	}
+	// Only a changed provider is the caller's choice (see updateProject).
+	if prov := strings.TrimSpace(req.Provider); prov != meta.Defaults.Provider && !requireProviderKeyAccess(c, prov) {
+		return
 	}
 	meta.Defaults.Provider = strings.TrimSpace(req.Provider)
 	meta.Defaults.Model = modelWithProvider(req.Provider, req.Model)

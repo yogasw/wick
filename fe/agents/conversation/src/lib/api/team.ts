@@ -276,7 +276,19 @@ export type AgentSessionItem = {
   last_active: string | null;
   agent_main: boolean;
   status: string;
+  /** Pool state of the chat's process ("working", "idle", …), "" when none. */
+  lifecycle?: string;
+  /** People who have spoken in it; >1 draws the shared marker. */
+  participants?: number;
+  /** Who the chat belongs to; mine = the caller. */
+  owner_user_id?: string;
+  owner_name?: string;
+  mine?: boolean;
 };
+
+/** GET …/sessions?scope=all: every chat of a shared agent (owner's and each
+    recipient's). shared = the drawer offers You | All. */
+export type AgentSessionsAll = { shared: boolean; sessions: AgentSessionItem[] | null };
 
 const enc = encodeURIComponent;
 
@@ -489,6 +501,11 @@ export const markAgentRead = (base: string, id: string) =>
 
 export const listAgentSessions = (base: string, id: string) =>
   apiGetE<AgentSessionItem[] | null>(`${base}/api/team/agents/${enc(id)}/sessions`);
+
+/** listAgentSessionsAll is the Chats drawer's read: the caller's chats and,
+    when the agent is shared, everyone else's it is shared with. */
+export const listAgentSessionsAll = (base: string, id: string) =>
+  apiGetE<AgentSessionsAll>(`${base}/api/team/agents/${enc(id)}/sessions?scope=all`);
 
 /** setAgentMainChat makes sessionId the agent's main chat — where @mentions,
     schedules to "Main chat" and opening the agent land. The old main stays
@@ -749,8 +766,17 @@ export const compactAgentMain = (base: string, id: string) =>
 
 /* ── Sharing (chat only) ─────────────────────────────────────────────── */
 
-export type AgentShare = { user_id: string; name: string; created_at: string };
-export type AgentShares = { shares: AgentShare[]; shareable: boolean; reason: string };
+/** history_visible: "Recipients can view chat history" for this share —
+    the stored choice, else the agent type's default (history_default). */
+export type AgentShare = { user_id: string; name: string; created_at: string; history_visible?: boolean };
+/** remote_kind: "slack" | "a2a" | "plugin" for a remote agent, "" built-in. */
+export type AgentShares = {
+  shares: AgentShare[];
+  shareable: boolean;
+  reason: string;
+  history_default?: boolean;
+  remote_kind?: string;
+};
 export type ShareUser = { id: string; name: string };
 
 export const listAgentShares = (base: string, id: string) =>
@@ -758,6 +784,12 @@ export const listAgentShares = (base: string, id: string) =>
 
 export const addAgentShare = (base: string, id: string, userId: string) =>
   apiPostE<{ status: string }>(`${base}/api/team/agents/${enc(id)}/shares`, { user_id: userId });
+
+/** setShareHistory flips "Recipients can view chat history" for one share. */
+export const setShareHistory = (base: string, id: string, userId: string, visible: boolean) =>
+  apiPatchE<{ status: string; history_visible: boolean }>(`${base}/api/team/agents/${enc(id)}/shares/${enc(userId)}`, {
+    history_visible: visible,
+  });
 
 export const removeAgentShare = (base: string, id: string, userId: string) =>
   apiDeleteE<{ status: string }>(`${base}/api/team/agents/${enc(id)}/shares/${enc(userId)}`);

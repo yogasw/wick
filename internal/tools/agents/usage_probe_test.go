@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/provider/logintty"
+	"github.com/yogasw/wick/internal/agents/provider/savedresets"
 )
 
 // testUsageCache is the production cache wired for tests: refreshes run
@@ -86,7 +87,7 @@ func TestUsageCacheNeverRefetchesOnItsOwn(t *testing.T) {
 	}
 
 	c.get("acct", fetch, time.Time{}) // the one automatic probe: this account was cold
-	for range 50 {       // a page open for an hour, polling throughout
+	for range 50 {                    // a page open for an hour, polling throughout
 		clk.advance(time.Minute)
 		c.get("acct", fetch, time.Time{})
 	}
@@ -600,4 +601,72 @@ func TestUsageCacheCredentialsChangeRespectsLimits(t *testing.T) {
 			t.Errorf("fetched %d times, want 1 — Retry-After is never overridden", calls)
 		}
 	})
+}
+
+// Saved resets ride in the usage probe's own flight: no extra probe, and
+// a failed saved-resets read never fails the usage reading.
+func TestUsageCacheSavedResetsCompanion(t *testing.T) {
+	c, _ := clockedCache(time.Minute)
+	usageCalls, resetCalls := 0, 0
+	fetch := func() ([]logintty.UsageWindow, error) { usageCalls++; return windows(10), nil }
+	resets := func() (*savedresets.SavedResets, error) {
+		resetCalls++
+		return &savedresets.SavedResets{Supported: true, Available: 1}, nil
+	}
+	v := c.get("acct", fetch, time.Time{}, resets)
+	v = c.get("acct", fetch, time.Time{}, resets)
+	if usageCalls != 1 || resetCalls != 1 {
+		t.Fatalf("calls usage=%d resets=%d, want 1/1", usageCalls, resetCalls)
+	}
+	if v.SavedResets == nil || v.SavedResets.Available != 1 || len(v.Windows) != 1 {
+		t.Fatalf("view = %+v", v)
+	}
+
+	c2, _ := clockedCache(time.Minute)
+	failing := func() (*savedresets.SavedResets, error) { return nil, errors.New("boom") }
+	v2 := c2.get("acct", fetch, time.Time{}, failing)
+	if v2.Err != nil || !v2.Known || v2.SavedResets != nil || len(v2.Windows) != 1 {
+		t.Fatalf("failed resets must leave usage intact and omit the field: %+v", v2)
+	}
+}
+
+// A re-check whose usage reading is good but carries no saved resets
+// drops the old ones (the account stopped reporting them); one whose
+// usage read failed keeps the last good copy, like the windows.
+func TestUsageCacheSavedResetsDropWhenNoLongerReported(t *testing.T) {
+	c, clk := clockedCache(time.Minute)
+	usageFail, resetsFail := false, false
+	fetch := func() ([]logintty.UsageWindow, error) {
+		if usageFail {
+			return nil, errors.New("boom")
+		}
+		return windows(10), nil
+	}
+	resets := func() (*savedresets.SavedResets, error) {
+		if resetsFail {
+			return nil, errors.New("no block")
+		}
+		return &savedresets.SavedResets{Supported: true, Available: 2}, nil
+	}
+	if v := c.get("acct", fetch, time.Time{}, resets); v.SavedResets == nil {
+		t.Fatalf("first reading: %+v", v)
+	}
+
+	usageFail = true
+	clk.advance(usageManualMinInterval)
+	if ok, _ := c.forceRefresh("acct", fetch, resets); !ok {
+		t.Fatal("re-check refused")
+	}
+	if v := c.get("acct", fetch, time.Time{}, resets); v.SavedResets == nil || v.SavedResets.Available != 2 {
+		t.Fatalf("failed usage read must keep the last saved resets: %+v", v.SavedResets)
+	}
+
+	usageFail, resetsFail = false, true
+	clk.advance(time.Hour)
+	if ok, _ := c.forceRefresh("acct", fetch, resets); !ok {
+		t.Fatal("re-check refused")
+	}
+	if v := c.get("acct", fetch, time.Time{}, resets); v.SavedResets != nil {
+		t.Fatalf("stale saved resets served after the account stopped reporting them: %+v", v.SavedResets)
+	}
 }

@@ -116,6 +116,7 @@
     value: selectedProvider,
     onChange: (v: string) => { selectedProvider = v; },
     loadModels: loadProviderModels,
+    usageBase: base,
   });
 
   // Preset selector — same affordance as the new-session page, so an init

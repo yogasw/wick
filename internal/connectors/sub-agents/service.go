@@ -28,6 +28,10 @@ import (
 type Deps struct {
 	Service func() *delegation.Service
 	Layout  agentconfig.Layout
+	// TeamChats (optional) is, for a Team agent's session, the chat
+	// paired with it at each teammate; nil for none. list_agents shows it
+	// as team_chats.
+	TeamChats func(ctx context.Context, sessionID string) any
 }
 
 // svc resolves the delegation service, or nil when unavailable.

@@ -47,6 +47,20 @@ type SwitchOptions struct {
 	ModelID string
 }
 
+// SwitchGuard, when set, decides whether a switch asked for outside the
+// UI's switch endpoint — a "#tag" message on any channel, agentctl — may
+// move sessionID to tag. A non-nil error refuses it, and its text says
+// why. The agents tool wires it: it knows the session's agent and owner.
+var SwitchGuard func(ctx context.Context, sessionID, tag string) error
+
+// CheckSwitch runs SwitchGuard; nil when none is wired.
+func CheckSwitch(ctx context.Context, sessionID, tag string) error {
+	if SwitchGuard == nil {
+		return nil
+	}
+	return SwitchGuard(ctx, sessionID, tag)
+}
+
 // normalizeProviderKey returns "type/name" form. Bare "type" becomes "type/type".
 func normalizeProviderKey(key string) string {
 	if strings.Contains(key, "/") {

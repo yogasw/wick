@@ -139,6 +139,9 @@ func (s *Server) switchProvider(cmd Cmd) Reply {
 	if provName != provType {
 		tag = provType + "/" + provName
 	}
+	if err := provider.CheckSwitch(context.Background(), sessionID, tag); err != nil {
+		return Reply{Error: err.Error()}
+	}
 	if err := provider.Switch(s.layout, s.pool, sessionID, agentName, tag, provider.SwitchOptions{
 		Source: "agentctl",
 	}); err != nil {

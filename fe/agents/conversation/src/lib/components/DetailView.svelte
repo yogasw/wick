@@ -6,11 +6,13 @@
   import { Effect, Either } from "effect";
   import { WickClientLayer, listAgentProfiles } from "@wick-fe/common-api";
   import { toastError, toastOk, toastWarn } from "@wick-fe/common-stores";
-  import { ConfirmDialog, Composer } from "@wick-fe/common-ui";
+  import { Button, ConfirmDialog, Composer, Modal } from "@wick-fe/common-ui";
+  import { seedUsage, glanceFromWire } from "@wick-fe/common-ui/usage";
   import { NOTIFY_KEY } from "../notify-pref.js";
 
   import { createThreadStore, TURN_SETTLE_MS } from "../stores/thread.js";
   import { remoteProgress } from "../remoteAgent.js";
+  import { noAccessError } from "../agentSharing.js";
   import type { ThreadMeta, LifecycleState } from "../stores/thread.js";
   import { connectSession } from "../stores/sse.js";
   import type { SSEStatus } from "../types/agents.js";
@@ -20,7 +22,7 @@
   import { currentApproval, showApproval, hideApproval, isExpiredApprovalError } from "../stores/approvals.js";
   import { notify } from "../notify.js";
   import { push } from "../router.js";
-  import { composerPlaceholder, hiddenTabNote, providerLocked, type AgentMode, type RailTab } from "../agentMode.js";
+  import { composerPlaceholder, hiddenTabNote, providerSwitchBody, providerSwitchWarns, type AgentMode, type RailTab } from "../agentMode.js";
   import { bareToolName } from "../todoGroups.js";
   import { readScmWidth, writeScmWidth, clampScmWidth, RAIL_GUTTER_PX } from "../scmWidth.js";
   import { isValidFileName } from "../fileName.js";
@@ -134,6 +136,10 @@
     onRailChange?: (open: boolean) => void;
   };
 
+  /* Another person's chat of a shared agent (meta.read_only): the
+     server refuses changes, so the composer is off too. Per chat: both
+     hosts key this view on the session id, so a new chat starts at false. */
+  let readOnly = $state(false);
   let { base, sessionId, agentMode, railToggle = 0, onRailChange }: Props = $props();
   // Trace chips stat the files a tool call named; cached per session.
   const traceFiles = $derived(makeTraceFiles(base, sessionId));
@@ -414,6 +420,8 @@
     run(getComposerUsage(base, activeProvider, activeModelID).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
         usageData = normalizeComposerUsage(res);
+        // Same reading feeds the picker rings via the shared store.
+        if (activeProvider && !usageData.pending) seedUsage(normKey(activeProvider), glanceFromWire(res));
         if (usageData.checking || usageData.pending) {
           scheduleUsagePoll();
         } else {
@@ -637,17 +645,20 @@
       : "",
     onChange: (v: string) => handleProviderChange(v),
     loadModels: loadProviderModels,
+    usageBase: base,
     showCapabilities: capsPrefs.show,
     capabilityMode: capsPrefs.mode,
   });
   /* Agent mode: the provider chip follows the agent's switch setting.
-     On, the picker works but another provider is refused once the chat
-     has turns; off, the chip only explains where to change it. */
-  let providerNotice = $state<"started" | "locked" | null>(null);
+     On, the picker works, and another provider in a chat that has turns
+     asks first (pendingProvider holds the pick); off, the chip only
+     explains where to change it. */
+  let providerNotice = $state<"locked" | null>(null);
+  let pendingProvider = $state<string | null>(null);
   const agentProviderSelect = $derived({
     ...providerSelect,
     onChange: (v: string) => {
-      if (providerLocked(turns.length > 0, activeProvider, v)) providerNotice = "started";
+      if (providerSwitchWarns(turns.length > 0, activeProvider ?? "", v)) pendingProvider = v;
       else void handleProviderChange(v);
     },
   });
@@ -1758,7 +1769,9 @@
         }
       })
       .catch((e: unknown) => {
-        if (showError) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
+        // A chat the caller may not open (e.g. a shared agent's chat with
+        // history off) is an expected state: the empty chat shows, no alert.
+        if (showError && !noAccessError(e)) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
       })
       .finally(() => { historyLoaded = true; });
   }
@@ -1805,7 +1818,11 @@
           }
         });
       })
-      .catch((e: unknown) => toastError(`History: ${e instanceof Error ? e.message : String(e)}`))
+      .catch((e: unknown) => {
+        // Same as the first load: a chat the caller may no longer open is
+        // an expected state, not an alert.
+        if (!noAccessError(e)) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
+      })
       .finally(() => { loadingOlder = false; });
   }
 
@@ -2278,6 +2295,7 @@
         activeProvider = res.provider || res.active_agent || null;
         activeModelID = res.model_id || "";
         activeProjectId = res.project_id || null;
+        readOnly = !!res.read_only;
         // The widget CSP arrives with meta, which can land AFTER the first
         // artifacts have mounted under the blocked fallback. Artifacts
         // subscribe to this policy and rebuild their srcdoc when it changes,
@@ -2285,7 +2303,13 @@
         // real policy as soon as it is known.
         setWidgetPolicy(res.widget);
       })
-      .catch(() => { title = sessionId; });
+      .catch(() => {
+        title = sessionId;
+        // No meta, no read-only claim: the composer stays on and the
+        // server's 403 refuses a send to someone else's chat. Failing
+        // closed would lock the caller's OWN chat on a passing error.
+        readOnly = false;
+      });
 
     // A bookmarked sub-agent URL redirects here as
     // ?rail=subagents&sub=<childSessionId>. Honour it so the link lands on
@@ -2820,7 +2844,13 @@
             usageRecheckWait={usageRecheckWait}
             onOpenUsage={openUsageFromContext}
           />
+          {#if readOnly}
+            <p class="mb-2 rounded-lg border border-white-300 bg-white-200 px-3 py-2 text-xs text-black-800 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600" data-testid="read-only-chat">
+              Read-only — this chat belongs to someone else.
+            </p>
+          {/if}
           <Composer
+            {readOnly}
             bind:this={composerRef}
             onSend={handleSend}
             placeholder={agentMode?.agent ? composerPlaceholder(agentMode.agent.name) : "Ask anything…   / commands · @ files"}
@@ -3548,20 +3578,36 @@
 
 <ConfirmDialog
   open={providerNotice !== null}
-  title={providerNotice === "started" ? "Provider is fixed for this chat" : "Provider is set by the agent"}
-  body={providerNotice === "started"
-    ? "Provider can't be changed once a conversation has started. Start a new chat to use a different one."
-    : `This agent always uses ${effectiveProvider}. Change it in agent Settings.`}
-  confirmLabel={providerNotice === "started" ? "New chat" : "Open Settings"}
+  title="Provider is set by the agent"
+  body={`This agent always uses ${effectiveProvider}. Change it in agent Settings.`}
+  confirmLabel="Open Settings"
   cancelLabel="Close"
   onConfirm={() => {
-    const n = providerNotice;
     providerNotice = null;
-    if (n === "started") agentMode?.onNewChat?.();
-    else agentMode?.onOpenSettings?.();
+    agentMode?.onOpenSettings?.();
   }}
   onCancel={() => (providerNotice = null)}
 />
+
+<!-- Another provider in a started chat: switching is allowed, but the
+     new provider may start without this conversation, so it asks first. -->
+<Modal open={pendingProvider !== null} title="Switch provider?" onClose={() => (pendingProvider = null)} size="sm">
+  <p class="text-sm text-black-600 dark:text-black-600">{providerSwitchBody(activeProvider ?? "", pendingProvider ?? "")}</p>
+  {#snippet footer()}
+    <Button variant="secondary" onclick={() => (pendingProvider = null)}>Cancel</Button>
+    {#if agentMode?.onNewChat}
+      <Button variant="secondary" onclick={() => { pendingProvider = null; agentMode?.onNewChat?.(); }}>New chat</Button>
+    {/if}
+    <Button
+      variant="primary"
+      onclick={() => {
+        const v = pendingProvider;
+        pendingProvider = null;
+        if (v) void handleProviderChange(v);
+      }}
+    >Switch anyway</Button>
+  {/snippet}
+</Modal>
 
 <ConfirmDialog
   open={confirmKill !== null}

@@ -9,8 +9,8 @@ import (
 
 	adminview "github.com/yogasw/wick/internal/admin/view"
 	"github.com/yogasw/wick/internal/connectors"
-	"github.com/yogasw/wick/internal/pkg/adminscope"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/adminscope"
 )
 
 // Access reach — "who can actually see this thing".
@@ -438,7 +438,6 @@ func containsString(list []string, want string) bool {
 	return false
 }
 
-
 // accountAccessDetail is the modal body for a connected account: the full set
 // from accountAccessUsers, tagged with the reason each person gets in.
 func (h *Handler) accountAccessDetail(ctx context.Context, path string) (AccessDetail, error) {
@@ -478,13 +477,14 @@ var errNoAccount = errors.New("connected account not found")
 //
 // "Who can reach this" is never just the tag holders: on most surfaces the
 // admin ROLE walks past the tags. How far it walks differs per surface, and
-// two of them are behind knobs, so the reach has to be the UNION of the tag
+// three of them are behind knobs, so the reach has to be the UNION of the tag
 // holders with whichever admins currently bypass — not the tag count alone.
 //
 //	/tools, /jobs, /manager  — login.CanAccessTool returns true for any admin,
 //	                           unconditionally. No knob.
-//	/providers               — providerPerm grants admins access and manage,
-//	                           unconditionally. No knob.
+//	/providers               — adminscope.AdminSeeAllProviderInstances
+//	                           (default ON): providerPerm grants admins access
+//	                           and manage only while it is on.
 //	/connectors, accounts    — adminscope.AdminSeeAllConnectors (default ON).
 //	/projects, /data-tables,
 //	/workflows, /skills      — adminscope.AdminSeeAllSessions (default OFF).
@@ -508,6 +508,8 @@ func (h *Handler) adminBypassForRule(rule accessRule) bool {
 		return adminscope.AdminSeeAllConnectors(h.configs)
 	case knobSessions:
 		return adminscope.AdminSeeAllSessions(h.configs)
+	case knobProviders:
+		return adminscope.AdminSeeAllProviderInstances(h.configs)
 	default:
 		return false
 	}
@@ -521,6 +523,8 @@ func (h *Handler) adminReason(path string) string {
 		return "admin (see-all connectors on)"
 	case knobSessions:
 		return "admin (see-all sessions on)"
+	case knobProviders:
+		return "admin (see-all providers on)"
 	default:
 		return "admin role"
 	}

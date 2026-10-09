@@ -26,6 +26,8 @@
   import type { ProvidersListResponse, ProviderStatusDTO, ProviderConnection } from "$lib/types.js";
   import UsageRings from "$lib/components/UsageRings.svelte";
   import UsageCacheChip from "$lib/components/UsageCacheChip.svelte";
+  import { SavedResetsChip } from "@wick-fe/common-ui";
+  import { seedUsage } from "@wick-fe/common-ui/usage";
   import { apiLoginTTYUsageRefresh } from "$lib/logintty.js";
   import { pickWindows, connectionKey, resetHint, fmtSecsShort } from "$lib/usagerings.js";
   import {
@@ -234,6 +236,18 @@
       const next: Record<string, ProviderConnection> = {};
       for (const c of rows) {
         next[connectionKey(c.type, c.name)] = c;
+        /* Share this reading with the other usage surfaces (composer
+           picker, /usage popover) so they never refetch what is on screen. */
+        if (c.usageSupported && !c.usagePending) {
+          seedUsage(`${c.type}/${c.name}`, {
+            supported: true,
+            checked: true,
+            windows: c.windows,
+            savedResets: c.savedResets ?? null,
+            error: c.usageErr,
+            fetchedAt: c.usageFetchedAt,
+          });
+        }
       }
       connections = next;
     } catch {
@@ -942,6 +956,7 @@
                       {:else}
                         <UsageCacheChip ageS={conn.usageAgeS} nextS={conn.usageNextS} fetchedAt={conn.usageFetchedAt} />
                       {/if}
+                      <SavedResetsChip resets={conn.savedResets} />
                       {@render recheckButton(p.Instance.Type, p.Instance.Name, busy, recheckWait[ckey] ?? 0)}
                     </div>
                   {:else if busy || conn.usagePending}

@@ -96,12 +96,16 @@ var claudeUsageOrder = map[string]int{"five_hour": 0, "seven_day": 1, "seven_day
 
 // readClaudeUsage calls the same OAuth usage endpoint the claude CLI's
 // /usage screen reads: rolling-window utilization percentages.
+//
+// ?cedar_ember=1 makes the same answer carry the account's saved resets
+// (claude_saved_resets.go), so they cost no request of their own.
 func readClaudeUsage(env []string) ([]UsageWindow, error) {
-	token, err := claudeAccessToken(claudeConfigDir(env))
+	dir := claudeConfigDir(env)
+	token, err := claudeAccessToken(dir)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodGet, anthropicAPIBase+"/api/oauth/usage", nil)
+	req, err := http.NewRequest(http.MethodGet, anthropicAPIBase+"/api/oauth/usage?cedar_ember=1", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +142,7 @@ func readClaudeUsage(env []string) ([]UsageWindow, error) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, err
 	}
+	rememberClaudeSavedResets(dir, raw["cedar_ember"], time.Now())
 	var windows []UsageWindow
 	for key, val := range raw {
 		var w struct {

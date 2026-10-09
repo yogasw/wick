@@ -7,7 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/logintty"
+	"github.com/yogasw/wick/internal/agents/provider/savedresets"
 )
 
 // The usage endpoint is a shared, rate-limited resource. Every provider
@@ -104,13 +106,34 @@ func randomDuration(min, max time.Duration) time.Duration {
 // usageFetch performs the actual remote read.
 type usageFetch func() ([]logintty.UsageWindow, error)
 
+// resetsFetch reads the account's saved resets (savedresets.SavedResets).
+// It is an optional companion of a usageFetch: it runs in the SAME
+// flight, right after the usage read and behind the same pace slot, so
+// saved resets never add a probe of their own and Re-check refreshes
+// both. Its failure never fails the usage reading; the section is
+// simply left out.
+type resetsFetch func() (*savedresets.SavedResets, error)
+
+// firstResets picks the optional companion out of a variadic tail.
+func firstResets(rs []resetsFetch) resetsFetch {
+	for _, r := range rs {
+		if r != nil {
+			return r
+		}
+	}
+	return nil
+}
+
 // usageEntry is one account's probe state.
 type usageEntry struct {
 	windows []logintty.UsageWindow
-	goodAt  time.Time // when the last successful reading was taken
-	err     error     // last failure, kept for display and backoff
-	fails   int       // consecutive failures, drives the backoff
-	nextAt  time.Time // earliest a manual re-check is accepted
+	// resets is the last saved-resets reading that succeeded, nil when
+	// none has (unsupported type, or every read failed).
+	resets *savedresets.SavedResets
+	goodAt time.Time // when the last successful reading was taken
+	err    error     // last failure, kept for display and backoff
+	fails  int       // consecutive failures, drives the backoff
+	nextAt time.Time // earliest a manual re-check is accepted
 	// attemptedAt is when the last probe finished, successful or not.
 	// A manual refresh is measured against this, not against goodAt:
 	// failed attempts cost the endpoint just as much as good ones.
@@ -155,7 +178,9 @@ var usageProbes = newUsageCache(usageCacheTTL)
 // passed off as a live one.
 type usageView struct {
 	Windows []logintty.UsageWindow
-	Err     error
+	// SavedResets rides along with the windows; nil = nothing to show.
+	SavedResets *savedresets.SavedResets
+	Err         error
 	// Known is false while the first reading for this account is still
 	// pending — neither data nor a failure yet.
 	Known bool
@@ -186,8 +211,8 @@ func (v usageView) Age(now time.Time) time.Duration {
 // to show; everything after that is Re-check.
 // credsAt is when this account's stored credentials last changed (zero
 // when unknown); it is what licenses the one retry described in rule 4.
-func (c *usageCache) get(key string, fetch usageFetch, credsAt time.Time) usageView {
-	c.schedule(key, fetch, false, credsAt)
+func (c *usageCache) get(key string, fetch usageFetch, credsAt time.Time, resets ...resetsFetch) usageView {
+	c.schedule(key, fetch, false, credsAt, resets...)
 	c.mu.Lock()
 	e := c.entries[key]
 	_, checking := c.inflight[key]
@@ -204,8 +229,8 @@ func (c *usageCache) get(key string, fetch usageFetch, credsAt time.Time) usageV
 //
 // Bounded by ctx: a caller that runs out of budget gets the blank and
 // the probe keeps going in the background for the next reader.
-func (c *usageCache) getWait(ctx context.Context, key string, fetch usageFetch, credsAt time.Time) usageView {
-	v := c.get(key, fetch, credsAt)
+func (c *usageCache) getWait(ctx context.Context, key string, fetch usageFetch, credsAt time.Time, resets ...resetsFetch) usageView {
+	v := c.get(key, fetch, credsAt, resets...)
 	if v.Known {
 		return v
 	}
@@ -238,7 +263,7 @@ func (c *usageCache) serve(e *usageEntry) usageView {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	v := usageView{FetchedAt: e.goodAt, NextAt: e.nextAt}
+	v := usageView{FetchedAt: e.goodAt, NextAt: e.nextAt, SavedResets: e.resets}
 	if !e.goodAt.IsZero() {
 		// Served however old it is. Nothing refreshes on its own any
 		// more, so a cutoff would simply blank the card and leave the
@@ -251,7 +276,7 @@ func (c *usageCache) serve(e *usageEntry) usageView {
 		v.Err, v.Known = e.err, true
 		return v
 	}
-	return usageView{NextAt: e.nextAt}
+	return usageView{NextAt: e.nextAt, SavedResets: e.resets}
 }
 
 // schedule starts a probe for key. It declines when one is already
@@ -260,7 +285,8 @@ func (c *usageCache) serve(e *usageEntry) usageView {
 // cost an upstream request. force comes only from forceRefresh, which
 // has already applied the cooldowns. Returns the channel that closes
 // when the running probe finishes, or nil when none was started.
-func (c *usageCache) schedule(key string, fetch usageFetch, force bool, credsAt time.Time) chan struct{} {
+func (c *usageCache) schedule(key string, fetch usageFetch, force bool, credsAt time.Time, resets ...resetsFetch) chan struct{} {
+	readResets := firstResets(resets)
 	c.mu.Lock()
 	if ch, ok := c.inflight[key]; ok {
 		c.mu.Unlock()
@@ -289,13 +315,27 @@ func (c *usageCache) schedule(key string, fetch usageFetch, force bool, credsAt 
 			c.sleep(wait) // rule 3: randomised gap between providers
 		}
 		windows, err := fetch()
-		c.store(key, windows, err)
+		var saved []*savedresets.SavedResets
+		if readResets != nil && !errors.Is(err, logintty.ErrUsageUnsupported) && !logintty.IsRateLimited(err) {
+			// Same flight, same pace slot; a failure only leaves the
+			// section out (rule 4 still governs the usage reading).
+			r, rerr := readResets()
+			if rerr != nil {
+				r = nil
+			}
+			// Beside a good usage reading a missing one is current too:
+			// the account stopped reporting resets, so the old copy goes.
+			if r != nil || err == nil {
+				saved = append(saved, r)
+			}
+		}
+		c.store(key, windows, err, saved...)
 	})
 	return ch
 }
 
 // store records a probe result and decides when the next one is allowed.
-func (c *usageCache) store(key string, windows []logintty.UsageWindow, err error) {
+func (c *usageCache) store(key string, windows []logintty.UsageWindow, err error, saved ...*savedresets.SavedResets) {
 	now := c.now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -305,6 +345,9 @@ func (c *usageCache) store(key string, windows []logintty.UsageWindow, err error
 		c.entries[key] = e
 	}
 	e.attemptedAt = now
+	if len(saved) > 0 {
+		e.resets = saved[0]
+	}
 	if after := logintty.RetryAfterOf(err); after > 0 {
 		e.serverUntil = now.Add(after)
 	}
@@ -366,7 +409,7 @@ func retryOnNewCreds(e *usageEntry, credsAt, now time.Time) bool {
 // Returns accepted=false plus how long to wait when it declines, so the
 // UI can say "10s more" instead of looking broken. A probe already in
 // flight counts as accepted — that click got what it asked for.
-func (c *usageCache) forceRefresh(key string, fetch usageFetch) (accepted bool, wait time.Duration) {
+func (c *usageCache) forceRefresh(key string, fetch usageFetch, resets ...resetsFetch) (accepted bool, wait time.Duration) {
 	now := c.now()
 	c.mu.Lock()
 	if _, running := c.inflight[key]; running {
@@ -387,6 +430,18 @@ func (c *usageCache) forceRefresh(key string, fetch usageFetch) (accepted bool, 
 	// force: schedule() declines an account that already has a reading,
 	// and this is the one caller allowed to override that — a human
 	// asked, and the cooldowns above already said yes.
-	c.schedule(key, fetch, true, time.Time{})
+	c.schedule(key, fetch, true, time.Time{}, resets...)
 	return true, 0
+}
+
+// instanceResetsFetch is the saved-resets companion for one instance, or
+// nil when its type registered no reader (the field is then omitted).
+// Lookup goes through the logintty registry, never a switch on the type,
+// so a provider that registers a reader is picked up here unchanged.
+func instanceResetsFetch(t provider.Type, env []string) resetsFetch {
+	read, ok := savedresets.ReaderFor(string(t))
+	if !ok {
+		return nil
+	}
+	return func() (*savedresets.SavedResets, error) { return read(env) }
 }

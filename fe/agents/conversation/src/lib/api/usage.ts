@@ -1,4 +1,5 @@
 import { apiGetE, apiPostE } from "@wick-fe/common-api";
+import { parseSavedResets, type SavedResets, type WireSavedResets } from "@wick-fe/common-ui/usage";
 
 /* Mirrors internal/tools/agents/api_composer_usage.go — GET
    /api/composer/usage. Backs the `/usage` popover: the session provider's
@@ -62,6 +63,8 @@ export type ComposerUsage = {
   accounts: ComposerUsageAccount[];
   /* Who picks the account on Auto: "omp" | "wick"; "" when pinned. */
   rotation: string;
+  /* Saved rate-limit resets (shared model); null = section hidden. */
+  savedResets?: SavedResets | null;
 };
 
 type WireWindow = { key?: string; utilization?: number; resets_at?: string; observed_at?: string };
@@ -87,6 +90,7 @@ type WireComposerUsage = {
     status?: string; windows?: WireWindow[] | null; error?: string; no_usage?: boolean; current?: boolean;
   }[] | null;
   rotation?: string;
+  saved_resets?: WireSavedResets | null;
 };
 
 function normalizeWindows(ws: WireWindow[] | null | undefined): ComposerUsageWindow[] {
@@ -134,6 +138,7 @@ export function normalizeComposerUsage(w: WireComposerUsage): ComposerUsage {
       current: a.current ?? false,
     })),
     rotation: w.rotation ?? "",
+    savedResets: parseSavedResets(w.saved_resets),
   };
 }
 

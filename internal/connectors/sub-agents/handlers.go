@@ -66,10 +66,18 @@ func (h *handlers) listAgents(c *connector.Ctx) (any, error) {
 	// continuable. Without this list a leader cannot tell "delegate a
 	// reviewer" from "the reviewer that already read this is one message
 	// away", and it will reliably pick the expensive one.
-	return map[string]any{
+	res := map[string]any{
 		"agents":    out,
 		"instances": h.instancesFor(c, caller),
-	}, nil
+	}
+	// Team agents are not roles: this only marks which chat of each
+	// teammate belongs to this conversation.
+	if h.deps.TeamChats != nil {
+		if tc := h.deps.TeamChats(c.Context(), caller.sessionID); tc != nil {
+			res["team_chats"] = tc
+		}
+	}
+	return res, nil
 }
 
 // instanceItem is one sub-agent that exists in this conversation.

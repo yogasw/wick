@@ -142,3 +142,40 @@ func TestAgentIdleKillBetweenTurnsWritesNothing(t *testing.T) {
 		t.Fatalf("idle reap between turns wrote a turn: %+v", turns)
 	}
 }
+
+// A message the process took and never wrote a line after is handed back
+// on an idle kill, so the pool can re-buffer it instead of losing it.
+func TestAgentIdleKillHandsBackUnansweredMessages(t *testing.T) {
+	r := newIdleKillRig(t, 50*time.Millisecond)
+	if err := r.a.Send("first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.Send("second"); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.waitExit(t); got != ExitIdle {
+		t.Fatalf("exit reason %v", got)
+	}
+	got := r.a.TakeUnanswered()
+	if len(got) != 2 || got[0] != "first" || got[1] != "second" {
+		t.Fatalf("unanswered: %q", got)
+	}
+	if again := r.a.TakeUnanswered(); len(again) != 0 {
+		t.Fatalf("second take: %q", again)
+	}
+}
+
+// Output after a message means the process is working on it: nothing is
+// handed back when it is later reaped.
+func TestAgentOutputClearsUnansweredMessages(t *testing.T) {
+	r := newIdleKillRig(t, 50*time.Millisecond)
+	if err := r.a.Send("hello"); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, `{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}`)
+	r.say(t, `{"type":"result","subtype":"success","is_error":false,"result":"hi"}`)
+	r.waitExit(t)
+	if got := r.a.TakeUnanswered(); len(got) != 0 {
+		t.Fatalf("unanswered after output: %q", got)
+	}
+}

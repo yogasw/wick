@@ -157,22 +157,27 @@
   /* The ⋮ is quiet until the row is pointed at: a column of dots down every
      row reads as clutter in a narrow panel. It keeps its box either way, so
      nothing reflows when it appears — the row shifting under the cursor was
-     the last thing we fixed here. */
-  .row-actions {
+     the last thing we fixed here.
+     The fade sits on the trigger itself, not on its wrapper: "keep it shown
+     while its menu is open" is then a plain attribute match on the trigger
+     instead of `:has()` on the wrapper, which jsdom's selector engine throws
+     on for these rows (it rebuilds a selector from the Tailwind classes, and
+     `text-[10px]` is not a valid one). */
+  .row-actions :global(button[aria-haspopup]) {
     opacity: 0;
     transition: opacity 120ms ease-out;
   }
-  .group:hover .row-actions,
-  .row-actions:focus-within,
+  .group:hover .row-actions :global(button[aria-haspopup]),
+  .row-actions:focus-within :global(button[aria-haspopup]),
   /* An open menu outlives the hover: the pointer leaves the row to reach the
      popup, and a trigger that vanishes mid-click looks broken. */
-  .row-actions:has(:global([aria-expanded="true"])) {
+  .row-actions :global(button[aria-expanded="true"]) {
     opacity: 1;
   }
   /* No pointer, no hover — on a touch screen a hover-only control does not
      exist at all, so there it stays visible. */
   @media (hover: none) {
-    .row-actions {
+    .row-actions :global(button[aria-haspopup]) {
       opacity: 1;
     }
   }

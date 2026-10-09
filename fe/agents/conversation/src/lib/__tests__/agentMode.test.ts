@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { FEATURE_TABS, composerPlaceholder, providerLocked, connectorCaption, hiddenTabNote, hiddenTabsFor } from "../agentMode.js";
+import { FEATURE_TABS, composerPlaceholder, providerSwitchWarns, providerLabel, providerSwitchBody, connectorCaption, hiddenTabNote, hiddenTabsFor } from "../agentMode.js";
 
 describe("hiddenTabNote", () => {
   it("is empty when nothing is hidden", () => {
@@ -50,19 +50,34 @@ describe("feature flags", () => {
   });
 });
 
-describe("providerLocked", () => {
+describe("providerSwitchWarns", () => {
   it("anything goes before the first message", () => {
-    expect(providerLocked(false, "claude/claude", "codex/codex")).toBe(false);
+    expect(providerSwitchWarns(false, "claude/claude", "codex/codex")).toBe(false);
   });
-  it("another provider is refused once the chat started", () => {
-    expect(providerLocked(true, "claude/claude", "codex/codex::gpt-5")).toBe(true);
-    expect(providerLocked(true, "claude", "codex/codex")).toBe(true);
+  it("another provider asks first once the chat started", () => {
+    expect(providerSwitchWarns(true, "claude/claude", "codex/codex::gpt-5")).toBe(true);
+    expect(providerSwitchWarns(true, "claude", "codex/codex")).toBe(true);
+    expect(providerSwitchWarns(true, "codex/codex", "codex/gemini_flash")).toBe(true);
   });
-  it("another model of the same provider is fine", () => {
-    expect(providerLocked(true, "claude/claude", "claude/claude::opus")).toBe(false);
-    expect(providerLocked(true, "claude", "claude/claude::sonnet")).toBe(false);
+  it("another model of the same provider is silent", () => {
+    expect(providerSwitchWarns(true, "claude/claude", "claude/claude::opus")).toBe(false);
+    expect(providerSwitchWarns(true, "claude", "claude/claude::sonnet")).toBe(false);
   });
-  it("a started chat on the wick default is fixed too", () => {
-    expect(providerLocked(true, "", "codex/codex")).toBe(true);
+  it("a started chat on the wick default asks too", () => {
+    expect(providerSwitchWarns(true, "", "codex/codex")).toBe(true);
+  });
+});
+
+describe("provider switch warning text", () => {
+  it("names providers as the picker does", () => {
+    expect(providerLabel("claude/claude::opus")).toBe("claude");
+    expect(providerLabel("codex")).toBe("codex");
+    expect(providerLabel("codex/gemini_flash")).toBe("codex · gemini_flash");
+    expect(providerLabel("")).toBe("wick default");
+  });
+  it("says the new provider may not resume", () => {
+    expect(providerSwitchBody("claude/claude", "codex/codex::gpt-5")).toBe(
+      "This chat started on claude. codex may not resume this conversation, and earlier context may not carry over.",
+    );
   });
 });

@@ -149,7 +149,7 @@ func statusAccounts(ins provider.Instance) []logintty.PoolAccount {
 	}
 	v := usageProbes.get(logintty.UsageIdentity(ins.Type, env), func() ([]logintty.UsageWindow, error) {
 		return logintty.ReadUsage(ins.Type, env)
-	}, logintty.CredentialsChangedAt(ins.Type, env))
+	}, logintty.CredentialsChangedAt(ins.Type, env), instanceResetsFetch(ins.Type, env))
 	if !v.Known || v.Err != nil {
 		return accts
 	}
@@ -188,8 +188,11 @@ func apiProviderLoginTTYUsage(c *tool.Ctx) {
 
 	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
 		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
-	}, logintty.CredentialsChangedAt(ins.Type, provider.AccountEnv(ins)))
+	}, logintty.CredentialsChangedAt(ins.Type, provider.AccountEnv(ins)), instanceResetsFetch(ins.Type, provider.AccountEnv(ins)))
 	body := map[string]any{"supported": true, "windows": []logintty.UsageWindow{}, "checking": v.Checking}
+	if sr := savedResetsDTOOf(v.SavedResets); sr != nil {
+		body["saved_resets"] = sr
+	}
 	// Same provenance the list carries: this panel is looking at a
 	// SHARED, cached reading, so it says how old it is.
 	now := time.Now()
@@ -252,7 +255,7 @@ func apiProviderLoginTTYUsageRefresh(c *tool.Ctx) {
 	}
 	accepted, wait := usageProbes.forceRefresh(logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
 		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
-	})
+	}, instanceResetsFetch(ins.Type, provider.AccountEnv(ins)))
 	body := map[string]any{"supported": true, "accepted": accepted, "checking": accepted}
 	if !accepted {
 		body["wait_s"] = int(wait.Round(time.Second) / time.Second)

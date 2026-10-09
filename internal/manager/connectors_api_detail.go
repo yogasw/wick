@@ -753,6 +753,36 @@ func (h *Handler) apiSetConnectorConfig(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }
 
+// apiClearConnectorConfig serves
+// DELETE /manager/api/connectors/{key}/{id}/configs/{configKey}. Empties a
+// stored value — the save endpoint treats a blank secret as "keep", so this
+// is how a stored secret is removed. Same gate as apiSetConnectorConfig;
+// required, locked and env-overridden fields are refused with 400.
+func (h *Handler) apiClearConnectorConfig(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	configKey := r.PathValue("configKey")
+	row, errResp, ok := h.loadConfigurableRow(r, user)
+	if !ok {
+		writeJSON(w, errResp.status, map[string]string{"error": errResp.msg})
+		return
+	}
+	for _, cfg := range h.connectors.RowConfigs(*row) {
+		if cfg.Key == configKey && cfg.IsSecret {
+			if !h.canConfigureSecretField(user, row) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "secret fields require admin or connector owner"})
+				return
+			}
+			break
+		}
+	}
+	if err := h.connectors.ClearConfig(ctx, row.ID, configKey); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
+}
+
 // apiToggleConnectorDisabled serves
 // POST /manager/api/connectors/{key}/{id}/disable. Flips the row off-switch
 // and returns the new state. Mirrors toggleConnectorDisabled.

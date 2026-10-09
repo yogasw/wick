@@ -87,6 +87,11 @@ export type ComposerSelect = {
     optionValue: string,
     opts?: { entry?: string; refresh?: boolean },
   ) => Promise<ComposerModelOption[]>;
+  /** API base for the usage-at-a-glance rings on instance rows (5h / 7d +
+      ✦N saved resets). When set, each "type/name" option reads the shared
+      usage store (usage/usageStore.ts) — cached, background-refreshed,
+      deduped — so the picker never fires a request per row. Omit to hide. */
+  usageBase?: string;
   /** Render capability chips on model rows. Default true (undefined = show). */
   showCapabilities?: boolean;
   /** Chip display mode when shown. Default "icon". */

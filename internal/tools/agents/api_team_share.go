@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -34,6 +35,50 @@ type teamShareItem struct {
 	UserID    string    `json:"user_id"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
+	// HistoryVisible is the share's "Recipients can view chat history",
+	// the agent type's default when the owner never chose.
+	HistoryVisible bool `json:"history_visible"`
+}
+
+// shareHistoryDefault is "Recipients can view chat history" for a share
+// with no stored choice: on for a built-in agent, whose project folder,
+// files and memory everyone shares anyway, off for a remote one (A2A,
+// Slack, plugin), which shares no files, so private chats make sense.
+func shareHistoryDefault(p entity.AgentPersona) bool { return !IsRemoteAgent(p) }
+
+// shareHistoryVisible is sh's stored choice, else the type default.
+func shareHistoryVisible(p entity.AgentPersona, sh entity.AgentShare) bool {
+	if sh.HistoryVisible != nil {
+		return *sh.HistoryVisible
+	}
+	return shareHistoryDefault(p)
+}
+
+// chatHistoryOpen reports whether uid's side of a shared agent takes part
+// in the All tab: the owner always, a recipient while shared with history
+// on. Both the viewer and the chat's owner must pass for a recipient to
+// read someone else's chat, so a recipient with history off neither sees
+// others' chats nor has theirs shown to other recipients.
+func chatHistoryOpen(ctx context.Context, p entity.AgentPersona, uid string) bool {
+	if uid != "" && uid == p.OwnerUserID {
+		return true
+	}
+	sh, ok := sharedWithUser(ctx, p, uid)
+	return ok && shareHistoryVisible(p, sh)
+}
+
+// shareRemoteKind names a remote agent's type for the share dialog's
+// note ("slack", "a2a", "plugin"), "" for a built-in agent.
+func shareRemoteKind(p entity.AgentPersona) string {
+	switch {
+	case isSlackRemote(p):
+		return "slack"
+	case isA2ARemote(p):
+		return "a2a"
+	case isPluginRemote(p):
+		return "plugin"
+	}
+	return ""
 }
 
 // shareBlockOf is team.ShareBlock with the remote usage check filled in.
@@ -163,10 +208,39 @@ func apiTeamAgentShares(c *tool.Ctx) {
 		if name == "" {
 			name = r.SharedWithUserID
 		}
-		out = append(out, teamShareItem{UserID: r.SharedWithUserID, Name: name, CreatedAt: r.CreatedAt})
+		out = append(out, teamShareItem{UserID: r.SharedWithUserID, Name: name, CreatedAt: r.CreatedAt,
+			HistoryVisible: shareHistoryVisible(p, r)})
 	}
 	block := shareBlockOf(p)
-	c.JSON(http.StatusOK, map[string]any{"shares": out, "shareable": block == "", "reason": block})
+	c.JSON(http.StatusOK, map[string]any{"shares": out, "shareable": block == "", "reason": block,
+		"history_default": shareHistoryDefault(p), "remote_kind": shareRemoteKind(p)})
+}
+
+// apiTeamAgentShareUpdate handles PATCH /api/team/agents/{id}/shares/{uid}
+// {history_visible}: the owner turns "Recipients can view chat history" on
+// or off for one share. The sessions stream's visibility answers are
+// dropped so nothing it cached outlives the change.
+func apiTeamAgentShareUpdate(c *tool.Ctx) {
+	if !teamReady(c) {
+		return
+	}
+	p, ok := loadShareManagedAgent(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		HistoryVisible *bool `json:"history_visible"`
+	}
+	if err := json.NewDecoder(io.LimitReader(c.R.Body, 1<<16)).Decode(&body); err != nil || body.HistoryVisible == nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "history_visible is required"})
+		return
+	}
+	if err := globalTeam.SetShareHistory(c.Context(), p.ID, c.PathValue("uid"), *body.HistoryVisible); err != nil {
+		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	forgetSharedChatVisible()
+	c.JSON(http.StatusOK, map[string]any{"status": "ok", "history_visible": *body.HistoryVisible})
 }
 
 // apiTeamAgentShareAdd handles POST /api/team/agents/{id}/shares
@@ -214,6 +288,9 @@ func apiTeamAgentShareAdd(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// The new recipient's stream picks up the agent's chats now, not
+	// when a cached "not visible" ages out.
+	forgetSharedChatVisible()
 	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -232,6 +309,9 @@ func apiTeamAgentShareRemove(c *tool.Ctx) {
 		c.JSON(teamAgentSaveStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
+	// The unshared side stops seeing the agent's chats' activity now,
+	// not when the stream's cached answer ages out.
+	forgetSharedChatVisible()
 	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -349,14 +429,94 @@ func sharedRosterItems(c *tool.Ctx, live teamLive) []TeamAgentItem {
 // sharedChatAgent returns the agent of a shared agent's chat with its
 // recipient (team.IsSharedChat), false for any other session.
 func sharedChatAgent(ctx context.Context, sess session.Session) (entity.AgentPersona, bool) {
+	p, ok := uiAgentChat(ctx, sess)
+	if !ok || !team.IsSharedChat(sess.Meta, &p) {
+		return entity.AgentPersona{}, false
+	}
+	return p, true
+}
+
+// uiAgentChat returns the agent of a web chat with a Team agent — the
+// owner's or a recipient's — false for any other session.
+func uiAgentChat(ctx context.Context, sess session.Session) (entity.AgentPersona, bool) {
 	if globalTeam == nil || sess.Meta.AgentID == "" || sess.Meta.Origin != session.OriginUI {
 		return entity.AgentPersona{}, false
 	}
 	p, err := globalTeam.Get(ctx, sess.Meta.AgentID)
-	if err != nil || !team.IsSharedChat(sess.Meta, &p) {
+	if err != nil {
 		return entity.AgentPersona{}, false
 	}
 	return p, true
+}
+
+// agentChatMember reports whether uid is one of the people an agent's
+// chats belong to right now: its owner, or someone it is shared with.
+func agentChatMember(ctx context.Context, p entity.AgentPersona, uid string) bool {
+	if uid != "" && uid == p.OwnerUserID {
+		return true
+	}
+	_, ok := sharedWithUser(ctx, p, uid)
+	return ok
+}
+
+// agentChatViewer is the All tab's rule for opening a chat of a shared
+// agent: the caller's own chat while they are a member (agentChatMember);
+// another person's when the caller is the owner and that person a
+// member, or when both sides have chat history open (chatHistoryOpen).
+// Unsharing either side, or turning history off, closes it again.
+func agentChatViewer(ctx context.Context, uid string, sess session.Session, p entity.AgentPersona) bool {
+	if uid == "" || sess.Meta.GroupSessionID != "" || p.Disabled || shareBlockOf(p) != "" {
+		return false
+	}
+	switch {
+	case uid == sess.Meta.UserID:
+		return agentChatMember(ctx, p, uid)
+	case uid == p.OwnerUserID:
+		return agentChatMember(ctx, p, sess.Meta.UserID)
+	}
+	return chatHistoryOpen(ctx, p, uid) && chatHistoryOpen(ctx, p, sess.Meta.UserID)
+}
+
+// errSharedReadOnly answers a change to another person's chat that the
+// caller reads through a share.
+const errSharedReadOnly = "this chat belongs to someone else — you can read it, not change it"
+
+// sharedChatReadOnly reports whether the caller reads sess only because
+// a Team agent is shared (agentChatViewer): another person's chat, with
+// no project access or admin rule of its own behind it (having spoken in
+// it earlier does not count).
+// Such a chat is read-only — no send, approve, switch, compact or stop.
+func sharedChatReadOnly(c *tool.Ctx, sess session.Session) bool {
+	u := login.GetUser(c.Context())
+	if u == nil || u.ID == "" || u.ID == sess.Meta.UserID || sess.Meta.UserID == "" {
+		return false
+	}
+	if u.CanSeeAllSessions() || (u.IsAdmin() && adminSeeAll()) {
+		return false
+	}
+	if _, ok := uiAgentChat(c.Context(), sess); !ok {
+		return false
+	}
+	return !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, nil)
+}
+
+// sharedChatReadOnlyMW refuses every non-read request on a chat the
+// caller only reads through a share (sharedChatReadOnly) with 403.
+func sharedChatReadOnlyMW(next tool.HandlerFunc) tool.HandlerFunc {
+	return func(c *tool.Ctx) {
+		switch c.R.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next(c)
+			return
+		}
+		if globalMgr != nil {
+			if sess, ok := globalMgr.Registry().Session(c.PathValue("id")); ok && sharedChatReadOnly(c, sess) {
+				c.JSON(http.StatusForbidden, map[string]string{"error": errSharedReadOnly})
+				return
+			}
+		}
+		next(c)
+	}
 }
 
 // sharedChatAllowed decides a shared agent's chat: only its recipient may
@@ -368,6 +528,69 @@ func sharedChatAllowed(ctx context.Context, userID string, sess session.Session,
 	}
 	_, err := globalTeam.ShareOf(ctx, p.ID, userID)
 	return err == nil
+}
+
+// sharedChatVisibleTTL is how long the sessions stream trusts one answer
+// of sharedAgentChatVisible: the check reads the share store, and turn
+// steps arrive many times a second.
+const sharedChatVisibleTTL = 30 * time.Second
+
+type sharedChatVisibleKey struct{ uid, sessionID string }
+
+type sharedChatVisibleEntry struct {
+	ok bool
+	at time.Time
+}
+
+var (
+	sharedChatVisibleMu    sync.Mutex
+	sharedChatVisibleCache = map[sharedChatVisibleKey]sharedChatVisibleEntry{}
+	// sharedChatVisibleGen counts forgets, so an answer computed across
+	// one is not stored over the cleared cache.
+	sharedChatVisibleGen uint64
+)
+
+// forgetSharedChatVisible drops every cached sharedAgentChatVisible
+// answer, after a share or its history toggle changed.
+func forgetSharedChatVisible() {
+	sharedChatVisibleMu.Lock()
+	clear(sharedChatVisibleCache)
+	sharedChatVisibleGen++
+	sharedChatVisibleMu.Unlock()
+}
+
+// sharedAgentChatVisible reports whether uid's sessions stream carries the
+// turn activity of sess because of a share: a shared agent's chat that
+// ownsSession opens for uid (agentChatViewer, or the recipient's own
+// chat), which project access alone does not show. Answers are cached for
+// sharedChatVisibleTTL.
+func sharedAgentChatVisible(ctx context.Context, uid string, sess session.Session) bool {
+	if uid == "" || sess.Meta.AgentID == "" || sess.Meta.Origin != session.OriginUI {
+		return false
+	}
+	key := sharedChatVisibleKey{uid, sess.ID}
+	now := time.Now()
+	sharedChatVisibleMu.Lock()
+	e, hit := sharedChatVisibleCache[key]
+	gen := sharedChatVisibleGen
+	sharedChatVisibleMu.Unlock()
+	if hit && now.Sub(e.at) < sharedChatVisibleTTL {
+		return e.ok
+	}
+	ok := false
+	if p, found := uiAgentChat(ctx, sess); found {
+		ok = agentChatViewer(ctx, uid, sess, p) ||
+			(team.IsSharedChat(sess.Meta, &p) && sharedChatAllowed(ctx, uid, sess, p))
+	}
+	sharedChatVisibleMu.Lock()
+	if len(sharedChatVisibleCache) > 4096 {
+		clear(sharedChatVisibleCache)
+	}
+	if gen == sharedChatVisibleGen {
+		sharedChatVisibleCache[key] = sharedChatVisibleEntry{ok, now}
+	}
+	sharedChatVisibleMu.Unlock()
+	return ok
 }
 
 // errSharedRail answers a share recipient who reaches for the rail of a
@@ -399,15 +622,19 @@ func registerSharedChatRailGuard(r tool.Router) {
 	}
 }
 
-// sharedChatRailMW answers 403 on a rail route of a shared agent's chat.
-// sessionAccessMW runs first, so only the recipient gets this far.
+// sharedChatRailMW answers 403 on a rail route of a shared agent's chat
+// for everyone but the agent's owner — the recipient's own chat, and the
+// owner's chats a recipient opens from the All tab alike.
 func sharedChatRailMW(next tool.HandlerFunc) tool.HandlerFunc {
 	return func(c *tool.Ctx) {
 		if globalMgr != nil {
 			if sess, ok := globalMgr.Registry().Session(c.PathValue("id")); ok {
-				if _, shared := sharedChatAgent(c.Context(), sess); shared {
-					c.JSON(http.StatusForbidden, map[string]string{"error": errSharedRail})
-					return
+				if p, ok := uiAgentChat(c.Context(), sess); ok && actorID(c) != p.OwnerUserID {
+					_, recipient := sharedWithCaller(c, p)
+					if team.IsSharedChat(sess.Meta, &p) || recipient {
+						c.JSON(http.StatusForbidden, map[string]string{"error": errSharedRail})
+						return
+					}
 				}
 			}
 		}

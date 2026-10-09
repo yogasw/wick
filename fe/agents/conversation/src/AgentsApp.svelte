@@ -12,7 +12,7 @@
   import { AgentAvatar, setIdleAnimations } from "@wick-fe/common-avatar";
   import AgentSettings from "./lib/components/AgentSettings.svelte";
   import SharedAgentInfo from "./lib/components/SharedAgentInfo.svelte";
-  import { agentMenu, isSharedAgent, sharedChatMode, sharedLabel } from "./lib/agentSharing.js";
+  import { agentMenu, chatListed, chatNeedsAccessCheck, isSharedAgent, sharedChatMode, sharedLabel } from "./lib/agentSharing.js";
   import AgentWizard from "./lib/components/AgentWizard.svelte";
   import TeamEmptyState from "./lib/components/TeamEmptyState.svelte";
   import RemoteAgentWizard from "./lib/components/team/RemoteAgentWizard.svelte";
@@ -30,7 +30,7 @@
   import { connectorCaption, hiddenTabsFor } from "./lib/agentMode.js";
   import { nativeToolsOf } from "./lib/nativeTools.js";
   import { rosterTime } from "./lib/timeFormat.js";
-  import { listAgents, openAgentChat, createAgent, updateAgent, makeCaptain, markAgentRead, runApi, isWorking, getSessionOptions, putSessionOptions, type AgentItem } from "./lib/api/team.js";
+  import { listAgents, listAgentSessionsAll, openAgentChat, createAgent, updateAgent, makeCaptain, markAgentRead, runApi, isWorking, getSessionOptions, putSessionOptions, type AgentItem } from "./lib/api/team.js";
   import { listGroups, getTeamSettings, type GroupItem } from "./lib/api/team.js";
   import GroupView from "./lib/components/GroupView.svelte";
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
@@ -38,6 +38,7 @@
   import GroupAvatars from "./lib/components/GroupAvatars.svelte";
   import { rosterStatus, withTurn, withActivity } from "./lib/rosterStatus.js";
   import { liveRoster } from "./lib/rosterLive.js";
+  import type { SessionActivity } from "./lib/stores/sessionsStream.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
   import TeamAddMenu from "./lib/components/TeamAddMenu.svelte";
@@ -169,6 +170,8 @@
      rosterLive.ts): turn steps as `activity`, a turn it sees end triggers
      the full read for the preview and unread count, and `agent_changed` or
      a reconnect reads the roster and groups again. No steady poll. */
+  /* The newest turn step, handed to the Chats drawer so its rows stay live. */
+  let lastActivity = $state<SessionActivity | null>(null);
   onMount(() =>
     liveRoster(base, {
       reload: () => {
@@ -176,6 +179,7 @@
         loadGroups();
       },
       onActivity: (ev) => {
+        lastActivity = ev;
         const next = withActivity(agents, ev);
         agents = next.agents;
         if (next.finished) load();
@@ -275,7 +279,34 @@
     });
   });
 
-  const chatSessionId = $derived(route.session ?? selected?.main_session_id ?? "");
+  /* A shared agent's ?session= other than the recipient's own main chat is
+     checked once against the chats they may list (a 200 read) before the
+     chat mounts. Not listed — e.g. an old link to the owner's chat after
+     history was turned off — drops back to their own chat, no alert. */
+  let chatChecked = $state("");
+  let chatChecking = "";
+  const chatCheckKey = $derived(
+    chatNeedsAccessCheck(selected, route.session) ? `${selected!.id}|${route.session}` : "",
+  );
+  $effect(() => {
+    const key = chatCheckKey;
+    if (!key || key === chatChecked || key === chatChecking) return;
+    const a = selected!;
+    const sid = route.session!;
+    chatChecking = key;
+    runApi(listAgentSessionsAll(base, a.id))
+      .then((r) => {
+        if (chatListed(r.sessions, sid)) chatChecked = key;
+        else if (route.handle === a.handle && route.session === sid) go({ session: null }, true);
+      })
+      // Could not tell: open it; the view treats a 404 as an empty chat.
+      .catch(() => { chatChecked = key; })
+      .finally(() => { if (chatChecking === key) chatChecking = ""; });
+  });
+
+  const chatSessionId = $derived(
+    chatCheckKey && chatCheckKey !== chatChecked ? "" : (route.session ?? selected?.main_session_id ?? ""),
+  );
 
   function go(patch: Partial<AgentsRoute>, replace = false) {
     navigate({ ...route, ...patch }, { replace });
@@ -914,6 +945,7 @@
           onPick={(id, main) => { draftFor = null; go({ session: main ? null : id, panel: null }); }}
           onNew={newChat}
           onPinned={pinnedMain}
+          activity={lastActivity}
         />
       {/if}
     </div>

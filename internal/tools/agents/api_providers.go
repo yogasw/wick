@@ -636,7 +636,9 @@ func apiProvidersList(c *tool.Ctx) {
 	providerDTOs := make([]ProviderStatusDTO, 0, len(statuses))
 	for _, st := range statuses {
 		dto := providerStatusDTO(st, caps)
-		dto.CanManage = isAdmin || canManageProvider(c, st.Instance.Type, st.Instance.Name)
+		// canManageProvider already passes admins while the
+		// admin_see_all_provider_instances knob is on, and not otherwise.
+		dto.CanManage = canManageProvider(c, st.Instance.Type, st.Instance.Name)
 		providerDTOs = append(providerDTOs, dto)
 	}
 

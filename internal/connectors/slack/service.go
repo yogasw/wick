@@ -44,6 +44,35 @@ func pickToken(c *connector.Ctx) (string, error) {
 	return token, nil
 }
 
+// tokenPrefixes maps each token field to the prefix Slack issues for it.
+// A token in the wrong field still authenticates — a user token in
+// bot_token posts as that person under a connector everyone thinks is a
+// bot — so the shape is checked on save.
+var tokenPrefixes = map[string]struct{ prefix, kind string }{
+	"bot_token":  {"xoxb-", "Bot User OAuth Token"},
+	"user_token": {"xoxp-", "User OAuth Token"},
+}
+
+// trimRotatingPrefix drops the "xoxe." Slack puts in front of an access
+// token when token rotation is on ("xoxe.xoxb-…", "xoxe.xoxp-…"), so the
+// type check sees the same prefix as for a long-lived token.
+func trimRotatingPrefix(token string) string {
+	return strings.TrimPrefix(token, "xoxe.")
+}
+
+// ValidateConfig refuses a token saved in the wrong field
+// (connector.Module.ValidateConfig).
+func ValidateConfig(key, value string) error {
+	want, ok := tokenPrefixes[key]
+	if !ok {
+		return nil
+	}
+	if !strings.HasPrefix(trimRotatingPrefix(strings.TrimSpace(value)), want.prefix) {
+		return fmt.Errorf("%s is not valid: expected a %s starting with %q", key, want.kind, want.prefix)
+	}
+	return nil
+}
+
 // baseURLOverride is non-empty only in tests — see slack_test.go's
 // withBaseURL helper. Production code uses defaultBaseURL.
 var baseURLOverride string

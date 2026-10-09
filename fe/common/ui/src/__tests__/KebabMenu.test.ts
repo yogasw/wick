@@ -2,13 +2,9 @@ import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import KebabMenu from "../KebabMenu.svelte";
 
-/* These exercise the menu directly rather than through FileBrowserNode, whose
-   own test file cannot open a menu at all in jsdom: its scoped stylesheet
-   carries `.row-actions:has(:global([aria-expanded="true"]))`, and nwsapi
-   resolves that by building a selector out of the matched element's classes —
-   which for a Tailwind arbitrary value (`text-[10px]`) is not a valid
-   selector, so every render that opens a menu throws. Pre-existing, unrelated
-   to what is tested here. */
+/* These exercise the menu directly rather than through FileBrowserNode, so
+   the menu's own behaviour is pinned down independently of any row that
+   hosts it. */
 
 async function open() {
   await fireEvent.click(screen.getByRole("button", { name: "Actions" }));

@@ -16,6 +16,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/delegation"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/remote"
+	"github.com/yogasw/wick/internal/agents/remote/slackremote"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
@@ -240,6 +241,137 @@ func (poolTurns) NewChat(ctx context.Context, agent teamlink.Peer) (string, erro
 	return id, nil
 }
 
+// LinkedChat is the chat of agent paired with callerSession
+// (teamlink.ChatLinker): one of agent's chats for its chat user whose
+// LinkedFromSession is callerSession, else the chat callerSession was
+// itself opened for when that is one of agent's — a reply back to the
+// asker lands in the conversation that asked.
+func (poolTurns) LinkedChat(_ context.Context, agent teamlink.Peer, callerSession string) string {
+	if callerSession == "" {
+		return ""
+	}
+	chats := agentSessions(chatUserOf(agent), agent.ID)
+	for _, s := range chats {
+		if s.Meta.LinkedFromSession == callerSession {
+			return s.ID
+		}
+	}
+	if caller, ok := globalMgr.Registry().Session(callerSession); ok && caller.Meta.LinkedFromSession != "" {
+		for _, s := range chats {
+			if s.ID == caller.Meta.LinkedFromSession {
+				return s.ID
+			}
+		}
+	}
+	return ""
+}
+
+// Link pairs chat with callerSession on chat's meta, so it survives a
+// restart, after unpairing any other chat of agent paired with it
+// (teamlink.ChatLinker).
+func (poolTurns) Link(_ context.Context, agent teamlink.Peer, chat, callerSession string) error {
+	for _, s := range agentSessions(chatUserOf(agent), agent.ID) {
+		want := s.ID == chat
+		if want == (s.Meta.LinkedFromSession == callerSession) {
+			continue
+		}
+		// Re-read from disk: the registry copy can lag a write the chat's
+		// own turn just made (title, pending input), which a save of it
+		// would undo.
+		fresh, err := session.Load(globalLayout, s.ID)
+		if err != nil {
+			return err
+		}
+		if want {
+			fresh.Meta.LinkedFromSession = callerSession
+		} else {
+			fresh.Meta.LinkedFromSession = ""
+		}
+		if err := session.SaveMeta(globalLayout, s.ID, fresh.Meta); err != nil {
+			return err
+		}
+		_ = globalMgr.RefreshSession(s.ID)
+	}
+	return nil
+}
+
+// Chats is agent's chats for its chat user, newest first
+// (teamlink.ChatLister): only that user's own sessions, so another
+// person's chat with a shared agent never shows, whatever the share's
+// history toggle says. A Slack remote's chat carries its thread link.
+func (poolTurns) Chats(_ context.Context, agent teamlink.Peer) []teamlink.ChatInfo {
+	user := chatUserOf(agent)
+	var out []teamlink.ChatInfo
+	for _, s := range agentSessions(user, agent.ID) {
+		c := teamlink.ChatInfo{
+			SessionID: s.ID, Title: s.Meta.Label, LastActive: s.Meta.LastActive, Main: s.Meta.AgentMain,
+			UserID: s.Meta.UserID, LinkedFrom: s.Meta.LinkedFromSession,
+		}
+		if agent.Remote {
+			c.SlackThread = slackThreadLink(slackremote.LoadState(globalLayout.SessionDir(s.ID)))
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// PairedWith is every Team chat paired with callerSession, in one pass
+// over the registry (teamlink.PairedLister): a spawn's "This session"
+// block and list_agents cost one scan, not one per teammate.
+func (poolTurns) PairedWith(_ context.Context, callerSession string) []teamlink.ChatInfo {
+	if callerSession == "" {
+		return nil
+	}
+	var out []teamlink.ChatInfo
+	for _, s := range globalMgr.Registry().Sessions() {
+		if s.Meta.LinkedFromSession != callerSession || s.Meta.AgentID == "" || s.Meta.GroupSessionID != "" {
+			continue
+		}
+		out = append(out, teamlink.ChatInfo{
+			SessionID: s.ID, Title: s.Meta.Label, LastActive: s.Meta.LastActive, Main: s.Meta.AgentMain,
+			UserID: s.Meta.UserID, LinkedFrom: s.Meta.LinkedFromSession, AgentID: s.Meta.AgentID,
+			// Only paired chats get here, so the state read stays rare; a
+			// chat that is not a Slack remote has no state file.
+			SlackThread: slackThreadLink(slackremote.LoadState(globalLayout.SessionDir(s.ID))),
+		})
+	}
+	return out
+}
+
+// slackThreadLink is a link to st's Slack thread, "" for none. The
+// slack.com/archives form redirects to the workspace, so no API call.
+func slackThreadLink(st slackremote.State) string {
+	if st.Channel == "" || st.ThreadTS == "" {
+		return ""
+	}
+	return "https://slack.com/archives/" + st.Channel + "/p" + strings.ReplaceAll(st.ThreadTS, ".", "")
+}
+
+// TeamLinkedChats is, for the Team agent session sessionID belongs to, the
+// chat paired with it at each teammate the session's person can reach
+// (teamlink.Hub.LinkedChats); nil outside the Team or with none.
+func TeamLinkedChats(ctx context.Context, sessionID string) []teamlink.TeamChat {
+	if globalTeamHub == nil || globalTeam == nil || sessionID == "" {
+		return nil
+	}
+	h := globalTeamHub()
+	id := TeamAgentOf(ctx, sessionID)
+	if h == nil || id == "" {
+		return nil
+	}
+	out, _ := h.LinkedChats(ctx, id, sessionID, sessionUserOf(sessionID))
+	return out
+}
+
+// TeamLinkedChatsPrompt is TeamLinkedChats as "This session" lines, ""
+// for none.
+func TeamLinkedChatsPrompt(sessionID string) string {
+	return teamlink.FormatLinkedChats(TeamLinkedChats(context.Background(), sessionID))
+}
+
+// SessionUserOf is the wick user of sessionID, "" when unknown.
+func SessionUserOf(sessionID string) string { return sessionUserOf(sessionID) }
+
 // MainSession is the session a turn of agent runs in (SessionLocator).
 func (poolTurns) MainSession(_ context.Context, agent teamlink.Peer) string {
 	if s, ok := mainSessionOf(chatUserOf(agent), agent.ID); ok {
@@ -397,32 +529,22 @@ func appendHandoff(layout agentconfig.Layout, sessionID string, turn store.Conve
 // without waiting.
 type TeamMentionRouter struct{ Hub func() *teamlink.Hub }
 
+// TeamHandles is every handle a mention in sessionID may reach: the
+// agent's teammates and those shared with its owner, or — in a chat
+// with an agent shared with the session's user — that user's own agents
+// and those shared with them (teamlink.Hub.MentionTargets).
 func (r TeamMentionRouter) TeamHandles(ctx context.Context, sessionID string) []string {
 	h, id := r.Hub(), TeamAgentOf(ctx, sessionID)
 	if h == nil || id == "" {
 		return nil
 	}
-	peers, err := h.Reachable(ctx, id)
+	peers, err := h.MentionTargets(ctx, id, sessionUserOf(sessionID))
 	if err != nil {
 		return nil
 	}
 	out := make([]string, 0, len(peers))
-	seen := map[string]bool{}
 	for _, p := range peers {
 		out = append(out, p.Handle)
-		seen[p.Handle] = true
-	}
-	// Agents shared with the session's owner answer that person's
-	// @mention too (teamlink refuses an agent's own).
-	if sess, ok := globalMgr.Registry().Session(sessionID); ok && sess.Meta.UserID != "" {
-		if shared, err := (teamDirectory{svc: globalTeam}).SharedPeers(ctx, sess.Meta.UserID); err == nil {
-			for _, p := range shared {
-				if !seen[p.Handle] {
-					out = append(out, p.Handle)
-					seen[p.Handle] = true
-				}
-			}
-		}
 	}
 	return out
 }
@@ -434,7 +556,16 @@ func (r TeamMentionRouter) SendTeam(ctx context.Context, sessionID, handle, body
 	}
 	_, err := h.Send(context.WithoutCancel(ctx), teamlink.SendInput{
 		CallerSession: sessionID, CallerAgentID: TeamAgentOf(ctx, sessionID),
-		To: handle, Text: body, Wait: -1, Mention: true, Human: human,
+		SessionUser: sessionUserOf(sessionID),
+		To:          handle, Text: body, Wait: -1, Mention: true, Human: human,
 	})
 	return err
+}
+
+// sessionUserOf is the wick user of sessionID, "" when unknown.
+func sessionUserOf(sessionID string) string {
+	if sess, ok := globalMgr.Registry().Session(sessionID); ok {
+		return sess.Meta.UserID
+	}
+	return ""
 }

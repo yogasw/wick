@@ -18,6 +18,10 @@ type AgentShare struct {
 	// LastReadAt is when the recipient last opened their chat with the
 	// agent — the recipient's own unread mark, apart from the owner's.
 	LastReadAt *time.Time `json:"last_read_at"`
+	// HistoryVisible is the owner's "Recipients can view chat history"
+	// choice for this share. nil follows the agent type's default (on for
+	// a built-in agent, off for a remote one).
+	HistoryVisible *bool `json:"history_visible"`
 }
 
 // TableName pins the table name.

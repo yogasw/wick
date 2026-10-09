@@ -74,6 +74,10 @@ describe("HtmlArtifact", () => {
     vi.stubGlobal("innerHeight", 1000);
     const { container } = render(HtmlArtifact, { props: { src: "<p>hi</p>", name: "x.html" } });
     const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+    // A load re-sends on purpose (a fresh document starts hidden), so let the
+    // frame finish loading first: what is pinned here is one document's
+    // reports, not the reload path.
+    await new Promise((r) => iframe.addEventListener("load", r, { once: true }));
     const sent: unknown[] = [];
     vi.spyOn(iframe.contentWindow as Window, "postMessage").mockImplementation(((m: unknown) => { sent.push(m); }) as typeof window.postMessage);
     const id = idFromIframe(iframe);

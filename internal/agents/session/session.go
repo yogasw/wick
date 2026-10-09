@@ -208,6 +208,11 @@ type Meta struct {
 	// GroupSessionID marks a member's backing session: the group chat it
 	// answers for. Hidden from the agent's own chat list.
 	GroupSessionID string `json:"group_session_id,omitempty"`
+	// LinkedFromSession pairs this chat of a Team agent with the
+	// conversation that messages it (team_message or an @mention): later
+	// messages from that conversation land here instead of the agent's
+	// main chat. Kept on disk so the pair outlives a restart.
+	LinkedFromSession string `json:"linked_from_session,omitempty"`
 }
 
 // AgentGroup is a group chat's settings (Meta.AgentGroup).

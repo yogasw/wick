@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
@@ -132,12 +133,16 @@ func deriveArtifacts(layout agentconfig.Layout, sessionID, base, cwd string, tur
 		add(rel, written)
 	}
 
+	previewed := htmlfileRefs(turn.Text, cwd)
 	out := make([]agentstore.Artifact, 0, len(order))
 	for _, rel := range order {
 		c := seen[rel]
 		name := filepath.Base(rel)
 		if !c.written && isTextArtifactExt(name) {
 			continue // read-only source file — not an artifact
+		}
+		if previewed[rel] {
+			continue // already previewed inline by an htmlfile fence in the reply
 		}
 		info, err := os.Stat(filepath.Join(cwd, filepath.FromSlash(rel)))
 		if err != nil || info.IsDir() {
@@ -153,6 +158,24 @@ func deriveArtifacts(layout agentconfig.Layout, sessionID, base, cwd string, tur
 			MIME:        normalizeExtMIME(filepath.Ext(name)),
 			Size:        info.Size(),
 		})
+	}
+	return out
+}
+
+// htmlfileFence matches an htmlfile fence and captures the path it holds.
+var htmlfileFence = regexp.MustCompile("(?m)^[ \t]*```htmlfile[ \t]*\r?\n[ \t]*([^\r\n`]+?)[ \t]*\r?\n[ \t]*```")
+
+// htmlfileRefs returns the cwd-relative paths text previews through an
+// htmlfile fence, so the artifact gallery does not render them a second time.
+func htmlfileRefs(text, cwd string) map[string]bool {
+	if !strings.Contains(text, "```htmlfile") {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, m := range htmlfileFence.FindAllStringSubmatch(text, -1) {
+		if rel, ok := resolveWithinCwd(cwd, m[1]); ok {
+			out[rel] = true
+		}
 	}
 	return out
 }

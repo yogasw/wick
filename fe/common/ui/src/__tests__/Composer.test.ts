@@ -34,6 +34,19 @@ describe("Composer — send + attachments", () => {
     expect(btn.disabled).toBe(false);
   });
 
+  test("readOnly locks the textarea and Send", () => {
+    render(Composer, { props: { onSend: vi.fn(), readOnly: true } });
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: /send/i }) as HTMLButtonElement).disabled).toBe(true);
+    const toolbar = screen.getByTestId("composer-toolbar") as HTMLElement & { inert?: boolean };
+    expect(toolbar.inert === true || toolbar.hasAttribute("inert")).toBe(true);
+  });
+
+  test("disabled keeps the textarea typeable", () => {
+    render(Composer, { props: { onSend: vi.fn(), disabled: true } });
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).disabled).toBe(false);
+  });
+
   test("attaching a file shows it and includes it on send", async () => {
     const onSend = vi.fn();
     render(Composer, { props: { onSend } });

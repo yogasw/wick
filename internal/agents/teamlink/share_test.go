@@ -86,9 +86,10 @@ func TestSharedAgentTakesRecipientMention(t *testing.T) {
 func TestSharedAgentRefusals(t *testing.T) {
 	h, dir, _ := newShareHub()
 	ctx := context.Background()
-	// An agent's own mention never crosses owners.
-	if _, err := h.Send(ctx, SendInput{CallerSession: "s-bob", CallerAgentID: "b-cap", To: "@lena", Text: "hi", Mention: true}); !errors.Is(err, ErrSharedHumanOnly) {
-		t.Fatalf("agent mention = %v, want ErrSharedHumanOnly", err)
+	// The recipient's own agent may mention an agent shared with its
+	// owner; it runs in that owner's chat with it.
+	if _, err := h.Send(ctx, SendInput{CallerSession: "s-bob", CallerAgentID: "b-cap", To: "@lena", Text: "hi", Mention: true}); err != nil {
+		t.Fatalf("agent mention = %v, want delivered", err)
 	}
 	// Not shared → unknown.
 	if _, err := h.Send(ctx, SendInput{CallerSession: "s-bob", CallerAgentID: "b-cap", To: "@kim", Text: "hi", Human: true, Mention: true}); !errors.Is(err, ErrUnknownHandle) {

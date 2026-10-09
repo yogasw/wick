@@ -34,6 +34,7 @@ type accessRule struct {
 const (
 	knobConnectors = "admin_see_all_connectors"
 	knobSessions   = "admin_see_all_sessions"
+	knobProviders  = "admin_see_all_provider_instances"
 	// knobNever: no admin bypass. A tag share hands the agent to the
 	// people who carry the tag and nobody else, admins included.
 	knobNever = "never"
@@ -51,8 +52,9 @@ var accessRules = map[string]accessRule{
 	"tools": {UntaggedIsPublic: true, FilterTagsGrant: true, Reader: "login.CanAccessTool"},
 	"jobs":  {UntaggedIsPublic: true, FilterTagsGrant: true, Reader: "login.CanAccessTool"},
 
-	// canAccessProvider → CanAccessTool on the access path. Admins always.
-	"providers": {UntaggedIsPublic: true, FilterTagsGrant: true, Reader: "canAccessProvider"},
+	// canAccessProvider → CanAccessTool on the access path. The admin
+	// bypass is behind its own knob, like connectors.
+	"providers": {UntaggedIsPublic: true, FilterTagsGrant: true, AdminKnob: knobProviders, Reader: "canAccessProvider"},
 
 	// connectors.Repo.ListAccessibleTo: untagged row visible to everyone;
 	// the admin bypass is behind its own knob.

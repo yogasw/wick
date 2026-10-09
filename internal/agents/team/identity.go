@@ -144,15 +144,15 @@ func YourTeam(team []Member) string {
 }
 
 // SharedWithOwner is the "Shared with your owner" block: agents of other
-// people shared with this agent's owner. Agents never hand turns across
-// owners, so it says who can reach them — the owner, by @mention.
+// people shared with this agent's owner. The agent may message them like
+// a teammate; their turns run in the owner's own chat with them.
 func SharedWithOwner(shared []Member) string {
 	if len(shared) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString("## Shared with your owner\n")
-	b.WriteString("Agents other people shared with your owner. You cannot message them (team_message refuses another owner's agent); your owner reaches one by writing @handle in a chat. Point the owner to one when it fits the request.\n")
+	b.WriteString("Agents other people shared with your owner. You can message them like a teammate (team_message or @handle); each turn runs in your owner's own chat with that agent, under its own mention setting. Use one when it fits the request.\n")
 	for i, m := range shared {
 		if i == maxTeamListed {
 			fmt.Fprintf(&b, "- +%d more\n", len(shared)-maxTeamListed)

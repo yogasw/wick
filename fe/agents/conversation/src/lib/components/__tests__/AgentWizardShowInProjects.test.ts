@@ -6,6 +6,8 @@ vi.mock("../../api/team.js", async (orig) => ({
   ...(await orig<typeof import("../../api/team.js")>()),
   createAgent: (b: string, body: unknown) => createAgent(b, body),
   listAgentConnectors: () => Promise.resolve([]),
+  // The Mentions step lists the owner's other agents.
+  listAgents: () => Promise.resolve({ agents: [], captain_id: "" }),
   getProjectPersona: () => Promise.resolve({ name: "Ops", description: "", system_prompt: "" }),
   runApi: <T,>(p: Promise<T>) => p,
 }));

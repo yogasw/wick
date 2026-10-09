@@ -213,6 +213,39 @@ func TestAPISetConnectorConfig(t *testing.T) {
 	}
 }
 
+func TestAPIClearConnectorConfig(t *testing.T) {
+	h, svc := newDetailHandler(t)
+	row, _ := svc.Create(t.Context(), "slack", "Prod", map[string]string{}, "u-admin")
+	if err := svc.Update(t.Context(), row.ID, row.Label, map[string]string{"api_url": "https://slack.test", "token": "s3cret"}, false); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	clear := func(configKey string) *httptest.ResponseRecorder {
+		req := adminReq(t, http.MethodDelete, "/manager/api/connectors/slack/"+row.ID+"/configs/"+configKey, nil)
+		req.SetPathValue("key", "slack")
+		req.SetPathValue("id", row.ID)
+		req.SetPathValue("configKey", configKey)
+		rec := httptest.NewRecorder()
+		h.apiClearConnectorConfig(rec, req)
+		return rec
+	}
+
+	if rec := clear("token"); rec.Code != http.StatusOK {
+		t.Fatalf("clear secret status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	rec := clear("api_url")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("clear required status = %d, want 400", rec.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["error"] == "" {
+		t.Errorf("refusal must carry a JSON error; body=%s", rec.Body.String())
+	}
+	stored := svc.LoadConfigs(*row)
+	if stored["token"] != "" || stored["api_url"] != "https://slack.test" {
+		t.Errorf("configs after clear = %+v, want token empty and api_url kept", stored)
+	}
+}
+
 func TestAPISetConnectorLabel(t *testing.T) {
 	h, svc := newDetailHandler(t)
 	row, _ := svc.Create(t.Context(), "slack", "Old", map[string]string{}, "u-admin")

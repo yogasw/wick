@@ -330,4 +330,7 @@ export interface ProviderConnection {
   usageAgeS: number;
   usageNextS: number;
   windows: { key: string; utilization: number; resetsAt: string }[];
+  /* Saved rate-limit resets (shared model, see @wick-fe/common-ui);
+     null when the type reports none or the read failed. */
+  savedResets?: import("@wick-fe/common-ui/usage").SavedResets | null;
 }

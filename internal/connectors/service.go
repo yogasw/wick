@@ -688,6 +688,9 @@ func (s *Service) Create(ctx context.Context, key, label string, configs map[str
 			return nil, ErrFixedInstanceViolation
 		}
 	}
+	if err := s.validateConfigs(mod, "", configs); err != nil {
+		return nil, err
+	}
 	c := &entity.Connector{
 		Key:                    key,
 		Label:                  label,
@@ -966,6 +969,13 @@ func (s *Service) IsManageableBy(ctx context.Context, connectorID, userID string
 // "connector:{id}"); only declared keys are written, unknown keys are
 // silently dropped to keep stale form fields from polluting storage.
 func (s *Service) Update(ctx context.Context, id, label string, configs map[string]string, disabled bool) error {
+	if row, err := s.repo.Get(ctx, id); err == nil {
+		if mod, ok := s.Module(row.Key); ok {
+			if err := s.validateConfigs(mod, ownerForConnector(id), configs); err != nil {
+				return err
+			}
+		}
+	}
 	if err := s.repo.Update(ctx, &entity.Connector{
 		ID:       id,
 		Label:    label,
@@ -987,6 +997,59 @@ func (s *Service) Update(ctx context.Context, id, label string, configs map[stri
 		}
 	}
 	return nil
+}
+
+// validateConfigs runs mod's ValidateConfig over the values a write would
+// change. Skipped: empty values (a blank secret keeps the stored one),
+// encrypted tokens (nothing to read), and values equal to what owner
+// already stores, so a bad value saved before validation existed never
+// blocks editing another field. owner "" is a new instance.
+func (s *Service) validateConfigs(mod connector.Module, owner string, configs map[string]string) error {
+	if mod.ValidateConfig == nil {
+		return nil
+	}
+	for k, v := range configs {
+		if strings.TrimSpace(v) == "" || enc.IsToken(v) || enc.IsMasterToken(v) {
+			continue
+		}
+		if owner != "" && s.cfgs.GetOwned(owner, k) == v {
+			continue
+		}
+		if err := mod.ValidateConfig(k, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ClearConfig empties one stored config value on connector id. Update
+// treats a blank secret as "keep", so this is the only way to remove a
+// stored secret. The key must be declared by the module and not Required
+// (a required field is replaced, never emptied); locked and env-overridden
+// rows are refused by configs.ClearOwned.
+func (s *Service) ClearConfig(ctx context.Context, id, key string) error {
+	row, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	mod, ok := s.Module(row.Key)
+	if !ok {
+		return fmt.Errorf("connector module %q is not registered", row.Key)
+	}
+	var spec *entity.Config
+	for i := range mod.Configs {
+		if mod.Configs[i].Key == key {
+			spec = &mod.Configs[i]
+			break
+		}
+	}
+	if spec == nil {
+		return fmt.Errorf("config %q is not declared by connector %q", key, row.Key)
+	}
+	if spec.Required {
+		return fmt.Errorf("config %q is required — replace its value instead of clearing it", key)
+	}
+	return s.cfgs.ClearOwned(ctx, ownerForConnector(id), key)
 }
 
 // SetDisabled toggles the row-level off-switch.
@@ -2164,6 +2227,20 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	if s.userName != nil {
 		cctx.SetUserNameResolver(s.userName)
 	}
+	// The row's connected accounts, listed only when an op asks — the Slack
+	// token_access widget names them; no other op pays for the query.
+	rowID := c.ID
+	cctx.SetAccountsLister(func() []connector.AccountRef {
+		accs, err := s.repo.ListAccounts(opCtx, rowID)
+		if err != nil {
+			return nil
+		}
+		out := make([]connector.AccountRef, 0, len(accs))
+		for _, a := range accs {
+			out = append(out, connector.AccountRef{ID: a.ID, DisplayName: a.DisplayName, WickUserID: a.WickUserID})
+		}
+		return out
+	})
 	// Ops that act ON the calling conversation rather than on an external
 	// API need to know which session that is — sub-agent delegation keys
 	// the parent, the tree, and the project scope off it.

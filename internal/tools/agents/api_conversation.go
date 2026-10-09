@@ -39,6 +39,9 @@ type SessionListItem struct {
 
 // SessionMetaDTO is the JSON shape returned by /api/sessions/{id}/meta.
 type SessionMetaDTO struct {
+	// ReadOnly: the caller reads this chat only through a shared Team
+	// agent (sharedChatReadOnly) — the composer and actions are off.
+	ReadOnly    bool   `json:"read_only,omitempty"`
 	ID          string `json:"id"`
 	Label       string `json:"label"`
 	Status      string `json:"status"`
@@ -289,7 +292,9 @@ func apiSessionConversation(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	if !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants) {
+	// ownsSession, not project access alone: a shared Team agent's chats
+	// live in the owner's agent project, which a recipient cannot reach.
+	if !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -330,7 +335,9 @@ func apiSessionMeta(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	if !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants) {
+	// ownsSession, not project access alone: a shared Team agent's chats
+	// live in the owner's agent project, which a recipient cannot reach.
+	if !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -346,6 +353,7 @@ func apiSessionMeta(c *tool.Ctx) {
 		LastActive:  sess.Meta.LastActive.Format("2006-01-02T15:04:05Z07:00"),
 		Widget:      resolveWidgetPolicy(sess.Meta.ProjectID),
 		Speaker:     sessionSpeaker(c, id),
+		ReadOnly:    sharedChatReadOnly(c, sess),
 	}
 	// Resolve provider + pinned model from the active (or first) agent
 	// entry — ActiveAgent above is the agent's own NAME ("main"), not its

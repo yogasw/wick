@@ -500,6 +500,40 @@ func (s *Service) setOwned(ctx context.Context, owner, key, value string) error 
 	return nil
 }
 
+// ClearOwned empties the stored value for (owner, key). Unlike SetOwned
+// with "", it bypasses the keep-on-empty shortcut for secret rows, so an
+// admin can deliberately remove a stored secret. Refuses undeclared,
+// locked and env-overridden rows.
+func (s *Service) ClearOwned(ctx context.Context, owner, key string) error {
+	ck := ownerKey{Owner: owner, Key: key}
+	s.mu.RLock()
+	m, ok := s.meta[ck]
+	s.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("unknown config %s/%s", owner, key)
+	}
+	if m.Locked {
+		return fmt.Errorf("config %q is locked and cannot be cleared", key)
+	}
+	if owner == "" {
+		if envName, _, set := EnvOverrideFor(key); set {
+			return fmt.Errorf("config %q is overridden by the %s environment variable — unset it and restart to edit from the UI", key, envName)
+		}
+	}
+	if err := s.repo.SetValue(ctx, owner, key, ""); err != nil {
+		return err
+	}
+	fresh, err := s.repo.FindByOwnerKey(ctx, owner, key)
+	if err != nil {
+		return err
+	}
+	fresh.Value = ""
+	s.mu.Lock()
+	s.cache[ck] = *fresh
+	s.mu.Unlock()
+	return nil
+}
+
 // shouldEncrypt reports whether (owner, key) is a secret row that the
 // at-rest layer should encrypt. False when no encryptor is wired, the
 // row is not declared IsSecret, or the row is the encryption_key

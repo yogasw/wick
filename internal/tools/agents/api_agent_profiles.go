@@ -313,6 +313,9 @@ func apiAgentProfileSave(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "key and provider are required"})
 		return
 	}
+	if !requireProviderKeyAccess(c, req.Provider) {
+		return
+	}
 	if strings.TrimSpace(req.Name) == "" {
 		req.Name = req.Key
 	}

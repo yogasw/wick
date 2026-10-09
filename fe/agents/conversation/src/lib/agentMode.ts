@@ -64,27 +64,47 @@ export type AgentMode = {
       header can show it next to its "typing" cue. */
   onProgress?: (label: string | undefined) => void;
   /** The agent's "Allow provider switch in chat" setting. Off, the
-      composer shows the provider read-only; on, the picker works but the
-      provider itself is fixed once the chat has started. */
+      composer shows the provider read-only; on, the picker works, and
+      picking another provider in a started chat asks first. */
   providerSwitch?: boolean;
   /** Opens the agent's Settings (the locked-provider modal's button). */
   onOpenSettings?: () => void;
-  /** Starts a new chat with the agent (the started-chat modal's button). */
+  /** Starts a new chat with the agent (the switch warning's button). */
   onNewChat?: () => void;
 };
 
-/** providerLocked says whether picking `next` must be refused: the chat
-    has started and `next` names another provider. A model change within
-    the same provider is fine. Values are "type/name[::model]"; a started
-    chat on the wick default ("") counts as having a provider. */
-export function providerLocked(started: boolean, current: string, next: string): boolean {
+/** providerKey is the "type/name" part of a picker value
+    ("type/name[::model]"); a bare "type" is the default instance. */
+function providerKey(v: string): string {
+  const i = v.indexOf("::");
+  const p = i < 0 ? v : v.slice(0, i);
+  return p.includes("/") ? p : `${p}/${p}`;
+}
+
+/** providerSwitchWarns says whether picking `next` must ask first: the
+    chat has started and `next` names another provider, which may not
+    resume the conversation. A model change within the same provider is
+    silent. A started chat on the wick default ("") counts as having a
+    provider. */
+export function providerSwitchWarns(started: boolean, current: string, next: string): boolean {
   if (!started) return false;
-  const prov = (v: string) => {
-    const i = v.indexOf("::");
-    const p = i < 0 ? v : v.slice(0, i);
-    return p.includes("/") ? p : `${p}/${p}`;
-  };
-  return prov(current) !== prov(next);
+  return providerKey(current) !== providerKey(next);
+}
+
+/** providerLabel names a picker value the way the picker lists it:
+    "codex", "codex · gemini_flash", "wick default" for "". */
+export function providerLabel(v: string): string {
+  if (!v) return "wick default";
+  const key = providerKey(v);
+  const slash = key.indexOf("/");
+  const type = key.slice(0, slash);
+  const name = key.slice(slash + 1);
+  return name && name !== type ? `${type} · ${name}` : type;
+}
+
+/** providerSwitchBody is the switch warning's text. */
+export function providerSwitchBody(current: string, next: string): string {
+  return `This chat started on ${providerLabel(current)}. ${providerLabel(next)} may not resume this conversation, and earlier context may not carry over.`;
 }
 
 /** What the chat area shows of the agent it talks to. */

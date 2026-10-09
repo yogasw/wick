@@ -119,9 +119,10 @@ func TestTeamAgentShareLifecycle(t *testing.T) {
 	if got := team.SpawnIdentity(sess.Meta, &p, bob.ID); got != owner.ID {
 		t.Fatalf("spawn identity = %q, want owner", got)
 	}
+	// The owner opens it too while it is shared (the Chats drawer's All).
 	_, oc := teamReq(t, owner, http.MethodGet, "/", nil, nil)
-	if ownsSession(oc, sess) {
-		t.Fatal("the owner can open the recipient's chat")
+	if !ownsSession(oc, sess) {
+		t.Fatal("the owner cannot open the recipient's chat while shared")
 	}
 	_, bc := teamReq(t, bob, http.MethodGet, "/", nil, nil)
 	if !ownsSession(bc, sess) {
@@ -150,6 +151,9 @@ func TestTeamAgentShareLifecycle(t *testing.T) {
 	}
 	if ownsSession(bc, sess) {
 		t.Fatal("bob still opens the chat after unshare")
+	}
+	if ownsSession(oc, sess) {
+		t.Fatal("the owner still opens bob's chat after unshare")
 	}
 }
 

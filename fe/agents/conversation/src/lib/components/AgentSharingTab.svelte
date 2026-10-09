@@ -4,13 +4,13 @@
      with this agent's access; they cannot change, share or disable it,
      and their chats stay theirs. People are picked by wick user id. */
   import { onMount } from "svelte";
-  import { Button } from "@wick-fe/common-ui";
+  import { Button, Toggle } from "@wick-fe/common-ui";
   import { toastOk } from "@wick-fe/common-stores";
   import {
-    listAgentShares, addAgentShare, removeAgentShare, listShareUsers, runApi,
+    listAgentShares, addAgentShare, removeAgentShare, setShareHistory, listShareUsers, runApi,
     type AgentItem, type AgentShare, type ShareUser,
   } from "../api/team.js";
-  import { pickableUsers } from "../agentSharing.js";
+  import { pickableUsers, shareHistoryNote, shareHistoryOn } from "../agentSharing.js";
 
   type Props = { base: string; agent: AgentItem };
   let { base, agent }: Props = $props();
@@ -19,6 +19,8 @@
   let users = $state<ShareUser[]>([]);
   let shareable = $state(true);
   let reason = $state("");
+  let historyDefault = $state(true);
+  let remoteKind = $state("");
   let loading = $state(true);
   let busy = $state("");
   let error = $state("");
@@ -34,6 +36,8 @@
       shares = s.shares ?? [];
       shareable = s.shareable;
       reason = s.reason ?? "";
+      historyDefault = s.history_default ?? true;
+      remoteKind = s.remote_kind ?? "";
       users = u.users ?? [];
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -51,6 +55,19 @@
       shares = [...shares, { user_id: u.id, name: u.name, created_at: new Date().toISOString() }];
       query = "";
       toastOk(`Shared with ${u.name}`);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = "";
+    }
+  }
+
+  async function setHistory(s: AgentShare, on: boolean) {
+    busy = s.user_id;
+    error = "";
+    try {
+      await runApi(setShareHistory(base, agent.id, s.user_id, on));
+      shares = shares.map((x) => (x.user_id === s.user_id ? { ...x, history_visible: on } : x));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -78,7 +95,7 @@
 <div data-testid="agent-sharing">
   <p class="text-sm font-semibold text-black-900 dark:text-white-100">Sharing</p>
   <p class="mt-1 text-xs text-black-800 dark:text-black-600">
-    People you share @{agent.handle} with can chat with it and @mention it, using this agent's access. They can't change its settings, share it on or turn it off, and you don't see their chats.
+    People you share @{agent.handle} with can chat with it and @mention it, using this agent's access. They can't change its settings, share it on or turn it off. With chat history on, they can read everyone's chats with it (read-only); off, they see only their own.
   </p>
 </div>
 
@@ -125,6 +142,18 @@
             <span class="min-w-0 flex-1">
               <span class="block truncate text-sm text-black-900 dark:text-white-100">{s.name}</span>
               <span class="block text-[11px] text-black-700">Chat only</span>
+              <span class="mt-2 flex items-center gap-2" data-testid="share-history">
+                <Toggle
+                  id={`share-history-${s.user_id}`}
+                  checked={shareHistoryOn(s, historyDefault)}
+                  disabled={!!busy}
+                  label="Recipients can view chat history"
+                  describedBy={`share-history-note-${s.user_id}`}
+                  onChange={(v) => setHistory(s, v)}
+                />
+                <span class="text-xs text-black-900 dark:text-white-100">Recipients can view chat history</span>
+              </span>
+              <span id={`share-history-note-${s.user_id}`} class="mt-1 block text-[11px] text-black-700 dark:text-black-600">{shareHistoryNote(remoteKind)}</span>
             </span>
             <Button size="sm" variant="ghost" disabled={!!busy} onclick={() => remove(s)}>{busy === s.user_id ? "Removing…" : "Remove"}</Button>
           </li>

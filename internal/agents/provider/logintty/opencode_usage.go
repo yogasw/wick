@@ -202,12 +202,24 @@ type chatgptUsageWindow struct {
 }
 
 func fetchChatGPTUsage(e opencodeAuthEntry) ([]UsageWindow, string, error) {
-	if e.Expires > 0 && time.UnixMilli(e.Expires).Before(time.Now()) {
-		return nil, "", fmt.Errorf("login token expired — opencode renews it on this account's next turn")
-	}
-	req, err := http.NewRequest(http.MethodGet, chatgptUsageURL, nil)
+	body, err := chatgptGet(chatgptUsageURL, e)
 	if err != nil {
 		return nil, "", err
+	}
+	return parseChatGPTUsage(body, time.Now())
+}
+
+// chatgptGet is one authenticated GET against a ChatGPT backend-api
+// route with an OAuth login: the bearer plus ChatGPT-Account-Id the CLIs
+// send. Shared by the usage read and the saved-resets read
+// (codex_saved_resets.go). A 429 comes back as RateLimitedError.
+func chatgptGet(url string, e opencodeAuthEntry) ([]byte, error) {
+	if e.Expires > 0 && time.UnixMilli(e.Expires).Before(time.Now()) {
+		return nil, fmt.Errorf("login token expired — opencode renews it on this account's next turn")
+	}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+e.Access)
 	if e.AccountID != "" {
@@ -216,20 +228,20 @@ func fetchChatGPTUsage(e opencodeAuthEntry) ([]UsageWindow, string, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, "", &RateLimitedError{Status: resp.Status, RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
+		return nil, &RateLimitedError{Status: resp.Status, RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("usage endpoint: %s", resp.Status)
+		return nil, fmt.Errorf("usage endpoint: %s", resp.Status)
 	}
-	return parseChatGPTUsage(body, time.Now())
+	return body, nil
 }
 
 func parseChatGPTUsage(body []byte, now time.Time) ([]UsageWindow, string, error) {

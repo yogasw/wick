@@ -157,3 +157,65 @@ func TestAttachArtifactsToTurns(t *testing.T) {
 		t.Errorf("assistant turn with artifacts must have has_artifact=true")
 	}
 }
+
+func TestHtmlfileRefs(t *testing.T) {
+	cwd := filepath.Join(t.TempDir(), "sess", "cwd")
+	if got := htmlfileRefs("no fence here", cwd); len(got) != 0 {
+		t.Errorf("no fence: got %v", got)
+	}
+	text := "Report:\n```htmlfile\nartifacts/report.html\n```\n" +
+		"Abs:\n```htmlfile\n" + filepath.Join(cwd, "abs.html") + "\n```\n" +
+		"Escape:\n```htmlfile\n../outside.html\n```\n" +
+		"Outside:\n```htmlfile\n" + filepath.Join(t.TempDir(), "other.html") + "\n```\n" +
+		"Plain:\n```html\n<b>x</b>\n```\n"
+	got := htmlfileRefs(text, cwd)
+	if !got["artifacts/report.html"] || !got["abs.html"] {
+		t.Errorf("fenced paths inside cwd must be returned; got %v", got)
+	}
+	if len(got) != 2 {
+		t.Errorf("paths outside cwd and plain html fences must be ignored; got %v", got)
+	}
+}
+
+func TestDeriveArtifactsSkipsHtmlfilePreview(t *testing.T) {
+	base := t.TempDir()
+	layout := agentconfig.NewLayout(base)
+	const sid, tid = "S3", "T3"
+	cwd := filepath.Join(layout.SessionDir(sid), "cwd")
+	if err := os.MkdirAll(filepath.Join(cwd, "artifacts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(cwd, "artifacts", "report.html"), []byte("<p/>"), 0o644)
+	_ = os.WriteFile(filepath.Join(cwd, "chart.png"), []byte("\x89PNG"), 0o644)
+	writeJSON(t, layout.SessionThinking(sid, tid), agentstore.TurnTraceIndex{
+		TurnID: tid,
+		Events: []agentstore.TurnEventIndex{
+			{Type: "tool_use", ToolName: "Write", ToolInput: `{"file_path":"artifacts/report.html"}`},
+			{Type: "tool_use", ToolName: "Write", ToolInput: `{"file_path":"chart.png"}`},
+		},
+	})
+	paths := func(text string) map[string]bool {
+		turn := agentstore.ConversationTurn{TurnID: tid, Role: "assistant", HasTrace: true, Text: text}
+		out := map[string]bool{}
+		for _, a := range deriveArtifacts(layout, sid, "/base", cwd, turn) {
+			out[a.Path] = true
+		}
+		return out
+	}
+
+	// Fence present: the previewed html is dropped, the png stays.
+	got := paths("Here:\n```htmlfile\nartifacts/report.html\n```\n")
+	if got["artifacts/report.html"] || !got["chart.png"] || len(got) != 1 {
+		t.Errorf("fence present: want only chart.png; got %v", got)
+	}
+	// No fence: both stay.
+	got = paths("done")
+	if !got["artifacts/report.html"] || !got["chart.png"] || len(got) != 2 {
+		t.Errorf("fence absent: want both; got %v", got)
+	}
+	// Fence pointing outside cwd changes nothing.
+	got = paths("```htmlfile\n../artifacts/report.html\n```\n")
+	if !got["artifacts/report.html"] || len(got) != 2 {
+		t.Errorf("fence outside cwd: want both; got %v", got)
+	}
+}

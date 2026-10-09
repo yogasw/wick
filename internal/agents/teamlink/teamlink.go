@@ -70,6 +70,14 @@ const (
 	// metaNewChat asks for the turn in a fresh chat of the target
 	// instead of its main one (SendInput.NewChat).
 	metaNewChat = "wick.new_chat"
+	// metaChat resumes one of the target's chats the person asked to
+	// continue (SendInput.Chat).
+	metaChat = "wick.chat"
+	// metaSessionUser names the person who wrote an @mention in their
+	// chat with an agent another owner shared with them
+	// (SendInput.SessionUser); the executor re-checks both ends against
+	// that person.
+	metaSessionUser = "wick.session_user"
 )
 
 var (
@@ -79,12 +87,12 @@ var (
 	// ErrUnknownHandle means no enabled agent of the owner has the handle.
 	ErrUnknownHandle = errors.New("unknown or disabled Team handle")
 	// ErrSelf refuses a message to the calling agent itself.
-	// ErrSharedHumanOnly refuses an agent's turn for an agent another
-	// owner shared: only the person it was shared with may mention it.
+	// ErrSharedHumanOnly refuses an agent's turn for an agent of another
+	// owner that is not shared with the caller's owner.
 	// ErrNotShared ends a turn for a shared agent its owner unshared or
 	// turned off since the mention was sent.
 	ErrNotShared       = errors.New("that agent is no longer shared with you or is turned off")
-	ErrSharedHumanOnly = errors.New("that agent is shared with your user, not your Team — only you can @mention it")
+	ErrSharedHumanOnly = errors.New("that agent belongs to another owner and is not shared with yours — tell the user instead")
 	ErrSelf            = errors.New("you can't message yourself — pick a teammate from your Team")
 	// ErrNotTeamSession refuses a caller that is not a Team agent.
 	ErrNotTeamSession = errors.New("team messaging is only available in a Team agent's session")
@@ -162,9 +170,9 @@ type Directory interface {
 }
 
 // SharedDirectory is optionally implemented by a Directory that knows
-// agents shared with a user (chat only). A shared agent answers a
-// person's @mention from the recipient's own sessions, never an agent's,
-// and its turn runs in the recipient's chat with it.
+// agents shared with a user (chat only). A shared agent answers the
+// recipient's @mention and the recipient's own agents, never a third
+// owner's, and its turn runs in the recipient's chat with it.
 type SharedDirectory interface {
 	// SharedPeers lists the enabled agents other owners share with
 	// userID, each with ChatUser = userID.
@@ -301,6 +309,9 @@ type Hub struct {
 	// answered is the task each session answered most recently, so a
 	// reply it sends after that task ended (FollowUp) reaches the asker.
 	answered map[string]a2a.TaskID
+	// linkMu serialises pairing a caller's conversation with a target's
+	// chat (chatFor), so two messages sent at once open one chat, not two.
+	linkMu sync.Mutex
 }
 
 // taskRef is what the Hub remembers about a task it sent.
@@ -321,6 +332,9 @@ type taskRef struct {
 	contextID string
 	title     string
 	started   time.Time
+	// chat is the target's session the turn runs in, once the executor
+	// picked it ("" = main or not yet known).
+	chat string
 }
 
 // contextState is one exchange's turn count.
@@ -365,6 +379,22 @@ type ChatOpener interface {
 	RunIn(ctx context.Context, agent Peer, sessionID, text string) (string, string, error)
 }
 
+// ChatLinker is optionally implemented by a ChatOpener: it pairs a
+// caller's conversation with one chat of each agent it messages, so a new
+// conversation at the caller gets a new chat at the target (a new Slack
+// thread for a Slack remote) instead of piling into its main chat. The
+// pair lives on the target chat's session, so it outlives the Hub.
+type ChatLinker interface {
+	// LinkedChat is the chat of agent (for agent.ChatUser) paired with
+	// callerSession, "" for none. A callerSession that is itself paired
+	// with a chat of agent answers with that chat, so a reply to the
+	// asker lands back in the conversation that asked.
+	LinkedChat(ctx context.Context, agent Peer, callerSession string) string
+	// Link pairs chat with callerSession, unpairing any other chat of
+	// agent paired with it.
+	Link(ctx context.Context, agent Peer, chat, callerSession string) error
+}
+
 // chatKey names one agent's side of an exchange: a shared agent's chat
 // with a recipient is not its owner's.
 func chatKey(p Peer) string { return p.ID + "\x00" + p.ChatUser }
@@ -392,21 +422,61 @@ func NormalizeHandle(h string) string {
 	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(h), "@"))
 }
 
-// Reachable lists the enabled teammates of agentID, itself excluded. The
-// tool is offered only when this is non-empty.
+// Reachable lists the enabled agents agentID may message, itself
+// excluded: its owner's other agents, then the agents other owners share
+// with its owner (ChatUser = the owner) whose handle no own agent takes.
+// The tool is offered only when this is non-empty.
 func (h *Hub) Reachable(ctx context.Context, agentID string) ([]Peer, error) {
 	self, err := h.Dir.Get(ctx, agentID)
 	if err != nil {
 		return nil, err
 	}
-	all, err := h.Dir.Peers(ctx, self.OwnerID)
+	return h.reachableFor(ctx, self.OwnerID, self.ID)
+}
+
+// MentionTargets lists the handles a person's @mention reaches from a
+// session of agentID whose user is sessionUser. In the agent's owner's
+// own sessions that is Reachable; in a chat with an agent shared with
+// sessionUser it is sessionUser's own agents and those shared with them —
+// never the sharing owner's other agents.
+func (h *Hub) MentionTargets(ctx context.Context, agentID, sessionUser string) ([]Peer, error) {
+	self, err := h.Dir.Get(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	user := self.OwnerID
+	if sessionUser != "" {
+		user = sessionUser
+	}
+	return h.reachableFor(ctx, user, self.ID)
+}
+
+// reachableFor is ownerID's enabled agents then those shared with ownerID,
+// one per handle (own first), selfID excluded.
+func (h *Hub) reachableFor(ctx context.Context, ownerID, selfID string) ([]Peer, error) {
+	all, err := h.Dir.Peers(ctx, ownerID)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]Peer, 0, len(all))
+	seen := map[string]bool{}
 	for _, p := range all {
-		if p.ID != self.ID && !p.Disabled && p.OwnerID == self.OwnerID {
+		if p.ID != selfID && !p.Disabled && p.OwnerID == ownerID {
 			out = append(out, p)
+			seen[p.Handle] = true
+		}
+	}
+	if sd, ok := h.Dir.(SharedDirectory); ok && ownerID != "" {
+		shared, err := sd.SharedPeers(ctx, ownerID)
+		if err != nil {
+			return out, nil
+		}
+		for _, p := range shared {
+			if p.ID != selfID && !p.Disabled && !seen[p.Handle] {
+				p.ChatUser = ownerID
+				out = append(out, p)
+				seen[p.Handle] = true
+			}
 		}
 	}
 	return out, nil
@@ -480,9 +550,18 @@ type SendInput struct {
 	// the exchange that reply answered. A person's mention (Human) always
 	// starts a fresh exchange.
 	Mention, Human bool
-	// NewChat runs the turn in a new chat of the target instead of its
-	// main one; later messages of the same context_id go to that chat.
+	// NewChat runs the turn in a new chat of the target instead of the
+	// one paired with CallerSession, and pairs that new chat instead.
 	NewChat bool
+	// Chat resumes this chat of the target (a session_id RecentChats
+	// listed) and pairs it with CallerSession — only when the person
+	// asked to continue it.
+	Chat string
+	// SessionUser is the user of CallerSession, resolved from the session
+	// like CallerSession. For a person's mention (Human) in their chat
+	// with an agent another owner shared with them, the mention resolves
+	// against this person, not the agent's owner.
+	SessionUser string
 }
 
 // Result is what a caller gets back.
@@ -493,6 +572,10 @@ type Result struct {
 	To        string `json:"to"`
 	ReplyText string `json:"reply_text,omitempty"`
 	Note      string `json:"note,omitempty"`
+	// Chat is the target's chat the turn runs in — the one paired with
+	// the caller's conversation — with its Slack thread for a Slack
+	// remote; nil for the main chat or when not known yet.
+	Chat *ChatInfo `json:"chat,omitempty"`
 }
 
 // Send delivers in.Text to the teammate named in.To and waits up to
@@ -506,15 +589,27 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if err != nil {
 		return nil, ErrNotTeamSession
 	}
-	card, target, err := h.Resolve(ctx, caller.OwnerID, in.To)
+	// A person writing in their chat with an agent another owner shared
+	// with them speaks for themselves: the mention reaches their own
+	// agents and those shared with them, never the sharing owner's others.
+	// An agent's message — a resume (Chat) included — never widens past a
+	// plain send: it resolves against the agent's owner; a resume only
+	// narrows which chat of that target it lands in (resumeScope).
+	resolveAs := caller.OwnerID
+	viaShare := in.Human && in.SessionUser != "" && in.SessionUser != caller.OwnerID
+	if viaShare {
+		resolveAs = in.SessionUser
+	}
+	card, target, err := h.Resolve(ctx, resolveAs, in.To)
 	if err == nil && target.ID == caller.ID {
 		err = ErrSelf
 	}
 	// A person's @mention always goes through; an agent's needs the
 	// target's consent.
-	// An agent shared with the caller's owner takes a person's mention
-	// only: agents never hand turns across owners.
-	if err == nil && target.OwnerID != caller.OwnerID && !in.Human {
+	// An agent reaches its owner's agents and those shared with its owner
+	// (the turn then runs in the owner's chat with it); never a third
+	// owner's.
+	if err == nil && !in.Human && !viaShare && target.OwnerID != caller.OwnerID && target.ChatUser != caller.OwnerID {
 		err = ErrSharedHumanOnly
 	}
 	if err == nil && !in.Human && !target.AcceptsFrom(caller) {
@@ -535,6 +630,23 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if _, ok := h.Turns.(ChatOpener); in.NewChat && !ok {
 		return nil, ErrNewChatUnsupported
 	}
+	if in.Chat = strings.TrimSpace(in.Chat); in.Chat != "" {
+		if in.NewChat {
+			return nil, ErrChatAndNewChat
+		}
+		// The chat must be the session person's own, with the target as
+		// it is shared with them; never someone else's (read-only) chat.
+		rp, ok := h.resumeScope(ctx, in.SessionUser, caller.OwnerID)(target)
+		if !ok || !h.ownsChat(ctx, rp, in.Chat) {
+			return nil, ErrUnknownChat
+		}
+		if rp.ChatUser != target.ChatUser {
+			// The turn runs in the recipient's chat with the target; the
+			// executor re-checks both shares against that person.
+			target = rp
+			viaShare = true
+		}
+	}
 	contextID, depth, limit, err := h.admit(caller.OwnerID, caller.ID, in.CallerSession, in.ContextID, in.Mention && !in.Human, MinHops(caller, target))
 	if err != nil {
 		if errors.Is(err, ErrHopLimit) {
@@ -551,6 +663,12 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	}
 	if in.NewChat {
 		msg.Metadata[metaNewChat] = true
+	}
+	if in.Chat != "" {
+		msg.Metadata[metaChat] = in.Chat
+	}
+	if viaShare {
+		msg.Metadata[metaSessionUser] = in.SessionUser
 	}
 
 	cl, err := h.client(ctx, card)
@@ -725,26 +843,67 @@ func (h *Hub) unknownLocked(callerAgentID string, id a2a.TaskID) error {
 	return ErrUnknownTask
 }
 
-// chatFor is the session target answers contextID in: a new chat when
-// newChat asks for one (remembered for the rest of the exchange), the
-// chat an earlier new_chat opened, else "" — its main chat.
-func (h *Hub) chatFor(ctx context.Context, contextID string, target Peer, newChat bool) (string, error) {
+// chatFor is the session target answers contextID in: resume when the
+// person asked to continue that chat (re-paired with callerSession), a
+// new chat when newChat asks for one, the chat an earlier new_chat opened for this
+// exchange, else the chat paired with callerSession (ChatLinker) — opened
+// and paired on the first message from that conversation. "" is the main
+// chat, where Turns cannot pair.
+func (h *Hub) chatFor(ctx context.Context, contextID, callerSession string, target Peer, newChat bool, resume string) (string, error) {
 	key := chatKey(target)
-	if !newChat {
+	op, canOpen := h.Turns.(ChatOpener)
+	lk, canLink := h.Turns.(ChatLinker)
+	if newChat && !canOpen {
+		return "", ErrNewChatUnsupported
+	}
+	if resume != "" {
+		// Re-checked here, whatever the metadata claims: only one of the
+		// target's chats with the caller's side.
+		if newChat || !canOpen || !h.ownsChat(ctx, target, resume) {
+			return "", ErrUnknownChat
+		}
+		h.linkMu.Lock()
+		if canLink && callerSession != "" {
+			_ = lk.Link(ctx, target, resume, callerSession)
+		}
+		h.linkMu.Unlock()
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		if cs := h.contexts[contextID]; cs != nil {
-			return cs.chats[key], nil
+			if cs.chats == nil {
+				cs.chats = map[string]string{}
+			}
+			cs.chats[key] = resume
 		}
-		return "", nil
+		return resume, nil
 	}
-	op, ok := h.Turns.(ChatOpener)
-	if !ok {
-		return "", ErrNewChatUnsupported
+	if !newChat {
+		h.mu.Lock()
+		var id string
+		if cs := h.contexts[contextID]; cs != nil {
+			id = cs.chats[key]
+		}
+		h.mu.Unlock()
+		if id != "" || !canOpen || !canLink || callerSession == "" {
+			return id, nil
+		}
 	}
-	id, err := op.NewChat(ctx, target)
-	if err != nil {
-		return "", err
+	h.linkMu.Lock()
+	defer h.linkMu.Unlock()
+	id := ""
+	if !newChat {
+		id = lk.LinkedChat(ctx, target, callerSession)
+	}
+	if id == "" {
+		var err error
+		if id, err = op.NewChat(ctx, target); err != nil {
+			return "", err
+		}
+		if canLink && callerSession != "" {
+			// A failed pair still answers in the new chat; the next
+			// message just opens another.
+			_ = lk.Link(ctx, target, id, callerSession)
+		}
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -777,15 +936,19 @@ func (h *Hub) wait(ctx context.Context, cl *a2aclient.Client, id a2a.TaskID, con
 		if ref.finished {
 			ref.delivered = true
 			out := &Result{TaskID: string(id), ContextID: contextID, State: stateName(ref.state), To: "@" + to.Handle, ReplyText: ref.reply}
+			chat := ref.chat
 			h.mu.Unlock()
+			out.Chat = h.chatView(ctx, to, chat)
 			return out, nil
 		}
 		if wait < 0 || !time.Now().Before(deadline) {
 			ref.waiterGone = true
+			chat := ref.chat
 			h.mu.Unlock()
 			return &Result{
 				TaskID: string(id), ContextID: contextID, State: stateName(a2a.TaskStateWorking), To: "@" + to.Handle,
 				Note: "Still working. The reply is delivered into this conversation when it lands — end your turn; do not poll or resend.",
+				Chat: h.chatView(ctx, to, chat),
 			}, nil
 		}
 		h.mu.Unlock()
@@ -816,18 +979,21 @@ func (h *Hub) GetTask(ctx context.Context, callerAgentID, taskID string) (*Resul
 		// The executor reports before the store has applied its last
 		// event; the ref is the fresher of the two.
 		out := &Result{TaskID: taskID, State: stateName(ref.state), To: "@" + to.Handle, ReplyText: ref.reply}
+		chat := ref.chat
 		h.mu.Unlock()
+		out.Chat = h.chatView(ctx, to, chat)
 		if t, err := h.handler(agentID).GetTask(ctx, &a2a.GetTaskRequest{ID: a2a.TaskID(taskID)}); err == nil {
 			out.ContextID = t.ContextID
 		}
 		return out, nil
 	}
+	chat := ref.chat
 	h.mu.Unlock()
 	t, err := h.handler(agentID).GetTask(ctx, &a2a.GetTaskRequest{ID: a2a.TaskID(taskID)})
 	if err != nil {
 		return nil, err
 	}
-	out := &Result{TaskID: taskID, ContextID: t.ContextID, State: stateName(t.Status.State), To: "@" + to.Handle}
+	out := &Result{TaskID: taskID, ContextID: t.ContextID, State: stateName(t.Status.State), To: "@" + to.Handle, Chat: h.chatView(ctx, to, chat)}
 	if t.Status.Message != nil {
 		out.ReplyText = messageText(t.Status.Message)
 	}

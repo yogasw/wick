@@ -1,4 +1,7 @@
-import { withModelListMeta } from "@wick-fe/common-ui";
+// The subpath, not the package root: the root re-exports every shared Svelte
+// component, and an API module (and its tests, which re-import it per case)
+// needs none of them.
+import { withModelListMeta } from "@wick-fe/common-ui/model-list-meta";
 import type { ProjectSettingsData, UpdateProjectRequest } from "./types.js";
 
 class ApiError extends Error {

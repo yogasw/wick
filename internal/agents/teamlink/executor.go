@@ -40,8 +40,9 @@ func Frame(from Peer, text string) string {
 	return fmt.Sprintf("Message from %s:\n%s", from.Label(), text)
 }
 
-// Execute runs one turn of the agent's main conversation for the message —
-// or of the chat a new_chat opened for its exchange.
+// Execute runs one turn of the agent for the message, in the chat chatFor
+// picks: the one paired with the caller's conversation, or its main chat
+// where Turns cannot pair.
 func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
 		if ec.StoredTask == nil {
@@ -72,11 +73,23 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 				e.fail(ctx, ec, yield, ErrUnknownHandle)
 				return
 			}
-			if from.OwnerID != target.OwnerID {
+			chatUser, _ := meta[metaChatUser].(string)
+			sessionUser, _ := meta[metaSessionUser].(string)
+			switch {
+			case sessionUser != "" && sessionUser != from.OwnerID:
+				// A person's mention in their chat with an agent shared
+				// with them: re-checked against that person now, whatever
+				// the metadata claims.
+				shared, ok := h.forSessionUser(ctx, sessionUser, chatUser, from, target)
+				if !ok {
+					e.fail(ctx, ec, yield, ErrNotShared)
+					return
+				}
+				target = shared
+			case from.OwnerID != target.OwnerID:
 				// Never across owners, whatever the metadata claims —
 				// except an agent still shared with the sender's owner,
 				// whose turn then runs in that owner's chat with it.
-				chatUser, _ := meta[metaChatUser].(string)
 				shared, ok := h.sharedByID(ctx, from.OwnerID, target.ID)
 				if chatUser != from.OwnerID || !ok {
 					e.fail(ctx, ec, yield, ErrNotShared)
@@ -92,11 +105,21 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		}
 
 		newChat, _ := meta[metaNewChat].(bool)
-		chat, err := h.chatFor(ctx, ec.ContextID, target, newChat)
+		resume, _ := meta[metaChat].(string)
+		chat, err := h.chatFor(ctx, ec.ContextID, callerSession, target, newChat, resume)
 		if err != nil {
 			e.fail(ctx, ec, yield, err)
 			return
 		}
+		// The sender's result names the chat (Result.Chat).
+		h.mu.Lock()
+		ref := h.tasks[ec.TaskID]
+		if ref == nil {
+			ref = &taskRef{touched: h.now()}
+			h.tasks[ec.TaskID] = ref
+		}
+		ref.chat = chat
+		h.mu.Unlock()
 		session := chat
 		if sl, ok := h.Turns.(SessionLocator); ok && session == "" {
 			session = sl.MainSession(ctx, target)
@@ -147,6 +170,23 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		yield(a2a.NewStatusUpdateEvent(ec, state, out), nil)
 		h.finished(ctx, ec.TaskID, state, reply)
 	}
+}
+
+// forSessionUser checks a mention user wrote in their chat with from: from
+// must still be shared with user, and target must be user's own agent (run
+// in user's chat, chatUser "") or still shared with user (chatUser = user).
+// It returns target as the turn should see it.
+func (h *Hub) forSessionUser(ctx context.Context, user, chatUser string, from, target Peer) (Peer, bool) {
+	if _, ok := h.sharedByID(ctx, user, from.ID); !ok {
+		return Peer{}, false
+	}
+	if target.OwnerID == user && chatUser == "" {
+		return target, true
+	}
+	if chatUser != user {
+		return Peer{}, false
+	}
+	return h.sharedByID(ctx, user, target.ID)
 }
 
 // fail ends the task as failed with err's text.

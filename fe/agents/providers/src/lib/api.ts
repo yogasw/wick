@@ -18,6 +18,7 @@ import type {
   ProviderConnection,
 } from "./types.js";
 import type { ModelCaps } from "@wick-fe/common-ui";
+import { parseSavedResets, type WireSavedResets } from "@wick-fe/common-ui/usage";
 
 interface WireProviderInstance {
   type: string;
@@ -1525,6 +1526,7 @@ interface WireProviderConnection {
   usage_age_s?: number;
   usage_next_s?: number;
   windows?: { key?: string; utilization?: number; resets_at?: string }[] | null;
+  saved_resets?: WireSavedResets | null;
 }
 
 export function normalizeConnections(
@@ -1551,6 +1553,7 @@ export function normalizeConnections(
       utilization: w.utilization ?? 0,
       resetsAt: w.resets_at ?? "",
     })),
+    savedResets: parseSavedResets(c.saved_resets),
   }));
 }
 

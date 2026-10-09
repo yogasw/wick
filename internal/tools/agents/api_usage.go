@@ -178,7 +178,9 @@ func apiSessionContext(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	if !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants) {
+	// ownsSession, not project access alone: a shared Team agent's chats
+	// live in the owner's agent project, which a recipient cannot reach.
+	if !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}

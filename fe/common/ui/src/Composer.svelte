@@ -15,6 +15,8 @@
   import CapabilityChips from "./CapabilityChips.svelte";
   import CapabilityModal from "./CapabilityModal.svelte";
   import ProviderIcon from "./ProviderIcon.svelte";
+  import UsageMiniRings from "./usage/UsageMiniRings.svelte";
+  import { usageStore, loadUsage } from "./usage/base/index.js";
   import { modelListMeta, describeModelListMeta, type ModelListMeta } from "./model-list-meta.js";
   import type { ComposerCommand, ComposerSelect, ComposerSelectOption, ComposerModelOption, ComposerMentionAgent } from "./composer-types.js";
   import { agentMentionRows, fileMentionRows } from "./mention-menu.js";
@@ -23,6 +25,8 @@
   type Props = {
     onSend: (msg: { text: string; files: File[] }) => void;
     disabled?: boolean;
+    /** Locks the textarea too (not just Send) — a chat the viewer can only read. */
+    readOnly?: boolean;
     placeholder?: string;
     submitLabel?: string;
     /** Initial textarea height in rows (grows with content up to a cap). 1 = the
@@ -93,6 +97,7 @@
   let {
     onSend,
     disabled = false,
+    readOnly = false,
     placeholder = "Message…",
     submitLabel,
     minRows = 1,
@@ -416,7 +421,7 @@
     return () => window.removeEventListener("keydown", onGlobalKeydown);
   });
 
-  const canSend = $derived(!disabled && (!requireContent || text.trim().length > 0 || files.length > 0));
+  const canSend = $derived(!disabled && !readOnly && (!requireContent || text.trim().length > 0 || files.length > 0));
 
   const minHeightPx = $derived(minRows > 1 ? minRows * 22 + 16 : 43);
   const MAX_HEIGHT = 240;
@@ -752,6 +757,16 @@
   function closeTypeDrill() {
     typeDrillKey = "";
   }
+  // Usage at a glance on instance rows: refresh the shared store for the
+  // drilled type's instances. loadUsage serves fresh entries without a
+  // request and shares in-flight ones, so opening the menu stays instant.
+  $effect(() => {
+    const base = provider?.usageBase;
+    if (base === undefined || !typeDrillKey) return;
+    for (const o of providerGroups.find((g) => g.type === typeDrillKey)?.opts ?? []) {
+      void loadUsage(base, splitModelPin(o.value).key);
+    }
+  });
 
   // Lazy live-model loading for the drilled provider. `modelCache` holds the
   // list keyed by option value once fetched; `modelLoading` is the set of
@@ -1246,6 +1261,7 @@
     style="overflow-y: auto; height: {minHeightPx}px;"
     rows={minRows}
     {placeholder}
+    disabled={readOnly}
     bind:this={textareaEl}
     bind:value={text}
     onkeydown={handleKeyDown}
@@ -1266,7 +1282,7 @@
   <!-- Toolbar: everything lives in the + menu (attach, context, commands,
        provider/project/preset) except the + button and the notification bell.
        Right side is just the send button. -->
-  <div bind:this={plusEl} class="relative flex items-center gap-2 rounded-b-2xl border-t border-white-300 dark:border-navy-600 bg-white-200/60 dark:bg-navy-800/40 px-3 py-2">
+  <div bind:this={plusEl} inert={readOnly} data-testid="composer-toolbar" class="relative flex items-center gap-2 rounded-b-2xl border-t border-white-300 dark:border-navy-600 bg-white-200/60 dark:bg-navy-800/40 px-3 py-2 {readOnly ? 'opacity-60' : ''}">
     <!-- + hub menu -->
     <div class="shrink-0">
       <button
@@ -1499,6 +1515,9 @@
                   <span class="truncate">{opt.label}</span>
                   {#if opt.badge}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">{opt.badge}</span>{/if}
                 </span>
+                {#if provider.usageBase !== undefined}
+                  <UsageMiniRings glance={$usageStore[splitModelPin(opt.value).key]?.glance} />
+                {/if}
                 {#if hasModelDrill(opt)}
                   <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 {:else if isSel}

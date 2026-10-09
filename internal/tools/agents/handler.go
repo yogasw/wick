@@ -41,6 +41,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/store"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
 	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
+	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
@@ -245,6 +246,9 @@ func Register(r tool.Router) {
 	// runs, instead of repeating ownsSession/allowProject in every handler.
 	r.Use("/sessions/{id}", sessionAccessMW)
 	r.Use("/api/sessions/{id}", sessionAccessMW)
+	// Another person's chat of a shared Team agent opens read-only.
+	r.Use("/sessions/{id}", sharedChatReadOnlyMW)
+	r.Use("/api/sessions/{id}", sharedChatReadOnlyMW)
 	r.Use("/projects/{id}", projectAccessMW)
 	r.Use("/api/projects/{id}", projectAccessMW)
 	// A shared agent's chat is chat only: its rail is the owner's project.
@@ -371,6 +375,7 @@ func Register(r tool.Router) {
 	r.GET("/api/team/agents/{id}/shares", apiTeamAgentShares)
 	r.POST("/api/team/agents/{id}/shares", apiTeamAgentShareAdd)
 	r.DELETE("/api/team/agents/{id}/shares/{uid}", apiTeamAgentShareRemove)
+	r.PATCH("/api/team/agents/{id}/shares/{uid}", apiTeamAgentShareUpdate)
 	r.GET("/api/team/share-users", apiTeamShareUsers)
 	r.GET("/api/team/agents/{id}/access-history", apiTeamAgentAccessHistory)
 	r.GET("/api/team/agents/{id}/skills", apiTeamAgentSkills)
@@ -1293,10 +1298,22 @@ func ownsSession(c *tool.Ctx, sess session.Session) bool {
 	if u.IsAdmin() && adminSeeAll() {
 		return true
 	}
-	// A shared agent's chat is its recipient's alone: the agent's owner
-	// reaches its project but not this conversation.
-	if p, ok := sharedChatAgent(c.Context(), sess); ok {
-		return sharedChatAllowed(c.Context(), u.ID, sess, p)
+	if p, ok := uiAgentChat(c.Context(), sess); ok {
+		// A shared agent's chats are open to everyone it belongs to right
+		// now — its owner and each recipient (the Chats drawer's All tab).
+		if agentChatViewer(c.Context(), u.ID, sess, p) {
+			return true
+		}
+		// Otherwise a recipient's chat is its recipient's alone, and only
+		// while the agent is still shared with them.
+		if team.IsSharedChat(sess.Meta, &p) {
+			return sharedChatAllowed(c.Context(), u.ID, sess, p)
+		}
+		// A recipient who spoke in the owner's chat is a participant of
+		// it; that opens nothing once the share is gone.
+		if u.ID != sess.Meta.UserID && u.ID != p.OwnerUserID {
+			return callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, nil)
+		}
 	}
 	// Owner or any other person who has spoken in it: a Slack thread is
 	// shared work, so replying into one must not leave it unopenable.
@@ -1558,6 +1575,10 @@ func startNewSession(c *tool.Ctx) {
 	}
 	projectID := c.Form("project_id")
 	provForm, formModel := splitProviderModel(c.Form("provider"))
+	if !providerKeyAllowed(c, provForm) {
+		c.Error(http.StatusForbidden, errNoProviderAccess(provForm))
+		return
+	}
 	prov, modelID := resolveSessionTarget(c, provForm, formModel, projectID)
 	presetName := c.Form("preset")
 	if presetName == "" {
@@ -1764,6 +1785,10 @@ func createSession(c *tool.Ctx) {
 	}
 	projectID := c.Form("project_id")
 	provForm, formModel := splitProviderModel(c.Form("provider"))
+	if !providerKeyAllowed(c, provForm) {
+		c.Error(http.StatusForbidden, errNoProviderAccess(provForm))
+		return
+	}
 	prov, modelID := resolveSessionTarget(c, provForm, formModel, projectID)
 	id := uuid.New().String()
 	presetName := "default"
@@ -1832,6 +1857,10 @@ func sessionDetail(c *tool.Ctx) {
 	}))
 }
 
+// errProviderSetByAgent answers a provider switch in the chat of a Team
+// agent whose allow_provider_switch is off.
+const errProviderSetByAgent = "provider is set by the agent — change it in agent Settings"
+
 type switchProviderReq struct {
 	Provider string `json:"provider"`
 	// ModelID optionally pins a model id on the target provider instance
@@ -1858,6 +1887,16 @@ func switchProvider(c *tool.Ctx) {
 	sess, ok := globalMgr.Registry().Session(id)
 	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	// A Team agent's chat switches only while the agent allows it; a
+	// started chat may switch too (the new provider starts fresh when it
+	// cannot resume), so nothing here looks at the turn count.
+	if agentForbidsSwitch(c.Context(), sess) {
+		c.JSON(http.StatusForbidden, map[string]string{"error": errProviderSetByAgent})
+		return
+	}
+	if !requireProviderKeyAccess(c, req.Provider) {
 		return
 	}
 	agentName := sess.Meta.ActiveAgent
@@ -2055,30 +2094,44 @@ func sendMessage(c *tool.Ctx) {
 			return
 		}
 		bcast := globalBcast
-		// No Reply on the UI path — the system turn (via Notify) is the only
-		// bubble the switch should produce.
-		if err := provider.Switch(globalLayout, globalPool, id, agentName, r.Tag, provider.SwitchOptions{
-			Source:   "ui",
-			UserText: req.Text,
-			Notify: func(tag string, steps []string) {
-				if bcast != nil {
-					bcast.PublishRaw(id, agentName, "user_message", req.Text)
-					bcast.PublishSystemTurn(id, agentName, provider.SwitchChipText(tag, ""), steps)
-				}
-			},
-		}); err != nil {
-			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
+		// The tag is a switch the endpoint would refuse (the agent keeps its
+		// provider, or the caller may not pick it): the directive is
+		// dropped with a notice, the words still go to the current provider.
+		if refusal := uiSwitchRefusal(c, sess, r.Tag); refusal != "" {
+			if bcast != nil {
+				bcast.PublishSystemTurn(id, agentName, "Provider switch ignored: "+refusal, nil)
+			}
+			if r.Rest == "" {
+				c.JSON(http.StatusOK, map[string]string{"status": "switch_ignored", "error": refusal})
+				return
+			}
+			req.Text = r.Rest
+		} else {
+			// No Reply on the UI path — the system turn (via Notify) is the only
+			// bubble the switch should produce.
+			if err := provider.Switch(globalLayout, globalPool, id, agentName, r.Tag, provider.SwitchOptions{
+				Source:   "ui",
+				UserText: req.Text,
+				Notify: func(tag string, steps []string) {
+					if bcast != nil {
+						bcast.PublishRaw(id, agentName, "user_message", req.Text)
+						bcast.PublishSystemTurn(id, agentName, provider.SwitchChipText(tag, ""), steps)
+					}
+				},
+			}); err != nil {
+				c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			if err := globalMgr.RefreshSession(id); err != nil {
+				c.JSON(http.StatusInternalServerError, map[string]string{"error": "refresh session: " + err.Error()})
+				return
+			}
+			if r.Rest == "" {
+				c.JSON(http.StatusOK, map[string]string{"status": "switched", "provider": r.Tag})
+				return
+			}
+			req.Text = r.Rest
 		}
-		if err := globalMgr.RefreshSession(id); err != nil {
-			c.JSON(http.StatusInternalServerError, map[string]string{"error": "refresh session: " + err.Error()})
-			return
-		}
-		if r.Rest == "" {
-			c.JSON(http.StatusOK, map[string]string{"status": "switched", "provider": r.Tag})
-			return
-		}
-		req.Text = r.Rest
 	}
 
 	sess, ok := globalMgr.Registry().Session(id)
@@ -2996,6 +3049,10 @@ func createProject(c *tool.Ctx) {
 		c.Error(http.StatusBadRequest, "project name required")
 		return
 	}
+	if !providerKeyAllowed(c, c.Form("provider")) {
+		c.Error(http.StatusForbidden, errNoProviderAccess(c.Form("provider")))
+		return
+	}
 	// Folder mode radio: "managed" forces an empty custom path regardless
 	// of any stale value in the path input.
 	customPath := strings.TrimSpace(c.Form("custom_path"))
@@ -3071,6 +3128,13 @@ func updateProject(c *tool.Ctx) {
 	meta.Description = c.Form("description")
 	if v := c.Form("preset"); v != "" {
 		meta.Defaults.Preset = v
+	}
+	// Only a CHANGED provider is a choice the caller makes; re-saving the
+	// one already there (set by someone else) must not lock them out of
+	// renaming the project.
+	if prov := strings.TrimSpace(c.Form("provider")); prov != meta.Defaults.Provider && !providerKeyAllowed(c, prov) {
+		c.Error(http.StatusForbidden, errNoProviderAccess(prov))
+		return
 	}
 	meta.Defaults.Provider = strings.TrimSpace(c.Form("provider"))
 	meta.Defaults.Model = modelWithProvider(c.Form("provider"), c.Form("model"))

@@ -78,6 +78,9 @@ type Ctx struct {
 	// accountID is the ConnectorAccount the framework resolved for this
 	// call (explicit @accountId on the tool id), "" when none.
 	accountID string
+	// accounts lists the connected OAuth accounts of this instance, wired
+	// by the framework and evaluated lazily. Nil for internal callers.
+	accounts func() []AccountRef
 	// sessionID is the agent session this call was made within, stamped
 	// by the framework from ExecuteParams. Read via SessionID() by ops
 	// that act ON the calling session rather than on an external API —
@@ -372,6 +375,28 @@ func (c *Ctx) UserName(userID string) string {
 		return ""
 	}
 	return name
+}
+
+// AccountRef names one connected (OAuth) account of a connector instance.
+// It never carries the account's token.
+type AccountRef struct {
+	ID          string
+	DisplayName string
+	WickUserID  string
+}
+
+// SetAccountsLister wires the lookup of this instance's connected accounts.
+// Framework-only.
+func (c *Ctx) SetAccountsLister(fn func() []AccountRef) { c.accounts = fn }
+
+// ConnectedAccounts returns the instance's connected OAuth accounts, or nil
+// when no lister is wired. Runs a query per call, so only config widgets
+// that report on accounts should use it.
+func (c *Ctx) ConnectedAccounts() []AccountRef {
+	if c.accounts == nil {
+		return nil
+	}
+	return c.accounts()
 }
 
 // SetSessionID stamps the calling agent session. Framework-only.

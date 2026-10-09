@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Button, Select } from "@wick-fe/common-ui";
+  import { Button, Select, SavedResetsSection } from "@wick-fe/common-ui";
+  import { seedUsage } from "@wick-fe/common-ui/usage";
   import { toastError } from "@wick-fe/common-stores";
   import {
     apiLoginTTYStatus,
@@ -78,9 +79,24 @@
     unknownRetry = status?.account.unknown && !destroyed ? setTimeout(() => void refresh(), 5000) : null;
     try {
       usage = await apiLoginTTYUsage(base, type, name);
+      shareUsage();
     } catch {
       usage = null;
     }
+  }
+
+  /* shareUsage hands the panel's reading to the shared usage store, so the
+     card chip, picker rings and /usage popover show the same numbers. */
+  function shareUsage() {
+    if (!usage?.supported || usage.pending) return;
+    seedUsage(`${type}/${name}`, {
+      supported: true,
+      checked: true,
+      windows: usage.windows,
+      savedResets: usage.savedResets ?? null,
+      error: usage.error,
+      fetchedAt: usage.fetchedAt,
+    });
   }
 
   /* Re-check: ask the server for a fresh reading now. Allowed even when
@@ -97,6 +113,7 @@
       const r = await apiLoginTTYUsageRefresh(base, type, name);
       if (!r.accepted) recheckWait = r.waitS;
       usage = await apiLoginTTYUsage(base, type, name);
+      shareUsage();
     } catch (e) {
       toastError(e instanceof Error ? e.message : "Failed to re-check usage");
     } finally {
@@ -453,6 +470,9 @@
                 {/if}
               </div>
             {/each}
+            <!-- Saved resets ride in the same cached reading; hidden when
+                 the type reports none or the read failed. -->
+            <SavedResetsSection resets={usage.savedResets} />
             <!-- Shared, cached reading (see UsageCacheChip): say its age
                  rather than implying this panel fetched it on open. -->
             <p class="flex items-center gap-1 text-[11px] text-black-700 dark:text-black-600">

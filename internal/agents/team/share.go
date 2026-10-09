@@ -70,6 +70,25 @@ func (s *Store) AddShare(ctx context.Context, agentID, userID, by string) (err e
 	return s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error
 }
 
+// SetShareHistory stores whether the recipient of a share made by hand
+// may view other people's chats with agentID; a missing share is
+// ErrNotFound.
+func (s *Store) SetShareHistory(ctx context.Context, agentID, userID string, visible bool) (err error) {
+	done := s.changing(ctx, agentID)
+	defer func() { done(err) }()
+	res := s.db.WithContext(ctx).Model(&entity.AgentShare{}).
+		Where("agent_id = ? AND shared_with_user_id = ?", agentID, userID).
+		Where(explicitShare).
+		UpdateColumn("history_visible", visible)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // RemoveShare drops one share; a missing one is ErrNotFound.
 func (s *Store) RemoveShare(ctx context.Context, agentID, userID string) (err error) {
 	done := s.changing(ctx, agentID)
@@ -105,6 +124,22 @@ func (s *Store) ListShares(ctx context.Context, agentID string) ([]entity.AgentS
 	err := s.db.WithContext(ctx).Where("agent_id = ?", agentID).Where(explicitShare).
 		Order("created_at ASC").Order("id ASC").Find(&rows).Error
 	return rows, err
+}
+
+// IsShared reports whether agentID is shared with anyone: a share by hand,
+// or a filter tag on its share path that somebody holds.
+func (s *Store) IsShared(ctx context.Context, agentID string) (bool, error) {
+	var n int64
+	if err := s.db.WithContext(ctx).Model(&entity.AgentShare{}).
+		Where("agent_id = ?", agentID).Where(explicitShare).Count(&n).Error; err != nil || n > 0 {
+		return n > 0, err
+	}
+	err := s.db.WithContext(ctx).Table("tool_tags").
+		Joins("JOIN tags ON tags.id = tool_tags.tag_id").
+		Joins("JOIN user_tags ON user_tags.tag_id = tool_tags.tag_id").
+		Where("tool_tags.tool_path = ? AND tags.is_filter = ?", TagSharePath(agentID), true).
+		Count(&n).Error
+	return n > 0, err
 }
 
 // ShareOf returns agentID's share with userID, ErrNotFound when it has

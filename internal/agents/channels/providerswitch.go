@@ -42,6 +42,8 @@ func SwitchProvider(layout agentconfig.Layout, pool SwitchPool, sessionID, agent
 // On switch-only message (no body), the send is skipped after confirmation.
 // On switch+message, provider is switched then message is forwarded.
 // On unknown provider, an error is surfaced via replyFn.
+// A switch provider.CheckSwitch refuses is ignored: replyFn says why and
+// the message body still goes out on the current provider.
 // replyFn, if non-nil, is called with the confirmation text so the channel
 // (Slack, REST) can deliver it without forwarding to the provider.
 func WrapSendFunc(fn SendFunc, layout agentconfig.Layout, pool SwitchPool, replyFn func(sessionID, agentName, source, text string)) SendFunc {
@@ -54,6 +56,13 @@ func WrapSendFunc(fn SendFunc, layout agentconfig.Layout, pool SwitchPool, reply
 			if replyFn != nil {
 				replyFn(sessionID, agentName, source, t)
 			}
+		}
+		if err := provider.CheckSwitch(ctx, sessionID, r.Tag); err != nil {
+			reply("⚠️ Provider switch ignored: " + err.Error())
+			if r.Rest == "" {
+				return nil
+			}
+			return fn(ctx, sessionID, agentName, source, role, r.Rest)
 		}
 		if err := provider.Switch(layout, pool, sessionID, agentName, r.Tag, provider.SwitchOptions{
 			Source:   source,

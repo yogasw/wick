@@ -3,6 +3,7 @@
    websocket URL + small view helpers for the terminal modal. */
 
 import { get, post, ApiError } from "./api.js";
+import { parseSavedResets, type SavedResets, type WireSavedResets } from "@wick-fe/common-ui/usage";
 
 export type LoginAccount = {
   connected: boolean;
@@ -106,6 +107,8 @@ export type UsageResult = {
   fetchedAt: string;
   ageS: number;
   nextS: number;
+  /* Saved rate-limit resets from the same cached reading; null = hidden. */
+  savedResets?: SavedResets | null;
 };
 
 /* One frame on the login TTY websocket (server → client). */
@@ -166,6 +169,7 @@ interface WireUsage {
   fetched_at?: string;
   age_s?: number;
   next_s?: number;
+  saved_resets?: WireSavedResets | null;
 }
 
 export function mapLoginAccount(w: WireLoginAccount | null | undefined): LoginAccount {
@@ -252,6 +256,7 @@ export function normalizeUsage(w: WireUsage): UsageResult {
     fetchedAt: w.fetched_at ?? "",
     ageS: w.age_s ?? 0,
     nextS: w.next_s ?? 0,
+    savedResets: parseSavedResets(w.saved_resets),
   };
 }
 

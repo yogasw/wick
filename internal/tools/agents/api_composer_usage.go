@@ -50,6 +50,10 @@ type ComposerUsageResponse struct {
 
 	Account *composerUsageAccount `json:"account,omitempty"`
 	Windows []usageWindowDTO      `json:"windows,omitempty"`
+	// SavedResets is the account's saved rate-limit resets, read in the
+	// same paced probe as Windows; absent when the type has no reader
+	// or the read failed.
+	SavedResets *savedResetsDTO `json:"saved_resets,omitempty"`
 
 	// Err is a failed probe (expired token, rate limit) — shown as text,
 	// never as an empty set of bars.
@@ -144,7 +148,7 @@ func apiComposerUsage(c *tool.Ctx) {
 	defer cancel()
 	v := usageProbes.getWait(ctx, logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
 		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
-	}, logintty.CredentialsChangedAt(ins.Type, provider.AccountEnv(ins)))
+	}, logintty.CredentialsChangedAt(ins.Type, provider.AccountEnv(ins)), instanceResetsFetch(ins.Type, provider.AccountEnv(ins)))
 
 	now := time.Now()
 	res.Checking = v.Checking
@@ -165,6 +169,7 @@ func apiComposerUsage(c *tool.Ctx) {
 	default:
 		res.Windows = usageWindowDTOs(v.Windows)
 	}
+	res.SavedResets = savedResetsDTOOf(v.SavedResets)
 	res.Accounts, res.Rotation = composerUsageAccounts(ins, strings.TrimSpace(c.Query("model")), v)
 	c.JSON(http.StatusOK, res)
 }
@@ -312,7 +317,7 @@ func apiComposerUsageRefresh(c *tool.Ctx) {
 	}
 	accepted, wait := usageProbes.forceRefresh(logintty.UsageIdentity(ins.Type, provider.AccountEnv(ins)), func() ([]logintty.UsageWindow, error) {
 		return logintty.ReadUsage(ins.Type, provider.AccountEnv(ins))
-	})
+	}, instanceResetsFetch(ins.Type, provider.AccountEnv(ins)))
 	res := ComposerUsageRefreshResponse{Supported: true, Accepted: accepted, Checking: accepted}
 	if !accepted {
 		res.WaitS = int(wait.Round(time.Second) / time.Second)

@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/pkg/adminscope"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -63,10 +65,36 @@ func callerIsAdmin(c *tool.Ctx) bool {
 	return u != nil && u.IsAdmin()
 }
 
+// adminSeeAllProviders reports whether the admin_see_all_provider_instances
+// knob is on (default, and with no configs wired). Off, the admin role no
+// longer walks past provider access/manage tags. A var so tests can flip it
+// without a configs service.
+var adminSeeAllProviders = func() bool {
+	if globalConfigs == nil {
+		return true
+	}
+	return adminscope.AdminSeeAllProviderInstances(globalConfigs)
+}
+
+// userBypassesProviderTags reports whether u's admin role alone grants
+// every provider instance: an admin, while the knob is on. Every
+// provider-use and provider-manage shortcut goes through this, never
+// through IsAdmin directly, so turning the knob off cannot miss one.
+func userBypassesProviderTags(u *entity.User) bool {
+	return u != nil && u.IsAdmin() && adminSeeAllProviders()
+}
+
+// callerBypassesProviderTags is userBypassesProviderTags for the request's
+// caller.
+func callerBypassesProviderTags(c *tool.Ctx) bool {
+	return userBypassesProviderTags(login.GetUser(c.Context()))
+}
+
 // providerPerm is the whole permission rule in one place, as data.
 //
 // approved   — signed in and approved at all.
 // isAdmin    — holds the admin role.
+// adminAll   — admin_see_all_provider_instances is on (off: tags decide).
 // accessTag  — login.CanAccessTool says yes for the access path (true
 //
 //	when the instance carries no filter tags: untagged is
@@ -77,11 +105,11 @@ func callerIsAdmin(c *tool.Ctx) bool {
 //	path (false when untagged: manage is never implicit).
 //
 // Kept pure so the table below is a unit test rather than a comment.
-func providerPerm(approved, isAdmin, accessTag, manageTag bool) (canAccess, canManage bool) {
+func providerPerm(approved, isAdmin, adminAll, accessTag, manageTag bool) (canAccess, canManage bool) {
 	if !approved {
 		return false, false
 	}
-	if isAdmin {
+	if isAdmin && adminAll {
 		return true, true
 	}
 	// Independent by design. Someone who keeps a provider's login alive
@@ -107,11 +135,11 @@ func userCanAccessProvider(ctx context.Context, u *entity.User, t provider.Type,
 	if u == nil {
 		return false
 	}
-	if u.IsAdmin() {
-		access, _ := providerPerm(u.Approved, true, false, false)
+	if userBypassesProviderTags(u) {
+		access, _ := providerPerm(u.Approved, true, true, false, false)
 		return access
 	}
-	access, _ := providerPerm(u.Approved, false, providerAccessTagAllows(ctx, u, t, name), false)
+	access, _ := providerPerm(u.Approved, u.IsAdmin(), false, providerAccessTagAllows(ctx, u, t, name), false)
 	return access
 }
 
@@ -160,26 +188,34 @@ func workflowProviderAccess(ctx context.Context, ownerUserID, typ, name string) 
 }
 
 // canManageProvider reports whether the caller may reconnect this
-// instance or force a usage re-check. Admins always may; everyone else
-// needs an explicit tag grant on the manage path.
+// instance or force a usage re-check. Admins may while the
+// admin_see_all_provider_instances knob is on; everyone else (and admins
+// with the knob off) needs an explicit tag grant on the manage path.
 func canManageProvider(c *tool.Ctx, t provider.Type, name string) bool {
 	u := login.GetUser(c.Context())
 	if u == nil {
 		return false
 	}
-	if u.IsAdmin() {
-		_, manage := providerPerm(u.Approved, true, false, false)
+	if userBypassesProviderTags(u) {
+		_, manage := providerPerm(u.Approved, true, true, false, false)
 		return manage
-	}
-	if globalAuth == nil {
-		return false
 	}
 	// Manage stands alone: the Providers menu is for whoever looks after
 	// the account, and that person does not also have to be allowed to
 	// pick the provider for a project.
-	_, manage := providerPerm(u.Approved, false, true,
-		globalAuth.CanAccessSharedResource(c.Context(), u, providerManagePath(t, name)))
+	_, manage := providerPerm(u.Approved, u.IsAdmin(), false, true,
+		providerManageTagAllows(c.Context(), u, t, name))
 	return manage
+}
+
+// providerManageTagAllows asks the tag store whether u passes the
+// instance's MANAGE tags (untagged = no). Fails closed with no auth
+// service wired. A var for the same reason as providerAccessTagAllows.
+var providerManageTagAllows = func(ctx context.Context, u *entity.User, t provider.Type, name string) bool {
+	if globalAuth == nil {
+		return false
+	}
+	return globalAuth.CanAccessSharedResource(ctx, u, providerManagePath(t, name))
 }
 
 // requireProviderAccess gates a pick-a-provider surface. A provider the
@@ -191,6 +227,34 @@ func requireProviderAccess(c *tool.Ctx, t provider.Type, name string) bool {
 	}
 	c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
 	return false
+}
+
+// providerKeyAllowed reports whether the caller may choose a provider key
+// the CLIENT sent — "type", "type/name", optionally with the composer's
+// "::model" suffix. Empty means nothing was chosen, which is not a choice
+// to refuse. Spawn and switch paths call this before anything starts, so
+// an instance the picker hides cannot be reached by posting its key.
+func providerKeyAllowed(c *tool.Ctx, key string) bool {
+	key, _ = splitProviderModel(key)
+	t, name, ok := splitProviderKey(key)
+	return !ok || canAccessProvider(c, t, name)
+}
+
+// requireProviderKeyAccess is providerKeyAllowed for JSON endpoints: it
+// answers 403 with the key named, because the caller already knows the
+// key (they sent it) and a 404 would read as a typo.
+func requireProviderKeyAccess(c *tool.Ctx, key string) bool {
+	if providerKeyAllowed(c, key) {
+		return true
+	}
+	c.JSON(http.StatusForbidden, map[string]string{"error": errNoProviderAccess(key)})
+	return false
+}
+
+// errNoProviderAccess is the one refusal text every spawn path uses.
+func errNoProviderAccess(key string) string {
+	key, _ = splitProviderModel(key)
+	return "no access to provider " + strings.TrimSpace(key) + " (provider access tags)"
 }
 
 // requireProviderManage gates everything behind the Providers menu.
@@ -207,7 +271,7 @@ func requireProviderManage(c *tool.Ctx, t provider.Type, name string) bool {
 // manageableProviders filters instances down to the ones the caller may
 // manage — what the Providers menu shows.
 func manageableProviders[T any](c *tool.Ctx, items []T, key func(T) (provider.Type, string)) []T {
-	if callerIsAdmin(c) {
+	if callerBypassesProviderTags(c) {
 		return items
 	}
 	out := make([]T, 0, len(items))
@@ -226,6 +290,11 @@ func manageableProviders[T any](c *tool.Ctx, items []T, key func(T) (provider.Ty
 //
 // Exported because the layout builder lives beside it and the templ view
 // takes it as a plain bool.
+//
+// Admins keep the menu whatever admin_see_all_provider_instances says: the
+// page also carries the admin-only provider configuration (adding an
+// instance, the gate, MCP clients). With the knob off its instance list is
+// still narrowed to what their manage tags reach (manageableProviders).
 func HasManageableProvider(c *tool.Ctx) bool {
 	if callerIsAdmin(c) {
 		return true
@@ -282,9 +351,10 @@ func requireProviderMenu(c *tool.Ctx) bool {
 }
 
 // visibleProviders filters a slice of instances down to the ones the
-// caller may CHOOSE (pickers). Admins get the list unchanged.
+// caller may CHOOSE (pickers). Admins get the list unchanged while
+// admin_see_all_provider_instances is on.
 func visibleProviders[T any](c *tool.Ctx, items []T, key func(T) (provider.Type, string)) []T {
-	if callerIsAdmin(c) {
+	if callerBypassesProviderTags(c) {
 		return items
 	}
 	out := make([]T, 0, len(items))

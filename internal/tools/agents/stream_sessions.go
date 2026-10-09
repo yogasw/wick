@@ -59,7 +59,8 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 		if !ok || sess.Meta.ParentSessionID != "" {
 			return false
 		}
-		return access.allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants)
+		return access.allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants) ||
+			sharedAgentChatVisible(c.Context(), uid, sess)
 	}
 	acts := newActivityTracker(sessionParentOf, visible, sessionNeedsAttention)
 

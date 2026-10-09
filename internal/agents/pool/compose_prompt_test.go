@@ -180,3 +180,20 @@ func TestComposePrompt_TeamInstructions(t *testing.T) {
 		t.Error("a sub-agent got the Team instructions")
 	}
 }
+
+// P13: the chats paired with this conversation ride the "This session"
+// block, after the identity lines; nothing is added without any.
+func TestComposePrompt_LinkedChatsInSessionBlock(t *testing.T) {
+	f := composeFactory(t, true, testTeamOperator)
+	f.LinkedChatsLoader = func(sid string) string {
+		if sid == "s1" {
+			return "linked_team_chats (x):\n- @anton → session c1"
+		}
+		return ""
+	}
+	got := f.composePrompt(FactoryOptions{SessionID: "s1"}, "claude")
+	inOrder(t, got, "## This session", "title_custom: false", "\n\nlinked_team_chats (x):\n- @anton → session c1", "TICKET-POINTER")
+	if other := f.composePrompt(FactoryOptions{SessionID: "s2"}, "claude"); strings.Contains(other, "linked_team_chats") {
+		t.Fatal("linked chats shown for a session without any")
+	}
+}

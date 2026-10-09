@@ -50,3 +50,26 @@ func TestAdminSeeAllConnectorsDefaultsOn(t *testing.T) {
 		t.Fatal("the legacy sessions key must not turn connectors off")
 	}
 }
+
+// Providers default ON, and are their own knob: turning connectors off must
+// not take provider instances away from an admin, nor the other way round.
+func TestAdminSeeAllProviderInstancesDefaultsOn(t *testing.T) {
+	if !AdminSeeAllProviderInstances(stubReader{}) {
+		t.Fatal("unwritten config should read as on")
+	}
+	if !AdminSeeAllProviderInstances(nil) {
+		t.Fatal("nil reader should read as on")
+	}
+	if AdminSeeAllProviderInstances(stubReader{"agents/admin_see_all_provider_instances": "false"}) {
+		t.Fatal("explicit false should scope admins")
+	}
+	if !AdminSeeAllProviderInstances(stubReader{"agents/admin_see_all_provider_instances": "true"}) {
+		t.Fatal("explicit true should stay on")
+	}
+	if !AdminSeeAllProviderInstances(stubReader{"agents/admin_see_all_connectors": "false"}) {
+		t.Fatal("the connectors knob must not turn providers off")
+	}
+	if !AdminSeeAllConnectors(stubReader{"agents/admin_see_all_provider_instances": "false"}) {
+		t.Fatal("the providers knob must not turn connectors off")
+	}
+}

@@ -101,6 +101,13 @@ export async function setConnectorConfig(
   await apiPost(`${rowBase(key, id)}/configs/${encodeURIComponent(configKey)}`, { value });
 }
 
+/* Empties a stored config value. The save endpoint treats a blank secret as
+   "keep", so this separate DELETE is the only way to remove a stored secret.
+   The server refuses required, locked and env-overridden fields. */
+export async function clearConnectorConfig(key: string, id: string, configKey: string): Promise<void> {
+  await apiDelete(`${rowBase(key, id)}/configs/${encodeURIComponent(configKey)}`);
+}
+
 export async function setConnectorLabel(key: string, id: string, label: string): Promise<void> {
   await apiPost(`${rowBase(key, id)}/label`, { label });
 }

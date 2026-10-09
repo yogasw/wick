@@ -38,6 +38,9 @@ type Configs struct {
 	UserToken    string `wick:"secret;desc=User OAuth Token (xoxp-...). Filled automatically via the Connect Account button when ClientID is configured. Or paste manually."`
 	ClientID     string `wick:"desc=Slack OAuth App Client ID. Required to use the Connect Account button for user-token OAuth flow."`
 	ClientSecret string `wick:"secret;desc=Slack OAuth App Client Secret. Required for the OAuth token exchange when using Connect Account."`
+	// TokenAccess is a read-only widget, not a stored value: the
+	// token_access op renders who each token is and what it can do.
+	TokenAccess string `wick:"html=token_access;desc=Who each stored token is, which one operations on this instance run as, and which operations each can run. Checked live with auth.test, token values are never shown."`
 
 	// The four below are `hidden`: nobody has to fill them for Connect
 	// Account to work, and four empty boxes on the credentials page read as
@@ -972,6 +975,16 @@ func Operations() []connector.Category {
 						"Slack requires the canvas link to have been shared with each target channel or user before setting its access.",
 					},
 				},
+			),
+		),
+		connector.Cat("Maintenance", "Backs the config page's Token & access panel; not meant for agent use.",
+			connector.OpConfigOnly(
+				"token_access",
+				"Token & Access",
+				"Render who each stored token is, which one operations run with, and what each can do per operation. Read-only: one auth.test per token.",
+				TokenAccessInput{},
+				tokenAccess,
+				wickdocs.Docs{},
 			),
 		),
 	}

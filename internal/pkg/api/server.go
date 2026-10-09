@@ -1873,6 +1873,12 @@ func NewServer() *Server {
 	connectors.Register(subagents.Module(subagents.Deps{
 		Service: func() *delegation.Service { return delegationSvc },
 		Layout:  agentsLayout,
+		TeamChats: func(ctx context.Context, sessionID string) any {
+			if tc := agentstool.TeamLinkedChats(ctx, sessionID); len(tc) > 0 {
+				return tc
+			}
+			return nil
+		},
 	}))
 
 	// Team messaging over A2A. Same late binding as sub-agents: the Hub
@@ -1893,9 +1899,10 @@ func NewServer() *Server {
 		})
 		return teamHub
 	}
-	connectors.Register(teamlinkconn.Module(teamlinkconn.Deps{Hub: hub, AgentOf: agentstool.TeamAgentOf}))
+	connectors.Register(teamlinkconn.Module(teamlinkconn.Deps{Hub: hub, AgentOf: agentstool.TeamAgentOf, SessionUser: agentstool.SessionUserOf}))
 	connectors.Register(teamagentsconn.Module(teamagentsconn.Deps{Ops: agentstool.TeamAgentOps}))
 	agentstool.SetTeamHub(hub)
+	agentsFactory.LinkedChatsLoader = agentstool.TeamLinkedChatsPrompt
 	// team_* tools only in a Team agent's session with a reachable teammate.
 	mcphandlers.TeamToolsVisible = func(ctx context.Context, sessionID string) bool {
 		h := hub()

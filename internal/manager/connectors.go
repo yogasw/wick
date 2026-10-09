@@ -52,6 +52,7 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/api/connectors/{key}/type-enable", admin(h.apiSetConnectorTypeDisabled(false)))
 	mux.Handle("POST /manager/api/connectors/{key}/resync-tools", auth(h.apiResyncMCPTools))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/configs/{configKey}", auth(h.apiSetConnectorConfig))
+	mux.Handle("DELETE /manager/api/connectors/{key}/{id}/configs/{configKey}", auth(h.apiClearConnectorConfig))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/disable", auth(h.apiToggleConnectorDisabled))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/delete", auth(h.apiDeleteConnectorRow))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/health-check", auth(h.runConnectorHealthCheck))
@@ -329,7 +330,6 @@ func (h *Handler) setConnectorLabel(w http.ResponseWriter, r *http.Request) {
 	}
 	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
 }
-
 
 func (h *Handler) setConnectorConfig(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

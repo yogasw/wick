@@ -132,6 +132,13 @@ type Agent struct {
 	// watcher can cancel the kill when the subprocess produces output
 	// during the KillAfterIdle window.
 	activityCh chan struct{}
+
+	// unanswered holds the messages written to stdin since the last stdout
+	// line. Non-empty at an idle kill means the process took them and never
+	// said a word: the turn never started, and without handing them back
+	// (TakeUnanswered) they died with the process — the person saw no
+	// reply, no event, nothing.
+	unanswered []string
 }
 
 // ExitReason classifies why the subprocess ended. The pool uses this
@@ -484,8 +491,13 @@ func (a *Agent) Send(text string) error {
 	proc := a.proc
 	a.mu.Unlock()
 	log.Debug().Str("payload", payload).Msg("agent.send: writing to stdin")
-	_, err := proc.Stdin().Write([]byte(payload + "\n"))
-	return err
+	if _, err := proc.Stdin().Write([]byte(payload + "\n")); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.unanswered = append(a.unanswered, text)
+	a.mu.Unlock()
+	return nil
 }
 
 // respawnWithMessage stops the current process (if any) and spawns a new one
@@ -1178,6 +1190,10 @@ func (a *Agent) run(ctx context.Context) {
 				goto drained
 			}
 			line = l
+			// Any output means the process is working on what it was sent.
+			a.mu.Lock()
+			a.unanswered = nil
+			a.mu.Unlock()
 		case <-ctx.Done():
 			// Killed (Stop / respawn). Exit immediately. Do NOT block on
 			// proc.Wait() here — on Windows Wait() can hang for seconds
@@ -1644,6 +1660,18 @@ func isCleanExitErr(err error) bool {
 	// Killed processes report ExitError on both platforms; treat as
 	// clean since we asked for it.
 	return false
+}
+
+// TakeUnanswered returns, and forgets, the messages written to stdin that
+// the process never produced a single line of output after. Read by the
+// pool after an idle kill so those messages go back to the session buffer
+// for the next spawn instead of vanishing with this one.
+func (a *Agent) TakeUnanswered() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	msgs := a.unanswered
+	a.unanswered = nil
+	return msgs
 }
 
 // procBusy asks the running process whether it is still working on its

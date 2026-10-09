@@ -6,16 +6,21 @@
      Auto-save mirrors the legacy configs.templ: immediate controls (select,
      checkbox, color, date, datetime) and kvlist removals save on change, while
      free-text fields debounce ~800ms. Each POST hits the per-key endpoint via
-     setConnectorConfig; success/failure surface as a per-field status + toast. */
+     setConnectorConfig; success/failure surface as a per-field status + toast,
+     and the server's error text is also shown under the input.
+
+     A stored secret on a connector can be emptied with "↺ Reset" (inline
+     confirm → clearConnectorConfig), since a blank submit keeps the stored
+     value. Required fields keep the button disabled: replace, don't empty. */
   import { untrack } from "svelte";
   import type { ConfigField } from "$lib/types.js";
-  import { setConnectorConfig } from "$lib/api.js";
+  import { clearConnectorConfig, setConnectorConfig } from "$lib/api.js";
   import { toastError } from "@wick-fe/common-stores";
   import { isFieldVisible, groupFields } from "./options.js";
   import FieldWidget from "./FieldWidget.svelte";
   import KvListField from "./KvListField.svelte";
 
-  type SaveState = "" | "saving" | "saved" | "error";
+  type SaveState = "" | "saving" | "saved" | "cleared" | "error";
   type Props = {
     connectorKey?: string;
     connectorId?: string;
@@ -37,6 +42,8 @@
   let values = $state<Record<string, string>>(untrack(() => initValues(fields)));
   let savedHasValue = $state<Record<string, boolean>>(untrack(() => initHasValue(fields)));
   let saveStatus = $state<Record<string, SaveState>>({});
+  let saveError = $state<Record<string, string>>({});
+  let confirmReset = $state<Record<string, boolean>>({});
   const timers: Record<string, ReturnType<typeof setTimeout>> = {};
 
   function initValues(list: ConfigField[]): Record<string, string> {
@@ -71,13 +78,43 @@
     try {
       await persistFn(key, value);
       saveStatus = { ...saveStatus, [key]: "saved" };
+      saveError = { ...saveError, [key]: "" };
       if (value.trim() !== "") savedHasValue = { ...savedHasValue, [key]: true };
       setTimeout(() => {
         if (saveStatus[key] === "saved") saveStatus = { ...saveStatus, [key]: "" };
       }, 2000);
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
       saveStatus = { ...saveStatus, [key]: "error" };
-      toastError("Save failed", `${key}: ${e instanceof Error ? e.message : String(e)}`);
+      saveError = { ...saveError, [key]: msg };
+      toastError("Save failed", `${key}: ${msg}`);
+    }
+  }
+
+  /* Reset is connector-only (job/tool pages inject `save` and have no clear
+     endpoint) and only for a stored secret the user may edit. */
+  function canReset(field: ConfigField): boolean {
+    return !save && field.is_secret && savedHasValue[field.key] && canConfigure && field.env_override === "";
+  }
+
+  async function clearSecret(key: string) {
+    if (timers[key]) clearTimeout(timers[key]);
+    saveStatus = { ...saveStatus, [key]: "saving" };
+    try {
+      await clearConnectorConfig(connectorKey, connectorId, key);
+      confirmReset = { ...confirmReset, [key]: false };
+      savedHasValue = { ...savedHasValue, [key]: false };
+      values = { ...values, [key]: "" };
+      saveError = { ...saveError, [key]: "" };
+      saveStatus = { ...saveStatus, [key]: "cleared" };
+      setTimeout(() => {
+        if (saveStatus[key] === "cleared") saveStatus = { ...saveStatus, [key]: "" };
+      }, 2000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      saveStatus = { ...saveStatus, [key]: "error" };
+      saveError = { ...saveError, [key]: msg };
+      toastError("Reset failed", `${key}: ${msg}`);
     }
   }
 
@@ -123,10 +160,18 @@
   }
 
   function statusText(s: SaveState): string {
-    return s === "saving" ? "saving…" : s === "saved" ? "✓ saved" : s === "error" ? "✗ failed" : "";
+    return s === "saving"
+      ? "saving…"
+      : s === "saved"
+        ? "✓ saved"
+        : s === "cleared"
+          ? "✓ cleared"
+          : s === "error"
+            ? "✗ failed"
+            : "";
   }
   function statusClass(s: SaveState): string {
-    return s === "saved"
+    return s === "saved" || s === "cleared"
       ? "text-pos-400"
       : s === "error"
         ? "text-neg-400"
@@ -154,20 +199,52 @@
         {#if field.is_secret && savedHasValue[field.key]}
           <span class="rounded-full bg-pos-100 px-1.5 py-0.5 text-[10px] font-semibold text-pos-400">stored</span>
         {/if}
+        {#if canReset(field)}
+          <button
+            type="button"
+            class="inline-flex items-center gap-0.5 rounded px-1 py-px text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 {confirmReset[field.key]
+              ? 'bg-neg-100 text-neg-400'
+              : 'text-black-700 dark:text-black-600 enabled:hover:bg-neg-100 enabled:hover:text-neg-400'}"
+            disabled={field.required}
+            title={field.required ? "Required field — replace the value; it cannot be emptied" : "Remove the stored value"}
+            onclick={() => (confirmReset = { ...confirmReset, [field.key]: true })}
+          >↺ Reset</button>
+        {/if}
         {#if field.env_override}
           <span class="rounded-full bg-prog-100 px-1.5 py-0.5 text-[10px] font-semibold text-prog-400" title="Overridden by environment variable">env: {field.env_override}</span>
         {/if}
         <span class="ml-auto text-[10px] transition-all {statusClass(saveStatus[field.key] ?? '')}">{statusText(saveStatus[field.key] ?? "")}</span>
       </div>
+      <!-- has_value follows savedHasValue so a reset secret goes back to the
+           "Enter secret" placeholder without reloading the page. -->
       <FieldWidget
-        {field}
+        field={field.is_secret ? { ...field, has_value: savedHasValue[field.key] ?? false } : field}
         {connectorKey}
         {connectorId}
         value={values[field.key] ?? ""}
-        disabled={!canConfigure || field.env_override !== ""}
+        disabled={!canConfigure || field.env_override !== "" || !!confirmReset[field.key]}
         onChange={(v) => onFieldChange(field, v)}
         onSetFields={setFields}
       />
+      {#if confirmReset[field.key] && canReset(field)}
+        <div class="mt-2 flex items-center gap-2 rounded-md border border-neg-400 bg-neg-100 px-2.5 py-2 text-xs text-black-900 dark:text-white-100">
+          <span class="flex-1">Remove the stored <b class="font-mono">{field.key}</b>? Operations that use it will fail until it is set again.</span>
+          <button
+            type="button"
+            class="rounded border border-white-400 dark:border-navy-600 px-2.5 py-0.5 text-xs font-semibold"
+            onclick={() => (confirmReset = { ...confirmReset, [field.key]: false })}
+          >Cancel</button>
+          <button
+            type="button"
+            class="rounded border border-neg-400 bg-neg-400 px-2.5 py-0.5 text-xs font-semibold text-white-100 disabled:opacity-50"
+            disabled={saveStatus[field.key] === "saving"}
+            onclick={() => clearSecret(field.key)}
+          >Remove</button>
+        </div>
+      {/if}
+      {#if saveError[field.key] && saveStatus[field.key] === "error"}
+        <p class="mt-1.5 text-[11px] text-neg-400 leading-relaxed">{saveError[field.key]}</p>
+      {/if}
       {#if field.env_override}
         <p class="mt-1.5 text-[11px] text-prog-400 leading-relaxed">Overridden by <span class="font-mono">{field.env_override}</span> environment variable. Unset it and restart to edit from here.</p>
       {:else if field.description}

@@ -489,6 +489,9 @@ func apiTicketCreate(c *tool.Ctx) {
 	}
 	var seed []string
 	if s := strings.TrimSpace(req.SessionID); s != "" {
+		if !ticketSessionWritable(c, s) {
+			return
+		}
 		seed = []string{s}
 	}
 	// Whoever creates a ticket is presumed to be taking it on — dragging a
@@ -835,6 +838,30 @@ func writeSessionTicketPointer(sessionID, ticketID string) {
 	_ = globalMgr.RefreshSession(sessionID)
 }
 
+// ticketSessionWritable answers for the caller when they may not move sid
+// onto or off a ticket — that rewrites the chat's own ticket pointer — and
+// reports whether they may: a chat they cannot open is not found, another
+// person's chat they only read through a share is read-only. An id the
+// registry does not know is left to the ticket store, as before.
+func ticketSessionWritable(c *tool.Ctx, sid string) bool {
+	if globalMgr == nil {
+		return true
+	}
+	sess, ok := globalMgr.Registry().Session(sid)
+	if !ok {
+		return true
+	}
+	if !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return false
+	}
+	if sharedChatReadOnly(c, sess) {
+		c.JSON(http.StatusForbidden, map[string]string{"error": errSharedReadOnly})
+		return false
+	}
+	return true
+}
+
 // apiTicketAttachSession handles PUT /api/tickets/{ticketID}/sessions/{sid}.
 func apiTicketAttachSession(c *tool.Ctx) {
 	if notReady(c) {
@@ -851,6 +878,9 @@ func apiTicketAttachSession(c *tool.Ctx) {
 	// that one just emptied — a ticket with no sessions has nothing left to
 	// track, and the user is offered its removal rather than left with a
 	// husk on the board.
+	if !ticketSessionWritable(c, sid) {
+		return
+	}
 	from, hadFrom := ticket.FindBySession(globalLayout, projectID, sid)
 
 	if err := ticket.AttachSession(globalLayout, projectID, ticketID, sid); err != nil {
@@ -887,6 +917,9 @@ func apiTicketDetachSession(c *tool.Ctx) {
 	projectID, ok := resolveTicketProject(c, ticketID)
 	if !ok {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
+		return
+	}
+	if !ticketSessionWritable(c, sid) {
 		return
 	}
 	from, hadFrom := ticket.Load(globalLayout, projectID, ticketID)

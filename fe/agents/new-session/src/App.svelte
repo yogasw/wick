@@ -173,6 +173,7 @@
     value: selectedProvider,
     onChange: (v: string) => (selectedProvider = v),
     loadModels: loadProviderModels,
+    usageBase: base,
     showCapabilities: capsPrefs.show,
     capabilityMode: capsPrefs.mode,
   });
