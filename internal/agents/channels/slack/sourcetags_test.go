@@ -1,8 +1,16 @@
 package slack
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
+
+	slackgo "github.com/slack-go/slack"
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 )
@@ -171,5 +179,77 @@ func TestLiveEditHoldsOpenOptionsLine(t *testing.T) {
 	last := calls[1].vals.Get("text") + calls[1].vals.Get("blocks")
 	if strings.Contains(last, "[options") || !strings.Contains(last, "Options: prod / staging") {
 		t.Fatalf("closed options line not rewritten: %s", last)
+	}
+}
+
+// The background start ping quotes the leader's brief, which may carry
+// source tags and an options line: neither reaches the thread raw, and an
+// unknown handle is dropped.
+func TestBackgroundStartRewritesSourceTags(t *testing.T) {
+	prev := agentchannels.SourceNames
+	t.Cleanup(func() { agentchannels.SourceNames = prev })
+	agentchannels.SourceNames = func(string) map[string]string {
+		return map[string]string{"alpha": "Alpha", "evil": "A&B <!channel>"}
+	}
+	f := newBannerSlack(t)
+	c := bgChannel(f, true)
+
+	c.OnBackgroundStart(bgSID, fixer, "check logs [from:@alpha] and retry [from:@ghost] then ask [from:@evil]\n[options: prod | staging]", false)
+
+	posts, _ := f.snapshot()
+	if len(posts) != 1 {
+		t.Fatalf("posted %d messages, want exactly 1", len(posts))
+	}
+	got := posts[0].Get("text")
+	if strings.Contains(got, "[from:") || strings.Contains(got, "[options:") || strings.Contains(got, "ghost") {
+		t.Fatalf("raw tag, options line or unknown handle leaked: %s", got)
+	}
+	// The post escapes the body once; the name must not be escaped again.
+	if strings.Contains(got, "<!channel>") || strings.Contains(got, "&amp;amp;") || strings.Contains(got, "&amp;lt;") {
+		t.Fatalf("name posted raw or escaped twice: %s", got)
+	}
+	for _, want := range []string{"check logs (from Alpha) and retry", "then ask (from A&amp;B &lt;!channel&gt;)", "Options: prod / staging"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %s", want, got)
+		}
+	}
+}
+
+// A system DM has no Team roster: a stray source tag is dropped whole
+// and an options line is posted as plain text.
+func TestSendDirectStripsSourceTags(t *testing.T) {
+	var (
+		mu     sync.Mutex
+		posted url.Values
+	)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/conversations.open", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"channel":{"id":"D1"}}`))
+	})
+	mux.HandleFunc("/chat.postMessage", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		vals, _ := url.ParseQuery(string(body))
+		mu.Lock()
+		posted = vals
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"channel":"D1","ts":"1700000000.000200"}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	c := &Channel{api: slackgo.New("xoxb-test", slackgo.OptionAPIURL(srv.URL+"/"))}
+
+	if err := c.SendDirect(context.Background(), "U1", "Approved [from:@alpha]\n[options: ok | later]"); err != nil {
+		t.Fatalf("SendDirect: %v", err)
+	}
+	mu.Lock()
+	got := posted.Get("text")
+	mu.Unlock()
+	if strings.Contains(got, "[from:") || strings.Contains(got, "alpha") || strings.Contains(got, "[options:") {
+		t.Fatalf("raw tag or options line leaked: %s", got)
+	}
+	if !strings.Contains(got, "Approved") || !strings.Contains(got, "Options: ok / later") {
+		t.Fatalf("notice text lost: %s", got)
 	}
 }

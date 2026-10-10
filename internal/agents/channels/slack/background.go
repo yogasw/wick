@@ -61,6 +61,10 @@ func (s *Channel) OnBackgroundStart(sessionKey string, agent agentchannels.Detac
 	if api == nil {
 		return
 	}
+	// The brief is the leader's raw text: its source tags and options line
+	// become plain text first (an unknown handle is dropped). Names are left
+	// unescaped here because the post below escapes the whole body.
+	task = agentchannels.RewriteSourceTags(sessionKey, agentchannels.RewriteOptionsLine(task), nil)
 	body := backgroundStartText(agent, task, queued)
 	s.withBackoff(func() error {
 		// escape=true: the task is the leader's own words and may quote a
