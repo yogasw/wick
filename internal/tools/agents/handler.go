@@ -42,6 +42,7 @@ import (
 	agentstore "github.com/yogasw/wick/internal/agents/store"
 	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
 	"github.com/yogasw/wick/internal/agents/team"
+	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
@@ -1637,6 +1638,7 @@ func startNewSession(c *tool.Ctx) {
 	}
 	// Detach from HTTP ctx (see sendMessage note) — keep request_id for logs.
 	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()), id)
+	bgCtx = teamlink.WithPersonMessage(bgCtx)
 	if err := globalPool.SendWithAttachments(bgCtx, id, "main", "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose send: %s", err.Error())
 		renderCompose(c, text, err.Error())
@@ -2177,7 +2179,7 @@ func sendMessage(c *tool.Ctx) {
 	// sessions (sub-agents, teammates). They are also bound to this
 	// session id, so a ctx that does travel carries neither.
 	turnID := strconv.FormatInt(time.Now().UnixNano(), 10)
-	sendCtx := store.WithUserTurnID(bgCtx, id, turnID)
+	sendCtx := teamlink.WithPersonMessage(store.WithUserTurnID(bgCtx, id, turnID))
 	if reply != nil {
 		sendCtx = store.WithReplyTo(sendCtx, id, reply)
 	}

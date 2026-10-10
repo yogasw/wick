@@ -11,6 +11,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/clitoken"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -341,7 +342,7 @@ func apiCLISend(c *tool.Ctx) {
 	// inheriting an HTTP context would kill the agent the moment this
 	// response returns.
 	bg := log.Ctx(c.Context()).WithContext(context.Background())
-	if err := globalPool.Send(bg, g.SessionID, agentName, "cli", "user", req.Text); err != nil {
+	if err := globalPool.Send(teamlink.WithPersonMessage(bg), g.SessionID, agentName, "cli", "user", req.Text); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("cli send %s: %s", g.SessionID, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

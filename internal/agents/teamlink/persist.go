@@ -90,6 +90,8 @@ func (h *Hub) Persist(dir string) error {
 			_ = os.Remove(filepath.Join(dir, name))
 			continue
 		}
+		// Keyed by the file's name, as SentFrom keys it.
+		h.fileSession[a2a.TaskID(strings.TrimSuffix(name, ".json"))] = rec.CallerSession
 		h.adoptLocked(rec, true)
 	}
 	for id, ref := range h.tasks {
@@ -250,6 +252,7 @@ func (h *Hub) persist(id a2a.TaskID) {
 	var rec taskRecord
 	if write {
 		rec = ref.record(id)
+		h.fileSession[id] = rec.CallerSession
 	}
 	h.mu.Unlock()
 	if write {
@@ -330,25 +333,68 @@ func (h *Hub) loadLocked(id a2a.TaskID) *taskRef {
 	return h.tasks[id]
 }
 
-// records lists the records in dir sent from session, skipping the tasks
-// in skip (memory already holds them as finished: their file adds
-// nothing). It reads files, so it runs without h.mu.
-func records(dir, session string, skip map[a2a.TaskID]bool) []taskRecord {
+// taskFiles lists the task ids that have a file in dir, by file name;
+// ok is false when dir could not be listed. It reads only the directory,
+// never a file, and runs without h.mu.
+func taskFiles(dir string) (ids []a2a.TaskID, ok bool) {
 	if dir == "" {
-		return nil
+		return nil, true
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	var out []taskRecord
+	var out []a2a.TaskID
 	for _, e := range entries {
-		id, ok := strings.CutSuffix(e.Name(), ".json")
-		if e.IsDir() || !ok || skip[a2a.TaskID(id)] {
+		if id, ok := strings.CutSuffix(e.Name(), ".json"); ok && !e.IsDir() {
+			out = append(out, a2a.TaskID(id))
+		}
+	}
+	return out, true
+}
+
+// sessionFilesLocked is the files among ids worth reading for SentFrom of
+// session: those fileSession puts in session, and those of a task this
+// process never saw (another wick process wrote it), read once to learn
+// whose they are. Tasks memory already holds as finished are skipped:
+// their file adds nothing. listed is false when ids is not the whole
+// directory (it could not be read); otherwise ids whose file is gone
+// leave fileSession, unless memory still holds the task (its file may
+// be written right after the directory was listed).
+func (h *Hub) sessionFilesLocked(session string, ids []a2a.TaskID, listed bool) []a2a.TaskID {
+	on := make(map[a2a.TaskID]bool, len(ids))
+	var out []a2a.TaskID
+	for _, id := range ids {
+		on[id] = true
+		if ref := h.tasks[id]; ref != nil && ref.finished {
 			continue
 		}
-		if rec, ok := readRecord(filepath.Join(dir, e.Name())); ok && rec.CallerSession == session {
-			out = append(out, rec)
+		if s, ok := h.fileSession[id]; ok && s != session {
+			continue
+		}
+		out = append(out, id)
+	}
+	if listed {
+		for id := range h.fileSession {
+			if !on[id] && h.tasks[id] == nil {
+				delete(h.fileSession, id)
+			}
+		}
+	}
+	return out
+}
+
+// readRecords reads the files of ids in dir, by id, skipping the
+// unreadable. It reads files, so it runs without h.mu.
+func readRecords(dir string, ids []a2a.TaskID) map[a2a.TaskID]taskRecord {
+	out := map[a2a.TaskID]taskRecord{}
+	for _, id := range ids {
+		path, ok := taskPath(dir, string(id))
+		if !ok {
+			continue
+		}
+		if rec, ok := readRecordFn(path); ok {
+			out[id] = rec
 		}
 	}
 	return out
@@ -367,9 +413,15 @@ func (h *Hub) pruneFilesLocked(now time.Time) {
 		info, err := e.Info()
 		if err == nil && !e.IsDir() && now.Sub(info.ModTime()) > TaskKeep {
 			_ = os.Remove(filepath.Join(h.dir, e.Name()))
+			if id, ok := strings.CutSuffix(e.Name(), ".json"); ok {
+				delete(h.fileSession, a2a.TaskID(id))
+			}
 		}
 	}
 }
+
+// readRecordFn is readRecord; tests count the files a list reads.
+var readRecordFn = readRecord
 
 func readRecord(path string) (taskRecord, bool) {
 	var rec taskRecord

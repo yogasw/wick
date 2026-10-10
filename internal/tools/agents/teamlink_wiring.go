@@ -386,28 +386,35 @@ func remoteTurnEnd(st a2aremote.State, start time.Time, text, failed string) *te
 // session's turn is stopped only when it is that task's; a task still
 // waiting for its turn just leaves the line.
 //
-// The pool stops a session, not a turn: when a message from anyone else
-// is queued in the session (the pool may merge it into the running turn,
-// or start it the moment the task's turn ends) the turn is left running
-// (TaskStopShared) rather than cutting that message off with it.
-//
-// Only providers that queue (codex, omp, opencode: RespawnQueue) hold such
-// a message apart. On an appending provider (claude) a message typed into
-// the session while the task's turn runs is written straight into that
-// turn, Queued stays 0, and the kill stops it along with the task: it stays
-// in the transcript, unanswered. Known limitation; the UI asks before a
-// cancel for that reason.
+// The pool stops a session, not a turn: when a message a person sent
+// reached the session while the task's turn ran the turn is left running
+// (TaskStopShared) rather than cutting that message off with it. The gate
+// sees every message (NoteSessionMessage, the pool's OnSend) and knows a
+// person's by its ctx (teamlink.WithPersonMessage, set where one enters):
+// an appending provider (claude) writes it straight into the running turn.
+// A queuing provider (codex, omp, opencode: RespawnQueue) may also hold
+// one the gate did not see, so its queue is checked too. The check and
+// the kill run with the session's new messages held back by the gate.
 func (poolTurns) StopTask(_ context.Context, _ teamlink.Peer, sessionID string, id a2a.TaskID, by string) (teamlink.TaskStop, error) {
-	out := teamTurnGate.Stop(sessionID, id)
-	if out != teamlink.TaskStopRunning || globalPool == nil {
-		return out, nil
-	}
-	for _, e := range globalPool.ActiveSnapshot() {
-		if e.SessionID == sessionID && e.Queued > 0 {
-			return teamlink.TaskStopShared, nil
+	return teamTurnGate.StopWith(sessionID, id, func() (teamlink.TaskStop, error) {
+		if globalPool == nil {
+			return teamlink.TaskStopRunning, nil
 		}
-	}
-	return out, globalPool.KillBy(sessionID, "", by, "team task canceled")
+		for _, e := range globalPool.ActiveSnapshot() {
+			if e.SessionID == sessionID && e.Queued > 0 {
+				return teamlink.TaskStopShared, nil
+			}
+		}
+		return teamlink.TaskStopRunning, globalPool.KillBy(sessionID, "", by, "team task canceled")
+	})
+}
+
+// NoteSessionMessage is the pool's OnSend: it tells the team task gate a
+// message is on its way into sessionID, so a cancel never stops the turn
+// a person's message reached (TurnGate.NoteMessage). It blocks while a
+// task's turn is being stopped in that session.
+func NoteSessionMessage(ctx context.Context, sessionID, role string) (func(delivered bool), error) {
+	return teamTurnGate.NoteMessage(ctx, sessionID, role)
 }
 
 // NewChat opens a chat of agent beside its main one, set up like it —

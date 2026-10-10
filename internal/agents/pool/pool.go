@@ -243,6 +243,15 @@ type PoolConfig struct {
 	// turns are skipped here to avoid a duplicate). Optional; nil = no
 	// callback.
 	OnUserMessage func(UserMessageEvent)
+	// OnSend fires at the start of every Send, whatever its source or
+	// role, before the message is routed to a live process or buffered,
+	// with the sender's ctx. It may block: the team task gate holds a
+	// message back while it stops a task's turn in the session. An error
+	// refuses the message (Send returns it). Otherwise done is called once
+	// the send is over, delivered telling whether the message was written
+	// to the live process or the session's buffer. Optional; nil = no
+	// callback.
+	OnSend func(ctx context.Context, sessionID, role string) (done func(delivered bool), err error)
 	// OnSpawnError fires when a spawn fails before the agent process starts
 	// (e.g. the CLI binary can't be launched). The wiring surfaces Message
 	// as a live error event so it shows inline in the conversation instead of
@@ -765,6 +774,8 @@ func (p *Pool) callerChanged(ctx context.Context, entry *runEntry) bool {
 }
 
 func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, text, projectID string, atts []store.Attachment) error {
+	// delivered: the message was written to the live process or buffered.
+	delivered := false
 	// An empty agent name means "whoever this session is talking to" — the
 	// same thing a person typing in the composer means. Resolved to the
 	// session's real agent before anything keys off it.
@@ -775,6 +786,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// process. It spawned a second, nameless track instead and every
 	// name-keyed write after it landed on a row nobody reads.
 	agentName = p.resolveAgentName(sessionID, agentName)
+	if p.cfg.OnSend != nil {
+		done, err := p.cfg.OnSend(ctx, sessionID, role)
+		if err != nil {
+			return err
+		}
+		defer func() { done(delivered) }()
+	}
 
 	// Who is speaking, per the originating channel. Resolved once here so
 	// the live and buffered paths below agree, and only for "user" turns:
@@ -893,6 +911,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			userMsgNotified = true
 		}
 		err := entry.agent.Send(withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel))
+		delivered = err == nil
 		// Nudge SSE so the Process panel's queued count updates in
 		// realtime — a RespawnQueue (codex) Send while busy just appended
 		// to the agent's pending queue, which fires no lifecycle event on
@@ -952,6 +971,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	if err := buf.Append(withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel)); err != nil {
 		return err
 	}
+	delivered = true
 	// Persist the user turn to conversation.jsonl immediately so a page
 	// refresh while the session is buffered (queued or mid-spawn) still
 	// shows the messages — they previously only lived in PendingInput.

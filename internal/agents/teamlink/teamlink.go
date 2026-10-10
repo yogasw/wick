@@ -337,6 +337,10 @@ type Hub struct {
 	maxWait time.Duration
 	// dir keeps the tasks on disk (Persist); "" = memory only.
 	dir string
+	// fileSession is the caller session of each task file in dir this
+	// process knows (written, loaded or read once), so SentFrom reads only
+	// the files of the session it lists. Guarded by mu.
+	fileSession map[a2a.TaskID]string
 	// saveMu orders the writes of task files (persist).
 	saveMu sync.Mutex
 	// now is the clock; tests move it.
@@ -536,6 +540,8 @@ func NewHub(dir Directory, turns Turns, notify Notifier) *Hub {
 		inflight:   map[string]map[a2a.TaskID]inbound{},
 		last:       map[string]inbound{},
 		answered:   map[string]a2a.TaskID{},
+
+		fileSession: map[a2a.TaskID]string{},
 	}
 }
 
@@ -1363,9 +1369,9 @@ func (h *Hub) GetTask(ctx context.Context, callerAgentID, taskID string) (*Resul
 // turn for it is stopped — or the task dropped while it still waits for
 // one — when Turns can (TaskStopper), and whatever that turn still
 // reports is dropped. A turn of anything else in the teammate's session
-// is never stopped, and the reason says when one was left running; but a
-// message typed into the task's own turn, on a provider that does not
-// queue it apart, is stopped with that turn (see TaskStopShared).
+// is never stopped, and the reason says when one was left running; nor is
+// the task's own turn once a message from someone else reached it while it
+// ran (see TaskStopShared), so that message is still answered.
 // A task the person started (taskRef.origin) is theirs to cancel:
 // ErrUserTask.
 func (h *Hub) CancelTask(ctx context.Context, callerAgentID, taskID string) (*Result, error) {
@@ -1418,7 +1424,7 @@ func (h *Hub) cancelTask(ctx context.Context, callerAgentID, taskID string, byUs
 		case TaskStopBehindOther:
 			reason += " before it started; the teammate's current turn was left running because it belongs to another conversation"
 		case TaskStopShared:
-			reason += "; the teammate's turn was left running because a message from another conversation is queued in it"
+			reason += "; the teammate's turn was left running because a message from another conversation reached it while it ran"
 		}
 		h.mu.Lock()
 		ref.reply = reason
@@ -1436,9 +1442,9 @@ func (h *Hub) cancelTask(ctx context.Context, callerAgentID, taskID string, byUs
 }
 
 // stoppedNote ends the reason of a cancel that stopped the teammate's
-// turn: on a provider that appends messages to the running turn, what
-// someone typed into it meanwhile went with it.
-const stoppedNote = "; the teammate's current turn was stopped, with anything typed into it while it ran"
+// turn: only the task's own turn is ever stopped, never one a message from
+// anyone else reached (TaskStopShared).
+const stoppedNote = "; the teammate's current turn was stopped"
 
 // finished is the executor telling the Hub a task's turn ended. A caller
 // that stopped waiting gets the reply (or the question, or the reason)
@@ -1610,20 +1616,20 @@ func (h *Hub) SentFrom(sessionID string) []TaskView {
 	// snapshot what memory already settled, read, then adopt under it.
 	h.mu.Lock()
 	h.pruneLocked()
-	dir, skip := h.dir, map[a2a.TaskID]bool{}
-	if dir != "" {
-		for id, ref := range h.tasks {
-			if ref.finished {
-				skip[id] = true
-			}
-		}
-	}
+	dir := h.dir
 	h.mu.Unlock()
-	recs := records(dir, sessionID, skip)
+	names, listed := taskFiles(dir)
+	h.mu.Lock()
+	ids := h.sessionFilesLocked(sessionID, names, listed)
+	h.mu.Unlock()
+	recs := readRecords(dir, ids)
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for _, rec := range recs {
-		h.adoptLocked(rec, false)
+	for id, rec := range recs {
+		h.fileSession[id] = rec.CallerSession
+		if rec.CallerSession == sessionID {
+			h.adoptLocked(rec, false)
+		}
 	}
 	now := h.now()
 	out := []TaskView{}

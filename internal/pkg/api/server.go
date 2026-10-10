@@ -1115,6 +1115,9 @@ func NewServer() *Server {
 			// the pool (the composer renders them optimistically).
 			agentsBcast.PublishUserMessage(ev.SessionID, ev.AgentName, ev.Source, ev.Text, ev.Sender)
 		},
+		// Every message into a session passes the team task gate, so
+		// canceling a task never stops a turn someone else's message is in.
+		OnSend: agentstool.NoteSessionMessage,
 		OnSpawnError: func(ev agentpool.SpawnErrorEvent) {
 			// The spawn failed before the agent started, so no AgentEvent will
 			// ever flow. Publish a synthetic Error (renders inline as a system
@@ -1602,6 +1605,11 @@ func NewServer() *Server {
 				if ids, err := agentproject.List(agentsLayout); err == nil && len(ids) == 1 {
 					pid = ids[0]
 				}
+			}
+			if channelType == "runtime" {
+				// A chat channel carries what a person wrote; A2A carries
+				// another agent's, often a reply to the session's own task.
+				ctx = teamlink.WithPersonMessage(ctx)
 			}
 			return agentsPool.SendWithProject(ctx, sessionID, agentName, source, role, text, pid)
 		})

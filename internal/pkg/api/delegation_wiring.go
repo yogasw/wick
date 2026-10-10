@@ -9,6 +9,7 @@ import (
 	event "github.com/yogasw/wick/internal/agents/event"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/teamlink"
 )
 
 // Async delivery + take-over wiring for sub-agent delegation.
@@ -83,7 +84,7 @@ func (s poolSteerer) SendToChild(ctx context.Context, childSessionID, agentName,
 	// cancelled the moment it answers "sent". A child spawned for this
 	// message starts its agent with this ctx, and a cancelled one ends the
 	// turn it was woken for before the prompt goes out.
-	return s.pool.Send(context.WithoutCancel(ctx), childSessionID, agentName, string(session.OriginUI), "user", message)
+	return s.pool.Send(teamlink.WithPersonMessage(context.WithoutCancel(ctx)), childSessionID, agentName, string(session.OriginUI), "user", message)
 }
 
 // poolWaker makes a sub-agent readable-to again after its process has
