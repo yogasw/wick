@@ -880,6 +880,14 @@ export type TeamTaskItem = {
       sentence before its newest tool call, or "Running <tool>…"); only
       while the task works, pushed on the team_task event, never stored. */
   progress?: string;
+  /** The task this one was sent again for (Retry / Reassign). */
+  retry_of?: string;
+  /** The task the person sent again for this one, how and to whom;
+      absent until it was retried or reassigned. */
+  replaced_by?: string;
+  replaced_how?: "retry" | "reassign";
+  replaced_to_handle?: string;
+  replaced_to_name?: string;
 };
 
 /** One message of a Team task's thread, as the Hub logged it

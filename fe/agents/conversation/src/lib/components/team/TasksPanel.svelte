@@ -8,7 +8,10 @@
      opens the task's TaskThread under the row). Answer opens the shared
      AnswerBox, Cancel asks first (CancelConfirm), and the raw payload
      stays one click away under each row. A working teammate's avatar
-     orbits, one waiting on the person pulses (AvatarActivity). */
+     orbits, one waiting on the person pulses (AvatarActivity). A failed
+     row offers Retry and a declined one Reassign (a menu of this chat's
+     other teammates) at the right of its first line; once sent again the
+     row links to the new task ("Retried → Name"). */
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import AvatarActivity from "./AvatarActivity.svelte";
   import { taskActivity } from "../../avatarActivity.js";
@@ -21,6 +24,7 @@
   import TaskThread from "./TaskThread.svelte";
   import TeamIcon from "./TeamIcon.svelte";
 
+  type ReassignTarget = { handle: string; name: string; shared?: boolean; refused?: boolean };
   type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string };
   type Props = {
     tasks: TeamTaskItem[];
@@ -29,6 +33,15 @@
     senderName?: string;
     onAnswer?: (taskId: string, text: string) => Promise<void>;
     onCancel?: (taskId: string) => Promise<void>;
+    /** Sends a failed task again to the same teammate (Retry). */
+    onRetry?: (taskId: string) => Promise<void>;
+    /** Sends a declined task to another teammate (Reassign). */
+    onReassign?: (taskId: string, to: string) => Promise<void>;
+    /** Who Reassign offers: this chat's teammates (the task's own is left out). */
+    teammates?: ReassignTarget[];
+    /** Reads who a task can go to, as the server will accept it (shared
+        agents included, refusing ones marked); wins over teammates. */
+    loadTargets?: (taskId: string) => Promise<ReassignTarget[]>;
     onJump?: (t: TeamTaskItem) => void;
     onOpenChat?: (t: TeamTaskItem) => void;
     /** Reads a task's thread; "Thread · N" opens it under the row. */
@@ -37,7 +50,7 @@
         host already titles the panel (the mobile sheet). */
     header?: boolean;
   };
-  let { tasks, agents = {}, senderName = "Captain", onAnswer, onCancel, onJump, onOpenChat, loadThread, header = true }: Props = $props();
+  let { tasks, agents = {}, senderName = "Captain", onAnswer, onCancel, onRetry, onReassign, teammates = [], loadTargets, onJump, onOpenChat, loadThread, header = true }: Props = $props();
 
   // The timers tick once a second, only while a task still runs.
   let now = $state(Date.now());
@@ -64,6 +77,43 @@
   // Per task, seeded from answerDrafts so a remount keeps what was typed.
   let drafts = $state<Record<string, string>>({});
   let error = $state("");
+  // Retry / Reassign: the task being sent again, the open menu, and an
+  // error under the row it belongs to.
+  let replacing = $state<string | null>(null);
+  let menuFor = $state<string | null>(null);
+  let rowError = $state<Record<string, string>>({});
+  // Per declined task, the server's list (null while it loads), read once
+  // as the row shows up.
+  let loaded = $state<Record<string, ReassignTarget[] | null>>({});
+  const requested = new Set<string>();
+  $effect(() => {
+    if (!loadTargets || !onReassign) return;
+    for (const t of tasks) {
+      const id = t.task_id;
+      if (taskStatus(t) !== "declined" || t.replaced_by || requested.has(id)) continue;
+      requested.add(id);
+      loaded = { ...loaded, [id]: null };
+      loadTargets(id)
+        .then((list) => { loaded = { ...loaded, [id]: list }; })
+        .catch((e) => {
+          loaded = { ...loaded, [id]: [] };
+          rowError = { ...rowError, [id]: "Couldn't load teammates: " + (e instanceof Error ? e.message : String(e)) };
+        });
+    }
+  });
+  const targetsOf = (t: TeamTaskItem): ReassignTarget[] | null =>
+    loadTargets ? (loaded[t.task_id] ?? null) : teammates.filter((m) => m.handle !== t.to_handle);
+  // The menu opens upward when the list has no room below the button.
+  let menuUp = $state(false);
+  function toggleMenu(id: string, btn: HTMLElement, count: number) {
+    if (menuFor === id) { menuFor = null; return; }
+    const r = btn.getBoundingClientRect();
+    const box = btn.closest("[data-tasks-scroll]")?.getBoundingClientRect() ?? { top: 0, bottom: window.innerHeight };
+    const below = box.bottom - r.bottom, above = r.top - box.top;
+    menuUp = below < Math.min(224, 34 + 32 * count) && above > below;
+    menuFor = id;
+  }
+  const replacedName = (t: TeamTaskItem) => agents[t.replaced_to_handle ?? ""]?.name || t.replaced_to_name || "@" + t.replaced_to_handle;
   const draftOf = (id: string) => drafts[id] ?? getDraft(id);
   const nameOf = (t: TeamTaskItem) => agents[t.to_handle]?.name || t.to_name || "@" + t.to_handle;
 
@@ -95,11 +145,34 @@
     drafts = { ...drafts, [id]: "" };
     if (answering === id) answering = null;
   }
+  async function replace(id: string, f: () => Promise<void>) {
+    if (replacing) return;
+    menuFor = null;
+    replacing = id;
+    rowError = { ...rowError, [id]: "" };
+    try {
+      await f();
+    } catch (e) {
+      rowError = { ...rowError, [id]: e instanceof Error ? e.message : String(e) };
+    } finally {
+      replacing = null;
+    }
+  }
+  // The new task's row, when it is in the list: scroll to it.
+  function showTask(id: string) {
+    const row = [...document.querySelectorAll<HTMLElement>('[data-testid="tasks-row"]')].find((r) => r.dataset.taskId === id);
+    row?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
   async function cancel(id: string) {
     confirming = null;
     if ((await act(() => onCancel!(id))) && answering === id) answering = null;
   }
 </script>
+
+<svelte:window
+  onkeydown={(e) => { if (e.key === "Escape") menuFor = null; }}
+  onclick={(e) => { if (menuFor && !(e.target as Element | null)?.closest?.("[data-reassign]")) menuFor = null; }}
+/>
 
 <div data-testid="tasks-panel" class="flex min-h-0 flex-1 flex-col overflow-hidden">
   {#if header}
@@ -108,7 +181,7 @@
     <span data-testid="tasks-panel-count" class="text-[11px] text-black-700">this chat · {tasks.length}</span>
   </div>
   {/if}
-  <div class="min-h-0 flex-1 overflow-y-auto pb-2">
+  <div data-tasks-scroll class="min-h-0 flex-1 overflow-y-auto pb-2">
     {#if tasks.length === 0}
       <p class="px-4 py-4 text-xs text-black-600 dark:text-black-700">No Team tasks in this chat yet.</p>
     {/if}
@@ -139,6 +212,7 @@
             <div
               data-testid="tasks-row"
               data-status={s}
+              data-task-id={t.task_id}
               class={["mb-1.5 flex items-start gap-2.5 rounded-lg border bg-white-100 dark:bg-navy-800 px-2.5 py-2",
                 s === "needs_you" ? "border-amber-500/[.45] dark:border-[rgba(251,191,36,.40)]" : "border-white-300 dark:border-navy-600"]}
             >
@@ -148,8 +222,51 @@
                   <span data-testid="tasks-panel-name" class="truncate font-semibold text-black-900 dark:text-white-100">{userTaskRoute(t) ?? nameOf(t)}</span>
                   {#if !active}<span data-testid="tasks-row-tag" class={["ml-1.5 shrink-0 text-[10px] font-medium uppercase tracking-[.05em]", TAG_TONE[s]]}>{s}</span>{/if}
                   <span class="flex-1"></span>
-                  <span data-testid="tasks-row-time" class="shrink-0 font-mono text-[10px] text-black-700">{g.collapsed ? endedDay(t, now) : chipElapsed(t, now)}</span>
+                  {#if t.replaced_by}
+                    <!-- Sent again: the link to the task that took over. -->
+                    <button type="button" data-testid="tasks-row-replaced" onclick={() => showTask(t.replaced_by!)} title="Show the new task" class="shrink-0 truncate text-[10.5px] text-black-700 hover:text-green-600 dark:hover:text-green-400">{t.replaced_how === "reassign" ? "Reassigned" : "Retried"} → {replacedName(t)}</button>
+                  {:else if s === "failed" && onRetry}
+                    <SmBtn icon="retry" data-testid="tasks-row-retry" aria-label={"Retry task for " + nameOf(t)} disabled={replacing !== null} onclick={() => replace(t.task_id, () => onRetry!(t.task_id))}>{replacing === t.task_id ? "Retrying…" : "Retry"}</SmBtn>
+                  {:else if s === "declined" && onReassign}
+                    {@const targets = targetsOf(t)}
+                    {@const open = targets?.filter((m) => !m.refused) ?? []}
+                    <span data-reassign class="relative shrink-0">
+                      <SmBtn
+                        icon="recover"
+                        data-testid="tasks-row-reassign"
+                        aria-label={"Reassign task for " + nameOf(t)}
+                        aria-haspopup="menu"
+                        aria-expanded={menuFor === t.task_id}
+                        title={targets === null ? "Loading teammates…" : open.length ? undefined : targets.length ? `No teammate here takes tasks from ${senderName}` : "No other teammate in this chat"}
+                        disabled={open.length === 0 || replacing !== null}
+                        onclick={(e: MouseEvent) => toggleMenu(t.task_id, e.currentTarget as HTMLElement, targets?.length ?? 0)}
+                      >{replacing === t.task_id ? "Reassigning…" : "Reassign"}</SmBtn>
+                      {#if menuFor === t.task_id}
+                        <div role="menu" data-testid="tasks-reassign-menu" aria-label="Reassign to" data-placement={menuUp ? "up" : "down"} class={["absolute right-0 z-20 max-h-56 min-w-[180px] overflow-y-auto rounded-lg border border-white-300 bg-white-100 py-1 shadow-lg dark:border-navy-600 dark:bg-navy-800", menuUp ? "bottom-full mb-1" : "top-full mt-1"]}>
+                          <div class="px-2.5 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-[.06em] text-black-700">Reassign to</div>
+                          {#each targets ?? [] as m (m.handle)}
+                            <button
+                              type="button"
+                              role="menuitem"
+                              data-testid="tasks-reassign-option"
+                              disabled={m.refused}
+                              title={m.refused ? `Doesn't take tasks from ${senderName}` : m.shared ? "Shared with you" : undefined}
+                              onclick={() => replace(t.task_id, () => onReassign!(t.task_id, m.handle))}
+                              class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11.5px] text-black-900 hover:bg-white-200 disabled:cursor-not-allowed disabled:opacity-50 dark:text-white-100 dark:hover:bg-navy-700"
+                            >
+                              <AgentAvatar kind={agents[m.handle]?.kind} shape={agents[m.handle]?.shape} expression={agents[m.handle]?.expression} color={agents[m.handle]?.color} size={18} />
+                              <span class="truncate">{agents[m.handle]?.name || m.name || "@" + m.handle}</span>
+                              <span class="ml-auto font-mono text-[10px] text-black-700">@{m.handle}</span>
+                            </button>
+                          {/each}
+                        </div>
+                      {/if}
+                    </span>
+                  {:else}
+                    <span data-testid="tasks-row-time" class="shrink-0 font-mono text-[10px] text-black-700">{g.collapsed ? endedDay(t, now) : chipElapsed(t, now)}</span>
+                  {/if}
                 </div>
+                {#if rowError[t.task_id]}<p data-testid="tasks-row-error" class="mt-0.5 text-[11px] text-red-600 dark:text-red-400">{rowError[t.task_id]}</p>{/if}
                 <div class="mt-px break-words text-[11.5px] text-black-700">{(s === "failed" || s === "declined" || s === "canceled") && t.summary ? t.summary : t.title}</div>
                 {#if s === "needs_you" && (t.reply || t.summary)}
                   <!-- The question the quick answers come from (reply, as in the block and the tray), three lines at most. -->

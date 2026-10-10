@@ -223,7 +223,11 @@ func teamTaskError(c *tool.Ctx, err error) {
 	switch {
 	case errors.Is(err, teamlink.ErrUnknownTask):
 		status = http.StatusNotFound
-	case errors.Is(err, teamlink.ErrAlreadyAnswered), errors.Is(err, teamlink.ErrTaskNotWaiting), errors.Is(err, teamlink.ErrTaskSettled), errors.Is(err, teamlink.ErrNoTaskChat), errors.Is(err, teamlink.ErrTaskMoved):
+	case errors.Is(err, teamlink.ErrUnknownTeammate):
+		status = http.StatusNotFound
+	case errors.Is(err, teamlink.ErrAlreadyAnswered), errors.Is(err, teamlink.ErrTaskNotWaiting), errors.Is(err, teamlink.ErrTaskSettled), errors.Is(err, teamlink.ErrNoTaskChat), errors.Is(err, teamlink.ErrTaskMoved),
+		errors.Is(err, teamlink.ErrTaskNotRetryable), errors.Is(err, teamlink.ErrTaskNotReassignable), errors.Is(err, teamlink.ErrAlreadyReplaced),
+		errors.Is(err, teamlink.ErrTeammateGone), errors.Is(err, teamlink.ErrTeammateChanged):
 		status = http.StatusConflict
 	}
 	c.JSON(status, map[string]string{"error": err.Error()})
@@ -293,6 +297,63 @@ func sessionTeamTaskCancel(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"task": res})
+}
+
+// sessionTeamTaskRetry handles POST /api/sessions/{id}/team-tasks/{task}/retry:
+// the person sends a failed task this chat sent again, as a new task to
+// the same teammate (409 for any other state, or once already sent again).
+func sessionTeamTaskRetry(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	res, err := h.RetryFromUser(c.Context(), id, c.PathValue("task"))
+	if err != nil {
+		teamTaskError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"task": res})
+}
+
+// sessionTeamTaskReassign handles POST /api/sessions/{id}/team-tasks/{task}/reassign
+// {to}: the person sends a declined or failed task this chat sent to
+// another teammate this chat reaches (400 without one or for the same
+// teammate, 404 for a handle it does not reach).
+func sessionTeamTaskReassign(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		To string `json:"to"`
+	}
+	if err := json.NewDecoder(io.LimitReader(c.R.Body, 1<<20)).Decode(&body); err != nil || teamlink.NormalizeHandle(body.To) == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "to is required"})
+		return
+	}
+	res, err := h.ReassignFromUser(c.Context(), id, c.PathValue("task"), body.To)
+	if err != nil {
+		teamTaskError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"task": res})
+}
+
+// sessionTeamTaskReassignTargets handles GET /api/sessions/{id}/team-tasks/{task}/reassign-targets:
+// the teammates the Reassign menu offers for one task this chat sent —
+// the same roster the reassign route checks, the task's own teammate left
+// out, each marked when its mention policy refuses the sending agent.
+func sessionTeamTaskReassignTargets(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	targets, err := h.ReassignTargets(c.Context(), id, c.PathValue("task"))
+	if err != nil {
+		teamTaskError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"targets": targets})
 }
 
 type teamDirectory struct{ svc *team.Service }

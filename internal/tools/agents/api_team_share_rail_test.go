@@ -100,6 +100,8 @@ func TestSharedChatRailForbidden(t *testing.T) {
 		"POST /api/sessions/{id}/git/commit",
 		"POST /api/sessions/{id}/team-tasks/{task}/answer", "POST /api/sessions/{id}/team-tasks/{task}/cancel",
 		"POST /api/sessions/{id}/team-tasks/{task}/message",
+		"POST /api/sessions/{id}/team-tasks/{task}/retry", "POST /api/sessions/{id}/team-tasks/{task}/reassign",
+		"GET /api/sessions/{id}/team-tasks/{task}/reassign-targets",
 	} {
 		found := false
 		for _, r := range rec.routes {

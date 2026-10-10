@@ -54,6 +54,32 @@ export const cancelTeamTask = (base: string, id: string, taskId: string) =>
     {},
   );
 
+// retryTeamTask sends a failed task this chat sent again, as a new task
+// to the same teammate. 409 = it is not failed, or was already sent again.
+export const retryTeamTask = (base: string, id: string, taskId: string) =>
+  apiPostE<{ task: unknown }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/retry`,
+    {},
+  );
+
+// reassignTeamTask sends a declined (or failed) task this chat sent to
+// another teammate (to = its handle). 409 = already sent again; 404 = a
+// teammate this chat does not reach.
+export const reassignTeamTask = (base: string, id: string, taskId: string, to: string) =>
+  apiPostE<{ task: unknown }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/reassign`,
+    { to },
+  );
+
+// getReassignTargets lists who a task this chat sent can be reassigned to:
+// the same roster the reassign route accepts (shared agents included),
+// without the task's own teammate; refused = its mention policy does not
+// take the sending agent.
+export const getReassignTargets = (base: string, id: string, taskId: string) =>
+  apiGetE<{ targets: { handle: string; name: string; shared?: boolean; refused?: boolean }[] | null }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/reassign-targets`,
+  ).pipe(Effect.map((r) => r?.targets ?? []));
+
 // getSubAgentPanel fetches the rail's whole payload: the agent rows plus
 // the investigation header, when this conversation has one. Separate from
 // getSubAgents so the existing badge path keeps its narrow return type

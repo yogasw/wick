@@ -62,7 +62,7 @@
   import { setTeamTasksCtx } from "../teamTasksContext.js";
   import { tasksByTurn, liveTurnTasks, taskRailBadge } from "../delegations.js";
   import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
-  import { answerTeamTask, cancelTeamTask, getTeamTaskThread, messageTeamTask } from "../api/subagents.js";
+  import { answerTeamTask, cancelTeamTask, getReassignTargets, getTeamTaskThread, messageTeamTask, reassignTeamTask, retryTeamTask } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
   import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
   import {
@@ -1276,6 +1276,24 @@
   async function cancelTask(taskId: string) {
     try {
       await run(cancelTeamTask(base, sessionId, taskId).pipe(Effect.provide(WickClientLayer)));
+    } finally {
+      loadTeamTasks();
+    }
+  }
+  async function retryTask(taskId: string) {
+    try {
+      await run(retryTeamTask(base, sessionId, taskId).pipe(Effect.provide(WickClientLayer)));
+    } finally {
+      loadTeamTasks();
+    }
+  }
+  // Who a declined task can go to instead, as the server will accept it.
+  function loadReassignTargets(taskId: string) {
+    return run(getReassignTargets(base, sessionId, taskId).pipe(Effect.provide(WickClientLayer)));
+  }
+  async function reassignTask(taskId: string, to: string) {
+    try {
+      await run(reassignTeamTask(base, sessionId, taskId, to).pipe(Effect.provide(WickClientLayer)));
     } finally {
       loadTeamTasks();
     }
@@ -3328,6 +3346,9 @@
           senderName={agentMode?.agent?.name ?? "Captain"}
           onAnswer={readOnly ? undefined : answerTask}
           onCancel={readOnly ? undefined : cancelTask}
+          onRetry={readOnly ? undefined : retryTask}
+          onReassign={readOnly ? undefined : reassignTask}
+          loadTargets={readOnly ? undefined : loadReassignTargets}
           onJump={jumpToTask}
           onOpenChat={agentMode?.agent ? openTaskChat : undefined}
           loadThread={readOnly ? undefined : loadTaskThread}
@@ -3545,6 +3566,9 @@
               senderName={agentMode?.agent?.name ?? "Captain"}
               onAnswer={readOnly ? undefined : answerTask}
               onCancel={readOnly ? undefined : cancelTask}
+              onRetry={readOnly ? undefined : retryTask}
+              onReassign={readOnly ? undefined : reassignTask}
+              loadTargets={readOnly ? undefined : loadReassignTargets}
               onJump={jumpToTask}
               onOpenChat={agentMode?.agent ? openTaskChat : undefined}
               loadThread={readOnly ? undefined : loadTaskThread}

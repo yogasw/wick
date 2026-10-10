@@ -309,6 +309,9 @@ func Register(r tool.Router) {
 	r.POST("/api/sessions/{id}/team-tasks/{task}/answer", sessionTeamTaskAnswer)
 	r.POST("/api/sessions/{id}/team-tasks/{task}/cancel", sessionTeamTaskCancel)
 	r.POST("/api/sessions/{id}/team-tasks/{task}/message", sessionTeamTaskMessage)
+	r.POST("/api/sessions/{id}/team-tasks/{task}/retry", sessionTeamTaskRetry)
+	r.POST("/api/sessions/{id}/team-tasks/{task}/reassign", sessionTeamTaskReassign)
+	r.GET("/api/sessions/{id}/team-tasks/{task}/reassign-targets", sessionTeamTaskReassignTargets)
 	// Interactive messages: an actioncard click, and a decision on an
 	// approval_request card.
 	r.POST("/api/sessions/{id}/postback", sessionPostback)

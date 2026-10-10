@@ -457,6 +457,25 @@ type taskRef struct {
 	originUser string
 	// log is the task's thread (logLocked), oldest first.
 	log []ThreadEntry
+	// brief is the task's first message as sent, kept whole (up to
+	// maxStoredReply) so Retry and Reassign send it again; "" on a record
+	// written before it existed (briefLocked falls back to the log).
+	brief string
+	// retryOf is the task this one was sent again for (Retry or Reassign
+	// from the UI); "" for any other task.
+	retryOf a2a.TaskID
+	// replacedBy is the task the person sent again for this one, how
+	// (ReplaceRetry or ReplaceReassign) and to whom (handle, name).
+	replacedBy                 a2a.TaskID
+	replacedHow                string
+	replacedHandle, replacedTo string
+	// replacing: a Retry or Reassign of this task is on its way in this
+	// process; a second one is refused until it went through or failed.
+	replacing bool
+	// replacePending is replacing as written to disk (how, "" = none): a
+	// restart that cut a Retry short leaves it set, and the next Retry
+	// looks for the task it may have sent (retryOf) before sending again.
+	replacePending string
 }
 
 // OriginUser is the origin of a task a person started (taskRef.origin).
@@ -718,6 +737,10 @@ type SendInput struct {
 	// logText is what the task's thread shows for Text ("" = Text): the
 	// user's answer without the framing the teammate reads.
 	logText string
+	// retryOf marks the new task as sent again for this one (Retry or
+	// Reassign), set as the task is registered, so the link is on disk
+	// with the task's first record.
+	retryOf a2a.TaskID
 }
 
 // Result is what a caller gets back.
@@ -915,6 +938,10 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	ref.touched = h.now()
 	if ref.started.IsZero() {
 		ref.contextID, ref.title, ref.started = contextID, firstLine(in.Text), ref.touched
+		ref.brief = in.Text
+	}
+	if in.retryOf != "" {
+		ref.retryOf = in.retryOf
 	}
 	if userOrigin {
 		ref.origin, ref.originUser = OriginUser, in.SessionUser
@@ -1680,6 +1707,14 @@ type TaskView struct {
 	// Progress is what the teammate's turn is doing right now, one plain
 	// line (progress.go); only while the task works, never persisted.
 	Progress string `json:"progress,omitempty"`
+	// RetryOf is the task this one was sent again for (Retry/Reassign).
+	RetryOf string `json:"retry_of,omitempty"`
+	// ReplacedBy is the task the person sent again for this one; how
+	// ("retry" or "reassign") and to whom.
+	ReplacedBy       string `json:"replaced_by,omitempty"`
+	ReplacedHow      string `json:"replaced_how,omitempty"`
+	ReplacedToHandle string `json:"replaced_to_handle,omitempty"`
+	ReplacedToName   string `json:"replaced_to_name,omitempty"`
 }
 
 // SentFrom lists the tasks sessionID sent, newest first: those in memory
@@ -1865,6 +1900,8 @@ func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {
 	v.Interrupted = ref.interrupted
 	v.Origin = ref.origin
 	v.MessageCount = len(ref.log)
+	v.RetryOf, v.ReplacedBy, v.ReplacedHow = string(ref.retryOf), string(ref.replacedBy), ref.replacedHow
+	v.ReplacedToHandle, v.ReplacedToName = ref.replacedHandle, ref.replacedTo
 	if v.State == "working" {
 		v.Progress = h.progressOf(id)
 	}

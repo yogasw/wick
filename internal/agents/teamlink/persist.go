@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/rs/zerolog/log"
@@ -73,6 +74,17 @@ type taskRecord struct {
 	Ended time.Time `json:"ended_at,omitzero"`
 	// Log is taskRef.log; absent on a record written before it existed.
 	Log []ThreadEntry `json:"log,omitempty"`
+	// Brief, RetryOf and the Replaced* fields are taskRef.brief, retryOf
+	// and replacedBy/How/Handle/To; a record written before they existed
+	// reads them unset.
+	Brief          string `json:"brief,omitempty"`
+	RetryOf        string `json:"retry_of,omitempty"`
+	ReplacedBy     string `json:"replaced_by,omitempty"`
+	ReplacedHow    string `json:"replaced_how,omitempty"`
+	ReplacedHandle string `json:"replaced_handle,omitempty"`
+	ReplacedTo     string `json:"replaced_to,omitempty"`
+	// ReplacePending is taskRef.replacePending.
+	ReplacePending string `json:"replace_pending,omitempty"`
 }
 
 // Persist keeps the Hub's tasks in dir (created when missing) and loads
@@ -211,6 +223,10 @@ func refFromRecord(rec taskRecord) *taskRef {
 		asked: rec.Asked, ended: rec.Ended,
 		chat: rec.Chat, answered: rec.Answered, log: rec.Log,
 		chatPicked: rec.ChatPicked, supersededBy: a2a.TaskID(rec.SupersededBy),
+		brief: rec.Brief, retryOf: a2a.TaskID(rec.RetryOf),
+		replacedBy: a2a.TaskID(rec.ReplacedBy), replacedHow: rec.ReplacedHow,
+		replacedHandle: rec.ReplacedHandle, replacedTo: rec.ReplacedTo,
+		replacePending: rec.ReplacePending,
 	}
 	if rec.Origin == OriginUser {
 		ref.origin, ref.originUser = OriginUser, rec.OriginUser
@@ -219,6 +235,19 @@ func refFromRecord(rec taskRecord) *taskRef {
 		ref.markSent(s)
 	}
 	return ref
+}
+
+// cutUTF8 cuts s to at most max bytes on a rune boundary, marking the cut,
+// so a stored brief never ends in half a character.
+func cutUTF8(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	i := max
+	for i > 0 && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return s[:i] + "…"
 }
 
 func (r *taskRef) record(id a2a.TaskID) taskRecord {
@@ -232,11 +261,16 @@ func (r *taskRef) record(id a2a.TaskID) taskRecord {
 		ChatPicked: r.chatPicked, SupersededBy: string(r.supersededBy),
 		Started: r.started, Touched: r.touched, Asked: r.asked, Ended: r.ended,
 		Origin: r.origin, OriginUser: r.originUser,
-		Log: append([]ThreadEntry(nil), r.log...),
+		Log:   append([]ThreadEntry(nil), r.log...),
+		Brief: r.brief, RetryOf: string(r.retryOf),
+		ReplacedBy: string(r.replacedBy), ReplacedHow: r.replacedHow,
+		ReplacedHandle: r.replacedHandle, ReplacedTo: r.replacedTo,
+		ReplacePending: r.replacePending,
 	}
 	if len(rec.Reply) > maxStoredReply {
 		rec.Reply = rec.Reply[:maxStoredReply] + "…"
 	}
+	rec.Brief = cutUTF8(rec.Brief, maxStoredReply)
 	for s := range r.sent {
 		rec.Sent = append(rec.Sent, s)
 	}

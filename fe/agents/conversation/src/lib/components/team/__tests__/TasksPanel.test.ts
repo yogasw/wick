@@ -305,3 +305,169 @@ describe("TasksPanel Thread · N", () => {
     expect(p.querySelector("b")).toBeNull();
   });
 });
+
+/* P48 s14 (B6): a failed row offers Retry, a declined one Reassign with a
+   menu of this chat's other teammates; once sent again the row links to
+   the new task. Read-only chats pass no handlers and get no buttons. */
+describe("TasksPanel Retry / Reassign", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 10, 12, 0, 0));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const failed = task({ task_id: "f", to_handle: "kai", to_name: "Kai", state: "failed", summary: "No reply in 10 min", updated_at: at(11, 50) });
+  const declined = task({ task_id: "x", to_handle: "jules", to_name: "Google Jules", state: "rejected", summary: "No access to qiscus/raya-webhook", updated_at: at(11, 52) });
+  const teammates = [
+    { handle: "jules", name: "Google Jules" },
+    { handle: "anton", name: "Anton" },
+    { handle: "vera", name: "Vera" },
+  ];
+
+  test("failed → Retry, declined → Reassign, on the first line instead of the time", () => {
+    render(TasksPanel, { props: { tasks: [failed, declined], teammates, onRetry: vi.fn(), onReassign: vi.fn() } });
+    const f = rowOf("Kai");
+    const retry = within(f).getByTestId("tasks-row-retry");
+    expect(retry.textContent!.trim()).toBe("Retry");
+    expect(retry.querySelector("svg")).not.toBeNull();
+    expect(within(f).queryByTestId("tasks-row-time")).toBeNull();
+    expect(within(f).queryByTestId("tasks-row-reassign")).toBeNull();
+    const x = rowOf("Google Jules");
+    expect(within(x).getByTestId("tasks-row-tag").textContent).toBe("declined");
+    expect(within(x).getByTestId("tasks-row-reassign").textContent!.trim()).toBe("Reassign");
+    expect(within(x).queryByTestId("tasks-row-retry")).toBeNull();
+  });
+
+  test("Retry calls onRetry once, shows Retrying… and blocks a second click", async () => {
+    let done!: () => void;
+    const onRetry = vi.fn(() => new Promise<void>((r) => { done = r; }));
+    render(TasksPanel, { props: { tasks: [failed], onRetry } });
+    const btn = within(rowOf("Kai")).getByTestId("tasks-row-retry") as HTMLButtonElement;
+    await fireEvent.click(btn);
+    expect(onRetry).toHaveBeenCalledWith("f");
+    expect(btn.textContent!.trim()).toBe("Retrying…");
+    expect(btn.disabled).toBe(true);
+    await fireEvent.click(btn);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    done();
+    await tick(); await tick();
+    expect(btn.textContent!.trim()).toBe("Retry");
+  });
+
+  test("a failed Retry shows its error under the row", async () => {
+    const onRetry = vi.fn(async () => { throw new Error("this task was already retried or reassigned"); });
+    render(TasksPanel, { props: { tasks: [failed], onRetry } });
+    await fireEvent.click(within(rowOf("Kai")).getByTestId("tasks-row-retry"));
+    await tick(); await tick();
+    expect(within(rowOf("Kai")).getByTestId("tasks-row-error").textContent).toBe("this task was already retried or reassigned");
+  });
+
+  test("Reassign opens a menu of the other teammates and sends to the one picked", async () => {
+    const onReassign = vi.fn(async () => {});
+    render(TasksPanel, { props: { tasks: [declined], teammates, onReassign } });
+    const btn = within(rowOf("Google Jules")).getByTestId("tasks-row-reassign");
+    expect(screen.queryByTestId("tasks-reassign-menu")).toBeNull();
+    await fireEvent.click(btn);
+    expect(btn.getAttribute("aria-expanded")).toBe("true");
+    const options = screen.getAllByTestId("tasks-reassign-option");
+    // The current assignee is not offered.
+    expect(options.map((o) => o.textContent!.replace(/\s+/g, " ").trim())).toEqual(["Anton @anton", "Vera @vera"]);
+    await fireEvent.click(options[1]);
+    expect(onReassign).toHaveBeenCalledWith("x", "vera");
+    expect(screen.queryByTestId("tasks-reassign-menu")).toBeNull();
+  });
+
+  test("Escape closes the menu", async () => {
+    render(TasksPanel, { props: { tasks: [declined], teammates, onReassign: vi.fn() } });
+    await fireEvent.click(within(rowOf("Google Jules")).getByTestId("tasks-row-reassign"));
+    expect(screen.getByTestId("tasks-reassign-menu")).toBeDefined();
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("tasks-reassign-menu")).toBeNull();
+  });
+
+  test("no other teammate: Reassign is disabled with a tooltip", () => {
+    render(TasksPanel, { props: { tasks: [declined], teammates: [{ handle: "jules", name: "Google Jules" }], onReassign: vi.fn() } });
+    const btn = within(rowOf("Google Jules")).getByTestId("tasks-row-reassign") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.getAttribute("title")).toBe("No other teammate in this chat");
+  });
+
+  test("read-only chat: no Retry, no Reassign", () => {
+    render(TasksPanel, { props: { tasks: [failed, declined], teammates } });
+    expect(screen.queryByTestId("tasks-row-retry")).toBeNull();
+    expect(screen.queryByTestId("tasks-row-reassign")).toBeNull();
+    expect(within(rowOf("Kai")).getByTestId("tasks-row-time")).toBeDefined();
+  });
+
+  test("sent again: the old row links to the new task, no button", async () => {
+    const retried = { ...failed, replaced_by: "f2", replaced_how: "retry" as const, replaced_to_handle: "kai", replaced_to_name: "Kai" };
+    const moved = { ...declined, replaced_by: "x2", replaced_how: "reassign" as const, replaced_to_handle: "vera", replaced_to_name: "Vera" };
+    const fresh = task({ task_id: "x2", to_handle: "vera", to_name: "Vera", retry_of: "x" });
+    render(TasksPanel, { props: { tasks: [retried, moved, fresh], teammates, onRetry: vi.fn(), onReassign: vi.fn(), agents: { vera: { name: "Vera V." } } } });
+    expect(within(rowOf("Kai")).getByTestId("tasks-row-replaced").textContent!.trim()).toBe("Retried → Kai");
+    expect(within(rowOf("Kai")).queryByTestId("tasks-row-retry")).toBeNull();
+    const link = within(rowOf("Google Jules")).getByTestId("tasks-row-replaced");
+    expect(link.textContent!.trim()).toBe("Reassigned → Vera V.");
+    expect(within(rowOf("Google Jules")).queryByTestId("tasks-row-reassign")).toBeNull();
+    const target = document.querySelector('[data-testid="tasks-row"][data-task-id="x2"]') as HTMLElement;
+    target.scrollIntoView = vi.fn();
+    await fireEvent.click(link);
+    expect(target.scrollIntoView).toHaveBeenCalled();
+  });
+  test("the server's list: loaded once, shared agents in, refusing ones disabled", async () => {
+    let resolve!: (v: { handle: string; name: string; shared?: boolean; refused?: boolean }[]) => void;
+    const loadTargets = vi.fn(() => new Promise<{ handle: string; name: string; shared?: boolean; refused?: boolean }[]>((r) => { resolve = r; }));
+    const onReassign = vi.fn(async () => {});
+    render(TasksPanel, { props: { tasks: [failed, declined], loadTargets, onReassign, senderName: "Yoga Bot" } });
+    expect(loadTargets).toHaveBeenCalledTimes(1);
+    expect(loadTargets).toHaveBeenCalledWith("x");
+    const btn = within(rowOf("Google Jules")).getByTestId("tasks-row-reassign") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.getAttribute("title")).toBe("Loading teammates…");
+    resolve([{ handle: "lena", name: "Lena", shared: true }, { handle: "vera", name: "Vera", refused: true }]);
+    await tick(); await tick();
+    expect(btn.disabled).toBe(false);
+    await fireEvent.click(btn);
+    const [lena, vera] = screen.getAllByTestId("tasks-reassign-option") as HTMLButtonElement[];
+    expect(lena.getAttribute("title")).toBe("Shared with you");
+    expect(vera.disabled).toBe(true);
+    expect(vera.getAttribute("title")).toBe("Doesn't take tasks from Yoga Bot");
+    await fireEvent.click(lena);
+    expect(onReassign).toHaveBeenCalledWith("x", "lena");
+  });
+
+  test("every teammate refuses: Reassign is disabled and says why", async () => {
+    const loadTargets = vi.fn(async () => [{ handle: "vera", name: "Vera", refused: true }]);
+    render(TasksPanel, { props: { tasks: [declined], loadTargets, onReassign: vi.fn(), senderName: "Yoga Bot" } });
+    await tick(); await tick();
+    const btn = within(rowOf("Google Jules")).getByTestId("tasks-row-reassign") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.getAttribute("title")).toBe("No teammate here takes tasks from Yoga Bot");
+  });
+
+  test("the server's refusal reads as is under the row", async () => {
+    const onReassign = vi.fn(async () => { throw new Error("that teammate does not take tasks from this agent — pick another one"); });
+    render(TasksPanel, { props: { tasks: [declined], teammates, onReassign } });
+    await fireEvent.click(within(rowOf("Google Jules")).getByTestId("tasks-row-reassign"));
+    await fireEvent.click(screen.getAllByTestId("tasks-reassign-option")[0]);
+    await tick(); await tick();
+    expect(within(rowOf("Google Jules")).getByTestId("tasks-row-error").textContent).toBe("that teammate does not take tasks from this agent — pick another one");
+  });
+
+  test("no room below the bottom row: the menu opens upward", async () => {
+    render(TasksPanel, { props: { tasks: [declined], teammates, onReassign: vi.fn() } });
+    const rect = (top: number, bottom: number) => ({ top, bottom, left: 0, right: 0, width: 0, height: bottom - top, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+    const scroller = document.querySelector("[data-tasks-scroll]") as HTMLElement;
+    const btn = within(rowOf("Google Jules")).getByTestId("tasks-row-reassign");
+    scroller.getBoundingClientRect = () => rect(0, 400);
+    btn.getBoundingClientRect = () => rect(370, 390);
+    await fireEvent.click(btn);
+    const menu = screen.getByTestId("tasks-reassign-menu");
+    expect(menu.dataset.placement).toBe("up");
+    expect(menu.className).toContain("bottom-full");
+    await fireEvent.click(btn);
+    btn.getBoundingClientRect = () => rect(40, 60);
+    await fireEvent.click(btn);
+    expect(screen.getByTestId("tasks-reassign-menu").dataset.placement).toBe("down");
+  });
+});
