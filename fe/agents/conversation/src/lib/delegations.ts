@@ -142,6 +142,19 @@ export function taskStatus(t: TeamTaskItem): TaskStatus {
   return "working";
 }
 
+/** Most a progress line shows, in characters (the server caps it too). */
+export const PROGRESS_MAX = 140;
+
+/** taskProgress is the live progress line of a working task (mockup t3,
+    `Checking Loki for the 21:00 window…`): one line of plain text, capped;
+    "" for any task that is not working or says nothing yet. */
+export function taskProgress(t: TeamTaskItem): string {
+  if (taskStatus(t) !== "working") return "";
+  const line = (t.progress ?? "").replace(/\s+/g, " ").trim();
+  const chars = Array.from(line);
+  return chars.length > PROGRESS_MAX ? chars.slice(0, PROGRESS_MAX - 1).join("") + "…" : line;
+}
+
 export function isTaskActive(t: TeamTaskItem): boolean {
   const s = taskStatus(t);
   return s === "working" || s === "answering" || s === "needs_you";

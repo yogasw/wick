@@ -186,6 +186,18 @@ func (g *TurnGate) Acquire(ctx context.Context, sessionID string, id a2a.TaskID)
 	}
 }
 
+// Owner is the task whose turn sessionID runs now: "" when no task holds
+// the session, or when a message a person sent reached that turn, so
+// what it says next may answer that person rather than the task.
+func (g *TurnGate) Owner(sessionID string) a2a.TaskID {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if s := g.sessions[sessionID]; s != nil && !s.shared {
+		return s.owner
+	}
+	return ""
+}
+
 func (g *TurnGate) release(sessionID string, id a2a.TaskID) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

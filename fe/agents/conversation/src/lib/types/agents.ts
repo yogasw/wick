@@ -876,6 +876,10 @@ export type TeamTaskItem = {
       capped at 50); absent on a task recorded before the server kept a
       thread, where turns stands in. */
   message_count?: number;
+  /** What the teammate's turn is doing right now, one plain line (the
+      sentence before its newest tool call, or "Running <tool>…"); only
+      while the task works, pushed on the team_task event, never stored. */
+  progress?: string;
 };
 
 /** One message of a Team task's thread, as the Hub logged it

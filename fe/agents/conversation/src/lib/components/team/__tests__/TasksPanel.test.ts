@@ -262,4 +262,46 @@ describe("TasksPanel Thread · N", () => {
     render(TasksPanel, { props: { tasks: [task({})], onCancel: vi.fn() } });
     expect(screen.queryByTestId("tasks-row-thread")).toBeNull();
   });
+
+  /* P48 s13 (B3): a working row's t3 is the teammate's live progress, in
+     green, one line; no other row shows it. */
+  test("working row shows the live progress line; other rows do not", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 10, 12, 0, 0));
+    const long = "Pulling message_logs for channel 0812 " + "x".repeat(200);
+    render(TasksPanel, {
+      props: {
+        tasks: [
+          task({ task_id: "w", to_handle: "anton", to_name: "Anton", progress: "Checking Loki for the 21:00 window…" }),
+          task({ task_id: "v", to_handle: "vera", to_name: "Vera", progress: long + "\nsecond line" }),
+          task({ task_id: "q", to_handle: "rio", to_name: "Rio", state: "input_required", needs_you: true, summary: "Diff both?", progress: "stale" }),
+          task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed", updated_at: at(11, 0), progress: "stale" }),
+          task({ task_id: "x", to_handle: "kai", to_name: "Kai", state: "failed", summary: "No reply", progress: "stale" }),
+        ],
+      },
+    });
+    const p = within(rowOf("Anton")).getByTestId("tasks-row-progress");
+    expect(p.textContent).toBe("Checking Loki for the 21:00 window…");
+    expect(p.className).toContain("text-green-600");
+    expect(p.className).toContain("truncate");
+    const v = within(rowOf("Vera")).getByTestId("tasks-row-progress").textContent!;
+    expect(Array.from(v)).toHaveLength(140);
+    expect(v.endsWith("…")).toBe(true);
+    expect(v).not.toContain("\n");
+    for (const name of ["Rio", "Lia", "Kai"]) expect(within(rowOf(name)).queryByTestId("tasks-row-progress")).toBeNull();
+    expect(screen.getAllByTestId("tasks-row-progress")).toHaveLength(2);
+    vi.useRealTimers();
+  });
+
+  test("a working row with no progress yet shows no t3", () => {
+    render(TasksPanel, { props: { tasks: [task({})] } });
+    expect(screen.queryByTestId("tasks-row-progress")).toBeNull();
+  });
+
+  test("markup is plain text, never HTML", () => {
+    render(TasksPanel, { props: { tasks: [task({ progress: "<b>bold</b> **md**" })] } });
+    const p = screen.getByTestId("tasks-row-progress");
+    expect(p.textContent).toBe("<b>bold</b> **md**");
+    expect(p.querySelector("b")).toBeNull();
+  });
 });

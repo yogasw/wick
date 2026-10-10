@@ -227,6 +227,27 @@ describe("DelegationBlock", () => {
     expect(screen.queryByTestId("delegation-preview")).toBeNull();
   });
 
+  /* P48 s13 (B3): the open chip of a working task reads its live progress
+     (combined 2a .prog), and the thread's working row says the same. */
+  test("2a: open working chip shows the live progress line", async () => {
+    const loadThread = vi.fn().mockResolvedValue([
+      { role: "captain", handle: "captain", name: "Captain", text: "check the logs", at: new Date(2026, 9, 11, 10, 5).toISOString() },
+    ]);
+    render(DelegationBlock, { props: { tasks: [task({ progress: "Checking Loki for the 21:00 window…" })], loadThread } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    expect(screen.getByTestId("delegation-preview-progress").textContent).toContain("Checking Loki for the 21:00 window…");
+    await waitFor(() => expect(screen.getByTestId("task-thread-progress").textContent).toBe("Checking Loki for the 21:00 window…"));
+  });
+
+  test("2a: no progress line on a chip that is not working", async () => {
+    render(DelegationBlock, {
+      props: { tasks: [task({ task_id: "w" }), task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed", summary: "done", reply: "done", progress: "stale" })] },
+    });
+    await fireEvent.click(screen.getAllByTestId("delegation-chip")[1]);
+    expect(screen.getByTestId("delegation-preview")).toBeDefined();
+    expect(screen.queryByTestId("delegation-preview-progress")).toBeNull();
+  });
+
   test("2b: a thread that fails to load still shows the last reply", async () => {
     const loadThread = vi.fn().mockRejectedValue(new Error("task not found"));
     render(DelegationBlock, { props: { tasks: [task({ state: "completed", reply: "found 3 errors", summary: "found 3 errors" })], loadThread } });

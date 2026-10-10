@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, liveTurnTasks, userTaskRoute, quickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, turnSpan } from "../delegations.js";
+import { PROGRESS_MAX, taskProgress, blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, liveTurnTasks, userTaskRoute, quickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, turnSpan } from "../delegations.js";
 import type { ConversationTurn, TeamTaskItem, ThreadBlock } from "../types/agents.js";
 
 const task = (o: Partial<TeamTaskItem>): TeamTaskItem => ({
@@ -309,5 +309,19 @@ describe("endedDay (Tasks rail Earlier)", () => {
     expect(endedDay(t(new Date(2025, 11, 31, 9, 0).toISOString()), now)).toBe("Dec 31, 2025");
     expect(endedDay({ ...t(new Date(2026, 9, 9).toISOString()), ended_at: new Date(2026, 9, 7, 8, 0).toISOString() }, now)).toBe("Oct 7");
     expect(endedDay(t(""), now)).toBe("");
+  });
+
+  /* P48 s13 (B3): the live progress line of a working task. */
+  test("taskProgress: working only, one line, capped at 140", () => {
+    expect(taskProgress(task({ progress: "Checking Loki…" }))).toBe("Checking Loki…");
+    expect(taskProgress(task({ progress: "  a\n\tb  " }))).toBe("a b");
+    const long = taskProgress(task({ progress: "é".repeat(300) }));
+    expect(Array.from(long)).toHaveLength(PROGRESS_MAX);
+    expect(long.endsWith("…")).toBe(true);
+    expect(taskProgress(task({ progress: "x".repeat(PROGRESS_MAX) }))).toBe("x".repeat(PROGRESS_MAX));
+    expect(taskProgress(task({}))).toBe("");
+    for (const state of ["input_required", "completed", "failed", "rejected", "canceled"]) {
+      expect(taskProgress(task({ state, progress: "stale" }))).toBe("");
+    }
   });
 });

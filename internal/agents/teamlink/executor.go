@@ -135,6 +135,9 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		h.inflight[e.agentID][ec.TaskID] = inbound{contextID: ec.ContextID, depth: depth, session: session}
 		canceled := ref.canceled
 		h.mu.Unlock()
+		// What the task's turn does shows on the sender's task while it
+		// runs (only once the task owns the session's turn: TurnOwner).
+		h.startProgress(session, ec.TaskID)
 		var sessionID, reply string
 		var runErr error
 		// The task id rides on ctx, so Turns can tell this task's turn
@@ -149,6 +152,7 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		default:
 			sessionID, reply, runErr = h.Turns.Run(tctx, target, text)
 		}
+		h.stopProgress(ec.TaskID)
 		h.mu.Lock()
 		delete(h.inflight[e.agentID], ec.TaskID)
 		if len(h.inflight[e.agentID]) == 0 {

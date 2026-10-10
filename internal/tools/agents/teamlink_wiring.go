@@ -63,6 +63,13 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 		globalBcast.OnTurnEnd(func(sessionID string) {
 			time.AfterFunc(needsYouSettle, func() { hub.RefreshNeedsYou(sessionID) })
 		})
+		// A teammate's turn on a task feeds the task's live progress line
+		// (the sentence before each tool call, or the tool's name).
+		// Only the turn a task owns at the gate counts for it.
+		hub.TurnOwner = func(sessionID string) a2a.TaskID { return teamTurnGate.Owner(sessionID) }
+		globalBcast.OnTurnActivity(func(sessionID string, ev event.AgentEvent) {
+			teamTurnActivity(hub, sessionID, ev)
+		})
 	}
 	// A task a restart left working is settled as interrupted, unless the
 	// draining previous process may still be running its turn.
@@ -824,6 +831,23 @@ func handoffTurn(h teamlink.Handoff, now time.Time) store.ConversationTurn {
 		extras["origin"] = h.Origin
 	}
 	return systemTurn(store.KindMentionHandoff, fmt.Sprintf("@%s → @%s · %s", h.From, h.To, h.State), extras, now)
+}
+
+// turnProgress is the part of the Hub a turn's activity feeds.
+type turnProgress interface {
+	TurnText(sessionID, delta string)
+	TurnTool(sessionID, tool string)
+}
+
+// teamTurnActivity folds one streamed event of sessionID into the live
+// progress of the task its turn answers, if any (teamlink progress.go).
+func teamTurnActivity(hub turnProgress, sessionID string, ev event.AgentEvent) {
+	switch ev.Type {
+	case event.TextDelta:
+		hub.TurnText(sessionID, ev.Text)
+	case event.ToolUse:
+		hub.TurnTool(sessionID, team.ActionLabel(ev.ToolName, ev.ToolInput))
+	}
 }
 
 // evTeamTask is the SSE event carrying one team task this session sent,

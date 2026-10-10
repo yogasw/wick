@@ -52,4 +52,14 @@ describe("teamTaskLive", () => {
     expect(isReconnect("connecting", "connected")).toBe(false);
     expect(isReconnect("connected", "error")).toBe(false);
   });
+
+  /* P48 s13 (B3): progress lives on the event only; a newer copy of the
+     task without it (the task left working) clears it, never keeps it. */
+  test("patchTeamTask drops a progress line the newer copy no longer carries", () => {
+    const list = [task({ progress: "Checking Loki…" })];
+    const next = patchTeamTask(list, task({ state: "completed", updated_at: "2026-10-10T10:05:00Z" }));
+    expect(next[0].progress).toBeUndefined();
+    const same = patchTeamTask(list, task({}));
+    expect(same[0].progress).toBeUndefined();
+  });
 });

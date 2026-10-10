@@ -18,7 +18,7 @@
   import AvatarActivity from "./AvatarActivity.svelte";
   import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
-  import { allSettled, blockHead, chipElapsed, chipLabel, clockTime, foldAvatars, isTaskActive, isUserTask, quickReplies, settledParts, statusParts, taskStatus, USER_TASK_MARKER, userTaskRoute, type StatusPart, type TaskStatus } from "../../delegations.js";
+  import { allSettled, blockHead, chipElapsed, chipLabel, clockTime, foldAvatars, isTaskActive, isUserTask, quickReplies, settledParts, statusParts, taskProgress, taskStatus, USER_TASK_MARKER, userTaskRoute, type StatusPart, type TaskStatus } from "../../delegations.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
   import AnswerBox from "./AnswerBox.svelte";
   import CancelConfirm from "./CancelConfirm.svelte";
@@ -346,6 +346,12 @@
               <button type="button" data-testid="delegation-cancel" onclick={() => { confirming = confirming === t.task_id ? null : t.task_id; }} class="shrink-0 text-[11px] text-red-600 dark:text-red-400 hover:underline">Cancel</button>
             {/if}
           </div>
+          {#if taskProgress(t)}
+            <!-- combined 2a .prog: what the teammate's turn is doing now. -->
+            <div data-testid="delegation-preview-progress" title={taskProgress(t)} class="flex items-center gap-1.5 px-3 pb-[7px] text-[11px] text-black-700">
+              <span aria-hidden="true" class="text-green-600 dark:text-green-400">●</span><span class="min-w-0 flex-1 truncate">{taskProgress(t)}</span>
+            </div>
+          {/if}
           {#if confirming === t.task_id && onCancel}
             <div class="px-3 pb-2"><CancelConfirm name={nameOf(t)} onConfirm={() => cancel(t)} onKeep={() => { confirming = null; }} /></div>
           {/if}

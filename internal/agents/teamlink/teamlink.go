@@ -387,6 +387,8 @@ type Hub struct {
 	// orphanPoll is how often the tasks a restart left working are
 	// checked (settleOrphans). Tests shorten it.
 	orphanPoll time.Duration
+	// progressHub holds the live progress of working tasks (progress.go).
+	progressHub
 }
 
 // taskRef is what the Hub remembers about a task it sent.
@@ -1675,6 +1677,9 @@ type TaskView struct {
 	// MessageCount is how many messages the task's thread holds (capped
 	// at maxThreadEntries); absent on a task recorded before wick kept it.
 	MessageCount int `json:"message_count,omitempty"`
+	// Progress is what the teammate's turn is doing right now, one plain
+	// line (progress.go); only while the task works, never persisted.
+	Progress string `json:"progress,omitempty"`
 }
 
 // SentFrom lists the tasks sessionID sent, newest first: those in memory
@@ -1860,6 +1865,9 @@ func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {
 	v.Interrupted = ref.interrupted
 	v.Origin = ref.origin
 	v.MessageCount = len(ref.log)
+	if v.State == "working" {
+		v.Progress = h.progressOf(id)
+	}
 	return v
 }
 

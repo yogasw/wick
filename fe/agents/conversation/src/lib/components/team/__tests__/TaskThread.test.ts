@@ -83,4 +83,20 @@ describe("TaskThread", () => {
     render(TaskThread, { props: { task: task({ state: "completed" }), load: vi.fn().mockResolvedValue([]) } });
     await waitFor(() => expect(screen.getByText("No messages yet.")).toBeDefined());
   });
+
+  /* P48 s13 (B3): the working row reads the live progress line (combined
+     2a), plain text; without one it stays "Working…". */
+  test("working row shows the progress line when there is one", async () => {
+    const load = vi.fn().mockResolvedValue(log);
+    const r = render(TaskThread, { props: { task: task({ progress: "Checking Loki for the 21:00 window… <b>x</b>" }), load } });
+    await waitFor(() => expect(screen.getByTestId("task-thread-progress")).toBeDefined());
+    const p = screen.getByTestId("task-thread-progress");
+    expect(p.textContent).toBe("Checking Loki for the 21:00 window… <b>x</b>");
+    expect(p.querySelector("b")).toBeNull();
+    expect(p.className).toContain("truncate");
+    r.unmount();
+    render(TaskThread, { props: { task: task({}), load } });
+    await waitFor(() => expect(screen.getByTestId("task-thread-working")).toBeDefined());
+    expect(screen.queryByTestId("task-thread-progress")).toBeNull();
+  });
 });

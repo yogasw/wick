@@ -16,7 +16,7 @@
   import TeamIcon from "./TeamIcon.svelte";
   import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
-  import { clockTime, taskStatus } from "../../delegations.js";
+  import { clockTime, taskProgress, taskStatus } from "../../delegations.js";
 
   type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string };
   type Props = {
@@ -105,7 +105,8 @@
       {@render avatar(task.to_handle, true)}
       <div class="min-w-0 flex-1">
         <div class="flex items-baseline gap-1.5 text-[11px] text-black-700"><b class="text-xs font-semibold text-black-900 dark:text-white-100">{teammateName}</b></div>
-        <div class="text-[12.5px] leading-[1.5] text-green-600 dark:text-green-400">Working<Dots /></div>
+        <!-- The live progress line when the server sent one (combined 2a), else Working… -->
+        <div class="text-[12.5px] leading-[1.5] text-green-600 dark:text-green-400">{#if taskProgress(task)}<span data-testid="task-thread-progress" class="block truncate" title={taskProgress(task)}>{taskProgress(task)}</span>{:else}Working<Dots />{/if}</div>
       </div>
     </div>
   {/if}

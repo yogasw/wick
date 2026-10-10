@@ -2,7 +2,8 @@
   /* The Tasks rail (mockup §4): every Team task this chat sent, grouped
      Needs input / Working / Done today / Earlier (folded) / Failed ·
      Canceled. A row reads name (+ status tag once it ended), the time on
-     the right, the title, then the question in amber; needs input offers
+     the right, the title, then the question in amber or, while it works, the live
+     progress line in green; needs input offers
      Answer / Cancel / Jump, working Thread · N / Cancel / Jump (Thread
      opens the task's TaskThread under the row). Answer opens the shared
      AnswerBox, Cancel asks first (CancelConfirm), and the raw payload
@@ -12,7 +13,7 @@
   import AvatarActivity from "./AvatarActivity.svelte";
   import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
-  import { chipElapsed, endedDay, groupTasks, isTaskActive, isUserTask, quickReplies, statusLabel, taskStatus, userTaskRoute, type TaskStatus } from "../../delegations.js";
+  import { chipElapsed, endedDay, groupTasks, isTaskActive, isUserTask, quickReplies, statusLabel, taskProgress, taskStatus, userTaskRoute, type TaskStatus } from "../../delegations.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
   import AnswerBox from "./AnswerBox.svelte";
   import CancelConfirm from "./CancelConfirm.svelte";
@@ -155,6 +156,9 @@
                   <div data-testid="tasks-row-question" title={t.reply || t.summary} class="mt-1 line-clamp-3 whitespace-pre-line break-words text-[11.5px] text-amber-700 dark:text-amber-300">{t.reply || t.summary}</div>
                 {:else if s === "answering"}
                   <div class="mt-1 text-[11.5px] text-black-700">{statusLabel(s, senderName)}…</div>
+                {:else if taskProgress(t)}
+                  <!-- What the teammate's turn is doing now (live, plain text, one line). -->
+                  <div data-testid="tasks-row-progress" title={taskProgress(t)} class="mt-1 truncate text-[11.5px] text-green-600 dark:text-green-400">{taskProgress(t)}</div>
                 {/if}
                 {#if active && (onAnswer || onCancel || onJump || onOpenChat || (s === "working" && loadThread))}
                   <div class="mt-1.5 flex flex-wrap items-center gap-1">

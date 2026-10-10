@@ -95,11 +95,21 @@ type Broadcaster struct {
 	parentOf func(string) (string, bool)
 	// turnEnd, when set (OnTurnEnd), hears every session's Done.
 	turnEnd atomic.Pointer[func(sessionID string)]
+	// turnActivity, when set (OnTurnActivity), hears every session's
+	// streamed text and tool calls.
+	turnActivity atomic.Pointer[func(sessionID string, ev event.AgentEvent)]
 }
 
 // OnTurnEnd registers fn to hear that a turn of a session ended (its
 // Done went out). fn runs on the publishing goroutine: keep it short.
 func (b *Broadcaster) OnTurnEnd(fn func(sessionID string)) { b.turnEnd.Store(&fn) }
+
+// OnTurnActivity registers fn to hear a session's streamed text
+// (TextDelta) and tool calls (ToolUse) as they are published. fn runs on
+// the publishing goroutine, for every chunk: keep it short.
+func (b *Broadcaster) OnTurnActivity(fn func(sessionID string, ev event.AgentEvent)) {
+	b.turnActivity.Store(&fn)
+}
 
 // NewBroadcaster returns a ready Broadcaster.
 func NewBroadcaster() *Broadcaster {
@@ -186,6 +196,9 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 	b.fanout(sessionID, payload)
 	if fn := b.turnEnd.Load(); fn != nil && ev.Type == event.Done && sessionID != "" {
 		(*fn)(sessionID)
+	}
+	if fn := b.turnActivity.Load(); fn != nil && sessionID != "" && (ev.Type == event.TextDelta || ev.Type == event.ToolUse) {
+		(*fn)(sessionID, ev)
 	}
 }
 
