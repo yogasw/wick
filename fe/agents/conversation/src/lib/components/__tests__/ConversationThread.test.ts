@@ -1,7 +1,9 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import ConversationThread from "../ConversationThread.svelte";
-import type { ConversationTurn, LiveTurn, TypingState } from "../../types/agents.js";
+import type { ConversationTurn, LiveTurn, TeamTaskItem, ThreadBlock, TypingState } from "../../types/agents.js";
+import { TEAM_TASKS_KEY, type TeamTasksCtx } from "../../teamTasksContext.js";
+import { liveTurnTasks, tasksByTurn } from "../../delegations.js";
 
 function makeTurn(id: string, role: string, text: string): ConversationTurn {
   return {
@@ -287,5 +289,99 @@ describe("ConversationThread working indicator placement", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("ConversationThread live delegation block", () => {
+  const tasks: TeamTaskItem[] = [
+    { task_id: "k1", context_id: "c", to_agent_id: "a1", to_handle: "alpha", to_name: "Alpha", title: "Check logs", state: "working", turns: 1, max_turns: 8, started_at: "2026-10-10T10:02:00Z", updated_at: "2026-10-10T10:02:00Z" },
+    { task_id: "k2", context_id: "c", to_agent_id: "a2", to_handle: "beta", to_name: "Beta", title: "Check deploys", state: "working", turns: 1, max_turns: 8, started_at: "2026-10-10T10:02:00Z", updated_at: "2026-10-10T10:02:00Z" },
+  ];
+  const teamBlock = (id: string, taskId: string): ThreadBlock => ({ kind: "tool", toolUseId: id, toolName: "mcp__wick__team_message", toolInput: '{"to":"@x"}', result: `{"task_id":"${taskId}","state":"working"}` });
+  const live: LiveTurn = {
+    text: "",
+    blocks: [teamBlock("u1", "k1"), teamBlock("u2", "k2"), { kind: "tool", toolUseId: "u3", toolName: "Search", toolInput: "{}", result: "ok" }],
+  };
+  const userTurn = { ...makeTurn("t-u", "user", "Split it across the team"), ts: "2026-10-10T10:01:00Z" };
+  /* DetailView's wiring: the running turn's tasks stay off the committed
+     turns (tasksByTurn) until it commits. */
+  let state: { turns: ConversationTurn[]; live: LiveTurn | null } = { turns: [], live: null };
+  const ctx: TeamTasksCtx = {
+    forTurn: (id) => {
+      const liveIds = new Set(liveTurnTasks(state.live?.blocks, tasks).map((t) => t.task_id));
+      return tasksByTurn(state.turns, tasks.filter((t) => !liveIds.has(t.task_id))).get(id) ?? [];
+    },
+    tasks: () => tasks,
+    agents: () => ({}),
+    captainName: () => "Captain",
+  };
+  const context = () => new Map([[TEAM_TASKS_KEY, ctx]]);
+
+  test("the running turn shows its block and drops the team_message cards from its trace", async () => {
+    state = { turns: [userTurn], live };
+    const { container } = render(ConversationThread, { props: { ...state, typing: { active: true } }, context: context() });
+    const block = screen.getByTestId("delegation-block");
+    expect(block.dataset.taskIds).toBe("k1 k2");
+    expect(block.textContent).toContain("Delegated to 2 teammates");
+    await fireEvent.click(screen.getByText("show trace"));
+    // Only the Search card is left in the trace.
+    expect(container.querySelectorAll("[data-tool-description]").length).toBe(1);
+  });
+
+  test("on commit the block moves to the committed turn: exactly one, never none", async () => {
+    state = { turns: [userTurn], live };
+    const { container, rerender } = render(ConversationThread, { props: { ...state, typing: { active: true } }, context: context() });
+    expect(container.querySelectorAll("[data-task-ids]").length).toBe(1);
+    // The thread store's finalize: the live turn becomes a live-* turn
+    // (each result on its tool_use) in the same update that clears live.
+    const committed: ConversationTurn = {
+      ...makeTurn("live-1", "assistant", "Waiting on the team."),
+      ts: "2026-10-10T10:03:00Z",
+      has_trace: true,
+      events: live.blocks.map((b) => (b.kind === "tool" ? { type: "tool_use", tool_name: b.toolName, tool_input: b.toolInput, tool_use_id: b.toolUseId, text: b.result } : { type: b.kind })),
+    };
+    state = { turns: [userTurn, committed], live: null };
+    await rerender({ ...state, typing: { active: false } });
+    const blocks = container.querySelectorAll("[data-task-ids]");
+    expect(blocks.length).toBe(1);
+    expect((blocks[0] as HTMLElement).dataset.taskIds).toBe("k1 k2");
+    expect(container.querySelector('[data-turn-id="live-1"] [data-task-ids]')).not.toBeNull();
+  });
+
+  test("a live turn that only answers an earlier task shows no block and keeps its card", async () => {
+    const answer: LiveTurn = { text: "", blocks: [{ kind: "tool", toolUseId: "u9", toolName: "mcp__wick__team_message", toolInput: '{"task_id":"k1","message":"both"}', result: '{"task_id":"k1","state":"working"}' }] };
+    state = { turns: [userTurn], live: answer };
+    const { container } = render(ConversationThread, { props: { ...state, typing: { active: true } }, context: context() });
+    expect(container.querySelector("[data-task-ids]")).toBeNull();
+    expect(container.innerHTML).toContain("1 step");
+    await fireEvent.click(screen.getByText("show trace"));
+    expect(container.querySelectorAll("[data-tool-description]").length).toBe(1);
+  });
+
+  test("a call whose task is not in the list yet keeps its card", async () => {
+    const pending: LiveTurn = { text: "", blocks: [teamBlock("u7", "k9")] };
+    state = { turns: [userTurn], live: pending };
+    const { container } = render(ConversationThread, { props: { ...state, typing: { active: true } }, context: context() });
+    expect(container.querySelector("[data-task-ids]")).toBeNull();
+    await fireEvent.click(screen.getByText("show trace"));
+    expect(container.querySelectorAll("[data-tool-description]").length).toBe(1);
+  });
+
+  test("the step count leaves out the cards the block stands for; none left, no toggle", () => {
+    state = { turns: [userTurn], live };
+    const { container, unmount } = render(ConversationThread, { props: { ...state, typing: { active: true } }, context: context() });
+    expect(container.querySelector("[data-live-trace-toggle]")!.textContent).toContain("· 1 step");
+    unmount();
+    const onlyTeam: LiveTurn = { text: "", blocks: [teamBlock("u1", "k1"), teamBlock("u2", "k2")] };
+    state = { turns: [userTurn], live: onlyTeam };
+    const r = render(ConversationThread, { props: { ...state, typing: { active: true } }, context: context() });
+    expect(r.getByTestId("delegation-block")).toBeDefined();
+    expect(r.container.querySelector("[data-live-trace-toggle]")).toBeNull();
+  });
+
+  test("without the Team context the live turn renders as before", () => {
+    render(ConversationThread, { props: { turns: [], live, typing: { active: true } } });
+    expect(screen.queryByTestId("delegation-block")).toBeNull();
+    expect(screen.getByText("show trace")).toBeDefined();
   });
 });

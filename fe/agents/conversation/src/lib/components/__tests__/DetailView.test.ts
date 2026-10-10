@@ -65,10 +65,25 @@ const { threadState } = vi.hoisted(() => ({
   },
 }));
 
+/* The turns and live turn a test can push after render (the thread
+   store's own updates); every other test only reads the initial value. */
+const { threadBus } = vi.hoisted(() => {
+  const bus = <T,>(initial: T) => {
+    const subs = new Set<(v: T) => void>();
+    let value = initial;
+    return {
+      subscribe(fn: (v: T) => void) { subs.add(fn); fn(value); return () => { subs.delete(fn); }; },
+      set(v: T) { value = v; subs.forEach((fn) => fn(v)); },
+      reset(v: T) { value = v; subs.clear(); },
+    };
+  };
+  return { threadBus: { live: bus<unknown>(null), turns: bus<unknown[] | null>(null) } };
+});
+
 vi.mock("../../stores/thread.js", () => ({
   createThreadStore: () => ({
-    turns: { subscribe: (fn: (v: unknown[]) => void) => { fn(threadState.turns); return () => {}; } },
-    live: { subscribe: (fn: (v: null) => void) => { fn(null); return () => {}; } },
+    turns: { subscribe: (fn: (v: unknown[]) => void) => threadBus.turns.subscribe((v) => fn(v ?? threadState.turns)) },
+    live: { subscribe: (fn: (v: null) => void) => threadBus.live.subscribe(fn as (v: unknown) => void) },
     typing: { subscribe: (fn: (v: { active: boolean }) => void) => { fn(threadState.typing); return () => {}; } },
     turnStartedAt: { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; } },
     contextUsed: { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; } },
@@ -1104,5 +1119,86 @@ describe("DetailView — Tasks rail marks (P48)", () => {
     // Docked (lg+): the panel's own header.
     expect(docked.querySelector("h2")?.textContent).toBe("Tasks");
     expect(docked.querySelector('[data-testid="tasks-panel-count"]')?.textContent).toBe("this chat · 2");
+  });
+});
+
+/* P48-s9: the running turn's delegation block, through DetailView's own
+   wiring — tasks patched in by team_task, the live turn and its commit
+   pushed through the thread store. */
+describe("DetailView — live delegation block (P48-s9)", () => {
+  const app = () => {
+    let el = document.getElementById("app");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+    return el;
+  };
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    sseBus.handler = null;
+    threadBus.live.reset(null);
+    threadBus.turns.reset(null);
+    app();
+  });
+  afterEach(() => {
+    threadBus.live.reset(null);
+    threadBus.turns.reset(null);
+  });
+
+  const teamTask = (o: Record<string, unknown>) => ({
+    type: "team_task",
+    data: JSON.stringify({
+      task_id: "k1", context_id: "c", to_agent_id: "a1", to_handle: "alpha", to_name: "Alpha", title: "x",
+      state: "working", turns: 1, max_turns: 8, started_at: "2026-10-10T10:05:00Z", updated_at: "2026-10-10T10:05:00Z", ...o,
+    }),
+  }) as { type: string };
+  const turn = (id: string, role: string, ts: string, text: string, events: unknown[] = []) => ({
+    turn_id: id, role, agent: "", provider: "", text, ts, timestamp: Date.parse(ts), truncated: false, interrupted: false, has_trace: events.length > 0, events, attachments: [],
+  });
+  // An earlier turn sent "old"; the running one sends k1 and answers "old".
+  const history = [
+    turn("u1", "user", "2026-10-10T10:00:00Z", "first"),
+    turn("a-old", "assistant", "2026-10-10T10:01:00Z", "asked beta", [
+      { type: "tool_use", tool_use_id: "x1", tool_name: "mcp__wick__team_message", tool_input: '{"to":"@beta","message":"m"}' },
+      { type: "tool_result", tool_use_id: "x1", text: '{"task_id":"old","state":"input_required"}' },
+    ]),
+    turn("u2", "user", "2026-10-10T10:04:00Z", "second"),
+    // A turn woken in the same segment, before the running one: the
+    // fallback would hand it k1 unless DetailView keeps live tasks out.
+    turn("a-wake", "assistant", "2026-10-10T10:04:30Z", "noted"),
+  ];
+  const liveBlocks = [
+    { kind: "tool", toolUseId: "l1", toolName: "mcp__wick__team_message", toolInput: '{"to":"@alpha","message":"m"}', result: '{"task_id":"k1","state":"working"}' },
+    { kind: "tool", toolUseId: "l2", toolName: "mcp__wick__team_message", toolInput: '{"task_id":"old","message":"use the 20:55 one"}', result: '{"task_id":"old","state":"working"}' },
+  ];
+  const blocks = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>("[data-task-ids]")];
+  const ownerOf = (el: HTMLElement) => el.closest<HTMLElement>("[data-turn-id]")?.dataset.turnId ?? "live";
+
+  test("one block per turn through the live turn, a team_task patch and the commit", async () => {
+    threadBus.turns.set(history);
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    sseBus.handler!(teamTask({ task_id: "old", to_handle: "beta", to_name: "Beta", state: "input_required", started_at: "2026-10-10T10:01:00Z" }));
+    sseBus.handler!(teamTask({}));
+    threadBus.live.set({ text: "", blocks: liveBlocks });
+    await waitFor(() => expect(blocks(container).length).toBe(2));
+    // The answer to "old" leaves it on the turn that sent it.
+    expect(blocks(container).map((b) => [ownerOf(b), b.dataset.taskIds])).toEqual([["a-old", "old"], ["live", "k1"]]);
+
+    // A team_task patch reaches the live block's chip.
+    const liveChip = () => blocks(container).find((b) => ownerOf(b) === "live")!.textContent;
+    expect(liveChip()).toContain("working");
+    sseBus.handler!(teamTask({ state: "input_required", needs_you: true, updated_at: "2026-10-10T10:06:00Z" }));
+    await waitFor(() => expect(liveChip()).toContain("needs input"));
+
+    // Commit (thread store finalize): the live-* turn in the same update
+    // that clears live.
+    const committed = turn("live-1", "assistant", "2026-10-10T10:07:00Z", "waiting on alpha",
+      liveBlocks.map((b) => ({ type: "tool_use", tool_name: b.toolName, tool_input: b.toolInput, tool_use_id: b.toolUseId, text: b.result })));
+    threadBus.turns.set([...history, committed]);
+    threadBus.live.set(null);
+    await waitFor(() => expect(blocks(container).map((b) => [ownerOf(b), b.dataset.taskIds])).toEqual([["a-old", "old"], ["live-1", "k1"]]));
   });
 });

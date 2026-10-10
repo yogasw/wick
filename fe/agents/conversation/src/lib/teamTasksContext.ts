@@ -8,6 +8,9 @@ import type { TeamTaskItem } from "./types/agents.js";
 export type TeamTasksCtx = {
   /** The tasks a turn sent (tasksByTurn), [] for none. */
   forTurn: (turnId: string) => TeamTaskItem[];
+  /** Every task this chat sent: the running turn's block picks its own
+      (liveTurnTasks) before the turn is committed. */
+  tasks?: () => TeamTaskItem[];
   /** Team agents by handle, for the chips' avatars. */
   agents: () => Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }>;
   /** The agent this chat belongs to — "Captain is answering…" names it. */

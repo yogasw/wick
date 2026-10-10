@@ -3,7 +3,7 @@
    tasks this chat sent (GET /api/sessions/{id}/team-tasks). This module
    holds the pure parts — which turn sent which task, what a task's status
    reads as, when a turn folds — so the components stay layout only. */
-import type { ConversationTurn, TeamTaskItem, TurnEvent } from "./types/agents.js";
+import type { ConversationTurn, TeamTaskItem, ThreadBlock, TurnEvent } from "./types/agents.js";
 
 /** A team_message call, whatever namespace the provider puts on it
     (mcp__wick__team_message, team_message). */
@@ -11,21 +11,50 @@ export function isTeamMessageTool(name?: string): boolean {
   return !!name && /(^|__)team_message$/.test(name);
 }
 
+/** A team_message input that answers an existing task (task_id set)
+    rather than sending a new one. */
+function isTaskAnswerInput(input?: string): boolean {
+  return /"task_id"\s*:\s*"[^"\s]/.test(input ?? "");
+}
+
 /** The task ids a turn's team_message calls returned, in call order.
     The result is the Hub's JSON (task_id, state, …), sometimes wrapped in
-    an MCP text envelope, so the id is read from the first task_id field. */
+    an MCP text envelope, so the id is read from the first task_id field.
+    A turn the thread committed from its live state (live-*) carries each
+    result on the tool_use itself, so a team_message tool_use's text counts
+    too: the block stays on that turn by id, not by guess.
+    A call that ANSWERS a task (its input names a task_id) did not send
+    it: that task stays with the turn that did. */
 export function teamTaskIdsFromEvents(events: TurnEvent[] | null | undefined): string[] {
   if (!events) return [];
-  const teamUses = new Set(
-    events.filter((e) => e.type === "tool_use" && isTeamMessageTool(e.tool_name)).map((e) => e.tool_use_id ?? ""),
-  );
+  const uses = events.filter((e) => e.type === "tool_use" && isTeamMessageTool(e.tool_name));
+  const teamUses = new Set(uses.map((e) => e.tool_use_id ?? ""));
+  const answers = new Set(uses.filter((e) => isTaskAnswerInput(e.tool_input)).map((e) => e.tool_use_id ?? ""));
   const out: string[] = [];
   for (const e of events) {
-    if (e.type !== "tool_result" || !(teamUses.has(e.tool_use_id ?? "") || isTeamMessageTool(e.tool_name))) continue;
+    if (e.tool_use_id && answers.has(e.tool_use_id)) continue;
+    const isResult = e.type === "tool_result" && (teamUses.has(e.tool_use_id ?? "") || isTeamMessageTool(e.tool_name));
+    if (!isResult && !(e.type === "tool_use" && isTeamMessageTool(e.tool_name))) continue;
     const m = /"task_id\\?"\s*:\s*\\?"([^"\\]+)/.exec(e.text ?? "");
     if (m && !out.includes(m[1])) out.push(m[1]);
   }
   return out;
+}
+
+/** The tasks the running (not yet committed) turn sent, in call order:
+    its tool blocks read as the trace events they become, so a task shows
+    in the live block as soon as its team_message call returns. A call
+    answering an older task is not one of them (teamTaskIdsFromEvents). */
+export function liveTurnTasks(liveBlocks: ThreadBlock[] | null | undefined, tasks: TeamTaskItem[]): TeamTaskItem[] {
+  if (!liveBlocks || tasks.length === 0) return [];
+  const events: TurnEvent[] = [];
+  for (const b of liveBlocks) {
+    if (b.kind !== "tool") continue;
+    events.push({ type: "tool_use", tool_name: b.toolName, tool_input: b.toolInput, tool_use_id: b.toolUseId });
+    if (b.result) events.push({ type: "tool_result", tool_name: b.toolName, tool_use_id: b.toolUseId, text: b.result });
+  }
+  const byId = new Map(tasks.map((t) => [t.task_id, t]));
+  return teamTaskIdsFromEvents(events).flatMap((id) => byId.get(id) ?? []);
 }
 
 function turnMs(t: ConversationTurn): number {

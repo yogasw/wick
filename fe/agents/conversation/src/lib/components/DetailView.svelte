@@ -60,7 +60,7 @@
   import RailTasksIcon from "./team/RailTasksIcon.svelte";
   import RailTasksTip from "./team/RailTasksTip.svelte";
   import { setTeamTasksCtx } from "../teamTasksContext.js";
-  import { tasksByTurn, taskRailBadge } from "../delegations.js";
+  import { tasksByTurn, liveTurnTasks, taskRailBadge } from "../delegations.js";
   import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
   import { answerTeamTask, cancelTeamTask } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
@@ -1247,7 +1247,17 @@
 
   /* The thread's delegation blocks, the tray and the Tasks rail read the
      tasks through this context. An answer or cancel refetches at once. */
-  const turnTasks = $derived(tasksByTurn(turns, teamTasks));
+  /* The running turn's tasks show in its own block (ConversationThread),
+     so they stay out of the committed turns until it commits — the
+     commit swaps live for the turn in one update, and the block moves
+     with it instead of showing twice. Keyed by a string: live changes on
+     every streamed token, and only a change of the ids may reach
+     turnTasks (and every turn's block). */
+  const liveTaskKey = $derived(liveTurnTasks(live?.blocks, teamTasks).map((t) => t.task_id).join(" "));
+  const turnTasks = $derived.by(() => {
+    const ids = new Set(liveTaskKey ? liveTaskKey.split(" ") : []);
+    return tasksByTurn(turns, ids.size ? teamTasks.filter((t) => !ids.has(t.task_id)) : teamTasks);
+  });
   const tasksBadge = $derived(taskRailBadge(teamTasks));
   async function answerTask(taskId: string, text: string) {
     try {
@@ -1271,6 +1281,7 @@
   }
   setTeamTasksCtx({
     forTurn: (id) => turnTasks.get(id) ?? [],
+    tasks: () => teamTasks,
     agents: () => teamAgentsByHandle,
     captainName: () => agentMode?.agent?.name ?? "Captain",
     // A read-only chat shows its tasks without the actions the server

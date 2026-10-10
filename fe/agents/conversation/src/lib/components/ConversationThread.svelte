@@ -1,7 +1,7 @@
 <script lang="ts">
   import TraceNote from "./TraceNote.svelte";
   import { onMount } from "svelte";
-  import type { ConversationTurn, LiveTurn, TypingState, TurnEvent, TurnEventPayload } from "../types/agents.js";
+  import type { ConversationTurn, LiveTurn, TeamTaskItem, TypingState, TurnEvent, TurnEventPayload } from "../types/agents.js";
   import type { TraceFiles } from "../api/files.js";
   import { renderLive } from "../richRender.js";
   import { mergeTodoItemsWithSteps, stripTodoBlocks, latestTodoGoal } from "../todoGroups.js";
@@ -17,6 +17,9 @@
   import { withRemoteLinks } from "../remoteQueue.js";
   import { foldReplaced } from "../remoteRecheck.js";
   import { speakerVia } from "../teamMention.js";
+  import DelegationBlock from "./team/DelegationBlock.svelte";
+  import { getTeamTasksCtx } from "../teamTasksContext.js";
+  import { isTeamMessageTool, liveTurnTasks } from "../delegations.js";
 
   type Props = {
     turns: ConversationTurn[];
@@ -142,7 +145,21 @@
   // live turn calling todo repeatedly shows one checklist with current
   // progress instead of a stacked card per call.
   const liveMergedTodoItems = $derived(mergeTodoItemsWithSteps(live?.blocks ?? []));
-  const liveNonTodoBlocks = $derived(stripTodoBlocks(live?.blocks ?? []));
+  /* The running turn's delegation block, the same one a committed turn
+     shows (ThreadMessage): its chips tick from the team_task stream while
+     the turn still runs. DetailView keeps these tasks off the committed
+     turns until this one commits, so the block hands over, never doubles.
+     Its team_message ToolCards leave the live trace as they do there. */
+  const teamCtx = getTeamTasksCtx();
+  // Keyed by the ids (and states), so a streamed token does not hand the
+  // block a new array.
+  const liveTaskKey = $derived(
+    teamCtx?.tasks && live ? JSON.stringify(liveTurnTasks(live.blocks, teamCtx.tasks())) : "[]",
+  );
+  const liveTasks = $derived(JSON.parse(liveTaskKey) as TeamTaskItem[]);
+  const liveNonTodoBlocks = $derived(
+    stripTodoBlocks(live?.blocks ?? []).filter((b) => !(liveTasks.length > 0 && b.kind === "tool" && isTeamMessageTool(b.toolName))),
+  );
   /* The working indicator is on from a turn's start to its end: while
      typing is up (hide debounced) or the live turn has not been committed.
      A todo card carries the activity instead when there is one. */
@@ -322,7 +339,10 @@
             currentActivity={activityText}
           />
         {/if}
-        {#if live && live.blocks.length > 0}
+        <!-- Counts what the trace shows: a team_message call the block
+             stands for is not a step here, and a trace with nothing left
+             has no toggle. -->
+        {#if live && liveNonTodoBlocks.length > 0}
           <button
             type="button"
             data-live-trace-toggle
@@ -334,7 +354,7 @@
             </svg>
             <span>{liveTraceOpen ? "hide trace" : "show trace"}</span>
             {#if !liveTraceOpen}
-              <span class="text-black-500 dark:text-black-600">· {live.blocks.length} step{live.blocks.length === 1 ? "" : "s"}</span>
+              <span class="text-black-500 dark:text-black-600">· {liveNonTodoBlocks.length} step{liveNonTodoBlocks.length === 1 ? "" : "s"}</span>
             {/if}
             <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0 transition-transform {liveTraceOpen ? 'rotate-90' : ''}" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
               <path d="M4.5 3l3 3-3 3" stroke-linecap="round" stroke-linejoin="round"></path>
@@ -351,6 +371,16 @@
               {/each}
             </div>
           {/if}
+        {/if}
+        {#if liveTasks.length > 0 && teamCtx}
+          <DelegationBlock
+            tasks={liveTasks}
+            agents={teamCtx.agents()}
+            captainName={teamCtx.captainName()}
+            onAnswer={teamCtx.answer}
+            onCancel={teamCtx.cancel}
+            onOpenChat={teamCtx.openChat}
+          />
         {/if}
         {#if live?.text}
           <!-- renderLive owns innerHTML (no {@html}) so streaming tokens don't

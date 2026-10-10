@@ -1,6 +1,6 @@
 import { describe, test, expect, vi } from "vitest";
-import { blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, userTaskRoute, quickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, turnSpan } from "../delegations.js";
-import type { ConversationTurn, TeamTaskItem } from "../types/agents.js";
+import { blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, liveTurnTasks, userTaskRoute, quickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, turnSpan } from "../delegations.js";
+import type { ConversationTurn, TeamTaskItem, ThreadBlock } from "../types/agents.js";
 
 const task = (o: Partial<TeamTaskItem>): TeamTaskItem => ({
   task_id: "t1", context_id: "c", to_agent_id: "a", to_handle: "anton", to_name: "Anton", title: "x",
@@ -18,6 +18,59 @@ describe("delegations", () => {
       { type: "tool_result", tool_use_id: "u2", text: '{"task_id":"nope"}' },
     ] as ConversationTurn["events"]);
     expect(ids).toEqual(["t9"]);
+  });
+
+  test("reads a team_message result carried on the tool_use (a turn committed from live)", () => {
+    const ids = teamTaskIdsFromEvents([
+      { type: "tool_use", tool_use_id: "u1", tool_name: "mcp__wick__team_message", tool_input: "{}", text: '{"task_id":"t4"}' },
+      { type: "tool_use", tool_use_id: "u2", tool_name: "Bash", text: '{"task_id":"nope"}' },
+    ] as ConversationTurn["events"]);
+    expect(ids).toEqual(["t4"]);
+  });
+
+  test("liveTurnTasks: the running turn's tasks, in call order, once each", () => {
+    const tool = (id: string, name: string, result?: string): ThreadBlock => ({ kind: "tool", toolUseId: id, toolName: name, toolInput: "{}", result });
+    const tasks = [task({ task_id: "a" }), task({ task_id: "b" }), task({ task_id: "other" })];
+    const blocks: ThreadBlock[] = [
+      { kind: "text", text: "splitting it up" },
+      tool("u1", "mcp__wick__team_message", '[{"type":"text","text":"{\\"task_id\\":\\"b\\"}"}]'),
+      tool("u2", "Bash", '{"task_id":"other"}'),
+      tool("u3", "team_message", '{"task_id":"a","state":"working"}'),
+      tool("u4", "team_message", '{"task_id":"a"}'),
+      // Still running: no result yet, so no task to show.
+      tool("u5", "team_message"),
+    ];
+    expect(liveTurnTasks(blocks, tasks).map((t) => t.task_id)).toEqual(["b", "a"]);
+  });
+
+  test("a team_message that answers a task (input task_id) does not claim it", () => {
+    const ids = teamTaskIdsFromEvents([
+      { type: "tool_use", tool_use_id: "s", tool_name: "team_message", tool_input: '{"to":"@anton","message":"go"}' },
+      { type: "tool_result", tool_use_id: "s", text: '{"task_id":"new"}' },
+      { type: "tool_use", tool_use_id: "a", tool_name: "team_message", tool_input: '{"task_id":"old","message":"both"}' },
+      { type: "tool_result", tool_use_id: "a", text: '{"task_id":"old","state":"working"}' },
+      // A turn committed from live: the answer's result rides on its tool_use.
+      { type: "tool_use", tool_use_id: "b", tool_name: "mcp__wick__team_message", tool_input: '{"task_id": "old2","message":"x"}', text: '{"task_id":"old2"}' },
+      // An empty task_id is a send.
+      { type: "tool_use", tool_use_id: "c", tool_name: "team_message", tool_input: '{"to":"@b","task_id":"","message":"x"}' },
+      { type: "tool_result", tool_use_id: "c", text: '{"task_id":"new2"}' },
+    ] as ConversationTurn["events"]);
+    expect(ids).toEqual(["new", "new2"]);
+  });
+
+  test("liveTurnTasks: answering an earlier task leaves it out of the live block", () => {
+    const blocks: ThreadBlock[] = [
+      { kind: "tool", toolUseId: "u1", toolName: "team_message", toolInput: '{"task_id":"old","message":"only 20:55"}', result: '{"task_id":"old","state":"working"}' },
+      { kind: "tool", toolUseId: "u2", toolName: "team_message", toolInput: '{"to":"@b","message":"x"}', result: '{"task_id":"t1"}' },
+    ];
+    expect(liveTurnTasks(blocks, [task({ task_id: "old" }), task({ task_id: "t1" })]).map((t) => t.task_id)).toEqual(["t1"]);
+  });
+
+  test("liveTurnTasks: nothing without a live turn, tasks, or a task the list knows", () => {
+    const blocks: ThreadBlock[] = [{ kind: "tool", toolUseId: "u1", toolName: "team_message", toolInput: "", result: '{"task_id":"gone"}' }];
+    expect(liveTurnTasks(null, [task({})])).toEqual([]);
+    expect(liveTurnTasks(blocks, [])).toEqual([]);
+    expect(liveTurnTasks(blocks, [task({ task_id: "t1" })])).toEqual([]);
   });
 
   test("places a task by its turn's events, else by the user turns around it", () => {
