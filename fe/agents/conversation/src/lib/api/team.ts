@@ -106,6 +106,10 @@ export type AgentItem = {
   /** Everything else on the same project: other agents (any owner) and
       web/channel conversations. */
   shared_with?: number;
+  /** How many people the owner shared this agent with by hand: the
+      header's "Shared with N". Absent (0) when not shared and on a
+      recipient's row. */
+  share_count?: number;
   /** "viewer" = another owner shared this agent with the user: chat and
       info only (agentSharing.ts); absent for the user's own agents. */
   role?: "viewer";

@@ -126,6 +126,26 @@ func (s *Store) ListShares(ctx context.Context, agentID string) ([]entity.AgentS
 	return rows, err
 }
 
+// ShareCounts returns how many people each of agentIDs is shared with by
+// hand (the rows ListShares lists), keyed by agent id; an agent shared
+// with nobody is absent. One query for the whole roster.
+func (s *Store) ShareCounts(ctx context.Context, agentIDs []string) (map[string]int, error) {
+	out := map[string]int{}
+	if len(agentIDs) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		AgentID string
+		N       int
+	}
+	err := s.db.WithContext(ctx).Model(&entity.AgentShare{}).Select("agent_id, COUNT(*) AS n").
+		Where("agent_id IN ?", agentIDs).Where(explicitShare).Group("agent_id").Scan(&rows).Error
+	for _, r := range rows {
+		out[r.AgentID] = r.N
+	}
+	return out, err
+}
+
 // IsShared reports whether agentID is shared with anyone: a share by hand,
 // or a filter tag on its share path that somebody holds.
 func (s *Store) IsShared(ctx context.Context, agentID string) (bool, error) {

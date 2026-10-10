@@ -12,14 +12,17 @@
   import { AgentAvatar, setIdleAnimations } from "@wick-fe/common-avatar";
   import AgentSettings from "./lib/components/AgentSettings.svelte";
   import SharedAgentInfo from "./lib/components/SharedAgentInfo.svelte";
-  import { agentMenu, chatListed, chatNeedsAccessCheck, isSharedAgent, sharedChatMode, sharedLabel } from "./lib/agentSharing.js";
+  import { agentMenu, chatListed, chatNeedsAccessCheck, isSharedAgent, shareInfo, sharedChatMode, sharedLabel } from "./lib/agentSharing.js";
   import AgentWizard from "./lib/components/AgentWizard.svelte";
   import TeamEmptyState from "./lib/components/TeamEmptyState.svelte";
   import RemoteAgentWizard from "./lib/components/team/RemoteAgentWizard.svelte";
   import SlackRemoteWizard from "./lib/components/team/SlackRemoteWizard.svelte";
   import PluginRemoteWizard from "./lib/components/team/PluginRemoteWizard.svelte";
   import RemoteQuestionCard from "./lib/components/team/RemoteQuestionCard.svelte";
-  import { isA2ARemote, isPluginRemote, isRemoteAgent, isSlackRemote, remoteBadge, remoteChatMode, remoteSubtitle, remoteWaitLabel } from "./lib/remoteAgent.js";
+  import PresenceDot from "./lib/components/team/PresenceDot.svelte";
+  import RemoteKindIcon from "./lib/components/team/RemoteKindIcon.svelte";
+  import AgentShareLine from "./lib/components/team/AgentShareLine.svelte";
+  import { isA2ARemote, isPluginRemote, isRemoteAgent, isSlackRemote, remoteChatMode, remoteTarget, remoteWaitLabel } from "./lib/remoteAgent.js";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
   import DraftChat from "./lib/components/DraftChat.svelte";
   import { startDraftChat, type DraftMessage } from "./lib/agentChats.js";
@@ -253,6 +256,8 @@
   let waitNow = $state(Date.now());
   // The header reads the selected agent as its roster row does.
   const headerStatus = $derived(selected ? rosterStatus(selected) : null);
+  // Who it is shared by (recipient) or how many have it (owner); null = not shared.
+  const headerShare = $derived(selected ? shareInfo(selected) : null);
   const remoteWaiting = $derived(!!selected && isRemoteAgent(selected) && isWorking(selected.status));
   const waitKey = $derived(remoteWaiting && selected ? selected.id : "");
   $effect(() => {
@@ -541,8 +546,8 @@
     // A [silent] reply previews dimmed, never with its raw marker.
     const last = silentPreview(a.last_preview || "", a.last_silent);
     if (last.text) return last;
-    // A shared agent the user has not chatted with yet says whose it is.
-    return { text: (isSharedAgent(a) ? sharedLabel(a) : "") || a.description || "No chats yet", silent: false };
+    // Never "shared by …": the chat header says whose it is, once.
+    return { text: a.description || "No chats yet", silent: false };
   }
 
   const mutedBell = "M8.7 3.7A6 6 0 0 1 18 8.5c0 3 .5 4.4 1.3 5.6M17 17H4c1.5-1.5 3-3 3-8.5";
@@ -680,13 +685,18 @@
                  a 🤖 so it reads apart from the agent's own tool call. -->
             <span class="relative flex shrink-0">
               <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={isWorking(a.status) || st.work === "subagent"} tool={st.work === "tool" || st.work === "subagent"} toolName={st.work === "tool" ? a.current_action : ""} toolError={a.tool_error} remote={st.work === "waiting"} events={a.avatar?.events} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
-              {#if st.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -right-1 text-[11px] leading-none" aria-hidden="true" data-testid="roster-subagent">🤖</span>{/if}
+              <!-- The status dot replaces the hover tip; its label is read
+                   out with the row (sr-only). -->
+              <PresenceDot presence={st.presence} label={st.label} ring={active ? "border-white-300 dark:border-navy-600" : "border-white-200 dark:border-navy-700"} />
+              {#if st.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -left-1 text-[11px] leading-none" aria-hidden="true" data-testid="roster-subagent">🤖</span>{/if}
             </span>
-            <span class="roster-tip rounded-lg bg-black-900 px-2 py-0.5 text-[11px] text-white-100 shadow-md">{st.tip}</span>
             <span class="min-w-0 flex-1">
               <span class="flex items-baseline gap-2">
-                <span class="min-w-0 flex-1 truncate text-sm {tone.name}">
-                  {a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[10px] font-semibold tracking-wider text-green-600 dark:text-green-400">CAPTAIN</span>{/if}{#if isRemoteAgent(a)}<span class="ml-1.5 rounded-full bg-white-300 px-1.5 py-px align-middle text-[9px] font-bold uppercase tracking-wider text-black-800 dark:bg-navy-600 dark:text-black-600" data-testid="roster-remote-badge">{remoteBadge(a)}</span>{/if}{#if isSharedAgent(a)}<span class="ml-1.5 rounded-full bg-white-300 px-1.5 py-px align-middle text-[9px] font-bold uppercase tracking-wider text-black-800 dark:bg-navy-600 dark:text-black-600" title={sharedLabel(a)} data-testid="roster-shared-badge">Shared</span>{/if}
+                <!-- No pills: a remote agent gets its source icon after the
+                     name; being shared is told in the chat header. -->
+                <span class="flex min-w-0 flex-1 items-center gap-1.5 text-sm {tone.name}">
+                  <span class="truncate">{a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[10px] font-semibold tracking-wider text-green-600 dark:text-green-400">CAPTAIN</span>{/if}</span>
+                  <RemoteKindIcon agent={a} />
                 </span>
                 <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(a.last_active)}</span>
               </span>
@@ -762,23 +772,32 @@
       {#if selected && !noCaptain}
         <span class="relative flex shrink-0">
           <AgentAvatar kind={selected.avatar?.kind} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={isWorking(selected.status) || headerStatus?.work === "subagent"} tool={headerStatus?.work === "tool" || headerStatus?.work === "subagent"} toolName={headerStatus?.work === "tool" ? selected.current_action : ""} toolError={selected.tool_error} remote={headerStatus?.work === "waiting"} events={selected.avatar?.events} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
-          {#if headerStatus?.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -right-1 text-[11px] leading-none" aria-hidden="true" data-testid="header-subagent">🤖</span>{/if}
+          {#if headerStatus}<PresenceDot presence={headerStatus.presence} label={headerStatus.label} />{/if}
+          {#if headerStatus?.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -left-1 text-[11px] leading-none" aria-hidden="true" data-testid="header-subagent">🤖</span>{/if}
         </span>
         <div class="min-w-0 flex-1">
           <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">
             {selected.name}{#if selected.tagline}<span class="font-normal text-black-700 dark:text-black-600">&nbsp;·&nbsp;{selected.tagline}</span>{/if}
           </div>
-          <div class="truncate text-xs text-black-800 dark:text-black-600">
+          <!-- No "online": the avatar's dot says it. Then @handle, where a
+               remote's turns go and who it is shared by / with. -->
+          <div class="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-xs text-black-800 dark:text-black-600" data-testid="header-line2">
             {#if remoteWaiting}
-              <span class="font-medium text-green-600 dark:text-green-400" data-testid="header-waiting">{remoteWaitLabel(selected, waitStart === null ? 0 : (waitNow - waitStart) / 1000, progressLabel)}</span>
+              <span class="truncate font-medium text-green-600 dark:text-green-400" data-testid="header-waiting">{remoteWaitLabel(selected, waitStart === null ? 0 : (waitNow - waitStart) / 1000, progressLabel)}</span><span aria-hidden="true">·</span>
             {:else if isWorking(selected.status) || headerStatus?.work === "subagent"}
-              <span class="font-medium text-green-600 dark:text-green-400" data-testid="header-typing" data-work={headerStatus?.work}>{(headerStatus?.typing ?? "thinking…").replace(/…$/, "")}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
+              <span class="truncate font-medium text-green-600 dark:text-green-400" data-testid="header-typing" data-work={headerStatus?.work}>{(headerStatus?.typing ?? "thinking…").replace(/…$/, "")}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span><span aria-hidden="true">·</span>
             {:else if selected.disabled}
-              disabled
-            {:else}
-              <span class="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-green-500 align-middle"></span>online
+              <span>disabled</span><span aria-hidden="true">·</span>
             {/if}
-            · @{selected.handle}{route.session ? " · other chat" : ""}{#if isRemoteAgent(selected)}<span data-testid="header-remote"> · {remoteSubtitle(selected)}</span>{/if}
+            <span class="truncate">@{selected.handle}{route.session ? " · other chat" : ""}</span>
+            {#if isRemoteAgent(selected)}
+              <span aria-hidden="true">·</span>
+              <span class="inline-flex min-w-0 items-center gap-1" data-testid="header-remote"><RemoteKindIcon agent={selected} /><span class="truncate">{remoteTarget(selected)}</span></span>
+            {/if}
+            {#if headerShare}
+              <span aria-hidden="true">·</span>
+              <AgentShareLine agent={selected} onOpenSharing={() => openPanel({ kind: "settings", tab: "sharing" })} />
+            {/if}
           </div>
         </div>
         <!-- Always-on switcher: names the conversation on screen and opens
@@ -973,16 +992,6 @@
   }
   /* No count from the server (a group chat): a small dot, not an empty pill. */
   .roster-badge-dot { min-width: 8px; height: 8px; padding: 0; margin-right: 5px; }
-  .roster-tip {
-    display: none;
-    position: absolute;
-    left: 52px;
-    top: -6px;
-    z-index: 30;
-    white-space: nowrap;
-    pointer-events: none;
-  }
-  .roster-row:hover .roster-tip { display: block; }
   /* Three dots that bounce in turn: the "typing" cue in the header and the
      roster. Tailwind has no staggered keyframe, hence the local rule. */
   .dots i {

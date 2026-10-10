@@ -74,8 +74,12 @@ func TestTeamAgentShareLifecycle(t *testing.T) {
 	if len(rosterOf(t, carol)) != 0 {
 		t.Fatal("carol sees an agent not shared with her")
 	}
-	if own := rosterOf(t, owner); len(own) != 1 || own[0].Role != "" {
+	if own := rosterOf(t, owner); len(own) != 1 || own[0].Role != "" || own[0].ShareCount != 1 {
 		t.Fatalf("owner roster = %+v", own)
+	}
+	// The header's "Shared with N" is the owner's alone.
+	if r[0].ShareCount != 0 {
+		t.Fatalf("recipient sees share_count %d", r[0].ShareCount)
 	}
 
 	// Every edit is 403 for bob; chat works; carol gets 404 everywhere.
@@ -143,6 +147,9 @@ func TestTeamAgentShareLifecycle(t *testing.T) {
 	}
 	if len(rosterOf(t, bob)) != 0 {
 		t.Fatal("unshared agent still in bob's roster")
+	}
+	if own := rosterOf(t, owner); own[0].ShareCount != 0 {
+		t.Fatalf("share_count after unshare = %d", own[0].ShareCount)
 	}
 	w, c = teamReq(t, bob, http.MethodPost, "/", map[string]any{}, id)
 	apiTeamAgentChat(c)

@@ -13,10 +13,34 @@ export function isSharedAgent(a: Shared | null | undefined): boolean {
   return a?.role === "viewer";
 }
 
-/** sharedLabel is the roster's small marker text: "shared by <owner>". */
+/** sharedLabel is the short "shared by <owner>" text (Info menu hint, info drawer). */
 export function sharedLabel(a: Pick<AgentItem, "role" | "shared_by">): string {
   if (!isSharedAgent(a)) return "";
   return a.shared_by ? `shared by ${a.shared_by}` : "shared with you";
+}
+
+/** initialsOf is the owner's tiny avatar text: the first letters of the
+    first and last word ("Yoga Setiawan" → "YS"), one letter for one word. */
+export function initialsOf(name: string | undefined): string {
+  const words = (name ?? "").trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "?";
+  const first = Array.from(words[0])[0] ?? "";
+  const last = words.length > 1 ? Array.from(words[words.length - 1])[0] ?? "" : "";
+  return (first + last).toUpperCase();
+}
+
+/** shareInfo is the chat header's sharing part: whose it is for a
+    recipient, how many have it for the owner, null when not shared. */
+export function shareInfo(a: Pick<AgentItem, "role" | "shared_by" | "share_count">):
+  | { kind: "shared-by"; owner: string; initials: string }
+  | { kind: "shared-with"; count: number }
+  | null {
+  if (isSharedAgent(a)) {
+    const owner = a.shared_by || "its owner";
+    return { kind: "shared-by", owner, initials: initialsOf(a.shared_by) };
+  }
+  const n = a.share_count ?? 0;
+  return n > 0 ? { kind: "shared-with", count: n } : null;
 }
 
 /** VIEWER_MENU is what a recipient keeps from the agent's ⋯ menu. */

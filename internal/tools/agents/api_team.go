@@ -144,6 +144,10 @@ type TeamAgentItem struct {
 	// agents of any owner and non-agent web/channel conversations — so
 	// the editor can warn that a persona edit changes them too.
 	SharedWith int `json:"shared_with"`
+	// ShareCount is how many people the owner shared this agent with by
+	// hand (team.Store.ShareCounts): the header's "Shared with N". 0 on a
+	// recipient's row.
+	ShareCount int `json:"share_count,omitempty"`
 	// Role is "" for the caller's own agent and RoleViewer for one another
 	// owner shared with them (chat only); SharedBy/SharedByID name that
 	// owner then.
@@ -701,10 +705,20 @@ func lastPreview(sessionID string) (string, bool) {
 type teamProjectUsers struct {
 	agents   map[string]int // project id → agents on it
 	sessions map[string]int // project id → non-agent top-level sessions
+	shares   map[string]int // agent id → people it is shared with by hand
 }
 
 func teamProjectUsersFor(ctx context.Context, rows []entity.AgentPersona) teamProjectUsers {
 	u := teamProjectUsers{agents: map[string]int{}, sessions: map[string]int{}}
+	agentIDs := make([]string, 0, len(rows))
+	for _, r := range rows {
+		agentIDs = append(agentIDs, r.ID)
+	}
+	if globalTeam != nil {
+		if n, err := globalTeam.ShareCounts(ctx, agentIDs); err == nil {
+			u.shares = n
+		}
+	}
 	want := map[string]bool{}
 	var ids []string
 	for _, r := range rows {
@@ -803,6 +817,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 	it.NativeToolsEnforced = team.NativeToolsEnforced(providerTypeOf(it.Provider))
 	fillChatState(&it, p.OwnerUserID, p.ID, p.LastReadAt, live)
 	it.SharedWith = users.others(p)
+	it.ShareCount = users.shares[p.ID]
 	return it
 }
 

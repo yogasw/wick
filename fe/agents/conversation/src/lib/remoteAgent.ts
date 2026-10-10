@@ -224,18 +224,19 @@ export function remoteChatMode(a: Pick<AgentItem, "remote" | "kind" | "slack_rem
   return { hideTabs: [...REMOTE_HIDDEN_TABS], railNote: REMOTE_RAIL_NOTE, caption: remoteCaption(a.remote?.host) };
 }
 
-/** remoteSubtitle is the chat header's second line: badge, card version, host.
-    A Slack target named like the agent's own handle is left out, so the
-    line does not read "@halodev · Slack remote · @halodev". */
-export function remoteSubtitle(a: Pick<AgentItem, "remote" | "kind" | "slack_remote"> & { handle?: string }): string {
+/** remoteTarget is where a remote agent's turns go, for the chat header
+    next to its source icon: the Slack target (left out when it reads like
+    the agent's own handle), or an A2A card version and host. "" when
+    there is nothing to add (a recipient gets no remote settings). */
+export function remoteTarget(a: Pick<AgentItem, "remote" | "kind" | "slack_remote"> & { handle?: string }): string {
   if (isSlackRemote(a)) {
     const target = a.slack_remote ? targetLabel(a.slack_remote) : "";
     const same = !!a.handle && target.replace(/^@/, "").toLowerCase() === a.handle.toLowerCase();
-    return ["Slack remote", same ? "" : target].filter(Boolean).join(" · ");
+    return same ? "" : target;
   }
   const r = a.remote;
-  if (!r) return "A2A remote";
-  return ["A2A remote", r.card?.version ? `v${r.card.version}` : "", r.host].filter(Boolean).join(" · ");
+  if (!r) return "";
+  return [r.card?.version ? `v${r.card.version}` : "", r.host].filter(Boolean).join(" · ");
 }
 
 /** The required plugin config fields still empty (a stored secret counts as

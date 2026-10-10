@@ -8,13 +8,13 @@ const row = (p: Record<string, unknown> = {}) => ({ id: "a1", status: "idle", di
 
 describe("rosterStatus", () => {
   it("idle agent", () => {
-    expect(rosterStatus(row())).toEqual({ unread: false, attention: false, work: "idle", typing: null, tip: "online · idle" });
+    expect(rosterStatus(row())).toEqual({ unread: false, attention: false, work: "idle", typing: null, presence: "online", label: "online, idle" });
   });
 
   it("unread shows the dot and 'new message'", () => {
     const s = rosterStatus(row({ unread: true }));
     expect(s.unread).toBe(true);
-    expect(s.tip).toBe("new message");
+    expect(s.label).toBe("new message");
   });
 
   it("the open chat is never unread", () => {
@@ -26,14 +26,14 @@ describe("rosterStatus", () => {
     const s = rosterStatus(row({ status: "running" }));
     expect(s.work).toBe("thinking");
     expect(s.typing).toBe("thinking…");
-    expect(s.tip).toBe("thinking…");
+    expect(s.label).toBe("thinking…");
   });
 
   it("a running turn on a tool names the tool", () => {
     const s = rosterStatus(row({ status: "queued", current_action: "query_range" }));
     expect(s.work).toBe("tool");
     expect(s.typing).toBe("running query_range…");
-    expect(s.tip).toBe("running query_range…");
+    expect(s.label).toBe("running query_range…");
     expect(rosterStatus(row({ status: "running", current_action: "read_file" })).typing).toBe("reading file…");
     expect(rosterStatus(row({ status: "running", current_action: "mcp__wick__wick_search" })).typing).toBe("searching…");
   });
@@ -50,22 +50,32 @@ describe("rosterStatus", () => {
 
   it("attention beats typing and unread", () => {
     const s = rosterStatus(row({ status: "running", needs_attention: true, unread: true }));
-    expect(s.tip).toBe("needs your attention");
+    expect(s.label).toBe("needs your attention");
     expect(s.attention).toBe(true);
     expect(s.typing).toBe("thinking…");
   });
 
   it("hatching beats everything but disabled", () => {
-    expect(rosterStatus(row({ unread: true }), { hatching: true }).tip).toBe("just hatched");
+    expect(rosterStatus(row({ unread: true }), { hatching: true }).label).toBe("just hatched");
   });
 
   it("a disabled agent shows no live cue", () => {
     const s = rosterStatus(row({ disabled: true, status: "running", unread: true, needs_attention: true }), { hatching: true });
-    expect(s).toEqual({ unread: false, attention: false, work: "idle", typing: null, tip: "disabled" });
+    expect(s).toEqual({ unread: false, attention: false, work: "idle", typing: null, presence: "disabled", label: "disabled" });
+  });
+
+  it("the status dot: amber needs you, spinner working, grey disabled, green otherwise", () => {
+    expect(rosterStatus(row()).presence).toBe("online");
+    expect(rosterStatus(row({ unread: true })).presence).toBe("online");
+    expect(rosterStatus(row({ status: "running" })).presence).toBe("working");
+    expect(rosterStatus(row({ status: "running", kind: "slack-remote", handle: "h" })).presence).toBe("working");
+    expect(rosterStatus(row({ subagents_working: ["x"] })).presence).toBe("working");
+    expect(rosterStatus(row({ status: "running", needs_attention: true })).presence).toBe("attention");
+    expect(rosterStatus(row({ disabled: true, needs_attention: true, status: "running" })).presence).toBe("disabled");
   });
 
   it("rows from an older server (no P13 fields) read as idle", () => {
-    expect(rosterStatus({ id: "x", status: "idle", disabled: false }).tip).toBe("online · idle");
+    expect(rosterStatus({ id: "x", status: "idle", disabled: false }).label).toBe("online, idle");
   });
 });
 
@@ -148,7 +158,7 @@ describe("sub-agents working after the agent's own turn", () => {
     const s = rosterStatus(row({ subagents_working: ["wick-fixer"] }));
     expect(s.work).toBe("subagent");
     expect(s.typing).toBe("🤖 wick-fixer bekerja…");
-    expect(s.tip).toBe("🤖 wick-fixer bekerja…");
+    expect(s.label).toBe("🤖 wick-fixer bekerja…");
   });
 
   it("more than one is counted", () => {
@@ -163,10 +173,10 @@ describe("sub-agents working after the agent's own turn", () => {
   });
 
   it("attention and hatching beat it, it beats unread, disabled shows nothing", () => {
-    expect(rosterStatus(row({ needs_attention: true, subagents_working: ["x"] })).tip).toBe("needs your attention");
-    expect(rosterStatus(row({ subagents_working: ["x"] }), { hatching: true }).tip).toBe("just hatched");
+    expect(rosterStatus(row({ needs_attention: true, subagents_working: ["x"] })).label).toBe("needs your attention");
+    expect(rosterStatus(row({ subagents_working: ["x"] }), { hatching: true }).label).toBe("just hatched");
     const unread = rosterStatus(row({ unread: true, subagents_working: ["x"] }));
-    expect(unread.tip).toBe("🤖 x bekerja…");
+    expect(unread.label).toBe("🤖 x bekerja…");
     expect(unread.unread).toBe(true);
     const off = rosterStatus(row({ disabled: true, subagents_working: ["x"] }));
     expect(off.work).toBe("idle");
@@ -187,5 +197,26 @@ describe("sub-agents working after the agent's own turn", () => {
     const ended = withTurn(agents, "a1", false);
     expect(ended[0].subagents_working).toEqual(["wick-fixer"]);
     expect(rosterStatus(ended[0]).work).toBe("subagent");
+  });
+});
+
+/* P44: the roster row says presence with a dot (label read out, no hover
+   tip), a remote with its source icon, and never "shared" — the header
+   tells that once. The old testids are gone on purpose. */
+describe("roster row and header markup", () => {
+  const src = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
+  it("no hover tip and no Shared / remote pills", () => {
+    expect(src).not.toMatch(/roster-tip|roster-shared-badge|roster-remote-badge/);
+    expect(src).not.toMatch(/st\.tip|\.tip\}/);
+  });
+  it("the dot and the source icon sit on the row and the header", () => {
+    expect(src.match(/<PresenceDot /g)?.length).toBe(2);
+    expect(src.match(/<RemoteKindIcon /g)?.length).toBe(2);
+    expect(src).toMatch(/<AgentShareLine agent=\{selected\} onOpenSharing=\{\(\) => openPanel\(\{ kind: "settings", tab: "sharing" \}\)\}/);
+  });
+  it("line 2 never says shared by, and the header drops the online text", () => {
+    const preview = src.slice(src.indexOf("function rowPreview"), src.indexOf("const mutedBell"));
+    expect(preview).not.toMatch(/sharedLabel/);
+    expect(src).not.toMatch(/<\/span>online\b/);
   });
 });

@@ -169,6 +169,35 @@ func TestShareByTag(t *testing.T) {
 	}
 }
 
+// ShareCounts is the owner's "Shared with N": hand shares only, so a tag
+// recipient's read mark never counts.
+func TestShareCounts(t *testing.T) {
+	ctx := context.Background()
+	st := shareTestStore(t)
+	a := &entity.AgentPersona{OwnerUserID: "owner", Handle: "helper"}
+	b := &entity.AgentPersona{OwnerUserID: "owner", Handle: "lonely"}
+	for _, p := range []*entity.AgentPersona{a, b} {
+		if err := st.Create(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, uid := range []string{"bob", "carol"} {
+		if err := st.AddShare(ctx, a.ID, uid, "owner"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.db.Create(&entity.AgentShare{ID: "mark-dave", AgentID: b.ID, SharedWithUserID: "dave", CreatedBy: ShareByTags, CreatedAt: time.Now()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.ShareCounts(ctx, []string{a.ID, b.ID})
+	if err != nil || got[a.ID] != 2 || len(got) != 1 {
+		t.Fatalf("ShareCounts = %v, %v; want only %s: 2", got, err, a.ID)
+	}
+	if got, err := st.ShareCounts(ctx, nil); err != nil || len(got) != 0 {
+		t.Fatalf("ShareCounts(nil) = %v, %v", got, err)
+	}
+}
+
 func TestShareBlock(t *testing.T) {
 	if ShareBlock(entity.AgentPersona{}, false) != "" {
 		t.Fatal("a plain agent must be shareable")

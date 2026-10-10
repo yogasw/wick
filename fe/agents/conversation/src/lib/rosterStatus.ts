@@ -4,7 +4,8 @@ import { THINKING_LABEL, toolActivityLabel } from "./activityLabel.js";
 import { isRemoteAgent, remoteWaitTarget } from "./remoteAgent.js";
 
 /* What a roster row says about an agent (mockup row() / stateOf()): the
-   red unread dot, the working line and the hover tip. Pure, so the order
+   red unread dot, the working line and the presence dot with its spoken
+   label. Pure, so the order
    the cues win in is tested rather than buried in the template. The Team
    header reads the same answer, so the two never disagree. */
 
@@ -13,6 +14,11 @@ import { isRemoteAgent, remoteWaitTarget } from "./remoteAgent.js";
     agent: wick waits for the other side) or subagent (no turn of its own,
     but background sub-agents it delegated to are still working). */
 export type WorkState = "idle" | "thinking" | "tool" | "waiting" | "subagent";
+
+/** The status dot on the avatar: green = online (idle), a spinner =
+    working (its own turn or its sub-agents), amber = needs the owner,
+    grey = disabled. */
+export type Presence = "online" | "working" | "attention" | "disabled";
 
 export type RosterStatus = {
   /** Red dot on the avatar: something new since the chat was last open. */
@@ -25,8 +31,10 @@ export type RosterStatus = {
       while only its sub-agents work. null = not working, show the normal
       preview. */
   typing: string | null;
-  /** Hover tip on the avatar. */
-  tip: string;
+  presence: Presence;
+  /** What the dot means in words, for screen readers (sr-only / aria):
+      there is no visible tooltip. */
+  label: string;
 };
 
 type Row = Pick<AgentItem, "id" | "status" | "disabled"> &
@@ -59,14 +67,15 @@ export function rosterStatus(a: Row, opts: { activeId?: string; hatching?: boole
             : THINKING_LABEL;
   const unread = !!a.unread && !a.disabled && a.id !== opts.activeId;
   const attention = !!a.needs_attention && !a.disabled;
-  let tip: string;
-  if (a.disabled) tip = "disabled";
-  else if (opts.hatching) tip = "just hatched";
-  else if (attention) tip = "needs your attention";
-  else if (typing !== null) tip = typing;
-  else if (unread) tip = "new message";
-  else tip = "online · idle";
-  return { unread, attention, work, typing, tip };
+  const presence: Presence = a.disabled ? "disabled" : attention ? "attention" : work !== "idle" ? "working" : "online";
+  let label: string;
+  if (a.disabled) label = "disabled";
+  else if (opts.hatching) label = "just hatched";
+  else if (attention) label = "needs your attention";
+  else if (typing !== null) label = typing;
+  else if (unread) label = "new message";
+  else label = "online, idle";
+  return { unread, attention, work, typing, presence, label };
 }
 
 /** withTurn is the roster after agent id's main-chat turn started or

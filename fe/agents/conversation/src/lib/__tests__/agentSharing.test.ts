@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { isSharedAgent, sharedLabel, agentMenu, pickableUsers, PICK_LIMIT, sharedChatMode, SHARED_RAIL_NOTE } from "../agentSharing.js";
+import { isSharedAgent, sharedLabel, initialsOf, shareInfo, agentMenu, pickableUsers, PICK_LIMIT, sharedChatMode, SHARED_RAIL_NOTE } from "../agentSharing.js";
 import { chatNeedsAccessCheck, chatListed, noAccessError } from "../agentSharing.js";
 import { REMOTE_HIDDEN_TABS } from "../remoteAgent.js";
 import { rosterEntries } from "../rosterList.js";
@@ -89,5 +89,21 @@ describe("noAccessError", () => {
     expect(noAccessError(new Error("HTTP 404: session not found"))).toBe(true);
     expect(noAccessError("not found")).toBe(true);
     expect(noAccessError(new Error("HTTP 500: boom"))).toBe(false);
+  });
+});
+
+describe("header share info", () => {
+  test("initials: first and last word, one letter for one word", () => {
+    expect(initialsOf("Yoga Setiawan")).toBe("YS");
+    expect(initialsOf("  ana maria de souza ")).toBe("AS");
+    expect(initialsOf("Bob")).toBe("B");
+    expect(initialsOf("")).toBe("?");
+  });
+  test("recipient sees who shared it, owner sees how many, otherwise nothing", () => {
+    expect(shareInfo({ role: "viewer", shared_by: "Yoga Setiawan" })).toEqual({ kind: "shared-by", owner: "Yoga Setiawan", initials: "YS" });
+    expect(shareInfo({ role: "viewer" })).toEqual({ kind: "shared-by", owner: "its owner", initials: "?" });
+    expect(shareInfo({ share_count: 3 })).toEqual({ kind: "shared-with", count: 3 });
+    expect(shareInfo({ share_count: 0 })).toBeNull();
+    expect(shareInfo({})).toBeNull();
   });
 });
