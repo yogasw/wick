@@ -40,14 +40,14 @@
   import NewGroupDialog from "./lib/components/NewGroupDialog.svelte";
   import GroupSettings from "./lib/components/GroupSettings.svelte";
   import GroupAvatars from "./lib/components/GroupAvatars.svelte";
-  import { rosterStatus, withTurn, withActivity } from "./lib/rosterStatus.js";
+  import { rosterStatus, withTurn, withActivity, busyWork, avatarWorking, type RosterStatus } from "./lib/rosterStatus.js";
   import { mainChatOpen } from "./lib/avatarActivity.js";
   import { liveRoster } from "./lib/rosterLive.js";
   import type { SessionActivity } from "./lib/stores/sessionsStream.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
   import TeamAddMenu from "./lib/components/TeamAddMenu.svelte";
-  import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass } from "./lib/rosterList.js";
+  import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass, dozing } from "./lib/rosterList.js";
   import TeamSettings from "./lib/components/TeamSettings.svelte";
   import { RETURN_KEY, agentsHomeHref } from "./lib/teamReturn.js";
 
@@ -256,6 +256,13 @@
   // waitStart is when the selected one began waiting; the header counts up.
   let waitStart = $state<number | null>(null);
   let waitNow = $state(Date.now());
+  /* The roster's clock, a minute at a time: stamps turn "Yesterday" and
+     rows start dozing at midnight without waiting for another change. */
+  let rosterNow = $state(Date.now());
+  onMount(() => {
+    const t = setInterval(() => (rosterNow = Date.now()), 60_000);
+    return () => clearInterval(t);
+  });
   // The header reads the selected agent as its roster row does.
   const headerStatus = $derived(selected ? rosterStatus(selected) : null);
   // Who it is shared by (recipient) or how many have it (owner); null = not shared.
@@ -542,6 +549,15 @@
       : undefined,
   });
 
+  /* The Team-task mark on a row's avatar in place of the dot: the amber
+     "?" while a teammate asks its sender, the task badge while it works
+     on one. */
+  function teamMark(a: AgentItem, st: RosterStatus): "asks" | "task" | null {
+    if (a.disabled) return null;
+    if (a.team_asks && st.attention) return "asks";
+    return st.work === "replying" ? "task" : null;
+  }
+
   function rowPreview(a: AgentItem): { text: string; silent: boolean } {
     if (a.disabled) return { text: "Disabled", silent: false };
     if (a.attention_preview) return { text: a.attention_preview, silent: false };
@@ -670,7 +686,7 @@
           {@const a = e.agent}
           {@const active = !route.group && selected?.id === a.id}
           {@const st = rosterStatus(a, { activeId: selected?.id, hatching: hatching.includes(a.id) })}
-          {@const tone = rowTone(st.unread)}
+          {@const tone = rowTone(st.unread, st.attention)}
           {@const pv = rowPreview(a)}
           <button
             type="button"
@@ -684,10 +700,10 @@
             <!-- Sub-agents still working after its own turn: the orbit, plus
                  a 🤖 so it reads apart from the agent's own tool call. -->
             <span class="relative flex shrink-0">
-              <RosterAvatar agent={a} {st} open={mainChatOpen(a, selected?.id, route)} hatching={hatching.includes(a.id)} />
+              <RosterAvatar agent={a} {st} open={mainChatOpen(a, selected?.id, route)} hatching={hatching.includes(a.id)} dozing={dozing(a, st, rosterNow)} />
               <!-- The status dot replaces the hover tip; its label is read
                    out with the row (sr-only). -->
-              <PresenceDot presence={st.presence} label={st.label} ring={active ? "border-white-300 dark:border-navy-600" : "border-white-200 dark:border-navy-700"} />
+              <PresenceDot presence={st.presence} label={st.label} ring={active ? "border-white-300 dark:border-navy-600" : "border-white-200 dark:border-navy-700"} mark={teamMark(a, st)} />
               {#if st.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -left-1 text-[11px] leading-none" aria-hidden="true" data-testid="roster-subagent">🤖</span>{/if}
             </span>
             <span class="min-w-0 flex-1">
@@ -698,12 +714,15 @@
                   <span class="truncate">{a.name}{#if a.is_captain}<span class="ml-1.5 align-middle text-[10px] font-semibold tracking-wider text-green-600 dark:text-green-400">CAPTAIN</span>{/if}</span>
                   <RemoteKindIcon agent={a} />
                 </span>
-                <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(a.last_active)}</span>
+                <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(a.last_active, rosterNow)}</span>
               </span>
               <span class="roster-line2 mt-0.5 flex items-center gap-1.5">
                 <span class="min-w-0 flex-1 truncate text-xs {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : pv.silent ? silentPreviewClass : tone.preview}">
-                  {#if st.typing !== null}<span data-testid="roster-working" data-work={st.work}>{st.typing}</span>{:else}{#if pv.silent}{@render silentBell()}{/if}{pv.text}{/if}
+                  {#if st.typing !== null}<span data-testid="roster-working" data-work={st.work}>{st.typing.replace(/…$/, "")}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span>{:else}{#if pv.silent}{@render silentBell()}{/if}{pv.text}{/if}
                 </span>
+                <!-- A teammate's question back to its sender: the amber count (the
+                     avatar carries the "?"). -->
+                {#if a.team_asks && !a.disabled}<span class="roster-badge shrink-0 rounded-full bg-amber-500 font-bold text-[#1b1300]" aria-label="1 question" data-testid="roster-asks">1</span>{/if}
                 {#if st.unread}<span class="roster-badge shrink-0 rounded-full bg-green-500 text-white-100" class:roster-badge-dot={!unreadLabel(a.unread_count)} aria-label="{a.unread_count || 'new'} unread" data-testid="roster-unread">{unreadLabel(a.unread_count)}</span>{/if}
               </span>
             </span>
@@ -724,7 +743,7 @@
             <span class="min-w-0 flex-1">
               <span class="flex items-baseline gap-2">
                 <span class="min-w-0 flex-1 truncate text-sm {tone.name}">{g.name}</span>
-                <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(g.last_active)}</span>
+                <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(g.last_active, rosterNow)}</span>
               </span>
               <span class="roster-line2 mt-0.5 flex items-center gap-1.5">
                 <span class="min-w-0 flex-1 truncate text-xs {gp.silent && gp.text ? silentPreviewClass : tone.preview}">{#if gp.silent && gp.text}{@render silentBell()}{/if}{gp.text || `${g.members.length} agents`}</span>
@@ -771,7 +790,7 @@
       </button>
       {#if selected && !noCaptain}
         <span class="relative flex shrink-0">
-          <AgentAvatar kind={selected.avatar?.kind} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={isWorking(selected.status) || headerStatus?.work === "subagent"} tool={headerStatus?.work === "tool" || headerStatus?.work === "subagent"} toolName={headerStatus?.work === "tool" ? selected.current_action : ""} toolError={selected.tool_error} remote={headerStatus?.work === "waiting"} events={selected.avatar?.events} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
+          <AgentAvatar kind={selected.avatar?.kind} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={!!headerStatus && avatarWorking(selected.status, headerStatus.work)} tool={headerStatus?.work === "tool" || headerStatus?.work === "subagent"} toolName={headerStatus?.work === "tool" ? selected.current_action : ""} toolError={selected.tool_error} remote={headerStatus?.work === "waiting"} events={selected.avatar?.events} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
           {#if headerStatus}<PresenceDot presence={headerStatus.presence} label={headerStatus.label} />{/if}
           {#if headerStatus?.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -left-1 text-[11px] leading-none" aria-hidden="true" data-testid="header-subagent">🤖</span>{/if}
         </span>
@@ -784,7 +803,7 @@
           <div class="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-xs text-black-800 dark:text-black-600" data-testid="header-line2">
             {#if remoteWaiting}
               <span class="truncate font-medium text-green-600 dark:text-green-400" data-testid="header-waiting">{remoteWaitLabel(selected, waitStart === null ? 0 : (waitNow - waitStart) / 1000, progressLabel)}</span><span aria-hidden="true">·</span>
-            {:else if isWorking(selected.status) || headerStatus?.work === "subagent"}
+            {:else if isWorking(selected.status) || (headerStatus && busyWork(headerStatus.work))}
               <span class="truncate font-medium text-green-600 dark:text-green-400" data-testid="header-typing" data-work={headerStatus?.work}>{(headerStatus?.typing ?? "thinking…").replace(/…$/, "")}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span><span aria-hidden="true">·</span>
             {:else if selected.disabled}
               <span>disabled</span><span aria-hidden="true">·</span>
@@ -1001,13 +1020,13 @@
     margin-left: 2px;
     border-radius: 9999px;
     background: currentColor;
-    animation: agent-dot 1s infinite;
+    animation: agent-dot 1.2s infinite;
   }
   .dots i:nth-child(2) { animation-delay: 0.15s; }
   .dots i:nth-child(3) { animation-delay: 0.3s; }
   @keyframes agent-dot {
-    0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
-    30% { opacity: 1; transform: translateY(-2px); }
+    0%, 60%, 100% { opacity: 0.5; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-3px); }
   }
   /* Floating drawer (mockup .drawer/.scrim): inset 8px on three sides, 20px
      corners, a short slide-in. Width and blur have no token step. */

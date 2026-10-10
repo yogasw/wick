@@ -12,13 +12,16 @@ describe("rosterTime", () => {
   });
 
   test("yesterday is a word, even just after midnight", () => {
-    expect(rosterTime(local(2026, 9, 2, 23, 59), NOW)).toBe("Kemarin");
-    expect(rosterTime(local(2026, 9, 2, 0, 1), new Date(2026, 9, 3, 0, 2).getTime())).toBe("Kemarin");
+    expect(rosterTime(local(2026, 9, 2, 23, 59), NOW)).toBe("Yesterday");
+    expect(rosterTime(local(2026, 9, 2, 0, 1), new Date(2026, 9, 3, 0, 2).getTime())).toBe("Yesterday");
   });
 
   test("earlier this year is day + month, older is a full date", () => {
     expect(rosterTime(local(2026, 8, 28, 10), NOW)).toBe("28 Sep");
     expect(rosterTime(local(2026, 0, 1, 10), NOW)).toBe("1 Jan");
+    // English month names, as all UI text.
+    expect(rosterTime(local(2026, 4, 5, 10), NOW)).toBe("5 May");
+    expect(rosterTime(local(2026, 7, 5, 10), NOW)).toBe("5 Aug");
     expect(rosterTime(local(2025, 11, 31, 10), NOW)).toBe("31/12/2025");
   });
 

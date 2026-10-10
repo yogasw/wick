@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -44,9 +45,15 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 	// user: the thread shows it as "Needs you".
 	hub.CallerBusy = poolSessionBusy
 	// A task's every change reaches the sending chat's open viewers, so
-	// "Needs you" shows at once instead of on the next poll.
+	// "Needs you" shows at once instead of on the next poll. The Team
+	// roster refetches too, but only when the task's state moved
+	// (rosterTaskMoved): the sender and the teammate read working while
+	// the task is open. Off the Hub's path: the audience reads the store.
 	hub.OnTaskChange = func(sessionID string, v teamlink.TaskView) {
 		publishTeamTask(globalBcast, sessionID, v)
+		if rosterTaskMoved(v) {
+			go TeamTaskChanged(sessionID, v.ToID)
+		}
 	}
 	// "Needs you" also turns on when the chat goes idle without its agent
 	// answering: once its turn ended (and the pool settled), the chat's
@@ -85,6 +92,41 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 		hub.FollowUp(context.Background(), sessionID, text)
 	}
 	return hub
+}
+
+// rosterTaskState is the state each task last signalled the roster with
+// (rosterSeen). A task dropped unfinished never settles, so entries older
+// than rosterTaskKeep are swept.
+var rosterTaskState sync.Map
+
+// rosterTaskKeep is how long an open task's entry outlives its last
+// change: the Hub drops an unfinished task after 2×TaskTTL.
+const rosterTaskKeep = 2 * teamlink.TaskTTL
+
+type rosterSeen struct {
+	state string
+	at    time.Time
+}
+
+// rosterTaskMoved reports whether v's state differs from the one last
+// signalled for it, and records it. A "Needs you" refresh repeats the
+// state and moves no roster row. Settling always signals (the teammate's
+// "Replied to …") and forgets the task.
+func rosterTaskMoved(v teamlink.TaskView) bool {
+	now := time.Now()
+	rosterTaskState.Range(func(k, val any) bool {
+		if now.Sub(val.(rosterSeen).at) > rosterTaskKeep {
+			rosterTaskState.Delete(k)
+		}
+		return true
+	})
+	switch v.State {
+	case "working", "input_required":
+		prev, loaded := rosterTaskState.Swap(v.TaskID, rosterSeen{state: v.State, at: now})
+		return !loaded || prev.(rosterSeen).state != v.State
+	}
+	rosterTaskState.Delete(v.TaskID)
+	return true
 }
 
 // TeamAgentOf returns the Team agent a session belongs to, "" for none.
@@ -808,6 +850,9 @@ func (r TeamMentionRouter) SendTeam(ctx context.Context, sessionID, handle, body
 
 // sessionUserOf is the wick user of sessionID, "" when unknown.
 func sessionUserOf(sessionID string) string {
+	if globalMgr == nil {
+		return ""
+	}
 	if sess, ok := globalMgr.Registry().Session(sessionID); ok {
 		return sess.Meta.UserID
 	}

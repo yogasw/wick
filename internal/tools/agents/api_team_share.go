@@ -375,13 +375,18 @@ func fillChatState(it *TeamAgentItem, userID, agentID string, lastRead *time.Tim
 	it.MainSessionID, it.LastActive, it.Unread, it.UnreadCount = "", nil, false, 0
 	it.Status, it.CurrentAction = string(session.StatusIdle), ""
 	it.AttentionPreview, it.NeedsAttention, it.LastPreview, it.LastSilent = "", false, "", false
-	it.SubagentsWorking = nil
+	it.SubagentsWorking, it.TeamWaiting, it.ReplyingTo, it.TeamAsks = nil, nil, "", nil
 	s, ok := mainSessionOf(userID, agentID)
 	if !ok {
 		return
 	}
 	it.MainSessionID = s.ID
 	it.SubagentsWorking = live.subagentsOf(s.ID)
+	it.TeamWaiting = live.teamWaitingOf(s.ID)
+	it.ReplyingTo = live.replyingTo[viewKey(agentID, userID)]
+	if ask, ok := live.teamAsks[viewKey(agentID, userID)]; ok {
+		it.TeamAsks = &ask
+	}
 	it.LastActive = timePtr(s.Meta.LastActive)
 	// Meta.Status stays "running" for as long as the process is warm,
 	// turn or no turn; the pool lifecycle is what says a turn is on.
@@ -400,9 +405,28 @@ func fillChatState(it *TeamAgentItem, userID, agentID string, lastRead *time.Tim
 	if it.AttentionPreview = live.attention(s.ID); it.AttentionPreview != "" {
 		it.NeedsAttention = true
 		it.LastPreview = it.AttentionPreview
+	} else if it.TeamAsks != nil {
+		// A teammate's question back to its sender waits on someone too.
+		it.AttentionPreview = teamAskPreview(*it.TeamAsks)
+		it.NeedsAttention = true
+		it.LastPreview = it.AttentionPreview
 	} else {
 		it.LastPreview, it.LastSilent = lastPreview(s.ID)
+		// Its newest Team task, answered or declined since the main chat
+		// last moved, reads as what it last did.
+		if t, ok := live.teamSettled[viewKey(agentID, userID)]; ok && it.ReplyingTo == "" && t.newerThan(s) {
+			it.LastPreview, it.LastSilent = t.preview(), false
+		}
 	}
+}
+
+// teamAskPreview is the roster line of a Team task's question: "Asks
+// Captain: which deploy?".
+func teamAskPreview(a TeamAsk) string {
+	if a.Question == "" {
+		return "Asks " + a.To + " a question"
+	}
+	return "Asks " + a.To + ": " + a.Question
 }
 
 // sharedRosterItems is the "Shared with me" half of the caller's roster.

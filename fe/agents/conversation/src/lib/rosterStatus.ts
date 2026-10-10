@@ -11,9 +11,11 @@ import { isRemoteAgent, remoteWaitTarget } from "./remoteAgent.js";
 
 /** What a turn is doing: idle (no turn), thinking (a turn with no tool in
     flight), tool (waiting on a tool_use's result), waiting (a remote
-    agent: wick waits for the other side) or subagent (no turn of its own,
-    but background sub-agents it delegated to are still working). */
-export type WorkState = "idle" | "thinking" | "tool" | "waiting" | "subagent";
+    agent: wick waits for the other side), replying (working on a Team
+    task another agent sent it), team (waiting on the teammates its own
+    open Team tasks went to) or subagent (no turn of its own, but
+    background sub-agents it delegated to are still working). */
+export type WorkState = "idle" | "thinking" | "tool" | "waiting" | "replying" | "team" | "subagent";
 
 /** The status dot on the avatar: green = online (idle), a spinner =
     working (its own turn or its sub-agents), amber = needs the owner,
@@ -38,12 +40,34 @@ export type RosterStatus = {
 };
 
 type Row = Pick<AgentItem, "id" | "status" | "disabled"> &
-  Partial<Pick<AgentItem, "unread" | "needs_attention" | "current_action" | "kind" | "handle" | "slack_remote" | "subagents_working">>;
+  Partial<Pick<AgentItem, "unread" | "needs_attention" | "current_action" | "kind" | "handle" | "slack_remote" | "subagents_working" | "team_waiting" | "replying_to" | "team_asks">>;
 
 /** subagentLabel is the working line for background sub-agents: the one
     handle, or how many when there are more. */
 export function subagentLabel(handles: string[]): string {
   return handles.length === 1 ? `🤖 ${handles[0]} bekerja…` : `🤖 ${handles.length} sub-agent bekerja…`;
+}
+
+/** busyWork: the agent reads busy with no turn of its own in its main
+    chat — its background sub-agents, the teammates its Team tasks wait
+    on, or a Team task it works on elsewhere. The avatar animates and the
+    header shows the working line for these as for its own turn. */
+export function busyWork(w: WorkState): boolean {
+  return w === "subagent" || w === "team" || w === "replying";
+}
+
+/** avatarWorking: the avatar acts working (thinking dots, or the orbit on
+    a tool) for its own turn or busyWork — except a Team task it works on
+    elsewhere: the task badge on its corner says that, the avatar stays
+    still, as the mockup. */
+export function avatarWorking(status: string, w: WorkState): boolean {
+  return w !== "replying" && (isWorking(status) || busyWork(w));
+}
+
+/** teamWaitingLabel is the working line while open Team tasks wait on
+    teammates: the one handle, or how many when there are more. */
+export function teamWaitingLabel(handles: string[]): string {
+  return handles.length === 1 ? `waiting on @${handles[0]}…` : `waiting on ${handles.length} teammates…`;
 }
 
 /** rosterStatus reads one row. activeId is the agent whose chat is on
@@ -52,21 +76,31 @@ export function subagentLabel(handles: string[]): string {
 export function rosterStatus(a: Row, opts: { activeId?: string; hatching?: boolean } = {}): RosterStatus {
   const working = isWorking(a.status) && !a.disabled;
   const action = (a.current_action ?? "").trim();
-  // The agent's own turn outranks its sub-agents' work.
+  // A Team task it works on names who it replies to, whichever chat runs
+  // it; then the teammates its own Team tasks wait on (its turn is often
+  // just that wait); then its own turn; then its background sub-agents.
   const subs = a.disabled ? [] : (a.subagents_working ?? []).filter((h) => h.trim() !== "");
-  const work: WorkState = working ? (isRemoteAgent(a) ? "waiting" : action ? "tool" : "thinking") : subs.length > 0 ? "subagent" : "idle";
+  const team = a.disabled ? [] : (a.team_waiting ?? []).filter((h) => h.trim() !== "");
+  const replyingTo = a.disabled ? "" : (a.replying_to ?? "").trim();
+  const own: WorkState = working ? (isRemoteAgent(a) ? "waiting" : action ? "tool" : "thinking") : subs.length > 0 ? "subagent" : "idle";
+  const work: WorkState = replyingTo ? "replying" : team.length > 0 ? "team" : own;
   const typing =
     work === "idle"
       ? null
       : work === "waiting"
         ? `${remoteWaitTarget({ handle: a.handle ?? "", slack_remote: a.slack_remote })}…`
-        : work === "tool"
-          ? toolActivityLabel(action)
-          : work === "subagent"
-            ? subagentLabel(subs)
-            : THINKING_LABEL;
+        : work === "replying"
+          ? `replying to ${replyingTo}…`
+          : work === "team"
+            ? teamWaitingLabel(team)
+            : work === "tool"
+              ? toolActivityLabel(action)
+              : work === "subagent"
+                ? subagentLabel(subs)
+                : THINKING_LABEL;
   const unread = !!a.unread && !a.disabled && a.id !== opts.activeId;
-  const attention = !!a.needs_attention && !a.disabled;
+  // A teammate's question back to its sender waits on someone too.
+  const attention = (!!a.needs_attention || !!a.team_asks) && !a.disabled;
   const presence: Presence = a.disabled ? "disabled" : attention ? "attention" : work !== "idle" ? "working" : "online";
   let label: string;
   if (a.disabled) label = "disabled";

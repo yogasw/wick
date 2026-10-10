@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass } from "../rosterList.js";
+import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass, dozing } from "../rosterList.js";
 import type { AgentItem, GroupItem } from "../api/team.js";
 
 const agent = (id: string, last: string | null, over: Partial<AgentItem> = {}) =>
@@ -80,15 +80,21 @@ test("unreadLabel: count, capped at 9+; empty when the server sends none", () =>
   expect(unreadLabel(12)).toBe("9+");
 });
 
-test("rowTone: unread is bold with an accent time, read stays plain", () => {
+test("rowTone: unread only accents the time (the badge counts), name and preview stay at normal weight", () => {
   const on = rowTone(true);
   const off = rowTone(false);
-  expect(on.name).toContain("font-bold");
-  expect(on.preview).toContain("font-semibold");
+  expect(on.name).toBe(off.name);
+  expect(on.preview).toBe(off.preview);
+  expect(on.time).toContain("font-semibold");
   expect(on.time).toContain("text-green-600");
   expect(off.name).not.toContain("font-bold");
   expect(off.preview).toContain("text-black-800");
   expect(off.time).toBe("text-black-700");
+  // Waiting on someone accents the time too, the rest stays as read.
+  const waits = rowTone(false, true);
+  expect(waits.time).toBe(on.time);
+  expect(waits.name).toBe(off.name);
+  expect(waits.preview).toBe(off.preview);
 });
 
 describe("silentPreview", () => {
@@ -106,5 +112,38 @@ describe("silentPreview", () => {
   });
   test("silent previews render dimmed and italic", () => {
     expect(silentPreviewClass).toContain("italic");
+  });
+});
+
+describe("Team task rows", () => {
+  const ag = (id: string, extra: Record<string, unknown> = {}) =>
+    ({ id, name: id, handle: id, status: "idle", main_session_id: "", last_active: "2026-10-10T10:00:00Z", last_preview: "", ...extra }) as unknown as AgentItem;
+
+  test("an agent waiting on someone sits right under the Captain, ahead of newer rows", () => {
+    const list = rosterEntries(
+      [
+        ag("busy", { last_active: "2026-10-10T10:14:00Z" }),
+        ag("asks", { last_active: "2026-10-10T10:12:00Z", team_asks: { to: "Captain", question: "q" } }),
+        ag("cap", { is_captain: true, last_active: "2026-10-10T10:13:00Z" }),
+        ag("off", { disabled: true, needs_attention: true, last_active: "2026-10-10T10:15:00Z" }),
+      ],
+      [],
+      "",
+    ).map((e) => e.id);
+    expect(list).toEqual(["cap", "asks", "off", "busy"]);
+  });
+
+  test("dozing: idle since before today, never while it works, waits or has unread", () => {
+    const now = new Date(2026, 9, 10, 14, 0).getTime();
+    const yesterday = new Date(2026, 9, 9, 18, 0).toISOString();
+    const today = new Date(2026, 9, 10, 9, 0).toISOString();
+    const idle = { work: "idle", attention: false, unread: false };
+    expect(dozing({ last_active: yesterday }, idle, now)).toBe(true);
+    expect(dozing({ last_active: today }, idle, now)).toBe(false);
+    expect(dozing({ last_active: yesterday }, { ...idle, work: "replying" }, now)).toBe(false);
+    expect(dozing({ last_active: yesterday }, { ...idle, attention: true }, now)).toBe(false);
+    expect(dozing({ last_active: yesterday }, { ...idle, unread: true }, now)).toBe(false);
+    expect(dozing({ last_active: yesterday, disabled: true }, idle, now)).toBe(false);
+    expect(dozing({ last_active: null }, idle, now)).toBe(false);
   });
 });

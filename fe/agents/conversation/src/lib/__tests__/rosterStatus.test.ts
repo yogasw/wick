@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { rosterStatus, withTurn, withActivity } from "../rosterStatus.js";
+import { avatarWorking, busyWork, rosterStatus, withTurn, withActivity, type WorkState } from "../rosterStatus.js";
 import type { SessionActivity } from "../stores/sessionsStream.js";
 
 const row = (p: Record<string, unknown> = {}) => ({ id: "a1", status: "idle", disabled: false, ...p });
@@ -144,9 +144,13 @@ describe("no quick poll", () => {
     const src = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
     const intervals = [...src.matchAll(/setInterval\([\s\S]*?,\s*(\w+)\s*\)/g)].map((m) => m[1]);
     // The roster refreshes on agent_changed over the sessions stream (no 30s
-    // poll since d979f8fc); the only timer left is the 1s wait clock.
-    expect(intervals.filter((ms) => ms !== "1000")).toEqual([]);
+    // poll since d979f8fc); the timers left are clocks that fetch nothing:
+    // the 1s wait clock and the roster's minute clock (stamps, dozing).
+    expect(intervals.filter((ms) => ms !== "1000" && ms !== "60_000")).toEqual([]);
     expect(src).toMatch(/setInterval\(\(\) => \(waitNow = Date\.now\(\)\), 1000\)/);
+    expect(src).toMatch(/setInterval\(\(\) => \(rosterNow = Date\.now\(\)\), 60_000\)/);
+    expect(src).toMatch(/rosterTime\(a\.last_active, rosterNow\)/);
+    expect(src).toMatch(/dozing=\{dozing\(a, st, rosterNow\)\}/);
     expect(src).not.toMatch(/agents\/live|listAgentsLive|createLivePoll/);
     // The stream itself lives in rosterLive.ts since d979f8fc.
     expect(src).toMatch(/liveRoster\(/);
@@ -218,5 +222,80 @@ describe("roster row and header markup", () => {
     const preview = src.slice(src.indexOf("function rowPreview"), src.indexOf("const mutedBell"));
     expect(preview).not.toMatch(/sharedLabel/);
     expect(src).not.toMatch(/<\/span>online\b/);
+  });
+});
+
+describe("Team tasks (team_message / @mention)", () => {
+  it("the sender waits on its teammates: working, one handle or how many", () => {
+    const one = rosterStatus(row({ team_waiting: ["anton"] }));
+    expect(one.work).toBe("team");
+    expect(one.presence).toBe("working");
+    expect(one.typing).toBe("waiting on @anton…");
+    expect(rosterStatus(row({ team_waiting: ["a", "b", "c"] })).typing).toBe("waiting on 3 teammates…");
+  });
+
+  it("outranks its own turn and its background sub-agents, which keep their own label", () => {
+    expect(rosterStatus(row({ status: "running", current_action: "team_message", team_waiting: ["a"] })).work).toBe("team");
+    expect(rosterStatus(row({ team_waiting: ["a"], subagents_working: ["x"] })).typing).toBe("waiting on @a…");
+    expect(rosterStatus(row({ subagents_working: ["x"] })).typing).toBe("🤖 x bekerja…");
+  });
+
+  it("the teammate working on it replies to its sender, ahead of everything else it does", () => {
+    const s = rosterStatus(row({ replying_to: "Captain" }));
+    expect(s.work).toBe("replying");
+    expect(s.presence).toBe("working");
+    expect(s.typing).toBe("replying to Captain…");
+    expect(s.label).toBe("replying to Captain…");
+    expect(rosterStatus(row({ status: "running", current_action: "Bash", replying_to: "Captain", team_waiting: ["a"] })).work).toBe("replying");
+  });
+
+  it("a teammate asking its sender needs attention", () => {
+    const s = rosterStatus(row({ team_asks: { to: "Captain", question: "which deploy?" } }));
+    expect(s.attention).toBe(true);
+    expect(s.presence).toBe("attention");
+  });
+
+  it("disabled shows none of it", () => {
+    const off = rosterStatus(row({ disabled: true, team_waiting: ["a"], replying_to: "Captain", team_asks: { to: "Captain", question: "q" } }));
+    expect(off.work).toBe("idle");
+    expect(off.attention).toBe(false);
+    expect(off.typing).toBeNull();
+  });
+});
+
+describe("Team task work in the avatar and the header", () => {
+  it("busyWork covers sub-agents, Team waits and replies, not the agent's own turn", () => {
+    expect(["subagent", "team", "replying"].every((w) => busyWork(w as WorkState))).toBe(true);
+    expect(["idle", "thinking", "tool", "waiting"].some((w) => busyWork(w as WorkState))).toBe(false);
+  });
+
+  it("avatarWorking: its own turn and busyWork animate the avatar, a Team task it replies to does not", () => {
+    expect(avatarWorking("running", "thinking")).toBe(true);
+    expect(avatarWorking("idle", "team")).toBe(true);
+    expect(avatarWorking("idle", "subagent")).toBe(true);
+    expect(avatarWorking("idle", "replying")).toBe(false);
+    expect(avatarWorking("running", "replying")).toBe(false);
+    expect(avatarWorking("idle", "idle")).toBe(false);
+  });
+
+  it("the row avatar, the header avatar and header line 2 all read busyWork", () => {
+    const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
+    const avatar = readFileSync(resolve(__dirname, "../components/team/RosterAvatar.svelte"), "utf8");
+    expect(avatar).toMatch(/working=\{!ring && avatarWorking\(a\.status, st\.work\)\} tool=\{st\.work === "tool" \|\| st\.work === "subagent"\}/);
+    expect(app).toMatch(/working=\{!!headerStatus && avatarWorking\(selected\.status, headerStatus\.work\)\} tool=\{headerStatus\?\.work === "tool" \|\| headerStatus\?\.work === "subagent"\}/);
+    expect(app).toMatch(/\{:else if isWorking\(selected\.status\) \|\| \(headerStatus && busyWork\(headerStatus\.work\)\)\}/);
+  });
+
+  it("the row's working line ends in the bouncing dots, and its avatar takes the Team-task mark", () => {
+    const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
+    expect(app).toMatch(/data-testid="roster-working" data-work=\{st\.work\}>\{st\.typing\.replace\(\/…\$\/, ""\)\}<span class="dots"/);
+    expect(app).toMatch(/<PresenceDot [^>]*mark=\{teamMark\(a, st\)\} \/>/);
+    expect(app).toMatch(/if \(a\.team_asks && st\.attention\) return "asks";/);
+    expect(app).toMatch(/return st\.work === "replying" \? "task" : null;/);
+  });
+
+  it("a teammate asking its sender gets the amber count badge on its row", () => {
+    const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
+    expect(app).toMatch(/\{#if a\.team_asks && !a\.disabled\}<span class="roster-badge[^"]*bg-amber-500[^"]*"[^>]*data-testid="roster-asks">1<\/span>\{\/if\}/);
   });
 });

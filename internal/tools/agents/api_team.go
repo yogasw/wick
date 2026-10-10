@@ -140,6 +140,16 @@ type TeamAgentItem struct {
 	// card can show work carrying on after the agent's own turn ended.
 	// Status is left alone: it stays the agent's own turn state.
 	SubagentsWorking []string `json:"subagents_working,omitempty"`
+	// TeamWaiting holds the handles of the teammates the main chat's open
+	// Team tasks (team_message / @mention) wait on: "waiting on N
+	// teammates". Status is left alone, as with SubagentsWorking.
+	TeamWaiting []string `json:"team_waiting,omitempty"`
+	// ReplyingTo names who the agent works on a Team task for ("replying
+	// to Captain"), in any of its chats; "" when it works on none.
+	ReplyingTo string `json:"replying_to,omitempty"`
+	// TeamAsks is the question an open Team task of the agent waits on its
+	// sender for ("Asks Captain: …"); nil when there is none.
+	TeamAsks *TeamAsk `json:"team_asks,omitempty"`
 	// SharedWith counts everything else on the same project — other
 	// agents of any owner and non-agent web/channel conversations — so
 	// the editor can warn that a persona edit changes them too.
@@ -558,6 +568,101 @@ type teamLive struct {
 	lifecycles map[string]string   // session id → pool lifecycle
 	approvals  map[string]string   // session id → tool of a pending approval
 	subagents  map[string][]string // parent session id → live background sub-agent handles
+	// Open Team tasks (team_message / @mention): the teammates each
+	// session waits on, and per teammate and viewer (viewKey) who it is
+	// replying to or what it asks its sender (addTeamTasks). Keyed by the
+	// person whose chat sent the task, so a shared agent's recipient
+	// never reads its owner's tasks, and "you" is always the viewer.
+	teamWaiting map[string][]string
+	replyingTo  map[string]string
+	teamAsks    map[string]TeamAsk
+	// teamSettled is each teammate's newest answered or declined Team
+	// task per viewer, sender already named ("Replied to Captain: …").
+	teamSettled map[string]teamSettled
+}
+
+// viewKey keys the teammate-side Team task state: the teammate and the
+// person whose chat sent the task.
+func viewKey(agentID, userID string) string { return agentID + "\x00" + userID }
+
+// teamTaskNames resolves what the roster says about a Team task's
+// sender: the sending agent's name (read once per agent) and the person
+// whose chat sent it (the viewer).
+type teamTaskNames struct {
+	name   func(agentID string) string
+	viewer func(sessionID string) string
+	names  map[string]string
+}
+
+// sender names who a task came from to its viewer: "you" for their own
+// @mention, else the sending agent ("a teammate" when it cannot be read).
+func (n *teamTaskNames) sender(origin, fromAgentID string) string {
+	if origin == teamlink.OriginUser {
+		return "you"
+	}
+	if n.names == nil {
+		n.names = map[string]string{}
+	}
+	name, ok := n.names[fromAgentID]
+	if !ok {
+		name = n.name(fromAgentID)
+		n.names[fromAgentID] = name
+	}
+	if name == "" {
+		return "a teammate"
+	}
+	return name
+}
+
+// teamSettled is a finished Team task as the teammate's row tells it.
+type teamSettled struct {
+	to       string
+	declined bool
+	summary  string
+	chat     string
+	at       time.Time
+}
+
+// settledGrace is how long after a task settled its own last write to
+// the teammate's main chat (the reply) may land without counting as the
+// chat moving on.
+const settledGrace = 2 * time.Second
+
+// newerThan reports whether t is still what main last did: settled after
+// the main chat's last activity — within settledGrace when the task ran
+// in that chat, whose reply is that activity.
+func (t teamSettled) newerThan(main session.Session) bool {
+	if t.chat == main.ID {
+		return !main.Meta.LastActive.After(t.at.Add(settledGrace))
+	}
+	return t.at.After(main.Meta.LastActive)
+}
+
+// preview is the row line: "Replied to Captain: …" or "Declined
+// Captain's task — …".
+func (t teamSettled) preview() string {
+	if t.declined {
+		owner := t.to + "'s"
+		if t.to == "you" {
+			owner = "your"
+		}
+		if t.summary == "" {
+			return "Declined " + owner + " task"
+		}
+		return "Declined " + owner + " task — " + t.summary
+	}
+	// The person's own task: they have the reply in their chat already.
+	if t.summary == "" || t.to == "you" {
+		return "Replied to " + t.to
+	}
+	return "Replied to " + t.to + ": " + t.summary
+}
+
+// TeamAsk is the question a teammate's open Team task puts to the agent
+// (or person) that sent it.
+type TeamAsk struct {
+	To       string `json:"to"`
+	Question string `json:"question"`
 }
 
 func teamLiveNow() teamLive {
@@ -570,7 +675,82 @@ func teamLiveNow() teamLive {
 			l.subagents = subs
 		}
 	}
+	// Team tasks (team_message / @mention) still open: the sender's row
+	// reads waiting on its teammates, as the Sub-agents tray does, and the
+	// teammate's reads replying to (or asking) its sender.
+	if globalTeamHub != nil {
+		if h := globalTeamHub(); h != nil {
+			names := &teamTaskNames{name: teamAgentName, viewer: sessionUserOf}
+			l.addTeamTasks(h.LiveTasks(), names)
+			l.addSettled(h.LastSettled(), names)
+		}
+	}
 	return l
+}
+
+// teamAgentName is the roster name of agentID, "" when it cannot be read.
+func teamAgentName(agentID string) string {
+	if globalTeam == nil || agentID == "" {
+		return ""
+	}
+	p, err := globalTeam.Get(context.Background(), agentID)
+	if err != nil {
+		return ""
+	}
+	return globalTeam.MemberOf(p).Name
+}
+
+// addTeamTasks folds the open Team tasks into l: each teammate's handle
+// joins its sender session's waiting list (once), and the teammate is
+// noted, for the person whose chat sent the task, replying to the sender
+// — or, while it waits on an answer, asking it. A task whose sending
+// chat has no known person is told to nobody.
+func (l *teamLive) addTeamTasks(tasks []teamlink.LiveTask, n *teamTaskNames) {
+	l.teamWaiting, l.replyingTo, l.teamAsks = map[string][]string{}, map[string]string{}, map[string]TeamAsk{}
+	for _, t := range tasks {
+		if t.ToHandle != "" && !slices.Contains(l.teamWaiting[t.FromSession], t.ToHandle) {
+			l.teamWaiting[t.FromSession] = append(l.teamWaiting[t.FromSession], t.ToHandle)
+		}
+		viewer := n.viewer(t.FromSession)
+		if t.ToID == "" || viewer == "" {
+			continue
+		}
+		key := viewKey(t.ToID, viewer)
+		if t.Working {
+			if _, seen := l.replyingTo[key]; !seen {
+				l.replyingTo[key] = n.sender(t.Origin, t.FromAgentID)
+			}
+		} else if _, seen := l.teamAsks[key]; !seen {
+			l.teamAsks[key] = TeamAsk{To: n.sender(t.Origin, t.FromAgentID), Question: t.Question}
+		}
+	}
+}
+
+// addSettled notes each teammate's newest finished Team task per person
+// whose chat sent it (tasks come newest first), sender named as
+// addTeamTasks names it.
+func (l *teamLive) addSettled(tasks []teamlink.SettledTask, n *teamTaskNames) {
+	l.teamSettled = map[string]teamSettled{}
+	for _, t := range tasks {
+		viewer := n.viewer(t.FromSession)
+		if t.ToID == "" || viewer == "" {
+			continue
+		}
+		key := viewKey(t.ToID, viewer)
+		if old, seen := l.teamSettled[key]; seen && !t.At.After(old.at) {
+			continue
+		}
+		l.teamSettled[key] = teamSettled{to: n.sender(t.Origin, t.FromAgentID), declined: t.Declined, summary: t.Summary, chat: t.Chat, at: t.At}
+	}
+}
+
+// teamWaitingOf returns the handles of the teammates sessionID's open
+// Team tasks wait on, or nil when there are none.
+func (l teamLive) teamWaitingOf(sessionID string) []string {
+	if len(l.teamWaiting[sessionID]) == 0 {
+		return nil
+	}
+	return slices.Clone(l.teamWaiting[sessionID])
 }
 
 // teamTurnsNow is teamLiveNow without the sub-agent query: the in-memory

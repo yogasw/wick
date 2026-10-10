@@ -1652,6 +1652,118 @@ func (h *Hub) SentFrom(sessionID string) []TaskView {
 	return out
 }
 
+// LiveTask is one task still open, as the roster reads it.
+type LiveTask struct {
+	// FromSession is the conversation that sent the task, FromAgentID
+	// its agent; Origin is OriginUser when the person sent it.
+	FromSession string
+	FromAgentID string
+	Origin      string
+	ToID        string
+	ToHandle    string
+	// Chat is the teammate's chat the task runs in ("" = main or not
+	// known yet).
+	Chat string
+	// Working: the teammate's turn is on it (not a question back to the
+	// sender).
+	Working bool
+	// Question is the first line of what the teammate asks the sender
+	// while not Working.
+	Question string
+}
+
+// LiveTasks lists the tasks in memory still open — working, or asking
+// the sender a question (input_required), the states the Sub-agents
+// panel counts as active — across every session, for the roster in one
+// pass rather than one SentFrom per agent. Memory is enough: Persist
+// adopts the kept tasks from disk at start.
+func (h *Hub) LiveTasks() []LiveTask {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pruneLocked()
+	var out []LiveTask
+	for _, ref := range h.tasks {
+		if ref.callerSession == "" || ref.started.IsZero() {
+			continue
+		}
+		state := h.viewState(ref)
+		if state != "working" && state != "input_required" {
+			continue
+		}
+		t := LiveTask{
+			FromSession: ref.callerSession, FromAgentID: ref.callerAgentID, Origin: ref.origin,
+			ToID: ref.to.ID, ToHandle: ref.to.Handle, Chat: ref.chat, Working: state == "working",
+		}
+		if !t.Working {
+			t.Question = firstLine(ref.reply)
+		}
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].FromSession != out[j].FromSession {
+			return out[i].FromSession < out[j].FromSession
+		}
+		return out[i].ToHandle < out[j].ToHandle
+	})
+	return out
+}
+
+// SettledTask is a teammate's most recent finished Team task, as the
+// roster reads it: replied (completed) or declined (failed / rejected).
+type SettledTask struct {
+	// FromSession sent the task, FromAgentID is its agent; Origin as in
+	// LiveTask. ToID is the teammate.
+	FromSession string
+	FromAgentID string
+	Origin      string
+	ToID        string
+	// Chat is the teammate's chat the task ran in ("" = main or not known).
+	Chat string
+	// Declined: the task failed or was rejected; else it was answered.
+	Declined bool
+	// Summary is the first line of the reply or the reason.
+	Summary string
+	At      time.Time
+}
+
+// LastSettled returns, per teammate and sending session, its newest Team
+// task that it answered or declined within TaskTTL, so the roster's
+// "Replied to …" fades. A canceled task is the sender's doing and one a
+// restart cut (interrupted) the teammate never declined: both are left
+// out. Per session, so the roster can keep each person to their own.
+func (h *Hub) LastSettled() []SettledTask {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pruneLocked()
+	out := map[string]SettledTask{}
+	now := h.now()
+	for _, ref := range h.tasks {
+		// pruneLocked is throttled and a read can adopt an old task from
+		// disk: the TTL is checked here too.
+		if !ref.finished || ref.interrupted || ref.to.ID == "" || ref.started.IsZero() || now.Sub(ref.touched) > TaskTTL {
+			continue
+		}
+		state := stateName(ref.state)
+		if state != "completed" && state != "failed" && state != "rejected" {
+			continue
+		}
+		key := ref.to.ID + "\x00" + ref.callerSession
+		if old, ok := out[key]; ok && !ref.touched.After(old.At) {
+			continue
+		}
+		out[key] = SettledTask{
+			FromSession: ref.callerSession, FromAgentID: ref.callerAgentID, Origin: ref.origin, ToID: ref.to.ID, Chat: ref.chat,
+			Declined: state != "completed", Summary: firstLine(ref.reply), At: ref.touched,
+		}
+	}
+	list := make([]SettledTask, 0, len(out))
+	for _, t := range out {
+		list = append(list, t)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].At.After(list[j].At) })
+	return list
+}
+
 // viewLocked is task id as the UI lists it, NeedsYou left to the caller
 // (it reads the pool, which h.mu must not wrap).
 func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {

@@ -32,7 +32,26 @@ export function rosterEntries(agents: AgentItem[], groups: GroupItem[], query: s
   const at = (e: RosterEntry) => ts(e.kind === "agent" ? e.agent.last_active : e.group.last_active);
   const name = (e: RosterEntry) => (e.kind === "agent" ? e.agent.name : e.group.name);
   const captain = (e: RosterEntry) => (e.kind === "agent" && e.agent.is_captain ? 1 : 0);
-  return list.sort((x, y) => captain(y) - captain(x) || at(y) - at(x) || name(x).localeCompare(name(y)));
+  // An agent waiting on someone (a question, an approval, a teammate's
+  // question back to its sender) sits right under the Captain.
+  const waits = (e: RosterEntry) => (e.kind === "agent" && !e.agent.disabled && (e.agent.needs_attention || e.agent.team_asks) ? 1 : 0);
+  return list.sort((x, y) => captain(y) - captain(x) || waits(y) - waits(x) || at(y) - at(x) || name(x).localeCompare(name(y)));
+}
+
+/** dozing: an idle row last active before today reads asleep — dimmed,
+    eyes closed — as the mockup's quiet rows do. Anything it is doing, waits
+    on or has unread keeps it awake. */
+export function dozing(
+  a: Pick<AgentItem, "last_active" | "disabled">,
+  st: { work: string; attention: boolean; unread: boolean },
+  nowMs: number = Date.now(),
+): boolean {
+  if (a.disabled || st.work !== "idle" || st.attention || st.unread) return false;
+  const at = ts(a.last_active);
+  if (!at) return false;
+  const today = new Date(nowMs);
+  today.setHours(0, 0, 0, 0);
+  return at < today.getTime();
 }
 
 export const PIN_COUNT = 3;
@@ -66,14 +85,14 @@ export function unreadLabel(count?: number): string {
   return count > 9 ? "9+" : String(Math.floor(count));
 }
 
-/** rowTone is how a roster row reads (chat-app pattern): an unread row
-    has its name and preview in bold and its time in the accent colour;
-    a read one stays plain and grey. */
-export function rowTone(unread: boolean): { name: string; preview: string; time: string } {
-  return unread
+/** rowTone is how a roster row reads: name and preview keep their weight;
+    an unread row, or one waiting on someone (waits), has its time in the
+    accent colour (the badge counts); otherwise the time stays grey. */
+export function rowTone(unread: boolean, waits = false): { name: string; preview: string; time: string } {
+  return unread || waits
     ? {
-        name: "font-bold text-black-900 dark:text-white-100",
-        preview: "font-semibold text-black-900 dark:text-white-100",
+        name: "font-medium text-black-900 dark:text-white-100",
+        preview: "text-black-800 dark:text-black-600",
         time: "font-semibold text-green-600 dark:text-green-400",
       }
     : {

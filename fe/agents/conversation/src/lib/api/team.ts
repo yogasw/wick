@@ -103,6 +103,15 @@ export type AgentItem = {
   /** Handles of the main chat's background sub-agents still queued or
       running. Independent of status: the agent's own turn may be over. */
   subagents_working?: string[];
+  /** Handles of the teammates the main chat's open Team tasks
+      (team_message / @mention) wait on. Independent of status. */
+  team_waiting?: string[];
+  /** Who the agent works on a Team task for ("Captain", "you"), in any of
+      its chats; absent when none. */
+  replying_to?: string;
+  /** The question an open Team task of the agent puts to its sender; the
+      server also sends it as attention_preview ("Asks Captain: …"). */
+  team_asks?: { to: string; question: string };
   /** Everything else on the same project: other agents (any owner) and
       web/channel conversations. */
   shared_with?: number;

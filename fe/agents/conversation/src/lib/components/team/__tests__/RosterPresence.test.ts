@@ -7,6 +7,23 @@ import AgentShareLine from "../AgentShareLine.svelte";
 /* P44 pieces of the roster row and chat header: the status dot (spoken,
    never a hover tip), the remote source icon and the header's sharing part. */
 describe("PresenceDot", () => {
+  test("a Team task mark replaces the dot: the amber ? and the green task badge", () => {
+    const asks = render(PresenceDot, { presence: "attention", label: "needs your attention", mark: "asks" });
+    const q = asks.getByTestId("presence-dot");
+    expect(q.dataset.mark).toBe("asks");
+    expect(q.textContent).toBe("?");
+    expect(q.className).toContain("bg-amber-500");
+    expect(q.className).toContain("text-[#1b1300]");
+    expect(asks.getByTestId("presence-label").textContent).toBe("needs your attention");
+    asks.unmount();
+    const task = render(PresenceDot, { presence: "working", label: "replying to Captain…", mark: "task" });
+    const t = task.getByTestId("presence-dot");
+    expect(t.dataset.mark).toBe("task");
+    expect(t.className).toContain("bg-green-500");
+    expect(t.querySelector("svg")).not.toBeNull();
+    task.unmount();
+  });
+
   test("draws the presence and reads the label out, with no title tooltip", () => {
     const { container } = render(PresenceDot, { presence: "attention", label: "needs your attention" });
     const dot = screen.getByTestId("presence-dot");
@@ -19,16 +36,16 @@ describe("PresenceDot", () => {
     expect(container.querySelector("[title]")).toBeNull();
   });
 
-  test("working spins, disabled is grey, online is green", () => {
-    const cls = (presence: "online" | "working" | "disabled") => {
-      const r = render(PresenceDot, { presence, label: presence });
-      const c = r.container.querySelector<HTMLElement>("[data-testid=presence-dot]")!.className;
-      r.unmount();
-      return c;
-    };
-    expect(cls("working")).toContain("presence-spin");
-    expect(cls("disabled")).toContain("bg-black-600");
-    expect(cls("online")).toContain("bg-green-500");
+  test("disabled is grey; online and working draw no dot but still read the label", () => {
+    const r = render(PresenceDot, { presence: "disabled", label: "disabled" });
+    expect(r.getByTestId("presence-dot").className).toContain("bg-black-600");
+    r.unmount();
+    for (const presence of ["online", "working"] as const) {
+      const p = render(PresenceDot, { presence, label: presence });
+      expect(p.queryByTestId("presence-dot")).toBeNull();
+      expect(p.getByTestId("presence-label").textContent).toBe(presence);
+      p.unmount();
+    }
   });
 });
 
