@@ -22,7 +22,7 @@ describe("Dots", () => {
 
 describe("TeamIcon", () => {
   test("every mockup icon is there, drawn on the 16px grid", () => {
-    expect(TEAM_ICON_NAMES).toEqual(["tasks", "spin", "check", "chevron", "reply", "open", "send", "msg", "jump", "retry", "recover"]);
+    expect(TEAM_ICON_NAMES).toEqual(["tasks", "spin", "check", "chevron", "reply", "open", "send", "msg", "jump", "retry", "recover", "user"]);
     for (const name of TEAM_ICON_NAMES) expect(TEAM_ICONS[name]).toMatch(/stroke="currentColor"/);
   });
 
