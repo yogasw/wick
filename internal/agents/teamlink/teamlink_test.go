@@ -436,11 +436,11 @@ func TestRemoteNobodyExplains(t *testing.T) {
 	}
 }
 
-// A wait past MaxWait is clamped, so the call hands back state=working
-// before the connector op timeout aborts it, and the reply still lands.
-func TestSendWaitClampedBelowOpTimeout(t *testing.T) {
-	if MaxWait >= 3*time.Minute {
-		t.Fatalf("MaxWait %s must stay under the 3m connector op timeout", MaxWait)
+// A wait past QuickWait is clamped, so the call hands back state=working
+// quickly instead of holding the turn, and the reply still lands.
+func TestSendWaitClampedToQuickWait(t *testing.T) {
+	if QuickWait > 15*time.Second {
+		t.Fatalf("QuickWait %s must stay short", QuickWait)
 	}
 	h, turns, note := newTestHub(func(Peer, string) string { return "late answer" })
 	h.maxWait = 20 * time.Millisecond

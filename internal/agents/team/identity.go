@@ -35,6 +35,10 @@ const maxTeamListed = 12
 const CaptainRoleAddon = "Help the owner run their Team — who handles what — " +
 	"and handle yourself whatever doesn't fit another agent."
 
+// replyHint follows the team_message pointer: a reply that is not quick
+// comes back on its own, so the agent ends its turn instead of waiting.
+const replyHint = "A reply not ready within seconds returns state=working: end your turn, it is delivered to you."
+
 // Member is one Team agent as the identity block names it. Name and
 // Description come from the agent's project, Handle from its row; Tagline
 // is the short one-liner when the agent has one.
@@ -70,12 +74,12 @@ func WhoYouAre(self Member, team []Member) string {
 	if self.IsCaptain {
 		if line := teamLine(team); line != "" {
 			b.WriteString("Your Team: " + line + "\n")
-			b.WriteString("Reach a member with team_message (to: \"@handle\"), e.g. team_message to \"@" + team[0].Handle + "\".\n")
+			b.WriteString("Reach a member with team_message (to: \"@handle\"), e.g. team_message to \"@" + team[0].Handle + "\". " + replyHint + "\n")
 		}
 	} else {
 		for _, m := range team {
 			if m.IsCaptain {
-				fmt.Fprintf(&b, "Your Captain is %s (@%s); the Captain coordinates the Team. Reach it with team_message (to: \"@%s\").\n", m.Name, m.Handle, m.Handle)
+				fmt.Fprintf(&b, "Your Captain is %s (@%s); the Captain coordinates the Team. Reach it with team_message (to: \"@%s\"). %s\n", m.Name, m.Handle, m.Handle, replyHint)
 				break
 			}
 		}

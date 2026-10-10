@@ -41,12 +41,25 @@ const (
 	MaxContextTurns = 4
 	// MaxDepth caps a chain of agents each waiting on the next.
 	MaxDepth = 3
-	// DefaultWait is how long a synchronous call waits for the reply.
-	DefaultWait = 90 * time.Second
-	// MaxWait clamps a caller-supplied wait. It stays well under the
-	// connector op timeout (3m): a wait past that aborts the whole call
-	// instead of handing back state=working.
-	MaxWait = 150 * time.Second
+	// QuickWait is how long a message waits for the reply before it hands
+	// back state=working (A2A: SendMessage returns at once, the client
+	// decides how long to look). It catches the quick answer of a local
+	// teammate, and it is short because a provider sends the tool calls of
+	// one turn one after another: five messages waiting 15s each still
+	// return in about a minute, where the old 90-150s wait held the turn
+	// for many minutes. Any reply that lands later is delivered into the
+	// caller's conversation.
+	QuickWait = 15 * time.Second
+	// fanOutWindow: a message sent while another one from the same
+	// conversation is still working, and was sent within this window,
+	// does not wait at all — the asker is fanning out, not waiting on one.
+	fanOutWindow = 5 * time.Minute
+	// cancelWait bounds how long cancel_task waits for the task store to
+	// take the cancellation.
+	cancelWait = 5 * time.Second
+	// answerRetry bounds how long an answer to an input_required task
+	// waits for the task's last turn to close.
+	answerRetry = 5 * time.Second
 
 	// TaskTTL is how long a settled task and an idle context are kept.
 	TaskTTL = time.Hour
@@ -102,11 +115,23 @@ var (
 	// ErrNewChatUnsupported refuses new_chat where Turns cannot open one.
 	ErrNewChatUnsupported = errors.New("new_chat is not available here — send without it to reach the main chat")
 	// ErrUnknownTask means the task id is not known to this caller: never
-	// issued to it, or lost when wick restarted (tasks live in memory).
-	ErrUnknownTask = errors.New("unknown task id — never issued to you, or lost when wick restarted (tasks are kept in memory only)")
+	// issued to it, or older than TaskKeep.
+	ErrUnknownTask = errors.New("unknown task id — never issued to you, or older than 7 days")
 	// ErrTaskExpired is an ErrUnknownTask for a task this caller did send
-	// but whose record was cleaned up (TaskTTL after it settled).
-	ErrTaskExpired = fmt.Errorf("%w: this task expired — its result is kept 1 hour after it settles; its reply was already delivered into the conversation that sent it", ErrUnknownTask)
+	// but whose record was cleaned up.
+	ErrTaskExpired = fmt.Errorf("%w: this task expired — its reply was already delivered into the conversation that sent it", ErrUnknownTask)
+	// ErrTaskContext refuses a task_id sent with a context_id it does not
+	// belong to (A2A §3.4.3).
+	ErrTaskContext = errors.New("task_id does not belong to that context_id — pass the context_id the task returned, or omit it")
+	// ErrTaskNotWaiting refuses an answer to a task that asked nothing.
+	ErrTaskNotWaiting = errors.New("that task is not waiting for input — send without task_id to start a new one")
+	// ErrTaskOtherAgent refuses a task_id sent to another teammate.
+	ErrTaskOtherAgent = errors.New("task_id belongs to another teammate — omit to, or use the teammate the task went to")
+	// ErrTaskSettled refuses cancelling a task that already ended.
+	ErrTaskSettled = errors.New("that task already ended — nothing to cancel")
+	// ErrAlreadyAnswered refuses a second answer to a teammate's question:
+	// the first one, from the user or the sender, won.
+	ErrAlreadyAnswered = errors.New("that question was already answered — the first answer won")
 	// ErrMentionsOff refuses a turn the target's mention setting does not
 	// take from the caller (Peer.AcceptsFrom).
 	ErrMentionsOff = errors.New("that agent does not take turns from you — tell the user instead")
@@ -262,6 +287,22 @@ func (h *Hub) refused(ctx context.Context, r Refusal) {
 	}
 }
 
+// TurnEnd is what a Turns implementation returns, as the error, for a turn
+// that ended in an A2A state other than completed or failed — a remote
+// agent that asked a question (input_required) or refused (rejected).
+// Text is the question or the reason.
+type TurnEnd struct {
+	State a2a.TaskState
+	Text  string
+}
+
+func (e *TurnEnd) Error() string { return stateName(e.State) + ": " + e.Text }
+
+// InputRequiredToken opens a teammate's reply that asks the sender a
+// question before it can go on: the task ends as input_required and the
+// sender answers with the same task_id.
+const InputRequiredToken = "[input-required]"
+
 // Handoff is one mention_handoff audit event.
 type Handoff struct {
 	From, To, ContextID, TaskID string
@@ -283,8 +324,13 @@ type Hub struct {
 
 	// poll is how often a waiting call re-reads its task. Tests shorten it.
 	poll time.Duration
-	// maxWait clamps a caller's wait (MaxWait). Tests shorten it.
+	// maxWait is the default and the cap of a caller's wait (QuickWait).
+	// Tests shorten it.
 	maxWait time.Duration
+	// dir keeps the tasks on disk (Persist); "" = memory only.
+	dir string
+	// saveMu orders the writes of task files (persist).
+	saveMu sync.Mutex
 	// now is the clock; tests move it.
 	now func() time.Time
 
@@ -312,14 +358,32 @@ type Hub struct {
 	// linkMu serialises pairing a caller's conversation with a target's
 	// chat (chatFor), so two messages sent at once open one chat, not two.
 	linkMu sync.Mutex
+	// PredecessorBusy reports whether a previous wick process, still
+	// draining, may be running a turn of chat ("" = the teammate's chat
+	// is not known: any turn). A task it may still finish is not settled
+	// as interrupted yet. nil = there is never a predecessor.
+	PredecessorBusy func(chat string) bool
+	// orphanPoll is how often the tasks a restart left working are
+	// checked (settleOrphans). Tests shorten it.
+	orphanPoll time.Duration
 }
 
 // taskRef is what the Hub remembers about a task it sent.
 type taskRef struct {
 	agentID       string
 	callerAgentID string
+	// callerOwner owns the exchange, kept so a task read back from disk
+	// can still be continued.
+	callerOwner   string
 	callerSession string
 	to            Peer
+	// canceled: cancel_task ended the task; whatever the turn still
+	// reports afterwards is ignored.
+	canceled bool
+	// answered is the target's session that answered (FollowUp).
+	answered string
+	// sent holds the dedupe keys (textKey) of what the caller already got.
+	sent map[string]bool
 	// waiterGone: the sending call returned before the task finished, so
 	// the result must be delivered back. finished/delivered close the race
 	// between that return and the executor finishing.
@@ -335,6 +399,25 @@ type taskRef struct {
 	// chat is the target's session the turn runs in, once the executor
 	// picked it ("" = main or not yet known).
 	chat string
+	// claimed: an answer to the task's question is on its way (answering
+	// took it under h.mu); any other answer is refused until the turn it
+	// starts ends, or the send fails and gives the question back.
+	claimed bool
+	// fromDisk: the task was read back from disk and nothing in this
+	// process has run it since. Unfinished, it was working in a process
+	// that is gone (or still draining): see settleOrphans.
+	fromDisk bool
+	// interrupted: the task was settled failed because the process
+	// running it went away (settleOrphans).
+	interrupted bool
+}
+
+// answerClaim is what answering changed on a task to claim it, so a send
+// that fails gives back exactly that.
+type answerClaim struct {
+	waiterGone, delivered bool
+	reply                 string
+	state                 a2a.TaskState
 }
 
 // contextState is one exchange's turn count.
@@ -403,19 +486,24 @@ func chatKey(p Peer) string { return p.ID + "\x00" + p.ChatUser }
 func NewHub(dir Directory, turns Turns, notify Notifier) *Hub {
 	return &Hub{
 		Dir: dir, Turns: turns, Notify: notify,
-		poll:     250 * time.Millisecond,
-		maxWait:  MaxWait,
-		now:      time.Now,
-		handlers: map[string]a2asrv.RequestHandler{},
-		stores:   map[string]*genStore{},
-		tasks:    map[a2a.TaskID]*taskRef{},
-		gone:     map[a2a.TaskID]goneTask{},
-		contexts: map[string]*contextState{},
-		inflight: map[string]map[a2a.TaskID]inbound{},
-		last:     map[string]inbound{},
-		answered: map[string]a2a.TaskID{},
+		poll:       250 * time.Millisecond,
+		orphanPoll: orphanPoll,
+		maxWait:    QuickWait,
+		now:        time.Now,
+		handlers:   map[string]a2asrv.RequestHandler{},
+		stores:     map[string]*genStore{},
+		tasks:      map[a2a.TaskID]*taskRef{},
+		gone:       map[a2a.TaskID]goneTask{},
+		contexts:   map[string]*contextState{},
+		inflight:   map[string]map[a2a.TaskID]inbound{},
+		last:       map[string]inbound{},
+		answered:   map[string]a2a.TaskID{},
 	}
 }
+
+// SetQuickWait changes how long a message waits for its reply (QuickWait).
+// Tests outside the package use it.
+func (h *Hub) SetQuickWait(d time.Duration) { h.maxWait = d }
 
 // NormalizeHandle trims a typed handle the way team.NormalizeHandle does.
 func NormalizeHandle(h string) string {
@@ -543,8 +631,12 @@ type SendInput struct {
 	To            string
 	Text          string
 	ContextID     string
-	// Wait bounds the synchronous part. 0 = DefaultWait; negative = do
-	// not wait at all (the @mention router).
+	// TaskID answers a task that ended input_required: the message goes
+	// to that task, in its context, at the teammate it went to.
+	TaskID string
+	// Wait bounds the synchronous part. 0 = QuickWait (none while the
+	// conversation fans out, see fanOutWindow); negative = do not wait at
+	// all (the @mention router); larger values are capped at QuickWait.
 	Wait time.Duration
 	// Mention marks an @handle line in an agent's own reply: it continues
 	// the exchange that reply answered. A person's mention (Human) always
@@ -571,7 +663,9 @@ type Result struct {
 	State     string `json:"state"`
 	To        string `json:"to"`
 	ReplyText string `json:"reply_text,omitempty"`
-	Note      string `json:"note,omitempty"`
+	// Reason says why a task ended failed, rejected or canceled.
+	Reason string `json:"reason,omitempty"`
+	Note   string `json:"note,omitempty"`
 	// Chat is the target's chat the turn runs in — the one paired with
 	// the caller's conversation — with its Slack thread for a Slack
 	// remote; nil for the main chat or when not known yet.
@@ -588,6 +682,24 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	caller, err := h.Dir.Get(ctx, in.CallerAgentID)
 	if err != nil {
 		return nil, ErrNotTeamSession
+	}
+	var answer a2a.TaskID
+	var claim *answerClaim
+	if in.TaskID = strings.TrimSpace(in.TaskID); in.TaskID != "" {
+		if in.To, in.ContextID, claim, err = h.answering(caller.ID, in); err != nil {
+			return nil, err
+		}
+		answer = a2a.TaskID(in.TaskID)
+		claimed := answer
+		// Any way out before the teammate took the answer gives the
+		// question back; claim is cleared once it did.
+		defer func() {
+			if claim != nil {
+				h.unclaim(claimed, claim)
+			}
+		}()
+		// Viewers see the task working again before its next turn reports.
+		h.persist(answer)
 	}
 	// A person writing in their chat with an agent another owner shared
 	// with them speaks for themselves: the mention reaches their own
@@ -657,6 +769,7 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 
 	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(in.Text))
 	msg.ContextID = contextID
+	msg.TaskID = answer
 	msg.Metadata = map[string]any{metaFrom: caller.ID, metaDepth: depth, metaSession: in.CallerSession}
 	if target.ChatUser != "" {
 		msg.Metadata[metaChatUser] = target.ChatUser
@@ -675,10 +788,29 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("team: connect @%s: %w", target.Handle, err)
 	}
-	res, err := cl.SendMessage(ctx, &a2a.SendMessageRequest{
-		Message: msg,
-		Config:  &a2a.SendMessageConfig{ReturnImmediately: true},
-	})
+	req := &a2a.SendMessageRequest{Message: msg, Config: &a2a.SendMessageConfig{ReturnImmediately: true}}
+	res, err := cl.SendMessage(ctx, req)
+	// An answer that comes right back can find the teammate's last turn
+	// still closing its execution of the task: retry for a moment.
+	for until := time.Now().Add(answerRetry); err != nil && answer != "" && strings.Contains(err.Error(), "already in progress") && time.Now().Before(until); {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(h.poll):
+		}
+		res, err = cl.SendMessage(ctx, req)
+	}
+	note := ""
+	var lost a2a.TaskID
+	if err != nil && answer != "" && errors.Is(err, a2a.ErrTaskNotFound) {
+		// The task store lost the task (wick restarted): the answer goes
+		// as a new task of the same exchange, and the lost one is settled
+		// once that went through (still claimed until then).
+		lost = answer
+		msg.TaskID, answer = "", ""
+		res, err = cl.SendMessage(ctx, req)
+		note = "The asking task was lost when wick restarted; your answer went to the teammate as a new task in the same exchange. "
+	}
 	if err != nil {
 		return nil, fmt.Errorf("team: send to @%s: %w", target.Handle, err)
 	}
@@ -686,19 +818,126 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if !ok {
 		return nil, fmt.Errorf("team: @%s answered without a task", target.Handle)
 	}
+	// The teammate took the answer: the claim holds until its turn ends.
+	claim = nil
+	if lost != "" {
+		h.supersede(lost, task.ID)
+	}
 
+	wait := in.Wait
 	h.mu.Lock()
 	ref := h.tasks[task.ID]
 	if ref == nil {
 		ref = &taskRef{}
 		h.tasks[task.ID] = ref
 	}
-	ref.agentID, ref.callerAgentID, ref.callerSession, ref.to = target.ID, caller.ID, in.CallerSession, target
+	ref.agentID, ref.callerAgentID, ref.callerOwner, ref.callerSession, ref.to = target.ID, caller.ID, caller.OwnerID, in.CallerSession, target
 	ref.touched = h.now()
-	ref.contextID, ref.title, ref.started = contextID, firstLine(in.Text), ref.touched
+	if ref.started.IsZero() {
+		ref.contextID, ref.title, ref.started = contextID, firstLine(in.Text), ref.touched
+	}
+	if wait == 0 && h.fanningOutLocked(in.CallerSession, task.ID) {
+		wait = -1
+	}
 	h.mu.Unlock()
+	h.persist(task.ID)
 
-	return h.wait(ctx, cl, task.ID, contextID, target, in.Wait)
+	out, err := h.wait(ctx, cl, task.ID, contextID, target, wait)
+	if out != nil && note != "" {
+		out.Note = note + out.Note
+	}
+	return out, err
+}
+
+// answering checks in.TaskID for an answer to a question: a task this
+// caller sent, in in.ContextID when one is given, to in.To when one is
+// given, that ended input_required. It returns the teammate's handle and
+// the task's context.
+// The check and the claim are one critical section: of two answers racing
+// for the same question (the user's and the agent's, or two tool calls)
+// exactly one gets the claim, the other ErrAlreadyAnswered.
+func (h *Hub) answering(callerID string, in SendInput) (string, string, *answerClaim, error) {
+	id := a2a.TaskID(in.TaskID)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ref := h.tasks[id]
+	if ref == nil {
+		ref = h.loadLocked(id)
+	}
+	if ref == nil || ref.callerAgentID != callerID {
+		return "", "", nil, h.unknownLocked(callerID, id)
+	}
+	if c := strings.TrimSpace(in.ContextID); c != "" && c != ref.contextID {
+		return "", "", nil, ErrTaskContext
+	}
+	if to := NormalizeHandle(in.To); to != "" && to != ref.to.Handle {
+		return "", "", nil, fmt.Errorf("%w (@%s)", ErrTaskOtherAgent, ref.to.Handle)
+	}
+	if ref.claimed {
+		return "", "", nil, ErrAlreadyAnswered
+	}
+	if !ref.finished || ref.state != a2a.TaskStateInputRequired {
+		return "", "", nil, fmt.Errorf("%w (it is %s)", ErrTaskNotWaiting, h.viewState(ref))
+	}
+	// The task runs again: clear what its last turn left before the
+	// executor can report the next one.
+	claim := &answerClaim{waiterGone: ref.waiterGone, delivered: ref.delivered, reply: ref.reply, state: ref.state}
+	ref.claimed = true
+	// This process runs it now: not a restart's leftover any more.
+	ref.fromDisk = false
+	ref.finished, ref.waiterGone, ref.delivered, ref.reply, ref.state = false, false, false, "", a2a.TaskStateWorking
+	return ref.to.Handle, ref.contextID, claim, nil
+}
+
+// unclaim gives task id's question back after an answer that never
+// reached the teammate: only the fields answering changed, and only while
+// the claim still stands — a cancel (or a turn) that settled the task
+// meanwhile is kept.
+func (h *Hub) unclaim(id a2a.TaskID, c *answerClaim) {
+	h.mu.Lock()
+	ref := h.tasks[id]
+	if ref == nil || !ref.claimed {
+		h.mu.Unlock()
+		return
+	}
+	ref.claimed = false
+	if !ref.canceled {
+		ref.finished, ref.waiterGone, ref.delivered, ref.reply, ref.state = true, c.waiterGone, c.delivered, c.reply, c.state
+	}
+	h.mu.Unlock()
+	h.persist(id)
+}
+
+// supersede settles task id, whose answer went out as task next because
+// the task store had lost id: it neither waits for an answer nor reads
+// as answered forever.
+func (h *Hub) supersede(id, next a2a.TaskID) {
+	h.mu.Lock()
+	ref := h.tasks[id]
+	if ref == nil || !ref.claimed || ref.canceled {
+		h.mu.Unlock()
+		return
+	}
+	ref.claimed, ref.canceled = false, true
+	ref.finished, ref.delivered, ref.state, ref.touched = true, true, a2a.TaskStateCanceled, h.now()
+	ref.reply = fmt.Sprintf("superseded by task %s: this task was lost when wick restarted, the answer went there", next)
+	h.mu.Unlock()
+	h.persist(id)
+}
+
+// fanningOutLocked reports whether session has another task still
+// working that it sent within fanOutWindow.
+func (h *Hub) fanningOutLocked(session string, except a2a.TaskID) bool {
+	if session == "" {
+		return false
+	}
+	now := h.now()
+	for id, t := range h.tasks {
+		if id != except && t.callerSession == session && !t.finished && now.Sub(t.started) < fanOutWindow {
+			return true
+		}
+	}
+	return false
 }
 
 // admit charges one turn to the context and works out the depth. A
@@ -825,6 +1064,7 @@ func (h *Hub) pruneLocked() {
 	for _, st := range h.stores {
 		st.rotate(now, TaskTTL)
 	}
+	h.pruneFilesLocked(now)
 }
 
 // dropLocked forgets task id, noting it as gone.
@@ -916,12 +1156,11 @@ func (h *Hub) chatFor(ctx context.Context, contextID, callerSession string, targ
 	return id, nil
 }
 
-// wait polls the task until it settles or the wait runs out.
+// wait polls the task until it settles or the wait runs out. A caller
+// that stops waiting — the wait ran out, or its tool call was cut off
+// (ctx done) — gets the reply delivered into its conversation instead.
 func (h *Hub) wait(ctx context.Context, cl *a2aclient.Client, id a2a.TaskID, contextID string, to Peer, wait time.Duration) (*Result, error) {
-	switch {
-	case wait == 0:
-		wait = DefaultWait
-	case wait > h.maxWait:
+	if wait == 0 || wait > h.maxWait {
 		wait = h.maxWait
 	}
 	deadline := time.Now().Add(wait)
@@ -935,18 +1174,23 @@ func (h *Hub) wait(ctx context.Context, cl *a2aclient.Client, id a2a.TaskID, con
 		}
 		if ref.finished {
 			ref.delivered = true
-			out := &Result{TaskID: string(id), ContextID: contextID, State: stateName(ref.state), To: "@" + to.Handle, ReplyText: ref.reply}
+			out := h.resultLocked(id, ref)
+			out.ContextID = contextID
+			if out.ReplyText != "" {
+				ref.markSent(textKey(out.ReplyText))
+			}
 			chat := ref.chat
 			h.mu.Unlock()
+			h.persist(id)
 			out.Chat = h.chatView(ctx, to, chat)
 			return out, nil
 		}
 		if wait < 0 || !time.Now().Before(deadline) {
-			ref.waiterGone = true
 			chat := ref.chat
 			h.mu.Unlock()
+			h.handBack(ctx, id)
 			return &Result{
-				TaskID: string(id), ContextID: contextID, State: stateName(a2a.TaskStateWorking), To: "@" + to.Handle,
+				TaskID: string(id), ContextID: contextID, State: "working", To: "@" + to.Handle,
 				Note: "Still working. The reply is delivered into this conversation when it lands — end your turn; do not poll or resend.",
 				Chat: h.chatView(ctx, to, chat),
 			}, nil
@@ -954,69 +1198,184 @@ func (h *Hub) wait(ctx context.Context, cl *a2aclient.Client, id a2a.TaskID, con
 		h.mu.Unlock()
 		select {
 		case <-ctx.Done():
+			h.handBack(ctx, id)
 			return nil, ctx.Err()
 		case <-time.After(h.poll):
 		}
 		// Reading through the client keeps the task store authoritative;
 		// the ref only carries what the store does not (the reply text).
 		if _, err := cl.GetTask(ctx, &a2a.GetTaskRequest{ID: id}); err != nil {
+			h.handBack(ctx, id)
 			return nil, fmt.Errorf("team: read task %s: %w", id, err)
 		}
 	}
 }
 
-// GetTask reports a task the caller sent.
-func (h *Hub) GetTask(ctx context.Context, callerAgentID, taskID string) (*Result, error) {
+// handBack marks task id's caller as gone: its result is delivered into
+// the caller's conversation when it lands — or now, when the task settled
+// while the caller was leaving.
+func (h *Hub) handBack(ctx context.Context, id a2a.TaskID) {
 	h.mu.Lock()
-	ref, ok := h.tasks[a2a.TaskID(taskID)]
-	if !ok || ref.callerAgentID != callerAgentID || callerAgentID == "" {
-		err := h.unknownLocked(callerAgentID, a2a.TaskID(taskID))
+	ref := h.tasks[id]
+	if ref == nil {
+		h.mu.Unlock()
+		return
+	}
+	ref.waiterGone = true
+	settled := ref.finished && !ref.delivered
+	state, reply := ref.state, ref.reply
+	h.mu.Unlock()
+	if settled {
+		h.finished(ctx, id, state, reply)
+		return
+	}
+	h.persist(id)
+}
+
+// resultLocked is what get_task and a finished wait report for ref.
+func (h *Hub) resultLocked(id a2a.TaskID, ref *taskRef) *Result {
+	out := &Result{TaskID: string(id), ContextID: ref.contextID, State: h.viewState(ref), To: "@" + ref.to.Handle}
+	switch out.State {
+	case "failed", "rejected", "canceled":
+		out.Reason = ref.reply
+		if out.Reason == "" {
+			out.Reason = "the teammate's turn ended as " + out.State + " without a reason"
+		}
+	case "input_required":
+		out.ReplyText = ref.reply
+		out.Note = "The teammate asks you something. Answer with message task_id=" + string(id) + "; ask the user first if only they can answer."
+	default:
+		out.ReplyText = ref.reply
+	}
+	return out
+}
+
+// viewState is the state a caller sees for ref: working until the turn
+// ends.
+func (h *Hub) viewState(ref *taskRef) string {
+	if !ref.finished {
+		return "working"
+	}
+	return stateName(ref.state)
+}
+
+// GetTask reports a task the caller sent, from memory or, for an older
+// task or one finished by another wick process, from disk.
+func (h *Hub) GetTask(ctx context.Context, callerAgentID, taskID string) (*Result, error) {
+	id := a2a.TaskID(strings.TrimSpace(taskID))
+	h.mu.Lock()
+	ref := h.tasks[id]
+	if ref == nil || !ref.finished {
+		ref = h.loadLocked(id)
+	}
+	if ref == nil || ref.callerAgentID != callerAgentID || callerAgentID == "" {
+		err := h.unknownLocked(callerAgentID, id)
 		h.mu.Unlock()
 		return nil, err
 	}
-	agentID, to := ref.agentID, ref.to
-	if ref.finished {
-		// The executor reports before the store has applied its last
-		// event; the ref is the fresher of the two.
-		out := &Result{TaskID: taskID, State: stateName(ref.state), To: "@" + to.Handle, ReplyText: ref.reply}
-		chat := ref.chat
-		h.mu.Unlock()
-		out.Chat = h.chatView(ctx, to, chat)
-		if t, err := h.handler(agentID).GetTask(ctx, &a2a.GetTaskRequest{ID: a2a.TaskID(taskID)}); err == nil {
-			out.ContextID = t.ContextID
-		}
+	out := h.resultLocked(id, ref)
+	agentID, to, chat, finished := ref.agentID, ref.to, ref.chat, ref.finished
+	h.mu.Unlock()
+	out.Chat = h.chatView(ctx, to, chat)
+	if finished {
 		return out, nil
 	}
-	chat := ref.chat
-	h.mu.Unlock()
-	t, err := h.handler(agentID).GetTask(ctx, &a2a.GetTaskRequest{ID: a2a.TaskID(taskID)})
-	if err != nil {
-		return nil, err
-	}
-	out := &Result{TaskID: taskID, ContextID: t.ContextID, State: stateName(t.Status.State), To: "@" + to.Handle, Chat: h.chatView(ctx, to, chat)}
-	if t.Status.Message != nil {
-		out.ReplyText = messageText(t.Status.Message)
+	// Still running: the task store has the live state and any message
+	// the turn has posted so far. A store that lost the task (restart)
+	// leaves the record's answer.
+	if t, err := h.handler(agentID).GetTask(ctx, &a2a.GetTaskRequest{ID: id}); err == nil {
+		if st := stateName(t.Status.State); st != "completed" {
+			out.State = st
+		}
+		if t.Status.Message != nil {
+			out.ReplyText = messageText(t.Status.Message)
+		}
 	}
 	return out, nil
 }
 
-// finished is the executor telling the Hub a task settled. A caller that
-// stopped waiting gets the reply delivered into its session.
-func (h *Hub) finished(ctx context.Context, id a2a.TaskID, state a2a.TaskState, reply string) {
+// CancelTask ends a task the caller sent that is still working or waiting
+// for input (A2A CancelTask): the task becomes canceled, and whatever the
+// teammate's turn for it still reports is dropped.
+func (h *Hub) CancelTask(ctx context.Context, callerAgentID, taskID string) (*Result, error) {
+	id := a2a.TaskID(strings.TrimSpace(taskID))
+	by := "the sender"
+	if p, err := h.Dir.Get(ctx, callerAgentID); err == nil {
+		by = "@" + p.Handle
+	}
 	h.mu.Lock()
 	ref := h.tasks[id]
+	if ref == nil {
+		ref = h.loadLocked(id)
+	}
+	if ref == nil || ref.callerAgentID != callerAgentID || callerAgentID == "" {
+		err := h.unknownLocked(callerAgentID, id)
+		h.mu.Unlock()
+		return nil, err
+	}
+	if ref.finished && ref.state != a2a.TaskStateInputRequired {
+		state := h.viewState(ref)
+		h.mu.Unlock()
+		return nil, fmt.Errorf("%w (it is %s)", ErrTaskSettled, state)
+	}
+	reason := "canceled by " + by
+	ref.canceled, ref.finished, ref.delivered = true, true, true
+	ref.claimed = false
+	ref.state, ref.reply, ref.touched = a2a.TaskStateCanceled, reason, h.now()
+	agentID := ref.agentID
+	h.mu.Unlock()
+
+	h.persist(id)
+	// The task store takes the cancellation once the execution lets go of
+	// the task, which can outlast this call: the Hub already says canceled.
+	go func() {
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cancelWait)
+		defer cancel()
+		_, _ = h.handler(agentID).CancelTask(cctx, &a2a.CancelTaskRequest{ID: id})
+	}()
+	return h.GetTask(ctx, callerAgentID, string(id))
+}
+
+// finished is the executor telling the Hub a task's turn ended. A caller
+// that stopped waiting gets the reply (or the question, or the reason)
+// delivered into its session.
+func (h *Hub) finished(ctx context.Context, id a2a.TaskID, state a2a.TaskState, reply string) {
+	h.settle(ctx, id, state, reply, false)
+}
+
+// settle is finished; orphan settles the task only while it is still a
+// restart's leftover (orphanLocked), marking it interrupted.
+func (h *Hub) settle(ctx context.Context, id a2a.TaskID, state a2a.TaskState, reply string, orphan bool) {
+	h.mu.Lock()
+	ref := h.tasks[id]
+	if orphan && (ref == nil || !h.orphanLocked(id, ref)) {
+		// Answered, canceled, or finished by the draining process since.
+		h.mu.Unlock()
+		return
+	}
 	if ref == nil {
 		// The executor can finish before Send registered the task.
 		ref = &taskRef{}
 		h.tasks[id] = ref
 	}
+	if ref.canceled {
+		// cancel_task already settled it and told the caller.
+		h.mu.Unlock()
+		return
+	}
+	ref.interrupted = orphan
 	ref.finished, ref.state, ref.reply, ref.touched = true, state, reply, h.now()
+	ref.claimed = false
 	deliver := ref.waiterGone && !ref.delivered && ref.callerSession != ""
 	if deliver {
 		ref.delivered = true
+		if reply != "" {
+			ref.markSent(textKey(reply))
+		}
 	}
 	session, to := ref.callerSession, ref.to
 	h.mu.Unlock()
+	h.persist(id)
 	if !deliver || h.Notify == nil {
 		return
 	}
@@ -1024,6 +1383,9 @@ func (h *Hub) finished(ctx context.Context, id a2a.TaskID, state a2a.TaskState, 
 		return // [silent]: nothing to hand back
 	}
 	text := fmt.Sprintf("Reply from %s [task %s, %s]:\n\n%s", to.Label(), id, stateName(state), reply)
+	if state == a2a.TaskStateInputRequired {
+		text += fmt.Sprintf("\n\n(%s asks you this. Answer with team_message task_id=%s; ask the user first if only they can answer.)", to.Label(), id)
+	}
 	if err := h.Notify.Deliver(context.WithoutCancel(ctx), session, text); err != nil {
 		_ = err // best-effort: the task store still holds the result
 	}
@@ -1032,7 +1394,9 @@ func (h *Hub) finished(ctx context.Context, id a2a.TaskID, state a2a.TaskState, 
 // FollowUp hands text — a reply the agent answering in sessionID sent
 // after its task had ended, such as a remote agent's late message — to
 // whoever asked, delivered into the asker's session like a late reply.
-// False when the session answered no task the Hub still remembers.
+// A text the asker already has for that task (the same answer posted
+// again) is dropped and still counts as handled. False when the session
+// answered no task the Hub still remembers.
 func (h *Hub) FollowUp(ctx context.Context, sessionID, text string) bool {
 	if sessionID == "" || strings.TrimSpace(text) == "" || h.Notify == nil {
 		return false
@@ -1040,20 +1404,38 @@ func (h *Hub) FollowUp(ctx context.Context, sessionID, text string) bool {
 	h.mu.Lock()
 	id, ok := h.answered[sessionID]
 	ref := h.tasks[id]
+	if ok && ref == nil {
+		ref = h.loadLocked(id)
+	}
+	if ok && ref != nil && ref.canceled {
+		// The sender canceled the task: what its turn still says is not
+		// theirs to read any more.
+		h.mu.Unlock()
+		return true
+	}
 	var session string
 	var to Peer
+	dup := false
 	if ok && ref != nil {
 		session, to = ref.callerSession, ref.to
+		if dup = ref.alreadySent(text); !dup {
+			ref.markSent(textKey(text))
+		}
 	}
 	h.mu.Unlock()
 	if session == "" {
 		return false
 	}
+	if dup {
+		return true
+	}
+	h.persist(id)
 	msg := fmt.Sprintf("Follow-up from %s [task %s]:\n\n%s", to.Label(), id, text)
 	return h.Notify.Deliver(context.WithoutCancel(ctx), session, msg) == nil
 }
 
-// TaskView is one task a session sent, as the Sub-agents panel lists it.
+// TaskView is one task a session sent, as the Sub-agents panel and
+// list_tasks show it.
 type TaskView struct {
 	TaskID    string    `json:"task_id"`
 	ContextID string    `json:"context_id"`
@@ -1066,39 +1448,97 @@ type TaskView struct {
 	MaxTurns  int       `json:"max_turns"`
 	Started   time.Time `json:"started_at"`
 	Updated   time.Time `json:"updated_at"`
+	// Age is how long ago the task was sent, rounded ("3m", "2h").
+	Age string `json:"age"`
+	// Summary is the first line of the reply, question or reason.
+	Summary string `json:"summary,omitempty"`
+	// ChatID is the teammate's chat the task runs in ("" = main or not
+	// known yet), so the UI can open it.
+	ChatID string `json:"chat_id,omitempty"`
+	// Interrupted: wick restarted while the task was working, so it
+	// failed (settleOrphans); sending it again is safe.
+	Interrupted bool `json:"interrupted,omitempty"`
 }
 
-// SentFrom lists the tasks sessionID sent and the Hub still remembers,
-// newest first. Unfinished tasks read "working".
+// SentFrom lists the tasks sessionID sent, newest first: those in memory
+// and those only on disk (older, or from before a restart). Unfinished
+// tasks read "working".
 func (h *Hub) SentFrom(sessionID string) []TaskView {
 	if sessionID == "" {
 		return nil
 	}
+	// The files are read without h.mu, which every Send and turn needs:
+	// snapshot what memory already settled, read, then adopt under it.
+	h.mu.Lock()
+	h.pruneLocked()
+	dir, skip := h.dir, map[a2a.TaskID]bool{}
+	if dir != "" {
+		for id, ref := range h.tasks {
+			if ref.finished {
+				skip[id] = true
+			}
+		}
+	}
+	h.mu.Unlock()
+	recs := records(dir, sessionID, skip)
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.pruneLocked()
+	for _, rec := range recs {
+		h.adoptLocked(rec, false)
+	}
+	now := h.now()
 	out := []TaskView{}
+	orphans := false
 	for id, ref := range h.tasks {
 		if ref.callerSession != sessionID || ref.started.IsZero() {
 			continue
 		}
-		state := "working"
-		if ref.finished {
-			state = stateName(ref.state)
-		}
-		turns, limit := 0, MaxContextTurns
-		if c := h.contexts[ref.contextID]; c != nil {
-			turns, limit = c.turns, c.limit
-		}
-		out = append(out, TaskView{
-			TaskID: string(id), ContextID: ref.contextID,
-			ToID: ref.to.ID, ToHandle: ref.to.Handle, ToName: ref.to.Name,
-			Title: ref.title, State: state, Turns: turns, MaxTurns: limit,
-			Started: ref.started, Updated: ref.touched,
-		})
+		orphans = orphans || h.orphanLocked(id, ref)
+		v := h.viewLocked(id, ref, now)
+		out = append(out, v)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Started.After(out[j].Started) })
+	if orphans {
+		// A task a restart left working: settle it now rather than on the
+		// next sweep.
+		go h.settleOrphans(context.Background())
+	}
 	return out
+}
+
+// viewLocked is task id as the UI lists it.
+func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {
+	turns, limit := 0, MaxContextTurns
+	if c := h.contexts[ref.contextID]; c != nil {
+		turns, limit = c.turns, c.limit
+	}
+	v := TaskView{
+		TaskID: string(id), ContextID: ref.contextID,
+		ToID: ref.to.ID, ToHandle: ref.to.Handle, ToName: ref.to.Name,
+		Title: ref.title, State: h.viewState(ref), Turns: turns, MaxTurns: limit,
+		Started: ref.started, Updated: ref.touched,
+		Age: shortAge(now.Sub(ref.started)),
+	}
+	if ref.finished {
+		v.Summary = firstLine(ref.reply)
+	}
+	v.ChatID = ref.chat
+	v.Interrupted = ref.interrupted
+	return v
+}
+
+// shortAge rounds d for a list: seconds under a minute, then minutes,
+// hours, days.
+func shortAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
 // firstLine is the task's title: its first non-blank line, capped.
@@ -1114,8 +1554,17 @@ func firstLine(s string) string {
 	return ""
 }
 
-// stateName shortens an A2A state to the word the tool reports.
+// stateName maps an A2A state to the word the tool reports: working,
+// input_required, completed, failed, canceled or rejected. submitted
+// (and an unset state) read working; auth_required reads rejected — the
+// caller cannot authenticate for the teammate, only its owner can.
 func stateName(s a2a.TaskState) string {
+	switch s {
+	case a2a.TaskStateUnspecified, a2a.TaskStateSubmitted, a2a.TaskStateWorking:
+		return "working"
+	case a2a.TaskStateAuthRequired:
+		return "rejected"
+	}
 	return strings.ToLower(strings.TrimPrefix(string(s), "TASK_STATE_"))
 }
 

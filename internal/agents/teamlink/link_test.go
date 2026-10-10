@@ -223,15 +223,15 @@ func TestExecutorRechecksCrossOwner(t *testing.T) {
 		"session user, wrong chat":  {"b-cap", map[string]any{metaFrom: "a-lena", metaSessionUser: "bob", metaChatUser: "alice"}},
 	}
 	for name, c := range cases {
-		if st := rawSend(t, h, c.target, c.meta); st != a2a.TaskStateFailed {
-			t.Errorf("%s: state = %s, want failed", name, st)
+		if st := rawSend(t, h, c.target, c.meta); st != a2a.TaskStateRejected {
+			t.Errorf("%s: state = %s, want rejected", name, st)
 		}
 	}
 	// Unshared since the mention was sent: refused too.
 	dir.mu.Lock()
 	dir.shared["bob"] = []string{"a-max"}
 	dir.mu.Unlock()
-	if st := rawSend(t, h, "b-cap", map[string]any{metaFrom: "a-lena", metaSessionUser: "bob"}); st != a2a.TaskStateFailed {
+	if st := rawSend(t, h, "b-cap", map[string]any{metaFrom: "a-lena", metaSessionUser: "bob"}); st != a2a.TaskStateRejected {
 		t.Errorf("after unshare: state = %s", st)
 	}
 	if runs := turns.runs(); len(runs) != 0 {

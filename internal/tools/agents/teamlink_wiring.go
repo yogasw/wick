@@ -9,9 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
+	"github.com/yogasw/wick/internal/agents/a2aremote"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/delegation"
 	"github.com/yogasw/wick/internal/agents/event"
@@ -23,6 +25,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/team"
 	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -36,6 +39,22 @@ const sourceTeam = team.SourceTeam
 // deliver wakes a session with a late reply (the sub-agent delivery path).
 func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, sessionID, text string) error) *teamlink.Hub {
 	hub := teamlink.NewHub(teamDirectory{svc: svc}, poolTurns{}, teamNotifier{deliver: deliver})
+	// A task a restart left working is settled as interrupted, unless the
+	// draining previous process may still be running its turn.
+	hub.PredecessorBusy = func(chat string) bool {
+		if chat == "" {
+			_, draining := upgrade.ReadDrainState(globalLayout.BaseDir)
+			return draining
+		}
+		return upgrade.PredecessorHolds(globalLayout.BaseDir, chat)
+	}
+	// Tasks are kept on disk, so get_task, list_tasks and late replies
+	// survive a restart.
+	if globalLayout.BaseDir != "" {
+		if err := hub.Persist(globalLayout.TeamTasksDir()); err != nil {
+			log.Warn().Err(err).Msg("team: task store")
+		}
+	}
 	// A remote agent's late reply goes to the agent that asked it too. The
 	// reply to a timed-out turn is found from the conversation, so it still
 	// arrives after a restart; it is sent once (settleLateReply).
@@ -193,6 +212,11 @@ func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text
 	// reply will follow (settleLateReply forwards it when it does).
 	if waited, ok := remote.IsTimeout(failed); ok && strings.TrimSpace(text) == "" {
 		text = remote.PendingNotice(agent.Handle, waited)
+	}
+	// An A2A remote that asks a question keeps its task open; the asker
+	// sees input_required and answers with the same task_id.
+	if agent.Remote && a2aremote.LoadState(globalLayout.SessionDir(sessionID)).InputRequired {
+		return sessionID, "", &teamlink.TurnEnd{State: a2a.TaskStateInputRequired, Text: text}
 	}
 	return sessionID, text, nil
 }

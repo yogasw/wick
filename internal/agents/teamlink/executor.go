@@ -2,6 +2,7 @@ package teamlink
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"strings"
@@ -146,24 +147,40 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			delete(h.inflight, e.agentID)
 		}
 		h.last[e.agentID] = inbound{contextID: ec.ContextID, depth: depth, at: h.now()}
-		if sessionID != "" {
-			h.answered[sessionID] = ec.TaskID
-		} else if session != "" {
-			h.answered[session] = ec.TaskID
+		answeredIn := sessionID
+		if answeredIn == "" {
+			answeredIn = session
+		}
+		// A canceled task answered nobody: later follow-ups of that
+		// session stay with whatever it answered before.
+		if ref := h.tasks[ec.TaskID]; answeredIn != "" && (ref == nil || !ref.canceled) {
+			h.answered[answeredIn] = ec.TaskID
+			if ref != nil {
+				ref.answered = answeredIn
+			}
 		}
 		h.mu.Unlock()
 
 		state := a2a.TaskStateCompleted
 		var out *a2a.Message
 		reply = strings.TrimSpace(reply)
+		var end *TurnEnd
 		switch {
+		case errors.As(runErr, &end):
+			state, reply = end.State, strings.TrimSpace(end.Text)
+			if reply == "" && state != a2a.TaskStateCompleted {
+				reply = "the teammate ended the task as " + stateName(state)
+			}
 		case runErr != nil:
 			state = a2a.TaskStateFailed
-			reply = runErr.Error()
-			out = a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, a2a.NewTextPart(reply))
+			reply = "the teammate's turn failed: " + runErr.Error()
 		case reply == SilentToken:
 			reply = ""
-		case reply != "":
+		case strings.HasPrefix(reply, InputRequiredToken):
+			state = a2a.TaskStateInputRequired
+			reply = strings.TrimSpace(strings.TrimPrefix(reply, InputRequiredToken))
+		}
+		if reply != "" {
 			out = a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, a2a.NewTextPart(reply))
 		}
 		e.audit(ctx, from, target, callerSession, sessionID, ec, state)
@@ -189,11 +206,20 @@ func (h *Hub) forSessionUser(ctx context.Context, user, chatUser string, from, t
 	return h.sharedByID(ctx, user, target.ID)
 }
 
-// fail ends the task as failed with err's text.
+// fail ends a task the turn never started for. A refusal — the teammate
+// is gone, no longer shared, or the chat asked for is not the caller's —
+// ends it rejected; anything else failed. Either way err's text is the
+// reason.
 func (e *executor) fail(ctx context.Context, ec *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool, err error) {
+	state := a2a.TaskStateFailed
+	for _, refusal := range []error{ErrUnknownHandle, ErrNotShared, ErrUnknownChat, ErrNewChatUnsupported, ErrMentionsOff} {
+		if errors.Is(err, refusal) {
+			state = a2a.TaskStateRejected
+		}
+	}
 	msg := a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, a2a.NewTextPart(err.Error()))
-	yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateFailed, msg), nil)
-	e.hub.finished(ctx, ec.TaskID, a2a.TaskStateFailed, err.Error())
+	yield(a2a.NewStatusUpdateEvent(ec, state, msg), nil)
+	e.hub.finished(ctx, ec.TaskID, state, err.Error())
 }
 
 // audit writes mention_handoff into both threads: once as working when
@@ -213,11 +239,17 @@ func (e *executor) audit(ctx context.Context, from, to Peer, callerSession, targ
 	}
 }
 
-// Cancel marks the task canceled. The turn already queued in the pool is
-// not pulled back; it simply has nobody waiting on it.
+// Cancel marks the task canceled, with the reason Hub.CancelTask noted.
+// Whatever the turn still reports afterwards is dropped.
 func (e *executor) Cancel(_ context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
-		yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCanceled, nil), nil)
+		var msg *a2a.Message
+		e.hub.mu.Lock()
+		if ref := e.hub.tasks[ec.TaskID]; ref != nil && ref.canceled && ref.reply != "" {
+			msg = a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, a2a.NewTextPart(ref.reply))
+		}
+		e.hub.mu.Unlock()
+		yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCanceled, msg), nil)
 	}
 }
 

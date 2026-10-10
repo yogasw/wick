@@ -88,11 +88,19 @@ func TestMessageSyncAndGetTask(t *testing.T) {
 func TestMessageAsyncDelivers(t *testing.T) {
 	gate := make(chan struct{})
 	n := &notify{}
-	d := deps(teamlink.NewHub(dir{}, turns{gate: gate}, n))
-	// wait_seconds is whole seconds; 1 is the shortest real wait.
-	out, err := call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "slow", "wait_seconds": "1"})
-	if err != nil || out.(*teamlink.Result).State != "working" {
-		t.Fatalf("result = %+v, %v", out, err)
+	hub := teamlink.NewHub(dir{}, turns{gate: gate}, n)
+	hub.SetQuickWait(20 * time.Millisecond)
+	d := deps(hub)
+	// wait_seconds is gone: an old prompt still sending it is not refused,
+	// and it does not stretch the wait.
+	start := time.Now()
+	out, err := call(t, d, Deps.message, "sess-cap", map[string]string{"to": "anton", "message": "slow", "wait_seconds": "150"})
+	if err != nil || out.(*teamlink.Result).State != "working" || time.Since(start) > 5*time.Second {
+		t.Fatalf("result = %+v, %v after %s", out, err, time.Since(start))
+	}
+	listed, err := call(t, d, Deps.listTasks, "sess-cap", nil)
+	if tasks := listed.(map[string]any)["tasks"].([]teamlink.TaskView); err != nil || len(tasks) != 1 || tasks[0].State != "working" {
+		t.Fatalf("list_tasks = %+v, %v", listed, err)
 	}
 	close(gate)
 	for i := 0; i < 200; i++ {
