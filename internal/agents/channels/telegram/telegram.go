@@ -719,6 +719,10 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 		// No buttons here: a card becomes a numbered list, and a bare
 		// number reply is mapped back to the button (handleMessage).
 		text, _ = actioncard.Split(text, actioncard.PlainText)
+		// Source tags become plain "(from Name)"; the raw tag never
+		// reaches the chat. Sent without a parse mode, so a name needs
+		// no escaping.
+		text = agentchannels.RewriteSourceTags(sessionID, text, nil)
 		if text != "" {
 			t.postChunked(chatID, text)
 		}

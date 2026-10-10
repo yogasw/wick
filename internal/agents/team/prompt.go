@@ -109,6 +109,36 @@ func (s *Service) teamPrompt(ctx context.Context, p entity.AgentPersona) string 
 	return out + manageAgentsBlock(p)
 }
 
+// SourceNames maps the handles of the teammates the agent behind
+// sessionID can reach (lower case, no "@") to their display names, for
+// rewriting the source tags of its replies on Slack and Telegram. A
+// session that is not a Team agent's has none.
+func (s *Service) SourceNames(ctx context.Context, sessionID string) map[string]string {
+	p := s.AgentFor(ctx, sessionID)
+	if p == nil {
+		return nil
+	}
+	out := map[string]string{}
+	add := func(m Member) {
+		if k := strings.ToLower(m.Handle); k != "" {
+			if _, ok := out[k]; !ok {
+				out[k] = m.Name
+			}
+		}
+	}
+	if all, err := s.List(ctx, p.OwnerUserID); err == nil {
+		for _, o := range all {
+			if o.ID != p.ID {
+				add(s.memberOf(o))
+			}
+		}
+	}
+	for _, m := range s.sharedMembers(ctx, p.OwnerUserID) {
+		add(m)
+	}
+	return out
+}
+
 // sharedMembers are the agents other people shared with ownerID, by hand
 // or by tag, that may still be shared.
 func (s *Service) sharedMembers(ctx context.Context, ownerID string) []Member {

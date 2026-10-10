@@ -172,6 +172,11 @@ type turn struct {
 	// reconcile compares the final text against it: equal → skip the update
 	// entirely (0 API calls); different → one final chat.update.
 	lastSent string
+	// sourceNames is the Team roster the turn's source tags are named
+	// from, resolved once per turn (sourceNamesSet) rather than on every
+	// live edit. Cleared when the reply is settled.
+	sourceNames    map[string]string
+	sourceNamesSet bool
 	// editTicker flushes turn.buf to the live message every streamEditInterval
 	// while text is still streaming. Stopped (and set to nil) on Done/Error.
 	editTicker *time.Ticker
@@ -2704,12 +2709,15 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 		s.mu.Unlock()
 		return
 	}
-	body := stripSilentMarker(t.buf.String())
+	raw := t.buf.String()
 	channelID := t.channelID
 	threadTS := t.threadTS
 	liveTS := t.liveTS
 	lastSent := t.lastSent
 	s.mu.Unlock()
+	// Outside s.mu: naming the sources reads the Team roster. A tag still
+	// streaming in is held back until it closes.
+	body := agentchannels.TrimOpenSourceTag(s.rewriteSources(sessionKey, stripSilentMarker(raw)))
 
 	if body == "" || body == lastSent {
 		return
@@ -2850,7 +2858,9 @@ func (s *Channel) NotifyState(sessionKey, state, text string) {
 	case "blocked":
 		s.setReaction(reactionBlocked, channelID, msgTS, "")
 		s.setAssistantStatus(channelID, threadTS, "")
-		note := text
+		// The raw source tags never reach the thread, whatever the state.
+		note := s.rewriteSources(sessionKey, text)
+		s.clearSourceNames(sessionKey)
 		if note == "" {
 			note = "Agent turn completed with blocked commands. See the dashboard for details."
 		} else {
@@ -2887,6 +2897,9 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 	// continuation chunks) works from the same clean text, and so the
 	// text == lastSent comparison matches what flushLiveMessage actually sent.
 	text = stripSilentMarker(text)
+	// Source tags become plain "(from Name)"; the raw tag never reaches
+	// the thread.
+	text = s.rewriteSources(sessionKey, text)
 	// Action cards go out as Block Kit messages after the text; the text
 	// keeps a one-line pointer where each fence was.
 	text, cards := actioncard.Split(text, cardPointer)
@@ -2898,6 +2911,7 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 		if cur := s.turns[sessionKey]; cur != nil {
 			cur.liveTS = ""
 			cur.lastSent = ""
+			cur.sourceNames, cur.sourceNamesSet = nil, false
 		}
 		s.mu.Unlock()
 	}()
@@ -3148,6 +3162,47 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.NotifyState(sessionKey, "error", msg)
 		s.startBackgroundBanner(sessionKey)
 	}
+}
+
+// rewriteSources turns the reply's [from:@handle] tags into plain
+// " (from Name)", names escaped for mrkdwn so one cannot ping or link.
+// The roster is read once per turn and kept on it: live edits rewrite
+// the same growing text every streamEditInterval.
+func (s *Channel) rewriteSources(sessionKey, text string) string {
+	if !strings.Contains(text, "[from:") {
+		return text
+	}
+	s.mu.Lock()
+	var names map[string]string
+	set := false
+	if t := s.turns[sessionKey]; t != nil {
+		names, set = t.sourceNames, t.sourceNamesSet
+	}
+	s.mu.Unlock()
+	if !set {
+		names = agentchannels.SourceNamesFor(sessionKey)
+		s.mu.Lock()
+		if t := s.turns[sessionKey]; t != nil {
+			t.sourceNames, t.sourceNamesSet = names, true
+		}
+		s.mu.Unlock()
+	}
+	return agentchannels.RewriteSourceTagsWith(text, names, escapeMrkdwn)
+}
+
+// clearSourceNames drops the turn's cached roster once its reply is out.
+func (s *Channel) clearSourceNames(sessionKey string) {
+	s.mu.Lock()
+	if t := s.turns[sessionKey]; t != nil {
+		t.sourceNames, t.sourceNamesSet = nil, false
+	}
+	s.mu.Unlock()
+}
+
+// escapeMrkdwn escapes the three characters Slack reads as control
+// sequences (<!channel>, <@U…>, <url|label>).
+func escapeMrkdwn(s string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }
 
 // postSystemNotice posts a session-level notice — a compaction boundary

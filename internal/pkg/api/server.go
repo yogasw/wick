@@ -1248,6 +1248,11 @@ func NewServer() *Server {
 	// Action cards outside the web UI: Slack buttons and numbered replies
 	// reach the agent through the same postback check as the web endpoint.
 	agentchannels.CardPostback = agentstool.ChannelPostback
+	// Source tags in replies going out to Slack/Telegram are named from
+	// the session's Team roster.
+	agentchannels.SourceNames = func(sessionID string) map[string]string {
+		return teamSvc.SourceNames(context.Background(), sessionID)
+	}
 	agentchannels.CardNumberPostback = agentstool.ChannelNumberPostback
 	agentsFactory.TeamLimitsLoader = func(sessionID string) (agentpool.TeamLimits, bool) {
 		lim, ok := teamSvc.LimitsFor(context.Background(), sessionID)

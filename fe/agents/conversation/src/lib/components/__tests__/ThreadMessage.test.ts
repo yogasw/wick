@@ -1515,3 +1515,35 @@ describe("ThreadMessage - asst-meta", () => {
     expect(container.querySelector(".wick-prose")!.classList.contains("wick-prose-sm")).toBe(false);
   });
 });
+
+/* P48 s16: per-point sources. A tag naming one of the turn's tasks shows
+   the teammate's name as a muted label; any other tag is dropped. */
+describe("ThreadMessage - source tags", () => {
+  const at = (h: number, m: number) => new Date(2026, 9, 10, h, m).toISOString();
+  const tasks: TeamTaskItem[] = [
+    { task_id: "a", context_id: "c", to_agent_id: "a1", to_handle: "alpha", to_name: "Alpha", title: "x", state: "completed", turns: 2, max_turns: 8, started_at: at(9, 31), updated_at: at(9, 40) },
+    { task_id: "b", context_id: "c", to_agent_id: "a2", to_handle: "beta", to_name: "Beta", title: "y", state: "completed", turns: 2, max_turns: 8, started_at: at(9, 32), updated_at: at(9, 41) },
+  ];
+  const ctx = (list: TeamTaskItem[]): TeamTasksCtx => ({ forTurn: () => list, agents: () => ({}), captainName: () => "Captain" });
+  const text = "- Logs are clean [from:@alpha]\n- Both saw the retry [from:@alpha,@beta]\n- My own point\n- Spoofed [from:@mallory]";
+
+  test("labels each sourced bullet, leaves own points and drops unknown handles", () => {
+    const turn = makeTurn({ turn_id: "a1", role: "assistant", text });
+    const { container } = render(ThreadMessage, { props: { turn }, context: new Map([[TEAM_TASKS_KEY, ctx(tasks)]]) });
+    const tags = screen.getAllByTestId("source-tag");
+    expect(tags.map((t) => t.textContent)).toEqual(["Alpha", "Alpha, Beta"]);
+    for (const c of ["ml-1", "font-sans", "text-[11px]", "text-black-700", "dark:text-black-600"]) expect(tags[0].classList.contains(c)).toBe(true);
+    const items = [...container.querySelectorAll(".wick-prose li")].map((li) => li.textContent!.trim());
+    // The gap is the label's ml-1, not a text space.
+    expect(items).toEqual(["Logs are cleanAlpha", "Both saw the retryAlpha, Beta", "My own point", "Spoofed"]);
+    expect(container.innerHTML).not.toContain("[from:");
+    expect(container.innerHTML).not.toContain("mallory");
+  });
+
+  test("a user turn keeps the text as typed", () => {
+    const turn = makeTurn({ role: "user", text: "tag it like [from:@alpha]" });
+    const { container } = render(ThreadMessage, { props: { turn }, context: new Map([[TEAM_TASKS_KEY, ctx(tasks)]]) });
+    expect(container.textContent).toContain("[from:@alpha]");
+    expect(screen.queryByTestId("source-tag")).toBeNull();
+  });
+});

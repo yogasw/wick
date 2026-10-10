@@ -32,6 +32,7 @@
   import { isRemoteTimeout, isLateReply, lateLabel, NOTE_NO_MARKER } from "../remoteRecheck.js";
   import { jumpLink, deliveryView } from "../slackDelivery.js";
   import { replyable, replyPreview, type ReplyTarget } from "../replyTo.js";
+  import { renderWithSourceTags } from "../sourceTags.js";
 
   type Props = {
     turn: ConversationTurn;
@@ -931,7 +932,12 @@
                 onAction={onCardAction}
               />
             {:else}
-              {@html renderMarkdown(seg.kind === "card" ? seg.raw : seg.text)}
+              <!-- An answer's [from:@handle] tags become muted teammate
+                   names (sourceTags.ts); a tag naming no task of this
+                   turn is dropped. -->
+              {@html turn.role === "assistant"
+                ? renderWithSourceTags(seg.kind === "card" ? seg.raw : seg.text, delegated, teamCtx?.agents(), renderMarkdown)
+                : renderMarkdown(seg.kind === "card" ? seg.raw : seg.text)}
             {/if}
           {/each}
           {#if turn.interrupted}
