@@ -30,7 +30,7 @@ describe("resolvePose", () => {
     expect(resolvePose({ working: true, remote: true })).toMatchObject({ state: "wide", expression: "attentive", event: "remote_wait", classic: "orbit" });
     expect(resolvePose({ working: true, toolName: "Bash", toolError: true })).toMatchObject({ state: "idle", expression: "sad", event: "error" });
     expect(resolvePose({ done: true })).toMatchObject({ state: "notify", expression: "happy", event: "done" });
-    expect(resolvePose({ working: true, toolName: "wick_compact" })).toMatchObject({ state: "swirl", event: "compact", classic: "orbit" });
+    expect(resolvePose({ working: true, toolName: "wick_compact" })).toMatchObject({ state: "swirl", event: "compact", classic: "thinking" });
   });
 
   test("no event keeps the agent's own expression", () => {
@@ -68,6 +68,8 @@ describe("resolvePose", () => {
   test("an override changes the pose and the expression; '' = own expression", () => {
     const o = { read: { state: "play", expression: "suspicious" }, write: { expression: "" } };
     expect(resolvePose({ working: true, toolName: "Grep", overrides: o })).toMatchObject({ state: "play", expression: "suspicious", classic: "orbit" });
+    // A blob-only override draws as its classic look-alike, not the fallback.
+    expect(resolvePose({ attention: true, overrides: { ask_user: { state: "play" } } })).toMatchObject({ state: "play", classic: "orbit", event: "ask_user" });
     const w = resolvePose({ working: true, toolName: "Edit", overrides: o });
     expect(w.state).toBe("orbit");
     expect(w.expression).toBeUndefined();

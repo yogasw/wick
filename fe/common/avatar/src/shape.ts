@@ -102,6 +102,27 @@ export function normalizeState(s: string | null | undefined): AvatarState {
   return AVATAR_STATES.includes(s as AvatarState) ? (s as AvatarState) : "idle";
 }
 
+/* The nearest classic state for a pose the classic (and image) avatar
+   cannot draw: blob-only motions (blob/core/types STATES) and the
+   mockup's event poses. A busy pose orbits, a churning one thinks, a
+   loud one alerts, a cheerful one notifies. */
+const CLASSIC_POSES = new Map<string, AvatarState>([
+  ["wide", "orbit"], ["play", "orbit"], ["comet", "orbit"], ["scan", "orbit"], ["type", "orbit"], ["send", "orbit"], ["wait", "orbit"],
+  ["swirl", "thinking"], ["squeeze", "thinking"], ["working", "thinking"],
+  ["exclaim", "alert"], ["fail", "alert"],
+  ["wink", "notify"], ["burst", "notify"],
+  ["disabled", "sleep"], ["hatching", "egg"],
+]);
+
+/** classicPoseFor is the state the classic and image avatars draw for a
+    pose: their own states pass through, a blob-only pose gets its
+    nearest look-alike, anything else is idle. Only what is drawn maps;
+    the stored pose stays the blob one. */
+export function classicPoseFor(s: string | null | undefined): AvatarState {
+  if (AVATAR_STATES.includes(s as AvatarState)) return s as AvatarState;
+  return CLASSIC_POSES.get(s ?? "") ?? "idle";
+}
+
 /** stateFor picks the state from what the roster knows. A hatching egg
     wins over everything, then work (orbit while a tool runs), then a
     disabled agent, then the attention states. */

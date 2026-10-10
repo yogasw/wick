@@ -7,7 +7,7 @@
   import { Toggle } from "@wick-fe/common-ui";
   import {
     AgentAvatar, AVATAR_EVENTS, AVATAR_EVENT_LABELS, AVATAR_STATES, BLOB_EXPRESSIONS, BLOB_STATES, DEFAULT_EVENT_POSES,
-    cleanOverrides, isBlobKind, poseFor, type AvatarEvent, type AvatarImageView, type EventOverride, type EventOverrides,
+    classicPoseFor, cleanOverrides, isBlobKind, poseFor, type AvatarEvent, type AvatarImageView, type EventOverride, type EventOverrides,
   } from "@wick-fe/common-avatar";
 
   type Props = {
@@ -23,8 +23,11 @@
   let { kind, shape, color, expression, events, image, onChange }: Props = $props();
 
   const blob = $derived(isBlobKind(kind));
-  /* The classic avatar draws fewer states; the rest read as the fallback. */
+  /* The classic and image avatars draw fewer states: a blob-only pose
+     shows as the one they draw for it (classicPoseFor), while the stored
+     override keeps the blob pose so switching style back loses nothing. */
   const states = $derived<readonly string[]>(blob ? BLOB_STATES : AVATAR_STATES.filter((s) => s !== "egg"));
+  const shown = (s: string) => (blob ? s : classicPoseFor(s));
   const select =
     "rounded-lg border border-white-300 bg-white-100 px-2 py-1 text-xs text-black-900 focus:border-green-500 focus:outline-none disabled:opacity-50 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100";
 
@@ -66,15 +69,17 @@
               </span>
             </td>
             <td class="px-3 py-2">
+              <!-- A blob pose shown as its classic look-alike: the title names the
+                   stored one, so re-picking the shown pose (no change) makes sense. -->
               <select
                 class={select}
                 aria-label="{AVATAR_EVENT_LABELS[ev]} pose"
                 disabled={!pose}
-                value={pose?.state ?? d.state}
+                value={shown(pose?.state ?? d.state)}
+                title={!blob && shown(pose?.state ?? d.state) !== (pose?.state ?? d.state) ? `Blob pose: ${pose?.state ?? d.state}` : undefined}
                 onchange={(e) => set(ev, { ...row, state: (e.currentTarget as HTMLSelectElement).value })}
               >
                 {#each states as s (s)}<option value={s}>{s}</option>{/each}
-                {#if !states.includes(pose?.state ?? d.state)}<option value={pose?.state ?? d.state}>{pose?.state ?? d.state}</option>{/if}
               </select>
             </td>
             {#if blob}

@@ -10,7 +10,7 @@
    to the plain cues every avatar had before: orbit while a tool runs,
    thinking while a turn has none, alert / notify / idle otherwise. */
 import { EXPRESSIONS, STATES, type BlobExpression, type BlobState } from "./blob/core/types";
-import type { AvatarState } from "./shape.js";
+import { classicPoseFor, type AvatarState } from "./shape.js";
 
 /** The events with a row in the table, in the order Settings lists them. */
 export const AVATAR_EVENTS = ["read", "run", "write", "delegate", "ask_user", "remote_wait", "error", "done", "compact"] as const;
@@ -172,9 +172,6 @@ export type ResolvedPose = {
   event: AvatarEvent | null;
 };
 
-/* The blob states the classic avatar can also draw. */
-const CLASSIC: Partial<Record<BlobState, AvatarState>> = { idle: "idle", thinking: "thinking", orbit: "orbit", alert: "alert", notify: "notify", sleep: "sleep" };
-
 /** resolvePose: disabled > needs-attention > error > tool in flight >
     thinking > idle, each event through the agent's table, a row that is
     off through the fallback. */
@@ -183,7 +180,7 @@ export function resolvePose(i: PoseInput): ResolvedPose {
   const ev = eventOf(i);
   const pose = ev ? poseFor(ev, i.overrides) : null;
   if (!ev || !pose) return { state: fb === "egg" ? "idle" : fb, classic: fb, event: null };
-  const classic = CLASSIC[pose.state] ?? fb;
+  const classic = classicPoseFor(pose.state);
   return pose.expression ? { state: pose.state, classic, expression: pose.expression, event: ev } : { state: pose.state, classic, event: ev };
 }
 

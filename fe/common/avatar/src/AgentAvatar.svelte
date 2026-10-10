@@ -23,7 +23,7 @@
   import ImageAvatar from "./ImageAvatar.svelte";
   import { isImageKind, safeImageSrc, type AvatarImageView } from "./image.js";
   import { isBlobKind, blobStateFor } from "./blob.js";
-  import { blobPath, eyesAt, orbitDot, thinkDots, gazeTarget, approach, followsPointer, normalizeShape, normalizeState, stateFor, DOT_R, type AvatarState, type Vec } from "./shape.js";
+  import { blobPath, eyesAt, orbitDot, thinkDots, gazeTarget, approach, followsPointer, normalizeShape, normalizeState, classicPoseFor, stateFor, DOT_R, type AvatarState, type Vec } from "./shape.js";
   import { subscribe, pointer, pointerActive, prefersReducedMotion } from "./ticker.js";
   import { createFidget, type FidgetPose } from "./blob/motion/fidget";
   import { idleAnimationsOn } from "./idle.js";
@@ -133,7 +133,7 @@
   );
   const forced = $derived(event ? poseFor(event, events) : null);
   const current = $derived<AvatarState>(
-    pose ? normalizeState(pose) : event ? (forced ? normalizeState(forced.state) : stateFor({ working: true, tool: true })) : resolved.classic,
+    pose ? classicPoseFor(pose) : event ? (forced ? classicPoseFor(forced.state) : stateFor({ working: true, tool: true })) : resolved.classic,
   );
   /* The blob's motion and temporary expression; back to the agent's own
      the moment the event is over. */
