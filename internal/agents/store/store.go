@@ -373,6 +373,25 @@ type Store struct {
 	// replaces it. Guarded by mu.
 	timedOut string
 
+	// lockMu guards the inflight bookkeeping below. appendInflight runs on
+	// the Apply goroutine, but Flush can come from a Stop on another one.
+	lockMu sync.Mutex
+	// turnLock is the session's inflight.lock flock, held from the first
+	// inflight.jsonl frame of a turn until the turn is written out. A
+	// successor process booting during a graceful upgrade sees it held and
+	// leaves the turn alone instead of recovering it as interrupted.
+	turnLock *inflightLock
+	// inflightTurnID stamps every inflight frame of the turn in progress,
+	// so a recovery that raced the live turn files its partial under an id
+	// the finished turn can name in Replaces. "" between turns.
+	inflightTurnID string
+	// inflightFile is inflight.jsonl as this turn created it. Gone or a
+	// different file means someone recovered it meanwhile; inflightLost
+	// latches that, checked before each frame because the turn's next
+	// append recreates the file — maybe on the very inode just freed.
+	inflightFile os.FileInfo
+	inflightLost bool
+
 	now func() time.Time
 }
 
@@ -636,6 +655,9 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		return false, nil
 
 	case event.Done:
+		// The turn is over whether or not its flush lands: drop the turn
+		// lock, so a leftover inflight.jsonl is recoverable, not guarded.
+		defer s.endInflight()
 		// Token accounting goes to the session ledger (usage.json), not
 		// onto the turn: the questions it answers are aggregate ones, and
 		// a failure to record must never fail the turn that earned it.
@@ -655,6 +677,7 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		return true, nil
 
 	case event.Error:
+		defer s.endInflight()
 		// An errored turn ended too: plot the level it climbed to (as a
 		// usage-less Done does), and leave nothing for the next turn.
 		if s.turnLevel > 0 {
@@ -834,6 +857,9 @@ func (s *Store) takeInterruptCause() (string, string) {
 }
 
 func (s *Store) Flush() error {
+	// Flush ends the turn (a stop, a dying process): release the turn lock
+	// on every path, including the nothing-buffered one below.
+	defer s.endInflight()
 	s.mu.RLock()
 	evEmpty := len(s.eventBuf) == 0
 	bufEmpty := s.turnBuf.Len() == 0
@@ -896,9 +922,17 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		return nil
 	}
 	body := s.turnBuf.String()
+	// A recovery that ran while this turn was still alive already filed
+	// its partial as an interrupted turn; this one stands in for it (see
+	// Replaces below) so the history keeps one turn per turn.
+	taken := s.inflightTaken()
 	// A resumed turn replays the interrupted one from its first word; drop
-	// what the reader already has. See resume_dedupe.go.
-	body = s.dedupeResumedPrefix(body)
+	// what the reader already has. See resume_dedupe.go. Not for a turn
+	// that replaces that partial: it is shown instead of it, so it keeps
+	// every word.
+	if taken == "" {
+		body = s.dedupeResumedPrefix(body)
+	}
 	truncated := wasInterrupted
 	s.mu.Lock()
 	evSnap := s.eventBuf
@@ -929,6 +963,9 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		RemoteNote:  note,
 		Replaces:    s.replacedBy(note),
 	}
+	if turn.Replaces == "" {
+		turn.Replaces = taken
+	}
 	if wasInterrupted {
 		turn.InterruptedBy, turn.InterruptedNote = s.takeInterruptCause()
 	}
@@ -948,6 +985,7 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 	if err := os.Remove(s.layout.SessionInflight(s.sessionID)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		// non-fatal: log left to caller's discretion via raw.jsonl audit
 	}
+	s.endInflight()
 	return nil
 }
 
@@ -1210,6 +1248,10 @@ type InflightEntry struct {
 	// Display mirrors TurnEvent.Display. A binary's bytes are not in it
 	// (Blob is never serialized); recovery re-derives them from Text.
 	Display *event.Display `json:"display,omitempty"`
+	// TurnID is the id the live turn reserved for a recovery of itself;
+	// RecoverInflight files the partial under it. Empty in files written
+	// before it existed.
+	TurnID string `json:"turn_id,omitempty"`
 }
 
 // appendInflight writes one entry to the session's inflight.jsonl.
@@ -1217,13 +1259,86 @@ type InflightEntry struct {
 // crash but never blocks the live event pipeline. Caller passes the
 // already-built entry so the struct is identical to what consumers
 // see at replay time.
+//
+// The first frame of a turn takes the session's turn lock (see
+// beginInflightLocked); the turn's flush drops it.
 func (s *Store) appendInflight(e InflightEntry) error {
-	return storage.AppendJSONL(
-		s.layout.SessionInflight(s.sessionID),
-		"wick-inflight-v1",
-		s.sessionID,
-		e,
-	)
+	s.lockMu.Lock()
+	defer s.lockMu.Unlock()
+	if s.inflightTurnID == "" {
+		s.beginInflightLocked()
+	}
+	e.TurnID = s.inflightTurnID
+	path := s.layout.SessionInflight(s.sessionID)
+	if s.inflightFile != nil && !s.inflightLost {
+		if fi, serr := os.Stat(path); serr != nil || !os.SameFile(fi, s.inflightFile) {
+			s.inflightLost = true
+		}
+	}
+	err := storage.AppendJSONL(path, "wick-inflight-v1", s.sessionID, e)
+	if s.inflightFile == nil {
+		if fi, serr := os.Stat(path); serr == nil {
+			s.inflightFile = fi
+		}
+	}
+	return err
+}
+
+// beginInflightLocked opens a turn's inflight bookkeeping: reserves its
+// recovery id and takes the turn lock. Failing to get the lock never blocks
+// the turn — the lock only tells a successor to keep its hands off, and an
+// unlocked turn just loses that protection.
+//
+// Getting the lock fresh while an inflight.jsonl is already there means
+// its writer is gone: a predecessor that died mid-turn after the boot
+// recovery passed over it because it was still alive then. That leftover
+// is recovered now, before this turn streams on top of it. Caller holds
+// lockMu.
+func (s *Store) beginInflightLocked() {
+	if l, ok := tryLockInflight(inflightLockPath(s.layout, s.sessionID)); ok {
+		s.turnLock = l
+		if _, err := RecoverInflight(s.layout, s.sessionID, s.agentName, s.provider, s.now); err != nil {
+			// The leftover stays on disk and this turn appends after it;
+			// the next recovery folds both. Nothing better to do mid-event.
+			_ = err
+		}
+	}
+	s.inflightTurnID = fmt.Sprintf("%d", s.now().UTC().UnixNano())
+	s.inflightFile = nil
+	s.inflightLost = false
+}
+
+// endInflight closes the turn's inflight bookkeeping and drops the turn
+// lock. Called once the turn is written out (or found to have nothing to
+// write); idempotent.
+func (s *Store) endInflight() {
+	s.lockMu.Lock()
+	defer s.lockMu.Unlock()
+	s.turnLock.release()
+	s.turnLock = nil
+	s.inflightTurnID = ""
+	s.inflightFile = nil
+	s.inflightLost = false
+}
+
+// inflightTaken returns the turn's reserved recovery id when its
+// inflight.jsonl was taken away from under it — deleted, or replaced by a
+// new file — which only a recovery does while the turn is alive. "" when
+// the file is still the one this turn started.
+func (s *Store) inflightTaken() string {
+	s.lockMu.Lock()
+	defer s.lockMu.Unlock()
+	if s.inflightTurnID == "" || s.inflightFile == nil {
+		return ""
+	}
+	if s.inflightLost {
+		return s.inflightTurnID
+	}
+	fi, err := os.Stat(s.layout.SessionInflight(s.sessionID))
+	if err == nil && os.SameFile(fi, s.inflightFile) {
+		return ""
+	}
+	return s.inflightTurnID
 }
 
 // LoadInflight reads inflight.jsonl for a session and returns every
@@ -1318,6 +1433,14 @@ func RecoverInflight(layout config.Layout, sessionID, agentName, provider string
 	text := body.String()
 	ts := now().UTC()
 	turnID := fmt.Sprintf("%d", ts.UnixNano())
+	// The live turn reserved an id for exactly this; using it lets the
+	// turn, if it was still alive after all, replace this partial.
+	for _, e := range entries {
+		if e.TurnID != "" {
+			turnID = e.TurnID
+			break
+		}
+	}
 	hasTrace := writeTraceIndexStatic(layout, sessionID, turnID, events, DefaultTraceInlineBytes)
 	turn := ConversationTurn{
 		TurnID:      turnID,

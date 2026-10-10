@@ -56,6 +56,12 @@ type Registry struct {
 	// own and is re-read on each scan. lastDiskScan rate-limits that scan.
 	adopted      map[string]struct{}
 	lastDiskScan time.Time
+
+	// deferred holds sessions Reload passed over because another process
+	// was still running their turn, keyed to the LastActive they had then.
+	// See inflight_recovery.go. Guarded by deferMu, not mu.
+	deferMu  sync.Mutex
+	deferred map[string]time.Time
 }
 
 // diskScanInterval bounds how often a listing read re-scans the sessions
@@ -131,49 +137,33 @@ func (r *Registry) Reload() error {
 		return err
 	}
 	sessions := make(map[string]session.Session, len(sessionIDs))
+	deferred := map[string]time.Time{}
 	for _, id := range sessionIDs {
 		s, err := session.Load(r.layout, id)
 		if err != nil {
 			continue
 		}
+		// A turn still streaming in another process — the predecessor
+		// draining after a graceful upgrade — holds the session's turn
+		// lock. Its subprocess is alive: leave the status and inflight.jsonl
+		// alone, and look again once that lock frees (deferRecovery).
+		guard, free := store.TryLockInflight(r.layout, id)
+		if !free {
+			log.Info().Str("session", id).Msg("registry: session has a live turn in another process, inflight recovery deferred")
+			deferred[id] = s.Meta.LastActive
+			sessions[id] = s
+			continue
+		}
 		// Subprocess from previous run is gone — force status to idle
 		// and zero per-agent statuses. cli_session_id is preserved for
 		// resume.
-		dirty := false
-		if s.Meta.Status != session.StatusIdle {
-			s.Meta.Status = session.StatusIdle
-			dirty = true
-		}
-		for i := range s.Agents {
-			if s.Agents[i].Status != "idle" {
-				s.Agents[i].Status = "idle"
-				dirty = true
-			}
-		}
-		if dirty {
-			_ = session.SaveMeta(r.layout, id, s.Meta)
-			_ = session.SaveAgents(r.layout, id, s.Agents)
-		}
+		resetSessionStatus(r.layout, &s)
 		// Merge any inflight.jsonl left over from the previous process
 		// into conversation.jsonl as a truncated assistant turn. Without
 		// this, a subsequent --resume would branch off a history the
 		// agent CLI never saw the answer for.
-		recoveryAgent := s.Meta.ActiveAgent
-		if recoveryAgent == "" && len(s.Agents) > 0 {
-			recoveryAgent = s.Agents[0].Name
-		}
-		recoveryProvider := ""
-		for _, a := range s.Agents {
-			if a.Name == recoveryAgent {
-				recoveryProvider = a.Provider
-				break
-			}
-		}
-		if recovered, err := store.RecoverInflight(r.layout, id, recoveryAgent, recoveryProvider, nil); err != nil {
-			log.Warn().Err(err).Str("session", id).Msg("registry: recover inflight failed")
-		} else if recovered {
-			log.Info().Str("session", id).Str("agent", recoveryAgent).Msg("registry: recovered inflight turn into conversation.jsonl")
-		}
+		recoverSessionInflight(r.layout, s)
+		guard.Release()
 		sessions[id] = s
 	}
 
@@ -181,6 +171,7 @@ func (r *Registry) Reload() error {
 	r.sessions = sessions
 	r.presets = presets
 	r.invalidateSessionViews()
+	r.deferRecovery(deferred)
 	return nil
 }
 
