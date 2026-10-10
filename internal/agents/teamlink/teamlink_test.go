@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
 )
 
 type fakeDir struct{ peers []Peer }
@@ -42,6 +44,8 @@ type fakeTurns struct {
 	// a teammate messaging onwards while it answers.
 	nested map[string]func() error
 	errs   []error
+	// end, when set, is the turn's error (a remote's TurnEnd).
+	end func(Peer) error
 }
 
 func (f *fakeTurns) Run(_ context.Context, agent Peer, text string) (string, string, error) {
@@ -56,6 +60,11 @@ func (f *fakeTurns) Run(_ context.Context, agent Peer, text string) (string, str
 		f.mu.Lock()
 		f.errs = append(f.errs, err)
 		f.mu.Unlock()
+	}
+	if f.end != nil {
+		if err := f.end(agent); err != nil {
+			return "sess-" + agent.ID, "", err
+		}
 	}
 	return "sess-" + agent.ID, f.reply(agent, text), nil
 }
@@ -547,5 +556,37 @@ func TestFollowUpReachesTheAsker(t *testing.T) {
 	}
 	if h.FollowUp(context.Background(), "sess-unknown", "x") {
 		t.Fatal("delivered for a session that answered nothing")
+	}
+}
+
+// TestRemoteEndedStates: a remote whose task ended failed, rejected,
+// canceled or auth_required ends the team task in that state with the
+// remote's message as the reason, never as completed.
+func TestRemoteEndedStates(t *testing.T) {
+	for _, c := range []struct {
+		state a2a.TaskState
+		want  string
+	}{
+		{a2a.TaskStateFailed, "failed"},
+		{a2a.TaskStateRejected, "rejected"},
+		{a2a.TaskStateCanceled, "canceled"},
+		{a2a.TaskStateAuthRequired, "rejected"},
+	} {
+		h, turns, _ := newTestHub(func(Peer, string) string { return "ok" })
+		d := h.Dir.(*fakeDir)
+		d.peers = append(d.peers, Peer{ID: "a-res", OwnerID: "u1", Handle: "research", Name: "Research", Remote: true})
+		turns.end = func(Peer) error { return &TurnEnd{State: c.state, Text: "remote says no"} }
+		ctx := context.Background()
+		res, err := h.Send(ctx, SendInput{CallerSession: "s", CallerAgentID: "a-cap", To: "research", Text: "do it"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.State != c.want || res.Reason != "remote says no" || res.ReplyText != "" {
+			t.Fatalf("%s: result = %+v", c.state, res)
+		}
+		got, err := h.GetTask(ctx, "a-cap", res.TaskID)
+		if err != nil || got.State != c.want || got.Reason != "remote says no" {
+			t.Fatalf("%s: get_task = %+v, %v", c.state, got, err)
+		}
 	}
 }

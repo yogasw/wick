@@ -328,11 +328,12 @@ func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text
 	// Subscribe BEFORE sending, or a fast turn ends unseen.
 	ch, unsub := NewDelegationStream(globalBcast).SubscribeSession(sessionID)
 	defer unsub()
+	start := time.Now()
 	// WithoutCancel: the turn must outlive the call that carried it.
 	if err := globalPool.Send(context.WithoutCancel(ctx), sessionID, "", sourceTeam, "user", text); err != nil {
 		return sessionID, "", err
 	}
-	text, failed := collectTurnErr(ctx, ch)
+	text, failed := collectTurnErr(ctx, ch, agent.Remote)
 	// The task's turn is over: let go of the session now, not after the
 	// reply is read, so a cancel arriving later never takes the next turn
 	// (someone else's) for the task's.
@@ -342,12 +343,43 @@ func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text
 	if waited, ok := remote.IsTimeout(failed); ok && strings.TrimSpace(text) == "" {
 		text = remote.PendingNotice(agent.Handle, waited)
 	}
-	// An A2A remote that asks a question keeps its task open; the asker
-	// sees input_required and answers with the same task_id.
-	if agent.Remote && a2aremote.LoadState(globalLayout.SessionDir(sessionID)).InputRequired {
-		return sessionID, "", &teamlink.TurnEnd{State: a2a.TaskStateInputRequired, Text: text}
+	if agent.Remote {
+		if end := remoteTurnEnd(a2aremote.LoadState(globalLayout.SessionDir(sessionID)), start, text, failed); end != nil {
+			return sessionID, "", end
+		}
 	}
 	return sessionID, text, nil
+}
+
+// remoteTurnEnd is how a remote agent's turn ends a team task when that
+// is not plainly completed. An A2A remote that asks a question keeps its
+// task open: the asker sees input_required and answers with the same
+// task_id. One whose task this turn ended failed, rejected, canceled or
+// auth_required ends the team task in that state with the remote's
+// message; any other error of the turn ends it failed. A timeout is not
+// an end: its reply follows (settleLateReply).
+func remoteTurnEnd(st a2aremote.State, start time.Time, text, failed string) *teamlink.TurnEnd {
+	if _, timedOut := remote.IsTimeout(failed); timedOut {
+		failed = ""
+	}
+	// The state is the session's: only one this turn saved speaks for it,
+	// or an earlier turn's question or end would come back.
+	fresh := !st.UpdatedAt.Before(start)
+	if fresh && st.InputRequired {
+		return &teamlink.TurnEnd{State: a2a.TaskStateInputRequired, Text: text}
+	}
+	failed = a2aremote.CleanReason(failed)
+	if state, ok := st.EndedState(); ok && fresh {
+		reason := st.Reason
+		if reason == "" {
+			reason = failed
+		}
+		return &teamlink.TurnEnd{State: state, Text: reason}
+	}
+	if failed != "" {
+		return &teamlink.TurnEnd{State: a2a.TaskStateFailed, Text: failed}
+	}
+	return nil
 }
 
 // StopTask cancels task id in sessionID (teamlink.TaskStopper): the
@@ -572,34 +604,38 @@ func chatUserOf(agent teamlink.Peer) string {
 
 // collectTurn joins the text of one turn, up to its Done.
 func collectTurn(ctx context.Context, ch <-chan delegation.StreamEvent) string {
-	text, _ := collectTurnErr(ctx, ch)
+	text, _ := collectTurnErr(ctx, ch, false)
 	return text
 }
 
-// collectTurnErr is collectTurn plus the error of a remote turn that
-// timed out, which ends the turn too.
-func collectTurnErr(ctx context.Context, ch <-chan delegation.StreamEvent) (string, string) {
+// collectTurnErr is collectTurn plus the turn's error. With remoteTurn
+// (any remote agent: A2A, Slack, plugin) the first error ends the turn,
+// since the remote runner sends nothing after it; a remote timeout does
+// so in any session. Any other error is returned with the text at Done.
+func collectTurnErr(ctx context.Context, ch <-chan delegation.StreamEvent, remoteTurn bool) (string, string) {
 	var b strings.Builder
+	failed := ""
 	for {
 		select {
 		case <-ctx.Done():
-			return b.String(), ""
+			return b.String(), failed
 		case ev, ok := <-ch:
 			if !ok {
-				return b.String(), ""
+				return b.String(), failed
 			}
 			switch ev.Type {
 			case event.Error:
-				if _, timedOut := remote.IsTimeout(ev.Text); timedOut {
+				if _, timedOut := remote.IsTimeout(ev.Text); timedOut || remoteTurn {
 					return b.String(), ev.Text
 				}
+				failed = ev.Text
 			case event.TextDelta:
 				b.WriteString(ev.Text)
 			case event.TextReplace:
 				b.Reset()
 				b.WriteString(ev.Text)
 			case event.Done:
-				return b.String(), ""
+				return b.String(), failed
 			}
 		}
 	}

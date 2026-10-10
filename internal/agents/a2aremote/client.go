@@ -133,7 +133,11 @@ func Ping(ctx context.Context, g Guard, card *a2a.AgentCard, auth PlainAuth) Pin
 				res.Reply += partsText(a.Parts)
 			}
 		}
-		res.OK = v.Status.State != a2a.TaskStateFailed && v.Status.State != a2a.TaskStateRejected
+		res.OK = !endedState(v.Status.State)
+		if !res.OK {
+			// The Test button shows the error, not the reply.
+			res.Error = CleanReason(res.Reply)
+		}
 	default:
 		res.State, res.Error = "send_failed", fmt.Sprintf("unexpected result %T", out)
 	}

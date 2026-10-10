@@ -9,6 +9,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/yogasw/wick/internal/agents/a2aremote"
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/delegation"
 	"github.com/yogasw/wick/internal/agents/event"
@@ -228,7 +229,7 @@ func TestLateWindowForwardsThroughSamePath(t *testing.T) {
 func TestCollectTurnErrSeesRemoteTimeout(t *testing.T) {
 	ch := make(chan delegation.StreamEvent, 2)
 	ch <- delegation.StreamEvent{Type: event.Error, Text: remote.TimeoutMessage(3 * time.Minute)}
-	text, failed := collectTurnErr(context.Background(), ch)
+	text, failed := collectTurnErr(context.Background(), ch, false)
 	if text != "" {
 		t.Fatalf("text = %q", text)
 	}
@@ -244,5 +245,64 @@ func TestHandoffTurnKeepsCallerSession(t *testing.T) {
 	}
 	if _, ok := handoffTurn(teamlink.Handoff{From: "a"}, time.Now()).Extras["from_session"]; ok {
 		t.Fatal("empty from_session should be left out")
+	}
+}
+
+// A remote turn's error is its last event: collectTurnErr returns it
+// there, while a local turn's error waits for Done.
+func TestCollectTurnErrRemoteError(t *testing.T) {
+	ch := make(chan delegation.StreamEvent, 3)
+	ch <- delegation.StreamEvent{Type: event.TextDelta, Text: "partial"}
+	ch <- delegation.StreamEvent{Type: event.Error, Text: "Remote agent: boom"}
+	text, failed := collectTurnErr(context.Background(), ch, true)
+	if text != "partial" || failed != "Remote agent: boom" {
+		t.Fatalf("remote = %q, %q", text, failed)
+	}
+	ch = make(chan delegation.StreamEvent, 3)
+	ch <- delegation.StreamEvent{Type: event.Error, Text: "rate limited"}
+	ch <- delegation.StreamEvent{Type: event.TextDelta, Text: "recovered"}
+	ch <- delegation.StreamEvent{Type: event.Done}
+	if text, failed := collectTurnErr(context.Background(), ch, false); text != "recovered" || failed != "rate limited" {
+		t.Fatalf("local = %q, %q", text, failed)
+	}
+}
+
+// remoteTurnEnd: a remote's failed, rejected, canceled or auth_required
+// task ends the team task in that state with the remote's message; a
+// question stays input_required; a stale state never speaks for this
+// turn; a timeout is no end.
+func TestRemoteTurnEnd(t *testing.T) {
+	start := time.Now()
+	fresh, stale := start.Add(time.Second), start.Add(-time.Minute)
+	for _, c := range []struct {
+		name   string
+		st     a2aremote.State
+		failed string
+		state  a2a.TaskState
+		text   string
+	}{
+		{"completed", a2aremote.State{LastState: string(a2a.TaskStateCompleted), UpdatedAt: fresh}, "", "", ""},
+		{"question", a2aremote.State{InputRequired: true, TaskID: "t1", UpdatedAt: fresh}, "", a2a.TaskStateInputRequired, "reply"},
+		{"failed", a2aremote.State{LastState: string(a2a.TaskStateFailed), Reason: "boom", UpdatedAt: fresh}, "Remote agent: boom", a2a.TaskStateFailed, "boom"},
+		{"rejected", a2aremote.State{LastState: string(a2a.TaskStateRejected), Reason: "not my job", UpdatedAt: fresh}, "Remote agent: not my job", a2a.TaskStateRejected, "not my job"},
+		{"canceled", a2aremote.State{LastState: string(a2a.TaskStateCanceled), Reason: "stopped", UpdatedAt: fresh}, "Remote agent: stopped", a2a.TaskStateCanceled, "stopped"},
+		{"auth", a2aremote.State{LastState: string(a2a.TaskStateAuthRequired), Reason: "sign in", UpdatedAt: fresh}, "Remote agent: sign in", a2a.TaskStateAuthRequired, "sign in"},
+		{"stale question", a2aremote.State{InputRequired: true, TaskID: "t1", UpdatedAt: stale}, "", "", ""},
+		{"stale question, turn failed", a2aremote.State{InputRequired: true, TaskID: "t1", UpdatedAt: stale}, "Remote agent: gone", a2a.TaskStateFailed, "Remote agent: gone"},
+		{"stale failed", a2aremote.State{LastState: string(a2a.TaskStateFailed), Reason: "old", UpdatedAt: stale}, "", "", ""},
+		{"transport error", a2aremote.State{LastState: string(a2a.TaskStateWorking), UpdatedAt: fresh}, "A2A call failed: refused", a2a.TaskStateFailed, "A2A call failed: refused"},
+		{"slack error", a2aremote.State{}, "channel not found", a2a.TaskStateFailed, "channel not found"},
+		{"timeout", a2aremote.State{LastState: string(a2a.TaskStateWorking), UpdatedAt: fresh}, remote.TimeoutMessage(time.Minute), "", ""},
+	} {
+		end := remoteTurnEnd(c.st, start, "reply", c.failed)
+		if c.state == "" {
+			if end != nil {
+				t.Fatalf("%s: end = %+v, want none", c.name, end)
+			}
+			continue
+		}
+		if end == nil || end.State != c.state || end.Text != c.text {
+			t.Fatalf("%s: end = %+v", c.name, end)
+		}
 	}
 }

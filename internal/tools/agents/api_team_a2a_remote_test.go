@@ -2,16 +2,23 @@ package agents
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/yogasw/wick/internal/agents/a2aremote"
 	"github.com/yogasw/wick/internal/agents/a2aremote/a2aremotetest"
+	"github.com/yogasw/wick/internal/agents/event"
+	"github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/team"
+	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -197,5 +204,69 @@ func TestRemoteAgentChatRunsOnRemote(t *testing.T) {
 	code, out, raw = remoteCall(t, u, http.MethodGet, "/api/team/agents/"+id+"/a2a-remote?session_id="+sid, nil, apiTeamRemoteGet)
 	if code != http.StatusOK || out["session"].(map[string]any)["context_id"] == "" {
 		t.Fatalf("session state: %d %s", code, raw)
+	}
+}
+
+// TestRemoteTeamTaskEndsAsRemoteSays: a team task's turn on an A2A remote
+// agent, run through RunIn with the real pool, broadcaster and session
+// state, ends in the state the remote's task ended in, with its words;
+// a question stays input_required and its answer continues the task.
+func TestRemoteTeamTaskEndsAsRemoteSays(t *testing.T) {
+	withRemoteWorld(t, "127.0.0.1")
+	srv := a2aremotetest.New("Moody")
+	defer srv.Close()
+	u := &entity.User{ID: "u1"}
+	code, out, raw := remoteCall(t, u, http.MethodPost, "/api/team/a2a-remote", map[string]any{"url": srv.URL}, apiTeamRemoteCreate)
+	if code != http.StatusOK {
+		t.Fatalf("create: %d %s", code, raw)
+	}
+	id := out["id"].(string)
+	code, out, raw = remoteCall(t, u, http.MethodPost, "/api/team/agents/"+id+"/chat", map[string]any{}, apiTeamAgentChat)
+	if code != http.StatusOK {
+		t.Fatalf("chat: %d %s", code, raw)
+	}
+	sid := out["session_id"].(string)
+
+	prevB := globalBcast
+	globalBcast = NewBroadcaster()
+	t.Cleanup(func() { globalBcast = prevB })
+	var p *pool.Pool
+	p = pool.New(pool.PoolConfig{Layout: globalLayout, MaxConcurrent: 2, Factory: &pool.ClaudeFactory{
+		Layout:              globalLayout,
+		RemoteSpawnerLoader: RemoteSpawnerFor,
+		OnEvent:             func(sid, name string, ev event.AgentEvent) { globalBcast.Publish(sid, name, ev) },
+		// Stop waits for every agent's exit to reach the pool.
+		OnExit: func(sid, name string, reason provider.ExitReason, detail string) {
+			p.HandleExit(sid, name, reason, detail)
+		},
+	}})
+	globalPool = p
+	t.Cleanup(p.Stop)
+
+	peer := teamlink.Peer{ID: id, OwnerID: u.ID, Handle: "moody", Remote: true}
+	for _, c := range []struct {
+		say   string
+		state a2a.TaskState // "" = completed
+		text  string
+	}{
+		{"fail", a2a.TaskStateFailed, "boom"},
+		{"reject", a2a.TaskStateRejected, "not my job"},
+		{"ask which env", a2a.TaskStateInputRequired, "Which environment?"},
+		{"staging", "", "deploying to staging"},
+		{"hello", "", "echo: hello"},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		_, text, err := poolTurns{}.RunIn(ctx, peer, sid, c.say)
+		cancel()
+		var end *teamlink.TurnEnd
+		if c.state == "" {
+			if err != nil || text != c.text {
+				t.Fatalf("%s: %q, %v", c.say, text, err)
+			}
+			continue
+		}
+		if !errors.As(err, &end) || end.State != c.state || end.Text != c.text {
+			t.Fatalf("%s: %q, %v (%+v)", c.say, text, err, end)
+		}
 	}
 }
