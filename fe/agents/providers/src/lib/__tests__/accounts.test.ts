@@ -22,7 +22,7 @@ describe("accounts helpers", () => {
   it("labels new types", () => {
     expect(typeLabel("omp")).toContain("oh-my-pi");
     expect(typeLabel("unknown")).toBe("unknown");
-    expect(typeOption("omp")).toEqual({ label: "oh-my-pi (omp)", value: "omp", description: "Login ChatGPT atau Claude · 1 profile per instance" });
+    expect(typeOption("omp")).toEqual({ label: "oh-my-pi (omp)", value: "omp", description: "Sign in with ChatGPT or Claude · 1 profile per instance" });
     expect(typeOption("gemini").badge).toBe("experimental");
     expect(typeOption("x")).toEqual({ label: "x", value: "x" });
   });

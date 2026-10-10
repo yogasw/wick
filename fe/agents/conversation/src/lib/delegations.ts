@@ -173,6 +173,15 @@ export function taskProgress(t: TeamTaskItem): string {
   return chars.length > PROGRESS_MAX ? chars.slice(0, PROGRESS_MAX - 1).join("") + "…" : line;
 }
 
+/** taskProgressShown is taskProgress for a line the typing dots follow:
+    a trailing "…"/"..." of the line's own would read twice ("window…•••"),
+    so it goes; the "…" the cap adds stays, it marks the cut. */
+export function taskProgressShown(t: TeamTaskItem): string {
+  const line = taskProgress(t);
+  if (Array.from((t.progress ?? "").replace(/\s+/g, " ").trim()).length > PROGRESS_MAX) return line;
+  return line.replace(/\s*(…|\.{3})$/, "");
+}
+
 export function isTaskActive(t: TeamTaskItem): boolean {
   const s = taskStatus(t);
   return s === "working" || s === "answering" || s === "needs_you";

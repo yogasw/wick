@@ -99,4 +99,67 @@ describe("TaskThread", () => {
     await waitFor(() => expect(screen.getByTestId("task-thread-working")).toBeDefined());
     expect(screen.queryByTestId("task-thread-progress")).toBeNull();
   });
+
+  /* P48 s18g (audit #12): the in-progress line reads "Halodev 10:13 ·
+     Checking Loki…" with the animated dots (combined 2a), the dots only
+     while the task runs. The time is when this client saw the line: a
+     progress push does not move updated_at. */
+  test("progress line carries the dots while running, none when done", async () => {
+    const load = vi.fn().mockResolvedValue(log);
+    const r = render(TaskThread, { props: { task: task({ progress: "Checking Loki for the 21:00 window…" }), load } });
+    await waitFor(() => expect(screen.getByTestId("task-thread-progress")).toBeDefined());
+    const dots = screen.getByTestId("task-thread-working").querySelector(".dots")!;
+    expect(dots).not.toBeNull();
+    expect(dots.getAttribute("aria-hidden")).toBe("true");
+    // The line's own trailing ellipsis gives way to the dots; the title keeps the line as sent.
+    const p = screen.getByTestId("task-thread-progress");
+    expect(p.textContent).toBe("Checking Loki for the 21:00 window");
+    expect(p.getAttribute("title")).toBe("Checking Loki for the 21:00 window…");
+    r.unmount();
+    render(TaskThread, { props: { task: task({ state: "completed", progress: "Checking Loki" }), load } });
+    await waitFor(() => expect(screen.getAllByTestId("task-thread-msg")).toHaveLength(3));
+    expect(screen.queryByTestId("task-thread-working")).toBeNull();
+    expect(screen.queryByTestId("task-thread-progress")).toBeNull();
+    expect(document.querySelector(".dots")).toBeNull();
+  });
+
+  test("the progress time is stamped when the line is first seen and when it changes", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 9, 11, 10, 13).getTime());
+    try {
+      const load = vi.fn().mockResolvedValue(log);
+      const r = render(TaskThread, { props: { task: task(), load } });
+      await waitFor(() => expect(screen.getByTestId("task-thread-working")).toBeDefined());
+      // "Working…": no progress yet, no time.
+      expect(screen.queryByTestId("task-thread-working-at")).toBeNull();
+      await r.rerender({ task: task({ progress: "Checking Loki" }), load });
+      await waitFor(() => expect(screen.getByTestId("task-thread-working-at").textContent).toBe("10:13"));
+      // Same text again (the task re-renders, updated_at moves): the time stays.
+      now.mockReturnValue(new Date(2026, 9, 11, 10, 20).getTime());
+      await r.rerender({ task: task({ progress: "Checking Loki", updated_at: at(10, 20) }), load });
+      await waitFor(() => expect(load).toHaveBeenCalledTimes(3));
+      expect(screen.getByTestId("task-thread-working-at").textContent).toBe("10:13");
+      // New text: a new time.
+      await r.rerender({ task: task({ progress: "Pulling request ids", updated_at: at(10, 20) }), load });
+      await waitFor(() => expect(screen.getByTestId("task-thread-working-at").textContent).toBe("10:20"));
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  test("progress ellipsis: ASCII ... goes, none stays intact, the cap's … stays", async () => {
+    const load = vi.fn().mockResolvedValue(log);
+    const shown = async (progress: string) => {
+      const r = render(TaskThread, { props: { task: task({ progress }), load } });
+      await waitFor(() => expect(screen.getByTestId("task-thread-progress")).toBeDefined());
+      const text = screen.getByTestId("task-thread-progress").textContent;
+      r.unmount();
+      return text;
+    };
+    expect(await shown("Checking Loki ...")).toBe("Checking Loki");
+    expect(await shown("Checking Loki for 401s")).toBe("Checking Loki for 401s");
+    const long = "x".repeat(200);
+    const cut = await shown(long);
+    expect(cut).toBe("x".repeat(139) + "…");
+    expect(Array.from(cut!)).toHaveLength(140);
+  });
 });

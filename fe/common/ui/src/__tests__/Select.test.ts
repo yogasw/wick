@@ -7,7 +7,7 @@ afterEach(() => cleanup());
 const opts = [
   { label: "Claude", value: "claude" },
   { label: "Gemini", value: "gemini", badge: "experimental", disabled: true },
-  { label: "oh-my-pi (omp)", value: "omp", description: "Login ChatGPT atau Claude" },
+  { label: "oh-my-pi (omp)", value: "omp", description: "Sign in with ChatGPT or Claude" },
   { label: "opencode", value: "opencode" },
 ];
 
@@ -33,7 +33,7 @@ describe("Select", () => {
     const list = screen.getByRole("listbox");
     expect(list.parentElement?.parentElement).toBe(document.body); // portalled
     const omp = screen.getByRole("option", { name: /oh-my-pi/ });
-    expect(omp.textContent).toContain("Login ChatGPT atau Claude");
+    expect(omp.textContent).toContain("Sign in with ChatGPT or Claude");
     expect(screen.getByRole("option", { name: /^Claude$/ }).getAttribute("aria-selected")).toBe("true");
     await fireEvent.click(omp);
     expect(onChange).toHaveBeenCalledWith("omp");

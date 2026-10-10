@@ -16,7 +16,7 @@
   import TeamIcon from "./TeamIcon.svelte";
   import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
-  import { clockTime, taskProgress, taskStatus } from "../../delegations.js";
+  import { clockTime, taskProgress, taskProgressShown, taskStatus } from "../../delegations.js";
 
   type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null };
   type Props = {
@@ -56,6 +56,18 @@
     return (e.handle && agents[e.handle]?.name) || e.name || task.to_name || "@" + task.to_handle;
   }
   const teammateName = $derived(agents[task.to_handle]?.name || task.to_name || "@" + task.to_handle);
+  const progress = $derived(taskProgress(task));
+  const progressShown = $derived(taskProgressShown(task));
+  // The time on the progress line is when this client saw that line: a
+  // progress push lives in the server's memory only and does not move the
+  // task's updated_at, so updated_at would show when the task last changed.
+  let progressAt = $state(0);
+  let seenProgress = "";
+  $effect(() => {
+    const p = progress;
+    if (p && p !== seenProgress) progressAt = Date.now();
+    seenProgress = p;
+  });
 </script>
 
 {#snippet avatar(handle: string | undefined, live: boolean)}
@@ -104,9 +116,9 @@
     <div data-testid="task-thread-working" data-role="teammate" class="flex gap-2 px-3 py-1">
       {@render avatar(task.to_handle, true)}
       <div class="min-w-0 flex-1">
-        <div class="flex items-baseline gap-1.5 text-[11px] text-black-700"><b class="text-xs font-semibold text-black-900 dark:text-white-100">{teammateName}</b></div>
+        <div class="flex items-baseline gap-1.5 text-[11px] text-black-700"><b class="text-xs font-semibold text-black-900 dark:text-white-100">{teammateName}</b>{#if progress && progressAt}<span data-testid="task-thread-working-at">{clockTime(progressAt)}</span>{/if}</div>
         <!-- The live progress line when the server sent one (combined 2a), else Working… -->
-        <div class="text-[12.5px] leading-[1.5] text-green-600 dark:text-green-400">{#if taskProgress(task)}<span data-testid="task-thread-progress" class="block truncate" title={taskProgress(task)}>{taskProgress(task)}</span>{:else}Working<Dots />{/if}</div>
+        <div class="text-[12.5px] leading-[1.5] text-green-600 dark:text-green-400">{#if progress}<span class="flex min-w-0 items-baseline"><span data-testid="task-thread-progress" class="truncate" title={progress}>{progressShown}</span><span class="shrink-0"><Dots /></span></span>{:else}Working<Dots />{/if}</div>
       </div>
     </div>
   {/if}
