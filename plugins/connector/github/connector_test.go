@@ -143,7 +143,7 @@ func TestOperations(t *testing.T) {
 	for _, c := range Operations() {
 		ops = append(ops, c.Ops...)
 	}
-	assert.Len(t, ops, 57)
+	assert.Len(t, ops, 64)
 	keys := make([]string, len(ops))
 	for i, op := range ops {
 		keys[i] = op.Key
@@ -166,6 +166,8 @@ func TestOperations(t *testing.T) {
 		"list_collaborators", "create_repo", "update_repo",
 		"list_workflows", "list_workflow_runs", "dispatch_workflow",
 		"list_hooks", "create_hook",
+		"list_rulesets", "get_ruleset", "get_branch_rules", "list_environments", "get_environment",
+		"validate_repo_setup", "token_access",
 	}, keys)
 }
 
