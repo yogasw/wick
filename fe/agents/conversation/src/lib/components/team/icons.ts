@@ -23,6 +23,8 @@ export const TEAM_ICONS = {
   retry: '<path d="M13 8a5 5 0 11-1.6-3.7M13 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
   /** Recovered after a restart. */
   recover: '<path d="M3 8a5 5 0 109-3M12 2v3H9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+  /** A head and shoulders: the person, when their name is not known. */
+  user: '<g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="5.5" r="2.5"/><path d="M3.5 13.5a4.5 4.5 0 019 0"/></g>',
 } as const;
 
 export type TeamIconName = keyof typeof TEAM_ICONS;

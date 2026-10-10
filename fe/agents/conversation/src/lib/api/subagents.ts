@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { apiGetE, apiPostE, APIError } from "@wick-fe/common-api";
-import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
+import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem, TeamThreadEntry } from "../types/agents.js";
 
 // liveSubAgents keeps only the sub-agents that are still working. Finished
 // ones must NOT raise the rail badge — otherwise the badge sticks at "3"
@@ -20,6 +20,13 @@ export const getTeamTasks = (base: string, id: string) =>
   apiGetE<{ tasks: TeamTaskItem[] | null }>(
     `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks`,
   ).pipe(Effect.map((r) => r?.tasks ?? []));
+
+// getTeamTaskThread reads the messages of one task this chat sent, oldest
+// first, for the task's thread (chip section, Tasks tab).
+export const getTeamTaskThread = (base: string, id: string, taskId: string) =>
+  apiGetE<{ messages: TeamThreadEntry[] | null }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/thread`,
+  ).pipe(Effect.map((r) => r?.messages ?? []));
 
 // answerTeamTask sends the person's answer to a teammate's question
 // straight to that task; the agent that sent it is told. 409 = someone

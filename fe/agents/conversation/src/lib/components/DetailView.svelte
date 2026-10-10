@@ -62,7 +62,7 @@
   import { setTeamTasksCtx } from "../teamTasksContext.js";
   import { tasksByTurn, liveTurnTasks, taskRailBadge } from "../delegations.js";
   import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
-  import { answerTeamTask, cancelTeamTask } from "../api/subagents.js";
+  import { answerTeamTask, cancelTeamTask, getTeamTaskThread } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
   import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
   import {
@@ -1273,6 +1273,11 @@
       loadTeamTasks();
     }
   }
+  // A task's thread, read when it is opened; the open thread reads it
+  // again when the task's team_task event changes it.
+  function loadTaskThread(taskId: string) {
+    return run(getTeamTaskThread(base, sessionId, taskId).pipe(Effect.provide(WickClientLayer)));
+  }
   function openTaskChat(t: TeamTaskItem) {
     navigateAgents({ handle: t.to_handle, session: t.chat_id || null, panel: null });
   }
@@ -1289,6 +1294,7 @@
     get answer() { return readOnly ? undefined : answerTask; },
     get cancel() { return readOnly ? undefined : cancelTask; },
     openChat: openTaskChat,
+    get loadThread() { return readOnly ? undefined : loadTaskThread; },
   });
   /* Every change of a task this chat sent arrives as a `team_task` event
      on the stream (patched in, see startSSE). A new turn still refetches
@@ -3316,6 +3322,7 @@
           onCancel={readOnly ? undefined : cancelTask}
           onJump={jumpToTask}
           onOpenChat={agentMode?.agent ? openTaskChat : undefined}
+          loadThread={readOnly ? undefined : loadTaskThread}
         />
       {:else if railTab === "subagents"}
         <SubAgentPanel
@@ -3532,6 +3539,7 @@
               onCancel={readOnly ? undefined : cancelTask}
               onJump={jumpToTask}
               onOpenChat={agentMode?.agent ? openTaskChat : undefined}
+              loadThread={readOnly ? undefined : loadTaskThread}
               header={false}
             />
           {:else if railTab === "subagents"}

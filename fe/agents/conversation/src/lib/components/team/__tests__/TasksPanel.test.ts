@@ -234,3 +234,32 @@ describe("TasksPanel (combined §4)", () => {
     expect(screen.queryByTestId("tasks-panel-count")).toBeNull();
   });
 });
+
+/* P48 s11 (A.10): a working row's "Thread · N" opens its TaskThread. */
+describe("TasksPanel Thread · N", () => {
+  test("Thread · N opens the task's thread under the row, read lazily", async () => {
+    const loadThread = vi.fn().mockResolvedValue([
+      { role: "captain", handle: "captain", name: "Captain", text: "check the logs", at: at(11, 57) },
+      { role: "teammate", handle: "anton", name: "Anton", text: "on it", at: at(11, 58) },
+    ]);
+    render(TasksPanel, { props: { tasks: [task({ message_count: 2 }), task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed" })], loadThread, onCancel: vi.fn() } });
+    const btns = screen.getAllByTestId("tasks-row-thread");
+    expect(btns).toHaveLength(1);
+    expect(btns[0].textContent!.trim()).toBe("Thread · 2");
+    expect(loadThread).not.toHaveBeenCalled();
+    await fireEvent.click(btns[0]);
+    expect(btns[0].getAttribute("aria-expanded")).toBe("true");
+    await vi.waitFor(() => expect(within(rowOf("Anton")).getAllByTestId("task-thread-msg")).toHaveLength(2));
+    expect(loadThread).toHaveBeenCalledWith("t1");
+    await fireEvent.click(btns[0]);
+    expect(screen.queryByTestId("task-thread")).toBeNull();
+  });
+
+  test("without message_count it reads Thread; without a loader it is not offered", async () => {
+    const r = render(TasksPanel, { props: { tasks: [task({})], loadThread: vi.fn().mockResolvedValue([]) } });
+    expect(screen.getByTestId("tasks-row-thread").textContent!.trim()).toBe("Thread");
+    r.unmount();
+    render(TasksPanel, { props: { tasks: [task({})], onCancel: vi.fn() } });
+    expect(screen.queryByTestId("tasks-row-thread")).toBeNull();
+  });
+});

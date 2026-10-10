@@ -447,6 +447,8 @@ type taskRef struct {
 	// same way again, so it reaches the same teammate through the same
 	// share.
 	originUser string
+	// log is the task's thread (logLocked), oldest first.
+	log []ThreadEntry
 }
 
 // OriginUser is the origin of a task a person started (taskRef.origin).
@@ -705,6 +707,9 @@ type SendInput struct {
 	// byUser marks the user's own answer (AnswerFromUser), which holds the
 	// task's userAnswer claim.
 	byUser bool
+	// logText is what the task's thread shows for Text ("" = Text): the
+	// user's answer without the framing the teammate reads.
+	logText string
 }
 
 // Result is what a caller gets back.
@@ -853,6 +858,8 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("team: connect @%s: %w", target.Handle, err)
 	}
+	// The thread dates the message when it left, ahead of any reply.
+	sentAt := h.now()
 	req := &a2a.SendMessageRequest{Message: msg, Config: &a2a.SendMessageConfig{ReturnImmediately: true}}
 	res, err := cl.SendMessage(ctx, req)
 	// An answer that comes right back can find the teammate's last turn
@@ -903,6 +910,21 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	}
 	if userOrigin {
 		ref.origin, ref.originUser = OriginUser, in.SessionUser
+	}
+	entry := ThreadEntry{Role: ThreadCaptain, Handle: caller.Handle, Name: caller.Name, Text: in.Text, At: sentAt}
+	if in.logText != "" {
+		entry.Text = in.logText
+	}
+	if userOrigin || in.byUser {
+		entry = ThreadEntry{Role: ThreadUser, Text: entry.Text, At: entry.At}
+	}
+	ref.logLocked(entry)
+	// A reply that settled before this registered the task did not know
+	// the teammate yet.
+	for i := range ref.log {
+		if e := &ref.log[i]; e.Role == ThreadTeammate && e.Handle == "" {
+			e.Handle, e.Name = target.Handle, target.Name
+		}
 	}
 	if wait == 0 && h.fanningOutLocked(in.CallerSession, task.ID) {
 		wait = -1
@@ -993,6 +1015,20 @@ func (h *Hub) supersede(id, next a2a.TaskID) {
 	ref.finished, ref.delivered, ref.state, ref.touched = true, true, a2a.TaskStateCanceled, h.now()
 	ref.ended = ref.touched
 	ref.reply = fmt.Sprintf("superseded by task %s: this task was lost when wick restarted, the answer went there", next)
+	// The replacement carries the thread on: the brief and the question
+	// it answers come first, the newest maxThreadEntries kept.
+	if len(ref.log) > 0 {
+		nr := h.tasks[next]
+		if nr == nil {
+			nr = &taskRef{}
+			h.tasks[next] = nr
+		}
+		log := append(append([]ThreadEntry(nil), ref.log...), nr.log...)
+		if n := len(log) - maxThreadEntries; n > 0 {
+			log = log[n:]
+		}
+		nr.log = log
+	}
 	h.mu.Unlock()
 	h.persist(id)
 }
@@ -1492,6 +1528,11 @@ func (h *Hub) settle(ctx context.Context, id a2a.TaskID, state a2a.TaskState, re
 	default:
 		ref.ended = ref.touched
 	}
+	// The teammate's reply, question or refusal joins the thread; a
+	// failure is wick's (or the transport's) text, not the teammate's.
+	if !again && !orphan && (state == a2a.TaskStateCompleted || state == a2a.TaskStateInputRequired || state == a2a.TaskStateRejected) {
+		ref.logTeammateLocked(reply, ref.touched)
+	}
 	deliver := ref.waiterGone && !ref.delivered && ref.callerSession != ""
 	if ref.userTask() {
 		// The person's task: the reply or question shows on the task in
@@ -1551,6 +1592,7 @@ func (h *Hub) FollowUp(ctx context.Context, sessionID, text string) bool {
 		session, to, userTask = ref.callerSession, ref.to, ref.userTask()
 		if dup = ref.alreadySent(text); !dup {
 			ref.markSent(textKey(text))
+			ref.logTeammateLocked(text, h.now())
 			if userTask {
 				// The person's task: the follow-up shows on it, without
 				// waking the agent of the chat. It joins a reply; a late
@@ -1623,6 +1665,9 @@ type TaskView struct {
 	// in this chat ("" = the agent's): its question always waits for the
 	// person, whatever the agent is doing.
 	Origin string `json:"origin,omitempty"`
+	// MessageCount is how many messages the task's thread holds (capped
+	// at maxThreadEntries); absent on a task recorded before wick kept it.
+	MessageCount int `json:"message_count,omitempty"`
 }
 
 // SentFrom lists the tasks sessionID sent, newest first: those in memory
@@ -1807,6 +1852,7 @@ func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {
 	v.ChatID = ref.chat
 	v.Interrupted = ref.interrupted
 	v.Origin = ref.origin
+	v.MessageCount = len(ref.log)
 	return v
 }
 

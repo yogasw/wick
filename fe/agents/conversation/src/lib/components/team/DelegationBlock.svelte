@@ -6,19 +6,22 @@
      is handling reads "Captain is answering…" with an "Answer instead"
      link. A task the person sent with an @mention is theirs: marked "You
      asked", no answering stage, the teammate's reply shows here. The
-     chevron in the head collapses the block to its chips; once every task
+     chevron in the head collapses the block to its chips. An open chip
+     shows the task's thread (TaskThread) under a head with Reply in
+     thread (a question only), Open chat, Collapse and Cancel. Once every task
      ended it folds to a single row (check, avatars, "Delegated to 3
      teammates · all replied · 12 messages · 13m", chevron). */
   import { tick } from "svelte";
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import AvatarActivity from "./AvatarActivity.svelte";
   import { taskActivity } from "../../avatarActivity.js";
-  import type { TeamTaskItem } from "../../types/agents.js";
-  import { allSettled, blockHead, chipElapsed, chipLabel, clockTime, foldAvatars, isTaskActive, isUserTask, quickReplies, settledParts, statusParts, taskStatus, USER_TASK_MARKER, type StatusPart, type TaskStatus } from "../../delegations.js";
+  import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
+  import { allSettled, blockHead, chipElapsed, chipLabel, clockTime, foldAvatars, isTaskActive, isUserTask, quickReplies, settledParts, statusParts, taskStatus, USER_TASK_MARKER, userTaskRoute, type StatusPart, type TaskStatus } from "../../delegations.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
   import AnswerBox from "./AnswerBox.svelte";
   import CancelConfirm from "./CancelConfirm.svelte";
   import SmBtn from "./SmBtn.svelte";
+  import TaskThread from "./TaskThread.svelte";
   import TeamIcon from "./TeamIcon.svelte";
 
   type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string };
@@ -29,8 +32,10 @@
     onAnswer?: (taskId: string, text: string) => Promise<void>;
     onCancel?: (taskId: string) => Promise<void>;
     onOpenChat?: (t: TeamTaskItem) => void;
+    /** Reads a task's thread for its open chip (TaskThread). */
+    loadThread?: (taskId: string) => Promise<TeamThreadEntry[]>;
   };
-  let { tasks, agents = {}, captainName = "Captain", onAnswer, onCancel, onOpenChat }: Props = $props();
+  let { tasks, agents = {}, captainName = "Captain", onAnswer, onCancel, onOpenChat, loadThread }: Props = $props();
 
   let showAll = $state(false);
   let unfolded = $state(false);
@@ -254,33 +259,61 @@
       {/each}
     {/if}
 
-    {#if !collapsed && tasks.some((t) => showAll || selected === t.task_id)}
-      <div data-testid="delegation-sections" class="flex flex-col gap-2 border-t border-white-300 dark:border-navy-600 px-3 py-2.5">
-        {#each tasks as t (t.task_id)}
-          {#if showAll || selected === t.task_id}
-            <div data-testid="delegation-preview" class="flex flex-col gap-1 rounded-lg bg-white-200 dark:bg-navy-900 px-3 py-2">
-              <span class="text-[11px] text-black-600 dark:text-black-700"><span class="font-medium text-black-800 dark:text-black-500">{isUserTask(t) ? "You" : captainName} → @{t.to_handle}</span> · {t.title}</span>
+    {#each tasks as t (t.task_id)}
+      {#if chipOpen(t)}
+        {@const s = taskStatus(t)}
+        <!-- grouped 2b: the open chip's short thread, a soft section of its own. -->
+        <div data-testid="delegation-preview" class="border-t border-white-300 bg-white-200 dark:border-navy-600 dark:bg-navy-700">
+          <div class="flex items-center gap-2 px-3 py-[7px] text-[11.5px] text-black-700">
+            <AvatarActivity activity={taskActivity(s)} size={20}><AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={20} /></AvatarActivity>
+            <b class="shrink-0 text-xs font-semibold text-black-900 dark:text-white-100">{userTaskRoute(t) ?? nameOf(t)}</b>
+            <span data-testid="delegation-preview-task" class="min-w-0 flex-1 truncate">· {t.title}{t.message_count ? ` · ${t.message_count} message${t.message_count === 1 ? "" : "s"}` : ""}</span>
+            {#if onAnswer && (s === "needs_you" || s === "answering")}
+              <!-- Only a question takes a reply yet; the others wait for B5. -->
+              <SmBtn icon="reply" data-testid="delegation-reply" class="shrink-0" onclick={() => { answerOpen = { ...answerOpen, [t.task_id]: true }; }}>Reply in thread</SmBtn>
+            {/if}
+            {#if onOpenChat && t.chat_id}
+              <SmBtn icon="open" class="shrink-0" onclick={() => onOpenChat?.(t)}>Open chat</SmBtn>
+            {/if}
+            <button
+              type="button"
+              data-testid="delegation-preview-collapse"
+              onclick={() => {
+                if (showAll) showAll = false;
+                selected = null;
+                if (allSettled(tasks)) unfolded = false;
+              }}
+              class="shrink-0 px-0.5 py-1 text-[11px] text-black-700 hover:text-black-900 dark:hover:text-white-100"
+            >Collapse</button>
+            {#if onCancel && isTaskActive(t)}
+              <button type="button" data-testid="delegation-cancel" onclick={() => { confirming = confirming === t.task_id ? null : t.task_id; }} class="shrink-0 text-[11px] text-red-600 dark:text-red-400 hover:underline">Cancel</button>
+            {/if}
+          </div>
+          {#if confirming === t.task_id && onCancel}
+            <div class="px-3 pb-2"><CancelConfirm name={nameOf(t)} onConfirm={() => cancel(t)} onKeep={() => { confirming = null; }} /></div>
+          {/if}
+          {#if errors[t.task_id] && !cardOpen(t)}<span class="block px-3 pb-1 text-[11px] text-red-600 dark:text-red-400">{errors[t.task_id]}</span>{/if}
+          {#if loadThread}
+            <TaskThread task={t} load={loadThread} {agents} {captainName}>
+              {#snippet fallback()}
+                <!-- The thread did not load: the last reply still reads. -->
+                {#if t.reply || t.summary}
+                  <div data-testid="delegation-preview-fallback" class="px-3 pb-1 text-[12.5px] leading-[1.5]"><span class="whitespace-pre-wrap break-words text-black-900 dark:text-white-100 line-clamp-4"><span class="font-medium">{nameOf(t)}:</span> {t.reply || t.summary}</span></div>
+                {/if}
+              {/snippet}
+            </TaskThread>
+          {:else}
+            <!-- No thread to read (a test, or a host without it): the reply alone. -->
+            <div class="px-3 pb-2 text-[12.5px] leading-[1.5]">
               {#if t.reply || t.summary}
                 <span class="whitespace-pre-wrap break-words text-black-900 dark:text-white-100 line-clamp-4"><span class="font-medium">{nameOf(t)}:</span> {t.reply || t.summary}</span>
               {:else}
                 <span class="italic text-black-600 dark:text-black-700">No reply yet.</span>
               {/if}
-              <span class="flex items-center gap-3 text-[11px]">
-                {#if onOpenChat}
-                  <button type="button" onclick={() => onOpenChat?.(t)} class="text-green-600 dark:text-green-400 hover:underline">Open chat ↗</button>
-                {/if}
-                {#if onCancel && isTaskActive(t)}
-                  <button type="button" data-testid="delegation-cancel" onclick={() => { confirming = confirming === t.task_id ? null : t.task_id; }} class="text-red-600 dark:text-red-400 hover:underline">Cancel</button>
-                {/if}
-              </span>
-              {#if confirming === t.task_id && onCancel}
-                <CancelConfirm name={nameOf(t)} onConfirm={() => cancel(t)} onKeep={() => { confirming = null; }} />
-              {/if}
-              {#if errors[t.task_id] && !cardOpen(t)}<span class="text-[11px] text-red-600 dark:text-red-400">{errors[t.task_id]}</span>{/if}
             </div>
           {/if}
-        {/each}
-      </div>
-    {/if}
+        </div>
+      {/if}
+    {/each}
   </div>
 {/if}

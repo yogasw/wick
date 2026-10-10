@@ -116,3 +116,49 @@ func testTeamTaskActionsThroughTheRouter(t *testing.T, origin string) {
 		t.Fatalf("after the owner's cancel: %+v", list)
 	}
 }
+
+// B2: the thread route takes the same checks as the task list: a
+// read-only viewer 403, a stranger 404, an unknown task (or one of the
+// owner's other chat) 404; the chat's owner reads the task's messages.
+func TestTeamTaskThreadThroughTheRouter(t *testing.T) {
+	withTeamWorld(t)
+	owner, bob, eve := &entity.User{ID: "u1"}, &entity.User{ID: "bob"}, &entity.User{ID: "eve"}
+	seedTeamProject(t, "p1", owner.ID)
+	p := seedTeamAgent(t, owner.ID, "helper", "p1")
+	ownChat := openChat(t, owner, p.ID, false)
+	if code := shareWith(t, owner, p.ID, bob.ID); code != http.StatusOK {
+		t.Fatalf("share: %d", code)
+	}
+	otherChat := openChat(t, owner, p.ID, true)
+	if otherChat == "" || otherChat == ownChat {
+		t.Fatalf("second chat = %q", otherChat)
+	}
+	seedUserTasks(t, p.ID, map[string]seedTask{
+		"t-ask":   {ownChat, a2a.TaskStateInputRequired, ""},
+		"t-other": {otherChat, a2a.TaskStateInputRequired, ""},
+	})
+
+	rr := &routeRecorder{routes: map[string]tool.HandlerFunc{}}
+	Register(rr)
+	call := func(u *entity.User, task string) (int, string) {
+		w, c := teamReq(t, u, http.MethodGet, "/", nil, map[string]string{"id": ownChat, "task": task})
+		rr.routed(t, http.MethodGet, "/api/sessions/{id}/team-tasks/{task}/thread")(c)
+		return w.Code, w.Body.String()
+	}
+	if code, _ := call(bob, "t-ask"); code != http.StatusForbidden {
+		t.Fatalf("read-only viewer: %d, want 403", code)
+	}
+	if code, _ := call(eve, "t-ask"); code != http.StatusNotFound {
+		t.Fatalf("stranger: %d, want 404", code)
+	}
+	if code, _ := call(owner, "t-nope"); code != http.StatusNotFound {
+		t.Fatalf("unknown task: %d, want 404", code)
+	}
+	// The owner's own task, but of their other chat: unknown here.
+	if code, _ := call(owner, "t-other"); code != http.StatusNotFound {
+		t.Fatalf("another chat's task: %d, want 404", code)
+	}
+	if code, body := call(owner, "t-ask"); code != http.StatusOK || !strings.Contains(body, `"messages":[`) {
+		t.Fatalf("owner: %d %s", code, body)
+	}
+}

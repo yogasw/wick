@@ -67,6 +67,8 @@ type taskRecord struct {
 	// they existed reads them zero.
 	Asked time.Time `json:"asked_at,omitzero"`
 	Ended time.Time `json:"ended_at,omitzero"`
+	// Log is taskRef.log; absent on a record written before it existed.
+	Log []ThreadEntry `json:"log,omitempty"`
 }
 
 // Persist keeps the Hub's tasks in dir (created when missing) and loads
@@ -203,7 +205,7 @@ func refFromRecord(rec taskRecord) *taskRef {
 		reply: rec.Reply, state: a2a.TaskState(rec.State), interrupted: rec.Interrupted, fromDisk: true,
 		touched: rec.Touched, contextID: rec.ContextID, title: rec.Title, started: rec.Started,
 		asked: rec.Asked, ended: rec.Ended,
-		chat: rec.Chat, answered: rec.Answered,
+		chat: rec.Chat, answered: rec.Answered, log: rec.Log,
 	}
 	if rec.Origin == OriginUser {
 		ref.origin, ref.originUser = OriginUser, rec.OriginUser
@@ -224,6 +226,7 @@ func (r *taskRef) record(id a2a.TaskID) taskRecord {
 		Reply: r.reply, Chat: r.chat, Answered: r.answered,
 		Started: r.started, Touched: r.touched, Asked: r.asked, Ended: r.ended,
 		Origin: r.origin, OriginUser: r.originUser,
+		Log: append([]ThreadEntry(nil), r.log...),
 	}
 	if len(rec.Reply) > maxStoredReply {
 		rec.Reply = rec.Reply[:maxStoredReply] + "…"

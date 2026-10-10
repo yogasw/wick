@@ -3,19 +3,21 @@
      Needs input / Working / Done today / Earlier (folded) / Failed ·
      Canceled. A row reads name (+ status tag once it ended), the time on
      the right, the title, then the question in amber; needs input offers
-     Answer / Cancel / Jump, working Cancel / Jump. Answer opens the shared
+     Answer / Cancel / Jump, working Thread · N / Cancel / Jump (Thread
+     opens the task's TaskThread under the row). Answer opens the shared
      AnswerBox, Cancel asks first (CancelConfirm), and the raw payload
      stays one click away under each row. A working teammate's avatar
      orbits, one waiting on the person pulses (AvatarActivity). */
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import AvatarActivity from "./AvatarActivity.svelte";
   import { taskActivity } from "../../avatarActivity.js";
-  import type { TeamTaskItem } from "../../types/agents.js";
+  import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
   import { chipElapsed, endedDay, groupTasks, isTaskActive, isUserTask, quickReplies, statusLabel, taskStatus, userTaskRoute, type TaskStatus } from "../../delegations.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
   import AnswerBox from "./AnswerBox.svelte";
   import CancelConfirm from "./CancelConfirm.svelte";
   import SmBtn from "./SmBtn.svelte";
+  import TaskThread from "./TaskThread.svelte";
   import TeamIcon from "./TeamIcon.svelte";
 
   type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string };
@@ -28,11 +30,13 @@
     onCancel?: (taskId: string) => Promise<void>;
     onJump?: (t: TeamTaskItem) => void;
     onOpenChat?: (t: TeamTaskItem) => void;
+    /** Reads a task's thread; "Thread · N" opens it under the row. */
+    loadThread?: (taskId: string) => Promise<TeamThreadEntry[]>;
     /** Draw the panel's own "Tasks · this chat · N" header; off where the
         host already titles the panel (the mobile sheet). */
     header?: boolean;
   };
-  let { tasks, agents = {}, senderName = "Captain", onAnswer, onCancel, onJump, onOpenChat, header = true }: Props = $props();
+  let { tasks, agents = {}, senderName = "Captain", onAnswer, onCancel, onJump, onOpenChat, loadThread, header = true }: Props = $props();
 
   // The timers tick once a second, only while a task still runs.
   let now = $state(Date.now());
@@ -55,6 +59,7 @@
   let confirming = $state<string | null>(null);
   let sending = $state<string | null>(null);
   let rawOpen = $state<Record<string, boolean>>({});
+  let threadOpen = $state<Record<string, boolean>>({});
   // Per task, seeded from answerDrafts so a remount keeps what was typed.
   let drafts = $state<Record<string, string>>({});
   let error = $state("");
@@ -151,8 +156,9 @@
                 {:else if s === "answering"}
                   <div class="mt-1 text-[11.5px] text-black-700">{statusLabel(s, senderName)}…</div>
                 {/if}
-                {#if active && (onAnswer || onCancel || onJump || onOpenChat)}
+                {#if active && (onAnswer || onCancel || onJump || onOpenChat || (s === "working" && loadThread))}
                   <div class="mt-1.5 flex flex-wrap items-center gap-1">
+                    {#if s === "working" && loadThread}<SmBtn icon="msg" data-testid="tasks-row-thread" aria-expanded={!!threadOpen[t.task_id]} aria-label={nameOf(t) + "'s thread"} onclick={() => { threadOpen = { ...threadOpen, [t.task_id]: !threadOpen[t.task_id] }; }}>Thread{t.message_count ? ` · ${t.message_count}` : ""}</SmBtn>{/if}
                     {#if ask && onAnswer}<SmBtn variant="warn" aria-label={"Answer " + nameOf(t)} onclick={() => { answering = answering === t.task_id ? null : t.task_id; }}>Answer</SmBtn>{/if}
                     {#if s === "needs_you" && onCancel}
                       <button type="button" aria-label={"Cancel task for " + nameOf(t)} onclick={() => { confirming = confirming === t.task_id ? null : t.task_id; }} class="px-1.5 py-[3px] text-[10.5px] font-medium text-black-700 hover:text-red-600 dark:hover:text-red-400">Cancel</button>
@@ -162,6 +168,9 @@
                     {#if onJump}<SmBtn icon="jump" aria-label={"Jump to " + nameOf(t) + "'s task"} onclick={() => onJump?.(t)}>Jump</SmBtn>{/if}
                     {#if onOpenChat}<SmBtn icon="open" aria-label={"Open " + nameOf(t) + "'s chat"} onclick={() => onOpenChat?.(t)}>Open chat</SmBtn>{/if}
                   </div>
+                {/if}
+                {#if s === "working" && loadThread && threadOpen[t.task_id]}
+                  <div class="-ml-1 mt-1.5 rounded-md border border-white-300 bg-white-200 pt-1 dark:border-navy-600 dark:bg-navy-700"><TaskThread task={t} load={loadThread} {agents} captainName={senderName} /></div>
                 {/if}
                 {#if active && confirming === t.task_id && onCancel}
                   <div class="mt-1.5"><CancelConfirm name={nameOf(t)} onConfirm={() => cancel(t.task_id)} onKeep={() => { confirming = null; }} /></div>

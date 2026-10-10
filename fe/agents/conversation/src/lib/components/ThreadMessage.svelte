@@ -881,6 +881,7 @@
           onAnswer={teamCtx.answer}
           onCancel={teamCtx.cancel}
           onOpenChat={teamCtx.openChat}
+          loadThread={teamCtx.loadThread}
         />
       {/if}
 

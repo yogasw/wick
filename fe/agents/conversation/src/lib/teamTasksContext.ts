@@ -3,7 +3,7 @@
    context instead of a prop passed down every layer. Absent (the
    /sessions pages, tests) = no blocks. */
 import { getContext, setContext } from "svelte";
-import type { TeamTaskItem } from "./types/agents.js";
+import type { TeamTaskItem, TeamThreadEntry } from "./types/agents.js";
 
 export type TeamTasksCtx = {
   /** The tasks a turn sent (tasksByTurn), [] for none. */
@@ -20,6 +20,8 @@ export type TeamTasksCtx = {
   cancel?: (taskId: string) => Promise<void>;
   /** Opens the teammate's chat the task runs in. */
   openChat?: (t: TeamTaskItem) => void;
+  /** Reads a task's thread (TaskThread), when it is opened. */
+  loadThread?: (taskId: string) => Promise<TeamThreadEntry[]>;
 };
 
 /** Exported for tests that mount a block without DetailView. */

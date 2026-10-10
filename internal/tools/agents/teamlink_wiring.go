@@ -169,8 +169,25 @@ func sessionTeamTasks(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"tasks": tasks})
 }
 
+// sessionTeamTaskThread handles GET /api/sessions/{id}/team-tasks/{task}/thread:
+// the messages of one task this session sent (brief, replies, answers),
+// oldest first, as the Hub logged them. Read-only; the session must be
+// the caller's, and a task of another session reads as unknown (404).
+func sessionTeamTaskThread(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	log, err := h.TaskThread(id, c.PathValue("task"))
+	if err != nil {
+		teamTaskError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"messages": log})
+}
+
 // teamTaskHub resolves the session and the Hub for a write on one of its
-// team tasks; false when it already answered (404/503).
+// team tasks (or a read of one); false when it already answered (404/503).
 func teamTaskHub(c *tool.Ctx) (string, *teamlink.Hub, bool) {
 	if notReady(c) {
 		return "", nil, false

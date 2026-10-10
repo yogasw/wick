@@ -74,7 +74,7 @@ func (h *Hub) AnswerFromUser(ctx context.Context, sessionID, taskID, text string
 	// or this one does. A failed send gives the question back ("Needs you").
 	out, err := h.Send(ctx, SendInput{
 		CallerSession: sessionID, CallerAgentID: caller, TaskID: string(id),
-		Text: "Answer from the user:\n\n" + text, Wait: -1, byUser: true,
+		Text: "Answer from the user:\n\n" + text, Wait: -1, byUser: true, logText: text,
 	})
 	if err != nil {
 		if errors.Is(err, ErrTaskNotWaiting) {

@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/svelte";
+import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import DelegationBlock from "../DelegationBlock.svelte";
 import TaskTray from "../TaskTray.svelte";
@@ -193,12 +193,55 @@ describe("DelegationBlock", () => {
 
   test("a chip previews the last messages with Open chat", async () => {
     const onOpenChat = vi.fn();
-    render(DelegationBlock, { props: { tasks: [task({ summary: "found 3 errors", reply: "found 3 errors" })], onOpenChat } });
+    render(DelegationBlock, { props: { tasks: [task({ summary: "found 3 errors", reply: "found 3 errors", chat_id: "s-anton" })], onOpenChat } });
     expect(screen.queryByTestId("delegation-preview")).toBeNull();
     await fireEvent.click(screen.getByTestId("delegation-chip"));
     expect(screen.getByTestId("delegation-preview").textContent).toContain("found 3 errors");
-    await fireEvent.click(screen.getByText("Open chat ↗"));
+    await fireEvent.click(screen.getByText("Open chat"));
     expect(onOpenChat).toHaveBeenCalled();
+  });
+
+  /* P48 s11: the open chip's section is grouped 2b — soft, its head
+     "Name · title · N messages", the thread read lazily, Collapse. */
+  test("2b: open chip shows the task's thread under its head", async () => {
+    const loadThread = vi.fn().mockResolvedValue([
+      { role: "captain", handle: "captain", name: "Captain", text: "check the logs", at: new Date(2026, 9, 11, 10, 5).toISOString() },
+      { role: "user", text: "and the request ids", at: new Date(2026, 9, 11, 10, 8).toISOString() },
+    ]);
+    const onOpenChat = vi.fn();
+    render(DelegationBlock, { props: { tasks: [task({ state: "working", message_count: 2 })], loadThread, onOpenChat, onCancel: vi.fn() } });
+    expect(loadThread).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    const sec = screen.getByTestId("delegation-preview");
+    expect(sec.className).toContain("border-t");
+    expect(sec.className).toContain("bg-white-200");
+    expect(screen.getByTestId("delegation-preview-task").textContent).toBe("· check the logs · 2 messages");
+    // No chat id: no Open chat; not a question: no Reply in thread.
+    expect(screen.queryByText("Open chat")).toBeNull();
+    expect(screen.queryByTestId("delegation-reply")).toBeNull();
+    expect(screen.getByTestId("delegation-cancel")).toBeDefined();
+    await waitFor(() => expect(screen.getAllByTestId("task-thread-msg")).toHaveLength(2));
+    expect(loadThread).toHaveBeenCalledWith("t1");
+    expect(screen.getByTestId("task-thread-working")).toBeDefined();
+    await fireEvent.click(screen.getByTestId("delegation-preview-collapse"));
+    expect(screen.queryByTestId("delegation-preview")).toBeNull();
+  });
+
+  test("2b: a thread that fails to load still shows the last reply", async () => {
+    const loadThread = vi.fn().mockRejectedValue(new Error("task not found"));
+    render(DelegationBlock, { props: { tasks: [task({ state: "completed", reply: "found 3 errors", summary: "found 3 errors" })], loadThread } });
+    await fireEvent.click(screen.getByTestId("delegation-folded"));
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await waitFor(() => expect(screen.getByTestId("task-thread-error").textContent).toBe("task not found"));
+    expect(screen.getByTestId("delegation-preview-fallback").textContent).toContain("found 3 errors");
+  });
+
+  test("2b.3: Reply in thread opens the answer box of a question the agent handles", async () => {
+    render(DelegationBlock, { props: { tasks: [task({ state: "input_required", needs_you: false, reply: "Which env?" })], captainName: "Cap", onAnswer: vi.fn() } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    expect(screen.queryByTestId("needs-you-card")).toBeNull();
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    expect(screen.getByTestId("needs-you-card")).toBeDefined();
   });
 });
 
@@ -274,7 +317,7 @@ describe("DelegationBlock head + chip (P48 s3)", () => {
     expect(chip("Halodev").getAttribute("aria-expanded")).toBe("false");
     await fireEvent.click(chip("Halodev"));
     expect(screen.getByTestId("delegation-collapse").getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByTestId("delegation-preview").textContent).toContain("@halodev");
+    expect(screen.getByTestId("delegation-preview").textContent).toContain("Halodev");
     expect(chip("Halodev").dataset.open).toBe("true");
     // Open, a second click still toggles it off.
     await fireEvent.click(chip("Halodev"));

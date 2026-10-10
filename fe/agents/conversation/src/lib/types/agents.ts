@@ -872,7 +872,22 @@ export type TeamTaskItem = {
   /** When the task ended (replied, failed, declined or canceled); absent
       until then, and on an older task, where updated_at stands in. */
   ended_at?: string;
-  /** Messages exchanged on the task; absent until the server sends it
-      (B2), so turns stands in. */
+  /** Messages in the task's thread (brief, replies, questions, answers;
+      capped at 50); absent on a task recorded before the server kept a
+      thread, where turns stands in. */
   message_count?: number;
+};
+
+/** One message of a Team task's thread, as the Hub logged it
+    (GET /api/sessions/{id}/team-tasks/{task}/thread): the brief, the
+    teammate's replies and questions, and each answer. */
+export type TeamThreadEntry = {
+  /** captain = the agent that sent the task, user = the person in this
+      chat, teammate = the agent it went to. */
+  role: "captain" | "user" | "teammate";
+  /** The agent that wrote it; absent for the person. */
+  handle?: string;
+  name?: string;
+  text: string;
+  at: string;
 };
