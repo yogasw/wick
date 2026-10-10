@@ -204,6 +204,16 @@ export function clockTime(at: number): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+/** "Oct 9" (or "Oct 9, 2025" outside the current year): the day a task
+    ended, for one finished before today; "" when the time is unknown. */
+export function endedDay(t: TeamTaskItem, now: number): string {
+  const at = endedMs(t);
+  if (!Number.isFinite(at)) return "";
+  const d = new Date(at);
+  const md = d.toLocaleDateString("en", { month: "short", day: "numeric" });
+  return d.getFullYear() === new Date(now).getFullYear() ? md : `${md}, ${d.getFullYear()}`;
+}
+
 /** The chip's time: a running timer while the teammate works, how long
     a question has waited, the clock time a task ended. */
 export function chipElapsed(t: TeamTaskItem, now: number): string {

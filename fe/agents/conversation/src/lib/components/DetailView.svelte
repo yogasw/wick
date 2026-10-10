@@ -3434,6 +3434,7 @@
       >
         <div class="flex items-center justify-between px-4 py-3 border-b border-white-300 dark:border-navy-600 shrink-0">
           <h2 class="text-sm font-semibold text-black-900 dark:text-white-100 capitalize">{railTab}</h2>
+          {#if railTab === "tasks"}<span data-testid="tasks-sheet-count" class="ml-auto mr-2 text-[11px] text-black-700">this chat · {teamTasks.length}</span>{/if}
           <button
             type="button"
             aria-label="Close"
@@ -3520,6 +3521,7 @@
               onCancel={readOnly ? undefined : cancelTask}
               onJump={jumpToTask}
               onOpenChat={agentMode?.agent ? openTaskChat : undefined}
+              header={false}
             />
           {:else if railTab === "subagents"}
             <SubAgentPanel

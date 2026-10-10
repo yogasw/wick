@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { blockHead, chipElapsed, chipLabel, clockTime, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, userTaskRoute, quickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, turnSpan } from "../delegations.js";
+import { blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, userTaskRoute, quickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, turnSpan } from "../delegations.js";
 import type { ConversationTurn, TeamTaskItem } from "../types/agents.js";
 
 const task = (o: Partial<TeamTaskItem>): TeamTaskItem => ({
@@ -221,5 +221,16 @@ describe("P48 helpers", () => {
       ["failed", "Failed · Canceled", ["r", "c"], false],
     ]);
     expect(groupTasks([task({})], noon).map((g) => g.key)).toEqual(["working"]);
+  });
+});
+
+describe("endedDay (Tasks rail Earlier)", () => {
+  const t = (iso: string) => ({ task_id: "x", context_id: "c", to_agent_id: "", to_handle: "a", to_name: "A", title: "", state: "completed", turns: 0, max_turns: 0, started_at: iso, updated_at: iso });
+  const now = new Date(2026, 9, 10, 12, 0).getTime();
+  test("the day, plus the year outside the current one; ended_at wins over updated_at", () => {
+    expect(endedDay(t(new Date(2026, 9, 9, 18, 0).toISOString()), now)).toBe("Oct 9");
+    expect(endedDay(t(new Date(2025, 11, 31, 9, 0).toISOString()), now)).toBe("Dec 31, 2025");
+    expect(endedDay({ ...t(new Date(2026, 9, 9).toISOString()), ended_at: new Date(2026, 9, 7, 8, 0).toISOString() }, now)).toBe("Oct 7");
+    expect(endedDay(t(""), now)).toBe("");
   });
 });

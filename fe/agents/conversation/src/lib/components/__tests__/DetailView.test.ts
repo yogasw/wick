@@ -1082,4 +1082,27 @@ describe("DetailView — Tasks rail marks (P48)", () => {
     expect(tip.querySelector("b")?.textContent).toBe("Tasks");
     expect(tip.querySelector('[data-testid="rail-tip-tasks-needs"]')?.className).toContain("text-amber-700");
   });
+
+  test("the mobile sheet titles the Tasks panel once, with the count", async () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    sseBus.handler!(task({}) as { type: string });
+    sseBus.handler!(task({ task_id: "t2", state: "input_required", needs_you: true }) as { type: string });
+    await waitFor(() => expect(container.querySelector('[data-testid="rail-tab-tasks"]')).not.toBeNull());
+    await fireEvent.click(container.querySelector('[data-testid="rail-tab-tasks"]')!);
+    const panels = await waitFor(() => {
+      const p = container.querySelectorAll('[data-testid="tasks-panel"]');
+      expect(p.length).toBe(2);
+      return p;
+    });
+    const sheet = container.querySelector(".lg\\:hidden.fixed")!;
+    const inSheet = [...panels].find((p) => sheet.contains(p))!;
+    const docked = [...panels].find((p) => !sheet.contains(p))!;
+    // Sheet: its own "Tasks" heading carries the count; the panel adds none.
+    expect([...sheet.querySelectorAll("h2")].map((h) => h.textContent)).toEqual(["tasks"]);
+    expect(sheet.querySelector('[data-testid="tasks-sheet-count"]')?.textContent).toBe("this chat · 2");
+    expect(inSheet.querySelector("h2")).toBeNull();
+    // Docked (lg+): the panel's own header.
+    expect(docked.querySelector("h2")?.textContent).toBe("Tasks");
+    expect(docked.querySelector('[data-testid="tasks-panel-count"]')?.textContent).toBe("this chat · 2");
+  });
 });

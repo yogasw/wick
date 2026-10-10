@@ -450,8 +450,9 @@ describe("TasksPanel", () => {
         },
       });
       for (const g of ["needs_you", "working", "done", "earlier", "failed"]) expect(screen.getByTestId("tasks-group-" + g)).toBeDefined();
-      expect(screen.getByText("needs input · 2m")).toBeDefined();
-      expect(screen.getAllByText("Raw payload")).toHaveLength(5);
+      expect(screen.getByTestId("tasks-panel-count").textContent).toBe("this chat · 5");
+      // Earlier starts folded: its row and raw payload are not drawn yet.
+      expect(screen.getAllByText("Raw payload")).toHaveLength(4);
     } finally {
       vi.useRealTimers();
     }
@@ -468,7 +469,8 @@ describe("TasksPanel", () => {
 
   test("a task a restart interrupted says so", () => {
     render(TasksPanel, { props: { tasks: [task({ task_id: "p2", state: "failed", interrupted: true, summary: "interrupted by a restart: …" })] } });
-    expect(screen.getByText(/interrupted by a restart · 2m/)).toBeDefined();
+    expect(screen.getByTestId("tasks-row-tag").textContent).toBe("failed");
+    expect(screen.getByText("interrupted by a restart: …")).toBeDefined();
   });
 });
 
@@ -580,7 +582,7 @@ describe("task avatar activity", () => {
     task({ task_id: "w" }),
     task({ task_id: "q", to_handle: "rio", to_name: "Rio", state: "input_required", needs_you: true, reply: "Which env?" }),
     task({ task_id: "a", to_handle: "vera", to_name: "Vera", state: "input_required", reply: "Which env?" }),
-    task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed", summary: "done" }),
+    task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed", summary: "done", updated_at: new Date(2026, 9, 10, 10, 0).toISOString() }),
   ];
   const activities = (root: ParentNode) => [...root.querySelectorAll<HTMLElement>("[data-testid=avatar-activity]")].map((e) => e.dataset.activity);
 
@@ -603,14 +605,21 @@ describe("task avatar activity", () => {
   });
 
   test("Tasks rail: a working teammate orbits, one waiting on you pulses", () => {
-    const { container } = render(TasksPanel, { props: { tasks } });
-    const rows = screen.getAllByTestId("tasks-panel-name").map((n) => n.parentElement!);
-    const by = (name: string) => rows.find((r) => r.textContent!.includes(name))!;
-    expect(activities(by("Anton"))).toEqual(["tool"]);
-    expect(by("Anton").querySelector("[data-testid=avatar-orbit]")).not.toBeNull();
-    expect(activities(by("Rio"))).toEqual(["alert"]);
-    expect(activities(by("Vera"))).toEqual(["idle"]);
-    expect(activities(by("Lia"))).toEqual(["idle"]);
-    expect(container.querySelectorAll("[data-testid=avatar-orbit]").length).toBe(1);
+    // Lia replied at 10:00 local today: on the real clock it would fold into Earlier.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 10, 12, 0));
+    try {
+      const { container } = render(TasksPanel, { props: { tasks } });
+      const rows = screen.getAllByTestId("tasks-panel-name").map((n) => n.closest<HTMLElement>("[data-testid=tasks-row]")!);
+      const by = (name: string) => rows.find((r) => r.textContent!.includes(name))!;
+      expect(activities(by("Anton"))).toEqual(["tool"]);
+      expect(by("Anton").querySelector("[data-testid=avatar-orbit]")).not.toBeNull();
+      expect(activities(by("Rio"))).toEqual(["alert"]);
+      expect(activities(by("Vera"))).toEqual(["idle"]);
+      expect(activities(by("Lia"))).toEqual(["idle"]);
+      expect(container.querySelectorAll("[data-testid=avatar-orbit]").length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
