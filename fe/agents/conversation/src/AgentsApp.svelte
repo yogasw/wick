@@ -20,6 +20,7 @@
   import PluginRemoteWizard from "./lib/components/team/PluginRemoteWizard.svelte";
   import RemoteQuestionCard from "./lib/components/team/RemoteQuestionCard.svelte";
   import PresenceDot from "./lib/components/team/PresenceDot.svelte";
+  import Dots from "./lib/components/team/Dots.svelte";
   import RosterAvatar from "./lib/components/team/RosterAvatar.svelte";
   import RemoteKindIcon from "./lib/components/team/RemoteKindIcon.svelte";
   import AgentShareLine from "./lib/components/team/AgentShareLine.svelte";
@@ -718,7 +719,7 @@
               </span>
               <span class="roster-line2 mt-0.5 flex items-center gap-1.5">
                 <span class="min-w-0 flex-1 truncate text-xs {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : pv.silent ? silentPreviewClass : tone.preview}">
-                  {#if st.typing !== null}<span data-testid="roster-working" data-work={st.work}>{st.typing.replace(/…$/, "")}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span>{:else}{#if pv.silent}{@render silentBell()}{/if}{pv.text}{/if}
+                  {#if st.typing !== null}<span data-testid="roster-working" data-work={st.work}>{st.typing.replace(/…$/, "")}<Dots /></span>{:else}{#if pv.silent}{@render silentBell()}{/if}{pv.text}{/if}
                 </span>
                 <!-- A teammate's question back to its sender: the amber count (the
                      avatar carries the "?"). -->
@@ -804,7 +805,7 @@
             {#if remoteWaiting}
               <span class="truncate font-medium text-green-600 dark:text-green-400" data-testid="header-waiting">{remoteWaitLabel(selected, waitStart === null ? 0 : (waitNow - waitStart) / 1000, progressLabel)}</span><span aria-hidden="true">·</span>
             {:else if isWorking(selected.status) || (headerStatus && busyWork(headerStatus.work))}
-              <span class="truncate font-medium text-green-600 dark:text-green-400" data-testid="header-typing" data-work={headerStatus?.work}>{(headerStatus?.typing ?? "thinking…").replace(/…$/, "")}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span><span aria-hidden="true">·</span>
+              <span class="truncate font-medium text-green-600 dark:text-green-400" data-testid="header-typing" data-work={headerStatus?.work}>{(headerStatus?.typing ?? "thinking…").replace(/…$/, "")}<Dots /></span><span aria-hidden="true">·</span>
             {:else if selected.disabled}
               <span>disabled</span><span aria-hidden="true">·</span>
             {/if}
@@ -1011,23 +1012,6 @@
   }
   /* No count from the server (a group chat): a small dot, not an empty pill. */
   .roster-badge-dot { min-width: 8px; height: 8px; padding: 0; margin-right: 5px; }
-  /* Three dots that bounce in turn: the "typing" cue in the header and the
-     roster. Tailwind has no staggered keyframe, hence the local rule. */
-  .dots i {
-    display: inline-block;
-    width: 4px;
-    height: 4px;
-    margin-left: 2px;
-    border-radius: 9999px;
-    background: currentColor;
-    animation: agent-dot 1.2s infinite;
-  }
-  .dots i:nth-child(2) { animation-delay: 0.15s; }
-  .dots i:nth-child(3) { animation-delay: 0.3s; }
-  @keyframes agent-dot {
-    0%, 60%, 100% { opacity: 0.5; transform: translateY(0); }
-    30% { opacity: 1; transform: translateY(-3px); }
-  }
   /* Floating drawer (mockup .drawer/.scrim): inset 8px on three sides, 20px
      corners, a short slide-in. Width and blur have no token step. */
   .agent-drawer {
@@ -1064,7 +1048,6 @@
     from { opacity: 0; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .dots i { animation: none; opacity: 0.7; }
     .team-app, .agent-drawer, .agent-modal, .agent-scrim { animation: none; }
   }
 </style>

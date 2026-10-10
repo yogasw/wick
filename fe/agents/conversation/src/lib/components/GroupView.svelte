@@ -26,6 +26,7 @@
   import { formatAgentsRoute, navigate } from "../agentsRouter.js";
   import { connectSession } from "../stores/sse.js";
   import type { AgentEvent } from "../types/agents.js";
+  import Dots from "./team/Dots.svelte";
 
   /* Fallback poll while a reply is pending AND the stream is down. */
   const DROPPED_POLL_MS = 60_000;
@@ -173,7 +174,7 @@
       <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">{group.name}</div>
       <div class="truncate text-xs text-black-800 dark:text-black-600">
         {#if typingHandles.length}
-          <span class="font-medium text-green-600 dark:text-green-400">@{typingHandles.join(", @")} typing<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></span> ·
+          <span class="font-medium text-green-600 dark:text-green-400">@{typingHandles.join(", @")} typing<Dots /></span> ·
         {/if}
         {handlesLine(group.members)}
       </div>
@@ -200,7 +201,7 @@
       {/if}
     {/each}
     {#if typingHandles.length}
-      <p class="text-xs font-medium text-green-600 dark:text-green-400" data-testid="group-typing">@{typingHandles.join(", @")} typing<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></p>
+      <p class="text-xs font-medium text-green-600 dark:text-green-400" data-testid="group-typing">@{typingHandles.join(", @")} typing<Dots /></p>
     {/if}
   </div>
 
@@ -219,24 +220,3 @@
   </div>
 </div>
 
-<style>
-  /* The typing dots, as in the roster (AgentsApp's rule is scoped there). */
-  .dots i {
-    display: inline-block;
-    width: 4px;
-    height: 4px;
-    margin-left: 2px;
-    border-radius: 9999px;
-    background: currentColor;
-    animation: group-dot 1s infinite;
-  }
-  .dots i:nth-child(2) { animation-delay: 0.15s; }
-  .dots i:nth-child(3) { animation-delay: 0.3s; }
-  @keyframes group-dot {
-    0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
-    30% { opacity: 1; transform: translateY(-2px); }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .dots i { animation: none; opacity: 0.7; }
-  }
-</style>

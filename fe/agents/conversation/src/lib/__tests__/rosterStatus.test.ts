@@ -288,7 +288,10 @@ describe("Team task work in the avatar and the header", () => {
 
   it("the row's working line ends in the bouncing dots, and its avatar takes the Team-task mark", () => {
     const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
-    expect(app).toMatch(/data-testid="roster-working" data-work=\{st\.work\}>\{st\.typing\.replace\(\/…\$\/, ""\)\}<span class="dots"/);
+    expect(app).toMatch(/data-testid="roster-working" data-work=\{st\.work\}>\{st\.typing\.replace\(\/…\$\/, ""\)\}<Dots \/><\/span>/);
+    // The header's working line ends in the same shared dots.
+    expect(app).toMatch(/data-testid="header-typing"[^>]*>\{[^}]*\}<Dots \/><\/span>/);
+    expect(app).not.toMatch(/class="dots"|\.dots i/);
     expect(app).toMatch(/<PresenceDot [^>]*mark=\{teamMark\(a, st\)\} \/>/);
     expect(app).toMatch(/if \(a\.team_asks && st\.attention\) return "asks";/);
     expect(app).toMatch(/return st\.work === "replying" \? "task" : null;/);
