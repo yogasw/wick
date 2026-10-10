@@ -1,5 +1,6 @@
-import { describe, test, expect, vi } from "vitest";
+import { describe, test, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
+import { tick } from "svelte";
 import DelegationBlock from "../DelegationBlock.svelte";
 import TaskTray from "../TaskTray.svelte";
 import TasksPanel from "../TasksPanel.svelte";
@@ -30,7 +31,7 @@ describe("DelegationBlock", () => {
     });
     expect(screen.getAllByTestId("delegation-block")).toHaveLength(1);
     expect(screen.getByText("Delegated to 4 teammates")).toBeDefined();
-    expect(screen.getByTestId("delegation-summary").textContent).toBe("2 working · 1 needs input · 1 replied");
+    expect(screen.getByTestId("delegation-summary").textContent).toBe("· 2 working · 1 needs input · 1 replied");
     expect(screen.getAllByTestId("delegation-chip")).toHaveLength(4);
   });
 
@@ -89,6 +90,170 @@ describe("DelegationBlock", () => {
   });
 });
 
+/* P48 slice 3: the head and the chips as grouped §2 draws them. */
+describe("DelegationBlock head + chip (P48 s3)", () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const fake = (iso: string) => { vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] }); vi.setSystemTime(new Date(iso)); };
+  const chip = (name: string) => screen.getAllByTestId("delegation-chip").find((c) => c.textContent!.includes(name))!;
+  const four = () => [
+    task({ task_id: "w1", to_handle: "halodev", to_name: "Halodev", started_at: "2026-10-10T10:02:00Z" }),
+    task({ task_id: "w2", to_handle: "wabster", to_name: "Wabster", started_at: "2026-10-10T10:03:30Z" }),
+    task({ task_id: "q", to_handle: "franky", to_name: "Franky", state: "input_required", needs_you: true, reply: "Diff both?", updated_at: "2026-10-10T10:11:50Z" }),
+    task({ task_id: "r", to_handle: "atraxa", to_name: "Atraxa", state: "completed", summary: "done", updated_at: "2026-10-10T10:08:00Z" }),
+  ];
+
+  test("head: tasks icon, 12.5px title, coloured summary parts, Show all as a small button", async () => {
+    render(DelegationBlock, { props: { tasks: four() } });
+    const block = screen.getByTestId("delegation-block");
+    expect(block.className).toContain("overflow-hidden");
+    expect(block.className).not.toMatch(/(^|\s)px-3(\s|$)/);
+    expect(block.querySelector("svg[data-icon=tasks]")!.getAttribute("width")).toBe("14");
+    expect(screen.getByText("Delegated to 4 teammates").className).toContain("text-[12.5px]");
+    const part = (st: string) => screen.getByTestId("delegation-summary").querySelector<HTMLElement>(`[data-status=${st}]`)!;
+    expect(part("working").className).toContain("text-green-600");
+    expect(part("needs_you").className).toContain("text-amber-700");
+    expect(part("replied").className).toContain("text-black-800");
+    const all = screen.getByTestId("delegation-show-all");
+    expect(all.dataset.variant).toBe("default");
+    expect(all.textContent!.trim()).toBe("Show all");
+    await fireEvent.click(all);
+    expect(all.textContent!.trim()).toBe("Hide");
+    expect(screen.getAllByTestId("delegation-preview")).toHaveLength(4);
+  });
+
+  test("failed and declined read red, canceled muted", () => {
+    render(DelegationBlock, { props: { tasks: [task({ task_id: "w" }), task({ task_id: "f", state: "failed" }), task({ task_id: "d", state: "rejected" }), task({ task_id: "c", state: "canceled" })] } });
+    const sum = screen.getByTestId("delegation-summary");
+    expect(sum.textContent).toBe("· 1 working · 1 declined · 1 failed · 1 canceled");
+    for (const st of ["failed", "declined"]) expect(sum.querySelector<HTMLElement>(`[data-status=${st}]`)!.className).toContain("dark:text-red-400");
+    expect(sum.querySelector<HTMLElement>("[data-status=canceled]")!.className).toBe("text-black-700");
+    const status = (s: string) => screen.getAllByTestId("delegation-chip").find((c) => c.dataset.status === s)!.querySelector<HTMLElement>("[data-testid=chip-status]")!;
+    expect(status("failed").className).toContain("text-red-600");
+    expect(status("declined").className).toContain("text-red-600");
+    expect(status("declined").textContent).toBe("declined");
+    expect(status("canceled").className).toContain("text-black-700");
+  });
+
+  test("the chevron collapses the block to its chips and back", async () => {
+    render(DelegationBlock, { props: { tasks: four(), onAnswer: vi.fn() } });
+    await fireEvent.click(chip("Halodev"));
+    expect(screen.getByTestId("needs-you-card")).toBeDefined();
+    expect(screen.getByTestId("delegation-preview")).toBeDefined();
+    const chev = screen.getByTestId("delegation-collapse");
+    expect(chev.getAttribute("aria-expanded")).toBe("true");
+    await fireEvent.click(chev);
+    expect(chev.getAttribute("aria-expanded")).toBe("false");
+    expect(chev.getAttribute("aria-label")).toBe("Expand");
+    expect(chev.querySelector("svg")!.getAttribute("class")).toContain("-rotate-90");
+    expect(screen.getAllByTestId("delegation-chip")).toHaveLength(4);
+    expect(screen.queryByTestId("needs-you-card")).toBeNull();
+    expect(screen.queryByTestId("delegation-preview")).toBeNull();
+    expect(chip("Halodev").dataset.open).toBe("false");
+    await fireEvent.click(chev);
+    expect(screen.getByTestId("needs-you-card")).toBeDefined();
+    expect(screen.getByTestId("delegation-preview")).toBeDefined();
+  });
+
+  test("a chip on a collapsed block opens it on that chip, even the one already selected", async () => {
+    render(DelegationBlock, { props: { tasks: four() } });
+    await fireEvent.click(chip("Halodev"));
+    expect(chip("Halodev").getAttribute("aria-expanded")).toBe("true");
+    await fireEvent.click(screen.getByTestId("delegation-collapse"));
+    expect(chip("Halodev").getAttribute("aria-expanded")).toBe("false");
+    await fireEvent.click(chip("Halodev"));
+    expect(screen.getByTestId("delegation-collapse").getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByTestId("delegation-preview").textContent).toContain("@halodev");
+    expect(chip("Halodev").dataset.open).toBe("true");
+    // Open, a second click still toggles it off.
+    await fireEvent.click(chip("Halodev"));
+    expect(screen.queryByTestId("delegation-preview")).toBeNull();
+    expect(chip("Franky").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("Show all never reads Hide while collapsed; a click there opens everything", async () => {
+    render(DelegationBlock, { props: { tasks: four() } });
+    const all = screen.getByTestId("delegation-show-all");
+    await fireEvent.click(all);
+    expect(all.getAttribute("aria-expanded")).toBe("true");
+    await fireEvent.click(screen.getByTestId("delegation-collapse"));
+    expect(all.textContent!.trim()).toBe("Show all");
+    expect(all.getAttribute("aria-expanded")).toBe("false");
+    await fireEvent.click(all);
+    expect(all.textContent!.trim()).toBe("Hide");
+    expect(screen.getAllByTestId("delegation-preview")).toHaveLength(4);
+  });
+
+  test("the head chevron has a 24px hit area and a focus ring", () => {
+    render(DelegationBlock, { props: { tasks: four() } });
+    const c = screen.getByTestId("delegation-collapse").className;
+    for (const k of ["h-6", "w-6", "-m-1.5", "focus-visible:ring-1"]) expect(c).toContain(k);
+  });
+
+  test("chips: spin while working, check when replied, needs input with no chevron; open is green", async () => {
+    fake("2026-10-10T10:12:00Z");
+    render(DelegationBlock, { props: { tasks: four(), captainName: "Captain" } });
+    const w = chip("Halodev");
+    expect(w.className).toContain("text-[11.5px]");
+    expect(w.className).toContain("bg-white-200");
+    expect(w.querySelector<SVGElement>("svg[data-icon=spin]")!.classList.contains("team-icon-spin")).toBe(true);
+    expect(w.querySelector("[data-testid=chip-status]")!.textContent).toBe("working");
+    expect(w.querySelector("[data-testid=avatar-activity]")).not.toBeNull();
+    const r = chip("Atraxa");
+    expect(r.querySelector("svg[data-icon=check]")).not.toBeNull();
+    expect(r.querySelector("[data-testid=chip-status]")!.textContent).toBe("replied");
+    const q = chip("Franky");
+    expect(q.querySelector("[data-testid=chip-status]")!.textContent).toBe("needs input");
+    expect(q.className).toContain("border-amber-500/[.45]");
+    expect(q.className).toContain("bg-[rgba(251,191,36,.12)]");
+    expect(q.querySelector("svg[data-icon=chevron]")).toBeNull();
+    expect(w.querySelector("svg[data-icon=chevron]")!.getAttribute("class")).toContain("-rotate-90");
+    await fireEvent.click(w);
+    expect(w.dataset.open).toBe("true");
+    expect(w.className).toContain("border-green-500");
+    expect(w.className).toContain("ring-1");
+    expect(w.querySelector("svg[data-icon=chevron]")!.getAttribute("class")).not.toContain("-rotate-90");
+    expect(chip("Wabster").className).not.toContain("ring-1");
+  });
+
+  test("elapsed: a running timer, how long a question waited, the clock time a reply came", async () => {
+    fake("2026-10-10T10:12:00Z");
+    render(DelegationBlock, { props: { tasks: four() } });
+    const el = (name: string) => chip(name).querySelector("[data-testid=chip-elapsed]")!.textContent;
+    expect(el("Halodev")).toBe("10m 00s");
+    expect(el("Wabster")).toBe("8m 30s");
+    expect(el("Franky")).toBe("10s");
+    const d = new Date("2026-10-10T10:08:00Z");
+    expect(el("Atraxa")).toBe(`${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`);
+    expect(chip("Atraxa").querySelector("[data-testid=chip-elapsed]")!.className).toContain("font-mono");
+    await vi.advanceTimersByTimeAsync(1000);
+    await tick();
+    expect(el("Halodev")).toBe("10m 01s");
+    expect(el("Franky")).toBe("11s");
+  });
+
+  test("the 1s tick runs only while a task is active and stops on destroy", () => {
+    fake("2026-10-10T10:12:00Z");
+    const settled = render(DelegationBlock, { props: { tasks: [task({ state: "completed" }), task({ task_id: "f", state: "failed" })] } });
+    expect(vi.getTimerCount()).toBe(0);
+    settled.unmount();
+    const live = render(DelegationBlock, { props: { tasks: four() } });
+    expect(vi.getTimerCount()).toBe(1);
+    live.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("the tick stops once the tasks finish (props update)", async () => {
+    fake("2026-10-10T10:12:00Z");
+    const r = render(DelegationBlock, { props: { tasks: [task({ task_id: "p1" })] } });
+    expect(vi.getTimerCount()).toBe(1);
+    await r.rerender({ tasks: [task({ task_id: "p1", state: "completed" })] });
+    expect(vi.getTimerCount()).toBe(0);
+    await r.rerender({ tasks: [task({ task_id: "p1" })] });
+    expect(vi.getTimerCount()).toBe(1);
+    r.unmount();
+  });
+});
+
 describe("DelegationBlock cancel", () => {
   test("Cancel in a preview asks first, then cancels the task", async () => {
     const onCancel = vi.fn().mockResolvedValue(undefined);
@@ -104,7 +269,8 @@ describe("DelegationBlock cancel", () => {
   test("an interrupted task's chip reads Interrupted by a restart, with no Cancel", async () => {
     render(DelegationBlock, { props: { tasks: [task({ task_id: "blk-2", state: "failed", interrupted: true })], onCancel: vi.fn() } });
     await fireEvent.click(screen.getByTestId("delegation-folded"));
-    expect(screen.getByTestId("delegation-chip").textContent).toContain("Interrupted by a restart");
+    expect(screen.getByTestId("chip-status").textContent).toBe("interrupted by a restart");
+    expect(screen.getByTestId("chip-status").className).toContain("text-red-600");
     await fireEvent.click(screen.getByTestId("delegation-chip"));
     expect(screen.queryByTestId("delegation-cancel")).toBeNull();
   });
@@ -264,7 +430,7 @@ describe("ThreadMessage delegation block", () => {
     const chip = screen.getByTestId("delegation-chip");
     expect(chip.getAttribute("data-status")).toBe("needs_you");
     expect(chip.getAttribute("data-origin")).toBe("user");
-    expect(chip.textContent).toContain("Needs you");
+    expect(chip.textContent).toContain("needs input");
     expect(chip.textContent).not.toContain("is answering");
     expect(screen.queryByTestId("answer-instead")).toBeNull();
     expect(screen.getByTestId("needs-you-card")).toBeDefined();

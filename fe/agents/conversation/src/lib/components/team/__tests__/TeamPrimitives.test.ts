@@ -10,9 +10,10 @@ import { TEAM_ICONS, TEAM_ICON_NAMES } from "../icons.js";
 const label = (text: string) => createRawSnippet(() => ({ render: () => `<span>${text}</span>` }));
 
 describe("Dots", () => {
-  test("three decorative dots in currentColor", () => {
-    render(Dots);
-    const d = screen.getByTestId("dots");
+  test("three decorative dots in currentColor, no test id (a list can hold many)", () => {
+    const { container } = render(Dots);
+    const d = container.querySelector<HTMLElement>(".dots")!;
+    expect(d.dataset.testid).toBeUndefined();
     expect(d.getAttribute("aria-hidden")).toBe("true");
     expect(d.querySelectorAll("i")).toHaveLength(3);
     expect(d.textContent).toBe("");
@@ -69,7 +70,31 @@ describe("SmBtn", () => {
     w.unmount();
     render(SmBtn, { variant: "danger", disabled: true, children: label("Cancel") });
     const danger = screen.getByRole("button", { name: "Cancel" });
-    expect(danger.className).toContain("text-red-500");
+    expect(danger.className).toContain("text-red-600");
+    expect(danger.className).toContain("dark:text-red-400");
     expect((danger as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test("warn has a hover state", () => {
+    render(SmBtn, { variant: "warn", children: label("Answer") });
+    const warn = screen.getByRole("button", { name: "Answer" });
+    expect(warn.className).toContain("hover:bg-[rgba(251,191,36,.22)]");
+    expect(warn.className).toContain("dark:hover:bg-[rgba(251,191,36,.18)]");
+  });
+
+  test("class takes a string, an array or an object, never [object Object]", () => {
+    const a = render(SmBtn, { class: "shrink-0", children: label("A") });
+    expect(screen.getByRole("button", { name: "A" }).className).toContain("shrink-0");
+    a.unmount();
+    const b = render(SmBtn, { class: ["ml-auto", { "opacity-50": true, hidden: false }], children: label("B") });
+    const btn = screen.getByRole("button", { name: "B" });
+    expect(btn.className).not.toContain("[object Object]");
+    expect(btn.className).toContain("ml-auto");
+    expect(btn.className).toContain("opacity-50");
+    expect(btn.className).not.toMatch(/(^|\s)hidden(\s|$)/);
+    expect(btn.className).toContain("rounded");
+    b.unmount();
+    render(SmBtn, { class: { "w-full": true }, children: label("C") });
+    expect(screen.getByRole("button", { name: "C" }).className).toContain("w-full");
   });
 });

@@ -2,10 +2,11 @@
   /* The typing cue after a working line ("waiting on 3 teammates•••"):
      three dots in currentColor that bounce in turn, as the mockup's .dots
      (4px, 2px apart, 1.2s, .15s/.3s delays, .5→1 and up 3px). Decorative;
-     the line it follows already says it. */
+     the line it follows already says it. No test id: a list can hold
+     many, so tests find them by .dots. */
 </script>
 
-<span class="dots" aria-hidden="true" data-testid="dots"><i></i><i></i><i></i></span>
+<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
 
 <style>
   .dots i {
