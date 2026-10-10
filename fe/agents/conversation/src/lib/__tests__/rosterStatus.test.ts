@@ -161,12 +161,12 @@ describe("sub-agents working after the agent's own turn", () => {
   it("one background sub-agent: working, named, with the 🤖 cue", () => {
     const s = rosterStatus(row({ subagents_working: ["wick-fixer"] }));
     expect(s.work).toBe("subagent");
-    expect(s.typing).toBe("🤖 wick-fixer bekerja…");
-    expect(s.label).toBe("🤖 wick-fixer bekerja…");
+    expect(s.typing).toBe("🤖 wick-fixer working…");
+    expect(s.label).toBe("🤖 wick-fixer working…");
   });
 
   it("more than one is counted", () => {
-    expect(rosterStatus(row({ subagents_working: ["a", "b"] })).typing).toBe("🤖 2 sub-agent bekerja…");
+    expect(rosterStatus(row({ subagents_working: ["a", "b"] })).typing).toBe("🤖 2 sub-agents working…");
   });
 
   it("the agent's own turn outranks its sub-agents", () => {
@@ -180,7 +180,7 @@ describe("sub-agents working after the agent's own turn", () => {
     expect(rosterStatus(row({ needs_attention: true, subagents_working: ["x"] })).label).toBe("needs your attention");
     expect(rosterStatus(row({ subagents_working: ["x"] }), { hatching: true }).label).toBe("just hatched");
     const unread = rosterStatus(row({ unread: true, subagents_working: ["x"] }));
-    expect(unread.label).toBe("🤖 x bekerja…");
+    expect(unread.label).toBe("🤖 x working…");
     expect(unread.unread).toBe(true);
     const off = rosterStatus(row({ disabled: true, subagents_working: ["x"] }));
     expect(off.work).toBe("idle");
@@ -237,7 +237,7 @@ describe("Team tasks (team_message / @mention)", () => {
   it("outranks its own turn and its background sub-agents, which keep their own label", () => {
     expect(rosterStatus(row({ status: "running", current_action: "team_message", team_waiting: ["a"] })).work).toBe("team");
     expect(rosterStatus(row({ team_waiting: ["a"], subagents_working: ["x"] })).typing).toBe("waiting on @a…");
-    expect(rosterStatus(row({ subagents_working: ["x"] })).typing).toBe("🤖 x bekerja…");
+    expect(rosterStatus(row({ subagents_working: ["x"] })).typing).toBe("🤖 x working…");
   });
 
   it("the teammate working on it replies to its sender, ahead of everything else it does", () => {

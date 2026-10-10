@@ -24,6 +24,7 @@
   import RosterAvatar from "./lib/components/team/RosterAvatar.svelte";
   import RemoteKindIcon from "./lib/components/team/RemoteKindIcon.svelte";
   import AgentShareLine from "./lib/components/team/AgentShareLine.svelte";
+  import AgentHeaderTitle from "./lib/components/team/AgentHeaderTitle.svelte";
   import { isA2ARemote, isPluginRemote, isRemoteAgent, isSlackRemote, remoteChatMode, remoteTarget, remoteWaitLabel } from "./lib/remoteAgent.js";
   import AgentSessions from "./lib/components/AgentSessions.svelte";
   import DraftChat from "./lib/components/DraftChat.svelte";
@@ -48,7 +49,7 @@
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
   import TeamAddMenu from "./lib/components/TeamAddMenu.svelte";
-  import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass, dozing } from "./lib/rosterList.js";
+  import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass, dozing, withSaved } from "./lib/rosterList.js";
   import TeamSettings from "./lib/components/TeamSettings.svelte";
   import { RETURN_KEY, agentsHomeHref } from "./lib/teamReturn.js";
 
@@ -401,7 +402,7 @@
 
   function onSaved(next: AgentItem) {
     const prevHandle = selected?.handle;
-    agents = agents.map((a) => (a.id === next.id ? { ...a, ...next } : next.is_captain ? { ...a, is_captain: false } : a));
+    agents = withSaved(agents, next);
     if (next.is_captain) captainId = next.id;
     // A renamed handle moves the page with it, or the next refresh 404s.
     if (prevHandle && next.handle !== prevHandle) go({ handle: next.handle }, true);
@@ -797,9 +798,7 @@
           {#if headerStatus?.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -left-1 text-[11px] leading-none" aria-hidden="true" data-testid="header-subagent">🤖</span>{/if}
         </span>
         <div class="min-w-0 flex-1">
-          <div class="truncate text-base font-semibold text-black-900 dark:text-white-100">
-            {selected.name}{#if selected.tagline}<span class="font-normal text-black-700 dark:text-black-600">&nbsp;·&nbsp;{selected.tagline}</span>{/if}
-          </div>
+          <AgentHeaderTitle agent={selected} />
           <!-- No "online": the avatar's dot says it. Then @handle, where a
                remote's turns go and who it is shared by / with. -->
           <div class="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-xs text-black-800 dark:text-black-600" data-testid="header-line2">

@@ -113,3 +113,10 @@ export function silentPreview(text: string, flag?: boolean): { text: string; sil
 /** Classes of a silent preview: dimmed and italic, like the muted-bell
     reply in the thread. */
 export const silentPreviewClass = "italic text-black-600 dark:text-black-700";
+
+/** withSaved merges a saved agent into the roster. Saving one as captain
+    clears the flag on every other agent, so the CAPTAIN badge and the
+    header's " · Team lead" move with it. */
+export function withSaved(agents: AgentItem[], next: AgentItem): AgentItem[] {
+  return agents.map((a) => (a.id === next.id ? { ...a, ...next } : next.is_captain ? { ...a, is_captain: false } : a));
+}

@@ -29,7 +29,7 @@ export type RosterStatus = {
   attention: boolean;
   work: WorkState;
   /** Preview line while a turn runs: "thinking…", the tool's label
-      ("running Bash…"), what a remote waits on, or "🤖 <handle> bekerja…"
+      ("running Bash…"), what a remote waits on, or "🤖 <handle> working…"
       while only its sub-agents work. null = not working, show the normal
       preview. */
   typing: string | null;
@@ -45,7 +45,7 @@ type Row = Pick<AgentItem, "id" | "status" | "disabled"> &
 /** subagentLabel is the working line for background sub-agents: the one
     handle, or how many when there are more. */
 export function subagentLabel(handles: string[]): string {
-  return handles.length === 1 ? `🤖 ${handles[0]} bekerja…` : `🤖 ${handles.length} sub-agent bekerja…`;
+  return handles.length === 1 ? `🤖 ${handles[0]} working…` : `🤖 ${handles.length} sub-agents working…`;
 }
 
 /** busyWork: the agent reads busy with no turn of its own in its main

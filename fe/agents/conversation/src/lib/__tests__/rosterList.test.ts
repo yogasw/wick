@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass, dozing } from "../rosterList.js";
+import { rosterEntries, mobilePins, canMakeGroup, unreadLabel, rowTone, silentPreview, silentPreviewClass, dozing, withSaved } from "../rosterList.js";
 import type { AgentItem, GroupItem } from "../api/team.js";
 
 const agent = (id: string, last: string | null, over: Partial<AgentItem> = {}) =>
@@ -145,5 +145,18 @@ describe("Team task rows", () => {
     expect(dozing({ last_active: yesterday }, { ...idle, unread: true }, now)).toBe(false);
     expect(dozing({ last_active: yesterday, disabled: true }, idle, now)).toBe(false);
     expect(dozing({ last_active: null }, idle, now)).toBe(false);
+  });
+});
+
+describe("withSaved", () => {
+  test("merges the saved agent; a new captain clears the old one's flag", () => {
+    const agents = [agent("anton", null, { is_captain: true }), agent("budi", null)];
+    const next = withSaved(agents, { ...agents[1], name: "Budi B", is_captain: true });
+    expect(next.map((a) => [a.id, a.name, a.is_captain])).toEqual([["anton", "Anton", false], ["budi", "Budi B", true]]);
+  });
+
+  test("saving a non-captain leaves the captain alone", () => {
+    const agents = [agent("anton", null, { is_captain: true }), agent("budi", null)];
+    expect(withSaved(agents, { ...agents[1], tagline: "x" }).map((a) => a.is_captain)).toEqual([true, false]);
   });
 });
