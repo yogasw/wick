@@ -87,8 +87,9 @@ export function handoffState(state: string): string {
       return "needs input";
     case "completed":
       return "completed";
-    case "failed":
     case "rejected":
+      return "declined";
+    case "failed":
       return "failed";
     case "canceled":
       return "canceled";

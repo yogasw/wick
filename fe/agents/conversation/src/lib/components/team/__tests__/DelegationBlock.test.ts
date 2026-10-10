@@ -158,19 +158,27 @@ describe("TaskTray", () => {
 });
 
 describe("TasksPanel", () => {
-  test("groups Needs you / Working / Done / Failed·Canceled with a raw payload", () => {
-    render(TasksPanel, {
-      props: {
-        tasks: [
-          task({ task_id: "a", state: "input_required", needs_you: true }),
-          task({ task_id: "b" }),
-          task({ task_id: "c", state: "completed" }),
-          task({ task_id: "d", state: "canceled" }),
-        ],
-      },
-    });
-    for (const g of ["needs_you", "working", "done", "failed"]) expect(screen.getByTestId("tasks-group-" + g)).toBeDefined();
-    expect(screen.getAllByText("Raw payload")).toHaveLength(4);
+  test("groups Needs input / Working / Done today / Earlier / Failed · Canceled with a raw payload", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 10, 12, 0));
+    try {
+      render(TasksPanel, {
+        props: {
+          tasks: [
+            task({ task_id: "a", state: "input_required", needs_you: true }),
+            task({ task_id: "b" }),
+            task({ task_id: "c", state: "completed", updated_at: new Date(2026, 9, 10, 9, 0).toISOString() }),
+            task({ task_id: "e", state: "completed", updated_at: new Date(2026, 9, 9, 18, 0).toISOString() }),
+            task({ task_id: "d", state: "canceled" }),
+          ],
+        },
+      });
+      for (const g of ["needs_you", "working", "done", "earlier", "failed"]) expect(screen.getByTestId("tasks-group-" + g)).toBeDefined();
+      expect(screen.getByText("needs input · 2m")).toBeDefined();
+      expect(screen.getAllByText("Raw payload")).toHaveLength(5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("Cancel asks before it cancels", async () => {

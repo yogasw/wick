@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { blockHead, isUserTask, userTaskRoute, quickReplies, settledLine, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel } from "../delegations.js";
+import { blockHead, chipElapsed, chipLabel, clockTime, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, userTaskRoute, quickReplies, settledLine, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel } from "../delegations.js";
 import type { ConversationTurn, TeamTaskItem } from "../types/agents.js";
 
 const task = (o: Partial<TeamTaskItem>): TeamTaskItem => ({
@@ -86,5 +86,104 @@ describe("blockHead (P45 N5)", () => {
     expect(blockHead([task({ origin: "user" })])).toBe("You asked 1 teammate");
     expect(blockHead([task({}), task({ origin: "user" })])).toBe("Delegated to 1 teammate · You asked 1");
     expect(settledLine([task({ origin: "user", state: "completed" })])).toBe("You asked 1 teammate · all replied · 1 message");
+  });
+});
+
+describe("P48 helpers", () => {
+  const now = Date.parse("2026-10-10T10:05:10Z");
+
+  test("rejected reads as declined, its own summary part", () => {
+    const d = task({ state: "rejected" });
+    expect(taskStatus(d)).toBe("declined");
+    expect(taskLabel(d, "Cap")).toBe("declined");
+    expect(statusSummary([d, task({ state: "failed" })])).toBe("1 declined · 1 failed");
+  });
+
+  test("statusParts keeps each status apart, answering counted as working", () => {
+    expect(
+      statusParts([task({}), task({ state: "input_required" }), task({ state: "input_required", needs_you: true }), task({ state: "completed" }), task({ state: "canceled" })]),
+    ).toEqual([
+      { status: "working", count: 2, label: "2 working" },
+      { status: "needs_you", count: 1, label: "1 needs input" },
+      { status: "replied", count: 1, label: "1 replied" },
+      { status: "canceled", count: 1, label: "1 canceled" },
+    ]);
+    expect(statusParts([])).toEqual([]);
+  });
+
+  test("chipLabel says needs input, the rest like taskLabel", () => {
+    expect(chipLabel(task({ state: "input_required", needs_you: true }), "Cap")).toBe("needs input");
+    expect(chipLabel(task({ state: "input_required" }), "Cap")).toBe("Cap is answering");
+    expect(chipLabel(task({}), "Cap")).toBe("working");
+    expect(chipLabel(task({ state: "failed", interrupted: true }), "Cap")).toBe("interrupted by a restart");
+  });
+
+  test("chipElapsed: timer while working or asking, clock time once ended", () => {
+    expect(chipElapsed(task({ started_at: "2026-10-10T10:03:00Z" }), now)).toBe("2m 10s");
+    expect(chipElapsed(task({ started_at: "2026-10-10T10:05:00Z" }), now)).toBe("10s");
+    expect(chipElapsed(task({ started_at: "2026-10-10T08:00:00Z" }), now)).toBe("2h 5m");
+    expect(chipElapsed(task({ state: "input_required", needs_you: true, updated_at: "2026-10-10T10:04:00Z" }), now)).toBe("1m 10s");
+    const end = "2026-10-10T10:08:00Z";
+    expect(chipElapsed(task({ state: "completed", updated_at: end }), now)).toBe(clockTime(Date.parse(end)));
+    expect(clockTime(new Date(2026, 9, 10, 9, 7).getTime())).toBe("09:07");
+    expect(clockTime(NaN)).toBe("");
+  });
+
+  test("settledParts adds the block's duration", () => {
+    const p = settledParts([
+      task({ state: "completed", turns: 5, started_at: "2026-10-10T09:31:00Z", updated_at: "2026-10-10T09:40:00Z" }),
+      task({ state: "completed", turns: 7, started_at: "2026-10-10T09:32:00Z", updated_at: "2026-10-10T09:44:00Z" }),
+    ]);
+    expect(p).toEqual({ head: "Delegated to 2 teammates", allReplied: true, parts: [{ status: "replied", count: 2, label: "2 replied" }], messages: "12 messages", duration: "13m" });
+    const q = settledParts([task({ state: "rejected", turns: 0, started_at: "2026-10-10T09:00:00Z", updated_at: "2026-10-10T10:05:00Z" })]);
+    expect(q.allReplied).toBe(false);
+    expect(q.parts.map((x) => x.label)).toEqual(["1 declined"]);
+    expect(q.messages).toBe("");
+    expect(q.duration).toBe("1h 5m");
+    expect(formatDuration(3_600_000)).toBe("1h");
+    expect(formatDuration(40_000)).toBe("40s");
+  });
+
+  test("foldAvatars: one per teammate, first-asked order", () => {
+    const av = foldAvatars([
+      task({ task_id: "1", to_agent_id: "b", to_handle: "bob", to_name: "Bob" }),
+      task({ task_id: "2", to_agent_id: "a", to_handle: "anton", to_name: "Anton" }),
+      task({ task_id: "3", to_agent_id: "b", to_handle: "bob", to_name: "Bob" }),
+    ]);
+    expect(av).toEqual([
+      { to_agent_id: "b", to_handle: "bob", to_name: "Bob" },
+      { to_agent_id: "a", to_handle: "anton", to_name: "Anton" },
+    ]);
+    const noId = foldAvatars([
+      task({ to_agent_id: "", to_handle: "bob", to_name: "Bob" }),
+      task({ to_agent_id: "", to_handle: "luna", to_name: "Luna" }),
+      task({ to_agent_id: "", to_handle: "bob", to_name: "Bob" }),
+    ]);
+    expect(noId.map((a) => a.to_handle)).toEqual(["bob", "luna"]);
+  });
+
+  test("groupTasks: new labels, Done today vs a folded Earlier, declined with failed", () => {
+    const noon = new Date(2026, 9, 10, 12, 0).getTime();
+    const today = new Date(2026, 9, 10, 0, 30).toISOString();
+    const yesterday = new Date(2026, 9, 9, 23, 30).toISOString();
+    const groups = groupTasks(
+      [
+        task({ task_id: "w" }),
+        task({ task_id: "n", state: "input_required", needs_you: true }),
+        task({ task_id: "d", state: "completed", updated_at: today }),
+        task({ task_id: "e", state: "completed", updated_at: yesterday }),
+        task({ task_id: "r", state: "rejected" }),
+        task({ task_id: "c", state: "canceled" }),
+      ],
+      noon,
+    );
+    expect(groups.map((g) => [g.key, g.label, g.tasks.map((t) => t.task_id), !!g.collapsed])).toEqual([
+      ["needs_you", "Needs input", ["n"], false],
+      ["working", "Working", ["w"], false],
+      ["done", "Done today", ["d"], false],
+      ["earlier", "Earlier", ["e"], true],
+      ["failed", "Failed · Canceled", ["r", "c"], false],
+    ]);
+    expect(groupTasks([task({})], noon).map((g) => g.key)).toEqual(["working"]);
   });
 });

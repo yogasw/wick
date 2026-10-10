@@ -33,6 +33,8 @@ describe("teamSender / handoffState", () => {
     expect(handoffState("TASK_STATE_COMPLETED")).toBe("completed");
     expect(handoffState("TASK_STATE_INPUT_REQUIRED")).toBe("needs input");
     expect(handoffState("working")).toBe("working");
+    expect(handoffState("TASK_STATE_REJECTED")).toBe("declined");
+    expect(handoffState("failed")).toBe("failed");
   });
 });
 

@@ -60,6 +60,7 @@
       case "needs input":
         return "bg-amber-400/10 text-amber-700 dark:text-amber-300";
       case "failed":
+      case "declined":
         return "bg-neg-100 text-neg-400";
     }
     return "bg-white-300 text-black-800 dark:bg-navy-700 dark:text-white-100";

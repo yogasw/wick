@@ -75,7 +75,7 @@ export function tasksByTurn(turns: ConversationTurn[], tasks: TeamTaskItem[]): M
   return out;
 }
 
-export type TaskStatus = "needs_you" | "answering" | "working" | "replied" | "failed" | "canceled";
+export type TaskStatus = "needs_you" | "answering" | "working" | "replied" | "declined" | "failed" | "canceled";
 
 /** A task the person sent with an @mention in this chat: theirs, not the
     chat agent's — only they answer its question. */
@@ -103,8 +103,9 @@ export function taskStatus(t: TeamTaskItem): TaskStatus {
       return t.needs_you || isUserTask(t) ? "needs_you" : "answering";
     case "completed":
       return "replied";
-    case "failed":
     case "rejected":
+      return "declined";
+    case "failed":
       return "failed";
     case "canceled":
       return "canceled";
@@ -121,6 +122,7 @@ const STATUS_LABEL: Record<Exclude<TaskStatus, "answering">, string> = {
   needs_you: "needs you",
   working: "working",
   replied: "replied",
+  declined: "declined",
   failed: "failed",
   canceled: "canceled",
 };
@@ -141,19 +143,98 @@ export function taskLabel(t: TeamTaskItem, senderName: string): string {
   return t.interrupted ? INTERRUPTED_LABEL.toLowerCase() : statusLabel(taskStatus(t), senderName);
 }
 
-/** "2 working · 1 needs input · 1 replied", in a fixed order, empty
+/** The chip's status word: like taskLabel, but a question waiting for
+    the person reads "needs input" (the Tasks tab keeps "needs you"). */
+export function chipLabel(t: TeamTaskItem, senderName: string): string {
+  return !t.interrupted && taskStatus(t) === "needs_you" ? "needs input" : taskLabel(t, senderName);
+}
+
+/** One part of the block's summary, its status kept so each part gets
+    its own colour. "answering" counts as working. */
+export type StatusPart = { status: Exclude<TaskStatus, "answering">; count: number; label: string };
+
+const PART_ORDER: StatusPart["status"][] = ["working", "needs_you", "replied", "declined", "failed", "canceled"];
+const PART_WORD: Record<StatusPart["status"], string> = { ...STATUS_LABEL, needs_you: "needs input" };
+
+/** "2 working", "1 needs input", "1 replied", … in a fixed order, empty
     states left out. */
+export function statusParts(tasks: TeamTaskItem[]): StatusPart[] {
+  const counts = new Map<StatusPart["status"], number>();
+  for (const t of tasks) {
+    const s = taskStatus(t);
+    const k = s === "answering" ? "working" : s;
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  return PART_ORDER.filter((s) => counts.has(s)).map((s) => ({ status: s, count: counts.get(s)!, label: `${counts.get(s)} ${PART_WORD[s]}` }));
+}
+
+/** "2 working · 1 needs input · 1 replied": statusParts as one string. */
 export function statusSummary(tasks: TeamTaskItem[]): string {
-  const counts = new Map<TaskStatus, number>();
-  for (const t of tasks) counts.set(taskStatus(t), (counts.get(taskStatus(t)) ?? 0) + 1);
-  const parts: string[] = [];
-  const add = (n: number, label: string) => n > 0 && parts.push(`${n} ${label}`);
-  add((counts.get("working") ?? 0) + (counts.get("answering") ?? 0), "working");
-  add(counts.get("needs_you") ?? 0, "needs input");
-  add(counts.get("replied") ?? 0, "replied");
-  add(counts.get("failed") ?? 0, "failed");
-  add(counts.get("canceled") ?? 0, "canceled");
-  return parts.join(" · ");
+  return statusParts(tasks).map((p) => p.label).join(" · ");
+}
+
+const ms = (iso: string | undefined): number => (iso ? Date.parse(iso) : NaN);
+
+/** When a task ended, and when its question was asked: updated_at until
+    the server sends ended_at / asked_at (B1). */
+const endedMs = (t: TeamTaskItem): number => ms(t.updated_at);
+const askedMs = (t: TeamTaskItem): number => ms(t.updated_at);
+
+/** "45s", "2m 10s", "1h 5m": a running timer. */
+export function formatTimer(msec: number): string {
+  const sec = Math.max(0, Math.floor(msec / 1000));
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`;
+  return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+}
+
+/** "13m", "1h 5m", "40s": how long a whole block took. */
+export function formatDuration(msec: number): string {
+  const sec = Math.max(0, Math.round(msec / 1000));
+  if (sec < 60) return `${sec}s`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m`;
+  return min % 60 === 0 ? `${min / 60}h` : `${Math.floor(min / 60)}h ${min % 60}m`;
+}
+
+/** "10:08" in the viewer's local time, "" when the time is unknown. */
+export function clockTime(at: number): string {
+  if (!Number.isFinite(at)) return "";
+  const d = new Date(at);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/** The chip's time: a running timer while the teammate works, how long
+    a question has waited, the clock time a task ended. */
+export function chipElapsed(t: TeamTaskItem, now: number): string {
+  const s = taskStatus(t);
+  if (s === "working" || s === "answering") {
+    const at = ms(t.started_at);
+    return Number.isFinite(at) ? formatTimer(now - at) : "";
+  }
+  if (s === "needs_you") {
+    const at = askedMs(t);
+    return Number.isFinite(at) ? formatTimer(now - at) : "";
+  }
+  return clockTime(endedMs(t));
+}
+
+/** One teammate in the folded line's avatar stack. */
+export type FoldAvatar = { to_agent_id: string; to_handle: string; to_name: string };
+
+/** The folded line's avatars: one per teammate, in the order first asked.
+    A task without to_agent_id is told apart by its handle, then its name,
+    so two such teammates never merge. */
+export function foldAvatars(tasks: TeamTaskItem[]): FoldAvatar[] {
+  const seen = new Set<string>();
+  const out: FoldAvatar[] = [];
+  for (const t of tasks) {
+    const key = t.to_agent_id ? "id:" + t.to_agent_id : t.to_handle ? "h:" + t.to_handle : "n:" + t.to_name;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ to_agent_id: t.to_agent_id, to_handle: t.to_handle, to_name: t.to_name });
+  }
+  return out;
 }
 
 /** A block folds to one line once every task in it ended. */
@@ -172,29 +253,58 @@ export function blockHead(tasks: TeamTaskItem[]): string {
   return `Delegated to ${plural(agents)} · You asked ${yours}`;
 }
 
+/** The folded line in pieces: the head, "all replied" or the state
+    parts (a failure never hides behind a tick), "12 messages" and how
+    long the block took (first start to last end, "13m"). Empty strings
+    for what is unknown. */
+export type SettledParts = { head: string; allReplied: boolean; parts: StatusPart[]; messages: string; duration: string };
+
+export function settledParts(tasks: TeamTaskItem[]): SettledParts {
+  const turns = tasks.reduce((s, t) => s + (t.turns || 0), 0);
+  const starts = tasks.map((t) => ms(t.started_at)).filter(Number.isFinite);
+  const ends = tasks.map(endedMs).filter(Number.isFinite);
+  const span = starts.length && ends.length ? Math.max(...ends) - Math.min(...starts) : NaN;
+  return {
+    head: blockHead(tasks),
+    allReplied: tasks.length > 0 && tasks.every((t) => t.state === "completed"),
+    parts: statusParts(tasks),
+    messages: turns > 0 ? `${turns} message${turns === 1 ? "" : "s"}` : "",
+    duration: Number.isFinite(span) ? formatDuration(span) : "",
+  };
+}
+
 /** The folded line: "all replied" when every task completed, else the
     state summary so a failure is never hidden behind a tick. */
 export function settledLine(tasks: TeamTaskItem[]): string {
-  const head = blockHead(tasks);
-  const turns = tasks.reduce((s, t) => s + (t.turns || 0), 0);
-  const tail = turns > 0 ? ` · ${turns} message${turns === 1 ? "" : "s"}` : "";
-  const state = tasks.every((t) => t.state === "completed") ? "all replied" : statusSummary(tasks);
-  return `${head} · ${state}${tail}`;
+  const p = settledParts(tasks);
+  const state = p.allReplied ? "all replied" : p.parts.map((x) => x.label).join(" · ");
+  return [p.head, state, p.messages].filter(Boolean).join(" · ");
 }
 
-export type TaskGroup = { key: "needs_you" | "working" | "done" | "failed"; label: string; tasks: TeamTaskItem[] };
+export type TaskGroup = {
+  key: "needs_you" | "working" | "done" | "earlier" | "failed";
+  label: string;
+  tasks: TeamTaskItem[];
+  /** Starts folded (Earlier). */
+  collapsed?: boolean;
+};
 
-/** The Tasks rail's groups, empty ones dropped. */
-export function groupTasks(tasks: TeamTaskItem[]): TaskGroup[] {
+/** The Tasks rail's groups, empty ones dropped. A reply that came in
+    before today (the viewer's local midnight) goes to a folded Earlier
+    group, so nothing disappears; declined joins Failed · Canceled. */
+export function groupTasks(tasks: TeamTaskItem[], now: number = Date.now()): TaskGroup[] {
   const groups: TaskGroup[] = [
-    { key: "needs_you", label: "Needs you", tasks: [] },
+    { key: "needs_you", label: "Needs input", tasks: [] },
     { key: "working", label: "Working", tasks: [] },
-    { key: "done", label: "Done", tasks: [] },
+    { key: "done", label: "Done today", tasks: [] },
+    { key: "earlier", label: "Earlier", tasks: [], collapsed: true },
     { key: "failed", label: "Failed · Canceled", tasks: [] },
   ];
+  const midnight = new Date(now).setHours(0, 0, 0, 0);
   for (const t of tasks) {
     const s = taskStatus(t);
-    const g = s === "needs_you" ? 0 : s === "working" || s === "answering" ? 1 : s === "replied" ? 2 : 3;
+    const g =
+      s === "needs_you" ? 0 : s === "working" || s === "answering" ? 1 : s === "replied" ? (endedMs(t) < midnight ? 3 : 2) : 4;
     groups[g].tasks.push(t);
   }
   return groups.filter((g) => g.tasks.length > 0);

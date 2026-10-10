@@ -45,6 +45,7 @@
     answering: "bg-black-400 dark:bg-black-600",
     working: "bg-green-500 animate-pulse motion-reduce:animate-none",
     replied: "bg-green-500",
+    declined: "bg-red-500",
     failed: "bg-red-500",
     canceled: "bg-black-400 dark:bg-black-600",
   };
@@ -55,6 +56,7 @@
       case "answering": return `${captainName} is answering…`;
       case "working": return "working";
       case "replied": return "replied";
+      case "declined": return "declined";
       case "failed": return "failed";
     }
     return "canceled";
