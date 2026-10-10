@@ -9,8 +9,8 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 )
 
-// The rail style choice reads back from the profile: unset is Icons, and a
-// stored Labels checks the other option.
+// The rail style choice reads back from the profile: unset is Icons + vertical
+// labels, and only an explicit false checks Icons.
 func TestProfileRailStyleRadio(t *testing.T) {
 	checked := func(u *entity.User) string {
 		var b bytes.Buffer
@@ -28,11 +28,16 @@ func TestProfileRailStyleRadio(t *testing.T) {
 		}
 		return ""
 	}
-	if got := checked(&entity.User{}); got != entity.RailStyleIcons {
-		t.Fatalf("unset: checked %q, want %q", got, entity.RailStyleIcons)
+	if got := checked(&entity.User{}); got != entity.RailStyleLabels {
+		t.Fatalf("unset: checked %q, want %q", got, entity.RailStyleLabels)
 	}
+	off, on := false, true
 	u := &entity.User{}
-	u.Metadata.Rail.Labels = true
+	u.Metadata.Rail.Labels = &off
+	if got := checked(u); got != entity.RailStyleIcons {
+		t.Fatalf("labels off: checked %q, want %q", got, entity.RailStyleIcons)
+	}
+	u.Metadata.Rail.Labels = &on
 	if got := checked(u); got != entity.RailStyleLabels {
 		t.Fatalf("labels on: checked %q, want %q", got, entity.RailStyleLabels)
 	}

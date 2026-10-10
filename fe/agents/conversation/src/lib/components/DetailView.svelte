@@ -2772,7 +2772,9 @@
   /* The "More" button sits below the tabs and is never folded, so its height
      comes out of the budget before anything is fitted. Shorter in icons
      mode, where no "More" runs under the dots. */
-  const RAIL_MORE_H = $derived(railPrefs.labels ? 44 : 37);
+  /* Labels are the default: only an explicit false means icons only. */
+  const railLabels = $derived(railPrefs.labels !== false);
+  const RAIL_MORE_H = $derived(railLabels ? 44 : 37);
   const railBudget = $derived(railViewH > 0 ? railViewH * RAIL_FILL - RAIL_MORE_H : 0);
   /* What the window can hold, on top of what the user chose to fold. This is
      a display override like badge promotion: nothing is saved, so the tabs
@@ -2781,7 +2783,7 @@
     fitStrip(
       railOrdered,
       railSplit,
-      (id) => railTabH[id] ?? (railPrefs.labels ? RAIL_TAB_FALLBACK_H : RAIL_ICON_TAB_FALLBACK_H),
+      (id) => railTabH[id] ?? (railLabels ? RAIL_TAB_FALLBACK_H : RAIL_ICON_TAB_FALLBACK_H),
       railBudget,
       railTab,
     ),
@@ -3645,7 +3647,7 @@
            hover AND keyboard focus, and a title on top would double it. -->
       <button
         type="button"
-        title={railPrefs.labels ? railName(tab) : undefined}
+        title={railLabels ? railName(tab) : undefined}
         aria-label={railName(tab)}
         draggable="true"
         data-testid={"rail-tab-" + tab.id}
@@ -3734,7 +3736,7 @@
             {@html tab.icon}
           </svg>
         {/if}
-        {#if railPrefs.labels}
+        {#if railLabels}
           <span
             class={[
               "text-[9px] font-medium [writing-mode:vertical-rl] [transform:rotate(180deg)] tracking-wide",
@@ -3771,7 +3773,7 @@
         onReorder={reorderRailTab}
         onToggleHidden={toggleRailHidden}
         dragging={railDragId !== null}
-        labels={railPrefs.labels === true}
+        labels={railLabels}
         onDropHere={(id) => {
           // Dropped on More: fold that tab, leaving its position alone.
           railDragId = null;

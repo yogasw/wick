@@ -149,8 +149,8 @@ templ ProfilePage(user *entity.User, errMsg string, success bool, prefsSaved boo
 							<span class="mt-1 block text-xs text-black-700 dark:text-black-600">Scales text and spacing on every page. Saved with Save.</span>
 						</div>
 						<!-- Conversation rail: icons only, or icons with the tab name
-						     printed along the strip. Unset is icons. -->
-						{{ railLabels := user.Metadata.Rail.Labels }}
+						     printed along the strip. Unset is labels. -->
+						{{ railLabels := user.Metadata.Rail.LabelsOn() }}
 						<fieldset class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 p-4">
 							<legend class="px-1 text-sm font-medium text-black-900 dark:text-white-100">Conversation rail</legend>
 							<div class="flex flex-col gap-3">

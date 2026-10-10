@@ -69,7 +69,7 @@ describe("RailMore", () => {
 
   /* P40: More follows the strip's label style. */
   test("icons mode: no vertical label, the tabs' tooltip instead of a title", () => {
-    const { container } = renderMore();
+    const { container } = renderMore({ labels: false });
     const btn = screen.getByLabelText("More panels");
     expect(btn.hasAttribute("title")).toBe(false);
     expect(container.querySelector('[class*="writing-mode"]')).toBeNull();
@@ -81,6 +81,13 @@ describe("RailMore", () => {
 
   test("labels mode: the vertical label and a native title, no tooltip", () => {
     const { container } = renderMore({ labels: true });
+    expect(screen.getByLabelText("More panels").getAttribute("title")).toBe("More panels");
+    expect(container.querySelector('[class*="writing-mode"]')?.textContent).toBe("More");
+    expect(screen.queryByTestId("rail-tip-more")).toBeNull();
+  });
+
+  test("labels unset: labels mode by default", () => {
+    const { container } = renderMore();
     expect(screen.getByLabelText("More panels").getAttribute("title")).toBe("More panels");
     expect(container.querySelector('[class*="writing-mode"]')?.textContent).toBe("More");
     expect(screen.queryByTestId("rail-tip-more")).toBeNull();

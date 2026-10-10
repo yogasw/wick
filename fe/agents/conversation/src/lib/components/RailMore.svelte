@@ -46,8 +46,8 @@
     /* A hidden tab being dragged OUT of this panel, so the strip can light
        up as a drop target. null on drag end. */
     onDragOut?: (id: string | null) => void;
-    /* The strip's label style. Off (icons only) drops the vertical "More"
-       for the same tooltip the tabs wear. */
+    /* The strip's label style, on by default. Off (icons only) drops the
+       vertical "More" for the same tooltip the tabs wear. */
     labels?: boolean;
   };
 
@@ -65,7 +65,7 @@
     dragging = false,
     onDropHere,
     onDragOut,
-    labels = false,
+    labels = true,
   }: Props = $props();
 
   /* Lit while a strip tab hovers the button, so the drop target is visible

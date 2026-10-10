@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
   DEFAULT_HIDDEN,
+  emptyRailPrefs,
   moveInOrder,
   reorderTo,
   orderTabs,
@@ -32,7 +33,7 @@ describe("parseRailPrefs", () => {
   // a deliberate "show everything". Collapsing them would re-fold the tabs
   // someone had just unfolded.
   test("empty input leaves the layout unarranged", () => {
-    expect(parseRailPrefs(undefined)).toEqual({ order: [], hidden: null, labels: false });
+    expect(parseRailPrefs(undefined)).toEqual({ order: [], hidden: null, labels: true });
   });
 
   test("an explicit empty list is a choice, not an absence", () => {
@@ -277,12 +278,12 @@ describe("railPrefsFromPage", () => {
   // already — fetching it meant drawing the default and then collapsing.
   test("reads the layout the shell inlined", () => {
     const got = railPrefsFromPage(el(JSON.stringify({ order: ["notes"], hidden: ["browser"] })));
-    expect(got).toEqual({ order: ["notes"], hidden: ["browser"], labels: false });
+    expect(got).toEqual({ order: ["notes"], hidden: ["browser"], labels: true });
   });
 
   test("normalises what it finds", () => {
     const got = railPrefsFromPage(el(JSON.stringify({ order: ["a", 7], hidden: [null, "b"] })));
-    expect(got).toEqual({ order: ["a"], hidden: ["b"], labels: false });
+    expect(got).toEqual({ order: ["a"], hidden: ["b"], labels: true });
   });
 
   // null, not a default: absent means "this shell did not carry it", and the
@@ -353,17 +354,22 @@ describe("fitStrip", () => {
 });
 
 describe("rail label style", () => {
-  // Unset is icons only; only an explicit true prints the labels.
-  test("labels default off", () => {
-    expect(parseRailPrefs({}).labels).toBe(false);
-    expect(parseRailPrefs({ labels: "yes" }).labels).toBe(false);
+  // Unset prints the labels; only an explicit false leaves icons only.
+  test("labels default on", () => {
+    expect(parseRailPrefs({}).labels).toBe(true);
+    expect(parseRailPrefs(null).labels).toBe(true);
+    expect(parseRailPrefs({ labels: "yes" }).labels).toBe(true);
     expect(parseRailPrefs({ labels: true }).labels).toBe(true);
-    expect(parseRailPrefs({ order: ["a"], visible: 1, labels: true }).labels).toBe(true);
+    expect(parseRailPrefs({ labels: false }).labels).toBe(false);
+    expect(parseRailPrefs({ order: ["a"], visible: 1, labels: false }).labels).toBe(false);
+    expect(emptyRailPrefs.labels).toBe(true);
   });
 
   test("the shell's inlined record carries it", () => {
     const d = document.createElement("div");
-    d.dataset.railPrefs = JSON.stringify({ order: [], hidden: null, labels: true });
+    d.dataset.railPrefs = JSON.stringify({ order: [], hidden: null, labels: false });
+    expect(railPrefsFromPage(d)?.labels).toBe(false);
+    d.dataset.railPrefs = JSON.stringify({ order: [], hidden: null });
     expect(railPrefsFromPage(d)?.labels).toBe(true);
   });
 });

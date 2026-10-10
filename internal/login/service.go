@@ -231,14 +231,15 @@ func (s *Service) SetRailPrefs(ctx context.Context, userID string, p entity.Rail
 }
 
 // SetRailLabels saves whether the conversation rail prints tab names along
-// the strip (true) or shows icons only (false). The layout is left alone.
+// the strip (true) or shows icons only (false). Both are stored explicitly,
+// so the choice survives a later change of default. The layout is left alone.
 func (s *Service) SetRailLabels(ctx context.Context, userID string, on bool) error {
 	u, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {
 		return err
 	}
 	meta := u.Metadata
-	meta.Rail.Labels = on
+	meta.Rail.Labels = &on
 	return s.repo.SetMetadata(ctx, userID, meta)
 }
 

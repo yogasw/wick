@@ -957,7 +957,7 @@ describe("DetailView — reply chip", () => {
   });
 });
 
-/* P40: the strip shows icons only unless the profile turned labels on. The
+/* P40: the strip prints the labels unless the profile turned them off. The
    choice arrives inlined on #app, like the rest of the rail layout. */
 describe("DetailView — rail label style (P40)", () => {
   const app = () => {
@@ -983,7 +983,8 @@ describe("DetailView — rail label style (P40)", () => {
   const label = (container: HTMLElement) =>
     container.querySelector('[data-testid="rail-tab-files"] [class*="writing-mode"]');
 
-  test("unset: icons only, the name in an accessible tooltip", () => {
+  test("labels off: icons only, the name in an accessible tooltip", () => {
+    app().dataset.railPrefs = JSON.stringify({ order: [], hidden: null, labels: false });
     const { container } = render(DetailView, { props: DEFAULT_PROPS });
     const btn = container.querySelector('[data-testid="rail-tab-files"]')!;
     expect(btn.getAttribute("aria-label")).toBe("Files");
@@ -1005,13 +1006,25 @@ describe("DetailView — rail label style (P40)", () => {
     expect(strip.querySelectorAll("[data-testid^='rail-tab-'] [title]").length).toBe(0);
   });
 
-  test("labels on: the name runs along the strip, no tooltip", () => {
-    app().dataset.railPrefs = JSON.stringify({ order: [], hidden: null, labels: true });
-    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+  const expectLabels = (container: HTMLElement) => {
     const btn = container.querySelector('[data-testid="rail-tab-files"]')!;
     expect(btn.getAttribute("aria-label")).toBe("Files");
     expect(btn.getAttribute("title")).toBe("Files");
     expect(label(container)?.textContent).toBe("Files");
     expect(container.querySelector('[data-testid="rail-tip-files"]')).toBeNull();
+  };
+
+  test("labels on: the name runs along the strip, no tooltip", () => {
+    app().dataset.railPrefs = JSON.stringify({ order: [], hidden: null, labels: true });
+    expectLabels(render(DetailView, { props: DEFAULT_PROPS }).container);
+  });
+
+  test("unset (saved layout without a choice): labels on", () => {
+    app().dataset.railPrefs = JSON.stringify({ order: [], hidden: null });
+    expectLabels(render(DetailView, { props: DEFAULT_PROPS }).container);
+  });
+
+  test("nothing inlined: labels on", () => {
+    expectLabels(render(DetailView, { props: DEFAULT_PROPS }).container);
   });
 });
