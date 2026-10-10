@@ -150,6 +150,7 @@ func (g *TurnGate) Acquire(ctx context.Context, sessionID string, id a2a.TaskID)
 	}
 	w := &gateWaiter{id: id, canceled: make(chan struct{})}
 	g.mu.Lock()
+	g.pruneDroppedLocked(time.Now())
 	if _, ok := g.dropped[id]; ok {
 		delete(g.dropped, id)
 		g.mu.Unlock()
@@ -347,11 +348,17 @@ func (g *TurnGate) StopWith(sessionID string, id a2a.TaskID, stop func() (TaskSt
 		}
 	}
 	now := time.Now()
+	g.pruneDroppedLocked(now)
+	g.dropped[id] = now
+	return TaskStopNotFound, nil
+}
+
+// pruneDroppedLocked forgets the cancels older than droppedTTL, so a task
+// that never asked for its turn does not stay remembered. g.mu is held.
+func (g *TurnGate) pruneDroppedLocked(now time.Time) {
 	for d, at := range g.dropped {
 		if now.Sub(at) > droppedTTL {
 			delete(g.dropped, d)
 		}
 	}
-	g.dropped[id] = now
-	return TaskStopNotFound, nil
 }

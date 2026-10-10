@@ -1606,9 +1606,11 @@ func NewServer() *Server {
 					pid = ids[0]
 				}
 			}
-			if channelType == "runtime" {
-				// A chat channel carries what a person wrote; A2A carries
-				// another agent's, often a reply to the session's own task.
+			if source == "slack" || source == "telegram" {
+				// A chat channel carries what a person wrote, whether its
+				// instance was there at boot or added later. REST is an API
+				// token (often a script) and A2A another agent, often
+				// replying to the session's own task: neither is marked.
 				ctx = teamlink.WithPersonMessage(ctx)
 			}
 			return agentsPool.SendWithProject(ctx, sessionID, agentName, source, role, text, pid)
@@ -3296,7 +3298,7 @@ func NewServer() *Server {
 			return mcphandlers.ExecuteAs(ctx, connectorsSvc, agentsLayout, toolID, params, sessionID, u, tagIDs, entity.ConnectorRunSourceSchedule)
 		},
 	)
-	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens}
+	return &Server{runAsUsable: runAsUsable, scheduleConnExec: scheduleConnExec, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens, teamHub: hub}
 }
 
 type Server struct {
@@ -3354,6 +3356,10 @@ type Server struct {
 	// consuming Slack events. Read by the single-node `all` entrypoint, which
 	// must hold its job scheduler back for the same reason.
 	intakeReady chan struct{}
+	// teamHub builds the Team A2A hub on first use. Run builds it once the
+	// intake baton is held, so tasks a restart left working are settled
+	// without waiting for someone to touch a team feature.
+	teamHub func() *teamlink.Hub
 	// httpInflight counts requests still being handled, so a handover waits
 	// for them like any other work instead of cutting them off when a
 	// shutdown deadline expires. Streams exclude themselves — see
@@ -3821,6 +3827,10 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		batonCh <- baton
 		logger.Info().Msg("intake: baton acquired — starting channels, cron and scheduled messages")
 		s.startChannels(ctx)
+		if s.teamHub != nil {
+			// Off the intake path: reading the task store back is disk I/O.
+			go s.teamHub()
+		}
 		if s.wfMgr != nil {
 			s.wfMgr.StartCron(ctx)
 			s.wfMgr.StartRunSweep(ctx)

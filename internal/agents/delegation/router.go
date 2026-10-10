@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/entity"
 )
 
@@ -222,6 +223,12 @@ func (s *Service) routeToAgent(ctx context.Context, in RouteInput, rootID string
 	if in.FromHandle == t.Handle {
 		d.Err = "an agent cannot message itself"
 		return d
+	}
+	// A person's mention is a person's message to whoever reads it, so a
+	// team task's turn it reaches is left running on cancel. A peer's is
+	// not (teamlink.WithPersonMessage).
+	if in.Human {
+		ctx = teamlink.WithPersonMessage(ctx)
 	}
 	_, err := s.SendMessage(ctx, SendInput{
 		RootID: rootID, FromHandle: in.FromHandle,

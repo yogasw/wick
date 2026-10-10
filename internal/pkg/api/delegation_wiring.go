@@ -9,7 +9,6 @@ import (
 	event "github.com/yogasw/wick/internal/agents/event"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/session"
-	"github.com/yogasw/wick/internal/agents/teamlink"
 )
 
 // Async delivery + take-over wiring for sub-agent delegation.
@@ -73,9 +72,14 @@ type poolSteerer struct {
 	pool *agentpool.Pool
 }
 
-// SendToChild injects the human's message as a normal user turn, so the
-// sub-agent reacts to it exactly as it would to any instruction — it
-// queues behind the in-flight turn rather than interrupting it.
+// SendToChild injects a message as a normal user turn, so the sub-agent
+// reacts to it exactly as it would to any instruction — it queues behind
+// the in-flight turn rather than interrupting it.
+//
+// It carries a person's take-over and a peer's inbox alike, so it does
+// not mark the message as a person's itself: the caller's ctx says so
+// (teamlink.WithPersonMessage, set by the take-over and a person's
+// @mention), and WithoutCancel keeps that mark.
 func (s poolSteerer) SendToChild(ctx context.Context, childSessionID, agentName, message string) error {
 	if s.pool == nil {
 		return nil
@@ -84,7 +88,7 @@ func (s poolSteerer) SendToChild(ctx context.Context, childSessionID, agentName,
 	// cancelled the moment it answers "sent". A child spawned for this
 	// message starts its agent with this ctx, and a cancelled one ends the
 	// turn it was woken for before the prompt goes out.
-	return s.pool.Send(teamlink.WithPersonMessage(context.WithoutCancel(ctx)), childSessionID, agentName, string(session.OriginUI), "user", message)
+	return s.pool.Send(context.WithoutCancel(ctx), childSessionID, agentName, string(session.OriginUI), "user", message)
 }
 
 // poolWaker makes a sub-agent readable-to again after its process has

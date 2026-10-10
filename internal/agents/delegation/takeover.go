@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/entity"
 )
 
@@ -66,7 +67,8 @@ func (s *Service) TakeOver(ctx context.Context, delegationID, actorID, message s
 	if s.Steerer == nil {
 		return fmt.Errorf("take-over is not wired on this transport")
 	}
-	return s.Steerer.SendToChild(ctx, d.ChildSessionID, d.ChildAgent, message)
+	// A take-over is a person typing into the sub-agent (teamlink.WithPersonMessage).
+	return s.Steerer.SendToChild(teamlink.WithPersonMessage(ctx), d.ChildSessionID, d.ChildAgent, message)
 }
 
 // Steerer delivers a human message into a running sub-agent session.
