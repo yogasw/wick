@@ -42,7 +42,7 @@ export interface TeamAgent {
   tagline?: string;
   is_captain: boolean;
   disabled: boolean;
-  avatar: { kind?: string; shape: string; color: string; expression?: string } | null;
+  avatar: { kind?: string; shape: string; color: string; expression?: string; image?: { v: string; aspect: number; fit: string; x: number; y: number; zoom: number; src?: string } } | null;
 }
 
 export interface TeamResponse {

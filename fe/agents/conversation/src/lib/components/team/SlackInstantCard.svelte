@@ -134,7 +134,9 @@
     <div>
       <span class={label}>How it looks in Slack</span>
       <div class="flex items-start gap-2 rounded-lg border border-white-300 p-3 dark:border-navy-600" data-testid="instant-preview">
-        {#if av}<AgentAvatar kind={av.kind} shape={av.shape} expression={av.expression} color={av.color} size={36} still />{/if}
+        {#if av}<!-- Slack's icon is drawn from shape + colour only (instantAvatar): an
+             image avatar shows there as its classic shape, so the preview does too. -->
+        <AgentAvatar kind={av.kind === "image" ? "" : av.kind} shape={av.shape} expression={av.expression} color={av.color} size={36} still />{/if}
         <span class="min-w-0">
           <span class="text-sm font-semibold text-black-900 dark:text-white-100" data-testid="instant-username">{status.username || agent.handle}</span>
           <span class="ml-1 rounded bg-white-200 px-1 py-0.5 text-[10px] font-medium uppercase text-black-800 dark:bg-navy-600 dark:text-black-600">App</span>

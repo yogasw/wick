@@ -20,6 +20,8 @@
      a failed tool, a remote's wait, a finished turn — each through the
      agent's own table (`events`), the cues above when a row is off. */
   import BlobAvatar from "./BlobAvatar.svelte";
+  import ImageAvatar from "./ImageAvatar.svelte";
+  import { isImageKind, safeImageSrc, type AvatarImageView } from "./image.js";
   import { isBlobKind, blobStateFor } from "./blob.js";
   import { blobPath, eyesAt, orbitDot, thinkDots, gazeTarget, approach, followsPointer, normalizeShape, normalizeState, stateFor, DOT_R, type AvatarState, type Vec } from "./shape.js";
   import { subscribe, pointer, pointerActive, prefersReducedMotion } from "./ticker.js";
@@ -34,6 +36,10 @@
     /** Blob only: one of BLOB_EXPRESSIONS. */
     expression?: string;
     color?: string;
+    /** kind="image": the picture and its crop — the avatar object's own
+        `image` (the API adds its versioned src). Without a usable src, or
+        once it fails to load, the avatar draws as classic. */
+    image?: AvatarImageView | null;
     size?: number;
     working?: boolean;
     /** The running turn is on a tool: orbit instead of thinking. */
@@ -74,6 +80,7 @@
     shape = "circle",
     expression,
     color = "#6366f1",
+    image,
     size = 40,
     working = false,
     tool = false,
@@ -94,6 +101,9 @@
   }: Props = $props();
 
   const blob = $derived(isBlobKind(kind));
+  let failedSrc = $state("");
+  const imageSrc = $derived(isImageKind(kind) && image ? safeImageSrc(image.src) : "");
+  const pictured = $derived(!!imageSrc && imageSrc !== failedSrc);
 
   const NOTIFY_MS = 2400;
   const WINK_MS = 450;
@@ -152,7 +162,7 @@
   let fp = $state<FidgetPose | null>(null);
 
   $effect(() => {
-    if (reduced || blob) return;
+    if (reduced || blob || pictured) return;
     const off = subscribe((now) => {
       t = now;
       const next = live
@@ -187,7 +197,9 @@
   const fill = $derived(/^#[0-9a-f]{3,8}$/i.test(color) ? color : "#6366f1");
 </script>
 
-{#if blob}
+{#if pictured && image}
+  <ImageAvatar {image} {size} {color} {title} onerror={() => (failedSrc = imageSrc)} pose={current} animate={!reduced && (live || !!event || current !== "idle")} />
+{:else if blob}
   <BlobAvatar {shape} expression={blobExpression} {color} {size} pose={blobPose} {live} {restless} {still} hatching={hatching && !reduced} {title} />
 {:else}
 <!-- The click is a reaction, not an action: the row button around the

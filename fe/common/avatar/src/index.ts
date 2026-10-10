@@ -5,6 +5,8 @@
 export { default as AgentAvatar } from "./AgentAvatar.svelte";
 export { default as BlobAvatar } from "./BlobAvatar.svelte";
 export { default as BlobAvatarPicker } from "./BlobAvatarPicker.svelte";
+export { default as ImageAvatar } from "./ImageAvatar.svelte";
+export * from "./image.js";
 export {
   AVATAR_KIND_BLOB, isBlobKind, BLOB_SHAPES, BLOB_EXPRESSIONS, BLOB_COLORS, BLOB_GAZE_MIN,
   normalizeBlobShape, normalizeBlobExpression, switchAvatarKind, type AvatarSpec, blobStateFor, randomBlob, blobColor,

@@ -14,6 +14,8 @@ export type AgentAvatarSpec = {
   expression?: string;
   /** Per-event pose overrides (Settings › Avatar, events.ts); absent = defaults. */
   events?: Record<string, { state?: string; expression?: string; off?: boolean }>;
+  /** kind "image": the crop of the stored picture (team.AvatarImage). */
+  image?: { v: string; aspect: number; fit: string; x: number; y: number; zoom: number; src?: string };
 };
 
 export type ConnectorGrant = {
@@ -874,3 +876,9 @@ export const getSessionOptions = (base: string, id: string, sessionId?: string) 
     session exists. */
 export const putSessionOptions = (base: string, id: string, sessionId: string, options: Record<string, string>) =>
   apiPutE<SessionOptions>(`${base}/api/team/agents/${enc(id)}/plugin-remote/session-options?session_id=${enc(sessionId)}`, { options });
+
+/** uploadAvatarImage sends a picture (base64 in JSON, like every other
+    write) for the server to check, re-encode and store; the avatar uses
+    it once an "image" avatar is saved. */
+export const uploadAvatarImage = (base: string, id: string, data: string) =>
+  apiPostE<{ v: string; aspect: number; width: number; height: number }>(`${base}/api/team/agents/${enc(id)}/avatar/image`, { data });

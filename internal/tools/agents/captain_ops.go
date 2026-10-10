@@ -150,6 +150,7 @@ func (o CaptainOps) Create(ctx context.Context, sessionID string, in teamagents.
 		if err := json.Unmarshal([]byte(in.Avatar), &av); err != nil {
 			return nil, errors.New("avatar must be a JSON object")
 		}
+		av = team.AvatarForCreate(av)
 	}
 	sys := in.SystemPrompt
 	if strings.TrimSpace(sys) == "" {

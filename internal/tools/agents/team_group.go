@@ -157,7 +157,7 @@ func groupItem(ctx context.Context, sess session.Session, byID map[string]teamli
 	for _, p := range members {
 		m := TeamGroupMember{ID: p.ID, Handle: p.Handle, Name: p.Name, IsCaptain: p.IsCaptain, Disabled: p.Disabled, MaxHops: teamlink.EffectiveHops(p.MaxHops)}
 		if a, err := globalTeam.Get(ctx, p.ID); err == nil {
-			m.Avatar = team.DecodeAvatar(a.Avatar)
+			m.Avatar = team.WithImageSrc(team.DecodeAvatar(a.Avatar), agentsToolBase, a.ID)
 		}
 		it.Members = append(it.Members, m)
 	}

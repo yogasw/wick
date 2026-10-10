@@ -123,6 +123,8 @@ export type AgentIdentity = {
   shape?: string;
   color?: string;
   expression?: string;
+  /** Image avatar: the picture's crop + versioned src (Avatar.image). */
+  image?: { v: string; aspect: number; fit: string; x: number; y: number; zoom: number; src?: string };
   /** Per-event avatar poses (Avatar.events); unset = defaults. */
   avatarEvents?: Record<string, { state?: string; expression?: string; off?: boolean }>;
   /** Right-hand composer caption, e.g. "3 connector". */

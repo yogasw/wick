@@ -376,6 +376,8 @@ func Register(r tool.Router) {
 	r.PATCH("/api/team/agents/{id}", apiTeamAgentUpdate)
 	r.DELETE("/api/team/agents/{id}", apiTeamAgentDelete)
 	r.POST("/api/team/agents/{id}/captain", apiTeamAgentMakeCaptain)
+	r.GET("/api/team/agents/{id}/avatar/image", apiTeamAgentAvatarImage)
+	r.POST("/api/team/agents/{id}/avatar/image", apiTeamAgentAvatarImageUpload)
 	r.POST("/api/team/agents/{id}/chat", apiTeamAgentChat)
 	r.GET("/api/team/agents/{id}/sessions", apiTeamAgentSessions)
 	r.POST("/api/team/agents/{id}/read", apiTeamAgentRead)

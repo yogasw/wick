@@ -11,6 +11,8 @@ package team
 import (
 	"encoding/json"
 	"hash/fnv"
+	"net/url"
+	"regexp"
 	"slices"
 )
 
@@ -122,6 +124,27 @@ type Avatar struct {
 	// Events overrides the event → pose table (fe/common/avatar/src/events.ts),
 	// keyed by one of AvatarEvents. Absent = the defaults.
 	Events map[string]AvatarEventPose `json:"events,omitempty"`
+	// Image is the uploaded picture's crop. The bytes live in their own
+	// table (entity.AgentAvatarImage); V and Aspect are copied from that
+	// row by the server, never taken from the client. It is drawn only
+	// for AvatarKindImage but kept under the other kinds too, so switching
+	// to Classic and back does not lose the upload.
+	Image *AvatarImage `json:"image,omitempty"`
+}
+
+// AvatarImage is where an image avatar's picture sits in its frame:
+// Fit picks what Zoom 0 (automatic) means, X/Y move it in percent of the
+// frame and Zoom scales it. Every number is clamped (clampAvatarImage).
+type AvatarImage struct {
+	V      string  `json:"v"`
+	Aspect float64 `json:"aspect"`
+	Fit    string  `json:"fit"`
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Zoom   float64 `json:"zoom"`
+	// Src is the picture's versioned URL, filled in only on the way out
+	// (WithImageSrc); never stored, never read from a request.
+	Src string `json:"src,omitempty"`
 }
 
 // AvatarEventPose is one row of Avatar.Events: a different pose for the
@@ -148,6 +171,11 @@ var AvatarShapes = []string{"circle", "squircle", "triangle", "diamond"}
 
 // AvatarKindBlob is Avatar.Kind for the blob mascot.
 const AvatarKindBlob = "blob"
+
+// AvatarKindImage is Avatar.Kind for an uploaded picture.
+const AvatarKindImage = "image"
+
+var avatarVersionRe = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
 // BlobShapes and BlobExpressions mirror BLOB_SHAPES / BLOB_EXPRESSIONS in
 // fe/common/avatar/src/blob/core/types.ts.
@@ -187,7 +215,25 @@ func DefaultAvatarFor(handle string) Avatar {
 // cannot draw. An unknown kind falls back to classic.
 func NormalizeAvatar(a Avatar) Avatar {
 	d := DefaultAvatar()
-	if a.Kind == AvatarKindBlob {
+	// An image avatar without a stored picture's version has nothing to
+	// draw: it falls back to classic.
+	if a.Image != nil && !avatarVersionRe.MatchString(a.Image.V) {
+		a.Image = nil
+	}
+	if a.Image != nil {
+		im := clampAvatarImage(*a.Image)
+		im.Src = ""
+		a.Image = &im
+	}
+	if a.Kind == AvatarKindImage && a.Image == nil {
+		a.Kind = ""
+	}
+	if a.Kind == AvatarKindImage {
+		a.Expression = ""
+		if !slices.Contains(AvatarShapes, a.Shape) {
+			a.Shape = d.Shape
+		}
+	} else if a.Kind == AvatarKindBlob {
 		if !slices.Contains(BlobShapes, a.Shape) {
 			a.Shape = BlobShapes[0]
 		}
@@ -290,6 +336,27 @@ func DecodeAvatar(raw string) Avatar {
 		_ = json.Unmarshal([]byte(raw), &a)
 	}
 	return NormalizeAvatar(a)
+}
+
+// AvatarForCreate is the avatar a NEW agent may start with: it has no
+// stored picture yet, so any image crop is dropped and an "image" kind
+// becomes classic. Every create path goes through it.
+func AvatarForCreate(a Avatar) Avatar {
+	a.Image = nil
+	return NormalizeAvatar(a)
+}
+
+// WithImageSrc fills in the picture's URL under base (the Agents tool
+// path) for agent id, so every surface that draws the avatar gets it
+// with no per-call-site wiring. A copy: a is not changed.
+func WithImageSrc(a Avatar, base, id string) Avatar {
+	if a.Image == nil || id == "" {
+		return a
+	}
+	im := *a.Image
+	im.Src = base + "/api/team/agents/" + url.PathEscape(id) + "/avatar/image?v=" + im.V
+	a.Image = &im
+	return a
 }
 
 // EncodeAvatar is the inverse of DecodeAvatar.

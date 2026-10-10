@@ -104,6 +104,7 @@ var migratedModels = []any{
 	// Agents app: chat-able agents backed by a project, with a per-agent
 	// connector checklist. See internal/agents/team.
 	&entity.AgentPersona{},
+	&entity.AgentAvatarImage{},
 	// Audit trail of every access change of an agent, and the pending
 	// ones a Captain proposed and the owner has not decided yet.
 	&entity.AgentAccessHistory{},

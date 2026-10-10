@@ -12,7 +12,7 @@ export type TeamTasksCtx = {
       (liveTurnTasks) before the turn is committed. */
   tasks?: () => TeamTaskItem[];
   /** Team agents by handle, for the chips' avatars. */
-  agents: () => Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }>;
+  agents: () => Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null }>;
   /** The agent this chat belongs to — "Captain is answering…" names it. */
   captainName: () => string;
   /** Absent in a read-only chat: the actions are hidden, not refused. */

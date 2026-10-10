@@ -73,7 +73,7 @@
     <span class={sLabel}>Members</span>
     {#each group.members as m (m.id)}
       <div class="flex items-center gap-2 py-1">
-        <AgentAvatar kind={m.avatar?.kind} shape={m.avatar?.shape} expression={m.avatar?.expression} color={m.avatar?.color} size={24} asleep={m.disabled} />
+        <AgentAvatar kind={m.avatar?.kind} image={m.avatar?.image} shape={m.avatar?.shape} expression={m.avatar?.expression} color={m.avatar?.color} size={24} asleep={m.disabled} />
         <span class="min-w-0 flex-1 truncate text-sm text-black-900 dark:text-white-100">{m.name} <span class="text-xs text-black-700">@{m.handle} · max {m.max_hops}</span></span>
         <button type="button" class="text-xs text-neg-400 hover:underline disabled:opacity-40" disabled={group.members.length <= 2 || sSaving} onclick={() => setMembers(sMembers.filter((id) => id !== m.id))}>Remove</button>
       </div>

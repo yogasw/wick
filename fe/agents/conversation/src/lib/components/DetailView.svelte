@@ -1420,7 +1420,7 @@
   });
 
   const teamAgentsByHandle = $derived(
-    Object.fromEntries(teamPeers.map((p) => [p.handle, { name: p.name || p.handle, kind: p.avatar?.kind, shape: p.avatar?.shape, color: p.avatar?.color, expression: p.avatar?.expression }])),
+    Object.fromEntries(teamPeers.map((p) => [p.handle, { name: p.name || p.handle, kind: p.avatar?.kind, shape: p.avatar?.shape, color: p.avatar?.color, expression: p.avatar?.expression, image: p.avatar?.image }])),
   );
   function openTeamAgent(handle: string) {
     navigateAgents({ handle, session: null, panel: null });
@@ -2930,8 +2930,8 @@
   {#if sessionFields}<SessionFieldChips fields={sessionFields.fields} values={sessionFields.values} locked />{/if}
 {/snippet}
 
-{#snippet mentionAvatar(a: { kind?: string; shape?: string; color?: string; expression?: string })}
-  <AgentAvatar kind={a.kind} shape={a.shape} expression={a.expression} color={a.color} size={18} />
+{#snippet mentionAvatar(a: { kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null })}
+  <AgentAvatar kind={a.kind} image={a.image} shape={a.shape} expression={a.expression} color={a.color} size={18} />
 {/snippet}
 
 <!-- Full-height flex row: main area + vertical rail -->

@@ -26,7 +26,7 @@
   import TaskThread from "./TaskThread.svelte";
   import TeamIcon from "./TeamIcon.svelte";
 
-  type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string };
+  type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null };
   type Props = {
     tasks: TeamTaskItem[];
     agents?: Record<string, Agent>;
@@ -203,7 +203,7 @@
     <TeamIcon name="check" size={14} class="text-green-600 dark:text-green-400" />
     <span data-testid="fold-avatars" aria-hidden="true" class="flex shrink-0 items-center">
       {#each foldAvatars(tasks) as a, i (a.to_agent_id || a.to_handle || a.to_name)}
-        <span data-testid="fold-avatar" class={"inline-flex " + (i ? "-ml-[5px]" : "")}><AgentAvatar kind={agents[a.to_handle]?.kind} shape={agents[a.to_handle]?.shape} expression={agents[a.to_handle]?.expression} color={agents[a.to_handle]?.color} size={18} /></span>
+        <span data-testid="fold-avatar" class={"inline-flex " + (i ? "-ml-[5px]" : "")}><AgentAvatar kind={agents[a.to_handle]?.kind} image={agents[a.to_handle]?.image} shape={agents[a.to_handle]?.shape} expression={agents[a.to_handle]?.expression} color={agents[a.to_handle]?.color} size={18} /></span>
       {/each}
     </span>
     <span data-testid="fold-title" class="shrink-0 whitespace-nowrap text-xs font-medium text-black-800 dark:text-black-600">{settled.head}</span>
@@ -261,7 +261,7 @@
               open ? "border-green-500 ring-1 ring-green-500" : s === "needs_you" ? "border-amber-500/[.45] dark:border-[rgba(251,191,36,.40)]" : "border-white-300 dark:border-navy-600",
               s === "needs_you" ? "bg-[rgba(251,191,36,.12)] dark:bg-[rgba(251,191,36,.10)]" : "bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600"]}
           >
-            <AvatarActivity activity={taskActivity(s)} size={18}><AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={18} /></AvatarActivity>
+            <AvatarActivity activity={taskActivity(s)} size={18}><AgentAvatar kind={agents[t.to_handle]?.kind} image={agents[t.to_handle]?.image} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={18} /></AvatarActivity>
             {#if isUserTask(t)}<span data-testid="user-task-marker" class="rounded bg-link-400/10 px-1 text-[10px] font-medium text-link-400">{USER_TASK_MARKER}</span>{/if}
             <span class="font-semibold text-black-900 dark:text-white-100">{nameOf(t)}</span>
             {#if s === "working"}
@@ -288,7 +288,7 @@
           {@const asked = askedClock(t)}
           <div data-testid="needs-you-card" class="border-t border-white-300 bg-[rgba(251,191,36,.12)] dark:border-navy-600 dark:bg-[rgba(251,191,36,.10)]">
             <div class="flex items-center gap-2 px-3 py-[7px] text-[11.5px] text-black-800 dark:text-black-600">
-              <AvatarActivity activity={taskActivity("needs_you")} size={20}><AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={20} /></AvatarActivity>
+              <AvatarActivity activity={taskActivity("needs_you")} size={20}><AgentAvatar kind={agents[t.to_handle]?.kind} image={agents[t.to_handle]?.image} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={20} /></AvatarActivity>
               <b class="shrink-0 text-xs font-semibold text-black-900 dark:text-white-100">{nameOf(t)}</b>
               <span data-testid="needs-you-task" class="min-w-0 flex-1 truncate">· {t.title}{asked ? ` · asked ${asked}` : ""}</span>
             </div>
@@ -317,7 +317,7 @@
         <!-- grouped 2b: the open chip's short thread, a soft section of its own. -->
         <div data-testid="delegation-preview" class="border-t border-white-300 bg-white-200 dark:border-navy-600 dark:bg-navy-700">
           <div class="flex items-center gap-2 px-3 py-[7px] text-[11.5px] text-black-700">
-            <AvatarActivity activity={taskActivity(s)} size={20}><AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={20} /></AvatarActivity>
+            <AvatarActivity activity={taskActivity(s)} size={20}><AgentAvatar kind={agents[t.to_handle]?.kind} image={agents[t.to_handle]?.image} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={20} /></AvatarActivity>
             <b class="shrink-0 text-xs font-semibold text-black-900 dark:text-white-100">{userTaskRoute(t) ?? nameOf(t)}</b>
             <span data-testid="delegation-preview-task" class="min-w-0 flex-1 truncate">· {t.title}{t.message_count ? ` · ${t.message_count} message${t.message_count === 1 ? "" : "s"}` : ""}</span>
             {#if s === "needs_you" || s === "answering"}

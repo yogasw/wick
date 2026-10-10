@@ -274,6 +274,8 @@ func (s *Store) Delete(ctx context.Context, id string) (err error) {
 	if res.RowsAffected == 0 {
 		return ErrNotFound
 	}
+	// Best effort: an orphaned picture is only bytes nobody can reach.
+	_ = s.DeleteAvatarImage(ctx, id)
 	return nil
 }
 

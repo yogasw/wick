@@ -7,7 +7,7 @@
   import { Toggle } from "@wick-fe/common-ui";
   import {
     AgentAvatar, AVATAR_EVENTS, AVATAR_EVENT_LABELS, AVATAR_STATES, BLOB_EXPRESSIONS, BLOB_STATES, DEFAULT_EVENT_POSES,
-    cleanOverrides, isBlobKind, poseFor, type AvatarEvent, type EventOverride, type EventOverrides,
+    cleanOverrides, isBlobKind, poseFor, type AvatarEvent, type AvatarImageView, type EventOverride, type EventOverrides,
   } from "@wick-fe/common-avatar";
 
   type Props = {
@@ -16,9 +16,11 @@
     color: string;
     expression?: string;
     events?: EventOverrides | null;
+    /** Style Image: the picture the rows move. */
+    image?: AvatarImageView | null;
     onChange: (events: Record<string, EventOverride> | undefined) => void;
   };
-  let { kind, shape, color, expression, events, onChange }: Props = $props();
+  let { kind, shape, color, expression, events, image, onChange }: Props = $props();
 
   const blob = $derived(isBlobKind(kind));
   /* The classic avatar draws fewer states; the rest read as the fallback. */
@@ -57,7 +59,9 @@
           <tr class="border-t border-white-300 dark:border-navy-600" data-testid="avatar-event-{ev}" data-off={row.off ? "1" : undefined}>
             <td class="px-3 py-2">
               <span class="flex items-center gap-2">
-                <AgentAvatar {kind} {shape} {expression} {color} {events} event={ev} size={28} still />
+                <!-- live, not still: a still avatar never runs its ticker (classic)
+                     and draws a cached frame (blob), so the preview never moved. -->
+                <AgentAvatar {kind} {shape} {expression} {color} {image} {events} event={ev} size={28} live />
                 <span class="text-black-900 dark:text-white-100">{AVATAR_EVENT_LABELS[ev]}</span>
               </span>
             </td>

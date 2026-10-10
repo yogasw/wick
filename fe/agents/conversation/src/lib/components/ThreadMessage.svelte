@@ -45,12 +45,12 @@
     loadTraceBlob?: (turnId: string, ref: string) => Promise<Blob>;
     traceFiles?: TraceFiles;
     /** Team agents by handle, for a teammate's avatar on its messages. */
-    teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }>;
+    teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null }>;
     /** Opens a Team agent's chat; unset (outside the Team app) the
         handoff row's target is plain text. */
     onOpenAgent?: (handle: string) => void;
     /** The agent this chat belongs to — names a speaker missing from teamAgents. */
-    agent?: { handle?: string; name: string; kind?: string; shape?: string; color?: string; expression?: string };
+    agent?: { handle?: string; name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null };
     /** Handle of the teammate a via-mention turn answered ("" = none). */
     via?: string;
     /** Server-computed actioncard state for the whole thread. */
@@ -624,7 +624,7 @@
               title={`${teamFrom.name} (@${teamFrom.handle}) · Team agent`}
               class="inline-flex items-center gap-1.5 pl-1 ml-0.5 text-[11px] leading-4 text-black-800 dark:text-black-600"
             >
-              <AgentAvatar kind={teamFromAgent?.kind} shape={teamFromAgent?.shape} expression={teamFromAgent?.expression} color={teamFromAgent?.color} size={20} />
+              <AgentAvatar kind={teamFromAgent?.kind} image={teamFromAgent?.image} shape={teamFromAgent?.shape} expression={teamFromAgent?.expression} color={teamFromAgent?.color} size={20} />
               <span class="min-w-0 truncate"
                 ><span class="font-medium text-black-900 dark:text-white-100">{teamFromAgent?.name || teamFrom.name}</span
                 ><span class="opacity-70">{" · @" + teamFrom.handle}</span></span
@@ -796,12 +796,12 @@
     <div class="flex flex-col gap-1.5 w-full max-w-full min-w-0">
       {#if showMeta}
         <div data-testid="asst-meta" class="flex items-center gap-1.5 text-[11px] text-black-700 dark:text-black-600">
-          <AgentAvatar kind={metaAgent?.kind} shape={metaAgent?.shape} expression={metaAgent?.expression} color={metaAgent?.color} size={18} />
+          <AgentAvatar kind={metaAgent?.kind} image={metaAgent?.image} shape={metaAgent?.shape} expression={metaAgent?.expression} color={metaAgent?.color} size={18} />
           <span class="min-w-0 truncate">{replyAuthor()}{viaMention ? (via ? " · via @" + via : " · via mention") : ""}{metaSpan ? " · " + metaSpan : ""}</span>
         </div>
       {:else if speaker}
         <span data-testid="speaker-chip" class="inline-flex items-center gap-1.5 self-start text-[11px] leading-4 text-black-800 dark:text-black-600">
-          <AgentAvatar kind={speakerAgent?.kind} shape={speakerAgent?.shape} expression={speakerAgent?.expression} color={speakerAgent?.color} size={20} />
+          <AgentAvatar kind={speakerAgent?.kind} image={speakerAgent?.image} shape={speakerAgent?.shape} expression={speakerAgent?.expression} color={speakerAgent?.color} size={20} />
           <span class="min-w-0 truncate"
             ><span class="font-medium text-black-900 dark:text-white-100">{speakerAgent?.name || "@" + speaker.handle}</span
             >{#if viaMention}<span class="opacity-70">{via ? " · via @" + via : " · via mention"}</span>{/if}</span

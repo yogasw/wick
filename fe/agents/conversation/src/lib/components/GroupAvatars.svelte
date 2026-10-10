@@ -16,7 +16,7 @@
 <span class="flex shrink-0 items-center" data-testid="group-avatars">
   {#each st.shown as m, i (m.id)}
     <span class="relative flex items-center justify-center rounded-full {ring}" style="padding:2px;margin-left:{i ? -OVERLAP : 0}px;z-index:{st.shown.length - i}">
-      <AgentAvatar kind={m.avatar?.kind} shape={m.avatar?.shape} expression={m.avatar?.expression} color={m.avatar?.color} {size} asleep={m.disabled} />
+      <AgentAvatar kind={m.avatar?.kind} image={m.avatar?.image} shape={m.avatar?.shape} expression={m.avatar?.expression} color={m.avatar?.color} {size} asleep={m.disabled} />
     </span>
   {/each}
   {#if showMore && st.more}

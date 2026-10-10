@@ -51,7 +51,7 @@
         avatar stands in for the typing spinner. */
     agent?: AgentIdentity;
     /** Team agents by handle and the opener for their chats; see ThreadMessage. */
-    teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string }>;
+    teamAgents?: Record<string, { name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null }>;
     /** History has not arrived yet: a loading state, not "no messages". */
     loading?: boolean;
     onOpenAgent?: (handle: string) => void;
@@ -243,14 +243,14 @@
     <!-- The avatar fills the wait with random fidgets (restless). -->
     <div class="flex flex-col items-center justify-center py-16 text-center gap-3" data-testid="thread-loading" aria-busy="true">
       {#if agent}
-        <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={72} live restless />
+        <AgentAvatar kind={agent.kind} image={agent.image} shape={agent.shape} expression={agent.expression} color={agent.color} size={72} live restless />
         <p class="text-lg font-semibold text-black-900 dark:text-white-100">{agent.name}</p>
       {/if}
       <p class="text-sm text-black-700 dark:text-black-600">Loading messages…</p>
     </div>
   {:else if isEmpty && agent}
     <div class="flex flex-col items-center justify-center py-16 text-center gap-3">
-      <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={72} live />
+      <AgentAvatar kind={agent.kind} image={agent.image} shape={agent.shape} expression={agent.expression} color={agent.color} size={72} live />
       <div class="flex flex-col gap-1">
         <p class="text-lg font-semibold text-black-900 dark:text-white-100">{agent.name}</p>
         {#if agent.tagline}
@@ -316,7 +316,7 @@
                    a tool runs), is the typing indicator in the Team app. A compaction keeps the amber
                    spinner: that wait is not the agent answering. -->
               {#if agent && !compacting}
-                <AgentAvatar kind={agent.kind} shape={agent.shape} expression={agent.expression} color={agent.color} size={20} live working={true} tool={!!typing.toolName} toolName={typing.toolName} events={agent.avatarEvents} />
+                <AgentAvatar kind={agent.kind} image={agent.image} shape={agent.shape} expression={agent.expression} color={agent.color} size={20} live working={true} tool={!!typing.toolName} toolName={typing.toolName} events={agent.avatarEvents} />
               {:else}
               <svg
                 class={"h-3 w-3 shrink-0 animate-spin " + (compacting ? "text-amber-500" : "text-green-500")}
@@ -382,7 +382,7 @@
         {#if liveStatus}
           <div data-testid="live-asst-meta" class="flex items-center gap-1.5 text-[11px] text-black-700 dark:text-black-600">
             <!-- The name is in the text: the avatar is decoration. -->
-            <span class="inline-flex shrink-0" aria-hidden="true"><AgentAvatar kind={agent?.kind} shape={agent?.shape} expression={agent?.expression} color={agent?.color} size={18} live working={true} /></span>
+            <span class="inline-flex shrink-0" aria-hidden="true"><AgentAvatar kind={agent?.kind} image={agent?.image} shape={agent?.shape} expression={agent?.expression} color={agent?.color} size={18} live working={true} /></span>
             <span class="min-w-0 truncate">{agent?.name || "Assistant"}{liveStatusTime ? " · " + liveStatusTime : ""} · {liveStatus}</span>
           </div>
         {/if}

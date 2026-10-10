@@ -18,11 +18,14 @@
      The mockup's "Connect" step waits for Slack/A2A (phase 1b). */
   import { onMount } from "svelte";
   import { AIGenerateButton, ProviderPicker, buildProviderOptions } from "@wick-fe/common-ui";
-  import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, defaultAvatarFor, isBlobKind, switchAvatarKind } from "@wick-fe/common-avatar";
+  import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, defaultAvatarFor, isBlobKind, isImageKind, switchAvatarKind } from "@wick-fe/common-avatar";
+  import AvatarImageEditor from "./AvatarImageEditor.svelte";
+  import { toastError } from "@wick-fe/common-stores";
+  import { DEFAULT_CROP, fileData, imageAvatar, pickError, type ImageCrop } from "../avatarImage.js";
   import ConnectorChecklist from "./ConnectorChecklist.svelte";
   import { accessPayload, type AccessMode } from "../accessList.js";
   import { getProjectOptions, getProviderOptions, getProviderOptionModels } from "../api/options.js";
-  import { createAgent, getProjectPersona, listAgentConnectors, listAgents, runApi, type AgentItem, type AgentConnector, type ConnectorGrant, type MentionFrom } from "../api/team.js";
+  import { createAgent, updateAgent, uploadAvatarImage, getProjectPersona, listAgentConnectors, listAgents, runApi, type AgentItem, type AgentConnector, type ConnectorGrant, type MentionFrom } from "../api/team.js";
   import { HANDLE_RE, splitPick, slugHandle, uniqueHandle, parseGrantErrors, projectOptionLabel, type GrantErrors, type PickerProject, TAGLINE_MAX } from "../agentForm.js";
   import { PERSONA_KIND, personaInput, suggestedConnectors, draftGrants, draftMentionAllow, acceptsNewAgent, type PersonaDraft } from "../personaGen.js";
   import { MENTION_FROM_OPTIONS } from "../mentionSettings.js";
@@ -69,6 +72,35 @@
     expression = a.expression ?? "neutral";
     avatarTouched = true;
   }
+  /* Style Image: the picked file stays in the page (a blob: URL preview)
+     until the agent exists; submit uploads it and saves the crop. */
+  let imgFile = $state<File | null>(null);
+  let imgUrl = $state("");
+  let imgAspect = $state(1);
+  let imgCrop = $state<ImageCrop>({ ...DEFAULT_CROP });
+  let imgError = $state("");
+  const imgView = $derived(imgUrl ? { src: imgUrl, aspect: imgAspect, ...imgCrop } : null);
+  function setImageFile(f: File | null) {
+    if (imgUrl) URL.revokeObjectURL(imgUrl);
+    imgFile = f;
+    imgUrl = f ? URL.createObjectURL(f) : "";
+    imgAspect = 1;
+    imgCrop = { ...DEFAULT_CROP };
+    if (!imgUrl || typeof Image === "undefined") return;
+    const probe = new Image();
+    const url = imgUrl;
+    probe.onload = () => {
+      if (url === imgUrl && probe.naturalWidth && probe.naturalHeight) imgAspect = probe.naturalWidth / probe.naturalHeight;
+    };
+    probe.src = url;
+  }
+  function pickImage(f: File) {
+    imgError = pickError(f);
+    if (!imgError) setImageFile(f);
+  }
+  $effect(() => () => {
+    if (imgUrl) URL.revokeObjectURL(imgUrl);
+  });
   // Until a shape or swatch is picked the avatar follows the handle's hash
   // (same function as the server's default), so it is stable per handle.
   let avatarTouched = $state(false);
@@ -245,6 +277,21 @@
     else if (step === 2) step = 3;
   }
 
+  /** withImage uploads the picked picture to the new agent and saves the
+      image avatar. A failure keeps the agent as created (classic) and
+      says so, with the server's reason, so it can be set again in
+      Settings › Avatar. */
+  async function withImage(a: AgentItem, f: File): Promise<AgentItem> {
+    try {
+      const r = await runApi(uploadAvatarImage(base, a.id, await fileData(f)));
+      return await runApi(updateAgent(base, a.id, { avatar: imageAvatar({ shape, color }, r.v, r.aspect, imgCrop) }));
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      toastError("Agent created, but the image was not saved", `${why} Set it again in Settings › Avatar.`);
+      return a;
+    }
+  }
+
   async function submit() {
     if (!personaOk || !modelOk || saving) return;
     saving = true;
@@ -273,7 +320,7 @@
           model: splitPick(pick).model,
         }),
       );
-      onCreated(a);
+      onCreated(isImageKind(kind) && imgFile ? await withImage(a, imgFile) : a);
     } catch (err) {
       // Same mapping as Settings: each rejection lands on its own field.
       const msg = err instanceof Error ? err.message : String(err);
@@ -380,11 +427,13 @@
         />
       </div>
     </div>
-    <div class="flex items-center gap-4">
-      <AgentAvatar {kind} {shape} {expression} {color} size={64} live />
-      <div class="space-y-2">
+    <!-- Image: preview on top, editor below (mockup), not a small avatar
+         hanging beside a tall editor. -->
+    <div class="flex {isImageKind(kind) ? 'flex-col items-start gap-3' : 'items-center gap-4'}">
+      <AgentAvatar {kind} {shape} {expression} {color} image={imgView} size={64} live />
+      <div class="space-y-2 {isImageKind(kind) ? 'w-full' : ''}">
         <div class="inline-flex rounded-lg border border-white-300 p-0.5 dark:border-navy-600" role="group" aria-label="Avatar kind">
-          {#each [["", "Classic"], ["blob", "Blob"]] as [k, lbl] (k)}
+          {#each [["", "Classic"], ["blob", "Blob"], ["image", "Image"]] as [k, lbl] (k)}
             <button
               type="button"
               class="rounded-md px-3 py-1 text-xs {kind === k ? 'bg-green-500 text-white-100' : 'text-black-800 dark:text-black-600'}"
@@ -394,7 +443,18 @@
             >{lbl}</button>
           {/each}
         </div>
-        {#if isBlobKind(kind)}
+        {#if isImageKind(kind)}
+          <AvatarImageEditor
+            src={imgUrl}
+            aspect={imgAspect}
+            crop={imgCrop}
+            error={imgError}
+            labelClass={label}
+            onFile={pickImage}
+            onReset={() => { imgError = ""; setImageFile(null); }}
+            onCrop={(c) => (imgCrop = c)}
+          />
+        {:else if isBlobKind(kind)}
           <BlobAvatarPicker {shape} {expression} {color} compact onChange={(l) => { shape = l.shape; expression = l.expression; color = l.color; avatarTouched = true; }} />
         {:else}
         <div class="flex gap-2">
@@ -575,7 +635,7 @@
                     mentionAllow = v ? [...mentionAllow, a.id] : mentionAllow.filter((id) => id !== a.id);
                   }}
                 />
-                <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={18} />
+                <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={18} />
                 <span class="truncate">{a.name}</span>
                 {#if a.is_captain}<span class="text-[10px]">🧭</span>{/if}
               </label>
@@ -588,7 +648,7 @@
               <p class="flex items-center gap-2 py-0.5 text-sm {ok ? 'text-black-900 dark:text-white-100' : 'text-black-700 line-through dark:text-black-700'}"
                 title={ok ? "" : "Set on that agent's Mention tab"}>
                 <span class="w-3 text-center text-xs">{ok ? "✓" : "–"}</span>
-                <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={18} />
+                <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={18} />
                 <span class="truncate">{a.name}</span>
               </p>
             {/each}

@@ -18,7 +18,7 @@
   import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
   import { clockTime, taskProgress, taskStatus } from "../../delegations.js";
 
-  type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string };
+  type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null };
   type Props = {
     task: TeamTaskItem;
     load: (taskId: string) => Promise<TeamThreadEntry[]>;
@@ -62,9 +62,9 @@
   {@const a = handle ? agents[handle] : undefined}
   <span class="mt-px shrink-0">
     {#if live}
-      <AvatarActivity activity={taskActivity("working")} size={22}><AgentAvatar kind={a?.kind} shape={a?.shape} expression={a?.expression} color={a?.color} size={22} /></AvatarActivity>
+      <AvatarActivity activity={taskActivity("working")} size={22}><AgentAvatar kind={a?.kind} image={a?.image} shape={a?.shape} expression={a?.expression} color={a?.color} size={22} /></AvatarActivity>
     {:else}
-      <AgentAvatar kind={a?.kind} shape={a?.shape} expression={a?.expression} color={a?.color} size={22} />
+      <AgentAvatar kind={a?.kind} image={a?.image} shape={a?.shape} expression={a?.expression} color={a?.color} size={22} />
     {/if}
   </span>
 {/snippet}

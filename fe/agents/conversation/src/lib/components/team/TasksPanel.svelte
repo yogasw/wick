@@ -25,7 +25,7 @@
   import TeamIcon from "./TeamIcon.svelte";
 
   type ReassignTarget = { handle: string; name: string; shared?: boolean; refused?: boolean };
-  type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string };
+  type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null };
   type Props = {
     tasks: TeamTaskItem[];
     agents?: Record<string, Agent>;
@@ -216,7 +216,7 @@
               class={["mb-1.5 flex items-start gap-2.5 rounded-lg border bg-white-100 dark:bg-navy-800 px-2.5 py-2",
                 s === "needs_you" ? "border-amber-500/[.45] dark:border-[rgba(251,191,36,.40)]" : "border-white-300 dark:border-navy-600"]}
             >
-              <span class="shrink-0"><AvatarActivity activity={taskActivity(s)} size={26}><AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={26} /></AvatarActivity></span>
+              <span class="shrink-0"><AvatarActivity activity={taskActivity(s)} size={26}><AgentAvatar kind={agents[t.to_handle]?.kind} image={agents[t.to_handle]?.image} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={26} /></AvatarActivity></span>
               <div class="min-w-0 flex-1">
                 <div class="flex items-baseline gap-1.5 text-[12.5px]">
                   <span data-testid="tasks-panel-name" class="truncate font-semibold text-black-900 dark:text-white-100">{userTaskRoute(t) ?? nameOf(t)}</span>
@@ -254,7 +254,7 @@
                               onclick={() => replace(t.task_id, () => onReassign!(t.task_id, m.handle))}
                               class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11.5px] text-black-900 hover:bg-white-200 disabled:cursor-not-allowed disabled:opacity-50 dark:text-white-100 dark:hover:bg-navy-700"
                             >
-                              <AgentAvatar kind={agents[m.handle]?.kind} shape={agents[m.handle]?.shape} expression={agents[m.handle]?.expression} color={agents[m.handle]?.color} size={18} />
+                              <AgentAvatar kind={agents[m.handle]?.kind} image={agents[m.handle]?.image} shape={agents[m.handle]?.shape} expression={agents[m.handle]?.expression} color={agents[m.handle]?.color} size={18} />
                               <span class="truncate">{agents[m.handle]?.name || m.name || "@" + m.handle}</span>
                               <span class="ml-auto font-mono text-[10px] text-black-700">@{m.handle}</span>
                             </button>

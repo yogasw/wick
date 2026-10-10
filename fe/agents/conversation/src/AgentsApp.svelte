@@ -544,6 +544,7 @@
           shape: selected.avatar?.shape,
           color: selected.avatar?.color,
           expression: selected.avatar?.expression,
+          image: selected.avatar?.image,
           avatarEvents: selected.avatar?.events,
           caption: remoteMode?.caption ?? connectorCaption(selected.allowed_connectors),
         }
@@ -633,7 +634,7 @@
         {#each pins as a (a.id)}
           <button type="button" class="flex w-20 flex-col items-center gap-1.5 rounded-xl py-1 text-xs text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600" onclick={() => openAgent(a)}>
             <span class="relative inline-flex">
-              <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={54} live working={isWorking(a.status)} asleep={a.disabled} />
+              <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={54} live working={isWorking(a.status)} asleep={a.disabled} />
               <!-- Same cue as the list's SHARED badge, sized for a pin. -->
               {#if isSharedAgent(a)}<span class="absolute bottom-0 right-0 flex h-5 w-5 items-center justify-center rounded-full border-2 border-white-100 bg-white-300 text-black-800 dark:border-navy-700 dark:bg-navy-600 dark:text-black-600" title={sharedLabel(a)} data-testid="pin-shared-badge"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" /></svg><span class="sr-only">{sharedLabel(a)}</span></span>{/if}
             </span>
@@ -791,7 +792,7 @@
       </button>
       {#if selected && !noCaptain}
         <span class="relative flex shrink-0">
-          <AgentAvatar kind={selected.avatar?.kind} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={!!headerStatus && avatarWorking(selected.status, headerStatus.work)} tool={headerStatus?.work === "tool" || headerStatus?.work === "subagent"} toolName={headerStatus?.work === "tool" ? selected.current_action : ""} toolError={selected.tool_error} remote={headerStatus?.work === "waiting"} events={selected.avatar?.events} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
+          <AgentAvatar kind={selected.avatar?.kind} image={selected.avatar?.image} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={!!headerStatus && avatarWorking(selected.status, headerStatus.work)} tool={headerStatus?.work === "tool" || headerStatus?.work === "subagent"} toolName={headerStatus?.work === "tool" ? selected.current_action : ""} toolError={selected.tool_error} remote={headerStatus?.work === "waiting"} events={selected.avatar?.events} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
           {#if headerStatus}<PresenceDot presence={headerStatus.presence} label={headerStatus.label} />{/if}
           {#if headerStatus?.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -left-1 text-[11px] leading-none" aria-hidden="true" data-testid="header-subagent">🤖</span>{/if}
         </span>

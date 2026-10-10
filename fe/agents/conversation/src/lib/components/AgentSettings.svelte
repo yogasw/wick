@@ -11,10 +11,13 @@
   import { toastOk } from "@wick-fe/common-stores";
   import AvatarEventsTable from "./AvatarEventsTable.svelte";
   import DrawerHeader from "./DrawerHeader.svelte";
-  import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, colorInputValue, isBlobKind, switchAvatarKind, type AvatarSpec } from "@wick-fe/common-avatar";
+  import { AgentAvatar, BlobAvatarPicker, AVATAR_SHAPES, AVATAR_COLORS, AVATAR_STATES, AVATAR_STATE_LABELS, colorInputValue, isBlobKind, isImageKind, switchAvatarKind, avatarImageUrl, type AvatarSpec } from "@wick-fe/common-avatar";
+  const pendingImage = (a: AvatarSpec) => isImageKind(a.kind) && !a.image?.v;
+  import AvatarImageEditor from "./AvatarImageEditor.svelte";
+  import { DEFAULT_CROP, fileData, imageAvatar, pickError } from "../avatarImage.js";
   import { getProviderOptions, getProjectOptions } from "../api/options.js";
   import {
-    getAgent, updateAgent, deleteAgent, getProjectPersona, listAgentConnectors, listAgentShares, makeCaptain, runApi,
+    getAgent, updateAgent, deleteAgent, uploadAvatarImage, getProjectPersona, listAgentConnectors, listAgentShares, makeCaptain, runApi,
     type AgentItem, type AgentWrite, type SuggestedPrompt, type ConnectorGrant, type AgentConnector,
   } from "../api/team.js";
   import type { AgentFeatures } from "../agentMode.js";
@@ -295,7 +298,15 @@
       p.model = model;
     }
     if (!sameValue(d.features, saved.features)) p.features = { ...d.features };
-    if (!sameValue(d.avatar, saved.avatar)) p.avatar = { ...d.avatar };
+    // Image with no picture yet is a local, pending state (Style shows
+    // Image, the editor "No image yet"): the style is not saved until an
+    // upload lands (the server would turn it into Classic and the draft
+    // would differ again forever), but the rest of the avatar — color,
+    // shape, Reacts to — is, under the style saved before.
+    {
+      const av = avatarToSave(d.avatar);
+      if (!sameValue(av, avatarCmp(saved.avatar))) p.avatar = av;
+    }
     if (!sameValue(d.grants, saved.allowed_connectors ?? [])) {
       p.allowed_connectors = $state.snapshot(d.grants) as ConnectorGrant[];
     }
@@ -346,6 +357,46 @@
     flush();
   }
 
+  /* Style Image: the picture uploads at once (the server checks and
+     re-encodes it); the avatar switches to it through the normal save. */
+  let imgBusy = $state(false);
+  let imgError = $state("");
+  const avatarImage = $derived(
+    isImageKind(draft.avatar.kind) && draft.avatar.image?.v
+      ? { ...draft.avatar.image, src: avatarImageUrl(base, agent.id, draft.avatar.image.v) }
+      : null,
+  );
+  async function uploadImage(f: File) {
+    imgError = pickError(f);
+    if (imgError) return;
+    imgBusy = true;
+    try {
+      const r = await runApi(uploadAvatarImage(base, agent.id, await fileData(f)));
+      draft.avatar = imageAvatar(draft.avatar, r.v, r.aspect);
+    } catch (err) {
+      imgError = err instanceof Error ? err.message : String(err);
+    } finally {
+      imgBusy = false;
+    }
+  }
+
+  /** avatarCmp drops the picture's src: the API adds it on the way out
+      and never stores it, so it must not make the draft look changed. */
+  function avatarCmp(a: AvatarSpec): AvatarSpec {
+    if (!a.image?.src) return { ...a };
+    const { src: _src, ...image } = a.image;
+    return { ...a, image };
+  }
+
+  /** avatarToSave is what the avatar part of a PATCH carries: the draft,
+      or while Image is pending, the draft under the saved style + picture. */
+  function avatarToSave(a: AvatarSpec): AvatarSpec {
+    if (!pendingImage(a)) return avatarCmp(a);
+    const { kind: _k, image: _i, ...rest } = a;
+    const s = saved.avatar;
+    return avatarCmp({ ...rest, ...(s?.kind ? { kind: s.kind } : {}), ...(s?.image ? { image: s.image } : {}) });
+  }
+
   async function save() {
     if (!dirty || !handleOk) return;
     if (saving) return; // the effect re-fires once the in-flight PATCH settles
@@ -360,6 +411,13 @@
       const next = await runApi(updateAgent(base, agent.id, sent));
       onSaved(next);
       saved = next;
+      // The server owns the picture's v/aspect (another tab may have
+      // uploaded a new one) and normalises the rest: when the avatar was
+      // not edited while this PATCH was in flight, take its answer, or the
+      // draft would differ from saved forever and PATCH again and again.
+      if (sent.avatar && next.avatar && sameValue(avatarToSave(draft.avatar), sent.avatar) && !pendingImage(draft.avatar)) {
+        draft.avatar = avatarCmp(next.avatar);
+      }
       failedKey = "";
       pruned = 0;
       grantErrors = null;
@@ -641,14 +699,14 @@
     {/key}
   {:else if view === "avatar"}
     <div class="flex items-center gap-4">
-      <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={72} live />
-      <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={72} working live events={draft.avatar.events} />
+      <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} image={avatarImage} size={72} live />
+      <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} image={avatarImage} size={72} working live events={draft.avatar.events} />
       <span class="text-xs text-black-800 dark:text-black-600">idle · working</span>
     </div>
     <div>
       <span class={label}>Style</span>
       <div class="inline-flex rounded-lg border border-white-300 p-0.5 dark:border-navy-600" role="group" aria-label="Avatar kind">
-        {#each [["", "Classic"], ["blob", "Blob"]] as [k, lbl] (k)}
+        {#each [["", "Classic"], ["blob", "Blob"], ["image", "Image"]] as [k, lbl] (k)}
           <button
             type="button"
             class="rounded-md px-3 py-1 text-xs {(draft.avatar.kind ?? "") === k ? 'bg-green-500 text-white-100' : 'text-black-800 dark:text-black-600'}"
@@ -659,7 +717,30 @@
         {/each}
       </div>
     </div>
-    {#if isBlobKind(draft.avatar.kind)}
+    {#if isImageKind(draft.avatar.kind)}
+      <AvatarImageEditor
+        src={avatarImage?.src ?? ""}
+        aspect={draft.avatar.image?.aspect ?? 1}
+        crop={draft.avatar.image ?? DEFAULT_CROP}
+        busy={imgBusy}
+        error={imgError}
+        labelClass={label}
+        onFile={uploadImage}
+        onReset={() => {
+          // Local only, as in the mockup: the stored picture stays until a
+          // new upload replaces it (or the agent is deleted).
+          imgError = "";
+          const { image: _img, ...rest } = draft.avatar;
+          draft.avatar = rest;
+        }}
+        onCrop={(c) => {
+          if (draft.avatar.image) draft.avatar = { ...draft.avatar, image: { ...draft.avatar.image, ...c } };
+        }}
+      />
+      {#if pendingImage(draft.avatar)}
+        <p class="text-xs text-amber-600 dark:text-amber-400" data-testid="avatar-image-pending">Not saved yet: upload a picture to use Image. Other avatar changes are saved with the current style.</p>
+      {/if}
+    {:else if isBlobKind(draft.avatar.kind)}
       <BlobAvatarPicker
         shape={draft.avatar.shape}
         expression={draft.avatar.expression}
@@ -716,10 +797,10 @@
                  moves the way that state does there. -->
             {#if st === "egg"}
               {#key hatchRun}
-                <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={40} pose={st} hatching live />
+                <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} image={avatarImage} size={40} pose={st} hatching live />
               {/key}
             {:else}
-              <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} size={40} pose={st} live />
+              <AgentAvatar kind={draft.avatar.kind} shape={draft.avatar.shape} expression={draft.avatar.expression} color={draft.avatar.color} image={avatarImage} size={40} pose={st} live />
             {/if}
             <span class="text-[11px] text-black-800 dark:text-black-600">{AVATAR_STATE_LABELS[st]}</span>
           </div>
@@ -728,6 +809,7 @@
     </div>
     <AvatarEventsTable
       kind={draft.avatar.kind}
+      image={avatarImage}
       shape={draft.avatar.shape}
       color={draft.avatar.color}
       expression={draft.avatar.expression}
@@ -771,7 +853,7 @@
                 draft.mention_allow = on ? [...draft.mention_allow, a.id] : draft.mention_allow.filter((id) => id !== a.id);
               }}
             />
-            <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={20} />
+            <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={20} />
             <span>{a.name}</span>
             <span class="text-xs text-black-800 dark:text-black-600">@{a.handle}</span>
           </label>

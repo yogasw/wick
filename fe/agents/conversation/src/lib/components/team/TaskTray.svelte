@@ -13,7 +13,7 @@
   import SmBtn from "./SmBtn.svelte";
   import TeamIcon from "./TeamIcon.svelte";
 
-  type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string };
+  type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null };
   type Props = {
     tasks: TeamTaskItem[];
     agents?: Record<string, Agent>;
@@ -82,7 +82,7 @@
       <button type="button" onclick={() => { open = !open; }} class="flex min-w-0 flex-1 items-center gap-2.5 text-left" aria-expanded={open} aria-controls={open ? listId : undefined}>
         <span class="flex -space-x-1.5">
           {#each stacked as t (t.task_id)}
-            <span data-testid="task-tray-avatar" data-status={taskStatus(t)}><AvatarActivity activity={taskActivity(taskStatus(t))} size={22}><AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={22} /></AvatarActivity></span>
+            <span data-testid="task-tray-avatar" data-status={taskStatus(t)}><AvatarActivity activity={taskActivity(taskStatus(t))} size={22}><AgentAvatar kind={agents[t.to_handle]?.kind} image={agents[t.to_handle]?.image} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={22} /></AvatarActivity></span>
           {/each}
         </span>
         <span data-testid="task-tray-summary" class="min-w-0 truncate text-black-800 dark:text-black-600">{#each parts as p, i}{i ? " · " : ""}<span data-status={p.status} class={PART_TONE[p.status] ?? ""}>{p.label}</span>{/each}</span>
@@ -106,7 +106,7 @@
           {@const s = taskStatus(t)}
           <div class="flex flex-col gap-1 rounded-md px-1.5 py-1 hover:bg-white-200 dark:hover:bg-navy-700">
             <div class="flex items-center gap-1.5">
-              <AvatarActivity activity={taskActivity(s)} size={16}><AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={16} /></AvatarActivity>
+              <AvatarActivity activity={taskActivity(s)} size={16}><AgentAvatar kind={agents[t.to_handle]?.kind} image={agents[t.to_handle]?.image} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={16} /></AvatarActivity>
               <span data-testid="task-tray-name" class="font-medium text-black-900 dark:text-white-100">{userTaskRoute(t) ?? (agents[t.to_handle]?.name || t.to_name || "@" + t.to_handle)}</span>
               <span class={"text-[10px] " + (s === "needs_you" ? "text-amber-700 dark:text-amber-300" : "text-green-600 dark:text-green-400")}>{s === "needs_you" ? "needs you" : "working"}</span>
               <span class="ml-auto flex items-center gap-2 text-[11px]">

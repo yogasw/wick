@@ -60,7 +60,7 @@
     ),
   );
   const teamAgents = $derived(
-    Object.fromEntries(group.members.map((m) => [m.handle, { name: m.name, kind: m.avatar?.kind, shape: m.avatar?.shape, color: m.avatar?.color, expression: m.avatar?.expression }])),
+    Object.fromEntries(group.members.map((m) => [m.handle, { name: m.name, kind: m.avatar?.kind, shape: m.avatar?.shape, color: m.avatar?.color, expression: m.avatar?.expression, image: m.avatar?.image }])),
   );
   const typingHandles = $derived(group.members.filter((m) => typing[m.id]).map((m) => m.handle));
 
@@ -158,8 +158,8 @@
 
 </script>
 
-{#snippet mentionAvatar(a: { kind?: string; shape?: string; color?: string; expression?: string })}
-  <AgentAvatar kind={a.kind} shape={a.shape} expression={a.expression} color={a.color} size={18} />
+{#snippet mentionAvatar(a: { kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null })}
+  <AgentAvatar kind={a.kind} image={a.image} shape={a.shape} expression={a.expression} color={a.color} size={18} />
 {/snippet}
 
 <div class="flex h-full min-w-0 flex-col" data-testid="group-view">

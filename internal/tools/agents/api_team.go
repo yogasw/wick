@@ -962,7 +962,7 @@ func teamAgentToItem(p entity.AgentPersona, users teamProjectUsers, live teamLiv
 		Name:                 p.Handle,
 		Tagline:              p.Tagline,
 		Features:             teamItemFeatures(p, reach),
-		Avatar:               team.DecodeAvatar(p.Avatar),
+		Avatar:               team.WithImageSrc(team.DecodeAvatar(p.Avatar), agentsToolBase, p.ID),
 		AllowedConnectors:    team.DecodeGrants(p.AllowedConnectors),
 		IncludeNewConnectors: p.IncludeNewConnectors,
 		AccessMode:           team.NormalizeAccessMode(p.AccessMode),
@@ -1351,7 +1351,9 @@ func apiTeamAgentCreate(c *tool.Ctx) {
 	}
 	av := team.DefaultAvatarFor(handle)
 	if req.Avatar != nil {
-		av = *req.Avatar
+		// A new agent has no stored picture yet: the wizard uploads it
+		// after the create and saves the image avatar then.
+		av = team.AvatarForCreate(*req.Avatar)
 	}
 	p := &entity.AgentPersona{
 		OwnerUserID: actorID(c), Handle: handle, ProjectID: pid, Tagline: tagline,
@@ -1496,6 +1498,7 @@ func apiTeamAgentUpdate(c *tool.Ctx) {
 		p.Features = team.EncodeFeatures(*req.Features)
 	}
 	if req.Avatar != nil {
+		bindAvatarImage(c, p.ID, req.Avatar)
 		p.Avatar = team.EncodeAvatar(*req.Avatar)
 	}
 	if req.ManageAgents != nil {
