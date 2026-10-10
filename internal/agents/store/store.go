@@ -156,6 +156,10 @@ type ConversationTurn struct {
 	// Only the postback endpoint sets it: text that merely looks like a
 	// postback is an ordinary message.
 	Postback *Postback `json:"postback,omitempty"`
+	// ReplyTo is the message this user turn answers (a web "Reply").
+	// Only the send endpoint sets it, from the stored turn; absent on
+	// every older turn and on channel turns.
+	ReplyTo *ReplyTo `json:"reply_to,omitempty"`
 }
 
 // Speaker is who said an assistant turn. Via is how the turn came to be:
@@ -494,15 +498,33 @@ func (s *Store) AppendUserTurnWithSender(role, source, text string, atts []Attac
 // AppendUserTurnWithPostback is AppendUserTurnWithSender for a turn that
 // may be an actioncard click. postback nil = an ordinary message.
 func (s *Store) AppendUserTurnWithPostback(role, source, text string, atts []Attachment, sender *Sender, postback *Postback) error {
+	return s.AppendUserTurnWithReply(role, source, text, atts, sender, postback, nil, "")
+}
+
+// AppendUserTurnWithReply is AppendUserTurnWithPostback for a turn that
+// may answer an earlier message. reply nil = not a reply. text stays the
+// person's own words; the quote lives in reply, never in text.
+//
+// Every turn gets a real id (turnID, else UnixNano like the other turns),
+// so a reply can point at it the moment it is stored. Turns written before
+// this keep the position id the conversation API backfills, and since ids
+// are only filled where empty, those positions do not move.
+func (s *Store) AppendUserTurnWithReply(role, source, text string, atts []Attachment, sender *Sender, postback *Postback, reply *ReplyTo, turnID string) error {
 	s.setTimedOut("")
+	now := s.now().UTC()
+	if turnID == "" {
+		turnID = fmt.Sprintf("%d", now.UnixNano())
+	}
 	turn := ConversationTurn{
-		Timestamp:   s.now().UTC(),
+		TurnID:      turnID,
+		Timestamp:   now,
 		Role:        role,
 		Source:      source,
 		Sender:      sender,
 		Text:        text,
 		Attachments: atts,
 		Postback:    postback,
+		ReplyTo:     reply,
 	}
 	return storage.AppendJSONL(
 		s.layout.SessionConversation(s.sessionID),

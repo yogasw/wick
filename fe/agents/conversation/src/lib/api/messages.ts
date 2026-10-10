@@ -3,8 +3,11 @@ import { Effect } from "effect";
 import { HttpClient } from "@effect/platform";
 import { APIError } from "@wick-fe/common-api";
 
-type SendPayload = { text: string; files?: File[] };
-type SendResult = { status: string };
+/** reply_to: turn id of the bubble being answered; the server checks it
+    and builds the quote itself. */
+type SendPayload = { text: string; files?: File[]; reply_to?: string };
+/** turn_id: the id the server stored the message under. */
+type SendResult = { status: string; turn_id?: string };
 
 function toAPIError(e: unknown): APIError {
   if (e instanceof APIError) return e;
@@ -18,11 +21,12 @@ export const sendMessage = (
   payload: SendPayload,
 ): Effect.Effect<SendResult, APIError, HttpClient.HttpClient> => {
   const url = `${base}/sessions/${encodeURIComponent(id)}/send`;
-  const { text, files } = payload;
+  const { text, files, reply_to } = payload;
 
   if (files && files.length > 0) {
     const fd = new FormData();
     fd.append("text", text);
+    if (reply_to) fd.append("reply_to", reply_to);
     files.forEach((f) => fd.append("files", f, f.name));
 
     return Effect.scoped(
@@ -45,7 +49,7 @@ export const sendMessage = (
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
       const req = yield* HttpClientRequest.post(url).pipe(
-        HttpClientRequest.bodyJson({ text }),
+        HttpClientRequest.bodyJson(reply_to ? { text, reply_to } : { text }),
       );
       const response = yield* client.execute(req);
       if (response.status < 200 || response.status >= 300) {

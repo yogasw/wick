@@ -59,12 +59,15 @@ const { threadState } = vi.hoisted(() => ({
   threadState: {
     typing: { active: false } as { active: boolean },
     lifecycle: { state: "", pid: 0, substate: "", at: 0 },
+    turns: [] as unknown[],
+    appendUserTurn: vi.fn(),
+    renameTurn: vi.fn(),
   },
 }));
 
 vi.mock("../../stores/thread.js", () => ({
   createThreadStore: () => ({
-    turns: { subscribe: (fn: (v: unknown[]) => void) => { fn([]); return () => {}; } },
+    turns: { subscribe: (fn: (v: unknown[]) => void) => { fn(threadState.turns); return () => {}; } },
     live: { subscribe: (fn: (v: null) => void) => { fn(null); return () => {}; } },
     typing: { subscribe: (fn: (v: { active: boolean }) => void) => { fn(threadState.typing); return () => {}; } },
     turnStartedAt: { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; } },
@@ -73,7 +76,8 @@ vi.mock("../../stores/thread.js", () => ({
     meta: metaStore,
     cards: { subscribe: (fn: (v: Record<string, unknown>) => void) => { fn({}); return () => {}; }, set: vi.fn(), update: vi.fn() },
     setHistory: vi.fn(),
-    appendUserTurn: vi.fn(),
+    appendUserTurn: threadState.appendUserTurn,
+    renameTurn: threadState.renameTurn,
     handleEvent: vi.fn(),
     handleKilledLocally: vi.fn(),
   }),
@@ -219,6 +223,7 @@ import { getConversation } from "../../api/sessions.js";
 import { getSubAgentPanel, interruptAllSubAgents } from "../../api/subagents.js";
 import { SCM_DEFAULT_W, RAIL_GUTTER_PX } from "../../scmWidth.js";
 import { Effect } from "effect";
+import { sendMessage } from "../../api/messages.js";
 
 const DEFAULT_PROPS = {
   base: "/api",
@@ -895,5 +900,59 @@ describe("DetailView — composer Stop", () => {
     await fireEvent.click(btn);
     expect(dequeueProcess).toHaveBeenCalledWith("/api", "test-sess");
     expect(killProcess).not.toHaveBeenCalled();
+  });
+});
+
+describe("DetailView — reply chip", () => {
+  const SEND = { send: true };
+  const turn = {
+    turn_id: "111", role: "assistant", agent: "main", provider: "", text: "Deploy finished",
+    timestamp: 0, truncated: false, interrupted: false, has_trace: false, events: [], attachments: [],
+  };
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    threadState.turns = [turn];
+    threadState.appendUserTurn.mockReturnValue("local-user-1");
+    vi.mocked(sendMessage).mockReturnValue({ pipe: () => SEND } as never);
+    vi.mocked(Effect.runPromise).mockImplementation(((eff: unknown) =>
+      eff === SEND ? Promise.resolve({ status: "queued", turn_id: "999" }) : new Promise(() => {})) as never);
+  });
+  afterEach(() => {
+    threadState.turns = [];
+    vi.mocked(sendMessage).mockReturnValue({ pipe: (x: unknown) => x } as never);
+    vi.mocked(Effect.runPromise).mockReset();
+    vi.mocked(Effect.runPromise).mockReturnValue(new Promise(() => {}));
+  });
+
+  async function pickReply() {
+    render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(await screen.findByTestId("reply-action"));
+    const chip = await screen.findByTestId("reply-chip");
+    expect(chip.textContent).toContain("Replying to main");
+    expect(chip.textContent).toContain("Deploy finished");
+  }
+
+  test("Reply sets the chip and × cancels it", async () => {
+    await pickReply();
+    await fireEvent.click(screen.getByTestId("reply-cancel"));
+    expect(screen.queryByTestId("reply-chip")).toBeNull();
+  });
+
+  test("Esc in the composer cancels the chip", async () => {
+    await pickReply();
+    await fireEvent.keyDown(document.querySelector("textarea")!, { key: "Escape" });
+    expect(screen.queryByTestId("reply-chip")).toBeNull();
+  });
+
+  test("a sent message carries reply_to, takes the server id, and clears the chip", async () => {
+    await pickReply();
+    const ta = document.querySelector("textarea")!;
+    await fireEvent.input(ta, { target: { value: "roll it back" } });
+    await fireEvent.keyDown(ta, { key: "Enter" });
+    expect(vi.mocked(sendMessage)).toHaveBeenCalledWith("/api", "test-sess", expect.objectContaining({ text: "roll it back", reply_to: "111" }));
+    expect(threadState.appendUserTurn).toHaveBeenCalledWith("roll it back", [], expect.objectContaining({ turn_id: "111" }));
+    await waitFor(() => expect(screen.queryByTestId("reply-chip")).toBeNull());
+    expect(threadState.renameTurn).toHaveBeenCalledWith("local-user-1", "999");
   });
 });

@@ -234,7 +234,12 @@ export type ConversationTurn = {
   /** user turn made by clicking an actioncard button — set ONLY by the
       server's postback endpoint, never parsed out of text. */
   postback?: CardPostback;
+  /** user turn answering an earlier bubble (a web "Reply"). Author and
+      excerpt are built by the server from the quoted turn. */
+  reply_to?: ReplyTo;
 };
+
+export type ReplyTo = { turn_id: string; role?: string; author?: string; excerpt?: string };
 
 export type TurnSpeaker = { agent_id: string; handle: string; via: "direct" | "mention" | "group" | string };
 

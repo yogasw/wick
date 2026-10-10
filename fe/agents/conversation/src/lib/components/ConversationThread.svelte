@@ -60,9 +60,12 @@
     onRemoteQueueCancel?: (queueId: string) => Promise<void>;
     /** Continue on a recovered last turn (see ThreadMessage). */
     onContinue?: () => void;
+    /** Reply on a bubble and the jump from a quote (see ThreadMessage). */
+    onReply?: (target: import("../replyTo.js").ReplyTarget) => void;
+    onJumpToTurn?: (turnId: string) => void;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -249,7 +252,10 @@
         <span class="rounded-md bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm">{label}</span>
       </div>
     {/if}
-    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} />
+    <!-- data-turn-id is the anchor a reply's quote jumps to. -->
+    <div data-turn-id={turn.turn_id} class="min-w-0 rounded-xl transition-shadow">
+      <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} />
+    </div>
   {/each}
 
   {#if live && turns.length === 0}

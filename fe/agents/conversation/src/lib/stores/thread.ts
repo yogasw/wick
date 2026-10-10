@@ -14,6 +14,7 @@ import type { Writable } from "svelte/store";
 import type {
   AgentEvent,
   Attachment,
+  ReplyTo,
   CardPostback,
   CardState,
   ConversationTurn,
@@ -88,7 +89,11 @@ export interface ThreadStore {
   /* Insert an older history page (infinite scroll up) before the turns
      already loaded, dropping any turn whose id is already present. */
   prependHistory(older: ConversationTurn[]): void;
-  appendUserTurn(text: string, attachments?: Attachment[]): void;
+  /** Returns the optimistic turn's local id (see renameTurn). */
+  appendUserTurn(text: string, attachments?: Attachment[], replyTo?: ReplyTo): string;
+  /** Gives a turn the id the server stored it under (POST /send answers
+      with it), so the bubble can be replied to before any reload. */
+  renameTurn(fromId: string, toId: string): void;
   handleEvent(ev: AgentEvent): void;
   /* Remove a stuck tool card from the live turn (a run with no runId to
      cancel — an orphan from before per-run cancel, or one whose finish event
@@ -641,7 +646,7 @@ export function createThreadStore(): ThreadStore {
     }
   }
 
-  function appendUserTurn(text: string, attachments?: Attachment[]): void {
+  function appendUserTurn(text: string, attachments?: Attachment[], replyTo?: ReplyTo): string {
     const id = ++_userTurnCounter;
     const turn: ConversationTurn = {
       turn_id: `local-user-${id}`,
@@ -655,8 +660,19 @@ export function createThreadStore(): ThreadStore {
       has_trace: false,
       events: [],
       attachments: attachments ?? [],
+      ...(replyTo ? { reply_to: replyTo } : {}),
     };
     turns.update((ts) => [...ts, turn]);
+    return turn.turn_id;
+  }
+
+  function renameTurn(fromId: string, toId: string): void {
+    if (!fromId || !toId || fromId === toId) return;
+    turns.update((ts) => {
+      // The server's copy may already be here (a history reload won the race).
+      if (ts.some((t) => t.turn_id === toId)) return ts.filter((t) => t.turn_id !== fromId);
+      return ts.map((t) => (t.turn_id === fromId ? { ...t, turn_id: toId } : t));
+    });
   }
 
   return {
@@ -766,6 +782,7 @@ export function createThreadStore(): ThreadStore {
       });
     },
     appendUserTurn,
+    renameTurn,
     handleEvent,
     handleKilledLocally() {
       // Final like a server killed edge: a late frame must not relight it.

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount, onDestroy, untrack } from "svelte";
+  import { onMount, onDestroy, tick, untrack } from "svelte";
+  import type { ReplyTarget } from "../replyTo.js";
   import { attachThreadScroll, type ThreadScroll } from "../threadStick.js";
   import { railRefreshTargets, type RefreshableRailTab } from "../railRefresh.js";
   import { get } from "svelte/store";
@@ -274,6 +275,53 @@
 
   /* ── thread scroll ref ─────────────────────────────────────────── */
   let threadEl: HTMLElement | undefined = $state();
+
+  /* ── reply to a bubble ──
+     The chip above the composer. Only the turn id goes to the server, which
+     checks it and builds the stored quote; author/excerpt here are display.
+     Cleared after a successful send and whenever the chat changes. */
+  let replyTarget = $state<ReplyTarget | null>(null);
+  let composerWrapEl: HTMLElement | undefined = $state();
+  $effect(() => {
+    void sessionId;
+    replyTarget = null;
+  });
+  // A chat that turns read-only takes no reply: drop the chip, not just hide it.
+  $effect(() => {
+    if (readOnly) untrack(() => (replyTarget = null));
+  });
+  function startReply(target: ReplyTarget) {
+    if (readOnly) return;
+    replyTarget = target;
+    requestAnimationFrame(() => composerWrapEl?.querySelector<HTMLElement>("textarea, [contenteditable='true']")?.focus());
+  }
+  // Composer's bare Esc (no menu of its own open) cancels the reply.
+  function cancelReplyOnEscape(): boolean {
+    if (!replyTarget) return false;
+    replyTarget = null;
+    return true;
+  }
+  /* Scroll to the quoted turn and flash it. Not loaded yet (older page):
+     walk back through history a bounded number of pages, then say so. */
+  const REPLY_JUMP_PAGES = 10;
+  function findTurnEl(turnId: string): HTMLElement | null {
+    return threadEl?.querySelector<HTMLElement>(`[data-turn-id="${CSS.escape(turnId)}"]`) ?? null;
+  }
+  async function jumpToTurn(turnId: string) {
+    let el = findTurnEl(turnId);
+    for (let i = 0; !el && hasMoreHistory && i < REPLY_JUMP_PAGES; i++) {
+      await loadOlderHistory();
+      await tick();
+      el = findTurnEl(turnId);
+    }
+    if (!el) {
+      toastWarn("Original message is not loaded");
+      return;
+    }
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.add("ring-2", "ring-green-500/60");
+    setTimeout(() => el?.classList.remove("ring-2", "ring-green-500/60"), 1600);
+  }
 
   /* ── context panel state ──────────────────────────────────────── */
   let cwdVal = $state("");
@@ -1869,17 +1917,21 @@
 
   /* Pull one older page and keep the viewport anchored on the turn the
      user was looking at (prepending grows scrollHeight above it). */
-  function loadOlderHistory() {
-    if (loadingOlder || !hasMoreHistory) return;
+  let olderInFlight: Promise<void> | null = null;
+  function loadOlderHistory(): Promise<void> {
+    // A page already on its way is awaited, not skipped: the reply jump
+    // waits on it instead of counting it as "nothing older".
+    if (olderInFlight) return olderInFlight;
+    if (loadingOlder || !hasMoreHistory) return Promise.resolve();
     // Old sessions can hold turns persisted before turn_id existed — skip
     // id-less turns (they can't anchor a `before` cursor) and local ones.
     const before = turns.find((t) => t.turn_id && !t.turn_id.startsWith("local-user-"))?.turn_id;
-    if (!before) return;
+    if (!before) return Promise.resolve();
     loadingOlder = true;
     const el = threadEl;
     const prevHeight = el?.scrollHeight ?? 0;
     const prevTop = el?.scrollTop ?? 0;
-    run(getConversation(base, sessionId, { limit: HISTORY_PAGE, before }).pipe(Effect.provide(WickClientLayer)))
+    return (olderInFlight = run(getConversation(base, sessionId, { limit: HISTORY_PAGE, before }).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
         hasMoreHistory = res.hasMore;
         thread.prependHistory(res.turns);
@@ -1894,7 +1946,7 @@
         // an expected state, not an alert.
         if (!noAccessError(e)) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
       })
-      .finally(() => { loadingOlder = false; });
+      .finally(() => { loadingOlder = false; olderInFlight = null; }));
   }
 
   /* History re-read for a turn that ended without its `done` (see the
@@ -2232,7 +2284,10 @@
   }
 
   /* ── send message ─────────────────────────────────────────────── */
-  async function handleSend(msg: { text: string; files: File[] }) {
+  /* opts.reply: only the composer's own Send answers the chip. Continue,
+     Compact and `send:` commands go out as plain messages and leave the
+     chip in place for what the person is typing. */
+  async function handleSend(msg: { text: string; files: File[] }, opts: { reply?: boolean } = {}) {
     // A /compact the provider cannot act on never becomes a message.
     // The server refuses it too, but only the composer can stop the
     // user watching a command they typed sit there doing nothing — so
@@ -2252,10 +2307,20 @@
       mime: f.type || "application/octet-stream",
       size: f.size,
     }));
-    thread.appendUserTurn(msg.text, optimisticAttachments);
+    const reply = opts.reply ? replyTarget : null;
+    const localId = thread.appendUserTurn(
+      msg.text,
+      optimisticAttachments,
+      reply ? { turn_id: reply.turnId, author: reply.author, excerpt: reply.excerpt } : undefined,
+    );
     scrollToBottom();
     try {
-      await run(sendMessage(base, sessionId, msg).pipe(Effect.provide(WickClientLayer)));
+      const res = await run(sendMessage(base, sessionId, reply ? { ...msg, reply_to: reply.turnId } : msg).pipe(Effect.provide(WickClientLayer)));
+      // The bubble takes the id the server stored it under, so it can be
+      // replied to straight away.
+      if (localId && res?.turn_id) thread.renameTurn(localId, res.turn_id);
+      // Only the reply that went out is cleared: one picked meanwhile stays.
+      if (reply && replyTarget === reply) replyTarget = null;
     } catch (e: unknown) {
       toastError(`Send: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -2852,7 +2917,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly ? undefined : () => handleSend({ text: "Continue", files: [] })} />
+          <ConversationThread {turns} {live} {typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly ? undefined : () => handleSend({ text: "Continue", files: [] })} onReply={readOnly ? undefined : startReply} onJumpToTurn={jumpToTurn} />
         </div>
       </div>
 
@@ -2944,10 +3009,30 @@
           {#if agentMode?.agent && !readOnly}
             <TaskTray tasks={teamTasks} agents={teamAgentsByHandle} onAnswer={answerTask} onCancel={cancelTask} onJump={jumpToTask} />
           {/if}
+          {#if replyTarget && !readOnly}
+            <div data-testid="reply-chip" class="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-green-500 bg-white-200 px-3 py-1.5 text-xs dark:bg-navy-800">
+              <div class="min-w-0 flex-1">
+                <div class="font-medium text-black-900 dark:text-white-100">Replying to {replyTarget.author}</div>
+                <div class="truncate text-black-700 dark:text-black-600">{replyTarget.excerpt}</div>
+              </div>
+              <button
+                type="button"
+                data-testid="reply-cancel"
+                aria-label="Cancel reply"
+                title="Cancel reply (Esc)"
+                onclick={() => (replyTarget = null)}
+                class="shrink-0 rounded p-0.5 text-black-600 hover:text-black-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:text-black-500 dark:hover:text-white-100"
+              >
+                <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"></path></svg>
+              </button>
+            </div>
+          {/if}
+          <div bind:this={composerWrapEl} class="contents">
           <Composer
             {readOnly}
             bind:this={composerRef}
-            onSend={handleSend}
+            onSend={(m) => handleSend(m, { reply: true })}
+            onEscape={cancelReplyOnEscape}
             placeholder={agentMode?.agent ? composerPlaceholder(agentMode.agent.name) : "Ask anything…   / commands · @ files"}
             notifyKey={NOTIFY_KEY}
             provider={!agentMode?.hidePickers ? providerSelect : agentMode.providerSwitch ? agentProviderSelect : undefined}
@@ -2975,6 +3060,7 @@
             onStop={handleStopFromComposer}
             toolbarExtra={sessionFields && sessionFields.fields.length > 0 ? lockedSessionFields : undefined}
           />
+          </div>
         </div>
       </div>
     {:else if activeView === "approvals"}

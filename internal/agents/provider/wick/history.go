@@ -204,6 +204,9 @@ func turnToContent(t store.ConversationTurn, senderVisibility string) *genai.Con
 		// here too, or replayed turns lose every attachment path and the model
 		// is told nothing about the files (it then hunts/hallucinates paths).
 		// Images ALSO ride as inline parts (bonus for vision models).
+		// A web reply's quote line is a sibling field too (t.ReplyTo); the
+		// live send prepended it, so the replay does the same.
+		text = store.PrependReplyQuote(text, t.ReplyTo)
 		text = appendAttachmentPaths(text, t.Attachments)
 		// Same story for WHO sent the turn: t.Sender is a sibling field of
 		// t.Text, never part of it, so a replay has to re-apply the

@@ -791,6 +791,18 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	if role == "user" {
 		postback = store.PostbackFrom(ctx)
 	}
+	// A web "Reply" is put on ctx by the send endpoint after it checked
+	// the quoted turn; never inferred from the text.
+	//
+	// Both are bound to the session they were made for, so a ctx that
+	// travels on (an @mention routed to a sub-agent or a teammate) carries
+	// neither into the other session.
+	var reply *store.ReplyTo
+	var userTurnID string
+	if role == "user" {
+		reply = store.ReplyToFrom(ctx, sessionID)
+		userTurnID = store.UserTurnIDFrom(ctx, sessionID)
+	}
 	// Read once per send so the live and buffered paths below agree even if
 	// the operator changes the setting mid-flight.
 	senderLevel := p.senderVisibility()
@@ -872,7 +884,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			Msg("pool.send: routing to live subprocess")
 		// Active agent — append to conversation log + send straight.
 		if entry.store != nil {
-			_ = entry.store.AppendUserTurnWithPostback(role, source, text, atts, sender, postback)
+			_ = entry.store.AppendUserTurnWithReply(role, source, text, atts, sender, postback, reply, userTurnID)
 			turnPersisted = true
 		}
 		if role == "user" {
@@ -880,7 +892,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			p.notifyUserMessage(sessionID, agentName, source, text, sender)
 			userMsgNotified = true
 		}
-		err := entry.agent.Send(withSenderLine(augmentWithAttachments(text, atts), sender, senderLevel))
+		err := entry.agent.Send(withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel))
 		// Nudge SSE so the Process panel's queued count updates in
 		// realtime — a RespawnQueue (codex) Send while busy just appended
 		// to the agent's pending queue, which fires no lifecycle event on
@@ -937,7 +949,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// before the subprocess exists, and drain concatenates them into one
 	// prompt. Stamping at drain would label every one of them with whoever
 	// happened to send last.
-	if err := buf.Append(withSenderLine(augmentWithAttachments(text, atts), sender, senderLevel)); err != nil {
+	if err := buf.Append(withSenderLine(augmentWithAttachments(store.PrependReplyQuote(text, reply), atts), sender, senderLevel)); err != nil {
 		return err
 	}
 	// Persist the user turn to conversation.jsonl immediately so a page
@@ -945,7 +957,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// shows the messages — they previously only lived in PendingInput.
 	// We build a transient Store because no entry.store exists yet.
 	if !turnPersisted {
-		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts, sender, postback)
+		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts, sender, postback, reply, userTurnID)
 	}
 	if role == "user" && !userMsgNotified {
 		p.notifyUserMessage(sessionID, agentName, source, text, sender)
@@ -1021,13 +1033,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 // (subprocess not yet alive) used to skip this, which made messages
 // disappear from the UI after a page refresh — they only lived in
 // meta.PendingInput, which the conversation view doesn't read.
-func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string, atts []store.Attachment, sender *store.Sender, postback *store.Postback) {
+func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string, atts []store.Attachment, sender *store.Sender, postback *store.Postback, reply *store.ReplyTo, turnID string) {
 	sto := store.New(store.Options{
 		Layout:    p.cfg.Layout,
 		SessionID: sessionID,
 		AgentName: agentName,
 	})
-	_ = sto.AppendUserTurnWithPostback(role, source, text, atts, sender, postback)
+	_ = sto.AppendUserTurnWithReply(role, source, text, atts, sender, postback, reply, turnID)
 }
 
 // preemptIdleSlot picks the longest-idle active entry (Lifecycle == Idle,

@@ -1972,6 +1972,9 @@ func moveSessionToProject(c *tool.Ctx) {
 
 type sendReq struct {
 	Text string `json:"text"`
+	// ReplyTo is the turn id of the bubble the person clicked "Reply" on.
+	// Only the id is taken from the client; see resolveReplyTo.
+	ReplyTo string `json:"reply_to,omitempty"`
 }
 
 // viewerID is the wick user reading the page, inlined into the SPA shell so
@@ -2049,6 +2052,9 @@ func sendMessage(c *tool.Ctx) {
 	id := c.PathValue("id")
 	var req sendReq
 	var atts []agentstore.Attachment
+	// A reply is checked before anything acts on the message (an upload or
+	// a provider switch included), so a refused reply_to changes nothing.
+	var reply *store.ReplyTo
 
 	// Accept multipart/form-data when files are attached; fall back to
 	// the JSON shape so text-only sends from older clients still work.
@@ -2058,6 +2064,13 @@ func sendMessage(c *tool.Ctx) {
 			return
 		}
 		req.Text = trimFormText(c.Form("text"))
+		// The reply is checked before the uploads touch the disk, so a
+		// refused reply_to leaves nothing behind.
+		r, ok := validateReply(c, id, c.Form("reply_to"), req.Text)
+		if !ok {
+			return
+		}
+		reply = r
 		saved, err := saveUploadsFromMultipart(c, id, c.Base())
 		if err != nil {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -2070,6 +2083,11 @@ func sendMessage(c *tool.Ctx) {
 			return
 		}
 		req.Text = strings.TrimSpace(req.Text)
+		r, ok := validateReply(c, id, req.ReplyTo, req.Text)
+		if !ok {
+			return
+		}
+		reply = r
 	}
 	if req.Text == "" && len(atts) == 0 {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "text or file required"})
@@ -2154,6 +2172,15 @@ func sendMessage(c *tool.Ctx) {
 	// inheriting c.Context() would SIGKILL claude.exe the moment the
 	// response returns. Copy request_id over so logs still correlate.
 	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()), id)
+	// The reply and the turn id ride only on the send to this chat's own
+	// agent — never on bgCtx, which routeHumanMentions hands on to other
+	// sessions (sub-agents, teammates). They are also bound to this
+	// session id, so a ctx that does travel carries neither.
+	turnID := strconv.FormatInt(time.Now().UnixNano(), 10)
+	sendCtx := store.WithUserTurnID(bgCtx, id, turnID)
+	if reply != nil {
+		sendCtx = store.WithReplyTo(sendCtx, id, reply)
+	}
 	// The person's words are never rewritten, but the leader is told, in
 	// the same message and before it reads them, which mentions wick is
 	// dispatching itself. Routing runs detached below, so without this
@@ -2164,7 +2191,7 @@ func sendMessage(c *tool.Ctx) {
 	if note := humanMentionNote(bgCtx, sess, id, req.Text); note != "" {
 		text = req.Text + "\n\n" + note
 	}
-	if err := globalPool.SendWithAttachments(bgCtx, id, agentName, "ui", "user", text, "", atts); err != nil {
+	if err := globalPool.SendWithAttachments(sendCtx, id, agentName, "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("pool send %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -2178,7 +2205,42 @@ func sendMessage(c *tool.Ctx) {
 	// the leader always sees what was said even when a mention took work
 	// straight to someone else.
 	routeHumanMentions(bgCtx, sess, id, req.Text)
-	c.JSON(http.StatusOK, map[string]string{"status": "queued"})
+	c.JSON(http.StatusOK, map[string]string{"status": "queued", "turn_id": turnID})
+}
+
+// validateReply checks the reply_to a person sent with a message (see
+// resolveReplyTo). Empty = not a reply. On refusal it answers the request
+// and returns ok=false: 404 for a chat the caller cannot open, 400 for a
+// group chat or an id that names no turn of this chat, 500 when the
+// history cannot be read. A bare slash command is sent without its reply:
+// it is a command, not an answer to anything.
+func validateReply(c *tool.Ctx, id, raw, text string) (*store.ReplyTo, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, true
+	}
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return nil, false
+	}
+	if sess.Meta.AgentGroup != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "reply_to: not supported in group chats"})
+		return nil, false
+	}
+	r, err := resolveReplyTo(id, raw, sessionSpeaker(c, id))
+	if errors.Is(err, errReplyTo) {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": errReplyTo.Error()})
+		return nil, false
+	}
+	if err != nil {
+		log.Ctx(c.Context()).Error().Msgf("reply_to %s: %s", id, err.Error())
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": "reply_to: could not read this chat"})
+		return nil, false
+	}
+	if store.IsBareSlashCommand(text) {
+		return nil, true
+	}
+	return r, true
 }
 
 // trimFormText reads a multipart text field the way the person typed it.

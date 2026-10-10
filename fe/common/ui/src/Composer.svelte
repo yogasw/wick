@@ -24,6 +24,9 @@
 
   type Props = {
     onSend: (msg: { text: string; files: File[] }) => void;
+    /** Esc in the textarea while no menu of the composer is open. Return
+        true when it was used (e.g. cancelling a reply) so it goes no further. */
+    onEscape?: () => boolean;
     disabled?: boolean;
     /** Locks the textarea too (not just Send) — a chat the viewer can only read. */
     readOnly?: boolean;
@@ -96,6 +99,7 @@
 
   let {
     onSend,
+    onEscape,
     disabled = false,
     readOnly = false,
     placeholder = "Message…",
@@ -589,6 +593,12 @@
 
   function handleKeyDown(e: KeyboardEvent) {
     if (handleMenuKeys(e)) return;
+    // A menu owns Esc while it is open (the + menu closes on its own window
+    // listener); only a bare Esc reaches the host.
+    if (e.key === "Escape" && !e.defaultPrevented && !plusOpen && !holdOpen && onEscape?.()) {
+      e.preventDefault();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       doSend();

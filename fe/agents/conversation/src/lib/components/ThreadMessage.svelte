@@ -31,6 +31,7 @@
   import type { RemoteRecheck as RecheckResult } from "../api/team.js";
   import { isRemoteTimeout, isLateReply, lateLabel, NOTE_NO_MARKER } from "../remoteRecheck.js";
   import { jumpLink, deliveryView } from "../slackDelivery.js";
+  import { replyable, replyPreview, type ReplyTarget } from "../replyTo.js";
 
   type Props = {
     turn: ConversationTurn;
@@ -65,8 +66,13 @@
     /** Asks the agent to pick a recovered turn back up; unset = no
         button (only the thread's last turn gets one). */
     onContinue?: () => void;
+    /** Starts a reply to this bubble in the composer; unset (read-only
+        viewer, composer off) = no Reply action. */
+    onReply?: (target: ReplyTarget) => void;
+    /** Scrolls to the turn a reply quotes; unset = the quote is plain. */
+    onJumpToTurn?: (turnId: string) => void;
   };
-  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue }: Props = $props();
+  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -230,6 +236,29 @@
      renders). Reads `ts` (RFC3339 from history) first, falls back to
      `timestamp` (epoch ms on client-built live turns). */
   const stamp = $derived(turnTime(turn));
+
+  /* Reply: who the chip names and what it previews. Display only — the
+     server rebuilds both from the stored turn when the reply is sent. */
+  const canReply = $derived(!!onReply && replyable(turn));
+  function replyAuthor(): string {
+    if (turn.role === "assistant") {
+      return speakerAgent?.name || (speaker?.handle ? "@" + speaker.handle : "") || agent?.name || turn.agent || "Assistant";
+    }
+    if (teamFrom) return teamFromAgent?.name || teamFrom.name;
+    if (fromSomeoneElse && sourceBadge?.who) return sourceBadge.who;
+    // Same name the server stores on the reply (sender name), "You" only
+    // for a bubble that has none yet.
+    return turn.sender?.name || "You";
+  }
+  function startReply() {
+    if (!onReply || !turn.turn_id) return;
+    const text = turn.postback ? turn.postback.label || turn.postback.value : (turn.text ?? "");
+    onReply({
+      turnId: turn.turn_id,
+      author: replyAuthor(),
+      excerpt: replyPreview(text || turn.attachments?.[0]?.name || ""),
+    });
+  }
 
   /* Back to the Slack thread a message came from, and proof an agent reply
      made it there. Both are recorded by the server when the message passed
@@ -670,6 +699,23 @@
               </svg>
             </a>
           {/if}
+          {#if turn.reply_to}
+            <!-- What this message answers: author + one line, built by the
+                 server. Clicking jumps to the original. -->
+            {@const q = turn.reply_to}
+            <button
+              type="button"
+              data-testid="reply-quote"
+              disabled={!onJumpToTurn}
+              onclick={() => onJumpToTurn?.(q.turn_id)}
+              title={onJumpToTurn ? "Jump to the original message" : undefined}
+              aria-label={`In reply to ${q.author || "a message"}: ${replyPreview(q.excerpt)}${onJumpToTurn ? ". Jump to original" : ""}`}
+              class="flex min-w-0 max-w-full flex-col items-start rounded-lg border-l-2 border-green-500 bg-white-200 px-2.5 py-1 text-left text-xs text-black-700 enabled:hover:bg-white-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:bg-navy-800 dark:text-black-600 dark:enabled:hover:bg-navy-700"
+            >
+              <span class="font-medium text-black-900 dark:text-white-100">{q.author || "Message"}</span>
+              <span class="max-w-full truncate">{replyPreview(q.excerpt)}</span>
+            </button>
+          {/if}
           {#if command}
             <!-- A command, not a line of chat: monospace on a quiet surface
                  with a prompt caret, so it reads as something that was RUN.
@@ -712,8 +758,25 @@
             Routed to {routedHandles.join(", ")}
           </span>
         {/if}
-        {#if stamp}
+        {#if stamp || canReply}
+          <span class={"flex items-center gap-1 " + (teamFrom ? "self-start" : "self-end")}>
+          {#if stamp}
           <span class="text-[10px] leading-none text-black-500 dark:text-black-600 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">{stamp}</span>
+          {/if}
+          {#if canReply}
+            <button
+              type="button"
+              data-testid="reply-action"
+              aria-label="Reply to this message"
+              title="Reply"
+              onclick={startReply}
+              class="inline-flex items-center gap-0.5 rounded px-1 text-[10px] leading-none text-black-500 opacity-0 transition-opacity hover:text-green-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 dark:text-black-600 dark:hover:text-green-400"
+            >
+              <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6.5 4 2.5 8l4 4M3 8h6.5a4 4 0 0 1 4 4v1" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+              Reply
+            </button>
+          {/if}
+          </span>
         {/if}
       {/if}
     </div>
@@ -811,7 +874,7 @@
         {#if isLateReply(turn)}
           <span class="self-start inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] leading-none text-amber-700 dark:text-amber-300" data-testid="late-reply-label">{lateLabel(turn)}</span>
         {/if}
-        {#if stamp || isSilentReply}
+        {#if stamp || isSilentReply || canReply}
           <span class="self-start inline-flex items-center gap-0.5 text-[10px] leading-none text-black-500 dark:text-black-600">
             {#if isSilentReply}
               <svg data-testid="silent-flag" viewBox="0 0 24 24" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Silent — kept out of channels & notifications; shown here only">
@@ -822,6 +885,19 @@
               </svg>
             {/if}
             {#if stamp}<span>{stamp}</span>{/if}
+            {#if canReply}
+            <button
+              type="button"
+              data-testid="reply-action"
+              aria-label="Reply to this message"
+              title="Reply"
+              onclick={startReply}
+              class="inline-flex items-center gap-0.5 rounded px-1 text-[10px] leading-none text-black-500 opacity-0 transition-opacity hover:text-green-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 dark:text-black-600 dark:hover:text-green-400"
+            >
+              <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6.5 4 2.5 8l4 4M3 8h6.5a4 4 0 0 1 4 4v1" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+              Reply
+            </button>
+          {/if}
           </span>
         {/if}
         <!-- Assistant replies render as plain serif prose (no bubble
