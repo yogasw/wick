@@ -591,7 +591,8 @@ describe("task avatar activity", () => {
 
   test("task tray, stacked avatars", () => {
     const { container } = render(TaskTray, { props: { tasks } });
-    expect(activities(container)).toEqual(["tool", "alert", "idle"]);
+    // The one waiting on you is stacked first; the list keeps the order.
+    expect(activities(container)).toEqual(["alert", "tool", "idle"]);
   });
 
   test("task tray popover rows", async () => {
