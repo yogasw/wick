@@ -866,4 +866,7 @@ export type TeamTaskItem = {
   /** "user": the person sent it with an @mention in this chat, so only
       they answer or cancel it and its question always needs them. */
   origin?: "user";
+  /** When the teammate asked the question it waits on (input_required);
+      absent until the server sends it. */
+  asked_at?: string;
 };

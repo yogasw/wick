@@ -41,9 +41,60 @@ describe("DelegationBlock", () => {
       props: { tasks: [task({ state: "input_required", needs_you: true, reply: "Which env? (prod / staging)" })], captainName: "Cap", onAnswer },
     });
     expect(screen.getByTestId("needs-you-card")).toBeDefined();
-    expect(screen.getByText("Answer goes to @anton · Cap sees it too")).toBeDefined();
+    expect(screen.getByTestId("answer-to").textContent).toBe("Answer goes to @anton · Cap sees it too");
     await fireEvent.click(screen.getByText("prod"));
     expect(onAnswer).toHaveBeenCalledWith("t1", "prod");
+  });
+
+  test("2a: the needs-input section sits in the block, head + indented body + AnswerBox", async () => {
+    let done!: () => void;
+    const onAnswer = vi.fn(() => new Promise<void>((r) => { done = r; }));
+    render(DelegationBlock, {
+      props: { tasks: [task({ state: "input_required", needs_you: true, title: "List deploys", reply: "Diff both? (both / only 20:55)" })], captainName: "Cap", onAnswer },
+    });
+    const sec = screen.getByTestId("needs-you-card");
+    for (const c of ["border-t", "border-white-300", "dark:border-navy-600", "bg-[rgba(251,191,36,.12)]", "dark:bg-[rgba(251,191,36,.10)]"]) expect(sec.classList.contains(c)).toBe(true);
+    expect(sec.className).not.toMatch(/rounded/);
+    const head = sec.firstElementChild as HTMLElement;
+    expect(head.className).toContain("py-[7px]");
+    expect(head.className).toContain("text-[11.5px]");
+    expect(head.querySelector("b")!.textContent).toBe("Anton");
+    // No asked_at yet: the head stops at the title.
+    expect(screen.getByTestId("needs-you-task").textContent).toBe("· List deploys");
+    expect((sec.children[1] as HTMLElement).className).toContain("pl-[38px]");
+    const q = screen.getByTestId("needs-you-question");
+    expect(q.className).toContain("text-[13px]");
+    expect(q.textContent).toBe("Diff both? (both / only 20:55)");
+    expect(screen.getAllByTestId("quick-pill").map((p) => p.textContent)).toEqual(["both", "only 20:55"]);
+    const input = screen.getByLabelText("Answer @anton") as HTMLInputElement;
+    expect(input.placeholder).toBe("Type an answer…");
+    const btn = screen.getByLabelText("Send answer") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    await fireEvent.input(input, { target: { value: "both, please" } });
+    expect(btn.disabled).toBe(false);
+    await fireEvent.click(btn);
+    expect(onAnswer).toHaveBeenCalledWith("t1", "both, please");
+    // While it is on its way the button spins and stays disabled.
+    await tick();
+    expect(btn.disabled).toBe(true);
+    expect(btn.querySelector("svg")!.dataset.icon).toBe("spin");
+    expect((screen.getAllByTestId("quick-pill")[0] as HTMLButtonElement).disabled).toBe(true);
+    done();
+    await vi.waitFor(() => expect((screen.getByLabelText("Answer @anton") as HTMLInputElement).value).toBe(""));
+  });
+
+  test("2a: the head reads asked HH:MM once the task carries asked_at", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 9, 10, 10, 14, 10));
+      const askedAt = new Date(2026, 9, 10, 10, 12, 0).toISOString();
+      render(DelegationBlock, {
+        props: { tasks: [task({ state: "input_required", needs_you: true, title: "List deploys", reply: "Which env?", asked_at: askedAt })], onAnswer: vi.fn() },
+      });
+      expect(screen.getByTestId("needs-you-task").textContent).toBe("· List deploys · asked 10:12");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("captain answering is a grey chip only, with Answer instead", async () => {
@@ -374,7 +425,7 @@ describe("Answer drafts", () => {
     const second = render(DelegationBlock, { props: { tasks: [{ ...q, age: "3m" }], onAnswer: failing } });
     expect((screen.getByLabelText("Answer @anton") as HTMLInputElement).value).toBe("prod, after 6pm");
     // A failed send keeps it.
-    await fireEvent.click(screen.getByText("Send"));
+    await fireEvent.click(screen.getByLabelText("Send answer"));
     expect(await screen.findByTestId("answer-error")).toBeDefined();
     second.unmount();
 
@@ -434,7 +485,7 @@ describe("ThreadMessage delegation block", () => {
     expect(chip.textContent).not.toContain("is answering");
     expect(screen.queryByTestId("answer-instead")).toBeNull();
     expect(screen.getByTestId("needs-you-card")).toBeDefined();
-    expect(screen.getByText("Answer goes to @anton · you asked, so only you answer")).toBeDefined();
+    expect(screen.getByTestId("answer-to").textContent).toBe("Answer goes to @anton · you asked, so only you answer");
     await fireEvent.click(chip);
     expect(screen.getByText("You → @anton")).toBeDefined();
   });
