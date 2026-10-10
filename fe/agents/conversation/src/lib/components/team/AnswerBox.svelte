@@ -21,6 +21,8 @@
     placeholder?: string;
     /** The input's accessible name; "Answer @to" by default. */
     label?: string;
+    /** The longest text the input takes, in characters (none by default). */
+    maxlength?: number;
     quick?: string[];
     sending?: boolean;
     /** Sending is blocked (another answer is on its way); typing is not. */
@@ -35,6 +37,7 @@
     value = $bindable(""),
     placeholder = "Type an answer…",
     label,
+    maxlength,
     quick = [],
     sending = false,
     disabled = false,
@@ -79,6 +82,7 @@
         type="text"
         aria-label={label ?? "Answer @" + to}
         {placeholder}
+        {maxlength}
         {value}
         oninput={(e) => { value = (e.currentTarget as HTMLInputElement).value; onInput?.(value); }}
         class="min-w-0 flex-1 bg-transparent py-1 text-[12.5px] text-black-900 placeholder:text-black-700 focus:outline-none disabled:cursor-not-allowed dark:text-white-100"

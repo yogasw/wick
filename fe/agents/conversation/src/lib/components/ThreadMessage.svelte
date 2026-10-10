@@ -880,6 +880,7 @@
           captainName={teamCtx.captainName()}
           onAnswer={teamCtx.answer}
           onCancel={teamCtx.cancel}
+          onMessage={teamCtx.message}
           onOpenChat={teamCtx.openChat}
           loadThread={teamCtx.loadThread}
         />

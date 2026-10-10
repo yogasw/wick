@@ -119,7 +119,7 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			ref = &taskRef{touched: h.now()}
 			h.tasks[ec.TaskID] = ref
 		}
-		ref.chat = chat
+		ref.chat, ref.chatPicked = chat, true
 		h.mu.Unlock()
 		session := chat
 		if sl, ok := h.Turns.(SessionLocator); ok && session == "" {

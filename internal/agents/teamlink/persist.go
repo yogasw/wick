@@ -55,14 +55,18 @@ type taskRecord struct {
 	Interrupted   bool   `json:"interrupted,omitempty"`
 	// Origin and OriginUser are taskRef.origin/originUser; a record
 	// written before they existed reads as the agent's task.
-	Origin     string    `json:"origin,omitempty"`
-	OriginUser string    `json:"origin_user,omitempty"`
-	Reply      string    `json:"reply,omitempty"`
-	Chat       string    `json:"chat,omitempty"`
-	Answered   string    `json:"answered_in,omitempty"`
-	Sent       []string  `json:"sent,omitempty"`
-	Started    time.Time `json:"started_at"`
-	Touched    time.Time `json:"updated_at"`
+	Origin     string `json:"origin,omitempty"`
+	OriginUser string `json:"origin_user,omitempty"`
+	Reply      string `json:"reply,omitempty"`
+	Chat       string `json:"chat,omitempty"`
+	// ChatPicked and SupersededBy are taskRef.chatPicked/supersededBy;
+	// a record written before they existed reads them unset.
+	ChatPicked   bool      `json:"chat_picked,omitempty"`
+	SupersededBy string    `json:"superseded_by,omitempty"`
+	Answered     string    `json:"answered_in,omitempty"`
+	Sent         []string  `json:"sent,omitempty"`
+	Started      time.Time `json:"started_at"`
+	Touched      time.Time `json:"updated_at"`
 	// Asked and Ended are taskRef.asked/ended; a record written before
 	// they existed reads them zero.
 	Asked time.Time `json:"asked_at,omitzero"`
@@ -206,6 +210,7 @@ func refFromRecord(rec taskRecord) *taskRef {
 		touched: rec.Touched, contextID: rec.ContextID, title: rec.Title, started: rec.Started,
 		asked: rec.Asked, ended: rec.Ended,
 		chat: rec.Chat, answered: rec.Answered, log: rec.Log,
+		chatPicked: rec.ChatPicked, supersededBy: a2a.TaskID(rec.SupersededBy),
 	}
 	if rec.Origin == OriginUser {
 		ref.origin, ref.originUser = OriginUser, rec.OriginUser
@@ -224,6 +229,7 @@ func (r *taskRef) record(id a2a.TaskID) taskRecord {
 		Title: r.title, State: string(r.state),
 		Finished: r.finished, WaiterGone: r.waiterGone, Delivered: r.delivered, Canceled: r.canceled, Interrupted: r.interrupted,
 		Reply: r.reply, Chat: r.chat, Answered: r.answered,
+		ChatPicked: r.chatPicked, SupersededBy: string(r.supersededBy),
 		Started: r.started, Touched: r.touched, Asked: r.asked, Ended: r.ended,
 		Origin: r.origin, OriginUser: r.originUser,
 		Log: append([]ThreadEntry(nil), r.log...),

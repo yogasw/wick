@@ -424,6 +424,12 @@ type taskRef struct {
 	// chat is the target's session the turn runs in, once the executor
 	// picked it ("" = main or not yet known).
 	chat string
+	// chatPicked: the executor picked chat, so chat "" means the target's
+	// main chat rather than "not known yet".
+	chatPicked bool
+	// supersededBy is the task that took over this one's thread when the
+	// task store had lost it (supersede); "" for any other task.
+	supersededBy a2a.TaskID
 	// claimed: an answer to the task's question is on its way (answering
 	// took it under h.mu); any other answer is refused until the turn it
 	// starts ends, or the send fails and gives the question back.
@@ -1012,6 +1018,7 @@ func (h *Hub) supersede(id, next a2a.TaskID) {
 		return
 	}
 	ref.claimed, ref.userAnswer, ref.canceled = false, false, true
+	ref.supersededBy = next
 	ref.finished, ref.delivered, ref.state, ref.touched = true, true, a2a.TaskStateCanceled, h.now()
 	ref.ended = ref.touched
 	ref.reply = fmt.Sprintf("superseded by task %s: this task was lost when wick restarted, the answer went there", next)

@@ -124,3 +124,146 @@ func (h *Hub) CancelFromUser(ctx context.Context, sessionID, taskID string) (*Re
 	}
 	return out, err
 }
+
+// MaxUserMessage caps a message the person writes on a task, in runes:
+// the thread keeps an entry whole up to threadTextMax, so what they sent
+// never reads cut right after sending.
+const MaxUserMessage = threadTextMax
+
+var (
+	// ErrNoTaskChat refuses a message to a task whose teammate has no chat
+	// picked yet: the executor has not taken the task up, so wick does not
+	// know which chat it will run in.
+	ErrNoTaskChat = errors.New("the teammate has not picked this task up yet, so there is no chat to send to — try again once it is working")
+	// ErrTaskMoved refuses a message to a task a restart replaced, when the
+	// task that took it over cannot be found.
+	ErrTaskMoved = errors.New("this task was replaced after a restart and its replacement is gone")
+	// ErrMessageTooLong refuses a message over MaxUserMessage.
+	ErrMessageTooLong = fmt.Errorf("message is longer than %d characters", MaxUserMessage)
+)
+
+// supersedeHops bounds following supersededBy: a chain longer than a
+// couple of restarts is not one wick makes.
+const supersedeHops = 4
+
+// liveTaskLocked is the task sessionID sent that a message on id lands
+// on: id itself, or the task that took over its thread when a restart
+// lost it (supersede). ErrUnknownTask as userTaskLocked; ErrTaskMoved
+// when the replacement is not known.
+func (h *Hub) liveTaskLocked(sessionID string, id a2a.TaskID) (a2a.TaskID, *taskRef, error) {
+	ref, err := h.userTaskLocked(sessionID, id)
+	for hop := 0; err == nil && hop < supersedeHops; hop++ {
+		next := ref.supersededBy
+		if next == "" {
+			// A record from before supersededBy was kept says so only in
+			// its reason.
+			if ref.canceled && strings.HasPrefix(ref.reply, "superseded by task ") {
+				return "", nil, ErrTaskMoved
+			}
+			return id, ref, nil
+		}
+		if ref, err = h.userTaskLocked(sessionID, next); err != nil {
+			return "", nil, ErrTaskMoved
+		}
+		id = next
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	return "", nil, ErrTaskMoved
+}
+
+// userMessageText frames the person's message for the teammate's chat:
+// a header saying who wrote it and on which task, then their words
+// quoted line by line, so nothing they typed reads as a frame wick posts.
+func userMessageText(id a2a.TaskID, title, text string) string {
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		lines[i] = "> " + l
+	}
+	return fmt.Sprintf("Message from the user [task %s · %s] (they wrote it in the task's thread):\n\n%s", id, title, strings.Join(lines, "\n"))
+}
+
+// MessageFromUser sends the person's message on a task sessionID sent,
+// from its thread ("Reply in thread"). A question waiting for them
+// (input_required) takes it as their answer (AnswerFromUser). Any other
+// task — working, or ended — gets it as a user entry on its thread, and
+// the teammate gets it in the chat the task runs in. The task keeps its
+// state, as a FollowUp on an ended task does: the message joins the task,
+// it does not reopen it, and nothing comes back on the sender's side. A
+// task a restart replaced passes the message on to its replacement.
+func (h *Hub) MessageFromUser(ctx context.Context, sessionID, taskID, text string) (*Result, error) {
+	id := a2a.TaskID(strings.TrimSpace(taskID))
+	if text = strings.TrimSpace(text); text == "" {
+		return nil, errors.New("message is empty")
+	}
+	if len([]rune(text)) > MaxUserMessage {
+		return nil, ErrMessageTooLong
+	}
+	// The main chat is read off the pool, never under h.mu: look it up
+	// first, for the case the decision below needs it.
+	h.mu.Lock()
+	_, ref, err := h.liveTaskLocked(sessionID, id)
+	var to Peer
+	if err == nil {
+		to = ref.to
+	}
+	h.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	main := ""
+	if sl, ok := h.Turns.(SessionLocator); ok {
+		main = sl.MainSession(ctx, to)
+	}
+
+	// One critical section decides and records: a question the teammate
+	// raised meanwhile takes the message as the answer, and the entry is
+	// on the thread before it goes out, so the task cannot vanish between
+	// delivering it and logging it.
+	h.mu.Lock()
+	live, ref, err := h.liveTaskLocked(sessionID, id)
+	if err != nil {
+		h.mu.Unlock()
+		return nil, err
+	}
+	if ref.finished && ref.state == a2a.TaskStateInputRequired && !ref.claimed && !ref.userAnswer {
+		h.mu.Unlock()
+		return h.AnswerFromUser(ctx, sessionID, string(live), text)
+	}
+	chat := ref.chat
+	switch {
+	case chat != "":
+	case ref.answered != "":
+		chat = ref.answered
+	case ref.chatPicked:
+		// The executor picked the target's main chat ("" once picked):
+		// that is where the task runs, so that is where the message goes.
+		chat = main
+	}
+	if chat == "" || h.Notify == nil {
+		h.mu.Unlock()
+		return nil, ErrNoTaskChat
+	}
+	to = ref.to
+	entry := ThreadEntry{Role: ThreadUser, Text: text, At: h.now()}
+	ref.logLocked(entry)
+	ref.touched = entry.At
+	out := h.resultLocked(live, ref)
+	msg := userMessageText(live, ref.title, text)
+	h.mu.Unlock()
+
+	// It is the person's message: a cancel of the task does not stop the
+	// turn it wakes (WithPersonMessage).
+	if err := h.Notify.Deliver(context.WithoutCancel(WithPersonMessage(ctx)), chat, msg); err != nil {
+		h.mu.Lock()
+		if ref := h.tasks[live]; ref != nil {
+			ref.unlogLocked(entry)
+		}
+		h.mu.Unlock()
+		h.persist(live)
+		return nil, fmt.Errorf("team: message @%s: %w", to.Handle, err)
+	}
+	h.persist(live)
+	return out, nil
+}

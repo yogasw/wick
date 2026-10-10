@@ -8,10 +8,12 @@
      asked", no answering stage, the teammate's reply shows here. The
      chevron in the head collapses the block to its chips. An open chip
      shows the task's thread (TaskThread) under a head with Reply in
-     thread (a question only), Open chat, Collapse and Cancel. Once every task
+     thread, Open chat, Collapse and Cancel: on a question it opens the
+     answer card, on any other task a composer under the thread whose
+     message joins that task (onMessage). Once every task
      ended it folds to a single row (check, avatars, "Delegated to 3
      teammates · all replied · 12 messages · 13m", chevron). */
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import AvatarActivity from "./AvatarActivity.svelte";
   import { taskActivity } from "../../avatarActivity.js";
@@ -31,11 +33,13 @@
     captainName?: string;
     onAnswer?: (taskId: string, text: string) => Promise<void>;
     onCancel?: (taskId: string) => Promise<void>;
+    /** Reply in thread on a task that asks nothing: working or ended. */
+    onMessage?: (taskId: string, text: string) => Promise<void>;
     onOpenChat?: (t: TeamTaskItem) => void;
     /** Reads a task's thread for its open chip (TaskThread). */
     loadThread?: (taskId: string) => Promise<TeamThreadEntry[]>;
   };
-  let { tasks, agents = {}, captainName = "Captain", onAnswer, onCancel, onOpenChat, loadThread }: Props = $props();
+  let { tasks, agents = {}, captainName = "Captain", onAnswer, onCancel, onMessage, onOpenChat, loadThread }: Props = $props();
 
   let showAll = $state(false);
   let unfolded = $state(false);
@@ -51,6 +55,37 @@
   let confirming = $state<string | null>(null);
   let sending = $state<string | null>(null);
   let errors = $state<Record<string, string>>({});
+  // Reply in thread on a task that asks nothing: its composer, its text
+  // and its error, per task. The composer stays open after a send, so the
+  // message shows in the thread above it.
+  let replyOpen = $state<Record<string, boolean>>({});
+  let replyDrafts = $state<Record<string, string>>({});
+  let replyErrors = $state<Record<string, string>>({});
+  // The server's cap on a message (teamlink.MaxUserMessage): the thread
+  // keeps it whole up to there, so the composer stops at the same length.
+  const MESSAGE_MAX = 1200;
+  // A task that asks a question while its composer is open: the reply
+  // becomes the answer — its card opens with what was typed, the
+  // composer closes.
+  $effect(() => {
+    const asking = tasks.filter((t) => {
+      const s = taskStatus(t);
+      return (s === "needs_you" || s === "answering") && untrack(() => replyOpen[t.task_id]);
+    });
+    if (asking.length === 0) return;
+    untrack(() => {
+      for (const t of asking) {
+        const typed = replyDrafts[t.task_id] ?? "";
+        if (typed.trim() && !draftOf(t.task_id).trim()) {
+          drafts = { ...drafts, [t.task_id]: typed };
+          setDraft(t.task_id, typed);
+        }
+        answerOpen = { ...answerOpen, [t.task_id]: true };
+        replyOpen = { ...replyOpen, [t.task_id]: false };
+        replyDrafts = { ...replyDrafts, [t.task_id]: "" };
+      }
+    });
+  });
 
   const folded = $derived(allSettled(tasks) && !unfolded);
 
@@ -116,6 +151,23 @@
       answerOpen = { ...answerOpen, [t.task_id]: false };
     } catch (e) {
       errors = { ...errors, [t.task_id]: e instanceof Error ? e.message : String(e) };
+    } finally {
+      sending = null;
+    }
+  }
+  async function sendMessage(t: TeamTaskItem, text: string) {
+    if (!onMessage || !text.trim() || sending) return;
+    if (text.trim().length > MESSAGE_MAX) {
+      replyErrors = { ...replyErrors, [t.task_id]: `Message is longer than ${MESSAGE_MAX} characters` };
+      return;
+    }
+    sending = t.task_id;
+    replyErrors = { ...replyErrors, [t.task_id]: "" };
+    try {
+      await onMessage(t.task_id, text.trim());
+      replyDrafts = { ...replyDrafts, [t.task_id]: "" };
+    } catch (e) {
+      replyErrors = { ...replyErrors, [t.task_id]: e instanceof Error ? e.message : String(e) };
     } finally {
       sending = null;
     }
@@ -268,9 +320,14 @@
             <AvatarActivity activity={taskActivity(s)} size={20}><AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={20} /></AvatarActivity>
             <b class="shrink-0 text-xs font-semibold text-black-900 dark:text-white-100">{userTaskRoute(t) ?? nameOf(t)}</b>
             <span data-testid="delegation-preview-task" class="min-w-0 flex-1 truncate">· {t.title}{t.message_count ? ` · ${t.message_count} message${t.message_count === 1 ? "" : "s"}` : ""}</span>
-            {#if onAnswer && (s === "needs_you" || s === "answering")}
-              <!-- Only a question takes a reply yet; the others wait for B5. -->
-              <SmBtn icon="reply" data-testid="delegation-reply" class="shrink-0" onclick={() => { answerOpen = { ...answerOpen, [t.task_id]: true }; }}>Reply in thread</SmBtn>
+            {#if s === "needs_you" || s === "answering"}
+              <!-- A question: the reply is the answer (the card above). -->
+              {#if onAnswer}
+                <SmBtn icon="reply" data-testid="delegation-reply" class="shrink-0" onclick={() => { answerOpen = { ...answerOpen, [t.task_id]: true }; }}>Reply in thread</SmBtn>
+              {/if}
+            {:else if onMessage}
+              <!-- Any other task: a message that joins it (the composer below). -->
+              <SmBtn icon="reply" data-testid="delegation-reply" class="shrink-0" onclick={() => { replyOpen = { ...replyOpen, [t.task_id]: !replyOpen[t.task_id] }; }}>Reply in thread</SmBtn>
             {/if}
             {#if onOpenChat && t.chat_id}
               <SmBtn icon="open" class="shrink-0" onclick={() => onOpenChat?.(t)}>Open chat</SmBtn>
@@ -310,6 +367,27 @@
               {:else}
                 <span class="italic text-black-600 dark:text-black-700">No reply yet.</span>
               {/if}
+            </div>
+          {/if}
+          {#if onMessage && replyOpen[t.task_id] && s !== "needs_you" && s !== "answering"}
+            <div data-testid="reply-composer" class="flex flex-col gap-1 px-3 pb-2.5">
+              <AnswerBox
+                to={t.to_handle}
+                note={isTaskActive(t) ? "joins this task" : "joins this ended task"}
+                tone="ok"
+                placeholder="Write a message…"
+                label={"Message @" + t.to_handle}
+                maxlength={MESSAGE_MAX}
+                value={replyDrafts[t.task_id] ?? ""}
+                sending={sending === t.task_id}
+                disabled={sending !== null && sending !== t.task_id}
+                onInput={(v) => { replyDrafts = { ...replyDrafts, [t.task_id]: v }; }}
+                onSend={(text) => sendMessage(t, text)}
+              />
+              <div class="flex items-start gap-2">
+                <span data-testid="reply-error" class="min-w-0 flex-1 text-[11px] text-red-600 dark:text-red-400">{replyErrors[t.task_id] ?? ""}</span>
+                <span data-testid="reply-count" class={["shrink-0 text-[10.5px] tabular-nums", (replyDrafts[t.task_id] ?? "").length >= MESSAGE_MAX ? "text-red-600 dark:text-red-400" : "text-black-700"]}>{(replyDrafts[t.task_id] ?? "").length} / {MESSAGE_MAX}</span>
+              </div>
             </div>
           {/if}
         </div>

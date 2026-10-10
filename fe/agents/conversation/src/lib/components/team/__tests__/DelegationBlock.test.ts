@@ -243,6 +243,82 @@ describe("DelegationBlock", () => {
     await fireEvent.click(screen.getByTestId("delegation-reply"));
     expect(screen.getByTestId("needs-you-card")).toBeDefined();
   });
+
+  /* B5: Reply in thread on a task that asks nothing opens a composer under
+     its thread; the message goes to onMessage, the composer stays open and
+     empties, an error reads inline. */
+  test("B5: Reply in thread on a working task sends a message to it", async () => {
+    const onMessage = vi.fn().mockResolvedValue(undefined);
+    render(DelegationBlock, { props: { tasks: [task({ state: "working" })], onMessage, onAnswer: vi.fn() } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    expect(screen.queryByTestId("reply-composer")).toBeNull();
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    expect(screen.queryByTestId("needs-you-card")).toBeNull();
+    const box = screen.getByTestId("reply-composer");
+    expect(box.querySelector("[data-tone]")?.getAttribute("data-tone")).toBe("ok");
+    expect(screen.getByTestId("answer-to").textContent).toContain("@anton · joins this task");
+    const input = screen.getByLabelText("Message @anton") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "  check 08:00 too " } });
+    await fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(onMessage).toHaveBeenCalledWith("t1", "check 08:00 too"));
+    await waitFor(() => expect(input.value).toBe(""));
+    expect(screen.getByTestId("reply-composer")).toBeDefined();
+  });
+
+  test("B5: an ended task takes a reply too; a failure shows inline", async () => {
+    const onMessage = vi.fn().mockRejectedValue(new Error("the teammate has no chat for this task yet"));
+    render(DelegationBlock, { props: { tasks: [task({ state: "completed", reply: "found 3 errors", summary: "found 3 errors" })], onMessage } });
+    await fireEvent.click(screen.getByTestId("delegation-folded"));
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    expect(screen.getByTestId("answer-to").textContent).toContain("joins this ended task");
+    const input = screen.getByLabelText("Message @anton") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "retry with 08:00" } });
+    await fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByTestId("reply-error").textContent).toBe("the teammate has no chat for this task yet"));
+    expect(input.value).toBe("retry with 08:00");
+    // The toggle closes it again.
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    expect(screen.queryByTestId("reply-composer")).toBeNull();
+  });
+
+  test("B5: no onMessage (read-only chat) = no Reply in thread on a non-question", async () => {
+    render(DelegationBlock, { props: { tasks: [task({ state: "working" })], onAnswer: vi.fn() } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    expect(screen.queryByTestId("delegation-reply")).toBeNull();
+  });
+
+  test("B5: the composer stops at the server's cap and counts", async () => {
+    render(DelegationBlock, { props: { tasks: [task({ state: "working" })], onMessage: vi.fn() } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    const input = screen.getByLabelText("Message @anton") as HTMLInputElement;
+    expect(input.getAttribute("maxlength")).toBe("1200");
+    expect(screen.getByTestId("reply-count").textContent).toBe("0 / 1200");
+    await fireEvent.input(input, { target: { value: "abc" } });
+    expect(screen.getByTestId("reply-count").textContent).toBe("3 / 1200");
+  });
+
+  test("B5: a task that starts asking carries the typed reply into the answer card", async () => {
+    const r = render(DelegationBlock, { props: { tasks: [task({ task_id: "tr-1", state: "working" })], onMessage: vi.fn(), onAnswer: vi.fn() } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    await fireEvent.input(screen.getByLabelText("Message @anton"), { target: { value: "use prod" } });
+    await r.rerender({ tasks: [task({ task_id: "tr-1", state: "input_required", needs_you: true, reply: "Which env?" })] });
+    await tick();
+    expect(screen.queryByTestId("reply-composer")).toBeNull();
+    expect(screen.getByTestId("needs-you-card")).toBeDefined();
+    expect((screen.getByLabelText("Answer @anton") as HTMLInputElement).value).toBe("use prod");
+  });
+
+  test("B5: a question keeps Reply in thread on the answer card, not the composer", async () => {
+    const onMessage = vi.fn();
+    render(DelegationBlock, { props: { tasks: [task({ state: "input_required", needs_you: false, reply: "Which env?" })], onAnswer: vi.fn(), onMessage } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    expect(screen.getByTestId("needs-you-card")).toBeDefined();
+    expect(screen.queryByTestId("reply-composer")).toBeNull();
+  });
 });
 
 /* P48 slice 3: the head and the chips as grouped §2 draws them. */
@@ -562,6 +638,23 @@ describe("ThreadMessage delegation block", () => {
       { type: "tool_result", tool_use_id: "u1", text: '{"task_id":"t1","state":"working"}' },
     ],
   } as ConversationTurn;
+
+  test("B5: a read-only chat's context has no message, so no Reply in thread; otherwise it sends through it", async () => {
+    const base = { forTurn: (id: string) => (id === "turn-1" ? [task({})] : []), agents: () => ({}), captainName: () => "Cap" };
+    // DetailView's getter gives message undefined in a read-only chat.
+    const ro = render(ThreadMessage, { props: { turn }, context: new Map([[TEAM_TASKS_KEY, { ...base, message: undefined } as TeamTasksCtx]]) });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    expect(screen.queryByTestId("delegation-reply")).toBeNull();
+    ro.unmount();
+    const message = vi.fn().mockResolvedValue(undefined);
+    render(ThreadMessage, { props: { turn }, context: new Map([[TEAM_TASKS_KEY, { ...base, message } as TeamTasksCtx]]) });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await fireEvent.click(screen.getByTestId("delegation-reply"));
+    const input = screen.getByLabelText("Message @anton") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "hi" } });
+    await fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(message).toHaveBeenCalledWith("t1", "hi"));
+  });
 
   test("renders the block from context and drops the raw team_message card", async () => {
     const ctx: TeamTasksCtx = {

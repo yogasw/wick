@@ -37,6 +37,16 @@ export const answerTeamTask = (base: string, id: string, taskId: string, text: s
     { text },
   );
 
+// messageTeamTask sends the person's message on a task this chat sent,
+// from its thread (Reply in thread): a waiting question takes it as the
+// answer; any other task logs it and hands it to the teammate's chat,
+// keeping its state. 409 = the teammate has no chat for it yet.
+export const messageTeamTask = (base: string, id: string, taskId: string, text: string) =>
+  apiPostE<{ task: unknown }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/message`,
+    { text },
+  );
+
 // cancelTeamTask cancels a task this chat sent (cancel_task).
 export const cancelTeamTask = (base: string, id: string, taskId: string) =>
   apiPostE<{ task: unknown }>(

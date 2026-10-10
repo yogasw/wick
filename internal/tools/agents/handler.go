@@ -308,6 +308,7 @@ func Register(r tool.Router) {
 	r.GET("/api/sessions/{id}/team-tasks/{task}/thread", sessionTeamTaskThread)
 	r.POST("/api/sessions/{id}/team-tasks/{task}/answer", sessionTeamTaskAnswer)
 	r.POST("/api/sessions/{id}/team-tasks/{task}/cancel", sessionTeamTaskCancel)
+	r.POST("/api/sessions/{id}/team-tasks/{task}/message", sessionTeamTaskMessage)
 	// Interactive messages: an actioncard click, and a decision on an
 	// approval_request card.
 	r.POST("/api/sessions/{id}/postback", sessionPostback)

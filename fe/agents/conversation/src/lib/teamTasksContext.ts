@@ -18,6 +18,8 @@ export type TeamTasksCtx = {
   /** Absent in a read-only chat: the actions are hidden, not refused. */
   answer?: (taskId: string, text: string) => Promise<void>;
   cancel?: (taskId: string) => Promise<void>;
+  /** Reply in thread on a task that asks nothing (working or ended). */
+  message?: (taskId: string, text: string) => Promise<void>;
   /** Opens the teammate's chat the task runs in. */
   openChat?: (t: TeamTaskItem) => void;
   /** Reads a task's thread (TaskThread), when it is opened. */

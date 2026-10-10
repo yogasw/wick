@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
@@ -215,7 +216,7 @@ func teamTaskError(c *tool.Ctx, err error) {
 	switch {
 	case errors.Is(err, teamlink.ErrUnknownTask):
 		status = http.StatusNotFound
-	case errors.Is(err, teamlink.ErrAlreadyAnswered), errors.Is(err, teamlink.ErrTaskNotWaiting), errors.Is(err, teamlink.ErrTaskSettled):
+	case errors.Is(err, teamlink.ErrAlreadyAnswered), errors.Is(err, teamlink.ErrTaskNotWaiting), errors.Is(err, teamlink.ErrTaskSettled), errors.Is(err, teamlink.ErrNoTaskChat), errors.Is(err, teamlink.ErrTaskMoved):
 		status = http.StatusConflict
 	}
 	c.JSON(status, map[string]string{"error": err.Error()})
@@ -237,6 +238,34 @@ func sessionTeamTaskAnswer(c *tool.Ctx) {
 		return
 	}
 	res, err := h.AnswerFromUser(c.Context(), id, c.PathValue("task"), body.Text)
+	if err != nil {
+		teamTaskError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"task": res})
+}
+
+// sessionTeamTaskMessage handles POST /api/sessions/{id}/team-tasks/{task}/message
+// {text}: the person writes on a task this chat sent, from its thread
+// (Reply in thread). A waiting question takes it as the answer; any other
+// task logs it and hands it to the teammate's chat, keeping its state.
+func sessionTeamTaskMessage(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(io.LimitReader(c.R.Body, 1<<20)).Decode(&body); err != nil || strings.TrimSpace(body.Text) == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "text is required"})
+		return
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(body.Text)) > teamlink.MaxUserMessage {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": teamlink.ErrMessageTooLong.Error()})
+		return
+	}
+	res, err := h.MessageFromUser(c.Context(), id, c.PathValue("task"), body.Text)
 	if err != nil {
 		teamTaskError(c, err)
 		return

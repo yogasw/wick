@@ -62,7 +62,7 @@
   import { setTeamTasksCtx } from "../teamTasksContext.js";
   import { tasksByTurn, liveTurnTasks, taskRailBadge } from "../delegations.js";
   import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
-  import { answerTeamTask, cancelTeamTask, getTeamTaskThread } from "../api/subagents.js";
+  import { answerTeamTask, cancelTeamTask, getTeamTaskThread, messageTeamTask } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
   import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
   import {
@@ -1266,6 +1266,13 @@
       loadTeamTasks();
     }
   }
+  async function messageTask(taskId: string, text: string) {
+    try {
+      await run(messageTeamTask(base, sessionId, taskId, text).pipe(Effect.provide(WickClientLayer)));
+    } finally {
+      loadTeamTasks();
+    }
+  }
   async function cancelTask(taskId: string) {
     try {
       await run(cancelTeamTask(base, sessionId, taskId).pipe(Effect.provide(WickClientLayer)));
@@ -1293,6 +1300,7 @@
     // refuses there.
     get answer() { return readOnly ? undefined : answerTask; },
     get cancel() { return readOnly ? undefined : cancelTask; },
+    get message() { return readOnly ? undefined : messageTask; },
     openChat: openTaskChat,
     get loadThread() { return readOnly ? undefined : loadTaskThread; },
   });

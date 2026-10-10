@@ -60,6 +60,18 @@ func (r *taskRef) logLocked(e ThreadEntry) {
 	}
 }
 
+// unlogLocked takes e back off ref's thread (its newest copy), for a
+// message logged ahead of a delivery that then failed.
+func (r *taskRef) unlogLocked(e ThreadEntry) {
+	e.Text = capText(e.Text, threadTextMax)
+	for i := len(r.log) - 1; i >= 0; i-- {
+		if l := r.log[i]; l.Role == e.Role && l.Text == e.Text && l.At.Equal(e.At) {
+			r.log = append(r.log[:i:i], r.log[i+1:]...)
+			return
+		}
+	}
+}
+
 // logTeammateLocked adds what ref's teammate said.
 func (r *taskRef) logTeammateLocked(text string, at time.Time) {
 	r.logLocked(ThreadEntry{Role: ThreadTeammate, Handle: r.to.Handle, Name: r.to.Name, Text: text, At: at})
