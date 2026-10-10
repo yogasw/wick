@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -39,6 +40,9 @@ const sourceTeam = team.SourceTeam
 // deliver wakes a session with a late reply (the sub-agent delivery path).
 func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, sessionID, text string) error) *teamlink.Hub {
 	hub := teamlink.NewHub(teamDirectory{svc: svc}, poolTurns{}, teamNotifier{deliver: deliver})
+	// A question no turn of the sending chat is handling waits for the
+	// user: the thread shows it as "Needs you".
+	hub.CallerBusy = poolSessionBusy
 	// A task a restart left working is settled as interrupted, unless the
 	// draining previous process may still be running its turn.
 	hub.PredecessorBusy = func(chat string) bool {
@@ -108,6 +112,79 @@ func sessionTeamTasks(c *tool.Ctx) {
 		tasks = []teamlink.TaskView{}
 	}
 	c.JSON(http.StatusOK, map[string]any{"tasks": tasks})
+}
+
+// teamTaskHub resolves the session and the Hub for a write on one of its
+// team tasks; false when it already answered (404/503).
+func teamTaskHub(c *tool.Ctx) (string, *teamlink.Hub, bool) {
+	if notReady(c) {
+		return "", nil, false
+	}
+	id := c.PathValue("id")
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return "", nil, false
+	}
+	var h *teamlink.Hub
+	if globalTeamHub != nil {
+		h = globalTeamHub()
+	}
+	if h == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "team messaging is not available"})
+		return "", nil, false
+	}
+	return id, h, true
+}
+
+// teamTaskError maps a Hub error on a user's task action to a status.
+func teamTaskError(c *tool.Ctx, err error) {
+	status := http.StatusBadRequest
+	switch {
+	case errors.Is(err, teamlink.ErrUnknownTask):
+		status = http.StatusNotFound
+	case errors.Is(err, teamlink.ErrAlreadyAnswered), errors.Is(err, teamlink.ErrTaskNotWaiting), errors.Is(err, teamlink.ErrTaskSettled):
+		status = http.StatusConflict
+	}
+	c.JSON(status, map[string]string{"error": err.Error()})
+}
+
+// sessionTeamTaskAnswer handles POST /api/sessions/{id}/team-tasks/{task}/answer
+// {text}: the person answers a teammate's question in a task this chat
+// sent, straight to that task. The first answer wins (409 after).
+func sessionTeamTaskAnswer(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(io.LimitReader(c.R.Body, 1<<20)).Decode(&body); err != nil || strings.TrimSpace(body.Text) == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "text is required"})
+		return
+	}
+	res, err := h.AnswerFromUser(c.Context(), id, c.PathValue("task"), body.Text)
+	if err != nil {
+		teamTaskError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"task": res})
+}
+
+// sessionTeamTaskCancel handles POST /api/sessions/{id}/team-tasks/{task}/cancel:
+// the person cancels a task this chat sent (cancel_task on its behalf).
+func sessionTeamTaskCancel(c *tool.Ctx) {
+	id, h, ok := teamTaskHub(c)
+	if !ok {
+		return
+	}
+	res, err := h.CancelFromUser(c.Context(), id, c.PathValue("task"))
+	if err != nil {
+		teamTaskError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"task": res})
 }
 
 type teamDirectory struct{ svc *team.Service }

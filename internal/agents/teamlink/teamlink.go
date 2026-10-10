@@ -358,6 +358,10 @@ type Hub struct {
 	// linkMu serialises pairing a caller's conversation with a target's
 	// chat (chatFor), so two messages sent at once open one chat, not two.
 	linkMu sync.Mutex
+	// CallerBusy reports whether a session runs (or waits for) a turn. A
+	// question nobody's turn is handling waits for the user (NeedsYou);
+	// nil = never busy.
+	CallerBusy func(sessionID string) bool
 	// PredecessorBusy reports whether a previous wick process, still
 	// draining, may be running a turn of chat ("" = the teammate's chat
 	// is not known: any turn). A task it may still finish is not settled
@@ -403,6 +407,8 @@ type taskRef struct {
 	// took it under h.mu); any other answer is refused until the turn it
 	// starts ends, or the send fails and gives the question back.
 	claimed bool
+	// userAnswer: the claim is the user's answer (AnswerFromUser).
+	userAnswer bool
 	// fromDisk: the task was read back from disk and nothing in this
 	// process has run it since. Unfinished, it was working in a process
 	// that is gone (or still draining): see settleOrphans.
@@ -654,6 +660,9 @@ type SendInput struct {
 	// with an agent another owner shared with them, the mention resolves
 	// against this person, not the agent's owner.
 	SessionUser string
+	// byUser marks the user's own answer (AnswerFromUser), which holds the
+	// task's userAnswer claim.
+	byUser bool
 }
 
 // Result is what a caller gets back.
@@ -873,7 +882,7 @@ func (h *Hub) answering(callerID string, in SendInput) (string, string, *answerC
 	if to := NormalizeHandle(in.To); to != "" && to != ref.to.Handle {
 		return "", "", nil, fmt.Errorf("%w (@%s)", ErrTaskOtherAgent, ref.to.Handle)
 	}
-	if ref.claimed {
+	if ref.claimed || ref.userAnswer {
 		return "", "", nil, ErrAlreadyAnswered
 	}
 	if !ref.finished || ref.state != a2a.TaskStateInputRequired {
@@ -882,7 +891,7 @@ func (h *Hub) answering(callerID string, in SendInput) (string, string, *answerC
 	// The task runs again: clear what its last turn left before the
 	// executor can report the next one.
 	claim := &answerClaim{waiterGone: ref.waiterGone, delivered: ref.delivered, reply: ref.reply, state: ref.state}
-	ref.claimed = true
+	ref.claimed, ref.userAnswer = true, in.byUser
 	// This process runs it now: not a restart's leftover any more.
 	ref.fromDisk = false
 	ref.finished, ref.waiterGone, ref.delivered, ref.reply, ref.state = false, false, false, "", a2a.TaskStateWorking
@@ -900,7 +909,7 @@ func (h *Hub) unclaim(id a2a.TaskID, c *answerClaim) {
 		h.mu.Unlock()
 		return
 	}
-	ref.claimed = false
+	ref.claimed, ref.userAnswer = false, false
 	if !ref.canceled {
 		ref.finished, ref.waiterGone, ref.delivered, ref.reply, ref.state = true, c.waiterGone, c.delivered, c.reply, c.state
 	}
@@ -918,7 +927,7 @@ func (h *Hub) supersede(id, next a2a.TaskID) {
 		h.mu.Unlock()
 		return
 	}
-	ref.claimed, ref.canceled = false, true
+	ref.claimed, ref.userAnswer, ref.canceled = false, false, true
 	ref.finished, ref.delivered, ref.state, ref.touched = true, true, a2a.TaskStateCanceled, h.now()
 	ref.reply = fmt.Sprintf("superseded by task %s: this task was lost when wick restarted, the answer went there", next)
 	h.mu.Unlock()
@@ -1326,7 +1335,7 @@ func (h *Hub) CancelTask(ctx context.Context, callerAgentID, taskID string) (*Re
 	running, isRunning := h.inflight[ref.agentID][id]
 	reason := "canceled by " + by
 	ref.canceled, ref.finished, ref.delivered = true, true, true
-	ref.claimed = false
+	ref.claimed, ref.userAnswer = false, false
 	ref.state, ref.reply, ref.touched = a2a.TaskStateCanceled, reason, h.now()
 	agentID, to := ref.agentID, ref.to
 	h.mu.Unlock()
@@ -1392,7 +1401,7 @@ func (h *Hub) settle(ctx context.Context, id a2a.TaskID, state a2a.TaskState, re
 	}
 	ref.interrupted = orphan
 	ref.finished, ref.state, ref.reply, ref.touched = true, state, reply, h.now()
-	ref.claimed = false
+	ref.claimed, ref.userAnswer = false, false
 	deliver := ref.waiterGone && !ref.delivered && ref.callerSession != ""
 	if deliver {
 		ref.delivered = true
@@ -1479,9 +1488,15 @@ type TaskView struct {
 	Age string `json:"age"`
 	// Summary is the first line of the reply, question or reason.
 	Summary string `json:"summary,omitempty"`
+	// Reply is the reply, question or reason itself, capped, for the
+	// thread's preview of the task.
+	Reply string `json:"reply,omitempty"`
 	// ChatID is the teammate's chat the task runs in ("" = main or not
 	// known yet), so the UI can open it.
 	ChatID string `json:"chat_id,omitempty"`
+	// NeedsYou: the task asks a question (input_required) that no turn of
+	// the sending conversation is handling, so it waits for the user.
+	NeedsYou bool `json:"needs_you,omitempty"`
 	// Interrupted: wick restarted while the task was working, so it
 	// failed (settleOrphans); sending it again is safe.
 	Interrupted bool `json:"interrupted,omitempty"`
@@ -1494,6 +1509,8 @@ func (h *Hub) SentFrom(sessionID string) []TaskView {
 	if sessionID == "" {
 		return nil
 	}
+	// Read before taking the lock: the pool is none of the Hub's.
+	busy := h.CallerBusy != nil && h.CallerBusy(sessionID)
 	// The files are read without h.mu, which every Send and turn needs:
 	// snapshot what memory already settled, read, then adopt under it.
 	h.mu.Lock()
@@ -1522,6 +1539,7 @@ func (h *Hub) SentFrom(sessionID string) []TaskView {
 		}
 		orphans = orphans || h.orphanLocked(id, ref)
 		v := h.viewLocked(id, ref, now)
+		v.NeedsYou = v.State == "input_required" && !ref.userAnswer && !busy
 		out = append(out, v)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Started.After(out[j].Started) })
@@ -1533,7 +1551,8 @@ func (h *Hub) SentFrom(sessionID string) []TaskView {
 	return out
 }
 
-// viewLocked is task id as the UI lists it.
+// viewLocked is task id as the UI lists it, NeedsYou left to the caller
+// (it reads the pool, which h.mu must not wrap).
 func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {
 	turns, limit := 0, MaxContextTurns
 	if c := h.contexts[ref.contextID]; c != nil {
@@ -1547,7 +1566,7 @@ func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {
 		Age: shortAge(now.Sub(ref.started)),
 	}
 	if ref.finished {
-		v.Summary = firstLine(ref.reply)
+		v.Summary, v.Reply = firstLine(ref.reply), capText(ref.reply, replyPreviewMax)
 	}
 	v.ChatID = ref.chat
 	v.Interrupted = ref.interrupted

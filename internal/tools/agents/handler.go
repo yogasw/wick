@@ -304,6 +304,8 @@ func Register(r tool.Router) {
 	// /api/sessions routes so sessionAccessMW covers them too.
 	r.GET("/api/sessions/{id}/subagents", sessionSubAgents)
 	r.GET("/api/sessions/{id}/team-tasks", sessionTeamTasks)
+	r.POST("/api/sessions/{id}/team-tasks/{task}/answer", sessionTeamTaskAnswer)
+	r.POST("/api/sessions/{id}/team-tasks/{task}/cancel", sessionTeamTaskCancel)
 	// Interactive messages: an actioncard click, and a decision on an
 	// approval_request card.
 	r.POST("/api/sessions/{id}/postback", sessionPostback)

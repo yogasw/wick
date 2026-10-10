@@ -10,6 +10,7 @@ export type RailTab =
   | "browser"
   | "source"
   | "subagents"
+  | "tasks"
   | "ticket"
   | "notes"
   | "todos";

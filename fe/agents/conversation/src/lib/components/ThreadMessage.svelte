@@ -21,6 +21,9 @@
   import type { CardState } from "../types/agents.js";
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import ToolCard from "./ToolCard.svelte";
+  import DelegationBlock from "./team/DelegationBlock.svelte";
+  import { getTeamTasksCtx } from "../teamTasksContext.js";
+  import { isTeamMessageTool } from "../delegations.js";
   import TodoCard from "./TodoCard.svelte";
   import ArtifactGallery from "./ArtifactGallery.svelte";
   import MediaLightbox from "./MediaLightbox.svelte";
@@ -59,8 +62,11 @@
     onRemoteRecheck?: () => Promise<RecheckResult>;
     /** Cancels a message queued behind a busy remote agent. */
     onRemoteQueueCancel?: (queueId: string) => Promise<void>;
+    /** Asks the agent to pick a recovered turn back up; unset = no
+        button (only the thread's last turn gets one). */
+    onContinue?: () => void;
   };
-  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel }: Props = $props();
+  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -109,7 +115,11 @@
           .replace(/^[ \t]*\[silent\][ \t]*/gim, ""),
   );
 
-  /* "Interrupted — response was cut off" answers what happened and not the
+  /* A turn the server cut off with no author is one wick recovered from
+     disk after a restart: the text is what the agent had written so far. */
+  const RECOVERED_LABEL = "Recovered after a restart — this is what the agent had written before wick restarted.";
+
+  /* "Interrupted — …" answers what happened and not the
      question that follows it: BY WHOM. A person clicking Stop, the agent
      stopping one of its own children, and wick going down mid-turn all
      landed on the same sentence, and only the last one means the work can
@@ -128,8 +138,11 @@
       case "unknown":
         return "Stopped — nothing claimed it; check the daemon log for this time";
     }
-    return "Interrupted — response was cut off";
+    return RECOVERED_LABEL;
   });
+  const isRecovered = $derived(
+    !!turn.interrupted && turn.role === "assistant" && !turn.interrupted_by && !(turn.interrupted_note ?? "").trim(),
+  );
 
   /* The server appends a "[routed] …" line to a person's message so the
      leader reads, in the same message, which @mentions wick already
@@ -384,7 +397,14 @@
   // The individual todo tool_use blocks are stripped from the flat
   // trace below since this merged widget replaces them.
   const mergedTodoItems = $derived(mergeTodoItemsWithSteps(traceBlocks));
-  const nonTodoBlocks = $derived(stripTodoBlocks(traceBlocks));
+  /* The turn's team_message calls render as one delegation block (see
+     DelegationBlock), so their raw ToolCards leave the trace — only when
+     the block has tasks to show, never hiding a call it could not place. */
+  const teamCtx = getTeamTasksCtx();
+  const delegated = $derived(teamCtx && turn.role === "assistant" ? teamCtx.forTurn(turn.turn_id) : []);
+  const nonTodoBlocks = $derived(
+    stripTodoBlocks(traceBlocks).filter((b) => !(delegated.length > 0 && b.kind === "tool" && isTeamMessageTool(b.toolName))),
+  );
   // Goal mode is optional and independent of the checklist — a turn can
   // report a goal with no items at all, so the card renders for either.
   const todoGoal = $derived(latestTodoGoal(traceBlocks));
@@ -776,6 +796,17 @@
         </div>
       {/if}
 
+      {#if delegated.length > 0 && teamCtx}
+        <DelegationBlock
+          tasks={delegated}
+          agents={teamCtx.agents()}
+          captainName={teamCtx.captainName()}
+          onAnswer={teamCtx.answer}
+          onCancel={teamCtx.cancel}
+          onOpenChat={teamCtx.openChat}
+        />
+      {/if}
+
       {#if turn.text}
         {#if isLateReply(turn)}
           <span class="self-start inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] leading-none text-amber-700 dark:text-amber-300" data-testid="late-reply-label">{lateLabel(turn)}</span>
@@ -813,11 +844,19 @@
           {/each}
           {#if turn.interrupted}
             <div class="mt-2 flex items-center gap-1.5 border-t border-white-300 dark:border-navy-600 pt-2">
+              {#if isRecovered}
+                <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-link-400" fill="none" stroke="currentColor" stroke-width="1.6" data-testid="recovered-icon">
+                  <path d="M3 8a5 5 0 109-3M12 2v3H9" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+                <span class="text-xs text-link-400">{interruptedLabel}</span>
+                {#if onContinue}<button type="button" data-testid="recovered-continue" onclick={() => onContinue?.()} class="ml-auto shrink-0 rounded-md border border-link-400/60 px-2 py-0.5 text-[11px] font-medium text-link-400 hover:bg-link-400/10">Continue</button>{/if}
+              {:else}
               <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-amber-500" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M8 2L1.5 13.5h13L8 2z" stroke-linejoin="round"></path>
                 <path d="M8 6v4M8 11.5v.5" stroke-linecap="round"></path>
               </svg>
               <span class="text-xs text-amber-600 dark:text-amber-400">{interruptedLabel}</span>
+              {/if}
             </div>
           {:else if turn.truncated}
             <p class="mt-2 text-xs text-black-600 dark:text-black-700 italic border-t border-white-300 dark:border-navy-600 pt-2">Output truncated — see raw.jsonl for full content.</p>
@@ -883,11 +922,19 @@
       {#if !turn.text && turn.interrupted}
         <div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 shadow-sm">
           <div class="flex items-center gap-1.5">
+            {#if isRecovered}
+              <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-link-400" fill="none" stroke="currentColor" stroke-width="1.6" data-testid="recovered-icon">
+                <path d="M3 8a5 5 0 109-3M12 2v3H9" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+              <span class="text-xs text-link-400">{interruptedLabel}</span>
+              {#if onContinue}<button type="button" data-testid="recovered-continue" onclick={() => onContinue?.()} class="ml-auto shrink-0 rounded-md border border-link-400/60 px-2 py-0.5 text-[11px] font-medium text-link-400 hover:bg-link-400/10">Continue</button>{/if}
+            {:else}
             <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-amber-500" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M8 2L1.5 13.5h13L8 2z" stroke-linejoin="round"></path>
               <path d="M8 6v4M8 11.5v.5" stroke-linecap="round"></path>
             </svg>
             <span class="text-xs text-amber-700 dark:text-amber-300">{interruptedLabel}</span>
+            {/if}
           </div>
         </div>
       {/if}

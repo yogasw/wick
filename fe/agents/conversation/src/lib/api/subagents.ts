@@ -21,6 +21,22 @@ export const getTeamTasks = (base: string, id: string) =>
     `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks`,
   ).pipe(Effect.map((r) => r?.tasks ?? []));
 
+// answerTeamTask sends the person's answer to a teammate's question
+// straight to that task; the agent that sent it is told. 409 = someone
+// answered first (the message says so).
+export const answerTeamTask = (base: string, id: string, taskId: string, text: string) =>
+  apiPostE<{ task: unknown }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/answer`,
+    { text },
+  );
+
+// cancelTeamTask cancels a task this chat sent (cancel_task).
+export const cancelTeamTask = (base: string, id: string, taskId: string) =>
+  apiPostE<{ task: unknown }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/team-tasks/${encodeURIComponent(taskId)}/cancel`,
+    {},
+  );
+
 // getSubAgentPanel fetches the rail's whole payload: the agent rows plus
 // the investigation header, when this conversation has one. Separate from
 // getSubAgents so the existing badge path keeps its narrow return type

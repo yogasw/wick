@@ -844,4 +844,18 @@ export type TeamTaskItem = {
   max_turns: number;
   started_at: string;
   updated_at: string;
+  /** How long ago it was sent, rounded ("3m"). */
+  age?: string;
+  /** First line of the reply, question or reason. */
+  summary?: string;
+  /** The reply, question or reason itself, capped. */
+  reply?: string;
+  /** The teammate's chat the task runs in ("" = its main chat). */
+  chat_id?: string;
+  /** input_required that no turn of this chat is handling: it waits
+      for the person. */
+  needs_you?: boolean;
+  /** Failed because wick restarted while the teammate was working on
+      it; sending it again is safe. */
+  interrupted?: boolean;
 };

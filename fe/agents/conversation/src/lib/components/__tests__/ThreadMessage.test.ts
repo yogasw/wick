@@ -220,7 +220,33 @@ describe("ThreadMessage - interrupted fallback", () => {
   test("interrupted assistant turn with no text renders an interrupted fallback bubble", () => {
     const turn = makeTurn({ role: "assistant", text: "", interrupted: true });
     render(ThreadMessage, { props: { turn } });
-    expect(screen.getByText(/interrupted/i)).toBeDefined();
+    expect(screen.getByText(/Recovered after a restart/)).toBeDefined();
+  });
+
+  test("a recovered turn offers Continue only when the thread passes onContinue", async () => {
+    const turn = makeTurn({ role: "assistant", text: "half an answer", interrupted: true });
+    const onContinue = vi.fn();
+    const { unmount } = render(ThreadMessage, { props: { turn, onContinue } });
+    await fireEvent.click(screen.getByTestId("recovered-continue"));
+    expect(onContinue).toHaveBeenCalledOnce();
+    unmount();
+    render(ThreadMessage, { props: { turn } });
+    expect(screen.queryByTestId("recovered-continue")).toBeNull();
+  });
+
+  test("a recovered turn reads as info (recover icon), a claimed stop as a warning", () => {
+    const { container, unmount } = render(ThreadMessage, { props: { turn: makeTurn({ role: "assistant", text: "half", interrupted: true }) } });
+    expect(screen.getByTestId("recovered-icon")).toBeDefined();
+    expect(container.querySelector(".text-amber-500")).toBeNull();
+    unmount();
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "assistant", text: "", interrupted: true, interrupted_by: "user" }) } });
+    expect(screen.queryByTestId("recovered-icon")).toBeNull();
+  });
+
+  test("a stop someone claimed gets no Continue", () => {
+    const turn = makeTurn({ role: "assistant", text: "", interrupted: true, interrupted_by: "user" });
+    render(ThreadMessage, { props: { turn, onContinue: vi.fn() } });
+    expect(screen.queryByTestId("recovered-continue")).toBeNull();
   });
 
   // Who stopped it decides what to do next: a person clicking Stop needs no
@@ -268,7 +294,7 @@ describe("ThreadMessage - interrupted fallback", () => {
   test("says only that it was interrupted when nothing claimed it", () => {
     const turn = makeTurn({ role: "assistant", text: "", interrupted: true });
     render(ThreadMessage, { props: { turn } });
-    expect(screen.getByText(/response was cut off/)).toBeDefined();
+    expect(screen.getByText(/Recovered after a restart — this is what the agent had written before wick restarted\./)).toBeDefined();
   });
 });
 
@@ -1023,7 +1049,7 @@ describe("ThreadMessage - large spilled tool_result", () => {
   test("card is NOT marked interrupted on an interrupted turn — the result did arrive", async () => {
     const turn = makeTurn({ role: "assistant", text: "", interrupted: true, events: largeEvents() });
     await openTrace(turn);
-    // The turn-level "Interrupted — response was cut off" banner still renders;
+    // The turn-level recovered-after-restart banner still renders;
     // what must NOT appear is the card's own "interrupted" badge (exact text)
     // or a spinner.
     expect(screen.queryByText("interrupted")).toBeNull();

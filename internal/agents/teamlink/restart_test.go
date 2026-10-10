@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
 )
 
 // sendWorking sends a task from a fresh Hub persisted in dir whose
@@ -53,7 +55,7 @@ func TestRestartSettlesAWorkingTaskAsInterrupted(t *testing.T) {
 		t.Fatalf("reason = %q", got.Reason)
 	}
 	list := h2.SentFrom("sess-cap")
-	if len(list) != 1 || list[0].State != "failed" || !list[0].Interrupted {
+	if len(list) != 1 || list[0].State != "failed" || !list[0].Interrupted || list[0].NeedsYou {
 		t.Fatalf("list = %+v", list)
 	}
 	delivered := waitDelivered(t, note, 1)
@@ -148,5 +150,74 @@ func TestAnsweredTaskIsNotAnOrphan(t *testing.T) {
 	defer h.mu.Unlock()
 	if ref.finished || !ref.claimed || h.orphanLocked("t1", ref) {
 		t.Fatalf("answered task reads as a leftover: %+v", ref)
+	}
+}
+
+// S3: the task store lost the question with a restart, so the user's
+// answer goes as a new task of the exchange; the old task is settled
+// canceled as superseded, its claim cleared, and the teammate gets the
+// answer exactly once.
+func TestUserAnswerToALostTaskSupersedesIt(t *testing.T) {
+	dir := t.TempDir()
+	h1, _, _ := newTestHub(func(Peer, string) string { return InputRequiredToken + " which environment?" })
+	if err := h1.Persist(dir); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	q, err := h1.Send(ctx, SendInput{CallerSession: "sess-cap", CallerAgentID: "a-cap", To: "vera", Text: "deploy it"})
+	if err != nil || q.State != "input_required" {
+		t.Fatalf("question = %+v, %v", q, err)
+	}
+
+	h2, turns, _ := newTestHub(func(Peer, string) string { return "deployed to prod" })
+	if err := h2.Persist(dir); err != nil {
+		t.Fatal(err)
+	}
+	if list := h2.SentFrom("sess-cap"); len(list) != 1 || !list[0].NeedsYou {
+		t.Fatalf("list before the answer = %+v", list)
+	}
+	a, err := h2.AnswerFromUser(ctx, "sess-cap", q.TaskID, "prod")
+	if err != nil || a.TaskID == q.TaskID || a.ContextID != q.ContextID {
+		t.Fatalf("answer = %+v, %v", a, err)
+	}
+	waitFor(t, "the new task to finish", func() bool {
+		got, err := h2.GetTask(ctx, "a-cap", a.TaskID)
+		return err == nil && got.State == "completed"
+	})
+
+	old, err := h2.GetTask(ctx, "a-cap", q.TaskID)
+	if err != nil || old.State != "canceled" || !strings.Contains(old.Reason, "superseded by task "+a.TaskID) {
+		t.Fatalf("old task = %+v, %v", old, err)
+	}
+	h2.mu.Lock()
+	ref := h2.tasks[a2a.TaskID(q.TaskID)]
+	claimed, userAnswer := ref.claimed, ref.userAnswer
+	h2.mu.Unlock()
+	if claimed || userAnswer {
+		t.Fatalf("old task still claimed: claimed=%v userAnswer=%v", claimed, userAnswer)
+	}
+	list := h2.SentFrom("sess-cap")
+	states := map[string]string{}
+	for _, v := range list {
+		states[v.TaskID] = v.State
+		if v.NeedsYou {
+			t.Fatalf("still needs the user: %+v", v)
+		}
+	}
+	if len(list) != 2 || states[q.TaskID] != "canceled" || states[a.TaskID] != "completed" {
+		t.Fatalf("list = %+v", list)
+	}
+	turns.mu.Lock()
+	seen := append([]string(nil), turns.seen...)
+	turns.mu.Unlock()
+	if len(seen) != 1 || !strings.Contains(seen[0], "prod") {
+		t.Fatalf("teammate turns = %v", seen)
+	}
+	// A second answer to the old task is refused, not sent again.
+	if _, err := h2.AnswerFromUser(ctx, "sess-cap", q.TaskID, "staging"); err == nil {
+		t.Fatal("the superseded task took a second answer")
+	}
+	if rec, ok := readRecord(filepath.Join(dir, q.TaskID+".json")); !ok || !rec.Canceled || !rec.Finished {
+		t.Fatalf("old record = %+v", rec)
 	}
 }

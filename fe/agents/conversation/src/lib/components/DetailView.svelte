@@ -54,6 +54,12 @@
   } from "../api/subagents.js";
   import { isSubAgentWorking } from "../lifecycleCls.js";
   import SubAgentPanel from "./SubAgentPanel.svelte";
+  import TaskTray from "./team/TaskTray.svelte";
+  import TasksPanel from "./team/TasksPanel.svelte";
+  import { setTeamTasksCtx } from "../teamTasksContext.js";
+  import { tasksByTurn, taskRailBadge } from "../delegations.js";
+  import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
+  import { answerTeamTask, cancelTeamTask } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
   import type { AgentMessageItem, IncidentSummary, SubAgentItem, TeamTaskItem } from "../types/agents.js";
   import {
@@ -1172,12 +1178,77 @@
 
   /* Team (A2A) tasks this chat sent: only an agent's chat can send any. */
   let teamTasks = $state<TeamTaskItem[]>([]);
+  /* Refetches overlap (new turn, poll, reconnect, an action): only the
+     newest one applies, and only to the chat it was made for. A team_task
+     patch bumps it too, so a list fetched before that event cannot put the
+     task back to what it was. */
+  let teamTasksSeq = 0;
   function loadTeamTasks() {
     if (!agentMode?.agent) return;
-    run(getTeamTasks(base, sessionId).pipe(Effect.provide(WickClientLayer)))
-      .then((t) => { teamTasks = t; })
+    const seq = ++teamTasksSeq;
+    const sid = sessionId;
+    run(getTeamTasks(base, sid).pipe(Effect.provide(WickClientLayer)))
+      .then((t) => { if (seq === teamTasksSeq && sid === sessionId) teamTasks = t; })
       .catch(() => {});
   }
+
+  /* The thread's delegation blocks, the tray and the Tasks rail read the
+     tasks through this context. An answer or cancel refetches at once. */
+  const turnTasks = $derived(tasksByTurn(turns, teamTasks));
+  const tasksBadge = $derived(taskRailBadge(teamTasks));
+  async function answerTask(taskId: string, text: string) {
+    try {
+      await run(answerTeamTask(base, sessionId, taskId, text).pipe(Effect.provide(WickClientLayer)));
+    } finally {
+      loadTeamTasks();
+    }
+  }
+  async function cancelTask(taskId: string) {
+    try {
+      await run(cancelTeamTask(base, sessionId, taskId).pipe(Effect.provide(WickClientLayer)));
+    } finally {
+      loadTeamTasks();
+    }
+  }
+  function openTaskChat(t: TeamTaskItem) {
+    navigateAgents({ handle: t.to_handle, session: t.chat_id || null, panel: null });
+  }
+  function jumpToTask(t: TeamTaskItem) {
+    document.querySelector(`[data-task-ids~="${CSS.escape(t.task_id)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+  setTeamTasksCtx({
+    forTurn: (id) => turnTasks.get(id) ?? [],
+    agents: () => teamAgentsByHandle,
+    captainName: () => agentMode?.agent?.name ?? "Captain",
+    // A read-only chat shows its tasks without the actions the server
+    // refuses there.
+    get answer() { return readOnly ? undefined : answerTask; },
+    get cancel() { return readOnly ? undefined : cancelTask; },
+    openChat: openTaskChat,
+  });
+  /* Every change of a task this chat sent arrives as a `team_task` event
+     on the stream (patched in, see startSSE). A new turn still refetches
+     (coalesced): a team_message call is a turn's tool, and "Needs you"
+     depends on whether a turn here is running. The stream being down is
+     the only time a poll runs; a reconnect or the tab coming back does
+     one refetch. */
+  const liveIdle = $derived(live === null);
+  $effect(() => {
+    void turns.length;
+    void liveIdle;
+    void sessionId;
+    if (!agentMode?.agent) return;
+    // The cleanup drops a pending refetch when the chat changes, the
+    // next turn re-arms it, or the view is destroyed.
+    const timer = setTimeout(loadTeamTasks, 400);
+    return () => clearTimeout(timer);
+  });
+  $effect(() => {
+    const every = teamTaskPollMs(sseStatus, !!agentMode?.agent);
+    if (every === null) return;
+    const timer = setInterval(loadTeamTasks, every);
+    return () => clearInterval(timer);
+  });
 
   function loadSubAgents() {
     if (agentMode?.chatOnly) return;
@@ -1849,7 +1920,10 @@
     stream.status.subscribe((s) => {
       // Back after a drop: sub_agent signals sent meanwhile are gone, so
       // re-read the rows once.
-      if (s === "connected" && sseStatus === "error") scheduleSubAgentReload();
+      if (isReconnect(sseStatus, s)) {
+        scheduleSubAgentReload();
+        loadTeamTasks();
+      }
       sseStatus = s;
     });
 
@@ -1916,6 +1990,13 @@
         // there, so without its own event the panel would sit on a stale
         // list until something unrelated triggered a fetch.
         scheduleTodoReload();
+      } else if (ev.type === "team_task") {
+        // A task this chat sent changed state (Needs you, a reply, …).
+        const t = parseTeamTaskEvent(ev.data);
+        if (t) {
+          teamTasksSeq++;
+          teamTasks = patchTeamTask(teamTasks, t);
+        }
       } else if (ev.type === "sub_agent") {
         // A sub-agent started, stopped or finished a turn.
         scheduleSubAgentReload();
@@ -2358,6 +2439,7 @@
     void loadConversation();
     scheduleProcessReload();
     scheduleSubAgentReload();
+    loadTeamTasks();
   }
 
   onDestroy(() => {
@@ -2384,6 +2466,13 @@
   let hasBrowserInstance = $state(false);
 
   const railTabsAll: { id: RailTab; label: string; icon: string }[] = [
+    {
+      // The Team tasks this chat sent (team_message), apart from the
+      // Sub-agents tab: these are teammates' turns, answerable from here.
+      id: "tasks",
+      label: "Tasks",
+      icon: '<rect x="2.5" y="2.5" width="11" height="11" rx="2" stroke-linejoin="round"></rect><path d="M5 8l2 2 4-4.5" stroke-linecap="round" stroke-linejoin="round"></path>',
+    },
     {
       id: "subagents",
       label: "Sub-agents",
@@ -2479,6 +2568,7 @@
         // own — the badge promotes it into the strip from there.
         (t.id !== "todos" || todosActive !== null || todosHistory.length > 0) &&
         (t.id !== "subagents" || subAgents.length > 0 || teamTasks.length > 0) &&
+        (t.id !== "tasks" || teamTasks.length > 0) &&
         // Notes need nothing but a reachable scope — and no Ticket tab to
         // have absorbed them.
         (t.id !== "notes" || (notesInfo !== null && !ticketTabShown)) &&
@@ -2646,6 +2736,7 @@
   // sub-agent row goes away.
   $effect(() => {
     if (railTab === "subagents" && subAgents.length === 0 && teamTasks.length === 0) railTab = null;
+    if (railTab === "tasks" && teamTasks.length === 0) railTab = null;
   });
 
   const sideOpen = $derived(railTab !== null);
@@ -2702,6 +2793,7 @@
     if (id === "workspace") return workspaceCount;
     if (id === "scheduled") return scheduledCount;
     if (id === "subagents") return subAgentCount;
+    if (id === "tasks") return tasksBadge.count;
     return 0;
   }
 </script>
@@ -2760,7 +2852,7 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} />
+          <ConversationThread {turns} {live} {typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly ? undefined : () => handleSend({ text: "Continue", files: [] })} />
         </div>
       </div>
 
@@ -2848,6 +2940,9 @@
             <p class="mb-2 rounded-lg border border-white-300 bg-white-200 px-3 py-2 text-xs text-black-800 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600" data-testid="read-only-chat">
               Read-only — this chat belongs to someone else.
             </p>
+          {/if}
+          {#if agentMode?.agent && !readOnly}
+            <TaskTray tasks={teamTasks} agents={teamAgentsByHandle} onAnswer={answerTask} onCancel={cancelTask} onJump={jumpToTask} />
           {/if}
           <Composer
             {readOnly}
@@ -3095,6 +3190,16 @@
           onKill={(sid) => { confirmKill = { sid, queued: false }; }}
           onDequeue={(sid) => { confirmKill = { sid, queued: true }; }}
         />
+      {:else if railTab === "tasks"}
+        <TasksPanel
+          tasks={teamTasks}
+          agents={teamAgentsByHandle}
+          senderName={agentMode?.agent?.name ?? "Captain"}
+          onAnswer={readOnly ? undefined : answerTask}
+          onCancel={readOnly ? undefined : cancelTask}
+          onJump={jumpToTask}
+          onOpenChat={agentMode?.agent ? openTaskChat : undefined}
+        />
       {:else if railTab === "subagents"}
         <SubAgentPanel
           {incident}
@@ -3300,6 +3405,16 @@
               onKill={(sid) => { confirmKill = { sid, queued: false }; }}
               onDequeue={(sid) => { confirmKill = { sid, queued: true }; }}
             />
+          {:else if railTab === "tasks"}
+            <TasksPanel
+              tasks={teamTasks}
+              agents={teamAgentsByHandle}
+              senderName={agentMode?.agent?.name ?? "Captain"}
+              onAnswer={readOnly ? undefined : answerTask}
+              onCancel={readOnly ? undefined : cancelTask}
+              onJump={jumpToTask}
+              onOpenChat={agentMode?.agent ? openTaskChat : undefined}
+            />
           {:else if railTab === "subagents"}
             <SubAgentPanel
               {incident}
@@ -3501,7 +3616,8 @@
               {@html tab.icon}
             </svg>
             <span
-              class="absolute -top-1 -right-1 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-green-500 px-0.5 text-[9px] font-semibold text-white-100"
+              data-testid={"rail-badge-" + tab.id}
+              class="absolute -top-1 -right-1 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full {tab.id === 'tasks' && tasksBadge.needsYou ? 'bg-amber-500' : 'bg-green-500'} px-0.5 text-[9px] font-semibold text-white-100"
             >{railCount(tab.id) > 99 ? "99+" : railCount(tab.id)}</span>
           </span>
         {:else}
