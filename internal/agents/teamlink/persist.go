@@ -219,8 +219,9 @@ func (r *taskRef) record(id a2a.TaskID) taskRecord {
 	return rec
 }
 
-// persist writes task id to disk. The snapshot is taken under saveMu, so
-// two saves of one task land in the order they were taken. Never call it with h.mu held.
+// persist writes task id to disk and tells OnTaskChange. The snapshot is
+// taken under saveMu, so two saves (and two events) of one task land in
+// the order they were taken. Never call it with h.mu held.
 func (h *Hub) persist(id a2a.TaskID) {
 	h.saveMu.Lock()
 	defer h.saveMu.Unlock()
@@ -230,6 +231,13 @@ func (h *Hub) persist(id a2a.TaskID) {
 		h.mu.Unlock()
 		return
 	}
+	var view *TaskView
+	var userAnswer bool
+	session := ref.callerSession
+	if h.OnTaskChange != nil && session != "" && !ref.started.IsZero() {
+		v := h.viewLocked(id, ref, h.now())
+		view, userAnswer = &v, ref.userAnswer
+	}
 	write := dir != "" && ref.callerAgentID != ""
 	var rec taskRecord
 	if write {
@@ -238,6 +246,42 @@ func (h *Hub) persist(id a2a.TaskID) {
 	h.mu.Unlock()
 	if write {
 		writeRecord(dir, id, rec)
+	}
+	if view != nil {
+		// CallerBusy reads the pool, so it runs outside h.mu.
+		busy := h.CallerBusy != nil && h.CallerBusy(session)
+		view.NeedsYou = view.State == "input_required" && !userAnswer && !busy
+		h.OnTaskChange(session, *view)
+	}
+}
+
+// RefreshNeedsYou sends OnTaskChange again for the questions sessionID's
+// tasks wait on (input_required, nobody answering): whether they need the
+// user depends on the session being idle, which changes without the task
+// changing. Call it when a turn of sessionID ended.
+func (h *Hub) RefreshNeedsYou(sessionID string) {
+	if h.OnTaskChange == nil || sessionID == "" {
+		return
+	}
+	h.saveMu.Lock()
+	defer h.saveMu.Unlock()
+	h.mu.Lock()
+	now := h.now()
+	var views []TaskView
+	for id, ref := range h.tasks {
+		if ref.callerSession == sessionID && !ref.started.IsZero() && !ref.claimed && !ref.userAnswer &&
+			ref.finished && ref.state == a2a.TaskStateInputRequired {
+			views = append(views, h.viewLocked(id, ref, now))
+		}
+	}
+	h.mu.Unlock()
+	if len(views) == 0 {
+		return
+	}
+	busy := h.CallerBusy != nil && h.CallerBusy(sessionID)
+	for _, v := range views {
+		v.NeedsYou = !busy
+		h.OnTaskChange(sessionID, v)
 	}
 }
 

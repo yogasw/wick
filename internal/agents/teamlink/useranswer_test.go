@@ -132,6 +132,85 @@ func TestCancelFromUser(t *testing.T) {
 	}
 }
 
+// Every change of a task reaches OnTaskChange for the session that sent
+// it, in order: working, the question (needing the user), the user's
+// answer running, then the reply.
+func TestOnTaskChangeFollowsTheTask(t *testing.T) {
+	h, _, _ := newTestHub(func(_ Peer, text string) string {
+		if strings.HasSuffix(text, "prod") {
+			return "deployed to prod"
+		}
+		return InputRequiredToken + " which environment?"
+	})
+	type change struct {
+		session string
+		v       TaskView
+	}
+	changes := make(chan change, 32)
+	h.OnTaskChange = func(session string, v TaskView) { changes <- change{session, v} }
+	next := func(state string) TaskView {
+		t.Helper()
+		deadline := time.After(3 * time.Second)
+		for {
+			select {
+			case c := <-changes:
+				if c.session != "sess-cap" {
+					t.Fatalf("change for %q: %+v", c.session, c.v)
+				}
+				if c.v.State == state {
+					return c.v
+				}
+			case <-deadline:
+				t.Fatalf("no %s change", state)
+			}
+		}
+	}
+	ctx := context.Background()
+	q, err := h.Send(ctx, SendInput{CallerSession: "sess-cap", CallerAgentID: "a-cap", To: "anton", Text: "deploy it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := next("input_required"); v.TaskID != q.TaskID || !v.NeedsYou || v.ToHandle != "anton" || v.Reply != "which environment?" {
+		t.Fatalf("question = %+v", v)
+	}
+	if _, err := h.AnswerFromUser(ctx, "sess-cap", q.TaskID, "prod"); err != nil {
+		t.Fatal(err)
+	}
+	if v := next("working"); v.NeedsYou {
+		t.Fatalf("answered task still needs the user: %+v", v)
+	}
+	if v := next("completed"); v.Summary != "deployed to prod" {
+		t.Fatalf("reply = %+v", v)
+	}
+}
+
+// A task that asks while its sending chat runs a turn does not need the
+// user: the event says so too.
+func TestOnTaskChangeBusyCallerNotNeedsYou(t *testing.T) {
+	h, _, _ := newTestHub(func(Peer, string) string { return InputRequiredToken + " which one?" })
+	h.CallerBusy = func(string) bool { return true }
+	got := make(chan TaskView, 8)
+	h.OnTaskChange = func(_ string, v TaskView) { got <- v }
+	if _, err := h.Send(context.Background(), SendInput{CallerSession: "sess-cap", CallerAgentID: "a-cap", To: "anton", Text: "deploy it"}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case v := <-got:
+			if v.State != "input_required" {
+				continue
+			}
+			if v.NeedsYou {
+				t.Fatalf("busy caller: %+v", v)
+			}
+			return
+		case <-deadline:
+			t.Fatal("no input_required change")
+		}
+	}
+}
+
 // The user's answer and the agent's race for the same question: exactly
 // one gets it and reaches the teammate, the other gets ErrAlreadyAnswered.
 func TestAnswerRaceExactlyOneWins(t *testing.T) {

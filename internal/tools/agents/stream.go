@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -92,7 +93,13 @@ type Broadcaster struct {
 	// parentOf resolves a session's direct parent for the sub_agent signal
 	// (see subAgentSignal). Defaults to the registry; tests inject one.
 	parentOf func(string) (string, bool)
+	// turnEnd, when set (OnTurnEnd), hears every session's Done.
+	turnEnd atomic.Pointer[func(sessionID string)]
 }
+
+// OnTurnEnd registers fn to hear that a turn of a session ended (its
+// Done went out). fn runs on the publishing goroutine: keep it short.
+func (b *Broadcaster) OnTurnEnd(fn func(sessionID string)) { b.turnEnd.Store(&fn) }
 
 // NewBroadcaster returns a ready Broadcaster.
 func NewBroadcaster() *Broadcaster {
@@ -177,6 +184,9 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 		Str("tool_use_id", payload.ToolUseID).
 		Msg("sse.publish: broadcasting event")
 	b.fanout(sessionID, payload)
+	if fn := b.turnEnd.Load(); fn != nil && ev.Type == event.Done && sessionID != "" {
+		(*fn)(sessionID)
+	}
 }
 
 // PublishLifecycle pushes a lifecycle transition (Spawning, Killed)

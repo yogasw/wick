@@ -43,6 +43,19 @@ func NewTeamLinkHub(svc *team.Service, deliver func(ctx context.Context, session
 	// A question no turn of the sending chat is handling waits for the
 	// user: the thread shows it as "Needs you".
 	hub.CallerBusy = poolSessionBusy
+	// A task's every change reaches the sending chat's open viewers, so
+	// "Needs you" shows at once instead of on the next poll.
+	hub.OnTaskChange = func(sessionID string, v teamlink.TaskView) {
+		publishTeamTask(globalBcast, sessionID, v)
+	}
+	// "Needs you" also turns on when the chat goes idle without its agent
+	// answering: once its turn ended (and the pool settled), the chat's
+	// waiting questions go out again.
+	if globalBcast != nil {
+		globalBcast.OnTurnEnd(func(sessionID string) {
+			time.AfterFunc(needsYouSettle, func() { hub.RefreshNeedsYou(sessionID) })
+		})
+	}
 	// A task a restart left working is settled as interrupted, unless the
 	// draining previous process may still be running its turn.
 	hub.PredecessorBusy = func(chat string) bool {
@@ -274,6 +287,10 @@ func mainChatOf(agent teamlink.Peer) (session.Session, error) {
 	}
 	return s, nil
 }
+
+// needsYouSettle is how long after a turn's Done the pool is read for
+// "Needs you": the next queued message, if any, has started by then.
+const needsYouSettle = 1500 * time.Millisecond
 
 // teamTurnGate lines up the team tasks each session answers, so a turn
 // is known to be a task's and cancel_task stops only that one.
@@ -673,6 +690,23 @@ func handoffTurn(h teamlink.Handoff, now time.Time) store.ConversationTurn {
 		extras["from_session"] = h.FromSession
 	}
 	return systemTurn(store.KindMentionHandoff, fmt.Sprintf("@%s → @%s · %s", h.From, h.To, h.State), extras, now)
+}
+
+// evTeamTask is the SSE event carrying one team task this session sent,
+// as GET /api/sessions/{id}/team-tasks lists it, after it changed.
+const evTeamTask = "team_task"
+
+// publishTeamTask pushes v to sessionID's live viewers as a team_task
+// event.
+func publishTeamTask(b *Broadcaster, sessionID string, v teamlink.TaskView) {
+	if b == nil || sessionID == "" {
+		return
+	}
+	body, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	b.PublishRaw(sessionID, "", evTeamTask, string(body))
 }
 
 // publishHandoff pushes turn to sessionID's live viewers.

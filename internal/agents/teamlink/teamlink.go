@@ -362,6 +362,11 @@ type Hub struct {
 	// question nobody's turn is handling waits for the user (NeedsYou);
 	// nil = never busy.
 	CallerBusy func(sessionID string) bool
+	// OnTaskChange is told every time a task changes (sent, settled,
+	// answered, canceled), with the sending session and the task as
+	// SentFrom lists it, so open viewers update without polling. Called
+	// in order per task, never with h.mu held; nil = nobody listens.
+	OnTaskChange func(sessionID string, v TaskView)
 	// PredecessorBusy reports whether a previous wick process, still
 	// draining, may be running a turn of chat ("" = the teammate's chat
 	// is not known: any turn). A task it may still finish is not settled
@@ -1545,7 +1550,7 @@ func (h *Hub) SentFrom(sessionID string) []TaskView {
 	sort.Slice(out, func(i, j int) bool { return out[i].Started.After(out[j].Started) })
 	if orphans {
 		// A task a restart left working: settle it now rather than on the
-		// next sweep.
+		// next sweep; the change reaches the list through OnTaskChange.
 		go h.settleOrphans(context.Background())
 	}
 	return out
