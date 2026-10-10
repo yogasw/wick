@@ -57,8 +57,10 @@
   import SubAgentPanel from "./SubAgentPanel.svelte";
   import TaskTray from "./team/TaskTray.svelte";
   import TasksPanel from "./team/TasksPanel.svelte";
+  import RailTasksIcon from "./team/RailTasksIcon.svelte";
+  import RailTasksTip from "./team/RailTasksTip.svelte";
   import { setTeamTasksCtx } from "../teamTasksContext.js";
-  import { tasksByTurn, taskRailBadge, taskStatus } from "../delegations.js";
+  import { tasksByTurn, taskRailBadge } from "../delegations.js";
   import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
   import { answerTeamTask, cancelTeamTask } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
@@ -1247,9 +1249,6 @@
      tasks through this context. An answer or cancel refetches at once. */
   const turnTasks = $derived(tasksByTurn(turns, teamTasks));
   const tasksBadge = $derived(taskRailBadge(teamTasks));
-  /* How many of those wait on the person: the badge only turns amber, the
-     rail tab's name says how many. */
-  const tasksNeedInput = $derived(teamTasks.filter((t) => taskStatus(t) === "needs_you").length);
   async function answerTask(taskId: string, text: string) {
     try {
       await run(answerTeamTask(base, sessionId, taskId, text).pipe(Effect.provide(WickClientLayer)));
@@ -2853,13 +2852,14 @@
      here rather than in a title of its own, which stacked a second tooltip
      on top of this one. */
   function railName(tab: { id: RailTab; label: string }): string {
-    if (tab.id === "tasks") return railTabName(tab.label, tasksBadge.count, tasksNeedInput);
+    if (tab.id === "tasks") return railTabName(tab.label, tasksBadge.count, tasksBadge.needsInput);
     if (tab.id === "source") return railTabName(tab.label, 0, 0, [scmSnapshotRepo]);
     if (railBusy(tab.id)) return railTabName(tab.label, 0, 0, ["working"]);
     return tab.label;
   }
 
   function railBusy(id: RailTab): boolean {
+    if (id === "tasks") return tasksBadge.working;
     return id === "subagents" && subAgentsBusy;
   }
 
@@ -3670,7 +3670,11 @@
             : "hover:bg-white-200 dark:hover:bg-navy-800",
         ].join(" ")}
       >
-        {#if railBusy(tab.id)}
+        {#if tab.id === "tasks" && tasksBadge.count > 0}
+          <!-- Tasks carries its own marks: green count, amber dot while a
+               task needs input, the ring while a teammate works. -->
+          <RailTasksIcon icon={tab.icon} count={tasksBadge.count} needsInput={tasksBadge.needsInput} working={tasksBadge.working} />
+        {:else if railBusy(tab.id)}
           <!-- Ring around the icon rather than a badge replacement: the
                count still matters (how many), the ring adds the part a
                number cannot carry (right now). -->
@@ -3722,7 +3726,7 @@
             </svg>
             <span
               data-testid={"rail-badge-" + tab.id}
-              class="absolute -top-1 -right-1 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full {tab.id === 'tasks' && tasksBadge.needsYou ? 'bg-amber-500' : 'bg-green-500'} px-0.5 text-[9px] font-semibold text-white-100"
+              class="absolute -top-1 -right-1 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-green-500 px-0.5 text-[9px] font-semibold text-white-100"
             >{railCount(tab.id) > 99 ? "99+" : railCount(tab.id)}</span>
           </span>
         {:else}
@@ -3752,7 +3756,7 @@
             aria-hidden="true"
             data-testid={"rail-tip-" + tab.id}
             class={[RAIL_TIP_CLASS, railDragId !== null ? "hidden" : ""].join(" ")}
-          >{railName(tab)}</span>
+          >{#if tab.id === "tasks"}<RailTasksTip label={tab.label} count={tasksBadge.count} needsInput={tasksBadge.needsInput} />{:else}{railName(tab)}{/if}</span>
         {/if}
       </button>
     {/each}

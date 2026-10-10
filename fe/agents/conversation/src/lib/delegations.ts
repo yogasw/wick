@@ -328,8 +328,14 @@ export function quickReplies(question: string): string[] {
   return opts.length >= 2 && opts.length <= 4 && opts.every((o) => o.length <= 24) ? opts : [];
 }
 
-/** The Tasks rail tab's badge: how many tasks are still active, and
-    whether one waits for the person (the badge turns amber). */
-export function taskRailBadge(tasks: TeamTaskItem[]): { count: number; needsYou: boolean } {
-  return { count: tasks.filter(isTaskActive).length, needsYou: tasks.some((t) => taskStatus(t) === "needs_you") };
+/** The Tasks rail tab's marks: the green badge counts the tasks still
+    active, the amber dot shows while one waits for the person (needsInput
+    says how many, for the tab's name), and the ring spins while a
+    teammate is working on one. */
+export function taskRailBadge(tasks: TeamTaskItem[]): { count: number; needsInput: number; working: boolean } {
+  return {
+    count: tasks.filter(isTaskActive).length,
+    needsInput: tasks.filter((t) => taskStatus(t) === "needs_you").length,
+    working: tasks.some((t) => taskStatus(t) === "working"),
+  };
 }

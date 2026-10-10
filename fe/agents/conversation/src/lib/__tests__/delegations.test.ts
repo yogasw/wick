@@ -48,10 +48,14 @@ describe("delegations", () => {
     expect(settledParts([task({ state: "completed", turns: 2 })])).toMatchObject({ head: "Delegated to 1 teammate", allReplied: true, messages: "2 messages" });
   });
 
-  test("the Tasks rail badge counts active tasks and turns amber on needs you", () => {
-    expect(taskRailBadge([task({}), task({ state: "completed" })])).toEqual({ count: 1, needsYou: false });
-    expect(taskRailBadge([task({ state: "input_required", needs_you: true })])).toEqual({ count: 1, needsYou: true });
-    expect(taskRailBadge([task({ state: "failed" })])).toEqual({ count: 0, needsYou: false });
+  test("the Tasks rail marks: active count (never amber), needs-input count, working ring", () => {
+    expect(taskRailBadge([task({}), task({ state: "completed" })])).toEqual({ count: 1, needsInput: 0, working: true });
+    expect(taskRailBadge([task({ state: "input_required", needs_you: true })])).toEqual({ count: 1, needsInput: 1, working: false });
+    expect(taskRailBadge([task({ state: "failed" })])).toEqual({ count: 0, needsInput: 0, working: false });
+    // The mockup's rail: one working, one waiting on the person.
+    expect(taskRailBadge([task({}), task({ task_id: "t2", state: "input_required", needs_you: true })])).toEqual({ count: 2, needsInput: 1, working: true });
+    // The teammate's own sender answering is not the person's turn, and not working either.
+    expect(taskRailBadge([task({ state: "input_required" })]).needsInput).toBe(0);
   });
 
   test("quick replies only for a short option list", () => {

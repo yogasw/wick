@@ -1028,3 +1028,58 @@ describe("DetailView — rail label style (P40)", () => {
     expectLabels(render(DetailView, { props: DEFAULT_PROPS }).container);
   });
 });
+
+/* P48 rail: Team tasks arriving over SSE draw the Tasks tab through
+   RailTasksIcon — ring while one works, green count, amber dot while one
+   waits for the person — and its icons-mode tooltip. */
+describe("DetailView — Tasks rail marks (P48)", () => {
+  const app = () => {
+    let el = document.getElementById("app");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+    return el;
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    sseBus.handler = null;
+    app();
+  });
+
+  afterEach(() => {
+    delete app().dataset.railPrefs;
+  });
+
+  const task = (o: Record<string, unknown>) => ({
+    type: "team_task",
+    data: JSON.stringify({
+      task_id: "t1", context_id: "c", to_agent_id: "a", to_handle: "franky", to_name: "Franky", title: "x",
+      state: "working", turns: 1, max_turns: 8, started_at: "2026-10-10T10:00:00Z", updated_at: "2026-10-10T10:00:00Z", ...o,
+    }),
+  });
+
+  test("1 working + 1 needs input: ring, green 2, amber dot, tooltip", async () => {
+    app().dataset.railPrefs = JSON.stringify({ order: [], hidden: null, labels: false });
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    expect(container.querySelector('[data-testid="rail-tab-tasks"]')).toBeNull();
+    sseBus.handler!(task({}) as { type: string });
+    sseBus.handler!(task({ task_id: "t2", state: "input_required", needs_you: true }) as { type: string });
+    await waitFor(() => expect(container.querySelector('[data-testid="rail-tab-tasks"]')).not.toBeNull());
+    const tab = container.querySelector('[data-testid="rail-tab-tasks"]')!;
+    expect(tab.getAttribute("aria-label")).toBe("Tasks · 2 active · 1 needs input");
+    expect(tab.querySelector('[data-testid="rail-ring-tasks"]')?.className).toContain("animate-spin");
+    const badge = tab.querySelector('[data-testid="rail-badge-tasks"]')!;
+    expect(badge.textContent).toBe("2");
+    expect(badge.className).toContain("bg-green-500");
+    expect(badge.className).not.toContain("bg-amber-500");
+    expect(tab.querySelector('[data-testid="rail-dot-tasks"]')?.className).toContain("bg-amber-500");
+    const tip = tab.querySelector('[data-testid="rail-tip-tasks"]')!;
+    expect(tip.textContent).toBe("Tasks · 2 active · 1 needs input");
+    expect(tip.querySelector("b")?.textContent).toBe("Tasks");
+    expect(tip.querySelector('[data-testid="rail-tip-tasks-needs"]')?.className).toContain("text-amber-700");
+  });
+});
