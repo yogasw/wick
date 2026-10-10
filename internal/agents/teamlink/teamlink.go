@@ -1370,7 +1370,7 @@ func (h *Hub) GetTask(ctx context.Context, callerAgentID, taskID string) (*Resul
 // one — when Turns can (TaskStopper), and whatever that turn still
 // reports is dropped. A turn of anything else in the teammate's session
 // is never stopped, and the reason says when one was left running; nor is
-// the task's own turn once a message from someone else reached it while it
+// the task's own turn once a person's message reached it while it
 // ran (see TaskStopShared), so that message is still answered.
 // A task the person started (taskRef.origin) is theirs to cancel:
 // ErrUserTask.
@@ -1424,7 +1424,7 @@ func (h *Hub) cancelTask(ctx context.Context, callerAgentID, taskID string, byUs
 		case TaskStopBehindOther:
 			reason += " before it started; the teammate's current turn was left running because it belongs to another conversation"
 		case TaskStopShared:
-			reason += "; the teammate's turn was left running because a message from another conversation reached it while it ran"
+			reason += "; the teammate's turn was left running because a person's message reached it while it ran"
 		}
 		h.mu.Lock()
 		ref.reply = reason

@@ -12,6 +12,7 @@ import (
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/teamlink"
 )
 
 // heldTurn is an in-wick turn (Pid 0, like an omp RPC turn): it runs
@@ -116,5 +117,57 @@ func TestSendToChildTurnOutlivesCallerCtx(t *testing.T) {
 	turn.mu.Unlock()
 	if killed {
 		t.Fatal("the woken turn died with the call that delivered its message")
+	}
+}
+
+// steerStop delivers a message through poolSteerer into session "C1"
+// while team task "t1" holds its turn, the pool's OnSend being a team
+// task gate, and returns what a cancel of t1 then makes of that turn.
+func steerStop(t *testing.T, ctx context.Context) teamlink.TaskStop {
+	t.Helper()
+	layout := agentconfig.NewLayout(t.TempDir())
+	if err := layout.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	g := teamlink.NewTurnGate(nil)
+	factory := &agentpool.ClaudeFactory{Layout: layout, Spawner: &heldSpawner{}}
+	pool := agentpool.New(agentpool.PoolConfig{MaxConcurrent: 2, IdleTimeout: time.Minute, Layout: layout, Factory: factory, OnSend: g.NoteMessage})
+	factory.OnExit = pool.HandleExit
+	t.Cleanup(pool.Stop)
+	if _, err := session.Create(context.Background(), layout, session.CreateOptions{ID: "C1", Origin: session.OriginUI}); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.AddAgent(layout, "C1", "main", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	release, err := g.Acquire(context.Background(), "C1", "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := (poolSteerer{pool: pool}).SendToChild(ctx, "C1", "main", "here is the file list"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := g.StopWith("C1", "t1", func() (teamlink.TaskStop, error) { return teamlink.TaskStopRunning, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// poolSteerer carries a peer's inbox too, so it never marks a message as
+// a person's itself: an untagged delivery leaves the task's turn
+// stoppable.
+func TestSendToChildDoesNotMarkPersonMessage(t *testing.T) {
+	if out := steerStop(t, context.Background()); out != teamlink.TaskStopRunning {
+		t.Fatalf("stop = %v, want running: poolSteerer marked the message as a person's", out)
+	}
+}
+
+// The caller's mark (a take-over, a person's @mention) survives the
+// steerer's WithoutCancel.
+func TestSendToChildKeepsCallersPersonMark(t *testing.T) {
+	if out := steerStop(t, teamlink.WithPersonMessage(context.Background())); out != teamlink.TaskStopShared {
+		t.Fatalf("stop = %v, want shared: the caller's person mark was lost", out)
 	}
 }

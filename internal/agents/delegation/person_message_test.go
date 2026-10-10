@@ -2,6 +2,7 @@ package delegation
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/teamlink"
@@ -80,7 +81,12 @@ func TestAgentMentionLeavesTaskTurnStoppable(t *testing.T) {
 	seedIdleWorker(t, r)
 	out := taskTurnIn(t, "sub-d1", func(g *teamlink.TurnGate) error {
 		s.Steerer = gateSteerer{g}
-		s.Route(context.Background(), RouteInput{SessionID: "parent", FromHandle: entity.LeaderHandle, Text: "@worker keep going"})
+		// The mention must really reach the turn, or the stop below
+		// proves nothing.
+		ds := s.Route(context.Background(), RouteInput{SessionID: "parent", FromHandle: entity.LeaderHandle, Text: "@worker keep going"})
+		if len(ds) != 1 || ds[0].Err != "" {
+			return fmt.Errorf("route = %+v, want one delivered dispatch", ds)
+		}
 		return nil
 	})
 	if out != teamlink.TaskStopRunning {

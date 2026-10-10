@@ -89,7 +89,7 @@ func TestCancelSparesTurnAMessageReached(t *testing.T) {
 
 	turns.typeMessage("are you still there?")
 	got, err := h.CancelTask(ctx, "a-cap", res.TaskID)
-	want := "canceled by @captain; the teammate's turn was left running because a message from another conversation reached it while it ran"
+	want := "canceled by @captain; the teammate's turn was left running because a person's message reached it while it ran"
 	if err != nil || got.State != "canceled" || got.Reason != want {
 		t.Fatalf("cancel = %+v, %v", got, err)
 	}

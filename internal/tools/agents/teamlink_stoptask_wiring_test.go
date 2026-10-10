@@ -64,6 +64,13 @@ func (heldSpawner) Spawn(context.Context, provider.SpawnOptions) (provider.Proce
 // gate. It returns the pool.
 func stopTaskWorld(t *testing.T) *pool.Pool {
 	t.Helper()
+	return stopTaskWorldWith(t, nil)
+}
+
+// stopTaskWorldWith is stopTaskWorld with the agent's instance pinned
+// (nil: the provider type's default).
+func stopTaskWorldWith(t *testing.T, ins *provider.Instance) *pool.Pool {
+	t.Helper()
 	layout := agentconfig.NewLayout(t.TempDir())
 	if err := layout.EnsureLayout(); err != nil {
 		t.Fatal(err)
@@ -74,7 +81,7 @@ func stopTaskWorld(t *testing.T) *pool.Pool {
 	if err := session.AddAgent(layout, "s1", "default", "claude"); err != nil {
 		t.Fatal(err)
 	}
-	factory := &pool.ClaudeFactory{Layout: layout, Spawner: heldSpawner{}}
+	factory := &pool.ClaudeFactory{Layout: layout, Spawner: heldSpawner{}, InstanceOverride: ins}
 	p := pool.New(pool.PoolConfig{Layout: layout, MaxConcurrent: 2, Factory: factory, OnSend: NoteSessionMessage})
 	factory.OnExit = p.HandleExit
 	prevPool, prevGate := globalPool, teamTurnGate
@@ -136,4 +143,25 @@ func TestStopTaskKillsTurnASubAgentResultReached(t *testing.T) {
 		t.Fatalf("stop = %v, %v; want running", out, err)
 	}
 	waitUntil(t, "the turn killed", func() bool { return p.Active() == 0 })
+}
+
+// A queuing provider holding a message nobody typed does not spare the
+// task's turn: the gate decides, not the pool's queue.
+func TestStopTaskKillsTurnWithAQueuedAgentMessage(t *testing.T) {
+	p := stopTaskWorldWith(t, &provider.Instance{Type: provider.TypeClaude, Name: "claude", SendMode: "queue"})
+	if err := p.Send(context.Background(), "s1", "default", "subagent", "user", "sub-agent finished"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the message queued", func() bool {
+		for _, e := range p.ActiveSnapshot() {
+			if e.SessionID == "s1" && e.Queued > 0 {
+				return true
+			}
+		}
+		return false
+	})
+	out, err := poolTurns{}.StopTask(context.Background(), teamlink.Peer{}, "s1", "t1", "@captain")
+	if err != nil || out != teamlink.TaskStopRunning {
+		t.Fatalf("stop = %v, %v; want running: a queued agent message is not a person's", out, err)
+	}
 }
