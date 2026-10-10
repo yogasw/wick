@@ -198,8 +198,39 @@ func mainChatOf(agent teamlink.Peer) (session.Session, error) {
 	return s, nil
 }
 
-// RunIn is Run in sessionID (teamlink.ChatOpener).
+// teamTurnGate lines up the team tasks each session answers, so a turn
+// is known to be a task's and cancel_task stops only that one.
+var teamTurnGate = teamlink.NewTurnGate(poolSessionBusy)
+
+// poolSessionBusy reports whether sessionID runs a turn, is being spawned,
+// holds messages for its next turn or waits for a pool slot: anything a
+// team task's message would land behind.
+func poolSessionBusy(sessionID string) bool {
+	if globalPool == nil {
+		return false
+	}
+	for _, e := range globalPool.ActiveSnapshot() {
+		if e.SessionID == sessionID && (e.Lifecycle == "working" || e.Lifecycle == "spawning" || e.Queued > 0) {
+			return true
+		}
+	}
+	for _, q := range globalPool.QueueSnapshot() {
+		if q.SessionID == sessionID {
+			return true
+		}
+	}
+	return false
+}
+
+// RunIn is Run in sessionID (teamlink.ChatOpener). A team task's turn
+// waits until the session runs nothing else, so the turn it starts is
+// its own (teamTurnGate).
 func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text string) (string, string, error) {
+	release, err := teamTurnGate.Acquire(ctx, sessionID, teamlink.TaskIDFrom(ctx))
+	if err != nil {
+		return sessionID, "", err
+	}
+	defer release()
 	// Subscribe BEFORE sending, or a fast turn ends unseen.
 	ch, unsub := NewDelegationStream(globalBcast).SubscribeSession(sessionID)
 	defer unsub()
@@ -208,6 +239,10 @@ func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text
 		return sessionID, "", err
 	}
 	text, failed := collectTurnErr(ctx, ch)
+	// The task's turn is over: let go of the session now, not after the
+	// reply is read, so a cancel arriving later never takes the next turn
+	// (someone else's) for the task's.
+	release()
 	// A remote that timed out is not an empty answer: the asker learns the
 	// reply will follow (settleLateReply forwards it when it does).
 	if waited, ok := remote.IsTimeout(failed); ok && strings.TrimSpace(text) == "" {
@@ -219,6 +254,34 @@ func (poolTurns) RunIn(ctx context.Context, agent teamlink.Peer, sessionID, text
 		return sessionID, "", &teamlink.TurnEnd{State: a2a.TaskStateInputRequired, Text: text}
 	}
 	return sessionID, text, nil
+}
+
+// StopTask cancels task id in sessionID (teamlink.TaskStopper): the
+// session's turn is stopped only when it is that task's; a task still
+// waiting for its turn just leaves the line.
+//
+// The pool stops a session, not a turn: when a message from anyone else
+// is queued in the session (the pool may merge it into the running turn,
+// or start it the moment the task's turn ends) the turn is left running
+// (TaskStopShared) rather than cutting that message off with it.
+//
+// Only providers that queue (codex, omp, opencode: RespawnQueue) hold such
+// a message apart. On an appending provider (claude) a message typed into
+// the session while the task's turn runs is written straight into that
+// turn, Queued stays 0, and the kill stops it along with the task: it stays
+// in the transcript, unanswered. Known limitation; the UI asks before a
+// cancel for that reason.
+func (poolTurns) StopTask(_ context.Context, _ teamlink.Peer, sessionID string, id a2a.TaskID, by string) (teamlink.TaskStop, error) {
+	out := teamTurnGate.Stop(sessionID, id)
+	if out != teamlink.TaskStopRunning || globalPool == nil {
+		return out, nil
+	}
+	for _, e := range globalPool.ActiveSnapshot() {
+		if e.SessionID == sessionID && e.Queued > 0 {
+			return teamlink.TaskStopShared, nil
+		}
+	}
+	return out, globalPool.KillBy(sessionID, "", by, "team task canceled")
 }
 
 // NewChat opens a chat of agent beside its main one, set up like it —

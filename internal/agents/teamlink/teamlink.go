@@ -1295,8 +1295,13 @@ func (h *Hub) GetTask(ctx context.Context, callerAgentID, taskID string) (*Resul
 }
 
 // CancelTask ends a task the caller sent that is still working or waiting
-// for input (A2A CancelTask): the task becomes canceled, and whatever the
-// teammate's turn for it still reports is dropped.
+// for input (A2A CancelTask): the task becomes canceled, the teammate's
+// turn for it is stopped — or the task dropped while it still waits for
+// one — when Turns can (TaskStopper), and whatever that turn still
+// reports is dropped. A turn of anything else in the teammate's session
+// is never stopped, and the reason says when one was left running; but a
+// message typed into the task's own turn, on a provider that does not
+// queue it apart, is stopped with that turn (see TaskStopShared).
 func (h *Hub) CancelTask(ctx context.Context, callerAgentID, taskID string) (*Result, error) {
 	id := a2a.TaskID(strings.TrimSpace(taskID))
 	by := "the sender"
@@ -1318,13 +1323,30 @@ func (h *Hub) CancelTask(ctx context.Context, callerAgentID, taskID string) (*Re
 		h.mu.Unlock()
 		return nil, fmt.Errorf("%w (it is %s)", ErrTaskSettled, state)
 	}
+	running, isRunning := h.inflight[ref.agentID][id]
 	reason := "canceled by " + by
 	ref.canceled, ref.finished, ref.delivered = true, true, true
 	ref.claimed = false
 	ref.state, ref.reply, ref.touched = a2a.TaskStateCanceled, reason, h.now()
-	agentID := ref.agentID
+	agentID, to := ref.agentID, ref.to
 	h.mu.Unlock()
 
+	if ts, ok := h.Turns.(TaskStopper); ok && isRunning && running.session != "" {
+		stop, _ := ts.StopTask(ctx, to, running.session, id, by)
+		switch stop {
+		case TaskStopRunning:
+			reason += stoppedNote
+		case TaskStopQueued:
+			reason += " before it started"
+		case TaskStopBehindOther:
+			reason += " before it started; the teammate's current turn was left running because it belongs to another conversation"
+		case TaskStopShared:
+			reason += "; the teammate's turn was left running because a message from another conversation is queued in it"
+		}
+		h.mu.Lock()
+		ref.reply = reason
+		h.mu.Unlock()
+	}
 	h.persist(id)
 	// The task store takes the cancellation once the execution lets go of
 	// the task, which can outlast this call: the Hub already says canceled.
@@ -1335,6 +1357,11 @@ func (h *Hub) CancelTask(ctx context.Context, callerAgentID, taskID string) (*Re
 	}()
 	return h.GetTask(ctx, callerAgentID, string(id))
 }
+
+// stoppedNote ends the reason of a cancel that stopped the teammate's
+// turn: on a provider that appends messages to the running turn, what
+// someone typed into it meanwhile went with it.
+const stoppedNote = "; the teammate's current turn was stopped, with anything typed into it while it ran"
 
 // finished is the executor telling the Hub a task's turn ended. A caller
 // that stopped waiting gets the reply (or the question, or the reason)

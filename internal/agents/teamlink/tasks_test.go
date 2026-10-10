@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -143,9 +144,30 @@ func TestTaskIDChecks(t *testing.T) {
 	}
 }
 
+// stopTurns is fakeTurns that knows each agent's session and can stop a
+// turn: stopping releases it.
+type stopTurns struct {
+	*fakeTurns
+	mu      sync.Mutex
+	stopped []string
+	once    sync.Once
+}
+
+func (s *stopTurns) MainSession(_ context.Context, agent Peer) string { return "sess-" + agent.ID }
+
+func (s *stopTurns) StopTask(_ context.Context, _ Peer, sessionID string, _ a2a.TaskID, by string) (TaskStop, error) {
+	s.mu.Lock()
+	s.stopped = append(s.stopped, sessionID+" by "+by)
+	s.mu.Unlock()
+	s.once.Do(func() { close(s.gate) })
+	return TaskStopRunning, nil
+}
+
 func TestListAndCancelTask(t *testing.T) {
 	h, turns, note := newTestHub(func(Peer, string) string { return "too late" })
 	turns.gate = make(chan struct{})
+	st := &stopTurns{fakeTurns: turns}
+	h.Turns = st
 	ctx := context.Background()
 	res, err := h.Send(ctx, SendInput{CallerSession: "sess-cap", CallerAgentID: "a-cap", To: "anton", Text: "long scan\nwith detail", Wait: -1})
 	if err != nil || res.State != "working" {
@@ -171,11 +193,15 @@ func TestListAndCancelTask(t *testing.T) {
 		t.Fatalf("another agent canceled: %v", err)
 	}
 	got, err := h.CancelTask(ctx, "a-cap", res.TaskID)
-	if err != nil || got.State != "canceled" || got.Reason != "canceled by @captain" {
+	if err != nil || got.State != "canceled" || got.Reason != "canceled by @captain"+stoppedNote {
 		t.Fatalf("cancel = %+v, %v", got, err)
 	}
-	// Let the turn end: what it still reports is dropped.
-	close(turns.gate)
+	st.mu.Lock()
+	stopped := strings.Join(st.stopped, ",")
+	st.mu.Unlock()
+	if stopped != "sess-a-anton by @captain" {
+		t.Fatalf("stopped = %q", stopped)
+	}
 	time.Sleep(50 * time.Millisecond)
 	if delivered, _ := note.snapshot(); len(delivered) != 0 {
 		t.Fatalf("a canceled task still delivered: %v", delivered)
@@ -183,7 +209,7 @@ func TestListAndCancelTask(t *testing.T) {
 	if again, err := h.GetTask(ctx, "a-cap", res.TaskID); err != nil || again.State != "canceled" {
 		t.Fatalf("get_task after cancel = %+v, %v", again, err)
 	}
-	if list := h.SentFrom("sess-cap"); list[0].State != "canceled" || list[0].Summary != "canceled by @captain" {
+	if list := h.SentFrom("sess-cap"); list[0].State != "canceled" || list[0].Summary != "canceled by @captain"+stoppedNote {
 		t.Fatalf("list after cancel = %+v", list)
 	}
 	if _, err := h.CancelTask(ctx, "a-cap", res.TaskID); !errors.Is(err, ErrTaskSettled) {

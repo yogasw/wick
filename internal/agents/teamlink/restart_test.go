@@ -150,13 +150,3 @@ func TestAnsweredTaskIsNotAnOrphan(t *testing.T) {
 		t.Fatalf("answered task reads as a leftover: %+v", ref)
 	}
 }
-
-// waitFor polls cond until it holds, failing the test after 2s.
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(2 * time.Second); !cond(); time.Sleep(2 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-	}
-}

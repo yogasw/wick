@@ -133,13 +133,21 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			h.inflight[e.agentID] = map[a2a.TaskID]inbound{}
 		}
 		h.inflight[e.agentID][ec.TaskID] = inbound{contextID: ec.ContextID, depth: depth, session: session}
+		canceled := ref.canceled
 		h.mu.Unlock()
 		var sessionID, reply string
 		var runErr error
-		if op, ok := h.Turns.(ChatOpener); ok && chat != "" {
-			sessionID, reply, runErr = op.RunIn(ctx, target, chat, text)
-		} else {
-			sessionID, reply, runErr = h.Turns.Run(ctx, target, text)
+		// The task id rides on ctx, so Turns can tell this task's turn
+		// from any other the session runs (TurnGate, TaskStopper).
+		tctx := withTaskID(ctx, ec.TaskID)
+		switch op, ok := h.Turns.(ChatOpener); {
+		case canceled:
+			// Canceled while the chat was being picked: no turn for it.
+			runErr = ErrTaskCanceled
+		case ok && chat != "":
+			sessionID, reply, runErr = op.RunIn(tctx, target, chat, text)
+		default:
+			sessionID, reply, runErr = h.Turns.Run(tctx, target, text)
 		}
 		h.mu.Lock()
 		delete(h.inflight[e.agentID], ec.TaskID)
@@ -240,7 +248,8 @@ func (e *executor) audit(ctx context.Context, from, to Peer, callerSession, targ
 }
 
 // Cancel marks the task canceled, with the reason Hub.CancelTask noted.
-// Whatever the turn still reports afterwards is dropped.
+// The turn itself is stopped by Hub.CancelTask (TaskStopper); whatever it
+// reports afterwards is dropped.
 func (e *executor) Cancel(_ context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
 		var msg *a2a.Message
