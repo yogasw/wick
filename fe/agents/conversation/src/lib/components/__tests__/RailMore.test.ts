@@ -67,6 +67,25 @@ describe("RailMore", () => {
     expect(screen.getByTestId("rail-more-count").textContent?.trim()).toBe("2");
   });
 
+  /* P40: More follows the strip's label style. */
+  test("icons mode: no vertical label, the tabs' tooltip instead of a title", () => {
+    const { container } = renderMore();
+    const btn = screen.getByLabelText("More panels");
+    expect(btn.hasAttribute("title")).toBe(false);
+    expect(container.querySelector('[class*="writing-mode"]')).toBeNull();
+    const tip = screen.getByTestId("rail-tip-more");
+    expect(tip.textContent).toBe("More panels");
+    expect(tip.getAttribute("aria-hidden")).toBe("true");
+    expect(tip.className).toContain("group-focus-visible:opacity-100");
+  });
+
+  test("labels mode: the vertical label and a native title, no tooltip", () => {
+    const { container } = renderMore({ labels: true });
+    expect(screen.getByLabelText("More panels").getAttribute("title")).toBe("More panels");
+    expect(container.querySelector('[class*="writing-mode"]')?.textContent).toBe("More");
+    expect(screen.queryByTestId("rail-tip-more")).toBeNull();
+  });
+
   test("nothing hidden means no badge", () => {
     renderMore({ overflow: [] });
     expect(screen.queryByTestId("rail-more-count")).toBeNull();

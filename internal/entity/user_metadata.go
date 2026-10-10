@@ -131,7 +131,27 @@ type RailPrefs struct {
 	// what was hidden. A leftover count is migrated by the client, which
 	// reads it as "the first N stay, name the rest as hidden".
 	Hidden []string `json:"hidden"`
+
+	// Labels prints each tab's name along the strip, rotated 90 degrees.
+	// Off (the default) leaves icons only, with the name in a tooltip. Set
+	// from the profile, not by the rail itself, so a layout save from the
+	// rail carries it over untouched (see WithLayout).
+	Labels bool `json:"labels,omitempty"`
 }
+
+// WithLayout returns next's order and folded tabs with p's Labels. The rail
+// saves only its arrangement; the label choice belongs to the profile and
+// must survive a drag on the strip.
+func (p RailPrefs) WithLayout(next RailPrefs) RailPrefs {
+	next.Labels = p.Labels
+	return next
+}
+
+// Values the profile form posts for RailPrefs.Labels.
+const (
+	RailStyleIcons  = "icons"
+	RailStyleLabels = "labels"
+)
 
 // TicketFilter is one saved ticket-board filter: which statuses to show,
 // whose tickets ("" = everyone, "me", or a user ID), and the last view

@@ -43,9 +43,13 @@ export type RailPrefs = {
       having deliberately unfolded everything — and that choice has to
       survive a reload rather than being re-folded as though untouched. */
   hidden: string[] | null;
+  /** Print each tab's name along the strip. Off (also when unset) leaves
+      icons only, with the name in a tooltip. Chosen in the profile; the rail
+      never writes it. */
+  labels?: boolean;
 };
 
-export const emptyRailPrefs: RailPrefs = { order: [], hidden: null };
+export const emptyRailPrefs: RailPrefs = { order: [], hidden: null, labels: false };
 
 const ids = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
@@ -58,10 +62,26 @@ const ids = (v: unknown): string[] =>
 export function parseRailPrefs(raw: unknown): RailPrefs {
   const o = (raw ?? {}) as Record<string, unknown>;
   const order = ids(o.order);
+  const labels = o.labels === true;
   if (!Array.isArray(o.hidden) && typeof o.visible === "number" && o.visible > 0) {
-    return { order, hidden: order.slice(Math.round(o.visible)) };
+    return { order, hidden: order.slice(Math.round(o.visible)), labels };
   }
-  return { order, hidden: Array.isArray(o.hidden) ? ids(o.hidden) : null };
+  return { order, hidden: Array.isArray(o.hidden) ? ids(o.hidden) : null, labels };
+}
+
+/** A rail tab's accessible name, which is also its tooltip in icons mode.
+
+    The Tasks tab spells out what its badge only hints at: how many tasks are
+    active, and how many of those wait on the person (the amber dot). `extra`
+    carries what other tabs only show as colour or motion — the repo behind
+    the Source badge, "working" behind the spinning ring — so it is named
+    once, here, instead of in a second native tooltip. */
+export function railTabName(label: string, active = 0, needsInput = 0, extra: string[] = []): string {
+  const parts = [label];
+  if (active > 0) parts.push(`${active} active`);
+  if (needsInput > 0) parts.push(`${needsInput} needs input`);
+  for (const x of extra) if (x) parts.push(x);
+  return parts.join(" · ");
 }
 
 /** The folded set to actually use, resolving "never arranged" to the default.
@@ -196,6 +216,15 @@ export const RAIL_FILL = 0.8;
     Only used before the first measurement lands; a rendered tab reports its
     own height and that is what is used from then on. */
 export const RAIL_TAB_FALLBACK_H = 52;
+/** The same guess for icons mode, where no label runs under the icon. */
+export const RAIL_ICON_TAB_FALLBACK_H = 37;
+
+/** The icons-mode tooltip, shared by the strip's tabs and the More button so
+    all of them read alike. Popover colours from the theme (white on light,
+    navy on dark) like the More panel; the parent button needs `group
+    relative`. Shown on hover and on keyboard focus. */
+export const RAIL_TIP_CLASS =
+  "pointer-events-none absolute right-full top-1/2 mr-2 -translate-y-1/2 whitespace-nowrap rounded-md bg-white-100 px-2 py-1 text-xs text-black-900 opacity-0 shadow-md ring-1 ring-white-300 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 dark:bg-navy-800 dark:text-white-100 dark:ring-navy-600";
 
 /** Trims the strip to what the window can actually hold.
 

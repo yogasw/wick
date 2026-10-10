@@ -6,6 +6,7 @@ import {
   orderTabs,
   parseRailPrefs,
   railPrefsFromPage,
+  railTabName,
   resolveHidden,
   splitRail,
   fitStrip,
@@ -31,7 +32,7 @@ describe("parseRailPrefs", () => {
   // a deliberate "show everything". Collapsing them would re-fold the tabs
   // someone had just unfolded.
   test("empty input leaves the layout unarranged", () => {
-    expect(parseRailPrefs(undefined)).toEqual({ order: [], hidden: null });
+    expect(parseRailPrefs(undefined)).toEqual({ order: [], hidden: null, labels: false });
   });
 
   test("an explicit empty list is a choice, not an absence", () => {
@@ -276,12 +277,12 @@ describe("railPrefsFromPage", () => {
   // already — fetching it meant drawing the default and then collapsing.
   test("reads the layout the shell inlined", () => {
     const got = railPrefsFromPage(el(JSON.stringify({ order: ["notes"], hidden: ["browser"] })));
-    expect(got).toEqual({ order: ["notes"], hidden: ["browser"] });
+    expect(got).toEqual({ order: ["notes"], hidden: ["browser"], labels: false });
   });
 
   test("normalises what it finds", () => {
     const got = railPrefsFromPage(el(JSON.stringify({ order: ["a", 7], hidden: [null, "b"] })));
-    expect(got).toEqual({ order: ["a"], hidden: ["b"] });
+    expect(got).toEqual({ order: ["a"], hidden: ["b"], labels: false });
   });
 
   // null, not a default: absent means "this shell did not carry it", and the
@@ -348,5 +349,41 @@ describe("fitStrip", () => {
   test("an unknown budget changes nothing", () => {
     const s = split(["ticket", "notes", "files"]);
     expect(fitStrip(tabs, s, even, 0)).toBe(s);
+  });
+});
+
+describe("rail label style", () => {
+  // Unset is icons only; only an explicit true prints the labels.
+  test("labels default off", () => {
+    expect(parseRailPrefs({}).labels).toBe(false);
+    expect(parseRailPrefs({ labels: "yes" }).labels).toBe(false);
+    expect(parseRailPrefs({ labels: true }).labels).toBe(true);
+    expect(parseRailPrefs({ order: ["a"], visible: 1, labels: true }).labels).toBe(true);
+  });
+
+  test("the shell's inlined record carries it", () => {
+    const d = document.createElement("div");
+    d.dataset.railPrefs = JSON.stringify({ order: [], hidden: null, labels: true });
+    expect(railPrefsFromPage(d)?.labels).toBe(true);
+  });
+});
+
+describe("railTabName", () => {
+  test("plain tabs are just their name", () => {
+    expect(railTabName("Files")).toBe("Files");
+  });
+
+  test("Tasks spells out its badge", () => {
+    expect(railTabName("Tasks", 2, 1)).toBe("Tasks · 2 active · 1 needs input");
+    expect(railTabName("Tasks", 2, 0)).toBe("Tasks · 2 active");
+    expect(railTabName("Tasks", 0, 0)).toBe("Tasks");
+  });
+
+  // Source names its repo and a busy tab says so here, in the one name the
+  // tab has, instead of in a second native tooltip.
+  test("extra parts follow the name, empty ones are dropped", () => {
+    expect(railTabName("Source", 0, 0, ["wick"])).toBe("Source · wick");
+    expect(railTabName("Source", 0, 0, [""])).toBe("Source");
+    expect(railTabName("Sub-agents", 0, 0, ["working"])).toBe("Sub-agents · working");
   });
 });

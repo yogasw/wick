@@ -91,7 +91,7 @@ templ ProfilePage(user *entity.User, errMsg string, success bool, prefsSaved boo
 				{{ homeView := user.Metadata.HomeViewOrDefault() }}
 				<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
 					<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Display preferences</h2>
-					<p class="mt-1 text-sm text-black-800 dark:text-black-600">Choose how the home tool grid is rendered.</p>
+					<p class="mt-1 text-sm text-black-800 dark:text-black-600">Choose how the home tool grid and the conversation rail are rendered.</p>
 					if prefsSaved {
 						<div class="mt-4 rounded-lg border border-pos-200 bg-pos-100 px-4 py-3 text-sm text-pos-400">
 							Preferences saved.
@@ -148,6 +148,42 @@ templ ProfilePage(user *entity.User, errMsg string, success bool, prefsSaved boo
 							/>
 							<span class="mt-1 block text-xs text-black-700 dark:text-black-600">Scales text and spacing on every page. Saved with Save.</span>
 						</div>
+						<!-- Conversation rail: icons only, or icons with the tab name
+						     printed along the strip. Unset is icons. -->
+						{{ railLabels := user.Metadata.Rail.Labels }}
+						<fieldset class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 p-4">
+							<legend class="px-1 text-sm font-medium text-black-900 dark:text-white-100">Conversation rail</legend>
+							<div class="flex flex-col gap-3">
+								<label class="flex cursor-pointer items-start gap-3">
+									<input
+										type="radio"
+										name="rail_labels"
+										value={ entity.RailStyleIcons }
+										checked?={ !railLabels }
+										data-testid="rail-style-icons"
+										class="mt-0.5 h-4 w-4 accent-green-500"
+									/>
+									<span class="flex flex-col">
+										<span class="text-sm font-medium text-black-900 dark:text-white-100">Icons</span>
+										<span class="text-xs text-black-700 dark:text-black-600">Icons only — the name shows on hover or keyboard focus.</span>
+									</span>
+								</label>
+								<label class="flex cursor-pointer items-start gap-3">
+									<input
+										type="radio"
+										name="rail_labels"
+										value={ entity.RailStyleLabels }
+										checked?={ railLabels }
+										data-testid="rail-style-labels"
+										class="mt-0.5 h-4 w-4 accent-green-500"
+									/>
+									<span class="flex flex-col">
+										<span class="text-sm font-medium text-black-900 dark:text-white-100">Icons + vertical labels</span>
+										<span class="text-xs text-black-700 dark:text-black-600">Each tab's name runs along the strip.</span>
+									</span>
+								</label>
+							</div>
+						</fieldset>
 						<script>
 							(function () {
 								var r = document.getElementById("ui-scale");

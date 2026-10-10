@@ -13,6 +13,8 @@
      Folding a VISIBLE panel is not in here, because it does not belong here:
      it is a drag from the strip onto this button. */
 
+  import { RAIL_TIP_CLASS } from "../railPrefs.js";
+
   type Tab = { id: string; label: string; icon: string };
 
   type Props = {
@@ -44,6 +46,9 @@
     /* A hidden tab being dragged OUT of this panel, so the strip can light
        up as a drop target. null on drag end. */
     onDragOut?: (id: string | null) => void;
+    /* The strip's label style. Off (icons only) drops the vertical "More"
+       for the same tooltip the tabs wear. */
+    labels?: boolean;
   };
 
   let {
@@ -60,6 +65,7 @@
     dragging = false,
     onDropHere,
     onDragOut,
+    labels = false,
   }: Props = $props();
 
   /* Lit while a strip tab hovers the button, so the drop target is visible
@@ -134,7 +140,7 @@
 <div class="relative">
   <button
     type="button"
-    title="More panels"
+    title={labels ? "More panels" : undefined}
     aria-label="More panels"
     aria-expanded={open}
     onclick={() => { open = !open; }}
@@ -150,7 +156,7 @@
       // rounded-bl-xl on the button itself: the strip cannot clip its
       // children (this panel opens out of it), so the bottom corner has to
       // be carried by whatever sits last — which is always this button.
-      "group inline-flex w-full flex-col items-center justify-center gap-1 rounded-bl-xl border-t border-white-300 px-1.5 py-2.5 transition-colors hover:bg-white-200 dark:border-navy-600 dark:hover:bg-navy-800",
+      "group relative inline-flex w-full flex-col items-center justify-center gap-1 rounded-bl-xl border-t border-white-300 px-1.5 py-2.5 transition-colors hover:bg-white-200 dark:border-navy-600 dark:hover:bg-navy-800",
       dropHover ? "ring-2 ring-inset ring-green-500" : "",
     ].join(" ")}
   >
@@ -180,7 +186,18 @@
         <span class="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-green-500" aria-label="Working"></span>
       {/if}
     </span>
-    <span class="text-[9px] leading-none text-black-700 [writing-mode:vertical-rl] dark:text-black-600">More</span>
+    {#if labels}
+      <span class="text-[9px] leading-none text-black-700 [writing-mode:vertical-rl] dark:text-black-600">More</span>
+    {:else}
+      <!-- Same tooltip as the strip's tabs; aria-label already names it.
+           Not drawn while a tab is dragged onto the button, or with the
+           panel open. -->
+      <span
+        aria-hidden="true"
+        data-testid="rail-tip-more"
+        class={[RAIL_TIP_CLASS, dragging || open ? "hidden" : ""].join(" ")}
+      >More panels</span>
+    {/if}
   </button>
 
   {#if open}

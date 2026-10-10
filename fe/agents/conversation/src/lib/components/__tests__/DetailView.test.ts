@@ -956,3 +956,62 @@ describe("DetailView — reply chip", () => {
     expect(threadState.renameTurn).toHaveBeenCalledWith("local-user-1", "999");
   });
 });
+
+/* P40: the strip shows icons only unless the profile turned labels on. The
+   choice arrives inlined on #app, like the rest of the rail layout. */
+describe("DetailView — rail label style (P40)", () => {
+  const app = () => {
+    let el = document.getElementById("app");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+    return el;
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    app();
+  });
+
+  afterEach(() => {
+    delete app().dataset.railPrefs;
+  });
+
+  const label = (container: HTMLElement) =>
+    container.querySelector('[data-testid="rail-tab-files"] [class*="writing-mode"]');
+
+  test("unset: icons only, the name in an accessible tooltip", () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    const btn = container.querySelector('[data-testid="rail-tab-files"]')!;
+    expect(btn.getAttribute("aria-label")).toBe("Files");
+    // No native title on top of the custom tooltip, or hover shows two.
+    expect(btn.hasAttribute("title")).toBe(false);
+    const tip = container.querySelector('[data-testid="rail-tip-files"]')!;
+    expect(tip.textContent).toBe("Files");
+    expect(tip.getAttribute("aria-hidden")).toBe("true");
+    // Shown on keyboard focus too, not only on hover.
+    expect(tip.className).toContain("group-focus-visible:opacity-100");
+    expect(tip.className).toContain("group-hover:opacity-100");
+    // Popover colours from the theme: light by default, navy only in dark.
+    expect(tip.className).toContain("bg-white-100");
+    expect(tip.className).toContain("dark:bg-navy-800");
+    expect(tip.className).not.toMatch(/(^|\s)bg-navy-800/);
+    expect(label(container)).toBeNull();
+    // No element inside any tab carries a title either (Source used to).
+    const strip = btn.parentElement!;
+    expect(strip.querySelectorAll("[data-testid^='rail-tab-'] [title]").length).toBe(0);
+  });
+
+  test("labels on: the name runs along the strip, no tooltip", () => {
+    app().dataset.railPrefs = JSON.stringify({ order: [], hidden: null, labels: true });
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    const btn = container.querySelector('[data-testid="rail-tab-files"]')!;
+    expect(btn.getAttribute("aria-label")).toBe("Files");
+    expect(btn.getAttribute("title")).toBe("Files");
+    expect(label(container)?.textContent).toBe("Files");
+    expect(container.querySelector('[data-testid="rail-tip-files"]')).toBeNull();
+  });
+});

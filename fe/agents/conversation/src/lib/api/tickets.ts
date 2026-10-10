@@ -280,7 +280,7 @@ export const saveTicketFilter = (base: string, projectId: string, f: TicketFilte
 
 /* ── rail layout (per user) ───────────────────────────────────────────── */
 
-export type RailPrefsWire = { order?: string[]; visible?: number };
+export type RailPrefsWire = { order?: string[]; hidden?: string[] | null; visible?: number; labels?: boolean };
 
 export const getRailPrefs = (base: string) =>
   apiGetE<RailPrefsWire>(`${base}/api/me/rail`).pipe(Effect.map((r) => r ?? {}));

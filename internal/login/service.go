@@ -218,14 +218,27 @@ func (s *Service) SetTicketFilter(ctx context.Context, userID, projectID string,
 // SetRailPrefs saves the user's conversation-rail layout. Stored as given:
 // both lists are tab ids, and the client owns which ids exist — a server that
 // filtered them would drop a tab added by a newer client and silently undo
-// the layout that client had just saved.
+// the layout that client had just saved. Labels is kept as it was; the
+// profile owns it (see SetRailLabels).
 func (s *Service) SetRailPrefs(ctx context.Context, userID string, p entity.RailPrefs) error {
 	u, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {
 		return err
 	}
 	meta := u.Metadata
-	meta.Rail = p
+	meta.Rail = meta.Rail.WithLayout(p)
+	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
+// SetRailLabels saves whether the conversation rail prints tab names along
+// the strip (true) or shows icons only (false). The layout is left alone.
+func (s *Service) SetRailLabels(ctx context.Context, userID string, on bool) error {
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	meta := u.Metadata
+	meta.Rail.Labels = on
 	return s.repo.SetMetadata(ctx, userID, meta)
 }
 

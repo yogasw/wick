@@ -58,7 +58,7 @@
   import TaskTray from "./team/TaskTray.svelte";
   import TasksPanel from "./team/TasksPanel.svelte";
   import { setTeamTasksCtx } from "../teamTasksContext.js";
-  import { tasksByTurn, taskRailBadge } from "../delegations.js";
+  import { tasksByTurn, taskRailBadge, taskStatus } from "../delegations.js";
   import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
   import { answerTeamTask, cancelTeamTask } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
@@ -80,6 +80,7 @@
     orderTabs,
     parseRailPrefs,
     railPrefsFromPage,
+    railTabName,
     reorderTo,
     resolveHidden,
     toggleHidden,
@@ -87,6 +88,8 @@
     fitStrip,
     RAIL_FILL,
     RAIL_TAB_FALLBACK_H,
+    RAIL_ICON_TAB_FALLBACK_H,
+    RAIL_TIP_CLASS,
     type RailPrefs,
   } from "../railPrefs.js";
   import BrowserPanel from "./BrowserPanel.svelte";
@@ -1244,6 +1247,9 @@
      tasks through this context. An answer or cancel refetches at once. */
   const turnTasks = $derived(tasksByTurn(turns, teamTasks));
   const tasksBadge = $derived(taskRailBadge(teamTasks));
+  /* How many of those wait on the person: the badge only turns amber, the
+     rail tab's name says how many. */
+  const tasksNeedInput = $derived(teamTasks.filter((t) => taskStatus(t) === "needs_you").length);
   async function answerTask(taskId: string, text: string) {
     try {
       await run(answerTeamTask(base, sessionId, taskId, text).pipe(Effect.provide(WickClientLayer)));
@@ -2764,8 +2770,9 @@
     return { update: read };
   }
   /* The "More" button sits below the tabs and is never folded, so its height
-     comes out of the budget before anything is fitted. */
-  const RAIL_MORE_H = 44;
+     comes out of the budget before anything is fitted. Shorter in icons
+     mode, where no "More" runs under the dots. */
+  const RAIL_MORE_H = $derived(railPrefs.labels ? 44 : 37);
   const railBudget = $derived(railViewH > 0 ? railViewH * RAIL_FILL - RAIL_MORE_H : 0);
   /* What the window can hold, on top of what the user chose to fold. This is
      a display override like badge promotion: nothing is saved, so the tabs
@@ -2774,7 +2781,7 @@
     fitStrip(
       railOrdered,
       railSplit,
-      (id) => railTabH[id] ?? RAIL_TAB_FALLBACK_H,
+      (id) => railTabH[id] ?? (railPrefs.labels ? RAIL_TAB_FALLBACK_H : RAIL_ICON_TAB_FALLBACK_H),
       railBudget,
       railTab,
     ),
@@ -2839,6 +2846,17 @@
     subAgents.filter((s) => isSubAgentWorking(s.status, s.lifecycle)).length,
   );
   const subAgentsBusy = $derived(busySubAgentCount > 0);
+  /* The tab's accessible name, and its only tooltip: the custom one in
+     icons mode, the native title in labels mode. Source carries its repo
+     here rather than in a title of its own, which stacked a second tooltip
+     on top of this one. */
+  function railName(tab: { id: RailTab; label: string }): string {
+    if (tab.id === "tasks") return railTabName(tab.label, tasksBadge.count, tasksNeedInput);
+    if (tab.id === "source") return railTabName(tab.label, 0, 0, [scmSnapshotRepo]);
+    if (railBusy(tab.id)) return railTabName(tab.label, 0, 0, ["working"]);
+    return tab.label;
+  }
+
   function railBusy(id: RailTab): boolean {
     return id === "subagents" && subAgentsBusy;
   }
@@ -3623,10 +3641,12 @@
     class="fixed top-1/2 right-0 z-20 -translate-y-1/2 {railOrdered.length === 0 ? 'hidden' : 'flex'} flex-col rounded-l-xl border border-r-0 border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md"
   >
     {#each railFit.shown as tab, i}
+      <!-- Icons mode drops the native title: the tooltip below shows on
+           hover AND keyboard focus, and a title on top would double it. -->
       <button
         type="button"
-        title={tab.label}
-        aria-label={tab.label}
+        title={railPrefs.labels ? railName(tab) : undefined}
+        aria-label={railName(tab)}
         draggable="true"
         data-testid={"rail-tab-" + tab.id}
         use:measureRailTab={tab.id}
@@ -3636,7 +3656,7 @@
         ondrop={(e) => { e.preventDefault(); dropRailOn(tab.id); }}
         ondragend={() => { railDragId = null; }}
         class={[
-          "group inline-flex flex-col items-center justify-center gap-1 px-1.5 py-2.5 transition-colors",
+          "group relative inline-flex flex-col items-center justify-center gap-1 px-1.5 py-2.5 transition-colors",
           // The strip no longer clips its children, so the top tab carries
           // the rounded corner itself — otherwise its hover fill squares off
           // the rail's edge.
@@ -3655,7 +3675,7 @@
           <span class="relative inline-flex h-4 w-4 items-center justify-center">
             <span
               class="absolute inset-[-3px] rounded-full border-2 border-green-500 border-t-transparent animate-spin"
-              aria-label="Working"
+              aria-hidden="true"
             ></span>
             <svg
               viewBox="0 0 16 16"
@@ -3673,10 +3693,7 @@
             {/if}
           </span>
         {:else if tab.id === "source" && scmChangeCount > 0}
-          <span
-            class="relative {scmRepoPulse ? 'animate-pulse' : ''}"
-            title={scmSnapshotRepo ? `Source: ${scmSnapshotRepo}` : "Source"}
-          >
+          <span class="relative {scmRepoPulse ? 'animate-pulse' : ''}">
             <svg
               viewBox="0 0 16 16"
               class="h-4 w-4 text-green-500"
@@ -3717,14 +3734,24 @@
             {@html tab.icon}
           </svg>
         {/if}
-        <span
-          class={[
-            "text-[9px] font-medium [writing-mode:vertical-rl] [transform:rotate(180deg)] tracking-wide",
-            railTab === tab.id
-              ? "text-green-600 dark:text-green-400"
-              : "text-black-700 dark:text-black-600",
-          ].join(" ")}
-        >{tab.label}</span>
+        {#if railPrefs.labels}
+          <span
+            class={[
+              "text-[9px] font-medium [writing-mode:vertical-rl] [transform:rotate(180deg)] tracking-wide",
+              railTab === tab.id
+                ? "text-green-600 dark:text-green-400"
+                : "text-black-700 dark:text-black-600",
+            ].join(" ")}
+          >{tab.label}</span>
+        {:else}
+          <!-- Hidden from assistive tech: aria-label already names the tab.
+               Not drawn during a drag, when hover marks the drop target. -->
+          <span
+            aria-hidden="true"
+            data-testid={"rail-tip-" + tab.id}
+            class={[RAIL_TIP_CLASS, railDragId !== null ? "hidden" : ""].join(" ")}
+          >{railName(tab)}</span>
+        {/if}
       </button>
     {/each}
 
@@ -3744,6 +3771,7 @@
         onReorder={reorderRailTab}
         onToggleHidden={toggleRailHidden}
         dragging={railDragId !== null}
+        labels={railPrefs.labels === true}
         onDropHere={(id) => {
           // Dropped on More: fold that tab, leaving its position alone.
           railDragId = null;
