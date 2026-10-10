@@ -288,3 +288,44 @@ describe("ThreadMessage delegation block", () => {
     expect(screen.queryByText(/Cap is answering/)).toBeNull();
   });
 });
+
+/* P39: a teammate's avatar in the chip and the tray moves while its task
+   works and pulses while a question waits for the person. */
+describe("task avatar activity", () => {
+  const tasks = [
+    task({ task_id: "w" }),
+    task({ task_id: "q", to_handle: "rio", to_name: "Rio", state: "input_required", needs_you: true, reply: "Which env?" }),
+    task({ task_id: "a", to_handle: "vera", to_name: "Vera", state: "input_required", reply: "Which env?" }),
+    task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed", summary: "done" }),
+  ];
+  const activities = (root: ParentNode) => [...root.querySelectorAll<HTMLElement>("[data-testid=avatar-activity]")].map((e) => e.dataset.activity);
+
+  test("delegation chips", () => {
+    render(DelegationBlock, { props: { tasks } });
+    expect(screen.getAllByTestId("delegation-chip").map((c) => activities(c)[0])).toEqual(["tool", "alert", "idle", "idle"]);
+  });
+
+  test("task tray, stacked avatars", () => {
+    const { container } = render(TaskTray, { props: { tasks } });
+    expect(activities(container)).toEqual(["tool", "alert", "idle"]);
+  });
+
+  test("task tray popover rows", async () => {
+    render(TaskTray, { props: { tasks } });
+    await fireEvent.click(screen.getByTestId("task-tray-summary"));
+    const rows = screen.getAllByTestId("task-tray-name").map((n) => activities(n.parentElement!)[0]);
+    expect(rows).toEqual(["tool", "alert", "idle"]);
+  });
+
+  test("Tasks rail: a working teammate orbits, one waiting on you pulses", () => {
+    const { container } = render(TasksPanel, { props: { tasks } });
+    const rows = screen.getAllByTestId("tasks-panel-name").map((n) => n.parentElement!);
+    const by = (name: string) => rows.find((r) => r.textContent!.includes(name))!;
+    expect(activities(by("Anton"))).toEqual(["tool"]);
+    expect(by("Anton").querySelector("[data-testid=avatar-orbit]")).not.toBeNull();
+    expect(activities(by("Rio"))).toEqual(["alert"]);
+    expect(activities(by("Vera"))).toEqual(["idle"]);
+    expect(activities(by("Lia"))).toEqual(["idle"]);
+    expect(container.querySelectorAll("[data-testid=avatar-orbit]").length).toBe(1);
+  });
+});

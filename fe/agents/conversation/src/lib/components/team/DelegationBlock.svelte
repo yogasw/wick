@@ -8,6 +8,8 @@
      answering stage, the teammate's reply shows here. Once every task
      ended the block folds to a single line. */
   import { AgentAvatar } from "@wick-fe/common-avatar";
+  import AvatarActivity from "./AvatarActivity.svelte";
+  import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem } from "../../types/agents.js";
   import { allSettled, blockHead, INTERRUPTED_LABEL, isTaskActive, isUserTask, quickReplies, settledLine, statusSummary, taskStatus, USER_TASK_MARKER, type TaskStatus } from "../../delegations.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
@@ -131,7 +133,7 @@
                 : "border-white-300 dark:border-navy-600 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700") +
               (selected === t.task_id ? " ring-1 ring-green-500" : "")}
           >
-            <AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={16} />
+            <AvatarActivity activity={taskActivity(s)} size={16}><AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={16} /></AvatarActivity>
             {#if isUserTask(t)}<span data-testid="user-task-marker" class="rounded bg-link-400/10 px-1 text-[10px] font-medium text-link-400">{USER_TASK_MARKER}</span>{/if}
             <span class="font-medium">{nameOf(t)}</span>
             <span class={"h-1.5 w-1.5 shrink-0 rounded-full " + DOT[s]}></span>

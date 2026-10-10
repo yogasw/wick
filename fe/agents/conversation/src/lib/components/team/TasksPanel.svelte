@@ -1,8 +1,11 @@
 <script lang="ts">
   /* The Tasks rail: every Team task this chat sent, grouped Needs you /
      Working / Done / Failed·Canceled, each row with its actions and the
-     raw payload one click away. */
+     raw payload one click away. A working teammate's avatar orbits, one
+     waiting on the person pulses (AvatarActivity, mockup rail rows). */
   import { AgentAvatar } from "@wick-fe/common-avatar";
+  import AvatarActivity from "./AvatarActivity.svelte";
+  import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem } from "../../types/agents.js";
   import { groupTasks, taskLabel, taskStatus, userTaskRoute } from "../../delegations.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
@@ -67,8 +70,8 @@
       {#each g.tasks as t (t.task_id)}
         {@const s = taskStatus(t)}
         <div class="flex flex-col gap-1 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2">
-          <div class="flex items-center gap-1.5">
-            <AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={18} />
+          <div class="flex items-center gap-2">
+            <AvatarActivity activity={taskActivity(s)} size={26}><AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={26} /></AvatarActivity>
             <span data-testid="tasks-panel-name" class="font-medium text-black-900 dark:text-white-100">{userTaskRoute(t) ?? (agents[t.to_handle]?.name || t.to_name || "@" + t.to_handle)}</span>
             <span class="text-[10px] text-black-600 dark:text-black-700">{taskLabel(t, senderName)}{t.age ? " · " + t.age : ""}</span>
           </div>

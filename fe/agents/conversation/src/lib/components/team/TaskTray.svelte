@@ -3,6 +3,8 @@
      sent is still working or waits for an answer. Stacked avatars, the
      summary and Answer; a click opens the list (Answer / Cancel / Jump). */
   import { AgentAvatar } from "@wick-fe/common-avatar";
+  import AvatarActivity from "./AvatarActivity.svelte";
+  import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem } from "../../types/agents.js";
   import { isTaskActive, statusSummary, taskStatus, userTaskRoute } from "../../delegations.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
@@ -65,7 +67,7 @@
       <button type="button" onclick={() => { open = !open; }} class="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={open}>
         <span class="flex -space-x-1.5">
           {#each active.slice(0, 3) as t (t.task_id)}
-            <span class="rounded-full ring-2 ring-white-100 dark:ring-navy-800"><AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={16} /></span>
+            <span class="rounded-full ring-2 ring-white-100 dark:ring-navy-800"><AvatarActivity activity={taskActivity(taskStatus(t))} size={16}><AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={16} /></AvatarActivity></span>
           {/each}
         </span>
         <span data-testid="task-tray-summary" class="min-w-0 truncate text-black-800 dark:text-black-600">{statusSummary(active)}</span>
@@ -81,7 +83,7 @@
           {@const s = taskStatus(t)}
           <div class="flex flex-col gap-1 rounded-md px-1.5 py-1 hover:bg-white-200 dark:hover:bg-navy-700">
             <div class="flex items-center gap-1.5">
-              <AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={16} />
+              <AvatarActivity activity={taskActivity(s)} size={16}><AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={16} /></AvatarActivity>
               <span data-testid="task-tray-name" class="font-medium text-black-900 dark:text-white-100">{userTaskRoute(t) ?? (agents[t.to_handle]?.name || t.to_name || "@" + t.to_handle)}</span>
               <span class={"text-[10px] " + (s === "needs_you" ? "text-amber-700 dark:text-amber-300" : "text-black-600 dark:text-black-700")}>{s === "needs_you" ? "needs you" : "working"}</span>
               <span class="ml-auto flex items-center gap-2 text-[11px]">

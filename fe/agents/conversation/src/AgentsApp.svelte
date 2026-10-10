@@ -20,6 +20,7 @@
   import PluginRemoteWizard from "./lib/components/team/PluginRemoteWizard.svelte";
   import RemoteQuestionCard from "./lib/components/team/RemoteQuestionCard.svelte";
   import PresenceDot from "./lib/components/team/PresenceDot.svelte";
+  import RosterAvatar from "./lib/components/team/RosterAvatar.svelte";
   import RemoteKindIcon from "./lib/components/team/RemoteKindIcon.svelte";
   import AgentShareLine from "./lib/components/team/AgentShareLine.svelte";
   import { isA2ARemote, isPluginRemote, isRemoteAgent, isSlackRemote, remoteChatMode, remoteTarget, remoteWaitLabel } from "./lib/remoteAgent.js";
@@ -40,6 +41,7 @@
   import GroupSettings from "./lib/components/GroupSettings.svelte";
   import GroupAvatars from "./lib/components/GroupAvatars.svelte";
   import { rosterStatus, withTurn, withActivity } from "./lib/rosterStatus.js";
+  import { mainChatOpen } from "./lib/avatarActivity.js";
   import { liveRoster } from "./lib/rosterLive.js";
   import type { SessionActivity } from "./lib/stores/sessionsStream.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
@@ -679,12 +681,10 @@
             data-testid="roster-agent"
             onclick={() => openAgent(a)}
           >
-            <!-- live like the header's: the same agent in the same state
-                 moves the same way in both. Rows scrolled away pause. -->
             <!-- Sub-agents still working after its own turn: the orbit, plus
                  a 🤖 so it reads apart from the agent's own tool call. -->
             <span class="relative flex shrink-0">
-              <AgentAvatar kind={a.avatar?.kind} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={isWorking(a.status) || st.work === "subagent"} tool={st.work === "tool" || st.work === "subagent"} toolName={st.work === "tool" ? a.current_action : ""} toolError={a.tool_error} remote={st.work === "waiting"} events={a.avatar?.events} asleep={a.disabled} hatching={hatching.includes(a.id)} alert={st.attention} notify={st.unread} />
+              <RosterAvatar agent={a} {st} open={mainChatOpen(a, selected?.id, route)} hatching={hatching.includes(a.id)} />
               <!-- The status dot replaces the hover tip; its label is read
                    out with the row (sr-only). -->
               <PresenceDot presence={st.presence} label={st.label} ring={active ? "border-white-300 dark:border-navy-600" : "border-white-200 dark:border-navy-700"} />
