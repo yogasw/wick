@@ -855,6 +855,9 @@ export type TeamTaskItem = {
   summary?: string;
   /** The reply, question or reason itself, capped. */
   reply?: string;
+  /** The choices a question offers (its "[options: …]" line), shown as
+      quick answers; absent when it offers none. */
+  options?: string[];
   /** The teammate's chat the task runs in ("" = its main chat). */
   chat_id?: string;
   /** input_required that no turn of this chat is handling: it waits

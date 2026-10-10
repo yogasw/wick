@@ -60,6 +60,8 @@ type taskRecord struct {
 	OriginUser string `json:"origin_user,omitempty"`
 	Reply      string `json:"reply,omitempty"`
 	Chat       string `json:"chat,omitempty"`
+	// Options is taskRef.options.
+	Options []string `json:"options,omitempty"`
 	// ChatPicked and SupersededBy are taskRef.chatPicked/supersededBy;
 	// a record written before they existed reads them unset.
 	ChatPicked   bool      `json:"chat_picked,omitempty"`
@@ -218,7 +220,7 @@ func refFromRecord(rec taskRecord) *taskRef {
 		agentID: rec.AgentID, callerAgentID: rec.CallerAgentID, callerOwner: rec.CallerOwner, callerSession: rec.CallerSession,
 		to:         Peer{ID: rec.AgentID, OwnerID: rec.ToOwner, Handle: rec.ToHandle, Name: rec.ToName, ChatUser: rec.ToChatUser, Remote: rec.ToRemote},
 		waiterGone: rec.WaiterGone, finished: rec.Finished, delivered: rec.Delivered, canceled: rec.Canceled,
-		reply: rec.Reply, state: a2a.TaskState(rec.State), interrupted: rec.Interrupted, fromDisk: true,
+		reply: rec.Reply, options: rec.Options, state: a2a.TaskState(rec.State), interrupted: rec.Interrupted, fromDisk: true,
 		touched: rec.Touched, contextID: rec.ContextID, title: rec.Title, started: rec.Started,
 		asked: rec.Asked, ended: rec.Ended,
 		chat: rec.Chat, answered: rec.Answered, log: rec.Log,
@@ -257,7 +259,7 @@ func (r *taskRef) record(id a2a.TaskID) taskRecord {
 		CallerAgentID: r.callerAgentID, CallerOwner: r.callerOwner, CallerSession: r.callerSession,
 		Title: r.title, State: string(r.state),
 		Finished: r.finished, WaiterGone: r.waiterGone, Delivered: r.delivered, Canceled: r.canceled, Interrupted: r.interrupted,
-		Reply: r.reply, Chat: r.chat, Answered: r.answered,
+		Reply: r.reply, Options: append([]string(nil), r.options...), Chat: r.chat, Answered: r.answered,
 		ChatPicked: r.chatPicked, SupersededBy: string(r.supersededBy),
 		Started: r.started, Touched: r.touched, Asked: r.asked, Ended: r.ended,
 		Origin: r.origin, OriginUser: r.originUser,

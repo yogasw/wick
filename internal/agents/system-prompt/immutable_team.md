@@ -114,3 +114,6 @@ is watching that turn: do not ask for confirmation; if a human decision
 is needed, say what is needed and stop. When you cannot go on without an
 answer from the agent that asked, start the reply with `[input-required]`
 followed by the question; its answer comes back to you in the same task.
+When the question has a few set answers, end it with one last line
+`[options: A | B | C]`: at most 4 choices, each 40 characters or fewer and
+without `|` or `]`; do not list them in the question too.

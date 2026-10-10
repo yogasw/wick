@@ -130,3 +130,46 @@ func TestSourceNamesResolvedOncePerTurn(t *testing.T) {
 		t.Fatalf("next turn must read the roster again, got %d", calls)
 	}
 }
+
+// A question's "[options: …]" line reaches the thread as plain choices,
+// never as the raw line.
+func TestReplyRewritesOptionsLine(t *testing.T) {
+	f := newFakeSlack(t)
+	c := &Channel{
+		api:   f.client(),
+		turns: map[string]*turn{"slack-t1": {channelID: "C1", threadTS: "1700000000.000100", running: true}},
+	}
+
+	c.NotifyState("slack-t1", "done", "Which env?\n[options: prod | staging]")
+
+	got := postedText(f)
+	if strings.Contains(got, "[options:") || !strings.Contains(got, "Options: prod / staging") {
+		t.Fatalf("options line not rewritten: %s", got)
+	}
+}
+
+// While a question streams in, its options line is held back until it
+// closes, then edited in as plain choices: the raw line never shows.
+func TestLiveEditHoldsOpenOptionsLine(t *testing.T) {
+	f := newMDFakeSlack(t)
+	tr := &turn{channelID: "C1", threadTS: "1700000000.000100", running: true}
+	tr.buf.WriteString("Which env?\n[options: prod | sta")
+	c := newMDChannel(f, tr)
+
+	c.flushLiveMessage("slack-t1")
+	tr.buf.WriteString("ging]")
+	c.flushLiveMessage("slack-t1")
+
+	calls := f.got()
+	if len(calls) != 2 {
+		t.Fatalf("want post then update, got %+v", calls)
+	}
+	first := calls[0].vals.Get("text") + calls[0].vals.Get("blocks")
+	if strings.Contains(first, "[options") || strings.Contains(first, "prod") || !strings.Contains(first, "Which env?") {
+		t.Fatalf("open options line leaked into the live post: %s", first)
+	}
+	last := calls[1].vals.Get("text") + calls[1].vals.Get("blocks")
+	if strings.Contains(last, "[options") || !strings.Contains(last, "Options: prod / staging") {
+		t.Fatalf("closed options line not rewritten: %s", last)
+	}
+}

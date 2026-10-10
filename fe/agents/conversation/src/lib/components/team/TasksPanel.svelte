@@ -16,7 +16,8 @@
   import AvatarActivity from "./AvatarActivity.svelte";
   import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
-  import { chipElapsed, endedDay, groupTasks, isTaskActive, isUserTask, quickReplies, statusLabel, taskProgress, taskStatus, userTaskRoute, type TaskStatus } from "../../delegations.js";
+  import { chipElapsed, endedDay, groupTasks, isTaskActive, isUserTask, statusLabel, taskProgress, taskQuickReplies, taskStatus, userTaskRoute, type TaskStatus } from "../../delegations.js";
+  import { questionHtml } from "../../questionText.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
   import AnswerBox from "./AnswerBox.svelte";
   import CancelConfirm from "./CancelConfirm.svelte";
@@ -270,7 +271,7 @@
                 <div class="mt-px break-words text-[11.5px] text-black-700">{(s === "failed" || s === "declined" || s === "canceled") && t.summary ? t.summary : t.title}</div>
                 {#if s === "needs_you" && (t.reply || t.summary)}
                   <!-- The question the quick answers come from (reply, as in the block and the tray), three lines at most. -->
-                  <div data-testid="tasks-row-question" title={t.reply || t.summary} class="mt-1 line-clamp-3 whitespace-pre-line break-words text-[11.5px] text-amber-700 dark:text-amber-300">{t.reply || t.summary}</div>
+                  <div data-testid="tasks-row-question" title={t.reply || t.summary} class="mt-1 line-clamp-3 whitespace-pre-line break-words text-[11.5px] text-amber-700 dark:text-amber-300">{@html questionHtml(t.reply || t.summary)}</div>
                 {:else if s === "answering"}
                   <div class="mt-1 text-[11.5px] text-black-700">{statusLabel(s, senderName)}…</div>
                 {:else if taskProgress(t)}
@@ -302,7 +303,7 @@
                       to={t.to_handle}
                       note={isUserTask(t) ? "you asked, so only you answer" : `${senderName} sees it too`}
                       value={draftOf(t.task_id)}
-                      quick={quickReplies(t.reply || t.summary || "")}
+                      quick={taskQuickReplies(t)}
                       sending={sending === t.task_id}
                       disabled={sending !== null && sending !== t.task_id}
                       onInput={(v) => { drafts = { ...drafts, [t.task_id]: v }; setDraft(t.task_id, v); }}

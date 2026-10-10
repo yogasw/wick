@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -31,6 +32,8 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/google/uuid"
+
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 )
 
 // Limits on agent-to-agent traffic. A2A→B→A counts as three turns of the
@@ -413,6 +416,9 @@ type taskRef struct {
 	waiterGone, finished, delivered bool
 	reply                           string
 	state                           a2a.TaskState
+	// options are the choices a question offered (its "[options: …]"
+	// line, taken off reply), for the UI's pills.
+	options []string
 	// touched is the last time the task changed; the janitor ages from it.
 	touched time.Time
 	// contextID, title and started describe the task for the UI list.
@@ -490,6 +496,7 @@ type answerClaim struct {
 	waiterGone, delivered bool
 	reply                 string
 	state                 a2a.TaskState
+	options               []string
 	// origin and originUser are the claimed task's (taskRef.origin): an
 	// answer to the person's own task carries them on.
 	origin, originUser string
@@ -750,6 +757,8 @@ type Result struct {
 	State     string `json:"state"`
 	To        string `json:"to"`
 	ReplyText string `json:"reply_text,omitempty"`
+	// Options are the choices an input_required question offers.
+	Options []string `json:"options,omitempty"`
 	// Reason says why a task ended failed, rejected or canceled.
 	Reason string `json:"reason,omitempty"`
 	Note   string `json:"note,omitempty"`
@@ -1009,11 +1018,12 @@ func (h *Hub) answering(callerID string, in SendInput) (string, string, *answerC
 	}
 	// The task runs again: clear what its last turn left before the
 	// executor can report the next one.
-	claim := &answerClaim{waiterGone: ref.waiterGone, delivered: ref.delivered, reply: ref.reply, state: ref.state, origin: ref.origin, originUser: ref.originUser}
+	claim := &answerClaim{waiterGone: ref.waiterGone, delivered: ref.delivered, reply: ref.reply, state: ref.state, options: ref.options, origin: ref.origin, originUser: ref.originUser}
 	ref.claimed, ref.userAnswer = true, in.byUser
 	// This process runs it now: not a restart's leftover any more.
 	ref.fromDisk = false
 	ref.finished, ref.waiterGone, ref.delivered, ref.reply, ref.state = false, false, false, "", a2a.TaskStateWorking
+	ref.options = nil
 	return ref.to.Handle, ref.contextID, claim, nil
 }
 
@@ -1031,6 +1041,7 @@ func (h *Hub) unclaim(id a2a.TaskID, c *answerClaim) {
 	ref.claimed, ref.userAnswer = false, false
 	if !ref.canceled {
 		ref.finished, ref.waiterGone, ref.delivered, ref.reply, ref.state = true, c.waiterGone, c.delivered, c.reply, c.state
+		ref.options = c.options
 	}
 	h.mu.Unlock()
 	h.persist(id)
@@ -1387,6 +1398,7 @@ func (h *Hub) resultLocked(id a2a.TaskID, ref *taskRef) *Result {
 		}
 	case "input_required":
 		out.ReplyText = ref.reply
+		out.Options = slices.Clone(ref.options)
 		out.Note = "The teammate asks you something. Answer with message task_id=" + string(id) + "; ask the user first if only they can answer."
 		if ref.userTask() {
 			out.Note = "The teammate asks the user, who sent this task with an @mention: only the user answers it, from the chat. Do not answer it yourself."
@@ -1554,6 +1566,15 @@ func (h *Hub) settle(ctx context.Context, id a2a.TaskID, state a2a.TaskState, re
 	// again: the same settle delivered once more (handBack after the
 	// caller left); the task asked or ended when it first settled.
 	again := ref.finished && ref.state == state
+	// A question's "[options: …]" line becomes its choices; settled once
+	// more (handBack), the reply has none left and keeps the choices.
+	if state == a2a.TaskStateInputRequired {
+		if q, opts := agentchannels.SplitOptions(reply); q != reply {
+			reply, ref.options = q, opts
+		}
+	} else {
+		ref.options = nil
+	}
 	ref.interrupted = orphan
 	ref.finished, ref.state, ref.reply, ref.touched = true, state, reply, h.now()
 	ref.claimed, ref.userAnswer = false, false
@@ -1581,7 +1602,7 @@ func (h *Hub) settle(ctx context.Context, id a2a.TaskID, state a2a.TaskState, re
 			ref.markSent(textKey(reply))
 		}
 	}
-	session, to := ref.callerSession, ref.to
+	session, to, opts := ref.callerSession, ref.to, ref.options
 	h.mu.Unlock()
 	h.persist(id)
 	if !deliver || h.Notify == nil {
@@ -1592,6 +1613,9 @@ func (h *Hub) settle(ctx context.Context, id a2a.TaskID, state a2a.TaskState, re
 	}
 	text := fmt.Sprintf("Reply from %s [task %s, %s]:\n\n%s", to.Label(), id, stateName(state), reply)
 	if state == a2a.TaskStateInputRequired {
+		if len(opts) > 0 {
+			text += "\n\nOptions: " + strings.Join(opts, " | ")
+		}
 		text += fmt.Sprintf("\n\n(%s asks you this. Answer with team_message task_id=%s; ask the user first if only they can answer.)", to.Label(), id)
 	}
 	if err := h.Notify.Deliver(context.WithoutCancel(ctx), session, text); err != nil {
@@ -1626,8 +1650,10 @@ func (h *Hub) FollowUp(ctx context.Context, sessionID, text string) bool {
 	dup, userTask := false, false
 	if ok && ref != nil {
 		session, to, userTask = ref.callerSession, ref.to, ref.userTask()
-		if dup = ref.alreadySent(text); !dup {
-			ref.markSent(textKey(text))
+		// The question as the caller got it: without its options line.
+		key, _ := agentchannels.SplitOptions(text)
+		if dup = ref.alreadySent(key); !dup {
+			ref.markSent(textKey(key))
 			ref.logTeammateLocked(text, h.now())
 			if userTask {
 				// The person's task: the follow-up shows on it, without
@@ -1688,6 +1714,9 @@ type TaskView struct {
 	// Reply is the reply, question or reason itself, capped, for the
 	// thread's preview of the task.
 	Reply string `json:"reply,omitempty"`
+	// Options are the choices a question offers (its "[options: …]"
+	// line), shown as pills; absent when it offers none.
+	Options []string `json:"options,omitempty"`
 	// ChatID is the teammate's chat the task runs in ("" = main or not
 	// known yet), so the UI can open it.
 	ChatID string `json:"chat_id,omitempty"`
@@ -1895,6 +1924,9 @@ func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {
 	}
 	if ref.finished {
 		v.Summary, v.Reply = firstLine(ref.reply), capText(ref.reply, replyPreviewMax)
+		if v.State == "input_required" {
+			v.Options = slices.Clone(ref.options)
+		}
 	}
 	v.ChatID = ref.chat
 	v.Interrupted = ref.interrupted

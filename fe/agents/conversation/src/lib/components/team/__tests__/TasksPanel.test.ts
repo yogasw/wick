@@ -180,6 +180,17 @@ describe("TasksPanel (combined §4)", () => {
     expect(screen.getByTestId("tasks-earlier-toggle").getAttribute("aria-controls")).toBe("tasks-earlier-rows");
   });
 
+  test("s18c: inline code in the question, escaped, and the teammate's choices as pills", async () => {
+    const q = task({ task_id: "q", to_handle: "rio", to_name: "Rio", state: "input_required", needs_you: true, reply: "Use `v2.14.0`? <img src=x onerror=alert(1)> (yes / no)", options: ["Both deploys", "Only 20:55"] });
+    render(TasksPanel, { props: { tasks: [q], onAnswer: vi.fn().mockResolvedValue(undefined) } });
+    const shown = screen.getByTestId("tasks-row-question");
+    expect(shown.querySelector("code")!.textContent).toBe("v2.14.0");
+    expect(shown.querySelector("img")).toBeNull();
+    expect(shown.textContent).toBe("Use v2.14.0? <img src=x onerror=alert(1)> (yes / no)");
+    await fireEvent.click(screen.getByText("Answer"));
+    expect(screen.getAllByTestId("quick-pill").map((p) => p.textContent)).toEqual(["Both deploys", "Only 20:55"]);
+  });
+
   test("the question shown is the one the quick answers come from (reply)", async () => {
     const q = task({ task_id: "q", to_handle: "rio", to_name: "Rio", state: "input_required", needs_you: true, summary: "Which env?", reply: "Which env?\nPick one (prod / staging)" });
     render(TasksPanel, { props: { tasks: [q], onAnswer: vi.fn().mockResolvedValue(undefined) } });

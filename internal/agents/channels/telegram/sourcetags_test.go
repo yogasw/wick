@@ -23,6 +23,23 @@ func TestDoneRewritesSourceTags(t *testing.T) {
 	agentchannels.SourceNames = func(string) map[string]string {
 		return map[string]string{"alpha": "Alpha", "beta": "Beta"}
 	}
+	got := doneText(t, "- Logs clean [from:@alpha]\n- Both agree [from:@alpha,@beta]\n- Spoof [from:@ghost]")
+	if got != "- Logs clean (from Alpha)\n- Both agree (from Alpha, Beta)\n- Spoof" {
+		t.Fatalf("sent %q", got)
+	}
+}
+
+// A question's "[options: …]" line reaches the chat as plain choices.
+func TestDoneRewritesOptionsLine(t *testing.T) {
+	got := doneText(t, "Which env?\n[options: prod | staging]")
+	if got != "Which env?\n\nOptions: prod / staging" {
+		t.Fatalf("sent %q", got)
+	}
+}
+
+// doneText streams delta as one turn and returns what it sent at Done.
+func doneText(t *testing.T, delta string) string {
+	t.Helper()
 	var mu sync.Mutex
 	var sent []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -48,13 +65,10 @@ func TestDoneRewritesSourceTags(t *testing.T) {
 	}
 	c := &Channel{bot: bot, turns: map[string]*turn{"tg-5": {chatID: 5}}}
 
-	c.OnAgentEvent("tg-5", event.AgentEvent{Type: event.TextDelta, Text: "- Logs clean [from:@alpha]\n- Both agree [from:@alpha,@beta]\n- Spoof [from:@ghost]"})
+	c.OnAgentEvent("tg-5", event.AgentEvent{Type: event.TextDelta, Text: delta})
 	c.OnAgentEvent("tg-5", event.AgentEvent{Type: event.Done})
 
 	mu.Lock()
-	got := strings.Join(sent, "\n")
-	mu.Unlock()
-	if got != "- Logs clean (from Alpha)\n- Both agree (from Alpha, Beta)\n- Spoof" {
-		t.Fatalf("sent %q", got)
-	}
+	defer mu.Unlock()
+	return strings.Join(sent, "\n")
 }

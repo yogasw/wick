@@ -2715,9 +2715,9 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 	liveTS := t.liveTS
 	lastSent := t.lastSent
 	s.mu.Unlock()
-	// Outside s.mu: naming the sources reads the Team roster. A tag still
-	// streaming in is held back until it closes.
-	body := agentchannels.TrimOpenSourceTag(s.rewriteSources(sessionKey, stripSilentMarker(raw)))
+	// Outside s.mu: naming the sources reads the Team roster. A tag or an
+	// options line still streaming in is held back until it closes.
+	body := agentchannels.TrimOpenOptionsLine(agentchannels.TrimOpenSourceTag(s.rewriteSources(sessionKey, stripSilentMarker(raw))))
 
 	if body == "" || body == lastSent {
 		return
@@ -3165,10 +3165,12 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 }
 
 // rewriteSources turns the reply's [from:@handle] tags into plain
-// " (from Name)", names escaped for mrkdwn so one cannot ping or link.
+// " (from Name)", names escaped for mrkdwn so one cannot ping or link,
+// and a question's "[options: …]" line into plain "Options: A / B".
 // The roster is read once per turn and kept on it: live edits rewrite
 // the same growing text every streamEditInterval.
 func (s *Channel) rewriteSources(sessionKey, text string) string {
+	text = agentchannels.RewriteOptionsLine(text)
 	if !strings.Contains(text, "[from:") {
 		return text
 	}

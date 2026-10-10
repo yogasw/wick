@@ -18,6 +18,32 @@ function task(o: Partial<TeamTaskItem>): TeamTaskItem {
 }
 
 describe("DelegationBlock", () => {
+  test("s18c: the question renders inline code, escaped, with the teammate's choices as pills", () => {
+    render(DelegationBlock, {
+      props: {
+        tasks: [task({ state: "input_required", needs_you: true, reply: "Diff `v2.14.0` or only the 20:55 push? (a / b)", options: ["Both deploys", "Only 20:55", "Only v2.14.0"] })],
+        onAnswer: vi.fn(),
+      },
+    });
+    const q = screen.getByTestId("needs-you-question");
+    const code = q.querySelector("code")!;
+    expect(code.textContent).toBe("v2.14.0");
+    expect(code.className).toBe("font-mono text-[11.5px]");
+    expect(q.textContent).toBe("Diff v2.14.0 or only the 20:55 push? (a / b)");
+    expect(screen.getAllByTestId("quick-pill").map((p) => p.textContent)).toEqual(["Both deploys", "Only 20:55", "Only v2.14.0"]);
+  });
+
+  test("s18c: markup in the question stays text", () => {
+    render(DelegationBlock, {
+      props: { tasks: [task({ state: "input_required", needs_you: true, reply: '<img src=x onerror="alert(1)"> `<script>alert(1)</script>` see https://example.com/a?b=1' })], onAnswer: vi.fn() },
+    });
+    const q = screen.getByTestId("needs-you-question");
+    expect(q.querySelector("img,script")).toBeNull();
+    expect(q.querySelector("code")!.textContent).toBe("<script>alert(1)</script>");
+    expect(q.textContent).toContain('<img src=x onerror="alert(1)">');
+    expect(q.querySelector("a")!.getAttribute("href")).toBe("https://example.com/a?b=1");
+  });
+
   test("groups several team_message results into one block with a summary", () => {
     render(DelegationBlock, {
       props: {

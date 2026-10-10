@@ -419,6 +419,12 @@ export function quickReplies(question: string): string[] {
   return opts.length >= 2 && opts.length <= 4 && opts.every((o) => o.length <= 24) ? opts : [];
 }
 
+/** A question's quick answers: the choices the teammate sent with it,
+    else what quickReplies reads from its text. */
+export function taskQuickReplies(t: TeamTaskItem): string[] {
+  return t.options?.length ? t.options : quickReplies(t.reply || t.summary || "");
+}
+
 /** The Tasks rail tab's marks: the green badge counts the tasks still
     active, the amber dot shows while one waits for the person (needsInput
     says how many, for the tab's name), and the ring spins while a

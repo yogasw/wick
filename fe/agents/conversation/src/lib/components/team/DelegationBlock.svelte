@@ -18,7 +18,8 @@
   import AvatarActivity from "./AvatarActivity.svelte";
   import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
-  import { allSettled, blockHead, chipElapsed, chipLabel, clockTime, foldAvatars, isTaskActive, isUserTask, quickReplies, settledParts, statusParts, taskProgress, taskStatus, teammateName, USER_TASK_MARKER, userTaskRoute, type StatusPart, type TaskStatus } from "../../delegations.js";
+  import { allSettled, blockHead, chipElapsed, chipLabel, clockTime, foldAvatars, isTaskActive, isUserTask, settledParts, statusParts, taskProgress, taskQuickReplies, taskStatus, teammateName, USER_TASK_MARKER, userTaskRoute, type StatusPart, type TaskStatus } from "../../delegations.js";
+  import { questionHtml } from "../../questionText.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
   import AnswerBox from "./AnswerBox.svelte";
   import CancelConfirm from "./CancelConfirm.svelte";
@@ -293,12 +294,12 @@
               <span data-testid="needs-you-task" class="min-w-0 flex-1 truncate">· {t.title}{asked ? ` · asked ${asked}` : ""}</span>
             </div>
             <div class="flex flex-col gap-2 pb-2.5 pl-[38px] pr-3">
-              <p data-testid="needs-you-question" class="whitespace-pre-wrap break-words text-[13px] leading-normal text-black-900 dark:text-white-100">{t.reply || t.summary || "(no question text)"}</p>
+              <p data-testid="needs-you-question" class="whitespace-pre-wrap break-words text-[13px] leading-normal text-black-900 dark:text-white-100">{#if t.reply || t.summary}{@html questionHtml(t.reply || t.summary)}{:else}(no question text){/if}</p>
               <AnswerBox
                 to={t.to_handle}
                 note={isUserTask(t) ? "you asked, so only you answer" : `${captainName} sees it too`}
                 value={draftOf(t.task_id)}
-                quick={quickReplies(t.reply || t.summary || "")}
+                quick={taskQuickReplies(t)}
                 sending={sending === t.task_id}
                 disabled={sending !== null && sending !== t.task_id}
                 onInput={(v) => { drafts = { ...drafts, [t.task_id]: v }; setDraft(t.task_id, v); }}

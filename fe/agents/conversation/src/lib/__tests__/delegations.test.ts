@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { PROGRESS_MAX, taskProgress, blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, liveTurnTasks, heldForLiveTurn, userTaskRoute, quickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, teammateName, turnSpan, liveTurnStatus } from "../delegations.js";
+import { PROGRESS_MAX, taskProgress, blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, liveTurnTasks, heldForLiveTurn, userTaskRoute, quickReplies, taskQuickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, teammateName, turnSpan, liveTurnStatus } from "../delegations.js";
 import type { ConversationTurn, TeamTaskItem, ThreadBlock } from "../types/agents.js";
 
 const task = (o: Partial<TeamTaskItem>): TeamTaskItem => ({
@@ -146,6 +146,13 @@ describe("delegations", () => {
   test("quick replies only for a short option list", () => {
     expect(quickReplies("Which environment? (prod / staging)")).toEqual(["prod", "staging"]);
     expect(quickReplies("What should the report say about the outage?")).toEqual([]);
+  });
+  test("s18c: the choices the teammate sent win over the guessed ones", () => {
+    const q = "Diff both? (both / only 20:55)";
+    expect(taskQuickReplies(task({ reply: q, options: ["Both deploys", "Only 20:55", "Only v2.14.0"] }))).toEqual(["Both deploys", "Only 20:55", "Only v2.14.0"]);
+    expect(taskQuickReplies(task({ reply: q, options: [] }))).toEqual(["both", "only 20:55"]);
+    expect(taskQuickReplies(task({ summary: q }))).toEqual(["both", "only 20:55"]);
+    expect(taskQuickReplies(task({}))).toEqual([]);
   });
   test("answering names the agent that sent the task", () => {
     expect(statusLabel(taskStatus(task({ state: "input_required" })), "Anton")).toBe("Anton is answering");

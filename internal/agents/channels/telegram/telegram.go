@@ -723,6 +723,8 @@ func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 		// reaches the chat. Sent without a parse mode, so a name needs
 		// no escaping.
 		text = agentchannels.RewriteSourceTags(sessionID, text, nil)
+		// A question's "[options: A | B]" line reads as plain choices.
+		text = agentchannels.RewriteOptionsLine(text)
 		if text != "" {
 			t.postChunked(chatID, text)
 		}
