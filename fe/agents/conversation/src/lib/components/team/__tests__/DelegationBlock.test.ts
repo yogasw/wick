@@ -92,6 +92,8 @@ describe("DelegationBlock", () => {
         props: { tasks: [task({ state: "input_required", needs_you: true, title: "List deploys", reply: "Which env?", asked_at: askedAt })], onAnswer: vi.fn() },
       });
       expect(screen.getByTestId("needs-you-task").textContent).toBe("· List deploys · asked 10:12");
+      // The chip times the wait from asked_at, not from the last touch.
+      expect(screen.getByTestId("chip-elapsed").textContent).toBe("2m 10s");
     } finally {
       vi.useRealTimers();
     }

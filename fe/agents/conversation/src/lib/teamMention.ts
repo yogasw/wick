@@ -88,6 +88,7 @@ export function handoffState(state: string): string {
     case "completed":
       return "completed";
     case "rejected":
+    case "auth-required":
       return "declined";
     case "failed":
       return "failed";

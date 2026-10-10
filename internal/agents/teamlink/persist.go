@@ -63,6 +63,10 @@ type taskRecord struct {
 	Sent       []string  `json:"sent,omitempty"`
 	Started    time.Time `json:"started_at"`
 	Touched    time.Time `json:"updated_at"`
+	// Asked and Ended are taskRef.asked/ended; a record written before
+	// they existed reads them zero.
+	Asked time.Time `json:"asked_at,omitzero"`
+	Ended time.Time `json:"ended_at,omitzero"`
 }
 
 // Persist keeps the Hub's tasks in dir (created when missing) and loads
@@ -198,6 +202,7 @@ func refFromRecord(rec taskRecord) *taskRef {
 		waiterGone: rec.WaiterGone, finished: rec.Finished, delivered: rec.Delivered, canceled: rec.Canceled,
 		reply: rec.Reply, state: a2a.TaskState(rec.State), interrupted: rec.Interrupted, fromDisk: true,
 		touched: rec.Touched, contextID: rec.ContextID, title: rec.Title, started: rec.Started,
+		asked: rec.Asked, ended: rec.Ended,
 		chat: rec.Chat, answered: rec.Answered,
 	}
 	if rec.Origin == OriginUser {
@@ -217,7 +222,7 @@ func (r *taskRef) record(id a2a.TaskID) taskRecord {
 		Title: r.title, State: string(r.state),
 		Finished: r.finished, WaiterGone: r.waiterGone, Delivered: r.delivered, Canceled: r.canceled, Interrupted: r.interrupted,
 		Reply: r.reply, Chat: r.chat, Answered: r.answered,
-		Started: r.started, Touched: r.touched,
+		Started: r.started, Touched: r.touched, Asked: r.asked, Ended: r.ended,
 		Origin: r.origin, OriginUser: r.originUser,
 	}
 	if len(rec.Reply) > maxStoredReply {

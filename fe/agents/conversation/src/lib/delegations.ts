@@ -204,10 +204,11 @@ export function statusSummary(tasks: TeamTaskItem[]): string {
 
 const ms = (iso: string | undefined): number => (iso ? Date.parse(iso) : NaN);
 
-/** When a task ended (ended_at once the server sends it, B1) and when
-    its question was asked: updated_at stands in for what is missing. */
+/** When a task ended (ended_at) and when its question was asked
+    (asked_at); updated_at stands in on a task recorded before the server
+    kept them. */
 const endedMs = (t: TeamTaskItem): number => ms(t.ended_at || t.updated_at);
-const askedMs = (t: TeamTaskItem): number => ms(t.updated_at);
+const askedMs = (t: TeamTaskItem): number => ms(t.asked_at || t.updated_at);
 
 /** "45s", "2m 10s", "1h 5m": a running timer. */
 export function formatTimer(msec: number): string {
@@ -244,14 +245,15 @@ export function endedDay(t: TeamTaskItem, now: number): string {
 }
 
 /** The chip's time: a running timer while the teammate works, how long
-    a question has waited, the clock time a task ended. */
+    a question has waited (the sender answering it or the person), the
+    clock time a task ended. */
 export function chipElapsed(t: TeamTaskItem, now: number): string {
   const s = taskStatus(t);
-  if (s === "working" || s === "answering") {
+  if (s === "working") {
     const at = ms(t.started_at);
     return Number.isFinite(at) ? formatTimer(now - at) : "";
   }
-  if (s === "needs_you") {
+  if (s === "needs_you" || s === "answering") {
     const at = askedMs(t);
     return Number.isFinite(at) ? formatTimer(now - at) : "";
   }

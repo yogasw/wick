@@ -78,6 +78,30 @@ describe("TasksPanel (combined §4)", () => {
     expect(within(c).getByText("Canceled by you — too wide")).toBeDefined();
   });
 
+  test("B1: asked_at times the question, ended_at places and times the row, declined reads red", () => {
+    render(TasksPanel, {
+      props: {
+        tasks: [
+          task({ task_id: "q", to_handle: "rio", to_name: "Rio", state: "input_required", needs_you: true, asked_at: at(11, 50), updated_at: at(11, 59), summary: "Which env?" }),
+          task({ task_id: "d", to_handle: "lia", to_name: "Lia", state: "completed", ended_at: at(10, 8), updated_at: at(11, 30) }),
+          task({ task_id: "e", to_handle: "vera", to_name: "Vera", state: "completed", ended_at: at(18, 0, 0, 9), updated_at: at(9, 0) }),
+          task({ task_id: "r", to_handle: "kai", to_name: "Kai", state: "rejected", ended_at: at(11, 40), summary: "not my job" }),
+        ],
+      },
+    });
+    expect(within(rowOf("Rio")).getByTestId("tasks-row-time").textContent).toBe("10m 00s");
+    expect(within(screen.getByTestId("tasks-group-done")).getAllByTestId("tasks-panel-name").map((n) => n.textContent)).toEqual(["Lia"]);
+    expect(within(rowOf("Lia")).getByTestId("tasks-row-time").textContent).toBe("10:08");
+    expect(within(screen.getByTestId("tasks-group-earlier")).getByTestId("tasks-earlier-toggle")).toBeDefined();
+    const r = within(screen.getByTestId("tasks-group-failed")).getByTestId("tasks-row");
+    const tag = within(r).getByTestId("tasks-row-tag");
+    expect(tag.textContent).toBe("declined");
+    expect(tag.className).toContain("text-red-600");
+    expect(tag.className).toContain("dark:text-red-400");
+    expect(within(r).getByTestId("tasks-row-time").textContent).toBe("11:40");
+    expect(within(r).getByText("not my job")).toBeDefined();
+  });
+
   test("actions: Answer / quiet Cancel / Jump, working Cancel / Jump, none once ended", () => {
     const fn = () => vi.fn().mockResolvedValue(undefined);
     render(TasksPanel, { props: { tasks, onAnswer: fn(), onCancel: fn(), onJump: vi.fn() } });

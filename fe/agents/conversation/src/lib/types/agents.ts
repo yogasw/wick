@@ -866,11 +866,11 @@ export type TeamTaskItem = {
   /** "user": the person sent it with an @mention in this chat, so only
       they answer or cancel it and its question always needs them. */
   origin?: "user";
-  /** When the teammate asked the question it waits on (input_required);
-      absent until the server sends it. */
+  /** When the teammate last asked a question (input_required); absent
+      until it asks, and on a task recorded before the server kept it. */
   asked_at?: string;
-  /** When the task ended; absent until the server sends it (B1), so
-      updated_at stands in. */
+  /** When the task ended (replied, failed, declined or canceled); absent
+      until then, and on an older task, where updated_at stands in. */
   ended_at?: string;
   /** Messages exchanged on the task; absent until the server sends it
       (B2), so turns stands in. */

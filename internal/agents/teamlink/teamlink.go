@@ -417,6 +417,10 @@ type taskRef struct {
 	contextID string
 	title     string
 	started   time.Time
+	// asked is when the task last entered input_required; ended is when it
+	// ended for good (replied, failed, rejected or canceled). Zero until
+	// then, and zero on a record written before they existed.
+	asked, ended time.Time
 	// chat is the target's session the turn runs in, once the executor
 	// picked it ("" = main or not yet known).
 	chat string
@@ -987,6 +991,7 @@ func (h *Hub) supersede(id, next a2a.TaskID) {
 	}
 	ref.claimed, ref.userAnswer, ref.canceled = false, false, true
 	ref.finished, ref.delivered, ref.state, ref.touched = true, true, a2a.TaskStateCanceled, h.now()
+	ref.ended = ref.touched
 	ref.reply = fmt.Sprintf("superseded by task %s: this task was lost when wick restarted, the answer went there", next)
 	h.mu.Unlock()
 	h.persist(id)
@@ -1411,6 +1416,7 @@ func (h *Hub) cancelTask(ctx context.Context, callerAgentID, taskID string, byUs
 	ref.canceled, ref.finished, ref.delivered = true, true, true
 	ref.claimed, ref.userAnswer = false, false
 	ref.state, ref.reply, ref.touched = a2a.TaskStateCanceled, reason, h.now()
+	ref.ended = ref.touched
 	agentID, to := ref.agentID, ref.to
 	h.mu.Unlock()
 
@@ -1473,9 +1479,19 @@ func (h *Hub) settle(ctx context.Context, id a2a.TaskID, state a2a.TaskState, re
 		h.mu.Unlock()
 		return
 	}
+	// again: the same settle delivered once more (handBack after the
+	// caller left); the task asked or ended when it first settled.
+	again := ref.finished && ref.state == state
 	ref.interrupted = orphan
 	ref.finished, ref.state, ref.reply, ref.touched = true, state, reply, h.now()
 	ref.claimed, ref.userAnswer = false, false
+	switch {
+	case again:
+	case state == a2a.TaskStateInputRequired:
+		ref.asked = ref.touched
+	default:
+		ref.ended = ref.touched
+	}
 	deliver := ref.waiterGone && !ref.delivered && ref.callerSession != ""
 	if ref.userTask() {
 		// The person's task: the reply or question shows on the task in
@@ -1548,6 +1564,7 @@ func (h *Hub) FollowUp(ctx context.Context, sessionID, text string) bool {
 				case ref.state == a2a.TaskStateFailed:
 					ref.state, ref.reply, ref.interrupted = a2a.TaskStateCompleted, strings.TrimSpace(text), false
 					ref.touched = h.now()
+					ref.ended = ref.touched
 				}
 			}
 		}
@@ -1581,6 +1598,11 @@ type TaskView struct {
 	MaxTurns  int       `json:"max_turns"`
 	Started   time.Time `json:"started_at"`
 	Updated   time.Time `json:"updated_at"`
+	// AskedAt is when the task last asked a question (input_required);
+	// EndedAt is when it ended for good. Absent until then, and on a task
+	// recorded before wick kept them.
+	AskedAt time.Time `json:"asked_at,omitzero"`
+	EndedAt time.Time `json:"ended_at,omitzero"`
 	// Age is how long ago the task was sent, rounded ("3m", "2h").
 	Age string `json:"age"`
 	// Summary is the first line of the reply, question or reason.
@@ -1776,6 +1798,7 @@ func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {
 		ToID: ref.to.ID, ToHandle: ref.to.Handle, ToName: ref.to.Name,
 		Title: ref.title, State: h.viewState(ref), Turns: turns, MaxTurns: limit,
 		Started: ref.started, Updated: ref.touched,
+		AskedAt: ref.asked, EndedAt: ref.ended,
 		Age: shortAge(now.Sub(ref.started)),
 	}
 	if ref.finished {

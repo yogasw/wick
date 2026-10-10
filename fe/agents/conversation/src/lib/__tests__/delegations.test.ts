@@ -182,6 +182,12 @@ describe("P48 helpers", () => {
     expect(chipElapsed(task({ state: "input_required", needs_you: true, updated_at: "2026-10-10T10:04:00Z" }), now)).toBe("1m 10s");
     const end = "2026-10-10T10:08:00Z";
     expect(chipElapsed(task({ state: "completed", updated_at: end }), now)).toBe(clockTime(Date.parse(end)));
+    // The sender answering a question: timed from the ask, like needs input.
+    expect(chipElapsed(task({ state: "input_required", started_at: "2026-10-10T09:00:00Z", asked_at: "2026-10-10T10:04:00Z" }), now)).toBe("1m 10s");
+    // asked_at / ended_at win over updated_at, which moves with every touch.
+    expect(chipElapsed(task({ state: "input_required", needs_you: true, asked_at: "2026-10-10T10:03:00Z", updated_at: "2026-10-10T10:05:00Z" }), now)).toBe("2m 10s");
+    expect(chipElapsed(task({ state: "completed", ended_at: end, updated_at: "2026-10-10T10:09:30Z" }), now)).toBe(clockTime(Date.parse(end)));
+    expect(chipElapsed(task({ state: "rejected", ended_at: end }), now)).toBe(clockTime(Date.parse(end)));
     expect(clockTime(new Date(2026, 9, 10, 9, 7).getTime())).toBe("09:07");
     expect(clockTime(NaN)).toBe("");
   });
@@ -274,6 +280,24 @@ describe("P48 helpers", () => {
       ["failed", "Failed · Canceled", ["r", "c"], false],
     ]);
     expect(groupTasks([task({})], noon).map((g) => g.key)).toEqual(["working"]);
+  });
+
+  test("groupTasks: ended_at decides Done today vs Earlier, updated_at only stands in", () => {
+    const noon = new Date(2026, 9, 10, 12, 0).getTime();
+    const today = new Date(2026, 9, 10, 0, 30).toISOString();
+    const yesterday = new Date(2026, 9, 9, 23, 30).toISOString();
+    const groups = groupTasks(
+      [
+        // A late follow-up touched it today; it ended yesterday.
+        task({ task_id: "old", state: "completed", ended_at: yesterday, updated_at: today }),
+        task({ task_id: "new", state: "completed", ended_at: today, updated_at: yesterday }),
+      ],
+      noon,
+    );
+    expect(groups.map((g) => [g.key, g.tasks.map((t) => t.task_id)])).toEqual([
+      ["done", ["new"]],
+      ["earlier", ["old"]],
+    ]);
   });
 });
 

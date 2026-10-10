@@ -33,6 +33,9 @@ describe("teamSender / handoffState", () => {
     expect(handoffState("TASK_STATE_COMPLETED")).toBe("completed");
     expect(handoffState("TASK_STATE_INPUT_REQUIRED")).toBe("needs input");
     expect(handoffState("working")).toBe("working");
+    // auth_required reads rejected on the Hub: declined, like delegations.
+    expect(handoffState("TASK_STATE_AUTH_REQUIRED")).toBe("declined");
+    expect(handoffState("TASK_STATE_REJECTED")).toBe("declined");
     expect(handoffState("TASK_STATE_REJECTED")).toBe("declined");
     expect(handoffState("failed")).toBe("failed");
   });
