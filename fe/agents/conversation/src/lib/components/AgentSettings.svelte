@@ -372,7 +372,8 @@
     imgBusy = true;
     try {
       const r = await runApi(uploadAvatarImage(base, agent.id, await fileData(f)));
-      draft.avatar = imageAvatar(draft.avatar, r.v, r.aspect);
+      // A new picture starts centred but keeps the chosen crop shape.
+      draft.avatar = imageAvatar(draft.avatar, r.v, r.aspect, { ...DEFAULT_CROP, crop: draft.avatar.image?.crop ?? DEFAULT_CROP.crop });
     } catch (err) {
       imgError = err instanceof Error ? err.message : String(err);
     } finally {

@@ -11,6 +11,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/yogasw/wick/internal/entity"
@@ -43,6 +44,15 @@ const (
 	AvatarFitFill = "fill"
 	AvatarFitFit  = "fit"
 )
+
+// AvatarCrops are the frame shapes an image avatar is cut to, the same keys
+// as AVATAR_CROPS in fe/common/avatar/src/image.ts. "none" is the plain
+// square picture; anything unknown (or absent, as on avatars saved before
+// crops existed) is the round frame.
+var AvatarCrops = []string{"round", "rounded", "hex", "none"}
+
+// AvatarCropRound is the default crop.
+const AvatarCropRound = "round"
 
 // Errors of ProcessAvatarImage, each one a 4xx for the caller.
 var (
@@ -223,6 +233,9 @@ func opaqueRGBA(m *image.RGBA) bool {
 func clampAvatarImage(im AvatarImage) AvatarImage {
 	if im.Fit != AvatarFitFit {
 		im.Fit = AvatarFitFill
+	}
+	if !slices.Contains(AvatarCrops, im.Crop) {
+		im.Crop = AvatarCropRound
 	}
 	im.X = clampFloat(im.X, -AvatarCropMaxOffset, AvatarCropMaxOffset, 0)
 	im.Y = clampFloat(im.Y, -AvatarCropMaxOffset, AvatarCropMaxOffset, 0)

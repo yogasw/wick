@@ -1,13 +1,14 @@
 /* Image avatars on the client: reading a picked file for the upload and
    the starting crop. The server is the gate (type by magic bytes, size,
    dimensions, re-encode); this only avoids sending what it would refuse. */
+import { DEFAULT_IMAGE_CROP } from "@wick-fe/common-avatar";
 import type { AgentAvatarSpec } from "./api/team.js";
 
 export const AVATAR_IMAGE_MAX_BYTES = 2 << 20;
 export const AVATAR_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 
-export type ImageCrop = { fit: string; x: number; y: number; zoom: number };
-export const DEFAULT_CROP: ImageCrop = { fit: "fill", x: 0, y: 0, zoom: 0 };
+export type ImageCrop = { fit: string; x: number; y: number; zoom: number; crop?: string };
+export const DEFAULT_CROP: ImageCrop = { fit: "fill", x: 0, y: 0, zoom: 0, crop: DEFAULT_IMAGE_CROP };
 
 /** pickError is why a picked file cannot be sent, "" when it can. */
 export function pickError(f: File): string {

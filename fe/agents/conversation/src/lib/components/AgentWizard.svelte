@@ -85,7 +85,8 @@
     imgFile = f;
     imgUrl = f ? URL.createObjectURL(f) : "";
     imgAspect = 1;
-    imgCrop = { ...DEFAULT_CROP };
+    // Another picture starts centred but keeps the chosen crop shape.
+    imgCrop = { ...DEFAULT_CROP, crop: imgCrop.crop ?? DEFAULT_CROP.crop };
     if (!imgUrl || typeof Image === "undefined") return;
     const probe = new Image();
     const url = imgUrl;

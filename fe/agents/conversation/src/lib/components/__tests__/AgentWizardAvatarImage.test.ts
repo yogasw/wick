@@ -7,6 +7,7 @@ vi.mock("@wick-fe/common-stores", async (orig) => ({
   toastError: (t: string, b?: string) => toastError(t, b),
 }));
 const uploadAvatarImage = vi.fn((_b: string, _id: string, _d: string) => Promise.reject(new Error("only PNG, JPEG or WebP images are accepted")));
+const updateAgent = vi.fn((_b: string, id: string, body: unknown) => Promise.resolve({ id, handle: "pic", ...(body as object) }));
 vi.mock("../../avatarImage.js", async (orig) => ({
   ...(await orig<typeof import("../../avatarImage.js")>()),
   fileData: () => Promise.resolve("iVBORw=="),
@@ -15,6 +16,7 @@ vi.mock("../../api/team.js", async (orig) => ({
   ...(await orig<typeof import("../../api/team.js")>()),
   createAgent: () => Promise.resolve({ id: "a1", handle: "pic", avatar: { shape: "circle", color: "#27b199" } }),
   uploadAvatarImage: (b: string, id: string, d: string) => uploadAvatarImage(b, id, d),
+  updateAgent: (b: string, id: string, body: unknown) => updateAgent(b, id, body),
   listAgentConnectors: () => Promise.resolve([]),
   listAgents: () => Promise.resolve({ agents: [], captain_id: "" }),
   getProjectPersona: () => Promise.resolve({ name: "", description: "", system_prompt: "" }),
@@ -54,6 +56,30 @@ describe("AgentWizard › avatar style Image", () => {
     await fireEvent.click(screen.getByTestId("avatar-image-reset"));
     expect(screen.getByText("No image yet")).toBeDefined();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith(url);
+  });
+
+  test("the crop tiles wait for a picture; another picture keeps the shape; submit saves it (review M2/L1)", async () => {
+    URL.createObjectURL = vi.fn(() => `blob:${location.origin}/0000-pic`);
+    URL.revokeObjectURL = vi.fn();
+    uploadAvatarImage.mockImplementationOnce(() => Promise.resolve({ v: "0123456789abcdef", aspect: 1 }) as never);
+    const onCreated = vi.fn();
+    render(AgentWizard, { props: { ...props(), onCreated } });
+    await fireEvent.input(screen.getByLabelText("Name"), { target: { value: "Pic" } });
+    await fireEvent.click(screen.getByTestId("avatar-kind-image"));
+    expect((screen.getByRole("button", { name: "Hexagon" }) as HTMLButtonElement).disabled).toBe(true);
+    const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "pic.png", { type: "image/png" });
+    await fireEvent.change(screen.getByTestId("avatar-image-file"), { target: { files: [file] } });
+    await fireEvent.click(screen.getByRole("button", { name: "Hexagon" }));
+    await fireEvent.change(screen.getByTestId("avatar-image-file"), { target: { files: [file] } });
+    expect(screen.getByRole("button", { name: "Hexagon" }).getAttribute("aria-pressed")).toBe("true");
+    await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Provider & model" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Claude/ }));
+    await fireEvent.click(await screen.findByText("Sonnet"));
+    await fireEvent.click(screen.getByRole("button", { name: "Create agent" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(updateAgent.mock.calls.at(-1)?.[2]).toMatchObject({ avatar: { kind: "image", image: { v: "0123456789abcdef", crop: "hex", x: 0, zoom: 0 } } });
   });
 
   test("a GIF is refused with a message", async () => {

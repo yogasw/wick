@@ -91,6 +91,17 @@ describe("AgentSettings avatar: image style", () => {
     expect(img?.getAttribute("src")).toBe("/tools/agents/api/team/agents/a1/avatar/image?v=0123456789abcdef");
   });
 
+  test("a new upload keeps the chosen crop shape (review M1)", async () => {
+    const hexAgent = { ...imgAgent, avatar: { ...imgAgent.avatar, image: { ...imgAgent.avatar!.image!, crop: "hex", x: 20 } } } as unknown as AgentItem;
+    render(AgentSettings, { props: props(hexAgent) });
+    expect(screen.getByRole("button", { name: "Hexagon" }).getAttribute("aria-pressed")).toBe("true");
+    const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "pic.png", { type: "image/png" });
+    await fireEvent.change(screen.getByTestId("avatar-image-file"), { target: { files: [file] } });
+    await waitFor(() => expect(uploadAvatarImage).toHaveBeenCalled());
+    await waitFor(() => expect(lastAvatar()).toMatchObject({ kind: "image", image: { aspect: 2, x: 0, crop: "hex" } }));
+    expect(screen.getByRole("button", { name: "Hexagon" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
   test("a non-image file is refused before any upload", async () => {
     render(AgentSettings, { props: props(imgAgent) });
     const svg = new File(["<svg/>"], "x.svg", { type: "image/svg+xml" });

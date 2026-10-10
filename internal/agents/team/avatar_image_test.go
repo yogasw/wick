@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"hash/crc32"
 	"image"
@@ -11,6 +12,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/yogasw/wick/internal/entity"
@@ -206,6 +208,40 @@ func TestNormalizeAvatarImageClamps(t *testing.T) {
 	w := WithImageSrc(a, "/tools/agents", "a 1")
 	if w.Image.Src != "/tools/agents/api/team/agents/a%201/avatar/image?v=0123456789abcdef" || a.Image.Src != "" {
 		t.Fatalf("src: %q (input changed: %q)", w.Image.Src, a.Image.Src)
+	}
+}
+
+func TestNormalizeAvatarImageCrop(t *testing.T) {
+	crop := func(c string) string {
+		a := NormalizeAvatar(Avatar{Kind: AvatarKindImage, Image: &AvatarImage{V: "0123456789abcdef", Crop: c}})
+		return a.Image.Crop
+	}
+	// Saved before crops existed: round, exactly as it was drawn then.
+	if got := crop(""); got != AvatarCropRound {
+		t.Fatalf("default crop = %q, want round", got)
+	}
+	for _, c := range AvatarCrops {
+		if got := crop(c); got != c {
+			t.Fatalf("crop %q became %q", c, got)
+		}
+	}
+	for _, c := range []string{"bogus", "Hex", "circle", "<svg>"} {
+		if got := crop(c); got != AvatarCropRound {
+			t.Fatalf("unknown crop %q = %q, want round", c, got)
+		}
+	}
+	// JSON round-trip: the crop is read, kept and written back.
+	var in Avatar
+	if err := json.Unmarshal([]byte(`{"kind":"image","shape":"circle","color":"#27b199","image":{"v":"0123456789abcdef","aspect":1,"fit":"fill","x":0,"y":0,"zoom":0,"crop":"hex"}}`), &in); err != nil {
+		t.Fatal(err)
+	}
+	out, err := json.Marshal(NormalizeAvatar(in))
+	if err != nil || !strings.Contains(string(out), `"crop":"hex"`) {
+		t.Fatalf("round-trip lost the crop: %s %v", out, err)
+	}
+	// A blob keeps its stored crop too, so switching back restores it.
+	if b := NormalizeAvatar(Avatar{Kind: AvatarKindBlob, Image: &AvatarImage{V: "0123456789abcdef", Crop: "hex"}}); b.Image.Crop != "hex" {
+		t.Fatalf("blob lost the crop: %+v", b.Image)
 	}
 }
 

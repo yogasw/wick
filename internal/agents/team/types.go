@@ -134,7 +134,8 @@ type Avatar struct {
 
 // AvatarImage is where an image avatar's picture sits in its frame:
 // Fit picks what Zoom 0 (automatic) means, X/Y move it in percent of the
-// frame and Zoom scales it. Every number is clamped (clampAvatarImage).
+// frame, Zoom scales it and Crop shapes the frame. Every value is clamped
+// (clampAvatarImage).
 type AvatarImage struct {
 	V      string  `json:"v"`
 	Aspect float64 `json:"aspect"`
@@ -142,6 +143,8 @@ type AvatarImage struct {
 	X      float64 `json:"x"`
 	Y      float64 `json:"y"`
 	Zoom   float64 `json:"zoom"`
+	// Crop is the frame's shape, one of AvatarCrops (default round).
+	Crop string `json:"crop"`
 	// Src is the picture's versioned URL, filled in only on the way out
 	// (WithImageSrc); never stored, never read from a request.
 	Src string `json:"src,omitempty"`

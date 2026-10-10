@@ -15,7 +15,7 @@ export type AgentAvatarSpec = {
   /** Per-event pose overrides (Settings › Avatar, events.ts); absent = defaults. */
   events?: Record<string, { state?: string; expression?: string; off?: boolean }>;
   /** kind "image": the crop of the stored picture (team.AvatarImage). */
-  image?: { v: string; aspect: number; fit: string; x: number; y: number; zoom: number; src?: string };
+  image?: { v: string; aspect: number; fit: string; x: number; y: number; zoom: number; crop?: string; src?: string };
 };
 
 export type ConnectorGrant = {

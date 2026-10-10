@@ -1,9 +1,12 @@
 <script lang="ts">
-  /* An image avatar: the picture inside a round frame, cropped by the
-     stored numbers (image.ts). Poses move the frame from outside — the
-     same motion names as the mockup's afx-* set — so the picture itself
-     never changes. `animate` off (still, reduced motion) is one frame. */
-  import { imageTransform, safeImageSrc, type AvatarImageView } from "./image.js";
+  /* An image avatar: the picture inside a frame cut to its crop (round by
+     default, rounded, hexagon or the plain square), placed by the stored
+     numbers (image.ts). The ring is the frame's box-shadow; a hexagon's
+     clip would cut that off, so it gets an outline drawn under the
+     picture instead (3px, half hidden by it: 1.5px shows, as the ring).
+     Poses move the frame from outside — the same motion names as the
+     mockup's afx-* set — so the picture itself never changes. `animate` off (still, reduced motion) is one frame. */
+  import { CROP_PATHS, cropFrameStyle, imageCrop, imageTransform, safeImageSrc, type AvatarImageView } from "./image.js";
 
   type Props = {
     image: AvatarImageView; size?: number; pose?: string; animate?: boolean; title?: string; color?: string;
@@ -14,6 +17,7 @@
 
   const src = $derived(safeImageSrc(image.src));
   const ring = $derived(/^#[0-9a-f]{3,8}$/i.test(color) ? color : "#27b199");
+  const crop = $derived(imageCrop(image.crop));
 </script>
 
 <span
@@ -26,10 +30,17 @@
   role="img"
   aria-label={title ?? "avatar"}
 >
-  <span class="frame absolute inset-0 overflow-hidden rounded-full bg-white-200 dark:bg-navy-700" style:box-shadow="0 0 0 1.5px {ring}">
-    {#if src}
-      <img {src} alt="" draggable="false" onerror={() => onerror?.()} class="h-full w-full select-none object-contain" style:transform={imageTransform(image)} />
+  <span class="frame absolute inset-0" data-crop={crop}>
+    {#if crop === "hex"}
+      <svg class="pointer-events-none absolute inset-0 h-full w-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <path d={CROP_PATHS.hex} fill="none" stroke={ring} stroke-width="3" vector-effect="non-scaling-stroke" stroke-linejoin="round" />
+      </svg>
     {/if}
+    <span class="clip absolute inset-0 overflow-hidden bg-white-200 dark:bg-navy-700" style={cropFrameStyle(crop)} style:box-shadow={crop === "hex" ? undefined : `0 0 0 1.5px ${ring}`}>
+      {#if src}
+        <img {src} alt="" draggable="false" onerror={() => onerror?.()} class="h-full w-full select-none object-contain" style:transform={imageTransform(image)} />
+      {/if}
+    </span>
   </span>
   {#if animate && (pose === "orbit" || pose === "thinking")}<span class="dot" style:background-color={ring}></span>{/if}
 </span>

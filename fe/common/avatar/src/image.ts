@@ -7,7 +7,47 @@ export const isImageKind = (k: string | undefined | null) => k === AVATAR_KIND_I
 
 /** The stored crop (team.AvatarImage). v and aspect are server-owned;
     src is the versioned URL the API adds on the way out. */
-export type AvatarImageSpec = { v: string; aspect: number; fit: "fit" | "fill" | string; x: number; y: number; zoom: number; src?: string };
+export type AvatarImageSpec = { v: string; aspect: number; fit: "fit" | "fill" | string; x: number; y: number; zoom: number; crop?: AvatarCrop | string; src?: string };
+
+/** The frame's shape (team.AvatarCrops): the mockup's Crop tiles. "none"
+    is the plain square picture. */
+export type AvatarCrop = "round" | "rounded" | "hex" | "none";
+export const AVATAR_CROPS: readonly [AvatarCrop, string][] = [
+  ["round", "Round"],
+  ["rounded", "Rounded"],
+  ["hex", "Hexagon"],
+  ["none", "Original"],
+];
+export const DEFAULT_IMAGE_CROP: AvatarCrop = "round";
+
+/** imageCrop is the crop to draw: anything unknown or absent (avatars saved
+    before crops existed) is round, as the server normalizes it. */
+export const imageCrop = (c: unknown): AvatarCrop =>
+  AVATAR_CROPS.some(([k]) => k === c) ? (c as AvatarCrop) : DEFAULT_IMAGE_CROP;
+
+/** CROP_PATHS outline each crop in a 100×100 box (the editor's frame line,
+    the hexagon's clip). Same paths as the mockup. */
+export const CROP_PATHS: Record<AvatarCrop, string> = {
+  round: "M0 50a50 50 0 1 0 100 0a50 50 0 1 0 -100 0Z",
+  rounded: "M26 0H74A26 26 0 0 1 100 26V74A26 26 0 0 1 74 100H26A26 26 0 0 1 0 74V26A26 26 0 0 1 26 0Z",
+  hex: "M25 5L75 5L100 50L75 95L25 95L0 50Z",
+  none: "M0 0H100V100H0Z",
+};
+
+/** cropFrameStyle clips the frame to the crop: a circle, 26% corners, the
+    hexagon polygon, or nothing (a square). */
+export function cropFrameStyle(c: unknown): string {
+  switch (imageCrop(c)) {
+    case "rounded":
+      return "border-radius: 26%";
+    case "hex":
+      return "clip-path: polygon(25% 5%, 75% 5%, 100% 50%, 75% 95%, 25% 95%, 0 50%)";
+    case "none":
+      return "border-radius: 0";
+    default:
+      return "border-radius: 9999px";
+  }
+}
 
 /** What AgentAvatar draws: the crop plus where to load the picture. Any
     avatar object from the API fits (its image carries src). */

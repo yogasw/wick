@@ -1,13 +1,28 @@
 <script lang="ts">
   /* Settings › Avatar and the create wizard, style Image (mockup
-     avatar-settings-image): Upload image + Reset, then Position — Fit /
-     Fill, drag to move, pinch / wheel / slider to zoom. The crop is only
-     numbers (x, y in % of the frame, zoom); the server clamps them again.
+     avatar-settings-image): Upload image + Reset, Crop (the frame's shape:
+     Round / Rounded / Hexagon / Original), then Position — Fit / Fill,
+     drag to move, pinch / wheel / slider to zoom. The crop is only numbers
+     and a shape key (x, y in % of the frame, zoom, crop); the server
+     clamps them again.
      The picture is shown through an <img> whose src passed safeImageSrc,
      never through markup. */
-  import { clampOffset, clampZoom, effectiveZoom, imageTransform, safeImageSrc, IMAGE_ZOOM_MAX, IMAGE_ZOOM_MIN } from "@wick-fe/common-avatar";
+  import {
+    clampOffset,
+    clampZoom,
+    cropFrameStyle,
+    effectiveZoom,
+    imageCrop,
+    imageTransform,
+    safeImageSrc,
+    AVATAR_CROPS,
+    CROP_PATHS,
+    IMAGE_ZOOM_MAX,
+    IMAGE_ZOOM_MIN,
+    ImageAvatar,
+  } from "@wick-fe/common-avatar";
 
-  type ImageCrop = { fit: string; x: number; y: number; zoom: number };
+  type ImageCrop = { fit: string; x: number; y: number; zoom: number; crop?: string };
   type Props = {
     /** The picture to place: the stored URL or a picked file's blob: URL; "" = none yet. */
     src: string;
@@ -25,6 +40,7 @@
   const safe = $derived(safeImageSrc(src));
   const view = $derived({ ...crop, aspect });
   const zoom = $derived(effectiveZoom(view));
+  const shape = $derived(imageCrop(crop.crop));
   const sm =
     "rounded-lg border border-white-300 px-2.5 py-1 text-xs text-black-900 hover:bg-white-200 disabled:opacity-50 dark:border-navy-600 dark:text-white-100 dark:hover:bg-navy-600";
 
@@ -98,11 +114,31 @@
     </p>
   </div>
   <div>
+    <span class={labelClass}>Crop</span>
+    <div class="mt-1.5 grid grid-cols-4 gap-2" role="group" aria-label="Crop" data-testid="avatar-image-crops">
+      {#each AVATAR_CROPS as [k, lbl] (k)}
+        <button
+          type="button"
+          class="flex flex-col items-center gap-1 rounded-xl border-2 p-1.5 text-xs text-black-900 dark:text-white-100 {shape === k ? 'border-green-500' : 'border-white-300 dark:border-navy-600'}"
+          disabled={!safe}
+          aria-pressed={shape === k}
+          aria-label={lbl}
+          data-testid="avatar-image-crop"
+          data-crop={k}
+          onclick={() => set({ crop: k })}
+        >
+          <ImageAvatar image={{ ...view, crop: k, src: safe }} size={46} title={lbl} />
+          <span>{lbl}</span>
+        </button>
+      {/each}
+    </div>
+  </div>
+  <div>
     <div class="flex items-center justify-between gap-2">
       <span class={labelClass}>Position</span>
       <span class="flex gap-1.5">
-        <button type="button" class={sm} disabled={!safe} aria-pressed={!crop.zoom && crop.fit === "fit"} data-testid="avatar-image-fit" onclick={() => onCrop({ fit: "fit", x: 0, y: 0, zoom: 0 })}>Fit</button>
-        <button type="button" class={sm} disabled={!safe} aria-pressed={!crop.zoom && crop.fit !== "fit"} data-testid="avatar-image-fill" onclick={() => onCrop({ fit: "fill", x: 0, y: 0, zoom: 0 })}>Fill</button>
+        <button type="button" class={sm} disabled={!safe} aria-pressed={!crop.zoom && crop.fit === "fit"} data-testid="avatar-image-fit" onclick={() => set({ fit: "fit", x: 0, y: 0, zoom: 0 })}>Fit</button>
+        <button type="button" class={sm} disabled={!safe} aria-pressed={!crop.zoom && crop.fit !== "fit"} data-testid="avatar-image-fill" onclick={() => set({ fit: "fill", x: 0, y: 0, zoom: 0 })}>Fill</button>
       </span>
     </div>
     <p class="mt-1 text-xs text-black-800 dark:text-black-600">Drag to move, pinch or use the slider to zoom. The dimmed part is cropped out of the avatar.</p>
@@ -115,6 +151,7 @@
         aria-label="Image position (arrow keys move)"
         tabindex={safe ? 0 : -1}
         data-testid="avatar-image-frame"
+        data-crop={shape}
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}
@@ -124,12 +161,23 @@
       >
         {#if safe}
           <img src={safe} alt="" draggable="false" class="pointer-events-none absolute inset-0 h-full w-full object-contain opacity-30" style:transform={imageTransform(view)} />
-          <div class="absolute inset-0 overflow-hidden rounded-full ring-2 ring-green-500">
+          <div class="absolute inset-0 overflow-hidden" style={cropFrameStyle(shape)}>
             <img src={safe} alt="" draggable="false" class="pointer-events-none h-full w-full object-contain" style:transform={imageTransform(view)} />
           </div>
         {:else}
-          <div class="absolute inset-0 flex items-center justify-center rounded-full border-2 border-dashed border-white-300 text-center text-xs text-black-800 dark:border-navy-600 dark:text-black-600">No image yet</div>
+          <div class="absolute inset-0 flex items-center justify-center text-center text-xs text-black-800 dark:text-black-600">No image yet</div>
         {/if}
+        <!-- The frame line follows the crop (the mockup's PATHS outline). -->
+        <svg class="pointer-events-none absolute inset-0 h-full w-full overflow-visible text-white-300 dark:text-navy-600" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" data-testid="avatar-image-outline">
+          <path
+            d={CROP_PATHS[shape]}
+            fill="none"
+            stroke={safe ? "#27b199" : "currentColor"}
+            stroke-width="2"
+            stroke-dasharray={safe ? undefined : "6 4"}
+            vector-effect="non-scaling-stroke"
+          />
+        </svg>
       </div>
     </div>
     <div class="mt-2 flex items-center gap-2">
