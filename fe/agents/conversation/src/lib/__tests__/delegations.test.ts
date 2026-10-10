@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { PROGRESS_MAX, taskProgress, blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, liveTurnTasks, userTaskRoute, quickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, turnSpan } from "../delegations.js";
+import { PROGRESS_MAX, taskProgress, blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, liveTurnTasks, userTaskRoute, quickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, teammateName, turnSpan, liveTurnStatus } from "../delegations.js";
 import type { ConversationTurn, TeamTaskItem, ThreadBlock } from "../types/agents.js";
 
 const task = (o: Partial<TeamTaskItem>): TeamTaskItem => ({
@@ -323,5 +323,41 @@ describe("endedDay (Tasks rail Earlier)", () => {
     for (const state of ["input_required", "completed", "failed", "rejected", "canceled"]) {
       expect(taskProgress(task({ state, progress: "stale" }))).toBe("");
     }
+  });
+});
+
+describe("liveTurnStatus (grouped §3 live)", () => {
+  const wait = "summary comes when they're back";
+
+  test("no tasks: no line", () => {
+    expect(liveTurnStatus([])).toBeNull();
+  });
+
+  test("one task names the teammate, the team's name first", () => {
+    const t = task({ task_id: "a", to_handle: "atraxa", to_name: "Atraxa", state: "working" });
+    expect(liveTurnStatus([t])).toBe(`asked Atraxa — ${wait}`);
+    expect(liveTurnStatus([t], { atraxa: { name: "Atraxa Prime" } })).toBe(`asked Atraxa Prime — ${wait}`);
+    expect(liveTurnStatus([task({ task_id: "b", to_handle: "halo", to_name: "", state: "working" })])).toBe(`asked @halo — ${wait}`);
+  });
+
+  test("two or more count the tasks", () => {
+    const ts = ["a", "b", "c", "d"].map((id) => task({ task_id: id, to_handle: id, state: "working" }));
+    expect(liveTurnStatus(ts.slice(0, 2))).toBe(`split the question into 2 tasks — ${wait}`);
+    expect(liveTurnStatus(ts)).toBe(`split the question into 4 tasks — ${wait}`);
+  });
+
+  test("stays while one task is out (working or waiting on input), null once all settled", () => {
+    const done = task({ task_id: "a", to_handle: "a", state: "completed" });
+    const ask = task({ task_id: "b", to_handle: "b", state: "input_required", needs_you: true });
+    expect(liveTurnStatus([done, ask])).toBe(`split the question into 2 tasks — ${wait}`);
+    const settled = ["completed", "failed", "rejected", "canceled"].map((st, i) => task({ task_id: "s" + i, to_handle: "s" + i, state: st as TeamTaskItem["state"] }));
+    expect(liveTurnStatus(settled)).toBeNull();
+    expect(liveTurnStatus([done])).toBeNull();
+  });
+
+  test("teammateName falls back from team name to task name to handle", () => {
+    expect(teammateName(task({ to_handle: "x", to_name: "Ex" }), { x: { name: "Team X" } })).toBe("Team X");
+    expect(teammateName(task({ to_handle: "x", to_name: "Ex" }))).toBe("Ex");
+    expect(teammateName(task({ to_handle: "x", to_name: "" }))).toBe("@x");
   });
 });

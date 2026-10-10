@@ -18,7 +18,7 @@
   import AvatarActivity from "./AvatarActivity.svelte";
   import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
-  import { allSettled, blockHead, chipElapsed, chipLabel, clockTime, foldAvatars, isTaskActive, isUserTask, quickReplies, settledParts, statusParts, taskProgress, taskStatus, USER_TASK_MARKER, userTaskRoute, type StatusPart, type TaskStatus } from "../../delegations.js";
+  import { allSettled, blockHead, chipElapsed, chipLabel, clockTime, foldAvatars, isTaskActive, isUserTask, quickReplies, settledParts, statusParts, taskProgress, taskStatus, teammateName, USER_TASK_MARKER, userTaskRoute, type StatusPart, type TaskStatus } from "../../delegations.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
   import AnswerBox from "./AnswerBox.svelte";
   import CancelConfirm from "./CancelConfirm.svelte";
@@ -123,7 +123,7 @@
   const settled = $derived(settledParts(tasks));
 
   function nameOf(t: TeamTaskItem): string {
-    return agents[t.to_handle]?.name || t.to_name || "@" + t.to_handle;
+    return teammateName(t, agents);
   }
   // A chip is open while its preview shows (clicked, or Show all).
   function chipOpen(t: TeamTaskItem): boolean {

@@ -379,6 +379,66 @@ describe("ConversationThread live delegation block", () => {
     expect(r.container.querySelector("[data-live-trace-toggle]")).toBeNull();
   });
 
+  test("the live turn opens with the asst-meta status line: who, when, how many tasks", () => {
+    state = { turns: [userTurn], live };
+    render(ConversationThread, { props: { ...state, typing: { active: true }, agent: { name: "Captain", description: "", caption: "" } }, context: context() });
+    const meta = screen.getByTestId("live-asst-meta");
+    expect(meta.textContent!.trim()).toMatch(/^Captain · \d\d:\d\d · split the question into 2 tasks — summary comes when they're back$/);
+    // It stands right above the block.
+    expect(meta.nextElementSibling?.hasAttribute("data-task-ids")).toBe(true);
+  });
+
+  test("one task names the teammate; the line goes once every task settled", async () => {
+    const one: LiveTurn = { text: "", blocks: [teamBlock("u1", "k1")] };
+    state = { turns: [userTurn], live: one };
+    const { rerender } = render(ConversationThread, { props: { ...state, typing: { active: true }, agent: { name: "Captain", description: "", caption: "" } }, context: context() });
+    expect(screen.getByTestId("live-asst-meta").textContent).toContain("· asked Alpha — summary comes when they're back");
+    tasks[0] = { ...tasks[0], state: "completed", ended_at: "2026-10-10T10:05:00Z" };
+    try {
+      await rerender({ ...state, live: { ...one }, typing: { active: true } });
+      expect(screen.queryByTestId("live-asst-meta")).toBeNull();
+      expect(document.querySelector("[data-task-ids]")).not.toBeNull();
+    } finally {
+      tasks[0] = { ...tasks[0], state: "working", ended_at: undefined };
+    }
+  });
+
+  test("a committed turn never shows the live status line", () => {
+    render(ConversationThread, { props: { turns: [userTurn, makeTurn("t-x", "assistant", "done")], live: null, typing: { active: false } }, context: context() });
+    expect(screen.queryByTestId("live-asst-meta")).toBeNull();
+  });
+
+  test("names carrying HTML render as literal text, no element made", () => {
+    const evil = "<img src=x onerror=alert(1)>";
+    const one: LiveTurn = { text: "", blocks: [teamBlock("u1", "k1")] };
+    tasks[0] = { ...tasks[0], to_name: evil };
+    try {
+      state = { turns: [userTurn], live: one };
+      render(ConversationThread, { props: { ...state, typing: { active: true }, agent: { name: evil, description: "", caption: "" } }, context: context() });
+      const meta = screen.getByTestId("live-asst-meta");
+      expect(meta.textContent).toContain(evil + " · ");
+      expect(meta.textContent).toContain("asked " + evil + " — ");
+      expect(meta.querySelector("img")).toBeNull();
+      expect(document.querySelector('img[src="x"]')).toBeNull();
+    } finally {
+      tasks[0] = { ...tasks[0], to_name: "Alpha" };
+    }
+  });
+
+  test("no agent name reads Assistant; no start time leaves the clock out", () => {
+    const k1 = tasks[0];
+    tasks[0] = { ...k1, started_at: "" };
+    try {
+      state = { turns: [userTurn], live: { text: "", blocks: [teamBlock("u1", "k1")] } };
+      render(ConversationThread, { props: { ...state, typing: { active: true } }, context: context() });
+      const meta = screen.getByTestId("live-asst-meta");
+      expect(meta.textContent!.trim()).toBe("Assistant · asked Alpha — summary comes when they're back");
+      expect(meta.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    } finally {
+      tasks[0] = k1;
+    }
+  });
+
   test("without the Team context the live turn renders as before", () => {
     render(ConversationThread, { props: { turns: [], live, typing: { active: true } } });
     expect(screen.queryByTestId("delegation-block")).toBeNull();

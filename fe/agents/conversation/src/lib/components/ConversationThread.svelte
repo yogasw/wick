@@ -19,7 +19,7 @@
   import { speakerVia } from "../teamMention.js";
   import DelegationBlock from "./team/DelegationBlock.svelte";
   import { getTeamTasksCtx } from "../teamTasksContext.js";
-  import { isTeamMessageTool, liveTurnTasks } from "../delegations.js";
+  import { isTeamMessageTool, liveTurnStatus, liveTurnTasks, turnSpan } from "../delegations.js";
 
   type Props = {
     turns: ConversationTurn[];
@@ -157,6 +157,13 @@
     teamCtx?.tasks && live ? JSON.stringify(liveTurnTasks(live.blocks, teamCtx.tasks())) : "[]",
   );
   const liveTasks = $derived(JSON.parse(liveTaskKey) as TeamTaskItem[]);
+  /* grouped §3 live asst-meta over the block: "Captain · 10:02 · split
+     the question into 4 tasks — summary comes when they're back", from
+     the task count alone; gone once every task has settled. */
+  const liveStatus = $derived(teamCtx ? liveTurnStatus(liveTasks, teamCtx.agents()) : null);
+  // The clock is the first task's start, not the turn's: the line
+  // reports the moment it delegated.
+  const liveStatusTime = $derived(liveStatus ? turnSpan(liveTasks) : "");
   const liveNonTodoBlocks = $derived(
     stripTodoBlocks(live?.blocks ?? []).filter((b) => !(liveTasks.length > 0 && b.kind === "tool" && isTeamMessageTool(b.toolName))),
   );
@@ -371,6 +378,13 @@
               {/each}
             </div>
           {/if}
+        {/if}
+        {#if liveStatus}
+          <div data-testid="live-asst-meta" class="flex items-center gap-1.5 text-[11px] text-black-700 dark:text-black-600">
+            <!-- The name is in the text: the avatar is decoration. -->
+            <span class="inline-flex shrink-0" aria-hidden="true"><AgentAvatar kind={agent?.kind} shape={agent?.shape} expression={agent?.expression} color={agent?.color} size={18} live working={true} /></span>
+            <span class="min-w-0 truncate">{agent?.name || "Assistant"}{liveStatusTime ? " · " + liveStatusTime : ""} · {liveStatus}</span>
+          </div>
         {/if}
         {#if liveTasks.length > 0 && teamCtx}
           <DelegationBlock

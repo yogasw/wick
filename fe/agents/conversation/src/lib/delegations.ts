@@ -342,6 +342,25 @@ export function turnSpan(tasks: TeamTaskItem[], committed: number = NaN): string
   return `${start} – ${end}`;
 }
 
+/** A teammate as the block names them: their agent's name in this
+    team, else the name the task carries, else "@handle". */
+export function teammateName(t: TeamTaskItem, agents: Record<string, { name?: string }> = {}): string {
+  return agents[t.to_handle]?.name || t.to_name || "@" + t.to_handle;
+}
+
+/** The live turn's asst-meta status (grouped §3 live), fixed by how many
+    tasks the turn sent, never by the prompt: one names the teammate
+    ("asked Atraxa — …"), more count them ("split the question into 4
+    tasks — …"). The line stays while any task is still out (working, or
+    a question waiting on input) and is null once every one has settled,
+    or when the turn sent none. */
+export function liveTurnStatus(tasks: TeamTaskItem[], agents: Record<string, { name?: string }> = {}): string | null {
+  if (tasks.length === 0 || allSettled(tasks)) return null;
+  const wait = "summary comes when they're back";
+  if (tasks.length === 1) return `asked ${teammateName(tasks[0], agents)} — ${wait}`;
+  return `split the question into ${tasks.length} tasks — ${wait}`;
+}
+
 export type TaskGroup = {
   key: "needs_you" | "working" | "done" | "earlier" | "failed";
   label: string;
