@@ -10,7 +10,6 @@ export {
   expiresSoon,
   showSavedResetsChip,
   savedResetsTooltip,
-  savedResetsEmptyText,
   usableNowText,
   inCooldown,
   ringTone,

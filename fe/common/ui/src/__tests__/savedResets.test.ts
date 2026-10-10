@@ -8,7 +8,6 @@ import {
   usableNowText,
   inCooldown,
   ringTone,
-  savedResetsEmptyText,
 } from "../usage/base/savedResets.js";
 import { glanceFromWire, loadUsage, peekUsage, resetUsageStore, seedUsage, usageStore } from "../usage/base/usageStore.js";
 
@@ -56,11 +55,9 @@ describe("chip + tooltip", () => {
 });
 
 describe("section states", () => {
-  it("not offered vs none left", () => {
-    expect(savedResetsEmptyText(parseSavedResets({ supported: true, available: 0, note: "Not available for this account." })!)).toBe(
-      "Not available for this account.",
-    );
-    expect(savedResetsEmptyText(parseSavedResets({ supported: true, available: 0 })!)).toBe("No saved resets.");
+  it("nothing to spend hides the section", () => {
+    expect(showSavedResetsChip(parseSavedResets({ supported: true, available: 0, note: "Not available for this account." }))).toBe(false);
+    expect(showSavedResetsChip(parseSavedResets({ supported: true, available: 0 }))).toBe(false);
   });
 
   it("usable now / at a limit / cooldown", () => {

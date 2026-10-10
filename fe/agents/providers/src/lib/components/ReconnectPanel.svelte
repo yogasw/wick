@@ -471,7 +471,7 @@
               </div>
             {/each}
             <!-- Saved resets ride in the same cached reading; hidden when
-                 the type reports none or the read failed. -->
+                 there is none to spend or the read failed. -->
             <SavedResetsSection resets={usage.savedResets} />
             <!-- Shared, cached reading (see UsageCacheChip): say its age
                  rather than implying this panel fetched it on open. -->

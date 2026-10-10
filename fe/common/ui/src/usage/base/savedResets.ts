@@ -23,7 +23,7 @@ export type SavedResets = {
   total: number;
   items: SavedResetItem[];
   cooldownUntil: string;
-  /* Replaces the count when there is nothing to offer ("Not available for this account."). */
+  /* Server-side reason when there is nothing to offer; the UI hides the section then. */
   note: string;
   /* The provider's one-line explanation, shown under the list. */
   hint: string;
@@ -141,11 +141,6 @@ export function usableNowText(r: SavedResets | null | undefined, now = Date.now(
   if (items.some((i) => i.usableNow)) return "Yes";
   if (items.length && items.every((i) => i.requiresLimit)) return "Only at a limit";
   return items.length ? "No" : "";
-}
-
-/** emptyText is what the section says when there is no count to show. */
-export function savedResetsEmptyText(r: SavedResets): string {
-  return r.note || "No saved resets.";
 }
 
 /** Ring tone for a utilization percentage: green < 80, amber 80–99, red ≥ 100. */

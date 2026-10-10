@@ -203,7 +203,7 @@
           <button
             type="button"
             class="inline-flex items-center gap-0.5 rounded px-1 py-px text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 {confirmReset[field.key]
-              ? 'bg-neg-100 text-neg-400'
+              ? 'bg-neg-100 text-neg-400 dark:bg-neg-400/15'
               : 'text-black-700 dark:text-black-600 enabled:hover:bg-neg-100 enabled:hover:text-neg-400'}"
             disabled={field.required}
             title={field.required ? "Required field — replace the value; it cannot be emptied" : "Remove the stored value"}
@@ -227,11 +227,11 @@
         onSetFields={setFields}
       />
       {#if confirmReset[field.key] && canReset(field)}
-        <div class="mt-2 flex items-center gap-2 rounded-md border border-neg-400 bg-neg-100 px-2.5 py-2 text-xs text-black-900 dark:text-white-100">
+        <div class="mt-2 flex items-center gap-2 rounded-md border border-neg-400 bg-neg-100 px-2.5 py-2 text-xs text-black-900 dark:border-neg-400/60 dark:bg-neg-400/10 dark:text-white-100">
           <span class="flex-1">Remove the stored <b class="font-mono">{field.key}</b>? Operations that use it will fail until it is set again.</span>
           <button
             type="button"
-            class="rounded border border-white-400 dark:border-navy-600 px-2.5 py-0.5 text-xs font-semibold"
+            class="rounded border border-white-400 bg-white-100 px-2.5 py-0.5 text-xs font-semibold text-black-900 hover:bg-white-300 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100 dark:hover:bg-navy-600"
             onclick={() => (confirmReset = { ...confirmReset, [field.key]: false })}
           >Cancel</button>
           <button

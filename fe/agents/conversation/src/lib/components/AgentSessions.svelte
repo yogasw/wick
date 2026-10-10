@@ -101,39 +101,45 @@
 </script>
 
 <DrawerHeader title="Chats" subtitle={`${agent.name} · @${agent.handle}`} avatar={agent.avatar} {onClose} />
-{#if shared}
-  <div class="flex shrink-0 gap-1 border-b border-white-300 px-4 dark:border-navy-600" role="tablist" aria-label="Chats">
-    {#each [{ key: "all", label: "All" }, { key: "you", label: "Yours" }] as t (t.key)}
-      <button
-        type="button"
-        role="tab"
-        aria-selected={tab === t.key}
-        class="-mb-px border-b-2 px-3 py-2.5 text-sm {tab === t.key ? 'border-green-500 font-medium text-black-900 dark:text-white-100' : 'border-transparent text-black-800 hover:text-black-900 dark:text-black-600 dark:hover:text-white-100'}"
-        onclick={() => (tab = t.key as ChatsTab)}
-      >{t.label}</button>
-    {/each}
-  </div>
-{/if}
 <div class="flex-1 overflow-y-auto px-4 py-4">
   <button
     type="button"
     class="mb-4 w-full rounded-lg border border-dashed border-white-400 px-4 py-2 text-sm font-medium text-black-900 hover:bg-white-200 dark:border-navy-500 dark:text-white-100 dark:hover:bg-navy-600"
     onclick={onNew}
   >+ New chat</button>
-  {#if !loading && !error && items.length > 0}
-    <div class="relative mb-4">
-      <svg viewBox="0 0 16 16" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black-600 dark:text-black-700" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-        <circle cx="6.5" cy="6.5" r="4.5"></circle>
-        <path d="M10.5 10.5l3 3" stroke-linecap="round"></path>
-      </svg>
-      <input
-        type="text"
-        placeholder="Search chats..."
-        aria-label="Search chats"
-        bind:value={query}
-        onkeydown={searchKey}
-        class="w-full rounded-lg border border-white-400 bg-white-100 py-2 pl-9 pr-4 text-sm text-black-900 placeholder-black-600 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-200 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100 dark:placeholder-black-700 dark:focus:ring-green-800"
-      />
+  {#if shared || (!loading && !error && items.length > 0)}
+    <!-- Search and the Yours/All scope share one row; the pill is the same
+         one the sidebar uses for its project scope. -->
+    <div class="mb-4 flex items-stretch gap-2">
+      {#if !loading && !error && items.length > 0}
+        <div class="relative min-w-0 flex-1">
+          <svg viewBox="0 0 16 16" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black-600 dark:text-black-700" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <circle cx="6.5" cy="6.5" r="4.5"></circle>
+            <path d="M10.5 10.5l3 3" stroke-linecap="round"></path>
+          </svg>
+          <input
+            type="text"
+            placeholder="Search chats..."
+            aria-label="Search chats"
+            bind:value={query}
+            onkeydown={searchKey}
+            class="w-full rounded-lg border border-white-400 bg-white-100 py-2 pl-9 pr-4 text-sm text-black-900 placeholder-black-600 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-200 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100 dark:placeholder-black-700 dark:focus:ring-green-800"
+          />
+        </div>
+      {/if}
+      {#if shared}
+        <div class="inline-flex shrink-0 overflow-hidden rounded-lg border border-white-400 bg-white-100 dark:border-navy-600 dark:bg-navy-700" role="tablist" aria-label="Chats">
+          {#each [{ key: "you", label: "Yours" }, { key: "all", label: "All" }] as t (t.key)}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === t.key}
+              class="flex items-center px-3 py-1.5 text-xs font-medium transition-colors {tab === t.key ? 'bg-green-500 text-white-100' : 'text-black-700 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-600'}"
+              onclick={() => (tab = t.key as ChatsTab)}
+            >{t.label}</button>
+          {/each}
+        </div>
+      {/if}
     </div>
   {/if}
   {#if loading}
