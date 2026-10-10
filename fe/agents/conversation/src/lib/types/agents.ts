@@ -858,4 +858,7 @@ export type TeamTaskItem = {
   /** Failed because wick restarted while the teammate was working on
       it; sending it again is safe. */
   interrupted?: boolean;
+  /** "user": the person sent it with an @mention in this chat, so only
+      they answer or cancel it and its question always needs them. */
+  origin?: "user";
 };

@@ -158,11 +158,17 @@ func (s *Service) PreRouteNote(ctx context.Context, in RouteInput) string {
 	}
 	seen := map[string]bool{}
 	tokens := make([]string, 0, 2)
+	// A person's teammate mention is their own task: nothing of it comes
+	// back into this thread, so the note must not promise it does.
+	var userTasks []string
 	if s.TeamRouter != nil {
 		for _, m := range ParseMentions(in.Text, s.TeamRouter.TeamHandles(ctx, in.SessionID)) {
 			if !seen[m.Handle] {
 				seen[m.Handle] = true
 				tokens = append(tokens, "@"+m.Handle)
+				if in.Human {
+					userTasks = append(userTasks, "@"+m.Handle)
+				}
 			}
 		}
 	}
@@ -193,9 +199,18 @@ func (s *Service) PreRouteNote(ctx context.Context, in RouteInput) string {
 	if len(tokens) == 0 {
 		return ""
 	}
-	return fmt.Sprintf(
-		"%s wick is dispatching %s for the message above. Do not delegate or message them again for it — that runs the work twice. Their results arrive in this thread on their own.",
+	note := fmt.Sprintf(
+		"%s wick is dispatching %s for the message above. Do not delegate or message them again for it — that runs the work twice.",
 		RoutedMarker, strings.Join(tokens, ", "))
+	switch {
+	case len(userTasks) == 0:
+		note += " Their results arrive in this thread on their own."
+	case len(userTasks) == len(tokens):
+		note += " It is the user's own task: the reply and any question show on the task for the user. You are not woken for them and must not answer them."
+	default:
+		note += fmt.Sprintf(" Results of the others arrive in this thread on their own. %s is the user's own task: the reply and any question show on the task for the user. You are not woken for them and must not answer them.", strings.Join(userTasks, ", "))
+	}
+	return note
 }
 
 // routeToAgent delivers a mention addressed to a live instance.

@@ -35,30 +35,34 @@ const (
 
 // taskRecord is one task as written to disk.
 type taskRecord struct {
-	TaskID        string    `json:"task_id"`
-	ContextID     string    `json:"context_id,omitempty"`
-	AgentID       string    `json:"agent_id"`
-	ToHandle      string    `json:"to_handle"`
-	ToName        string    `json:"to_name,omitempty"`
-	ToOwner       string    `json:"to_owner,omitempty"`
-	ToChatUser    string    `json:"to_chat_user,omitempty"`
-	ToRemote      bool      `json:"to_remote,omitempty"`
-	CallerAgentID string    `json:"caller_agent_id"`
-	CallerOwner   string    `json:"caller_owner,omitempty"`
-	CallerSession string    `json:"caller_session,omitempty"`
-	Title         string    `json:"title,omitempty"`
-	State         string    `json:"state,omitempty"`
-	Finished      bool      `json:"finished,omitempty"`
-	WaiterGone    bool      `json:"waiter_gone,omitempty"`
-	Delivered     bool      `json:"delivered,omitempty"`
-	Canceled      bool      `json:"canceled,omitempty"`
-	Interrupted   bool      `json:"interrupted,omitempty"`
-	Reply         string    `json:"reply,omitempty"`
-	Chat          string    `json:"chat,omitempty"`
-	Answered      string    `json:"answered_in,omitempty"`
-	Sent          []string  `json:"sent,omitempty"`
-	Started       time.Time `json:"started_at"`
-	Touched       time.Time `json:"updated_at"`
+	TaskID        string `json:"task_id"`
+	ContextID     string `json:"context_id,omitempty"`
+	AgentID       string `json:"agent_id"`
+	ToHandle      string `json:"to_handle"`
+	ToName        string `json:"to_name,omitempty"`
+	ToOwner       string `json:"to_owner,omitempty"`
+	ToChatUser    string `json:"to_chat_user,omitempty"`
+	ToRemote      bool   `json:"to_remote,omitempty"`
+	CallerAgentID string `json:"caller_agent_id"`
+	CallerOwner   string `json:"caller_owner,omitempty"`
+	CallerSession string `json:"caller_session,omitempty"`
+	Title         string `json:"title,omitempty"`
+	State         string `json:"state,omitempty"`
+	Finished      bool   `json:"finished,omitempty"`
+	WaiterGone    bool   `json:"waiter_gone,omitempty"`
+	Delivered     bool   `json:"delivered,omitempty"`
+	Canceled      bool   `json:"canceled,omitempty"`
+	Interrupted   bool   `json:"interrupted,omitempty"`
+	// Origin and OriginUser are taskRef.origin/originUser; a record
+	// written before they existed reads as the agent's task.
+	Origin     string    `json:"origin,omitempty"`
+	OriginUser string    `json:"origin_user,omitempty"`
+	Reply      string    `json:"reply,omitempty"`
+	Chat       string    `json:"chat,omitempty"`
+	Answered   string    `json:"answered_in,omitempty"`
+	Sent       []string  `json:"sent,omitempty"`
+	Started    time.Time `json:"started_at"`
+	Touched    time.Time `json:"updated_at"`
 }
 
 // Persist keeps the Hub's tasks in dir (created when missing) and loads
@@ -194,6 +198,9 @@ func refFromRecord(rec taskRecord) *taskRef {
 		touched: rec.Touched, contextID: rec.ContextID, title: rec.Title, started: rec.Started,
 		chat: rec.Chat, answered: rec.Answered,
 	}
+	if rec.Origin == OriginUser {
+		ref.origin, ref.originUser = OriginUser, rec.OriginUser
+	}
 	for _, s := range rec.Sent {
 		ref.markSent(s)
 	}
@@ -209,6 +216,7 @@ func (r *taskRef) record(id a2a.TaskID) taskRecord {
 		Finished: r.finished, WaiterGone: r.waiterGone, Delivered: r.delivered, Canceled: r.canceled, Interrupted: r.interrupted,
 		Reply: r.reply, Chat: r.chat, Answered: r.answered,
 		Started: r.started, Touched: r.touched,
+		Origin: r.origin, OriginUser: r.originUser,
 	}
 	if len(rec.Reply) > maxStoredReply {
 		rec.Reply = rec.Reply[:maxStoredReply] + "…"
@@ -250,7 +258,7 @@ func (h *Hub) persist(id a2a.TaskID) {
 	if view != nil {
 		// CallerBusy reads the pool, so it runs outside h.mu.
 		busy := h.CallerBusy != nil && h.CallerBusy(session)
-		view.NeedsYou = view.State == "input_required" && !userAnswer && !busy
+		view.NeedsYou = needsYou(*view, userAnswer, busy)
 		h.OnTaskChange(session, *view)
 	}
 }
@@ -280,7 +288,7 @@ func (h *Hub) RefreshNeedsYou(sessionID string) {
 	}
 	busy := h.CallerBusy != nil && h.CallerBusy(sessionID)
 	for _, v := range views {
-		v.NeedsYou = !busy
+		v.NeedsYou = needsYou(v, false, busy)
 		h.OnTaskChange(sessionID, v)
 	}
 }

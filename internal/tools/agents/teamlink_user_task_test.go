@@ -19,6 +19,8 @@ import (
 type seedTask struct {
 	session string
 	state   a2a.TaskState
+	// origin is teamlink.OriginUser for the person's own task (P45).
+	origin string
 }
 
 // seedUserTasks wires a Hub whose disk holds the given tasks (by id), all
@@ -33,6 +35,9 @@ func seedUserTasks(t *testing.T, agentID string, tasks map[string]seedTask) *tea
 			"caller_agent_id": agentID, "caller_session": st.session, "title": "deploy it",
 			"state": string(st.state), "finished": true, "reply": "which environment?",
 			"started_at": now, "updated_at": now,
+		}
+		if st.origin != "" {
+			rec["origin"], rec["origin_user"] = st.origin, "u1"
 		}
 		b, _ := json.Marshal(rec)
 		if err := os.WriteFile(filepath.Join(dir, id+".json"), b, 0o600); err != nil {
@@ -67,10 +72,10 @@ func TestSessionTeamTaskActions(t *testing.T) {
 		t.Fatalf("chat: %d %s", w.Code, w.Body)
 	}
 	seedUserTasks(t, p.ID, map[string]seedTask{
-		"t-ask":  {chat.SessionID, a2a.TaskStateInputRequired},
-		"t-done": {chat.SessionID, a2a.TaskStateCompleted},
+		"t-ask":  {chat.SessionID, a2a.TaskStateInputRequired, ""},
+		"t-done": {chat.SessionID, a2a.TaskStateCompleted, ""},
 		// Another chat's task: never reachable from this one.
-		"t-foreign": {"sess-other", a2a.TaskStateInputRequired},
+		"t-foreign": {"sess-other", a2a.TaskStateInputRequired, ""},
 	})
 
 	call := func(u *entity.User, h func(c *tool.Ctx), task string, body any) (int, string) {
@@ -117,7 +122,7 @@ func TestSessionTeamTasksNeedsYou(t *testing.T) {
 		SessionID string `json:"session_id"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &chat)
-	hub := seedUserTasks(t, p.ID, map[string]seedTask{"t-ask": {chat.SessionID, a2a.TaskStateInputRequired}})
+	hub := seedUserTasks(t, p.ID, map[string]seedTask{"t-ask": {chat.SessionID, a2a.TaskStateInputRequired, ""}})
 	list := func() []teamlink.TaskView {
 		w, c := teamReq(t, owner, http.MethodGet, "/", nil, map[string]string{"id": chat.SessionID})
 		sessionTeamTasks(c)

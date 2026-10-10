@@ -4,7 +4,7 @@
      summary and Answer; a click opens the list (Answer / Cancel / Jump). */
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import type { TeamTaskItem } from "../../types/agents.js";
-  import { isTaskActive, statusSummary, taskStatus } from "../../delegations.js";
+  import { isTaskActive, statusSummary, taskStatus, userTaskRoute } from "../../delegations.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
   import CancelConfirm from "./CancelConfirm.svelte";
 
@@ -82,7 +82,7 @@
           <div class="flex flex-col gap-1 rounded-md px-1.5 py-1 hover:bg-white-200 dark:hover:bg-navy-700">
             <div class="flex items-center gap-1.5">
               <AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={16} />
-              <span class="font-medium text-black-900 dark:text-white-100">{agents[t.to_handle]?.name || t.to_name || "@" + t.to_handle}</span>
+              <span data-testid="task-tray-name" class="font-medium text-black-900 dark:text-white-100">{userTaskRoute(t) ?? (agents[t.to_handle]?.name || t.to_name || "@" + t.to_handle)}</span>
               <span class={"text-[10px] " + (s === "needs_you" ? "text-amber-700 dark:text-amber-300" : "text-black-600 dark:text-black-700")}>{s === "needs_you" ? "needs you" : "working"}</span>
               <span class="ml-auto flex items-center gap-2 text-[11px]">
                 {#if s !== "working" && onAnswer}<button type="button" onclick={() => { answering = answering === t.task_id ? null : t.task_id; }} class="text-amber-700 dark:text-amber-300 hover:underline">Answer</button>{/if}

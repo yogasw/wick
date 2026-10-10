@@ -37,8 +37,14 @@ func TestRouteTeamMentions(t *testing.T) {
 		t.Fatalf("format = %q", got)
 	}
 	note := s.PreRouteNote(context.Background(), RouteInput{SessionID: "team-sess", Text: "@vera hi"})
-	if !strings.HasPrefix(note, RoutedMarker) || !strings.Contains(note, "@vera") {
+	if !strings.HasPrefix(note, RoutedMarker) || !strings.Contains(note, "@vera") || !strings.Contains(note, "arrive in this thread") {
 		t.Fatalf("note = %q", note)
+	}
+	// P45: the person's own mention is their task; the note says nothing
+	// of it comes back here.
+	note = s.PreRouteNote(context.Background(), RouteInput{SessionID: "team-sess", Text: "@vera hi", Human: true})
+	if !strings.Contains(note, "@vera") || strings.Contains(note, "arrive in this thread") || !strings.Contains(note, "must not answer them") {
+		t.Fatalf("human note = %q", note)
 	}
 	if ds := s.Route(context.Background(), RouteInput{SessionID: "plain", Text: "@anton hi"}); len(ds) != 0 {
 		t.Fatalf("non-Team session routed: %+v", ds)

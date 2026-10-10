@@ -78,6 +78,9 @@ const (
 	metaFrom    = "wick.from_agent"
 	metaDepth   = "wick.depth"
 	metaSession = "wick.caller_session"
+	// metaOrigin is OriginUser on a task a person's @mention started
+	// (SendInput.Human), so the handoff rows can say so.
+	metaOrigin = "wick.origin"
 	// metaChatUser names the recipient a shared agent's turn is for.
 	metaChatUser = "wick.chat_user"
 	// metaNewChat asks for the turn in a fresh chat of the target
@@ -132,6 +135,9 @@ var (
 	// ErrAlreadyAnswered refuses a second answer to a teammate's question:
 	// the first one, from the user or the sender, won.
 	ErrAlreadyAnswered = errors.New("that question was already answered — the first answer won")
+	// ErrUserTask refuses an agent's answer to (or cancel of) a task the
+	// person started with an @mention in its chat: only they act on it.
+	ErrUserTask = errors.New("this task belongs to the user: they sent it with an @mention in this chat, so only the user can answer or cancel it from the chat — do not answer it yourself")
 	// ErrMentionsOff refuses a turn the target's mention setting does not
 	// take from the caller (Peer.AcceptsFrom).
 	ErrMentionsOff = errors.New("that agent does not take turns from you — tell the user instead")
@@ -309,6 +315,8 @@ type Handoff struct {
 	// ToID is the target agent's id, so the thread can link to its chat.
 	ToID  string
 	State a2a.TaskState
+	// Origin is OriginUser when a person's @mention started the task.
+	Origin string
 	// FromSession is the caller's conversation, so a reply the target
 	// sends after the task ended can still find its way back after a
 	// restart (the Hub's own memory of the task does not survive one).
@@ -421,7 +429,23 @@ type taskRef struct {
 	// interrupted: the task was settled failed because the process
 	// running it went away (settleOrphans).
 	interrupted bool
+	// origin is OriginUser for a task a person's @mention started in the
+	// caller's chat (SendInput.Human), set by Send and never from model
+	// input; "" = the agent's own task. Only that person answers or
+	// cancels it, and nothing of it is delivered into the agent's chat.
+	origin string
+	// originUser is the SessionUser that mention resolved as (the user of
+	// the caller's chat, "" = unknown): the person's answer resolves the
+	// same way again, so it reaches the same teammate through the same
+	// share.
+	originUser string
 }
+
+// OriginUser is the origin of a task a person started (taskRef.origin).
+const OriginUser = "user"
+
+// userTask reports whether the person, not the agent, owns ref.
+func (r *taskRef) userTask() bool { return r.origin == OriginUser }
 
 // answerClaim is what answering changed on a task to claim it, so a send
 // that fails gives back exactly that.
@@ -429,6 +453,9 @@ type answerClaim struct {
 	waiterGone, delivered bool
 	reply                 string
 	state                 a2a.TaskState
+	// origin and originUser are the claimed task's (taskRef.origin): an
+	// answer to the person's own task carries them on.
+	origin, originUser string
 }
 
 // contextState is one exchange's turn count.
@@ -714,6 +741,13 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 		}()
 		// Viewers see the task working again before its next turn reports.
 		h.persist(answer)
+		if in.byUser && claim.origin == OriginUser {
+			// The person answering their own task continues the mention
+			// that started it: the same resolution and the same freedom
+			// from the target's mention policy. Only their answer (byUser,
+			// from that chat's UI) does — an agent's was refused above.
+			in.Human, in.SessionUser = true, claim.originUser
+		}
 	}
 	// A person writing in their chat with an agent another owner shared
 	// with them speaks for themselves: the mention reaches their own
@@ -797,6 +831,13 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if viaShare {
 		msg.Metadata[metaSessionUser] = in.SessionUser
 	}
+	// Human is set only by the person's mention route, never by a tool:
+	// the task is theirs (taskRef.origin). Their answer to it stays theirs,
+	// down to a new task standing in for one a restart lost.
+	userOrigin := in.Human && (answer == "" || claim.origin == OriginUser)
+	if userOrigin {
+		msg.Metadata[metaOrigin] = OriginUser
+	}
 
 	cl, err := h.client(ctx, card)
 	if err != nil {
@@ -850,6 +891,9 @@ func (h *Hub) Send(ctx context.Context, in SendInput) (*Result, error) {
 	if ref.started.IsZero() {
 		ref.contextID, ref.title, ref.started = contextID, firstLine(in.Text), ref.touched
 	}
+	if userOrigin {
+		ref.origin, ref.originUser = OriginUser, in.SessionUser
+	}
 	if wait == 0 && h.fanningOutLocked(in.CallerSession, task.ID) {
 		wait = -1
 	}
@@ -881,6 +925,9 @@ func (h *Hub) answering(callerID string, in SendInput) (string, string, *answerC
 	if ref == nil || ref.callerAgentID != callerID {
 		return "", "", nil, h.unknownLocked(callerID, id)
 	}
+	if ref.userTask() && !in.byUser {
+		return "", "", nil, ErrUserTask
+	}
 	if c := strings.TrimSpace(in.ContextID); c != "" && c != ref.contextID {
 		return "", "", nil, ErrTaskContext
 	}
@@ -895,7 +942,7 @@ func (h *Hub) answering(callerID string, in SendInput) (string, string, *answerC
 	}
 	// The task runs again: clear what its last turn left before the
 	// executor can report the next one.
-	claim := &answerClaim{waiterGone: ref.waiterGone, delivered: ref.delivered, reply: ref.reply, state: ref.state}
+	claim := &answerClaim{waiterGone: ref.waiterGone, delivered: ref.delivered, reply: ref.reply, state: ref.state, origin: ref.origin, originUser: ref.originUser}
 	ref.claimed, ref.userAnswer = true, in.byUser
 	// This process runs it now: not a restart's leftover any more.
 	ref.fromDisk = false
@@ -1258,6 +1305,9 @@ func (h *Hub) resultLocked(id a2a.TaskID, ref *taskRef) *Result {
 	case "input_required":
 		out.ReplyText = ref.reply
 		out.Note = "The teammate asks you something. Answer with message task_id=" + string(id) + "; ask the user first if only they can answer."
+		if ref.userTask() {
+			out.Note = "The teammate asks the user, who sent this task with an @mention: only the user answers it, from the chat. Do not answer it yourself."
+		}
 	default:
 		out.ReplyText = ref.reply
 	}
@@ -1316,10 +1366,19 @@ func (h *Hub) GetTask(ctx context.Context, callerAgentID, taskID string) (*Resul
 // is never stopped, and the reason says when one was left running; but a
 // message typed into the task's own turn, on a provider that does not
 // queue it apart, is stopped with that turn (see TaskStopShared).
+// A task the person started (taskRef.origin) is theirs to cancel:
+// ErrUserTask.
 func (h *Hub) CancelTask(ctx context.Context, callerAgentID, taskID string) (*Result, error) {
+	return h.cancelTask(ctx, callerAgentID, taskID, false)
+}
+
+// cancelTask is CancelTask; byUser is the person's cancel (CancelFromUser).
+func (h *Hub) cancelTask(ctx context.Context, callerAgentID, taskID string, byUser bool) (*Result, error) {
 	id := a2a.TaskID(strings.TrimSpace(taskID))
 	by := "the sender"
-	if p, err := h.Dir.Get(ctx, callerAgentID); err == nil {
+	if byUser {
+		by = "the user"
+	} else if p, err := h.Dir.Get(ctx, callerAgentID); err == nil {
 		by = "@" + p.Handle
 	}
 	h.mu.Lock()
@@ -1331,6 +1390,10 @@ func (h *Hub) CancelTask(ctx context.Context, callerAgentID, taskID string) (*Re
 		err := h.unknownLocked(callerAgentID, id)
 		h.mu.Unlock()
 		return nil, err
+	}
+	if ref.userTask() && !byUser {
+		h.mu.Unlock()
+		return nil, ErrUserTask
 	}
 	if ref.finished && ref.state != a2a.TaskStateInputRequired {
 		state := h.viewState(ref)
@@ -1408,6 +1471,11 @@ func (h *Hub) settle(ctx context.Context, id a2a.TaskID, state a2a.TaskState, re
 	ref.finished, ref.state, ref.reply, ref.touched = true, state, reply, h.now()
 	ref.claimed, ref.userAnswer = false, false
 	deliver := ref.waiterGone && !ref.delivered && ref.callerSession != ""
+	if ref.userTask() {
+		// The person's task: the reply or question shows on the task in
+		// their chat (OnTaskChange), never as a prompt waking its agent.
+		ref.delivered, deliver = true, false
+	}
 	if deliver {
 		ref.delivered = true
 		if reply != "" {
@@ -1456,11 +1524,26 @@ func (h *Hub) FollowUp(ctx context.Context, sessionID, text string) bool {
 	}
 	var session string
 	var to Peer
-	dup := false
+	dup, userTask := false, false
 	if ok && ref != nil {
-		session, to = ref.callerSession, ref.to
+		session, to, userTask = ref.callerSession, ref.to, ref.userTask()
 		if dup = ref.alreadySent(text); !dup {
 			ref.markSent(textKey(text))
+			if userTask {
+				// The person's task: the follow-up shows on it, without
+				// waking the agent of the chat. It joins a reply; a late
+				// reply to a turn that failed (a remote's timeout) is the
+				// reply. A question or an unfinished turn keeps its text.
+				switch {
+				case !ref.finished:
+				case ref.state == a2a.TaskStateCompleted:
+					ref.reply = strings.TrimSpace(ref.reply + "\n\n" + text)
+					ref.touched = h.now()
+				case ref.state == a2a.TaskStateFailed:
+					ref.state, ref.reply, ref.interrupted = a2a.TaskStateCompleted, strings.TrimSpace(text), false
+					ref.touched = h.now()
+				}
+			}
 		}
 	}
 	h.mu.Unlock()
@@ -1471,6 +1554,9 @@ func (h *Hub) FollowUp(ctx context.Context, sessionID, text string) bool {
 		return true
 	}
 	h.persist(id)
+	if userTask {
+		return true
+	}
 	msg := fmt.Sprintf("Follow-up from %s [task %s]:\n\n%s", to.Label(), id, text)
 	return h.Notify.Deliver(context.WithoutCancel(ctx), session, msg) == nil
 }
@@ -1505,6 +1591,10 @@ type TaskView struct {
 	// Interrupted: wick restarted while the task was working, so it
 	// failed (settleOrphans); sending it again is safe.
 	Interrupted bool `json:"interrupted,omitempty"`
+	// Origin is OriginUser for a task the person sent with an @mention
+	// in this chat ("" = the agent's): its question always waits for the
+	// person, whatever the agent is doing.
+	Origin string `json:"origin,omitempty"`
 }
 
 // SentFrom lists the tasks sessionID sent, newest first: those in memory
@@ -1544,7 +1634,7 @@ func (h *Hub) SentFrom(sessionID string) []TaskView {
 		}
 		orphans = orphans || h.orphanLocked(id, ref)
 		v := h.viewLocked(id, ref, now)
-		v.NeedsYou = v.State == "input_required" && !ref.userAnswer && !busy
+		v.NeedsYou = needsYou(v, ref.userAnswer, busy)
 		out = append(out, v)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Started.After(out[j].Started) })
@@ -1575,7 +1665,15 @@ func (h *Hub) viewLocked(id a2a.TaskID, ref *taskRef, now time.Time) TaskView {
 	}
 	v.ChatID = ref.chat
 	v.Interrupted = ref.interrupted
+	v.Origin = ref.origin
 	return v
+}
+
+// needsYou is TaskView.NeedsYou for v: a question nobody is answering
+// yet, waiting for the person — always for their own task, otherwise
+// only while no turn of the sending chat (busy) may answer it.
+func needsYou(v TaskView, userAnswer, busy bool) bool {
+	return v.State == "input_required" && !userAnswer && (v.Origin == OriginUser || !busy)
 }
 
 // shortAge rounds d for a list: seconds under a minute, then minutes,

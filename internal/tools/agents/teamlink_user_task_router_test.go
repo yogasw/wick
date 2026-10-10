@@ -8,6 +8,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -63,6 +64,16 @@ func (r *routeRecorder) routed(t *testing.T, method, path string) tool.HandlerFu
 // chat is not theirs to know), leaving the task untouched; the chat's
 // owner gets through.
 func TestTeamTaskActionsThroughTheRouter(t *testing.T) {
+	testTeamTaskActionsThroughTheRouter(t, "")
+}
+
+// P45: the person's own task (an @mention they typed) takes the same
+// checks: a read-only viewer or a stranger never acts on it.
+func TestUserOriginTaskActionsThroughTheRouter(t *testing.T) {
+	testTeamTaskActionsThroughTheRouter(t, teamlink.OriginUser)
+}
+
+func testTeamTaskActionsThroughTheRouter(t *testing.T, origin string) {
 	withTeamWorld(t)
 	owner, bob, eve := &entity.User{ID: "u1"}, &entity.User{ID: "bob"}, &entity.User{ID: "eve"}
 	seedTeamProject(t, "p1", owner.ID)
@@ -71,7 +82,7 @@ func TestTeamTaskActionsThroughTheRouter(t *testing.T) {
 	if code := shareWith(t, owner, p.ID, bob.ID); code != http.StatusOK {
 		t.Fatalf("share: %d", code)
 	}
-	hub := seedUserTasks(t, p.ID, map[string]seedTask{"t-ask": {ownChat, a2a.TaskStateInputRequired}})
+	hub := seedUserTasks(t, p.ID, map[string]seedTask{"t-ask": {ownChat, a2a.TaskStateInputRequired, origin}})
 
 	rr := &routeRecorder{routes: map[string]tool.HandlerFunc{}}
 	Register(rr)
@@ -83,7 +94,7 @@ func TestTeamTaskActionsThroughTheRouter(t *testing.T) {
 	stillAsks := func(when string) {
 		t.Helper()
 		list := hub.SentFrom(ownChat)
-		if len(list) != 1 || list[0].State != "input_required" {
+		if len(list) != 1 || list[0].State != "input_required" || list[0].Origin != origin {
 			t.Fatalf("%s: task = %+v", when, list)
 		}
 	}

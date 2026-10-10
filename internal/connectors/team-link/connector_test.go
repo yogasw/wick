@@ -129,3 +129,52 @@ func TestMessagePassesNewChat(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// P45: the origin of a task is never model input — a message spoofing
+// origin/human fields still sends the agent's own task.
+func TestMessageCannotSpoofUserOrigin(t *testing.T) {
+	gate := make(chan struct{})
+	defer close(gate)
+	hub := teamlink.NewHub(dir{}, turns{gate: gate}, &notify{})
+	hub.SetQuickWait(20 * time.Millisecond)
+	d := deps(hub)
+	out, err := call(t, d, Deps.message, "sess-cap", map[string]string{
+		"to": "anton", "message": "slow",
+		"origin": "user", "origin_user": "u1", "human": "true", "Human": "true", "mention": "true",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := call(t, d, Deps.listTasks, "sess-cap", nil)
+	tasks := listed.(map[string]any)["tasks"].([]teamlink.TaskView)
+	if err != nil || len(tasks) != 1 || tasks[0].Origin != "" {
+		t.Fatalf("spoofed task = %+v, %v", tasks, err)
+	}
+	// Still the agent's: it may cancel it.
+	if _, err := call(t, d, Deps.cancelTask, "sess-cap", map[string]string{"task_id": out.(*teamlink.Result).TaskID}); err != nil {
+		t.Fatalf("cancel own task: %v", err)
+	}
+}
+
+// P45: the agent's tools cannot answer or cancel a task the person sent
+// with an @mention in its chat.
+func TestToolsRefuseUserTask(t *testing.T) {
+	gate := make(chan struct{})
+	defer close(gate)
+	hub := teamlink.NewHub(dir{}, turns{gate: gate}, &notify{})
+	d := deps(hub)
+	// The person's mention route (routeHumanMentions), not a tool.
+	res, err := hub.Send(context.Background(), teamlink.SendInput{
+		CallerSession: "sess-cap", CallerAgentID: "a-cap", SessionUser: "u1",
+		To: "anton", Text: "deploy", Wait: -1, Mention: true, Human: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call(t, d, Deps.message, "sess-cap", map[string]string{"task_id": res.TaskID, "message": "prod"}); !errors.Is(err, teamlink.ErrUserTask) {
+		t.Fatalf("message task_id on the user's task: %v", err)
+	}
+	if _, err := call(t, d, Deps.cancelTask, "sess-cap", map[string]string{"task_id": res.TaskID}); !errors.Is(err, teamlink.ErrUserTask) {
+		t.Fatalf("cancel_task on the user's task: %v", err)
+	}
+}

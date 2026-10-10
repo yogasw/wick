@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { quickReplies, settledLine, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel } from "../delegations.js";
+import { blockHead, isUserTask, userTaskRoute, quickReplies, settledLine, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel } from "../delegations.js";
 import type { ConversationTurn, TeamTaskItem } from "../types/agents.js";
 
 const task = (o: Partial<TeamTaskItem>): TeamTaskItem => ({
@@ -64,5 +64,27 @@ describe("delegations", () => {
     expect(taskLabel(task({ state: "failed", interrupted: true }), "Anton")).toBe("interrupted by a restart");
     expect(taskLabel(task({ state: "failed" }), "Anton")).toBe("failed");
     expect(statusLabel("replied", "Anton")).toBe("replied");
+  });
+
+  test("P45: the person's own task needs them at once, never 'answering'", () => {
+    const mine = task({ origin: "user", state: "input_required", needs_you: false });
+    expect(isUserTask(mine)).toBe(true);
+    expect(taskStatus(mine)).toBe("needs_you");
+    expect(taskLabel(mine, "Cap")).toBe("needs you");
+    expect(userTaskRoute(mine)).toBe("You → @anton");
+    const agents = task({ state: "input_required", needs_you: false });
+    expect(isUserTask(agents)).toBe(false);
+    expect(taskStatus(agents)).toBe("answering");
+    expect(userTaskRoute(agents)).toBeNull();
+    expect(taskStatus(task({ origin: "user", state: "completed" }))).toBe("replied");
+  });
+});
+
+describe("blockHead (P45 N5)", () => {
+  test("names the agent's and the person's tasks apart", () => {
+    expect(blockHead([task({}), task({})])).toBe("Delegated to 2 teammates");
+    expect(blockHead([task({ origin: "user" })])).toBe("You asked 1 teammate");
+    expect(blockHead([task({}), task({ origin: "user" })])).toBe("Delegated to 1 teammate · You asked 1");
+    expect(settledLine([task({ origin: "user", state: "completed" })])).toBe("You asked 1 teammate · all replied · 1 message");
   });
 });

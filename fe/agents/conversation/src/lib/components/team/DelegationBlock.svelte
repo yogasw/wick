@@ -3,11 +3,13 @@
      raw ToolCard per call: "Delegated to N teammates", a status summary
      and a chip per teammate. A question that waits for the person opens
      its answer card inside the block; one the agent is handling reads
-     "Captain is answering…" with an "Answer instead" link. Once every task
+     "Captain is answering…" with an "Answer instead" link. A task the
+     person sent with an @mention is theirs: marked "You asked", no
+     answering stage, the teammate's reply shows here. Once every task
      ended the block folds to a single line. */
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import type { TeamTaskItem } from "../../types/agents.js";
-  import { allSettled, INTERRUPTED_LABEL, isTaskActive, quickReplies, settledLine, statusSummary, taskStatus, type TaskStatus } from "../../delegations.js";
+  import { allSettled, blockHead, INTERRUPTED_LABEL, isTaskActive, isUserTask, quickReplies, settledLine, statusSummary, taskStatus, USER_TASK_MARKER, type TaskStatus } from "../../delegations.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
   import CancelConfirm from "./CancelConfirm.svelte";
 
@@ -35,7 +37,6 @@
   let errors = $state<Record<string, string>>({});
 
   const folded = $derived(allSettled(tasks) && !unfolded);
-  const n = $derived(tasks.length);
 
   const DOT: Record<TaskStatus, string> = {
     needs_you: "bg-amber-500",
@@ -105,7 +106,7 @@
 {:else}
   <div data-testid="delegation-block" data-task-ids={tasks.map((t) => t.task_id).join(" ")} class="flex flex-col gap-2 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-xs">
     <div class="flex items-center gap-2">
-      <span class="font-medium text-black-900 dark:text-white-100">Delegated to {n} teammate{n === 1 ? "" : "s"}</span>
+      <span class="font-medium text-black-900 dark:text-white-100">{blockHead(tasks)}</span>
       <span data-testid="delegation-summary" class="min-w-0 truncate text-black-600 dark:text-black-700">{statusSummary(tasks)}</span>
       <button
         type="button"
@@ -122,6 +123,7 @@
             type="button"
             data-testid="delegation-chip"
             data-status={s}
+            data-origin={t.origin ?? "agent"}
             onclick={() => { selected = selected === t.task_id ? null : t.task_id; }}
             class={"inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] leading-4 transition-colors " +
               (s === "needs_you"
@@ -130,6 +132,7 @@
               (selected === t.task_id ? " ring-1 ring-green-500" : "")}
           >
             <AgentAvatar kind={agents[t.to_handle]?.kind} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={16} />
+            {#if isUserTask(t)}<span data-testid="user-task-marker" class="rounded bg-link-400/10 px-1 text-[10px] font-medium text-link-400">{USER_TASK_MARKER}</span>{/if}
             <span class="font-medium">{nameOf(t)}</span>
             <span class={"h-1.5 w-1.5 shrink-0 rounded-full " + DOT[s]}></span>
             <span class="opacity-80">{chipLabel(t, s)}</span>
@@ -166,7 +169,7 @@
             />
             <button type="submit" disabled={sending !== null || !draftOf(t.task_id).trim()} class="rounded-md bg-green-500 px-2.5 py-1 text-[11px] font-medium text-white-100 hover:bg-green-600 disabled:opacity-50">{sending === t.task_id ? "Sending…" : "Send"}</button>
           </form>
-          <span class="text-[10px] text-black-600 dark:text-black-700">Answer goes to @{t.to_handle} · {captainName} sees it too</span>
+          <span class="text-[10px] text-black-600 dark:text-black-700">{isUserTask(t) ? `Answer goes to @${t.to_handle} · you asked, so only you answer` : `Answer goes to @${t.to_handle} · ${captainName} sees it too`}</span>
           {#if errors[t.task_id]}<span data-testid="answer-error" class="text-[11px] text-red-600 dark:text-red-400">{errors[t.task_id]}</span>{/if}
         </div>
       {/if}
@@ -175,7 +178,7 @@
     {#each tasks as t (t.task_id)}
       {#if showAll || selected === t.task_id}
         <div data-testid="delegation-preview" class="flex flex-col gap-1 rounded-lg bg-white-200 dark:bg-navy-900 px-3 py-2">
-          <span class="text-[11px] text-black-600 dark:text-black-700"><span class="font-medium text-black-800 dark:text-black-500">{captainName} → @{t.to_handle}</span> · {t.title}</span>
+          <span class="text-[11px] text-black-600 dark:text-black-700"><span class="font-medium text-black-800 dark:text-black-500">{isUserTask(t) ? "You" : captainName} → @{t.to_handle}</span> · {t.title}</span>
           {#if t.reply || t.summary}
             <span class="whitespace-pre-wrap break-words text-black-900 dark:text-white-100 line-clamp-4"><span class="font-medium">{nameOf(t)}:</span> {t.reply || t.summary}</span>
           {:else}

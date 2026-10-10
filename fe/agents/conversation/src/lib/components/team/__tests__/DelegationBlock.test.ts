@@ -245,4 +245,46 @@ describe("ThreadMessage delegation block", () => {
     await fireEvent.click(screen.getByText(/show trace/));
     expect(screen.queryByText(/team_message/)).toBeNull();
   });
+
+  test("P45: the person's own task — 'You asked', straight to Needs you, no answering stage", async () => {
+    const onAnswer = vi.fn().mockResolvedValue(undefined);
+    render(DelegationBlock, {
+      props: { tasks: [task({ origin: "user", state: "input_required", needs_you: false, reply: "Which env? (prod / staging)" })], captainName: "Cap", onAnswer },
+    });
+    expect(screen.getByText("You asked 1 teammate")).toBeDefined();
+    expect(screen.getByTestId("user-task-marker").textContent).toBe("You asked");
+    const chip = screen.getByTestId("delegation-chip");
+    expect(chip.getAttribute("data-status")).toBe("needs_you");
+    expect(chip.getAttribute("data-origin")).toBe("user");
+    expect(chip.textContent).toContain("Needs you");
+    expect(chip.textContent).not.toContain("is answering");
+    expect(screen.queryByTestId("answer-instead")).toBeNull();
+    expect(screen.getByTestId("needs-you-card")).toBeDefined();
+    expect(screen.getByText("Answer goes to @anton · you asked, so only you answer")).toBeDefined();
+    await fireEvent.click(chip);
+    expect(screen.getByText("You → @anton")).toBeDefined();
+  });
+
+  test("P45: the teammate's final reply shows on the person's task", async () => {
+    render(DelegationBlock, {
+      props: { tasks: [task({ origin: "user", state: "completed", reply: "deployed to prod", summary: "deployed to prod" })], captainName: "Cap" },
+    });
+    await fireEvent.click(screen.getByTestId("delegation-folded"));
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    expect(screen.getByText("deployed to prod")).toBeDefined();
+    expect(screen.getByText("You → @anton")).toBeDefined();
+  });
+
+  test("P45: tray and Tasks tab name the person's task 'You → @B'", async () => {
+    const mine = task({ task_id: "m", origin: "user", state: "input_required", needs_you: false });
+    const { unmount } = render(TaskTray, { props: { tasks: [mine, task({ task_id: "a" })], onAnswer: vi.fn() } });
+    await fireEvent.click(screen.getByTestId("task-tray-summary"));
+    const names = screen.getAllByTestId("task-tray-name").map((e) => e.textContent);
+    expect(names).toContain("You → @anton");
+    expect(names).toContain("Anton");
+    unmount();
+    render(TasksPanel, { props: { tasks: [mine], senderName: "Cap" } });
+    expect(screen.getByTestId("tasks-panel-name").textContent).toBe("You → @anton");
+    expect(screen.queryByText(/Cap is answering/)).toBeNull();
+  });
 });

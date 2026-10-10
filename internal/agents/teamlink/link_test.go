@@ -30,20 +30,32 @@ type linkTurns struct {
 	mu     sync.Mutex
 	ran    []string
 	opened []string
+	// asks is how many turns still ask back (InputRequiredToken) before
+	// the teammate answers "ok".
+	asks int
+}
+
+// replyLocked is the next turn's reply.
+func (l *linkTurns) replyLocked() string {
+	if l.asks > 0 {
+		l.asks--
+		return InputRequiredToken + " which one?"
+	}
+	return "ok"
 }
 
 func (l *linkTurns) Run(_ context.Context, agent Peer, _ string) (string, string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.ran = append(l.ran, agent.Handle+"/"+agent.OwnerID+"@main:"+agent.ChatUser)
-	return "main-" + agent.ID + "-" + agent.ChatUser, "ok", nil
+	return "main-" + agent.ID + "-" + agent.ChatUser, l.replyLocked(), nil
 }
 
 func (l *linkTurns) RunIn(_ context.Context, agent Peer, sessionID, _ string) (string, string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.ran = append(l.ran, agent.Handle+"/"+agent.OwnerID+"@"+sessionID)
-	return sessionID, "ok", nil
+	return sessionID, l.replyLocked(), nil
 }
 
 func (l *linkTurns) NewChat(_ context.Context, agent Peer) (string, error) {

@@ -24,23 +24,38 @@ import (
 type lateWorld struct {
 	mu        sync.Mutex
 	delivered map[string][]string
+	// followed is what was put on the person's own task (followUpLate),
+	// by the session it came from.
+	followed map[string][]string
 }
 
 func newLateWorld(t *testing.T, fromSession string) *lateWorld {
 	t.Helper()
+	return newLateWorldOrigin(t, fromSession, "")
+}
+
+// newLateWorldOrigin is newLateWorld for a task of origin (P45).
+func newLateWorldOrigin(t *testing.T, fromSession, origin string) *lateWorld {
+	t.Helper()
 	layout := config.NewLayout(t.TempDir())
-	prevLayout, prevDeliver := globalLayout, deliverLate
+	prevLayout, prevDeliver, prevFollow := globalLayout, deliverLate, followUpLate
 	globalLayout = layout
-	w := &lateWorld{delivered: map[string][]string{}}
+	w := &lateWorld{delivered: map[string][]string{}, followed: map[string][]string{}}
+	followUpLate = func(_ context.Context, sid, text string) bool {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		w.followed[sid] = append(w.followed[sid], text)
+		return true
+	}
 	deliverLate = func(_ context.Context, sid, text string) error {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		w.delivered[sid] = append(w.delivered[sid], text)
 		return nil
 	}
-	t.Cleanup(func() { globalLayout, deliverLate = prevLayout, prevDeliver })
+	t.Cleanup(func() { globalLayout, deliverLate, followUpLate = prevLayout, prevDeliver, prevFollow })
 	at := time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC)
-	h := teamlink.Handoff{From: "asker", To: "remote-x", ToID: "ag-r", TaskID: "task-1", ContextID: "c1", State: a2a.TaskStateWorking, FromSession: fromSession}
+	h := teamlink.Handoff{From: "asker", To: "remote-x", ToID: "ag-r", TaskID: "task-1", ContextID: "c1", State: a2a.TaskStateWorking, FromSession: fromSession, Origin: origin}
 	turns := []store.ConversationTurn{
 		handoffTurn(h, at),
 		{TurnID: "u1", Timestamp: at.Add(time.Second), Role: "user", Source: sourceTeam, Text: "please check"},
@@ -102,6 +117,55 @@ func TestSettleLateReplyReplacesAndForwardsOnce(t *testing.T) {
 	}
 	if n := len(w.sent("S-asker")); n != 1 {
 		t.Fatalf("forwarded %d times, want once", n)
+	}
+}
+
+// P45: the person's own task (their @mention in the asker's chat) — its
+// late reply is never forwarded into that chat as a prompt.
+func TestSettleLateReplyUserOriginNotForwarded(t *testing.T) {
+	w := newLateWorldOrigin(t, "S-asker", teamlink.OriginUser)
+	out, err := settleLateReply(context.Background(), "S-remote", "The answer.", remote.NoteRechecked)
+	if err != nil || !out.Replaced || out.ForwardedTo != "" {
+		t.Fatalf("outcome = %+v, %v", out, err)
+	}
+	if got := w.sent("S-asker"); len(got) != 0 {
+		t.Fatalf("forwarded into the asking chat: %q", got)
+	}
+	if h := lateTurns(t)[0]; h.Extras["origin"] != teamlink.OriginUser {
+		t.Fatalf("handoff extras = %+v", h.Extras)
+	}
+	// S2: the reply goes on the person's task instead.
+	if got := w.followed["S-remote"]; len(got) != 1 || got[0] != "The answer." {
+		t.Fatalf("follow-up on the task = %q", got)
+	}
+}
+
+// P45 B2: the person answered the remote's question, and the answer's
+// turn timed out. Its handoff (written by an older process, without the
+// origin) is the one nearest the timeout; the task is still the person's,
+// so the late reply goes on the task, not into the asking chat.
+func TestSettleLateReplyAfterUserAnswerNotForwarded(t *testing.T) {
+	w := newLateWorldOrigin(t, "S-asker", teamlink.OriginUser)
+	at := time.Date(2026, 1, 2, 4, 0, 0, 0, time.UTC)
+	h := teamlink.Handoff{From: "asker", To: "remote-x", ToID: "ag-r", TaskID: "task-1", ContextID: "c1", State: a2a.TaskStateWorking, FromSession: "S-asker"}
+	for _, tr := range []store.ConversationTurn{
+		handoffTurn(h, at),
+		{TurnID: "u2", Timestamp: at.Add(time.Second), Role: "user", Source: sourceTeam, Text: "Answer from the user:\n\nyes"},
+		{TurnID: "e2", Timestamp: at.Add(3 * time.Minute), Role: "system", IsError: true, Text: remote.TimeoutMessage(3 * time.Minute)},
+	} {
+		if err := storage.AppendJSONL(globalLayout.SessionConversation("S-remote"), "wick-conv-v1", "S-remote", tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := settleLateReply(context.Background(), "S-remote", "Done.", remote.NoteRechecked)
+	if err != nil || !out.Replaced || out.ForwardedTo != "" {
+		t.Fatalf("outcome = %+v, %v", out, err)
+	}
+	if got := w.sent("S-asker"); len(got) != 0 {
+		t.Fatalf("forwarded into the asking chat: %q", got)
+	}
+	if got := w.followed["S-remote"]; len(got) != 1 || got[0] != "Done." {
+		t.Fatalf("follow-up on the task = %q", got)
 	}
 }
 

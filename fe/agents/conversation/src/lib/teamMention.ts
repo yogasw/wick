@@ -60,7 +60,7 @@ export function teamSender(source: string | undefined, text: string): { name: st
 }
 
 /** A mention_handoff system turn's fields, as the server writes them in Extras. */
-export type Handoff = { from: string; to: string; state: string; taskId: string; contextId: string; toAgentId: string };
+export type Handoff = { from: string; to: string; state: string; taskId: string; contextId: string; toAgentId: string; origin: string };
 
 export function handoffOf(extras: Record<string, string> | null | undefined): Handoff {
   const x = extras ?? {};
@@ -71,6 +71,8 @@ export function handoffOf(extras: Record<string, string> | null | undefined): Ha
     taskId: x.task_id ?? "",
     contextId: x.context_id ?? "",
     toAgentId: x.to_agent_id ?? "",
+    /* "user" when the person sent the task with an @mention (P45). */
+    origin: x.origin ?? "",
   };
 }
 

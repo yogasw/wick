@@ -23,6 +23,14 @@ describe("system event registry", () => {
     expect(parts).toEqual(["Captain", " → ", { handle: "anton" }, " · completed"]);
   });
 
+  test("P45: the person's own task reads You → @B", () => {
+    const parts = systemEventParts(
+      { kind: "mention_handoff", text: "", extras: { from: "captain", to: "anton", state: "TASK_STATE_WORKING", origin: "user" } },
+      { names: { captain: "Captain" } },
+    );
+    expect(parts).toEqual(["You", " → ", { handle: "anton" }, " · working"]);
+  });
+
   test("a new kind is one register call", () => {
     registerSystemEvent("custom_x", { icon: "plug", parts: (t) => ["custom: " + t.text] });
     expect(systemEventParts({ kind: "custom_x", text: "hi" })).toEqual(["custom: hi"]);

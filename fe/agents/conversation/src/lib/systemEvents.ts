@@ -82,7 +82,7 @@ registerSystemEvent("mention_handoff", {
   parts: (turn, ctx) => {
     const h = handoffOf(turn.extras);
     if (!h.to) return [];
-    const from = h.from === "user" ? "You" : (ctx.names?.[h.from] ?? "@" + h.from);
+    const from = h.from === "user" || h.origin === "user" ? "You" : (ctx.names?.[h.from] ?? "@" + h.from);
     return [from, " → ", { handle: h.to }, " · " + handoffState(h.state)];
   },
 });

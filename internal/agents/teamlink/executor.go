@@ -237,6 +237,19 @@ func (e *executor) audit(ctx context.Context, from, to Peer, callerSession, targ
 		return
 	}
 	ev := Handoff{From: from.Handle, To: to.Handle, ToID: to.ID, ContextID: ec.ContextID, TaskID: string(ec.TaskID), State: state, FromSession: callerSession}
+	// The Hub's task is the source of truth; the message's mark covers a
+	// first turn that starts before Send registered the task. Either can
+	// only make the task the person's, which delivers less, never more.
+	e.hub.mu.Lock()
+	if ref := e.hub.tasks[ec.TaskID]; ref != nil && ref.userTask() {
+		ev.Origin = OriginUser
+	}
+	e.hub.mu.Unlock()
+	if ec.Message != nil {
+		if o, _ := ec.Message.Metadata[metaOrigin].(string); o == OriginUser {
+			ev.Origin = OriginUser
+		}
+	}
 	if ev.From == "" {
 		ev.From = "user"
 	}

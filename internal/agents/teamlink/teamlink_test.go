@@ -64,6 +64,7 @@ type fakeNotify struct {
 	mu        sync.Mutex
 	delivered []string
 	audits    []string
+	handoffs  []Handoff
 }
 
 func (n *fakeNotify) Deliver(_ context.Context, sessionID, text string) error {
@@ -77,6 +78,7 @@ func (n *fakeNotify) Audit(_ context.Context, sessionID string, h Handoff) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.audits = append(n.audits, sessionID+" "+h.From+"->"+h.To+" "+stateName(h.State))
+	n.handoffs = append(n.handoffs, h)
 }
 
 func (n *fakeNotify) snapshot() ([]string, []string) {

@@ -689,6 +689,11 @@ func handoffTurn(h teamlink.Handoff, now time.Time) store.ConversationTurn {
 	if h.FromSession != "" {
 		extras["from_session"] = h.FromSession
 	}
+	// A person's own task: its late reply is never forwarded into the
+	// asking chat as a prompt (lateCaller).
+	if h.Origin != "" {
+		extras["origin"] = h.Origin
+	}
 	return systemTurn(store.KindMentionHandoff, fmt.Sprintf("@%s → @%s · %s", h.From, h.To, h.State), extras, now)
 }
 

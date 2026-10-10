@@ -77,13 +77,30 @@ export function tasksByTurn(turns: ConversationTurn[], tasks: TeamTaskItem[]): M
 
 export type TaskStatus = "needs_you" | "answering" | "working" | "replied" | "failed" | "canceled";
 
+/** A task the person sent with an @mention in this chat: theirs, not the
+    chat agent's — only they answer its question. */
+export function isUserTask(t: TeamTaskItem): boolean {
+  return t.origin === "user";
+}
+
+/** "You → @handle" for the person's own task, as the tray and the Tasks
+    tab name it; null for an agent's task (named by its teammate). */
+export function userTaskRoute(t: TeamTaskItem): string | null {
+  return isUserTask(t) ? `You → @${t.to_handle}` : null;
+}
+
+/** The marker on the person's own task, in place of the sending agent. */
+export const USER_TASK_MARKER = "You asked";
+
 /** How a task reads in the UI. input_required splits two ways: the
     sending agent is on it ("Captain is answering…", grey) or it waits for
-    the person (needs_you, amber) — the server decides (needs_you). */
+    the person (needs_you, amber) — the server decides (needs_you). The
+    person's own task never has an "answering" stage: its question is
+    theirs at once. */
 export function taskStatus(t: TeamTaskItem): TaskStatus {
   switch (t.state) {
     case "input_required":
-      return t.needs_you ? "needs_you" : "answering";
+      return t.needs_you || isUserTask(t) ? "needs_you" : "answering";
     case "completed":
       return "replied";
     case "failed":
@@ -144,11 +161,21 @@ export function allSettled(tasks: TeamTaskItem[]): boolean {
   return tasks.length > 0 && tasks.every((t) => !isTaskActive(t));
 }
 
+/** The block's head: "Delegated to N teammates" for the agent's tasks,
+    "You asked N" for the person's own, both when the block mixes them. */
+export function blockHead(tasks: TeamTaskItem[]): string {
+  const plural = (n: number) => `${n} teammate${n === 1 ? "" : "s"}`;
+  const yours = tasks.filter(isUserTask).length;
+  const agents = tasks.length - yours;
+  if (yours === 0) return `Delegated to ${plural(agents)}`;
+  if (agents === 0) return `You asked ${plural(yours)}`;
+  return `Delegated to ${plural(agents)} · You asked ${yours}`;
+}
+
 /** The folded line: "all replied" when every task completed, else the
     state summary so a failure is never hidden behind a tick. */
 export function settledLine(tasks: TeamTaskItem[]): string {
-  const n = tasks.length;
-  const head = `Delegated to ${n} teammate${n === 1 ? "" : "s"}`;
+  const head = blockHead(tasks);
   const turns = tasks.reduce((s, t) => s + (t.turns || 0), 0);
   const tail = turns > 0 ? ` · ${turns} message${turns === 1 ? "" : "s"}` : "";
   const state = tasks.every((t) => t.state === "completed") ? "all replied" : statusSummary(tasks);

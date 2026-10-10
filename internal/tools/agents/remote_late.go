@@ -12,6 +12,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/remote"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/agents/teamlink"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -42,6 +43,16 @@ var deliverLate = func(ctx context.Context, sessionID, text string) error {
 		return errors.New("team link is not ready")
 	}
 	return h.Notify.Deliver(ctx, sessionID, text)
+}
+
+// followUpLate puts a late reply on the person's own task (FollowUp),
+// where they see it, without waking the asking chat. Tests replace it.
+var followUpLate = func(ctx context.Context, sessionID, text string) bool {
+	if globalTeamHub == nil {
+		return false
+	}
+	h := globalTeamHub()
+	return h != nil && h.FollowUp(ctx, sessionID, text)
 }
 
 // lateLocks serialises settling per session, so a click racing the late
@@ -78,7 +89,9 @@ func settleLateReply(ctx context.Context, sessionID, text, note string) (lateOut
 	target := turns[i]
 	prev := replacementOf(turns, target.TurnID)
 	if prev == nil {
-		if c, ok := lateCaller(turns, i); ok {
+		if c, ok := lateCaller(turns, i); ok && c.userTask {
+			followUpLate(context.WithoutCancel(ctx), sessionID, text)
+		} else if ok {
 			msg := remote.LateForward(c.remote, c.taskID, text)
 			if err := deliverLate(context.WithoutCancel(ctx), c.session, msg); err == nil {
 				out.ForwardedTo = c.handle
@@ -149,12 +162,16 @@ func replacementOf(turns []store.ConversationTurn, id string) *store.Conversatio
 // remote's handle and the task id, from the turn's mention_handoff.
 type lateAsker struct {
 	session, handle, remote, taskID string
+	// userTask: the person sent the task with an @mention (origin user);
+	// its reply goes on the task, never into the asking chat.
+	userTask bool
 }
 
 // lateCaller finds who asked the turn ending at index i: the message
 // that started it must have come from a teammate, and the handoff written
 // just before that message names the caller. A person's own message
-// forwards nowhere.
+// forwards nowhere. A task the person sent (origin user, on any handoff
+// of it) is reported with userTask and must not be forwarded.
 func lateCaller(turns []store.ConversationTurn, i int) (lateAsker, bool) {
 	j := i - 1
 	for j >= 0 && turns[j].Role != "user" {
@@ -171,6 +188,15 @@ func lateCaller(turns []store.ConversationTurn, i int) (lateAsker, bool) {
 		c := lateAsker{session: t.Extras["from_session"], handle: t.Extras["from"], remote: t.Extras["to"], taskID: t.Extras["task_id"]}
 		if c.session == "" || c.handle == "" || c.handle == "user" {
 			return lateAsker{}, false
+		}
+		// A task the person sent with an @mention is theirs: its late
+		// reply stays on the task, never waking the asking chat's agent.
+		// Any handoff of the task says so — an answer turn's own may not.
+		c.userTask = t.Extras["origin"] == teamlink.OriginUser
+		for m := k - 1; m >= 0 && !c.userTask; m-- {
+			if o := turns[m]; o.Kind == store.KindMentionHandoff && o.Extras["task_id"] == c.taskID && o.Extras["origin"] == teamlink.OriginUser {
+				c.userTask = true
+			}
 		}
 		return c, true
 	}

@@ -42,6 +42,8 @@ func (h *Hub) userTaskLocked(sessionID string, id a2a.TaskID) (*taskRef, error) 
 // its conversation so it does not answer again. The first answer wins —
 // the user's or the agent's — and any later one gets ErrAlreadyAnswered.
 // The teammate's reply comes back into sessionID like any late reply.
+// On the person's own task (taskRef.origin) the agent is not told and the
+// reply only shows on the task: nothing wakes the agent's turn.
 func (h *Hub) AnswerFromUser(ctx context.Context, sessionID, taskID, text string) (*Result, error) {
 	id := a2a.TaskID(strings.TrimSpace(taskID))
 	if text = strings.TrimSpace(text); text == "" {
@@ -64,7 +66,7 @@ func (h *Hub) AnswerFromUser(ctx context.Context, sessionID, taskID, text string
 		}
 		return nil, fmt.Errorf("%w (it is %s)", ErrTaskNotWaiting, state)
 	}
-	caller, to := ref.callerAgentID, ref.to
+	caller, to, userTask := ref.callerAgentID, ref.to, ref.userTask()
 	h.mu.Unlock()
 
 	// Send claims the task (answering) in the same critical section as its
@@ -81,7 +83,9 @@ func (h *Hub) AnswerFromUser(ctx context.Context, sessionID, taskID, text string
 		}
 		return nil, err
 	}
-	if h.Notify != nil {
+	// The person's own task is none of the agent's business: telling it
+	// would only wake its turn.
+	if h.Notify != nil && !userTask {
 		note := fmt.Sprintf("The user answered %s's question [task %s] directly:\n\n%s\n\n(Already sent to the teammate — do not answer it again.", to.Label(), id, text)
 		if out.State == "working" {
 			note += " Its reply comes back here.)"
@@ -105,15 +109,16 @@ func (h *Hub) CancelFromUser(ctx context.Context, sessionID, taskID string) (*Re
 	ref, err := h.userTaskLocked(sessionID, id)
 	var caller string
 	var to Peer
+	userTask := false
 	if err == nil {
-		caller, to = ref.callerAgentID, ref.to
+		caller, to, userTask = ref.callerAgentID, ref.to, ref.userTask()
 	}
 	h.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	out, err := h.CancelTask(ctx, caller, string(id))
-	if err == nil && h.Notify != nil {
+	out, err := h.cancelTask(ctx, caller, string(id), true)
+	if err == nil && h.Notify != nil && !userTask {
 		note := fmt.Sprintf("The user canceled the task to %s [task %s]. No reply will come back for it; do not resend it unless the user asks.", to.Label(), id)
 		_ = h.Notify.Deliver(context.WithoutCancel(ctx), sessionID, note) // best-effort: the cancel itself went through
 	}
