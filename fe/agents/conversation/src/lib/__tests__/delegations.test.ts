@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { PROGRESS_MAX, taskProgress, blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, liveTurnTasks, userTaskRoute, quickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, teammateName, turnSpan, liveTurnStatus } from "../delegations.js";
+import { PROGRESS_MAX, taskProgress, blockHead, chipElapsed, chipLabel, clockTime, endedDay, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, liveTurnTasks, heldForLiveTurn, userTaskRoute, quickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, teammateName, turnSpan, liveTurnStatus } from "../delegations.js";
 import type { ConversationTurn, TeamTaskItem, ThreadBlock } from "../types/agents.js";
 
 const task = (o: Partial<TeamTaskItem>): TeamTaskItem => ({
@@ -90,6 +90,38 @@ describe("delegations", () => {
     ]);
     expect(m.get("a1")?.map((t) => t.task_id)).toEqual(["late", "early"]);
     expect(m.get("a2")?.map((t) => t.task_id)).toEqual(["next"]);
+  });
+
+  test("heldForLiveTurn: an agent's task started after the last committed turn, not one a turn names, not the person's", () => {
+    const turns = [
+      turn("u1", "user", "2026-10-10T10:00:00Z"),
+      turn("a1", "assistant", "2026-10-10T10:02:00Z", [
+        { type: "tool_use", tool_use_id: "x", tool_name: "team_message" },
+        { type: "tool_result", tool_use_id: "x", text: '{"task_id":"named"}' },
+      ] as ConversationTurn["events"]),
+    ];
+    const tasks = [
+      task({ task_id: "before", started_at: "2026-10-10T10:01:00Z" }),
+      task({ task_id: "named", started_at: "2026-10-10T10:03:00Z" }),
+      task({ task_id: "mine", origin: "user", started_at: "2026-10-10T10:03:00Z" }),
+      task({ task_id: "new", started_at: "2026-10-10T10:03:30Z" }),
+    ];
+    expect(heldForLiveTurn(turns, tasks)).toEqual(["new"]);
+    // Held out of the input, the fallback no longer hands it to a1.
+    const held = new Set(heldForLiveTurn(turns, tasks));
+    expect(tasksByTurn(turns, tasks).get("a1")?.map((t) => t.task_id)).toContain("new");
+    expect(tasksByTurn(turns, tasks.filter((t) => !held.has(t.task_id))).get("a1")?.map((t) => t.task_id)).toEqual(["named", "before", "mine"]);
+    expect(heldForLiveTurn(turns, [])).toEqual([]);
+    expect(heldForLiveTurn([], [task({ task_id: "first" })])).toEqual(["first"]);
+  });
+
+  test("heldForLiveTurn: a Retry or Reassign (retry_of) is never held", () => {
+    const turns = [turn("u1", "user", "2026-10-10T10:00:00Z"), turn("a1", "assistant", "2026-10-10T10:02:00Z")];
+    const tasks = [
+      task({ task_id: "retry", retry_of: "t0", started_at: "2026-10-10T10:03:00Z" }),
+      task({ task_id: "new", started_at: "2026-10-10T10:03:30Z" }),
+    ];
+    expect(heldForLiveTurn(turns, tasks)).toEqual(["new"]);
   });
 
   test("input_required splits into needs you and captain answering", () => {

@@ -104,6 +104,24 @@ export function tasksByTurn(turns: ConversationTurn[], tasks: TeamTaskItem[]): M
   return out;
 }
 
+/** The tasks a running turn holds back from the committed turns: an
+    agent's task started after the last committed turn, that no committed
+    turn names as its own. Its team_message result may reach the stream
+    after the team_task event, and until then tasksByTurn's fallback would
+    hand it to the previous turn — the block would show there, then jump
+    to the live one. The person's own tasks (origin "user") and a Retry
+    or Reassign (retry_of set) keep their place. Ids in the order of
+    tasks; read only while a turn is live. */
+export function heldForLiveTurn(turns: ConversationTurn[], tasks: TeamTaskItem[]): string[] {
+  if (tasks.length === 0) return [];
+  const last = turns.at(-1);
+  const since = last ? turnMs(last) : -Infinity;
+  const claimed = new Set(turns.flatMap((t) => (t.role === "assistant" ? teamTaskIdsFromEvents(t.events) : [])));
+  return tasks
+    .filter((t) => !isUserTask(t) && !t.retry_of && !claimed.has(t.task_id) && Date.parse(t.started_at) > since)
+    .map((t) => t.task_id);
+}
+
 export type TaskStatus = "needs_you" | "answering" | "working" | "replied" | "declined" | "failed" | "canceled";
 
 /** A task the person sent with an @mention in this chat: theirs, not the

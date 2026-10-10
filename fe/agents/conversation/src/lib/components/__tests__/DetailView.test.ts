@@ -229,7 +229,16 @@ vi.mock("svelte/store", async (importActual) => {
   return { ...actual };
 });
 
+// tasksByTurn and heldForLiveTurn run as written; the spies count how
+// often DetailView regroups the turns' tasks (not once per streamed token).
+vi.mock("../../delegations.js", async (importActual) => {
+  const actual = await importActual<typeof import("../../delegations.js")>();
+  return { ...actual, tasksByTurn: vi.fn(actual.tasksByTurn), heldForLiveTurn: vi.fn(actual.heldForLiveTurn) };
+});
+
 import DetailView from "../DetailView.svelte";
+import { tasksByTurn, heldForLiveTurn } from "../../delegations.js";
+import { tick } from "svelte";
 import { killProcess, getProcesses, dequeueProcess } from "../../api/processes.js";
 import { getAsks } from "../../api/asks.js";
 import { getApprovals } from "../../api/approvals.js";
@@ -1200,5 +1209,49 @@ describe("DetailView — live delegation block (P48-s9)", () => {
     threadBus.turns.set([...history, committed]);
     threadBus.live.set(null);
     await waitFor(() => expect(blocks(container).map((b) => [ownerOf(b), b.dataset.taskIds])).toEqual([["a-old", "old"], ["live-1", "k1"]]));
+  });
+
+  // P48-s18b: the team_task event ("sent") can reach the page before the
+  // team_message result reaches the stream.
+  const k1Owners = (c: HTMLElement) => blocks(c).filter((b) => b.dataset.taskIds?.split(" ").includes("k1")).map(ownerOf);
+
+  test("a task sent before its tool_result shows only in the live block, then once on the commit", async () => {
+    threadBus.turns.set(history);
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    threadBus.live.set({ text: "", blocks: [] });
+    sseBus.handler!(teamTask({}));
+    await waitFor(() => expect(container.querySelector('[data-testid="rail-tab-tasks"]')).not.toBeNull());
+    await tick();
+    // Not on the turn before (a-wake would take it by the fallback).
+    expect(k1Owners(container)).toEqual([]);
+
+    // The result arrives: the live block, once.
+    threadBus.live.set({ text: "", blocks: [liveBlocks[0]] });
+    await waitFor(() => expect(k1Owners(container)).toEqual(["live"]));
+
+    const committed = turn("live-1", "assistant", "2026-10-10T10:07:00Z", "waiting on alpha",
+      [liveBlocks[0]].map((b) => ({ type: "tool_use", tool_name: b.toolName, tool_input: b.toolInput, tool_use_id: b.toolUseId, text: b.result })));
+    threadBus.turns.set([...history, committed]);
+    threadBus.live.set(null);
+    await waitFor(() => expect(k1Owners(container)).toEqual(["live-1"]));
+  });
+
+  test("streamed tokens do not regroup the turns' tasks", async () => {
+    threadBus.turns.set(history);
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    sseBus.handler!(teamTask({}));
+    threadBus.live.set({ text: "", blocks: liveBlocks });
+    await waitFor(() => expect(k1Owners(container)).toEqual(["live"]));
+    const calls = vi.mocked(tasksByTurn).mock.calls.length;
+    const held = vi.mocked(heldForLiveTurn).mock.calls.length;
+    expect(held).toBeGreaterThan(0);
+    for (const text of ["Wait", "Waiting on", "Waiting on alpha"]) {
+      threadBus.live.set({ text, blocks: liveBlocks });
+      await tick();
+    }
+    await waitFor(() => expect(container.textContent).toContain("Waiting on alpha"));
+    expect(vi.mocked(tasksByTurn).mock.calls.length).toBe(calls);
+    expect(vi.mocked(heldForLiveTurn).mock.calls.length).toBe(held);
+    expect(k1Owners(container)).toEqual(["live"]);
   });
 });

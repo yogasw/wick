@@ -60,7 +60,7 @@
   import RailTasksIcon from "./team/RailTasksIcon.svelte";
   import RailTasksTip from "./team/RailTasksTip.svelte";
   import { setTeamTasksCtx } from "../teamTasksContext.js";
-  import { tasksByTurn, liveTurnTasks, taskRailBadge } from "../delegations.js";
+  import { tasksByTurn, liveTurnTasks, heldForLiveTurn, taskRailBadge } from "../delegations.js";
   import { isReconnect, parseTeamTaskEvent, patchTeamTask, teamTaskPollMs } from "../teamTaskLive.js";
   import { answerTeamTask, cancelTeamTask, getReassignTargets, getTeamTaskThread, messageTeamTask, reassignTeamTask, retryTeamTask } from "../api/subagents.js";
   import SubAgentModal from "./SubAgentModal.svelte";
@@ -1252,10 +1252,16 @@
      commit swaps live for the turn in one update, and the block moves
      with it instead of showing twice. Keyed by a string: live changes on
      every streamed token, and only a change of the ids may reach
-     turnTasks (and every turn's block). */
+     turnTasks (and every turn's block).
+     An agent's task that starts during the running turn is held too,
+     before its team_message result names it (heldForLiveTurn): the
+     team_task event can come first, and the block would show on the
+     previous turn for a moment. Keyed on live being there, not on live. */
   const liveTaskKey = $derived(liveTurnTasks(live?.blocks, teamTasks).map((t) => t.task_id).join(" "));
+  const liveOn = $derived(live !== null);
+  const heldTaskKey = $derived(liveOn ? heldForLiveTurn(turns, teamTasks).join(" ") : "");
   const turnTasks = $derived.by(() => {
-    const ids = new Set(liveTaskKey ? liveTaskKey.split(" ") : []);
+    const ids = new Set(`${liveTaskKey} ${heldTaskKey}`.split(" ").filter(Boolean));
     return tasksByTurn(turns, ids.size ? teamTasks.filter((t) => !ids.has(t.task_id)) : teamTasks);
   });
   const tasksBadge = $derived(taskRailBadge(teamTasks));
