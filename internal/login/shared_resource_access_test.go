@@ -210,3 +210,42 @@ func TestSharedResourceForAnotherUserIgnoresViewerTags(t *testing.T) {
 		t.Fatal("the owner's access was answered with the viewer's tags")
 	}
 }
+
+func TestCanAccessOpenTaggedResource(t *testing.T) {
+	db := newLoginSQLite(t)
+	svc := NewService(db, "")
+
+	const path = "/providers/claude/work"
+	tagID := tagResource(t, db, path, "team-x")
+
+	user := &entity.User{ID: "u1", Email: "u1@abc.com", Name: "U1", Approved: true, Role: entity.RoleUser}
+	admin := &entity.User{ID: "a1", Email: "a1@abc.com", Name: "A1", Approved: true, Role: entity.RoleAdmin}
+
+	t.Run("untagged resource is open to any approved user", func(t *testing.T) {
+		ctx := WithUser(context.Background(), user, nil)
+		if !svc.CanAccessOpenTaggedResource(ctx, user, "/providers/claude/untagged") {
+			t.Fatal("untagged resource should be open")
+		}
+	})
+
+	t.Run("tag holder is admitted", func(t *testing.T) {
+		ctx := WithUser(context.Background(), user, []string{tagID})
+		if !svc.CanAccessOpenTaggedResource(ctx, user, path) {
+			t.Fatal("user with the tag should pass")
+		}
+	})
+
+	t.Run("admin without the tag is denied: no hidden admin bypass", func(t *testing.T) {
+		ctx := WithUser(context.Background(), admin, []string{"some-other-tag"})
+		if svc.CanAccessOpenTaggedResource(ctx, admin, path) {
+			t.Fatal("admin role alone must not pass tags; the caller's knob decides that")
+		}
+	})
+
+	t.Run("unapproved user is denied even when untagged", func(t *testing.T) {
+		unapproved := &entity.User{ID: "u2", Email: "u2@abc.com", Name: "U2", Approved: false, Role: entity.RoleUser}
+		if svc.CanAccessOpenTaggedResource(context.Background(), unapproved, "/providers/claude/untagged") {
+			t.Fatal("unapproved user must be denied")
+		}
+	})
+}

@@ -165,6 +165,20 @@ describe("ReconnectPanel", () => {
     expect(await screen.findByText(/Checking usage/i)).toBeTruthy();
   });
 
+  it("keeps asking while a probe is in flight, then shows the finished reading", async () => {
+    vi.mocked(logintty.apiLoginTTYStatus).mockResolvedValue(makeStatus());
+    vi.mocked(logintty.apiLoginTTYUsage)
+      .mockResolvedValueOnce(makeUsage({ checking: true }))
+      .mockResolvedValue(makeUsage({ checking: false }));
+    render(ReconnectPanel, { props: { base: "/tools/agents", type: "claude", name: "main" } });
+    await screen.findByText("dev@abc.com");
+    await fireEvent.click(screen.getByText("Connection"));
+    expect(await screen.findByTestId("panel-usage-checking")).toBeTruthy();
+    // The panel polls on its own; no reload, no second click.
+    await vi.waitFor(() => expect(screen.queryByTestId("panel-usage-checking")).toBeNull(), { timeout: 5000 });
+    expect(vi.mocked(logintty.apiLoginTTYUsage).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("offers a re-check next to the usage bars and sends it", async () => {
     vi.mocked(logintty.apiLoginTTYStatus).mockResolvedValue(makeStatus());
     vi.mocked(logintty.apiLoginTTYUsage).mockResolvedValue(makeUsage({ ageS: 20 }));

@@ -219,6 +219,13 @@ export interface ProvidersListResponse {
      is admin-only however the access tags are set, so a non-admin gets
      the read-only page rather than buttons that come back 403. */
   IsAdmin: boolean;
+  /* CanCreate: admin or the provider_create_tag whitelist. CanHostConfig:
+     the create form may set the binary (older field). CreatePerms: the
+     owner permissions the create form follows, per field — all for an
+     admin, the defaults for a whitelisted creator. */
+  CanCreate: boolean;
+  CanHostConfig: boolean;
+  CreatePerms: OwnerPerms;
   Providers: ProviderStatusDTO[];
   Gate: GateStatusDTO;
   MCPClients: MCPStatusDTO;
@@ -259,6 +266,29 @@ export interface StorageResponse {
   provider_types: string[];
 }
 
+/* OwnerPerms maps an owner permission name (configure, binary, env, …)
+   to whether the instance's owner may do it. */
+export type OwnerPerms = Record<string, boolean>;
+
+export interface ProviderCaps {
+  Configure: boolean;
+  Models: boolean;
+  Env: boolean;
+  ExtraArgs: boolean;
+  Binary: boolean;
+  ExtraMCPServers: boolean;
+  ExternalSkills: boolean;
+  Sandbox: boolean;
+  AIRouterRawConfig: boolean;
+  BorrowLogin: boolean;
+  Rename: boolean;
+  Delete: boolean;
+  AIRouter: boolean;
+  StorageSync: boolean;
+  Rescan: boolean;
+  ViewSessions: boolean;
+}
+
 export interface ProviderDetailResponse {
   /* ReadOnly: the caller may look at this instance but not edit it.
      CanManage is separate — reconnecting is not editing. SecretsHidden
@@ -267,6 +297,14 @@ export interface ProviderDetailResponse {
   ReadOnly: boolean;
   CanManage: boolean;
   SecretsHidden: boolean;
+  /* IsAdmin: admin-only parts (terminal, hooks, gate, opening a session)
+     render only for an admin. Can: what the caller may do beyond viewing —
+     everything for an admin, the ticked owner permissions for its owner. */
+  IsAdmin: boolean;
+  Can: ProviderCaps;
+  /* OwnerPerms: the instance's effective owner permissions, sent to admins
+     only (the Owner permissions card). Empty for everyone else. */
+  OwnerPerms: OwnerPerms;
   Instance: ProviderInstanceDTO;
   Path: string;
   PathFound: boolean;

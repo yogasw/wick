@@ -374,8 +374,62 @@ func Validate(w workflow.Workflow) *Result {
 		}
 	}
 	validateSessionInitUse(r, w.Graph, nodesByID)
+	// On the canvas a missing project is a warning — a freshly added agent
+	// node has none yet, and every edit re-validates. Publish refuses it
+	// (ValidatePublish).
+	r.Warnings = append(r.Warnings, AgentProjectErrors(w)...)
 
 	return r
+}
+
+// ValidatePublish is Validate plus the rules only Publish enforces. Edits
+// keep working on a draft that breaks them; promoting it does not.
+func ValidatePublish(w workflow.Workflow) *Result {
+	r := Validate(w)
+	r.Errors = append(r.Errors, AgentProjectErrors(w)...)
+	return r
+}
+
+// AgentProjectErrors names every agent node that would run in a session
+// with no project: it opens its own session (no session_init before it, or
+// session "new") and sets no workspace. Such a session lands outside every
+// project, so nobody can find it in a sidebar or resume it afterwards.
+//
+// An agent is fine when its session comes from elsewhere: session_from
+// another node, or the session of a session_init upstream (session_init
+// fixes the project for everyone sharing it).
+func AgentProjectErrors(w workflow.Workflow) []Error {
+	nodesByID := make(map[string]workflow.Node, len(w.Graph.Nodes))
+	var inits []string
+	for _, n := range w.Graph.Nodes {
+		nodesByID[n.ID] = n
+		if n.Type == workflow.NodeSessionInit {
+			inits = append(inits, n.ID)
+		}
+	}
+	afterInit := map[string]bool{}
+	for _, id := range inits {
+		for nid := range BfsReachable(w.Graph, map[string]bool{id: true}) {
+			afterInit[nid] = true
+		}
+	}
+	var out []Error
+	for _, n := range w.Graph.Nodes {
+		if n.Type != workflow.NodeAgent || n.SessionFrom != "" || strings.TrimSpace(n.Workspace) != "" {
+			continue
+		}
+		if n.Session != workflow.SessionNew && afterInit[n.ID] {
+			continue
+		}
+		label := n.Label
+		if label == "" {
+			label = n.ID
+		}
+		out = append(out, Error{Path: fmt.Sprintf("graph.nodes[%s].workspace", n.ID), Message: fmt.Sprintf(
+			"agent %q opens its own session but has no project, so the session is saved outside every project and cannot be found or resumed later. Set its workspace (project), or put a session_init before it and let it share that session.",
+			label)})
+	}
+	return out
 }
 
 func validateTrigger(r *Result, path string, tr workflow.Trigger, wfID string) {

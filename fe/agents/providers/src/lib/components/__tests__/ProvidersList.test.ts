@@ -22,6 +22,9 @@ vi.mock("@wick-fe/common-stores", () => ({
 function makeData(): ProvidersListResponse {
   return {
     IsAdmin: true,
+    CanCreate: true,
+    CanHostConfig: true,
+    CreatePerms: { binary: true, extra_args: true, env: true, airouter_raw_config: true },
     Providers: [
       {
         Instance: { Type: "claude", Name: "claude", Binary: "claude", Disabled: false, MaxConcurrent: 4, SendMode: "" },
@@ -388,7 +391,7 @@ describe("ProvidersList connection badges", () => {
   // would let them change the host. The API refuses these anyway — this
   // is about not offering a button that lies.
   it("hides every admin control when the caller is not an admin", async () => {
-    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false });
+    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false, CanCreate: false });
     vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
     render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
     await screen.findByText("claude/claude");
@@ -405,7 +408,7 @@ describe("ProvidersList connection badges", () => {
   });
 
   it("still lists the providers themselves for a non-admin", async () => {
-    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false });
+    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false, CanCreate: false });
     vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
     render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
     // The point of sharing: the card and its usage are there.
@@ -440,7 +443,7 @@ describe("ProvidersList connection badges", () => {
   });
 
   it("hides per-card Rescan from a non-admin manager", async () => {
-    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false });
+    vi.mocked(api.apiGetProviders).mockResolvedValue({ ...makeData(), IsAdmin: false, CanCreate: false });
     vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
     render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
     await screen.findByText("claude/claude");

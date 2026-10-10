@@ -289,6 +289,10 @@ type ProviderInstance struct {
 	// login this one uses; empty = its own login. See provider/authshare.go.
 	AuthFrom string `json:"auth_from,omitempty"`
 
+	// OwnerPerms is the per-instance owner permission map (short name →
+	// allowed). Absent keys take the agents tool's defaults.
+	OwnerPerms map[string]bool `json:"owner_perms,omitempty"`
+
 	// MaxConcurrent caps how many parallel spawns this instance may
 	// have running at once. 0 = unlimited (follows the global pool cap).
 	MaxConcurrent int `json:"max_concurrent,omitempty"`

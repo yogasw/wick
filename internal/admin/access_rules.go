@@ -35,6 +35,7 @@ const (
 	knobConnectors = "admin_see_all_connectors"
 	knobSessions   = "admin_see_all_sessions"
 	knobProviders  = "admin_see_all_provider_instances"
+	knobWorkflows  = "admin_see_all_workflows"
 	// knobNever: no admin bypass. A tag share hands the agent to the
 	// people who carry the tag and nobody else, admins included.
 	knobNever = "never"
@@ -52,8 +53,8 @@ var accessRules = map[string]accessRule{
 	"tools": {UntaggedIsPublic: true, FilterTagsGrant: true, Reader: "login.CanAccessTool"},
 	"jobs":  {UntaggedIsPublic: true, FilterTagsGrant: true, Reader: "login.CanAccessTool"},
 
-	// canAccessProvider → CanAccessTool on the access path. The admin
-	// bypass is behind its own knob, like connectors.
+	// canAccessProvider → login.CanAccessOpenTaggedResource on the access
+	// path. The admin bypass is behind its own knob, like connectors.
 	"providers": {UntaggedIsPublic: true, FilterTagsGrant: true, AdminKnob: knobProviders, Reader: "canAccessProvider"},
 
 	// connectors.Repo.ListAccessibleTo: untagged row visible to everyone;
@@ -74,7 +75,7 @@ var accessRules = map[string]accessRule{
 	// Owner tag ONLY. Neither reader ever looks at the filter tags these
 	// admin pages write, so a tag added there grants nothing — see
 	// FilterTagsGrant and the warning the modal renders because of it.
-	"workflows": {OwnerScoped: true, Reader: "spa_workflows.go listWorkflows → UserOwnsResource"},
+	"workflows": {OwnerScoped: true, AdminKnob: knobWorkflows, Reader: "spa_workflows.go spaWorkflowList → UserOwnsResource"},
 	"skills":    {OwnerScoped: true, Reader: "skills.go skillOwned → UserOwnsResource"},
 
 	// Connector TYPE tags are categories (is_filter=false) for grouping on

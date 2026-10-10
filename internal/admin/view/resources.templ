@@ -122,7 +122,7 @@ templ resourceOwnerLabel(row ResourceAdminRow) {
 // means to move ownership — the same restraint the schedules run-as picker
 // uses, for the same reason: this is not a field to nudge by accident.
 templ resourceOwnerPicker(row ResourceAdminRow, baseURL string, users []UserOption) {
-	<form action={ templ.SafeURL(baseURL + "/" + row.ID + "/owner") } method="POST" class="flex items-center gap-2">
+	<form action={ templ.SafeURL(baseURL + "/" + row.ID + "/owner") } method="POST" class="async-form flex items-center gap-2">
 		<select
 			name="owner_user_id"
 			data-initial={ row.CreatedBy }

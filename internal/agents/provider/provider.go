@@ -125,6 +125,12 @@ type Instance struct {
 	// authshare.go.
 	AuthFrom string
 
+	// OwnerPerms is what the owner of this instance (the user carrying its
+	// owner tag) may do to it, keyed by short permission name (configure,
+	// binary, env, …). A key that is absent takes the default the agents
+	// tool defines, so only an admin's explicit choice is stored.
+	OwnerPerms map[string]bool
+
 	// Hooks holds the user's enable/disable intent per hook event
 	// (PreToolUse, SessionStart, …). Spawners read this on every
 	// Spawn to decide whether to install / remove the per-workspace
@@ -1083,6 +1089,7 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 			ins.IdleCompactScope = raw.IdleCompactScope
 			ins.IdleCompactMatch = raw.IdleCompactMatch
 			ins.AuthFrom = raw.AuthFrom
+			ins.OwnerPerms = raw.OwnerPerms
 			if t == TypeOpencode && ins.OpencodeConfig == nil {
 				ins.OpencodeConfig = &OpencodeConfig{}
 			}
@@ -1173,6 +1180,7 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 	raw.IdleCompactScope = ins.IdleCompactScope
 	raw.IdleCompactMatch = ins.IdleCompactMatch
 	raw.AuthFrom = ins.AuthFrom
+	raw.OwnerPerms = ins.OwnerPerms
 	if ins.OpencodeConfig != nil {
 		raw.OpencodeModel = ins.OpencodeConfig.Model
 		raw.OpencodeAllowHosted = boolPtr(ins.OpencodeConfig.AllowHosted)

@@ -147,6 +147,8 @@
       const form = p.closest('form');
       if (form) enhance(form);
     });
+    // Small forms without a tag picker (the owner selects) save the same way.
+    document.querySelectorAll('form.async-form').forEach(enhance);
   }
 
   if (document.readyState === 'loading') {

@@ -73,3 +73,12 @@ func TestAdminSeeAllProviderInstancesDefaultsOn(t *testing.T) {
 		t.Fatal("the providers knob must not turn connectors off")
 	}
 }
+
+func TestAdminSeeAllWorkflowsDefaultsOff(t *testing.T) {
+	if AdminSeeAllWorkflows(stubReader{}) || AdminSeeAllWorkflows(nil) {
+		t.Fatal("unwritten config should read as off")
+	}
+	if !AdminSeeAllWorkflows(stubReader{"agents/admin_see_all_workflows": "true"}) {
+		t.Fatal("explicit true should turn it on")
+	}
+}

@@ -17,6 +17,11 @@ vi.mock("@wick-fe/common-stores", () => ({
   toasts: { subscribe: vi.fn(() => vi.fn()) },
 }));
 
+// viewerCan: a non-admin who is not the owner — every permission off.
+function viewerCan(): ProviderDetailResponse["Can"] {
+  return Object.fromEntries(Object.keys(makeDetail().Can).map((k) => [k, false])) as ProviderDetailResponse["Can"];
+}
+
 function makeDetail(): ProviderDetailResponse {
   return {
     // Existing tests describe the ADMIN page; the read-only variant has
@@ -24,6 +29,13 @@ function makeDetail(): ProviderDetailResponse {
     ReadOnly: false,
     CanManage: true,
     SecretsHidden: false,
+    IsAdmin: true,
+    Can: {
+      Configure: true, Models: true, Env: true, ExtraArgs: true, Binary: true, ExtraMCPServers: true, ExternalSkills: true,
+      Sandbox: true, AIRouterRawConfig: true, BorrowLogin: true, Rename: true, Delete: true, AIRouter: true, StorageSync: true,
+      Rescan: true, ViewSessions: true,
+    },
+    OwnerPerms: { configure: true, binary: false, delete: true },
     Instance: { Type: "claude", Name: "default", Binary: "claude", Disabled: false, MaxConcurrent: 4, SendMode: "" },
     Path: "/usr/bin/claude",
     PathFound: true,
@@ -405,7 +417,7 @@ describe("ProviderDetail - callbacks", () => {
 
 describe("ProviderDetail - read-only viewer", () => {
   it("gives a manager a read-only summary, not the admin form", async () => {
-    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), ReadOnly: true, CanManage: false });
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), ReadOnly: true, CanManage: false, IsAdmin: false, Can: viewerCan() });
     render(ProviderDetail, { props: { base: "", type: "claude", name: "claude", onBack: vi.fn(), onOpenSession: vi.fn() } });
 
     const cfg = await screen.findByTestId("provider-config");
@@ -447,7 +459,7 @@ describe("ProviderDetail - card rhythm", () => {
   });
 
   it("spaces the read-only summary too", async () => {
-    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), ReadOnly: true, CanManage: false });
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), ReadOnly: true, CanManage: false, IsAdmin: false, Can: viewerCan() });
     const { container } = render(ProviderDetail, { props: defaultProps });
     await screen.findByTestId("provider-config");
     expectCardRhythm(container);
@@ -633,5 +645,30 @@ describe("ProviderDetail - Activity", () => {
     expect(sec.getAttribute("data-open")).toBe("1");
     expect(await screen.findByText("Refresh")).toBeTruthy();
     expect(localStorage.getItem("wick.providers.section.detail.activity")).toBe("1");
+  });
+});
+
+describe("ProviderDetail - owner permissions", () => {
+  it("shows the card to an admin, seeded from OwnerPerms, and saves the ticks", async () => {
+    vi.mocked(api.apiSaveOwnerPerms).mockImplementation(async (_b, _t, _n, perms) => perms);
+    render(ProviderDetail, { props: defaultProps });
+    await fireEvent.click(await screen.findByText("Owner permissions"));
+    const binary = (await screen.findByTestId("owner-perm-binary")) as HTMLInputElement;
+    const del = screen.getByTestId("owner-perm-delete") as HTMLInputElement;
+    expect(binary.checked).toBe(false);
+    expect(del.checked).toBe(true);
+    await fireEvent.click(binary);
+    await fireEvent.click(screen.getByTestId("owner-perms-save"));
+    expect(api.apiSaveOwnerPerms).toHaveBeenCalledWith(
+      defaultProps.base, "claude", "default",
+      expect.objectContaining({ binary: true, delete: true }),
+    );
+  });
+
+  it("hides the card from a non-admin", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue({ ...makeDetail(), IsAdmin: false, OwnerPerms: {} });
+    render(ProviderDetail, { props: defaultProps });
+    await screen.findByText("Configuration");
+    expect(screen.queryByText("Owner permissions")).toBeNull();
   });
 });

@@ -23,6 +23,10 @@ type ProviderAdminRow struct {
 	// provider); TagNames feeds the search blob.
 	Access   AccessSummary
 	TagNames []string
+	// OwnerID / OwnerLabel: the one user carrying the instance's owner tag
+	// ("" = no owner). The owner may do what the instance's owner permissions allow.
+	OwnerID    string
+	OwnerLabel string
 }
 
 // ProvidersAdminPage lists every provider instance with its two tag sets.
@@ -36,7 +40,7 @@ type ProviderAdminRow struct {
 // Their empty states also fall opposite ways — blank Access means
 // everyone, blank Manage means nobody but admins — so each picker says
 // which, rather than leaving an operator to infer it once and wrongly.
-templ ProvidersAdminPage(rows []ProviderAdminRow, allTags []*entity.Tag, user *entity.User) {
+templ ProvidersAdminPage(rows []ProviderAdminRow, allTags []*entity.Tag, users []UserOption, user *entity.User) {
 	@AdminLayout("Admin · Providers", "providers", user) {
 		{{ tagsJSON := tagsToJSON(allTags) }}
 		<main class="mx-auto w-full max-w-container px-6 py-8">
@@ -44,7 +48,7 @@ templ ProvidersAdminPage(rows []ProviderAdminRow, allTags []*entity.Tag, user *e
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">
 				Two independent grants. <span class="font-medium text-black-900 dark:text-white-100">Access</span> decides who may choose this provider for a project, session, channel or workflow.
 				<span class="font-medium text-black-900 dark:text-white-100">Manage</span> decides who sees it in the Providers menu and may reconnect it — that menu is hidden entirely from anyone with no manage grant.
-				Editing a provider's configuration stays admin-only either way; a manager sees those fields read-only.
+				<span class="font-medium text-black-900 dark:text-white-100">Owner</span> is the one person who looks after the instance: they may reconnect it and do what the Owner permissions card on the instance's detail page allows. Whoever creates an instance owns it.
 			</p>
 			if len(rows) == 0 {
 				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
@@ -57,6 +61,7 @@ templ ProvidersAdminPage(rows []ProviderAdminRow, allTags []*entity.Tag, user *e
 						<thead>
 							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Provider</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Owner</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Reach</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Access — may pick it for a project / session / channel</th>
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Manage — sees it in the Providers menu, may reconnect</th>
@@ -64,7 +69,7 @@ templ ProvidersAdminPage(rows []ProviderAdminRow, allTags []*entity.Tag, user *e
 						</thead>
 						<tbody>
 							for _, row := range rows {
-								@providerAdminRow(row, tagsJSON)
+								@providerAdminRow(row, tagsJSON, users)
 							}
 						</tbody>
 					</table>
@@ -74,7 +79,7 @@ templ ProvidersAdminPage(rows []ProviderAdminRow, allTags []*entity.Tag, user *e
 	}
 }
 
-templ providerAdminRow(row ProviderAdminRow, tagsJSON string) {
+templ providerAdminRow(row ProviderAdminRow, tagsJSON string, users []UserOption) {
 	<tr
 		id={ "provider-" + row.Type + "-" + row.Name }
 		data-search={ searchHaystack(row.Name, row.Type, row.Path, row.Binary, strings.Join(row.TagNames, " ")) }
@@ -87,6 +92,9 @@ templ providerAdminRow(row ProviderAdminRow, tagsJSON string) {
 			if row.Disabled {
 				<span class="mt-1 inline-block rounded bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 text-[10px] text-black-700 dark:text-black-600">disabled</span>
 			}
+		</td>
+		<td class="px-4 py-3 align-top">
+			@providerOwnerPicker(row, users)
 		</td>
 		<td class="px-4 py-3 align-top">
 			@AccessBadge(row.Access)
@@ -132,4 +140,30 @@ templ providerAdminRow(row ProviderAdminRow, tagsJSON string) {
 			</p>
 		</td>
 	</tr>
+}
+
+// providerOwnerPicker is the Owner cell, the same shape as the connector
+// one: pick one user, Save appears once the selection changes.
+templ providerOwnerPicker(row ProviderAdminRow, users []UserOption) {
+	<form action={ templ.SafeURL("/admin/providers/" + row.Path + "/owner") } method="POST" class="async-form flex items-center gap-2">
+		<select
+			name="owner_user_id"
+			data-initial={ row.OwnerID }
+			onchange="this.nextElementSibling.hidden = this.value === this.dataset.initial"
+			class="min-w-0 w-44 rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-1 text-xs text-black-900 dark:text-white-100"
+		>
+			<option value="" selected?={ row.OwnerID == "" }>no owner</option>
+			if row.OwnerID != "" && !userOptionsHave(users, row.OwnerID) {
+				<option value={ row.OwnerID } selected>{ row.OwnerLabel } — unknown user</option>
+			}
+			for _, u := range users {
+				<option value={ u.ID } selected?={ row.OwnerID == u.ID }>{ u.Label }</option>
+			}
+		</select>
+		<button
+			type="submit"
+			hidden
+			class="shrink-0 rounded-lg border border-green-400 bg-green-100 dark:bg-green-900 px-2 py-1 text-xs text-green-700 dark:text-green-300 hover:border-green-500 transition-colors"
+		>Save</button>
+	</form>
 }

@@ -176,6 +176,19 @@
      API enforces all of it — this only stops us rendering buttons that
      would come back 403. */
   let isAdmin = $derived(data?.IsAdmin ?? false);
+  /* A non-admin on the provider_create_tag whitelist may add instances;
+     the host fields of the form show only when they may set them. */
+  let canCreate = $derived(isAdmin || (data?.CanCreate ?? false));
+  /* Per field, the create form follows the owner permissions a new
+     instance starts with (CreatePerms); an admin may set all of them. */
+  function createMay(perm: string): boolean {
+    return isAdmin || (data?.CreatePerms?.[perm] ?? false);
+  }
+  let createBinary = $derived(createMay("binary"));
+  let createArgs = $derived(createMay("extra_args"));
+  let createEnv = $derived(createMay("env"));
+  let createRawConfig = $derived(createMay("airouter_raw_config"));
+  let hostCfg = $derived(createBinary || createArgs || createEnv);
 
   /* canManage answers the per-instance question the API will ask again:
      may this caller reconnect it and force a usage re-check? Admins
@@ -647,6 +660,8 @@
         disabled={busy["rescan-all"]}
         class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50"
       >{busy["rescan-all"] ? "Rescanning…" : "Rescan all"}</button>
+      {/if}
+      {#if canCreate}
       <button
         type="button"
         onclick={openAdd}
@@ -1276,6 +1291,8 @@
             <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Letters, digits and '_' only. Spaces auto-convert to '_'.</p>
           {/if}
         </div>
+        {#if hostCfg}
+        {#if createBinary}
         {#if formIsolated && managedTypes.includes(formType)}
           <div class="space-y-2" data-testid="add-binary-source">
             <label for="add-binary-source" class="block text-xs font-medium text-black-800 dark:text-black-600">Binary</label>
@@ -1299,14 +1316,24 @@
             <input id="add-provider-binary" type="text" bind:value={formBinary} placeholder="leave empty to use PATH lookup" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100" />
           </div>
         {/if}
+        {:else}
+          <p class="text-[11px] text-black-700 dark:text-black-600">The binary is set by an admin. The instance uses the default binary.</p>
+        {/if}
+        {#if createArgs}
         <div>
           <label for="add-provider-args" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Extra args (space separated)</label>
           <input id="add-provider-args" type="text" bind:value={formExtraArgs} class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100" />
         </div>
+        {/if}
+        {#if createEnv}
         <div>
           <label for="add-provider-env" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Env (one KEY=VALUE per line)</label>
           <textarea id="add-provider-env" bind:value={formEnv} rows="3" placeholder="ANTHROPIC_API_KEY=sk-..." class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100"></textarea>
         </div>
+        {/if}
+        {:else}
+          <p class="text-[11px] text-black-700 dark:text-black-600">Binary, extra args and env are set by an admin. The instance uses the default binary.</p>
+        {/if}
         <AIRouterConfig
           {base}
           type={formType}
@@ -1317,6 +1344,7 @@
           bind:apiKey={formAirouterKey}
           bind:rawConfig={formAirouterRawConfig}
           routers={airouterRouters}
+          rawConfigEditable={createRawConfig}
         />
       </form>
   {#snippet footer()}

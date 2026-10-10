@@ -16,6 +16,7 @@
     apiProbeGate,
     apiGetProviderCatalog,
     apiSaveAIRouter,
+    apiSaveOwnerPerms,
   } from "$lib/api.js";
   import type { CatalogEntry, ProviderCatalog } from "$lib/api.js";
   import type { ProviderDetailResponse, ConfigFieldDTO, SpawnLogFileDTO } from "$lib/types.js";
@@ -55,6 +56,10 @@
      editable form to someone whose writes get 403 is worse than showing
      a read-only one to an admin for a moment. */
   let readOnly = $derived(data?.ReadOnly ?? true);
+  /* Same fail-closed rule: admin-only parts and each owner permission
+     stay hidden until the payload grants them. */
+  let isAdmin = $derived(data?.IsAdmin ?? false);
+  let can = $derived(data?.Can);
   let loading = $state(true);
   let error = $state<string | null>(null);
   let saving = $state(false);
@@ -315,6 +320,41 @@
   let airRawConfig = $state("");
   let airSaving = $state(false);
 
+  /* Owner permissions (admin-only card): what this instance's owner may
+     do to it. Order and wording follow the server's permission keys. */
+  const ownerPermList: { key: string; label: string; desc: string }[] = [
+    { key: "configure", label: "General settings", desc: "Max concurrent, send mode, enable/disable, server mode and the other general fields." },
+    { key: "models", label: "Models", desc: "Model selection, the curated model list and live model options." },
+    { key: "env", label: "Env", desc: "Environment variables passed to the CLI." },
+    { key: "extra_args", label: "Extra args", desc: "Extra command-line flags passed to the CLI." },
+    { key: "binary", label: "Binary path", desc: "Which binary runs on this machine." },
+    { key: "extra_mcp_servers", label: "Extra MCP servers", desc: "MCP server commands the CLI starts on this machine." },
+    { key: "external_skills", label: "External skills", desc: "Let the CLI load skills from the host's skill folders." },
+    { key: "sandbox", label: "Sandbox mode", desc: "The codex sandbox: what a session may do on the host." },
+    { key: "airouter", label: "AI Router", desc: "Router, models and API key of the AI Router." },
+    { key: "airouter_raw_config", label: "AI Router raw config", desc: "Free-form env/args the AI Router injects at spawn." },
+    { key: "borrow_login", label: "Borrow a login", desc: "Use another instance's login, or change the account folder." },
+    { key: "rename", label: "Rename", desc: "Rename this instance." },
+    { key: "delete", label: "Delete", desc: "Delete this instance." },
+    { key: "storage_sync", label: "Storage sync", desc: "Run a storage sync of the login files." },
+    { key: "rescan", label: "Rescan", desc: "Rescan the binary." },
+    { key: "view_sessions", label: "Recent sessions", desc: "See the Recent Sessions list (time, status and spawn count only)." },
+  ];
+  let ownerPerms = $state<Record<string, boolean>>({});
+  let ownerPermsSaving = $state(false);
+
+  async function saveOwnerPerms() {
+    ownerPermsSaving = true;
+    try {
+      ownerPerms = { ...(await apiSaveOwnerPerms(base, type, name, ownerPerms)) };
+      toastOk("Owner permissions saved");
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      ownerPermsSaving = false;
+    }
+  }
+
   async function load(silent = false) {
     if (!silent) { loading = true; error = null; }
     try {
@@ -339,6 +379,7 @@
       airKeyMasked = data.AIRouter.KeySet;
       airKey = ""; // never prefill a secret; blank = keep existing
       airRawConfig = data.AIRouter.RawConfig;
+      ownerPerms = { ...(data.OwnerPerms ?? {}) };
     } catch (e) {
       if (!silent) error = e instanceof Error ? e.message : "Failed to load provider detail";
     } finally {
@@ -733,7 +774,7 @@
   <div class="flex items-center justify-between gap-3 flex-wrap">
     <div class="flex items-center gap-2 flex-wrap">
       <ProviderIcon value={type} class="w-6 h-6 shrink-0" />
-      {#if readOnly}
+      {#if !can?.Rename}
         <span class="text-lg font-semibold text-black-900 dark:text-white-100">{type}/{name}</span>
       {:else}
       <button
@@ -764,11 +805,21 @@
       {/if}
     </div>
     {#if data && readOnly}
+      <div class="flex items-center gap-2">
       <span
         class={`rounded-lg border px-3 py-1.5 text-xs font-medium ${data.Instance.Disabled
           ? "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900 text-amber-800 dark:text-amber-300"
           : "border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900 text-green-700 dark:text-green-300"}`}
       >{data.Instance.Disabled ? "Disabled" : "Enabled"}</span>
+      <!-- Delete is its own owner permission, independent of editing. -->
+      {#if can?.Delete}
+        <button
+          onclick={() => { confirmDelete = true; }}
+          disabled={busy["delete"]}
+          class="rounded-lg border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900 px-4 py-2 text-xs font-semibold text-red-700 dark:text-red-300 hover:bg-red-300/40 dark:hover:bg-red-800 disabled:opacity-50 transition-colors"
+        >Delete</button>
+      {/if}
+      </div>
     {:else if data}
       <div class="flex items-center gap-2">
         {#if data.Instance.Disabled}
@@ -792,11 +843,13 @@
             Enabled — click to disable
           </button>
         {/if}
+        {#if can?.Delete}
         <button
           onclick={() => { confirmDelete = true; }}
           disabled={busy["delete"]}
           class="rounded-lg border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900 px-4 py-2 text-xs font-semibold text-red-700 dark:text-red-300 hover:bg-red-300/40 dark:hover:bg-red-800 disabled:opacity-50 transition-colors"
         >Delete</button>
+        {/if}
       </div>
     {/if}
   </div>
@@ -839,8 +892,8 @@
     </CollapsibleSection>
 
     {#if managedType}
-      <!-- A terminal is a shell on the host: admin-only, like editing. -->
-      {#if !readOnly}
+      <!-- A terminal is a shell on the host: admin-only, owner or not. -->
+      {#if isAdmin}
         <TerminalPanel {base} {type} {name} />
       {/if}
     {/if}
@@ -890,7 +943,7 @@
           <span class="text-black-900 dark:text-white-100">{data.Instance.Disabled ? "disabled" : "enabled"}</span>
         </div>
         <p class="pt-2 text-[11px] text-black-700 dark:text-black-600">
-          Editing a provider's configuration is admin-only. You can reconnect this account, re-check its usage and tune compact when idle above.
+          An admin has not allowed you to edit this provider's configuration. You can reconnect this account, re-check its usage and tune compact when idle above.
         </p>
       </div>
     {:else}
@@ -1113,7 +1166,7 @@
       </CollapsibleSection>
     {/if}
 
-    {#if airouterSupported}
+    {#if airouterSupported && can?.AIRouter}
       <CollapsibleSection title="AI Router" storageKey="detail.airouter" bodyClass="">
         {#snippet summary()}{airUse ? "on" : "off"}{/snippet}
         <div class="p-5">
@@ -1129,6 +1182,7 @@
             bind:rawConfig={airRawConfig}
             configPreview={data?.AIRouter.Preview ?? ""}
             routers={airRouters}
+            rawConfigEditable={can?.AIRouterRawConfig ?? false}
           />
         </div>
         <div class="px-5 py-3 border-t border-white-300 dark:border-navy-600 flex justify-end">
@@ -1137,6 +1191,42 @@
             disabled={airSaving}
             class="rounded-lg bg-green-600 hover:bg-green-700 px-4 py-1.5 text-xs font-medium text-white-100 disabled:opacity-50"
           >{airSaving ? "Saving…" : "Save AI Router"}</button>
+        </div>
+      </CollapsibleSection>
+    {/if}
+
+    {#if isAdmin}
+      <CollapsibleSection title="Owner permissions" storageKey="detail.ownerperms" testid="section-owner-perms" bodyClass="">
+        {#snippet summary()}{ownerPermList.filter((p) => ownerPerms[p.key]).length} of {ownerPermList.length} allowed{/snippet}
+        <div class="px-5 pt-4">
+          <p class="text-xs text-black-700 dark:text-black-600">
+            What the owner of this instance may do to it. Admins can always do all of it.
+          </p>
+        </div>
+        <div class="p-5 grid gap-1 sm:grid-cols-2">
+          {#each ownerPermList as perm (perm.key)}
+            <label class="flex items-start gap-3 rounded-lg px-2 py-2 cursor-pointer hover:bg-white-200 dark:hover:bg-navy-800">
+              <input
+                type="checkbox"
+                data-testid={"owner-perm-" + perm.key}
+                checked={ownerPerms[perm.key] ?? false}
+                onchange={(e) => { ownerPerms = { ...ownerPerms, [perm.key]: (e.currentTarget as HTMLInputElement).checked }; }}
+                class="mt-0.5 h-4 w-4 shrink-0 accent-green-600"
+              />
+              <span class="min-w-0 flex-1">
+                <span class="block text-xs font-semibold text-black-900 dark:text-white-100">{perm.label}</span>
+                <span class="block text-[11px] text-black-700 dark:text-black-600">{perm.desc}</span>
+              </span>
+            </label>
+          {/each}
+        </div>
+        <div class="px-5 py-3 border-t border-white-300 dark:border-navy-600 flex justify-end">
+          <button
+            onclick={saveOwnerPerms}
+            disabled={ownerPermsSaving}
+            data-testid="owner-perms-save"
+            class="rounded-lg bg-green-600 hover:bg-green-700 px-4 py-1.5 text-xs font-medium text-white-100 disabled:opacity-50"
+          >{ownerPermsSaving ? "Saving…" : "Save owner permissions"}</button>
         </div>
       </CollapsibleSection>
     {/if}
@@ -1249,8 +1339,8 @@
       </CollapsibleSection>
     {/each}
 
-    <!-- Hooks -->
-    {#if hookEvents.length > 0}
+    <!-- Hooks: wired into the global command gate, admin-only. -->
+    {#if isAdmin && hookEvents.length > 0}
       <CollapsibleSection title="Hooks" storageKey="detail.hooks" bodyClass="">
         {#snippet summary()}{hookEvents.filter((e) => data?.HookEnabled[e]).length}/{hookEvents.length} enabled{/snippet}
         <div class="divide-y divide-white-300 dark:divide-navy-600">
@@ -1323,6 +1413,7 @@
       <UsageReport {base} provider={`${type}/${name}`} title="" flush />
     </CollapsibleSection>
 
+    {#if isAdmin}
     <!-- Command Gate -->
     <CollapsibleSection title="Command Gate" storageKey="detail.gate">
       {#snippet summary()}{data.Gate?.Enabled ? "enabled" : "disabled"}{/snippet}
@@ -1364,6 +1455,7 @@
         {/if}
       </div>
     </CollapsibleSection>
+    {/if}
 
     <!-- Active processes -->
     {#if data.ActivePIDs.length > 0}
@@ -1391,7 +1483,10 @@
     {/if}
 
     <!-- Recent spawns — shared component (search + pagination + inline detail) -->
-    <RecentSpawns {base} {type} {name} {onOpenSession} collapsible={true} />
+    {#if isAdmin || can?.ViewSessions}
+      <!-- An owner sees the list only; opening a session stays admin-only. -->
+      <RecentSpawns {base} {type} {name} {onOpenSession} collapsible={true} clickable={isAdmin} />
+    {/if}
     </div>
     {/if}
   {/if}

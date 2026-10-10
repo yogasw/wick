@@ -36,6 +36,13 @@ func providerManageTagPath(typ, name string) string {
 	return providerAccessTagPath(typ, name) + "/manage"
 }
 
+// providerOwnerResourceID is the id behind an instance's owner tag
+// ("owner:provider:<type>/<name>"). Same string as providerOwnerResource in
+// internal/tools/agents/providers.go, which hands it to the creator.
+func providerOwnerResourceID(typ, name string) string {
+	return "provider:" + typ + "/" + name
+}
+
 // providersAdminPage renders the provider sharing table.
 func (h *Handler) providersAdminPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -56,6 +63,21 @@ func (h *Handler) providersAdminPage(w http.ResponseWriter, r *http.Request) {
 	// reads as "untagged", and saving it would make that true.
 	allTags, accessPerms, ok := h.tagPageData(w, r, accessPaths)
 	if !ok {
+		return
+	}
+	// The pickers offer the provider owner tags only, not every connector's
+	// and project's; the owner itself is set in its own column.
+	ownerIDs := make(map[string]struct{}, len(instances))
+	ownerTagNames := make([]string, 0, len(instances))
+	for _, ins := range instances {
+		id := providerOwnerResourceID(string(ins.Type), ins.Name)
+		ownerIDs[id] = struct{}{}
+		ownerTagNames = append(ownerTagNames, "owner:"+id)
+	}
+	allTags = filterOwnerTagsForIDs(allTags, ownerIDs)
+	owners, err := h.repo.OwnerTagHolders(ctx, ownerTagNames)
+	if err != nil {
+		http.Error(w, "cannot load provider owners: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	managePerms, err := h.repo.ListToolPerms(ctx, managePaths)
@@ -79,6 +101,13 @@ func (h *Handler) providersAdminPage(w http.ResponseWriter, r *http.Request) {
 		if i < len(managePerms) && managePerms[i] != nil {
 			row.ManageTagIDs = managePerms[i].TagIDs
 		}
+		if holders := owners["owner:"+providerOwnerResourceID(row.Type, row.Name)]; len(holders) > 0 {
+			row.OwnerID = holders[0].ID
+			row.OwnerLabel = holders[0].Name
+			if row.OwnerLabel == "" {
+				row.OwnerLabel = holders[0].Email
+			}
+		}
 		rows[i] = row
 	}
 
@@ -88,7 +117,30 @@ func (h *Handler) providersAdminPage(w http.ResponseWriter, r *http.Request) {
 		rows[i].TagNames = adminview.TagNames(allTags, rows[i].AccessTagIDs)
 	}
 
-	adminview.ProvidersAdminPage(rows, allTags, user).Render(ctx, w)
+	adminview.ProvidersAdminPage(rows, allTags, h.userOptions(ctx), user).Render(ctx, w)
+}
+
+// setProviderOwner names the one owner of a provider instance — the user
+// carrying its owner tag, which grants what the instance's owner permissions
+// allow. A new instance's owner tag is also on its access path (private to
+// its owner until an admin changes the access tags); the new owner inherits
+// that. Empty leaves it ownerless.
+func (h *Handler) setProviderOwner(w http.ResponseWriter, r *http.Request) {
+	typ := strings.TrimSpace(r.PathValue("type"))
+	name := strings.TrimSpace(r.PathValue("name"))
+	if _, err := provider.Find(provider.Type(typ), name); err != nil {
+		http.Error(w, "provider not found", http.StatusNotFound)
+		return
+	}
+	owner, ok := h.ownerFromForm(w, r)
+	if !ok {
+		return
+	}
+	if err := h.repo.SetSoleOwnerTag(r.Context(), providerOwnerResourceID(typ, name), owner); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	redirectOrNoContent(w, r, "/admin/providers")
 }
 
 // setProviderAccessTags writes the ACCESS tags of one instance.

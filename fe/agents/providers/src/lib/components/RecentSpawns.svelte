@@ -14,8 +14,11 @@
     /** Collapsed by default with a click-to-toggle header; the list is
         fetched lazily on first expand. */
     collapsible?: boolean;
+    /* clickable: false renders the rows inert — a provider owner sees the
+       list, but opening a session is admin-only (the API refuses it). */
+    clickable?: boolean;
   };
-  let { base, type, name, onOpenSession, collapsible = false }: Props = $props();
+  let { base, type, name, onOpenSession, collapsible = false, clickable = true }: Props = $props();
 
   let expanded = $state(false);
   let loadedOnce = false;
@@ -97,6 +100,7 @@
   </div>
 
   {#if expanded}
+  {#if clickable}
   <div class="flex flex-wrap items-center gap-2 px-5 py-3 border-b border-white-300 dark:border-navy-600">
     <input
       type="text"
@@ -106,6 +110,7 @@
       class="flex-1 min-w-[12rem] rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-1.5 text-xs text-black-900 dark:text-white-100"
     />
   </div>
+  {/if}
 
   {#if loading && !data}
     <div class="px-5 py-8 text-center text-sm text-black-700 dark:text-black-600">Loading…</div>
@@ -129,8 +134,8 @@
         {#each data?.Sessions ?? [] as s (s.SessionID)}
           {@const st = exitStatus(s.LastStatus)}
           <tr
-            class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 cursor-pointer"
-            onclick={() => onOpenSession(s.SessionID)}
+            class="border-b border-white-300 dark:border-navy-600 last:border-0 {clickable ? 'hover:bg-white-200 dark:hover:bg-navy-800 cursor-pointer' : ''}"
+            onclick={clickable ? () => onOpenSession(s.SessionID) : undefined}
           >
             <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600 whitespace-nowrap">{new Date(s.LastStarted).toLocaleString()}</td>
             {#if !scoped}<td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">{s.ProviderType}/{s.ProviderName}</td>{/if}
@@ -139,7 +144,7 @@
             <td class="px-5 py-2">
               <span class="rounded px-1.5 py-0.5 text-xs {exitBadgeClass(st.tone)}" title={st.title}>{st.label}</span>
             </td>
-            <td class="px-5 py-2 text-black-700 dark:text-black-600 max-w-xs truncate">{s.FirstMessage}</td>
+            <td class="px-5 py-2 text-black-700 dark:text-black-600 max-w-xs truncate">{s.FirstMessage || "—"}</td>
           </tr>
         {/each}
       </tbody>

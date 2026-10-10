@@ -351,6 +351,7 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("GET /admin/providers", admin(h.providersAdminPage))
 	mux.Handle("POST /admin/providers/{type}/{name}/access-tags", admin(h.setProviderAccessTags))
 	mux.Handle("POST /admin/providers/{type}/{name}/manage-tags", admin(h.setProviderManageTags))
+	mux.Handle("POST /admin/providers/{type}/{name}/owner", admin(h.setProviderOwner))
 
 	mux.Handle("GET /admin/data-tables", admin(h.dataTablesAdminPage))
 	mux.Handle("GET /admin/team-agents", admin(h.teamAgentsAdminPage))

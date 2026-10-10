@@ -315,7 +315,15 @@ type ProvidersListResponse struct {
 	// that edits configuration is admin-only however the tags are set,
 	// so a non-admin gets the read-only page rather than buttons that
 	// would come back 403.
-	IsAdmin       bool                `json:"is_admin"`
+	IsAdmin bool `json:"is_admin"`
+	// CanCreate: may this caller add an instance (admin, or the
+	// provider_create_tag whitelist)? CanHostConfig: may the create form
+	// set the binary (kept for older clients; CreatePerms is per field)?
+	// CreatePerms: the owner permissions the create form follows — every
+	// one for an admin, the defaults for a whitelisted creator.
+	CanCreate     bool                `json:"can_create"`
+	CanHostConfig bool                `json:"can_host_config"`
+	CreatePerms   map[string]bool     `json:"create_perms"`
 	Providers     []ProviderStatusDTO `json:"providers"`
 	Gate          GateStatusDTO       `json:"gate"`
 	MCPClients    MCPStatusDTO        `json:"mcp"`
@@ -338,6 +346,27 @@ type ConfigFieldDTO struct {
 	Required    bool   `json:"required"`
 }
 
+// ProviderCapsDTO is one bool per owner permission (see ownerPerm* in
+// provider_access.go).
+type ProviderCapsDTO struct {
+	Configure         bool `json:"configure"`
+	Models            bool `json:"models"`
+	Env               bool `json:"env"`
+	ExtraArgs         bool `json:"extra_args"`
+	Binary            bool `json:"binary"`
+	ExtraMCPServers   bool `json:"extra_mcp_servers"`
+	ExternalSkills    bool `json:"external_skills"`
+	Sandbox           bool `json:"sandbox"`
+	AIRouterRawConfig bool `json:"airouter_raw_config"`
+	BorrowLogin       bool `json:"borrow_login"`
+	Rename            bool `json:"rename"`
+	Delete            bool `json:"delete"`
+	AIRouter          bool `json:"airouter"`
+	StorageSync       bool `json:"storage_sync"`
+	Rescan            bool `json:"rescan"`
+	ViewSessions      bool `json:"view_sessions"`
+}
+
 // ProviderDetailResponse is the JSON envelope for GET /api/providers/{type}/{name}.
 type ProviderDetailResponse struct {
 	// ReadOnly marks a payload rendered for someone who may look but not
@@ -350,22 +379,32 @@ type ProviderDetailResponse struct {
 	// SecretsHidden marks a payload whose resolved-config previews were
 	// withheld. They contain live auth tokens verbatim, which is fine for
 	// the admin who owns the credential and not for a viewer.
-	SecretsHidden bool                         `json:"secrets_hidden,omitempty"`
-	Instance      ProviderInstanceDTO          `json:"instance"`
-	Path          string                       `json:"path"`
-	PathFound     bool                         `json:"path_found"`
-	Source        string                       `json:"source,omitempty"`
-	Version       string                       `json:"version"`
-	VersionErr    string                       `json:"version_err,omitempty"`
-	Probing       bool                         `json:"probing"`
-	Hooks         map[string]HookCapabilityDTO `json:"hooks"`
-	HookEnabled   map[string]bool              `json:"hook_enabled"`
-	Gate          GateStatusDTO                `json:"gate"`
-	GlobalMax     int                          `json:"global_max"`
-	ActiveCount   int                          `json:"active_count"`
-	ActivePIDs    []LiveProcessDTO             `json:"active_pids"`
-	ConfigFields  []ConfigFieldDTO             `json:"config_fields"`
-	AIRouter      AIRouterDetailDTO            `json:"airouter"`
+	SecretsHidden bool `json:"secrets_hidden,omitempty"`
+	// IsAdmin: admin-only parts (terminal, hooks, gate, opening a session)
+	// render only for an admin, whatever the owner permissions say.
+	IsAdmin bool `json:"is_admin"`
+	// Can lists what the caller may do to this instance beyond viewing:
+	// everything for an admin, the ticked owner permissions for its owner.
+	Can ProviderCapsDTO `json:"can"`
+	// OwnerPerms is the instance's effective owner permissions (stored
+	// value, else the default), sent to admins only: they edit it in the
+	// Owner permissions card.
+	OwnerPerms   map[string]bool              `json:"owner_perms,omitempty"`
+	Instance     ProviderInstanceDTO          `json:"instance"`
+	Path         string                       `json:"path"`
+	PathFound    bool                         `json:"path_found"`
+	Source       string                       `json:"source,omitempty"`
+	Version      string                       `json:"version"`
+	VersionErr   string                       `json:"version_err,omitempty"`
+	Probing      bool                         `json:"probing"`
+	Hooks        map[string]HookCapabilityDTO `json:"hooks"`
+	HookEnabled  map[string]bool              `json:"hook_enabled"`
+	Gate         GateStatusDTO                `json:"gate"`
+	GlobalMax    int                          `json:"global_max"`
+	ActiveCount  int                          `json:"active_count"`
+	ActivePIDs   []LiveProcessDTO             `json:"active_pids"`
+	ConfigFields []ConfigFieldDTO             `json:"config_fields"`
+	AIRouter     AIRouterDetailDTO            `json:"airouter"`
 	// DefaultModels are the per-type catalog seed models (id + description),
 	// shown in the model-selection card so the operator sees what's used when
 	// the curated list is empty, and can Load them as an editable starting
@@ -571,6 +610,24 @@ func seedModelDTOs(t provider.Type) []DefaultModelDTO {
 // Secret fields have their Value replaced with "••••••••" when non-empty,
 // following the same discipline applied across API endpoints that return
 // provider config state.
+// editableConfigFields drops the fields the caller may not change, so a
+// provider owner's editor never offers a host setting the API would refuse.
+// An admin gets every field.
+func editableConfigFields(c *tool.Ctx, t provider.Type, name string, fields []ConfigFieldDTO) []ConfigFieldDTO {
+	if callerIsAdmin(c) {
+		return fields
+	}
+	manage := canManageProvider(c, t, name)
+	out := fields[:0]
+	for _, f := range fields {
+		// Idle compact is a manage grant (see saveProviderConfigKey).
+		if (manage && provider.IsIdleCompactKey(f.Key)) || canProviderDo(c, t, name, providerKeyPerm(f.Key)) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 func configFieldDTOs(rows []pkgentity.Config) []ConfigFieldDTO {
 	out := make([]ConfigFieldDTO, 0, len(rows))
 	for _, r := range rows {
@@ -658,6 +715,9 @@ func apiProvidersList(c *tool.Ctx) {
 
 	c.JSON(http.StatusOK, ProvidersListResponse{
 		IsAdmin:       isAdmin,
+		CanCreate:     canCreateProvider(c),
+		CanHostConfig: isAdmin || ownerPermDefaults[ownerPermBinary],
+		CreatePerms:   createOwnerPerms(isAdmin),
 		Providers:     providerDTOs,
 		Gate:          gateStatusDTO(gateVM),
 		MCPClients:    mcpStatusDTO(mcpVM),
@@ -726,19 +786,44 @@ func apiProviderDetail(c *tool.Ctx) {
 	gateVM := gateStatusVM()
 
 	isAdmin := callerIsAdmin(c)
+	can := ProviderCapsDTO{
+		Configure:         canProviderDo(c, t, name, ownerPermConfigure),
+		Models:            canProviderDo(c, t, name, ownerPermModels),
+		Env:               canProviderDo(c, t, name, ownerPermEnv),
+		ExtraArgs:         canProviderDo(c, t, name, ownerPermExtraArgs),
+		Binary:            canProviderDo(c, t, name, ownerPermBinary),
+		ExtraMCPServers:   canProviderDo(c, t, name, ownerPermExtraMCP),
+		ExternalSkills:    canProviderDo(c, t, name, ownerPermExternalSkills),
+		Sandbox:           canProviderDo(c, t, name, ownerPermSandbox),
+		AIRouterRawConfig: canProviderDo(c, t, name, ownerPermAIRouterRawConf),
+		BorrowLogin:       canProviderDo(c, t, name, ownerPermAuthFrom),
+		Rename:            canProviderDo(c, t, name, ownerPermRename),
+		Delete:            canProviderDo(c, t, name, ownerPermDelete),
+		AIRouter:          canProviderDo(c, t, name, ownerPermAIRouter),
+		StorageSync:       canProviderDo(c, t, name, ownerPermStorage),
+		Rescan:            canProviderDo(c, t, name, ownerPermRescan),
+		ViewSessions:      canProviderDo(c, t, name, ownerPermSessions),
+	}
 	airouterDTO := aiRouterDetailDTO(st.Instance)
 	if !isAdmin {
 		// aiRouterConfigPreview resolves the REAL spawn config, auth
 		// token included, because it was written for an admin-only page.
 		// A viewer gets the settings without the credential.
 		airouterDTO.Preview = ""
-		airouterDTO.RawConfig = ""
+		// The raw override carries no credential (the key is its own field);
+		// whoever may edit it needs to see it, or their next save wipes it.
+		if !can.AIRouterRawConfig {
+			airouterDTO.RawConfig = ""
+		}
 	}
 
 	c.JSON(http.StatusOK, ProviderDetailResponse{
-		ReadOnly:      !isAdmin,
+		ReadOnly:      !can.Configure,
 		CanManage:     canManageProvider(c, t, name),
 		SecretsHidden: !isAdmin,
+		IsAdmin:       isAdmin,
+		Can:           can,
+		OwnerPerms:    adminOwnerPerms(isAdmin, st.Instance.OwnerPerms),
 		Instance: ProviderInstanceDTO{
 			Type:          string(st.Instance.Type),
 			Name:          st.Instance.Name,
@@ -760,7 +845,7 @@ func apiProviderDetail(c *tool.Ctx) {
 		GlobalMax:     poolMaxConcurrent(),
 		ActiveCount:   len(activePIDs),
 		ActivePIDs:    activePIDs,
-		ConfigFields:  configFieldDTOs(provider.SeedInstanceConfig(st.Instance)),
+		ConfigFields:  editableConfigFields(c, t, name, configFieldDTOs(provider.SeedInstanceConfig(st.Instance))),
 		AIRouter:      airouterDTO,
 		DefaultModels: seedModelDTOs(st.Instance.Type),
 	})
@@ -898,4 +983,26 @@ func parseInt(s string) int {
 		n = n*10 + int(ch-'0')
 	}
 	return n
+}
+
+// createOwnerPerms is what the create form may set: every owner
+// permission for an admin, the defaults for a whitelisted creator (who
+// owns what they create, before an admin ticks anything for it).
+func createOwnerPerms(isAdmin bool) map[string]bool {
+	out := effectiveOwnerPerms(nil)
+	if isAdmin {
+		for k := range out {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// adminOwnerPerms is the instance's effective owner permissions for an
+// admin, nil for anyone else.
+func adminOwnerPerms(isAdmin bool, stored map[string]bool) map[string]bool {
+	if !isAdmin {
+		return nil
+	}
+	return effectiveOwnerPerms(stored)
 }

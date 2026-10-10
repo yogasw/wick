@@ -497,6 +497,25 @@ func (s *Service) CanAccessSharedResource(ctx context.Context, user *entity.User
 	return anyTagMatch(s.effectiveTagIDs(ctx, user.ID), filterTagIDs)
 }
 
+// CanAccessOpenTaggedResource answers the tag question for a resource that is
+// open to everyone until tagged — a provider instance, keyed by a tool_tags
+// path like "/providers/claude/work". Untagged = any approved user; tagged =
+// the user must carry one of the tags.
+//
+// Unlike CanAccessTool it has NO admin bypass: the caller decides whether the
+// admin role walks past tags (an admin_see_all_* knob), and a bypass hidden in
+// here would make turning that knob off do nothing.
+func (s *Service) CanAccessOpenTaggedResource(ctx context.Context, user *entity.User, resourcePath string) bool {
+	if user == nil || !user.Approved {
+		return false
+	}
+	filterTagIDs := s.repo.GetToolFilterTagIDs(ctx, resourcePath)
+	if len(filterTagIDs) == 0 {
+		return true
+	}
+	return anyTagMatch(s.effectiveTagIDs(ctx, user.ID), filterTagIDs)
+}
+
 // anyTagMatch reports whether the two tag-id sets intersect. Pure helper so the
 // tag-share rule is unit-testable without a DB.
 func anyTagMatch(userTagIDs, filterTagIDs []string) bool {

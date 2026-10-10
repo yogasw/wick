@@ -651,6 +651,7 @@ func Register(r tool.Router) {
 	r.GET("/providers/detail/{type}/{name}", providerDetailPage)
 	r.POST("/providers/detail/{type}/{name}/save", saveProviderDetail)
 	r.POST("/providers/detail/{type}/{name}/airouter", saveProviderAIRouter)
+	r.POST("/providers/detail/{type}/{name}/owner-perms", saveProviderOwnerPerms)
 	r.POST("/providers/detail/{type}/{name}/{key}", saveProviderConfigKey)
 	r.POST("/providers/idle-compact-probe/{type}/{name}", probeIdleCompact)
 	r.GET("/providers/airouter/slots/{type}", providerAIRouterSlots)

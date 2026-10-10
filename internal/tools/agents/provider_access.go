@@ -147,11 +147,15 @@ func userCanAccessProvider(ctx context.Context, u *entity.User, t provider.Type,
 // instance's ACCESS tags (untagged = yes). With no auth service wired it
 // says no — an unwired ACL fails closed. A var so tests can stand in for
 // the tag store.
+//
+// Not CanAccessTool: that one lets every admin through, which made
+// admin_see_all_provider_instances=false a no-op for every picker. The
+// admin shortcut lives in userBypassesProviderTags and nowhere else.
 var providerAccessTagAllows = func(ctx context.Context, u *entity.User, t provider.Type, name string) bool {
 	if globalAuth == nil {
 		return false
 	}
-	return globalAuth.CanAccessTool(ctx, u, providerAccessPath(t, name), entity.VisibilityPrivate)
+	return globalAuth.CanAccessOpenTaggedResource(ctx, u, providerAccessPath(t, name))
 }
 
 // lookupWorkflowOwner resolves a workflow owner id to the account. A var
@@ -188,17 +192,22 @@ func workflowProviderAccess(ctx context.Context, ownerUserID, typ, name string) 
 }
 
 // canManageProvider reports whether the caller may reconnect this
-// instance or force a usage re-check. Admins may while the
-// admin_see_all_provider_instances knob is on; everyone else (and admins
-// with the knob off) needs an explicit tag grant on the manage path.
+// instance or force a usage re-check. Admins always may: the Providers
+// page is where they look after every account, and the
+// admin_see_all_provider_instances knob only narrows what they can PICK.
+// Everyone else needs an explicit tag grant on the manage path.
 func canManageProvider(c *tool.Ctx, t provider.Type, name string) bool {
 	u := login.GetUser(c.Context())
 	if u == nil {
 		return false
 	}
-	if userBypassesProviderTags(u) {
+	if u.IsAdmin() {
 		_, manage := providerPerm(u.Approved, true, true, false, false)
 		return manage
+	}
+	// The owner looks after their own instance (reconnect, usage).
+	if u.Approved && providerOwnedBy(c.Context(), u, t, name) {
+		return true
 	}
 	// Manage stands alone: the Providers menu is for whoever looks after
 	// the account, and that person does not also have to be allowed to
@@ -206,6 +215,189 @@ func canManageProvider(c *tool.Ctx, t provider.Type, name string) bool {
 	_, manage := providerPerm(u.Approved, u.IsAdmin(), false, true,
 		providerManageTagAllows(c.Context(), u, t, name))
 	return manage
+}
+
+// providerOwnedBy reports whether u carries the instance's owner tag —
+// the one tagProviderOwner hands its creator. A var so tests can stand
+// in for the tag store.
+var providerOwnedBy = func(ctx context.Context, u *entity.User, t provider.Type, name string) bool {
+	if globalTagsSvc == nil || u == nil {
+		return false
+	}
+	ok, _ := globalTagsSvc.UserOwnsResource(ctx, u.ID, providerOwnerResource(t, name))
+	return ok
+}
+
+// Owner permissions: what the owner of a provider instance (the user
+// carrying its owner tag, see tagProviderOwner) may do to it. Stored per
+// instance in provider.Instance.OwnerPerms, ticked by an admin on the
+// instance's detail page. Admins may do all of them whatever is ticked.
+const (
+	ownerPermConfigure       = "configure"
+	ownerPermModels          = "models"
+	ownerPermEnv             = "env"
+	ownerPermExtraArgs       = "extra_args"
+	ownerPermBinary          = "binary"
+	ownerPermExtraMCP        = "extra_mcp_servers"
+	ownerPermExternalSkills  = "external_skills"
+	ownerPermSandbox         = "sandbox"
+	ownerPermAIRouter        = "airouter"
+	ownerPermAIRouterRawConf = "airouter_raw_config"
+	ownerPermAuthFrom        = "borrow_login"
+	ownerPermRename          = "rename"
+	ownerPermDelete          = "delete"
+	ownerPermStorage         = "storage_sync"
+	ownerPermRescan          = "rescan"
+	ownerPermSessions        = "view_sessions"
+)
+
+// ownerPermKeys is every owner permission, in the order the detail page
+// lists them.
+var ownerPermKeys = []string{
+	ownerPermConfigure, ownerPermModels, ownerPermEnv, ownerPermExtraArgs,
+	ownerPermBinary, ownerPermExtraMCP, ownerPermExternalSkills, ownerPermSandbox,
+	ownerPermAIRouter, ownerPermAIRouterRawConf, ownerPermAuthFrom,
+	ownerPermRename, ownerPermDelete, ownerPermStorage, ownerPermRescan, ownerPermSessions,
+}
+
+// ownerPermDefaults is what a permission the instance does not store reads
+// as. The ones that decide what runs on the host, or whose login is used,
+// start off.
+var ownerPermDefaults = map[string]bool{
+	ownerPermConfigure:       true,
+	ownerPermModels:          true,
+	ownerPermEnv:             true,
+	ownerPermExtraArgs:       true,
+	ownerPermBinary:          false,
+	ownerPermExtraMCP:        false,
+	ownerPermExternalSkills:  false,
+	ownerPermSandbox:         false,
+	ownerPermAIRouter:        true,
+	ownerPermAIRouterRawConf: false,
+	ownerPermAuthFrom:        false,
+	ownerPermRename:          true,
+	ownerPermDelete:          true,
+	ownerPermStorage:         true,
+	ownerPermRescan:          true,
+	ownerPermSessions:        true,
+}
+
+// isOwnerPerm reports whether perm names a known owner permission.
+func isOwnerPerm(perm string) bool {
+	_, ok := ownerPermDefaults[perm]
+	return ok
+}
+
+// effectiveOwnerPerms is every owner permission of an instance with the
+// defaults filled in for the keys it does not store.
+func effectiveOwnerPerms(stored map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(ownerPermDefaults))
+	for k, def := range ownerPermDefaults {
+		if v, ok := stored[k]; ok {
+			out[k] = v
+		} else {
+			out[k] = def
+		}
+	}
+	return out
+}
+
+// instanceOwnerMay reads one owner permission off the instance. A var so
+// tests can stand in for the instance store. An instance that cannot be
+// found grants nothing.
+var instanceOwnerMay = func(t provider.Type, name, perm string) bool {
+	ins, err := findProviderInstanceFn(t, name)
+	if err != nil {
+		return false
+	}
+	return effectiveOwnerPerms(ins.OwnerPerms)[perm]
+}
+
+// canProviderDo reports whether the caller may do perm to this instance:
+// an admin always, its owner when the instance allows perm.
+func canProviderDo(c *tool.Ctx, t provider.Type, name, perm string) bool {
+	u := login.GetUser(c.Context())
+	if u == nil || !u.Approved {
+		return false
+	}
+	if u.IsAdmin() {
+		return true
+	}
+	return providerOwnedBy(c.Context(), u, t, name) && instanceOwnerMay(t, name, perm)
+}
+
+// requireProviderDo is canProviderDo for handlers.
+func requireProviderDo(c *tool.Ctx, t provider.Type, name, perm string) bool {
+	if canProviderDo(c, t, name, perm) {
+		return true
+	}
+	c.JSON(http.StatusForbidden, map[string]string{"error": "no access: an admin has not allowed this for provider owners"})
+	return false
+}
+
+// providerCreateTagKey names the agents config holding the tag whose holders
+// may create provider instances besides admins. Empty = admins only.
+const providerCreateTagKey = "provider_create_tag"
+
+// providerCreateTagName reads that tag name. A var so tests can set it.
+var providerCreateTagName = func() string {
+	if globalConfigs == nil {
+		return ""
+	}
+	return strings.TrimSpace(globalConfigs.GetOwned("agents", providerCreateTagKey))
+}
+
+// userCarriesTagNamed reports whether u carries the tag called name. A var
+// so tests can stand in for the tag store.
+var userCarriesTagNamed = func(ctx context.Context, u *entity.User, name string) bool {
+	if globalTagsSvc == nil || u == nil {
+		return false
+	}
+	ok, _ := globalTagsSvc.UserCarriesTagName(ctx, u.ID, name)
+	return ok
+}
+
+// canCreateProvider reports whether the caller may add a provider instance:
+// an admin, or a holder of the whitelist tag named in provider_create_tag.
+// A non-admin creator owns what they create, and the host and login
+// settings of it follow the default owner permissions (ownerPermDefaults).
+func canCreateProvider(c *tool.Ctx) bool {
+	u := login.GetUser(c.Context())
+	if u == nil || !u.Approved {
+		return false
+	}
+	if u.IsAdmin() {
+		return true
+	}
+	name := providerCreateTagName()
+	return name != "" && userCarriesTagNamed(c.Context(), u, name)
+}
+
+// providerKeyPerm is the owner permission a per-instance config key
+// needs. The host keys (binary, flags, env, extra MCP server commands,
+// skill dirs, the codex sandbox) each have their own permission, since
+// they decide what runs on the host; auth_from and the account dir
+// (opencode data dir, omp profile) decide whose login runs.
+func providerKeyPerm(key string) string {
+	switch key {
+	case "binary":
+		return ownerPermBinary
+	case "extra_args":
+		return ownerPermExtraArgs
+	case "env":
+		return ownerPermEnv
+	case "extra_mcp_servers":
+		return ownerPermExtraMCP
+	case "load_external_skills":
+		return ownerPermExternalSkills
+	case "sandbox_mode":
+		return ownerPermSandbox
+	case "auth_from", "opencode_data_dir", "omp_profile":
+		return ownerPermAuthFrom
+	case "models", "model_select", "live_models", "live_model_filter", "live_model_default", "opencode_model":
+		return ownerPermModels
+	}
+	return ownerPermConfigure
 }
 
 // providerManageTagAllows asks the tag store whether u passes the
@@ -271,7 +463,7 @@ func requireProviderManage(c *tool.Ctx, t provider.Type, name string) bool {
 // manageableProviders filters instances down to the ones the caller may
 // manage — what the Providers menu shows.
 func manageableProviders[T any](c *tool.Ctx, items []T, key func(T) (provider.Type, string)) []T {
-	if callerBypassesProviderTags(c) {
+	if callerIsAdmin(c) {
 		return items
 	}
 	out := make([]T, 0, len(items))
@@ -293,14 +485,17 @@ func manageableProviders[T any](c *tool.Ctx, items []T, key func(T) (provider.Ty
 //
 // Admins keep the menu whatever admin_see_all_provider_instances says: the
 // page also carries the admin-only provider configuration (adding an
-// instance, the gate, MCP clients). With the knob off its instance list is
-// still narrowed to what their manage tags reach (manageableProviders).
+// instance, the gate, MCP clients), and admins manage every instance.
 func HasManageableProvider(c *tool.Ctx) bool {
 	if callerIsAdmin(c) {
 		return true
 	}
 	if u := login.GetUser(c.Context()); u == nil || !u.Approved || globalAuth == nil {
 		return false
+	}
+	// A whitelisted creator needs the page to add their first instance.
+	if canCreateProvider(c) {
+		return true
 	}
 	instances, err := provider.Load()
 	if err != nil {

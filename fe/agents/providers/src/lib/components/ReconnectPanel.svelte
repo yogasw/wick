@@ -67,7 +67,42 @@
   onMount(() => () => {
     destroyed = true;
     if (unknownRetry !== null) clearTimeout(unknownRetry);
+    if (usagePoll !== null) clearTimeout(usagePoll);
   });
+
+  /* While a probe is in flight (checking) or the first reading is still
+     queued behind the pacing gate (pending), the server answers at once
+     with what it has. Ask again until it settles; otherwise "Checking
+     usage…" stays on screen until the page is reloaded. Capped so a
+     stuck probe cannot poll forever. */
+  let usagePoll: ReturnType<typeof setTimeout> | null = null;
+  let usagePolls = 0;
+  const USAGE_POLL_MS = 2000;
+  const USAGE_POLL_MAX = 90;
+
+  function setUsage(next: typeof usage) {
+    usage = next;
+    shareUsage();
+    if (usagePoll !== null) {
+      clearTimeout(usagePoll);
+      usagePoll = null;
+    }
+    const busy = next?.checking === true || next?.pending === true;
+    if (!busy) {
+      usagePolls = 0;
+      return;
+    }
+    if (destroyed || usagePolls >= USAGE_POLL_MAX) return;
+    usagePolls++;
+    usagePoll = setTimeout(async () => {
+      usagePoll = null;
+      try {
+        setUsage(await apiLoginTTYUsage(base, type, name));
+      } catch {
+        /* keep the last reading; the next manual action retries */
+      }
+    }, USAGE_POLL_MS);
+  }
 
   async function refresh() {
     try {
@@ -78,10 +113,9 @@
     if (unknownRetry !== null) clearTimeout(unknownRetry);
     unknownRetry = status?.account.unknown && !destroyed ? setTimeout(() => void refresh(), 5000) : null;
     try {
-      usage = await apiLoginTTYUsage(base, type, name);
-      shareUsage();
+      setUsage(await apiLoginTTYUsage(base, type, name));
     } catch {
-      usage = null;
+      setUsage(null);
     }
   }
 
@@ -112,8 +146,8 @@
     try {
       const r = await apiLoginTTYUsageRefresh(base, type, name);
       if (!r.accepted) recheckWait = r.waitS;
-      usage = await apiLoginTTYUsage(base, type, name);
-      shareUsage();
+      usagePolls = 0;
+      setUsage(await apiLoginTTYUsage(base, type, name));
     } catch (e) {
       toastError(e instanceof Error ? e.message : "Failed to re-check usage");
     } finally {

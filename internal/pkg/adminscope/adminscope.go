@@ -33,6 +33,10 @@ const (
 	// knob existed an admin walked past both tags unconditionally.
 	KeyAdminSeeAllProviderInstances = "admin_see_all_provider_instances"
 
+	// KeyAdminSeeAllWorkflows gates the workflow list. Default OFF: an admin
+	// lists the workflows they created or own, like everyone else.
+	KeyAdminSeeAllWorkflows = "admin_see_all_workflows"
+
 	// legacyKeyAdminSeeAll is the pre-split name. Still read as a fallback so
 	// an install that had it on keeps its session visibility after upgrading.
 	legacyKeyAdminSeeAll = "admin_see_all"
@@ -76,4 +80,13 @@ func AdminSeeAllProviderInstances(r ConfigReader) bool {
 		return true
 	}
 	return r.GetOwned(ConfigOwner, KeyAdminSeeAllProviderInstances) != "false"
+}
+
+// AdminSeeAllWorkflows reports whether an admin lists every workflow.
+// Default off.
+func AdminSeeAllWorkflows(r ConfigReader) bool {
+	if r == nil {
+		return false
+	}
+	return r.GetOwned(ConfigOwner, KeyAdminSeeAllWorkflows) == "true"
 }

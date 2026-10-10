@@ -510,6 +510,8 @@ func (h *Handler) adminBypassForRule(rule accessRule) bool {
 		return adminscope.AdminSeeAllSessions(h.configs)
 	case knobProviders:
 		return adminscope.AdminSeeAllProviderInstances(h.configs)
+	case knobWorkflows:
+		return adminscope.AdminSeeAllWorkflows(h.configs)
 	default:
 		return false
 	}
@@ -525,6 +527,8 @@ func (h *Handler) adminReason(path string) string {
 		return "admin (see-all sessions on)"
 	case knobProviders:
 		return "admin (see-all providers on)"
+	case knobWorkflows:
+		return "admin (see-all workflows on)"
 	default:
 		return "admin role"
 	}

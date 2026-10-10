@@ -173,6 +173,9 @@ interface WireConfigField {
 
 interface WireProvidersListResponse {
   is_admin?: boolean;
+  can_create?: boolean;
+  can_host_config?: boolean;
+  create_perms?: Record<string, boolean> | null;
   providers: WireProviderStatus[] | null;
   gate: WireGateStatus | null;
   mcp: WireMCPStatus | null;
@@ -184,10 +187,32 @@ interface WireProvidersListResponse {
   supported_keys: string[] | null;
 }
 
+interface WireProviderCaps {
+  configure?: boolean;
+  models?: boolean;
+  env?: boolean;
+  extra_args?: boolean;
+  binary?: boolean;
+  extra_mcp_servers?: boolean;
+  external_skills?: boolean;
+  sandbox?: boolean;
+  airouter_raw_config?: boolean;
+  borrow_login?: boolean;
+  rename?: boolean;
+  delete?: boolean;
+  airouter?: boolean;
+  storage_sync?: boolean;
+  rescan?: boolean;
+  view_sessions?: boolean;
+}
+
 interface WireProviderDetailResponse {
   read_only?: boolean;
   can_manage?: boolean;
   secrets_hidden?: boolean;
+  is_admin?: boolean;
+  can?: WireProviderCaps;
+  owner_perms?: Record<string, boolean> | null;
   instance: WireProviderInstance;
   path: string;
   path_found: boolean;
@@ -401,6 +426,10 @@ export function normalizeProviders(r: WireProvidersListResponse): ProvidersListR
     // (or a field that silently disappears) must render the read-only
     // page, never hand out admin chrome the API would refuse anyway.
     IsAdmin: r.is_admin ?? false,
+    CanCreate: r.can_create ?? false,
+    CanHostConfig: r.can_host_config ?? false,
+    // Absent (older server) = nothing beyond what CanHostConfig said.
+    CreatePerms: r.create_perms ?? {},
     Providers: (r.providers ?? []).map(mapProviderStatus),
     Gate: mapGate(r.gate),
     MCPClients: mapMCP(r.mcp),
@@ -595,6 +624,26 @@ export function normalizeProviderDetail(r: WireProviderDetailResponse): Provider
     ReadOnly: r.read_only ?? true,
     CanManage: r.can_manage ?? false,
     SecretsHidden: r.secrets_hidden ?? false,
+    IsAdmin: r.is_admin ?? false,
+    Can: {
+      Configure: r.can?.configure ?? false,
+      Models: r.can?.models ?? false,
+      Env: r.can?.env ?? false,
+      ExtraArgs: r.can?.extra_args ?? false,
+      Binary: r.can?.binary ?? false,
+      ExtraMCPServers: r.can?.extra_mcp_servers ?? false,
+      ExternalSkills: r.can?.external_skills ?? false,
+      Sandbox: r.can?.sandbox ?? false,
+      AIRouterRawConfig: r.can?.airouter_raw_config ?? false,
+      BorrowLogin: r.can?.borrow_login ?? false,
+      Rename: r.can?.rename ?? false,
+      Delete: r.can?.delete ?? false,
+      AIRouter: r.can?.airouter ?? false,
+      StorageSync: r.can?.storage_sync ?? false,
+      Rescan: r.can?.rescan ?? false,
+      ViewSessions: r.can?.view_sessions ?? false,
+    },
+    OwnerPerms: r.owner_perms ?? {},
     Instance: mapInstance(r.instance),
     Path: r.path ?? "",
     PathFound: r.path_found ?? false,
@@ -1022,6 +1071,21 @@ export async function apiAIRouterSlots(base: string, type: string, routerId: str
 // apiSaveAIRouter persists an instance's AI-router settings (toggle +
 // selected router + per-slot models + optional key) in one request. Slot
 // models are sent as airouter_model_<slot>. A blank key keeps the stored one.
+// apiSaveOwnerPerms stores what the owner of one instance may do to it
+// (admin-only). Returns the instance's effective owner permissions.
+export async function apiSaveOwnerPerms(
+  base: string,
+  type: string,
+  name: string,
+  perms: Record<string, boolean>,
+): Promise<Record<string, boolean>> {
+  const r = await post<{ owner_perms?: Record<string, boolean> }>(
+    `${base}/providers/detail/${encodeURIComponent(type)}/${encodeURIComponent(name)}/owner-perms`,
+    perms,
+  );
+  return r?.owner_perms ?? perms;
+}
+
 export async function apiSaveAIRouter(
   base: string,
   type: string,

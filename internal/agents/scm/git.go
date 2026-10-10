@@ -50,6 +50,12 @@ func (e *GitError) Unwrap() error { return e.Err }
 func run(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := safeexec.CommandContext(ctx, "git", args...)
 	cmd.Env = envscrub.ScrubOSEnv()
+	if readOnlyIndexCmd(args) {
+		// status/diff refresh the index under an OPTIONAL index.lock. A
+		// cancelled context SIGKILLs git mid-refresh and leaves that lock
+		// behind, so the next Stage/Commit fails. Skip the lock for them.
+		cmd.Env = append(cmd.Env, "GIT_OPTIONAL_LOCKS=0")
+	}
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -58,6 +64,34 @@ func run(ctx context.Context, dir string, args ...string) (string, error) {
 		return stdout.String(), &GitError{Args: args, Stderr: stderr.String(), Err: err}
 	}
 	return stdout.String(), nil
+}
+
+// gitSubcommand returns the first non-flag argument of a git invocation
+// (the subcommand), skipping the value of global flags that take one
+// separately (-c key=val, -C dir).
+func gitSubcommand(args []string) string {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "-c" || a == "-C" {
+			i++
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		return a
+	}
+	return ""
+}
+
+// readOnlyIndexCmd reports whether args run a read-only command that only
+// takes git's optional index.lock (status, diff).
+func readOnlyIndexCmd(args []string) bool {
+	switch gitSubcommand(args) {
+	case "status", "diff":
+		return true
+	}
+	return false
 }
 
 // indexLocks serializes wick's OWN index-writing commands per repository.

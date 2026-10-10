@@ -362,7 +362,7 @@ func (s *DBService) Publish(id, actorID string) (workflow.Workflow, error) {
 	if err != nil {
 		return workflow.Workflow{}, err
 	}
-	if r := parse.Validate(draft); !r.Ok() {
+	if r := parse.ValidatePublish(draft); !r.Ok() {
 		return workflow.Workflow{}, fmt.Errorf("cannot publish — fix validation errors:\n%s", r.Error())
 	}
 	publisher := actorID
