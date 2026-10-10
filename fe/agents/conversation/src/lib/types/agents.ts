@@ -869,4 +869,10 @@ export type TeamTaskItem = {
   /** When the teammate asked the question it waits on (input_required);
       absent until the server sends it. */
   asked_at?: string;
+  /** When the task ended; absent until the server sends it (B1), so
+      updated_at stands in. */
+  ended_at?: string;
+  /** Messages exchanged on the task; absent until the server sends it
+      (B2), so turns stands in. */
+  message_count?: number;
 };

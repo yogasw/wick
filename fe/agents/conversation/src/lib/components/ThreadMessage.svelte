@@ -23,7 +23,7 @@
   import ToolCard from "./ToolCard.svelte";
   import DelegationBlock from "./team/DelegationBlock.svelte";
   import { getTeamTasksCtx } from "../teamTasksContext.js";
-  import { isTeamMessageTool } from "../delegations.js";
+  import { isTeamMessageTool, turnSpan } from "../delegations.js";
   import TodoCard from "./TodoCard.svelte";
   import ArtifactGallery from "./ArtifactGallery.svelte";
   import MediaLightbox from "./MediaLightbox.svelte";
@@ -438,6 +438,15 @@
   // report a goal with no items at all, so the card renders for either.
   const todoGoal = $derived(latestTodoGoal(traceBlocks));
 
+  /* grouped §3 asst-meta: a turn whose block shows opens with who
+     answered and when ("Captain · 09:31 – 09:44", first task start to the
+     last task end or this turn's commit; only the start while a task
+     still runs). It stands in for the speaker
+     chip and the stamp, so the turn names its time once. */
+  const showMeta = $derived(delegated.length > 0 && !!teamCtx);
+  const metaAgent = $derived(speakerAgent ?? agent);
+  const metaSpan = $derived(showMeta ? turnSpan(delegated, turn.ts ? Date.parse(turn.ts) : turn.timestamp || NaN) : "");
+
   async function toggleTrace() {
     if (traceOpen) {
       traceOpen = false;
@@ -784,7 +793,12 @@
 {:else}
   <div class={"flex justify-start group" + (viaMention ? " ml-3 pl-3 border-l-2 border-white-300 dark:border-navy-600" : "")} data-via={viaMention ? "mention" : undefined}>
     <div class="flex flex-col gap-1.5 w-full max-w-full min-w-0">
-      {#if speaker}
+      {#if showMeta}
+        <div data-testid="asst-meta" class="flex items-center gap-1.5 text-[11px] text-black-700 dark:text-black-600">
+          <AgentAvatar kind={metaAgent?.kind} shape={metaAgent?.shape} expression={metaAgent?.expression} color={metaAgent?.color} size={18} />
+          <span class="min-w-0 truncate">{replyAuthor()}{viaMention ? (via ? " · via @" + via : " · via mention") : ""}{metaSpan ? " · " + metaSpan : ""}</span>
+        </div>
+      {:else if speaker}
         <span data-testid="speaker-chip" class="inline-flex items-center gap-1.5 self-start text-[11px] leading-4 text-black-800 dark:text-black-600">
           <AgentAvatar kind={speakerAgent?.kind} shape={speakerAgent?.shape} expression={speakerAgent?.expression} color={speakerAgent?.color} size={20} />
           <span class="min-w-0 truncate"
@@ -874,7 +888,7 @@
         {#if isLateReply(turn)}
           <span class="self-start inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] leading-none text-amber-700 dark:text-amber-300" data-testid="late-reply-label">{lateLabel(turn)}</span>
         {/if}
-        {#if stamp || isSilentReply || canReply}
+        {#if (stamp && !showMeta) || isSilentReply || canReply}
           <span class="self-start inline-flex items-center gap-0.5 text-[10px] leading-none text-black-500 dark:text-black-600">
             {#if isSilentReply}
               <svg data-testid="silent-flag" viewBox="0 0 24 24" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Silent — kept out of channels & notifications; shown here only">
@@ -884,7 +898,7 @@
                 <line x1="2" y1="2" x2="22" y2="22"></line>
               </svg>
             {/if}
-            {#if stamp}<span>{stamp}</span>{/if}
+            {#if stamp && !showMeta}<span>{stamp}</span>{/if}
             {#if canReply}
             <button
               type="button"
@@ -905,7 +919,7 @@
              only the user's turns wear a bubble. Slightly larger text + roomy
              line-height for comfortable long-form reading. A [silent] reply is
              the same plain text, marked by the muted-bell chip above. -->
-        <div use:enrich={displayText} onwick-imagecard-open={onImageCardOpen} class="wick-prose px-0.5 text-black-900 dark:text-white-100 break-words">
+        <div use:enrich={displayText} onwick-imagecard-open={onImageCardOpen} class={"wick-prose px-0.5 text-black-900 dark:text-white-100 break-words" + (showMeta ? " wick-prose-sm" : "")}>
           {#each cardSegments as seg}
             {#if seg.kind === "card" && cardMode(seg.card.id, turn.turn_id, cards) !== "none"}
               <ActionCard

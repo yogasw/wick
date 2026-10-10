@@ -175,9 +175,9 @@ export function statusSummary(tasks: TeamTaskItem[]): string {
 
 const ms = (iso: string | undefined): number => (iso ? Date.parse(iso) : NaN);
 
-/** When a task ended, and when its question was asked: updated_at until
-    the server sends ended_at / asked_at (B1). */
-const endedMs = (t: TeamTaskItem): number => ms(t.updated_at);
+/** When a task ended (ended_at once the server sends it, B1) and when
+    its question was asked: updated_at stands in for what is missing. */
+const endedMs = (t: TeamTaskItem): number => ms(t.ended_at || t.updated_at);
 const askedMs = (t: TeamTaskItem): number => ms(t.updated_at);
 
 /** "45s", "2m 10s", "1h 5m": a running timer. */
@@ -260,7 +260,7 @@ export function blockHead(tasks: TeamTaskItem[]): string {
 export type SettledParts = { head: string; allReplied: boolean; parts: StatusPart[]; messages: string; duration: string };
 
 export function settledParts(tasks: TeamTaskItem[]): SettledParts {
-  const turns = tasks.reduce((s, t) => s + (t.turns || 0), 0);
+  const turns = tasks.reduce((s, t) => s + (t.message_count ?? t.turns ?? 0), 0);
   const starts = tasks.map((t) => ms(t.started_at)).filter(Number.isFinite);
   const ends = tasks.map(endedMs).filter(Number.isFinite);
   const span = starts.length && ends.length ? Math.max(...ends) - Math.min(...starts) : NaN;
@@ -273,12 +273,19 @@ export function settledParts(tasks: TeamTaskItem[]): SettledParts {
   };
 }
 
-/** The folded line: "all replied" when every task completed, else the
-    state summary so a failure is never hidden behind a tick. */
-export function settledLine(tasks: TeamTaskItem[]): string {
-  const p = settledParts(tasks);
-  const state = p.allReplied ? "all replied" : p.parts.map((x) => x.label).join(" · ");
-  return [p.head, state, p.messages].filter(Boolean).join(" · ");
+/** The asst-meta line's "09:31 – 09:44" over a turn that delegated:
+    from the first task's start to the last task's end or the turn's own
+    commit time, whichever is later. While a task still runs the end is
+    not known yet, so only the start shows ("10:02", grouped §3 live).
+    One clock when both read the same, "" when nothing is known. */
+export function turnSpan(tasks: TeamTaskItem[], committed: number = NaN): string {
+  const starts = tasks.map((t) => ms(t.started_at)).filter(Number.isFinite);
+  const start = clockTime(starts.length ? Math.min(...starts) : committed);
+  if (!allSettled(tasks)) return start;
+  const ends = [...tasks.map(endedMs), committed].filter(Number.isFinite);
+  const end = clockTime(ends.length ? Math.max(...ends) : NaN);
+  if (!start || !end || start === end) return start || end;
+  return `${start} – ${end}`;
 }
 
 export type TaskGroup = {

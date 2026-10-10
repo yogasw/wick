@@ -7,12 +7,14 @@
      link. A task the person sent with an @mention is theirs: marked "You
      asked", no answering stage, the teammate's reply shows here. The
      chevron in the head collapses the block to its chips; once every task
-     ended it folds to a single line. */
+     ended it folds to a single row (check, avatars, "Delegated to 3
+     teammates · all replied · 12 messages · 13m", chevron). */
+  import { tick } from "svelte";
   import { AgentAvatar } from "@wick-fe/common-avatar";
   import AvatarActivity from "./AvatarActivity.svelte";
   import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem } from "../../types/agents.js";
-  import { allSettled, blockHead, chipElapsed, chipLabel, clockTime, isTaskActive, isUserTask, quickReplies, settledLine, statusParts, taskStatus, USER_TASK_MARKER, type StatusPart, type TaskStatus } from "../../delegations.js";
+  import { allSettled, blockHead, chipElapsed, chipLabel, clockTime, foldAvatars, isTaskActive, isUserTask, quickReplies, settledParts, statusParts, taskStatus, USER_TASK_MARKER, type StatusPart, type TaskStatus } from "../../delegations.js";
   import { clearDraft, getDraft, setDraft } from "../../answerDrafts.js";
   import AnswerBox from "./AnswerBox.svelte";
   import CancelConfirm from "./CancelConfirm.svelte";
@@ -34,6 +36,7 @@
   let unfolded = $state(false);
   // The head's chevron: chips stay, the open sections below them hide.
   let collapsed = $state(false);
+  let collapseBtn = $state<HTMLButtonElement>();
   let selected = $state<string | null>(null);
   // "Answer instead" on a task the agent is handling opens its card too.
   let answerOpen = $state<Record<string, boolean>>({});
@@ -77,6 +80,7 @@
     canceled: "text-black-700",
   };
   const parts = $derived(statusParts(tasks));
+  const settled = $derived(settledParts(tasks));
 
   function nameOf(t: TeamTaskItem): string {
     return agents[t.to_handle]?.name || t.to_name || "@" + t.to_handle;
@@ -124,15 +128,31 @@
 </script>
 
 {#if folded}
+  <!-- grouped §3: the finished turn as one full-width row; a click opens
+       the whole block. -->
   <button
     type="button"
     data-testid="delegation-folded"
     data-task-ids={tasks.map((t) => t.task_id).join(" ")}
-    onclick={() => { unfolded = true; }}
-    class="self-start inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2.5 py-1 text-[11px] text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700"
+    aria-expanded={false}
+    onclick={async () => {
+      // The row leaves the DOM; keep keyboard focus on the block's toggle.
+      unfolded = true;
+      await tick();
+      collapseBtn?.focus();
+    }}
+    class="flex w-full items-center gap-2 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-[7px] text-left text-xs hover:bg-white-200 dark:hover:bg-navy-700 focus:outline-none focus-visible:ring-1 focus-visible:ring-green-500"
   >
-    <span class="text-green-600 dark:text-green-400">✓</span>
-    <span>{settledLine(tasks)}</span>
+    <TeamIcon name="check" size={14} class="text-green-600 dark:text-green-400" />
+    <span data-testid="fold-avatars" aria-hidden="true" class="flex shrink-0 items-center">
+      {#each foldAvatars(tasks) as a, i (a.to_agent_id || a.to_handle || a.to_name)}
+        <span data-testid="fold-avatar" class={"inline-flex " + (i ? "-ml-[5px]" : "")}><AgentAvatar kind={agents[a.to_handle]?.kind} shape={agents[a.to_handle]?.shape} expression={agents[a.to_handle]?.expression} color={agents[a.to_handle]?.color} size={18} /></span>
+      {/each}
+    </span>
+    <span data-testid="fold-title" class="shrink-0 whitespace-nowrap text-xs font-medium text-black-800 dark:text-black-600">{settled.head}</span>
+    <span data-testid="fold-summary" class="min-w-0 flex-1 truncate text-[11.5px] text-black-700 dark:text-black-600">·
+      {#if settled.allReplied}<b class="font-semibold text-green-600 dark:text-green-400">all replied</b>{:else}{#each settled.parts as p, i}{i ? " · " : ""}<span data-status={p.status} class={PART_TONE[p.status]}>{p.label}</span>{/each}{/if}{settled.messages ? ` · ${settled.messages}` : ""}{settled.duration ? ` · ${settled.duration}` : ""}</span>
+    <TeamIcon name="chevron" class="-rotate-90 text-black-700 dark:text-black-600" />
   </button>
 {:else}
   <div data-testid="delegation-block" data-task-ids={tasks.map((t) => t.task_id).join(" ")} class="flex flex-col overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 text-xs">
@@ -153,6 +173,7 @@
       >{showAll && !collapsed ? "Hide" : "Show all"}</SmBtn>
       <button
         type="button"
+        bind:this={collapseBtn}
         data-testid="delegation-collapse"
         aria-label={collapsed ? "Expand" : "Collapse"}
         aria-expanded={!collapsed}

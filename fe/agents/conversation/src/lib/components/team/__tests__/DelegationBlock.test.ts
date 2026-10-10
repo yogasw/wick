@@ -120,14 +120,73 @@ describe("DelegationBlock", () => {
       props: { tasks: [task({ task_id: "a", state: "completed", turns: 2 }), task({ task_id: "b", to_handle: "vera", state: "completed", turns: 1 })] },
     });
     expect(screen.queryByTestId("delegation-block")).toBeNull();
-    expect(screen.getByTestId("delegation-folded").textContent).toContain("Delegated to 2 teammates · all replied · 3 messages");
+    expect(screen.getByTestId("fold-title").textContent).toBe("Delegated to 2 teammates");
+    expect(screen.getByTestId("fold-summary").textContent).toContain("· all replied · 3 messages");
     await fireEvent.click(screen.getByTestId("delegation-folded"));
     expect(screen.getByTestId("delegation-block")).toBeDefined();
+  });
+
+  test("§3 fold row: full-width button, check, one avatar per teammate, title, summary with duration, chevron", () => {
+    render(DelegationBlock, {
+      props: {
+        tasks: [
+          task({ task_id: "a", to_agent_id: "a1", state: "completed", turns: 5, started_at: "2026-10-10T09:31:00Z", updated_at: "2026-10-10T09:40:00Z" }),
+          task({ task_id: "b", to_agent_id: "a1", state: "completed", turns: 3, started_at: "2026-10-10T09:33:00Z", updated_at: "2026-10-10T09:38:00Z" }),
+          task({ task_id: "c", to_agent_id: "a2", to_handle: "vera", to_name: "Vera", state: "completed", turns: 4, started_at: "2026-10-10T09:32:00Z", updated_at: "2026-10-10T09:44:00Z" }),
+        ],
+      },
+    });
+    const row = screen.getByTestId("delegation-folded");
+    expect(row.tagName).toBe("BUTTON");
+    expect(row.getAttribute("type")).toBe("button");
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    for (const c of ["flex", "w-full", "rounded-xl", "border", "border-white-300", "dark:border-navy-600", "bg-white-100", "dark:bg-navy-800", "px-3", "py-[7px]"]) expect(row.classList.contains(c)).toBe(true);
+    expect(row.className).not.toMatch(/rounded-full/);
+    const check = row.querySelector('[data-icon="check"]')!;
+    expect(check.getAttribute("width")).toBe("14");
+    expect(check.getAttribute("class")).toContain("text-green-600");
+    expect(screen.getByTestId("fold-avatars").getAttribute("aria-hidden")).toBe("true");
+    const avs = screen.getAllByTestId("fold-avatar");
+    expect(avs).toHaveLength(2);
+    expect(avs[0].className).not.toContain("-ml-[5px]");
+    expect(avs[1].className).toContain("-ml-[5px]");
+    const title = screen.getByTestId("fold-title");
+    expect(title.textContent).toBe("Delegated to 3 teammates");
+    for (const c of ["font-medium", "text-xs", "text-black-800", "dark:text-black-600"]) expect(title.classList.contains(c)).toBe(true);
+    const sum = screen.getByTestId("fold-summary");
+    expect(sum.textContent!.replace(/\s+/g, " ").trim()).toBe("· all replied · 12 messages · 13m");
+    expect(sum.querySelector("b")!.className).toContain("text-green-600");
+    expect(sum.classList.contains("dark:text-black-600")).toBe(true);
+    const chev = row.querySelector('[data-icon="chevron"]')!.getAttribute("class")!;
+    expect(chev).toContain("-rotate-90");
+    expect(chev).toContain("dark:text-black-600");
+  });
+
+  test("§3 fold row: a declined task shows in red instead of all replied; the chevron opens the full block", async () => {
+    render(DelegationBlock, {
+      props: {
+        tasks: [
+          task({ task_id: "a", state: "completed", turns: 2, started_at: "2026-10-10T09:00:00Z", updated_at: "2026-10-10T09:30:00Z" }),
+          task({ task_id: "b", to_agent_id: "a2", to_handle: "vera", state: "rejected", turns: 1, started_at: "2026-10-10T09:00:00Z", updated_at: "2026-10-10T10:05:00Z" }),
+        ],
+      },
+    });
+    const sum = screen.getByTestId("fold-summary");
+    expect(sum.textContent!.replace(/\s+/g, " ").trim()).toBe("· 1 replied · 1 declined · 3 messages · 1h 5m");
+    expect(sum.querySelector("b")).toBeNull();
+    expect(sum.querySelector('[data-status="declined"]')!.className).toContain("text-red-600");
+    screen.getByTestId("delegation-folded").focus();
+    await fireEvent.click(screen.getByTestId("delegation-folded"));
+    expect(screen.queryByTestId("delegation-folded")).toBeNull();
+    expect(screen.getAllByTestId("delegation-chip")).toHaveLength(2);
+    // Focus moves to the open block's toggle, not to <body>.
+    await vi.waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("delegation-collapse")));
   });
 
   test("a failure is never folded behind all replied", () => {
     render(DelegationBlock, { props: { tasks: [task({ task_id: "a", state: "completed" }), task({ task_id: "b", state: "failed" })] } });
     expect(screen.getByTestId("delegation-folded").textContent).toContain("1 replied · 1 failed");
+    expect(screen.getByTestId("fold-summary").querySelector('[data-status="failed"]')!.className).toContain("text-red-600");
   });
 
   test("a chip previews the last messages with Open chat", async () => {

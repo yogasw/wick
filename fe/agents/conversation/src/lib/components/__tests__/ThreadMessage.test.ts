@@ -1,8 +1,9 @@
-import { describe, test, expect, vi } from "vitest";
+import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import ThreadMessage from "../ThreadMessage.svelte";
 import { setViewerId } from "../../viewer.js";
-import type { ConversationTurn, TurnEvent, TurnEventPayload } from "../../types/agents.js";
+import { TEAM_TASKS_KEY, type TeamTasksCtx } from "../../teamTasksContext.js";
+import type { ConversationTurn, TeamTaskItem, TurnEvent, TurnEventPayload } from "../../types/agents.js";
 
 function makeTurn(overrides: Partial<ConversationTurn> = {}): ConversationTurn {
   return {
@@ -1456,5 +1457,61 @@ describe("ThreadMessage - Slack jump & delivery", () => {
   test("a web-only reply shows no delivery row", () => {
     render(ThreadMessage, { props: { turn: makeTurn({ role: "assistant", text: "Done." }) } });
     expect(screen.queryByTestId("delivery-status")).toBeNull();
+  });
+});
+
+/* P48 s5 (grouped §3): a turn that delegated opens with "Captain ·
+   09:31 – 09:44" and drops its own stamp; other turns are unchanged. */
+describe("ThreadMessage - asst-meta", () => {
+  const at = (h: number, m: number) => new Date(2026, 9, 10, h, m).toISOString();
+  const tasks: TeamTaskItem[] = [
+    { task_id: "a", context_id: "c", to_agent_id: "a1", to_handle: "atraxa", to_name: "Atraxa", title: "x", state: "completed", turns: 4, max_turns: 8, started_at: at(9, 31), updated_at: at(9, 40) },
+    { task_id: "b", context_id: "c", to_agent_id: "a2", to_handle: "halodev", to_name: "Halodev", title: "y", state: "completed", turns: 8, max_turns: 8, started_at: at(9, 32), updated_at: at(9, 44) },
+  ];
+  const ctx = (forTurn: TeamTasksCtx["forTurn"]): TeamTasksCtx => ({ forTurn, agents: () => ({}), captainName: () => "Captain" });
+  const agent = { handle: "captain", name: "Captain", color: "#27B199" };
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 9, 10, 10, 0));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("a turn with tasks: avatar 18 + name · start – end, no stamp, smaller prose", () => {
+    const turn = makeTurn({ turn_id: "a1", role: "assistant", text: "The CSAT trigger was off.", ts: at(9, 42), speaker: { agent_id: "c1", handle: "captain", via: "direct" } });
+    const { container } = render(ThreadMessage, { props: { turn, agent }, context: new Map([[TEAM_TASKS_KEY, ctx(() => tasks)]]) });
+    const meta = screen.getByTestId("asst-meta");
+    expect(meta.textContent!.trim()).toBe("Captain · 09:31 – 09:44");
+    for (const c of ["flex", "items-center", "gap-1.5", "text-[11px]", "text-black-700"]) expect(meta.classList.contains(c)).toBe(true);
+    expect(meta.querySelector('[width="18"]')).not.toBeNull();
+    expect(screen.queryByTestId("speaker-chip")).toBeNull();
+    expect(screen.queryByText("09:42")).toBeNull();
+    expect(screen.getByTestId("delegation-folded")).toBeDefined();
+    expect(container.querySelector(".wick-prose")!.classList.contains("wick-prose-sm")).toBe(true);
+  });
+
+  test("the end is the turn's commit when it came after the last task", () => {
+    const turn = makeTurn({ turn_id: "a1", role: "assistant", text: "Done.", ts: at(9, 50) });
+    render(ThreadMessage, { props: { turn, agent }, context: new Map([[TEAM_TASKS_KEY, ctx(() => tasks)]]) });
+    expect(screen.getByTestId("asst-meta").textContent!.trim()).toBe("Captain · 09:31 – 09:50");
+  });
+
+  test("live: while a task still runs only the start shows, no moving end", () => {
+    const live = [tasks[0], { ...tasks[1], state: "working", started_at: at(9, 35), updated_at: at(9, 58) }];
+    const turn = makeTurn({ turn_id: "a1", role: "assistant", text: "Split it across the team.", ts: at(9, 36) });
+    render(ThreadMessage, { props: { turn, agent }, context: new Map([[TEAM_TASKS_KEY, ctx(() => live)]]) });
+    const meta = screen.getByTestId("asst-meta");
+    expect(meta.textContent!.trim()).toBe("Captain · 09:31");
+    expect(meta.textContent).not.toContain("–");
+    expect(meta.classList.contains("dark:text-black-600")).toBe(true);
+  });
+
+  test("a turn without tasks keeps its stamp and the regular prose", () => {
+    const turn = makeTurn({ turn_id: "a2", role: "assistant", text: "Plain answer.", ts: at(9, 42) });
+    const { container } = render(ThreadMessage, { props: { turn, agent }, context: new Map([[TEAM_TASKS_KEY, ctx(() => [])]]) });
+    expect(screen.queryByTestId("asst-meta")).toBeNull();
+    expect(screen.getByText("09:42")).toBeDefined();
+    expect(container.querySelector(".wick-prose")!.classList.contains("wick-prose-sm")).toBe(false);
   });
 });

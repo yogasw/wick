@@ -1,5 +1,5 @@
-import { describe, test, expect } from "vitest";
-import { blockHead, chipElapsed, chipLabel, clockTime, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, userTaskRoute, quickReplies, settledLine, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel } from "../delegations.js";
+import { describe, test, expect, vi } from "vitest";
+import { blockHead, chipElapsed, chipLabel, clockTime, foldAvatars, formatDuration, groupTasks, settledParts, statusParts, isUserTask, userTaskRoute, quickReplies, statusSummary, taskRailBadge, tasksByTurn, teamTaskIdsFromEvents, taskStatus, statusLabel, taskLabel, turnSpan } from "../delegations.js";
 import type { ConversationTurn, TeamTaskItem } from "../types/agents.js";
 
 const task = (o: Partial<TeamTaskItem>): TeamTaskItem => ({
@@ -45,7 +45,7 @@ describe("delegations", () => {
     expect(statusSummary([task({}), task({ state: "input_required" }), task({ state: "input_required", needs_you: true }), task({ state: "completed" })])).toBe(
       "2 working · 1 needs input · 1 replied",
     );
-    expect(settledLine([task({ state: "completed", turns: 2 })])).toBe("Delegated to 1 teammate · all replied · 2 messages");
+    expect(settledParts([task({ state: "completed", turns: 2 })])).toMatchObject({ head: "Delegated to 1 teammate", allReplied: true, messages: "2 messages" });
   });
 
   test("the Tasks rail badge counts active tasks and turns amber on needs you", () => {
@@ -85,7 +85,7 @@ describe("blockHead (P45 N5)", () => {
     expect(blockHead([task({}), task({})])).toBe("Delegated to 2 teammates");
     expect(blockHead([task({ origin: "user" })])).toBe("You asked 1 teammate");
     expect(blockHead([task({}), task({ origin: "user" })])).toBe("Delegated to 1 teammate · You asked 1");
-    expect(settledLine([task({ origin: "user", state: "completed" })])).toBe("You asked 1 teammate · all replied · 1 message");
+    expect(settledParts([task({ origin: "user", state: "completed" })])).toMatchObject({ head: "You asked 1 teammate", allReplied: true, messages: "1 message" });
   });
 });
 
@@ -142,6 +142,38 @@ describe("P48 helpers", () => {
     expect(q.duration).toBe("1h 5m");
     expect(formatDuration(3_600_000)).toBe("1h");
     expect(formatDuration(40_000)).toBe("40s");
+  });
+
+  test("settledParts prefers ended_at and message_count once the server sends them", () => {
+    const p = settledParts([
+      task({ state: "completed", turns: 1, message_count: 4, started_at: "2026-10-10T09:31:00Z", updated_at: "2026-10-10T11:00:00Z", ended_at: "2026-10-10T09:40:00Z" }),
+      task({ state: "completed", turns: 2, started_at: "2026-10-10T09:32:00Z", updated_at: "2026-10-10T09:44:00Z" }),
+    ]);
+    expect(p.messages).toBe("6 messages");
+    expect(p.duration).toBe("13m");
+  });
+
+  test("turnSpan: first start to the last end or the turn's commit, local HH:MM", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 9, 10, 10, 0));
+    try {
+      const at = (h: number, m: number) => new Date(2026, 9, 10, h, m).toISOString();
+      const tasks = [
+        task({ state: "completed", started_at: at(9, 31), updated_at: at(9, 40) }),
+        task({ state: "completed", started_at: at(9, 33), updated_at: at(9, 41), ended_at: at(9, 44) }),
+      ];
+      expect(turnSpan(tasks)).toBe("09:31 – 09:44");
+      expect(turnSpan(tasks, new Date(2026, 9, 10, 9, 50).getTime())).toBe("09:31 – 09:50");
+      expect(turnSpan([task({ state: "completed", started_at: at(9, 31), updated_at: at(9, 31) })])).toBe("09:31");
+      expect(turnSpan([task({ state: "completed", started_at: "", updated_at: "" })], new Date(2026, 9, 10, 9, 5).getTime())).toBe("09:05");
+      expect(turnSpan([task({ state: "completed", started_at: "", updated_at: "" })])).toBe("");
+      // Live: a task still runs (or waits on a question), so no end yet.
+      const live = [tasks[0], task({ state: "working", started_at: at(9, 35), updated_at: at(9, 58) })];
+      expect(turnSpan(live, new Date(2026, 9, 10, 9, 36).getTime())).toBe("09:31");
+      expect(turnSpan([task({ state: "input_required", needs_you: true, started_at: at(10, 2), updated_at: at(10, 7) })])).toBe("10:02");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("foldAvatars: one per teammate, first-asked order", () => {
