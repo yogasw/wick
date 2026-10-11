@@ -127,7 +127,8 @@ export async function loadRepos(): Promise<void> {
     if (get(sessionID) !== id) return;
     applySnapshot(s);
   } finally {
-    loading.set(false);
+    // A stale fetch must not clear the spinner of the current one.
+    if (get(sessionID) === id) loading.set(false);
   }
 }
 

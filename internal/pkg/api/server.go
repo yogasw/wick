@@ -1030,6 +1030,9 @@ func NewServer() *Server {
 		SpawnHold: resourceGuard.HoldSpawns,
 		OnSessionCreated: func(s agentsession.Session) {
 			agentsMgr.Register(s)
+			// Also fires when the pool binds an unscoped session to a
+			// project; an open Source stream must follow it there.
+			agentstool.RebindGitWatch(s)
 		},
 		OnAgentAdded: func(sessionID string) {
 			_ = agentsMgr.RefreshSession(sessionID)

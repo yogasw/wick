@@ -1969,6 +1969,10 @@ func moveSessionToProject(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// An open tab's git watcher is still on the old folder; re-point it.
+	if moved, found := globalMgr.Registry().Session(id); found {
+		RebindGitWatch(moved)
+	}
 	// Kill running subprocess so next Send respawns in the new folder.
 	agentName := sess.Meta.ActiveAgent
 	if agentName == "" && len(sess.Agents) > 0 {
@@ -3420,8 +3424,7 @@ func streamSSE(c *tool.Ctx) {
 	if sessionID != "" && globalMgr != nil {
 		if sess, found := globalMgr.Registry().Session(sessionID); found {
 			if cwd, cerr := resolveSessionCwd(sess); cerr == nil {
-				globalGitWatch.acquire(sessionID, cwd)
-				defer globalGitWatch.release(sessionID, cwd)
+				defer globalGitWatch.acquire(sessionID, cwd).release()
 			}
 		}
 	}
@@ -3540,8 +3543,7 @@ func streamMultiSSE(c *tool.Ctx) {
 		if globalMgr != nil {
 			if sess, found := globalMgr.Registry().Session(id); found {
 				if cwd, cerr := resolveSessionCwd(sess); cerr == nil {
-					globalGitWatch.acquire(id, cwd)
-					defer globalGitWatch.release(id, cwd)
+					defer globalGitWatch.acquire(id, cwd).release()
 				}
 			}
 		}

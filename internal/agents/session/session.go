@@ -624,6 +624,10 @@ func SetProject(_ context.Context, layout config.Layout, id, newProjectID string
 		return nil
 	}
 	sess.Meta.ProjectID = newProjectID
+	// The Source selection names a repo in the old folder. Kept, a repo
+	// of the same name in the new project would read as a choice the
+	// person never made there.
+	sess.Meta.ScmRepo = ""
 	sess.Meta.LastActive = time.Now().UTC()
 	return SaveMeta(layout, id, sess.Meta)
 }

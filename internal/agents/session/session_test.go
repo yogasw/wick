@@ -127,6 +127,11 @@ func TestSetProject(t *testing.T) {
 	mkProject(t, layout, "p-a", "a")
 	mkProject(t, layout, "p-b", "b")
 	_, _ = Create(context.Background(), layout, CreateOptions{ID: "S3", ProjectID: "p-a", Origin: OriginUI})
+	before, _ := Load(layout, "S3")
+	before.Meta.ScmRepo = "wick"
+	if err := SaveMeta(layout, "S3", before.Meta); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := SetProject(context.Background(), layout, "S3", "p-b"); err != nil {
 		t.Fatalf("move: %v", err)
@@ -134,6 +139,9 @@ func TestSetProject(t *testing.T) {
 	s, _ := Load(layout, "S3")
 	if s.Meta.ProjectID != "p-b" {
 		t.Fatalf("project after move: %q", s.Meta.ProjectID)
+	}
+	if s.Meta.ScmRepo != "" {
+		t.Errorf("Source selection %q from the old project survived the move", s.Meta.ScmRepo)
 	}
 }
 

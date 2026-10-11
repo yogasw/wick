@@ -370,3 +370,72 @@ func TestReleaseKeepsCacheWhileAttachedElsewhere(t *testing.T) {
 		t.Fatalf("cache kept after the session's last watcher reference went")
 	}
 }
+
+// A tab left open across a move keeps its stream: the SharedWorker never
+// reconnects it. rebind has to carry that stream's reference to the new
+// project's watcher, drop the old project's replay, and leave the lease
+// pointing where it now is, so the stream's own release later detaches
+// the new directory rather than leaking it.
+func TestRebindCarriesAnOpenStreamToTheNewProject(t *testing.T) {
+	prevBcast, prevPublish := globalBcast, rebindPublish
+	t.Cleanup(func() { globalBcast, rebindPublish = prevBcast, prevPublish })
+	globalBcast = NewBroadcaster()
+	var published []string
+	rebindPublish = func(sessionID, cwd string) { published = append(published, sessionID+"@"+cwd) }
+
+	m := &gitWatchManager{entries: make(map[string]*gitWatchEntry)}
+	oldCwd, newCwd := t.TempDir(), t.TempDir()
+	m.entries[oldCwd] = &gitWatchEntry{sessions: map[string]int{"s1": 1}}
+	// Someone already watches the new project, so rebind joins that
+	// watcher instead of starting a real one in the test.
+	m.entries[newCwd] = &gitWatchEntry{sessions: map[string]int{"s2": 1}}
+	l := &gitWatchLease{m: m, sessionID: "s1", cwd: oldCwd}
+	m.leases = map[string][]*gitWatchLease{"s1": {l}}
+	globalBcast.PublishGitStatusJSON("s1", `{"repos":[{"rel":"old-repo"}],"active":"old-repo"}`)
+
+	m.rebind("s1", newCwd)
+
+	m.mu.Lock()
+	_, oldLeft := m.entries[oldCwd]
+	leaseCwd := l.cwd
+	m.mu.Unlock()
+	if oldLeft {
+		t.Errorf("the old project's watcher is still attached after the move")
+	}
+	if leaseCwd != newCwd {
+		t.Errorf("lease still points at %q, want the new project", leaseCwd)
+	}
+	if got := m.entries[newCwd].attached(); len(got) != 2 {
+		t.Errorf("new project's watcher has %v, want s1 and s2", got)
+	}
+	if body, ok := globalBcast.LastGitStatus("s1"); ok {
+		t.Errorf("the old project's tree is still replayed after the move: %s", body)
+	}
+	if want := []string{"s1@" + newCwd}; !slices.Equal(published, want) {
+		t.Errorf("published %v, want %v", published, want)
+	}
+
+	l.release()
+	if got := m.entries[newCwd].attached(); len(got) != 1 || got[0] != "s2" {
+		t.Errorf("the stream's release did not drop its reference on the new project: %v", got)
+	}
+	if len(m.leases) != 0 {
+		t.Errorf("released lease still tracked: %v", m.leases)
+	}
+	var nilLease *gitWatchLease
+	nilLease.release()
+}
+
+// release (test helper) detaches one reference of sessionID from the watcher for cwd,
+// stopping it when its last subscriber goes.
+func (m *gitWatchManager) release(sessionID, cwd string) {
+	if sessionID == "" || cwd == "" {
+		return
+	}
+	m.mu.Lock()
+	forget := m.releaseLocked(sessionID, cwd)
+	m.mu.Unlock()
+	if forget && globalBcast != nil {
+		globalBcast.ForgetGitStatus(sessionID)
+	}
+}
