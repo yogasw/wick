@@ -1239,9 +1239,12 @@ func (x *Ticket) GetUpdatedAt() string {
 	return ""
 }
 
+// Ticket ids are unique per project only: project_id picks the project; without
+// it an id found in more than one reachable project is FailedPrecondition.
 type GetTicketRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	ProjectId     string                 `protobuf:"bytes,2,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1279,6 +1282,13 @@ func (*GetTicketRequest) Descriptor() ([]byte, []int) {
 func (x *GetTicketRequest) GetId() string {
 	if x != nil {
 		return x.Id
+	}
+	return ""
+}
+
+func (x *GetTicketRequest) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
 	}
 	return ""
 }
@@ -1489,6 +1499,7 @@ type UpdateTicketRequest struct {
 	SetAssignees  bool                   `protobuf:"varint,6,opt,name=set_assignees,json=setAssignees,proto3" json:"set_assignees,omitempty"`
 	Fields        map[string]string      `protobuf:"bytes,7,rep,name=fields,proto3" json:"fields,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	IfUpdatedAt   string                 `protobuf:"bytes,8,opt,name=if_updated_at,json=ifUpdatedAt,proto3" json:"if_updated_at,omitempty"`
+	ProjectId     string                 `protobuf:"bytes,9,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1579,10 +1590,18 @@ func (x *UpdateTicketRequest) GetIfUpdatedAt() string {
 	return ""
 }
 
+func (x *UpdateTicketRequest) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
+	}
+	return ""
+}
+
 type AttachSessionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TicketId      string                 `protobuf:"bytes,1,opt,name=ticket_id,json=ticketId,proto3" json:"ticket_id,omitempty"`
 	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	ProjectId     string                 `protobuf:"bytes,3,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1627,6 +1646,13 @@ func (x *AttachSessionRequest) GetTicketId() string {
 func (x *AttachSessionRequest) GetSessionId() string {
 	if x != nil {
 		return x.SessionId
+	}
+	return ""
+}
+
+func (x *AttachSessionRequest) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
 	}
 	return ""
 }
@@ -2562,9 +2588,11 @@ const file_host_proto_rawDesc = "" +
 	"updated_at\x18\t \x01(\tR\tupdatedAt\x1a9\n" +
 	"\vFieldsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\"\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"A\n" +
 	"\x10GetTicketRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"a\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\x02 \x01(\tR\tprojectId\"a\n" +
 	"\x12ListTicketsRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x16\n" +
@@ -2583,7 +2611,7 @@ const file_host_proto_rawDesc = "" +
 	"\x06fields\x18\a \x03(\v2-.wick.host.v1.CreateTicketRequest.FieldsEntryR\x06fields\x1a9\n" +
 	"\vFieldsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xfd\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9c\x03\n" +
 	"\x13UpdateTicketRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\x06status\x18\x02 \x01(\tH\x00R\x06status\x88\x01\x01\x12\x19\n" +
@@ -2592,17 +2620,21 @@ const file_host_proto_rawDesc = "" +
 	"\tassignees\x18\x05 \x03(\tR\tassignees\x12#\n" +
 	"\rset_assignees\x18\x06 \x01(\bR\fsetAssignees\x12E\n" +
 	"\x06fields\x18\a \x03(\v2-.wick.host.v1.UpdateTicketRequest.FieldsEntryR\x06fields\x12\"\n" +
-	"\rif_updated_at\x18\b \x01(\tR\vifUpdatedAt\x1a9\n" +
+	"\rif_updated_at\x18\b \x01(\tR\vifUpdatedAt\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\t \x01(\tR\tprojectId\x1a9\n" +
 	"\vFieldsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\t\n" +
 	"\a_statusB\b\n" +
 	"\x06_titleB\a\n" +
-	"\x05_body\"R\n" +
+	"\x05_body\"q\n" +
 	"\x14AttachSessionRequest\x12\x1b\n" +
 	"\tticket_id\x18\x01 \x01(\tR\bticketId\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x02 \x01(\tR\tsessionId\":\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\x03 \x01(\tR\tprojectId\":\n" +
 	"\x10GetConfigRequest\x12\x14\n" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\"W\n" +

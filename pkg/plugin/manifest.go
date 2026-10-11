@@ -41,6 +41,11 @@ type Manifest struct {
 	// Service carries the routes, auth modes, capabilities, and callback
 	// scopes for kind=service.
 	Service *ServiceModule `json:"service,omitempty"`
+	// HostScopes are the Host API scopes the plugin uses (see HostScopes);
+	// HostResources names what rest.*, db.* and connectors.execute reach.
+	// Both are optional: a plugin built before the Host API has neither.
+	HostScopes    []string       `json:"host_scopes,omitempty"`
+	HostResources *HostResources `json:"host_resources,omitempty"`
 }
 
 // manifestJSON is Manifest without its methods, so MarshalJSON and
@@ -152,7 +157,7 @@ func sha256File(path string) (string, error) {
 
 // VerifyManifest checks a plugin envelope against the binary at binaryPath
 // and the host's trust policy. Returns nil when the plugin is safe to load.
-// Order: os_arch -> proto_version -> sha256 integrity -> signature.
+// Order: os_arch -> proto_version -> host access -> sha256 integrity -> signature.
 func VerifyManifest(m Manifest, binaryPath string) error {
 	host := runtime.GOOS + "/" + runtime.GOARCH
 	okArch := false
@@ -167,6 +172,9 @@ func VerifyManifest(m Manifest, binaryPath string) error {
 	}
 	if !ProtoVersionSupported(m.ProtoVersion) {
 		return fmt.Errorf("proto v%d unsupported (host speaks v%d–v%d)", m.ProtoVersion, MinProtoVersion, ProtoVersion)
+	}
+	if err := m.ValidateHostAccess(); err != nil {
+		return err
 	}
 	sum, err := sha256File(binaryPath)
 	if err != nil {

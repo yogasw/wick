@@ -103,12 +103,14 @@ message Ticket {
   string status = 5; repeated string assignees = 6; map<string,string> fields = 7;
   string created_at = 8; string updated_at = 9;
 }
-message GetTicketRequest   { string id = 1; }
+// Ticket ids are unique per project only: project_id picks the project; without
+// it an id found in more than one reachable project is FailedPrecondition.
+message GetTicketRequest   { string id = 1; string project_id = 2; }
 message ListTicketsRequest { string project_id = 1; string status = 2; int32 limit = 3; }
 message ListTicketsResponse { repeated Ticket tickets = 1; }
 message CreateTicketRequest { string project_id = 1; string id = 2; string title = 3; string body = 4; string status = 5; repeated string assignees = 6; map<string,string> fields = 7; }
-message UpdateTicketRequest { string id = 1; optional string status = 2; optional string title = 3; optional string body = 4; repeated string assignees = 5; bool set_assignees = 6; map<string,string> fields = 7; string if_updated_at = 8; }
-message AttachSessionRequest { string ticket_id = 1; string session_id = 2; }
+message UpdateTicketRequest { string id = 1; optional string status = 2; optional string title = 3; optional string body = 4; repeated string assignees = 5; bool set_assignees = 6; map<string,string> fields = 7; string if_updated_at = 8; string project_id = 9; }
+message AttachSessionRequest { string ticket_id = 1; string session_id = 2; string project_id = 3; }
 
 // ---- config ----
 message GetConfigRequest  { string owner = 1; string key = 2; }

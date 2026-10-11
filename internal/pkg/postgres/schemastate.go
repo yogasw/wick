@@ -83,6 +83,9 @@ var migratedModels = []any{
 	&entity.PluginSource{},
 	&entity.PluginAudit{},
 	&entity.PluginReplacement{},
+	// Host API: admin overlay on plugin scopes, and the call audit ring.
+	&entity.PluginHostPermission{},
+	&entity.PluginHostCall{},
 	&entity.ConnectorState{},
 	&entity.ScheduledMessage{},
 	&entity.ScheduleLease{},
