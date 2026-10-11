@@ -99,6 +99,9 @@ export type AgentItem = {
   suggested_prompts?: SuggestedPrompt[];
   main_session_id: string;
   last_active: string | null;
+  /** Newest last_active of all the agent's chats (main and side chats);
+      dozing reads it, order/time/preview stay on last_active. */
+  last_any_active?: string | null;
   last_preview: string;
   /** last_preview is a [silent] reply (marker stripped); shown dimmed. */
   last_silent?: boolean;

@@ -376,9 +376,10 @@ func fillChatState(it *TeamAgentItem, userID, agentID string, lastRead *time.Tim
 	it.Status, it.CurrentAction = string(session.StatusIdle), ""
 	it.AttentionPreview, it.NeedsAttention, it.LastPreview, it.LastSilent = "", false, "", false
 	it.SubagentsWorking, it.TeamWaiting, it.ReplyingTo, it.TeamAsks = nil, nil, "", nil
-	it.WorkingSessions, it.LastSession = nil, nil
+	it.WorkingSessions, it.LastSession, it.LastAnyActive = nil, nil, nil
 	// One scan of the registry serves the main chat and the others.
 	sessions := agentSessions(userID, agentID)
+	it.LastAnyActive = newestActive(sessions)
 	s, ok := mainSessionIn(sessions)
 	if !ok {
 		return
@@ -422,6 +423,18 @@ func fillChatState(it *TeamAgentItem, userID, agentID string, lastRead *time.Tim
 			it.LastPreview, it.LastSilent = t.preview(), false
 		}
 	}
+}
+
+// newestActive is the latest LastActive among sessions; nil when none
+// has moved.
+func newestActive(sessions []session.Session) *time.Time {
+	var at time.Time
+	for _, s := range sessions {
+		if s.Meta.LastActive.After(at) {
+			at = s.Meta.LastActive
+		}
+	}
+	return timePtr(at)
 }
 
 // teamAskPreview is the roster line of a Team task's question: "Asks

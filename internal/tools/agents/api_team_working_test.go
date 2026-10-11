@@ -93,6 +93,51 @@ func sideChat(id string, origin session.Origin, status session.Status, lastActiv
 	return session.Session{ID: id, Meta: session.Meta{Origin: origin, Status: status, LastActive: lastActive, Label: "chat " + id}}
 }
 
+// The roster's last_any_active is the newest of all the agent's chats: a
+// side chat that moved today wins over a main chat idle for two days.
+func TestNewestActive(t *testing.T) {
+	now := time.Now()
+	main := sideChat("main", session.OriginUI, session.StatusIdle, now.Add(-48*time.Hour))
+	main.Meta.AgentMain = true
+	side := sideChat("side", session.OriginUI, session.StatusIdle, now.Add(-3*time.Hour))
+	if got := newestActive([]session.Session{main, side}); got == nil || !got.Equal(side.Meta.LastActive) {
+		t.Fatalf("newest = %v, want side %v", got, side.Meta.LastActive)
+	}
+	if got := newestActive([]session.Session{main}); got == nil || !got.Equal(main.Meta.LastActive) {
+		t.Fatalf("main only = %v", got)
+	}
+	if got := newestActive([]session.Session{sideChat("x", session.OriginUI, session.StatusIdle, time.Time{})}); got != nil {
+		t.Fatalf("never moved = %v", got)
+	}
+
+	// On the row it counts every chat, while last_active stays the main's:
+	// the main chat idle for two days, the side chat newer.
+	owner, p, helperMain, _ := receiverWorld(t)
+	sideID := teamNewChat(t, owner, p.ID)
+	reg := globalMgr.Registry()
+	mainSess, ok := reg.Session(helperMain)
+	if !ok {
+		t.Fatal("main chat missing")
+	}
+	mainSess.Meta.LastActive = time.Now().Add(-48 * time.Hour)
+	if err := session.SaveMeta(globalLayout, helperMain, mainSess.Meta); err != nil {
+		t.Fatal(err)
+	}
+	_ = globalMgr.RefreshSession(helperMain)
+	sideSess, ok := reg.Session(sideID)
+	if !ok {
+		t.Fatal("side chat missing")
+	}
+	var it TeamAgentItem
+	fillChatState(&it, owner.ID, p.ID, nil, teamTurnsNow())
+	if it.LastActive == nil || !it.LastActive.Equal(mainSess.Meta.LastActive) {
+		t.Fatalf("last_active = %v, want main %v", it.LastActive, mainSess.Meta.LastActive)
+	}
+	if it.LastAnyActive == nil || !it.LastAnyActive.Equal(sideSess.Meta.LastActive) || !it.LastAnyActive.After(*it.LastActive) {
+		t.Fatalf("last_any_active = %v, want side %v after last_active %v", it.LastAnyActive, sideSess.Meta.LastActive, it.LastActive)
+	}
+}
+
 // A queued chat has not started: it is neither working nor Last, so it
 // cannot take the click and then hand it on when it starts. Running turns
 // sort by their start, one never seen yet starts now (no zero Since), and

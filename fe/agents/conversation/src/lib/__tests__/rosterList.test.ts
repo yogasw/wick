@@ -146,6 +146,16 @@ describe("Team task rows", () => {
     expect(dozing({ last_active: yesterday, disabled: true }, idle, now)).toBe(false);
     expect(dozing({ last_active: null }, idle, now)).toBe(false);
   });
+
+  test("dozing: a side chat active today keeps it awake, main chat or not", () => {
+    const now = new Date(2026, 9, 10, 14, 0).getTime();
+    const yesterday = new Date(2026, 9, 9, 18, 0).toISOString();
+    const today = new Date(2026, 9, 10, 11, 0).toISOString();
+    const idle = { work: "idle", attention: false, unread: false };
+    expect(dozing({ last_active: yesterday, last_any_active: today }, idle, now)).toBe(false);
+    expect(dozing({ last_active: yesterday, last_any_active: yesterday }, idle, now)).toBe(true);
+    expect(dozing({ last_active: null, last_any_active: today }, idle, now)).toBe(false);
+  });
 });
 
 describe("withSaved", () => {

@@ -39,15 +39,17 @@ export function rosterEntries(agents: AgentItem[], groups: GroupItem[], query: s
 }
 
 /** dozing: an idle row last active before today dozes — eyes closed and
-    a "z", in full colour (only a disabled agent greys out). Anything it is doing, waits
-    on or has unread keeps it awake. */
+    a "z", in full colour (only a disabled agent greys out). Last active
+    is the newest of any of its chats (last_any_active), so a side chat
+    that moved today keeps it awake even when the main chat is older.
+    Anything it is doing, waits on or has unread keeps it awake too. */
 export function dozing(
-  a: Pick<AgentItem, "last_active" | "disabled">,
+  a: Pick<AgentItem, "last_active" | "last_any_active" | "disabled">,
   st: { work: string; attention: boolean; unread: boolean },
   nowMs: number = Date.now(),
 ): boolean {
   if (a.disabled || st.work !== "idle" || st.attention || st.unread) return false;
-  const at = ts(a.last_active);
+  const at = Math.max(ts(a.last_active), ts(a.last_any_active));
   if (!at) return false;
   const today = new Date(nowMs);
   today.setHours(0, 0, 0, 0);

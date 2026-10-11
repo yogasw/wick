@@ -110,7 +110,12 @@ type TeamAgentItem struct {
 	CaptainCan    team.CaptainCan `json:"captain_can"`
 	MainSessionID string          `json:"main_session_id"`
 	LastActive    *time.Time      `json:"last_active"`
-	LastPreview   string          `json:"last_preview"`
+	// LastAnyActive is the newest LastActive of all the agent's chats with
+	// the owner, main and side chats alike: the roster's dozing reads it,
+	// so work in a side chat keeps the agent awake. LastActive (order,
+	// time, preview) stays the main chat's.
+	LastAnyActive *time.Time `json:"last_any_active,omitempty"`
+	LastPreview   string     `json:"last_preview"`
 	// LastSilent is true when LastPreview is a [silent] reply, shown
 	// dimmed; the marker itself is stripped.
 	LastSilent bool   `json:"last_silent,omitempty"`
