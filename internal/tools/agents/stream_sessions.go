@@ -63,6 +63,7 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 			sharedAgentChatVisible(c.Context(), uid, sess)
 	}
 	acts := newActivityTracker(sessionParentOf, visible, sessionNeedsAttention)
+	acts.sideAgent = sideChatAgent(uid)
 
 	fmt.Fprintf(w, ": connected\n\n")
 	// Replay what is running right now, so a freshly loaded page paints

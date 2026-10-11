@@ -6,7 +6,7 @@
      Settings, other conversations and the + Agent wizard are drawers with
      their own URL (agentsRouter.ts), so they survive a refresh. */
   import { viewerName as readViewerName } from "./lib/viewer.js";
-  import { onMount, untrack } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { KebabMenu, ToastHost } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
   import DetailView from "./lib/components/DetailView.svelte";
@@ -22,6 +22,8 @@
   import RemoteQuestionCard from "./lib/components/team/RemoteQuestionCard.svelte";
   import PresenceDot from "./lib/components/team/PresenceDot.svelte";
   import Dots from "./lib/components/team/Dots.svelte";
+  import RosterSessionsMenu from "./lib/components/team/RosterSessionsMenu.svelte";
+  import { runningSessions, rowTarget, lastSession, lastSessionKey, loadSeen, markSeen, sessionSignal, sessionTitle } from "./lib/rosterSessions.js";
   import RosterAvatar from "./lib/components/team/RosterAvatar.svelte";
   import RemoteKindIcon from "./lib/components/team/RemoteKindIcon.svelte";
   import AgentShareLine from "./lib/components/team/AgentShareLine.svelte";
@@ -45,7 +47,7 @@
   import GroupAvatars from "./lib/components/GroupAvatars.svelte";
   import { rosterStatus, withTurn, withActivity, busyWork, avatarWorking, type RosterStatus } from "./lib/rosterStatus.js";
   import { mainChatOpen } from "./lib/avatarActivity.js";
-  import { liveRoster } from "./lib/rosterLive.js";
+  import { liveRoster, boundedDebounce, singleFlight, ROSTER_REFETCH_DEBOUNCE_MS, ROSTER_REFETCH_MAX_WAIT_MS } from "./lib/rosterLive.js";
   import type { SessionActivity } from "./lib/stores/sessionsStream.js";
   import { duplicateBody } from "./lib/agentDuplicate.js";
   import TeamAccountMenu from "./lib/components/TeamAccountMenu.svelte";
@@ -134,29 +136,27 @@
   }
 
   /* One roster read at a time: the poll, a finished turn and a save can
-     all ask at once, and they share the request in flight. */
-  let inflight: Promise<void> | null = null;
-  function load(): Promise<void> {
-    inflight ??= (async () => {
+     all ask at once, and they share the request in flight. A call that
+     lands while one is in flight runs once more after it (singleFlight):
+     the read in flight may predate what it was asked for, a turn that
+     just started. */
+  const load = singleFlight(async () => {
+    try {
+      const r = await runApi(listAgents(base));
+      agents = r.agents ?? [];
+      captainId = r.captain_id ?? "";
+      loadError = "";
       try {
-        const r = await runApi(listAgents(base));
-        agents = r.agents ?? [];
-        captainId = r.captain_id ?? "";
-        loadError = "";
-        try {
-          sessionStorage.setItem(ROSTER_CACHE, JSON.stringify({ agents, captain_id: captainId }));
-        } catch {
-          /* storage full or off */
-        }
-      } catch (e) {
-        loadError = e instanceof Error ? e.message : String(e);
-      } finally {
-        loaded = true;
-        inflight = null;
+        sessionStorage.setItem(ROSTER_CACHE, JSON.stringify({ agents, captain_id: captainId }));
+      } catch {
+        /* storage full or off */
       }
-    })();
-    return inflight;
-  }
+    } catch (e) {
+      loadError = e instanceof Error ? e.message : String(e);
+    } finally {
+      loaded = true;
+    }
+  });
 
   /* Team settings › Idle animations applies to every avatar on the page;
      the drawer updates it on save. A failed read keeps the default (on). */
@@ -180,17 +180,27 @@
      a reconnect reads the roster and groups again. No steady poll. */
   /* The newest turn step, handed to the Chats drawer so its rows stay live. */
   let lastActivity = $state<SessionActivity | null>(null);
+  /* Roster agents' non-main chats seen mid-turn (sessionSignal); their
+     turn starts and ends coalesce into one roster read, at least every
+     ROSTER_REFETCH_MAX_WAIT_MS under a steady stream. */
+  const activeSessions = new Set<string>();
+  const sessionReload = boundedDebounce(() => load(), ROSTER_REFETCH_DEBOUNCE_MS, ROSTER_REFETCH_MAX_WAIT_MS);
+  onDestroy(() => sessionReload.cancel());
   onMount(() =>
     liveRoster(base, {
       reload: () => {
         load();
         loadGroups();
       },
+      // A turn's end missed while the stream was down would leave its chat
+      // marked mid-turn, and its next start would read nothing.
+      onReconnect: () => activeSessions.clear(),
       onActivity: (ev) => {
         lastActivity = ev;
         const next = withActivity(agents, ev);
         agents = next.agents;
         if (next.finished) load();
+        else if (sessionSignal(agents, ev, activeSessions)) sessionReload.call();
       },
     }),
   );
@@ -328,10 +338,24 @@
   function go(patch: Partial<AgentsRoute>, replace = false) {
     navigate({ ...route, ...patch }, { replace });
   }
+  /* A row opens the agent's oldest chat still running elsewhere (a Team
+     task, a chat the person opened) while there is one, else its pinned
+     main chat. */
   function openAgent(a: AgentItem) {
-    rosterOpen = false;
-    navigate({ handle: a.handle, session: null, panel: null });
+    openRowChat(a, rowTarget(a));
   }
+  function openRowChat(a: AgentItem, session: string | null) {
+    rosterOpen = false;
+    navigate({ handle: a.handle, session, panel: null });
+  }
+
+  /* The "Last: …" lines already opened (rosterSessions.lastSession): the
+     chat on screen marks its own as opened. */
+  let seenLast = $state(loadSeen());
+  $effect(() => {
+    const s = selected?.last_session;
+    if (s && route.session === s.id && !seenLast.has(lastSessionKey(s))) seenLast = markSeen(seenLast, lastSessionKey(s));
+  });
   function openPanel(panel: AgentsPanel | null) {
     go({ panel });
   }
@@ -692,6 +716,11 @@
           {@const st = rosterStatus(a, { activeId: selected?.id, hatching: hatching.includes(a.id) })}
           {@const tone = rowTone(st.unread, st.attention)}
           {@const pv = rowPreview(a)}
+          {@const running = runningSessions(a)}
+          {@const last = lastSession(a, seenLast, route.session)}
+          <!-- The row, plus beside it (a button holds no other button) the
+               count of chats running elsewhere and the Last line. -->
+          <div class="relative {pinIds.has(a.id) ? 'hidden lg:block' : ''}" data-testid="roster-agent-wrap">
           <button
             type="button"
             class="roster-row relative mb-0.5 w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left {pinIds.has(a.id) ? 'hidden lg:flex' : 'flex'} {active
@@ -720,7 +749,7 @@
                 </span>
                 <span class="shrink-0 text-[11px] {tone.time}">{rosterTime(a.last_active, rosterNow)}</span>
               </span>
-              <span class="roster-line2 mt-0.5 flex items-center gap-1.5">
+              <span class="roster-line2 mt-0.5 flex items-center gap-1.5" class:pr-6={running.length > 1}>
                 <span class="min-w-0 flex-1 truncate text-xs {st.typing !== null ? 'font-medium text-green-600 dark:text-green-400' : st.attention && a.attention_preview ? 'font-medium text-amber-700 dark:text-amber-300' : pv.silent ? silentPreviewClass : tone.preview}">
                   {#if st.typing !== null}<span data-testid="roster-working" data-work={st.work}>{st.typing.replace(/…$/, "")}<Dots /></span>{:else}{#if pv.silent}{@render silentBell()}{/if}{pv.text}{/if}
                 </span>
@@ -731,6 +760,20 @@
               </span>
             </span>
           </button>
+          {#if running.length > 1}<RosterSessionsMenu sessions={running} now={rosterNow} onopen={(id) => openRowChat(a, id)} />{/if}
+          {#if last}
+            <button
+              type="button"
+              class="roster-last -mt-1 mb-1 block w-full truncate pr-2 text-left text-[11px] text-black-800 hover:underline dark:text-black-600"
+              title="Open {sessionTitle(last)}"
+              data-testid="roster-last"
+              onclick={() => {
+                seenLast = markSeen(seenLast, lastSessionKey(last));
+                openRowChat(a, last.id);
+              }}>Last: {sessionTitle(last)}</button
+            >
+          {/if}
+          </div>
         {:else}
           {@const g = e.group}
           {@const unread = g.unread && activeGroupId !== g.id}
@@ -794,7 +837,7 @@
       </button>
       {#if selected && !noCaptain}
         <span class="relative flex shrink-0">
-          <AgentAvatar kind={selected.avatar?.kind} image={selected.avatar?.image} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={!!headerStatus && avatarWorking(selected.status, headerStatus.work)} tool={headerStatus?.work === "tool" || headerStatus?.work === "subagent"} toolName={headerStatus?.work === "tool" ? selected.current_action : ""} toolError={selected.tool_error} remote={headerStatus?.work === "waiting"} events={selected.avatar?.events} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
+          <AgentAvatar kind={selected.avatar?.kind} image={selected.avatar?.image} shape={selected.avatar?.shape} expression={selected.avatar?.expression} color={selected.avatar?.color} size={36} live working={!!headerStatus && avatarWorking(selected.status, headerStatus.work)} tool={headerStatus?.work === "tool" || headerStatus?.work === "subagent" || headerStatus?.work === "replying"} toolName={headerStatus?.work === "tool" ? selected.current_action : ""} toolError={selected.tool_error} remote={headerStatus?.work === "waiting"} events={selected.avatar?.events} asleep={selected.disabled} hatching={hatching.includes(selected.id)} alert={headerStatus?.attention} />
           {#if headerStatus}<PresenceDot presence={headerStatus.presence} label={headerStatus.label} />{/if}
           {#if headerStatus?.work === "subagent"}<span class="pointer-events-none absolute -bottom-1 -left-1 text-[11px] leading-none" aria-hidden="true" data-testid="header-subagent">🤖</span>{/if}
         </span>
@@ -1000,6 +1043,8 @@
      the unread count pill (18px tall, 11px text) and the second line it
      sits on, kept at the pill's height so a row never grows with it. */
   .roster-line2 { min-height: 18px; }
+  /* The Last line starts under the row's text: row padding + avatar + gap. */
+  .roster-last { padding-left: 56px; }
   .roster-badge {
     display: grid;
     place-items: center;

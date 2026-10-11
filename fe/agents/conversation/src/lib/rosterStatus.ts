@@ -12,7 +12,8 @@ import { isRemoteAgent, remoteWaitTarget } from "./remoteAgent.js";
 /** What a turn is doing: idle (no turn), thinking (a turn with no tool in
     flight), tool (waiting on a tool_use's result), waiting (a remote
     agent: wick waits for the other side), replying (working on a Team
-    task another agent sent it), team (waiting on the teammates its own
+    task another agent sent it, or in a chat other than its main one),
+    team (waiting on the teammates its own
     open Team tasks went to) or subagent (no turn of its own, but
     background sub-agents it delegated to are still working). */
 export type WorkState = "idle" | "thinking" | "tool" | "waiting" | "replying" | "team" | "subagent";
@@ -40,7 +41,9 @@ export type RosterStatus = {
 };
 
 type Row = Pick<AgentItem, "id" | "status" | "disabled"> &
-  Partial<Pick<AgentItem, "unread" | "needs_attention" | "current_action" | "kind" | "handle" | "slack_remote" | "subagents_working" | "team_waiting" | "replying_to" | "team_asks">>;
+  Partial<
+    Pick<AgentItem, "unread" | "needs_attention" | "current_action" | "kind" | "handle" | "slack_remote" | "subagents_working" | "team_waiting" | "replying_to" | "team_asks" | "working_sessions">
+  >;
 
 /** subagentLabel is the working line for background sub-agents: the one
     handle, or how many when there are more. */
@@ -57,11 +60,20 @@ export function busyWork(w: WorkState): boolean {
 }
 
 /** avatarWorking: the avatar acts working (thinking dots, or the orbit on
-    a tool) for its own turn or busyWork — except a Team task it works on
-    elsewhere: the task badge on its corner says that, the avatar stays
-    still, as the mockup. */
+    a tool) for its own turn or busyWork — a Team task or another chat it
+    works on elsewhere too, the task badge on its corner beside the orbit,
+    as the mockup. */
 export function avatarWorking(status: string, w: WorkState): boolean {
-  return w !== "replying" && (isWorking(status) || busyWork(w));
+  return isWorking(status) || busyWork(w);
+}
+
+/** replyingLabel is the working line for a chat it works on for someone:
+    "replying to Captain…", "working on your request…" for the person's
+    own, or a plain "working…" for one nobody on the Team asked for (an
+    outside caller, a channel, a schedule). */
+export function replyingLabel(to: string): string {
+  if (!to) return "working…";
+  return to === "you" ? "working on your request…" : `replying to ${to}…`;
 }
 
 /** teamWaitingLabel is the working line while open Team tasks wait on
@@ -82,15 +94,25 @@ export function rosterStatus(a: Row, opts: { activeId?: string; hatching?: boole
   const subs = a.disabled ? [] : (a.subagents_working ?? []).filter((h) => h.trim() !== "");
   const team = a.disabled ? [] : (a.team_waiting ?? []).filter((h) => h.trim() !== "");
   const replyingTo = a.disabled ? "" : (a.replying_to ?? "").trim();
+  // A chat other than the main one running a turn (a Team task, a chat
+  // the person opened) reads as replying to whoever it works for when the
+  // main chat has nothing of its own to say.
+  const elsewhere = a.disabled ? undefined : (a.working_sessions ?? [])[0];
   const own: WorkState = working ? (isRemoteAgent(a) ? "waiting" : action ? "tool" : "thinking") : subs.length > 0 ? "subagent" : "idle";
-  const work: WorkState = replyingTo ? "replying" : team.length > 0 ? "team" : own;
+  // null = not replying; "" = working elsewhere for no one named.
+  const replyTo: string | null = replyingTo
+    ? replyingTo
+    : elsewhere && team.length === 0 && (own === "idle" || own === "subagent")
+      ? (elsewhere.trigger ?? "").trim()
+      : null;
+  const work: WorkState = replyTo !== null ? "replying" : team.length > 0 ? "team" : own;
   const typing =
     work === "idle"
       ? null
       : work === "waiting"
         ? `${remoteWaitTarget({ handle: a.handle ?? "", slack_remote: a.slack_remote })}…`
         : work === "replying"
-          ? `replying to ${replyingTo}…`
+          ? replyingLabel(replyTo ?? "")
           : work === "team"
             ? teamWaitingLabel(team)
             : work === "tool"

@@ -147,6 +147,12 @@ type TeamAgentItem struct {
 	// ReplyingTo names who the agent works on a Team task for ("replying
 	// to Captain"), in any of its chats; "" when it works on none.
 	ReplyingTo string `json:"replying_to,omitempty"`
+	// WorkingSessions are the agent's other chats (not its main chat) that
+	// run a turn now — a Team task Captain sent, a chat the person opened
+	// — oldest turn first; nil when none. LastSession is the newest of
+	// them that finished within the hour ("Last: …").
+	WorkingSessions []TeamWorkingSession `json:"working_sessions,omitempty"`
+	LastSession     *TeamWorkingSession  `json:"last_session,omitempty"`
 	// TeamAsks is the question an open Team task of the agent waits on its
 	// sender for ("Asks Captain: …"); nil when there is none.
 	TeamAsks *TeamAsk `json:"team_asks,omitempty"`
@@ -545,7 +551,12 @@ func agentSessions(ownerID, agentID string) []session.Session {
 
 // mainSessionOf returns the agent's main conversation, if it has one.
 func mainSessionOf(ownerID, agentID string) (session.Session, bool) {
-	for _, s := range agentSessions(ownerID, agentID) {
+	return mainSessionIn(agentSessions(ownerID, agentID))
+}
+
+// mainSessionIn picks the main conversation out of one agent's sessions.
+func mainSessionIn(sessions []session.Session) (session.Session, bool) {
+	for _, s := range sessions {
 		if s.Meta.AgentMain {
 			return s, true
 		}
@@ -579,6 +590,11 @@ type teamLive struct {
 	// teamSettled is each teammate's newest answered or declined Team
 	// task per viewer, sender already named ("Replied to Captain: …").
 	teamSettled map[string]teamSettled
+	// taskChats names, per teammate chat a working Team task runs in, who
+	// sent it ("Captain", "you"); since is when each running session's
+	// turn was first seen (noteTurns).
+	taskChats map[string]string
+	since     map[string]time.Time
 }
 
 // viewKey keys the teammate-side Team task state: the teammate and the
@@ -706,7 +722,7 @@ func teamAgentName(agentID string) string {
 // — or, while it waits on an answer, asking it. A task whose sending
 // chat has no known person is told to nobody.
 func (l *teamLive) addTeamTasks(tasks []teamlink.LiveTask, n *teamTaskNames) {
-	l.teamWaiting, l.replyingTo, l.teamAsks = map[string][]string{}, map[string]string{}, map[string]TeamAsk{}
+	l.teamWaiting, l.replyingTo, l.teamAsks, l.taskChats = map[string][]string{}, map[string]string{}, map[string]TeamAsk{}, map[string]string{}
 	for _, t := range tasks {
 		if t.ToHandle != "" && !slices.Contains(l.teamWaiting[t.FromSession], t.ToHandle) {
 			l.teamWaiting[t.FromSession] = append(l.teamWaiting[t.FromSession], t.ToHandle)
@@ -719,6 +735,9 @@ func (l *teamLive) addTeamTasks(tasks []teamlink.LiveTask, n *teamTaskNames) {
 		if t.Working {
 			if _, seen := l.replyingTo[key]; !seen {
 				l.replyingTo[key] = n.sender(t.Origin, t.FromAgentID)
+			}
+			if _, seen := l.taskChats[t.Chat]; t.Chat != "" && !seen {
+				l.taskChats[t.Chat] = n.sender(t.Origin, t.FromAgentID)
 			}
 		} else if _, seen := l.teamAsks[key]; !seen {
 			l.teamAsks[key] = TeamAsk{To: n.sender(t.Origin, t.FromAgentID), Question: t.Question}
@@ -757,9 +776,13 @@ func (l teamLive) teamWaitingOf(sessionID string) []string {
 // pool and approval state only, for a caller that just needs a lifecycle.
 func teamTurnsNow() teamLive {
 	l := teamLive{actions: map[string]string{}, failed: map[string]bool{}, lifecycles: map[string]string{}, approvals: map[string]string{}, subagents: map[string][]string{}}
+	firstEvent := map[string]time.Time{}
 	if globalPool != nil {
 		for _, e := range globalPool.ActiveSnapshot() {
 			l.lifecycles[e.SessionID] = e.Lifecycle
+			if len(e.InFlightEvents) > 0 {
+				firstEvent[e.SessionID] = e.InFlightEvents[0].At
+			}
 			if a := team.CurrentAction(e.InFlightEvents); a != "" {
 				l.actions[e.SessionID] = a
 			}
@@ -768,6 +791,7 @@ func teamTurnsNow() teamLive {
 			}
 		}
 	}
+	l.since = noteTurns(l.lifecycles, firstEvent, time.Now())
 	if globalApprovals != nil {
 		for _, r := range globalApprovals.PendingFor("") {
 			if _, seen := l.approvals[r.SessionID]; !seen {

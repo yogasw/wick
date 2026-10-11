@@ -22,6 +22,9 @@ export type SessionActivity = {
   action: string;
   tool_error?: boolean;
   needs_attention?: boolean;
+  /** The Team agent when this is one of the viewer's own chats with it
+      other than its main chat; absent for every other conversation. */
+  agent_id?: string;
 };
 
 /** One `ticket` signal: a ticket of project_id was written. The board

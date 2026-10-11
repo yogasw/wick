@@ -28,5 +28,5 @@
 </script>
 
 <AvatarActivity {activity} size={38} rings>
-  <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={!ring && avatarWorking(a.status, st.work)} tool={st.work === "tool" || st.work === "subagent"} toolName={st.work === "tool" ? a.current_action : ""} toolError={a.tool_error} remote={!ring && st.work === "waiting"} events={a.avatar?.events} asleep={a.disabled || dozing} {hatching} alert={st.attention} />
+  <AgentAvatar kind={a.avatar?.kind} image={a.avatar?.image} shape={a.avatar?.shape} expression={a.avatar?.expression} color={a.avatar?.color} size={38} live working={!ring && avatarWorking(a.status, st.work)} tool={st.work === "tool" || st.work === "subagent" || st.work === "replying"} toolName={st.work === "tool" ? a.current_action : ""} toolError={a.tool_error} remote={!ring && st.work === "waiting"} events={a.avatar?.events} asleep={a.disabled || dozing} {hatching} alert={st.attention} />
 </AvatarActivity>

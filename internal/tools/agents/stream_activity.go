@@ -26,6 +26,11 @@ type sessionActivity struct {
 	// NeedsAttention: the conversation waits on a person (ask_user or a
 	// tool approval).
 	NeedsAttention bool `json:"needs_attention,omitempty"`
+	// AgentID names the Team agent when the conversation is one of the
+	// viewer's own chats with it other than its main chat, so the roster
+	// reads itself again only for a turn that can change a row (its
+	// working chats, its Last line); "" for everything else.
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 func (a sessionActivity) JSON() string {
@@ -48,6 +53,9 @@ type activityTracker struct {
 	parentOf  func(string) (string, bool)
 	visible   func(string) bool
 	attention func(string) bool
+	// sideAgent, when set, names the agent of a conversation that is one
+	// of the viewer's non-main chats with it (sideChatAgent).
+	sideAgent func(string) string
 	last      map[string]sessionActivity
 }
 
@@ -80,7 +88,7 @@ func (t *activityTracker) apply(ev Event) (sessionActivity, bool) {
 	}
 	prev, seen := t.last[ev.SessionID]
 	if !seen {
-		prev = sessionActivity{SessionID: ev.SessionID}
+		prev = sessionActivity{SessionID: ev.SessionID, AgentID: t.agentOf(ev.SessionID)}
 	}
 	next := prev
 	switch ev.Type {
@@ -119,7 +127,7 @@ func (t *activityTracker) replay(entries []pool.ActiveEntry) []sessionActivity {
 		if e.Lifecycle != "working" && e.Lifecycle != "spawning" || !t.root(e.SessionID) {
 			continue
 		}
-		a := sessionActivity{SessionID: e.SessionID, Work: "thinking", NeedsAttention: t.attention(e.SessionID)}
+		a := sessionActivity{SessionID: e.SessionID, Work: "thinking", NeedsAttention: t.attention(e.SessionID), AgentID: t.agentOf(e.SessionID)}
 		if action := team.CurrentAction(e.InFlightEvents); action != "" {
 			a.Work, a.Action = "tool", action
 		} else {
@@ -129,6 +137,32 @@ func (t *activityTracker) replay(entries []pool.ActiveEntry) []sessionActivity {
 		out = append(out, a)
 	}
 	return out
+}
+
+// agentOf is sideAgent's answer, "" without one.
+func (t *activityTracker) agentOf(sessionID string) string {
+	if t.sideAgent == nil {
+		return ""
+	}
+	return t.sideAgent(sessionID)
+}
+
+// sideChatAgent answers, for viewer uid, which Team agent a conversation
+// is a non-main chat with: the agent of uid's own chat that is neither the
+// agent's main chat nor a group's backing session — exactly the chats
+// agentSessions/workingSessionsOf put on uid's roster. "" otherwise (a
+// main chat, someone else's chat, a channel thread with no agent).
+func sideChatAgent(uid string) func(string) string {
+	return func(sessionID string) string {
+		if globalMgr == nil || uid == "" {
+			return ""
+		}
+		sess, ok := globalMgr.Registry().Session(sessionID)
+		if !ok || sess.Meta.AgentID == "" || sess.Meta.AgentMain || sess.Meta.GroupSessionID != "" || sess.Meta.UserID != uid {
+			return ""
+		}
+		return sess.Meta.AgentID
+	}
 }
 
 // remember keeps a.SessionID's last sent state; an idle conversation

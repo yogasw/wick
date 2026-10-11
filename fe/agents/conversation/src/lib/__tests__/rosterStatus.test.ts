@@ -249,6 +249,25 @@ describe("Team tasks (team_message / @mention)", () => {
     expect(rosterStatus(row({ status: "running", current_action: "Bash", replying_to: "Captain", team_waiting: ["a"] })).work).toBe("replying");
   });
 
+  it("a chat other than the main one running reads as replying to whoever it works for", () => {
+    const ws = (trigger: string) => [{ id: "s1", label: "x", trigger }];
+    expect(rosterStatus(row({ working_sessions: ws("Captain") })).typing).toBe("replying to Captain…");
+    const own = rosterStatus(row({ working_sessions: ws("you") }));
+    expect(own.work).toBe("replying");
+    expect(own.typing).toBe("working on your request…");
+    expect(own.presence).toBe("working");
+    // The main chat's own turn and Team waits keep their line.
+    expect(rosterStatus(row({ status: "running", working_sessions: ws("you") })).work).toBe("thinking");
+    expect(rosterStatus(row({ team_waiting: ["a"], working_sessions: ws("you") })).work).toBe("team");
+    // A Team task's sender names it first; a disabled agent shows none.
+    expect(rosterStatus(row({ replying_to: "Captain", working_sessions: ws("you") })).typing).toBe("replying to Captain…");
+    expect(rosterStatus(row({ disabled: true, working_sessions: ws("you") })).work).toBe("idle");
+    // Nobody on the Team asked (an outside caller, a channel): a plain working line.
+    const outside = rosterStatus(row({ working_sessions: [{ id: "s1", label: "x", trigger: "", source: "A2A" }] }));
+    expect(outside.work).toBe("replying");
+    expect(outside.typing).toBe("working…");
+  });
+
   it("a teammate asking its sender needs attention", () => {
     const s = rosterStatus(row({ team_asks: { to: "Captain", question: "which deploy?" } }));
     expect(s.attention).toBe(true);
@@ -269,20 +288,20 @@ describe("Team task work in the avatar and the header", () => {
     expect(["idle", "thinking", "tool", "waiting"].some((w) => busyWork(w as WorkState))).toBe(false);
   });
 
-  it("avatarWorking: its own turn and busyWork animate the avatar, a Team task it replies to does not", () => {
+  it("avatarWorking: its own turn and busyWork animate the avatar, a Team task or another chat it works on too", () => {
     expect(avatarWorking("running", "thinking")).toBe(true);
     expect(avatarWorking("idle", "team")).toBe(true);
     expect(avatarWorking("idle", "subagent")).toBe(true);
-    expect(avatarWorking("idle", "replying")).toBe(false);
-    expect(avatarWorking("running", "replying")).toBe(false);
+    expect(avatarWorking("idle", "replying")).toBe(true);
+    expect(avatarWorking("running", "replying")).toBe(true);
     expect(avatarWorking("idle", "idle")).toBe(false);
   });
 
   it("the row avatar, the header avatar and header line 2 all read busyWork", () => {
     const app = readFileSync(resolve(__dirname, "../../AgentsApp.svelte"), "utf8");
     const avatar = readFileSync(resolve(__dirname, "../components/team/RosterAvatar.svelte"), "utf8");
-    expect(avatar).toMatch(/working=\{!ring && avatarWorking\(a\.status, st\.work\)\} tool=\{st\.work === "tool" \|\| st\.work === "subagent"\}/);
-    expect(app).toMatch(/working=\{!!headerStatus && avatarWorking\(selected\.status, headerStatus\.work\)\} tool=\{headerStatus\?\.work === "tool" \|\| headerStatus\?\.work === "subagent"\}/);
+    expect(avatar).toMatch(/working=\{!ring && avatarWorking\(a\.status, st\.work\)\} tool=\{st\.work === "tool" \|\| st\.work === "subagent" \|\| st\.work === "replying"\}/);
+    expect(app).toMatch(/working=\{!!headerStatus && avatarWorking\(selected\.status, headerStatus\.work\)\} tool=\{headerStatus\?\.work === "tool" \|\| headerStatus\?\.work === "subagent" \|\| headerStatus\?\.work === "replying"\}/);
     expect(app).toMatch(/\{:else if isWorking\(selected\.status\) \|\| \(headerStatus && busyWork\(headerStatus\.work\)\)\}/);
   });
 

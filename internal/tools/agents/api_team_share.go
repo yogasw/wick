@@ -376,11 +376,15 @@ func fillChatState(it *TeamAgentItem, userID, agentID string, lastRead *time.Tim
 	it.Status, it.CurrentAction = string(session.StatusIdle), ""
 	it.AttentionPreview, it.NeedsAttention, it.LastPreview, it.LastSilent = "", false, "", false
 	it.SubagentsWorking, it.TeamWaiting, it.ReplyingTo, it.TeamAsks = nil, nil, "", nil
-	s, ok := mainSessionOf(userID, agentID)
+	it.WorkingSessions, it.LastSession = nil, nil
+	// One scan of the registry serves the main chat and the others.
+	sessions := agentSessions(userID, agentID)
+	s, ok := mainSessionIn(sessions)
 	if !ok {
 		return
 	}
 	it.MainSessionID = s.ID
+	it.WorkingSessions, it.LastSession = workingSessionsOf(sessions, s.ID, live, time.Now())
 	it.SubagentsWorking = live.subagentsOf(s.ID)
 	it.TeamWaiting = live.teamWaitingOf(s.ID)
 	it.ReplyingTo = live.replyingTo[viewKey(agentID, userID)]

@@ -27,6 +27,21 @@ export type ConnectorGrant = {
   ops: string[];
 };
 
+/** One of an agent's non-main chats as its roster row tells it. */
+export type WorkingSession = {
+  id: string;
+  label: string;
+  /** Who it works for: "you" (a chat the person opened in the app), the
+      agent whose Team task runs in it ("Captain"), or "" for anything
+      else. */
+  trigger: string;
+  /** Where a chat with no trigger came from ("Slack", "A2A", "Schedule",
+      "API", "Telegram"); absent when unknown or trigger is set. */
+  source?: string;
+  /** Turn start while running; last activity once finished. */
+  since?: string;
+};
+
 export type AgentItem = {
   id: string;
   handle: string;
@@ -111,6 +126,13 @@ export type AgentItem = {
   /** Who the agent works on a Team task for ("Captain", "you"), in any of
       its chats; absent when none. */
   replying_to?: string;
+  /** The agent's other chats (not its main chat) running a turn now — a
+      Team task Captain sent, a chat the person opened — oldest turn first,
+      so a click on the row keeps opening the same one; absent when none. */
+  working_sessions?: WorkingSession[];
+  /** The newest of those chats that finished within the hour: the row's
+      subtle "Last: …" line. */
+  last_session?: WorkingSession;
   /** The question an open Team task of the agent puts to its sender; the
       server also sends it as attention_preview ("Asks Captain: …"). */
   team_asks?: { to: string; question: string };
