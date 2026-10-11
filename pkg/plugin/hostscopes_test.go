@@ -61,7 +61,7 @@ func TestValidateHostAccess(t *testing.T) {
 		{"plain scopes", Manifest{HostScopes: []string{"users.read", "tickets.write", "datadir"}}, ""},
 		{"unknown scope loads (forward compatible)", Manifest{HostScopes: []string{"notes.read"}}, ""},
 		{"read_secret needs config", Manifest{HostScopes: []string{"config.read_secret"}}, "host_resources.config"},
-		{"read_secret ok", Manifest{HostScopes: []string{"config.read_other", "config.read_secret"}, HostResources: &HostResources{Config: []HostConfigResource{{Owner: "job:notion-ticket-sync", Key: "token"}}}}, ""},
+		{"read_secret ok", Manifest{HostScopes: []string{"config.read_other", "config.read_secret"}, HostResources: &HostResources{Config: []HostConfigResource{{Owner: "notion-ticket-sync", Key: "token"}}}}, ""},
 		{"config missing key", Manifest{HostResources: &HostResources{Config: []HostConfigResource{{Owner: "job:x"}}}}, "owner and key"},
 		{"duplicate", Manifest{HostScopes: []string{"users.read", "users.read"}}, "twice"},
 		{"db without tables", Manifest{HostScopes: []string{"db.read"}}, "host_resources.db"},

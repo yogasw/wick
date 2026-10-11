@@ -220,7 +220,7 @@ func (r *HostResources) Empty() bool {
 //     "write" declaration yields both items (write implies read), so an
 //     admin can keep reads and block writes of one table.
 //   - connectors: "<connector>.<op>", e.g. "slack.send_message".
-//   - config:     "<owner>/<key>", e.g. "job:notion-ticket-sync/token".
+//   - config:     "<owner>/<key>", e.g. "notion-ticket-sync/token".
 //
 // Items lists the declared items of resource kind in those shapes.
 func (r *HostResources) Items(kind string) []string {

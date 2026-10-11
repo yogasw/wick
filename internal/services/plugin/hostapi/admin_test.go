@@ -36,7 +36,7 @@ func fullPlugin() PluginInfo {
 			Rest:       []wickplugin.HostRestResource{{Method: "GET", Path: "/api/tickets/*"}, {Method: "POST", Path: "/api/tickets"}},
 			DB:         []wickplugin.HostDBResource{{Table: "users", Mode: "read"}, {Table: "tickets", Mode: "write"}},
 			Connectors: []wickplugin.HostConnectorResource{{Connector: "slack", Ops: []string{"lookup_user_by_email", "send_message"}}},
-			Config:     []wickplugin.HostConfigResource{{Owner: "job:notion-ticket-sync", Key: "token"}},
+			Config:     []wickplugin.HostConfigResource{{Owner: "notion-ticket-sync", Key: "token"}},
 		}}
 }
 
@@ -115,7 +115,7 @@ func TestAdminViewEveryResourceKind(t *testing.T) {
 		"db.read":            {"users:read", "tickets:read"},
 		"db.write":           {"tickets:write"},
 		"connectors.execute": {"slack.lookup_user_by_email", "slack.send_message"},
-		"config.read_secret": {"job:notion-ticket-sync/token"},
+		"config.read_secret": {"notion-ticket-sync/token"},
 	}
 	for scope, items := range want {
 		s := scopeOf(v, scope)
