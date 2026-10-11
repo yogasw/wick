@@ -32,6 +32,8 @@
     agents?: Record<string, Agent>;
     /** The agent this chat belongs to, who sent the tasks. */
     senderName?: string;
+    /** The person's name for their own rows in a task's thread. */
+    userName?: string;
     onAnswer?: (taskId: string, text: string) => Promise<void>;
     onCancel?: (taskId: string) => Promise<void>;
     /** Sends a failed task again to the same teammate (Retry). */
@@ -51,7 +53,7 @@
         host already titles the panel (the mobile sheet). */
     header?: boolean;
   };
-  let { tasks, agents = {}, senderName = "Captain", onAnswer, onCancel, onRetry, onReassign, teammates = [], loadTargets, onJump, onOpenChat, loadThread, header = true }: Props = $props();
+  let { tasks, agents = {}, senderName = "Captain", userName, onAnswer, onCancel, onRetry, onReassign, teammates = [], loadTargets, onJump, onOpenChat, loadThread, header = true }: Props = $props();
 
   // The timers tick once a second, only while a task still runs.
   let now = $state(Date.now());
@@ -292,7 +294,7 @@
                   </div>
                 {/if}
                 {#if s === "working" && loadThread && threadOpen[t.task_id]}
-                  <div class="-ml-1 mt-1.5 rounded-md border border-white-300 bg-white-200 pt-1 dark:border-navy-600 dark:bg-navy-700"><TaskThread task={t} load={loadThread} {agents} captainName={senderName} /></div>
+                  <div class="-ml-1 mt-1.5 rounded-md border border-white-300 bg-white-200 pt-1 dark:border-navy-600 dark:bg-navy-700"><TaskThread task={t} load={loadThread} {agents} captainName={senderName} {userName} /></div>
                 {/if}
                 {#if active && confirming === t.task_id && onCancel}
                   <div class="mt-1.5"><CancelConfirm name={nameOf(t)} onConfirm={() => cancel(t.task_id)} onKeep={() => { confirming = null; }} /></div>

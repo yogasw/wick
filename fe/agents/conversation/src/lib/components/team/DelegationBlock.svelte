@@ -32,6 +32,8 @@
     tasks: TeamTaskItem[];
     agents?: Record<string, Agent>;
     captainName?: string;
+    /** The person's name for their own rows in a task's thread. */
+    userName?: string;
     onAnswer?: (taskId: string, text: string) => Promise<void>;
     onCancel?: (taskId: string) => Promise<void>;
     /** Reply in thread on a task that asks nothing: working or ended. */
@@ -40,7 +42,7 @@
     /** Reads a task's thread for its open chip (TaskThread). */
     loadThread?: (taskId: string) => Promise<TeamThreadEntry[]>;
   };
-  let { tasks, agents = {}, captainName = "Captain", onAnswer, onCancel, onMessage, onOpenChat, loadThread }: Props = $props();
+  let { tasks, agents = {}, captainName = "Captain", userName, onAnswer, onCancel, onMessage, onOpenChat, loadThread }: Props = $props();
 
   let showAll = $state(false);
   let unfolded = $state(false);
@@ -320,7 +322,7 @@
           <div class="flex items-center gap-2 px-3 py-[7px] text-[11.5px] text-black-700">
             <AvatarActivity activity={taskActivity(s)} size={20}><AgentAvatar kind={agents[t.to_handle]?.kind} image={agents[t.to_handle]?.image} shape={agents[t.to_handle]?.shape} expression={agents[t.to_handle]?.expression} color={agents[t.to_handle]?.color} size={20} /></AvatarActivity>
             <b class="shrink-0 text-xs font-semibold text-black-900 dark:text-white-100">{userTaskRoute(t) ?? nameOf(t)}</b>
-            <span data-testid="delegation-preview-task" class="min-w-0 flex-1 truncate">· {t.title}{t.message_count ? ` · ${t.message_count} message${t.message_count === 1 ? "" : "s"}` : ""}</span>
+            <span data-testid="delegation-preview-task" class="min-w-0 flex-1 truncate" title={t.title}>· {t.title}{t.message_count ? ` · ${t.message_count} message${t.message_count === 1 ? "" : "s"}` : ""}</span>
             {#if s === "needs_you" || s === "answering"}
               <!-- A question: the reply is the answer (the card above). -->
               {#if onAnswer}
@@ -358,7 +360,7 @@
           {/if}
           {#if errors[t.task_id] && !cardOpen(t)}<span class="block px-3 pb-1 text-[11px] text-red-600 dark:text-red-400">{errors[t.task_id]}</span>{/if}
           {#if loadThread}
-            <TaskThread task={t} load={loadThread} {agents} {captainName}>
+            <TaskThread task={t} load={loadThread} {agents} {captainName} {userName}>
               {#snippet fallback()}
                 <!-- The thread did not load: the last reply still reads. -->
                 {#if t.reply || t.summary}

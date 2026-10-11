@@ -30,6 +30,9 @@ type ConversationVM struct {
 	// this person sent needs no name, and one from anybody else does — which
 	// is the whole point in a session several people write into.
 	ViewerID string
+	// ViewerName is that person's display name, for their own rows in a
+	// Team task's thread (initials and name beside the You pill).
+	ViewerName string
 }
 
 // Conversation renders the conversation SPA shell inside the agents chrome.
@@ -52,6 +55,7 @@ templ Conversation(vm ConversationVM) {
 				data-idle-timeout-ms={ strconv.Itoa(vm.IdleTimeoutMs) }
 				data-rail-prefs={ vm.RailPrefs }
 				data-viewer-id={ vm.ViewerID }
+				data-viewer-name={ vm.ViewerName }
 				class="h-full"
 			></div>
 			<script type="module" src={ vm.AssetURL }></script>

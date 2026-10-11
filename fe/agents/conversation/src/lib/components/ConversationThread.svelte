@@ -18,6 +18,7 @@
   import { foldReplaced } from "../remoteRecheck.js";
   import { speakerVia } from "../teamMention.js";
   import DelegationBlock from "./team/DelegationBlock.svelte";
+  import { viewerName } from "../viewer.js";
   import { getTeamTasksCtx } from "../teamTasksContext.js";
   import { isTeamMessageTool, liveTurnStatus, liveTurnTasks, turnSpan } from "../delegations.js";
 
@@ -391,6 +392,7 @@
             tasks={liveTasks}
             agents={teamCtx.agents()}
             captainName={teamCtx.captainName()}
+            userName={viewerName()}
             onAnswer={teamCtx.answer}
             onCancel={teamCtx.cancel}
             onMessage={teamCtx.message}

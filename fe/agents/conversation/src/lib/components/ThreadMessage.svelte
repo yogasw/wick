@@ -7,7 +7,7 @@
   import { enrich } from "../richRender.js";
   import { mergeTodoItemsWithSteps, stripTodoBlocks, latestTodoGoal } from "../todoGroups.js";
   import { avatarTone } from "../senderTone.js";
-  import { isViewer } from "../viewer.js";
+  import { isViewer, viewerName } from "../viewer.js";
   import { bareSlashCommand } from "../slashCommand.js";
   import { teamSender } from "../teamMention.js";
   import { isSystemEventKind } from "../systemEvents.js";
@@ -879,6 +879,7 @@
           tasks={delegated}
           agents={teamCtx.agents()}
           captainName={teamCtx.captainName()}
+          userName={viewerName()}
           onAnswer={teamCtx.answer}
           onCancel={teamCtx.cancel}
           onMessage={teamCtx.message}

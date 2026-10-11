@@ -5,6 +5,7 @@
      artifacts and the rail all come along instead of being rebuilt.
      Settings, other conversations and the + Agent wizard are drawers with
      their own URL (agentsRouter.ts), so they survive a refresh. */
+  import { viewerName as readViewerName } from "./lib/viewer.js";
   import { onMount, untrack } from "svelte";
   import { KebabMenu, ToastHost } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
@@ -55,7 +56,7 @@
 
   const appEl = document.getElementById("app");
   const base = appEl?.dataset.base ?? "";
-  const viewerName = appEl?.dataset.viewerName ?? "";
+  const viewerName = readViewerName();
   const account = {
     viewerEmail: appEl?.dataset.viewerEmail ?? "",
     viewerAvatar: appEl?.dataset.viewerAvatar ?? "",

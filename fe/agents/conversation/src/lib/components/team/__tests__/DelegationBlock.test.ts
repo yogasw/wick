@@ -242,15 +242,31 @@ describe("DelegationBlock", () => {
     expect(sec.className).toContain("border-t");
     expect(sec.className).toContain("bg-white-200");
     expect(screen.getByTestId("delegation-preview-task").textContent).toBe("· check the logs · 2 messages");
+    // Truncated in the head, so the full brief stays on hover (s19a M1).
+    expect(screen.getByTestId("delegation-preview-task").getAttribute("title")).toBe("check the logs");
     // No chat id: no Open chat; not a question: no Reply in thread.
     expect(screen.queryByText("Open chat")).toBeNull();
     expect(screen.queryByTestId("delegation-reply")).toBeNull();
     expect(screen.getByTestId("delegation-cancel")).toBeDefined();
+    // Logged after the task started, so not the brief (s19a G3): kept.
     await waitFor(() => expect(screen.getAllByTestId("task-thread-msg")).toHaveLength(2));
     expect(loadThread).toHaveBeenCalledWith("t1");
     expect(screen.getByTestId("task-thread-working")).toBeDefined();
     await fireEvent.click(screen.getByTestId("delegation-preview-collapse"));
     expect(screen.queryByTestId("delegation-preview")).toBeNull();
+  });
+
+  /* P48 s19a (G1): the person's name reaches the open chip's thread. */
+  test("2b: userName reaches the thread as initials and name", async () => {
+    const loadThread = vi.fn().mockResolvedValue([
+      { role: "user", text: "and the request ids", at: new Date(2026, 9, 11, 10, 8).toISOString() },
+    ]);
+    render(DelegationBlock, { props: { tasks: [task({})], loadThread, userName: "Yoga Setiawan" } });
+    await fireEvent.click(screen.getByTestId("delegation-chip"));
+    await waitFor(() => expect(screen.getAllByTestId("task-thread-msg")).toHaveLength(1));
+    const you = screen.getAllByTestId("task-thread-msg")[0];
+    expect(you.querySelector(".bg-green-600")!.textContent!.trim()).toBe("YS");
+    expect(you.querySelector("b")!.textContent).toBe("Yoga Setiawan");
   });
 
   /* P48 s13 (B3): the open chip of a working task reads its live progress
@@ -262,7 +278,7 @@ describe("DelegationBlock", () => {
     render(DelegationBlock, { props: { tasks: [task({ progress: "Checking Loki for the 21:00 window…" })], loadThread } });
     await fireEvent.click(screen.getByTestId("delegation-chip"));
     expect(screen.getByTestId("delegation-preview-progress").textContent).toContain("Checking Loki for the 21:00 window…");
-    await waitFor(() => expect(screen.getByTestId("task-thread-progress").textContent).toBe("Checking Loki for the 21:00 window…"));
+    await waitFor(() => expect(screen.getByTestId("task-thread-progress").textContent).toBe("Checking Loki for the 21:00 window"));
   });
 
   test("2a: no progress line on a chip that is not working", async () => {

@@ -57,6 +57,7 @@
   import SubAgentPanel from "./SubAgentPanel.svelte";
   import TaskTray from "./team/TaskTray.svelte";
   import TasksPanel from "./team/TasksPanel.svelte";
+  import { viewerName } from "../viewer.js";
   import RailTasksIcon from "./team/RailTasksIcon.svelte";
   import RailTasksTip from "./team/RailTasksTip.svelte";
   import { setTeamTasksCtx } from "../teamTasksContext.js";
@@ -3350,6 +3351,7 @@
           tasks={teamTasks}
           agents={teamAgentsByHandle}
           senderName={agentMode?.agent?.name ?? "Captain"}
+          userName={viewerName()}
           onAnswer={readOnly ? undefined : answerTask}
           onCancel={readOnly ? undefined : cancelTask}
           onRetry={readOnly ? undefined : retryTask}
@@ -3570,6 +3572,7 @@
               tasks={teamTasks}
               agents={teamAgentsByHandle}
               senderName={agentMode?.agent?.name ?? "Captain"}
+              userName={viewerName()}
               onAnswer={readOnly ? undefined : answerTask}
               onCancel={readOnly ? undefined : cancelTask}
               onRetry={readOnly ? undefined : retryTask}

@@ -17,6 +17,7 @@
   import { taskActivity } from "../../avatarActivity.js";
   import type { TeamTaskItem, TeamThreadEntry } from "../../types/agents.js";
   import { clockTime, taskProgress, taskProgressShown, taskStatus } from "../../delegations.js";
+  import { questionHtml } from "../../questionText.js";
 
   type Agent = { name: string; kind?: string; shape?: string; color?: string; expression?: string; image?: import("@wick-fe/common-avatar").AvatarImageView | null };
   type Props = {
@@ -47,8 +48,19 @@
     return () => { stale = true; };
   });
 
+  // The section head already shows the brief (grouped 2b), so the Captain's
+  // first row is dropped when it only repeats the task title. The server
+  // keeps the latest entries only, so entries[0] is the brief only when it
+  // was logged as the task started (the Hub's own test: at <= start + 1s);
+  // a later Captain line that repeats the title is never dropped.
+  function isBrief(e: TeamThreadEntry | undefined): boolean {
+    if (!e || e.role !== "captain" || e.text.trim() !== (task.title ?? "").trim()) return false;
+    const at = Date.parse(e.at), started = Date.parse(task.started_at);
+    return !Number.isNaN(at) && !Number.isNaN(started) && at <= started + 1000;
+  }
+  const shown = $derived(entries && isBrief(entries[0]) ? entries.slice(1) : entries);
   const working = $derived(taskStatus(task) === "working");
-  const lastIsTeammate = $derived(!!entries?.length && entries[entries.length - 1].role === "teammate");
+  const lastIsTeammate = $derived(!!shown?.length && shown[shown.length - 1].role === "teammate");
   const initials = $derived(userName.trim().split(/\s+/).map((w) => w[0] ?? "").join("").slice(0, 2).toUpperCase());
 
   function nameOf(e: TeamThreadEntry): string {
@@ -87,11 +99,11 @@
     {@render fallback?.()}
   {:else if entries === null}
     <p class="px-3 py-1 text-[11px] text-black-700">Loading…</p>
-  {:else if entries.length === 0 && !working}
+  {:else if shown!.length === 0 && !working}
     <p class="px-3 py-1 text-[11px] text-black-700">No messages yet.</p>
   {/if}
-  {#each entries ?? [] as e, i (i)}
-    {@const live = working && i === entries!.length - 1 && e.role === "teammate"}
+  {#each shown ?? [] as e, i (i)}
+    {@const live = working && i === shown!.length - 1 && e.role === "teammate"}
     <div data-testid="task-thread-msg" data-role={e.role} class="flex gap-2 px-3 py-1">
       {#if e.role === "user"}
         <span aria-hidden="true" class="mt-px inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-green-600 text-[9px] font-semibold text-white-100">{#if initials}{initials}{:else}<TeamIcon name="user" size={13} />{/if}</span>
@@ -108,7 +120,7 @@
           {/if}
           <span>{clockTime(Date.parse(e.at))}</span>
         </div>
-        <div class={["whitespace-pre-wrap break-words text-[12.5px] leading-[1.5]", live ? "text-green-600 dark:text-green-400" : "text-black-900 dark:text-white-100"]}>{e.text}{#if live}<Dots />{/if}</div>
+        <div class={["whitespace-pre-wrap break-words text-[12.5px] leading-[1.5]", live ? "text-green-600 dark:text-green-400" : "text-black-900 dark:text-white-100"]}>{@html questionHtml(e.text)}{#if live}<Dots />{/if}</div>
       </div>
     </div>
   {/each}

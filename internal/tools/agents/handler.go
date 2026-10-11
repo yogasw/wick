@@ -1747,6 +1747,7 @@ func sessionsPage(c *tool.Ctx) {
 		IdleTimeoutMs: idleTimeoutMs(),
 		RailPrefs:     railPrefsJSON(c),
 		ViewerID:      viewerID(c),
+		ViewerName:    viewerName(c),
 	}))
 }
 
@@ -1866,6 +1867,7 @@ func sessionDetail(c *tool.Ctx) {
 		IdleTimeoutMs:  idleTimeoutMs(),
 		RailPrefs:      railPrefsJSON(c),
 		ViewerID:       viewerID(c),
+		ViewerName:     viewerName(c),
 	}))
 }
 

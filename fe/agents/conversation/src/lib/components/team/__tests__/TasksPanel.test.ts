@@ -260,10 +260,24 @@ describe("TasksPanel Thread · N", () => {
     expect(loadThread).not.toHaveBeenCalled();
     await fireEvent.click(btns[0]);
     expect(btns[0].getAttribute("aria-expanded")).toBe("true");
-    await vi.waitFor(() => expect(within(rowOf("Anton")).getAllByTestId("task-thread-msg")).toHaveLength(2));
+    // The brief repeats the title (s19a G3): only Anton's reply is a row.
+    await vi.waitFor(() => expect(within(rowOf("Anton")).getAllByTestId("task-thread-msg")).toHaveLength(1));
     expect(loadThread).toHaveBeenCalledWith("t1");
     await fireEvent.click(btns[0]);
     expect(screen.queryByTestId("task-thread")).toBeNull();
+  });
+
+  /* P48 s19a (G1): the person's name reaches the row's thread. */
+  test("userName reaches the thread as initials and name", async () => {
+    const loadThread = vi.fn().mockResolvedValue([
+      { role: "user", text: "and the request ids", at: at(11, 58) },
+    ]);
+    render(TasksPanel, { props: { tasks: [task({ message_count: 1 })], loadThread, userName: "Yoga Setiawan" } });
+    await fireEvent.click(screen.getByTestId("tasks-row-thread"));
+    await vi.waitFor(() => expect(screen.getAllByTestId("task-thread-msg")).toHaveLength(1));
+    const you = screen.getAllByTestId("task-thread-msg")[0];
+    expect(you.querySelector(".bg-green-600")!.textContent!.trim()).toBe("YS");
+    expect(you.querySelector("b")!.textContent).toBe("Yoga Setiawan");
   });
 
   test("without message_count it reads Thread; without a loader it is not offered", async () => {
