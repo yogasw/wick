@@ -224,4 +224,14 @@ describe("TaskThread", () => {
     expect(you.querySelector("b")).toBeNull();
     expect(screen.getByTestId("task-thread-you").textContent).toBe("You");
   });
+
+  test("s20a N1: inline code in a message is a bordered chip", async () => {
+    const load = vi.fn().mockResolvedValue([{ ...log[1], text: "38 × `401 invalid signature`" }]);
+    render(TaskThread, { props: { task: task({ state: "completed" }), load } });
+    await waitFor(() => expect(screen.getAllByTestId("task-thread-msg")).toHaveLength(1));
+    const code = screen.getAllByTestId("task-thread-msg")[0].querySelector("code")!;
+    expect(code.textContent).toBe("401 invalid signature");
+    expect(code.className).toContain("rounded-sm border");
+    expect(code.className).toContain("text-[11px]");
+  });
 });

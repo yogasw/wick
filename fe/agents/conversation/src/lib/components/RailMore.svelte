@@ -161,7 +161,7 @@
     ].join(" ")}
   >
     <span class="relative inline-flex h-4 w-4 items-center justify-center">
-      <svg viewBox="0 0 16 16" class="h-4 w-4 text-black-700 dark:text-black-600" fill="currentColor" aria-hidden="true">
+      <svg viewBox="0 0 16 16" class="h-4 w-4 text-green-500" fill="currentColor" aria-hidden="true">
         <circle cx="3" cy="8" r="1.4"></circle>
         <circle cx="8" cy="8" r="1.4"></circle>
         <circle cx="13" cy="8" r="1.4"></circle>
@@ -187,7 +187,7 @@
       {/if}
     </span>
     {#if labels}
-      <span class="text-[9px] leading-none text-black-700 [writing-mode:vertical-rl] dark:text-black-600">More</span>
+      <span class="text-[9px] font-medium leading-none text-black-700 [writing-mode:vertical-rl] [transform:rotate(180deg)] tracking-wide dark:text-black-600">More</span>
     {:else}
       <!-- Same tooltip as the strip's tabs; aria-label already names it.
            Not drawn while a tab is dragged onto the button, or with the

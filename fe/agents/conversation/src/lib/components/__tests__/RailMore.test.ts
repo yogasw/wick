@@ -83,6 +83,9 @@ describe("RailMore", () => {
     const { container } = renderMore({ labels: true });
     expect(screen.getByLabelText("More panels").getAttribute("title")).toBe("More panels");
     expect(container.querySelector('[class*="writing-mode"]')?.textContent).toBe("More");
+    // s20a N2: reads bottom-to-top like the strip's labels, green icon.
+    expect(container.querySelector('[class*="writing-mode"]')?.className).toContain("[transform:rotate(180deg)]");
+    expect(container.querySelector("svg")?.getAttribute("class")).toContain("text-green-500");
     expect(screen.queryByTestId("rail-tip-more")).toBeNull();
   });
 
