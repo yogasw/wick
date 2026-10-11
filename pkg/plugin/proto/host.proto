@@ -114,7 +114,11 @@ message AttachSessionRequest { string ticket_id = 1; string session_id = 2; stri
 
 // ---- config ----
 message GetConfigRequest  { string owner = 1; string key = 2; }
-message GetConfigResponse { string value = 1; bool found = 2; bool secret = 3; }
+// withheld: a secret of another owner whose value was blanked because
+// config.read_secret is not allowed for this plugin or the row is not
+// declared in host_resources.config. A secret the plugin may read is never
+// withheld, even when it is empty.
+message GetConfigResponse { string value = 1; bool found = 2; bool secret = 3; bool withheld = 4; }
 
 // ---- connectors ----
 message ConnectorInstance {

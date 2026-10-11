@@ -121,7 +121,7 @@ Any kind can call wick: users, sessions, tickets, config, another connector's op
 | `tickets.read` | `GetTicket`, `ListTickets` | allow | – |
 | `tickets.write` | `CreateTicket`, `UpdateTicket`, `AttachSession` (destructive) | allow | – |
 | `config.read_other` | `GetConfig` of another owner (secrets stay empty) | allow | – |
-| `config.read_secret` | `GetConfig` of another owner's secret (sensitive) | **OFF** | `config` |
+| `config.read_secret` | `GetConfig` of another owner's secret (sensitive); without it the reply is `withheld: true` | **OFF** | `config` |
 | `connectors.read` | `ListConnectorInstances` | allow | – |
 | `connectors.execute` | `ExecuteConnector` | allow | `connectors` |
 | `rest.read` | `Rest` GET/HEAD | allow | `rest` |

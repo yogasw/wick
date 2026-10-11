@@ -21,28 +21,28 @@ func TestGetConfigReadSecret(t *testing.T) {
 	req := &hostpb.GetConfigRequest{Owner: "job:other", Key: "api_secret"}
 	// Declared owner/key, but the scope is off by default: value withheld.
 	got, err := f.srv.GetConfig(ctx, req)
-	if err != nil || got.Value != "" || !got.Secret || !got.Found {
+	if err != nil || got.Value != "" || !got.Secret || !got.Found || !got.Withheld {
 		t.Fatalf("read_secret off = %+v, %v", got, err)
 	}
 	_ = f.perms.Set(context.Background(), "setup", "config.read_secret", "", true, "admin")
-	if got, _ = f.srv.GetConfig(ctx, req); got.Value != "s3cret" {
+	if got, _ = f.srv.GetConfig(ctx, req); got.Value != "s3cret" || got.Withheld {
 		t.Fatalf("read_secret allowed + declared = %+v", got)
 	}
 	// Allowed scope, undeclared key: still withheld.
-	if got, _ = f.srv.GetConfig(ctx, &hostpb.GetConfigRequest{Owner: "job:other", Key: "other_secret"}); got.Value != "" {
+	if got, _ = f.srv.GetConfig(ctx, &hostpb.GetConfigRequest{Owner: "job:other", Key: "other_secret"}); got.Value != "" || !got.Withheld {
 		t.Fatalf("undeclared secret = %+v", got)
 	}
 	// One item blocked.
 	_ = f.perms.Set(context.Background(), "setup", "config.read_secret", wickplugin.ConfigItem("job:other", "api_secret"), false, "admin")
-	if got, _ = f.srv.GetConfig(ctx, req); got.Value != "" {
+	if got, _ = f.srv.GetConfig(ctx, req); got.Value != "" || !got.Withheld {
 		t.Fatalf("blocked item = %+v", got)
 	}
 	// A plugin that never declared read_secret gets nothing either.
-	if got, _ = f.srv.GetConfig(as(Caller{PluginKey: "cronpt"}), req); got.Value != "" {
+	if got, _ = f.srv.GetConfig(as(Caller{PluginKey: "cronpt"}), req); got.Value != "" || !got.Withheld {
 		t.Fatalf("undeclared scope = %+v", got)
 	}
 	// Non-secret values of other owners need only config.read_other.
-	if got, _ = f.srv.GetConfig(as(Caller{PluginKey: "cronpt"}), &hostpb.GetConfigRequest{Owner: "job:other", Key: "region"}); got.Value != "id" {
+	if got, _ = f.srv.GetConfig(as(Caller{PluginKey: "cronpt"}), &hostpb.GetConfigRequest{Owner: "job:other", Key: "region"}); got.Value != "id" || got.Withheld {
 		t.Fatalf("plain other value = %+v", got)
 	}
 }

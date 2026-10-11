@@ -58,6 +58,32 @@ func TestProxyTokenUserHeadersAndCallID(t *testing.T) {
 	}
 }
 
+// The ticket webhook's delivery headers reach the plugin as sent, so it can
+// verify the HMAC itself; identity headers are still dropped or overwritten.
+func TestProxyPassesDeliveryHeaders(t *testing.T) {
+	h := http.Header{}
+	h.Set("X-Wick-Signature", "sha256=abc")
+	h.Set("X-Wick-Event", "ticket.status_changed")
+	h.Set("X-Wick-Delivery", "d-1")
+	h.Set(wickplugin.HeaderUserID, "forged")
+	h.Set(wickplugin.HeaderUserRole, "admin")
+	h.Set(wickplugin.HeaderTokenUserID, "forged")
+	h.Set(wickplugin.HeaderTokenUserSource, "system")
+	h.Set("X-Wick-Anything-Else", "x")
+	injectHeaders(h, "/tools/demo", &tool.User{ID: "u1", Name: "One"})
+	injectTokenUser(h, nil)
+
+	if h.Get("X-Wick-Signature") != "sha256=abc" || h.Get("X-Wick-Event") != "ticket.status_changed" || h.Get("X-Wick-Delivery") != "d-1" {
+		t.Fatalf("delivery headers changed: %v", h)
+	}
+	if h.Get(wickplugin.HeaderUserID) != "u1" || h.Get(wickplugin.HeaderUserRole) != "user" {
+		t.Fatalf("session headers not overwritten: %v", h)
+	}
+	if h.Get(wickplugin.HeaderTokenUserID) != "" || h.Get(wickplugin.HeaderTokenUserSource) != "" || h.Get("X-Wick-Anything-Else") != "" {
+		t.Fatalf("other X-Wick-* survived: %v", h)
+	}
+}
+
 // Every injection names its credential, a forged source header from the
 // client is dropped with the rest of X-Wick-*, and wick's system identity
 // is passed on (role system, no email) without a Host API call as a user.

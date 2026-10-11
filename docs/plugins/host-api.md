@@ -68,6 +68,12 @@ Notes that matter in practice:
 
 - A plugin's **own** config never needs a scope: `GetConfig` with an empty
   owner (or its own) just works.
+- `GetConfig` answers `value`, `found` (the row exists — its value may still
+  be empty), `secret` and `withheld`. `withheld` is true only when a secret of
+  another owner was blanked because `config.read_secret` is not allowed for
+  the plugin or that owner/key is not declared in `host_resources.config`; an
+  allowed secret that is simply empty comes back with `withheld` false. Use it
+  to tell "ask an admin" apart from "not set".
 - `wick_pat` is never returned to anyone, not even the plugin that owns it;
   `GetConfig` reports it `found`, `secret`, empty. wick resolves it itself.
 - An **unknown** scope (a plugin built for a newer wick) does not fail the

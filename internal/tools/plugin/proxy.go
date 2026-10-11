@@ -128,11 +128,23 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, req request) {
 	rp.ServeHTTP(w, r)
 }
 
-// injectHeaders drops every client-sent X-Wick-* header, then sets the
-// trusted ones from the host's own session.
+// deliveryHeaders are the X-Wick-* headers wick's own outgoing webhooks
+// (ticket integration) put on a delivery. They pass through untouched: they
+// name no identity the plugin would trust, and a plugin receiving such a
+// delivery verifies X-Wick-Signature (an HMAC over the body with a secret it
+// holds) itself — stripping them made that impossible.
+var deliveryHeaders = map[string]bool{
+	"X-Wick-Signature": true,
+	"X-Wick-Event":     true,
+	"X-Wick-Delivery":  true,
+}
+
+// injectHeaders drops every other client-sent X-Wick-* header, then sets
+// the trusted ones from the host's own session.
 func injectHeaders(h http.Header, base string, u *tool.User) {
 	for k := range h {
-		if strings.HasPrefix(http.CanonicalHeaderKey(k), wickplugin.HeaderPrefix) {
+		ck := http.CanonicalHeaderKey(k)
+		if strings.HasPrefix(ck, wickplugin.HeaderPrefix) && !deliveryHeaders[ck] {
 			delete(h, k)
 		}
 	}

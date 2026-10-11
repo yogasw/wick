@@ -1710,11 +1710,16 @@ func (x *GetConfigRequest) GetKey() string {
 	return ""
 }
 
+// withheld: a secret of another owner whose value was blanked because
+// config.read_secret is not allowed for this plugin or the row is not
+// declared in host_resources.config. A secret the plugin may read is never
+// withheld, even when it is empty.
 type GetConfigResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Value         string                 `protobuf:"bytes,1,opt,name=value,proto3" json:"value,omitempty"`
 	Found         bool                   `protobuf:"varint,2,opt,name=found,proto3" json:"found,omitempty"`
 	Secret        bool                   `protobuf:"varint,3,opt,name=secret,proto3" json:"secret,omitempty"`
+	Withheld      bool                   `protobuf:"varint,4,opt,name=withheld,proto3" json:"withheld,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1766,6 +1771,13 @@ func (x *GetConfigResponse) GetFound() bool {
 func (x *GetConfigResponse) GetSecret() bool {
 	if x != nil {
 		return x.Secret
+	}
+	return false
+}
+
+func (x *GetConfigResponse) GetWithheld() bool {
+	if x != nil {
+		return x.Withheld
 	}
 	return false
 }
@@ -2653,11 +2665,12 @@ const file_host_proto_rawDesc = "" +
 	"project_id\x18\x03 \x01(\tR\tprojectId\":\n" +
 	"\x10GetConfigRequest\x12\x14\n" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x10\n" +
-	"\x03key\x18\x02 \x01(\tR\x03key\"W\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\"s\n" +
 	"\x11GetConfigResponse\x12\x14\n" +
 	"\x05value\x18\x01 \x01(\tR\x05value\x12\x14\n" +
 	"\x05found\x18\x02 \x01(\bR\x05found\x12\x16\n" +
-	"\x06secret\x18\x03 \x01(\bR\x06secret\"\xc6\x01\n" +
+	"\x06secret\x18\x03 \x01(\bR\x06secret\x12\x1a\n" +
+	"\bwithheld\x18\x04 \x01(\bR\bwithheld\"\xc6\x01\n" +
 	"\x11ConnectorInstance\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1c\n" +
 	"\tconnector\x18\x02 \x01(\tR\tconnector\x12\x14\n" +

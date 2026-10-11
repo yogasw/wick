@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,6 +107,25 @@ func TestCodecQueryAndFallbacks(t *testing.T) {
 	var inv hostpb.InvokeRequest
 	if err := host.UnmarshalHTTP([]byte(`{"method":"m","args_json":"eyJhIjoxfQ=="}`), &inv); err != nil || string(inv.GetArgsJson()) != `{"a":1}` {
 		t.Fatalf("base64 fallback = %s, %v", inv.GetArgsJson(), err)
+	}
+}
+
+// GetConfig's withheld flag survives the HTTP door both ways.
+func TestHTTPGetConfigWithheld(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /x/-/api/config", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("owner") != "job" || r.URL.Query().Get("key") != "token" {
+			t.Errorf("query = %s", r.URL.RawQuery)
+		}
+		body, _ := host.MarshalHTTP(&hostpb.GetConfigResponse{Found: true, Secret: true, Withheld: true})
+		if !strings.Contains(string(body), `"withheld":true`) {
+			t.Errorf("encoded = %s", body)
+		}
+		writeRaw(w, string(body))
+	})
+	got, err := serve(t, mux).GetConfig(context.Background(), &hostpb.GetConfigRequest{Owner: "job", Key: "token"})
+	if err != nil || !got.GetWithheld() || !got.GetFound() || !got.GetSecret() || got.GetValue() != "" {
+		t.Fatalf("GetConfig = %v, %v", got, err)
 	}
 }
 

@@ -394,6 +394,7 @@ func (s *Server) GetConfig(ctx context.Context, in *hostpb.GetConfigRequest) (*h
 		if err != nil {
 			return status.Errorf(codes.Unavailable, "read config: %v", err)
 		}
+		withheld := false
 		switch {
 		case in.GetKey() == PATConfigKey:
 			v, secret = "", true
@@ -402,10 +403,12 @@ func (s *Server) GetConfig(ctx context.Context, in *hostpb.GetConfigRequest) (*h
 			if s.d.Perms.Decide(ctx, c.plugin, wickplugin.ScopeHostConfigReadSecret, item).Allowed {
 				c.addNote(wickplugin.ScopeHostConfigReadSecret + " " + item)
 			} else {
-				v = ""
+				// Withheld tells the plugin "not allowed", which a blank
+				// value alone cannot: an allowed secret may be empty too.
+				v, withheld = "", true
 			}
 		}
-		out = &hostpb.GetConfigResponse{Value: v, Found: found, Secret: secret}
+		out = &hostpb.GetConfigResponse{Value: v, Found: found, Secret: secret, Withheld: withheld}
 		return nil
 	})
 	return out, err
