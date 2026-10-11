@@ -70,7 +70,15 @@ describe("ThreadMessage - quote preview", () => {
     const onJumpToTurn = vi.fn();
     render(ThreadMessage, { props: { turn: replyTurn(), onJumpToTurn } });
     await fireEvent.click(screen.getByTestId("reply-quote"));
-    expect(onJumpToTurn).toHaveBeenCalledWith("111");
+    expect(onJumpToTurn).toHaveBeenCalledWith("111", "222");
+  });
+
+  test("a lookup in flight shows a spinner and says it is finding the message", () => {
+    render(ThreadMessage, { props: { turn: replyTurn(), onJumpToTurn: vi.fn(), jumpPending: true } });
+    const q = screen.getByTestId("reply-quote");
+    expect(q.getAttribute("title")).toBe("Finding message…");
+    expect(q.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByTestId("reply-quote-spinner")).toBeDefined();
   });
 
   test("an old turn without reply_to renders no quote", () => {

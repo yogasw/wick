@@ -4,11 +4,13 @@ import { writable, get } from "svelte/store";
 //   ok    — green, used for clean save / publish
 //   warn  — amber, used for "Saved with N validation errors"
 //   error — red, used for save / publish failures
+//   info  — neutral with a spinner, for "working on it" (pair with ttlMs 0
+//           and dismissToast once the work settles)
 //
 // Auto-dismiss after `ttlMs` (default 3.5 s) or on click. Multiple
 // toasts stack vertically; newest at top.
 
-export type ToastState = "ok" | "warn" | "error";
+export type ToastState = "ok" | "warn" | "error" | "info";
 
 export type Toast = {
   id: number;

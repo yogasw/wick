@@ -36,12 +36,17 @@ export type ThreadScroll = {
   /** Set scrollTop without the scroll event counting (history prepend). */
   setTop(top: number): void;
   isStuck(): boolean;
+  /** Detached view (a reply jump swapped in an older window): never stick,
+      keep Jump shown — reaching the window's end is not the latest turn,
+      and pinning there would chain-load every newer page. */
+  hold(on: boolean): void;
   destroy(): void;
 };
 
 export type ThreadScrollOpts = {
   onJump?: (show: boolean) => void;
   onNearTop?: () => void;
+  onNearBottom?: () => void;
 };
 
 const raf: (cb: () => void) => void =
@@ -65,6 +70,7 @@ export function attachThreadScroll(el: HTMLElement, opts: ThreadScrollOpts = {})
   let smoothUntil = 0;
   let pinQueued = false;
   let jumpShown = false;
+  let held = false;
   const dist = () => el.scrollHeight - el.scrollTop - el.clientHeight;
 
   // Mirrored onto the scroller so HtmlArtifact knows not to compensate
@@ -115,9 +121,10 @@ export function attachThreadScroll(el: HTMLElement, opts: ThreadScrollOpts = {})
     const d = dist();
     // Re-pin only. Releasing here would let a clamp or a scrollIntoView
     // un-stick the reader; releasing belongs to the gesture listeners.
-    if (d <= REPIN_THRESHOLD) setStick(true);
-    jump(!stick && d > JUMP_THRESHOLD);
+    if (d <= REPIN_THRESHOLD && !held) setStick(true);
+    jump(held || (!stick && d > JUMP_THRESHOLD));
     if (el.scrollTop < 80) opts.onNearTop?.();
+    if (d < 80) opts.onNearBottom?.();
   }
 
   // Content changed size with no scroll event (an iframe resized, a turn
@@ -126,7 +133,7 @@ export function attachThreadScroll(el: HTMLElement, opts: ThreadScrollOpts = {})
   // a shrink-then-grow left a stuck reader in the middle.
   function onResize() {
     if (stick) pin();
-    else jump(dist() > JUMP_THRESHOLD);
+    else jump(held || dist() > JUMP_THRESHOLD);
   }
 
   function onWheel(e: WheelEvent) {
@@ -169,6 +176,7 @@ export function attachThreadScroll(el: HTMLElement, opts: ThreadScrollOpts = {})
 
   return {
     scrollToBottom(o?: { smooth?: boolean }) {
+      held = false;
       setStick(true);
       const smooth = !!o?.smooth && !reducedMotion() && typeof el.scrollTo === "function";
       smoothUntil = smooth ? now() + SMOOTH_MS : 0;
@@ -181,6 +189,14 @@ export function attachThreadScroll(el: HTMLElement, opts: ThreadScrollOpts = {})
       quiet(() => { el.scrollTop = top; });
     },
     isStuck: () => stick,
+    hold(on: boolean) {
+      held = on;
+      if (on) {
+        smoothUntil = 0;
+        setStick(false);
+        jump(true);
+      }
+    },
     destroy() {
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("wheel", onWheel);

@@ -8,6 +8,9 @@ const inertEffect: { pipe: (...a: unknown[]) => unknown } = { pipe: () => inertE
 
 vi.mock("@wick-fe/common-api", () => ({
   WickClientLayer: {},
+  APIError: class APIError extends Error {
+    constructor(public readonly status: number, public readonly body: string) { super(body); }
+  },
   apiGetE: vi.fn(() => inertEffect),
   apiPostE: vi.fn(() => inertEffect),
   apiDeleteE: vi.fn(() => inertEffect),
@@ -24,6 +27,8 @@ vi.mock("@wick-fe/common-stores", () => ({
   toastOk: vi.fn(),
   toastError: vi.fn(),
   toastWarn: vi.fn(),
+  pushToast: vi.fn(() => 1),
+  dismissToast: vi.fn(),
 }));
 
 vi.mock("effect", () => ({
@@ -31,7 +36,9 @@ vi.mock("effect", () => ({
     runPromise: vi.fn().mockReturnValue(new Promise(() => {})),
     provide: vi.fn((eff: unknown) => eff),
     map: vi.fn(() => (eff: unknown) => eff),
+    either: vi.fn((eff: unknown) => ({ either: eff })),
   },
+  Either: { isRight: (r: { _tag?: string }) => r?._tag === "Right" },
 }));
 
 const { metaStore } = vi.hoisted(() => {
@@ -62,6 +69,7 @@ const { threadState } = vi.hoisted(() => ({
     turns: [] as unknown[],
     appendUserTurn: vi.fn(),
     renameTurn: vi.fn(),
+    setHistory: vi.fn(),
   },
 }));
 
@@ -80,7 +88,8 @@ const { threadBus } = vi.hoisted(() => {
   return { threadBus: { live: bus<unknown>(null), turns: bus<unknown[] | null>(null) } };
 });
 
-vi.mock("../../stores/thread.js", () => ({
+vi.mock("../../stores/thread.js", async (importActual) => ({
+  isLocalTurnId: (await importActual<typeof import("../../stores/thread.js")>()).isLocalTurnId,
   createThreadStore: () => ({
     turns: { subscribe: (fn: (v: unknown[]) => void) => threadBus.turns.subscribe((v) => fn(v ?? threadState.turns)) },
     live: { subscribe: (fn: (v: null) => void) => threadBus.live.subscribe(fn as (v: unknown) => void) },
@@ -90,7 +99,7 @@ vi.mock("../../stores/thread.js", () => ({
     lifecycle: { subscribe: (fn: (v: { state: string; pid: number; substate: string; at: number }) => void) => { fn(threadState.lifecycle); return () => {}; } },
     meta: metaStore,
     cards: { subscribe: (fn: (v: Record<string, unknown>) => void) => { fn({}); return () => {}; }, set: vi.fn(), update: vi.fn() },
-    setHistory: vi.fn(),
+    setHistory: threadState.setHistory,
     appendUserTurn: threadState.appendUserTurn,
     renameTurn: threadState.renameTurn,
     handleEvent: vi.fn(),
@@ -244,6 +253,8 @@ import { getAsks } from "../../api/asks.js";
 import { getApprovals } from "../../api/approvals.js";
 import { fetchSessionContext } from "../../api/context.js";
 import { getConversation } from "../../api/sessions.js";
+import { toastWarn, pushToast } from "@wick-fe/common-stores";
+import { APIError } from "@wick-fe/common-api";
 import { getSubAgentPanel, interruptAllSubAgents } from "../../api/subagents.js";
 import { SCM_DEFAULT_W, RAIL_GUTTER_PX } from "../../scmWidth.js";
 import { Effect } from "effect";
@@ -1253,5 +1264,165 @@ describe("DetailView — live delegation block (P48-s9)", () => {
     expect(vi.mocked(tasksByTurn).mock.calls.length).toBe(calls);
     expect(vi.mocked(heldForLiveTurn).mock.calls.length).toBe(held);
     expect(k1Owners(container)).toEqual(["live"]);
+  });
+});
+
+/* P50: a reply quote whose original is not on screen fetches ONE window
+   around it and shows it detached from the latest turns. */
+describe("DetailView — reply jump (P50)", () => {
+  const mk = (turn_id: string, text: string, extra: Record<string, unknown> = {}) => ({
+    turn_id, role: "assistant", agent: "main", provider: "", text,
+    timestamp: 0, truncated: false, interrupted: false, has_trace: false, events: [], attachments: [], ...extra,
+  });
+  const reply = (to: string) => mk("222", "roll it back", {
+    role: "user", reply_to: { turn_id: to, role: "assistant", author: "main", excerpt: "Deploy finished" },
+  });
+  type Conv = { conv: { around?: string; after?: string; limit?: number } };
+  let aroundResult: (opts: Conv["conv"]) => unknown;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sseBus.handler = null;
+    threadBus.turns.reset(null);
+    Element.prototype.scrollIntoView = vi.fn();
+    if (!(globalThis as { CSS?: unknown }).CSS) (globalThis as { CSS?: unknown }).CSS = { escape: (v: string) => v };
+    // getConversation(...).pipe(provide) → a tagged request the runner reads.
+    vi.mocked(getConversation).mockImplementation(((_b: string, _s: string, opts: Conv["conv"] = {}) =>
+      ({ pipe: () => ({ conv: opts }) })) as never);
+    aroundResult = (opts) => ({
+      _tag: "Right",
+      right: { turns: [mk("100", "older"), mk(opts.around!, "Deploy finished")], hasMore: true, hasMoreAfter: true },
+    });
+    vi.mocked(Effect.runPromise).mockImplementation(((eff: { either?: Conv }) =>
+      eff?.either?.conv?.around ? Promise.resolve(aroundResult(eff.either.conv)) : new Promise(() => {})) as never);
+  });
+  afterEach(() => {
+    threadState.turns = [];
+    threadBus.turns.reset(null);
+    vi.mocked(getConversation).mockReset();
+    vi.mocked(getConversation).mockReturnValue({ pipe: (x: unknown) => x } as never);
+    vi.mocked(Effect.runPromise).mockReset();
+    vi.mocked(Effect.runPromise).mockReturnValue(new Promise(() => {}));
+  });
+  const aroundCalls = () => vi.mocked(getConversation).mock.calls.filter((c) => (c[2] as Conv["conv"])?.around);
+
+  test("original on screen: scrolls to it, no request, Back to reply appears", async () => {
+    threadState.turns = [mk("111", "Deploy finished"), reply("111")];
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByTestId("reply-quote"));
+    const target = container.querySelector('[data-turn-id="111"]')!;
+    expect(vi.mocked(Element.prototype.scrollIntoView).mock.contexts[0]).toBe(target);
+    expect(aroundCalls()).toHaveLength(0);
+    expect(await screen.findByTestId("back-to-reply")).toBeDefined();
+  });
+
+  test("original not on screen: one around request, detached window, then Back / Jump to latest", async () => {
+    threadState.turns = [reply("old")];
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByTestId("reply-quote"));
+    await waitFor(() => expect(container.querySelector('[data-turn-id="old"]')).not.toBeNull());
+    expect(aroundCalls()).toHaveLength(1);
+    expect(aroundCalls()[0][2]).toEqual({ around: "old" });
+    // Detached: the window replaced the latest turns, Jump to latest shows.
+    expect(container.querySelector('[data-turn-id="222"]')).toBeNull();
+    expect(screen.getByTestId("jump-latest")).toBeDefined();
+
+    // Live events only bump the badge; the window stays as it is.
+    threadBus.turns.set([reply("old"), mk("333", "new reply")]);
+    expect((await screen.findByTestId("jump-latest-badge")).textContent).toBe("1");
+    expect(container.querySelector('[data-turn-id="333"]')).toBeNull();
+
+    // Back to reply: its bubble was dropped with the latest window → around=222.
+    await fireEvent.click(screen.getByTestId("back-to-reply"));
+    await waitFor(() => expect(aroundCalls()).toHaveLength(2));
+    expect(aroundCalls()[1][2]).toEqual({ around: "222" });
+    await waitFor(() => expect(screen.queryByTestId("back-to-reply")).toBeNull());
+
+    // Jump to latest leaves the window and reloads the latest one.
+    const before = vi.mocked(getConversation).mock.calls.length;
+    await fireEvent.click(screen.getByTestId("jump-latest"));
+    await waitFor(() => expect(container.querySelector('[data-turn-id="333"]')).not.toBeNull());
+    expect(vi.mocked(getConversation).mock.calls.length).toBe(before + 1);
+    expect(vi.mocked(getConversation).mock.calls.at(-1)![2]).toEqual({ limit: 20 });
+  });
+
+  test("Jump to latest hides the Back to reply chip", async () => {
+    threadState.turns = [reply("old")];
+    render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByTestId("reply-quote"));
+    await screen.findByTestId("back-to-reply");
+    await fireEvent.click(screen.getByTestId("jump-latest"));
+    await waitFor(() => expect(screen.queryByTestId("back-to-reply")).toBeNull());
+  });
+
+  test("original gone: toast, no detached window", async () => {
+    threadState.turns = [reply("gone")];
+    aroundResult = () => ({ _tag: "Left", left: new (APIError as unknown as new (s: number, b: string) => Error)(404, "turn not found") });
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByTestId("reply-quote"));
+    await waitFor(() => expect(toastWarn).toHaveBeenCalledWith("Original message is no longer available"));
+    expect(container.querySelector('[data-turn-id="222"]')).not.toBeNull();
+    expect(screen.queryByTestId("back-to-reply")).toBeNull();
+  });
+
+  test("in flight: the quote spins and repeat clicks send no extra request", async () => {
+    threadState.turns = [reply("old")];
+    vi.mocked(Effect.runPromise).mockImplementation((() => new Promise(() => {})) as never);
+    render(DetailView, { props: DEFAULT_PROPS });
+    const q = screen.getByTestId("reply-quote");
+    await fireEvent.click(q);
+    await fireEvent.click(q);
+    await fireEvent.click(q);
+    expect(aroundCalls()).toHaveLength(1);
+    expect(await screen.findByTestId("reply-quote-spinner")).toBeDefined();
+    expect(q.getAttribute("title")).toBe("Finding message…");
+    // Slow: a neutral "working" toast, not a success one.
+    await waitFor(() => expect(pushToast).toHaveBeenCalledWith(expect.objectContaining({ state: "info", title: "Finding message…" })), { timeout: 1000 });
+  });
+
+  test("a streaming reply bumps the badge while detached", async () => {
+    threadState.turns = [reply("old")];
+    render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByTestId("reply-quote"));
+    await screen.findByTestId("back-to-reply");
+    expect(screen.queryByTestId("jump-latest-badge")).toBeNull();
+    threadBus.live.set({ turnId: "live-1", text: "typing", blocks: [] });
+    expect((await screen.findByTestId("jump-latest-badge")).textContent).toBe("1");
+    threadBus.live.reset(null);
+  });
+
+  test("paging down to the latest turn re-attaches the thread and reloads it", async () => {
+    threadState.turns = [reply("old")];
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByTestId("reply-quote"));
+    await waitFor(() => expect(container.querySelector('[data-turn-id="old"]')).not.toBeNull());
+    vi.mocked(Effect.runPromise).mockImplementation(((eff: { conv?: Conv["conv"]; either?: Conv }) =>
+      eff?.conv?.after
+        ? Promise.resolve({ turns: [reply("old")], hasMore: false, hasMoreAfter: false })
+        : new Promise(() => {})) as never);
+    await fireEvent.click(screen.getByRole("button", { name: "Load newer messages" }));
+    await waitFor(() => expect(threadState.setHistory).toHaveBeenCalled());
+    expect(vi.mocked(getConversation).mock.calls.find((c) => (c[2] as Conv["conv"])?.after)![2]).toEqual({ limit: 20, after: "old" });
+    expect(threadState.setHistory.mock.calls.at(-1)![0].map((t: { turn_id: string }) => t.turn_id)).toEqual(["100", "old", "222"]);
+    // Attached again: the store's turns show, and the latest window is re-read.
+    await waitFor(() => expect(container.querySelector('[data-turn-id="100"]')).toBeNull());
+    expect(vi.mocked(getConversation).mock.calls.at(-1)![2]).toEqual({ limit: 20 });
+  });
+
+  test("Jump to latest while a lookup is out: its late answer does not re-detach", async () => {
+    threadState.turns = [reply("old")];
+    let resolve!: (v: unknown) => void;
+    vi.mocked(Effect.runPromise).mockImplementation(((eff: { either?: Conv }) =>
+      eff?.either?.conv?.around ? new Promise((r) => { resolve = r; }) : new Promise(() => {})) as never);
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByTestId("reply-quote"));
+    await screen.findByTestId("reply-quote-spinner");
+    await fireEvent.keyDown(window, { key: "ArrowDown", ctrlKey: true });
+    await waitFor(() => expect(screen.queryByTestId("reply-quote-spinner")).toBeNull());
+    resolve(aroundResult({ around: "old" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(container.querySelector('[data-turn-id="old"]')).toBeNull();
+    expect(container.querySelector('[data-turn-id="222"]')).not.toBeNull();
+    expect(screen.queryByTestId("back-to-reply")).toBeNull();
   });
 });

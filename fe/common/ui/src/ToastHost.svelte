@@ -12,6 +12,8 @@
         return "border-cau-400 bg-cau-100 text-cau-400";
       case "error":
         return "border-neg-400 bg-neg-100 text-neg-400";
+      case "info":
+        return "border-white-300 bg-white-100 text-black-700 dark:border-navy-600 dark:bg-navy-700 dark:text-black-600";
     }
   }
 
@@ -23,6 +25,8 @@
         return "⚠";
       case "error":
         return "✕";
+      case "info":
+        return "";
     }
   }
 </script>
@@ -40,7 +44,12 @@
       aria-label="Dismiss notification"
     >
       <div class="flex items-start gap-2">
-        <span class="text-sm font-semibold leading-tight">{stateIcon(t)}</span>
+        {#if t.state === "info"}
+          <!-- Work in progress, not an outcome: a spinner, no glyph. -->
+          <svg data-testid="toast-spinner" viewBox="0 0 16 16" class="mt-px h-3.5 w-3.5 shrink-0 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
+        {:else}
+          <span class="text-sm font-semibold leading-tight">{stateIcon(t)}</span>
+        {/if}
         <div class="flex-1 min-w-0">
           <div class="text-xs font-semibold leading-snug">{t.title}</div>
           {#if t.body}

@@ -71,9 +71,11 @@
         viewer, composer off) = no Reply action. */
     onReply?: (target: ReplyTarget) => void;
     /** Scrolls to the turn a reply quotes; unset = the quote is plain. */
-    onJumpToTurn?: (turnId: string) => void;
+    onJumpToTurn?: (turnId: string, fromTurnId?: string) => void;
+    /** This bubble's quote lookup is in flight: spinner + "Finding message…". */
+    jumpPending?: boolean;
   };
-  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn }: Props = $props();
+  let { turn, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, teamAgents = {}, onOpenAgent, agent, via = "", cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPending = false }: Props = $props();
 
   /* Who spoke an assistant turn, from the server's turn.speaker — never
      guessed from the text. A turn answering a teammate's mention is nested
@@ -717,12 +719,18 @@
               type="button"
               data-testid="reply-quote"
               disabled={!onJumpToTurn}
-              onclick={() => onJumpToTurn?.(q.turn_id)}
-              title={onJumpToTurn ? "Jump to the original message" : undefined}
+              onclick={() => onJumpToTurn?.(q.turn_id, turn.turn_id)}
+              title={jumpPending ? "Finding message…" : onJumpToTurn ? "Jump to the original message" : undefined}
+              aria-busy={jumpPending || undefined}
               aria-label={`In reply to ${q.author || "a message"}: ${replyPreview(q.excerpt)}${onJumpToTurn ? ". Jump to original" : ""}`}
               class="flex min-w-0 max-w-full flex-col items-start rounded-lg border-l-2 border-green-500 bg-white-200 px-2.5 py-1 text-left text-xs text-black-700 enabled:hover:bg-white-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500 dark:bg-navy-800 dark:text-black-600 dark:enabled:hover:bg-navy-700"
             >
-              <span class="font-medium text-black-900 dark:text-white-100">{q.author || "Message"}</span>
+              <span class="inline-flex items-center gap-1.5 font-medium text-black-900 dark:text-white-100">
+                {q.author || "Message"}
+                {#if jumpPending}
+                  <svg data-testid="reply-quote-spinner" viewBox="0 0 16 16" class="h-3 w-3 animate-spin text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
+                {/if}
+              </span>
               <span class="max-w-full truncate">{replyPreview(q.excerpt)}</span>
             </button>
           {/if}

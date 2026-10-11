@@ -2,16 +2,17 @@
   import { onMount, onDestroy, tick, untrack } from "svelte";
   import type { ReplyTarget } from "../replyTo.js";
   import { attachThreadScroll, type ThreadScroll } from "../threadStick.js";
+  import { createTurnJump, type BackTarget, type TurnWindow } from "../turnJump.js";
   import { railRefreshTargets, type RefreshableRailTab } from "../railRefresh.js";
   import { get } from "svelte/store";
   import { Effect, Either } from "effect";
   import { WickClientLayer, listAgentProfiles } from "@wick-fe/common-api";
-  import { toastError, toastOk, toastWarn } from "@wick-fe/common-stores";
+  import { toastError, toastOk, toastWarn, pushToast, dismissToast } from "@wick-fe/common-stores";
   import { Button, ConfirmDialog, Composer, Modal } from "@wick-fe/common-ui";
   import { seedUsage, glanceFromWire } from "@wick-fe/common-ui/usage";
   import { NOTIFY_KEY } from "../notify-pref.js";
 
-  import { createThreadStore, TURN_SETTLE_MS } from "../stores/thread.js";
+  import { createThreadStore, isLocalTurnId, TURN_SETTLE_MS } from "../stores/thread.js";
   import { remoteProgress } from "../remoteAgent.js";
   import { noAccessError } from "../agentSharing.js";
   import type { ThreadMeta, LifecycleState } from "../stores/thread.js";
@@ -307,26 +308,106 @@
     replyTarget = null;
     return true;
   }
-  /* Scroll to the quoted turn and flash it. Not loaded yet (older page):
-     walk back through history a bounded number of pages, then say so. */
-  const REPLY_JUMP_PAGES = 10;
+  /* Scroll to the quoted turn and flash it. Not on screen: ONE `around`
+     request swaps the thread for the window around it — "detached" mode,
+     where the thread shows that window instead of the latest one, pages
+     both ways, and live events only bump the Jump to latest badge. The
+     lookup itself (single in-flight, slow toast, Back to reply) lives in
+     turnJump.ts. */
   function findTurnEl(turnId: string): HTMLElement | null {
     return threadEl?.querySelector<HTMLElement>(`[data-turn-id="${CSS.escape(turnId)}"]`) ?? null;
   }
-  async function jumpToTurn(turnId: string) {
-    let el = findTurnEl(turnId);
-    for (let i = 0; !el && hasMoreHistory && i < REPLY_JUMP_PAGES; i++) {
-      await loadOlderHistory();
-      await tick();
-      el = findTurnEl(turnId);
-    }
-    if (!el) {
-      toastWarn("Original message is not loaded");
-      return;
-    }
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
-    el.classList.add("ring-2", "ring-green-500/60");
-    setTimeout(() => el?.classList.remove("ring-2", "ring-green-500/60"), 1600);
+  /* Flash: an outline with an offset, so it clears the text of a turn that
+     has no bubble padding and needs no offset colour (a ring offset paints
+     a white band in dark mode). Inline because the compiled app.css carries
+     no outline-width/offset utilities; #27B199 is green-500 at 60%. */
+  function revealTurn(el: HTMLElement, instant: boolean) {
+    el.scrollIntoView({ block: "center", behavior: instant ? "auto" : "smooth" });
+    el.style.outline = "2px solid #27b19999";
+    el.style.outlineOffset = "4px";
+    setTimeout(() => { el.style.outline = ""; el.style.outlineOffset = ""; }, 1600);
+  }
+  let detached = $state(false);
+  let detachedTurns = $state<ConversationTurn[]>([]);
+  let detachedHasMore = $state(false);
+  let detachedHasMoreAfter = $state(false);
+  // Turn ids already on the latest window when the view detached: anything
+  // the live stream adds past them is what the Jump to latest badge counts.
+  let detachedSeen = new Set<string>();
+  // A reply still streaming counts too: it is news the reader is missing.
+  const detachedBadge = $derived(
+    detached
+      ? turns.filter((t) => t.turn_id && !isLocalTurnId(t.turn_id) && !detachedSeen.has(t.turn_id)).length + (live ? 1 : 0)
+      : 0,
+  );
+  // Bumped whenever the shown window changes (detach, re-attach, Jump to
+  // latest): a page or lookup answer from an older generation is dropped.
+  let windowGen = 0;
+  const shownTurns = $derived(detached ? detachedTurns : turns);
+  let backTarget = $state<BackTarget | null>(null);
+  // The reply bubble has left the viewport since the jump; seeing it again
+  // means the reader went back by hand, so the chip has done its job.
+  let backLeft = false;
+  let jumpPendingId = $state<string | null>(null);
+
+  async function showDetachedWindow(win: TurnWindow) {
+    windowGen++;
+    if (!detached) detachedSeen = new Set(turns.map((t) => t.turn_id));
+    detachedTurns = win.turns;
+    detachedHasMore = win.hasMore;
+    detachedHasMoreAfter = win.hasMoreAfter;
+    detached = true;
+    scrollCtl?.hold(true);
+    // A window that already reaches the latest turn has no gap to close.
+    if (!win.hasMoreAfter) attachLatest();
+    await tick();
+  }
+  /* The detached window reached the latest turn: it becomes the thread
+     again, and live events append to it as usual. */
+  function attachLatest() {
+    const first = detachedTurns[0]?.turn_id;
+    // setHistory keeps loaded turns older than the window; only when none
+    // are kept does the window's own has_more describe the thread.
+    if (!first || turns.findIndex((t) => t.turn_id === first) <= 0) hasMoreHistory = detachedHasMore;
+    thread.setHistory(detachedTurns);
+    leaveDetached();
+    scrollCtl?.hold(false);
+    // A turn persisted after the last page was read would otherwise sit
+    // out until the next reload.
+    void loadConversation();
+  }
+  /* Drop the window. detachedHasMore/After and detachedSeen are left as
+     they are: unused while attached, and reset by the next detach. */
+  function leaveDetached() {
+    windowGen++;
+    detached = false;
+    detachedTurns = [];
+  }
+
+  const turnJump = createTurnJump({
+    findEl: findTurnEl,
+    fetchAround: async (turnId) => {
+      const res = await Effect.runPromise(
+        Effect.either(getConversation(base, sessionId, { around: turnId }).pipe(Effect.provide(WickClientLayer))),
+      );
+      if (Either.isRight(res)) return res.right;
+      if (res.left instanceof APIError && res.left.status === 404 && /turn not found/i.test(res.left.message)) return null;
+      throw res.left;
+    },
+    showWindow: showDetachedWindow,
+    reveal: revealTurn,
+    setPending: (id) => { jumpPendingId = id; },
+    setBack: (b) => { backTarget = b; backLeft = false; },
+    toastPending: (title) => pushToast({ state: "info", title, ttlMs: 0 }),
+    dismissToast,
+    toastWarn: (title) => { toastWarn(title); },
+    toastError: (title, body) => { toastError(title, body); },
+  });
+  function jumpToTurn(turnId: string, fromTurnId?: string) {
+    void turnJump.jump(turnId, fromTurnId);
+  }
+  function backToReply() {
+    if (backTarget) void turnJump.back(backTarget);
   }
 
   /* ── context panel state ──────────────────────────────────────── */
@@ -1747,8 +1828,41 @@
   // Send, Jump to latest, Ctrl+↓, ask_user: glide down (instant under
   // prefers-reduced-motion). The open / view-switch landing is instant.
   function scrollToBottom() {
+    if (detached || turnJump.busy()) return jumpToLatest();
     scrollCtl?.scrollToBottom({ smooth: true });
   }
+  /* Jump to latest. Detached, that means leaving the jumped-to window:
+     reload the latest one and land at its bottom. Either way the Back to
+     reply chip is done. */
+  function jumpToLatest() {
+    // A lookup still out would re-detach the view the reader just left.
+    turnJump.cancel();
+    backTarget = null;
+    if (!detached) {
+      windowGen++;
+      scrollCtl?.scrollToBottom({ smooth: true });
+      return;
+    }
+    leaveDetached();
+    void loadConversation();
+    void tick().then(() => scrollCtl?.scrollToBottom());
+  }
+
+  $effect(() => {
+    const el = threadEl;
+    if (!el) return;
+    function onScroll() {
+      if (!backTarget || !el) return;
+      const b = findTurnEl(backTarget.turnId);
+      const r = b?.getBoundingClientRect();
+      const v = el.getBoundingClientRect();
+      const inView = !!r && r.bottom > v.top && r.top < v.bottom;
+      if (!inView) backLeft = true;
+      else if (backLeft) backTarget = null;
+    }
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  });
 
   $effect(() => {
     function onKeydown(e: KeyboardEvent) {
@@ -1782,11 +1896,14 @@
     const ctl = attachThreadScroll(threadEl, {
       onJump: (show) => { showJumpBtn = show; },
       onNearTop: () => loadOlderHistory(),
+      onNearBottom: () => loadNewerHistory(),
     });
     scrollCtl = ctl;
     // The scroller is recreated whenever the conversation view is shown again
-    // (switching tabs), so land at the bottom of the new one right away.
-    ctl.scrollToBottom();
+    // (switching tabs), so land at the bottom of the new one right away —
+    // unless it shows a detached window, whose bottom is not the latest.
+    if (untrack(() => detached)) ctl.hold(true);
+    else ctl.scrollToBottom();
     return () => {
       ctl.destroy();
       if (scrollCtl === ctl) scrollCtl = null;
@@ -1973,23 +2090,37 @@
   /* Pull one older page and keep the viewport anchored on the turn the
      user was looking at (prepending grows scrollHeight above it). */
   let olderInFlight: Promise<void> | null = null;
+  let olderGen = 0;
   function loadOlderHistory(): Promise<void> {
     // A page already on its way is awaited, not skipped: the reply jump
     // waits on it instead of counting it as "nothing older".
-    if (olderInFlight) return olderInFlight;
-    if (loadingOlder || !hasMoreHistory) return Promise.resolve();
+    // A page for an older window (see windowGen) is neither awaited nor a
+    // reason to wait: its answer is dropped.
+    const gen = windowGen;
+    if (olderInFlight && olderGen === gen) return olderInFlight;
+    // Detached: page back from the jumped-to window, not the latest one.
+    const inWindow = detached;
+    if ((loadingOlder && olderGen === gen) || !(inWindow ? detachedHasMore : hasMoreHistory)) return Promise.resolve();
     // Old sessions can hold turns persisted before turn_id existed — skip
     // id-less turns (they can't anchor a `before` cursor) and local ones.
-    const before = turns.find((t) => t.turn_id && !t.turn_id.startsWith("local-user-"))?.turn_id;
+    const before = (inWindow ? detachedTurns : turns).find((t) => t.turn_id && !isLocalTurnId(t.turn_id))?.turn_id;
     if (!before) return Promise.resolve();
     loadingOlder = true;
+    olderGen = gen;
     const el = threadEl;
     const prevHeight = el?.scrollHeight ?? 0;
     const prevTop = el?.scrollTop ?? 0;
-    return (olderInFlight = run(getConversation(base, sessionId, { limit: HISTORY_PAGE, before }).pipe(Effect.provide(WickClientLayer)))
+    const p: Promise<void> = run(getConversation(base, sessionId, { limit: HISTORY_PAGE, before }).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
-        hasMoreHistory = res.hasMore;
-        thread.prependHistory(res.turns);
+        if (gen !== windowGen) return;
+        if (inWindow) {
+          detachedHasMore = res.hasMore;
+          const have = new Set(detachedTurns.map((t) => t.turn_id).filter(Boolean));
+          detachedTurns = [...res.turns.filter((t) => !t.turn_id || !have.has(t.turn_id)), ...detachedTurns];
+        } else {
+          hasMoreHistory = res.hasMore;
+          thread.prependHistory(res.turns);
+        }
         requestAnimationFrame(() => {
           if (el) {
             scrollCtl?.setTop(prevTop + (el.scrollHeight - prevHeight));
@@ -1999,9 +2130,43 @@
       .catch((e: unknown) => {
         // Same as the first load: a chat the caller may no longer open is
         // an expected state, not an alert.
-        if (!noAccessError(e)) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
+        if (gen === windowGen && !noAccessError(e)) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
       })
-      .finally(() => { loadingOlder = false; olderInFlight = null; }));
+      .finally(() => {
+        if (olderInFlight === p) { loadingOlder = false; olderInFlight = null; }
+      });
+    return (olderInFlight = p);
+  }
+
+  /* Detached only: pull the next page toward the latest turn (`after`).
+     Appending below the viewport needs no anchoring. The page that
+     reaches the latest turn closes the gap and re-attaches the thread. */
+  let loadingNewer = $state(false);
+  let newerInFlight: Promise<void> | null = null;
+  let newerGen = 0;
+  function loadNewerHistory(): Promise<void> {
+    const gen = windowGen;
+    if (newerInFlight && newerGen === gen) return newerInFlight;
+    if (!detached || (loadingNewer && newerGen === gen) || !detachedHasMoreAfter) return Promise.resolve();
+    const after = [...detachedTurns].reverse().find((t) => t.turn_id && !isLocalTurnId(t.turn_id))?.turn_id;
+    if (!after) return Promise.resolve();
+    loadingNewer = true;
+    newerGen = gen;
+    const p: Promise<void> = run(getConversation(base, sessionId, { limit: HISTORY_PAGE, after }).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        if (gen !== windowGen) return;
+        const have = new Set(detachedTurns.map((t) => t.turn_id).filter(Boolean));
+        detachedTurns = [...detachedTurns, ...res.turns.filter((t) => !t.turn_id || !have.has(t.turn_id))];
+        detachedHasMoreAfter = res.hasMoreAfter;
+        if (!res.hasMoreAfter) attachLatest();
+      })
+      .catch((e: unknown) => {
+        if (gen === windowGen && !noAccessError(e)) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
+      })
+      .finally(() => {
+        if (newerInFlight === p) { loadingNewer = false; newerInFlight = null; }
+      });
+    return (newerInFlight = p);
   }
 
   /* History re-read for a turn that ended without its `done` (see the
@@ -2040,7 +2205,8 @@
       if (ev.type === "ask_user") {
         try {
           showAsk(JSON.parse(ev.data ?? "{}"));
-          setTimeout(() => scrollToBottom(), 50);
+          // Detached, a live event only bumps the Jump to latest badge.
+          setTimeout(() => { if (!detached) scrollToBottom(); }, 50);
         } catch (_) { /* skip */ }
       } else if (ev.type === "ask_user_resolved") {
         try { hideAsk(JSON.parse(ev.data ?? "{}")); } catch (_) { /* skip */ }
@@ -2562,6 +2728,7 @@
     loadTeamTasks();
   }
 
+  onDestroy(() => turnJump.dispose());
   onDestroy(() => {
     cancelSettleReload();
     scmCleanup?.();
@@ -2978,7 +3145,7 @@
               <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
               <span>Loading older messages…</span>
             </div>
-          {:else if hasMoreHistory}
+          {:else if detached ? detachedHasMore : hasMoreHistory}
             <div class="py-1.5 text-center">
               <button
                 type="button"
@@ -2987,7 +3154,21 @@
               >Load older messages</button>
             </div>
           {/if}
-          <ConversationThread {turns} {live} {typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly ? undefined : () => handleSend({ text: "Continue", files: [] })} onReply={readOnly ? undefined : startReply} onJumpToTurn={jumpToTurn} />
+          <ConversationThread turns={shownTurns} live={detached ? null : live} typing={detached ? { active: false } : typing} {progressLabel} compacting={compactInFlight} loading={!historyLoaded} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} loadTraceEvent={(turnId, eventId) => Effect.runPromise(getTurnEvent(base, sessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)))} loadTraceBlob={(turnId, ref) => getTurnBlob(base, sessionId, turnId, ref)} {traceFiles} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onStopTurn={handleStopFromTool} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} agent={agentMode?.agent} teamAgents={teamAgentsByHandle} onOpenAgent={agentMode?.agent ? openTeamAgent : undefined} {cards} onCardAction={handleCardAction} onApprovalDecide={handleApprovalCard} onRemoteRecheck={agentMode?.recheckAgentId ? remoteRecheck : undefined} onRemoteQueueCancel={agentMode?.recheckAgentId ? remoteQueueCancel : undefined} onContinue={readOnly || detached ? undefined : () => handleSend({ text: "Continue", files: [] })} onReply={readOnly ? undefined : startReply} onJumpToTurn={jumpToTurn} {jumpPendingId} />
+          {#if loadingNewer}
+            <div class="flex items-center justify-center gap-2 py-3 text-[11px] text-black-600 dark:text-black-700">
+              <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
+              <span>Loading newer messages…</span>
+            </div>
+          {:else if detached && detachedHasMoreAfter}
+            <div class="py-1.5 text-center">
+              <button
+                type="button"
+                onclick={loadNewerHistory}
+                class="rounded-full px-3 py-1 text-[11px] text-black-600 dark:text-black-700 hover:bg-white-300 dark:hover:bg-navy-700 hover:text-black-800 dark:hover:text-black-500 transition-colors"
+              >Load newer messages</button>
+            </div>
+          {/if}
         </div>
       </div>
 
@@ -3008,19 +3189,44 @@
 
       <!-- Zone 4: composer with leading toolbar actions in one row -->
       <div class="relative shrink-0 px-6 bg-white-200 dark:bg-navy-800">
-        {#if showJumpBtn}
-          <button
-            type="button"
-            onclick={scrollToBottom}
-            class="absolute left-1/2 -translate-x-1/2 -top-3 z-30 inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100 transition-colors"
-            title="Scroll to latest (Ctrl+↓)"
-          >
-            <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.75">
-              <path d="M8 3v9M4 9l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path>
-            </svg>
-            <span>Jump to latest</span>
-            <kbd class="rounded border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1 text-[10px] font-mono text-black-600 dark:text-black-700">Ctrl+↓</kbd>
-          </button>
+        {#if showJumpBtn || detached || backTarget}
+          <!-- Floating chips over the composer edge: Back to reply returns to
+               the bubble a quote jump started from; Jump to latest leaves a
+               detached window too. -->
+          <div class="absolute left-1/2 -translate-x-1/2 -top-3 z-30 flex items-center gap-2">
+            {#if backTarget}
+              <button
+                type="button"
+                data-testid="back-to-reply"
+                onclick={backToReply}
+                class="inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+                title="Back to the message you jumped from"
+              >
+                <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+                  <path d="M6 4 3 7l3 3M3 7h6.5a3.5 3.5 0 0 1 0 7H8" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+                <span>Back to reply</span>
+              </button>
+            {/if}
+            {#if showJumpBtn || detached}
+              <button
+                type="button"
+                data-testid="jump-latest"
+                onclick={jumpToLatest}
+                class="inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+                title="Scroll to latest (Ctrl+↓)"
+              >
+                <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.75">
+                  <path d="M8 3v9M4 9l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+                <span>Jump to latest</span>
+                {#if detachedBadge > 0}
+                  <span data-testid="jump-latest-badge" class="rounded-full bg-green-600 px-1.5 text-[10px] font-semibold leading-4 text-white-100">{detachedBadge}</span>
+                {/if}
+                <kbd class="rounded border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1 text-[10px] font-mono text-black-600 dark:text-black-700">Ctrl+↓</kbd>
+              </button>
+            {/if}
+          </div>
         {/if}
         <div class="page-col relative pb-3 md:pb-6">
           <!-- /project picker floats above the composer. /provider now opens

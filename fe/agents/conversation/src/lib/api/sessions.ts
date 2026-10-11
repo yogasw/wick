@@ -33,14 +33,18 @@ export const listSessions = (
 export const getConversation = (
   base: string,
   id: string,
-  opts?: { limit?: number; before?: string },
+  opts?: { limit?: number; before?: string; around?: string; after?: string },
 ) => {
   const params = new URLSearchParams();
   if (opts?.limit) params.set("limit", String(opts.limit));
   if (opts?.before) params.set("before", opts.before);
+  // around: the window either side of a reply-jump target (404 "turn not
+  // found" when it is gone); after: the next page toward the latest turn.
+  if (opts?.around) params.set("around", opts.around);
+  if (opts?.after) params.set("after", opts.after);
   const qs = params.toString();
   const url = `${base}/api/sessions/${id}/conversation${qs ? `?${qs}` : ""}`;
-  return apiGetE<{ turns: ConversationTurn[]; has_more?: boolean; cards?: Record<string, CardState> }>(url).pipe(
+  return apiGetE<{ turns: ConversationTurn[]; has_more?: boolean; has_more_after?: boolean; cards?: Record<string, CardState> }>(url).pipe(
     Effect.map((r) => ({
       turns: (r.turns ?? []).map((t) => ({
         ...t,
@@ -48,6 +52,7 @@ export const getConversation = (
         attachments: t.attachments ?? [],
       })),
       hasMore: r.has_more === true,
+      hasMoreAfter: r.has_more_after === true,
     })),
   );
 };

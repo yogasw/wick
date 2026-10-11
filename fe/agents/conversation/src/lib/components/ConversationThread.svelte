@@ -66,10 +66,12 @@
     onContinue?: () => void;
     /** Reply on a bubble and the jump from a quote (see ThreadMessage). */
     onReply?: (target: import("../replyTo.js").ReplyTarget) => void;
-    onJumpToTurn?: (turnId: string) => void;
+    onJumpToTurn?: (turnId: string, fromTurnId?: string) => void;
+    /** The reply bubble whose quote lookup is in flight (spinner on it). */
+    jumpPendingId?: string | null;
   };
 
-  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, loadTraceBlob, traceFiles, onOpenPath, onCancelRun, onStopTurn, onDismissTool, onOpenSubAgent, compacting = false, progressLabel, loading = false, agent, teamAgents = {}, onOpenAgent, cards = {}, onCardAction, onApprovalDecide, onRemoteRecheck, onRemoteQueueCancel, onContinue, onReply, onJumpToTurn, jumpPendingId = null }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -279,7 +281,7 @@
     {/if}
     <!-- data-turn-id is the anchor a reply's quote jumps to. -->
     <div data-turn-id={turn.turn_id} class="min-w-0 rounded-xl transition-shadow">
-      <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} />
+      <ThreadMessage {turn} {loadTrace} {loadTraceEvent} {loadTraceBlob} {traceFiles} {teamAgents} {onOpenAgent} {agent} via={speakerVia(shownTurns, i)} {cards} {onCardAction} {onApprovalDecide} {onRemoteRecheck} {onRemoteQueueCancel} onContinue={!live && i === shownTurns.length - 1 ? onContinue : undefined} {onReply} {onJumpToTurn} jumpPending={jumpPendingId !== null && jumpPendingId === turn.turn_id} />
     </div>
   {/each}
 

@@ -110,6 +110,12 @@ export interface ThreadStore {
 
 let _userTurnCounter = 0;
 
+/** A turn this store made client-side (streamed, echoed, error/warning
+    notes) that the persisted history has not given an id of its own. */
+export function isLocalTurnId(id: string): boolean {
+  return /^(live|error|warning|local-user|postback)-/.test(id);
+}
+
 export function createThreadStore(): ThreadStore {
   const turns = writable<ConversationTurn[]>([]);
   const live = writable<LiveTurn | null>(null);
@@ -712,12 +718,7 @@ export function createThreadStore(): ThreadStore {
       // a persisted twin has no inline events but its local twin does, graft the
       // local events onto it.
       turns.update((cur) => {
-        const isLocal = (t: ConversationTurn) =>
-          t.turn_id.startsWith("live-") ||
-          t.turn_id.startsWith("error-") ||
-          t.turn_id.startsWith("warning-") ||
-          t.turn_id.startsWith("local-user-") ||
-          t.turn_id.startsWith("postback-");
+        const isLocal = (t: ConversationTurn) => isLocalTurnId(t.turn_id);
 
         // Newlines are normalised out of the key. A message sent WITH a file
         // goes as multipart, and form encoding rewrites every newline to

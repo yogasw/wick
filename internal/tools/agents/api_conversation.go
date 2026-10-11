@@ -278,10 +278,66 @@ func pageTurns(turns []agentstore.ConversationTurn, before string, limit int) ([
 	return turns[start:end], start > 0
 }
 
+// indexOfTurn returns the position of the turn with id `id`, or -1.
+func indexOfTurn(turns []agentstore.ConversationTurn, id string) int {
+	for i, t := range turns {
+		if t.TurnID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// pageTurnsAround returns the window centred on the turn with id `around`:
+// up to `span` turns before it, the turn itself, and up to `span` after.
+// hasMore / hasMoreAfter report whether older / newer turns lie outside the
+// window. found is false for an unknown id (pruned or compacted) — unlike
+// `before`, a jump has no sensible fallback window.
+func pageTurnsAround(turns []agentstore.ConversationTurn, around string, span int) (page []agentstore.ConversationTurn, hasMore, hasMoreAfter, found bool) {
+	i := indexOfTurn(turns, around)
+	if i < 0 {
+		return nil, false, false, false
+	}
+	start, end := i-span, i+span+1
+	if start < 0 {
+		start = 0
+	}
+	if end > len(turns) {
+		end = len(turns)
+	}
+	return turns[start:end], start > 0, end < len(turns), true
+}
+
+// pageTurnsAfter returns the window starting just after the turn with id
+// `after`, holding at most `limit` entries (0 = no cap) — the forward page
+// a detached view (opened by a jump) loads while scrolling down toward the
+// latest turn. hasMoreAfter reports whether newer turns remain past it.
+func pageTurnsAfter(turns []agentstore.ConversationTurn, after string, limit int) (page []agentstore.ConversationTurn, hasMoreAfter, found bool) {
+	i := indexOfTurn(turns, after)
+	if i < 0 {
+		return nil, false, false
+	}
+	start, end := i+1, len(turns)
+	if limit > 0 && start+limit < end {
+		end = start + limit
+	}
+	return turns[start:end], end < len(turns), true
+}
+
+// aroundSpan is how many turns an `around` jump loads on each side of the
+// target; afterPageLimit is the default size of one `after` page.
+const (
+	aroundSpan     = 10
+	afterPageLimit = 20
+)
+
 // apiSessionConversation handles GET /api/sessions/{id}/conversation and
 // returns the session's ConversationTurn entries. With no query params it
 // returns the full history; `?limit=N` returns only the latest N turns and
 // `&before=<turn_id>` walks back one window at a time (infinite scroll up).
+// `?around=<turn_id>` returns ~aroundSpan turns either side of a jump target
+// (404 "turn not found" when it is gone) and `?after=<turn_id>` pages forward
+// from it; both report `has_more_after` for the newer side.
 func apiSessionConversation(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -314,13 +370,35 @@ func apiSessionConversation(c *tool.Ctx) {
 	agentstore.StampDeliveries(turns, agentstore.LoadDeliveries(globalLayout, id))
 	cards := actionCardStates(turns)
 	limit, _ := strconv.Atoi(c.Query("limit"))
-	page, hasMore := pageTurns(turns, c.Query("before"), limit)
+	var page []agentstore.ConversationTurn
+	var hasMore, hasMoreAfter bool
+	switch {
+	case c.Query("around") != "":
+		var found bool
+		page, hasMore, hasMoreAfter, found = pageTurnsAround(turns, c.Query("around"), aroundSpan)
+		if !found {
+			c.JSON(http.StatusNotFound, map[string]string{"error": "turn not found"})
+			return
+		}
+	case c.Query("after") != "":
+		if limit <= 0 {
+			limit = afterPageLimit
+		}
+		var found bool
+		page, hasMoreAfter, found = pageTurnsAfter(turns, c.Query("after"), limit)
+		if !found {
+			c.JSON(http.StatusNotFound, map[string]string{"error": "turn not found"})
+			return
+		}
+	default:
+		page, hasMore = pageTurns(turns, c.Query("before"), limit)
+	}
 	if cwd, err := resolveSessionCwd(sess); err == nil {
 		attachArtifactsToTurns(globalLayout, id, c.Base(), cwd, page)
 	}
 	// Card state needs the whole thread (a click may sit pages after its
 	// card), so it is worked out before paging trims anything.
-	c.JSON(http.StatusOK, map[string]any{"turns": page, "has_more": hasMore, "cards": cards})
+	c.JSON(http.StatusOK, map[string]any{"turns": page, "has_more": hasMore, "has_more_after": hasMoreAfter, "cards": cards})
 }
 
 // apiSessionMeta handles GET /api/sessions/{id}/meta and returns the
